@@ -145,6 +145,15 @@ class BlobTest(unittest.TestCase):
         self.assertEqual(C.add_gles3(tree).status, 'unchanged')           # already has GLES3
         self.assertEqual(C.add_gles3(tree, replace=True).status, 'converted')
         self.assertEqual(len(p['progVertex']['m_SubPrograms']), 2)
+        # replacing in a shader whose programs no longer translate: the old GLES programs go
+        bad = PROGRAM.replace('    return;\n}\n\n#endif\n#ifdef FRAGMENT', '    gl_FragColor = vec4(1.0);\n    return;\n}\n\n#endif\n#ifdef FRAGMENT', 1)
+        sb = B.ShaderBlobs(tree)
+        sb.set_entries(15, [_entry(6, bad.encode()), _entry(6, b'')])
+        sb.store()
+        r = C.add_gles3(tree, replace=True)
+        self.assertEqual((r.status, r.changed), ('skipped', True))
+        self.assertEqual(tree['platforms'], [15])
+        self.assertEqual([s['m_GpuProgramType'] for s in p['progVertex']['m_SubPrograms']], [6])
 
 
 if __name__ == '__main__':

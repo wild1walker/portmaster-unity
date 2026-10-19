@@ -38,7 +38,8 @@ def subprograms(tree):
 class Result:
     def __init__(self, name):
         self.name = name
-        self.status = 'unchanged'       # converted | unchanged | skipped
+        self.status = 'unchanged'       # converted | unchanged | skipped (converted: the tree changed)
+        self.changed = False            # skipped, but older GLES programs were removed (save the tree)
         self.why = ''
         self.programs = 0               # translated blob entries
         self.twins = 0                  # GLES3 subprograms added
@@ -60,15 +61,18 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
     if B.PLATFORM_GLCORE not in plats:
         r.why = 'no OpenGL Core programs'
         return r
-    if B.PLATFORM_GLES3PLUS in plats and not replace:
-        r.why = 'already has GLES3 programs'
-        return r
+    if B.PLATFORM_GLES3PLUS in plats:
+        if not replace:
+            r.why = 'already has GLES3 programs'
+            return r
+        _strip_gles(tree)          # rebuilt below, or (no translatable programs) left without any
+        r.status, r.why = 'converted', '(old GLES programs removed)'
     blobs = B.ShaderBlobs(tree)
     entries = blobs.entries(B.PLATFORM_GLCORE)
     used = sorted({sp['m_BlobIndex'] for _, _, lst in subprograms(tree) for sp in lst
                    if sp['m_GpuProgramType'] == B.GPU_GLCORE32})
     if not used:
-        r.why = 'no GLCore32 programs'
+        r.why = ('no GLCore32 programs ' + r.why).strip()
         return r
     tr = translate or (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes).encode('utf-8'))
     out = [e.copy() if e is not None else None for e in entries]
@@ -82,16 +86,14 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
                 e.code = tr(e.code)
             except glsl.Unsupported as ex:
                 r.status, r.why = 'skipped', f'program {i}: {ex}'
+                r.changed = bool(replace and B.PLATFORM_GLES3PLUS in plats)
                 return r
             r.programs += 1
         e.gpu_type = B.GPU_GLES3
-    # commit: blob, then the twins (any older GLES subprograms go first when replacing)
-    blobs.remove(B.PLATFORM_GLES3PLUS)
+    # commit: the blob, then the twins
     blobs.set_entries(B.PLATFORM_GLES3PLUS, out)
     blobs.store()
     for _, _, lst in subprograms(tree):
-        if replace:
-            lst[:] = [sp for sp in lst if sp['m_GpuProgramType'] not in GLES_TYPES]
         twins = []
         for sp in lst:
             if sp['m_GpuProgramType'] == B.GPU_GLCORE32:
@@ -102,6 +104,15 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
         r.twins += len(twins)
     r.status = 'converted'
     return r
+
+
+def _strip_gles(tree):
+    """Removes a shader's GLES3Plus blob and every GLES subprogram (tree edited in place)."""
+    blobs = B.ShaderBlobs(tree)
+    blobs.remove(B.PLATFORM_GLES3PLUS)
+    blobs.store()
+    for _, _, lst in subprograms(tree):
+        lst[:] = [sp for sp in lst if sp['m_GpuProgramType'] not in GLES_TYPES]
 
 
 def gles3_programs(tree):

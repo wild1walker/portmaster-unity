@@ -48,7 +48,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                             optimize=C.glsl.OPTIMIZE if optimize is None else optimize)
             r.file = rel
             results.append(r)
-            if r.status == 'converted':
+            if r.status == 'converted' or r.changed:
                 o.save_typetree(t)
                 n += 1
             if r.status == 'skipped' or log_each:
