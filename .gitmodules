@@ -1,0 +1,3 @@
+[submodule "runtime/thirdparty/libhybris"]
+	path = runtime/thirdparty/libhybris
+	url = https://github.com/libhybris/libhybris.git

@@ -1,0 +1,8 @@
+# pmunity (tested with these versions)
+UnityPy==1.25.4          # reads and writes Unity serialized files and bundles (unity_io.py patches two of its methods)
+lz4==4.4.5               # shader blobs, bundle blocks
+astc_encoder_py==0.1.12  # ARM's astc-encoder (textures step)
+pillow==12.3.0           # decoding and scaling textures
+texture2ddecoder==1.0.6  # used by UnityPy to decode BC/DXT/crunched textures
+# tools/re (optional)
+pyelftools==0.33

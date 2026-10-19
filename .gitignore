@@ -1,0 +1,35 @@
+# build output
+out/
+*.o
+*.a
+__pycache__/
+*.pyc
+# conversion output and inputs that must never be committed: game data, Unity's player
+android-out/
+work/
+extract/
+*.apk
+*.obb
+*.exe
+*.so
+*.so.*
+*.dll
+*.assets
+*.resS
+*.resource
+globalgamemanagers*
+unity_builtin_extra
+unity default resources
+level[0-9]*
+*_Data/
+*.app/
+# device and test artefacts (logs, screenshots, shader dumps of a game)
+*.log
+*.ppm
+shots/
+*.glsl
+.DS_Store
+._*
+syms_*.txt
+obj/
+bin/
