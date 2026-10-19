@@ -56,6 +56,8 @@ def main(argv=None):
     c.add_argument('--steps', default=None, help='comma-separated (default: the config\'s "steps", else ' + ','.join(BUILTIN_STEPS) + ')')
     c.add_argument('--plugin', action='append', default=[], help="a Python file with STEPS = {name: function(job)}")
     c.add_argument('--only', help='regex: only convert matching files (tests)')
+    c.add_argument('--set', action='append', default=[], metavar='SECTION.KEY=VALUE',
+                   help='override a config value (VALUE as JSON, else a string), e.g. --set shaders.precision=highp')
     s = sub.add_parser('shaders', help='GLES3 programs from the OpenGL Core ones')
     s.add_argument('data'); s.add_argument('out', nargs='?')
     s.add_argument('--precision', default='highp', choices=['highp', 'default-samplers'])
@@ -72,6 +74,14 @@ def main(argv=None):
     if a.cmd == 'convert':
         cfg = json.load(open(a.config))
         cfg.setdefault('version', 1)
+        for kv in a.set:
+            k, _, v = kv.partition('=')
+            sec, _, key = k.partition('.')
+            try:
+                v = json.loads(v)
+            except ValueError:
+                pass
+            cfg.setdefault(sec, {})[key] = v
         steps = {n: _builtin(n) for n in BUILTIN_STEPS}
         for i, p in enumerate(a.plugin):
             spec = importlib.util.spec_from_file_location(f'pmunity_plugin_{i}', p)

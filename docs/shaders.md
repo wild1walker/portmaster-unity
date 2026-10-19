@@ -70,6 +70,13 @@ sets it):
 | the same with const weights | 2.49-2.55 |
 | the same with const weights + unrolled | 2.47-2.54 |
 
+In the game (Cuphead, Glumstone the Giant, alternating runs on the device): the rewrites changed
+nothing measurable (+1.2 % and -2.5 % in two phases, within run-to-run noise), and full-precision
+samplers cost 0.9 % in one phase and up to ~6 % in another. Cuphead's port therefore builds with
+`default-samplers` (pixel-identical to its earlier builds, and what Unity's own GLES compiler gives
+those samplers); `highp` stays the converter's default because another game may sample depth or
+float textures, which lowp would visibly quantize.
+
 So on this GPU a fragment costs about one unit per texture fetch, per interpolated varying and
 for the blended write; arithmetic and precision barely matter (mediump saves ~1 % on sprites).
 What a frame costs is mostly the number of pixels drawn times the fetches per pixel: overdraw,
