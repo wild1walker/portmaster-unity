@@ -2,9 +2,9 @@
 
 The runtime and converter were built for Unity 2017.4.9f1 (Mono, armeabi-v7a; Cuphead). This
 survey reads the Android players of the last patch of every LTS line, 2017.4 to 2022.3, and lists
-what each one needs that the tools do not have yet. It is static analysis of Unity's own files
-(imports, JNI tables and string references, the Java side, the built-in resources); none of these
-players has been run. Per-version details:
+what each one needs that the tools do not have yet. It started as static analysis of Unity's own
+files (imports, JNI tables and string references, the Java side, the built-in resources); every
+line has since run a free Linux game in the emulated rig ("Players run" below). Per-version details:
 [2017.4.40f1](unity-2017.4.40f1.md) · [2018.4.36f1](unity-2018.4.36f1.md) ·
 [2019.4.40f1](unity-2019.4.40f1.md) · [2020.3.48f1](unity-2020.3.48f1.md) ·
 [2021.3.45f2](unity-2021.3.45f2.md) · [2022.3.62f3](unity-2022.3.62f3.md).
@@ -18,7 +18,7 @@ loading, startup, input or data conversion) · "-" not applicable.
 |---|---|---|---|---|---|---|---|
 | Mono ABIs | v7a, x86 | v7a, x86 | v7a, x86 | v7a | v7a | v7a | v7a |
 | IL2CPP ABIs | v7a, x86 | v7a, **arm64**, x86 | v7a, arm64, x86 | v7a, arm64, x86, x86_64 | same | same | same + armv9 variant |
-| Mono runtime | libmono ✅ (+bdwgc) | same ✅ | same ✅ (+PosixHelper) | **bdwgc only** ⚠️ never run | ⚠️ | ⚠️ +mono-native | ⚠️ |
+| Mono runtime | libmono ✅ (+bdwgc) | same ✅ | same ✅ (+PosixHelper) | **bdwgc only** ✅ | ✅ | ✅ +mono-native | ✅ |
 | NDK / min API | old / - | old / - | r16b / 16, 21 | r19 / 19, 21 | r19 / 19, 21 | r21d / 22 | r23b / 22 |
 | armeabi-v7a code | ARM | ARM | ARM | Thumb-2 | Thumb-2 | Thumb-2 | Thumb-2 |
 | relocations, TLS, IFUNC | REL/RELA ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -32,7 +32,8 @@ loading, startup, input or data conversion) · "-" not applicable.
 | Java members bound (count) | 398 | 402 | 458 | 487 | 487 | 487 | 395 |
 | of which runtime/jni defines | 250 | 254 | 287 | 306 | 309 | 308 | 304 |
 | UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (callbacks 28/28) | ✅ (27/27) | ✅ (30/30) | ✅ (34/34; GameActivity only from 2023.1) |
-| frame pacing (Swappy) | - | - | - | ⚠️ off by design: Java side absent, no `eglPresentationTimeANDROID` (untested) | ⚠️ | ⚠️ | ⚠️ |
+| frame pacing (Swappy) | - | - | - | ✅ off (`swappy.disable`); `androidUseSwappy` must be off (converter default) or nothing is presented | ✅ (Unity: off below API 23) | ✅ off; with the setting on: stops after 2-4 frames | ✅ same |
+| vsync clock | UnityMain | UnityMain | UnityMain | UnityMain | UnityMain | ✅ own HandlerThread (`FrameTimeTracker`): per-looper Choreographer | ✅ same |
 | SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | 22 ✅ | 22 ✅ | 22 ✅ |
 | shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
 | GLCore41/43 programs (converter) | - (output as before) | ⚠️ off by default (`shaders.glcore4x`) | ✅ GLES3 / GLES 3.1 | ✅ | ✅ | ✅ + stripped shaders' empty blobs | ✅ |
@@ -40,7 +41,7 @@ loading, startup, input or data conversion) · "-" not applicable.
 | assembly list (converter) | fixed 48 slots ✅ | fixed 48 ✅ | flags (`m_AssemblyTypes`) ✅ | flags ✅ | `ScriptingAssemblies.json` ✅ (2020.2+) | json ✅ | json ✅ |
 | texture formats (converter) | ASTC RGB/RGBA ✅ | ✅ | ✅ | `ASTC_nxn` ✅ | ✅ | ✅ | ✅ |
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
-| OBB matching | build-id ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ not traced; `unity_obb_guid` written | ⚠️ `unity_obb_guid` written, unchecked |
+| OBB matching | build-id ✅ | ✅ | ✅ | ✅ | ✅ | ✅ root `unity_obb_guid` via `ZipFile` | ✅ root `unity_obb_guid` (own zip reader) |
 | IL2CPP API looked up | - | 175 | 194 | 222 | 225 | 230 | 234 |
 | IL2CPP metadata (header, unverified) | - | 24 | 24 | 24 | 27 | 29 | 29 or 31 |
 
@@ -91,6 +92,29 @@ Notes on the rows:
   (24.1 for 2018.3/2018.4, 24.2-24.5 across 2019.x, 27.1 for 2020.2.4+, 29.1 for 2022.x; late
   2022.3 patches are reported with 31). Read the header of the game's own file.
 
+## Players run (emulated rig)
+
+One free Linux (Mono) game per LTS line, converted with `pmunity convert` + `android-data --pack
+all` and run on the runtime in the emulated rig (`tools/emu`: QEMU armv7, Mesa llvmpipe), with
+that version's player from `pmunity player fetch`. Frame times there mean nothing; startup, the
+Java side, data loading and the picture do.
+
+| player | game | result |
+|---|---|---|
+| 2017.4.9 | Cuphead (the port) | title screen as before |
+| 2017.4.40 | Mono 2.x, Rewired, intro videos | runs; black while its intro VideoPlayer waits (video decoding is not provided); its web requests now fail at once instead of never finishing |
+| 2018.4.36 | .NET 4.x (bdwgc) | title screen; 0 unresolved imports (`__isfinite` was one) |
+| 2019.4.8 | bdwgc | Unity splash, title screen (with `androidUseSwappy` on: nothing presented, hence the converter default) |
+| 2020.3.49 | bdwgc | splash, title screen |
+| 2021.3.16 | URP, bdwgc, Burst | first screen (name entry), then the main menu; was a SIGSEGV after 2 frames (Swappy's NULL EGL table), then a hang in `WaitVSync` (vsync clock on UnityMain; Swappy's -1 swap duration) |
+| 2022.3.36 | URP, bdwgc, FMOD Studio, Steamworks.NET, Burst | title screen; was the same SIGSEGV, then `Application.Quit` (no `libsteam_api.so`); FMOD stays silent without ARM FMOD libraries |
+
+What these runs still show: Unity's optional Java classes (`GoogleARCoreApi`, `Camera2Wrapper`,
+`HFPStatus`, `AudioVolumeHandler`, `SoftInputProvider`) are placeholders that only get natives
+registered; cursor images (`Bitmap`/`PointerIcon`) and video decoding are other work; HTTPS from
+2019.4+ fails certificate checks (`TrustManagerFactory` placeholders; libunity's unitytls then
+reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM builds.
+
 ## Gaps, most impact for the most games first
 
 1. ~~**JNI signatures that drifted**~~ (done in runtime/jni): natives are called with the signature
@@ -116,9 +140,9 @@ Notes on the rows:
 4. ~~**Converter data formats**~~ (done in the converter): SerializedFile format 22, the four shader
    serializers, segmented blobs, parameter entries and per-tier subprograms, assembly lists by
    flags and `ScriptingAssemblies.json`, 2019+ ASTC numbers, compressed builds via `pmunity
-   unpack`, GLCore41/43 programs (2018.1+). Left: D3D11 programs of 2019.1+ Windows builds (GL
-   constant buffer layouts), the 2021.3 OBB check (not traced; `assets/unity_obb_guid` is written
-   for 2021+).
+   unpack`, GLCore41/43 programs (2018.1+), the 2021.3+ OBB GUID (the OBB's `unity_obb_guid` at
+   its root, the APK's `assets/unity_obb_guid`). Left: D3D11 programs of 2019.1+ Windows builds
+   (GL constant buffer layouts).
 5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.x on (and of any
    .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
@@ -129,20 +153,21 @@ Notes on the rows:
    clipboard, `getScreenBrightness`/`setScreenBrightness` (2021.3), `hidePreservedContent`,
    `setMainSurfaceViewAspectRatio`, activity indicator (2022.3), and the framework members the
    later players read (`View.getDisplay`, display modes, ...).
-7. ~~**Swappy**~~ (2019.3+), decided: off, by construction (`runtime/android/README.md`, "Frame
-   pacing"). runtime/jni answers its Java classes and the dex class loaders as absent, there is
-   no `AChoreographer_*` in the libandroid shims, and `eglGetProcAddress` answers NULL for
-   Android's frame-timing functions (`eglPresentationTimeANDROID`, `eglGetFrameTimestampsANDROID`,
-   ...), without which Swappy's EGL setup disables it; Unity then presents with `eglSwapBuffers` at
-   its swap interval, paced by the host's display. Untested with a real player. The converter could
-   also turn `androidUseSwappy` off; it changes pacing, not the picture.
+7. ~~**Swappy**~~ (2019.3+), done: off. Swappy's own switch (`swappy.disable`, the loader's
+   system properties) keeps it off once its EGL table loads (`eglPresentationTimeANDROID` is a
+   no-op; with NULL, the 2021.3+ Swappy kept a disabled instance whose fallback swap went through
+   a NULL table: the SIGSEGV on `UnityGfxDeviceW` after two frames) and its display query works
+   (`NativeActivity.getWindowManager()`). Unity's own setting must be off as well, which the
+   converter does by default (`--swappy`): with `androidUseSwappy` on and Swappy off, 2019.4
+   presents nothing and 2021.3+ wait for INT_MAX vsyncs after their first frames
+   (`runtime/android/README.md`, "Frame pacing").
 8. **EGL** (done): `eglSurfaceAttrib` (2020.3+) on the SDL display path goes to the real surface
    (and is set again on a surface KMSDRM puts in its place); on fbdev it is the driver's own.
 9. **Packaging of Android builds** (games owned as APK/AAB): split APKs
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
    (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`;
-   runtime/jni answers as an app without Play Core: no asset packs),
-   OBB GUID file `assets/unity_obb_guid` (2022.3).
+   runtime/jni answers as an app without Play Core: no asset packs); their PlayerSettings'
+   `androidUseSwappy` (on in many 2021.3+ projects) has to be turned off there too.
 10. **IL2CPP Android games**: loading already works through `ClassLoader.findLibrary` +
     `System.load`; libunity then copies IL2CPP data to `<filesDir>/il2cpp` (writable files dir
     needed, runtime/jni creates it and warns otherwise; 2022.3 re-extracts when
