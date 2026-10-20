@@ -2,6 +2,7 @@
 declarations (ImplMap -> ModuleRef), method signatures and field constants. Enough to see which
 native libraries a game's managed code calls, with which argument types, without running or
 decompiling anything. Pure Python, no dependencies."""
+import bisect
 import struct
 
 # metadata table numbers
@@ -201,6 +202,12 @@ class Assembly:
         return 2 if self.nrows.get(c, 0) < 65536 else 4
 
     def rows(self, t):
+        cache = self.__dict__.setdefault('_rows', {})
+        if t not in cache:
+            cache[t] = self._rows_of(t)
+        return cache[t]
+
+    def _rows_of(self, t):
         if t not in self.tables:
             return []
         o, rs, css, n = self.tables[t]
@@ -248,17 +255,23 @@ class Assembly:
         self._types = out
         return out
 
+    def _owner(self, key, row):
+        """The type whose member list (key 'methods' or 'fields') holds row: the last type whose list
+        starts at or before it (lists are in TypeDef order, contiguous)."""
+        ts = self.types()
+        starts = self.__dict__.setdefault('_starts', {})
+        if key not in starts:
+            starts[key] = [t[key][0] for t in ts]
+        i = bisect.bisect_right(starts[key], row) - 1
+        while i >= 0 and not ts[i][key][0] <= row < ts[i][key][1]:
+            i -= 1                                 # (types with empty lists share a start)
+        return ts[i] if i >= 0 else None
+
     def type_of_method(self, mrow):
-        for t in self.types():
-            if t['methods'][0] <= mrow < t['methods'][1]:
-                return t
-        return None
+        return self._owner('methods', mrow)
 
     def type_of_field(self, frow):
-        for t in self.types():
-            if t['fields'][0] <= frow < t['fields'][1]:
-                return t
-        return None
+        return self._owner('fields', frow)
 
     def typeref_name(self, row):
         scope, name, ns = self.rows(TYPEREF)[row - 1]
