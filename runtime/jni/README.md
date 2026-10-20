@@ -11,6 +11,7 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback; one per looper thread), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
 | `up_media.c` | The video classes (VideoPlayer, see Video below): MediaExtractor, MediaFormat, MediaCodec (+BufferInfo), SurfaceTexture (+OnFrameAvailableListener), Surface(SurfaceTexture), ParcelFileDescriptor, FileDescriptor, java.nio Buffer/IntBuffer members. The work is `../media`'s (libuamedia.a); registered only in a program that links it (`up_media_init()` pulls it in; this folder's tests do not). |
 | `up_tls.c` | The system trust store as Android's Java side gives it to libunity's unitytls (2018.4+): TrustManagerFactory, X509TrustManager, Certificate/X509Certificate, KeyStore("AndroidCAStore"), over the handheld's CA bundle ([docs/plugins.md](../../docs/plugins.md#https)). |
+| `up_http.c` | `com.unity3d.player.UnityWebRequest` (2017.4 - 2018.4) and the header map libunity gives it: no network by default, real requests through the system's libcurl with `UA_HTTP=1`. |
 | `up_fmod.c` | `org.fmod.FMOD` (and `org.fmod.AudioDevice`), the Java side of FMOD Engine's Android libraries, for games whose port supplies them ([docs/plugins.md](../../docs/plugins.md#fmod)). |
 | `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
 | `test/` | Unit tests (see Tests). |
@@ -228,6 +229,13 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   and `<files>/il2cpp`, `up_resize`, the 2020.3/2022.3 startup natives, pause/resume/surface
   loss/focus, and quit with `nativeDone` of either signature. It also checks that every Java
   method the 2017.4-2022.3 libunity call on UnityPlayer/ReflectionHelper by name is implemented.
+- `test/tls_test.sh` (Docker image of the machine's own architecture with Debian's mbedTLS, openssl,
+  Python and libcurl; network off): `test_tls.c` takes the trust anchors through JNI as libunity's
+  unitytls does and verifies local HTTPS servers with mbedTLS (a self-made CA trusted, a wrong host
+  name, an unknown CA and an empty store refused, a distribution bundle read); `test_http.c` drives
+  `UnityWebRequest` (2017.4 - 2018.4) as libunity does, without `UA_HTTP` (fails at once) and with it
+  (GET, HEAD, POST, a big body, a stopped download, HTTPS trusted / unknown CA / wrong host, unknown
+  host, malformed URL).
 - Both pass (0 failures) on both architectures: `test_unityplayer` prints one line per version and
   `PASSED: 0 failure(s) in 7 Unity version shapes`. They also pass with `FJ_TRACE=1`. The tests
   assume the default FJ_* modes: `FJ_NOFREE`/`FJ_STRICT` intentionally break their
@@ -340,6 +348,10 @@ libunity; "ok" rows of all rows, before → after this work):
 | UnityPlayer methods libunity calls | 12 / 12 | 12 / 12 | 11 → 19 / 19 | 11 → 28 / 28 | 10 → 27 / 27 | 10 → 30 / 30 | 10 → 34 / 34 |
 | natives runtime/jni calls, called with the registered signature | all | 1 ✗ → all | 1 ✗ → all | 3 ✗ → all | 3 ✗ → all | 3 ✗ → all | 4 ✗ → all |
 
+The trust store (`up_tls.c`: TrustManagerFactory's four members, `X509TrustManager.getAcceptedIssuers`,
+`Certificate.getEncoded`) adds six bound members from 2018.4 on: the framework rows are then 250,
+254, 293, 312, 315, 317 and 310 (`jnicover` on the same `bindings.tsv`).
+
 With `up_media.c` (a program that links the media core, as ua_host does) the framework members
 defined are 302, 306, 339, 360, 364, 364 and 311 of the same totals: every MediaExtractor,
 MediaFormat, MediaCodec, SurfaceTexture, Surface(SurfaceTexture), ParcelFileDescriptor and
@@ -398,9 +410,10 @@ thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`.
 - `UnityPlayer.showVideoPlayer` (`Handheld.PlayFullScreenMovie`, Unity's full-screen Java video
   activity) returns false: the movie is skipped. Unity's VideoPlayer component is implemented (Video below).
 - **Networking**: the Java `com/unity3d/player/UnityWebRequest` of 2017.4 - 2018.4 (Unity's
-  HTTP(S) transport; file: and jar: URLs are read natively) answers every request as a phone
-  without a network does (`run()` reports UnknownHostException, errorCallback code 7 as Unity's
+  HTTP(S) transport; file: and jar: URLs are read natively; `up_http.c`) answers every request as a
+  phone without a network does (`run()` reports UnknownHostException, errorCallback code 7 as Unity's
   Java side sends it), so `WWW`/`UnityWebRequest` complete with an error instead of never finishing;
+  with `UA_HTTP=1` it makes them through the system's libcurl (docs/plugins.md, "HTTPS");
   2019.4+ use libunity's own transport, whose TLS checks take their anchors from `up_tls.c` (the
   handheld's CA bundle; docs/plugins.md, "HTTPS"). The
   soft keyboard (`showSoftInput` is logged only), AlertDialog/Dialog/ProgressBar (activity indicator)

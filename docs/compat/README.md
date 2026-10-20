@@ -30,7 +30,7 @@ loading, startup, input or data conversion) · "-" not applicable.
 | natives runtime/jni calls | ✅ | ✅ SendMessage(byte[]) | ✅ | ✅ nativeDone()Z | ✅ | ✅ | ✅ nativeInjectEvent(·,int) |
 | AndroidJavaProxy | ✅ (int handle) | ✅ | ✅ | ✅ long handle | ✅ newProxyInstance(UnityPlayer,·) | ✅ invocation errors | ✅ |
 | Java members bound (count) | 398 | 402 | 458 | 487 | 487 | 487 | 395 |
-| of which runtime/jni defines | 250 | 254 | 287 | 306 | 309 | 308 | 304 |
+| of which runtime/jni defines | 250 | 254 | 293 | 312 | 315 | 317 | 310 |
 | UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (callbacks 28/28) | ✅ (27/27) | ✅ (30/30) | ✅ (34/34; GameActivity only from 2023.1) |
 | frame pacing (Swappy) | - | - | - | ✅ off (`swappy.disable`); `androidUseSwappy` must be off (converter default) or nothing is presented | ✅ (Unity: off below API 23) | ✅ off; with the setting on: stops after 2-4 frames | ✅ same |
 | vsync clock | UnityMain | UnityMain | UnityMain | UnityMain | UnityMain | ✅ own HandlerThread (`FrameTimeTracker`): per-looper Choreographer | ✅ same |
@@ -71,7 +71,8 @@ Notes on the rows:
   native table.
 - "of which runtime/jni defines": `tools/re/jnicover.c` on the bound members; the rest are classes
   of no use on a handheld (camera, VR/AR, web/TLS, dialogs, telephony, location) that answer
-  0/null. Video's members (MediaExtractor, MediaFormat, MediaCodec, SurfaceTexture, ...) are
+  0/null (2018.4+: the six TLS members, TrustManagerFactory, X509TrustManager and Certificate, are
+  defined since runtime/jni/up_tls.c). Video's members (MediaExtractor, MediaFormat, MediaCodec, SurfaceTexture, ...) are
   defined by `runtime/jni/up_media.c` in a program that links the media core: then 302, 306, 339,
   360, 364, 364, 311 (`runtime/jni/README.md`).
 - Converter rows (shaders, assembly list, textures, OBB): what `convert/` does for each version,
