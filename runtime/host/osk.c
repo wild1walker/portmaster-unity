@@ -229,9 +229,16 @@ static void glyph(int x, int y, uint32_t cp, int icon, int s, int c, int clip_x1
             }
     }
 }
-static void text(int x, int y, const char *t, int s, int c)
+static void text(int x, int y, const char *t, int s, int c)     /* UTF-8 */
 {
-    for (; *t; t++, x += OSK_FONT_W * s) glyph(x, y, (unsigned char)*t, 0, s, c, P.W);
+    const unsigned char *p = (const unsigned char *)t;
+    for (; *p; x += OSK_FONT_W * s) {
+        uint32_t cp = *p++;
+        int extra = cp >= 0xf0 ? 3 : cp >= 0xe0 ? 2 : cp >= 0xc0 ? 1 : 0;
+        if (extra) cp &= 0x3f >> extra;
+        for (; extra && (*p & 0xc0) == 0x80; extra--) cp = cp << 6 | (*p++ & 0x3f);
+        glyph(x, y, cp, 0, s, c, P.W);
+    }
 }
 
 static int cls(void) { return fs.input_type & 0xf; }
