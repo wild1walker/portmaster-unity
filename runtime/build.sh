@@ -7,6 +7,7 @@
 # Each part's build.sh reads ARCH. TESTS=1 also runs the fake JNI's unit tests: armhf under qemu-arm
 # (some qemu-user builds crash on their threads; the binaries, jni/out/test_*, also run on the
 # handheld itself: LD_LIBRARY_PATH=/lib32:/usr/lib32 ./test_fakejni), arm64 natively.
+# OPENH264=0 builds the media core without OpenH264 (media/README.md).
 set -e
 cd "$(dirname "$0")"
 ARCH=${ARCH:-armhf}

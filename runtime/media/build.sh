@@ -10,6 +10,8 @@
 # ./build.sh test  also builds and runs the unit tests (test/): armhf in an arm/v7 container
 #   (Docker's emulation), arm64 natively; the GL test needs the emulated rig's image ua-emu-armhf
 #   (tools/emu) for armhf, Mesa from ua-build-arm64 for arm64.
+# OPENH264=0 ./build.sh  leaves OpenH264 out (H.264 then only through the system's libavcodec, when
+#   the handheld has one): for a release that must not carry an H.264 decoder. The default is in.
 # Link with: libuamedia.a -lstdc++ -ldl -lpthread -lm
 set -e
 cd "$(dirname "$0")"
@@ -24,11 +26,11 @@ case "$ARCH" in
 esac
 docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG -f $DF docker
 docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIBDIR=$LIBDIR -e ARCHF="$ARCHF" \
-  -e TEST="$1" $IMG bash -c '
+  -e TEST="$1" -e OPENH264="${OPENH264:-1}" $IMG bash -c '
   set -e
   mkdir -p $O/obj $O/licenses $O/test
   CC=${CROSS}gcc; CXX=${CROSS}g++; AR=${CROSS}ar
-  H264=$(ls $LIBDIR/libopenh264.a /usr/local/lib/libopenh264.a 2>/dev/null | head -1)
+  H264=; [ "$OPENH264" = 0 ] || H264=$(ls $LIBDIR/libopenh264.a /usr/local/lib/libopenh264.a 2>/dev/null | head -1)
   DEFS="-DUM_HAVE_VPX -DUM_HAVE_VORBIS -DUM_HAVE_OPUS -DUM_HAVE_MP4 -DUM_HAVE_FFMPEG"
   [ -n "$H264" ] && DEFS="$DEFS -DUM_HAVE_H264"
   CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64 $ARCHF $DEFS -I/usr/local/include"
@@ -42,10 +44,11 @@ docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIB
     for l in $LIBDIR/libvpx.a $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a $H264; do echo "addlib $l"; done
     echo save; echo end; } | $AR -M
   rm -f $O/core.a
-  for p in libvpx-dev libvorbis-dev libogg-dev libopus-dev libopenh264-dev; do
+  rm -f $O/licenses/*                                   # exactly the libraries this build linked
+  for p in libvpx-dev libvorbis-dev libogg-dev libopus-dev ${H264:+libopenh264-dev}; do
     [ -f /usr/share/doc/$p/copyright ] && cp /usr/share/doc/$p/copyright $O/licenses/${p%-dev}.copyright
   done
-  [ -f /usr/local/lib/openh264.LICENSE ] && cp /usr/local/lib/openh264.LICENSE $O/licenses/libopenh264.LICENSE
+  [ -n "$H264" ] && [ -f /usr/local/lib/openh264.LICENSE ] && cp /usr/local/lib/openh264.LICENSE $O/licenses/libopenh264.LICENSE
   ls -la $O/libuamedia.a | awk "{print \$5, \$9}"; echo "decoders built in: $DEFS"
   $CC $CFLAGS -I. -o $O/umbench umbench.c $O/libuamedia.a -lstdc++ -ldl -lpthread -lm   # device check
   if [ "$TEST" = test ] || [ "$TEST" = test-ffmpeg ]; then

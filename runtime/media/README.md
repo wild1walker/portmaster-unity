@@ -118,7 +118,10 @@ What each covers:
 
 Licences: `build.sh` copies the libraries' copyright files into `out/[arm64/]licenses/`; a
 `ua_host` that links the core ships them (`THIRD_PARTY.md`). OpenH264 built from source carries
-no MPEG LA patent licence (Cisco's own binaries do); FFmpeg is the system's.
+no MPEG LA patent licence (Cisco's own binaries do); FFmpeg is the system's. `OPENH264=0
+./build.sh` (or `OPENH264=0 runtime/build.sh`) builds the core without OpenH264, for a release that
+must not carry an H.264 decoder: H.264 clips then play only where the handheld has libavcodec, and
+`out/licenses/` lists only what was linked.
 
 ## Environment
 
