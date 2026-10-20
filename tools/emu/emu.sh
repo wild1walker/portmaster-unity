@@ -10,6 +10,8 @@
 # EMU_ZIP=<dir>    the data tool's zip folder (APK, OBB, android_package.json, ...)
 # ZIP2=<dir>       a variant APK for A/B runs (its .apk replaces the one in EMU_ZIP)
 # EMU_HOSTBIN=<dir> another ua_host build to run (default runtime/host/out)
+# EMU_NET=1        give the game network access (default: none, so a game's analytics and other
+#                  requests never leave the Mac; a run that tests networking turns it on)
 # Environment passed into the container: UA_*, GC_*, ANDROID_*, GALLIUM_*, LP_*, and the prefixes
 # in EMU_ENV (space-separated, e.g. EMU_ENV="CUPHEAD_" for a port's own switches).
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -26,5 +28,6 @@ case "${EMU_ARCH:-armhf}" in
          docker image inspect $img >/dev/null 2>&1 || docker build -q -t $img "$here/runtime/docker/arm64" >/dev/null ;;
   *) echo "EMU_ARCH must be armhf or arm64"; exit 1 ;;
 esac
-docker run --rm --platform $plat "${envs[@]}" "${zip2[@]}" -v "$E":/emu -v "$Z":/zip:ro -v "${EMU_HOSTBIN:-$hostbin}":/hostbin:ro \
+net=(--network none); [ "${EMU_NET:-0}" = 1 ] && net=()
+docker run --rm --platform $plat "${net[@]}" "${envs[@]}" "${zip2[@]}" -v "$E":/emu -v "$Z":/zip:ro -v "${EMU_HOSTBIN:-$hostbin}":/hostbin:ro \
   -v "$here/tools/emu":/emubin:ro $img sh /emubin/run_emu.sh "/emu/${1:-emu.log}" "${2:-600}" "${3:-release}"
