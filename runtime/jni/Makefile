@@ -12,7 +12,7 @@ ifeq ($(ARCH),arm64)
 CROSS   ?=
 OUT     := out/arm64
 # arm64-v8a code and the host share AAPCS64: the "Android side" of the tests is ordinary code
-ANDROID_CFLAGS := -std=gnu11 -O2 -g -Wall -fno-stack-protector
+ANDROID_CFLAGS := -std=gnu11 -O2 -g -Wall
 TEST_LDFLAGS   :=
 else ifeq ($(ARCH),armhf)
 CROSS   ?= arm-linux-gnueabihf-
