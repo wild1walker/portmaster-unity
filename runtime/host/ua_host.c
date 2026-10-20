@@ -4,6 +4,7 @@
 // emulator: the armeabi-v7a player in a 32-bit (armhf) build, the arm64-v8a one in an aarch64 build.
 //   ../loader   maps the Android libraries; bionic -> glibc through libhybris's hooks
 //   ../android  liblog, libandroid (window, looper, sensors), OpenSL ES (SDL2), EGL glue (Mali fbdev)
+//   display.c   the EGL window Unity draws into: Mali fbdev, or an SDL2 window (UA_DISPLAY)
 //   ../jni      the Java side: JavaVM/JNIEnv and Unity's UnityPlayer activity, in C
 // Usage: ua_host <root>   with <root>/lib/{libmain,libunity,libmono}.so, <root>/<name>.apk (the
 // game's data, assets/bin/Data), <root>/main.<ver>.<pkg>.obb (or in UA_OBB_DIR), <root>/data/ (saves) and
@@ -18,6 +19,7 @@
 #include "hitches.h"
 #include "gltrace.h"
 #include "arch.h"
+#include "display.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -277,6 +279,9 @@ int main(int argc, char **argv)
     hitches_init();                            // UA_HITCH_TRACE
     so_add_shims(gltrace_table());             // UA_GL_TRACE
     so_add_shims(glhooks_table());             // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
+    // the window: Mali fbdev (nothing to open), or an SDL2 window whose EGL objects Unity gets
+    if (display_init(pkg) != 0) { fprintf(stderr, "[host] no display (UA_DISPLAY)\n"); return 1; }
+    so_add_shims(display_egl_shims());         // NULL for fbdev
     so_add_shims(egl_shims);
     so_add_shims(android_shims);
     so_add_shims(bionic_compat_table());
@@ -323,7 +328,7 @@ int main(int argc, char **argv)
     cfg.width = ANativeWindow_getWidth(win);
     cfg.height = ANativeWindow_getHeight(win);
     cfg.density_dpi = 160;
-    cfg.refresh_rate = 60.f;
+    cfg.refresh_rate = display_refresh_rate() > 0 ? (float)display_refresh_rate() : 60.f;
     cfg.sdk_int = 19;
     cfg.os_release = "4.4.4";
     cfg.cpu_count = 4;
@@ -338,12 +343,12 @@ int main(int argc, char **argv)
     cfg.on_quit = on_quit;
     input_init();
     frames_init(root, cfg.width, cfg.height);
-    fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d\n", apk, cfg.width, cfg.height);
+    fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d (%s)\n", apk, cfg.width, cfg.height, display_backend());
     if (up_start(&cfg) != 0) { fprintf(stderr, "[host] up_start failed\n"); return 1; }
     input_started();
 
     // this thread is Android's UI thread
-    while (!quitting && up_running())
+    while (!quitting && !display_quit_requested() && up_running())
     {
         up_poll();
         input_poll();
