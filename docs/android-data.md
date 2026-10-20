@@ -200,6 +200,16 @@ and Mono `Managed` set, fetched from Unity's installers): every serialized file 
 UnityPy with the Android platform, every assembly the list names is present, APK and OBB verify.
 None has run in a player.
 
+## 5. Native plugins
+
+`check_source` runs the plugin survey (`pmunity/plugins.py`, [plugins.md](plugins.md)) on the source
+data: one warning per library the game P/Invokes (what the runtime gives it), the full report in
+`android_data_report.json` (`plugins`), `plugins.map` in the output and zip folders (`--plugin-map`
+for the port's own entries). FMOD opens its banks with plain file I/O, so for a game that uses FMOD
+the `*.bank` files of StreamingAssets stay out of the OBB and go to `zip/assets/` beside the APK
+(`--loose-assets <glob>` for other files); ua_host gives FMOD's `jar:file://` and
+`file:///android_asset/` bank paths those files.
+
 ## Unsure / untested
 
 - Nothing has run on the player yet.
