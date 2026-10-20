@@ -342,7 +342,7 @@ int main(int argc, char **argv)
     cfg.native_window = win;
     cfg.on_load_library = load_library;
     cfg.on_quit = on_quit;
-    input_init();
+    input_init(cfg.width, cfg.height);
     frames_init(root, cfg.width, cfg.height);
     fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d (%s)\n", apk, cfg.width, cfg.height, display_backend());
     if (up_start(&cfg) != 0) { fprintf(stderr, "[host] up_start failed\n"); return 1; }

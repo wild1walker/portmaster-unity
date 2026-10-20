@@ -107,6 +107,10 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
   - the BCL (mscorlib, System*, Mono.Security). The Android package has no BCL; Unity uses the
     editor's 2.0 profile for every platform.
 - `*.dll.so` (x86-64 AOT) is not shipped.
+- Assemblies a desktop build compiled for its own platform where the Android build differs:
+  `--asmpatch` runs `tools/asmpatch` on the game's Managed folder and ships what it changed (e.g.
+  Rewired's `DetectPlatform` reporting Android); a port's own patches: `--assembly-patch`,
+  `--managed-file`.
 - `tools/apicheck` (Mono.Cecil) results:
   - All 3035 references from the game assemblies into UnityEngine* resolve against the Android set.
     The 9 "missing" ones are multi-dim array runtime methods.

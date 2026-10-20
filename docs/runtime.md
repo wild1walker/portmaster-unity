@@ -58,7 +58,12 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_APK_NAME` | the APK's name without `.apk` (default: from `android_package.json`, else the only `.apk` in the root) |
 | `UA_OBB_DIR` | where the OBB is (default: beside the APK) |
 | `UA_PAD_NAME` | name the pad reports (Rewired knows Android pads by name: `Xbox Wireless Controller`) |
-| `UA_INPUT_SCRIPT` | scripted presses: `"<sec>[@<period>]:<button>[~<hold>][+...] ..."` |
+| `UA_INPUT_SCRIPT` | scripted presses: `"<sec>[@<period>]:<button>[~<hold>][+...] ..."`; `ptr=<x>/<y>` puts pointer mode's cursor there (fractions with a `.`, else pixels) |
+| `UA_POINTER=1\|mouse\|touch` | pointer mode, off by default: the pad moves a cursor ua_host draws over the frame and clicks with it, as an Android mouse (`1` = `mouse`: hover, buttons, wheel) or a finger (`touch`); see [input.md](input.md) |
+| `UA_POINTER_MOVE`, `UA_POINTER_BUTTONS`, `UA_POINTER_SCROLL` | what moves it (`lstick,dpad`; also `rstick`), pad button : mouse button (`a:left,b:right`), `rstick` = wheel; the controls it uses no longer reach the game as the pad's |
+| `UA_POINTER_SPEED`, `UA_POINTER_START`, `UA_POINTER_TOGGLE` | full speed in screen heights/s (1.2); start position `<x>/<y>` (fractions, `0.5/0.5`); a button that turns pointer mode off and on |
+| `UA_POINTER_CURSOR=0`, `UA_POINTER_SIZE`, `UA_POINTER_HIDE`, `UA_POINTER_SHOTS=1` | no cursor drawn (the game draws its own); its scale; hide it after `<s>` idle; draw it into `shot.req` screenshots too (by default they show only the game) |
+| `UA_KEYMAP=<button>:<key>,...` | pad buttons (and `up/down/left/right`, the d-pad) that press keyboard keys instead, e.g. `start:escape,x:space` |
 | `UA_FPS` | frame stats every N s (avg/p99/worst, late >25 ms, hitch >50 ms, GC); `[hitch]` lines >100 ms |
 | `touch <root>/shot.req` | screenshot of the next frame -> `<root>/shot-<n>.ppm` |
 | `UA_MONO_OPTIONS` | Mono options; `--trace=T:Class,M:Class:Method` (no `<` in specs) |

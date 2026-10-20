@@ -170,6 +170,10 @@ up_start(&c);
 for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP_KEYCODE_BUTTON_A, 0, 0);
            up_inject_axes(1, 0, n, axes, values); ... }
 ```
+- A mouse (the host's pointer mode): register a device with `UP_SOURCE_MOUSE` and send
+  `up_inject_mouse(id, action, buttons, x, y, vscroll, hscroll)`: `UP_ACTION_HOVER_MOVE` while no
+  button is held, `DOWN` / `MOVE` / `UP` with the `UP_BUTTON_*` state, `UP_ACTION_SCROLL` with the
+  wheel; `up_inject_touch` for a finger.
 - The android shim's `ANativeWindow_fromSurface(env, surface)` may use `up_surface_window(surface)`
   (== `fj_data(surface)`, the `cfg.native_window`). It currently returns its single window for any
   non-NULL Surface, which also works. `up_asset_manager(obj)` maps AssetManager objects to `cfg.asset_manager`.

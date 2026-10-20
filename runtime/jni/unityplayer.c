@@ -918,6 +918,26 @@ int up_inject_axes(int device_id, int source, int n, const int *axes, const floa
     return r;
 }
 
+int up_inject_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll)
+{
+    up_motion_ev *m = motion_new(action, UP_SOURCE_MOUSE, device_id);
+    m->n = 1;
+    m->ids[0] = 0;
+    m->tool[0] = 3;   /* TOOL_TYPE_MOUSE */
+    m->buttons = buttons;
+    m->ax[0][UP_AXIS_X] = x;
+    m->ax[0][UP_AXIS_Y] = y;
+    m->ax[0][2] = buttons ? 1.0f : 0.0f;   /* AXIS_PRESSURE */
+    m->ax[0][UP_AXIS_VSCROLL] = vscroll;
+    m->ax[0][UP_AXIS_HSCROLL] = hscroll;
+    fj_push_frame();
+    jobject ev = fj_new_by_name("android/view/MotionEvent", m, free);
+    int r = inject(ev);
+    fj_pop_frame();
+    if (fj_tracing()) up_log("mouse dev %d action %d buttons %d at %.0f,%.0f -> %d", device_id, action, buttons, x, y, r);
+    return r;
+}
+
 int up_inject_touch(int action, int n, const int *ids, const float *x, const float *y)
 {
     if (n > UP_MAX_POINTERS) n = UP_MAX_POINTERS;

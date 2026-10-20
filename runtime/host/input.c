@@ -9,8 +9,12 @@
 // UA_INPUT_SCRIPT="<sec>:<button>[~<hold sec>][+<button>...] ..." presses buttons at those times
 // after start (held 0.15 s, or <hold sec>; a,b,x,y,l1,r1,l2,r2,start,select,up,down,left,right),
 // "<sec>@<period>:..." repeats every <period> s; e.g. "30:a 36:a 70:right~60 75@10:x~9.9 80@1.5:a"
-// for unattended tests.
+// for unattended tests; lup/ldown/lleft/lright: the left stick, kup..kright: DPAD keys,
+// ptr=<x>/<y>: the pointer (UA_POINTER) to that spot (fractions of the screen with a '.', else
+// pixels), e.g. "40:ptr=0.9/0.47 41:a~1". Scripted buttons and sticks go through pointer mode and
+// UA_KEYMAP like the pad's own (pointer.c).
 #include "input.h"
+#include "pointer.h"
 #include "../jni/unityplayer.h"
 
 #include <SDL2/SDL.h>
@@ -28,6 +32,7 @@ static struct pad {
     int l2, r2;                 // trigger key state
     int script_hx, script_hy;   // UA_INPUT_SCRIPT d-pad and left stick, merged into the pad's own state
     int script_lx, script_ly;
+    int virt;                   // UA_INPUT_SCRIPT's own pad (no SDL pad present)
 } pads[MAX_PADS];
 
 static const int pad_axes[8] = { UP_AXIS_X, UP_AXIS_Y, UP_AXIS_Z, UP_AXIS_RZ,
@@ -62,7 +67,7 @@ static struct pad *pad_of(SDL_JoystickID jid)
 static void pad_open(int index)
 {
     struct pad *p = NULL;
-    for (int i = 0; i < MAX_PADS && !p; i++) if (!pads[i].gc) p = &pads[i];
+    for (int i = 0; i < MAX_PADS && !p; i++) if (!pads[i].gc && !pads[i].virt) p = &pads[i];
     if (!p) return;
     SDL_GameController *gc = SDL_GameControllerOpen(index);
     if (!gc) { fprintf(stderr, "[input] pad %d: %s\n", index, SDL_GetError()); return; }
@@ -103,9 +108,11 @@ static void pad_close(SDL_JoystickID jid)
     up_remove_input_device(p->id);
     SDL_GameControllerClose(p->gc);
     p->gc = NULL;
+    float none[8] = { 0 };
+    pointer_axes((int)(p - pads), none);       // its share of the cursor's movement
 }
 
-int input_init(void)
+int input_init(int width, int height)
 {
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0)
     { fprintf(stderr, "[input] SDL: %s\n", SDL_GetError()); return -1; }
@@ -123,6 +130,7 @@ int input_init(void)
         }
     }
     if (!pads_found) fprintf(stderr, "[input] no gamepad\n");
+    pointer_init(width, height, &next_id);
     return 0;
 }
 
@@ -130,7 +138,8 @@ static void send_axes(struct pad *p);
 
 /* ---- scripted presses -------------------------------------------------------------------- */
 #define MAX_PRESS 512
-static struct press { double at; int key; int hat_x, hat_y; int down; int stick; double period; } script[MAX_PRESS];
+#define KEY_PTR (-2)              // ptr=<x>/<y>: hat_x/hat_y unused, at pos[]
+static struct press { double at; int key; int hat_x, hat_y; int down; int stick; double period; float pos[2]; int frac; } script[MAX_PRESS];
 static int nscript, next_press;
 static double t_start;
 static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
@@ -174,25 +183,36 @@ static void script_parse(const char *spec)
         double at = atof(tok), period = strchr(tok, '@') && strchr(tok, '@') < colon ? atof(strchr(tok, '@') + 1) : 0;
         for (char *b = strtok_r(colon + 1, "+", &colon); b && nscript < MAX_PRESS - 4; b = strtok_r(NULL, "+", &colon))
         {
+            if (!strncasecmp(b, "ptr=", 4))
+            {
+                float x = 0, y = 0;
+                if (sscanf(b + 4, "%f/%f", &x, &y) != 2) { fprintf(stderr, "[input] script: %s: want ptr=<x>/<y>\n", b); continue; }
+                script[nscript++] = (struct press){ at, KEY_PTR, 0, 0, 1, 0, period, { x, y }, strchr(b, '.') != NULL };
+                continue;
+            }
             double hold = 0.15;
             char *tilde = strchr(b, '~');
             if (tilde) { *tilde = 0; hold = atof(tilde + 1); }
             int hx, hy, stick, k = script_key(b, &hx, &hy, &stick);
             if (k < 0) continue;
             if (period > 0 && hold >= period) hold = period * 0.9;
-            script[nscript++] = (struct press){ at, k, hx, hy, 1, stick, period };
-            script[nscript++] = (struct press){ at + hold, k, hx, hy, 0, stick, period };
+            script[nscript++] = (struct press){ at, k, hx, hy, 1, stick, period, { 0, 0 }, 0 };
+            script[nscript++] = (struct press){ at + hold, k, hx, hy, 0, stick, period, { 0, 0 }, 0 };
         }
     }
     qsort(script, nscript, sizeof script[0], cmp_press);
 }
-static int scripted_pad(void)
+static struct pad *scripted_pad(void)
 {
-    for (int i = 0; i < MAX_PADS; i++) if (pads[i].gc) return pads[i].id;
+    for (int i = 0; i < MAX_PADS; i++) if (pads[i].gc) return &pads[i];
     /* no real pad: a virtual one, presented like a real pad (UA_PAD_NAME, the same axes), since
        Rewired maps Android pads by name */
-    static int vid = -1;
-    if (vid >= 0) return vid;
+    static struct pad *vp;
+    if (vp) return vp;
+    for (int i = 0; i < MAX_PADS && !vp; i++) if (!pads[i].gc && !pads[i].virt) vp = &pads[i];
+    if (!vp) return NULL;
+    memset(vp, 0, sizeof *vp);
+    vp->virt = 1;
     struct up_input_device d;
     memset(&d, 0, sizeof d);
     d.id = next_id++; d.name = getenv("UA_PAD_NAME") ? getenv("UA_PAD_NAME") : "Virtual Gamepad"; d.descriptor = "ua-virtual-pad";
@@ -206,12 +226,13 @@ static int scripted_pad(void)
         d.axis[i] = all[i]; d.min[i] = trig ? 0.f : -1.f; d.max[i] = 1.f;
     }
     up_add_input_device(&d);
+    vp->id = d.id;
     fprintf(stderr, "[input] virtual pad \"%s\" as Android device %d\n", d.name, d.id);
-    return vid = d.id;
+    return vp;
 }
 static void script_run(void)
 {
-    static int dev = -1;
+    static struct pad *sp;
     double t = now_s() - t_start;
     while (next_press < nscript && script[next_press].at <= t)
     {
@@ -229,24 +250,22 @@ static void script_run(void)
             while (i > next_press && script[i - 1].at > again.at) { script[i] = script[i - 1]; i--; }
             script[i] = again;
         }
-        if (dev < 0) dev = scripted_pad();
+        if (p->key == KEY_PTR) { pointer_warp(p->pos[0], p->pos[1], p->frac); continue; }
+        if (!sp) sp = scripted_pad();
+        if (!sp) continue;
         if (p->period <= 0)
             fprintf(stderr, "[input] script %.2f s: %s %d/%d,%d\n", t, p->down ? "down" : "up", p->key, p->hat_x, p->hat_y);
-        struct pad *real = NULL;
-        for (int i = 0; i < MAX_PADS; i++) if (pads[i].gc && pads[i].id == dev) real = &pads[i];
-        if (p->key) up_inject_key(dev, UP_SOURCE_GAMEPAD, p->down ? UP_ACTION_DOWN : UP_ACTION_UP, p->key, 0, 0);
-        else if (real)
+        if (p->key)
         {
-            int *sx = p->stick ? &real->script_lx : &real->script_hx, *sy = p->stick ? &real->script_ly : &real->script_hy;
-            if (p->hat_x) *sx = p->down ? p->hat_x : 0;
-            if (p->hat_y) *sy = p->down ? p->hat_y : 0;
-            send_axes(real);
+            if (!pointer_key(p->key, p->down))
+                up_inject_key(sp->id, UP_SOURCE_GAMEPAD, p->down ? UP_ACTION_DOWN : UP_ACTION_UP, p->key, 0, 0);
         }
         else
         {
-            int ax[2] = { UP_AXIS_HAT_X, UP_AXIS_HAT_Y };
-            float v[2] = { p->down ? (float)p->hat_x : 0.f, p->down ? (float)p->hat_y : 0.f };
-            up_inject_axes(dev, UP_SOURCE_JOYSTICK, 2, ax, v);
+            int *sx = p->stick ? &sp->script_lx : &sp->script_hx, *sy = p->stick ? &sp->script_ly : &sp->script_hy;
+            if (p->hat_x) *sx = p->down ? p->hat_x : 0;
+            if (p->hat_y) *sy = p->down ? p->hat_y : 0;
+            send_axes(sp);
         }
     }
 }
@@ -256,25 +275,30 @@ void input_started(void)
     started = 1;
     t_start = now_s();
     if (getenv("UA_INPUT_SCRIPT")) script_parse(getenv("UA_INPUT_SCRIPT"));
+    pointer_start();
 }
 
 static void send_axes(struct pad *p)
 {
-    float v[8];
+    float v[8] = { 0 };
     SDL_GameController *gc = p->gc;
-    v[0] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX) / 32767.f;
-    v[1] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY) / 32767.f;
-    v[2] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_RIGHTX) / 32767.f;
-    v[3] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_RIGHTY) / 32767.f;
-    v[4] = (float)(SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) - SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_LEFT));
-    v[5] = (float)(SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_DOWN) - SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_UP));
+    if (gc)
+    {
+        v[0] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTX) / 32767.f;
+        v[1] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_LEFTY) / 32767.f;
+        v[2] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_RIGHTX) / 32767.f;
+        v[3] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_RIGHTY) / 32767.f;
+        v[4] = (float)(SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) - SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_LEFT));
+        v[5] = (float)(SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_DOWN) - SDL_GameControllerGetButton(gc, SDL_CONTROLLER_BUTTON_DPAD_UP));
+        v[6] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.f;
+        v[7] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.f;
+    }
     if (p->script_lx) v[0] = (float)p->script_lx;
     if (p->script_ly) v[1] = (float)p->script_ly;
     if (p->script_hx) v[4] = (float)p->script_hx;
     if (p->script_hy) v[5] = (float)p->script_hy;
-    v[6] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.f;
-    v[7] = SDL_GameControllerGetAxis(gc, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.f;
     for (int i = 0; i < 8; i++) { if (v[i] < -1.f) v[i] = -1.f; if (v[i] > 1.f) v[i] = 1.f; }
+    pointer_axes((int)(p - pads), v);           // pointer mode / UA_KEYMAP take their controls
     if (!memcmp(v, p->axes, sizeof v)) return;
     memcpy(p->axes, v, sizeof v);
     int ax[10]; float val[10];
@@ -303,8 +327,11 @@ void input_poll(void)
         case SDL_CONTROLLERBUTTONUP:
             if (!started || !(p = pad_of(e.cbutton.which))) break;
             if (keycode(e.cbutton.button))
-                up_inject_key(p->id, UP_SOURCE_GAMEPAD, e.type == SDL_CONTROLLERBUTTONDOWN ? UP_ACTION_DOWN : UP_ACTION_UP,
-                              keycode(e.cbutton.button), 0, 0);
+            {
+                int down = e.type == SDL_CONTROLLERBUTTONDOWN;
+                if (!pointer_key(keycode(e.cbutton.button), down))
+                    up_inject_key(p->id, UP_SOURCE_GAMEPAD, down ? UP_ACTION_DOWN : UP_ACTION_UP, keycode(e.cbutton.button), 0, 0);
+            }
             else moved[p - pads] = 1;     // d-pad -> hat axes
             break;
         case SDL_CONTROLLERAXISMOTION:
@@ -314,4 +341,5 @@ void input_poll(void)
     }
     for (int i = 0; i < MAX_PADS; i++) if (moved[i] && pads[i].gc) send_axes(&pads[i]);
     if (next_press < nscript) script_run();
+    pointer_tick();
 }
