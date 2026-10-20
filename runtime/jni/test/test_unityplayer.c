@@ -203,6 +203,7 @@ static int run_shape(int shape)
     CHECK(wait_for(R_FMOD_PROCESS, 3, 3000));
     if (shape >= SHAPE_2021_3) CHECK(wait_for(R_VSYNC, 5, 3000) && wait_for(R_VSYNC_WAITED, 3, 3000));
     else CHECK(R(R_VSYNC) == 0);
+    for (int t = 0; t < 300 && frames_cb < 10; t++) usleep(10000);   /* the 10th frame may still wait for its vsync */
     CHECK(frames_cb >= 10);
     CHECK(audio_frames >= 3 * 256);
 

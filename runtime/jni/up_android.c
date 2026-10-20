@@ -489,6 +489,8 @@ H(vib_cancel) { if (UPC.on_vibrate) UPC.on_vibrate(UPC.user, 0); return fj_v(); 
 H(loc_lang)    { return fj_l(fj_string(UPC.language)); }
 H(loc_country) { return fj_l(fj_string(UPC.country)); }
 H(loc_str)     { char b[64]; snprintf(b, sizeof b, "%s_%s", UPC.language, UPC.country); return fj_l(fj_string(b)); }
+/* BCP 47 (API 21+): Mono 4.x players take the process culture from it ("Getting locale") */
+H(loc_tag)     { char b[64]; snprintf(b, sizeof b, "%s-%s", UPC.language, UPC.country); return fj_l(fj_string(b)); }
 
 /* Environment */
 H(env_extDir)  { return fj_l(up_make_file(UPC.external_storage)); }
@@ -1603,6 +1605,7 @@ void up_android_register(void)
     M("java/util/Locale", "getLanguage", "()Ljava/lang/String;", loc_lang);
     M("java/util/Locale", "getCountry", "()Ljava/lang/String;", loc_country);
     M("java/util/Locale", "toString", "()Ljava/lang/String;", loc_str);
+    M("java/util/Locale", "toLanguageTag", "()Ljava/lang/String;", loc_tag);
     SMU("java/util/Locale", "getDefault", "()Ljava/util/Locale;", h_obj, &g_locale);
     SMU("android/os/Environment", "getExternalStorageState", "()Ljava/lang/String;", h_str, "mounted");
     SM("android/os/Environment", "getExternalStorageDirectory", "()Ljava/io/File;", env_extDir);

@@ -508,6 +508,7 @@ void up_input_register(void)
     fj_static_int(K, "KEYCODE_ZOOM_OUT", 169);
     fj_static_int(K, "KEYCODE_BACK", 4);
     fj_static_int(K, "KEYCODE_MENU", 82);
+    fj_static_int(K, "KEYCODE_CAMERA", 27);           /* 2019.4+ players read it */
     fj_static_int(K, "ACTION_DOWN", 0);
     fj_static_int(K, "ACTION_UP", 1);
     fj_static_int(K, "ACTION_MULTIPLE", 2);

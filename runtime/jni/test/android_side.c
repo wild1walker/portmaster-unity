@@ -254,6 +254,17 @@ int android_side_run(JavaVM *vm)
     CHECK(absent == 0 && (*env)->ExceptionCheck(env));
     (*env)->ExceptionClear(env);
 
+    /* Class.forName(binary name, initialize, loader), as libunity's class lookups use it */
+    jclass cc = (*env)->FindClass(env, "java/lang/Class");
+    jmethodID fn3 = (*env)->GetStaticMethodID(env, cc, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;");
+    jobject k = (*env)->CallStaticObjectMethod(env, cc, fn3, (*env)->NewStringUTF(env, "test.Calc"), (jboolean)0, (jobject)0);
+    CHECK(k != 0 && (*env)->IsSameObject(env, k, calc) && !(*env)->ExceptionCheck(env));
+    k = (*env)->CallStaticObjectMethod(env, cc, fn3, (*env)->NewStringUTF(env, "com.example.Absent"), (jboolean)0, (jobject)0);
+    CHECK(k == 0 && (*env)->ExceptionCheck(env));
+    jthrowable cnf = (*env)->ExceptionOccurred(env);
+    (*env)->ExceptionClear(env);
+    CHECK((*env)->IsInstanceOf(env, cnf, (*env)->FindClass(env, "java/lang/ClassNotFoundException")));
+
     /* RegisterNatives + Java-side call of a native through the JNI table */
     jclass nat = (*env)->FindClass(env, "test/Natives");
     CHECK((*env)->RegisterNatives(env, nat, natives, sizeof natives / sizeof natives[0]) == JNI_OK);
