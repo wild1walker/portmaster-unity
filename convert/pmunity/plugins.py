@@ -454,7 +454,7 @@ def fmod_info(constants, pinvokes, files):
         'version': v,
         'android': {
             'files': files_android,
-            'abi': 'armeabi-v7a (the armv7 Mono player; arm64-v8a for an arm64 player)',
+            'abi': 'armeabi-v7a for the armv7 Mono player, arm64-v8a for an arm64 player',
             'from': [f'FMOD Engine {v} for Android (fmodstudioapi{vv}android.tar.gz): api/core/lib/<abi>/libfmod.so, '
                      f'api/studio/lib/<abi>/libfmodstudio.so',
                      f'or FMOD for Unity {v} (fmodstudio{vv}.unitypackage): the Android libraries under '
@@ -646,6 +646,7 @@ def summary(rep):
         s = f['supply']
         out.append(f'FMOD {f["header_version"]}: put {", ".join(s["android"]["files"])} of FMOD Engine {s["version"]} '
                    f'for Android ({s["android"]["abi"]}) in {s["android"]["to"]}' + (f'; {f["warning"]}' if f.get('warning') else ''))
+        out[-1] = out[-1].replace(' in lib/ (beside libunity.so)', ' in the port\'s lib/, beside libunity.so')
     return out
 
 

@@ -436,7 +436,7 @@ SOUND_W(w_createstream4, r_createstream4, "stream")
 #define PLUGIN_W(w, r)                                                                              \
     static SO_ABI int w(void *sys, const char *name, unsigned *h, unsigned prio)                    \
     {                                                                                               \
-        char b[PATH_MAX];                                                                           \
+        char b[PATH_MAX + 260];                                                                     \
         if (name && !is_file(name)) {                                                               \
             const char *s = strrchr(name, '/');                                                     \
             snprintf(b, sizeof b, "%s/%s", g_libdir, s ? s + 1 : name);                             \

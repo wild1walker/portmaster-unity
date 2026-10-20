@@ -115,8 +115,39 @@ Java side, data loading and the picture do.
 What these runs still show: Unity's optional Java classes (`GoogleARCoreApi`, `Camera2Wrapper`,
 `HFPStatus`, `AudioVolumeHandler`, `SoftInputProvider`) are placeholders that only get natives
 registered; cursor images (`Bitmap`/`PointerIcon`) and video decoding are other work; HTTPS from
-2019.4+ fails certificate checks (`TrustManagerFactory` placeholders; libunity's unitytls then
-reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM builds.
+2018.4+ now checks certificates against the handheld's CA bundle (runtime/jni/up_tls.c, below); a
+game's native plugins follow `plugins.map` (FMOD needs FMOD's ARM libraries; Burst falls back).
+
+## Plugins and services (emulated rig)
+
+Native plugins, platform SDKs and HTTPS ([plugins.md](../plugins.md)), on free Linux games of the
+corpus, each converted with `android-data` (plugin report, `plugins.map`, FMOD banks beside the APK)
+and run in the rig. FMOD's real libraries need an FMOD account and were not used: an ABI-compatible
+test double (`runtime/host/test/fmod_double.c`) stood in for them as `lib/libfmodstudio.so`.
+
+| player | game | plugins | result |
+|---|---|---|---|
+| 2022.3.36 | URP, Burst | FMOD 2.02.23 (`fmodstudio` only), Steamworks, Resonance | the integration starts FMOD (create, output, software format, initialize), loads its 5 banks from beside the APK (`file:///android_asset/*.bank` -> `assets/`), starts its music event, sets 3 VCA volumes; the same 34 calls with the double built as an Android and as a glibc library (15 softfp thunks); `org.fmod.FMOD` answers (initialized, 48000 Hz / 512, assets, one output). Steam stub: `SteamAPI_Init` fails, the game goes on. Without ARM FMOD libraries: `DllNotFoundException`, silent, as before |
+| 2021.1.28 | Rewired | FMOD 2.02.04, SQLite, Steamworks | FMOD as above (5 banks, events, 3D attributes); `sqlite3` -> the system's `libsqlite3.so.0` (4 thunks); Unity's own analytics over HTTPS (below) |
+| 2022.3.62f2 | Burst, Addressables | Discord Game SDK, StandaloneFileBrowser | Discord stub: the game logs "Failed to initialize Discord: NotRunning" and reaches its language screen. (Its Addressables bundles fail: their provider checks `jar:file://` StreamingAssets paths with file I/O, not a plugin matter) |
+| 2022.1.10 | Burst | SQLite (GameAnalytics) | `sqlite3` -> the system's library; GameAnalytics turns itself off on Android ("Unsupported platform") |
+| 2018.1.0 | Photon | Steamworks, Discord Game SDK | not reached: a game script's `Awake` faults right after "The script behaviour ... could not be instantiated" (2018.1 is outside the LTS lines; before any plugin call). Stubs registered (steam, discord_game_sdk), Photon's optional native socket plugins refused |
+| 2017.4.40 | Rewired, intro videos | Steamworks | requests of Unity's analytics and the game's news feed fail at once as before; with `UA_HTTP=1` (and the system's libcurl) they are made: below |
+| 2017.4.9 | Cuphead | CSteamworks, GOG Galaxy (macOS build) | `plugins.map` from the survey: CSteamworks stub (never called: the GOG build's online interface is GOG's), Galaxy refused as before; title screen as before |
+
+HTTPS, Unity 2018.4+ (the 2021.1 game's analytics at startup: `config.uca.cloud.unity3d.com`,
+`cdp.cloud.unity3d.com`, `perf-events.cloud.unity3d.com`), on an internal Docker network whose DNS
+sends every name to a local HTTPS server that signs a certificate per name with a self-made CA:
+with that CA as the bundle (`UA_CA_BUNDLE`), libunity's unitytls verifies all of them and the six
+POSTs arrive; with another CA, all six handshakes fail (`Curl error 60: Cert verify failed:
+UNITYTLS_X509VERIFY_FLAG_NOT_TRUSTED`) and nothing is sent. Before up_tls.c every certificate
+check failed the same way.
+
+HTTP(S), Unity 2017.4 (Java UnityWebRequest, `UA_HTTP=1`, the rig image with Debian's libcurl4
+added): the 2017.4.40 game's five HTTPS POSTs (Unity analytics, config) and its plain-HTTP news
+GET reach the local server and get their 200 back; with another CA the four HTTPS requests fail
+with TLS error 16 (`SSL certificate problem: unable to get local issuer certificate`) and the HTTP
+one still works.
 
 ## Gaps, most impact for the most games first
 

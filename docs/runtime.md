@@ -92,6 +92,7 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_QUIT_CLEANUP=1` | run Unity's engine cleanup (nativeDone) at quit; by default the host pauses Unity (PlayerPrefs saved) and exits |
 | `UA_PLUGIN_MAP=<file>` | another plugins.map (default `<root>/plugins.map`; [plugins.md](plugins.md)) |
 | `UA_CA_BUNDLE=<pem>` (`SSL_CERT_FILE`, `SSL_CERT_DIR`) | the CA certificates libunity's TLS trusts (Unity 2018.4+; default: the system bundle, `/etc/ssl/certs/ca-certificates.crt` and the other usual places; [plugins.md](plugins.md#https)) |
+| `UA_HTTP=1` | Unity 2017.4 - 2018.4: UnityWebRequest/WWW make real requests through the system's libcurl (default: they fail at once, as without a network; [plugins.md](plugins.md#https)) |
 | `UA_AUDIO_RATE`, `UA_AUDIO_FRAMES` | output rate and buffer size AudioManager reports to FMOD (default 48000, 512) |
 | `UM_TRACE`, `UM_VIDEO_BUFFERS`, `UM_VPX_THREADS`, `UM_H264`, `UM_FFMPEG` | video (Unity's VideoPlayer, `runtime/media`): per-buffer log, a video decoder's output queue (default 4), libvpx threads, OpenH264 for every H.264 stream, the system's libavcodec off / from a path (see Video below) |
 | `UA_HITCH_TRACE=<ms>` | in frames longer than `<ms>`, sample `UA_HITCH_THREADS` (default `UnityMain`) every `UA_HITCH_EVERY` ms (20): pc, lr, return addresses as module+offset (runtime/host/hitches.c; `tools/analysis/sym.py` names libunity offsets, `tools/analysis/hitchsum.py` sums them up) |

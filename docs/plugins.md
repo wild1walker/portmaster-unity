@@ -145,11 +145,14 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | Unity's Linux launcher | (`ScreenSelector.so`) | - | the desktop player's own dialog; never used |
 | Windows / macOS system libraries | `kernel32`, `user32`, `/System/Library/...` | - | fail as on a Linux PC |
 
-Survey of the corpus (the six corpus games and four `svc-*` ones, free itch.io Linux builds) and of
-the Plugins folders of 68 more free Linux Mono builds (read from their zip directories): Burst
-(17 of 68), Steamworks (11), Discord Game SDK (3), FMOD Studio with Resonance Audio (3), SQLite (1),
-StandaloneFileBrowser (1), CSteamworks (1); Unity's ScreenSelector in 26. None ships GOG Galaxy,
-EOS or Wwise for Linux; Cuphead's macOS build has GOG Galaxy and CSteamworks P/Invokes.
+Survey: the ten corpus games (free itch.io Linux Mono builds, 2017.4 - 2022.3; `pmunity plugins`
+reads every one: `PMUNITY_GAMES=... python -m unittest tests.test_plugins`) and the Plugins folders
+of 68 free Linux Mono builds from itch.io's listings (their zip directories, read with range
+requests): Burst in 17 of them, Steamworks 11, Discord Game SDK 3, FMOD Studio with Resonance
+Audio 3, SQLite 1, StandaloneFileBrowser 1, CSteamworks 1, Unity's ScreenSelector 26. None ships GOG
+Galaxy, EOS or Wwise for Linux; Cuphead's macOS build P/Invokes GOG Galaxy and CSteamworks. Of 76
+free Android builds, one ships FMOD's Android libraries (its `libfmod.so` needs only `liblog`,
+`libm`, `libdl`, `libc`, all provided) and one Wwise's.
 
 ## HTTPS
 
@@ -184,15 +187,24 @@ unknown CA (not trusted), and every server when there is no bundle; a Debian ca-
 (150 certificates) round-trips too, DER equal to openssl's.
 
 **Unity 2017.4 - 2018.4 UnityWebRequest/WWW** go through Unity's Java class
-`com.unity3d.player.UnityWebRequest` (HttpURLConnection on a phone). runtime/jni answers every request
-as a phone without a network does (UnknownHostException: the request completes with an error at
-once). Decision: real HTTP(S) for these versions is worth having only as an option (a port opts in):
-the transport is small (the Java class's natives are `uploadCallback`, `downloadCallback`,
-`headerCallback`, `contentLengthCallback`, `responseCodeCallback`, `errorCallback`,
-`validateCertificateCallback`), the system's libcurl through dlopen would do the HTTP and its own
-certificate checks against the same bundle, but the handhelds' 32-bit userlands may have no libcurl,
-and the games of those versions that need the network are rare (analytics and news feeds in the
-corpus, whose failure changes nothing). It is not implemented yet.
+`com.unity3d.player.UnityWebRequest` (HttpURLConnection on a phone; runtime/jni/up_http.c here). By
+default every request fails at once as on a phone without a network (UnknownHostException, error 7),
+which is what these versions did in this runtime before; Cuphead (2017.4) keeps that.
+Decision: real HTTP(S) is worth having as an option, because the transport is small and the same
+trust store serves it, but not as the default: the handhelds' 32-bit userlands may lack libcurl, and
+the requests the corpus games of these versions make (analytics, news feeds) change nothing when
+they fail. `UA_HTTP=1` makes real requests through the system's libcurl (`libcurl.so.4` or
+`libcurl-gnutls.so.4`, by dlopen), driving libunity's natives in the order Unity's Java class does
+(the body through `uploadCallback`, `responseCodeCallback`, `headerCallback("Status", <status
+line>)` and each header, `contentLengthCallback`, `downloadCallback` per block of at most 128 KiB,
+`errorCallback` with the Java side's codes: unknown host 7, malformed URL 5, protocol 4, timeout 14,
+TLS 16, other I/O 12). Redirects are left to Unity (as `setInstanceFollowRedirects(false)`), the
+request's timeout applies, certificates and host names are checked by libcurl against up_tls.c's
+bundle. Not provided: a game's own `CertificateHandler` (2018.4) is not consulted (the system's
+checks still apply: nothing is accepted that they refuse), and there is no cookie store between
+requests. Tested against local HTTP/HTTPS servers (`tls_test.sh`: GET, HEAD, POST with a body, a
+300000-byte body, a download stopped by Unity, the test CA, an unknown CA, a wrong host name, an
+unknown host, a malformed URL, and the default without `UA_HTTP`).
 
 ## Corpus results (emulated rig)
 
