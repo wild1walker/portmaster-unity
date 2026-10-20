@@ -124,7 +124,10 @@ enum {
     UP_SOURCE_JOYSTICK    = 0x01000010,
 };
 enum { UP_ACTION_DOWN = 0, UP_ACTION_UP = 1, UP_ACTION_MOVE = 2, UP_ACTION_CANCEL = 3,
-       UP_ACTION_POINTER_DOWN = 5, UP_ACTION_POINTER_UP = 6 };
+       UP_ACTION_POINTER_DOWN = 5, UP_ACTION_POINTER_UP = 6, UP_ACTION_HOVER_MOVE = 7,
+       UP_ACTION_SCROLL = 8, UP_ACTION_HOVER_ENTER = 9, UP_ACTION_HOVER_EXIT = 10 };
+/* MotionEvent.getButtonState bits */
+enum { UP_BUTTON_PRIMARY = 1, UP_BUTTON_SECONDARY = 2, UP_BUTTON_TERTIARY = 4 };
 /* a few android.view.KeyEvent / MotionEvent constants */
 enum {
     UP_KEYCODE_BACK = 4, UP_KEYCODE_DPAD_UP = 19, UP_KEYCODE_DPAD_DOWN = 20,
@@ -137,7 +140,7 @@ enum {
     UP_KEYCODE_BUTTON_START = 108, UP_KEYCODE_BUTTON_SELECT = 109, UP_KEYCODE_BUTTON_MODE = 110,
 };
 enum {
-    UP_AXIS_X = 0, UP_AXIS_Y = 1, UP_AXIS_Z = 11, UP_AXIS_RX = 12, UP_AXIS_RY = 13, UP_AXIS_RZ = 14,
+    UP_AXIS_X = 0, UP_AXIS_Y = 1, UP_AXIS_VSCROLL = 9, UP_AXIS_HSCROLL = 10, UP_AXIS_Z = 11, UP_AXIS_RX = 12, UP_AXIS_RY = 13, UP_AXIS_RZ = 14,
     UP_AXIS_HAT_X = 15, UP_AXIS_HAT_Y = 16, UP_AXIS_LTRIGGER = 17, UP_AXIS_RTRIGGER = 18,
     UP_AXIS_GAS = 22, UP_AXIS_BRAKE = 23,
 };
@@ -163,6 +166,12 @@ int  up_inject_key(int device_id, int source, int action, int keycode, int repea
 int  up_inject_axes(int device_id, int source, int n, const int *axes, const float *values);
 /* A touch MotionEvent; action may include the pointer index (ACTION_POINTER_DOWN | idx<<8). */
 int  up_inject_touch(int action, int n, const int *ids, const float *x, const float *y);
+/* A mouse MotionEvent (SOURCE_MOUSE, TOOL_TYPE_MOUSE, one pointer) at x, y in view pixels (origin
+ * top left), as Android delivers a mouse: UP_ACTION_HOVER_MOVE while no button is held, DOWN when
+ * the first button goes down, MOVE while one is held (and when the held set changes), UP when the
+ * last one is released, SCROLL with vscroll/hscroll (AXIS_VSCROLL > 0: wheel up). buttons:
+ * UP_BUTTON_* held after the event (getButtonState). */
+int  up_inject_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll);
 
 /* Register the fake Android/Unity classes without starting (done by up_start; tests). */
 void up_register_classes(const struct up_config *cfg);

@@ -9,6 +9,12 @@ has GLES3 programs.
 `sources` names the desktop platforms to translate, in order of preference: 'glcore' (OpenGL
 Core, macOS / Linux builds; the default) and 'd3d11' (Direct3D 11, Windows builds, with Unity's
 HLSLcc: tools/hlslcc). A shader is translated from the first one it has.
+
+`glcore4x`: also translate the GLCore41 / GLCore43 programs (`#pragma target 4.5` and up) and
+give shaders whose variants were all stripped an empty GLES3 blob (convert.add_gles3). On by
+default, for data of every Unity version; config `"shaders": {"glcore4x": false}` (or `pmunity
+convert --set shaders.glcore4x=false`) keeps a port on the output the converter wrote before
+(Cuphead's port, which was checked on the device that way, sets it).
 """
 import os
 import re
@@ -19,6 +25,11 @@ from . import convert as C
 from . import dxbc
 
 SOURCES = {'glcore': B.PLATFORM_GLCORE, 'd3d11': B.PLATFORM_D3D11}
+
+
+def glcore4x_for(path, glcore4x=None):
+    """Whether the GLCore41/43 programs of a serialized file or bundle are translated (None: yes)."""
+    return True if glcore4x is None else bool(glcore4x)
 
 
 def shader_files(job, bundles=r'.'):
@@ -42,8 +53,13 @@ def _is_bundle(path):
 
 
 def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, optimize=None, sources=('glcore',),
-        hlslcc=None):
-    """Returns the per-shader results. hlslcc: the pmhlslcc binary (default dxbc.find_hlslcc())."""
+        hlslcc=None, glcore4x=None):
+    """Returns the per-shader results. hlslcc: the pmhlslcc binary (default dxbc.find_hlslcc());
+    glcore4x: see the module docstring."""
+    if glcore4x is None:
+        glcore4x = (job.cfg.get('shaders') or {}).get('glcore4x')
+    if glcore4x not in (None, True, False):
+        raise ValueError(f'shaders.glcore4x: {glcore4x!r} (true or false)')
     for src in sources:
         if src not in SOURCES:
             raise ValueError(f'unknown shader source {src!r} (known: {", ".join(SOURCES)})')
@@ -55,6 +71,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
         if job.is_done('shaders', rel):
             continue
         lf = Loaded(job.path_in(rel))
+        gl4 = glcore4x_for(job.path_in(rel), glcore4x)
         n = 0
         for pid, o in lf.objects('Shader'):
             t = o.read_typetree()
@@ -64,7 +81,8 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                     translator = dxbc.Translator(hlslcc)
                 r = C.add_gles3_d3d11(t, translator, precision=precision, replace=replace, optimize=opt)
             else:
-                r = C.add_gles3(t, precision=precision, replace=replace, optimize=opt)
+                r = C.add_gles3(t, precision=precision, replace=replace, optimize=opt, glcore4x=gl4)
+                r.glcore4x = gl4
             r.file = rel
             results.append(r)
             if r.status == 'converted' or r.changed:
@@ -88,8 +106,16 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             f'rewrites: {sum(len(r.notes) for r in conv)} stages ({", ".join(sorted({n.split(" ", 1)[1].rsplit(" ", 1)[0] for r in conv for n in r.notes})) or "none"})')
     es31 = sum(getattr(r, 'es31', 0) for r in conv)
     if es31:
-        job.log(f'shaders: {es31} programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions): '
-                f'GLES 3.1 programs, used where the device has OpenGL ES 3.1+')
+        job.log(f'shaders: {es31} programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, '
+                f'storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+')
+    gl4 = [r for r in results if r.source == 'glcore' and getattr(r, 'glcore4x', False)]
+    if gl4:
+        sub = [w for r in gl4 if r.source == 'glcore' for w in r.failed]
+        job.log(f'shaders: GLCore41/43 programs translated too: {sum(r.programs4x for r in gl4 if r.status == "converted")} '
+                f'programs; {len(sub)} SubShaders left out (no ES equivalent); '
+                f'{sum(r.empty for r in gl4)} shaders without programs (stripped) given an empty GLES3 blob')
+    elif any(r.source == 'glcore' for r in results):
+        job.log('shaders: GLCore41/43 programs not translated (glcore4x off)')
     vr = sum(r.dropped for r in conv if r.source == 'glcore')
     if vr:
         job.log(f'shaders: {vr} VR-only OpenGL Core variants not translatable (left out, never used on a handheld)')

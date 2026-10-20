@@ -23,6 +23,11 @@ Debian's armhf cross toolchains and libraries (Dockerfiles), SDL2, Mesa (test ri
 packages in `convert/requirements.txt` (UnityPy MIT, lz4 BSD, astc-encoder Apache 2.0, Pillow
 MIT-CMU, texture2ddecoder MIT, pyelftools public domain).
 
+[Mono.Cecil](https://github.com/jbevain/cecil) 0.11.6 (MIT, Copyright (c) 2008 - 2015 Jb Evain,
+Copyright (c) 2008 - 2011 Novell, Inc.), a NuGet package `tools/asmpatch` is built with:
+`out/linux-arm64/asmpatch` contains it and the .NET runtime (MIT; distribute that binary with
+Mono.Cecil's licence and the runtime pack's `LICENSE.TXT` and `THIRD-PARTY-NOTICES.TXT`).
+
 [HLSLcc](https://github.com/Unity-Technologies/HLSLcc) (MIT; it includes bstrlib, BSD), fetched by
 `tools/hlslcc/build.sh` at a pinned commit and compiled into `pmhlslcc` (Direct3D 11 shaders,
 `pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the

@@ -5,12 +5,15 @@
 //                     50 ms (hitch), Mono GC collections and heap; any frame over 100 ms is also
 //                     logged at once ("[hitch]", seconds since start) to line it up with game logs
 //   touch <root>/shot.req   save the next frame as <root>/shot-<n>.ppm (the back buffer being
-//                     presented; checked once a second, the request file is removed)
+//                     presented; checked once a second, the request file is removed). Pointer
+//                     mode's cursor is drawn after it (UA_POINTER_SHOTS=1: before), so shots show
+//                     the game's own picture
 #define _GNU_SOURCE
 #include "frames.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
+#include "pointer.h"
 #include "../android/egl_glue.h"
 #include "../loader/so_loader.h"
 
@@ -108,11 +111,16 @@ static void on_swap(void *ctx)
     static int n, total, late, hitch, gc_prev = -1;
     double t = now();
     if (!g_t_start) g_t_start = t;
+    int shot = 0;
     if (t - checked >= 1.0)
     {
         checked = t;
-        if (access(g_req, F_OK) == 0) { unlink(g_req); screenshot(); }
+        if (access(g_req, F_OK) == 0) { unlink(g_req); shot = 1; }
     }
+    int cursor_first = shot && pointer_in_shots();
+    if (cursor_first) pointer_draw();
+    if (shot) screenshot();
+    if (!cursor_first) pointer_draw();          // UA_POINTER's cursor (nothing when off)
     if (++total == 1) glhooks_first_frame();
     hitches_frame();
     gltrace_frame();

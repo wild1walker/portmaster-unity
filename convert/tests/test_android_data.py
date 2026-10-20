@@ -3,6 +3,7 @@ SerializedFile headers (formats 17, 22), Unity versions, assembly lists, compres
 (data.unity3d), GLES 3.1 programs.   python -m unittest discover -s tests   (from convert/)"""
 import lzma
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -177,6 +178,63 @@ void main()
         with self.assertRaises(G.Unsupported) as cm:
             G.program_to_es(self.PROGRAM.replace('sampler2DMS', 'sampler2DMSArray'), es='310')
         self.assertNotIsInstance(cm.exception, G.NeedsES31)
+
+
+class AsmpatchTest(unittest.TestCase):
+    """--asmpatch: the command gets <Managed> <work dir>; what it writes is shipped like
+    --managed-file; its failure stops the run; an assembly a port also provides is an error."""
+
+    FAKE = ('import os, sys\n'
+            'managed, out = sys.argv[-2], sys.argv[-1]\n'
+            'assert os.path.isfile(os.path.join(managed, "Assembly-CSharp.dll"))\n'
+            'os.makedirs(out, exist_ok=True)\n'
+            'mode = sys.argv[1]\n'
+            'if mode == "fail": print("FAIL rewired-android: no constant"); sys.exit(1)\n'
+            'if mode == "patch":\n'
+            '    open(os.path.join(out, "Assembly-CSharp.dll"), "wb").write(b"patched")\n'
+            '    print("ok   rewired-android: Assembly-CSharp.dll: platform Linux -> Android (7)")\n'
+            '    print("wrote Assembly-CSharp.dll")\n'
+            'else: print("n/a  rewired-android: no Rewired")\n')
+
+    def run_it(self, mode, **kw):
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, True)
+        os.makedirs(os.path.join(td, 'src', 'Managed'))
+        with open(os.path.join(td, 'src', 'Managed', 'Assembly-CSharp.dll'), 'wb') as f:
+            f.write(b'orig')
+        script = os.path.join(td, 'fake_asmpatch.py')
+        with open(script, 'w') as f:
+            f.write(self.FAKE)
+        args = type('Args', (), dict(src=os.path.join(td, 'src'), out=os.path.join(td, 'out'), game_managed=None,
+                                     asmpatch=f'"{sys.executable}" -I "{script}" {mode}', assembly_patch=[], managed_file=[]))()
+        for k, v in kw.items():
+            setattr(args, k, v)
+        os.makedirs(args.out)
+        logged = []
+        return args, A.run_asmpatch(args, logged.append), logged
+
+    def test_patched_assembly_is_shipped(self):
+        args, notes, logged = self.run_it('patch')
+        self.assertEqual([os.path.basename(f) for f in args.managed_file], ['Assembly-CSharp.dll'])
+        with open(args.managed_file[0], 'rb') as f:
+            self.assertEqual(f.read(), b'patched')
+        self.assertTrue(notes[0].startswith('ok   rewired-android'))
+        self.assertIn('asmpatch: wrote Assembly-CSharp.dll', logged)
+
+    def test_nothing_applies(self):
+        args, notes, _ = self.run_it('none')
+        self.assertEqual(args.managed_file, [])
+        self.assertEqual(notes, [])
+
+    def test_failure_stops(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.run_it('fail')
+        self.assertIn('no constant', str(cm.exception))
+
+    def test_clash_with_port_patch(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.run_it('patch', assembly_patch=[('Assembly-CSharp.dll', 'codepatch {managed} {out}')])
+        self.assertIn('also provide', str(cm.exception))
 
 
 if __name__ == '__main__':
