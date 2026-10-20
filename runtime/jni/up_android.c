@@ -1941,6 +1941,9 @@ void up_android_register(void)
 
     extern void up_input_register(void);
     up_input_register();
+    extern void up_tls_register(void), up_fmod_register(void);
+    up_tls_register();                  /* the system trust store (unitytls, 2018.4+) */
+    up_fmod_register();                 /* org.fmod.FMOD for FMOD's Android libraries */
     /* android.media's video classes (up_media.c): in the program when the host links the media
        core (ua_host does; the unit tests of this folder do not) */
     extern void up_media_register(void) __attribute__((weak));
