@@ -1,6 +1,8 @@
 /*
- * unityplayer: Unity 2017.4's Java player side (com.unity3d.player.UnityPlayer and the
- * Android framework objects it and libunity touch) re-implemented in C on top of fakejni.
+ * unityplayer: Unity's Java player side (com.unity3d.player.UnityPlayer and the Android
+ * framework objects it and libunity touch) re-implemented in C on top of fakejni. Written
+ * against 2017.4; the same code serves the Android players of every LTS line up to 2022.3 by
+ * calling natives with the signature each libunity registered (see README "Unity versions").
  *
  * Threads (as on Android):
  *  - "UI thread": the host thread that calls up_start() and the up_* control functions.
@@ -76,6 +78,8 @@ struct up_config {
     void (*on_frame)(void *user);                   /* UnityMain, after each nativeRender() */
     void (*on_vibrate)(void *user, int64_t ms);     /* Vibrator.vibrate; 0 = cancel */
     int  (*on_load_library)(void *user, const char *name); /* System.loadLibrary/UnityPlayer.loadLibrary:
+                                                       a short name ("main"); System.load: a full
+                                                       path (IL2CPP players load libil2cpp.so so);
                                                        return 1 if loaded (and JNI_OnLoad called) */
     void (*on_open_url)(void *user, const char *url);      /* startActivity(ACTION_VIEW) */
     /* FMOD Java output (org.fmod.FMODAudioDevice / AudioTrack replacement): interleaved
@@ -93,6 +97,9 @@ void up_pause(void);                   /* Activity.onPause  -> nativePause on Un
 void up_resume(void);                  /* Activity.onResume -> nativeResume               */
 void up_focus(int has_focus);          /* onWindowFocusChanged -> nativeFocusChanged      */
 void up_set_surface(void *native_window); /* surfaceCreated/Changed; NULL: surfaceDestroyed */
+void up_resize(int width, int height);    /* the window (display, view and surface) changed size:
+                                             surfaceChanged -> nativeRecreateGfxState and, 2018.4+,
+                                             nativeSendSurfaceChangedEvent */
 void up_low_memory(void);              /* onLowMemory -> nativeLowMemory                   */
 void up_quit(void);                    /* Activity.onDestroy -> UnityPlayer.quit()        */
 int  up_running(void);                 /* UnityMain alive and not finishing               */

@@ -53,7 +53,12 @@ int      up_is_finishing(void);
 void     up_request_finish(const char *why);   /* Activity.finish / nativeRender false */
 void     up_gl_post(void (*fn)(void *), void *arg, jobject runnable);  /* UnityPlayer.b(Runnable) */
 void     up_run_gl_jobs(void);                 /* executeGLThreadJobs */
-jvalue   up_native(const char *name, const char *sig, const jvalue *args);
+jvalue   up_native(const char *name, const char *sig, const jvalue *args);   /* UnityPlayer native */
+/* call native `name` of `cls` with the signature it was registered with; `args` follow `sig`
+   and are converted where the registered signature differs (see unityplayer.c) */
+jvalue   up_call_native(const char *cls, const char *name, const char *sig, jobject self, const jvalue *args);
+void     up_send_message_j(jstring obj, jstring method, jstring msg);   /* UnitySendMessage */
+int      up_unity_quit_done(void);             /* UnityPlayer.quit() ran: no more managed calls */
 
 /* input devices registry (unityplayer.c) */
 int      up_input_device_ids(int *ids, int max);

@@ -37,7 +37,7 @@ static jobject g_window, g_decor, g_layout_params, g_wm, g_display, g_resources,
                g_locale, g_pm, g_appinfo, g_pkginfo, g_assets, g_intent, g_vibrator, g_audio,
                g_conn, g_content_resolver, g_class_loader, g_display_mgr, g_meta_bundle,
                g_runtime, g_activity_mgr, g_mime, g_empty_bundle, g_input_mgr_obj,
-               g_media_router, g_media_route;
+               g_media_router, g_media_route, g_display_mode, g_power;
 jobject up_g_input_mgr;   /* shared with up_input.c */
 
 static int g_sysui_vis;
@@ -370,6 +370,7 @@ H(ctx_getSystemService)
     else if (!strcmp(n, "input")) r = up_g_input_mgr;
     else if (!strcmp(n, "activity")) r = g_activity_mgr;
     else if (!strcmp(n, "media_router")) r = g_media_router;
+    else if (!strcmp(n, "power")) r = g_power;
     else up_log("getSystemService(\"%s\") -> null", n);
     if (fj_tracing()) up_log("getSystemService(\"%s\") -> %p", n, r);
     return fj_l(r);
@@ -475,6 +476,8 @@ H(am_getProperty)
     return fj_l(fj_string(b));
 }
 H(as_rate)    { return fj_i(UPC.audio_sample_rate); }
+H(ab_build)   { return fj_l(fj_new_by_name("android/media/AudioAttributes", NULL, NULL)); }
+H(afr_build)  { return fj_l(fj_new_by_name("android/media/AudioFocusRequest", NULL, NULL)); }
 H(as_frames)  { return fj_i(UPC.audio_frames_per_buffer); }
 
 /* Vibrator */
@@ -656,7 +659,12 @@ H(cl_loadClass)
     snprintf(n, sizeof n, "%s", jstr(a[0]));
     for (char *p = n; *p; p++)
         if (*p == '.') *p = '/';
-    return fj_l((*e)->FindClass(e, n));
+    jclass c = (*e)->FindClass(e, n);
+    if (!c) {   /* ClassLoader.loadClass throws ClassNotFoundException, not NoClassDefFoundError */
+        (*e)->ExceptionClear(e);
+        fj_throw(env, "java/lang/ClassNotFoundException", jstr(a[0]));
+    }
+    return fj_l(c);
 }
 H(sys_load)
 {
@@ -884,6 +892,46 @@ H(ht_quit)      { hthread *t = fj_data(self); if (t) { jvalue x; lp_quit(env, lo
 H(ht_isAlive)   { hthread *t = fj_data(self); return fj_z(t && t->started && !t->l.quit); }
 H(ht_join)      { hthread *t = fj_data(self); if (t && t->started) pthread_join(t->th, NULL); return fj_v(); }
 
+/* ---- framework members the 2018.4-2022.3 players bind ---------------------------------- */
+H(h_arg0)          { return fj_l(a[0].l); }
+H(h_long)          { return fj_j((jlong)(intptr_t)ud); }
+/* one display mode: the panel at its refresh rate */
+H(disp_modes)
+{
+    jobjectArray arr = fj_array_new("Landroid/view/Display$Mode;", 1);
+    JNIEnv *e = fj_env();
+    (*e)->SetObjectArrayElement(e, arr, 0, g_display_mode);
+    return fj_l(arr);
+}
+/* Android's own values for a panel without vsync offsets: the app is woken at vsync and has one
+   refresh period to present */
+H(disp_deadline)   { return fj_j((jlong)(1e9 / UPC.refresh_rate)); }
+H(view_getDisplay) { return fj_l(g_display); }
+H(pi_longVersion)  { return fj_j(UPC.version_code); }
+H(pm_queryIntents) { jobject l = fj_new_by_name("java/util/ArrayList", NULL, NULL); coll_init(env, l, NULL, NULL); return fj_l(l); }
+H(am_getDevices)   /* the built-in speaker (AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) */
+{
+    jobjectArray arr = fj_array_new("Landroid/media/AudioDeviceInfo;", 1);
+    JNIEnv *e = fj_env();
+    (*e)->SetObjectArrayElement(e, arr, 0, fj_new_by_name("android/media/AudioDeviceInfo", NULL, NULL));
+    return fj_l(arr);
+}
+H(set_global_getString)
+{
+    const char *k = jstr(a[1]);
+    if (!strcmp(k, "device_name")) return fj_l(fj_string(UPC.model));   /* SystemInfo.deviceName */
+    return fj_l(NULL);
+}
+static jobject g_pad;
+H(pad_init)
+{
+    if (!g_pad) g_pad = fj_global(fj_new_by_name("com/unity3d/player/PlayAssetDeliveryUnityWrapper", NULL, NULL));
+    return fj_l(g_pad);
+}
+H(pad_logged)      { up_log("Play Asset Delivery: getAssetPackState(%s): no asset packs here", jstr(a[0])); return fj_v(); }
+H(act_moveTaskToBack) { up_log("Activity.moveTaskToBack(%d): ignored (no other task to show)", a[0].z); return fj_z(0); }
+H(proc_setPriority)   { if (fj_tracing()) up_log("Process.setThreadPriority(%d, %d) ignored", a[0].i, a[1].i); return fj_v(); }
+
 /* ---- UnityPlayer (Java methods native code calls) ------------------------------------- */
 H(up_execGL)        { up_run_gl_jobs(); return fj_v(); }
 H(up_kill)          { up_log("UnityPlayer.kill()"); up_request_finish("UnityPlayer.kill()"); return fj_v(); }
@@ -898,12 +946,7 @@ H(up_loadLibrary)
 }
 H(up_showVideo)     { up_log("showVideoPlayer(%s) unsupported", jstr(a[0])); return fj_z(0); }
 H(up_reportError)   { up_log("Unity error: %s: %s", jstr(a[0]), jstr(a[1])); return fj_v(); }
-H(up_sendMessage)
-{
-    fj_call_native(UP_CLS, "nativeUnitySendMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-                   NULL, a[0].l, a[1].l, a[2].l);
-    return fj_v();
-}
+H(up_sendMessage)   { up_send_message_j(a[0].l, a[1].l, a[2].l); return fj_v(); }
 H(up_reportSoftInputStr)
 {
     if (a[1].i == 1) { /* hideSoftInput */ }
@@ -912,6 +955,47 @@ H(up_reportSoftInputStr)
     if (a[1].i == 1) fj_call_native(UP_CLS, "nativeSoftInputClosed", "()V", self);
     return fj_v();
 }
+
+/* Methods libunity added to UnityPlayerJavaWrapper from 2018.4 on, with what a handheld answers */
+static float g_brightness = 1.0f;          /* Screen.brightness: the window's own value */
+static char *g_clipboard;
+static pthread_mutex_t g_clip_mu = PTHREAD_MUTEX_INITIALIZER;
+H(up_getClipboard)
+{
+    pthread_mutex_lock(&g_clip_mu);
+    jstring r = fj_string(g_clipboard ? g_clipboard : "");
+    pthread_mutex_unlock(&g_clip_mu);
+    return fj_l(r);
+}
+H(up_setClipboard)
+{
+    pthread_mutex_lock(&g_clip_mu);
+    free(g_clipboard);
+    g_clipboard = strdup(jstr(a[0]));
+    pthread_mutex_unlock(&g_clip_mu);
+    return fj_v();
+}
+H(up_getBrightness)  { return fj_f(g_brightness); }
+H(up_setBrightness)
+{
+    g_brightness = a[0].f < 0 ? 1.0f : a[0].f > 1 ? 1.0f : a[0].f;
+    up_log("Screen.brightness = %.2f (not applied to the panel)", (double)g_brightness);
+    return fj_v();
+}
+H(up_logged)         { up_log("UnityPlayer.%s ignored (one full-screen view, no system back)", (const char *)ud); return fj_v(); }
+static void job_hide_preserved(void *arg)
+{
+    (void)arg;
+    if (fj_native_sig(UP_CLS, "nativeHidePreservedContent")) up_native("nativeHidePreservedContent", "()V", NULL);
+}
+static void ui_hide_preserved(void *arg) { (void)arg; up_gl_post(job_hide_preserved, NULL, NULL); }
+/* 2021.3+: the engine asks Java to drop the last frame it kept on screen across a surface
+   change; Java does that on the UI thread and acknowledges with nativeHidePreservedContent on
+   the GL thread (the pairing is inferred from the names). There is no such view here. */
+H(up_hidePreserved)  { looper_post(&L_ui, ui_hide_preserved, NULL, NULL, 0); return fj_v(); }
+/* Application.Unload (2019.4: notifyOnUnityPlayerUnloaded, 2020.3+: pauseJavaAndCallUnloadCallback):
+   UnityPlayerActivity then moves its task to the back; a handheld port has no back, so quit */
+H(up_unloaded)       { up_request_finish("Application.Unload"); return fj_v(); }
 
 /* ReflectionHelper (managed AndroidJavaObject/Class support) */
 H(rh_getMethodID)
@@ -937,14 +1021,95 @@ H(rh_getCtorID)
     jmethodID m = (*e)->GetMethodID(e, a[0].l, "<init>", sig);
     return fj_l((*e)->ToReflectedMethod(e, a[0].l, m, 0));
 }
-H(rh_newProxy1)
+H(rh_fieldSig)      { const char *sg = fj_reflected_sig(a[0].l); return fj_l(sg ? fj_string(sg) : NULL); }
+
+/* AndroidJavaProxy: Proxy.newProxyInstance with Unity's invocation handler, which forwards each
+ * call to the managed object through ReflectionHelper.nativeProxyInvoke(id, method name, args).
+ *   2017.4-2018.4: newProxyInstance(int id, Class | Class[]), nativeProxyInvoke(int, ...)
+ *   2019.4:        long ids; a managed exception is flagged on the proxy with
+ *                  setNativeExceptionOnProxy(proxy, handle, methodNotFound)
+ *   2020.3+:       newProxyInstance(UnityPlayer, long id, Class | Class[]); calls are bracketed by
+ *                  beginProxyCall(id)/endProxyCall() (refused once the player is gone)
+ *   2021.3+:       managed exceptions come back as the result, made by createInvocationError(
+ *                  handle, methodNotFound); nativeProxyJNIFreeGCHandle(handle) releases them
+ * Proxies of an earlier launch (before ReflectionHelper.endUnityLaunch) are not called. */
+#define RH "com/unity3d/player/ReflectionHelper"
+#define RH_ERROR "com/unity3d/player/ReflectionHelper$InvocationError"
+static int g_launch = 1;
+
+static jobject rh_proxy(jlong id, jobject ifaces_or_class, int single)
 {
-    jobjectArray arr = fj_array_new("Ljava/lang/Class;", 1);
-    JNIEnv *e = fj_env();
-    (*e)->SetObjectArrayElement(e, arr, 0, a[1].l);
-    return fj_l(fj_new_proxy(FJ_PROXY_REFLECTION, a[0].i, arr));
+    jobjectArray arr = ifaces_or_class;
+    if (single) {
+        arr = fj_array_new("Ljava/lang/Class;", 1);
+        JNIEnv *e = fj_env();
+        (*e)->SetObjectArrayElement(e, arr, 0, ifaces_or_class);
+    }
+    jobject p = fj_new_proxy(FJ_PROXY_REFLECTION, id, arr);
+    fj_set_int(p, "rhLaunch", g_launch);
+    return p;
 }
-H(rh_newProxyN)     { return fj_l(fj_new_proxy(FJ_PROXY_REFLECTION, a[0].i, a[1].l)); }
+/* ud bit 0: a single Class (not Class[]), bit 1: a UnityPlayer comes first (2020.3+), bit 2: long id */
+H(rh_newProxy)
+{
+    intptr_t f = (intptr_t)ud;
+    const jvalue *x = (f & 2) ? a + 1 : a;
+    return fj_l(rh_proxy((f & 4) ? x[0].j : (jlong)x[0].i, x[1].l, f & 1));
+}
+H(rh_endLaunch)     { g_launch++; up_log("ReflectionHelper.endUnityLaunch: earlier proxies are detached"); return fj_v(); }
+H(rh_beginCall)     { return fj_z(!up_unity_quit_done()); }
+H(rh_setException)
+{
+    if (!a[0].l) return fj_v();
+    fj_set_long(a[0].l, "rhException", a[1].j);
+    fj_set_bool(a[0].l, "rhNotFound", a[2].z);
+    return fj_v();
+}
+H(rh_invocationError)
+{
+    jobject e = fj_new_by_name(RH_ERROR, NULL, NULL);
+    fj_set_long(e, "handle", a[0].j);
+    fj_set_bool(e, "notFound", a[1].z);
+    return fj_l(e);
+}
+
+/* a managed exception in a proxy call: Unity logs it (nativeProxyLogJNIInvokeException) and Java
+ * throws it to the caller; here the caller gets null/0 and no Java exception */
+static void rh_failed(jlong handle, int not_found, const char *method)
+{
+    up_log("AndroidJavaProxy.%s: %s in managed code", method, not_found ? "no such method" : "exception");
+    jvalue h = fj_j(handle);
+    const char *sig = fj_native_sig(RH, "nativeProxyLogJNIInvokeException");
+    if (handle && sig && !strcmp(sig, "(J)V")) up_call_native(RH, "nativeProxyLogJNIInvokeException", "(J)V", NULL, &h);
+    if (handle && fj_native_sig(RH, "nativeProxyJNIFreeGCHandle"))
+        up_call_native(RH, "nativeProxyJNIFreeGCHandle", "(J)V", NULL, &h);
+}
+
+static jobject rh_invoke(JNIEnv *env, jobject proxy, jlong id, const char *method, jobjectArray args)
+{
+    int launch = fj_get_field(proxy, "rhLaunch", "I").i;
+    if (launch && launch != g_launch) {
+        up_log("AndroidJavaProxy.%s: proxy of an ended Unity launch, not called", method);
+        return NULL;
+    }
+    if (!rh_beginCall(env, NULL, NULL, NULL).z) return NULL;   /* beginProxyCall(id) */
+    const char *sig = fj_native_sig(RH, "nativeProxyInvoke");
+    if (!sig) { up_log("AndroidJavaProxy.%s: ReflectionHelper.nativeProxyInvoke not registered", method); return NULL; }
+    jvalue a[3] = { sig[1] == 'I' ? fj_i((jint)id) : fj_j(id), fj_l(fj_string(method)), fj_l(args) };
+    fj_set_long(proxy, "rhException", 0);
+    jvalue r = up_call_native(RH, "nativeProxyInvoke", sig, NULL, a);
+    jlong exc = fj_get_field(proxy, "rhException", "J").j;
+    if (exc) {                                                  /* 2019.4, 2020.3 */
+        fj_set_long(proxy, "rhException", 0);
+        rh_failed(exc, fj_get_field(proxy, "rhNotFound", "Z").z, method);
+        return NULL;
+    }
+    if (r.l && fj_is_instance(r.l, RH_ERROR)) {                 /* 2021.3+ */
+        rh_failed(fj_get_field(r.l, "handle", "J").j, fj_get_field(r.l, "notFound", "Z").z, method);
+        return NULL;
+    }
+    return r.l;                                                 /* endProxyCall() */
+}
 
 /* ======================================================================================= */
 /* registration                                                                            */
@@ -964,6 +1129,8 @@ static void constants(void)
     fj_static_string(C, "ACTIVITY_SERVICE", "activity");
     fj_static_string(C, "SENSOR_SERVICE", "sensor");
     fj_static_string(C, "TELEPHONY_SERVICE", "phone");
+    fj_static_string(C, "POWER_SERVICE", "power");
+    fj_static_string(C, "WIFI_SERVICE", "wifi");
     fj_static_int(C, "MODE_PRIVATE", 0);
     fj_static_int(C, "BIND_AUTO_CREATE", 1);
     fj_static_string("android/Manifest$permission", "VIBRATE", "android.permission.VIBRATE");
@@ -975,6 +1142,7 @@ static void constants(void)
     fj_static_int("android/content/DialogInterface", "BUTTON_POSITIVE", -1);
     fj_static_string("android/content/Intent", "ACTION_BATTERY_CHANGED", "android.intent.action.BATTERY_CHANGED");
     fj_static_string("android/content/Intent", "ACTION_VIEW", "android.intent.action.VIEW");
+    fj_static_string("android/content/Intent", "ACTION_MAIN", "android.intent.action.MAIN");
     const char *AI = "android/content/pm/ActivityInfo";
     fj_static_int(AI, "SCREEN_ORIENTATION_UNSPECIFIED", -1);
     fj_static_int(AI, "SCREEN_ORIENTATION_LANDSCAPE", 0);
@@ -1026,6 +1194,8 @@ static void constants(void)
     fj_static_string("android/provider/Settings$Secure", "ANDROID_ID", "android_id");
     fj_static_string("android/provider/Settings$System", "SCREEN_OFF_TIMEOUT", "screen_off_timeout");
     fj_static_string("android/provider/Settings$System", "ACCELEROMETER_ROTATION", "accelerometer_rotation");
+    fj_static_string("android/provider/Settings$System", "SCREEN_BRIGHTNESS", "screen_brightness");
+    fj_static_string("android/provider/Settings$Global", "DEVICE_NAME", "device_name");
     fj_static_int("android/view/Gravity", "LEFT", 3);
     fj_static_int("android/view/Gravity", "TOP", 48);
     fj_static_int("android/view/Gravity", "CENTER", 17);
@@ -1530,13 +1700,129 @@ void up_android_register(void)
     M(UP_CLS, "removeViewFromPlayer", "(Landroid/view/View;)V", h_void);
     SM(UP_CLS, "UnitySendMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", up_sendMessage);
     fj_field_define(UP_CLS, "currentActivity", "Landroid/app/Activity;", 1, fj_l(NULL));
+    /* added after 2017.4 (UnityPlayerJavaWrapper of 2018.4-2022.3) */
+    M(UP_CLS, "showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZ)V", up_showSoftInput);    /* 2018.4 */
+    M(UP_CLS, "showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZZ)V", up_showSoftInput);   /* 2019.4+ */
+    M(UP_CLS, "setCharacterLimit", "(I)V", h_void);
+    M(UP_CLS, "setHideInputField", "(Z)V", h_void);
+    M(UP_CLS, "setSelection", "(II)V", h_void);
+    M(UP_CLS, "getKeyboardLayout", "()Ljava/lang/String;", h_null);
+    M(UP_CLS, "getClipboardText", "()Ljava/lang/String;", up_getClipboard);
+    M(UP_CLS, "setClipboardText", "(Ljava/lang/String;)V", up_setClipboard);
+    M(UP_CLS, "requestUserAuthorization", "(Ljava/lang/String;)V", h_void);   /* every permission is granted */
+    M(UP_CLS, "skipPermissionsDialog", "()Z", h_false);
+    M(UP_CLS, "getLaunchURL", "()Ljava/lang/String;", h_null);                /* no deep link */
+    M(UP_CLS, "getNetworkConnectivity", "()I", h_int);                        /* NetworkReachability.NotReachable */
+    M(UP_CLS, "getNetworkProxySettings", "(Ljava/lang/String;)Ljava/lang/String;", h_null);
+    M(UP_CLS, "isUaaLUseCase", "()Z", h_false);                               /* a game, not Unity as a Library */
+    M(UP_CLS, "getUaaLLaunchProcessType", "()I", h_int);
+    M(UP_CLS, "notifyOnUnityPlayerUnloaded", "()V", up_unloaded);
+    M(UP_CLS, "pauseJavaAndCallUnloadCallback", "()V", up_unloaded);
+    M(UP_CLS, "startOrientationListener", "(I)Z", h_false);                   /* no orientation sensor */
+    M(UP_CLS, "stopOrientationListener", "()Z", h_false);
+    M(UP_CLS, "getScreenBrightness", "()F", up_getBrightness);
+    M(UP_CLS, "setScreenBrightness", "(F)V", up_setBrightness);
+    M(UP_CLS, "hidePreservedContent", "()V", up_hidePreserved);
+    MU(UP_CLS, "setMainSurfaceViewAspectRatio", "(F)V", up_logged, "setMainSurfaceViewAspectRatio");
+    M(UP_CLS, "startActivityIndicator", "(I)V", h_void);
+    M(UP_CLS, "stopActivityIndicator", "()V", h_void);
+    MU(UP_CLS, "setBackButtonLeavesApp", "(Z)V", up_logged, "setBackButtonLeavesApp");
+    M(UP_CLS, "runOnUiThread", "(Ljava/lang/Runnable;)V", act_runOnUiThread);
+    MU(UP_CLS, "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;", h_obj, &g_appinfo);
 
-    const char *RH = "com/unity3d/player/ReflectionHelper";
+    /* Android framework members the 2018.4-2022.3 players bind */
+    MU(D, "getAppVsyncOffsetNanos", "()J", h_long, 0);
+    M(D, "getPresentationDeadlineNanos", "()J", disp_deadline);
+    M(D, "isWideColorGamut", "()Z", h_false);
+    M(D, "isHdr", "()Z", h_false);
+    M(D, "getHdrCapabilities", "()Landroid/view/Display$HdrCapabilities;", h_null);
+    M(D, "getSupportedModes", "()[Landroid/view/Display$Mode;", disp_modes);
+    MU(D, "getMode", "()Landroid/view/Display$Mode;", h_obj, &g_display_mode);
+    const char *DMODE = "android/view/Display$Mode";
+    CLS(DMODE, NULL);
+    MU(DMODE, "getModeId", "()I", h_int, 1);
+    M(DMODE, "getPhysicalWidth", "()I", disp_width);
+    M(DMODE, "getPhysicalHeight", "()I", disp_height);
+    M(DMODE, "getRefreshRate", "()F", disp_refresh);
+    M("android/content/res/Configuration", "isScreenWideColorGamut", "()Z", h_false);
+    M(V, "getDisplay", "()Landroid/view/Display;", view_getDisplay);
+    M(V, "getLeft", "()I", h_int);
+    M(V, "getTop", "()I", h_int);
+    MU(V, "getRootView", "()Landroid/view/View;", h_obj, &g_decor);
+    M(V, "getRootWindowInsets", "()Landroid/view/WindowInsets;", h_null);   /* no cutout, no insets */
+    M(V, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", h_arg0);
+    M(V, "requestApplyInsets", "()V", h_void);
+    M(V, "setOnApplyWindowInsetsListener", "(Landroid/view/View$OnApplyWindowInsetsListener;)V", h_void);
+    M(V, "addOnLayoutChangeListener", "(Landroid/view/View$OnLayoutChangeListener;)V", h_void);
+    M(V, "removeOnLayoutChangeListener", "(Landroid/view/View$OnLayoutChangeListener;)V", h_void);
+    M(V, "setOnTouchListener", "(Landroid/view/View$OnTouchListener;)V", h_void);
+    M(V, "setPointerIcon", "(Landroid/view/PointerIcon;)V", h_void);
+    M(W, "setSustainedPerformanceMode", "(Z)V", h_void);
+    M("android/os/PowerManager", "isSustainedPerformanceModeSupported", "()Z", h_false);
+    SM("android/os/Process", "setThreadPriority", "(II)V", proc_setPriority);
+    M(A, "findViewById", "(I)Landroid/view/View;", h_null);
+    M(A, "isInMultiWindowMode", "()Z", h_false);
+    M(A, "moveTaskToBack", "(Z)Z", act_moveTaskToBack);
+    fj_field_define("android/content/pm/ApplicationInfo", "splitPublicSourceDirs", "[Ljava/lang/String;", 0, fj_l(NULL));
+    fj_field_define("android/content/pm/PackageInfo", "reqFeatures", "[Landroid/content/pm/FeatureInfo;", 0, fj_l(NULL));
+    M("android/content/pm/PackageInfo", "getLongVersionCode", "()J", pi_longVersion);
+    M(PM, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", pm_queryIntents);
+    M(I, "addCategory", "(Ljava/lang/String;)Landroid/content/Intent;", h_self);
+    M("android/content/DialogInterface", "dismiss", "()V", h_void);
+    M("android/media/AudioAttributes$Builder", "build", "()Landroid/media/AudioAttributes;", ab_build);
+    M("android/media/AudioFocusRequest$Builder", "build", "()Landroid/media/AudioFocusRequest;", afr_build);
+    M(AU, "getDevices", "(I)[Landroid/media/AudioDeviceInfo;", am_getDevices);
+    MU("android/media/AudioDeviceInfo", "getType", "()I", h_int, 2);
+    M(AU, "startBluetoothSco", "()V", h_void);
+    M(AU, "stopBluetoothSco", "()V", h_void);
+    SM("android/provider/Settings$System", "getString", "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", h_null);
+    SM("android/provider/Settings$Global", "getString", "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", set_global_getString);
+    M("android/hardware/SensorManager", "getDefaultSensor", "(I)Landroid/hardware/Sensor;", h_null);   /* sensors: NDK ASensor */
+    SM("java/net/NetworkInterface", "getByName", "(Ljava/lang/String;)Ljava/net/NetworkInterface;", h_null);
+
+    /* other classes of the player's Java side that libunity uses (2019.4+) */
+    CLS("com/unity3d/player/OrientationLockListener", NULL);   /* 2020.3+: its native, see up_start */
+    SM("com/unity3d/player/MultiWindowSupport", "isInMultiWindowMode", "(Landroid/app/Activity;)Z", h_false);
+    SM("com/unity3d/player/UnityPermissions", "skipPermissionsDialog", "(Landroid/app/Activity;)Z", h_false);
+    /* Play Asset Delivery: what the wrapper answers in an app built without the Play Core
+       library (Unity data and StreamingAssets come from the APK/OBB, not from asset packs) */
+    const char *PAD = "com/unity3d/player/PlayAssetDeliveryUnityWrapper";
+    SM(PAD, "init", "(Landroid/content/Context;)Lcom/unity3d/player/PlayAssetDeliveryUnityWrapper;", pad_init);
+    M(PAD, "playCoreApiMissing", "()Z", h_true);
+    M(PAD, "getAssetPackPath", "(Ljava/lang/String;)Ljava/lang/String;", h_null);
+    M(PAD, "getAssetPackState", "(Ljava/lang/String;Lcom/unity3d/player/IAssetPackManagerStatusQueryCallback;)V", pad_logged);
+    M(PAD, "registerDownloadStatusListener", "(Lcom/unity3d/player/IAssetPackManagerDownloadStatusCallback;)Ljava/lang/Object;", h_null);
+    M(PAD, "unregisterDownloadStatusListener", "(Ljava/lang/Object;)V", h_void);
+    M("com/unity3d/player/UnityCoreAssetPacksStatusCallbacks", "<init>", "()V", h_void);
+
+    /* Android Frame Pacing (Swappy, 2019.4+) inside libunity looks its Java helpers up through the
+     * activity's ClassLoader and else loads them from its embedded dex (InMemoryDexClassLoader,
+     * or PathClassLoader on a temporary file before API 26). None of that can run here: the
+     * classes are absent, so Swappy's choreographer falls back to its own timer thread, and Swappy
+     * switches itself off where EGL lacks eglPresentationTimeANDROID; Unity then paces frames
+     * as 2017.4 does (vsync + Choreographer through JNIBridge). */
+    fj_class_absent("com/google/androidgamesdk/ChoreographerCallback");
+    fj_class_absent("com/google/androidgamesdk/SwappyDisplayManager");
+    fj_class_absent("dalvik/system/InMemoryDexClassLoader");
+    fj_class_absent("dalvik/system/PathClassLoader");
+
     SM(RH, "getMethodID", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/reflect/Method;", rh_getMethodID);
     SM(RH, "getFieldID", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/reflect/Field;", rh_getFieldID);
     SM(RH, "getConstructorID", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Constructor;", rh_getCtorID);
-    SM(RH, "newProxyInstance", "(ILjava/lang/Class;)Ljava/lang/Object;", rh_newProxy1);
-    SM(RH, "newProxyInstance", "(I[Ljava/lang/Class;)Ljava/lang/Object;", rh_newProxyN);
+    SM(RH, "getFieldSignature", "(Ljava/lang/reflect/Field;)Ljava/lang/String;", rh_fieldSig);
+    SMU(RH, "newProxyInstance", "(ILjava/lang/Class;)Ljava/lang/Object;", rh_newProxy, 1);
+    SMU(RH, "newProxyInstance", "(I[Ljava/lang/Class;)Ljava/lang/Object;", rh_newProxy, 0);
+    SMU(RH, "newProxyInstance", "(JLjava/lang/Class;)Ljava/lang/Object;", rh_newProxy, 4 | 1);
+    SMU(RH, "newProxyInstance", "(J[Ljava/lang/Class;)Ljava/lang/Object;", rh_newProxy, 4);
+    SMU(RH, "newProxyInstance", "(Lcom/unity3d/player/UnityPlayer;JLjava/lang/Class;)Ljava/lang/Object;", rh_newProxy, 4 | 2 | 1);
+    SMU(RH, "newProxyInstance", "(Lcom/unity3d/player/UnityPlayer;J[Ljava/lang/Class;)Ljava/lang/Object;", rh_newProxy, 4 | 2);
+    SM(RH, "endUnityLaunch", "()V", rh_endLaunch);
+    SM(RH, "beginProxyCall", "(J)Z", rh_beginCall);
+    SM(RH, "endProxyCall", "()V", h_void);
+    SM(RH, "setNativeExceptionOnProxy", "(Ljava/lang/Object;JZ)V", rh_setException);
+    SM(RH, "createInvocationError", "(JZ)Ljava/lang/Object;", rh_invocationError);
+    CLS(RH_ERROR, "java/lang/Error");
+    fj_set_proxy_handler(rh_invoke);
 
     extern void up_input_register(void);
     up_input_register();
@@ -1581,6 +1867,8 @@ void up_android_create_objects(void)
     NEWG(g_runtime, "java/lang/Runtime");
     NEWG(g_activity_mgr, "android/app/ActivityManager");
     NEWG(g_mime, "android/webkit/MimeTypeMap");
+    NEWG(g_display_mode, "android/view/Display$Mode");
+    NEWG(g_power, "android/os/PowerManager");
     up_g_input_mgr = fj_global(fj_new_by_name("android/hardware/input/InputManager", NULL, NULL));
     g_input_mgr_obj = up_g_input_mgr;
     g_empty_bundle = fj_global(bundle_new());

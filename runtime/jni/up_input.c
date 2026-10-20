@@ -59,6 +59,8 @@ H(k_unicode)  { return fj_i(key_unicode(kev(self)->keycode, kev(self)->meta)); }
 H(k_unicodeM) { return fj_i(key_unicode(kev(self)->keycode, a[0].i)); }
 H(k_isSystem) { int c = kev(self)->keycode; return fj_z(c == 3 || c == 4 || c == 24 || c == 25 || c == 82); }
 H(k_device_obj) { return fj_l(up_make_input_device(kev(self)->device)); }
+H(k_ctrl)     { return fj_z((kev(self)->meta & 0x1000) != 0); }   /* META_CTRL_ON */
+H(k_shift)    { return fj_z((kev(self)->meta & 0x1) != 0); }      /* META_SHIFT_ON */
 H(kcm_load)   { return fj_l(fj_new_by_name("android/view/KeyCharacterMap", NULL, NULL)); }
 H(kcm_get)    { return fj_i(key_unicode(a[0].i, a[1].i)); }
 
@@ -95,6 +97,8 @@ H(m_hist_x)        { return fj_f(axis(mev(self), 0, a[0].i)); }        /* (point
 H(m_hist_y)        { return fj_f(axis(mev(self), 1, a[0].i)); }
 H(m_hist_time)     { return fj_j(mev(self)->time_ms); }
 H(m_device_obj)    { return fj_l(up_make_input_device(mev(self)->device)); }
+H(m_axis0)         { return fj_f(axis(mev(self), (int)(intptr_t)ud, 0)); }            /* ud: axis, pointer 0 */
+H(m_axisp)         { return fj_f(axis(mev(self), (int)(intptr_t)ud, a[0].i)); }       /* ud: axis, (pointer) */
 H(m_obtain)
 {
     up_motion_ev *c = malloc(sizeof *c);
@@ -431,6 +435,8 @@ void up_input_register(void)
     M(K, "getUnicodeChar", "(I)I", k_unicodeM);
     M(K, "isSystem", "()Z", k_isSystem);
     M(K, "getDevice", "()Landroid/view/InputDevice;", k_device_obj);
+    M(K, "isCtrlPressed", "()Z", k_ctrl);
+    M(K, "isShiftPressed", "()Z", k_shift);
     fj_method_define("android/view/KeyCharacterMap", "load", "(I)Landroid/view/KeyCharacterMap;", 1, kcm_load, NULL);
     M("android/view/KeyCharacterMap", "get", "(II)I", kcm_get);
 
@@ -471,6 +477,17 @@ void up_input_register(void)
     M(ME, "getHistoricalEventTime", "(I)J", m_hist_time);
     M(ME, "recycle", "()V", m_zero);
     M(ME, "getDevice", "()Landroid/view/InputDevice;", m_device_obj);
+    /* AXIS_PRESSURE 2, AXIS_SIZE 3, AXIS_TOUCH_MAJOR 6, AXIS_TOUCH_MINOR 7, AXIS_ORIENTATION 8;
+       the history is empty, so historical values are the current ones (as getHistoricalX) */
+    MU(ME, "getPressure", "()F", m_axis0, 2);
+    MU(ME, "getOrientation", "()F", m_axis0, 8);
+    MU(ME, "getTouchMajor", "(I)F", m_axisp, 6);
+    MU(ME, "getTouchMinor", "(I)F", m_axisp, 7);
+    MU(ME, "getHistoricalPressure", "(II)F", m_axisp, 2);
+    MU(ME, "getHistoricalSize", "(II)F", m_axisp, 3);
+    MU(ME, "getHistoricalTouchMajor", "(II)F", m_axisp, 6);
+    MU(ME, "getHistoricalTouchMinor", "(II)F", m_axisp, 7);
+    M("android/view/InputEvent", "getDevice", "()Landroid/view/InputDevice;", NULL);   /* KeyEvent/MotionEvent */
     SM(ME, "obtain", "(Landroid/view/MotionEvent;)Landroid/view/MotionEvent;", m_obtain);
     SM(ME, "axisToString", "(I)Ljava/lang/String;", m_axisToString);
 
@@ -501,6 +518,7 @@ void up_input_register(void)
     M(D, "getMotionRange", "(I)Landroid/view/InputDevice$MotionRange;", d_motionRange);
     M(D, "getMotionRange", "(II)Landroid/view/InputDevice$MotionRange;", d_motionRange);
     M(D, "hasKeys", "([I)[Z", d_hasKeys);
+    M(D, "getKeyCharacterMap", "()Landroid/view/KeyCharacterMap;", kcm_load);
     const char *R = "android/view/InputDevice$MotionRange";
     M(R, "getAxis", "()I", r_axis);
     M(R, "getSource", "()I", r_source);

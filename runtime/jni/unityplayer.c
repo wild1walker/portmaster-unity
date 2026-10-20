@@ -1,6 +1,9 @@
 /*
- * unityplayer.c - lifecycle, threads and input of Unity 2017.4's com.unity3d.player.UnityPlayer,
+ * unityplayer.c - lifecycle, threads and input of Unity's com.unity3d.player.UnityPlayer,
  * reimplemented in C from how the player package's Java side behaves (no Unity code is included).
+ * The model is 2017.4's and holds up to 2022.3 (same UnityMain looper and natives); natives are
+ * called with the signature the loaded libunity registered (up_call_native), and the steps later
+ * versions added run only when their natives are registered.
  *
  * Behaviour reproduced here:
  *   UnityPlayer.<clinit>   : loadLibrary("main")              -> libmain JNI_OnLoad
@@ -18,6 +21,10 @@
  *   idle handler           : executeGLThreadJobs(); if resumed && surface: nativeRender()
  *   onPause   -> pause()   : PAUSE; UnityMain: nativePause() (true => finish: nativeDone())
  *   quit()                 : pause (nativePause); nativeDone only with UA_QUIT_CLEANUP=1; QUIT; NativeLoader.unload()
+ * Added by later versions (when registered):
+ *   2018.4 surfaceChanged  : nativeSendSurfaceChangedEvent() after nativeRecreateGfxState
+ *   2020.3 constructor     : OrientationLockListener.nativeUpdateOrientationLockState(auto-rotate)
+ *   2022.3 constructor     : nativeGetNoWindowMode()
  */
 #define _GNU_SOURCE
 #include "up_internal.h"
@@ -158,17 +165,97 @@ static void looper_wake(up_looper *l)
 /* natives                                                                                 */
 /* ======================================================================================= */
 
+/* Natives are looked up by name and called with the signature the library registered: Unity
+ * changed some across versions (nativeUnitySendMessage takes the message as byte[] from 2017.4.40,
+ * nativeDone returns a boolean from 2019.4, nativeInjectEvent gained an int in 2022.3,
+ * ReflectionHelper's proxy ids became long in 2019.4). `sig` is the signature the caller's
+ * arguments follow; when the registered one differs, each argument is converted to the
+ * registered parameter at its position (String -> byte[] as UTF-8, int <-> long, boolean/char/
+ * short/byte <-> int) and missing ones are 0/null. The result is the registered return value. */
+
+/* parameter descriptors of a method signature: start pointers and lengths; returns the count */
+static int sig_params(const char *sig, const char **p, int *len, int max)
+{
+    int n = 0;
+    if (!sig || *sig != '(') return 0;
+    const char *s = sig + 1;
+    while (*s && *s != ')' && n < max) {
+        const char *b = s;
+        while (*s == '[') s++;
+        if (*s == 'L') { while (*s && *s != ';') s++; if (*s) s++; }
+        else if (*s) s++;
+        p[n] = b;
+        len[n++] = (int)(s - b);
+    }
+    return n;
+}
+
+static int is_ref(char c) { return c == 'L' || c == '['; }
+static int is_intlike(char c) { return c == 'Z' || c == 'B' || c == 'C' || c == 'S' || c == 'I'; }
+
+static jvalue adapt_arg(const char *want, int wlen, const char *have, int hlen, jvalue v)
+{
+    if (wlen == hlen && !strncmp(want, have, wlen)) return v;
+    char w = *want, h = *have;
+    if (w == '[' && wlen == 2 && want[1] == 'B' && h == 'L' && !strncmp(have, "Ljava/lang/String;", hlen)) {
+        const char *s = fj_cstr(v.l);   /* standard UTF-8, as String.getBytes("UTF-8") */
+        size_t n = s ? strlen(s) : 0;
+        jarray b = fj_array_new("B", (jsize)n);
+        if (n) memcpy(fj_array_data(b), s, n);
+        return fj_l(b);
+    }
+    if (is_ref(w) && is_ref(h)) return v;
+    if (w == 'J' && is_intlike(h)) return fj_j(h == 'Z' ? v.z : h == 'B' ? v.b : h == 'C' ? v.c : h == 'S' ? v.s : v.i);
+    if (is_intlike(w) && h == 'J') return w == 'Z' ? fj_z(v.j != 0) : fj_i((jint)v.j);
+    if (is_intlike(w) && is_intlike(h)) {
+        jint x = h == 'Z' ? v.z : h == 'B' ? v.b : h == 'C' ? v.c : h == 'S' ? v.s : v.i;
+        return w == 'Z' ? fj_z(x != 0) : fj_i(x);
+    }
+    if (w == 'F' && h == 'D') return fj_f((jfloat)v.d);
+    if (w == 'D' && h == 'F') return fj_d(v.f);
+    return fj_v();
+}
+
+jvalue up_call_native(const char *cls, const char *name, const char *sig, jobject self, const jvalue *args)
+{
+    jvalue r = fj_v();
+    const char *reg = fj_native_sig(cls, name);
+    if (!reg) {
+        fj_call_native_a(cls, name, sig, self, args);   /* logs "not registered" */
+        return r;
+    }
+    if (!sig || !strcmp(sig, reg))
+        return fj_call_native_a(cls, name, reg, self, args);
+    enum { NP = 32 };
+    const char *wp[NP], *hp[NP];
+    int wl[NP], hl[NP];
+    int nw = sig_params(reg, wp, wl, NP), nh = sig_params(sig, hp, hl, NP);
+    jvalue a[NP];
+    for (int i = 0; i < nw; i++)
+        a[i] = i < nh && args ? adapt_arg(wp[i], wl[i], hp[i], hl[i], args[i]) : fj_v();
+    /* say it once per native */
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    static const char *logged[16];
+    int seen = 0, i;
+    pthread_mutex_lock(&mu);
+    for (i = 0; i < 16 && logged[i] && !seen; i++) seen = logged[i] == reg;
+    if (!seen && i < 16) logged[i] = reg;
+    pthread_mutex_unlock(&mu);
+    if (!seen) up_log("%s.%s registered as %s: adapting the call from %s", cls, name, reg, sig);
+    return fj_call_native_a(cls, name, reg, self, a);
+}
+
 jvalue up_native(const char *name, const char *sig, const jvalue *args)
 {
     fj_push_frame();
-    jvalue r = fj_call_native_a(UP_CLS, name, sig, g_player, args);
+    jvalue r = up_call_native(UP_CLS, name, sig, g_player, args);
     fj_pop_frame();
     return r;
 }
 
-static int have_native(const char *name, const char *sig)
+static int have_native(const char *name)
 {
-    return fj_native(UP_CLS, name, sig) != NULL;
+    return fj_native_sig(UP_CLS, name) != NULL;
 }
 
 /* ======================================================================================= */
@@ -294,8 +381,8 @@ static void job_soft_input_cancel_close(void *arg)
 {
     (void)arg;
     if (S.finishing) return;
-    if (have_native("nativeSoftInputCanceled", "()V")) up_native("nativeSoftInputCanceled", "()V", NULL);
-    if (have_native("nativeSoftInputClosed", "()V")) up_native("nativeSoftInputClosed", "()V", NULL);
+    if (have_native("nativeSoftInputCanceled")) up_native("nativeSoftInputCanceled", "()V", NULL);
+    if (have_native("nativeSoftInputClosed")) up_native("nativeSoftInputClosed", "()V", NULL);
 }
 
 /* UnityPlayer.f() */
@@ -319,7 +406,13 @@ struct pause_ctx { sem_t sem; int quit; };
    with UA_QUIT_CLEANUP=1. */
 static void native_done(void)
 {
-    if (getenv("UA_QUIT_CLEANUP") && *getenv("UA_QUIT_CLEANUP") == '1') up_native("nativeDone", "()V", NULL);
+    if (getenv("UA_QUIT_CLEANUP") && *getenv("UA_QUIT_CLEANUP") == '1') {
+        /* ()V up to 2018.4; ()Z from 2019.4: true asks Java to kill the process, which the
+           host does anyway after quitting */
+        jvalue r = up_native("nativeDone", "()V", NULL);
+        const char *sig = fj_native_sig(UP_CLS, "nativeDone");
+        if (sig && !strcmp(sig, "()Z")) up_log("nativeDone -> %d (kill process)", r.z);
+    }
     else up_log("quit: engine cleanup skipped (UA_QUIT_CLEANUP=1 runs nativeDone)");
 }
 
@@ -375,7 +468,7 @@ void up_resume(void)
     up_log("resume");
     S.paused = 0;
     try_resume();
-    if (have_native("nativeRestartActivityIndicator", "()V"))
+    if (have_native("nativeRestartActivityIndicator"))   /* up to 2021.3 */
         up_native("nativeRestartActivityIndicator", "()V", NULL);
 }
 
@@ -399,16 +492,27 @@ static void job_recreate_gfx(void *arg)
     else free(c);
 }
 
+/* 2018.4+: SurfaceHolder.Callback.surfaceChanged queues nativeSendSurfaceChangedEvent after the
+   display update (it runs on UnityMain after nativeRecreateGfxState) */
+static void job_surface_changed(void *arg) { (void)arg; up_native("nativeSendSurfaceChangedEvent", "()V", NULL); }
+
+/* surfaceCreated + surfaceChanged: (re)attach the surface */
+static void surface_changed(void)
+{
+    struct gfx_ctx *c = calloc(1, sizeof *c);
+    c->surface = g_surface;
+    looper_post(&L_main, job_recreate_gfx, c, NULL, 0);
+    post_msg(MSG_SURFACE_ACQUIRED);
+    if (have_native("nativeSendSurfaceChangedEvent")) looper_post(&L_main, job_surface_changed, NULL, NULL, 0);
+}
+
 void up_set_surface(void *native_window)
 {
     if (!g_main_started) return;
     if (native_window) {
         fj_set_data(g_surface, native_window, NULL);
         up_log("surface %p -> nativeRecreateGfxState(0, surface)", native_window);
-        struct gfx_ctx *c = calloc(1, sizeof *c);
-        c->surface = g_surface;
-        looper_post(&L_main, job_recreate_gfx, c, NULL, 0);
-        post_msg(MSG_SURFACE_ACQUIRED);
+        surface_changed();
     } else {
         up_log("surface destroyed -> nativeRecreateGfxState(0, null)");
         struct gfx_ctx *c = calloc(1, sizeof *c);
@@ -420,6 +524,15 @@ void up_set_surface(void *native_window)
         else { sem_destroy(&c->sem); free(c); }
         fj_set_data(g_surface, NULL, NULL);
     }
+}
+
+void up_resize(int width, int height)
+{
+    if (width <= 0 || height <= 0 || (width == UPC.width && height == UPC.height)) return;
+    up_log("resize %dx%d -> %dx%d", UPC.width, UPC.height, width, height);
+    UPC.width = width;
+    UPC.height = height;
+    if (g_main_started && fj_data(g_surface)) surface_changed();
 }
 
 static void job_low_memory(void *arg) { (void)arg; up_native("nativeLowMemory", "()V", NULL); }
@@ -447,6 +560,7 @@ void up_quit(void)
 }
 
 int up_running(void) { return g_main_started && !S.finishing && !L_main.quit; }
+int up_unity_quit_done(void) { return S.quit_done; }
 void up_wait(void) { if (g_main_started) pthread_join(g_main_thread, NULL); }
 
 void up_poll(void)
@@ -458,12 +572,24 @@ void up_poll(void)
     t_looper = saved;
 }
 
+/* UnityPlayer.UnitySendMessage: the static native takes (String, String, String) up to 2017.4.9
+   and (String, String, byte[] UTF-8) from 2017.4.40 */
+void up_send_message_j(jstring obj, jstring method, jstring msg)
+{
+    if (!S.loaded) {
+        up_log("Native libraries not loaded - dropping message for %s.%s", fj_cstr(obj), fj_cstr(method));
+        return;
+    }
+    fj_push_frame();
+    jvalue a[3] = { fj_l(obj), fj_l(method), fj_l(msg ? msg : fj_string("")) };
+    up_call_native(UP_CLS, "nativeUnitySendMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", NULL, a);
+    fj_pop_frame();
+}
+
 void up_send_message(const char *obj, const char *method, const char *msg)
 {
-    if (!S.loaded) { up_log("Native libraries not loaded - dropping message for %s.%s", obj, method); return; }
     fj_push_frame();
-    fj_call_native(UP_CLS, "nativeUnitySendMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-                   NULL, fj_string(obj), fj_string(method), fj_string(msg));
+    up_send_message_j(fj_string(obj), fj_string(method), fj_string(msg ? msg : ""));
     fj_pop_frame();
 }
 
@@ -545,6 +671,9 @@ void up_register_classes(const struct up_config *cfg)
     up_mkdirs(UPC.files_dir);
     up_mkdirs(UPC.cache_dir);
     up_mkdirs(UPC.external_files_dir);
+    /* IL2CPP players copy their data to <files_dir>/il2cpp at startup and stop if they cannot */
+    if (access(UPC.files_dir, W_OK) != 0)
+        up_log("WARNING: files dir %s is not writable (IL2CPP players extract <files>/il2cpp there)", UPC.files_dir);
     up_android_register();
     up_android_create_objects();
 }
@@ -580,7 +709,7 @@ int up_start(const struct up_config *cfg)
         up_log("Failure to initialize! (native libraries not loaded)");
         return -1;
     }
-    if (!have_native("initJni", "(Landroid/content/Context;)V")) {
+    if (!have_native("initJni")) {
         up_log("UnityPlayer.initJni not registered by libunity");
         return -2;
     }
@@ -589,9 +718,23 @@ int up_start(const struct up_config *cfg)
     jvalue a = fj_l(g_activity);
     up_native("initJni", "(Landroid/content/Context;)V", &a);
     /* SurfaceView + window flags happen in up_android_create_objects; then: */
-    if (have_native("nativeInitWebRequest", "(Ljava/lang/Class;)V")) {
+    if (have_native("nativeInitWebRequest")) {   /* up to 2018.4 */
         jvalue c = fj_l(fj_class_find("com/unity3d/player/UnityWebRequest"));
         up_native("nativeInitWebRequest", "(Ljava/lang/Class;)V", &c);
+    }
+    /* 2020.3+: OrientationLockListener reports the system auto-rotate setting when it is
+       created: off (a handheld without an accelerometer) */
+    if (fj_native_sig("com/unity3d/player/OrientationLockListener", "nativeUpdateOrientationLockState")) {
+        jvalue l = fj_i(0);
+        fj_push_frame();
+        up_call_native("com/unity3d/player/OrientationLockListener", "nativeUpdateOrientationLockState", "(I)V", NULL, &l);
+        fj_pop_frame();
+    }
+    /* 2022.3: Java asks whether the engine wants to run without an Android window (batch
+       mode); the surface is provided either way */
+    if (have_native("nativeGetNoWindowMode")) {
+        jvalue nw = up_native("nativeGetNoWindowMode", "()Z", NULL);
+        up_log("nativeGetNoWindowMode -> %d", nw.z);
     }
 
     /* UnityMain thread */
@@ -675,11 +818,12 @@ int up_input_device_get(int id, struct up_input_device *out)
     return ok;
 }
 
+/* nativeInjectEvent(InputEvent)Z; 2022.3: (InputEvent, int)Z, Java's injectEvent(event) passes 0 */
 static int inject(jobject ev)
 {
     if (!S.loaded || !g_player) return 0;
     jvalue a = fj_l(ev);
-    jvalue r = fj_call_native_a(UP_CLS, "nativeInjectEvent", "(Landroid/view/InputEvent;)Z", g_player, &a);
+    jvalue r = up_call_native(UP_CLS, "nativeInjectEvent", "(Landroid/view/InputEvent;)Z", g_player, &a);
     return r.z;
 }
 
