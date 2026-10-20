@@ -68,11 +68,23 @@ class Loaded:
     """One data file opened with UnityPy: a plain serialized file (.assets, level, globalgamemanagers)
     or a UnityFS bundle holding one serialized file (CAB-...) and optionally its .resS."""
 
-    def __init__(self, path):
+    def __init__(self, path, resource_dir=None):
+        """resource_dir: where the file's .resS / .resource streams are when they are not beside it
+        (a conversion writing to an overlay folder rewrites the file, not its streams)."""
+        import os
         import UnityPy
         _patch_unitypy()
         self.path = path
         self.env = UnityPy.load(path)
+        if resource_dir and os.path.realpath(resource_dir) != os.path.realpath(os.path.dirname(path)) \
+                and os.path.isdir(resource_dir):
+            from UnityPy.streams import EndianBinaryReader
+            base = os.path.basename(path)
+            stem = os.path.splitext(base)[0]
+            for n in os.listdir(resource_dir):
+                if n in (base + '.resS', stem + '.resource', stem + '.resS') and \
+                        not os.path.exists(os.path.join(os.path.dirname(path), n)):
+                    self.env.register_cab(n, EndianBinaryReader(os.path.join(resource_dir, n)))
         f = self.env.file
         self.is_bundle = type(f).__name__ == 'BundleFile'
         if self.is_bundle:

@@ -7,6 +7,11 @@ Android player on GLES handhelds.
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
     python -m pmunity macpkg <root> <installer.pkg>...       (unpack macOS installers, e.g. GOG's)
+    python -m pmunity unpack <data> [--out DIR] [--remove]   (a compressed build's data.unity3d -> files)
+    python -m pmunity version <data>                          (the Unity version the data was built with)
+
+The data's Unity version is read from the data (unity_version.py); versions outside 2017.3 - 2022.3
+are refused unless --any-unity-version is given.
 
 <data> is the Unity data folder (<Game>_Data, or <Game>.app/Contents/Resources/Data). With <out>
 the converted files go there and <data> is only read (an overlay: later steps read a file from
@@ -47,6 +52,22 @@ def _builtin(name):
     return run
 
 
+def _check_data(data, force):
+    """Stops with the reason for data the converter does not handle: a Unity version outside the
+    supported range, a compressed build (data.unity3d) not unpacked yet."""
+    import os
+    from . import unity_version as UV
+    try:
+        if not os.path.isfile(os.path.join(data, 'globalgamemanagers')) and os.path.isfile(os.path.join(data, 'data.unity3d')):
+            raise UV.Unsupported(f'{data}: a compressed build (data.unity3d): unpack it first with '
+                                 f'`python -m pmunity unpack {data}`')
+        v = UV.check(UV.of_data(data), force)
+    except UV.Unsupported as ex:
+        sys.exit(str(ex))
+    print(f'data: Unity {v}', flush=True)
+    return v
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ['android-data']:
@@ -55,6 +76,14 @@ def main(argv=None):
     if argv[:1] == ['macpkg']:
         from . import macpkg
         return macpkg.main(argv[1:])
+    if argv[:1] == ['unpack']:
+        from . import unpack
+        return unpack.main(argv[1:])
+    if argv[:1] == ['version']:
+        from . import unity_version as UV
+        v = UV.of_data(argv[1])
+        print(f'{v} ({"supported" if UV.FIRST <= v.line <= UV.LAST else "not supported"})')
+        return
     ap = argparse.ArgumentParser(prog='pmunity')
     sub = ap.add_subparsers(dest='cmd', required=True)
     c = sub.add_parser('convert', help='run conversion steps with a game config')
@@ -77,11 +106,16 @@ def main(argv=None):
                    help='desktop programs to translate, in order of preference: glcore (macOS/Linux builds), '
                         'd3d11 (Windows builds, needs tools/hlslcc), e.g. glcore,d3d11')
     s.add_argument('--hlslcc', help='the pmhlslcc binary (default: $PMHLSLCC, tools/hlslcc/out/pmhlslcc, PATH)')
+    for p in (c, s):
+        p.add_argument('--any-unity-version', action='store_true',
+                       help='convert data of a Unity version outside 2017.3 - 2022.3 (untested; layouts guessed)')
     e = sub.add_parser('shaders-export', help='GLES3 programs as .vert/.frag files (compile checks)')
     e.add_argument('data'); e.add_argument('dir')
     e.add_argument('--bundles', default='.')
     sub.add_parser('android-data', help='package converted data for the Android player (see android-data --help)')
     a = ap.parse_args(argv)
+    if a.cmd in ('convert', 'shaders'):
+        _check_data(a.data, a.any_unity_version)
     if a.cmd == 'convert':
         cfg = json.load(open(a.config))
         cfg.setdefault('version', 1)

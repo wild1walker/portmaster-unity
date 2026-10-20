@@ -10,19 +10,21 @@ variant the game uses. A Windows build has only Direct3D 11 programs (DXBC bytec
 ## What the converter does
 
 1. **Program blobs** (`blob.py`). A Shader keeps its compiled programs per shader compiler
-   platform in one LZ4 block each. The GLCore platform's blob (15) is copied as a GLES3Plus blob
+   platform in LZ4 blocks. The GLCore platform's blob (15) is copied as a GLES3Plus blob
    (9); every entry a GLCore32 subprogram uses is translated and retyped GLES3 (gpu program type
-   4). Entries are parsed with a layout table checked by writing every entry back byte for byte
-   (Unity 2017.3/2017.4: serializer 201708220; other versions are tried and reported).
-2. **Subprograms** (`convert.py`). Every GLCore32 `SerializedSubProgram` gets a GLES3 twin with the
+   4). Entries are parsed with the layout of their serializer version, checked by writing every
+   entry back byte for byte ([Unity versions](#unity-versions) below; another version's layout is
+   guessed and reported).
+2. **Subprograms** (`convert.py`). Every GLCore32 subprogram gets a GLES3 twin with the
    same blob index, keywords, channels and parameter bindings (the GL and GLES backends bind by
    name the same way). GLCore41/43 variants (desktop-only features) get none.
 3. **GLSL** (`glsl.py`), per stage block (`#ifdef VERTEX` / `#ifdef FRAGMENT`, each compiled by
    Unity as one shader):
    - `#version 300 es` instead of `#version 150` / `330`;
    - the desktop extensions ES 3.00 has built in are dropped (explicit attribute locations,
-     float/int bit casts); any other extension is kept, so a program that needs one fails on a
-     driver without it, as it would in a real Android build;
+     float/int bit casts), also in the `#ifdef GL_ARB_... / #extension / #endif` form of Unity
+     2019+; any other extension is kept, so a program that needs one fails on a driver without
+     it, as it would in a real Android build;
    - default precisions: **highp** for floats, ints and every sampler type the stage declares.
      Desktop GL computes and samples in 32-bit floats; ES would otherwise sample `sampler2D` at
      lowp. `--precision default-samplers` keeps ES's sampler defaults (for A/B tests);
@@ -30,11 +32,83 @@ variant the game uses. A Windows build has only Direct3D 11 programs (DXBC bytec
      **const-arrays** (HLSLcc fills constant tables, e.g. blur weights, element by element at the
      start of every invocation; they become `const` arrays) and **unroll** (loops with literal
      bounds and a plain body are written out, the counter becoming a literal).
-4. A shader with a program that uses GLSL with no ES 3.00 equivalent (fixed-function built-ins,
-   rectangle or 1D samplers, `noperspective`, ES 3.1+ functions, storage buffers) gets no GLES3
+4. A program that needs what GLSL ES 3.10 has and 3.00 lacks (multisampled textures
+   `sampler2DMS`, `textureGather`, bit-field functions) is written as `#version 310 es` and typed
+   GLES31 (gpu program type 3, with all subprograms of its variant): Unity runs it where the device
+   has OpenGL ES 3.1+, as it does the GLES 3.1 programs of an Android build. (Unity's own GLES3
+   output keeps such a program as `#version 300 es`, which no driver compiles.)
+5. A shader with a program that uses GLSL with no ES equivalent (fixed-function built-ins,
+   rectangle or 1D samplers, `noperspective`, images and atomics, storage buffers) gets no GLES3
    programs at all, and the run says which. Unity then treats it as unsupported on the device, as
    it would a shader without GLES3 programs in an Android build. For Cuphead that is only
-   `Hidden/VideoDecodeOSX` (the macOS video decoder; Android decodes video elsewhere).
+   `Hidden/VideoDecodeOSX` (the macOS video decoder; Android decodes video elsewhere). Variants
+   only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords) that do not translate (they
+   write `gl_Layer`) are left out instead, with their subprograms; Unity never asks for them on a
+   handheld.
+
+## Unity versions
+
+The converter reads the data's Unity version from the data (`python -m pmunity version <data>`)
+and handles 2017.3 - 2022.3; other versions are refused unless `--any-unity-version` is given
+(then the layouts are guessed and checked by round trip). What changes between the LTS lines:
+
+| | 2017.4 | 2018.4 | 2019.4 | 2020.3 | 2021.3 | 2022.3 |
+|---|---|---|---|---|---|---|
+| serializer (program entry layout) | 201708220 | 201802150 | 201806140: global + local keyword lists | 201806140 | 202012090: parameters as entries of their own | 202012090 |
+| blob container | one LZ4 block per platform, 8-byte entry table | same | 2019.3+: segments (Unity's 16 MB variant chunks), 12-byte entries (offset, length, segment) | same | same | same |
+| where the subprograms are | `m_SubPrograms`, hardware tier per subprogram | same | same, keyword indices global + local | same, parameters grouped in `m_Parameters` (+ program `m_CommonParameters`) | `m_PlayerSubPrograms`: a list per tier (desktop builds use the 4th, tier-independent one) with the parallel `m_ParameterBlobIndices` | same, + `m_SerializedKeywordStateMask` |
+| also kept in step | - | - | - | pass `m_Platforms` | + Shader `stageCounts` | same |
+| GL program text | plain `#extension` lines | same | `#ifdef`-wrapped extensions; macro blocks for uniform buffers and uniform locations (`UNITY_LOCATION(n)`, `UNITY_BINDING(n)`) | same | same | same |
+
+In Unity's own built-in resources of each line, which hold GLCore and GLES3 programs of the same
+shaders (desktop players ship one file for every API), the GLES3 blob differs from the GLCore one
+only in the code and type of the program entries (same keywords, statistics, binding info, and
+2021.2+ parameter entries), and every GLES3 subprogram equals the GLCore subprogram of its variant
+but for the type: what the converter writes. Segments: the GLES3 blob keeps the segment of every
+entry of the GLCore one.
+
+The macro blocks of 2019+ programs are kept as Unity keeps them in its GLES3 programs: GLSL ES
+3.00 has no `layout(location)` on uniforms nor `layout(binding)` on blocks, and libunity
+(2019.4 - 2022.3) carries the line `#define UNITY_SUPPORTS_UNIFORM_LOCATION 1` to switch it off by
+device. `shaders-export` writes each stage as the driver then gets it (`as_driver_sees`: the
+switch at 0 in `#version 300 es` stages). Unity's own Android GLES3 programs compile on Mesa that
+way (78 of 136; the others are VR and frame-debugger variants), and 41 without it.
+
+### Checked on Unity's data and on games
+
+- **Built-in resources** of every LTS line's last patch (Linux player's "unity default resources",
+  with Unity's GLES3 programs in the same file and the Android player's copy as references;
+  `tests/test_glcore_corpus.py`): every GL and D3D11 blob reads and writes back byte for byte,
+  every shader converts but 2022.3's `FrameDebuggerRenderTargetDisplay` (a `sampler2DMSArray`
+  variant, editor-only); twins, parameter entries, `m_Platforms` and `stageCounts` equal Unity's;
+  every non-VR program declares the same uniforms, inputs, varyings, outputs and samplers as
+  Unity's GLES3 program (desktop file and Android player alike): 7, 7, 7, 8, 8, 9 programs from
+  2017.4 to 2022.3, and 77 converted programs link on Mesa (llvmpipe, ES 3.2); the 27 that do not
+  are the `STEREO_MULTIVIEW_ON` ones (`GL_OVR_multiview2`, which llvmpipe lacks).
+
+  ```sh
+  cd convert && PMUNITY_GLCORE_CORPUS=<linux udr>[:...] PMUNITY_GLCORE_ANDROID=<android udr>[:...] \
+      PMUNITY_GLCORE_EXPORT=/tmp/glsl python -m unittest tests.test_glcore_corpus -v    # then shadercheck /tmp/glsl
+  ```
+- **Six free Linux Mono games**, one per LTS line (not in the repository): all their shaders
+  convert but VR-only ones and one with `noperspective`, and every exported program compiles and
+  links on Mesa (`PMUNITY_GAMES=<Game>_Data[:...] PMUNITY_GAMES_EXPORT=<dir> python -m unittest
+  tests.test_games_corpus`, then shadercheck each `<dir>/<n>`):
+
+  | game data | formats | shaders given GLES3 | programs (GLES 3.1) | left out | distinct programs linked on Mesa |
+  |---|---|---|---|---|---|
+  | 2017.4.40f1 | SF 17, one block, 201708220 | 75 | 280 | - | 239 / 239 |
+  | 2018.4.36f1 | SF 17, one block, 201802150 | 34 | 154 | - | 145 / 145 |
+  | 2019.4.8f1 | SF 21, segments, 201806140 | 34 | 167 | VR blit (`gl_Layer`) | 150 / 150 |
+  | 2020.3.49f1 | SF 22, segments, 201806140 | 51 | 211 | VR blit | 183 / 183 |
+  | 2021.3.16f1 (URP) | SF 22, segments (URP UberPost: 3 segments, 2048 entries), 202012090 | 78 | 2495 (6) | VR blit, URP XR occlusion mesh | 933 / 933 |
+  | 2022.3.36f1 | SF 22, segments, 202012090 | 80 | 1140 | VR blit, a third-party outline shader (`noperspective`) | 906 / 906 |
+
+What was not checked: nothing of this has run in a Unity player of these versions; Unity's own
+GLES3 programs of a game's shaders were not available to compare with (only built-ins). Desktop
+builds put every subprogram in the tier-independent place (tier 3, 2021.2+: the 4th list), where
+Android builds have one per tier: Unity 2017.4's Android player takes the desktop form (Cuphead),
+later players are assumed to (the selection code is shared with the desktop players).
 
 ## Windows builds: Direct3D 11 programs
 
@@ -53,6 +127,13 @@ clang, Linux gcc (aarch64 in `ua-build-arm64`, armhf with `ua-host-armhf`'s cros
 byte-identical output. Ship the binary with `pmhlslcc.LICENSE.txt` (HLSLcc MIT, bstrlib BSD).
 
 What the path does (`dxbc.py`, `convert.add_gles3_d3d11`):
+
+Unity versions: 2017.3 - 2018.4 (serializers 201708220 and 201802150; in 2018.2+ a texture
+binding's two ints are the sampler index and `dimension << 1 | multisampled`). From 2019.1
+Unity's GL programs carry constant buffer layouts of their own (a `$Globals` of every loose
+uniform, which the D3D11 binding info does not give), its D3D11 headers are 38 bytes, and from
+2020.1 the parameters a program's variants share are stored once in the parsed form
+(`m_CommonParameters`): such data is refused with that reason.
 
 1. **Entries.** One D3D11 blob entry is one stage: Unity's 6-byte header (1, then the numbers of
    texture, constant buffer and sampler slots and two more), the DXBC container, and after the
@@ -120,7 +201,11 @@ samplers as Unity's GLCore program of the variant and have the same code (9 byte
 the order of declarations and the names of temporaries, Unity's GL compile having seen `fixed`
 values), and the same interface as Unity's GLES3 program; the 72 GLES3 subprograms equal Unity's
 own GLES3 subprograms but for the blob index. The 15 GLES3 programs (11 distinct) compile and link
-with Mesa (llvmpipe). The comparison is `convert/tests/test_d3d11_corpus.py`:
+with Mesa (llvmpipe). The same holds for the built-ins of 2017.4.40f1 and 2018.4.36f1 (the Linux
+player's file carries the D3D11 programs too): 36 variants translate per version, the 14 non-VR
+ones match Unity's GLCore code (2018.4: up to temporaries) and Unity's GLES3 interface, the 72
+subprograms equal Unity's, and the 30 GLES3 programs link on Mesa. The comparison is
+`convert/tests/test_d3d11_corpus.py`:
 
 ```sh
 cd convert && PMUNITY_D3D11_CORPUS="<path>/unity default resources" PMUNITY_D3D11_EXPORT=/tmp/glsl \

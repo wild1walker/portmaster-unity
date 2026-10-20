@@ -86,8 +86,13 @@ class Astc:
         return self._context(block).compress(src, A.ASTCSwizzle.from_str('RGBA'))
 
 
-def astc_format_id(block, alpha):
+def astc_format_id(block, alpha, unity=None):
+    """Unity's TextureFormat of ASTC LDR with this footprint. Up to Unity 2018 there are RGB (48-53)
+    and RGBA (54-59) formats; from 2019.1 only ASTC_<n>x<n> (48-53, alpha included: ASTC blocks
+    carry it either way), the RGBA numbers being deprecated. unity: the data's version string."""
     from UnityPy.enums import TextureFormat
+    if unity and int(unity.split('.')[0]) >= 2019:
+        alpha = False
     return int(TextureFormat[f'ASTC_{"RGBA" if alpha else "RGB"}_{block[0]}x{block[1]}'])
 
 
@@ -233,6 +238,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
     texture is encoded (ASTC on every core), one texture ahead at most. Everything else, and every
     other read of the file, happens with the worker idle, in the textures' order, so the output is
     the same as one texture after the other (c['pipeline'] = False does exactly that)."""
+    unity = getattr(lf.sf, 'unity_version', None)
     from concurrent.futures import ThreadPoolExecutor
     stream_name = None
     stream = StreamFile()
@@ -254,7 +260,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
                 sizes[pid] = (old[0], old[1], ch.width, ch.height)
             stats['in'] += sd.get('size') or len(t.get('image data') or b'')
             stats['out'] += len(blob)
-            t['m_TextureFormat'] = astc_format_id(ch.block, ch.alpha)
+            t['m_TextureFormat'] = astc_format_id(ch.block, ch.alpha, unity)
             t['m_Width'], t['m_Height'], t['m_MipCount'] = ch.width, ch.height, nlevels
             t['m_CompleteImageSize'] = len(blob)
             if streamed:
@@ -293,11 +299,26 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
             pool.shutdown(wait=True)
     if not converted:
         return None
+    if stream_name:
+        # everything else that streams from the same file goes along (Unity 2018+ meshes; cubemaps,
+        # texture arrays, 3D textures): the stream file is rewritten
+        for _, o in lf.objects():
+            if o.type.name not in OTHER_STREAMED:
+                continue
+            t = o.read_typetree()
+            sd = t.get('m_StreamData') or {}
+            if sd.get('size') and sd.get('path') == stream_name:
+                t['m_StreamData'] = dict(sd, offset=stream.add(read_stream(sd['path'], sd['offset'], sd['size'])))
+                save.append((o, t))
     stats['textures'] += converted
     save += fix_references(lf, sizes, stats)
     for o, t in save:
         o.save_typetree(t)
     return stream_name, (bytes(stream.data) if stream_name else None), sizes
+
+
+# classes besides Texture2D whose data can be in a .resS stream (StreamingInfo m_StreamData)
+OTHER_STREAMED = ('Mesh', 'Cubemap', 'CubemapArray', 'Texture2DArray', 'Texture3D')
 
 
 def texture_files(job, files_rx):
@@ -331,7 +352,7 @@ def run(job, only=None):
         job.need_space(os.path.getsize(src) // 2 + (64 << 20), f'convert {rel}')
         before = (stats['in'], stats['out'])
         res_dir = os.path.dirname(os.path.join(job.src, rel))
-        lf = Loaded(src)
+        lf = Loaded(src, res_dir)
         handles = {}
 
         def read_stream(path, off, size):
