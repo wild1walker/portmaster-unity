@@ -158,8 +158,10 @@ built-ins and six free Linux games (one per line):
   is. From 2020.2 the list is `ScriptingAssemblies.json` in the data folder (MonoManager keeps only
   script hashes); it is shipped with `RuntimeInitializeOnLoads.json`. The check (game assemblies
   present, engine modules the Android set lacks) reads whichever list the version has.
-- **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder
-  or (macOS) in `Contents/`.
+- **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder,
+  next to it (Windows) or (macOS) in `Contents/`. A Windows build's native plugins
+  (`Plugins/x86_64/*.dll`) are named in the warning; Unity 2021.2+ Windows builds' class libraries
+  are Windows-only (`pmunity.winbcl` gives the Unix ones, shipped with `--managed-file`).
 - **Texture streams.** Inlined in every version (the 2017.4 reason, section 2, is not known for
   later players; inline pixels load either way). From 2018 meshes can stream their vertex data
   from the same `.resS`: a `.resS` that a mesh still reads is shipped beside its file (2021.3 URP

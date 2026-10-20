@@ -64,11 +64,15 @@ def build(template_tree, bt709=False):
     pf = t['m_ParsedForm']
     if pf['m_Name'] != TEMPLATE:
         raise ValueError(f'template is {pf["m_Name"]}, not {TEMPLATE}')
-    if B.PLATFORM_GLCORE not in t['platforms']:
-        raise ValueError(f'{TEMPLATE} has no OpenGL Core programs to take the layout from')
+    # a Windows build's has GLES3 programs translated from Direct3D 11 (the shaders step) instead,
+    # laid out as Unity's GL programs of that version
+    plat, typ = next(((pl, ty) for pl, ty in ((B.PLATFORM_GLCORE, B.GPU_GLCORE32), (B.PLATFORM_GLES3PLUS, B.GPU_GLES3))
+                      if pl in t['platforms']), (None, None))
+    if plat is None:
+        raise ValueError(f'{TEMPLATE} has no OpenGL Core (or translated GLES3) programs to take the layout from')
     progs = programs(bt709)
     blobs = B.ShaderBlobs(t)
-    src = C.platform_entries(t, B.PLATFORM_GLCORE, blobs)
+    src = C.platform_entries(t, plat, blobs)
     ss = pf['m_SubShaders'][0]
     by_name = {_pass_name(p).upper(): p for p in ss['m_Passes']}
     new_passes, entries, remap = [], [], {}
@@ -105,7 +109,7 @@ def build(template_tree, bt709=False):
                 for tier, lst in enumerate(players):
                     lists.append((lst, prog['m_ParameterBlobIndices'][tier]))
             for lst, pbi in lists:
-                keep = [k for k, sp in enumerate(lst) if sp['m_GpuProgramType'] == B.GPU_GLCORE32]
+                keep = [k for k, sp in enumerate(lst) if sp['m_GpuProgramType'] == typ]
                 subs = []
                 for k in keep:
                     sp = copy.deepcopy(lst[k])

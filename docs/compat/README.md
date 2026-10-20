@@ -37,7 +37,8 @@ loading, startup, input or data conversion) · "-" not applicable.
 | SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | 22 ✅ | 22 ✅ | 22 ✅ |
 | shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
 | GLCore41/43 programs (converter) | - (output as before) | ⚠️ off by default (`shaders.glcore4x`) | ✅ GLES3 / GLES 3.1 | ✅ | ✅ | ✅ + stripped shaders' empty blobs | ✅ |
-| D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ❌ GL cbuffer layouts | ❌ + common params | ❌ | ❌ |
+| D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ✅ GL binding info (Unity's 2019 layout) | ✅ + common params | ✅ + param entries | ✅ merged `$Globals` |
+| class libraries (Windows builds) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ unityjit-win32: `pmunity.winbcl` (2021.2+) | ⚠️ same |
 | assembly list (converter) | fixed 48 slots ✅ | fixed 48 ✅ | flags (`m_AssemblyTypes`) ✅ | flags ✅ | `ScriptingAssemblies.json` ✅ (2020.2+) | json ✅ | json ✅ |
 | texture formats (converter) | ASTC RGB/RGBA ✅ | ✅ | ✅ | `ASTC_nxn` ✅ | ✅ | ✅ | ✅ |
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
@@ -87,8 +88,12 @@ Notes on the rows:
   every game) become GLES3 or GLES 3.1 programs (on by default; `shaders.glcore4x: false` keeps the
   earlier output, GLCore32 programs only, as Cuphead's port does). A shader
   whose variants were all stripped (URP's `StencilDeferred`, `BlitHDROverlay`) gets an empty GLES3
-  blob, as in Unity's builds. D3D11: 2019.1+ GL programs carry constant buffer layouts the D3D11
-  data does not give (refused with that reason).
+  blob, as in Unity's builds. D3D11 (Windows builds): translated with Unity's HLSLcc for every
+  line, the GL programs' own binding info (2019.1+) written as Unity's GL compiler does
+  (docs/shaders.md, "Windows builds"); a 2021.2+ Windows build's class libraries are the Windows
+  profile's (`unityjit-win32`, kernel32 P/Invokes) and are replaced by the Unix profile's from
+  Unity's editor installer (`python -m pmunity.winbcl`). Six free Windows-only games (2018.3 -
+  2022.3) reach their first screens in the emulated rig ("Players run" below).
 - IL2CPP metadata: the header's integer version (`global-metadata.dat` starts with 0xFAB11BAF
   and the version). These values come from public reverse-engineering tools, not from these
   packages (`libil2cpp.so` and the metadata are built per game), and tools also use sub-versions
@@ -112,11 +117,43 @@ Java side, data loading and the picture do.
 | 2021.3.16 | URP, bdwgc, Burst | first screen (name entry), then the main menu; was a SIGSEGV after 2 frames (Swappy's NULL EGL table), then a hang in `WaitVSync` (vsync clock on UnityMain; Swappy's -1 swap duration) |
 | 2022.3.36 | URP, bdwgc, FMOD Studio, Steamworks.NET, Burst | title screen; was the same SIGSEGV, then `Application.Quit` (no `libsteam_api.so`); FMOD stays silent without ARM FMOD libraries |
 
+Windows builds (Direct3D 11 shaders translated with HLSLcc, `--set shaders.from=d3d11`; six free
+Windows-only Mono games, docs/shaders.md "Windows builds"): a 2018.3.7f1 3D game starts in its
+first level; 2019.2.5f1: title screen; 2019.3.14f1 (URP): Unity splash, title menu; 2020.3.44f1:
+splash, first screen; 2021.3.28f1: title menu once its class libraries are the Unix ones
+(`pmunity.winbcl`; with the Windows ones Mono asserts in the Input System's start, then SIGSEGV);
+2022.3.62f3 (URP): title menu (its Windows class libraries had failed only System.Console).
+
 What these runs still show: Unity's optional Java classes (`GoogleARCoreApi`, `Camera2Wrapper`,
 `HFPStatus`, `AudioVolumeHandler`, `SoftInputProvider`) are placeholders that only get natives
 registered; cursor images (`Bitmap`/`PointerIcon`) and video decoding are other work; HTTPS from
 2019.4+ fails certificate checks (`TrustManagerFactory` placeholders; libunity's unitytls then
 reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM builds.
+
+## Android builds run (emulated rig)
+
+Free itch.io Android builds, each made ready with `pmunity apk` (docs/apk.md) and run as they
+are: the game's own player libraries and data, nothing converted. The 64-bit route runs in an
+aarch64 container (`EMU_ARCH=arm64`, native on an Apple-silicon Mac, Mesa llvmpipe), the 32-bit
+one under QEMU armv7.
+
+| build | ABI run | result |
+|---|---|---|
+| 2019.4.18, Mono (bdwgc), armeabi-v7a, Vulkan + GLES3, portrait | armeabi-v7a | title screen ("PLAY"), laid out for the landscape window |
+| 2020.3.3, IL2CPP, arm64-v8a + armeabi-v7a, GLES3 + GLES2, Optimized Frame Pacing on | arm64-v8a | title menu, 60-70 fps in the rig (2020.3 turns Swappy off itself below API 23) |
+| 2021.3.4, IL2CPP + Burst, Vulkan + GLES3, Optimized Frame Pacing on | arm64-v8a | title menu, 25-29 fps; before: stopped after 3 frames (Swappy kept off), then slowed to 2 fps (Swappy's tick on UnityMain) |
+| same build | armeabi-v7a (IL2CPP, 32-bit) | intro, then the title menu |
+| 2022.3.14, IL2CPP + Burst, FMOD, 3D, Vulkan + GLES3, Optimized Frame Pacing on, minSdk 26 | arm64-v8a | title menu over its 3D scene (0.2-12 fps: llvmpipe-bound); before: stopped after 8 frames when told API 26 (Swappy on the NDK choreographer) |
+| 2022.3.23, Mono (bdwgc), armeabi-v7a, GLES2 only | armeabi-v7a | title screen ("tap anywhere to start") |
+
+In all of them Unity picks GLES (`libvulkan.so` does not load), finds no OBB (none shipped) and
+reads its data from the APK as on a phone. The Mono ones stalled for minutes at times under QEMU
+with UnityMain stopped in the Boehm collector's suspend handler (a stop-the-world that does not
+end); not seen with the converted desktop games' longer runs nor reproducible natively here (no
+32-bit ARM on Apple silicon): needs a run on a handheld. Not found among free builds: one with an
+OBB (a build re-split locally into APK + main OBB, as Unity's "Split Application Binary" makes
+them, mounted its OBB and reached its title: docs/apk.md), an IL2CPP arm64 build of 2017.4 - 2019.4
+(the one 2018.4 build was a VR title, refused).
 
 ## Gaps, most impact for the most games first
 
@@ -147,8 +184,8 @@ reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM bu
    serializers, segmented blobs, parameter entries and per-tier subprograms, assembly lists by
    flags and `ScriptingAssemblies.json`, 2019+ ASTC numbers, compressed builds via `pmunity
    unpack`, GLCore41/43 programs (2018.1+), the 2021.3+ OBB GUID (the OBB's `unity_obb_guid` at
-   its root, the APK's `assets/unity_obb_guid`). Left: D3D11 programs of 2019.1+ Windows builds
-   (GL constant buffer layouts).
+   its root, the APK's `assets/unity_obb_guid`), D3D11 programs of Windows builds of every line
+   (2019.1+: the GL binding info Unity's GL compiler writes).
 5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.x on (and of any
    .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
@@ -169,16 +206,19 @@ reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM bu
    (`runtime/android/README.md`, "Frame pacing").
 8. **EGL** (done): `eglSurfaceAttrib` (2020.3+) on the SDL display path goes to the real surface
    (and is set again on a surface KMSDRM puts in its place); on fbdev it is the driver's own.
-9. **Packaging of Android builds** (games owned as APK/AAB): split APKs
+9. **Packaging of Android builds** (games owned as APK/AAB; `pmunity apk`, docs/apk.md: APKs,
+   splits, XAPK/APKS, AAB and OBBs handled, asset-pack splits merged into the one APK the player
+   reads; run as above): split APKs
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
    (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`;
    runtime/jni answers as an app without Play Core: no asset packs); their PlayerSettings'
-   `androidUseSwappy` (on in many 2021.3+ projects) has to be turned off there too.
-10. **IL2CPP Android games**: loading already works through `ClassLoader.findLibrary` +
-    `System.load`; libunity then copies IL2CPP data to `<filesDir>/il2cpp` (writable files dir
-    needed, runtime/jni creates it and warns otherwise; 2022.3 re-extracts when
-    `assets/bin/Data/unity_app_guid` changes) and binds 175-234 `il2cpp_*` functions from the
-    game's `libil2cpp.so`.
+   `androidUseSwappy` (on in many 2020+ projects) stays as built: ua_host runs Swappy for them
+   (its Java tick on a thread of its own) and reports at most API 23, below Swappy's NDK path.
+10. ~~**IL2CPP Android games**~~ (run, 32- and 64-bit): `libil2cpp.so` comes up with libunity
+    through libmain's `NativeLoader.load` (its `JNI_OnLoad` right after libmain's; `ClassLoader.findLibrary`
+    + `System.load` serve Burst's `lib_burst_generated.so`); libunity copies IL2CPP data to
+    `<external files>/il2cpp` (2022.3 re-extracts when `assets/bin/Data/unity_app_guid` changes)
+    and binds 175-234 `il2cpp_*` functions from the game's `libil2cpp.so`.
 11. Small: ~~`nativeSendSurfaceChangedEvent` after a resize (2018.4+)~~ (done); the 2022.3 `armv9` libunity
     must not be used on ARMv8 CPUs; 16 KiB-page kernels stay unsupported (the 2022.3.62 libraries
     would allow them).

@@ -24,7 +24,7 @@ player under box64, at roughly half the frame rate.
   - `Data/unity default resources` (the Android player's built-in resources)
   - the Development variants (`Variations/mono/Development/...`) for debugging
 - The game, a desktop build you own: macOS (its OpenGL Core shaders are converted for GLES) or
-  Linux. Windows builds carry Direct3D shaders only.
+  Linux; or Windows, whose Direct3D 11 shaders are translated with Unity's HLSLcc.
 
 ## Layout
 - `runtime/loader/`   ELF loader for Android .so files on glibc + bionic compatibility wrappers

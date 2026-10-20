@@ -10,6 +10,8 @@ Android player on GLES handhelds.
     python -m pmunity unpack <data> [--out DIR] [--remove]   (a compressed build's data.unity3d -> files)
     python -m pmunity version <data>                          (the Unity version the data was built with)
     python -m pmunity player fetch <version> <dir>            (Unity's Android player of that version, from Unity)
+    python -m pmunity port check|new|package ...              (a PortMaster port of a game: docs/porting.md)
+    python -m pmunity apk <apk|xapk|apks|aab|obb...> <out>     (a game's own Android build, ready for ua_host)
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a]   (the game's assemblies compiled with IL2CPP; docs/il2cpp.md)
 
 The data's Unity version is read from the data (unity_version.py); versions outside 2017.3 - 2022.3
@@ -81,9 +83,15 @@ def main(argv=None):
     if argv[:1] == ['unpack']:
         from . import unpack
         return unpack.main(argv[1:])
+    if argv[:1] == ['apk']:
+        from . import apk
+        return apk.main(argv[1:])
     if argv[:1] == ['player']:
         from . import player
         return player.main(argv[1:])
+    if argv[:1] == ['port']:            # port check / new / package (port.py, docs/porting.md)
+        from . import port
+        return sys.exit(port.main(argv[1:]))
     if argv[:1] == ['il2cpp']:
         from . import il2cpp
         return il2cpp.main(argv[1:])
