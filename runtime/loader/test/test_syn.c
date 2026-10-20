@@ -234,6 +234,15 @@ int main(int argc, char **argv)
         unsetenv("SO_PROP_swappy_disable");
         CHECK(prop_get && prop_get("no.such.prop", v) == 0 && !v[0], "a missing property");
     }
+#if defined(__arm__)
+    // bionic-only names glibc lacks resolve to the static softfp wrappers (2018.4's libmonobdwgc)
+    {
+        int (SO_ABI *fin)(double) = (int (SO_ABI *)(double))so_resolve("__isfinite");
+        int (SO_ABI *finf)(float) = (int (SO_ABI *)(float))so_resolve("__isfinitef");
+        CHECK(fin && fin(1.5) && !fin(1.0 / 0.0) && !fin(0.0 / 0.0), "__isfinite");
+        CHECK(finf && finf(2.5f) && !finf(1.0f / 0.0f), "__isfinitef");
+    }
+#endif
 
     static const char *const kinds[] = { "plain", "RELR", "APS2", "RELR+APS2", "Android RELR+APS2" };
     so_module *m[5];

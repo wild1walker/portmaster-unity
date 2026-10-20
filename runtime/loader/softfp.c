@@ -268,6 +268,15 @@ void *so_softfp_wrap(const char *name, void *fn)
     return w->wrapper;
 }
 
+/* The wrappers that call the host's code statically (libm, strtod, the classification functions):
+ * usable when the host library lacks the name itself, e.g. bionic's __isfinite / __isfinitef,
+ * which glibc does not export (Mono 4.x's libmonobdwgc-2.0.so of 2018.4 imports __isfinite). */
+void *so_softfp_static(const char *name)
+{
+    const wrapent *w = name ? find(name) : NULL;
+    return w && !w->real ? w->wrapper : NULL;
+}
+
 int so_softfp_count(void) { return (int)(sizeof g_wraps / sizeof g_wraps[0]) - 1; }
 
 void so_softfp_list(FILE *out)
@@ -282,6 +291,7 @@ void so_softfp_list(FILE *out)
 }
 #else
 void *so_softfp_wrap(const char *name, void *fn) { (void)name; return fn; }
+void *so_softfp_static(const char *name) { (void)name; return NULL; }
 int so_softfp_count(void) { return 0; }
 void so_softfp_list(FILE *out) { fprintf(out, "\n"); }
 #endif

@@ -118,6 +118,9 @@ void so_register_fake_lib(const char *android_name, const so_shim *table);
  * floats (GL/GLES, libm), or fn itself if it needs none. Used for dlsym results
  * and by eglGetProcAddress shims (the EGL glue should call this too). AArch64: fn. */
 void *so_softfp_wrap(const char *name, void *fn);
+/* A wrapper that needs no host function of that name (it calls host code statically), for names
+ * the host lacks: bionic's __isfinite, __isfinitef. NULL otherwise, and on AArch64. */
+void *so_softfp_static(const char *name);
 
 /* ARM EHABI unwinding support (32-bit ARM): finds the .ARM.exidx table for pc in our
  * modules (then in host objects). Exported under the libgcc/glibc name by so_loader.c:
