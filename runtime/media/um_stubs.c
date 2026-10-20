@@ -6,11 +6,9 @@
 
 #ifndef UM_HAVE_MP4
 int um_mp4_open(um_source *src, um_demux *d) { (void)src; (void)d; return UM_ERR_UNSUPPORTED; }
-int um_avcc_to_annexb(const uint8_t *avcc, size_t n, uint8_t **out, size_t *outn, int *nal_len_size)
-{
-    (void)avcc; (void)n; (void)out; (void)outn; (void)nal_len_size;
-    return -1;
-}
+int um_avcc_csd(um_format *f, const uint8_t *a, size_t n, int *nls) { (void)f; (void)a; (void)n; (void)nls; return -1; }
+int um_hvcc_csd(um_format *f, const uint8_t *a, size_t n, int *nls) { (void)f; (void)a; (void)n; (void)nls; return -1; }
+ssize_t um_nal_convert(const uint8_t *in, size_t n, int nls, uint8_t *out, size_t cap) { (void)in; (void)n; (void)nls; (void)out; (void)cap; return -1; }
 #endif
 #ifndef UM_HAVE_H264
 um_dec *um_h264_create(const char *mime) { (void)mime; return NULL; }

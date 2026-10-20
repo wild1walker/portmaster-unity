@@ -1,0 +1,6 @@
+# Test image for the media core's FFmpeg decoders (um_ffmpeg.c): Debian's FFmpeg (libavcodec 59)
+# and its command-line tool, which makes the test clips (AAC in MP4; H.264 High profile with
+# B-frames, and interlaced, by x264). Built for the platform of the test (linux/arm/v7 or arm64).
+FROM debian:bookworm-slim
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*

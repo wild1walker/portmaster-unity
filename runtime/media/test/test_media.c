@@ -17,7 +17,9 @@
 #include <wels/codec_api.h>
 #endif
 
-static int fails, checks;
+int test_fails, test_checks;
+#define fails test_fails
+#define checks test_checks
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 /* ---- decoding helpers ------------------------------------------------------------------------------- */

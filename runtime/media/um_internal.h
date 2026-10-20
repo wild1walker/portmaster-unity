@@ -37,7 +37,7 @@ typedef struct {
     int cur;                    /* next sample to return */
     int selected;
     uint32_t max_size;
-    /* MP4: the sample data needs a prefix (H.264 length -> start codes are done by the decoder) */
+    int nal_len;                /* MP4 H.264 / HEVC: NAL length bytes, replaced by start codes on read */
 } um_track;
 
 typedef struct um_demux {
@@ -91,11 +91,12 @@ um_dec *um_opus_create(const char *mime);
 um_dec *um_h264_create(const char *mime);
 um_dec *um_ffmpeg_create(const char *mime);
 int     um_ffmpeg_available(void);
-const char *um_ffmpeg_version(void);
 
-/* H.264 / HEVC helpers (um_mp4.c): avcC -> Annex B parameter sets; NAL length prefixes -> start codes */
-int  um_avcc_to_annexb(const uint8_t *avcc, size_t n, uint8_t **out, size_t *outn, int *nal_len_size);
-int  um_nal_to_annexb(const uint8_t *in, size_t n, int nal_len_size, uint8_t **out, size_t *outn, size_t *outcap);
+/* H.264 / HEVC (um_mp4.c): avcC / hvcC -> csd-0 (/ csd-1) in Annex B form, the NAL length size;
+   length-prefixed NAL units -> start codes (in == out is fine for 4-byte lengths) */
+int  um_avcc_csd(um_format *f, const uint8_t *avcc, size_t n, int *nal_len_size);
+int  um_hvcc_csd(um_format *f, const uint8_t *hvcc, size_t n, int *nal_len_size);
+ssize_t um_nal_convert(const uint8_t *in, size_t n, int nal_len_size, uint8_t *out, size_t cap);
 
 int  um_cpu_count(void);
 int64_t um_now_us(void);

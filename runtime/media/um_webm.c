@@ -190,16 +190,10 @@ static int track_format(um_demux *d, tinfo *ti, int64_t duration_us, int *map_in
         um_format_set_int32(f, UM_KEY_HEIGHT, (int32_t)ti->height);
         if (ti->fps > 0) um_format_set_float(f, UM_KEY_FRAME_RATE, (float)ti->fps);
         else if (ti->default_duration) um_format_set_float(f, UM_KEY_FRAME_RATE, (float)(1e9 / ti->default_duration));
-        if (!strcmp(mime, UM_MIME_AVC) && ti->priv) {
-            uint8_t *ab; size_t an; int nls;
-            if (um_avcc_to_annexb(ti->priv, ti->priv_n, &ab, &an, &nls) == 0) {
-                um_format_set_buffer(f, "csd-0", ab, an);     /* SPS + PPS with start codes */
-                um_format_set_int32(f, "x-nal-length-size", nls);
-                free(ab);
-            }
-        } else if (!strcmp(mime, UM_MIME_HEVC) && ti->priv) {
-            um_format_set_buffer(f, "csd-hvcc", ti->priv, ti->priv_n);
-        }
+        /* H.264 / HEVC: parameter sets as Android's (Annex B), samples converted on read */
+        int nls = 4;
+        if (!strcmp(mime, UM_MIME_AVC)) { if (ti->priv) um_avcc_csd(f, ti->priv, ti->priv_n, &nls); t->nal_len = nls; }
+        else if (!strcmp(mime, UM_MIME_HEVC)) { if (ti->priv) um_hvcc_csd(f, ti->priv, ti->priv_n, &nls); t->nal_len = nls; }
     } else {
         um_format_set_int32(f, UM_KEY_SAMPLE_RATE, (int32_t)(ti->rate + 0.5));
         um_format_set_int32(f, UM_KEY_CHANNEL_COUNT, (int32_t)(ti->channels ? ti->channels : 1));

@@ -159,7 +159,10 @@ const char *um_decoders(void)
         if (!dup && ns < 16) {
             seen[ns++] = decoders[i].mime;
             size_t l = strlen(buf);
-            snprintf(buf + l, sizeof buf - l, "%s%s(%s)", l ? " " : "", strchr(decoders[i].mime, '/') + 1, d->name);
+            const char *m = strchr(decoders[i].mime, '/') + 1;
+            if (!strncmp(m, "x-vnd.on2.", 10)) m += 10;
+            if (!strcmp(m, "mp4a-latm")) m = "aac";
+            snprintf(buf + l, sizeof buf - l, "%s%s (%s)", l ? ", " : "", m, d->name);
         }
         d->destroy(d);
     }
@@ -369,6 +372,22 @@ int um_codec_configure(um_codec *c, const um_format *f, um_surface *surface)
     c->in_fmt = um_format_copy(f);
     um_format *out = um_format_new();
     int r = c->dec->configure(c->dec, f, out);
+    /* a stream this backend does not take (e.g. interlaced H.264 for OpenH264): the next decoder
+       of the same type, if this build has one */
+    for (const um_dec_entry *e = c->ent + 1; r == UM_ERR_UNSUPPORTED && e < decoders + sizeof decoders / sizeof decoders[0]; e++) {
+        if (strcasecmp(e->mime, c->ent->mime)) continue;
+        um_dec *d = e->create(e->mime);
+        if (!d) continue;
+        um_format_free(out);
+        out = um_format_new();
+        r = d->configure(d, f, out);
+        if (r == UM_OK) {
+            um_log("codec %s: the stream goes to %s", c->ent->name, e->name);
+            c->dec->destroy(c->dec);
+            c->dec = d;
+            c->ent = e;
+        } else d->destroy(d);
+    }
     if (r != UM_OK) {
         um_format_free(out);
         pthread_mutex_unlock(&c->mu);

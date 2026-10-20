@@ -110,6 +110,11 @@ void um_track_finish(um_track *t)
     /* decode order stays file order (B-frames: presentation times are not monotonic in the file);
        audio is in time order anyway */
     (void)cmp_sample;
+    /* decode order is not presentation order (B-frames): decoders that reorder badly step aside */
+    if (video) {
+        for (int i = 1; i < t->n; i++)
+            if (t->s[i].pts_us < t->s[i - 1].pts_us) { um_format_set_int32(t->fmt, "x-reordered", 1); break; }
+    }
     if (!um_format_type(t->fmt, UM_KEY_MAX_INPUT_SIZE) && t->max_size)
         um_format_set_int32(t->fmt, UM_KEY_MAX_INPUT_SIZE, t->max_size);
     /* frame rate from the samples when the container gave none: (frames - 1) over the time from
@@ -276,8 +281,16 @@ ssize_t um_extractor_read(um_extractor *e, void *buf, size_t cap)
     ssize_t r = -1;
     if (t) {
         um_sample *s = &t->s[t->cur];
-        if (s->size > cap) { um_log("extractor: sample of %u bytes, buffer of %zu", s->size, cap); r = -1; }
-        else if (um_source_read(&e->src, s->pos, buf, s->size) == 0) r = s->size;
+        if (t->nal_len && t->nal_len < 4) {
+            /* NAL lengths of 1 or 2 bytes: the start codes make the sample longer */
+            uint8_t *tmp = malloc(s->size ? s->size : 1);
+            if (tmp && um_source_read(&e->src, s->pos, tmp, s->size) == 0) r = um_nal_convert(tmp, s->size, t->nal_len, buf, cap);
+            free(tmp);
+        } else if (s->size > cap) { um_log("extractor: sample of %u bytes, buffer of %zu", s->size, cap); r = -1; }
+        else if (um_source_read(&e->src, s->pos, buf, s->size) == 0) {
+            r = s->size;
+            if (t->nal_len == 4) r = um_nal_convert(buf, s->size, 4, buf, cap);   /* (in place) */
+        }
     }
     pthread_mutex_unlock(&e->mu);
     return r;

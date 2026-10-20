@@ -184,6 +184,8 @@ void        um_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int         um_tracing(void);
 /* what this build decodes, e.g. "vp8 vp9 vorbis opus avc(openh264) aac(libavcodec 59)" */
 const char *um_decoders(void);
+/* the system's libavcodec this build found ("libavcodec 59"), or NULL (none, or UM_FFMPEG=0) */
+const char *um_ffmpeg_version(void);
 
 #ifdef __cplusplus
 }
