@@ -83,6 +83,7 @@ def main(argv=None):
     if argv[:1] == ['player']:
         from . import player
         return player.main(argv[1:])
+    if argv[:1] == ['route']: from . import route; return route.main(argv[1:])  # noqa: E701,E702 (docs/box64-route.md)
     if argv[:1] == ['version']:
         from . import unity_version as UV
         v = UV.of_data(argv[1])

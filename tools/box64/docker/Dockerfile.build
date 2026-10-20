@@ -1,0 +1,11 @@
+# Builds box64 and gl4es for aarch64 handhelds. Debian 11 (glibc 2.31): the binaries then load on
+# the PortMaster firmwares with older C libraries too (see docs/box64-route.md, "Firmwares").
+# On an Apple-silicon Mac this image runs natively (linux/arm64).
+FROM debian:bullseye
+ENV DEBIAN_FRONTEND=noninteractive
+# bullseye-security is being archived (its index names files the mirror no longer has): packages
+# come from the snapshot of the image's own date (the commented lines in its sources.list)
+RUN sed -i -e "/^deb /d" -e "s/^# deb /deb [check-valid-until=no] /" /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git gcc libc6-dev make cmake python3 file binutils libx11-dev libegl-dev libgles-dev \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src

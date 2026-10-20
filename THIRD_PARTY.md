@@ -56,3 +56,20 @@ Mono.Cecil's licence and the runtime pack's `LICENSE.TXT` and `THIRD-PARTY-NOTIC
 `tools/hlslcc/build.sh` at a pinned commit and compiled into `pmhlslcc` (Direct3D 11 shaders,
 `pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the
 build writes next to it.
+
+## The box64 route (`tools/box64`): built from source, not vendored
+
+`tools/box64/build.sh` clones these at a release tag and builds them in Docker; none of their
+source or binaries is in this repository. A port that ships the binaries ships the licence files
+the build writes to `tools/box64/out/licenses/`.
+
+| what | version | licence | used for |
+|---|---|---|---|
+| [box64](https://github.com/ptitSeb/box64) | v0.4.4 | MIT | x86_64 -> ARM64 translation of a game's Linux build |
+| box64's `x64lib/libstdc++.so.6`, `libgcc_s.so.1` (x86_64 GCC runtime, as box64 ships them) | from box64 v0.4.4 | GPL-3.0 with the GCC Runtime Library Exception 3.1 | the x86_64 C++ runtime Unity's players link |
+| [gl4es](https://github.com/ptitSeb/gl4es) | v1.1.6 | MIT | OpenGL 2.1 on GLES 2 for Unity's legacy OpenGL 2 renderer |
+
+`tools/box64/glxes` (GLX for OpenGL ES contexts on EGL) is ours (MIT). At run time a port uses
+PortMaster's Westonpack runtime (`weston_pkg_0.2`, from PortMaster; not shipped by the port), and
+the test rig (`tools/box64/docker/Dockerfile.rig`) Debian's Mesa, Xvfb, PulseAudio and X11
+packages.
