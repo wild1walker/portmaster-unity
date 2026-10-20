@@ -1,9 +1,43 @@
 #!/bin/bash
-# Cross-compiles the host programs for the device's 32-bit (armhf) userland in the ua-host-armhf
-# image: ua_host (loader + android shims + fake JNI), and the device checks egltest / sdltest /
-# audiocheck / shadercheck. Build ../loader, ../android and ../jni first (../build.sh does).
+# Builds the host programs: ua_host (loader + android shims + fake JNI), and the device checks
+# egltest / sdltest / audiocheck / shadercheck. Build ../loader, ../android and ../jni first for the
+# same ARCH (../build.sh does).
+#   ARCH=armhf (default): cross-compiled for the device's 32-bit userland in the ua-host-armhf image
+#     -> out/
+#   ARCH=arm64: native build in the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31; its SDL2, EGL
+#     and GLES) -> out/arm64/. ua_host is linked once ../loader/out/arm64/libsoloader.a exists;
+#     until then its objects are still compiled, so the sources are checked.
 set -e
 cd "$(dirname "$0")"
+ARCH=${ARCH:-armhf}
+if [ "$ARCH" = arm64 ]; then
+  mkdir -p out/arm64
+  docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build -t ua-build-arm64 ../docker/arm64
+  docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 bash -c '
+    set -e
+    O=out/arm64
+    F="-O2 -g -Wall -I../jni/include -I../jni"
+    OBJS=
+    for f in ua_host input frames glhooks hitches gltrace; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame; how the
+    # host unwinder finds the Android modules (if it must) is the arm64 loader'"'"'s business, and
+    # any link flags it needs go here.
+    LOADER=../loader/out/arm64/libsoloader.a
+    if [ -f $LOADER ]; then
+      g++ -o $O/ua_host $OBJS $LOADER ../android/out/arm64/libandroidshims.a ../jni/out/arm64/libfakejni.a \
+        -lSDL2 -lz -ldl -lpthread -lm
+      file $O/ua_host | sed "s|, BuildID[^,]*||"
+    else
+      rm -f $O/ua_host
+      echo "ua_host not linked: no arm64 loader yet ($LOADER); objects compiled in $O"
+    fi
+    gcc -O2 -Wall -o $O/egltest egltest.c -lEGL -lGLESv2
+    gcc -O2 -Wall -o $O/sdltest sdltest.c -lSDL2
+    gcc -O2 -Wall -o $O/audiocheck audiocheck.c -lSDL2
+    gcc -O2 -Wall -o $O/shadercheck shadercheck.c -lEGL -lGLESv2'
+  exit
+fi
+[ "$ARCH" = armhf ] || { echo "ARCH must be armhf or arm64"; exit 1; }
 mkdir -p out
 docker image inspect ua-host-armhf >/dev/null 2>&1 || docker build -q -t ua-host-armhf . >/dev/null
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '

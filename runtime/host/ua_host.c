@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
-// ua_host: runs a Unity game with Unity's own ARMv7 Android player (libmain.so, libunity.so,
-// libmono.so) natively on a 32-bit ARM Linux handheld, no Android system and no emulator:
+// ua_host: runs a Unity game with Unity's own Android player (libmain.so, libunity.so,
+// libmono.so or libil2cpp.so) natively on an ARM Linux handheld, no Android system and no
+// emulator: the armeabi-v7a player in a 32-bit (armhf) build, the arm64-v8a one in an aarch64 build.
 //   ../loader   maps the Android libraries; bionic -> glibc through libhybris's hooks
 //   ../android  liblog, libandroid (window, looper, sensors), OpenSL ES (SDL2), EGL glue (Mali fbdev)
 //   ../jni      the Java side: JavaVM/JNIEnv and Unity's UnityPlayer activity, in C
@@ -16,6 +17,7 @@
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
+#include "arch.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -95,16 +97,15 @@ static int load_library(void *user, const char *name)
 // of return-address-looking words on the stack (Mono installs its own handler later for managed
 // code and calls this one for faults outside it)
 #include <dlfcn.h>
-#include <ucontext.h>
 int so_dladdr(const void *addr, Dl_info *info);   /* loader: Android modules first, then the host */
 static void where(const char *what, uintptr_t a)
 {
     Dl_info di;
     if (a && so_dladdr((void *)a, &di) && di.dli_fname)
-        fprintf(stderr, "[crash]   %-4s %08lx  %s+0x%lx  %s\n", what, (unsigned long)a, di.dli_fname,
+        fprintf(stderr, "[crash]   %-4s %0*lx  %s+0x%lx  %s\n", what, ADDR_HEX, (unsigned long)a, di.dli_fname,
                 (unsigned long)(a - (uintptr_t)di.dli_fbase), di.dli_sname ? di.dli_sname : "");
     else
-        fprintf(stderr, "[crash]   %-4s %08lx\n", what, (unsigned long)a);
+        fprintf(stderr, "[crash]   %-4s %0*lx\n", what, ADDR_HEX, (unsigned long)a);
 }
 static void on_crash(int sig, siginfo_t *si, void *ctx)
 {
@@ -114,19 +115,19 @@ static void on_crash(int sig, siginfo_t *si, void *ctx)
     if (up_is_finishing())
     {
         static const char msg[] = "[host] Unity shut down\n";
-        write(2, msg, sizeof msg - 1);
+        (void)!write(2, msg, sizeof msg - 1);
         _exit(0);
     }
     fprintf(stderr, "[crash] signal %d (code %d) at address %p, thread %ld\n", sig, si->si_code, si->si_addr, (long)syscall(SYS_gettid));
-    where("pc", uc->uc_mcontext.arm_pc);
-    where("lr", uc->uc_mcontext.arm_lr);
-    uintptr_t *sp = (uintptr_t *)uc->uc_mcontext.arm_sp;
+    where("pc", UC_PC(uc));
+    where("lr", UC_LR(uc));
+    uintptr_t *sp = (uintptr_t *)UC_SP(uc);
     int shown = 0;
-    for (int i = 0; i < 2048 && shown < 24; i++)
+    for (int i = 0; i < 8192 / (int)sizeof sp[0] && shown < 24; i++)     // the 8 KB above sp
     {
         Dl_info di;
         uintptr_t v = sp[i];
-        if ((v & 1) || (v & 3) == 0)
+        if (code_aligned(v))
             if (so_dladdr((void *)v, &di) && di.dli_fname && strstr(di.dli_fname, ".so") && di.dli_fbase && v - (uintptr_t)di.dli_fbase > 0x1000)
             { char t[16]; snprintf(t, sizeof t, "s%d", i); where(t, v); shown++; }
     }

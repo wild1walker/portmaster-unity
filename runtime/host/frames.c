@@ -143,7 +143,7 @@ static void on_swap(void *ctx)
         int gc = mono_gc_count ? mono_gc_count(0) : -1;
         long rss_pages = 0;
         FILE *sm = fopen("/proc/self/statm", "r");
-        if (sm) { if (fscanf(sm, "%*ld %ld", &rss_pages) != 1) rss_pages = 0; fclose(sm); }
+        if (sm) { if (fscanf(sm, "%*s %ld", &rss_pages) != 1) rss_pages = 0; fclose(sm); }
         fprintf(stderr, "[fps] %.1f fps, frame %.1f avg / %.1f p99 / %.1f worst ms, late %d hitch %d, gc %d heap %lld MB (%d frames, %d total, %.0f s) rss %ld MB\n",
                 n / sum, 1000 * sum / n, p99, 1000 * worst, late, hitch, gc_prev >= 0 && gc >= 0 ? gc - gc_prev : 0,
                 mono_heap ? (long long)(mono_heap() >> 20) : -1LL, n, total, t - g_t_start, rss_pages * (sysconf(_SC_PAGESIZE) >> 10) >> 10);
