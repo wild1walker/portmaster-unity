@@ -97,6 +97,8 @@ H(m_hist_x)        { return fj_f(axis(mev(self), 0, a[0].i)); }        /* (point
 H(m_hist_y)        { return fj_f(axis(mev(self), 1, a[0].i)); }
 H(m_hist_time)     { return fj_j(mev(self)->time_ms); }
 H(m_device_obj)    { return fj_l(up_make_input_device(mev(self)->device)); }
+H(m_isButtonPressed) { return fj_z((mev(self)->buttons & a[0].i) != 0); }
+H(m_isFromSource)  { return fj_z((mev(self)->source & a[0].i) == a[0].i); }
 H(m_axis0)         { return fj_f(axis(mev(self), (int)(intptr_t)ud, 0)); }            /* ud: axis, pointer 0 */
 H(m_axisp)         { return fj_f(axis(mev(self), (int)(intptr_t)ud, a[0].i)); }       /* ud: axis, (pointer) */
 H(m_obtain)
@@ -469,6 +471,11 @@ void up_input_register(void)
     fj_static_int(ME, "ACTION_UP", 1);
     fj_static_int(ME, "ACTION_MOVE", 2);
     fj_static_int(ME, "ACTION_CANCEL", 3);
+    fj_static_int(ME, "ACTION_HOVER_MOVE", UP_ACTION_HOVER_MOVE);
+    fj_static_int(ME, "ACTION_SCROLL", UP_ACTION_SCROLL);
+    fj_static_int(ME, "BUTTON_PRIMARY", UP_BUTTON_PRIMARY);
+    fj_static_int(ME, "BUTTON_SECONDARY", UP_BUTTON_SECONDARY);
+    fj_static_int(ME, "TOOL_TYPE_MOUSE", 3);
     M(ME, "getAction", "()I", m_action);
     M(ME, "getActionMasked", "()I", m_actionMasked);
     M(ME, "getActionIndex", "()I", m_actionIndex);
@@ -500,6 +507,8 @@ void up_input_register(void)
     M(ME, "getHistoricalEventTime", "(I)J", m_hist_time);
     M(ME, "recycle", "()V", m_zero);
     M(ME, "getDevice", "()Landroid/view/InputDevice;", m_device_obj);
+    M(ME, "isButtonPressed", "(I)Z", m_isButtonPressed);     /* API 21; mice */
+    M(ME, "isFromSource", "(I)Z", m_isFromSource);
     /* AXIS_PRESSURE 2, AXIS_SIZE 3, AXIS_TOUCH_MAJOR 6, AXIS_TOUCH_MINOR 7, AXIS_ORIENTATION 8;
        the history is empty, so historical values are the current ones (as getHistoricalX) */
     MU(ME, "getPressure", "()F", m_axis0, 2);

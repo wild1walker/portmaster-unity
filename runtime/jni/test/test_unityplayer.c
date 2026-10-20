@@ -178,6 +178,19 @@ static int run_shape(int shape)
     CHECK(up_inject_axes(5, 0, 2, axes, vals) == 1);
     CHECK(R(R_AXIS_X_X1000) == -500 && R(R_AXIS_HAT_X1000) == 1000 && R(R_MOTION_SRC) == UP_SOURCE_JOYSTICK);
     CHECK(R(R_INJECT_EXTRA) == (shape >= SHAPE_2022_3 ? 1000 : 0));
+    /* a mouse (host pointer mode): hover, press, wheel */
+    struct up_input_device mouse = { .id = 9, .name = "Test Mouse", .descriptor = "test-mouse", .sources = UP_SOURCE_MOUSE,
+                                     .naxes = 2, .axis = { UP_AXIS_X, UP_AXIS_Y }, .max = { 639, 479 } };
+    up_add_input_device(&mouse);
+    CHECK(up_inject_mouse(9, UP_ACTION_HOVER_MOVE, 0, 100, 50, 0, 0) == 1);
+    CHECK(R(R_MOTION_SRC) == UP_SOURCE_MOUSE && R(R_MOTION_ACTION) == UP_ACTION_HOVER_MOVE && R(R_MOTION_TOOL) == 3 &&
+          R(R_MOTION_BUTTONS) == 0 && R(R_MOTION_PRESSED) == 0 && R(R_AXIS_X_X1000) == 100000 && R(R_MOUSE_DEV_OK) == 1);
+    up_inject_mouse(9, UP_ACTION_DOWN, UP_BUTTON_PRIMARY, 100, 50, 0, 0);
+    CHECK(R(R_MOTION_ACTION) == UP_ACTION_DOWN && R(R_MOTION_BUTTONS) == UP_BUTTON_PRIMARY && R(R_MOTION_PRESSED) == 1);
+    up_inject_mouse(9, UP_ACTION_UP, 0, 100, 50, 0, 0);
+    CHECK(R(R_MOTION_ACTION) == UP_ACTION_UP && R(R_MOTION_BUTTONS) == 0);
+    up_inject_mouse(9, UP_ACTION_SCROLL, 0, 100, 50, 1, 0);
+    CHECK(R(R_MOTION_ACTION) == UP_ACTION_SCROLL && R(R_VSCROLL_X1000) == 1000);
     up_send_message("GameManager", "OnHello", "w\xc3\xb6rld \xe2\x9c\x93");
     CHECK(R(R_SENDMSG) == 1);
 

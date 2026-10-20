@@ -400,6 +400,19 @@ static jboolean inject_event(JNIEnv *env, jobject ev)
         jfloat h = (*env)->CallFloatMethod(env, ev, gav, (jint)15, (jint)0);
         R[R_AXIS_X_X1000] = (int)(x * 1000.0f + (x < 0 ? -0.5f : 0.5f));
         R[R_AXIS_HAT_X1000] = (int)(h * 1000.0f + (h < 0 ? -0.5f : 0.5f));
+        /* what libunity reads of a mouse event */
+        R[R_MOTION_ACTION] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, mc, "getActionMasked", "()I"));
+        R[R_MOTION_TOOL] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, mc, "getToolType", "(I)I"), (jint)0);
+        R[R_MOTION_BUTTONS] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, mc, "getButtonState", "()I"));
+        R[R_MOTION_PRESSED] = (*env)->CallBooleanMethod(env, ev, (*env)->GetMethodID(env, mc, "isButtonPressed", "(I)Z"), (jint)1);
+        jfloat vs = (*env)->CallFloatMethod(env, ev, gav, (jint)9, (jint)0);
+        R[R_VSCROLL_X1000] = (int)(vs * 1000.0f + (vs < 0 ? -0.5f : 0.5f));
+        if (src == 0x2002) {
+            jclass idc = (*env)->FindClass(env, "android/view/InputDevice");
+            jobject d = (*env)->CallObjectMethod(env, ev, (*env)->GetMethodID(env, mc, "getDevice", "()Landroid/view/InputDevice;"));
+            R[R_MOUSE_DEV_OK] = d && (*env)->CallBooleanMethod(env, d, (*env)->GetMethodID(env, idc, "supportsSource", "(I)Z"), (jint)0x2002) &&
+                                str_eq(env, (*env)->CallObjectMethod(env, d, (*env)->GetMethodID(env, idc, "getName", "()Ljava/lang/String;")), "Test Mouse");
+        }
         return JNI_TRUE;
     }
     FAIL("unknown event class");
