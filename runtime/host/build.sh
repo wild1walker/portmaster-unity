@@ -19,13 +19,15 @@ if [ "$ARCH" = arm64 ]; then
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
     for f in ua_host input frames glhooks hitches gltrace; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
-    # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame; how the
-    # host unwinder finds the Android modules (if it must) is the arm64 loader'"'"'s business, and
-    # any link flags it needs go here.
+    # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
+    # unwinders linked into the Android libraries find our modules through the loader'"'"'s
+    # dl_iterate_phdr (docs/arm64.md): no flags for that. -lrt: libhybris'"'"'s timer_* and shm_open
+    # are there before glibc 2.34. The loader must be in the executable itself (its thread-local
+    # block holds bionic'"'"'s stack guard slot, so_loader.h).
     LOADER=../loader/out/arm64/libsoloader.a
     if [ -f $LOADER ]; then
       g++ -o $O/ua_host $OBJS $LOADER ../android/out/arm64/libandroidshims.a ../jni/out/arm64/libfakejni.a \
-        -lSDL2 -lz -ldl -lpthread -lm
+        -lSDL2 -lz -ldl -lpthread -lm -lrt
       file $O/ua_host | sed "s|, BuildID[^,]*||"
     else
       rm -f $O/ua_host
