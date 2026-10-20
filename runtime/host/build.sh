@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 ARCH=${ARCH:-armhf}
 if [ "$ARCH" = arm64 ]; then
   mkdir -p out/arm64
-  docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build -t ua-build-arm64 ../docker/arm64
+  docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 ../docker/arm64
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 bash -c '
     set -e
     O=out/arm64

@@ -2,7 +2,7 @@
 # plus the static decoder libraries of its -dev packages (libvpx, libvorbis + libogg, libopus).
 # OpenH264 is not packaged for Ubuntu 20.04: built from Debian bookworm's source package with the
 # image's own compiler (stage 1 only fetches the source).
-FROM debian:bookworm AS src
+FROM arm64v8/debian:bookworm AS src
 RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends dpkg-dev && \
     mkdir /src && cd /src && apt-get source --download-only openh264 && \
