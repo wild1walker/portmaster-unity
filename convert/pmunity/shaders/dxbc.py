@@ -123,13 +123,31 @@ class ConstantBuffer:
         self.name, self.size, self.params, self.structs = name, size, params, structs
 
 
+# serializer from which a texture binding's two ints are (sampler index, dimension << 1 |
+# multisampled) (Unity 2018.2+); before: (dimension, sampler index)
+PACKED_TEXTURE_FROM = 201802150
+# serializers this path reads: Unity 2017.3 - 2018.4. From 2019.1 Unity's GL programs carry
+# constant buffer layouts of their own (a "$Globals" of every loose uniform) that the D3D11 ones
+# do not give, and from 2020.1 the parameters a program's variants share are stored once, in the
+# parsed form (m_CommonParameters), not with each entry.
+SERIALIZERS = (201708220, 201802150)
+
+
 class Binding:
     KIND_TEXTURE, KIND_CBUFFER = 0, 1
     EXTRA = {KIND_TEXTURE: 2, KIND_CBUFFER: 1}          # ints after the index, by kind
-    __slots__ = ('name', 'kind', 'index', 'extra')
+    __slots__ = ('name', 'kind', 'index', 'extra', 'packed')
 
-    def __init__(self, name, kind, index, extra):
+    def __init__(self, name, kind, index, extra, packed=False):
         self.name, self.kind, self.index, self.extra = name, kind, index, list(extra)
+        self.packed = packed
+
+    @property
+    def dim(self):
+        """A texture's dimension (Unity's TextureDimension: 2 2D, 3 3D, 4 cube, 5 2D array)."""
+        if self.kind != self.KIND_TEXTURE:
+            return None
+        return self.extra[1] >> 1 if self.packed else self.extra[0]
 
     def __repr__(self):
         return f'{self.name}:{self.kind}/{self.index}'
@@ -143,7 +161,9 @@ class Bindings:
         self.cbuffers, self.bindings = cbuffers, bindings
 
     @classmethod
-    def parse(cls, data):
+    def parse(cls, data, serializer=None):
+        """serializer: the entry's serializer version (texture bindings changed in 2018.2)."""
+        packed = serializer is not None and serializer >= PACKED_TEXTURE_FROM
         r = _Reader(data)
         try:
             source_map = r.i32()
@@ -161,7 +181,7 @@ class Bindings:
                 name, kind, index = r.string(), r.i32(), r.i32()
                 if kind not in Binding.EXTRA:
                     raise Unsupported(f'binding {name!r} of kind {kind} (buffer or UAV?): not supported')
-                binds.append(Binding(name, kind, index, [r.i32() for _ in range(Binding.EXTRA[kind])]))
+                binds.append(Binding(name, kind, index, [r.i32() for _ in range(Binding.EXTRA[kind])], packed))
         except (struct.error, ValueError, UnicodeDecodeError) as ex:
             raise Unsupported(f'binding info does not match the known layout ({ex})')
         b = cls(source_map, channels, cbs, binds)
@@ -205,7 +225,7 @@ def check_parsed_form(bindings, sp, names):
         for p in (cb.get('m_VectorParams') or []) + (cb.get('m_MatrixParams') or []):
             if offs.get(names.get(p['m_NameIndex'])) != p['m_Index']:
                 out.append(f'constant {names.get(p["m_NameIndex"])} in {mine.name}')
-    tex = {(b.name, b.index, b.extra[0]) for b in bindings.bindings if b.kind == Binding.KIND_TEXTURE}
+    tex = {(b.name, b.index, b.dim) for b in bindings.bindings if b.kind == Binding.KIND_TEXTURE}
     for t in sp.get('m_TextureParams') or []:
         if (names.get(t['m_NameIndex']), t['m_Index'], t['m_Dim']) not in tex:
             out.append(f'texture {names.get(t["m_NameIndex"])}/{t["m_Index"]}')
@@ -389,7 +409,7 @@ _RDEF_PROGRAM_TYPES = {0: 0xffff, 1: 0xfffe, 2: 0x4753, 3: 0x4853, 4: 0x4453, 5:
 
 def _var_layout(p):
     """(D3D_SHADER_VARIABLE_CLASS, D3D_SHADER_VARIABLE_TYPE, size in bytes) of a Unity param."""
-    types = {0: 3, 1: 2}                             # float, int (the types seen in Unity's data)
+    types = {0: 3, 1: 2, 2: 1, 5: 19}                # Unity float, int, bool, uint -> D3D_SVT_*
     if p.type not in types:
         raise Unsupported(f'constant {p.name!r} of Unity type {p.type}')
     if p.is_matrix:
@@ -489,8 +509,8 @@ def with_reflection(dxbc, bindings):
             raise Unsupported(f'texture {b.name!r}: resource dimension {dim}')
         if dim not in _ES3_DIMS:
             raise Unsupported(f'{_DIM_NAMES[dim]} texture {b.name!r} (not in GLSL ES 3.00)')
-        if _DIMS[dim][1] is not None and b.extra[0] != _DIMS[dim][1]:
-            raise Unsupported(f'texture {b.name!r}: declared {_DIM_NAMES[dim]} but Unity says dimension {b.extra[0]}')
+        if _DIMS[dim][1] is not None and b.dim != _DIMS[dim][1]:
+            raise Unsupported(f'texture {b.name!r}: declared {_DIM_NAMES[dim]} but Unity says dimension {b.dim}')
         textures.append((reg, b.name))
     names = dict(textures)
     samplers = [(reg, 'sampler' + names[reg] if reg in names else f'sampler{reg}') for reg in sorted(prog.samplers)]
@@ -603,13 +623,13 @@ def gl_program(stages):
     return ''.join(out)
 
 
-def translate_program(translator, vs, ps):
+def translate_program(translator, vs, ps, serializer=None):
     """vs, ps: (code, rest) of the D3D11 vertex and pixel entries -> GL program text (GLSL 1.50,
-    as Unity's GLCore programs). Raises Unsupported."""
+    as Unity's GLCore programs). serializer: the entries' serializer version. Raises Unsupported."""
     stages = []
     for code, rest in (vs, ps):
         _, dxbc = split_code(code)
-        cont, prog = with_reflection(dxbc, Bindings.parse(rest))
+        cont, prog = with_reflection(dxbc, Bindings.parse(rest, serializer))
         stages.append((prog, cont))
     if [p.stage for p, _ in stages] != [1, 0]:
         raise Unsupported('expected a vertex and a pixel shader, got ' + ', '.join(STAGE_NAMES.get(p.stage, '?') for p, _ in stages))

@@ -16,6 +16,19 @@ from . import glsl
 from .step import shader_files
 
 
+# Unity 2019+ programs define their uniform and block layout qualifiers through a macro the player
+# switches off where the GLSL version lacks them (libunity looks for this line); GLSL ES 3.00 has
+# no `layout(location)` on uniforms nor `layout(binding)` on blocks
+_UNIFORM_LOCATION = '#define UNITY_SUPPORTS_UNIFORM_LOCATION 1\n'
+
+
+def as_driver_sees(src):
+    """One stage's source as the player hands it to a GLES 3.0 driver (for compile checks)."""
+    if src.lstrip().startswith('#version 300 es') and _UNIFORM_LOCATION in src:
+        src = src.replace(_UNIFORM_LOCATION, '#define UNITY_SUPPORTS_UNIFORM_LOCATION 0\n')
+    return src
+
+
 def export(job, out_dir, bundles=r'.'):
     os.makedirs(out_dir, exist_ok=True)
     seen = {}
@@ -36,7 +49,7 @@ def export(job, out_dir, bundles=r'.'):
                 for stage, src in glsl.stage_sources(code).items():
                     ext = {'VERTEX': 'vert', 'FRAGMENT': 'frag'}.get(stage, stage.lower())
                     with open(os.path.join(out_dir, f'{n:04d}.{ext}'), 'w') as f:
-                        f.write(src)
+                        f.write(as_driver_sees(src))
                 rows.append(f'{n:04d}\t{name}\t{rel}\t{i}\t{" ".join(entries[i].keywords)}')
         lf.close()
     with open(os.path.join(out_dir, 'index.tsv'), 'w') as f:

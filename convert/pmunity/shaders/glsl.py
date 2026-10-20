@@ -177,11 +177,18 @@ def unroll(src, limit=UNROLL_MAX):
     return src, done
 
 
+def _code_lines(body):
+    """A stage's source without comments and preprocessor lines (the macro blocks of Unity 2019+
+    define layout qualifiers the player switches by device: not code the stage necessarily uses)."""
+    return re.sub(r'^[ \t]*#[^\n]*', '', body, flags=re.M)
+
+
 def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None):
     """One stage's source (starting with its #version line) -> GLSL ES 3.00."""
     body = _strip_comments(src)
+    code = _code_lines(body)
     for rx, what in _UNSUPPORTED:
-        m = rx.search(body)
+        m = rx.search(code)
         if m:
             raise Unsupported(f'{stage}: {what} {m.group(0).strip()!r}')
     lines = src.splitlines(keepends=True)
@@ -196,14 +203,21 @@ def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None):
         raise Unsupported(f'{stage}: #version {m.group(1)} {m.group(2)}'.rstrip())
     out.append('#version 300 es\n')
     i += 1
-    # the extension directives right after #version (they must precede any declaration)
+    # the extension directives right after #version (they must precede any declaration); Unity
+    # 2019+ wraps the optional ones: #ifdef GL_ARB_shader_bit_encoding / #extension ... / #endif
     while i < len(lines):
         s = lines[i].strip()
         e = re.match(r'#\s*extension\s+(\w+)\s*:\s*(\w+)', s)
+        w = re.match(r'#\s*ifdef\s+(\w+)$', s)
         if e:
             if e.group(1) not in DROP_EXTENSIONS:
                 out.append(lines[i])
             i += 1
+        elif w and i + 2 < len(lines) and re.match(r'#\s*extension\s+%s\s*:' % w.group(1), lines[i + 1].strip()) \
+                and re.match(r'#\s*endif\b', lines[i + 2].strip()):
+            if w.group(1) not in DROP_EXTENSIONS:
+                out += lines[i:i + 3]
+            i += 3
         elif not s:
             i += 1
         else:

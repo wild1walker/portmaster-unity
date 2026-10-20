@@ -95,7 +95,7 @@ class D3D11CorpusTest(unittest.TestCase):
         for path, t in self.trees:
             for e in B.ShaderBlobs(t).entries(B.PLATFORM_D3D11):
                 if e is not None and e.code:
-                    self.assertEqual(D.Bindings.parse(e.rest).serialize(), e.rest)
+                    self.assertEqual(D.Bindings.parse(e.rest, e.version).serialize(), e.rest)
                     self.count('D3D11 entries')
 
     def test_translation_matches_unity(self):
@@ -112,7 +112,7 @@ class D3D11CorpusTest(unittest.TestCase):
                 self.assertIsNotNone(psp, label)
                 ps = d3d[psp['m_BlobIndex']]
                 try:
-                    ours = D.translate_program(self.translator, (vs.code, vs.rest), (ps.code, ps.rest))
+                    ours = D.translate_program(self.translator, (vs.code, vs.rest), (ps.code, ps.rest), vs.version)
                     es = G.program_to_es(ours)
                 except (D.Unsupported, G.Unsupported) as ex:
                     self.assertTrue(vr, f'{label}: {ex}')

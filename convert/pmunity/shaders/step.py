@@ -86,6 +86,9 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             f'{sum(r.twins for r in conv)} subprograms) in {changed_files} files; '
             f'{sum(r.status == "skipped" for r in results)} not translatable; precision {precision}; '
             f'rewrites: {sum(len(r.notes) for r in conv)} stages ({", ".join(sorted({n.split(" ", 1)[1].rsplit(" ", 1)[0] for r in conv for n in r.notes})) or "none"})')
+    vr = sum(r.dropped for r in conv if r.source == 'glcore')
+    if vr:
+        job.log(f'shaders: {vr} VR-only OpenGL Core variants not translatable (left out, never used on a handheld)')
     d3d = [r for r in results if r.source == 'd3d11']
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '
