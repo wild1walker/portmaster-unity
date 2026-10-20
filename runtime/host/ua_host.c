@@ -22,6 +22,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "arch.h"
 #include "display.h"
 #include "steamstub.h"
+#include "plugins.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -227,6 +228,7 @@ static void mono_options(void *some_mono_fn)
 static int g_mono_trace;
 static void *dlsym_hook(const char *sym, void *p)
 {
+    p = plugins_dlsym_hook(sym, p);            // FMOD's file paths (plugins.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
@@ -289,7 +291,7 @@ int main(int argc, char **argv)
     // symbol resolution: ours win over libhybris's hooks, which win over the host
     so_set_library_path(libdir);
     g_mono_trace = getenv("UA_MONO_TRACE") != NULL;
-    if (g_mono_trace || getenv("UA_MONO_OPTIONS")) so_set_dlsym_hook(dlsym_hook);
+    so_set_dlsym_hook(dlsym_hook);
     hitches_init();                            // UA_HITCH_TRACE
     so_add_shims(gltrace_table());             // UA_GL_TRACE
     so_add_shims(glhooks_table());             // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
@@ -308,6 +310,7 @@ int main(int argc, char **argv)
     up_media_init();                            // the media core's decoders (../media)
     so_map_library("libvulkan.so", NULL);       // GLES only
     steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
+    plugins_init(root, libdir);                 // the port's plugins.map: ARM builds, stubs (plugins.c)
 
     char path[600];
     snprintf(path, sizeof path, "%s/libmain.so", libdir);
