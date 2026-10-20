@@ -1,5 +1,40 @@
 # 64-bit ARM (arm64-v8a) in the loader
 
+## Real players
+
+Unity's arm64-v8a players exist only with IL2CPP, and a game's own Android build carries them
+(`libmain.so`, `libunity.so`, `libil2cpp.so` in `lib/arm64-v8a/`): `pmunity apk` makes such a
+build ready for the aarch64 `ua_host` (docs/apk.md). Free IL2CPP Android builds of Unity 2020.3.3,
+2021.3.4 (with Burst) and 2022.3.14 (Burst, FMOD, a 3D scene) reach their title menus in the
+emulated rig (`EMU_ARCH=arm64 tools/emu/emu.sh`: a native aarch64 container on an Apple-silicon
+Mac, Mesa llvmpipe, the `ua-build-arm64` image), with no unresolved imports. What the bring-up
+needed was outside the loader:
+- **frame pacing**: their builds have Optimized Frame Pacing on; with Swappy kept off (the
+  converter's choice for desktop data, where the setting is turned off) 2021.3 stops after 3
+  frames. Imported builds run Swappy; its Java `ChoreographerCallback` ticks on a looper thread of
+  its own (runtime/jni), not on UnityMain, which waits inside `nativeRender` for those ticks (on
+  UnityMain the frame time grew without bound: 130 ms to 480 ms per frame within 90 s).
+- **API level**: the 64-bit host reports API 22 (64-bit Android starts at 21), an imported build at
+  least its `minSdkVersion`, but at most 23: from 24 Swappy uses the NDK's `AChoreographer`, which
+  the libandroid shims lack (2022.3 then waits for vsyncs forever).
+- **IL2CPP startup**: `libil2cpp.so` comes up with libunity through libmain's `NativeLoader.load`
+  (its `JNI_OnLoad` runs right after libmain's), libunity extracts `Managed/Metadata` and
+  `Managed/Resources` to `<external files>/il2cpp/` (`data/external/il2cpp` under the root) and
+  binds the `il2cpp_*` API; Burst's `lib_burst_generated.so` arrives through `System.load`: all as
+  on a phone.
+- **symbols**: IL2CPP builds with engine code stripping (the default) link their own
+  `libunity.so` from Unity's static libraries, so its build id differs from the player package's
+  and `pmunity player fetch --symbols-only` symbols do not fit it (only the exported names do);
+  Mono builds and IL2CPP builds without stripping use the prebuilt library the symbols belong to.
+- 2021.3+ builds list Vulkan first; `libvulkan.so` is mapped to nothing, so the player takes
+  GLES3, as on a phone without Vulkan.
+
+The loader itself needed nothing for these libraries: their relocations, the guard slot, emulated
+TLS and the LP64 bionic types held (whether a C++ exception crossed the unwinder in these runs is
+not known). Not run yet: 2017.4 and 2018.4 IL2CPP arm64 builds (none in the corpus: the one 2018.4
+build found was a VR title), 2019.4 IL2CPP arm64, 16 KiB-page kernels, a real handheld's Mali/GPU
+driver with the 64-bit host.
+
 `runtime/loader` loads the Android libraries of its own build's architecture: armeabi-v7a on
 armhf (`runtime/loader/build.sh`, output `out/`) and arm64-v8a on aarch64 glibc
 (`ARCH=arm64 runtime/loader/build.sh`, output `out/arm64/`, built natively in the

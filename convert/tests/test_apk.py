@@ -349,6 +349,24 @@ class ImportTest(unittest.TestCase):
         # the libraries' split missing
         self.refused([base], 'split APK')
 
+    def test_bundletool_apks(self):
+        base = make_apk(os.path.join(self.d, 'base-master.apk'), manifest(), abis=())
+        cfg = os.path.join(self.d, 'base-arm64_v8a.apk')
+        with zipfile.ZipFile(cfg, 'w') as z:
+            z.writestr('AndroidManifest.xml', axml(manifest(split='config.arm64_v8a')))
+            for n in ('libmain.so', 'libunity.so', 'libil2cpp.so'):
+                z.writestr(f'lib/arm64-v8a/{n}', b'split')
+        standalone = make_apk(os.path.join(self.d, 'standalone-arm64_v8a.apk'), manifest())
+        x = os.path.join(self.d, 'game.apks')
+        with zipfile.ZipFile(x, 'w') as z:
+            z.writestr('toc.pb', b'')
+            z.write(base, 'splits/base-master.apk')
+            z.write(cfg, 'splits/base-arm64_v8a.apk')
+            z.write(standalone, 'standalones/standalone-arm64_v8a.apk')
+        r = self.run_apk([x], target='arm64')
+        self.assertEqual(r['abi'], 'arm64-v8a')
+        self.assertEqual(rd(os.path.join(self.out, 'lib', 'libunity.so')), b'split')
+
     def test_asset_pack_split_merged(self):
         base = make_apk(os.path.join(self.d, 'base.apk'), manifest(), data=False, extra={'assets/bin/Data/x': b'base'})
         pack = os.path.join(self.d, 'UnityDataAssetPack.apk')

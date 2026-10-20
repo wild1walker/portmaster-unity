@@ -364,6 +364,10 @@ def unpack_inputs(paths, tmp, log):
             else:
                 inner = [n for n in names if n.lower().endswith('.apk') and not n.endswith('/')]
                 inner_obb = [n for n in names if _is_obb_name(n) and not n.endswith('/')]
+                if any(n.startswith('splits/') for n in inner):
+                    # bundletool's .apks: splits/ (base-master + config splits), asset-slices/ (asset
+                    # packs); standalones/ repeat the whole app per ABI for pre-5.0 devices
+                    inner = [n for n in inner if not n.startswith('standalones/')]
                 if not inner:
                     raise Refused(f'{p}: a zip without an APK, AAB or AndroidManifest.xml')
                 d = tempfile.mkdtemp(prefix='c', dir=tmp)
