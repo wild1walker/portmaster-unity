@@ -1,8 +1,9 @@
-"""pmunity: converts a Unity game's desktop (macOS / Linux) data for Unity's Android player on
-GLES handhelds.
+"""pmunity: converts a Unity game's desktop (macOS / Linux, or Windows: --from d3d11) data for Unity's
+Android player on GLES handhelds.
 
     python -m pmunity convert <data> [<out>] --config game.json [--steps a,b] [--plugin steps.py] [--only REGEX]
     python -m pmunity shaders <data> [<out>] [--precision highp|default-samplers] [--replace] [--bundles REGEX]
+                              [--from glcore|d3d11|glcore,d3d11] [--hlslcc PATH]
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
     python -m pmunity macpkg <root> <installer.pkg>...       (unpack macOS installers, e.g. GOG's)
@@ -30,8 +31,10 @@ def _builtin(name):
         if name == 'shaders':
             from .shaders import step
             c = job.cfg.get('shaders', {})
+            src = c.get('from', ['glcore'])
             return step.run(job, c.get('precision', 'highp'), c.get('replace', False), c.get('bundles', '.'),
-                            optimize=tuple(c.get('optimize', ('const-arrays', 'unroll'))))
+                            optimize=tuple(c.get('optimize', ('const-arrays', 'unroll'))),
+                            sources=tuple(src.split(',') if isinstance(src, str) else src), hlslcc=c.get('hlslcc'))
         if name == 'textures':
             from . import textures
             return textures.run(job, a.only)
@@ -62,7 +65,7 @@ def main(argv=None):
     c.add_argument('--only', help='regex: only convert matching files (tests)')
     c.add_argument('--set', action='append', default=[], metavar='SECTION.KEY=VALUE',
                    help='override a config value (VALUE as JSON, else a string), e.g. --set shaders.precision=highp')
-    s = sub.add_parser('shaders', help='GLES3 programs from the OpenGL Core ones')
+    s = sub.add_parser('shaders', help='GLES3 programs from the OpenGL Core (--from d3d11: Direct3D 11) ones')
     s.add_argument('data'); s.add_argument('out', nargs='?')
     s.add_argument('--precision', default='highp', choices=['highp', 'default-samplers'])
     s.add_argument('--replace', action='store_true', help='rebuild GLES programs a shader already has')
@@ -70,6 +73,10 @@ def main(argv=None):
     s.add_argument('--log-each', action='store_true')
     s.add_argument('--optimize', default='const-arrays,unroll',
                    help="exact rewrites, comma-separated ('' = none): const-arrays, unroll")
+    s.add_argument('--from', dest='sources', default='glcore',
+                   help='desktop programs to translate, in order of preference: glcore (macOS/Linux builds), '
+                        'd3d11 (Windows builds, needs tools/hlslcc), e.g. glcore,d3d11')
+    s.add_argument('--hlslcc', help='the pmhlslcc binary (default: $PMHLSLCC, tools/hlslcc/out/pmhlslcc, PATH)')
     e = sub.add_parser('shaders-export', help='GLES3 programs as .vert/.frag files (compile checks)')
     e.add_argument('data'); e.add_argument('dir')
     e.add_argument('--bundles', default='.')
@@ -106,7 +113,8 @@ def main(argv=None):
     if a.cmd == 'shaders':
         from .shaders import step
         job = Job(a.data, a.out or a.data, cfg)
-        step.run(job, a.precision, a.replace, a.bundles, a.log_each, tuple(x for x in a.optimize.split(',') if x))
+        step.run(job, a.precision, a.replace, a.bundles, a.log_each, tuple(x for x in a.optimize.split(',') if x),
+                 sources=tuple(x for x in a.sources.split(',') if x), hlslcc=a.hlslcc)
     elif a.cmd == 'shaders-export':
         from .shaders import export
         export.export(Job.reader(a.data, cfg), a.dir, a.bundles)

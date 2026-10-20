@@ -23,6 +23,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -240,7 +241,7 @@ int main(int argc, char **argv)
     }
     // the root is also the working directory: Mono reads its config relative to it
     // (assets/bin/Data/Managed/etc/mono/config, outside the APK)
-    static char root[512];
+    static char root[PATH_MAX];                     // (realpath needs PATH_MAX; fortified builds check it)
     if (!realpath(argc > 1 ? argv[1] : ".", root) || chdir(root) != 0)
     { fprintf(stderr, "[host] %s: %s\n", argc > 1 ? argv[1] : ".", strerror(errno)); return 1; }
     // package, build id and APK name: the environment, else <root>/android_package.json (written by

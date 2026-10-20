@@ -11,38 +11,46 @@ Decompressed, a platform's blob is
 and every entry is one serialized subprogram:
 
     int32 version                              the serializer's date, e.g. 201708220 (2017.3/2017.4)
-    int32 gpu program type                     6 GLCore32, 4 GLES3, 23/24 Metal, ...
+    int32 gpu program type                     6 GLCore32, 4 GLES3, 15-22 D3D11, 23/24 Metal, ...
     int32 x N                                  statistics (ALU, TEX, flow, temp registers)
     string[] keywords                          int32 count, then each: int32 length, bytes, pad to 4
-    string code                                int32 length, bytes, pad to 4 (GL: GLSL source)
-    bytes                                      binding info: parameters, buffers, samplers (kept as is)
+    string code                                int32 length, bytes, pad to 4 (GL: GLSL source;
+                                               D3D11: Unity's 6-byte header + DXBC, see dxbc.py)
+    bytes                                      binding info: parameters, buffers, samplers (kept as
+                                               is; GL: only the source map, D3D11: dxbc.Bindings)
 
-N is 4 for the serializer versions in LAYOUTS (checked on real data: every GL entry writes back
-byte for byte). For another version the GL entries are tried with each N in turn; a layout is only
-taken when the keywords decode, the code is GLSL and the entry writes back to the same bytes, and
-the converter says so (Entry.guessed). The SerializedSubProgram records in m_ParsedForm point into
-a platform's blob by m_BlobIndex. Only GL platforms are parsed here; Metal and others are kept as
-they are.
+N is 4 for the serializer versions in LAYOUTS (checked on real data: every GL and D3D11 entry
+writes back byte for byte). For another version the entries are tried with each N in turn; a layout
+is only taken when the keywords decode, the code is GLSL (or DXBC) and the entry writes back to the
+same bytes, and the converter says so (Entry.guessed). The SerializedSubProgram records in
+m_ParsedForm point into a platform's blob by m_BlobIndex. Only GL and D3D11 platforms are parsed
+here; Metal and others are kept as they are.
 """
 import struct
 
 import lz4.block
 
 # shader compiler platforms (ShaderCompilerPlatform)
-PLATFORM_GLES20, PLATFORM_GLES3PLUS, PLATFORM_METAL, PLATFORM_GLCORE, PLATFORM_VULKAN = 5, 9, 14, 15, 18
+PLATFORM_D3D11, PLATFORM_GLES20, PLATFORM_GLES3PLUS, PLATFORM_METAL, PLATFORM_GLCORE, PLATFORM_VULKAN = 4, 5, 9, 14, 15, 18
 # GPU program types (ShaderGpuProgramType, Unity 5.5 - 2018.x)
 GPU_GLES31AEP, GPU_GLES31, GPU_GLES3, GPU_GLES = 2, 3, 4, 5
 GPU_GLCORE32, GPU_GLCORE41, GPU_GLCORE43 = 6, 7, 8
 
 # serializer version -> number of statistics ints (verified versions only)
 LAYOUTS = {
-    201708220: 4,       # Unity 2017.3 / 2017.4 (Cuphead 1.3.4: 5914 GLCore entries)
+    201708220: 4,       # Unity 2017.3 / 2017.4 (Cuphead 1.3.4: 5914 GLCore entries; Unity 2017.4.9's
+                        # Windows player resources: 36 D3D11 entries)
 }
 _STATS_CANDIDATES = (4, 3, 5, 2)      # for versions not in LAYOUTS, most likely first
 
 
 def _pad4(n):
     return (n + 3) & ~3
+
+
+def _is_d3d11(code):
+    """D3D11 program code: Unity's 6-byte header, then a DXBC container (dxbc.py)."""
+    return len(code) >= 38 and code[6:10] == b'DXBC'
 
 
 class Entry:
@@ -89,9 +97,12 @@ class Entry:
             if not 0 <= n <= len(data) - p - 4:
                 return None
             code = bytes(data[p + 4:p + 4 + n])
-            if code and not code.lstrip()[:1] in (b'#', b'/'):
+            if _is_d3d11(code):
+                pass                            # D3D11: Unity's header + DXBC (dxbc.py)
+            elif code and not code.lstrip()[:1] in (b'#', b'/'):
                 return None
-            code.decode('utf-8')
+            else:
+                code.decode('utf-8')
             e = cls(version, gpu_type, stats, kws, code, bytes(data[_pad4(p + 4 + n):]))
         except (struct.error, UnicodeDecodeError):
             return None
