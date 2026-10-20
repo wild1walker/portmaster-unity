@@ -12,10 +12,12 @@
 //   UA_EGL_PBUFFER=1        tests without a display (Mesa's surfaceless platform): the window surface
 //                           is a pbuffer of the window's size, configs are chosen for pbuffers
 //   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
-//                           passed through the loader's so_softfp_wrap() (float-taking GL calls)
+//                           passed through the loader's so_softfp_wrap() (float-taking GL calls);
+//                           NULL for Android's frame-timing extensions (EGL_ANDROID_presentation_time,
+//                           _get_frame_timestamps): Swappy (Unity 2019.3+) then switches itself off
 // With a host display (egl_glue_set_host_display, egl_host_shims[]: an SDL2 window on Wayland,
 // KMSDRM, X11, ...), Unity's display, config, window surface, current-making, swaps and swap
-// interval are mapped onto the host's EGL objects instead (see egl_glue.h).
+// interval, surface attributes are mapped onto the host's EGL objects instead (see egl_glue.h).
 #define _GNU_SOURCE
 #include "egl_glue.h"
 #include "android_shims.h"
@@ -74,6 +76,7 @@ static struct {
     EGLBoolean (*SwapInterval)(EGLDisplay, EGLint);
     EGLBoolean (*QuerySurface)(EGLDisplay, EGLSurface, EGLint, EGLint *);
     EGLSurface (*GetCurrentSurface)(EGLint);
+    EGLBoolean (*SurfaceAttrib)(EGLDisplay, EGLSurface, EGLint, EGLint);
 } real;
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
@@ -99,7 +102,7 @@ static void load_real(void)
     R(CreateWindowSurface); R(ChooseConfig); R(GetConfigAttrib); R(CreateContext);
     R(SwapBuffers); R(GetProcAddress); R(GetError); R(CreatePbufferSurface);
     R(GetDisplay); R(Initialize); R(Terminate); R(MakeCurrent); R(DestroySurface); R(SwapInterval);
-    R(QuerySurface); R(GetCurrentSurface);
+    R(QuerySurface); R(GetCurrentSurface); R(SurfaceAttrib);
 #undef R
 }
 
@@ -230,6 +233,22 @@ static EGLBoolean shim_eglSwapBuffers(EGLDisplay dpy, EGLSurface s)
 
 static eglproc shim_eglGetProcAddress(const char *name);
 
+// Android's frame-timing EGL extensions: SurfaceFlinger's present times and frame timestamps. No
+// window system here has them (Mesa and Mali's fbdev driver may still hand out entry points). Swappy,
+// the frame pacer in libunity 2019.3+, needs eglPresentationTimeANDROID and disables itself without
+// it; Unity then presents with eglSwapBuffers at its swap interval, which the host's display paces.
+static int android_frame_timing_proc(const char *name)
+{
+    static const char *const names[] = {
+        "eglPresentationTimeANDROID", "eglGetNextFrameIdANDROID", "eglGetCompositorTimingANDROID",
+        "eglGetCompositorTimingSupportedANDROID", "eglGetFrameTimestampsANDROID",
+        "eglGetFrameTimestampSupportedANDROID", NULL,
+    };
+    for (int i = 0; names[i]; i++)
+        if (!strcmp(names[i], name)) return 1;
+    return 0;
+}
+
 so_shim egl_shims[] = {
     { "eglCreateWindowSurface", (void *)shim_eglCreateWindowSurface },
     { "eglChooseConfig", (void *)shim_eglChooseConfig },
@@ -247,6 +266,7 @@ static eglproc shim_eglGetProcAddress(const char *name)
         if (!strcmp(s->name, name)) return (eglproc)s->fn;
     // entry points the host replaces (loader shim tables), e.g. glShaderSource for shader overrides
     if (so_shim_lookup) { void *o = so_shim_lookup(name); if (o) return (eglproc)o; }
+    if (android_frame_timing_proc(name)) { SHIM_TRACE("eglGetProcAddress(%s) = NULL (Android frame timing)", name); return NULL; }
     if (!ensure() || !real.GetProcAddress) return NULL;
     eglproc p = real.GetProcAddress(name);
     if (!p) SHIM_TRACE("eglGetProcAddress(%s) = NULL", name);
@@ -268,8 +288,19 @@ static char g_host_token;
 static __thread EGLSurface t_host_real;   // the host's real surface as this thread has it current
 static EGLSurface g_host_real;            // the latest one any thread saw (atomic)
 
+// Attributes Unity set on its surface handle (eglSurfaceAttrib: EGL_SWAP_BEHAVIOR, ...), set again on
+// a surface the window system put in place of the one they were set on.
+static struct { EGLint attr, value; } g_attrs[8];
+static int g_nattrs;
+static EGLSurface g_attrs_on;             // the real surface they were last set on
+static pthread_mutex_t g_attr_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void egl_glue_set_host_display(const egl_host_display *d)
 {
+    pthread_mutex_lock(&g_attr_lock);
+    g_nattrs = 0;
+    g_attrs_on = NULL;
+    pthread_mutex_unlock(&g_attr_lock);
     if (d && d->display && d->config && d->surface && d->make_current && d->swap) {
         g_host = *d;
         g_host_real = d->surface;
@@ -290,12 +321,29 @@ static EGLSurface host_real_surface(void)
     return s ? s : __atomic_load_n(&g_host_real, __ATOMIC_ACQUIRE);
 }
 
+static void attrs_reapply(EGLSurface s)
+{
+    pthread_mutex_lock(&g_attr_lock);
+    if (g_nattrs && s != g_attrs_on && real.SurfaceAttrib) {
+        for (int i = 0; i < g_nattrs; i++) {
+            EGLBoolean ok = real.SurfaceAttrib(g_host.display, s, g_attrs[i].attr, g_attrs[i].value);
+            SHIM_TRACE("eglSurfaceAttrib 0x%x=%d set again on the new host surface %p: %u", g_attrs[i].attr, g_attrs[i].value, s, ok);
+        }
+        if (real.GetError) real.GetError();   // Unity's swap succeeded: leave no error behind
+        g_attrs_on = s;
+    }
+    pthread_mutex_unlock(&g_attr_lock);
+}
+
 // After make_current or a swap: the surface the host has current now.
 static void host_track_current(void)
 {
     EGLSurface s = real.GetCurrentSurface ? real.GetCurrentSurface(EGL_DRAW) : NULL;
     t_host_real = s;
-    if (s) __atomic_store_n(&g_host_real, s, __ATOMIC_RELEASE);
+    if (s) {
+        __atomic_store_n(&g_host_real, s, __ATOMIC_RELEASE);
+        if (__atomic_load_n(&g_nattrs, __ATOMIC_ACQUIRE)) attrs_reapply(s);
+    }
 }
 
 static EGLDisplay host_eglGetDisplay(void *native)
@@ -412,6 +460,30 @@ static EGLBoolean host_eglSwapBuffers(EGLDisplay d, EGLSurface s)
     return real.SwapBuffers(d, s);
 }
 
+// Unity 2020.3+: an attribute of its window surface goes to the host's real one, and is kept for a
+// replacement surface. Other displays and surfaces (pbuffers): the real call.
+static EGLBoolean host_eglSurfaceAttrib(EGLDisplay d, EGLSurface s, EGLint attr, EGLint value)
+{
+    if (!ensure() || !real.SurfaceAttrib) return EGL_FALSE;
+    if (!(host_dpy(d) && s == HOST_SURFACE)) return real.SurfaceAttrib(d, s, attr, value);
+    EGLSurface rs = host_real_surface();
+    EGLBoolean r = real.SurfaceAttrib(d, rs, attr, value);
+    SHIM_TRACE("eglSurfaceAttrib(host surface %p, 0x%x, %d) = %u", rs, attr, value, r);
+    if (r) {
+        pthread_mutex_lock(&g_attr_lock);
+        int i = 0;
+        while (i < g_nattrs && g_attrs[i].attr != attr) i++;
+        if (i < (int)(sizeof g_attrs / sizeof g_attrs[0])) {
+            g_attrs[i].attr = attr;
+            g_attrs[i].value = value;
+            if (i == g_nattrs) __atomic_store_n(&g_nattrs, i + 1, __ATOMIC_RELEASE);
+        }
+        g_attrs_on = rs;
+        pthread_mutex_unlock(&g_attr_lock);
+    }
+    return r;
+}
+
 static EGLBoolean host_eglSwapInterval(EGLDisplay d, EGLint interval)
 {
     if (host_dpy(d) && g_host.swap_interval)
@@ -434,6 +506,7 @@ so_shim egl_host_shims[] = {
     { "eglQuerySurface", (void *)host_eglQuerySurface },
     { "eglSwapBuffers", (void *)host_eglSwapBuffers },
     { "eglSwapInterval", (void *)host_eglSwapInterval },
+    { "eglSurfaceAttrib", (void *)host_eglSurfaceAttrib },
     { "eglGetProcAddress", (void *)host_eglGetProcAddress },
     { NULL, NULL },
 };

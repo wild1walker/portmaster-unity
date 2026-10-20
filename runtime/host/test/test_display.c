@@ -1,9 +1,9 @@
 // Test of the SDL display backend without a device: the host's display_init() on the main thread,
 // then Unity's EGL call sequence (libunity 2017.4: UnityGetSelectedGLESVersion, ConfigEGL::Match,
 // ContextEGL::Update, WindowContextEGL::HandleInvalidState/Acquire/Present/SetVSyncInterval/
-// Release/DestroySurface, ContextGLES::Destroy) on a second thread through the shim tables the
-// loader would bind Unity's imports to, drawing, reading back and swapping while the main thread
-// pumps SDL events like ua_host's main loop. On X11 the presented frame is also read back from the
+// Release/DestroySurface, ContextGLES::Destroy; eglSurfaceAttrib of 2020.3+) on a second thread
+// through the shim tables the loader would bind Unity's imports to, drawing, reading back and
+// swapping while the main thread pumps SDL events like ua_host's main loop. On X11 the presented frame is also read back from the
 // window with XGetImage. Built and run by display_test.sh (aarch64, Mesa llvmpipe; Xvfb and a
 // headless weston).
 //   TEST_EXPECT=sdl|fbdev   backend display_init() must pick (default sdl)
@@ -52,6 +52,8 @@ typedef unsigned int EGLBoolean;
 #define EGL_WINDOW_BIT 0x0004
 #define EGL_OPENGL_ES3_BIT 0x0040
 #define EGL_RECORDABLE_ANDROID 0x3142
+#define EGL_SWAP_BEHAVIOR 0x3093
+#define EGL_BUFFER_DESTROYED 0x3095
 #define GL_COLOR_BUFFER_BIT 0x4000
 #define GL_SCISSOR_TEST 0x0C11
 #define GL_RGBA 0x1908
@@ -111,13 +113,14 @@ static void *unity_render_thread(void *arg)
     EGLSurface (*GetCurrentSurface)(EGLint) = U("eglGetCurrentSurface");
     EGLBoolean (*SwapBuffers)(EGLDisplay, EGLSurface) = U("eglSwapBuffers");
     EGLBoolean (*SwapInterval)(EGLDisplay, EGLint) = U("eglSwapInterval");
+    EGLBoolean (*SurfaceAttrib)(EGLDisplay, EGLSurface, EGLint, EGLint) = U("eglSurfaceAttrib");
     EGLint (*GetError)(void) = U("eglGetError");
     const char *(*QueryString)(EGLDisplay, EGLint) = U("eglQueryString");
     void *(*GetProcAddress)(const char *) = U("eglGetProcAddress");
     p_GetCurrentContext = U("eglGetCurrentContext");
     CHECK(GetDisplay && Initialize && Terminate && ChooseConfig && GetConfigAttrib && CreateContext && DestroyContext &&
           CreateWindowSurface && DestroySurface && QuerySurface && MakeCurrent && GetCurrentSurface && p_GetCurrentContext &&
-          SwapBuffers && SwapInterval && GetError && QueryString && GetProcAddress);
+          SwapBuffers && SwapInterval && SurfaceAttrib && GetError && QueryString && GetProcAddress);
     CHECK(GetProcAddress("eglSwapBuffers") == (void *)SwapBuffers && GetProcAddress("eglMakeCurrent") == (void *)MakeCurrent);
 
     // ContextGLES::Create / UnityGetSelectedGLESVersion
@@ -162,6 +165,13 @@ static void *unity_render_thread(void *arg)
     CHECK(MakeCurrent(dpy, surf, surf, ctx));
     CHECK(GetCurrentSurface(EGL_DRAW) == surf && GetCurrentSurface(EGL_READ) == surf && p_GetCurrentContext() == ctx);
     CHECK(SwapInterval(dpy, 1));
+    // WindowContextEGL (2020.3+): an attribute of the window surface lands on SDL's real surface
+    EGLint sb = 0;
+    CHECK(SurfaceAttrib(dpy, surf, EGL_SWAP_BEHAVIOR, EGL_BUFFER_DESTROYED) && GetError() == EGL_SUCCESS);
+    CHECK(QuerySurface(dpy, surf, EGL_SWAP_BEHAVIOR, &sb) && sb == EGL_BUFFER_DESTROYED);
+    // Swappy finds no Android frame timing and stays off
+    CHECK(GetProcAddress("eglPresentationTimeANDROID") == NULL && GetProcAddress("eglGetFrameTimestampsANDROID") == NULL);
+    CHECK(GetProcAddress("eglSurfaceAttrib") == (void *)SurfaceAttrib);
 
     void (*Viewport)(int, int, int, int) = GetProcAddress("glViewport");
     void (*ClearColor)(float, float, float, float) = GetProcAddress("glClearColor");

@@ -374,3 +374,234 @@ __attribute__((noinline)) int syn_backtrace(uintptr_t *pcs, int max)
 }
 __attribute__((noinline)) int syn_call_host(int (*cb)(void)) { return cb() + 1; }
 #endif
+
+// ---- bionic symbols of newer players (Unity 2019.4-2022.3) -------------------------------------
+// fortify entry points only bionic has, android_set_abort_message, sys_signame/sys_siglist, and calls
+// whose flag values or (32-bit) structures differ from glibc's; each with bionic's types and values.
+int *__errno(void);
+void android_set_abort_message(const char *);
+void __FD_SET_chk(int, unsigned long *, size_t), __FD_CLR_chk(int, unsigned long *, size_t);
+int __FD_ISSET_chk(int, const unsigned long *, size_t);
+size_t __strlen_chk(const char *, size_t);
+char *__strchr_chk(const char *, int, size_t), *__strrchr_chk(const char *, int, size_t);
+size_t __strlcpy_chk(char *, const char *, size_t, size_t), __strlcat_chk(char *, const char *, size_t, size_t);
+extern const char *const sys_signame[], *const sys_siglist[];
+struct b_ftw { int base, level; };
+int nftw(const char *, int (*)(const char *, const void *, int, struct b_ftw *), int, int);
+int ftw(const char *, int (*)(const char *, const void *, int), int);
+int fnmatch(const char *, const char *, int);
+long pathconf(const char *, int), fpathconf(int, int);
+void *sem_open(const char *, int, ...);
+void *newlocale(int, const char *, void *);
+void freelocale(void *);
+int isdigit_l(int, void *);
+long double strtold_l(const char *, char **, void *);
+typedef unsigned int b_wchar;            // bionic's wchar_t: 32 bits
+double wcstod(const b_wchar *, b_wchar **);
+float wcstof(const b_wchar *, b_wchar **);
+int statvfs(const char *, void *), fstatvfs(int, void *);
+int open(const char *, int, ...), close(int), unlink(const char *);
+struct b_passwd {
+    char *pw_name, *pw_passwd;
+    unsigned pw_uid, pw_gid;
+#if defined(__LP64__)
+    char *pw_gecos;                      // LP32 bionic has none
+#endif
+    char *pw_dir, *pw_shell;
+};
+struct b_passwd *getpwuid(unsigned), *getpwnam(const char *);
+int getpwuid_r(unsigned, struct b_passwd *, char *, size_t, struct b_passwd **);
+#if !defined(__LP64__)
+void *__mmap2(void *, size_t, int, int, int, size_t);
+int munmap(void *, size_t);
+int mknod(const char *, unsigned, unsigned, unsigned);   // bionic's has 3 arguments: r3 = junk
+size_t mbsrtowcs(b_wchar *, const char **, size_t, void *), wcsrtombs(char *, const b_wchar **, size_t, void *);
+size_t mbrlen(const char *, size_t, void *);
+int mbsinit(const void *);
+#endif
+#define B_LC_ALL_MASK 0x1fbf
+#define B_ENOENT 2
+#define B_EINVAL 22
+#define B_ENOSYS 38
+
+static size_t slen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
+static const char *base_of(const char *p) { const char *b = p; for (; *p; p++) if (*p == '/') b = p + 1; return b; }
+
+// the walk, as "name:type" entries in visiting order; bionic's types: F 0, D 1, DNR 2, DP 3, NS 4, SL 5, SLN 6
+static char walk[256];
+static int walk_n;
+static long long walk_fsize;
+static void walk_add(const char *path, int type)
+{
+    const char *b = base_of(path);
+    size_t n = slen(b);
+    if (walk_n + n + 4 >= sizeof walk) return;
+    for (size_t i = 0; i < n; i++) walk[walk_n++] = b[i];
+    walk[walk_n++] = ':';
+    walk[walk_n++] = (char)('0' + type);
+    walk[walk_n++] = ' ';
+    walk[walk_n] = 0;
+}
+static int nftw_cb(const char *path, const void *st, int type, struct b_ftw *f)
+{
+    walk_add(path, type);
+    if (streq(base_of(path), "f") && f->level == 1) walk_fsize = *(const long long *)((const char *)st + 48);
+    return 0;
+}
+static int ftw_cb(const char *path, const void *st, int type) { (void)st; walk_add(path, type); return 0; }
+static int has(const char *hay, const char *needle)
+{
+    size_t n = slen(needle);
+    for (; *hay; hay++) {
+        size_t i = 0;
+        while (i < n && hay[i] == needle[i]) i++;
+        if (i == n) return 1;
+    }
+    return 0;
+}
+static int before(const char *a, const char *b)       // both in the walk, a first
+{
+    const char *pa = 0, *pb = 0;
+    size_t na = slen(a), nb = slen(b);
+    for (const char *p = walk; *p; p++) {
+        size_t i = 0;
+        if (!pa) { while (i < na && p[i] == a[i]) i++; if (i == na) pa = p; }
+        i = 0;
+        if (!pb) { while (i < nb && p[i] == b[i]) i++; if (i == nb) pb = p; }
+    }
+    return pa && pb && pa < pb;
+}
+
+// 0 when everything holds, else a bit per failed area. dir: a directory with tree/{f (5 bytes), sub/g,
+// link -> f, dang -> nowhere} and file8k (8192 bytes, 'Q' at 4096); pc: glibc's pathconf of dir for
+// NAME_MAX, PIPE_BUF, FILESIZEBITS, LINK_MAX; vfs: glibc's statvfs of dir: bsize, blocks, namemax
+int syn_newer_test(const char *dir, const long *pc, const unsigned long *vfs)
+{
+    int f = 0;
+    char path[256];
+    // fd_set
+    unsigned long set[1024 / (8 * sizeof(unsigned long))];
+    for (size_t i = 0; i < sizeof set / sizeof set[0]; i++) set[i] = 0;
+    __FD_SET_chk(3, set, sizeof set);
+    __FD_SET_chk(70, set, sizeof set);
+    if (set[0] != (1ul << 3) || set[70 / (8 * sizeof(long))] != 1ul << (70 % (8 * sizeof(long)))) f |= 1 << 0;
+    if (__FD_ISSET_chk(70, set, sizeof set) != 1 || __FD_ISSET_chk(71, set, sizeof set) != 0) f |= 1 << 0;
+    __FD_CLR_chk(70, set, sizeof set);
+    if (__FD_ISSET_chk(70, set, sizeof set) || !__FD_ISSET_chk(3, set, sizeof set)) f |= 1 << 0;
+    // string checks that pass
+    static const char hello[] = "hello";
+    char b8[8];
+    if (__strlen_chk(hello, sizeof hello) != 5 || __strchr_chk(hello, 'l', sizeof hello) != hello + 2 ||
+        __strrchr_chk(hello, 'l', sizeof hello) != hello + 3 || __strchr_chk(hello, 'z', sizeof hello) ||
+        __strrchr_chk(hello, 0, sizeof hello) != hello + 5)
+        f |= 1 << 1;
+    if (__strlcpy_chk(b8, "abcdef", 4, sizeof b8) != 6 || !streq(b8, "abc") ||
+        __strlcat_chk(b8, "xyzw", sizeof b8, sizeof b8) != 7 || !streq(b8, "abcxyzw"))
+        f |= 1 << 1;
+    // signal tables
+    if (sys_signame[0] || !streq(sys_signame[11], "SEGV") || !streq(sys_signame[30], "PWR") ||
+        !streq(sys_siglist[2], "Interrupt") || !streq(sys_siglist[6], "Aborted"))
+        f |= 1 << 2;
+    // statvfs: bionic's layout (LP32: 11 longs; LP64: glibc's, 11 longs + 24 reserved bytes)
+    union { unsigned long w[32]; unsigned char b[256]; } v;
+    for (int i = 0; i < 256; i++) v.b[i] = 0xaa;
+    size_t vsize = sizeof(long) == 8 ? 112 : 44;
+    if (statvfs(dir, v.b) || v.w[0] != vfs[0] || v.w[2] != vfs[1] || v.w[10] != vfs[2]) f |= 1 << 3;
+    for (size_t i = vsize; i < 256; i++) if (v.b[i] != 0xaa) { f |= 1 << 3; break; }
+    int fd = open(dir, 0);
+    if (fd < 0 || fstatvfs(fd, v.b) || v.w[0] != vfs[0] || v.w[10] != vfs[2]) f |= 1 << 3;
+    // struct passwd (root: /etc/passwd of the test container)
+    struct b_passwd *p = getpwuid(0);
+    if (!p || !streq(p->pw_name, "root") || p->pw_uid || !streq(p->pw_dir, "/root") || p->pw_shell[0] != '/') f |= 1 << 4;
+    p = getpwnam("root");
+    if (!p || p->pw_uid || !streq(p->pw_dir, "/root")) f |= 1 << 4;
+    struct { struct b_passwd pw; long sentinel; } pr = { .sentinel = SENTINEL };
+    struct b_passwd *res = 0;
+    char pbuf[512];
+    if (getpwuid_r(0, &pr.pw, pbuf, sizeof pbuf, &res) || res != &pr.pw || !streq(pr.pw.pw_dir, "/root") ||
+        pr.sentinel != SENTINEL)
+        f |= 1 << 4;
+    // nftw: bionic's FTW_PHYS 1 | FTW_DEPTH 4: contents before their directory (FTW_DP), links not followed
+    snprintf(path, sizeof path, "%s/tree", dir);
+    walk_n = 0; walk[0] = 0; walk_fsize = -1;
+    if (nftw(path, nftw_cb, 4, 1 | 4) || !has(walk, "f:0") || !has(walk, "g:0") || !has(walk, "sub:3") ||
+        !has(walk, "tree:3") || !has(walk, "link:5") || !has(walk, "dang:5") || !before("g:0", "sub:3") ||
+        !before("sub:3", "tree:3") || walk_fsize != 5)
+        f |= 1 << 5;
+    walk_n = 0; walk[0] = 0;                              // logical, pre-order: links followed
+    if (nftw(path, nftw_cb, 4, 0) || !has(walk, "tree:1") || !has(walk, "sub:1") || !has(walk, "link:0") ||
+        !has(walk, "dang:6") || !before("tree:1", "f:0"))
+        f |= 1 << 5;
+    walk_n = 0; walk[0] = 0;
+    if (ftw(path, ftw_cb, 4) || !has(walk, "tree:1") || !has(walk, "g:0")) f |= 1 << 5;
+    if (nftw(path, nftw_cb, 0, 0) != -1 || *__errno() != B_EINVAL) f |= 1 << 5;
+    // fnmatch: bionic's FNM_NOESCAPE 1, FNM_PATHNAME 2
+    if (fnmatch("*.txt", "a/b.txt", 0) != 0 || fnmatch("*.txt", "a/b.txt", 2) != 1 ||
+        fnmatch("a\\*", "a\\b", 1) != 0 || fnmatch("a\\*", "a\\b", 0) != 1 || fnmatch("a\\*", "a*", 0) != 0)
+        f |= 1 << 6;
+    // pathconf: bionic's _PC_NAME_MAX 4, _PC_PIPE_BUF 6, _PC_FILESIZEBITS 0, _PC_LINK_MAX 1
+    if (pathconf(dir, 4) != pc[0] || pathconf(dir, 6) != pc[1] || pathconf(dir, 0) != pc[2] || pathconf(dir, 1) != pc[3])
+        f |= 1 << 7;
+    if (fd < 0 || fpathconf(fd, 4) != pc[0] || pathconf(dir, 99) != -1 || *__errno() != B_EINVAL) f |= 1 << 7;
+    close(fd);
+    // named semaphores: none on Android
+    *__errno() = 0;
+    if (sem_open("/syn", 0) || *__errno() != B_ENOSYS) f |= 1 << 8;
+    // locales: bionic's names; the objects work with the *_l functions
+    void *loc = newlocale(B_LC_ALL_MASK, "C.UTF-8", 0), *c = newlocale(B_LC_ALL_MASK, "", 0);
+    if (!loc || !c || !isdigit_l('7', loc) || isdigit_l('x', loc)) f |= 1 << 9;
+    char *end = 0;
+    // 12.5 as long double: IEEE quad on arm64 (no libgcc here for comparing those), double on 32-bit ARM
+    union { long double ld; unsigned long long u[2]; } r = { .u = { 1, 1 } };
+    if (loc) r.ld = strtold_l("1.25e1z", &end, loc);
+    if (sizeof(long double) == 16 ? r.u[1] != 0x4002900000000000ull || r.u[0] : r.u[0] != 0x4029000000000000ull) f |= 1 << 9;
+    if (!end || *end != 'z') f |= 1 << 9;
+    *__errno() = 0;
+    if (newlocale(B_LC_ALL_MASK, "de_DE.UTF-8", 0) || *__errno() != B_ENOENT) f |= 1 << 9;
+    if (newlocale(1 << 6, "C", 0) || *__errno() != B_EINVAL) f |= 1 << 9;
+    if (loc) freelocale(loc);
+    if (c) freelocale(c);
+    // float results (softfp wrappers on 32-bit ARM)
+    static const b_wchar w1[] = { '2', '.', '5', 'x', 0 }, w2[] = { '-', '0', '.', '7', '5', 0 };
+    b_wchar *we = 0;
+    if (wcstod(w1, &we) != 2.5 || we != w1 + 3 || wcstof(w2, 0) != -0.75f) f |= 1 << 10;
+#if !defined(__LP64__)
+    // __mmap2: the offset in 4096-byte units
+    snprintf(path, sizeof path, "%s/file8k", dir);
+    fd = open(path, 0);
+    const char *m = fd >= 0 ? __mmap2(0, 4096, 1 /* PROT_READ */, 2 /* MAP_PRIVATE */, fd, 1) : 0;
+    if (!m || m == (const char *)-1 || m[0] != 'Q' || m[1] != 'R') f |= 1 << 11;
+    else munmap((void *)m, 4096);
+    close(fd);
+    // mknod: bionic's 32-bit dev_t (r3 holds junk the callee must ignore)
+    unlink("/tmp/syn_fifo");
+    if (mknod("/tmp/syn_fifo", 0010600 /* S_IFIFO | 0600 */, 0, 0xdeadbeef)) f |= 1 << 12;
+    unlink("/tmp/syn_fifo");
+    // conversions with bionic's 4-byte mbstate_t
+    struct { unsigned st; unsigned sentinel; } s = { 0, 0x5e17e1a5 };
+    const char *src = "abc";
+    b_wchar wb[8];
+    if (mbsrtowcs(wb, &src, 8, &s.st) != 3 || wb[0] != 'a' || wb[2] != 'c' || src || s.sentinel != 0x5e17e1a5) f |= 1 << 13;
+    const b_wchar *wsrc = wb;
+    char nb[8];
+    if (wcsrtombs(nb, &wsrc, sizeof nb, &s.st) != 3 || !streq(nb, "abc") || s.sentinel != 0x5e17e1a5) f |= 1 << 13;
+    if (mbrlen("a", 1, &s.st) != 1 || !mbsinit(&s.st) || s.sentinel != 0x5e17e1a5) f |= 1 << 13;
+#endif
+    return f;
+}
+
+// fortify failures and the abort message (run in a child process by test_syn.c)
+void syn_fortify_fail(int k)
+{
+    unsigned long set[1024 / (8 * sizeof(unsigned long))] = { 0 };
+    char b8[8];
+    switch (k) {
+    case 0: __strlen_chk("hello", 5); break;
+    case 1: __FD_SET_chk(1024, set, sizeof set); break;
+    case 2: __strlcpy_chk(b8, "abc", 16, sizeof b8); break;
+    case 3: __FD_ISSET_chk(-1, set, sizeof set); break;
+    case 4: __strchr_chk("hello", 'z', 3); break;
+    case 5: __FD_CLR_chk(1, set, 64); break;
+    default: android_set_abort_message("syn: giving up"); break;
+    }
+}

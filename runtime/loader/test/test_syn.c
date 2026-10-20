@@ -4,7 +4,11 @@
 // imports through the shim tables, the host and the dependency; init order; dlopen/dlsym routing;
 // bionic-layout setjmp, signals, pthread objects at 4 mod 8, struct stat; the stack protector
 // (arm64: bionic's TLS slot at tpidr_el0 + 0x28); a corrupt packed table fails cleanly; arm64: an
-// unwinder inside the library walks through Android and host frames. Usage: test_syn <dir>
+// unwinder inside the library walks through Android and host frames. Newer players' bionic symbols:
+// the fortify functions (and their failures: message, SIGABRT), android_set_abort_message,
+// sys_signame, nftw/ftw, fnmatch, pathconf, sem_open, newlocale, wcstod/strtold_l (softfp), statvfs and
+// getpw* layouts, and on 32-bit ARM __mmap2, mknod, the mbstate_t conversions; libmediandk.so routing
+// (dlopen and a DT_NEEDED entry served by shims). Usage: test_syn <dir>
 #define _GNU_SOURCE
 #include "../so_loader.h"
 #include <dlfcn.h>
@@ -17,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -26,9 +31,15 @@ static int order;
 static int next_order(void) { return ++order; }
 static int shim_add(int a, int b) { return a + b; }
 static int shim_data = 1234;
+static void *media_extractor_new(void) { return (void *)0x3e7; }
+static const char *media_key_mime = "mime";
 static const so_shim test_shims[] = {
     { "test_next_order", (void *)next_order }, { "test_shim_add", (void *)shim_add }, { "test_shim_data", &shim_data },
     { NULL, NULL }
+};
+/* what the Android shims' libmediandk table holds, in small (android/media_ndk.c) */
+static const so_shim media_shims[] = {
+    { "AMediaExtractor_new", (void *)media_extractor_new }, { "AMEDIAFORMAT_KEY_MIME", &media_key_mime }, { NULL, NULL }
 };
 
 static int fails;
@@ -85,6 +96,112 @@ static void *sym(so_module *m, const char *n)
     return p;
 }
 
+/* a child process runs syn_fortify_fail(k): its stderr and how it ended */
+static int run_child(void (*fn)(int), int k, char *out, size_t n)
+{
+    int pfd[2];
+    if (pipe(pfd)) return -1;
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], 2);
+        fn(k);
+        _exit(0);
+    }
+    close(pfd[1]);
+    size_t got = 0;
+    ssize_t r;
+    while (got + 1 < n && (r = read(pfd[0], out + got, n - 1 - got)) > 0) got += r;
+    out[got] = 0;
+    close(pfd[0]);
+    int ws = 0;
+    waitpid(pid, &ws, 0);
+    return ws;
+}
+
+static void write_file(const char *path, const char *data, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+    if (f) { fwrite(data, 1, n, f); fclose(f); }
+}
+
+/* newer players' bionic symbols, called from Android code (syn_lib.c's syn_newer_test) */
+static void test_newer(so_module *m)
+{
+    char dir[64], p[128];
+    snprintf(dir, sizeof dir, "/tmp/syn.%d", (int)getpid());
+    mkdir(dir, 0755);
+    snprintf(p, sizeof p, "%s/tree", dir); mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/tree/sub", dir); mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/tree/f", dir); write_file(p, "12345", 5);
+    snprintf(p, sizeof p, "%s/tree/sub/g", dir); write_file(p, "x", 1);
+    snprintf(p, sizeof p, "%s/tree/link", dir); CHECK(!symlink("f", p), "symlink %s", p);
+    snprintf(p, sizeof p, "%s/tree/dang", dir); CHECK(!symlink("nowhere", p), "symlink %s", p);
+    static char big[8192];
+    memset(big, 'P', sizeof big);
+    big[4096] = 'Q'; big[4097] = 'R';
+    snprintf(p, sizeof p, "%s/file8k", dir); write_file(p, big, sizeof big);
+    long pc[4] = { pathconf(dir, _PC_NAME_MAX), pathconf(dir, _PC_PIPE_BUF), pathconf(dir, _PC_FILESIZEBITS),
+                   pathconf(dir, _PC_LINK_MAX) };
+    struct statvfs64 v;
+    statvfs64(dir, &v);
+    unsigned long vfs[3] = { v.f_bsize, (unsigned long)v.f_blocks, v.f_namemax };
+
+    int (*newer)(const char *, const long *, const unsigned long *) =
+        (int (*)(const char *, const long *, const unsigned long *))sym(m, "syn_newer_test");
+    void (*fail)(int) = (void (*)(int))sym(m, "syn_fortify_fail");
+    if (!newer || !fail) return;
+    int r = newer(dir, pc, vfs);
+    static const char *const areas[] = { "fd_set", "string checks", "sys_signame", "statvfs", "passwd", "nftw/ftw",
+                                         "fnmatch", "pathconf", "sem_open", "newlocale", "wcstod", "__mmap2", "mknod",
+                                         "mbstate" };
+    for (int i = 0; i < 14; i++) CHECK(!(r & (1 << i)), "newer bionic symbols: %s", areas[i]);
+
+    /* fortify failures: bionic's message, then SIGABRT */
+    static const char *const msgs[] = {
+        "FORTIFY: strlen: detected read past end of buffer",
+        "FORTIFY: FD_SET: file descriptor 1024 >= FD_SETSIZE 1024",
+        "FORTIFY: strlcpy: prevented 16-byte write into 8-byte buffer",
+        "FORTIFY: FD_ISSET: file descriptor -1 < 0",
+        "FORTIFY: strchr: prevented read past end of buffer",
+        "FORTIFY: FD_CLR: set size 64 is too small to be an fd_set",
+    };
+    char out[512];
+    for (int k = 0; k < 6; k++) {
+        int ws = run_child(fail, k, out, sizeof out);
+        CHECK(WIFSIGNALED(ws) && WTERMSIG(ws) == SIGABRT && strstr(out, msgs[k]), "fortify %d: status %#x, \"%s\"", k, ws, out);
+    }
+    int ws = run_child(fail, 99, out, sizeof out);
+    CHECK(WIFEXITED(ws) && strstr(out, "abort message: syn: giving up"), "android_set_abort_message: \"%s\"", out);
+    snprintf(p, sizeof p, "rm -rf %s", dir);
+    if (system(p)) printf("  (could not remove %s)\n", dir);
+}
+
+/* libmediandk.so: an Android-only library served by shims (Unity 2022.3 links against it) */
+static void test_mediandk(const char *dir)
+{
+    void *h = so_dlopen("libmediandk.so", 0);
+    CHECK(h && so_dlsym(h, "AMediaExtractor_new") == (void *)media_extractor_new, "dlopen(libmediandk.so) -> shims: %p", h);
+    char path[512];
+    snprintf(path, sizeof path, "%s/libsyn_media.so", dir); /* DT_NEEDED: not the stand-in file next to it */
+    so_module *m = so_load(path, NULL);
+    CHECK(m != NULL, "load %s: %s", path, so_error());
+    if (!m) return;
+    so_run_init(m);
+    CHECK(so_unresolved_count(m) == 0 && !so_find("libmediandk.so"), "libsyn_media.so: %d unresolved, libmediandk.so %s",
+          so_unresolved_count(m), so_find("libmediandk.so") ? "loaded from disk" : "from shims");
+    void *(*ext)(void) = (void *(*)(void))sym(m, "syn_media_extractor");
+    const char *(*mime)(void) = (const char *(*)(void))sym(m, "syn_media_mime");
+    CHECK(ext && ext() == (void *)0x3e7 && mime && mime() && !strcmp(mime(), "mime"), "libmediandk imports");
+    so_map_library("libmediandk.so", NULL);                 /* the host refuses dlopen of it (ua_host does) */
+    CHECK(!so_dlopen("libmediandk.so", 0), "dlopen(libmediandk.so) after so_map_library(NULL)");
+    static const so_shim own[] = { { "AMediaExtractor_new", (void *)shim_add }, { NULL, NULL } };
+    so_register_fake_lib("libmediandk.so", own);           /* a registered table wins over the refusal */
+    h = so_dlopen("libmediandk.so", 0);
+    CHECK(h && so_dlsym(h, "AMediaExtractor_new") == (void *)shim_add, "dlopen(libmediandk.so) with a registered table");
+}
+
 #if defined(__aarch64__)
 static unsigned long (*tls_guard)(void);
 static int (*protected_fn)(int);
@@ -103,6 +220,7 @@ int main(int argc, char **argv)
     char path[512];
     setvbuf(stdout, NULL, _IOLBF, 0);
     so_add_shims(test_shims);
+    so_add_shims(media_shims);
     so_add_shims(bionic_compat_table());
     so_set_library_path(dir);
 
@@ -142,6 +260,8 @@ int main(int argc, char **argv)
     stat(path, &st);
     r = stat_test(path, st.st_size);
     CHECK(r == 0, "stat: %d", r);
+    test_newer(m[0]);
+    test_mediandk(dir);
 
 #if defined(__aarch64__)
     tls_guard = (unsigned long (*)(void))sym(m[0], "syn_tls_guard");
@@ -197,7 +317,8 @@ int main(int argc, char **argv)
 
 out:
     if (fails) printf("syn: %d FAILED\n", fails);
-    else printf("syn: ok (%s: 5 relocation encodings alike, imports, init order, dl*, setjmp, signals, pthread, stat, stack guard%s)\n",
+    else printf("syn: ok (%s: 5 relocation encodings alike, imports, init order, dl*, setjmp, signals, pthread, stat, "
+                "newer bionic symbols, libmediandk routing, stack guard%s)\n",
                 sizeof(void *) == 8 ? "arm64" : "arm32", sizeof(void *) == 8 ? ", unwinding" : "");
     return fails != 0;
 }

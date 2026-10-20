@@ -17,17 +17,27 @@
  * translated; the rest (struct stat on arm64, dirent, tm, timespec, addrinfo after libhybris's
  * swap, Dl_info, dl_phdr_info, stack_t, siginfo_t, ucontext_t, pthread_attr_t behind libhybris's
  * pointer, the attribute objects glibc writes itself) match or never reach glibc as bionic objects.
+ *
+ * Players after 2017.4 (NDK r16b-r23b) add: bionic's own fortify entry points (__FD_SET_chk,
+ * __strlen_chk, ...), android_set_abort_message, __mmap2, sys_signame/sys_siglist, and calls whose
+ * flag values or 32-bit structures differ from glibc's (nftw/ftw, fnmatch, pathconf, newlocale,
+ * getpw*, statvfs, mknod, the mbstate_t string conversions, sem_open). See "newer players" below;
+ * the float-returning ones (wcstod, strtold_l, ...) are softfp wrappers in softfp.c.
  */
 #include "../thirdparty/libhybris/hybris/common/hooks.c"
 #include "so_loader.h"
 
+#include <fnmatch.h>
+#include <ftw.h>
 #include <limits.h>
 #include <link.h>
 #include <math.h>
 #include <linux/futex.h>
 #include <stdatomic.h>
 #include <sys/random.h>
+#include <sys/socket.h>
 #include <sys/statfs.h>
+#include <sys/statvfs.h>
 #include <sys/stat.h>
 
 /* bionic_setjmp.S: setjmp/longjmp with bionic's 256-byte jmp_buf (both ABIs: 64 or 32 longs) */
@@ -629,6 +639,451 @@ static int bionic_rwlock_unlock(void *l)
     return pthread_rwlock_unlock(rwlock_of(l));
 }
 
+/* ==== newer players (Unity 2019.4-2022.3: NDK r19-r23b) ========================================== */
+
+/* ---- android_set_abort_message, and bionic's fortify failures ---------------------------------
+ * bionic keeps the first abort message for the crash report (debuggerd's tombstone); here it is
+ * printed (libunity sets one right before it aborts) and the first one kept. */
+static char g_abort_message[512];
+static int g_abort_message_set;
+static pthread_mutex_t g_abort_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void keep_abort_message(const char *msg)
+{
+    pthread_mutex_lock(&g_abort_lock);
+    if (!g_abort_message_set) {
+        snprintf(g_abort_message, sizeof g_abort_message, "%s", msg);
+        g_abort_message_set = 1;
+    }
+    pthread_mutex_unlock(&g_abort_lock);
+}
+
+static void bionic_android_set_abort_message(const char *msg)
+{
+    if (!msg) msg = "(null)";
+    fprintf(stderr, "[bionic] abort message: %s\n", msg);
+    keep_abort_message(msg);
+}
+
+/* bionic's __fortify_fatal: "FORTIFY: <what>" (logcat and stderr there), the abort message, abort() */
+__attribute__((noreturn, format(printf, 1, 2))) static void fortify_fatal(const char *fmt, ...)
+{
+    char msg[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "FORTIFY: %s\n", msg);
+    keep_abort_message(msg);
+    abort();
+}
+
+/* ---- fortify: the __*_chk functions only bionic has ---------------------------------------------
+ * NDK headers with _FORTIFY_SOURCE turn calls whose buffer sizes the compiler knows into these. glibc
+ * has the common ones with the same arguments (__memcpy_chk, __strcpy_chk, __vsnprintf_chk,
+ * __open_2, __read_chk, ...: they resolve to the host); these are bionic's own, or (__fgets_chk,
+ * __fread_chk) take their arguments in another order than glibc's. Checks and messages as in
+ * bionic's fortify.cpp and private/bionic_fortify.h. */
+static void check_buffer_access(const char *fn, const char *action, size_t claim, size_t actual)
+{
+    if (claim > actual) fortify_fatal("%s: prevented %zu-byte %s %zu-byte buffer", fn, claim, action, actual);
+}
+static void check_count(const char *fn, const char *what, size_t value)
+{
+    if (value > SSIZE_MAX) fortify_fatal("%s: %s %zu > SSIZE_MAX", fn, what, value);
+}
+
+/* bionic's fd_set: FD_SETSIZE (1024) bits in unsigned longs, as glibc's */
+#define B_FD_SETSIZE 1024
+#define B_NFDBITS (8 * sizeof(unsigned long))
+static void check_fd_set(const char *fn, int fd, size_t set_size)
+{
+    if (fd < 0) fortify_fatal("%s: file descriptor %d < 0", fn, fd);
+    if (fd >= B_FD_SETSIZE) fortify_fatal("%s: file descriptor %d >= FD_SETSIZE %zu", fn, fd, (size_t)B_FD_SETSIZE);
+    if (set_size < B_FD_SETSIZE / 8) fortify_fatal("%s: set size %zu is too small to be an fd_set", fn, set_size);
+}
+static void bionic_FD_SET_chk(int fd, unsigned long *set, size_t set_size)
+{
+    check_fd_set("FD_SET", fd, set_size);
+    set[fd / B_NFDBITS] |= 1ul << (fd % B_NFDBITS);
+}
+static void bionic_FD_CLR_chk(int fd, unsigned long *set, size_t set_size)
+{
+    check_fd_set("FD_CLR", fd, set_size);
+    set[fd / B_NFDBITS] &= ~(1ul << (fd % B_NFDBITS));
+}
+static int bionic_FD_ISSET_chk(int fd, const unsigned long *set, size_t set_size)
+{
+    check_fd_set("FD_ISSET", fd, set_size);
+    return (set[fd / B_NFDBITS] & (1ul << (fd % B_NFDBITS))) != 0;
+}
+
+static size_t bionic_strlen_chk(const char *s, size_t s_len)
+{
+    size_t n = strlen(s);
+    if (n >= s_len) fortify_fatal("strlen: detected read past end of buffer");
+    return n;
+}
+static char *bionic_strchr_chk(const char *p, int ch, size_t s_len)
+{
+    for (;; p++, s_len--) {
+        if (s_len == 0) fortify_fatal("strchr: prevented read past end of buffer");
+        if (*p == (char)ch) return (char *)p;
+        if (!*p) return NULL;
+    }
+}
+static char *bionic_strrchr_chk(const char *p, int ch, size_t s_len)
+{
+    for (const char *save = NULL;; p++, s_len--) {
+        if (s_len == 0) fortify_fatal("strrchr: prevented read past end of buffer");
+        if (*p == (char)ch) save = p;
+        if (!*p) return (char *)save;
+    }
+}
+/* BSD strlcpy/strlcat (glibc has them only from 2.38) */
+static size_t b_strlcpy(char *d, const char *s, size_t n)
+{
+    size_t l = strlen(s);
+    if (n) {
+        size_t c = l < n - 1 ? l : n - 1;
+        memcpy(d, s, c);
+        d[c] = 0;
+    }
+    return l;
+}
+static size_t b_strlcat(char *d, const char *s, size_t n)
+{
+    size_t dl = strnlen(d, n);
+    if (dl == n) return n + strlen(s);
+    return dl + b_strlcpy(d + dl, s, n - dl);
+}
+static size_t bionic_strlcpy_chk(char *d, const char *s, size_t n, size_t d_len)
+{
+    check_buffer_access("strlcpy", "write into", n, d_len);
+    return b_strlcpy(d, s, n);
+}
+static size_t bionic_strlcat_chk(char *d, const char *s, size_t n, size_t d_len)
+{
+    check_buffer_access("strlcat", "write into", n, d_len);
+    return b_strlcat(d, s, n);
+}
+static char *bionic_strncpy_chk2(char *d, const char *s, size_t n, size_t d_len, size_t s_len)
+{
+    check_buffer_access("strncpy", "write into", n, d_len);
+    if (n > s_len && strnlen(s, s_len) >= s_len) fortify_fatal("strncpy: detected read past end of %zu-byte buffer", s_len);
+    return strncpy(d, s, n);
+}
+static char *bionic_stpncpy_chk2(char *d, const char *s, size_t n, size_t d_len, size_t s_len)
+{
+    check_buffer_access("stpncpy", "write into", n, d_len);
+    if (n > s_len && strnlen(s, s_len) >= s_len) fortify_fatal("stpncpy: detected read past end of %zu-byte buffer", s_len);
+    return stpncpy(d, s, n);
+}
+static void *bionic_memchr_chk(const void *s, int c, size_t n, size_t actual)
+{
+    check_buffer_access("memchr", "read from", n, actual);
+    return memchr(s, c, n);
+}
+static void *bionic_memrchr_chk(const void *s, int c, size_t n, size_t actual)
+{
+    check_buffer_access("memrchr", "read from", n, actual);
+    return memrchr(s, c, n);
+}
+static mode_t bionic_umask_chk(mode_t mode)
+{
+    if ((mode & 0777) != mode) fortify_fatal("umask: called with invalid mask %o", (unsigned)mode);
+    return umask(mode);
+}
+static ssize_t bionic_write_chk(int fd, const void *buf, size_t count, size_t buf_size)
+{
+    check_count("write", "count", count);
+    check_buffer_access("write", "read from", count, buf_size);
+    return write(fd, buf, count);
+}
+/* off_t is bionic's: 32 bits on 32-bit ARM, as glibc's plain pwrite there */
+static ssize_t bionic_pwrite_chk(int fd, const void *buf, size_t count, long offset, size_t buf_size)
+{
+    check_count("pwrite", "count", count);
+    check_buffer_access("pwrite", "read from", count, buf_size);
+    return pwrite(fd, buf, count, offset);
+}
+static ssize_t bionic_pwrite64_chk(int fd, const void *buf, size_t count, off64_t offset, size_t buf_size)
+{
+    check_count("pwrite64", "count", count);
+    check_buffer_access("pwrite64", "read from", count, buf_size);
+    return pwrite64(fd, buf, count, offset);
+}
+static ssize_t bionic_sendto_chk(int fd, const void *buf, size_t len, size_t buf_len, int flags,
+                                 const struct sockaddr *to, socklen_t to_len)
+{
+    check_buffer_access("sendto", "read from", len, buf_len);
+    return sendto(fd, buf, len, flags, to, to_len);
+}
+/* stdio: bionic's FILE through libhybris's translation; glibc's __fgets_chk is (buf, size, n, fp) */
+static char *bionic_fgets_chk(char *dst, int n, FILE *fp, size_t dst_len)
+{
+    check_buffer_access("fgets", "write into", (size_t)n, dst_len);
+    return fgets(dst, n, _get_actual_fp(fp));
+}
+static size_t bionic_fread_chk(void *buf, size_t size, size_t count, FILE *fp, size_t buf_size)
+{
+    size_t total;
+    if (!__builtin_mul_overflow(size, count, &total)) check_buffer_access("fread", "write into", total, buf_size);
+    return fread(buf, size, count, _get_actual_fp(fp));
+}
+static size_t bionic_fwrite_chk(const void *buf, size_t size, size_t count, FILE *fp, size_t buf_size)
+{
+    size_t total;
+    if (!__builtin_mul_overflow(size, count, &total)) check_buffer_access("fwrite", "read from", total, buf_size);
+    return fwrite(buf, size, count, _get_actual_fp(fp));
+}
+
+#if defined(__arm__)
+/* bionic's raw mmap2 system call (offset in 4096-byte units), which Mono's libraries call directly */
+static void *bionic_mmap2(void *addr, size_t size, int prot, int flags, int fd, size_t pgoff)
+{
+    return (void *)syscall(SYS_mmap2, addr, size, prot, flags, fd, pgoff);
+}
+#endif
+
+/* ---- sys_signame / sys_siglist: bionic's tables (NSIG = 65 entries; names without "SIG") ------- */
+#define B_NSIG 65
+#define SIGDEFS(X) \
+    X(SIGHUP, "HUP", "Hangup") X(SIGINT, "INT", "Interrupt") X(SIGQUIT, "QUIT", "Quit") \
+    X(SIGILL, "ILL", "Illegal instruction") X(SIGTRAP, "TRAP", "Trap") X(SIGABRT, "ABRT", "Aborted") \
+    X(SIGFPE, "FPE", "Floating point exception") X(SIGKILL, "KILL", "Killed") X(SIGBUS, "BUS", "Bus error") \
+    X(SIGSEGV, "SEGV", "Segmentation fault") X(SIGPIPE, "PIPE", "Broken pipe") X(SIGALRM, "ALRM", "Alarm clock") \
+    X(SIGTERM, "TERM", "Terminated") X(SIGUSR1, "USR1", "User signal 1") X(SIGUSR2, "USR2", "User signal 2") \
+    X(SIGCHLD, "CHLD", "Child exited") X(SIGPWR, "PWR", "Power failure") X(SIGWINCH, "WINCH", "Window size changed") \
+    X(SIGURG, "URG", "Urgent I/O condition") X(SIGIO, "IO", "I/O possible") X(SIGSTOP, "STOP", "Stopped (signal)") \
+    X(SIGTSTP, "TSTP", "Stopped") X(SIGCONT, "CONT", "Continue") X(SIGTTIN, "TTIN", "Stopped (tty input)") \
+    X(SIGTTOU, "TTOU", "Stopped (tty output)") X(SIGVTALRM, "VTALRM", "Virtual timer expired") \
+    X(SIGPROF, "PROF", "Profiling timer expired") X(SIGXCPU, "XCPU", "CPU time limit exceeded") \
+    X(SIGXFSZ, "XFSZ", "File size limit exceeded") X(SIGSTKFLT, "STKFLT", "Stack fault") X(SIGSYS, "SYS", "Bad system call")
+#define SIGNAME(s, n, d) [s] = n,
+#define SIGDESC(s, n, d) [s] = d,
+static const char *const bionic_sys_signame[B_NSIG] = { SIGDEFS(SIGNAME) };
+static const char *const bionic_sys_siglist[B_NSIG] = { SIGDEFS(SIGDESC) };
+
+/* ---- nftw / ftw: bionic's (BSD) flag and type values ----------------------------------------------
+ * walk flags: PHYS 1, MOUNT 2, DEPTH 4, CHDIR 8 (glibc: CHDIR 4, DEPTH 8); types passed to the
+ * callback: F 0, D 1, DNR 2, DP 3, NS 4, SL 5, SLN 6 (glibc: NS 3, SL 4, DP 5). The callback gets
+ * bionic's struct stat, which is glibc's stat64 (see stat above); struct FTW is { base, level } in both.
+ * A recursive delete with glibc's values would see directories as symlinks, before their contents. */
+static int ftw_type_out(int t)
+{
+    switch (t) {
+    case FTW_NS: return 4;
+    case FTW_SL: return 5;
+    case FTW_DP: return 3;
+    default: return t;          /* F, D, DNR, SLN: the same */
+    }
+}
+typedef int (*bionic_nftw_fn)(const char *, const struct stat64 *, int, struct FTW *);
+typedef int (*bionic_ftw_fn)(const char *, const struct stat64 *, int);
+static __thread bionic_nftw_fn t_nftw_fn;      /* the callback of this thread's innermost walk */
+static __thread bionic_ftw_fn t_ftw_fn;
+static int nftw_tramp(const char *p, const struct stat64 *st, int t, struct FTW *f) { return t_nftw_fn(p, st, ftw_type_out(t), f); }
+static int ftw_tramp(const char *p, const struct stat64 *st, int t) { return t_ftw_fn(p, st, ftw_type_out(t)); }
+static int bionic_nftw(const char *dir, bionic_nftw_fn fn, int nfds, int flags)
+{
+    if (nfds < 1) { errno = EINVAL; return -1; }
+    int g = 0;
+    if (flags & 1) g |= FTW_PHYS;
+    if (flags & 2) g |= FTW_MOUNT;
+    if (flags & 4) g |= FTW_DEPTH;
+    if (flags & 8) g |= FTW_CHDIR;
+    bionic_nftw_fn saved = t_nftw_fn;
+    t_nftw_fn = fn;
+    int r = nftw64(dir, nftw_tramp, nfds, g);
+    t_nftw_fn = saved;
+    return r;
+}
+static int bionic_ftw(const char *dir, bionic_ftw_fn fn, int nfds)
+{
+    if (nfds < 1) { errno = EINVAL; return -1; }
+    bionic_ftw_fn saved = t_ftw_fn;
+    t_ftw_fn = fn;
+    int r = ftw64(dir, ftw_tramp, nfds);
+    t_ftw_fn = saved;
+    return r;
+}
+
+/* ---- fnmatch: bionic's (BSD) flags NOESCAPE 1, PATHNAME 2 are glibc's PATHNAME 1, NOESCAPE 2 ----- */
+static int bionic_fnmatch(const char *pattern, const char *string, int flags)
+{
+    int g = 0;
+    if (flags & 0x01) g |= FNM_NOESCAPE;
+    if (flags & 0x02) g |= FNM_PATHNAME;
+    if (flags & 0x04) g |= FNM_PERIOD;
+    if (flags & 0x08) g |= FNM_LEADING_DIR;
+    if (flags & 0x10) g |= FNM_CASEFOLD;
+    return fnmatch(pattern, string, g) == 0 ? 0 : FNM_NOMATCH;
+}
+
+/* ---- pathconf: bionic numbers the _PC_* names differently (unistd.h there) ---------------------- */
+static int pathconf_name(int b)
+{
+    static const int g[] = {
+        _PC_FILESIZEBITS, _PC_LINK_MAX, _PC_MAX_CANON, _PC_MAX_INPUT, _PC_NAME_MAX, _PC_PATH_MAX,
+        _PC_PIPE_BUF, _PC_2_SYMLINKS, _PC_ALLOC_SIZE_MIN, _PC_REC_INCR_XFER_SIZE, _PC_REC_MAX_XFER_SIZE,
+        _PC_REC_MIN_XFER_SIZE, _PC_REC_XFER_ALIGN, _PC_SYMLINK_MAX, _PC_CHOWN_RESTRICTED, _PC_NO_TRUNC,
+        _PC_VDISABLE, _PC_ASYNC_IO, _PC_PRIO_IO, _PC_SYNC_IO,
+    };
+    return b >= 0 && b < (int)(sizeof g / sizeof g[0]) ? g[b] : -1;
+}
+static long bionic_pathconf(const char *path, int name)
+{
+    int g = pathconf_name(name);
+    if (g < 0) { errno = EINVAL; return -1; }
+    return pathconf(path, g);
+}
+static long bionic_fpathconf(int fd, int name)
+{
+    int g = pathconf_name(name);
+    if (g < 0) { errno = EINVAL; return -1; }
+    return fpathconf(fd, g);
+}
+
+/* ---- named semaphores: bionic has none (sem_open fails with ENOSYS); a glibc one would then reach
+ * the bionic sem_* functions above, which read its memory as a bionic semaphore word ---------------- */
+static void *bionic_sem_open(const char *name, int flags, ...) { (void)name; (void)flags; errno = ENOSYS; return NULL; }
+static int bionic_sem_close(void *s) { (void)s; errno = EINVAL; return -1; }
+static int bionic_sem_unlink(const char *name) { (void)name; errno = ENOENT; return -1; }
+
+/* ---- newlocale: bionic's locales -------------------------------------------------------------------
+ * bionic (API 21+) knows "C"/"POSIX" and "C.UTF-8" ("" and "en_US.UTF-8" are the latter), refuses other
+ * names with ENOENT, ignores (and keeps) the base object, and its *_l functions ignore the locale.
+ * glibc's newlocale would load whatever the name says, or fail when that locale is not installed (as
+ * en_US.UTF-8 often is not on a handheld's firmware: libc++ then throws), and consumes base. So: bionic's
+ * checks, then glibc's C.UTF-8 (C when the host lacks it) or C. The objects are glibc's, for the *_l
+ * calls (isdigit_l, strtold_l, strftime_l, ...: libc++ inside libunity 2019.4+) that go to glibc, and
+ * for uselocale/duplocale/freelocale (libhybris passes them to glibc). */
+static locale_t bionic_newlocale(int mask, const char *name, locale_t base)
+{
+    (void)base;
+    if ((mask & ~LC_ALL_MASK) || !name) { errno = EINVAL; return (locale_t)0; }
+    int utf8;
+    if (!strcmp(name, "C") || !strcmp(name, "POSIX")) utf8 = 0;
+    else if (!*name || !strcmp(name, "C.UTF-8") || !strcmp(name, "en_US.UTF-8")) utf8 = 1;
+    else { errno = ENOENT; return (locale_t)0; }
+    locale_t l = utf8 ? newlocale(LC_ALL_MASK, "C.UTF-8", (locale_t)0) : (locale_t)0;
+    if (!l) l = newlocale(LC_ALL_MASK, "C", (locale_t)0);
+    return l;
+}
+
+#if !defined(__LP64__)
+/* ---- 32-bit ARM structure layouts ---------------------------------------------------------------- */
+
+/* struct passwd: bionic's LP32 one has no pw_gecos ({ name, passwd, uid, gid, dir, shell }); glibc's
+ * has it before pw_dir. The strings stay where glibc put them (the caller's buffer for the _r forms,
+ * glibc's static one otherwise); the non-_r results are per thread, as in bionic. */
+struct bionic_passwd { char *pw_name, *pw_passwd; uid_t pw_uid; gid_t pw_gid; char *pw_dir, *pw_shell; };
+static __thread struct bionic_passwd t_passwd;
+static struct bionic_passwd *passwd_out(struct bionic_passwd *b, const struct passwd *g)
+{
+    b->pw_name = g->pw_name;
+    b->pw_passwd = g->pw_passwd;
+    b->pw_uid = g->pw_uid;
+    b->pw_gid = g->pw_gid;
+    b->pw_dir = g->pw_dir;
+    b->pw_shell = g->pw_shell;
+    return b;
+}
+static struct bionic_passwd *bionic_getpwuid(uid_t uid)
+{
+    struct passwd *g = getpwuid(uid);
+    return g ? passwd_out(&t_passwd, g) : NULL;
+}
+static struct bionic_passwd *bionic_getpwnam(const char *name)
+{
+    struct passwd *g = getpwnam(name);
+    return g ? passwd_out(&t_passwd, g) : NULL;
+}
+static int bionic_getpwuid_r(uid_t uid, struct bionic_passwd *pw, char *buf, size_t n, struct bionic_passwd **res)
+{
+    struct passwd g, *gr = NULL;
+    int r = getpwuid_r(uid, &g, buf, n, &gr);
+    *res = r == 0 && gr ? passwd_out(pw, &g) : NULL;
+    return r;
+}
+static int bionic_getpwnam_r(const char *name, struct bionic_passwd *pw, char *buf, size_t n, struct bionic_passwd **res)
+{
+    struct passwd g, *gr = NULL;
+    int r = getpwnam_r(name, &g, buf, n, &gr);
+    *res = r == 0 && gr ? passwd_out(pw, &g) : NULL;
+    return r;
+}
+
+/* struct statvfs (and statvfs64, the same in bionic): eleven unsigned longs, 44 bytes, its block and
+ * file counts being unsigned long (fsblkcnt_t, fsfilcnt_t); glibc's 32-bit one has an int after f_fsid
+ * and six spare ints (72 bytes), its statvfs64 64-bit counts. On arm64 both are glibc's layout. */
+struct bionic_statvfs {
+    unsigned long f_bsize, f_frsize, f_blocks, f_bfree, f_bavail, f_files, f_ffree, f_favail, f_fsid, f_flag, f_namemax;
+};
+static void statvfs_out(struct bionic_statvfs *b, const struct statvfs64 *g)
+{
+    b->f_bsize = g->f_bsize;
+    b->f_frsize = g->f_frsize;
+    b->f_blocks = (unsigned long)g->f_blocks;      /* truncated as bionic does */
+    b->f_bfree = (unsigned long)g->f_bfree;
+    b->f_bavail = (unsigned long)g->f_bavail;
+    b->f_files = (unsigned long)g->f_files;
+    b->f_ffree = (unsigned long)g->f_ffree;
+    b->f_favail = (unsigned long)g->f_favail;
+    b->f_fsid = g->f_fsid;
+    b->f_flag = g->f_flag;
+    b->f_namemax = g->f_namemax;
+}
+static int bionic_statvfs(const char *path, struct bionic_statvfs *b)
+{
+    struct statvfs64 g;
+    int r = statvfs64(path, &g);
+    if (r == 0) statvfs_out(b, &g);
+    return r;
+}
+static int bionic_fstatvfs(int fd, struct bionic_statvfs *b)
+{
+    struct statvfs64 g;
+    int r = fstatvfs64(fd, &g);
+    if (r == 0) statvfs_out(b, &g);
+    return r;
+}
+
+/* dev_t is 32 bits in bionic's LP32 ABI, 64 in glibc's: in mknod the high word would be r3's leftover
+ * (glibc then fails with EINVAL), in mknodat a stack word */
+static int bionic_mknod(const char *path, mode_t mode, uint32_t dev) { return mknod(path, mode, (dev_t)dev); }
+static int bionic_mknodat(int dirfd, const char *path, mode_t mode, uint32_t dev) { return mknodat(dirfd, path, mode, (dev_t)dev); }
+
+/* the string conversions with a state: bionic's mbstate_t is 4 bytes here, glibc writes 8. The
+ * per-thread glibc state of mbrtowc above stands in for the caller's; NULL keeps glibc's internal one.
+ * bionic resets a state on an invalid sequence, so this one is reset then too. */
+static mbstate_t *tls_state(const void *ps) { return ps ? &tls_mbstate : NULL; }
+static size_t mbs_done(size_t r, const void *ps)
+{
+    if (r == (size_t)-1 && ps) memset(&tls_mbstate, 0, sizeof tls_mbstate);
+    return r;
+}
+static size_t bionic_mbrlen(const char *s, size_t n, void *ps) { return mbs_done(mbrlen(s, n, tls_state(ps)), ps); }
+static size_t bionic_mbsrtowcs(wchar_t *d, const char **s, size_t n, void *ps)
+{
+    return mbs_done(mbsrtowcs(d, s, n, tls_state(ps)), ps);
+}
+static size_t bionic_mbsnrtowcs(wchar_t *d, const char **s, size_t nms, size_t n, void *ps)
+{
+    return mbs_done(mbsnrtowcs(d, s, nms, n, tls_state(ps)), ps);
+}
+static size_t bionic_wcsrtombs(char *d, const wchar_t **s, size_t n, void *ps)
+{
+    return mbs_done(wcsrtombs(d, s, n, tls_state(ps)), ps);
+}
+static size_t bionic_wcsnrtombs(char *d, const wchar_t **s, size_t nwc, size_t n, void *ps)
+{
+    return mbs_done(wcsnrtombs(d, s, nwc, n, tls_state(ps)), ps);
+}
+static int bionic_mbsinit(const void *ps) { return ps ? mbsinit(&tls_mbstate) : 1; }
+#endif
+
 #if defined(__aarch64__)
 /* bionic's FP_* values differ from glibc's (FP_INFINITE 1, NAN 2, NORMAL 4, SUBNORMAL 8, ZERO 16).
  * On 32-bit ARM the softfp wrappers translate them (softfp.c); here they are shims. */
@@ -693,6 +1148,35 @@ static const so_shim ours[] = {
     { "sem_timedwait", (void *)bionic_sem_timedwait }, { "sem_getvalue", (void *)bionic_sem_getvalue },
     { "mbrtowc", (void *)bionic_mbrtowc }, { "wcrtomb", (void *)bionic_wcrtomb }, { "ungetwc", (void *)bionic_ungetwc },
     { "getnameinfo", (void *)bionic_getnameinfo }, { "__system_property_get", (void *)bionic_system_property_get },
+    /* newer players */
+    { "android_set_abort_message", (void *)bionic_android_set_abort_message },
+    { "__FD_SET_chk", (void *)bionic_FD_SET_chk }, { "__FD_CLR_chk", (void *)bionic_FD_CLR_chk },
+    { "__FD_ISSET_chk", (void *)bionic_FD_ISSET_chk }, { "__strlen_chk", (void *)bionic_strlen_chk },
+    { "__strchr_chk", (void *)bionic_strchr_chk }, { "__strrchr_chk", (void *)bionic_strrchr_chk },
+    { "__strlcpy_chk", (void *)bionic_strlcpy_chk }, { "__strlcat_chk", (void *)bionic_strlcat_chk },
+    { "__strncpy_chk2", (void *)bionic_strncpy_chk2 }, { "__stpncpy_chk2", (void *)bionic_stpncpy_chk2 },
+    { "__memchr_chk", (void *)bionic_memchr_chk }, { "__memrchr_chk", (void *)bionic_memrchr_chk },
+    { "__umask_chk", (void *)bionic_umask_chk }, { "__write_chk", (void *)bionic_write_chk },
+    { "__pwrite_chk", (void *)bionic_pwrite_chk }, { "__pwrite64_chk", (void *)bionic_pwrite64_chk },
+    { "__sendto_chk", (void *)bionic_sendto_chk }, { "__fgets_chk", (void *)bionic_fgets_chk },
+    { "__fread_chk", (void *)bionic_fread_chk }, { "__fwrite_chk", (void *)bionic_fwrite_chk },
+    { "sys_signame", (void *)bionic_sys_signame }, { "sys_siglist", (void *)bionic_sys_siglist },
+    { "nftw", (void *)bionic_nftw }, { "nftw64", (void *)bionic_nftw }, { "ftw", (void *)bionic_ftw },
+    { "ftw64", (void *)bionic_ftw }, { "fnmatch", (void *)bionic_fnmatch },
+    { "pathconf", (void *)bionic_pathconf }, { "fpathconf", (void *)bionic_fpathconf },
+    { "sem_open", (void *)bionic_sem_open }, { "sem_close", (void *)bionic_sem_close },
+    { "sem_unlink", (void *)bionic_sem_unlink }, { "newlocale", (void *)bionic_newlocale },
+#if defined(__arm__)
+    { "__mmap2", (void *)bionic_mmap2 },
+    { "getpwuid", (void *)bionic_getpwuid }, { "getpwnam", (void *)bionic_getpwnam },
+    { "getpwuid_r", (void *)bionic_getpwuid_r }, { "getpwnam_r", (void *)bionic_getpwnam_r },
+    { "statvfs", (void *)bionic_statvfs }, { "fstatvfs", (void *)bionic_fstatvfs },
+    { "statvfs64", (void *)bionic_statvfs }, { "fstatvfs64", (void *)bionic_fstatvfs },
+    { "mknod", (void *)bionic_mknod }, { "mknodat", (void *)bionic_mknodat },
+    { "mbrlen", (void *)bionic_mbrlen }, { "mbsrtowcs", (void *)bionic_mbsrtowcs },
+    { "mbsnrtowcs", (void *)bionic_mbsnrtowcs }, { "wcsrtombs", (void *)bionic_wcsrtombs },
+    { "wcsnrtombs", (void *)bionic_wcsnrtombs }, { "mbsinit", (void *)bionic_mbsinit },
+#endif
 #if defined(__aarch64__)
     { "__fpclassifyd", (void *)bionic_fpclassifyd }, { "__fpclassify", (void *)bionic_fpclassifyd },
     { "__fpclassifyf", (void *)bionic_fpclassifyf }, { "__fpclassifyl", (void *)bionic_fpclassifyl },

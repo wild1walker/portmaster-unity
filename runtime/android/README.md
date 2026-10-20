@@ -1,4 +1,4 @@
-# android/: Android API shims (liblog, libandroid, OpenSL ES, EGL glue)
+# android/: Android API shims (liblog, libandroid, OpenSL ES, libmediandk, EGL glue)
 
 C shims for the Android-only libraries that Unity 2017.4.9f1's ARMv7 player
 (`libunity.so`, `libmain.so`, `libmono.so`) imports or dlopens, built for armhf glibc
@@ -24,6 +24,7 @@ The DT_NEEDED entries and undefined dynamic symbols of the 2017.4 player; the An
 | libOpenSLES.so | libunity (FMOD) via dlopen | `slCreateEngine`, `SL_IID_ENGINE`, `SL_IID_ANDROIDSIMPLEBUFFERQUEUE`, `SL_IID_PLAY`, `SL_IID_RECORD`, `SL_IID_ANDROIDCONFIGURATION` (data symbols) |
 | libEGL.so | libunity | 21 `egl*` functions (host libEGL; 6 are wrapped, see below) |
 | libGLESv2.so | libunity | nothing imported: GL is loaded with dlopen/dlsym and eglGetProcAddress |
+| libmediandk.so | libunity 2022.3 (DT_NEEDED); 2017.4-2021.3 dlopen it | `AMediaCodec_*`, `AMediaExtractor_*`, `AMediaFormat_*`, the `AMEDIAFORMAT_KEY_*` string constants (data objects); weak `AImageReader_*`, `AImage_*`, `AMediaDataSource_*`, more keys |
 
 Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sym.so`):
 - The `AInputEvent_*`/`AKeyEvent_*` imports have no relocations: Unity never calls them (input
@@ -31,10 +32,10 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
   are not imported at all: Unity reads the APK zip itself.
 - The sensor calls come from `InitNativeSensors()` etc.: Unity handles an empty sensor list and a
   NULL default sensor.
-- libunity also dlopens `libmediandk.so` (AMediaCodec/AMediaExtractor for VideoPlayer),
-  `libvulkan.so`, `libSEC_OMX_Core.so`, `libsomxcore.so`. We have no shims for them:
-  `android_shims_for_library()` returns NULL and the loader's dlopen should fail, which makes
-  Unity fall back (GLES instead of Vulkan, no hardware video decoding).
+- libunity also dlopens `libvulkan.so`, `libSEC_OMX_Core.so`, `libsomxcore.so`. We have no shims
+  for them: `android_shims_for_library()` returns NULL and the loader's dlopen fails, which makes
+  Unity fall back (GLES instead of Vulkan). `libmediandk.so` (VideoPlayer; dlopened up to 2021.3,
+  linked by 2022.3) is served by stubs that fail cleanly, below.
 
 ## Implemented vs stubbed
 
@@ -48,6 +49,8 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
 | Input | Minimal: `AInputEvent_*`, `AKeyEvent_*`, `AMotionEvent_*` getters over our own event struct (`android_input_event_new_key()` builds one). `AInputQueue_*` are inert stubs. |
 | AConfiguration | Minimal fixed config: landscape, 160 dpi, SDK 26, no touch, D-pad, en_US. |
 | OpenSL ES | Implemented on SDL2: engine, output mix, audio player with a PCM buffer queue (`SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE` or `_BUFFERQUEUE`, 8/16/32-bit int and float PCM). Interfaces: Object, Engine, OutputMix, Play, BufferQueue/AndroidSimpleBufferQueue, Volume, AndroidConfiguration. Stubbed with `SL_RESULT_FEATURE_UNSUPPORTED`: audio recorder (`SL_IID_RECORD` exists but recording does not), MIDI, LED/vibra, listener/3D, metadata extractor, URI/fd players, effects. |
+| libmediandk | Stubs (`media_ndk.c`), for libunity 2022.3 to load: every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted, `AImage_deleteAsync` closes its fence fd); the `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). A VideoPlayer reports an error and the video is skipped. `AMediaFormat_setFloat` is `SOFTFP`. In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
+| Frame pacing | No `AChoreographer_*` (dlsym answers NULL, as on API < 24) and no Android frame-timing EGL functions: Swappy turns itself off (below). |
 | EGL | `egl_glue.c`, separate table `egl_shims[]` (below). |
 
 ## Using it from the host
@@ -63,7 +66,8 @@ so_add_shims(android_shims);                // liblog + libandroid + libOpenSLES
 so_register_fake_lib("liblog.so", android_log_shims);       // dlopen()+dlsym() by Android code;
 so_register_fake_lib("libandroid.so", android_ndk_shims);   // or loop over names with
 so_register_fake_lib("libOpenSLES.so", android_sles_shims); // android_shims_for_library(name)
-so_map_library("libmediandk.so", NULL);     // no shims: let these dlopens fail
+so_map_library("libmediandk.so", NULL);     // dlopen refused (2017.4-2021.3 take their JNI video path);
+                                            // 2022.3's DT_NEEDED and imports still get the stubs
 so_map_library("libvulkan.so", NULL);
 ```
 - For `SL_IID_*` the table entry is the address of the `SLInterfaceID` variable, which is what
@@ -81,6 +85,10 @@ so_map_library("libvulkan.so", NULL);
   registered first wins, and both give the same result.
 - `egl_glue_set_swap_hook(fn, ctx)` runs `fn` on Unity's render thread before every
   `eglSwapBuffers` (a place to pump input or measure frames).
+- `libmediandk.so` is one of the loader's Android-only libraries: without the `so_map_library(...,
+  NULL)` line above, dlopen of it returns a handle on the shims too (or on
+  `android_mediandk_shims` once registered with `so_register_fake_lib`), and players up to 2021.3
+  take their NDK video path, which fails at the first call instead of before it.
 
 Environment variables: `ANDROID_LOG_LEVEL`, `ANDROID_ASSET_DIR`, `ANDROID_WINDOW_SIZE=WxH`,
 `ANDROID_FBDEV` (default /dev/fb0), `ANDROID_SHIM_LIBEGL` (real libEGL path, default libEGL.so.1
@@ -108,7 +116,8 @@ such a struct, so the pointer Unity passes is already a valid fbdev window. `egl
   `EGL_FRAMEBUFFER_TARGET_ANDROID`, ...). `eglGetConfigAttrib` answers them with 0.
 - `eglCreateContext`: on `EGL_BAD_ATTRIBUTE` retries with only `EGL_CONTEXT_CLIENT_VERSION`.
 - `eglSwapBuffers`: host hook, then the real call. `eglGetProcAddress`: returns the wrappers for
-  wrapped names.
+  wrapped names, NULL for Android's frame-timing functions (see Frame pacing).
+- `eglSurfaceAttrib` (Unity 2020.3+) is not wrapped: Unity's surface is the driver's.
 
 All other `egl*` imports can resolve to the host libEGL directly (`egl_glue_real(name)` returns
 the real symbol). The real libEGL is dlopened on first use, so EGL calls can come from any of
@@ -143,11 +152,31 @@ android_window_set_size(w, h);          // the drawable size: what Unity is told
 | `eglMakeCurrent(host surface, ctx)` | `make_current(ctx)` (`SDL_GL_MakeCurrent(window, ctx)`, which keeps SDL's per-thread current window right); releases and other surfaces go to the real call after `make_current(NULL)` |
 | `eglSwapBuffers(host surface)` | the swap hook, then `swap()` (`SDL_GL_SwapWindow`: KMSDRM flips there, newer SDLs pace Wayland there); the real call if this thread did not make the surface current through `make_current` |
 | `eglSwapInterval` | `swap_interval()` (`SDL_GL_SetSwapInterval`; SDL keeps its own copy for Wayland and KMSDRM) |
+| `eglSurfaceAttrib(host surface)` (2020.3+) | the real surface the host has current; attributes the driver accepted are set again on a surface the window system puts in its place (KMSDRM) |
 | `eglGetProcAddress` | what an import of that name resolves to (the loader's tables in order, these wrappers first without the loader) |
 
 Display, config and contexts are the real EGL objects, so `eglGetCurrentContext`,
 `eglGetConfigAttrib` and `eglGetError` need no wrapping. Not combined with `UA_EGL_PBUFFER` (the
 host never sets a display then).
+
+## Frame pacing (Swappy)
+
+Unity 2019.3+ contains Android Frame Pacing (Swappy, player setting "Optimized Frame Pacing").
+Decision: Swappy stays off, by construction, and Unity presents with `eglSwapBuffers` at its swap
+interval, which the host's display paces (vsync on Mali fbdev, `SDL_GL_SetSwapInterval` on SDL):
+- `AChoreographer_*` are absent from the libandroid shims (dlsym of them answers NULL, as on
+  Android before API 24): Swappy's NDK choreographer cannot start. Implementing them from the
+  host's frame loop would give Swappy callbacks, but its pacing also needs SurfaceFlinger's
+  present times, which no host here has.
+- `eglGetProcAddress` answers NULL for `eglPresentationTimeANDROID`, `eglGetNextFrameIdANDROID`,
+  `eglGetFrameTimestampsANDROID`, `eglGetFrameTimestampSupportedANDROID`,
+  `eglGetCompositorTimingANDROID`, `eglGetCompositorTimingSupportedANDROID`, also when the driver
+  has entry points for them: Swappy's EGL loader needs `eglPresentationTimeANDROID` and disables
+  Swappy without it ("Swappy is disabled"), whatever its choreographer did.
+- Its Java fallback (`com.google.androidgamesdk.ChoreographerCallback`, `SwappyDisplayManager`,
+  loaded through `dalvik.system.InMemoryDexClassLoader` when missing) is runtime/jni's side: those
+  classes should be absent there (FindClass NULL with a cleared exception) so that path fails early.
+- `ANativeWindow_setFrameRate` (2021.3+, dlsym) is absent too: Unity keeps its frame rate.
 
 ## Audio
 
@@ -166,7 +195,7 @@ empties it. Volume and mute are applied in the callback. This covers FMOD's exac
 Unity's armeabi-v7a libraries use the base AAPCS (no `Tag_ABI_VFP_args`): float and double
 arguments and return values go in core registers. This code is armhf (VFP registers). Every shim
 with floating-point arguments or results is marked `SOFTFP` (`__attribute__((pcs("aapcs")))`):
-`ASensor_getResolution` and `AMotionEvent_getX/getY/getAxisValue`. EGL, OpenSL ES and liblog have
+`ASensor_getResolution`, `AMotionEvent_getX/getY/getAxisValue` and `AMediaFormat_setFloat`. EGL, OpenSL ES and liblog have
 no floating-point parameters (varargs always use the base convention). GLES does: Unity gets
 GL functions through dlsym/eglGetProcAddress, and the loader's `softfp_gl.c`/`so_softfp_wrap()`
 provides the thunks; our `eglGetProcAddress` wrapper routes results through it.
@@ -187,12 +216,14 @@ The unit tests pass unchanged on both architectures.
 
 ## Tests
 
-`test/test_shims.c` (202 checks) covers: log formatting and filtering; assets (read/seek bounds,
+`test/test_shims.c` (245 checks) covers: log formatting and filtering; assets (read/seek bounds,
 getBuffer, openFileDescriptor, directory listing, `..` refusal); ALooper callbacks, idents, wake
 and timeout; sensors and input; the window and egl_glue against `test/fake_egl.c` (fbdev size
-follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress; with
-a host display: every mapping above, pass-through for other displays and surfaces, no-op
-destroy/terminate); the same against Mesa with real SDL windows (X11, Wayland) is
+follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress and its
+hidden frame-timing functions; with a host display: every mapping above, `eglSurfaceAttrib` and
+its re-application after a surface replacement, pass-through for other displays and surfaces,
+no-op destroy/terminate); the libmediandk stubs (tables, key strings, a VideoPlayer's call
+sequence failing cleanly); the same EGL against Mesa with real SDL windows (X11, Wayland) is
 `runtime/host/test/display_test.sh`;
 OpenSL ES driven like FMOD (resolved through `android_sles_shims` like dlsym, 4 buffers, 40
 callbacks), checking SDL's disk-driver output sample by sample (sequence order, no gaps, -602 mB

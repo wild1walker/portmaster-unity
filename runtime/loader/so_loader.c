@@ -381,15 +381,19 @@ static libmap *libmap_find(const char *android)
     return NULL;
 }
 
-/* Android-only libraries served by shims when nobody registered a table */
+/* Android-only libraries served by shims when nobody registered a table. libmediandk.so: Unity
+ * 2022.3's libunity needs it (DT_NEEDED, AMediaCodec_* / AMEDIAFORMAT_KEY_* imports); the Android
+ * shims serve stubs that fail cleanly (android/media_ndk.c). A host that maps it to NULL
+ * (so_map_library) keeps dlopen() of it failing (older players then take their JNI path) while
+ * DT_NEEDED and the imports still resolve to the shims. */
 static const char *const g_android_only[] = {
     "liblog.so", "libandroid.so", "libOpenSLES.so", "libjnigraphics.so", "libstdc++.so",
-    "libnativewindow.so", "libsync.so", NULL
+    "libnativewindow.so", "libsync.so", "libmediandk.so", NULL
 };
 
 /* libraries whose dlopen() must fail cleanly (features we do not provide) */
 static const char *const g_denied_prefix[] = {
-    "libmediandk", "libvulkan", "libOpenMAXAL", "libOMX", "libomx", "libstagefright",
+    "libvulkan", "libOpenMAXAL", "libOMX", "libomx", "libstagefright",
     "libaaudio", "libcamera2ndk", "libneuralnetworks", NULL
 };
 
@@ -1526,15 +1530,17 @@ void *so_dlopen(const char *filename, int flags)
 
     if (is_denied(b)) { set_err("dlopen(%s): library not available", filename); goto out; }
     fakelib *f = fakelib_find(b);
+    libmap *lm = libmap_find(b);
+    /* so_map_library(name, NULL) refuses dlopen even for an Android-only library, unless the host
+     * registered a table for it */
+    if (!f && lm && !lm->host) { set_err("dlopen(%s): library not available", filename); goto out; }
     if (f || is_android_only(b)) {
         h = find_handle(H_FAKE, b);
         if (!h) { h = new_handle(H_FAKE, b); h->table = f ? f->table : NULL; }
-        else h->refs++;
+        else { h->refs++; if (f) h->table = f->table; }   /* a table registered since the last dlopen */
         goto out;
     }
-    libmap *lm = libmap_find(b);
     if (lm) {
-        if (!lm->host) { set_err("dlopen(%s): library not available", filename); goto out; }
         h = find_handle(H_HOST, b);
         if (h) { h->refs++; goto out; }
         void *hh = host_open(lm->host, (flags & B_RTLD_GLOBAL) != 0);

@@ -6,6 +6,8 @@
 //   libandroid.so  ANativeWindow_*, AAssetManager_*/AAsset*, AConfiguration_*, ALooper_*,
 //                  AInputEvent_*/AKeyEvent_*/AMotionEvent_*, ASensor* (no sensors)
 //   libOpenSLES.so slCreateEngine + SL_IID_* (engine, output mix, PCM buffer-queue player) -> SDL2
+//   libmediandk.so AMediaCodec_*, AMediaExtractor_*, AMediaFormat_*, AImageReader_*, AImage_*,
+//                  AMediaDataSource_* failing cleanly (no decoder), AMEDIAFORMAT_KEY_* constants
 // EGL translation (ANativeWindow* -> Mali fbdev_window*) lives in egl_glue.h (egl_shims[]).
 #ifndef ANDROID_SHIMS_H
 #define ANDROID_SHIMS_H
@@ -32,14 +34,15 @@ typedef struct { const char *name; void *fn; } so_shim;
 #endif
 
 // ---- shim tables (null-terminated) ---------------------------------------------------------
-extern so_shim android_shims[];       // everything below (liblog + libandroid + libOpenSLES)
+extern so_shim android_shims[];       // everything below (liblog + libandroid + libOpenSLES + libmediandk)
 extern so_shim android_log_shims[];   // liblog.so only
 extern so_shim android_ndk_shims[];   // libandroid.so only
 extern so_shim android_sles_shims[];  // libOpenSLES.so only (SL_IID_* entries point at the variables)
+extern so_shim android_mediandk_shims[]; // libmediandk.so only (AMEDIAFORMAT_KEY_* entries: the variables)
 
 // For the loader's dlopen routing: the table for an Android-only library ("liblog.so",
-// "/system/lib/libOpenSLES.so", ...), or NULL when we have no shim for it (libmediandk.so,
-// libvulkan.so, OMX libs: let dlopen fail, Unity then disables that feature).
+// "/system/lib/libOpenSLES.so", "libmediandk.so", ...), or NULL when we have no shim for it
+// (libvulkan.so, OMX libs: let dlopen fail, Unity then disables that feature).
 const so_shim *android_shims_for_library(const char *path);
 // Lookup by symbol name over android_shims[] (NULL if absent).
 void *android_shims_lookup(const char *name);

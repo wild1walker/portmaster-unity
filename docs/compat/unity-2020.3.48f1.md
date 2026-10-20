@@ -11,12 +11,12 @@ Compared with 2019.4.40f1: a small step for the libraries, a format step for the
 | toolchain | NDK r19, min API 19 / 21, Thumb-2 on armeabi-v7a; REL/RELA + PLT only; arm64 64 KiB aligned |
 
 ## Native imports
-- Same as 2019.4 plus `eglSurfaceAttrib`, `fchmod`, `fdopen`. Not provided: the same four
+- Same as 2019.4 plus `eglSurfaceAttrib`, `fchmod`, `fdopen`. The four 2019.4 lacked
   (`__FD_SET_chk`, `__FD_ISSET_chk`, `android_set_abort_message` on arm64; `__mmap2` in the
-  Mono libraries).
-- `eglSurfaceAttrib` goes to the host libEGL. With the SDL host display, Unity's surface is the
-  glue's fixed handle, so this call needs mapping to the real surface in `egl_host_shims`
-  (otherwise EGL_BAD_SURFACE).
+  Mono libraries) are provided now.
+- `eglSurfaceAttrib` goes to the host libEGL on fbdev. With the SDL host display, Unity's surface
+  is the glue's fixed handle: `egl_host_shims` maps it to the real surface (it was EGL_BAD_SURFACE)
+  and sets the attribute again on a surface SDL's KMSDRM driver puts in its place.
 
 ## JNI
 - RegisterNatives: 45. New `OrientationLockListener.nativeUpdateOrientationLockState(I)`; the
@@ -46,4 +46,4 @@ Compared with 2019.4.40f1: a small step for the libraries, a format step for the
 ## What the tools need for this version
 - everything listed for 2019.4, plus: SerializedFile format 22 in the converter; the new
   `newProxyInstance` signatures and `OrientationLockListener.nativeUpdateOrientationLockState`
-  (done in runtime/jni); `eglSurfaceAttrib` mapping for the SDL display path.
+  (done in runtime/jni). (`eglSurfaceAttrib` on the SDL display path: done.)

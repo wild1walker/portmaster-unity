@@ -23,16 +23,16 @@ loading, startup, input or data conversion) · "-" not applicable.
 | armeabi-v7a code | ARM | ARM | ARM | Thumb-2 | Thumb-2 | Thumb-2 | Thumb-2 |
 | relocations, TLS, IFUNC | REL/RELA ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | segment alignment | 4K ✅ | 4K ✅ | 4K, arm64 64K ✅ | 4K, arm64 64K ✅ | 4K, arm64 64K ✅ | 4K ✅ | **16K all** ✅ (4K kernels) |
-| DT_NEEDED | ✅ | ✅ | ✅ | ✅ (no GLES/stdc++) | ✅ | ✅ (mono-native → SONAME) | ❌ **libmediandk** |
-| imports nobody provides | 0 | 0 | 0 | ❌ 4 | ❌ 4 | ❌ 9 | ❌ 9 + libmediandk set |
-| imports with ABI risk | - | - | - | ⚠️ getpwuid_r, nftw | ⚠️ + eglSurfaceAttrib | ⚠️ + wcstod/wcstof (softfp), statvfs | ⚠️ + `*_l` locale |
+| DT_NEEDED | ✅ | ✅ | ✅ | ✅ (no GLES/stdc++) | ✅ | ✅ (mono-native → SONAME) | ✅ libmediandk (stubs) |
+| imports nobody provides | 0 | 0 | 0 | ✅ 0 (was 4) | ✅ 0 (was 4) | ✅ 0 (was 9) | ✅ 0 (was 9 + 41 libmediandk) |
+| imports with ABI risk | - | - | - | ✅ getpwuid_r, nftw, fnmatch, pathconf translated | ✅ + eglSurfaceAttrib mapped | ✅ + wcstod/wcstof/strtold_l (softfp), statvfs | ✅ + `*_l` (glibc locale objects) |
 | RegisterNatives (count) | 45 ✅ | 45 | 44 | 47 | 45 | 48 | 48 |
 | natives runtime/jni calls | ✅ | ✅ SendMessage(byte[]) | ✅ | ✅ nativeDone()Z | ✅ | ✅ | ✅ nativeInjectEvent(·,int) |
 | AndroidJavaProxy | ✅ (int handle) | ✅ | ✅ | ✅ long handle | ✅ newProxyInstance(UnityPlayer,·) | ✅ invocation errors | ✅ |
 | Java members bound (count) | 398 | 402 | 458 | 487 | 487 | 487 | 395 |
 | of which runtime/jni defines | 250 | 254 | 287 | 306 | 309 | 308 | 304 |
 | UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (callbacks 28/28) | ✅ (27/27) | ✅ (30/30) | ✅ (34/34; GameActivity only from 2023.1) |
-| frame pacing (Swappy) | - | - | - | ⚠️ Java side absent, off without `eglPresentationTimeANDROID` (untested) | ⚠️ | ⚠️ | ⚠️ |
+| frame pacing (Swappy) | - | - | - | ⚠️ off by design: Java side absent, no `eglPresentationTimeANDROID` (untested) | ⚠️ | ⚠️ | ⚠️ |
 | SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | **22** ❌ | 22 ❌ | 22 ❌ |
 | shader serializer | 201708220 ✅ | 201708220 ✅ | 201802150 ⚠️ | 201806140 ❌ segments | 201806140 ❌ | 202012090 ❌ +param entries | 202012090 ❌ |
 | MonoManager engine slots | fixed 48 ✅ | fixed 48 ✅ | ❌ flags (`m_AssemblyTypes`) | ❌ flags | ❌ flags | ❌ flags | ❌ flags |
@@ -44,9 +44,22 @@ loading, startup, input or data conversion) · "-" not applicable.
 Notes on the rows:
 - "imports nobody provides": undefined dynamic symbols of `libmain`, `libunity` (Mono v7a, IL2CPP
   v7a and arm64) and the Mono libraries that are neither in the runtime's shim tables nor in glibc
-  (calls land in the loader's abort stub). 2019.4/2020.3: `__FD_SET_chk`, `__FD_ISSET_chk`,
-  `android_set_abort_message`, `__mmap2`. 2021.3 adds `__strlen_chk`, `__strchr_chk`,
-  `__strrchr_chk`, `__strlcpy_chk`, `sys_signame` (and the FD ones on v7a too).
+  (calls land in the loader's abort stub), counted with `tools/re/shimnames.py` as `playerdiff.py
+  --all-missing` does (weak ones left out). Before the bionic additions: 2019.4/2020.3:
+  `__FD_SET_chk`, `__FD_ISSET_chk`, `android_set_abort_message`, `__mmap2`; 2021.3 added
+  `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`, `__strlcpy_chk`, `sys_signame` (and the FD ones
+  on v7a too); 2022.3 the same 9 plus 41 strong `libmediandk` imports (31 functions, 10
+  `AMEDIAFORMAT_KEY_*` objects). All are provided now (`loader/hybris_compat.c`,
+  `android/media_ndk.c`). Libraries the survey does not cover (a game's `libil2cpp.so`, plugins) can
+  still import others: the loader lists them with `SO_TRACE=1`.
+- "imports with ABI risk": host-resolved calls whose bionic flag values or 32-bit structures differ
+  from glibc's, or that return floating point. Translated in `loader/hybris_compat.c`: `nftw`/`ftw`
+  (BSD `FTW_*` flags and callback types, both ABIs), `fnmatch` (`FNM_NOESCAPE`/`FNM_PATHNAME`
+  swapped), `pathconf`/`fpathconf` (`_PC_*` numbering), `newlocale` (bionic's locale names; glibc
+  objects for the `*_l` calls), `sem_open` (fails with ENOSYS as on Android), and on 32-bit ARM
+  `getpw*` (`struct passwd` without `pw_gecos`), `statvfs`/`fstatvfs` (44-byte struct, 32-bit
+  counts), `mknod`/`mknodat` (32-bit `dev_t`), the `mbstate_t` string conversions (4-byte state);
+  softfp wrappers (`loader/softfp.c`) for `wcstod`, `wcstof`, `strtold_l` and their siblings.
 - "natives runtime/jni calls": the natives `runtime/jni` calls, checked against what each
   libunity/libmain registers. runtime/jni looks them up by name and calls them with the registered
   signature (`runtime/jni/README.md`, "Unity versions"); `runtime/jni/test` runs each version's
@@ -71,16 +84,20 @@ Notes on the rows:
    (2019.4+); all `newProxyInstance` forms and the 2019.4/2021.3 exception paths of
    AndroidJavaProxy are implemented. Tested with each version's native table, not with the real
    players.
-2. **Missing bionic symbols** (2019.4+, more in 2021.3+): `__FD_SET_chk`, `__FD_ISSET_chk`
-   (add `__FD_CLR_chk`), `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`, `__strlcpy_chk`,
-   `android_set_abort_message`, `__mmap2` (32-bit), `sys_signame` (data). Small additions to
-   `loader/hybris_compat.c`. Same place: softfp wrappers for `wcstod`/`wcstof` (2021.3+), and
-   32-bit layout translation for `getpwuid_r` (`struct passwd` without `pw_gecos`), `nftw`
-   (bionic `struct stat` in the callback), `statvfs`/`fstatvfs` (Mono.Posix only).
-3. **libmediandk stub** (2022.3: libunity cannot load without it). A shim table with the
-   `AMediaCodec_*`/`AMediaExtractor_*`/`AMediaFormat_*` functions failing cleanly and the
-   `AMEDIAFORMAT_KEY_*` string objects; register it so the loader's libmediandk refusal does not
-   apply. Video then fails the way it does today on the Java path.
+2. **Missing bionic symbols** (done): bionic's own fortify functions (`__FD_SET_chk`,
+   `__FD_CLR_chk`, `__FD_ISSET_chk`, `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`,
+   `__strlcpy_chk`, `__strlcat_chk`, `__memchr_chk`, `__write_chk`, ... with bionic's checks and
+   "FORTIFY:" messages, then abort), `android_set_abort_message` (printed), `__mmap2`,
+   `sys_signame`/`sys_siglist`; the ABI translations listed under "imports with ABI risk" above.
+   `nftw` mattered beyond its stat layout: glibc's flag and type values would make a recursive
+   delete visit directories first and see them as symlinks.
+3. **libmediandk stub** (done): `android/media_ndk.c` (every call fails the NDK way, the
+   `AMEDIAFORMAT_KEY_*` objects hold the NDK's strings); `libmediandk.so` is one of the loader's
+   Android-only libraries now. The host's `so_map_library("libmediandk.so", NULL)` keeps dlopen of
+   it failing, so 2017.4-2021.3 keep their JNI video path, while 2022.3's DT_NEEDED entry and
+   imports bind to the stubs. Video is skipped either way. (Strictly, the loader treated an
+   unknown DT_NEEDED as a system library already, so libunity 2022.3 loaded before; its first
+   media call would have aborted, and the key objects were zeroed blocks.)
 4. **Converter data formats**: SerializedFile format 22 (2020.1+: 48-byte header, the platform
    word follows the version string at 48) in `android_data.sf_platform_offset`; shader blobs:
    serializers 201802150 / 201806140 / 202012090 in LAYOUTS, segmented blobs with 12-byte entries
@@ -97,13 +114,15 @@ Notes on the rows:
    clipboard, `getScreenBrightness`/`setScreenBrightness` (2021.3), `hidePreservedContent`,
    `setMainSurfaceViewAspectRatio`, activity indicator (2022.3), and the framework members the
    later players read (`View.getDisplay`, display modes, ...).
-7. **Swappy** (2019.3+): decided in runtime/jni: its Java classes and the dex class loaders are
-   absent, so it runs without a choreographer and switches itself off where EGL lacks
-   `eglPresentationTimeANDROID`; the android/EGL layer must keep that function unresolved (or
-   implement `AChoreographer_*` from the host's vsync instead). The converter could also turn
-   `androidUseSwappy` off; it changes pacing, not the picture.
-8. **EGL**: `eglSurfaceAttrib` (2020.3+) on the SDL display path must map the glue's fixed surface
-   handle to the real surface.
+7. ~~**Swappy**~~ (2019.3+), decided: off, by construction (`runtime/android/README.md`, "Frame
+   pacing"). runtime/jni answers its Java classes and the dex class loaders as absent, there is
+   no `AChoreographer_*` in the libandroid shims, and `eglGetProcAddress` answers NULL for
+   Android's frame-timing functions (`eglPresentationTimeANDROID`, `eglGetFrameTimestampsANDROID`,
+   ...), without which Swappy's EGL setup disables it; Unity then presents with `eglSwapBuffers` at
+   its swap interval, paced by the host's display. Untested with a real player. The converter could
+   also turn `androidUseSwappy` off; it changes pacing, not the picture.
+8. **EGL** (done): `eglSurfaceAttrib` (2020.3+) on the SDL display path goes to the real surface
+   (and is set again on a surface KMSDRM puts in its place); on fbdev it is the driver's own.
 9. **Packaging of Android builds** (games owned as APK/AAB): split APKs
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
    (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`;
