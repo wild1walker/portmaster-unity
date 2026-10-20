@@ -10,7 +10,7 @@ using AssemblyName = System.Reflection.AssemblyName;
 
 namespace AsmPatch.Tests;
 
-static class TestMain
+static partial class TestMain
 {
     static int failures, passes;
     static string tmp;
@@ -31,6 +31,7 @@ static class TestMain
             DllEdition();
             NoRewired();
             NoAndroidConstant();
+            InputSystemTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }

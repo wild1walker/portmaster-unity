@@ -27,6 +27,7 @@ static class Survey
         var selects = new Counter();            // EventSystem.SetSelectedGameObject, Selectable.Select, firstSelectedGameObject
         var inputSystemRefs = new Counter();
         var inControlRefs = new Counter();
+        var textEntry = new Counter();          // InputField / TMP_InputField / TouchScreenKeyboard
         var mouseMsgs = new List<string>();
         var pointerTypes = new List<string>();
         var navTypes = new List<string>();
@@ -66,6 +67,7 @@ static class Survey
                             selects.Add(where);
                         if (dt.StartsWith("UnityEngine.InputSystem")) inputSystemRefs.Add(where);
                         if (dt.StartsWith("InControl.") && !asm.Name.Name.StartsWith("InControl")) inControlRefs.Add(where);
+                        if (dt == "UnityEngine.TouchScreenKeyboard" || dt == "UnityEngine.UI.InputField" || dt == "TMPro.TMP_InputField") textEntry.Add(where);
                     }
                 }
             }
@@ -77,15 +79,17 @@ static class Survey
         foreach (var s in rewired) Console.WriteLine("  " + s);
         if (rewired.Count > 0)
             Console.WriteLine("  -> asmpatch rewired-android (Rewired then reads pads through Unity input; android-data adds its Joy<j>Axis<a> axes)");
-        Console.WriteLine("InControl: " + (inControlLib || inControlRefs.N > 0 ? $"yes ({inControlRefs.N} call sites); picks its device profiles at run time (Android profiles by pad name)" : "no"));
+        Console.WriteLine("InControl: " + (inControlLib || inControlRefs.N > 0 ? $"yes ({inControlRefs.N} call sites); picks its device profiles at run time (Android profiles by pad name: UA_PAD_NAME)" : "no"));
         bool isys = names.Contains("Unity.InputSystem");
         Console.WriteLine("Input System package: " + (isys ? $"Unity.InputSystem.dll, {inputSystemRefs.N} call sites in game code{inputSystemRefs.Examples()}" : "no"));
-        if (isys) Console.WriteLine("  (its Android device layouts are compiled in only for Android builds: pads may need more than this; the player setting Active Input Handling decides which stack runs)");
+        if (isys) Console.WriteLine("  -> asmpatch inputsystem-android (a desktop build has no layout for the Android player's pads; keyboard, mouse and touch need nothing)");
         Console.WriteLine("legacy Input (UnityEngine.Input):");
         foreach (var (g, c) in legacy) Console.WriteLine($"  {g,-15} {c.N,4}{c.Examples()}");
         Console.WriteLine($"mouse messages (OnMouse*): {mouseMsgs.Count}{Examples(mouseMsgs)}");
         Console.WriteLine($"UI pointer handlers (IPointer*/IDrag*/IScroll*): {pointerTypes.Count}{Examples(pointerTypes)}");
         Console.WriteLine($"UI navigation: {navTypes.Count} handler types, {selects.N} selection calls (SetSelectedGameObject/Select){selects.Examples()}");
+        Console.WriteLine($"text entry (InputField, TMP_InputField, TouchScreenKeyboard): {textEntry.N}{textEntry.Examples()}" +
+                          (textEntry.N > 0 ? " -> the soft keyboard opens ua_host's on-screen keyboard" : ""));
         Console.WriteLine();
         bool pointerUse = legacy["mouse"].N > 0 || mouseMsgs.Count > 0 || pointerTypes.Count > 0;
         bool padUse = rewired.Count > 0 || inControlLib || legacy["axes/buttons"].N > 0 || selects.N > 0 || navTypes.Count > 0;
