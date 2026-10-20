@@ -35,6 +35,8 @@ class Source:
             self.f = open(src, 'rb')
 
     def read(self, off, n):
+        if n <= 0:
+            return b''               # an empty file's block (no valid Range for it)
         if not self.url:
             self.f.seek(off)
             return self.f.read(n)

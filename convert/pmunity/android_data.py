@@ -837,7 +837,8 @@ def plan(args):
     act = ('sfvideo709' if args.video_bt709 else 'sfvideo') if args.video_shader_pid else 'sfpatch'
     items.append((os.path.join(data, 'Resources', 'unity_builtin_extra'), bex, act))
     # Managed: the Android engine assemblies, the game's own and Unity's extension/BCL assemblies
-    amanaged = os.path.join(pkg, 'Variations', 'mono', 'Managed')
+    il2cpp = getattr(args, 'il2cpp', None)
+    amanaged = os.path.join(pkg, 'Variations', 'il2cpp' if il2cpp else 'mono', 'Managed')
     names = set()
     for n in sorted(os.listdir(amanaged)):
         if n.endswith('.dll'):
@@ -888,6 +889,21 @@ def plan(args):
     for n in sorted(os.listdir(gd)):
         if any(fnmatch.fnmatch(n, g) for g in args.beside):
             items.append((n, os.path.join(gd, n), 'link'))
+    if il2cpp:
+        items = il2cpp_items(args, items, data)
+    return items
+
+
+def il2cpp_items(args, items, data):
+    """--il2cpp: the game's code is the libil2cpp.so `pmunity il2cpp` built; instead of Managed/*.dll
+    and Mono's config the player gets what il2cpp wrote for it (Managed/Metadata/global-metadata.dat,
+    Managed/Resources/*.dat, Managed/etc), as in Unity's IL2CPP Android builds."""
+    info = args.il2cpp_info
+    managed = os.path.join(data, 'Managed') + os.sep
+    items = [it for it in items if not it[0].startswith(managed)]
+    for rel in info['files']:
+        items.append((os.path.join(data, os.path.relpath(rel, 'Data')), os.path.join(args.il2cpp, rel), 'link'))
+    args.managed_names = set(info['assemblies'])
     return items
 
 
@@ -970,6 +986,14 @@ def check_source(args):
             args.warnings.append(f'data of Unity {args.unity}, Android player {args.player_unity}: same line, other patch '
                                  f'(layouts rarely change within a line; the same version is safest)')
     args.runtime = scripting_runtime(src, args.unity)
+    if getattr(args, 'il2cpp', None):
+        ij = os.path.join(args.il2cpp, 'il2cpp.json')
+        if not os.path.isfile(ij):
+            raise UV.Unsupported(f'--il2cpp {args.il2cpp}: no il2cpp.json (the output folder of `pmunity il2cpp`)')
+        args.il2cpp_info = json.load(open(ij))
+        if args.il2cpp_info['unity'] != str(args.unity):
+            raise UV.Unsupported(f'--il2cpp {args.il2cpp} was built for Unity {args.il2cpp_info["unity"]}, the data is {args.unity}')
+        args.runtime = f'IL2CPP ({args.il2cpp_info["abi"]}, metadata v{args.il2cpp_info["metadata_version"]})'
     plugins = os.path.join(src, 'Plugins')
     if os.path.isdir(plugins) and any(not n.startswith('.') for n in os.listdir(plugins)):
         args.warnings.append(f'native plugins in {plugins} ({", ".join(sorted(os.listdir(plugins))[:6])}) are not shipped: '
@@ -1064,6 +1088,9 @@ def main(argv=None):
                     help='an extra dllmap line in the Mono config (P/Invoke DLL -> library)')
     ap.add_argument('--beside', action='append', default=None, metavar='GLOB',
                     help="files of the game's folder (the parent of --src) put beside the APK root (default goggame-*.info)")
+    ap.add_argument('--il2cpp', default=None, metavar='DIR',
+                    help="the output of `pmunity il2cpp` for this data: package for Unity's IL2CPP player (--pkg: the IL2CPP "
+                         "player package) with IL2CPP's metadata instead of the assemblies (docs/il2cpp.md)")
     ap.add_argument('--force', action='store_true', help='redo every file')
     ap.add_argument('--consume-src', action='store_true',
                     help="move the data's files into the tree instead of copying them (and delete what is "
@@ -1092,6 +1119,8 @@ def main(argv=None):
     if re.search(r'\.(apk|obb|zip|jar)$', args.name, re.I):
         sys.exit('--name must not end in .apk/.obb/.zip/.jar: the player would try to open paths under it as a zip')
     args.src, args.pkg, args.out = map(os.path.abspath, (args.src, args.pkg, args.out))
+    if args.il2cpp:
+        args.il2cpp = os.path.abspath(args.il2cpp)
     real_out = os.path.realpath(args.out)
     for ro in [args.src] + ([args.game_managed] if args.game_managed else []):
         if real_out.startswith(os.path.realpath(ro)):
@@ -1417,6 +1446,8 @@ def opts_key(args):
            args.inline_textures]
     if not args.video_shader:
         key.append('no-video-shader')
+    if getattr(args, 'il2cpp', None):
+        key.append('il2cpp=' + args.il2cpp)
     if args.swappy != 'keep' and args.unity.line >= SWAPPY_FROM:     # the setting exists from 2019.3
         key.append('swappy=' + args.swappy)
     return key
@@ -1486,7 +1517,7 @@ def verify(args, items, log):
         bad.append(('Managed', 'no assembly list (MonoManager.m_AssemblyNames, ScriptingAssemblies.json)'))
     for what, names in lists:
         mdir = os.path.join(args.out, args.name, 'assets', 'bin', 'Data', 'Managed')
-        have = lambda a: os.path.exists(os.path.join(mdir, a))
+        have = (lambda a: a in args.managed_names) if getattr(args, 'il2cpp', None) else (lambda a: os.path.exists(os.path.join(mdir, a)))
         game, engine = split_assemblies(names, args.unity)
         miss = [a for a in game if not have(a)]
         if miss:
