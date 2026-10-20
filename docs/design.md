@@ -28,6 +28,7 @@ player under box64, at roughly half the frame rate.
 
 ## Layout
 - `runtime/loader/`   ELF loader for Android .so files on glibc + bionic compatibility wrappers
+                      (armeabi-v7a on armhf; arm64-v8a on aarch64: [arm64.md](arm64.md))
 - `runtime/jni/`      fake JavaVM/JNIEnv and the UnityPlayer Java side written in C
 - `runtime/android/`  shims: liblog, libandroid (ANativeWindow, AAssetManager, ALooper,
                       AConfiguration), OpenSL ES (audio, to SDL2 or a pipe), EGL glue
