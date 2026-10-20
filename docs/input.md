@@ -31,7 +31,7 @@ own assemblies. On the Android player:
 | mouse (`GetMouseButton*`, `mousePosition`, `OnMouse*`, UI pointer events) | Android mouse MotionEvents | pointer mode, `UA_POINTER=1` (below) |
 | touch (`Input.touches`) | Android touch MotionEvents | `UA_POINTER=touch` |
 | [Rewired](https://guavaman.com/projects/rewired/) | decides its platform from the desktop build's compile-time symbols, so it looks for the desktop's input APIs (Linux: libudev) and leaves the Android pad unused | `asmpatch` `rewired-android` (via `pmunity android-data --asmpatch`): Rewired runs as on Android, reading pads through Unity's input. android-data always adds the `Joy<j>Axis<a>` axes it reads (`--rewired-joysticks`) |
-| InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (see below) | `UA_PAD_NAME` if the built-in pad's name matches no profile |
+| InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (below) | `UA_PAD_NAME` that one of its Android profiles knows (`asmpatch --survey` lists them), e.g. `Microsoft X-Box 360 pad` |
 | Input System package (`Unity.InputSystem.dll`) | the engine's Android backend reports keyboards, mice and touchscreens in the package's common formats (they work as they are) and pads as Android game controllers, for which the package has layouts only in Android builds: a desktop build's copy has its own platform's (Linux: SDL) | `asmpatch` `inputsystem-android` (below): the pad is a `Gamepad`. The player setting "Active Input Handling" decides whether the legacy stack runs too |
 | soft keyboard (`TouchScreenKeyboard`, UI `InputField` / `TMP_InputField` on Android) | Unity opens its input dialog (`UnityPlayer.showSoftInput`) | nothing: ua_host's on-screen keyboard (below) |
 
@@ -65,6 +65,28 @@ joysticks) and sensors, which ua_host does not present.
 ```sh
 python -m pmunity android-data ... --asmpatch "/path/to/asmpatch --only=inputsystem-android"
 ```
+
+## InControl
+
+[InControl](https://gallantgames.com/pages/incontrol-introduction) reads pads through Unity's
+legacy joystick input and picks a device profile for each joystick at run time: profiles name
+the platforms they apply to (`IncludePlatforms` / `SupportedPlatforms`, compared with
+`SystemInfo.operatingSystem`, which says Android on the Android player) and the joystick names
+they match (`JoystickNames` or a matcher's `NameLiteral`, and patterns). Nothing of this is
+compiled per platform, so a desktop build runs its Android profiles on the Android player
+unchanged: no patch is needed. What matters is the pad's name (`Input.GetJoystickNames()`, the
+InputDevice name ua_host reports): a name no Android profile matches makes the pad an *unknown
+controller* (raw buttons and axes, not InControl's Action1-4, bumpers, sticks), so the game's
+bindings do nothing. ua_host's pads have the standard Android layout of an Xbox pad, so a port
+sets the name of InControl's Xbox Android profile:
+
+```sh
+UA_PAD_NAME="Microsoft X-Box 360 pad"     # InControl's Xbox360AndroidProfile (also matches /360/)
+```
+
+`asmpatch --survey <Managed>` lists the Android profiles of the game's own InControl (read from
+its profile classes, old constructor style and newer `Define()` style) with the names they
+match, Xbox profiles first, and suggests the first name.
 
 ## The on-screen keyboard
 
@@ -192,7 +214,8 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
   version's dialog calls, in order, for showing, typing (a two-byte character, the caret, the
   character limit), the game's own text and selection, done, cancel, lost focus, the game hiding
   it, the number and decimal pads' filters, a password and a multi-line field, and a pause.
-- `tools/asmpatch/build.sh test`: the Rewired patch on fake Rewired assemblies; the Input System
+- `tools/asmpatch/build.sh test`: the Rewired patch on fake Rewired assemblies; the survey's
+  InControl Android profiles on fake profile classes of both styles; the Input System
   patch on a fake `Unity.InputSystem` (built with Cecil, no package code): the layouts it
   registers on every return, parsed and checked against the player's state format; already
   applied, an Android build of the package, missing methods.

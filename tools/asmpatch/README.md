@@ -64,7 +64,8 @@ also provides is an error: run asmpatch inside that patch command instead (on it
 Which input stacks the game's own assemblies use (not Unity's or the class libraries): Rewired
 (edition, compiled platform), InControl, the Input System package, the legacy `UnityEngine.Input`
 calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointer handlers,
-whether code selects UI elements (pad/keyboard menu navigation), and text entry (`InputField`,
+whether code selects UI elements (pad/keyboard menu navigation), InControl's Android device
+profiles and the pad names they match (so a port can set `UA_PAD_NAME` to one), and text entry (`InputField`,
 `TMP_InputField`, `TouchScreenKeyboard`: the soft keyboard, which ua_host's on-screen keyboard
 answers). The verdict line says whether the
 menus are likely pointer-only (then the port needs ua_host's pointer mode, `UA_POINTER=1`, see

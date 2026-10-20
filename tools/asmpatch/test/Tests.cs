@@ -32,6 +32,7 @@ static partial class TestMain
             NoRewired();
             NoAndroidConstant();
             InputSystemTests();
+            InControlTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }
