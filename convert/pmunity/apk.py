@@ -29,7 +29,8 @@ arm64-v8a players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one
 Refused, with the reason: builds without Unity's player (libmain/libunity) for an ARM ABI, x86-only
 builds, an ABI the target cannot run, Vulkan-only builds (the runtime draws with GLES), IL2CPP
 builds without their metadata, Unity data that is not there (an OBB or asset pack not given), Unity
-versions outside the runtime's range (--any-unity-version), OBBs of another build (--force).
+versions outside the runtime's range (--any-unity-version), VR (headset) builds and OBBs of another
+build (--force).
 """
 import argparse
 import io
@@ -46,6 +47,12 @@ import zipfile
 from . import unity_version as UV
 
 ABIS = ('arm64-v8a', 'armeabi-v7a')
+# headset runtimes (Oculus / Meta, OpenXR, Pico) and VR launcher categories: such builds render for
+# a headset's two eyes and need its tracking
+VR_LIBS = {'libvrapi.so', 'libOVRPlugin.so', 'libopenxr_loader.so', 'libpxr_api.so', 'libPvr_UnitySDK.so',
+           'libovrplatformloader.so', 'libUnityOpenXR.so', 'libgvr.so'}
+VR_CATEGORIES = ('com.oculus.intent.category.VR', 'org.khronos.openxr.intent.category.IMMERSIVE_HMD',
+                 'com.google.intent.category.CARDBOARD', 'com.google.intent.category.DAYDREAM')
 OTHER_ABIS = ('x86', 'x86_64', 'armeabi', 'mips', 'mips64', 'riscv64')
 IL2CPP_MAGIC = 0xFAB11BAF
 GFX = {8: 'GLES2', 11: 'GLES3', 21: 'Vulkan', 17: 'Metal', 16: 'GLCore', 2: 'D3D11'}
@@ -292,6 +299,7 @@ class Manifest:
                     v = m.get('value')
                     self.meta[m.get('name')] = v if v is not None else m.get('resource')
         self.activities = [a.get('name') for a in root.iter('activity')]
+        self.categories = [c.get('name') for c in root.iter('category') if c.get('name')]
         self.gles = None
         self.features = []
         for f in root.iter('uses-feature'):
@@ -619,8 +627,9 @@ def place(src, dst, log):
 # --------------------------------------------------------------------------------------------
 
 def run(inputs, out, target='auto', abi=None, any_version=False, force=False, dry_run=False, log=print):
-    os.makedirs(out, exist_ok=True)
-    tmp = tempfile.mkdtemp(prefix='.apk-', dir=out)
+    if not dry_run:
+        os.makedirs(out, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix='.apk-', dir=None if dry_run else out)
     try:
         return _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log)
     finally:
@@ -738,6 +747,13 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log):
                                                 'libmono.so', 'libMonoPosixHelper.so', 'libmono-native.so', 'libmonosgen-2.0.so')]
     if plugins:
         log(f'native plugins: {", ".join(plugins)}')
+    vr = sorted(set(plugins) & VR_LIBS) + [c for c in mf.categories if c in VR_CATEGORIES] + \
+        [f for f, req in mf.features if req and f.startswith('android.hardware.vr.')]
+    if vr:
+        msg = f'a VR build (headset only: {", ".join(vr)})'
+        if not force:
+            raise Refused(msg + '; --force imports it anyway')
+        notes.append(msg)
     if mf.gles and mf.gles > 0x30002:
         notes.append(f'the manifest asks for OpenGL ES {mf.gles >> 16}.{mf.gles & 0xffff}')
     for nm in notes:

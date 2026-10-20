@@ -410,12 +410,28 @@ int main(int argc, char **argv)
     cfg.height = ANativeWindow_getHeight(win);
     cfg.density_dpi = 160;
     cfg.refresh_rate = display_refresh_rate() > 0 ? (float)display_refresh_rate() : 60.f;
-    // Build.VERSION: 4.4 (API 19) as the ports were made with; an imported Android build reports at
-    // least its minSdkVersion, as any phone it installs on would (UA_SDK_INT overrides)
-    cfg.sdk_int = getenv("UA_SDK_INT") ? atoi(getenv("UA_SDK_INT")) : pj_min_sdk > 19 ? pj_min_sdk : 19;
-    static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1", "6.0", "7.0", "7.1", "8.0", "8.1", "9", "10",
-                                            "11", "12", "12L", "13", "14", "15" };
+    // Build.VERSION: 4.4 (API 19) as the 32-bit ports were made with, 5.1 (API 22) for 64-bit players
+    // (64-bit Android starts at API 21; the loader's ro.build.version.sdk says the same). An imported
+    // Android build reports at least its minSdkVersion, as a phone it installs on would, but at most
+    // 23: from API 24 on, Unity's frame pacing (Swappy) takes the NDK's AChoreographer, which the
+    // libandroid shims do not have, and stops pacing (Unity then waits for vsyncs forever).
+    // UA_SDK_INT overrides; the system property follows.
+#if defined(__aarch64__)
+    const int base_sdk = 22;
+#else
+    const int base_sdk = 19;
+#endif
+    cfg.sdk_int = getenv("UA_SDK_INT") ? atoi(getenv("UA_SDK_INT"))
+                : pj_min_sdk > base_sdk ? (pj_min_sdk < 23 ? pj_min_sdk : 23) : base_sdk;
+    static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1.1", "6.0.1", "7.0", "7.1.2", "8.0.0", "8.1.0", "9",
+                                            "10", "11", "12", "12", "13", "14", "15" };
     cfg.os_release = cfg.sdk_int >= 19 && cfg.sdk_int <= 35 ? releases[cfg.sdk_int - 19] : "4.4.4";
+    if (cfg.sdk_int != base_sdk && !getenv("SO_PROP_ro_build_version_sdk")) {
+        char v[16];
+        snprintf(v, sizeof v, "%d", cfg.sdk_int);
+        setenv("SO_PROP_ro_build_version_sdk", v, 1);
+        setenv("SO_PROP_ro_build_version_release", cfg.os_release, 1);
+    }
     cfg.cpu_count = 4;
     cfg.total_mem = 973LL << 20;
     // what AudioManager reports to FMOD as the output's native rate and buffer size

@@ -288,6 +288,9 @@ class ImportTest(unittest.TestCase):
         self.refused([p], 'give the .obb')
         p = make_apk(os.path.join(self.d, 'nometa.apk'), manifest(), metadata=False)
         self.refused([p], 'global-metadata.dat')
+        p = make_apk(os.path.join(self.d, 'vr.apk'), manifest(), extra={'lib/arm64-v8a/libvrapi.so': b'x'})
+        self.refused([p], 'a VR build')
+        self.assertIn('notes', self.run_apk([p], target='arm64', force=True))
         p = make_apk(os.path.join(self.d, 'b.apk'), manifest())
         orig = A.player_settings
         A.player_settings = lambda z, n, log: {'graphics_apis': [21]}
