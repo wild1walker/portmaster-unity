@@ -273,7 +273,8 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
             r.failed.append((si, why))
     if not plan:
         r.status = 'skipped'
-        r.why = r.failed[0][1] if r.failed else 'no Direct3D 11 vertex/pixel programs'
+        r.why = (r.failed[0][1] if r.failed else f'only VR-only variants, none translatable ({r.dropped})' if r.dropped
+                 else 'no Direct3D 11 vertex/pixel programs')
         r.changed = bool(replace and B.PLATFORM_GLES3PLUS in plats)
         return r
 
@@ -293,7 +294,7 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                 vslot[(vi, fi)] = slot
                 e = entries[vi]
                 out[slot] = B.Entry(e.version, B.GPU_GLES3, [0] * len(e.stats), e.keywords, cache[(vi, fi)].encode('utf-8'),
-                                    dxbc.gl_rest(vsp['m_Channels']['m_SourceMap']))
+                                    dxbc.gl_rest(dxbc.Bindings.parse(e.rest).source_map))
                 r.programs += 1
             used.add(fi)
             twins.append((p['progVertex']['m_SubPrograms'], gl_twin(vsp, vslot[(vi, fi)])))
