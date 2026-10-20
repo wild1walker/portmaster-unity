@@ -468,7 +468,7 @@ void *plugins_dlsym_hook(const char *sym, void *p)
 #define TH_N 256            // thunks available
 #define TH_WORDS 32         // softfp argument words read: r0-r3 and 28 stack words
 #define TH_STACK 32         // hard-float stack words passed
-#define TH_MAXARGS 24
+#define TH_MAXARGS 24             /* = SIG_MAXARGS */
 
 typedef struct { void *fn; char ret; int n; char k[TH_MAXARGS]; unsigned char c[TH_MAXARGS]; } th_sig;
 static th_sig th_sigs[TH_N];
@@ -586,43 +586,56 @@ TH64(0) TH64(1) TH64(2) TH64(3)
 static void *const th_entry[TH_N] = { E64(0) E64(1) E64(2) E64(3) };
 #endif
 
+#define SIG_MAXARGS 24
+typedef struct { char ret; int n; char k[SIG_MAXARGS]; unsigned char c[SIG_MAXARGS]; int floats; } sig_parsed;
+
+// "i,f,F3,s2" -> classes; 0 if malformed (the same check on every architecture)
+static int sig_parse(const char *ret, const char *args, sig_parsed *s)
+{
+    memset(s, 0, sizeof *s);
+    if (!ret || !args || !strchr("vilfd", ret[0]) || !ret[0] || ret[1]) return 0;
+    s->ret = ret[0];
+    s->floats = s->ret == 'f' || s->ret == 'd';
+    if (!strcmp(args, "-")) return 1;
+    const char *p = args;
+    while (*p) {
+        if (s->n >= SIG_MAXARGS) return 0;
+        char k = *p++;
+        int c = 1;
+        if (!strchr("ilfdFDsS", k)) return 0;
+        if (strchr("FDsS", k)) { c = (int)strtol(p, (char **)&p, 10); if (c < 1 || c > 16) return 0; }
+        if (strchr("FD", k) && c > 4) return 0;                // not a homogeneous aggregate
+        s->floats |= strchr("fdFD", k) != NULL;
+        s->k[s->n] = k; s->c[s->n] = (unsigned char)c; s->n++;
+        if (*p == ',') p++;
+        else if (*p) return 0;
+    }
+    return 1;
+}
+
 void *plugins_thunk(void *fn, const char *ret, const char *args)
 {
-    if (!fn || !ret || !args) return NULL;
-    char r = ret[0];
-    if (!strchr("vilfd", r) || ret[1]) return NULL;
+    sig_parsed sp;
+    if (!fn || !sig_parse(ret, args, &sp)) return NULL;
+    if (!sp.floats) return fn;                      // nothing to convert
 #if defined(__arm__) && defined(__ARM_PCS_VFP)
     th_sig s;
     memset(&s, 0, sizeof s);
     s.fn = fn;
-    s.ret = r;
-    int floats = r == 'f' || r == 'd';
-    if (strcmp(args, "-") != 0) {
-        const char *p = args;
-        while (*p) {
-            if (s.n >= TH_MAXARGS) return NULL;
-            char k = *p++;
-            int c = 1;
-            if (strchr("FDsS", k)) { c = (int)strtol(p, (char **)&p, 10); if (c < 1 || c > 16) return NULL; }
-            if (!strchr("ilfdFDsS", k) || (strchr("FD", k) && c > 4)) return NULL;
-            floats |= strchr("fdFD", k) != NULL;
-            s.k[s.n] = k; s.c[s.n] = (unsigned char)c; s.n++;
-            if (*p == ',') p++;
-            else if (*p) return NULL;
-        }
-    }
-    if (!floats) return fn;                         // nothing to convert
+    s.ret = sp.ret;
+    s.n = sp.n;
+    memcpy(s.k, sp.k, sizeof s.k);
+    memcpy(s.c, sp.c, sizeof s.c);
     uint32_t w[TH_WORDS] = { 0 };
     th_frame f;
-    if (!th_layout(&s, w, &f)) return NULL;
+    if (!th_layout(&s, w, &f)) return NULL;         // more argument words than a thunk carries
     pthread_mutex_lock(&th_mu);
     int k = th_used < TH_N ? th_used++ : -1;
     if (k >= 0) th_sigs[k] = s;
     pthread_mutex_unlock(&th_mu);
     return k >= 0 ? th_entry[k] : NULL;
 #else
-    (void)args;
-    return fn;
+    return fn;                                      // AAPCS64 on both sides
 #endif
 }
 
