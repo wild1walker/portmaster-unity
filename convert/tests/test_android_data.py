@@ -111,7 +111,7 @@ class SwappyTest(unittest.TestCase):
         """--swappy (default off) is part of the conversion key only where androidUseSwappy exists
         (2019.3+), so a 2017.4 or 2018.4 conversion is not redone for it"""
         import types
-        base = dict(platform_patch=True, graphics_apis='11', mt_rendering='keep', blit='never', rewired_joysticks=None,
+        base = dict(video_shader=True, platform_patch=True, graphics_apis='11', mt_rendering='keep', blit='never', rewired_joysticks=None,
                     name='Game', async_upload_buffer=None, inline_textures=True, swappy='off')
         old = A.opts_key(types.SimpleNamespace(unity=UV.Version('2017.4.9f1'), **base))
         new = A.opts_key(types.SimpleNamespace(unity=UV.Version('2021.3.16f1'), **base))
