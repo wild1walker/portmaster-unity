@@ -2,7 +2,7 @@
  * fakejni.c - JavaVM / JNIEnv in C (see fakejni.h for the model).
  *
  * Layout reference: Android libnativehelper include_jni/jni.h (vendored in include/, with the
- * JNI_ABI softfp attribute added to every slot). Ideas from FalsoJNI (Vita) and gmloader;
+ * JNI_ABI attribute, softfp on 32-bit ARM, added to every slot). Ideas from FalsoJNI (Vita) and gmloader;
  * the code is our own.
  */
 #define _GNU_SOURCE
@@ -1050,7 +1050,14 @@ void fj_throw(JNIEnv *env, const char *cls, const char *msg)
 /* invocation                                                                              */
 /* ======================================================================================= */
 
+/* A native registered by Android code is called with arguments decoded at run time from its
+ * JNI signature: they are laid out where the callee's calling convention expects them, then the
+ * function is called through a pointer type whose fixed parameter list is long enough for any
+ * signature (FJ_MAXARGS arguments after env and self). */
 #if defined(__arm__)
+/* armeabi-v7a, base AAPCS ("softfp"): every argument is a run of 32-bit words in r0-r3, then on
+ * the stack; 64-bit values start at an even word (register pair / 8-byte aligned slot). The
+ * result comes back in r0 or r0:r1. */
 typedef uint64_t (__attribute__((pcs("aapcs"))) *fn_words_t)(
     uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
     uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
@@ -1058,8 +1065,33 @@ typedef uint64_t (__attribute__((pcs("aapcs"))) *fn_words_t)(
     uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
     uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 #define NWORDS 40
+#elif defined(__aarch64__)
+/* arm64-v8a, AAPCS64 (Android and Linux use the same one): the first 8 integer and pointer
+ * arguments go in x0-x7, the first 8 float and double arguments in v0-v7 (a float as single
+ * precision in s<n>, not promoted), and every argument after its register class has run out
+ * takes the next 8-byte stack slot, in argument order. A pointer type taking 8 integers, 8
+ * doubles and NSTACK more integers makes the compiler fill exactly those registers and slots:
+ * a float travels as a double whose low 32 bits are the float (s<n> is the low half of d<n>),
+ * and a float or narrow integer on the stack sits in the low bytes of its slot, as the callee
+ * reads it. The result comes back in x0 or in d0/s0, so there is one pointer type for each.
+ * NSTACK: env, self and FJ_MAXARGS integers leave 2 + 32 - 8 for the stack, the most possible. */
+#define NSTACK 26
+#define A64_PARAMS \
+    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,             \
+    double, double, double, double, double, double, double, double,                             \
+    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,   \
+    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,   \
+    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t
+typedef uint64_t (*fn_a64_x_t)(A64_PARAMS);
+typedef double (*fn_a64_d_t)(A64_PARAMS);
+#define A64_ARGS(x, v, st) \
+    x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], \
+    st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7], st[8], st[9], st[10], st[11], st[12],   \
+    st[13], st[14], st[15], st[16], st[17], st[18], st[19], st[20], st[21], st[22], st[23], st[24], \
+    st[25]
 #endif
 
+/* The raw result (r0:r1, x0, or the bits of d0 whose low half is s0) as the signature's type. */
 static jvalue ret_from_bits(char r, uint64_t bits)
 {
     jvalue v; v.j = 0;
@@ -1074,12 +1106,12 @@ static jvalue ret_from_bits(char r, uint64_t bits)
     case 'F': memcpy(&v.f, &lo, 4); break;
     case 'J': v.j = (jlong)bits; break;
     case 'D': memcpy(&v.d, &bits, 8); break;
-    default:  v.l = (jobject)(uintptr_t)lo; break;
+    default:  v.l = (jobject)(uintptr_t)bits; break;   /* r0 on ARM (uintptr_t is 32-bit), x0 on AArch64 */
     }
     return v;
 }
 
-jvalue fj_invoke_softfp(void *fn, JNIEnv *env, jobject self, const char *sig, const jvalue *args)
+jvalue fj_invoke_native(void *fn, JNIEnv *env, jobject self, const char *sig, const jvalue *args)
 {
     fj_sig s = parse_sig(sig);
     jvalue none; none.j = 0;
@@ -1121,12 +1153,50 @@ jvalue fj_invoke_softfp(void *fn, JNIEnv *env, jobject self, const char *sig, co
         return ret_from_bits(s.ret, r);
     }
 toolong:
-    fj_log("fj_invoke_softfp: too many argument words for %s", sig);
+    fj_log("fj_invoke_native: too many argument words for %s", sig);
     return none;
+#elif defined(__aarch64__)
+    uint64_t x[8], st[NSTACK];
+    double v[8];
+    int nx = 0, nv = 0, ns = 0;
+    memset(x, 0, sizeof x); memset(v, 0, sizeof v); memset(st, 0, sizeof st);
+    x[nx++] = (uintptr_t)env;
+    x[nx++] = (uintptr_t)self;
+    for (int i = 0; i < s.nargs; i++) {
+        char t = s.a[i];
+        uint64_t b = 0;
+        if (t == 'F' || t == 'D') {
+            if (t == 'F') memcpy(&b, &args[i].f, 4);   /* upper half zero: d<n> = s<n> zero-extended */
+            else memcpy(&b, &args[i].d, 8);
+            if (nv < 8) { memcpy(&v[nv++], &b, 8); continue; }
+        } else {
+            /* narrow values widened like a compiler does (AAPCS64 leaves the upper bits to the
+             * callee, but sign/zero extension is what any callee can rely on) */
+            switch (t) {
+            case 'Z': b = args[i].z; break;
+            case 'B': b = (uint64_t)(int64_t)args[i].b; break;
+            case 'C': b = args[i].c; break;
+            case 'S': b = (uint64_t)(int64_t)args[i].s; break;
+            case 'I': b = (uint64_t)(int64_t)args[i].i; break;
+            case 'J': b = (uint64_t)args[i].j; break;
+            default:  b = (uintptr_t)args[i].l; break;
+            }
+            if (nx < 8) { x[nx++] = b; continue; }
+        }
+        if (ns == NSTACK) { fj_log("fj_invoke_native: too many arguments for %s", sig); return none; }
+        st[ns++] = b;
+    }
+    if (s.ret == 'F' || s.ret == 'D') {
+        double d = ((fn_a64_d_t)fn)(A64_ARGS(x, v, st));
+        uint64_t bits;
+        memcpy(&bits, &d, 8);
+        return ret_from_bits(s.ret, bits);
+    }
+    return ret_from_bits(s.ret, ((fn_a64_x_t)fn)(A64_ARGS(x, v, st)));
 #else
-    /* non-ARM build (host-side unit tests only): support (env, self[, int/obj x3]) */
-    (void)env; (void)self; (void)args;
-    fj_log("fj_invoke_softfp: unsupported on this architecture (%s)", sig);
+    /* other architectures (no Android player to run): natives cannot be called */
+    (void)env; (void)self; (void)args; (void)s;
+    fj_log("fj_invoke_native: unsupported on this architecture (%s)", sig);
     return none;
 #endif
 }
@@ -1185,7 +1255,7 @@ static jvalue invoke(JNIEnv *env, jobject self, fj_method *m, const jvalue *args
     if (t->fn) {
         r = t->fn(env, kind == CALL_STATIC ? (jobject)(t->cls) : self, args, t->ud);
     } else if (t->native_fn) {
-        r = fj_invoke_softfp(t->native_fn, env, kind == CALL_STATIC ? (jobject)t->cls : self, t->sig, args);
+        r = fj_invoke_native(t->native_fn, env, kind == CALL_STATIC ? (jobject)t->cls : self, t->sig, args);
     } else if (o && o->cls == C_Proxy) {
         r = proxy_invoke(env, o, m, args);
     } else {
@@ -1285,7 +1355,7 @@ jvalue fj_call_native_a(const char *cls, const char *name, const char *sig, jobj
         fmt_args(&s, args, a, sizeof a);
         fj_log("-> native %s.%s%s self=%s (%s)", cls, name, n->sig, descr(self, sb, sizeof sb), a);
     }
-    r = fj_invoke_softfp(n->fn, env, self, n->sig, args);
+    r = fj_invoke_native(n->fn, env, self, n->sig, args);
     if (g_trace) {
         fj_sig s = parse_sig(n->sig);
         char rb[200];
@@ -2425,7 +2495,7 @@ static jvalue proxy_invoke(JNIEnv *env, fj_obj *p, fj_method *m, const jvalue *a
         a[3] = fj_l(arr);
     }
     TRACE("proxy -> %s(%llx, %s.%s)", nname, (long long)ptr, m->cls->name, m->name);
-    jvalue res = fj_invoke_softfp(n->fn, env, (jobject)bridge, n->sig, a);
+    jvalue res = fj_invoke_native(n->fn, env, (jobject)bridge, n->sig, a);
     fj_obj *ro = O(res.l);
     if (ro) obj_ref(ro);
     fj_pop_frame();

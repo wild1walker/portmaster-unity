@@ -1,4 +1,4 @@
-/* fakejni unit test (host side, armhf). Run under QEMU: see Makefile `make test`. */
+/* fakejni unit test (host side: armhf, or aarch64). See Makefile `make test` / `test-qemu`. */
 #include "../fakejni.h"
 #include <math.h>
 #include <pthread.h>
@@ -9,7 +9,7 @@ static int fails;
 #define CHECK(c) do { if (!(c)) { printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 static int feq(double a, double b) { return fabs(a - b) < 1e-5; }
 
-int android_side_run(JavaVM *vm);   /* softfp object, integer-only signature */
+int android_side_run(JavaVM *vm);   /* softfp object on ARM, integer-only signature */
 
 /* ---------- handlers for test/Calc ---------- */
 static jvalue h_mix(JNIEnv *env, jobject cls, const jvalue *a, void *ud)
@@ -97,7 +97,7 @@ int main(void)
     fj_class_define("test/Natives", NULL);
     fj_class_absent("com/example/Absent");
 
-    printf("== android side (softfp caller)\n");
+    printf("== android side (Android ABI caller)\n");
     fails += android_side_run(vm);
 
     printf("== host side\n");
@@ -106,7 +106,7 @@ int main(void)
     jmethodID sum = (*env)->GetStaticMethodID(env, calc, "sum", "(IJFD)D");
     CHECK(feq((*env)->CallStaticDoubleMethod(env, calc, sum, (jint)2, (jlong)3, (jfloat)0.25f, (jdouble)0.5), 5.75));
 
-    /* natives registered by the android side, called from C with the softfp ABI */
+    /* natives registered by the android side, called from C with the Android ABI */
     CHECK(fj_native("test/Natives", "mixed", NULL) != NULL);
     CHECK(fj_native("test/Natives", "nope", NULL) == NULL);
     jvalue r = fj_call_native("test/Natives", "mixed", "(IJFDLjava/lang/String;I)D", NULL,
@@ -121,6 +121,22 @@ int main(void)
     CHECK(r.z == JNI_FALSE);
     r = fj_call_native("test/Natives", "str", NULL, NULL, fj_string("n"), (jint)7);
     CHECK(r.l && !strcmp(fj_cstr(r.l), "n:7"));
+    /* more arguments than registers (see nat_wide), host varargs and jvalue[] */
+    double wide = 1 + 2.5 * 2 + 3 * 3 + 4.25 * 4 - 5 * 5 + 6.5 * 6 + 7000000000.0 * 7 + 8.125 * 8 + 9 * 9
+                + 10.5 * 10 - 11 * 11 + 12.75 * 12 + 13 * 13 + 14.5 * 14 + 1 * 15 - 16 * 16 + 17 * 17
+                - 18 * 18 + 19.25 * 19 + 20.5 * 20 + 3 * 21 + 22 * 22;
+    r = fj_call_native("test/Natives", "wide", NULL, NULL, (jint)1, 2.5, (jlong)3, 4.25, (jint)-5, 6.5,
+                       (jlong)7000000000LL, 8.125, (jint)9, 10.5, (jlong)-11, 12.75, (jint)13, 14.5,
+                       (jint)1, (jint)-16, (jint)17, (jint)-18, 19.25, 20.5, fj_string("abc"), (jint)22);
+    CHECK(feq(r.d, wide));
+    jvalue w[22] = { fj_i(1), fj_f(2.5f), fj_j(3), fj_d(4.25), fj_i(-5), fj_f(6.5f), fj_j(7000000000LL),
+                     fj_d(8.125), fj_i(9), fj_f(10.5f), fj_j(-11), fj_d(12.75), fj_i(13), fj_f(14.5f),
+                     fj_z(1), fj_v(), fj_v(), fj_v(), fj_d(19.25), fj_f(20.5f), fj_l(fj_string("xyz")), fj_i(22) };
+    w[15].b = -16; w[16].c = 17; w[17].s = -18;
+    r = fj_call_native_a("test/Natives", "wide", "(IFJDIFJDIFJDIFZBCSDFLjava/lang/String;I)D", NULL, w);
+    CHECK(feq(r.d, wide));
+    r = fj_call_native("test/Natives", "fsum", NULL, NULL, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0);
+    CHECK(feq(r.f, 192.5));
 
     /* fj_call into a handler from C */
     jobject o = fj_new_by_name("test/Calc", NULL, NULL);

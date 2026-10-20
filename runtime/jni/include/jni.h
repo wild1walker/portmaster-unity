@@ -31,7 +31,9 @@
  * base AAPCS ("softfp": float/double arguments and results in core registers), while this
  * port's host is armhf (VFP registers). Every JNI function-table slot is therefore declared
  * with the base procedure-call standard, so both our implementation and any host C code
- * calling through the table agree with what Android code expects. No-op on other targets.
+ * calling through the table agree with what Android code expects. Empty everywhere else: the
+ * arm64-v8a libraries use AAPCS64, which Linux on AArch64 shares (floats in v registers on
+ * both sides), and code built softfp for ARM needs no attribute.
  */
 #ifndef JNI_ABI
 # if defined(__arm__) && defined(__ARM_PCS_VFP)

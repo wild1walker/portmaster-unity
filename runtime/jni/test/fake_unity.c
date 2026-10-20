@@ -1,5 +1,6 @@
 /*
- * A fake libmain + libunity for test_unityplayer: built softfp/freestanding like NDK code. It
+ * A fake libmain + libunity for test_unityplayer: built like NDK code (softfp/freestanding on
+ * 32-bit ARM, ordinary code on AArch64). It
  * registers the same natives as the real libraries (spec/natives.tsv) and, from them, uses the
  * Java APIs the real libunity binds (spec/jni_bindings_libunity.tsv): paths, display metrics,
  * Build fields, SharedPreferences, Choreographer + JNIBridge proxies, Handler/Message,
@@ -83,7 +84,7 @@ static void initJni(JNIEnv *env, jobject player, jobject context)
     R[R_LOCALE_OK] = str_eq(env, (*env)->CallObjectMethod(env, l, (*env)->GetMethodID(env, loc, "getLanguage", "()Ljava/lang/String;")), "en")
                   && str_eq(env, (*env)->CallObjectMethod(env, l, (*env)->GetMethodID(env, loc, "getCountry", "()Ljava/lang/String;")), "US");
 
-    /* PlayerPrefs: SharedPreferences round trip (floats through the softfp paths) */
+    /* PlayerPrefs: SharedPreferences round trip (floats through the Android ABI paths) */
     jstring pname = (*env)->NewStringUTF(env, "com.test.app.v2.playerprefs");
     jobject sp = (*env)->CallObjectMethod(env, context,
         (*env)->GetMethodID(env, ctx, "getSharedPreferences", "(Ljava/lang/String;I)Landroid/content/SharedPreferences;"), pname, (jint)0);

@@ -669,10 +669,22 @@ H(sys_load)
 H(sys_nanoTime)  { return fj_j(up_now_ns()); }
 H(sys_millis)    { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); return fj_j((jlong)ts.tv_sec * 1000 + ts.tv_nsec / 1000000); }
 H(sys_idHash)    { return fj_i((jint)((uintptr_t)a[0].l >> 3)); }
+/* What an Android device running the player's ABI reports: the libraries are built for the
+ * same architecture as this program. */
+#if defined(__aarch64__)
+#define UP_OS_ARCH "aarch64"
+#define UP_CPU_ABI "arm64-v8a"
+#define UP_CPU_ABI2 ""
+#else
+#define UP_OS_ARCH "armv7l"
+#define UP_CPU_ABI "armeabi-v7a"
+#define UP_CPU_ABI2 "armeabi"
+#endif
+
 H(sys_getProperty)
 {
     const char *k = jstr(a[0]);
-    const char *v = !strcmp(k, "os.arch") ? "armv7l" : !strcmp(k, "java.vm.version") ? "2.1.0" :
+    const char *v = !strcmp(k, "os.arch") ? UP_OS_ARCH : !strcmp(k, "java.vm.version") ? "2.1.0" :
                     !strcmp(k, "line.separator") ? "\n" : !strcmp(k, "file.separator") ? "/" :
                     !strcmp(k, "os.name") ? "Linux" : !strcmp(k, "java.io.tmpdir") ? UPC.cache_dir : NULL;
     return fj_l(v ? fj_string(v) : NULL);
@@ -1004,8 +1016,8 @@ static void constants(void)
     fj_static_string(B, "FINGERPRINT", UPC.fingerprint);
     fj_static_string(B, "BOARD", UPC.device);
     fj_static_string(B, "TAGS", "release-keys");
-    fj_static_string(B, "CPU_ABI", "armeabi-v7a");
-    fj_static_string(B, "CPU_ABI2", "armeabi");
+    fj_static_string(B, "CPU_ABI", UP_CPU_ABI);
+    fj_static_string(B, "CPU_ABI2", UP_CPU_ABI2);
     fj_static_string("android/os/Build$VERSION", "INCREMENTAL", "1");
     fj_static_string("android/os/Build$VERSION", "RELEASE", UPC.os_release);
     fj_static_string("android/os/Build$VERSION", "CODENAME", "REL");
