@@ -283,6 +283,135 @@ static void test_window_egl(const char *fakeegl)
     CHECK(egl_glue_real("eglSwapBuffers") == dlsym(lib, "eglSwapBuffers"));
 }
 
+// ---- egl_glue with a host display (UA_DISPLAY=sdl) --------------------------------------------
+// The host's callbacks, standing in for SDL: make_current makes the "real" surface current in the
+// fake libEGL; a swap may replace the real surface (SDL's KMSDRM driver does that).
+static int hd_currents, hd_releases, hd_swaps, hd_interval = -1;
+static void *hd_ctx, *hd_real, *hd_real_next, **hd_current_draw;
+static int hd_make_current(void *user, void *ctx)
+{
+    if (ctx) { hd_currents++; hd_ctx = ctx; *hd_current_draw = hd_real; }
+    else { hd_releases++; *hd_current_draw = NULL; }
+    return 0;
+}
+static int hd_swap(void *user)
+{
+    hd_swaps++;
+    if (hd_real_next) { hd_real = hd_real_next; hd_real_next = NULL; *hd_current_draw = hd_real; }
+    return 0;
+}
+static int hd_swap_interval(void *user, int n) { hd_interval = n; return 0; }
+
+// imports bind to the host table first, then egl_shims (the loader's registration order)
+static void *hegl(const char *name)
+{
+    for (so_shim *s = egl_host_shims; s->name; s++) if (!strcmp(s->name, name)) return s->fn;
+    return egl(name);
+}
+
+static void test_host_display(const char *fakeegl)
+{
+    void *lib = dlopen(fakeegl, RTLD_NOW | RTLD_GLOBAL);
+    CHECK(lib != NULL);
+    if (!lib) return;
+    int *terminates = dlsym(lib, "fake_terminates"), *currents = dlsym(lib, "fake_make_currents");
+    int *destroyed = dlsym(lib, "fake_destroyed_surfaces"), *interval = dlsym(lib, "fake_interval");
+    int *swaps = dlsym(lib, "fake_swaps"), *surface_calls = dlsym(lib, "fake_surface_calls");
+    void **ctx_cfg = dlsym(lib, "fake_last_context_config"), **queried = dlsym(lib, "fake_last_query_surface");
+    hd_current_draw = dlsym(lib, "fake_current_draw");
+    void *(*GetDisplay)(void *) = hegl("eglGetDisplay");
+    unsigned (*Initialize)(void *, int32_t *, int32_t *) = hegl("eglInitialize");
+    unsigned (*Terminate)(void *) = hegl("eglTerminate");
+    unsigned (*ChooseConfig)(void *, const int32_t *, void **, int32_t, int32_t *) = hegl("eglChooseConfig");
+    unsigned (*GetConfigAttrib)(void *, void *, int32_t, int32_t *) = hegl("eglGetConfigAttrib");
+    void *(*CreateContext)(void *, void *, void *, const int32_t *) = hegl("eglCreateContext");
+    void *(*CreateWindowSurface)(void *, void *, void *, const int32_t *) = hegl("eglCreateWindowSurface");
+    unsigned (*DestroySurface)(void *, void *) = hegl("eglDestroySurface");
+    unsigned (*MakeCurrent)(void *, void *, void *, void *) = hegl("eglMakeCurrent");
+    void *(*GetCurrentSurface)(int32_t) = hegl("eglGetCurrentSurface");
+    unsigned (*QuerySurface)(void *, void *, int32_t, int32_t *) = hegl("eglQuerySurface");
+    unsigned (*SwapBuffers)(void *, void *) = hegl("eglSwapBuffers");
+    unsigned (*SwapInterval)(void *, int32_t) = hegl("eglSwapInterval");
+    void *(*GetProcAddress)(const char *) = hegl("eglGetProcAddress");
+    CHECK(terminates && currents && destroyed && interval && swaps && surface_calls && ctx_cfg && queried && hd_current_draw);
+    CHECK(GetDisplay && Initialize && Terminate && ChooseConfig && GetConfigAttrib && CreateContext && CreateWindowSurface &&
+          DestroySurface && MakeCurrent && GetCurrentSurface && QuerySurface && SwapBuffers && SwapInterval && GetProcAddress);
+    if (!hd_current_draw || !queried) return;
+
+    // without a host display the wrappers pass through
+    CHECK(GetDisplay(NULL) == (void *)0xd0);
+    void *const D = (void *)0xd1, *const C = (void *)0xcf, *const S = (void *)0x5e, *const ctx = (void *)0xc0;
+    egl_host_display bad = { D, C, NULL, hd_make_current, hd_swap, hd_swap_interval, NULL };
+    egl_glue_set_host_display(&bad);                       // no surface: refused
+    CHECK(GetDisplay(NULL) == (void *)0xd0);
+    egl_host_display hd = { D, C, S, hd_make_current, hd_swap, hd_swap_interval, NULL };
+    egl_glue_set_host_display(&hd);
+    hd_real = S;
+
+    CHECK(GetDisplay(NULL) == D);
+    int32_t major = 0, minor = 0;
+    CHECK(Initialize(D, &major, &minor) == 1 && major == 1 && minor == 4);
+    const int32_t cattr[] = { 0x3024, 8, 0x3142 /* RECORDABLE_ANDROID */, 1, 0x3033, 4, 0x3038 };
+    void *cfgs[4] = { 0 };
+    int32_t num = -1;
+    CHECK(ChooseConfig(D, cattr, NULL, 0, &num) == 1 && num == 1);
+    CHECK(ChooseConfig(D, cattr, cfgs, 4, &num) == 1 && num == 1 && cfgs[0] == C);
+    CHECK(ChooseConfig(D, cattr, cfgs, 0, &num) == 1 && num == 0);
+    CHECK(ChooseConfig((void *)0xd0, cattr, cfgs, 4, &num) == 1 && cfgs[0] == (void *)0x1);   // another display: as before
+    int32_t v = -1;
+    CHECK(GetConfigAttrib(D, C, 0x3142, &v) == 1 && v == 0);
+    const int32_t ctxattr[] = { 0x3098, 3, 0x3038 };
+    CHECK(CreateContext(D, (void *)0x77, NULL, ctxattr) == ctx && *ctx_cfg == C);   // always the host config
+
+    // Unity's surface handle stands for the host's real surface
+    ANativeWindow *w = android_window_get();
+    int before = *surface_calls;
+    void *H = CreateWindowSurface(D, C, w, NULL);
+    CHECK(H != NULL && H != S);
+    const int32_t srgb[] = { 0x309D, 0x3089, 0x3038 };       // linear-color-space game: warns, still the host surface
+    CHECK(CreateWindowSurface(D, C, w, srgb) == H && *surface_calls == before);
+    v = 0;
+    CHECK(QuerySurface(D, H, 0x3057, &v) == 1 && v == 77 && *queried == S);   // before any make-current: the host's
+
+    int m = *currents;
+    CHECK(MakeCurrent(D, H, H, ctx) == 1 && hd_currents == 1 && hd_ctx == ctx && *currents == m);
+    CHECK(GetCurrentSurface(0x3059) == H && GetCurrentSurface(0x305A) == H);   // IsCurrentInternal
+    CHECK(MakeCurrent(D, NULL, NULL, NULL) == 1 && hd_releases == 1 && *currents == m + 1);
+    CHECK(GetCurrentSurface(0x3059) == NULL);
+    CHECK(MakeCurrent(D, (void *)0x99, (void *)0x99, ctx) == 1 && hd_releases == 2 && *currents == m + 2);  // a pbuffer
+    CHECK(MakeCurrent((void *)0xd0, S, S, ctx) == 1 && hd_currents == 1 && *currents == m + 3);           // another display
+
+    int inc = 1, s0 = *swaps;
+    hook_calls = 0;
+    egl_glue_set_swap_hook(swap_hook, &inc);
+    CHECK(MakeCurrent(D, H, H, ctx) == 1 && hd_currents == 2);
+    CHECK(SwapBuffers(D, H) == 1 && hd_swaps == 1 && hook_calls == 1 && *swaps == s0);
+    // the window system replaces its surface during a swap: the handle follows it
+    void *const S2 = (void *)0x5f00;
+    hd_real_next = S2;
+    CHECK(SwapBuffers(D, H) == 1 && hd_swaps == 2 && GetCurrentSurface(0x3059) == H);
+    CHECK(QuerySurface(D, H, 0x3057, &v) == 1 && *queried == S2);
+    CHECK(SwapBuffers(D, (void *)0x99) == 1 && hd_swaps == 2 && hook_calls == 3 && *swaps == s0 + 1);
+    egl_glue_set_swap_hook(NULL, NULL);
+    CHECK(SwapInterval(D, 2) == 1 && hd_interval == 2 && *interval == -1);
+    CHECK(SwapInterval((void *)0xd0, 0) == 1 && *interval == 0);
+    CHECK(MakeCurrent(D, NULL, NULL, NULL) == 1);
+
+    int d0 = *destroyed;
+    CHECK(DestroySurface(D, H) == 1 && *destroyed == d0);
+    CHECK(DestroySurface(D, (void *)0x99) == 1 && *destroyed == d0 + 1);
+    CHECK(CreateWindowSurface(D, C, w, NULL) == H);           // pause/resume: the same handle again
+    int t0 = *terminates;
+    CHECK(Terminate(D) == 1 && *terminates == t0);
+    CHECK(Terminate((void *)0xd0) == 1 && *terminates == t0 + 1);
+
+    CHECK(GetProcAddress("eglMakeCurrent") == (void *)MakeCurrent && GetProcAddress("eglSwapBuffers") == (void *)SwapBuffers);
+    CHECK(GetProcAddress("eglGetConfigAttrib") == (void *)GetConfigAttrib);
+    CHECK(GetProcAddress("eglFakeOnly") != NULL);
+    egl_glue_set_host_display(NULL);
+    CHECK(GetDisplay(NULL) == (void *)0xd0);
+}
+
 // ---- OpenSL ES, driven like FMOD::OutputOpenSL ------------------------------------------------
 #define BUF_FRAMES 256
 #define NBUF 4
@@ -448,6 +577,7 @@ int main(int argc, char **argv)
     test_assets();
     test_looper_sensors_input();
     test_window_egl(fakeegl);
+    test_host_display(fakeegl);
     const char *drv = getenv("SDL_AUDIODRIVER");
     if (drv && *drv) test_opensles(!strcmp(drv, "disk") ? getenv("SDL_DISKAUDIOFILE") : NULL);
     else fprintf(stderr, "opensles: skipped (set SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=... or =dummy)\n");

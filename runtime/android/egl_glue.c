@@ -13,6 +13,9 @@
 //                           is a pbuffer of the window's size, configs are chosen for pbuffers
 //   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
 //                           passed through the loader's so_softfp_wrap() (float-taking GL calls)
+// With a host display (egl_glue_set_host_display, egl_host_shims[]: an SDL2 window on Wayland,
+// KMSDRM, X11, ...), Unity's display, config, window surface, current-making, swaps and swap
+// interval are mapped onto the host's EGL objects instead (see egl_glue.h).
 #define _GNU_SOURCE
 #include "egl_glue.h"
 #include "android_shims.h"
@@ -23,8 +26,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Own minimal EGL declarations (avoids eglplatform.h's X11 dependency; on 32-bit ARM every
-// EGLNative*Type is one 32-bit word, so void * is ABI-compatible with fbdev, X11 and Android).
+// Own minimal EGL declarations (avoids eglplatform.h's X11 dependency; every EGLNative*Type is one
+// pointer-sized word on 32- and 64-bit ARM, so void * is ABI-compatible with fbdev, X11, Wayland,
+// GBM and Android).
 typedef void *EGLDisplay, *EGLConfig, *EGLSurface, *EGLContext;
 typedef int32_t EGLint;
 typedef unsigned int EGLBoolean;
@@ -43,6 +47,8 @@ typedef void (*eglproc)(void);
 #define EGL_PBUFFER_BIT 0x0001
 #define EGL_WIDTH 0x3057
 #define EGL_HEIGHT 0x3056
+#define EGL_GL_COLORSPACE_SRGB_KHR 0x3089
+#define EGL_DRAW 0x3059
 // Android-only config attributes (EGL_ANDROID_* extensions)
 #define EGL_NATIVE_BUFFER_ANDROID 0x3140
 #define EGL_RECORDABLE_ANDROID 0x3142
@@ -59,6 +65,15 @@ static struct {
     EGLBoolean (*SwapBuffers)(EGLDisplay, EGLSurface);
     eglproc (*GetProcAddress)(const char *);
     EGLint (*GetError)(void);
+    // used with a host display only
+    EGLDisplay (*GetDisplay)(void *);
+    EGLBoolean (*Initialize)(EGLDisplay, EGLint *, EGLint *);
+    EGLBoolean (*Terminate)(EGLDisplay);
+    EGLBoolean (*MakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+    EGLBoolean (*DestroySurface)(EGLDisplay, EGLSurface);
+    EGLBoolean (*SwapInterval)(EGLDisplay, EGLint);
+    EGLBoolean (*QuerySurface)(EGLDisplay, EGLSurface, EGLint, EGLint *);
+    EGLSurface (*GetCurrentSurface)(EGLint);
 } real;
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
@@ -83,6 +98,8 @@ static void load_real(void)
 #define R(f) *(void **)&real.f = dlsym(real.lib, "egl" #f)
     R(CreateWindowSurface); R(ChooseConfig); R(GetConfigAttrib); R(CreateContext);
     R(SwapBuffers); R(GetProcAddress); R(GetError); R(CreatePbufferSurface);
+    R(GetDisplay); R(Initialize); R(Terminate); R(MakeCurrent); R(DestroySurface); R(SwapInterval);
+    R(QuerySurface); R(GetCurrentSurface);
 #undef R
 }
 
@@ -236,4 +253,198 @@ static eglproc shim_eglGetProcAddress(const char *name)
     // GL functions taking floats need a softfp->hardfp thunk for Unity's armeabi-v7a code.
     if (p && so_softfp_wrap) p = (eglproc)so_softfp_wrap(name, (void *)p);
     return p;
+}
+
+// ---- host display (egl_glue.h) -------------------------------------------------------------------
+// Set once before Unity starts (its threads are created afterwards), read-only from then on.
+static egl_host_display g_host;
+static int g_host_set;
+
+// Unity's handle for the host's window surface: a token that never changes, because the window
+// system's surface may (SDL's KMSDRM driver recreates it inside SDL_GL_SwapWindow after a fullscreen
+// switch or a VT switch). Mapped to the real surface wherever Unity passes or gets one back.
+static char g_host_token;
+#define HOST_SURFACE ((EGLSurface)&g_host_token)
+static __thread EGLSurface t_host_real;   // the host's real surface as this thread has it current
+static EGLSurface g_host_real;            // the latest one any thread saw (atomic)
+
+void egl_glue_set_host_display(const egl_host_display *d)
+{
+    if (d && d->display && d->config && d->surface && d->make_current && d->swap) {
+        g_host = *d;
+        g_host_real = d->surface;
+        g_host_set = 1;
+        SHIM_TRACE("host display %p: config %p, surface %p", d->display, d->config, d->surface);
+    } else {
+        memset(&g_host, 0, sizeof g_host);
+        g_host_real = NULL;
+        g_host_set = 0;
+    }
+}
+
+static int host_dpy(EGLDisplay d) { return g_host_set && d == g_host.display; }
+
+static EGLSurface host_real_surface(void)
+{
+    EGLSurface s = t_host_real;
+    return s ? s : __atomic_load_n(&g_host_real, __ATOMIC_ACQUIRE);
+}
+
+// After make_current or a swap: the surface the host has current now.
+static void host_track_current(void)
+{
+    EGLSurface s = real.GetCurrentSurface ? real.GetCurrentSurface(EGL_DRAW) : NULL;
+    t_host_real = s;
+    if (s) __atomic_store_n(&g_host_real, s, __ATOMIC_RELEASE);
+}
+
+static EGLDisplay host_eglGetDisplay(void *native)
+{
+    if (!g_host_set) return ensure() && real.GetDisplay ? real.GetDisplay(native) : NULL;
+    SHIM_TRACE("eglGetDisplay(%p) = host display %p", native, g_host.display);
+    return g_host.display;
+}
+
+// The host initialized its display: a second eglInitialize only reports the version.
+static EGLBoolean host_eglInitialize(EGLDisplay d, EGLint *major, EGLint *minor)
+{
+    if (!ensure() || !real.Initialize) return EGL_FALSE;
+    return real.Initialize(d, major, minor);
+}
+
+// Unity's teardown must not terminate the display the host's window lives on.
+static EGLBoolean host_eglTerminate(EGLDisplay d)
+{
+    if (host_dpy(d)) { SHIM_TRACE("eglTerminate(host display): kept"); return EGL_TRUE; }
+    return ensure() && real.Terminate ? real.Terminate(d) : EGL_FALSE;
+}
+
+// Only the host's config: its surface was created with it, and Mesa (among others) wants a
+// context's config to be the surface's. Unity checks it with eglGetConfigAttrib like any other
+// and falls back to its closest match when it is not what it asked for.
+static EGLBoolean host_eglChooseConfig(EGLDisplay d, const EGLint *attribs, EGLConfig *cfgs, EGLint size, EGLint *num)
+{
+    if (!host_dpy(d)) return shim_eglChooseConfig(d, attribs, cfgs, size, num);
+    trace_attribs("eglChooseConfig attribs (host config returned)", attribs);
+    if (!num) return EGL_FALSE;
+    *num = 0;
+    if (!cfgs) *num = 1;
+    else if (size > 0) { cfgs[0] = g_host.config; *num = 1; }
+    return EGL_TRUE;
+}
+
+static EGLContext host_eglCreateContext(EGLDisplay d, EGLConfig cfg, EGLContext share, const EGLint *attribs)
+{
+    if (!host_dpy(d)) return shim_eglCreateContext(d, cfg, share, attribs);
+    if (cfg != g_host.config) SHIM_TRACE("eglCreateContext: config %p -> host config %p", cfg, g_host.config);
+    return shim_eglCreateContext(d, g_host.config, share, attribs);
+}
+
+static EGLSurface host_eglCreateWindowSurface(EGLDisplay d, EGLConfig cfg, void *win, const EGLint *attribs)
+{
+    if (!host_dpy(d)) return shim_eglCreateWindowSurface(d, cfg, win, attribs);
+    ensure();
+    trace_attribs("eglCreateWindowSurface attribs (host surface returned)", attribs);
+    if (win && !android_window_is_ours(win)) SHIM_WARN("egl_glue: eglCreateWindowSurface with a foreign window %p", win);
+    // A linear-color-space game asks for an sRGB window surface; the host's is created up front.
+    static int warned;
+    for (const EGLint *a = attribs; a && a[0] != EGL_NONE && !warned; a += 2)
+        if (a[0] == EGL_GL_COLORSPACE_KHR && a[1] == EGL_GL_COLORSPACE_SRGB_KHR) {
+            EGLint cs = 0;
+            if (!real.QuerySurface || !real.QuerySurface(d, host_real_surface(), EGL_GL_COLORSPACE_KHR, &cs)) cs = 0;
+            if (real.GetError) real.GetError();
+            if (cs != EGL_GL_COLORSPACE_SRGB_KHR) {
+                SHIM_WARN("egl_glue: Unity asks for an sRGB window surface (linear color space) but the host's is not "
+                          "(set UA_DISPLAY_SRGB=1)");
+                warned = 1;
+            }
+        }
+    return HOST_SURFACE;
+}
+
+static EGLBoolean host_eglDestroySurface(EGLDisplay d, EGLSurface s)
+{
+    if (host_dpy(d) && s == HOST_SURFACE) { SHIM_TRACE("eglDestroySurface(host surface): kept"); return EGL_TRUE; }
+    return ensure() && real.DestroySurface ? real.DestroySurface(d, s) : EGL_FALSE;
+}
+
+static EGLBoolean host_eglMakeCurrent(EGLDisplay d, EGLSurface draw, EGLSurface read, EGLContext ctx)
+{
+    if (!ensure() || !real.MakeCurrent) return EGL_FALSE;
+    if (!host_dpy(d)) return real.MakeCurrent(d, draw, read, ctx);
+    if (ctx && draw == HOST_SURFACE && read == HOST_SURFACE) {
+        if (g_host.make_current(g_host.user, ctx) != 0) return EGL_FALSE;
+        host_track_current();
+        return EGL_TRUE;
+    }
+    // a release or other surfaces: the host first forgets what it made current on this thread
+    g_host.make_current(g_host.user, NULL);
+    t_host_real = NULL;
+    if (draw == HOST_SURFACE) draw = host_real_surface();
+    if (read == HOST_SURFACE) read = host_real_surface();
+    return real.MakeCurrent(d, draw, read, ctx);
+}
+
+// Unity's IsCurrentInternal compares this with its handle before every present.
+static EGLSurface host_eglGetCurrentSurface(EGLint which)
+{
+    if (!ensure() || !real.GetCurrentSurface) return NULL;
+    EGLSurface s = real.GetCurrentSurface(which);
+    return g_host_set && s && s == t_host_real ? HOST_SURFACE : s;
+}
+
+static EGLBoolean host_eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, EGLint *value)
+{
+    if (!ensure() || !real.QuerySurface) return EGL_FALSE;
+    if (host_dpy(d) && s == HOST_SURFACE) s = host_real_surface();
+    return real.QuerySurface(d, s, attr, value);
+}
+
+static EGLBoolean host_eglSwapBuffers(EGLDisplay d, EGLSurface s)
+{
+    if (!ensure() || !real.SwapBuffers) return EGL_FALSE;
+    void (*hook)(void *) = g_swap_hook;
+    if (hook) hook(g_swap_ctx);
+    if (host_dpy(d) && s == HOST_SURFACE) {
+        if (g_host.swap(g_host.user) == 0) { host_track_current(); return EGL_TRUE; }
+        s = host_real_surface();
+    }
+    return real.SwapBuffers(d, s);
+}
+
+static EGLBoolean host_eglSwapInterval(EGLDisplay d, EGLint interval)
+{
+    if (host_dpy(d) && g_host.swap_interval)
+        return g_host.swap_interval(g_host.user, interval) == 0 ? EGL_TRUE : EGL_FALSE;
+    return ensure() && real.SwapInterval ? real.SwapInterval(d, interval) : EGL_FALSE;
+}
+
+static eglproc host_eglGetProcAddress(const char *name);
+
+so_shim egl_host_shims[] = {
+    { "eglGetDisplay", (void *)host_eglGetDisplay },
+    { "eglInitialize", (void *)host_eglInitialize },
+    { "eglTerminate", (void *)host_eglTerminate },
+    { "eglChooseConfig", (void *)host_eglChooseConfig },
+    { "eglCreateContext", (void *)host_eglCreateContext },
+    { "eglCreateWindowSurface", (void *)host_eglCreateWindowSurface },
+    { "eglDestroySurface", (void *)host_eglDestroySurface },
+    { "eglMakeCurrent", (void *)host_eglMakeCurrent },
+    { "eglGetCurrentSurface", (void *)host_eglGetCurrentSurface },
+    { "eglQuerySurface", (void *)host_eglQuerySurface },
+    { "eglSwapBuffers", (void *)host_eglSwapBuffers },
+    { "eglSwapInterval", (void *)host_eglSwapInterval },
+    { "eglGetProcAddress", (void *)host_eglGetProcAddress },
+    { NULL, NULL },
+};
+
+// What an import of the same name resolves to: with the loader, its shim tables in registration
+// order (host replacements, egl_host_shims, egl_shims, ...); without it (tests), this table first.
+static eglproc host_eglGetProcAddress(const char *name)
+{
+    if (!name) return NULL;
+    if (so_shim_lookup) { void *o = so_shim_lookup(name); if (o) return (eglproc)o; }
+    for (so_shim *s = egl_host_shims; s->name; s++)
+        if (!strcmp(s->name, name)) return (eglproc)s->fn;
+    return shim_eglGetProcAddress(name);
 }

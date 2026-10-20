@@ -42,8 +42,10 @@ EGLBoolean eglGetConfigAttrib(EGLDisplay d, EGLConfig c, EGLint attr, EGLint *v)
     return 1;
 }
 
+void *fake_last_context_config;
 EGLContext eglCreateContext(EGLDisplay d, EGLConfig c, EGLContext share, const EGLint *a)
 {
+    fake_last_context_config = c;
     for (int i = 0; a && a[i] != 0x3038; i += 2)
         if (a[i] != 0x3098) { last_error = 0x3004; return NULL; }
     return (EGLContext)0xc0;
@@ -52,6 +54,30 @@ EGLContext eglCreateContext(EGLDisplay d, EGLConfig c, EGLContext share, const E
 EGLBoolean eglSwapBuffers(EGLDisplay d, EGLSurface s) { fake_swaps++; return 1; }
 
 EGLBoolean eglFakeOnly(void) { return 7; }
+
+// What the host-display wrappers pass through (or must not)
+int fake_terminates, fake_make_currents, fake_destroyed_surfaces, fake_interval = -1;
+EGLDisplay eglGetDisplay(void *native) { return (EGLDisplay)0xd0; }
+EGLBoolean eglInitialize(EGLDisplay d, EGLint *major, EGLint *minor)
+{
+    if (major) *major = 1;
+    if (minor) *minor = 4;
+    return 1;
+}
+EGLBoolean eglTerminate(EGLDisplay d) { fake_terminates++; return 1; }
+EGLBoolean eglMakeCurrent(EGLDisplay d, EGLSurface draw, EGLSurface read, EGLContext c) { fake_make_currents++; return 1; }
+EGLBoolean eglDestroySurface(EGLDisplay d, EGLSurface s) { fake_destroyed_surfaces++; return 1; }
+EGLBoolean eglSwapInterval(EGLDisplay d, EGLint n) { fake_interval = n; return 1; }
+void *fake_current_draw, *fake_last_query_surface;
+EGLSurface eglGetCurrentSurface(EGLint which) { return fake_current_draw; }
+EGLBoolean eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, EGLint *v)
+{
+    fake_last_query_surface = s;
+    if (attr == 0x309D) { *v = 0x308A; return 1; }   // EGL_GL_COLORSPACE_KHR: linear
+    if (attr == 0x3057) { *v = 77; return 1; }       // EGL_WIDTH
+    last_error = 0x3004;
+    return 0;
+}
 
 void (*eglGetProcAddress(const char *name))(void)
 {

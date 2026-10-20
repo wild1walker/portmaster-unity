@@ -1,9 +1,11 @@
-// libandroid.so ANativeWindow_*: one window, sized like the framebuffer.
+// libandroid.so ANativeWindow_*: one window, sized like the framebuffer (or as the host says:
+// android_window_set_size, e.g. the drawable size of the host's SDL window, runtime/host/display*.c).
 //
 // The ANativeWindow struct starts with a Mali fbdev `struct fbdev_window { u16 width, height; }`,
 // so the pointer Unity hands to eglCreateWindowSurface is already a valid fbdev native window.
 // egl_glue.c still translates it (android_window_native_handle) to refresh the size from the
-// buffer geometry and to allow a host-provided native window instead.
+// buffer geometry and to allow a host-provided native window instead. With a host display
+// (egl_glue_set_host_display) egl_glue answers with the host's surface and only the size matters.
 #define _GNU_SOURCE
 #include "android_shims.h"
 #include "shim_internal.h"

@@ -90,6 +90,12 @@ then libEGL.so), `ANDROID_SLES_SAMPLES` (SDL buffer in frames, default 512), `AN
 
 ## EGL and the window
 
+Two ways to the screen, picked by the host (`runtime/host/display.c`, `UA_DISPLAY`, see
+`docs/runtime.md`): Mali's fbdev EGL (below, the default on Knulli/H700), or a window the host
+created with SDL2 (next section).
+
+### Mali fbdev
+
 On the device EGL is Mali's fbdev libEGL, whose `EGLNativeWindowType` is
 `struct fbdev_window { unsigned short width, height; }`. Our `struct ANativeWindow` starts with
 such a struct, so the pointer Unity passes is already a valid fbdev window. `egl_shims[]` wraps:
@@ -107,6 +113,41 @@ such a struct, so the pointer Unity passes is already a valid fbdev window. `egl
 All other `egl*` imports can resolve to the host libEGL directly (`egl_glue_real(name)` returns
 the real symbol). The real libEGL is dlopened on first use, so EGL calls can come from any of
 Unity's threads.
+
+### Host display (SDL2: Wayland, KMSDRM, X11, offscreen)
+
+Mesa and vendor GLES drivers on Wayland, KMS/DRM or X11 have no fbdev window type, and on KMSDRM
+presenting is more than `eglSwapBuffers` (GBM buffers, page flips). So the host lets SDL2 create
+the window, the EGL display, config and window surface (`runtime/host/display_sdl.c`), and hands
+them to the glue with `egl_glue_set_host_display()`:
+
+```c
+egl_host_display d = { display, config, surface, make_current, swap, swap_interval, user };
+egl_glue_set_host_display(&d);          // before Unity's first EGL call
+so_add_shims(egl_host_shims);           // before egl_shims (after the host's own GL/EGL hooks)
+android_window_set_size(w, h);          // the drawable size: what Unity is told and renders at
+```
+
+`egl_host_shims[]` maps Unity's calls (libunity 2017.4's `ContextGLES`, `ConfigEGL`,
+`ContextEGL`, `WindowContextEGL`) onto those objects:
+
+| Unity calls | becomes |
+|---|---|
+| `eglGetDisplay(EGL_DEFAULT_DISPLAY)` | the host display; `eglInitialize` only reports its version |
+| `eglTerminate` (ContextGLES::Destroy) | kept (no-op): the host's window lives on that display |
+| `eglChooseConfig` | the host config only. The context's config must be the surface's (Mesa checks equality); Unity checks it with `eglGetConfigAttrib` (depth, stencil, samples, ES3 bit, exact RGBA) and takes its closest match if it differs |
+| `eglCreateContext` (ConfigEGL::Match's probe, the window context, contexts linked to it) | a real new context with the host config; the share context is passed on |
+| `eglCreateWindowSurface(ANativeWindow*)` | a fixed handle standing for the host surface: the window system may replace the real one (SDL's KMSDRM driver recreates it inside `SDL_GL_SwapWindow` after a fullscreen or VT switch, window creation included). An sRGB request on a non-sRGB host surface is logged (`UA_DISPLAY_SRGB=1`) |
+| `eglGetCurrentSurface`, `eglQuerySurface` | that handle when the real current surface is the one the host made current on this thread (Unity's `IsCurrentInternal` compares it before every present); queries go to the real surface |
+| `eglDestroySurface` of it | no-op; the next `eglCreateWindowSurface` returns it again (pause/resume) |
+| `eglMakeCurrent(host surface, ctx)` | `make_current(ctx)` (`SDL_GL_MakeCurrent(window, ctx)`, which keeps SDL's per-thread current window right); releases and other surfaces go to the real call after `make_current(NULL)` |
+| `eglSwapBuffers(host surface)` | the swap hook, then `swap()` (`SDL_GL_SwapWindow`: KMSDRM flips there, newer SDLs pace Wayland there); the real call if this thread did not make the surface current through `make_current` |
+| `eglSwapInterval` | `swap_interval()` (`SDL_GL_SetSwapInterval`; SDL keeps its own copy for Wayland and KMSDRM) |
+| `eglGetProcAddress` | what an import of that name resolves to (the loader's tables in order, these wrappers first without the loader) |
+
+Display, config and contexts are the real EGL objects, so `eglGetCurrentContext`,
+`eglGetConfigAttrib` and `eglGetError` need no wrapping. Not combined with `UA_EGL_PBUFFER` (the
+host never sets a display then).
 
 ## Audio
 
@@ -146,10 +187,13 @@ The unit tests pass unchanged on both architectures.
 
 ## Tests
 
-`test/test_shims.c` (163 checks) covers: log formatting and filtering; assets (read/seek bounds,
+`test/test_shims.c` (202 checks) covers: log formatting and filtering; assets (read/seek bounds,
 getBuffer, openFileDescriptor, directory listing, `..` refusal); ALooper callbacks, idents, wake
 and timeout; sensors and input; the window and egl_glue against `test/fake_egl.c` (fbdev size
-follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress);
+follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress; with
+a host display: every mapping above, pass-through for other displays and surfaces, no-op
+destroy/terminate); the same against Mesa with real SDL windows (X11, Wayland) is
+`runtime/host/test/display_test.sh`;
 OpenSL ES driven like FMOD (resolved through `android_sles_shims` like dlsym, 4 buffers, 40
 callbacks), checking SDL's disk-driver output sample by sample (sequence order, no gaps, -602 mB
 gives half amplitude). The armhf test binary runs in the `ua-android-shims` image (which carries
