@@ -78,9 +78,10 @@ struct up_config {
     void (*on_frame)(void *user);                   /* UnityMain, after each nativeRender() */
     void (*on_vibrate)(void *user, int64_t ms);     /* Vibrator.vibrate; 0 = cancel */
     int  (*on_load_library)(void *user, const char *name); /* System.loadLibrary/UnityPlayer.loadLibrary:
-                                                       a short name ("main"); System.load: a full
-                                                       path (IL2CPP players load libil2cpp.so so);
-                                                       return 1 if loaded (and JNI_OnLoad called) */
+                                                       a bare name ("main", never with a '/');
+                                                       System.load: an absolute path (IL2CPP players
+                                                       load libil2cpp.so so); return 1 if loaded
+                                                       (and JNI_OnLoad called), else 0 */
     void (*on_open_url)(void *user, const char *url);      /* startActivity(ACTION_VIEW) */
     /* FMOD Java output (org.fmod.FMODAudioDevice / AudioTrack replacement): interleaved
      * 16-bit stereo PCM; should block like AudioTrack.write. NULL: the device thread just

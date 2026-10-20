@@ -254,29 +254,100 @@ void up_notify_input_device(int id, int added)
 }
 
 /* ---- Choreographer ------------------------------------------------------------------------ */
+/* Choreographer.getInstance() is the calling thread's, as Android keeps one per Looper. UnityMain's,
+ * the UI thread's and a looper-less thread's is g_choreo: its frame callbacks run on UnityMain
+ * before each nativeRender (UnityPlayer's frame loop). A HandlerThread's runs them on that thread
+ * at the display's vsync times (UPC.refresh_rate), as Android's DisplayEventReceiver does: Unity
+ * 2021.3+ keeps its vsync clock on such a thread ("UnityChoreographer") and UnityMain waits for it
+ * inside nativeRender (AndroidVSync, WaitVSync), so those callbacks cannot wait for UnityMain. A
+ * callback posted while callbacks run goes to the next vsync. */
 #define MAX_FRAME_CB 16
+#define MAX_THREAD_CHOREO 4
+typedef struct choreo {
+    up_looper *l;               /* NULL: run on UnityMain by up_choreographer_tick */
+    jobject obj;                /* the Choreographer (global ref) */
+    struct { jobject cb; int64_t at_ns; } cb[MAX_FRAME_CB];
+    int scheduled;              /* a vsync job is queued on l */
+} choreo;
+static choreo g_ch_main, g_ch_thread[MAX_THREAD_CHOREO];
 static jobject g_choreo;
-static struct { jobject cb; int64_t at_ns; } g_frame_cb[MAX_FRAME_CB];
 static pthread_mutex_t g_choreo_mu = PTHREAD_MUTEX_INITIALIZER;
 
-H(ch_getInstance) { return fj_l(g_choreo); }
+static int64_t vsync_period_ns(void) { return (int64_t)(1e9 / (UPC.refresh_rate > 0 ? UPC.refresh_rate : 60.0f)); }
+static void choreo_vsync(void *arg);
+static void choreo_schedule(choreo *c)      /* g_choreo_mu held */
+{
+    int64_t first = -1, now = up_now_ns(), p = vsync_period_ns();
+    for (int i = 0; i < MAX_FRAME_CB; i++)
+        if (c->cb[i].cb && (first < 0 || c->cb[i].at_ns < first)) first = c->cb[i].at_ns;
+    if (first < 0 || c->scheduled) return;
+    int64_t t = ((first > now ? first : now) / p + 1) * p;   /* the next vsync */
+    c->scheduled = 1;
+    looper_post(c->l, choreo_vsync, c, NULL, (t - now + 999999) / 1000000);
+}
+static void choreo_run(choreo *c, int64_t frame_ns)
+{
+    jobject due[MAX_FRAME_CB];
+    int n = 0;
+    int64_t now = up_now_ns();
+    pthread_mutex_lock(&g_choreo_mu);
+    for (int i = 0; i < MAX_FRAME_CB; i++)
+        if (c->cb[i].cb && c->cb[i].at_ns <= now) { due[n++] = c->cb[i].cb; c->cb[i].cb = NULL; }
+    pthread_mutex_unlock(&g_choreo_mu);
+    for (int i = 0; i < n; i++) {
+        fj_push_frame();
+        fj_call(due[i], "doFrame", "(J)V", (jlong)frame_ns);
+        fj_pop_frame();
+        fj_release(due[i]);
+    }
+}
+static void choreo_vsync(void *arg)         /* on the Choreographer's own thread */
+{
+    choreo *c = arg;
+    int64_t p = vsync_period_ns();
+    pthread_mutex_lock(&g_choreo_mu);
+    c->scheduled = 0;
+    pthread_mutex_unlock(&g_choreo_mu);
+    choreo_run(c, up_now_ns() / p * p);     /* frameTimeNanos: this vsync */
+    pthread_mutex_lock(&g_choreo_mu);
+    choreo_schedule(c);
+    pthread_mutex_unlock(&g_choreo_mu);
+}
+static choreo *choreo_of(jobject ch) { choreo *c = ch ? fj_data(ch) : NULL; return c ? c : &g_ch_main; }
+
+H(ch_getInstance)
+{
+    up_looper *l = t_looper;
+    if (!l || l == &L_main || l == &L_ui) return fj_l(g_choreo);
+    pthread_mutex_lock(&g_choreo_mu);
+    choreo *c = NULL;
+    for (int i = 0; i < MAX_THREAD_CHOREO && !c; i++)
+        if (g_ch_thread[i].l == l || !g_ch_thread[i].l) c = &g_ch_thread[i];
+    if (c && !c->l) { c->l = l; c->obj = fj_global(fj_new_by_name("android/view/Choreographer", c, NULL)); }
+    pthread_mutex_unlock(&g_choreo_mu);
+    if (!c) { up_log("Choreographer: too many looper threads, %s gets UnityMain's", l->name); return fj_l(g_choreo); }
+    return fj_l(c->obj);
+}
 H(ch_post)        /* ud: 1 = postFrameCallbackDelayed(cb, ms) */
 {
+    choreo *c = choreo_of(self);
     pthread_mutex_lock(&g_choreo_mu);
     int i;
-    for (i = 0; i < MAX_FRAME_CB; i++) if (!g_frame_cb[i].cb) break;
+    for (i = 0; i < MAX_FRAME_CB; i++) if (!c->cb[i].cb) break;
     if (i < MAX_FRAME_CB) {
-        g_frame_cb[i].cb = fj_global(a[0].l);
-        g_frame_cb[i].at_ns = up_now_ns() + (ud ? a[1].j * 1000000LL : 0);
+        c->cb[i].cb = fj_global(a[0].l);
+        c->cb[i].at_ns = up_now_ns() + (ud ? a[1].j * 1000000LL : 0);
+        if (c->l) choreo_schedule(c);
     } else up_log("Choreographer: too many frame callbacks");
     pthread_mutex_unlock(&g_choreo_mu);
     return fj_v();
 }
 H(ch_remove)
 {
+    choreo *c = choreo_of(self);
     pthread_mutex_lock(&g_choreo_mu);
     for (int i = 0; i < MAX_FRAME_CB; i++)
-        if (g_frame_cb[i].cb == a[0].l) { fj_release(g_frame_cb[i].cb); g_frame_cb[i].cb = NULL; }
+        if (c->cb[i].cb == a[0].l) { fj_release(c->cb[i].cb); c->cb[i].cb = NULL; }
     pthread_mutex_unlock(&g_choreo_mu);
     return fj_v();
 }
@@ -286,7 +357,16 @@ H(ch_remove)
  * nOnChoreographer(cookie, frameTimeNanos) for each frame it posts; SwappyDisplayManager offers
  * no refresh rate choices (the panel's one rate) and reports none. */
 #define GSDK "com/google/androidgamesdk/"
-H(cc_init)      { fj_set_data(self, (void *)(intptr_t)a[0].j, NULL); return fj_v(); }
+H(cc_init)      /* Swappy (the library) starts only when Unity's Optimized Frame Pacing is on */
+{
+    static int told;
+    if (!told++)
+        up_log("Swappy started (PlayerSettings.androidUseSwappy on). It stays off here (swappy.disable), and "
+               "Unity with that setting on then presents nothing (2019.4) or stops after its first frames "
+               "(2021.3+): pack the data with pmunity android-data --swappy off (the default)");
+    fj_set_data(self, (void *)(intptr_t)a[0].j, NULL);
+    return fj_v();
+}
 H(cc_post)      /* ud: 1 = postFrameCallbackDelayed(ms) */
 {
     jvalue b[2] = { fj_l(self), fj_j(ud ? a[0].j : 0) };
@@ -302,19 +382,7 @@ H(sdm_void)     { return fj_v(); }
 
 void up_choreographer_tick(void)
 {
-    jobject due[MAX_FRAME_CB];
-    int n = 0;
-    int64_t now = up_now_ns();
-    pthread_mutex_lock(&g_choreo_mu);
-    for (int i = 0; i < MAX_FRAME_CB; i++)
-        if (g_frame_cb[i].cb && g_frame_cb[i].at_ns <= now) { due[n++] = g_frame_cb[i].cb; g_frame_cb[i].cb = NULL; }
-    pthread_mutex_unlock(&g_choreo_mu);
-    for (int i = 0; i < n; i++) {
-        fj_push_frame();
-        fj_call(due[i], "doFrame", "(J)V", (jlong)now);
-        fj_pop_frame();
-        fj_release(due[i]);
-    }
+    choreo_run(&g_ch_main, up_now_ns());
 }
 
 /* ---- org.fmod.FMODAudioDevice ----------------------------------------------------------- */
@@ -559,7 +627,7 @@ void up_input_register(void)
     M(IM, "getInputDevice", "(I)Landroid/view/InputDevice;", im_getDevice);
 
     const char *CH = "android/view/Choreographer";
-    g_choreo = fj_global(fj_new_by_name(CH, NULL, NULL));
+    g_choreo = g_ch_main.obj = fj_global(fj_new_by_name(CH, &g_ch_main, NULL));
     SM(CH, "getInstance", "()Landroid/view/Choreographer;", ch_getInstance);
     M(CH, "postFrameCallback", "(Landroid/view/Choreographer$FrameCallback;)V", ch_post);
     MU(CH, "postFrameCallbackDelayed", "(Landroid/view/Choreographer$FrameCallback;J)V", ch_post, 1);
