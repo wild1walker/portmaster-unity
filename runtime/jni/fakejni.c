@@ -1327,6 +1327,36 @@ jvalue fj_call(jobject obj, const char *name, const char *sig, ...)
     return r;
 }
 
+int fj_method_defined(const char *cls, const char *name, const char *sig)
+{
+    fj_class *c = class_get(cls, 0);
+    if (!c || c->placeholder || c->absent) return 0;
+    LOCK();
+    int found = 0;
+    for (int st = 0; st < 2 && !found; st++) {
+        fj_method *m = method_find(c, name, sig, st, 0);
+        found = m && (m->fn || m->native_fn);
+    }
+    UNLOCK();
+    return found;
+}
+
+const char *fj_reflected_sig(jobject member)
+{
+    fj_obj *o = O(member);
+    if (!o || o->kind != K_OBJECT || !o->data) return NULL;
+    if (o->cls == C_Method || class_is_sub(o->cls, C_Method, 0) ||
+        !strcmp(o->cls->name, "java/lang/reflect/Constructor")) {
+        fj_method *m = M((jmethodID)o->data);
+        return m ? m->sig : NULL;
+    }
+    if (o->cls == C_Field) {
+        fj_field *f = (fj_field *)o->data;
+        return f->magic == FJ_MAGIC_F ? f->sig : NULL;
+    }
+    return NULL;
+}
+
 /* natives */
 void *fj_native(const char *cls, const char *name, const char *sig)
 {
@@ -1336,6 +1366,21 @@ void *fj_native(const char *cls, const char *name, const char *sig)
     fj_native_rec *n = native_in(c, name, sig);
     UNLOCK();
     return n ? n->fn : NULL;
+}
+
+const char *fj_native_sig(const char *cls, const char *name)
+{
+    fj_class *c = class_get(cls, 0);
+    if (!c) return NULL;
+    LOCK();
+    fj_native_rec *n = native_in(c, name, NULL);
+    while (n && !n->fn) {                    /* unregistered entries: look for a live one */
+        fj_native_rec *x = n->next;
+        while (x && strcmp(x->name, name)) x = x->next;
+        n = x;
+    }
+    UNLOCK();
+    return n ? n->sig : NULL;
 }
 
 jvalue fj_call_native_a(const char *cls, const char *name, const char *sig, jobject self, const jvalue *args)
@@ -2469,33 +2514,48 @@ static jvalue unbox_value(char t, jobject o)
     return v;
 }
 
+static fj_proxy_handler g_proxy_handler;
+void fj_set_proxy_handler(fj_proxy_handler h) { g_proxy_handler = h; }
+
 static jvalue proxy_invoke(JNIEnv *env, fj_obj *p, fj_method *m, const jvalue *args)
 {
     jvalue r; r.j = 0;
     jlong ptr = fj_get_field((jobject)p, "ptr", "J").j;
     int kind = fj_get_field((jobject)p, "kind", "I").i;
     if (!ptr && kind != FJ_PROXY_REFLECTION) { TRACE("proxy %p disabled; %s ignored", (void *)p, m->name); return r; }
+    int handled = kind == FJ_PROXY_REFLECTION && g_proxy_handler;
     fj_class *bridge = kind == FJ_PROXY_REFLECTION ? class_get("com/unity3d/player/ReflectionHelper", 0)
                                                    : class_get("bitter/jnibridge/JNIBridge", 0);
     const char *nname = kind == FJ_PROXY_REFLECTION ? "nativeProxyInvoke" : "invoke";
-    fj_native_rec *n = bridge ? native_in(bridge, nname, NULL) : NULL;
-    if (!n || !n->fn) { fj_log("proxy call %s.%s but %s not registered", m->cls->name, m->name, nname); return r; }
+    fj_native_rec *n = NULL;
+    if (!handled) {
+        LOCK();
+        n = bridge ? native_in(bridge, nname, NULL) : NULL;
+        UNLOCK();
+        if (!n || !n->fn) { fj_log("proxy call %s.%s but %s not registered", m->cls->name, m->name, nname); return r; }
+    }
     fj_push_frame();
     jobjectArray arr = j_NewObjectArray(env, m->ps.nargs, (jclass)C_Object, NULL);
     for (int i = 0; i < m->ps.nargs; i++) objarray_set(O(arr), i, box_value(m->ps.a[i], args[i]));
-    jvalue a[4];
-    if (kind == FJ_PROXY_REFLECTION) {
-        a[0] = fj_i((jint)ptr);
-        a[1] = fj_l(fj_string(m->name));
-        a[2] = fj_l(arr);
+    jvalue res; res.j = 0;
+    TRACE("proxy -> %s(%llx, %s.%s)", handled ? "handler" : nname, (long long)ptr, m->cls->name, m->name);
+    if (handled) {
+        res.l = g_proxy_handler(env, (jobject)p, ptr, m->name, arr);
     } else {
-        a[0] = fj_j(ptr);
-        a[1] = fj_l((jobject)m->cls);
-        a[2] = fj_l(j_ToReflectedMethod(env, (jclass)m->cls, (jmethodID)m, 0));
-        a[3] = fj_l(arr);
+        jvalue a[4];
+        if (kind == FJ_PROXY_REFLECTION) {
+            /* the proxy id is an int up to Unity 2018.4 and a long from 2019.4 on */
+            a[0] = n->sig[1] == 'J' ? fj_j(ptr) : fj_i((jint)ptr);
+            a[1] = fj_l(fj_string(m->name));
+            a[2] = fj_l(arr);
+        } else {
+            a[0] = fj_j(ptr);
+            a[1] = fj_l((jobject)m->cls);
+            a[2] = fj_l(j_ToReflectedMethod(env, (jclass)m->cls, (jmethodID)m, 0));
+            a[3] = fj_l(arr);
+        }
+        res = fj_invoke_native(n->fn, env, (jobject)bridge, n->sig, a);
     }
-    TRACE("proxy -> %s(%llx, %s.%s)", nname, (long long)ptr, m->cls->name, m->name);
-    jvalue res = fj_invoke_native(n->fn, env, (jobject)bridge, n->sig, a);
     fj_obj *ro = O(res.l);
     if (ro) obj_ref(ro);
     fj_pop_frame();

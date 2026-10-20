@@ -115,9 +115,19 @@ jobjectArray fj_string_array(const char *const *strs, int n);
 /* exceptions: raise from a handler; the JNI caller sees ExceptionCheck() == true */
 void     fj_throw(JNIEnv *env, const char *cls, const char *msg);
 
+/* 1 if `cls` (its superclasses or interfaces) has method name+sig with a C handler or a
+ * registered native (sig NULL: any signature). Placeholders and bare declarations count as 0. */
+int      fj_method_defined(const char *cls, const char *name, const char *sig);
+/* JNI signature of a java.lang.reflect.Method / Constructor / Field object made by
+ * ToReflectedMethod/ToReflectedField ("(I)V", "Ljava/lang/String;"), NULL for anything else. */
+const char *fj_reflected_sig(jobject member);
+
 /* ---- natives registered by the libraries ----------------------------------------------- */
 /* Raw fnPtr from RegisterNatives (sig NULL: match by name only). NULL if not registered. */
 void    *fj_native(const char *cls, const char *name, const char *sig);
+/* The signature a native was registered with (the latest registration of that name), or NULL.
+ * Lets callers adapt to what a given library version registered. Valid for the process. */
+const char *fj_native_sig(const char *cls, const char *name);
 /* Call a registered native with the Android ABI, arguments decoded from the signature:
  * (env, self-or-class, args...). For static natives pass the jclass as self (or NULL: the
  * class itself is passed). Host varargs: pass jint/jboolean/jchar/... as int, jobject as a
@@ -136,11 +146,18 @@ jvalue   fj_invoke_native(void *fn, JNIEnv *env, jobject self, const char *sig,
 /* ---- interface proxies (java.lang.reflect.Proxy) -------------------------------------------- */
 /* Calls on a proxy object (any method not implemented in C) are forwarded to a native:
  *   FJ_PROXY_JNIBRIDGE: bitter/jnibridge/JNIBridge.invoke(J id, Class iface, Method m, Object[] args)
- *   FJ_PROXY_REFLECTION: com/unity3d/player/ReflectionHelper.nativeProxyInvoke(I id, String name, Object[])
+ *   FJ_PROXY_REFLECTION: the handler set with fj_set_proxy_handler (unityplayer: Unity's
+ *     ReflectionHelper invocation handler), or else ReflectionHelper.nativeProxyInvoke(id, String
+ *     name, Object[]) with the id passed as the int or long its registered signature takes.
  * Primitive arguments are boxed (Integer/Long/Float/Double/Boolean), results unboxed.
  * JNIBridge.newInterfaceProxy is built in; ReflectionHelper.newProxyInstance uses this. */
 enum { FJ_PROXY_JNIBRIDGE = 1, FJ_PROXY_REFLECTION = 2 };
 jobject  fj_new_proxy(int kind, jlong id, jobjectArray interfaces);
+/* Handler of FJ_PROXY_REFLECTION calls: gets the proxy, its id, the method name and the boxed
+ * arguments; returns the (boxed) result as a local ref, or NULL. */
+typedef jobject (*fj_proxy_handler)(JNIEnv *env, jobject proxy, jlong id, const char *method,
+                                    jobjectArray args);
+void     fj_set_proxy_handler(fj_proxy_handler h);
 
 /* ---- calling fake-Java methods from C ---------------------------------------------------- */
 /* Invoke a registered Java method (virtual dispatch on obj's class). */
