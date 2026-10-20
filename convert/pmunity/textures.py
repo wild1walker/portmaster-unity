@@ -1,7 +1,7 @@
 """Conversion step `textures`: desktop texture formats -> ASTC, optionally downscaled for a small
 screen.
 
-Mali and most other handheld GPUs cannot sample BC1-BC7 (DXT) textures, so Unity's Android player
+Mali and most other handheld GPUs cannot sample BC1-BC7 (DXT, BPTC, RGTC) textures, so Unity's Android player
 would decompress every one of them to RGBA32 on the CPU when it loads (a 4096x4096 atlas page: 16
 MB on disk becomes 64 MB of RAM and GPU memory). This step decodes each such texture (UnityPy),
 optionally scales it (Lanczos on premultiplied alpha, so transparent texels do not bleed into the
@@ -40,9 +40,13 @@ DEFAULTS = {
     'threads': 0,                # encoder threads, 0 = all cores
 }
 
-# Unity texture formats this step converts: name -> has alpha
+# Unity texture formats this step converts: name -> has alpha. Windows builds also use BC7 (RGBA),
+# BC4 (one channel, sampled as (r, 0, 0, 1)) and BC5 (two, (r, g, 0, 1)); each is decoded to the
+# RGBA a GPU samples from it (texture_image) and encoded like the others. BC6H (HDR half floats)
+# is left as it is: ASTC LDR cannot hold it.
 CONVERTIBLE = {
     'DXT1': False, 'DXT1Crunched': False, 'DXT5': True, 'DXT5Crunched': True, 'BC7': True,
+    'BC4': False, 'BC5': False,
     'RGB24': False, 'RGBA32': True, 'ARGB32': True, 'BGRA32': True,
 }
 
@@ -224,9 +228,21 @@ def _format_name(tree):
         return None
 
 
-def _prepare(o, ch):
+def texture_image(img, fmt_name):
+    """A decoded texture (UnityPy's PIL image) -> the RGBA image a GPU samples from it. UnityPy
+    gives BC4 as luminance (r, r, r); the GPU samples it as (r, 0, 0, 1) (and BC5 as (r, g, 0, 1),
+    which UnityPy's RGB already is)."""
+    if fmt_name == 'BC4':
+        from PIL import Image
+        r = img.convert('L')
+        zero = Image.new('L', r.size, 0)
+        return Image.merge('RGBA', (r, zero, zero, Image.new('L', r.size, 255)))
+    return img.convert('RGBA')
+
+
+def _prepare(o, ch, fmt_name=None):
     """Decoded and scaled mip levels of one texture (runs on the worker thread)."""
-    img = o.read().image.convert('RGBA')
+    img = texture_image(o.read().image, fmt_name)
     return mip_chain(downscale(img, ch.width, ch.height), ch.mips)
 
 
@@ -251,7 +267,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
         nonlocal converted
         while pending:
             pid, o, t, sd, streamed, ch, fut = pending.pop(0)
-            levels = fut.result() if pool else _prepare(o, ch)
+            levels = fut.result() if pool else _prepare(o, ch, _format_name(t))
             blob = b''.join(enc.encode(level, ch.block) for level in levels)
             nlevels = len(levels)
             del levels
@@ -290,7 +306,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
                     t['m_StreamData'] = dict(sd, offset=stream.add(blob))
                     save.append((o, t))
                 continue
-            fut = pool.submit(_prepare, o, ch) if pool else None
+            fut = pool.submit(_prepare, o, ch, _format_name(t)) if pool else None
             finish()                                       # the previous one, while this one is prepared
             pending.append((pid, o, t, sd, streamed, ch, fut))
         finish()

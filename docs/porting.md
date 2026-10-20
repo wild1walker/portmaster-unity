@@ -55,6 +55,12 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | coming (`tools/box64`, `pmunity route`) |
 | `apk` | an Android build of the game | coming (`pmunity apk`) |
 
+Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from = ["d3d11"]` and
+`pmhlslcc` (`tools/hlslcc/build.sh`; docs/shaders.md, "Windows builds"). A Windows build of Unity
+2021.2+ also needs the Unix class libraries, because its own are Windows-only: `python -m
+pmunity.winbcl <Game>_Data <dir>` fetches them from Unity (about 5 MB) and prints the
+`--managed-file` options for `android-data` (in a port: `android_data.args`).
+
 A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`:
 
 ```json
