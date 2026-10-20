@@ -34,7 +34,8 @@ Re-running only redoes files whose source changed (state in <out>/.android_data_
 
 Game-specific additions are options: --managed-file (an assembly to ship instead of the data's
 copy, e.g. a port's helper), --assembly-patch (a command that writes a patched assembly from the
-original game's ones), --root-file (files the game reads from Application.dataPath).
+original game's ones), --asmpatch (tools/asmpatch's generic patches, e.g. Rewired on Android),
+--root-file (files the game reads from Application.dataPath).
 """
 import argparse
 import ctypes
@@ -965,6 +966,26 @@ def check_source(args):
                              f'desktop libraries; a game that P/Invokes them needs ARM builds of them')
 
 
+def run_asmpatch(args, log):
+    """--asmpatch: tools/asmpatch on the game's Managed folder writes the assemblies its patches
+    change into <out>/.asmpatch; they are shipped like --managed-file ones."""
+    src = args.game_managed or os.path.join(args.src, 'Managed')
+    work = os.path.join(args.out, '.asmpatch')
+    shutil.rmtree(work, ignore_errors=True)
+    r = subprocess.run(shlex.split(args.asmpatch) + [src, work], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        log('asmpatch: ' + line)
+    if r.returncode != 0:
+        raise SystemExit(f'asmpatch failed (exit {r.returncode}):\n{r.stdout}{r.stderr}')
+    written = sorted(n for n in os.listdir(work) if n.endswith('.dll')) if os.path.isdir(work) else []
+    clash = [n for n in written if n in dict(args.assembly_patch) or n in {os.path.basename(f) for f in args.managed_file}]
+    if clash:
+        raise SystemExit(f'asmpatch changed {", ".join(clash)}, which --assembly-patch/--managed-file also provide: '
+                         f'run asmpatch on that assembly inside the patch command instead')
+    args.managed_file += [os.path.join(work, n) for n in written]
+    return [line for line in r.stdout.splitlines() if line.startswith(('ok', 'done', 'FAIL'))]
+
+
 def _cmd_key(cmd):
     """State key of an assembly patch command: its text and the modification times of the files it names."""
     parts = [cmd]
@@ -1015,6 +1036,10 @@ def main(argv=None):
                     help='NAME (e.g. Assembly-CSharp.dll) is written by COMMAND, which gets {managed} (the original '
                          'game\'s Managed folder, --game-managed) and {out} (a folder to write NAME into)')
     ap.add_argument('--game-managed', default=None, help="the original game's Managed folder (input of --assembly-patch)")
+    ap.add_argument('--asmpatch', default=None, metavar='COMMAND',
+                    help="tools/asmpatch's command (its path and options, e.g. 'asmpatch --only=rewired-android' or "
+                         "'dotnet asmpatch.dll'): run on the game's Managed folder (--game-managed, else <src>/Managed); "
+                         "the assemblies it changes are shipped instead of the game's copies")
     ap.add_argument('--root-file', action='append', default=[], metavar='NAME',
                     help='a file of --src the game reads from Application.dataPath (placed at the APK root)')
     ap.add_argument('--mono-etc', default=None, metavar='DIR',
@@ -1084,10 +1109,11 @@ def main(argv=None):
                 state = {}
         except Exception:
             state = {}
+    asmpatch_notes = run_asmpatch(args, log) if args.asmpatch else []
     items = plan(args)
     log(f'{len(items)} files planned from {args.src}')
     stats = {}
-    report = {'bundles': {}, 'files': {}, 'notes': []}
+    report = {'bundles': {}, 'files': {}, 'notes': ['asmpatch: ' + n for n in asmpatch_notes]}
     newstate = {'_version': STATE_VERSION, '_opts': opts_key(args)}
     kept = set()                                    # .resS files placed beside their inlined file
     for k, (dst_rel, src, act) in enumerate(items):
