@@ -829,6 +829,13 @@ def plan(args):
             items.append((os.path.join(args.name, n), p, 'link'))
         else:
             args.skipped.append(n)
+    # realtime GI data (Enlighten: GI/level<n>/..), read by scene loads as in an Android build's Data
+    gi = os.path.join(src, 'GI')
+    for r, ds, fs in os.walk(gi):
+        ds.sort()
+        for f in sorted(fs):
+            if not f.startswith('.'):
+                items.append((os.path.join(data, 'GI', os.path.relpath(os.path.join(r, f), gi)), os.path.join(r, f), 'link'))
     items.append((os.path.join(data, 'unity default resources'), os.path.join(pkg, 'Data', 'unity default resources'), 'link'))
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
     # the Android VideoPlayer's shader, made from the desktop one (video.py)
