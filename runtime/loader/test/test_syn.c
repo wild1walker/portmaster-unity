@@ -194,6 +194,10 @@ static void test_mediandk(const char *dir)
     void *(*ext)(void) = (void *(*)(void))sym(m, "syn_media_extractor");
     const char *(*mime)(void) = (const char *(*)(void))sym(m, "syn_media_mime");
     CHECK(ext && ext() == (void *)0x3e7 && mime && mime() && !strcmp(mime(), "mime"), "libmediandk imports");
+    uintptr_t bias = 1;                                     /* the samplers' lock-free lookup */
+    const char *at = so_module_at((void *)ext, &bias);
+    CHECK(at && strstr(at, "libsyn_media.so") && bias == so_base(m) && !so_module_at((void *)&bias, NULL),
+          "so_module_at: %s, bias %#lx", at ? at : "(null)", (unsigned long)bias);
     so_map_library("libmediandk.so", NULL);                 /* the host refuses dlopen of it (ua_host does) */
     CHECK(!so_dlopen("libmediandk.so", 0), "dlopen(libmediandk.so) after so_map_library(NULL)");
     static const so_shim own[] = { { "AMediaExtractor_new", (void *)shim_add }, { NULL, NULL } };

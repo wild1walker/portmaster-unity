@@ -98,20 +98,23 @@ the resource map, so stripped or obfuscated names work) and aapt2's protobuf XML
 
 ## Tested (emulated rig)
 
-Free itch.io Android builds, run with `tools/emu` (`EMU_ARCH=arm64`: native aarch64 container
-with Mesa llvmpipe; `EMU_ARCH=armhf`: QEMU armv7):
-
-| build | route | result |
-|---|---|---|
-| Unity 2020.3.3, IL2CPP, arm64-v8a + armeabi-v7a, Swappy on | arm64 | title menu, 60-70 fps in the rig |
-| Unity 2021.3.4, IL2CPP + Burst, Vulkan first, Swappy on | arm64 | title menu; ~25-29 fps in the rig with Swappy pacing (before: stopped after 3 frames with Swappy off; slowing down to 2 fps when Swappy's callback ran on UnityMain) |
-| Unity 2019.4.18, Mono (bdwgc), armeabi-v7a, portrait | armhf | see docs/compat/README.md |
+Free itch.io Android builds, run with `tools/emu` (`EMU_ARCH=arm64`: a native aarch64 container
+with Mesa llvmpipe; `EMU_ARCH=armhf`: QEMU armv7); the list and results are in
+docs/compat/README.md ("Android builds run"): Unity 2019.4 - 2022.3, Mono (armeabi-v7a) and IL2CPP
+(arm64-v8a, and one build's armeabi-v7a libraries on the 32-bit route), Burst, FMOD, GLES2-only,
+Vulkan-first and Swappy-on builds all reach their title screens. No free build with an OBB was
+found; one was made locally by moving an IL2CPP 2021.3 build's `data.unity3d` into a main OBB with
+the 2021.1+ GUID files, as Unity's "Split Application Binary" does: `pmunity apk` found it beside
+the APK, named it `main.1.<package>.obb`, and the player mounted it and reached the title screen.
 
 ## Debugging
 
 - Symbols: `python -m pmunity player fetch <version> <dir> --backend il2cpp --abi arm64-v8a
   --symbols-only` fetches `libunity.sym.so` / `libmain.sym.so` of the build's exact version (a few
-  MB of range reads), for `tools/analysis/sym.py` and crash reports.
+  MB of range reads), for `tools/analysis/sym.py` (`UA_SYMS`) and crash reports. They fit Mono
+  builds and IL2CPP builds made without engine code stripping; with stripping (the IL2CPP default)
+  the build links its own `libunity.so` (another build id: compare the `NT_GNU_BUILD_ID` notes) and
+  only its exported names are known.
 - `kill -USR2 <pid>` dumps every thread's stack; `UA_PROF_EVERY` / `UA_HITCH_TRACE` sample them
   (runtime/host/hitches.c).
 - `SO_TRACE=1` lists unresolved imports of the game's own libraries (plugins).
