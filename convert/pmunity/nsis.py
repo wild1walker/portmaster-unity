@@ -8,7 +8,7 @@ installers are built with a large-installer NSIS variant: the first header is 36
 entries have 8 parameters instead of 6 and file offsets are 64-bit (both layouts handled).
 Solid installers (one LZMA stream for everything) are refused: use 7-Zip.
 
-usage:
+usage (tools/re/nsisrange.py, or python -m pmunity.nsis):
   nsisrange.py list    SRC                     # path<TAB>block offset<TAB>compressed size
   nsisrange.py extract SRC OUTDIR GLOB...      # extract matching paths (fnmatch, '/' separators)
   SRC: a local file or an http(s) URL (the server must honour Range requests)

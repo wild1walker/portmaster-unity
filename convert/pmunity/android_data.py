@@ -881,9 +881,16 @@ def plan(args):
 
 
 def player_version(pkg):
-    """The Unity version of an Android player package: its ivy.xml (2017.x, 2018.x), else the
-    version string in its Mono libunity.so, else that of its "unity default resources" (the Unity
-    line only: that file can be older than the player)."""
+    """The Unity version of an Android player package: its player.json (`pmunity player fetch`), its
+    ivy.xml (2017.x, 2018.x), else the version string in its Mono libunity.so, else that of its
+    "unity default resources" (the Unity line only: that file can be older than the player)."""
+    pj = os.path.join(pkg, 'player.json')
+    if os.path.isfile(pj):
+        try:
+            with open(pj) as f:
+                return UV.Version(json.load(f)['version'])
+        except (ValueError, KeyError):
+            pass
     ivy = os.path.join(pkg, 'ivy.xml')
     if os.path.isfile(ivy):
         m = re.search(r'unityVersion="([^"]+)"', open(ivy, encoding='utf-8', errors='replace').read())
