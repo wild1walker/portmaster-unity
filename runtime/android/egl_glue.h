@@ -8,8 +8,10 @@ extern "C" {
 #endif
 
 // eglCreateWindowSurface, eglChooseConfig, eglGetConfigAttrib, eglCreateContext, eglSwapBuffers,
-// eglGetProcAddress. Register before the host libEGL so these win; other egl* names resolve to the
-// real libEGL. The real libEGL is dlopen'ed from env ANDROID_SHIM_LIBEGL, else libEGL.so.1 / libEGL.so.
+// eglGetProcAddress. Register before the host libEGL so these win; other egl* names (eglSurfaceAttrib
+// among them) resolve to the real libEGL. The real libEGL is dlopen'ed from env ANDROID_SHIM_LIBEGL,
+// else libEGL.so.1 / libEGL.so. eglGetProcAddress answers NULL for Android's frame-timing functions
+// (eglPresentationTimeANDROID, eglGetFrameTimestampsANDROID, ...), which turns Swappy off.
 extern so_shim egl_shims[];
 
 // A symbol of the real libEGL (dlsym, then its eglGetProcAddress), for the loader's passthrough.
@@ -32,6 +34,8 @@ void egl_glue_set_swap_hook(void (*hook)(void *ctx), void *ctx);
 //   eglCreateContext -> a new context with the host config (Unity's share context passed on)
 //   eglMakeCurrent (host surface) -> make_current; other surfaces or a release -> the real call
 //   eglSwapBuffers (host surface) -> swap hook, then swap; eglSwapInterval -> swap_interval
+//   eglSurfaceAttrib (host surface, Unity 2020.3+) -> the real surface; set again on a surface the
+//                      window system puts in its place
 // Display, config and contexts are the real EGL objects, so eglGetCurrentContext,
 // eglGetConfigAttrib and eglGetError go to the real libEGL unchanged.
 typedef struct egl_host_display {

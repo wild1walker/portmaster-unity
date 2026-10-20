@@ -1,6 +1,6 @@
 // Unit tests for the Android shims, run without a GPU (armhf under QEMU, aarch64 natively): liblog,
-// AAssetManager, ALooper, sensors, ANativeWindow + egl_glue (against fake_egl.c), OpenSL ES on
-// SDL's disk audio driver.
+// AAssetManager, ALooper, sensors, ANativeWindow + egl_glue (against fake_egl.c), the libmediandk
+// stubs, OpenSL ES on SDL's disk audio driver.
 #define _GNU_SOURCE
 #include "android_shims.h"
 #include "egl_glue.h"
@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -281,6 +282,11 @@ static void test_window_egl(const char *fakeegl)
     CHECK(GetProcAddress("eglCreateWindowSurface") == (void *)CreateWindowSurface);
     CHECK(GetProcAddress("eglFakeOnly") != NULL && GetProcAddress("eglNope") == NULL);
     CHECK(egl_glue_real("eglSwapBuffers") == dlsym(lib, "eglSwapBuffers"));
+    // Android's frame timing stays hidden even when the driver has it: Swappy turns itself off
+    CHECK(egl_glue_real("eglPresentationTimeANDROID") != NULL);
+    CHECK(GetProcAddress("eglPresentationTimeANDROID") == NULL && GetProcAddress("eglGetFrameTimestampsANDROID") == NULL);
+    // eglSurfaceAttrib is not wrapped on this path: an import binds to the real one
+    CHECK(egl("eglSurfaceAttrib") == NULL && egl_glue_real("eglSurfaceAttrib") == dlsym(lib, "eglSurfaceAttrib"));
 }
 
 // ---- egl_glue with a host display (UA_DISPLAY=sdl) --------------------------------------------
@@ -318,6 +324,9 @@ static void test_host_display(const char *fakeegl)
     int *destroyed = dlsym(lib, "fake_destroyed_surfaces"), *interval = dlsym(lib, "fake_interval");
     int *swaps = dlsym(lib, "fake_swaps"), *surface_calls = dlsym(lib, "fake_surface_calls");
     void **ctx_cfg = dlsym(lib, "fake_last_context_config"), **queried = dlsym(lib, "fake_last_query_surface");
+    int *attrib_calls = dlsym(lib, "fake_attrib_calls"), *attrib_attr = dlsym(lib, "fake_attrib_attr");
+    int *attrib_value = dlsym(lib, "fake_attrib_value");
+    void **attrib_surface = dlsym(lib, "fake_attrib_surface");
     hd_current_draw = dlsym(lib, "fake_current_draw");
     void *(*GetDisplay)(void *) = hegl("eglGetDisplay");
     unsigned (*Initialize)(void *, int32_t *, int32_t *) = hegl("eglInitialize");
@@ -333,7 +342,10 @@ static void test_host_display(const char *fakeegl)
     unsigned (*SwapBuffers)(void *, void *) = hegl("eglSwapBuffers");
     unsigned (*SwapInterval)(void *, int32_t) = hegl("eglSwapInterval");
     void *(*GetProcAddress)(const char *) = hegl("eglGetProcAddress");
+    unsigned (*SurfaceAttrib)(void *, void *, int32_t, int32_t) = hegl("eglSurfaceAttrib");
     CHECK(terminates && currents && destroyed && interval && swaps && surface_calls && ctx_cfg && queried && hd_current_draw);
+    CHECK(attrib_calls && attrib_attr && attrib_value && attrib_surface && SurfaceAttrib);
+    if (!attrib_calls || !attrib_surface || !SurfaceAttrib) return;
     CHECK(GetDisplay && Initialize && Terminate && ChooseConfig && GetConfigAttrib && CreateContext && CreateWindowSurface &&
           DestroySurface && MakeCurrent && GetCurrentSurface && QuerySurface && SwapBuffers && SwapInterval && GetProcAddress);
     if (!hd_current_draw || !queried) return;
@@ -385,13 +397,22 @@ static void test_host_display(const char *fakeegl)
     hook_calls = 0;
     egl_glue_set_swap_hook(swap_hook, &inc);
     CHECK(MakeCurrent(D, H, H, ctx) == 1 && hd_currents == 2);
-    CHECK(SwapBuffers(D, H) == 1 && hd_swaps == 1 && hook_calls == 1 && *swaps == s0);
-    // the window system replaces its surface during a swap: the handle follows it
+    // eglSurfaceAttrib (Unity 2020.3+) on the handle: the real surface; one the driver refuses is not kept
+    int a0 = *attrib_calls;
+    CHECK(SurfaceAttrib(D, H, 0x3093 /* SWAP_BEHAVIOR */, 0x3095 /* BUFFER_DESTROYED */) == 1 && *attrib_surface == S &&
+          *attrib_attr == 0x3093 && *attrib_value == 0x3095 && *attrib_calls == a0 + 1);
+    CHECK(SurfaceAttrib(D, H, 0x3430 /* TIMESTAMPS_ANDROID */, 1) == 0 && *attrib_surface == S && *attrib_calls == a0 + 2);
+    CHECK(SwapBuffers(D, H) == 1 && hd_swaps == 1 && hook_calls == 1 && *swaps == s0 && *attrib_calls == a0 + 2);
+    // the window system replaces its surface during a swap: the handle follows it, the attribute is set again
     void *const S2 = (void *)0x5f00;
     hd_real_next = S2;
     CHECK(SwapBuffers(D, H) == 1 && hd_swaps == 2 && GetCurrentSurface(0x3059) == H);
     CHECK(QuerySurface(D, H, 0x3057, &v) == 1 && *queried == S2);
-    CHECK(SwapBuffers(D, (void *)0x99) == 1 && hd_swaps == 2 && hook_calls == 3 && *swaps == s0 + 1);
+    CHECK(*attrib_calls == a0 + 3 && *attrib_surface == S2 && *attrib_attr == 0x3093 && *attrib_value == 0x3095);
+    CHECK(SwapBuffers(D, H) == 1 && *attrib_calls == a0 + 3);                          // once
+    CHECK(SurfaceAttrib(D, (void *)0x99, 0x3093, 0x3094) == 1 && *attrib_surface == (void *)0x99);   // a pbuffer
+    CHECK(SurfaceAttrib((void *)0xd0, S, 0x3093, 0x3094) == 1 && *attrib_surface == S);              // another display
+    CHECK(SwapBuffers(D, (void *)0x99) == 1 && hd_swaps == 3 && hook_calls == 4 && *swaps == s0 + 1);
     egl_glue_set_swap_hook(NULL, NULL);
     CHECK(SwapInterval(D, 2) == 1 && hd_interval == 2 && *interval == -1);
     CHECK(SwapInterval((void *)0xd0, 0) == 1 && *interval == 0);
@@ -408,8 +429,92 @@ static void test_host_display(const char *fakeegl)
     CHECK(GetProcAddress("eglMakeCurrent") == (void *)MakeCurrent && GetProcAddress("eglSwapBuffers") == (void *)SwapBuffers);
     CHECK(GetProcAddress("eglGetConfigAttrib") == (void *)GetConfigAttrib);
     CHECK(GetProcAddress("eglFakeOnly") != NULL);
+    CHECK(GetProcAddress("eglSurfaceAttrib") == (void *)SurfaceAttrib);
+    CHECK(GetProcAddress("eglPresentationTimeANDROID") == NULL);
     egl_glue_set_host_display(NULL);
     CHECK(GetDisplay(NULL) == (void *)0xd0);
+}
+
+// ---- libmediandk: stubs failing the NDK way (Unity 2022.3 links against it) ---------------------
+static void *media(const char *name)
+{
+    for (so_shim *s = android_mediandk_shims; s->name; s++) if (!strcmp(s->name, name)) return s->fn;
+    return NULL;
+}
+
+static void test_mediandk(void)
+{
+    CHECK(android_shims_for_library("libmediandk.so") == android_mediandk_shims);
+    CHECK(android_shims_for_library("/system/lib/libmediandk.so") == android_mediandk_shims);
+    int n = 0, in_all = 0;
+    for (so_shim *s = android_mediandk_shims; s->name; s++, n++) in_all += android_shims_lookup(s->name) == s->fn;
+    CHECK(n > 60 && in_all == n);                          // the global table has them too (DT_NEEDED imports)
+
+    // the key constants: data objects holding the NDK's strings
+    static const char *const keys[][2] = {
+        { "AMEDIAFORMAT_KEY_MIME", "mime" }, { "AMEDIAFORMAT_KEY_WIDTH", "width" }, { "AMEDIAFORMAT_KEY_HEIGHT", "height" },
+        { "AMEDIAFORMAT_KEY_DURATION", "durationUs" }, { "AMEDIAFORMAT_KEY_FRAME_RATE", "frame-rate" },
+        { "AMEDIAFORMAT_KEY_COLOR_FORMAT", "color-format" }, { "AMEDIAFORMAT_KEY_STRIDE", "stride" },
+        { "AMEDIAFORMAT_KEY_SAMPLE_RATE", "sample-rate" }, { "AMEDIAFORMAT_KEY_CHANNEL_COUNT", "channel-count" },
+        { "AMEDIAFORMAT_KEY_LANGUAGE", "language" }, { "AMEDIAFORMAT_KEY_ROTATION", "rotation-degrees" },
+        { "AMEDIAFORMAT_KEY_SLICE_HEIGHT", "slice-height" }, { "AMEDIAFORMAT_KEY_COLOR_RANGE", "color-range" },
+        { "AMEDIAFORMAT_KEY_COLOR_STANDARD", "color-standard" }, { "AMEDIAFORMAT_KEY_ENCODER_DELAY", "encoder-delay" },
+    };
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        const char *const *k = media(keys[i][0]);
+        CHECK(k && *k && !strcmp(*k, keys[i][1]));
+    }
+
+    const int32_t UNSUPPORTED = -10002;
+    void *(*ext_new)(void) = media("AMediaExtractor_new");
+    int32_t (*ext_fd)(void *, int, int64_t, int64_t) = media("AMediaExtractor_setDataSourceFd");
+    int32_t (*ext_url)(void *, const char *) = media("AMediaExtractor_setDataSource");
+    size_t (*ext_tracks)(void *) = media("AMediaExtractor_getTrackCount");
+    void *(*ext_format)(void *, size_t) = media("AMediaExtractor_getTrackFormat");
+    ssize_t (*ext_read)(void *, uint8_t *, size_t) = media("AMediaExtractor_readSampleData");
+    int64_t (*ext_time)(void *) = media("AMediaExtractor_getSampleTime");
+    bool (*ext_advance)(void *) = media("AMediaExtractor_advance");
+    int32_t (*ext_delete)(void *) = media("AMediaExtractor_delete");
+    void *(*codec_new)(const char *) = media("AMediaCodec_createDecoderByType");
+    int32_t (*codec_configure)(void *, const void *, void *, void *, uint32_t) = media("AMediaCodec_configure");
+    uint8_t *(*codec_in)(void *, size_t, size_t *) = media("AMediaCodec_getInputBuffer");
+    ssize_t (*codec_dequeue)(void *, void *, int64_t) = media("AMediaCodec_dequeueOutputBuffer");
+    int32_t (*codec_delete)(void *) = media("AMediaCodec_delete");
+    bool (*fmt_int)(void *, const char *, int32_t *) = media("AMediaFormat_getInt32");
+    bool (*fmt_str)(void *, const char *, const char **) = media("AMediaFormat_getString");
+    int32_t (*reader_new)(int32_t, int32_t, int32_t, uint64_t, int32_t, void **) = media("AImageReader_newWithUsage");
+    void (*image_delete_async)(void *, int) = media("AImage_deleteAsync");
+    void *(*source_new)(void) = media("AMediaDataSource_new");
+    CHECK(ext_new && ext_fd && ext_url && ext_tracks && ext_format && ext_read && ext_time && ext_advance && ext_delete &&
+          codec_new && codec_configure && codec_in && codec_dequeue && codec_delete && fmt_int && fmt_str && reader_new &&
+          image_delete_async && source_new);
+    if (!(ext_new && ext_fd && ext_url && ext_tracks && ext_format && ext_read && ext_time && ext_advance && ext_delete &&
+          codec_new && codec_configure && codec_in && codec_dequeue && codec_delete && fmt_int && fmt_str && reader_new &&
+          image_delete_async && source_new))
+        return;
+    // what a VideoPlayer does, failing at every step without touching the NULL objects
+    void *ex = ext_new();
+    CHECK(ex == NULL);
+    CHECK(ext_fd(ex, 0, 0, 1000) == UNSUPPORTED && ext_url(ex, "file:///clip.mp4") == UNSUPPORTED);
+    CHECK(ext_tracks(ex) == 0 && ext_format(ex, 0) == NULL);
+    uint8_t buf[16];
+    CHECK(ext_read(ex, buf, sizeof buf) == -1 && ext_time(ex) == -1 && !ext_advance(ex));
+    CHECK(ext_delete(ex) == 0);
+    void *codec = codec_new("video/avc");
+    CHECK(codec == NULL && codec_configure(codec, NULL, NULL, NULL, 0) == UNSUPPORTED);
+    size_t sz = 77;
+    CHECK(codec_in(codec, 0, &sz) == NULL && sz == 0 && codec_dequeue(codec, NULL, 1000) < 0 && codec_delete(codec) == 0);
+    int32_t iv = 5;
+    const char *sv = "x";
+    CHECK(!fmt_int(NULL, "width", &iv) && iv == 5 && !fmt_str(NULL, "mime", &sv));
+    void *reader = (void *)1;
+    CHECK(reader_new(640, 360, 0x23, 0, 2, &reader) == UNSUPPORTED && reader == NULL);
+    int fds[2];
+    CHECK(pipe(fds) == 0);
+    image_delete_async(NULL, fds[0]);                      // the fence fd is the callee's
+    CHECK(fcntl(fds[0], F_GETFD) == -1 && errno == EBADF);
+    close(fds[1]);
+    CHECK(source_new() == NULL);
 }
 
 // ---- OpenSL ES, driven like FMOD::OutputOpenSL ------------------------------------------------
@@ -578,6 +683,7 @@ int main(int argc, char **argv)
     test_looper_sensors_input();
     test_window_egl(fakeegl);
     test_host_display(fakeegl);
+    test_mediandk();
     const char *drv = getenv("SDL_AUDIODRIVER");
     if (drv && *drv) test_opensles(!strcmp(drv, "disk") ? getenv("SDL_DISKAUDIOFILE") : NULL);
     else fprintf(stderr, "opensles: skipped (set SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=... or =dummy)\n");

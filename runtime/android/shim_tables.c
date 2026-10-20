@@ -1,6 +1,6 @@
 // The so_shim tables. Functions are declared here only to take their addresses (their real
-// prototypes live in android_shims.h / sles_min.h); SL_IID_* entries point at the variables,
-// since dlsym on a data symbol returns its address.
+// prototypes live in android_shims.h / sles_min.h / media_ndk.c); SL_IID_* and AMEDIAFORMAT_KEY_*
+// entries point at the variables, since dlsym on a data symbol returns its address.
 #include <stddef.h>
 #include <string.h>
 
@@ -60,12 +60,48 @@ typedef struct { const char *name; void *fn; } so_shim;
     X(SL_IID_PLAYBACKRATE) X(SL_IID_SEEK) X(SL_IID_PREFETCHSTATUS) X(SL_IID_METADATAEXTRACTION) \
     X(SL_IID_ANDROIDEFFECT) X(SL_IID_ANDROIDBUFFERQUEUESOURCE)
 
+// libmediandk.so (media_ndk.c): stubs without a decoder; the keys are data (const char * variables)
+#define MEDIANDK_FUNCS(X) \
+    X(AMediaFormat_new) X(AMediaFormat_delete) X(AMediaFormat_toString) X(AMediaFormat_getInt32) \
+    X(AMediaFormat_getInt64) X(AMediaFormat_getFloat) X(AMediaFormat_getSize) X(AMediaFormat_getBuffer) \
+    X(AMediaFormat_getString) X(AMediaFormat_setInt32) X(AMediaFormat_setInt64) X(AMediaFormat_setFloat) \
+    X(AMediaFormat_setString) X(AMediaFormat_setBuffer) \
+    X(AMediaExtractor_new) X(AMediaExtractor_delete) X(AMediaExtractor_setDataSourceFd) \
+    X(AMediaExtractor_setDataSource) X(AMediaExtractor_setDataSourceCustom) X(AMediaExtractor_getTrackCount) \
+    X(AMediaExtractor_getTrackFormat) X(AMediaExtractor_selectTrack) X(AMediaExtractor_unselectTrack) \
+    X(AMediaExtractor_readSampleData) X(AMediaExtractor_getSampleFlags) X(AMediaExtractor_getSampleTrackIndex) \
+    X(AMediaExtractor_getSampleTime) X(AMediaExtractor_advance) X(AMediaExtractor_seekTo) \
+    X(AMediaExtractor_getFileFormat) \
+    X(AMediaCodec_createDecoderByType) X(AMediaCodec_createEncoderByType) X(AMediaCodec_createCodecByName) \
+    X(AMediaCodec_delete) X(AMediaCodec_configure) X(AMediaCodec_start) X(AMediaCodec_stop) X(AMediaCodec_flush) \
+    X(AMediaCodec_getInputBuffer) X(AMediaCodec_getOutputBuffer) X(AMediaCodec_dequeueInputBuffer) \
+    X(AMediaCodec_dequeueOutputBuffer) X(AMediaCodec_queueInputBuffer) X(AMediaCodec_getOutputFormat) \
+    X(AMediaCodec_releaseOutputBuffer) X(AMediaCodec_setOutputSurface) \
+    X(AMediaDataSource_new) X(AMediaDataSource_delete) X(AMediaDataSource_setUserdata) X(AMediaDataSource_setReadAt) \
+    X(AMediaDataSource_setGetSize) X(AMediaDataSource_setClose) \
+    X(AImageReader_new) X(AImageReader_newWithUsage) X(AImageReader_delete) X(AImageReader_getWindow) \
+    X(AImageReader_acquireLatestImage) X(AImageReader_acquireNextImage) X(AImageReader_setImageListener) \
+    X(AImageReader_setBufferRemovedListener) X(AImage_delete) X(AImage_deleteAsync) X(AImage_getHardwareBuffer) \
+    X(AImage_getTimestamp) X(AImage_getWidth) X(AImage_getHeight)
+
+#define MEDIANDK_KEYS(X) \
+    X(AMEDIAFORMAT_KEY_CHANNEL_COUNT) X(AMEDIAFORMAT_KEY_COLOR_FORMAT) X(AMEDIAFORMAT_KEY_DURATION) \
+    X(AMEDIAFORMAT_KEY_FRAME_RATE) X(AMEDIAFORMAT_KEY_HEIGHT) X(AMEDIAFORMAT_KEY_LANGUAGE) X(AMEDIAFORMAT_KEY_MIME) \
+    X(AMEDIAFORMAT_KEY_SAMPLE_RATE) X(AMEDIAFORMAT_KEY_STRIDE) X(AMEDIAFORMAT_KEY_WIDTH) X(AMEDIAFORMAT_KEY_COLOR_RANGE) \
+    X(AMEDIAFORMAT_KEY_COLOR_STANDARD) X(AMEDIAFORMAT_KEY_ENCODER_DELAY) X(AMEDIAFORMAT_KEY_ROTATION) \
+    X(AMEDIAFORMAT_KEY_SLICE_HEIGHT) X(AMEDIAFORMAT_KEY_BIT_RATE) X(AMEDIAFORMAT_KEY_CHANNEL_MASK) \
+    X(AMEDIAFORMAT_KEY_COLOR_TRANSFER) X(AMEDIAFORMAT_KEY_ENCODER_PADDING) X(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL) \
+    X(AMEDIAFORMAT_KEY_IS_ADTS) X(AMEDIAFORMAT_KEY_MAX_HEIGHT) X(AMEDIAFORMAT_KEY_MAX_INPUT_SIZE) \
+    X(AMEDIAFORMAT_KEY_MAX_WIDTH) X(AMEDIAFORMAT_KEY_PCM_ENCODING) X(AMEDIAFORMAT_KEY_TIME_US) X(AMEDIAFORMAT_KEY_TRACK_ID)
+
 #define DECL_FN(n) extern void n(void);
 #define DECL_VAR(n) extern const void *const n;
 LOG_FUNCS(DECL_FN)
 NDK_FUNCS(DECL_FN)
 SLES_FUNCS(DECL_FN)
 SLES_IIDS(DECL_VAR)
+MEDIANDK_FUNCS(DECL_FN)
+MEDIANDK_KEYS(DECL_VAR)
 
 #define ENT_FN(n) { #n, (void *)n },
 #define ENT_VAR(n) { #n, (void *)&n },
@@ -73,8 +109,10 @@ SLES_IIDS(DECL_VAR)
 so_shim android_log_shims[] = { LOG_FUNCS(ENT_FN) { NULL, NULL } };
 so_shim android_ndk_shims[] = { NDK_FUNCS(ENT_FN) { NULL, NULL } };
 so_shim android_sles_shims[] = { SLES_FUNCS(ENT_FN) SLES_IIDS(ENT_VAR) { NULL, NULL } };
+so_shim android_mediandk_shims[] = { MEDIANDK_FUNCS(ENT_FN) MEDIANDK_KEYS(ENT_VAR) { NULL, NULL } };
 so_shim android_shims[] = {
-    LOG_FUNCS(ENT_FN) NDK_FUNCS(ENT_FN) SLES_FUNCS(ENT_FN) SLES_IIDS(ENT_VAR) { NULL, NULL }
+    LOG_FUNCS(ENT_FN) NDK_FUNCS(ENT_FN) SLES_FUNCS(ENT_FN) SLES_IIDS(ENT_VAR)
+    MEDIANDK_FUNCS(ENT_FN) MEDIANDK_KEYS(ENT_VAR) { NULL, NULL }
 };
 
 const so_shim *android_shims_for_library(const char *path)
@@ -85,6 +123,7 @@ const so_shim *android_shims_for_library(const char *path)
     if (!strcmp(base, "liblog.so")) return android_log_shims;
     if (!strcmp(base, "libandroid.so")) return android_ndk_shims;
     if (!strcmp(base, "libOpenSLES.so")) return android_sles_shims;
+    if (!strcmp(base, "libmediandk.so")) return android_mediandk_shims;
     return NULL;
 }
 

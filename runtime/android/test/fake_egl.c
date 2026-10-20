@@ -79,8 +79,26 @@ EGLBoolean eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, EGLint *v)
     return 0;
 }
 
+// eglSurfaceAttrib: the surface, attribute and value of the last call; EGL_SWAP_BEHAVIOR (0x3093) only
+int fake_attrib_calls;
+void *fake_attrib_surface;
+EGLint fake_attrib_attr, fake_attrib_value;
+EGLBoolean eglSurfaceAttrib(EGLDisplay d, EGLSurface s, EGLint attr, EGLint value)
+{
+    fake_attrib_calls++;
+    fake_attrib_surface = s;
+    fake_attrib_attr = attr;
+    fake_attrib_value = value;
+    if (attr != 0x3093) { last_error = 0x3004; return 0; }
+    return 1;
+}
+
+// a driver that hands out Android's frame-timing entry points (Mali's might)
+EGLBoolean eglPresentationTimeANDROID(EGLDisplay d, EGLSurface s, int64_t t) { return 1; }
+
 void (*eglGetProcAddress(const char *name))(void)
 {
     if (!strcmp(name, "eglFakeOnly")) return (void (*)(void))eglFakeOnly;
+    if (!strcmp(name, "eglPresentationTimeANDROID")) return (void (*)(void))eglPresentationTimeANDROID;
     return NULL;
 }

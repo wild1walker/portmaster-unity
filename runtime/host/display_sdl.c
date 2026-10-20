@@ -14,6 +14,10 @@
 //   eglSwapBuffers -> SDL_GL_SwapWindow (KMSDRM flips pages there; newer SDLs pace Wayland
 //       swaps with frame callbacks there)
 //   eglSwapInterval -> SDL_GL_SetSwapInterval (SDL keeps its own copy for Wayland and KMSDRM)
+//   eglSurfaceAttrib (Unity 2020.3+) -> the EGL surface SDL has current; egl_glue sets it again on
+//       the surface KMSDRM puts in its place
+// Swappy (Android Frame Pacing, Unity 2019.3+) stays off: it finds no AChoreographer and no
+// eglPresentationTimeANDROID, and Unity paces with the swap interval set here.
 // The main thread keeps pumping SDL events (input_poll), which Wayland needs. SDL_QUIT (the
 // window closed) is seen by an event watch and ends the host's main loop.
 //
