@@ -60,7 +60,7 @@ typedef struct { const char *name; void *fn; } so_shim;
     X(SL_IID_PLAYBACKRATE) X(SL_IID_SEEK) X(SL_IID_PREFETCHSTATUS) X(SL_IID_METADATAEXTRACTION) \
     X(SL_IID_ANDROIDEFFECT) X(SL_IID_ANDROIDBUFFERQUEUESOURCE)
 
-// libmediandk.so (media_ndk.c): stubs without a decoder; the keys are data (const char * variables)
+// libmediandk.so (media_ndk.c): the media core's (../media) when linked, else stubs; the keys are data
 #define MEDIANDK_FUNCS(X) \
     X(AMediaFormat_new) X(AMediaFormat_delete) X(AMediaFormat_toString) X(AMediaFormat_getInt32) \
     X(AMediaFormat_getInt64) X(AMediaFormat_getFloat) X(AMediaFormat_getSize) X(AMediaFormat_getBuffer) \
@@ -76,7 +76,9 @@ typedef struct { const char *name; void *fn; } so_shim;
     X(AMediaCodec_delete) X(AMediaCodec_configure) X(AMediaCodec_start) X(AMediaCodec_stop) X(AMediaCodec_flush) \
     X(AMediaCodec_getInputBuffer) X(AMediaCodec_getOutputBuffer) X(AMediaCodec_dequeueInputBuffer) \
     X(AMediaCodec_dequeueOutputBuffer) X(AMediaCodec_queueInputBuffer) X(AMediaCodec_getOutputFormat) \
-    X(AMediaCodec_releaseOutputBuffer) X(AMediaCodec_setOutputSurface) \
+    X(AMediaCodec_releaseOutputBuffer) X(AMediaCodec_setOutputSurface) X(AMediaCodec_releaseOutputBufferAtTime) \
+    X(AMediaCodec_getInputFormat) X(AMediaCodec_getName) X(AMediaCodec_releaseName) X(AMediaExtractor_getSampleSize) \
+    X(AMediaExtractor_getCachedDuration) \
     X(AMediaDataSource_new) X(AMediaDataSource_delete) X(AMediaDataSource_setUserdata) X(AMediaDataSource_setReadAt) \
     X(AMediaDataSource_setGetSize) X(AMediaDataSource_setClose) \
     X(AImageReader_new) X(AImageReader_newWithUsage) X(AImageReader_delete) X(AImageReader_getWindow) \

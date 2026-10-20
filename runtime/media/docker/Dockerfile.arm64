@@ -1,0 +1,17 @@
+# Media core, arm64 (64-bit players): the runtime's arm64 build image (Ubuntu 20.04, glibc 2.31)
+# plus the static decoder libraries of its -dev packages (libvpx, libvorbis + libogg, libopus).
+# OpenH264 is not packaged for Ubuntu 20.04: built from Debian bookworm's source package with the
+# image's own compiler (stage 1 only fetches the source).
+FROM debian:bookworm AS src
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends dpkg-dev && \
+    mkdir /src && cd /src && apt-get source --download-only openh264 && \
+    dpkg-source -x openh264_*.dsc openh264 && rm -rf /var/lib/apt/lists/*
+FROM ua-build-arm64
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      libvpx-dev libvorbis-dev libogg-dev libopus-dev && rm -rf /var/lib/apt/lists/*
+COPY --from=src /src/openh264 /opt/openh264
+RUN cd /opt/openh264 && make -j4 OS=linux ARCH=aarch64 libopenh264.a >/dev/null && \
+    install -d /usr/local/include/wels && install -m644 codec/api/wels/*.h /usr/local/include/wels/ && \
+    install -m644 libopenh264.a /usr/local/lib/ && install -m644 LICENSE /usr/local/lib/openh264.LICENSE && \
+    make clean >/dev/null

@@ -12,7 +12,8 @@ Output (default ./android-out/):
                                              (*.resS: texture pixels moved into the textures, see
                                              inline_texture_streams; bundles likewise)
       unity default resources                the Android player package's own copy
-      Resources/unity_builtin_extra          clone, platform byte set
+      Resources/unity_builtin_extra          clone, platform byte set (+ Hidden/VideoDecodeAndroid,
+                                             video.py, when the data has Hidden/VideoDecode)
       Managed/*.dll                          Android UnityEngine*.dll + the game's assemblies
       Managed/etc/mono/...                   Mono config (dllmaps), read relative to the cwd
       boot.config                            read through Java AssetManager "bin/Data/boot.config"
@@ -53,13 +54,14 @@ import tempfile
 import time
 
 from . import unity_version as UV
+from . import video
 
 DEF_OUT = 'android-out'
 
 ANDROID = 13            # BuildTarget.Android; SerializedFile::ReadMetadata rejects anything else
 GLES3 = 11              # GfxDeviceRenderer kGfxRendererOpenGLES3x
 SHADER_PLATFORM_GLCORE, SHADER_PLATFORM_GLES3, SHADER_PLATFORM_D3D11 = 15, 9, 4
-STATE_VERSION = 9       # bump when an action's output changes
+STATE_VERSION = 10      # bump when an action's output changes
 
 # --------------------------------------------------------------------------- file placement
 
@@ -689,6 +691,8 @@ def edit_globalgamemanagers(src, managed_names, args, log):
                 q['asyncUploadBufferSize'] = args.async_upload_buffer
             notes.append(f'QualitySettings.asyncUploadBufferSize = {args.async_upload_buffer} MB')
             o.save_typetree(t)
+        elif n == 'ScriptMapper' and getattr(args, 'video_shader_pid', None):
+            video.map_shader(sf, args.video_shader_pid, notes)    # Hidden/VideoDecodeAndroid
         elif n == 'PlayerSettings':
             t = o.read_typetree()
             changed = False
@@ -826,7 +830,12 @@ def plan(args):
         else:
             args.skipped.append(n)
     items.append((os.path.join(data, 'unity default resources'), os.path.join(pkg, 'Data', 'unity default resources'), 'link'))
-    items.append((os.path.join(data, 'Resources', 'unity_builtin_extra'), os.path.join(src, 'Resources', 'unity_builtin_extra'), 'sfpatch'))
+    bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
+    # the Android VideoPlayer's shader, made from the desktop one (video.py)
+    args.video_shader_pid = video.path_id_for(bex) if args.video_shader and video.has_template(bex) else None
+    args.video_bt709 = bool(args.video_shader_pid) and video.wants_bt709(src, print)
+    act = ('sfvideo709' if args.video_bt709 else 'sfvideo') if args.video_shader_pid else 'sfpatch'
+    items.append((os.path.join(data, 'Resources', 'unity_builtin_extra'), bex, act))
     # Managed: the Android engine assemblies, the game's own and Unity's extension/BCL assemblies
     amanaged = os.path.join(pkg, 'Variations', 'mono', 'Managed')
     names = set()
@@ -1032,6 +1041,9 @@ def main(argv=None):
     ap.add_argument('--no-inline-textures', dest='inline_textures', action='store_false',
                     help="keep textures' pixels in .resS streams (the Android player never finishes "
                          "an asynchronous load of a streamed texture; see inline_texture_streams)")
+    ap.add_argument('--no-video-shader', dest='video_shader', action='store_false',
+                    help="do not add Hidden/VideoDecodeAndroid (the Android VideoPlayer's shader, made from the data's "
+                         "Hidden/VideoDecode; without it no video frame shows)")
     ap.add_argument('--rewired-joysticks', type=int, default=4, help="joysticks given Rewired's Unity-input axes (Joy<j>Axis1-28; Rewired supports 11)")
     ap.add_argument('--managed-file', action='append', default=[], metavar='DLL',
                     help='an assembly shipped instead of the data\'s copy of the same name (or added)')
@@ -1186,6 +1198,16 @@ def main(argv=None):
             write_bytes(dst, data)
             report['notes'] += notes
             how = 'unitypy'
+        elif act in ('sfvideo', 'sfvideo709'):
+            import UnityPy
+            sf = UnityPy.load(src).file
+            pid = video.add_to_builtin_extra(sf, log, act == 'sfvideo709')
+            if pid != args.video_shader_pid:
+                raise SystemExit(f'video: shader got path id {pid}, globalgamemanagers maps {args.video_shader_pid}')
+            sf._m_target_platform = ANDROID
+            write_bytes(dst, sf.save())
+            report['files'][dst_rel] = f'platform -> {ANDROID}, {video.NAME} added (path id {pid})'
+            how = 'video'
         elif act == 'monoconfig':
             txt = mono_config_text(open(src).read(), [d.split('=', 1) for d in args.dllmap])
             write_bytes(dst, txt.encode())
@@ -1393,6 +1415,8 @@ def pack(args, log):
 def opts_key(args):
     key = [args.platform_patch, args.graphics_apis, args.mt_rendering, args.blit, args.rewired_joysticks, args.name, args.async_upload_buffer,
            args.inline_textures]
+    if not args.video_shader:
+        key.append('no-video-shader')
     if args.swappy != 'keep' and args.unity.line >= SWAPPY_FROM:     # the setting exists from 2019.3
         key.append('swappy=' + args.swappy)
     return key
@@ -1409,13 +1433,14 @@ def verify(args, items, log):
     n_sf = 0
     for dst_rel, src, act in items:
         dst = os.path.join(args.out, dst_rel)
-        if act in ('sfpatch', 'sfinline', 'ggm'):
+        if act in ('sfpatch', 'sfinline', 'ggm', 'sfvideo', 'sfvideo709'):
             env = UnityPy.load(dst)
             sf = env.file
             if not isinstance(sf, SerializedFile):
                 bad.append((dst_rel, 'not a serialized file')); continue
             env0 = UnityPy.load(src) if os.path.exists(src) else None      # (gone with --consume-src)
-            if env0 is not None and len(sf.objects) != len(env0.file.objects):
+            added = 1 if act.startswith('sfvideo') else 0                 # Hidden/VideoDecodeAndroid
+            if env0 is not None and len(sf.objects) != len(env0.file.objects) + added:
                 bad.append((dst_rel, f'{len(sf.objects)} objects, source {len(env0.file.objects)}'))
             if want is not None and sf._m_target_platform != want:
                 bad.append((dst_rel, f'platform {sf._m_target_platform}'))

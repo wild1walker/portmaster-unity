@@ -13,6 +13,7 @@
 #include "../android/android_shims.h"
 #include "../android/egl_glue.h"
 #include "../jni/unityplayer.h"
+void up_media_init(void);                  /* ../jni/up_media.c */
 #include "input.h"
 #include "frames.h"
 #include "glhooks.h"
@@ -301,7 +302,10 @@ int main(int argc, char **argv)
     so_register_fake_lib("liblog.so", android_log_shims);
     so_register_fake_lib("libandroid.so", android_ndk_shims);
     so_register_fake_lib("libOpenSLES.so", android_sles_shims);
-    so_map_library("libmediandk.so", NULL);     // no video decoder: VideoPlayer falls back
+    // libmediandk: 2017.4-2021.3 players dlopen it and decode video through Java when that fails
+    // (../jni/up_media.c); 2022.3 links it (the shims in ../android/media_ndk.c)
+    so_map_library("libmediandk.so", NULL);
+    up_media_init();                            // the media core's decoders (../media)
     so_map_library("libvulkan.so", NULL);       // GLES only
     steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
 

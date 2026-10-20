@@ -29,7 +29,7 @@ endif
 CC      := $(CROSS)gcc
 AR      := $(CROSS)ar
 
-LIB_OBJS := $(OUT)/fakejni.o $(OUT)/unityplayer.o $(OUT)/up_android.o $(OUT)/up_input.o
+LIB_OBJS := $(OUT)/fakejni.o $(OUT)/unityplayer.o $(OUT)/up_android.o $(OUT)/up_input.o $(OUT)/up_media.o
 
 all: $(OUT)/libfakejni.a $(OUT)/test_fakejni $(OUT)/test_unityplayer
 
@@ -39,7 +39,7 @@ $(OUT):
 $(OUT)/fakejni.o: fakejni.c fakejni.h include/jni.h | $(OUT)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OUT)/%.o: %.c unityplayer.h up_internal.h fakejni.h include/jni.h | $(OUT)
+$(OUT)/%.o: %.c unityplayer.h up_internal.h fakejni.h include/jni.h ../media/um.h | $(OUT)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(OUT)/libfakejni.a: $(LIB_OBJS)

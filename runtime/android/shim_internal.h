@@ -14,6 +14,10 @@ void shim_log(const char *kind, const char *fmt, ...) __attribute__((format(prin
 // values travel in core registers. Every shim that takes or returns floating point must use it
 // too, since this code is built for armhf (VFP registers). On AArch64 the arm64-v8a libraries and
 // the host share AAPCS64, so it is empty there.
+// native_window.c: the um_surface (../media) of a SurfaceTexture's window, NULL for other windows
+typedef struct ANativeWindow ANativeWindow;
+void *android_window_media_surface(ANativeWindow *w);
+
 #if defined(__arm__)
 #define SOFTFP __attribute__((pcs("aapcs")))
 #else

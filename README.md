@@ -20,8 +20,9 @@ computer.
 | folder | what |
 |---|---|
 | `runtime/loader/` | ELF loader for Android ARMv7 libraries on glibc: relocation, symbol resolution, bionic -> glibc through libhybris's hooks plus our own fixes (futex semaphores, mutex/cond init, clocks, stat/sigaction/setjmp/ctype translations, bionic's fortify functions and the flag/layout translations newer players need), softfp thunks for float-passing GL and libc calls |
-| `runtime/jni/` | a JavaVM/JNIEnv in C and Unity's `UnityPlayer` activity: lifecycle, the UnityMain looper, surface, input events, FMOD's AudioTrack, PackageManager, PlayerPrefs |
-| `runtime/android/` | liblog, libandroid (ANativeWindow on Mali fbdev, looper, sensors), OpenSL ES (to SDL2, or PCM piped into `pw-cat`/`pacat` when a sound server holds the card), libmediandk stubs (no video decoding), EGL glue |
+| `runtime/jni/` | a JavaVM/JNIEnv in C and Unity's `UnityPlayer` activity: lifecycle, the UnityMain looper, surface, input events, FMOD's AudioTrack, PackageManager, PlayerPrefs, android.media's video classes |
+| `runtime/android/` | liblog, libandroid (ANativeWindow on Mali fbdev, looper, sensors), OpenSL ES (to SDL2, or PCM piped into `pw-cat`/`pacat` when a sound server holds the card), libmediandk (the NDK's media API over `runtime/media`), EGL glue |
+| `runtime/media/` | video for Unity's VideoPlayer: WebM and MP4 demuxers, decoders (libvpx VP8/VP9, libvorbis, libopus, OpenH264; the system's libavcodec when there is one), the SurfaceTexture whose frames reach Unity's external texture through an EGLImage |
 | `runtime/host/` | `ua_host` (ties it together; SDL2 pads -> Android gamepads, pointer mode (a pad-driven mouse and cursor for mouse-only menus) and pad -> keyboard keys; frame statistics, shader dump/override, GL frame tracer, hitch sampler) and device checks (`egltest`, `sdltest`, `audiocheck`, `shadercheck`) |
 | `convert/pmunity/` | the data converter: `shaders` (OpenGL Core -> GLSL ES 3.00), `textures` (BC/DXT -> ASTC, optional downscale), `settings`, `audio`, `android-data` (APK + OBB for the player), `macpkg` (unpacks macOS installers such as GOG's). Runs on a PC or on the handheld itself (portmaster-cuphead's PortMaster setup does) |
 | `tools/` | `asmpatch/` (generic patches to a game's assemblies for the Android player, e.g. Rewired on Android, and an input survey; C#, Mono.Cecil), device scripts (`device/`), log analysis (`analysis/`), an emulated armv7 test rig with Mesa (`emu/`), reverse-engineering helpers for new player versions (`re/`) |
@@ -74,7 +75,8 @@ Mali-G31.
 
 MIT (see [LICENSE](LICENSE)) for everything in this repository except the third-party parts listed
 in [THIRD_PARTY.md](THIRD_PARTY.md): libhybris (a git submodule, Apache 2.0) and AOSP's `jni.h`
-(Apache 2.0).
+(Apache 2.0). `ua_host` also links the video decoders of Debian's packages (libvpx, libvorbis,
+libogg, libopus: BSD-3-Clause; OpenH264: BSD-2-Clause), whose licence texts go with it.
 
 Unity is a trademark of Unity Technologies. This project is not affiliated with or endorsed by
 Unity Technologies or by any game's publisher.

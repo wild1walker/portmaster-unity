@@ -1941,6 +1941,10 @@ void up_android_register(void)
 
     extern void up_input_register(void);
     up_input_register();
+    /* android.media's video classes (up_media.c): in the program when the host links the media
+       core (ua_host does; the unit tests of this folder do not) */
+    extern void up_media_register(void) __attribute__((weak));
+    if (up_media_register) up_media_register();
 }
 
 void up_android_create_objects(void)

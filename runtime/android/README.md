@@ -49,7 +49,7 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
 | Input | Minimal: `AInputEvent_*`, `AKeyEvent_*`, `AMotionEvent_*` getters over our own event struct (`android_input_event_new_key()` builds one). `AInputQueue_*` are inert stubs. |
 | AConfiguration | Minimal fixed config: landscape, 160 dpi, SDK 26, no touch, D-pad, en_US. |
 | OpenSL ES | Implemented on SDL2: engine, output mix, audio player with a PCM buffer queue (`SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE` or `_BUFFERQUEUE`, 8/16/32-bit int and float PCM). Interfaces: Object, Engine, OutputMix, Play, BufferQueue/AndroidSimpleBufferQueue, Volume, AndroidConfiguration. Stubbed with `SL_RESULT_FEATURE_UNSUPPORTED`: audio recorder (`SL_IID_RECORD` exists but recording does not), MIDI, LED/vibra, listener/3D, metadata extractor, URI/fd players, effects. |
-| libmediandk | Stubs (`media_ndk.c`), for libunity 2022.3 to load: every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted, `AImage_deleteAsync` closes its fence fd); the `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). A VideoPlayer reports an error and the video is skipped. `AMediaFormat_setFloat` is `SOFTFP`. In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
+| libmediandk | `media_ndk.c`: AMediaExtractor (fd ranges, paths, `AMediaDataSource`), AMediaFormat, AMediaCodec over the media core (`../media`, referenced weakly) when the program links it, as ua_host does: Unity 2022.3's VideoPlayer path, with the video decoder's output the window of a Java `Surface(SurfaceTexture)` (`ANativeWindow_fromSurface` gives such a Surface a window of its own, `android_window_media_surface()`). Without the core every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted), which this folder's tests check. `AImageReader`/`AImage` (the Vulkan video path) are failing stubs either way; `AImage_deleteAsync` closes its fence fd. The `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). `AMediaFormat_setFloat` is `SOFTFP`. In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
 | Frame pacing | No `AChoreographer_*` (dlsym answers NULL, as on API < 24), no Android frame timestamps, a no-op `eglPresentationTimeANDROID`; Swappy is kept off by its own switch (below). |
 | EGL | `egl_glue.c`, separate table `egl_shims[]` (below). |
 
@@ -67,7 +67,7 @@ so_register_fake_lib("liblog.so", android_log_shims);       // dlopen()+dlsym() 
 so_register_fake_lib("libandroid.so", android_ndk_shims);   // or loop over names with
 so_register_fake_lib("libOpenSLES.so", android_sles_shims); // android_shims_for_library(name)
 so_map_library("libmediandk.so", NULL);     // dlopen refused (2017.4-2021.3 take their JNI video path);
-                                            // 2022.3's DT_NEEDED and imports still get the stubs
+                                            // 2022.3's DT_NEEDED and imports still get media_ndk.c
 so_map_library("libvulkan.so", NULL);
 ```
 - For `SL_IID_*` the table entry is the address of the `SLInterfaceID` variable, which is what
@@ -88,7 +88,8 @@ so_map_library("libvulkan.so", NULL);
 - `libmediandk.so` is one of the loader's Android-only libraries: without the `so_map_library(...,
   NULL)` line above, dlopen of it returns a handle on the shims too (or on
   `android_mediandk_shims` once registered with `so_register_fake_lib`), and players up to 2021.3
-  take their NDK video path, which fails at the first call instead of before it.
+  take their NDK video path (untested: they were written against the Java one here). `media_ndk.c`
+  includes `../media/um.h` (build.sh mounts `runtime/`).
 
 Environment variables: `ANDROID_LOG_LEVEL`, `ANDROID_ASSET_DIR`, `ANDROID_WINDOW_SIZE=WxH`,
 `ANDROID_FBDEV` (default /dev/fb0), `ANDROID_SHIM_LIBEGL` (real libEGL path, default libEGL.so.1
