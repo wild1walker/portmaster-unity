@@ -6,7 +6,9 @@ archive (Distribution + one or more component packages) or a single component pa
 per component, `PackageInfo` (with the install location) and `Payload`: a cpio archive (odc or
 newc), gzip-compressed or in Apple's pbzx framing (xz chunks). The payload's paths are relative to
 the install location, so each file lands at <root>/<install location>/<path>: a DLC package that
-installs into the game's .app ends up inside it.
+installs into the game's .app ends up inside it. GOG's installers leave the Payload empty (or out)
+and carry the game in the component's Scripts archive under payload/, which a postinstall script
+copies to the install location; that folder is unpacked the same way.
 
 Everything is streamed (a game's payload is gigabytes). Symbolic links are skipped and counted
 (exFAT cards cannot store them; a game's data folder has none); hard links in the archive are
@@ -200,50 +202,79 @@ def cpio_members(s):
 
 def extract(pkg, root, log=print, keep=None):
     """Extracts every component package of one .pkg under root. keep(path) -> bool filters the
-    payload paths (relative to /). Returns (files, bytes, skipped symlinks)."""
+    paths (relative to /). Returns (files, bytes, skipped symlinks).
+
+    A component's files come from its Payload, and also from its Scripts archive when that holds a
+    `payload/` folder: GOG's macOS installers ship the game that way (an empty or missing Payload,
+    and a postinstall script that copies Scripts/payload to the install location)."""
     x = Xar(pkg)
     files = dict(x.files())
-    comps = sorted({p.rsplit('/', 1)[0] if '/' in p else '' for p in files if p.endswith('Payload')})
-    n = total = links = 0
+    comps = sorted({p.rsplit('/', 1)[0] if '/' in p else '' for p in files
+                    if p.rsplit('/', 1)[-1] in ('Payload', 'Scripts', 'PackageInfo')})
+    totals = [0, 0, 0]                                  # files, bytes, symlinks
     for c in comps:
         pre = c + '/' if c else ''
         loc = '/'
         if pre + 'PackageInfo' in files:
             info = ET.fromstring(x.read(files[pre + 'PackageInfo']))
             loc = info.get('install-location') or '/'
-        log(f'{os.path.basename(pkg)}: {c or "package"} -> {loc}')
-        s = payload_stream(x.open(files[pre + 'Payload']))
-        for name, mode, size in cpio_members(s):
-            rel = os.path.normpath(os.path.join(loc.lstrip('/'), name))
-            rel = '' if rel == '.' else rel
-            kind = mode & 0o170000
-            if (rel.startswith('..') or os.path.isabs(rel) or os.path.basename(rel).startswith('._')
-                    or (keep and not keep('/' + rel))):             # ._*: macOS metadata, not the game's
+        for part, strip in (('Payload', None), ('Scripts', 'payload')):
+            if pre + part not in files or files[pre + part].find('data') is None:
+                continue
+            before = totals[0]
+            _unpack(payload_stream(x.open(files[pre + part])), root, loc, strip, keep, totals)
+            if totals[0] > before or part == 'Payload':
+                log(f'{os.path.basename(pkg)}: {c or "package"} {part} -> {loc}: {totals[0] - before} files')
+    if totals[0] == 0:
+        log(f'{os.path.basename(pkg)}: no files found; the package holds: ' +
+            ', '.join(f'{p} ({_size(fe)})' for p, fe in sorted(files.items()))[:2000])
+    return tuple(totals)
+
+
+def _size(fe):
+    d = fe.find('data')
+    return f'{int(d.findtext("size") or 0) >> 10} KB' if d is not None else 'dir'
+
+
+def _unpack(s, root, loc, strip, keep, totals):
+    """Writes the members of one cpio stream under root/<loc>. strip: only members inside that
+    top folder (e.g. 'payload'), with the folder removed from their paths."""
+    for name, mode, size in cpio_members(s):
+        nm = os.path.normpath(name)
+        if strip is not None:
+            if nm == strip or not nm.startswith(strip + '/'):
                 _skip(s, size)
                 continue
-            dst = os.path.join(root, rel)
-            if kind == 0o040000:
-                os.makedirs(dst, exist_ok=True)
-            elif kind == 0o120000:
-                _skip(s, size)
-                links += 1
-            elif kind == 0o100000:
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                tmp = dst + '.part'
-                with open(tmp, 'wb') as f:
-                    left = size
-                    while left:
-                        b = s.read(min(left, 1 << 20))
-                        if not b:
-                            raise EOFError(f'{name}: payload ends early')
-                        f.write(b)
-                        left -= len(b)
-                os.replace(tmp, dst)
-                n += 1
-                total += size
-            else:
-                _skip(s, size)
-    return n, total, links
+            nm = nm[len(strip) + 1:]
+        rel = os.path.normpath(os.path.join(loc.lstrip('/'), nm))
+        rel = '' if rel == '.' else rel
+        kind = mode & 0o170000
+        if (rel.startswith('..') or os.path.isabs(rel) or os.path.basename(rel).startswith('._')
+                or (keep and not keep('/' + rel))):             # ._*: macOS metadata, not the game's
+            _skip(s, size)
+            continue
+        dst = os.path.join(root, rel)
+        if kind == 0o040000:
+            os.makedirs(dst, exist_ok=True)
+        elif kind == 0o120000:
+            _skip(s, size)
+            totals[2] += 1
+        elif kind == 0o100000:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            tmp = dst + '.part'
+            with open(tmp, 'wb') as f:
+                left = size
+                while left:
+                    b = s.read(min(left, 1 << 20))
+                    if not b:
+                        raise EOFError(f'{name}: archive ends early')
+                    f.write(b)
+                    left -= len(b)
+            os.replace(tmp, dst)
+            totals[0] += 1
+            totals[1] += size
+        else:
+            _skip(s, size)
 
 
 def _skip(s, size):
