@@ -973,8 +973,13 @@ def check_source(args):
     args.runtime = scripting_runtime(src, args.unity)
     plugins = os.path.join(src, 'Plugins')
     if os.path.isdir(plugins) and any(not n.startswith('.') for n in os.listdir(plugins)):
-        args.warnings.append(f'native plugins in {plugins} ({", ".join(sorted(os.listdir(plugins))[:6])}) are not shipped: '
-                             f'desktop libraries; a game that P/Invokes them needs ARM builds of them')
+        # (a Windows build keeps them in Plugins/x86_64/*.dll: name the libraries)
+        libs = sorted({n for _, _, ns in os.walk(plugins) for n in ns
+                       if n.lower().endswith(('.dll', '.so', '.dylib', '.bundle'))}) or sorted(os.listdir(plugins))
+        args.warnings.append(f'native plugins in {plugins} ({", ".join(libs[:8])}{", ..." if len(libs) > 8 else ""}) '
+                             f'are not shipped: desktop libraries; a game that P/Invokes them needs ARM builds of them'
+                             + (' (lib_burst_generated: Burst-compiled jobs, which run as the managed code without it)'
+                                if any(n.startswith('lib_burst_generated') for n in libs) else ''))
 
 
 def run_asmpatch(args, log):

@@ -16,7 +16,11 @@ worked for Cuphead.
   `GameAssembly` library, no `Managed/`) compile the game to native code for one platform; their
   desktop code cannot run in the Android player.
 - **Graphics**: the macOS build's shaders include OpenGL Core programs, which `pmunity shaders`
-  translates. A Linux build may carry GLCore too. Windows builds have only Direct3D bytecode.
+  translates. A Linux build may carry GLCore too. Windows builds have only Direct3D 11 bytecode:
+  `"shaders": {"from": ["d3d11"]}` (or `--set shaders.from=d3d11`) translates it with Unity's HLSLcc
+  (`tools/hlslcc/build.sh`; docs/shaders.md, "Windows builds"). A Windows build of Unity 2021.2+
+  also needs the Unix class libraries (`python -m pmunity.winbcl <Game>_Data <dir>`, then the
+  `--managed-file` options it prints to `android-data`): its own are Windows-only.
 - **Memory**: the handheld has little RAM (the RG34XX-SP: 1 GB with the system). The texture step
   can scale textures down (`textures.scale`, e.g. 0.375 for 1080p art on a 480-line screen).
 

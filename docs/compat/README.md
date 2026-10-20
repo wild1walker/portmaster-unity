@@ -37,7 +37,8 @@ loading, startup, input or data conversion) · "-" not applicable.
 | SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | 22 ✅ | 22 ✅ | 22 ✅ |
 | shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
 | GLCore41/43 programs (converter) | - (output as before) | ⚠️ off by default (`shaders.glcore4x`) | ✅ GLES3 / GLES 3.1 | ✅ | ✅ | ✅ + stripped shaders' empty blobs | ✅ |
-| D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ❌ GL cbuffer layouts | ❌ + common params | ❌ | ❌ |
+| D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ✅ GL binding info (Unity's 2019 layout) | ✅ + common params | ✅ + param entries | ✅ merged `$Globals` |
+| class libraries (Windows builds) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ unityjit-win32: `pmunity.winbcl` (2021.2+) | ⚠️ same |
 | assembly list (converter) | fixed 48 slots ✅ | fixed 48 ✅ | flags (`m_AssemblyTypes`) ✅ | flags ✅ | `ScriptingAssemblies.json` ✅ (2020.2+) | json ✅ | json ✅ |
 | texture formats (converter) | ASTC RGB/RGBA ✅ | ✅ | ✅ | `ASTC_nxn` ✅ | ✅ | ✅ | ✅ |
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
@@ -87,8 +88,12 @@ Notes on the rows:
   every game) become GLES3 or GLES 3.1 programs (on by default; `shaders.glcore4x: false` keeps the
   earlier output, GLCore32 programs only, as Cuphead's port does). A shader
   whose variants were all stripped (URP's `StencilDeferred`, `BlitHDROverlay`) gets an empty GLES3
-  blob, as in Unity's builds. D3D11: 2019.1+ GL programs carry constant buffer layouts the D3D11
-  data does not give (refused with that reason).
+  blob, as in Unity's builds. D3D11 (Windows builds): translated with Unity's HLSLcc for every
+  line, the GL programs' own binding info (2019.1+) written as Unity's GL compiler does
+  (docs/shaders.md, "Windows builds"); a 2021.2+ Windows build's class libraries are the Windows
+  profile's (`unityjit-win32`, kernel32 P/Invokes) and are replaced by the Unix profile's from
+  Unity's editor installer (`python -m pmunity.winbcl`). Six free Windows-only games (2018.3 -
+  2022.3) reach their first screens in the emulated rig ("Players run" below).
 - IL2CPP metadata: the header's integer version (`global-metadata.dat` starts with 0xFAB11BAF
   and the version). These values come from public reverse-engineering tools, not from these
   packages (`libil2cpp.so` and the metadata are built per game), and tools also use sub-versions
@@ -147,8 +152,8 @@ reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM bu
    serializers, segmented blobs, parameter entries and per-tier subprograms, assembly lists by
    flags and `ScriptingAssemblies.json`, 2019+ ASTC numbers, compressed builds via `pmunity
    unpack`, GLCore41/43 programs (2018.1+), the 2021.3+ OBB GUID (the OBB's `unity_obb_guid` at
-   its root, the APK's `assets/unity_obb_guid`). Left: D3D11 programs of 2019.1+ Windows builds
-   (GL constant buffer layouts).
+   its root, the APK's `assets/unity_obb_guid`), D3D11 programs of Windows builds of every line
+   (2019.1+: the GL binding info Unity's GL compiler writes).
 5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.x on (and of any
    .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
