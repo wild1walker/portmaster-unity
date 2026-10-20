@@ -1756,6 +1756,10 @@ void up_android_register(void)
     M("java/util/Iterator$Impl", "hasNext", "()Z", it_hasNext);
     M("java/util/Iterator$Impl", "next", "()Ljava/lang/Object;", it_next);
     M("java/util/HashMap", "entrySet", "()Ljava/util/Set;", map_entrySet);
+    /* the request headers libunity hands UnityWebRequest (2017.4 - 2018.4): never read back here */
+    M("java/util/HashMap", "<init>", "()V", h_void);
+    M("java/util/HashMap", "<init>", "(I)V", h_void);
+    M("java/util/HashMap", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", h_null);
 
     /* Looper / Handler / Message / HandlerThread */
     SM("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;", lp_main);
