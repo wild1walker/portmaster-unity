@@ -49,14 +49,14 @@ $(OUT)/libfakejni.a: $(LIB_OBJS)
 $(OUT)/android_side.o: test/android_side.c include/jni.h | $(OUT)
 	$(CC) $(ANDROID_CFLAGS) -c $< -o $@
 
-$(OUT)/fake_unity.o: test/fake_unity.c include/jni.h | $(OUT)
+$(OUT)/fake_unity.o: test/fake_unity.c test/fake_unity.h include/jni.h | $(OUT)
 	$(CC) $(ANDROID_CFLAGS) -c $< -o $@
 
 $(OUT)/test_fakejni: test/test_fakejni.c $(OUT)/android_side.o $(OUT)/libfakejni.a
 	$(CC) $(CFLAGS) $< $(OUT)/android_side.o -L$(OUT) -lfakejni -lz -lpthread -lm \
 	      $(TEST_LDFLAGS) -o $@
 
-$(OUT)/test_unityplayer: test/test_unityplayer.c $(OUT)/fake_unity.o $(OUT)/libfakejni.a
+$(OUT)/test_unityplayer: test/test_unityplayer.c test/fake_unity.h $(OUT)/fake_unity.o $(OUT)/libfakejni.a
 	$(CC) $(CFLAGS) $< $(OUT)/fake_unity.o -L$(OUT) -lfakejni -lz -lpthread -lm \
 	      $(TEST_LDFLAGS) -o $@
 
