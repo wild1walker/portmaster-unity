@@ -36,8 +36,12 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 
 static char libdir[512];
 
-// android_package.json beside the APK (pmunity android-data --pack): "package", "build_id", "apk"
-static char pj_package[256], pj_build_id[128], pj_apk[256];
+// android_package.json beside the APK (pmunity android-data --pack, pmunity apk): "package",
+// "build_id", "apk", and from an imported Android build "version_code", "version_name", "min_sdk"
+// and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData)
+static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32];
+static int pj_version_code, pj_min_sdk;
+static char pj_meta[4096];                      // "key=value;key=value"
 
 static void json_str(const char *js, const char *key, char *out, size_t n)
 {
@@ -49,9 +53,55 @@ static void json_str(const char *js, const char *key, char *out, size_t n)
     if (e && (size_t)(e - p) < n) { memcpy(out, p, e - p); out[e - p] = 0; }
 }
 
+static int json_int(const char *js, const char *key)
+{
+    char k[64];
+    snprintf(k, sizeof k, "\"%s\"", key);
+    const char *p = strstr(js, k);
+    if (!p || !(p = strchr(p + strlen(k), ':'))) return 0;
+    while (*++p == ' ') ;
+    return atoi(p);
+}
+
+// a JSON string at p (p at the opening quote) into out, with \" \\ \/ unescaped; returns the
+// character after the closing quote, or NULL
+static const char *json_strval(const char *p, char *out, size_t n)
+{
+    size_t o = 0;
+    for (p++; *p && *p != '"'; p++) {
+        char c = *p;
+        if (c == '\\' && p[1]) { c = *++p; if (c == 'n') c = '\n'; else if (c == 't') c = '\t'; }
+        if (o + 1 < n) out[o++] = c;
+    }
+    out[o] = 0;
+    return *p == '"' ? p + 1 : NULL;
+}
+
+// "meta_data": {"k": "v", "k2": null, ...} -> "k=v;..." (values that are not strings are skipped)
+static void json_meta(const char *js, char *out, size_t n)
+{
+    const char *p = strstr(js, "\"meta_data\"");
+    if (!p || !(p = strchr(p, '{'))) return;
+    size_t o = 0;
+    out[0] = 0;
+    for (p++; *p && *p != '}';) {
+        char k[256], v[1024];
+        while (*p && *p != '"' && *p != '}') p++;
+        if (*p != '"' || !(p = json_strval(p, k, sizeof k))) break;
+        while (*p == ' ' || *p == ':') p++;
+        if (*p == '"') {
+            if (!(p = json_strval(p, v, sizeof v))) break;
+            if (!strchr(k, ';') && !strchr(v, ';') && o + strlen(k) + strlen(v) + 3 < n)
+                o += snprintf(out + o, n - o, "%s%s=%s", o ? ";" : "", k, v);
+        } else {
+            while (*p && *p != ',' && *p != '}') p++;
+        }
+    }
+}
+
 static void read_package_json(const char *root)
 {
-    char path[600], js[8192];
+    char path[600], js[16384];
     snprintf(path, sizeof path, "%s/android_package.json", root);
     FILE *f = fopen(path, "r");
     if (!f) return;
@@ -62,6 +112,11 @@ static void read_package_json(const char *root)
     json_str(js, "build_id", pj_build_id, sizeof pj_build_id);
     json_str(js, "apk", pj_apk, sizeof pj_apk);
     if (strchr(pj_apk, '/')) pj_apk[0] = 0;          // an older file with a path in it: not used
+    json_str(js, "version_name", pj_version_name, sizeof pj_version_name);
+    pj_version_code = json_int(js, "version_code");
+    pj_min_sdk = json_int(js, "min_sdk");
+    json_meta(js, pj_meta, sizeof pj_meta);
+    json_str(js, "source", pj_source, sizeof pj_source);
 }
 
 static int only_apk(const char *root, char *out, size_t n)
@@ -261,6 +316,11 @@ int main(int argc, char **argv)
     // the data tool next to the APK), else the only .apk in <root>
     read_package_json(root);
     const char *pkg = getenv("UA_PACKAGE") ? getenv("UA_PACKAGE") : pj_package[0] ? pj_package : "com.pmunity.game";
+    // an imported Android build (pmunity apk) keeps its own frame pacing setting: with Optimized Frame
+    // Pacing on, Unity 2019.3+ needs Swappy running (disabled, it presents nothing or stops after a few
+    // frames), so Swappy's off switch (the loader's swappy.disable property) is cleared for it;
+    // converted desktop data has the setting off and never starts Swappy (android/README.md)
+    if (!strcmp(pj_source, "apk") && !getenv("SO_PROP_swappy_disable")) setenv("SO_PROP_swappy_disable", "0", 1);
     char apk[600], obb[600], data[600], files[600], cache[600], ext[600];
     if (getenv("UA_LIBDIR")) snprintf(libdir, sizeof libdir, "%s", getenv("UA_LIBDIR"));   // e.g. a Development player
     else snprintf(libdir, sizeof libdir, "%s/lib", root);
@@ -327,19 +387,22 @@ int main(int argc, char **argv)
     cfg.external_cache_dir = cache;
     cfg.obb_dir = obb;
     cfg.external_storage = data;
-    cfg.version_code = 1;
-    cfg.version_name = "1.0";
+    // PackageInfo.versionCode names the OBBs the player looks for (main.<code>.<package>.obb)
+    cfg.version_code = pj_version_code > 0 ? pj_version_code : 1;
+    cfg.version_name = pj_version_name[0] ? pj_version_name : "1.0";
     cfg.command_line = getenv("UA_UNITY_ARGS");
     // ApplicationInfo.metaData: UA_META="key=value;key=value" (e.g. unity.build-id=..., which ties
     // the APK to its OBB)
-    static const char *meta[16];
-    static char metabuf[1024];
+    static const char *meta[32];
+    static char metabuf[4096];
     int nm = 0;
     if (getenv("UA_META"))
         snprintf(metabuf, sizeof metabuf, "%s", getenv("UA_META"));
+    else if (pj_meta[0])                        // an imported build's manifest meta-data
+        snprintf(metabuf, sizeof metabuf, "%s", pj_meta);
     else if (pj_build_id[0])
         snprintf(metabuf, sizeof metabuf, "unity.build-id=%s", pj_build_id);
-    for (char *t = strtok(metabuf, ";"); t && nm < 15; t = strtok(NULL, ";")) meta[nm++] = t;
+    for (char *t = strtok(metabuf, ";"); t && nm < 31; t = strtok(NULL, ";")) meta[nm++] = t;
     meta[nm] = NULL;
     cfg.meta_data = meta;
     ANativeWindow *win = android_window_get();
@@ -347,8 +410,12 @@ int main(int argc, char **argv)
     cfg.height = ANativeWindow_getHeight(win);
     cfg.density_dpi = 160;
     cfg.refresh_rate = display_refresh_rate() > 0 ? (float)display_refresh_rate() : 60.f;
-    cfg.sdk_int = 19;
-    cfg.os_release = "4.4.4";
+    // Build.VERSION: 4.4 (API 19) as the ports were made with; an imported Android build reports at
+    // least its minSdkVersion, as any phone it installs on would (UA_SDK_INT overrides)
+    cfg.sdk_int = getenv("UA_SDK_INT") ? atoi(getenv("UA_SDK_INT")) : pj_min_sdk > 19 ? pj_min_sdk : 19;
+    static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1", "6.0", "7.0", "7.1", "8.0", "8.1", "9", "10",
+                                            "11", "12", "12L", "13", "14", "15" };
+    cfg.os_release = cfg.sdk_int >= 19 && cfg.sdk_int <= 35 ? releases[cfg.sdk_int - 19] : "4.4.4";
     cfg.cpu_count = 4;
     cfg.total_mem = 973LL << 20;
     // what AudioManager reports to FMOD as the output's native rate and buffer size
