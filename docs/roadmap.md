@@ -27,6 +27,8 @@ are 32-bit ARM in every version.
    2022.3): their libraries' imports (`tools/re/elfimports.py`), the Java classes and natives they
    use (`FJ_DUMP`), the startup order, data paths, the OBB/asset-pack layout; IL2CPP
    (`libil2cpp.so`, `global-metadata.dat`) next to Mono.
+   Surveyed statically for the last patch of each line: [compat/README.md](compat/README.md)
+   (matrix and the prioritized gap list).
 3. **Converter coverage**: shader program blob layouts per version, GraphicsSettings and
    MonoManager per version (the engine-module slot count), compressed builds (`data.unity3d`),
    bundles of all versions, Addressables; DXBC shaders (Windows builds).
