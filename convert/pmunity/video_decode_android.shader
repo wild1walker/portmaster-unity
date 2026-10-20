@@ -6,11 +6,18 @@
 // decoder, YUV 4:2:0 in one 8-bit channel: rows 0 .. H-1 the Y plane, then each chroma row as U
 // (W/2 texels) and V (W/2 texels); W x H is the picture padded to even sizes, the texture is
 // W x 1.5 H. The texture coordinates Unity passes (its quad's, through getTransformMatrix and
-// _MainTex_ST) are frame coordinates: (0,0) the picture's top-left, (1,1) its padded
-// bottom-right. Sampling is nearest (Unity sets point filtering on this texture), so each output
-// pixel reads its own Y and the U and V of its 2x2 block, and the YCbCr -> RGB conversion is the
-// one Unity's desktop players apply to the same decoded pictures (BT.601, limited range,
-// coefficients in 1/64 steps, in the same order of operations), so frames look as they do there.
+// _MainTex_ST) are frame coordinates: (0,0) the picture's top-left, (1,1) its padded bottom-right.
+// Sampling is nearest (Unity sets point filtering on this texture), so each output pixel reads its
+// own Y and the U and V of its 2x2 block. (No texture size is read in the shader: drivers differ
+// in what textureSize gives for external samplers.)
+//
+// The YCbCr -> RGB conversion is the one Unity's desktop players apply to the same clips, in the
+// same order of operations, so a clip looks as it does there. UM_BT709 (a constant, so the
+// compiler drops the other branch) chooses it; video.py sets it from the game's clips:
+//   0: VP8 / VP9, decoded by Unity itself on the desktop and converted by its YCbCr_TO_RGB1 pass
+//      (BT.601, limited range, coefficients in 1/64 steps): Linux builds' clips;
+//   1: H.264 / HEVC, decoded by the system there into NV12 pictures and converted by Unity's NV12
+//      pass (BT.709, limited range): macOS and Windows builds' clips.
 //
 // Two programs, each one Unity program (vertex and fragment in one source, "#ifdef VERTEX" /
 // "#ifdef FRAGMENT"), separated by "//// pass <name>" lines: the passes Unity looks up by name.
@@ -47,6 +54,7 @@ void main()
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
 precision highp int;
+const bool UM_BT709 = false;
 uniform 	float _AlphaParam;
 uniform highp samplerExternalOES _MainTex;
 in  vec2 vs_TEXCOORD0;
@@ -62,6 +70,11 @@ vec3 yuv(vec2 p)
 }
 vec3 rgb(vec3 s)
 {
+    if (UM_BT709) {
+        vec3 t = vec3(s.x + -0.0625, s.yz + vec2(-0.5, -0.5));
+        return vec3(dot(vec2(1.16439998, 1.79270005), t.xz), dot(vec3(1.16439998, -0.213300005, -0.532899976), t),
+                    dot(vec2(1.16439998, 2.11240005), t.xy));
+    }
     vec2 uu = vec2(s.y) * vec2(0.390625, 1.984375);
     float g = s.x * 1.15625 + (-uu.x);
     float b = s.x * 1.15625 + uu.y;
@@ -113,6 +126,7 @@ void main()
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
 precision highp int;
+const bool UM_BT709 = false;
 uniform highp samplerExternalOES _MainTex;
 in  vec2 vs_TEXCOORD0;
 layout(location = 0) out vec4 SV_Target0;
@@ -126,6 +140,11 @@ vec3 yuv(vec2 p)
 }
 vec3 rgb(vec3 s)
 {
+    if (UM_BT709) {
+        vec3 t = vec3(s.x + -0.0625, s.yz + vec2(-0.5, -0.5));
+        return vec3(dot(vec2(1.16439998, 1.79270005), t.xz), dot(vec3(1.16439998, -0.213300005, -0.532899976), t),
+                    dot(vec2(1.16439998, 2.11240005), t.xy));
+    }
     vec2 uu = vec2(s.y) * vec2(0.390625, 1.984375);
     float g = s.x * 1.15625 + (-uu.x);
     float b = s.x * 1.15625 + uu.y;

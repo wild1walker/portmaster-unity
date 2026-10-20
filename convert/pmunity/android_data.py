@@ -831,7 +831,9 @@ def plan(args):
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
     # the Android VideoPlayer's shader, made from the desktop one (video.py)
     args.video_shader_pid = video.path_id_for(bex) if args.video_shader and video.has_template(bex) else None
-    items.append((os.path.join(data, 'Resources', 'unity_builtin_extra'), bex, 'sfvideo' if args.video_shader_pid else 'sfpatch'))
+    args.video_bt709 = bool(args.video_shader_pid) and video.wants_bt709(src, print)
+    act = ('sfvideo709' if args.video_bt709 else 'sfvideo') if args.video_shader_pid else 'sfpatch'
+    items.append((os.path.join(data, 'Resources', 'unity_builtin_extra'), bex, act))
     # Managed: the Android engine assemblies, the game's own and Unity's extension/BCL assemblies
     amanaged = os.path.join(pkg, 'Variations', 'mono', 'Managed')
     names = set()
@@ -1167,10 +1169,10 @@ def main(argv=None):
             write_bytes(dst, data)
             report['notes'] += notes
             how = 'unitypy'
-        elif act == 'sfvideo':
+        elif act in ('sfvideo', 'sfvideo709'):
             import UnityPy
             sf = UnityPy.load(src).file
-            pid = video.add_to_builtin_extra(sf, log)
+            pid = video.add_to_builtin_extra(sf, log, act == 'sfvideo709')
             if pid != args.video_shader_pid:
                 raise SystemExit(f'video: shader got path id {pid}, globalgamemanagers maps {args.video_shader_pid}')
             sf._m_target_platform = ANDROID
@@ -1399,13 +1401,13 @@ def verify(args, items, log):
     n_sf = 0
     for dst_rel, src, act in items:
         dst = os.path.join(args.out, dst_rel)
-        if act in ('sfpatch', 'sfinline', 'ggm', 'sfvideo'):
+        if act in ('sfpatch', 'sfinline', 'ggm', 'sfvideo', 'sfvideo709'):
             env = UnityPy.load(dst)
             sf = env.file
             if not isinstance(sf, SerializedFile):
                 bad.append((dst_rel, 'not a serialized file')); continue
             env0 = UnityPy.load(src) if os.path.exists(src) else None      # (gone with --consume-src)
-            added = 1 if act == 'sfvideo' else 0                          # Hidden/VideoDecodeAndroid
+            added = 1 if act.startswith('sfvideo') else 0                 # Hidden/VideoDecodeAndroid
             if env0 is not None and len(sf.objects) != len(env0.file.objects) + added:
                 bad.append((dst_rel, f'{len(sf.objects)} objects, source {len(env0.file.objects)}'))
             if want is not None and sf._m_target_platform != want:

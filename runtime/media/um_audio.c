@@ -244,3 +244,61 @@ um_dec *um_opus_create(const char *mime)
     return &o->base;
 }
 #endif
+
+/* ---- silence: the last resort for AAC / MP3 (no permissive decoder of our own; the system's
+   libavcodec decodes them when there is one). A clip whose audio decoder cannot be made may not
+   prepare at all (Unity waits for every track's decoder), so the track gives the silence its
+   frames stand for (1024 samples per AAC frame, 2048 with SBR; 1152 / 576 per MP3 frame) and the
+   video plays, without its sound. ------------------------------------------------------------ */
+typedef struct {
+    um_dec base;
+    int aac, rate, channels, per;
+    int16_t *zeros;
+} silentdec;
+
+static const int aac_rates[] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350 };
+
+static int si_configure(um_dec *d, const um_format *in, um_format *out)
+{
+    silentdec *s = (silentdec *)d;
+    int32_t v;
+    s->rate = um_format_get_int32(in, UM_KEY_SAMPLE_RATE, &v) && v > 0 ? v : 44100;
+    s->channels = um_format_get_int32(in, UM_KEY_CHANNEL_COUNT, &v) && v > 0 && v <= 8 ? v : 2;
+    s->per = s->aac ? 1024 : (s->rate >= 32000 ? 1152 : 576);
+    size_t n = 0;
+    const uint8_t *asc = s->aac ? um_format_get_buffer(in, "csd-0", &n) : NULL;
+    if (asc && n >= 2) {
+        int aot = asc[0] >> 3, idx = (asc[0] & 7) << 1 | asc[1] >> 7;
+        if (idx < 13) s->rate = aac_rates[idx];
+        if (aot == 5 || aot == 29) { s->rate *= 2; s->per = 2048; }     /* SBR: twice the rate */
+    }
+    s->zeros = calloc((size_t)s->per * s->channels, sizeof(int16_t));
+    um_format_set_int32(out, UM_KEY_SAMPLE_RATE, s->rate);
+    um_format_set_int32(out, UM_KEY_CHANNEL_COUNT, s->channels);
+    um_log("audio: no %s decoder (no system libavcodec): the clip's sound is silence", s->aac ? "AAC" : "MP3");
+    return s->zeros ? UM_OK : UM_ERR_UNKNOWN;
+}
+
+static int si_decode(um_dec *d, const uint8_t *data, size_t size, int64_t pts, uint32_t flags, um_emit *em)
+{
+    silentdec *s = (silentdec *)d;
+    (void)data;
+    if (!size || (flags & UM_BUFFER_FLAG_CODEC_CONFIG)) return UM_OK;
+    return em->audio(em->codec, s->zeros, s->per, s->channels, s->rate, pts);
+}
+
+static void si_flush(um_dec *d) { (void)d; }
+static void si_destroy(um_dec *d) { silentdec *s = (silentdec *)d; free(s->zeros); free(s); }
+
+um_dec *um_silent_create(const char *mime)
+{
+    silentdec *s = calloc(1, sizeof *s);
+    if (!s) return NULL;
+    s->aac = !strcmp(mime, UM_MIME_AAC);
+    s->base.name = "silence";
+    s->base.configure = si_configure;
+    s->base.decode = si_decode;
+    s->base.flush = si_flush;
+    s->base.destroy = si_destroy;
+    return &s->base;
+}

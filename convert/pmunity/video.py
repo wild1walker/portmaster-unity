@@ -31,9 +31,19 @@ GLSL = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'video_decode_an
 PREFERRED_PATH_ID = 16001       # next to Hidden/VideoDecode's 16000 (any free id works)
 
 
-def programs():
-    """{pass name: GLSL program source (both stages, Unity's #ifdef VERTEX / FRAGMENT form)}"""
-    text = open(GLSL, encoding='utf-8').read()
+BT709_OFF = 'const bool UM_BT709 = false;'
+
+
+def programs(bt709=False):
+    """{pass name: GLSL program source (both stages, Unity's #ifdef VERTEX / FRAGMENT form)}, with
+    the YCbCr conversion Unity's desktop players give VP8 / VP9 clips (bt709 False) or H.264 /
+    HEVC ones (True)"""
+    with open(GLSL, encoding='utf-8') as f:
+        text = f.read()
+    if text.count(BT709_OFF) != len(PASSES):
+        raise ValueError(f'{GLSL}: expected one "{BT709_OFF}" per pass')
+    if bt709:
+        text = text.replace(BT709_OFF, 'const bool UM_BT709 = true;')
     out = {}
     for m in re.finditer(r'^//// pass (\S+)\n(.*?)(?=^//// pass |\Z)', text, re.S | re.M):
         out[m.group(1)] = m.group(2).strip() + '\n'
@@ -48,7 +58,7 @@ def _pass_name(p):
     return st.get('m_Name') or p.get('m_Name') or ''
 
 
-def build(template_tree):
+def build(template_tree, bt709=False):
     """The Hidden/VideoDecodeAndroid Shader typetree made from a Hidden/VideoDecode one."""
     t = copy.deepcopy(template_tree)
     pf = t['m_ParsedForm']
@@ -56,7 +66,7 @@ def build(template_tree):
         raise ValueError(f'template is {pf["m_Name"]}, not {TEMPLATE}')
     if B.PLATFORM_GLCORE not in t['platforms']:
         raise ValueError(f'{TEMPLATE} has no OpenGL Core programs to take the layout from')
-    progs = programs()
+    progs = programs(bt709)
     blobs = B.ShaderBlobs(t)
     src = C.platform_entries(t, B.PLATFORM_GLCORE, blobs)
     ss = pf['m_SubShaders'][0]
@@ -132,7 +142,7 @@ def build(template_tree):
     return t
 
 
-def add_to_builtin_extra(sf, log=print):
+def add_to_builtin_extra(sf, log=print, bt709=False):
     """Adds Hidden/VideoDecodeAndroid to a loaded unity_builtin_extra (UnityPy SerializedFile) that
     has Hidden/VideoDecode. Returns the new path id, or None (no template, or already there)."""
     template = None
@@ -146,7 +156,7 @@ def add_to_builtin_extra(sf, log=print):
             template = o
     if template is None:
         return None
-    tree = build(template.read_typetree())
+    tree = build(template.read_typetree(), bt709)
     pid = PREFERRED_PATH_ID
     while pid in sf.objects:
         pid += 1
@@ -156,7 +166,7 @@ def add_to_builtin_extra(sf, log=print):
     new.save_typetree(tree)
     sf.objects[pid] = new
     log(f'video: {NAME} added to unity_builtin_extra (path id {pid}, passes '
-        f'{", ".join(p for p, _ in PASSES)})')
+        f'{", ".join(p for p, _ in PASSES)}; {"BT.709 (H.264 / HEVC clips)" if bt709 else "BT.601 (VP8 / VP9 clips)"})')
     return pid
 
 
@@ -212,3 +222,64 @@ def has_template(path):
             return TEMPLATE.encode() in f.read()
     except OSError:
         return False
+
+
+# ---------------------------------------------------------------- the game's clips
+
+def sniff(path, offset, size):
+    """The video codec of the clip at [offset, offset + size) of path: 'vp8', 'vp9', 'h264',
+    'hevc', or the container ('webm', 'mp4') when the codec is not seen, or None."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(offset)
+            head = f.read(min(size, 1 << 16))
+            tail = b''
+            if size > 1 << 16:                          # an MP4's moov may be at the end
+                f.seek(offset + max(size - (1 << 20), 1 << 16))
+                tail = f.read(min(size - (1 << 16), 1 << 20))
+    except OSError:
+        return None
+    if head[:4] == b'\x1a\x45\xdf\xa3':
+        for tag, codec in ((b'V_VP8', 'vp8'), (b'V_VP9', 'vp9'), (b'V_MPEG4/ISO/AVC', 'h264'), (b'V_MPEGH/ISO/HEVC', 'hevc')):
+            if tag in head:
+                return codec
+        return 'webm'
+    if head[4:8] in (b'ftyp', b'moov', b'mdat', b'free', b'wide', b'skip'):
+        for tag, codec in ((b'avc1', 'h264'), (b'avc3', 'h264'), (b'hvc1', 'hevc'), (b'hev1', 'hevc')):
+            if tag in head or tag in tail:
+                return codec
+        return 'mp4'
+    return None
+
+
+def clip_codecs(data_dir):
+    """{codec: count} of the VideoClips in a game's data folder (their data in *.resource files)."""
+    import UnityPy
+    out = {}
+    for n in sorted(os.listdir(data_dir)):
+        if not (n.endswith('.assets') or re.match(r'^level\d+$', n)):
+            continue
+        try:
+            env = UnityPy.load(os.path.join(data_dir, n))
+        except Exception:
+            continue
+        for o in env.objects:
+            if o.type.name != 'VideoClip':
+                continue
+            er = o.read_typetree().get('m_ExternalResources') or {}
+            src = (er.get('m_Source') or '').split('/')[-1]
+            codec = sniff(os.path.join(data_dir, src), er.get('m_Offset', 0), er.get('m_Size', 0)) if src else None
+            out[codec or 'unknown'] = out.get(codec or 'unknown', 0) + 1
+    return out
+
+
+def wants_bt709(data_dir, log=print):
+    """True when the game's clips are H.264 / HEVC (macOS / Windows builds): Unity's desktop players
+    convert those with BT.709; VP8 / VP9 (Linux builds) with Unity's own BT.601 constants."""
+    codecs = clip_codecs(data_dir)
+    hd = codecs.get('h264', 0) + codecs.get('hevc', 0)
+    sw = codecs.get('vp8', 0) + codecs.get('vp9', 0)
+    if codecs:
+        log(f'video: clips {codecs}: {"BT.709" if hd > sw else "BT.601"} conversion'
+            + (' (clips of both kinds: the more common one; the others are converted with it too)' if hd and sw else ''))
+    return hd > sw

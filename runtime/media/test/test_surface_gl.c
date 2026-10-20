@@ -63,9 +63,12 @@ static GLuint compile(GLenum t, const char *src)
     return s;
 }
 
-static GLuint program(const char *glsl, const char *pass)
+static GLuint program(const char *glsl, const char *pass, int bt709)
 {
     char *vs = stage(glsl, pass, "VERTEX"), *fs = stage(glsl, pass, "FRAGMENT");
+    char *d = fs ? strstr(fs, "const bool UM_BT709 = false;") : NULL;   /* what video.py sets for H.264 clips */
+    CHECK(d != NULL, "UM_BT709 in %s", pass);
+    if (d && bt709) memcpy(d + strlen("const bool UM_BT709 = "), "true; ", 6);
     CHECK(vs && fs, "pass %s in the shader file", pass);
     GLuint p = glCreateProgram();
     glAttachShader(p, compile(GL_VERTEX_SHADER, vs));
@@ -80,13 +83,22 @@ static GLuint program(const char *glsl, const char *pass)
     return p;
 }
 
-/* the desktop conversion (Hidden/VideoDecode YCbCr_TO_RGB1), to 8 bits */
+/* the desktop conversions, to 8 bits: Hidden/VideoDecode's YCbCr_TO_RGB1 (VP8 / VP9) and its
+   NV12 pass (BT.709, H.264 / HEVC) */
+enum { UM_COLOUR_UNITY_SOFTWARE, UM_COLOUR_BT709 };
+static int g_colour;
 static void ref_rgb(int Y, int U, int V, int out[3])
 {
     float y = Y / 255.0f, u = U / 255.0f, v = V / 255.0f;
     float r = y * 1.15625f + v * 1.59375f - 0.872539997f;
     float g = y * 1.15625f - u * 0.390625f - v * 0.8125f + 0.531369984f;
     float b = y * 1.15625f + u * 1.984375f - 1.06861997f;
+    if (g_colour == UM_COLOUR_BT709) {
+        float ty = y - 0.0625f, tu = u - 0.5f, tv = v - 0.5f;
+        r = 1.16439998f * ty + 1.79270005f * tv;
+        g = 1.16439998f * ty - 0.213300005f * tu - 0.532899976f * tv;
+        b = 1.16439998f * ty + 2.11240005f * tu;
+    }
     float c[3] = { r, g, b };
     for (int i = 0; i < 3; i++) {
         float x = c[i] < 0 ? 0 : c[i] > 1 ? 1 : c[i];
@@ -139,9 +151,10 @@ static uint8_t *draw(GLuint pr, GLuint ext, um_surface *s, int w, int h)
     return px;
 }
 
-static void test_size(const char *glsl, int w, int h, int split)
+static void test_size(const char *glsl, int w, int h, int split, int colour)
 {
-    printf("-- %dx%d%s\n", w, h, split ? " (alpha split)" : "");
+    printf("-- %dx%d%s%s\n", w, h, split ? " (alpha split)" : "", colour == UM_COLOUR_BT709 ? " BT.709" : "");
+    g_colour = colour;
     GLuint ext;
     glGenTextures(1, &ext);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, ext);       /* as Unity's ApiGLES::GenTexture does */
@@ -172,7 +185,7 @@ static void test_size(const char *glsl, int w, int h, int split)
     CHECK(um_surface_timestamp(s) == 123456000, "timestamp");
     CHECK(um_surface_update(s) == 0, "nothing new to latch");
     int ow = split ? w / 2 : w;
-    GLuint pr = program(glsl, split ? "RGBASplitExternal_To_RGBA" : "RGBAExternal_To_RGBA");
+    GLuint pr = program(glsl, split ? "RGBASplitExternal_To_RGBA" : "RGBAExternal_To_RGBA", colour == UM_COLOUR_BT709);
     uint8_t *px = draw(pr, ext, s, ow, h);
     int maxd = 0, bad = 0, amax = 0;
     for (int j = 0; j < h; j++)
@@ -230,9 +243,11 @@ int main(int argc, char **argv)
     if (!eglMakeCurrent(d, s, s, ctx)) { printf("SKIPPED: no GLES 3 context\n"); return 0; }
     printf("GL: %s, %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    test_size(glsl, 64, 36, 0);
-    test_size(glsl, 71, 41, 0);
-    test_size(glsl, 128, 40, 1);
+    test_size(glsl, 64, 36, 0, UM_COLOUR_UNITY_SOFTWARE);
+    test_size(glsl, 71, 41, 0, UM_COLOUR_UNITY_SOFTWARE);
+    test_size(glsl, 128, 40, 1, UM_COLOUR_UNITY_SOFTWARE);
+    test_size(glsl, 64, 36, 0, UM_COLOUR_BT709);
+    test_size(glsl, 71, 41, 0, UM_COLOUR_BT709);
     printf("%s: %d failure(s) in %d checks\n", fails ? "FAILED" : "PASSED", fails, checks);
     return fails != 0;
 }

@@ -61,6 +61,9 @@ static const um_dec_entry decoders[] = {
     { UM_MIME_HEVC, "ffmpeg.hevc.decoder", um_ffmpeg_create, 1 },
     { UM_MIME_AAC, "ffmpeg.aac.decoder", um_ffmpeg_create, 0 },
     { UM_MIME_MPEG, "ffmpeg.mp3.decoder", um_ffmpeg_create, 0 },
+    /* no decoder for the sound: silence of the right length, so the clip still plays */
+    { UM_MIME_AAC, "OMX.google.aac.decoder", um_silent_create, 0 },
+    { UM_MIME_MPEG, "OMX.google.mp3.decoder", um_silent_create, 0 },
 };
 
 struct um_codec {

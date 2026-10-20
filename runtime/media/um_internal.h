@@ -90,6 +90,7 @@ um_dec *um_vorbis_create(const char *mime);
 um_dec *um_opus_create(const char *mime);
 um_dec *um_h264_create(const char *mime);
 um_dec *um_ffmpeg_create(const char *mime);
+um_dec *um_silent_create(const char *mime);          /* AAC / MP3 without a decoder: silence */
 int     um_ffmpeg_available(void);
 
 /* H.264 / HEVC (um_mp4.c): avcC / hvcC -> csd-0 (/ csd-1) in Annex B form, the NAL length size;

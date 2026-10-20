@@ -9,6 +9,7 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. One build serves the players of Unity 2017.4 to 2022.3 (see Unity versions). |
 | `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
+| `up_media.c` | The video classes (VideoPlayer, see Video below): MediaExtractor, MediaFormat, MediaCodec (+BufferInfo), SurfaceTexture (+OnFrameAvailableListener), Surface(SurfaceTexture), ParcelFileDescriptor, FileDescriptor, java.nio Buffer/IntBuffer members. The work is `../media`'s (libuamedia.a); registered only in a program that links it (`up_media_init()` pulls it in; this folder's tests do not). |
 | `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
 | `test/` | Unit tests (see Tests). |
 | `build.sh`, `Makefile`, `docker/Dockerfile` | Build in docker image `ua-jni-build` (bookworm + gcc-arm-linux-gnueabihf + qemu-user), or with `ARCH=arm64` in `ua-build-arm64` (`../docker/arm64`). |
@@ -311,10 +312,15 @@ libunity; "ok" rows of all rows, before → after this work):
 | UnityPlayer methods libunity calls | 12 / 12 | 12 / 12 | 11 → 19 / 19 | 11 → 28 / 28 | 10 → 27 / 27 | 10 → 30 / 30 | 10 → 34 / 34 |
 | natives runtime/jni calls, called with the registered signature | all | 1 ✗ → all | 1 ✗ → all | 3 ✗ → all | 3 ✗ → all | 3 ✗ → all | 4 ✗ → all |
 
+With `up_media.c` (a program that links the media core, as ua_host does) the framework members
+defined are 302, 306, 339, 360, 364, 364 and 311 of the same totals: every MediaExtractor,
+MediaFormat, MediaCodec, SurfaceTexture, Surface(SurfaceTexture), ParcelFileDescriptor and
+java.nio member the players bind.
+
 (✗: `nativeUnitySendMessage` from 2017.4.40, `nativeDone` and `nativeProxyInvoke` from 2019.4,
-`nativeInjectEvent` in 2022.3.) The remaining rows are classes with no use on a handheld (camera, VR/AR, video, web requests and
+`nativeInjectEvent` in 2022.3.) The remaining rows are classes with no use on a handheld (camera, VR/AR, web requests and
 TLS, dialogs, telephony, location, Wi-Fi...: placeholders that answer 0/null as before),
-`Surface(SurfaceTexture)`/`SurfaceView(Context)` (video), and in javacalls Java-only entry points
+`SurfaceView(Context)`, and in javacalls Java-only entry points
 whose names libunity happens to contain (`UnityPlayer.pause/resume/quit/onKeyDown...`: the
 Activity calls them, here `up_*`), Swappy's classes (absent on purpose) and obfuscated helpers.
 The 2017.4.9 additions (`AudioAttributes.Builder.build`, `AudioFocusRequest.Builder.build`) are
@@ -332,11 +338,36 @@ Reproduce: build jnicover as its header says, then for each player
 `jnicover < notes/bindings.tsv` and `jnicover < notes/javacalls.tsv` (notes from
 `tools/re/survey_player.sh` and `tools/re/javacalls.py`).
 
+## Video (`up_media.c`)
+Players 2017.4 - 2021.3 decode VideoPlayer clips through Java (`AndroidVideoMedia<AndroidMediaJNI>`
+in libunity; the host refuses their dlopen of libmediandk, which is what selects this path),
+2022.3 through the NDK (`../android/media_ndk.c`) with the same SurfaceTexture. The classes behave
+as Android's for what libunity calls (the call sequence: `../media/README.md`):
+- `ParcelFileDescriptor.adoptFd(fd).getFileDescriptor()` → `MediaExtractor.setDataSource(fd,
+  offset, length)`: libunity opens the APK/OBB itself and passes the entry's range; the extractor
+  keeps a dup of the fd, so libunity's `detachFd` + `close` are fine. `setDataSource(String)` for
+  paths; http(s) throws IOException (no network).
+- `MediaFormat`'s typed getters throw as Java's do (NullPointerException for a missing key,
+  ClassCastException for another type: libunity reads `frame-rate` with `getFloat` and falls back
+  to `getInteger` on the exception); `toString` as Android's.
+- `MediaCodec`: IOException from `createDecoderByType` without a decoder, IllegalStateException in
+  the wrong state, direct ByteBuffers over the codec's memory from `getInputBuffers` /
+  `getOutputBuffers` (cached per configure; a video decoder with a Surface still gets a few bytes
+  behind every output index, which libunity checks), BufferInfo fields set by
+  `dequeueOutputBuffer`, `INFO_OUTPUT_FORMAT_CHANGED` / `INFO_OUTPUT_BUFFERS_CHANGED`.
+- `SurfaceTexture(texName)`: `onFrameAvailable` is posted to the looper of the thread that made it
+  (libunity's `VideoDecoderLooper` HandlerThread) or of the Handler given; `updateTexImage` (on
+  Unity's render thread, its GL context current) and `getTransformMatrix` are the media core's.
+  `Surface(SurfaceTexture)`'s data is a tagged pointer to the core's surface (the window Surface's
+  is the host's ANativeWindow), which `MediaCodec.configure` and `ANativeWindow_fromSurface` (NDK
+  path) recognize: `up_media_surface(surface)`.
+Tests: `../media/test/test_media_jni.c` (`../media/build.sh test`).
+
 ## What Unity may still call that is missing or shallow
 The authoritative list of what libunity can bind comes from `tools/re/strrefs.py` + `tools/re/jnibindings.py` run on your own copy of the player. Run the real
 thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`. Known gaps:
-- **Video** (`MediaCodec`, `MediaExtractor`, `MediaFormat`, `SurfaceTexture`, `Surface(SurfaceTexture)`)
-  and `UnityPlayer.showVideoPlayer` (returns false). A game that plays videos through Unity's VideoPlayer on this path gets none.
+- `UnityPlayer.showVideoPlayer` (`Handheld.PlayFullScreenMovie`, Unity's full-screen Java video
+  activity) returns false: the movie is skipped. Unity's VideoPlayer component is implemented (Video below).
 - **UnityWebRequest** Java class (`com/unity3d/player/UnityWebRequest` instances: networking, up
   to 2018.4; native from 2019.4, with TLS checks through `TrustManagerFactory` placeholders), the
   soft keyboard (`showSoftInput` is logged only), AlertDialog/Dialog/ProgressBar (activity indicator)

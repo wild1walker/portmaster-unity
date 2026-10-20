@@ -580,6 +580,15 @@ H(buf_setpos) { fj_set_int(self, "position", a[0].i); return fj_l(self); }
 H(buf_setlim) { fj_set_int(self, "limit", a[0].i); return fj_l(self); }
 H(buf_remaining) { return fj_i(fj_get_field(self, "limit", "I").i - fj_get_field(self, "position", "I").i); }
 
+/* java.nio.IntBuffer.allocate / array (the 2019.4+ players bind them) */
+H(ib_allocate)
+{
+    jobject b = fj_new_by_name("java/nio/IntBuffer", NULL, NULL);
+    fj_set_obj(b, "hb", "[I", fj_array_new("I", a[0].i > 0 ? a[0].i : 0));
+    return fj_l(b);
+}
+H(ib_array) { return fj_get_field(self, "hb", "[I"); }
+
 /* ---- registration ---------------------------------------------------------------------------------- */
 static const char *const media_keys[][2] = {
     { "KEY_MIME", "mime" }, { "KEY_WIDTH", "width" }, { "KEY_HEIGHT", "height" },
@@ -743,6 +752,9 @@ void up_media_register(void)
     M(B, "limit", "(I)Ljava/nio/Buffer;", buf_setlim);
     M(B, "remaining", "()I", buf_remaining);
     M("java/nio/ByteBuffer", "isDirect", "()Z", buf_true);
+    CLS("java/nio/IntBuffer", B);
+    SM("java/nio/IntBuffer", "allocate", "(I)Ljava/nio/IntBuffer;", ib_allocate);
+    M("java/nio/IntBuffer", "array", "()[I", ib_array);
 }
 
 /* the host's call: pulls this file (and the media core) into the program and says what it decodes */

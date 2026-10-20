@@ -73,7 +73,25 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_GC_HEAP=<bytes>` | Mono's initial GC heap (default 64 MB, `0` = Boehm's own; `GC_INITIAL_HEAP_SIZE` wins) |
 | `UA_QUIT_CLEANUP=1` | run Unity's engine cleanup (nativeDone) at quit; by default the host pauses Unity (PlayerPrefs saved) and exits |
 | `UA_AUDIO_RATE`, `UA_AUDIO_FRAMES` | output rate and buffer size AudioManager reports to FMOD (default 48000, 512) |
+| `UM_TRACE`, `UM_VIDEO_BUFFERS`, `UM_VPX_THREADS`, `UM_H264`, `UM_FFMPEG` | video (Unity's VideoPlayer, `runtime/media`): per-buffer log, a video decoder's output queue (default 4), libvpx threads, OpenH264 for every H.264 stream, the system's libavcodec off / from a path (see Video below) |
 | `UA_HITCH_TRACE=<ms>` | in frames longer than `<ms>`, sample `UA_HITCH_THREADS` (default `UnityMain`) every `UA_HITCH_EVERY` ms (20): pc, lr, return addresses as module+offset (runtime/host/hitches.c; `tools/analysis/sym.py` names libunity offsets, `tools/analysis/hitchsum.py` sums them up) |
+
+## Video
+
+Unity's VideoPlayer plays clips through `runtime/media` (details, call sequences and costs:
+`runtime/media/README.md`): players 2017.4 - 2021.3 through the Java classes of
+`runtime/jni/up_media.c`, 2022.3 through `runtime/android/media_ndk.c`. The data needs
+`Hidden/VideoDecodeAndroid`, which `pmunity android-data` adds (`docs/android-data.md`).
+
+| clips (desktop build) | picture | sound |
+|---|---|---|
+| VP8 / VP9 + Vorbis / Opus WebM (Linux builds) | libvpx, built in | libvorbis / libopus, built in |
+| H.264 + AAC MP4 (macOS, Windows builds) | OpenH264, built in (with B-frames: the system's libavcodec when there is one, exact; else OpenH264, close) | the system's libavcodec; without it silence |
+| HEVC, MP3 | the system's libavcodec | the system's libavcodec; MP3 without it: silence |
+
+At start the log names the decoders (`[media] decoders: vp8 (libvpx-vp8), ...`); each clip logs its
+tracks and decoders. `umbench <file> [offset size]` (`runtime/media/out/umbench`, a device check)
+decodes a clip as fast as it goes and prints the cost per frame.
 
 Debugging on the device: `python3 tools/device/stacks.py <pid> [thread]` (each thread's syscall and the
 libunity return addresses on its stack; name them with `tools/analysis/sym.py`), and gdb attaches to the

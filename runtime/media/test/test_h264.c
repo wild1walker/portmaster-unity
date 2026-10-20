@@ -140,7 +140,7 @@ void test_mp4_h264(void)
     um_codec *c = um_codec_create(UM_MIME_AVC);
     CHECK(c && !strcmp(um_codec_name(c), "OMX.google.h264.decoder"), "h264 decoder");
     CHECK(um_codec_configure(c, vf, NULL) == UM_OK && um_codec_start(c) == UM_OK, "configure/start");
-    int got = 0, fmts = 0, eos = 0, in_eos = 0, ordered = 1;
+    int got = 0, fmts = 0, eos = 0, in_eos = 0, ordered = 1, stride = 0, last_size = 0;
     double qmin = 99;
     int64_t last = -1;
     for (int spins = 0; spins < 4000 && !eos; spins++) {
@@ -156,16 +156,23 @@ void test_mp4_h264(void)
         }
         um_buffer_info bi;
         int o = um_codec_dequeue_output(c, &bi, 2000);
-        if (o == UM_INFO_OUTPUT_FORMAT_CHANGED) { fmts++; continue; }
+        if (o == UM_INFO_OUTPUT_FORMAT_CHANGED) {
+            um_format *of = um_codec_output_format(c);
+            um_format_get_int32(of, UM_KEY_STRIDE, &stride);
+            um_format_free(of);
+            fmts++;
+            continue;
+        }
         if (o < 0) continue;
         if (bi.flags & UM_BUFFER_FLAG_END_OF_STREAM) eos = 1;
         else {
             size_t cap;
             uint8_t *pp = um_codec_output_buffer(c, o, &cap);
             int f = (int)((bi.pts_us * 30 + 500000) / 1000000);
-            double q = psnr(pp, w, w, h, f);
+            double q = psnr(pp, stride, w, h, f);
             if (q < qmin) qmin = q;
             if (bi.pts_us <= last) ordered = 0;
+            last_size = bi.size;
             last = bi.pts_us;
             got++;
         }
@@ -173,10 +180,69 @@ void test_mp4_h264(void)
     }
     CHECK(got == frames && fmts == 1 && eos && ordered, "%d frames, %d format changes, eos %d, in order %d", got, fmts, eos, ordered);
     CHECK(qmin > 30, "PSNR %.1f dB", qmin);
+    CHECK(stride == w && last_size == w * (h + h / 2), "packed pictures (%d, %d)", stride, last_size);
     um_codec_free(c);
     um_format_free(vf);
     um_extractor_free(ex);
     wb_free(&clip);
     for (int i = 0; i < n; i++) free(samples[i].p);
     free(sps.p); free(pps.p); free(Y); free(U); free(V);
+}
+
+/* AAC without the system's libavcodec: the track still decodes, to silence of its length */
+void test_mp4_aac_silence(void)
+{
+    if (um_ffmpeg_version()) { printf("-- MP4 AAC: the system has libavcodec (test_media_ffmpeg covers it)\n"); return; }
+    printf("-- MP4 AAC without a decoder: silence\n");
+    static const uint8_t asc[2] = { 0x11, 0x90 };          /* AAC LC, 48 kHz, stereo */
+    uint8_t frame[64];
+    memset(frame, 0x21, sizeof frame);
+    const uint8_t *data[10]; size_t size[10]; int64_t dts[10]; int key[10];
+    for (int i = 0; i < 10; i++) { data[i] = frame; size[i] = sizeof frame; dts[i] = (int64_t)i * 1024; key[i] = 1; }
+    mp4_track t = { 0, 48000, 0, 0, 48000, 2, asc, 2, 10, data, size, dts, NULL, key, 213, 0 };
+    wb clip = mux_mp4(&t, 1);
+    char path[] = "/tmp/um-test-XXXXXX";
+    int fd = mkstemp(path);
+    CHECK(write(fd, clip.p, clip.n) == (ssize_t)clip.n, "write");
+    close(fd);
+    um_extractor *ex = um_extractor_new();
+    CHECK(um_extractor_set_path(ex, path) == UM_OK, "open");
+    unlink(path);
+    um_format *af = um_extractor_track_format(ex, 0);
+    size_t n;
+    int32_t v;
+    CHECK(af && !strcmp(um_format_get_string(af, UM_KEY_MIME), UM_MIME_AAC) && um_format_get_buffer(af, "csd-0", &n) && n == 2, "audio/mp4a-latm + csd-0");
+    CHECK(um_format_get_int32(af, UM_KEY_SAMPLE_RATE, &v) && v == 48000, "rate from the AudioSpecificConfig");
+    um_codec *c = um_codec_create(UM_MIME_AAC);
+    CHECK(c && !strcmp(um_codec_name(c), "OMX.google.aac.decoder"), "the silent decoder");
+    CHECK(um_codec_configure(c, af, NULL) == UM_OK && um_codec_start(c) == UM_OK, "configure");
+    um_extractor_select(ex, 0, 1);
+    long frames = 0, nonzero = 0;
+    int eos = 0, in_eos = 0;
+    for (int spins = 0; spins < 2000 && !eos; spins++) {
+        if (!in_eos) {
+            int i = um_codec_dequeue_input(c, 1000);
+            if (i >= 0) {
+                size_t cap;
+                uint8_t *b = um_codec_input_buffer(c, i, &cap);
+                ssize_t r = um_extractor_read(ex, b, cap);
+                if (r < 0) { um_codec_queue_input(c, i, 0, 0, 0, UM_BUFFER_FLAG_END_OF_STREAM); in_eos = 1; }
+                else { um_codec_queue_input(c, i, 0, (int)r, um_extractor_sample_time(ex), 0); um_extractor_advance(ex); }
+            }
+        }
+        um_buffer_info bi;
+        int o = um_codec_dequeue_output(c, &bi, 2000);
+        if (o < 0) continue;
+        if (bi.flags & UM_BUFFER_FLAG_END_OF_STREAM) eos = 1;
+        size_t cap;
+        int16_t *p = (int16_t *)um_codec_output_buffer(c, o, &cap);
+        for (int k = 0; k < bi.size / 2; k++) nonzero += p[k] != 0;
+        frames += bi.size / 4;
+        um_codec_release_output(c, o, 0);
+    }
+    CHECK(frames == 10240 && !nonzero && eos, "%ld frames of silence", frames);
+    um_codec_free(c);
+    um_format_free(af);
+    um_extractor_free(ex);
+    wb_free(&clip);
 }

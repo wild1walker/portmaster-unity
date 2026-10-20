@@ -97,6 +97,24 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
 - `unity default resources` comes from the Android package. It has the same PathIDs as the Linux one
   (checked) and an embedded Arial. `unity_builtin_extra` is the converted one.
 - Fonts are embedded in the game; there is no /system/fonts fallback.
+- **Video (`pmunity/video.py`).** Unity's Android VideoPlayer draws frames with
+  `Hidden/VideoDecodeAndroid` (`ScriptMapper::FindShader`, passes `RGBAExternal_To_RGBA` and
+  `RGBASplitExternal_To_RGBA`, matched ignoring case; the same in 2017.4 - 2022.3). An Android
+  build's `unity_builtin_extra` has it; a desktop build's has only `Hidden/VideoDecode`, and its
+  ScriptMapper lists the Android name with a null pointer. When the data has `Hidden/VideoDecode`,
+  android-data adds our own `Hidden/VideoDecodeAndroid` to `unity_builtin_extra` (a free path id,
+  16001 when free) and points the ScriptMapper entry at it:
+  - the Shader object is the data's `Hidden/VideoDecode` with the name, two passes (made from its
+    `FLIP_RGBA_TO_RGBA` and `FLIP_RGBASPLIT_TO_RGBA`: vertex inputs, `_MainTex`, `_MainTex_ST`,
+    `_AlphaParam`, render state), one GLES3 program each and no other platform, so its layout is
+    that Unity version's;
+  - the programs are `pmunity/video_decode_android.shader` (GLSL ES 3.00, `samplerExternalOES`),
+    written for the runtime's SurfaceTexture (`runtime/media/README.md`): Y, U and V read from the
+    packed picture and converted as Unity's desktop players convert the same clips; the converter
+    picks the conversion from the game's clips (their `.resource` headers: VP8/VP9 → Unity's
+    BT.601 software conversion, H.264/HEVC → BT.709 as Unity's NV12 pass), logged as
+    `video: clips {...}: BT.601 conversion`;
+  - `--no-video-shader` leaves it out (then no frame shows).
 
 ## 3. Managed assemblies
 

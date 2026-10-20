@@ -29,7 +29,7 @@ typedef struct {
     int64_t first_pts, last_pts, pts[512];
     int64_t audio_frames;
     int16_t *pcm; size_t pcm_n, pcm_cap;
-    int rate, channels, w, h;
+    int rate, channels, w, h, stride;
 } dec_result;
 
 static double psnr_y(const uint8_t *packed, int pw, int w, int h, int f)
@@ -70,6 +70,7 @@ static void run_codec(um_extractor *ex, um_codec *c, int track, dec_result *r, i
             int32_t v;
             if (um_format_get_int32(f, UM_KEY_WIDTH, &v)) r->w = v;
             if (um_format_get_int32(f, UM_KEY_HEIGHT, &v)) r->h = v;
+            if (um_format_get_int32(f, UM_KEY_STRIDE, &v)) r->stride = v;
             if (um_format_get_int32(f, UM_KEY_SAMPLE_RATE, &v)) r->rate = v;
             if (um_format_get_int32(f, UM_KEY_CHANNEL_COUNT, &v)) r->channels = v;
             um_format_free(f);
@@ -88,7 +89,7 @@ static void run_codec(um_extractor *ex, um_codec *c, int track, dec_result *r, i
                     size_t cap;
                     uint8_t *p = um_codec_output_buffer(c, o, &cap);
                     int f = (int)((bi.pts_us * 30 + 500000) / 1000000);
-                    double q = psnr_y(p, (r->w + 1) & ~1, r->w, r->h, f);
+                    double q = psnr_y(p, r->stride, r->w, r->h, f);
                     if (q < r->psnr_min) r->psnr_min = q;
                 }
                 r->frames++;
@@ -152,13 +153,15 @@ static void test_frame_layout(void)
     for (int i = 0; i < 6; i++) { u[i] = 100 + i; v[i] = 200 + i; }
     um_frame *f = um_frame_get(w, h);
     um_frame_fill(f, y, 5, u, 3, v, 3);
-    CHECK(f->pw == 6 && f->ph == 4, "padded size %dx%d", f->pw, f->ph);
-    CHECK(f->data[0] == 0 && f->data[4] == 4 && f->data[5] == 4 && f->data[6] == 5, "Y rows");
-    CHECK(f->data[3 * 6 + 0] == 10 && f->data[3 * 6 + 5] == 14, "last row repeated");
-    uint8_t *c = f->data + 6 * 4;
+    int P = f->pw;
+    CHECK(P == 6 && f->ph == 4, "padded size %dx%d", f->pw, f->ph);
+    CHECK(f->data[0] == 0 && f->data[4] == 4 && f->data[5] == 4 && f->data[P] == 5, "Y rows");
+    CHECK(f->data[3 * P + 0] == 10 && f->data[3 * P + 5] == 14, "last row repeated");
+    uint8_t *c = f->data + P * 4;
     CHECK(c[0] == 100 && c[2] == 102 && c[3] == 200 && c[5] == 202, "chroma row 0: U then V");
-    CHECK(c[6] == 103 && c[9] == 203, "chroma row 1");
+    CHECK(c[P] == 103 && c[P + 3] == 203, "chroma row 1");
     um_frame_put(f);
+
 }
 
 static int heard;
@@ -342,6 +345,7 @@ static void test_vp9_opus(void)
 
 #ifdef UM_HAVE_H264
 void test_mp4_h264(void);
+void test_mp4_aac_silence(void);
 #endif
 
 static void test_errors(void)
@@ -373,6 +377,7 @@ int main(void)
     test_vp9_opus();
 #ifdef UM_HAVE_H264
     test_mp4_h264();
+    test_mp4_aac_silence();
 #endif
     test_errors();
     printf("%s: %d failure(s) in %d checks\n", fails ? "FAILED" : "PASSED", fails, checks);

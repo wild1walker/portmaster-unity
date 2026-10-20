@@ -244,15 +244,15 @@ void um_frame_fill(um_frame *f, const uint8_t *y, int ys, const uint8_t *u, int 
     for (int r = 0; r < ph; r++) {
         const uint8_t *s = y + (size_t)(r < h ? r : h - 1) * ys;
         memcpy(d, s, w);
-        if (pw > w) d[w] = d[w - 1];
+        if (pw > w) memset(d + w, d[w - 1], pw - w);
         d += pw;
     }
     for (int r = 0; r < ch; r++) {
         int sr = r < sh ? r : sh - 1;
         memcpy(d, u + (size_t)sr * us, sw);
-        if (cw > sw) d[sw] = d[sw - 1];
+        if (cw > sw) memset(d + sw, d[sw - 1], cw - sw);
         memcpy(d + cw, v + (size_t)sr * vs, sw);
-        if (cw > sw) d[cw + sw] = d[cw + sw - 1];
+        if (cw > sw) memset(d + cw + sw, d[cw + sw - 1], cw - sw);
         d += pw;
     }
 }

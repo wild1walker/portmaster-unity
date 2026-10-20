@@ -17,7 +17,8 @@
  * bytes (W', H' = width and height rounded up to even): the Y plane on top, then each chroma row
  * as U (W'/2 bytes) followed by V (W'/2 bytes). It is uploaded as it is into a one-channel
  * texture that is the EGLImage behind the SurfaceTexture's external texture, and the converter's
- * Hidden/VideoDecodeAndroid shader (convert/pmunity/video.py) reads Y, U and V from it.
+ * Hidden/VideoDecodeAndroid shader (convert/pmunity/video_decode_android.shader) reads Y, U and V
+ * from it.
  */
 #ifndef UM_H
 #define UM_H
@@ -124,7 +125,7 @@ typedef struct um_frame {
 } um_frame;
 um_frame *um_frame_get(int width, int height);   /* pooled */
 void      um_frame_put(um_frame *f);
-/* copy planes into a packed frame (odd sizes: the last row/column repeated) */
+/* copy planes into a packed frame (odd sizes and padding: the last row / column repeated) */
 void      um_frame_fill(um_frame *f, const uint8_t *y, int ys, const uint8_t *u, int us,
                         const uint8_t *v, int vs);
 

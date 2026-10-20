@@ -41,6 +41,7 @@ loading, startup, input or data conversion) · "-" not applicable.
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
 | OBB matching | build-id ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ not traced; `unity_obb_guid` written | ⚠️ `unity_obb_guid` written, unchecked |
 | IL2CPP API looked up | - | 175 | 194 | 222 | 225 | 230 | 234 |
+| VideoPlayer (`runtime/media`) | ⚠️ Java path, same code as 2017.4.40 (not run) | ✅ Java path: a game's VP8 WebM intro plays and moves on (emulated rig) | ⚠️ Java path (same bindings; not run) | ⚠️ Java path (+ `IntBuffer`, `KEY_STRIDE`/`KEY_COLOR_FORMAT` bound; not run) | ⚠️ same | ⚠️ same | ⚠️ NDK path (libmediandk over the media core; unit tests only) |
 | IL2CPP metadata (header, unverified) | - | 24 | 24 | 24 | 27 | 29 | 29 or 31 |
 
 Notes on the rows:
@@ -67,8 +68,10 @@ Notes on the rows:
   signature (`runtime/jni/README.md`, "Unity versions"); `runtime/jni/test` runs each version's
   native table.
 - "of which runtime/jni defines": `tools/re/jnicover.c` on the bound members; the rest are classes
-  of no use on a handheld (camera, VR/AR, video, web/TLS, dialogs, telephony, location) that answer
-  0/null.
+  of no use on a handheld (camera, VR/AR, web/TLS, dialogs, telephony, location) that answer
+  0/null. Video's members (MediaExtractor, MediaFormat, MediaCodec, SurfaceTexture, ...) are
+  defined by `runtime/jni/up_media.c` in a program that links the media core: then 302, 306, 339,
+  360, 364, 364, 311 (`runtime/jni/README.md`).
 - Converter rows (shaders, assembly list, textures, OBB): what `convert/` does for each version,
   checked on Unity's built-in resources of each line (`tests/test_glcore_corpus.py`: conversion
   equal to Unity's own GLES3 data but for the program text) and on six free Linux games, one per
@@ -99,13 +102,16 @@ Notes on the rows:
    `sys_signame`/`sys_siglist`; the ABI translations listed under "imports with ABI risk" above.
    `nftw` mattered beyond its stat layout: glibc's flag and type values would make a recursive
    delete visit directories first and see them as symlinks.
-3. **libmediandk stub** (done): `android/media_ndk.c` (every call fails the NDK way, the
-   `AMEDIAFORMAT_KEY_*` objects hold the NDK's strings); `libmediandk.so` is one of the loader's
-   Android-only libraries now. The host's `so_map_library("libmediandk.so", NULL)` keeps dlopen of
-   it failing, so 2017.4-2021.3 keep their JNI video path, while 2022.3's DT_NEEDED entry and
-   imports bind to the stubs. Video is skipped either way. (Strictly, the loader treated an
-   unknown DT_NEEDED as a system library already, so libunity 2022.3 loaded before; its first
-   media call would have aborted, and the key objects were zeroed blocks.)
+3. **libmediandk and video** (done): `android/media_ndk.c` is the NDK's media API over the media
+   core (`runtime/media`), and its failing stubs where the core is not linked (the shims' own
+   tests); the `AMEDIAFORMAT_KEY_*` objects hold the NDK's strings. The host's
+   `so_map_library("libmediandk.so", NULL)` keeps dlopen of it failing, so 2017.4-2021.3 decode
+   through Java (`runtime/jni/up_media.c`), while 2022.3's DT_NEEDED entry and imports bind to
+   the NDK implementation. Both draw through a SurfaceTexture into Unity's external texture with
+   the converter's `Hidden/VideoDecodeAndroid`. Decoders: libvpx, libvorbis, libopus, OpenH264
+   built in, the system's libavcodec when present (AAC, MP3, HEVC, H.264 with B-frames);
+   `runtime/media/README.md`. Left: 2022.3's Vulkan path (`AImageReader`), a run of the
+   2018.4-2022.3 players with video, device measurements.
 4. ~~**Converter data formats**~~ (done in the converter): SerializedFile format 22, the four shader
    serializers, segmented blobs, parameter entries and per-tier subprograms, assembly lists by
    flags and `ScriptingAssemblies.json`, 2019+ ASTC numbers, compressed builds via `pmunity

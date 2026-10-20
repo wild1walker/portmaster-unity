@@ -15,8 +15,9 @@
 // buffer) is put back as it was, so Unity's GL state cache stays right.
 //
 // getTransformMatrix maps Unity's quad texture coordinates to the shader's frame coordinates:
-// (0,0) the top-left of the picture, (w/pw, h/ph) its bottom-right, so the matrix flips y as
-// Android's does for its top-down buffers (scale (w/pw, -h/ph), offset (0, h/ph)).
+// (0,0) the top-left of the picture, (w/pw, h/ph) its bottom-right (pw x ph: the size padded to
+// even), so the matrix flips y as Android's does for its top-down buffers (scale (w/pw, -h/ph),
+// offset (0, h/ph)).
 #define _GNU_SOURCE
 #include "um_internal.h"
 

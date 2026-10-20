@@ -1,7 +1,8 @@
 #!/bin/bash
 # Builds the media core: out/libuamedia.a (armhf) or out/arm64/libuamedia.a, our objects with the
 # build image's static decoder libraries merged in (libvpx, libvorbis, libogg, libopus, OpenH264),
-# and out/[arm64/]licenses/ (their licence texts, to ship with a binary that links them).
+# out/[arm64/]licenses/ (their licence texts, to ship with a binary that links them), and the device
+# check out/[arm64/]umbench (what decoding a clip costs: `umbench <file> [offset size]`).
 #   ARCH=armhf (default): Debian bookworm cross toolchain, image ua-media-armhf (docker/Dockerfile)
 #   ARCH=arm64: native in ua-media-arm64 (docker/Dockerfile.arm64, on top of ua-build-arm64)
 # ./build.sh test-ffmpeg  the decoders of the system's FFmpeg (um_ffmpeg.c) on clips made by FFmpeg's
@@ -46,6 +47,7 @@ docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIB
   done
   [ -f /usr/local/lib/openh264.LICENSE ] && cp /usr/local/lib/openh264.LICENSE $O/licenses/libopenh264.LICENSE
   ls -la $O/libuamedia.a | awk "{print \$5, \$9}"; echo "decoders built in: $DEFS"
+  $CC $CFLAGS -I. -o $O/umbench umbench.c $O/libuamedia.a -lstdc++ -ldl -lpthread -lm   # device check
   if [ "$TEST" = test ] || [ "$TEST" = test-ffmpeg ]; then
     $CC $CFLAGS -I. -o $O/test/test_media_ffmpeg test/test_media_ffmpeg.c $O/libuamedia.a -lstdc++ -ldl -lpthread -lm
     T264=; [ -n "$H264" ] && T264="test/test_h264.c test/mp4_writer.c"
