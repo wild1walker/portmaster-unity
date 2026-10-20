@@ -20,6 +20,7 @@
 #include "gltrace.h"
 #include "arch.h"
 #include "display.h"
+#include "steamstub.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -291,6 +292,7 @@ int main(int argc, char **argv)
     so_register_fake_lib("libOpenSLES.so", android_sles_shims);
     so_map_library("libmediandk.so", NULL);     // no video decoder: VideoPlayer falls back
     so_map_library("libvulkan.so", NULL);       // GLES only
+    steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
 
     char path[600];
     snprintf(path, sizeof path, "%s/libmain.so", libdir);
