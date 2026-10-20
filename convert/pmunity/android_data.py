@@ -708,13 +708,14 @@ def edit_globalgamemanagers(src, managed_names, args, log):
                 notes.append(f'PlayerSettings.androidBlitType = {t["androidBlitType"]}')
                 changed = True
             if args.swappy != 'keep':
-                # Android Frame Pacing (Unity 2019.3+): pacing only, not the picture
+                # Android Frame Pacing (Unity 2019.3+): a desktop build never ran it; off by default
+                # (--swappy), as the runtime keeps Swappy off and Unity then cannot present with it on
                 if 'androidUseSwappy' in t:
                     t['androidUseSwappy'] = args.swappy == 'on'
                     notes.append(f'PlayerSettings.androidUseSwappy = {t["androidUseSwappy"]}')
                     changed = True
-                else:
-                    notes.append('PlayerSettings: no androidUseSwappy (Unity < 2019.3), --swappy ignored')
+                elif args.unity.line >= SWAPPY_FROM:
+                    notes.append('PlayerSettings: no androidUseSwappy, --swappy ignored')
             if changed:
                 o.save_typetree(t)
     old = sf._m_target_platform
@@ -998,9 +999,11 @@ def main(argv=None):
                     help="PlayerSettings.androidBlitType. Default never: Unity draws straight into the window instead of "
                          "an offscreen buffer copied to it every frame (same pixels, one full-screen pass less; the "
                          "game's own value, Android's default, is always)")
-    ap.add_argument('--swappy', choices=['keep', 'off', 'on'], default='keep',
-                    help="PlayerSettings.androidUseSwappy (Unity 2019.3+: Android Frame Pacing; it changes pacing, not the "
-                         "picture). off: the player presents as without it, if the runtime's choreographer support is missing")
+    ap.add_argument('--swappy', choices=['keep', 'off', 'on'], default='off',
+                    help="PlayerSettings.androidUseSwappy (Unity 2019.3+: Android Frame Pacing, never used by a desktop "
+                         "build). Default off: Unity paces frames itself, as on the desktop. The runtime keeps Swappy off, "
+                         "and with the setting on Unity presents nothing (2019.4) or stops after its first frames "
+                         "(2021.3+); keep/on only for a runtime that runs Swappy")
     ap.add_argument('--any-unity-version', action='store_true',
                     help='convert data of a Unity version outside 2017.3 - 2022.3, or for an Android player of another '
                          'Unity line (untested; the formats are then guessed)')
@@ -1222,11 +1225,15 @@ def build_id(args):
     return f'{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}'
 
 
-# Unity 2021+: an OBB is matched by the file assets/unity_obb_guid (libunity 2022.3: "Application
-# OBB has mismatching GUID"; 2017.4 - 2020.3 use the unity.build-id marker). Written into the APK
-# and every OBB with the same contents, the build id; not checked against a real player yet.
+# Unity 2021+: an OBB is matched by its GUID file (libunity 2022.3: "Application OBB has mismatching
+# GUID"; 2017.4 - 2020.3 use the unity.build-id marker): the APK's assets/unity_obb_guid (2021.3:
+# AssetManager.open("unity_obb_guid"), 2022.3: <apk>/assets/unity_obb_guid) must equal the OBB's
+# unity_obb_guid at the root of the archive (2021.3: ZipFile.getEntry("unity_obb_guid"), 2022.3: its
+# own zip reader, which reads the archive's first entry when the name is missing). Both hold the build id.
 OBB_GUID_FROM = (2021, 1)
+SWAPPY_FROM = (2019, 3)          # PlayerSettings.androidUseSwappy (Optimized Frame Pacing)
 OBB_GUID_FILE = 'assets/unity_obb_guid'
+OBB_GUID_FILE_IN_OBB = 'unity_obb_guid'
 
 
 def _write_zip(path, entries, log, align=4):
@@ -1305,9 +1312,8 @@ def pack(args, log):
     marker = ('assets/' + bid, b'')
     res = {'build_id': bid, 'package': args.package, 'version_code': args.version_code}
     if args.unity.line >= OBB_GUID_FROM:
-        guidf = (OBB_GUID_FILE, bid.encode('ascii'))
-        apk_entries.append(guidf)
-        marker = [marker, guidf]
+        apk_entries.append((OBB_GUID_FILE, bid.encode('ascii')))
+        marker = [marker, (OBB_GUID_FILE_IN_OBB, bid.encode('ascii'))]
         res['unity_obb_guid'] = bid
     else:
         marker = [marker]
@@ -1361,7 +1367,7 @@ def pack(args, log):
 def opts_key(args):
     key = [args.platform_patch, args.graphics_apis, args.mt_rendering, args.blit, args.rewired_joysticks, args.name, args.async_upload_buffer,
            args.inline_textures]
-    if args.swappy != 'keep':
+    if args.swappy != 'keep' and args.unity.line >= SWAPPY_FROM:     # the setting exists from 2019.3
         key.append('swappy=' + args.swappy)
     return key
 

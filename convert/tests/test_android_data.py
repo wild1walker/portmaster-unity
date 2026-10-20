@@ -105,6 +105,21 @@ class VersionTest(unittest.TestCase):
         self.assertEqual((game, eng), (['Assembly-CSharp.dll', 'UnityEngine.UI.dll'], ['UnityEngine.CoreModule.dll']))
 
 
+class SwappyTest(unittest.TestCase):
+    def test_options_key(self):
+        """--swappy (default off) is part of the conversion key only where androidUseSwappy exists
+        (2019.3+), so a 2017.4 or 2018.4 conversion is not redone for it"""
+        import types
+        base = dict(platform_patch=True, graphics_apis='11', mt_rendering='keep', blit='never', rewired_joysticks=None,
+                    name='Game', async_upload_buffer=None, inline_textures=True, swappy='off')
+        old = A.opts_key(types.SimpleNamespace(unity=UV.Version('2017.4.9f1'), **base))
+        new = A.opts_key(types.SimpleNamespace(unity=UV.Version('2021.3.16f1'), **base))
+        self.assertNotIn('swappy=off', old)
+        self.assertIn('swappy=off', new)
+        self.assertEqual(new[:-1], old)
+        self.assertEqual((A.OBB_GUID_FILE, A.OBB_GUID_FILE_IN_OBB), ('assets/unity_obb_guid', 'unity_obb_guid'))
+
+
 class UnpackTest(unittest.TestCase):
     def test_unpack(self):
         files = [('globalgamemanagers', bytes(range(256)) * 3), ('level0', b'level data ' * 20),
