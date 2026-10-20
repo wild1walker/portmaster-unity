@@ -18,7 +18,10 @@ tested before a 64-bit runtime and handheld are at hand).
 
 **Where it runs:** on the porter's PC or Mac, never on the handheld. il2cpp and the C++ build of
 its output take minutes to an hour of CPU (a small game's generated C++ is a few hundred MB;
-the build uses 1-2 GB of disk and about 300 MB of memory per compiler process), in Docker.
+the build uses about 1 GB of disk and 100-500 MB of memory per compiler process), in Docker.
+Everything it writes is in `--home` and `<out>`: the tools are plain folders bind-mounted into a
+stock `ubuntu:24.04` container (no image is built), so Docker's own disk only holds that image
+and a slow external drive works for all of it.
 
 **What the result is:** `libil2cpp.so` holds the game's code (its assemblies, Unity's packages,
 the UnityEngine bindings and the .NET class libraries, compiled) and Unity's IL2CPP runtime. It
@@ -41,14 +44,14 @@ or of what is built from them, is in this repository.
 | `Editor/Data/il2cpp` (il2cpp, UnityLinker, libil2cpp and Boehm GC sources) and `MonoBleedingEdge/lib/mono/unityaot` + `etc` (the class libraries IL2CPP builds use) | the Windows editor installer `UnitySetup64-<ver>.exe` (Unity's release API names it): a non-solid NSIS installer like the Android support ones, so `nsis.py` reads only these files' blocks (neighbouring blocks in one request) | 10-13 MB of 1.6-2.4 GB | 45-50 MB |
 | the Android NDK's target files: unified sysroot (headers, per-API libraries), libc++, libgcc | Google's `android-ndk-<rev>-linux-x86_64.zip`: its central directory, then only those members | 34 MB (arm64-v8a), +24 MB (armeabi-v7a) of 820 MB | 145 MB / 200 MB both |
 | the IL2CPP Android player: `libmain.so`, `libunity.so`, `unity default resources` (`pmunity player fetch --backend il2cpp`), the IL2CPP UnityEngine assemblies (`Variations/il2cpp/Managed`), `baselib.a` (2020.1+) | the Android Build Support installer | 9 MB | 30 MB per ABI |
-| the `pmunity-il2cpp` Docker image (tools/il2cpp/Dockerfile): Ubuntu 24.04 with .NET 8, Mono 6.8, clang/lld 14 | Ubuntu's archive | | 1.2 GB |
+| `<home>/root/usr`, `root/etc` (tools/il2cpp/root.sh): .NET 8, Mono 6.8, clang/lld 14, unpacked with `dpkg-deb -x` over a copy of the stock image's own `/usr` and `/etc`, then mounted over them | Ubuntu 24.04's archive | 180 MB | 0.85 GB |
 
 NDK per Unity line (what that line's il2cpp checks for): r16b for 2017.4 - 2019.2, r19 for 2019.3 -
 2020.3, r21d for 2021.x - 2022.1, r23b for 2022.2+. The NDK's compilers and binutils are x86-64
 programs, so only its target files are fetched; `tools/il2cpp/ndk-clang.sh` is put where
 il2cpp's Android toolchain runs them (`toolchains/llvm/prebuilt/linux-x86_64/bin/clang++`,
-`<triple>-objcopy`, ...) and runs the image's clang 14 and lld with the NDK's sysroot, libc++
-and libgcc (the NDK's clang finds those next to itself). The image thus runs natively on arm64
+`<triple>-objcopy`, ...) and runs Ubuntu's clang 14 and lld with the NDK's sysroot, libc++
+and libgcc (the NDK's clang finds those next to itself). The tools thus run natively on arm64
 hosts (Apple Silicon) as on x86-64 ones. Differences from the NDK's own clang 8 (r19): lld instead
 of GNU ld, no `-g` (debug info changes no code; `PMUNITY_IL2CPP_DEBUG_INFO=1` keeps it), and the
 newer compiler's code generation.

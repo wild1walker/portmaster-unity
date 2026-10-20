@@ -3,7 +3,7 @@ Unity's IL2CPP for the IL2CPP Android player of the same Unity version. Unity's 
 Android players (arm64-v8a) are IL2CPP players only; this is how a Mono game reaches them.
 
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a|armeabi-v7a] [--pkg DIR] [--home DIR]
-                             [--jobs N] [--image NAME] [--keep-cpp] [--dry-run]
+                             [--jobs N] [--strip low|none] [--keep-cpp] [--dry-run]
     python -m pmunity il2cpp fetch <version> [--abi ...] [--pkg DIR] [--home DIR]   (toolchain only)
 
 <data>: the game's desktop data folder (<Game>_Data, or <Game>.app/Contents/Resources/Data; read
@@ -27,9 +27,12 @@ What it uses, all fetched once into --home (default $PMUNITY_IL2CPP_HOME, else
                                                 --backend il2cpp`) + Variations/il2cpp/Managed
                                                 (the IL2CPP UnityEngine assemblies) and, from
                                                 Unity 2020.1, StaticLibs/<abi>/baselib.a
-il2cpp and the C++ build run in the pmunity-il2cpp Docker image (tools/il2cpp/Dockerfile; built
-on first use). See docs/il2cpp.md: heavy (minutes, ~1-2 GB of build files), for a PC or Mac,
-and its result is the user's own build of their game, never something to publish.
+  root/usr, root/etc                            .NET 8, Mono, clang/lld 14 from Ubuntu 24.04's archive
+                                                (tools/il2cpp/root.sh), bind-mounted over a stock
+                                                ubuntu:24.04 container's own: no image is built
+il2cpp and the C++ build run in Docker that way, with every file in --home and <out>. See
+docs/il2cpp.md: heavy (minutes of CPU, ~1 GB of build files), for a PC or Mac, and its result is
+the user's own build of their game, never something to publish.
 
 Unity's files stay where the porter downloads them; nothing of them is in this repository.
 """
@@ -59,7 +62,7 @@ def api_level(rev, abi):
     return 16 if abi == 'armeabi-v7a' and rev == 'r16b' else ABIS[abi][2]
 
 
-IMAGE = 'pmunity-il2cpp'
+IMAGE = 'ubuntu:24.04'                   # stock; the tools are in <home>/root (tools/il2cpp/root.sh)
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.normpath(os.path.join(HERE, '..', '..', 'tools', 'il2cpp'))
 EDITOR_API = 'https://services.api.unity.com/unity/editor/release/v1/releases'
@@ -393,8 +396,8 @@ def ndk_wanted(name, rev, abi):
     if not rel.startswith(llvm):
         return None
     r = rel[len(llvm):]
-    if r.startswith('sysroot/usr/include/'):
-        return rel
+    if r.startswith(('sysroot/usr/include/', 'sysroot/usr/local/include/')):
+        return rel                        # (usr/local/include: libandroid_support's headers, API < 21)
     if r.startswith(f'sysroot/usr/lib/{triple}/'):
         rest = r[len(f'sysroot/usr/lib/{triple}/'):]
         return rel if '/' not in rest or rest.startswith(f'{api}/') else None
@@ -410,7 +413,7 @@ def fetch_ndk(rev_name, zipname, abi, dest):
     if os.path.isfile(mark):
         return dest
     url = NDK_BASE + zipname
-    log(f'NDK {rev_name} ({abi}): sysroot, libc++ and libgcc from {url}')
+    log(f'NDK {rev_name} ({abi}): sysroot, C++ runtime and libgcc from {url}')
     z = RemoteZip(url)
     got = z.extract(lambda n: ndk_wanted(n, rev_name, abi), dest)
     if 'source.properties' not in got:
@@ -726,13 +729,14 @@ def metadata_version(path):
     return ver
 
 
-def image_ok(image):
-    return subprocess.run(['docker', 'image', 'inspect', image], capture_output=True).returncode == 0
-
-
-def build_image(image):
-    log(f'building the {image} Docker image (tools/il2cpp/Dockerfile; Ubuntu packages, once)')
-    subprocess.run(['docker', 'build', '-t', image, TOOLS], check=True)
+def ensure_root(root, image):
+    """<home>/root: the tool folders bind-mounted over the stock image's /usr and /etc."""
+    if os.path.isfile(os.path.join(root, '.complete')):
+        return root
+    log(f'making the il2cpp tool folders in {root} (tools/il2cpp/root.sh: Ubuntu packages, once, ~0.85 GB)')
+    subprocess.run(['sh', os.path.join(TOOLS, 'root.sh'), root], check=True,
+                   env=dict(os.environ, PMUNITY_IL2CPP_BASE=image))
+    return root
 
 
 def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg):
@@ -752,11 +756,12 @@ def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg):
 
 
 class Container:
-    """Runs commands in the pmunity-il2cpp image with the toolchain and output folders mounted at
-    the same paths, as the calling user, with --jobs CPUs."""
+    """Runs commands in the stock image with the tool folders (<home>/root) over its /usr and /etc,
+    the toolchain and output folders mounted at the same paths and /tmp in the work folder: the
+    container's own file system gets nothing. As the calling user, with --jobs CPUs."""
 
-    def __init__(self, image, mounts, jobs, work):
-        self.image, self.work = image, work
+    def __init__(self, image, root, mounts, jobs, work):
+        self.image, self.root, self.work = image, root, work
         try:                                     # the CPUs Docker's machine has (a VM on macOS / Windows)
             n = int(subprocess.run(['docker', 'info', '--format', '{{.NCPU}}'], capture_output=True, text=True).stdout)
         except ValueError:
@@ -768,8 +773,13 @@ class Container:
     def run(self, cmd, logname, quiet=False):
         # --cpuset-cpus as well as --cpus: il2cpp starts one compiler per CPU it sees (Mono counts the
         # CPUs it may run on, not the quota)
+        tmp = os.path.join(self.work, 'tmp')
+        os.makedirs(tmp, exist_ok=True)
         d = ['docker', 'run', '--rm', f'--cpus={self.jobs}', f'--cpuset-cpus=0-{self.jobs - 1}',
-             '-e', 'HOME=/tmp', '-e', 'DOTNET_CLI_HOME=/tmp',
+             '-v', f'{os.path.join(self.root, "usr")}:/usr:ro', '-v', f'{os.path.join(self.root, "etc")}:/etc:ro',
+             '-v', f'{tmp}:/tmp', '-e', 'HOME=/tmp', '-e', 'DOTNET_CLI_HOME=/tmp', '-e', 'TMPDIR=/tmp',
+             '-e', 'DOTNET_CLI_TELEMETRY_OPTOUT=1', '-e', 'DOTNET_NOLOGO=1', '-e', 'DOTNET_ROLL_FORWARD=Major',
+             '-e', 'PMUNITY_LLVM=/usr/lib/llvm-14/bin',
              '-e', f'PMUNITY_IL2CPP_CCLOG={os.path.join(self.work, "cc.log")}']
         if hasattr(os, 'getuid'):
             d += ['--user', f'{os.getuid()}:{os.getgid()}']
@@ -793,6 +803,13 @@ class Container:
             prog = next((os.path.basename(w) for w in cmd if w.endswith(('.exe', '.dll'))), cmd[0])
             raise SystemExit(f'{prog} failed (exit {rcode}); full log: {path}')
         return time.time() - t0
+
+
+def has_option(tool, field):
+    """Whether a Unity .NET tool has an option field of that name (Unity.Options: one public
+    static field per option, its name in the metadata strings)."""
+    with open(tool, 'rb') as f:
+        return b'\0' + field.encode() + b'\0' in f.read()
 
 
 def link_args(version, abi, staged, linked, roots):
@@ -837,21 +854,25 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         if tool.endswith('.exe') and net471 == 'mono':
             return ['mono', '--gc=sgen', tool]
         return ['dotnet', 'exec', '--runtimeconfig', rc, tool]
-    box = Container(image, (home, out, tc['pkg']), jobs or min(4, os.cpu_count() or 2), work)
+    root = os.path.join(home, 'root')
+    box = Container(image, root, (home, out, tc['pkg']), jobs or min(4, os.cpu_count() or 2), work)
     if os.path.exists(os.path.join(work, 'cc.log')):
         os.unlink(os.path.join(work, 'cc.log'))
     roots = [n for n, src in chosen.items() if not src.startswith(os.path.join(tc['editor'], BCL_DIR) + os.sep)]
     lcmd = runner(deploy_tool(tc['editor'], 'UnityLinker')) + link_args(version, abi, staged, linked, roots)
-    icmd = runner(deploy_tool(tc['editor'], 'il2cpp'), os.environ.get('PMUNITY_IL2CPP_NET471', 'mono')) + \
+    tool = deploy_tool(tc['editor'], 'il2cpp')
+    icmd = runner(tool, os.environ.get('PMUNITY_IL2CPP_NET471', 'mono')) + \
         il2cpp_args(version, abi, linked, cpp, cache, so, tc['ndk'], settings, tc['pkg'])
+    if has_option(tool, 'Jobs'):                # (2020.x+; older ones run a compiler per CPU they see)
+        icmd.append(f'--jobs={box.jobs}')
+    icmd += os.environ.get('PMUNITY_IL2CPP_EXTRA_ARGS', '').split()     # e.g. --additional-cpp=... (debugging)
     if strip == 'none':
         icmd = [w.replace(f'--directory={linked}', f'--directory={staged}') for w in icmd]
     log('UnityLinker: ' + ' '.join(lcmd) if strip != 'none' else 'UnityLinker: not run (--strip none)')
     log('il2cpp: ' + ' '.join(icmd))
     if dry:
         return None
-    if not image_ok(image):
-        build_image(image)
+    ensure_root(root, image)
     secs = 0
     if strip != 'none':
         shutil.rmtree(linked, ignore_errors=True)
@@ -882,6 +903,7 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
         os.replace(src, dst)                     # (il2cpp writes it beside the library)
     else:
         shutil.copytree(src, dst)
+    shutil.rmtree(os.path.join(os.path.dirname(so), 'Data'), ignore_errors=True)   # (2019.4: also there)
     mv = metadata_version(os.path.join(dst, 'Metadata', 'global-metadata.dat'))
     libunity = os.path.join(tc['pkg'], 'Variations', 'il2cpp', 'Release', 'Libs', abi, 'libunity.so')
     missing, nwanted = il2cpp_api_check(libunity, so) if os.path.isfile(libunity) else ([], 0)
@@ -908,6 +930,7 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
     if not keep_cpp:
         shutil.rmtree(cpp, ignore_errors=True)
         shutil.rmtree(os.path.join(work, 'cache'), ignore_errors=True)
+    shutil.rmtree(os.path.join(work, 'tmp'), ignore_errors=True)
     log(f'il2cpp: {so} ({os.path.getsize(so) / 2**20:.1f} MiB), metadata version {mv}, '
         f'{len(info["files"])} data files -> {dst}')
     return info
@@ -935,7 +958,7 @@ def main(argv):
     ap.add_argument('--home', help='toolchain folder (default $PMUNITY_IL2CPP_HOME, else ~/.cache/pmunity/il2cpp)')
     ap.add_argument('--pkg', help='the IL2CPP Android player package (default <home>/<version>/player-<abi>)')
     ap.add_argument('--jobs', type=int, help='parallel compiles (CPUs given to the container; default min(4, CPUs))')
-    ap.add_argument('--image', default=IMAGE)
+    ap.add_argument('--image', default=IMAGE, help='the stock image the tool folders are mounted into (default ubuntu:24.04)')
     ap.add_argument('--keep-cpp', action='store_true', help='keep the generated C++ and the object cache (<out>/.work)')
     ap.add_argument('--strip', default='low', choices=['low', 'none'],
                     help="managed code stripping: low (UnityLinker's conservative rules, as Unity's default for IL2CPP; "

@@ -36,6 +36,7 @@ class NdkTest(unittest.TestCase):
         llvm = 'toolchains/llvm/prebuilt/linux-x86_64/'
         self.assertEqual(w('source.properties'), 'source.properties')
         self.assertTrue(w(llvm + 'sysroot/usr/include/stdio.h'))
+        self.assertTrue(w(llvm + 'sysroot/usr/local/include/stdlib.h', 'armeabi-v7a'))
         self.assertTrue(w(llvm + 'sysroot/usr/lib/aarch64-linux-android/libc++_static.a'))
         self.assertTrue(w(llvm + 'sysroot/usr/lib/aarch64-linux-android/21/libc.so'))
         self.assertIsNone(w(llvm + 'sysroot/usr/lib/aarch64-linux-android/28/libc.so'))
@@ -245,6 +246,15 @@ class NdkClangTest(unittest.TestCase):
 
 
 class AndroidDataIl2cppTest(unittest.TestCase):
+    def test_options_key(self):
+        """a Mono conversion's key (and so its output) is the same as before --il2cpp existed"""
+        base = dict(video_shader=True, platform_patch='data', graphics_apis='11', mt_rendering='keep', blit='never',
+                    rewired_joysticks=4, name='Game', async_upload_buffer=0, inline_textures=True, swappy='off',
+                    unity=UV.Version('2017.4.9f1'))
+        mono = AD.opts_key(types.SimpleNamespace(**base))
+        self.assertEqual(AD.opts_key(types.SimpleNamespace(il2cpp=None, **base)), mono)
+        self.assertEqual(AD.opts_key(types.SimpleNamespace(il2cpp='/x', **base)), mono + ['il2cpp=/x'])
+
     def test_items(self):
         args = types.SimpleNamespace(il2cpp='/il2', il2cpp_info={
             'files': ['Data/Managed/Metadata/global-metadata.dat', 'Data/Managed/Resources/mscorlib.dll-resources.dat',
