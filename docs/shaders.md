@@ -1,26 +1,29 @@
 # Shaders
 
 Unity's Android player only runs GPU programs of the GLES types. A desktop build has OpenGL Core
-programs (GLSL 1.50, written by Unity's HLSLcc from the game's HLSL), Metal on macOS, and maybe
-Vulkan. `python -m pmunity shaders` (convert/pmunity/shaders/) gives every OpenGL Core program a
-GLSL ES 3.00 twin in the same Shader asset, so the Android player finds a GLES3 program for every
-variant the game uses. A Windows build has only Direct3D 11 programs (DXBC bytecode):
-`--from d3d11` translates those with Unity's HLSLcc ([below](#windows-builds-direct3d-11-programs)).
+programs (written by Unity's HLSLcc from the game's HLSL: GLSL 1.50 for most shaders, GLSL 4.x
+for `#pragma target 4.5` and up), Metal on macOS, and maybe Vulkan. `python -m pmunity shaders`
+(convert/pmunity/shaders/) gives every OpenGL Core program a GLSL ES 3.00 (or 3.10) twin in the
+same Shader asset, so the Android player finds a GLES3 program for every variant the game uses. A
+Windows build has only Direct3D 11 programs (DXBC bytecode): `--from d3d11` translates those with
+Unity's HLSLcc ([below](#windows-builds-direct3d-11-programs)).
 
 ## What the converter does
 
 1. **Program blobs** (`blob.py`). A Shader keeps its compiled programs per shader compiler
    platform in LZ4 blocks. The GLCore platform's blob (15) is copied as a GLES3Plus blob
-   (9); every entry a GLCore32 subprogram uses is translated and retyped GLES3 (gpu program type
-   4). Entries are parsed with the layout of their serializer version, checked by writing every
-   entry back byte for byte ([Unity versions](#unity-versions) below; another version's layout is
-   guessed and reported).
-2. **Subprograms** (`convert.py`). Every GLCore32 subprogram gets a GLES3 twin with the
-   same blob index, keywords, channels and parameter bindings (the GL and GLES backends bind by
-   name the same way). GLCore41/43 variants (desktop-only features) get none.
+   (9); every entry a GLCore subprogram uses is translated and retyped GLES3 (gpu program type
+   4) or GLES 3.1 (3, item 4). Entries are parsed with the layout of their serializer version,
+   checked by writing every entry back byte for byte ([Unity versions](#unity-versions) below;
+   another version's layout is guessed and reported).
+2. **Subprograms** (`convert.py`). Every GLCore subprogram gets a GLES twin with the same blob
+   index, keywords, channels, requirements and parameter bindings (the GL and GLES backends bind
+   by name the same way; 2021.2+: the same parameter entry). A variant has one GLCore program,
+   typed by its target: GLCore32 (GLSL 1.50 / 3.30), or GLCore41 / GLCore43 (GLSL 4.x) for
+   `#pragma target 4.5` and up ([below](#glcore4143-programs-pragma-target-45-and-up)).
 3. **GLSL** (`glsl.py`), per stage block (`#ifdef VERTEX` / `#ifdef FRAGMENT`, each compiled by
    Unity as one shader):
-   - `#version 300 es` instead of `#version 150` / `330`;
+   - `#version 300 es` instead of `#version 150` / `330` (GLSL 4.x: `410` - `450`);
    - the desktop extensions ES 3.00 has built in are dropped (explicit attribute locations,
      float/int bit casts), also in the `#ifdef GL_ARB_... / #extension / #endif` form of Unity
      2019+; any other extension is kept, so a program that needs one fails on a driver without
@@ -33,18 +36,69 @@ variant the game uses. A Windows build has only Direct3D 11 programs (DXBC bytec
      start of every invocation; they become `const` arrays) and **unroll** (loops with literal
      bounds and a plain body are written out, the counter becoming a literal).
 4. A program that needs what GLSL ES 3.10 has and 3.00 lacks (multisampled textures
-   `sampler2DMS`, `textureGather`, bit-field functions) is written as `#version 310 es` and typed
-   GLES31 (gpu program type 3, with all subprograms of its variant): Unity runs it where the device
-   has OpenGL ES 3.1+, as it does the GLES 3.1 programs of an Android build. (Unity's own GLES3
-   output keeps such a program as `#version 300 es`, which no driver compiles.)
-5. A shader with a program that uses GLSL with no ES equivalent (fixed-function built-ins,
-   rectangle or 1D samplers, `noperspective`, images and atomics, storage buffers) gets no GLES3
-   programs at all, and the run says which. Unity then treats it as unsupported on the device, as
-   it would a shader without GLES3 programs in an Android build. For Cuphead that is only
-   `Hidden/VideoDecodeOSX` (the macOS video decoder; Android decodes video elsewhere). Variants
-   only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords) that do not translate (they
-   write `gl_Layer`) are left out instead, with their subprograms; Unity never asks for them on a
-   handheld.
+   `sampler2DMS`, `textureGather`, bit-field functions; for GLSL 4.x also storage buffers, binding
+   points, images) is written as `#version 310 es` and typed GLES31 (gpu program type 3, with all
+   subprograms of its variant): Unity runs it where the device has OpenGL ES 3.1+, as it does the
+   GLES 3.1 programs of an Android build. (Unity's own GLES3 output keeps such a program as
+   `#version 300 es`, which no driver compiles.)
+5. A shader with a GLCore32 program that uses GLSL with no ES equivalent (fixed-function
+   built-ins, rectangle or 1D samplers, `noperspective`, images and atomics, storage buffers) gets
+   no GLES3 programs at all, and the run says which. Unity then treats it as unsupported on the
+   device, as it would a shader without GLES3 programs in an Android build. For Cuphead that is
+   only `Hidden/VideoDecodeOSX` (the macOS video decoder; Android decodes video elsewhere).
+   Variants only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords) that do not translate
+   (they write `gl_Layer`) are left out instead, with their subprograms; Unity never asks for them
+   on a handheld. A SubShader with a GLCore41/43 program that does not translate gets no twins
+   for its GLCore41/43 variants (Unity uses the next SubShader or the Fallback, as for a
+   SubShader an Android build has no programs for); the rest of the shader is converted.
+6. A shader whose variants were all stripped from the build (a GLCore blob without entries, e.g.
+   URP's `StencilDeferred` in a forward-rendered game) gets an empty GLES3 blob, as Unity's own
+   builds have a blob for each of their platforms: the player then finds its platform there
+   (without one it logs "Desired shader compiler platform 9 is not available in shader blob").
+
+### GLCore41/43 programs (`#pragma target 4.5` and up)
+
+Shaders written for compute-capable GPUs are compiled for OpenGL 4.1+ (GLCore41, GLCore43:
+`#version 410` - `450`): URP's error shaders (`MaterialError`, `FallbackError`), its FSR upscaler
+(`Edge Adaptive Spatial Upsampling`), the `#pragma target 4.5` SubShaders of its post-processing
+shaders (`FinalPost`, `BokehDepthOfField`, which keep a GLCore32 fallback SubShader), the
+procedural-instancing variants of the particle shaders (one pass, one target per keyword) and
+`unity_builtin_extra`'s `Hidden/BlitToDepth` and `BlitToDepth_MSAA` (in every game; the Android
+player looks them up). The same rules apply, plus what GLSL 4.20 has built in:
+
+- `GL_ARB_shading_language_420pack`, `GL_ARB_shader_storage_buffer_object` and
+  `GL_ARB_shader_image_load_store` are dropped (what HLSLcc uses of them is in ES 3.10);
+- the unused `precise vec4 u_xlat_precise_vec4;` (and `ivec4`, `bvec4`, `uvec4`) declarations at
+  the top of each stage are dropped; any other `precise` is GLSL ES 3.20's (left out);
+- varyings' `layout(location = n)` (vertex outputs, fragment inputs) are removed in ES 3.00
+  programs, which match varyings by name only (HLSLcc gives a varying the same name and location
+  in both stages); ES 3.10 programs keep them;
+- GLES 3.1 (`#version 310 es`, item 4) for what ES 3.10 has: storage buffers (`buffer`, `std430`;
+  in a vertex stage they need a driver with vertex shader storage blocks), explicit binding
+  points and uniform locations outside Unity's macro blocks, images with a format qualifier
+  (with `precision highp` for each image type), image load/store and buffer atomics,
+  `early_fragment_tests`;
+- left out, with the reason: what only desktop GL 4.x or ES 3.20 has (cube map array, buffer and
+  1D textures, an image without a format qualifier, image atomics, `textureQueryLevels`,
+  interpolation functions, interface blocks, `component` / `index` layouts, geometry and
+  tessellation stages).
+
+Every variant has one program, so a shader with GLCore32 and GLCore41/43 programs gets twins for
+all of them: where its SubShaders differ by target (URP's post-processing: SubShader 0 at target
+4.5, SubShader 1 its fallback), both get programs, and Unity runs SubShader 0 where the device
+has what its requirements ask (OpenGL ES 3.1+; the GLCore subprograms' `m_ShaderRequirements`
+are kept) and the fallback elsewhere, as an Android build of the game would, and as the desktop
+build does on OpenGL 4.3+ and on 3.2 (the fallback does with plain fetches what SubShader 0 does
+with `textureGather`, in URP's depth of field).
+
+**On by default, for every Unity version.** `"shaders": {"glcore4x": false}` in a port's config
+(or `pmunity convert ... --set shaders.glcore4x=false`) keeps the converter's earlier output,
+GLCore32 programs only. Cuphead's port sets it: its output was checked on the device that way and
+stays byte for byte the same (`BlitToDepth`, `BlitToDepth_MSAA` and the `#pragma target 4.5+`
+SubShaders of its post-processing keep no GLES programs; the 2017.4 player logs "Desired shader
+compiler platform 9 is not available" for the two blits at startup and runs on). On, Cuphead's 14
+GLCore43 programs translate as well (9 of them GLES 3.1: the eye adaptation histogram's storage
+buffer, `textureGather` in depth of field) and link on Mesa.
 
 ## Unity versions
 
@@ -59,6 +113,7 @@ and handles 2017.3 - 2022.3; other versions are refused unless `--any-unity-vers
 | where the subprograms are | `m_SubPrograms`, hardware tier per subprogram | same | same, keyword indices global + local | same, parameters grouped in `m_Parameters` (+ program `m_CommonParameters`) | `m_PlayerSubPrograms`: a list per tier (desktop builds use the 4th, tier-independent one) with the parallel `m_ParameterBlobIndices` | same, + `m_SerializedKeywordStateMask` |
 | also kept in step | - | - | - | pass `m_Platforms` | + Shader `stageCounts` | same |
 | GL program text | plain `#extension` lines | same | `#ifdef`-wrapped extensions; macro blocks for uniform buffers and uniform locations (`UNITY_LOCATION(n)`, `UNITY_BINDING(n)`) | same | same | same |
+| GLCore41/43 programs, stripped shaders | not translated by default (2017.x: the output stays as before) | translated / empty GLES3 blob | same | same | same | same |
 
 In Unity's own built-in resources of each line, which hold GLCore and GLES3 programs of the same
 shaders (desktop players ship one file for every API), the GLES3 blob differs from the GLCore one
@@ -91,21 +146,35 @@ way (78 of 136; the others are VR and frame-debugger variants), and 41 without i
       PMUNITY_GLCORE_EXPORT=/tmp/glsl python -m unittest tests.test_glcore_corpus -v    # then shadercheck /tmp/glsl
   ```
 - **Six free Linux Mono games**, one per LTS line (not in the repository): all their shaders
-  convert but VR-only ones and one with `noperspective`, and every exported program compiles and
-  links on Mesa (`PMUNITY_GAMES=<Game>_Data[:...] PMUNITY_GAMES_EXPORT=<dir> python -m unittest
+  convert but VR-only ones, one with `noperspective` and URP's HDR debug view (an image without a
+  format), every converted program declares the same uniforms, blocks, inputs, varyings and
+  outputs as the GL program it comes from, and every exported program compiles and links on Mesa
+  (llvmpipe, ES 3.2: Mesa 21.2 in `ua-build-arm64` and 22.3 in `ua-emu-armhf`;
+  `PMUNITY_GAMES=<Game>_Data[:...] PMUNITY_GAMES_EXPORT=<dir> python -m unittest
   tests.test_games_corpus`, then shadercheck each `<dir>/<n>`):
 
-  | game data | formats | shaders given GLES3 | programs (GLES 3.1) | left out | distinct programs linked on Mesa |
+  | game data | formats | shaders given GLES3 (for GLCore41/43 programs) | programs (GLCore41/43; GLES 3.1) | left out | distinct programs linked on Mesa |
   |---|---|---|---|---|---|
-  | 2017.4.40f1 | SF 17, one block, 201708220 | 75 | 280 | - | 239 / 239 |
-  | 2018.4.36f1 | SF 17, one block, 201802150 | 34 | 154 | - | 145 / 145 |
-  | 2019.4.8f1 | SF 21, segments, 201806140 | 34 | 167 | VR blit (`gl_Layer`) | 150 / 150 |
-  | 2020.3.49f1 | SF 22, segments, 201806140 | 51 | 211 | VR blit | 183 / 183 |
-  | 2021.3.16f1 (URP) | SF 22, segments (URP UberPost: 3 segments, 2048 entries), 202012090 | 78 | 2495 (6) | VR blit, URP XR occlusion mesh | 933 / 933 |
-  | 2022.3.36f1 | SF 22, segments, 202012090 | 80 | 1140 | VR blit, a third-party outline shader (`noperspective`) | 906 / 906 |
+  | 2017.4.40f1 | SF 17, one block, 201708220 | 75 (- : 2017.x) | 280 | `BlitToDepth`, `BlitToDepth_MSAA` (2017.x; with `glcore4x` on: 77 shaders, 282 programs, 241 / 241 link) | 239 / 239 |
+  | 2018.4.36f1 | SF 17, one block, 201802150 | 36 (2: the blits) | 156 (2) | - | 147 / 147 |
+  | 2019.4.8f1 | SF 21, segments, 201806140 | 36 (2, + particles' procedural instancing variants) | 183 (16; 14) | VR blit (`gl_Layer`; its GLCore41 SubShader: a geometry stage) | 164 / 164 |
+  | 2020.3.49f1 | SF 22, segments, 201806140 | 53 (2) | 213 (2) | VR blit | 185 / 185 |
+  | 2021.3.16f1 (URP) | SF 22, segments (URP UberPost: 3 segments, 2048 entries), 202012090 | 84 (6: error shaders, FSR upscaler, blits, `StencilDeferred` empty; + post-processing SubShaders) | 2607 (112; 10) | VR blit, URP XR occlusion mesh | 1008 / 1008 |
+  | 2022.3.36f1 (URP) | SF 22, segments, 202012090 | 84 (4: FSR upscaler, blits, `BlitHDROverlay` empty; + post-processing SubShaders, particles' instancing variants) | 1199 (59; 57) | VR blit, a third-party outline shader (`noperspective`: ES has it only with `GL_NV_shader_noperspective_interpolation`), URP `HDRDebugView` (writes an image declared without a format; HDR output debugging) | 948 / 948 |
+
+  Before GLCore41/43 programs were translated: 34, 34, 51, 78 and 80 shaders from 2018.4 on. The
+  players log "Desired shader compiler platform 9 is not available in shader blob" for each shader
+  without a GLES3 blob they load: under emulation 5 times in the 2021.3 game and 3 in the 2022.3
+  one before, once in each now (a shader left out above); twice in the 2017.4 game (its two
+  blits, 2017.x). Both URP games still stop on Unity's graphics thread after two frames, at the
+  same code address as before.
 
 What was not checked: nothing of this has run in a Unity player of these versions; Unity's own
-GLES3 programs of a game's shaders were not available to compare with (only built-ins). Desktop
+GLES3 programs of a game's shaders were not available to compare with (only built-ins), and for
+GLCore41/43 programs there is no Unity reference at all (Unity's built-in resources have none):
+their rules come from the GLSL ES 3.00 / 3.10 specifications and Mesa's compiler, and no Mali
+compiler has seen them. Storage buffers in a vertex stage (particles' procedural instancing) need
+a driver that has vertex shader storage blocks, which ES 3.1 does not require. Desktop
 builds put every subprogram in the tier-independent place (tier 3, 2021.2+: the 4th list), where
 Android builds have one per tier: Unity 2017.4's Android player takes the desktop form (Cuphead),
 later players are assumed to (the selection code is shared with the desktop players).
