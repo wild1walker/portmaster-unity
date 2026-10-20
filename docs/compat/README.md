@@ -139,7 +139,9 @@ reads its data from the APK as on a phone. The Mono ones stalled for minutes at 
 with UnityMain stopped in the Boehm collector's suspend handler (a stop-the-world that does not
 end); not seen with the converted desktop games' longer runs nor reproducible natively here (no
 32-bit ARM on Apple silicon): needs a run on a handheld. Not found among free builds: one with an
-OBB, an IL2CPP arm64 build of 2017.4 - 2019.4 (the one 2018.4 build was a VR title, refused).
+OBB (a build re-split locally into APK + main OBB, as Unity's "Split Application Binary" makes
+them, mounted its OBB and reached its title: docs/apk.md), an IL2CPP arm64 build of 2017.4 - 2019.4
+(the one 2018.4 build was a VR title, refused).
 
 ## Gaps, most impact for the most games first
 
