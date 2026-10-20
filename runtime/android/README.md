@@ -50,7 +50,7 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
 | AConfiguration | Minimal fixed config: landscape, 160 dpi, SDK 26, no touch, D-pad, en_US. |
 | OpenSL ES | Implemented on SDL2: engine, output mix, audio player with a PCM buffer queue (`SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE` or `_BUFFERQUEUE`, 8/16/32-bit int and float PCM). Interfaces: Object, Engine, OutputMix, Play, BufferQueue/AndroidSimpleBufferQueue, Volume, AndroidConfiguration. Stubbed with `SL_RESULT_FEATURE_UNSUPPORTED`: audio recorder (`SL_IID_RECORD` exists but recording does not), MIDI, LED/vibra, listener/3D, metadata extractor, URI/fd players, effects. |
 | libmediandk | Stubs (`media_ndk.c`), for libunity 2022.3 to load: every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted, `AImage_deleteAsync` closes its fence fd); the `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). A VideoPlayer reports an error and the video is skipped. `AMediaFormat_setFloat` is `SOFTFP`. In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
-| Frame pacing | No `AChoreographer_*` (dlsym answers NULL, as on API < 24) and no Android frame-timing EGL functions: Swappy turns itself off (below). |
+| Frame pacing | No `AChoreographer_*` (dlsym answers NULL, as on API < 24), no Android frame timestamps, a no-op `eglPresentationTimeANDROID`; Swappy is kept off by its own switch (below). |
 | EGL | `egl_glue.c`, separate table `egl_shims[]` (below). |
 
 ## Using it from the host
@@ -116,7 +116,8 @@ such a struct, so the pointer Unity passes is already a valid fbdev window. `egl
   `EGL_FRAMEBUFFER_TARGET_ANDROID`, ...). `eglGetConfigAttrib` answers them with 0.
 - `eglCreateContext`: on `EGL_BAD_ATTRIBUTE` retries with only `EGL_CONTEXT_CLIENT_VERSION`.
 - `eglSwapBuffers`: host hook, then the real call. `eglGetProcAddress`: returns the wrappers for
-  wrapped names, NULL for Android's frame-timing functions (see Frame pacing).
+  wrapped names, NULL for Android's frame-timestamp queries, our no-op for
+  `eglPresentationTimeANDROID` (see Frame pacing).
 - `eglSurfaceAttrib` (Unity 2020.3+) is not wrapped: Unity's surface is the driver's.
 
 All other `egl*` imports can resolve to the host libEGL directly (`egl_glue_real(name)` returns
@@ -161,22 +162,32 @@ host never sets a display then).
 
 ## Frame pacing (Swappy)
 
-Unity 2019.3+ contains Android Frame Pacing (Swappy, player setting "Optimized Frame Pacing").
-Decision: Swappy stays off, by construction, and Unity presents with `eglSwapBuffers` at its swap
-interval, which the host's display paces (vsync on Mali fbdev, `SDL_GL_SetSwapInterval` on SDL):
+Unity 2019.3+ contains Android Frame Pacing (Swappy, player setting "Optimized Frame Pacing",
+`androidUseSwappy`). Decision: Swappy stays off, and Unity presents with `eglSwapBuffers` at its
+swap interval, which the host's display paces (vsync on Mali fbdev, `SDL_GL_SetSwapInterval` on SDL):
+- Swappy's own off switch, the `swappy.disable` system property, is set (`loader/hybris_compat.c`;
+  `SO_PROP_swappy_disable=0` would let it run). It is read once Swappy's EGL table and its
+  display query (`NativeActivity.getWindowManager()`, runtime/jni) work.
+- Swappy's EGL table needs `eglPresentationTimeANDROID` (and `eglCreateSyncKHR`,
+  `eglDestroySyncKHR`, `eglGetSyncAttribKHR`, `eglSurfaceAttrib`, ...). `eglGetProcAddress` answers
+  a no-op that succeeds: a desired present time is a hint to SurfaceFlinger's queue, and no host
+  here queues frames. Before, it answered NULL so that Swappy switched itself off; but the Swappy of
+  2021.3+ keeps its disabled instance, Unity's present still calls `SwappyGL_swap`, and that falls
+  back to the table: a NULL dereference on `UnityGfxDeviceW` after two frames (`swappy::SwappyGL::swap`).
+  `eglGetNextFrameIdANDROID`, `eglGetFrameTimestampsANDROID`, `eglGetCompositorTimingANDROID` and
+  their `Supported` queries stay NULL (optional for Swappy too), also when the driver has them.
 - `AChoreographer_*` are absent from the libandroid shims (dlsym of them answers NULL, as on
-  Android before API 24): Swappy's NDK choreographer cannot start. Implementing them from the
-  host's frame loop would give Swappy callbacks, but its pacing also needs SurfaceFlinger's
-  present times, which no host here has.
-- `eglGetProcAddress` answers NULL for `eglPresentationTimeANDROID`, `eglGetNextFrameIdANDROID`,
-  `eglGetFrameTimestampsANDROID`, `eglGetFrameTimestampSupportedANDROID`,
-  `eglGetCompositorTimingANDROID`, `eglGetCompositorTimingSupportedANDROID`, also when the driver
-  has entry points for them: Swappy's EGL loader needs `eglPresentationTimeANDROID` and disables
-  Swappy without it ("Swappy is disabled"), whatever its choreographer did.
-- Its Java fallback (`com.google.androidgamesdk.ChoreographerCallback`, `SwappyDisplayManager`,
-  loaded through `dalvik.system.InMemoryDexClassLoader` when missing) is runtime/jni's side: those
-  classes should be absent there (FindClass NULL with a cleared exception) so that path fails early.
+  Android before API 24): Swappy's NDK choreographer cannot start; its Java one
+  (`ChoreographerCallback`, runtime/jni) is driven by UnityMain's frame loop.
 - `ANativeWindow_setFrameRate` (2021.3+, dlsym) is absent too: Unity keeps its frame rate.
+
+Unity itself must not use Swappy then: with `androidUseSwappy` on and Swappy off, the 2019.4 player
+presents nothing (Swappy deletes a disabled instance, `SwappyGL_swap` returns false without
+swapping: "Failed to get SwappyGL instance in swap" for every frame), and 2021.3+ stop after their
+first frames (the disabled Swappy reports a swap duration of -1, Unity's target frame rate comes out
+near 0 and `AndroidVSync` waits for INT_MAX vsyncs). 2020.3 turns Swappy off itself below API 23.
+`pmunity android-data` therefore turns `androidUseSwappy` off by default (`--swappy`), which is
+also what a desktop build ran with; runtime/jni logs a line when Swappy starts anyway.
 
 ## Audio
 
@@ -216,11 +227,11 @@ The unit tests pass unchanged on both architectures.
 
 ## Tests
 
-`test/test_shims.c` (245 checks) covers: log formatting and filtering; assets (read/seek bounds,
+`test/test_shims.c` (249 checks) covers: log formatting and filtering; assets (read/seek bounds,
 getBuffer, openFileDescriptor, directory listing, `..` refusal); ALooper callbacks, idents, wake
 and timeout; sensors and input; the window and egl_glue against `test/fake_egl.c` (fbdev size
-follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress and its
-hidden frame-timing functions; with a host display: every mapping above, `eglSurfaceAttrib` and
+follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress, its
+hidden frame-timestamp functions and the no-op presentation time; with a host display: every mapping above, `eglSurfaceAttrib` and
 its re-application after a surface replacement, pass-through for other displays and surfaces,
 no-op destroy/terminate); the libmediandk stubs (tables, key strings, a VideoPlayer's call
 sequence failing cleanly); the same EGL against Mesa with real SDL windows (X11, Wayland) is

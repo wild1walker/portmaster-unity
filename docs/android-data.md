@@ -150,21 +150,28 @@ built-ins and six free Linux games (one per line):
   deprecated.
 - **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version;
   the GLES3 entry is copied from GLCore (from D3D11 for a Windows build).
-- **PlayerSettings.** As in section 2, plus `--swappy keep|off|on`: `androidUseSwappy` (2019.3+,
-  Android Frame Pacing). Off changes pacing, not the picture; use it if the runtime's choreographer
-  path misbehaves.
-- **OBB.** 2017.4 - 2020.3: the `assets/<build-id>` marker and `unity.build-id` meta-data. 2022.3's
-  libunity has `/assets/unity_obb_guid` ("Application OBB has mismatching GUID"); 2021.3 has neither
-  string (its check was not traced). For Unity 2021+ the packer writes `assets/unity_obb_guid`
-  (the build id as text) into the APK and every OBB, and names it in `android_package.json`; not
-  run against a player. The build id comes from `BuildSettings.buildGUID`, which 2022 dropped:
-  then `PlayerSettings.productGUID`, else a hash of the settings file.
+- **PlayerSettings.** As in section 2, plus `--swappy off|keep|on`: `androidUseSwappy` (2019.3+,
+  Android Frame Pacing), off by default. A desktop build never ran it, and the runtime keeps Swappy
+  off; with the setting on, the 2019.4 player presents nothing and 2021.3+ stop after their first
+  frames (runtime/android/README.md, "Frame pacing"). Off, Unity paces frames itself (vsync count,
+  `targetFrameRate`), as on the desktop. Only 2019.3+ conversions carry the option in their state.
+- **OBB.** 2017.4 - 2020.3: the `assets/<build-id>` marker and `unity.build-id` meta-data. 2021.3+
+  match an OBB by GUID: the APK's `assets/unity_obb_guid` (2021.3 reads it with
+  `AssetManager.open("unity_obb_guid")`, 2022.3 as `<apk>/assets/unity_obb_guid`) must equal the
+  OBB's `unity_obb_guid` at the root of the archive (2021.3: `ZipFile.getEntry("unity_obb_guid")`,
+  2022.3: its own zip reader, which reads the archive's first entry when the name is missing:
+  "Application OBB has mismatching GUID ... got ''", and the OBB is not mounted). The packer writes
+  both, the build id as text, and names it in `android_package.json`; checked with both players in
+  the emulated rig. The build id comes from `BuildSettings.buildGUID`, which 2022 dropped: then
+  `PlayerSettings.productGUID`, else a hash of the settings file.
 - **What is refused or reported.** A compressed build (`data.unity3d` without
   `globalgamemanagers`): unpack it first with `python -m pmunity unpack <data> [--remove]`
   (stored, LZ4 and LZMA blocks; the files come out as an uncompressed build has them, which is what
   an Android player reads from `assets/bin/Data`). An IL2CPP build (no `Managed/*.dll`;
   `GameAssembly`, `il2cpp_data`): the Mono player cannot run it. Native plugins in `Plugins/`
-  (e.g. `lib_burst_generated.so`, FMOD, Steam) are not shipped; the report names them.
+  (e.g. `lib_burst_generated.so`, FMOD, Steam) are not shipped; the report names them. Burst
+  falls back to its managed code; `libsteam_api.so` is answered by the runtime's stub (Steam not
+  running, `runtime/host/steamstub.c`); FMOD and other plugins need ARM builds of their own.
 
 Six free Linux Mono games (2017.4.40f1, 2018.4.36f1, 2019.4.8f1, 2020.3.49f1, 2021.3.16f1,
 2022.3.36f1) go through every step (shaders, textures, settings, audio, android-data with

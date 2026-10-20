@@ -252,7 +252,8 @@ static int obb_guid(JNIEnv *env)
 }
 
 /* Android's names: loadLibrary(name) has no '/' (else UnsatisfiedLinkError: UnityPlayer.loadLibrary
-   answers false), System.load(path) wants an absolute path; the host gets lib<name>.so / the path */
+   answers false; libunity 2021.3+ asks for libmono-native.so's full path that way), System.load
+   wants an absolute path; the host gets lib<name>.so / the path */
 static int load_rules(JNIEnv *env, jobject player)
 {
     jclass pc = (*env)->FindClass(env, "com/unity3d/player/UnityPlayer");
@@ -261,7 +262,9 @@ static int load_rules(JNIEnv *env, jobject player)
     jmethodID sl = (*env)->GetStaticMethodID(env, sys, "load", "(Ljava/lang/String;)V");
     jmethodID sll = (*env)->GetStaticMethodID(env, sys, "loadLibrary", "(Ljava/lang/String;)V");
     int ok = (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "plugin")) == JNI_TRUE;
+    ok &= (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "/tmp/uptest/lib/libplugin.so")) == JNI_FALSE;
     ok &= (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "/tmp/uptest/lib/libplugin")) == JNI_FALSE;
+    ok &= (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "lib/libplugin.so")) == JNI_FALSE;
     ok &= !clear_exc(env);
     (*env)->CallStaticVoidMethod(env, sys, sl, (*env)->NewStringUTF(env, "/tmp/uptest/lib/libplugin.so"));
     ok &= !clear_exc(env);
@@ -339,7 +342,34 @@ static void initJni(JNIEnv *env, jobject player, jobject context)
     (*env)->PopLocalFrame(env, 0);
 }
 
-static void nativeInitWebRequest(JNIEnv *env, jobject player, jclass cls) { (void)player; R[R_WEBREQ] = cls != 0; }
+/* up to 2018.4: libunity registers UnityWebRequest's natives on the class it is given, creates one
+   per HTTP request and calls run() on a worker thread; offline, run() ends it with an error */
+static void uwr_error(JNIEnv *env, jclass c, jlong ptr, jint code, jstring msg)
+{
+    if (ptr != 0x77aa) FAIL("UnityWebRequest errorCallback ptr");
+    R[R_WEBREQ_ERR] = code;
+    if (!msg) FAIL("UnityWebRequest errorCallback without a message");
+}
+static void nativeInitWebRequest(JNIEnv *env, jobject player, jclass cls)
+{
+    (void)player;
+    R[R_WEBREQ] = cls != 0;
+    if (!cls) return;
+    JNINativeMethod n[] = { { "errorCallback", "(JILjava/lang/String;)V", (void *)uwr_error } };
+    (*env)->RegisterNatives(env, cls, n, 1);
+    jclass mc = (*env)->FindClass(env, "java/util/HashMap");
+    jobject hdr = (*env)->NewObject(env, mc, (*env)->GetMethodID(env, mc, "<init>", "()V"));
+    jstring get = (*env)->NewStringUTF(env, "GET"), url = (*env)->NewStringUTF(env, "https://example.invalid/news.json");
+    jobject r = S <= SHAPE_2017_4_40
+        ? (*env)->NewObject(env, cls, (*env)->GetMethodID(env, cls, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;I)V"),
+                            (jlong)0x77aa, get, hdr, url, (jint)10000)
+        : (*env)->NewObject(env, cls, (*env)->GetMethodID(env, cls, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;ZI)V"),
+                            (jlong)0x77aa, get, hdr, url, (jboolean)1, (jint)10000);
+    if (S == SHAPE_2018_4)
+        (*env)->CallVoidMethod(env, r, (*env)->GetMethodID(env, cls, "setupTransferSettings", "(JZZ)V"), (jlong)0, (jboolean)1, (jboolean)1);
+    (*env)->CallVoidMethod(env, r, (*env)->GetMethodID(env, cls, "run", "()V"));
+    if (clear_exc(env)) FAIL("UnityWebRequest.run threw");
+}
 
 static void nativeRecreateGfxState(JNIEnv *env, jobject player, jint which, jobject surface)
 {

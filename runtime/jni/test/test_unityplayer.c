@@ -173,6 +173,7 @@ static int run_shape(int shape)
     CHECK(R(R_ONLOAD) == 1);
     CHECK(R(R_INITJNI) == 1);
     CHECK(R(R_WEBREQ) == (shape <= SHAPE_2018_4));
+    CHECK(R(R_WEBREQ_ERR) == (shape <= SHAPE_2018_4 ? 7 : 0));   /* unknown host */
     CHECK(R(R_PATH_OK) == 1);
     CHECK(R(R_MODEL_OK) == 1);
     CHECK(R(R_SDK) == 23);

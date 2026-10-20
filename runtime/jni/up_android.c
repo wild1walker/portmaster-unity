@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <zlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -682,6 +683,45 @@ H(zf_getInputStream)
 }
 H(ze_getName) { const char *n = fj_data(self); return fj_l(n ? fj_string(n) : NULL); }
 
+/* com.unity3d.player.UnityWebRequest (2017.4 - 2018.4): Unity's HTTP(S) transport in Java
+ * (file: and jar: URLs are read natively; 2019.4+ has its own). This runtime has no HTTP client:
+ * run() ends a request the way HttpURLConnection does on a phone without a network, so it
+ * completes with an error at once instead of never finishing. An http(s) URL gets
+ * UnknownHostException, a URL without a scheme MalformedURLException, another scheme a
+ * protocol error: errorCallback codes 7, 5 and 4, as Unity's Java side reports them. */
+typedef struct { jlong ptr; char *url; } uwr;
+static void uwr_free(void *p) { uwr *w = p; if (w) { free(w->url); free(w); } }
+H(uwr_init)          /* (ptr, method, headers, url[, followRedirects], timeout) */
+{
+    uwr *w = calloc(1, sizeof *w);
+    if (!w) return fj_v();
+    const char *u = jstr(a[3]);
+    w->ptr = a[0].j;
+    w->url = strdup(u ? u : "");
+    fj_set_data(self, w, uwr_free);
+    return fj_v();
+}
+H(uwr_run)
+{
+    uwr *w = fj_data(self);
+    if (!w) return fj_v();
+    const char *u = w->url, *sep = strstr(u, "://");
+    char msg[600];
+    int code;
+    if (!sep) { code = 5; snprintf(msg, sizeof msg, "no protocol: %s", u); }
+    else if (!strncasecmp(u, "http://", 7) || !strncasecmp(u, "https://", 8)) {
+        const char *h = sep + 3;
+        int n = (int)strcspn(h, ":/?#");
+        code = 7;
+        snprintf(msg, sizeof msg, "Unable to resolve host \"%.*s\": No address associated with hostname", n > 255 ? 255 : n, h);
+    } else { code = 4; snprintf(msg, sizeof msg, "unknown protocol: %.*s", (int)(sep - u) > 32 ? 32 : (int)(sep - u), u); }
+    up_log("UnityWebRequest %s: no network here, error %d", u, code);
+    jvalue b[3] = { fj_j(w->ptr), fj_i(code), fj_l(fj_string(msg)) };
+    up_call_native("com/unity3d/player/UnityWebRequest", "errorCallback", "(JILjava/lang/String;)V",
+                   fj_class_find("com/unity3d/player/UnityWebRequest"), b);
+    return fj_v();
+}
+
 /* ClassLoader / System / Runtime / Thread */
 /* BaseDexClassLoader.findLibrary: the path of lib<name>.so in nativeLibraryDir, or null when the
  * app does not ship it (Unity probes optional libraries this way, e.g. the .NET 4.x Mono runtime
@@ -708,8 +748,8 @@ H(cl_loadClass)
     return fj_l(c);
 }
 /* Android's rules for the two: System.loadLibrary(name) takes a bare name ("Directory separator
- * should not appear in library name"), System.load(path) an absolute path; anything else throws
- * UnsatisfiedLinkError without loading. The host maps a name to lib<name>.so. */
+ * should not appear in library name"), which the host maps to lib<name>.so; System.load(path) an
+ * absolute path. Anything else throws UnsatisfiedLinkError without loading. */
 static int load_named(const char *n, int by_name)
 {
     if (!n || !*n || (by_name ? strchr(n, '/') != NULL : n[0] != '/')) return 0;
@@ -1358,6 +1398,7 @@ void up_android_register(void)
     CLS("com/unity3d/player/NativeLoader", NULL);
     CLS("com/unity3d/player/ReflectionHelper", NULL);
     CLS("com/unity3d/player/UnityWebRequest", NULL);
+    fj_class_implements("com/unity3d/player/UnityWebRequest", "java/lang/Runnable");
     /* optional Unity features we do not provide: real Java would have these classes, but the
      * VR/AR paths only run when the build enables them; keep the placeholders. */
 
@@ -1627,6 +1668,13 @@ void up_android_register(void)
     M("java/util/Scanner", "useDelimiter", "(Ljava/lang/String;)Ljava/util/Scanner;", h_self);
     M("java/util/Scanner", "next", "()Ljava/lang/String;", scanner_next);
     M("java/util/Scanner", "close", "()V", h_void);
+    const char *UWR = "com/unity3d/player/UnityWebRequest";
+    M(UWR, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;I)V", uwr_init);      /* 2017.4 */
+    M(UWR, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;ZI)V", uwr_init);     /* 2018.4 */
+    M(UWR, "setupTransferSettings", "(JZZ)V", h_void);
+    M(UWR, "run", "()V", uwr_run);
+    M(UWR, "abort", "()V", h_void);
+    SM(UWR, "clearCookieCache", "(Ljava/lang/String;Ljava/lang/String;)V", h_void);
     const char *ZF = "java/util/zip/ZipFile";
     M(ZF, "<init>", "(Ljava/lang/String;)V", zf_init);
     M(ZF, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;", zf_getEntry);
