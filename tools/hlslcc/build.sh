@@ -4,7 +4,12 @@
 # at the pinned commit below (not kept in this repository); any C++11 compiler builds it (macOS
 # clang, Linux gcc; e.g. in the ua-build-arm64 image for the handheld's aarch64 userland).
 #
-#   tools/hlslcc/build.sh [<out dir>]        default tools/hlslcc/out; the binary is <out>/pmhlslcc
+#   tools/hlslcc/build.sh [<out dir>]        default tools/hlslcc/out; the binary is <out>/pmhlslcc,
+#                                            HLSLcc's licence (MIT, bstrlib BSD) <out>/pmhlslcc.LICENSE.txt
+# For the handheld: the ua-build-arm64 image (aarch64) or ua-host-armhf with
+# CC=arm-linux-gnueabihf-gcc CXX=arm-linux-gnueabihf-g++ (armhf); neither image can fetch over
+# HTTPS (no CA certificates), so run this once on the host first: an <out> that already holds
+# HLSLcc-<commit>/ is not fetched again.
 #
 # Fetching uses curl, wget, python3 or git, whichever there is. Environment: CC, CXX (compilers),
 # CXXFLAGS. The converter finds the binary through $PMHLSLCC, else tools/hlslcc/out/pmhlslcc,
@@ -54,4 +59,6 @@ for f in "$src"/src/*.cpp; do
   objs="$objs $o"
 done
 $CXX $CXXFLAGS -std=c++11 -Wall $inc "$here/pmhlslcc.cpp" $objs -o "$out/pmhlslcc"
+# the binary contains HLSLcc (MIT) and bstrlib (BSD): ship it with their licence text
+cp "$src/license.txt" "$out/pmhlslcc.LICENSE.txt"
 echo "$out/pmhlslcc (HLSLcc $HLSLCC_COMMIT)"

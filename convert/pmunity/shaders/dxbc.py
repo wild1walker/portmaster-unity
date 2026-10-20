@@ -14,7 +14,7 @@ entry (blob.Entry) holds one stage:
            int32 n; n x constant buffer           the first one (name '', size 0) holds the
                                                   globals outside any cbuffer (none in D3D11)
                string name; int32 size
-               int32 n; n x (string name, int32 type (0 float, 1 int, 2 bool), int32 rows,
+               int32 n; n x (string name, int32 type (0 float, 1 int; others refused), int32 rows,
                              int32 columns, int32 is matrix, int32 array size, int32 offset)
                int32 n; n x struct member         (none in 2017.4 data seen: refused)
            int32 n; n x binding: string name, int32 kind, int32 index, then by kind:
@@ -23,13 +23,16 @@ entry (blob.Entry) holds one stage:
                kind 1 constant buffer:  int32 (0 in all data seen)
                other kinds (buffers, UAVs) are refused
          (strings: int32 length, bytes, padded to 4). Checked by writing every entry back byte for
-         byte (Bindings.serialize).
+         byte (Bindings.serialize) and against the SerializedSubProgram that uses the entry
+         (check_parsed_form: Unity writes both from the same compile).
 
 Only the names and constant buffer layouts are missing from the bytecode; registers, resource
 types and sampler modes come from the declarations in the SHDR/SHEX chunk. with_reflection()
 puts both back together as an RDEF chunk in the form HLSLcc reads (D3D11_SHADER_DESC tables:
 resource bindings, constant buffers, variables, types, strings), so HLSLcc names every uniform,
-texture and constant buffer as Unity's own GL programs do.
+texture and constant buffer as Unity's own GL programs do. It refuses what the binding info does
+not describe (a register without a name, a constant buffer location an instruction reads that
+no member covers) and resources GLSL ES 3.00 has no type for.
 
 The stages are then translated by pmhlslcc (tools/hlslcc: HLSLcc with a small front end) the way
 Unity's shader compiler does for OpenGL Core: GLSL 1.50, matrices as vec4 arrays
@@ -271,11 +274,18 @@ _DIMS = {1: (1, None), 2: (2, None), 3: (4, 2), 4: (6, 2), 5: (8, 3), 6: (9, 4),
          8: (5, 5), 9: (7, 5), 10: (10, 6)}
 _DIM_NAMES = {1: 'buffer', 2: '1D', 3: '2D', 4: '2D MS', 5: '3D', 6: 'cube', 7: '1D array', 8: '2D array',
               9: '2D MS array', 10: 'cube array'}
+_ES3_DIMS = (3, 5, 6, 8)                # 2D, 3D, cube, 2D array: the sampler types GLSL ES 3.00 has
+
+
+def _is_declaration(op):
+    return 88 <= op <= 106 or 143 <= op <= 162 or op == 206
 
 
 class Program:
     """What the bytecode declares: version, stage, registers of constant buffers (with their
-    size in vec4s), textures (dimension, return type) and samplers (mode)."""
+    size in vec4s), textures (dimension, return type) and samplers (mode); and cb_reads, the
+    constant buffer locations its instructions read with immediate indices: {(register, vec4,
+    first component)} (None if an instruction could not be walked)."""
 
     def __init__(self, shdr):
         w = struct.unpack('<%dI' % (len(shdr) // 4), shdr[:len(shdr) // 4 * 4])
@@ -284,6 +294,7 @@ class Program:
         self.minor, self.major, self.stage = w[0] & 0xf, (w[0] >> 4) & 0xf, w[0] >> 16
         self.cbuffers, self.textures, self.samplers = {}, {}, {}
         self.buffers = []               # other resource declarations (UAVs, buffers): their names
+        self.cb_reads = set()
         end = min(w[1], len(w))
         i = 2
         while i < end:
@@ -292,6 +303,8 @@ class Program:
             n = w[i + 1] if op == _OP_CUSTOMDATA else (tok >> 24) & 0x7f
             if n == 0 or i + n > end:
                 raise Unsupported('shader code chunk: bad instruction length')
+            if op != _OP_CUSTOMDATA and not _is_declaration(op) and self.cb_reads is not None:
+                self._walk(w, i, i + n)
             if op == _OP_DCL_CB:
                 idx, _ = self._operand(w, i + 1)
                 self.cbuffers[idx[0]] = idx[1] if len(idx) > 1 else 0
@@ -304,6 +317,54 @@ class Program:
             elif op in _OP_BUFFERS:
                 self.buffers.append(_OP_BUFFERS[op])
             i += n
+
+    def _walk(self, w, i, end):
+        """Records the immediate constant buffer reads of the instruction at w[i:end]."""
+        p = i + 1
+        ext = w[i] >> 31
+        while ext and p < end:                      # extended opcode tokens
+            ext = w[p] >> 31
+            p += 1
+        try:
+            while p < end:
+                p = self._operand_reads(w, p, end)
+        except (IndexError, ValueError):
+            self.cb_reads = None
+        if p != end:
+            self.cb_reads = None
+
+    def _operand_reads(self, w, p, end):
+        tok = w[p]
+        p += 1
+        ext = tok >> 31
+        while ext:                                  # extended operand tokens
+            if p >= end:
+                raise ValueError
+            ext = w[p] >> 31
+            p += 1
+        ncomp, otype, dim = tok & 3, (tok >> 12) & 0xff, (tok >> 20) & 3
+        if otype in (4, 5):                         # immediate 32 / 64-bit values
+            return p + (1 if ncomp == 1 else 4 if ncomp == 2 else 0) * (1 if otype == 4 else 2)
+        idx = []
+        for k in range(dim):
+            rep = (tok >> (22 + 3 * k)) & 7
+            if rep == 0:
+                idx.append(w[p]); p += 1
+            elif rep == 1:
+                idx.append(None); p += 2
+            elif rep in (2, 3, 4):
+                p += (0, 1, 2)[rep - 2]
+                idx.append(None)
+                p = self._operand_reads(w, p, end)  # relative index: an operand of its own
+            else:
+                raise ValueError
+        if otype == 8 and dim == 2 and None not in idx and ncomp == 2:
+            mode = (tok >> 2) & 3                   # 0 mask, 1 swizzle, 2 one component
+            comp = (tok >> 4) & 3 if mode else next((c for c in range(4) if tok >> (4 + c) & 1), 0)
+            self.cb_reads.add((idx[0], idx[1], comp))
+        if p > end:
+            raise ValueError
+        return p
 
     def _operand(self, w, p):
         """Immediate register indices of a declaration's operand; position after it."""
@@ -328,7 +389,7 @@ _RDEF_PROGRAM_TYPES = {0: 0xffff, 1: 0xfffe, 2: 0x4753, 3: 0x4853, 4: 0x4453, 5:
 
 def _var_layout(p):
     """(D3D_SHADER_VARIABLE_CLASS, D3D_SHADER_VARIABLE_TYPE, size in bytes) of a Unity param."""
-    types = {0: 3, 1: 2, 2: 1}                       # float, int, bool
+    types = {0: 3, 1: 2}                             # float, int (the types seen in Unity's data)
     if p.type not in types:
         raise Unsupported(f'constant {p.name!r} of Unity type {p.type}')
     if p.is_matrix:
@@ -413,6 +474,11 @@ def with_reflection(dxbc, bindings):
         if name is None or name not in by_name:
             raise Unsupported(f'constant buffer cb{reg} is not named in the binding info')
         cbs.append((reg, by_name[name]))
+    extents = {reg: [(p.offset, p.offset + _var_layout(p)[2]) for p in cb.params] for reg, cb in cbs}
+    for reg, vec, comp in sorted(prog.cb_reads or ()):
+        at = vec * 16 + comp * 4
+        if not any(a <= at < b for a, b in extents.get(reg, ())):
+            raise Unsupported(f'cb{reg}[{vec}].{"xyzw"[comp]} is read but the binding info has no constant there')
     textures = []
     for reg in sorted(prog.textures):
         b = tex_regs.get(reg)
@@ -421,6 +487,8 @@ def with_reflection(dxbc, bindings):
         dim, ret = prog.textures[reg]
         if dim not in _DIMS:
             raise Unsupported(f'texture {b.name!r}: resource dimension {dim}')
+        if dim not in _ES3_DIMS:
+            raise Unsupported(f'{_DIM_NAMES[dim]} texture {b.name!r} (not in GLSL ES 3.00)')
         if _DIMS[dim][1] is not None and b.extra[0] != _DIMS[dim][1]:
             raise Unsupported(f'texture {b.name!r}: declared {_DIM_NAMES[dim]} but Unity says dimension {b.extra[0]}')
         textures.append((reg, b.name))

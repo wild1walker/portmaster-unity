@@ -52,9 +52,19 @@ def dcl_sampler(reg):
     return op(90, [0x00106000, reg])
 
 
-def shdr(stage, decls, code):
+def shdr(stage, decls, code, version=0x40):
     body = [w for i in decls + code for w in i]
-    return struct.pack('<%dI' % (2 + len(body)), (stage << 16) | 0x40, 2 + len(body), *body)
+    return struct.pack('<%dI' % (2 + len(body)), (stage << 16) | version, 2 + len(body), *body)
+
+
+def as_sm5(chs):
+    """The same program as shader model 5.0 (SHEX; RDEF variables have 4 more words)."""
+    out = []
+    for f, d in chs:
+        if f == 'SHDR':
+            f, d = 'SHEX', struct.pack('<I', (struct.unpack_from('<I', d)[0] & ~0xff) | 0x50) + d[4:]
+        out.append((f, d))
+    return out
 
 
 def signature(elems):
@@ -180,8 +190,15 @@ class ContainerTest(unittest.TestCase):
         _, cbs = read_rdef(dict(D.chunks(D.with_reflection(D.split_code(VS_CODE)[1], VS_BIND)[0]))['RDEF'])
         self.assertEqual(cbs['$Globals'][1][0], ('unity_MatrixMVP', 0, 64, 3, 4, 4))   # column-major 4x4
 
+    def test_constant_reads(self):
+        self.assertEqual(D.Program(dict(VS_DXBC)['SHDR']).cb_reads, {(0, 0, 0), (0, 1, 0), (0, 2, 0), (0, 3, 0)})
+        self.assertEqual(D.Program(dict(PS_DXBC)['SHDR']).cb_reads, {(0, 4, 0)})
+
     def test_reflection_refused(self):
         dx = D.split_code(PS_CODE)[1]
+        other = D.Bindings(0, [], [D.ConstantBuffer('$Globals', 80, [D.Param('_Other', 0, 1, 4, 0, 0, 16)])], PS_BIND.bindings)
+        with self.assertRaisesRegex(D.Unsupported, r'cb0\[4\]\.x is read'):   # _Tint is not described
+            D.with_reflection(dx, other)
         nameless = D.Bindings(0, [], PS_BIND.cbuffers, PS_BIND.bindings[:1] + PS_BIND.bindings[2:])
         with self.assertRaises(D.Unsupported):          # t1 has no name
             D.with_reflection(dx, nameless)
@@ -354,6 +371,14 @@ class HlslccTest(unittest.TestCase):
         self.assertIn('layout(location = 0) out vec4 SV_Target0;', fs)
         es = G.program_to_es(gl)
         self.assertEqual(es.count('#version 300 es\n'), 2)
+
+    def test_shader_model_5(self):
+        vs, ps = unity_code(as_sm5(VS_DXBC)), unity_code(as_sm5(PS_DXBC))
+        self.assertEqual(D.Program(dict(D.chunks(D.split_code(vs)[1]))['SHEX']).major, 5)
+        with D.Translator() as tr:
+            sm5 = D.translate_program(tr, (vs, VS_BIND.serialize()), (ps, PS_BIND.serialize()))
+            sm4 = D.translate_program(tr, (VS_CODE, VS_BIND.serialize()), (PS_CODE, PS_BIND.serialize()))
+        self.assertEqual(sm5, sm4)
 
     def test_bad_program(self):
         with D.Translator() as tr:

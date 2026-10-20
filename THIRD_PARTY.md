@@ -22,3 +22,8 @@ Apache 2.0 licence text and libhybris's notices.
 Debian's armhf cross toolchains and libraries (Dockerfiles), SDL2, Mesa (test rig), Python
 packages in `convert/requirements.txt` (UnityPy MIT, lz4 BSD, astc-encoder Apache 2.0, Pillow
 MIT-CMU, texture2ddecoder MIT, pyelftools public domain).
+
+[HLSLcc](https://github.com/Unity-Technologies/HLSLcc) (MIT; it includes bstrlib, BSD), fetched by
+`tools/hlslcc/build.sh` at a pinned commit and compiled into `pmhlslcc` (Direct3D 11 shaders,
+`pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the
+build writes next to it.
