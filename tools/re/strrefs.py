@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Per-function .rodata string references in an ARM32 (ARM-mode, PIC) shared object.
+"""Per-function .rodata string references in an ARM32 (ARM or Thumb-2, PIC) shared object.
 
 Recognises the PIC idioms clang/gcc emit for Android:
-   ldr rX, [pc, #imm]   ; literal = string - (P + 8)
-   add rX, pc, rX       ; P = address of the add
- and   movw/movt rX + add rX, pc, rX.
+   ldr rX, [pc, #imm]   ; literal = string - (P + 8)   (Thumb: P + 4)
+   add rX, pc, rX       ; P = address of the add       (Thumb: add rX, pc)
+ movw/movt rX + add rX, pc, rX, and add rX, pc, #imm / adr (strings in literal pools in .text).
 Only functions whose referenced strings match FILTER (regex) are printed.
 
 usage: python3 -I strrefs.py LIB.so LIB.sym.so [FILTER_REGEX] [--all]
@@ -35,15 +35,22 @@ def main():
             return struct.unpack_from('<I', tdata, addr - tbase)[0]
         return None
 
+    textstr = re.compile(rb'^[A-Za-z0-9_$<>/;()\[.]{2,}$')
+
     def cstr(addr):
-        if not (ro_lo <= addr < ro_hi):
+        if ro_lo <= addr < ro_hi:
+            data, o = rodata, addr - ro_lo
+        elif tbase <= addr < tbase + len(tdata):
+            data, o = tdata, addr - tbase      # literal pools: newer players keep short JNI names there
+        else:
             return None
-        o = addr - ro_lo
-        end = rodata.find(b'\0', o, o + 400)
+        end = data.find(b'\0', o, o + 400)
         if end < 0:
             return None
-        s = rodata[o:end]
+        s = data[o:end]
         if len(s) < 1 or any(c < 0x20 or c > 0x7e for c in s):
+            return None
+        if data is tdata and not textstr.match(s):
             return None
         return s.decode('ascii')
 
@@ -73,13 +80,17 @@ def main():
     ldr_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), \[pc, #(-?0x[0-9a-f]+|-?\d+)\]$')
     addpc_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), pc, (r\d+|ip|lr|sb|sl|fp)$')
     addpc2_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), (r\d+|ip|lr|sb|sl|fp), pc$')
+    addpc1_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), pc$')        # Thumb: add rX, pc
     add3_re = re.compile(r'^(\w+), (\w+), (\w+)$')
     mov_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), #(0x[0-9a-f]+|\d+)$')
+    addimm_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), pc, #(-?0x[0-9a-f]+|-?\d+)$')   # add rX, pc, #imm
+    adr_re = re.compile(r'^(r\d+|ip|lr|sb|sl|fp), #(-?0x[0-9a-f]+|-?\d+)$')
     for idx, (addr, size, name, thumb) in enumerate(funcs):
         if not (tbase <= addr < tbase + len(tdata)):
             continue
-        mi = bisect.bisect_right(mapaddrs, addr) - 1
-        is_thumb = thumb or (mi >= 0 and maps[mi][1] == '$t')
+        # an ARM ELF function symbol has bit 0 set for Thumb code; mapping symbols ($a/$t) of a
+        # .sym.so are not reliable (some players keep only $t ones)
+        is_thumb = bool(thumb)
         md = md_thumb if is_thumb else md_arm
         code = tdata[addr - tbase: addr - tbase + size]
         regs = {}
@@ -99,7 +110,7 @@ def main():
                     off += step  # undecodable word (literal pool data): skip it
         for ins in insns():
             a, sz, mn, ops = ins
-            if mn.startswith('ldr') and mn in ('ldr', 'ldr.w'):
+            if mn in ('ldr', 'ldr.w'):
                 m = ldr_re.match(ops)
                 if m:
                     pcv = (a + (4 if is_thumb else 8)) & ~3
@@ -107,21 +118,33 @@ def main():
                     if w is not None:
                         regs[m.group(1)] = w
                     continue
-            if mn in ('movw',):
+            if mn in ('movw', 'movw.w'):
                 m = mov_re.match(ops)
                 if m:
                     regs[m.group(1)] = int(m.group(2), 0)
                     continue
-            if mn in ('movt',):
+            if mn in ('movt', 'movt.w'):
                 m = mov_re.match(ops)
                 if m and m.group(1) in regs:
                     regs[m.group(1)] = (regs[m.group(1)] & 0xffff) | (int(m.group(2), 0) << 16)
                     continue
+            if mn in ('adr', 'adr.w') or (mn in ('add', 'addw', 'add.w') and addimm_re.match(ops)):
+                m = adr_re.match(ops) if mn.startswith('adr') else addimm_re.match(ops)
+                if m:
+                    pcv = ((a + 4) & ~3) if is_thumb else a + 8
+                    v = (pcv + int(m.group(2), 0)) & 0xffffffff
+                    absr[m.group(1)] = v
+                    st = cstr(v)
+                    if st is not None:
+                        refs.append(st)
+                    continue
             if mn == 'add':
                 pcv = a + (4 if is_thumb else 8)
                 m = addpc_re.match(ops) or addpc2_re.match(ops)
-                if m:
-                    src = m.group(2)
+                m1 = None if m else addpc1_re.match(ops)
+                if m or m1:
+                    src = m.group(2) if m else m1.group(1)
+                    m = m or m1
                     if src in regs:
                         v = (regs[src] + pcv) & 0xffffffff
                         absr[m.group(1)] = v

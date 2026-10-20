@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import/relocation analysis of Android ARMv7 shared objects.
+"""Import/relocation analysis of Android shared objects (armeabi-v7a; arm64-v8a too).
 
 Run inside the ua-spec docker image (debian:bookworm + python3-pyelftools +
 libc6-armhf-cross), e.g.
@@ -11,6 +11,8 @@ and prints a summary (json) to stdout.
 """
 import sys, os, json, collections, struct
 from elftools.elf.elffile import ELFFile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from elfimage import Image  # noqa: E402  (relocations of every format, both ABIs)
 from elftools.elf.dynamic import DynamicSection
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.gnuversions import GNUVerSymSection, GNUVerNeedSection, GNUVerDefSection
@@ -184,18 +186,18 @@ def analyse(path):
         if versym:
             for i in range(versym.num_symbols()):
                 vers.append(versym.get_symbol(i)['ndx'])
-        # relocations
+        # relocations (REL/RELA, PLT, packed APS2, RELR: elfimage.Image)
+        im = Image(path)
         relcount = collections.Counter()
         symrel = collections.defaultdict(set)
         relocs = []
-        for sec in e.iter_sections():
-            if isinstance(sec, RelocationSection):
-                for r in sec.iter_relocations():
-                    t = ARM_RELOC.get(r['r_info_type'], str(r['r_info_type']))
-                    relcount[(sec.name, t)] += 1
-                    if r['r_info_sym']:
-                        symrel[r['r_info_sym']].add(t)
-                    relocs.append((r['r_offset'], r['r_info_type'], r['r_info_sym']))
+        for off, typ, sym, add, table in im.relocs():
+            t = 'R_' + ('ARM_' if im.mach == 'EM_ARM' else 'AARCH64_' if im.mach == 'EM_AARCH64' else '') \
+                + im.reloc_name(typ)
+            relcount[(table, t)] += 1
+            if sym:
+                symrel[sym].add(t)
+            relocs.append((off, typ, sym))
         out['relocs'] = {'%s %s' % k: v for k, v in sorted(relcount.items())}
         tls = [s.name for s in syms if s['st_info']['type'] == 'STT_TLS']
         out['tls_symbols'] = tls
@@ -225,23 +227,23 @@ def analyse(path):
             if tag_addr not in tags:
                 return []
             addr, sz = tags[tag_addr], tags[tag_sz]
-            for seg in e.iter_segments():
-                if seg['p_type'] == 'PT_LOAD' and seg['p_vaddr'] <= addr < seg['p_vaddr'] + seg['p_filesz']:
-                    off = seg['p_offset'] + addr - seg['p_vaddr']
-                    f.seek(off)
-                    data = f.read(sz)
-                    return ['0x%x' % w for w in struct.unpack('<%dI' % (sz // 4), data)]
-            return []
-        out['init_array'] = {'addr': hex(tags.get('DT_INIT_ARRAY', 0)), 'count': tags.get('DT_INIT_ARRAYSZ', 0) // 4,
+            return ['0x%x' % (im.ptr(addr + i) or 0) for i in range(0, sz, im.ps)]
+        out['init_array'] = {'addr': hex(tags.get('DT_INIT_ARRAY', 0)), 'count': tags.get('DT_INIT_ARRAYSZ', 0) // im.ps,
                              'entries': read_array('DT_INIT_ARRAY', 'DT_INIT_ARRAYSZ')}
-        out['fini_array'] = {'addr': hex(tags.get('DT_FINI_ARRAY', 0)), 'count': tags.get('DT_FINI_ARRAYSZ', 0) // 4,
+        out['fini_array'] = {'addr': hex(tags.get('DT_FINI_ARRAY', 0)), 'count': tags.get('DT_FINI_ARRAYSZ', 0) // im.ps,
                              'entries': read_array('DT_FINI_ARRAY', 'DT_FINI_ARRAYSZ')}
         out['DT_INIT'] = hex(tags['DT_INIT']) if 'DT_INIT' in tags else None
         out['DT_FINI'] = hex(tags['DT_FINI']) if 'DT_FINI' in tags else None
-        # TPIDRURO reads (mrc p15,0,Rt,c13,c0,3): ARM encoding 0xEE1D0F70|Rt<<12 (cond AL)
+        # thread pointer reads: AArch64 mrs Xt, tpidr_el0 (0xD53BD040|Rt);
+        # ARM TPIDRURO (mrc p15,0,Rt,c13,c0,3): ARM encoding 0xEE1D0F70|Rt<<12 (cond AL)
         text = e.get_section_by_name('.text')
         data = text.data()
         base = text['sh_addr']
+        if im.mach == 'EM_AARCH64':
+            hits = [base + o for o in range(0, len(data) - 3, 4)
+                    if struct.unpack_from('<I', data, o)[0] & 0xFFFFFFE0 == 0xD53BD040]
+            out['tpidr_el0_reads'] = {'count': len(hits), 'first': [hex(h) for h in hits[:20]]}
+            return out
         arm_hits, thumb_hits = [], []
         for off in range(0, len(data) - 3, 2):
             w = struct.unpack_from('<I', data, off)[0]
