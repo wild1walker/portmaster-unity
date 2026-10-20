@@ -1,7 +1,7 @@
 #!/bin/bash
-# Builds the host programs: ua_host (loader + android shims + fake JNI), and the device checks
-# egltest / sdltest / audiocheck / shadercheck. Build ../loader, ../android and ../jni first for the
-# same ARCH (../build.sh does).
+# Builds the host programs: ua_host (loader + android shims + fake JNI + media core), and the device
+# checks egltest / sdltest / audiocheck / shadercheck. Build ../loader, ../android, ../jni and ../media
+# first for the same ARCH (../build.sh does).
 #   ARCH=armhf (default): cross-compiled for the device's 32-bit userland in the ua-host-armhf image
 #     -> out/
 #   ARCH=arm64: native build in the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31; its SDL2, EGL
@@ -27,7 +27,7 @@ if [ "$ARCH" = arm64 ]; then
     LOADER=../loader/out/arm64/libsoloader.a
     if [ -f $LOADER ]; then
       g++ -o $O/ua_host $OBJS $LOADER ../android/out/arm64/libandroidshims.a ../jni/out/arm64/libfakejni.a \
-        -lSDL2 -lz -ldl -lpthread -lm -lrt
+        ../media/out/arm64/libuamedia.a -lSDL2 -lz -ldl -lpthread -lm -lrt
       file $O/ua_host | sed "s|, BuildID[^,]*||"
     else
       rm -f $O/ua_host
@@ -55,7 +55,8 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c display_sdl.c -o out/display_sdl.o
   arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/frames.o out/glhooks.o out/hitches.o out/gltrace.o \
     out/display.o out/display_sdl.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
-    ../jni/out/libfakejni.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -lSDL2 -lz -ldl -lpthread -lm
+    ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
+    -lSDL2 -lz -ldl -lpthread -lm
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/egltest egltest.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/sdltest sdltest.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/audiocheck audiocheck.c -lSDL2

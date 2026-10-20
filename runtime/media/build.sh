@@ -1,0 +1,64 @@
+#!/bin/bash
+# Builds the media core: out/libuamedia.a (armhf) or out/arm64/libuamedia.a, our objects with the
+# build image's static decoder libraries merged in (libvpx, libvorbis, libogg, libopus, OpenH264),
+# and out/[arm64/]licenses/ (their licence texts, to ship with a binary that links them).
+#   ARCH=armhf (default): Debian bookworm cross toolchain, image ua-media-armhf (docker/Dockerfile)
+#   ARCH=arm64: native in ua-media-arm64 (docker/Dockerfile.arm64, on top of ua-build-arm64)
+# ./build.sh test  also builds and runs the unit tests (test/): armhf in an arm/v7 container
+#   (Docker's emulation), arm64 natively; the GL test needs the emulated rig's image ua-emu-armhf
+#   (tools/emu) for armhf, Mesa from ua-build-arm64 for arm64.
+# Link with: libuamedia.a -lstdc++ -ldl -lpthread -lm
+set -e
+cd "$(dirname "$0")"
+ARCH=${ARCH:-armhf}
+case "$ARCH" in
+  armhf) IMG=ua-media-armhf; DF=docker/Dockerfile; PLAT=; O=out; CROSS=arm-linux-gnueabihf-
+         LIBDIR=/usr/lib/arm-linux-gnueabihf; ARCHF="-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard" ;;
+  arm64) IMG=ua-media-arm64; DF=docker/Dockerfile.arm64; PLAT="--platform linux/arm64"; O=out/arm64; CROSS=
+         LIBDIR=/usr/lib/aarch64-linux-gnu; ARCHF=
+         docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build -t ua-build-arm64 ../docker/arm64 ;;
+  *) echo "ARCH must be armhf or arm64"; exit 1 ;;
+esac
+docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG -f $DF docker
+docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIBDIR=$LIBDIR -e ARCHF="$ARCHF" \
+  -e TEST="$1" $IMG bash -c '
+  set -e
+  mkdir -p $O/obj $O/licenses $O/test
+  CC=${CROSS}gcc; CXX=${CROSS}g++; AR=${CROSS}ar
+  H264=$(ls $LIBDIR/libopenh264.a /usr/local/lib/libopenh264.a 2>/dev/null | head -1)
+  DEFS="-DUM_HAVE_VPX -DUM_HAVE_VORBIS -DUM_HAVE_OPUS"
+  true
+  CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64 $ARCHF $DEFS -I/usr/local/include"
+  OBJS=
+  for f in um_format um_extractor um_webm um_codec um_surface um_vpx um_audio um_stubs; do
+    $CC $CFLAGS -c $f.c -o $O/obj/$f.o; OBJS="$OBJS $O/obj/$f.o"
+  done
+  rm -f $O/libuamedia.a $O/core.a
+  $AR rcs $O/core.a $OBJS
+  { echo "create $O/libuamedia.a"; echo "addlib $O/core.a"
+    for l in $LIBDIR/libvpx.a $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a $H264; do echo "addlib $l"; done
+    echo save; echo end; } | $AR -M
+  rm -f $O/core.a
+  for p in libvpx-dev libvorbis-dev libogg-dev libopus-dev libopenh264-dev; do
+    [ -f /usr/share/doc/$p/copyright ] && cp /usr/share/doc/$p/copyright $O/licenses/${p%-dev}.copyright
+  done
+  [ -f /usr/local/lib/openh264.LICENSE ] && cp /usr/local/lib/openh264.LICENSE $O/licenses/libopenh264.LICENSE
+  ls -la $O/libuamedia.a | awk "{print \$5, \$9}"; echo "decoders built in: $DEFS"
+  if [ "$TEST" = test ]; then
+    $CC $CFLAGS -I. -o $O/test/test_media test/test_media.c test/webm_writer.c $O/libuamedia.a \
+      $LIBDIR/libvorbisenc.a $LIBDIR/libvpx.a $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a $H264 -lstdc++ -ldl -lpthread -lm
+    $CC $CFLAGS -I. -o $O/test/test_surface_gl test/test_surface_gl.c $O/libuamedia.a -lEGL -lGLESv2 -lstdc++ -ldl -lpthread -lm
+  fi
+'
+if [ "$1" = test ]; then
+  if [ "$ARCH" = armhf ]; then
+    docker run --rm --platform linux/arm/v7 -v "$PWD":/w -w /w debian:bookworm-slim timeout 900 ./out/test/test_media
+    docker image inspect ua-emu-armhf >/dev/null 2>&1 && \
+      docker run --rm --platform linux/arm/v7 -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless \
+        -e LIBGL_ALWAYS_SOFTWARE=1 ua-emu-armhf timeout 600 ./out/test/test_surface_gl ../../convert/pmunity/video_decode_android.shader
+  else
+    docker run --rm $PLAT -v "$PWD":/w -w /w $IMG timeout 900 ./out/arm64/test/test_media
+    docker run --rm $PLAT -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 \
+      $IMG timeout 600 ./out/arm64/test/test_surface_gl ../../convert/pmunity/video_decode_android.shader
+  fi
+fi

@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the runtime in Docker: loader -> android shims -> fake JNI -> ua_host and the device checks.
+# Builds the runtime in Docker: loader -> android shims -> fake JNI -> media core -> ua_host and the
+# device checks.
 #   ARCH=armhf (default): 32-bit ARM (armeabi-v7a players), cross-compiled -> */out/, host/out/ua_host
 #   ARCH=arm64: AArch64 (arm64-v8a players), native builds in the ua-build-arm64 image -> */out/arm64/,
 #     host/out/arm64/ua_host (linked once the loader builds loader/out/arm64/libsoloader.a)
@@ -18,5 +19,6 @@ android/build.sh
 T=test-qemu; OUT=host/out
 [ "$ARCH" = arm64 ] && { T=test; OUT=host/out/arm64; }
 if [ "$TESTS" = 1 ]; then jni/build.sh all $T; else jni/build.sh all; fi
+media/build.sh
 host/build.sh
 echo "runtime built: $OUT/ua_host"
