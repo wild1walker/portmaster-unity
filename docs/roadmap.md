@@ -11,7 +11,8 @@ ARM) is the first game done end to end.
 | macOS / Linux desktop build, Mono | the same Unity version's Android player; desktop data converted (GLCore shaders -> GLES3, textures, settings) | done for 2017.4 (32-bit ARM); version coverage below |
 | Windows desktop build, Mono | as above, but the shaders are Direct3D bytecode (DXBC) only | a DXBC -> GLSL ES translator in the converter (Unity's open-source HLSLcc does this) |
 | the game's own Android build (APK / OBB / AAB), Mono or IL2CPP | as is, on our runtime (32- or 64-bit) | runtime coverage of that Unity version's Java side and native imports |
-| desktop build, IL2CPP (GameAssembly) | its code is compiled for x86: not portable this way | (out of scope) |
+| desktop build, IL2CPP (GameAssembly) | its code is compiled for x86: not portable this way; the game's own **Linux** build runs under box64 instead ([box64-route.md](box64-route.md)) | menus reached in the emulated rig (IL2CPP 2020.3, 2022.3, Unity 6); not yet run on a handheld |
+| Linux build of a version or with plugins the Android route does not take (5.x, 2017.1-2, 2023.x, Unity 6; x86-only FMOD/Wwise/...) | the same: the game's Linux x86_64 build under box64, GL through the player's own OpenGL ES mode (`-force-gles` + glxes), Mesa or gl4es | `pmunity route` picks the route; see box64-route.md for what is left |
 | desktop build, Mono, 64-bit ARM wanted | the game's assemblies compiled with Unity's IL2CPP for the Android player's arm64-v8a variation | Unity's il2cpp tool and libil2cpp of that version, Android NDK; AOT limits (no Reflection.Emit) |
 
 Unity ships 64-bit ARM Android players only with IL2CPP (2017.4.16+ and 2018.2+); Mono players
@@ -35,6 +36,10 @@ are 32-bit ARM in every version.
 4. **IL2CPP pipeline** for Mono desktop games on 64-bit ARM.
 5. **Test corpus**: games across versions and build types, each with a deterministic smoke test
    (load to the first scene, screenshot) in the emulated rig (`tools/emu`) and on a handheld.
+6. **box64 route** for the games above ([box64-route.md](box64-route.md)): `pmunity route`,
+   `tools/box64` (box64/gl4es builds, glxes, launcher template, test rig). Left: a handheld run of
+   GLES mode through Westonpack's `crusty_x11egl`, Mono AOT for the JIT's first-use cost, 32-bit
+   x86 builds (box86 or box64's BOX32), the on-device GLES conversion in the port template.
 
 Each item keeps the rule the Cuphead port follows: the game looks and plays as the original;
 anything that changes that is an option, off by default.

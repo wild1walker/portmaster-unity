@@ -118,6 +118,31 @@ registered; cursor images (`Bitmap`/`PointerIcon`) and video decoding are other 
 2019.4+ fails certificate checks (`TrustManagerFactory` placeholders; libunity's unitytls then
 reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM builds.
 
+## Linux players under box64 (the other route)
+
+Games the Android-player route cannot take (IL2CPP, Unity 5.x / 2023+ / Unity 6, x86-only
+plugins) run as their own Linux x86_64 build under box64: [box64-route.md](../box64-route.md).
+`pmunity route <game>` says which route fits. In the box64 rig (`tools/box64/rig.sh`: arm64
+container, Mesa), with box64 0.4.4:
+
+| Linux player | build | desktop GL | GLES mode (`-force-gles`, converted shaders, glxes; no desktop GL) |
+|---|---|---|---|
+| 5.5.1 | Mono | menu | menu (ES 3.1 AEP device) |
+| 2017.4.40 | Mono | title menu | title menu (ES 3.1 AEP) |
+| 2018.4.36 | Mono (bdwgc) | title menu | title menu (ES 3.1 AEP) |
+| 2019.4.8 | Mono | title | title (ES 3.2) |
+| 2020.3.49 / 2020.3.28 | Mono / IL2CPP | title menu / main menu | title menu / not converted (settings step error on that build) |
+| 2021.3.16 | Mono, URP | main menu | first-start name entry |
+| 2022.3.36 / 2022.3.4 | Mono, URP, FMOD / IL2CPP | title menu / opening scene | title menu / opening scene |
+| 6000.5.9 / 6000.6.4 | IL2CPP / Mono | sign-in screen / in game | not converted (SerializedFile format 23) |
+| 5.0.0, 5.3.2 | Mono, 32-bit x86 only | not run (box86 or box64's BOX32) | |
+
+The Linux players' own GLES device: `-force-gles` works when OpenGL ES 3 (11) is in the build's
+graphics API list (otherwise ignored; the player logs `Unknown renderer 11` and goes on), and it
+uses only GLES 3 shader programs (platform 9; `pmunity convert` adds them, `tools/box64/gles.json`).
+Its context comes through GLX with the ES profile, after a desktop core-profile probe whose version
+sets the ES device level.
+
 ## Gaps, most impact for the most games first
 
 1. ~~**JNI signatures that drifted**~~ (done in runtime/jni): natives are called with the signature

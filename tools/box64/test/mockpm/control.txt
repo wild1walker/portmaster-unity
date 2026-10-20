@@ -1,0 +1,15 @@
+# A stand-in for PortMaster's control.txt (tools/box64/test/launcher_test.sh): the names a launcher
+# uses, with the test rig's values. Not PortMaster's code.
+directory=roms
+ESUDO=""
+GPTOKEYB="true"
+GPTOKEYB2="true"
+CFW_NAME=mock
+DEVICE_ARCH=aarch64
+PM_CAN_MOUNT=N
+DISPLAY_WIDTH=${DISPLAY_WIDTH:-640}
+DISPLAY_HEIGHT=${DISPLAY_HEIGHT:-480}
+get_controls() { :; }
+pm_message() { echo "pm_message: $*"; }
+pm_platform_helper() { :; }
+pm_finish() { echo "pm_finish"; }

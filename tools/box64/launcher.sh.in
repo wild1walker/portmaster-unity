@@ -80,12 +80,13 @@ $ESUDO mount "$controlfolder/libs/${weston_runtime}.squashfs" "$weston_dir"
 # keys and mouse for games that want them: ports/@PORTDIR@/@PORTDIR@.gptk (also the exit hotkey)
 $GPTOKEYB "$EXE" -c "$GAMEDIR/@PORTDIR@.gptk" &
 pm_platform_helper "$GAMEDIR/box64/box64"
-cd "$DATADIR"
-# box64's and the GL settings go on westonwrap's command line: it reloads PortMaster's settings
-# before it starts the game, and some firmwares (ROCKNIX) export their own BOX64_LD_LIBRARY_PATH
+# The game's command as a script (westonwrap.sh evaluates its arguments again: names with spaces);
+# box64's and the GL settings go on westonwrap's command line, as it reloads PortMaster's settings
+# before it starts the game and some firmwares (ROCKNIX) export their own BOX64_LD_LIBRARY_PATH
+{ echo '#!/bin/bash'; printf 'cd %q || exit 1\nexec' "$DATADIR"; printf ' %q' "$GAMEDIR/box64/box64" "./$EXE" "${ARGS[@]}"; echo; } > "$GAMEDIR/conf/run.sh"
+chmod +x "$GAMEDIR/conf/run.sh"
 $ESUDO env $weston_dir/westonwrap.sh "${WESTON[@]}" \
-  "${B64[@]}" "${GLENV[@]}" HOME="$GAMEDIR/conf" XDG_CONFIG_HOME="$GAMEDIR/conf/.config" \
-  "$GAMEDIR/box64/box64" "./$EXE" "${ARGS[@]}"
+  "${B64[@]}" "${GLENV[@]}" HOME="$GAMEDIR/conf" XDG_CONFIG_HOME="$GAMEDIR/conf/.config" "$GAMEDIR/conf/run.sh"
 
 $ESUDO $weston_dir/westonwrap.sh cleanup
 [[ "$PM_CAN_MOUNT" != "N" ]] && $ESUDO umount "$weston_dir"

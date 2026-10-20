@@ -15,11 +15,10 @@
  * links libGLESv2). Not a desktop GL implementation: Unity's OpenGL Core renderer (no -force-gles)
  * draws nothing with it.
  *
- * Env: GLXES_PROBE_VERSION=<major>.<minor>, GLXES_LOG=1 (calls on stderr).
+ * Env: GLXES_PROBE_VERSION=<major>.<minor>, GLXES_LOG=1 (calls on stderr), GLXES_FPS=<file> (frames
+ * per second appended to the file, one line a second).
  * MIT licence (portmaster-unity). */
 #define _GNU_SOURCE
-#include <EGL/egl.h>
-#include <GLES3/gl3.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <dlfcn.h>
@@ -27,8 +26,63 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define EXPORT __attribute__((visibility("default")))
+
+/* The few EGL and GLES names used (Khronos values), so that only libX11's headers are needed to
+ * build; the library links the device's libEGL.so.1 and libGLESv2.so.2 by name. */
+typedef void *EGLDisplay, *EGLConfig, *EGLContext, *EGLSurface;
+typedef int EGLint;
+typedef unsigned int EGLBoolean, EGLenum, GLenum;
+typedef int GLint;
+typedef unsigned char GLubyte;
+#define EGL_NO_DISPLAY ((EGLDisplay)0)
+#define EGL_NO_CONTEXT ((EGLContext)0)
+#define EGL_NO_SURFACE ((EGLSurface)0)
+#define EGL_PBUFFER_BIT 0x0001
+#define EGL_WINDOW_BIT 0x0004
+#define EGL_OPENGL_ES2_BIT 0x0004
+#define EGL_OPENGL_ES3_BIT 0x0040
+#define EGL_BUFFER_SIZE 0x3020
+#define EGL_ALPHA_SIZE 0x3021
+#define EGL_BLUE_SIZE 0x3022
+#define EGL_GREEN_SIZE 0x3023
+#define EGL_RED_SIZE 0x3024
+#define EGL_DEPTH_SIZE 0x3025
+#define EGL_STENCIL_SIZE 0x3026
+#define EGL_NATIVE_VISUAL_ID 0x302E
+#define EGL_SURFACE_TYPE 0x3033
+#define EGL_NONE 0x3038
+#define EGL_RENDERABLE_TYPE 0x3040
+#define EGL_VENDOR 0x3053
+#define EGL_VERSION 0x3054
+#define EGL_HEIGHT 0x3056
+#define EGL_WIDTH 0x3057
+#define EGL_CONTEXT_MAJOR_VERSION 0x3098
+#define EGL_OPENGL_ES_API 0x30A0
+#define EGL_CONTEXT_MINOR_VERSION 0x30FB
+#define GL_VERSION 0x1F02
+#define GL_MAJOR_VERSION 0x821B
+#define GL_MINOR_VERSION 0x821C
+#define GL_SHADING_LANGUAGE_VERSION 0x8B8C
+EGLDisplay eglGetDisplay(void *native);
+EGLBoolean eglInitialize(EGLDisplay, EGLint *, EGLint *);
+EGLBoolean eglBindAPI(EGLenum);
+EGLBoolean eglChooseConfig(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
+EGLBoolean eglGetConfigAttrib(EGLDisplay, EGLConfig, EGLint, EGLint *);
+const char *eglQueryString(EGLDisplay, EGLint);
+EGLint eglGetError(void);
+EGLContext eglCreateContext(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
+EGLBoolean eglDestroyContext(EGLDisplay, EGLContext);
+EGLSurface eglCreatePbufferSurface(EGLDisplay, EGLConfig, const EGLint *);
+EGLSurface eglCreateWindowSurface(EGLDisplay, EGLConfig, unsigned long, const EGLint *);
+EGLBoolean eglDestroySurface(EGLDisplay, EGLSurface);
+EGLBoolean eglQuerySurface(EGLDisplay, EGLSurface, EGLint, EGLint *);
+EGLBoolean eglMakeCurrent(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+EGLBoolean eglSwapBuffers(EGLDisplay, EGLSurface);
+EGLBoolean eglSwapInterval(EGLDisplay, EGLint);
+void (*eglGetProcAddress(const char *))(void);
 
 /* GLX types and constants (glx.h is not needed for so few) */
 typedef struct glxes_ctx *GLXContext;
@@ -134,7 +188,7 @@ static int egl_open(Display *dpy) {
     setup();
     if (edpy != EGL_NO_DISPLAY)
         return 1;
-    edpy = eglGetDisplay((EGLNativeDisplayType)dpy);
+    edpy = eglGetDisplay(dpy);
     if (edpy == EGL_NO_DISPLAY || !eglInitialize(edpy, NULL, NULL)) {
         LOG("eglInitialize failed (0x%x)\n", eglGetError());
         edpy = EGL_NO_DISPLAY;
@@ -303,7 +357,7 @@ static EGLSurface surface_of(GLXDrawable d) {
     if (!s) {
         s = calloc(1, sizeof *s);
         s->draw = d;
-        s->egl = eglCreateWindowSurface(edpy, econfig, (EGLNativeWindowType)d, NULL);
+        s->egl = eglCreateWindowSurface(edpy, econfig, (unsigned long)d, NULL);
         if (s->egl == EGL_NO_SURFACE)
             LOG("eglCreateWindowSurface(0x%lx) failed (0x%x)\n", (unsigned long)d, eglGetError());
         else
@@ -346,11 +400,39 @@ EXPORT void glXDestroyContext(Display *dpy, GLXContext ctx) {
     free(ctx);
 }
 
+static void count_frame(void) {
+    static FILE *f;
+    static int frames, off;
+    static struct timespec t0;
+    struct timespec t;
+    if (off)
+        return;
+    if (!f) {
+        const char *p = getenv("GLXES_FPS");
+        if (!p || !*p || !(f = fopen(p, "a"))) {
+            off = 1;
+            return;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+    }
+    frames++;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    double dt = (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9;
+    if (dt >= 1.0) {
+        fprintf(f, "%.2f\n", frames / dt);
+        fflush(f);
+        frames = 0;
+        t0 = t;
+    }
+}
+
 EXPORT void glXSwapBuffers(Display *dpy, GLXDrawable d) {
     (void)dpy;
     EGLSurface s = surface_of(d);
-    if (s != EGL_NO_SURFACE)
+    if (s != EGL_NO_SURFACE) {
         eglSwapBuffers(edpy, s);
+        count_frame();
+    }
 }
 
 EXPORT GLXContext glXGetCurrentContext(void) { return current; }

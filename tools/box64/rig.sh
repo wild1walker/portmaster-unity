@@ -23,6 +23,8 @@
 #   MEASURE=a-b     seconds between which frames and thread CPU are counted (default: last third)
 #   PROFILE=default|safe|fast   box64 settings (as tools/box64/launcher.sh.in: box64.env)
 #   CPUS=0-3        container CPU set (4 cores, as the handhelds); BOX64_MAXCPU follows it
+#   MEM=1500m       container memory limit (a 1 GB handheld's game plus slack; keeps a runaway run,
+#                   e.g. GL=noop drawing a thousand frames a second, from starving other containers)
 #   OVERLAY=<dir>   files replacing the same paths in the data folder (e.g. pmunity convert output)
 #   ARGS="..."      more player arguments; BOX64_EXTRA="VAR=val ..." more box64 settings
 set -u
@@ -43,12 +45,13 @@ fi
 [ -n "${EXE:-}" ] || { echo "no Linux x86_64 executable in $GAME (set EXE=)"; exit 1; }
 docker image inspect pmu-box64-rig >/dev/null 2>&1 || \
   docker build -q --platform linux/arm64 -t pmu-box64-rig -f "$here/docker/Dockerfile.rig" "$here/docker" >/dev/null
-rm -rf "$OUTD/home" "$OUTD"/shot_*.png "$OUTD/hud"
+rm -rf "$OUTD/home" "$OUTD"/shot_* "$OUTD/hud"
 name=pmu-rig-$$
 trap 'docker kill $name >/dev/null 2>&1' INT TERM
-docker run --rm --name $name --platform linux/arm64 --network none --cpuset-cpus="${CPUS:-0-3}" --shm-size=512m \
+docker run --rm --name $name --platform linux/arm64 --network none --cpuset-cpus="${CPUS:-0-3}" --shm-size=512m --memory="${MEM:-1500m}" \
   -v "$GAME":/game:ro ${OVERLAY:+-v "$(cd "$OVERLAY" && pwd)":/overlay:ro} -v "$OUTD":/out -v "$BIN":/pm:ro -v "$here":/rig:ro \
   -e EXE="$EXE" -e SECS="$SECS" -e GL="${GL:-mesa}" -e RES="${RES:-640x480}" -e SHOTS="${SHOTS:-}" \
   -e KEYS="${KEYS:-}" -e CLICKS="${CLICKS:-}" -e MEASURE="${MEASURE:-}" -e PROFILE="${PROFILE:-default}" \
   -e ARGS="${ARGS:-}" -e BOX64_EXTRA="${BOX64_EXTRA:-}" -e CPUS="${CPUS:-0-3}" \
   pmu-box64-rig bash /rig/rig_inside.sh
+python3 -I "$here/rigstats.py" "$OUTD"
