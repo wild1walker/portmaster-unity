@@ -1795,14 +1795,12 @@ void up_android_register(void)
     M(PAD, "unregisterDownloadStatusListener", "(Ljava/lang/Object;)V", h_void);
     M("com/unity3d/player/UnityCoreAssetPacksStatusCallbacks", "<init>", "()V", h_void);
 
-    /* Android Frame Pacing (Swappy, 2019.4+) inside libunity looks its Java helpers up through the
-     * activity's ClassLoader and else loads them from its embedded dex (InMemoryDexClassLoader,
-     * or PathClassLoader on a temporary file before API 26). None of that can run here: the
-     * classes are absent, so Swappy's choreographer falls back to its own timer thread, and Swappy
-     * switches itself off where EGL lacks eglPresentationTimeANDROID; Unity then paces frames
-     * as 2017.4 does (vsync + Choreographer through JNIBridge). */
-    fj_class_absent("com/google/androidgamesdk/ChoreographerCallback");
-    fj_class_absent("com/google/androidgamesdk/SwappyDisplayManager");
+    /* Android Frame Pacing (Swappy, 2019.4+) inside libunity finds its Java helpers
+     * (ChoreographerCallback, SwappyDisplayManager: up_input.c) through the activity's class
+     * loader, and else would load them from its embedded dex (InMemoryDexClassLoader, or
+     * PathClassLoader on a temporary file before API 26), which cannot run here: those loaders are
+     * absent. Swappy switches itself off where EGL lacks eglPresentationTimeANDROID (egl_glue.c);
+     * Unity then paces frames as 2017.4 does (vsync + Choreographer through JNIBridge). */
     fj_class_absent("dalvik/system/InMemoryDexClassLoader");
     fj_class_absent("dalvik/system/PathClassLoader");
 

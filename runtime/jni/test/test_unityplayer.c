@@ -140,7 +140,7 @@ static int run_shape(int shape)
     CHECK(R(R_PREFS_STR_OK) == 1);
     CHECK(R(R_AUDIO_RATE) == 48000);
     CHECK(R(R_CALLBACKS_OK) == 1);
-    CHECK(R(R_SWAPPY_ABSENT) == 1);
+    CHECK(R(R_SWAPPY_JAVA) == 1);
     CHECK(R(R_IL2CPP_OK) == 1);
     CHECK(access("/tmp/uptest/data/files/il2cpp", W_OK) == 0);
     CHECK(R(R_ORIENT_LOCK) == (shape >= SHAPE_2020_3 ? 100 : 0));
@@ -148,6 +148,7 @@ static int run_shape(int shape)
 
     /* render loop */
     CHECK(wait_for(R_RENDER, 10, 5000));
+    if (shape >= SHAPE_2019_4) CHECK(R(R_SWAPPY_FRAME) == 1);   /* one posted frame, one call */
     CHECK(R(R_GFX) == 1 && R(R_FOCUS_TRUE) == 1 && R(R_RESUME) == 1);
     CHECK(R(R_SURF_CHANGED) == later);
     CHECK(R(R_ORDER_OK) == 1);

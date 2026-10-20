@@ -134,21 +134,41 @@ static int new_callbacks(JNIEnv *env, jobject player)
 
 /* Swappy (2019.4+) looks for its Java helpers through the activity's ClassLoader, then tries the
    dex class loaders; the runtime makes all of them absent */
-static int swappy_absent(JNIEnv *env)
+/* Swappy (2019.4+): libunity registers nOnChoreographer / the SwappyDisplayManager natives as it
+   loads (and stops if the classes are missing); Swappy finds the classes through the activity's
+   class loader (its embedded-dex fallback loaders are absent here) and runs a frame callback */
+#define SWAPPY_COOKIE 0x5a5a
+static void nOnChoreographer(JNIEnv *env, jobject self, jlong cookie, jlong t)
 {
+    (void)env; (void)self;
+    if (cookie == SWAPPY_COOKIE && t > 0) R[R_SWAPPY_FRAME]++;
+}
+static void nSetSupportedRefreshRates(JNIEnv *env, jobject self, jlong cookie, jlongArray p, jintArray m) { (void)env; (void)self; (void)cookie; (void)p; (void)m; }
+static void nOnRefreshRateChanged(JNIEnv *env, jobject self, jlong cookie, jlong a, jlong b, jlong c) { (void)env; (void)self; (void)cookie; (void)a; (void)b; (void)c; }
+static int swappy_java(JNIEnv *env)
+{
+    jclass cb = (*env)->FindClass(env, "com/google/androidgamesdk/ChoreographerCallback");
+    jclass dm = (*env)->FindClass(env, "com/google/androidgamesdk/SwappyDisplayManager");
+    if (!cb || !dm) { clear_exc(env); return 0; }
+    JNINativeMethod ncb[] = { { "nOnChoreographer", "(JJ)V", (void *)nOnChoreographer } };
+    JNINativeMethod ndm[] = { { "nSetSupportedRefreshRates", "(J[J[I)V", (void *)nSetSupportedRefreshRates },
+                              { "nOnRefreshRateChanged", "(JJJJ)V", (void *)nOnRefreshRateChanged } };
+    int ok = (*env)->RegisterNatives(env, cb, ncb, 1) == 0 && (*env)->RegisterNatives(env, dm, ndm, 2) == 0;
     jclass cc = (*env)->FindClass(env, "android/content/Context");
     jobject cl = (*env)->CallObjectMethod(env, g_context, (*env)->GetMethodID(env, cc, "getClassLoader", "()Ljava/lang/ClassLoader;"));
     jclass clc = (*env)->FindClass(env, "java/lang/ClassLoader");
     jmethodID load = (*env)->GetMethodID(env, clc, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    jobject k = (*env)->CallObjectMethod(env, cl, load, (*env)->NewStringUTF(env, "com/google/androidgamesdk/ChoreographerCallback"));
-    int ok = !k && (*env)->ExceptionCheck(env);
-    if (ok) {
-        jthrowable t = (*env)->ExceptionOccurred(env);
-        (*env)->ExceptionClear(env);
-        ok = (*env)->IsInstanceOf(env, t, (*env)->FindClass(env, "java/lang/ClassNotFoundException"));
-    }
+    ok &= (*env)->CallObjectMethod(env, cl, load, (*env)->NewStringUTF(env, "com/google/androidgamesdk/ChoreographerCallback")) != 0;
+    ok &= !clear_exc(env);
     ok &= !(*env)->FindClass(env, "dalvik/system/InMemoryDexClassLoader") && clear_exc(env);
     ok &= !(*env)->FindClass(env, "dalvik/system/PathClassLoader") && clear_exc(env);
+    /* Swappy's JavaChoreographerThread: new ChoreographerCallback(cookie).postFrameCallback() */
+    jobject o = (*env)->NewObject(env, cb, (*env)->GetMethodID(env, cb, "<init>", "(J)V"), (jlong)SWAPPY_COOKIE);
+    ok &= o != 0;
+    if (o) {
+        (*env)->CallVoidMethod(env, o, (*env)->GetMethodID(env, cb, "postFrameCallback", "()V"));
+        ok &= !clear_exc(env);
+    }
     return ok;
 }
 
@@ -244,7 +264,7 @@ static void initJni(JNIEnv *env, jobject player, jobject context)
     R[R_AUDIO_RATE] = (*env)->CallStaticIntMethod(env, as, (*env)->GetStaticMethodID(env, as, "getPrimaryOutputSamplingRate", "()I"));
 
     R[R_CALLBACKS_OK] = S >= SHAPE_2018_4 ? new_callbacks(env, player) : 1;
-    R[R_SWAPPY_ABSENT] = S >= SHAPE_2019_4 ? swappy_absent(env) : 1;
+    R[R_SWAPPY_JAVA] = S >= SHAPE_2019_4 ? swappy_java(env) : 1;
     R[R_IL2CPP_OK] = il2cpp_paths(env);
     if (clear_exc(env)) FAIL("exception pending after initJni");
     (*env)->PopLocalFrame(env, 0);

@@ -280,6 +280,26 @@ H(ch_remove)
     pthread_mutex_unlock(&g_choreo_mu);
     return fj_v();
 }
+/* Swappy's Java helpers (Android Frame Pacing, 2019.4+): libunity registers their natives when it
+ * loads (and stops if the classes are missing), and Swappy finds them through the activity's class
+ * loader. ChoreographerCallback is a Choreographer.FrameCallback that calls
+ * nOnChoreographer(cookie, frameTimeNanos) for each frame it posts; SwappyDisplayManager offers
+ * no refresh rate choices (the panel's one rate) and reports none. */
+#define GSDK "com/google/androidgamesdk/"
+H(cc_init)      { fj_set_data(self, (void *)(intptr_t)a[0].j, NULL); return fj_v(); }
+H(cc_post)      /* ud: 1 = postFrameCallbackDelayed(ms) */
+{
+    jvalue b[2] = { fj_l(self), fj_j(ud ? a[0].j : 0) };
+    return ch_post(env, g_choreo, b, ud);
+}
+H(cc_terminate) { jvalue b[1] = { fj_l(self) }; return ch_remove(env, g_choreo, b, NULL); }
+H(cc_doFrame)
+{
+    jvalue b[2] = { fj_j((jlong)(intptr_t)fj_data(self)), fj_j(a[0].j) };
+    return up_call_native(GSDK "ChoreographerCallback", "nOnChoreographer", "(JJ)V", self, b);
+}
+H(sdm_void)     { return fj_v(); }
+
 void up_choreographer_tick(void)
 {
     jobject due[MAX_FRAME_CB];
@@ -405,6 +425,9 @@ void up_input_register(void)
     fj_class_define("android/view/KeyCharacterMap", NULL);
     fj_class_define("android/hardware/input/InputManager", NULL);
     fj_class_define("android/view/Choreographer", NULL);
+    fj_class_define(GSDK "ChoreographerCallback", NULL);
+    fj_class_implements(GSDK "ChoreographerCallback", "android/view/Choreographer$FrameCallback");
+    fj_class_define(GSDK "SwappyDisplayManager", NULL);
     fj_class_define("org/fmod/FMODAudioDevice", NULL);
     fj_class_implements("org/fmod/FMODAudioDevice", "java/lang/Runnable");
 
@@ -541,6 +564,15 @@ void up_input_register(void)
     M(CH, "postFrameCallback", "(Landroid/view/Choreographer$FrameCallback;)V", ch_post);
     MU(CH, "postFrameCallbackDelayed", "(Landroid/view/Choreographer$FrameCallback;J)V", ch_post, 1);
     M(CH, "removeFrameCallback", "(Landroid/view/Choreographer$FrameCallback;)V", ch_remove);
+    const char *CC = GSDK "ChoreographerCallback", *SDM = GSDK "SwappyDisplayManager";
+    M(CC, "<init>", "(J)V", cc_init);
+    M(CC, "postFrameCallback", "()V", cc_post);
+    MU(CC, "postFrameCallbackDelayed", "(J)V", cc_post, 1);
+    M(CC, "terminate", "()V", cc_terminate);
+    M(CC, "doFrame", "(J)V", cc_doFrame);
+    M(SDM, "<init>", "(JLandroid/app/Activity;)V", sdm_void);
+    M(SDM, "setPreferredDisplayModeId", "(I)V", sdm_void);
+    M(SDM, "terminate", "()V", sdm_void);
 
     const char *FM = "org/fmod/FMODAudioDevice";
     M(FM, "<init>", "()V", fm_init);
