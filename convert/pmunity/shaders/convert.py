@@ -120,6 +120,7 @@ class Result:
         self.notes = []                 # rewrites applied (glsl.OPTIMIZE)
         self.source = 'glcore'          # the platform translated: glcore | d3d11
         self.dropped = 0                # VR-only variants left out (not translatable)
+        self.dropped_instancing = 0     # D3D11: GPU instancing variants left out (not translatable)
         self.es31 = 0                   # programs that need GLSL ES 3.10 (GLES 3.1 programs, type 3)
         self.programs4x = 0             # of the translated entries: GLCore41/43 ones
         self.empty = False              # no programs at all: given an empty GLES3 blob
@@ -327,6 +328,10 @@ def gles3_programs(tree):
 # variants only VR rendering asks for (stereo instancing writes gl_Layer, which ES 3.00 lacks):
 # one of these that cannot be translated is left out; Unity never enables them on a handheld
 VR_KEYWORDS = ('STEREO_INSTANCING_ON', 'STEREO_MULTIVIEW_ON', 'UNITY_SINGLE_PASS_STEREO', 'STEREO_CUBEMAP_RENDER_ON')
+# variants only GPU instancing draws use (instance data in arrays of structs, procedural instancing's
+# structured buffers): one of these that cannot be translated from Direct3D 11 is left out, and the
+# pass's instancing flags (2021.2+) are cleared, so the player draws such objects one by one
+INSTANCING_KEYWORDS = ('INSTANCING_ON', 'PROCEDURAL_INSTANCING_ON', 'DOTS_INSTANCING_ON')
 # SerializedSubProgram fields a GL subprogram leaves empty (its backend finds everything by name)
 _D3D_ONLY_LISTS = ('m_VectorParams', 'm_MatrixParams', 'm_TextureParams', 'm_BufferParams', 'm_ConstantBuffers',
                    'm_ConstantBufferBindings', 'm_UAVParams', 'm_Samplers')
@@ -387,23 +392,54 @@ def _fill_parsed_form(t, b, names):
             t['m_ConstantBufferBindings'].append({'m_NameIndex': nid(x.name), 'm_Index': x.index})
 
 
-def _pixel_for(vkey, pss):
-    """(subprogram, parameter index) of the pixel shader Unity runs with a vertex subprogram of
-    keywords and tier vkey: the one of the same keywords, else (from Unity 2019 a stage's variants
-    leave out the keywords it does not use) the one whose keywords are the largest part of the
-    vertex subprogram's (and of the same tier); (None, None) if there is none or two."""
-    (vk, tier), best = vkey, []
-    for key, sp, pi in pss:
-        if key == vkey:
-            return sp, pi
-    vsets = [set(x) for x in vk]
-    for (pk, ptier), sp, pi in pss:
-        if ptier == tier and len(pk) == len(vk) and all(set(a) <= b for a, b in zip(pk, vsets)):
-            best.append((sum(len(a) for a in pk), sp, pi))
-    best.sort(key=lambda x: -x[0])
-    if not best or (len(best) > 1 and best[0][0] == best[1][0]):
-        return None, None
-    return best[0][1], best[0][2]
+_KEY_FIELDS = (('m_KeywordIndices', 'k'), ('m_GlobalKeywordIndices', 'g'), ('m_LocalKeywordIndices', 'l'))
+
+
+def _keyset(sp):
+    """A subprogram's keywords as one set of (list, index) (2019.1 - 2021.1: global and local lists)."""
+    return frozenset((tag, i) for f, tag in _KEY_FIELDS for i in sp.get(f) or ())
+
+
+def _variant_pairs(vss, pss):
+    """The (vertex sp, its parameter index, pixel sp, its parameter index, keywords) of every variant
+    of a pass's tier list: Unity runs, for the keywords K enabled, the vertex subprogram of K's
+    keywords its stage uses and the pixel one likewise (from Unity 2019 each stage's variants leave
+    out keywords it does not use, so one vertex program may go with several pixel ones and the other
+    way round). A pair belongs together when each side has the other's keywords that its stage uses
+    (a stage uses the keywords any of its subprograms has); the GL program's keywords are both
+    sides'. A vertex subprogram with no pixel one gives (vsp, vpi, None, None, its keywords)."""
+    vuse = set().union(*(_keyset(sp) for sp, _ in vss)) if vss else set()
+    puse = set().union(*(_keyset(sp) for sp, _ in pss)) if pss else set()
+    for vsp, vpi in vss:
+        a, tier, found = _keyset(vsp), vsp.get('m_ShaderHardwareTier'), False
+        for psp, ppi in pss:
+            b = _keyset(psp)
+            if psp.get('m_ShaderHardwareTier') == tier and (b & vuse) <= a and (a & puse) <= b:
+                found = True
+                yield vsp, vpi, psp, ppi, a | b
+        if not found:
+            yield vsp, vpi, None, None, a
+
+
+def _set_keywords(t, keys):
+    """A twin's keyword index lists from a keyword set (_keyset)."""
+    for f, tag in _KEY_FIELDS:
+        if f in t:
+            t[f] = sorted(i for g, i in keys if g == tag)
+
+
+def _entry_keywords(ve, pe):
+    """(keywords, local keywords or None) of a GL program made of two D3D11 entries: the vertex
+    entry's, then the pixel entry's it lacks."""
+    def merged(a, b):
+        return list(a) + [k for k in b if k not in a]
+    vk = list(ve.keywords) if isinstance(ve, B.Entry) else []
+    vl = ve.local_keywords if isinstance(ve, B.Entry) else None
+    if isinstance(pe, B.Entry):
+        vk = merged(vk, pe.keywords)
+        if vl is not None and pe.local_keywords is not None:
+            vl = merged(vl, pe.local_keywords)
+    return vk, (list(vl) if vl is not None else None)
 
 
 def _name_indices(p, needed):
@@ -505,6 +541,14 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
     line = unity_of(tree, unity)
     if serializer is not None and line < dxbc.unity_line(serializer):
         line = dxbc.unity_line(serializer)
+    if not entries and line >= (2018, 1):
+        # every variant stripped from the build: an empty GLES3 blob, as Unity's builds have one per platform
+        blobs.set_entries(B.PLATFORM_GLES3PLUS, [], [] if blobs.nested else None,
+                          1 if blobs.stage_counts is not None else None)
+        blobs.store()
+        r.status, r.empty = 'converted', True
+        r.why = ('no programs (every variant stripped): an empty GLES3 blob ' + r.why).strip()
+        return r
     gl_info = line >= (2019, 1)             # GL programs have binding info of their own
     compact = line >= (2020, 1)             # GL: vertex subprograms only, entries numbered anew
     separate = serializer == dxbc.SEPARATE_PARAMS_FROM
@@ -562,6 +606,7 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
 
     # plan: per SubShader, the (pass, tier list, vs, ps, program) variants to twin; any failure drops the SubShader
     plan = []
+    no_instancing = set()               # passes whose GPU instancing variants were left out
     for si, ss in enumerate(tree['m_ParsedForm']['m_SubShaders']):
         todo, why = [], None
         for pi_, p in enumerate(ss['m_Passes']):
@@ -571,33 +616,34 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                       for sp in lst if sp['m_GpuProgramType'] in dxbc.OTHER_STAGE_TYPES}
             for t, (vlist, vpbi) in enumerate(vlists):
                 flist, fpbi = flists[t] if t < len(flists) else ([], None)
-                pss = [(_variant_key(sp), sp, fpbi[j] if fpbi is not None else None)
-                       for j, sp in enumerate(flist) if sp['m_GpuProgramType'] in dxbc.PIXEL_TYPES]
-                for j, vsp in enumerate(vlist):
-                    if vsp['m_GpuProgramType'] not in dxbc.VERTEX_TYPES:
-                        continue
-                    k = _variant_key(vsp)
-                    psp, ppi = _pixel_for(k, pss)
-                    vpi = vpbi[j] if vpbi is not None else None
+                vss = [(sp, vpbi[j] if vpbi is not None else None) for j, sp in enumerate(vlist)
+                       if sp['m_GpuProgramType'] in dxbc.VERTEX_TYPES]
+                pss = [(sp, fpbi[j] if fpbi is not None else None) for j, sp in enumerate(flist)
+                       if sp['m_GpuProgramType'] in dxbc.PIXEL_TYPES]
+                for vsp, vpi, psp, ppi, keys in _variant_pairs(vss, pss):
                     ve = entries[vsp['m_BlobIndex']]
-                    kws = (ve.keywords + (ve.local_keywords or [])) if isinstance(ve, B.Entry) else []
+                    pe = entries[psp['m_BlobIndex']] if psp is not None else None
+                    kws = _entry_keywords(ve, pe)
+                    kws = kws[0] + (kws[1] or [])
                     res = None
                     if psp is None:
                         err = 'no pixel shader for this variant'
-                    elif k in others:
+                    elif _variant_key(vsp) in others:
                         err = 'geometry or tessellation stage (not in GLSL ES 3.00)'
                     else:
                         vb = stage_bindings(p, vprog, vsp, ve, vpi)
-                        pe = entries[psp['m_BlobIndex']]
                         pb = stage_bindings(p, fprog, psp, pe, ppi)
                         err = vb if isinstance(vb, str) else pb if isinstance(pb, str) else None
                         if err is None:
                             res = program((vsp['m_BlobIndex'], vpi), ve, vb, (psp['m_BlobIndex'], ppi), pe, pb)
                             err = str(res) if isinstance(res, Exception) else None
                     if err is None:
-                        todo.append((p, t, vsp, vpi, psp, res))
+                        todo.append((p, t, vsp, vpi, psp, res, keys))
                     elif any(kw in VR_KEYWORDS for kw in kws):
                         r.dropped += 1
+                    elif any(kw in INSTANCING_KEYWORDS for kw in kws):
+                        r.dropped_instancing += 1
+                        no_instancing.add(id(p))
                     elif why is None:
                         why = f'pass {pi_} variant {" ".join(kws) or "(no keywords)"}: {err}'
         if why is None and todo:
@@ -620,7 +666,7 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
         segs = blobs.segments(B.PLATFORM_D3D11) if blobs.nested else None
         vslot, used = {}, set()
         for si, todo in plan:
-            for p, t, vsp, vpi, psp, (es, info, typ) in todo:
+            for p, t, vsp, vpi, psp, (es, info, typ), keys in todo:
                 vi, fi = vsp['m_BlobIndex'], psp['m_BlobIndex']
                 if (vi, fi) not in vslot:
                     slot = vi if vi not in used else len(out)
@@ -632,15 +678,17 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                     vslot[(vi, fi)] = slot
                     e = entries[vi]
                     rest = info.serialize() if info is not None else dxbc.gl_rest(bind_of_source_map(e))
-                    out[slot] = B.Entry(e.version, typ, [0] * len(e.stats), e.keywords, es.encode('utf-8'), rest,
-                                        e.local_keywords)
+                    kw, lkw = _entry_keywords(e, entries[fi])
+                    out[slot] = B.Entry(e.version, typ, [0] * len(e.stats), kw, es.encode('utf-8'), rest, lkw)
                     r.programs += 1
                     r.es31 += typ == B.GPU_GLES31
                 used.add(fi)
                 if typ == B.GPU_GLES31 and out[fi] is not None:
                     out[fi].gpu_type = typ
                 names = _name_indices(p, _gl_names(info)) if info is not None else None
-                twins.append((p['progVertex']['m_SubPrograms'], None, gl_twin(vsp, vslot[(vi, fi)], info, names, typ), None))
+                tw = gl_twin(vsp, vslot[(vi, fi)], info, names, typ)
+                _set_keywords(tw, keys)
+                twins.append((p['progVertex']['m_SubPrograms'], None, tw, None))
                 twins.append((p['progFragment']['m_SubPrograms'], None, gl_twin(psp, fi, gpu_type=typ), None))
         blobs.set_entries(B.PLATFORM_GLES3PLUS, out, segs)
     else:
@@ -648,15 +696,15 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
         d3d_segs = blobs.segments(B.PLATFORM_D3D11) if blobs.nested else [0] * len(entries)
         code_at, param_at = {}, {}
         for si, todo in plan:
-            for p, t, vsp, vpi, psp, (es, info, typ) in todo:
+            for p, t, vsp, vpi, psp, (es, info, typ), keys in todo:
                 vi = vsp['m_BlobIndex']
                 key = (vi, vpi, psp['m_BlobIndex'])
                 e = entries[vi]
                 if key not in code_at:
                     rest = info.head() if separate else info.serialize()
                     code_at[key] = len(out)
-                    out.append(B.Entry(e.version, typ, [0] * len(e.stats), e.keywords, es.encode('utf-8'), rest,
-                                       e.local_keywords))
+                    kw, lkw = _entry_keywords(e, entries[psp['m_BlobIndex']])
+                    out.append(B.Entry(e.version, typ, [0] * len(e.stats), kw, es.encode('utf-8'), rest, lkw))
                     segs.append(d3d_segs[vi])
                     r.programs += 1
                     r.es31 += typ == B.GPU_GLES31
@@ -669,7 +717,9 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                         segs.append(d3d_segs[vi])
                     pidx = param_at[data]
                 lst, pbi = _tier_lists(p['progVertex'])[t]
-                twins.append((lst, pbi, gl_twin(vsp, code_at[key], gpu_type=typ), pidx))
+                tw = gl_twin(vsp, code_at[key], gpu_type=typ)
+                _set_keywords(tw, keys)
+                twins.append((lst, pbi, tw, pidx))
         _restore_common(tree, plan, entries, blobs, separate)
         blobs.set_entries(B.PLATFORM_GLES3PLUS, out, segs if blobs.nested else None, 1 if blobs.stage_counts is not None else None)
     blobs.store()
@@ -687,6 +737,10 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
     for si, todo in plan:
         for p, *_ in todo:
             add_platform(p, B.PLATFORM_GLES3PLUS)
+            if id(p) in no_instancing:
+                for f in ('m_HasInstancingVariant', 'm_HasProceduralInstancingVariant'):
+                    if f in p:
+                        p[f] = False
     r.status = 'converted'
     if r.failed:
         r.why = (r.why + ' ' if r.why else '') + '; '.join(f'SubShader {si} left out: {w}' for si, w in r.failed)
@@ -707,7 +761,8 @@ def _restore_common(tree, plan, entries, blobs, separate):
     """2020.1+: a vertex program given GLES3 subprograms gets its m_CommonParameters (what its
     D3D11 subprograms share, which the player adds to every subprogram of the program) put back
     into its D3D11 subprograms' binding info, and cleared. (Other desktop platforms' subprograms
-    of such a program, e.g. Vulkan, then lack them; a handheld never uses those.)"""
+    of such a program, e.g. Vulkan, and D3D11 ones whose binding info this path does not read
+    then lack them; a handheld never uses those.)"""
     progs = {}
     for si, todo in plan:
         for p, *_ in todo:
@@ -731,7 +786,10 @@ def _restore_common(tree, plan, entries, blobs, separate):
                 done.add(at)
                 e = entries[sp['m_BlobIndex']]
                 pe = entries[pi] if pi is not None else None
-                b = dxbc.with_common(dxbc.entry_bindings(e, pe), common, names)
+                try:
+                    b = dxbc.with_common(dxbc.entry_bindings(e, pe), common, names)
+                except dxbc.Unsupported:
+                    continue            # (binding info this path does not read: kept as it is)
                 if separate:
                     entries[pi] = B.ParamEntry(pe.version, b.params_bytes())
                 else:

@@ -365,7 +365,7 @@ class AddGles3D3D11Test(unittest.TestCase):
         self.assertTrue(es[0].code.startswith(b'#ifdef VERTEX\n#version 300 es\n'))
         self.assertEqual((es[1].code, es[1].rest), (b'', D.gl_rest(0)))
         self.assertEqual(es[0].rest, D.gl_rest(9))
-        self.assertEqual(es[5].keywords, [])               # the shared vertex entry's keywords
+        self.assertEqual(es[5].keywords, ['FOO'])          # the shared vertex entry's keywords and the pixel one's
         self.assertEqual(dict(C.gles3_programs(tree)).keys(), {0, 5})
         self.assertEqual(C.add_gles3_d3d11(tree, translate=translate).status, 'unchanged')
 

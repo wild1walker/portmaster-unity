@@ -795,9 +795,10 @@ DATA_JSON = ('ScriptingAssemblies.json', 'RuntimeInitializeOnLoads.json')
 
 def mono_etc_dir(src):
     """Mono's etc folder of a desktop build: <Game>_Data/Mono/etc (.NET 3.5 runtime) or
-    <Game>_Data/MonoBleedingEdge/etc (.NET 4.x); a macOS build has them in Contents/, two levels up
-    from Contents/Resources/Data."""
-    for d in (src, os.path.dirname(os.path.dirname(os.path.abspath(src)))):
+    <Game>_Data/MonoBleedingEdge/etc (.NET 4.x); a Windows build has MonoBleedingEdge next to
+    <Game>_Data, a macOS build in Contents/, two levels up from Contents/Resources/Data."""
+    up = os.path.dirname(os.path.abspath(src))
+    for d in (src, up, os.path.dirname(up)):
         for m in ('Mono', 'MonoBleedingEdge'):
             p = os.path.join(d, m, 'etc')
             if os.path.isdir(p):
