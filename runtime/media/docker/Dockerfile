@@ -6,6 +6,6 @@ RUN dpkg --add-architecture armhf && apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross binutils-arm-linux-gnueabihf \
       libvpx-dev:armhf libvorbis-dev:armhf libogg-dev:armhf libopus-dev:armhf libopenh264-dev:armhf \
-      libegl-dev:armhf libgles-dev:armhf \
+      libegl-dev:armhf libgles-dev:armhf zlib1g-dev:armhf \
       make file && \
     rm -rf /var/lib/apt/lists/*

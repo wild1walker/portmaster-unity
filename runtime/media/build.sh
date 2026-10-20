@@ -30,7 +30,7 @@ docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIB
   true
   CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64 $ARCHF $DEFS -I/usr/local/include"
   OBJS=
-  for f in um_format um_extractor um_webm um_codec um_surface um_vpx um_audio um_stubs; do
+  for f in um_format um_extractor um_webm um_codec um_surface um_vpx um_audio um_stubs um_compat; do
     $CC $CFLAGS -c $f.c -o $O/obj/$f.o; OBJS="$OBJS $O/obj/$f.o"
   done
   rm -f $O/libuamedia.a $O/core.a
@@ -45,19 +45,31 @@ docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIB
   [ -f /usr/local/lib/openh264.LICENSE ] && cp /usr/local/lib/openh264.LICENSE $O/licenses/libopenh264.LICENSE
   ls -la $O/libuamedia.a | awk "{print \$5, \$9}"; echo "decoders built in: $DEFS"
   if [ "$TEST" = test ]; then
-    $CC $CFLAGS -I. -o $O/test/test_media test/test_media.c test/webm_writer.c $O/libuamedia.a \
+    $CC $CFLAGS -I. -o $O/test/test_media test/test_media.c test/clips.c test/webm_writer.c $O/libuamedia.a \
       $LIBDIR/libvorbisenc.a $LIBDIR/libvpx.a $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a $H264 -lstdc++ -ldl -lpthread -lm
     $CC $CFLAGS -I. -o $O/test/test_surface_gl test/test_surface_gl.c $O/libuamedia.a -lEGL -lGLESv2 -lstdc++ -ldl -lpthread -lm
+    JNI=../jni/out; [ "$O" = out/arm64 ] && JNI=../jni/out/arm64
+    if [ -f $JNI/libfakejni.a ]; then
+      $CC $CFLAGS -I. -o $O/test/test_media_jni test/test_media_jni.c test/clips.c test/webm_writer.c $JNI/libfakejni.a \
+        $O/libuamedia.a $LIBDIR/libvorbisenc.a $LIBDIR/libvpx.a $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a \
+        -lz -lstdc++ -ldl -lpthread -lm
+      $CC $CFLAGS -I. -I../android -o $O/test/test_media_ndk test/test_media_ndk.c test/clips.c test/webm_writer.c \
+        ../android/media_ndk.c ../android/native_window.c ../android/log_shim.c $JNI/libfakejni.a \
+        $O/libuamedia.a $LIBDIR/libvorbisenc.a $LIBDIR/libvpx.a $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a \
+        -lz -lstdc++ -ldl -lpthread -lm
+    else echo "no $JNI/libfakejni.a: build ../jni first for the Java-side and NDK tests"; fi
   fi
 '
 if [ "$1" = test ]; then
   if [ "$ARCH" = armhf ]; then
-    docker run --rm --platform linux/arm/v7 -v "$PWD":/w -w /w debian:bookworm-slim timeout 900 ./out/test/test_media
+    docker run --rm --platform linux/arm/v7 -v "$PWD":/w -w /w debian:bookworm-slim sh -c \
+      'timeout 900 ./out/test/test_media; [ ! -x ./out/test/test_media_jni ] || timeout 900 ./out/test/test_media_jni; [ ! -x ./out/test/test_media_ndk ] || timeout 900 ./out/test/test_media_ndk'
     docker image inspect ua-emu-armhf >/dev/null 2>&1 && \
       docker run --rm --platform linux/arm/v7 -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless \
         -e LIBGL_ALWAYS_SOFTWARE=1 ua-emu-armhf timeout 600 ./out/test/test_surface_gl ../../convert/pmunity/video_decode_android.shader
   else
-    docker run --rm $PLAT -v "$PWD":/w -w /w $IMG timeout 900 ./out/arm64/test/test_media
+    docker run --rm $PLAT -v "$PWD":/w -w /w $IMG sh -c \
+      'timeout 900 ./out/arm64/test/test_media; [ ! -x ./out/arm64/test/test_media_jni ] || timeout 900 ./out/arm64/test/test_media_jni; [ ! -x ./out/arm64/test/test_media_ndk ] || timeout 900 ./out/arm64/test/test_media_ndk'
     docker run --rm $PLAT -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 \
       $IMG timeout 600 ./out/arm64/test/test_surface_gl ../../convert/pmunity/video_decode_android.shader
   fi

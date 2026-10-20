@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the Android shims in Docker:
+# Builds the Android shims in Docker (runtime/ is mounted: media_ndk.c includes ../media/um.h):
 #   ARCH=armhf (default): Debian bookworm cross toolchain (glibc 2.36), image ua-android-shims ->
 #     out/libandroidshims.a (+ out/obj/*.o), out/test/test_shims, out/test/libfakeegl.so
 #   ARCH=arm64: native gcc of the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31) -> the same
@@ -18,7 +18,7 @@ case "$ARCH" in
   *) echo "ARCH must be armhf or arm64"; exit 1 ;;
 esac
 mkdir -p $O/obj $O/test
-docker run --rm $PLAT -v "$PWD":/w -w /w -e O=$O -e CROSS=$CROSS $IMG bash -c '
+docker run --rm $PLAT -v "$PWD/..":/r -w /r/android -e O=$O -e CROSS=$CROSS $IMG bash -c '
   set -e
   CC=${CROSS}gcc
   CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64"
@@ -36,11 +36,11 @@ if [ "$1" = test ]; then
   # armhf: the test binary runs in the same image, which carries the armhf multiarch runtime
   # (libc6:armhf, libSDL2:armhf); Docker Desktop runs 32-bit ARM code with QEMU user emulation.
   # arm64: native.
-  docker run --rm $PLAT -v "$PWD":/w -w /w/$O/test \
+  docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test \
     -e SDL_AUDIODRIVER=disk -e SDL_DISKAUDIOFILE=/tmp/sles.raw -e ANDROID_WINDOW_SIZE=640x480 \
     -e ANDROID_SHIM_TRACE=${ANDROID_SHIM_TRACE:-0} \
     $IMG timeout 300 ./test_shims ./libfakeegl.so
   # Same again on SDL's dummy driver (buffer-queue logic and callback pacing only).
-  docker run --rm $PLAT -v "$PWD":/w -w /w/$O/test -e SDL_AUDIODRIVER=dummy -e ANDROID_WINDOW_SIZE=640x480 \
+  docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=dummy -e ANDROID_WINDOW_SIZE=640x480 \
     $IMG timeout 300 ./test_shims ./libfakeegl.so
 fi

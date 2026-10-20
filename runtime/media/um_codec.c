@@ -23,7 +23,7 @@
 #include <time.h>
 
 #define MAX_IN 8
-#define MAX_OUT 8
+#define MAX_OUT 32
 #define AUDIO_OUT_CAP (128 * 1024)
 
 enum { ST_CREATED, ST_CONFIGURED, ST_RUNNING, ST_EOS };
@@ -396,7 +396,11 @@ int um_codec_configure(um_codec *c, const um_format *f, um_surface *surface)
     if (icap < 4096) icap = 4096;
     free_buffers(c);
     c->nin = c->video ? 4 : 8;
-    c->nout = c->video ? 4 : 4;
+    c->nout = 4;
+    /* UM_VIDEO_BUFFERS: more decoded pictures may wait for the client (a slow consumer, e.g. the
+       emulated rig, then still finds the frame it asks for; each costs a picture's memory) */
+    const char *vb = getenv("UM_VIDEO_BUFFERS");
+    if (c->video && vb && atoi(vb) > 0) c->nout = atoi(vb) < MAX_OUT ? atoi(vb) : MAX_OUT;
     for (int i = 0; i < c->nin; i++) {
         c->in[i].data = malloc(icap);
         c->in[i].cap = c->in[i].data ? icap : 0;

@@ -1,5 +1,7 @@
 // libandroid.so ANativeWindow_*: one window, sized like the framebuffer (or as the host says:
 // android_window_set_size, e.g. the drawable size of the host's SDL window, runtime/host/display*.c).
+// A Surface made from a SurfaceTexture (../jni/up_media.c: a video decoder's output) gets a window
+// of its own instead, which AMediaCodec_configure (media_ndk.c) recognizes.
 //
 // The ANativeWindow struct starts with a Mali fbdev `struct fbdev_window { u16 width, height; }`,
 // so the pointer Unity hands to eglCreateWindowSurface is already a valid fbdev native window.
@@ -19,6 +21,12 @@
 #include <unistd.h>
 
 #define ANW_MAGIC 0x414e5753u   /* 'ANWS' */
+#define ANW_MEDIA_MAGIC 0x414e574du   /* 'ANWM': a SurfaceTexture's window */
+
+/* the media side, when the program has it: the um_surface behind a Surface(SurfaceTexture) */
+void *up_media_surface(void *surface) __attribute__((weak));
+void *um_surface_ref(void *s) __attribute__((weak));
+void um_surface_unref(void *s) __attribute__((weak));
 
 struct fbdev_window { unsigned short width, height; };
 
@@ -30,6 +38,7 @@ struct ANativeWindow {
     int buf_width, buf_height;  // setBuffersGeometry (0 = physical size)
     int buf_format;             // setBuffersGeometry format (0 = default)
     void *native;               // host-provided EGLNativeWindowType, or NULL
+    void *media;                // a SurfaceTexture's window: its um_surface (ANW_MEDIA_MAGIC)
 };
 
 static ANativeWindow g_win;
@@ -101,11 +110,27 @@ void *android_window_native_handle(ANativeWindow *w)
     return r;
 }
 
+void *android_window_media_surface(ANativeWindow *w)
+{
+    return w && w->magic == ANW_MEDIA_MAGIC ? w->media : NULL;
+}
+
 ANativeWindow *ANativeWindow_fromSurface(void *env, void *surface)
 {
     (void)env;
-    ANativeWindow *w = android_window_get();
     if (!surface) return NULL;              // Android returns NULL for a null Surface
+    void *ms = up_media_surface ? up_media_surface(surface) : NULL;
+    if (ms && um_surface_ref) {             // a video decoder's Surface(SurfaceTexture)
+        ANativeWindow *v = calloc(1, sizeof *v);
+        if (!v) return NULL;
+        v->magic = ANW_MEDIA_MAGIC;
+        v->refcount = 1;
+        v->width = v->height = 1;
+        v->media = um_surface_ref(ms);
+        SHIM_TRACE("ANativeWindow_fromSurface(%p) -> video window %p", surface, (void *)v);
+        return v;
+    }
+    ANativeWindow *w = android_window_get();
     ANativeWindow_acquire(w);               // fromSurface returns a reference
     SHIM_TRACE("ANativeWindow_fromSurface(%p) -> %p", surface, (void *)w);
     return w;
@@ -118,7 +143,13 @@ void ANativeWindow_acquire(ANativeWindow *w)
 
 void ANativeWindow_release(ANativeWindow *w)
 {
-    if (w) __atomic_sub_fetch(&w->refcount, 1, __ATOMIC_SEQ_CST);
+    if (!w) return;
+    int left = __atomic_sub_fetch(&w->refcount, 1, __ATOMIC_SEQ_CST);
+    if (w->magic == ANW_MEDIA_MAGIC && left == 0) {
+        w->magic = 0;
+        if (um_surface_unref) um_surface_unref(w->media);
+        free(w);
+    }
 }
 
 int32_t ANativeWindow_getWidth(ANativeWindow *w)
