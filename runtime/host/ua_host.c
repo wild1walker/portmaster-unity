@@ -86,17 +86,20 @@ static void mkdirs(const char *path)
     mkdir(p, 0755);
 }
 
-// System.loadLibrary(name) / UnityPlayer.loadLibrary: lib<name>.so from the library folder, as
-// Android maps the name (so "libmono.so" is not found there either: Unity then dlopens it itself);
-// System.load(path): that file (IL2CPP players load libil2cpp.so so). A library loaded for the
-// first time gets its JNI_OnLoad called, as on Android. Returns 1 when loaded.
+// System.loadLibrary(name) / UnityPlayer.loadLibrary(name): lib<name>.so from the library folder,
+// as Android maps a bare name (the Java side refuses names with a '/'), so libunity's probes for
+// "libmono.so" or "libc.so.6" fail as on a phone and Unity dlopens those itself; System.load(path):
+// that file (IL2CPP players load libil2cpp.so so). A library that was not loaded yet gets its
+// JNI_OnLoad called, as Android's VM does (dlsym on the handle: the library, then its dependencies);
+// one already loaded natively (libmain, libunity, a dependency) does not get it a second time.
+// Returns 1 when loaded, else 0.
 static int load_library(void *user, const char *name)
 {
     (void)user;
     char path[PATH_MAX];
     if (name[0] == '/') snprintf(path, sizeof path, "%s", name);
     else snprintf(path, sizeof path, "%s/lib%s.so", libdir, name);
-    int had = so_dlopen(path, 4 /* bionic RTLD_NOLOAD */) != NULL;
+    int had = so_find(path) != NULL;
     void *h = so_dlopen(path, 0);
     fprintf(stderr, "[host] loadLibrary(%s): %s\n", name, h ? had ? "ok (already loaded)" : "ok" : so_dlerror());
     if (!h) return 0;
