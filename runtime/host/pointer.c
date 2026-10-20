@@ -32,7 +32,8 @@
 // The cursor is drawn on Unity's render thread right before eglSwapBuffers (frames.c's swap hook)
 // with scissored clears only: no shader, texture or buffer of Unity's is touched, and the few GL
 // states the clears use (scissor, clear colour, colour mask, draw framebuffer, rasterizer
-// discard) are put back.
+// discard) are put back. GLES 2 contexts (a game set to GLES2): the one framebuffer binding, no
+// rasterizer discard, so no enum is used that the context would reject.
 #include "pointer.h"
 #include "../jni/unityplayer.h"
 
@@ -434,8 +435,10 @@ void pointer_tick(void)
 #define GL_COLOR_WRITEMASK 0x0C23
 #define GL_COLOR_BUFFER_BIT 0x4000
 #define GL_DRAW_FRAMEBUFFER 0x8CA9
-#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6       // = GL_FRAMEBUFFER_BINDING in GLES 2
+#define GL_FRAMEBUFFER 0x8D40
 #define GL_RASTERIZER_DISCARD 0x8C89
+#define GL_VERSION 0x1F02
 static struct {
     void (*Enable)(unsigned), (*Disable)(unsigned);
     unsigned char (*IsEnabled)(unsigned);
@@ -447,8 +450,10 @@ static struct {
     void (*GetBooleanv)(unsigned, unsigned char *);
     void (*ColorMask)(unsigned char, unsigned char, unsigned char, unsigned char);
     void (*BindFramebuffer)(unsigned, unsigned);
+    const unsigned char *(*GetString)(unsigned);
 } gl;
 static int gl_state;   // 0 unresolved, 1 ok, -1 missing
+static int gl_es2;     // the context is GLES 2 (checked at the first draw)
 
 static int gl_resolve(void)
 {
@@ -457,11 +462,13 @@ static int gl_resolve(void)
     if (!h) h = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
 #define G(n) (*(void **)&gl.n = h ? dlsym(h, "gl" #n) : NULL, gl.n != NULL)
     int ok = G(Enable) & G(Disable) & G(IsEnabled) & G(Scissor) & G(ClearColor) & G(Clear) & G(GetIntegerv) &
-             G(GetFloatv) & G(GetBooleanv) & G(ColorMask) & G(BindFramebuffer);
+             G(GetFloatv) & G(GetBooleanv) & G(ColorMask) & G(BindFramebuffer) & G(GetString);
 #undef G
     gl_state = ok ? 1 : -1;
-    if (!ok) fprintf(stderr, "[input] pointer: no GLES functions, the cursor is not drawn\n");
-    return ok;
+    if (!ok) { fprintf(stderr, "[input] pointer: no GLES functions, the cursor is not drawn\n"); return 0; }
+    const char *v = (const char *)gl.GetString(GL_VERSION);     // "OpenGL ES 3.2 ..."
+    gl_es2 = v && strstr(v, "OpenGL ES 2") != NULL;
+    return 1;
 }
 
 void pointer_draw(void)
@@ -475,8 +482,9 @@ void pointer_draw(void)
     gl.GetIntegerv(GL_SCISSOR_BOX, box);
     gl.GetFloatv(GL_COLOR_CLEAR_VALUE, cc);
     gl.GetBooleanv(GL_COLOR_WRITEMASK, mask);
-    unsigned char sc = gl.IsEnabled(GL_SCISSOR_TEST), rd = gl.IsEnabled(GL_RASTERIZER_DISCARD);
-    if (fb) gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    unsigned char sc = gl.IsEnabled(GL_SCISSOR_TEST), rd = gl_es2 ? 0 : gl.IsEnabled(GL_RASTERIZER_DISCARD);
+    unsigned target = gl_es2 ? GL_FRAMEBUFFER : GL_DRAW_FRAMEBUFFER;
+    if (fb) gl.BindFramebuffer(target, 0);
     if (!sc) gl.Enable(GL_SCISSOR_TEST);
     if (rd) gl.Disable(GL_RASTERIZER_DISCARD);
     gl.ColorMask(1, 1, 1, 1);
@@ -501,5 +509,5 @@ void pointer_draw(void)
     gl.Scissor(box[0], box[1], box[2], box[3]);
     if (rd) gl.Enable(GL_RASTERIZER_DISCARD);
     if (!sc) gl.Disable(GL_SCISSOR_TEST);
-    if (fb) gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (unsigned)fb);
+    if (fb) gl.BindFramebuffer(target, (unsigned)fb);
 }

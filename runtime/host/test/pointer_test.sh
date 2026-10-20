@@ -11,9 +11,9 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -I../jni -o $O/test_pointer test/test_pointer.c pointer.c $O/libGLESv2.so.2 -ldl -lm'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
-    for s in off mouse touch keymap toggle; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done"
+    for s in off mouse touch keymap toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done"
   exit
 fi
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c "O=out/test CC=arm-linux-gnueabihf-gcc; $run"
 docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookworm-slim sh -c \
-  'for s in off mouse touch keymap toggle; do LD_LIBRARY_PATH=out/test out/test/test_pointer $s; done'
+  'for s in off mouse touch keymap toggle es2; do LD_LIBRARY_PATH=out/test out/test/test_pointer $s; done'

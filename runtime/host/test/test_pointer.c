@@ -31,7 +31,7 @@ int up_inject_touch(int action, int n, const int *ids, const float *x, const flo
 
 /* fake_gles.c */
 extern unsigned char fake_fb0[480][640][4];
-extern int fake_calls, fake_clears, fake_other_fb_clears, fake_bad_scissor;
+extern int fake_calls, fake_clears, fake_other_fb_clears, fake_bad_scissor, fake_errors;
 extern int fake_scissor_on, fake_discard_on, fake_box[4], fake_draw_fb;
 extern float fake_cc[4];
 extern unsigned char fake_mask[4];
@@ -153,6 +153,23 @@ static void mouse(void)
     pointer_draw();
     CHECK(fake_bad_scissor == 0 && unity_state_kept() && is(px(639, 479), 0, 0, 0));
     CHECK(!pointer_in_shots());
+    CHECK(fake_errors == 0);
+}
+
+// a GLES 2 context: the same cursor, no GLES 3 enum used
+static void es2(void)
+{
+    setenv("FAKE_GLES2", "1", 1);
+    setenv("UA_POINTER", "1", 1);
+    int id = 1;
+    CHECK(pointer_init(640, 480, &id) == 1);
+    pointer_warp(10, 20, 0);
+    unity_state();
+    fake_discard_on = 0;                                // no such state in GLES 2
+    pointer_draw();
+    CHECK(fake_errors == 0 && fake_clears > 10 && fake_other_fb_clears == 0);
+    CHECK(fake_draw_fb == 7 && !fake_scissor_on && fake_box[2] == 3 && fake_cc[1] == 0.5f && fake_mask[1] == 0);
+    CHECK(is(px(10, 20), 0, 0, 0) && is(px(11, 23), 255, 255, 255));
 }
 
 static void touch(void)
@@ -246,7 +263,8 @@ int main(int argc, char **argv)
     else if (!strcmp(s, "touch")) touch();
     else if (!strcmp(s, "keymap")) keymap();
     else if (!strcmp(s, "toggle")) toggle();
-    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|toggle\n"); return 2; }
+    else if (!strcmp(s, "es2")) es2();
+    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|toggle|es2\n"); return 2; }
     printf("%s %s: %d failure(s)\n", failures ? "FAILED" : "PASSED", s, failures);
     return failures != 0;
 }
