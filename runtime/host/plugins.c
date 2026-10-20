@@ -256,7 +256,8 @@ static int in_libdir(const char *name)
     for (int i = 0; i < n; i++) {
         char p[PATH_MAX + 260];
         snprintf(p, sizeof p, "%s/%s", g_libdir, v[i]);
-        if (strstr(v[i], ".so") && access(p, R_OK) == 0) return 1;
+        elf_facts f;          // an ARM library of this build (a desktop x86 one copied there does not count)
+        if (strstr(v[i], ".so") && elf_read(p, &f) && f.machine == HOST_MACHINE) return 1;
     }
     return 0;
 }

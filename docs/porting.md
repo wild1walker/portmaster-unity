@@ -17,6 +17,10 @@ worked for Cuphead.
   desktop code cannot run in the Android player.
 - **Graphics**: the macOS build's shaders include OpenGL Core programs, which `pmunity shaders`
   translates. A Linux build may carry GLCore too. Windows builds have only Direct3D bytecode.
+- **Native plugins**: `python -m pmunity plugins <Data>` lists the libraries the game's code
+  P/Invokes and what the port gives each (built-in stubs for Steam, Discord, EOS; FMOD and Wwise
+  need their ARM libraries of the game's version, which the porter supplies; [plugins.md](plugins.md)).
+  android-data repeats it as warnings and writes `plugins.map` for the runtime.
 - **Memory**: the handheld has little RAM (the RG34XX-SP: 1 GB with the system). The texture step
   can scale textures down (`textures.scale`, e.g. 0.375 for 1080p art on a 480-line screen).
 

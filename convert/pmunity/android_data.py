@@ -23,7 +23,8 @@ Output (default ./android-out/):
                                              incompressible ones are rewritten)
   --beside files                             beside the root (default goggame-*.info: a GOG build's
                                              DLC checks read Application.dataPath + "/../goggame-<id>.info")
-  android_data_report.json
+  plugins.map                                the native-plugin map for ua_host (plugins.py; also in zip/)
+  android_data_report.json                   (with the plugin report under "plugins")
 
 Big files are APFS clones (clonefile(2): no extra space; a 1-byte patch copies one block).
 On a filesystem without clones, unchanged files are hard links and patched files copies.
@@ -31,7 +32,8 @@ Re-running only redoes files whose source changed (state in <out>/.android_data_
 
   zip/ (--pack apk|obb|all)                  the same tree as archives for the stock Mount path:
                                              <name>.apk = assets/bin/Data/**, main.<code>.<pkg>.obb
-                                             = the rest + assets/<build-id>; STORE, zip32, < 2 GiB each
+                                             = the rest + assets/<build-id>; STORE, zip32, < 2 GiB each;
+                                             --loose-assets files (FMOD banks) in zip/assets/ instead
 
 Game-specific additions are options: --managed-file (an assembly to ship instead of the data's
 copy, e.g. a port's helper), --assembly-patch (a command that writes a patched assembly from the
