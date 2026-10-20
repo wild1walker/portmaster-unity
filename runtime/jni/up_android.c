@@ -1025,7 +1025,6 @@ H(proc_setPriority)   { if (fj_tracing()) up_log("Process.setThreadPriority(%d, 
 H(up_execGL)        { up_run_gl_jobs(); return fj_v(); }
 H(up_kill)          { up_log("UnityPlayer.kill()"); up_request_finish("UnityPlayer.kill()"); return fj_v(); }
 H(up_isFinishing)   { return fj_z(up_is_finishing()); }
-H(up_showSoftInput) { up_log("showSoftInput(\"%s\") ignored (no on-screen keyboard)", jstr(a[0])); return fj_v(); }
 H(up_loadLibrary)    /* System.loadLibrary(name), false instead of UnsatisfiedLinkError */
 {
     const char *n = jstr(a[0]);
@@ -1036,14 +1035,6 @@ H(up_loadLibrary)    /* System.loadLibrary(name), false instead of UnsatisfiedLi
 H(up_showVideo)     { up_log("showVideoPlayer(%s) unsupported", jstr(a[0])); return fj_z(0); }
 H(up_reportError)   { up_log("Unity error: %s: %s", jstr(a[0]), jstr(a[1])); return fj_v(); }
 H(up_sendMessage)   { up_send_message_j(a[0].l, a[1].l, a[2].l); return fj_v(); }
-H(up_reportSoftInputStr)
-{
-    if (a[1].i == 1) { /* hideSoftInput */ }
-    if (a[2].z) fj_call_native(UP_CLS, "nativeSoftInputCanceled", "()V", self);
-    else if (a[0].l) fj_call_native(UP_CLS, "nativeSetInputString", "(Ljava/lang/String;)V", self, a[0].l);
-    if (a[1].i == 1) fj_call_native(UP_CLS, "nativeSoftInputClosed", "()V", self);
-    return fj_v();
-}
 
 /* Methods libunity added to UnityPlayerJavaWrapper from 2018.4 on, with what a handheld answers */
 static float g_brightness = 1.0f;          /* Screen.brightness: the window's own value */
@@ -1800,10 +1791,7 @@ void up_android_register(void)
     M(UP_CLS, "kill", "()V", up_kill);
     M(UP_CLS, "isFinishing", "()Z", up_isFinishing);
     MU(UP_CLS, "getSplashMode", "()I", h_int, 0);
-    M(UP_CLS, "showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;)V", up_showSoftInput);
-    M(UP_CLS, "hideSoftInput", "()V", h_void);
-    M(UP_CLS, "setSoftInputStr", "(Ljava/lang/String;)V", h_void);
-    M(UP_CLS, "reportSoftInputStr", "(Ljava/lang/String;IZ)V", up_reportSoftInputStr);
+    up_softinput_register();                    /* showSoftInput & co. (up_softinput.c) */
     M(UP_CLS, "addPhoneCallListener", "()V", h_void);
     M(UP_CLS, "toggleGyroscopeSensor", "(Z)V", h_void);
     M(UP_CLS, "initializeGoogleVr", "()Z", h_false);
@@ -1818,12 +1806,6 @@ void up_android_register(void)
     SM(UP_CLS, "UnitySendMessage", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", up_sendMessage);
     fj_field_define(UP_CLS, "currentActivity", "Landroid/app/Activity;", 1, fj_l(NULL));
     /* added after 2017.4 (UnityPlayerJavaWrapper of 2018.4-2022.3) */
-    M(UP_CLS, "showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZ)V", up_showSoftInput);    /* 2018.4 */
-    M(UP_CLS, "showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZZ)V", up_showSoftInput);   /* 2019.4+ */
-    M(UP_CLS, "setCharacterLimit", "(I)V", h_void);
-    M(UP_CLS, "setHideInputField", "(Z)V", h_void);
-    M(UP_CLS, "setSelection", "(II)V", h_void);
-    M(UP_CLS, "getKeyboardLayout", "()Ljava/lang/String;", h_null);
     M(UP_CLS, "getClipboardText", "()Ljava/lang/String;", up_getClipboard);
     M(UP_CLS, "setClipboardText", "(Ljava/lang/String;)V", up_setClipboard);
     M(UP_CLS, "requestUserAuthorization", "(Ljava/lang/String;)V", h_void);   /* every permission is granted */
