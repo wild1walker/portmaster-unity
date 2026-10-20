@@ -952,11 +952,15 @@ def suggest_config(rep):
         notes.append('services: ' + ', '.join(s['services']))
     tex = d.get('textures') or {}
     bc = sum(v[1] for k, v in tex.items() if k.startswith(('DXT', 'BC')))
+    crunched = sum(v[0] for k, v in tex.items() if k.endswith('Crunched'))
     if bc > 64 << 20:
         notes.append(f'{bc / 2**20:.0f} MB of BC/DXT textures (main data): the handheld GPU cannot sample them, '
                      f'so Unity decodes them to RGBA when loading (4-8x the memory). The textures step '
                      f'(convert.steps += "textures") re-encodes them as ASTC: less memory, slightly different '
                      f'pixels, a longer setup; off by default')
+    if crunched:
+        notes.append(f'{crunched} crunched textures: as ASTC (the textures step) they take their full size on the '
+                     f'card (several times the crunched size)')
     if rep.get('size_mb', 0) > 600:
         notes.append(f"{rep['size_mb']} MB: the handheld's setup needs about 2-3 times that free while it runs")
     return sug
@@ -1036,15 +1040,16 @@ VALUE_RX = re.compile(r'^[A-Za-z0-9._:+-]+$')
 ENV_RX = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 
 DEFAULTS = {
-    'port': {'name': '', 'title': '', 'route': 'android', 'porter': [], 'desc': '', 'genres': [],
-             'availability': 'free', 'store': [], 'setup_time': '', 'exp': True},
-    'game': {'data': '*_Data', 'build': 'linux', 'unity_versions': [], 'what': '', 'size_mb': 0},
+    'port': {'name': '', 'title': '', 'route': 'android', 'porter': [], 'desc': '', 'inst': '', 'genres': [],
+             'availability': 'free', 'store': [], 'setup_time': '', 'exp': True, 'ready_marker': '.setup_done'},
+    'game': {'data': '*_Data', 'build': 'linux', 'unity_versions': [], 'what': '', 'size_mb': 0, 'setup_space_mb': 0},
     'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'url': '', 'sha256': {}},
     'convert': {'steps': ['shaders', 'settings', 'audio'], 'settings': {'graphics_apis': [11]}},
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'name': '', 'package': '', 'args': []},
     'runtime': {},
     'questions': [],
     'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': []},
+    'build': {'commands': [], 'outputs': {}, 'licenses': {}},
 }
 HOOK_POINTS = ('game', 'pre_convert', 'post_convert', 'post_pack', 'post_install')
 
@@ -1134,6 +1139,11 @@ def validate(cfg):
     for k in cfg['files'].get('hooks', {}):
         if k not in HOOK_POINTS:
             errs.append(f"files.hooks.{k}: one of {', '.join(HOOK_POINTS)}")
+    if not re.match(r'^\.[A-Za-z0-9._-]+$', p.get('ready_marker', '')):
+        errs.append(f"port.ready_marker {p.get('ready_marker')!r}: a dot file name, e.g. .setup_done")
+    for dst in cfg['build'].get('outputs', {}):
+        if dst.startswith('/') or '..' in dst.split('/'):
+            errs.append(f'build.outputs: {dst!r} must be a path inside the port folder')
     for v in cfg['game']['unity_versions']:
         if not re.match(r'^\d{4}\.\d+\.\d+[abfpx]\d+$', v):
             errs.append(f'game.unity_versions: {v!r} is not a Unity version')
@@ -1173,6 +1183,9 @@ CONFIG_DOC = {
                     '# finds, e.g. Rewired) | off | ["patch", ...]; name = the APK\'s, package; args = more options',
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME",
+    'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
+             '# they make put into the port folder (outputs = {"setup/files/x" = "build/x"}), and their licences\n'
+             '# (licenses = {"LICENSE.x.txt" = "path"})',
     'files': '# the porter\'s own files (paths relative to this file), copied into setup/: converter plugins\n'
              '# (--plugin), managed = assemblies shipped into the game (--managed-file), assembly_patches =\n'
              '# [{name, command, files}] ({setup} = the setup folder), hooks = {game|pre_convert|post_convert|\n'
@@ -1193,7 +1206,7 @@ def dump_toml(cfg):
     """port.toml text for a resolved config, with the keys explained."""
     out = ['# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).',
            '# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.', '']
-    for sec in ('port', 'game', 'player', 'convert', 'android_data', 'runtime', 'files'):
+    for sec in ('port', 'game', 'player', 'convert', 'android_data', 'runtime', 'files', 'build'):
         val = cfg.get(sec, {})
         out.append(CONFIG_DOC[sec])
         out.append(f'[{sec}]')
@@ -1272,7 +1285,8 @@ def setup_env(cfg, extra=()):
     lines = ['# Written by `pmunity port new` from port.toml: the setup\'s settings (sourced by patchscript).',
              f'PORT_NAME={q(p["name"])}', f'PORT_TITLE={q(p["title"])}', f'PORT_ROUTE={q(p["route"])}',
              f'GAME_DATA={q(g["data"])}', f'GAME_BUILD={q(g["build"])}', f'GAME_WHAT={q(g["what"])}',
-             f'GAME_SIZE_MB={int(g.get("size_mb") or 0)}',
+             f'GAME_SIZE_MB={int(g.get("size_mb") or 0)}', f'SETUP_SPACE_MB={int(g.get("setup_space_mb") or 0)}',
+             f'READY={q(p.get("ready_marker") or ".setup_done")}',
              f'UNITY_VERSIONS={q(" ".join(g["unity_versions"]))}',
              f'PLAYER_BACKEND={q(pl["backend"])}', f'PLAYER_ABI={q(pl["abi"])}',
              f'PLAYER_URL={q(pl.get("url") or "")}',
@@ -1343,8 +1357,8 @@ def port_json(cfg):
         'attr': {
             'title': p['title'], 'porter': list(p['porter']), 'desc': p['desc'] or f"{p['title']} on Unity's Android player.",
             'desc_md': None,
-            'inst': f"Requires {g['what']}: put it in ports/{p['name']}/gamedata. The first launch builds the game on "
-                    f"the handheld ({p['setup_time']}; downloads Unity's Android player from Unity, about 10 MB, Wi-Fi).",
+            'inst': p.get('inst') or f"Requires {g['what']}: put it in ports/{p['name']}/gamedata. The first launch builds "
+                    f"the game on the handheld ({p['setup_time']}; downloads Unity's Android player from Unity, about 10 MB, Wi-Fi).",
             'inst_md': None, 'genres': list(p['genres']), 'image': None, 'rtr': False, 'exp': bool(p.get('exp', True)),
             'runtime': [], 'store': list(p['store']), 'availability': p['availability'],
             'reqs': ['armhf'], 'arch': ['aarch64'], 'min_glibc': '',
@@ -1420,8 +1434,9 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
               'SETUP_TIME': cfg['port']['setup_time'], 'GAME_WHAT': cfg['game']['what'],
               'ROUTE': cfg['port']['route'], 'ROUTE_TEXT': ROUTE_TEXT.get(cfg['port']['route'], cfg['port']['route']),
               'UNITY_VERSIONS': ', '.join(cfg['game']['unity_versions']) or 'any the converter supports',
-              'SIZE_GB': max(1, (3 * int(cfg['game'].get('size_mb') or 0) + 1023) // 1024),
-              'PORTER': ', '.join(cfg['port']['porter']) or 'the porter'}
+              'SIZE_GB': max(1, ((int(cfg['game'].get('setup_space_mb') or 0) or 3 * int(cfg['game'].get('size_mb') or 0)) + 1023) // 1024),
+              'PORTER': ', '.join(cfg['port']['porter']) or 'the porter',
+              'READY': cfg['port'].get('ready_marker') or '.setup_done'}
     # the files a route renders: route.json "files": {output path: template name}; output paths
     # may use @@TOKENS@@; mode 755 for scripts
     for dst, spec in r['files'].items():
@@ -1667,6 +1682,13 @@ def package(port_src, out=None, runtime=None, log=print, **opts):
     shutil.rmtree(zipdir, ignore_errors=True)
     os.makedirs(zipdir)
     ctx = PackCtx(cfg, port_src, zipdir, runtime, log)
+    bld = cfg.get('build') or {}
+    if bld.get('commands'):
+        env = dict(os.environ, PMUNITY=REPO, PORT_SRC=port_src, BUILD=os.path.join(out, 'build'))
+        os.makedirs(env['BUILD'], exist_ok=True)
+        for cmd in bld['commands']:
+            log(f'== build: {cmd}')
+            subprocess.run(cmd, shell=True, cwd=port_src, env=env, check=True)
     launcher = f'{title}.sh'
     shutil.copyfile(os.path.join(port_src, launcher), os.path.join(zipdir, launcher))
     os.chmod(os.path.join(zipdir, launcher), 0o755)
@@ -1682,6 +1704,13 @@ def package(port_src, out=None, runtime=None, log=print, **opts):
             continue                            # (a hook module provides it)
         log(f'== {c}')
         COMPONENTS[c](ctx, opts)
+    for dst, src in (bld.get('outputs') or {}).items():
+        sp = os.path.join(port_src, src.replace('{build}', os.path.join(out, 'build')))
+        if not os.path.exists(sp):
+            raise SystemExit(f'build.outputs: {sp} was not made')
+        ctx.add(sp, dst, 0o755 if os.access(sp, os.X_OK) else None)
+    for n, src in (bld.get('licenses') or {}).items():
+        ctx.license(n, os.path.join(port_src, src))
     _call_hooks('port_package', ctx)
     ctx.license('LICENSE.portmaster-unity.txt', os.path.join(REPO, 'LICENSE'))
     ctx.license('THIRD_PARTY.portmaster-unity.md', os.path.join(REPO, 'THIRD_PARTY.md'))

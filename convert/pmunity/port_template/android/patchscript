@@ -81,7 +81,7 @@ find_any() {    # the port's data folder, else any Unity data folder
 if [ ! -f "$W/.step_game" ]; then
   D=$(find_any "$GD")
   if [ -z "$D" ]; then
-    need=$((GAME_SIZE_MB * 3 + 500))
+    need=$((GAME_SIZE_MB * 3 + 500)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
     for a in "$GD"/*; do
       [ -f "$a" ] || continue
       case "$(lower "$a")" in
@@ -102,6 +102,8 @@ if [ ! -f "$W/.step_game" ]; then
     done
   fi
   if [ -z "$D" ] && ls "$GD"/*.pkg >/dev/null 2>&1; then
+    need=$((GAME_SIZE_MB * 3 + 500)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+    room "$need" || fail "Unpacking the installers needs about $need MB free on the card ($(free_mb) MB free)."
     step "unpacking the macOS installers"
     rm -rf "$W/pkgroot"
     # shellcheck disable=SC2046
@@ -167,7 +169,7 @@ fi
 # ---- 3. the conversion
 if [ ! -f "$W/.step_convert" ]; then
   hook pre_convert
-  need=$((GAME_SIZE_MB * 3 / 2 + 300))
+  need=$((GAME_SIZE_MB * 3 / 2 + 300)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
   room "$need" || fail "Converting the game needs about $need MB free on the card ($(free_mb) MB free)."
   step "converting the game (if this is interrupted, the next launch continues where it stopped)"
   sed "s|{setup}|$S|g" "$S/convert.json" > "$W/convert.json"
@@ -229,5 +231,5 @@ top=${D#$GD/}; top=${top%%/*}
 case "$D" in "$W"/*) ;; *) [ -n "$top" ] && [ "$top" != "$(basename "$W")" ] && rm -rf "${GD:?}/$top";; esac
 rm -rf "$W" "$S"
 sync
-touch "$GAMEDIR/.setup_done"
+touch "$GAMEDIR/$READY"
 step "setup finished: $(du -sm "$GAMEDIR" | cut -f1) MB. Archives or installers left in gamedata/ can be deleted now."

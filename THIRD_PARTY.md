@@ -56,3 +56,16 @@ Mono.Cecil's licence and the runtime pack's `LICENSE.TXT` and `THIRD-PARTY-NOTIC
 `tools/hlslcc/build.sh` at a pinned commit and compiled into `pmhlslcc` (Direct3D 11 shaders,
 `pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the
 build writes next to it.
+
+## Shipped in a port's release zip (`pmunity port package`)
+
+Besides `ua_host` (above) and asmpatch when the port uses it (above, with the .NET runtime's and
+Mono.Cecil's licences), a port made with `pmunity port new` carries the setup's Python,
+`tools/port/build_pybundle.sh`'s bundle: [python-build-standalone](https://github.com/astral-sh/python-build-standalone)'s
+CPython 3.12 (PSF licence) with UnityPy (MIT), lz4 (BSD), astc-encoder-py (MIT; ARM's
+astc-encoder inside it: Apache 2.0), Pillow (MIT-CMU), texture2ddecoder (MIT), etcpak (MIT),
+brotli (MIT), archspec (Apache 2.0 or MIT), attrs (MIT), fsspec (BSD-3-Clause), tpk_ar (MIT) and
+pyfmodex (MIT), downloaded from their releases and PyPI when the bundle is built (none of it is in
+this repository). The packager collects each one's licence
+text from the bundle into the zip's `licenses/LICENSE.setup-python.txt`; the setup removes the
+bundle from the handheld when it is done.

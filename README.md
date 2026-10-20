@@ -24,8 +24,8 @@ computer.
 | `runtime/android/` | liblog, libandroid (ANativeWindow on Mali fbdev, looper, sensors), OpenSL ES (to SDL2, or PCM piped into `pw-cat`/`pacat` when a sound server holds the card), libmediandk (the NDK's media API over `runtime/media`), EGL glue |
 | `runtime/media/` | video for Unity's VideoPlayer: WebM and MP4 demuxers, decoders (libvpx VP8/VP9, libvorbis, libopus, OpenH264; the system's libavcodec when there is one), the SurfaceTexture whose frames reach Unity's external texture through an EGLImage |
 | `runtime/host/` | `ua_host` (ties it together; SDL2 pads -> Android gamepads, pointer mode (a pad-driven mouse and cursor for mouse-only menus) and pad -> keyboard keys; frame statistics, shader dump/override, GL frame tracer, hitch sampler) and device checks (`egltest`, `sdltest`, `audiocheck`, `shadercheck`) |
-| `convert/pmunity/` | the data converter: `shaders` (OpenGL Core -> GLSL ES 3.00), `textures` (BC/DXT -> ASTC, optional downscale), `settings`, `audio`, `android-data` (APK + OBB for the player), `macpkg` (unpacks macOS installers such as GOG's). Runs on a PC or on the handheld itself (portmaster-cuphead's PortMaster setup does) |
-| `tools/` | `asmpatch/` (generic patches to a game's assemblies for the Android player, e.g. Rewired on Android, and an input survey; C#, Mono.Cecil), device scripts (`device/`), log analysis (`analysis/`), an emulated armv7 test rig with Mesa (`emu/`), reverse-engineering helpers for new player versions (`re/`) |
+| `convert/pmunity/` | the data converter: `shaders` (OpenGL Core -> GLSL ES 3.00), `textures` (BC/DXT -> ASTC, optional downscale), `settings`, `audio`, `android-data` (APK + OBB for the player), `macpkg` (unpacks macOS installers such as GOG's), `player fetch` (Unity's Android player of a version, about 10 MB of its installer), `port` (`check`: what a game is and needs and which route fits; `new`: a complete PortMaster port from a short port.toml; `package`: its release zip). Runs on a PC or on the handheld itself (the ports' first-launch setup does) |
+| `tools/` | `asmpatch/` (generic patches to a game's assemblies for the Android player, e.g. Rewired on Android, and an input survey; C#, Mono.Cecil), `port/` (the setup's Python bundle for ports, `rehearse.sh`: a port's first launch in a handheld-like container, then the game in the emulated rig), device scripts (`device/`), log analysis (`analysis/`), an emulated armv7 test rig with Mesa (`emu/`), reverse-engineering helpers for new player versions (`re/`) |
 | `docs/` | design, runtime reference (every `UA_*` switch), input (pads, pointer mode, input stacks), the data format notes, shader notes, porting a new game |
 
 ## Requirements
@@ -45,6 +45,18 @@ computer.
 
 ## Making a port
 
+With `pmunity port` a port needs no scripts of its own ([docs/porting.md](docs/porting.md)):
+
+```sh
+cd convert
+python -m pmunity port check <game folder>                 # version, backend, input, video, plugins, route
+python -m pmunity port new mygame --data <game folder>     # -> mygame/: port.toml, launcher, setup, port.json
+mygame/package.sh                                          # -> mygame/out/mygame.zip (unzip into ports/)
+```
+
+The player puts their own copy of the game into `ports/mygame/gamedata/`; the first launch fetches
+Unity's player and converts the game on the handheld. By hand, on a PC:
+
 ```sh
 git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity
 cd portmaster-unity
@@ -58,9 +70,9 @@ python -m pmunity android-data --src work/data --pkg <player package> --out work
 Then copy to the handheld: `ua_host`, the player's three libraries into `lib/`, and the contents
 of `work/android/zip/` (APK, OBB, `android_package.json`, `assets/bin/Data/Managed/etc`). Start it
 with `LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_host "$PWD"` (see `tools/device/run.sh` and
-docs/runtime.md). [docs/porting.md](docs/porting.md) goes through a new game step by step: what
-the converter's config holds, what to check first, and what a game may need beyond it (assembly
-patches, a helper DLL).
+docs/runtime.md). [docs/porting.md](docs/porting.md) is the porter's guide: the
+port tools and their settings, the routes, the rehearsal, what to test on a device, the manual
+steps, and what a game may need beyond them (assembly patches, a helper DLL).
 
 ## Shaders
 

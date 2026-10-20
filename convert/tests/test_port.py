@@ -322,7 +322,8 @@ class NewAndSetupTest(unittest.TestCase):
 
     def test_package(self):
         with tempfile.TemporaryDirectory() as t:
-            _, out = self.make(t)
+            _, out = self.make(t, {'build': {'commands': ['echo tool > "$BUILD/tool" && chmod +x "$BUILD/tool"'],
+                                             'outputs': {'setup/files/tool': '{build}/tool'}}})
             rt = os.path.join(t, 'rt')
             for d in ('runtime/host/out', 'runtime/media/out/licenses'):
                 os.makedirs(os.path.join(rt, d))
@@ -350,6 +351,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(modes['My Game.sh'], 0o755)
             self.assertEqual(modes['mygame/ua_host'], 0o755)
             self.assertEqual(modes['mygame/setup/patchscript'], 0o755)
+            self.assertEqual(modes['mygame/setup/files/tool'], 0o755)          # (a build output)
             self.assertIn('MIT a', lic)
             self.assertNotIn('port.toml', ' '.join(names))
 

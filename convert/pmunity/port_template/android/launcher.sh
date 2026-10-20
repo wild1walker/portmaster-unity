@@ -34,7 +34,7 @@ if [ ! -e /lib/ld-linux-armhf.so.3 ]; then
 fi
 
 # ---- first launch: build the game from your copy (PortMaster's patcher shows the progress)
-if [ ! -f "$GAMEDIR/.setup_done" ]; then
+if [ ! -f "$GAMEDIR/@@READY@@" ]; then
   if [ -f "$GAMEDIR/setup/patchscript" ] && [ -f "$controlfolder/utils/patcher.txt" ]; then
     export GAMEDIR DEVICE_ARCH controlfolder
     chmod +x "$GAMEDIR/setup/patchscript"
@@ -45,7 +45,7 @@ if [ ! -f "$GAMEDIR/.setup_done" ]; then
     source "$controlfolder/utils/patcher.txt"
     $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null
   fi
-  if [ ! -f "$GAMEDIR/.setup_done" ]; then
+  if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
     sleep 8
     pm_finish
