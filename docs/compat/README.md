@@ -83,8 +83,8 @@ Notes on the rows:
   every game) become GLES3 or GLES 3.1 programs from 2018.1 on; 2017.x data keeps the earlier
   output, GLCore32 programs only (Cuphead's port; `shaders.glcore4x` forces either way). A shader
   whose variants were all stripped (URP's `StencilDeferred`, `BlitHDROverlay`) gets an empty GLES3
-  blob, as in Unity's builds. D3D11: 2019.1+ GL programs carry constant buffer
-  layouts the D3D11 data does not give (refused with that reason).
+  blob, as in Unity's builds. D3D11: 2019.1+ GL programs carry constant buffer layouts the D3D11
+  data does not give (refused with that reason).
 - IL2CPP metadata: the header's integer version (`global-metadata.dat` starts with 0xFAB11BAF
   and the version). These values come from public reverse-engineering tools, not from these
   packages (`libil2cpp.so` and the metadata are built per game), and tools also use sub-versions
@@ -116,8 +116,9 @@ Notes on the rows:
 4. ~~**Converter data formats**~~ (done in the converter): SerializedFile format 22, the four shader
    serializers, segmented blobs, parameter entries and per-tier subprograms, assembly lists by
    flags and `ScriptingAssemblies.json`, 2019+ ASTC numbers, compressed builds via `pmunity
-   unpack`, GLCore41/43 programs (2018.1+). Left: D3D11 programs of 2019.1+ Windows builds (GL constant buffer layouts), the
-   2021.3 OBB check (not traced; `assets/unity_obb_guid` is written for 2021+).
+   unpack`, GLCore41/43 programs (2018.1+). Left: D3D11 programs of 2019.1+ Windows builds (GL
+   constant buffer layouts), the 2021.3 OBB check (not traced; `assets/unity_obb_guid` is written
+   for 2021+).
 5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.x on (and of any
    .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
