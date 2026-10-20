@@ -365,6 +365,9 @@ static const char *const default_props[][2] = {
     { "ro.product.model", "RG34XX-SP" }, { "ro.product.manufacturer", "Anbernic" },
     { "ro.product.brand", "Anbernic" }, { "ro.product.device", "rgsp" },
     { "ro.hardware", "sun50iw9" }, { "ro.board.platform", "sun50iw9" },
+    /* Android Frame Pacing's own off switch (Swappy in libunity 2019.3+): Swappy stays off here,
+     * and Unity presents with eglSwapBuffers (android/README.md, "Frame pacing") */
+    { "swappy.disable", "1" },
 };
 static int bionic_system_property_get(const char *name, char *value)
 {

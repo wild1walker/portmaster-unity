@@ -13,8 +13,8 @@
 //                           is a pbuffer of the window's size, configs are chosen for pbuffers
 //   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
 //                           passed through the loader's so_softfp_wrap() (float-taking GL calls);
-//                           NULL for Android's frame-timing extensions (EGL_ANDROID_presentation_time,
-//                           _get_frame_timestamps): Swappy (Unity 2019.3+) then switches itself off
+//                           NULL for Android's frame-timestamp queries (EGL_ANDROID_get_frame_timestamps)
+//   eglPresentationTimeANDROID  a no-op that succeeds (Swappy's EGL table needs it; Swappy stays off)
 // With a host display (egl_glue_set_host_display, egl_host_shims[]: an SDL2 window on Wayland,
 // KMSDRM, X11, ...), Unity's display, config, window surface, current-making, swaps and swap
 // interval, surface attributes are mapped onto the host's EGL objects instead (see egl_glue.h).
@@ -234,19 +234,32 @@ static EGLBoolean shim_eglSwapBuffers(EGLDisplay dpy, EGLSurface s)
 static eglproc shim_eglGetProcAddress(const char *name);
 
 // Android's frame-timing EGL extensions: SurfaceFlinger's present times and frame timestamps. No
-// window system here has them (Mesa and Mali's fbdev driver may still hand out entry points). Swappy,
-// the frame pacer in libunity 2019.3+, needs eglPresentationTimeANDROID and disables itself without
-// it; Unity then presents with eglSwapBuffers at its swap interval, which the host's display paces.
+// window system here has them (Mesa and Mali's fbdev driver may still hand out entry points), so
+// the frame-timestamp queries answer NULL (EGL_ANDROID_get_frame_timestamps is optional for
+// everyone, Swappy included).
 static int android_frame_timing_proc(const char *name)
 {
     static const char *const names[] = {
-        "eglPresentationTimeANDROID", "eglGetNextFrameIdANDROID", "eglGetCompositorTimingANDROID",
+        "eglGetNextFrameIdANDROID", "eglGetCompositorTimingANDROID",
         "eglGetCompositorTimingSupportedANDROID", "eglGetFrameTimestampsANDROID",
         "eglGetFrameTimestampSupportedANDROID", NULL,
     };
     for (int i = 0; names[i]; i++)
         if (!strcmp(names[i], name)) return 1;
     return 0;
+}
+
+// EGL_ANDROID_presentation_time: a desired present time for the next swap, a hint to Android's
+// compositor queue. There is no such queue here; the swap presents when the host's display does.
+// Swappy (Android Frame Pacing in libunity 2019.3+) needs the entry point for its EGL table at
+// all: without it the table stays NULL, and the Swappy of 2021.3+ keeps its (disabled) instance
+// and presents through that table, a NULL dereference on the first frame. With it the table loads,
+// Swappy stays off by its own switch (the swappy.disable system property, loader/hybris_compat.c)
+// and presents with plain eglSwapBuffers.
+static EGLBoolean shim_eglPresentationTimeANDROID(EGLDisplay dpy, EGLSurface s, int64_t when)
+{
+    (void)dpy; (void)s; (void)when;
+    return EGL_TRUE;
 }
 
 so_shim egl_shims[] = {
@@ -256,6 +269,7 @@ so_shim egl_shims[] = {
     { "eglCreateContext", (void *)shim_eglCreateContext },
     { "eglSwapBuffers", (void *)shim_eglSwapBuffers },
     { "eglGetProcAddress", (void *)shim_eglGetProcAddress },
+    { "eglPresentationTimeANDROID", (void *)shim_eglPresentationTimeANDROID },
     { NULL, NULL },
 };
 

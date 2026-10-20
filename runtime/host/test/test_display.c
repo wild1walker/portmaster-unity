@@ -169,8 +169,9 @@ static void *unity_render_thread(void *arg)
     EGLint sb = 0;
     CHECK(SurfaceAttrib(dpy, surf, EGL_SWAP_BEHAVIOR, EGL_BUFFER_DESTROYED) && GetError() == EGL_SUCCESS);
     CHECK(QuerySurface(dpy, surf, EGL_SWAP_BEHAVIOR, &sb) && sb == EGL_BUFFER_DESTROYED);
-    // Swappy finds no Android frame timing and stays off
-    CHECK(GetProcAddress("eglPresentationTimeANDROID") == NULL && GetProcAddress("eglGetFrameTimestampsANDROID") == NULL);
+    // Swappy's EGL table loads (a no-op presentation time) and it stays off by its system property;
+    // no Android frame timestamps
+    CHECK(GetProcAddress("eglPresentationTimeANDROID") != NULL && GetProcAddress("eglGetFrameTimestampsANDROID") == NULL);
     CHECK(GetProcAddress("eglSurfaceAttrib") == (void *)SurfaceAttrib);
 
     void (*Viewport)(int, int, int, int) = GetProcAddress("glViewport");
