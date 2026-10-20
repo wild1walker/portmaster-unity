@@ -58,5 +58,7 @@ Compared with 2020.3.48f1. 2021.3.45f2 (2025-10) is a re-release of 2021.3.45f1 
 
 ## What the tools need for this version
 - bionic shims: the fortify set above, `sys_signame`, `__mmap2`, softfp `wcstod`/`wcstof`.
-- runtime/jni: as 2020.3 (+ `nativeGetSoftInputType` is only called by Java).
+- runtime/jni: as 2020.3, plus `createInvocationError`/`nativeProxyJNIFreeGCHandle`,
+  screen brightness and `hidePreservedContent` (done; `nativeGetSoftInputType` is only called by
+  Java).
 - converter: serializer 202012090 with separate parameter entries and per-tier subprograms.

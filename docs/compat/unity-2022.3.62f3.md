@@ -30,8 +30,8 @@ still `UnityPlayer` + `UnityPlayerActivity`.
 
 ## JNI
 - RegisterNatives: 48. **`nativeInjectEvent` takes `(InputEvent, int)`** (an extra int; Java
-  passes 0): runtime/jni's input injection calls the one-argument form, so **no input** until it
-  follows. `nativeRestartActivityIndicator` is gone (runtime/jni already checks), new
+  passes 0): runtime/jni now calls the form libunity registered (it used to call the one-argument
+  form, which meant no input). `nativeRestartActivityIndicator` is gone (runtime/jni already checks), new
   `nativeGetNoWindowMode()Z` (Java asks it whether to run without an Android window).
 - Java members libunity binds: 395 (+15 -107). Gone: Camera v1, the Java MediaCodec/
   MediaExtractor/MediaFormat users, ConnectivityManager/NetworkInfo, Dialog, ParcelFileDescriptor,
@@ -61,6 +61,6 @@ still `UnityPlayer` + `UnityPlayerActivity`.
 
 ## What the tools need for this version
 - loader/android: a libmediandk stub (blocker), the bionic fortify shims, `__mmap2`, `sys_signame`.
-- runtime/jni: `nativeInjectEvent(InputEvent, int)` (blocker for input), plus everything from
-  2019.4-2021.3.
+- runtime/jni (done): `nativeInjectEvent(InputEvent, int)` (the int is 0), `nativeGetNoWindowMode`,
+  the new UnityPlayer methods and framework members, plus everything from 2019.4-2021.3.
 - converter: OBB GUID file; otherwise as 2021.3.

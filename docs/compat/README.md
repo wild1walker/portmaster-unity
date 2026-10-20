@@ -27,11 +27,12 @@ loading, startup, input or data conversion) · "-" not applicable.
 | imports nobody provides | 0 | 0 | 0 | ❌ 4 | ❌ 4 | ❌ 9 | ❌ 9 + libmediandk set |
 | imports with ABI risk | - | - | - | ⚠️ getpwuid_r, nftw | ⚠️ + eglSurfaceAttrib | ⚠️ + wcstod/wcstof (softfp), statvfs | ⚠️ + `*_l` locale |
 | RegisterNatives (count) | 45 ✅ | 45 | 44 | 47 | 45 | 48 | 48 |
-| natives runtime/jni calls | ✅ | ❌ SendMessage(byte[]) | ❌ same | ❌ + nativeDone()Z | ❌ same | ❌ same | ❌ + **nativeInjectEvent(·,int)** |
-| AndroidJavaProxy | ✅ (int handle) | ✅ | ✅ | ❌ long handle | ❌ + new newProxyInstance | ❌ | ❌ |
+| natives runtime/jni calls | ✅ | ✅ SendMessage(byte[]) | ✅ | ✅ nativeDone()Z | ✅ | ✅ | ✅ nativeInjectEvent(·,int) |
+| AndroidJavaProxy | ✅ (int handle) | ✅ | ✅ | ✅ long handle | ✅ newProxyInstance(UnityPlayer,·) | ✅ invocation errors | ✅ |
 | Java members bound (count) | 398 | 402 | 458 | 487 | 487 | 487 | 395 |
-| UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (+new callbacks ⚠️) | ✅ ⚠️ | ✅ ⚠️ | ✅ ⚠️ (GameActivity only from 2023.1) |
-| frame pacing (Swappy) | - | - | - | ⚠️ falls back (untested) | ⚠️ | ⚠️ | ⚠️ |
+| of which runtime/jni defines | 250 | 254 | 287 | 306 | 309 | 308 | 304 |
+| UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (callbacks 28/28) | ✅ (27/27) | ✅ (30/30) | ✅ (34/34; GameActivity only from 2023.1) |
+| frame pacing (Swappy) | - | - | - | ⚠️ Java side absent, off without `eglPresentationTimeANDROID` (untested) | ⚠️ | ⚠️ | ⚠️ |
 | SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | **22** ❌ | 22 ❌ | 22 ❌ |
 | shader serializer | 201708220 ✅ | 201708220 ✅ | 201802150 ⚠️ | 201806140 ❌ segments | 201806140 ❌ | 202012090 ❌ +param entries | 202012090 ❌ |
 | MonoManager engine slots | fixed 48 ✅ | fixed 48 ✅ | ❌ flags (`m_AssemblyTypes`) | ❌ flags | ❌ flags | ❌ flags | ❌ flags |
@@ -46,8 +47,13 @@ Notes on the rows:
   (calls land in the loader's abort stub). 2019.4/2020.3: `__FD_SET_chk`, `__FD_ISSET_chk`,
   `android_set_abort_message`, `__mmap2`. 2021.3 adds `__strlen_chk`, `__strchr_chk`,
   `__strrchr_chk`, `__strlcpy_chk`, `sys_signame` (and the FD ones on v7a too).
-- "natives runtime/jni calls": the 19 natives `runtime/jni` looks up by name and signature,
-  checked against what each libunity/libmain registers.
+- "natives runtime/jni calls": the natives `runtime/jni` calls, checked against what each
+  libunity/libmain registers. runtime/jni looks them up by name and calls them with the registered
+  signature (`runtime/jni/README.md`, "Unity versions"); `runtime/jni/test` runs each version's
+  native table.
+- "of which runtime/jni defines": `tools/re/jnicover.c` on the bound members; the rest are classes
+  of no use on a handheld (camera, VR/AR, video, web/TLS, dialogs, telephony, location) that answer
+  0/null.
 - Shader serializer: every GL program entry of every version has 4 statistics ints and writes
   back unchanged with `blob.py`'s layout; what breaks is the container (2019.3+: segmented blobs,
   12-byte entry table; 2021.2+: parameter entries and per-tier subprograms).
@@ -59,12 +65,12 @@ Notes on the rows:
 
 ## Gaps, most impact for the most games first
 
-1. **JNI signatures that drifted** (every version after 2017.4.9). runtime/jni looks natives up
-   by exact signature; make it take what libunity registered and adapt:
-   `nativeUnitySendMessage(String, String, byte[])` (2017.4.40+), `nativeDone()Z` (2019.4+),
-   `nativeInjectEvent(InputEvent, int)` (2022.3: **no input otherwise**), and the
-   `ReflectionHelper` proxies with `long` handles (2019.4+) and `newProxyInstance(long, ...)` /
-   `newProxyInstance(UnityPlayer, long, ...)` (2020.3+), used by every AndroidJavaProxy.
+1. ~~**JNI signatures that drifted**~~ (done in runtime/jni): natives are called with the signature
+   libunity registered: `nativeUnitySendMessage(String, String, byte[])` (2017.4.40+),
+   `nativeDone()Z` (2019.4+), `nativeInjectEvent(InputEvent, int)` (2022.3), `long` proxy ids
+   (2019.4+); all `newProxyInstance` forms and the 2019.4/2021.3 exception paths of
+   AndroidJavaProxy are implemented. Tested with each version's native table, not with the real
+   players.
 2. **Missing bionic symbols** (2019.4+, more in 2021.3+): `__FD_SET_chk`, `__FD_ISSET_chk`
    (add `__FD_CLR_chk`), `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`, `__strlcpy_chk`,
    `android_set_abort_message`, `__mmap2` (32-bit), `sys_signame` (data). Small additions to
@@ -85,26 +91,30 @@ Notes on the rows:
    .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
    `libmono-native.so` (2021.3+, needs its SONAME dependency `libmonoboehm-2.0.so` loaded first).
-6. **UnityPlayer callbacks added since 2019.4** that libunity can call and runtime/jni lacks
-   (they answer 0/null now): `isUaaLUseCase`, `getUaaLLaunchProcessType`, `getLaunchURL`,
-   `getNetworkConnectivity`, `getKeyboardLayout`, `startOrientationListener`, the 10-argument
-   `showSoftInput`, clipboard, `getScreenBrightness`/`setScreenBrightness` (2021.3),
-   `setMainSurfaceViewAspectRatio`, activity indicator (2022.3). Give each a sane default.
-7. **Swappy** (2019.3+): decide its behaviour instead of relying on its fallback: mark
-   `com.google.androidgamesdk.*` and `dalvik.system.InMemoryDexClassLoader` absent in fakejni (or
-   implement `AChoreographer_*` from the host's vsync). The converter could also turn
+6. ~~**UnityPlayer callbacks added since 2018.4**~~ (done in runtime/jni, with handheld answers):
+   `isUaaLUseCase`, `getUaaLLaunchProcessType`, `getLaunchURL`, `getNetworkConnectivity`,
+   `getKeyboardLayout`, `startOrientationListener`, the 9- and 10-argument `showSoftInput`,
+   clipboard, `getScreenBrightness`/`setScreenBrightness` (2021.3), `hidePreservedContent`,
+   `setMainSurfaceViewAspectRatio`, activity indicator (2022.3), and the framework members the
+   later players read (`View.getDisplay`, display modes, ...).
+7. **Swappy** (2019.3+): decided in runtime/jni: its Java classes and the dex class loaders are
+   absent, so it runs without a choreographer and switches itself off where EGL lacks
+   `eglPresentationTimeANDROID`; the android/EGL layer must keep that function unresolved (or
+   implement `AChoreographer_*` from the host's vsync instead). The converter could also turn
    `androidUseSwappy` off; it changes pacing, not the picture.
 8. **EGL**: `eglSurfaceAttrib` (2020.3+) on the SDL display path must map the glue's fixed surface
    handle to the real surface.
 9. **Packaging of Android builds** (games owned as APK/AAB): split APKs
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
-   (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`),
+   (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`;
+   runtime/jni answers as an app without Play Core: no asset packs),
    OBB GUID file `assets/unity_obb_guid` (2022.3).
 10. **IL2CPP Android games**: loading already works through `ClassLoader.findLibrary` +
     `System.load`; libunity then copies IL2CPP data to `<filesDir>/il2cpp` (writable files dir
-    needed; 2022.3 re-extracts when `assets/bin/Data/unity_app_guid` changes) and binds 175-234
-    `il2cpp_*` functions from the game's `libil2cpp.so`.
-11. Small: `nativeSendSurfaceChangedEvent` after a resize (2018.4+); the 2022.3 `armv9` libunity
+    needed, runtime/jni creates it and warns otherwise; 2022.3 re-extracts when
+    `assets/bin/Data/unity_app_guid` changes) and binds 175-234 `il2cpp_*` functions from the
+    game's `libil2cpp.so`.
+11. Small: ~~`nativeSendSurfaceChangedEvent` after a resize (2018.4+)~~ (done); the 2022.3 `armv9` libunity
     must not be used on ARMv8 CPUs; 16 KiB-page kernels stay unsupported (the 2022.3.62 libraries
     would allow them).
 

@@ -6,8 +6,8 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | File | What |
 |---|---|
 | `fakejni.h/.c` | A complete `JavaVM`/`JNIEnv`: all 229 `JNINativeInterface` slots and the 5 `JNIInvokeInterface` slots, in `include/jni.h` (AOSP libnativehelper) order. Java classes, methods and fields are implemented by C handlers. |
-| `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. |
-| `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper. |
+| `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. One build serves the players of Unity 2017.4 to 2022.3 (see Unity versions). |
+| `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
 | `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
 | `test/` | Unit tests (see Tests). |
@@ -87,19 +87,23 @@ sides), so `JNI_ABI`/`FJ_ABI` are empty and every JNI table function is plain C.
   methods and fields get placeholder ids, and calling them returns 0/null. Each such name is logged
   **once, always** (`UNKNOWN ...`, `UNIMPLEMENTED call ...`). `fj_class_absent(name)` or
   `FJ_STRICT=1` makes `FindClass` return NULL with NoClassDefFoundError instead.
-- **RegisterNatives** is recorded per class. `fj_native(cls, name, sig)` returns the fnPtr.
-  `fj_call_native(cls, name, sig, self, ...)` calls it with the Android ABI. Java-side calls to a
-  registered native (`Call*Method` on its id) are routed to it as well.
+- **RegisterNatives** is recorded per class. `fj_native(cls, name, sig)` returns the fnPtr,
+  `fj_native_sig(cls, name)` the signature it was registered with (natives changed signature
+  across Unity versions). `fj_call_native(cls, name, sig, self, ...)` calls it with the Android
+  ABI. Java-side calls to a registered native (`Call*Method` on its id) are routed to it as well.
 - **Proxies**: `bitter.jnibridge.JNIBridge.newInterfaceProxy` (Unity's native listeners, e.g.
   `Choreographer$FrameCallback`, `Handler$Callback`, `Runnable`) and `ReflectionHelper.newProxyInstance`
   (managed `AndroidJavaProxy`) create proxy objects. Calls on a proxy (from Unity, or from C via
   `fj_call(obj, name, sig, ...)`) go to the registered `JNIBridge.invoke(J,Class,Method,Object[])` or
-  `ReflectionHelper.nativeProxyInvoke`. Arguments are boxed and results unboxed; `FromReflectedMethod`
-  on the Method object yields the interface's jmethodID, which is how Unity's invoker identifies it.
-- Also implemented: `ToReflected*`/`FromReflected*`, direct ByteBuffers, `IsInstanceOf`/`IsAssignableFrom`
-  (super chain plus interfaces), `GetObjectRefType`, and built-in `Object`, `Class`, `String`,
-  `Throwable`+subclasses, boxed types and `reflect.Method`. `MonitorEnter/Exit` are no-ops and
-  `DefineClass` returns NULL.
+  `ReflectionHelper.nativeProxyInvoke` (through the handler `unityplayer` installs with
+  `fj_set_proxy_handler`, see Unity versions). Arguments are boxed and results unboxed;
+  `FromReflectedMethod` on the Method object yields the interface's jmethodID, which is how Unity's
+  invoker identifies it.
+- Also implemented: `ToReflected*`/`FromReflected*` (`fj_reflected_sig()` gives a reflected member's
+  signature), direct ByteBuffers, `IsInstanceOf`/`IsAssignableFrom` (super chain plus interfaces),
+  `GetObjectRefType`, and built-in `Object`, `Class`, `String`, `Throwable`+subclasses, boxed types
+  and `reflect.Method`. `fj_method_defined()` tells whether a member has an implementation (tests,
+  coverage). `MonitorEnter/Exit` are no-ops and `DefineClass` returns NULL.
 - **Env vars**: `FJ_TRACE=1` logs every JNI call with decoded arguments and results. `FJ_DUMP=1`
   prints a usage report at exit (each class/method/field touched, with call counts, flagged
   `[UNKNOWN]`/`[no handler]`/`[native]`; `fj_dump()` gives it on demand). `FJ_NATIVES=1` logs
@@ -126,12 +130,18 @@ This mirrors `UnityPlayer.java`, `UnityPlayerActivity.java` and `UnityPlayer$e` 
     return means finish. Then `cfg.on_frame`, and repeat (NEXT_FRAME).
 
 The order observed by the test: initJni → InitWebRequest → RecreateGfxState(surface) →
-FocusChanged(true) → Resume → Render...
+[SendSurfaceChangedEvent] → FocusChanged(true) → Resume → Render... Steps of later versions run
+when their natives are registered: `nativeSendSurfaceChangedEvent` after every surface
+(re)attach (2018.4+), `OrientationLockListener.nativeUpdateOrientationLockState(0)` (2020.3+) and
+`nativeGetNoWindowMode()` (2022.3) right after initJni; `nativeInitWebRequest` (gone in 2019.4) and
+`nativeRestartActivityIndicator` (gone in 2022.3) only where registered.
 - `up_pause()`: soft-input cancel/close jobs, PAUSE, then **`nativePause()`** on UnityMain (true
   means quit: `nativeDone()`). Waits up to 4 s, like Java.
 - `up_resume()`, `up_focus(0/1)` (`nativeFocusChanged(false)` only after a gained focus),
   `up_set_surface(win)`. NULL means SURFACE_LOST, then `nativeRecreateGfxState(0, null)`, with a 4 s wait.
 - `up_low_memory()`: `nativeLowMemory`. `up_send_message()`: `nativeUnitySendMessage`.
+- `up_resize(w, h)`: the window changed size: display, view and surface sizes follow and
+  surfaceChanged runs (`nativeRecreateGfxState`, then `nativeSendSurfaceChangedEvent` on 2018.4+).
 - `up_quit()`: finishing, pause (which runs **`nativeDone()`**), QUIT, join UnityMain (4 s),
   stop FMOD threads, then `NativeLoader.unload()`.
 - When Unity itself finishes (`Activity.finish`, `UnityPlayer.kill`, `nativeRender`→false), `cfg.on_quit` is called.
@@ -187,23 +197,153 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   including a float; `fsum`: 10 floats, float result), called from the Java side and from C. The
   host side calls the natives through `fj_call_native(_a)`, covers refcount freeing, direct
   buffers and boxing, and runs 4 threads.
-- `test/test_unityplayer.c` + `test/fake_unity.c` (softfp on ARM): a fake libmain/libunity with the same native
-  tables as the real ones (listed with `tools/re/jnitables.py` from your own copy of the player). It checks the full startup order, display metrics
-  (`getRefreshRate` float return), Build/paths/locale, SharedPreferences round trip and persistence,
-  AudioSystem, Choreographer doFrame through a JNIBridge proxy, Handler/Message to a `Handler$Callback`
-  proxy, the FMODAudioDevice thread, KeyEvent/MotionEvent/InputDevice reads (`getAxisValue(II)F`),
-  UnitySendMessage, and pause/resume/surface loss/focus/quit.
-- Both pass (0 failures) on both architectures. They also pass with `FJ_TRACE=1`. The tests assume the default
-  FJ_* modes: `FJ_NOFREE`/`FJ_STRICT` intentionally break their refcount/placeholder checks.
+- `test/test_unityplayer.c` + `test/fake_unity.c` (softfp on ARM): a fake libmain/libunity that
+  registers the natives of one of 7 Unity versions (2017.4.9, 2017.4.40, 2018.4, 2019.4, 2020.3,
+  2021.3, 2022.3: names and signatures as `tools/re/jnitables.py` lists them for each player) and
+  uses the Java side as that version does. Each version runs in its own process
+  (`test_unityplayer [n]` runs one). It checks the full startup order (with
+  `nativeSendSurfaceChangedEvent` from 2018.4), display metrics (`getRefreshRate` float return;
+  through `View.getDisplay()` from 2019.4), Build/paths/locale, SharedPreferences round trip and
+  persistence, AudioSystem, Choreographer doFrame through a JNIBridge proxy, Handler/Message to a
+  `Handler$Callback` proxy, the FMODAudioDevice thread, KeyEvent/MotionEvent/InputDevice reads
+  (`getAxisValue(II)F`) through each `nativeInjectEvent` signature, UnitySendMessage (String and
+  UTF-8 byte[] forms, from C and from the static Java method), AndroidJavaProxy with int or long
+  ids and each version's `newProxyInstance` (a Runnable posted with `runOnUiThread`, a call with
+  an argument and a boxed result, managed exceptions of the 2019.4 and 2021.3 kinds, calls refused
+  after quit), the new UnityPlayer callbacks, Swappy's classes being absent, IL2CPP's library path
+  and `<files>/il2cpp`, `up_resize`, the 2020.3/2022.3 startup natives, pause/resume/surface
+  loss/focus, and quit with `nativeDone` of either signature. It also checks that every Java
+  method the 2017.4-2022.3 libunity call on UnityPlayer/ReflectionHelper by name is implemented.
+- Both pass (0 failures) on both architectures: `test_unityplayer` prints one line per version and
+  `PASSED: 0 failure(s) in 7 Unity version shapes`. They also pass with `FJ_TRACE=1`. The tests
+  assume the default FJ_* modes: `FJ_NOFREE`/`FJ_STRICT` intentionally break their
+  refcount/placeholder checks. (Docker's arm/v7 emulation on a Mac has crashed in the thread part
+  of the armhf tests before; the same binaries pass on the device.)
+
+## Unity versions (2017.4 to 2022.3)
+The runtime was written against 2017.4.9 (Cuphead); `docs/compat` surveys the Android players of
+the last patch of every LTS line up to 2022.3. The Java side keeps the 2017.4 model throughout, so
+one build serves them all, without a version switch: what differs is decided by what the loaded
+libunity registers.
+
+**Natives by name.** `up_call_native()` looks a native up by name and calls it with the signature
+it was registered with, converting the caller's arguments by position (String to UTF-8 byte[],
+int and long, narrower integers; missing ones are 0/null). It logs the first adaptation of each
+native.
+
+| native | 2017.4.9 | later players | runtime/jni |
+|---|---|---|---|
+| `nativeUnitySendMessage` (static) | `(String, String, String)V` | `(String, String, byte[])V` from 2017.4.40 | the message as UTF-8 bytes (Java's `getBytes("UTF-8")`); also for `UnityPlayer.UnitySendMessage` called from managed code |
+| `nativeDone` | `()V` | `()Z` from 2019.4 (true: Java kills the process) | still only with `UA_QUIT_CLEANUP=1`; the result is logged |
+| `nativeInjectEvent` | `(InputEvent)Z` | `(InputEvent, int)Z` in 2022.3 | the int is 0, as Java's `injectEvent(event)` passes |
+| `ReflectionHelper.nativeProxy*` | `int` proxy id | `long` from 2019.4 | the id as the registered type |
+| `nativeInitWebRequest`, `nativeRestartActivityIndicator` | yes | gone in 2019.4 / 2022.3 | called when registered |
+| `nativeSendSurfaceChangedEvent` | - | 2018.4+ | after `nativeRecreateGfxState(0, surface)` (surfaceChanged), on start, surface change and `up_resize` |
+| `OrientationLockListener.nativeUpdateOrientationLockState(I)` | - | 2020.3+ | 0 (auto-rotate off) after initJni |
+| `nativeGetNoWindowMode()Z` | - | 2022.3 | asked after initJni and logged; a surface is provided either way |
+| `nativeHidePreservedContent` | - | 2021.3+ | GL-thread job after `UnityPlayer.hidePreservedContent()` (through the UI thread; the pairing is inferred from the names) |
+
+**AndroidJavaProxy** (`ReflectionHelper`, used by every `AndroidJavaProxy`/`AndroidJavaRunnable`
+of the game's managed code): all six `newProxyInstance` forms (`(int, Class|Class[])` up to 2018.4,
+`(long, ...)` in 2019.4, `(UnityPlayer, long, ...)` from 2020.3). A call on a proxy goes through
+the handler `unityplayer` installs: refused for proxies of an ended launch (`endUnityLaunch`) and
+after quit (Java's `beginProxyCall`), then `nativeProxyInvoke(id, name, Object[])`. A managed
+exception (flagged with `setNativeExceptionOnProxy` in 2019.4/2020.3, returned as the object of
+`createInvocationError` from 2021.3) is logged through `nativeProxyLogJNIInvokeException(handle)`,
+its handle released with `nativeProxyJNIFreeGCHandle` (2021.3+), and the caller gets null/0 where
+Java would throw. `getFieldSignature` is implemented; `nativeProxyFinalize` is never called (proxy
+objects are freed without telling the managed side, which keeps its GC handle).
+
+**UnityPlayer methods libunity added** (its `UnityPlayerJavaWrapper`, 2018.4-2022.3), answered
+as for a handheld:
+
+| method | answer |
+|---|---|
+| `showSoftInput` (9 and 10 arguments), `setCharacterLimit`, `setHideInputField`, `setSelection` | logged/ignored: no on-screen keyboard (as the 7-argument one) |
+| `getClipboardText`/`setClipboardText` | a process-local clipboard |
+| `requestUserAuthorization`, `skipPermissionsDialog` | nothing to ask (every permission is granted), false |
+| `getLaunchURL`, `getNetworkConnectivity`, `getNetworkProxySettings`, `getKeyboardLayout` | null (no deep link), 0 (not reachable), null, null |
+| `isUaaLUseCase`, `getUaaLLaunchProcessType` | false, 0: a game, not Unity as a Library |
+| `notifyOnUnityPlayerUnloaded` (2019.4), `pauseJavaAndCallUnloadCallback` (2020.3+) | `Application.Unload`: the activity would go to the back; here the game quits |
+| `startOrientationListener`, `stopOrientationListener` | false: no orientation sensor |
+| `getScreenBrightness`/`setScreenBrightness` (2021.3+) | 1.0, then what the game set; the panel is not changed |
+| `hidePreservedContent` (2021.3+) | acknowledged with `nativeHidePreservedContent` (inferred pairing) |
+| `setMainSurfaceViewAspectRatio`, `startActivityIndicator`/`stopActivityIndicator`, `setBackButtonLeavesApp` (2022.3) | ignored |
+
+**Frame pacing (Swappy, 2019.4+).** libunity's Swappy looks for its Java helpers
+(`com.google.androidgamesdk.ChoreographerCallback`, `SwappyDisplayManager`) through the activity's
+ClassLoader and then loads them from its embedded dex with `InMemoryDexClassLoader` (or, before
+API 26, writes the dex to the cache dir for `PathClassLoader`). All four classes are absent here
+(`ClassLoader.loadClass` throws ClassNotFoundException as on Android), so no dex is written or
+run; Swappy then uses its own timer instead of a choreographer and turns itself off when EGL has no
+`eglPresentationTimeANDROID` ("Swappy is disabled"; the Android Game SDK's behaviour, not yet seen
+with a real player here), and Unity paces frames as 2017.4 does (vsync, Choreographer callbacks
+through JNIBridge). Whether that EGL function resolves is up to the
+android/EGL layer: it should not, for this to hold. The converter could also turn
+`androidUseSwappy` off; that changes pacing, not the picture.
+
+**IL2CPP players** find `libil2cpp.so` with `ClassLoader.findLibrary("il2cpp")`
+(`<native_lib_dir>/libil2cpp.so` when present, else null) and `System.load` it (the host's
+`on_load_library` gets the full path), then copy their data to `<files_dir>/il2cpp` with libc.
+`up_register_classes` creates `files_dir` and warns when it is not writable.
+
+**Other Java the later players use**: `View.getDisplay()` (2019.4+ reads the display through it:
+the display), `Display.getRealMetrics/getSupportedModes/getMode` (one mode: the panel),
+`getAppVsyncOffsetNanos` (0) and `getPresentationDeadlineNanos` (one refresh period), HDR and wide
+colour gamut (none), window insets (none), `PowerManager.isSustainedPerformanceModeSupported`
+(false), `Process.setThreadPriority` (ignored: thread priorities stay as on 2017.4),
+`AudioManager.getDevices` (the built-in speaker), `Settings.Global` `DEVICE_NAME` (the model),
+`Activity.moveTaskToBack` (ignored, false), `PackageInfo.getLongVersionCode`, more KeyEvent/
+MotionEvent getters, and `PlayAssetDeliveryUnityWrapper` answering as in an app built without
+the Play Core library (`playCoreApiMissing`, no asset pack paths). `cfg.sdk_int` should be at
+least the player's minimum API (22 for 2021.3 and 2022.3); libunity skips newer Android paths
+below their API level.
+
+**Coverage** (`tools/re/jnicover.c` on each player's `bindings.tsv`, the Android framework
+members libunity binds, and `javacalls.tsv`, the player's own Java members whose names occur in
+libunity; "ok" rows of all rows, before → after this work):
+
+| | 2017.4.9 | 2017.4.40 | 2018.4.36 | 2019.4.40 | 2020.3.48 | 2021.3.45f2 | 2022.3.62f3 |
+|---|---|---|---|---|---|---|---|
+| framework members (bindings) | 248 → 250 / 398 | 251 → 254 / 402 | 267 → 287 / 458 | 268 → 306 / 487 | 266 → 309 / 487 | 262 → 308 / 487 | 250 → 304 / 395 |
+| missing members of known classes | 4 → 2 | 5 → 2 | 20 → 2 | 37 → 2 | 38 → 2 | 38 → 3 | 46 → 3 |
+| player Java members (javacalls) | 19 / 43 | - | - | 19 → 46 / 112 | 18 → 46 / 105 | 18 → 49 / 121 | 17 → 52 / 91 |
+| UnityPlayer methods libunity calls | 12 / 12 | 12 / 12 | 11 → 19 / 19 | 11 → 28 / 28 | 10 → 27 / 27 | 10 → 30 / 30 | 10 → 34 / 34 |
+| natives runtime/jni calls, called with the registered signature | all | 1 ✗ → all | 1 ✗ → all | 3 ✗ → all | 3 ✗ → all | 3 ✗ → all | 4 ✗ → all |
+
+(✗: `nativeUnitySendMessage` from 2017.4.40, `nativeDone` and `nativeProxyInvoke` from 2019.4,
+`nativeInjectEvent` in 2022.3.) The remaining rows are classes with no use on a handheld (camera, VR/AR, video, web requests and
+TLS, dialogs, telephony, location, Wi-Fi...: placeholders that answer 0/null as before),
+`Surface(SurfaceTexture)`/`SurfaceView(Context)` (video), and in javacalls Java-only entry points
+whose names libunity happens to contain (`UnityPlayer.pause/resume/quit/onKeyDown...`: the
+Activity calls them, here `up_*`), Swappy's classes (absent on purpose) and obfuscated helpers.
+The 2017.4.9 additions (`AudioAttributes.Builder.build`, `AudioFocusRequest.Builder.build`) are
+only reached at API 26+, so Cuphead (API 19) runs as before.
+
+**Not covered yet** (beyond the general gaps below): none of these players has been run, only
+their native tables and Java bindings; `nativeOrientationChanged` (2019.4+, sent by Java's
+orientation listener) and `nativeSetLaunchURL` (deep links) are never sent; `Application.Unload`
+quits; Play Asset Delivery has no asset packs and split APKs are not listed
+(`splitPublicSourceDirs` null); the 2019.4+ native UnityWebRequest's certificate checks meet
+`TrustManagerFactory` placeholders; `nativeGetNoWindowMode` returning true is only logged; and the
+2022.3 player additionally needs the libmediandk stub of the loader to load at all.
+
+Reproduce: build jnicover as its header says, then for each player
+`jnicover < notes/bindings.tsv` and `jnicover < notes/javacalls.tsv` (notes from
+`tools/re/survey_player.sh` and `tools/re/javacalls.py`).
 
 ## What Unity may still call that is missing or shallow
 The authoritative list of what libunity can bind comes from `tools/re/strrefs.py` + `tools/re/jnibindings.py` run on your own copy of the player. Run the real
 thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`. Known gaps:
 - **Video** (`MediaCodec`, `MediaExtractor`, `MediaFormat`, `SurfaceTexture`, `Surface(SurfaceTexture)`)
   and `UnityPlayer.showVideoPlayer` (returns false). A game that plays videos through Unity's VideoPlayer on this path gets none.
-- **UnityWebRequest** Java class (`com/unity3d/player/UnityWebRequest` instances: networking), the
+- **UnityWebRequest** Java class (`com/unity3d/player/UnityWebRequest` instances: networking, up
+  to 2018.4; native from 2019.4, with TLS checks through `TrustManagerFactory` placeholders), the
   soft keyboard (`showSoftInput` is logged only), AlertDialog/Dialog/ProgressBar (activity indicator)
   and Presentation/MediaRouter (second display): placeholders.
+- 2019.4+: Play Asset Delivery (asset packs: none), `Camera2Wrapper`, `HFPStatus` (Bluetooth headset
+  microphone), Google VR/ARCore, `java.util.zip.ZipFile` (2021.3), `PointerIcon`/`Bitmap` (cursor
+  images), `DisplayCutout`/`WindowInsets` (none), `NetworkInterface`: placeholders or none.
 - Camera, location, `GeomagneticField`, `Parcel`/`IBinder`/`bindService` (returns false),
   `ParcelFileDescriptor`: placeholders. Sensors go through the NDK `ASensor*` shim, not JNI.
 - `SharedPreferences.getAll()` returns an empty map, which only matters for Unity's v1→v2 PlayerPrefs migration.

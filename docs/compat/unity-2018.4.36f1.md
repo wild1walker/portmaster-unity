@@ -32,8 +32,9 @@ Compared with 2017.4.40f1 (and the 2017.4.9f1 baseline).
   (`InputManager.getInputDeviceIds/getInputDevice`, `InputDevice.getVendorId/getProductId`),
   more `MotionEvent` getters (touch major/minor, historical values), `Process.setThreadPriority`,
   sustained performance mode, `TrustManagerFactory`/`X509TrustManager` (certificate checks),
-  `Resources.getIdentifier`, `Activity.findViewById`. None of these classes or members exist in
-  runtime/jni: fakejni answers 0/null, which Unity treats as "not available" in the paths seen.
+  `Resources.getIdentifier`, `Activity.findViewById`. runtime/jni now defines the members of known
+  classes (insets: none; input device ids; `findViewById`: null; sustained performance: not
+  supported); the other classes answer 0/null, which Unity treats as "not available".
 - Java side (`classes.jar`, 95 classes): the same UnityPlayer model as 2017.4 (`initJni`,
   `nativeInitWebRequest`, a `UnityMain` looper thread posting frames to `nativeRender`).
   `showSoftInput` gained parameters; `UnityPlayerNativeActivity`/`ProxyActivity` are gone.
@@ -51,6 +52,6 @@ Compared with 2017.4.40f1 (and the 2017.4.9f1 baseline).
 - 194 `il2cpp_*` functions looked up; same loading and resource-copy path as 2017.4.
 
 ## What the tools need for this version
-- runtime/jni: byte[] `nativeUnitySendMessage`; optionally `nativeSendSurfaceChangedEvent`
-  after a resize.
+- runtime/jni: byte[] `nativeUnitySendMessage`, `nativeSendSurfaceChangedEvent` after a surface
+  change, the 9-argument `showSoftInput` and the new framework members (done).
 - converter: shader serializer 201802150 in LAYOUTS; MonoManager handling by `m_AssemblyTypes`.

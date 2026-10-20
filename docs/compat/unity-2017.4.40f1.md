@@ -22,8 +22,8 @@ Analysed: Release players of both backends, `classes.jar`, `unity default resour
 
 ## JNI
 - RegisterNatives: 45 natives, as in 2017.4.9, but **`UnityPlayer.nativeUnitySendMessage` now takes
-  `(String, String, byte[])`** (the message as UTF-8 bytes). `runtime/jni` calls it with three
-  Strings (`up_send_message`, `UnityPlayer.UnitySendMessage`): that lookup fails on this version.
+  `(String, String, byte[])`** (the message as UTF-8 bytes). `runtime/jni` used to call it with
+  three Strings; it now passes the UTF-8 bytes when that is what libunity registered.
 - Java members libunity binds: 402 (2017.4.9: 398). New: `ApplicationInfo.splitPublicSourceDirs`
   (split APKs; not defined in runtime/jni, reads as null), `Context.getApplicationInfo`,
   `AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE`, `MotionEvent.getPressure(int)`,
@@ -48,6 +48,7 @@ Analysed: Release players of both backends, `classes.jar`, `unity default resour
   copies IL2CPP reads the metadata from was not traced.
 
 ## What the tools need for this version
-- runtime/jni: the byte[] `nativeUnitySendMessage` (pick the signature libunity registered).
+- runtime/jni: the byte[] `nativeUnitySendMessage` (done: natives are called with the signature
+  libunity registered).
 - Everything else that works for 2017.4.9 should work: same libraries' interfaces, same data
   formats. arm64-v8a players exist here, so 2017.4.16+ IL2CPP Android builds can use the arm64 runtime.

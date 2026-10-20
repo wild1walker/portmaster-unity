@@ -45,4 +45,5 @@ Compared with 2019.4.40f1: a small step for the libraries, a format step for the
 
 ## What the tools need for this version
 - everything listed for 2019.4, plus: SerializedFile format 22 in the converter; the new
-  `newProxyInstance` signatures; `eglSurfaceAttrib` mapping for the SDL display path.
+  `newProxyInstance` signatures and `OrientationLockListener.nativeUpdateOrientationLockState`
+  (done in runtime/jni); `eglSurfaceAttrib` mapping for the SDL display path.

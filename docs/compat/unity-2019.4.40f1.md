@@ -80,9 +80,10 @@ not run.
 ## What the tools need for this version
 - runtime loader/bionic: `__FD_SET_chk`, `__FD_ISSET_chk`, `android_set_abort_message`, `__mmap2`;
   layout translation for `getpwuid_r` and `nftw` on 32-bit ARM.
-- runtime/jni: `nativeDone()Z`; long proxy handles and the new `newProxyInstance` signatures;
-  defaults for the new UnityPlayer methods; a decided Swappy behaviour (classes absent, or
-  `AChoreographer` shims).
+- runtime/jni (done): `nativeDone()Z`; long proxy handles, `newProxyInstance(long, ...)` and
+  `setNativeExceptionOnProxy`; handheld answers for the new UnityPlayer methods; `View.getDisplay`
+  and the display members; Swappy's Java classes absent (it then needs EGL without
+  `eglPresentationTimeANDROID` to switch itself off).
 - Mono: every Mono game of this version runs on `libmonobdwgc-2.0.so`, which the runtime has
   never run (Cuphead uses `libmono.so`).
 - converter: serializer 201806140, segmented blobs and 12-byte entries; MonoManager flags.
