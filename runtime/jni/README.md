@@ -10,6 +10,8 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ZipFile/ZipEntry, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback; one per looper thread), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
 | `up_media.c` | The video classes (VideoPlayer, see Video below): MediaExtractor, MediaFormat, MediaCodec (+BufferInfo), SurfaceTexture (+OnFrameAvailableListener), Surface(SurfaceTexture), ParcelFileDescriptor, FileDescriptor, java.nio Buffer/IntBuffer members. The work is `../media`'s (libuamedia.a); registered only in a program that links it (`up_media_init()` pulls it in; this folder's tests do not). |
+| `up_tls.c` | The system trust store as Android's Java side gives it to libunity's unitytls (2018.4+): TrustManagerFactory, X509TrustManager, Certificate/X509Certificate, KeyStore("AndroidCAStore"), over the handheld's CA bundle ([docs/plugins.md](../../docs/plugins.md#https)). |
+| `up_fmod.c` | `org.fmod.FMOD` (and `org.fmod.AudioDevice`), the Java side of FMOD Engine's Android libraries, for games whose port supplies them ([docs/plugins.md](../../docs/plugins.md#fmod)). |
 | `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
 | `test/` | Unit tests (see Tests). |
 | `build.sh`, `Makefile`, `docker/Dockerfile` | Build in docker image `ua-jni-build` (bookworm + gcc-arm-linux-gnueabihf + qemu-user), or with `ARCH=arm64` in `ua-build-arm64` (`../docker/arm64`). |
@@ -399,7 +401,8 @@ thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`.
   HTTP(S) transport; file: and jar: URLs are read natively) answers every request as a phone
   without a network does (`run()` reports UnknownHostException, errorCallback code 7 as Unity's
   Java side sends it), so `WWW`/`UnityWebRequest` complete with an error instead of never finishing;
-  2019.4+ use libunity's own transport, with TLS checks through `TrustManagerFactory` placeholders. The
+  2019.4+ use libunity's own transport, whose TLS checks take their anchors from `up_tls.c` (the
+  handheld's CA bundle; docs/plugins.md, "HTTPS"). The
   soft keyboard (`showSoftInput` is logged only), AlertDialog/Dialog/ProgressBar (activity indicator)
   and Presentation/MediaRouter (second display): placeholders.
 - 2019.4+: Play Asset Delivery (asset packs: none), `Camera2Wrapper`, `HFPStatus` (Bluetooth headset
