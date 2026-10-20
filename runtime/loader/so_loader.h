@@ -1,6 +1,7 @@
 /*
- * so_loader.h - ELF loader for Android ARMv7 (armeabi-v7a) shared libraries on
- * 32-bit ARM glibc Linux (armhf). Part of the Cuphead Unity-Android port.
+ * so_loader.h - ELF loader for Android ARM shared libraries on ARM glibc Linux:
+ * armeabi-v7a (ELF32) on armhf, arm64-v8a (ELF64) on aarch64. A build loads the
+ * libraries of its own architecture. Part of the Cuphead Unity-Android port.
  *
  * Ideas from the PS Vita so_loader (so_util.c) and PortMaster's gmloader;
  * the code is our own.
@@ -18,11 +19,37 @@
  * Symbols a module defines itself are bound to its own definition (as the Android
  * linker does for these libraries) unless the per-module shim table overrides them.
  *
- * ABI WARNING: armeabi-v7a code uses the *softfp* calling convention (float and
- * double arguments/results in core registers), our code is hard-float. Every C
- * function that Android code calls (shims, JNI functions) or that we call in
+ * Relocation tables: REL and RELA, Android's packed ones (DT_ANDROID_REL / _RELA,
+ * "APS2"), RELR (DT_RELR, and Android's earlier DT_ANDROID_RELR); IRELATIVE and
+ * IFUNC symbols. ELF TLS (PT_TLS) is refused: NDK code for API levels below 29 uses
+ * emulated TLS (__emutls_get_address, linked into each library).
+ *
+ * ABI WARNING (32-bit ARM): armeabi-v7a code uses the *softfp* calling convention
+ * (float and double arguments/results in core registers), our code is hard-float.
+ * Every C function that Android code calls (shims, JNI functions) or that we call in
  * Android code (JNI natives, callbacks) with float/double arguments or results must
- * be declared with SO_ABI. Variadic functions are unaffected.
+ * be declared with SO_ABI. Variadic functions are unaffected. On AArch64 Android and
+ * Linux share AAPCS64 and SO_ABI is empty.
+ *
+ * AArch64 THREAD SLOTS: bionic keeps per-thread slots at the thread pointer
+ * (tpidr_el0), and NDK code built with the stack protector loads its canary from
+ * slot 5, tpidr_el0 + 0x28, on entry to and exit from every protected function
+ * (32-bit ARM code reads the global __stack_chk_guard instead, a shim). glibc's
+ * tpidr_el0 points at its 16-byte TCB (the dtv pointer and an unused word), followed
+ * by the executable's static TLS block, then the libraries' (errno, ...). A canary
+ * that changes while a function runs aborts it, so so_loader.c makes that word ours:
+ * it defines the executable's first static TLS block, 48 bytes standing for bionic's
+ * slots 2-7 (tpidr_el0 + 16 .. + 63), with slot 5 holding a fixed canary that each
+ * new thread copies from the executable's TLS image. The block comes first because
+ * it is the executable's only initialized thread-local data (.tdata precedes .tbss).
+ * Rules for the host program, checked by every so_load() (which fails with an
+ * explanation otherwise):
+ *   - libsoloader.a is linked into the executable itself, not into a shared library;
+ *   - no other thread-local variable of the executable has an initial value
+ *     (`__thread int x = 1;`) or an alignment above 16.
+ * The other slots: 0-1 are glibc's TCB, which only bionic's libc reads; 3-4 (OpenGL)
+ * belong to Android's GLES wrapper libraries, 6 to HWASan, 7 to ART, none of which run
+ * here; their words are reserved and zero.
  */
 #ifndef SO_LOADER_H
 #define SO_LOADER_H
@@ -86,15 +113,19 @@ void so_register_fake_lib(const char *android_name, const so_shim *table);
 
 /* Returns a softfp-callable wrapper for a host function that takes or returns
  * floats (GL/GLES, libm), or fn itself if it needs none. Used for dlsym results
- * and by eglGetProcAddress shims (the EGL glue should call this too). */
+ * and by eglGetProcAddress shims (the EGL glue should call this too). AArch64: fn. */
 void *so_softfp_wrap(const char *name, void *fn);
 
-/* ARM EHABI unwinding support: finds the .ARM.exidx table for pc in our modules
- * (then in host objects). Exported under the libgcc/glibc name by so_loader.c:
+/* ARM EHABI unwinding support (32-bit ARM): finds the .ARM.exidx table for pc in our
+ * modules (then in host objects). Exported under the libgcc/glibc name by so_loader.c:
  * link the host executable with
  *     -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx
  * (or -rdynamic) so that the host libgcc_s unwinder, which libunity uses for C++
- * exceptions, can unwind through Android code. */
+ * exceptions, can unwind through Android code.
+ * AArch64 unwinds with .eh_frame instead, and arm64 Android libraries carry their own
+ * unwinder (bionic never exported one on LP64), which finds frames through
+ * dl_iterate_phdr: bionic_compat_table() routes that to the loader, which reports our
+ * modules, then the host's. so_find_exidx returns 0 there. */
 uintptr_t so_find_exidx(uintptr_t pc, int *pcount);
 
 /* dl* shims used by Android code (also part of bionic_shims). Handles are loader

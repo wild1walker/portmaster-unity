@@ -10,6 +10,9 @@
  * so_softfp_wrap(name, fn) is applied automatically by the loader to every import
  * or dlsym() result that comes from the host; it returns fn itself when the
  * function needs no wrapper. The list is printed by so_softfp_list().
+ *
+ * AArch64: Android and Linux both use AAPCS64 (floats in SIMD registers), so there is
+ * nothing to wrap and so_softfp_wrap() returns fn for every name.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -22,6 +25,7 @@
 #include <time.h>
 #include "so_loader.h"
 
+#if defined(__arm__)
 /* ---------------- GL / GLES (dynamic: real pointer captured at wrap time) ------ */
 typedef unsigned int GLenum;
 typedef int GLint;
@@ -261,6 +265,11 @@ void so_softfp_list(FILE *out)
     }
     fprintf(out, "\n");
 }
+#else
+void *so_softfp_wrap(const char *name, void *fn) { (void)name; return fn; }
+int so_softfp_count(void) { return 0; }
+void so_softfp_list(FILE *out) { fprintf(out, "\n"); }
+#endif
 
 /* eglGetProcAddress for Android code: host lookup + softfp wrapping. The EGL
  * glue (android/egl_glue.c) has its own, registered first; this is the fallback. */
