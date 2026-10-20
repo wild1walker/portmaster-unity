@@ -30,6 +30,7 @@ class Version:
         self.text = text
         self.major, self.minor, self.patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
         self.kind, self.build = m.group(4), int(m.group(5) or 0)
+        self.exact = True               # False: only the line is known for sure
 
     @property
     def line(self):

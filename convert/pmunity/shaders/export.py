@@ -39,7 +39,7 @@ def export(job, out_dir, bundles=r'.'):
             t = o.read_typetree()
             if B.PLATFORM_GLES3PLUS not in t['platforms']:
                 continue
-            entries = B.ShaderBlobs(t).entries(B.PLATFORM_GLES3PLUS)
+            entries = C.platform_entries(t, B.PLATFORM_GLES3PLUS)
             name = t['m_ParsedForm']['m_Name']
             for i, code in C.gles3_programs(t):
                 h = hashlib.sha1(code.encode()).hexdigest()

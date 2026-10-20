@@ -86,6 +86,10 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             f'{sum(r.twins for r in conv)} subprograms) in {changed_files} files; '
             f'{sum(r.status == "skipped" for r in results)} not translatable; precision {precision}; '
             f'rewrites: {sum(len(r.notes) for r in conv)} stages ({", ".join(sorted({n.split(" ", 1)[1].rsplit(" ", 1)[0] for r in conv for n in r.notes})) or "none"})')
+    es31 = sum(getattr(r, 'es31', 0) for r in conv)
+    if es31:
+        job.log(f'shaders: {es31} programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions): '
+                f'GLES 3.1 programs, used where the device has OpenGL ES 3.1+')
     vr = sum(r.dropped for r in conv if r.source == 'glcore')
     if vr:
         job.log(f'shaders: {vr} VR-only OpenGL Core variants not translatable (left out, never used on a handheld)')

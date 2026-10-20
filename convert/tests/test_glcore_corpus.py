@@ -67,11 +67,13 @@ def load_shaders(path):
 
 
 def gles3_subprograms(tree):
-    """Counter of (stage, subprogram, parameter index, blob index) of the GLES3 subprograms."""
+    """Counter of (stage, subprogram, parameter index, blob index) of the GLES3 subprograms (GLES
+    3.1 ones counted as GLES3: the conversion makes some, Unity's own data has none)."""
     out = collections.Counter()
     for p, st, lst, pbi in C.subprogram_lists(tree):
         for i, sp in enumerate(lst):
-            if sp['m_GpuProgramType'] == B.GPU_GLES3:
+            if sp['m_GpuProgramType'] in (B.GPU_GLES3, B.GPU_GLES31):
+                sp = dict(sp, m_GpuProgramType=B.GPU_GLES3)
                 out[(st, repr(sorted(sp.items())), None if pbi is None else pbi[i], sp['m_BlobIndex'])] += 1
     return out
 
@@ -127,9 +129,7 @@ class GLCoreCorpusTest(unittest.TestCase):
                 r = C.add_gles3(t, replace=True)
                 label = f'{ver} {name}'
                 if r.status == 'skipped':
-                    # the shader has a non-VR variant with no ES 3.00 equivalent: Unity's own GLES3
-                    # program of it does not compile either (e.g. sampler2DMS in 2022.3's
-                    # FrameDebuggerRenderTargetDisplay); the conversion leaves the shader out
+                    # a non-VR variant with no GLSL ES equivalent: the conversion leaves the shader out
                     self.count(f'{ver} shaders left out ({r.why.split(": ", 1)[-1]})')
                     continue
                 self.assertEqual(r.status, 'converted', label)
@@ -149,6 +149,13 @@ class GLCoreCorpusTest(unittest.TestCase):
                     if a.gpu_type == B.GPU_GLCORE32:          # a VR-only program left out
                         self.assertTrue(is_vr(a), f'{label} entry {i}')
                         continue
+                    if a.gpu_type == B.GPU_GLES31 and b.gpu_type == B.GPU_GLES3:
+                        # needs GLSL ES 3.10 (e.g. sampler2DMS): a GLES 3.1 program here; Unity's
+                        # own GLES3 program of it is "#version 300 es" and does not compile
+                        self.assertTrue(a.code.startswith(b'#ifdef VERTEX\n#version 310 es\n'), f'{label} entry {i}')
+                        self.count(f'{ver} programs made GLES 3.1 ones')
+                        b = b.copy()
+                        b.gpu_type = B.GPU_GLES31
                     for f in ('version', 'gpu_type', 'stats', 'keywords', 'local_keywords', 'rest'):
                         self.assertEqual(getattr(a, f), getattr(b, f), f'{label} entry {i} {f}')
                     if not a.code:

@@ -110,6 +110,7 @@ class Result:
         self.notes = []                 # rewrites applied (glsl.OPTIMIZE)
         self.source = 'glcore'          # the platform translated: glcore | d3d11
         self.dropped = 0                # VR-only variants left out (not translatable)
+        self.es31 = 0                   # programs that need GLSL ES 3.10 (GLES 3.1 programs, type 3)
         self.failed = []                # D3D11: (subshader, why) of SubShaders left without GLES3 programs
 
     def __repr__(self):
@@ -141,8 +142,11 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
         r.why = ('no GLCore32 programs ' + r.why).strip()
         return r
     tr = translate or (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes).encode('utf-8'))
+    tr31 = None if translate else \
+        (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes, es='310').encode('utf-8'))
     out = [e.copy() if e is not None else None for e in entries]
     dropped = set()                     # VR-only programs that do not translate: no twins
+    es31 = set()                        # programs translated as GLES 3.1 ones
     for i in used:
         e = out[i]
         if e is None:
@@ -152,7 +156,13 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
         r.guessed_layout |= e.guessed
         if e.code:
             try:
-                e.code = tr(e.code)
+                try:
+                    e.code = tr(e.code)
+                except glsl.NeedsES31:
+                    if tr31 is None:
+                        raise
+                    e.code = tr31(e.code)
+                    es31.add(i)
             except glsl.Unsupported as ex:
                 if any(k in VR_KEYWORDS for k in e.keywords + (e.local_keywords or [])):
                     dropped.add(i)      # e.g. STEREO_INSTANCING_ON writes gl_Layer (not in ES 3.00)
@@ -164,9 +174,18 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
                 return r
             r.programs += 1
         e.gpu_type = B.GPU_GLES3
-    # the variants (per pass) whose program was left out: none of their subprograms get a twin
+    # the variants (per pass) whose program was left out: none of their subprograms get a twin;
+    # those made GLES 3.1 programs: all their subprograms (and entries) are typed GLES 3.1
     skip = {(id(p), _variant_key(sp)) for p, _, lst in subprograms(tree) for sp in lst
             if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and sp['m_BlobIndex'] in dropped}
+    raised = {(id(p), _variant_key(sp)) for p, _, lst in subprograms(tree) for sp in lst
+              if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and sp['m_BlobIndex'] in es31}
+    for p, _, lst in subprograms(tree):
+        for sp in lst:
+            if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and (id(p), _variant_key(sp)) in raised:
+                if out[sp['m_BlobIndex']] is not None:
+                    out[sp['m_BlobIndex']].gpu_type = B.GPU_GLES31
+    r.es31 = len(es31)
     # commit: the blob, then the twins
     stages = blobs.stage_counts.get(B.PLATFORM_GLCORE) if blobs.stage_counts else None
     blobs.set_entries(B.PLATFORM_GLES3PLUS, out, blobs.segments(B.PLATFORM_GLCORE), stages)
@@ -176,7 +195,7 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
         for i, sp in enumerate(lst):
             if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and (id(p), _variant_key(sp)) not in skip:
                 t = copy.deepcopy(sp)
-                t['m_GpuProgramType'] = B.GPU_GLES3
+                t['m_GpuProgramType'] = B.GPU_GLES31 if (id(p), _variant_key(sp)) in raised else B.GPU_GLES3
                 twins.append((t, None if pbi is None else pbi[i]))
         for t, pi in twins:
             lst.append(t)
@@ -210,7 +229,7 @@ def gles3_programs(tree):
         return []
     entries = platform_entries(tree, B.PLATFORM_GLES3PLUS)
     idx = sorted({sp['m_BlobIndex'] for _, _, lst in subprograms(tree) for sp in lst
-                  if sp['m_GpuProgramType'] == B.GPU_GLES3})
+                  if sp['m_GpuProgramType'] in (B.GPU_GLES3, B.GPU_GLES31)})
     return [(i, entries[i].code.decode('utf-8')) for i in idx if entries[i] is not None and entries[i].code]
 
 

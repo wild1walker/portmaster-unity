@@ -39,16 +39,25 @@ default (`optimize`):
 On the RGSP's Mali-G31 both together make Cuphead's 7-tap blur passes ~4% cheaper (see
 tools/shadercheck -t); the rest of a pass is texture fetches.
 
-Programs that use GLSL with no ES 3.00 equivalent (fixed-function built-ins such as gl_Vertex,
-gl_FragColor in a 300 es shader, rectangle and 1D samplers, `noperspective`, ES 3.1+ functions) raise
-Unsupported; the converter then gives that shader no GLES3 programs, and Unity treats it as not
-supported on the device, just as a shader without GLES3 programs in an Android build.
+Programs that use what GLSL ES 3.10 has and 3.00 lacks (multisampled textures, texture gather,
+bit-field functions) raise NeedsES31; translated with es='310' (`#version 310 es`) they become
+GLES 3.1 programs, which Unity runs where the device has OpenGL ES 3.1 or later (the converter
+types them so). Programs that use GLSL with no ES equivalent (fixed-function built-ins such as
+gl_Vertex, gl_FragColor in a 300 es shader, rectangle and 1D samplers, `noperspective`, images,
+atomics, storage buffers) raise Unsupported; the converter then gives that shader no GLES3
+programs, and Unity treats it as not supported on the device, just as a shader without GLES3
+programs in an Android build.
 """
 import re
 
 
 class Unsupported(Exception):
     pass
+
+
+class NeedsES31(Unsupported):
+    """The program uses what GLSL ES 3.10 has and 3.00 lacks (multisampled textures, texture
+    gather, bit-field functions): it can be translated as a GLES 3.1 program (`es='310'`)."""
 
 
 VERSIONS = ('150', '330')                    # #version lines this translation handles
@@ -58,19 +67,19 @@ DROP_EXTENSIONS = {
 }
 SAMPLER_TYPES = ('sampler2D', 'sampler3D', 'samplerCube', 'sampler2DShadow', 'samplerCubeShadow',
                  'sampler2DArray', 'sampler2DArrayShadow', 'isampler2D', 'isampler3D', 'isamplerCube',
-                 'isampler2DArray', 'usampler2D', 'usampler3D', 'usamplerCube', 'usampler2DArray')
+                 'isampler2DArray', 'usampler2D', 'usampler3D', 'usamplerCube', 'usampler2DArray',
+                 'sampler2DMS', 'isampler2DMS', 'usampler2DMS')          # (the last three: ES 3.10)
 _SAMPLER_RE = re.compile(r'\b(%s)\b' % '|'.join(SAMPLER_TYPES))
 
 # no ES 3.00 equivalent
 _UNSUPPORTED = [
     (re.compile(r'\bgl_(Vertex|Normal|Color|SecondaryColor|MultiTexCoord\d|ModelView\w*|Projection\w*|NormalMatrix|TextureMatrix\w*|FragColor|FragData)\b'),
      'fixed-function built-in'),
-    (re.compile(r'\b(sampler1D\w*|sampler2DRect\w*|samplerBuffer|sampler2DMS\w*|image\w+D\w*)\b'), 'sampler type'),
+    (re.compile(r'\b(sampler1D\w*|sampler2DRect\w*|samplerBuffer|[iu]?sampler2DMSArray|image\w+D\w*)\b'), 'sampler type'),
     (re.compile(r'\b(texture1D\w*|texture2D\w*|texture3D\w*|textureCube\w*|shadow2D\w*)\s*\('), 'GLSL 1.10 texture function'),
-    (re.compile(r'\b(textureGather\w*|textureQueryLod|textureQueryLevels|fma|bitfield\w+|bitCount|findLSB|findMSB|'
-                r'imageLoad|imageStore|atomic\w+|memoryBarrier\w*|barrier|interpolateAt\w+|packUnorm4x8|packSnorm4x8|'
-                r'unpackUnorm4x8|unpackSnorm4x8|uaddCarry|usubBorrow|umulExtended|imulExtended|frexp|ldexp)\s*\('),
-     'ES 3.1+ function'),
+    (re.compile(r'\b(textureQueryLod|textureQueryLevels|fma|imageLoad|imageStore|atomic\w+|memoryBarrier\w*|barrier|'
+                r'interpolateAt\w+)\s*\('),
+     'ES 3.2+ / desktop function'),
     (re.compile(r'\b(noperspective|sample|patch|subroutine|precise)\b(?=\s+(in|out|uniform|centroid|flat|smooth|vec|float|int|uint|mat|bool))'),
      'qualifier'),
     (re.compile(r'layout\s*\([^)]*\b(binding|offset|std430|index)\b'), 'layout qualifier'),
@@ -78,6 +87,12 @@ _UNSUPPORTED = [
     (re.compile(r'\b(gl_ClipDistance|gl_PrimitiveID|gl_Layer|gl_ViewportIndex|gl_SampleID|gl_SamplePosition|gl_SampleMask\w*)\b'),
      'built-in variable'),
     (re.compile(r'\b(double|dvec\d|dmat\d)\b'), 'double precision'),
+]
+# what GLSL ES 3.10 has (Unity's GLES 3.1 programs, gpu program type 3, run where the device has ES 3.1+)
+_ES31 = [
+    (re.compile(r'\b[iu]?sampler2DMS\b'), 'sampler type'),
+    (re.compile(r'\b(textureGather\w*|bitfield\w+|bitCount|findLSB|findMSB|packUnorm4x8|packSnorm4x8|unpackUnorm4x8|'
+                r'unpackSnorm4x8|uaddCarry|usubBorrow|umulExtended|imulExtended|frexp|ldexp)\s*\('), 'ES 3.1 function'),
 ]
 
 
@@ -183,14 +198,19 @@ def _code_lines(body):
     return re.sub(r'^[ \t]*#[^\n]*', '', body, flags=re.M)
 
 
-def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None):
-    """One stage's source (starting with its #version line) -> GLSL ES 3.00."""
+def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None, es='300'):
+    """One stage's source (starting with its #version line) -> GLSL ES 3.00 (es='310': 3.10)."""
     body = _strip_comments(src)
     code = _code_lines(body)
     for rx, what in _UNSUPPORTED:
         m = rx.search(code)
         if m:
             raise Unsupported(f'{stage}: {what} {m.group(0).strip()!r}')
+    if es == '300':
+        for rx, what in _ES31:
+            m = rx.search(code)
+            if m:
+                raise NeedsES31(f'{stage}: {what} {m.group(0).strip()!r} (GLSL ES 3.10)')
     lines = src.splitlines(keepends=True)
     out = []
     i = 0
@@ -201,7 +221,7 @@ def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None):
         raise Unsupported(f'{stage}: no #version line')
     if m.group(1) not in VERSIONS or m.group(2):
         raise Unsupported(f'{stage}: #version {m.group(1)} {m.group(2)}'.rstrip())
-    out.append('#version 300 es\n')
+    out.append(f'#version {es} es\n')
     i += 1
     # the extension directives right after #version (they must precede any declaration); Unity
     # 2019+ wraps the optional ones: #ifdef GL_ARB_shader_bit_encoding / #extension ... / #endif
@@ -244,9 +264,10 @@ def precision_block(body, precision='highp'):
     return ''.join(p)
 
 
-def program_to_es(code, precision='highp', optimize=OPTIMIZE, notes=None):
-    """A whole GL program (every stage block) -> its GLSL ES 3.00 twin. Text outside the stage
-    blocks (none in HLSLcc output) is kept. notes: a list that gets the rewrites applied."""
+def program_to_es(code, precision='highp', optimize=OPTIMIZE, notes=None, es='300'):
+    """A whole GL program (every stage block) -> its GLSL ES 3.00 twin (es='310': 3.10, for
+    programs that raise NeedsES31). Text outside the stage blocks (none in HLSLcc output) is kept.
+    notes: a list that gets the rewrites applied."""
     blocks = stage_blocks(code)
     if not blocks:
         raise Unsupported('no stage blocks')
@@ -256,7 +277,7 @@ def program_to_es(code, precision='highp', optimize=OPTIMIZE, notes=None):
         if stage not in ('VERTEX', 'FRAGMENT'):
             raise Unsupported(f'{stage} stage')
         out.append(code[last:a])
-        out.append(stage_to_es(code[a:b], stage, precision, optimize, notes))
+        out.append(stage_to_es(code[a:b], stage, precision, optimize, notes, es))
         last = b
     out.append(code[last:])
     return ''.join(out)
