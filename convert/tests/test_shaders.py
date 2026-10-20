@@ -535,7 +535,7 @@ class GLCore4xConvertTest(unittest.TestCase):
         self.assertEqual((ours[2].rest, ours[3].rest), (es[2].rest, es[3].rest))
         self.assertTrue(ours[2].code.startswith(b'#ifdef VERTEX\n#version 310 es\n'))
         self.assertEqual([i for i, _ in C.gles3_programs(tree)], [2, 3])
-        # GLCore32 programs only (the converter before, and 2017.x data): SubShader 0 gets nothing
+        # GLCore32 programs only (the converter before; glcore4x off): SubShader 0 gets nothing
         old = copy.deepcopy(before)
         r = C.add_gles3(old, glcore4x=False)
         self.assertEqual((r.status, r.programs, r.twins), ('converted', 1, 1))
@@ -607,19 +607,12 @@ class GLCore4xConvertTest(unittest.TestCase):
         sb = B.ShaderBlobs(tree)
         self.assertEqual(sb.platforms[9], sb.platforms[15])
 
-    def test_version_gate(self):
-        """step.glcore4x_for: by the Unity version in the file's header (2018.1+), unless forced."""
-        import tempfile
+    def test_glcore4x_default(self):
+        """step.glcore4x_for: on unless a port's config turns it off, for data of every version."""
         from pmunity.shaders import step
-        with tempfile.TemporaryDirectory() as d:
-            for ver, want in (('2017.4.9f1', False), ('2017.3.0f3', False), ('2018.1.0f2', True), ('2022.3.36f1', True)):
-                path = os.path.join(d, ver)
-                with open(path, 'wb') as f:      # SerializedFile header (format 17): sizes, format, offset, endianness
-                    f.write(struct.pack('>IIII', 0, 0, 17, 0) + b'\0' * 4 + ver.encode() + b'\0' * 40)
-                self.assertEqual(step.glcore4x_for(path), want, ver)
-                self.assertTrue(step.glcore4x_for(path, True))
-                self.assertFalse(step.glcore4x_for(path, False))
-
+        self.assertTrue(step.glcore4x_for('any'))
+        self.assertTrue(step.glcore4x_for('any', True))
+        self.assertFalse(step.glcore4x_for('any', False))
 
 if __name__ == '__main__':
     unittest.main()

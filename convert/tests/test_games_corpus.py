@@ -6,8 +6,8 @@ the repository; run Python with -I on data you downloaded):
 Per data folder: the Unity version is read and supported; in every serialized file (and asset
 bundle under StreamingAssets) every Shader with OpenGL Core programs has blobs that read and write
 back byte for byte (segments included) and converts in memory, nothing written, GLCore41/43
-programs included as the shaders step decides by the file's Unity version (step.glcore4x_for;
-PMUNITY_GAMES_GLCORE4X=1 / 0 forces it). A shader, or a SubShader's GLCore41/43 variants, may be
+programs included as the shaders step does by default (step.glcore4x_for;
+PMUNITY_GAMES_GLCORE4X=0 turns them off). A shader, or a SubShader's GLCore41/43 variants, may be
 left out only for GLSL with no ES equivalent (reported per game, with the shader names when
 PMUNITY_GAMES_VERBOSE=1); every converted program is GLSL ES 3.00 (or 3.10, typed GLES 3.1), and
 every GLES subprogram names a translated entry of its own type. PMUNITY_GAMES_EXPORT=<dir>: the

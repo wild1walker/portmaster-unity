@@ -80,8 +80,8 @@ Notes on the rows:
   their own and subprograms in per-tier lists. GLCore41/43: the GLSL 4.x programs of `#pragma
   target 4.5`+ shaders (URP's error shaders and FSR upscaler, the 4.5 SubShaders of its
   post-processing, particles' procedural instancing, `unity_builtin_extra`'s `BlitToDepth` in
-  every game) become GLES3 or GLES 3.1 programs from 2018.1 on; 2017.x data keeps the earlier
-  output, GLCore32 programs only (Cuphead's port; `shaders.glcore4x` forces either way). A shader
+  every game) become GLES3 or GLES 3.1 programs (on by default; `shaders.glcore4x: false` keeps the
+  earlier output, GLCore32 programs only, as Cuphead's port does). A shader
   whose variants were all stripped (URP's `StencilDeferred`, `BlitHDROverlay`) gets an empty GLES3
   blob, as in Unity's builds. D3D11: 2019.1+ GL programs carry constant buffer layouts the D3D11
   data does not give (refused with that reason).

@@ -136,8 +136,7 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
     (otherwise it is left alone). translate: function(code bytes) -> code bytes, default glsl.program_to_es with
     `precision` and the `optimize` rewrites. glcore4x: also translate GLCore41 / GLCore43 programs,
     and give a shader with no GLCore programs at all (every variant stripped) an empty GLES3 blob
-    (False: GLCore32 programs only, the converter's behaviour before; step.py keeps it for Unity
-    2017.x data).
+    (False: GLCore32 programs only, the converter's behaviour before; a port's config can keep it).
 
     GLCore32 programs: a non-VR one that does not translate leaves the whole shader without GLES3
     programs (Unity then does not mix translated and missing variants). GLCore41/43 programs are

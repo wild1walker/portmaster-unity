@@ -11,34 +11,25 @@ Core, macOS / Linux builds; the default) and 'd3d11' (Direct3D 11, Windows build
 HLSLcc: tools/hlslcc). A shader is translated from the first one it has.
 
 `glcore4x`: also translate the GLCore41 / GLCore43 programs (`#pragma target 4.5` and up) and
-give shaders whose variants were all stripped an empty GLES3 blob (convert.add_gles3). None (the
-default; also the config's `"shaders": {"glcore4x": "auto"}`) decides by the Unity version of each
-file: on from 2018.1, off for 2017.x data, whose output stays what the converter wrote before (the
-2017.4 line, Cuphead's port among them, was checked on the device that way); True / False (config
-`true` / `false`, or `pmunity convert --set shaders.glcore4x=true`) force it.
+give shaders whose variants were all stripped an empty GLES3 blob (convert.add_gles3). On by
+default, for data of every Unity version; config `"shaders": {"glcore4x": false}` (or `pmunity
+convert --set shaders.glcore4x=false`) keeps a port on the output the converter wrote before
+(Cuphead's port, which was checked on the device that way, sets it).
 """
 import os
 import re
 
-from .. import unity_version as UV
 from ..unity_io import Loaded
 from . import blob as B
 from . import convert as C
 from . import dxbc
 
 SOURCES = {'glcore': B.PLATFORM_GLCORE, 'd3d11': B.PLATFORM_D3D11}
-GLCORE4X_FROM = (2018, 1, 0)            # glcore4x=None: GLCore41/43 programs translated from this Unity version on
 
 
 def glcore4x_for(path, glcore4x=None):
-    """Whether the GLCore41/43 programs of a serialized file or bundle are translated (glcore4x None:
-    by its Unity version)."""
-    if glcore4x is not None:
-        return bool(glcore4x)
-    try:
-        return UV.of_file(path) >= GLCORE4X_FROM
-    except (OSError, ValueError):
-        return True
+    """Whether the GLCore41/43 programs of a serialized file or bundle are translated (None: yes)."""
+    return True if glcore4x is None else bool(glcore4x)
 
 
 def shader_files(job, bundles=r'.'):
@@ -67,9 +58,8 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     glcore4x: see the module docstring."""
     if glcore4x is None:
         glcore4x = (job.cfg.get('shaders') or {}).get('glcore4x')
-    if glcore4x not in (None, True, False, 'auto'):
-        raise ValueError(f'shaders.glcore4x: {glcore4x!r} (true, false or "auto")')
-    glcore4x = None if glcore4x == 'auto' else glcore4x
+    if glcore4x not in (None, True, False):
+        raise ValueError(f'shaders.glcore4x: {glcore4x!r} (true or false)')
     for src in sources:
         if src not in SOURCES:
             raise ValueError(f'unknown shader source {src!r} (known: {", ".join(SOURCES)})')
@@ -125,7 +115,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 f'programs; {len(sub)} SubShaders left out (no ES equivalent); '
                 f'{sum(r.empty for r in gl4)} shaders without programs (stripped) given an empty GLES3 blob')
     elif any(r.source == 'glcore' for r in results):
-        job.log('shaders: GLCore41/43 programs not translated (Unity 2017.x data, or glcore4x off)')
+        job.log('shaders: GLCore41/43 programs not translated (glcore4x off)')
     vr = sum(r.dropped for r in conv if r.source == 'glcore')
     if vr:
         job.log(f'shaders: {vr} VR-only OpenGL Core variants not translatable (left out, never used on a handheld)')

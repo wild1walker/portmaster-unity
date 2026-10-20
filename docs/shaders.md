@@ -91,15 +91,14 @@ are kept) and the fallback elsewhere, as an Android build of the game would, and
 build does on OpenGL 4.3+ and on 3.2 (the fallback does with plain fetches what SubShader 0 does
 with `textureGather`, in URP's depth of field).
 
-**Unity 2017.x data**: off by default. The outputs of the 2017.4 line (Cuphead's port, checked on
-the device) stay byte for byte what the converter wrote before, which had GLCore32 programs only:
-there `BlitToDepth`, `BlitToDepth_MSAA` and the `#pragma target 4.5+` SubShaders of the
-post-processing stack keep no GLES programs (the 2017.4 player logs "Desired shader compiler
-platform 9 is not available" for the two blits at startup and runs on). The shaders step decides
-by each file's Unity version (from 2018.1 on); the config's `"shaders": {"glcore4x": true}` (or
-`pmunity convert ... --set shaders.glcore4x=true`) turns it on for 2017.x data too, `false` off for
-any version. On, Cuphead's 14 GLCore43 programs translate as well (9 of them GLES 3.1: the eye
-adaptation histogram's storage buffer, `textureGather` in depth of field) and link on Mesa.
+**On by default, for every Unity version.** `"shaders": {"glcore4x": false}` in a port's config
+(or `pmunity convert ... --set shaders.glcore4x=false`) keeps the converter's earlier output,
+GLCore32 programs only. Cuphead's port sets it: its output was checked on the device that way and
+stays byte for byte the same (`BlitToDepth`, `BlitToDepth_MSAA` and the `#pragma target 4.5+`
+SubShaders of its post-processing keep no GLES programs; the 2017.4 player logs "Desired shader
+compiler platform 9 is not available" for the two blits at startup and runs on). On, Cuphead's 14
+GLCore43 programs translate as well (9 of them GLES 3.1: the eye adaptation histogram's storage
+buffer, `textureGather` in depth of field) and link on Mesa.
 
 ## Unity versions
 
