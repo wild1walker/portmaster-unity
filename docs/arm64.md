@@ -68,7 +68,10 @@ Android code reaches it on arm64); `__gnu_Unwind_Find_exidx` and its link flag a
 | `sem_t` | 16 bytes, the first word is the semaphore | the same futex code as 32-bit |
 | `struct stat`, `statfs` | the kernel's generic layouts = glibc's | passed through (`stat64` names too) |
 | `FILE` / `__sF` | 152-byte `__sFILE` | libhybris (LP64 layout) |
-| `mbstate_t` | 8 bytes | per-thread state, as on 32-bit |
+| `mbstate_t` | 8 bytes | per-thread state for `mbrtowc`/`wcrtomb`, as on 32-bit; the string conversions (`mbsrtowcs`, ...) pass it to glibc (same size) |
+| `struct passwd`, `struct statvfs` | glibc's layouts (`pw_gecos` present; 11 longs + 24 reserved bytes) | passed through (32-bit ARM translates both) |
+| `nftw`/`ftw`, `fnmatch`, `pathconf` | BSD flag values (`FTW_DEPTH` 4 / `FTW_CHDIR` 8, `FTW_DP` 3 / `NS` 4 / `SL` 5; `FNM_NOESCAPE` 1 / `FNM_PATHNAME` 2; `_PC_*` numbered from `_PC_FILESIZEBITS` 0) | translated on both architectures |
+| fortify | `__FD_SET_chk`, `__strlen_chk`, ... (bionic-only) | ours, with bionic's checks and messages; the `__*_chk` glibc also has go to glibc |
 | `__fpclassify*` | bionic's `FP_*` values | translated (no softfp wrappers on AArch64) |
 | dlfcn | `RTLD_GLOBAL` 0x100, `RTLD_DEFAULT` 0, `RTLD_NEXT` -1 | handled |
 

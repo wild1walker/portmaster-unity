@@ -17,16 +17,23 @@ still `UnityPlayer` + `UnityPlayerActivity`.
 - **`libmediandk.so` is a hard dependency now** (VideoPlayer moved from Java MediaCodec to the
   NDK): strong imports of `AMediaCodec_*` (configure, start/stop, buffers), `AMediaExtractor_*`,
   `AMediaFormat_*` and the `AMEDIAFORMAT_KEY_*` string constants (data objects); weak imports of
-  `AImageReader_*`, `AImage_*`, `AMediaDataSource_*`, newer keys. The loader refuses
-  `libmediandk*` and has no shim for it, so **libunity 2022.3 does not load** until a stub
-  libmediandk is provided (every call failing cleanly, the key constants defined).
+  `AImageReader_*`, `AImage_*`, `AMediaDataSource_*`, newer keys. Provided now by stubs
+  (`android/media_ndk.c`): every call fails cleanly, the key constants hold the NDK's strings, and
+  `libmediandk.so` is one of the loader's Android-only libraries (served by shims). Before, the
+  DT_NEEDED entry was skipped as a system library, the functions bound to the loader's abort stub
+  and the key objects to zeroed blocks.
 - libandroid: weak `AHardwareBuffer_acquire/describe/release`, `ANativeWindow_toSurface` (0 if
   absent: fine). A weak C++ `thread_local` init hook (`_ZTH...`) appears; there is still no ELF TLS.
-- Not provided (as 2021.3): `__FD_SET_chk`, `__FD_ISSET_chk`, `__strlen_chk` (arm64),
-  `android_set_abort_message`; Mono: `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`,
+- Not provided before (as 2021.3), provided now: `__FD_SET_chk`, `__FD_ISSET_chk`, `__strlen_chk`
+  (arm64), `android_set_abort_message`; Mono: `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`,
   `__strlcpy_chk`, `__mmap2`, `sys_signame`.
-- New `*_l` locale calls (`isdigit_l`, `strftime_l`, ... on arm64) go to glibc with the locale
-  object libhybris' `newlocale` returned: check that it is a glibc `locale_t`.
+- New `*_l` locale calls (`isdigit_l`, `islower_l`, `isupper_l`, `iswlower_l`, `isxdigit_l`,
+  `strftime_l` on arm64; `strtold_l`, `strtoll_l`, `strtoull_l` since 2019.4) go to glibc. The
+  locale objects come from libc++'s `newlocale`, which libhybris passed straight to glibc (so they
+  were glibc `locale_t`s, but a name bionic accepts and the host lacks, such as `en_US.UTF-8`,
+  failed). `newlocale` now follows bionic: "C"/"POSIX", "C.UTF-8"/"en_US.UTF-8"/"" (glibc's
+  C.UTF-8, or C where the host has none), ENOENT for other names; the objects stay glibc's.
+  `strtold_l` returns floating point: a softfp wrapper on 32-bit ARM.
 
 ## JNI
 - RegisterNatives: 48. **`nativeInjectEvent` takes `(InputEvent, int)`** (an extra int; Java
@@ -60,7 +67,8 @@ still `UnityPlayer` + `UnityPlayerActivity`.
   up to date, not extracting" when `unity_app_guid` matches).
 
 ## What the tools need for this version
-- loader/android: a libmediandk stub (blocker), the bionic fortify shims, `__mmap2`, `sys_signame`.
+- loader/android: done (libmediandk stubs, the bionic fortify shims, `__mmap2`, `sys_signame`,
+  `newlocale`).
 - runtime/jni: `nativeInjectEvent(InputEvent, int)` (blocker for input), plus everything from
   2019.4-2021.3.
 - converter: OBB GUID file; otherwise as 2021.3.

@@ -16,12 +16,17 @@ Compared with 2018.4.36f1. The biggest step of the LTS line.
 ## Native imports
 - armeabi-v7a `libunity` 373 imports, all provided. New ones going to glibc that need an ABI
   look: `getpwuid_r` (bionic's 32-bit `struct passwd` has no `pw_gecos`: glibc writes a
-  different layout), `nftw` (the callback gets a glibc `struct stat`, not bionic's),
-  `sched_get/setaffinity` (fine: size passed), `capset`, `strtoimax`, many `isw*`.
-- arm64-v8a `libunity` 353 imports; **not provided**: `__FD_SET_chk`, `__FD_ISSET_chk` (bionic
-  fortify for `select()`), `android_set_abort_message`. Called, they hit the loader's abort stub.
-- `libmonobdwgc-2.0.so` and `libMonoPosixHelper.so` (armeabi-v7a): **`__mmap2`** not provided
-  (bionic's 32-bit mmap with a page offset); `__end__` is a weak data import (0 is fine).
+  different layout), `nftw` (the callback gets bionic's `struct stat`, glibc's stat64 there; and
+  bionic's BSD values for the walk flags and callback types differ from glibc's), `fnmatch` (BSD
+  flag values), `mbrlen` (4-byte `mbstate_t`), `sched_get/setaffinity` (fine: size passed),
+  `capset`, `strtoimax`, many `isw*`. All translated in `loader/hybris_compat.c` now.
+- arm64-v8a `libunity` 353 imports; `__FD_SET_chk`, `__FD_ISSET_chk` (bionic fortify for
+  `select()`), `android_set_abort_message` were not provided (the loader's abort stub); they are
+  now, with bionic's checks.
+- `libmonobdwgc-2.0.so` and `libMonoPosixHelper.so` (armeabi-v7a): **`__mmap2`** (bionic's 32-bit
+  mmap with a page offset) provided now; `__end__` is a weak data import (0 is fine).
+  `pathconf`/`fpathconf` (bionic's `_PC_*` numbering), `mknod` (32-bit `dev_t`) and `sem_open`
+  (none on Android: ENOSYS) are translated too.
 - Strings show dlsym'd NDK APIs: `AChoreographer_getInstance/postFrameCallback(Delayed)/
   registerRefreshRateCallback` (Swappy, see below), `libmediandk.so` (video, falls back to JNI),
   `libvulkan.so`, `eglPresentationTimeANDROID`.
@@ -59,9 +64,12 @@ Compared with 2018.4.36f1. The biggest step of the LTS line.
 `AChoreographer_*` in libandroid (our shim has none: NULL), then falls back to Java
 (`com.google.androidgamesdk.ChoreographerCallback`, loaded from its embedded dex through
 `dalvik.system.InMemoryDexClassLoader` if the class is missing) and needs the
-`EGL_ANDROID_get_frame_timestamps`/`eglPresentationTimeANDROID` extensions. With none of these,
-Swappy should switch itself off ("Swappy is disabled") and Unity presents as before; that path was
-not run.
+`EGL_ANDROID_get_frame_timestamps`/`eglPresentationTimeANDROID` extensions. Decided: Swappy stays
+off. The libandroid shims have no `AChoreographer_*`, and the EGL glue's `eglGetProcAddress`
+answers NULL for the Android frame-timing functions even when the driver has entry points, so
+Swappy's EGL setup fails and it switches itself off ("Swappy is disabled"); Unity presents with
+`eglSwapBuffers` at the swap interval as before. runtime/jni should answer the Java classes above
+as absent. Not run with a player yet.
 
 ## Data
 - `unity default resources`: **format 21**, "2019.4.38f1", platform 13 (format 21 is still the
@@ -78,8 +86,8 @@ not run.
 - 222 `il2cpp_*` functions (new: incremental GC, write barriers, debugger agent, unitytls).
 
 ## What the tools need for this version
-- runtime loader/bionic: `__FD_SET_chk`, `__FD_ISSET_chk`, `android_set_abort_message`, `__mmap2`;
-  layout translation for `getpwuid_r` and `nftw` on 32-bit ARM.
+- runtime loader/bionic: done (`__FD_SET_chk`, `__FD_ISSET_chk`, `android_set_abort_message`,
+  `__mmap2`; `getpwuid_r`, `nftw`, `fnmatch`, `pathconf` translated).
 - runtime/jni: `nativeDone()Z`; long proxy handles and the new `newProxyInstance` signatures;
   defaults for the new UnityPlayer methods; a decided Swappy behaviour (classes absent, or
   `AChoreographer` shims).

@@ -15,12 +15,15 @@ Compared with 2020.3.48f1. 2021.3.45f2 (2025-10) is a re-release of 2021.3.45f1 
   **`__FD_SET_chk`, `__FD_ISSET_chk`** (armeabi-v7a too now), **`__strlen_chk`** (arm64);
   plus `android_set_abort_message` (arm64). Glibc-provided fortify calls (`__memcpy_chk`,
   `__vsnprintf_chk`, ...) resolve to the host.
-- Mono libraries (armeabi-v7a), not provided: **`__strlen_chk`, `__strchr_chk`, `__strrchr_chk`,
-  `__strlcpy_chk`, `__mmap2`, `sys_signame`** (bionic's signal-name table, a data import).
-- New host-resolved calls worth a check: `wcstod`/`wcstof` in armeabi-v7a libunity return
-  floating point and have **no softfp wrapper** in `loader/softfp.c` (wrong values on armhf);
-  `statvfs`/`fstatvfs` in libMonoPosixHelper (bionic's 32-bit `struct statvfs` uses 64-bit
-  counts); `sincos(f)` and the libm additions are wrapped.
+- Mono libraries (armeabi-v7a), not provided before: **`__strlen_chk`, `__strchr_chk`,
+  `__strrchr_chk`, `__strlcpy_chk`, `__mmap2`, `sys_signame`** (bionic's signal-name table, a data
+  import). All provided now (`loader/hybris_compat.c`, bionic's checks and messages).
+- New host-resolved calls worth a check: `wcstod`/`wcstof` and `strtold_l` in armeabi-v7a libunity
+  return floating point: softfp wrappers in `loader/softfp.c` now (they returned garbage on
+  armhf); `statvfs`/`fstatvfs` in libMonoPosixHelper: bionic's 32-bit `struct statvfs` is eleven
+  `unsigned long`s (44 bytes; `fsblkcnt_t`/`fsfilcnt_t` are `unsigned long` there), glibc's 72
+  bytes with an int after `f_fsid`: translated now; `mbsrtowcs`/`mbsnrtowcs`/`wcsnrtombs` (4-byte
+  `mbstate_t`): translated; `sincos(f)` and the libm additions are wrapped.
 - Strings: `ANativeWindow_setFrameRate`, `ATrace_*`, the `AMediaCodec/AMediaExtractor/AMediaFormat`
   set (dlsym'd from libmediandk in this version), `AChoreographer_*`, ARCore.
 
@@ -57,6 +60,7 @@ Compared with 2020.3.48f1. 2021.3.45f2 (2025-10) is a re-release of 2021.3.45f1 
   `unity_set_android_network_up_state_func`).
 
 ## What the tools need for this version
-- bionic shims: the fortify set above, `sys_signame`, `__mmap2`, softfp `wcstod`/`wcstof`.
+- bionic shims: done (the fortify set above, `sys_signame`, `__mmap2`, softfp `wcstod`/`wcstof`/
+  `strtold_l`, `statvfs`).
 - runtime/jni: as 2020.3 (+ `nativeGetSoftInputType` is only called by Java).
 - converter: serializer 202012090 with separate parameter entries and per-tier subprograms.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Names the runtime itself provides to Android libraries (before the host's glibc fallback):
 the loader's bionic table (hybris_compat.c), the libhybris hooks it compiles in, the Android
-shims (liblog, libandroid, OpenSL ES, EGL glue), the loader's own tables, and the libraries the
-loader maps, serves with shims or refuses (so_loader.c).
+shims (liblog, libandroid, OpenSL ES, libmediandk, EGL glue), the loader's own tables, and the
+libraries the loader maps, serves with shims or refuses (so_loader.c).
 
 usage: python3 -I shimnames.py RUNTIME_DIR          -> one "kind<TAB>name" per line
        import shimnames; shimnames.provided(RUNTIME_DIR) -> {name: kind}
@@ -29,7 +29,8 @@ def provided(rt):
         out.setdefault(m.group(1), 'libhybris')
     tab = _read(os.path.join(rt, 'android/shim_tables.c'))
     for macro, kind in (('LOG_FUNCS', 'liblog'), ('NDK_FUNCS', 'libandroid'), ('SLES_FUNCS', 'opensles'),
-                        ('SLES_IIDS', 'opensles')):
+                        ('SLES_IIDS', 'opensles'), ('MEDIANDK_FUNCS', 'libmediandk'),
+                        ('MEDIANDK_KEYS', 'libmediandk')):
         m = re.search(r'#define %s\(X\)((?:.*\\\n)*.*)' % macro, tab)
         if m:
             for n in re.findall(r'X\((\w+)\)', m.group(1)):
