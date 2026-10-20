@@ -162,10 +162,12 @@ way (78 of 136; the others are VR and frame-debugger variants), and 41 without i
   | 2021.3.16f1 (URP) | SF 22, segments (URP UberPost: 3 segments, 2048 entries), 202012090 | 84 (6: error shaders, FSR upscaler, blits, `StencilDeferred` empty; + post-processing SubShaders) | 2607 (112; 10) | VR blit, URP XR occlusion mesh | 1008 / 1008 |
   | 2022.3.36f1 (URP) | SF 22, segments, 202012090 | 84 (4: FSR upscaler, blits, `BlitHDROverlay` empty; + post-processing SubShaders, particles' instancing variants) | 1199 (59; 57) | VR blit, a third-party outline shader (`noperspective`: ES has it only with `GL_NV_shader_noperspective_interpolation`), URP `HDRDebugView` (writes an image declared without a format; HDR output debugging) | 948 / 948 |
 
-  Before GLCore41/43 programs were translated: 34, 34, 51, 78 and 80 shaders from 2018.4 on; the
+  Before GLCore41/43 programs were translated: 34, 34, 51, 78 and 80 shaders from 2018.4 on. The
   players log "Desired shader compiler platform 9 is not available in shader blob" for each shader
-  without a GLES3 blob they load (under emulation: 5 times in the 2021.3 game, 3 in the 2022.3 one,
-  twice in the 2017.4 one, which are its two blits).
+  without a GLES3 blob they load: under emulation 5 times in the 2021.3 game and 3 in the 2022.3
+  one before, once in each now (a shader left out above); twice in the 2017.4 game (its two
+  blits, 2017.x). Both URP games still stop on Unity's graphics thread after two frames, at the
+  same place as before: not a shader of these.
 
 What was not checked: nothing of this has run in a Unity player of these versions; Unity's own
 GLES3 programs of a game's shaders were not available to compare with (only built-ins), and for
