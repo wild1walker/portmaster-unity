@@ -117,6 +117,13 @@ Java side, data loading and the picture do.
 | 2021.3.16 | URP, bdwgc, Burst | first screen (name entry), then the main menu; was a SIGSEGV after 2 frames (Swappy's NULL EGL table), then a hang in `WaitVSync` (vsync clock on UnityMain; Swappy's -1 swap duration) |
 | 2022.3.36 | URP, bdwgc, FMOD Studio, Steamworks.NET, Burst | title screen; was the same SIGSEGV, then `Application.Quit` (no `libsteam_api.so`); FMOD stays silent without ARM FMOD libraries |
 
+Windows builds (Direct3D 11 shaders translated with HLSLcc, `--set shaders.from=d3d11`; six free
+Windows-only Mono games, docs/shaders.md "Windows builds"): a 2018.3.7f1 3D game starts in its
+first level; 2019.2.5f1: title screen; 2019.3.14f1 (URP): Unity splash, title menu; 2020.3.44f1:
+splash, first screen; 2021.3.28f1: title menu once its class libraries are the Unix ones
+(`pmunity.winbcl`; with the Windows ones Mono asserts in the Input System's start, then SIGSEGV);
+2022.3.62f3 (URP): title menu (its Windows class libraries had failed only System.Console).
+
 What these runs still show: Unity's optional Java classes (`GoogleARCoreApi`, `Camera2Wrapper`,
 `HFPStatus`, `AudioVolumeHandler`, `SoftInputProvider`) are placeholders that only get natives
 registered; cursor images (`Bitmap`/`PointerIcon`) and video decoding are other work; HTTPS from

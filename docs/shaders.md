@@ -338,7 +338,8 @@ GLCore and GLES3 programs of the variant, with the same code up to temporaries:
 
 | player resources | D3D11 subprograms | variants translated (VR-only left out) | same code as Unity GLCore (byte for byte) | binding info as Unity's (GLCore / GLES3) | GLES3 subprograms equal to Unity's |
 |---|---|---|---|---|---|
-| 2017.4.9f1 | 94 | 36 (11) | 14 (9) | - (source map only, as Unity's) | 22 |
+| 2017.4.9f1, 2017.4.40f1 | 94 | 36 (11) | 14 (9) | - (source map only, as Unity's) | 22 |
+| 2018.4.36f1 | 94 | 36 (11) | 14 (0: temporaries) | - | 22 |
 | 2019.4.40f1 | 94 | 36 (11) | 14 (13) | 14 / 14 | 28 (14 vertex, 14 fragment) |
 | 2020.3.48f1 | 102 | 39 (12) | 15 (14) | 15 / 15 | 15 |
 | 2021.3.45f2 | 102 | 39 (12) | 15 (13) | 14 / 14 | 14 |
@@ -347,21 +348,37 @@ GLCore and GLES3 programs of the variant, with the same code up to temporaries:
 The programs that differ from Unity's GLCore code byte for byte differ in the order of
 declarations or the names of temporaries (Unity's GL compile sees `fixed`/`half` values);
 `Hidden/Internal-Loading` (2021.3+) has uniform blocks in Unity's GL program, which declare
-their unused members too, and loose uniforms in ours (a subset, same code otherwise). The
-2017.4 - 2018.4 results of the earlier checks hold (the 2017.4 file above; 2017.4.40f1 and
-2018.4.36f1 were checked the same way before):
+their unused members too, and loose uniforms in ours (a subset, same code otherwise). (2017.4.40f1:
+the Linux player's file, which has the D3D11 programs too.)
 
 ```sh
 cd convert && PMUNITY_D3D11_CORPUS="<path>/unity default resources" PMUNITY_D3D11_EXPORT=/tmp/glsl \
     python -m unittest tests.test_d3d11_corpus -v                  # then shadercheck /tmp/glsl
 ```
 
-**Five free Windows-only Mono games** (itch.io, not in the repository), each converted with
+**Six free Windows-only Mono games** (not in the repository), each converted with
 `pmunity convert --set shaders.from=d3d11`, every distinct GLES3 program exported and compiled
 and linked on Mesa (llvmpipe, ES 3.2, Mesa 21.2 in `ua-build-arm64`), then packed and run on
 the runtime in the emulated rig with the game's exact Android player:
 
-WINDOWS_GAMES_TABLE
+| game data | shaders given GLES3 | programs (GLES 3.1) | left out | distinct programs linked on Mesa | rig |
+|---|---|---|---|---|---|
+| 2018.3.7f1, 3D, SF 17, 201802150 | 33 of 34 | 196 | `BlitToDepth_MSAA` (`textureSamples`); 8 particle procedural-instancing variants (structured buffer) | 181 / 181 | first screen (the game starts in its first level) |
+| 2019.2.5f1, 2D, SF 20, one block, 201806140 (two keyword lists) | 42 of 44 | 205 | `BlitToDepth_MSAA`, VR blit (`gl_Layer`), UIElements' `Internal-UIRDefault` SubShader 0 (structured buffer; SubShader 1 kept) | 180 / 180 | title screen |
+| 2019.3.14f1 (URP 7), SF 21, segments | 60 of 62 | 918 (3) | `BlitToDepth_MSAA`, VR blit (2 SubShaders) | 504 / 504 | Unity splash, title menu (URP post-processing on) |
+| 2020.3.44f1, SF 22, `m_CommonParameters` | 50 of 52 | 212 | `BlitToDepth_MSAA`, VR blit | 192 / 192 | splash, then its first (click to start) screen |
+| 2021.3.28f1, compressed build (`pmunity unpack`), 202012090 | 49 of 51 | 270 | `BlitToDepth_MSAA`, VR blit | 240 / 240 | title menu (with `pmunity.winbcl`; before: Mono asserted in the Input System's start on the Windows class libraries, then SIGSEGV) |
+| 2022.3.62f3 (URP 14), Burst plugin | 82 of 85 (6 stripped: empty GLES3 blobs) | 569 (55) | URP `HDRDebugView` (UAV), `BlitToDepth_MSAA`, VR blit; 8 particle procedural-instancing variants | 440 / 440 | title menu |
+
+Every converted program declares the same uniforms, inputs and outputs in its GLES3 form as in
+its GL one, and HLSLcc's translation of each variant is checked as above only where Unity's own GL
+program is at hand (built-ins). Textures of these games (RGBA32, RGB24, Alpha8, DXT1/5, crunched
+DXT, BC6H cube maps) go through the textures step as before (BC6H left as it is); the rig's Mesa
+samples BC textures itself, so the runs use the unconverted ones. The 2021.2+ games need Unix
+class libraries in place of their Windows ones (`python -m pmunity.winbcl`, docs/porting.md).
+Not checked: a run on the handheld, pictures against the Windows build, and any game with BC7,
+BC4 or BC5 textures (the step's decoding of those is tested on hand-made blocks,
+`tests/test_textures.py`).
 
 `tests/test_dxbc.py` checks the path on hand-assembled vertex and pixel programs (no Unity files;
 the HLSLcc part runs when pmhlslcc is built).
