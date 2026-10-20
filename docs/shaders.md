@@ -92,7 +92,8 @@ way (78 of 136; the others are VR and frame-debugger variants), and 41 without i
   ```
 - **Six free Linux Mono games**, one per LTS line (not in the repository): all their shaders
   convert but VR-only ones and one with `noperspective`, and every exported program compiles and
-  links on Mesa:
+  links on Mesa (`PMUNITY_GAMES=<Game>_Data[:...] PMUNITY_GAMES_EXPORT=<dir> python -m unittest
+  tests.test_games_corpus`, then shadercheck each `<dir>/<n>`):
 
   | game data | formats | shaders given GLES3 | programs (GLES 3.1) | left out | distinct programs linked on Mesa |
   |---|---|---|---|---|---|
