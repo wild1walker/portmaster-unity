@@ -87,8 +87,9 @@ Every variant has one program, so a shader with GLCore32 and GLCore41/43 program
 all of them: where its SubShaders differ by target (URP's post-processing: SubShader 0 at target
 4.5, SubShader 1 its fallback), both get programs, and Unity runs SubShader 0 where the device
 has what its requirements ask (OpenGL ES 3.1+; the GLCore subprograms' `m_ShaderRequirements`
-are kept) and the fallback elsewhere, as an Android build of the game would. The two render the
-same by design (the fallback replaces, e.g., `textureGather` by four fetches).
+are kept) and the fallback elsewhere, as an Android build of the game would, and as the desktop
+build does on OpenGL 4.3+ and on 3.2 (the fallback does with plain fetches what SubShader 0 does
+with `textureGather`, in URP's depth of field).
 
 **Unity 2017.x data**: off by default. The outputs of the 2017.4 line (Cuphead's port, checked on
 the device) stay byte for byte what the converter wrote before, which had GLCore32 programs only:
@@ -167,7 +168,7 @@ way (78 of 136; the others are VR and frame-debugger variants), and 41 without i
   without a GLES3 blob they load: under emulation 5 times in the 2021.3 game and 3 in the 2022.3
   one before, once in each now (a shader left out above); twice in the 2017.4 game (its two
   blits, 2017.x). Both URP games still stop on Unity's graphics thread after two frames, at the
-  same place as before: not a shader of these.
+  same code address as before.
 
 What was not checked: nothing of this has run in a Unity player of these versions; Unity's own
 GLES3 programs of a game's shaders were not available to compare with (only built-ins), and for
