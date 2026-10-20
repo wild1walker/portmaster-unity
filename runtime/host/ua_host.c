@@ -86,15 +86,23 @@ static void mkdirs(const char *path)
     mkdir(p, 0755);
 }
 
-// System.loadLibrary(name) / UnityPlayer.loadLibrary: lib<name>.so from the library folder
+// System.loadLibrary(name) / UnityPlayer.loadLibrary: lib<name>.so from the library folder, as
+// Android maps the name (so "libmono.so" is not found there either: Unity then dlopens it itself);
+// System.load(path): that file (IL2CPP players load libil2cpp.so so). A library loaded for the
+// first time gets its JNI_OnLoad called, as on Android. Returns 1 when loaded.
 static int load_library(void *user, const char *name)
 {
     (void)user;
-    char path[600];
-    snprintf(path, sizeof path, "%s/lib%s.so", libdir, name);
+    char path[PATH_MAX];
+    if (name[0] == '/') snprintf(path, sizeof path, "%s", name);
+    else snprintf(path, sizeof path, "%s/lib%s.so", libdir, name);
+    int had = so_dlopen(path, 4 /* bionic RTLD_NOLOAD */) != NULL;
     void *h = so_dlopen(path, 0);
-    fprintf(stderr, "[host] loadLibrary(%s): %s\n", name, h ? "ok" : so_dlerror());
-    return h ? 0 : -1;
+    fprintf(stderr, "[host] loadLibrary(%s): %s\n", name, h ? had ? "ok (already loaded)" : "ok" : so_dlerror());
+    if (!h) return 0;
+    jint (*onload)(JavaVM *, void *) = had ? NULL : (jint (*)(JavaVM *, void *))so_dlsym(h, "JNI_OnLoad");
+    if (onload) fprintf(stderr, "[host] %s JNI_OnLoad -> 0x%x\n", name, onload(fj_vm(), NULL));
+    return 1;
 }
 
 // crash report: signal, fault address and the module + offset (+ nearest symbol) of pc, lr and
