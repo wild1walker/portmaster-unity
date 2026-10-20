@@ -6,8 +6,9 @@ reads) and the Android player package. For Cuphead a run takes about 15 s; big f
 (APFS clonefile, else hard links), so the tree costs about 0.4 GB of real disk (48 rewritten
 bundles, explained below). The output is in `--out` (default `android-out/`).
 
-Everything below comes from libunity.so 2017.4.9f1 armeabi-v7a
-(sha256 `b7d24200…b604315e`), disassembled with the symbols in libunity.sym.so (`tools/re/arm.py`).
+Sections 1-3 come from libunity.so 2017.4.9f1 armeabi-v7a (sha256 `b7d24200…b604315e`),
+disassembled with the symbols in libunity.sym.so (`tools/re/arm.py`); section 4 is what changes
+for the other Unity versions (2017.3 - 2022.3).
 
 ## 1. How the player finds its data
 
@@ -111,6 +112,62 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
     The 9 "missing" ones are multi-dim array runtime methods.
   - mscorlib `mono_corlib_version` = 82, which is what the Android libmono.so checks.
   - The macOS-only icalls are MovieTexture, GameCenter, ClusterInput and Windows.Speech, which the game doesn't use.
+
+## 4. Unity versions (2017.3 - 2022.3)
+
+Sections 1-3 come from the 2017.4.9 player. What `android-data` does for the other LTS lines,
+from the static survey of their Android players ([compat](compat/README.md)) and runs on Unity's
+built-ins and six free Linux games (one per line):
+
+- **Versions.** The data's Unity version is read from `globalgamemanagers` (or a bundle header);
+  outside 2017.3 - 2022.3 the run stops unless `--any-unity-version`. The player package's version
+  comes from its `ivy.xml` (2017.x, 2018.x) or, failing that, from its "unity default resources"
+  (which gives only the line: the file is often from an earlier patch). Data and player of
+  different lines are refused (main data has no type trees: the player reads its own layouts);
+  another patch of the same line is a warning. The report has both, and the Mono runtime the game
+  needs: `.NET 3.5 (libmono)` (a `Mono/` folder, 2017.x - 2018.x) or `.NET 4.x (libmonobdwgc-2.0)`
+  (`MonoBleedingEdge/`, and every 2019.1+ game).
+- **SerializedFile headers.** Formats 17 (2017.x - 2018.x), 21 (2019.x) and 22 (2020.1+, a 48-byte
+  header with 64-bit sizes: the version string at 48, the platform word after it). The platform
+  word is set in place for all three, in plain files and in bundles' CABs.
+- **Assemblies.** 2017.x: MonoManager's fixed slots (section 3). From 2018 (2018.4 - 2022.3
+  disassembled) `GetAvailableDllAssemblyMask` takes every listed assembly that loaded, filtered by
+  its `m_AssemblyTypes` flags: no slot is reserved, a missing engine module is skipped wherever it
+  is. From 2020.2 the list is `ScriptingAssemblies.json` in the data folder (MonoManager keeps only
+  script hashes); it is shipped with `RuntimeInitializeOnLoads.json`. The check (game assemblies
+  present, engine modules the Android set lacks) reads whichever list the version has.
+- **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder
+  or (macOS) in `Contents/`.
+- **Texture streams.** Inlined in every version (the 2017.4 reason, section 2, is not known for
+  later players; inline pixels load either way). From 2018 meshes can stream their vertex data
+  from the same `.resS`: a `.resS` that a mesh still reads is shipped beside its file (2021.3 URP
+  game: 19 meshes in 3 files). The textures step likewise carries those blobs when it rewrites a
+  `.resS`, and writes ASTC as `ASTC_<n>x<n>` (48-53) from 2019.1, where the RGBA numbers are
+  deprecated.
+- **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version;
+  the GLES3 entry is copied from GLCore (from D3D11 for a Windows build).
+- **PlayerSettings.** As in section 2, plus `--swappy keep|off|on`: `androidUseSwappy` (2019.3+,
+  Android Frame Pacing). Off changes pacing, not the picture; use it if the runtime's choreographer
+  path misbehaves.
+- **OBB.** 2017.4 - 2020.3: the `assets/<build-id>` marker and `unity.build-id` meta-data. 2022.3's
+  libunity has `/assets/unity_obb_guid` ("Application OBB has mismatching GUID"); 2021.3 has neither
+  string (its check was not traced). For Unity 2021+ the packer writes `assets/unity_obb_guid`
+  (the build id as text) into the APK and every OBB, and names it in `android_package.json`; not
+  run against a player. The build id comes from `BuildSettings.buildGUID`, which 2022 dropped:
+  then `PlayerSettings.productGUID`, else a hash of the settings file.
+- **What is refused or reported.** A compressed build (`data.unity3d` without
+  `globalgamemanagers`): unpack it first with `python -m pmunity unpack <data> [--remove]`
+  (stored, LZ4 and LZMA blocks; the files come out as an uncompressed build has them, which is what
+  an Android player reads from `assets/bin/Data`). An IL2CPP build (no `Managed/*.dll`;
+  `GameAssembly`, `il2cpp_data`): the Mono player cannot run it. Native plugins in `Plugins/`
+  (e.g. `lib_burst_generated.so`, FMOD, Steam) are not shipped; the report names them.
+
+Six free Linux Mono games (2017.4.40f1, 2018.4.36f1, 2019.4.8f1, 2020.3.49f1, 2021.3.16f1,
+2022.3.36f1) go through every step (shaders, textures, settings, audio, android-data with
+`--pack all`) with the Android player package of their own version (its `unity default resources`
+and Mono `Managed` set, fetched from Unity's installers): every serialized file loads back in
+UnityPy with the Android platform, every assembly the list names is present, APK and OBB verify.
+None has run in a player.
 
 ## Unsure / untested
 

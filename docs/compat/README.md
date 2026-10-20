@@ -32,11 +32,13 @@ loading, startup, input or data conversion) · "-" not applicable.
 | Java members bound (count) | 398 | 402 | 458 | 487 | 487 | 487 | 395 |
 | UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (+new callbacks ⚠️) | ✅ ⚠️ | ✅ ⚠️ | ✅ ⚠️ (GameActivity only from 2023.1) |
 | frame pacing (Swappy) | - | - | - | ⚠️ falls back (untested) | ⚠️ | ⚠️ | ⚠️ |
-| SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | **22** ❌ | 22 ❌ | 22 ❌ |
-| shader serializer | 201708220 ✅ | 201708220 ✅ | 201802150 ⚠️ | 201806140 ❌ segments | 201806140 ❌ | 202012090 ❌ +param entries | 202012090 ❌ |
-| MonoManager engine slots | fixed 48 ✅ | fixed 48 ✅ | ❌ flags (`m_AssemblyTypes`) | ❌ flags | ❌ flags | ❌ flags | ❌ flags |
+| SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | 22 ✅ | 22 ✅ | 22 ✅ |
+| shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
+| D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ❌ GL cbuffer layouts | ❌ + common params | ❌ | ❌ |
+| assembly list (converter) | fixed 48 slots ✅ | fixed 48 ✅ | flags (`m_AssemblyTypes`) ✅ | flags ✅ | `ScriptingAssemblies.json` ✅ (2020.2+) | json ✅ | json ✅ |
+| texture formats (converter) | ASTC RGB/RGBA ✅ | ✅ | ✅ | `ASTC_nxn` ✅ | ✅ | ✅ | ✅ |
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
-| OBB matching | build-id ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ not traced | ❌ `unity_obb_guid` |
+| OBB matching | build-id ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ not traced; `unity_obb_guid` written | ⚠️ `unity_obb_guid` written, unchecked |
 | IL2CPP API looked up | - | 175 | 194 | 222 | 225 | 230 | 234 |
 | IL2CPP metadata (header, unverified) | - | 24 | 24 | 24 | 27 | 29 | 29 or 31 |
 
@@ -48,9 +50,15 @@ Notes on the rows:
   `__strrchr_chk`, `__strlcpy_chk`, `sys_signame` (and the FD ones on v7a too).
 - "natives runtime/jni calls": the 19 natives `runtime/jni` looks up by name and signature,
   checked against what each libunity/libmain registers.
-- Shader serializer: every GL program entry of every version has 4 statistics ints and writes
-  back unchanged with `blob.py`'s layout; what breaks is the container (2019.3+: segmented blobs,
-  12-byte entry table; 2021.2+: parameter entries and per-tier subprograms).
+- Converter rows (shaders, assembly list, textures, OBB): what `convert/` does for each version,
+  checked on Unity's built-in resources of each line (`tests/test_glcore_corpus.py`: conversion
+  equal to Unity's own GLES3 data but for the program text) and on six free Linux games, one per
+  line, taken through every step to packed APK/OBB ([shaders](../shaders.md#unity-versions),
+  [android-data](../android-data.md#4-unity-versions-20173---20223)). Nothing of it has run in
+  a player of these versions. Serializers: 2019.1 - 2021.1 entries have a second (local) keyword
+  list; 2019.3+ blobs are segmented (12-byte entry table); 2021.2+ keep parameters as entries of
+  their own and subprograms in per-tier lists. D3D11: 2019.1+ GL programs carry constant buffer
+  layouts the D3D11 data does not give (refused with that reason).
 - IL2CPP metadata: the header's integer version (`global-metadata.dat` starts with 0xFAB11BAF
   and the version). These values come from public reverse-engineering tools, not from these
   packages (`libil2cpp.so` and the metadata are built per game), and tools also use sub-versions
@@ -75,12 +83,11 @@ Notes on the rows:
    `AMediaCodec_*`/`AMediaExtractor_*`/`AMediaFormat_*` functions failing cleanly and the
    `AMEDIAFORMAT_KEY_*` string objects; register it so the loader's libmediandk refusal does not
    apply. Video then fails the way it does today on the Java path.
-4. **Converter data formats**: SerializedFile format 22 (2020.1+: 48-byte header, the platform
-   word follows the version string at 48) in `android_data.sf_platform_offset`; shader blobs:
-   serializers 201802150 / 201806140 / 202012090 in LAYOUTS, segmented blobs with 12-byte entries
-   (2019.3+), parameter entries + `m_PlayerSubPrograms`/`m_ParameterBlobIndices`/
-   `m_CommonParameters` (2021.2+); MonoManager without the 48-slot rule from 2018.x on (filter by
-   `m_AssemblyTypes`).
+4. **Converter data formats**: done in the converter (SerializedFile format 22, the four shader
+   serializers, segmented blobs, parameter entries and per-tier subprograms, assembly lists by
+   flags and `ScriptingAssemblies.json`, 2019+ ASTC numbers, compressed builds via `pmunity
+   unpack`). Left: D3D11 programs of 2019.1+ Windows builds (GL constant buffer layouts), the
+   2021.3 OBB check (not traced; `assets/unity_obb_guid` is written for 2021+).
 5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.x on (and of any
    .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
