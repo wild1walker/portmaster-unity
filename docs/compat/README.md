@@ -118,6 +118,29 @@ registered; cursor images (`Bitmap`/`PointerIcon`) and video decoding are other 
 2019.4+ fails certificate checks (`TrustManagerFactory` placeholders; libunity's unitytls then
 reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM builds.
 
+## Android builds run (emulated rig)
+
+Free itch.io Android builds, each made ready with `pmunity apk` (docs/apk.md) and run as they
+are: the game's own player libraries and data, nothing converted. The 64-bit route runs in an
+aarch64 container (`EMU_ARCH=arm64`, native on an Apple-silicon Mac, Mesa llvmpipe), the 32-bit
+one under QEMU armv7.
+
+| build | ABI run | result |
+|---|---|---|
+| 2019.4.18, Mono (bdwgc), armeabi-v7a, Vulkan + GLES3, portrait | armeabi-v7a | title screen ("PLAY"), laid out for the landscape window |
+| 2020.3.3, IL2CPP, arm64-v8a + armeabi-v7a, GLES3 + GLES2, Optimized Frame Pacing on | arm64-v8a | title menu, 60-70 fps in the rig (2020.3 turns Swappy off itself below API 23) |
+| 2021.3.4, IL2CPP + Burst, Vulkan + GLES3, Optimized Frame Pacing on | arm64-v8a | title menu, 25-29 fps; before: stopped after 3 frames (Swappy kept off), then slowed to 2 fps (Swappy's tick on UnityMain) |
+| same build | armeabi-v7a (IL2CPP, 32-bit) | intro, then the title menu |
+| 2022.3.14, IL2CPP + Burst, FMOD, 3D, Vulkan + GLES3, Optimized Frame Pacing on, minSdk 26 | arm64-v8a | title menu over its 3D scene (0.2-12 fps: llvmpipe-bound); before: stopped after 8 frames when told API 26 (Swappy on the NDK choreographer) |
+| 2022.3.23, Mono (bdwgc), armeabi-v7a, GLES2 only | armeabi-v7a | title screen ("tap anywhere to start") |
+
+In all of them Unity picks GLES (`libvulkan.so` does not load), finds no OBB (none shipped) and
+reads its data from the APK as on a phone. The Mono ones stalled for minutes at times under QEMU
+with UnityMain stopped in the Boehm collector's suspend handler (a stop-the-world that does not
+end); not seen with the converted desktop games' longer runs nor reproducible natively here (no
+32-bit ARM on Apple silicon): needs a run on a handheld. Not found among free builds: one with an
+OBB, an IL2CPP arm64 build of 2017.4 - 2019.4 (the one 2018.4 build was a VR title, refused).
+
 ## Gaps, most impact for the most games first
 
 1. ~~**JNI signatures that drifted**~~ (done in runtime/jni): natives are called with the signature
@@ -169,16 +192,19 @@ reports "Cert verify failed"); a game's native plugins (FMOD, Burst) need ARM bu
    (`runtime/android/README.md`, "Frame pacing").
 8. **EGL** (done): `eglSurfaceAttrib` (2020.3+) on the SDL display path goes to the real surface
    (and is set again on a surface KMSDRM puts in its place); on fbdev it is the driver's own.
-9. **Packaging of Android builds** (games owned as APK/AAB): split APKs
+9. **Packaging of Android builds** (games owned as APK/AAB; `pmunity apk`, docs/apk.md: APKs,
+   splits, XAPK/APKS, AAB and OBBs handled, asset-pack splits merged into the one APK the player
+   reads; run as above): split APKs
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
    (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`;
    runtime/jni answers as an app without Play Core: no asset packs); their PlayerSettings'
-   `androidUseSwappy` (on in many 2021.3+ projects) has to be turned off there too.
-10. **IL2CPP Android games**: loading already works through `ClassLoader.findLibrary` +
-    `System.load`; libunity then copies IL2CPP data to `<filesDir>/il2cpp` (writable files dir
-    needed, runtime/jni creates it and warns otherwise; 2022.3 re-extracts when
-    `assets/bin/Data/unity_app_guid` changes) and binds 175-234 `il2cpp_*` functions from the
-    game's `libil2cpp.so`.
+   `androidUseSwappy` (on in many 2020+ projects) stays as built: ua_host runs Swappy for them
+   (its Java tick on a thread of its own) and reports at most API 23, below Swappy's NDK path.
+10. ~~**IL2CPP Android games**~~ (run, 32- and 64-bit): `libil2cpp.so` comes up with libunity
+    through libmain's `NativeLoader.load` (its `JNI_OnLoad` right after libmain's; `ClassLoader.findLibrary`
+    + `System.load` serve Burst's `lib_burst_generated.so`); libunity copies IL2CPP data to
+    `<external files>/il2cpp` (2022.3 re-extracts when `assets/bin/Data/unity_app_guid` changes)
+    and binds 175-234 `il2cpp_*` functions from the game's `libil2cpp.so`.
 11. Small: ~~`nativeSendSurfaceChangedEvent` after a resize (2018.4+)~~ (done); the 2022.3 `armv9` libunity
     must not be used on ARMv8 CPUs; 16 KiB-page kernels stay unsupported (the 2022.3.62 libraries
     would allow them).
