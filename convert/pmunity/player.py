@@ -2,7 +2,7 @@
 
     python -m pmunity player url <version>
     python -m pmunity player fetch <version> <dir> [--backend mono|il2cpp] [--abi armeabi-v7a|arm64-v8a]
-                                                   [--installer FILE|URL]
+                                                   [--installer FILE|URL] [--symbols | --symbols-only]
 
 A game runs on the Android player of the Unity version it was built with (`python -m pmunity version
 <data>` reads it). Unity's release API (services.api.unity.com) names that version's Android Build
@@ -16,6 +16,10 @@ a non-solid NSIS installer, so only the files a port needs are read, one HTTP ra
   Variations/<backend>/Release/Libs/<abi>/*.so   libmain.so, libunity.so
   Variations/mono/Release/MonoLibs/<abi>/*.so    libmono.so (Mono 2.x), libmonobdwgc-2.0.so (4.x), ...
   player.json                                    version, changeset, backend, abi, installer
+  Variations/<backend>/Release/Symbols/<abi>/*.sym.so   with --symbols: libunity's and libmain's symbol
+                                                 files, for crash reports and samplers (tools/analysis); a
+                                                 game's own Android build (pmunity apk) carries the libraries
+                                                 but not these: --symbols-only fetches just them
 Unity's files stay Unity's: whoever installs a port fetches them; ports never ship them.
 """
 import argparse
@@ -63,14 +67,17 @@ def package_path(nsis_path):
     return '/'.join(parts[1:]) if parts and parts[0].startswith('$') else None
 
 
-def wanted(backend, abi):
+def wanted(backend, abi, symbols=False, symbols_only=False):
+    sym = [f'Variations/{backend}/Release/Symbols/{abi}/*.sym.so']
+    if symbols_only:
+        return sym
     g = ['Data/unity default resources', f'Variations/{backend}/Release/Libs/{abi}/*.so']
     if backend == 'mono':
         g += ['Variations/mono/Managed/*.dll', f'Variations/mono/Release/MonoLibs/{abi}/*.so']
-    return g
+    return g + (sym if symbols else [])
 
 
-def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=print):
+def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=print, symbols=False, symbols_only=False):
     from . import nsis
     rec = None
     if not installer:
@@ -80,13 +87,13 @@ def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=p
         installer = installer_url(rec)
     log(f'player {version} ({backend}, {abi}) from {installer}')
     ns = nsis.Nsis(installer)
-    globs = wanted(backend, abi)
+    globs = wanted(backend, abi, symbols, symbols_only)
     got = []
     for path, off, _ in sorted(ns.files()):
         rel = package_path(path)
         if rel is None or not any(fnmatch.fnmatchcase(rel, g) for g in globs):
             continue
-        if rel.endswith(('.sym.so', '.dbg.so')):
+        if rel.endswith(('.sym.so', '.dbg.so')) and '/Symbols/' not in rel:
             continue
         data = ns.extract(off)
         dst = os.path.join(out, *rel.split('/'))
@@ -99,13 +106,18 @@ def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=p
     missing = [n for n in ('libmain.so', 'libunity.so') if libs + n not in got]
     if 'Data/unity default resources' not in got:
         missing.append('Data/unity default resources')
+    if symbols_only:
+        missing = [] if any(r.endswith('/libunity.sym.so') for r in got) else ['libunity.sym.so']
     if missing:
         raise SystemExit(f'the installer has no {", ".join(missing)} for {backend}/{abi} '
                          f'(Unity ships arm64-v8a players only with IL2CPP, from 2017.4.16 / 2018.2)')
     info = {'version': version, 'changeset': (rec or {}).get('shortRevision'), 'backend': backend, 'abi': abi,
             'installer': installer, 'files': len(got)}
-    with open(os.path.join(out, 'player.json'), 'w') as f:
-        json.dump(info, f, indent=1)
+    if symbols or symbols_only:
+        info['symbols'] = sorted(r for r in got if '/Symbols/' in r)
+    if not symbols_only:
+        with open(os.path.join(out, 'player.json'), 'w') as f:
+            json.dump(info, f, indent=1)
     log(f'{len(got)} files, {ns.s.fetched / 1e6:.1f} MB read -> {out}')
     return info
 
@@ -120,6 +132,8 @@ def main(argv):
     f.add_argument('--backend', default='mono', choices=['mono', 'il2cpp'])
     f.add_argument('--abi', default='armeabi-v7a', choices=['armeabi-v7a', 'arm64-v8a'])
     f.add_argument('--installer', help='a local copy (or another URL) of the installer')
+    f.add_argument('--symbols', action='store_true', help="also libunity's and libmain's symbol files (*.sym.so)")
+    f.add_argument('--symbols-only', action='store_true', help='only the symbol files (for a game\'s own Android build)')
     a = ap.parse_args(argv)
     if a.cmd == 'url':
         rec = release(a.version)
@@ -127,4 +141,5 @@ def main(argv):
             raise SystemExit(f'Unity does not list version {a.version}')
         print(installer_url(rec))
     else:
-        fetch(a.version, a.dir, a.backend, a.abi, a.installer, log=lambda m: print(m, file=sys.stderr))
+        fetch(a.version, a.dir, a.backend, a.abi, a.installer, log=lambda m: print(m, file=sys.stderr),
+              symbols=a.symbols, symbols_only=a.symbols_only)

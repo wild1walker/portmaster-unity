@@ -25,6 +25,8 @@ class PlayerTest(unittest.TestCase):
         g = P.wanted('mono', 'armeabi-v7a')
         self.assertIn('Variations/mono/Release/MonoLibs/armeabi-v7a/*.so', g)
         self.assertNotIn('Variations/mono/Managed/*.dll', P.wanted('il2cpp', 'arm64-v8a'))
+        self.assertIn('Variations/il2cpp/Release/Symbols/arm64-v8a/*.sym.so', P.wanted('il2cpp', 'arm64-v8a', symbols=True))
+        self.assertEqual(P.wanted('il2cpp', 'arm64-v8a', symbols_only=True), ['Variations/il2cpp/Release/Symbols/arm64-v8a/*.sym.so'])
 
 
 if __name__ == '__main__':

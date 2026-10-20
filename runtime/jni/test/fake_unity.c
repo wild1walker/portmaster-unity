@@ -13,6 +13,8 @@
 int printf(const char *, ...);
 int strcmp(const char *, const char *);
 int usleep(unsigned int);
+unsigned long pthread_self(void);
+int pthread_getname_np(unsigned long, char *, unsigned long);
 
 static volatile int R[R_N];
 static int S = SHAPE_2017_4_9;
@@ -142,7 +144,10 @@ static int new_callbacks(JNIEnv *env, jobject player)
 static void nOnChoreographer(JNIEnv *env, jobject self, jlong cookie, jlong t)
 {
     (void)env; (void)self;
-    if (cookie == SWAPPY_COOKIE && t > 0) R[R_SWAPPY_FRAME]++;
+    /* on Swappy's own looper thread, never on UnityMain (whose frame loop waits for these ticks) */
+    char name[16] = "";
+    pthread_getname_np(pthread_self(), name, sizeof name);
+    if (cookie == SWAPPY_COOKIE && t > 0 && !strcmp(name, "SwappyChoreo")) R[R_SWAPPY_FRAME]++;
 }
 static void nSetSupportedRefreshRates(JNIEnv *env, jobject self, jlong cookie, jlongArray p, jintArray m) { (void)env; (void)self; (void)cookie; (void)p; (void)m; }
 static void nOnRefreshRateChanged(JNIEnv *env, jobject self, jlong cookie, jlong a, jlong b, jlong c) { (void)env; (void)self; (void)cookie; (void)a; (void)b; (void)c; }

@@ -190,6 +190,15 @@ near 0 and `AndroidVSync` waits for INT_MAX vsyncs). 2020.3 turns Swappy off its
 `pmunity android-data` therefore turns `androidUseSwappy` off by default (`--swappy`), which is
 also what a desktop build ran with; runtime/jni logs a line when Swappy starts anyway.
 
+A game's own Android build (`pmunity apk`, docs/apk.md) keeps its setting, so ua_host clears
+`swappy.disable` for it (`SO_PROP_swappy_disable=0` unless set): Swappy then paces the frames, with
+its Java `ChoreographerCallback` ticking on a looper thread of its own (`SwappyChoreo`,
+runtime/jni/up_input.c) as Swappy's `LooperThread` does on Android. Driven from UnityMain's frame
+loop instead, Swappy's swap waited for ticks the blocked loop could not give, and each frame took
+longer than the last (2021.3: 130 ms to 480 ms within 90 s in the emulated rig; with the thread,
+a steady 25-29 fps). The reported API level stays below 24 for these builds: from 24 Swappy takes
+the NDK choreographer, which these shims do not have.
+
 ## Audio
 
 Each OpenSL audio player opens its own SDL audio device with the exact PCM format (SDL converts
