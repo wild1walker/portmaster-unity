@@ -108,6 +108,51 @@ PS_DXBC = [
                    op(MUL, dst(OUTPUT, 0) + src(TEMP, 0) + cb(0, 4)),
                    op(RET)])),
 ]
+# a 3-tap blur as a game would write it: weights in an immediate constant buffer, a loop, sample_l,
+# alpha test with discard
+LOOP, ENDLOOP, BREAKC, IADD, IGE, DISCARD, SAMPLE_L, LT, ADD = 48, 22, 3, 30, 33, 13, 72, 49, 0
+NONZERO = 1 << 7                                       # instruction test bit (opcode bit 18)
+
+
+def imm(*v):                                           # l(...) float literal(s)
+    return [(1 if len(v) == 1 else 2) | (4 << 12)] + [struct.unpack('<I', struct.pack('<f', x))[0] for x in v]
+
+
+def immi(v):                                           # l(<int>)
+    return [1 | (4 << 12), v]
+
+
+def one(rtype, idx, c):                                # register.<c> (select 1)
+    return [2 | (2 << 2) | ('xyzw'.index(c) << 4) | (rtype << 12) | (1 << 20), idx]
+
+
+BLUR_PS_DXBC = [
+    ('ISGN', signature([('SV_POSITION', 0, 1, 0, 0xf, 0), ('TEXCOORD', 0, 0, 1, 0x3, 0x3)])),
+    ('OSGN', signature([('SV_Target', 0, 0, 0, 0xf, 0)])),
+    ('SHDR', shdr(0, [op(106, ctl=1),
+                      [53 | (3 << 11), 2 + 12] + imm(0.25, 0, 0, 0)[1:] + imm(0.5, 0, 0, 0)[1:] + imm(0.25, 0, 0, 0)[1:],
+                      dcl_cb(0, 1), dcl_sampler(0), dcl_tex2d(0), op(98, [0x00101032, 1], ctl=2),
+                      op(101, [0x001020f2, 0]), op(104, [4])],
+                  [op(MOV, dst(TEMP, 0) + imm(0, 0, 0, 0)),
+                   op(MOV, dst(TEMP, 1, 0x3) + src(INPUT, 1, 'xyxx')),
+                   op(MOV, dst(TEMP, 1, 0x4) + immi(0)),
+                   op(LOOP),
+                   op(IGE, dst(TEMP, 1, 0x8) + one(TEMP, 1, 'z') + immi(3)),
+                   op(BREAKC, one(TEMP, 1, 'w'), ctl=NONZERO),
+                   op(SAMPLE_L, dst(TEMP, 2) + src(TEMP, 1, 'xyxx') + src(RESOURCE, 0) + [0x00106000, 0] + imm(0.0)),
+                   op(MAD, dst(TEMP, 0) + src(TEMP, 2) + [2 | (1 << 2) | (9 << 12) | (1 << 20) | (3 << 22), 0] + one(TEMP, 1, 'z')
+                      + src(TEMP, 0)),
+                   op(ADD, dst(TEMP, 1, 0x1) + src(TEMP, 1, 'xxxx') + cb(0, 0, 'xxxx')),
+                   op(IADD, dst(TEMP, 1, 0x4) + one(TEMP, 1, 'z') + immi(1)),
+                   op(ENDLOOP),
+                   op(LT, dst(TEMP, 3, 0x1) + one(TEMP, 0, 'w') + imm(0.5)),
+                   op(DISCARD, one(TEMP, 3, 'x'), ctl=NONZERO),
+                   op(MOV, dst(OUTPUT, 0) + src(TEMP, 0)),
+                   op(RET)])),
+]
+BLUR_PS_BIND = D.Bindings(0, [], [D.ConstantBuffer('', 0, []), D.ConstantBuffer('$Globals', 16, [D.Param('_Step', 0, 1, 1, 0, 0, 0)])],
+                          [D.Binding('_MainTex', 0, 0, [2, 0]), D.Binding('$Globals', 1, 0, [0])])
+
 GLOBALS_VS = D.ConstantBuffer('$Globals', 80, [D.Param('unity_MatrixMVP', 0, 4, 4, 1, 0, 0),
                                                D.Param('_Tint', 0, 1, 4, 0, 0, 64)])
 GLOBALS_PS = D.ConstantBuffer('$Globals', 80, [D.Param('_Tint', 0, 1, 4, 0, 0, 64)])
@@ -379,6 +424,22 @@ class HlslccTest(unittest.TestCase):
             sm5 = D.translate_program(tr, (vs, VS_BIND.serialize()), (ps, PS_BIND.serialize()))
             sm4 = D.translate_program(tr, (VS_CODE, VS_BIND.serialize()), (PS_CODE, PS_BIND.serialize()))
         self.assertEqual(sm5, sm4)
+
+    def test_blur(self):
+        ps = unity_code(BLUR_PS_DXBC, (1, 1, 1))
+        with D.Translator() as tr:
+            gl = D.translate_program(tr, (VS_CODE, VS_BIND.serialize()), (ps, BLUR_PS_BIND.serialize()))
+        f = G.stage_sources(gl)['FRAGMENT']
+        self.assertIn('float ImmCB_0_0_0[3];', f)
+        self.assertIn('for(int u_xlati_loop_1 = 0 ; u_xlati_loop_1<3 ; u_xlati_loop_1++)', f)
+        self.assertIn('textureLod(_MainTex, u_xlat1.xy, 0.0)', f)
+        self.assertIn('discard;', f)
+        self.assertIn('uniform \tfloat _Step;', f)
+        notes = []
+        es = G.stage_sources(G.program_to_es(gl, notes=notes))['FRAGMENT']
+        self.assertEqual(sorted(notes), ['FRAGMENT const-arrays 1', 'FRAGMENT unroll 1'])
+        self.assertIn('const float ImmCB_0_0_0[3] = float[3](0.25, 0.5, 0.25);', es)
+        self.assertIn('ImmCB_0_0_0[2] + u_xlat0;', es)
 
     def test_bad_program(self):
         with D.Translator() as tr:
