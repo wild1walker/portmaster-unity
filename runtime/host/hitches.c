@@ -8,11 +8,12 @@
 //
 // A sample stops the thread in a signal handler while a watchdog thread copies its stack, then
 // logs one line: "[hitch-sample] +<ms into the frame> <thread> pc <module+off> lr <module+off> |
-// <return addresses>". The return addresses are the stack words that point just past a BL/BLX in
-// a mapped module (so: real calls, a few stale ones). host/sym.py names libunity.so offsets. When
-// the frame ends: "[hitch-sample] frame of <ms> ms, <n> samples". Frames in Mono's JIT code (anonymous
-// executable memory) are named by Mono itself, as "M:<Namespace.Class:Method>" (the watchdog
-// thread attaches to Mono's root domain for that).
+// <return addresses>". The return addresses are the stack words that point just past a call
+// instruction (ARM/Thumb BL/BLX, A64 BL/BLR) in a mapped module (so: real calls, a few stale
+// ones). host/sym.py names libunity.so offsets. When the frame ends: "[hitch-sample] frame of
+// <ms> ms, <n> samples". Frames in Mono's JIT code (anonymous executable memory) are named by
+// Mono itself, as "M:<Namespace.Class:Method>" (the watchdog thread attaches to Mono's root
+// domain for that).
 //
 // Always on: kill -USR2 <pid> logs every thread's stack once ("[dump] <thread> pc ... | ..."), e.g. to
 // see where a hung process waits.
@@ -31,11 +32,12 @@
 #include <unistd.h>
 
 #include "hitches.h"
+#include "arch.h"
 #include "../jni/unityplayer.h"
 #include "../loader/so_loader.h"
 
 #define MAX_THREADS 8
-#define STACK_WORDS 2048
+#define STACK_WORDS 2048        // pointer-sized words: 8 KB of stack on ARM, 16 KB on AArch64
 #define MAX_FRAMES 28
 
 static int g_thresh_ms, g_every_ms = 20, g_prof_ms;
@@ -46,7 +48,7 @@ static int g_sig;
 
 // handshake with the handler: 1 = registers stored, 2 = stack copied (handler may return)
 static atomic_int g_state;
-static volatile uint32_t g_pc, g_lr, g_sp;
+static volatile uintptr_t g_pc, g_lr, g_sp;
 
 static long long now_ns(void)
 {
@@ -59,9 +61,9 @@ static void on_sample(int sig, siginfo_t *si, void *ctx)
 {
     (void)sig; (void)si;
     ucontext_t *uc = ctx;
-    g_pc = uc->uc_mcontext.arm_pc;
-    g_lr = uc->uc_mcontext.arm_lr;
-    g_sp = uc->uc_mcontext.arm_sp;
+    g_pc = UC_PC(uc);
+    g_lr = UC_LR(uc);
+    g_sp = UC_SP(uc);
     atomic_store(&g_state, 1);
     long long until = now_ns() + 200000000ll;      // never hold the thread longer than 200 ms
     while (atomic_load(&g_state) != 2 && now_ns() < until) { struct timespec t = { 0, 200000 }; nanosleep(&t, NULL); }
@@ -125,8 +127,20 @@ static const map_ent *find_map(uintptr_t v)
     return NULL;
 }
 
+#if defined(__aarch64__)
+// v is a return address: the instruction before it is a BL or BLR (or the pointer-authenticating
+// BLRAA/BLRAB forms)
+static int after_call(uintptr_t v, const map_ent *m)
+{
+    if (!code_aligned(v) || v < m->lo + 4) return 0;
+    uint32_t i = *(const uint32_t *)(v - 4);
+    return (i & 0xFC000000) == 0x94000000          // BL imm26
+        || (i & 0xFFFFFC1F) == 0xD63F0000          // BLR Xn
+        || (i & 0xFEFFF800) == 0xD63F0800;         // BLRAA/BLRAAZ/BLRAB/BLRABZ
+}
+#else
 // v is a return address: the instruction before it is a BL/BLX (ARM or Thumb)
-static int after_call(uint32_t v, const map_ent *m)
+static int after_call(uintptr_t v, const map_ent *m)
 {
     if (v & 1) {
         uintptr_t a = v - 1;
@@ -139,6 +153,7 @@ static int after_call(uint32_t v, const map_ent *m)
     uint32_t i = *(const uint32_t *)(v - 4);
     return (i & 0x0F000000) == 0x0B000000 || (i & 0xFE000000) == 0xFA000000 || (i & 0x0FFFFFF0) == 0x012FFF30;
 }
+#endif
 
 // Mono, for JIT code: loaded lazily from the Android libmono.so (pointer arguments only: no softfp issue)
 static void *(*mono_root)(void);
@@ -171,7 +186,7 @@ static void *g_mthread;
 static void mono_enter(void) { if (g_domain && !g_mthread) g_mthread = mono_attach(g_domain); }
 static void mono_leave(void) { if (g_mthread && mono_detach) { mono_detach(g_mthread); g_mthread = NULL; } }
 
-static int fmt(char *out, size_t n, uint32_t v)
+static int fmt(char *out, size_t n, uintptr_t v)
 {
     const map_ent *m = find_map(v);
     if (m && !m->name[0]) {
@@ -187,9 +202,9 @@ static int fmt(char *out, size_t n, uint32_t v)
             mono_free_(mn);
             return k;
         }
-        return snprintf(out, n, "anon:0x%x", v);
+        return snprintf(out, n, "anon:0x%lx", (unsigned long)v);
     }
-    return m ? snprintf(out, n, "%s+0x%lx", m->name, (unsigned long)(v - m->base)) : snprintf(out, n, "0x%x", v);
+    return m ? snprintf(out, n, "%s+0x%lx", m->name, (unsigned long)(v - m->base)) : snprintf(out, n, "0x%lx", (unsigned long)v);
 }
 
 static int find_threads_all(pid_t *tids, int max)
@@ -225,7 +240,7 @@ static int find_threads(pid_t *tids)
 
 static void sample(pid_t tid, double ms, int prof)
 {
-    static uint32_t stack[STACK_WORDS];
+    static uintptr_t stack[STACK_WORDS];
     char name[32] = "?", p[64], line[2048];
     snprintf(p, sizeof p, "/proc/self/task/%d/comm", tid);
     FILE *f = fopen(p, "r");
@@ -235,12 +250,12 @@ static void sample(pid_t tid, double ms, int prof)
     long long until = now_ns() + 100000000ll;
     while (atomic_load(&g_state) != 1 && now_ns() < until) { struct timespec t = { 0, 100000 }; nanosleep(&t, NULL); }
     if (atomic_load(&g_state) != 1) { fprintf(stderr, "[hitch-sample] +%.0f %s: no answer\n", ms, name); return; }
-    uint32_t pc = g_pc, lr = g_lr, sp = g_sp;
+    uintptr_t pc = g_pc, lr = g_lr, sp = g_sp;
     // the thread waits in the handler: its stack above sp stays as it was; copy it up to the end
     // of the mapping that holds sp
     uintptr_t end = mapping_end(sp);
     long got = end > sp ? (long)(end - sp < sizeof stack ? end - sp : sizeof stack) : 0;
-    if (got > 0) memcpy(stack, (const void *)(uintptr_t)sp, (size_t)got);
+    if (got > 0) memcpy(stack, (const void *)sp, (size_t)got);
     atomic_store(&g_state, 2);           // the thread goes on
     mono_enter();
     int len = prof == 2 ? snprintf(line, sizeof line, "[dump] %d %s pc ", tid, name) : prof ? snprintf(line, sizeof line, "[prof] %s pc ", name)
@@ -250,7 +265,7 @@ static void sample(pid_t tid, double ms, int prof)
     len += fmt(line + len, sizeof line - len, lr);
     len += snprintf(line + len, sizeof line - len, " |");
     int frames = 0;
-    for (long i = 0; got > 0 && i < got / 4 && frames < MAX_FRAMES && len < (int)sizeof line - 64; i++) {
+    for (long i = 0; got > 0 && i < got / (long)sizeof stack[0] && frames < MAX_FRAMES && len < (int)sizeof line - 64; i++) {
         const map_ent *m = find_map(stack[i]);
         if (!m || !after_call(stack[i], m)) continue;
         line[len++] = ' ';

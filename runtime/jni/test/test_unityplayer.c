@@ -1,4 +1,4 @@
-/* End-to-end test of the C UnityPlayer against a fake (softfp) libmain/libunity. */
+/* End-to-end test of the C UnityPlayer against a fake libmain/libunity (softfp on ARM). */
 #include "../unityplayer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +34,7 @@ static int wait_for(int idx, int min, int ms)
 
 int main(void)
 {
-    system("rm -rf /tmp/uptest && mkdir -p /tmp/uptest");
+    if (system("rm -rf /tmp/uptest && mkdir -p /tmp/uptest") != 0) printf("  (could not reset /tmp/uptest)\n");
     static const char *meta[] = { "unity.splash-mode=0", "unity.build-id=1234-test", NULL };
     struct up_config cfg;
     memset(&cfg, 0, sizeof cfg);

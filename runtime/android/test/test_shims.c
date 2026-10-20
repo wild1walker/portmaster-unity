@@ -1,9 +1,11 @@
-// Unit tests for the Android shims, run under QEMU (no GPU): liblog, AAssetManager, ALooper,
-// sensors, ANativeWindow + egl_glue (against fake_egl.c), OpenSL ES on SDL's disk audio driver.
+// Unit tests for the Android shims, run without a GPU (armhf under QEMU, aarch64 natively): liblog,
+// AAssetManager, ALooper, sensors, ANativeWindow + egl_glue (against fake_egl.c), OpenSL ES on
+// SDL's disk audio driver.
 #define _GNU_SOURCE
 #include "android_shims.h"
 #include "egl_glue.h"
 #include "sles_min.h"
+#include "shim_internal.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -191,8 +193,8 @@ static void test_looper_sensors_input(void)
     ASensorEventQueue *q = ASensorManager_createEventQueue(sm, l, 3, NULL, NULL);
     CHECK(q != NULL && ASensorEventQueue_hasEvents(q) == 0 && ASensorEventQueue_getEvents(q, NULL, 8) == 0);
     CHECK(ASensorManager_destroyEventQueue(sm, q) == 0);
-    // Unity's dump_sensor_info calls this through the softfp convention.
-    float (__attribute__((pcs("aapcs"))) *res)(const void *) = android_shims_lookup("ASensor_getResolution");
+    // Unity's dump_sensor_info calls this through the Android convention (softfp on ARM).
+    float (SOFTFP *res)(const void *) = android_shims_lookup("ASensor_getResolution");
     CHECK(res && res(NULL) == 0.0f);
 
     AInputEvent *e = android_input_event_new_key(3, AKEY_EVENT_ACTION_DOWN, 96 /* BUTTON_A */, 0);

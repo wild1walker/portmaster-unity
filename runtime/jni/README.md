@@ -1,6 +1,7 @@
 # jni/: fake JavaVM/JNIEnv + Unity's Java player in C
 
-Two layers, both built into `out/libfakejni.a` (armhf, glibc ≤ 2.36, Debian bookworm cross gcc):
+Two layers, both built into `out/libfakejni.a` (armhf, glibc ≤ 2.36, Debian bookworm cross gcc)
+or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-build-arm64` image):
 
 | File | What |
 |---|---|
@@ -8,30 +9,50 @@ Two layers, both built into `out/libfakejni.a` (armhf, glibc ≤ 2.36, Debian bo
 | `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. |
 | `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper. |
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
-| `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below). |
+| `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
 | `test/` | Unit tests (see Tests). |
-| `build.sh`, `Makefile`, `docker/Dockerfile` | Build in docker image `ua-jni-build` (bookworm + gcc-arm-linux-gnueabihf + qemu-user). |
+| `build.sh`, `Makefile`, `docker/Dockerfile` | Build in docker image `ua-jni-build` (bookworm + gcc-arm-linux-gnueabihf + qemu-user), or with `ARCH=arm64` in `ua-build-arm64` (`../docker/arm64`). |
 
 ```
-./build.sh                    # builds out/libfakejni.a, out/test_*; runs both tests under qemu-arm
+./build.sh                    # builds out/libfakejni.a, out/test_*; runs both tests (arm/v7 container)
 ./build.sh out/libfakejni.a   # library only
+ARCH=arm64 ./build.sh         # out/arm64/libfakejni.a + tests, built and run natively (no QEMU)
 ```
 
 ## ABI (important)
+### 32-bit ARM
 The Android libraries are armeabi-v7a, which uses **softfp**: float/double arguments and results
 go in core registers (libunity's ELF flags say "soft-float ABI"). The host is armhf (VFP registers).
 - Every JNI function we hand out is compiled `__attribute__((pcs("aapcs")))` (`JNI_ABI`/`FJ_ABI`).
   Because the attribute sits on the slots in `include/jni.h`, host C code that calls through
   `(*env)->CallFloatMethod(...)` also uses the right convention automatically.
-- Natives registered by Unity are called with `fj_invoke_softfp()`: arguments are laid out as
-  base-AAPCS words (64-bit values in even register pairs / 8-byte-aligned stack slots) and passed to
-  a `pcs("aapcs")` function pointer; the result is read from r0/r0:r1. This handles any signature
-  of up to 40 words. Use `fj_call_native*()`, never cast `fj_native()` to a hard-float type.
+- Natives registered by Unity are called with `fj_invoke_native()` (formerly `fj_invoke_softfp`, still
+  an alias): arguments are laid out as base-AAPCS words (64-bit values in even register pairs /
+  8-byte-aligned stack slots) and passed to a `pcs("aapcs")` function pointer; the result is read
+  from r0/r0:r1. This handles any signature of up to 40 words. Use `fj_call_native*()`, never cast
+  `fj_native()` to a hard-float type.
 - C handlers (`fj_fn`) are only called by fakejni and use the normal host ABI.
 - Varargs (`Call*Method(...)`, `NewObject(...)`) and `va_list` (`...V`) are decoded per signature with
   `va_arg` (int-promoted Z/B/C/S, `jlong`, `double` for F, `double` for D, pointers). `...A` variants
   copy the `jvalue[]`.
 - `JNI_OnLoad` pointers are typed `up_onload_fn` (FJ_ABI; integer-only, so either ABI works).
+
+### AArch64
+arm64-v8a libraries and aarch64 Linux share AAPCS64 (floats and doubles in v registers on both
+sides), so `JNI_ABI`/`FJ_ABI` are empty and every JNI table function is plain C.
+- `fj_invoke_native()` places the decoded arguments as AAPCS64 does: integers and pointers in
+  x0-x7 (env and self first; narrow types sign/zero-extended), floats in s0-s7 (single precision,
+  not promoted) and doubles in d0-d7, and each argument after its register class runs out in the
+  next 8-byte stack slot, in argument order. It calls through a pointer type taking 8 integers,
+  8 doubles and 26 stack integers (a float rides in the low half of a double), which is as many
+  stack slots as `FJ_MAXARGS` (32) arguments can need; the result is read from x0, or d0/s0 through
+  a second pointer type returning double. No assembly is involved.
+- Varargs and `va_list`: `va_list` is a struct on AArch64 (passed by reference to a copy, the same
+  on bionic and glibc); the `...V` functions take it as `va_list` and `decode_va` reads it with
+  `va_arg` per signature (int-promoted Z/B/C/S, `jlong`, `double` for F and D, pointers), exactly as
+  on ARM. Host callers of `fj_call_native(...)` must pass objects as pointers (`NULL`, never `0`).
+- `Build.CPU_ABI`/`CPU_ABI2` and `System.getProperty("os.arch")` follow the build: `arm64-v8a`/""/
+  `aarch64` on AArch64, `armeabi-v7a`/`armeabi`/`armv7l` on ARM.
 
 ## fakejni model
 - **Handles**: every `jobject` is a pointer to an internal object (plain object, class, string,
@@ -67,7 +88,7 @@ go in core registers (libunity's ELF flags say "soft-float ABI"). The host is ar
   **once, always** (`UNKNOWN ...`, `UNIMPLEMENTED call ...`). `fj_class_absent(name)` or
   `FJ_STRICT=1` makes `FindClass` return NULL with NoClassDefFoundError instead.
 - **RegisterNatives** is recorded per class. `fj_native(cls, name, sig)` returns the fnPtr.
-  `fj_call_native(cls, name, sig, self, ...)` calls it with the softfp ABI. Java-side calls to a
+  `fj_call_native(cls, name, sig, self, ...)` calls it with the Android ABI. Java-side calls to a
   registered native (`Call*Method` on its id) are routed to it as well.
 - **Proxies**: `bitter.jnibridge.JNIBridge.newInterfaceProxy` (Unity's native listeners, e.g.
   `Choreographer$FrameCallback`, `Handler$Callback`, `Runnable`) and `ReflectionHelper.newProxyInstance`
@@ -142,7 +163,7 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
 - The android shim's `ANativeWindow_fromSurface(env, surface)` may use `up_surface_window(surface)`
   (== `fj_data(surface)`, the `cfg.native_window`). It currently returns its single window for any
   non-NULL Surface, which also works. `up_asset_manager(obj)` maps AssetManager objects to `cfg.asset_manager`.
-- Link order: `-lfakejni` (from `out/`), `-lpthread`, `-lm`. Include path is the `jni/` dir.
+- Link order: `-lfakejni` (from `out/`, or `out/arm64/`), `-lpthread`, `-lm`. Include path is the `jni/` dir.
 - FMOD: `AudioSystem.getPrimaryOutputSamplingRate()/getPrimaryOutputFrameCount()` return
   `cfg.audio_sample_rate` (48000) and `cfg.audio_frames_per_buffer` (512); FMOD fails to init if either is 0.
   If FMOD chooses its Java output (`FMODAudioDevice.start()`), a C thread pumps
@@ -154,22 +175,25 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   `cfg.meta_data` ("key=value"). The battery intent reports full; there is no network
   (`getActiveNetworkInfo` returns null), all permissions are granted and `SDK_INT` defaults to 22.
 
-## Tests (`./build.sh`, run under qemu-arm in the build container)
-- `test/test_fakejni.c` + `test/android_side.c`: android_side is compiled **`-mfloat-abi=softfp
-  -ffreestanding`**, like NDK code, and linked with `--no-warn-mismatch`. It calls every Call*
+## Tests (`./build.sh` in an arm/v7 container, `ARCH=arm64 ./build.sh` natively in ua-build-arm64)
+- `test/test_fakejni.c` + `test/android_side.c`: on ARM android_side is compiled **`-mfloat-abi=softfp
+  -ffreestanding`**, like NDK code, and linked with `--no-warn-mismatch`; on AArch64 it is ordinary
+  code (same ABI as the host). It calls every Call*
   family (plain varargs, `V` through real `va_list`, `A`, Nonvirtual, Static) with mixed
   I/J/F/D/L/Z/B/C/S arguments, float/double returns and field setters, plus NewObject with a float,
   virtual dispatch, exceptions, placeholders, absent classes, strings (UTF-16, modified UTF-8,
-  4-byte UTF-8), arrays, local frames, global refs and RegisterNatives. The host side calls those
-  softfp natives through `fj_call_native(_a)`, covers refcount freeing, direct buffers and boxing,
-  and runs 4 threads.
-- `test/test_unityplayer.c` + `test/fake_unity.c` (softfp): a fake libmain/libunity with the same native
+  4-byte UTF-8), arrays, local frames, global refs and RegisterNatives. Two natives take more
+  arguments than there are registers (`wide`: 22 mixed arguments, 8 of them on the AArch64 stack
+  including a float; `fsum`: 10 floats, float result), called from the Java side and from C. The
+  host side calls the natives through `fj_call_native(_a)`, covers refcount freeing, direct
+  buffers and boxing, and runs 4 threads.
+- `test/test_unityplayer.c` + `test/fake_unity.c` (softfp on ARM): a fake libmain/libunity with the same native
   tables as the real ones (listed with `tools/re/jnitables.py` from your own copy of the player). It checks the full startup order, display metrics
   (`getRefreshRate` float return), Build/paths/locale, SharedPreferences round trip and persistence,
   AudioSystem, Choreographer doFrame through a JNIBridge proxy, Handler/Message to a `Handler$Callback`
   proxy, the FMODAudioDevice thread, KeyEvent/MotionEvent/InputDevice reads (`getAxisValue(II)F`),
   UnitySendMessage, and pause/resume/surface loss/focus/quit.
-- Both pass (0 failures). They also pass with `FJ_TRACE=1`. The tests assume the default
+- Both pass (0 failures) on both architectures. They also pass with `FJ_TRACE=1`. The tests assume the default
   FJ_* modes: `FJ_NOFREE`/`FJ_STRICT` intentionally break their refcount/placeholder checks.
 
 ## What Unity may still call that is missing or shallow

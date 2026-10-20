@@ -2,14 +2,16 @@
 
 C shims for the Android-only libraries that Unity 2017.4.9f1's ARMv7 player
 (`libunity.so`, `libmain.so`, `libmono.so`) imports or dlopens, built for armhf glibc
-(Debian bookworm cross toolchain, glibc symbols up to 2.34).
+(Debian bookworm cross toolchain, glibc symbols up to 2.34), or for aarch64 glibc (arm64-v8a
+players; native gcc of the `ua-build-arm64` image, glibc symbols up to 2.28).
 
 ```
-./build.sh        # -> out/libandroidshims.a (+ out/obj/*.o), out/test/*
-./build.sh test   # also runs the unit tests under QEMU (no GPU), twice: SDL "disk" and "dummy" audio
+./build.sh                   # -> out/libandroidshims.a (+ out/obj/*.o), out/test/*
+./build.sh test              # also runs the unit tests under QEMU (no GPU), twice: SDL "disk" and "dummy" audio
+ARCH=arm64 ./build.sh test   # the same under out/arm64/, built and run natively in ua-build-arm64
 ```
-Link the host with `out/libandroidshims.a -lSDL2 -ldl -lpthread -lm`. Do not link a real libEGL
-for the shims' sake: `egl_glue.c` dlopens it.
+Link the host with `out/libandroidshims.a` (or `out/arm64/libandroidshims.a`) `-lSDL2 -ldl -lpthread -lm`.
+Do not link a real libEGL for the shims' sake: `egl_glue.c` dlopens it.
 
 ## What the libraries need (from `readelf`; `tools/re/elfimports.py` lists them for any player)
 
@@ -128,6 +130,20 @@ no floating-point parameters (varargs always use the base convention). GLES does
 GL functions through dlsym/eglGetProcAddress, and the loader's `softfp_gl.c`/`so_softfp_wrap()`
 provides the thunks; our `eglGetProcAddress` wrapper routes results through it.
 
+## AArch64 (arm64-v8a players)
+
+arm64-v8a code and aarch64 Linux share AAPCS64, so `SOFTFP` is empty and no thunks are needed:
+an arm64 loader need not define `so_softfp_wrap` (`egl_glue.c` references it weakly), and if it
+does, it must return the function unchanged. What else changes with the word
+size was checked against the NDK headers: every declaration here uses pointer-sized fields where
+the NDK does (`SLDataSource`, `SLDataLocator_OutputMix`, the interface vtables and handles,
+`ANativeWindow_Buffer.bits`), fixed-width integers elsewhere; `AAsset_seek/getLength/...` use
+`a_off_t` = `long`, which is bionic's `off_t` on both (32-bit on ARMv7, 64-bit on AArch64);
+`va_list` (`__android_log_vprint`) is the AAPCS64 struct passed by reference on bionic and glibc
+alike; EGL's native window/display types are one pointer-sized word on fbdev, X11 and Android, so
+`void *` still matches; Mali's `fbdev_window` is the same two `unsigned short`s on 64-bit drivers.
+The unit tests pass unchanged on both architectures.
+
 ## Tests
 
 `test/test_shims.c` (163 checks) covers: log formatting and filtering; assets (read/seek bounds,
@@ -136,8 +152,9 @@ and timeout; sensors and input; the window and egl_glue against `test/fake_egl.c
 follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress);
 OpenSL ES driven like FMOD (resolved through `android_sles_shims` like dlsym, 4 buffers, 40
 callbacks), checking SDL's disk-driver output sample by sample (sequence order, no gaps, -602 mB
-gives half amplitude). The test binary runs in the arm64 build image with the armhf multiarch
-runtime, under Docker Desktop's QEMU.
+gives half amplitude). The armhf test binary runs in the `ua-android-shims` image (which carries
+the armhf multiarch runtime) under Docker Desktop's QEMU; the aarch64 one runs natively in
+`ua-build-arm64`.
 
 OpenSL ES layouts, constants and interface IDs follow the NDK's `OpenSLES.h`,
 `OpenSLES_Android.h` and AOSP's `OpenSLES_IID.cpp`; `sles_min.h` declares only what we

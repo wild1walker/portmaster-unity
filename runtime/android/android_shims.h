@@ -1,4 +1,5 @@
-// Android API shims for running Unity's ARMv7 Android player on armhf glibc Linux.
+// Android API shims for running Unity's Android player on ARM glibc Linux: the armeabi-v7a
+// player on armhf, the arm64-v8a player on aarch64.
 //
 // Covers the Android-only libraries the player imports or dlopens:
 //   liblog.so      __android_log_*                         -> stderr
@@ -66,8 +67,8 @@ void *android_window_native_handle(ANativeWindow *w);
 int android_window_is_ours(const void *p);
 
 // ---- NDK types (opaque outside the shims) --------------------------------------------------
-// Bionic's 32-bit ABI: off_t is a 32-bit long, off64_t is long long. Spelled out so a host built
-// with _FILE_OFFSET_BITS=64 still sees the right prototypes.
+// Bionic's off_t is a long (32 bits on ARMv7, 64 on AArch64), off64_t a long long. Spelled out so
+// a host built with _FILE_OFFSET_BITS=64 still sees the right prototypes.
 typedef long a_off_t;
 typedef long long a_off64_t;
 typedef struct AAssetManager AAssetManager;

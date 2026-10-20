@@ -1,14 +1,20 @@
 /*
- * "Android side" of the fakejni test. Compiled with -mfloat-abi=softfp -ffreestanding so it
- * calls the JNI table exactly like code built by the NDK for armeabi-v7a (floats/doubles in
- * core registers), and its natives are softfp functions. No libc headers (they would need the
- * soft-float stubs); printf/strcmp are declared by hand (variadic/integer-only: same ABI).
+ * "Android side" of the fakejni test. On 32-bit ARM it is compiled with -mfloat-abi=softfp
+ * -ffreestanding so it calls the JNI table exactly like code built by the NDK for armeabi-v7a
+ * (floats/doubles in core registers), and its natives are softfp functions. No libc headers
+ * (they would need the soft-float stubs); printf/strcmp are declared by hand (variadic or
+ * integer-only: same ABI). On AArch64 it is ordinary code: arm64-v8a and the host share AAPCS64.
  */
 #include "../include/jni.h"
 
 int printf(const char *, ...);
 int strcmp(const char *, const char *);
 int snprintf(char *, unsigned long, const char *, ...);
+
+/* nat_wide's result for the arguments both tests pass (u is a 3-character string) */
+#define WIDE_SUM (1 + 2.5 * 2 + 3 * 3 + 4.25 * 4 - 5 * 5 + 6.5 * 6 + 7000000000.0 * 7 + 8.125 * 8 + 9 * 9 \
+                  + 10.5 * 10 - 11 * 11 + 12.75 * 12 + 13 * 13 + 14.5 * 14 + 1 * 15 - 16 * 16 + 17 * 17   \
+                  - 18 * 18 + 19.25 * 19 + 20.5 * 20 + 3 * 21 + 22 * 22)
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("  [android] FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
@@ -42,12 +48,36 @@ static jstring nat_str(JNIEnv *env, jclass cls, jstring a, jint n)
     return (*env)->NewStringUTF(env, buf);
 }
 
+/* More arguments than registers. AArch64: env, cls, a, c, e, g, i, k fill x0-x7 and b..s fill
+ * v0-v7, so m, o, p, q, r, t (a float), u, v go to the stack, in that order. ARM softfp: r0-r3
+ * then 8-byte aligned stack words. Each argument has its own weight, so any misplaced one shows. */
+static jdouble nat_wide(JNIEnv *env, jclass cls, jint a, jfloat b, jlong c, jdouble d, jint e, jfloat f,
+                        jlong g, jdouble h, jint i, jfloat j, jlong k, jdouble l, jint m, jfloat n,
+                        jboolean o, jbyte p, jchar q, jshort r, jdouble s, jfloat t, jobject u, jint v)
+{
+    (void)cls;
+    double ulen = u ? (double)(*env)->GetStringLength(env, (jstring)u) : -100.0;
+    return a * 1.0 + b * 2.0 + c * 3.0 + d * 4.0 + e * 5.0 + f * 6.0 + g * 7.0 + h * 8.0 + i * 9.0
+         + j * 10.0 + k * 11.0 + l * 12.0 + m * 13.0 + n * 14.0 + o * 15.0 + p * 16.0 + q * 17.0
+         + r * 18.0 + s * 19.0 + t * 20.0 + ulen * 21.0 + v * 22.0;
+}
+
+/* Ten floats: two of them on the AArch64 stack (4-byte values in 8-byte slots), float result. */
+static jfloat nat_fsum(JNIEnv *env, jclass cls, jfloat a, jfloat b, jfloat c, jfloat d, jfloat e,
+                       jfloat f, jfloat g, jfloat h, jfloat i, jfloat j)
+{
+    (void)env; (void)cls;
+    return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8 + i * 9 + j * 10;
+}
+
 static const JNINativeMethod natives[] = {
     { "mixed", "(IJFDLjava/lang/String;I)D", (void *)nat_mixed },
     { "halve", "(F)F", (void *)nat_halve },
     { "lng", "(IJIJ)J", (void *)nat_long },
     { "neg", "(Z)Z", (void *)nat_bool },
     { "str", "(Ljava/lang/String;I)Ljava/lang/String;", (void *)nat_str },
+    { "wide", "(IFJDIFJDIFJDIFZBCSDFLjava/lang/String;I)D", (void *)nat_wide },
+    { "fsum", "(FFFFFFFFFF)F", (void *)nat_fsum },
 };
 
 /* V-variant caller, like Unity's jni::Op<>::CallMethod wrappers */
@@ -231,6 +261,15 @@ int android_side_run(JavaVM *vm)
     jstring xs = (*env)->NewStringUTF(env, "xyz");
     CHECK(feq((*env)->CallStaticDoubleMethod(env, nat, mm, (jint)1, (jlong)2, (jfloat)0.5f, (jdouble)0.25, xs, (jint)10),
               1013.75));
+    jmethodID mw = (*env)->GetStaticMethodID(env, nat, "wide", "(IFJDIFJDIFJDIFZBCSDFLjava/lang/String;I)D");
+    CHECK(feq((*env)->CallStaticDoubleMethod(env, nat, mw, (jint)1, (jfloat)2.5f, (jlong)3, (jdouble)4.25,
+              (jint)-5, (jfloat)6.5f, (jlong)7000000000LL, (jdouble)8.125, (jint)9, (jfloat)10.5f, (jlong)-11,
+              (jdouble)12.75, (jint)13, (jfloat)14.5f, (jboolean)1, (jbyte)-16, (jchar)17, (jshort)-18,
+              (jdouble)19.25, (jfloat)20.5f, xs, (jint)22), WIDE_SUM));
+    jmethodID mf = (*env)->GetStaticMethodID(env, nat, "fsum", "(FFFFFFFFFF)F");
+    jvalue fa10[10];
+    for (int q = 0; q < 10; q++) fa10[q].f = 0.5f * (q + 1);
+    CHECK(feq((*env)->CallStaticFloatMethodA(env, nat, mf, fa10), 192.5));
     jmethodID mh = (*env)->GetMethodID(env, nat, "halve", "(F)F");
     jobject natobj = (*env)->AllocObject(env, nat);
     CHECK(feq((*env)->CallFloatMethod(env, natobj, mh, (jfloat)3.0f), 1.5));
