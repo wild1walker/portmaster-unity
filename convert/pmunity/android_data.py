@@ -87,6 +87,21 @@ def clone(src, dst, allow_hardlink):
     return 'copy'
 
 
+def consumable(args, src, act):
+    """--consume-src: the game data's big files are moved into the tree (or deleted once rewritten)
+    instead of copied; assemblies and Mono's config stay (an assembly patch reads them)."""
+    if not args.consume_src or act not in ('link', 'sfpatch', 'bundle', 'sfinline'):
+        return False
+    rel = os.path.relpath(os.path.realpath(src), os.path.realpath(args.src))
+    return not rel.startswith(('..', 'Managed' + os.sep, 'Mono' + os.sep))
+
+
+def move(src, dst):
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    os.replace(src, dst)
+    return 'moved'
+
+
 def write_bytes(dst, data):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     tmp = dst + '.tmp'
@@ -876,6 +891,10 @@ def main(argv=None):
     ap.add_argument('--beside', action='append', default=None, metavar='GLOB',
                     help="files of the game's folder (the parent of --src) put beside the APK root (default goggame-*.info)")
     ap.add_argument('--force', action='store_true', help='redo every file')
+    ap.add_argument('--consume-src', action='store_true',
+                    help="move the data's files into the tree instead of copying them (and delete what is "
+                         "rewritten): for a first-run setup on a file system without clones or hard links. "
+                         "--src is used up; re-running continues from the tree")
     ap.add_argument('--verify-bundles', type=int, default=6, help='bundles fully loaded with UnityPy in the check (0 = none, -1 = all)')
     ap.add_argument('--no-verify', action='store_true')
     ap.add_argument('--pack', choices=['none', 'apk', 'obb', 'all'], default='none',
@@ -929,16 +948,21 @@ def main(argv=None):
     newstate = {'_version': STATE_VERSION, '_opts': opts_key(args)}
     for k, (dst_rel, src, act) in enumerate(items):
         dst = os.path.join(args.out, dst_rel)
+        if not os.path.exists(src) and dst_rel in state and os.path.exists(dst):
+            newstate[dst_rel] = state[dst_rel]          # moved here by an earlier --consume-src run
+            stats['unchanged'] = stats.get('unchanged', 0) + 1
+            continue
         st = os.stat(src)
         key = [st.st_size, int(st.st_mtime_ns), act]
         if state.get(dst_rel) == key and os.path.exists(dst):
             newstate[dst_rel] = key
             stats['unchanged'] = stats.get('unchanged', 0) + 1
             continue
+        mv = consumable(args, src, act)
         if act == 'link' or (act in ('sfpatch', 'bundle') and args.platform_patch == 'none'):
-            how = clone(src, dst, allow_hardlink=True)
+            how = move(src, dst) if mv else clone(src, dst, allow_hardlink=True)
         elif act == 'sfpatch':
-            how = clone(src, dst, allow_hardlink=False)
+            how = move(src, dst) if mv else clone(src, dst, allow_hardlink=False)
             old = patch_sf_platform(dst)
             report['files'][dst_rel] = f'platform {old} -> {ANDROID}'
         elif act.startswith('patch:'):
@@ -956,12 +980,18 @@ def main(argv=None):
             n = inline_serialized(src, dst)
             report['files'][dst_rel] = f'platform -> {ANDROID}, {n} textures inlined'
             how = 'inlined'
+            if mv:
+                os.remove(src)
+                if os.path.exists(src + '.resS'):
+                    os.remove(src + '.resS')
         elif act == 'bundle' and args.inline_textures and any(nm.endswith('.resS') for _, _, _, nm in Bundle(src).nodes):
             n, dropped = inline_bundle(src, dst)
             report['bundles'][os.path.basename(dst)] = f'{n} textures inlined, dropped {dropped}'
             how = 'inlined'
+            if mv:
+                os.remove(src)
         elif act == 'bundle':
-            how = clone(src, dst, allow_hardlink=False)
+            how = move(src, dst) if mv else clone(src, dst, allow_hardlink=False)
             res = patch_bundle_platform(dst)
             report['bundles'][os.path.basename(dst)] = res
             if any(m == 'rewrite' for _, _, m in res):
@@ -986,6 +1016,9 @@ def main(argv=None):
     for d in sorted(placed_before):
         if d not in planned:
             p = os.path.join(args.out, d)
+            if args.consume_src and d in state and os.path.lexists(p):
+                newstate[d] = state[d]                  # its source was moved here by an earlier run
+                continue
             if os.path.lexists(p):
                 os.unlink(p)
                 log(f'removed stale {d}')
@@ -1165,8 +1198,8 @@ def verify(args, items, log):
             sf = env.file
             if not isinstance(sf, SerializedFile):
                 bad.append((dst_rel, 'not a serialized file')); continue
-            env0 = UnityPy.load(src)
-            if len(sf.objects) != len(env0.file.objects):
+            env0 = UnityPy.load(src) if os.path.exists(src) else None      # (gone with --consume-src)
+            if env0 is not None and len(sf.objects) != len(env0.file.objects):
                 bad.append((dst_rel, f'{len(sf.objects)} objects, source {len(env0.file.objects)}'))
             if want is not None and sf._m_target_platform != want:
                 bad.append((dst_rel, f'platform {sf._m_target_platform}'))

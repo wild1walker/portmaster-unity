@@ -219,49 +219,78 @@ def _format_name(tree):
         return None
 
 
+def _prepare(o, ch):
+    """Decoded and scaled mip levels of one texture (runs on the worker thread)."""
+    img = o.read().image.convert('RGBA')
+    return mip_chain(downscale(img, ch.width, ch.height), ch.mips)
+
+
 def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
     """Converts the textures of one opened file. Returns (stream name, new stream bytes or None,
-    {path id: sizes}) or None when nothing changed."""
+    {path id: sizes}) or None when nothing changed.
+
+    Decoding and scaling a texture (one core each) run on a worker thread while the previous
+    texture is encoded (ASTC on every core), one texture ahead at most. Everything else, and every
+    other read of the file, happens with the worker idle, in the textures' order, so the output is
+    the same as one texture after the other (c['pipeline'] = False does exactly that)."""
+    from concurrent.futures import ThreadPoolExecutor
     stream_name = None
     stream = StreamFile()
     sizes, save, converted = {}, [], 0
-    for pid, o in lf.objects('Texture2D'):
-        t = o.read_typetree()
-        sd = t.get('m_StreamData') or {}
-        streamed = bool(sd.get('size'))
-        if streamed:
-            name = sd['path']
-            if stream_name not in (None, name):
-                raise ValueError(f'{rel}: textures stream from more than one file ({stream_name}, {name})')
-            stream_name = name
-        elif not c['inline'] or not t.get('image data'):
-            continue
-        ch = choose(t, _format_name(t), c, sharp_rx)
-        if ch is None:
-            if streamed:                               # copied into the new stream file unchanged
-                blob = read_stream(sd['path'], sd['offset'], sd['size'])
-                t['m_StreamData'] = dict(sd, offset=stream.add(blob))
-                save.append((o, t))
-            continue
-        img = o.read().image.convert('RGBA')
-        levels = mip_chain(downscale(img, ch.width, ch.height), ch.mips)
-        del img
-        blob = b''.join(enc.encode(level, ch.block) for level in levels)
-        old = (t['m_Width'], t['m_Height'])
-        if (ch.width, ch.height) != old:
-            sizes[pid] = (old[0], old[1], ch.width, ch.height)
-        stats['in'] += sd.get('size') or len(t.get('image data') or b'')
-        stats['out'] += len(blob)
-        t['m_TextureFormat'] = astc_format_id(ch.block, ch.alpha)
-        t['m_Width'], t['m_Height'], t['m_MipCount'] = ch.width, ch.height, len(levels)
-        t['m_CompleteImageSize'] = len(blob)
-        if streamed:
-            t['m_StreamData'] = dict(sd, offset=stream.add(blob), size=len(blob))
-            t['image data'] = b''
-        else:
-            t['image data'] = blob
-        save.append((o, t))
-        converted += 1
+    items = [(pid, o, o.read_typetree()) for pid, o in lf.objects('Texture2D')]   # (no reads later)
+    pool = ThreadPoolExecutor(max_workers=1) if c.get('pipeline', True) else None
+    pending = []
+
+    def finish():
+        nonlocal converted
+        while pending:
+            pid, o, t, sd, streamed, ch, fut = pending.pop(0)
+            levels = fut.result() if pool else _prepare(o, ch)
+            blob = b''.join(enc.encode(level, ch.block) for level in levels)
+            nlevels = len(levels)
+            del levels
+            old = (t['m_Width'], t['m_Height'])
+            if (ch.width, ch.height) != old:
+                sizes[pid] = (old[0], old[1], ch.width, ch.height)
+            stats['in'] += sd.get('size') or len(t.get('image data') or b'')
+            stats['out'] += len(blob)
+            t['m_TextureFormat'] = astc_format_id(ch.block, ch.alpha)
+            t['m_Width'], t['m_Height'], t['m_MipCount'] = ch.width, ch.height, nlevels
+            t['m_CompleteImageSize'] = len(blob)
+            if streamed:
+                t['m_StreamData'] = dict(sd, offset=stream.add(blob), size=len(blob))
+                t['image data'] = b''
+            else:
+                t['image data'] = blob
+            save.append((o, t))
+            converted += 1
+
+    try:
+        for pid, o, t in items:
+            sd = t.get('m_StreamData') or {}
+            streamed = bool(sd.get('size'))
+            if streamed:
+                name = sd['path']
+                if stream_name not in (None, name):
+                    raise ValueError(f'{rel}: textures stream from more than one file ({stream_name}, {name})')
+                stream_name = name
+            elif not c['inline'] or not t.get('image data'):
+                continue
+            ch = choose(t, _format_name(t), c, sharp_rx)
+            if ch is None:
+                if streamed:                               # copied into the new stream file unchanged
+                    finish()                               # (the worker is idle while the file is read)
+                    blob = read_stream(sd['path'], sd['offset'], sd['size'])
+                    t['m_StreamData'] = dict(sd, offset=stream.add(blob))
+                    save.append((o, t))
+                continue
+            fut = pool.submit(_prepare, o, ch) if pool else None
+            finish()                                       # the previous one, while this one is prepared
+            pending.append((pid, o, t, sd, streamed, ch, fut))
+        finish()
+    finally:
+        if pool:
+            pool.shutdown(wait=True)
     if not converted:
         return None
     stats['textures'] += converted

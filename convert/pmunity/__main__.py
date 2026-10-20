@@ -5,6 +5,7 @@ GLES handhelds.
     python -m pmunity shaders <data> [<out>] [--precision highp|default-samplers] [--replace] [--bundles REGEX]
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
+    python -m pmunity macpkg <root> <installer.pkg>...       (unpack macOS installers, e.g. GOG's)
 
 <data> is the Unity data folder (<Game>_Data, or <Game>.app/Contents/Resources/Data). With <out>
 the converted files go there and <data> is only read (an overlay: later steps read a file from
@@ -48,6 +49,9 @@ def main(argv=None):
     if argv[:1] == ['android-data']:
         from . import android_data
         return android_data.main(argv[1:])
+    if argv[:1] == ['macpkg']:
+        from . import macpkg
+        return macpkg.main(argv[1:])
     ap = argparse.ArgumentParser(prog='pmunity')
     sub = ap.add_subparsers(dest='cmd', required=True)
     c = sub.add_parser('convert', help='run conversion steps with a game config')

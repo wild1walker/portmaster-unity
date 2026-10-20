@@ -23,7 +23,7 @@ computer.
 | `runtime/jni/` | a JavaVM/JNIEnv in C and Unity's `UnityPlayer` activity: lifecycle, the UnityMain looper, surface, input events, FMOD's AudioTrack, PackageManager, PlayerPrefs |
 | `runtime/android/` | liblog, libandroid (ANativeWindow on Mali fbdev, looper, sensors), OpenSL ES (to SDL2, or PCM piped into `pw-cat`/`pacat` when a sound server holds the card), EGL glue |
 | `runtime/host/` | `ua_host` (ties it together; SDL2 pads -> Android gamepads; frame statistics, shader dump/override, GL frame tracer, hitch sampler) and device checks (`egltest`, `sdltest`, `audiocheck`, `shadercheck`) |
-| `convert/pmunity/` | the data converter: `shaders` (OpenGL Core -> GLSL ES 3.00), `textures` (BC/DXT -> ASTC, optional downscale), `settings`, `audio`, `android-data` (APK + OBB for the player) |
+| `convert/pmunity/` | the data converter: `shaders` (OpenGL Core -> GLSL ES 3.00), `textures` (BC/DXT -> ASTC, optional downscale), `settings`, `audio`, `android-data` (APK + OBB for the player), `macpkg` (unpacks macOS installers such as GOG's). Runs on a PC or on the handheld itself (portmaster-cuphead's PortMaster setup does) |
 | `tools/` | device scripts (`device/`), log analysis (`analysis/`), an emulated armv7 test rig with Mesa (`emu/`), reverse-engineering helpers for new player versions (`re/`) |
 | `docs/` | design, runtime reference (every `UA_*` switch), the data format notes, shader notes, porting a new game |
 
