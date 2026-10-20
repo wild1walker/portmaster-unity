@@ -31,6 +31,12 @@ enum { R_ONLOAD, R_INITJNI, R_RESUME, R_PAUSE, R_DONE, R_FOCUS_TRUE, R_FOCUS_FAL
        R_PROXY_EXC_LOGGED,  /* nativeProxyLogJNIInvokeException(handle) after a managed exception */
        R_PROXY_FREED,       /* nativeProxyJNIFreeGCHandle(handle) (2021.3+)                       */
        R_HIDE_PRESERVED,    /* nativeHidePreservedContent calls (2021.3+)                         */
+       R_SWAPPY_DISPLAY,    /* Swappy's display query through NativeActivity, Build.DISPLAY       */
+       R_OBB_GUID_OK,       /* ZipFile(obb).getEntry("unity_obb_guid") read with Scanner (2021.3+) */
+       R_VSYNC,             /* doFrame on a HandlerThread's own Choreographer (2021.3+)            */
+       R_VSYNC_WAITED,      /* nativeRender waited for one of those and it came (2021.3+)         */
+       R_LOADLIB_OK,        /* loadLibrary / System.load name rules                                */
+       R_WEBREQ_ERR,        /* UnityWebRequest.run() (Java, up to 2018.4): errorCallback code     */
        /* mouse MotionEvents (pointer mode) */
        R_MOTION_ACTION, R_MOTION_TOOL, R_MOTION_BUTTONS, R_MOTION_PRESSED, R_VSCROLL_X1000,
        R_MOUSE_DEV_OK,      /* getDevice() of a SOURCE_MOUSE event is the registered mouse        */

@@ -7,8 +7,8 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 |---|---|
 | `fakejni.h/.c` | A complete `JavaVM`/`JNIEnv`: all 229 `JNINativeInterface` slots and the 5 `JNIInvokeInterface` slots, in `include/jni.h` (AOSP libnativehelper) order. Java classes, methods and fields are implemented by C handlers. |
 | `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. One build serves the players of Unity 2017.4 to 2022.3 (see Unity versions). |
-| `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
-| `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
+| `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ZipFile/ZipEntry, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
+| `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback; one per looper thread), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
 | `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
 | `test/` | Unit tests (see Tests). |
 | `build.sh`, `Makefile`, `docker/Dockerfile` | Build in docker image `ua-jni-build` (bookworm + gcc-arm-linux-gnueabihf + qemu-user), or with `ARCH=arm64` in `ua-build-arm64` (`../docker/arm64`). |
@@ -126,8 +126,8 @@ This mirrors `UnityPlayer.java`, `UnityPlayerActivity.java` and `UnityPlayer$e` 
    surface exists. `f()` (libs loaded, focus, not paused, not yet running) posts the GL job
    **`nativeResume()`** and the RESUME message.
 10. Each UnityMain loop pass: run the queued messages, then `executeGLThreadJobs()`. If resumed and a
-    surface exists, run the due Choreographer `doFrame` callbacks, then **`nativeRender()`**. A false
-    return means finish. Then `cfg.on_frame`, and repeat (NEXT_FRAME).
+    surface exists, run the due `doFrame` callbacks of UnityMain's Choreographer, then
+    **`nativeRender()`**. A false return means finish. Then `cfg.on_frame`, and repeat (NEXT_FRAME).
 
 The order observed by the test: initJni → InitWebRequest → RecreateGfxState(surface) →
 [SendSurfaceChangedEvent] → FocusChanged(true) → Resume → Render... Steps of later versions run
@@ -151,6 +151,11 @@ when their natives are registered: `nativeSendSurfaceChangedEvent` after every s
 The thread that calls `up_start` plays Android's **UI thread**. It must call `up_poll()` regularly,
 which runs `runOnUiThread` jobs and `Handler(getMainLooper())` posts. Input can be injected from it
 (Android injects on the UI thread). Unity's own Handlers or HandlerThreads get real looper threads.
+`Choreographer.getInstance()` is per looper, as on Android: UnityMain's, the UI thread's and a
+looper-less thread's run their callbacks on UnityMain before each `nativeRender` (the 2017.4 model);
+a HandlerThread's run on that thread at the display's vsync times (`cfg.refresh_rate`). Unity 2021.3+
+keeps its vsync clock on one ("UnityChoreographer", `FrameTimeTracker`) and waits for its frames
+inside `nativeRender` (`AndroidVSync`, `WaitVSync`): run on UnityMain, they never came.
 
 ### Host usage
 ```c
@@ -214,7 +219,9 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   UTF-8 byte[] forms, from C and from the static Java method), AndroidJavaProxy with int or long
   ids and each version's `newProxyInstance` (a Runnable posted with `runOnUiThread`, a call with
   an argument and a boxed result, managed exceptions of the 2019.4 and 2021.3 kinds, calls refused
-  after quit), the new UnityPlayer callbacks, Swappy's classes being absent, IL2CPP's library path
+  after quit), the new UnityPlayer callbacks, Swappy's Java classes and its display query through
+  `NativeActivity`, a 2021.3+ vsync HandlerThread whose frames `nativeRender` waits for, an OBB's
+  `unity_obb_guid` read through `ZipFile` (2021.3+), Android's `loadLibrary`/`load` name rules, IL2CPP's library path
   and `<files>/il2cpp`, `up_resize`, the 2020.3/2022.3 startup natives, pause/resume/surface
   loss/focus, and quit with `nativeDone` of either signature. It also checks that every Java
   method the 2017.4-2022.3 libunity call on UnityPlayer/ReflectionHelper by name is implemented.
@@ -274,22 +281,31 @@ as for a handheld:
 | `hidePreservedContent` (2021.3+) | acknowledged with `nativeHidePreservedContent` (inferred pairing) |
 | `setMainSurfaceViewAspectRatio`, `startActivityIndicator`/`stopActivityIndicator`, `setBackButtonLeavesApp` (2022.3) | ignored |
 
-**Frame pacing (Swappy, 2019.4+).** libunity's Swappy looks for its Java helpers
-(`com.google.androidgamesdk.ChoreographerCallback`, `SwappyDisplayManager`) through the activity's
-ClassLoader and then loads them from its embedded dex with `InMemoryDexClassLoader` (or, before
-API 26, writes the dex to the cache dir for `PathClassLoader`). All four classes are absent here
-(`ClassLoader.loadClass` throws ClassNotFoundException as on Android), so no dex is written or
-run; Swappy then uses its own timer instead of a choreographer and turns itself off when EGL has no
-`eglPresentationTimeANDROID` ("Swappy is disabled"; the Android Game SDK's behaviour, not yet seen
-with a real player here), and Unity paces frames as 2017.4 does (vsync, Choreographer callbacks
-through JNIBridge). Whether that EGL function resolves is up to the
-android/EGL layer: it should not, for this to hold. The converter could also turn
-`androidUseSwappy` off; that changes pacing, not the picture.
+**Frame pacing (Swappy, 2019.4+).** libunity's Swappy finds its Java helpers
+(`com.google.androidgamesdk.ChoreographerCallback`, `SwappyDisplayManager`, up_input.c) through the
+activity's ClassLoader; the dex class loaders it would otherwise load them with
+(`InMemoryDexClassLoader`, `PathClassLoader`) are absent, so no dex is written or run.
+ChoreographerCallback's frames come from UnityMain's Choreographer. Swappy reads the display as
+`NativeActivity.getWindowManager().getDefaultDisplay()` on Unity's activity (`android.app.NativeActivity`
+is defined as a subclass of Activity for that; before, a placeholder gave it a 0 Hz display) and
+`Build.DISPLAY` for its device list. It then stays off by the `swappy.disable` system property
+(android/README.md, "Frame pacing"). Unity itself must not use Swappy then: with
+`PlayerSettings.androidUseSwappy` on, 2019.4 presents nothing and 2021.3+ stop after their first
+frames, which `pmunity android-data` avoids by turning the setting off (its default); runtime/jni
+logs a line when Swappy starts.
 
 **IL2CPP players** find `libil2cpp.so` with `ClassLoader.findLibrary("il2cpp")`
 (`<native_lib_dir>/libil2cpp.so` when present, else null) and `System.load` it (the host's
 `on_load_library` gets the full path), then copy their data to `<files_dir>/il2cpp` with libc.
-`up_register_classes` creates `files_dir` and warns when it is not writable.
+`System.loadLibrary` and `UnityPlayer.loadLibrary` take a bare name (the host loads
+`lib<name>.so`) and `System.load` an absolute path, as on Android: anything else fails before the
+host is asked (UnsatisfiedLinkError; `UnityPlayer.loadLibrary` answers false). libunity tries
+`loadLibrary` on every plugin it looks up (`FindPluginExecutable`: `findLibrary` + `System.load`,
+else `loadLibrary(name)`, else the name without "lib"), with names like `libmono.so`, `libc.so.6`
+or a full path (2021.3+: `<lib dir>/libmono-native.so` and the same without `.so`); those fail as
+on a phone, and Unity's Mono then loads the file itself. (`libmono-native.so`, Mono's System.Native,
+must be in the library folder for a 2021.3+ .NET 4.x game, as in an Android build: without it
+`Interop.Sys` throws DllNotFoundException, which breaks `Guid.NewGuid`, file APIs, JSON libraries.)
 
 **Other Java the later players use**: `View.getDisplay()` (2019.4+ reads the display through it:
 the display), `Display.getRealMetrics/getSupportedModes/getMode` (one mode: the panel),
@@ -299,7 +315,13 @@ colour gamut (none), window insets (none), `PowerManager.isSustainedPerformanceM
 `AudioManager.getDevices` (the built-in speaker), `Settings.Global` `DEVICE_NAME` (the model),
 `Activity.moveTaskToBack` (ignored, false), `PackageInfo.getLongVersionCode`, more KeyEvent/
 MotionEvent getters, and `PlayAssetDeliveryUnityWrapper` answering as in an app built without
-the Play Core library (`playCoreApiMissing`, no asset pack paths). `cfg.sdk_int` should be at
+the Play Core library (`playCoreApiMissing`, no asset pack paths), `java.util.zip.ZipFile`
+(2021.3 checks an OBB with `getEntry("unity_obb_guid")` + `getInputStream` + Scanner; 2022.3 reads
+the zip itself), `Locale.toLanguageTag` ("en-US": the Mono 4.x players take the process culture
+from it; empty before, so Mono ran with the invariant culture), the three-argument
+`Class.forName` (binary names, ClassNotFoundException; libunity's class lookups through the app's
+class loader), `Build.DISPLAY`, `ActivityInfo.SCREEN_ORIENTATION_USER_*`/`FULL_USER` and
+`KeyEvent.KEYCODE_CAMERA` (placeholders reading 0 before). `cfg.sdk_int` should be at
 least the player's minimum API (22 for 2021.3 and 2022.3); libunity skips newer Android paths
 below their API level.
 
@@ -324,8 +346,9 @@ Activity calls them, here `up_*`), Swappy's classes (absent on purpose) and obfu
 The 2017.4.9 additions (`AudioAttributes.Builder.build`, `AudioFocusRequest.Builder.build`) are
 only reached at API 26+, so Cuphead (API 19) runs as before.
 
-**Not covered yet** (beyond the general gaps below): none of these players has been run, only
-their native tables and Java bindings; `nativeOrientationChanged` (2019.4+, sent by Java's
+**Not covered yet** (beyond the general gaps below): each of these lines has run one or two
+free Linux games in the emulated rig (docs/compat/README.md, "Players run"), the rest is their
+native tables and Java bindings; `nativeOrientationChanged` (2019.4+, sent by Java's
 orientation listener) and `nativeSetLaunchURL` (deep links) are never sent; `Application.Unload`
 quits; Play Asset Delivery has no asset packs and split APKs are not listed
 (`splitPublicSourceDirs` null); the 2019.4+ native UnityWebRequest's certificate checks meet
@@ -341,12 +364,15 @@ The authoritative list of what libunity can bind comes from `tools/re/strrefs.py
 thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`. Known gaps:
 - **Video** (`MediaCodec`, `MediaExtractor`, `MediaFormat`, `SurfaceTexture`, `Surface(SurfaceTexture)`)
   and `UnityPlayer.showVideoPlayer` (returns false). A game that plays videos through Unity's VideoPlayer on this path gets none.
-- **UnityWebRequest** Java class (`com/unity3d/player/UnityWebRequest` instances: networking, up
-  to 2018.4; native from 2019.4, with TLS checks through `TrustManagerFactory` placeholders), the
+- **Networking**: the Java `com/unity3d/player/UnityWebRequest` of 2017.4 - 2018.4 (Unity's
+  HTTP(S) transport; file: and jar: URLs are read natively) answers every request as a phone
+  without a network does (`run()` reports UnknownHostException, errorCallback code 7 as Unity's
+  Java side sends it), so `WWW`/`UnityWebRequest` complete with an error instead of never finishing;
+  2019.4+ use libunity's own transport, with TLS checks through `TrustManagerFactory` placeholders. The
   soft keyboard (`showSoftInput` is logged only), AlertDialog/Dialog/ProgressBar (activity indicator)
   and Presentation/MediaRouter (second display): placeholders.
 - 2019.4+: Play Asset Delivery (asset packs: none), `Camera2Wrapper`, `HFPStatus` (Bluetooth headset
-  microphone), Google VR/ARCore, `java.util.zip.ZipFile` (2021.3), `PointerIcon`/`Bitmap` (cursor
+  microphone), Google VR/ARCore, `PointerIcon`/`Bitmap` (cursor
   images), `DisplayCutout`/`WindowInsets` (none), `NetworkInterface`: placeholders or none.
 - Camera, location, `GeomagneticField`, `Parcel`/`IBinder`/`bindService` (returns false),
   `ParcelFileDescriptor`: placeholders. Sensors go through the NDK `ASensor*` shim, not JNI.

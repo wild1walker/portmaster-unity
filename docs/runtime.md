@@ -11,6 +11,14 @@
 | files the game reads beside its data | e.g. a GOG build's `goggame-*.info` (`--beside`) |
 | `data/` | created: `files/`, `cache/` (Unity's shader cache), `external/` (persistentDataPath: saves), `shared_prefs/` (PlayerPrefs) |
 
+What the host answers for itself (besides the Android shims): `System.loadLibrary(name)` /
+`UnityPlayer.loadLibrary(name)` load `lib<name>.so` from the library folder and `System.load(path)`
+that file, with the library's `JNI_OnLoad` called the first time (runtime/host/ua_host.c); and
+`libsteam_api.so`, unless the library folder has a real ARM one, is a stub of the Steamworks flat
+API that answers as a PC without a running Steam client (Init fails, the game goes on without
+Steam; runtime/host/steamstub.c). Android system properties come from the loader
+(`SO_PROP_<name, '.' as '_'>` overrides them; `swappy.disable=1` keeps Android Frame Pacing off).
+
 Run it with the 32-bit libraries first: `LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_host "$PWD"`
 (`tools/device/run.sh` does that, silent by default). Pads: SDL2 GameController, mapped by
 `SDL_GAMECONTROLLERCONFIG` (PortMaster's launchers set it through `get_controls`).

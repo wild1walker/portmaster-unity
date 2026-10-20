@@ -224,6 +224,26 @@ int main(int argc, char **argv)
     so_add_shims(bionic_compat_table());
     so_set_library_path(dir);
 
+    // system properties: the device's defaults (Swappy's off switch among them), SO_PROP_* overrides
+    {
+        int (*prop_get)(const char *, char *) = (int (*)(const char *, char *))so_shim_lookup("__system_property_get");
+        char v[92] = "";
+        CHECK(prop_get && prop_get("swappy.disable", v) == 1 && !strcmp(v, "1"), "swappy.disable = \"%s\"", v);
+        setenv("SO_PROP_swappy_disable", "0", 1);
+        CHECK(prop_get && prop_get("swappy.disable", v) == 1 && !strcmp(v, "0"), "SO_PROP_swappy_disable: \"%s\"", v);
+        unsetenv("SO_PROP_swappy_disable");
+        CHECK(prop_get && prop_get("no.such.prop", v) == 0 && !v[0], "a missing property");
+    }
+#if defined(__arm__)
+    // bionic-only names glibc lacks resolve to the static softfp wrappers (2018.4's libmonobdwgc)
+    {
+        int (SO_ABI *fin)(double) = (int (SO_ABI *)(double))so_resolve("__isfinite");
+        int (SO_ABI *finf)(float) = (int (SO_ABI *)(float))so_resolve("__isfinitef");
+        CHECK(fin && fin(1.5) && !fin(1.0 / 0.0) && !fin(0.0 / 0.0), "__isfinite");
+        CHECK(finf && finf(2.5f) && !finf(1.0f / 0.0f), "__isfinitef");
+    }
+#endif
+
     static const char *const kinds[] = { "plain", "RELR", "APS2", "RELR+APS2", "Android RELR+APS2" };
     so_module *m[5];
     for (int i = 0; i < 5; i++) {

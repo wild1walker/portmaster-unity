@@ -282,9 +282,14 @@ static void test_window_egl(const char *fakeegl)
     CHECK(GetProcAddress("eglCreateWindowSurface") == (void *)CreateWindowSurface);
     CHECK(GetProcAddress("eglFakeOnly") != NULL && GetProcAddress("eglNope") == NULL);
     CHECK(egl_glue_real("eglSwapBuffers") == dlsym(lib, "eglSwapBuffers"));
-    // Android's frame timing stays hidden even when the driver has it: Swappy turns itself off
+    // Android's frame timestamps stay hidden even when the driver has them; the presentation time
+    // is our no-op (Swappy's EGL table needs it; nothing queues frames here), not the driver's
     CHECK(egl_glue_real("eglPresentationTimeANDROID") != NULL);
-    CHECK(GetProcAddress("eglPresentationTimeANDROID") == NULL && GetProcAddress("eglGetFrameTimestampsANDROID") == NULL);
+    CHECK(GetProcAddress("eglGetFrameTimestampsANDROID") == NULL && GetProcAddress("eglGetNextFrameIdANDROID") == NULL);
+    int (*PresentationTime)(void *, void *, int64_t) = GetProcAddress("eglPresentationTimeANDROID");
+    CHECK(PresentationTime && (void *)PresentationTime == egl("eglPresentationTimeANDROID"));
+    CHECK((void *)PresentationTime != egl_glue_real("eglPresentationTimeANDROID"));
+    CHECK(PresentationTime && PresentationTime(NULL, NULL, 123456789) == 1);
     // eglSurfaceAttrib is not wrapped on this path: an import binds to the real one
     CHECK(egl("eglSurfaceAttrib") == NULL && egl_glue_real("eglSurfaceAttrib") == dlsym(lib, "eglSurfaceAttrib"));
 }
@@ -430,7 +435,8 @@ static void test_host_display(const char *fakeegl)
     CHECK(GetProcAddress("eglGetConfigAttrib") == (void *)GetConfigAttrib);
     CHECK(GetProcAddress("eglFakeOnly") != NULL);
     CHECK(GetProcAddress("eglSurfaceAttrib") == (void *)SurfaceAttrib);
-    CHECK(GetProcAddress("eglPresentationTimeANDROID") == NULL);
+    CHECK(GetProcAddress("eglPresentationTimeANDROID") == egl("eglPresentationTimeANDROID"));
+    CHECK(GetProcAddress("eglGetFrameTimestampsANDROID") == NULL);
     egl_glue_set_host_display(NULL);
     CHECK(GetDisplay(NULL) == (void *)0xd0);
 }

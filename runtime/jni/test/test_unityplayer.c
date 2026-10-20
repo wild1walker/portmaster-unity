@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <zlib.h>
 
 int fake_unity_get(int i);
 void fake_unity_set_shape(int shape);
@@ -25,6 +26,46 @@ static int frames_cb, audio_frames, quit_cb;
 static void on_frame(void *u) { frames_cb++; }
 static void on_audio(void *u, const int16_t *pcm, int frames, int rate) { audio_frames += frames; usleep(1000); }
 static void on_quit(void *u) { quit_cb++; }
+
+/* System.loadLibrary("plugin") and System.load(<abs path>) reach the host; nothing else may */
+static int loadlib_bad;
+static int on_load_library(void *u, const char *name)
+{
+    if (!strcmp(name, "plugin") || !strcmp(name, "/tmp/uptest/lib/libplugin.so")) return 1;
+    if (strcmp(name, "missing")) { printf("  host asked to load \"%s\"\n", name); loadlib_bad++; }
+    return 0;
+}
+
+/* a STORE zip as the converter writes an OBB: assets first, the GUID file at the root */
+static void put16(FILE *f, unsigned v) { fputc(v & 0xff, f); fputc(v >> 8 & 0xff, f); }
+static void put32(FILE *f, unsigned long v) { put16(f, v & 0xffff); put16(f, v >> 16 & 0xffff); }
+static void write_obb(const char *path)
+{
+    static const char *const names[2] = { "assets/first.bin", "unity_obb_guid" };
+    static const char *const data[2] = { "xxxxxxxx", "5678-obb-guid" };
+    unsigned long off[2], crc[2];
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    for (int i = 0; i < 2; i++) {
+        size_t nl = strlen(names[i]), dl = strlen(data[i]);
+        off[i] = ftell(f);
+        crc[i] = crc32(0, (const Bytef *)data[i], dl);
+        put32(f, 0x04034b50); put16(f, 20); put16(f, 0); put16(f, 0); put16(f, 0); put16(f, 0);
+        put32(f, crc[i]); put32(f, dl); put32(f, dl); put16(f, nl); put16(f, 0);
+        fwrite(names[i], 1, nl, f); fwrite(data[i], 1, dl, f);
+    }
+    unsigned long cd = ftell(f);
+    for (int i = 0; i < 2; i++) {
+        size_t nl = strlen(names[i]), dl = strlen(data[i]);
+        put32(f, 0x02014b50); put16(f, 20); put16(f, 20); put16(f, 0); put16(f, 0); put16(f, 0); put16(f, 0);
+        put32(f, crc[i]); put32(f, dl); put32(f, dl); put16(f, nl); put16(f, 0); put16(f, 0); put16(f, 0);
+        put16(f, 0); put32(f, 0); put32(f, off[i]);
+        fwrite(names[i], 1, nl, f);
+    }
+    unsigned long end = ftell(f);
+    put32(f, 0x06054b50); put16(f, 0); put16(f, 0); put16(f, 2); put16(f, 2); put32(f, end - cd); put32(f, cd); put16(f, 0);
+    fclose(f);
+}
 
 static int wait_for(int idx, int min, int ms)
 {
@@ -93,6 +134,7 @@ static int run_shape(int shape)
     fake_unity_set_shape(shape);
     if (system("rm -rf /tmp/uptest && mkdir -p /tmp/uptest/lib && touch /tmp/uptest/lib/libil2cpp.so") != 0)
         printf("  (could not reset /tmp/uptest)\n");
+    write_obb("/tmp/uptest/main.1.com.test.app.obb");
     static const char *meta[] = { "unity.splash-mode=0", "unity.build-id=1234-test", NULL };
     struct up_config cfg;
     memset(&cfg, 0, sizeof cfg);
@@ -111,6 +153,7 @@ static int run_shape(int shape)
     cfg.on_frame = on_frame;
     cfg.on_audio = on_audio;
     cfg.on_quit = on_quit;
+    cfg.on_load_library = on_load_library;
 
     struct up_input_device pad = { .id = 5, .name = "Test Pad", .descriptor = "pad-5",
                                    .sources = UP_SOURCE_GAMEPAD | UP_SOURCE_JOYSTICK, .naxes = 4,
@@ -130,6 +173,7 @@ static int run_shape(int shape)
     CHECK(R(R_ONLOAD) == 1);
     CHECK(R(R_INITJNI) == 1);
     CHECK(R(R_WEBREQ) == (shape <= SHAPE_2018_4));
+    CHECK(R(R_WEBREQ_ERR) == (shape <= SHAPE_2018_4 ? 7 : 0));   /* unknown host */
     CHECK(R(R_PATH_OK) == 1);
     CHECK(R(R_MODEL_OK) == 1);
     CHECK(R(R_SDK) == 23);
@@ -145,6 +189,9 @@ static int run_shape(int shape)
     CHECK(access("/tmp/uptest/data/files/il2cpp", W_OK) == 0);
     CHECK(R(R_ORIENT_LOCK) == (shape >= SHAPE_2020_3 ? 100 : 0));
     CHECK(R(R_NOWINDOW) == (shape >= SHAPE_2022_3 ? 1 : 0));
+    CHECK(R(R_SWAPPY_DISPLAY) == 1);
+    CHECK(R(R_OBB_GUID_OK) == 1);
+    CHECK(R(R_LOADLIB_OK) == 1 && loadlib_bad == 0);
 
     /* render loop */
     CHECK(wait_for(R_RENDER, 10, 5000));
@@ -155,6 +202,9 @@ static int run_shape(int shape)
     CHECK(wait_for(R_DOFRAME, 3, 3000));
     CHECK(wait_for(R_HANDLE_MSG, 42, 3000));
     CHECK(wait_for(R_FMOD_PROCESS, 3, 3000));
+    if (shape >= SHAPE_2021_3) CHECK(wait_for(R_VSYNC, 5, 3000) && wait_for(R_VSYNC_WAITED, 3, 3000));
+    else CHECK(R(R_VSYNC) == 0);
+    for (int t = 0; t < 300 && frames_cb < 10; t++) usleep(10000);   /* the 10th frame may still wait for its vsync */
     CHECK(frames_cb >= 10);
     CHECK(audio_frames >= 3 * 256);
 

@@ -2367,12 +2367,23 @@ static jvalue m_class_getSimpleName(JNIEnv *e, jobject self, const jvalue *a, vo
     const char *d = strrchr(s, '$');
     return fj_l(fj_string(d ? d + 1 : s));
 }
+/* Class.forName(name[, initialize, loader]): a binary name ("a.b.C", "a.b.C$D"), as FindClass
+ * finds it; ClassNotFoundException when there is none (libunity binds the three-argument form for
+ * its class lookups through the application's class loader) */
 static jvalue m_class_forName(JNIEnv *e, jobject self, const jvalue *a, void *ud)
 {
     (void)self; (void)ud;
     const char *n = fj_cstr(a[0].l);
-    if (!n) return fj_l(NULL);
-    return fj_l(j_FindClass(e, n));
+    if (!n) { fj_throw(e, "java/lang/NullPointerException", "forName(null)"); return fj_l(NULL); }
+    char b[512];
+    snprintf(b, sizeof b, "%s", n);
+    for (char *p = b; *p; p++) if (*p == '.') *p = '/';
+    jclass c = j_FindClass(e, b);
+    if (!c) {
+        (*e)->ExceptionClear(e);
+        fj_throw(e, "java/lang/ClassNotFoundException", n);
+    }
+    return fj_l(c);
 }
 
 static jvalue m_str_length(JNIEnv *e, jobject self, const jvalue *a, void *ud)
@@ -2583,6 +2594,7 @@ static void define_builtins(void)
     FJ_METHOD("java/lang/Class", "getName", "()Ljava/lang/String;", m_class_getName);
     FJ_METHOD("java/lang/Class", "getSimpleName", "()Ljava/lang/String;", m_class_getSimpleName);
     FJ_STATIC("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", m_class_forName);
+    FJ_STATIC("java/lang/Class", "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", m_class_forName);
 
     FJ_METHOD("java/lang/String", "length", "()I", m_str_length);
     FJ_METHOD("java/lang/String", "equals", "(Ljava/lang/Object;)Z", m_str_equals);

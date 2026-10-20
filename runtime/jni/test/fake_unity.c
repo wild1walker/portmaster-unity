@@ -12,6 +12,7 @@
 
 int printf(const char *, ...);
 int strcmp(const char *, const char *);
+int usleep(unsigned int);
 
 static volatile int R[R_N];
 static int S = SHAPE_2017_4_9;
@@ -19,7 +20,7 @@ int fake_unity_get(int i) { return (i >= 0 && i < R_N) ? R[i] : -1; }
 void fake_unity_set_shape(int shape) { S = shape; }
 
 static JavaVM *g_vm;
-static jobject g_context, g_choreo_cb, g_handler, g_proxy, g_proxy_failing;
+static jobject g_context, g_choreo_cb, g_handler, g_proxy, g_proxy_failing, g_vsync_cb, g_main_looper;
 static jmethodID m_doFrame, m_handleMessage, m_postFrame;
 static jclass c_choreo;
 
@@ -208,6 +209,74 @@ static jobject new_proxy(JNIEnv *env, jobject player, jclass iface)
                                           player, (jlong)PROXY_ID_LONG, ifs);
 }
 
+/* Swappy (2019.4+) finds the display as NativeActivity.getWindowManager().getDefaultDisplay() on
+   Unity's activity and reads Build.DISPLAY for its device list */
+static int swappy_display(JNIEnv *env)
+{
+    jclass na = (*env)->FindClass(env, "android/app/NativeActivity");
+    jmethodID gwm = na ? (*env)->GetMethodID(env, na, "getWindowManager", "()Landroid/view/WindowManager;") : 0;
+    jobject wm = gwm ? (*env)->CallObjectMethod(env, g_context, gwm) : 0;
+    jclass wmc = (*env)->FindClass(env, "android/view/WindowManager");
+    jobject d = wm ? (*env)->CallObjectMethod(env, wm, (*env)->GetMethodID(env, wmc, "getDefaultDisplay", "()Landroid/view/Display;")) : 0;
+    jclass dc = (*env)->FindClass(env, "android/view/Display");
+    jfloat rr = d ? (*env)->CallFloatMethod(env, d, (*env)->GetMethodID(env, dc, "getRefreshRate", "()F")) : 0;
+    jclass build = (*env)->FindClass(env, "android/os/Build");
+    jobject disp = (*env)->GetStaticObjectField(env, build, (*env)->GetStaticFieldID(env, build, "DISPLAY", "Ljava/lang/String;"));
+    return (int)(rr * 100.0f + 0.5f) == 5994 && disp != 0 && !clear_exc(env);
+}
+
+/* 2021.3: VerifyAndMountObb reads the OBB's root entry unity_obb_guid with java.util.zip.ZipFile */
+static int obb_guid(JNIEnv *env)
+{
+    jclass zf = (*env)->FindClass(env, "java/util/zip/ZipFile");
+    jclass ze = (*env)->FindClass(env, "java/util/zip/ZipEntry");
+    jmethodID init = (*env)->GetMethodID(env, zf, "<init>", "(Ljava/lang/String;)V");
+    jmethodID ge = (*env)->GetMethodID(env, zf, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;");
+    jmethodID gis = (*env)->GetMethodID(env, zf, "getInputStream", "(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;");
+    jobject z = (*env)->NewObject(env, zf, init, (*env)->NewStringUTF(env, "/tmp/uptest/main.1.com.test.app.obb"));
+    if (!z || clear_exc(env)) return 0;
+    jobject e = (*env)->CallObjectMethod(env, z, ge, (*env)->NewStringUTF(env, "unity_obb_guid"));
+    jobject miss = (*env)->CallObjectMethod(env, z, ge, (*env)->NewStringUTF(env, "assets/unity_obb_guid"));
+    int ok = e && !miss && str_eq(env, (*env)->CallObjectMethod(env, e, (*env)->GetMethodID(env, ze, "getName", "()Ljava/lang/String;")), "unity_obb_guid");
+    jobject in = e ? (*env)->CallObjectMethod(env, z, gis, e) : 0;
+    jclass sc = (*env)->FindClass(env, "java/util/Scanner");
+    jobject scan = in ? (*env)->NewObject(env, sc, (*env)->GetMethodID(env, sc, "<init>", "(Ljava/io/InputStream;Ljava/lang/String;)V"),
+                                          in, (*env)->NewStringUTF(env, "UTF-8")) : 0;
+    if (scan) scan = (*env)->CallObjectMethod(env, scan, (*env)->GetMethodID(env, sc, "useDelimiter", "(Ljava/lang/String;)Ljava/util/Scanner;"),
+                                              (*env)->NewStringUTF(env, "\\A"));
+    ok &= scan && str_eq(env, (*env)->CallObjectMethod(env, scan, (*env)->GetMethodID(env, sc, "next", "()Ljava/lang/String;")), "5678-obb-guid");
+    ok &= !clear_exc(env);
+    (*env)->NewObject(env, zf, init, (*env)->NewStringUTF(env, "/tmp/uptest/patch.1.com.test.app.obb"));   /* none: throws */
+    ok &= clear_exc(env);
+    return ok;
+}
+
+/* Android's names: loadLibrary(name) has no '/' (else UnsatisfiedLinkError: UnityPlayer.loadLibrary
+   answers false; libunity 2021.3+ asks for libmono-native.so's full path that way), System.load
+   wants an absolute path; the host gets lib<name>.so / the path */
+static int load_rules(JNIEnv *env, jobject player)
+{
+    jclass pc = (*env)->FindClass(env, "com/unity3d/player/UnityPlayer");
+    jmethodID ll = (*env)->GetMethodID(env, pc, "loadLibrary", "(Ljava/lang/String;)Z");
+    jclass sys = (*env)->FindClass(env, "java/lang/System");
+    jmethodID sl = (*env)->GetStaticMethodID(env, sys, "load", "(Ljava/lang/String;)V");
+    jmethodID sll = (*env)->GetStaticMethodID(env, sys, "loadLibrary", "(Ljava/lang/String;)V");
+    int ok = (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "plugin")) == JNI_TRUE;
+    ok &= (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "/tmp/uptest/lib/libplugin.so")) == JNI_FALSE;
+    ok &= (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "/tmp/uptest/lib/libplugin")) == JNI_FALSE;
+    ok &= (*env)->CallBooleanMethod(env, player, ll, (*env)->NewStringUTF(env, "lib/libplugin.so")) == JNI_FALSE;
+    ok &= !clear_exc(env);
+    (*env)->CallStaticVoidMethod(env, sys, sl, (*env)->NewStringUTF(env, "/tmp/uptest/lib/libplugin.so"));
+    ok &= !clear_exc(env);
+    (*env)->CallStaticVoidMethod(env, sys, sl, (*env)->NewStringUTF(env, "libplugin.so"));
+    ok &= clear_exc(env);
+    (*env)->CallStaticVoidMethod(env, sys, sll, (*env)->NewStringUTF(env, "lib/libplugin.so"));
+    ok &= clear_exc(env);
+    (*env)->CallStaticVoidMethod(env, sys, sll, (*env)->NewStringUTF(env, "missing"));
+    ok &= clear_exc(env);
+    return ok;
+}
+
 /* ---------------- UnityPlayer natives ---------------- */
 static void initJni(JNIEnv *env, jobject player, jobject context)
 {
@@ -266,11 +335,41 @@ static void initJni(JNIEnv *env, jobject player, jobject context)
     R[R_CALLBACKS_OK] = S >= SHAPE_2018_4 ? new_callbacks(env, player) : 1;
     R[R_SWAPPY_JAVA] = S >= SHAPE_2019_4 ? swappy_java(env) : 1;
     R[R_IL2CPP_OK] = il2cpp_paths(env);
+    R[R_SWAPPY_DISPLAY] = S >= SHAPE_2019_4 ? swappy_display(env) : 1;
+    R[R_OBB_GUID_OK] = S >= SHAPE_2021_3 ? obb_guid(env) : 1;
+    R[R_LOADLIB_OK] = load_rules(env, player);
     if (clear_exc(env)) FAIL("exception pending after initJni");
     (*env)->PopLocalFrame(env, 0);
 }
 
-static void nativeInitWebRequest(JNIEnv *env, jobject player, jclass cls) { (void)player; R[R_WEBREQ] = cls != 0; }
+/* up to 2018.4: libunity registers UnityWebRequest's natives on the class it is given, creates one
+   per HTTP request and calls run() on a worker thread; offline, run() ends it with an error */
+static void uwr_error(JNIEnv *env, jclass c, jlong ptr, jint code, jstring msg)
+{
+    if (ptr != 0x77aa) FAIL("UnityWebRequest errorCallback ptr");
+    R[R_WEBREQ_ERR] = code;
+    if (!msg) FAIL("UnityWebRequest errorCallback without a message");
+}
+static void nativeInitWebRequest(JNIEnv *env, jobject player, jclass cls)
+{
+    (void)player;
+    R[R_WEBREQ] = cls != 0;
+    if (!cls) return;
+    JNINativeMethod n[] = { { "errorCallback", "(JILjava/lang/String;)V", (void *)uwr_error } };
+    (*env)->RegisterNatives(env, cls, n, 1);
+    jclass mc = (*env)->FindClass(env, "java/util/HashMap");
+    jobject hdr = (*env)->NewObject(env, mc, (*env)->GetMethodID(env, mc, "<init>", "()V"));
+    jstring get = (*env)->NewStringUTF(env, "GET"), url = (*env)->NewStringUTF(env, "https://example.invalid/news.json");
+    jobject r = S <= SHAPE_2017_4_40
+        ? (*env)->NewObject(env, cls, (*env)->GetMethodID(env, cls, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;I)V"),
+                            (jlong)0x77aa, get, hdr, url, (jint)10000)
+        : (*env)->NewObject(env, cls, (*env)->GetMethodID(env, cls, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;ZI)V"),
+                            (jlong)0x77aa, get, hdr, url, (jboolean)1, (jint)10000);
+    if (S == SHAPE_2018_4)
+        (*env)->CallVoidMethod(env, r, (*env)->GetMethodID(env, cls, "setupTransferSettings", "(JZZ)V"), (jlong)0, (jboolean)1, (jboolean)1);
+    (*env)->CallVoidMethod(env, r, (*env)->GetMethodID(env, cls, "run", "()V"));
+    if (clear_exc(env)) FAIL("UnityWebRequest.run threw");
+}
 
 static void nativeRecreateGfxState(JNIEnv *env, jobject player, jint which, jobject surface)
 {
@@ -327,6 +426,23 @@ static void nativeResume(JNIEnv *env, jobject player)
     jclass mc = (*env)->FindClass(env, "android/os/Message");
     (*env)->CallVoidMethod(env, msg, (*env)->GetMethodID(env, mc, "sendToTarget", "()V"));
 
+    /* 2021.3+: Unity's vsync clock (FrameTimeTracker) on a HandlerThread "UnityChoreographer": a
+       message to its Handler.Callback, which posts to that thread's own Choreographer; nativeRender
+       then waits for those frames (AndroidVSync, WaitVSync) */
+    if (S >= SHAPE_2021_3) {
+        g_main_looper = (*env)->NewGlobalRef(env, lp);
+        jclass htc = (*env)->FindClass(env, "android/os/HandlerThread");
+        jobject ht = (*env)->NewObject(env, htc, (*env)->GetMethodID(env, htc, "<init>", "(Ljava/lang/String;)V"),
+                                       (*env)->NewStringUTF(env, "UnityChoreographer"));
+        (*env)->CallVoidMethod(env, ht, (*env)->GetMethodID(env, htc, "start", "()V"));
+        jobject hl = (*env)->CallObjectMethod(env, ht, (*env)->GetMethodID(env, htc, "getLooper", "()Landroid/os/Looper;"));
+        jobject vcb = (*env)->CallStaticObjectMethod(env, bridge, np, (jlong)0x3333, ifs2);
+        g_vsync_cb = (*env)->NewGlobalRef(env, (*env)->CallStaticObjectMethod(env, bridge, np, (jlong)0x4444, ifs));
+        jobject vh = (*env)->NewObject(env, hc, (*env)->GetMethodID(env, hc, "<init>", "(Landroid/os/Looper;Landroid/os/Handler$Callback;)V"), hl, vcb);
+        jobject vm = (*env)->CallObjectMethod(env, vh, (*env)->GetMethodID(env, hc, "obtainMessage", "(I)Landroid/os/Message;"), (jint)0);
+        (*env)->CallVoidMethod(env, vm, (*env)->GetMethodID(env, mc, "sendToTarget", "()V"));
+    }
+
     /* FMOD Java output device */
     jclass fd = (*env)->FindClass(env, "org/fmod/FMODAudioDevice");
     jobject dev = (*env)->NewObject(env, fd, (*env)->GetMethodID(env, fd, "<init>", "()V"));
@@ -371,6 +487,11 @@ static jboolean nativeRender(JNIEnv *env, jobject player)
 {
     R[R_RENDER]++;
     if (R[R_RESUME] == 0) FAIL("render before resume");
+    if (S >= SHAPE_2021_3 && R[R_VSYNC] > 0) {          /* WaitVSync: the next frame, from the other thread */
+        int want = R[R_VSYNC] + 1, t;
+        for (t = 0; t < 2000 && R[R_VSYNC] < want; t++) usleep(1000);
+        if (R[R_VSYNC] >= want) R[R_VSYNC_WAITED]++; else FAIL("no vsync while UnityMain waited for one");
+    }
     return JNI_TRUE;
 }
 
@@ -471,6 +592,22 @@ static jobject bridge_invoke(JNIEnv *env, jclass cls, jlong ptr, jclass iface, j
         R[R_HANDLE_MSG] = (*env)->GetIntField(env, msg, (*env)->GetFieldID(env, mc, "what", "I"));
         jclass bc = (*env)->FindClass(env, "java/lang/Boolean");
         return (*env)->NewObject(env, bc, (*env)->GetMethodID(env, bc, "<init>", "(Z)V"), (jboolean)1);
+    }
+    if (ptr == 0x3333 && mid == m_handleMessage) {           /* on the vsync HandlerThread */
+        jobject ch = (*env)->CallStaticObjectMethod(env, c_choreo, (*env)->GetStaticMethodID(env, c_choreo, "getInstance", "()Landroid/view/Choreographer;"));
+        (*env)->CallVoidMethod(env, ch, m_postFrame, g_vsync_cb);
+        jclass bc = (*env)->FindClass(env, "java/lang/Boolean");
+        return (*env)->NewObject(env, bc, (*env)->GetMethodID(env, bc, "<init>", "(Z)V"), (jboolean)1);
+    }
+    if (ptr == 0x4444 && mid == m_doFrame) {
+        jclass lpc = (*env)->FindClass(env, "android/os/Looper");
+        jobject my = (*env)->CallStaticObjectMethod(env, lpc, (*env)->GetStaticMethodID(env, lpc, "myLooper", "()Landroid/os/Looper;"));
+        jobject ui = (*env)->CallStaticObjectMethod(env, lpc, (*env)->GetStaticMethodID(env, lpc, "getMainLooper", "()Landroid/os/Looper;"));
+        if (!my || (*env)->IsSameObject(env, my, g_main_looper) || (*env)->IsSameObject(env, my, ui)) FAIL("vsync frame not on its HandlerThread");
+        R[R_VSYNC]++;
+        jobject ch = (*env)->CallStaticObjectMethod(env, c_choreo, (*env)->GetStaticMethodID(env, c_choreo, "getInstance", "()Landroid/view/Choreographer;"));
+        (*env)->CallVoidMethod(env, ch, m_postFrame, g_vsync_cb);
+        return 0;
     }
     FAIL("unexpected proxy call ptr=%x", (int)ptr);
     return 0;

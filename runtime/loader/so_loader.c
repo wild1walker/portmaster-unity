@@ -542,6 +542,7 @@ static void *host_lookup(const char *name)
     for (int i = 0; i < g_nhost_libs && !p; i++) p = dlsym(g_host_libs[i], name);
     if (!p) p = dlsym(RTLD_DEFAULT, name);
     if (p) p = so_softfp_wrap(name, p);
+    else p = so_softfp_static(name);
     return p;
 }
 
@@ -1603,7 +1604,7 @@ void *so_dlsym(void *handle, const char *symbol)
     } else if (h->kind == H_HOST) {
         if (!shims_lookup(symbol, &p) || !p) {
             p = dlsym(h->host, symbol);
-            if (p) p = so_softfp_wrap(symbol, p);
+            p = p ? so_softfp_wrap(symbol, p) : so_softfp_static(symbol);
         }
     } else if (h->kind == H_FAKE) {
         int found = 0;

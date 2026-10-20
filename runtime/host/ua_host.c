@@ -20,6 +20,7 @@
 #include "gltrace.h"
 #include "arch.h"
 #include "display.h"
+#include "steamstub.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -85,15 +86,26 @@ static void mkdirs(const char *path)
     mkdir(p, 0755);
 }
 
-// System.loadLibrary(name) / UnityPlayer.loadLibrary: lib<name>.so from the library folder
+// System.loadLibrary(name) / UnityPlayer.loadLibrary(name): lib<name>.so from the library folder,
+// as Android maps a bare name (the Java side refuses names with a '/'), so libunity's probes for
+// "libmono.so" or "libc.so.6" fail as on a phone and Unity dlopens those itself; System.load(path):
+// that file (IL2CPP players load libil2cpp.so so). A library that was not loaded yet gets its
+// JNI_OnLoad called, as Android's VM does (dlsym on the handle: the library, then its dependencies);
+// one already loaded natively (libmain, libunity, a dependency) does not get it a second time.
+// Returns 1 when loaded, else 0.
 static int load_library(void *user, const char *name)
 {
     (void)user;
-    char path[600];
-    snprintf(path, sizeof path, "%s/lib%s.so", libdir, name);
+    char path[PATH_MAX];
+    if (name[0] == '/') snprintf(path, sizeof path, "%s", name);
+    else snprintf(path, sizeof path, "%s/lib%s.so", libdir, name);
+    int had = so_find(path) != NULL;
     void *h = so_dlopen(path, 0);
-    fprintf(stderr, "[host] loadLibrary(%s): %s\n", name, h ? "ok" : so_dlerror());
-    return h ? 0 : -1;
+    fprintf(stderr, "[host] loadLibrary(%s): %s\n", name, h ? had ? "ok (already loaded)" : "ok" : so_dlerror());
+    if (!h) return 0;
+    jint (*onload)(JavaVM *, void *) = had ? NULL : (jint (*)(JavaVM *, void *))so_dlsym(h, "JNI_OnLoad");
+    if (onload) fprintf(stderr, "[host] %s JNI_OnLoad -> 0x%x\n", name, onload(fj_vm(), NULL));
+    return 1;
 }
 
 // crash report: signal, fault address and the module + offset (+ nearest symbol) of pc, lr and
@@ -291,6 +303,7 @@ int main(int argc, char **argv)
     so_register_fake_lib("libOpenSLES.so", android_sles_shims);
     so_map_library("libmediandk.so", NULL);     // no video decoder: VideoPlayer falls back
     so_map_library("libvulkan.so", NULL);       // GLES only
+    steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
 
     char path[600];
     snprintf(path, sizeof path, "%s/libmain.so", libdir);

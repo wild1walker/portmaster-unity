@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <zlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -489,6 +490,8 @@ H(vib_cancel) { if (UPC.on_vibrate) UPC.on_vibrate(UPC.user, 0); return fj_v(); 
 H(loc_lang)    { return fj_l(fj_string(UPC.language)); }
 H(loc_country) { return fj_l(fj_string(UPC.country)); }
 H(loc_str)     { char b[64]; snprintf(b, sizeof b, "%s_%s", UPC.language, UPC.country); return fj_l(fj_string(b)); }
+/* BCP 47 (API 21+): Mono 4.x players take the process culture from it ("Getting locale") */
+H(loc_tag)     { char b[64]; snprintf(b, sizeof b, "%s-%s", UPC.language, UPC.country); return fj_l(fj_string(b)); }
 
 /* Environment */
 H(env_extDir)  { return fj_l(up_make_file(UPC.external_storage)); }
@@ -533,15 +536,14 @@ static void stream_free(void *p) { stream *s = p; if (s) { free(s->buf); free(s)
 static uint32_t le32(const unsigned char *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t le16(const unsigned char *p) { return p[0] | p[1] << 8; }
 
-/* the whole entry "assets/<name>" of the zip at <apk>, NUL-terminated; 0 on success */
-static int apk_read_asset(const char *apk, const char *name, char **out, size_t *outlen)
+/* entry <want> of the zip at <path>: its whole data, NUL-terminated, in *out (out NULL: only
+ * whether it is there); 0 on success, -1 if missing or unreadable */
+static int zip_entry(const char *path, const char *want, char **out, size_t *outlen)
 {
-    FILE *f = fopen(apk, "rb");
+    FILE *f = fopen(path, "rb");
     if (!f) return -1;
     int rc = -1;
     unsigned char *cd = NULL, *comp = NULL;
-    char want[512];
-    snprintf(want, sizeof want, "assets/%s", name);
     size_t wl = strlen(want);
     /* end of central directory: in the last 64 KiB + 22 bytes */
     if (fseeko(f, 0, SEEK_END) != 0) goto done;
@@ -565,6 +567,7 @@ static int apk_read_asset(const char *apk, const char *name, char **out, size_t 
         uint32_t csize = le32(cd + p + 20), usize = le32(cd + p + 24), loff = le32(cd + p + 42);
         if (nl == wl && !memcmp(cd + p + 46, want, wl))
         {
+            if (!out) { rc = 0; goto done; }
             unsigned char lh[30];
             if (fseeko(f, loff, SEEK_SET) != 0 || fread(lh, 1, 30, f) != 30 || le32(lh) != 0x04034b50) goto done;
             if (fseeko(f, (off_t)loff + 30 + le16(lh + 26) + le16(lh + 28), SEEK_SET) != 0) goto done;
@@ -598,6 +601,14 @@ done:
     free(cd); free(comp);
     fclose(f);
     return rc;
+}
+
+/* the whole entry "assets/<name>" of the APK at <apk> (AssetManager.open) */
+static int apk_read_asset(const char *apk, const char *name, char **out, size_t *outlen)
+{
+    char want[512];
+    snprintf(want, sizeof want, "assets/%s", name);
+    return zip_entry(apk, want, out, outlen);
 }
 
 H(asset_open)
@@ -641,6 +652,76 @@ H(scanner_next)
 }
 H(is_close) { return fj_v(); }
 
+/* java.util.zip.ZipFile / ZipEntry: Unity 2021.3 checks an OBB with new ZipFile(obb)
+ * .getEntry("unity_obb_guid") and reads it through getInputStream + Scanner (2022.3 reads the zip
+ * itself). Entries are read whole, stored or deflated, like the APK's assets. */
+H(zf_init)
+{
+    const char *p = jstr(a[0]);
+    FILE *f = p ? fopen(p, "rb") : NULL;
+    if (!f) { fj_throw(env, "java/io/FileNotFoundException", p ? p : "(null)"); return fj_v(); }
+    fclose(f);
+    fj_set_data(self, strdup(p), free);
+    return fj_v();
+}
+H(zf_getEntry)
+{
+    const char *zip = fj_data(self), *n = jstr(a[0]);
+    if (!zip || !n || zip_entry(zip, n, NULL, NULL) != 0) return fj_l(NULL);
+    return fj_l(fj_new_by_name("java/util/zip/ZipEntry", strdup(n), free));
+}
+H(zf_getInputStream)
+{
+    const char *zip = fj_data(self), *n = a[0].l ? fj_data(a[0].l) : NULL;
+    stream *st = calloc(1, sizeof *st);
+    if (!zip || !n || !st || zip_entry(zip, n, &st->buf, &st->len) != 0) {
+        free(st);
+        fj_throw(env, "java/io/IOException", n ? n : "(null)");
+        return fj_l(NULL);
+    }
+    return fj_l(fj_new_by_name("java/io/InputStream", st, stream_free));
+}
+H(ze_getName) { const char *n = fj_data(self); return fj_l(n ? fj_string(n) : NULL); }
+
+/* com.unity3d.player.UnityWebRequest (2017.4 - 2018.4): Unity's HTTP(S) transport in Java
+ * (file: and jar: URLs are read natively; 2019.4+ has its own). This runtime has no HTTP client:
+ * run() ends a request the way HttpURLConnection does on a phone without a network, so it
+ * completes with an error at once instead of never finishing. An http(s) URL gets
+ * UnknownHostException, a URL without a scheme MalformedURLException, another scheme a
+ * protocol error: errorCallback codes 7, 5 and 4, as Unity's Java side reports them. */
+typedef struct { jlong ptr; char *url; } uwr;
+static void uwr_free(void *p) { uwr *w = p; if (w) { free(w->url); free(w); } }
+H(uwr_init)          /* (ptr, method, headers, url[, followRedirects], timeout) */
+{
+    uwr *w = calloc(1, sizeof *w);
+    if (!w) return fj_v();
+    const char *u = jstr(a[3]);
+    w->ptr = a[0].j;
+    w->url = strdup(u ? u : "");
+    fj_set_data(self, w, uwr_free);
+    return fj_v();
+}
+H(uwr_run)
+{
+    uwr *w = fj_data(self);
+    if (!w) return fj_v();
+    const char *u = w->url, *sep = strstr(u, "://");
+    char msg[600];
+    int code;
+    if (!sep) { code = 5; snprintf(msg, sizeof msg, "no protocol: %s", u); }
+    else if (!strncasecmp(u, "http://", 7) || !strncasecmp(u, "https://", 8)) {
+        const char *h = sep + 3;
+        int n = (int)strcspn(h, ":/?#");
+        code = 7;
+        snprintf(msg, sizeof msg, "Unable to resolve host \"%.*s\": No address associated with hostname", n > 255 ? 255 : n, h);
+    } else { code = 4; snprintf(msg, sizeof msg, "unknown protocol: %.*s", (int)(sep - u) > 32 ? 32 : (int)(sep - u), u); }
+    up_log("UnityWebRequest %s: no network here, error %d", u, code);
+    jvalue b[3] = { fj_j(w->ptr), fj_i(code), fj_l(fj_string(msg)) };
+    up_call_native("com/unity3d/player/UnityWebRequest", "errorCallback", "(JILjava/lang/String;)V",
+                   fj_class_find("com/unity3d/player/UnityWebRequest"), b);
+    return fj_v();
+}
+
 /* ClassLoader / System / Runtime / Thread */
 /* BaseDexClassLoader.findLibrary: the path of lib<name>.so in nativeLibraryDir, or null when the
  * app does not ship it (Unity probes optional libraries this way, e.g. the .NET 4.x Mono runtime
@@ -666,12 +747,20 @@ H(cl_loadClass)
     }
     return fj_l(c);
 }
+/* Android's rules for the two: System.loadLibrary(name) takes a bare name ("Directory separator
+ * should not appear in library name"), which the host maps to lib<name>.so; System.load(path) an
+ * absolute path. Anything else throws UnsatisfiedLinkError without loading. */
+static int load_named(const char *n, int by_name)
+{
+    if (!n || !*n || (by_name ? strchr(n, '/') != NULL : n[0] != '/')) return 0;
+    return UPC.on_load_library ? UPC.on_load_library(UPC.user, n) == 1 : 0;
+}
 H(sys_load)
 {
     const char *n = jstr(a[0]);
-    int ok = UPC.on_load_library ? UPC.on_load_library(UPC.user, n) : 0;
+    int ok = load_named(n, ud != NULL);
     up_log("System.load%s(%s) -> %d", ud ? "Library" : "", n, ok);
-    if (!ok) fj_throw(env, "java/lang/UnsatisfiedLinkError", n);
+    if (!ok) fj_throw(env, "java/lang/UnsatisfiedLinkError", n ? n : "(null)");
     return fj_v();
 }
 H(sys_nanoTime)  { return fj_j(up_now_ns()); }
@@ -937,10 +1026,10 @@ H(up_execGL)        { up_run_gl_jobs(); return fj_v(); }
 H(up_kill)          { up_log("UnityPlayer.kill()"); up_request_finish("UnityPlayer.kill()"); return fj_v(); }
 H(up_isFinishing)   { return fj_z(up_is_finishing()); }
 H(up_showSoftInput) { up_log("showSoftInput(\"%s\") ignored (no on-screen keyboard)", jstr(a[0])); return fj_v(); }
-H(up_loadLibrary)
+H(up_loadLibrary)    /* System.loadLibrary(name), false instead of UnsatisfiedLinkError */
 {
     const char *n = jstr(a[0]);
-    int ok = UPC.on_load_library ? UPC.on_load_library(UPC.user, n) : 0;
+    int ok = load_named(n, 1);
     up_log("UnityPlayer.loadLibrary(%s) -> %d", n, ok);
     return fj_z(ok);
 }
@@ -1153,6 +1242,9 @@ static void constants(void)
     fj_static_int(AI, "SCREEN_ORIENTATION_REVERSE_LANDSCAPE", 8);
     fj_static_int(AI, "SCREEN_ORIENTATION_REVERSE_PORTRAIT", 9);
     fj_static_int(AI, "SCREEN_ORIENTATION_FULL_SENSOR", 10);
+    fj_static_int(AI, "SCREEN_ORIENTATION_USER_LANDSCAPE", 11);    /* 2018.4+ players read these too */
+    fj_static_int(AI, "SCREEN_ORIENTATION_USER_PORTRAIT", 12);
+    fj_static_int(AI, "SCREEN_ORIENTATION_FULL_USER", 13);
     const char *PM = "android/content/pm/PackageManager";
     fj_static_string(PM, "FEATURE_AUDIO_LOW_LATENCY", "android.hardware.audio.low_latency");
     fj_static_int(PM, "GET_ACTIVITIES", 1);
@@ -1176,6 +1268,7 @@ static void constants(void)
     const char *B = "android/os/Build";
     fj_static_string(B, "DEVICE", UPC.device);
     fj_static_string(B, "ID", "LMY47D");
+    fj_static_string(B, "DISPLAY", "LMY47D");   /* the build id shown to users (Swappy's device list reads it) */
     fj_static_string(B, "MANUFACTURER", UPC.manufacturer);
     fj_static_string(B, "MODEL", UPC.model);
     fj_static_string(B, "BRAND", UPC.brand);
@@ -1224,6 +1317,9 @@ void up_android_register(void)
     CLS("android/content/ContextWrapper", "android/content/Context");
     CLS("android/view/ContextThemeWrapper", "android/content/ContextWrapper");
     CLS("android/app/Activity", "android/view/ContextThemeWrapper");
+    /* Swappy (Unity 2019.3+) reads the display through NativeActivity's getWindowManager() on
+     * Unity's activity: inherited from Activity, as on Android */
+    CLS("android/app/NativeActivity", "android/app/Activity");
     CLS("com/unity3d/player/UnityPlayerActivity", "android/app/Activity");
     CLS("com/unity3d/player/UnityPlayerNativeActivity", "com/unity3d/player/UnityPlayerActivity");
     CLS("android/view/View", NULL);
@@ -1276,6 +1372,8 @@ void up_android_register(void)
     CLS("java/io/FileNotFoundException", "java/io/IOException");
     CLS("java/lang/UnsatisfiedLinkError", "java/lang/LinkageError");
     CLS("java/util/Scanner", NULL);
+    CLS("java/util/zip/ZipFile", NULL);
+    CLS("java/util/zip/ZipEntry", NULL);
     CLS("java/util/Locale", NULL);
     CLS("java/lang/ClassLoader", NULL);
     CLS("java/lang/System", NULL);
@@ -1300,6 +1398,7 @@ void up_android_register(void)
     CLS("com/unity3d/player/NativeLoader", NULL);
     CLS("com/unity3d/player/ReflectionHelper", NULL);
     CLS("com/unity3d/player/UnityWebRequest", NULL);
+    fj_class_implements("com/unity3d/player/UnityWebRequest", "java/lang/Runnable");
     /* optional Unity features we do not provide: real Java would have these classes, but the
      * VR/AR paths only run when the build enables them; keep the placeholders. */
 
@@ -1547,6 +1646,7 @@ void up_android_register(void)
     M("java/util/Locale", "getLanguage", "()Ljava/lang/String;", loc_lang);
     M("java/util/Locale", "getCountry", "()Ljava/lang/String;", loc_country);
     M("java/util/Locale", "toString", "()Ljava/lang/String;", loc_str);
+    M("java/util/Locale", "toLanguageTag", "()Ljava/lang/String;", loc_tag);
     SMU("java/util/Locale", "getDefault", "()Ljava/util/Locale;", h_obj, &g_locale);
     SMU("android/os/Environment", "getExternalStorageState", "()Ljava/lang/String;", h_str, "mounted");
     SM("android/os/Environment", "getExternalStorageDirectory", "()Ljava/io/File;", env_extDir);
@@ -1568,6 +1668,19 @@ void up_android_register(void)
     M("java/util/Scanner", "useDelimiter", "(Ljava/lang/String;)Ljava/util/Scanner;", h_self);
     M("java/util/Scanner", "next", "()Ljava/lang/String;", scanner_next);
     M("java/util/Scanner", "close", "()V", h_void);
+    const char *UWR = "com/unity3d/player/UnityWebRequest";
+    M(UWR, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;I)V", uwr_init);      /* 2017.4 */
+    M(UWR, "<init>", "(JLjava/lang/String;Ljava/util/Map;Ljava/lang/String;ZI)V", uwr_init);     /* 2018.4 */
+    M(UWR, "setupTransferSettings", "(JZZ)V", h_void);
+    M(UWR, "run", "()V", uwr_run);
+    M(UWR, "abort", "()V", h_void);
+    SM(UWR, "clearCookieCache", "(Ljava/lang/String;Ljava/lang/String;)V", h_void);
+    const char *ZF = "java/util/zip/ZipFile";
+    M(ZF, "<init>", "(Ljava/lang/String;)V", zf_init);
+    M(ZF, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;", zf_getEntry);
+    M(ZF, "getInputStream", "(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;", zf_getInputStream);
+    M(ZF, "close", "()V", h_void);
+    M("java/util/zip/ZipEntry", "getName", "()Ljava/lang/String;", ze_getName);
     M("android/graphics/drawable/ColorDrawable", "<init>", "(I)V", h_void);
     SMU("android/graphics/ImageFormat", "getBitsPerPixel", "(I)I", h_int, 12);
     M("android/app/ActivityManager", "getMemoryClass", "()I", h_int);
@@ -1643,6 +1756,10 @@ void up_android_register(void)
     M("java/util/Iterator$Impl", "hasNext", "()Z", it_hasNext);
     M("java/util/Iterator$Impl", "next", "()Ljava/lang/Object;", it_next);
     M("java/util/HashMap", "entrySet", "()Ljava/util/Set;", map_entrySet);
+    /* the request headers libunity hands UnityWebRequest (2017.4 - 2018.4): never read back here */
+    M("java/util/HashMap", "<init>", "()V", h_void);
+    M("java/util/HashMap", "<init>", "(I)V", h_void);
+    M("java/util/HashMap", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", h_null);
 
     /* Looper / Handler / Message / HandlerThread */
     SM("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;", lp_main);
