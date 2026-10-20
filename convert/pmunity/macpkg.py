@@ -8,7 +8,8 @@ newc), gzip-compressed or in Apple's pbzx framing (xz chunks). The payload's pat
 the install location, so each file lands at <root>/<install location>/<path>: a DLC package that
 installs into the game's .app ends up inside it. GOG's installers leave the Payload empty (or out)
 and carry the game in the component's Scripts archive under payload/, which a postinstall script
-copies to the install location; that folder is unpacked the same way.
+copies to <install location>/<gog_bundle_name> (e.g. Cuphead.app; a DLC's on top of the game's);
+that folder is unpacked to the same place.
 
 Everything is streamed (a game's payload is gigabytes). Symbolic links are skipped and counted
 (exFAT cards cannot store them; a game's data folder has none); hard links in the archive are
@@ -206,7 +207,8 @@ def extract(pkg, root, log=print, keep=None):
 
     A component's files come from its Payload, and also from its Scripts archive when that holds a
     `payload/` folder: GOG's macOS installers ship the game that way (an empty or missing Payload,
-    and a postinstall script that copies Scripts/payload to the install location)."""
+    and a postinstall script that copies Scripts/payload to <install location>/<gog_bundle_name>).
+    keep does not apply to that folder (its final place is known only after the postinstall)."""
     x = Xar(pkg)
     files = dict(x.files())
     comps = sorted({p.rsplit('/', 1)[0] if '/' in p else '' for p in files
@@ -222,9 +224,22 @@ def extract(pkg, root, log=print, keep=None):
             if pre + part not in files or files[pre + part].find('data') is None:
                 continue
             before = totals[0]
-            _unpack(payload_stream(x.open(files[pre + part])), root, loc, strip, keep, totals)
+            if part == 'Payload':
+                _unpack(payload_stream(x.open(files[pre + part])), root, loc, strip, keep, totals)
+                dest = loc
+            else:
+                # GOG's postinstall copies payload/* into <install location>/<gog_bundle_name>, and
+                # the postinstall comes after payload/ in the archive: stage, then move into place.
+                stage = os.path.join(root, '.scripts-payload')
+                shutil.rmtree(stage, ignore_errors=True)
+                scripts = {'postinstall': b''}
+                _unpack(payload_stream(x.open(files[pre + part])), stage, '/', strip, None, totals, scripts)
+                bundle = _gog_bundle(scripts['postinstall'])
+                dest = os.path.join(loc, bundle) if bundle else loc
+                if os.path.isdir(stage):
+                    _merge(stage, os.path.join(root, dest.lstrip('/')))
             if totals[0] > before or part == 'Payload':
-                log(f'{os.path.basename(pkg)}: {c or "package"} {part} -> {loc}: {totals[0] - before} files')
+                log(f'{os.path.basename(pkg)}: {c or "package"} {part} -> {dest}: {totals[0] - before} files')
     if totals[0] == 0:
         log(f'{os.path.basename(pkg)}: no files found; the package holds: ' +
             ', '.join(f'{p} ({_size(fe)})' for p, fe in sorted(files.items()))[:2000])
@@ -236,11 +251,36 @@ def _size(fe):
     return f'{int(d.findtext("size") or 0) >> 10} KB' if d is not None else 'dir'
 
 
-def _unpack(s, root, loc, strip, keep, totals):
+def _gog_bundle(postinstall):
+    """The folder GOG's postinstall copies payload/* into (gog_bundle_name="Game.app"), or None."""
+    for line in postinstall.decode('utf-8', 'replace').splitlines():
+        if line.startswith('gog_bundle_name='):
+            name = line.split('=', 1)[1].strip().strip('"\'')
+            if name and '/' not in name and name not in ('.', '..'):
+                return name
+    return None
+
+
+def _merge(src, dst):
+    """Moves the tree src into dst, replacing files that exist (a DLC's payload over the game's, as
+    GOG's postinstall does with cp -rf), and removes src."""
+    for d, _dirs, fs in os.walk(src):
+        out = os.path.join(dst, os.path.relpath(d, src))
+        os.makedirs(out, exist_ok=True)
+        for f in fs:
+            os.replace(os.path.join(d, f), os.path.join(out, f))
+    shutil.rmtree(src)
+
+
+def _unpack(s, root, loc, strip, keep, totals, extra=None):
     """Writes the members of one cpio stream under root/<loc>. strip: only members inside that
-    top folder (e.g. 'payload'), with the folder removed from their paths."""
+    top folder (e.g. 'payload'), with the folder removed from their paths. extra: {name: b''} of
+    top-level files to read into the dict instead (e.g. the postinstall script)."""
     for name, mode, size in cpio_members(s):
         nm = os.path.normpath(name)
+        if extra is not None and nm in extra:
+            extra[nm] = _exact(s, size)
+            continue
         if strip is not None:
             if nm == strip or not nm.startswith(strip + '/'):
                 _skip(s, size)
