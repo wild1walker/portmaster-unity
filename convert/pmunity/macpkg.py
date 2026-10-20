@@ -17,6 +17,7 @@ written as copies.
 import gzip
 import lzma
 import os
+import re
 import shutil
 import struct
 import sys
@@ -205,8 +206,9 @@ def extract(pkg, root, log=print, keep=None):
     paths (relative to /). Returns (files, bytes, skipped symlinks).
 
     A component's files come from its Payload, and also from its Scripts archive when that holds a
-    `payload/` folder: GOG's macOS installers ship the game that way (an empty or missing Payload,
-    and a postinstall script that copies Scripts/payload to the install location)."""
+    `payload/` folder: GOG's macOS installers ship the game that way (no Payload, and a postinstall
+    script that moves Scripts/payload into <install location>/<gog_bundle_name>). keep applies to
+    Payload files only."""
     x = Xar(pkg)
     files = dict(x.files())
     comps = sorted({p.rsplit('/', 1)[0] if '/' in p else '' for p in files
@@ -218,13 +220,26 @@ def extract(pkg, root, log=print, keep=None):
         if pre + 'PackageInfo' in files:
             info = ET.fromstring(x.read(files[pre + 'PackageInfo']))
             loc = info.get('install-location') or '/'
-        for part, strip in (('Payload', None), ('Scripts', 'payload')):
-            if pre + part not in files or files[pre + part].find('data') is None:
-                continue
+        if pre + 'Payload' in files and files[pre + 'Payload'].find('data') is not None:
             before = totals[0]
-            _unpack(payload_stream(x.open(files[pre + part])), root, loc, strip, keep, totals)
-            if totals[0] > before or part == 'Payload':
-                log(f'{os.path.basename(pkg)}: {c or "package"} {part} -> {loc}: {totals[0] - before} files')
+            _unpack(payload_stream(x.open(files[pre + 'Payload'])), root, loc, None, keep, totals)
+            log(f'{os.path.basename(pkg)}: {c or "package"} Payload -> {loc}: {totals[0] - before} files')
+        if pre + 'Scripts' in files and files[pre + 'Scripts'].find('data') is not None:
+            # GOG: payload/ goes to <install location>/<gog_bundle_name> (the postinstall script's
+            # `mv payload/*` or, for a DLC, `cp -rf payload/*` into the game's .app); without such a
+            # script, payload/ goes to the install location itself. Unpacked into a staging folder
+            # first (the script comes after the payload in the archive), then moved into place.
+            stage = os.path.join(root, '.pmunity-payload', c or 'package')
+            before = totals[0]
+            scripts = {}
+            _unpack(payload_stream(x.open(files[pre + 'Scripts'])), stage, '/', 'payload', None, totals, scripts)
+            if totals[0] > before:
+                m = re.search(r'gog_bundle_name="([^"/]+)"', scripts.get('postinstall', b'').decode('utf-8', 'replace'))
+                dest = os.path.join(loc.lstrip('/'), m.group(1)) if m else loc.lstrip('/')
+                _merge(stage, os.path.join(root, dest))
+                log(f'{os.path.basename(pkg)}: {c or "package"} Scripts/payload -> /{dest}: {totals[0] - before} files')
+            shutil.rmtree(stage, ignore_errors=True)
+    shutil.rmtree(os.path.join(root, '.pmunity-payload'), ignore_errors=True)
     if totals[0] == 0:
         log(f'{os.path.basename(pkg)}: no files found; the package holds: ' +
             ', '.join(f'{p} ({_size(fe)})' for p, fe in sorted(files.items()))[:2000])
@@ -236,14 +251,29 @@ def _size(fe):
     return f'{int(d.findtext("size") or 0) >> 10} KB' if d is not None else 'dir'
 
 
-def _unpack(s, root, loc, strip, keep, totals):
+def _merge(src, dst):
+    """Moves the tree src into dst (files replace files of the same name), then removes src."""
+    for d, _, names in os.walk(src):
+        rel = os.path.relpath(d, src)
+        target = os.path.normpath(os.path.join(dst, rel))
+        os.makedirs(target, exist_ok=True)
+        for n in names:
+            os.replace(os.path.join(d, n), os.path.join(target, n))
+    shutil.rmtree(src, ignore_errors=True)
+
+
+def _unpack(s, root, loc, strip, keep, totals, scripts=None):
     """Writes the members of one cpio stream under root/<loc>. strip: only members inside that
-    top folder (e.g. 'payload'), with the folder removed from their paths."""
+    top folder (e.g. 'payload'), with the folder removed from their paths; scripts: a dict that
+    gets the small top-level files outside it (postinstall, preinstall) by name."""
     for name, mode, size in cpio_members(s):
         nm = os.path.normpath(name)
         if strip is not None:
             if nm == strip or not nm.startswith(strip + '/'):
-                _skip(s, size)
+                if scripts is not None and '/' not in nm and (mode & 0o170000) == 0o100000 and size < (1 << 20):
+                    scripts[nm] = _exact(s, size)
+                else:
+                    _skip(s, size)
                 continue
             nm = nm[len(strip) + 1:]
         rel = os.path.normpath(os.path.join(loc.lstrip('/'), nm))
