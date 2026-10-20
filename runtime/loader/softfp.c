@@ -1,7 +1,7 @@
 /*
  * softfp.c - softfp-ABI wrappers for host (hard-float) functions that take or
  * return float/double: GL/GLES (bound dynamically to the pointer the host gave us),
- * libm and libc (strtod, atof, difftime, ...; bound statically).
+ * libm and libc (strtod, wcstod, strtold_l, atof, difftime, ...; bound statically).
  *
  * armeabi-v7a code passes float arguments and results in core registers
  * (base AAPCS, "softfp"); armhf code expects them in VFP registers. Each wrapper
@@ -16,6 +16,7 @@
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <locale.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -23,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <wchar.h>
 #include "so_loader.h"
 
 #if defined(__arm__)
@@ -158,6 +160,17 @@ static SO_ABI double s_strtod(const char *s, char **e) { return strtod(s, e); }
 static SO_ABI float s_strtof(const char *s, char **e) { return strtof(s, e); }
 static SO_ABI double s_strtold(const char *s, char **e) { return strtod(s, e); }  /* long double == double */
 static SO_ABI double s_atof(const char *s) { return atof(s); }
+/* the wide and locale forms (libc++ inside libunity 2019.4+, Mono); the locale objects are glibc's
+ * (newlocale in hybris_compat.c) */
+static SO_ABI double s_wcstod(const wchar_t *s, wchar_t **e) { return wcstod(s, e); }
+static SO_ABI float s_wcstof(const wchar_t *s, wchar_t **e) { return wcstof(s, e); }
+static SO_ABI double s_wcstold(const wchar_t *s, wchar_t **e) { return wcstod(s, e); }
+static SO_ABI double s_strtod_l(const char *s, char **e, locale_t l) { return strtod_l(s, e, l); }
+static SO_ABI float s_strtof_l(const char *s, char **e, locale_t l) { return strtof_l(s, e, l); }
+static SO_ABI double s_strtold_l(const char *s, char **e, locale_t l) { return strtod_l(s, e, l); }
+static SO_ABI double s_wcstod_l(const wchar_t *s, wchar_t **e, locale_t l) { return wcstod_l(s, e, l); }
+static SO_ABI float s_wcstof_l(const wchar_t *s, wchar_t **e, locale_t l) { return wcstof_l(s, e, l); }
+static SO_ABI double s_wcstold_l(const wchar_t *s, wchar_t **e, locale_t l) { return wcstod_l(s, e, l); }
 static SO_ABI double s_difftime(time_t a, time_t b) { return difftime(a, b); }
 static SO_ABI double s_drand48(void) { return drand48(); }
 static SO_ABI double s_erand48(unsigned short x[3]) { return erand48(x); }
@@ -201,6 +214,8 @@ static const wrapent g_wraps[] = {
     { "__signbit", (void *)s_signbit, NULL },
     S(__fpclassifyd), S(__fpclassifyf), { "__fpclassify", (void *)s___fpclassifyd, NULL },
     S(strtod), S(strtof), S(strtold), S(atof), S(difftime), S(drand48), S(erand48),
+    S(wcstod), S(wcstof), S(wcstold), S(strtod_l), S(strtof_l), S(strtold_l), S(wcstod_l), S(wcstof_l),
+    S(wcstold_l),
     { NULL, NULL, NULL }
 };
 

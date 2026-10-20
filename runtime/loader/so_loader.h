@@ -102,7 +102,10 @@ void       *so_shim_lookup(const char *name);
 void so_set_library_path(const char *dirs);
 
 /* Map an Android library name (basename, e.g. "libGLESv2.so") to a host library
- * (e.g. "libGLESv2.so.2", or an absolute path). host == NULL: dlopen fails for it. */
+ * (e.g. "libGLESv2.so.2", or an absolute path). host == NULL: dlopen fails for it, also for an
+ * Android-only library the shims serve (e.g. "libmediandk.so") unless a table was registered for
+ * it with so_register_fake_lib; a DT_NEEDED entry of it is skipped, and imports still resolve
+ * through the shim tables. */
 void so_map_library(const char *android_name, const char *host);
 
 /* Register a fake Android library (e.g. "liblog.so", "libOpenSLES.so"): dlopen()

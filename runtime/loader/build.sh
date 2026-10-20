@@ -74,6 +74,10 @@ docker run --rm -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS" -e SY
   for i in 0 1 2 3 4 x; do
     $CC $S -Wl,-soname,libsyn_$i.so -o $D/libsyn_$i.so $D/syn_lib.o -L$D -lsyn_dep -lc $UNW
   done
+  # a library linked against libmediandk.so (an empty stand-in, for the DT_NEEDED entry), as libunity 2022.3
+  $CC -shared -nostdlib -Wl,-soname,libmediandk.so -o $D/libmediandk.so -x c /dev/null
+  $CC $A -c test/syn_media.c -o $D/syn_media.o
+  $CC $S -Wl,-soname,libsyn_media.so -o $D/libsyn_media.so $D/syn_media.o -L$D -lmediandk -lc
   P="python3 test/pack_relocs.py"
   $P --relr $D/libsyn_1.so $D/libsyn_1.so
   $P --aps2 $D/libsyn_2.so $D/libsyn_2.so
