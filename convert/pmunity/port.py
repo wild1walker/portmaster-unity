@@ -828,7 +828,7 @@ def check(path, asmpatch=None, deep=True, log=None):
     b = builds[0]
     rep['other_builds'] = [{k: x[k] for k in ('data', 'build', 'backend')} for x in builds[1:]]
     rep.update(b)
-    rep['size_mb'] = int(dir_size(b['root'] if b['build'] != 'macos' else b['root']) / 2 ** 20 + 0.5)
+    rep['size_mb'] = int(dir_size(b['root']) / 2 ** 20 + 0.5)
     rep['data_mb'] = int(dir_size(b['data']) / 2 ** 20 + 0.5)
     try:
         v = UV.of_data(b['data'])
@@ -1698,10 +1698,11 @@ def package(port_src, out=None, runtime=None, log=print, **opts):
         if os.path.isfile(p):
             os.chmod(p, 0o755)
     for c in route.get('package', []):
-        optional = c.endswith('?')
-        c = c.rstrip('?')
+        c = c.rstrip('?')                       # ('?': only when the port uses it; the part decides)
         if c not in COMPONENTS:
             continue                            # (a hook module provides it)
+        if c == 'asmpatch' and not needs_asmpatch(cfg):
+            continue
         log(f'== {c}')
         COMPONENTS[c](ctx, opts)
     for dst, src in (bld.get('outputs') or {}).items():
