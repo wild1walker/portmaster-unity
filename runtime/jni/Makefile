@@ -30,7 +30,7 @@ CC      := $(CROSS)gcc
 AR      := $(CROSS)ar
 
 LIB_OBJS := $(OUT)/fakejni.o $(OUT)/unityplayer.o $(OUT)/up_android.o $(OUT)/up_input.o $(OUT)/up_media.o \
-            $(OUT)/up_tls.o $(OUT)/up_fmod.o
+            $(OUT)/up_tls.o $(OUT)/up_fmod.o $(OUT)/up_http.o
 
 all: $(OUT)/libfakejni.a $(OUT)/test_fakejni $(OUT)/test_unityplayer
 
@@ -54,11 +54,11 @@ $(OUT)/fake_unity.o: test/fake_unity.c test/fake_unity.h include/jni.h | $(OUT)
 	$(CC) $(ANDROID_CFLAGS) -c $< -o $@
 
 $(OUT)/test_fakejni: test/test_fakejni.c $(OUT)/android_side.o $(OUT)/libfakejni.a
-	$(CC) $(CFLAGS) $< $(OUT)/android_side.o -L$(OUT) -lfakejni -lz -lpthread -lm \
+	$(CC) $(CFLAGS) $< $(OUT)/android_side.o -L$(OUT) -lfakejni -lz -ldl -lpthread -lm \
 	      $(TEST_LDFLAGS) -o $@
 
 $(OUT)/test_unityplayer: test/test_unityplayer.c test/fake_unity.h $(OUT)/fake_unity.o $(OUT)/libfakejni.a
-	$(CC) $(CFLAGS) $< $(OUT)/fake_unity.o -L$(OUT) -lfakejni -lz -lpthread -lm \
+	$(CC) $(CFLAGS) $< $(OUT)/fake_unity.o -L$(OUT) -lfakejni -lz -ldl -lpthread -lm \
 	      $(TEST_LDFLAGS) -o $@
 
 # run natively (arm64 in ua-build-arm64, or armhf on the device / an arm/v7 container)

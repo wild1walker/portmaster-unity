@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/.."
 docker build -q -t ua-tls-test test/tls >/dev/null
-docker run --rm -v "$PWD":/src:ro ua-tls-test sh -c '
+docker run --rm --network none -v "$PWD":/src:ro ua-tls-test sh -c '
   set -e
   W=$(mktemp -d); cd $W; mkdir der
   q() { "$@" >/dev/null 2>&1; }
@@ -23,8 +23,15 @@ docker run --rm -v "$PWD":/src:ro ua-tls-test sh -c '
   openssl x509 -in ca3.pem -outform der -out der/1.der
   python3 /src/test/tls/server.py 8443 srv.pem srv.key 2>server.log &
   python3 /src/test/tls/server.py 8444 bad.pem bad.key 2>>server.log &
+  python3 /src/test/tls/server.py 8080 2>>server.log &
+  echo "127.0.0.1 tls.test" >> /etc/hosts
   gcc -O2 -g -Wall -std=gnu11 -I/src -o test_tls /src/test/test_tls.c /src/fakejni.c /src/up_tls.c -lmbedtls -lmbedx509 -lmbedcrypto -lpthread -lm
+  gcc -O2 -g -Wall -std=gnu11 -I/src -o test_http /src/test/test_http.c /src/fakejni.c /src/unityplayer.c /src/up_android.c \
+    /src/up_input.c /src/up_tls.c /src/up_fmod.c /src/up_http.c -lz -ldl -lpthread -lm
   sleep 1
+  # Unity 2017.4 - 2018.4 UnityWebRequest: off by default, UA_HTTP=1 through the system libcurl
+  ./test_http off 2>&1 | grep -E "^  |http|FAIL"
+  UA_HTTP=1 UA_CA_BUNDLE=$W/bundle.pem ./test_http on 2>&1 | grep -E "^  |http|FAIL"
   UA_CA_BUNDLE=$W/bundle.pem TLS_WANT=2 ./test_tls der 8443 8444
   # a distribution bundle (Debian ca-certificates) with the test CA added
   S=/etc/ssl/certs/ca-certificates.crt

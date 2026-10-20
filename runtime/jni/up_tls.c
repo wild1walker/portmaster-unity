@@ -333,3 +333,14 @@ void up_tls_register(void)
     M("java/util/Enumeration", "hasMoreElements", "()Z", en_has);
     M("java/util/Enumeration", "nextElement", "()Ljava/lang/Object;", en_next);
 }
+
+/* the bundle file (or certificate directory) the store came from, for other TLS clients of the
+   runtime (up_http.c's libcurl): NULL when none was found */
+const char *up_tls_bundle_path(int *is_dir)
+{
+    up_tls_ca_count();
+    if (!g_source[0]) return NULL;
+    struct stat st;
+    if (is_dir) *is_dir = stat(g_source, &st) == 0 && S_ISDIR(st.st_mode);
+    return g_source;
+}
