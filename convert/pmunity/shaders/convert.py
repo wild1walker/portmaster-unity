@@ -5,11 +5,12 @@ built for macOS or Linux has OpenGL Core programs (GLSL 1.50) instead, which are
 3.00 (glsl.py). For every Shader:
 
   1. the GLCore platform blob is copied as a GLES3Plus blob (platform 9, the one Unity's GLES3
-     renderer reads), each entry used by a GLCore32 subprogram translated to GLSL ES 3.00 and
-     retyped GLES3 (gpu program type 4); entries nothing uses that way (and, from Unity 2021.2,
-     the parameter entries) are copied unchanged so the blob indices stay the same;
-  2. every GLCore32 subprogram in the parsed form gets a GLES3 twin: a copy with
-     m_GpuProgramType 4 and the same m_BlobIndex (2021.2+: the same parameter entry too).
+     renderer reads), each entry used by a GLCore subprogram translated to GLSL ES 3.00 and
+     retyped GLES3 (gpu program type 4), or to 3.10 and typed GLES 3.1 (3) where it needs that;
+     entries nothing uses that way (and, from Unity 2021.2, the parameter entries) are copied
+     unchanged so the blob indices stay the same;
+  2. every GLCore subprogram in the parsed form gets a GLES3 twin: a copy with
+     m_GpuProgramType 4 (or 3) and the same m_BlobIndex (2021.2+: the same parameter entry too).
      Parameters, bindings, keywords and channels are the GLCore ones, which the GL and GLES
      backends read the same way (both bind by name). This is what Unity's own builds hold: in
      the built-in resources of every LTS line 2017.4 - 2022.3, which carry both platforms, each
@@ -22,9 +23,17 @@ Where the subprograms are: up to Unity 2021.1 in each program's m_SubPrograms (a
 field each); from 2021.2 in m_PlayerSubPrograms, a list per hardware tier (desktop builds use the
 last, tier-independent one) with the parallel m_ParameterBlobIndices (subprogram_lists()).
 
-GLCore41 / GLCore43 programs (desktop-only variants) get no twin. A shader with a program that
-cannot be translated (glsl.Unsupported) gets no GLES3 programs at all, so Unity does not mix
-translated and missing variants; the report names it.
+GLCore subprograms are GLCore32 (GLSL 1.50 / 3.30) or, for `#pragma target 4.5` and up, GLCore41
+and GLCore43 (GLSL 4.x; glsl.py): every variant has one GLCore program, of the type of its
+target. GLCore41/43 ones are translated too (glcore4x=True; step.py: Unity 2018.1+ data), into
+GLES3 programs where the GLSL fits ES 3.00 and GLES 3.1 ones where it needs ES 3.10, so a shader
+whose SubShaders are compiled for different targets gets programs for each, as an Android build
+has them (Unity runs the first SubShader the device supports). A shader with a GLCore32 program
+that cannot be translated (glsl.Unsupported) gets no GLES3 programs at all, so Unity does not mix
+translated and missing variants; a SubShader with a GLCore41/43 program that cannot be
+translated gets none for its GLCore41/43 variants (Unity uses the next SubShader). The report
+names both. A shader whose variants were all stripped from the build (a GLCore blob without
+entries) gets an empty GLES3 blob, as Unity's builds have.
 
 A Windows build has Direct3D 11 programs instead (add_gles3_d3d11, dxbc.py): one blob entry per
 stage, translated a variant (vertex + pixel shader) at a time with Unity's HLSLcc.
@@ -37,6 +46,7 @@ from . import glsl
 
 STAGES = ('progVertex', 'progFragment', 'progGeometry', 'progHull', 'progDomain')
 GLES_TYPES = (B.GPU_GLES31AEP, B.GPU_GLES31, B.GPU_GLES3, B.GPU_GLES)
+GLCORE4X = (B.GPU_GLCORE41, B.GPU_GLCORE43)    # GLSL 4.x programs (`#pragma target 4.5` and up)
 # the GPU program types whose code and parameter entries are in a platform's blob
 PLATFORM_TYPES = {
     B.PLATFORM_GLCORE: (B.GPU_GLCORE32, B.GPU_GLCORE41, B.GPU_GLCORE43),
@@ -111,17 +121,29 @@ class Result:
         self.source = 'glcore'          # the platform translated: glcore | d3d11
         self.dropped = 0                # VR-only variants left out (not translatable)
         self.es31 = 0                   # programs that need GLSL ES 3.10 (GLES 3.1 programs, type 3)
-        self.failed = []                # D3D11: (subshader, why) of SubShaders left without GLES3 programs
+        self.programs4x = 0             # of the translated entries: GLCore41/43 ones
+        self.empty = False              # no programs at all: given an empty GLES3 blob
+        self.failed = []                # (subshader, why) of SubShaders left without GLES3 programs (D3D11;
+                                        # GLCore: their GLCore41/43 variants)
 
     def __repr__(self):
         return f'{self.name}: {self.status} {self.why}'.rstrip()
 
 
-def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=glsl.OPTIMIZE):
+def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=glsl.OPTIMIZE, glcore4x=True):
     """Adds GLES3 programs to one Shader typetree in place. Returns a Result.
     replace: a shader that already has GLES programs gets them rebuilt from its GLCore ones
     (otherwise it is left alone). translate: function(code bytes) -> code bytes, default glsl.program_to_es with
-    `precision` and the `optimize` rewrites."""
+    `precision` and the `optimize` rewrites. glcore4x: also translate GLCore41 / GLCore43 programs,
+    and give a shader with no GLCore programs at all (every variant stripped) an empty GLES3 blob
+    (False: GLCore32 programs only, the converter's behaviour before; step.py keeps it for Unity
+    2017.x data).
+
+    GLCore32 programs: a non-VR one that does not translate leaves the whole shader without GLES3
+    programs (Unity then does not mix translated and missing variants). GLCore41/43 programs are
+    taken a SubShader at a time: if a non-VR one does not translate, none of that SubShader's
+    GLCore41/43 variants get twins (Result.failed) and Unity uses the next SubShader or the
+    Fallback, as for a SubShader an Android build has no programs for; the shader keeps the rest."""
     name = tree['m_ParsedForm']['m_Name']
     r = Result(name)
     plats = list(tree['platforms'])
@@ -138,19 +160,44 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
     entries = platform_entries(tree, B.PLATFORM_GLCORE, blobs)
     used = sorted({sp['m_BlobIndex'] for _, _, lst in subprograms(tree) for sp in lst
                    if sp['m_GpuProgramType'] == B.GPU_GLCORE32})
-    if not used:
+    # GLCore41/43 programs per SubShader (the SubShader of each pass: sub_of)
+    sub_of, used4 = {}, {}
+    for si, ss in enumerate(tree['m_ParsedForm']['m_SubShaders']):
+        for p in ss['m_Passes']:
+            sub_of[id(p)] = si
+    if glcore4x:
+        for p, _, lst in subprograms(tree):
+            for sp in lst:
+                if sp['m_GpuProgramType'] in GLCORE4X:
+                    used4.setdefault(sub_of[id(p)], set()).add(sp['m_BlobIndex'])
+    if not used and not used4:
+        if glcore4x:
+            # no GLCore program at all (every variant stripped): an empty GLES3 blob, as Unity's own
+            # builds have a blob for each of their platforms
+            stages = blobs.stage_counts.get(B.PLATFORM_GLCORE) if blobs.stage_counts else None
+            blobs.set_entries(B.PLATFORM_GLES3PLUS, [e.copy() if e is not None else None for e in entries],
+                              blobs.segments(B.PLATFORM_GLCORE), stages)
+            blobs.store()
+            r.status, r.empty = 'converted', True
+            r.why = ('no programs (every variant stripped): an empty GLES3 blob ' + r.why).strip()
+            return r
         r.why = ('no GLCore32 programs ' + r.why).strip()
         return r
+    both = set(used) & {i for s in used4.values() for i in s}
+    if both:
+        raise ValueError(f'{name}: blob entry {min(both)} is both a GLCore32 and a GLCore41/43 program')
     tr = translate or (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes).encode('utf-8'))
     tr31 = None if translate else \
         (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes, es='310').encode('utf-8'))
     out = [e.copy() if e is not None else None for e in entries]
     dropped = set()                     # VR-only programs that do not translate: no twins
     es31 = set()                        # programs translated as GLES 3.1 ones
-    for i in used:
+
+    def translate_entry(i):
+        """None (translated in out[i], or no code), 'vr' (VR-only, left out) or the Unsupported."""
         e = out[i]
         if e is None:
-            continue
+            return None
         if not isinstance(e, B.Entry):
             raise ValueError(f'{name}: blob entry {i} is both a program and parameters')
         r.guessed_layout |= e.guessed
@@ -164,39 +211,80 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
                     e.code = tr31(e.code)
                     es31.add(i)
             except glsl.Unsupported as ex:
+                out[i] = entries[i].copy()
                 if any(k in VR_KEYWORDS for k in e.keywords + (e.local_keywords or [])):
                     dropped.add(i)      # e.g. STEREO_INSTANCING_ON writes gl_Layer (not in ES 3.00)
-                    out[i] = entries[i].copy()
                     r.dropped += 1
-                    continue
-                r.status, r.why = 'skipped', f'program {i}: {ex}'
-                r.changed = bool(replace and B.PLATFORM_GLES3PLUS in plats)
-                return r
+                    return 'vr'
+                return ex
             r.programs += 1
         e.gpu_type = B.GPU_GLES3
+        return None
+
+    for i in used:
+        ex = translate_entry(i)
+        if isinstance(ex, Exception):
+            r.status, r.why = 'skipped', f'program {i}: {ex}'
+            r.changed = bool(replace and B.PLATFORM_GLES3PLUS in plats)
+            return r
+    done4 = {}                          # GLCore41/43 entry -> None (translated, or no code) | 'vr' | Unsupported
+    counted = set()                     # of those, the entries whose code was translated (r.programs)
+    failed4 = set()                     # SubShaders whose GLCore41/43 variants get no twins
+    for si in sorted(used4):
+        for i in sorted(used4[si]):
+            if i not in done4:
+                n = r.programs
+                done4[i] = translate_entry(i)
+                if r.programs > n:
+                    counted.add(i)
+            if isinstance(done4[i], Exception):
+                failed4.add(si)
+                r.failed.append((si, f'GLCore41/43 program {i}: {done4[i]}'))
+                break
+    # what only the failed SubShaders use goes back as it was (no GLES subprogram names it)
+    keep = set().union(*(s for si, s in used4.items() if si not in failed4))
+    for i in set(done4) - keep:
+        out[i] = entries[i].copy() if entries[i] is not None else None
+        es31.discard(i)
+        if i in counted:
+            r.programs -= 1
+    r.programs4x = len(counted & keep)
+
+    def twinned(p, sp):
+        t = sp['m_GpuProgramType']
+        return t == B.GPU_GLCORE32 or t in GLCORE4X and glcore4x and sub_of[id(p)] not in failed4
+
     # the variants (per pass) whose program was left out: none of their subprograms get a twin;
     # those made GLES 3.1 programs: all their subprograms (and entries) are typed GLES 3.1
-    skip = {(id(p), _variant_key(sp)) for p, _, lst in subprograms(tree) for sp in lst
-            if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and sp['m_BlobIndex'] in dropped}
-    raised = {(id(p), _variant_key(sp)) for p, _, lst in subprograms(tree) for sp in lst
-              if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and sp['m_BlobIndex'] in es31}
+    skip = {(id(p), _variant_key(sp), sp['m_GpuProgramType']) for p, _, lst in subprograms(tree) for sp in lst
+            if twinned(p, sp) and sp['m_BlobIndex'] in dropped}
+    raised = {(id(p), _variant_key(sp), sp['m_GpuProgramType']) for p, _, lst in subprograms(tree) for sp in lst
+              if twinned(p, sp) and sp['m_BlobIndex'] in es31}
     for p, _, lst in subprograms(tree):
         for sp in lst:
-            if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and (id(p), _variant_key(sp)) in raised:
+            if twinned(p, sp) and (id(p), _variant_key(sp), sp['m_GpuProgramType']) in raised:
                 if out[sp['m_BlobIndex']] is not None:
                     out[sp['m_BlobIndex']].gpu_type = B.GPU_GLES31
     r.es31 = len(es31)
     # commit: the blob, then the twins
     stages = blobs.stage_counts.get(B.PLATFORM_GLCORE) if blobs.stage_counts else None
-    blobs.set_entries(B.PLATFORM_GLES3PLUS, out, blobs.segments(B.PLATFORM_GLCORE), stages)
-    blobs.store()
+    twins_of = []
     for p, _, lst, pbi in subprogram_lists(tree):
         twins = []
         for i, sp in enumerate(lst):
-            if sp['m_GpuProgramType'] == B.GPU_GLCORE32 and (id(p), _variant_key(sp)) not in skip:
+            k = (id(p), _variant_key(sp), sp['m_GpuProgramType'])
+            if twinned(p, sp) and k not in skip:
                 t = copy.deepcopy(sp)
-                t['m_GpuProgramType'] = B.GPU_GLES31 if (id(p), _variant_key(sp)) in raised else B.GPU_GLES3
+                t['m_GpuProgramType'] = B.GPU_GLES31 if k in raised else B.GPU_GLES3
                 twins.append((t, None if pbi is None else pbi[i]))
+        twins_of.append((p, lst, pbi, twins))
+    if failed4 and not any(tw for _, _, _, tw in twins_of):
+        r.status, r.why = 'skipped', '; '.join(f'SubShader {si}: {w}' for si, w in r.failed)
+        r.changed = bool(replace and B.PLATFORM_GLES3PLUS in plats)
+        return r
+    blobs.set_entries(B.PLATFORM_GLES3PLUS, out, blobs.segments(B.PLATFORM_GLCORE), stages)
+    blobs.store()
+    for p, lst, pbi, twins in twins_of:
         for t, pi in twins:
             lst.append(t)
             if pbi is not None:
@@ -205,6 +293,8 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
             add_platform(p, B.PLATFORM_GLES3PLUS)
         r.twins += len(twins)
     r.status = 'converted'
+    if r.failed:
+        r.why = (r.why + ' ' if r.why else '') + '; '.join(f'SubShader {si} left out: {w}' for si, w in r.failed)
     return r
 
 

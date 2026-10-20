@@ -239,6 +239,151 @@ class Glsl2019Test(unittest.TestCase):
         self.assertIn('#define UNITY_SUPPORTS_UNIFORM_LOCATION 0', f)
 
 
+# GLSL 4.20, the form of Unity's GLCore41 / GLCore43 programs (`#pragma target 4.5` and up):
+# 420pack, the unused `precise` declarations, varyings with explicit locations, binding macros
+_MACROS = """#define UNITY_SUPPORTS_UNIFORM_LOCATION 1
+#if UNITY_SUPPORTS_UNIFORM_LOCATION
+#define UNITY_LOCATION(x) layout(location = x)
+#define UNITY_BINDING(x) layout(binding = x, std140)
+#else
+#define UNITY_LOCATION(x)
+#define UNITY_BINDING(x) layout(std140)
+#endif
+"""
+PROGRAM_420 = """#ifdef VERTEX
+#version 420
+#extension GL_ARB_explicit_attrib_location : require
+#extension GL_ARB_shading_language_420pack : require
+
+""" + _MACROS + """precise vec4 u_xlat_precise_vec4;
+precise ivec4 u_xlat_precise_ivec4;
+precise bvec4 u_xlat_precise_bvec4;
+precise uvec4 u_xlat_precise_uvec4;
+uniform 	vec4 _Offset;
+UNITY_BINDING(0) uniform PerDraw {
+	vec4 hlslcc_mtx4x4ObjectToClip[4];
+};
+in  vec4 in_POSITION0;
+in  vec2 in_TEXCOORD0;
+layout(location = 0) out vec2 vs_TEXCOORD0;
+layout(location = 1) flat out uint vs_INDEX0;
+void main()
+{
+    gl_Position = hlslcc_mtx4x4ObjectToClip[0] * in_POSITION0.xxxx + _Offset;
+    vs_TEXCOORD0.xy = in_TEXCOORD0.xy;
+    vs_INDEX0 = uint(gl_VertexID);
+    return;
+}
+
+#endif
+#ifdef FRAGMENT
+#version 420
+#extension GL_ARB_explicit_attrib_location : require
+#extension GL_ARB_shading_language_420pack : require
+
+""" + _MACROS + """precise vec4 u_xlat_precise_vec4;
+UNITY_LOCATION(0) uniform  sampler2D _MainTex;
+layout(location = 0) in  vec2 vs_TEXCOORD0;
+layout(location = 1) flat in  uint vs_INDEX0;
+layout(location = 0) out vec4 SV_Target0;
+void main()
+{
+    SV_Target0 = texture(_MainTex, vs_TEXCOORD0.xy) * float(vs_INDEX0);
+    gl_FragDepth = 0.5;
+    return;
+}
+
+#endif
+"""
+# a storage buffer read in the vertex stage (procedural instancing): GLSL ES 3.10
+PROGRAM_420_SSBO = PROGRAM_420.replace(
+    '#extension GL_ARB_shading_language_420pack : require\n\n#define', '#extension GL_ARB_shading_language_420pack : require\n'
+    '#extension GL_ARB_shader_storage_buffer_object : enable\n\n#define', 1).replace(
+    'uniform 	vec4 _Offset;\n', 'layout(std430, binding = 0) readonly buffer Instances {\n\tvec4 Instances_buf[];\n};\n', 1).replace(
+    '+ _Offset;', '+ Instances_buf[gl_InstanceID];', 1)
+
+
+def _frag_line(program, old, new):
+    a = program.index('#ifdef FRAGMENT')
+    return program[:a] + program[a:].replace(old, new, 1)
+
+
+class Glsl4xTest(unittest.TestCase):
+    def test_es300(self):
+        st = G.stage_sources(G.program_to_es(PROGRAM_420))
+        v, f = st['VERTEX'], st['FRAGMENT']
+        for src in (v, f):
+            self.assertTrue(src.startswith('#version 300 es\nprecision highp float;\nprecision highp int;\n'), src[:80])
+            self.assertNotIn('GL_ARB_', src)
+            self.assertNotIn('precise', src)
+            self.assertIn('#define UNITY_SUPPORTS_UNIFORM_LOCATION 1', src)      # switched by the player
+        self.assertIn('\nout vec2 vs_TEXCOORD0;\nflat out uint vs_INDEX0;\n', v)  # matched by name in ES 3.00
+        self.assertIn('\nin  vec2 vs_TEXCOORD0;\nflat in  uint vs_INDEX0;\nlayout(location = 0) out vec4 SV_Target0;\n', f)
+        self.assertIn('UNITY_BINDING(0) uniform PerDraw {', v)
+        self.assertIn('UNITY_LOCATION(0) uniform  sampler2D _MainTex;', f)
+        self.assertIn('precision highp sampler2D;', f)
+
+    def test_used_precise_is_es32(self):
+        p = PROGRAM_420.replace('vec4 u_xlat0;', '', 1).replace('void main()\n{\n    gl_Position', 'precise vec4 u_xlat0;\nvoid main()\n{\n    u_xlat0 = _Offset;\n    gl_Position', 1)
+        with self.assertRaisesRegex(G.Unsupported, "qualifier 'precise'"):
+            G.program_to_es(p)
+        # a dummy that is used is not dropped (and so not translatable)
+        p = PROGRAM_420.replace('+ _Offset;', '+ _Offset + u_xlat_precise_vec4;', 1)
+        with self.assertRaisesRegex(G.Unsupported, 'precise'):
+            G.program_to_es(p)
+
+    def test_ssbo_es310(self):
+        with self.assertRaisesRegex(G.NeedsES31, 'std430'):
+            G.program_to_es(PROGRAM_420_SSBO)
+        st = G.stage_sources(G.program_to_es(PROGRAM_420_SSBO, es='310'))
+        v, f = st['VERTEX'], st['FRAGMENT']
+        self.assertTrue(v.startswith('#version 310 es\nprecision highp float;'))
+        self.assertNotIn('GL_ARB_', v)
+        self.assertIn('layout(std430, binding = 0) readonly buffer Instances {', v)
+        self.assertIn('layout(location = 0) out vec2 vs_TEXCOORD0;', v)          # ES 3.10 keeps them
+        self.assertIn('layout(location = 1) flat in  uint vs_INDEX0;', f)
+
+    def test_explicit_binding_es310(self):
+        p = _frag_line(PROGRAM_420, 'UNITY_LOCATION(0) uniform  sampler2D', 'layout(binding = 0) uniform  sampler2D')
+        with self.assertRaisesRegex(G.NeedsES31, 'binding'):
+            G.program_to_es(p)
+        self.assertIn('layout(binding = 0) uniform  sampler2D _MainTex;', G.program_to_es(p, es='310'))
+
+    def test_images(self):
+        decl = 'layout(location = 0) out vec4 SV_Target0;\n'
+        store = '    gl_FragDepth = 0.5;\n'
+        p = _frag_line(_frag_line(PROGRAM_420, decl, decl + 'writeonly layout(binding=1, rgba8) uniform image2D _Marks;\n'),
+                       store, store + '    imageStore(_Marks, ivec2(gl_FragCoord.xy), vec4(1.0));\n')
+        with self.assertRaises(G.NeedsES31):
+            G.program_to_es(p)
+        f = G.stage_sources(G.program_to_es(p, es='310'))['FRAGMENT']
+        self.assertIn('precision highp image2D;', f)                             # no default precision in ES
+        self.assertIn('writeonly layout(binding=1, rgba8) uniform image2D _Marks;', f)
+        # without a format (desktop GL can store to it, ES cannot)
+        with self.assertRaisesRegex(G.Unsupported, "image without a format qualifier '_Marks'"):
+            G.program_to_es(p.replace('binding=1, rgba8', 'binding=1'), es='310')
+
+    def test_desktop_only(self):
+        for old, new in (('uniform  sampler2D _MainTex;', 'uniform  samplerCubeArray _MainTex;'),
+                         ('gl_FragDepth = 0.5;', 'gl_FragDepth = float(textureQueryLevels(_MainTex));'),
+                         ('layout(location = 1) flat in  uint vs_INDEX0;', 'layout(location = 1, component = 0) flat in  uint vs_INDEX0;'),
+                         ('layout(location = 0) in  vec2 vs_TEXCOORD0;', 'in Block { vec2 vs_TEXCOORD0; };'),
+                         ('layout(location = 0) in  vec2 vs_TEXCOORD0;', 'layout(location = 0) noperspective in  vec2 vs_TEXCOORD0;'),
+                         ('gl_FragDepth = 0.5;', 'gl_FragDepth = interpolateAtCentroid(vs_TEXCOORD0).x;')):
+            p = _frag_line(PROGRAM_420, old, new)
+            self.assertNotEqual(p, PROGRAM_420, old)
+            with self.assertRaises(G.Unsupported, msg=new) as cm:
+                G.program_to_es(p, es='310')
+            self.assertNotIsInstance(cm.exception, G.NeedsES31, new)
+
+    def test_glsl150_rules_unchanged(self):
+        """The ES 3.10 features of GLSL 4.x stay Unsupported in a GLSL 1.50 program."""
+        p = PROGRAM_2019.replace('UNITY_LOCATION(0) uniform  sampler2D', 'layout(binding = 0) uniform  sampler2D', 1)
+        with self.assertRaisesRegex(G.Unsupported, 'layout qualifier') as cm:
+            G.program_to_es(p, es='310')
+        self.assertNotIsInstance(cm.exception, G.NeedsES31)
+
+
 def _entry19(gpu_type, code, keywords=(), local=()):
     return B.Entry(201806140, gpu_type, [0, 0, 0, 0], list(keywords), code, struct.pack('<2i', 9, 0), list(local))
 
@@ -351,6 +496,129 @@ class NewerLayoutsTest(unittest.TestCase):
         self.assertEqual(C.add_gles3(tree, replace=True).status, 'converted')
         self.assertEqual(tree['m_ParsedForm'], before['m_ParsedForm'])
         self.assertEqual(B.ShaderBlobs(tree).platforms, B.ShaderBlobs(before).platforms)
+
+
+class GLCore4xConvertTest(unittest.TestCase):
+    """GLCore41/43 programs: twins of their own type, a SubShader at a time; stripped shaders."""
+
+    def _two_subshaders(self, prog43=PROGRAM_420_SSBO):
+        """2021.2+: SubShader 0 with a GLCore43 program (`#pragma target 4.5`), SubShader 1 its
+        GLCore32 fallback, each a pass with one tier-independent vertex subprogram."""
+        sub = lambda i, t: {'m_BlobIndex': i, 'm_KeywordIndices': [], 'm_ShaderRequirements': 1, 'm_GpuProgramType': t}
+        def prog(i, t, pi):
+            return {'m_SubPrograms': [], 'm_PlayerSubPrograms': [[], [], [], [sub(i, t)]],
+                    'm_ParameterBlobIndices': [[], [], [], [pi]], 'm_CommonParameters': {}}
+        empty = {'m_SubPrograms': [], 'm_PlayerSubPrograms': [[], [], [], []], 'm_ParameterBlobIndices': [[], [], [], []]}
+        p0 = {'m_Platforms': [15], 'progVertex': prog(2, 8, 0), 'progFragment': copy.deepcopy(empty)}
+        p1 = {'m_Platforms': [15], 'progVertex': prog(3, 6, 1), 'progFragment': copy.deepcopy(empty)}
+        es = [_params21(), _params21('Other'), _entry21(8, prog43.encode()), _entry21(6, PROGRAM_2019.encode())]
+        tree = _tree({15: B.build_segments(es)}, {'m_Name': 'T', 'm_SubShaders': [{'m_Passes': [p0]}, {'m_Passes': [p1]}]},
+                     True, stage_counts=[1])
+        return tree, p0, p1, es
+
+    def test_subshader_per_target(self):
+        tree, p0, p1, es = self._two_subshaders()
+        before = copy.deepcopy(tree)
+        r = C.add_gles3(tree)
+        self.assertEqual((r.status, r.programs, r.programs4x, r.es31, r.twins, r.failed), ('converted', 2, 1, 1, 2, []))
+        self.assertEqual(tree['platforms'], [9, 15])
+        self.assertEqual(tree['stageCounts'], [1, 1])
+        self.assertEqual((p0['m_Platforms'], p1['m_Platforms']), ([9, 15], [9, 15]))
+        v0, v1 = p0['progVertex'], p1['progVertex']
+        self.assertEqual([(s['m_GpuProgramType'], s['m_BlobIndex']) for s in v0['m_PlayerSubPrograms'][3]], [(8, 2), (3, 2)])
+        self.assertEqual([(s['m_GpuProgramType'], s['m_BlobIndex']) for s in v1['m_PlayerSubPrograms'][3]], [(6, 3), (4, 3)])
+        self.assertEqual((v0['m_ParameterBlobIndices'][3], v1['m_ParameterBlobIndices'][3]), ([0, 0], [1, 1]))
+        ours = C.platform_entries(tree, 9)
+        self.assertEqual([type(e).__name__ for e in ours], ['ParamEntry', 'ParamEntry', 'Entry', 'Entry'])
+        self.assertEqual([e.serialize() for e in ours[:2]], [e.serialize() for e in es[:2]])
+        self.assertEqual((ours[2].gpu_type, ours[3].gpu_type), (3, 4))
+        self.assertEqual((ours[2].rest, ours[3].rest), (es[2].rest, es[3].rest))
+        self.assertTrue(ours[2].code.startswith(b'#ifdef VERTEX\n#version 310 es\n'))
+        self.assertEqual([i for i, _ in C.gles3_programs(tree)], [2, 3])
+        # GLCore32 programs only (the converter before, and 2017.x data): SubShader 0 gets nothing
+        old = copy.deepcopy(before)
+        r = C.add_gles3(old, glcore4x=False)
+        self.assertEqual((r.status, r.programs, r.twins), ('converted', 1, 1))
+        self.assertEqual(len(old['m_ParsedForm']['m_SubShaders'][0]['m_Passes'][0]['progVertex']['m_PlayerSubPrograms'][3]), 1)
+        self.assertEqual([e.gpu_type for e in C.platform_entries(old, 9)[2:]], [8, 4])
+        # rebuilt: the same
+        self.assertEqual(C.add_gles3(tree, replace=True).status, 'converted')
+        again = copy.deepcopy(before)
+        C.add_gles3(again)
+        self.assertEqual(tree['m_ParsedForm'], again['m_ParsedForm'])
+        self.assertEqual(B.ShaderBlobs(tree).platforms, B.ShaderBlobs(again).platforms)
+
+    def test_subshader_left_out(self):
+        """A GLCore43 program with no ES equivalent: its SubShader gets no twins, the fallback does."""
+        bad = _frag_line(PROGRAM_420, 'UNITY_LOCATION(0) uniform  sampler2D _MainTex;',
+                         'UNITY_LOCATION(0) uniform  samplerCubeArray _MainTex;')
+        tree, p0, p1, es = self._two_subshaders(bad)
+        r = C.add_gles3(tree)
+        self.assertEqual((r.status, r.programs, r.programs4x, r.twins), ('converted', 1, 0, 1))
+        self.assertEqual([si for si, _ in r.failed], [0])
+        self.assertIn('SubShader 0 left out', r.why)
+        self.assertIn('samplerCubeArray', r.why)
+        self.assertEqual((p0['m_Platforms'], p1['m_Platforms']), ([15], [9, 15]))
+        self.assertEqual(len(p0['progVertex']['m_PlayerSubPrograms'][3]), 1)
+        ours = C.platform_entries(tree, 9)
+        self.assertEqual(ours[2].serialize(), es[2].serialize())      # left as it was: no GLES subprogram names it
+        # with no fallback SubShader: the shader is left out
+        tree, p0, p1, es = self._two_subshaders(bad)
+        del tree['m_ParsedForm']['m_SubShaders'][1]
+        before = copy.deepcopy(tree)
+        r = C.add_gles3(tree)
+        self.assertEqual((r.status, r.changed), ('skipped', False))
+        self.assertTrue(r.why.startswith('SubShader 0: GLCore41/43 program 2: FRAGMENT: sampler type'), r.why)
+        self.assertEqual(tree, before)
+
+    def test_variant_targets_in_one_pass(self):
+        """2019.1 - 2021.1: a pass whose instanced variant is GLCore43 (keyword-dependent target),
+        the others GLCore32; the GL fragment subprograms name entries without code."""
+        sub = lambda i, t, kw: {'m_BlobIndex': i, 'm_GpuProgramType': t, 'm_GlobalKeywordIndices': kw,
+                                'm_LocalKeywordIndices': [], 'm_ShaderHardwareTier': 3}
+        p = {'m_Platforms': [15], 'progVertex': {'m_SubPrograms': [sub(0, 6, []), sub(1, 8, [3])]},
+             'progFragment': {'m_SubPrograms': [sub(2, 6, []), sub(3, 8, [3])]}}
+        es = [_entry19(6, PROGRAM_2019.encode()), _entry19(8, PROGRAM_420_SSBO.encode(), ['PROCEDURAL_INSTANCING_ON']),
+              _entry19(6, b''), _entry19(8, b'', ['PROCEDURAL_INSTANCING_ON'])]
+        tree = _tree({15: B.build_segments(es, [0, 0, 1, 1])}, {'m_Name': 'T', 'm_SubShaders': [{'m_Passes': [p]}]}, True)
+        r = C.add_gles3(tree)
+        self.assertEqual((r.status, r.programs, r.programs4x, r.es31, r.twins), ('converted', 2, 1, 1, 4))
+        self.assertEqual([(s['m_GpuProgramType'], s['m_BlobIndex']) for s in p['progVertex']['m_SubPrograms']],
+                         [(6, 0), (8, 1), (4, 0), (3, 1)])
+        self.assertEqual([(s['m_GpuProgramType'], s['m_BlobIndex']) for s in p['progFragment']['m_SubPrograms']],
+                         [(6, 2), (8, 3), (4, 2), (3, 3)])
+        sb = B.ShaderBlobs(tree)
+        self.assertEqual([e.gpu_type for e in sb.entries(9)], [4, 3, 4, 3])
+        self.assertEqual(sb.segments(9), [0, 0, 1, 1])
+        self.assertEqual(p['m_Platforms'], [9, 15])
+
+    def test_stripped_shader(self):
+        """No GLCore program at all (every variant stripped from the build): an empty GLES3 blob."""
+        tree = _tree({15: B.build_segments([]), 18: [b'\0' * 4]}, {'m_Name': 'T', 'm_SubShaders': [{'m_Passes': []}]},
+                     True, stage_counts=[1, 1])
+        before = copy.deepcopy(tree)
+        r = C.add_gles3(tree, glcore4x=False)
+        self.assertEqual((r.status, r.why), ('unchanged', 'no GLCore32 programs'))
+        self.assertEqual(tree, before)
+        r = C.add_gles3(tree)
+        self.assertEqual((r.status, r.empty, r.twins), ('converted', True, 0))
+        self.assertEqual(tree['platforms'], [9, 15, 18])
+        self.assertEqual(tree['stageCounts'], [1, 1, 1])
+        sb = B.ShaderBlobs(tree)
+        self.assertEqual(sb.platforms[9], sb.platforms[15])
+
+    def test_version_gate(self):
+        """step.glcore4x_for: by the Unity version in the file's header (2018.1+), unless forced."""
+        import tempfile
+        from pmunity.shaders import step
+        with tempfile.TemporaryDirectory() as d:
+            for ver, want in (('2017.4.9f1', False), ('2017.3.0f3', False), ('2018.1.0f2', True), ('2022.3.36f1', True)):
+                path = os.path.join(d, ver)
+                with open(path, 'wb') as f:      # SerializedFile header (format 17): sizes, format, offset, endianness
+                    f.write(struct.pack('>IIII', 0, 0, 17, 0) + b'\0' * 4 + ver.encode() + b'\0' * 40)
+                self.assertEqual(step.glcore4x_for(path), want, ver)
+                self.assertTrue(step.glcore4x_for(path, True))
+                self.assertFalse(step.glcore4x_for(path, False))
 
 
 if __name__ == '__main__':

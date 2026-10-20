@@ -47,6 +47,25 @@ gl_Vertex, gl_FragColor in a 300 es shader, rectangle and 1D samplers, `noperspe
 atomics, storage buffers) raise Unsupported; the converter then gives that shader no GLES3
 programs, and Unity treats it as not supported on the device, just as a shader without GLES3
 programs in an Android build.
+
+GLSL 4.x (GLCore41 / GLCore43 programs, `#version 410` - `450`: shaders of `#pragma target 4.5`
+and up) is HLSLcc's output for OpenGL 4.1+, which uses what GLSL 4.20 has built in. The rules are
+the same, plus:
+
+  * the extensions `GL_ARB_shading_language_420pack`, `GL_ARB_shader_storage_buffer_object` and
+    `GL_ARB_shader_image_load_store` are dropped (what HLSLcc uses of them is in ES 3.10);
+  * the unused `precise <type> u_xlat_precise_<type>;` declarations HLSLcc writes at the top of
+    each stage are dropped (any other `precise` is a GLSL ES 3.20 qualifier: Unsupported);
+  * `layout(location = n)` on varyings (vertex outputs, fragment inputs) is removed for ES 3.00,
+    which matches varyings by name only (HLSLcc gives a varying the same name and location in both
+    stages); ES 3.10 programs keep them;
+  * what ES 3.10 has besides the above raises NeedsES31: explicit binding points
+    (`layout(binding = n)`) and uniform locations outside Unity's macro blocks, storage buffers
+    (`buffer`, `std430`), images with a format qualifier (ES needs the format; an image without
+    one is Unsupported), image load/store and buffer atomics, `early_fragment_tests`;
+  * what only desktop GL 4.x or ES 3.20 has stays Unsupported: cube map array, buffer and 1D
+    textures, image atomics, `textureQueryLevels`, interpolation functions, interface blocks
+    (`out gl_PerVertex {...}`), layout qualifiers such as `component` or `index`.
 """
 import re
 
@@ -94,6 +113,68 @@ _ES31 = [
     (re.compile(r'\b(textureGather\w*|bitfield\w+|bitCount|findLSB|findMSB|packUnorm4x8|packSnorm4x8|unpackUnorm4x8|'
                 r'unpackSnorm4x8|uaddCarry|usubBorrow|umulExtended|imulExtended|frexp|ldexp)\s*\('), 'ES 3.1 function'),
 ]
+
+# GLSL 4.x: GLCore41 / GLCore43 programs (HLSLcc's output for OpenGL 4.1+)
+VERSIONS_4X = ('400', '410', '420', '430', '440', '450')
+DROP_EXTENSIONS_4X = DROP_EXTENSIONS | {
+    'GL_ARB_shading_language_420pack',       # what HLSLcc uses of it (binding points) is ES 3.10's
+    'GL_ARB_shader_storage_buffer_object',   # ES 3.10: storage buffers
+    'GL_ARB_shader_image_load_store',        # ES 3.10: images (with a format qualifier)
+}
+IMAGE_TYPES = ('image2D', 'image3D', 'imageCube', 'image2DArray', 'iimage2D', 'iimage3D', 'iimageCube',
+               'iimage2DArray', 'uimage2D', 'uimage3D', 'uimageCube', 'uimage2DArray')    # ES 3.10, no default precision
+IMAGE_FORMATS = ('rgba32f', 'rgba16f', 'r32f', 'rgba8', 'rgba8_snorm', 'rgba32i', 'rgba16i', 'rgba8i', 'r32i',
+                 'rgba32ui', 'rgba16ui', 'rgba8ui', 'r32ui')                               # what ES 3.10 has
+_IMAGE_DECL = re.compile(r'^(.*)\b(%s)\s+(\w+)\s*[\[;]' % '|'.join(IMAGE_TYPES), re.M)
+# HLSLcc's GL 4.x stages start with these, used or not
+_PRECISE_DUMMY = re.compile(r'^precise ([biu]?vec4) (u_xlat_precise_\1);[ \t]*\n', re.M)
+# location of a varying: vertex outputs, fragment inputs (ES 3.00 has none; it matches by name)
+_VARYING_LOCATION = {
+    st: re.compile(r'^([ \t]*)layout\s*\(\s*location\s*=\s*\d+\s*\)[ \t]*((?:(?:invariant|flat|smooth|centroid)\s+)*%s\s)' % io, re.M)
+    for st, io in (('VERTEX', 'out'), ('FRAGMENT', 'in'))}
+_UNSUPPORTED_4X = [
+    _UNSUPPORTED[0],                                                         # fixed-function built-ins
+    (re.compile(r'\b([iu]?sampler1D\w*|[iu]?sampler2DRect\w*|[iu]?samplerBuffer|[iu]?sampler2DMSArray|[iu]?samplerCubeArray\w*|'
+                r'[iu]?image(?:1D\w*|2DRect|Buffer|CubeArray|2DMS\w*))\b'), 'sampler type'),
+    _UNSUPPORTED[2],                                                         # GLSL 1.10 texture functions
+    (re.compile(r'\b(textureQueryLod|textureQueryLevels|textureSamples|imageSamples|fma|imageAtomic\w+|atomicCounter\w*|'
+                r'barrier|groupMemoryBarrier|memoryBarrierShared|interpolateAt\w+)\s*\('), 'ES 3.2+ / desktop function'),
+    (re.compile(r'\b(noperspective|sample|patch|subroutine|precise)\b(?=\s+(in|out|uniform|centroid|flat|smooth|[biud]?vec|'
+                r'float|int|uint|mat|bool|highp|mediump|lowp))'), 'qualifier'),
+    (re.compile(r'layout\s*\([^)]*\b(index|component|xfb_\w+|origin_upper_left|pixel_center_integer|depth_\w+|offset|align|'
+                r'stream)\b'), 'layout qualifier'),
+    (re.compile(r'^[ \t]*(?:layout\s*\([^)]*\)\s*)?(?:(?:flat|smooth|centroid)\s+)*(?:in|out)\s+\w+\s*\{', re.M), 'interface block'),
+    (re.compile(r'\b(gl_ClipDistance|gl_CullDistance|gl_PrimitiveID|gl_Layer|gl_ViewportIndex|gl_SampleID|gl_SamplePosition|'
+                r'gl_SampleMask\w*|gl_PerVertex)\b'), 'built-in variable'),
+    _UNSUPPORTED[-1],                                                        # double precision
+]
+_ES31_4X = _ES31 + [
+    (re.compile(r'layout\s*\([^)]*\b(binding|std430|early_fragment_tests)\b'), 'layout qualifier'),
+    (re.compile(r'layout\s*\([^)]*\blocation\b[^)]*\)\s*(?:(?:highp|mediump|lowp)\s+)?uniform\b'), 'uniform location'),
+    (re.compile(r'\bbuffer\s+\w+\s*\{'), 'storage buffer'),
+    (re.compile(r'\b(%s)\b' % '|'.join(IMAGE_TYPES)), 'image'),
+    (re.compile(r'\b(imageLoad|imageStore|imageSize|atomic(?:Add|Min|Max|And|Or|Xor|Exchange|CompSwap)|'
+                r'memoryBarrier(?:Buffer|Image|AtomicCounter)?)\s*\('), 'ES 3.1 function'),
+]
+
+
+def _drop_precise_dummies(src):
+    """HLSLcc's `precise vec4 u_xlat_precise_vec4;` (and ivec4, bvec4, uvec4) lines, where nothing
+    else in the stage names them."""
+    for m in list(_PRECISE_DUMMY.finditer(src)):
+        rest = src.replace(m.group(0), '', 1)
+        if not re.search(r'\b%s\b' % m.group(2), rest):
+            src = rest
+    return src
+
+
+def _check_images(code, stage):
+    """Unsupported for an image without a format qualifier (desktop GL can store to one, ES cannot)."""
+    for m in _IMAGE_DECL.finditer(code):
+        lay = re.findall(r'layout\s*\(([^)]*)\)', m.group(1))
+        if not any(re.search(r'\b(%s)\b' % '|'.join(IMAGE_FORMATS), q) for q in lay):
+            raise Unsupported(f'{stage}: image without a format qualifier {m.group(3)!r} (GLSL ES needs the format, '
+                              f'the program does not give it)')
 
 
 def stage_blocks(code):
@@ -199,15 +280,23 @@ def _code_lines(body):
 
 
 def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None, es='300'):
-    """One stage's source (starting with its #version line) -> GLSL ES 3.00 (es='310': 3.10)."""
+    """One stage's source (starting with its #version line) -> GLSL ES 3.00 (es='310': 3.10).
+    GLSL 4.x stages (VERSIONS_4X: GLCore41 / GLCore43 programs) get the rules of the module
+    docstring's last part as well."""
+    head = re.match(r'\s*#\s*version\s+(\d+)', src)
+    gl4 = bool(head) and head.group(1) in VERSIONS_4X
+    if gl4:
+        src = _drop_precise_dummies(src)
     body = _strip_comments(src)
     code = _code_lines(body)
-    for rx, what in _UNSUPPORTED:
+    for rx, what in (_UNSUPPORTED_4X if gl4 else _UNSUPPORTED):
         m = rx.search(code)
         if m:
             raise Unsupported(f'{stage}: {what} {m.group(0).strip()!r}')
+    if gl4:
+        _check_images(code, stage)
     if es == '300':
-        for rx, what in _ES31:
+        for rx, what in (_ES31_4X if gl4 else _ES31):
             m = rx.search(code)
             if m:
                 raise NeedsES31(f'{stage}: {what} {m.group(0).strip()!r} (GLSL ES 3.10)')
@@ -219,8 +308,9 @@ def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None, es
     m = re.match(r'\s*#\s*version\s+(\d+)\s*(\w*)', lines[i]) if i < len(lines) else None
     if not m:
         raise Unsupported(f'{stage}: no #version line')
-    if m.group(1) not in VERSIONS or m.group(2):
+    if not (m.group(1) in VERSIONS and not m.group(2) or gl4 and m.group(2) in ('', 'core')):
         raise Unsupported(f'{stage}: #version {m.group(1)} {m.group(2)}'.rstrip())
+    drop = DROP_EXTENSIONS_4X if gl4 else DROP_EXTENSIONS
     out.append(f'#version {es} es\n')
     i += 1
     # the extension directives right after #version (they must precede any declaration); Unity
@@ -230,20 +320,22 @@ def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None, es
         e = re.match(r'#\s*extension\s+(\w+)\s*:\s*(\w+)', s)
         w = re.match(r'#\s*ifdef\s+(\w+)$', s)
         if e:
-            if e.group(1) not in DROP_EXTENSIONS:
+            if e.group(1) not in drop:
                 out.append(lines[i])
             i += 1
         elif w and i + 2 < len(lines) and re.match(r'#\s*extension\s+%s\s*:' % w.group(1), lines[i + 1].strip()) \
                 and re.match(r'#\s*endif\b', lines[i + 2].strip()):
-            if w.group(1) not in DROP_EXTENSIONS:
+            if w.group(1) not in drop:
                 out += lines[i:i + 3]
             i += 3
         elif not s:
             i += 1
         else:
             break
-    out.append(precision_block(body, precision))
+    out.append(precision_block(body, precision, images=gl4))
     rest = ''.join(lines[i:])
+    if gl4 and es == '300' and stage in _VARYING_LOCATION:
+        rest = _VARYING_LOCATION[stage].sub(r'\1\2', rest)
     if 'const-arrays' in optimize:
         rest, n = const_arrays(rest)
         if n and notes is not None: notes.append(f'{stage} const-arrays {n}')
@@ -254,10 +346,11 @@ def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None, es
     return ''.join(out)
 
 
-def precision_block(body, precision='highp'):
-    """Default precision statements for one stage (body: its source without comments)."""
+def precision_block(body, precision='highp', images=False):
+    """Default precision statements for one stage (body: its source without comments); images:
+    also for the image types it declares (GLSL 4.x stages)."""
     p = ['precision highp float;\n', 'precision highp int;\n']
-    used = [t for t in SAMPLER_TYPES if re.search(r'\b%s\b' % t, body)]
+    used = [t for t in SAMPLER_TYPES + (IMAGE_TYPES if images else ()) if re.search(r'\b%s\b' % t, body)]
     for t in used:
         if precision == 'highp' or t not in ('sampler2D', 'samplerCube'):
             p.append(f'precision highp {t};\n')      # (types other than these two have no default in ES)
