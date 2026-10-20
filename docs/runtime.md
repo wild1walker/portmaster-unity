@@ -66,7 +66,9 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_APK_NAME` | the APK's name without `.apk` (default: from `android_package.json`, else the only `.apk` in the root) |
 | `UA_OBB_DIR` | where the OBB is (default: beside the APK) |
 | `UA_PAD_NAME` | name the pad reports (Rewired knows Android pads by name: `Xbox Wireless Controller`) |
-| `UA_INPUT_SCRIPT` | scripted presses: `"<sec>[@<period>]:<button>[~<hold>][+...] ..."`; `ptr=<x>/<y>` puts pointer mode's cursor there (fractions with a `.`, else pixels) |
+| `UA_INPUT_SCRIPT` | scripted presses: `"<sec>[@<period>]:<button>[~<hold>][+...] ..."`; `ptr=<x>/<y>` puts pointer mode's cursor there (fractions with a `.`, else pixels); `text=<chars>` types into an open soft keyboard (`_` = space). Without a real pad they press a virtual one, registered at the first press (`UA_VIRTUAL_PAD=1`: at start) |
+| `UA_OSK=0\|done\|cancel`, `UA_OSK_SCALE`, `UA_OSK_SHOTS=0` | the on-screen keyboard for the game's soft keyboard (on by default, shown only when the game opens it; see [input.md](input.md)): off; answer every keyboard at once (OK / Back); glyph scale; keep it out of `shot.req` screenshots |
+| `UA_KEYBOARD=1` | an SDL window's key events also reach the game as an Android hardware keyboard (they always type into an open soft keyboard) |
 | `UA_POINTER=1\|mouse\|touch` | pointer mode, off by default: the pad moves a cursor ua_host draws over the frame and clicks with it, as an Android mouse (`1` = `mouse`: hover, buttons, wheel) or a finger (`touch`); see [input.md](input.md) |
 | `UA_POINTER_MOVE`, `UA_POINTER_BUTTONS`, `UA_POINTER_SCROLL` | what moves it (`lstick,dpad`; also `rstick`), pad button : mouse button (`a:left,b:right`), `rstick` = wheel; the controls it uses no longer reach the game as the pad's |
 | `UA_POINTER_SPEED`, `UA_POINTER_START`, `UA_POINTER_TOGGLE` | full speed in screen heights/s (1.2); start position `<x>/<y>` (fractions, `0.5/0.5`); a button that turns pointer mode off and on |

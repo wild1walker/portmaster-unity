@@ -31,8 +31,102 @@ own assemblies. On the Android player:
 | mouse (`GetMouseButton*`, `mousePosition`, `OnMouse*`, UI pointer events) | Android mouse MotionEvents | pointer mode, `UA_POINTER=1` (below) |
 | touch (`Input.touches`) | Android touch MotionEvents | `UA_POINTER=touch` |
 | [Rewired](https://guavaman.com/projects/rewired/) | decides its platform from the desktop build's compile-time symbols, so it looks for the desktop's input APIs (Linux: libudev) and leaves the Android pad unused | `asmpatch` `rewired-android` (via `pmunity android-data --asmpatch`): Rewired runs as on Android, reading pads through Unity's input. android-data always adds the `Joy<j>Axis<a>` axes it reads (`--rewired-joysticks`) |
-| InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (not tested here yet) | `UA_PAD_NAME` if the built-in pad's name matches no profile |
-| Input System package (`Unity.InputSystem.dll`) | the package compiles its Android device support (layouts for Android pads) only into Android builds: a desktop build's copy has its own platform's (Linux: SDL) and none for the pads the Android player reports | open: no pad until a port registers layouts for Android gamepads; the player setting "Active Input Handling" decides whether the legacy stack runs too |
+| InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (see below) | `UA_PAD_NAME` if the built-in pad's name matches no profile |
+| Input System package (`Unity.InputSystem.dll`) | the engine's Android backend reports keyboards, mice and touchscreens in the package's common formats (they work as they are) and pads as Android game controllers, for which the package has layouts only in Android builds: a desktop build's copy has its own platform's (Linux: SDL) | `asmpatch` `inputsystem-android` (below): the pad is a `Gamepad`. The player setting "Active Input Handling" decides whether the legacy stack runs too |
+| soft keyboard (`TouchScreenKeyboard`, UI `InputField` / `TMP_InputField` on Android) | Unity opens its input dialog (`UnityPlayer.showSoftInput`) | nothing: ua_host's on-screen keyboard (below) |
+
+## The Input System package: `inputsystem-android`
+
+On the Android player the engine's input backend (the one the package reads) reports a pad as
+interface `Android`, device class `AndroidGameController`, with state format `'AGC '`: the
+pressed Android key codes as bits from byte 0 (`KEYCODE_BUTTON_A` = bit 96) and the
+MotionEvent axes as 48 floats from byte 28 (`AXIS_X` at 28, `AXIS_HAT_X` at 88). Keyboards
+(`'KEYS'`), mice and touchpads (`'MOUS'`) and touchscreens (`'TSCR'`) come in the package's common
+formats, whose layouts every build has. A desktop build's `Unity.InputSystem.dll` lacks the
+Android layouts (the package compiles them only into Android and editor builds), so the pad is
+an unsupported device: no `Gamepad.current`, no gamepad bindings, no UI navigation with
+`InputSystemUIInputModule`.
+
+`asmpatch`'s `inputsystem-android` patch (tools/asmpatch) puts calls to the package's own public
+`InputSystem.RegisterLayout(json)` at the end of `InputSystem.PerformDefaultPluginInitialization`,
+where the package registers its platform support. The layouts are written in the package's
+JSON layout format from the player's state format above (no package code is used): they extend
+the package's `Gamepad` layout and place each of its controls, so the pad is a `Gamepad` with
+`buttonSouth/East/West/North` = A/B/X/Y, the shoulders, stick presses, Start/Select, both sticks
+(`AXIS_X/Y`, `AXIS_Z/RZ`; Android's y axes point down and are inverted), the triggers
+(`AXIS_BRAKE`/`AXIS_GAS`) and the d-pad from `AXIS_HAT_X/Y` (ua_host's pads report these axes).
+A pad with Microsoft's USB vendor id (0x045E) becomes an `XInputController` (Xbox glyphs), as
+the package's Android support makes it, where the build has that class. They match by interface
+and device class, so the package versions 1.0-1.8 take them the same way (the patch fails, and
+changes nothing, if `PerformDefaultPluginInitialization` or `RegisterLayout(string, string,
+InputDeviceMatcher?)` is missing). Not covered: pads without `SOURCE_GAMEPAD` (Android
+joysticks) and sensors, which ua_host does not present.
+
+```sh
+python -m pmunity android-data ... --asmpatch "/path/to/asmpatch --only=inputsystem-android"
+```
+
+## The on-screen keyboard
+
+When a game opens Unity's soft keyboard (`TouchScreenKeyboard.Open`; UI `InputField` and
+`TMP_InputField` do so on Android when selected), the Android player calls
+`UnityPlayer.showSoftInput`, and Unity's Java side opens a dialog with a text field over the
+IME. runtime/jni/up_softinput.c is that dialog: the field holds the game's text with the caret at
+the end, the character limit (as Android's `LengthFilter`, in UTF-16 units) and the input type's
+characters (the number and phone pads' `DigitsKeyListener`/`DialerKeyListener`), and reports
+every change to libunity as the dialog of the player's version does: the text
+(`nativeSetInputString`), the selection (`nativeSetInputSelection`, 2018.4+), done or cancelled
+and closed (`nativeSoftInputClosed`/`Canceled`/`LostFocus`), the keyboard's visibility and area
+(`nativeSetKeyboardIsVisible`, `nativeSetInputArea`, 2019.4+). The game's own updates
+(`setSoftInputStr`, `setSelection`, `setCharacterLimit`, `setHideInputField`, `hideSoftInput`)
+change the field as they change the dialog.
+
+ua_host (runtime/host/osk.c) is the IME: while the game's keyboard is open it draws a keyboard
+and the field at the bottom of the screen and the pad types:
+
+| control | |
+|---|---|
+| d-pad, left stick | move over the keys (held: repeats) |
+| A | press the key |
+| B | delete (held: repeats) |
+| X | space |
+| Y | shift; twice: caps lock; three times: off |
+| L1 / R1 | caret left / right |
+| Start | done (the dialog's OK: the game gets the text) |
+| Select | cancel (Back: the game keeps its old text) |
+
+The keys: letters with shift, a symbols page (`?123` / `ABC`: all of ASCII), space, backspace and
+Enter (a newline in a multi-line field, else done); number and phone pads for the game's numeric
+keyboard types (the sign and decimal point only where the type allows them). Letters are
+capitalised where the field's input type asks for it (Unity's name and social types), a
+password field shows `*`, and a game that hides its input field (`shouldHideMobileInput`) gets
+the keyboard without the field. The pad is the keyboard's while it is open: the game sees a
+centred pad, and buttons held from before reach the game when released; pointer mode's cursor is
+hidden. Nothing changes for a game that never opens its keyboard: nothing is drawn, no input is
+taken, no memory is allocated.
+
+The keyboard is drawn like pointer mode's cursor, over Unity's frame right before the swap: on a
+GLES 3 context it is rendered on the CPU when it changes, uploaded to a texture of its own and
+copied with one `glBlitFramebuffer` (an sRGB window gets an sRGB texture, so colours stay
+right); on GLES 2 or a multisampled window it is drawn with scissored clears. The GL state used
+is restored. It is in `<root>/shot.req` screenshots (`UA_OSK_SHOTS=0`: not). The font is the
+public-domain misc-fixed 6x13 (runtime/host/osk_font.h, made by fontgen.py).
+
+Switches: `UA_OSK=0` (no on-screen keyboard: the field stays open for a hardware keyboard),
+`UA_OSK=done` / `UA_OSK=cancel` (answer every keyboard at once, as OK or Back would: for ports
+where text entry does not matter; with `done` the game keeps the text it offered),
+`UA_OSK_SCALE=<n>` (glyph scale; default screen height / 240).
+
+## A hardware keyboard
+
+With an SDL window (`UA_DISPLAY=sdl`), SDL's key events reach ua_host. While the game's soft
+keyboard is open they type into its field, as into Android's dialog: text as typed, Backspace,
+Delete, the arrows, Home, End, Enter (done, or a newline in a multi-line field) and Escape
+(cancel). With `UA_KEYBOARD=1` they also reach the game as an Android keyboard while no soft
+keyboard is open (KeyEvents from a `Hardware Keyboard` device, `SOURCE_KEYBOARD`, US layout, the
+modifier keys' meta state): `Input.GetKey`, the Input System's `Keyboard`. Off by default, so a
+handheld whose buttons appear as keyboard keys does not press them twice. (With Mali fbdev,
+`UA_DISPLAY=fbdev`, there are no SDL key events.)
 
 ## Pointer mode
 
@@ -88,4 +182,17 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
   keymap, toggle), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off.
 - `runtime/jni/build.sh`: libunity's view of a mouse MotionEvent (source, action, tool type,
   button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape.
-- `tools/asmpatch/build.sh test`: the Rewired patch on fake Rewired assemblies.
+- `runtime/host/test/pointer_test.sh` also runs `test_osk` (osk.c against a stand-in field and the
+  fake GL): nothing taken or drawn while no keyboard is open; typing with the pad (focus moves,
+  every button, shift and caps, the symbols page, Enter, repeats, buttons held from before);
+  the picture on the copy path, with scissored clears on GLES 2 and on a multisampled window,
+  Unity's GL state kept; the number and phone pads, auto-capitalisation, a hidden field;
+  `UA_OSK=done|cancel|0` and a hardware keyboard.
+- `runtime/jni/build.sh`: the soft keyboard in every Unity version shape: the natives each
+  version's dialog calls, in order, for showing, typing (a two-byte character, the caret, the
+  character limit), the game's own text and selection, done, cancel, lost focus, the game hiding
+  it, the number and decimal pads' filters, a password and a multi-line field, and a pause.
+- `tools/asmpatch/build.sh test`: the Rewired patch on fake Rewired assemblies; the Input System
+  patch on a fake `Unity.InputSystem` (built with Cecil, no package code): the layouts it
+  registers on every return, parsed and checked against the player's state format; already
+  applied, an Android build of the package, missing methods.
