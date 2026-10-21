@@ -110,6 +110,13 @@ def consumable(args, src, act):
     return not rel.startswith(('..', 'Managed' + os.sep, 'Mono' + os.sep))
 
 
+def save_state(path, state):
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(state, f, indent=0)
+    os.replace(tmp, path)
+
+
 def move(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     os.replace(src, dst)
@@ -1432,8 +1439,10 @@ def main(argv=None):
     kept = set()                                    # .resS files placed beside their inlined file
     for k, (dst_rel, src, act) in enumerate(items):
         dst = os.path.join(args.out, dst_rel)
-        if not os.path.exists(src) and dst_rel in state and os.path.exists(dst):
-            newstate[dst_rel] = state[dst_rel]          # moved here by an earlier --consume-src run
+        if not os.path.exists(src) and os.path.exists(dst) and (dst_rel in state or args.consume_src):
+            # moved here by an earlier --consume-src run (a killed one too: its state was not saved
+            # yet; a consumed file is only ever moved complete, see below)
+            newstate[dst_rel] = state.get(dst_rel, 'consumed')
             stats['unchanged'] = stats.get('unchanged', 0) + 1
             continue
         st = os.stat(src)
@@ -1454,8 +1463,12 @@ def main(argv=None):
         if act == 'link' or (act in ('sfpatch', 'bundle') and args.platform_patch == 'none'):
             how = move(src, dst) if mv else clone(src, dst, allow_hardlink=True)
         elif act == 'sfpatch':
-            how = move(src, dst) if mv else clone(src, dst, allow_hardlink=False)
-            old = patch_sf_platform(dst)
+            if mv:                              # patched first: a moved file is always complete
+                old = patch_sf_platform(src)
+                how = move(src, dst)
+            else:
+                how = clone(src, dst, allow_hardlink=False)
+                old = patch_sf_platform(dst)
             report['files'][dst_rel] = f'platform {old} -> {ANDROID}'
         elif act.startswith('patch:'):
             name = act.split(':')[1]
@@ -1491,11 +1504,15 @@ def main(argv=None):
             if mv:
                 os.remove(src)
         elif act == 'bundle':
-            how = move(src, dst) if mv else clone(src, dst, allow_hardlink=False)
+            p = src if mv else dst              # consumed: patched in place first, then moved complete
+            if not mv:
+                how = clone(src, dst, allow_hardlink=False)
             try:
-                res = patch_bundle_platform(dst)
+                res = patch_bundle_platform(p)
             except ValueError as ex:                    # (e.g. LZMA blocks: rewritten as LZ4 by UnityPy)
-                res = ST.repack_bundle(dst, ANDROID, write_bytes, why=str(ex))
+                res = ST.repack_bundle(p, ANDROID, write_bytes, why=str(ex))
+            if mv:
+                how = move(src, dst)
             report['bundles'][os.path.basename(dst)] = res
             if any(m == 'rewrite' for _, _, m in res):
                 log(f'  {dst_rel}: bundle rewritten (no same-size encoding of the patched block)')
@@ -1528,6 +1545,8 @@ def main(argv=None):
             raise ValueError(act)
         stats[how] = stats.get(how, 0) + 1
         newstate[dst_rel] = key
+        if mv or (k + 1) % 50 == 0:         # what is placed so far, for a run that is killed
+            save_state(statep, dict(state, **newstate))
         if how in ('inlined', 'unitypy', 'video', 'patched'):
             gc.collect()
             _trim()
@@ -1557,7 +1576,7 @@ def main(argv=None):
     old_crc = {d: v for d, v in state.get('_crc', {}).items() if d in newstate and d not in newstate.get('_crc', {})}
     if old_crc:
         newstate.setdefault('_crc', {}).update(old_crc)
-    json.dump(newstate, open(statep, 'w'), indent=0)
+    save_state(statep, newstate)
     log(f'placed: {stats}; skipped source files: {args.skipped}; engine modules not shipped: {args.dropped_modules}; '
         f'.resS moved into their serialized files: {len(args.inlined_ress)}')
     report['stats'] = stats
