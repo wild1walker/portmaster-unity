@@ -175,7 +175,8 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | same | 2019.4.8f1 | armeabi-v7a | 25.6 MiB | 24 | 8 min (cached) | splash, title screen (QEMU: ~1 fps) once the loader routes `__gnu_Unwind_Find_exidx` (below) |
 | 2D city builder, incremental GC | 2020.3.49f1 | arm64-v8a | 33.6 MiB | 27 | 8 min | title menu (40-50 fps in the rig) once packed as one APK with `buildDate` (above) |
 | 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
-| 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); no sound (below) |
+| 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; no sound (below) |
+| same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
 2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3); the metadata versions match those of real IL2CPP builds
@@ -199,12 +200,14 @@ What the runs showed:
   back to the invariant culture. Harmless; a runtime that sets `LANG` would avoid it.
 - **Pointer-driven menus**: clicking a menu entry with the pointer mode did not start the
   2018.4 game in one scripted try (its Mono build does); not looked into.
-- **2017.4, no sound in the rig**: the 2017.4.40 arm64 player's FMOD creates its OpenSL ES player,
-  starts and stops it at once, reports "FMOD failed to initialize the output device", and its null
-  output fails too ("An error occured that wasn't supposed to"): the game runs silent. Not the
-  rig's missing `CAP_SYS_NICE` (FMOD's `setpriority(-20)` for its mixer thread fails without it,
-  but granting it changes nothing), not the API level (19 and 22 alike); the 2017.4.40 armv7 Mono
-  player and the 2018.4+ arm64 players start their audio in the same rigs. Open (runtime side).
+- **2017.4 arm64, no sound in the rig**: the 2017.4.40 arm64 player's FMOD creates its OpenSL ES
+  player, starts and stops it at once, reports "FMOD failed to initialize the output device", and
+  its null output fails too ("An error occured that wasn't supposed to"): the game runs silent.
+  Not the rig's missing `CAP_SYS_NICE` (the `setpriority(-20)` that fails without it is SDL's
+  audio thread; granting it changes nothing), not the API level (19 and 22 alike). The same game's
+  armv7 IL2CPP build (2017.4.40's armv7 IL2CPP player) and the 2018.4+ arm64 players start their
+  audio in the rigs: something between 2017.4's arm64 FMOD and the 64-bit runtime. Open; not
+  yet tried on a handheld.
 - **Stack traces** (2017.4): with the SymbolMap written from the symbol table, Unity's logged
   stack traces name the same frames as the game's Mono build; without it they had extra frames
   named after neighbouring methods.
@@ -219,7 +222,7 @@ What the runs showed:
   flags for them are not); 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
   2017.4 .NET 4.x games (`net45`: none among the free 2017.4 builds surveyed, all were .NET 3.5),
   .NET 3.5 games of 2018.x (`legacyunity` / `net20` with the newer UnityLinker), the ".NET 2.0"
-  (`net20`) profile; 2017.4 armv7.
+  (`net20`) profile.
 - Data of a 2017.4 release before 2017.4.16f1 on the 2017.4.40f1 player (Cuphead's case).
 - Games with native plugins, Burst (`lib_burst_generated` is not rebuilt: Burst jobs run as their
   managed code), the Input System package, link.xml-dependent reflection.
