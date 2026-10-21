@@ -45,6 +45,16 @@ each). The package keeps `unity default resources` in `Data/Resources/` (from 20
   and, through its `pthread_create`, for every thread (runtime/loader/so_loader.h, "THREAD ID
   SLOT"; both architectures). 6000.0 - 6000.5 do not enable mimalloc.
 
+- **Video** (a 6000.0.61f1 game's cutscenes, VP8 WebM): libunity's `AndroidVideoMedia<AndroidMediaNDK>`
+  decodes into an `AImageReader` (frames as AHardwareBuffers) whenever libmediandk has one, else into
+  a Java `SurfaceTexture` as 2021.3 - 2022.3 do. The shims' failing AImageReader stubs made it wait
+  forever ("AndroidVideoMedia surface creation stalled"); they are now absent below their API level
+  (24, the hardware-buffer ones 26; ua_host reports 19), as on such a phone, and the SurfaceTexture
+  path plays the clips. The surface itself is made on libunity's `NdkLooper` thread
+  (`VideoDecoder::GetSurface` sends it a message through an fd that `NdkLooper::CreateHandler` adds
+  from the decoder's thread, one per clip): the shims' `ALooper` watches such an fd at once, as
+  Android's epoll Looper does (before that, the second clip's request was never seen).
+
 ## JNI
 - **UnityPlayer is abstract from 2023.1** (`UnityPlayerForActivityOrService` for an Activity or
   Service, `UnityPlayerForGameActivity`). libunity registers the per-instance natives
@@ -97,5 +107,6 @@ each). The package keeps `unity default resources` in `Data/Resources/` (from 20
 - converter: format 23, the 6000.6 serializer, the default resources path, the PlayerSettings
   tree: done.
 - runtime: natives on both player classes, the 2023.1+ UnityPlayer members and helpers, the UI
-  ALooper, mimalloc's thread id: done. Not done: the GameActivity variant (not needed: the Activity
+  ALooper (and fds added to it by other threads), mimalloc's thread id, video through the
+  SurfaceTexture: done. Not done: the GameActivity variant (not needed: the Activity
   one is in every package), accessibility, Vulkan (the converter keeps GLES3 only).
