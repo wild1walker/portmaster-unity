@@ -186,9 +186,15 @@ if [ ! -f "$W/.step_package" ]; then
   args=(--src "$D" --pkg "$P" --out "$W/android" --name "$APK_NAME" --package "$PACKAGE" --swappy "$SWAPPY"
         --consume-src --verify-bundles 2 --pack all)
   [ "$VIDEO_SHADER" = 1 ] || args+=(--no-video-shader)
-  if [ "$ASMPATCH" != off ] && [ -f "$S/asmpatch" ]; then
+  # StreamingAssets the game reads as files: beside the APK too (Game_Data/StreamingAssets), and
+  # asmpatch's streaming-assets patch; files at Application.dataPath: Game_Data/ and data-path
+  # (android-data adds the patches to the asmpatch command)
+  SA=${STREAMING_ASSETS:-obb}; args+=(--streaming-assets "$SA")
+  [ "${DATA_PATH:-0}" = 1 ] && args+=(--data-path)
+  if { [ "$ASMPATCH" != off ] || [ "$SA" != obb ] || [ "${DATA_PATH:-0}" = 1 ]; } && [ -f "$S/asmpatch" ]; then
     chmod +x "$S/asmpatch"
-    a="'$S/asmpatch'"; [ "$ASMPATCH" = auto ] || a="$a --only=$ASMPATCH"
+    a="'$S/asmpatch'"
+    case "$ASMPATCH" in auto) ;; off) a="$a --only=";; *) a="$a --only=$ASMPATCH";; esac
     args+=(--asmpatch "$a")
   fi
   for f in "${MANAGED_FILES[@]}"; do args+=(--managed-file "$S/$f"); done
@@ -220,6 +226,17 @@ for f in "$P/Variations/$PLAYER_BACKEND/Release/Libs/$PLAYER_ABI/"*.so "$P/Varia
 done
 [ -f "$GAMEDIR/lib/libunity.so" ] || fail "Unity's player is incomplete (see patchlog.txt)."
 [ -d "$Z/assets" ] && rm -rf "$GAMEDIR/assets"        # (an interrupted install moved it already)
+# Game_Data/ (StreamingAssets as files, the data folder's own files): the new ones replace the old;
+# files the game wrote there stay
+if [ -d "$Z/Game_Data" ] && [ -d "$GAMEDIR/Game_Data" ]; then
+  rm -rf "$GAMEDIR/Game_Data/StreamingAssets"
+  for f in "$Z/Game_Data"/*; do
+    [ -e "$f" ] || continue
+    rm -rf "$GAMEDIR/Game_Data/$(basename "$f")"
+    mv -f "$f" "$GAMEDIR/Game_Data/" || fail "Could not install $(basename "$f")."
+  done
+  rm -rf "$Z/Game_Data"
+fi
 for f in "$Z"/*; do
   [ -e "$f" ] || continue
   mv -f "$f" "$GAMEDIR/" || fail "Could not install $(basename "$f")."

@@ -416,6 +416,20 @@ static void nativeResume(JNIEnv *env, jobject player)
 {
     R[R_RESUME]++;
     if (R[R_RESUME] > 1) return;
+    if (S >= SHAPE_6000_6) {             /* UnityPlayerJavaWrapper's 2023.1+ members, on UnityMain */
+        (*env)->PushLocalFrame(env, 16);
+        jclass pc = (*env)->FindClass(env, "com/unity3d/player/UnityPlayerForActivityOrService");
+        jboolean main = (*env)->CallBooleanMethod(env, player, (*env)->GetMethodID(env, pc, "runningOnMainThread", "()Z"));
+        (*env)->CallVoidMethod(env, player, (*env)->GetMethodID(env, pc, "executeMainThreadJobs", "()V"));
+        jclass di = (*env)->FindClass(env, "com/unity3d/player/DeviceInfo");
+        jobject os = (*env)->CallStaticObjectMethod(env, di, (*env)->GetStaticMethodID(env, di, "getOsVersion", "()Ljava/lang/String;"));
+        jclass mu = (*env)->FindClass(env, "com/unity3d/player/UnityPlayerForActivityOrService$MemoryUsage");
+        jobject crit = (*env)->GetStaticObjectField(env, mu, (*env)->GetStaticFieldID(env, mu, "Critical",
+                                                    "Lcom/unity3d/player/UnityPlayerForActivityOrService$MemoryUsage;"));
+        jint v = crit ? (*env)->GetIntField(env, crit, (*env)->GetFieldID(env, mu, "value", "I")) : 0;
+        R[R_U6_JAVA] = main && os && v == 4;
+        (*env)->PopLocalFrame(env, 0);
+    }
     /* order on UnityMain: RecreateGfxState(surface) [, SendSurfaceChangedEvent], FocusChanged(true),
        Resume, then Render */
     R[R_ORDER_OK] = R[R_GFX] == 1 && R[R_FOCUS_TRUE] == 1 && R[R_RENDER] == 0 &&
@@ -754,31 +768,39 @@ static jint fmodProcess(JNIEnv *env, jobject self, jobject buf)
     return 0;
 }
 
+/* 6000.6: initJni(Context, context type, String) */
+static void initJni3(JNIEnv *env, jobject player, jobject context, jint type, jstring s)
+{
+    R[R_U6_INITJNI] = type == 0 && s && (*env)->GetStringUTFLength(env, s) == 0;
+    initJni(env, player, context);
+}
+static void nativeMemoryUsage(JNIEnv *env, jobject player, jint v) { R[R_U6_MEMORY] = v; }
+
 /* The UnityPlayer natives the runtime calls, with each version's signature, plus a few it does
    not call (registered as the real table does). first/last: the shapes that register an entry. */
 #define SIG_SENDMSG_S "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"
 #define SIG_SENDMSG_B "(Ljava/lang/String;Ljava/lang/String;[B)V"
 struct nat { int first, last; JNINativeMethod m; };
 static const struct nat up_natives[] = {
-    { 0, SHAPE_N, { "initJni", "(Landroid/content/Context;)V", (void *)initJni } },
+    { 0, SHAPE_2022_3, { "initJni", "(Landroid/content/Context;)V", (void *)initJni } },
     { 0, SHAPE_2018_4, { "nativeDone", "()V", (void *)nativeDoneV } },
-    { SHAPE_2019_4, SHAPE_N, { "nativeDone", "()Z", (void *)nativeDoneZ } },
-    { 0, SHAPE_N, { "nativePause", "()Z", (void *)nativePause } },
-    { 0, SHAPE_N, { "nativeRecreateGfxState", "(ILandroid/view/Surface;)V", (void *)nativeRecreateGfxState } },
-    { SHAPE_2018_4, SHAPE_N, { "nativeSendSurfaceChangedEvent", "()V", (void *)nativeSendSurfaceChangedEvent } },
-    { 0, SHAPE_N, { "nativeRender", "()Z", (void *)nativeRender } },
-    { 0, SHAPE_N, { "nativeResume", "()V", (void *)nativeResume } },
-    { 0, SHAPE_N, { "nativeLowMemory", "()V", (void *)nativeVoid } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeDone", "()Z", (void *)nativeDoneZ } },
+    { 0, SHAPE_2022_3, { "nativePause", "()Z", (void *)nativePause } },
+    { 0, SHAPE_2022_3, { "nativeRecreateGfxState", "(ILandroid/view/Surface;)V", (void *)nativeRecreateGfxState } },
+    { SHAPE_2018_4, SHAPE_2022_3, { "nativeSendSurfaceChangedEvent", "()V", (void *)nativeSendSurfaceChangedEvent } },
+    { 0, SHAPE_2022_3, { "nativeRender", "()Z", (void *)nativeRender } },
+    { 0, SHAPE_2022_3, { "nativeResume", "()V", (void *)nativeResume } },
+    { 0, SHAPE_2022_3, { "nativeLowMemory", "()V", (void *)nativeVoid } },
     { SHAPE_2019_4, SHAPE_N, { "nativeApplicationUnload", "()V", (void *)nativeVoid } },
-    { 0, SHAPE_N, { "nativeFocusChanged", "(Z)V", (void *)nativeFocusChanged } },
-    { SHAPE_2019_4, SHAPE_N, { "nativeSetInputArea", "(IIII)V", (void *)nativeSetInputArea } },
-    { SHAPE_2019_4, SHAPE_N, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeSetKeyboardIsVisible } },
-    { 0, SHAPE_N, { "nativeSetInputString", "(Ljava/lang/String;)V", (void *)nativeSetInputString } },
-    { SHAPE_2018_4, SHAPE_N, { "nativeSetInputSelection", "(II)V", (void *)nativeSetInputSelection } },
-    { 0, SHAPE_N, { "nativeSoftInputClosed", "()V", (void *)nativeSoftInputClosed } },
-    { 0, SHAPE_N, { "nativeSoftInputCanceled", "()V", (void *)nativeSoftInputCanceled } },
-    { 0, SHAPE_N, { "nativeSoftInputLostFocus", "()V", (void *)nativeSoftInputLostFocus } },
-    { SHAPE_2019_4, SHAPE_N, { "nativeReportKeyboardConfigChanged", "()V", (void *)nativeReportKeyboardConfigChanged } },
+    { 0, SHAPE_2022_3, { "nativeFocusChanged", "(Z)V", (void *)nativeFocusChanged } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeSetInputArea", "(IIII)V", (void *)nativeSetInputArea } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeSetKeyboardIsVisible } },
+    { 0, SHAPE_2022_3, { "nativeSetInputString", "(Ljava/lang/String;)V", (void *)nativeSetInputString } },
+    { SHAPE_2018_4, SHAPE_2022_3, { "nativeSetInputSelection", "(II)V", (void *)nativeSetInputSelection } },
+    { 0, SHAPE_2022_3, { "nativeSoftInputClosed", "()V", (void *)nativeSoftInputClosed } },
+    { 0, SHAPE_2022_3, { "nativeSoftInputCanceled", "()V", (void *)nativeSoftInputCanceled } },
+    { 0, SHAPE_2022_3, { "nativeSoftInputLostFocus", "()V", (void *)nativeSoftInputLostFocus } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeReportKeyboardConfigChanged", "()V", (void *)nativeReportKeyboardConfigChanged } },
     { 0, SHAPE_2018_4, { "nativeInitWebRequest", "(Ljava/lang/Class;)V", (void *)nativeInitWebRequest } },
     { 0, SHAPE_2021_3, { "nativeInjectEvent", "(Landroid/view/InputEvent;)Z", (void *)nativeInjectEvent } },
     { SHAPE_2022_3, SHAPE_N, { "nativeInjectEvent", "(Landroid/view/InputEvent;I)Z", (void *)nativeInjectEvent2 } },
@@ -787,9 +809,32 @@ static const struct nat up_natives[] = {
     { 0, SHAPE_N, { "nativeIsAutorotationOn", "()Z", (void *)nativeFalse } },
     { 0, SHAPE_N, { "nativeMuteMasterAudio", "(Z)V", (void *)nativeVoidZ } },
     { 0, SHAPE_2021_3, { "nativeRestartActivityIndicator", "()V", (void *)nativeVoid } },
-    { SHAPE_2019_4, SHAPE_N, { "nativeOrientationChanged", "(II)V", (void *)nativeVoidII } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeOrientationChanged", "(II)V", (void *)nativeVoidII } },
     { SHAPE_2021_3, SHAPE_N, { "nativeHidePreservedContent", "()V", (void *)nativeHidePreserved } },
-    { SHAPE_2022_3, SHAPE_N, { "nativeGetNoWindowMode", "()Z", (void *)nativeNoWindow } },
+    { SHAPE_2022_3, SHAPE_2022_3, { "nativeGetNoWindowMode", "()Z", (void *)nativeNoWindow } },
+    { SHAPE_6000_6, SHAPE_N, { "initJni", "(Landroid/content/Context;ILjava/lang/String;)V", (void *)initJni3 } },
+};
+
+/* 2023.1+: UnityPlayer's per-instance natives on its Activity implementation */
+static const struct nat aos_natives[] = {
+    { SHAPE_6000_6, SHAPE_N, { "nativeDone", "()Z", (void *)nativeDoneZ } },
+    { SHAPE_6000_6, SHAPE_N, { "nativePause", "()Z", (void *)nativePause } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeRecreateGfxState", "(ILandroid/view/Surface;)V", (void *)nativeRecreateGfxState } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSendSurfaceChangedEvent", "()V", (void *)nativeSendSurfaceChangedEvent } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeRender", "()Z", (void *)nativeRender } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeResume", "()V", (void *)nativeResume } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeOrientationChanged", "(II)V", (void *)nativeVoidII } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeGetNoWindowMode", "()Z", (void *)nativeNoWindow } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeMemoryUsageChanged", "(I)V", (void *)nativeMemoryUsage } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeFocusChanged", "(Z)V", (void *)nativeFocusChanged } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputArea", "(IIII)V", (void *)nativeSetInputArea } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeSetKeyboardIsVisible } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputString", "(Ljava/lang/String;)V", (void *)nativeSetInputString } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputSelection", "(II)V", (void *)nativeSetInputSelection } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputClosed", "()V", (void *)nativeSoftInputClosed } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputCanceled", "()V", (void *)nativeSoftInputCanceled } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputLostFocus", "()V", (void *)nativeSoftInputLostFocus } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeReportKeyboardConfigChanged", "()V", (void *)nativeReportKeyboardConfigChanged } },
 };
 static const struct nat rh_natives[] = {
     { 0, SHAPE_2018_4, { "nativeProxyInvoke", "(ILjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)nativeProxyInvokeI } },
@@ -826,6 +871,7 @@ jint fake_libunity_onload(JavaVM *vm, void *reserved)
     if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) return -1;
     R[R_ONLOAD]++;
     register_shape(env, "com/unity3d/player/UnityPlayer", up_natives, sizeof up_natives / sizeof up_natives[0]);
+    register_shape(env, "com/unity3d/player/UnityPlayerForActivityOrService", aos_natives, sizeof aos_natives / sizeof aos_natives[0]);
     register_shape(env, "com/unity3d/player/ReflectionHelper", rh_natives, sizeof rh_natives / sizeof rh_natives[0]);
     register_shape(env, "com/unity3d/player/OrientationLockListener", ol_natives, 1);
     (*env)->RegisterNatives(env, (*env)->FindClass(env, "org/fmod/FMODAudioDevice"), fmod_natives, 2);

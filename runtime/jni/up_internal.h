@@ -7,6 +7,8 @@
 #include "unityplayer.h"
 
 #define UP_CLS "com/unity3d/player/UnityPlayer"
+/* Unity 2023.1+: UnityPlayer's Activity implementation, where the per-instance natives are */
+#define UP_CLS_AOS "com/unity3d/player/UnityPlayerForActivityOrService"
 #define H(n) static jvalue n(JNIEnv *env, jobject self, const jvalue *a, void *ud)
 
 #define up_log(...) fj_log("up: " __VA_ARGS__)
@@ -89,6 +91,12 @@ void     up_notify_input_device(int id, int added);
 void     up_fmod_stop_all(void);
 void     up_mkdirs(const char *path);
 
+/* Unity 2023.1+ Java side (up_unity6.c) */
+void     up_unity6_register(void);             /* from up_android_register         */
+void     up_unity6_objects(void);              /* from up_android_create_objects   */
+/* Unity 5.6 - 2017.2 Java side (up_legacy.c) */
+void     up_legacy_register(void);             /* from up_android_register         */
+void     up_legacy_start(void);                /* after initJni: nativeFile, nativeInitWWW */
 /* soft keyboard (up_softinput.c) */
 void     up_softinput_register(void);          /* UnityPlayer.showSoftInput & co. */
 void     up_softinput_pause(void);             /* UnityPlayer.pause(): the dialog is cancelled */

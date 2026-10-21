@@ -20,7 +20,7 @@ const char *fake_unity_si_seq(void);
 const char *fake_unity_si_str(void);
 void fake_unity_si_reset(void);
 
-static const char *const shape_name[SHAPE_N] = { "2017.4.9", "2017.4.40", "2018.4", "2019.4", "2020.3", "2021.3", "2022.3" };
+static const char *const shape_name[SHAPE_N] = { "2017.4.9", "2017.4.40", "2018.4", "2019.4", "2020.3", "2021.3", "2022.3", "6000.6" };
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
@@ -335,6 +335,7 @@ static int run_shape(int shape)
     CHECK(access("/tmp/uptest/data/files/il2cpp", W_OK) == 0);
     CHECK(R(R_ORIENT_LOCK) == (shape >= SHAPE_2020_3 ? 100 : 0));
     CHECK(R(R_NOWINDOW) == (shape >= SHAPE_2022_3 ? 1 : 0));
+    CHECK(R(R_U6_INITJNI) == (shape >= SHAPE_6000_6));
     CHECK(R(R_SWAPPY_DISPLAY) == 1);
     CHECK(R(R_OBB_GUID_OK) == 1);
     CHECK(R(R_LOADLIB_OK) == 1 && loadlib_bad == 0);
@@ -344,6 +345,11 @@ static int run_shape(int shape)
     /* one posted frame, one call, at the next vsync on Swappy's own looper thread */
     if (shape >= SHAPE_2019_4) CHECK(wait_for(R_SWAPPY_FRAME, 1, 3000) && R(R_SWAPPY_FRAME) == 1);
     CHECK(R(R_GFX) == 1 && R(R_FOCUS_TRUE) == 1 && R(R_RESUME) == 1);
+    CHECK(R(R_U6_JAVA) == (shape >= SHAPE_6000_6));
+    if (shape >= SHAPE_6000_6) {         /* low memory: nativeMemoryUsageChanged(Critical) */
+        up_low_memory();
+        CHECK(wait_for(R_U6_MEMORY, 4, 2000));
+    }
     CHECK(R(R_SURF_CHANGED) == later);
     CHECK(R(R_ORDER_OK) == 1);
     CHECK(wait_for(R_DOFRAME, 3, 3000));

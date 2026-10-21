@@ -52,7 +52,8 @@ static struct {
     int area[4];                            /* the host keyboard's rectangle: x, y, w, h */
 } E;
 
-static int have(const char *native) { return fj_native_sig(UP_CLS, native) != NULL; }
+/* (2023.1+: on UnityPlayerForActivityOrService, where up_native also finds them) */
+static int have(const char *native) { return fj_native_sig(UP_CLS, native) || fj_native_sig(UP_CLS_AOS, native); }
 
 /* ---- UTF-8 <-> code points ----------------------------------------------------------------- */
 static int utf8_decode(const char *s, uint32_t *out, int max)

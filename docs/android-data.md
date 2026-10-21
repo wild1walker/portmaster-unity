@@ -8,7 +8,7 @@ bundles, explained below). The output is in `--out` (default `android-out/`).
 
 Sections 1-3 come from libunity.so 2017.4.9f1 armeabi-v7a (sha256 `b7d24200…b604315e`),
 disassembled with the symbols in libunity.sym.so (`tools/re/arm.py`); section 4 is what changes
-for the other Unity versions (2017.3 - 2022.3).
+for the other Unity versions (5.6 - 6000.6).
 
 ## 1. How the player finds its data
 
@@ -33,7 +33,7 @@ for the other Unity versions (2017.3 - 2022.3).
    If it is missing, the defaults are used. The command line comes from the Intent extra `"unity"`.
 6. StreamingAssets = `"jar:file://" + app + "!/assets"`. ToAbsolute converts that back to `<app>/assets/…`.
    Cuphead loads every bundle with `AssetBundle.LoadFromFile(streamingAssetsPath/AssetBundles/x)`,
-   which goes through the same VFS.
+   which goes through the same VFS. Code that reads it with System.IO instead: section 6.
 
 Lookup: `LocalFileSystemAndroid::Open/Exists` tries the zip handler first, then **the real file
 system with the same path**. Zip lookup: the archive whose path prefixes the file wins. Otherwise
@@ -135,24 +135,40 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
   - mscorlib `mono_corlib_version` = 82, which is what the Android libmono.so checks.
   - The macOS-only icalls are MovieTexture, GameCenter, ClusterInput and Windows.Speech, which the game doesn't use.
 
-## 4. Unity versions (2017.3 - 2022.3)
+## 4. Unity versions (5.6 - 6000.6)
 
 Sections 1-3 come from the 2017.4.9 player. What `android-data` does for the other LTS lines,
 from the static survey of their Android players ([compat](compat/README.md)) and runs on Unity's
 built-ins and six free Linux games (one per line):
 
 - **Versions.** The data's Unity version is read from `globalgamemanagers` (or a bundle header);
-  outside 2017.3 - 2022.3 the run stops unless `--any-unity-version`. The player package's version
-  comes from its `ivy.xml` (2017.x, 2018.x) or, failing that, from its "unity default resources"
+  outside 5.6 - 6000.6 the run stops unless `--any-unity-version`. The player package's version
+  comes from its `player.json` (`pmunity player fetch`), its `ivy.xml` (5.x - 2018.x), the version
+  string in its libunity, or, failing that, from its "unity default resources"
   (which gives only the line: the file is often from an earlier patch). Data and player of
   different lines are refused (main data has no type trees: the player reads its own layouts);
   another patch of the same line is a warning. The report has both, and the Mono runtime the game
   needs: `.NET 3.5 (libmono)` (a `Mono/` folder, 2017.x - 2018.x) or `.NET 4.x (libmonobdwgc-2.0)`
   (`MonoBleedingEdge/`, and every 2019.1+ game).
-- **SerializedFile headers.** Formats 17 (2017.x - 2018.x), 21 (2019.x) and 22 (2020.1+, a 48-byte
-  header with 64-bit sizes: the version string at 48, the platform word after it). The platform
-  word is set in place for all three, in plain files and in bundles' CABs.
-- **Assemblies.** 2017.x: MonoManager's fixed slots (section 3). From 2018 (2018.4 - 2022.3
+- **SerializedFile headers.** Formats 17 (5.6 - 2018.x), 21 (2019.x), 22 (2020.1 - 6000.4, a
+  48-byte header with 64-bit sizes: the version string at 48, the platform word after it) and 23
+  (6000.5+, the same header; type trees carry a hash and their size). The platform word is set in
+  place for all of them, in plain files and in bundles' CABs. (6000.7 betas write format 25:
+  refused.)
+- **Built-in resources.** 2023.2+ players read `assets/bin/Data/Resources/unity default
+  resources` (libunity: "Resources/unity default resources"), earlier ones `assets/bin/Data/unity
+  default resources`; the package keeps its copy at `Data/Resources/` from 2023.2 too. android-data
+  takes it from either place and puts it where the player's line reads it.
+- **Assemblies.** 2017.3 - 2017.4: MonoManager's fixed slots (section 3). Older lines
+  (`GetAvailableDllAssemblyMask` of 5.6.7, 2017.1.5, 2017.2.5 disassembled): 5.x and 2017.1 have one
+  engine assembly (`UnityEngine.dll`, slot 0), slot 1 reserved, the game from slot 2; 2017.2 (the
+  first line with engine modules) takes slots 0 - 43 without looking for the files, skips 44 and
+  checks 45+. A game assembly that references a type of an engine module (by the module's name,
+  2017.2+) which the Android copy lacks but the game's desktop copy defines (Adventure Creator and
+  others: `UnityEngine.MovieTexture` in `UnityEngine.AudioModule`, standalone-only) would stop the
+  player at a `TypeLoadException`: that module is shipped as the game's desktop copy (a warning
+  names the types); only its standalone-only members fail, when called. `--managed-file
+  UnityEngine.XModule.dll` does the same by hand. From 2018 (2018.4 - 2022.3
   disassembled) `GetAvailableDllAssemblyMask` takes every listed assembly that loaded, filtered by
   its `m_AssemblyTypes` flags: no slot is reserved, a missing engine module is skipped wherever it
   is. From 2020.2 the list is `ScriptingAssemblies.json` in the data folder (MonoManager keeps only
@@ -168,14 +184,28 @@ built-ins and six free Linux games (one per line):
   game: 19 meshes in 3 files). The textures step likewise carries those blobs when it rewrites a
   `.resS`, and writes ASTC as `ASTC_<n>x<n>` (48-53) from 2019.1, where the RGBA numbers are
   deprecated.
-- **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version;
-  the GLES3 entry is copied from GLCore (from D3D11 for a Windows build).
+- **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version
+  that has it (2017.1+; 5.x has none, and nothing is added); the GLES3 entry is copied from GLCore
+  (from D3D11 for a Windows build).
+- **Type trees UnityPy lacks.** Main data has no type trees; UnityPy reads it with the trees it
+  ships (UnityPy 1.25.4: up to 6000.6 alphas / 6000.7 alphas). `PlayerSettings` of 6000.0.58f2,
+  6000.3.11f1, 6000.5.7f1 and 6000.6.3f1 is 4 bytes longer than those trees (6000.6.3f1's
+  `PlayerSettingsState::Transfer` has `captureStartupLogsBaked` after `insecureHttpOption`), so
+  reading it failed; 2023.2.20f1's is 1 byte longer, at its end. `pmunity/typetrees.py` then reads
+  it with that field added, or else with the bytes left over kept as unknown fields at the end,
+  only when UnityPy's own tree fails, the fixed one reads every byte, and no field of the missing
+  size fits before the fields android-data changes (`m_MTRendering`, `mobileMTRenderingBaked`,
+  `androidBlitType`, `androidUseSwappy`: the conversion stops otherwise). In all five the missing
+  bytes can only be among the last fields, and the object writes back byte for byte.
 - **PlayerSettings.** As in section 2, plus `--swappy off|keep|on`: `androidUseSwappy` (2019.3+,
   Android Frame Pacing), off by default. A desktop build never ran it, and the runtime keeps Swappy
   off; with the setting on, the 2019.4 player presents nothing and 2021.3+ stop after their first
   frames (runtime/android/README.md, "Frame pacing"). Off, Unity paces frames itself (vsync count,
   `targetFrameRate`), as on the desktop. Only 2019.3+ conversions carry the option in their state.
-- **OBB.** 2017.4 - 2020.3: the `assets/<build-id>` marker and `unity.build-id` meta-data. 2021.3+
+- **OBB.** 5.x: Java mounts the APK and each OBB with `nativeFile(path)` (an OBB only when the
+  APK's `settings.xml` lists the MD5 of its last 64 KiB); the runtime mounts the APK and every
+  main/patch OBB of the package that way (runtime/jni/up_legacy.c). 2017.1 - 2020.3: the
+  `assets/<build-id>` marker and `unity.build-id` meta-data. 2021.3+
   match an OBB by GUID: the APK's `assets/unity_obb_guid` (2021.3 reads it with
   `AssetManager.open("unity_obb_guid")`, 2022.3 as `<apk>/assets/unity_obb_guid`) must equal the
   OBB's `unity_obb_guid` at the root of the archive (2021.3: `ZipFile.getEntry("unity_obb_guid")`,
@@ -198,7 +228,10 @@ Six free Linux Mono games (2017.4.40f1, 2018.4.36f1, 2019.4.8f1, 2020.3.49f1, 20
 `--pack all`) with the Android player package of their own version (its `unity default resources`
 and Mono `Managed` set, fetched from Unity's installers): every serialized file loads back in
 UnityPy with the Android platform, every assembly the list names is present, APK and OBB verify.
-None has run in a player.
+Eight more (5.6.0f3, 2017.2.0f3, 2023.2.20f1, 6000.0.58f2, 6000.3.11f1, 6000.5.7f1, 6000.6.2f1,
+6000.6.3f1)
+go through shaders, settings and android-data the same way; all of them run in the emulated rig
+(compat/README.md, "Players run").
 
 ## 5. Native plugins
 
@@ -210,6 +243,122 @@ the `*.bank` files of StreamingAssets stay out of the OBB and go to `zip/assets/
 (`--loose-assets <glob>` for other files); ua_host gives FMOD's `jar:file://` and
 `file:///android_asset/` bank paths those files.
 
+## 6. StreamingAssets, files the game reads, saves
+
+On a desktop, `Application.streamingAssetsPath` is a folder (`<Game>_Data/StreamingAssets`; macOS:
+`<Game>.app/Contents/Resources/Data/StreamingAssets`) and a game may read it with any file API. On
+the Android player it is `jar:file://<archive>!/assets`, the archive being the OBB when one is
+mounted, else the APK. Unity's own APIs open that path through the VFS of section 1
+(`AssetBundle.LoadFromFile*`, `UnityWebRequest`, `WWW`, `VideoPlayer.url`); System.IO does not
+(Mono takes it for a relative path: `DirectoryNotFoundException`). `asmpatch --survey` lists the
+reads of each folder getter and what they reach (tools/asmpatch/README.md); `port check` suggests
+the option below when reads of StreamingAssets reach System.IO.
+
+**Bundles anywhere in StreamingAssets.** Every UnityFS file there gets the Android platform
+(section 2), not only Cuphead's `AssetBundles/`: Addressables' `aa/<platform>/`, a game's own
+folders. Bundles of 2022.3 (format 8) may start their blocks 16-aligned after the blocks info
+(flag 0x200); LZMA blocks (BuildAssetBundleOptions.None) are read, and the one with the platform
+byte is written back as LZ4HC; a bundle the reader cannot patch in place is saved again by UnityPy
+(LZ4 chunks, same objects).
+
+**Addressables.** Its settings and catalog are text read by Addressables' providers. Release 1.21
+(Unity 2022.3) reads them with UnityWebRequest when the path has `://` and the runtime platform
+is Android, so the jar path works; a desktop build of older releases reads them with
+`File.ReadAllText` (then `streaming-assets` below gives it the folder). Each bundle location's
+`AssetBundleRequestOptions` hold the bundle's CRC (`m_Crc`: CRC-32 of the uncompressed bundle
+data, the value `AssetBundle.LoadFromFile(path, crc)` checks), and a patched bundle has another
+one. android-data rewrites the catalog (`aa/catalog*.json` with a non-zero `m_Crc`): each CRC of a
+patched bundle becomes the new one; the records that grow or shrink move the entries' offsets
+after them; the rest of the file stays byte for byte (`streaming.py`). A 2022.3 game whose
+localization tables are Addressables bundles printed "The AssetBundle ... can't be loaded because
+it was not built with the right version or build target" and had no locales; now its language
+screen leads to its title menu (emulated rig). Binary catalogs (`catalog.bin`, Addressables 2.x)
+are not handled yet.
+
+**StreamingAssets as files: `--streaming-assets obb|both|loose`.**
+
+| mode | the files | asmpatch (opt-in patch, added to `--asmpatch`) | for |
+|---|---|---|---|
+| `obb` (default) | in the OBB | none | code that reads StreamingAssets with Unity's APIs only (Cuphead) |
+| `both` | in the OBB and beside the APK in `Game_Data/StreamingAssets/` | `streaming-assets`: the reads whose value reaches System.IO get the folder; the others keep the jar path | a game that reads JSON, XML, SQLite, level or mod files there |
+| `loose` | only in `Game_Data/StreamingAssets/` | `streaming-assets-all`: every read gets the folder, so Unity's APIs read it from there too | big StreamingAssets (`both` keeps them twice) |
+
+The folder mirrors the desktop layout (a data folder with StreamingAssets in it); on the handheld
+it is `ports/<name>/Game_Data/StreamingAssets/`, a plain folder on the card (exFAT or ext4) that
+System.IO lists, reads and, as on a desktop, writes. The patched read takes the archive's folder
+from the jar path itself, so it follows the APK and OBB wherever they are, and gives the original
+value back for anything else (a desktop player, the directory route). Without `--asmpatch` the
+folder is made but the code still reads the jar path (a warning says so). FMOD's banks stay in
+`assets/` beside the APK too, for ua_host's FMOD path mapping (section 5).
+
+In the emulated rig: a 2018.3 game whose menus take their text from localization XML files that it
+lists and opens in StreamingAssets (`DirectoryInfo.GetFiles`, `File.Exists`, `FileStream`) showed
+a dark screen and `KeyNotFoundException`s as before; with `both` its title menu. A 2020.3 game
+that loads its subtitles with `File.Exists`/`File.ReadAllText` at startup finds them (no "Cannot
+find file!"; Mono's trace shows the call). In a survey of the
+corpus (`asmpatch --survey`), reads of StreamingAssets that reach System.IO came from Unity
+Services Core's configuration reader (three games), a localization package's file storage, the
+Addressables release above, and the games' own localization or subtitle files; Cuphead's reach only
+`AssetBundle.LoadFromFile*`.
+
+Caveats:
+- `loose`: code that runs only on Android in the desktop build too (a run-time
+  `Application.platform == RuntimePlatform.Android` branch) gets a folder where it expects the
+  jar path; `UnityWebRequest.Get("/a/b")` turns a bare path into `http://localhost/a/b`
+  (`WebRequestUtils.MakeInitialUrl`), where the desktop code it was written for adds `file://`.
+  `both` keeps such reads on the jar path.
+- Code that builds the jar path itself (`"jar:file://" + Application.dataPath + "!/assets/"`, in
+  such Android branches) reads the OBB: keep the files there (`obb` or `both`).
+- The folder must be writable even for code that only reads: `new FileStream(path, FileMode.Open)`
+  asks for read and write access (desktop code does that). On the card it is; the emulated rig
+  copies `Game_Data/` into its device folder for the same reason (`tools/emu/run_emu.sh`).
+- A port's setup run again (a new release) replaces `Game_Data/StreamingAssets/`; anything else
+  the game wrote into `Game_Data/` stays.
+
+**Files at `Application.dataPath`.** On the player `dataPath` is the OBB file when one is mounted,
+else the APK: `dataPath + "/x"` fails (`ENOTDIR`). Its folder, `Path.GetDirectoryName(dataPath)`
+(and `dataPath + "/../x"` with .NET 4.x's class libraries, whose `Path.GetFullPath` folds the
+`..`), is the folder beside the APK, where `--beside` files (a GOG build's `goggame-*.info`) and
+`--root-file` files go. For code that reads or writes inside its data folder
+(`dataPath + "/config.ini"`, a mods folder, a log or a screenshot next to the data), `--data-path`
+makes `Game_Data/` beside the APK, a writable folder with the data folder's own files (top-level
+files and folders Unity does not use: not the serialized files, `Managed/`, `Resources/`,
+`StreamingAssets/`, `Plugins/`, `Mono*/`, `GI/`), and runs asmpatch's opt-in `data-path` patch:
+the reads of `dataPath` that reach System.IO get that folder (a `dataPath` ending in `.apk` or
+`.obb` becomes `<its folder>/Game_Data`; anything else, e.g. a desktop player's, stays). Then
+`dataPath + "/StreamingAssets"` is the folder `--streaming-assets` makes, and
+`GetDirectoryName(dataPath)` is still the folder beside the APK. Reads that reach only Unity's
+APIs (an Android branch's `"jar:file://" + dataPath + "!/assets/"`) keep the archive. In the corpus,
+the reads of `dataPath` that reach System.IO were debug output (heat maps, screenshots), editor
+tools, a plugin folder ua_host maps itself (FMOD), or code with an Android branch that uses
+`persistentDataPath` on the player: none needed `--data-path`, which the port check therefore only
+mentions (`android_data.data_path`), never suggests.
+
+**The working directory** (`Directory.GetCurrentDirectory`, relative paths) is ua_host's root, the
+port folder, where a desktop build started from its own folder would look too.
+
+### Saves
+
+| | desktop player | the handheld (ua_host) |
+|---|---|---|
+| `Application.persistentDataPath` (save files) | Linux `~/.config/unity3d/<Company>/<Product>/`; Windows `%USERPROFILE%\AppData\LocalLow\<Company>\<Product>\`; macOS `~/Library/Application Support/<Company>/<Product>/` (older Unity: `…/unity.<Company>.<Product>/`) | `ports/<name>/data/external/` (`getExternalFilesDir`) |
+| PlayerPrefs | Linux the `prefs` file in that folder (XML, strings base64); Windows the registry, `HKCU\Software\<Company>\<Product>`; macOS `~/Library/Preferences/unity.<Company>.<Product>.plist` | `ports/<name>/data/shared_prefs/<package>.v2.playerprefs.prefs` (the Android player's SharedPreferences: one `<i\|f\|s>\t<key>\t<value>` line each, `%XX` for tab, newline, `%`) |
+| `temporaryCachePath` | the system's cache folder | `ports/<name>/data/cache/` (also Unity's shader cache) |
+
+`<Company>` and `<Product>` are the game's PlayerSettings (a Linux or Windows build's data folder
+has them in `app.info`, two lines; the Linux player writes `unknown/unknown` when that is missing).
+The box64 route runs the Linux player, which keeps the Linux paths below its `HOME`
+([box64-route.md](box64-route.md)). `data/` is not in a port's
+release zip and the setup never touches it, so updates keep it. The package (`android_data.package`,
+default `com.pmunity.<name>`) names the PlayerPrefs file: a port keeps it from release to release.
+
+To move saves between a PC and the handheld: the files of `persistentDataPath` copy as they are
+(the same names below the folder; a few games tie a save to a machine by encrypting it with a
+device id); PlayerPrefs with `python -m pmunity prefs copy <from> <to>` between the Linux player's
+`prefs` file and the handheld's `.prefs` file (`prefs.py`; `prefs show <file>` lists one). It keeps
+the display settings each machine has its own of (`Screenmanager *`) unless `--all`. Windows'
+registry and macOS's plist are not read: there a game's own save files are what copies.
+
 ## Unsure / untested
 
 - Nothing has run on the player yet.
@@ -218,3 +367,7 @@ the `*.bank` files of StreamingAssets stay out of the OBB and go to `zip/assets/
   12 bundles parsed fully), but Unity itself has not read them yet.
 - The Mount patch and the OBB route have not been tried.
 - MT rendering and blit type are left at the game's values.
+- StreamingAssets (section 6): the rig ran the `obb` route on an Addressables game and `both` on
+  games reading localization XML and subtitle JSON with System.IO; `loose` and `--data-path` only
+  in the unit tests and the asmpatch tests; an FMOD game with `both` not run. Binary Addressables
+  catalogs, Windows and macOS PlayerPrefs not handled.

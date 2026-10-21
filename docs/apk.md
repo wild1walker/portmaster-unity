@@ -75,7 +75,7 @@ the NDK's choreographer.
 Refused, each with the reason: no `libmain.so`/`libunity.so` for an ARM ABI (not a Unity build, or
 the libraries are in an ABI split that was not given), x86-only builds, an ABI the target cannot
 run, Vulkan-only builds, IL2CPP without its metadata, Unity data that is not in the inputs (the
-OBB or the asset packs a store delivers), Unity versions outside 2017.3 - 2022.3
+OBB or the asset packs a store delivers), Unity versions outside 5.6 - 6000.6
 (`--any-unity-version`), VR builds (Oculus/OpenXR/Pico runtimes, a VR launcher category or a
 required `android.hardware.vr.*` feature; `--force`), OBBs of another build or package
 (`--force` for the build id).

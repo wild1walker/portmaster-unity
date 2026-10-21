@@ -116,6 +116,7 @@ static class Survey
             Console.WriteLine("verdict: pad/keyboard input");
         else
             Console.WriteLine("verdict: no input code found in the game's assemblies (UI built in scenes only? check the title screen)");
+        PathFlow.Print(game);
         return 0;
     }
 

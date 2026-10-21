@@ -33,6 +33,7 @@ static partial class TestMain
             NoAndroidConstant();
             InputSystemTests();
             InControlTests();
+            StreamingAssets();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }
@@ -137,14 +138,14 @@ static partial class TestMain
     }
 
     // ---- running and calling ----------------------------------------------------------------
-    static (int status, string output) Patch(string inDir, string outDir, string[] only = null)
+    static (int status, string output) Patch(string inDir, string outDir, string[] only = null, string[] with = null)
     {
         var w = new StringWriter();
         var old = Console.Out;
         Console.SetOut(w);
         int status;
         var game = new Game(inDir);
-        try { status = Program.Run(game, outDir, only, Array.Empty<string>()); }
+        try { status = Program.Run(game, outDir, only, Array.Empty<string>(), with); }
         finally { game.Dispose(); Console.SetOut(old); }
         foreach (var l in w.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)) Console.WriteLine("     | " + l);
         return (status, w.ToString());

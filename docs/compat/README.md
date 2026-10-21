@@ -7,7 +7,9 @@ files (imports, JNI tables and string references, the Java side, the built-in re
 line has since run a free Linux game in the emulated rig ("Players run" below). Per-version details:
 [2017.4.40f1](unity-2017.4.40f1.md) · [2018.4.36f1](unity-2018.4.36f1.md) ·
 [2019.4.40f1](unity-2019.4.40f1.md) · [2020.3.48f1](unity-2020.3.48f1.md) ·
-[2021.3.45f2](unity-2021.3.45f2.md) · [2022.3.62f3](unity-2022.3.62f3.md).
+[2021.3.45f2](unity-2021.3.45f2.md) · [2022.3.62f3](unity-2022.3.62f3.md). The lines around them
+(Mono builds of 5.6 - 2017.2 and 2023.1 - 6000.6, "Older and newer lines" below):
+[5.6 - 2017.2](unity-5.6-2017.2.md) · [2023.1 - 2023.2](unity-2023.md) · [6000.0 - 6000.6](unity-6000.md).
 
 ## Matrix
 
@@ -211,10 +213,46 @@ OBB (a build re-split locally into APK + main OBB, as Unity's "Split Application
 them, mounted its OBB and reached its title: docs/apk.md), an IL2CPP arm64 build of 2017.4 - 2019.4
 (the one 2018.4 build was a VR title, refused).
 
+## Older and newer lines (5.6 - 2017.2, 2023.1 - 6000.6)
+
+Surveyed the same way (`tools/re`), then converted and run with a free Linux Mono game where one
+was found. Everything in the matrix above that is not listed here holds for these lines too (the
+REL/RELA-only libraries, the UnityMain looper model, Swappy off, the OBB GUID of 2021.3+).
+
+| | 5.6.7 | 2017.1.5 | 2017.2.5 | 2023.1.22 | 2023.2.22 | 6000.0.85 | 6000.1 - 6000.4 | 6000.5 | 6000.6 |
+|---|---|---|---|---|---|---|---|---|---|
+| installer (player fetch) | NSIS, per file | same | same | large-installer NSIS | same | **chunked LZMA**: per file (6000.0.58) or solid (6000.0.85) | per file (6000.1.17, 6000.2.15, 6000.3.11), solid (6000.3.26, 6000.4.12) | solid | solid |
+| Mono runtime | libmono (in `Libs/`, DT_NEEDED of libunity) | libmono, libmonobdwgc | same | libmonobdwgc | same | same | same | same | same |
+| imports nobody provided | `SHA1*` (now shims) | `SHA1*` (now shims) | 0 | 0 | 0 | 0 | - | - | - |
+| Java side | UnityPlayer; **`nativeFile`** mounts APK/OBBs; WWW | UnityPlayer; WWW | same | **UnityPlayer abstract**: natives on `UnityPlayerForActivityOrService` | same | same; UI-thread `ALooper` | same | same | + `initJni(Context, I, String)`, `nativeInjectEvent(·, I)` |
+| allocator | - | - | - | - | - | - | - | - | **mimalloc**: bionic thread id slot (loader) |
+| SerializedFile format | 17 | 17 | 17 | 22 | 22 | 22 | 22 | **23** | 23 |
+| shader serializer | 201609010 | 201609010 | 201609010 | 202012090 | 202012090 | 202012090 | 202012090 | 202012090 | **202605290** |
+| `unity default resources` read from | `bin/Data/` | same | same | same | **`bin/Data/Resources/`** | same | same | same | same |
+| engine assembly slots | 2 | 2 | 45 | by name (json) | same | same | same | same | same |
+| PlayerSettings type tree | UnityPy's | UnityPy's | UnityPy's | UnityPy's | 2023.2.20: +1 byte (typetrees.py) | +4 bytes | (6000.3.11: +4) | +4 | +4 |
+
+Not covered: 5.0 - 5.5 (5.0 - 5.4: another Shader layout; 5.5 unchecked), 6000.7 (betas: format
+25), the GameActivity variant (a Gradle-built `libgame.so`; every package has the Activity one,
+which the runtime plays), Vulkan (the converter keeps GLES3 only).
+
+### Players run (emulated rig)
+
+| player | game | result |
+|---|---|---|
+| 5.6.0f3 | .NET 3.5, UI, Unity Analytics (WWW) | main menu; its analytics requests fail at once (WWW without a network) |
+| 2017.2.0f3 | .NET 3.5, Adventure Creator, CSteamworks, 860 MB | the `TypeLoadException` (`MovieTexture`, desktop-only) is gone with the desktop AudioModule; then black: `EntryPointNotFoundException: SteamClient_` (an old Steamworks.NET through `CSteamworks`, which the Steam stub's flat API lacks) and 47 - 60 frames in 300 s |
+| 2023.2.20f1 | bdwgc | main menu (Start, Settings, Exit) |
+| 6000.0.58f2 | bdwgc | studio logo, "sound required" card, its opening screen (frames take ~2 s in the rig) |
+| 6000.3.11f1 | bdwgc, VideoPlayer (H.264) | main menu; its background clip seeks with "Codec appears stalled" |
+| 6000.5.7f1 | format 23 | title screen (Start, Quit) |
+| 6000.6.2f1 | mimalloc, 3D | its first scene (in game: sky, crosshair, control hints), 23 frames in 300 s |
+| 6000.6.3f1 | mimalloc, generated world | Unity splash, then minutes of world generation (a GC every ~1 s); before the thread id slot: SIGSEGV in mimalloc or Mono assertions; still, in some runs: Mono's restart-signal handler on the UI thread asserting (`mono_thread_info_current`) |
+
 ## Linux players under box64 (the other route)
 
-Games the Android-player route cannot take (IL2CPP, Unity 5.x / 2023+ / Unity 6, x86-only
-plugins) run as their own Linux x86_64 build under box64: [box64-route.md](../box64-route.md).
+Games the Android-player route cannot take (Unity before 5.6 or after 6000.6, IL2CPP builds
+the IL2CPP route does not take, x86-only plugins) run as their own Linux x86_64 build under box64: [box64-route.md](../box64-route.md).
 `pmunity route <game>` says which route fits. In the box64 rig (`tools/box64/rig.sh`: arm64
 container, Mesa), with box64 0.4.4:
 

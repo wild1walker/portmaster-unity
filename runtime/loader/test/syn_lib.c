@@ -253,6 +253,20 @@ static struct __attribute__((aligned(8))) {
     int counter, turn, readers, max_readers;
 } S;                                                     // all zero: bionic's static initializers
 static unsigned long thread_guard[4];
+static unsigned long thread_ids[4];
+
+/* bionic's TLS_SLOT_THREAD_ID (thread pointer + 1 word), as mimalloc reads it (Unity 6000.6) */
+unsigned long syn_thread_id(void)
+{
+    unsigned long *tp;
+#if defined(__aarch64__)
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+#else
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tp));
+    tp = (unsigned long *)((unsigned long)tp & ~3ul);
+#endif
+    return tp[1];
+}
 
 #if defined(__aarch64__)
 unsigned long syn_tls_guard(void)
@@ -269,6 +283,7 @@ void *syn_guard_addr(void) { return &__stack_chk_guard; }
 static void *worker(void *arg)
 {
     int id = (int)(intptr_t)arg;
+    thread_ids[id] = syn_thread_id();
 #if defined(__aarch64__)
     thread_guard[id] = syn_tls_guard();
 #endif
@@ -316,6 +331,10 @@ int syn_thread_test(void)
 #if defined(__aarch64__)
     for (int i = 0; i < 4; i++) if (thread_guard[i] != syn_tls_guard()) return 7;
 #endif
+    for (int i = 0; i < 4; i++) {                        // thread id slots: set, one per thread
+        if (!thread_ids[i] || thread_ids[i] == syn_thread_id()) return 9;
+        for (int j = 0; j < i; j++) if (thread_ids[i] == thread_ids[j]) return 9;
+    }
     // a recursive mutex from pthread_mutex_init, also at 4 mod 8
     struct __attribute__((aligned(8))) { int pad; int32_t m[MUTEX_WORDS]; long attr; } r = { 0 };
     pthread_mutexattr_init(&r.attr);

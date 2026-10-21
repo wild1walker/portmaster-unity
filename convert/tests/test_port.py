@@ -185,7 +185,7 @@ class CheckTest(unittest.TestCase):
 
     def test_unsupported(self):
         with tempfile.TemporaryDirectory() as t:
-            d = fake_game(t, version='5.6.7f1')
+            d = fake_game(t, version='5.5.4f1')
             rep = P.check(t, asmpatch='/nonexistent-asmpatch')
             self.assertFalse(next(r for r in rep['routes'] if r['route'] == 'android')['ok'])
             self.assertEqual(rep['route'], 'box64')         # (a Linux x86-64 build)
@@ -430,6 +430,19 @@ class RoutesTest(unittest.TestCase):
                 P.template_path(r, spec if isinstance(spec, str) else spec['template'])
         with self.assertRaises(SystemExit):
             P.render('@@NOPE@@', {})
+
+
+
+
+class DecodedTexturesTest(unittest.TestCase):
+    def test_textures_step_suggested_when_bc_decodes_large(self):
+        from pmunity import port as PT
+        big = {'notes': [], 'data_survey': {'decoded_mb': 600.0, 'textures': {}}}
+        PT.suggest_config(big)
+        self.assertIn('textures', big['suggest']['convert']['steps'])
+        small = {'notes': [], 'data_survey': {'decoded_mb': 20.0, 'textures': {}}}
+        PT.suggest_config(small)
+        self.assertNotIn('steps', small['suggest']['convert'])
 
 
 if __name__ == '__main__':

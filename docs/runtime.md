@@ -12,7 +12,8 @@
 | `plugins.map` | written beside the APK by the data tool: what each native library the game P/Invokes becomes (ARM build in `lib/`, system library, built-in stub, refused) and the float signatures of glibc plugins ([plugins.md](plugins.md)) |
 | `lib/<plugin>.so` | ARM builds of the game's plugins (FMOD's Android libraries, ...) beside the player |
 | `assets/*.bank` | FMOD banks, kept out of the OBB (FMOD opens them as files) |
-| `data/` | created: `files/`, `cache/` (Unity's shader cache), `external/` (persistentDataPath: saves), `shared_prefs/` (PlayerPrefs) |
+| `Game_Data/StreamingAssets/` | StreamingAssets as plain files, for code that reads them with System.IO (`android-data --streaming-assets both\|loose` with asmpatch's streaming-assets patch; android-data.md section 6) |
+| `data/` | created: `files/`, `cache/` (Unity's shader cache, temporaryCachePath), `external/` (persistentDataPath: saves), `shared_prefs/` (PlayerPrefs, `<package>.v2.playerprefs.prefs`; `pmunity prefs` converts it to and from a Linux player's `prefs`) |
 
 What the host answers for itself (besides the Android shims): `System.loadLibrary(name)` /
 `UnityPlayer.loadLibrary(name)` load `lib<name>.so` from the library folder and `System.load(path)`

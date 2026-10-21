@@ -58,7 +58,8 @@ def archive(files, unity='2021.3.16f1', block=40, comp=(3, 0, 1)):
 
 class HeaderTest(unittest.TestCase):
     def test_platform_offset(self):
-        for fmt, ver, off in ((17, '2017.4.9f1', 31), (21, '2019.4.38f1', 32), (22, '2020.3.48f1', 60)):
+        for fmt, ver, off in ((17, '2017.4.9f1', 31), (21, '2019.4.38f1', 32), (22, '2020.3.48f1', 60),
+                              (23, '6000.6.3f1', 59)):
             head = sf_head(fmt, ver, 24)
             self.assertEqual(A.sf_platform_offset(head), (off, '<', 24, ver))
             self.assertEqual(UV.sf_header(head)[:2], (fmt, ver))
@@ -78,9 +79,10 @@ class VersionTest(unittest.TestCase):
     def test_parse_and_check(self):
         v = UV.Version('2021.3.45f2')
         self.assertEqual((v.line, v.patch, v.kind, v.build), ((2021, 3), 45, 'f', 2))
-        for ok in ('2017.3.0f3', '2017.4.40f1', '2020.3.49f1', '2022.3.62f3'):
+        for ok in ('5.6.0f3', '5.6.7f1', '2017.1.5f1', '2017.2.0f3', '2017.3.0f3', '2017.4.40f1', '2020.3.49f1',
+                   '2022.3.62f3', '2023.1.20f1', '2023.2.3f1', '6000.0.58f2', '6000.3.11f1', '6000.6.3f1'):
             UV.check(UV.Version(ok))
-        for bad in ('5.6.7f1', '2017.2.5f1', '2023.1.0f1', '6000.0.23f1'):
+        for bad in ('5.5.4f1', '5.3.2p3', '6000.7.0b5'):
             with self.assertRaises(UV.Unsupported):
                 UV.check(UV.Version(bad))
             UV.check(UV.Version(bad), force=True)
@@ -104,6 +106,62 @@ class VersionTest(unittest.TestCase):
         game, eng = A.split_assemblies(['Assembly-CSharp.dll', 'UnityEngine.CoreModule.dll', 'UnityEngine.UI.dll'],
                                        UV.Version('2019.4.8f1'))
         self.assertEqual((game, eng), (['Assembly-CSharp.dll', 'UnityEngine.UI.dll'], ['UnityEngine.CoreModule.dll']))
+
+
+class OlderNewerLinesTest(unittest.TestCase):
+    def test_assembly_slots(self):
+        """MonoManager's engine slots: 5.x and 2017.1 2, 2017.2 45, 2017.3+ 48 (then by name)"""
+        names = ['UnityEngine.dll', ''] + ['Assembly-CSharp.dll']
+        self.assertEqual(A.split_assemblies(names, UV.Version('5.6.0f3'))[0], ['Assembly-CSharp.dll'])
+        self.assertEqual(A.split_assemblies(names, UV.Version('2017.1.5f1'))[0], ['Assembly-CSharp.dll'])
+        self.assertEqual(A.builtin_assembly_slots(UV.Version('2017.2.0f3')), 45)
+        self.assertEqual(A.builtin_assembly_slots(UV.Version('2017.4.9f1')), 48)
+
+    def test_default_resources(self):
+        """2023.2+ players read Resources/unity default resources; packages keep it there too"""
+        self.assertEqual(A.default_resources_path(UV.Version('2023.1.20f1')), ('unity default resources',))
+        self.assertEqual(A.default_resources_path(UV.Version('6000.0.58f2')), ('Resources', 'unity default resources'))
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, 'Data', 'Resources'))
+            p = os.path.join(d, 'Data', 'Resources', 'unity default resources')
+            with open(p, 'wb') as f:
+                f.write(sf_head(23, '6000.6.0b3', 13))
+            self.assertEqual(A.pkg_default_resources(d), p)
+            self.assertEqual(A.player_version(d).line, (6000, 6))
+
+    def test_typetree_fix(self):
+        """typetrees.py: a fixed tree only where UnityPy's does not read the object, and exactly"""
+        from UnityPy.helpers.TypeTreeNode import TypeTreeNode
+        from pmunity import typetrees as T
+        node = TypeTreeNode.from_list([
+            dict(m_Level=0, m_Type='PlayerSettings', m_Name='Base', m_ByteSize=-1, m_Version=1, m_Index=0, m_MetaFlag=0),
+            dict(m_Level=1, m_Type='int', m_Name='insecureHttpOption', m_ByteSize=4, m_Version=1, m_Index=1, m_MetaFlag=0),
+            dict(m_Level=1, m_Type='int', m_Name='last', m_ByteSize=4, m_Version=1, m_Index=2, m_MetaFlag=0)])
+        fixed = T._with_fields(node, T.FIELDS['PlayerSettings'])
+        self.assertEqual([c.m_Name for c in fixed.m_Children], ['insecureHttpOption', 'captureStartupLogsBaked', 'last'])
+        self.assertEqual(fixed.m_Children[1].m_MetaFlag, T.ALIGN)
+
+        class Obj:          # read_typetree with UnityPy's node fails, with the fixed one succeeds
+            type = type('t', (), {'name': 'PlayerSettings'})
+            def _get_typetree_node(self):
+                return node
+            def read_typetree(self, nodes=None):
+                if nodes is None or len(nodes.m_Children) != 3:
+                    raise ValueError('Expected to read 12 bytes, but only read 8 bytes')
+                return {'ok': True}
+        tree, used = T.read(Obj())
+        self.assertEqual(tree, {'ok': True})
+        self.assertEqual(len(used.m_Children), 3)
+
+        class Tail(Obj):    # 2023.2.20f1: one byte more at the end, no FIELDS entry fits
+            type = type('t', (), {'name': 'Other'})
+            def read_typetree(self, nodes=None):
+                if nodes is None or [c.m_Name for c in nodes.m_Children][-1] != '_unknown_0':
+                    raise ValueError('Expected to read 9 bytes, but only read 8 bytes')
+                return {'tail': True}
+        tree, used = T.read(Tail(), edits=('insecureHttpOption',))
+        self.assertEqual(tree, {'tail': True})
+        self.assertEqual(used.m_Children[-1].m_Type, 'UInt8')
 
 
 class SwappyTest(unittest.TestCase):

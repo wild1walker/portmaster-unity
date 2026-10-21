@@ -5,6 +5,13 @@
 cd /emu || exit 1
 for p in /zip/*; do
   f=$(basename "$p")
+  # Game_Data/ (StreamingAssets as files, a data folder's own files) is a writable folder on a
+  # handheld, and desktop code opens files read-write (FileMode.Open): a copy, StreamingAssets fresh
+  if [ "$f" = Game_Data ]; then
+    [ -L "$f" ] && rm -f "$f"
+    mkdir -p "$f"; rm -rf "$f/StreamingAssets"; cp -R "$p/." "$f/"
+    continue
+  fi
   [ -e "$f" ] || [ -L "$f" ] || ln -s "$p" "$f"
 done
 # an APK variant (A/B): the .apk in /zip2 replaces the default one

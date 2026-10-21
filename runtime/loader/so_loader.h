@@ -47,9 +47,17 @@
  *   - libsoloader.a is linked into the executable itself, not into a shared library;
  *   - no other thread-local variable of the executable has an initial value
  *     (`__thread int x = 1;`) or an alignment above 16.
- * The other slots: 0-1 are glibc's TCB, which only bionic's libc reads; 3-4 (OpenGL)
+ * The other slots: 0-1 are glibc's TCB (the dtv and an unused word), which bionic's
+ * libc reads, and mimalloc in Unity 6000.6+ (slot 1 as its thread id); 3-4 (OpenGL)
  * belong to Android's GLES wrapper libraries, 6 to HWASan, 7 to ART, none of which run
  * here; their words are reserved and zero.
+ *
+ * THREAD ID SLOT (both architectures): slot 1 (thread pointer + 1 word) must be unique and
+ * non-zero per thread, as bionic's is (mimalloc's _mi_thread_id). so_load() fills it in for
+ * the calling thread, and libsoloader.a defines pthread_create, which fills it in for every new
+ * thread before its start routine (the executable's definition: the host program's code, the
+ * Android libraries' and the shared libraries' calls all reach it). Threads the process
+ * started otherwise call so_thread_slots() before running Android code.
  */
 #ifndef SO_LOADER_H
 #define SO_LOADER_H
@@ -103,6 +111,9 @@ const char *so_module_at(const void *addr, uintptr_t *bias);
  * Also settable with env SO_LIBRARY_PATH. Directories of loaded modules are
  * searched too. */
 void so_set_library_path(const char *dirs);
+
+/* bionic's thread id slot for the calling thread (see THREAD ID SLOT above); idempotent */
+void so_thread_slots(void);
 
 /* Map an Android library name (basename, e.g. "libGLESv2.so") to a host library
  * (e.g. "libGLESv2.so.2", or an absolute path). host == NULL: dlopen fails for it, also for an
