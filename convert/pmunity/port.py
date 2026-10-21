@@ -978,7 +978,7 @@ def suggest_config(rep):
                      f'card (several times the crunched size)')
     decoded = d.get('decoded_mb', 0)
     if decoded > 128:
-        # seen on an RG35XX SP (1 GB): 57 MB of crunched DXT grew to 830 MB resident in 12 s and the
+        # seen on an RG34XX-SP (1 GB): 57 MB of crunched DXT grew to 830 MB resident in 12 s and the
         # handheld froze in swap; as ASTC the same game ran at 60 fps in 385 MB
         steps = cv.setdefault('steps', list(DEFAULT_STEPS))
         if 'textures' not in steps:

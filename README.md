@@ -149,8 +149,8 @@ Notes:
 **What that covers.** In a survey of 65 free Linux Unity games (classified by their Unity version
 and build type), 50 were Mono builds of Unity 2017.3 - 2022.3, the range the tools supported at the
 time (it is 5.6 - 6000.6 now): column A, which has run on the handheld with a game of every year
-from 2017 to 2022. 8 were IL2CPP builds (column E, emulator only so far) and 5 used a Unity
-version outside that range.
+from 2017 to 2022. 8 were IL2CPP builds (column E, emulator only so far), 5 used a Unity
+version outside that range, and for 2 the survey could not tell the build type.
 
 ### What is missing
 
