@@ -163,6 +163,17 @@ static int looper_cb(int fd, int events, void *data)
 
 static void *waker(void *l) { usleep(50000); ALooper_wake(l); return NULL; }
 
+/* another thread adds an fd while the looper waits (Unity 6's video looper: a handler per clip) */
+static int late_fd[2], late_evs;
+static void *late_adder(void *l)
+{
+    usleep(50000);
+    ALooper_addFd(l, late_fd[0], 9, ALOOPER_EVENT_INPUT, looper_cb, &late_evs);
+    usleep(50000);
+    (void)!write(late_fd[1], "z", 1);
+    return NULL;
+}
+
 static void test_looper_sensors_input(void)
 {
     CHECK(ALooper_forThread() == NULL);
@@ -185,6 +196,14 @@ static void test_looper_sensors_input(void)
     pthread_create(&t, NULL, waker, l);
     CHECK(ALooper_pollOnce(2000, NULL, NULL, NULL) == ALOOPER_POLL_WAKE);
     pthread_join(t, NULL);
+    // an fd added by another thread during an endless wait is watched by that wait (no POLL_WAKE)
+    CHECK(pipe(late_fd) == 0);
+    int calls0 = cb_calls;
+    pthread_create(&t, NULL, late_adder, l);
+    CHECK(ALooper_pollOnce(-1, NULL, NULL, NULL) == ALOOPER_POLL_CALLBACK && cb_calls == calls0 + 1);
+    pthread_join(t, NULL);
+    CHECK(ALooper_removeFd(l, late_fd[0]) == 1);
+    close(late_fd[0]); close(late_fd[1]);
 
     ASensorManager *sm = ASensorManager_getInstance();
     CHECK(sm != NULL);
@@ -458,11 +477,16 @@ static void test_ndk_newer(void)
     CHECK(android_shims_lookup("AChoreographer_postFrameCallback") == NULL);
     CHECK(table_fn(android_ndk_shims, "ATrace_isEnabled") != NULL && table_fn(android_ndk_shims, "ATrace_setCounter") == NULL);
     CHECK(table_fn(android_ndk_shims, "ALooper_prepare") != NULL && table_fn(android_ndk_shims, "AConfiguration_getSdkVersion") != NULL);
+    // libmediandk's AImageReader (Unity 6 decodes video into one when it finds it): absent below 24
+    CHECK(table_fn(android_mediandk_shims, "AImageReader_newWithUsage") == NULL && table_fn(android_mediandk_shims, "AImage_getWidth") == NULL);
+    CHECK(table_fn(android_mediandk_shims, "AMediaCodec_createDecoderByType") != NULL);
     android_shims_set_api_level(24);
+    CHECK(table_fn(android_mediandk_shims, "AImageReader_new") != NULL && table_fn(android_mediandk_shims, "AImageReader_newWithUsage") == NULL);
     CHECK(table_fn(android_ndk_shims, "AChoreographer_getInstance") == (void *)AChoreographer_getInstance);
     CHECK(table_fn(android_ndk_shims, "AChoreographer_postFrameCallback64") == NULL);
     CHECK(table_fn(android_ndk_shims, "AHardwareBuffer_acquire") == NULL);
     android_shims_set_api_level(29);
+    CHECK(table_fn(android_mediandk_shims, "AImageReader_newWithUsage") != NULL && table_fn(android_mediandk_shims, "AImage_getHardwareBuffer") != NULL);
     CHECK(table_fn(android_ndk_shims, "AChoreographer_postFrameCallback64") != NULL);
     CHECK(table_fn(android_ndk_shims, "AChoreographer_registerRefreshRateCallback") == NULL);
     CHECK(table_fn(android_ndk_shims, "ANativeWindow_setFrameRate") == NULL && table_fn(android_ndk_shims, "AHardwareBuffer_isSupported") != NULL);

@@ -107,6 +107,11 @@ static const struct { const char *prefix; int api; } NDK_API_LEVELS[] = {
     { "AThermal_getThermalHeadroomThresholds", 35 }, { "AThermal_getThermalHeadroom", 31 }, { "AThermal_", 30 },
     { "APerformanceHint_setThreads", 34 }, { "APerformanceHint_setPreferPowerEfficiency", 35 },
     { "APerformanceHint_reportActualWorkDuration2", 35 }, { "AWorkDuration_", 35 }, { "APerformanceHint_", 33 },
+    // libmediandk: AImageReader / AImage (24; the hardware-buffer ones 26). Unity 6 decodes video into
+    // an AImageReader whenever it finds one (else, as on older phones, into a SurfaceTexture: the
+    // path ua_host provides): at the reported level 19 they are absent, as on such a phone
+    { "AImageReader_newWithUsage", 26 }, { "AImageReader_setBufferRemovedListener", 26 },
+    { "AImage_getHardwareBuffer", 26 }, { "AImage_deleteAsync", 26 }, { "AImageReader_", 24 }, { "AImage_", 24 },
 };
 
 #define SLES_FUNCS(X) X(slCreateEngine) X(slQueryNumSupportedEngineInterfaces) X(slQuerySupportedEngineInterfaces)
@@ -189,7 +194,14 @@ static int ndk_api_of(const char *name)
     return 9;
 }
 
-static const char *const g_newer_names[] = { NDK_NEWER_FUNCS(NAME_OF) NULL };
+// libmediandk functions gated the same way
+#define MEDIANDK_NEWER_FUNCS(X) \
+    X(AImageReader_new) X(AImageReader_newWithUsage) X(AImageReader_delete) X(AImageReader_getWindow) \
+    X(AImageReader_acquireLatestImage) X(AImageReader_acquireNextImage) X(AImageReader_setImageListener) \
+    X(AImageReader_setBufferRemovedListener) X(AImage_delete) X(AImage_deleteAsync) X(AImage_getHardwareBuffer) \
+    X(AImage_getTimestamp) X(AImage_getWidth) X(AImage_getHeight)
+
+static const char *const g_newer_names[] = { NDK_NEWER_FUNCS(NAME_OF) MEDIANDK_NEWER_FUNCS(NAME_OF) NULL };
 static int g_api_level;
 
 int android_shims_api_level(void) { return g_api_level; }
@@ -199,11 +211,11 @@ int android_shims_api_level(void) { return g_api_level; }
 // a symbol up: it indexes the tables then.
 void android_shims_set_api_level(int api)
 {
-    static void *orig[2][sizeof g_newer_names / sizeof g_newer_names[0]];
+    static void *orig[3][sizeof g_newer_names / sizeof g_newer_names[0]];
     static int saved;
-    so_shim *tabs[2] = { android_shims, android_ndk_shims };
+    so_shim *tabs[3] = { android_shims, android_ndk_shims, android_mediandk_shims };
     g_api_level = api;
-    for (int t = 0; t < 2; t++)
+    for (int t = 0; t < 3; t++)
         for (so_shim *e = tabs[t]; e->name; e++)
             for (int i = 0; g_newer_names[i]; i++)
                 if (!strcmp(e->name, g_newer_names[i])) {

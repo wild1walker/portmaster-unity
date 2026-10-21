@@ -24,6 +24,8 @@ struct ALooper {
     int allow_non_callbacks;
     int nfds;
     struct looper_fd fds[LOOPER_MAX_FDS];
+    pthread_t owner;        // the thread that polls it
+    int woken;              // ALooper_wake since the last poll (else the eventfd only says the fds changed)
 };
 
 static __thread ALooper *t_looper;
@@ -39,6 +41,7 @@ ALooper *ALooper_prepare(int opts)
     l->refcount = 1;
     l->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     l->allow_non_callbacks = opts & ALOOPER_PREPARE_ALLOW_NON_CALLBACKS;
+    l->owner = pthread_self();
     t_looper = l;
     SHIM_TRACE("ALooper_prepare(%d) -> %p", opts, (void *)l);
     return l;
@@ -58,7 +61,20 @@ void ALooper_release(ALooper *l)
 void ALooper_wake(ALooper *l)
 {
     uint64_t one = 1;
-    if (l && l->wake_fd >= 0) (void)!write(l->wake_fd, &one, sizeof one);
+    if (!l) return;
+    __atomic_store_n(&l->woken, 1, __ATOMIC_SEQ_CST);
+    if (l->wake_fd >= 0) (void)!write(l->wake_fd, &one, sizeof one);
+}
+
+/* Android's Looper changes its epoll set at once, so an fd another thread adds is watched by the
+   poll already waiting. Here the waiting poll() has its own copy of the set: the eventfd makes it
+   look again (without a POLL_WAKE: ALooper_pollOnce goes on waiting). Unity 6 adds a handler fd to
+   its video looper for every clip from another thread; the second clip's surface request was
+   otherwise never seen ("AndroidVideoMedia surface creation stalled"). */
+static void fds_changed(ALooper *l)
+{
+    uint64_t one = 1;
+    if (l->wake_fd >= 0 && !pthread_equal(l->owner, pthread_self())) (void)!write(l->wake_fd, &one, sizeof one);
 }
 
 int ALooper_addFd(ALooper *l, int fd, int ident, int events, ALooper_callbackFunc cb, void *data)
@@ -74,6 +90,7 @@ int ALooper_addFd(ALooper *l, int fd, int ident, int events, ALooper_callbackFun
     }
     l->fds[i] = (struct looper_fd){ fd, cb ? ALOOPER_POLL_CALLBACK : ident, events, cb, data };
     pthread_mutex_unlock(&l->lock);
+    fds_changed(l);
     return 1;
 }
 
@@ -86,6 +103,7 @@ int ALooper_removeFd(ALooper *l, int fd)
         if (l->fds[i].fd == fd) { l->fds[i] = l->fds[--l->nfds]; found = 1; break; }
     }
     pthread_mutex_unlock(&l->lock);
+    if (found) fds_changed(l);
     return found;
 }
 
@@ -108,25 +126,39 @@ int ALooper_pollOnce(int timeoutMillis, int *outFd, int *outEvents, void **outDa
     }
     struct pollfd pfd[LOOPER_MAX_FDS + 1];
     struct looper_fd fds[LOOPER_MAX_FDS];
-    pthread_mutex_lock(&l->lock);
-    int n = l->nfds;
-    memcpy(fds, l->fds, n * sizeof *fds);
-    pthread_mutex_unlock(&l->lock);
-    pfd[0] = (struct pollfd){ l->wake_fd, POLLIN, 0 };
-    for (int i = 0; i < n; i++) {
-        short ev = 0;
-        if (fds[i].events & ALOOPER_EVENT_INPUT) ev |= POLLIN;
-        if (fds[i].events & ALOOPER_EVENT_OUTPUT) ev |= POLLOUT;
-        pfd[i + 1] = (struct pollfd){ fds[i].fd, ev, 0 };
-    }
-    int r = poll(pfd, n + 1, timeoutMillis);
-    if (r < 0) return errno == EINTR ? ALOOPER_POLL_WAKE : ALOOPER_POLL_ERROR;
-    if (r == 0) return ALOOPER_POLL_TIMEOUT;
-    int result = ALOOPER_POLL_TIMEOUT;
-    if (pfd[0].revents) {
-        uint64_t v;
-        (void)!read(l->wake_fd, &v, sizeof v);
-        result = ALOOPER_POLL_WAKE;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int n, r, result;
+    for (;;) {
+        pthread_mutex_lock(&l->lock);
+        n = l->nfds;
+        memcpy(fds, l->fds, n * sizeof *fds);
+        pthread_mutex_unlock(&l->lock);
+        pfd[0] = (struct pollfd){ l->wake_fd, POLLIN, 0 };
+        for (int i = 0; i < n; i++) {
+            short ev = 0;
+            if (fds[i].events & ALOOPER_EVENT_INPUT) ev |= POLLIN;
+            if (fds[i].events & ALOOPER_EVENT_OUTPUT) ev |= POLLOUT;
+            pfd[i + 1] = (struct pollfd){ fds[i].fd, ev, 0 };
+        }
+        int left = timeoutMillis;
+        if (timeoutMillis > 0) {
+            struct timespec t1;
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            long el = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+            left = el >= timeoutMillis ? 0 : (int)(timeoutMillis - el);
+        }
+        r = poll(pfd, n + 1, left);
+        if (r < 0) return errno == EINTR ? ALOOPER_POLL_WAKE : ALOOPER_POLL_ERROR;
+        if (r == 0) return ALOOPER_POLL_TIMEOUT;
+        result = ALOOPER_POLL_TIMEOUT;
+        if (pfd[0].revents) {
+            uint64_t v;
+            (void)!read(l->wake_fd, &v, sizeof v);
+            if (__atomic_exchange_n(&l->woken, 0, __ATOMIC_SEQ_CST)) result = ALOOPER_POLL_WAKE;
+            else if (r == 1) continue;          // only the fd set changed: wait on the new one
+        }
+        break;
     }
     for (int i = 0; i < n; i++) {
         if (!pfd[i + 1].revents) continue;
