@@ -432,5 +432,18 @@ class RoutesTest(unittest.TestCase):
             P.render('@@NOPE@@', {})
 
 
+
+
+class DecodedTexturesTest(unittest.TestCase):
+    def test_textures_step_suggested_when_bc_decodes_large(self):
+        from pmunity import port as PT
+        big = {'notes': [], 'data_survey': {'decoded_mb': 600.0, 'textures': {}}}
+        PT.suggest_config(big)
+        self.assertIn('textures', big['suggest']['convert']['steps'])
+        small = {'notes': [], 'data_survey': {'decoded_mb': 20.0, 'textures': {}}}
+        PT.suggest_config(small)
+        self.assertNotIn('steps', small['suggest']['convert'])
+
+
 if __name__ == '__main__':
     unittest.main()

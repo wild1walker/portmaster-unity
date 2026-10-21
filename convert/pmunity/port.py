@@ -632,7 +632,7 @@ def survey_data(data, deep=True):
     (input modules, text fields), video, texture formats, scenes."""
     r = {'product': None, 'company': None, 'graphics_apis': None, 'color_space': None, 'active_input': None,
          'screen': None, 'scenes': None, 'scripts_used': {}, 'video_players': 0, 'video_clips': {},
-         'movie_textures': 0, 'textures': {}, 'notes': []}
+         'movie_textures': 0, 'textures': {}, 'decoded_mb': 0.0, 'notes': []}
     try:
         import UnityPy
     except ImportError:
@@ -705,6 +705,11 @@ def survey_data(data, deep=True):
                     st = r['textures'].setdefault(f, [0, 0])
                     st[0] += 1
                     st[1] += int(getattr(t, 'm_CompleteImageSize', 0) or 0)
+                    # formats a GLES handheld GPU (Mali) cannot sample: Unity decodes them to RGBA32 at load
+                    if str(f).startswith(('DXT', 'BC')):
+                        w, h = int(getattr(t, 'm_Width', 0) or 0), int(getattr(t, 'm_Height', 0) or 0)
+                        mips = int(getattr(t, 'm_MipCount', 1) or 1)
+                        r['decoded_mb'] += w * h * 4 * (4 / 3 if mips > 1 else 1) / 2**20
             except Exception:
                 continue
     r['scripts_used'] = {f'{ns}.{cn}' if ns else cn: c for (ns, cn, _), c in sorted(used.items())}
@@ -892,6 +897,9 @@ def check(path, asmpatch=None, deep=True, log=None):
     return rep
 
 
+DEFAULT_STEPS = ('shaders', 'settings', 'audio')
+
+
 def suggest_config(rep):
     """Port config values the check suggests (port new starts from them)."""
     s, d = rep.get('code') or {}, rep.get('data_survey') or {}
@@ -968,6 +976,17 @@ def suggest_config(rep):
     if crunched:
         notes.append(f'{crunched} crunched textures: as ASTC (the textures step) they take their full size on the '
                      f'card (several times the crunched size)')
+    decoded = d.get('decoded_mb', 0)
+    if decoded > 128:
+        # seen on an RG35XX SP (1 GB): 57 MB of crunched DXT grew to 830 MB resident in 12 s and the
+        # handheld froze in swap; as ASTC the same game ran at 60 fps in 385 MB
+        steps = cv.setdefault('steps', list(DEFAULT_STEPS))
+        if 'textures' not in steps:
+            steps.append('textures')
+        notes.append(f'BC/DXT textures decode to about {decoded:.0f} MB of RGBA on the handheld (its GPU cannot '
+                     f'sample them): more than a 1 GB device can hold next to the game. The textures step is '
+                     f'suggested (convert.steps), re-encoding them as ASTC at the GPU\'s own size; remove it '
+                     f'only for a device with the memory to spare')
     if rep.get('size_mb', 0) > 600:
         notes.append(f"{rep['size_mb']} MB: the handheld's setup needs about 2-3 times that free while it runs")
     return sug
@@ -1051,7 +1070,7 @@ DEFAULTS = {
              'availability': 'free', 'store': [], 'setup_time': '', 'exp': True, 'ready_marker': '.setup_done'},
     'game': {'data': '*_Data', 'build': 'linux', 'unity_versions': [], 'what': '', 'size_mb': 0, 'setup_space_mb': 0},
     'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'url': '', 'sha256': {}},
-    'convert': {'steps': ['shaders', 'settings', 'audio'], 'settings': {'graphics_apis': [11]}},
+    'convert': {'steps': list(DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
                      'name': '', 'package': '', 'args': []},
     'runtime': {},
