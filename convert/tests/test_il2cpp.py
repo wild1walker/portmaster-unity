@@ -424,6 +424,16 @@ class AndroidDataIl2cppTest(unittest.TestCase):
         self.assertEqual(got[2][1], os.path.join('/il2', 'Data/Managed/Metadata/global-metadata.dat'))
         self.assertEqual(args.managed_names, {'Assembly-CSharp.dll', 'mscorlib.dll'})
 
+    def test_player_match(self):
+        """libil2cpp.so goes with the data it was built from and the player of its IL2CPP's release"""
+        v = UV.Version
+        info = {'unity': '2017.4.40f1', 'data_unity': '2017.4.9f1'}
+        self.assertIsNone(AD.il2cpp_mismatch(info, v('2017.4.9f1'), v('2017.4.40f1')))
+        self.assertIsNone(AD.il2cpp_mismatch(info, v('2017.4.9f1'), None))
+        self.assertIn('2017.4.9f1 data', AD.il2cpp_mismatch(info, v('2017.4.40f1'), v('2017.4.40f1')))
+        self.assertIn('player package is 2017.4.9f1', AD.il2cpp_mismatch(info, v('2017.4.9f1'), v('2017.4.9f1')))
+        self.assertIsNone(AD.il2cpp_mismatch({'unity': '2019.4.8f1'}, v('2019.4.8f1'), v('2019.4.8f1')))  # (older il2cpp.json)
+
     def test_build_date_2020(self):
         """2020.x: boot.config gets a buildDate (libunity's re-extraction stamp) from the metadata"""
         with tempfile.TemporaryDirectory() as t:
