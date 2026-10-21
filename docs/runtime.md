@@ -86,7 +86,8 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_MONO_OPTIONS` | Mono options; `--trace=T:Class,M:Class:Method` (no `<` in specs) |
 | `UA_MONO_TRACE` | log Mono class/method/field lookups that fail |
 | `FJ_TRACE` | log every JNI call |
-| `ANDROID_SLES_OUTPUT` | `auto` (SDL, else pipe), `sdl`, `pipe`; `ANDROID_SLES_PIPE_CMD` overrides the client |
+| `ANDROID_SLES_OUTPUT` | `auto` (SDL, else pipe), `sdl`, `pipe`; `ANDROID_SLES_PIPE_CMD` overrides the client. The pipe goes to `pw-cat` (PipeWire), else `pacat` (PulseAudio), else the system's `aplay` (ALSA alone, e.g. when the 32-bit alsa-lib cannot drive an older kernel) |
+| `ANDROID_SLES_APLAY_DEVICES` | the ALSA devices the `aplay` client tries in order (default `plughw:0,0 default`: the card directly, without dmix's buffer, else the system's default device when the card is busy) |
 | `UA_SHADER_DUMP=<dir>` | write every GLSL source Unity compiles to `<dir>/<fnv64>.glsl` (runtime/host/glhooks.c) |
 | `UA_SHADER_OVERRIDE=<dir>` | compile `<dir>/<fnv64>.glsl` instead of that source (both switches turn Unity's program binary cache off) |
 | `UA_SWAP_INTERVAL` | eglSwapInterval forced (0: no vsync; Unity's own frame cap still applies) |

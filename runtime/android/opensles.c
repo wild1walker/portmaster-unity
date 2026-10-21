@@ -12,8 +12,9 @@
 //
 // Output (ANDROID_SLES_OUTPUT): sdl = an SDL audio device; pipe = raw PCM piped into a sound-server
 // client (ANDROID_SLES_PIPE_CMD, else pw-cat for PipeWire or pacat for PulseAudio, found through
-// XDG_RUNTIME_DIR) - for 32-bit programs on a 64-bit system whose sound server they cannot reach
-// directly (PipeWire holding the card, no 32-bit client plugins); auto (default) = sdl, else pipe.
+// XDG_RUNTIME_DIR, else the system's aplay on ALSA alone) - for 32-bit programs on a 64-bit system
+// whose sound server they cannot reach directly (PipeWire holding the card, no 32-bit client
+// plugins) or whose 32-bit alsa-lib cannot drive the kernel; auto (default) = sdl, else pipe.
 #define _GNU_SOURCE
 #include "sles_min.h"
 #include "shim_internal.h"
@@ -268,6 +269,49 @@ static const char *pipe_format(SDL_AudioFormat f, int pulse)
     }
 }
 
+static const char *aplay_format(SDL_AudioFormat f)
+{
+    switch (f) {
+    case AUDIO_S16LSB: return "S16_LE";
+    case AUDIO_F32LSB: return "FLOAT_LE";
+    case AUDIO_S32LSB: return "S32_LE";
+    case AUDIO_U8: return "U8";
+    default: return NULL;
+    }
+}
+
+// ALSA alone (no sound server; the 32-bit alsa-lib can fail where the system's 64-bit one works,
+// e.g. Debian's time64 libasound2t64 on kernels before 5.6): the system's aplay, trying the devices
+// of ANDROID_SLES_APLAY_DEVICES in order (default "plughw:0,0 default": the card directly, without
+// dmix's buffer, else the system's default device when the card is busy). aplay opens the device
+// before it reads stdin, so a device that fails to open loses no audio. 0 if it does not fit.
+static int aplay_cmd(char *cmd, size_t n, const char *fmt, int rate, int ch)
+{
+    const char *list = getenv("ANDROID_SLES_APLAY_DEVICES");
+    if (!list || !*list) list = "plughw:0,0 default";
+    size_t len = 0;
+    int k = 0;
+    cmd[0] = 0;
+    for (const char *p = list; *p; ) {
+        size_t m = strcspn(p, " ");
+        if (m && m < 64 && strspn(p, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:,_=.-") >= m) {
+            int last = !p[m] || !p[m + strspn(p + m, " ")];
+            int w = snprintf(cmd + len, n - len, "%s%saplay -q -t raw -f %s -r %d -c %d -D %.*s --buffer-time=40000 --period-time=10000 -%s",
+                             k ? " || { echo 'OpenSL: aplay: next device' >&2; " : "", last ? "exec " : "",
+                             fmt, rate, ch, (int)m, p, last ? "" : " 2>/dev/null");
+            if (w < 0 || (size_t)w >= n - len) return 0;
+            len += w; k++;
+        }
+        p += m;
+        p += strspn(p, " ");
+    }
+    for (int i = 1; i < k; i++) {               // close the { ...; } groups
+        if (len + 3 >= n) return 0;
+        memcpy(cmd + len, "; }", 4); len += 3;
+    }
+    return k > 0;
+}
+
 static int pipe_open(obj *o)
 {
     char cmd[512];
@@ -282,6 +326,9 @@ static int pipe_open(obj *o)
     else if (pfmt && rt && (snprintf(sock, sizeof sock, "%s/pulse/native", rt), access(sock, F_OK) == 0) && in_path("pacat"))
         snprintf(cmd, sizeof cmd, "exec pacat --playback --raw --format=%s --rate=%d --channels=%d --latency-msec=20",
                  pfmt, o->p.spec.freq, o->p.spec.channels);
+    else if (aplay_format(o->p.spec.format) && in_path("aplay") &&
+             aplay_cmd(cmd, sizeof cmd, aplay_format(o->p.spec.format), o->p.spec.freq, o->p.spec.channels))
+        ;
     else
         return 0;
     int fds[2];

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stand-in for the system's aplay in build.sh's pipe test: records its arguments, refuses
+# plughw:0,0 as a busy card does, and keeps the PCM it is given.
+echo "$*" >> /tmp/aplay.args
+case "$*" in *"-D plughw:0,0 "*) echo "aplay: device busy" >&2; exit 1;; esac
+cat > /tmp/aplay.raw
