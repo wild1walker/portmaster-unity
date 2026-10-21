@@ -1901,6 +1901,7 @@ void up_android_register(void)
     extern void up_media_register(void) __attribute__((weak));
     if (up_media_register) up_media_register();
     up_unity6_register();         /* Unity 2023.1+ (up_unity6.c) */
+    up_legacy_register();         /* Unity 5.6 - 2017.2 (up_legacy.c) */
 }
 
 void up_android_create_objects(void)

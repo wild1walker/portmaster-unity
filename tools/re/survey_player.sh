@@ -29,7 +29,7 @@ for d in mono/Release/Libs/armeabi-v7a il2cpp/Release/Libs/armeabi-v7a il2cpp/Re
   [ -d "$PKG/$V/$d" ] || continue
   tag=$(echo "$d" | cut -d/ -f1)-$(basename "$d")
   extra=""
-  [ "$tag" = mono-armeabi-v7a ] && extra=$(cd "$PKG" && ls $V/mono/Release/MonoLibs/armeabi-v7a/*.so 2>/dev/null | sed 's#^#/p/#' | tr '\n' ' ')
+  [ "$tag" = mono-armeabi-v7a ] && extra=$(cd "$PKG" && ls $V/mono/Release/MonoLibs/armeabi-v7a/*.so 2>/dev/null | sed 's#^#/p/#' | tr '\n' ' ' || true)
   run sh -c "mkdir -p /o/imports/$tag && python3 -I /t/elfimports.py /o/imports/$tag /p/$V/$d/*.so $extra > /o/imports/$tag/summary.json"
 done
 

@@ -59,6 +59,7 @@ class Layout:
 
 
 SERIALIZERS = {
+    201609010: Layout('5.5 - 2017.2', 4, 1, False),       # Unity 5.6.7, 2017.1.5, 2017.2.5's built-ins
     201708220: Layout('2017.3 - 2018.1', 4, 1, False),     # Cuphead 1.3.4: 5914 GLCore entries; Unity 2017.4's built-ins
     201802150: Layout('2018.2 - 2018.4', 4, 1, False),     # Unity 2018.4.36's built-ins
     201806140: Layout('2019.1 - 2021.1', 4, 2, False),     # Unity 2019.4.40, 2020.3.48's built-ins

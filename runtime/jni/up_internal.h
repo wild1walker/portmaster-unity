@@ -94,5 +94,8 @@ void     up_mkdirs(const char *path);
 /* Unity 2023.1+ Java side (up_unity6.c) */
 void     up_unity6_register(void);             /* from up_android_register         */
 void     up_unity6_objects(void);              /* from up_android_create_objects   */
+/* Unity 5.6 - 2017.2 Java side (up_legacy.c) */
+void     up_legacy_register(void);             /* from up_android_register         */
+void     up_legacy_start(void);                /* after initJni: nativeFile, nativeInitWWW */
 
 #endif

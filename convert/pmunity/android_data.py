@@ -639,6 +639,8 @@ def edit_globalgamemanagers(src, managed_names, args, log):
             # with that platform's built-in defines: the GLES3 platform gets the same (the entry
             # has the same layout in Unity 2017.4 - 2022.3)
             t = o.read_typetree()
+            if 'm_ShaderDefinesPerShaderCompiler' not in t:
+                continue                # Unity 5.x: no per-compiler defines
             d = t['m_ShaderDefinesPerShaderCompiler']
             have = {e['shaderPlatform'] for e in d}
             src_plat = next((p for p in (SHADER_PLATFORM_GLCORE, SHADER_PLATFORM_D3D11) if p in have), None)
@@ -745,7 +747,20 @@ def edit_globalgamemanagers(src, managed_names, args, log):
 # loaded is taken, filtered by its flags in m_AssemblyTypes, so missing engine modules are
 # skipped wherever they are. From 2020.2 the list is Data/ScriptingAssemblies.json
 # ({"names": [...], "types": [...]}), which the player reads instead of MonoManager fields.
+# Older lines (GetAvailableDllAssemblyMask of 5.6.7, 2017.1.5 and 2017.2.5 disassembled): 5.x and
+# 2017.1 have one engine assembly (UnityEngine.dll, slot 0) and a reserved slot 1, the game from 2;
+# 2017.2 (the first with engine modules) marks slots 0..43 loaded without looking for the files,
+# skips 44 and checks 45+.
 BUILTIN_ASSEMBLY_SLOTS = 48
+
+
+def builtin_assembly_slots(unity):
+    """The engine's slots at the start of MonoManager's list (Unity 5.x - 2017.x)."""
+    if unity is not None and (unity.major < 2017 or unity.line == (2017, 1)):
+        return 2
+    if unity is not None and unity.line == (2017, 2):
+        return 45
+    return BUILTIN_ASSEMBLY_SLOTS
 
 
 def is_engine_module(name):
@@ -754,10 +769,11 @@ def is_engine_module(name):
 
 def split_assemblies(names, unity=None):
     """(game assemblies, engine modules) of an assembly list (MonoManager.m_AssemblyNames or
-    ScriptingAssemblies.json names): Unity 2017 by slot, later by name."""
+    ScriptingAssemblies.json names): Unity 5.x - 2017 by slot, later by name."""
     if unity is None or unity.major <= 2017:
-        return ([a for i, a in enumerate(names) if i >= BUILTIN_ASSEMBLY_SLOTS and a],
-                [a for i, a in enumerate(names) if i < BUILTIN_ASSEMBLY_SLOTS and a])
+        n = builtin_assembly_slots(unity)
+        return ([a for i, a in enumerate(names) if i >= n and a],
+                [a for i, a in enumerate(names) if i < n and a])
     return [a for a in names if a and not is_engine_module(a)], [a for a in names if a and is_engine_module(a)]
 
 
@@ -846,12 +862,19 @@ def plan(args):
     # Managed: the Android engine assemblies, the game's own and Unity's extension/BCL assemblies
     amanaged = os.path.join(pkg, 'Variations', 'mono', 'Managed')
     names = set()
+    override = {os.path.basename(f): os.path.abspath(f) for f in args.managed_file}
+    for n, why in desktop_modules_needed(os.path.join(src, 'Managed'), amanaged).items():
+        if n not in override:
+            override[n] = os.path.join(src, 'Managed', n)
+            args.warnings.append(f'{n}: the game\'s own (desktop) copy is shipped: its assemblies use types the '
+                                 f'Android one lacks ({", ".join(why[:4])}{"..." if len(why) > 4 else ""})')
     for n in sorted(os.listdir(amanaged)):
         if n.endswith('.dll'):
-            items.append((os.path.join(data, 'Managed', n), os.path.join(amanaged, n), 'link'))
+            # --managed-file of an engine module: shipped instead of the player's (e.g. a desktop
+            # module whose types a game's assemblies reference and the Android one lacks)
+            items.append((os.path.join(data, 'Managed', n), override.pop(n, None) or os.path.join(amanaged, n), 'link'))
             names.add(n)
     gmanaged = os.path.join(src, 'Managed')
-    override = {os.path.basename(f): os.path.abspath(f) for f in args.managed_file}
     patched = dict(args.assembly_patch)
     for n in sorted(set(os.listdir(gmanaged)) | set(override)):
         if not n.endswith('.dll'):
@@ -922,6 +945,51 @@ def pkg_default_resources(pkg):
 
 
 VERSION_RE = rb'\b((?:20\d\d|6\d\d\d|5)\.\d+\.\d+[abfp]\d+)'
+
+
+def desktop_modules_needed(gmanaged, amanaged):
+    """{engine module: [type names]}: modules (2017.2+, UnityEngine.*Module.dll) whose types the
+    game's own assemblies reference by that module but the Android player's copy does not define,
+    while the game's desktop copy does (e.g. UnityEngine.MovieTexture in AudioModule: standalone
+    only). The player would stop at a TypeLoadException; the desktop module loads, and only its
+    standalone-only members (missing native calls) fail when called."""
+    from . import clrmeta as CM
+    out = {}
+    if not (os.path.isdir(gmanaged) and os.path.isdir(amanaged)):
+        return out
+    defined = {}
+
+    def types_of(path):
+        if path not in defined:
+            try:
+                defined[path] = {t['full'] for t in CM.Assembly(path).types()}
+            except Exception:                   # noqa: BLE001 - not a readable assembly: no claim
+                defined[path] = None
+        return defined[path]
+
+    wanted = {}
+    for n in sorted(os.listdir(gmanaged)):
+        if not n.endswith('.dll') or is_engine_module(n):
+            continue
+        try:
+            a = CM.Assembly(os.path.join(gmanaged, n))
+            for r in range(1, a.count(CM.TYPEREF) + 1):
+                scope = a.typeref_scope(r)
+                if scope and scope.startswith('UnityEngine.') and scope.endswith('Module'):
+                    wanted.setdefault(scope + '.dll', set()).add(a.typeref_name(r))
+        except Exception:                       # noqa: BLE001
+            continue
+    for mod, names in wanted.items():
+        ap, gp = os.path.join(amanaged, mod), os.path.join(gmanaged, mod)
+        if not (os.path.isfile(ap) and os.path.isfile(gp)):
+            continue
+        have, desk = types_of(ap), types_of(gp)
+        if have is None or desk is None:
+            continue
+        missing = sorted(t for t in names if t not in have and t in desk)
+        if missing:
+            out[mod] = missing
+    return out
 
 
 def player_version(pkg):

@@ -751,6 +751,7 @@ int up_start(const struct up_config *cfg)
     a[2] = fj_l(fj_string(""));
     up_native("initJni", "(Landroid/content/Context;ILjava/lang/String;)V", a);
     fj_pop_frame();
+    up_legacy_start();             /* 5.6 - 2017.2: nativeFile (5.x), nativeInitWWW */
     /* SurfaceView + window flags happen in up_android_create_objects; then: */
     if (have_native("nativeInitWebRequest")) {   /* up to 2018.4 */
         jvalue c = fj_l(fj_class_find("com/unity3d/player/UnityWebRequest"));

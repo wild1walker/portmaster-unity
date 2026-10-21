@@ -14,7 +14,7 @@ import re
 import struct
 
 # (major, minor) bounds of the versions the converter supports, both included
-FIRST, LAST = (2017, 3), (6000, 6)
+FIRST, LAST = (5, 6), (6000, 6)
 
 
 class Unsupported(Exception):
