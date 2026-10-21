@@ -105,6 +105,33 @@ Notes on the rows:
   (24.1 for 2018.3/2018.4, 24.2-24.5 across 2019.x, 27.1 for 2020.2.4+, 29.1 for 2022.x; late
   2022.3 patches are reported with 31). Read the header of the game's own file.
 
+## On a handheld (RG35XX SP: Allwinner H700, Mali-G31, 1 GB, Knulli; 2026-10-20)
+
+The first runs outside the emulated rig, with free games of each line (their names stay out of the
+repository) and Cuphead. Every game reached its title or first screen and drew it correctly.
+
+| route | Unity, build | result |
+|---|---|---|
+| 32-bit (armhf `ua_host`, desktop data converted) | Cuphead 2017.4.9 | title 59.6 fps; eight boss fights 59.0 - 59.5 fps average (the 2026-10-18 baseline: 58.5 - 59.5), fewer long frames |
+| | 2017.4.40 (its intro video plays), 2018.4, 2019.4, 2020.3, 2021.3 URP | title 59.6 fps |
+| | 2022.3 URP | title, a steady 30 fps (not looked into) |
+| 64-bit (arm64 `ua_host`, no 32-bit userland used) | 2018.4, 2019.4, 2020.3 desktop Mono games compiled with `pmunity il2cpp` | title 59.4 - 59.6 fps, `Scripting Backend 'il2cpp', CPU 'arm64-v8a'` |
+| | Android IL2CPP builds (`pmunity apk`) of 2020.3, 2021.3, 2022.3 | title; 59.6 fps, and 30 fps for the two that leave Unity's Android default frame rate |
+
+What only the handheld showed:
+- **32-bit players on a 64-bit kernel** read the AArch64 format of `/proc/cpuinfo` unless the process
+  has the PER_LINUX32 personality; Unity 2019.4+ then takes itself for ARM64 and its FMOD crashes in
+  `PluginFactory::registerOutput` before the first frame. ua_host (armhf) now sets PER_LINUX32 on
+  an aarch64 kernel, as Android does for its 32-bit apps (`UA_LINUX32=0`: off). QEMU's rig never
+  showed it: QEMU supplies its own cpuinfo.
+- **BC/DXT textures**: the Mali cannot sample them, so Unity decodes them to RGBA at load. A game's
+  57 MB of crunched DXT grew to 830 MB resident in 12 s and the 1 GB handheld froze in swap; with
+  the textures step (ASTC) it ran at 60 fps in 385 MB. `pmunity port check` now estimates the decoded
+  size and suggests the textures step above 128 MB. The rig's llvmpipe samples BC, so it never showed
+  this either.
+- Writing hundreds of MB to the SD card during a run makes the game stutter (seen while copying test
+  data): keep a device idle during benchmarks.
+
 ## Players run (emulated rig)
 
 One free Linux (Mono) game per LTS line, converted with `pmunity convert` + `android-data --pack
