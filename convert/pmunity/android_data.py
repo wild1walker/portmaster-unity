@@ -1259,8 +1259,16 @@ def check_source(args):
         if not os.path.isfile(ij):
             raise UV.Unsupported(f'--il2cpp {args.il2cpp}: no il2cpp.json (the output folder of `pmunity il2cpp`)')
         args.il2cpp_info = json.load(open(ij))
-        if args.il2cpp_info['unity'] != str(args.unity):
-            raise UV.Unsupported(f'--il2cpp {args.il2cpp} was built for Unity {args.il2cpp_info["unity"]}, the data is {args.unity}')
+        built_for = args.il2cpp_info.get('data_unity', args.il2cpp_info['unity'])
+        if built_for != str(args.unity):
+            raise UV.Unsupported(f'--il2cpp {args.il2cpp} was built from Unity {built_for} data, the data is {args.unity}')
+        # libunity and libil2cpp.so talk through il2cpp_* functions and the metadata layout of one
+        # IL2CPP version: the player must be the one whose IL2CPP built it (2017.4.9 data: 2017.4.40)
+        if args.player_unity is not None and getattr(args.player_unity, 'exact', True) and \
+                str(args.player_unity) != args.il2cpp_info['unity']:
+            raise UV.Unsupported(f'--il2cpp {args.il2cpp} was built with Unity {args.il2cpp_info["unity"]}\'s IL2CPP, '
+                                 f'the player package is {args.player_unity}: use the IL2CPP player of '
+                                 f'{args.il2cpp_info["unity"]} (`pmunity il2cpp` fetched it into <home>/<version>/player-<abi>)')
         args.runtime = f'IL2CPP ({args.il2cpp_info["abi"]}, metadata v{args.il2cpp_info["metadata_version"]})'
     # native plugins: what the managed code P/Invokes and what the port gives each (plugins.py)
     from . import plugins as PL

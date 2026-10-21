@@ -18,9 +18,15 @@ from pmunity import il2cpp as I
 from pmunity import unity_version as UV
 from pmunity import android_data as AD
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_port import write_assembly
+
 
 class NdkTest(unittest.TestCase):
     def test_ndk_per_line(self):
+        self.assertEqual(I.ndk_for(UV.Version('2017.4.40f1'))[:2], ('r13b', '13.1.3345770'))
+        self.assertEqual(I.ndk_for(UV.Version('2018.2.21f1'))[0], 'r13b')
+        self.assertEqual(I.ndk_for(UV.Version('2018.3.0f2'))[0], 'r16b')
         self.assertEqual(I.ndk_for(UV.Version('2018.4.36f1'))[0], 'r16b')
         self.assertEqual(I.ndk_for(UV.Version('2019.2.21f1'))[0], 'r16b')
         self.assertEqual(I.ndk_for(UV.Version('2019.4.8f1'))[0], 'r19')
@@ -54,6 +60,20 @@ class NdkTest(unittest.TestCase):
         self.assertIsNone(w('platforms/android-19/arch-arm/usr/lib/libc.so', 'armeabi-v7a', rev='r16b'))
         self.assertTrue(w('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/lib/gcc/aarch64-linux-android/4.9.x/libgcc.a', rev='r16b'))
         self.assertEqual((I.api_level('r16b', 'armeabi-v7a'), I.api_level('r19', 'armeabi-v7a'), I.api_level('r16b', 'arm64-v8a')), (16, 19, 21))
+        self.assertEqual((I.api_level('r13b', 'armeabi-v7a'), I.api_level('r13b', 'arm64-v8a')), (16, 21))
+
+    def test_ndk_members_r13b(self):
+        """r13b (2017.x il2cpp): the platform's own headers and libraries, GNU libstdc++, libgcc"""
+        w = lambda n, abi='arm64-v8a': I.ndk_wanted('android-ndk-r13b/' + n, 'r13b', abi)
+        self.assertTrue(w('platforms/android-21/arch-arm64/usr/include/stdio.h'))
+        self.assertTrue(w('platforms/android-21/arch-arm64/usr/lib/libc.so'))
+        self.assertIsNone(w('platforms/android-23/arch-arm64/usr/include/stdio.h'))
+        self.assertTrue(w('platforms/android-16/arch-arm/usr/include/stdio.h', 'armeabi-v7a'))
+        self.assertTrue(w('sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/include/bits/c++config.h'))
+        self.assertTrue(w('sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/libgnustl_static.a'))
+        self.assertIsNone(w('sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/libgnustl_shared.so'))
+        self.assertTrue(w('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/lib/gcc/aarch64-linux-android/4.9.x/libgcc.a'))
+        self.assertIsNone(w('toolchains/llvm/prebuilt/linux-x86_64/bin/clang'))
 
 
 class EditorTest(unittest.TestCase):
@@ -68,6 +88,37 @@ class EditorTest(unittest.TestCase):
         self.assertFalse(I.editor_wanted('il2cpp/MapFileParser/Driver.cpp'))
         self.assertFalse(I.editor_wanted('il2cpp/build/deploy/netcoreapp3.1/il2cpp.pdb'))
         self.assertFalse(I.editor_wanted('Resources/unity editor resources'))
+
+    def test_class_library_folders(self):
+        """a class library folder: its assemblies and its Mono's etc (il2cpp copies that into the data)"""
+        u = 'Mono/lib/mono/unity'
+        self.assertTrue(I.editor_wanted('Mono/lib/mono/unity/mscorlib.dll', u))
+        self.assertTrue(I.editor_wanted('Mono/etc/mono/2.0/machine.config', u))
+        self.assertTrue(I.editor_wanted('MonoBleedingEdge/etc/mono/config', u))
+        self.assertTrue(I.editor_wanted('il2cpp/libil2cpp/il2cpp-api.h', u))
+        self.assertFalse(I.editor_wanted('Mono/lib/mono/unity/mscorlib.dll.mdb', u))
+        self.assertFalse(I.editor_wanted('Mono/lib/mono/unity/smcs.exe', u))
+        self.assertFalse(I.editor_wanted('Mono/lib/mono/2.0/mscorlib.dll', u))
+        self.assertFalse(I.editor_wanted('MonoBleedingEdge/lib/mono/unityaot/mscorlib.dll', u))
+        f = 'MonoBleedingEdge/lib/mono/4.5'
+        self.assertTrue(I.editor_wanted('MonoBleedingEdge/lib/mono/4.5/Facades/System.Runtime.dll', f))
+        self.assertFalse(I.editor_wanted('MonoBleedingEdge/lib/mono/4.5/mscorlib.dll.dylib', f))
+        self.assertFalse(I.editor_wanted('Mono/etc/mono/config', f))
+
+    def test_class_library_complete(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.assertFalse(I.bcl_complete(t, I.BCL_DIR))
+            os.makedirs(os.path.join(t, I.BCL_DIR))
+            open(os.path.join(t, I.BCL_DIR, 'mscorlib.dll'), 'w').close()
+            self.assertFalse(I.bcl_complete(t, I.BCL_DIR))
+            open(os.path.join(t, '.complete'), 'w').close()
+            self.assertTrue(I.bcl_complete(t, I.BCL_DIR))       # (a home from before the per-folder marks)
+            u = 'Mono/lib/mono/unity'
+            os.makedirs(os.path.join(t, u))
+            open(os.path.join(t, u, 'mscorlib.dll'), 'w').close()
+            self.assertFalse(I.bcl_complete(t, u))
+            open(os.path.join(t, u, '.complete'), 'w').close()
+            self.assertTrue(I.bcl_complete(t, u))
 
     def test_runtime_pack(self):
         deps = {'targets': {'.NETCoreApp,Version=v3.1/win-x64': {
@@ -94,6 +145,80 @@ class EditorTest(unittest.TestCase):
             self.assertEqual(I.deploy_tool(t, 'UnityLinker'), os.path.join(n, 'UnityLinker.exe'))
             with self.assertRaises(SystemExit):
                 I.deploy_tool(t, 'bee')
+
+
+class ProfileTest(unittest.TestCase):
+    def test_profiles(self):
+        v = UV.Version
+        self.assertEqual(I.bcl_profile(v('2017.4.40f1'), 2, True), ('legacyunity', 'Mono/lib/mono/unity'))
+        self.assertEqual(I.bcl_profile(v('2017.4.40f1'), 2), ('net20', 'Mono/lib/mono/2.0'))
+        self.assertEqual(I.bcl_profile(v('2018.4.36f1'), 2, True), ('legacyunity', 'Mono/lib/mono/unity'))
+        self.assertEqual(I.bcl_profile(v('2017.4.40f1'), 4), ('net45', 'MonoBleedingEdge/lib/mono/4.5'))
+        self.assertEqual(I.bcl_profile(v('2018.1.0f1'), 4), ('unityaot', 'MonoBleedingEdge/lib/mono/unityaot'))
+        self.assertEqual(I.bcl_profile(v('2020.3.49f1'), 4), ('unityaot', I.BCL_DIR))
+        with self.assertRaises(UV.Unsupported):
+            I.bcl_profile(v('2019.4.8f1'), 2)
+
+    def test_dotnet_level(self):
+        with tempfile.TemporaryDirectory() as t:
+            m = os.path.join(t, 'Managed')
+            os.makedirs(m)
+            with self.assertRaises(UV.Unsupported):
+                I.dotnet_level(t)
+            self.assertEqual(I.dotnet_level(t, UV.Version('2019.4.8f1')), 4)
+            # the old Mono's "unity" profile (".NET 2.0 Subset"), its "2.0" one, .NET 4.x
+            write_assembly(os.path.join(m, 'mscorlib.dll'), 'mscorlib', [('System', 'Object'), ('System', 'MonoTouchAOTHelper')],
+                           version=2)
+            self.assertEqual((I.dotnet_level(t), I.subset_profile(t)), (2, True))
+            write_assembly(os.path.join(m, 'mscorlib.dll'), 'mscorlib', [('System', 'Object'), ('System', 'TermInfoDriver')],
+                           version=2)
+            self.assertEqual((I.dotnet_level(t), I.subset_profile(t)), (2, False))
+            write_assembly(os.path.join(m, 'mscorlib.dll'), 'mscorlib', [('System', 'Object')], version=4)
+            self.assertEqual((I.dotnet_level(t), I.subset_profile(t)), (4, False))
+            os.unlink(os.path.join(m, 'mscorlib.dll'))      # (none shipped: what Assembly-CSharp references)
+            write_assembly(os.path.join(m, 'Assembly-CSharp.dll'), 'Assembly-CSharp', [('', 'Menu')])
+            with self.assertRaises(UV.Unsupported):
+                I.dotnet_level(t)
+
+    def test_tool_version(self):
+        v = UV.Version
+        self.addCleanup(setattr, I, 'log', I.log)
+        I.log = lambda m: None
+        self.assertEqual(str(I.tool_version(v('2017.4.9f1'), 'arm64-v8a')), '2017.4.40f1')     # no arm64 player before .16
+        self.assertEqual(str(I.tool_version(v('2017.4.9f1'), 'armeabi-v7a')), '2017.4.9f1')
+        self.assertEqual(str(I.tool_version(v('2017.4.16f1'), 'arm64-v8a')), '2017.4.16f1')
+        self.assertEqual(str(I.tool_version(v('2017.4.9f1'), 'arm64-v8a', '2017.4.30f1')), '2017.4.30f1')
+        self.assertEqual(str(I.tool_version(v('2019.4.8f1'), 'arm64-v8a')), '2019.4.8f1')
+        with self.assertRaises(UV.Unsupported):
+            I.tool_version(v('2017.4.9f1'), 'arm64-v8a', '2018.4.36f1')
+
+    def test_link_args_2017(self):
+        a = I.link_args_2017(2, '/s', '/l', ['B.dll', 'A.dll'], '/d', subset=True)
+        self.assertEqual(a[:6], ['--api=NET_2_0_Subset', '--out=/l', '--i18n=none', '--core-action=link',
+                                 '--descriptor-directory=/d', '--search-directory=/s'])
+        self.assertEqual(a[6:], ['--include-assembly=/s/A.dll', '--include-assembly=/s/B.dll'])
+        self.assertEqual(I.link_args_2017(2, '/s', '/l', [], '/d')[0], '--api=NET_2_0')
+        self.assertEqual(I.link_args_2017(4, '/s', '/l', [], '/d')[0], '--api=NET_4_6')
+
+    def test_linker_descriptors(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = os.path.join(t, 'editor', 'il2cpp', 'LinkerDescriptors')
+            os.makedirs(d)
+            for n in ('mscorlib.xml', 'mscorlib45.xml', 'mscorlib_mono.xml', 'System.xml', 'System45.xml', 'Mono.Security.xml'):
+                with open(os.path.join(d, n), 'w') as f:
+                    f.write(n)
+            ed, work = os.path.join(t, 'editor'), os.path.join(t, 'work')
+            self.assertEqual(I.linker_descriptors(ed, 'legacyunity', work), d)
+            got = I.linker_descriptors(ed, 'net45', work)
+            self.assertEqual(sorted(os.listdir(got)), ['Mono.Security.xml', 'System.xml', 'mscorlib.xml'])
+            for n, src in (('mscorlib.xml', 'mscorlib45.xml'), ('Mono.Security.xml', 'Mono.Security.xml')):
+                with open(os.path.join(got, n)) as f:
+                    self.assertEqual(f.read(), src)
+
+    def test_il2cpp_profile_arg(self):
+        a = I.il2cpp_args(UV.Version('2017.4.40f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p', 'legacyunity')
+        self.assertIn('--dotnetprofile=legacyunity', a)
+        self.assertNotIn('--dotnetprofile=unityaot', a)
 
 
 class SpansTest(unittest.TestCase):
@@ -238,6 +363,14 @@ class NdkClangTest(unittest.TestCase):
         self.assertNotIn('-D__ANDROID_API__=21', out)
         out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang', '-c', '-target', 'armv7-linux-androideabi19', 'a.c')
         self.assertIn('armv7-linux-androideabi19', out)
+
+    def test_pic_wins(self):
+        """2017.4's il2cpp: -fPIC then -fPIE for a shared library's objects: PIC stays"""
+        out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang++', '-c', '-fPIC', '-Os', '-fPIE', 'a.cpp')
+        self.assertIn('-fPIC', out)
+        self.assertNotIn('-fPIE', out)
+        out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang', '-c', '-fPIE', 'a.c')
+        self.assertIn('-fPIE', out)
 
     def test_binutils(self):
         out = self.run_tool('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-objcopy',

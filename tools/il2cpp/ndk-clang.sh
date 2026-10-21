@@ -14,6 +14,9 @@
 #   -fuse-ld=lld for the NDK's GNU linkers (bfd, gold).
 # -D__ANDROID_API__=N is dropped: clang defines it from the target (-target <triple><API>); a
 # target without the API level (r16b builds) gets N appended.
+# -fPIE next to -fPIC is dropped: 2017.4's il2cpp passes both (-fPIE last, so it wins) for the
+# objects of a shared library; their direct references to default-visibility symbols (GNU
+# libstdc++'s template statics) were accepted by the NDK's GNU ld, lld refuses them in a .so.
 # -g is dropped unless PMUNITY_IL2CPP_DEBUG_INFO=1: debug info triples the objects' size and the
 # compiler's memory, and the shipped libil2cpp.so is stripped anyway (il2cpp keeps the debug info
 # in libil2cpp.sym.so). Code generation is the same either way.
@@ -30,8 +33,8 @@ case $name in
   *) cc=$llvm/clang ;;
 esac
 tc=$(dirname "$bin")                         # toolchains/llvm/prebuilt/linux-x86_64
-api=
-for a do case $a in -D__ANDROID_API__=*) api=${a#-D__ANDROID_API__=} ;; esac; done
+api=; pic=
+for a do case $a in -D__ANDROID_API__=*) api=${a#-D__ANDROID_API__=} ;; -fPIC | -fpic) pic=1 ;; esac; done
 link=1; sysroot=; gcc=; prev=
 for a do
   shift
@@ -48,6 +51,7 @@ for a do
     -c | -S | -E | -M | -MM) link= ;;
     -fuse-ld=*) a=-fuse-ld=lld ;;
     -D__ANDROID_API__=*) prev=; continue ;;   # (clang defines it from the target's API level)
+    -fPIE | -fpie) [ -n "$pic" ] && continue ;;
     -g) [ -n "$PMUNITY_IL2CPP_DEBUG_INFO" ] || continue ;;
   esac
   prev=$a
