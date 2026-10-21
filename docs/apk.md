@@ -35,6 +35,9 @@ What `ua_host` takes from `android_package.json` (runtime/host/ua_host.c): the p
 APK name, `PackageInfo.versionCode`/`versionName` (the OBB names depend on the code),
 `ApplicationInfo.metaData` (all of the manifest's meta-data; `unity.build-id` ties the APK to its
 OBB: the player mounts an OBB only if it holds an entry `assets/<build-id>`), and the API level.
+Frame pacing stays the Android build's own (`UA_FRAME_RATE=android`: 2021.1+ players render a game
+that never sets `targetFrameRate` at 30 fps, as on a phone); `UA_FRAME_RATE=desktop` or a number in
+the launcher changes that ([runtime.md](runtime.md)).
 
 **API level**: an imported build is told its `targetSdkVersion` (`Build.VERSION.SDK_INT`, the
 `ro.build.version.sdk` property, `ApplicationInfo.targetSdkVersion`, AConfiguration): the Android its

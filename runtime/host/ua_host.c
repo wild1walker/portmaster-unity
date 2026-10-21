@@ -16,6 +16,7 @@
 void up_media_init(void);                  /* ../jni/up_media.c */
 #include "input.h"
 #include "frames.h"
+#include "framerate.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
@@ -43,8 +44,9 @@ static char libdir[512];
 
 // android_package.json beside the APK (pmunity android-data --pack, pmunity apk): "package",
 // "build_id", "apk", and from an imported Android build "version_code", "version_name", "min_sdk",
-// "target_sdk" and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData)
-static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32];
+// "target_sdk" and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData), and
+// "unity_version"
+static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32], pj_unity[32];
 static int pj_version_code, pj_min_sdk, pj_target_sdk;
 static char pj_meta[4096];                      // "key=value;key=value"
 
@@ -123,6 +125,7 @@ static void read_package_json(const char *root)
     pj_target_sdk = json_int(js, "target_sdk");
     json_meta(js, pj_meta, sizeof pj_meta);
     json_str(js, "source", pj_source, sizeof pj_source);
+    json_str(js, "unity_version", pj_unity, sizeof pj_unity);
 }
 
 // Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
@@ -310,6 +313,7 @@ static int g_mono_trace;
 static void *dlsym_hook(const char *sym, void *p)
 {
     p = plugins_dlsym_hook(sym, p);            // FMOD's file paths (plugins.c)
+    p = framerate_dlsym_hook(sym, p);          // UA_FRAME_RATE (framerate.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
@@ -463,6 +467,10 @@ int main(int argc, char **argv)
     cfg.density_dpi = 160;
     cfg.refresh_rate = display_refresh_rate() > 0 ? (float)display_refresh_rate() : 60.f;
     android_vsync_set_refresh_rate(cfg.refresh_rate);   // the NDK's and Java's Choreographer: one clock
+    // 2021.1+ Android players pace at targetFrameRate only (-1: 30 fps); converted desktop data gets
+    // the desktop's vsync pacing back (framerate.c). An imported Android build keeps its own.
+    framerate_init(strcmp(pj_source, "apk") && atoi(pj_unity) >= 2021 ? "desktop" : "android", cfg.refresh_rate);
+    cfg.on_frame = framerate_frame;
     cfg.sdk_int = sdk_int;
     static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1.1", "6.0.1", "7.0", "7.1.2", "8.0.0", "8.1.0", "9",
                                             "10", "11", "12", "12", "13", "14", "15" };

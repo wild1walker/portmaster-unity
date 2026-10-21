@@ -1746,7 +1746,8 @@ def pack(args, log):
     obb_entries = [e for e in obb_entries if e not in loose and e in keep]
     beside = [(a, p) for a, p in files if not a.startswith('assets/')]   # read with plain file I/O (--root-file)
     marker = ('assets/' + bid, b'')
-    res = {'build_id': bid, 'package': args.package, 'version_code': args.version_code}
+    # unity_version: ua_host paces 2021.1+ converted data as the desktop did (runtime/host/framerate.c)
+    res = {'build_id': bid, 'package': args.package, 'version_code': args.version_code, 'unity_version': str(args.unity)}
     if args.unity.line >= OBB_GUID_FROM:
         apk_entries.append((OBB_GUID_FILE, bid.encode('ascii')))
         marker = [marker, (OBB_GUID_FILE_IN_OBB, bid.encode('ascii'))]

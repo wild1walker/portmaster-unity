@@ -6,7 +6,7 @@
 |---|---|
 | `lib/libmain.so`, `lib/libunity.so`, `lib/libmono.so` | the player (Release variant; `UA_LIBDIR` for another folder, e.g. the Development player) |
 | `<name>.apk`, `main.<code>.<package>.obb` | the game's data, from `pmunity android-data --pack all` |
-| `android_package.json` | written beside the APK by the data tool: package, build id, APK name (read by ua_host) |
+| `android_package.json` | written beside the APK by the data tool: package, build id, APK name, Unity version (read by ua_host) |
 | `assets/bin/Data/Managed/etc/` | Mono's config, read relative to the working directory (the data tool's zip folder has it) |
 | files the game reads beside its data | e.g. a GOG build's `goggame-*.info` (`--beside`) |
 | `plugins.map` | written beside the APK by the data tool: what each native library the game P/Invokes becomes (ARM build in `lib/`, system library, built-in stub, refused) and the float signatures of glibc plugins ([plugins.md](plugins.md)) |
@@ -90,6 +90,7 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_SHADER_DUMP=<dir>` | write every GLSL source Unity compiles to `<dir>/<fnv64>.glsl` (runtime/host/glhooks.c) |
 | `UA_SHADER_OVERRIDE=<dir>` | compile `<dir>/<fnv64>.glsl` instead of that source (both switches turn Unity's program binary cache off) |
 | `UA_SWAP_INTERVAL` | eglSwapInterval forced (0: no vsync; Unity's own frame cap still applies) |
+| `UA_FRAME_RATE=desktop\|android\|<n>` | frame pacing. From 2021.1 Unity's Android players ignore `QualitySettings.vSyncCount` and render at `Application.targetFrameRate`, whose default (-1) is a fixed 30 fps; a desktop game that leaves its frame rate to vsync drops from 60 to 30. `desktop`: paced as the desktop player does (vSyncCount > 0: the display's rate / vSyncCount; 0: targetFrameRate, -1 = the display's rate; the game reads back what it set); `android`: Unity's Android pacing; `<n>`: n fps whatever the game asks. Default: `desktop` for converted desktop data of Unity 2021.1+ (`unity_version` in `android_package.json`), else `android` (runtime/host/framerate.c) |
 | `UA_DISPLAY`, `UA_DISPLAY_*` | the EGL window: Mali fbdev or SDL2 (see Display above) |
 | `UA_GL_TRACE=<s>` | one whole frame every `<s>` seconds logged pass by pass: framebuffer, size, clears, draws, vertices, invalidates, uploads (runtime/host/gltrace.c) |
 | `UA_GC_HEAP=<bytes>` | Mono's initial GC heap (default 64 MB, `0` = Boehm's own; `GC_INITIAL_HEAP_SIZE` wins) |
