@@ -18,7 +18,8 @@ handheld.
 
 ## Setting it up
 
-1. Copy the game (its folder, or the archive it came in) into `ports/@@PORTDIR@@/gamedata/`.
+1. Copy the game (its folder, the archive it came in, or GOG's Linux installer `.sh`) into
+   `ports/@@PORTDIR@@/gamedata/`.
 2. Launch @@TITLE@@ from the Ports menu. PortMaster's patcher shows the setup's progress: it finds
    (or unpacks) the game, downloads Unity's player, converts the game for the handheld's GPU and
    packs it for the player (@@SETUP_TIME@@). If it is interrupted, launch again: it continues

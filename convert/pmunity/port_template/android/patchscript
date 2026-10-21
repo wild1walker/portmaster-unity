@@ -2,7 +2,8 @@
 # First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
 # `pmunity port new`, android route): builds the game for Unity's Android player from the
 # player's own copy in ports/<port>/gamedata/:
-#   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg) put there
+#   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
+#      Linux installer .sh: its zip is unpacked, the script never runs) put there
 #   2. Unity's Android player of the game's exact version, from Unity (about 10 MB: only the files
 #      the port needs, read with range requests), or from its installer put in gamedata/
 #   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps)
@@ -86,6 +87,7 @@ if [ ! -f "$W/.step_game" ]; then
       [ -f "$a" ] || continue
       case "$(lower "$a")" in
         *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2) ;;
+        *.sh) head -c 65536 "$a" | grep -aqE 'Makeself|MojoSetup' || continue;;   # GOG's Linux installer (read, never run)
         *) continue;;
       esac
       room "$need" || fail "Unpacking $(basename "$a") needs about $need MB free on the card ($(free_mb) MB free)."
@@ -94,6 +96,7 @@ if [ ! -f "$W/.step_game" ]; then
       rm -rf "$W/unpacked"; mkdir -p "$W/unpacked"
       case "$(lower "$a")" in
         *.tar|*.zip|*.7z|*.rar) "$SEVENZ" x -y -o"$W/unpacked" "$a" >/dev/null ;;
+        *.sh) "$SEVENZ" x -tzip -y -o"$W/unpacked" "$a" >/dev/null ;;        # the zip after the installer's script
         *) "$SEVENZ" x -so "$a" 2>/dev/null | "$SEVENZ" x -si -ttar -y -o"$W/unpacked" >/dev/null ;;
       esac || fail "Could not unpack $(basename "$a") (see patchlog.txt)."
       D=$(find_any "$W/unpacked")

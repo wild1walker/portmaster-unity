@@ -47,6 +47,7 @@ if [ ! -f "$W/.step_game" ]; then
       [ -f "$a" ] || continue
       case "$(lower "$a")" in
         *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2) ;;
+        *.sh) head -c 65536 "$a" | grep -aqE 'Makeself|MojoSetup' || continue;;   # GOG's Linux installer (read, never run)
         *) continue;;
       esac
       room "$need" || fail "Unpacking $(basename "$a") needs about $need MB free on the card ($(free_mb) MB free)."
@@ -54,6 +55,7 @@ if [ ! -f "$W/.step_game" ]; then
       [ -x "$SEVENZ" ] || fail "PortMaster's 7-Zip is missing: update PortMaster, or unpack $(basename "$a") into gamedata/ yourself."
       case "$(lower "$a")" in
         *.tar|*.zip|*.7z|*.rar) "$SEVENZ" x -y -o"$GD" "$a" >/dev/null ;;
+        *.sh) "$SEVENZ" x -tzip -y -o"$GD" "$a" >/dev/null ;;        # the zip after the installer's script
         *) "$SEVENZ" x -so "$a" 2>/dev/null | "$SEVENZ" x -si -ttar -y -o"$GD" >/dev/null ;;
       esac || fail "Could not unpack $(basename "$a") (see patchlog.txt)."
       pm route "$GD" --env > "$W/game.env" 2>/dev/null && break

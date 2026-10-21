@@ -14,8 +14,8 @@ come with this port: you provide your own copy.
 
 ## Setting it up
 
-1. Copy the game's Linux files (the folder with the executable and its `_Data` folder, or the
-   archive they came in) into `ports/@@PORTDIR@@/gamedata/`.
+1. Copy the game's Linux files (the folder with the executable and its `_Data` folder, the
+   archive they came in, or GOG's Linux installer `.sh`) into `ports/@@PORTDIR@@/gamedata/`.
 2. Launch @@TITLE@@ from the Ports menu. The first launch finds the game and adds OpenGL ES shaders
    next to its own (@@SETUP_TIME@@); the game's code and pictures stay as they are. If it is
    interrupted, launch again. The log is `ports/@@PORTDIR@@/patchlog.txt`.

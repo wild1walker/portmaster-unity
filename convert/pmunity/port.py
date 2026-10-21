@@ -1130,7 +1130,8 @@ def build_config(name, rep, user):
         vs = ', '.join(g['unity_versions'])
         g['what'] = f"the {kind} build of {p['title']}" + (f' (Unity {vs})' if vs else '') + \
             (': the installed .app or the macOS installers (.pkg)' if g['build'] == 'macos' else
-             ': its folder, or the archive (.zip, .7z, .tar.gz) it came in')
+             ': its folder, the archive it came in (.zip, .7z, .tar.gz)' +
+             (" or GOG's installer (.sh)" if g['build'] == 'linux' else ''))
     ad['name'] = ad['name'] or (re.sub(r'[^A-Za-z0-9]', '', p['title']) or 'Game')
     ad['package'] = ad['package'] or 'com.pmunity.' + re.sub(r'[^a-z0-9]', '', p['name'].lower())
     if not p['setup_time']:
