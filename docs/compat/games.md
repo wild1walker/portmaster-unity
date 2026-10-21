@@ -19,7 +19,7 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 | game | Unity, build | route | emulated rig | handheld | notes (last checked) |
 |---|---|---|---|---|---|
 | Cuphead + The Delicious Last Course (GOG, macOS) | 2017.4.9f1, Mono .NET 3.5 | 32-bit | title, levels | **whole game**: setup from GOG's installers, title 59.6 fps, eight boss fights 59.0 - 59.5 fps | its own port (portmaster-cuphead); a 64-bit route is in progress (2026-10-21) |
-| Hollow Knight (GOG, Linux) | 6000.0.61f1, Mono .NET 4.x | 32-bit | first launch to gameplay: language, menus, calibration, both opening cinematics, King's Pass | title at ~30 fps; stopped by the memory watchdog at the opening sequence (Mali 292 MB + 439 MB anonymous at the title) | needs less memory (the audio step, maybe smaller textures); Switch controls via `UA_PAD_NAME` (2026-10-21) |
+| Hollow Knight (GOG, Linux) | 6000.0.61f1, Mono .NET 4.x | 32-bit | first launch to gameplay: language, menus, calibration, both opening cinematics, King's Pass | title at ~30 fps (the 2021.1+ Android default; `UA_FRAME_RATE` is meant to fix it, not measured yet); stopped by the memory watchdog at the opening sequence (Mali 292 MB + 439 MB anonymous at the title) | needs less memory (the audio step, maybe smaller textures); Switch controls via `UA_PAD_NAME` (2026-10-21) |
 
 ## Linux builds, one per Unity line (32-bit route)
 
@@ -30,7 +30,7 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 | [buggish](https://norrimo.itch.io/buggish) | 2019.4.8f1, Mono 4.x | splash, title; pointer starts the game | title 59.6 fps | mouse-driven menu (2026-10-21) |
 | [Tom City](https://tomanddad.itch.io/tomcity) | 2020.3.49f1, Mono 4.x | splash, title; a click starts a new city | title 59.6 fps | its crunched DXT textures froze the handheld until converted to ASTC (textures step) (2026-10-21) |
 | [Untitled Hook Game](https://bonionline.itch.io/untitled-hook-game) | 2021.3.16f1, URP | name prompt on first launch; on-screen keyboard types the name; main menu | title 59.6 fps | (2026-10-21) |
-| [Tiny Kingdom](https://neltile.itch.io/tiny-kingdom) | 2022.3.36f1, URP, FMOD, Steam, Burst | title (play/settings/exit) | title, a steady 30 fps | no ARM FMOD: silent; Steam stub; 30 fps not looked into (2026-10-21) |
+| [Tiny Kingdom](https://neltile.itch.io/tiny-kingdom) | 2022.3.36f1, URP, FMOD, Steam, Burst | title (play/settings/exit) | title, a steady 30 fps | no ARM FMOD: silent; Steam stub; 30 fps is the 2021.1+ Android player's default, which `UA_FRAME_RATE=desktop` replaces with the desktop's vsync pacing (60 in the emulated rig's log; not measured on the handheld yet) (2026-10-21) |
 
 ## More Unity versions
 

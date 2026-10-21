@@ -115,7 +115,7 @@ name: [games.md](games.md)). Every game reached its title or first screen and dr
 |---|---|---|
 | 32-bit (armhf `ua_host`, desktop data converted) | Cuphead 2017.4.9 | title 59.6 fps; eight boss fights 59.0 - 59.5 fps average (the 2026-10-18 baseline: 58.5 - 59.5), fewer long frames |
 | | 2017.4.40 (its intro video plays), 2018.4, 2019.4, 2020.3, 2021.3 URP | title 59.6 fps |
-| | 2022.3 URP | title, a steady 30 fps (not looked into) |
+| | 2022.3 URP | title, a steady 30 fps: from 2021.1 Unity's Android players ignore vSyncCount and render at a fixed 30 fps unless the game sets `targetFrameRate`. ua_host now paces 2021.1+ converted data as the desktop did (`UA_FRAME_RATE`, docs/runtime.md); not measured on the handheld yet |
 | 64-bit (arm64 `ua_host`, no 32-bit userland used) | 2018.4, 2019.4, 2020.3 desktop Mono games compiled with `pmunity il2cpp` | title 59.4 - 59.6 fps, `Scripting Backend 'il2cpp', CPU 'arm64-v8a'` |
 | | Android IL2CPP builds (`pmunity apk`) of 2020.3, 2021.3, 2022.3 | title; 59.6 fps, and 30 fps for the two that leave Unity's Android default frame rate |
 
