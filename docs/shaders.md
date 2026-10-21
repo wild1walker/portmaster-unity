@@ -195,59 +195,87 @@ builds `pmhlslcc`, a small front end (one-shot, or a server the converter keeps 
 clang, Linux gcc (aarch64 in `ua-build-arm64`, armhf with `ua-host-armhf`'s cross compiler) give
 byte-identical output. Ship the binary with `pmhlslcc.LICENSE.txt` (HLSLcc MIT, bstrlib BSD).
 
-What the path does (`dxbc.py`, `convert.add_gles3_d3d11`):
+What the path does (`dxbc.py`, `convert.add_gles3_d3d11`), for Unity 2017.3 - 2022.3 (all four
+program serializers):
 
-Unity versions: 2017.3 - 2018.4 (serializers 201708220 and 201802150; in 2018.2+ a texture
-binding's two ints are the sampler index and `dimension << 1 | multisampled`). From 2019.1
-Unity's GL programs carry constant buffer layouts of their own (a `$Globals` of every loose
-uniform, which the D3D11 binding info does not give), its D3D11 headers are 38 bytes, and from
-2020.1 the parameters a program's variants share are stored once in the parsed form
-(`m_CommonParameters`): such data is refused with that reason.
-
-1. **Entries.** One D3D11 blob entry is one stage: Unity's 6-byte header (1, then the numbers of
-   texture, constant buffer and sampler slots and two more), the DXBC container, and after the
-   code Unity's binding info. Unity strips the container's reflection chunk (RDEF: constant buffer
-   layouts, resource names) in builds; the binding info replaces it: the vertex channel source
-   map and inputs, every constant buffer with its used members (name, type, rows, columns, matrix,
-   array size, offset), and the bindings (constant buffers and textures by register, textures with
-   their dimension). Its layout (serializer 201708220, Unity 2017.3/2017.4) is checked by writing
-   every entry back byte for byte, and against the subprogram's `m_ParsedForm` (constant buffer
-   bindings, member offsets, texture registers and dimensions must agree).
+1. **Entries.** One D3D11 blob entry is one stage: Unity's header (6 bytes up to 2019.3: 1, then
+   the numbers of texture, constant buffer and sampler slots and two more; 38 bytes from 2019.4),
+   the DXBC container, and after the code Unity's binding info. Unity strips the container's
+   reflection chunk (RDEF: constant buffer layouts, resource names) in builds; the binding info
+   replaces it: the vertex channel source map and inputs, every constant buffer with its used
+   members (name, type, rows, columns, matrix, array size, offset) and struct members (GPU
+   instancing data), and the bindings (constant buffers and textures by register, textures with
+   their dimension and sampler, inline sampler states). In 2018.2+ a texture binding's two ints
+   are the sampler index and `dimension << 1 | multisampled`; from 2021.2 the bindings are a
+   parameter entry of their own (`m_ParameterBlobIndices`); from 2020.1 what all the
+   subprograms of a program share is stored once, in the parsed form's `m_CommonParameters`, and
+   left out of the entries (`with_common` puts it back). Every entry is checked by writing it back
+   byte for byte, and against the subprogram's parsed form where it lists parameters (up to 2019).
 2. **Reflection.** The registers, texture types and sampler modes come from the declarations in
    the bytecode (SHDR/SHEX); with the binding info's names and layouts they become an RDEF chunk
    in the form HLSLcc reads. Every constant buffer location an instruction reads must be a member
    Unity described, else the variant is refused (HLSLcc would fail on it).
-3. **Variants.** In each pass, a D3D11 vertex subprogram is paired with the pixel subprogram of
-   the same keywords and hardware tier; the two are translated together (one
+3. **Variants.** In each pass and hardware tier, a D3D11 vertex subprogram is paired with the
+   pixel subprograms Unity runs it with. From 2019 Unity strips the keywords a stage does not use
+   from that stage's variants (a full-screen pass's one vertex program goes with all its pixel
+   variants; a vertex-lit variant's pixel program lacks `VERTEXLIGHT_ON`): two subprograms go
+   together when each has the other's keywords that its stage uses (the keywords any of its
+   subprograms has), and the GL program gets both's keywords, as Unity's own GL programs have
+   (one program for both stages, not stripped per stage). Each pair is translated together (one
    `GLSLCrossDependencyData`, pixel shader first, as HLSLcc requires), with Unity's GLCore
    settings: GLSL 1.50, `HLSLCC_FLAG_TRANSLATE_MATRICES` (`hlslcc_mtx4x4<name>` vec4 arrays) and
    `HLSLCC_FLAG_DISABLE_GLOBALS_STRUCT` (every constant buffer member a plain uniform: Unity's GL
    backends set built-ins and material values by name, also those that are in cbuffers on D3D11,
-   e.g. `UnityPerDraw`). Inputs are `in_POSITION0`..., varyings `vs_TEXCOORD0`..., outputs
-   `SV_Target0`..., one GLSL sampler per texture named as the texture. The newer HLSLcc's macro
-   blocks for uniform buffers and explicit uniform locations, which Unity 2017 players do not
-   know, are written out as switched off, and `#ifdef`-wrapped extensions plainly, as Unity 2017
-   stored them. The program then goes through the GLSL ES rules above (precision, rewrites,
-   unsupported constructs) like a GLCore program.
-4. **GL data.** Unity's GL subprograms have no parameters, bindings or vertex channels, only the
-   source map (its GL backends find uniforms, textures and inputs by name in the linked program),
-   and every GL blob entry's binding info is the source map followed by `0 1 0 0 0 0 0` (all
-   5782 GLCore entries of Cuphead and all GL entries of Unity's Windows and Android player
-   resources). As in Unity's builds, the program is stored in the vertex subprogram's entry and
-   the fragment subprogram's entry has no code; the GLES3 blob keeps the D3D11 blob's indices (a
-   vertex entry shared by variants with different pixel shaders gets more entries).
+   e.g. `UnityPerDraw`; a device without uniform buffers gets the same from Unity's own programs).
+   Inputs are `in_POSITION0`..., varyings `vs_TEXCOORD0`..., outputs `SV_Target0`..., one GLSL
+   sampler per texture named as the texture. Up to 2018 the newer HLSLcc's macro blocks for
+   uniform buffers and explicit uniform locations, which those players do not know, are written
+   out as switched off, and `#ifdef`-wrapped extensions plainly, as Unity 2017 stored them; from
+   2019.1 they stay as Unity's own programs have them, with each texture's unit
+   (`UNITY_LOCATION(n)`, `HLSLCC_FLAG_FORCE_EXPLICIT_LOCATIONS`), and the uniforms are declared
+   in Unity's order (the members of Unity's named constant buffers before the shader's own
+   `$Globals`, as the GL compile's single `$Globals` has them from the HLSL source). A cube shadow
+   map compared at level 0 (D3D's `SampleCmpLevelZero`, point-light shadows: `textureLod` on a
+   `samplerCubeShadow`, which no GLSL ES has) is sampled with `texture()`, as Unity's Android
+   builds have it. The program then goes through the GLSL ES rules above (precision, rewrites,
+   unsupported constructs) like a GLCore program, as GLSL ES 3.10 (a GLES 3.1 program) where it
+   needs that (multisampled textures, `textureGather`).
+4. **GL data**, as Unity writes GL programs of the data's version:
+   - up to 2018: GL subprograms have no parameters, bindings or vertex channels, only the source
+     map (its GL backends find uniforms, textures and inputs by name in the linked program), and
+     every GL entry's binding info is the source map followed by `0 1 0 0 0 0 0` (all 5782
+     GLCore entries of Cuphead and all GL entries of Unity's Windows and Android player
+     resources). The program is stored in the vertex subprogram's entry and the fragment
+     subprogram's entry has no code; the GLES3 blob keeps the D3D11 blob's indices (a vertex entry
+     shared by variants with different pixel shaders gets more entries);
+   - 2019.x: the same, but the vertex entry carries the GL program's binding info
+     ([below](#gl-binding-info-unity-20191)), which the vertex subprogram lists too
+     (`m_ConstantBuffers`, `m_TextureParams`, with names added to the pass's `m_NameIndices` where
+     needed);
+   - 2020.1+: Unity's GL programs have vertex subprograms only (one program for both stages):
+     the GLES3 blob has one entry per program (2021.2+: and a parameter entry, shared where
+     equal), the twins' parameter lists stay empty, the pass lists the GLES3 platform
+     (`m_Platforms`) and 2021.2+ the Shader's `stageCounts` gets it with 1. The vertex program's
+     `m_CommonParameters`, which the player would add to every subprogram of the program (ours
+     too), go back into its D3D11 subprograms' binding info and are cleared.
 5. **What is left out.** A SubShader with a variant that cannot be translated gets no GLES3
    programs, so Unity uses the next SubShader or the Fallback (as for a SubShader an Android build
-   has no programs for); a shader none of whose SubShaders translate gets none. VR-only variants
-   (`STEREO_INSTANCING_ON` writes `gl_Layer`, which ES 3.00 lacks) that do not translate are left
-   out instead; Unity never asks for them on a handheld. The run logs each case.
+   has no programs for); a shader none of whose SubShaders translate gets none. Left out instead,
+   the SubShader keeping its other variants: VR-only variants (`STEREO_INSTANCING_ON` writes
+   `gl_Layer`, which ES 3.00 lacks), which Unity never asks for on a handheld, and GPU instancing
+   variants (`INSTANCING_ON`, `PROCEDURAL_INSTANCING_ON`, `DOTS_INSTANCING_ON`: instance data in
+   arrays of structs or structured buffers), whose pass then has its 2021.2+ instancing flags
+   (`m_HasInstancingVariant`, `m_HasProceduralInstancingVariant`) cleared so the player draws such
+   objects one at a time. A shader whose variants were all stripped from the build (an empty D3D11
+   blob, e.g. URP's post-processing shaders a game does not use) gets an empty GLES3 blob
+   (2018.1+), as the GLCore path does. The run logs each case.
 
 | translates | does not (SubShader left out) |
 |---|---|
 | vertex + pixel shaders, shader model 4.0 and 5.0 | geometry, hull, domain, compute shaders; shader model 5.1 |
-| constant buffers of float and int scalars, vectors, matrices, arrays | struct members in constant buffers (GPU instancing data: Unity's layout for them is not known); other constant types |
-| textures 2D, 3D, cube, 2D array; samplers, comparison (shadow) samplers | UAVs, structured / raw buffers, RW textures; 1D, multisampled and cube array textures; texture gather and LOD queries (ES 3.1+) |
-| everything else HLSLcc writes as GLSL ES 3.00 (integer and bit operations, loops, immediate constant buffers, derivatives, discard, MRT, depth output) | GLSL with no ES 3.00 equivalent (the GLSL ES rules above, e.g. `noperspective`) |
+| constant buffers of float, int and uint scalars, vectors, matrices, arrays | struct members in constant buffers (GPU instancing data; such variants are left out, above); other constant types |
+| textures 2D, 3D, cube, 2D array, 2D multisampled (GLES 3.1); samplers, comparison (shadow) samplers, inline sampler states (as the texture's own sampler on GL) | UAVs, structured / raw buffers, RW textures; 1D, cube array and multisampled array textures; LOD and sample count queries |
+| everything else HLSLcc writes as GLSL ES 3.00 / 3.10 (integer and bit operations, loops, immediate constant buffers, derivatives, discard, MRT, depth output, `textureGather`) | GLSL with no ES equivalent (the GLSL ES rules above, e.g. `noperspective`) |
 
 Not carried over, because it is not in the bytecode: what the HLSL decided per platform at
 compile time. Where a shader tested `UNITY_REVERSED_Z`, `UNITY_NEAR_CLIP_VALUE` or
@@ -259,27 +287,98 @@ Ordinary drawing is not affected: matrices, `_ProjectionParams`, `_ZBufferParams
 `_ScreenParams` and texel sizes are set by the engine for the API it runs on, so sprites, UI,
 lighting and post effects that only sample textures come out as on PC. A row-major matrix
 (`row_major`, rare in Unity shaders) would be transposed: the binding info does not record the
-packing, column-major is assumed.
+packing, column-major is assumed. Inline sampler states (`sampler_PointClamp`) have no
+equivalent in Unity's GL binding info as seen (every texture of every GL program in the data
+checked samples with its own unit's sampler): such a texture is sampled with its own sampler
+state, as Unity's GL programs of shaders using them are assumed to.
 
-Checked on Unity 2017.4.9f1's Windows player resources ("unity default resources" of
-`Variations/win64_nondevelopment_mono`, from Unity's Windows support installer), which also hold
-Unity's own GLCore and GLES3 programs of the same shaders: 5 shaders, 36 D3D11 entries, 47
-variants. 36 variants translate; the other 11 are `STEREO_INSTANCING_ON` (left out). Of the 14
-variants that are not VR-only, all declare the same uniforms, inputs, varyings, outputs and
-samplers as Unity's GLCore program of the variant and have the same code (9 byte for byte; 5 up to
-the order of declarations and the names of temporaries, Unity's GL compile having seen `fixed`
-values), and the same interface as Unity's GLES3 program; the 72 GLES3 subprograms equal Unity's
-own GLES3 subprograms but for the blob index. The 15 GLES3 programs (11 distinct) compile and link
-with Mesa (llvmpipe). The same holds for the built-ins of 2017.4.40f1 and 2018.4.36f1 (the Linux
-player's file carries the D3D11 programs too): 36 variants translate per version, the 14 non-VR
-ones match Unity's GLCore code (2018.4: up to temporaries) and Unity's GLES3 interface, the 72
-subprograms equal Unity's, and the 30 GLES3 programs link on Mesa. The comparison is
-`convert/tests/test_d3d11_corpus.py`:
+### GL binding info (Unity 2019.1+)
+
+From 2019.1 Unity's GL programs (GLCore and GLES3 alike) carry binding info of their own, which
+`dxbc.gl_bindings` writes from the program's text the way Unity's GL compiler does from HLSLcc's
+reflection (HLSLcc reports each loose uniform with offset 0; Unity lays them out):
+
+- constant buffers: the empty one, then per stage in HLSLcc's order (fragment first) a
+  `$Globals` of the stage's loose uniforms, members listed vectors first, then matrices (names
+  without the `hlslcc_mtx4x4` prefix, rows and columns 4, array the number of matrices), ints and
+  bools as uint (5); then the stage's uniform blocks (each once);
+- offsets in declaration order: 2020.1+ aligned to 4 / 8 / 16 / 16 for 1 - 4 components and to 16
+  for arrays and matrices, arrays packed by their element size (as `glUniform*v` reads them), the
+  size the end of the last member; 2019.x vec4s and matrices on 16, a smaller vector that would
+  cross a 16-byte boundary moved on by as many bytes as it would cross it by (Unity 2019's rule,
+  as its own programs have it: `vec3, vec3` at 176 and 196);
+- 2022.1+: one `$Globals` for all stages, its members keyed by offset (a later stage's member at
+  an offset already taken is not listed: Unity's own programs have it so, e.g. a vertex
+  `unity_ObjectToWorld` at 0 next to a fragment `_Color` at 0), listed by offset, with a binding
+  `$Globals` 0; uniform blocks after it in reverse order;
+- bindings: the textures (each name once, `hlslcc_zcmp<name>` being `<name>`; index and sampler
+  index the unit, dimension and multisampling from the sampler type), then the blocks.
+
+Checked against every GLCore and GLES3 program (not VR-only) of Unity's Windows player resources
+2019.4 - 2022.3, the 2019.4 Android player's and nine Linux games of 2019.4 - 2022.3 (four of the
+corpus and five of other agents', `tests/test_gl_bindings_corpus.py`): all 6813 programs with
+loose uniforms (what this path writes) match, 6209 of them byte for byte and the others with the
+program's shared parameters put back (2020.1+, compared as sets); of the 1238 with uniform blocks
+(not written by this path) 1180 match (the rest: a one-element array in a block, which HLSLcc
+declares as a plain variable, and the order of the blocks of several stages in 2022.1+).
+
+```sh
+cd convert && PMUNITY_GL_BINDINGS=<file or data folder>[:...] python -m unittest tests.test_gl_bindings_corpus -v
+```
+
+### Checked on Unity's data and on Windows games
+
+**Unity's Windows player resources** ("unity default resources" of the Windows support
+installers, which also hold Unity's own GLCore and GLES3 programs of the same shaders;
+`tests/test_d3d11_corpus.py`): every D3D11 entry reads and writes back byte for byte, every
+shader converts (2022.3's editor-only `FrameDebuggerRenderTargetDisplay` aside: a
+`sampler2DMSArray` variant), every variant that is not VR-only translates, and every non-VR
+translated program declares the same uniforms, inputs, varyings, outputs and samplers as Unity's
+GLCore and GLES3 programs of the variant, with the same code up to temporaries:
+
+| player resources | D3D11 subprograms | variants translated (VR-only left out) | same code as Unity GLCore (byte for byte) | binding info as Unity's (GLCore / GLES3) | GLES3 subprograms equal to Unity's |
+|---|---|---|---|---|---|
+| 2017.4.9f1, 2017.4.40f1 | 94 | 36 (11) | 14 (9) | - (source map only, as Unity's) | 22 |
+| 2018.4.36f1 | 94 | 36 (11) | 14 (0: temporaries) | - | 22 |
+| 2019.4.40f1 | 94 | 36 (11) | 14 (13) | 14 / 14 | 28 (14 vertex, 14 fragment) |
+| 2020.3.48f1 | 102 | 39 (12) | 15 (14) | 15 / 15 | 15 |
+| 2021.3.45f2 | 102 | 39 (12) | 15 (13) | 14 / 14 | 14 |
+| 2022.3.62f3 | 122 | 50 (12; 3 editor-only) | 26 (25) | 25 / 25 | 19 |
+
+The programs that differ from Unity's GLCore code byte for byte differ in the order of
+declarations or the names of temporaries (Unity's GL compile sees `fixed`/`half` values);
+`Hidden/Internal-Loading` (2021.3+) has uniform blocks in Unity's GL program, which declare
+their unused members too, and loose uniforms in ours (a subset, same code otherwise). (2017.4.40f1:
+the Linux player's file, which has the D3D11 programs too.)
 
 ```sh
 cd convert && PMUNITY_D3D11_CORPUS="<path>/unity default resources" PMUNITY_D3D11_EXPORT=/tmp/glsl \
     python -m unittest tests.test_d3d11_corpus -v                  # then shadercheck /tmp/glsl
 ```
+
+**Six free Windows-only Mono games** (not in the repository), each converted with
+`pmunity convert --set shaders.from=d3d11`, every distinct GLES3 program exported and compiled
+and linked on Mesa (llvmpipe, ES 3.2, Mesa 21.2 in `ua-build-arm64`), then packed and run on
+the runtime in the emulated rig with the game's exact Android player:
+
+| game data | shaders given GLES3 | programs (GLES 3.1) | left out | distinct programs linked on Mesa | rig |
+|---|---|---|---|---|---|
+| 2018.3.7f1, 3D, SF 17, 201802150 | 33 of 34 | 196 | `BlitToDepth_MSAA` (`textureSamples`); 8 particle procedural-instancing variants (structured buffer) | 181 / 181 | first screen (the game starts in its first level) |
+| 2019.2.5f1, 2D, SF 20, one block, 201806140 (two keyword lists) | 42 of 44 | 205 | `BlitToDepth_MSAA`, VR blit (`gl_Layer`), UIElements' `Internal-UIRDefault` SubShader 0 (structured buffer; SubShader 1 kept) | 180 / 180 | title screen |
+| 2019.3.14f1 (URP 7), SF 21, segments | 60 of 62 | 918 (3) | `BlitToDepth_MSAA`, VR blit (2 SubShaders) | 504 / 504 | Unity splash, title menu (URP post-processing on) |
+| 2020.3.44f1, SF 22, `m_CommonParameters` | 50 of 52 | 212 | `BlitToDepth_MSAA`, VR blit | 192 / 192 | splash, then its first (click to start) screen |
+| 2021.3.28f1, compressed build (`pmunity unpack`), 202012090 | 49 of 51 | 270 | `BlitToDepth_MSAA`, VR blit | 240 / 240 | title menu (with `pmunity.winbcl`; before: Mono asserted in the Input System's start on the Windows class libraries, then SIGSEGV) |
+| 2022.3.62f3 (URP 14), Burst plugin | 82 of 85 (6 stripped: empty GLES3 blobs) | 569 (55) | URP `HDRDebugView` (UAV), `BlitToDepth_MSAA`, VR blit; 8 particle procedural-instancing variants | 440 / 440 | title menu |
+
+Every converted program declares the same uniforms, inputs and outputs in its GLES3 form as in
+its GL one, and HLSLcc's translation of each variant is checked as above only where Unity's own GL
+program is at hand (built-ins). Textures of these games (RGBA32, RGB24, Alpha8, DXT1/5, crunched
+DXT, BC6H cube maps) go through the textures step as before (BC6H left as it is); the rig's Mesa
+samples BC textures itself, so the runs use the unconverted ones. The 2021.2+ games need Unix
+class libraries in place of their Windows ones (`python -m pmunity.winbcl`, docs/porting.md).
+Not checked: a run on the handheld, pictures against the Windows build, and any game with BC7,
+BC4 or BC5 textures (the step's decoding of those is tested on hand-made blocks,
+`tests/test_textures.py`).
 
 `tests/test_dxbc.py` checks the path on hand-assembled vertex and pixel programs (no Unity files;
 the HLSLcc part runs when pmhlslcc is built).

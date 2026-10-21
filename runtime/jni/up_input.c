@@ -317,18 +317,22 @@ static void choreo_vsync(void *arg)         /* on the Choreographer's own thread
 }
 static choreo *choreo_of(jobject ch) { choreo *c = ch ? fj_data(ch) : NULL; return c ? c : &g_ch_main; }
 
-H(ch_getInstance)
+static jobject choreo_of_looper(up_looper *l)     /* the Choreographer of a looper thread */
 {
-    up_looper *l = t_looper;
-    if (!l || l == &L_main || l == &L_ui) return fj_l(g_choreo);
     pthread_mutex_lock(&g_choreo_mu);
     choreo *c = NULL;
     for (int i = 0; i < MAX_THREAD_CHOREO && !c; i++)
         if (g_ch_thread[i].l == l || !g_ch_thread[i].l) c = &g_ch_thread[i];
     if (c && !c->l) { c->l = l; c->obj = fj_global(fj_new_by_name("android/view/Choreographer", c, NULL)); }
     pthread_mutex_unlock(&g_choreo_mu);
-    if (!c) { up_log("Choreographer: too many looper threads, %s gets UnityMain's", l->name); return fj_l(g_choreo); }
-    return fj_l(c->obj);
+    if (!c) { up_log("Choreographer: too many looper threads, %s gets UnityMain's", l->name); return g_choreo; }
+    return c->obj;
+}
+H(ch_getInstance)
+{
+    up_looper *l = t_looper;
+    if (!l || l == &L_main || l == &L_ui) return fj_l(g_choreo);
+    return fj_l(choreo_of_looper(l));
 }
 H(ch_post)        /* ud: 1 = postFrameCallbackDelayed(cb, ms) */
 {
@@ -362,19 +366,52 @@ H(ch_remove)
 H(cc_init)      /* Swappy (the library) starts only when Unity's Optimized Frame Pacing is on */
 {
     static int told;
-    if (!told++)
+    const char *off = getenv("SO_PROP_swappy_disable");     /* the loader's swappy.disable property */
+    if (!told++ && off && !strcmp(off, "0"))
+        up_log("Swappy started (PlayerSettings.androidUseSwappy on), frame pacing on");
+    else if (told == 1)
         up_log("Swappy started (PlayerSettings.androidUseSwappy on). It stays off here (swappy.disable), and "
                "Unity with that setting on then presents nothing (2019.4) or stops after its first frames "
                "(2021.3+): pack the data with pmunity android-data --swappy off (the default)");
     fj_set_data(self, (void *)(intptr_t)a[0].j, NULL);
     return fj_v();
 }
+/* Swappy's ChoreographerCallback posts to the Choreographer of its own looper thread (Swappy's
+ * Java LooperThread), whose callbacks run at vsync whatever UnityMain does: Swappy's swap, on
+ * UnityMain or the render thread, waits for those ticks (its ChoreographerFilter threads predict
+ * vsync from them), so they cannot come from UnityMain's frame loop */
+static up_looper g_swappy_looper;
+static jobject g_swappy_choreo;
+static void *swappy_looper_main(void *arg)
+{
+    (void)arg;
+    pthread_setname_np(pthread_self(), "SwappyChoreo");
+    JavaVM *vm = fj_vm();
+    JNIEnv *e;
+    (*vm)->AttachCurrentThread(vm, &e, NULL);
+    looper_loop(&g_swappy_looper);
+    (*vm)->DetachCurrentThread(vm);
+    return NULL;
+}
+static void swappy_looper_start(void)
+{
+    looper_init(&g_swappy_looper, "SwappyChoreo");
+    g_swappy_choreo = choreo_of_looper(&g_swappy_looper);
+    pthread_t th;
+    if (pthread_create(&th, NULL, swappy_looper_main, NULL) == 0) pthread_detach(th);
+}
+static jobject swappy_choreo(void)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, swappy_looper_start);
+    return g_swappy_choreo;
+}
 H(cc_post)      /* ud: 1 = postFrameCallbackDelayed(ms) */
 {
     jvalue b[2] = { fj_l(self), fj_j(ud ? a[0].j : 0) };
-    return ch_post(env, g_choreo, b, ud);
+    return ch_post(env, swappy_choreo(), b, ud);
 }
-H(cc_terminate) { jvalue b[1] = { fj_l(self) }; return ch_remove(env, g_choreo, b, NULL); }
+H(cc_terminate) { jvalue b[1] = { fj_l(self) }; return ch_remove(env, swappy_choreo(), b, NULL); }
 H(cc_doFrame)
 {
     jvalue b[2] = { fj_j((jlong)(intptr_t)fj_data(self)), fj_j(a[0].j) };

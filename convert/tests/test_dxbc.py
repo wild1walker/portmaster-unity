@@ -199,10 +199,27 @@ class BindingsTest(unittest.TestCase):
         bad.bindings[0].extra = []
         with self.assertRaises(D.Unsupported):          # a kind whose layout is not known
             D.Bindings.parse(bad.serialize())
-        with self.assertRaises(D.Unsupported):          # struct members (instancing)
-            D.Bindings.parse(D.Bindings(0, [], [D.ConstantBuffer('UnityInstancing_PerDraw0', 64, [], 1)], []).serialize())
+        with self.assertRaises(D.Unsupported):          # the struct list is not followed by the bindings
+            D.Bindings.parse(D.Bindings(0, [], [D.ConstantBuffer('UnityInstancing_PerDraw0', 64, [])], []).serialize()[:-8]
+                             + struct.pack('<ii', 1, 0))
         with self.assertRaises(D.Unsupported):          # trailing bytes
             D.Bindings.parse(VS_BIND.serialize() + b'\0\0\0\0')
+
+    def test_structs_and_samplers(self):
+        # GPU instancing data (an array of structs) and an inline sampler state, as Unity 2019+ writes them
+        inst = D.ConstantBuffer('UnityInstancing_PerDraw0', 256, [], [D.StructParam('unity_Builtins0Array', 0, 2, 128, [
+            D.Param('unity_ObjectToWorldArray', 0, 4, 4, 1, 0, 0), D.Param('unity_WorldToObjectArray', 0, 4, 4, 1, 0, 64)])])
+        b = D.Bindings(0, [], [D.ConstantBuffer('', 0, []), inst],
+                       [D.Binding('_MainTex', 0, 0, [-1, 4], True), D.Binding('', 4, 0, [84], True)])
+        data = b.serialize()
+        back = D.Bindings.parse(data, 201806140)
+        self.assertEqual(back.serialize(), data)
+        self.assertEqual(back.cbuffers[1].structs[0].params[1].offset, 64)
+        self.assertEqual((back.bindings[0].sampler, back.bindings[0].dim), (-1, 2))
+        self.assertEqual(D.Bindings.parse(b.head() + b.params_bytes(), 202012090).serialize(), data)
+        vs = D.Bindings(9, [(0, 0)], [D.ConstantBuffer('', 0, []), inst], [D.Binding('UnityInstancing_PerDraw0', 1, 0, [0])])
+        with self.assertRaisesRegex(D.Unsupported, 'instancing'):
+            D.with_reflection(D.split_code(VS_CODE)[1], vs)
 
     def test_gl_rest(self):
         self.assertEqual(D.gl_rest(13), struct.pack('<8i', 13, 0, 1, 0, 0, 0, 0, 0))
@@ -348,7 +365,7 @@ class AddGles3D3D11Test(unittest.TestCase):
         self.assertTrue(es[0].code.startswith(b'#ifdef VERTEX\n#version 300 es\n'))
         self.assertEqual((es[1].code, es[1].rest), (b'', D.gl_rest(0)))
         self.assertEqual(es[0].rest, D.gl_rest(9))
-        self.assertEqual(es[5].keywords, [])               # the shared vertex entry's keywords
+        self.assertEqual(es[5].keywords, ['FOO'])          # the shared vertex entry's keywords and the pixel one's
         self.assertEqual(dict(C.gles3_programs(tree)).keys(), {0, 5})
         self.assertEqual(C.add_gles3_d3d11(tree, translate=translate).status, 'unchanged')
 

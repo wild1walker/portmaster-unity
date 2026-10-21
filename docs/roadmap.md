@@ -10,7 +10,7 @@ ARM) is the first game done end to end.
 |---|---|---|
 | macOS / Linux desktop build, Mono | the same Unity version's Android player; desktop data converted (GLCore shaders -> GLES3, textures, settings) | done for 2017.4 (32-bit ARM); version coverage below |
 | Windows desktop build, Mono | as above, but the shaders are Direct3D bytecode (DXBC) only | a DXBC -> GLSL ES translator in the converter (Unity's open-source HLSLcc does this) |
-| the game's own Android build (APK / OBB / AAB), Mono or IL2CPP | as is, on our runtime (32- or 64-bit) | runtime coverage of that Unity version's Java side and native imports |
+| the game's own Android build (APK / OBB / AAB), Mono or IL2CPP | as is, on our runtime (32- or 64-bit): `pmunity apk` (docs/apk.md) | runtime coverage of that Unity version's Java side and native imports; 2019.4 - 2022.3 Mono and IL2CPP builds run in the emulated rig, arm64-v8a ones on the 64-bit host |
 | desktop build, IL2CPP (GameAssembly) | its code is compiled for x86: not portable this way | (out of scope) |
 | desktop build, Mono, 64-bit ARM wanted | the game's assemblies compiled with Unity's IL2CPP for the Android player's arm64-v8a variation | Unity's il2cpp tool and libil2cpp of that version, Android NDK; AOT limits (no Reflection.Emit) |
 

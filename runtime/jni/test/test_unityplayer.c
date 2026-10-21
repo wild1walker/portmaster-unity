@@ -340,7 +340,8 @@ static int run_shape(int shape)
 
     /* render loop */
     CHECK(wait_for(R_RENDER, 10, 5000));
-    if (shape >= SHAPE_2019_4) CHECK(R(R_SWAPPY_FRAME) == 1);   /* one posted frame, one call */
+    /* one posted frame, one call, at the next vsync on Swappy's own looper thread */
+    if (shape >= SHAPE_2019_4) CHECK(wait_for(R_SWAPPY_FRAME, 1, 3000) && R(R_SWAPPY_FRAME) == 1);
     CHECK(R(R_GFX) == 1 && R(R_FOCUS_TRUE) == 1 && R(R_RESUME) == 1);
     CHECK(R(R_SURF_CHANGED) == later);
     CHECK(R(R_ORDER_OK) == 1);
