@@ -44,6 +44,8 @@ assembly that would reference the patcher's own runtime (`System.Private.CoreLib
 | `data-path` (opt-in) | Reads of `Application.dataPath` whose value reaches System.IO get `Game_Data/` beside the APK (`pmunity android-data --data-path`: a writable folder with the data folder's own files). On the Android player `dataPath` is the APK or OBB file, so `dataPath + "/config.ini"` and writes next to the data fail; the helper (`<asmpatch>Paths.DataPath`) returns `<folder>/Game_Data` for a value ending in `.apk` or `.obb` and the value itself otherwise. Reads that reach only Unity's APIs (an Android branch's `"jar:file://" + dataPath + "!/assets/"`) keep the archive. |
 | `streaming-assets-all` (opt-in) | Every read of the getter gets the folder (`android-data --streaming-assets loose`: the files are only beside the APK, so Unity's APIs read them from there too, as on the desktop, where the getter is a folder for them as well). For big StreamingAssets, which `both` would keep twice. Code that runs only on Android (a runtime `Application.platform` check, compiled into the desktop build too) then gets a folder where it expects the jar path: `UnityWebRequest.Get(path)` without `file://` turns a bare path into `http://localhost/…`. |
 
+| `inputsystem-android` | Unity's [Input System](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.7/manual/index.html) package compiles its Android device support only into Android builds; on the Android player the engine reports the pad as an Android game controller (interface `Android`, class `AndroidGameController`, state `'AGC '`), which a desktop build's `Unity.InputSystem.dll` has no layout for, so the game sees no gamepad. The patch registers layouts for it with the package's own public `InputSystem.RegisterLayout(json)`, at the end of `InputSystem.PerformDefaultPluginInitialization` (where the package registers its platform support). The layouts are JSON written here from the player's state format (Android key codes as bits from byte 0, MotionEvent axes as floats from byte 28), extend the package's `Gamepad` and place each of its controls; a pad with Microsoft's vendor id becomes an `XInputController` where the build has that class. Not applicable without `Unity.InputSystem.dll` or when it has the Android support (an Android build); fails if those two methods are missing. Keyboards, mice and touchscreens need nothing (common formats). docs/input.md has the mapping. |
+
 Adding a patch: a class deriving from `Patch` (`src/Patch.cs`) in `src/Patches/`, listed in
 `Patch.All`; its `Run(game, apply)` finds the targets, reports them, and with `apply` changes them
 and marks their assemblies changed. Look things up by name (types, members, enum constants), fail
@@ -85,8 +87,11 @@ reaching a sink it does not see (reflection, a delegate's arguments) leaves a re
 
 Which input stacks the game's own assemblies use (not Unity's or the class libraries): Rewired
 (edition, compiled platform), InControl, the Input System package, the legacy `UnityEngine.Input`
-calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointer handlers, and
-whether code selects UI elements (pad/keyboard menu navigation). The verdict line says whether the
+calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointer handlers,
+whether code selects UI elements (pad/keyboard menu navigation), InControl's Android device
+profiles and the pad names they match (so a port can set `UA_PAD_NAME` to one), and text entry (`InputField`,
+`TMP_InputField`, `TouchScreenKeyboard`: the soft keyboard, which ua_host's on-screen keyboard
+answers). The verdict line says whether the
 menus are likely pointer-only (then the port needs ua_host's pointer mode, `UA_POINTER=1`, see
 docs/input.md).
 
@@ -111,10 +116,13 @@ the runtime pack and ILLink):
 `./build.sh test` also runs the tests (`test/`): fake Rewired assemblies are built with Cecil (a
 `Rewired_Core` whose enums are numbered unlike any real Rewired, a source-edition game and a DLL
 edition, a `DetectPlatform` with early returns and a short branch the patch pushes out of range),
-patched, loaded into the test process and called; plus the not-applicable, already-applied,
-failing and command-line cases. For streaming-assets: a fake `UnityEngine.CoreModule` (Application
-getters that return settable values, an AssetBundle and a UnityWebRequest that record the path they
-get) and a game whose StreamingAssets paths go straight into System.IO, through a property and a
+patched, loaded into the test process and called; a fake `Unity.InputSystem` (an
+`InputSystem` whose plugin initialization returns early or not, a logging `RegisterLayout` and a
+decoy overload; no package code) is patched and called, and the layouts it registers are parsed
+and checked control by control; plus the not-applicable, already-applied, failing and
+command-line cases. For streaming-assets and data-path: a fake `UnityEngine.CoreModule`
+(Application getters that return settable values, an AssetBundle and a UnityWebRequest that record
+the path they get) and a game whose paths go straight into System.IO, through a property and a
 helper, a static field, an array, a virtual method, a delegate, into Unity's APIs only, and into
-both; the patched game runs against a `jar:file://` path whose folder has the files and against a
-desktop path (same results as unpatched), and the helper against odd paths.
+both; the patched game runs against a `jar:file://` path (and an OBB dataPath) whose folder has the
+files and against desktop paths (same results as unpatched), and the helpers against odd paths.

@@ -31,6 +31,8 @@ static partial class TestMain
             DllEdition();
             NoRewired();
             NoAndroidConstant();
+            InputSystemTests();
+            InControlTests();
             StreamingAssets();
             Cli();
         }

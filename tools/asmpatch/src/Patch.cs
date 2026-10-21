@@ -32,6 +32,7 @@ abstract class Patch
     public static readonly Patch[] All =
     {
         new RewiredAndroid(),
+        new InputSystemAndroid(),
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
     };
 }

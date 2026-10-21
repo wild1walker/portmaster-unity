@@ -1,5 +1,5 @@
 #!/bin/sh
-# Inside the ua-emu-armhf container (see tools/emu/emu.sh): the device layout under /emu, with the
+# Inside the ua-emu-armhf / ua-emu-arm64 container (see tools/emu/emu.sh): the device layout under /emu, with the
 # APK/OBB from the data tool's zip dir (/zip), host binaries from /hostbin. Extra env passes through.
 # run_emu.sh <log> <seconds> [release|dev]
 cd /emu || exit 1

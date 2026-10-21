@@ -1,0 +1,13 @@
+{
+  "title": "the game's own x86-64 Linux build under box64 (portmaster-unity tools/box64; OpenGL ES through the player's -force-gles mode and glxes)",
+  "files": {
+    "@@TITLE@@.sh": "launcher.sh",
+    "@@PORTDIR@@/setup/patchscript": "patchscript",
+    "@@PORTDIR@@/README.md": "README.player.md",
+    "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
+    "@@PORTDIR@@/@@PORTDIR@@.gptk": "hotkey.gptk",
+    "README.md": "README.port.md",
+    "package.sh": "package.sh"
+  },
+  "package": ["pmunity", "pybundle", "box64"]
+}
