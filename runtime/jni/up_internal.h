@@ -89,4 +89,8 @@ void     up_notify_input_device(int id, int added);
 void     up_fmod_stop_all(void);
 void     up_mkdirs(const char *path);
 
+/* soft keyboard (up_softinput.c) */
+void     up_softinput_register(void);          /* UnityPlayer.showSoftInput & co. */
+void     up_softinput_pause(void);             /* UnityPlayer.pause(): the dialog is cancelled */
+
 #endif

@@ -1,0 +1,13 @@
+# Compilers for box64, gl4es and glxes (tools/box64/build.sh; the sources come in a bind mount; box64's
+# CMake wants Python). EGL/GLES only as the glvnd libraries glxes links: their -dev packages would
+# bring Mesa and LLVM (~250 MB).
+# Debian 11 (glibc 2.31): the binaries then load on the PortMaster firmwares with older C libraries
+# too (docs/box64-route.md, "What the device needs"). Native on an Apple-silicon Mac (linux/arm64).
+FROM debian:bullseye
+ENV DEBIAN_FRONTEND=noninteractive
+# bullseye-security is being archived (its index names files the mirror no longer has): packages
+# come from the snapshot of the image's own date (the commented lines in its sources.list)
+RUN sed -i -e "/^deb /d" -e "s/^# deb /deb [check-valid-until=no] /" /etc/apt/sources.list && apt-get update && apt-get install -y --no-install-recommends \
+      gcc libc6-dev make cmake binutils python3 libx11-dev libegl1 libgles2 \
+ && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/locale
+WORKDIR /src

@@ -173,6 +173,40 @@ int  up_inject_touch(int action, int n, const int *ids, const float *x, const fl
  * UP_BUTTON_* held after the event (getButtonState). */
 int  up_inject_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll);
 
+/* ---- soft keyboard (TouchScreenKeyboard) ------------------------------------------------
+ * When the game opens Unity's soft keyboard (TouchScreenKeyboard.Open -> UnityPlayer.showSoftInput)
+ * the runtime holds the text field of Unity's input dialog (an EditText: text, selection, character
+ * limit, the input type's character filter) and reports each change to libunity as that dialog
+ * does in the player's version (up_softinput.c). The host is the keyboard (Android's IME): it
+ * reads the field and types into it with the functions below, on the UI thread. */
+#define UP_SOFT_INPUT_MAX 4096          /* code points the field holds */
+#define UP_SOFT_INPUT_HINT 128
+enum { UP_SOFT_INPUT_DONE, UP_SOFT_INPUT_CANCEL, UP_SOFT_INPUT_LOST_FOCUS };
+struct up_soft_input {
+    unsigned serial;            /* changes with every change of the fields below */
+    int active;                 /* the keyboard is open */
+    int kb_type;                /* TouchScreenKeyboardType the game asked for: 0 default, 1 ASCII,
+                                   2 numbers and punctuation, 3 URL, 4 number pad, 5 phone pad,
+                                   6 name/phone, 7 e-mail, 8 NN account, 9 social, 10 search, 11 decimal */
+    int input_type;             /* the android.text.InputType Unity's Java side sets for it */
+    int multiline, secure, hide_input, char_limit;   /* char_limit 0: none (UTF-16 units) */
+    int len;                    /* text length, code points */
+    int sel_start, sel_end;     /* selection (start <= end; equal: the caret), code points */
+    uint32_t text[UP_SOFT_INPUT_MAX];
+    char placeholder[UP_SOFT_INPUT_HINT];   /* UTF-8 */
+};
+unsigned up_soft_input_serial(void);                 /* cheap: has anything changed? */
+unsigned up_soft_input_get(struct up_soft_input *s); /* a copy of the field; returns the serial */
+int  up_soft_input_commit(const char *utf8);   /* IME commitText: replaces the selection, through the
+                                                  filters; returns the code points inserted */
+void up_soft_input_delete(int before, int after);   /* deleteSurroundingText (code points); with a
+                                                       selection, deletes the selection */
+void up_soft_input_select(int start, int end);  /* caret / selection, code points (clamped) */
+void up_soft_input_finish(int how);             /* UP_SOFT_INPUT_DONE: the OK button or the Done
+                                                   action; _CANCEL: Back; _LOST_FOCUS: dismissed */
+void up_soft_input_set_area(int x, int y, int w, int h);   /* where the host's keyboard and field
+                                                   sit (view pixels), for TouchScreenKeyboard.area */
+
 /* Register the fake Android/Unity classes without starting (done by up_start; tests). */
 void up_register_classes(const struct up_config *cfg);
 

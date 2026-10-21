@@ -7,12 +7,14 @@
 //   touch <root>/shot.req   save the next frame as <root>/shot-<n>.ppm (the back buffer being
 //                     presented; checked once a second, the request file is removed). Pointer
 //                     mode's cursor is drawn after it (UA_POINTER_SHOTS=1: before), so shots show
-//                     the game's own picture
+//                     the game's own picture; an open on-screen keyboard is in them (UA_OSK_SHOTS=0:
+//                     not)
 #define _GNU_SOURCE
 #include "frames.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
+#include "osk.h"
 #include "pointer.h"
 #include "../android/egl_glue.h"
 #include "../loader/so_loader.h"
@@ -117,10 +119,13 @@ static void on_swap(void *ctx)
         checked = t;
         if (access(g_req, F_OK) == 0) { unlink(g_req); shot = 1; }
     }
-    int cursor_first = shot && pointer_in_shots();
-    if (cursor_first) pointer_draw();
+    int osk_first = !shot || osk_in_shots(), cursor_first = shot && pointer_in_shots();
+    if (osk_first) osk_draw();                  // the on-screen keyboard (nothing unless the game opened its own)
+    int cursor = !osk_active();                 // no cursor while the keyboard has the pad
+    if (cursor && cursor_first) pointer_draw();
     if (shot) screenshot();
-    if (!cursor_first) pointer_draw();          // UA_POINTER's cursor (nothing when off)
+    if (!osk_first) osk_draw();
+    if (cursor && !cursor_first) pointer_draw();          // UA_POINTER's cursor (nothing when off)
     if (++total == 1) glhooks_first_frame();
     hitches_frame();
     gltrace_frame();

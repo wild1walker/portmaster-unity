@@ -1,0 +1,93 @@
+#!/bin/bash
+# First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
+# `pmunity port new`, box64 route): prepares the player's own copy of the game's Linux build in
+# ports/<port>/gamedata/ for box64:
+#   1. the game: its folder (or the archive it came in, unpacked in place), found by `pmunity route`
+#   2. for the OpenGL ES mode: GLES 3 shader programs next to the game's OpenGL Core ones, and GLES 3
+#      in its graphics API list (pmunity convert, setup/gles.json; in place, the picture unchanged)
+#   3. ports/<port>/game.env: where the game is and the GL mode, for the launcher
+# The game's code is not changed. Every step can be interrupted: the next launch continues.
+# Log: ports/<port>/patchlog.txt. A line "PATCH_FAIL_MSG:<text>" says why the setup failed.
+S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+. "$S/setup.env"
+
+exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
+echo "=== $(date) $PORT_TITLE setup ==="
+fail() { echo "PATCH_FAIL_MSG:$1"; echo "Setup failed: $1"; echo "Patching process failed!"; exit 1; }
+step() { echo; echo "== $(date +%H:%M:%S) $*"; }
+hook() {                                # the port's own step at a fixed point (setup/hooks/<name>.sh)
+  [ -f "$S/hooks/$1.sh" ] || return 0
+  step "$PORT_TITLE: $1"
+  . "$S/hooks/$1.sh" || fail "The port's $1 step failed (see patchlog.txt)."
+}
+lower() { echo "$1" | tr 'A-Z' 'a-z'; }
+free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
+room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }
+[ "$DEVICE_ARCH" = aarch64 ] || fail "box64 needs a 64-bit (aarch64) system (this one: $DEVICE_ARCH)."
+SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
+mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
+
+# ---- the setup's Python (CPython + UnityPy, aarch64): pmunity route and convert
+PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4" 2>/dev/null; then
+  step "unpacking the setup tools"
+  rm -rf "$W/python"
+  tar -xzf "$S/python.tar.gz" -C "$W" || fail "Could not unpack the setup's Python (see patchlog.txt)."
+  PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+  [ -n "$PY" ] || fail "The setup's Python is incomplete."
+fi
+export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
+pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
+
+# ---- 1. the game: a Linux x86-64 build in gamedata/ (an archive is unpacked there first)
+if [ ! -f "$W/.step_game" ]; then
+  if ! pm route "$GD" --env > "$W/game.env" 2>/dev/null; then
+    need=$((GAME_SIZE_MB * 2 + 200))
+    for a in "$GD"/*; do
+      [ -f "$a" ] || continue
+      case "$(lower "$a")" in
+        *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2) ;;
+        *) continue;;
+      esac
+      room "$need" || fail "Unpacking $(basename "$a") needs about $need MB free on the card ($(free_mb) MB free)."
+      step "unpacking $(basename "$a")"
+      [ -x "$SEVENZ" ] || fail "PortMaster's 7-Zip is missing: update PortMaster, or unpack $(basename "$a") into gamedata/ yourself."
+      case "$(lower "$a")" in
+        *.tar|*.zip|*.7z|*.rar) "$SEVENZ" x -y -o"$GD" "$a" >/dev/null ;;
+        *) "$SEVENZ" x -so "$a" 2>/dev/null | "$SEVENZ" x -si -ttar -y -o"$GD" >/dev/null ;;
+      esac || fail "Could not unpack $(basename "$a") (see patchlog.txt)."
+      pm route "$GD" --env > "$W/game.env" 2>/dev/null && break
+    done
+  fi
+  hook game                               # (a port's own way to find or unpack the game)
+  . "$W/game.env" 2>/dev/null
+  [ -n "$EXE" ] || fail "No Linux x86-64 build of the game in ports/$PORT_NAME/gamedata: put $GAME_WHAT there, then launch again."
+  echo "the game: gamedata/$GAME_DIR/$EXE, Unity $UNITY ($BACKEND), GL mode $GL_MODE"
+  if [ -n "$UNITY_VERSIONS" ]; then
+    case " $UNITY_VERSIONS " in *" $UNITY "*) ;; *)
+      echo "note: this port was made for Unity $UNITY_VERSIONS; your copy is Unity $UNITY (another version of the game?)";;
+    esac
+  fi
+  touch "$W/.step_game"
+fi
+. "$W/game.env"
+
+# ---- 2. GLES mode: the game's shaders in GLSL ES 3.00 next to its OpenGL Core ones
+if [ "$GL_MODE" = gles ] && [ ! -f "$W/.step_convert" ]; then
+  hook pre_convert
+  room 300 || fail "Converting the game's shaders needs about 300 MB free on the card ($(free_mb) MB free)."
+  step "adding OpenGL ES shaders (if this is interrupted, the next launch continues where it stopped)"
+  pm convert "$GD/$GAME_DIR/$DATA" --config "$S/gles.json" \
+    || fail "Converting the game's shaders failed (see patchlog.txt). Launch again to continue."
+  hook post_convert
+  touch "$W/.step_convert"
+fi
+
+# ---- 3. for the launcher
+cp "$W/game.env" "$GAMEDIR/game.env"
+chmod +x "$GD/$GAME_DIR/$EXE"
+hook post_install
+rm -rf "$W" "$S"
+sync
+touch "$GAMEDIR/$READY"
+step "setup finished. Archives left in gamedata/ can be deleted now."

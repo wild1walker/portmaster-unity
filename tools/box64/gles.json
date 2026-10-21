@@ -1,0 +1,5 @@
+{
+ "comment": "pmunity convert config for the box64 route's GLES mode (docs/box64-route.md): GLES 3 programs next to every shader's OpenGL Core ones, and OpenGL ES 3 added before OpenGL Core in the build's graphics API list, which lets the Linux player's -force-gles switch take effect. The player's own built-in shaders already carry GLES 3 programs.",
+ "steps": ["shaders", "settings"],
+ "settings": {"graphics_apis": [11, 17]}
+}

@@ -93,6 +93,7 @@ def main(argv=None):
     if argv[:1] == ['player']:
         from . import player
         return player.main(argv[1:])
+    if argv[:1] == ['route']: from . import route; return route.main(argv[1:])  # noqa: E701,E702 (docs/box64-route.md)
     if argv[:1] == ['port']:            # port check / new / package (port.py, docs/porting.md)
         from . import port
         return sys.exit(port.main(argv[1:]))

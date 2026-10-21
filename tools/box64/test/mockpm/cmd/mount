@@ -1,0 +1,3 @@
+#!/bin/bash
+# mount <squashfs> <dir>: the Westonpack runtime is the stand-in westonwrap.sh
+mkdir -p "${@: -1}" && cp /mockpm/westonwrap.sh "${@: -1}/westonwrap.sh"
