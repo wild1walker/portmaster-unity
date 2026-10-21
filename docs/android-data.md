@@ -33,7 +33,7 @@ for the other Unity versions (2017.3 - 2022.3).
    If it is missing, the defaults are used. The command line comes from the Intent extra `"unity"`.
 6. StreamingAssets = `"jar:file://" + app + "!/assets"`. ToAbsolute converts that back to `<app>/assets/…`.
    Cuphead loads every bundle with `AssetBundle.LoadFromFile(streamingAssetsPath/AssetBundles/x)`,
-   which goes through the same VFS.
+   which goes through the same VFS. Code that reads it with System.IO instead: section 6.
 
 Lookup: `LocalFileSystemAndroid::Open/Exists` tries the zip handler first, then **the real file
 system with the same path**. Zip lookup: the archive whose path prefixes the file wins. Otherwise
@@ -210,6 +210,112 @@ the `*.bank` files of StreamingAssets stay out of the OBB and go to `zip/assets/
 (`--loose-assets <glob>` for other files); ua_host gives FMOD's `jar:file://` and
 `file:///android_asset/` bank paths those files.
 
+## 6. StreamingAssets, files the game reads, saves
+
+On a desktop, `Application.streamingAssetsPath` is a folder (`<Game>_Data/StreamingAssets`; macOS:
+`<Game>.app/Contents/Resources/Data/StreamingAssets`) and a game may read it with any file API. On
+the Android player it is `jar:file://<archive>!/assets`, the archive being the OBB when one is
+mounted, else the APK. Unity's own APIs open that path through the VFS of section 1
+(`AssetBundle.LoadFromFile*`, `UnityWebRequest`, `WWW`, `VideoPlayer.url`); System.IO does not
+(Mono takes it for a relative path: `DirectoryNotFoundException`). `asmpatch --survey` lists the
+reads of each folder getter and what they reach (tools/asmpatch/README.md); `port check` suggests
+the option below when reads of StreamingAssets reach System.IO.
+
+**Bundles anywhere in StreamingAssets.** Every UnityFS file there gets the Android platform
+(section 2), not only Cuphead's `AssetBundles/`: Addressables' `aa/<platform>/`, a game's own
+folders. Bundles of 2022.3 (format 8) may start their blocks 16-aligned after the blocks info
+(flag 0x200); LZMA blocks (BuildAssetBundleOptions.None) are read, and the one with the platform
+byte is written back as LZ4HC; a bundle the reader cannot patch in place is saved again by UnityPy
+(LZ4 chunks, same objects).
+
+**Addressables.** Its settings and catalog are text read by Addressables' providers. Release 1.21
+(Unity 2022.3) reads them with UnityWebRequest when the path has `://` and the runtime platform
+is Android, so the jar path works; a desktop build of older releases reads them with
+`File.ReadAllText` (then `streaming-assets` below gives it the folder). Each bundle location's
+`AssetBundleRequestOptions` hold the bundle's CRC (`m_Crc`: CRC-32 of the uncompressed bundle
+data, the value `AssetBundle.LoadFromFile(path, crc)` checks), and a patched bundle has another
+one. android-data rewrites the catalog (`aa/catalog*.json` with a non-zero `m_Crc`): each CRC of a
+patched bundle becomes the new one; the records that grow or shrink move the entries' offsets
+after them; the rest of the file stays byte for byte (`streaming.py`). A 2022.3 game whose
+localization tables are Addressables bundles printed "The AssetBundle ... can't be loaded because
+it was not built with the right version or build target" and had no locales; now its language
+screen leads to its title menu (emulated rig). Binary catalogs (`catalog.bin`, Addressables 2.x)
+are not handled yet.
+
+**StreamingAssets as files: `--streaming-assets obb|both|loose`.**
+
+| mode | the files | asmpatch (opt-in patch, added to `--asmpatch`) | for |
+|---|---|---|---|
+| `obb` (default) | in the OBB | none | code that reads StreamingAssets with Unity's APIs only (Cuphead) |
+| `both` | in the OBB and beside the APK in `Game_Data/StreamingAssets/` | `streaming-assets`: the reads whose value reaches System.IO get the folder; the others keep the jar path | a game that reads JSON, XML, SQLite, level or mod files there |
+| `loose` | only in `Game_Data/StreamingAssets/` | `streaming-assets-all`: every read gets the folder, so Unity's APIs read it from there too | big StreamingAssets (`both` keeps them twice) |
+
+The folder mirrors the desktop layout (a data folder with StreamingAssets in it); on the handheld
+it is `ports/<name>/Game_Data/StreamingAssets/`, a plain folder on the card (exFAT or ext4) that
+System.IO lists, reads and, as on a desktop, writes. The patched read takes the archive's folder
+from the jar path itself, so it follows the APK and OBB wherever they are, and gives the original
+value back for anything else (a desktop player, the directory route). Without `--asmpatch` the
+folder is made but the code still reads the jar path (a warning says so). FMOD's banks stay in
+`assets/` beside the APK too, for ua_host's FMOD path mapping (section 5).
+
+Caveats:
+- `loose`: code that runs only on Android in the desktop build too (a run-time
+  `Application.platform == RuntimePlatform.Android` branch) gets a folder where it expects the
+  jar path; `UnityWebRequest.Get("/a/b")` turns a bare path into `http://localhost/a/b`
+  (`WebRequestUtils.MakeInitialUrl`), where the desktop code it was written for adds `file://`.
+  `both` keeps such reads on the jar path.
+- Code that builds the jar path itself (`"jar:file://" + Application.dataPath + "!/assets/"`, in
+  such Android branches) reads the OBB: keep the files there (`obb` or `both`).
+- The folder must be writable even for code that only reads: `new FileStream(path, FileMode.Open)`
+  asks for read and write access (desktop code does that). On the card it is; the emulated rig
+  copies `Game_Data/` into its device folder for the same reason (`tools/emu/run_emu.sh`).
+- A port's setup run again (a new release) replaces `Game_Data/StreamingAssets/`; anything else
+  the game wrote into `Game_Data/` stays.
+
+**Files at `Application.dataPath`.** On the player `dataPath` is the OBB file when one is mounted,
+else the APK: `dataPath + "/x"` fails (`ENOTDIR`). Its folder, `Path.GetDirectoryName(dataPath)`
+(and `dataPath + "/../x"` with .NET 4.x's class libraries, whose `Path.GetFullPath` folds the
+`..`), is the folder beside the APK, where `--beside` files (a GOG build's `goggame-*.info`) and
+`--root-file` files go. For code that reads or writes inside its data folder
+(`dataPath + "/config.ini"`, a mods folder, a log or a screenshot next to the data), `--data-path`
+makes `Game_Data/` beside the APK, a writable folder with the data folder's own files (top-level
+files and folders Unity does not use: not the serialized files, `Managed/`, `Resources/`,
+`StreamingAssets/`, `Plugins/`, `Mono*/`, `GI/`), and runs asmpatch's opt-in `data-path` patch:
+the reads of `dataPath` that reach System.IO get that folder (a `dataPath` ending in `.apk` or
+`.obb` becomes `<its folder>/Game_Data`; anything else, e.g. a desktop player's, stays). Then
+`dataPath + "/StreamingAssets"` is the folder `--streaming-assets` makes, and
+`GetDirectoryName(dataPath)` is still the folder beside the APK. Reads that reach only Unity's
+APIs (an Android branch's `"jar:file://" + dataPath + "!/assets/"`) keep the archive. In the corpus,
+the reads of `dataPath` that reach System.IO were debug output (heat maps, screenshots), editor
+tools, a plugin folder ua_host maps itself (FMOD), or code with an Android branch that uses
+`persistentDataPath` on the player: none needed `--data-path`, which the port check therefore only
+mentions (`android_data.data_path`), never suggests.
+
+**The working directory** (`Directory.GetCurrentDirectory`, relative paths) is ua_host's root, the
+port folder, where a desktop build started from its own folder would look too.
+
+### Saves
+
+| | desktop player | the handheld (ua_host) |
+|---|---|---|
+| `Application.persistentDataPath` (save files) | Linux `~/.config/unity3d/<Company>/<Product>/`; Windows `%USERPROFILE%\AppData\LocalLow\<Company>\<Product>\`; macOS `~/Library/Application Support/<Company>/<Product>/` (older Unity: `…/unity.<Company>.<Product>/`) | `ports/<name>/data/external/` (`getExternalFilesDir`) |
+| PlayerPrefs | Linux the `prefs` file in that folder (XML, strings base64); Windows the registry, `HKCU\Software\<Company>\<Product>`; macOS `~/Library/Preferences/unity.<Company>.<Product>.plist` | `ports/<name>/data/shared_prefs/<package>.v2.playerprefs.prefs` (the Android player's SharedPreferences: one `<i\|f\|s>\t<key>\t<value>` line each, `%XX` for tab, newline, `%`) |
+| `temporaryCachePath` | the system's cache folder | `ports/<name>/data/cache/` (also Unity's shader cache) |
+
+`<Company>` and `<Product>` are the game's PlayerSettings (a Linux or Windows build's data folder
+has them in `app.info`, two lines; the Linux player writes `unknown/unknown` when that is missing).
+The box64 route runs the Linux player, which keeps the Linux paths below its `HOME`
+([box64-route.md](box64-route.md)). `data/` is not in a port's
+release zip and the setup never touches it, so updates keep it. The package (`android_data.package`,
+default `com.pmunity.<name>`) names the PlayerPrefs file: a port keeps it from release to release.
+
+To move saves between a PC and the handheld: the files of `persistentDataPath` copy as they are
+(the same names below the folder; a few games tie a save to a machine by encrypting it with a
+device id); PlayerPrefs with `python -m pmunity prefs copy <from> <to>` between the Linux player's
+`prefs` file and the handheld's `.prefs` file (`prefs.py`; `prefs show <file>` lists one). It keeps
+the display settings each machine has its own of (`Screenmanager *`) unless `--all`. Windows'
+registry and macOS's plist are not read: there a game's own save files are what copies.
+
 ## Unsure / untested
 
 - Nothing has run on the player yet.
@@ -218,3 +324,7 @@ the `*.bank` files of StreamingAssets stay out of the OBB and go to `zip/assets/
   12 bundles parsed fully), but Unity itself has not read them yet.
 - The Mount patch and the OBB route have not been tried.
 - MT rendering and blit type are left at the game's values.
+- StreamingAssets (section 6): the rig ran the `obb` route on an Addressables game and `both` on
+  games reading XML and JSON with System.IO; `loose` only in the unit tests and the asmpatch
+  tests; an FMOD game with `both` not run. Binary Addressables catalogs, Windows and macOS
+  PlayerPrefs not handled.

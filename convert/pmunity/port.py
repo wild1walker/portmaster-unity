@@ -54,7 +54,7 @@ from . import unity_version as UV
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, 'port_template')
 REPO = os.path.dirname(os.path.dirname(HERE))          # the portmaster-unity checkout
-HOOK_MODULES = ('route', 'box64', 'il2cpp', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows')
+HOOK_MODULES = ('route', 'box64', 'il2cpp', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows', 'streaming')
 
 
 # =========================================================================== .NET metadata
@@ -1045,7 +1045,8 @@ DEFAULTS = {
     'game': {'data': '*_Data', 'build': 'linux', 'unity_versions': [], 'what': '', 'size_mb': 0, 'setup_space_mb': 0},
     'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'url': '', 'sha256': {}},
     'convert': {'steps': ['shaders', 'settings', 'audio'], 'settings': {'graphics_apis': [11]}},
-    'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'name': '', 'package': '', 'args': []},
+    'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
+                     'name': '', 'package': '', 'args': []},
     'runtime': {},
     'questions': [],
     'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': []},
@@ -1136,6 +1137,8 @@ def validate(cfg):
     a = cfg['android_data']['asmpatch']
     if not (a in ('auto', 'off') or isinstance(a, list) and all(VALUE_RX.match(x) for x in a)):
         errs.append(f'android_data.asmpatch {a!r}: auto, off or a list of patch names')
+    if cfg['android_data'].get('streaming_assets', 'obb') not in ('obb', 'both', 'loose'):
+        errs.append(f"android_data.streaming_assets {cfg['android_data']['streaming_assets']!r}: obb, both or loose")
     for k in cfg['files'].get('hooks', {}):
         if k not in HOOK_POINTS:
             errs.append(f"files.hooks.{k}: one of {', '.join(HOOK_POINTS)}")
@@ -1180,7 +1183,10 @@ CONFIG_DOC = {
     'convert': '# pmunity convert\'s config (each step\'s DEFAULTS); "textures" re-encodes BC/DXT as ASTC\n'
                '# (less memory, a longer setup, slightly different pixels: off unless you add it)',
     'android_data': '# pmunity android-data: asmpatch = auto (run tools/asmpatch; it changes only what it\n'
-                    '# finds, e.g. Rewired) | off | ["patch", ...]; name = the APK\'s, package; args = more options',
+                    '# finds, e.g. Rewired) | off | ["patch", ...]; streaming_assets = obb | both | loose (code that\n'
+                    '# reads StreamingAssets as files: also/only beside the APK, docs/android-data.md); data_path =\n'
+                    '# true (files read or written at Application.dataPath); name = the APK\'s, package (keep it:\n'
+                    '# it names the PlayerPrefs file); args = more options',
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
@@ -1295,6 +1301,7 @@ def setup_env(cfg, extra=()):
              f'APK_NAME={q(ad["name"])}', f'PACKAGE={q(ad["package"])}',
              f'ASMPATCH={q(",".join(a) if isinstance(a, list) else a)}',
              f'VIDEO_SHADER={1 if ad.get("video_shader", True) else 0}', f'SWAPPY={q(ad.get("swappy") or "off")}',
+             f'STREAMING_ASSETS={q(ad.get("streaming_assets") or "obb")}', f'DATA_PATH={1 if ad.get("data_path") else 0}',
              'ANDROID_DATA_ARGS=(' + ' '.join(q(x) for x in ad.get('args', [])) + ')',
              'CONVERT_PLUGINS=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('plugins', [])) + ')',
              'MANAGED_FILES=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('managed', [])) + ')',
@@ -1571,7 +1578,8 @@ def pybundle_licenses(tar_path):
 
 
 def needs_asmpatch(cfg):
-    return cfg['android_data'].get('asmpatch', 'off') != 'off'
+    ad = cfg['android_data']
+    return ad.get('asmpatch', 'off') != 'off' or ad.get('streaming_assets', 'obb') != 'obb' or bool(ad.get('data_path'))
 
 
 def _component_ua_host(ctx, opts):
