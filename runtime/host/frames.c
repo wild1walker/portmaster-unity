@@ -106,9 +106,13 @@ static int cmp_float(const void *a, const void *b)
     return d < 0 ? -1 : d > 0;
 }
 
+static volatile unsigned long g_presented;
+unsigned long frames_presented(void) { return g_presented; }
+
 static void on_swap(void *ctx)
 {
     (void)ctx;
+    g_presented++;
     static double t0, last, worst, sum, checked;
     static int n, total, late, hitch, gc_prev = -1;
     double t = now();

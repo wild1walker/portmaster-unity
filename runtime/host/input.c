@@ -22,6 +22,7 @@
 // UA_KEYBOARD=1 its keys also reach the game as an Android keyboard (KeyEvents from a
 // "Hardware Keyboard" device) while none is open.
 #include "input.h"
+#include "frames.h"
 #include "osk.h"
 #include "pointer.h"
 #include "../jni/unityplayer.h"
@@ -31,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #define MAX_PADS 4
 static struct pad {
@@ -294,12 +296,28 @@ static struct pad *scripted_pad(void)
     fprintf(stderr, "[input] virtual pad \"%s\" as Android device %d\n", d.name, d.id);
     return vp;
 }
+// A game reads the pad once a frame, so a press released within one frame never reaches it: in the
+// emulated rig (about 1 fps) or during a long load. A scripted release therefore waits until
+// SCRIPT_HOLD_FRAMES frames were presented since the last press, and the first press waits
+// SCRIPT_PAD_FRAMES frames after the pad is taken (a virtual pad appears then, and games such as
+// Rewired's take a frame or two to list it). At 60 fps that is 33 ms; real pads are not affected.
+#define SCRIPT_HOLD_FRAMES 2
+#define SCRIPT_PAD_FRAMES 3
 static void script_run(void)
 {
     static struct pad *sp;
+    static unsigned long pad_frame, down_frame;
     double t = now_s() - t_start;
     while (next_press < nscript && script[next_press].at <= t)
     {
+        const struct press *q = &script[next_press];
+        if (q->key != KEY_PTR && q->key != KEY_TEXT)
+        {
+            if (!sp && (sp = scripted_pad())) pad_frame = frames_presented();
+            unsigned long f = frames_presented();
+            if (sp && (f < pad_frame + SCRIPT_PAD_FRAMES || (!q->down && f < down_frame + SCRIPT_HOLD_FRAMES)))
+                break;                                      // again at the next poll, order kept
+        }
         if (next_press >= MAX_PRESS / 2)                    // drop what was played
         {
             memmove(script, script + next_press, (nscript - next_press) * sizeof script[0]);
@@ -325,6 +343,7 @@ static void script_run(void)
         if (!sp) continue;
         if (p->period <= 0)
             fprintf(stderr, "[input] script %.2f s: %s %d/%d,%d\n", t, p->down ? "down" : "up", p->key, p->hat_x, p->hat_y);
+        if (p->down) down_frame = frames_presented();
         if (p->key)
         {
             if (!take_key(p->key, p->down))
