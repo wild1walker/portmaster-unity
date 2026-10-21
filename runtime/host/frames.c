@@ -149,7 +149,7 @@ static void on_swap(void *ctx)
         float p99 = g_win[(int)(m * 0.99) < m ? (int)(m * 0.99) : m - 1];
         if (!mono_gc_count)                   // once Unity has loaded Mono (never loads it here)
         {
-            void *h = so_dlopen("libmono.so", 4 /* RTLD_NOLOAD */);
+            void *h = mono_runtime_lib();
             if (h) { mono_gc_count = (int (*)(int))so_dlsym(h, "mono_gc_collection_count");
                      mono_heap = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_heap_size"); }
         }

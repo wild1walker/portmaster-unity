@@ -168,11 +168,17 @@ static char *(*mono_name)(void *, int);
 static void (*mono_free_)(void *);
 static void *g_domain;
 
+void *mono_runtime_lib(void)
+{
+    void *h = so_dlopen("libmono.so", 4 /* RTLD_NOLOAD */);
+    return h ? h : so_dlopen("libmonobdwgc-2.0.so", 4);
+}
+
 static void mono_setup(void)
 {
     if (g_domain) return;
     if (!mono_root) {
-        void *h = so_dlopen("libmono.so", 4 /* RTLD_NOLOAD */);
+        void *h = mono_runtime_lib();
         if (!h) return;
         mono_root = so_dlsym(h, "mono_get_root_domain"); mono_attach = so_dlsym(h, "mono_thread_attach");
         mono_detach = so_dlsym(h, "mono_thread_detach");
