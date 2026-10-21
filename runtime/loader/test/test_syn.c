@@ -158,6 +158,27 @@ static void test_newer(so_module *m)
                                          "mbstate" };
     for (int i = 0; i < 14; i++) CHECK(!(r & (1 << i)), "newer bionic symbols: %s", areas[i]);
 
+    /* old bionic's SHA-1 (libunity 5.6 - 2017.1): "abc" and a million 'a's (FIPS 180-1 vectors) */
+    void (*s_init)(void *) = (void (*)(void *))so_shim_lookup("SHA1Init");
+    void (*s_upd)(void *, const void *, unsigned) = (void (*)(void *, const void *, unsigned))so_shim_lookup("SHA1Update");
+    void (*s_fin)(unsigned char *, void *) = (void (*)(unsigned char *, void *))so_shim_lookup("SHA1Final");
+    CHECK(s_init && s_upd && s_fin, "SHA1* shims missing");
+    if (s_init && s_upd && s_fin) {
+        unsigned char ctx[92], dg[20], dg2[20];
+        s_init(ctx); s_upd(ctx, "abc", 3); s_fin(dg, ctx);
+        static const unsigned char want[20] = { 0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e,
+                                                0x25, 0x71, 0x78, 0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d };
+        CHECK(!memcmp(dg, want, 20), "SHA1(abc)");
+        static char ma[1000];
+        memset(ma, 'a', sizeof ma);
+        s_init(ctx);
+        for (int i = 0; i < 1000; i++) s_upd(ctx, ma, 1000);
+        s_fin(dg2, ctx);
+        static const unsigned char want2[20] = { 0x34, 0xaa, 0x97, 0x3c, 0xd4, 0xc4, 0xda, 0xa4, 0xf6, 0x1e,
+                                                 0xeb, 0x2b, 0xdb, 0xad, 0x27, 0x31, 0x65, 0x34, 0x01, 0x6f };
+        CHECK(!memcmp(dg2, want2, 20), "SHA1(a x 1000000)");
+    }
+
     /* fortify failures: bionic's message, then SIGABRT */
     static const char *const msgs[] = {
         "FORTIFY: strlen: detected read past end of buffer",
@@ -356,7 +377,7 @@ int main(int argc, char **argv)
 out:
     if (fails) printf("syn: %d FAILED\n", fails);
     else printf("syn: ok (%s: 5 relocation encodings alike, imports, init order, dl*, setjmp, signals, pthread, stat, "
-                "newer bionic symbols, libmediandk routing, stack guard, thread id slot%s)\n",
+                "newer bionic symbols, SHA1, libmediandk routing, stack guard, thread id slot%s)\n",
                 sizeof(void *) == 8 ? "arm64" : "arm32", sizeof(void *) == 8 ? ", unwinding" : "");
     return fails != 0;
 }

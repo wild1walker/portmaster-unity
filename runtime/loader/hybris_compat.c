@@ -22,7 +22,8 @@
  * __strlen_chk, ...), android_set_abort_message, __mmap2, sys_signame/sys_siglist, and calls whose
  * flag values or 32-bit structures differ from glibc's (nftw/ftw, fnmatch, pathconf, newlocale,
  * getpw*, statvfs, mknod, the mbstate_t string conversions, sem_open). See "newer players" below;
- * the float-returning ones (wcstod, strtold_l, ...) are softfp wrappers in softfp.c.
+ * the float-returning ones (wcstod, strtold_l, ...) are softfp wrappers in softfp.c. Older ones
+ * (5.6 - 2017.1) import the SHA1Init/SHA1Update/SHA1Final that bionic's libc exported then.
  */
 #include "../thirdparty/libhybris/hybris/common/hooks.c"
 #include "so_loader.h"
@@ -849,6 +850,62 @@ static void *bionic_mmap2(void *addr, size_t size, int prot, int flags, int fd, 
 }
 #endif
 
+/* ---- SHA1Init / SHA1Update / SHA1Final: the NetBSD-style SHA-1 old bionic libcs exported, which
+ * libunity 5.6 - 2017.1 imports. SHA1_CTX is bionic's: uint32_t state[5], count[2]; uint8_t
+ * buffer[64] (92 bytes, allocated by the caller); count is the message length in bits. */
+typedef struct { uint32_t state[5], count[2]; uint8_t buffer[64]; } bionic_sha1_ctx;
+
+#define ROL32(v, n) (((v) << (n)) | ((v) >> (32 - (n))))
+static void sha1_block(uint32_t st[5], const uint8_t *p)
+{
+    uint32_t w[80], a = st[0], b = st[1], c = st[2], d = st[3], e = st[4];
+    for (int i = 0; i < 16; i++) w[i] = (uint32_t)p[4 * i] << 24 | p[4 * i + 1] << 16 | p[4 * i + 2] << 8 | p[4 * i + 3];
+    for (int i = 16; i < 80; i++) w[i] = ROL32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if (i < 20) f = (b & c) | (~b & d), k = 0x5a827999;
+        else if (i < 40) f = b ^ c ^ d, k = 0x6ed9eba1;
+        else if (i < 60) f = (b & c) | (b & d) | (c & d), k = 0x8f1bbcdc;
+        else f = b ^ c ^ d, k = 0xca62c1d6;
+        uint32_t t = ROL32(a, 5) + f + e + k + w[i];
+        e = d; d = c; c = ROL32(b, 30); b = a; a = t;
+    }
+    st[0] += a; st[1] += b; st[2] += c; st[3] += d; st[4] += e;
+}
+
+static void bionic_SHA1Init(bionic_sha1_ctx *c)
+{
+    static const uint32_t iv[5] = { 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0 };
+    memcpy(c->state, iv, sizeof iv);
+    c->count[0] = c->count[1] = 0;
+}
+
+static void bionic_SHA1Update(bionic_sha1_ctx *c, const uint8_t *data, unsigned int len)
+{
+    unsigned int have = (c->count[0] >> 3) & 63;
+    uint32_t bits = (uint32_t)len << 3;
+    if ((c->count[0] += bits) < bits) c->count[1]++;
+    c->count[1] += len >> 29;
+    while (len) {
+        unsigned int n = 64 - have < len ? 64 - have : len;
+        memcpy(c->buffer + have, data, n);
+        have += n; data += n; len -= n;
+        if (have == 64) { sha1_block(c->state, c->buffer); have = 0; }
+    }
+}
+
+static void bionic_SHA1Final(uint8_t digest[20], bionic_sha1_ctx *c)
+{
+    uint8_t len[8];
+    for (int i = 0; i < 4; i++) len[i] = (uint8_t)(c->count[1] >> (24 - 8 * i)), len[4 + i] = (uint8_t)(c->count[0] >> (24 - 8 * i));
+    static const uint8_t pad[64] = { 0x80 };
+    unsigned int have = (c->count[0] >> 3) & 63;
+    bionic_SHA1Update(c, pad, have < 56 ? 56 - have : 120 - have);
+    bionic_SHA1Update(c, len, 8);
+    for (int i = 0; i < 20; i++) digest[i] = (uint8_t)(c->state[i >> 2] >> (24 - 8 * (i & 3)));
+    memset(c, 0, sizeof *c);
+}
+
 /* ---- sys_signame / sys_siglist: bionic's tables (NSIG = 65 entries; names without "SIG") ------- */
 #define B_NSIG 65
 #define SIGDEFS(X) \
@@ -1164,6 +1221,8 @@ static const so_shim ours[] = {
     { "__sendto_chk", (void *)bionic_sendto_chk }, { "__fgets_chk", (void *)bionic_fgets_chk },
     { "__fread_chk", (void *)bionic_fread_chk }, { "__fwrite_chk", (void *)bionic_fwrite_chk },
     { "sys_signame", (void *)bionic_sys_signame }, { "sys_siglist", (void *)bionic_sys_siglist },
+    { "SHA1Init", (void *)bionic_SHA1Init }, { "SHA1Update", (void *)bionic_SHA1Update },
+    { "SHA1Final", (void *)bionic_SHA1Final },                                  /* 5.6 - 2017.1 */
     { "nftw", (void *)bionic_nftw }, { "nftw64", (void *)bionic_nftw }, { "ftw", (void *)bionic_ftw },
     { "ftw64", (void *)bionic_ftw }, { "fnmatch", (void *)bionic_fnmatch },
     { "pathconf", (void *)bionic_pathconf }, { "fpathconf", (void *)bionic_fpathconf },
