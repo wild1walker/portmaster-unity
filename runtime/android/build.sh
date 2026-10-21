@@ -14,7 +14,7 @@ case "$ARCH" in
   armhf) IMG=ua-android-shims; PLAT=; O=out; CROSS=arm-linux-gnueabihf-
          docker image inspect $IMG >/dev/null 2>&1 || docker build -t $IMG docker ;;
   arm64) IMG=ua-build-arm64; PLAT="--platform linux/arm64"; O=out/arm64; CROSS=
-         docker image inspect $IMG >/dev/null 2>&1 || docker build -t $IMG ../docker/arm64 ;;
+         docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG ../docker/arm64 ;;
   *) echo "ARCH must be armhf or arm64"; exit 1 ;;
 esac
 mkdir -p $O/obj $O/test

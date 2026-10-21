@@ -15,6 +15,10 @@ int fake_unity_get(int i);
 void fake_unity_set_shape(int shape);
 jobject fake_unity_proxy(void);
 jint FJ_ABI fake_libmain_onload(JavaVM *vm, void *reserved);
+void fake_unity_soft_input(int op, int arg);
+const char *fake_unity_si_seq(void);
+const char *fake_unity_si_str(void);
+void fake_unity_si_reset(void);
 
 static const char *const shape_name[SHAPE_N] = { "2017.4.9", "2017.4.40", "2018.4", "2019.4", "2020.3", "2021.3", "2022.3" };
 
@@ -75,6 +79,147 @@ static int wait_for(int idx, int min, int ms)
         usleep(10000);
     }
     return 0;
+}
+
+/* the GL-thread soft input natives libunity got, in order (fake_unity.c's seq letters) */
+static int wait_seq(const char *want)
+{
+    for (int t = 0; t < 2000; t += 10) {
+        up_poll();
+        if (!strcmp(fake_unity_si_seq(), want)) return 1;
+        usleep(10000);
+    }
+    printf("  soft input natives \"%s\", want \"%s\"\n", fake_unity_si_seq(), want);
+    return 0;
+}
+static struct up_soft_input si;
+static int wait_active(int on)
+{
+    for (int t = 0; t < 2000; t += 10) {
+        up_poll();
+        up_soft_input_get(&si);
+        if (si.active == on) return 1;
+        usleep(10000);
+    }
+    return 0;
+}
+static int text_is(const char *want)            /* the field's text (ASCII want) */
+{
+    if (si.len != (int)strlen(want)) return 0;
+    for (int i = 0; i < si.len; i++) if (si.text[i] != (unsigned char)want[i]) return 0;
+    return 1;
+}
+
+/* the soft keyboard as each version's dialog reports it: S string, L selection, C closed,
+   X canceled, V visible, A area (GL thread, in order); config changed and lost focus counted */
+static int show_kb(int op, int type, int sel, int lay)     /* opens it and waits for its reports */
+{
+    fake_unity_si_reset();
+    fake_unity_soft_input(op, type);
+    int ok = wait_active(1) && wait_seq(sel ? (lay ? "LVA" : "L") : (lay ? "VA" : ""));
+    fake_unity_si_reset();
+    return ok;
+}
+static int hide_kb(int lay)                                /* the game closes it */
+{
+    fake_unity_si_reset();
+    fake_unity_soft_input(3, 0);
+    int ok = wait_active(0) && wait_seq(lay ? "AV" : "");
+    fake_unity_si_reset();
+    return ok;
+}
+static void soft_input(int shape)
+{
+    int sel = shape >= SHAPE_2018_4, lay = shape >= SHAPE_2019_4;
+    char want[32];
+#define SEQ(...) (snprintf(want, sizeof want, __VA_ARGS__), wait_seq(want))
+    up_soft_input_set_area(0, 300, 720, 180);
+    fake_unity_si_reset();
+    int conf = R(R_SI_CONFIG);
+    CHECK(up_soft_input_commit("x") == 0);                 /* nothing open: nothing typed */
+    fake_unity_soft_input(1, 0);                            /* "ab", default keyboard */
+    CHECK(wait_active(1));
+    CHECK(text_is("ab") && si.sel_start == 2 && si.sel_end == 2 && !strcmp(si.placeholder, "Name"));
+    CHECK(si.input_type == 0x8001 && !si.multiline && !si.secure && si.char_limit == (sel ? 6 : 0));
+    CHECK(SEQ("%s%s", sel ? "L" : "", lay ? "VA" : ""));
+    if (sel) CHECK(R(R_SI_SEL_START) == 2 && R(R_SI_SEL_LEN) == 0);
+    if (lay) CHECK(R(R_SI_VISIBLE) == 1 && R(R_SI_AREA_TOP) == 300 && R(R_SI_AREA_W) == 720);
+    CHECK(R(R_SI_CONFIG) == conf + lay);
+    fake_unity_soft_input(7, 0);
+    CHECK(R(R_SI_LAYOUT) == 1);
+    /* typing: a two-byte character, caret moves, backspace */
+    fake_unity_si_reset();
+    CHECK(up_soft_input_commit("c\xc3\xa9") == 2);
+    CHECK(SEQ("S%s", sel ? "L" : ""));
+    CHECK(!strcmp(fake_unity_si_str(), "abc\xc3\xa9"));
+    if (sel) CHECK(R(R_SI_SEL_START) == 4 && R(R_SI_SEL_LEN) == 0);
+    fake_unity_si_reset();
+    up_soft_input_select(1, 1);
+    up_soft_input_delete(1, 0);
+    CHECK(SEQ("%s", sel ? "LSL" : "S"));
+    CHECK(!strcmp(fake_unity_si_str(), "bc\xc3\xa9"));
+    if (sel) {                                              /* the LengthFilter: 6 UTF-16 units */
+        fake_unity_si_reset();
+        CHECK(up_soft_input_commit("12345") == 3);
+        CHECK(SEQ("SL") && !strcmp(fake_unity_si_str(), "123bc\xc3\xa9"));
+        CHECK(R(R_SI_SEL_START) == 3);
+    }
+    /* the game sets the text, then the selection */
+    fake_unity_si_reset();
+    fake_unity_soft_input(4, 0);
+    CHECK(SEQ("%s", sel ? "SLL" : "S"));
+    CHECK(!strcmp(fake_unity_si_str(), "xyz"));
+    up_soft_input_get(&si);
+    CHECK(text_is("xyz") && si.sel_start == 3);
+    if (sel) {
+        CHECK(R(R_SI_SEL_START) == 3 && R(R_SI_SEL_LEN) == 0);
+        fake_unity_si_reset();
+        fake_unity_soft_input(5, 1);
+        CHECK(SEQ("L") && R(R_SI_SEL_START) == 1 && R(R_SI_SEL_LEN) == 1);
+        up_soft_input_get(&si);
+        CHECK(si.sel_start == 1 && si.sel_end == 2);
+    }
+    /* Done: the caret to 0, the text, closed, then the area and visibility */
+    fake_unity_si_reset();
+    conf = R(R_SI_CONFIG);
+    int closed = R(R_SI_CLOSED);
+    up_soft_input_finish(UP_SOFT_INPUT_DONE);
+    CHECK(SEQ("%sSC%s", sel ? "L" : "", lay ? "AV" : ""));
+    CHECK(!strcmp(fake_unity_si_str(), "xyz") && R(R_SI_CLOSED) == closed + 1);
+    if (sel) CHECK(R(R_SI_SEL_START) == 0 && R(R_SI_SEL_LEN) == 0);
+    if (lay) CHECK(R(R_SI_VISIBLE) == 0);
+    CHECK(R(R_SI_CONFIG) == conf + lay);
+    up_soft_input_get(&si);
+    CHECK(!si.active && up_soft_input_commit("q") == 0);
+    /* number pad (type 4): digits only; Back cancels */
+    CHECK(show_kb(1, 4, sel, lay) && si.input_type == 2);
+    CHECK(up_soft_input_commit("1a2-.") == 2);
+    int canceled = R(R_SI_CANCELED);
+    up_soft_input_finish(UP_SOFT_INPUT_CANCEL);
+    CHECK(SEQ("S%s%sXC%s", sel ? "L" : "", sel ? "L" : "", lay ? "AV" : ""));
+    CHECK(R(R_SI_CANCELED) == canceled + 1 && !strcmp(fake_unity_si_str(), "ab12"));
+    /* decimal pad (11): one decimal point; secure numbers (8 + 4) */
+    CHECK(show_kb(1, 11, sel, lay) && si.input_type == 0x2002);
+    CHECK(up_soft_input_commit("1.2.3") == 4);
+    CHECK(SEQ("S%s", sel ? "L" : ""));
+    CHECK(hide_kb(lay));
+    CHECK(show_kb(8, 4, sel, lay) && si.secure && si.input_type == 0x12);
+    CHECK(hide_kb(lay));
+    /* multiline: newlines go in; the game hides the keyboard: no close report */
+    CHECK(show_kb(2, 0, sel, lay) && si.multiline && si.input_type == 0x28001);
+    CHECK(up_soft_input_commit("x\ny") == 3);
+    CHECK(SEQ("S%s", sel ? "L" : "") && !strcmp(fake_unity_si_str(), "abx\ny"));
+    closed = R(R_SI_CLOSED);
+    CHECK(hide_kb(lay) && R(R_SI_CLOSED) == closed);
+    /* dismissed (lost focus): closed without the text */
+    CHECK(show_kb(1, 0, sel, lay));
+    int lost = R(R_SI_LOST);
+    up_soft_input_finish(UP_SOFT_INPUT_LOST_FOCUS);
+    CHECK(SEQ("C%s", lay ? "AV" : "") && R(R_SI_LOST) == lost + 1);
+    up_soft_input_get(&si);
+    CHECK(!si.active);
+    fake_unity_si_reset();
+#undef SEQ
 }
 
 /* Java methods the libunity of 2017.4-2022.3 call on UnityPlayer / ReflectionHelper by name */
@@ -245,6 +390,7 @@ static int run_shape(int shape)
     CHECK(R(R_MOTION_ACTION) == UP_ACTION_SCROLL && R(R_VSCROLL_X1000) == 1000);
     up_send_message("GameManager", "OnHello", "w\xc3\xb6rld \xe2\x9c\x93");
     CHECK(R(R_SENDMSG) == 1);
+    soft_input(shape);
 
     /* resize: surfaceChanged */
     up_resize(800, 600);
@@ -255,8 +401,11 @@ static int run_shape(int shape)
     }
 
     /* lifecycle: pause / resume / surface loss */
+    int canceled = R(R_SI_CANCELED), closed = R(R_SI_CLOSED);
     up_pause();
     CHECK(R(R_PAUSE) == 1);
+    CHECK(wait_seq(shape >= SHAPE_2019_4 ? "XCAV" : "XC"));        /* reportSoftInputStr(null, 1, true) */
+    CHECK(R(R_SI_CANCELED) == canceled + 1 && R(R_SI_CLOSED) == closed + 1);
     int r0 = R(R_RENDER);
     usleep(200000);
     CHECK(R(R_RENDER) - r0 <= 1);

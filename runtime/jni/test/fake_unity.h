@@ -41,6 +41,9 @@ enum { R_ONLOAD, R_INITJNI, R_RESUME, R_PAUSE, R_DONE, R_FOCUS_TRUE, R_FOCUS_FAL
        /* mouse MotionEvents (pointer mode) */
        R_MOTION_ACTION, R_MOTION_TOOL, R_MOTION_BUTTONS, R_MOTION_PRESSED, R_VSCROLL_X1000,
        R_MOUSE_DEV_OK,      /* getDevice() of a SOURCE_MOUSE event is the registered mouse        */
+       /* soft keyboard natives */
+       R_SI_STR, R_SI_SEL_START, R_SI_SEL_LEN, R_SI_CLOSED, R_SI_CANCELED, R_SI_LOST, R_SI_CONFIG,
+       R_SI_VISIBLE, R_SI_AREA_TOP, R_SI_AREA_W, R_SI_LAYOUT,
        R_N };
 
 #endif

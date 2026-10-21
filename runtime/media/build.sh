@@ -21,7 +21,7 @@ case "$ARCH" in
          LIBDIR=/usr/lib/arm-linux-gnueabihf; ARCHF="-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard" ;;
   arm64) IMG=ua-media-arm64; DF=docker/Dockerfile.arm64; PLAT="--platform linux/arm64"; O=out/arm64; CROSS=
          LIBDIR=/usr/lib/aarch64-linux-gnu; ARCHF=
-         docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build -t ua-build-arm64 ../docker/arm64 ;;
+         docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 ../docker/arm64 ;;
   *) echo "ARCH must be armhf or arm64"; exit 1 ;;
 esac
 docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG -f $DF docker

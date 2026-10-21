@@ -9,6 +9,7 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. One build serves the players of Unity 2017.4 to 2022.3 (see Unity versions). |
 | `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ZipFile/ZipEntry, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback; one per looper thread), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
+| `up_softinput.c` | The soft keyboard: `UnityPlayer.showSoftInput` (7, 9 and 10 arguments) and its siblings, and the text field of Unity's input dialog (text, selection, character limit, the input type's filter) with every change reported to libunity as each version's dialog does; the host types into it (`up_soft_input_*` in unityplayer.h; ua_host's on-screen keyboard, docs/input.md). |
 | `up_media.c` | The video classes (VideoPlayer, see Video below): MediaExtractor, MediaFormat, MediaCodec (+BufferInfo), SurfaceTexture (+OnFrameAvailableListener), Surface(SurfaceTexture), ParcelFileDescriptor, FileDescriptor, java.nio Buffer/IntBuffer members. The work is `../media`'s (libuamedia.a); registered only in a program that links it (`up_media_init()` pulls it in; this folder's tests do not). |
 | `up_tls.c` | The system trust store as Android's Java side gives it to libunity's unitytls (2018.4+): TrustManagerFactory, X509TrustManager, Certificate/X509Certificate, KeyStore("AndroidCAStore"), over the handheld's CA bundle ([docs/plugins.md](../../docs/plugins.md#https)). |
 | `up_http.c` | `com.unity3d.player.UnityWebRequest` (2017.4 - 2018.4) and the header map libunity gives it: no network by default, real requests through the system's libcurl with `UA_HTTP=1`. |
@@ -139,7 +140,8 @@ when their natives are registered: `nativeSendSurfaceChangedEvent` after every s
 (re)attach (2018.4+), `OrientationLockListener.nativeUpdateOrientationLockState(0)` (2020.3+) and
 `nativeGetNoWindowMode()` (2022.3) right after initJni; `nativeInitWebRequest` (gone in 2019.4) and
 `nativeRestartActivityIndicator` (gone in 2022.3) only where registered.
-- `up_pause()`: soft-input cancel/close jobs, PAUSE, then **`nativePause()`** on UnityMain (true
+- `up_pause()`: the input dialog is cancelled (`reportSoftInputStr(null, 1, true)`: canceled and
+  closed, 2019.4+ also area and visibility), PAUSE, then **`nativePause()`** on UnityMain (true
   means quit: `nativeDone()`). Waits up to 4 s, like Java.
 - `up_resume()`, `up_focus(0/1)` (`nativeFocusChanged(false)` only after a gained focus),
   `up_set_surface(win)`. NULL means SURFACE_LOST, then `nativeRecreateGfxState(0, null)`, with a 4 s wait.
@@ -228,7 +230,10 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   an argument and a boxed result, managed exceptions of the 2019.4 and 2021.3 kinds, calls refused
   after quit), the new UnityPlayer callbacks, Swappy's Java classes (and the display modes its `SwappyDisplayManager` reports, under each version's native name) and its display query through
   `NativeActivity`, a 2021.3+ vsync HandlerThread whose frames `nativeRender` waits for, an OBB's
-  `unity_obb_guid` read through `ZipFile` (2021.3+), Android's `loadLibrary`/`load` name rules, IL2CPP's library path
+  `unity_obb_guid` read through `ZipFile` (2021.3+), the soft keyboard (each version's input-dialog
+  natives in order for showing, typing, the caret, the character limit, the game's text and
+  selection, done, cancel, lost focus, hiding, the number pads' filters, password and multi-line
+  fields, a pause), Android's `loadLibrary`/`load` name rules, IL2CPP's library path
   and `<files>/il2cpp`, `up_resize`, the 2020.3/2022.3 startup natives, pause/resume/surface
   loss/focus, and quit with `nativeDone` of either signature. It also checks that every Java
   method the 2017.4-2022.3 libunity call on UnityPlayer/ReflectionHelper by name is implemented.
@@ -284,10 +289,10 @@ as for a handheld:
 
 | method | answer |
 |---|---|
-| `showSoftInput` (9 and 10 arguments), `setCharacterLimit`, `setHideInputField`, `setSelection` | logged/ignored: no on-screen keyboard (as the 7-argument one) |
+| `showSoftInput` (9 and 10 arguments), `setCharacterLimit`, `setHideInputField`, `setSelection`, `getKeyboardLayout` | the input dialog's field (up_softinput.c; also the 7-argument `showSoftInput`, `hideSoftInput`, `setSoftInputStr` of 2017.4); `getKeyboardLayout` is `en_US` while it is open, else null |
 | `getClipboardText`/`setClipboardText` | a process-local clipboard |
 | `requestUserAuthorization`, `skipPermissionsDialog` | nothing to ask (every permission is granted), false |
-| `getLaunchURL`, `getNetworkConnectivity`, `getNetworkProxySettings`, `getKeyboardLayout` | null (no deep link), 0 (not reachable), null, null |
+| `getLaunchURL`, `getNetworkConnectivity`, `getNetworkProxySettings` | null (no deep link), 0 (not reachable), null |
 | `isUaaLUseCase`, `getUaaLLaunchProcessType` | false, 0: a game, not Unity as a Library |
 | `notifyOnUnityPlayerUnloaded` (2019.4), `pauseJavaAndCallUnloadCallback` (2020.3+) | `Application.Unload`: the activity would go to the back; here the game quits |
 | `startOrientationListener`, `stopOrientationListener` | false: no orientation sensor |
@@ -424,7 +429,7 @@ thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`.
   with `UA_HTTP=1` it makes them through the system's libcurl (docs/plugins.md, "HTTPS");
   2019.4+ use libunity's own transport, whose TLS checks take their anchors from `up_tls.c` (the
   handheld's CA bundle; docs/plugins.md, "HTTPS"). The
-  soft keyboard (`showSoftInput` is logged only), AlertDialog/Dialog/ProgressBar (activity indicator)
+  AlertDialog/Dialog/ProgressBar (activity indicator)
   and Presentation/MediaRouter (second display): placeholders.
 - 2019.4+: Play Asset Delivery (asset packs: none), `Camera2Wrapper`, `HFPStatus` (Bluetooth headset
   microphone), Google VR/ARCore, `PointerIcon`/`Bitmap` (cursor
