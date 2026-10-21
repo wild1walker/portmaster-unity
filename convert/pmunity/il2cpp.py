@@ -872,6 +872,11 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     log('il2cpp: ' + ' '.join(icmd))
     if dry:
         return None
+    for where, need in ((out, 2 << 30), (home, 1 << 30)):
+        st = os.statvfs(where)
+        if st.f_bavail * st.f_frsize < need:
+            raise SystemExit(f'{where}: {st.f_bavail * st.f_frsize / 2**30:.1f} GiB free; the build needs about '
+                             f'{need >> 30} GiB there (generated C++, objects; the tool folders)')
     ensure_root(root, image)
     secs = 0
     if strip != 'none':

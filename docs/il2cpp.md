@@ -93,8 +93,17 @@ object cache; logs: `unitylinker.log`, `il2cpp.log`, `cc.log` with every compile
 (Metadata, Resources, etc) instead of the assemblies and Mono's dllmap config, and checks the
 assembly list against what IL2CPP compiled. The player package (`--pkg`) is the IL2CPP one
 (`<home>/<ver>/player-<abi>`). `libil2cpp.so` goes into the runtime's `lib/` next to
-`libmain.so` and `libunity.so` of the IL2CPP player; libunity loads it with `System.load`, then
-copies `assets/bin/Data/Managed` out of the APK into `<files dir>/il2cpp` and runs from there.
+`libmain.so` and `libunity.so` of the IL2CPP player; libunity loads it, copies
+`assets/bin/Data/Managed` out of the APK into `<external files>/il2cpp` (`data/external/il2cpp`
+under the runtime's root) and runs IL2CPP from there. Two packing rules follow from that copy:
+- **one APK, no OBB** (`--pack all` with `--il2cpp`, when the data stays under 2 GiB, as Unity's
+  builds without "split application binary"): libunity 2020.3 lists the APK's
+  `assets/bin/Data/Managed` to copy it, and with an OBB mounted that listing came back empty
+  (nothing copied, then "Could not open .../global-metadata.dat"). Data over 2 GiB still gets an
+  OBB, with that problem (untested);
+- **`buildDate` in boot.config** (Unity 2020.x; a value from the metadata's hash): libunity keeps
+  it in `il2cpp/unity.ver` and copies the data again only when it changes; without it the copy is
+  redone at every start.
 
 ## AOT limits
 
@@ -122,14 +131,69 @@ IL2CPP compiles everything ahead of time; what Mono does at run time instead fai
 
 ## Tested
 
-| game (Unity) | backend | libil2cpp.so | metadata | result |
-|---|---|---|---|---|
+Free Linux (Mono, .NET 4.x) builds of the test corpus, one per line; `pmunity convert` (shaders,
+settings) and `android-data --il2cpp --pack all`, then the emulated rigs (`tools/emu`:
+`EMU_ARCH=arm64` runs the aarch64 `ua_host` natively on an Apple-silicon Mac, armhf is QEMU
+armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
+
+| game | Unity | ABI | libil2cpp.so | metadata | build | result |
+|---|---|---|---|---|---|---|
+| 2D, TextMeshPro, 2D Animation | 2019.4.8f1 | arm64-v8a | 31.9 MiB | 24 | 10 min | Unity splash, title screen, animated (1125 frames in 140 s) |
+| same | 2019.4.8f1 | armeabi-v7a | 25.6 MiB | 24 | 8 min (cached) | splash, title screen (QEMU: ~1 fps) once the loader routes `__gnu_Unwind_Find_exidx` (below) |
+| 2D city builder, incremental GC | 2020.3.49f1 | arm64-v8a | 33.6 MiB | 27 | 8 min | title menu (40-50 fps in the rig) once packed as one APK with `buildDate` (above) |
+| 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
+
+Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (194 for
+2018.4, 222 for 2019.4, 225 for 2020.3); the metadata versions match those of real IL2CPP builds
+of these lines (a 2020.3 Android build's is 27). The layout of the APK matches Unity's IL2CPP
+builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
+`Managed/Resources/mscorlib.dll-resources.dat`, the 18 `Managed/etc/mono` files (2020.3), no
+assemblies; `libil2cpp.so` needs the same four libraries (`liblog`, `libm`, `libdl`, `libc`).
+The two linkers differ: lld writes four PT_LOAD segments with 4 KiB alignment, Unity's
+bfd-linked libraries two with 64 KiB.
+
+What the runs showed:
+- **C++ exceptions on armv7**: IL2CPP throws managed exceptions as C++ exceptions. The EHABI
+  unwinder linked into `libil2cpp.so` finds a frame's unwind table through
+  `__gnu_Unwind_Find_exidx`, which the loader resolved to glibc's own (it only knows glibc's
+  modules), so the first exception a game's startup catches (above: a `CultureNotFoundException`)
+  terminated the player. runtime/loader now gives Android code its own lookup, as it did for
+  `dl_unwind_find_exidx`. arm64 unwinds with `.eh_frame` through the loader's `dl_iterate_phdr`
+  and was not affected.
+- **Locale**: IL2CPP reads the process locale; with `LANG` unset it is `C`, and its startup
+  throws (and catches) `CultureNotFoundException: Culture name c is not supported` before falling
+  back to the invariant culture. Harmless; a runtime that sets `LANG` would avoid it.
+- **Pointer-driven menus**: clicking a menu entry with the pointer mode did not start the
+  2018.4 game in one scripted try (its Mono build does); not looked into.
+
+## Not tested yet
+
+- Unity 2021.x / 2022.x (NDK r21d / r23b: the NDK selection and `ndk_wanted` know them, r23b's
+  compiler-rt builtins and libunwind in `lib64/clang/<ver>/lib/linux` are fetched but the link
+  flags for them are not), 2017.4 (r16b, as 2018.4); .NET 3.5 games of 2017.4 / 2018.4 (their
+  class libraries are not the unityaot profile).
+- Games with native plugins, Burst (`lib_burst_generated` is not rebuilt: Burst jobs run as their
+  managed code), the Input System package, link.xml-dependent reflection.
+- IL2CPP data over 2 GiB (APK + OBB, see above); 16 KiB-page kernels; a real handheld.
+- `--strip none` end to end (it built 1 GB of C++ for the 2019.4 game; stopped there).
+- armv7 for 2018.4 and 2020.3.
 
 ## Notes per version
 
-- 2018.4: `il2cpp/build/il2cpp.exe` (no `deploy/`), NDK r16b (GNU binutils layout: il2cpp passes
-  `--sysroot` and `-gcc-toolchain` itself; ndk-clang.sh maps them).
-- 2019.4: `il2cpp/build/deploy/net471/` (il2cpp.exe, UnityLinker.exe), NDK r19.
+- 2018.4: `il2cpp/build/il2cpp.exe` (no `deploy/`), NDK r16b (GNU binutils layout and GNU
+  libstdc++ (`gnustl_static`): il2cpp passes `--sysroot`, `-gcc-toolchain` and a target without
+  the API level, which ndk-clang.sh adds from `-D__ANDROID_API__`); armv7 there is API 16.
+- 2019.4: `il2cpp/build/deploy/net471/` (il2cpp.exe, UnityLinker.exe), NDK r19; armv7 at API 19
+  needs the NDK's `sysroot/usr/local/include` (libandroid_support's headers).
 - 2020.3: `il2cpp/build/deploy/netcoreapp3.1/` (self-contained Windows .NET Core builds: only the
   application files are fetched, the .NET runtime it carries is left out by its `deps.json`),
-  `baselib.a` from the player's `StaticLibs/<abi>`.
+  `baselib.a` from the player's `StaticLibs/<abi>`; il2cpp takes `--jobs`.
+
+## Debugging a build
+
+`<out>/.work` keeps `unitylinker.log`, `il2cpp.log` and `cc.log` (every compiler and linker
+command as ndk-clang.sh ran it); `--keep-cpp` keeps the generated C++ and the object cache, so
+a rebuild only compiles what changed. `PMUNITY_IL2CPP_EXTRA_ARGS` appends il2cpp options, e.g.
+`--additional-cpp=<file> --linker-flags=-Wl,--wrap=__cxa_throw` to log every throw (the file must
+be under `<out>` or `--home`, which the container mounts). `libil2cpp.sym.so` (symbols only) is
+in `.work`.
