@@ -72,6 +72,27 @@ class Job:
                 os.fsync(f.fileno())
         os.replace(tmp, dst)
 
+    def write_file(self, rel, path):
+        """Put a converted file written to <path> (on the same file system as <out>) in place, as
+        write() does, without reading it into memory."""
+        if self.state_path is None:
+            raise RuntimeError('read-only job')
+        dst = os.path.join(self.out, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if self.inplace:
+            with open(path, 'rb+') as f:
+                os.fsync(f.fileno())
+        os.replace(path, dst)
+
+    def work_dir(self, name):
+        """An empty scratch folder for a step (<out>/.pmunity-work/<name>: a dot folder, which
+        packing leaves out)."""
+        import shutil
+        d = os.path.join(self.out, '.pmunity-work', name)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        return d
+
     # ---- journal
     def is_done(self, step, rel):
         return rel in self.state['done'].get(step, ())

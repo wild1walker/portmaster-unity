@@ -21,7 +21,9 @@ Settings (cfg['textures'], defaults in DEFAULTS): scale, block, quality, per-nam
 """
 import os
 import re
+import shutil
 
+from . import bigbundle
 from .unity_io import Loaded
 
 DEFAULTS = {
@@ -38,6 +40,12 @@ DEFAULTS = {
     'inline': True,              # also textures whose pixels are inside the serialized file
     'files': r'.',               # regex on the relative path: which files to look at
     'threads': 0,                # encoder threads, 0 = all cores
+    'pipeline': 'auto',          # decode the next texture while one is encoded: true | false | auto
+                                 # (on, but on a system with under 2 GB of RAM a texture of more than
+                                 # 16 MB decoded is decoded and encoded alone)
+    'spill_mb': 64,              # bundles with more than this (uncompressed) are unpacked to files
+                                 # and rewritten from them (bigbundle.py): little memory, whatever
+                                 # their size; 0 = always in memory
 }
 
 # Unity texture formats this step converts: name -> has alpha. Windows builds also use BC7 (RGBA),
@@ -240,6 +248,18 @@ def texture_image(img, fmt_name):
     return img.convert('RGBA')
 
 
+def mem_total_mb():
+    """The system's RAM in MB (Linux; elsewhere: plenty)."""
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    return int(line.split()[1]) >> 10
+    except OSError:
+        pass
+    return 1 << 20
+
+
 def _prepare(o, ch, fmt_name=None):
     """Decoded and scaled mip levels of one texture (runs on the worker thread)."""
     img = texture_image(o.read().image, fmt_name)
@@ -261,6 +281,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
     sizes, save, converted = {}, [], 0
     items = [(pid, o, o.read_typetree()) for pid, o in lf.objects('Texture2D')]   # (no reads later)
     pool = ThreadPoolExecutor(max_workers=1) if c.get('pipeline', True) else None
+    solo_px = (16 << 20) // 4 if c.get('pipeline', True) == 'auto' and mem_total_mb() < 2048 else None
     pending = []
 
     def finish():
@@ -306,9 +327,14 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
                     t['m_StreamData'] = dict(sd, offset=stream.add(blob))
                     save.append((o, t))
                 continue
+            solo = pool and solo_px and t['m_Width'] * t['m_Height'] > solo_px
+            if solo:                                       # a big one on a small system: alone
+                finish()
             fut = pool.submit(_prepare, o, ch, _format_name(t)) if pool else None
             finish()                                       # the previous one, while this one is prepared
             pending.append((pid, o, t, sd, streamed, ch, fut))
+            if solo:
+                finish()
         finish()
     finally:
         if pool:
@@ -365,20 +391,39 @@ def run(job, only=None):
         if job.is_done('textures', rel):
             continue
         src = job.path_in(rel)
-        job.need_space(os.path.getsize(src) // 2 + (64 << 20), f'convert {rel}')
+        spilled = c['spill_mb'] and bigbundle.size(src) > c['spill_mb'] << 20
+        job.need_space(os.path.getsize(src) // 2 + (64 << 20) + (bigbundle.size(src) * 2 if spilled else 0),
+                       f'convert {rel}')
         before = (stats['in'], stats['out'])
         res_dir = os.path.dirname(os.path.join(job.src, rel))
-        lf = Loaded(src, res_dir)
         handles = {}
+        b = sf_node = None
+        if spilled:
+            work = job.work_dir('textures')
+            b = bigbundle.unpack(src, work)
+            sfs = [n for n in b.nodes if not n.name.endswith(('.resS', '.resource'))] if b else []
+            if len(sfs) == 1:
+                sf_node = sfs[0]
+            else:
+                b = None
+                job.log(f'textures: {rel}: a bundle layout left to UnityPy (read in memory)')
+        if b:
+            node_files = {n.name: n.path for n in b.nodes}
+            lf = Loaded(sf_node.path, streams={n.name: n.path for n in b.nodes if n is not sf_node})
+        else:
+            lf = Loaded(src, res_dir)
 
         def read_stream(path, off, size):
             name = os.path.basename(path)
-            if lf.is_bundle:
+            if b:
+                p = node_files[name]
+            elif lf.is_bundle:
                 node = lf.bundle_res(name)
                 return bytes(node[off:off + size])
-            p = job.path_in(os.path.join(os.path.dirname(rel), name))
-            if not os.path.exists(p):
-                p = os.path.join(res_dir, name)
+            else:
+                p = job.path_in(os.path.join(os.path.dirname(rel), name))
+                if not os.path.exists(p):
+                    p = os.path.join(res_dir, name)
             if p not in handles:
                 handles[p] = open(p, 'rb')
             handles[p].seek(off)
@@ -389,7 +434,29 @@ def run(job, only=None):
         finally:
             for h in handles.values():
                 h.close()
-        if r is not None:
+        if r is not None and b:
+            # the bundle again from its node files: the serialized file and the stream rewritten
+            stream_name, stream_bytes, sizes = r
+            new = {sf_node.name: lf.save()}
+            if stream_bytes is not None:
+                new[os.path.basename(stream_name)] = stream_bytes
+            nodes = []
+            for n in b.nodes:
+                if n.name in new:
+                    p = n.path + '.new'
+                    with open(p, 'wb') as f:
+                        f.write(new.pop(n.name))
+                    n = n._replace(path=p)
+                nodes.append(n)
+            lf.close()
+            del new, stream_bytes
+            r = True                                       # (its bytes freed: only "changed" is left)
+            out = os.path.join(work, 'bundle.new')
+            bigbundle.pack(b, nodes, out)
+            job.write_file(rel, out)
+            if sizes:
+                job.state['scaled'][rel] = {str(k): list(v) for k, v in sizes.items()}
+        elif r is not None:
             stream_name, stream_bytes, sizes = r
             if lf.is_bundle:
                 if stream_bytes is not None:
@@ -402,6 +469,12 @@ def run(job, only=None):
             if sizes:
                 job.state['scaled'][rel] = {str(k): list(v) for k, v in sizes.items()}
         lf.close()
+        if spilled:
+            shutil.rmtree(work, ignore_errors=True)
+            try:
+                os.rmdir(os.path.dirname(work))
+            except OSError:
+                pass
         job.mark_done('textures', rel)
         if r is not None:
             job.log(f'textures: {rel}: {(stats["in"] - before[0]) >> 20} -> {(stats["out"] - before[1]) >> 20} MB ({i}/{len(files)})')

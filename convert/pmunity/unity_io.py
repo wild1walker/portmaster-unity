@@ -64,18 +64,35 @@ def _patch_unitypy():
     _recompile(FM, FM.File, 'read_files', 'reader.read(node.size)', '_node_view(reader, node.size)', {'_node_view': _node_view})
 
 
+def _trim():
+    """Hands freed heap memory back to the system (glibc keeps it otherwise, and a setup that
+    converts hundreds of files one after the other grows until a 1 GB handheld runs out)."""
+    import ctypes, sys
+    if sys.platform.startswith('linux'):
+        try:
+            ctypes.CDLL(None).malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+
+
 class Loaded:
     """One data file opened with UnityPy: a plain serialized file (.assets, level, globalgamemanagers)
     or a UnityFS bundle holding one serialized file (CAB-...) and optionally its .resS."""
 
-    def __init__(self, path, resource_dir=None):
+    def __init__(self, path, resource_dir=None, streams=None):
         """resource_dir: where the file's .resS / .resource streams are when they are not beside it
-        (a conversion writing to an overlay folder rewrites the file, not its streams)."""
+        (a conversion writing to an overlay folder rewrites the file, not its streams).
+        streams: {name: file} for streams elsewhere under their own names (a big bundle's nodes
+        unpacked by bigbundle.py); each is read from its file where needed, never loaded whole."""
         import os
         import UnityPy
         _patch_unitypy()
         self.path = path
         self.env = UnityPy.load(path)
+        if streams:
+            from UnityPy.streams import EndianBinaryReader
+            for n, p in streams.items():
+                self.env.register_cab(n, EndianBinaryReader(p))
         if resource_dir and os.path.realpath(resource_dir) != os.path.realpath(os.path.dirname(path)) \
                 and os.path.isdir(resource_dir):
             from UnityPy.streams import EndianBinaryReader
@@ -125,5 +142,10 @@ class Loaded:
         return self.sf.save()
 
     def close(self):
+        for r in list(getattr(self.env, 'cabs', {}).values()) if self.env else ():
+            f = getattr(r, 'stream', None)          # streams registered from files
+            if f is not None and hasattr(f, 'close'):
+                f.close()
         self.env = self.sf = self.bundle = None
         gc.collect()
+        _trim()
