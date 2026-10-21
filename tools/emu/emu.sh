@@ -1,8 +1,8 @@
 #!/bin/bash
-# PC side: runs a game on the runtime emulated (QEMU armv7, Mesa llvmpipe, pbuffer). Frame times
-# are meaningless; frame contents, GL work counts and game logic match the device.
+# PC side: runs a game on the runtime emulated (QEMU armv7 or AArch64, Mesa llvmpipe, pbuffer).
+# Frame times are meaningless; frame contents, GL work counts and game logic match the device.
 #   emu.sh <log name> <seconds> [release|dev]
-# EMU_ARCH=armhf (default): the 32-bit route (armeabi-v7a players), QEMU armv7 in ua-emu-armhf.
+# EMU_ARCH=armhf (default; ARCH works too): the 32-bit route (armeabi-v7a players), QEMU armv7 in ua-emu-armhf.
 # EMU_ARCH=arm64: the 64-bit route (arm64-v8a players): an aarch64 container, native on an
 #                  Apple-silicon Mac or an arm64 Linux PC (QEMU elsewhere), with the ua-build-arm64
 #                  image's Mesa (llvmpipe) and SDL2, and runtime/host/out/arm64/ua_host.
@@ -21,11 +21,11 @@ pre="UA_ GC_ ANDROID_ GALLIUM_ LP_ $EMU_ENV"
 envs=()
 for p in $pre; do for v in $(env | grep -oE "^${p}[A-Za-z0-9_]*="); do envs+=(-e "${v%=}"); done; done
 zip2=(); [ -n "$ZIP2" ] && zip2=(-v "$ZIP2":/zip2:ro)
-case "${EMU_ARCH:-armhf}" in
+case "${EMU_ARCH:-${ARCH:-armhf}}" in
   armhf) plat=linux/arm/v7; img=ua-emu-armhf; hostbin=$here/runtime/host/out
-         docker image inspect $img >/dev/null 2>&1 || docker build -q -t $img "$here/tools/emu" >/dev/null ;;
+         docker image inspect $img >/dev/null 2>&1 || docker build -q --platform $plat --build-arg BASE=arm32v7/debian:bookworm-slim -t $img "$here/tools/emu" >/dev/null ;;
   arm64) plat=linux/arm64; img=ua-build-arm64; hostbin=$here/runtime/host/out/arm64
-         docker image inspect $img >/dev/null 2>&1 || docker build -q -t $img "$here/runtime/docker/arm64" >/dev/null ;;
+         docker image inspect $img >/dev/null 2>&1 || docker build -q --platform $plat -t $img "$here/runtime/docker/arm64" >/dev/null ;;
   *) echo "EMU_ARCH must be armhf or arm64"; exit 1 ;;
 esac
 net=(--network none); [ "${EMU_NET:-0}" = 1 ] && net=()
