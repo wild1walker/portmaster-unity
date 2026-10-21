@@ -10,6 +10,7 @@ line has since run a free Linux game in the emulated rig ("Players run" below). 
 [2021.3.45f2](unity-2021.3.45f2.md) · [2022.3.62f3](unity-2022.3.62f3.md). The lines around them
 (Mono builds of 5.6 - 2017.2 and 2023.1 - 6000.6, "Older and newer lines" below):
 [5.6 - 2017.2](unity-5.6-2017.2.md) · [2023.1 - 2023.2](unity-2023.md) · [6000.0 - 6000.6](unity-6000.md).
+Every game tested, by name, and how far each got: [games.md](games.md).
 
 ## Matrix
 
@@ -107,8 +108,8 @@ Notes on the rows:
 
 ## On a handheld (RG34XX-SP: Allwinner H700, Mali-G31, 1 GB, Knulli; 2026-10-20)
 
-The first runs outside the emulated rig, with free games of each line (their names stay out of the
-repository) and Cuphead. Every game reached its title or first screen and drew it correctly.
+The first runs outside the emulated rig, with free games of each line and Cuphead (the games, by
+name: [games.md](games.md)). Every game reached its title or first screen and drew it correctly.
 
 | route | Unity, build | result |
 |---|---|---|

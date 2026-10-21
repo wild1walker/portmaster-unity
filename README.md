@@ -79,7 +79,8 @@ Saves and settings are in `ports/mygame/data/`. The log of the last run is `port
 - **The first launch is long**: the game is converted on the handheld. Ports that convert textures
   take the longest.
 - **Only Cuphead has been played level by level on a handheld.** The other games tried so far
-  were tested up to their title or first screen ([what has been tested](#what-it-can-port-today)).
+  were tested up to their title or first screen ([what has been tested](#what-it-can-port-today);
+  every game by name: [docs/compat/games.md](docs/compat/games.md)).
 - **1 GB of RAM is tight** for games with many large textures; ports of such games convert their
   textures (`pmunity port check` tells the porter when).
 - **Online services** (Steam, Discord, Epic) answer as if they were not running. Games whose sound
@@ -123,7 +124,7 @@ What has run, by Unity version (the version numbers in the cells are the builds 
 | 2021 | **Handheld**: 2021.3 (URP) title, 59.6 fps | Emulator: 2021.3.28 title menu (with the class library swap, `pmunity.winbcl`) | Not yet | **Handheld**: 2021.3 IL2CPP, 64-bit: title (its 32-bit libraries: emulator) | Emulator: 2021.3.16 (URP) main menu |
 | 2022 | **Handheld**: 2022.3 (URP) title, a steady 30 fps (cause not checked yet) | Emulator: 2022.3.62 (URP) title menu | Not yet | **Handheld**: 2022.3 IL2CPP, 64-bit: title. 2022.3.23 Mono, 32-bit: emulator | Emulator: 2022.3.36 (URP) title menu; 2022.3.4 IL2CPP opening scene |
 | 2023.1 - 2023.2 | Emulator: 2023.2.20 main menu (2023.1 not tried) | Not yet | Not yet | Not yet | Not yet |
-| 6000.0 - 6000.6 (Unity 6) | Emulator: 6000.0.58, 6000.3.11, 6000.5.7 and 6000.6.2 reach their menus or first scenes; 6000.6.3 gets as far as generating its world | Not yet | Not yet | Not yet | Emulator, desktop GL only: 6000.5.9 IL2CPP sign-in screen, 6000.6.4 Mono in game. GLES mode, which most handhelds need: not yet |
+| 6000.0 - 6000.6 (Unity 6) | **Handheld**: Hollow Knight (6000.0.61) title at ~30 fps, stopped for memory at its opening (in progress). Emulator: Hollow Knight from first launch to gameplay; 6000.0.58, 6000.3.11, 6000.5.7 and 6000.6.2 reach their menus or first scenes; 6000.6.3 gets as far as generating its world | Not yet | Not yet | Not yet | Emulator, desktop GL only: 6000.5.9 IL2CPP sign-in screen, 6000.6.4 Mono in game. GLES mode, which most handhelds need: not yet |
 | 6000.7 and later | Not yet (betas are refused) | Not yet | Not yet | Not yet | Not yet |
 
 | Mark | Meaning |
@@ -144,6 +145,7 @@ Notes:
   read them, so Unity unpacks them in memory. On the handheld, one game's 57 MB of such textures
   grew to 830 MB and froze it; converted to ASTC it ran at 60 fps in 385 MB. `port check` warns
   above 128 MB.
+- Every game tested, by name, and how far it got: [docs/compat/games.md](docs/compat/games.md).
 - The full record, per version and per feature: [docs/compat/README.md](docs/compat/README.md).
 
 **What that covers.** In a survey of 65 free Linux Unity games (classified by their Unity version
@@ -257,6 +259,7 @@ port's zip: never the game, a converted game, or Unity's files.
 |---|---|
 | [docs/porting.md](docs/porting.md) | the porter's guide: `port check`, `port.toml`, the setup, packaging, the rehearsal, testing on a device, doing it by hand, typical first problems |
 | [docs/compat/README.md](docs/compat/README.md) | what each Unity version needs and what has run, on the handheld and in the emulator |
+| [docs/compat/games.md](docs/compat/games.md) | every game tested, by name, and how far each got |
 | [docs/roadmap.md](docs/roadmap.md) | where this is going |
 | [docs/input.md](docs/input.md) | pads, Rewired, InControl, the Input System, pointer mode, the on-screen keyboard |
 | [docs/plugins.md](docs/plugins.md) | native plugins, FMOD, Steam and other services, HTTPS |
