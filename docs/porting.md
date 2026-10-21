@@ -213,7 +213,14 @@ The rehearsal does not cover what only a handheld has. Check, with the release z
 - the download over the handheld's Wi-Fi (Python's TLS and the system's CA certificates; the
   setup sets `SSL_CERT_FILE` when it finds a bundle);
 - the time and the peak memory of the setup on the device's CPU (the textures step is the slow
-  part: ASTC encoding);
+  part: ASTC encoding). A rehearsal container has the PC's memory, not the handheld's: a setup
+  that passes there can still be killed by a 1 GB handheld's kernel. The textures step keeps to
+  a few hundred MB whatever the game (bundles over `textures.spill_mb` are unpacked to files and
+  written back a chunk at a time, a `.resS` is read where a texture needs it, big single-level
+  textures are converted in strips of rows, and under 2 GB of RAM a big texture is converted
+  alone); to see a game's peak before a device run, run the converter in an arm64 Linux
+  container with the setup's Python and read its maximum resident memory (`getrusage`; macOS's
+  own figure leaves out compressed memory);
 - the game: the pad (the mapping from `get_controls`; `UA_PAD_NAME` for Rewired), pointer mode and
   `UA_KEYMAP` where the menus want a mouse or keys, sound (ALSA, else `ANDROID_SLES_OUTPUT=pipe`
   when a sound server holds the card), video, saves (`ports/<name>/data/`: `external/` is

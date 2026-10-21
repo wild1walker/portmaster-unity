@@ -22,7 +22,7 @@ from collections import namedtuple
 
 Node = namedtuple('Node', 'name flags path')
 CHUNK = 0x20000                  # UnityPy's LZ4 chunk (COMPRESSION_CHUNK_SIZE_MAP)
-MAX_BLOCK = 64 << 20             # a bigger block (an LZMA bundle is one block) stays with UnityPy
+MAX_BLOCK = 64 << 20             # bigger blocks (an LZMA bundle is one) are decompressed in pieces
 DATA_FLAG, BLOCK_FLAG = 194, 2   # UnityPy's packer='lz4': blocks info at the end, directory, LZ4
 
 
@@ -49,13 +49,44 @@ def _engine(s):
 def _decompress(data, usize, flag):
     from UnityPy.helpers import CompressionHelper as C
     kind = flag & 0x3F
+    if kind not in (0, 1, 2, 3):
+        raise ValueError(f'compression {kind}')
+    return C.DECOMPRESSION_MAP[kind](data, usize)
+
+
+def _pieces(f, csize, usize, flag):
+    """A block's decompressed bytes in pieces of at most a few MB: an LZMA block (Unity's default
+    bundle compression makes the whole bundle one block) or a stored one streamed from the file,
+    any other block decompressed whole (LZ4 blocks are 128 KiB)."""
+    kind = flag & 0x3F
+    if usize <= MAX_BLOCK or kind not in (0, 1):
+        yield _decompress(f.read(csize), usize, flag)
+        return
     if kind == 0:
-        return data
-    if kind in (2, 3):
-        return C.decompress_lz4(data, usize)
-    if kind == 1:
-        return C.decompress_lzma(data, usize)
-    raise ValueError(f'compression {kind}')
+        left = csize
+        while left > 0:
+            b = f.read(min(left, 4 << 20))
+            if not b:
+                raise ValueError('a stored block ends early')
+            left -= len(b)
+            yield b
+        return
+    import lzma
+    p, dict_size = struct.unpack('<BI', f.read(5))          # UnityPy's decompress_lzma, in pieces
+    dec = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=[{
+        'id': lzma.FILTER_LZMA1, 'dict_size': dict_size, 'lc': p % 9, 'lp': p // 9 % 5, 'pb': p // 9 // 5}])
+    left, out = csize - 5, 0
+    while out < usize:
+        data = b''
+        if dec.needs_input:
+            if left <= 0:
+                break
+            data = f.read(min(left, 1 << 20))
+            left -= len(data)
+        piece = dec.decompress(data, max_length=4 << 20)
+        if piece:
+            out += len(piece)
+            yield piece
 
 
 def header(path):
@@ -113,13 +144,13 @@ def size(path):
 
 
 def unpack(path, work_dir):
-    """The bundle's nodes as files in work_dir (one block in memory at a time), or None when this
-    module leaves the bundle to UnityPy (a layout it does not read, or a block over MAX_BLOCK)."""
+    """The bundle's nodes as files in work_dir (a block, or a few MB of a big one, in memory at a
+    time), or None when this module leaves the bundle to UnityPy (a layout it does not read)."""
     h = header(path)
     if h is None:
         return None
     version, player, engine, flags, aligned, blocks, nodes, start = h
-    if any(b[0] > MAX_BLOCK for b in blocks):
+    if any(b[0] > MAX_BLOCK and b[2] & 0x3F not in (0, 1) for b in blocks):
         return None
     os.makedirs(work_dir, exist_ok=True)
     order = sorted(range(len(nodes)), key=lambda i: nodes[i][0])
@@ -133,16 +164,18 @@ def unpack(path, work_dir):
             f.seek(start)
             pos = 0                                      # in the uncompressed data
             for usize, csize, bflags in blocks:
-                data = memoryview(_decompress(f.read(csize), usize, bflags))
-                if len(data) != usize:
-                    raise ValueError(f'{path}: a block decompressed to {len(data)} bytes, not {usize}')
-                end = pos + usize
-                for i in order:
-                    off, sz = nodes[i][0], nodes[i][1]
-                    lo, hi = max(off, pos), min(off + sz, end)
-                    if lo < hi:
-                        files[i].write(data[lo - pos:hi - pos])
-                pos = end
+                start_pos = pos
+                for piece in _pieces(f, csize, usize, bflags):
+                    data = memoryview(piece)
+                    end = pos + len(data)
+                    for i in order:
+                        off, sz = nodes[i][0], nodes[i][1]
+                        lo, hi = max(off, pos), min(off + sz, end)
+                        if lo < hi:
+                            files[i].write(data[lo - pos:hi - pos])
+                    pos = end
+                if pos - start_pos != usize:
+                    raise ValueError(f'{path}: a block decompressed to {pos - start_pos} bytes, not {usize}')
     finally:
         for fh in files.values():
             fh.close()

@@ -75,6 +75,32 @@ class BigBundleTest(unittest.TestCase):
     def test_v7_aligned(self):
         self._roundtrip(7, '2020.3.48f1', True)
 
+    def test_lzma_one_block_in_pieces(self):
+        # Unity's default bundle compression: the block info and all data in one LZMA block
+        src = os.path.join(self.d, 'src')
+        os.makedirs(src)
+        nodes = _nodes(src)
+        lz4 = os.path.join(self.d, 'lz4')
+        bigbundle.pack(bigbundle.Bundle(None, 6, '5.x.x', '2017.4.9f1', False, nodes, 0), nodes, lz4)
+        import UnityPy
+        lzma_path = os.path.join(self.d, 'lzma')
+        with open(lzma_path, 'wb') as f:
+            f.write(UnityPy.load(lz4).file.save(packer='lzma'))
+        h = bigbundle.header(lzma_path)
+        self.assertEqual(len(h[5]), 1)                        # one block
+        old = bigbundle.MAX_BLOCK
+        bigbundle.MAX_BLOCK = 1 << 16                         # so it is read in pieces
+        try:
+            u = bigbundle.unpack(lzma_path, os.path.join(self.d, 'work'))
+        finally:
+            bigbundle.MAX_BLOCK = old
+        for a, c in zip(u.nodes, nodes):
+            self.assertEqual(_read(a.path), _read(c.path))
+        # written back as chunked LZ4: the bundle UnityPy's lz4 packer makes of the same nodes
+        out = os.path.join(self.d, 'out')
+        bigbundle.pack(u, u.nodes, out)
+        self.assertEqual(_read(out), _read(lz4))
+
     def test_not_a_bundle(self):
         p = os.path.join(self.d, 'x.assets')
         with open(p, 'wb') as f:
