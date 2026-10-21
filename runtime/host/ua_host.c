@@ -485,6 +485,7 @@ int main(int argc, char **argv)
     cfg.on_quit = on_quit;
     input_init(cfg.width, cfg.height);
     frames_init(root, cfg.width, cfg.height);
+    input_set_root(root);
     fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d (%s), API %d\n", apk, cfg.width, cfg.height,
             display_backend(), cfg.sdk_int);
     if (up_start(&cfg) != 0) { fprintf(stderr, "[host] up_start failed\n"); return 1; }

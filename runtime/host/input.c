@@ -6,6 +6,7 @@
 //   d-pad    AXIS_HAT_X/AXIS_HAT_Y (-1/0/1)
 //   triggers AXIS_LTRIGGER/AXIS_RTRIGGER and AXIS_BRAKE/AXIS_GAS (0..1), plus L2/R2 keys
 // UA_PAD_NAME overrides the device name Unity sees (scripts may pick a layout by name).
+// <root>/input.req: more presses in the same syntax while the game runs (times from when it is read)
 // UA_INPUT_SCRIPT="<sec>:<button>[~<hold sec>][+<button>...] ..." presses buttons at those times
 // after start (held 0.15 s, or <hold sec>; a,b,x,y,l1,r1,l2,r2,start,select,up,down,left,right),
 // "<sec>@<period>:..." repeats every <period> s; e.g. "30:a 36:a 70:right~60 75@10:x~9.9 80@1.5:a"
@@ -197,7 +198,10 @@ static int cmp_press(const void *a, const void *b)
     double d = ((const struct press *)a)->at - ((const struct press *)b)->at;
     return d < 0 ? -1 : d > 0;
 }
-static void script_parse(const char *spec)
+static void script_parse_at(const char *spec, double base);
+static void script_parse(const char *spec) { script_parse_at(spec, 0); }
+/* presses at <sec> after base (0: the start; live input: now), merged in among the unplayed ones */
+static void script_parse_at(const char *spec, double base)
 {
     char buf[2048];
     snprintf(buf, sizeof buf, "%s", spec);
@@ -206,7 +210,7 @@ static void script_parse(const char *spec)
     {
         char *colon = strchr(tok, ':');
         if (!colon) continue;
-        double at = atof(tok), period = strchr(tok, '@') && strchr(tok, '@') < colon ? atof(strchr(tok, '@') + 1) : 0;
+        double at = base + atof(tok), period = strchr(tok, '@') && strchr(tok, '@') < colon ? atof(strchr(tok, '@') + 1) : 0;
         for (char *b = strtok_r(colon + 1, "+", &colon); b && nscript < MAX_PRESS - 4; b = strtok_r(NULL, "+", &colon))
         {
             if (!strncasecmp(b, "text=", 5))
@@ -234,7 +238,33 @@ static void script_parse(const char *spec)
             script[nscript++] = (struct press){ at + hold, k, hx, hy, 0, stick, period, { 0, 0 }, 0, "" };
         }
     }
-    qsort(script, nscript, sizeof script[0], cmp_press);
+    qsort(script + next_press, nscript - next_press, sizeof script[0], cmp_press);
+}
+
+/* live input: <root>/input.req holds presses in UA_INPUT_SCRIPT's syntax, their times counted
+   from when it is read; it is read (every 0.25 s) and deleted. Write it elsewhere and rename it
+   into place, so it is never read half-written. For driving a game from a test script (emulated
+   rig or handheld) by what its screenshots show. */
+static char g_live[600];
+void input_set_root(const char *root) { snprintf(g_live, sizeof g_live, "%s/input.req", root); }
+static void live_input(void)
+{
+    static double last;
+    if (!started || !g_live[0]) return;
+    double t = now_s() - t_start;
+    if (t - last < 0.25) return;
+    last = t;
+    FILE *f = fopen(g_live, "r");
+    if (!f) return;
+    char spec[2048];
+    size_t n = fread(spec, 1, sizeof spec - 1, f);
+    fclose(f);
+    unlink(g_live);
+    spec[n] = 0;
+    for (char *c = spec; *c; c++) if (*c == '\n' || *c == '\r' || *c == '\t') *c = ' ';
+    int before = nscript;
+    script_parse_at(spec, t);
+    fprintf(stderr, "[input] input.req at %.1f s: %d events (%s)\n", t, nscript - before, spec);
 }
 static struct pad *scripted_pad(void)
 {
@@ -432,6 +462,7 @@ void input_poll(void)
         }
     }
     for (int i = 0; i < MAX_PADS; i++) if (moved[i] && pads[i].gc) send_axes(&pads[i]);
+    live_input();                       // (cheap: a stat of input.req every 0.25 s)
     if (next_press < nscript) script_run();
     if (osk_tick())                             // the soft keyboard opened or closed: the game
         for (int i = 0; i < MAX_PADS; i++)      // sees a centred pad while it is open
