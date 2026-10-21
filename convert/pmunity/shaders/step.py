@@ -18,8 +18,9 @@ convert --set shaders.glcore4x=false`) keeps a port on the output the converter 
 """
 import os
 import re
+import shutil
 
-from ..unity_io import Loaded
+from ..unity_io import Loaded, NotOneSerializedFile
 from . import blob as B
 from . import convert as C
 from . import dxbc
@@ -70,7 +71,14 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     for rel in shader_files(job, bundles):
         if job.is_done('shaders', rel):
             continue
-        lf = Loaded(job.path_in(rel))
+        work = job.work_dir('shaders')
+        try:
+            lf = Loaded(job.path_in(rel), spill_dir=work)          # (a big bundle: from its nodes)
+        except NotOneSerializedFile as ex:
+            job.log(f'shaders: {rel}: left as it is ({ex})')
+            shutil.rmtree(work, ignore_errors=True)
+            job.mark_done('shaders', rel)
+            continue
         gl4 = glcore4x_for(job.path_in(rel), glcore4x)
         n = 0
         for pid, o in lf.objects('Shader'):
@@ -94,9 +102,14 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             if r.guessed_layout:
                 job.log(f'shaders: {rel}: {r.name}: program layout of an unverified Unity version (guessed, checked by round trip)')
         if n:
-            job.write(rel, lf.save())
+            lf.write_to(job, rel)
             changed_files += 1
         lf.close()
+        shutil.rmtree(work, ignore_errors=True)
+        try:
+            os.rmdir(os.path.dirname(work))
+        except OSError:
+            pass
         job.mark_done('shaders', rel)
     if translator is not None:
         translator.close()

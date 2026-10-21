@@ -1787,17 +1787,28 @@ def verify(args, items, log):
     if nb and bundles:
         by_size = sorted(bundles, key=lambda x: os.path.getsize(os.path.join(args.out, x[0])))
         pick = by_size if nb >= len(by_size) else [by_size[int(i * (len(by_size) - 1) / max(1, nb - 1))] for i in range(nb)]
+        from . import bigbundle
         for d, s in pick:
-            env = UnityPy.load(os.path.join(args.out, d))
-            cnt = 0
-            for f in env.file.files.values():
+            path = os.path.join(args.out, d)
+            cnt, work, b = 0, None, None
+            if bigbundle.size(path) > 64 << 20:          # big: its serialized files from its nodes
+                work = os.path.join(args.out, '.verify-work')
+                shutil.rmtree(work, ignore_errors=True)
+                b = bigbundle.unpack(path, work)
+            if b:
+                files = [UnityPy.load(n.path).file for n in b.nodes if n.flags & 4]
+            else:
+                files = list(UnityPy.load(path).file.files.values())
+            for f in files:
                 if isinstance(f, SerializedFile):
                     if want is not None and f._m_target_platform != want:
                         bad.append((d, f'UnityPy platform {f._m_target_platform}'))
                     for o in f.objects.values():
                         o.read_typetree(); cnt += 1
+            files = None
+            if work:
+                shutil.rmtree(work, ignore_errors=True)
             log(f'verify: {d}: {cnt} objects parsed')
-            env = None
     # the Managed set must cover what MonoManager loads
     ggm = os.path.join(args.out, args.name, 'assets', 'bin', 'Data', 'globalgamemanagers')
     env = UnityPy.load(ggm)

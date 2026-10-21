@@ -9,7 +9,7 @@ runtime's tools/shadercheck compiles and links every pair with the device's own 
 import hashlib
 import os
 
-from ..unity_io import Loaded
+from ..unity_io import Loaded, NotOneSerializedFile
 from . import blob as B
 from . import convert as C
 from . import glsl
@@ -34,7 +34,10 @@ def export(job, out_dir, bundles=r'.'):
     seen = {}
     rows = []
     for rel in shader_files(job, bundles):
-        lf = Loaded(job.path_in(rel))
+        try:
+            lf = Loaded(job.path_in(rel))
+        except NotOneSerializedFile:
+            continue
         for pid, o in lf.objects('Shader'):
             t = o.read_typetree()
             if B.PLATFORM_GLES3PLUS not in t['platforms']:

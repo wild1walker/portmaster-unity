@@ -1,5 +1,6 @@
 """Loading and saving Unity serialized files and UnityFS asset bundles with UnityPy."""
 import gc
+import os
 import inspect
 import textwrap
 
@@ -75,20 +76,42 @@ def _trim():
             pass
 
 
+class NotOneSerializedFile(ValueError):
+    """A bundle with no serialized file or several (scene bundles): not opened."""
+
+
 class Loaded:
     """One data file opened with UnityPy: a plain serialized file (.assets, level, globalgamemanagers)
     or a UnityFS bundle holding one serialized file (CAB-...) and optionally its .resS."""
 
-    def __init__(self, path, resource_dir=None, streams=None):
+    def __init__(self, path, resource_dir=None, streams=None, spill_dir=None, spill_mb=64):
         """resource_dir: where the file's .resS / .resource streams are when they are not beside it
         (a conversion writing to an overlay folder rewrites the file, not its streams).
-        streams: {name: file} for streams elsewhere under their own names (a big bundle's nodes
-        unpacked by bigbundle.py); each is read from its file where needed, never loaded whole."""
+        streams: {name: file} for streams elsewhere under their own names; each is read from its
+        file where needed, never loaded whole.
+        spill_dir: an empty scratch folder on the output's file system. A bundle of more than
+        spill_mb MB (uncompressed) is then unpacked there into its nodes (bigbundle.py) and opened
+        from them: the same objects in little memory (UnityPy holds a whole bundle, twice while
+        reading it). Write it with write_to()."""
         import os
         import UnityPy
+        from . import bigbundle
         _patch_unitypy()
         self.path = path
-        self.env = UnityPy.load(path)
+        self.spilled = None                  # (bigbundle.Bundle, its serialized file's node)
+        self._res, self._maps = {}, {}       # a spilled bundle's changed nodes; {file: (mmap, view)}
+        load = path
+        if spill_dir and spill_mb and bigbundle.size(path) > spill_mb << 20:
+            b = bigbundle.unpack(path, spill_dir)
+            if b:
+                sfs = [n for n in b.nodes if n.flags & 4] or \
+                    [n for n in b.nodes if not n.name.endswith(('.resS', '.resource'))]
+                if len(sfs) != 1:
+                    raise NotOneSerializedFile(f'{path}: expected one serialized file in the bundle, found {len(sfs)}')
+                self.spilled = (b, sfs[0])
+                streams = dict(streams or {}, **{n.name: n.path for n in b.nodes if n is not sfs[0]})
+                load = sfs[0].path
+        self.env = UnityPy.load(load)
         if streams:
             from UnityPy.streams import EndianBinaryReader
             for n, p in streams.items():
@@ -106,12 +129,18 @@ class Loaded:
                     self.env.register_cab(n, EndianBinaryReader(os.path.join(d, n)))
                     break
         f = self.env.file
+        if self.spilled:
+            if type(f).__name__ != 'SerializedFile':
+                raise NotOneSerializedFile(f'{path}: its node {self.spilled[1].name} is not a serialized file')
+            self.is_bundle, self.bundle = True, None
+            self.cab_name, self.sf = self.spilled[1].name, f
+            return
         self.is_bundle = type(f).__name__ == 'BundleFile'
         if self.is_bundle:
             self.bundle = f
             sfs = [(k, v) for k, v in f.files.items() if type(v).__name__ == 'SerializedFile']
             if len(sfs) != 1:
-                raise ValueError(f'{path}: expected one serialized file in the bundle, found {len(sfs)}')
+                raise NotOneSerializedFile(f'{path}: expected one serialized file in the bundle, found {len(sfs)}')
             self.cab_name, self.sf = sfs[0]
         else:
             self.bundle = None
@@ -123,7 +152,21 @@ class Loaded:
                 yield pid, o
 
     def bundle_res(self, name):
-        """A node (e.g. CAB-xxx.resS) inside the bundle as a memoryview (no copy), or None."""
+        """A node (e.g. CAB-xxx.resS) inside the bundle as a memoryview (no copy), or None. A
+        spilled bundle's node is its file, mapped (its pages stay the file's, not the process's)."""
+        if self.spilled:
+            import mmap
+            n = next((n for n in self.spilled[0].nodes if n.name == name), None)
+            if n is None:
+                return None
+            p = self._res.get(name, n.path)
+            if p not in self._maps:
+                with open(p, 'rb') as f:
+                    if not os.fstat(f.fileno()).st_size:
+                        return memoryview(b'')
+                    m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+                self._maps[p] = (m, memoryview(m))
+            return self._maps[p][1]
         n = self.bundle.files.get(name)
         if n is None:
             return None
@@ -132,6 +175,16 @@ class Loaded:
         return memoryview(n.bytes if hasattr(n, 'bytes') else n)
 
     def set_bundle_res(self, name, data):
+        """A node's new contents: bytes, or (a spilled bundle) the path of a file holding them."""
+        if self.spilled:
+            n = next(n for n in self.spilled[0].nodes if n.name == name)
+            if isinstance(data, str):
+                self._res[name] = data
+            else:
+                with open(n.path + '.new', 'wb') as f:
+                    f.write(data)
+                self._res[name] = n.path + '.new'
+            return
         from UnityPy.streams import EndianBinaryReader
         old = self.bundle.files[name]
         r = EndianBinaryReader(bytes(data))
@@ -140,11 +193,37 @@ class Loaded:
 
     def save(self):
         """Serialized bytes of the whole file (bundles: chunked LZ4, which Unity reads in place)."""
+        if self.spilled:
+            raise RuntimeError(f'{self.path}: a spilled bundle is written with write_to()')
         if self.is_bundle:
             return self.bundle.save(packer='lz4')
         return self.sf.save()
 
+    def write_to(self, job, rel):
+        """The file, changed, into the job's output as <rel> (a spilled bundle: packed again from
+        its node files, one chunk at a time)."""
+        if not self.spilled:
+            job.write(rel, self.save())
+            return
+        import os
+        from . import bigbundle
+        b, sf_node = self.spilled
+        with open(sf_node.path + '.new', 'wb') as f:
+            f.write(self.sf.save())
+        nodes = [n._replace(path=sf_node.path + '.new') if n is sf_node else
+                 n._replace(path=self._res.get(n.name, n.path)) for n in b.nodes]
+        out = os.path.join(os.path.dirname(sf_node.path), 'bundle.new')
+        bigbundle.pack(b, nodes, out)
+        job.write_file(rel, out)
+
     def close(self):
+        for m, v in self._maps.values():
+            try:
+                v.release()
+                m.close()
+            except BufferError:              # a slice of it still alive: unmapped with that
+                pass
+        self._maps = {}
         for r in list(getattr(self.env, 'cabs', {}).values()) if self.env else ():
             f = getattr(r, 'stream', None)          # streams registered from files
             if f is not None and hasattr(f, 'close'):

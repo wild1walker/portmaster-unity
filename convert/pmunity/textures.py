@@ -24,7 +24,7 @@ import re
 import shutil
 
 from . import bigbundle
-from .unity_io import Loaded
+from .unity_io import Loaded, NotOneSerializedFile
 
 DEFAULTS = {
     'scale': 1.0,                # texture size factor (1.0 = only re-encode)
@@ -469,79 +469,56 @@ def run(job, only=None):
         before = (stats['in'], stats['out'])
         res_dir = os.path.dirname(os.path.join(job.src, rel))
         handles = {}
-        b = sf_node = None
         work = job.work_dir('textures')
-        if spilled:
-            b = bigbundle.unpack(src, work)
-            sfs = [n for n in b.nodes if not n.name.endswith(('.resS', '.resource'))] if b else []
-            if len(sfs) == 1:
-                sf_node = sfs[0]
-            else:
-                b = None
-                job.log(f'textures: {rel}: a bundle layout left to UnityPy (read in memory)')
-        if b:
-            node_files = {n.name: n.path for n in b.nodes}
-            lf = Loaded(sf_node.path, streams={n.name: n.path for n in b.nodes if n is not sf_node})
-        else:
-            lf = Loaded(src, res_dir)
-        # the new stream: written to a file as it is made, except for a bundle kept in memory
-        stream = StreamFile() if lf.is_bundle else StreamFile(os.path.join(work, 'stream.new'))
+        try:
+            lf = Loaded(src, res_dir, spill_dir=os.path.join(work, 'nodes'), spill_mb=c['spill_mb'])
+        except NotOneSerializedFile as ex:
+            job.log(f'textures: {rel}: left as it is ({ex})')
+            lf = r = None
+        if lf is not None:
+            # the new stream: written to a file as it is made, except for a bundle held in memory
+            stream = StreamFile() if lf.is_bundle and not lf.spilled else StreamFile(os.path.join(work, 'stream.new'))
 
-        def read_stream(path, off, size):
-            name = os.path.basename(path)
-            if b:
-                p = node_files[name]
-            elif lf.is_bundle:
-                node = lf.bundle_res(name)
-                return bytes(node[off:off + size])
-            else:
+            def read_stream(path, off, size):
+                name = os.path.basename(path)
+                if lf.is_bundle:
+                    node = lf.bundle_res(name)
+                    return bytes(node[off:off + size])
                 p = job.path_in(os.path.join(os.path.dirname(rel), name))
                 if not os.path.exists(p):
                     p = os.path.join(res_dir, name)
-            if p not in handles:
-                handles[p] = open(p, 'rb')
-            handles[p].seek(off)
-            return handles[p].read(size)
+                if p not in handles:
+                    handles[p] = open(p, 'rb')
+                handles[p].seek(off)
+                return handles[p].read(size)
 
-        try:
-            r = convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, job.log, stream)
-        finally:
-            for h in handles.values():
-                h.close()
-            stream.close()
-        if r is not None:
-            stream_name, new_stream, sizes = r
-            stream_node = os.path.basename(stream_name) if stream_name else None
-            if b:
-                # the bundle again from its node files: the serialized file and the stream rewritten
-                sf_new = sf_node.path + '.new'
-                with open(sf_new, 'wb') as f:
-                    f.write(lf.save())
-                nodes = [n._replace(path=sf_new) if n is sf_node else
-                         n._replace(path=new_stream.path) if new_stream and n.name == stream_node else n
-                         for n in b.nodes]
-                lf.close()
-                out = os.path.join(work, 'bundle.new')
-                bigbundle.pack(b, nodes, out)
-                job.write_file(rel, out)
-            elif lf.is_bundle:
-                if new_stream is not None:
-                    lf.set_bundle_res(stream_node, new_stream.data)
-                job.write(rel, lf.save())
-            else:
-                sf_new = os.path.join(work, 'file.new')
-                with open(sf_new, 'wb') as f:
-                    f.write(lf.save())
-                lf.close()
-                pair = [(rel, sf_new)]
-                if new_stream is not None:
-                    pair.insert(0, (os.path.join(os.path.dirname(rel), stream_node), new_stream.path))
-                job.commit(pair)                   # the file and its stream together
-            if sizes:
-                job.state['scaled'][rel] = {str(k): list(v) for k, v in sizes.items()}
-            r = True
-        lf.close()
-        stream = None
+            try:
+                r = convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, job.log, stream)
+            finally:
+                for h in handles.values():
+                    h.close()
+                stream.close()
+            if r is not None:
+                stream_name, new_stream, sizes = r
+                stream_node = os.path.basename(stream_name) if stream_name else None
+                if lf.is_bundle:
+                    if new_stream is not None:
+                        lf.set_bundle_res(stream_node, new_stream.path if lf.spilled else new_stream.data)
+                    lf.write_to(job, rel)
+                else:
+                    sf_new = os.path.join(work, 'file.new')
+                    with open(sf_new, 'wb') as f:
+                        f.write(lf.save())
+                    lf.close()
+                    pair = [(rel, sf_new)]
+                    if new_stream is not None:
+                        pair.insert(0, (os.path.join(os.path.dirname(rel), stream_node), new_stream.path))
+                    job.commit(pair)                   # the file and its stream together
+                if sizes:
+                    job.state['scaled'][rel] = {str(k): list(v) for k, v in sizes.items()}
+                r = True
+            lf.close()
+            stream = None
         shutil.rmtree(work, ignore_errors=True)
         try:
             os.rmdir(os.path.dirname(work))
