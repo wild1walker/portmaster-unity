@@ -594,10 +594,83 @@ def inline_texture_streams(objects, read_stream):
     return done, still
 
 
+def _inline_plan(objects):
+    """inline_texture_streams' choice without changing anything: (path ids of the textures to
+    inline, .resS names still referenced)."""
+    plan, still = set(), set()
+    for o in objects:
+        if o.type.name == 'Mesh':
+            sd = o.read_typetree().get('m_StreamData')
+            if sd and sd.get('path') and sd.get('size'):
+                still.add(sd['path'].split('/')[-1])
+            continue
+        if o.type.name not in ('Texture2D', 'Cubemap', 'Texture2DArray', 'Texture3D'):
+            continue
+        t = o.read_typetree()
+        sd = t.get('m_StreamData')
+        if not sd or not sd.get('path'):
+            continue
+        if 'image data' not in t:
+            still.add(sd['path'].split('/')[-1])
+            continue
+        plan.add(o.path_id)
+    return plan, still
+
+
+def _inline_streamed(sf, plan, read_stream, out_path):
+    """sf (target platform set) written to out_path with the planned textures' pixels inlined, one
+    texture in memory at a time (unity_io.save_serialized_to); False when that layout does not
+    stream (the caller inlines in memory)."""
+    from .unity_io import save_serialized_to
+
+    def prepare(o):
+        if o.path_id not in plan:
+            return False
+        t = o.read_typetree()
+        sd = t['m_StreamData']
+        data = read_stream(sd['path'], sd['offset'], sd['size'])
+        if len(data) != sd['size']:
+            raise SystemExit(f'{t.get("m_Name")}: stream {sd} gave {len(data)} bytes')
+        t['image data'] = data
+        t['m_StreamData'] = {'offset': 0, 'size': 0, 'path': ''}
+        o.save_typetree(t)
+        return True
+    return save_serialized_to(sf, out_path, prepare)
+
+
 def inline_bundle(src, dst):
     """Bundle with .resS nodes: textures inlined, the .resS nodes dropped once unreferenced, every
-    CAB's target platform set to Android, saved as chunked LZ4 like the original."""
+    CAB's target platform set to Android, saved as chunked LZ4 like the original. A big bundle
+    (over 64 MB) is unpacked to its node files and written back from them (bigbundle.py)."""
     import UnityPy
+    from . import bigbundle
+    if bigbundle.size(src) > 64 << 20:
+        work = dst + '.work'
+        shutil.rmtree(work, ignore_errors=True)
+        try:
+            b = bigbundle.unpack(src, work)
+            sfs = [n for n in b.nodes if n.flags & 4] if b else []
+            if len(sfs) == 1:
+                files = {n.name: n.path for n in b.nodes}
+
+                def read_node(path, off, size):
+                    with open(files[path.split('/')[-1]], 'rb') as f:
+                        f.seek(off)
+                        return f.read(size)
+                sf = UnityPy.load(sfs[0].path).file
+                plan, still = _inline_plan(sf.objects.values())
+                sf._m_target_platform = ANDROID
+                if _inline_streamed(sf, plan, read_node, sfs[0].path + '.new'):
+                    sf = None
+                    dropped = [n.name for n in b.nodes if n.name.endswith('.resS') and n.name not in still]
+                    nodes = [n._replace(path=n.path + '.new') if n is sfs[0] else n
+                             for n in b.nodes if n.name not in dropped]
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    bigbundle.pack(b, nodes, dst + '.tmp')
+                    os.replace(dst + '.tmp', dst)
+                    return len(plan), dropped
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     env = UnityPy.load(src)
     bf = env.file
     cache = {}
@@ -633,8 +706,15 @@ def inline_serialized(src, dst):
             f.seek(off)
             return f.read(size)
 
-    done, still = inline_texture_streams(sf.objects.values(), read_stream)
+    # streamed: one texture's pixels in memory at a time (in memory, a file with hundreds of MB of
+    # textures needed several times that: the inlined objects, then the whole file twice)
+    plan, still = _inline_plan(sf.objects.values())
     sf._m_target_platform = ANDROID
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if _inline_streamed(sf, plan, read_stream, dst + '.tmp'):
+        os.replace(dst + '.tmp', dst)
+        return len(plan), still
+    done, still = inline_texture_streams(sf.objects.values(), read_stream)
     write_bytes(dst, sf.save())
     return done, still
 

@@ -76,6 +76,61 @@ def _trim():
             pass
 
 
+_save_streamed = None
+
+
+def _make_save_streamed():
+    """UnityPy's SerializedFile.save, recompiled to write the object data into a file (the caller's)
+    instead of memory, with a hook before each object; None for another UnityPy version."""
+    import importlib
+    SF = importlib.import_module('UnityPy.files.SerializedFile')
+    src = inspect.getsource(SF.SerializedFile.save)
+    reps = [
+        ('def save(self, packer: Optional[str] = None) -> bytes:', 'def save_streamed(self, _data_stream, _prepare):', 1),
+        ('data_writer = EndianBinaryWriter(endian=header.endian)',
+         'data_writer = EndianBinaryWriter(_data_stream, endian=header.endian)', 1),
+        ('            obj.write(header, meta_writer, data_writer)\n',
+         '            _tmp = _prepare(obj)\n            obj.write(header, meta_writer, data_writer)\n'
+         '            if _tmp:\n                obj.data = None\n', 1),
+        ('            writer.write_bytes(data_writer.bytes)\n', '', 2),      # the data follows, from the file
+    ]
+    for old, new, count in reps:
+        if src.count(old) != count:
+            return None
+        src = src.replace(old, new)
+    ns = dict(vars(SF))
+    exec(compile(textwrap.dedent(src), SF.__file__ + ' (pmunity streamed)', 'exec'), ns)
+    return ns['save_streamed']
+
+
+def save_serialized_to(sf, path, prepare=None):
+    """Writes a SerializedFile to path, the bytes sf.save() gives, its object data streamed through
+    a file beside it: in memory only the metadata and one object at a time. prepare(obj) is called
+    before each object is written and returns True when it set obj.data for this write only (a
+    texture given its pixels): that data is dropped again once written. Returns False, writing
+    nothing, for a layout it does not stream (header version < 9, another UnityPy version)."""
+    global _save_streamed
+    if sf.header.version < 9:
+        return False
+    if _save_streamed is None:
+        _save_streamed = _make_save_streamed() or False
+    if not _save_streamed:
+        return False
+    import shutil
+    tmp = path + '.data'
+    try:
+        with open(tmp, 'w+b') as d:
+            head = _save_streamed(sf, d, prepare or (lambda o: False))
+            with open(path, 'wb') as out:
+                out.write(head)
+                d.seek(0)
+                shutil.copyfileobj(d, out, 1 << 20)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return True
+
+
 class NotOneSerializedFile(ValueError):
     """A bundle with no serialized file or several (scene bundles): not opened."""
 
