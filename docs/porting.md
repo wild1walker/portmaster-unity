@@ -52,7 +52,7 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 |---|---|---|
 | `android` | a Mono build of Unity 2017.3 - 2022.3 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
 | `il2cpp-arm64` | a Mono build on a 64-bit-only system: the game compiled with IL2CPP into an arm64 Android player | coming (`pmunity il2cpp`) |
-| `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | coming (`tools/box64`, `pmunity route`) |
+| `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
 | `apk` | an Android build of the game | coming (`pmunity apk`) |
 
 Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from = ["d3d11"]` and
