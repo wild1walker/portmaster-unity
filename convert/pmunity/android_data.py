@@ -1584,6 +1584,39 @@ def verify_zip(path, entries, log, sample=40):
     log(f'pack: {os.path.basename(path)} verified (zip32, stored, aligned, data in place)')
 
 
+# what Unity reads before any OBB is mounted stays in the APK: assemblies, settings, the first scene
+_APK_FIRST = re.compile(r'^(Managed/|Resources/|boot\.config$|globalgamemanagers|unity default resources$|'
+                        r'level0$|sharedassets0\.|ScriptingAssemblies\.json$|RuntimeInitializeOnLoads\.json$|'
+                        r'unity_obb_guid$)')
+
+
+def split_big_apk(apk_entries, limit=None):
+    """A game whose assets/bin/Data passes the APK's 2 GiB: the largest files of later scenes and
+    resources (levelN, sharedassetsN, resources.assets, .resource, .resS) move to the OBBs until the
+    APK fits. Returns (apk entries, moved entries); a game that fits is left as it is."""
+    limit = limit or ZIP_LIMIT - (64 << 20)
+    def size(e):
+        a, p = e
+        return (len(p) if isinstance(p, bytes) else os.path.getsize(p)) + 30 + 46 + 2 * len(a) + 8
+    total = sum(size(e) for e in apk_entries)
+    if total <= limit:
+        return apk_entries, []
+    pre = 'assets/bin/Data/'
+    movable = [e for e in apk_entries if e[0].startswith(pre) and not isinstance(e[1], bytes)
+               and not _APK_FIRST.match(e[0][len(pre):])]
+    moved = []
+    for e in sorted(movable, key=size, reverse=True):
+        if total <= limit:
+            break
+        moved.append(e)
+        total -= size(e)
+    if total > limit:
+        raise SystemExit(f'pack: the APK would still hold {total / 2**30:.2f} GiB after moving every later '
+                         f'scene and resource to the OBBs')
+    keep = set(a for a, _ in moved)
+    return [e for e in apk_entries if e[0] not in keep], sorted(moved)
+
+
 def pack(args, log):
     """APK = assets/bin/Data/** (what Unity reads first: Mono assemblies, settings, scenes);
     main OBB = assets/AssetBundles/**, assets/Logo.png and the build-id marker; a patch OBB takes
@@ -1631,6 +1664,13 @@ def pack(args, log):
             log('pack: IL2CPP data: one APK, no OBB')
         else:
             log('pack: WARNING: IL2CPP data over 2 GiB: APK + OBB (Unity 2020.3 then extracts no IL2CPP data: untested)')
+    if pack_what == 'all':
+        apk_entries, moved = split_big_apk(apk_entries)
+        if moved:
+            obb_entries = moved + obb_entries
+            log(f'pack: the data passes 2 GiB: {len(moved)} files of later scenes and resources '
+                f'({sum(os.path.getsize(p) for a, p in moved) / 2**30:.2f} GiB) go into the OBBs, as Unity\'s '
+                f'"split application binary" does (the player looks bin/Data up in every mounted archive)')
     if pack_what in ('apk', 'all'):
         _write_zip(apk, apk_entries, log)
         verify_zip(apk, apk_entries, log)

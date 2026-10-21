@@ -318,5 +318,25 @@ class PlanTest(unittest.TestCase):
         self.assertNotIn('GI', args.skipped)
 
 
+class SplitBigApkTest(unittest.TestCase):
+    """A game whose bin/Data passes the APK's 2 GiB: later scenes and resources move to the OBBs."""
+    def test_split(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        def f(n, sz):
+            p = os.path.join(d, n.replace('/', '_'))
+            with open(p, 'wb') as fh:
+                fh.truncate(sz)
+            return 'assets/bin/Data/' + n, p
+        e = [f('globalgamemanagers', 10), f('level0', 10), f('sharedassets0.assets', 10), f('Managed/a.dll', 500),
+             f('level5', 3000), f('sharedassets5.assets', 2000), f('resources.assets', 100)]
+        apk, moved = A.split_big_apk(e, limit=3000)
+        self.assertEqual(sorted(a for a, _ in moved), ['assets/bin/Data/level5', 'assets/bin/Data/sharedassets5.assets'])
+        for first in ('globalgamemanagers', 'level0', 'sharedassets0.assets', 'Managed/a.dll'):
+            self.assertIn('assets/bin/Data/' + first, [a for a, _ in apk])
+        small, none = A.split_big_apk(e, limit=10 ** 9)
+        self.assertEqual((small, none), (e, []))
+
+
 if __name__ == '__main__':
     unittest.main()
