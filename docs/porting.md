@@ -255,8 +255,11 @@ The same steps without the setup, on a PC:
    tools/device/test.sh <folder> 120 30 90` does all of it over SSH: it copies the folder (only
    what changed) with this checkout's `ua_host`, runs the game with a memory watchdog, takes
    screenshots at 30 and 90 s, and brings back the log, a memory log and the screenshots with a
-   summary (frames per second, peak memory, how the run ended). In the emulated rig:
-   `tools/emu/emu.sh`.
+   summary (frames per second, peak memory, how the run ended). While it runs,
+   `REMOTE=uatest/<folder> tools/device/drive.sh "0:a~2 6:down" 10 now.png` presses buttons (the
+   game folder's `input.req`) and brings back a screenshot a few seconds later: a game driven by
+   what it shows, menus and all. In the emulated rig: `tools/emu/emu.sh` (the same `input.req` and
+   `shot.req` in `EMU_ROOT`).
 
 Typical first problems:
 
