@@ -43,4 +43,15 @@ if [ "$1" = test ]; then
   # Same again on SDL's dummy driver (buffer-queue logic and callback pacing only).
   docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=dummy -e ANDROID_WINDOW_SIZE=640x480 \
     $IMG timeout 300 ./test_shims ./libfakeegl.so
+  # Pipe output on ALSA alone (no sound server): test/fakebin/aplay refuses plughw:0,0 as a busy card
+  # does, so the PCM must reach the next device of the aplay client.
+  docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=dummy -e ANDROID_SLES_OUTPUT=pipe \
+    -e ANDROID_WINDOW_SIZE=640x480 -e PATH=/r/android/test/fakebin:/usr/bin:/bin $IMG sh -c '
+    unset XDG_RUNTIME_DIR; rm -f /tmp/aplay.args /tmp/aplay.raw
+    timeout 300 ./test_shims ./libfakeegl.so > /tmp/out.txt 2>&1 || { cat /tmp/out.txt; echo "pipe/aplay: test_shims failed"; exit 1; }
+    if grep -q -- "-D default" /tmp/aplay.args && [ -s /tmp/aplay.raw ]; then
+      echo "pipe/aplay: ok ($(wc -c < /tmp/aplay.raw) bytes of PCM on the second device)"
+    else
+      echo "pipe/aplay: FAILED"; cat /tmp/aplay.args; exit 1
+    fi'
 fi
