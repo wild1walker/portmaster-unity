@@ -1175,7 +1175,12 @@ static const so_shim ours[] = {
     { "dladdr", (void *)so_dladdr }, { "dl_iterate_phdr", (void *)so_dl_iterate_phdr },
     { "android_dlopen_ext", (void *)so_android_dlopen_ext },
 #if defined(__arm__)
+    /* the EHABI unwinders Android code links (libgcc's, LLVM libunwind) find a frame's .ARM.exidx
+     * through bionic's __gnu_Unwind_Find_exidx; glibc's own one only knows glibc's modules, so a
+     * C++ exception (IL2CPP's managed exceptions are C++ throws) would find no handler in a
+     * loader module and terminate */
     { "dl_unwind_find_exidx", (void *)so_dl_unwind_find_exidx },
+    { "__gnu_Unwind_Find_exidx", (void *)so_dl_unwind_find_exidx },
 #endif
     { "stat", (void *)bionic_stat }, { "lstat", (void *)bionic_lstat }, { "fstat", (void *)bionic_fstat },
     { "fstatat", (void *)bionic_fstatat }, { "statfs", (void *)bionic_statfs }, { "fstatfs", (void *)bionic_fstatfs },

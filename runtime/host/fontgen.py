@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Writes osk_font.h (the on-screen keyboard's font) from an X11 PCF bitmap font.
+
+usage: python3 -I fontgen.py <font.pcf[.gz]> > osk_font.h
+
+osk_font.h is made from misc-fixed 6x13 (6x13-ISO8859-1.pcf.gz of Debian's xfonts-base,
+upstream font-misc-misc: "Public domain font.  Share and enjoy."):
+  docker run --rm -v "$PWD":/out debian:bookworm-slim sh -c 'cd /tmp && apt-get update -qq &&
+    apt-get download -qq xfonts-base && dpkg-deb -x xfonts-base_*.deb x &&
+    cp x/usr/share/fonts/X11/misc/6x13-ISO8859-1.pcf.gz /out/'
+Code points 32-126 and 160-255, one row byte per scan line (bit 7 = leftmost pixel), all glyphs
+in one cell of the font's width and height (ascent + descent).
+"""
+import gzip
+import struct
+import sys
+
+PCF_PROPERTIES, PCF_ACCELERATORS, PCF_METRICS, PCF_BITMAPS, PCF_BDF_ENCODINGS = 1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 5
+PCF_BDF_ACCELERATORS = 1 << 8
+PCF_COMPRESSED_METRICS = 0x100
+
+
+def tables(data):
+    if data[:4] != b'\x01fcp':
+        sys.exit('not a PCF font')
+    n = struct.unpack_from('<I', data, 4)[0]
+    t = {}
+    for i in range(n):
+        typ, fmt, size, off = struct.unpack_from('<IIII', data, 8 + 16 * i)
+        t[typ] = (fmt, off)
+    return t
+
+
+def fmt_of(data, off):
+    fmt = struct.unpack_from('<I', data, off)[0]
+    return fmt, '>' if fmt & 4 else '<'
+
+
+def properties(data, off):
+    fmt, e = fmt_of(data, off)
+    n = struct.unpack_from(e + 'I', data, off + 4)[0]
+    props = []
+    p = off + 8
+    for i in range(n):
+        name, isstr, val = struct.unpack_from(e + 'IBI', data, p)
+        props.append((name, isstr, val))
+        p += 9
+    p += (4 - (n & 3)) & 3
+    strsize = struct.unpack_from(e + 'I', data, p)[0]
+    strs = data[p + 4:p + 4 + strsize]
+    cstr = lambda o: strs[o:strs.index(b'\0', o)].decode('latin-1')
+    return {cstr(nm): (cstr(v) if s else v) for nm, s, v in props}
+
+
+def ascent_descent(data, off):
+    fmt, e = fmt_of(data, off)
+    return struct.unpack_from(e + '2i', data, off + 4 + 8)   # after the format and 8 flag bytes
+
+
+def metrics(data, off):
+    fmt, e = fmt_of(data, off)
+    out = []
+    if fmt & PCF_COMPRESSED_METRICS:
+        n = struct.unpack_from(e + 'H', data, off + 4)[0]
+        for i in range(n):
+            l, r, w, a, d = struct.unpack_from('5B', data, off + 6 + 5 * i)
+            out.append((l - 0x80, r - 0x80, w - 0x80, a - 0x80, d - 0x80))
+    else:
+        n = struct.unpack_from(e + 'I', data, off + 4)[0]
+        for i in range(n):
+            out.append(struct.unpack_from(e + '5h', data, off + 8 + 12 * i))
+    return out
+
+
+def bitmaps(data, off):
+    fmt, e = fmt_of(data, off)
+    n = struct.unpack_from(e + 'I', data, off + 4)[0]
+    offs = struct.unpack_from(e + '%dI' % n, data, off + 8)
+    sizes = struct.unpack_from(e + '4I', data, off + 8 + 4 * n)
+    pad = 1 << (fmt & 3)                      # row padding in bytes
+    base = off + 8 + 4 * n + 16
+    msbit = bool(fmt & 8)
+    return offs, data[base:base + sizes[fmt & 3]], pad, msbit
+
+
+def encodings(data, off):
+    fmt, e = fmt_of(data, off)
+    c1, c2, r1, r2, default = struct.unpack_from(e + '5H', data, off + 4)
+    cols = c2 - c1 + 1
+    idx = struct.unpack_from(e + '%dH' % (cols * (r2 - r1 + 1)), data, off + 14)
+    def glyph(cp):
+        r, c = cp >> 8, cp & 0xff
+        if not (r1 <= r <= r2 and c1 <= c <= c2):
+            return None
+        g = idx[(r - r1) * cols + c - c1]
+        return None if g == 0xffff else g
+    return glyph
+
+
+def main():
+    raw = open(sys.argv[1], 'rb').read()
+    data = gzip.decompress(raw) if raw[:2] == b'\x1f\x8b' else raw
+    t = tables(data)
+    props = properties(data, t[PCF_PROPERTIES][1])
+    mets = metrics(data, t[PCF_METRICS][1])
+    offs, bits, pad, msbit = bitmaps(data, t[PCF_BITMAPS][1])
+    glyph = encodings(data, t[PCF_BDF_ENCODINGS][1])
+    acc = t.get(PCF_BDF_ACCELERATORS) or t[PCF_ACCELERATORS]
+    ascent, descent = (props['FONT_ASCENT'], props['FONT_DESCENT']) if 'FONT_ASCENT' in props else ascent_descent(data, acc[1])
+    width = max(m[2] for m in mets)
+    height = ascent + descent
+    if width > 8:
+        sys.exit('fontgen: glyphs wider than 8 pixels are not supported')
+    cps = list(range(32, 127)) + list(range(160, 256))
+    rows = []
+    for cp in cps:
+        g = glyph(cp)
+        cell = [0] * height
+        if g is not None:
+            l, r, w, a, d = mets[g]
+            stride = ((r - l + 7) // 8 + pad - 1) // pad * pad
+            for y in range(a + d):
+                for x in range(r - l):
+                    byte = bits[offs[g] + y * stride + x // 8]
+                    on = byte & (0x80 >> (x % 8)) if msbit else byte & (1 << (x % 8))
+                    cx, cy = l + x, ascent - a + y
+                    if on and 0 <= cx < 8 and 0 <= cy < height:
+                        cell[cy] |= 0x80 >> cx
+        rows.append((cp, cell))
+    print('/* Generated by fontgen.py from %s: %s (%s). */' % (sys.argv[1].rsplit('/', 1)[-1],
+          props.get('FONT', '?'), props.get('COPYRIGHT', 'no copyright property')))
+    print('#define OSK_FONT_W %d' % width)
+    print('#define OSK_FONT_H %d' % height)
+    print('#define OSK_FONT_ASCENT %d' % ascent)
+    print('/* code points 32-126, then 160-255; row bytes, bit 7 = leftmost pixel */')
+    print('static const unsigned char osk_font[%d][OSK_FONT_H] = {' % len(rows))
+    for cp, cell in rows:
+        print('    { %s },  /* %s */' % (', '.join('0x%02x' % b for b in cell),
+                                          'U+%04X' % cp if cp > 126 or cp in (42, 47, 92) else repr(chr(cp))))
+    print('};')
+
+
+if __name__ == '__main__':
+    main()

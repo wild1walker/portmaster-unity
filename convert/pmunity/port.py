@@ -903,13 +903,18 @@ def suggest_config(rep):
     if rep.get('shader_source') == 'd3d11':
         cv.setdefault('shaders', {})['from'] = ['d3d11']
     if s.get('rewired'):
-        ad['asmpatch'] = 'auto'
         rt.setdefault('UA_PAD_NAME', 'Xbox Wireless Controller')
         notes.append(f"Rewired ({s['rewired']}): asmpatch's rewired-android patch (Rewired then reads the pad "
                      f"through Unity's Android input); UA_PAD_NAME names the pad as one Rewired's Android "
                      f"definitions know")
-    else:
-        ad['asmpatch'] = 'off'
+    if s.get('incontrol'):
+        # the name of an InControl Android profile (asmpatch --survey reads the game's own profiles)
+        m = re.search(r'-> UA_PAD_NAME="([^"]+)"', rep.get('asmpatch_survey') or '')
+        rt.setdefault('UA_PAD_NAME', m.group(1) if m else 'Microsoft X-Box 360 pad')
+        notes.append("InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names "
+                     "the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown "
+                     "controller (docs/input.md)")
+    ad['asmpatch'] = 'auto' if s.get('rewired') or s.get('input_system') else 'off'
     verdict = rep.get('input_verdict')
     if verdict == 'pointer':
         rt['UA_POINTER'] = '1'
@@ -924,11 +929,13 @@ def suggest_config(rep):
                      f"with UA_KEYMAP (e.g. start:escape) where the pad has no binding")
     if s.get('input_system') or d.get('active_input') in ('Input System package', 'both'):
         notes.append(f"Input System package ({d.get('active_input') or 'Unity.InputSystem.dll'}): its desktop "
-                     f"build has no Android pad layouts (docs/input.md); pads may need more than this")
+                     f"build has no layout for the Android player's pads: asmpatch's inputsystem-android patch "
+                     f"registers them (docs/input.md)")
     if s.get('text_input') or any(k.endswith('InputField') for k in d.get('scripts_used', {})):
         used = [k for k in d.get('scripts_used', {}) if k.endswith(('InputField', 'TextField'))]
         notes.append('text input (' + ', '.join(s.get('text_input', []) + [f'{k} in scenes' for k in used]) +
-                     '): typing needs an on-screen keyboard or a default text')
+                     "): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "
+                     '"done" in runtime answers it at once where text does not matter (docs/input.md)')
     if d.get('color_space') == 'linear':
         notes.append('linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)')
     vids = d.get('video_clips') or {}
@@ -1180,9 +1187,11 @@ CONFIG_DOC = {
     'convert': '# pmunity convert\'s config (each step\'s DEFAULTS); "textures" re-encodes BC/DXT as ASTC\n'
                '# (less memory, a longer setup, slightly different pixels: off unless you add it)',
     'android_data': '# pmunity android-data: asmpatch = auto (run tools/asmpatch; it changes only what it\n'
-                    '# finds, e.g. Rewired) | off | ["patch", ...]; name = the APK\'s, package; args = more options',
+                    '# finds: Rewired, the Input System package) | off | ["patch", ...]; name = the APK\'s,\n'
+                    '# package; args = more options',
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
-               "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME",
+               "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
+               "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\"",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
              '# they make put into the port folder (outputs = {"setup/files/x" = "build/x"}), and their licences\n'
              '# (licenses = {"LICENSE.x.txt" = "path"})',

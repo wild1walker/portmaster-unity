@@ -385,13 +385,6 @@ void up_request_finish(const char *why)
 }
 
 static void job_native_resume(void *arg) { (void)arg; up_native("nativeResume", "()V", NULL); }
-static void job_soft_input_cancel_close(void *arg)
-{
-    (void)arg;
-    if (S.finishing) return;
-    if (have_native("nativeSoftInputCanceled")) up_native("nativeSoftInputCanceled", "()V", NULL);
-    if (have_native("nativeSoftInputClosed")) up_native("nativeSoftInputClosed", "()V", NULL);
-}
 
 /* UnityPlayer.f() */
 static void try_resume(void)
@@ -451,8 +444,7 @@ void up_pause(void)
 {
     if (!g_main_started) return;
     up_log("pause");
-    /* reportSoftInputStr(null, 1, true) */
-    up_gl_post(job_soft_input_cancel_close, NULL, NULL);
+    up_softinput_pause();                      /* reportSoftInputStr(null, 1, true) */
     if (S.running && S.loaded) {
         struct pause_ctx *c = calloc(1, sizeof *c);
         sem_init(&c->sem, 0, 0);

@@ -295,5 +295,28 @@ class AsmpatchTest(unittest.TestCase):
         self.assertIn('also provide', str(cm.exception))
 
 
+class PlanTest(unittest.TestCase):
+    """plan(): what of a desktop build's Data goes into the APK's assets/bin/Data."""
+
+    def test_realtime_gi_data_is_shipped(self):
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, True)
+        src, pkg = os.path.join(td, 'Game_Data'), os.path.join(td, 'pkg')
+        for d in (os.path.join(src, 'Managed'), os.path.join(src, 'GI', 'level1', 'f8'), os.path.join(src, 'Resources'),
+                  os.path.join(pkg, 'Data'), os.path.join(pkg, 'Variations', 'mono', 'Managed')):
+            os.makedirs(d)
+        for f in (os.path.join(src, 'GI', 'level1', 'f8', 'abc.vis'), os.path.join(src, 'GI', 'level1', 'f8', 'abc.rgb'),
+                  os.path.join(src, 'level1'), os.path.join(pkg, 'Data', 'unity default resources')):
+            open(f, 'wb').close()
+        args = type('Args', (), dict(src=src, pkg=pkg, name='Game', inline_textures=False, inlined_ress=[], root_file=[],
+                                     skipped=[], video_shader=False, managed_file=[], assembly_patch=[], game_managed=None,
+                                     dropped_modules=[], mono_etc=os.path.join(td, 'none'), beside=[]))()
+        dst = {d: s for d, s, a in A.plan(args)}
+        data = os.path.join('Game', 'assets', 'bin', 'Data')
+        for f in ('abc.vis', 'abc.rgb'):
+            self.assertEqual(dst.get(os.path.join(data, 'GI', 'level1', 'f8', f)), os.path.join(src, 'GI', 'level1', 'f8', f))
+        self.assertNotIn('GI', args.skipped)
+
+
 if __name__ == '__main__':
     unittest.main()

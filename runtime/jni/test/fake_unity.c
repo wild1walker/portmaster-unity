@@ -22,7 +22,7 @@ int fake_unity_get(int i) { return (i >= 0 && i < R_N) ? R[i] : -1; }
 void fake_unity_set_shape(int shape) { S = shape; }
 
 static JavaVM *g_vm;
-static jobject g_context, g_choreo_cb, g_handler, g_proxy, g_proxy_failing, g_vsync_cb, g_main_looper;
+static jobject g_player_obj, g_context, g_choreo_cb, g_handler, g_proxy, g_proxy_failing, g_vsync_cb, g_main_looper;
 static jmethodID m_doFrame, m_handleMessage, m_postFrame;
 static jclass c_choreo;
 
@@ -108,6 +108,7 @@ static int new_callbacks(JNIEnv *env, jobject player)
     else
         (*env)->CallVoidMethod(env, player, MID("showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZZ)V"),
                                s, (jint)0, (jboolean)1, (jboolean)0, (jboolean)0, (jboolean)0, s, (jint)0, (jboolean)0, (jboolean)0);
+    (*env)->CallVoidMethod(env, player, MID("hideSoftInput", "()V"));
     (*env)->CallVoidMethod(env, player, MID("setClipboardText", "(Ljava/lang/String;)V"), s);
     ok &= str_eq(env, (*env)->CallObjectMethod(env, player, MID("getClipboardText", "()Ljava/lang/String;")), "text");
     if (S >= SHAPE_2019_4) {
@@ -287,6 +288,7 @@ static void initJni(JNIEnv *env, jobject player, jobject context)
 {
     R[R_INITJNI]++;
     g_context = (*env)->NewGlobalRef(env, context);
+    g_player_obj = (*env)->NewGlobalRef(env, player);
     (*env)->PushLocalFrame(env, 64);
 
     jobject apk = call_obj(env, context, "getPackageCodePath", "()Ljava/lang/String;");
@@ -497,6 +499,70 @@ static jboolean nativeDoneZ(JNIEnv *env, jobject player) { R[R_DONE]++; return J
 static void nativeVoid(JNIEnv *env, jobject player) { }
 static void nativeVoidII(JNIEnv *env, jobject player, jint a, jint b) { }
 static void nativeVoidZ(JNIEnv *env, jobject player, jboolean z) { }
+
+/* ---- soft keyboard: what the dialog reports (GL-thread natives append to seq, in order) ---- */
+static char si_seq[64], si_str[128];
+static volatile int si_seq_n;
+static void seq(char c) { if (si_seq_n < 63) { si_seq[si_seq_n] = c; si_seq[++si_seq_n] = 0; } }
+const char *fake_unity_si_seq(void) { return si_seq; }
+const char *fake_unity_si_str(void) { return si_str; }
+void fake_unity_si_reset(void) { si_seq_n = 0; si_seq[0] = 0; }
+static void nativeSetInputString(JNIEnv *env, jobject player, jstring s)
+{
+    const char *c = (*env)->GetStringUTFChars(env, s, 0);
+    int i = 0;
+    for (; c[i] && i < 127; i++) si_str[i] = c[i];
+    si_str[i] = 0;
+    (*env)->ReleaseStringUTFChars(env, s, c);
+    R[R_SI_STR]++;
+    seq('S');
+}
+static void nativeSetInputSelection(JNIEnv *env, jobject player, jint start, jint length)
+{
+    R[R_SI_SEL_START] = start; R[R_SI_SEL_LEN] = length;
+    seq('L');
+}
+static void nativeSoftInputClosed(JNIEnv *env, jobject player) { R[R_SI_CLOSED]++; seq('C'); }
+static void nativeSoftInputCanceled(JNIEnv *env, jobject player) { R[R_SI_CANCELED]++; seq('X'); }
+static void nativeSoftInputLostFocus(JNIEnv *env, jobject player) { R[R_SI_LOST]++; }
+static void nativeReportKeyboardConfigChanged(JNIEnv *env, jobject player) { R[R_SI_CONFIG]++; }
+static void nativeSetKeyboardIsVisible(JNIEnv *env, jobject player, jboolean z) { R[R_SI_VISIBLE] = z; seq('V'); }
+static void nativeSetInputArea(JNIEnv *env, jobject player, jint l, jint t, jint r, jint b) { R[R_SI_AREA_TOP] = t; R[R_SI_AREA_W] = r; seq('A'); }
+
+/* the game opens, changes and closes its keyboard (from the calling thread, as libunity does
+   from UnityMain): op 1 show "ab" (arg: keyboard type; placeholder "Name"; 2018.4+ limit 6),
+   2 the same multiline, 3 hide, 4 setSoftInputStr("xyz"), 5 setSelection(1, arg),
+   6 setCharacterLimit(arg), 7 getKeyboardLayout (R_SI_LAYOUT 1 if non-null), 8 show secure */
+void fake_unity_soft_input(int op, int arg)
+{
+    JNIEnv *env;
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) { FAIL("soft input: no env"); return; }
+    jclass pc = (*env)->FindClass(env, "com/unity3d/player/UnityPlayer");
+    jobject player = g_player_obj;
+#define MID(n, s) (*env)->GetMethodID(env, pc, n, s)
+    jstring t = (*env)->NewStringUTF(env, "ab"), h = (*env)->NewStringUTF(env, "Name");
+    jboolean ml = op == 2, sec = op == 8;
+    switch (op) {
+    case 1: case 2: case 8:
+        if (S <= SHAPE_2017_4_40)
+            (*env)->CallVoidMethod(env, player, MID("showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;)V"),
+                                   t, (jint)arg, (jboolean)1, ml, sec, (jboolean)0, h);
+        else if (S == SHAPE_2018_4)
+            (*env)->CallVoidMethod(env, player, MID("showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZ)V"),
+                                   t, (jint)arg, (jboolean)1, ml, sec, (jboolean)0, h, (jint)6, (jboolean)0);
+        else
+            (*env)->CallVoidMethod(env, player, MID("showSoftInput", "(Ljava/lang/String;IZZZZLjava/lang/String;IZZ)V"),
+                                   t, (jint)arg, (jboolean)1, ml, sec, (jboolean)0, h, (jint)6, (jboolean)0, (jboolean)0);
+        break;
+    case 3: (*env)->CallVoidMethod(env, player, MID("hideSoftInput", "()V")); break;
+    case 4: (*env)->CallVoidMethod(env, player, MID("setSoftInputStr", "(Ljava/lang/String;)V"), (*env)->NewStringUTF(env, "xyz")); break;
+    case 5: (*env)->CallVoidMethod(env, player, MID("setSelection", "(II)V"), (jint)1, (jint)arg); break;
+    case 6: (*env)->CallVoidMethod(env, player, MID("setCharacterLimit", "(I)V"), (jint)arg); break;
+    case 7: R[R_SI_LAYOUT] = (*env)->CallObjectMethod(env, player, MID("getKeyboardLayout", "()Ljava/lang/String;")) != 0; break;
+    }
+#undef MID
+    if (clear_exc(env)) FAIL("soft input op %d threw", op);
+}
 static jboolean nativeFalse(JNIEnv *env, jobject player) { return JNI_FALSE; }
 static jboolean nativeNoWindow(JNIEnv *env, jobject player) { R[R_NOWINDOW]++; return JNI_FALSE; }
 static void nativeHidePreserved(JNIEnv *env, jobject player) { R[R_HIDE_PRESERVED]++; }
@@ -711,10 +777,14 @@ static const struct nat up_natives[] = {
     { 0, SHAPE_2022_3, { "nativeLowMemory", "()V", (void *)nativeVoid } },
     { SHAPE_2019_4, SHAPE_N, { "nativeApplicationUnload", "()V", (void *)nativeVoid } },
     { 0, SHAPE_2022_3, { "nativeFocusChanged", "(Z)V", (void *)nativeFocusChanged } },
-    { SHAPE_2019_4, SHAPE_2022_3, { "nativeSetInputArea", "(IIII)V", (void *)nativeVoid } },
-    { SHAPE_2019_4, SHAPE_2022_3, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeVoidZ } },
-    { 0, SHAPE_2022_3, { "nativeSoftInputClosed", "()V", (void *)nativeVoid } },
-    { 0, SHAPE_2022_3, { "nativeSoftInputCanceled", "()V", (void *)nativeVoid } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeSetInputArea", "(IIII)V", (void *)nativeSetInputArea } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeSetKeyboardIsVisible } },
+    { 0, SHAPE_2022_3, { "nativeSetInputString", "(Ljava/lang/String;)V", (void *)nativeSetInputString } },
+    { SHAPE_2018_4, SHAPE_2022_3, { "nativeSetInputSelection", "(II)V", (void *)nativeSetInputSelection } },
+    { 0, SHAPE_2022_3, { "nativeSoftInputClosed", "()V", (void *)nativeSoftInputClosed } },
+    { 0, SHAPE_2022_3, { "nativeSoftInputCanceled", "()V", (void *)nativeSoftInputCanceled } },
+    { 0, SHAPE_2022_3, { "nativeSoftInputLostFocus", "()V", (void *)nativeSoftInputLostFocus } },
+    { SHAPE_2019_4, SHAPE_2022_3, { "nativeReportKeyboardConfigChanged", "()V", (void *)nativeReportKeyboardConfigChanged } },
     { 0, SHAPE_2018_4, { "nativeInitWebRequest", "(Ljava/lang/Class;)V", (void *)nativeInitWebRequest } },
     { 0, SHAPE_2021_3, { "nativeInjectEvent", "(Landroid/view/InputEvent;)Z", (void *)nativeInjectEvent } },
     { SHAPE_2022_3, SHAPE_N, { "nativeInjectEvent", "(Landroid/view/InputEvent;I)Z", (void *)nativeInjectEvent2 } },
@@ -737,14 +807,18 @@ static const struct nat aos_natives[] = {
     { SHAPE_6000_6, SHAPE_N, { "nativeSendSurfaceChangedEvent", "()V", (void *)nativeSendSurfaceChangedEvent } },
     { SHAPE_6000_6, SHAPE_N, { "nativeRender", "()Z", (void *)nativeRender } },
     { SHAPE_6000_6, SHAPE_N, { "nativeResume", "()V", (void *)nativeResume } },
-    { SHAPE_6000_6, SHAPE_N, { "nativeFocusChanged", "(Z)V", (void *)nativeFocusChanged } },
-    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputArea", "(IIII)V", (void *)nativeVoid } },
-    { SHAPE_6000_6, SHAPE_N, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeVoidZ } },
-    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputClosed", "()V", (void *)nativeVoid } },
-    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputCanceled", "()V", (void *)nativeVoid } },
     { SHAPE_6000_6, SHAPE_N, { "nativeOrientationChanged", "(II)V", (void *)nativeVoidII } },
     { SHAPE_6000_6, SHAPE_N, { "nativeGetNoWindowMode", "()Z", (void *)nativeNoWindow } },
     { SHAPE_6000_6, SHAPE_N, { "nativeMemoryUsageChanged", "(I)V", (void *)nativeMemoryUsage } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeFocusChanged", "(Z)V", (void *)nativeFocusChanged } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputArea", "(IIII)V", (void *)nativeSetInputArea } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetKeyboardIsVisible", "(Z)V", (void *)nativeSetKeyboardIsVisible } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputString", "(Ljava/lang/String;)V", (void *)nativeSetInputString } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSetInputSelection", "(II)V", (void *)nativeSetInputSelection } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputClosed", "()V", (void *)nativeSoftInputClosed } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputCanceled", "()V", (void *)nativeSoftInputCanceled } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeSoftInputLostFocus", "()V", (void *)nativeSoftInputLostFocus } },
+    { SHAPE_6000_6, SHAPE_N, { "nativeReportKeyboardConfigChanged", "()V", (void *)nativeReportKeyboardConfigChanged } },
 };
 static const struct nat rh_natives[] = {
     { 0, SHAPE_2018_4, { "nativeProxyInvoke", "(ILjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;", (void *)nativeProxyInvokeI } },
