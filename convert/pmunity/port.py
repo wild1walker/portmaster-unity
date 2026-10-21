@@ -1647,6 +1647,8 @@ def _component_pmunity(ctx, opts):
             if n.endswith(('.py', '.shader')):
                 rel = os.path.relpath(os.path.join(r, n), os.path.dirname(src))
                 ctx.add(os.path.join(r, n), os.path.join('setup', rel))
+    # `pmunity il2cpp --on-device` puts this NDK stand-in into the NDK folder (il2cpp.TOOLS)
+    ctx.add(os.path.join(REPO, 'tools', 'il2cpp', 'ndk-clang.sh'), os.path.join('setup', 'tools', 'il2cpp', 'ndk-clang.sh'), 0o755)
 
 
 def _component_pybundle(ctx, opts):

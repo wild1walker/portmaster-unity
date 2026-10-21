@@ -4,7 +4,11 @@ Android players (arm64-v8a) are IL2CPP players only; this is how a Mono game rea
 
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a|armeabi-v7a] [--pkg DIR] [--home DIR]
                              [--jobs N] [--strip low|none] [--keep-cpp] [--dry-run]
-    python -m pmunity il2cpp fetch <version> [--abi ...] [--pkg DIR] [--home DIR]   (toolchain only)
+                             [--on-device [--toolchain DIR]]
+    python -m pmunity il2cpp fetch <version> [--abi ...] [--pkg DIR] [--home DIR] [--on-device]
+                                                                                   (toolchain only)
+--on-device: natively on an aarch64 Linux handheld, in a port's setup, without Docker
+(il2cpp_device.py; docs/il2cpp.md, "On the handheld").
 
 <data>: the game's desktop data folder (<Game>_Data, or <Game>.app/Contents/Resources/Data; read
 only). <out> gets
@@ -64,7 +68,9 @@ def api_level(rev, abi):
 
 IMAGE = 'ubuntu:24.04'                   # stock; the tools are in <home>/root (tools/il2cpp/root.sh)
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOOLS = os.path.normpath(os.path.join(HERE, '..', '..', 'tools', 'il2cpp'))
+# tools/il2cpp of the repository; in a port's setup folder, setup/tools/il2cpp next to setup/pmunity
+TOOLS = next((t for t in (os.path.normpath(os.path.join(HERE, *up, 'tools', 'il2cpp')) for up in (('..', '..'), ('..',)))
+              if os.path.isfile(os.path.join(t, 'ndk-clang.sh'))), os.path.normpath(os.path.join(HERE, '..', '..', 'tools', 'il2cpp')))
 EDITOR_API = 'https://services.api.unity.com/unity/editor/release/v1/releases'
 EDITOR_CDN = 'https://download.unity3d.com/download_unity/{rev}/Windows64EditorInstaller/UnitySetup64-{ver}.exe'
 NDK_BASE = 'https://dl.google.com/android/repository/'
@@ -827,7 +833,10 @@ def link_args(version, abi, staged, linked, roots):
 
 
 def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAGE, keep_cpp=False, dry=False,
-          strip='low'):
+          strip='low', on_device=False, device_tc=None):
+    """on_device: run the tools natively on this aarch64 Linux machine (a handheld's setup) with the
+    device toolchain (il2cpp_device.py; fetched into device_tc, default <home>/device-arm64) instead
+    of Docker; the steps resume after a kill and the compiler jobs fit the memory."""
     version = UV.of_data(data)
     UV.check(version)
     home = os.path.abspath(home or default_home())
@@ -855,7 +864,12 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
             return ['mono', '--gc=sgen', tool]
         return ['dotnet', 'exec', '--runtimeconfig', rc, tool]
     root = os.path.join(home, 'root')
-    box = Container(image, root, (home, out, tc['pkg']), jobs or min(4, os.cpu_count() or 2), work)
+    if on_device:
+        from . import il2cpp_device as dev
+        device_tc = os.path.abspath(device_tc or dev.default_toolchain(home))
+        box = dev.Native(device_tc, jobs, work)
+    else:
+        box = Container(image, root, (home, out, tc['pkg']), jobs or min(4, os.cpu_count() or 2), work)
     if os.path.exists(os.path.join(work, 'cc.log')):
         os.unlink(os.path.join(work, 'cc.log'))
     roots = [n for n, src in chosen.items() if not src.startswith(os.path.join(tc['editor'], BCL_DIR) + os.sep)]
@@ -872,6 +886,12 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     log('il2cpp: ' + ' '.join(icmd))
     if dry:
         return None
+    if on_device:
+        tools = [deploy_tool(tc['editor'], 'UnityLinker'), tool]
+        dev.fetch(device_tc, dev.groups_for(tools))
+        secs = dev.run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, tc['editor'], strip)
+        return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
+                      extra={'on_device': dev.report(box)})
     for where, need in ((out, 2 << 30), (home, 1 << 30)):
         st = os.statvfs(where)
         if st.f_bavail * st.f_frsize < need:
@@ -891,7 +911,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip)
 
 
-def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip):
+def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip, extra=None):
     """The data folder il2cpp wrote (Metadata, Resources) -> <out>/Data/Managed; il2cpp.json."""
     src = None
     for cand in (os.path.join(cpp, 'Data'), os.path.join(os.path.dirname(so), 'Data'), os.path.join(work, 'Data')):
@@ -928,6 +948,7 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
         'ndk': tc['ndk_name'], 'player': tc['player'].get('version'),
         'assemblies': sorted(chosen), 'gc_incremental': settings.get('gcIncremental', False), 'strip': strip,
         'build_seconds': round(secs),
+        **(extra or {}),
         'files': sorted(os.path.relpath(os.path.join(r, n), out) for r, _, fs in os.walk(os.path.join(out, 'Data')) for n in fs),
     }
     with open(os.path.join(out, 'il2cpp.json'), 'w') as f:
@@ -951,8 +972,17 @@ def main(argv):
         ap.add_argument('version')
         ap.add_argument('--abi', default='arm64-v8a', choices=sorted(ABIS))
         ap.add_argument('--home'); ap.add_argument('--pkg')
+        ap.add_argument('--on-device', action='store_true', help="also the compiler tools for this aarch64 Linux machine")
+        ap.add_argument('--toolchain', help='where they go (default <home>/device-arm64)')
         a = ap.parse_args(argv[1:])
-        tc = toolchain(UV.Version(a.version), a.abi, os.path.abspath(a.home or default_home()), a.pkg)
+        home = os.path.abspath(a.home or default_home())
+        if a.on_device:
+            from . import il2cpp_device as dev
+            dev.install_ca()
+        tc = toolchain(UV.Version(a.version), a.abi, home, a.pkg)
+        if a.on_device:
+            tools = [deploy_tool(tc['editor'], 'UnityLinker'), deploy_tool(tc['editor'], 'il2cpp')]
+            tc['device_toolchain'] = dev.fetch(a.toolchain or dev.default_toolchain(home), dev.groups_for(tools))
         print(json.dumps({k: v for k, v in tc.items() if k != 'player'}, indent=1))
         return
     ap = argparse.ArgumentParser(prog='pmunity il2cpp', description=__doc__.split('\n\n')[0],
@@ -970,8 +1000,16 @@ def main(argv):
                          "the game's and the engine's assemblies are kept whole) or none (every class library compiled "
                          "whole: about 3x the C++ and the build time)")
     ap.add_argument('--dry-run', action='store_true', help='fetch and stage, print the commands, do not run them')
+    ap.add_argument('--on-device', action='store_true',
+                    help='run natively on this aarch64 Linux machine (a handheld\'s setup), without Docker: the tools '
+                         'come from Debian\'s and Microsoft\'s servers (docs/il2cpp.md, "On the handheld")')
+    ap.add_argument('--toolchain', help='--on-device: the tools folder (default <home>/device-arm64)')
     a = ap.parse_args(argv)
+    if a.on_device:
+        from . import il2cpp_device as dev
+        dev.install_ca()
     try:
-        build(a.data, a.out, a.abi, a.home, a.pkg, a.jobs, a.image, a.keep_cpp, a.dry_run, a.strip)
+        build(a.data, a.out, a.abi, a.home, a.pkg, a.jobs, a.image, a.keep_cpp, a.dry_run, a.strip,
+              a.on_device, a.toolchain)
     except UV.Unsupported as ex:
         sys.exit(str(ex))

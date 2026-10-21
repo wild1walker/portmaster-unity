@@ -343,6 +343,7 @@ class NewAndSetupTest(unittest.TestCase):
                 lic = zf.read('mygame/licenses/LICENSE.setup-python.txt').decode()
             for n in ('My Game.sh', 'mygame/ua_host', 'mygame/setup/python.tar.gz', 'mygame/setup/pmunity/__main__.py',
                       'mygame/setup/pmunity/shaders/glsl.py', 'mygame/setup/pmunity/video_decode_android.shader',
+                      'mygame/setup/pmunity/il2cpp_device_lock.py', 'mygame/setup/tools/il2cpp/ndk-clang.sh',
                       'mygame/licenses/LICENSE.libvpx.txt', 'mygame/licenses/LICENSE.portmaster-unity.txt',
                       'mygame/licenses/LICENSE.libhybris-Apache-2.0.txt', 'mygame/setup/patchscript'):
                 self.assertIn(n, names)

@@ -16,12 +16,13 @@ python -m pmunity android-data --src work/data --pkg <IL2CPP player package> --i
 the emulated armv7 rig; a Mono game does not need it there, but it is how the IL2CPP route is
 tested before a 64-bit runtime and handheld are at hand).
 
-**Where it runs:** on the porter's PC or Mac, never on the handheld. il2cpp and the C++ build of
-its output take minutes to an hour of CPU (a small game's generated C++ is a few hundred MB;
-the build uses about 1 GB of disk and 100-500 MB of memory per compiler process), in Docker.
-Everything it writes is in `--home` and `<out>`: the tools are plain folders bind-mounted into a
-stock `ubuntu:24.04` container (no image is built), so Docker's own disk only holds that image
-and a slow external drive works for all of it.
+**Where it runs:** on the porter's PC or Mac, in Docker; or, with `--on-device`, natively on the
+player's aarch64 handheld inside a port's first-launch setup (below, "On the handheld"). il2cpp
+and the C++ build of its output take minutes to an hour of CPU on a PC (a small game's generated
+C++ is a few hundred MB; the build uses about 1 GB of disk and 100-800 MB of memory per compiler
+process). On the PC, everything it writes is in `--home` and `<out>`: the tools are plain folders
+bind-mounted into a stock `ubuntu:24.04` container (no image is built), so Docker's own disk only
+holds that image and a slow external drive works for all of it.
 
 **What the result is:** `libil2cpp.so` holds the game's code (its assemblies, Unity's packages,
 the UnityEngine bindings and the .NET class libraries, compiled) and Unity's IL2CPP runtime. It
@@ -30,7 +31,8 @@ converted data, it is not something to publish or share: it is made from the gam
 Unity's IL2CPP (libil2cpp's sources, the class libraries), which stay under their owners' terms.
 Unity's il2cpp, libil2cpp and the Android NDK stay where the porter downloads them (`--home`) and
 are never shipped by this project. A port ships the tools and a setup that runs them on the
-user's machine, never the result.
+user's machine, never the result: for a 64-bit-only handheld, that machine is the handheld itself
+(`--on-device`).
 
 ## What it fetches (once, into `--home`)
 
@@ -104,6 +106,97 @@ under the runtime's root) and runs IL2CPP from there. Two packing rules follow f
 - **`buildDate` in boot.config** (Unity 2020.x; a value from the metadata's hash): libunity keeps
   it in `il2cpp/unity.ver` and copies the data again only when it changes; without it the copy is
   redone at every start.
+
+## On the handheld (`--on-device`)
+
+A port cannot ship `libil2cpp.so` (above), so on a 64-bit-only firmware the port's first-launch
+setup builds it on the handheld itself, with the same tools as the PC route but without Docker:
+
+```
+python -m pmunity il2cpp fetch <version> --on-device --home <dir>        # downloads only (Wi-Fi)
+python -m pmunity il2cpp <Game>_Data <out> --on-device --home <dir>      # the build (resumable)
+```
+
+`--on-device` runs everything natively on the aarch64 Linux machine it is started on (convert/
+pmunity/il2cpp_device.py). It needs no root, installs nothing, never touches the firmware's
+`/usr` and works with the setup's own Python (the port's `python.tar.gz`; urllib, tarfile and lzma
+only).
+
+### The tools
+
+| what | from | download | on disk |
+|---|---|---|---|
+| glibc 2.36 (its loader runs every tool), libstdc++, zlib | Debian 12 arm64 packages | 3 MB | 6 MB |
+| clang 14, lld 14, llvm-objcopy / -ar / -nm, clang's headers, and what libLLVM loads (libxml2, ICU, Z3, libedit, libffi, ...) | Debian 12 arm64 packages | 59 MB | 236 MB |
+| Mono 6.8 and the class libraries il2cpp.exe / UnityLinker.exe load (Unity 2017.4 - 2019.4) | Debian 12 packages | 6 MB | 19 MB |
+| .NET 8 runtime (Unity 2020.1+ only: their il2cpp / UnityLinker are .NET builds), libssl | Microsoft's `dotnet-runtime-8.0.x-linux-arm64.tar.gz`, Debian 12 | 32 MB | 75 MB |
+| Unity's il2cpp parts, the NDK's target files, the IL2CPP player | as on the PC (above, range reads) | 50-60 MB | 230-370 MB |
+
+Every Debian and .NET file is pinned by sha256 in `convert/pmunity/il2cpp_device_lock.py`
+(`tools/il2cpp/device_lock.py` writes it from Debian's index and Microsoft's release metadata).
+The packages come from `deb.debian.org`, else from `snapshot.debian.org` (which keeps every
+version Debian has published, so old pins keep working after Debian replaces a package). Only the
+group a build needs is fetched: a 2018.4 game takes base + LLVM + Mono, 68 MB, about 2.5 minutes
+on a fast connection; a package once unpacked is not fetched again after an interruption.
+Firmwares keep their CA certificates in different places: the fetch looks in the usual ones; on a
+system with none at all it downloads the pinned files without checking the server (the sha256
+check still applies). Unity's and Google's range reads need the system's certificates.
+
+The folder (`--toolchain`, default `<home>/device-arm64`) holds no symbolic links and needs no
+executable bits on the programs, so it works on an exFAT or FAT32 card as on ext4: libraries
+are stored under their sonames in `lib/`, Mono's class libraries in its GAC, and every program
+runs through the folder's own loader (`lib/ld-linux-aarch64.so.1 --library-path lib <program>`),
+so the firmware's libraries (often an older glibc) never matter. Only the loader and the small
+scripts in `bin/` are executed directly (an exFAT card's mount gives every file the exec bit;
+PortMaster needs that anyway). Programs that find their own files through `/proc/self/exe`
+(which, run this way, names the loader) are given them: clang `-no-canonical-prefixes` (its
+headers and `ld.lld` from argv[0]), Mono a copy of the loader named `mono/bin/mono` (Mono takes
+its prefix from that path), .NET a copy inside `dotnet/` (the muxer finds `host/fxr` next to
+itself). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`, `llvm-ar`,
+`llvm-ranlib`, `llvm-nm`, `mono`, `dotnet`; tools/il2cpp/ndk-clang.sh runs them as on the PC
+(`PMUNITY_LLVM=<toolchain>/bin`), so a port ships `setup/tools/il2cpp/ndk-clang.sh` next to
+`setup/pmunity` (`pmunity port package` does).
+
+### Fitting a 1 GB, 4 x Cortex-A53 handheld
+
+- **Steps**: UnityLinker, il2cpp's conversion to C++ (`--convert-to-cpp` alone) and the C++ build
+  (`--compile-cpp` alone, from the C++ on disk) run as three processes, each skipped when an
+  earlier run finished it with the same inputs (`<out>/.work/.done-*`). A killed build continues:
+  il2cpp's object cache (`.work/cache`) keeps every compiled file, so a resumed build compiles only
+  what is missing. Nothing is lost but the file being compiled.
+- **Memory**: UnityLinker and the conversion run with their CPU affinity set to one CPU (the 2017.4 -
+  2019.4 tools size their thread pools by the CPUs they may use). Compiler jobs: one per 200 MB of
+  `MemAvailable` beyond 250 MB, at most one per CPU (`PMUNITY_IL2CPP_JOB_MB`,
+  `PMUNITY_IL2CPP_RESERVE_MB`; `--jobs` sets it). The compiler wrappers hold job slots (POSIX sh,
+  `mkdir` locks; a killed run's slots are taken over), so however many compilers il2cpp starts,
+  only that many run; a further one starts only while `MemAvailable` stays above a job's size, and
+  a source file over 4 MB (`PMUNITY_IL2CPP_BIG_KB`: IL2CPP's metadata tables) compiles alone.
+  AArch64 compiles get `-mno-outline`: LLVM's machine outliner keeps the machine code of every
+  function of a file until the end, although at `-Os` it outlines nothing; without it the objects
+  are byte-identical and the largest file's compiler peak falls from 725 MB to 270 MB.
+- **Progress**: a line every 30 seconds (PortMaster's patcher shows the setup's output): MB of C++
+  written while converting, files compiled of the total with an estimate of the time left while
+  compiling. `il2cpp.json` gets `on_device`: jobs, CPUs, the peak memory of each step.
+
+### Measured (Unity 2018.4 game, the 2D pixel-art one of the table below)
+
+⟨numbers⟩
+
+### When memory runs out
+
+⟨oom⟩
+
+### In a port's setup
+
+```
+pm il2cpp fetch "$VERSION" --on-device --home "$W/il2cpp-home"     # with Wi-Fi: about 125 MB
+pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # 1.5 - 4 hours on an A53 handheld
+pm android-data --src ... --pkg "$W/il2cpp-home/$VERSION/player-arm64-v8a" --il2cpp "$W/il2cpp" ...
+rm -rf "$W/il2cpp-home" "$W/il2cpp/.work"                          # the tools and build files, ~1 GB
+```
+
+A firmware with a 32-bit userland keeps the Mono route (armeabi-v7a player); the IL2CPP route is
+for the 64-bit-only ones (no `/lib/ld-linux-armhf.so.3`).
 
 ## AOT limits
 
