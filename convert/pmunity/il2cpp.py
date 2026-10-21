@@ -500,10 +500,39 @@ def fetch_player(version, pkg, abi):
     return info
 
 
+# libil2cpp's armv7 64-bit atomics (2017.4, 2018.4) bind their operands to r0-r3 and also list
+# those registers as clobbered; clang 3.8 took that, clang 11+ refuses it ("asm-specifier for input
+# or output variable conflicts with asm clobber list"). None of these asm blocks writes a register
+# it binds an input to, and Unity's own later file (2019.4) lists only "cc" and "memory": the same
+# change is made in the fetched copy.
+SOURCE_FIXES = {
+    'il2cpp/libil2cpp/os/Unity/ExtendedAtomicOps-arm.h':
+        (re.compile(r'^([ \t]*: "cc"(?:, "memory")?)(?:, "r\d+")+[ \t]*(\r?)$', re.M), r'\1\2'),
+}
+
+
+def fix_editor_sources(editor):
+    """SOURCE_FIXES in the fetched Editor/Data (idempotent); returns the files changed."""
+    changed = []
+    for rel, (pat, rep_) in SOURCE_FIXES.items():
+        p = os.path.join(editor, rel)
+        if not os.path.isfile(p):
+            continue
+        with open(p, encoding='utf-8', newline='') as f:
+            text = f.read()
+        new = pat.sub(rep_, text)
+        if new != text:
+            _write(p, new.encode('utf-8'))
+            changed.append(rel)
+    return changed
+
+
 def toolchain(version, abi, home, pkg=None, bcl=BCL_DIR):
     """Fetches what is missing; returns the paths."""
     vdir = os.path.join(home, str(version))
     editor = fetch_editor(version, os.path.join(vdir, 'editor'), bcl=bcl)
+    for rel in fix_editor_sources(editor):
+        log(f'{rel}: armv7 asm clobber lists as in later Unity releases (SOURCE_FIXES)')
     name, rev, zipname = ndk_for(version)
     ndk = fetch_ndk(name, zipname, abi, os.path.join(home, 'ndk-' + name))
     install_ndk_shims(ndk, abi)                  # (again: the script may be newer than the fetch)
@@ -790,8 +819,9 @@ def player_settings(data):
     return out
 
 
-def elf_exports(path):
-    """Names of the defined dynamic symbols of an ELF shared library (32- or 64-bit, little endian)."""
+def _elf_symbols(path, table):
+    """(data, string table offset, [(name offset, value, size, info, shndx)]) of one symbol table
+    of an ELF file (32- or 64-bit, little endian): table 11 = SHT_DYNSYM, 2 = SHT_SYMTAB."""
     with open(path, 'rb') as f:
         d = f.read()
     if d[:4] != b'\x7fELF':
@@ -809,22 +839,47 @@ def elf_exports(path):
         else:
             name, typ, flags, addr, off, size, link, info, align, ent = struct.unpack_from('<IIIIIIIIII', d, o)
         secs.append((typ, off, size, link, ent))
-    out = set()
+    syms, stro = [], 0
     for typ, off, size, link, ent in secs:
-        if typ != 11:                               # SHT_DYNSYM
+        if typ != table:
             continue
         stro = secs[link][1]
         for k in range(1, size // ent):
             o = off + k * ent
             if is64:
-                nm, info, other, shndx = struct.unpack_from('<IBBH', d, o)
+                nm, info, other, shndx, value, sz = struct.unpack_from('<IBBHQQ', d, o)
             else:
-                nm, _, _, info, other, shndx = struct.unpack_from('<IIIBBH', d, o)
-            if shndx == 0 or (info >> 4) == 0:      # undefined or local
-                continue
-            e = d.index(b'\0', stro + nm)
-            out.add(d[stro + nm:e].decode('ascii', 'replace'))
+                nm, value, sz, info, other, shndx = struct.unpack_from('<IIIBBH', d, o)
+            syms.append((nm, value, sz, info, shndx))
+    return d, stro, syms
+
+
+def elf_exports(path):
+    """Names of the defined dynamic symbols of an ELF shared library."""
+    d, stro, syms = _elf_symbols(path, 11)
+    out = set()
+    for nm, value, size, info, shndx in syms:
+        if shndx == 0 or (info >> 4) == 0:      # undefined or local
+            continue
+        e = d.index(b'\0', stro + nm)
+        out.add(d[stro + nm:e].decode('ascii', 'replace'))
     return out
+
+
+def write_symbol_map(elf, path, thumb=False):
+    """Data/Managed/SymbolMap-<arch> of a 2017.x Android IL2CPP build, from the unstripped library's
+    symbol table instead of the linker map Unity's MapFileParser reads: int32 count, then each code
+    symbol's (uint64 offset, uint32 length) in address order. libil2cpp finds the method of a
+    managed stack frame with it (without it, by the method pointer table, which names a frame in
+    native code after a neighbouring method). `thumb`: armv7 (bit 0 marks Thumb code, not part of
+    the address). Returns the number of symbols."""
+    d, stro, syms = _elf_symbols(elf, 2)
+    funcs = sorted({((v & ~1) if thumb else v, n) for _, v, n, info, shndx in syms
+                    if info & 0xf == 2 and n > 0 and shndx != 0})          # STT_FUNC, defined, sized
+    with open(path, 'wb') as f:
+        f.write(struct.pack('<i', len(funcs)))
+        f.write(b''.join(struct.pack('<QI', a, n) for a, n in funcs))
+    return len(funcs)
 
 
 def il2cpp_api_check(libunity, libil2cpp):
@@ -1119,6 +1174,10 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
     missing, nwanted = il2cpp_api_check(libunity, so) if os.path.isfile(libunity) else ([], 0)
     if missing:
         log(f'WARNING: the player\'s libunity.so looks up {len(missing)} il2cpp_* functions libil2cpp.so lacks: {missing[:8]}')
+    syms = [p for p in (os.path.join(os.path.dirname(so), n) for n in ('libil2cpp.so.debug', 'libil2cpp.sym')) if os.path.isfile(p)]
+    if version.line < (2018, 1) and syms:      # (2017.x: see il2cpp_args' --map-file-parser)
+        n = write_symbol_map(syms[0], os.path.join(dst, 'SymbolMap-' + ABIS[abi][0]), abi == 'armeabi-v7a')
+        log(f'SymbolMap-{ABIS[abi][0]}: {n} code symbols')
     # the unstripped library and the linker's map (dropped), the symbols (kept in .work): 2019.4+
     # name them .dbg.so / .sym.so, 2017.4 and 2018.4 .so.debug / .sym / .map
     for extra in ('libil2cpp.dbg.so', 'libil2cpp.so.debug', 'libil2cpp.map', 'libil2cpp.sym.so', 'libil2cpp.sym'):

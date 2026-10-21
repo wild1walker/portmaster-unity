@@ -205,9 +205,12 @@ What the runs showed:
   rig's missing `CAP_SYS_NICE` (FMOD's `setpriority(-20)` for its mixer thread fails without it,
   but granting it changes nothing), not the API level (19 and 22 alike); the 2017.4.40 armv7 Mono
   player and the 2018.4+ arm64 players start their audio in the same rigs. Open (runtime side).
-- **Stack traces without SymbolMap** (2017.4): libil2cpp finds a frame's method in the method
-  pointer table, so a frame in native code gets a neighbouring managed method's name in Unity's
-  logged stack traces.
+- **Stack traces** (2017.4): with the SymbolMap written from the symbol table, Unity's logged
+  stack traces name the same frames as the game's Mono build; without it they had extra frames
+  named after neighbouring methods.
+- **Rewired** (`--asmpatch "... --only=rewired-android"`): the patched Assembly-CSharp compiled in,
+  Rewired takes the Android path (no libudev lookups) and the pad's A skips the intro videos and
+  opens the main menu.
 
 ## Not tested yet
 
@@ -237,9 +240,14 @@ What the runs showed:
   which the NDK's GNU ld accepted in a shared library and lld does not, so ndk-clang.sh drops a
   `-fPIE` that comes with `-fPIC`. It links with a map file and then runs MapFileParser on it for
   `Data/SymbolMap-<arch>` (the editor passes its prebuilt one; without `--map-file-parser` il2cpp
-  builds it from source with the host's GCC): `--map-file-parser=/bin/true`, so no SymbolMap is
-  written. libil2cpp needs none: without it, a managed stack trace's methods are found in the
-  sorted method pointer table instead. For a .NET 3.5 game il2cpp copies the old Mono's
+  builds it from source with the host's GCC): `--map-file-parser=/bin/true`, and `pmunity il2cpp`
+  writes `Data/Managed/SymbolMap-ARM64` / `-ARMv7` itself from the unstripped library's symbol
+  table (the same records: each code symbol's offset and length). libil2cpp names the methods of
+  managed stack frames with it; without it, it falls back to the method pointer table, which
+  gave frames in native code a neighbouring method's name in Unity's logged stack traces.
+  libil2cpp's armv7 64-bit atomics (`os/Unity/ExtendedAtomicOps-arm.h`, also 2018.4's) list the
+  registers they bind operands to as clobbered, which clang 11+ refuses; the fetched copy gets
+  the clobber lists of Unity's own 2019.4 file (`SOURCE_FIXES`: "cc", "memory"). For a .NET 3.5 game il2cpp copies the old Mono's
   `etc` (`Mono/etc/mono`: `config`, `2.0/machine.config`, ...) into the data, so that is fetched
   with its class libraries. A 64-bit ARM IL2CPP player exists from 2017.4.16f1; older data (Cuphead
   is 2017.4.9f1) is built with 2017.4.40f1's IL2CPP and run on its player (`--unity`; android-data

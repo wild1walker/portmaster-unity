@@ -235,6 +235,75 @@ class ProfileTest(unittest.TestCase):
         self.assertFalse(any(x.startswith('--map-file-parser') for x in a))
 
 
+def write_elf(path, syms, is64=True):
+    """An ELF file with only a symbol table (SHT_SYMTAB) and its strings: syms = [(name, value,
+    size, type)] (type 2 = function), defined in section 1."""
+    strtab = b'\0' + b''.join(n.encode() + b'\0' for n, _, _, _ in syms)
+    ent = 24 if is64 else 16
+    tab, pos = bytes(ent), 1
+    for n, v, size, typ in syms:
+        info = (1 << 4) | typ                                   # STB_GLOBAL
+        tab += struct.pack('<IBBHQQ', pos, info, 0, 1, v, size) if is64 else struct.pack('<IIIBBH', pos, v, size, info, 0, 1)
+        pos += len(n) + 1
+    hdr = 64 if is64 else 52
+    shoff = hdr + len(tab) + len(strtab)
+    if is64:
+        sh = lambda typ, off, size, link, entsize: struct.pack('<IIQQQQIIQQ', 0, typ, 0, 0, off, size, link, 0, 1, entsize)
+        head = bytearray(b'\x7fELF\x02\x01\x01' + bytes(hdr - 7))
+        struct.pack_into('<Q', head, 0x28, shoff); struct.pack_into('<HH', head, 0x3a, 64, 3)
+    else:
+        sh = lambda typ, off, size, link, entsize: struct.pack('<IIIIIIIIII', 0, typ, 0, 0, off, size, link, 0, 1, entsize)
+        head = bytearray(b'\x7fELF\x01\x01\x01' + bytes(hdr - 7))
+        struct.pack_into('<I', head, 0x20, shoff); struct.pack_into('<HH', head, 0x2e, 40, 3)
+    with open(path, 'wb') as f:
+        f.write(bytes(head) + tab + strtab + sh(0, 0, 0, 0, 0) + sh(2, hdr, len(tab), 2, ent) +
+                sh(3, hdr + len(tab), len(strtab), 0, 0))
+
+
+class SourceFixTest(unittest.TestCase):
+    def test_arm_clobbers(self):
+        src = ('    __asm__ __volatile__\n    (\n        "ldrexd\\t%1, %2, [%3]\\n\\t"\n'
+               '        : "=&r" (success), "=&r" (lo), "=&r" (hi)\n        : "r" (p)\n        : "cc", "r2", "r3"\n    );\n'
+               '        : "cc", "memory", "r0", "r1", "r3"\n        : "cc", "memory"\n')
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'il2cpp', 'libil2cpp', 'os', 'Unity', 'ExtendedAtomicOps-arm.h')
+            os.makedirs(os.path.dirname(p))
+            with open(p, 'w') as f:
+                f.write(src)
+            self.assertEqual(I.fix_editor_sources(t), ['il2cpp/libil2cpp/os/Unity/ExtendedAtomicOps-arm.h'])
+            with open(p) as f:
+                got = f.read()
+            self.assertNotIn('"r2"', got)
+            self.assertNotIn('"r3"', got)
+            self.assertIn('        : "cc"\n    );', got)
+            self.assertEqual(got.count('        : "cc", "memory"\n'), 2)
+            self.assertIn(': "=&r" (success), "=&r" (lo), "=&r" (hi)', got)       # (operands untouched)
+            self.assertEqual(I.fix_editor_sources(t), [])                           # idempotent
+
+
+class SymbolMapTest(unittest.TestCase):
+    def read(self, path):
+        with open(path, 'rb') as f:
+            d = f.read()
+        n, = struct.unpack_from('<i', d)
+        self.assertEqual(len(d), 4 + 12 * n)
+        return [struct.unpack_from('<QI', d, 4 + 12 * i) for i in range(n)]
+
+    def test_arm64(self):
+        with tempfile.TemporaryDirectory() as t:
+            elf, out = os.path.join(t, 'libil2cpp.sym'), os.path.join(t, 'SymbolMap-ARM64')
+            write_elf(elf, [('b', 0x2000, 16, 2), ('a', 0x1000, 32, 2), ('data', 0x3000, 8, 1), ('zero', 0x4000, 0, 2)])
+            self.assertEqual(I.write_symbol_map(elf, out), 2)          # functions with a size only, sorted
+            self.assertEqual(self.read(out), [(0x1000, 32), (0x2000, 16)])
+
+    def test_armv7_thumb(self):
+        with tempfile.TemporaryDirectory() as t:
+            elf, out = os.path.join(t, 'libil2cpp.sym'), os.path.join(t, 'SymbolMap-ARMv7')
+            write_elf(elf, [('t', 0x1001, 10, 2), ('a', 0x2000, 4, 2)], is64=False)
+            I.write_symbol_map(elf, out, thumb=True)
+            self.assertEqual(self.read(out), [(0x1000, 10), (0x2000, 4)])
+
+
 class SpansTest(unittest.TestCase):
     def test_merge(self):
         sp = I._spans([(100, 10, 'a'), (0, 50, 'b'), (120, 5, 'c'), (10 ** 7, 10, 'd')], gap=1000)
