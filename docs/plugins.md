@@ -131,7 +131,7 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | SDK | DllImport | default | what happens |
 |---|---|---|---|
 | Steamworks (Steamworks.NET 9+, Facepunch) | `steam_api`, `steam_api64` | stub `steam` | `SteamAPI_Init*` fail as without a running Steam client (runtime/host/steamstub.c) |
-| Steamworks.NET before 9.0 | `CSteamworks` | stub `csteamworks` | `Init`/`InitSafe` false, `RestartAppIfNecessary` false |
+| Steamworks.NET before 9.0 | `CSteamworks` | stub `csteamworks` | `Init`/`InitSafe` false, `RestartAppIfNecessary` false; the interface accessors (`SteamClient_`, `SteamGameServerClient_`) NULL, so Steamworks.NET throws its own "Steamworks is not initialized." before any `ISteam*_` call, as on a PC without Steam (2017.2.0f3: a game's 601 Steam calls go through that check) |
 | Steam encrypted app tickets | `sdkencryptedappticket` | none | only reached after a successful Steam init |
 | Discord Game SDK | `discord_game_sdk` | stub `discord_game_sdk` | `DiscordCreate` -> `NotRunning`; the C# wrapper throws `ResultException`, as without a Discord client |
 | Discord RPC | `discord-rpc` | stub `discord-rpc` | every call does nothing (never connects) |

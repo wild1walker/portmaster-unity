@@ -12,6 +12,7 @@
 static int z_false(void) { return 0; }
 static void z_void(void) { }
 static void *z_null(void) { return NULL; }
+static uint64_t z_u64(void) { return 0; }     // 64-bit results: both registers on 32-bit ARM
 
 #define F(name, fn) { name, (void *)(fn) }
 
@@ -50,9 +51,33 @@ const so_shim plugstub_discord_rpc[] = {
 };
 
 // CSteamworks (Steamworks.NET before 9.0 put a C glue library between C# and libsteam_api): Init
-// and InitSafe fail as without a running Steam client, RestartAppIfNecessary is false; the
-// interface functions are never reached after a failed Init
+// and InitSafe fail as without a running Steam client, RestartAppIfNecessary is false. The
+// interface accessors (SteamClient_, SteamGameServerClient_) give NULL, as libsteam_api does before
+// a successful init: Steamworks.NET's InteropHelp.TestIfAvailableClient then throws its own
+// "Steamworks is not initialized." before any interface function (ISteam*_), as on a PC without
+// Steam; the pipe and user handles are 0, the crash and minidump helpers do nothing
 const so_shim plugstub_csteamworks[] = {
+    F("SteamClient_", z_null),
+    F("SteamGameServerClient_", z_null),
+    F("GetHSteamPipe_", z_false),
+    F("GetHSteamUser_", z_false),
+    F("Steam_GetHSteamUserCurrent_", z_false),
+    F("Steam_RunCallbacks_", z_void),
+    F("Steam_RegisterInterfaceFuncs_", z_void),
+    F("SteamInternal_CreateInterface_", z_null),
+    F("SteamInternal_GameServer_Init_", z_false),
+    F("GetSteamInstallPath", z_null),
+    F("ReleaseCurrentThreadMemory", z_void),
+    F("SetTryCatchCallbacks", z_void),
+    F("WriteMiniDump", z_void),
+    F("SetMiniDumpComment", z_void),
+    F("SetBreakpadAppID", z_void),
+    F("UseBreakpadCrashHandler", z_void),
+    F("GameServer_BSecure", z_false),
+    F("GameServer_GetHSteamPipe", z_false),
+    F("GameServer_GetHSteamUser", z_false),
+    F("GameServer_GetSteamID", z_u64),
+    F("GameServer_ReleaseCurrentThreadMemory", z_void),
     F("Init", z_false),
     F("InitSafe", z_false),
     F("SteamAPI_Init", z_false),

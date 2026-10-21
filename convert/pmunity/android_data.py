@@ -97,7 +97,10 @@ def clone(src, dst, allow_hardlink):
         except OSError:
             pass
     shutil.copyfile(src, dst)
-    shutil.copymode(src, dst)
+    try:
+        shutil.copymode(src, dst)
+    except OSError:                 # exFAT (muOS's ports partition) may refuse chmod: data needs no mode
+        pass
     return 'copy'
 
 

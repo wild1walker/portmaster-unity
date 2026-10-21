@@ -17,6 +17,7 @@
 static int  s_false(void) { return 0; }
 static void s_void(void) { }
 static void *s_null(void) { return NULL; }
+static uint64_t s_u64(void) { return 0; }     // 64-bit results: both registers on 32-bit ARM
 static const char *s_empty(void) { return ""; }
 
 // SteamAPI_InitFlat(SteamErrMsg *) / SteamInternal_SteamAPI_Init(const char *versions, SteamErrMsg *)
@@ -51,7 +52,7 @@ static const so_shim steam_api_shims[] = {
     F("SteamGameServer_GetHSteamPipe", s_false),
     F("SteamGameServer_GetHSteamUser", s_false),
     F("SteamGameServer_BSecure", s_false),
-    F("SteamGameServer_GetSteamID", s_false),
+    F("SteamGameServer_GetSteamID", s_u64),
     // what a game may still call once Init failed: nothing to do
     F("SteamAPI_Shutdown", s_void),
     F("SteamAPI_RunCallbacks", s_void),

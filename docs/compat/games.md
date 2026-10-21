@@ -37,7 +37,7 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 | game | Unity, build | emulated rig | notes (last checked) |
 |---|---|---|---|
 | [Petty Puny Planet](https://whalesandgames.itch.io/petty-puny-planet) | 5.6.0f3 | main menu | (2026-10-20) |
-| [Shiver](https://aquiluslupus.itch.io/shiver) | 2017.2.0f3 | black, 47 - 60 frames in 300 s | CSteamworks entry point missing (2026-10-20) |
+| [Shiver](https://aquiluslupus.itch.io/shiver) | 2017.2.0f3 | starts (Adventure Creator's text and PlayerPrefs, Steam's failed init handled as on a PC without Steam), but black, 64 frames in 300 s | the missing CSteamworks entry point is fixed; the black picture is not looked into yet (2026-10-21) |
 | [Chassis Chase](https://frog626267.itch.io/chassis-chase) | 2023.2.20f1 | main menu | (2026-10-20) |
 | [Lo-Fi Room](https://bearmask.itch.io/lofi-room) | 6000.0.58f2 | logo, title | (2026-10-21) |
 | [DIG UP (test)](https://asestr.itch.io/dig-up-test) | 6000.3.11f1 | main menu | (2026-10-21) |

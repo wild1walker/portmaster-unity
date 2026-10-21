@@ -269,7 +269,7 @@ which the runtime plays), Vulkan (the converter keeps GLES3 only).
 | player | game | result |
 |---|---|---|
 | 5.6.0f3 | .NET 3.5, UI, Unity Analytics (WWW) | main menu; its analytics requests fail at once (WWW without a network) |
-| 2017.2.0f3 | .NET 3.5, Adventure Creator, CSteamworks, 860 MB | the `TypeLoadException` (`MovieTexture`, desktop-only) is gone with the desktop AudioModule; then black: `EntryPointNotFoundException: SteamClient_` (an old Steamworks.NET through `CSteamworks`, which the Steam stub's flat API lacks) and 47 - 60 frames in 300 s |
+| 2017.2.0f3 | .NET 3.5, Adventure Creator, CSteamworks, 860 MB | the `TypeLoadException` (`MovieTexture`, desktop-only) is gone with the desktop AudioModule; then black: `EntryPointNotFoundException: SteamClient_` (an old Steamworks.NET through `CSteamworks`, which the Steam stub's flat API lacks) and 47 - 60 frames in 300 s. With the accessors in the `csteamworks` stub (2026-10-21): Steamworks.NET's own "Steamworks is not initialized.", as on a PC without Steam; still black, 64 frames in 300 s |
 | 2023.2.20f1 | bdwgc | main menu (Start, Settings, Exit) |
 | 6000.0.58f2 | bdwgc | studio logo, "sound required" card, its opening screen (frames take ~2 s in the rig) |
 | 6000.3.11f1 | bdwgc, VideoPlayer (H.264) | main menu; its background clip seeks with "Codec appears stalled" |
