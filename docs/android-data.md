@@ -258,6 +258,16 @@ value back for anything else (a desktop player, the directory route). Without `-
 folder is made but the code still reads the jar path (a warning says so). FMOD's banks stay in
 `assets/` beside the APK too, for ua_host's FMOD path mapping (section 5).
 
+In the emulated rig: a 2018.3 game whose menus take their text from localization XML files that it
+lists and opens in StreamingAssets (`DirectoryInfo.GetFiles`, `File.Exists`, `FileStream`) showed
+a dark screen and `KeyNotFoundException`s as before; with `both` its title menu. A 2020.3 game
+that loads its subtitles with `File.Exists`/`File.ReadAllText` at startup finds them (no "Cannot
+find file!"; Mono's trace shows the call). In a survey of the
+corpus (`asmpatch --survey`), reads of StreamingAssets that reach System.IO came from Unity
+Services Core's configuration reader (three games), a localization package's file storage, the
+Addressables release above, and the games' own localization or subtitle files; Cuphead's reach only
+`AssetBundle.LoadFromFile*`.
+
 Caveats:
 - `loose`: code that runs only on Android in the desktop build too (a run-time
   `Application.platform == RuntimePlatform.Android` branch) gets a folder where it expects the
@@ -325,6 +335,6 @@ registry and macOS's plist are not read: there a game's own save files are what 
 - The Mount patch and the OBB route have not been tried.
 - MT rendering and blit type are left at the game's values.
 - StreamingAssets (section 6): the rig ran the `obb` route on an Addressables game and `both` on
-  games reading XML and JSON with System.IO; `loose` only in the unit tests and the asmpatch
-  tests; an FMOD game with `both` not run. Binary Addressables catalogs, Windows and macOS
-  PlayerPrefs not handled.
+  games reading localization XML and subtitle JSON with System.IO; `loose` and `--data-path` only
+  in the unit tests and the asmpatch tests; an FMOD game with `both` not run. Binary Addressables
+  catalogs, Windows and macOS PlayerPrefs not handled.
