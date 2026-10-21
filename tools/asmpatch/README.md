@@ -37,6 +37,8 @@ assembly that would reference the patcher's own runtime (`System.Private.CoreLib
 |---|---|
 | `rewired-android` | [Rewired](https://guavaman.com/projects/rewired/)'s `InputManager.DetectPlatform` reports Android. A desktop build compiled it to say Windows, OSX or Linux, and on the Android player Rewired then looks for that platform's input APIs (Linux: libudev) and the pad's buttons do nothing for the game. As Android, Rewired reads pads through Unity's input with its Android controller definitions, as the game's own Android builds do. `platform = Android`, `editorPlatform = None`, `webplayerPlatform = None` and `isEditor = false` are stored right before each return of the method as compiled; each value is the enum constant found by name in the game's Rewired (its numbers differ between versions). Works on the source edition (`InputManager` in `Assembly-CSharp`) and on DLL editions (any class deriving from `Rewired.InputManager_Base` with a `DetectPlatform` body, in whichever assembly). `pmunity android-data` adds the `Joy<j>Axis<a>` input axes Rewired's Unity input reads (`--rewired-joysticks`). |
 
+| `inputsystem-android` | Unity's [Input System](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.7/manual/index.html) package compiles its Android device support only into Android builds; on the Android player the engine reports the pad as an Android game controller (interface `Android`, class `AndroidGameController`, state `'AGC '`), which a desktop build's `Unity.InputSystem.dll` has no layout for, so the game sees no gamepad. The patch registers layouts for it with the package's own public `InputSystem.RegisterLayout(json)`, at the end of `InputSystem.PerformDefaultPluginInitialization` (where the package registers its platform support). The layouts are JSON written here from the player's state format (Android key codes as bits from byte 0, MotionEvent axes as floats from byte 28), extend the package's `Gamepad` and place each of its controls; a pad with Microsoft's vendor id becomes an `XInputController` where the build has that class. Not applicable without `Unity.InputSystem.dll` or when it has the Android support (an Android build); fails if those two methods are missing. Keyboards, mice and touchscreens need nothing (common formats). docs/input.md has the mapping. |
+
 Adding a patch: a class deriving from `Patch` (`src/Patch.cs`) in `src/Patches/`, listed in
 `Patch.All`; its `Run(game, apply)` finds the targets, reports them, and with `apply` changes them
 and marks their assemblies changed. Look things up by name (types, members, enum constants), fail
@@ -61,8 +63,11 @@ also provides is an error: run asmpatch inside that patch command instead (on it
 
 Which input stacks the game's own assemblies use (not Unity's or the class libraries): Rewired
 (edition, compiled platform), InControl, the Input System package, the legacy `UnityEngine.Input`
-calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointer handlers, and
-whether code selects UI elements (pad/keyboard menu navigation). The verdict line says whether the
+calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointer handlers,
+whether code selects UI elements (pad/keyboard menu navigation), InControl's Android device
+profiles and the pad names they match (so a port can set `UA_PAD_NAME` to one), and text entry (`InputField`,
+`TMP_InputField`, `TouchScreenKeyboard`: the soft keyboard, which ua_host's on-screen keyboard
+answers). The verdict line says whether the
 menus are likely pointer-only (then the port needs ua_host's pointer mode, `UA_POINTER=1`, see
 docs/input.md).
 
@@ -81,5 +86,8 @@ the runtime pack and ILLink):
 `./build.sh test` also runs the tests (`test/`): fake Rewired assemblies are built with Cecil (a
 `Rewired_Core` whose enums are numbered unlike any real Rewired, a source-edition game and a DLL
 edition, a `DetectPlatform` with early returns and a short branch the patch pushes out of range),
-patched, loaded into the test process and called; plus the not-applicable, already-applied,
-failing and command-line cases.
+patched, loaded into the test process and called; a fake `Unity.InputSystem` (an
+`InputSystem` whose plugin initialization returns early or not, a logging `RegisterLayout` and a
+decoy overload; no package code) is patched and called, and the layouts it registers are parsed
+and checked control by control; plus the not-applicable, already-applied, failing and
+command-line cases.
