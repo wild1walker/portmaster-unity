@@ -206,7 +206,7 @@ REL/RELA-only libraries, the UnityMain looper model, Swappy off, the OBB GUID of
 | shader serializer | 201609010 | 201609010 | 201609010 | 202012090 | 202012090 | 202012090 | 202012090 | 202012090 | **202605290** |
 | `unity default resources` read from | `bin/Data/` | same | same | same | **`bin/Data/Resources/`** | same | same | same | same |
 | engine assembly slots | 2 | 2 | 45 | by name (json) | same | same | same | same | same |
-| PlayerSettings type tree | UnityPy's | UnityPy's | UnityPy's | UnityPy's | UnityPy's | +4 bytes (typetrees.py) | (6000.3.11: +4) | +4 | +4 |
+| PlayerSettings type tree | UnityPy's | UnityPy's | UnityPy's | UnityPy's | 2023.2.20: +1 byte (typetrees.py) | +4 bytes | (6000.3.11: +4) | +4 | +4 |
 
 Not covered: 5.0 - 5.5 (5.0 - 5.4: another Shader layout; 5.5 unchecked), 6000.7 (betas: format
 25), the GameActivity variant (a Gradle-built `libgame.so`; every package has the Activity one,
@@ -218,6 +218,7 @@ which the runtime plays), Vulkan (the converter keeps GLES3 only).
 |---|---|---|
 | 5.6.0f3 | .NET 3.5, UI, Unity Analytics (WWW) | main menu; its analytics requests fail at once (WWW without a network) |
 | 2017.2.0f3 | .NET 3.5, Adventure Creator, CSteamworks, 860 MB | the `TypeLoadException` (`MovieTexture`, desktop-only) is gone with the desktop AudioModule; then black: `EntryPointNotFoundException: SteamClient_` (an old Steamworks.NET through `CSteamworks`, which the Steam stub's flat API lacks) and 47 - 60 frames in 300 s |
+| 2023.2.20f1 | bdwgc | main menu (Start, Settings, Exit) |
 | 6000.0.58f2 | bdwgc | studio logo, "sound required" card, its opening screen (frames take ~2 s in the rig) |
 | 6000.3.11f1 | bdwgc, VideoPlayer (H.264) | main menu; its background clip seeks with "Codec appears stalled" |
 | 6000.5.7f1 | format 23 | title screen (Start, Quit) |

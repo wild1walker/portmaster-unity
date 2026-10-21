@@ -153,6 +153,16 @@ class OlderNewerLinesTest(unittest.TestCase):
         self.assertEqual(tree, {'ok': True})
         self.assertEqual(len(used.m_Children), 3)
 
+        class Tail(Obj):    # 2023.2.20f1: one byte more at the end, no FIELDS entry fits
+            type = type('t', (), {'name': 'Other'})
+            def read_typetree(self, nodes=None):
+                if nodes is None or [c.m_Name for c in nodes.m_Children][-1] != '_unknown_0':
+                    raise ValueError('Expected to read 9 bytes, but only read 8 bytes')
+                return {'tail': True}
+        tree, used = T.read(Tail(), edits=('insecureHttpOption',))
+        self.assertEqual(tree, {'tail': True})
+        self.assertEqual(used.m_Children[-1].m_Type, 'UInt8')
+
 
 class SwappyTest(unittest.TestCase):
     def test_options_key(self):

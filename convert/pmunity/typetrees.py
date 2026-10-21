@@ -6,13 +6,18 @@ version. A release that added a field after UnityPy's snapshot (6000.6.3f1's Pla
 `captureStartupLogsBaked`, which UnityPy's 6000.6 alpha tree lacks) then fails to read
 ("Expected to read 892 bytes, but only read 888 bytes"). The fields such releases added are known
 from the players' own type tree code (libunity's `Transfer<GenerateTypeTreeTransfer>` functions,
-read with tools/re/strrefs.py and the player's symbols); FIELDS lists them. A fixed tree is only
-used when UnityPy's own one does not read the object and the fixed one reads it exactly (every
-byte), so the table never changes data that UnityPy reads correctly.
+read with tools/re/strrefs.py and the player's symbols); FIELDS lists them. Otherwise the bytes
+left over at the end are kept as unknown fields. A fixed tree is only used when UnityPy's own one
+does not read the object and the fixed one reads it exactly (every byte), so this never changes
+data that UnityPy reads correctly, and (read(obj, edits)) only when the fields to change come
+before every place the missing bytes can be.
 
     tree, node = read(obj)       # node: the tree used (None: UnityPy's own)
     save(obj, tree, node)
 """
+import re
+import struct
+
 # class name -> [(field it follows, type, name, aligned)]: fields Unity releases added after the
 # type trees UnityPy ships
 FIELDS = {
@@ -70,18 +75,60 @@ def candidates(obj):
     return out
 
 
-def read(obj):
+_SHORT = re.compile(r'Expected to read (\d+) bytes, but only read (\d+) bytes')
+
+
+def _reads(obj, node):
+    try:
+        return obj.read_typetree(nodes=node)
+    except (ValueError, IndexError, KeyError, EOFError, OverflowError, MemoryError, struct.error):
+        return None
+
+
+def _earliest_gap(obj, base, k):
+    """The first top-level field after which k unknown bytes make the object read exactly (the
+    earliest place a field the tree lacks can be), or None."""
+    names = [c.m_Name for c in base.m_Children]
+    typ = {1: 'UInt8', 2: 'UInt16', 4: 'int', 8: 'SInt64'}.get(k)
+    if typ is None:
+        return None
+    for i, n in enumerate(names):
+        for aligned in (False, True):
+            t = _with_fields(base, [(n, typ, '_probe', aligned)])
+            if t is not None and _reads(obj, t) is not None:
+                return i
+    return None
+
+
+def read(obj, edits=()):
     """(tree, node): the object read with UnityPy's tree, or else with a fixed one that reads all
-    of its bytes (node is then that tree, to save with)."""
+    of its bytes (node is then that tree, to save with). The fixed trees: FIELDS for the class,
+    else the bytes UnityPy's tree leaves over kept as unknown fields at the end (the fields a release
+    added at the end: 2023.2.20f1's PlayerSettings is 1 byte longer). With `edits` (fields the caller
+    will change), a fixed tree is only taken when the bytes the tree lacks cannot sit before any of
+    them (no shorter field of that size fits there), so those fields are read where they are."""
     try:
         return obj.read_typetree(), None
     except ValueError as ex:
         first = ex
+    m = _SHORT.search(str(first))
+    base = obj._get_typetree_node()
+    if edits and m:
+        names = [c.m_Name for c in base.m_Children]
+        last = max((names.index(e) for e in edits if e in names), default=-1)
+        gap = _earliest_gap(obj, base, int(m.group(1)) - int(m.group(2)))
+        if gap is not None and gap < last:
+            raise ValueError(f'{obj.type.name}: {first}; the missing field could be before {names[gap + 1]}, '
+                             f'which this conversion edits: no fixed type tree used') from first
     for node in candidates(obj):
-        try:
+        if _reads(obj, node) is not None:
             return obj.read_typetree(nodes=node), node
-        except (ValueError, IndexError, KeyError):
-            continue
+    if m and 0 < int(m.group(1)) - int(m.group(2)) <= 16:
+        node = base
+        for i in range(int(m.group(1)) - int(m.group(2))):     # unknown bytes, one after the other
+            node = node and _with_fields(node, [(node.m_Children[-1].m_Name, 'UInt8', f'_unknown_{i}', False)])
+        if node is not None and _reads(obj, node) is not None:
+            return obj.read_typetree(nodes=node), node
     raise first
 
 

@@ -699,7 +699,9 @@ def edit_globalgamemanagers(src, managed_names, args, log):
         elif n == 'ScriptMapper' and getattr(args, 'video_shader_pid', None):
             video.map_shader(sf, args.video_shader_pid, notes)    # Hidden/VideoDecodeAndroid
         elif n == 'PlayerSettings':
-            t, node = typetrees.read(o)        # (6000.6.3f1: a field UnityPy's tree lacks)
+            # (6000.x, 2023.2.20f1: fields UnityPy's trees lack, after the ones changed here)
+            t, node = typetrees.read(o, edits=('m_MTRendering', 'mobileMTRenderingBaked', 'androidBlitType',
+                                               'androidUseSwappy'))
             if node is not None:
                 notes.append('PlayerSettings read with a fixed type tree (typetrees.py)')
             changed = False

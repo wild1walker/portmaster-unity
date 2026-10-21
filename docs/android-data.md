@@ -191,10 +191,12 @@ built-ins and six free Linux games (one per line):
   ships (UnityPy 1.25.4: up to 6000.6 alphas / 6000.7 alphas). `PlayerSettings` of 6000.0.58f2,
   6000.3.11f1, 6000.5.7f1 and 6000.6.3f1 is 4 bytes longer than those trees (6000.6.3f1's
   `PlayerSettingsState::Transfer` has `captureStartupLogsBaked` after `insecureHttpOption`), so
-  reading it failed. `pmunity/typetrees.py` then reads it with that field added, only when
-  UnityPy's own tree fails and the fixed one reads every byte; a 4-byte field fits only among the
-  last fields in all four, long after the ones android-data changes, and the object writes back
-  byte for byte.
+  reading it failed; 2023.2.20f1's is 1 byte longer, at its end. `pmunity/typetrees.py` then reads
+  it with that field added, or else with the bytes left over kept as unknown fields at the end,
+  only when UnityPy's own tree fails, the fixed one reads every byte, and no field of the missing
+  size fits before the fields android-data changes (`m_MTRendering`, `mobileMTRenderingBaked`,
+  `androidBlitType`, `androidUseSwappy`: the conversion stops otherwise). In all five the missing
+  bytes can only be among the last fields, and the object writes back byte for byte.
 - **PlayerSettings.** As in section 2, plus `--swappy off|keep|on`: `androidUseSwappy` (2019.3+,
   Android Frame Pacing), off by default. A desktop build never ran it, and the runtime keeps Swappy
   off; with the setting on, the 2019.4 player presents nothing and 2021.3+ stop after their first
@@ -226,7 +228,8 @@ Six free Linux Mono games (2017.4.40f1, 2018.4.36f1, 2019.4.8f1, 2020.3.49f1, 20
 `--pack all`) with the Android player package of their own version (its `unity default resources`
 and Mono `Managed` set, fetched from Unity's installers): every serialized file loads back in
 UnityPy with the Android platform, every assembly the list names is present, APK and OBB verify.
-Seven more (5.6.0f3, 2017.2.0f3, 6000.0.58f2, 6000.3.11f1, 6000.5.7f1, 6000.6.2f1, 6000.6.3f1)
+Eight more (5.6.0f3, 2017.2.0f3, 2023.2.20f1, 6000.0.58f2, 6000.3.11f1, 6000.5.7f1, 6000.6.2f1,
+6000.6.3f1)
 go through shaders, settings and android-data the same way; all of them run in the emulated rig
 (compat/README.md, "Players run").
 

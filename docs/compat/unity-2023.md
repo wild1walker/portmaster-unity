@@ -2,8 +2,8 @@
 
 Installers: `UnitySetup-Android-Support-for-Editor-2023.1.22f1.exe` (changeset c1416845ad01) and
 `...-2023.2.22f1.exe` (6b19bf4f8115), the last patches of the two lines: the 2020.3 large-installer
-NSIS layout, per-file blocks (one range request per file). Static survey only: no free Mono Linux
-game of these lines was found in the corpus feeds (the one 2023.2 game seen is IL2CPP).
+NSIS layout, per-file blocks (one range request per file). Run in the emulated rig: a free Linux
+game of 2023.2.20f1 (its main menu); no 2023.1 Mono game was found in the corpus feeds.
 
 ## What changes, in short
 2023.1 is where the Java side becomes Unity 6's (unity-6000.md): `UnityPlayer` abstract,
@@ -26,4 +26,6 @@ int)`, `nativeMemoryUsageChanged` in place of `nativeLowMemory` (from 2023.2; 20
 ## What the tools need
 Nothing beyond the 6000.x work: the converter's 2022.3 formats, the default resources path from
 2023.2 (`DEFAULT_RESOURCES_IN_RESOURCES_FROM`), the runtime's natives on both player classes, the
-2023.1+ UnityPlayer members and the UI thread's ALooper (unity-6000.md). Untested in a game.
+2023.1+ UnityPlayer members and the UI thread's ALooper (unity-6000.md); 2023.2.20f1's
+PlayerSettings is one byte longer than UnityPy's tree (typetrees.py keeps it). 2023.1 is untested
+in a game.
