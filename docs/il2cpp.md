@@ -128,16 +128,17 @@ only).
 |---|---|---|---|
 | glibc 2.36 (its loader runs every tool), libstdc++, zlib | Debian 12 arm64 packages | 3 MB | 6 MB |
 | clang 14, lld 14, llvm-objcopy / -ar / -nm, clang's headers, and what libLLVM loads (libxml2, ICU, Z3, libedit, libffi, ...) | Debian 12 arm64 packages | 59 MB | 236 MB |
-| Mono 6.8 and the class libraries il2cpp.exe / UnityLinker.exe load (Unity 2017.4 - 2019.4) | Debian 12 packages | 6 MB | 19 MB |
-| .NET 8 runtime (Unity 2020.1+ only: their il2cpp / UnityLinker are .NET builds), libssl | Microsoft's `dotnet-runtime-8.0.x-linux-arm64.tar.gz`, Debian 12 | 32 MB | 75 MB |
-| Unity's il2cpp parts, the NDK's target files, the IL2CPP player | as on the PC (above, range reads) | 50-60 MB | 230-370 MB |
+| Mono 6.8 and the class libraries UnityLinker.exe (and, if asked, il2cpp.exe) load: Unity 2017.4 - 2019.4 | Debian 12 packages | 7 MB (2019.x: +24 MB, the netstandard facades and System.Web.Extensions) | 20 MB |
+| .NET 8 runtime (Unity 2020.1+: il2cpp / UnityLinker are .NET builds; 2017.4 - 2019.4: il2cpp.exe, below), libssl | Microsoft's `dotnet-runtime-8.0.x-linux-arm64.tar.gz`, Debian 12 | 32 MB | 76 MB |
+| Unity's il2cpp parts, the NDK's target files, the IL2CPP player | as on the PC (above, range reads) | 55-60 MB | 150-370 MB |
 
 Every Debian and .NET file is pinned by sha256 in `convert/pmunity/il2cpp_device_lock.py`
 (`tools/il2cpp/device_lock.py` writes it from Debian's index and Microsoft's release metadata).
 The packages come from `deb.debian.org`, else from `snapshot.debian.org` (which keeps every
 version Debian has published, so old pins keep working after Debian replaces a package). Only the
-group a build needs is fetched: a 2018.4 game takes base + LLVM + Mono, 68 MB, about 2.5 minutes
-on a fast connection; a package once unpacked is not fetched again after an interruption.
+groups a build needs are fetched: a 2018.4 game takes base + LLVM + Mono + .NET, 100 MB (68 MB
+with `PMUNITY_IL2CPP_NET471=mono`), unpacked in about 2.5 minutes on a fast connection; a package
+once unpacked is not fetched again after an interruption.
 Firmwares keep their CA certificates in different places: the fetch looks in the usual ones; on a
 system with none at all it downloads the pinned files without checking the server (the sha256
 check still applies). Unity's and Google's range reads need the system's certificates.
@@ -151,8 +152,8 @@ scripts in `bin/` are executed directly (an exFAT card's mount gives every file 
 PortMaster needs that anyway). Programs that find their own files through `/proc/self/exe`
 (which, run this way, names the loader) are given them: clang `-no-canonical-prefixes` (its
 headers and `ld.lld` from argv[0]), Mono a copy of the loader named `mono/bin/mono` (Mono takes
-its prefix from that path), .NET a copy inside `dotnet/` (the muxer finds `host/fxr` next to
-itself). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`, `llvm-ar`,
+its prefix from that path), .NET a copy named `dotnet/dotnet` (the muxer insists on its name and
+finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`, `llvm-ar`,
 `llvm-ranlib`, `llvm-nm`, `mono`, `dotnet`; tools/il2cpp/ndk-clang.sh runs them as on the PC
 (`PMUNITY_LLVM=<toolchain>/bin`), so a port ships `setup/tools/il2cpp/ndk-clang.sh` next to
 `setup/pmunity` (`pmunity port package` does).
@@ -164,8 +165,15 @@ itself). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`
   earlier run finished it with the same inputs (`<out>/.work/.done-*`). A killed build continues:
   il2cpp's object cache (`.work/cache`) keeps every compiled file, so a resumed build compiles only
   what is missing. Nothing is lost but the file being compiled.
+- **il2cpp.exe on .NET 8** (Unity 2017.4 - 2019.4; `PMUNITY_IL2CPP_NET471=mono` keeps Mono, as on
+  the PC): the generated C++ is the same up to how 23 of 240 files write floating-point literals
+  (`3.1415926535897931` vs `3.141592653589793`: the same values; the objects compiled from them
+  are byte-identical), with a sixth of Mono's CPU time and less memory (2018.4 game: 0.4 vs 2.6
+  min, 469 vs 535 MB). If it fails, the conversion runs again on Mono. UnityLinker.exe stays on
+  Mono (it uses .NET Framework-only types).
 - **Memory**: UnityLinker and the conversion run with their CPU affinity set to one CPU (the 2017.4 -
-  2019.4 tools size their thread pools by the CPUs they may use). Compiler jobs: one per 200 MB of
+  2019.4 tools size their thread pools by the CPUs they may use); .NET with
+  `DOTNET_GCConserveMemory=9` (2020.3 conversion: 766 -> 666 MB). Compiler jobs: one per 200 MB of
   `MemAvailable` beyond 250 MB, at most one per CPU (`PMUNITY_IL2CPP_JOB_MB`,
   `PMUNITY_IL2CPP_RESERVE_MB`; `--jobs` sets it). The compiler wrappers hold job slots (POSIX sh,
   `mkdir` locks; a killed run's slots are taken over), so however many compilers il2cpp starts,
@@ -173,30 +181,79 @@ itself). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`
   a source file over 4 MB (`PMUNITY_IL2CPP_BIG_KB`: IL2CPP's metadata tables) compiles alone.
   AArch64 compiles get `-mno-outline`: LLVM's machine outliner keeps the machine code of every
   function of a file until the end, although at `-Os` it outlines nothing; without it the objects
-  are byte-identical and the largest file's compiler peak falls from 725 MB to 270 MB.
+  are byte-identical and `Il2CppAttributes.cpp`'s compiler peak (14.7 MB, 15,000 functions)
+  falls from 725 MB to 270-320 MB (at 450 MB it was killed with the outliner, and compiled
+  without it). The largest compile is then `Il2CppTypeDefinitions.cpp`, 334 MB.
+  A compiler killed by the OOM killer is noted in `.work/killed.log`; with more than one job the
+  build then goes on once with one job at a time.
 - **Progress**: a line every 30 seconds (PortMaster's patcher shows the setup's output): MB of C++
   written while converting, files compiled of the total with an estimate of the time left while
-  compiling. `il2cpp.json` gets `on_device`: jobs, CPUs, the peak memory of each step.
+  compiling (from the size of the files started so far). `il2cpp.json` gets `on_device`: jobs,
+  CPUs, the peak memory and CPU seconds of each step. `PMUNITY_IL2CPP_CC_WRAPPER=<command>` runs
+  every compiler under that command (e.g. a timer).
 
 ### Measured (Unity 2018.4 game, the 2D pixel-art one of the table below)
 
-⟨numbers⟩
+In an arm64 Docker container limited like the handheld (`--cpus=4 --cpuset-cpus=0-3
+--memory=1g --memory-swap=1g`, no swap) on an Apple M3, a Debian 11 userland (glibc 2.31) standing
+in for the firmware, the setup's Python 3.12. The tools and build files were on Docker Desktop's
+file sharing from a slow USB drive, which made every step wait on I/O (wall time 3-10x the CPU
+time): the CPU time is the figure to scale. Nothing was killed by the OOM killer; killed by hand
+while compiling, the build went on with the objects it had.
+
+| step | wall (container) | CPU (M3) | peak memory | Cortex-A53 1.5 GHz, 1 GB (estimate) | Snapdragon 865, 8 GB (estimate) |
+|---|---|---|---|---|---|
+| fetch the tools (100 MB; 68 MB without .NET) | 2.5 min | - | 170 MB | 3-6 min (Wi-Fi, xz) | 1-2 min |
+| UnityLinker (Mono) | 0.1-0.4 min | 0.1 min | 300 MB | 2-3 min | < 1 min |
+| conversion to C++, il2cpp.exe on .NET 8 (default) | 4-6.5 min | 0.4 min | 469-488 MB | 8-12 min | 1-2 min |
+| (the same on Mono) | 9.5-13.6 min | 2.6 min | 535 MB | 45-55 min | 6-7 min |
+| compile 677 files, link, strip (3 jobs) | 42.5 min | 12.5 min (8.5 in the compilers) | 430 MB; largest compile 334 MB; lld 412 MB resident, much of it its mapped inputs | 1.7-2.5 h with 2 jobs (3.5-4.5 h with 1) | 6-10 min with 8 jobs |
+| all | about 1 h | 13 min | 607-731 MB in the container's cgroup (with its page cache) | **2-3 hours** | **10-15 minutes** |
+
+The estimates scale the CPU times: a 1.5 GHz Cortex-A53 core does about 1/15 - 1/20 of an M3
+core's work at compiling (single-core Geekbench 6: ~160-200 against ~3,000), a Snapdragon 865's
+Cortex-A77 cores about 1/2.4 (its four A55 cores add little). The job count is what
+`MemAvailable` allows: two on a 1 GB handheld with EmulationStation running (600-700 MB
+available), one below 650 MB, more with 2 GB and up. A source file over 4 MB compiles alone; the
+largest ones take 6-11 s of CPU here, 2-4 minutes on an A53.
+
+Disk: the tools 330 MB (255 MB without .NET), Unity's parts for 2018.4 arm64 about 150 MB, the
+build files up to 650 MB (C++ 300 MB, objects 186 MB, the unstripped library and its symbols
+until the end): about 1.1 GB at the peak, then `lib/arm64-v8a/libil2cpp.so` (30 MB) and
+`Data/Managed` (5 MB) once `<home>` and `<out>/.work` are removed. The tools also run from an
+exFAT or FAT32 card (tested with loop-mounted images: fetch, compile, lld, strip, Mono, .NET).
 
 ### When memory runs out
 
-⟨oom⟩
+The kernel's OOM killer stops the process with the most memory:
+- **a compiler**: the wrapper notes it in `.work/killed.log`; with more than one job the build goes
+  on once with one job at a time (the objects made so far are kept). With one job, il2cpp fails
+  with "N compiler(s) were killed by a signal (137) ...: out of memory, most likely";
+- **the conversion or UnityLinker** (Mono or .NET, 470-590 MB; .NET 8 for a 2020.3 game 666 MB):
+  "... failed (exit -9) (killed: out of memory?)". The conversion starts over when run again.
+
+Running the setup again continues where it stopped, so a build that ran out of memory once
+because something else was using it usually gets through the second time. It needs about 550 MB
+available for the conversion (700 MB for a 2020.x game) and 350 MB for the largest compile: on a
+1 GB handheld, quit what can be quit; zram swap (which some firmwares have) helps. Below that
+the same step fails each time; the way out is swap on the card (`mkswap` / `swapon` need root,
+which this tool never asks for) or the PC route.
 
 ### In a port's setup
 
 ```
-pm il2cpp fetch "$VERSION" --on-device --home "$W/il2cpp-home"     # with Wi-Fi: about 125 MB
-pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # 1.5 - 4 hours on an A53 handheld
+pm il2cpp fetch "$VERSION" --on-device --home "$W/il2cpp-home"     # with Wi-Fi: about 155 MB
+pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # 2 - 3 hours on an A53 handheld
 pm android-data --src ... --pkg "$W/il2cpp-home/$VERSION/player-arm64-v8a" --il2cpp "$W/il2cpp" ...
 rm -rf "$W/il2cpp-home" "$W/il2cpp/.work"                          # the tools and build files, ~1 GB
 ```
 
 A firmware with a 32-bit userland keeps the Mono route (armeabi-v7a player); the IL2CPP route is
 for the 64-bit-only ones (no `/lib/ld-linux-armhf.so.3`).
+
+So far run in the arm64 containers only: the 2018.4 game end to end (the same UnityLinker output
+as the PC route but for each assembly's MVID; 677 objects), the 2019.4 and 2020.3 games of the
+table below through UnityLinker and the conversion into compiling. Not yet on a handheld.
 
 ## AOT limits
 

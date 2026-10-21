@@ -8,8 +8,9 @@ firmwares the player's own handheld builds it.
 
 The tools are the PC route's, as Debian 12 ("bookworm") arm64 packages: clang/lld 14 (the NDK's
 x86-64 compilers stand-in, as on the PC: tools/il2cpp/ndk-clang.sh), Mono 6.8 (the .NET Framework
-builds of il2cpp and UnityLinker, Unity 2017.4 - 2019.4) and, for Unity 2020.1+, Microsoft's .NET 8
-runtime. They are fetched at setup time from Debian's and Microsoft's servers, each file checked
+builds of UnityLinker, Unity 2017.4 - 2019.4) and Microsoft's .NET 8 runtime (Unity 2020.1+'s
+tools; il2cpp.exe of 2017.4 - 2019.4 too, unless PMUNITY_IL2CPP_NET471=mono: the same C++ but for
+how floating-point literals are written, a sixth of Mono's CPU time). They are fetched at setup time from Debian's and Microsoft's servers, each file checked
 against the sha256 in il2cpp_device_lock.py, and unpacked by this module (Python's tarfile + lzma:
 Debian's packages are xz-compressed) into one folder:
 
@@ -17,7 +18,7 @@ Debian's packages are xz-compressed) into one folder:
   <toolchain>/llvm/bin/       clang, lld, llvm-objcopy/-ar/-nm; ld.lld (a wrapper, below)
   <toolchain>/llvm/lib/clang/14.0.6/include/   clang's own headers
   <toolchain>/mono/           mono-sgen, the 4.5 class libraries il2cpp/UnityLinker load, etc/mono
-  <toolchain>/dotnet/         .NET 8 (Unity 2020.1+ only)
+  <toolchain>/dotnet/         .NET 8 (dotnet = the loader's copy, dotnet-muxer = .NET's dotnet)
   <toolchain>/bin/            the commands the build runs: clang, clang++, ld.lld, llvm-*, mono, dotnet
 
 Every program runs through the folder's own glibc loader (`lib/ld-linux-aarch64.so.1
@@ -28,12 +29,13 @@ is not touched. The folder holds no symbolic links and needs no executable bits 
 cards as on ext4. Programs that find their files through /proc/self/exe (the loader, when run that
 way) get what they need: clang `-no-canonical-prefixes` (its resource dir and ld.lld from its
 argv[0]), Mono a copy of the loader named mono/bin/mono (Mono derives its prefix from that path),
-.NET a copy inside dotnet/ (the muxer finds host/fxr next to itself).
+.NET a copy named dotnet/dotnet (the muxer wants that name and finds host/fxr next to itself).
 
 The build is the PC route's (il2cpp.py), with what a 1 GB, 4 x Cortex-A53 handheld needs:
-  - memory: compiler jobs from MemAvailable (one at a time on a 1 GB handheld), files above
-    PMUNITY_IL2CPP_BIG_KB compiled alone, il2cpp's CPU affinity limited to the job count (the
-    2017.4 - 2019.4 tools start one compiler per CPU they see);
+  - memory: compiler jobs from MemAvailable (one or two on a 1 GB handheld), files above
+    PMUNITY_IL2CPP_BIG_KB compiled alone, -mno-outline (identical objects, a third of the memory
+    for the largest file), one CPU for UnityLinker and the conversion (the 2017.4 - 2019.4 tools
+    size their thread pools by the CPUs they may use), one job after an OOM kill;
   - progress lines (PortMaster's patcher shows them) and a log per step in <out>/.work;
   - resumable: UnityLinker, the C++ conversion and every compiled object are kept, so a killed
     build continues where it stopped (il2cpp's object cache; conversion and compilation run as two
@@ -122,11 +124,12 @@ def place(member):
 ONLY = {'mono-devel': re.compile(r'^(?:\./)?usr/lib/mono/4\.5/Facades/')}
 
 
-def groups_for(tools):
+def groups_for(tools, net471='dotnet'):
     """The package groups a build needs: tools = the il2cpp/UnityLinker programs (.exe: .NET
     Framework builds run on Mono; .dll: .NET Core / .NET builds run on .NET 8). For Mono, what the
     tools' folders reference beyond the base class libraries: the netstandard facade (Unity 2019.x:
-    a netstandard Mono.Cecil), System.Web.Extensions (2019.x UnityLinker's JSON)."""
+    a netstandard Mono.Cecil), System.Web.Extensions (2019.x UnityLinker's JSON). net471='dotnet'
+    (the handheld's default): il2cpp.exe runs on .NET 8 (UnityLinker.exe stays on Mono)."""
     g = ['base', 'llvm']
     exe = [t for t in tools if t.endswith('.exe')]
     if exe:
@@ -144,8 +147,8 @@ def groups_for(tools):
             g.append('mono-facades')
         if 'System.Web.Extensions.dll' in refs:
             g.append('mono-web')
-    if any(t.endswith('.dll') for t in tools) or (exe and os.environ.get('PMUNITY_IL2CPP_NET471') == 'dotnet'):
-        g.append('dotnet')                   # (PMUNITY_IL2CPP_NET471=dotnet: il2cpp.exe on .NET 8, il2cpp.py)
+    if any(t.endswith('.dll') for t in tools) or (exe and net471 == 'dotnet'):
+        g.append('dotnet')
     return g
 
 
@@ -931,6 +934,26 @@ def _mb(path):
     return du(path) / 2**20 if os.path.isdir(path) else 0
 
 
+def on_mono(cmd):
+    """An il2cpp.exe command run on .NET 8 (dotnet exec --runtimeconfig <rc> <tool> ...) -> the same
+    on Mono, or None when it is not one."""
+    if cmd[:3] == ['dotnet', 'exec', '--runtimeconfig'] and cmd[4].endswith('.exe'):
+        return ['mono', '--gc=sgen'] + cmd[4:]
+    return None
+
+
+def _outputpath(cmd):
+    return next((w.split('=', 1)[1] for w in cmd if w.startswith('--outputpath=')), None)
+
+
+# what il2cpp 2017.4 / 2018.4 writes beside libil2cpp.so: the unstripped library and its symbols.
+# A .debug left from an earlier link makes it skip stripping the next one ("Skipping Android
+# library stripping": a resumed build would keep a library twice the size), so both are removed
+# before the build, and after it the symbols go to .work (as il2cpp.finish() does for the newer
+# names) and the unstripped copy is deleted.
+SIDE_FILES = ('libil2cpp.so.debug', 'libil2cpp.sym')
+
+
 def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     """UnityLinker, il2cpp's conversion to C++, then its build of libil2cpp.so, each skipped when a
     run before finished it with the same inputs; the build reuses every object il2cpp's cache
@@ -964,10 +987,20 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     if _done(work, 'convert', conv_id) and os.path.isdir(cpp):
         log('il2cpp: C++ written before')
     else:
-        log('il2cpp: converting the game\'s code to C++ (the slow single-threaded part: up to an hour)')
+        log('il2cpp: converting the game\'s code to C++ (one CPU: 10 minutes to an hour on a handheld)')
         shutil.rmtree(cpp, ignore_errors=True)
         box.progress = lambda el: f'  converting: {el / 60:.0f} min, {_mb(cpp):.0f} MiB of C++ so far'
-        t = box.run(conv, 'il2cpp-convert.log', affinity=1)
+        try:
+            t = box.run(conv, 'il2cpp-convert.log', affinity=1)
+        except SystemExit:
+            if not on_mono(conv) or box.peaks.get('il2cpp-convert.log', 0) > available_mb() * 0.9:
+                raise
+            log('il2cpp: il2cpp.exe failed on .NET 8: converting again on Mono (as Unity\'s Linux and macOS editors run it)')
+            icmd = on_mono(icmd)
+            conv = [w for w in icmd if w != '--compile-cpp']
+            conv_id = hashlib.sha256(json.dumps([conv, link_id]).encode()).hexdigest()
+            shutil.rmtree(cpp, ignore_errors=True)
+            t = box.run(conv, 'il2cpp-convert.log', affinity=1)
         secs += t
         box.progress = None
         log(f'il2cpp: {_mb(cpp):.0f} MiB of C++ in {t / 60:.1f} min (CPU {box.cpu["il2cpp-convert.log"] / 60:.1f} min, '
@@ -977,7 +1010,7 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     before = count_objects(cache)
     comp = [w for w in icmd if w != '--convert-to-cpp']
     log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
-        '(the long part: one to a few hours on a handheld)')
+        '(the long part: one to a few hours on a 4-core ARM handheld)')
     cclog = CompileLog(os.path.join(work, 'cc.log'))
     left0 = cost * max(0, total - before) / max(1, total)     # (what a resumed build has left, roughly)
 
@@ -990,6 +1023,10 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
         return f'  compiled {min(n, total)} of ~{total} files ({100 * min(n, total) // max(1, total)}%), ' \
                f'{el / 60:.0f} min{eta}'
     box.progress = progress
+    so = _outputpath(comp)
+    for n in SIDE_FILES:
+        if so and os.path.exists(os.path.join(os.path.dirname(so), n)):
+            os.unlink(os.path.join(os.path.dirname(so), n))
     killed = len(box.killed())
     try:
         t = box.run(comp, 'il2cpp.log')
@@ -1004,6 +1041,13 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     box.progress = None
     log(f'il2cpp: compiled and linked in {t / 60:.1f} min (CPU {box.cpu["il2cpp.log"] / 60:.1f} min, '
         f'peak {box.peaks["il2cpp.log"]} MB)')
+    for n in SIDE_FILES:
+        p = os.path.join(os.path.dirname(so), n) if so else None
+        if p and os.path.exists(p):
+            if n.endswith('.debug'):
+                os.unlink(p)
+            else:
+                os.replace(p, os.path.join(work, n))
     return secs
 
 

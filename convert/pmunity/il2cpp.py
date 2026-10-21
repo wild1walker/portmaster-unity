@@ -875,7 +875,11 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     roots = [n for n, src in chosen.items() if not src.startswith(os.path.join(tc['editor'], BCL_DIR) + os.sep)]
     lcmd = runner(deploy_tool(tc['editor'], 'UnityLinker')) + link_args(version, abi, staged, linked, roots)
     tool = deploy_tool(tc['editor'], 'il2cpp')
-    icmd = runner(tool, os.environ.get('PMUNITY_IL2CPP_NET471', 'mono')) + \
+    # (on the handheld il2cpp.exe runs on .NET 8 unless PMUNITY_IL2CPP_NET471=mono: the same C++ up
+    # to how floating-point literals are written (the same values, byte-identical objects), with a
+    # sixth of Mono's CPU time and less memory; il2cpp_device.py falls back to Mono if it fails)
+    net471 = os.environ.get('PMUNITY_IL2CPP_NET471', 'dotnet' if on_device else 'mono')
+    icmd = runner(tool, net471) + \
         il2cpp_args(version, abi, linked, cpp, cache, so, tc['ndk'], settings, tc['pkg'])
     if has_option(tool, 'Jobs'):                # (2020.x+; older ones run a compiler per CPU they see)
         icmd.append(f'--jobs={box.jobs}')
@@ -888,10 +892,10 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         return None
     if on_device:
         tools = [deploy_tool(tc['editor'], 'UnityLinker'), tool]
-        dev.fetch(device_tc, dev.groups_for(tools))
+        dev.fetch(device_tc, dev.groups_for(tools, net471))
         secs = dev.run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, tc['editor'], strip)
         return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
-                      extra={'on_device': dev.report(box)})
+                      more={'on_device': dev.report(box)})
     for where, need in ((out, 2 << 30), (home, 1 << 30)):
         st = os.statvfs(where)
         if st.f_bavail * st.f_frsize < need:
@@ -911,7 +915,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip)
 
 
-def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip, extra=None):
+def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip, more=None):
     """The data folder il2cpp wrote (Metadata, Resources) -> <out>/Data/Managed; il2cpp.json."""
     src = None
     for cand in (os.path.join(cpp, 'Data'), os.path.join(os.path.dirname(so), 'Data'), os.path.join(work, 'Data')):
@@ -948,7 +952,7 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
         'ndk': tc['ndk_name'], 'player': tc['player'].get('version'),
         'assemblies': sorted(chosen), 'gc_incremental': settings.get('gcIncremental', False), 'strip': strip,
         'build_seconds': round(secs),
-        **(extra or {}),
+        **(more or {}),
         'files': sorted(os.path.relpath(os.path.join(r, n), out) for r, _, fs in os.walk(os.path.join(out, 'Data')) for n in fs),
     }
     with open(os.path.join(out, 'il2cpp.json'), 'w') as f:
@@ -982,7 +986,8 @@ def main(argv):
         tc = toolchain(UV.Version(a.version), a.abi, home, a.pkg)
         if a.on_device:
             tools = [deploy_tool(tc['editor'], 'UnityLinker'), deploy_tool(tc['editor'], 'il2cpp')]
-            tc['device_toolchain'] = dev.fetch(a.toolchain or dev.default_toolchain(home), dev.groups_for(tools))
+            tc['device_toolchain'] = dev.fetch(a.toolchain or dev.default_toolchain(home),
+                                               dev.groups_for(tools, os.environ.get('PMUNITY_IL2CPP_NET471', 'dotnet')))
         print(json.dumps({k: v for k, v in tc.items() if k != 'player'}, indent=1))
         return
     ap = argparse.ArgumentParser(prog='pmunity il2cpp', description=__doc__.split('\n\n')[0],

@@ -99,9 +99,10 @@ class PlaceTest(unittest.TestCase):
                             f.write(r)
                     return [os.path.join(d, 'UnityLinker.exe'), os.path.join(d, 'il2cpp.exe')]
                 t = tools(UnityLinker_exe='mscorlib.dll System.dll', il2cpp_exe='mscorlib.dll')
-                self.assertEqual(D.groups_for(t), ['base', 'llvm', 'mono'])               # 2017.4 / 2018.4
+                self.assertEqual(D.groups_for(t, 'mono'), ['base', 'llvm', 'mono'])               # 2017.4 / 2018.4
+                self.assertEqual(D.groups_for(t), ['base', 'llvm', 'mono', 'dotnet'])         # (il2cpp.exe on .NET 8)
                 t = tools(UnityLinker_exe='mscorlib.dll System.Web.Extensions.dll', Mono_Cecil_dll='netstandard.dll')
-                self.assertEqual(D.groups_for(t), ['base', 'llvm', 'mono', 'mono-facades', 'mono-web'])   # 2019.x
+                self.assertEqual(D.groups_for(t, 'mono'), ['base', 'llvm', 'mono', 'mono-facades', 'mono-web'])   # 2019.x
                 self.assertEqual(D.groups_for([os.path.join(d, 'UnityLinker.dll'), os.path.join(d, 'il2cpp.dll')]),
                                  ['base', 'llvm', 'dotnet'])                                # 2020.1+
         finally:
@@ -109,6 +110,11 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(D.place('./usr/lib/mono/4.5/Facades/netstandard.dll'), 'mono/lib/mono/4.5/Facades/netstandard.dll')
         self.assertTrue(D.ONLY['mono-devel'].match('./usr/lib/mono/4.5/Facades/netstandard.dll'))
         self.assertFalse(D.ONLY['mono-devel'].match('./usr/lib/mono/gac/Mono.Cecil/0.11.1.0__0738eb9f132ed756/Mono.Cecil.dll'))
+        # il2cpp.exe's fallback from .NET 8 to Mono
+        self.assertEqual(D.on_mono(['dotnet', 'exec', '--runtimeconfig', 'rc.json', 'b/il2cpp.exe', '--x']),
+                         ['mono', '--gc=sgen', 'b/il2cpp.exe', '--x'])
+        self.assertIsNone(D.on_mono(['dotnet', 'exec', '--runtimeconfig', 'rc.json', 'b/il2cpp.dll', '--x']))
+        self.assertIsNone(D.on_mono(['mono', '--gc=sgen', 'b/il2cpp.exe']))
 
     def test_lock(self):
         names = set()
