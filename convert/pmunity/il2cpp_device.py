@@ -144,8 +144,8 @@ def groups_for(tools):
             g.append('mono-facades')
         if 'System.Web.Extensions.dll' in refs:
             g.append('mono-web')
-    if any(t.endswith('.dll') for t in tools):
-        g.append('dotnet')
+    if any(t.endswith('.dll') for t in tools) or (exe and os.environ.get('PMUNITY_IL2CPP_NET471') == 'dotnet'):
+        g.append('dotnet')                   # (PMUNITY_IL2CPP_NET471=dotnet: il2cpp.exe on .NET 8, il2cpp.py)
     return g
 
 
@@ -383,8 +383,11 @@ def fetch(tc, groups, log=log):
                 shutil.rmtree(p) if os.path.isdir(p) else os.unlink(p)
         state = {}
     state['layout'] = LAYOUT
-    if state.get('ready') == lock_id(groups) and state.get('path') == tc and all(g in state.get('groups', []) for g in groups):
-        commands(tc, state['groups'])                # (cheap; they follow this pmunity's version)
+    if state.get('ready') == lock_id(groups) and all(g in state.get('groups', []) for g in groups):
+        commands(tc, state['groups'])                # (cheap; they follow this pmunity's version and
+        if state.get('path') != tc:                  # the folder's place: it may have been moved)
+            state['path'] = tc
+            _save_state(tc, state)
         return tc
     if not install_ca():
         no_ca()
@@ -546,7 +549,7 @@ def write_wrappers(tc, groups):
     # clang: its install dir (resource headers, ld.lld) from argv[0] instead of /proc/self/exe
     for name, mode in (('clang', ''), ('clang++', ' --driver-mode=g++')):
         w[name] = WRAP.format(what=name) + JOBS_SH + NO_OUTLINE_SH + \
-            f'$PMUNITY_IL2CPP_CC_WRAPPER {ld} "{llvm}/clang"{mode} -no-canonical-prefixes $nool "$@"\nst=$?\nrelease\nexit $st\n'
+            f'$PMUNITY_IL2CPP_CC_WRAPPER {ld} "{llvm}/clang"{mode} -no-canonical-prefixes $nool "$@"\nst=$?\nrelease\n' + KILLED_SH + 'exit $st\n'
     w['ld.lld'] = WRAP.format(what='lld') + f'exec {ld} "{llvm}/lld" -flavor gnu $PMUNITY_LLD_FLAGS "$@"\n'
     for name, real in (('llvm-objcopy', 'llvm-objcopy'), ('llvm-strip', 'llvm-objcopy'), ('llvm-ar', 'llvm-ar'),
                        ('llvm-ranlib', 'llvm-ar'), ('llvm-nm', 'llvm-nm')):
@@ -582,6 +585,12 @@ def write_wrappers(tc, groups):
 NO_OUTLINE_SH = r'''nool=; c=; a64=
 for a do case $a in -c) c=1 ;; aarch64*|--target=aarch64*) a64=1 ;; esac; done
 [ -n "$c" ] && [ -n "$a64" ] && [ -z "$PMUNITY_IL2CPP_OUTLINER" ] && nool=-mno-outline
+'''
+
+# a compiler killed by a signal (the OOM killer's SIGKILL: 137) is noted in PMUNITY_IL2CPP_KILLED
+KILLED_SH = r'''if [ "$st" -gt 128 ] && [ -n "$PMUNITY_IL2CPP_KILLED" ]; then
+  echo "$st ${src:-?} $(date +%H:%M:%S 2>/dev/null)" >> "$PMUNITY_IL2CPP_KILLED"
+fi
 '''
 
 # job slots for the compiler (POSIX sh; busybox ash and dash): PMUNITY_JOBS slots in
@@ -747,6 +756,15 @@ class Native:
         self.peaks = {}                  # step log name -> peak MB (the process tree's resident memory)
         self.cpu = {}                    # step log name -> CPU seconds (the step and every process it waited for)
         self.progress = progress
+        self.killed_log = os.path.join(work, 'killed.log')
+
+    def killed(self):
+        """Compilers killed by a signal so far (lines of killed.log)."""
+        try:
+            with open(self.killed_log) as f:
+                return [line.split() for line in f if line.strip()]
+        except OSError:
+            return []
 
     def env(self):
         tmp = os.path.join(self.work, 'tmp')
@@ -759,11 +777,13 @@ class Native:
             'HOME': tmp, 'TMPDIR': tmp, 'DOTNET_CLI_HOME': tmp,
             'DOTNET_CLI_TELEMETRY_OPTOUT': '1', 'DOTNET_NOLOGO': '1', 'DOTNET_ROLL_FORWARD': 'Major',
             'DOTNET_SYSTEM_GLOBALIZATION_INVARIANT': '1', 'DOTNET_gcServer': '0', 'DOTNET_GCgen0size': '0x2000000',
+            'DOTNET_GCConserveMemory': '9',      # (.NET 8 converting a 2020.3 game: peak 766 -> 666 MB)
             'PMUNITY_LLVM': os.path.join(self.tc, 'bin'),
             'PMUNITY_IL2CPP_CCLOG': os.path.join(self.work, 'cc.log'),
             'PMUNITY_JOBS': str(self.jobs), 'PMUNITY_JOBS_DIR': os.path.join(self.work, 'jobs'),
             'PMUNITY_JOB_MEM_KB': str((JOB_MB + RESERVE_MB // 2) * 1024),
             'PMUNITY_IL2CPP_BIG_KB': str(BIG_KB),
+            'PMUNITY_IL2CPP_KILLED': self.killed_log,
         })
         return e
 
@@ -820,6 +840,10 @@ class Native:
             sys.stderr.write(''.join(tail))
             prog = next((os.path.basename(w) for w in cmd if w.endswith(('.exe', '.dll'))), cmd[0])
             hint = ' (killed: out of memory? see docs/il2cpp.md, "On the handheld")' if rcode in (-9, 137) else ''
+            k = self.killed()
+            if k:
+                hint += (f'; {len(k)} compiler(s) were killed by a signal ({k[-1][0]}, the last on {os.path.basename(k[-1][1])}): '
+                         'out of memory, most likely')
             raise SystemExit(f'{prog} failed (exit {rcode}){hint}; full log: {path}')
         return secs
 
@@ -852,16 +876,51 @@ def _mark(work, step, digest):
         f.write(digest)
 
 
+FILE_COST = 300 << 10      # (a compile's fixed part, the headers, in bytes of generated C++ it takes as long as)
+
+
 def sources_estimate(cpp, editor):
-    """How many files il2cpp's builder compiles: the generated C++ and libil2cpp's sources (with
-    the Boehm GC it includes)."""
-    n = sum(1 for r, _, fs in os.walk(cpp) for x in fs if x.endswith(('.cpp', '.c')))
+    """What il2cpp's builder compiles: the generated C++ and libil2cpp's sources (with the Boehm
+    GC it includes). Returns (files, cost): cost = bytes of source + FILE_COST per file, which the
+    compile time follows better than the file count (the generated files are 1 KB - 15 MB)."""
+    files = [os.path.join(r, x) for r, _, fs in os.walk(cpp) for x in fs if x.endswith(('.cpp', '.c'))]
     lib = os.path.join(editor, 'il2cpp', 'libil2cpp')
-    n += sum(1 for r, _, fs in os.walk(lib) for x in fs if x.endswith(('.cpp', '.c')))
+    files += [os.path.join(r, x) for r, _, fs in os.walk(lib) for x in fs if x.endswith(('.cpp', '.c'))]
     for gc in ('boehmgc', 'bdwgc'):
         extra = os.path.join(editor, 'il2cpp', 'external', gc, 'extra')
-        n += sum(1 for x in os.listdir(extra) if x.endswith('.c')) if os.path.isdir(extra) else 0
-    return n
+        files += [os.path.join(extra, x) for x in os.listdir(extra) if x.endswith('.c')] if os.path.isdir(extra) else []
+    return len(files), sum(_size(f) + FILE_COST for f in files)
+
+
+def _size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+class CompileLog:
+    """The compiles started so far, from cc.log (ndk-clang.sh appends each command line): their
+    number and cost (as sources_estimate)."""
+
+    def __init__(self, path):
+        self.path, self.pos, self.n, self.cost = path, 0, 0, 0
+
+    def read(self):
+        try:
+            with open(self.path, 'rb') as f:
+                f.seek(self.pos)
+                data = f.read()
+        except OSError:
+            return self
+        end = data.rfind(b'\n') + 1
+        self.pos += end
+        for line in data[:end].decode('utf-8', 'replace').splitlines():
+            m = re.search(r' (\S+\.(?:cpp|c|cc)) -o ', line)
+            if m:
+                self.n += 1
+                self.cost += _size(m.group(1)) + FILE_COST
+        return self
 
 
 def count_objects(cache):
@@ -914,21 +973,33 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
         log(f'il2cpp: {_mb(cpp):.0f} MiB of C++ in {t / 60:.1f} min (CPU {box.cpu["il2cpp-convert.log"] / 60:.1f} min, '
             f'peak {box.peaks["il2cpp-convert.log"]} MB)')
         _mark(work, 'convert', conv_id)
-    total = sources_estimate(cpp, editor)
+    total, cost = sources_estimate(cpp, editor)
     before = count_objects(cache)
     comp = [w for w in icmd if w != '--convert-to-cpp']
     log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
         '(the long part: one to a few hours on a handheld)')
+    cclog = CompileLog(os.path.join(work, 'cc.log'))
+    left0 = cost * max(0, total - before) / max(1, total)     # (what a resumed build has left, roughly)
 
     def progress(el):
         n = count_objects(cache)
-        done = n - before
-        left = max(0, total - n)
-        eta = f', about {el / done * left / 60:.0f} min left' if done >= 5 else ''
+        started = cclog.read()
+        eta = ''
+        if started.n >= 5 and started.cost:
+            eta = f', about {max(1, el / started.cost * (left0 - started.cost) / 60):.0f} min left'
         return f'  compiled {min(n, total)} of ~{total} files ({100 * min(n, total) // max(1, total)}%), ' \
                f'{el / 60:.0f} min{eta}'
     box.progress = progress
-    t = box.run(comp, 'il2cpp.log')
+    killed = len(box.killed())
+    try:
+        t = box.run(comp, 'il2cpp.log')
+    except SystemExit:
+        if len(box.killed()) == killed or box.jobs == 1:
+            raise
+        # a compiler ran out of memory: once more, one at a time (the objects made so far are kept)
+        log(f'il2cpp: a compiler was killed (out of memory, most likely): going on with one job at a time')
+        box.jobs = 1
+        t = box.run(comp, 'il2cpp.log')
     secs += t
     box.progress = None
     log(f'il2cpp: compiled and linked in {t / 60:.1f} min (CPU {box.cpu["il2cpp.log"] / 60:.1f} min, '

@@ -267,6 +267,20 @@ class JobSlotsTest(unittest.TestCase):
             peak = self.run_many(3, [big, big, big], {'PMUNITY_IL2CPP_BIG_KB': '2'})
             self.assertEqual(peak, 1)
 
+    def test_killed_noted(self):
+        with tempfile.TemporaryDirectory() as d:
+            jd, killed = os.path.join(d, 'jobs'), os.path.join(d, 'killed.log')
+            os.makedirs(jd)
+            script = os.path.join(d, 'cc')
+            with open(script, 'w') as f:
+                f.write('#!/bin/sh\n' + D.JOBS_SH + 'sh -c \'kill -9 $$\'\nst=$?\nrelease\n' + D.KILLED_SH + 'exit $st\n')
+            r = subprocess.run(['sh', script, '-c', 'Bulk_0.cpp'], timeout=20,
+                               env=dict(os.environ, PMUNITY_JOBS='1', PMUNITY_JOBS_DIR=jd, PMUNITY_IL2CPP_KILLED=killed))
+            self.assertEqual(r.returncode, 137)
+            with open(killed) as f:
+                self.assertTrue(f.read().startswith('137 Bulk_0.cpp '))
+            self.assertEqual(os.listdir(jd), [])
+
     def test_stale_slot(self):
         with tempfile.TemporaryDirectory() as d:
             jd = os.path.join(d, 'jobs')
@@ -290,6 +304,27 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(D.auto_jobs(4, mb(973, 300)), 1)               # (never 0)
         self.assertEqual(D.auto_jobs(8, mb(8000, 7000)), 8)
         self.assertEqual(D.auto_jobs(4, mb(4000, D.RESERVE_MB + 2 * D.JOB_MB + 1)), 2)
+
+    def test_progress(self):
+        with tempfile.TemporaryDirectory() as d:
+            cpp, ed = os.path.join(d, 'cpp'), os.path.join(d, 'editor')
+            lib, gc = os.path.join(ed, 'il2cpp', 'libil2cpp', 'vm'), os.path.join(ed, 'il2cpp', 'external', 'boehmgc', 'extra')
+            for p, n in ((cpp, 'Bulk_0.cpp'), (cpp, 'Bulk_1.cpp'), (lib, 'Class.cpp'), (gc, 'gc.c')):
+                os.makedirs(p, exist_ok=True)
+                with open(os.path.join(p, n), 'wb') as f:
+                    f.write(b'x' * 1000)
+            with open(os.path.join(lib, 'Class.h'), 'w') as f:
+                f.write('')
+            n, cost = D.sources_estimate(cpp, ed)
+            self.assertEqual((n, cost), (4, 4 * (1000 + D.FILE_COST)))
+            log = os.path.join(d, 'cc.log')
+            with open(log, 'w') as f:
+                f.write(f'clang++ -c -Os {cpp}/Bulk_0.cpp -o x.o\nclang++ -shared a.o b.o -o libil2cpp.so\nclang++ -c {cpp}/Bul')
+            c = D.CompileLog(log).read()
+            self.assertEqual((c.n, c.cost), (1, 1000 + D.FILE_COST))       # (a partial last line waits)
+            with open(log, 'a') as f:
+                f.write(f'k_1.cpp -o y.o\n')
+            self.assertEqual(c.read().n, 2)
 
     def test_markers(self):
         with tempfile.TemporaryDirectory() as d:
