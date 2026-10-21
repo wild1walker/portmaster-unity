@@ -36,6 +36,7 @@ while kill -0 $pid 2>/dev/null && [ $t -lt "$SECS" ]; do
     echo "t=$t avail=${a}M swapfree=$(mem SwapFree)M rss=$(mem VmRSS /proc/$pid/status)M load=$(cut -d' ' -f1 /proc/loadavg)" >> mem.log
   fi
   if [ "${a:-$MIN}" -lt "$MIN" ]; then
+    echo "t=$t avail=${a}M swapfree=$(mem SwapFree)M rss=$(mem VmRSS /proc/$pid/status)M load=$(cut -d' ' -f1 /proc/loadavg)" >> mem.log
     echo "[uatest] LOW MEMORY at $t s (${a} MB available, under UA_MEM_MIN=$MIN): stopping the game" | tee -a mem.log >> run.log
     kill -KILL $pid; low=1; break
   fi
