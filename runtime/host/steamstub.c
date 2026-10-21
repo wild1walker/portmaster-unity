@@ -83,6 +83,8 @@ static const so_shim steam_api_shims[] = {
     { NULL, NULL },
 };
 
+const so_shim *steamstub_table(void) { return steam_api_shims; }
+
 void steamstub_register(const char *libdir)
 {
     char path[1024];

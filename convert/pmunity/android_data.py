@@ -23,7 +23,8 @@ Output (default ./android-out/):
                                              incompressible ones are rewritten)
   --beside files                             beside the root (default goggame-*.info: a GOG build's
                                              DLC checks read Application.dataPath + "/../goggame-<id>.info")
-  android_data_report.json
+  plugins.map                                the native-plugin map for ua_host (plugins.py; also in zip/)
+  android_data_report.json                   (with the plugin report under "plugins")
 
 Big files are APFS clones (clonefile(2): no extra space; a 1-byte patch copies one block).
 On a filesystem without clones, unchanged files are hard links and patched files copies.
@@ -31,7 +32,8 @@ Re-running only redoes files whose source changed (state in <out>/.android_data_
 
   zip/ (--pack apk|obb|all)                  the same tree as archives for the stock Mount path:
                                              <name>.apk = assets/bin/Data/**, main.<code>.<pkg>.obb
-                                             = the rest + assets/<build-id>; STORE, zip32, < 2 GiB each
+                                             = the rest + assets/<build-id>; STORE, zip32, < 2 GiB each;
+                                             --loose-assets files (FMOD banks) in zip/assets/ instead
 
 Game-specific additions are options: --managed-file (an assembly to ship instead of the data's
 copy, e.g. a port's helper), --assembly-patch (a command that writes a patched assembly from the
@@ -995,15 +997,18 @@ def check_source(args):
         if args.il2cpp_info['unity'] != str(args.unity):
             raise UV.Unsupported(f'--il2cpp {args.il2cpp} was built for Unity {args.il2cpp_info["unity"]}, the data is {args.unity}')
         args.runtime = f'IL2CPP ({args.il2cpp_info["abi"]}, metadata v{args.il2cpp_info["metadata_version"]})'
-    plugins = os.path.join(src, 'Plugins')
-    if os.path.isdir(plugins) and any(not n.startswith('.') for n in os.listdir(plugins)):
-        # (a Windows build keeps them in Plugins/x86_64/*.dll: name the libraries)
-        libs = sorted({n for _, _, ns in os.walk(plugins) for n in ns
-                       if n.lower().endswith(('.dll', '.so', '.dylib', '.bundle'))}) or sorted(os.listdir(plugins))
-        args.warnings.append(f'native plugins in {plugins} ({", ".join(libs[:8])}{", ..." if len(libs) > 8 else ""}) '
-                             f'are not shipped: desktop libraries; a game that P/Invokes them needs ARM builds of them'
-                             + (' (lib_burst_generated: Burst-compiled jobs, which run as the managed code without it)'
-                                if any(n.startswith('lib_burst_generated') for n in libs) else ''))
+    # native plugins: what the managed code P/Invokes and what the port gives each (plugins.py)
+    from . import plugins as PL
+    try:
+        args.plugins = PL.survey(src)
+        pm = getattr(args, 'plugin_map', None)
+        port_map = json.load(open(pm)) if pm else {}
+        args.plugin_entries = PL.merge_map(args.plugins, port_map)
+    except (OSError, ValueError) as ex:
+        raise UV.Unsupported(f'plugins: {ex}')
+    args.warnings += ['plugin ' + line for line in PL.summary(args.plugins)]
+    if getattr(args, 'loose_assets', None) is None:   # FMOD reads its banks with plain file I/O: beside the APK
+        args.loose_assets = ['*.bank'] if args.plugins.get('fmod') else []
 
 
 def run_asmpatch(args, log):
@@ -1092,6 +1097,12 @@ def main(argv=None):
                          "its .dylib names become Linux ones)")
     ap.add_argument('--dllmap', action='append', default=[], metavar='DLL=TARGET',
                     help='an extra dllmap line in the Mono config (P/Invoke DLL -> library)')
+    ap.add_argument('--plugin-map', default=None, metavar='JSON',
+                    help='the port\'s plugin map over the defaults (a {"<DllImport name>": {"use": lib|host|stub|none, ...}} '
+                         'object, or a port config with a "plugins" one): written as plugins.map for ua_host (docs/plugins.md)')
+    ap.add_argument('--loose-assets', action='append', default=None, metavar='GLOB',
+                    help='StreamingAssets files kept beside the APK (assets/<path>) instead of in the OBB, for libraries '
+                         'that open them with plain file I/O (default: *.bank when the game uses FMOD)')
     ap.add_argument('--beside', action='append', default=None, metavar='GLOB',
                     help="files of the game's folder (the parent of --src) put beside the APK root (default goggame-*.info)")
     ap.add_argument('--il2cpp', default=None, metavar='DIR',
@@ -1272,6 +1283,10 @@ def main(argv=None):
                        'scripting_runtime': args.runtime, 'warnings': args.warnings}
     report['skipped'] = args.skipped
     report['dropped_modules'] = args.dropped_modules
+    report['plugins'] = {k: v for k, v in args.plugins.items() if k not in ('sigs', 'map')}
+    report['plugins']['map'] = args.plugin_entries
+    report['plugins']['float_signatures'] = len(args.plugins['sigs'])
+    write_plugin_map(args, args.out, log)
     if not args.no_verify:
         report['verify'] = verify(args, items, log)
     if args.pack != 'none':
@@ -1391,6 +1406,9 @@ def pack(args, log):
     bid = build_id(args)
     apk_entries = [(a, p) for a, p in files if a.startswith('assets/bin/')]
     obb_entries = [(a, p) for a, p in files if a.startswith('assets/') and not a.startswith('assets/bin/')]
+    loose = [(a, p) for a, p in obb_entries if any(fnmatch.fnmatch(a[len('assets/'):], g) or
+                                                   fnmatch.fnmatch(os.path.basename(a), g) for g in args.loose_assets)]
+    obb_entries = [e for e in obb_entries if e not in loose]
     beside = [(a, p) for a, p in files if not a.startswith('assets/')]   # read with plain file I/O (--root-file)
     marker = ('assets/' + bid, b'')
     res = {'build_id': bid, 'package': args.package, 'version_code': args.version_code}
@@ -1438,6 +1456,14 @@ def pack(args, log):
     # files the game reads beside its data (Application.dataPath/.. on Android: beside the APK/OBB)
     for a, p in beside:
         clone(p, os.path.join(zdir, a), allow_hardlink=True)
+    # StreamingAssets read with plain file I/O (FMOD banks): ua_host gives their jar:file:// paths
+    # these files (runtime/host/plugins.c)
+    for a, p in loose:
+        clone(p, os.path.join(zdir, a), allow_hardlink=True)
+    if loose:
+        res['loose_assets'] = [a for a, p in loose]
+        log(f'pack: {len(loose)} StreamingAssets files beside the APK ({", ".join(args.loose_assets)})')
+    write_plugin_map(args, zdir, log)
     # read by ua_host from beside the APK (package, build id, APK name): file names only, so the
     # folder can be copied anywhere
     pj = {k: (os.path.basename(v) if k in ('apk', 'main_obb', 'patch_obb') else v) for k, v in res.items()}
@@ -1445,6 +1471,16 @@ def pack(args, log):
     log(f'pack: build-id {bid}; host: getPackageCodePath -> {apk}, getObbDir -> {zdir}, '
         f'PackageInfo.versionCode {args.version_code}, package {args.package}')
     return res
+
+
+def write_plugin_map(args, where, log):
+    """plugins.map (runtime/host/plugins.c) from the plugin survey and the port's map."""
+    from . import plugins as PL
+    txt = PL.map_text(args.plugins, args.plugin_entries)
+    with open(os.path.join(where, 'plugins.map'), 'w') as f:
+        f.write(txt)
+    n = sum(1 for line in txt.splitlines() if line.startswith('map '))
+    log(f'plugins.map: {n} libraries, {sum(1 for line in txt.splitlines() if line.startswith("sig "))} float signatures -> {where}')
 
 
 def opts_key(args):

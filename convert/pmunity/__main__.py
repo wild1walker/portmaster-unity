@@ -6,6 +6,7 @@ Android player on GLES handhelds.
                               [--from glcore|d3d11|glcore,d3d11] [--hlslcc PATH]
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
+    python -m pmunity plugins <data> [--map F] [--json F]    (native plugins: what the port gives each)
     python -m pmunity macpkg <root> <installer.pkg>...       (unpack macOS installers, e.g. GOG's)
     python -m pmunity unpack <data> [--out DIR] [--remove]   (a compressed build's data.unity3d -> files)
     python -m pmunity version <data>                          (the Unity version the data was built with)
@@ -77,6 +78,9 @@ def main(argv=None):
     if argv[:1] == ['android-data']:
         from . import android_data
         return android_data.main(argv[1:])
+    if argv[:1] == ['plugins']:
+        from . import plugins
+        return plugins.main(argv[1:])
     if argv[:1] == ['macpkg']:
         from . import macpkg
         return macpkg.main(argv[1:])

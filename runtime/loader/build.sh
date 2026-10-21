@@ -12,7 +12,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 ARCH=${ARCH:-armhf}
 case "$ARCH" in
 armhf)
-  IMG=unity-android-loader-build
+  IMG=unity-android-loader-build; PLAT=
   docker build -q -t $IMG "$DIR" >/dev/null
   T=arm-linux-gnueabihf-
   CFLAGS="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -fPIC"
@@ -21,8 +21,8 @@ armhf)
   EXPORT="-Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx"
   OUT=out ;;
 arm64)
-  IMG=ua-build-arm64
-  docker image inspect $IMG >/dev/null 2>&1 || docker build -q -t $IMG "$DIR/../docker/arm64" >/dev/null
+  IMG=ua-build-arm64; PLAT="--platform linux/arm64"   # also on an x86 PC (QEMU)
+  docker image inspect $IMG >/dev/null 2>&1 || docker build -q $PLAT -t $IMG "$DIR/../docker/arm64" >/dev/null
   T=
   CFLAGS="-O2 -g -Wall -fPIC"
   # bionic's stack guard: the TLS slot NDK code reads (TLS_SLOT_STACK_GUARD, tpidr_el0 + 0x28)
@@ -34,7 +34,7 @@ arm64)
 esac
 TEST=0
 [ "$1" = test ] && TEST=1
-docker run --rm -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS" -e SYNFLAGS="$SYNFLAGS" \
+docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS" -e SYNFLAGS="$SYNFLAGS" \
   -e EXPORT="$EXPORT" -e OUT="$OUT" -e TEST=$TEST $IMG sh -c '
   set -e
   CC=${T}gcc
@@ -88,7 +88,7 @@ docker run --rm -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS" -e SY
 echo "built: $DIR/$OUT/libsoloader.a $DIR/$OUT/test_load"
 [ $TEST = 1 ] || exit 0
 if [ "$ARCH" = arm64 ]; then
-  docker run --rm -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && ./test_sync && ./test_syn .'
+  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && ./test_sync && ./test_syn .'
 else
   docker run --rm --pull never --platform linux/arm/v7 -v "$DIR/$OUT/test":/t -w /t debian:bookworm-slim \
     sh -c './test_sem && ./test_sync && ./test_syn .'

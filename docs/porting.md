@@ -61,6 +61,12 @@ Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from
 pmunity.winbcl <Game>_Data <dir>` fetches them from Unity (about 5 MB) and prints the
 `--managed-file` options for `android-data` (in a port: `android_data.args`).
 
+Native plugins: `python -m pmunity plugins <Data>` lists the libraries the game's code P/Invokes
+and what the port gives each: built-in stubs answering as a PC without the service (Steam,
+Discord, EOS), or ARM libraries of the game's exact version that the porter supplies (FMOD, Wwise;
+[plugins.md](plugins.md)). android-data repeats it as warnings and writes `plugins.map` for the
+runtime; a port config's `plugins` table changes the map.
+
 A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`:
 
 ```json
