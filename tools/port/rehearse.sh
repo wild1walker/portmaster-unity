@@ -59,7 +59,7 @@ cat > "$PMD/control.txt" <<'TXT'
 # rehearsal stand-in for PortMaster's control.txt
 directory=roms
 CFW_NAME=Rehearsal; DEVICE_NAME=container; DEVICE_ARCH=aarch64; DISPLAY_WIDTH=720; DISPLAY_HEIGHT=480
-ESUDO=""; GPTOKEYB="true"; sdl_controllerconfig=""
+ESUDO=""; GPTOKEYB="true"; GPTOKEYB2="true"; sdl_controllerconfig=""
 get_controls() { :; }
 pm_message() { echo "[pm_message] $*"; }
 pm_finish() { :; }

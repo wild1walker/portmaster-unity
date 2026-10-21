@@ -19,8 +19,8 @@ GLES 3 shader programs to the player's copy (docs/box64-route.md in portmaster-u
 
 ## Controls
 
-The game's own SDL2 reads the pad (PortMaster's `SDL_GAMECONTROLLERCONFIG`); `@@PORTDIR@@.gptk`
-(gptokeyb) can give keys and mouse to games that want them, and holds the exit hotkey.
+The game's own SDL2 reads the pad (PortMaster's `SDL_GAMECONTROLLERCONFIG`); `@@PORTDIR@@.ini`
+(gptokeyb2) can give keys and mouse to games that want them, and holds the exit hotkey.
 
 ## Building
 

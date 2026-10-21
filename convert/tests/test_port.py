@@ -297,7 +297,7 @@ class NewAndSetupTest(unittest.TestCase):
                 files = set(f.read().split('\n')) - {''}
             for f in ('My Game.sh', 'mygame/setup/patchscript', 'mygame/setup/setup.env', 'mygame/setup/convert.json',
                       'mygame/setup/questions.lua', 'mygame/setup.txt', 'mygame/port.json', 'mygame/port.env',
-                      'mygame/README.md', 'mygame/gamedata/PUT_GAME_FILES_HERE.txt', 'mygame/mygame.gptk',
+                      'mygame/README.md', 'mygame/gamedata/PUT_GAME_FILES_HERE.txt', 'mygame/mygame.ini',
                       'README.md', 'package.sh', 'port.build.json'):
                 self.assertIn(f, files)
             for f in files:

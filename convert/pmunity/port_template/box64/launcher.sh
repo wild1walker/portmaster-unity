@@ -1,10 +1,5 @@
 #!/bin/bash
 # PORTMASTER: @@ZIP@@, @@LAUNCHER@@
-#
-# @@TITLE@@: the game's own Linux x86-64 build, unmodified, under box64 (portmaster-unity's
-# @@ROUTE@@ route, docs/box64-route.md). The first launch runs the setup: it finds your copy in
-# ports/@@PORTDIR@@/gamedata/ and, for the OpenGL ES mode, adds GLES 3 shaders to it. Options:
-# ports/@@PORTDIR@@/port.env (PMU_GL, PMU_BOX64, PMU_MAXCPU, PMU_ARGS, PMU_DYNACACHE).
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster/" ]; then
@@ -17,8 +12,12 @@ else
   controlfolder="/roms/ports/PortMaster"
 fi
 source $controlfolder/control.txt
-[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
+
+# @@TITLE@@: the game's own Linux x86-64 build, unmodified, under box64 (portmaster-unity's
+# @@ROUTE@@ route, docs/box64-route.md). The first launch runs the setup: it finds your copy in
+# ports/@@PORTDIR@@/gamedata/ and, for the OpenGL ES mode, adds GLES 3 shaders to it. Options:
+# ports/@@PORTDIR@@/port.env (PMU_GL, PMU_BOX64, PMU_MAXCPU, PMU_ARGS, PMU_DYNACACHE).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"
 cd "$GAMEDIR" || exit 1
@@ -35,7 +34,7 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     export PATCHER_GAME="@@TITLE@@"
     export PATCHER_TIME="@@SETUP_TIME@@, once"
     source "$controlfolder/utils/patcher.txt"
-    $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null
+    $ESUDO kill -9 $(pidof gptokeyb gptokeyb2) 2>/dev/null
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
@@ -94,8 +93,9 @@ $ESUDO mkdir -p "$weston_dir"
 $ESUDO mount "$controlfolder/libs/${weston_runtime}.squashfs" "$weston_dir"
 
 # the pad: the player's own SDL2 reads it; keys and mouse for games that want them, and the exit
-# hotkey: ports/@@PORTDIR@@/@@PORTDIR@@.gptk
-$GPTOKEYB "$EXE" -c "$GAMEDIR/@@PORTDIR@@.gptk" &
+# hotkey: ports/@@PORTDIR@@/@@PORTDIR@@.ini (gptokeyb2). Its kill switch finds the game by the
+# kernel's process name, which keeps 15 characters: a longer name never matches in full
+$GPTOKEYB2 "${EXE:0:15}" -c "$GAMEDIR/@@PORTDIR@@.ini" &
 pm_platform_helper "$GAMEDIR/box64/box64"
 # The game's command as a script (westonwrap.sh evaluates its arguments again: names with spaces);
 # box64's and the GL settings go on westonwrap's command line, as it reloads PortMaster's settings

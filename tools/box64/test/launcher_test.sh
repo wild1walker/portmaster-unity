@@ -39,7 +39,7 @@ port=$(sed -n "s|^GAMEDIR=\"*/\$directory/ports/\([^\"]*\)\"*$|\1|p" /launcher.s
 mkdir -p $P/box64 $P/glxes $P/gl4es $P/gamedata
 cp /pm/box64/box64 $P/box64/; ln -s /pm/box64/x64lib $P/box64/x64lib
 cp /rig/box64.env /rig/unityprefs.sh $P/box64/; cp /pm/glxes/libGL.so.1 $P/glxes/; cp /pm/gl4es/libGL.so.1 $P/gl4es/
-: > "$P/$port.gptk"
+: > "$P/$port.ini"
 for f in /game/*; do ln -s "$f" "$P/gamedata/$(basename "$f")"; done
 cp /out/game.env $P/game.env; : > $P/.setup_done; . $P/game.env
 exe=$EXE; rm "$P/gamedata/$exe"; cp "/game/$exe" "$P/gamedata/$exe"
