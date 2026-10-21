@@ -16,6 +16,15 @@ python -m pmunity android-data --src work/data --pkg <IL2CPP player package> --i
 the emulated armv7 rig; a Mono game does not need it there, but it is how the IL2CPP route is
 tested before a 64-bit runtime and handheld are at hand).
 
+Options for ports: `--managed-file DLL` compiles that assembly instead of the data's copy of the
+same name (a port's patched `Assembly-CSharp.dll`, its helper assembly), `--asmpatch COMMAND`
+runs tools/asmpatch on the game's `Managed` and compiles what it changed (as `android-data
+--asmpatch`: e.g. `--asmpatch "dotnet asmpatch.dll --only=rewired-android"`). With IL2CPP the
+assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data.
+`--unity VERSION` builds with another release of the data's line (its IL2CPP and its player):
+data of a 2017.4 release before 2017.4.16f1, which has no 64-bit ARM player, gets 2017.4.40f1 for
+arm64-v8a by itself (below, Unity 2017.4).
+
 **Where it runs:** on the porter's PC or Mac, never on the handheld. il2cpp and the C++ build of
 its output take minutes to an hour of CPU (a small game's generated C++ is a few hundred MB;
 the build uses about 1 GB of disk and 100-500 MB of memory per compiler process), in Docker.
@@ -41,13 +50,14 @@ or of what is built from them, is in this repository.
 
 | what | from | read | on disk |
 |---|---|---|---|
-| `Editor/Data/il2cpp` (il2cpp, UnityLinker, libil2cpp and Boehm GC sources) and `MonoBleedingEdge/lib/mono/unityaot` + `etc` (the class libraries IL2CPP builds use) | the Windows editor installer `UnitySetup64-<ver>.exe` (Unity's release API names it): a non-solid NSIS installer like the Android support ones, so `nsis.py` reads only these files' blocks (neighbouring blocks in one request) | 10-13 MB of 1.6-2.4 GB | 45-50 MB |
+| `Editor/Data/il2cpp` (il2cpp, UnityLinker, libil2cpp and Boehm GC sources), `MonoBleedingEdge/etc` and the class libraries IL2CPP builds of the game's kind use (below: `MonoBleedingEdge/lib/mono/unityaot`; .NET 3.5 games `Mono/lib/mono/unity` or `2.0` and `Mono/etc`; .NET 4.x of 2017.x `MonoBleedingEdge/lib/mono/4.5`) | the Windows editor installer `UnitySetup64-<ver>.exe` (Unity's release API names it): a non-solid NSIS installer like the Android support ones, so `nsis.py` reads only these files' blocks (neighbouring blocks in one request) | 10-13 MB of 1.6-2.4 GB | 45-50 MB |
 | the Android NDK's target files: unified sysroot (headers, per-API libraries), libc++, libgcc | Google's `android-ndk-<rev>-linux-x86_64.zip`: its central directory, then only those members | 34 MB (arm64-v8a), +24 MB (armeabi-v7a) of 820 MB | 145 MB / 200 MB both |
 | the IL2CPP Android player: `libmain.so`, `libunity.so`, `unity default resources` (`pmunity player fetch --backend il2cpp`), the IL2CPP UnityEngine assemblies (`Variations/il2cpp/Managed`), `baselib.a` (2020.1+) | the Android Build Support installer | 9 MB | 30 MB per ABI |
 | `<home>/root/usr`, `root/etc` (tools/il2cpp/root.sh): .NET 8, Mono 6.8, clang/lld 14, unpacked with `dpkg-deb -x` over a copy of the stock image's own `/usr` and `/etc`, then mounted over them | Ubuntu 24.04's archive | 180 MB | 0.85 GB |
 
-NDK per Unity line (what that line's il2cpp checks for): r16b for 2017.4 - 2019.2, r19 for 2019.3 -
-2020.3, r21d for 2021.x - 2022.1, r23b for 2022.2+. The NDK's compilers and binutils are x86-64
+NDK per Unity line (what that line's IL2CPP checks for): r13b for 2017.1 - 2018.2 (their Android
+extension: "IL2CPP requires r13b"), r16b for 2018.3 - 2019.2, r19 for 2019.3 - 2020.3, r21d for
+2021.x - 2022.1, r23b for 2022.2+. The NDK's compilers and binutils are x86-64
 programs, so only its target files are fetched; `tools/il2cpp/ndk-clang.sh` is put where
 il2cpp's Android toolchain runs them (`toolchains/llvm/prebuilt/linux-x86_64/bin/clang++`,
 `<triple>-objcopy`, ...) and runs Ubuntu's clang 14 and lld with the NDK's sysroot, libc++
@@ -61,23 +71,46 @@ newer compiler's code generation.
 1. **Assemblies** (`stage_assemblies`): the game's own and Unity's package assemblies from
    `<Data>/Managed`; the IL2CPP player's UnityEngine assemblies (`Variations/il2cpp/Managed`)
    instead of the desktop ones, as `android-data` swaps in the Mono player's; the IL2CPP class
-   libraries (`unityaot`) instead of the desktop Mono's (`unityjit`: same names and versions, the
-   AOT profile), following the references from the game's assemblies.
+   libraries of the game's profile instead of the desktop Mono's, following the references from
+   the game's assemblies. The profile is the one an IL2CPP Android build of that version picks
+   (the editor's `ApiCompatibilityLevelToDotNetProfileArgument`; il2cpp's own profiles say where
+   their assemblies are):
+
+   | game | profile | class libraries (Editor/Data/...) |
+   |---|---|---|
+   | .NET 4.x, 2018.1+ | `unityaot` | `MonoBleedingEdge/lib/mono/unityaot` (the desktop's `unityjit`: same names and versions, the AOT profile) |
+   | .NET 4.x, 2017.x | `net45` | `MonoBleedingEdge/lib/mono/4.5` |
+   | .NET 3.5, API level ".NET 2.0 Subset" | `legacyunity` | `Mono/lib/mono/unity` (the old Mono 2.x fork's) |
+   | .NET 3.5, API level ".NET 2.0" | `net20` | `Mono/lib/mono/2.0` |
+
+   Which runtime: the version of the `mscorlib.dll` the game ships (2.0.0.0: .NET 3.5). Which API
+   level: its types (the "unity" profile has Unity's `MonoTouchAOTHelper` and no console
+   drivers); a desktop build ships the profile it ran on, so IL2CPP compiles that one.
 2. **UnityLinker** (`--strip low`, the default) as an Android IL2CPP build with Managed Stripping
-   Level "Low" runs it: `--rule-set=Conservative --use-editor-options --dotnetprofile=unityaot
+   Level "Low" runs it: `--rule-set=Conservative --use-editor-options --dotnetprofile=<profile>
    --dotnetruntime=il2cpp --platform=Android`. The class libraries are linked with Unity's own
    descriptors; every other assembly (the game's, the packages', the UnityEngine modules) is a
    root and kept whole: a desktop build carries no list of the types its scenes and assets use
    (the editor's TypesInScenes / editor data), so nothing the data might name is removed.
-   `--strip none` compiles everything whole (3x the C++).
+   `--strip none` compiles everything whole (3x the C++). 2017.x's UnityLinker is the older one
+   (Mono's linker with Unity's steps and options), run as that editor runs it: `--api=NET_2_0[_Subset]|NET_4_6
+   --core-action=link --i18n=none --descriptor-directory=<il2cpp/LinkerDescriptors>` (for `net45` a
+   copy where each `*45.xml` replaces the file without 45), the game's and the packages'
+   assemblies as `--include-assembly` roots (copied whole), the UnityEngine ones kept whole by a
+   generated link.xml (`preserve="all"`) but linked: the linker then writes into them a stub for
+   each member the game calls that the Android engine lacks (desktop-only API, e.g. Rewired's
+   `Input.IsJoystickPreconfigured`; the stub throws, as Mono's call of a missing method does).
+   Without the stubs 2017.4's il2cpp stops at such a call (`NullReferenceException` in
+   `MethodBodyWriter.GetMethodCallExpression`).
 3. **il2cpp** with the options of an Android build of that version: `--convert-to-cpp
    --compile-cpp --libil2cpp-static --emit-null-checks --enable-array-bounds-check
-   --dotnetprofile=unityaot --platform=Android --architecture=ARM64|ARMv7 --configuration=Release`,
+   --dotnetprofile=<profile> --platform=Android --architecture=ARM64|ARMv7 --configuration=Release`,
    `--incremental-g-c-time-slice=<ms>` when the game's `boot.config` has `gc-max-time-slice`
    (the incremental GC that line turns on in the player needs the write barriers in the code), and
    `--baselib-directory` (2020.1+). il2cpp's own builder compiles the generated C++ and libil2cpp
-   and links `libil2cpp.so` against the NDK (API 21 for arm64, 19 for armv7, libc++ static), then
-   strips it. The .NET Framework builds of the tools (2018.4 - 2019.4) run on Mono, as in Unity's
+   and links `libil2cpp.so` against the NDK (API 21 for arm64; for armv7 19, 16 with NDK r13b and
+   r16b; libc++ static, GNU libstdc++ with r13b and r16b), then strips it. The .NET Framework
+   builds of the tools (2017.4 - 2019.4) run on Mono, as in Unity's
    Linux and macOS editors (UnityLinker uses .NET Framework-only types); the .NET Core / .NET
    builds (2020.1+) on .NET 8 with roll-forward.
 4. **Checks**: `global-metadata.dat`'s header (magic `0xFAB11BAF`, the metadata version), and that
@@ -142,9 +175,11 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | same | 2019.4.8f1 | armeabi-v7a | 25.6 MiB | 24 | 8 min (cached) | splash, title screen (QEMU: ~1 fps) once the loader routes `__gnu_Unwind_Find_exidx` (below) |
 | 2D city builder, incremental GC | 2020.3.49f1 | arm64-v8a | 33.6 MiB | 27 | 8 min | title menu (40-50 fps in the rig) once packed as one APK with `buildDate` (above) |
 | 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
+| 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; no sound (below) |
+| same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
 
-Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (194 for
-2018.4, 222 for 2019.4, 225 for 2020.3); the metadata versions match those of real IL2CPP builds
+Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3); the metadata versions match those of real IL2CPP builds
 of these lines (a 2020.3 Android build's is 27). The layout of the APK matches Unity's IL2CPP
 builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
 `Managed/Resources/mscorlib.dll-resources.dat`, the 18 `Managed/etc/mono` files (2020.3), no
@@ -165,13 +200,31 @@ What the runs showed:
   back to the invariant culture. Harmless; a runtime that sets `LANG` would avoid it.
 - **Pointer-driven menus**: clicking a menu entry with the pointer mode did not start the
   2018.4 game in one scripted try (its Mono build does); not looked into.
+- **2017.4 arm64, no sound in the rig**: the 2017.4.40 arm64 player's FMOD creates its OpenSL ES
+  player, starts and stops it at once, reports "FMOD failed to initialize the output device", and
+  its null output fails too ("An error occured that wasn't supposed to"): the game runs silent.
+  Not the rig's missing `CAP_SYS_NICE` (the `setpriority(-20)` that fails without it is SDL's
+  audio thread; granting it changes nothing), not the API level (19 and 22 alike). The same game's
+  armv7 IL2CPP build (2017.4.40's armv7 IL2CPP player) and the 2018.4+ arm64 players start their
+  audio in the rigs: something between 2017.4's arm64 FMOD and the 64-bit runtime. Open; not
+  yet tried on a handheld.
+- **Stack traces** (2017.4): with the SymbolMap written from the symbol table, Unity's logged
+  stack traces name the same frames as the game's Mono build; without it they had extra frames
+  named after neighbouring methods.
+- **Rewired** (`--asmpatch "... --only=rewired-android"`): the patched Assembly-CSharp compiled in,
+  Rewired takes the Android path (no libudev lookups) and the pad's A skips the intro videos and
+  opens the main menu.
 
 ## Not tested yet
 
 - Unity 2021.x / 2022.x (NDK r21d / r23b: the NDK selection and `ndk_wanted` know them, r23b's
   compiler-rt builtins and libunwind in `lib64/clang/<ver>/lib/linux` are fetched but the link
-  flags for them are not), 2017.4 (r16b, as 2018.4); .NET 3.5 games of 2017.4 / 2018.4 (their
-  class libraries are not the unityaot profile).
+  flags for them are not); 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
+  2017.4 .NET 4.x games (`net45`: none among the free 2017.4 builds surveyed, all were .NET 3.5),
+  .NET 3.5 games of 2018.x (`legacyunity` / `net20` with the newer UnityLinker), the ".NET 2.0"
+  (`net20`) profile.
+- IL2CPP with data of a 2017.4 release before 2017.4.16f1 on the 2017.4.40f1 player (Cuphead's
+  case: its data, retargeted, reaches its title on the 2017.4.40f1 Mono armv7 player).
 - Games with native plugins, Burst (`lib_burst_generated` is not rebuilt: Burst jobs run as their
   managed code), the Input System package, link.xml-dependent reflection.
 - IL2CPP data over 2 GiB (APK + OBB, see above); 16 KiB-page kernels.
@@ -182,6 +235,29 @@ What the runs showed:
 
 ## Notes per version
 
+- 2017.4: `il2cpp/build/il2cpp.exe` and the older `UnityLinker.exe` (above), run on Mono. NDK
+  r13b, the last with per-platform headers: il2cpp passes `--sysroot
+  <ndk>/platforms/android-21/arch-arm64` (armv7: `android-16/arch-arm`), `-gcc-toolchain` and a
+  target without the API level, and no `-D__ANDROID_API__` (the platform's `api-level.h` defines
+  it), GNU libstdc++; il2cpp takes no `--jobs`. Its compile flags end in `-fPIE` after `-fPIC`
+  (as for an executable): the objects then reference GNU libstdc++'s template statics directly,
+  which the NDK's GNU ld accepted in a shared library and lld does not, so ndk-clang.sh drops a
+  `-fPIE` that comes with `-fPIC`. It links with a map file and then runs MapFileParser on it for
+  `Data/SymbolMap-<arch>` (the editor passes its prebuilt one; without `--map-file-parser` il2cpp
+  builds it from source with the host's GCC): `--map-file-parser=/bin/true`, and `pmunity il2cpp`
+  writes `Data/Managed/SymbolMap-ARM64` / `-ARMv7` itself from the unstripped library's symbol
+  table (the same records: each code symbol's offset and length). libil2cpp names the methods of
+  managed stack frames with it; without it, it falls back to the method pointer table, which
+  gave frames in native code a neighbouring method's name in Unity's logged stack traces.
+  libil2cpp's armv7 64-bit atomics (`os/Unity/ExtendedAtomicOps-arm.h`, also 2018.4's) list the
+  registers they bind operands to as clobbered, which clang 11+ refuses; the fetched copy gets
+  the clobber lists of Unity's own 2019.4 file (`SOURCE_FIXES`: "cc", "memory"). For a .NET 3.5 game il2cpp copies the old Mono's
+  `etc` (`Mono/etc/mono`: `config`, `2.0/machine.config`, ...) into the data, so that is fetched
+  with its class libraries. A 64-bit ARM IL2CPP player exists from 2017.4.16f1; older data (Cuphead
+  is 2017.4.9f1) is built with 2017.4.40f1's IL2CPP and run on its player (`--unity`; `il2cpp.json`
+  keeps both versions): android-data retargets the data to the player's release
+  ([android-data.md](android-data.md), "retargeted") and refuses a player other than the one
+  `libil2cpp.so` was built for (`il2cpp_mismatch`).
 - 2018.4: `il2cpp/build/il2cpp.exe` (no `deploy/`), NDK r16b (GNU binutils layout and GNU
   libstdc++ (`gnustl_static`): il2cpp passes `--sysroot`, `-gcc-toolchain` and a target without
   the API level, which ndk-clang.sh adds from `-D__ANDROID_API__`); armv7 there is API 16.

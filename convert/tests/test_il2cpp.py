@@ -18,9 +18,15 @@ from pmunity import il2cpp as I
 from pmunity import unity_version as UV
 from pmunity import android_data as AD
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_port import write_assembly
+
 
 class NdkTest(unittest.TestCase):
     def test_ndk_per_line(self):
+        self.assertEqual(I.ndk_for(UV.Version('2017.4.40f1'))[:2], ('r13b', '13.1.3345770'))
+        self.assertEqual(I.ndk_for(UV.Version('2018.2.21f1'))[0], 'r13b')
+        self.assertEqual(I.ndk_for(UV.Version('2018.3.0f2'))[0], 'r16b')
         self.assertEqual(I.ndk_for(UV.Version('2018.4.36f1'))[0], 'r16b')
         self.assertEqual(I.ndk_for(UV.Version('2019.2.21f1'))[0], 'r16b')
         self.assertEqual(I.ndk_for(UV.Version('2019.4.8f1'))[0], 'r19')
@@ -54,6 +60,20 @@ class NdkTest(unittest.TestCase):
         self.assertIsNone(w('platforms/android-19/arch-arm/usr/lib/libc.so', 'armeabi-v7a', rev='r16b'))
         self.assertTrue(w('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/lib/gcc/aarch64-linux-android/4.9.x/libgcc.a', rev='r16b'))
         self.assertEqual((I.api_level('r16b', 'armeabi-v7a'), I.api_level('r19', 'armeabi-v7a'), I.api_level('r16b', 'arm64-v8a')), (16, 19, 21))
+        self.assertEqual((I.api_level('r13b', 'armeabi-v7a'), I.api_level('r13b', 'arm64-v8a')), (16, 21))
+
+    def test_ndk_members_r13b(self):
+        """r13b (2017.x il2cpp): the platform's own headers and libraries, GNU libstdc++, libgcc"""
+        w = lambda n, abi='arm64-v8a': I.ndk_wanted('android-ndk-r13b/' + n, 'r13b', abi)
+        self.assertTrue(w('platforms/android-21/arch-arm64/usr/include/stdio.h'))
+        self.assertTrue(w('platforms/android-21/arch-arm64/usr/lib/libc.so'))
+        self.assertIsNone(w('platforms/android-23/arch-arm64/usr/include/stdio.h'))
+        self.assertTrue(w('platforms/android-16/arch-arm/usr/include/stdio.h', 'armeabi-v7a'))
+        self.assertTrue(w('sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/include/bits/c++config.h'))
+        self.assertTrue(w('sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/libgnustl_static.a'))
+        self.assertIsNone(w('sources/cxx-stl/gnu-libstdc++/4.9/libs/arm64-v8a/libgnustl_shared.so'))
+        self.assertTrue(w('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/lib/gcc/aarch64-linux-android/4.9.x/libgcc.a'))
+        self.assertIsNone(w('toolchains/llvm/prebuilt/linux-x86_64/bin/clang'))
 
 
 class EditorTest(unittest.TestCase):
@@ -68,6 +88,37 @@ class EditorTest(unittest.TestCase):
         self.assertFalse(I.editor_wanted('il2cpp/MapFileParser/Driver.cpp'))
         self.assertFalse(I.editor_wanted('il2cpp/build/deploy/netcoreapp3.1/il2cpp.pdb'))
         self.assertFalse(I.editor_wanted('Resources/unity editor resources'))
+
+    def test_class_library_folders(self):
+        """a class library folder: its assemblies and its Mono's etc (il2cpp copies that into the data)"""
+        u = 'Mono/lib/mono/unity'
+        self.assertTrue(I.editor_wanted('Mono/lib/mono/unity/mscorlib.dll', u))
+        self.assertTrue(I.editor_wanted('Mono/etc/mono/2.0/machine.config', u))
+        self.assertTrue(I.editor_wanted('MonoBleedingEdge/etc/mono/config', u))
+        self.assertTrue(I.editor_wanted('il2cpp/libil2cpp/il2cpp-api.h', u))
+        self.assertFalse(I.editor_wanted('Mono/lib/mono/unity/mscorlib.dll.mdb', u))
+        self.assertFalse(I.editor_wanted('Mono/lib/mono/unity/smcs.exe', u))
+        self.assertFalse(I.editor_wanted('Mono/lib/mono/2.0/mscorlib.dll', u))
+        self.assertFalse(I.editor_wanted('MonoBleedingEdge/lib/mono/unityaot/mscorlib.dll', u))
+        f = 'MonoBleedingEdge/lib/mono/4.5'
+        self.assertTrue(I.editor_wanted('MonoBleedingEdge/lib/mono/4.5/Facades/System.Runtime.dll', f))
+        self.assertFalse(I.editor_wanted('MonoBleedingEdge/lib/mono/4.5/mscorlib.dll.dylib', f))
+        self.assertFalse(I.editor_wanted('Mono/etc/mono/config', f))
+
+    def test_class_library_complete(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.assertFalse(I.bcl_complete(t, I.BCL_DIR))
+            os.makedirs(os.path.join(t, I.BCL_DIR))
+            open(os.path.join(t, I.BCL_DIR, 'mscorlib.dll'), 'w').close()
+            self.assertFalse(I.bcl_complete(t, I.BCL_DIR))
+            open(os.path.join(t, '.complete'), 'w').close()
+            self.assertTrue(I.bcl_complete(t, I.BCL_DIR))       # (a home from before the per-folder marks)
+            u = 'Mono/lib/mono/unity'
+            os.makedirs(os.path.join(t, u))
+            open(os.path.join(t, u, 'mscorlib.dll'), 'w').close()
+            self.assertFalse(I.bcl_complete(t, u))
+            open(os.path.join(t, u, '.complete'), 'w').close()
+            self.assertTrue(I.bcl_complete(t, u))
 
     def test_runtime_pack(self):
         deps = {'targets': {'.NETCoreApp,Version=v3.1/win-x64': {
@@ -94,6 +145,163 @@ class EditorTest(unittest.TestCase):
             self.assertEqual(I.deploy_tool(t, 'UnityLinker'), os.path.join(n, 'UnityLinker.exe'))
             with self.assertRaises(SystemExit):
                 I.deploy_tool(t, 'bee')
+
+
+class ProfileTest(unittest.TestCase):
+    def test_profiles(self):
+        v = UV.Version
+        self.assertEqual(I.bcl_profile(v('2017.4.40f1'), 2, True), ('legacyunity', 'Mono/lib/mono/unity'))
+        self.assertEqual(I.bcl_profile(v('2017.4.40f1'), 2), ('net20', 'Mono/lib/mono/2.0'))
+        self.assertEqual(I.bcl_profile(v('2018.4.36f1'), 2, True), ('legacyunity', 'Mono/lib/mono/unity'))
+        self.assertEqual(I.bcl_profile(v('2017.4.40f1'), 4), ('net45', 'MonoBleedingEdge/lib/mono/4.5'))
+        self.assertEqual(I.bcl_profile(v('2018.1.0f1'), 4), ('unityaot', 'MonoBleedingEdge/lib/mono/unityaot'))
+        self.assertEqual(I.bcl_profile(v('2020.3.49f1'), 4), ('unityaot', I.BCL_DIR))
+        with self.assertRaises(UV.Unsupported):
+            I.bcl_profile(v('2019.4.8f1'), 2)
+
+    def test_dotnet_level(self):
+        with tempfile.TemporaryDirectory() as t:
+            m = os.path.join(t, 'Managed')
+            os.makedirs(m)
+            with self.assertRaises(UV.Unsupported):
+                I.dotnet_level(t)
+            self.assertEqual(I.dotnet_level(t, UV.Version('2019.4.8f1')), 4)
+            # the old Mono's "unity" profile (".NET 2.0 Subset"), its "2.0" one, .NET 4.x
+            write_assembly(os.path.join(m, 'mscorlib.dll'), 'mscorlib', [('System', 'Object'), ('System', 'MonoTouchAOTHelper')],
+                           version=2)
+            self.assertEqual((I.dotnet_level(t), I.subset_profile(t)), (2, True))
+            write_assembly(os.path.join(m, 'mscorlib.dll'), 'mscorlib', [('System', 'Object'), ('System', 'TermInfoDriver')],
+                           version=2)
+            self.assertEqual((I.dotnet_level(t), I.subset_profile(t)), (2, False))
+            write_assembly(os.path.join(m, 'mscorlib.dll'), 'mscorlib', [('System', 'Object')], version=4)
+            self.assertEqual((I.dotnet_level(t), I.subset_profile(t)), (4, False))
+            os.unlink(os.path.join(m, 'mscorlib.dll'))      # (none shipped: what Assembly-CSharp references)
+            write_assembly(os.path.join(m, 'Assembly-CSharp.dll'), 'Assembly-CSharp', [('', 'Menu')])
+            with self.assertRaises(UV.Unsupported):
+                I.dotnet_level(t)
+
+    def test_tool_version(self):
+        v = UV.Version
+        self.addCleanup(setattr, I, 'log', I.log)
+        I.log = lambda m: None
+        self.assertEqual(str(I.tool_version(v('2017.4.9f1'), 'arm64-v8a')), '2017.4.40f1')     # no arm64 player before .16
+        self.assertEqual(str(I.tool_version(v('2017.4.9f1'), 'armeabi-v7a')), '2017.4.9f1')
+        self.assertEqual(str(I.tool_version(v('2017.4.16f1'), 'arm64-v8a')), '2017.4.16f1')
+        self.assertEqual(str(I.tool_version(v('2017.4.9f1'), 'arm64-v8a', '2017.4.30f1')), '2017.4.30f1')
+        self.assertEqual(str(I.tool_version(v('2019.4.8f1'), 'arm64-v8a')), '2019.4.8f1')
+        with self.assertRaises(UV.Unsupported):
+            I.tool_version(v('2017.4.9f1'), 'arm64-v8a', '2018.4.36f1')
+
+    def test_link_args_2017(self):
+        a = I.link_args_2017(2, '/s', '/l', ['B.dll', 'A.dll'], '/d', subset=True)
+        self.assertEqual(a[:6], ['--api=NET_2_0_Subset', '--out=/l', '--i18n=none', '--core-action=link',
+                                 '--descriptor-directory=/d', '--search-directory=/s'])
+        self.assertEqual(a[6:], ['--include-assembly=/s/A.dll', '--include-assembly=/s/B.dll'])
+        self.assertEqual(I.link_args_2017(2, '/s', '/l', [], '/d')[0], '--api=NET_2_0')
+        self.assertEqual(I.link_args_2017(4, '/s', '/l', [], '/d')[0], '--api=NET_4_6')
+        self.assertIn('--include-link-xml=/k.xml', I.link_args_2017(2, '/s', '/l', [], '/d', keep_xml='/k.xml'))
+
+    def test_engine_keep_xml(self):
+        """the engine assemblies: kept whole, linked (so the linker's stubs are written into them)"""
+        import xml.etree.ElementTree as ET
+        with tempfile.TemporaryDirectory() as t:
+            p = I.engine_keep_xml(['UnityEngine.dll', 'UnityEngine.CoreModule.dll'], os.path.join(t, 'k.xml'))
+            root = ET.parse(p).getroot()
+            self.assertEqual(root.tag, 'linker')
+            self.assertEqual([(a.get('fullname'), a.get('preserve')) for a in root],
+                             [('UnityEngine.CoreModule', 'all'), ('UnityEngine', 'all')])
+
+    def test_linker_descriptors(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = os.path.join(t, 'editor', 'il2cpp', 'LinkerDescriptors')
+            os.makedirs(d)
+            for n in ('mscorlib.xml', 'mscorlib45.xml', 'mscorlib_mono.xml', 'System.xml', 'System45.xml', 'Mono.Security.xml'):
+                with open(os.path.join(d, n), 'w') as f:
+                    f.write(n)
+            ed, work = os.path.join(t, 'editor'), os.path.join(t, 'work')
+            self.assertEqual(I.linker_descriptors(ed, 'legacyunity', work), d)
+            got = I.linker_descriptors(ed, 'net45', work)
+            self.assertEqual(sorted(os.listdir(got)), ['Mono.Security.xml', 'System.xml', 'mscorlib.xml'])
+            for n, src in (('mscorlib.xml', 'mscorlib45.xml'), ('Mono.Security.xml', 'Mono.Security.xml')):
+                with open(os.path.join(got, n)) as f:
+                    self.assertEqual(f.read(), src)
+
+    def test_il2cpp_profile_arg(self):
+        a = I.il2cpp_args(UV.Version('2017.4.40f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p', 'legacyunity')
+        self.assertIn('--dotnetprofile=legacyunity', a)
+        self.assertNotIn('--dotnetprofile=unityaot', a)
+        self.assertIn('--map-file-parser=/bin/true', a)
+        a = I.il2cpp_args(UV.Version('2018.4.36f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p')
+        self.assertFalse(any(x.startswith('--map-file-parser') for x in a))
+
+
+def write_elf(path, syms, is64=True):
+    """An ELF file with only a symbol table (SHT_SYMTAB) and its strings: syms = [(name, value,
+    size, type)] (type 2 = function), defined in section 1."""
+    strtab = b'\0' + b''.join(n.encode() + b'\0' for n, _, _, _ in syms)
+    ent = 24 if is64 else 16
+    tab, pos = bytes(ent), 1
+    for n, v, size, typ in syms:
+        info = (1 << 4) | typ                                   # STB_GLOBAL
+        tab += struct.pack('<IBBHQQ', pos, info, 0, 1, v, size) if is64 else struct.pack('<IIIBBH', pos, v, size, info, 0, 1)
+        pos += len(n) + 1
+    hdr = 64 if is64 else 52
+    shoff = hdr + len(tab) + len(strtab)
+    if is64:
+        sh = lambda typ, off, size, link, entsize: struct.pack('<IIQQQQIIQQ', 0, typ, 0, 0, off, size, link, 0, 1, entsize)
+        head = bytearray(b'\x7fELF\x02\x01\x01' + bytes(hdr - 7))
+        struct.pack_into('<Q', head, 0x28, shoff); struct.pack_into('<HH', head, 0x3a, 64, 3)
+    else:
+        sh = lambda typ, off, size, link, entsize: struct.pack('<IIIIIIIIII', 0, typ, 0, 0, off, size, link, 0, 1, entsize)
+        head = bytearray(b'\x7fELF\x01\x01\x01' + bytes(hdr - 7))
+        struct.pack_into('<I', head, 0x20, shoff); struct.pack_into('<HH', head, 0x2e, 40, 3)
+    with open(path, 'wb') as f:
+        f.write(bytes(head) + tab + strtab + sh(0, 0, 0, 0, 0) + sh(2, hdr, len(tab), 2, ent) +
+                sh(3, hdr + len(tab), len(strtab), 0, 0))
+
+
+class SourceFixTest(unittest.TestCase):
+    def test_arm_clobbers(self):
+        src = ('    __asm__ __volatile__\n    (\n        "ldrexd\\t%1, %2, [%3]\\n\\t"\n'
+               '        : "=&r" (success), "=&r" (lo), "=&r" (hi)\n        : "r" (p)\n        : "cc", "r2", "r3"\n    );\n'
+               '        : "cc", "memory", "r0", "r1", "r3"\n        : "cc", "memory"\n')
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'il2cpp', 'libil2cpp', 'os', 'Unity', 'ExtendedAtomicOps-arm.h')
+            os.makedirs(os.path.dirname(p))
+            with open(p, 'w') as f:
+                f.write(src)
+            self.assertEqual(I.fix_editor_sources(t), ['il2cpp/libil2cpp/os/Unity/ExtendedAtomicOps-arm.h'])
+            with open(p) as f:
+                got = f.read()
+            self.assertNotIn('"r2"', got)
+            self.assertNotIn('"r3"', got)
+            self.assertIn('        : "cc"\n    );', got)
+            self.assertEqual(got.count('        : "cc", "memory"\n'), 2)
+            self.assertIn(': "=&r" (success), "=&r" (lo), "=&r" (hi)', got)       # (operands untouched)
+            self.assertEqual(I.fix_editor_sources(t), [])                           # idempotent
+
+
+class SymbolMapTest(unittest.TestCase):
+    def read(self, path):
+        with open(path, 'rb') as f:
+            d = f.read()
+        n, = struct.unpack_from('<i', d)
+        self.assertEqual(len(d), 4 + 12 * n)
+        return [struct.unpack_from('<QI', d, 4 + 12 * i) for i in range(n)]
+
+    def test_arm64(self):
+        with tempfile.TemporaryDirectory() as t:
+            elf, out = os.path.join(t, 'libil2cpp.sym'), os.path.join(t, 'SymbolMap-ARM64')
+            write_elf(elf, [('b', 0x2000, 16, 2), ('a', 0x1000, 32, 2), ('data', 0x3000, 8, 1), ('zero', 0x4000, 0, 2)])
+            self.assertEqual(I.write_symbol_map(elf, out), 2)          # functions with a size only, sorted
+            self.assertEqual(self.read(out), [(0x1000, 32), (0x2000, 16)])
+
+    def test_armv7_thumb(self):
+        with tempfile.TemporaryDirectory() as t:
+            elf, out = os.path.join(t, 'libil2cpp.sym'), os.path.join(t, 'SymbolMap-ARMv7')
+            write_elf(elf, [('t', 0x1001, 10, 2), ('a', 0x2000, 4, 2)], is64=False)
+            I.write_symbol_map(elf, out, thumb=True)
+            self.assertEqual(self.read(out), [(0x1000, 10), (0x2000, 4)])
 
 
 class SpansTest(unittest.TestCase):
@@ -169,6 +377,9 @@ class StagingTest(unittest.TestCase):
     def test_link_args(self):
         a = I.link_args(UV.Version('2019.4.8f1'), 'arm64-v8a', '/s', '/l', ['B.dll', 'A.dll'])
         self.assertIn('--rule-set=Conservative', a)
+        self.assertIn('--dotnetprofile=unityaot', a)
+        self.assertIn('--dotnetprofile=legacyunity',
+                      I.link_args(UV.Version('2018.4.36f1'), 'arm64-v8a', '/s', '/l', [], 'legacyunity'))
         self.assertEqual([x for x in a if x.startswith('--include-unity-root-assembly')],
                          ['--include-unity-root-assembly=/s/A.dll', '--include-unity-root-assembly=/s/B.dll'])
 
@@ -239,6 +450,14 @@ class NdkClangTest(unittest.TestCase):
         out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang', '-c', '-target', 'armv7-linux-androideabi19', 'a.c')
         self.assertIn('armv7-linux-androideabi19', out)
 
+    def test_pic_wins(self):
+        """2017.4's il2cpp: -fPIC then -fPIE for a shared library's objects: PIC stays"""
+        out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang++', '-c', '-fPIC', '-Os', '-fPIE', 'a.cpp')
+        self.assertIn('-fPIC', out)
+        self.assertNotIn('-fPIE', out)
+        out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang', '-c', '-fPIE', 'a.c')
+        self.assertIn('-fPIE', out)
+
     def test_binutils(self):
         out = self.run_tool('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-objcopy',
                             '--strip-all', 'a', 'b')
@@ -273,6 +492,16 @@ class AndroidDataIl2cppTest(unittest.TestCase):
             os.path.join(data, 'Managed', 'etc', 'mono', 'config')])
         self.assertEqual(got[2][1], os.path.join('/il2', 'Data/Managed/Metadata/global-metadata.dat'))
         self.assertEqual(args.managed_names, {'Assembly-CSharp.dll', 'mscorlib.dll'})
+
+    def test_player_match(self):
+        """libil2cpp.so goes with the data it was built from and the player of its IL2CPP's release"""
+        v = UV.Version
+        info = {'unity': '2017.4.40f1', 'data_unity': '2017.4.9f1'}
+        self.assertIsNone(AD.il2cpp_mismatch(info, v('2017.4.9f1'), v('2017.4.40f1')))
+        self.assertIsNone(AD.il2cpp_mismatch(info, v('2017.4.9f1'), None))
+        self.assertIn('2017.4.9f1 data', AD.il2cpp_mismatch(info, v('2017.4.40f1'), v('2017.4.40f1')))
+        self.assertIn('player package is 2017.4.9f1', AD.il2cpp_mismatch(info, v('2017.4.9f1'), v('2017.4.9f1')))
+        self.assertIsNone(AD.il2cpp_mismatch({'unity': '2019.4.8f1'}, v('2019.4.8f1'), v('2019.4.8f1')))  # (older il2cpp.json)
 
     def test_build_date_2020(self):
         """2020.x: boot.config gets a buildDate (libunity's re-extraction stamp) from the metadata"""

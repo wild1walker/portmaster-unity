@@ -3,8 +3,10 @@ Unity's IL2CPP for the IL2CPP Android player of the same Unity version. Unity's 
 Android players (arm64-v8a) are IL2CPP players only; this is how a Mono game reaches them.
 
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a|armeabi-v7a] [--pkg DIR] [--home DIR]
-                             [--jobs N] [--strip low|none] [--keep-cpp] [--dry-run]
-    python -m pmunity il2cpp fetch <version> [--abi ...] [--pkg DIR] [--home DIR]   (toolchain only)
+                             [--jobs N] [--strip low|none] [--keep-cpp] [--unity VERSION]
+                             [--managed-file DLL]... [--asmpatch COMMAND] [--dry-run]
+    python -m pmunity il2cpp fetch <version> [--abi ...] [--net 2|2subset|4] [--pkg DIR] [--home DIR]
+                                                                                    (toolchain only)
 
 <data>: the game's desktop data folder (<Game>_Data, or <Game>.app/Contents/Resources/Data; read
 only). <out> gets
@@ -19,7 +21,9 @@ What it uses, all fetched once into --home (default $PMUNITY_IL2CPP_HOME, else
   <ver>/editor/il2cpp/...                       Editor/Data/il2cpp of the Windows editor installer
                                                 (UnitySetup64-<ver>.exe: non-solid NSIS, nsis.py):
                                                 il2cpp + UnityLinker (.NET), libil2cpp's sources
-  <ver>/editor/MonoBleedingEdge/lib/mono/unityaot/   the class libraries IL2CPP builds use
+  <ver>/editor/MonoBleedingEdge/lib/mono/unityaot/   the class libraries IL2CPP builds use (bcl_profile:
+                                                .NET 3.5 games Mono/lib/mono/unity or 2.0, .NET
+                                                4.x of 2017.x MonoBleedingEdge/lib/mono/4.5)
   ndk-<rev>/...                                 the Android NDK's target files only (sysroot,
                                                 libc++, libgcc) from Google's zip; its x86-64
                                                 compilers are replaced by tools/il2cpp/ndk-clang.sh
@@ -58,8 +62,8 @@ ABIS = {'arm64-v8a': ('ARM64', 'aarch64-linux-android', 21),
 
 def api_level(rev, abi):
     """The Android API level il2cpp's Android toolchain builds for: 21 on arm64; on armv7 16 with
-    NDK r16b (Unity 2017.4 - 2019.2), 19 from r19 (2019.3+)."""
-    return 16 if abi == 'armeabi-v7a' and rev == 'r16b' else ABIS[abi][2]
+    NDK r13b / r16b (Unity 2017.1 - 2019.2), 19 from r19 (2019.3+)."""
+    return 16 if abi == 'armeabi-v7a' and rev in GNU_NDKS else ABIS[abi][2]
 
 
 IMAGE = 'ubuntu:24.04'                   # stock; the tools are in <home>/root (tools/il2cpp/root.sh)
@@ -68,15 +72,22 @@ TOOLS = os.path.normpath(os.path.join(HERE, '..', '..', 'tools', 'il2cpp'))
 EDITOR_API = 'https://services.api.unity.com/unity/editor/release/v1/releases'
 EDITOR_CDN = 'https://download.unity3d.com/download_unity/{rev}/Windows64EditorInstaller/UnitySetup64-{ver}.exe'
 NDK_BASE = 'https://dl.google.com/android/repository/'
-# the NDK each Unity line's il2cpp checks for (AndroidNDKUtilities: it wants that revision or newer;
-# the Android Build Support of the line installs exactly this one)
+# the NDK each Unity line's IL2CPP wants (AndroidNDKUtilities, and up to 2018.2 the Android
+# extension's "IL2CPP requires r13b" check; the Android Build Support of the line installs exactly
+# this one). r13b's headers are per platform (platforms/android-<api>/arch-<arch>/usr/include),
+# which 2017.x's il2cpp passes as --sysroot; r16b has unified headers only.
 NDKS = [  # (first Unity line, name, Pkg.Revision, zip)
-    ((2017, 1), 'r16b', '16.1.4479499', 'android-ndk-r16b-linux-x86_64.zip'),
+    ((2017, 1), 'r13b', '13.1.3345770', 'android-ndk-r13b-linux-x86_64.zip'),
+    ((2018, 3), 'r16b', '16.1.4479499', 'android-ndk-r16b-linux-x86_64.zip'),
     ((2019, 3), 'r19', '19.0.5232133', 'android-ndk-r19-linux-x86_64.zip'),
     ((2021, 1), 'r21d', '21.3.6528147', 'android-ndk-r21d-linux-x86_64.zip'),
     ((2022, 2), 'r23b', '23.1.7779620', 'android-ndk-r23b-linux.zip'),
 ]
+GNU_NDKS = ('r13b', 'r16b')              # GNU binutils layout: platforms/, sources/cxx-stl, gnustl
 METADATA_MAGIC = 0xFAB11BAF
+# the first 2017.4 release with a 64-bit ARM IL2CPP player, and the line's last
+ARM64_2017 = (16, '2017.4.40f1')
+BCL_DIR = 'MonoBleedingEdge/lib/mono/unityaot'   # the class libraries of IL2CPP builds from 2018.1 (bcl_profile)
 
 
 def log(msg):
@@ -310,14 +321,29 @@ def editor_rel(nsis_path):
 EDITOR_PARTS = ('il2cpp/il2cpp_root', 'MonoBleedingEdge/etc/mono/config')   # (fetched with every part)
 
 
-def editor_wanted(rel):
-    if rel.startswith('MonoBleedingEdge/etc/'):          # il2cpp copies it into the data (Managed/etc)
+def bcl_wanted(rel, bcl):
+    """The assemblies of a class library folder (bcl_profile; the 4.5 folder's AOT images and tools
+    are not needed) and the etc folder of its Mono, which il2cpp copies into the data (Managed/etc)."""
+    return (rel.startswith(bcl + '/') and rel.endswith('.dll')) or rel.startswith(bcl.split('/')[0] + '/etc/')
+
+
+def editor_wanted(rel, bcl=BCL_DIR):
+    """Whether il2cpp's build needs this file of Editor/Data: il2cpp/, MonoBleedingEdge/etc and a
+    class library folder (bcl_wanted)."""
+    if rel.startswith('MonoBleedingEdge/etc/') or bcl_wanted(rel, bcl):
         return True
-    if rel.startswith('MonoBleedingEdge/lib/mono/unityaot/'):
-        return not rel.endswith(('.pdb', '.mdb'))
     if not rel.startswith('il2cpp/'):
         return False
     return not (rel.startswith(('il2cpp/MapFileParser/', 'il2cpp/external/mono/mono/tests/')) or rel.endswith(('.pdb', '.mdb')))
+
+
+def bcl_complete(dest, bcl):
+    """Whether the class library folder is all there (its own mark; the unityaot folder of a home
+    made before the marks came with the editor's .complete)."""
+    if os.path.isfile(os.path.join(dest, bcl, '.complete')):
+        return True
+    return bcl == BCL_DIR and os.path.isfile(os.path.join(dest, '.complete')) and \
+        os.path.isfile(os.path.join(dest, bcl, 'mscorlib.dll'))
 
 
 def runtime_pack_files(deps):
@@ -334,14 +360,24 @@ def runtime_pack_files(deps):
     return out
 
 
-def fetch_editor(version, dest, installer=None):
-    """Editor/Data/il2cpp and MonoBleedingEdge/lib/mono/unityaot of the Windows editor installer.
-    A self-contained .NET build of il2cpp (2020.1+) leaves out the .NET runtime it carries."""
+def fetch_editor(version, dest, installer=None, bcl=BCL_DIR):
+    """Editor/Data/il2cpp, MonoBleedingEdge/etc and one class library folder (bcl_profile) of the
+    Windows editor installer; a home that has the first two gets just another class library
+    folder. A self-contained .NET build of il2cpp (2020.1+) leaves out the .NET runtime it carries."""
     from . import nsis
-    if os.path.isfile(os.path.join(dest, '.complete')) and all(os.path.exists(os.path.join(dest, p)) for p in EDITOR_PARTS):
+    base = os.path.isfile(os.path.join(dest, '.complete')) and all(os.path.exists(os.path.join(dest, p)) for p in EDITOR_PARTS)
+    if base and bcl_complete(dest, bcl):
+        return dest
+    if base:
+        installer = installer or json.load(open(os.path.join(dest, '.complete'))).get('installer') or editor_installer(str(version))
+        log(f'editor {version}: the class libraries of {bcl} from {installer}')
+        got = nsis_fetch(installer, lambda p: (lambda r: r if r and bcl_wanted(r, bcl) else None)(editor_rel(p)), dest)
+        if f'{bcl}/mscorlib.dll' not in got:
+            raise SystemExit(f'{installer}: no {bcl}/mscorlib.dll in this installer')
+        open(os.path.join(dest, bcl, '.complete'), 'w').close()
         return dest
     installer = installer or editor_installer(str(version))
-    log(f'editor {version}: il2cpp and the unityaot class libraries from {installer}')
+    log(f'editor {version}: il2cpp and the class libraries of {bcl} from {installer}')
     ns = nsis.Nsis(installer)
     deps = {}
     for rel in nsis_fetch(ns, lambda p: (lambda r: r if r and r.startswith('il2cpp/build/') and r.endswith('.deps.json') else None)(
@@ -351,7 +387,7 @@ def fetch_editor(version, dest, installer=None):
 
     def select(p):
         r = editor_rel(p)
-        if not r or not editor_wanted(r) or r.endswith('.deps.json'):
+        if not r or not editor_wanted(r, bcl) or r.endswith('.deps.json'):
             return None
         if r.split('/')[-1].lower() in deps.get(os.path.dirname(r), ()):
             return None
@@ -359,6 +395,9 @@ def fetch_editor(version, dest, installer=None):
     got = nsis_fetch(ns, select, dest)
     if not any(g.startswith('il2cpp/libil2cpp/') for g in got):
         raise SystemExit(f'{installer}: no Editor/Data/il2cpp in this installer')
+    if f'{bcl}/mscorlib.dll' not in got:
+        raise SystemExit(f'{installer}: no {bcl}/mscorlib.dll in this installer')
+    open(os.path.join(dest, bcl, '.complete'), 'w').close()
     # framework-dependent from here on: the deps files would name the runtime pack's files
     for d in deps:
         for n in os.listdir(os.path.join(dest, d)):
@@ -382,12 +421,12 @@ def ndk_wanted(name, rev, abi):
     if rel == 'source.properties':
         return rel
     llvm = 'toolchains/llvm/prebuilt/linux-x86_64/'
-    if rev == 'r16b':                    # GNU binutils layout: platforms/ + sysroot/ + sources/cxx-stl, GNU libstdc++
+    if rev in GNU_NDKS:                  # GNU binutils layout: platforms/ (+ sysroot/ in r16b) + sources/cxx-stl, GNU libstdc++
         arch = 'arm64' if abi == 'arm64-v8a' else 'arm'
         gcc = f'toolchains/{triple}-4.9/prebuilt/linux-x86_64/'
         stl = 'sources/cxx-stl/gnu-libstdc++/4.9/'
         if rel.startswith('sysroot/usr/include/') or rel.startswith(f'platforms/android-{api}/arch-{arch}/'):
-            return rel
+            return rel                    # (r13b: the platform's own headers and libraries)
         if rel.startswith(stl + 'include/') or rel.startswith(stl + f'libs/{abi}/'):
             return rel if not rel.endswith('.so') else None
         if rel.startswith(gcc + f'lib/gcc/{triple}/') or rel.startswith(gcc + f'{triple}/lib'):
@@ -461,16 +500,63 @@ def fetch_player(version, pkg, abi):
     return info
 
 
-def toolchain(version, abi, home, pkg=None):
+# libil2cpp's armv7 64-bit atomics (2017.4, 2018.4) bind their operands to r0-r3 and also list
+# those registers as clobbered; clang 3.8 took that, clang 11+ refuses it ("asm-specifier for input
+# or output variable conflicts with asm clobber list"). None of these asm blocks writes a register
+# it binds an input to, and Unity's own later file (2019.4) lists only "cc" and "memory": the same
+# change is made in the fetched copy.
+SOURCE_FIXES = {
+    'il2cpp/libil2cpp/os/Unity/ExtendedAtomicOps-arm.h':
+        (re.compile(r'^([ \t]*: "cc"(?:, "memory")?)(?:, "r\d+")+[ \t]*(\r?)$', re.M), r'\1\2'),
+}
+
+
+def fix_editor_sources(editor):
+    """SOURCE_FIXES in the fetched Editor/Data (idempotent); returns the files changed."""
+    changed = []
+    for rel, (pat, rep_) in SOURCE_FIXES.items():
+        p = os.path.join(editor, rel)
+        if not os.path.isfile(p):
+            continue
+        with open(p, encoding='utf-8', newline='') as f:
+            text = f.read()
+        new = pat.sub(rep_, text)
+        if new != text:
+            _write(p, new.encode('utf-8'))
+            changed.append(rel)
+    return changed
+
+
+def toolchain(version, abi, home, pkg=None, bcl=BCL_DIR):
     """Fetches what is missing; returns the paths."""
     vdir = os.path.join(home, str(version))
-    editor = fetch_editor(version, os.path.join(vdir, 'editor'))
+    editor = fetch_editor(version, os.path.join(vdir, 'editor'), bcl=bcl)
+    for rel in fix_editor_sources(editor):
+        log(f'{rel}: armv7 asm clobber lists as in later Unity releases (SOURCE_FIXES)')
     name, rev, zipname = ndk_for(version)
     ndk = fetch_ndk(name, zipname, abi, os.path.join(home, 'ndk-' + name))
     install_ndk_shims(ndk, abi)                  # (again: the script may be newer than the fetch)
     pkg = pkg or os.path.join(vdir, 'player-' + abi)
     info = fetch_player(version, pkg, abi)
-    return {'editor': editor, 'ndk': ndk, 'ndk_name': name, 'ndk_revision': rev, 'pkg': pkg, 'player': info}
+    return {'editor': editor, 'ndk': ndk, 'ndk_name': name, 'ndk_revision': rev, 'pkg': pkg, 'player': info, 'bcl': bcl}
+
+
+def tool_version(data_version, abi, unity=None):
+    """The Unity version whose IL2CPP and player the build uses: the data's own, or `unity` (same
+    line). A 2017.4 release before 2017.4.16f1 has no 64-bit ARM IL2CPP player: its data gets the
+    line's last release (2017.4.40f1; a line keeps its serialized layouts, see android-data's
+    same-line player rule)."""
+    if unity:
+        v = UV.Version(unity)
+        if v.line != data_version.line:
+            raise UV.Unsupported(f'--unity {v}: the data is Unity {data_version}; the IL2CPP player must be of the '
+                                 f'same line ({data_version.major}.{data_version.minor})')
+        return v
+    if abi == 'arm64-v8a' and data_version.line == (2017, 4) and data_version.patch < ARM64_2017[0]:
+        log(f'Unity {data_version} has no arm64-v8a IL2CPP player (2017.4.{ARM64_2017[0]}f1 and later): '
+            f'building with {ARM64_2017[1]}\'s IL2CPP for its player (--unity chooses another)')
+        return UV.Version(ARM64_2017[1])
+    return data_version
 
 
 # --------------------------------------------------------------------------- the build
@@ -502,7 +588,62 @@ RUNTIMECONFIG = {'runtimeOptions': {
         'System.GC.Concurrent': False}}}
 
 
-BCL_DIR = os.path.join('MonoBleedingEdge', 'lib', 'mono', 'unityaot')
+def bcl_profile(version, net, subset=False):
+    """(il2cpp's --dotnetprofile, the folder of Editor/Data with its class libraries) of an IL2CPP
+    Android build of that Unity version and .NET level (net: 2 = the .NET 3.5 runtime, 4 = .NET
+    4.x), as the editor picks them (ApiCompatibilityLevelToDotNetProfileArgument) and il2cpp
+    resolves them (its LegacyUnity and Net20 profiles are the old Mono's, Net45 and UnityAot
+    MonoBleedingEdge's):
+      .NET 3.5, ".NET 2.0 Subset"   legacyunity  Mono/lib/mono/unity       (2017.x, 2018.x)
+      .NET 3.5, ".NET 2.0"          net20        Mono/lib/mono/2.0
+      .NET 4.x, 2017.x              net45        MonoBleedingEdge/lib/mono/4.5
+      .NET 4.x, 2018.1+             unityaot     MonoBleedingEdge/lib/mono/unityaot
+    `subset`: the game's own class libraries are the "unity" profile (subset_profile)."""
+    if net == 2:
+        if version.line >= (2019, 1):
+            raise UV.Unsupported(f'Unity {version}: a .NET 3.5 game of a line without the .NET 3.5 runtime')
+        return ('legacyunity', 'Mono/lib/mono/unity') if subset else ('net20', 'Mono/lib/mono/2.0')
+    if version.line < (2018, 1):
+        return 'net45', 'MonoBleedingEdge/lib/mono/4.5'
+    return 'unityaot', BCL_DIR
+
+
+def dotnet_level(data, version=None):
+    """2 or 4: the game's scripting runtime, .NET 3.5 (class libraries 2.0.0.0) or .NET 4.x: the
+    version of the mscorlib.dll it ships, else of the one Assembly-CSharp references (netstandard:
+    4). Unity 2019.1+ has only .NET 4.x."""
+    from . import clrmeta as CM
+    if version is not None and version.line >= (2019, 1):
+        return 4
+    gm = os.path.join(data, 'Managed')
+    try:
+        a = CM.Assembly(os.path.join(gm, 'mscorlib.dll'))
+        if a.rows(0x20):                        # Assembly: HashAlgId, Major, ...
+            return 2 if a.rows(0x20)[0][1] == 2 else 4
+    except (OSError, CM.NotAssembly, ValueError, IndexError, struct.error):
+        pass
+    try:
+        b = CM.Assembly(os.path.join(gm, 'Assembly-CSharp.dll'))
+        refs = {b.string(r[6]): r[0] for r in b.rows(CM.ASSEMBLYREF)}
+        if 'netstandard' in refs:
+            return 4
+        if 'mscorlib' in refs:
+            return 2 if refs['mscorlib'] == 2 else 4
+    except (OSError, CM.NotAssembly, ValueError, IndexError, struct.error):
+        pass
+    raise UV.Unsupported(f'{gm}: no mscorlib.dll, no Assembly-CSharp.dll that references it: which .NET?')
+
+
+def subset_profile(data):
+    """Whether a .NET 3.5 game ships the old Mono's "unity" profile (API compatibility level ".NET
+    2.0 Subset"; its mscorlib has Unity's AOT helper and no console drivers) rather than the
+    "2.0" one: the desktop game ran on that profile, so IL2CPP compiles the same one."""
+    from . import clrmeta as CM
+    p = os.path.join(data, 'Managed', 'mscorlib.dll')
+    if not os.path.isfile(p):
+        return False
+    types = {t['full'] for t in CM.Assembly(p).types()}
+    return 'System.MonoTouchAOTHelper' in types and 'System.TermInfoDriver' not in types
 
 
 def is_engine(name):
@@ -609,25 +750,28 @@ class _AsmRefs:
             self.refs.append(d[strings + name_idx:e].decode('utf-8', 'replace'))
 
 
-def stage_assemblies(data, tc, out_dir, log=log):
+def stage_assemblies(data, tc, out_dir, log=log, managed_files=()):
     """The assembly set il2cpp compiles, in out_dir: the game's own assemblies (and Unity's package
     assemblies the build shipped) from <data>/Managed, the IL2CPP player's UnityEngine assemblies
-    instead of the desktop ones, and the IL2CPP class libraries (unityaot) instead of the desktop
-    Mono's, following references from the game's assemblies. Returns {name: source}."""
+    instead of the desktop ones, and the IL2CPP class libraries (tc['bcl']: bcl_profile) instead of
+    the desktop Mono's, following references from the game's assemblies. `managed_files`: assemblies
+    compiled instead of the data's copies of the same name, or added (a port's patched
+    Assembly-CSharp, its helper, asmpatch's output). Returns {name: source}."""
     gm = os.path.join(data, 'Managed')
     eng = os.path.join(tc['pkg'], 'Variations', 'il2cpp', 'Managed')
-    bcl = os.path.join(tc['editor'], BCL_DIR)
+    bcl = os.path.join(tc['editor'], tc.get('bcl', BCL_DIR))
     bcl_files = {}
     for r, ds, fs in os.walk(bcl):
         for n in fs:
             if n.endswith('.dll'):
                 bcl_files.setdefault(n, os.path.join(r, n))         # unityaot/ before unityaot/Facades/
     engine = {n: os.path.join(eng, n) for n in os.listdir(eng) if n.endswith('.dll')}
+    override = {os.path.basename(f): os.path.abspath(f) for f in managed_files}
     game = {}
-    for n in sorted(os.listdir(gm)):
-        if not n.endswith('.dll') or is_engine(n) or n in bcl_files:
+    for n in sorted(set(os.listdir(gm)) | set(override)):
+        if not n.endswith('.dll') or (n not in override and (is_engine(n) or n in bcl_files)):
             continue
-        game[n] = os.path.join(gm, n)
+        game[n] = override.get(n) or os.path.join(gm, n)
     chosen = dict(engine)
     chosen.update(game)
     todo = list(chosen)
@@ -654,7 +798,7 @@ def stage_assemblies(data, tc, out_dir, log=log):
     for n, src in sorted(chosen.items()):
         shutil.copyfile(src, os.path.join(out_dir, n))
     log(f'assemblies: {len(game)} of the game, {len(engine)} UnityEngine (IL2CPP player), '
-        f'{len(chosen) - len(game) - len(engine)} class libraries (unityaot)')
+        f'{len(chosen) - len(game) - len(engine)} class libraries ({tc.get("bcl", BCL_DIR)})')
     return chosen
 
 
@@ -675,8 +819,9 @@ def player_settings(data):
     return out
 
 
-def elf_exports(path):
-    """Names of the defined dynamic symbols of an ELF shared library (32- or 64-bit, little endian)."""
+def _elf_symbols(path, table):
+    """(data, string table offset, [(name offset, value, size, info, shndx)]) of one symbol table
+    of an ELF file (32- or 64-bit, little endian): table 11 = SHT_DYNSYM, 2 = SHT_SYMTAB."""
     with open(path, 'rb') as f:
         d = f.read()
     if d[:4] != b'\x7fELF':
@@ -694,22 +839,47 @@ def elf_exports(path):
         else:
             name, typ, flags, addr, off, size, link, info, align, ent = struct.unpack_from('<IIIIIIIIII', d, o)
         secs.append((typ, off, size, link, ent))
-    out = set()
+    syms, stro = [], 0
     for typ, off, size, link, ent in secs:
-        if typ != 11:                               # SHT_DYNSYM
+        if typ != table:
             continue
         stro = secs[link][1]
         for k in range(1, size // ent):
             o = off + k * ent
             if is64:
-                nm, info, other, shndx = struct.unpack_from('<IBBH', d, o)
+                nm, info, other, shndx, value, sz = struct.unpack_from('<IBBHQQ', d, o)
             else:
-                nm, _, _, info, other, shndx = struct.unpack_from('<IIIBBH', d, o)
-            if shndx == 0 or (info >> 4) == 0:      # undefined or local
-                continue
-            e = d.index(b'\0', stro + nm)
-            out.add(d[stro + nm:e].decode('ascii', 'replace'))
+                nm, value, sz, info, other, shndx = struct.unpack_from('<IIIBBH', d, o)
+            syms.append((nm, value, sz, info, shndx))
+    return d, stro, syms
+
+
+def elf_exports(path):
+    """Names of the defined dynamic symbols of an ELF shared library."""
+    d, stro, syms = _elf_symbols(path, 11)
+    out = set()
+    for nm, value, size, info, shndx in syms:
+        if shndx == 0 or (info >> 4) == 0:      # undefined or local
+            continue
+        e = d.index(b'\0', stro + nm)
+        out.add(d[stro + nm:e].decode('ascii', 'replace'))
     return out
+
+
+def write_symbol_map(elf, path, thumb=False):
+    """Data/Managed/SymbolMap-<arch> of a 2017.x Android IL2CPP build, from the unstripped library's
+    symbol table instead of the linker map Unity's MapFileParser reads: int32 count, then each code
+    symbol's (uint64 offset, uint32 length) in address order. libil2cpp finds the method of a
+    managed stack frame with it (without it, by the method pointer table, which names a frame in
+    native code after a neighbouring method). `thumb`: armv7 (bit 0 marks Thumb code, not part of
+    the address). Returns the number of symbols."""
+    d, stro, syms = _elf_symbols(elf, 2)
+    funcs = sorted({((v & ~1) if thumb else v, n) for _, v, n, info, shndx in syms
+                    if info & 0xf == 2 and n > 0 and shndx != 0})          # STT_FUNC, defined, sized
+    with open(path, 'wb') as f:
+        f.write(struct.pack('<i', len(funcs)))
+        f.write(b''.join(struct.pack('<QI', a, n) for a, n in funcs))
+    return len(funcs)
 
 
 def il2cpp_api_check(libunity, libil2cpp):
@@ -739,14 +909,19 @@ def ensure_root(root, image):
     return root
 
 
-def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg):
+def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg, profile='unityaot'):
     arch = ABIS[abi][0]
     a = ['--convert-to-cpp', '--compile-cpp', '--libil2cpp-static',
          '--emit-null-checks', '--enable-array-bounds-check',
-         '--dotnetprofile=unityaot',
+         f'--dotnetprofile={profile}',
          '--platform=Android', f'--architecture={arch}', '--configuration=Release',
          f'--outputpath={so}', f'--cachedirectory={cache}', f'--generatedcppdir={cpp}',
          f'--directory={managed}', f'--tool-chain-path={ndk}', '--verbose']
+    if version.line < (2018, 1):
+        # 2017.x links with a map file and then runs MapFileParser on it for Data/SymbolMap-<arch>
+        # (which libil2cpp's managed stack traces can do without: it falls back to the method
+        # pointer table); with no --map-file-parser il2cpp builds one with the host's GCC
+        a.append('--map-file-parser=/bin/true')
     if settings.get('gcIncremental') and version.line >= (2019, 1):
         a.append(f'--incremental-g-c-time-slice={settings.get("gcTimeSlice", 3)}')
     baselib = os.path.join(pkg, 'Variations', 'il2cpp', 'Release', 'StaticLibs', abi)
@@ -812,7 +987,7 @@ def has_option(tool, field):
         return b'\0' + field.encode() + b'\0' in f.read()
 
 
-def link_args(version, abi, staged, linked, roots):
+def link_args(version, abi, staged, linked, roots, profile='unityaot'):
     """UnityLinker as an Android IL2CPP build with Managed Stripping Level "Low" runs it: the
     "Conservative" rules (the class libraries are linked with Unity's own descriptors; every root
     assembly is kept whole, MonoBehaviours, [Preserve] and [RequiredByNativeCode] members too).
@@ -820,24 +995,98 @@ def link_args(version, abi, staged, linked, roots):
     UnityEngine modules): a desktop build carries no record of the types its scenes use (the
     editor's TypesInScenes / editor data), so nothing the data might name is stripped."""
     a = [f'--out={linked}', f'--search-directory={staged}', f'--include-directory={staged}',
-         '--dotnetruntime=il2cpp', '--dotnetprofile=unityaot', '--use-editor-options',
+         '--dotnetruntime=il2cpp', f'--dotnetprofile={profile}', '--use-editor-options',
          '--rule-set=Conservative', '--platform=Android', f'--architecture={ABIS[abi][0]}']
     a += [f'--include-unity-root-assembly={os.path.join(staged, n)}' for n in sorted(roots)]
     return a
 
 
+def link_args_2017(net, staged, linked, roots, descriptors, subset=False, keep_xml=None):
+    """UnityLinker of 2017.x (Mono's linker with Unity's steps and its own options) as that editor
+    runs it for IL2CPP: the class libraries linked (--core-action=link) with il2cpp's descriptors
+    (<assembly>.xml in --descriptor-directory), the game's and the packages' assemblies roots kept
+    whole (--include-assembly: a library root is copied, all its types marked), the UnityEngine
+    ones kept whole by `keep_xml` (engine_keep_xml) but linked, not copied: the linker gives the
+    engine assembly it writes a stub for each member the game calls and it lacks (a desktop-only
+    API such as Input.IsJoystickPreconfigured: the stub throws, as Mono's call of a missing method
+    does; a copied assembly would keep no stub, and il2cpp stops at the unresolved call)."""
+    api = 'NET_4_6' if net == 4 else 'NET_2_0_Subset' if subset else 'NET_2_0'
+    a = [f'--api={api}', f'--out={linked}', '--i18n=none', '--core-action=link',
+         f'--descriptor-directory={descriptors}', f'--search-directory={staged}']
+    if keep_xml:
+        a.append(f'--include-link-xml={keep_xml}')
+    a += [f'--include-assembly={os.path.join(staged, n)}' for n in sorted(roots)]
+    return a
+
+
+def engine_keep_xml(names, path):
+    """A link.xml keeping the named assemblies whole (preserve="all")."""
+    from xml.sax.saxutils import quoteattr
+    with open(path, 'w') as f:
+        f.write('<linker>\n' + ''.join(f'  <assembly fullname={quoteattr(n[:-4])} preserve="all"/>\n' for n in sorted(names))
+                + '</linker>\n')
+    return path
+
+
+def linker_descriptors(editor, profile, work):
+    """The folder the 2017.x UnityLinker reads <assembly>.xml descriptors from: il2cpp's
+    LinkerDescriptors as it is for the 2.0 profile (its *45.xml and *_mono.xml match no assembly);
+    for net45 a copy where each *45.xml takes the place of the file without 45, as the editor
+    picks the 4.5 descriptors."""
+    src = os.path.join(editor, 'il2cpp', 'LinkerDescriptors')
+    if profile != 'net45':
+        return src
+    dst = os.path.join(work, 'LinkerDescriptors')
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(dst)
+    names = set(os.listdir(src))
+    for n in sorted(names):
+        if not n.endswith('.xml') or n.endswith('_mono.xml') or (not n.endswith('45.xml') and n[:-4] + '45.xml' in names):
+            continue
+        shutil.copyfile(os.path.join(src, n), os.path.join(dst, n[:-6] + '.xml' if n.endswith('45.xml') else n))
+    return dst
+
+
+def run_asmpatch(command, managed, work):
+    """tools/asmpatch (its command line) on the game's Managed folder: the assemblies its patches
+    change, written to <work>/asmpatch, for --managed-file (as android-data --asmpatch)."""
+    import shlex
+    dst = os.path.join(work, 'asmpatch')
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(work, exist_ok=True)
+    r = subprocess.run(shlex.split(command) + [managed, dst], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        log('asmpatch: ' + line)
+    if r.returncode != 0:
+        raise SystemExit(f'asmpatch failed (exit {r.returncode}):\n{r.stdout}{r.stderr}')
+    return [os.path.join(dst, n) for n in sorted(os.listdir(dst)) if n.endswith('.dll')] if os.path.isdir(dst) else []
+
+
 def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAGE, keep_cpp=False, dry=False,
-          strip='low'):
-    version = UV.of_data(data)
-    UV.check(version)
+          strip='low', unity=None, managed_files=(), asmpatch=None):
+    data_version = UV.of_data(data)
+    UV.check(data_version)
+    version = tool_version(data_version, abi, unity)
     home = os.path.abspath(home or default_home())
     out = os.path.abspath(out)
     data = os.path.abspath(data)
-    log(f'data: Unity {version}; IL2CPP for {abi}')
-    tc = toolchain(version, abi, home, pkg and os.path.abspath(pkg))
+    net = dotnet_level(data, data_version)
+    subset = net == 2 and subset_profile(data)
+    profile, bcl = bcl_profile(version, net, subset)
+    log(f'data: Unity {data_version}, .NET {"3.5" if net == 2 else "4.x"}; IL2CPP of {version} for {abi} '
+        f'(profile {profile}, {bcl})')
+    tc = toolchain(version, abi, home, pkg and os.path.abspath(pkg), bcl)
     work = os.path.join(out, '.work')
     staged, linked = os.path.join(work, 'Managed-in'), os.path.join(work, 'Managed')
-    chosen = stage_assemblies(data, tc, staged)
+    managed_files = list(managed_files)
+    if asmpatch:
+        patched = run_asmpatch(asmpatch, os.path.join(data, 'Managed'), work)
+        clash = sorted({os.path.basename(f) for f in patched} & {os.path.basename(f) for f in managed_files})
+        if clash:
+            raise SystemExit(f'asmpatch changed {", ".join(clash)}, which --managed-file also gives: run asmpatch on '
+                             f'that assembly when making it instead')
+        managed_files += patched
+    chosen = stage_assemblies(data, tc, staged, managed_files=managed_files)
     settings = player_settings(data)
     cpp, cache = os.path.join(work, 'cpp'), os.path.join(work, 'cache')
     so = os.path.join(out, 'lib', abi, 'libil2cpp.so')
@@ -858,11 +1107,20 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     box = Container(image, root, (home, out, tc['pkg']), jobs or min(4, os.cpu_count() or 2), work)
     if os.path.exists(os.path.join(work, 'cc.log')):
         os.unlink(os.path.join(work, 'cc.log'))
-    roots = [n for n, src in chosen.items() if not src.startswith(os.path.join(tc['editor'], BCL_DIR) + os.sep)]
-    lcmd = runner(deploy_tool(tc['editor'], 'UnityLinker')) + link_args(version, abi, staged, linked, roots)
+    roots = [n for n, src in chosen.items() if not src.startswith(os.path.join(tc['editor'], bcl) + os.sep)]
+    linker = deploy_tool(tc['editor'], 'UnityLinker')
+    if has_option(linker, 'IncludeUnityRootAssembly'):
+        largs = link_args(version, abi, staged, linked, roots, profile)
+    else:                                       # 2017.x: the older UnityLinker
+        engine = [n for n in roots if is_engine(n)]
+        os.makedirs(work, exist_ok=True)
+        largs = link_args_2017(net, staged, linked, [n for n in roots if n not in engine],
+                               linker_descriptors(tc['editor'], profile, work), subset,
+                               engine_keep_xml(engine, os.path.join(work, 'engine-link.xml')))
+    lcmd = runner(linker) + largs
     tool = deploy_tool(tc['editor'], 'il2cpp')
     icmd = runner(tool, os.environ.get('PMUNITY_IL2CPP_NET471', 'mono')) + \
-        il2cpp_args(version, abi, linked, cpp, cache, so, tc['ndk'], settings, tc['pkg'])
+        il2cpp_args(version, abi, linked, cpp, cache, so, tc['ndk'], settings, tc['pkg'], profile)
     if has_option(tool, 'Jobs'):                # (2020.x+; older ones run a compiler per CPU they see)
         icmd.append(f'--jobs={box.jobs}')
     icmd += os.environ.get('PMUNITY_IL2CPP_EXTRA_ARGS', '').split()     # e.g. --additional-cpp=... (debugging)
@@ -888,10 +1146,12 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     t = box.run(icmd, 'il2cpp.log')
     secs += t
     log(f'il2cpp: done in {t:.0f} s')
-    return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip)
+    return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
+                  data_version=data_version, profile=profile)
 
 
-def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip):
+def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip, data_version=None,
+           profile='unityaot'):
     """The data folder il2cpp wrote (Metadata, Resources) -> <out>/Data/Managed; il2cpp.json."""
     src = None
     for cand in (os.path.join(cpp, 'Data'), os.path.join(os.path.dirname(so), 'Data'), os.path.join(work, 'Data')):
@@ -914,15 +1174,22 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
     missing, nwanted = il2cpp_api_check(libunity, so) if os.path.isfile(libunity) else ([], 0)
     if missing:
         log(f'WARNING: the player\'s libunity.so looks up {len(missing)} il2cpp_* functions libil2cpp.so lacks: {missing[:8]}')
-    for extra in ('libil2cpp.dbg.so', 'libil2cpp.sym.so'):     # the unstripped library, its symbols
+    syms = [p for p in (os.path.join(os.path.dirname(so), n) for n in ('libil2cpp.so.debug', 'libil2cpp.sym')) if os.path.isfile(p)]
+    if version.line < (2018, 1) and syms:      # (2017.x: see il2cpp_args' --map-file-parser)
+        n = write_symbol_map(syms[0], os.path.join(dst, 'SymbolMap-' + ABIS[abi][0]), abi == 'armeabi-v7a')
+        log(f'SymbolMap-{ABIS[abi][0]}: {n} code symbols')
+    # the unstripped library and the linker's map (dropped), the symbols (kept in .work): 2019.4+
+    # name them .dbg.so / .sym.so, 2017.4 and 2018.4 .so.debug / .sym / .map
+    for extra in ('libil2cpp.dbg.so', 'libil2cpp.so.debug', 'libil2cpp.map', 'libil2cpp.sym.so', 'libil2cpp.sym'):
         p = os.path.join(os.path.dirname(so), extra)
         if os.path.exists(p):
-            if extra.endswith('.dbg.so'):
+            if extra.endswith(('.dbg.so', '.debug', '.map')):
                 os.unlink(p)
             else:
                 os.replace(p, os.path.join(work, extra))
     info = {
-        'unity': str(version), 'abi': abi, 'metadata_version': mv,
+        'unity': str(version), 'data_unity': str(data_version or version), 'abi': abi, 'metadata_version': mv,
+        'dotnet_profile': profile,
         'libil2cpp_bytes': os.path.getsize(so),
         'player_api': {'looked_up': nwanted, 'missing': missing},
         'ndk': tc['ndk_name'], 'player': tc['player'].get('version'),
@@ -951,8 +1218,13 @@ def main(argv):
         ap.add_argument('version')
         ap.add_argument('--abi', default='arm64-v8a', choices=sorted(ABIS))
         ap.add_argument('--home'); ap.add_argument('--pkg')
+        ap.add_argument('--net', default='4', choices=('2', '2subset', '4'),
+                        help='the class libraries to fetch: 2 / 2subset = the .NET 3.5 runtime\'s ".NET 2.0" / '
+                             '".NET 2.0 Subset" profile, 4 = .NET 4.x (default)')
         a = ap.parse_args(argv[1:])
-        tc = toolchain(UV.Version(a.version), a.abi, os.path.abspath(a.home or default_home()), a.pkg)
+        v = UV.Version(a.version)
+        bcl = bcl_profile(v, int(a.net[0]), a.net == '2subset')[1]
+        tc = toolchain(v, a.abi, os.path.abspath(a.home or default_home()), a.pkg, bcl)
         print(json.dumps({k: v for k, v in tc.items() if k != 'player'}, indent=1))
         return
     ap = argparse.ArgumentParser(prog='pmunity il2cpp', description=__doc__.split('\n\n')[0],
@@ -969,9 +1241,19 @@ def main(argv):
                     help="managed code stripping: low (UnityLinker's conservative rules, as Unity's default for IL2CPP; "
                          "the game's and the engine's assemblies are kept whole) or none (every class library compiled "
                          "whole: about 3x the C++ and the build time)")
+    ap.add_argument('--unity', metavar='VERSION',
+                    help="the Unity version whose IL2CPP and player to build for (default: the data's; same line only; "
+                         "2017.4 data before 2017.4.16f1 gets 2017.4.40f1 for arm64-v8a, the first with that player)")
+    ap.add_argument('--managed-file', action='append', default=[], metavar='DLL',
+                    help="an assembly compiled instead of the data's copy of the same name (or added): a port's patched "
+                         "or helper assembly")
+    ap.add_argument('--asmpatch', metavar='COMMAND',
+                    help="tools/asmpatch's command (e.g. 'asmpatch --only=rewired-android'), run on <data>/Managed; the "
+                         "assemblies it changes are compiled instead of the game's copies (as android-data --asmpatch)")
     ap.add_argument('--dry-run', action='store_true', help='fetch and stage, print the commands, do not run them')
     a = ap.parse_args(argv)
     try:
-        build(a.data, a.out, a.abi, a.home, a.pkg, a.jobs, a.image, a.keep_cpp, a.dry_run, a.strip)
+        build(a.data, a.out, a.abi, a.home, a.pkg, a.jobs, a.image, a.keep_cpp, a.dry_run, a.strip, a.unity,
+              a.managed_file, a.asmpatch)
     except UV.Unsupported as ex:
         sys.exit(str(ex))
