@@ -14,7 +14,7 @@ Android player on GLES handhelds.
     python -m pmunity port check|new|package ...              (a PortMaster port of a game: docs/porting.md)
     python -m pmunity apk <apk|xapk|apks|aab|obb...> <out>     (a game's own Android build, ready for ua_host)
 
-The data's Unity version is read from the data (unity_version.py); versions outside 2017.3 - 2022.3
+The data's Unity version is read from the data (unity_version.py); versions outside 5.6 - 6000.6
 are refused unless --any-unity-version is given.
 
 <data> is the Unity data folder (<Game>_Data, or <Game>.app/Contents/Resources/Data). With <out>
@@ -124,7 +124,7 @@ def main(argv=None):
     s.add_argument('--hlslcc', help='the pmhlslcc binary (default: $PMHLSLCC, tools/hlslcc/out/pmhlslcc, PATH)')
     for p in (c, s):
         p.add_argument('--any-unity-version', action='store_true',
-                       help='convert data of a Unity version outside 2017.3 - 2022.3 (untested; layouts guessed)')
+                       help='convert data of a Unity version outside 5.6 - 6000.6 (untested; layouts guessed)')
     e = sub.add_parser('shaders-export', help='GLES3 programs as .vert/.frag files (compile checks)')
     e.add_argument('data'); e.add_argument('dir')
     e.add_argument('--bundles', default='.')

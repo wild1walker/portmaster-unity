@@ -1,6 +1,6 @@
 """pmunity.nsis: the four installer layouts Unity's Android support installers use, on hand-made
 installers (offline): non-solid NSIS (up to 2020.2), the large-installer variant (2020.3 - 2023.2),
-and Unity 6's chunked LZMA, per-file (6000.1, 6000.2) and solid (6000.0, 6000.3+)."""
+and Unity 6's chunked LZMA, per-file and solid (both occur from 6000.0 on)."""
 import lzma
 import os
 import struct

@@ -8,12 +8,13 @@ stored. From 2020.3 they are built with a large-installer NSIS variant: the firs
 bytes, script entries have 8 parameters instead of 6 and file offsets are 64-bit. Unity 6's
 installers (an NSIS of 2025, first-header flag 0x40) cut LZMA data into chunks of 2 MiB
 (uncompressed), each its own LZMA stream behind a 3-byte compressed length:
-  - per-file blocks (6000.1, 6000.2): 8-byte block words (top bit: compressed), the chunks of a
-    block end with a zero length;
-  - solid (6000.0, 6000.3): the first header holds the 64-bit uncompressed size, then the header
-    is one chunk and all files follow as one stream of 2 MiB chunks (each file: 8-byte length +
-    data, at its offset in that stream). A file is read by walking the chunk lengths (3 bytes per
-    2 MiB chunk, one small range request each on a kept-alive connection) to the chunks it spans.
+  - per-file blocks (e.g. 6000.0.58, 6000.1, 6000.2, 6000.3.11): 8-byte block words (top bit:
+    compressed), the chunks of a block end with a zero length;
+  - solid (e.g. 6000.0.85, 6000.3.26, 6000.4 - 6000.6): the first header holds the 64-bit
+    uncompressed size, then the header is one chunk and all files follow as one stream of 2 MiB
+    chunks (each file: 8-byte length + data, at its offset in that stream). A file is read by
+    walking the chunk lengths (3 bytes per 2 MiB chunk, one small range request each on a
+    kept-alive connection) to the chunks it spans.
 Old-style solid installers (one LZMA stream for everything) are refused: use 7-Zip.
 
 usage (tools/re/nsisrange.py, or python -m pmunity.nsis):

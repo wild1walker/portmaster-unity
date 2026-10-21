@@ -33,7 +33,7 @@ reads the game and prints:
 
 | what | from |
 |---|---|
-| Unity version, inside the converter's range (2017.3 - 2022.3) or not | the data's serialized files |
+| Unity version, inside the converter's range (5.6 - 6000.6) or not | the data's serialized files |
 | scripting backend (Mono: `Managed/*.dll`; IL2CPP: `GameAssembly`, `il2cpp_data`), .NET 3.5 or 4.x runtime | the build's files |
 | platform build (Linux, macOS, Windows; the executable's architecture), compressed (`data.unity3d`) or not | the executable's header, the data folder |
 | graphics APIs, and so the shaders the converter can translate (OpenGL Core, Direct3D 11) | `BuildSettings` |
@@ -50,7 +50,7 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 
 | route | when | status |
 |---|---|---|
-| `android` | a Mono build of Unity 2017.3 - 2022.3 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
+| `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
 | `il2cpp-arm64` | a Mono build on a 64-bit-only system: the game compiled with IL2CPP into an arm64 Android player | coming (`pmunity il2cpp`) |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | coming (`tools/box64`, `pmunity route`) |
 | `apk` | an Android build of the game | coming (`pmunity apk`) |
@@ -222,7 +222,7 @@ The rehearsal does not cover what only a handheld has. Check, with the release z
 The same steps without the setup, on a PC:
 
 1. **Check** the version (`python -m pmunity version <Data>`), the backend and the graphics APIs
-   (`port check` says all of it). The runtime knows the Android players of 2017.4 - 2022.3; for
+   (`port check` says all of it). The runtime knows the Android players of 5.6 - 6000.6; for
    others `tools/re/elfimports.py` lists a player's imports (compare with
    `runtime/android/README.md`) and `FJ_DUMP=1` lists the Java classes and methods Unity asked for
    and did not find. The handheld has little RAM (1 GB with the system): the textures step can

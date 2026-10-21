@@ -1144,7 +1144,7 @@ def main(argv=None):
                          "and with the setting on Unity presents nothing (2019.4) or stops after its first frames "
                          "(2021.3+); keep/on only for a runtime that runs Swappy")
     ap.add_argument('--any-unity-version', action='store_true',
-                    help='convert data of a Unity version outside 2017.3 - 2022.3, or for an Android player of another '
+                    help='convert data of a Unity version outside 5.6 - 6000.6, or for an Android player of another '
                          'Unity line (untested; the formats are then guessed)')
     ap.add_argument('--async-upload-buffer', type=int, default=0, help='QualitySettings.asyncUploadBufferSize in MB (0 = keep)')
     ap.add_argument('--no-inline-textures', dest='inline_textures', action='store_false',
