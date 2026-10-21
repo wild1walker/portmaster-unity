@@ -244,7 +244,12 @@ The same steps without the setup, on a PC:
 4. **Run**: on the handheld, in one folder: `ua_host`, `lib/` with the player's libraries
    (`Variations/mono/Release/Libs/armeabi-v7a/*.so` and, from `MonoLibs/`, the Mono runtime the
    game needs) and the contents of `android/zip/`; then `tools/device/run.sh first.log 60` and
-   read the log (`I/Unity`, `[host]`, `UA_FPS=5`). In the emulated rig: `tools/emu/emu.sh`.
+   read the log (`I/Unity`, `[host]`, `UA_FPS=5`). From the PC, `DEVICE=root@<handheld>
+   tools/device/test.sh <folder> 120 30 90` does all of it over SSH: it copies the folder (only
+   what changed) with this checkout's `ua_host`, runs the game with a memory watchdog, takes
+   screenshots at 30 and 90 s, and brings back the log, a memory log and the screenshots with a
+   summary (frames per second, peak memory, how the run ended). In the emulated rig:
+   `tools/emu/emu.sh`.
 
 Typical first problems:
 
