@@ -256,7 +256,7 @@ class AndroidDataIl2cppTest(unittest.TestCase):
         self.assertEqual(AD.opts_key(types.SimpleNamespace(il2cpp='/x', **base)), mono + ['il2cpp=/x'])
 
     def test_items(self):
-        args = types.SimpleNamespace(il2cpp='/il2', il2cpp_info={
+        args = types.SimpleNamespace(il2cpp='/il2', unity=UV.Version('2019.4.8f1'), il2cpp_info={
             'files': ['Data/Managed/Metadata/global-metadata.dat', 'Data/Managed/Resources/mscorlib.dll-resources.dat',
                       'Data/Managed/etc/mono/config'],
             'assemblies': ['Assembly-CSharp.dll', 'mscorlib.dll']})
@@ -273,6 +273,23 @@ class AndroidDataIl2cppTest(unittest.TestCase):
             os.path.join(data, 'Managed', 'etc', 'mono', 'config')])
         self.assertEqual(got[2][1], os.path.join('/il2', 'Data/Managed/Metadata/global-metadata.dat'))
         self.assertEqual(args.managed_names, {'Assembly-CSharp.dll', 'mscorlib.dll'})
+
+    def test_build_date_2020(self):
+        """2020.x: boot.config gets a buildDate (libunity's re-extraction stamp) from the metadata"""
+        with tempfile.TemporaryDirectory() as t:
+            md = os.path.join(t, 'Data', 'Managed', 'Metadata')
+            os.makedirs(md)
+            with open(os.path.join(md, 'global-metadata.dat'), 'wb') as f:
+                f.write(struct.pack('<Ii', 0xFAB11BAF, 27))
+            args = types.SimpleNamespace(il2cpp=t, unity=UV.Version('2020.3.49f1'), il2cpp_info={
+                'files': ['Data/Managed/Metadata/global-metadata.dat'], 'assemblies': []})
+            data = os.path.join('Game', 'assets', 'bin', 'Data')
+            got = AD.il2cpp_items(args, [(os.path.join(data, 'boot.config'), '/src/boot.config', 'link')], data)
+            self.assertEqual(got[0][2], 'il2cppboot')
+            self.assertTrue(6 * 10 ** 17 <= args.il2cpp_build_date < 7 * 10 ** 17)
+            args.unity = UV.Version('2021.3.16f1')
+            got = AD.il2cpp_items(args, [(os.path.join(data, 'boot.config'), '/src/boot.config', 'link')], data)
+            self.assertEqual(got[0][2], 'link')
 
 
 if __name__ == '__main__':

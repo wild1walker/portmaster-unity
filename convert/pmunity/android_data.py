@@ -907,6 +907,14 @@ def il2cpp_items(args, items, data):
     for rel in info['files']:
         items.append((os.path.join(data, os.path.relpath(rel, 'Data')), os.path.join(args.il2cpp, rel), 'link'))
     args.managed_names = set(info['assemblies'])
+    # Unity 2020.x extracts that data to <external files>/il2cpp unless il2cpp/unity.ver holds
+    # boot.config's buildDate (an IL2CPP build writes one; a desktop build has none): a value
+    # from the metadata, so the copy is redone exactly when the IL2CPP build changes
+    if args.unity.major == 2020:
+        import hashlib
+        with open(os.path.join(args.il2cpp, 'Data', 'Managed', 'Metadata', 'global-metadata.dat'), 'rb') as f:
+            args.il2cpp_build_date = 6 * 10 ** 17 + int(hashlib.sha256(f.read()).hexdigest(), 16) % 10 ** 17
+        items = [(d, s, 'il2cppboot' if os.path.basename(d) == 'boot.config' else a) for d, s, a in items]
     return items
 
 
@@ -1258,6 +1266,12 @@ def main(argv=None):
             txt = mono_config_text(open(src).read(), [d.split('=', 1) for d in args.dllmap])
             write_bytes(dst, txt.encode())
             how = 'written'
+        elif act == 'il2cppboot':                       # (il2cpp_items)
+            txt = open(src, encoding='utf-8', errors='replace').read()
+            if not re.search(r'^buildDate=', txt, re.M):
+                txt = txt.rstrip('\n') + f'\nbuildDate={args.il2cpp_build_date}\n'
+            write_bytes(dst, txt.encode())
+            how = 'written'
         else:
             raise ValueError(act)
         stats[how] = stats.get(how, 0) + 1
@@ -1421,11 +1435,25 @@ def pack(args, log):
     apk = os.path.join(zdir, args.name + '.apk')
     main_obb = os.path.join(zdir, f'main.{args.version_code}.{args.package}.obb')
     patch_obb = os.path.join(zdir, f'patch.{args.version_code}.{args.package}.obb')
-    if args.pack in ('apk', 'all'):
+    pack_what = args.pack
+    if getattr(args, 'il2cpp', None) and pack_what == 'all':
+        # IL2CPP: one APK when it fits, as Unity's builds (no "split application binary"). libunity
+        # 2020.3 extracts IL2CPP's data by listing assets/bin/Data/Managed, and with an OBB mounted
+        # that listing comes back empty (nothing extracted: "Could not open global-metadata.dat")
+        total = sum(len(p) if isinstance(p, bytes) else os.path.getsize(p) for a, p in apk_entries + obb_entries)
+        if total < ZIP_LIMIT - (64 << 20):
+            apk_entries, obb_entries, pack_what = apk_entries + obb_entries, [], 'apk'
+            for old in (main_obb, patch_obb):
+                if os.path.exists(old):
+                    os.unlink(old)
+            log('pack: IL2CPP data: one APK, no OBB')
+        else:
+            log('pack: WARNING: IL2CPP data over 2 GiB: APK + OBB (Unity 2020.3 then extracts no IL2CPP data: untested)')
+    if pack_what in ('apk', 'all'):
         _write_zip(apk, apk_entries, log)
         verify_zip(apk, apk_entries, log)
         res['apk'] = apk
-    if args.pack in ('obb', 'all'):
+    if pack_what in ('obb', 'all'):
         need = sum(os.path.getsize(p) for a, p in obb_entries)
         st = os.statvfs(zdir)
         free = st.f_bavail * st.f_frsize
