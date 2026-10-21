@@ -1238,7 +1238,9 @@ def main(argv=None):
             f'but the game\'s code still reads the jar path (asmpatch {ST.PATCH[args.streaming_assets]})')
     items = plan(args)
     crc = any(a == 'aacatalog' for _, _, a in items)       # bundle CRCs to follow (Addressables)
-    crcs = {}
+    # source CRC -> patched CRC of every bundle placed: this run's and earlier runs' (a bundle left
+    # as it was, or moved here by an earlier --consume-src run, is not planned again)
+    crcs = {v[0]: v[1] for v in state.get('_crc', {}).values()}
     log(f'{len(items)} files planned from {args.src}')
     stats = {}
     report = {'bundles': {}, 'files': {}, 'notes': ['asmpatch: ' + n for n in asmpatch_notes]}
@@ -1257,9 +1259,6 @@ def main(argv=None):
             continue
         if state.get(dst_rel) == key and os.path.exists(dst):
             newstate[dst_rel] = key
-            if dst_rel in state.get('_crc', {}):
-                newstate.setdefault('_crc', {})[dst_rel] = state['_crc'][dst_rel]
-                crcs[state['_crc'][dst_rel][0]] = state['_crc'][dst_rel][1]
             for kr in state.get('_kept', {}).get(dst_rel, ()):
                 newstate.setdefault('_kept', {}).setdefault(dst_rel, []).append(kr)
                 newstate[kr] = state.get(kr, key)
@@ -1368,6 +1367,9 @@ def main(argv=None):
             if os.path.lexists(p):
                 os.unlink(p)
                 log(f'removed stale {d}')
+    old_crc = {d: v for d, v in state.get('_crc', {}).items() if d in newstate and d not in newstate.get('_crc', {})}
+    if old_crc:
+        newstate.setdefault('_crc', {}).update(old_crc)
     json.dump(newstate, open(statep, 'w'), indent=0)
     log(f'placed: {stats}; skipped source files: {args.skipped}; engine modules not shipped: {args.dropped_modules}; '
         f'.resS moved into their serialized files: {len(args.inlined_ress)}')
