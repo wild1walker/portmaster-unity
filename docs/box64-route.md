@@ -229,8 +229,9 @@ files, nothing of Unity.
   `PMU_MAXCPU`, `PMU_ARGS` (more player arguments, e.g. `-force-gfx-direct`), `PMU_DYNACACHE=0`.
 - **Input**: Unity's Linux players have SDL2 built in and read pads with the firmware's
   `SDL_GAMECONTROLLERCONFIG` (the player's legacy SDL numbering can differ from the firmware's; the
-  20 Minutes Till Dawn port's launcher remaps it); gptokeyb (`<port>.gptk`) gives keys and mouse to
-  games that want them, and the exit hotkey.
+  20 Minutes Till Dawn port's launcher remaps it); gptokeyb2 (`<port>.ini`) gives keys and mouse to
+  games that want them, and the exit hotkey (its kill switch gets the first 15 characters of the
+  executable's name: the kernel keeps no more of a process name).
 
 Without `pmunity port`: `python -m pmunity route "<Game folder>" --launcher "<Title>.sh" --port <port>`
 writes the same launcher; `tools/box64/test/launcher_test.sh <launcher> <game folder> <out>` runs a

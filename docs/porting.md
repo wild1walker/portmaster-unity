@@ -79,7 +79,7 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
 ```
 
 `files` maps each output path of the port folder to a template, looked up in the route's folder
-and then in `port_template/common/` (the READMEs, the gamedata note, the exit-hotkey `.gptk`,
+and then in `port_template/common/` (the READMEs, the gamedata note, the exit-hotkey `.ini` for gptokeyb2,
 `package.sh`). Templates are text with `@@NAME@@` values (`PORTDIR`, `TITLE`, `ZIP`, `LAUNCHER`,
 `SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`; an unknown
 name is an error). Everything else a launcher or setup needs comes from files `port new` writes
@@ -102,7 +102,7 @@ checks the game and writes `<out>` (default `./<name>`):
 | `port.toml` | the port's settings (written once, with the values the check found; yours to edit). Run `port new` again to regenerate the rest from it (it is used when it is there, `--config` names another) |
 | `port.build.json` | the resolved settings, the route and the check's findings (what `package` reads) |
 | `<Title>.sh` | the launcher (PortMaster conventions: `control.txt`, `get_controls`, `$GPTOKEYB`, `$ESUDO`, `pm_message`, `pm_finish`; first launch: PortMaster's patcher runs the setup) |
-| `<name>/` | the folder installed as `ports/<name>/`: `setup/patchscript`, `setup/setup.env`, `setup/convert.json`, `setup/questions.lua` and `setup.txt` (with questions), `port.env`, `port.json`, `README.md`, `gamedata/PUT_GAME_FILES_HERE.txt`, `<name>.gptk` |
+| `<name>/` | the folder installed as `ports/<name>/`: `setup/patchscript`, `setup/setup.env`, `setup/convert.json`, `setup/questions.lua` and `setup.txt` (with questions), `port.env`, `port.json`, `README.md`, `gamedata/PUT_GAME_FILES_HERE.txt`, `<name>.ini` (gptokeyb2: the exit hotkey) |
 | `README.md`, `package.sh` | the port's own README (PortMaster's layout: Notes, Controls) and its release build |
 
 `--player PKG` (a folder from `pmunity player fetch <version> PKG`) puts the installer's URL and

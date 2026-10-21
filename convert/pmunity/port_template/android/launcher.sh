@@ -1,9 +1,5 @@
 #!/bin/bash
 # PORTMASTER: @@ZIP@@, @@LAUNCHER@@
-#
-# @@TITLE@@ on Unity's own Android player, run natively on the handheld's 32-bit userland by
-# portmaster-unity's ua_host. On the first launch the setup builds the game from your copy in
-# ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmunity port new` (@@ROUTE@@ route).
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster/" ]; then
@@ -16,8 +12,11 @@ else
   controlfolder="/roms/ports/PortMaster"
 fi
 source $controlfolder/control.txt
-[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
+
+# @@TITLE@@ on Unity's own Android player, run natively on the handheld's 32-bit userland by
+# portmaster-unity's ua_host. On the first launch the setup builds the game from your copy in
+# ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmunity port new` (@@ROUTE@@ route).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"
 cd "$GAMEDIR" || exit 1
@@ -43,7 +42,7 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     export PATCHER_TIME="@@SETUP_TIME@@, once"
     [ -f "$GAMEDIR/setup/questions.lua" ] && export PATCHER_QUESTIONS="$GAMEDIR/setup/questions.lua"
     source "$controlfolder/utils/patcher.txt"
-    $ESUDO kill -9 $(pidof gptokeyb) 2>/dev/null
+    $ESUDO kill -9 $(pidof gptokeyb gptokeyb2) 2>/dev/null
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
@@ -65,7 +64,7 @@ export UA_FPS=${UA_FPS:-10}                     # a line of frame statistics eve
 [ -f "$GAMEDIR/answers.env" ] && source "$GAMEDIR/answers.env"
 chmod +x "$GAMEDIR/ua_host"
 
-$GPTOKEYB "ua_host" -c "$GAMEDIR/@@PORTDIR@@.gptk" &   # exit hotkey only
+$GPTOKEYB2 "ua_host" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/ua_host"
 
 # the 32-bit libraries first (Knulli: /lib32, /usr/lib32)

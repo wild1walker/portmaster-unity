@@ -5,7 +5,7 @@
     "@@PORTDIR@@/setup/patchscript": "patchscript",
     "@@PORTDIR@@/README.md": "README.player.md",
     "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
-    "@@PORTDIR@@/@@PORTDIR@@.gptk": "hotkey.gptk",
+    "@@PORTDIR@@/@@PORTDIR@@.ini": "hotkey.ini",
     "README.md": "README.port.md",
     "package.sh": "package.sh"
   },
