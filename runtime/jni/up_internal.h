@@ -7,6 +7,8 @@
 #include "unityplayer.h"
 
 #define UP_CLS "com/unity3d/player/UnityPlayer"
+/* Unity 2023.1+: UnityPlayer's Activity implementation, where the per-instance natives are */
+#define UP_CLS_AOS "com/unity3d/player/UnityPlayerForActivityOrService"
 #define H(n) static jvalue n(JNIEnv *env, jobject self, const jvalue *a, void *ud)
 
 #define up_log(...) fj_log("up: " __VA_ARGS__)
@@ -88,5 +90,9 @@ void     up_choreographer_tick(void);          /* UnityMain: run due FrameCallba
 void     up_notify_input_device(int id, int added);
 void     up_fmod_stop_all(void);
 void     up_mkdirs(const char *path);
+
+/* Unity 2023.1+ Java side (up_unity6.c) */
+void     up_unity6_register(void);             /* from up_android_register         */
+void     up_unity6_objects(void);              /* from up_android_create_objects   */
 
 #endif

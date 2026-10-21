@@ -11,7 +11,7 @@ a non-solid NSIS installer, so only the files a port needs are read, one HTTP ra
 (nsis.py): about 10 MB of a 200-700 MB download. --installer reads a local copy (or another URL).
 
 <dir> gets the player package layout `android-data --pkg` reads:
-  Data/unity default resources
+  Data/unity default resources                   (Unity 6: Data/Resources/unity default resources)
   Variations/mono/Managed/*.dll                  the Android UnityEngine assemblies (mono)
   Variations/<backend>/Release/Libs/<abi>/*.so   libmain.so, libunity.so
   Variations/mono/Release/MonoLibs/<abi>/*.so    libmono.so (Mono 2.x), libmonobdwgc-2.0.so (4.x), ...
@@ -63,8 +63,11 @@ def package_path(nsis_path):
     return '/'.join(parts[1:]) if parts and parts[0].startswith('$') else None
 
 
+DEFAULT_RESOURCES = ('Data/unity default resources', 'Data/Resources/unity default resources')   # Unity 6: the second
+
+
 def wanted(backend, abi):
-    g = ['Data/unity default resources', f'Variations/{backend}/Release/Libs/{abi}/*.so']
+    g = list(DEFAULT_RESOURCES) + [f'Variations/{backend}/Release/Libs/{abi}/*.so']
     if backend == 'mono':
         g += ['Variations/mono/Managed/*.dll', f'Variations/mono/Release/MonoLibs/{abi}/*.so']
     return g
@@ -97,7 +100,7 @@ def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=p
         got.append(rel)
     libs = f'Variations/{backend}/Release/Libs/{abi}/'
     missing = [n for n in ('libmain.so', 'libunity.so') if libs + n not in got]
-    if 'Data/unity default resources' not in got:
+    if not any(n in got for n in DEFAULT_RESOURCES):
         missing.append('Data/unity default resources')
     if missing:
         raise SystemExit(f'the installer has no {", ".join(missing)} for {backend}/{abi} '
@@ -106,7 +109,7 @@ def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=p
             'installer': installer, 'files': len(got)}
     with open(os.path.join(out, 'player.json'), 'w') as f:
         json.dump(info, f, indent=1)
-    log(f'{len(got)} files, {ns.s.fetched / 1e6:.1f} MB read -> {out}')
+    log(f'{len(got)} files, {ns.s.fetched / 1e6:.1f} MB read ({ns.s.requests} requests) -> {out}')
     return info
 
 

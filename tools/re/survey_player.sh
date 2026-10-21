@@ -65,7 +65,7 @@ data = open(sys.argv[1], 'rb').read()
 print('\n'.join(sorted(set(m.group().decode() for m in re.finditer(rb'(?<=\0)il2cpp_[a-z0-9_]+(?=\0)', data)))))
 PYEOF
 
-jar=$(cd "$PKG" && ls $V/mono/Release/Classes/classes.jar $V/il2cpp/Release/Classes/classes.jar 2>/dev/null | head -1)
+jar=$(cd "$PKG" && ls $V/mono/Release/Classes/classes.jar $V/il2cpp/Release/Classes/classes.jar 2>/dev/null | head -1 || true)
 if [ -n "$jar" ]; then
   docker run --rm -v "$PKG":/p:ro -v "$OUT":/o "$JAVA" sh -c \
     "cd /tmp && classes=\$(jar tf /p/$jar | grep '\.class\$' | sed 's/\.class\$//; s#/#.#g' | sort) && \

@@ -58,7 +58,8 @@ def archive(files, unity='2021.3.16f1', block=40, comp=(3, 0, 1)):
 
 class HeaderTest(unittest.TestCase):
     def test_platform_offset(self):
-        for fmt, ver, off in ((17, '2017.4.9f1', 31), (21, '2019.4.38f1', 32), (22, '2020.3.48f1', 60)):
+        for fmt, ver, off in ((17, '2017.4.9f1', 31), (21, '2019.4.38f1', 32), (22, '2020.3.48f1', 60),
+                              (23, '6000.6.3f1', 59)):
             head = sf_head(fmt, ver, 24)
             self.assertEqual(A.sf_platform_offset(head), (off, '<', 24, ver))
             self.assertEqual(UV.sf_header(head)[:2], (fmt, ver))
@@ -78,9 +79,10 @@ class VersionTest(unittest.TestCase):
     def test_parse_and_check(self):
         v = UV.Version('2021.3.45f2')
         self.assertEqual((v.line, v.patch, v.kind, v.build), ((2021, 3), 45, 'f', 2))
-        for ok in ('2017.3.0f3', '2017.4.40f1', '2020.3.49f1', '2022.3.62f3'):
+        for ok in ('2017.3.0f3', '2017.4.40f1', '2020.3.49f1', '2022.3.62f3', '2023.1.20f1', '2023.2.3f1',
+                   '6000.0.58f2', '6000.3.11f1', '6000.6.3f1'):
             UV.check(UV.Version(ok))
-        for bad in ('5.6.7f1', '2017.2.5f1', '2023.1.0f1', '6000.0.23f1'):
+        for bad in ('5.6.7f1', '2017.2.5f1', '6000.7.0b5'):
             with self.assertRaises(UV.Unsupported):
                 UV.check(UV.Version(bad))
             UV.check(UV.Version(bad), force=True)

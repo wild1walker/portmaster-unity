@@ -62,7 +62,8 @@ SERIALIZERS = {
     201708220: Layout('2017.3 - 2018.1', 4, 1, False),     # Cuphead 1.3.4: 5914 GLCore entries; Unity 2017.4's built-ins
     201802150: Layout('2018.2 - 2018.4', 4, 1, False),     # Unity 2018.4.36's built-ins
     201806140: Layout('2019.1 - 2021.1', 4, 2, False),     # Unity 2019.4.40, 2020.3.48's built-ins
-    202012090: Layout('2021.2 - 2022.3', 4, 1, True),      # Unity 2021.3.45, 2022.3.62's built-ins
+    202012090: Layout('2021.2 - 6000.5', 4, 1, True),      # Unity 2021.3.45 - 6000.5.11's built-ins
+    202605290: Layout('6000.6', 4, 1, True),               # Unity 6000.6's built-ins: written as 202012090
 }
 LAYOUTS = {v: l.stats for v, l in SERIALIZERS.items()}     # (older name: version -> statistics ints)
 _CANDIDATES = [(n, k) for n in (4, 3, 5, 2) for k in (1, 2)]    # unknown versions, most likely first

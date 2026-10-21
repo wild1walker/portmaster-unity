@@ -53,6 +53,7 @@ import sys
 import tempfile
 import time
 
+from . import typetrees
 from . import unity_version as UV
 from . import video
 
@@ -694,7 +695,9 @@ def edit_globalgamemanagers(src, managed_names, args, log):
         elif n == 'ScriptMapper' and getattr(args, 'video_shader_pid', None):
             video.map_shader(sf, args.video_shader_pid, notes)    # Hidden/VideoDecodeAndroid
         elif n == 'PlayerSettings':
-            t = o.read_typetree()
+            t, node = typetrees.read(o)        # (6000.6.3f1: a field UnityPy's tree lacks)
+            if node is not None:
+                notes.append('PlayerSettings read with a fixed type tree (typetrees.py)')
             changed = False
             if args.mt_rendering != 'keep':
                 t['m_MTRendering'] = args.mt_rendering == 'on'
@@ -722,7 +725,7 @@ def edit_globalgamemanagers(src, managed_names, args, log):
                 elif args.unity.line >= SWAPPY_FROM:
                     notes.append('PlayerSettings: no androidUseSwappy, --swappy ignored')
             if changed:
-                o.save_typetree(t)
+                typetrees.save(o, t, node)
     old = sf._m_target_platform
     sf._m_target_platform = ANDROID
     notes.append(f'target platform {old} -> {ANDROID}')
@@ -829,7 +832,8 @@ def plan(args):
             items.append((os.path.join(args.name, n), p, 'link'))
         else:
             args.skipped.append(n)
-    items.append((os.path.join(data, 'unity default resources'), os.path.join(pkg, 'Data', 'unity default resources'), 'link'))
+    udr_dst = os.path.join(data, *default_resources_path(args.unity))
+    items.append((udr_dst, pkg_default_resources(pkg), 'link'))
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
     # the Android VideoPlayer's shader, made from the desktop one (video.py)
     args.video_shader_pid = video.path_id_for(bex) if args.video_shader and video.has_template(bex) else None
@@ -891,6 +895,32 @@ def plan(args):
     return items
 
 
+# The player's built-in resources: assets/bin/Data/unity default resources up to 2023.1, then
+# assets/bin/Data/Resources/unity default resources (libunity 2022.3: "Data/unity default
+# resources", 6000.x: "Resources/unity default resources"); the player package moved its copy to
+# Data/Resources/ in the same version.
+DEFAULT_RESOURCES_IN_RESOURCES_FROM = (2023, 2)
+
+
+def default_resources_path(unity):
+    """Where the Android player reads "unity default resources", relative to assets/bin/Data."""
+    if unity is not None and unity.line >= DEFAULT_RESOURCES_IN_RESOURCES_FROM:
+        return ('Resources', 'unity default resources')
+    return ('unity default resources',)
+
+
+def pkg_default_resources(pkg):
+    """The player package's "unity default resources" (Data/, or Data/Resources/ from 2023.2)."""
+    for rel in (('Data', 'unity default resources'), ('Data', 'Resources', 'unity default resources')):
+        p = os.path.join(pkg, *rel)
+        if os.path.isfile(p):
+            return p
+    return os.path.join(pkg, 'Data', 'unity default resources')
+
+
+VERSION_RE = rb'\b((?:20\d\d|6\d\d\d|5)\.\d+\.\d+[abfp]\d+)'
+
+
 def player_version(pkg):
     """The Unity version of an Android player package: its player.json (`pmunity player fetch`), its
     ivy.xml (2017.x, 2018.x), else the version string in its Mono libunity.so, else that of its
@@ -910,18 +940,18 @@ def player_version(pkg):
     for name in ('modules.asset', 'version.txt'):           # (installer extras, when kept)
         p = os.path.join(pkg, name)
         if os.path.isfile(p):
-            m = re.search(r'\b(20\d\d\.\d+\.\d+[abfp]\d+)\b', open(p, encoding='utf-8', errors='replace').read())
+            m = re.search(VERSION_RE.decode() + r'\b', open(p, encoding='utf-8', errors='replace').read())
             if m:
                 return UV.Version(m.group(1))
     for abi in ('armeabi-v7a', 'arm64-v8a'):
         lib = os.path.join(pkg, 'Variations', 'mono', 'Release', 'Libs', abi, 'libunity.so')
         if os.path.isfile(lib):
             with open(lib, 'rb') as f:
-                found = re.findall(rb'\b(20\d\d\.\d+\.\d+[abfp]\d+)\x00', f.read())
+                found = re.findall(VERSION_RE + rb'\x00', f.read())
             if found:
                 best = max(set(found), key=found.count)
                 return UV.Version(best.decode())
-    udr = os.path.join(pkg, 'Data', 'unity default resources')
+    udr = pkg_default_resources(pkg)
     if os.path.isfile(udr):
         v = UV.of_file(udr)
         v.exact = False                 # the file is often from an earlier patch of the line
@@ -1264,7 +1294,7 @@ def build_id(args):
     for cls, field in (('BuildSettings', 'buildGUID'), ('PlayerSettings', 'productGUID')):
         for o in env.file.objects.values():
             if o.type.name == cls and h is None:
-                t = o.read_typetree()
+                t, _ = typetrees.read(o)
                 if field in t and any(t[field].values()):
                     h = guid(t[field])
     if h is None:
@@ -1446,7 +1476,7 @@ def verify(args, items, log):
                 bad.append((dst_rel, f'platform {sf._m_target_platform}'))
             if act == 'ggm':
                 for o in sf.objects.values():
-                    o.read_typetree()
+                    typetrees.read(o)
             n_sf += 1
     log(f'verify: {n_sf} serialized files load in UnityPy')
     bundles = [(d, s) for d, s, a in items if a == 'bundle']

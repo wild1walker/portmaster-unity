@@ -216,9 +216,17 @@ static jvalue adapt_arg(const char *want, int wlen, const char *have, int hlen, 
     return fj_v();
 }
 
+/* Unity 2023.1+ registers UnityPlayer's per-instance natives on UnityPlayerForActivityOrService */
+static const char *native_cls(const char *cls, const char *name)
+{
+    if (!strcmp(cls, UP_CLS) && !fj_native_sig(cls, name) && fj_native_sig(UP_CLS_AOS, name)) return UP_CLS_AOS;
+    return cls;
+}
+
 jvalue up_call_native(const char *cls, const char *name, const char *sig, jobject self, const jvalue *args)
 {
     jvalue r = fj_v();
+    cls = native_cls(cls, name);
     const char *reg = fj_native_sig(cls, name);
     if (!reg) {
         fj_call_native_a(cls, name, sig, self, args);   /* logs "not registered" */
@@ -255,7 +263,7 @@ jvalue up_native(const char *name, const char *sig, const jvalue *args)
 
 static int have_native(const char *name)
 {
-    return fj_native_sig(UP_CLS, name) != NULL;
+    return fj_native_sig(native_cls(UP_CLS, name), name) != NULL;
 }
 
 /* ======================================================================================= */
@@ -410,7 +418,7 @@ static void native_done(void)
         /* ()V up to 2018.4; ()Z from 2019.4: true asks Java to kill the process, which the
            host does anyway after quitting */
         jvalue r = up_native("nativeDone", "()V", NULL);
-        const char *sig = fj_native_sig(UP_CLS, "nativeDone");
+        const char *sig = fj_native_sig(native_cls(UP_CLS, "nativeDone"), "nativeDone");
         if (sig && !strcmp(sig, "()Z")) up_log("nativeDone -> %d (kill process)", r.z);
     }
     else up_log("quit: engine cleanup skipped (UA_QUIT_CLEANUP=1 runs nativeDone)");
@@ -535,7 +543,15 @@ void up_resize(int width, int height)
     if (g_main_started && fj_data(g_surface)) surface_changed();
 }
 
-static void job_low_memory(void *arg) { (void)arg; up_native("nativeLowMemory", "()V", NULL); }
+static void job_low_memory(void *arg)
+{
+    (void)arg;
+    if (have_native("nativeLowMemory")) up_native("nativeLowMemory", "()V", NULL);
+    else {   /* 2023.1+: onTrimMemory(MemoryUsage.Critical) */
+        jvalue c = fj_i(4);
+        up_native("nativeMemoryUsageChanged", "(I)V", &c);
+    }
+}
 void up_low_memory(void) { up_gl_post(job_low_memory, NULL, NULL); }
 
 void up_quit(void)
@@ -563,12 +579,25 @@ int up_running(void) { return g_main_started && !S.finishing && !L_main.quit; }
 int up_unity_quit_done(void) { return S.quit_done; }
 void up_wait(void) { if (g_main_started) pthread_join(g_main_thread, NULL); }
 
+/* The android shims' native looper (libandroid's ALooper), when linked in (not in this folder's
+   tests). Android's UI thread has one: Unity 2023.1+ takes it in JNI_OnLoad (ALooper_forThread;
+   "Couldn't retrieve native ALooper for UI thread" without it) and adds its fds to it, so the
+   UI thread's poll services it too. */
+extern void *ALooper_prepare(int opts) __attribute__((weak));
+extern int ALooper_pollOnce(int timeout_ms, int *fd, int *events, void **data) __attribute__((weak));
+static int g_ui_alooper;
+
 void up_poll(void)
 {
     up_looper *saved = t_looper;
     t_looper = &L_ui;
     up_job *j;
     while ((j = looper_take(&L_ui, 0, 0))) looper_run_job(j);
+    if (g_ui_alooper) {
+        int r, n = 0;
+        do r = ALooper_pollOnce(0, NULL, NULL, NULL);
+        while (r == -2 && ++n < 16);    /* ALOOPER_POLL_CALLBACK: more may be ready */
+    }
     t_looper = saved;
 }
 
@@ -685,6 +714,7 @@ int up_start(const struct up_config *cfg)
     JNIEnv *env = fj_env();
     (void)env;
     t_looper = &L_ui;
+    if (ALooper_prepare && ALooper_pollOnce && ALooper_prepare(0)) g_ui_alooper = 1;
 
     /* UnityPlayer.<clinit>: loadLibrary("main") */
     if (UPC.libmain_onload) {
@@ -714,9 +744,13 @@ int up_start(const struct up_config *cfg)
         return -2;
     }
 
-    /* initJni(context) on the UI thread */
-    jvalue a = fj_l(g_activity);
-    up_native("initJni", "(Landroid/content/Context;)V", &a);
+    /* initJni(context) on the UI thread; 2023.1+: (context, 0 = ActivityOrService context type),
+       6000.6: (context, 0, "" = UnityPlayer.initialize's string) */
+    jvalue a[3] = { fj_l(g_activity), fj_i(0), fj_l(NULL) };
+    fj_push_frame();
+    a[2] = fj_l(fj_string(""));
+    up_native("initJni", "(Landroid/content/Context;ILjava/lang/String;)V", a);
+    fj_pop_frame();
     /* SurfaceView + window flags happen in up_android_create_objects; then: */
     if (have_native("nativeInitWebRequest")) {   /* up to 2018.4 */
         jvalue c = fj_l(fj_class_find("com/unity3d/player/UnityWebRequest"));

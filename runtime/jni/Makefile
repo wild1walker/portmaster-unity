@@ -29,7 +29,8 @@ endif
 CC      := $(CROSS)gcc
 AR      := $(CROSS)ar
 
-LIB_OBJS := $(OUT)/fakejni.o $(OUT)/unityplayer.o $(OUT)/up_android.o $(OUT)/up_input.o $(OUT)/up_media.o
+LIB_OBJS := $(OUT)/fakejni.o $(OUT)/unityplayer.o $(OUT)/up_android.o $(OUT)/up_input.o $(OUT)/up_media.o \
+            $(OUT)/up_unity6.o
 
 all: $(OUT)/libfakejni.a $(OUT)/test_fakejni $(OUT)/test_unityplayer
 

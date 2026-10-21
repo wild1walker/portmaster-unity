@@ -1039,9 +1039,9 @@ H(up_sendMessage)   { up_send_message_j(a[0].l, a[1].l, a[2].l); return fj_v(); 
 H(up_reportSoftInputStr)
 {
     if (a[1].i == 1) { /* hideSoftInput */ }
-    if (a[2].z) fj_call_native(UP_CLS, "nativeSoftInputCanceled", "()V", self);
-    else if (a[0].l) fj_call_native(UP_CLS, "nativeSetInputString", "(Ljava/lang/String;)V", self, a[0].l);
-    if (a[1].i == 1) fj_call_native(UP_CLS, "nativeSoftInputClosed", "()V", self);
+    if (a[2].z) up_call_native(UP_CLS, "nativeSoftInputCanceled", "()V", self, NULL);
+    else if (a[0].l) up_call_native(UP_CLS, "nativeSetInputString", "(Ljava/lang/String;)V", self, &a[0]);
+    if (a[1].i == 1) up_call_native(UP_CLS, "nativeSoftInputClosed", "()V", self, NULL);
     return fj_v();
 }
 
@@ -1945,6 +1945,7 @@ void up_android_register(void)
        core (ua_host does; the unit tests of this folder do not) */
     extern void up_media_register(void) __attribute__((weak));
     if (up_media_register) up_media_register();
+    up_unity6_register();         /* Unity 2023.1+ (up_unity6.c) */
 }
 
 void up_android_create_objects(void)
@@ -2024,6 +2025,7 @@ void up_android_create_objects(void)
 
     looper_obj(&L_ui);
     looper_obj(&L_main);
+    up_unity6_objects();
     fj_pop_frame();
 #undef NEWG
 }

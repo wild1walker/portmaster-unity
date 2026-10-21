@@ -2,8 +2,9 @@
 converter supports.
 
 Every serialized file names the Unity version that wrote it, right after its header (formats 9 -
-21: a 20-byte header; format 22, Unity 2020.1+: 48 bytes, the sizes being 64-bit), and so does the
-header of a UnityFS bundle (a compressed build's data.unity3d, asset bundles). The converter knows
+21: a 20-byte header; formats 22 (Unity 2020.1+) and 23 (Unity 6.5+): 48 bytes, the sizes being
+64-bit), and so does the header of a UnityFS bundle (a compressed build's data.unity3d, asset
+bundles). The converter knows
 the formats of Unity 2017.3 - 2022.3 (docs/compat/README.md): their shader program layouts
 (shaders/blob.py) and player-side data rules (android_data.py). Older and newer data is refused
 with the version it has, unless the caller insists (`force`).
@@ -13,7 +14,7 @@ import re
 import struct
 
 # (major, minor) bounds of the versions the converter supports, both included
-FIRST, LAST = (2017, 3), (2022, 3)
+FIRST, LAST = (2017, 3), (6000, 6)
 
 
 class Unsupported(Exception):
@@ -55,10 +56,10 @@ def sf_header(head):
     if len(head) < 40:
         raise ValueError('short file')
     fmt, = struct.unpack_from('>I', head, 8)
-    if not 9 <= fmt <= 22:
+    if not 9 <= fmt <= 23:
         raise ValueError(f'unsupported SerializedFile format {fmt}')
     p = 48 if fmt >= 22 else 20
-    big = head[16] != 0                         # (format 22 keeps the old 16 bytes first)
+    big = head[16] != 0                         # (formats 22+ keep the old 16 bytes first)
     end = head.index(b'\0', p)
     return fmt, head[p:end].decode('ascii'), end + 1, big
 
