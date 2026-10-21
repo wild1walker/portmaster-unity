@@ -34,8 +34,10 @@ loading, startup, input or data conversion) · "-" not applicable.
 | Java members bound (count) | 398 | 402 | 458 | 487 | 487 | 487 | 395 |
 | of which runtime/jni defines | 250 | 254 | 293 | 312 | 315 | 317 | 310 |
 | UnityPlayer Java model | ✅ | ✅ | ✅ | ✅ (callbacks 28/28) | ✅ (27/27) | ✅ (30/30) | ✅ (34/34; GameActivity only from 2023.1) |
-| frame pacing (Swappy) | - | - | - | ✅ off (`swappy.disable`); `androidUseSwappy` must be off (converter default) or nothing is presented | ✅ (Unity: off below API 23) | ✅ off; with the setting on: stops after 2-4 frames | ✅ same |
+| frame pacing (Swappy) | - | - | - | ✅ converted data: off (`swappy.disable`); `androidUseSwappy` must be off (converter default) or nothing is presented; imported builds: on | ✅ (Unity: off below API 23) | ✅ converted: off; with the setting on: stops after 2-4 frames; imported: on | ✅ same |
+| Swappy's choreographer | - | - | - | ✅ Java (`ChoreographerCallback`, own looper) below API 24, NDK `AChoreographer` from 24, `SwappyDisplayManager` modes from 28 | ✅ same | ✅ same + refresh rate callback (30+) | ✅ same |
 | vsync clock | UnityMain | UnityMain | UnityMain | UnityMain | UnityMain | ✅ own HandlerThread (`FrameTimeTracker`): per-looper Choreographer | ✅ same |
+| API level reported | converted data: 19 (arm64: 22) | same | same | same; imported builds: their targetSdk (≤ 33) | same | same (19 is below this player's minimum, 22: works) | same |
 | SerializedFile format | 17 ✅ | 17 ✅ | 17 ✅ | 21 ✅ | 22 ✅ | 22 ✅ | 22 ✅ |
 | shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
 | GLCore41/43 programs (converter) | - (output as before) | ⚠️ off by default (`shaders.glcore4x`) | ✅ GLES3 / GLES 3.1 | ✅ | ✅ | ✅ + stripped shaders' empty blobs | ✅ |
@@ -167,24 +169,46 @@ one still works.
 ## Android builds run (emulated rig)
 
 Free itch.io Android builds, each made ready with `pmunity apk` (docs/apk.md) and run as they
-are: the game's own player libraries and data, nothing converted. The 64-bit route runs in an
-aarch64 container (`EMU_ARCH=arm64`, native on an Apple-silicon Mac, Mesa llvmpipe), the 32-bit
-one under QEMU armv7.
+are: the game's own player libraries and data, nothing converted, told their own `targetSdkVersion`
+as the API level (docs/apk.md). The 64-bit route runs in an aarch64 container (`EMU_ARCH=arm64`,
+native on an Apple-silicon Mac, Mesa llvmpipe), the 32-bit one under QEMU armv7.
 
-| build | ABI run | result |
-|---|---|---|
-| 2019.4.18, Mono (bdwgc), armeabi-v7a, Vulkan + GLES3, portrait | armeabi-v7a | title screen ("PLAY"), laid out for the landscape window |
-| 2020.3.3, IL2CPP, arm64-v8a + armeabi-v7a, GLES3 + GLES2, Optimized Frame Pacing on | arm64-v8a | title menu, 60-70 fps in the rig (2020.3 turns Swappy off itself below API 23) |
-| 2021.3.4, IL2CPP + Burst, Vulkan + GLES3, Optimized Frame Pacing on | arm64-v8a | title menu, 25-29 fps; before: stopped after 3 frames (Swappy kept off), then slowed to 2 fps (Swappy's tick on UnityMain) |
-| same build | armeabi-v7a (IL2CPP, 32-bit) | intro, then the title menu |
-| 2022.3.14, IL2CPP + Burst, FMOD, 3D, Vulkan + GLES3, Optimized Frame Pacing on, minSdk 26 | arm64-v8a | title menu over its 3D scene (0.2-12 fps: llvmpipe-bound); before: stopped after 8 frames when told API 26 (Swappy on the NDK choreographer) |
-| 2022.3.23, Mono (bdwgc), armeabi-v7a, GLES2 only | armeabi-v7a | title screen ("tap anywhere to start") |
+| build | minSdk / target (API run) | ABI run | result |
+|---|---|---|---|
+| 2019.4.18, Mono (bdwgc), armeabi-v7a, Vulkan + GLES3, portrait | 19 / 29 (29) | armeabi-v7a | title screen ("PLAY"), laid out for the landscape window; at times a stall under QEMU (below), at API 19 as at 29 |
+| 2020.3.3, IL2CPP, arm64-v8a + armeabi-v7a, GLES3 + GLES2, Optimized Frame Pacing on | 19 / 29 (29) | arm64-v8a | title menu, 35-47 fps in the rig with Swappy pacing on the NDK choreographer and `SwappyDisplayManager` (at API 19/22: 60-70 fps, 2020.3 turns Swappy off itself below 23) |
+| 2021.3.4, IL2CPP + Burst, Vulkan + GLES3, Optimized Frame Pacing on | 22 / 31 (31; 33) | arm64-v8a | title menu, 22-29 fps (Swappy on the NDK choreographer, its refresh rate callback); before: stopped after 3 frames (Swappy kept off), then slowed to 2 fps (Swappy's tick on UnityMain) |
+| same build | 22 / 31 (31) | armeabi-v7a (IL2CPP, 32-bit) | intro, then the title menu |
+| 2022.3.14, IL2CPP + Burst, FMOD, 3D, Vulkan + GLES3, Optimized Frame Pacing on | 26 / 32 (32) | arm64-v8a | title menu over its 3D scene, a steady 30 fps (Swappy: every second vsync); with the data on a USB drive through Docker's file sharing 6-19 fps and some early stops; before AChoreographer: stopped after 8 frames when told API 26, hence the old cap of 23 |
+| 2022.3.23, Mono (bdwgc), armeabi-v7a, GLES2 only | 22 / 32 (32) | armeabi-v7a | title screen ("tap anywhere to start") |
 
-In all of them Unity picks GLES (`libvulkan.so` does not load), finds no OBB (none shipped) and
-reads its data from the APK as on a phone. The Mono ones stalled for minutes at times under QEMU
-with UnityMain stopped in the Boehm collector's suspend handler (a stop-the-world that does not
-end); not seen with the converted desktop games' longer runs nor reproducible natively here (no
-32-bit ARM on Apple silicon): needs a run on a handheld. Not found among free builds: one with an
+The 2021.3 build also ran at API 33 (the cap): the same title menu. At these levels the players
+read more of the framework (display cutout mode, window insets, audio devices): runtime/jni answers
+those with placeholders, which they survive. In all of them Unity picks GLES (`libvulkan.so` does
+not load), finds no OBB (none shipped) and reads its data from the APK as on a phone. A converted
+desktop game of 2021.3 (Mono) behaves the same at API 30 as at its default 19.
+
+**The stalls under QEMU** (the Mono builds; the early stops of the 2022.3 IL2CPP build in some arm64
+runs were file I/O instead: a thread waiting on Docker's file sharing of a USB drive; with the data
+on the internal disk it ran steadily): in 4 runs of 300 s, the 2019.4 Mono
+build stopped presenting in 3, at API 19 and 29 alike. Caught with kernel thread states and stack
+dumps during the stall, it is not a stop-the-world: no thread sits in the suspend handler
+(`rt_sigsuspend`); UnityMain waits in PhysX's `NpScene::fetchResults` (`SyncImpl::wait`, a
+condition variable) for simulation tasks that Unity's job workers never take: all of them sleep in
+`CappedSemaphore::WaitForSignalImpl` (Baselib's own futex calls, which reach the kernel, here QEMU,
+untranslated). A lost wakeup between the job queue and its workers. What the runtime puts on that
+path held under stress in the same QEMU, through the bionic translations and through glibc
+directly alike: Boehm's stop-the-world protocol as Unity's libmonobdwgc does it (SIGPWR suspends,
+SIGXCPU restarts, sem_post from the handler, sem_timedwait-based resends; 20000 rounds x 16
+threads: no lost signal, only deliveries up to ~1 s late) and PhysX's Sync handoff (mutex,
+condition variable, timed wait on CLOCK_REALTIME; 100000 rounds x 8 pairs: no lost wakeup). The
+signal masks, `sigaction` layouts and semaphores match bionic's for the signals Unity's Mono uses
+(Boehm: SIGPWR/SIGXCPU; Mono's own thread suspension: SIGUSR1, SIGUSR2, SIGTTIN; all below 32, as
+its asserts require). One runtime-side hazard did turn up: ua_host's stack dump on SIGUSR2 collides
+with Mono's restart signal, so `kill -USR2` (how the earlier stalls were inspected) aborts a Mono
+4.x game ("may have been prematurely finalized") or resumes a suspended thread; the dump also
+answers `kill -s RTMIN+7` now (docs/apk.md). Not reproducible natively here (no 32-bit ARM on Apple
+silicon): needs a run on a handheld. Not found among free builds: one with an
 OBB (a build re-split locally into APK + main OBB, as Unity's "Split Application Binary" makes
 them, mounted its OBB and reached its title: docs/apk.md), an IL2CPP arm64 build of 2017.4 - 2019.4
 (the one 2018.4 build was a VR title, refused).
@@ -307,8 +331,9 @@ sets the ES device level.
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
    (`PlayAssetDeliveryUnityWrapper.getAssetPackPath`, 2019.4+; Unity data in `UnityDataAssetPack`;
    runtime/jni answers as an app without Play Core: no asset packs); their PlayerSettings'
-   `androidUseSwappy` (on in many 2020+ projects) stays as built: ua_host runs Swappy for them
-   (its Java tick on a thread of its own) and reports at most API 23, below Swappy's NDK path.
+   `androidUseSwappy` (on in many 2020+ projects) stays as built: ua_host runs Swappy for them and
+   reports their `targetSdkVersion` (at most 33): Swappy ticks on the NDK's AChoreographer from 24
+   (runtime/android/choreographer.c), on its Java callback (a thread of its own) below.
 10. ~~**IL2CPP Android games**~~ (run, 32- and 64-bit): `libil2cpp.so` comes up with libunity
     through libmain's `NativeLoader.load` (its `JNI_OnLoad` right after libmain's; `ClassLoader.findLibrary`
     + `System.load` serve Burst's `lib_burst_generated.so`); libunity copies IL2CPP data to

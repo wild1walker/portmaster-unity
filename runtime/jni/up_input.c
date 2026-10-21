@@ -275,7 +275,15 @@ static choreo g_ch_main, g_ch_thread[MAX_THREAD_CHOREO];
 static jobject g_choreo;
 static pthread_mutex_t g_choreo_mu = PTHREAD_MUTEX_INITIALIZER;
 
-static int64_t vsync_period_ns(void) { return (int64_t)(1e9 / (UPC.refresh_rate > 0 ? UPC.refresh_rate : 60.0f)); }
+/* the vsync clock: the libandroid shims' (android/choreographer.c) when the program links them, so
+ * that this Choreographer and the NDK's AChoreographer tick at the same instants (ua_host sets its
+ * rate to UPC.refresh_rate); else UPC.refresh_rate on CLOCK_MONOTONIC, the same multiples */
+int64_t android_vsync_period_ns(void) __attribute__((weak));
+static int64_t vsync_period_ns(void)
+{
+    if (android_vsync_period_ns) return android_vsync_period_ns();
+    return (int64_t)(1e9 / (UPC.refresh_rate > 0 ? UPC.refresh_rate : 60.0f));
+}
 static void choreo_vsync(void *arg);
 static void choreo_schedule(choreo *c)      /* g_choreo_mu held */
 {
@@ -418,6 +426,26 @@ H(cc_doFrame)
     return up_call_native(GSDK "ChoreographerCallback", "nOnChoreographer", "(JJ)V", self, b);
 }
 H(sdm_void)     { return fj_v(); }
+/* SwappyDisplayManager(cookie, activity): the Java class reports the display's modes of the current
+ * resolution to native at once (nSetSupportedRefreshPeriods), and Swappy's swap waits for that report
+ * (API 28+, where Swappy uses this class): one mode here, the panel's rate (Display.Mode id 1) */
+H(sdm_init)
+{
+    jarray periods = fj_array_new("J", 1), ids = fj_array_new("I", 1);
+    ((jlong *)fj_array_data(periods))[0] = (jlong)vsync_period_ns();
+    ((jint *)fj_array_data(ids))[0] = 1;
+    jvalue b[3] = { fj_j(a[0].j), fj_l(periods), fj_l(ids) };
+    const char *n = fj_native_sig(GSDK "SwappyDisplayManager", "nSetSupportedRefreshPeriods")
+                  ? "nSetSupportedRefreshPeriods" : "nSetSupportedRefreshRates";     /* 2021.3+ / 2019.4-2020.3 */
+    up_call_native(GSDK "SwappyDisplayManager", n, "(J[J[I)V", self, b);
+    return fj_v();
+}
+
+/* AChoreographer_getInstance on a Java looper thread (UnityMain, a HandlerThread) is that looper's,
+ * as on Android: android/choreographer.c runs its callbacks as jobs posted here */
+void android_set_host_looper(void *(*current)(void), void (*post)(void *, void (*)(void *), void *, int64_t)) __attribute__((weak));
+static void *host_looper_current(void) { return t_looper; }
+static void host_looper_post(void *l, void (*fn)(void *), void *arg, int64_t delay_ms) { looper_post(l, fn, arg, NULL, delay_ms); }
 
 void up_choreographer_tick(void)
 {
@@ -673,6 +701,7 @@ void up_input_register(void)
     M(IM, "getInputDeviceIds", "()[I", d_getDeviceIds);
     M(IM, "getInputDevice", "(I)Landroid/view/InputDevice;", im_getDevice);
 
+    if (android_set_host_looper) android_set_host_looper(host_looper_current, host_looper_post);
     const char *CH = "android/view/Choreographer";
     g_choreo = g_ch_main.obj = fj_global(fj_new_by_name(CH, &g_ch_main, NULL));
     SM(CH, "getInstance", "()Landroid/view/Choreographer;", ch_getInstance);
@@ -685,8 +714,9 @@ void up_input_register(void)
     MU(CC, "postFrameCallbackDelayed", "(J)V", cc_post, 1);
     M(CC, "terminate", "()V", cc_terminate);
     M(CC, "doFrame", "(J)V", cc_doFrame);
-    M(SDM, "<init>", "(JLandroid/app/Activity;)V", sdm_void);
+    M(SDM, "<init>", "(JLandroid/app/Activity;)V", sdm_init);
     M(SDM, "setPreferredDisplayModeId", "(I)V", sdm_void);
+    M(SDM, "setPreferredRefreshRate", "(I)V", sdm_void);        /* its 2019.4-2020.3 name */
     M(SDM, "terminate", "()V", sdm_void);
 
     const char *FM = "org/fmod/FMODAudioDevice";

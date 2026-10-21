@@ -266,34 +266,112 @@ int ASensor_getType(ASensor const *s) { (void)s; return -1; }
 SOFTFP float ASensor_getResolution(ASensor const *s) { (void)s; return 0; }
 int ASensor_getMinDelay(ASensor const *s) { (void)s; return 0; }
 
-// ---- AConfiguration: fixed handheld configuration ------------------------------------------
-struct AConfiguration { int32_t orientation, density, sdk, screenSize, touch, keyboard, navigation, uiMode; char lang[2], country[2]; };
+// ---- AConfiguration: the handheld's configuration -----------------------------------------
+// Landscape, the window's size in dp at 160 dpi (mdpi), no touch screen, no keyboard, a D-pad,
+// en-US, left to right, the reported API level (android_shims_set_api_level; 26 when no host set
+// one). Every getter and setter of the NDK's configuration.h (API 9-34); diff/match/isBetterThan
+// compare the fields that are set.
+struct AConfiguration {
+    int32_t mcc, mnc, orientation, touch, density, keyboard, navigation, keysHidden, navHidden, sdk,
+            screenSize, screenLong, screenRound, uiModeType, uiModeNight, widthDp, heightDp,
+            smallestWidthDp, layoutDirection, grammaticalGender;
+    char lang[2], country[2];
+};
 
-static const struct AConfiguration g_default_cfg = {
-    2 /* ORIENTATION_LAND */, 160 /* DENSITY_MEDIUM */, 26, 2 /* SCREENSIZE_NORMAL */,
-    1 /* TOUCHSCREEN_NOTOUCH */, 1 /* KEYBOARD_NOKEYS */, 2 /* NAVIGATION_DPAD */, 1 /* UI_MODE_TYPE_NORMAL */,
-    { 'e', 'n' }, { 'U', 'S' } };
+static void default_cfg(struct AConfiguration *c)
+{
+    int w = ANativeWindow_getWidth(android_window_get()), h = ANativeWindow_getHeight(android_window_get());
+    int api = android_shims_api_level();
+    memset(c, 0, sizeof *c);
+    c->orientation = 2;                         // ORIENTATION_LAND
+    c->touch = 1;                               // TOUCHSCREEN_NOTOUCH
+    c->density = 160;                           // DENSITY_MEDIUM
+    c->keyboard = 1;                            // KEYBOARD_NOKEYS
+    c->navigation = 2;                          // NAVIGATION_DPAD
+    c->keysHidden = 3;                          // KEYSHIDDEN_SOFT
+    c->navHidden = 1;                           // NAVHIDDEN_NO
+    c->sdk = api > 0 ? api : 26;
+    c->widthDp = w > 0 ? w : 0;                 // px at 160 dpi = dp
+    c->heightDp = h > 0 ? h : 0;
+    c->smallestWidthDp = c->widthDp < c->heightDp ? c->widthDp : c->heightDp;
+    c->screenSize = c->smallestWidthDp >= 720 ? 4 : c->smallestWidthDp >= 600 ? 3 : c->smallestWidthDp >= 320 ? 2 : 1;
+    int lo = c->widthDp < c->heightDp ? c->widthDp : c->heightDp, hi = c->widthDp ^ c->heightDp ^ lo;
+    c->screenLong = lo && hi * 3 > lo * 5 ? 2 : 1;   // SCREENLONG_YES above 5:3 (Android's rule)
+    c->screenRound = 1;                         // SCREENROUND_NO
+    c->uiModeType = 1;                          // UI_MODE_TYPE_NORMAL
+    c->uiModeNight = 1;                         // UI_MODE_NIGHT_NO
+    c->layoutDirection = 1;                     // LAYOUTDIR_LTR
+    memcpy(c->lang, "en", 2);
+    memcpy(c->country, "US", 2);
+}
 
 AConfiguration *AConfiguration_new(void)
 {
-    AConfiguration *c = malloc(sizeof *c);
-    if (c) *c = g_default_cfg;
+    AConfiguration *c = calloc(1, sizeof *c);   // Android's new configuration is empty (all 0)
     return c;
 }
 void AConfiguration_delete(AConfiguration *c) { free(c); }
-void AConfiguration_fromAssetManager(AConfiguration *out, AAssetManager *am) { (void)am; if (out) *out = g_default_cfg; }
+void AConfiguration_fromAssetManager(AConfiguration *out, AAssetManager *am) { (void)am; if (out) default_cfg(out); }
 void AConfiguration_copy(AConfiguration *dst, AConfiguration *src) { if (dst && src) *dst = *src; }
-int32_t AConfiguration_getOrientation(AConfiguration *c) { return c ? c->orientation : 0; }
-int32_t AConfiguration_getDensity(AConfiguration *c) { return c ? c->density : 0; }
-int32_t AConfiguration_getSdkVersion(AConfiguration *c) { return c ? c->sdk : 0; }
-int32_t AConfiguration_getScreenSize(AConfiguration *c) { return c ? c->screenSize : 0; }
-int32_t AConfiguration_getTouchscreen(AConfiguration *c) { return c ? c->touch : 0; }
-int32_t AConfiguration_getKeyboard(AConfiguration *c) { return c ? c->keyboard : 0; }
-int32_t AConfiguration_getNavigation(AConfiguration *c) { return c ? c->navigation : 0; }
-int32_t AConfiguration_getUiModeType(AConfiguration *c) { return c ? c->uiMode : 0; }
+
+#define CFG_FIELD(Name, f) \
+    int32_t AConfiguration_get##Name(AConfiguration *c) { return c ? c->f : 0; } \
+    void AConfiguration_set##Name(AConfiguration *c, int32_t v) { if (c) c->f = v; }
+CFG_FIELD(Mcc, mcc) CFG_FIELD(Mnc, mnc) CFG_FIELD(Orientation, orientation) CFG_FIELD(Touchscreen, touch)
+CFG_FIELD(Density, density) CFG_FIELD(Keyboard, keyboard) CFG_FIELD(Navigation, navigation)
+CFG_FIELD(KeysHidden, keysHidden) CFG_FIELD(NavHidden, navHidden) CFG_FIELD(SdkVersion, sdk)
+CFG_FIELD(ScreenSize, screenSize) CFG_FIELD(ScreenLong, screenLong) CFG_FIELD(ScreenRound, screenRound)
+CFG_FIELD(UiModeType, uiModeType) CFG_FIELD(UiModeNight, uiModeNight) CFG_FIELD(ScreenWidthDp, widthDp)
+CFG_FIELD(ScreenHeightDp, heightDp) CFG_FIELD(SmallestScreenWidthDp, smallestWidthDp)
+CFG_FIELD(LayoutDirection, layoutDirection) CFG_FIELD(GrammaticalGender, grammaticalGender)
 void AConfiguration_getLanguage(AConfiguration *c, char *out) { if (c && out) memcpy(out, c->lang, 2); }
 void AConfiguration_getCountry(AConfiguration *c, char *out) { if (c && out) memcpy(out, c->country, 2); }
-int32_t AConfiguration_getScreenWidthDp(AConfiguration *c)
-{ (void)c; return ANativeWindow_getWidth(android_window_get()) * 160 / g_default_cfg.density; }
-int32_t AConfiguration_getScreenHeightDp(AConfiguration *c)
-{ (void)c; return ANativeWindow_getHeight(android_window_get()) * 160 / g_default_cfg.density; }
+void AConfiguration_setLanguage(AConfiguration *c, const char *v) { if (c) { c->lang[0] = v ? v[0] : 0; c->lang[1] = v && v[0] ? v[1] : 0; } }
+void AConfiguration_setCountry(AConfiguration *c, const char *v) { if (c) { c->country[0] = v ? v[0] : 0; c->country[1] = v && v[0] ? v[1] : 0; } }
+
+// diff: ACONFIGURATION_* bits of the fields that differ; match: every field `req` sets is the
+// base's (dp sizes and the API level: at most the base's); isBetterThan: `test` matches `requested`
+// and sets more of its fields than `base`
+#define CFG_EXACT(X) X(mcc, 0x0001) X(mnc, 0x0002) X(touch, 0x0008) X(keyboard, 0x0010) X(keysHidden, 0x0020) \
+    X(navHidden, 0x0020) X(navigation, 0x0040) X(orientation, 0x0080) X(density, 0x0100) X(screenSize, 0x0800) \
+    X(screenLong, 0x0800) X(uiModeType, 0x1000) X(uiModeNight, 0x1000) X(layoutDirection, 0x4000) \
+    X(screenRound, 0x8000) X(grammaticalGender, 0x20000)
+#define CFG_ATMOST(X) X(widthDp, 0x0200) X(heightDp, 0x0200) X(sdk, 0x0400) X(smallestWidthDp, 0x2000)
+int32_t AConfiguration_diff(AConfiguration *a, AConfiguration *b)
+{
+    if (!a || !b) return 0;
+    int32_t d = 0;
+#define X(f, bit) if (a->f != b->f) d |= bit;
+    CFG_EXACT(X) CFG_ATMOST(X)
+#undef X
+    if (memcmp(a->lang, b->lang, 2) || memcmp(a->country, b->country, 2)) d |= 0x0004;   // LOCALE
+    return d;
+}
+int32_t AConfiguration_match(AConfiguration *base, AConfiguration *req)
+{
+    if (!base || !req) return 0;
+#define X(f, bit) if (req->f && req->f != base->f) return 0;
+    CFG_EXACT(X)
+#undef X
+#define X(f, bit) if (req->f && req->f > base->f) return 0;
+    CFG_ATMOST(X)
+#undef X
+    if (req->lang[0] && memcmp(req->lang, base->lang, 2)) return 0;
+    if (req->country[0] && memcmp(req->country, base->country, 2)) return 0;
+    return 1;
+}
+static int cfg_fields_set(const AConfiguration *c)
+{
+    int n = (c->lang[0] != 0) + (c->country[0] != 0);
+#define X(f, bit) n += c->f != 0;
+    CFG_EXACT(X) CFG_ATMOST(X)
+#undef X
+    return n;
+}
+int32_t AConfiguration_isBetterThan(AConfiguration *base, AConfiguration *test, AConfiguration *requested)
+{
+    if (!base || !test) return 0;
+    if (requested && AConfiguration_match(requested, test) != AConfiguration_match(requested, base))
+        return AConfiguration_match(requested, test);
+    return cfg_fields_set(test) > cfg_fields_set(base);
+}

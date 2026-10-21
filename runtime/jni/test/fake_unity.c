@@ -150,7 +150,17 @@ static void nOnChoreographer(JNIEnv *env, jobject self, jlong cookie, jlong t)
     pthread_getname_np(pthread_self(), name, sizeof name);
     if (cookie == SWAPPY_COOKIE && t > 0 && !strcmp(name, "SwappyChoreo")) R[R_SWAPPY_FRAME]++;
 }
-static void nSetSupportedRefreshRates(JNIEnv *env, jobject self, jlong cookie, jlongArray p, jintArray m) { (void)env; (void)self; (void)cookie; (void)p; (void)m; }
+/* SwappyDisplayManager's constructor reports the modes at once (Swappy's swap waits for that) */
+static void nSetSupportedRefreshRates(JNIEnv *env, jobject self, jlong cookie, jlongArray p, jintArray m)
+{
+    (void)self;
+    jlong period = 0; jint id = 0;
+    if ((*env)->GetArrayLength(env, p) == 1 && (*env)->GetArrayLength(env, m) == 1) {
+        (*env)->GetLongArrayRegion(env, p, 0, 1, &period);
+        (*env)->GetIntArrayRegion(env, m, 0, 1, &id);
+    }
+    if (cookie == SWAPPY_COOKIE && period > 16000000 && period < 17000000 && id == 1) R[R_SWAPPY_MODES]++;
+}
 static void nOnRefreshRateChanged(JNIEnv *env, jobject self, jlong cookie, jlong a, jlong b, jlong c) { (void)env; (void)self; (void)cookie; (void)a; (void)b; (void)c; }
 static int swappy_java(JNIEnv *env)
 {
@@ -158,8 +168,10 @@ static int swappy_java(JNIEnv *env)
     jclass dm = (*env)->FindClass(env, "com/google/androidgamesdk/SwappyDisplayManager");
     if (!cb || !dm) { clear_exc(env); return 0; }
     JNINativeMethod ncb[] = { { "nOnChoreographer", "(JJ)V", (void *)nOnChoreographer } };
-    JNINativeMethod ndm[] = { { "nSetSupportedRefreshRates", "(J[J[I)V", (void *)nSetSupportedRefreshRates },
-                              { "nOnRefreshRateChanged", "(JJJJ)V", (void *)nOnRefreshRateChanged } };
+    /* the natives' names changed in 2021.3 (Swappy's refresh "periods") */
+    int periods = S >= SHAPE_2021_3;
+    JNINativeMethod ndm[] = { { periods ? "nSetSupportedRefreshPeriods" : "nSetSupportedRefreshRates", "(J[J[I)V", (void *)nSetSupportedRefreshRates },
+                              { periods ? "nOnRefreshPeriodChanged" : "nOnRefreshRateChanged", "(JJJJ)V", (void *)nOnRefreshRateChanged } };
     int ok = (*env)->RegisterNatives(env, cb, ncb, 1) == 0 && (*env)->RegisterNatives(env, dm, ndm, 2) == 0;
     jclass cc = (*env)->FindClass(env, "android/content/Context");
     jobject cl = (*env)->CallObjectMethod(env, g_context, (*env)->GetMethodID(env, cc, "getClassLoader", "()Ljava/lang/ClassLoader;"));
@@ -169,6 +181,10 @@ static int swappy_java(JNIEnv *env)
     ok &= !clear_exc(env);
     ok &= !(*env)->FindClass(env, "dalvik/system/InMemoryDexClassLoader") && clear_exc(env);
     ok &= !(*env)->FindClass(env, "dalvik/system/PathClassLoader") && clear_exc(env);
+    /* Swappy (API 28+): new SwappyDisplayManager(cookie, activity) */
+    jobject sdm = (*env)->NewObject(env, dm, (*env)->GetMethodID(env, dm, "<init>", "(JLandroid/app/Activity;)V"),
+                                    (jlong)SWAPPY_COOKIE, g_context);
+    ok &= sdm != 0 && !clear_exc(env);
     /* Swappy's JavaChoreographerThread: new ChoreographerCallback(cookie).postFrameCallback() */
     jobject o = (*env)->NewObject(env, cb, (*env)->GetMethodID(env, cb, "<init>", "(J)V"), (jlong)SWAPPY_COOKIE);
     ok &= o != 0;

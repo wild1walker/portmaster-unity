@@ -34,9 +34,18 @@ Then copy `out/` to the handheld and start `ua_host out/` with the build of the 
 What `ua_host` takes from `android_package.json` (runtime/host/ua_host.c): the package name, the
 APK name, `PackageInfo.versionCode`/`versionName` (the OBB names depend on the code),
 `ApplicationInfo.metaData` (all of the manifest's meta-data; `unity.build-id` ties the APK to its
-OBB: the player mounts an OBB only if it holds an entry `assets/<build-id>`), and
-`Build.VERSION.SDK_INT` = at least the build's `minSdkVersion` (19 otherwise, as the ports were
-made with; `UA_SDK_INT` overrides).
+OBB: the player mounts an OBB only if it holds an entry `assets/<build-id>`), and the API level.
+
+**API level**: an imported build is told its `targetSdkVersion` (`Build.VERSION.SDK_INT`, the
+`ro.build.version.sdk` property, `ApplicationInfo.targetSdkVersion`, AConfiguration): the Android its
+makers built and tested it for, at most 33 (Android 13) and at least its `minSdkVersion` (a phone it
+installs on has that), its `minSdkVersion` when the manifest names no target. The libandroid shims
+then offer what that level has (runtime/android/README.md: AChoreographer from 24, refresh rate
+callbacks and `ANativeWindow_setFrameRate` from 30, ...; newer functions read NULL, as on a phone of
+that level). `UA_SDK_INT` overrides. Converted desktop data stays at API 19 on armhf (the level the
+32-bit ports were made with, Cuphead's among them) and 22 on arm64 (64-bit Android starts at 21).
+Until AChoreographer existed here, imported builds were held at 23 and below: from 24 Swappy takes
+the NDK's choreographer.
 
 ## Choices and checks
 
@@ -58,8 +67,9 @@ made with; `UA_SDK_INT` overrides).
 - **Frame pacing**: Optimized Frame Pacing (`androidUseSwappy`, on in many 2020+ projects) is
   reported. ua_host lets Swappy run for imported builds (it clears the loader's `swappy.disable`
   property, `"source": "apk"`): with the setting on and Swappy off, the 2019.4 player presents
-  nothing and 2021.3+ stop after their first frames (runtime/android/README.md). Swappy's own Java
-  callback ticks on a looper thread of its own (runtime/jni, `SwappyChoreo`), as its
+  nothing and 2021.3+ stop after their first frames (runtime/android/README.md). At the builds'
+  target levels (API 24+) Swappy ticks on the NDK's AChoreographer, on a looper thread it makes;
+  below 24 on its Java callback, on a looper thread of its own (runtime/jni, `SwappyChoreo`), as its
   `LooperThread` does on Android. `SO_PROP_swappy_disable=1` turns it off again.
 
 Refused, each with the reason: no `libmain.so`/`libunity.so` for an ARM ABI (not a Unity build, or
@@ -115,7 +125,9 @@ the APK, named it `main.1.<package>.obb`, and the player mounted it and reached 
   builds and IL2CPP builds made without engine code stripping; with stripping (the IL2CPP default)
   the build links its own `libunity.so` (another build id: compare the `NT_GNU_BUILD_ID` notes) and
   only its exported names are known.
-- `kill -USR2 <pid>` dumps every thread's stack; `UA_PROF_EVERY` / `UA_HITCH_TRACE` sample them
+- `kill -USR2 <pid>` dumps every thread's stack (Mono 4.x games, every Mono build of 2019.4+: `kill -s
+  RTMIN+7 <pid>`, 41 with glibc: their Mono takes SIGUSR1/SIGUSR2 for its own thread suspension, and a
+  SIGUSR2 on a thread it does not know aborts the game); `UA_PROF_EVERY` / `UA_HITCH_TRACE` sample them
   (runtime/host/hitches.c).
 - `SO_TRACE=1` lists unresolved imports of the game's own libraries (plugins).
 - `PMUNITY_APK=<file>` runs `tests/test_apk.py`'s dry import on a real build.

@@ -28,7 +28,8 @@ def provided(rt):
     for m in re.finditer(r'HOOK_(?:DIRECT|DIRECT_NO_DEBUG|INDIRECT|TO)\(\s*(\w+)', hooks):
         out.setdefault(m.group(1), 'libhybris')
     tab = _read(os.path.join(rt, 'android/shim_tables.c'))
-    for macro, kind in (('LOG_FUNCS', 'liblog'), ('NDK_FUNCS', 'libandroid'), ('SLES_FUNCS', 'opensles'),
+    for macro, kind in (('LOG_FUNCS', 'liblog'), ('NDK_FUNCS', 'libandroid'), ('NDK_NEWER_FUNCS', 'libandroid'),
+                        ('SLES_FUNCS', 'opensles'),
                         ('SLES_IIDS', 'opensles'), ('MEDIANDK_FUNCS', 'libmediandk'),
                         ('MEDIANDK_KEYS', 'libmediandk')):
         m = re.search(r'#define %s\(X\)((?:.*\\\n)*.*)' % macro, tab)

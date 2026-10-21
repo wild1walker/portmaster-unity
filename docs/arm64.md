@@ -14,9 +14,10 @@ needed was outside the loader:
   frames. Imported builds run Swappy; its Java `ChoreographerCallback` ticks on a looper thread of
   its own (runtime/jni), not on UnityMain, which waits inside `nativeRender` for those ticks (on
   UnityMain the frame time grew without bound: 130 ms to 480 ms per frame within 90 s).
-- **API level**: the 64-bit host reports API 22 (64-bit Android starts at 21), an imported build at
-  least its `minSdkVersion`, but at most 23: from 24 Swappy uses the NDK's `AChoreographer`, which
-  the libandroid shims lack (2022.3 then waits for vsyncs forever).
+- **API level**: the 64-bit host reports API 22 for converted data (64-bit Android starts at 21), an
+  imported build its `targetSdkVersion` (at most 33, at least its `minSdkVersion`; docs/apk.md). From
+  API 24 Swappy ticks on the NDK's `AChoreographer` (runtime/android/choreographer.c); before that
+  existed here, 2022.3 told API 26 waited for vsyncs forever, so builds were held at 23.
 - **IL2CPP startup**: `libil2cpp.so` comes up with libunity through libmain's `NativeLoader.load`
   (its `JNI_OnLoad` runs right after libmain's), libunity extracts `Managed/Metadata` and
   `Managed/Resources` to `<external files>/il2cpp/` (`data/external/il2cpp` under the root) and

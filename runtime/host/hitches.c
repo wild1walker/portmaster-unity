@@ -16,7 +16,10 @@
 // domain for that).
 //
 // Always on: kill -USR2 <pid> logs every thread's stack once ("[dump] <thread> pc ... | ..."), e.g. to
-// see where a hung process waits.
+// see where a hung process waits. Mono 4.x (libmonobdwgc: 2018.4+ .NET 4.x and every 2019.4+ Mono game)
+// takes SIGUSR1/SIGUSR2 for its own thread suspension once it starts (SIGUSR2 resumes a suspended
+// thread; on a thread Mono does not know it aborts: "may have been prematurely finalized"): for those,
+// kill -s RTMIN+7 <pid> (41 with glibc) dumps the same.
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <pthread.h>
@@ -372,6 +375,7 @@ void hitches_init(void)
         da.sa_flags = SA_RESTART;
         sigemptyset(&da.sa_mask);
         sigaction(SIGUSR2, &da, NULL);
+        sigaction(SIGRTMIN + 7, &da, NULL);     // the one Mono 4.x leaves alone (above)
         pthread_t dt;
         pthread_create(&dt, NULL, dumper, NULL);
     }

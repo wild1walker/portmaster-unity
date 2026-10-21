@@ -49,7 +49,65 @@ typedef struct { const char *name; void *fn; } so_shim;
     X(AConfiguration_getOrientation) X(AConfiguration_getDensity) X(AConfiguration_getSdkVersion) \
     X(AConfiguration_getScreenSize) X(AConfiguration_getTouchscreen) X(AConfiguration_getKeyboard) \
     X(AConfiguration_getNavigation) X(AConfiguration_getUiModeType) X(AConfiguration_getLanguage) \
-    X(AConfiguration_getCountry) X(AConfiguration_getScreenWidthDp) X(AConfiguration_getScreenHeightDp)
+    X(AConfiguration_getCountry) X(AConfiguration_getScreenWidthDp) X(AConfiguration_getScreenHeightDp) \
+    NDK_NEWER_FUNCS(X)
+
+// newer libandroid functions (choreographer.c, ndk_newer.c, looper_input_sensor.c): each is present
+// from the API level Android added it in (NDK_API_LEVELS), absent (NULL) below the reported level
+#define NDK_NEWER_FUNCS(X) \
+    X(AConfiguration_setOrientation) X(AConfiguration_setDensity) X(AConfiguration_setSdkVersion) \
+    X(AConfiguration_setScreenSize) X(AConfiguration_setTouchscreen) X(AConfiguration_setKeyboard) \
+    X(AConfiguration_setNavigation) X(AConfiguration_setUiModeType) X(AConfiguration_setLanguage) \
+    X(AConfiguration_setCountry) X(AConfiguration_getMcc) X(AConfiguration_setMcc) X(AConfiguration_getMnc) \
+    X(AConfiguration_setMnc) X(AConfiguration_getKeysHidden) X(AConfiguration_setKeysHidden) \
+    X(AConfiguration_getNavHidden) X(AConfiguration_setNavHidden) X(AConfiguration_getScreenLong) \
+    X(AConfiguration_setScreenLong) X(AConfiguration_getUiModeNight) X(AConfiguration_setUiModeNight) \
+    X(AConfiguration_setScreenWidthDp) X(AConfiguration_setScreenHeightDp) X(AConfiguration_getSmallestScreenWidthDp) \
+    X(AConfiguration_setSmallestScreenWidthDp) X(AConfiguration_getLayoutDirection) X(AConfiguration_setLayoutDirection) \
+    X(AConfiguration_getScreenRound) X(AConfiguration_setScreenRound) X(AConfiguration_getGrammaticalGender) \
+    X(AConfiguration_setGrammaticalGender) X(AConfiguration_diff) X(AConfiguration_match) X(AConfiguration_isBetterThan) \
+    X(ATrace_beginSection) X(ATrace_endSection) X(ATrace_isEnabled) X(ATrace_beginAsyncSection) \
+    X(ATrace_endAsyncSection) X(ATrace_setCounter) \
+    X(AChoreographer_getInstance) X(AChoreographer_postFrameCallback) X(AChoreographer_postFrameCallbackDelayed) \
+    X(AChoreographer_postFrameCallback64) X(AChoreographer_postFrameCallbackDelayed64) \
+    X(AChoreographer_registerRefreshRateCallback) X(AChoreographer_unregisterRefreshRateCallback) \
+    X(AChoreographer_postVsyncCallback) X(AChoreographerFrameCallbackData_getFrameTimeNanos) \
+    X(AChoreographerFrameCallbackData_getFrameTimelinesLength) X(AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex) \
+    X(AChoreographerFrameCallbackData_getFrameTimelineVsyncId) \
+    X(AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos) \
+    X(AChoreographerFrameCallbackData_getFrameTimelineDeadlineNanos) \
+    X(AHardwareBuffer_allocate) X(AHardwareBuffer_acquire) X(AHardwareBuffer_release) X(AHardwareBuffer_describe) \
+    X(AHardwareBuffer_lock) X(AHardwareBuffer_unlock) X(AHardwareBuffer_isSupported) X(AHardwareBuffer_getId) \
+    X(ANativeWindow_setFrameRate) X(ANativeWindow_setFrameRateWithChangeStrategy) X(ANativeWindow_clearFrameRate) \
+    X(AThermal_acquireManager) X(AThermal_releaseManager) X(AThermal_getCurrentThermalStatus) \
+    X(AThermal_registerThermalStatusListener) X(AThermal_unregisterThermalStatusListener) \
+    X(AThermal_getThermalHeadroom) X(AThermal_getThermalHeadroomThresholds) \
+    X(APerformanceHint_getManager) X(APerformanceHint_createSession) X(APerformanceHint_getPreferredUpdateRateNanos) \
+    X(APerformanceHint_updateTargetWorkDuration) X(APerformanceHint_reportActualWorkDuration) \
+    X(APerformanceHint_closeSession) X(APerformanceHint_setThreads) X(APerformanceHint_setPreferPowerEfficiency) \
+    X(APerformanceHint_reportActualWorkDuration2) X(AWorkDuration_create) X(AWorkDuration_release) \
+    X(AWorkDuration_setWorkPeriodStartTimestampNanos) X(AWorkDuration_setActualTotalDurationNanos) \
+    X(AWorkDuration_setActualCpuDurationNanos) X(AWorkDuration_setActualGpuDurationNanos)
+
+// the API level each function above appeared in (configuration.h, choreographer.h, trace.h,
+// hardware_buffer.h, native_window.h, thermal.h, performance_hint.h); names not listed: API 9
+static const struct { const char *prefix; int api; } NDK_API_LEVELS[] = {
+    { "AConfiguration_getScreenRound", 30 }, { "AConfiguration_setScreenRound", 30 },
+    { "AConfiguration_getGrammaticalGender", 34 }, { "AConfiguration_setGrammaticalGender", 34 },
+    { "AConfiguration_getLayoutDirection", 17 }, { "AConfiguration_setLayoutDirection", 17 },
+    { "AConfiguration_setScreenWidthDp", 13 }, { "AConfiguration_setScreenHeightDp", 13 },
+    { "AConfiguration_getSmallestScreenWidthDp", 13 }, { "AConfiguration_setSmallestScreenWidthDp", 13 },
+    { "ATrace_beginSection", 23 }, { "ATrace_endSection", 23 }, { "ATrace_isEnabled", 23 }, { "ATrace_", 29 },
+    { "AChoreographer_postFrameCallback64", 29 }, { "AChoreographer_postFrameCallbackDelayed64", 29 },
+    { "AChoreographer_registerRefreshRateCallback", 30 }, { "AChoreographer_unregisterRefreshRateCallback", 30 },
+    { "AChoreographer_postVsyncCallback", 33 }, { "AChoreographerFrameCallbackData_", 33 }, { "AChoreographer_", 24 },
+    { "AHardwareBuffer_isSupported", 29 }, { "AHardwareBuffer_getId", 31 }, { "AHardwareBuffer_", 26 },
+    { "ANativeWindow_setFrameRateWithChangeStrategy", 31 }, { "ANativeWindow_clearFrameRate", 34 },
+    { "ANativeWindow_setFrameRate", 30 },
+    { "AThermal_getThermalHeadroomThresholds", 35 }, { "AThermal_getThermalHeadroom", 31 }, { "AThermal_", 30 },
+    { "APerformanceHint_setThreads", 34 }, { "APerformanceHint_setPreferPowerEfficiency", 35 },
+    { "APerformanceHint_reportActualWorkDuration2", 35 }, { "AWorkDuration_", 35 }, { "APerformanceHint_", 33 },
+};
 
 #define SLES_FUNCS(X) X(slCreateEngine) X(slQueryNumSupportedEngineInterfaces) X(slQuerySupportedEngineInterfaces)
 
@@ -106,6 +164,7 @@ MEDIANDK_FUNCS(DECL_FN)
 MEDIANDK_KEYS(DECL_VAR)
 
 #define ENT_FN(n) { #n, (void *)n },
+#define NAME_OF(n) #n,
 #define ENT_VAR(n) { #n, (void *)&n },
 
 so_shim android_log_shims[] = { LOG_FUNCS(ENT_FN) { NULL, NULL } };
@@ -116,6 +175,43 @@ so_shim android_shims[] = {
     LOG_FUNCS(ENT_FN) NDK_FUNCS(ENT_FN) SLES_FUNCS(ENT_FN) SLES_IIDS(ENT_VAR)
     MEDIANDK_FUNCS(ENT_FN) MEDIANDK_KEYS(ENT_VAR) { NULL, NULL }
 };
+
+// the API level a libandroid function appeared in (the first matching entry: exact names and
+// longer prefixes come before shorter ones), 9 for the rest
+static int ndk_api_of(const char *name)
+{
+    for (size_t i = 0; i < sizeof NDK_API_LEVELS / sizeof NDK_API_LEVELS[0]; i++) {
+        size_t n = strlen(NDK_API_LEVELS[i].prefix);
+        if (NDK_API_LEVELS[i].prefix[n - 1] == '_' ? !strncmp(name, NDK_API_LEVELS[i].prefix, n)
+                                                    : !strcmp(name, NDK_API_LEVELS[i].prefix))
+            return NDK_API_LEVELS[i].api;
+    }
+    return 9;
+}
+
+static const char *const g_newer_names[] = { NDK_NEWER_FUNCS(NAME_OF) NULL };
+static int g_api_level;
+
+int android_shims_api_level(void) { return g_api_level; }
+
+// Functions newer than `api` read NULL in the tables (dlsym fails, a weak import is 0), as on a
+// phone of that API level; 0 makes every one present (the default). Call before the loader looks
+// a symbol up: it indexes the tables then.
+void android_shims_set_api_level(int api)
+{
+    static void *orig[2][sizeof g_newer_names / sizeof g_newer_names[0]];
+    static int saved;
+    so_shim *tabs[2] = { android_shims, android_ndk_shims };
+    g_api_level = api;
+    for (int t = 0; t < 2; t++)
+        for (so_shim *e = tabs[t]; e->name; e++)
+            for (int i = 0; g_newer_names[i]; i++)
+                if (!strcmp(e->name, g_newer_names[i])) {
+                    if (!saved) orig[t][i] = e->fn;
+                    e->fn = api <= 0 || ndk_api_of(e->name) <= api ? orig[t][i] : NULL;
+                }
+    saved = 1;
+}
 
 const so_shim *android_shims_for_library(const char *path)
 {
