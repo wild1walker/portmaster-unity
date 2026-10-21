@@ -29,7 +29,7 @@ for d in mono/Release/Libs/armeabi-v7a il2cpp/Release/Libs/armeabi-v7a il2cpp/Re
   [ -d "$PKG/$V/$d" ] || continue
   tag=$(echo "$d" | cut -d/ -f1)-$(basename "$d")
   extra=""
-  [ "$tag" = mono-armeabi-v7a ] && extra=$(cd "$PKG" && ls $V/mono/Release/MonoLibs/armeabi-v7a/*.so 2>/dev/null | sed 's#^#/p/#' | tr '\n' ' ')
+  [ "$tag" = mono-armeabi-v7a ] && extra=$(cd "$PKG" && ls $V/mono/Release/MonoLibs/armeabi-v7a/*.so 2>/dev/null | sed 's#^#/p/#' | tr '\n' ' ' || true)
   run sh -c "mkdir -p /o/imports/$tag && python3 -I /t/elfimports.py /o/imports/$tag /p/$V/$d/*.so $extra > /o/imports/$tag/summary.json"
 done
 
@@ -65,7 +65,7 @@ data = open(sys.argv[1], 'rb').read()
 print('\n'.join(sorted(set(m.group().decode() for m in re.finditer(rb'(?<=\0)il2cpp_[a-z0-9_]+(?=\0)', data)))))
 PYEOF
 
-jar=$(cd "$PKG" && ls $V/mono/Release/Classes/classes.jar $V/il2cpp/Release/Classes/classes.jar 2>/dev/null | head -1)
+jar=$(cd "$PKG" && ls $V/mono/Release/Classes/classes.jar $V/il2cpp/Release/Classes/classes.jar 2>/dev/null | head -1 || true)
 if [ -n "$jar" ]; then
   docker run --rm -v "$PKG":/p:ro -v "$OUT":/o "$JAVA" sh -c \
     "cd /tmp && classes=\$(jar tf /p/$jar | grep '\.class\$' | sed 's/\.class\$//; s#/#.#g' | sort) && \

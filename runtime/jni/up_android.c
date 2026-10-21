@@ -1882,6 +1882,8 @@ void up_android_register(void)
        core (ua_host does; the unit tests of this folder do not) */
     extern void up_media_register(void) __attribute__((weak));
     if (up_media_register) up_media_register();
+    up_unity6_register();         /* Unity 2023.1+ (up_unity6.c) */
+    up_legacy_register();         /* Unity 5.6 - 2017.2 (up_legacy.c) */
 }
 
 void up_android_create_objects(void)
@@ -1961,6 +1963,7 @@ void up_android_create_objects(void)
 
     looper_obj(&L_ui);
     looper_obj(&L_main);
+    up_unity6_objects();
     fj_pop_frame();
 #undef NEWG
 }

@@ -6,11 +6,13 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | File | What |
 |---|---|
 | `fakejni.h/.c` | A complete `JavaVM`/`JNIEnv`: all 229 `JNINativeInterface` slots and the 5 `JNIInvokeInterface` slots, in `include/jni.h` (AOSP libnativehelper) order. Java classes, methods and fields are implemented by C handlers. |
-| `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. One build serves the players of Unity 2017.4 to 2022.3 (see Unity versions). |
+| `unityplayer.h/.c` | `com.unity3d.player.UnityPlayer` reimplemented in C after the behaviour of the player package's Java side (no Unity code is included): lifecycle, the `UnityMain` looper thread, the render loop and input injection. One build serves the players of Unity 5.6 to 6000.6 (see Unity versions). |
 | `up_android.c` | The Android framework objects libunity binds: Context/Activity, paths, PackageManager, Build, Display, Window/View, SharedPreferences (persisted), Bundle/Intent, Looper/Handler/Message/HandlerThread, AudioManager/AudioSystem, Vibrator, Locale, File, Uri, MimeTypeMap, AssetManager.open+Scanner, ZipFile/ZipEntry, ClassLoader/System/Runtime/Thread, collections, ReflectionHelper (AndroidJavaProxy), UnityPlayer's Java methods, Play Asset Delivery wrapper. |
 | `up_input.c` | KeyEvent, MotionEvent, InputDevice/MotionRange, InputManager (+ device listeners), KeyCharacterMap, Choreographer (FrameCallback; one per looper thread), `org.fmod.FMODAudioDevice` (FMOD's AudioTrack output as a C thread). |
 | `up_softinput.c` | The soft keyboard: `UnityPlayer.showSoftInput` (7, 9 and 10 arguments) and its siblings, and the text field of Unity's input dialog (text, selection, character limit, the input type's filter) with every change reported to libunity as each version's dialog does; the host types into it (`up_soft_input_*` in unityplayer.h; ua_host's on-screen keyboard, docs/input.md). |
 | `up_media.c` | The video classes (VideoPlayer, see Video below): MediaExtractor, MediaFormat, MediaCodec (+BufferInfo), SurfaceTexture (+OnFrameAvailableListener), Surface(SurfaceTexture), ParcelFileDescriptor, FileDescriptor, java.nio Buffer/IntBuffer members. The work is `../media`'s (libuamedia.a); registered only in a program that links it (`up_media_init()` pulls it in; this folder's tests do not). |
+| `up_unity6.c` | The Java side of Unity 2023.1+ (Unity 6), Activity variant: `UnityPlayerForActivityOrService` (where libunity registers the per-instance natives), the UnityPlayer members its UnityPlayerJavaWrapper binds (`runningOnMainThread`, `executeMainThreadJobs`, `requestUserAuthorization(String, long)`, ...), `MemoryUsage`, `DeviceInfo` and the other helpers (see Unity versions). |
+| `up_legacy.c` | What the Java side of Unity 5.6 - 2017.2 did that later ones dropped: `nativeFile` (5.x mounts the APK and OBBs from Java), `nativeInitWWW` and the `WWW` HTTP class (answered without a network; file: URLs read). |
 | `up_tls.c` | The system trust store as Android's Java side gives it to libunity's unitytls (2018.4+): TrustManagerFactory, X509TrustManager, Certificate/X509Certificate, KeyStore("AndroidCAStore"), over the handheld's CA bundle ([docs/plugins.md](../../docs/plugins.md#https)). |
 | `up_http.c` | `com.unity3d.player.UnityWebRequest` (2017.4 - 2018.4) and the header map libunity gives it: no network by default, real requests through the system's libcurl with `UA_HTTP=1`. |
 | `up_fmod.c` | `org.fmod.FMOD` (and `org.fmod.AudioDevice`), the Java side of FMOD Engine's Android libraries, for games whose port supplies them ([docs/plugins.md](../../docs/plugins.md#fmod)). |
@@ -213,8 +215,9 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   host side calls the natives through `fj_call_native(_a)`, covers refcount freeing, direct
   buffers and boxing, and runs 4 threads.
 - `test/test_unityplayer.c` + `test/fake_unity.c` (softfp on ARM): a fake libmain/libunity that
-  registers the natives of one of 7 Unity versions (2017.4.9, 2017.4.40, 2018.4, 2019.4, 2020.3,
-  2021.3, 2022.3: names and signatures as `tools/re/jnitables.py` lists them for each player) and
+  registers the natives of one of 8 Unity versions (2017.4.9, 2017.4.40, 2018.4, 2019.4, 2020.3,
+  2021.3, 2022.3, 6000.6: names and signatures as `tools/re/jnitables.py` lists them for each
+  player; 6000.6's per-instance natives on `UnityPlayerForActivityOrService`) and
   uses the Java side as that version does. Each version runs in its own process
   (`test_unityplayer [n]` runs one). It checks the full startup order (with
   `nativeSendSurfaceChangedEvent` from 2018.4), display metrics (`getRefreshRate` float return;
@@ -242,12 +245,12 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   (GET, HEAD, POST, a big body, a stopped download, HTTPS trusted / unknown CA / wrong host, unknown
   host, malformed URL).
 - Both pass (0 failures) on both architectures: `test_unityplayer` prints one line per version and
-  `PASSED: 0 failure(s) in 7 Unity version shapes`. They also pass with `FJ_TRACE=1`. The tests
+  `PASSED: 0 failure(s) in 8 Unity version shapes`. They also pass with `FJ_TRACE=1`. The tests
   assume the default FJ_* modes: `FJ_NOFREE`/`FJ_STRICT` intentionally break their
   refcount/placeholder checks. (Docker's arm/v7 emulation on a Mac has crashed in the thread part
   of the armhf tests before; the same binaries pass on the device.)
 
-## Unity versions (2017.4 to 2022.3)
+## Unity versions (2017.4 to 2022.3; 5.6 - 2017.2 and 2023.1 - 6000.6 below)
 The runtime was written against 2017.4.9 (Cuphead); `docs/compat` surveys the Android players of
 the last patch of every LTS line up to 2022.3. The Java side keeps the 2017.4 model throughout, so
 one build serves them all, without a version switch: what differs is decided by what the loaded
@@ -383,6 +386,37 @@ quits; Play Asset Delivery has no asset packs and split APKs are not listed
 Reproduce: build jnicover as its header says, then for each player
 `jnicover < notes/bindings.tsv` and `jnicover < notes/javacalls.tsv` (notes from
 `tools/re/survey_player.sh` and `tools/re/javacalls.py`).
+
+### Unity 2023.1 - 6000.6 (`up_unity6.c`; docs/compat/unity-6000.md)
+- `UnityPlayer` is abstract; the Activity uses `UnityPlayerForActivityOrService`, on which libunity
+  registers `nativeRender`, `nativePause`, `nativeResume`, `nativeDone`, `nativeFocusChanged`,
+  `nativeRecreateGfxState`, `nativeSendSurfaceChangedEvent`, soft input, `nativeGetNoWindowMode`,
+  `nativeMemoryUsageChanged`. `up_call_native(UP_CLS, ...)` takes a native from that class when
+  UnityPlayer has none of the name; the player object stays a UnityPlayer.
+- `initJni` is called as `(activity, 0, "")` and adapted to the registered form: `(Context)` up
+  to 2022.3, `(Context, int)` 2023.1 - 6000.5 (the context type, 0 = ActivityOrService),
+  `(Context, int, String)` in 6000.6. `up_low_memory()` sends `nativeMemoryUsageChanged(4)`
+  (Critical) where `nativeLowMemory` is gone.
+- UnityPlayerJavaWrapper members answered: `runningOnMainThread` (true on UnityMain),
+  `executeMainThreadJobs` (runs the queued UnityMain jobs when called there), `invokeOnMainThread`,
+  `requestUserAuthorization(String, long)` (granted: `permissionResponseToNative(callback, true)`
+  on UnityMain), `shouldSetGameState`/`shouldReportFullyDrawn` (false), `reportFullyDrawn`,
+  `setRunWithoutFocus` (logged), pointer capture (ignored), `shutdown` (finish). Helpers:
+  `DeviceInfo`, `ApplicationExitInfoProvider.getANRRecordsJson` ("[]"), the id helpers,
+  `UnityGameState`, `UnityPlayerUtilities`; `UnityPlayerActivity.mUnityPlayer` is the player.
+- The UI thread gets the android shims' native looper before the libraries load (libunity's
+  `InitializeUILooper` in JNI_OnLoad); `up_poll()` services it (`ALooper_pollOnce(0)`). Weak
+  symbols: this folder's tests, without the shims, skip it.
+
+### Unity 5.6 - 2017.2 (`up_legacy.c`; docs/compat/unity-5.6-2017.2.md)
+- Right after `initJni`: `nativeFile(apk)` and `nativeFile(obb)` for each main/patch OBB of the
+  package (5.x, where Java mounts them), then `nativeInitWWW(WWW.class)` (to 2017.2), then
+  `nativeInitWebRequest` as before.
+- `com.unity3d.player.WWW(id, url, post, headers).start()`: on its own thread,
+  `errorCallback(id, "java.net.UnknownHostException: Unable to resolve host ...")`; a file: URL is
+  delivered with `headerCallback("content-length: n")`, `readCallback` blocks and `doneCallback`.
+- Not done: `nativeSetInputCanceled(Z)` (5.6/2017.1's form of `nativeSoftInputCanceled`), 5.x's
+  `settings.xml`.
 
 ## Video (`up_media.c`)
 Players 2017.4 - 2021.3 decode VideoPlayer clips through Java (`AndroidVideoMedia<AndroidMediaJNI>`

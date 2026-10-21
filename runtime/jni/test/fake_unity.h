@@ -7,7 +7,7 @@
 /* Each shape registers the natives (names and signatures) of that version's libunity and calls
  * the Java side the way that version's libunity and managed code do. */
 enum { SHAPE_2017_4_9, SHAPE_2017_4_40, SHAPE_2018_4, SHAPE_2019_4, SHAPE_2020_3, SHAPE_2021_3,
-       SHAPE_2022_3, SHAPE_N };
+       SHAPE_2022_3, SHAPE_6000_6, SHAPE_N };
 
 enum { R_ONLOAD, R_INITJNI, R_RESUME, R_PAUSE, R_DONE, R_FOCUS_TRUE, R_FOCUS_FALSE, R_GFX, R_GFX_NULL,
        R_RENDER, R_WIDTH, R_HEIGHT, R_REFRESH_X100, R_SDK, R_MODEL_OK, R_PATH_OK, R_PREFS_FLOAT_X100,
@@ -37,6 +37,9 @@ enum { R_ONLOAD, R_INITJNI, R_RESUME, R_PAUSE, R_DONE, R_FOCUS_TRUE, R_FOCUS_FAL
        R_VSYNC_WAITED,      /* nativeRender waited for one of those and it came (2021.3+)         */
        R_LOADLIB_OK,        /* loadLibrary / System.load name rules                                */
        R_WEBREQ_ERR,        /* UnityWebRequest.run() (Java, up to 2018.4): errorCallback code     */
+       R_U6_INITJNI,        /* initJni(Context, 0, "") on UnityPlayer (6000.6)                     */
+       R_U6_JAVA,           /* runningOnMainThread on UnityMain, DeviceInfo, MemoryUsage (2023.1+) */
+       R_U6_MEMORY,         /* nativeMemoryUsageChanged value (2023.1+: for up_low_memory)        */
        /* mouse MotionEvents (pointer mode) */
        R_MOTION_ACTION, R_MOTION_TOOL, R_MOTION_BUTTONS, R_MOTION_PRESSED, R_VSCROLL_X1000,
        R_MOUSE_DEV_OK,      /* getDevice() of a SOURCE_MOUSE event is the registered mouse        */

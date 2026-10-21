@@ -977,6 +977,62 @@ static int bionic_tls_check(void)
 #endif
 
 /* ------------------------------------------------------------------------ */
+/* bionic's TLS_SLOT_THREAD_ID (both architectures; so_loader.h) */
+
+/* Slot 1 (thread pointer + 4 / + 8) is bionic's pthread_internal_t of the thread; mimalloc,
+ * inside libunity from Unity 6000.6, takes it as its thread id (_mi_thread_id: mrc p15 /
+ * mrs tpidr_el0, then [tp + one word]). In glibc's TCB that word is unused and zero, so every
+ * thread had id 0, mimalloc's "no owner": blocks freed by other threads were treated as the
+ * freeing thread's own, and heaps broke (SIGSEGV in _mi_theap_malloc_zero, Mono asserting in
+ * mono_thread_info_current). The word gets the thread pointer itself, unique per live thread:
+ * for the thread that loads the first library, and for every thread created through
+ * pthread_create below (the executable's definition, which the host's code, libhybris's hook for
+ * Android code and the shared libraries, which reference it, all bind to). */
+static inline uintptr_t *thread_pointer(void)
+{
+    uintptr_t *tp;
+#if defined(__aarch64__)
+    __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+#else
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tp));
+    tp = (uintptr_t *)((uintptr_t)tp & ~(uintptr_t)3);
+#endif
+    return tp;
+}
+
+void so_thread_slots(void)
+{
+    uintptr_t *tp = thread_pointer();
+    if (!tp[1]) tp[1] = (uintptr_t)tp;
+}
+
+struct thread_start { void *(*fn)(void *); void *arg; };
+
+static void *thread_start(void *p)
+{
+    struct thread_start s = *(struct thread_start *)p;
+    free(p);
+    so_thread_slots();
+    return s.fn(s.arg);
+}
+
+int pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(*fn)(void *), void *arg)
+{
+    static int (*real)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
+    if (!real) {
+        real = (int (*)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *))dlsym(RTLD_NEXT, "pthread_create");
+        if (!real) return EAGAIN;
+    }
+    struct thread_start *s = malloc(sizeof *s);
+    if (!s) return EAGAIN;
+    s->fn = fn;
+    s->arg = arg;
+    int r = real(th, attr, thread_start, s);
+    if (r) free(s);
+    return r;
+}
+
+/* ------------------------------------------------------------------------ */
 /* loading */
 
 static int is_android_elf_file(const char *path)
@@ -1280,6 +1336,7 @@ static so_module *load_locked(const char *path, const so_shim *shims, int depth)
 #if defined(__aarch64__)
     if (bionic_tls_check() < 0) return NULL;
 #endif
+    so_thread_slots();
     /* segments are mapped and protected in 4 KiB pages: a kernel with larger ones (some arm64
      * kernels use 16 or 64 KiB) cannot place them */
     if (sysconf(_SC_PAGESIZE) != (long)PAGE_SZ) {

@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """List and extract files of an NSIS installer (LZMA or deflate), local or over HTTP.
 
-Unity's TargetSupportInstaller .exe files are non-solid NSIS 3 (Unicode) installers: every file is
-its own compressed block, at an offset the script's header gives, so a file is fetched with one
-HTTP range request and the installer itself is never downloaded whole or stored. From 2020.3 the
-installers are built with a large-installer NSIS variant: the first header is 36 bytes, script
-entries have 8 parameters instead of 6 and file offsets are 64-bit (both layouts handled).
-Solid installers (one LZMA stream for everything) are refused: use 7-Zip.
+Unity's TargetSupportInstaller .exe files are NSIS (Unicode) installers. Up to 2023.2 they are
+non-solid: every file is its own compressed block, at an offset the script's header gives, so a
+file is fetched with one HTTP range request and the installer itself is never downloaded whole or
+stored. From 2020.3 they are built with a large-installer NSIS variant: the first header is 36
+bytes, script entries have 8 parameters instead of 6 and file offsets are 64-bit. Unity 6's
+installers (an NSIS of 2025, first-header flag 0x40) cut LZMA data into chunks of 2 MiB
+(uncompressed), each its own LZMA stream behind a 3-byte compressed length:
+  - per-file blocks (e.g. 6000.0.58, 6000.1, 6000.2, 6000.3.11): 8-byte block words (top bit:
+    compressed), the chunks of a block end with a zero length;
+  - solid (e.g. 6000.0.85, 6000.3.26, 6000.4 - 6000.6): the first header holds the 64-bit
+    uncompressed size, then the header is one chunk and all files follow as one stream of 2 MiB
+    chunks (each file: 8-byte length + data, at its offset in that stream). A file is read by
+    walking the chunk lengths (3 bytes per 2 MiB chunk, one small range request each on a
+    kept-alive connection) to the chunks it spans.
+Old-style solid installers (one LZMA stream for everything) are refused: use 7-Zip.
 
 usage (tools/re/nsisrange.py, or python -m pmunity.nsis):
   nsisrange.py list    SRC                     # path<TAB>block offset<TAB>compressed size
@@ -16,7 +25,7 @@ usage (tools/re/nsisrange.py, or python -m pmunity.nsis):
 Paths come from the script's SetOutPath / File commands; variables are written as $NAME
 ($INSTDIR, $_59_ for user variables, ...). Only what Unity's installers use is decoded.
 """
-import sys, os, struct, lzma, zlib, fnmatch, urllib.request, time
+import sys, os, struct, lzma, zlib, fnmatch, urllib.request, urllib.parse, http.client, time
 
 FH_SIG = b'\xef\xbe\xad\xdeNullsoftInst'
 VARS = ['$0', '$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8', '$9',
@@ -27,12 +36,41 @@ EW_CREATEDIR, EW_EXTRACTFILE = 11, 20
 
 
 class Source:
+    """Random access to a local file or an http(s) URL (Range requests on one kept-alive
+    connection, reopened after errors; redirects followed)."""
+
     def __init__(self, src):
         self.src = src
         self.url = src.startswith(('http://', 'https://'))
         self.fetched = 0
+        self.requests = 0
+        self.conn = None
         if not self.url:
             self.f = open(src, 'rb')
+
+    def _get(self, url, rng, depth=0):
+        u = urllib.parse.urlsplit(url)
+        if self.conn is None or self.conn_host != (u.scheme, u.netloc):
+            if self.conn is not None:
+                self.conn.close()
+            cls = http.client.HTTPSConnection if u.scheme == 'https' else http.client.HTTPConnection
+            self.conn, self.conn_host = cls(u.netloc, timeout=120), (u.scheme, u.netloc)
+        path = u.path + ('?' + u.query if u.query else '')
+        self.conn.request('GET', path, headers={'Range': rng, 'User-Agent': 'pmunity'})
+        r = self.conn.getresponse()
+        data = r.read()
+        if r.status in (301, 302, 303, 307, 308) and depth < 5:
+            return self._get(urllib.parse.urljoin(url, r.getheader('Location')), rng, depth + 1)
+        if r.status != 206:
+            raise IOError('server ignored the Range request (status %d)' % r.status)
+        return data
+
+    def close(self):
+        if not self.url:
+            self.f.close()
+        elif self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def read(self, off, n):
         if n <= 0:
@@ -42,17 +80,17 @@ class Source:
             return self.f.read(n)
         for attempt in range(6):
             try:
-                req = urllib.request.Request(self.src, headers={'Range': 'bytes=%d-%d' % (off, off + n - 1)})
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    if r.status != 206:
-                        raise IOError('server ignored the Range request (status %d)' % r.status)
-                    data = r.read()
+                data = self._get(self.src, 'bytes=%d-%d' % (off, off + n - 1))
                 if len(data) != n:
                     raise IOError('short read %d of %d' % (len(data), n))
                 self.fetched += n
+                self.requests += 1
                 return data
-            except (OSError, IOError) as ex:  # retry transient network errors
-                if attempt == 5 or isinstance(ex, ValueError):
+            except (OSError, IOError, http.client.HTTPException) as ex:  # retry transient network errors
+                if self.conn is not None:
+                    self.conn.close()
+                    self.conn = None
+                if attempt == 5:
                     raise
                 print('retry %d at %d: %s' % (attempt + 1, off, ex), file=sys.stderr)
                 time.sleep(3 * (attempt + 1))
@@ -79,6 +117,22 @@ def decompress(blk):
     return zlib.decompressobj(-15).decompress(blk)   # NSIS zlib = raw deflate (bzip2 unsupported)
 
 
+CHUNK = 2 << 20          # Unity 6 installers: uncompressed size of every LZMA chunk but a stream's last
+
+
+def dechunk(blk):
+    """A Unity 6 block body: LZMA chunks, each a 3-byte compressed length and an LZMA stream, up to
+    a zero length (or the end of the body)."""
+    out, p = [], 0
+    while p + 3 <= len(blk):
+        n = int.from_bytes(blk[p:p + 3], 'little')
+        if n == 0:
+            break
+        out.append(decompress(blk[p + 3:p + 3 + n]))
+        p += 3 + n
+    return b''.join(out)
+
+
 class Nsis:
     def __init__(self, src):
         self.s = Source(src)
@@ -96,17 +150,44 @@ class Nsis:
             pos = i + 1
         self.fh = i - 4
         flags, _, _, _, _, self.hdr_len, self.total = struct.unpack_from('<7I', head, self.fh)
-        fhsize = 28
-        if head[self.fh + 28:self.fh + 36] == bytes(8) and head[self.fh + 39] & 0x80:
-            fhsize = 36                      # large-installer variant: 64-bit data length
-        w = struct.unpack_from('<I', head, self.fh + fhsize)[0]
-        if not w & 0x80000000:
-            raise SystemExit('solid installer: use 7-Zip (this tool needs per-file blocks)')
-        n = w & 0x7fffffff
-        p = self.fh + fhsize + 4
-        blk = head[p:p + n] if p + n <= len(head) else self.s.read(p, n)
-        self.h = decompress(blk)[:self.hdr_len]
-        self.data_base = p + n
+        self.chunked = bool(flags & 0x40)    # Unity 6: LZMA in 2 MiB chunks (module doc)
+        self.solid = False
+        self.cache = {}
+        get = lambda p, n: head[p:p + n] if p + n <= len(head) else self.s.read(p, n)
+        if self.chunked:
+            self.usize = struct.unpack_from('<Q', head, self.fh + 28)[0]
+            if self.usize:                   # solid: header chunk, then the data stream's chunks
+                self.solid = True
+                p = self.fh + 36
+                n = int.from_bytes(get(p, 3), 'little')
+                blk = get(p, 3 + n + 3)
+                h = decompress(blk[3:3 + n])
+                if struct.unpack_from('<Q', h, 0)[0] != self.hdr_len:
+                    raise SystemExit('unknown Unity 6 installer layout (header chunk)')
+                self.h = h[8:8 + self.hdr_len]
+                self.chunk_pos = [p + 3 + n]  # compressed position of each data chunk found so far
+                self.chunk_len = [int.from_bytes(blk[3 + n:], 'little')]
+                self.end = self.fh + 28 + self.total
+                fhsize = 36
+            else:
+                w = struct.unpack_from('<Q', head, self.fh + 36)[0]
+                n = w & 0x7fffffffffffffff
+                blk = get(self.fh + 44, n)
+                self.h = (dechunk(blk) if w >> 63 else blk)[:self.hdr_len]
+                self.data_base = self.fh + 44 + n
+                fhsize = 36
+        else:
+            fhsize = 28
+            if head[self.fh + 28:self.fh + 36] == bytes(8) and head[self.fh + 39] & 0x80:
+                fhsize = 36                      # large-installer variant: 64-bit data length
+            w = struct.unpack_from('<I', head, self.fh + fhsize)[0]
+            if not w & 0x80000000:
+                raise SystemExit('solid installer: use 7-Zip (this tool needs per-file blocks)')
+            n = w & 0x7fffffff
+            p = self.fh + fhsize + 4
+            blk = get(p, n)
+            self.h = decompress(blk)[:self.hdr_len]
+            self.data_base = p + n
         self.total += fhsize - 28            # end of data relative to fh + 28 below
         self.blocks = [struct.unpack_from('<II', self.h, 4 + 8 * k) for k in range(8)]
         so = self.blocks[3][0]
@@ -124,6 +205,9 @@ class Nsis:
             old = sum(1 for w in words if 0xE000 <= w <= 0xE003)
             self.codes = ({1: 'lang', 2: 'shell', 3: 'var', 4: 'skip'} if new > old else
                           {0xE000: 'skip', 0xE001: 'var', 0xE002: 'shell', 0xE003: 'lang'})
+
+    def close(self):
+        self.s.close()
 
     def string(self, off):
         h, so = self.h, self.blocks[3][0]
@@ -191,12 +275,59 @@ class Nsis:
                 seen.setdefault(path, pa[2])
         offs = sorted(set(seen.values()))
         nxt = {o: (offs[j + 1] if j + 1 < len(offs) else None) for j, o in enumerate(offs)}
-        end = self.fh + 28 + self.total - self.data_base
+        if self.solid:
+            end = self.usize
+        else:
+            end = self.fh + 28 + self.total - self.data_base
+        word = 8 if self.chunked else 4
         for path, o in seen.items():
             e = nxt[o] if nxt[o] is not None else end
-            yield path, o, e - o - 4   # compressed size (approximate for the last block: CRC tail)
+            # compressed size (solid: uncompressed; approximate for the last block: CRC tail)
+            yield path, o, e - o - word
+
+    def _chunk(self, k):
+        """Data chunk k of a solid Unity 6 installer, uncompressed (the last two kept)."""
+        if k in self.cache:
+            return self.cache[k]
+        while len(self.chunk_pos) <= k:          # walk the chunk lengths up to chunk k
+            p, n = self.chunk_pos[-1], self.chunk_len[-1]
+            if n == 0 or p + 3 + n >= self.end:
+                raise SystemExit('offset beyond the installer data')
+            q = p + 3 + n
+            self.chunk_pos.append(q)
+            self.chunk_len.append(int.from_bytes(self.s.read(q, 3), 'little'))
+        p, n = self.chunk_pos[k], self.chunk_len[k]
+        blk = self.s.read(p + 3, n + 3 if p + 6 + n <= self.end else n)
+        if len(self.chunk_pos) == k + 1 and len(blk) == n + 3:
+            self.chunk_pos.append(p + 3 + n)
+            self.chunk_len.append(int.from_bytes(blk[n:], 'little'))
+        data = decompress(blk[:n])
+        if len(self.cache) >= 2:
+            self.cache.pop(min(self.cache))
+        self.cache[k] = data
+        return data
+
+    def _stream(self, off, n):
+        out = []
+        while n > 0:
+            k, r = divmod(off, CHUNK)
+            c = self._chunk(k)[r:r + n]
+            if not c:
+                raise SystemExit('short chunk %d' % k)
+            out.append(c)
+            off += len(c)
+            n -= len(c)
+        return b''.join(out)
 
     def extract(self, off):
+        if self.solid:
+            n = struct.unpack('<Q', self._stream(off, 8))[0]
+            return self._stream(off + 8, n)
+        if self.chunked:
+            w = struct.unpack('<Q', self.s.read(self.data_base + off, 8))[0]
+            n = w & 0x7fffffffffffffff
+            blk = self.s.read(self.data_base + off + 8, n)
+            return dechunk(blk) if w >> 63 else blk
         w = struct.unpack('<I', self.s.read(self.data_base + off, 4))[0]
         n = w & 0x7fffffff
         blk = self.s.read(self.data_base + off + 4, n)
@@ -221,7 +352,7 @@ def main():
             with open(dst, 'wb') as f:
                 f.write(data)
             print('%10d %s' % (len(data), path))
-        print('fetched %d bytes' % ns.s.fetched, file=sys.stderr)
+        print('fetched %d bytes in %d requests' % (ns.s.fetched, ns.s.requests), file=sys.stderr)
     else:
         raise SystemExit(__doc__)
 

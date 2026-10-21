@@ -103,7 +103,7 @@ buffer, `textureGather` in depth of field) and link on Mesa.
 ## Unity versions
 
 The converter reads the data's Unity version from the data (`python -m pmunity version <data>`)
-and handles 2017.3 - 2022.3; other versions are refused unless `--any-unity-version` is given
+and handles 5.6 - 6000.6; other versions are refused unless `--any-unity-version` is given
 (then the layouts are guessed and checked by round trip). What changes between the LTS lines:
 
 | | 2017.4 | 2018.4 | 2019.4 | 2020.3 | 2021.3 | 2022.3 |
@@ -114,6 +114,17 @@ and handles 2017.3 - 2022.3; other versions are refused unless `--any-unity-vers
 | also kept in step | - | - | - | pass `m_Platforms` | + Shader `stageCounts` | same |
 | GL program text | plain `#extension` lines | same | `#ifdef`-wrapped extensions; macro blocks for uniform buffers and uniform locations (`UNITY_LOCATION(n)`, `UNITY_BINDING(n)`) | same | same | same |
 | GLCore41/43 programs, stripped shaders | not translated by default (2017.x: the output stays as before) | translated / empty GLES3 blob | same | same | same | same |
+
+The other lines use these layouts too (their built-ins read and write back with them):
+
+| lines | serializer | container, subprograms |
+|---|---|---|
+| 5.5 - 2017.2 | 201609010, written as 201708220 (4 statistics, one keyword list) | one block per platform, `m_SubPrograms`; 5.x GraphicsSettings has no `m_ShaderDefinesPerShaderCompiler` |
+| 2023.1 - 6000.5 | 202012090 | as 2022.3 |
+| 6000.6 | 202605290, written as 202012090 | as 2022.3 |
+
+5.5 writes 201609010 too but has not been checked (refused with the rest of 5.x before 5.6); 5.0 -
+5.4 keep their programs in another Shader layout (no `compressedBlob`).
 
 In Unity's own built-in resources of each line, which hold GLCore and GLES3 programs of the same
 shaders (desktop players ship one file for every API), the GLES3 blob differs from the GLCore one
@@ -139,7 +150,11 @@ way (78 of 136; the others are VR and frame-debugger variants), and 41 without i
   every non-VR program declares the same uniforms, inputs, varyings, outputs and samplers as
   Unity's GLES3 program (desktop file and Android player alike): 7, 7, 7, 8, 8, 9 programs from
   2017.4 to 2022.3, and 77 converted programs link on Mesa (llvmpipe, ES 3.2); the 27 that do not
-  are the `STEREO_MULTIVIEW_ON` ones (`GL_OVR_multiview2`, which llvmpipe lacks).
+  are the `STEREO_MULTIVIEW_ON` ones (`GL_OVR_multiview2`, which llvmpipe lacks). The same test
+  on the "unity default resources" that free Linux games of 5.6.0 and 6000.6.3 carry (built-ins
+  "5.6.0f3", "6000.6.0b3"; with the 5.6.0f3 Android player's copy): every blob reads and writes
+  back, the GLES3 programs and subprograms equal Unity's (92 subprograms for 5.6, 44 and 16
+  parameter entries for 6000.6).
 
   ```sh
   cd convert && PMUNITY_GLCORE_CORPUS=<linux udr>[:...] PMUNITY_GLCORE_ANDROID=<android udr>[:...] \

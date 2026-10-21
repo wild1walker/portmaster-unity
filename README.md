@@ -40,7 +40,8 @@ computer.
   it (`7z x UnitySetup-Android-Support-for-Editor-<version>.exe`). The folder with `Variations/`
   and `Data/` is the "player package" below. Unity's licence terms apply to it; it is not
   redistributed here.
-- The game: a desktop build you own. The macOS build is the usual choice (its OpenGL Core shaders
+- The game: a desktop build you own, Mono, of Unity 5.6 - 6000.6 (docs/compat: what each line
+  needs and what has run). The macOS build is the usual choice (its OpenGL Core shaders
   convert to GLES 3); a Windows build carries only Direct3D 11 shaders, which `pmunity shaders
   --from d3d11` translates with Unity's HLSLcc (`tools/hlslcc/build.sh`; docs/shaders.md).
 

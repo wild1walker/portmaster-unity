@@ -134,7 +134,7 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(f['game_assembly']['arch'], 'x86_64')
 
     def test_out_of_range_versions(self):
-        for v, fmt in (('5.6.7f1', 17), ('2023.2.3f1', 22), ('6000.5.9f1', 23)):
+        for v, fmt in (('5.5.4f1', 17), ('5.4.6f3', 15), ('6000.7.0b5', 23)):
             b = linux_build(self, v, fmt=fmt)
             f = R.examine(R.find_data_dirs(b.root)[0])
             self.assertEqual(f['unity'], v)                 # format 23: read past unity_version's range
@@ -197,7 +197,7 @@ class RouteTest(unittest.TestCase):
     def test_gl_modes(self):
         # GLES mode needs the converter's versions; else desktop GL (mesa) or gl4es (GL 2 players)
         for v, fmt, player, want in (('2019.4.1f1', 21, b'force-glcore\0GLX_EXT_create_context_es2_profile\0', 'gles'),
-                                     ('6000.5.9f1', 23, b'force-glcore\0GLX_EXT_create_context_es2_profile\0', 'mesa'),
+                                     ('6000.7.0b5', 23, b'force-glcore\0GLX_EXT_create_context_es2_profile\0', 'mesa'),
                                      ('5.3.2p3', 15, b'force-glcore\0force-opengl\0', 'gl4es')):
             b = linux_build(self, v, fmt=fmt, player=player)
             self.assertEqual(R.gl_mode(R.examine(R.find_data_dirs(b.root)[0])), want, v)

@@ -59,6 +59,7 @@ import tempfile
 import time
 
 from . import streaming as ST
+from . import typetrees
 from . import unity_version as UV
 from . import video
 
@@ -663,6 +664,8 @@ def edit_globalgamemanagers(src, managed_names, args, log):
             # with that platform's built-in defines: the GLES3 platform gets the same (the entry
             # has the same layout in Unity 2017.4 - 2022.3)
             t = o.read_typetree()
+            if 'm_ShaderDefinesPerShaderCompiler' not in t:
+                continue                # Unity 5.x: no per-compiler defines
             d = t['m_ShaderDefinesPerShaderCompiler']
             have = {e['shaderPlatform'] for e in d}
             src_plat = next((p for p in (SHADER_PLATFORM_GLCORE, SHADER_PLATFORM_D3D11) if p in have), None)
@@ -721,7 +724,11 @@ def edit_globalgamemanagers(src, managed_names, args, log):
         elif n == 'ScriptMapper' and getattr(args, 'video_shader_pid', None):
             video.map_shader(sf, args.video_shader_pid, notes)    # Hidden/VideoDecodeAndroid
         elif n == 'PlayerSettings':
-            t = o.read_typetree()
+            # (6000.x, 2023.2.20f1: fields UnityPy's trees lack, after the ones changed here)
+            t, node = typetrees.read(o, edits=('m_MTRendering', 'mobileMTRenderingBaked', 'androidBlitType',
+                                               'androidUseSwappy'))
+            if node is not None:
+                notes.append('PlayerSettings read with a fixed type tree (typetrees.py)')
             changed = False
             if args.mt_rendering != 'keep':
                 t['m_MTRendering'] = args.mt_rendering == 'on'
@@ -749,7 +756,7 @@ def edit_globalgamemanagers(src, managed_names, args, log):
                 elif args.unity.line >= SWAPPY_FROM:
                     notes.append('PlayerSettings: no androidUseSwappy, --swappy ignored')
             if changed:
-                o.save_typetree(t)
+                typetrees.save(o, t, node)
     old = sf._m_target_platform
     sf._m_target_platform = ANDROID
     notes.append(f'target platform {old} -> {ANDROID}')
@@ -767,7 +774,20 @@ def edit_globalgamemanagers(src, managed_names, args, log):
 # loaded is taken, filtered by its flags in m_AssemblyTypes, so missing engine modules are
 # skipped wherever they are. From 2020.2 the list is Data/ScriptingAssemblies.json
 # ({"names": [...], "types": [...]}), which the player reads instead of MonoManager fields.
+# Older lines (GetAvailableDllAssemblyMask of 5.6.7, 2017.1.5 and 2017.2.5 disassembled): 5.x and
+# 2017.1 have one engine assembly (UnityEngine.dll, slot 0) and a reserved slot 1, the game from 2;
+# 2017.2 (the first with engine modules) marks slots 0..43 loaded without looking for the files,
+# skips 44 and checks 45+.
 BUILTIN_ASSEMBLY_SLOTS = 48
+
+
+def builtin_assembly_slots(unity):
+    """The engine's slots at the start of MonoManager's list (Unity 5.x - 2017.x)."""
+    if unity is not None and (unity.major < 2017 or unity.line == (2017, 1)):
+        return 2
+    if unity is not None and unity.line == (2017, 2):
+        return 45
+    return BUILTIN_ASSEMBLY_SLOTS
 
 
 def is_engine_module(name):
@@ -776,10 +796,11 @@ def is_engine_module(name):
 
 def split_assemblies(names, unity=None):
     """(game assemblies, engine modules) of an assembly list (MonoManager.m_AssemblyNames or
-    ScriptingAssemblies.json names): Unity 2017 by slot, later by name."""
+    ScriptingAssemblies.json names): Unity 5.x - 2017 by slot, later by name."""
     if unity is None or unity.major <= 2017:
-        return ([a for i, a in enumerate(names) if i >= BUILTIN_ASSEMBLY_SLOTS and a],
-                [a for i, a in enumerate(names) if i < BUILTIN_ASSEMBLY_SLOTS and a])
+        n = builtin_assembly_slots(unity)
+        return ([a for i, a in enumerate(names) if i >= n and a],
+                [a for i, a in enumerate(names) if i < n and a])
     return [a for a in names if a and not is_engine_module(a)], [a for a in names if a and is_engine_module(a)]
 
 
@@ -868,7 +889,8 @@ def plan(args):
                 items.append((os.path.join(data, 'GI', os.path.relpath(os.path.join(r, f), gi)), os.path.join(r, f), 'link'))
     if getattr(args, 'data_path', False):
         items += ST.data_folder_items(src, os.path.join(args.name, ST.FOLDER))
-    items.append((os.path.join(data, 'unity default resources'), os.path.join(pkg, 'Data', 'unity default resources'), 'link'))
+    udr_dst = os.path.join(data, *default_resources_path(getattr(args, 'unity', None)))
+    items.append((udr_dst, pkg_default_resources(pkg), 'link'))
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
     # the Android VideoPlayer's shader, made from the desktop one (video.py)
     args.video_shader_pid = video.path_id_for(bex) if args.video_shader and video.has_template(bex) else None
@@ -879,12 +901,19 @@ def plan(args):
     il2cpp = getattr(args, 'il2cpp', None)
     amanaged = os.path.join(pkg, 'Variations', 'il2cpp' if il2cpp else 'mono', 'Managed')
     names = set()
+    override = {os.path.basename(f): os.path.abspath(f) for f in args.managed_file}
+    for n, why in desktop_modules_needed(os.path.join(src, 'Managed'), amanaged).items():
+        if n not in override:
+            override[n] = os.path.join(src, 'Managed', n)
+            args.warnings.append(f'{n}: the game\'s own (desktop) copy is shipped: its assemblies use types the '
+                                 f'Android one lacks ({", ".join(why[:4])}{"..." if len(why) > 4 else ""})')
     for n in sorted(os.listdir(amanaged)):
         if n.endswith('.dll'):
-            items.append((os.path.join(data, 'Managed', n), os.path.join(amanaged, n), 'link'))
+            # --managed-file of an engine module: shipped instead of the player's (e.g. a desktop
+            # module whose types a game's assemblies reference and the Android one lacks)
+            items.append((os.path.join(data, 'Managed', n), override.pop(n, None) or os.path.join(amanaged, n), 'link'))
             names.add(n)
     gmanaged = os.path.join(src, 'Managed')
-    override = {os.path.basename(f): os.path.abspath(f) for f in args.managed_file}
     patched = dict(args.assembly_patch)
     for n in sorted(set(os.listdir(gmanaged)) | set(override)):
         if not n.endswith('.dll'):
@@ -956,6 +985,77 @@ def il2cpp_items(args, items, data):
     return items
 
 
+# The player's built-in resources: assets/bin/Data/unity default resources up to 2023.1, then
+# assets/bin/Data/Resources/unity default resources (libunity 2022.3: "Data/unity default
+# resources", 6000.x: "Resources/unity default resources"); the player package moved its copy to
+# Data/Resources/ in the same version.
+DEFAULT_RESOURCES_IN_RESOURCES_FROM = (2023, 2)
+
+
+def default_resources_path(unity):
+    """Where the Android player reads "unity default resources", relative to assets/bin/Data."""
+    if unity is not None and unity.line >= DEFAULT_RESOURCES_IN_RESOURCES_FROM:
+        return ('Resources', 'unity default resources')
+    return ('unity default resources',)
+
+
+def pkg_default_resources(pkg):
+    """The player package's "unity default resources" (Data/, or Data/Resources/ from 2023.2)."""
+    for rel in (('Data', 'unity default resources'), ('Data', 'Resources', 'unity default resources')):
+        p = os.path.join(pkg, *rel)
+        if os.path.isfile(p):
+            return p
+    return os.path.join(pkg, 'Data', 'unity default resources')
+
+
+VERSION_RE = rb'\b((?:20\d\d|6\d\d\d|5)\.\d+\.\d+[abfp]\d+)'
+
+
+def desktop_modules_needed(gmanaged, amanaged):
+    """{engine module: [type names]}: modules (2017.2+, UnityEngine.*Module.dll) whose types the
+    game's own assemblies reference by that module but the Android player's copy does not define,
+    while the game's desktop copy does (e.g. UnityEngine.MovieTexture in AudioModule: standalone
+    only). The player would stop at a TypeLoadException; the desktop module loads, and only its
+    standalone-only members (missing native calls) fail when called."""
+    from . import clrmeta as CM
+    out = {}
+    if not (os.path.isdir(gmanaged) and os.path.isdir(amanaged)):
+        return out
+    defined = {}
+
+    def types_of(path):
+        if path not in defined:
+            try:
+                defined[path] = {t['full'] for t in CM.Assembly(path).types()}
+            except Exception:                   # noqa: BLE001 - not a readable assembly: no claim
+                defined[path] = None
+        return defined[path]
+
+    wanted = {}
+    for n in sorted(os.listdir(gmanaged)):
+        if not n.endswith('.dll') or is_engine_module(n):
+            continue
+        try:
+            a = CM.Assembly(os.path.join(gmanaged, n))
+            for r in range(1, a.count(CM.TYPEREF) + 1):
+                scope = a.typeref_scope(r)
+                if scope and scope.startswith('UnityEngine.') and scope.endswith('Module'):
+                    wanted.setdefault(scope + '.dll', set()).add(a.typeref_name(r))
+        except Exception:                       # noqa: BLE001
+            continue
+    for mod, names in wanted.items():
+        ap, gp = os.path.join(amanaged, mod), os.path.join(gmanaged, mod)
+        if not (os.path.isfile(ap) and os.path.isfile(gp)):
+            continue
+        have, desk = types_of(ap), types_of(gp)
+        if have is None or desk is None:
+            continue
+        missing = sorted(t for t in names if t not in have and t in desk)
+        if missing:
+            out[mod] = missing
+    return out
+
+
 def player_version(pkg):
     """The Unity version of an Android player package: its player.json (`pmunity player fetch`), its
     ivy.xml (2017.x, 2018.x), else the version string in its Mono libunity.so, else that of its
@@ -975,18 +1075,18 @@ def player_version(pkg):
     for name in ('modules.asset', 'version.txt'):           # (installer extras, when kept)
         p = os.path.join(pkg, name)
         if os.path.isfile(p):
-            m = re.search(r'\b(20\d\d\.\d+\.\d+[abfp]\d+)\b', open(p, encoding='utf-8', errors='replace').read())
+            m = re.search(VERSION_RE.decode() + r'\b', open(p, encoding='utf-8', errors='replace').read())
             if m:
                 return UV.Version(m.group(1))
     for abi in ('armeabi-v7a', 'arm64-v8a'):
         lib = os.path.join(pkg, 'Variations', 'mono', 'Release', 'Libs', abi, 'libunity.so')
         if os.path.isfile(lib):
             with open(lib, 'rb') as f:
-                found = re.findall(rb'\b(20\d\d\.\d+\.\d+[abfp]\d+)\x00', f.read())
+                found = re.findall(VERSION_RE + rb'\x00', f.read())
             if found:
                 best = max(set(found), key=found.count)
                 return UV.Version(best.decode())
-    udr = os.path.join(pkg, 'Data', 'unity default resources')
+    udr = pkg_default_resources(pkg)
     if os.path.isfile(udr):
         v = UV.of_file(udr)
         v.exact = False                 # the file is often from an earlier patch of the line
@@ -1116,7 +1216,7 @@ def main(argv=None):
                          "and with the setting on Unity presents nothing (2019.4) or stops after its first frames "
                          "(2021.3+); keep/on only for a runtime that runs Swappy")
     ap.add_argument('--any-unity-version', action='store_true',
-                    help='convert data of a Unity version outside 2017.3 - 2022.3, or for an Android player of another '
+                    help='convert data of a Unity version outside 5.6 - 6000.6, or for an Android player of another '
                          'Unity line (untested; the formats are then guessed)')
     ap.add_argument('--async-upload-buffer', type=int, default=0, help='QualitySettings.asyncUploadBufferSize in MB (0 = keep)')
     ap.add_argument('--no-inline-textures', dest='inline_textures', action='store_false',
@@ -1409,7 +1509,7 @@ def build_id(args):
     for cls, field in (('BuildSettings', 'buildGUID'), ('PlayerSettings', 'productGUID')):
         for o in env.file.objects.values():
             if o.type.name == cls and h is None:
-                t = o.read_typetree()
+                t, _ = typetrees.read(o)
                 if field in t and any(t[field].values()):
                     h = guid(t[field])
     if h is None:
@@ -1634,7 +1734,7 @@ def verify(args, items, log):
                 bad.append((dst_rel, f'platform {sf._m_target_platform}'))
             if act == 'ggm':
                 for o in sf.objects.values():
-                    o.read_typetree()
+                    typetrees.read(o)
             n_sf += 1
     log(f'verify: {n_sf} serialized files load in UnityPy')
     bundles = [(d, s) for d, s, a in items if a == 'bundle']

@@ -8,7 +8,7 @@ bundles, explained below). The output is in `--out` (default `android-out/`).
 
 Sections 1-3 come from libunity.so 2017.4.9f1 armeabi-v7a (sha256 `b7d24200…b604315e`),
 disassembled with the symbols in libunity.sym.so (`tools/re/arm.py`); section 4 is what changes
-for the other Unity versions (2017.3 - 2022.3).
+for the other Unity versions (5.6 - 6000.6).
 
 ## 1. How the player finds its data
 
@@ -135,24 +135,40 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
   - mscorlib `mono_corlib_version` = 82, which is what the Android libmono.so checks.
   - The macOS-only icalls are MovieTexture, GameCenter, ClusterInput and Windows.Speech, which the game doesn't use.
 
-## 4. Unity versions (2017.3 - 2022.3)
+## 4. Unity versions (5.6 - 6000.6)
 
 Sections 1-3 come from the 2017.4.9 player. What `android-data` does for the other LTS lines,
 from the static survey of their Android players ([compat](compat/README.md)) and runs on Unity's
 built-ins and six free Linux games (one per line):
 
 - **Versions.** The data's Unity version is read from `globalgamemanagers` (or a bundle header);
-  outside 2017.3 - 2022.3 the run stops unless `--any-unity-version`. The player package's version
-  comes from its `ivy.xml` (2017.x, 2018.x) or, failing that, from its "unity default resources"
+  outside 5.6 - 6000.6 the run stops unless `--any-unity-version`. The player package's version
+  comes from its `player.json` (`pmunity player fetch`), its `ivy.xml` (5.x - 2018.x), the version
+  string in its libunity, or, failing that, from its "unity default resources"
   (which gives only the line: the file is often from an earlier patch). Data and player of
   different lines are refused (main data has no type trees: the player reads its own layouts);
   another patch of the same line is a warning. The report has both, and the Mono runtime the game
   needs: `.NET 3.5 (libmono)` (a `Mono/` folder, 2017.x - 2018.x) or `.NET 4.x (libmonobdwgc-2.0)`
   (`MonoBleedingEdge/`, and every 2019.1+ game).
-- **SerializedFile headers.** Formats 17 (2017.x - 2018.x), 21 (2019.x) and 22 (2020.1+, a 48-byte
-  header with 64-bit sizes: the version string at 48, the platform word after it). The platform
-  word is set in place for all three, in plain files and in bundles' CABs.
-- **Assemblies.** 2017.x: MonoManager's fixed slots (section 3). From 2018 (2018.4 - 2022.3
+- **SerializedFile headers.** Formats 17 (5.6 - 2018.x), 21 (2019.x), 22 (2020.1 - 6000.4, a
+  48-byte header with 64-bit sizes: the version string at 48, the platform word after it) and 23
+  (6000.5+, the same header; type trees carry a hash and their size). The platform word is set in
+  place for all of them, in plain files and in bundles' CABs. (6000.7 betas write format 25:
+  refused.)
+- **Built-in resources.** 2023.2+ players read `assets/bin/Data/Resources/unity default
+  resources` (libunity: "Resources/unity default resources"), earlier ones `assets/bin/Data/unity
+  default resources`; the package keeps its copy at `Data/Resources/` from 2023.2 too. android-data
+  takes it from either place and puts it where the player's line reads it.
+- **Assemblies.** 2017.3 - 2017.4: MonoManager's fixed slots (section 3). Older lines
+  (`GetAvailableDllAssemblyMask` of 5.6.7, 2017.1.5, 2017.2.5 disassembled): 5.x and 2017.1 have one
+  engine assembly (`UnityEngine.dll`, slot 0), slot 1 reserved, the game from slot 2; 2017.2 (the
+  first line with engine modules) takes slots 0 - 43 without looking for the files, skips 44 and
+  checks 45+. A game assembly that references a type of an engine module (by the module's name,
+  2017.2+) which the Android copy lacks but the game's desktop copy defines (Adventure Creator and
+  others: `UnityEngine.MovieTexture` in `UnityEngine.AudioModule`, standalone-only) would stop the
+  player at a `TypeLoadException`: that module is shipped as the game's desktop copy (a warning
+  names the types); only its standalone-only members fail, when called. `--managed-file
+  UnityEngine.XModule.dll` does the same by hand. From 2018 (2018.4 - 2022.3
   disassembled) `GetAvailableDllAssemblyMask` takes every listed assembly that loaded, filtered by
   its `m_AssemblyTypes` flags: no slot is reserved, a missing engine module is skipped wherever it
   is. From 2020.2 the list is `ScriptingAssemblies.json` in the data folder (MonoManager keeps only
@@ -168,14 +184,28 @@ built-ins and six free Linux games (one per line):
   game: 19 meshes in 3 files). The textures step likewise carries those blobs when it rewrites a
   `.resS`, and writes ASTC as `ASTC_<n>x<n>` (48-53) from 2019.1, where the RGBA numbers are
   deprecated.
-- **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version;
-  the GLES3 entry is copied from GLCore (from D3D11 for a Windows build).
+- **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version
+  that has it (2017.1+; 5.x has none, and nothing is added); the GLES3 entry is copied from GLCore
+  (from D3D11 for a Windows build).
+- **Type trees UnityPy lacks.** Main data has no type trees; UnityPy reads it with the trees it
+  ships (UnityPy 1.25.4: up to 6000.6 alphas / 6000.7 alphas). `PlayerSettings` of 6000.0.58f2,
+  6000.3.11f1, 6000.5.7f1 and 6000.6.3f1 is 4 bytes longer than those trees (6000.6.3f1's
+  `PlayerSettingsState::Transfer` has `captureStartupLogsBaked` after `insecureHttpOption`), so
+  reading it failed; 2023.2.20f1's is 1 byte longer, at its end. `pmunity/typetrees.py` then reads
+  it with that field added, or else with the bytes left over kept as unknown fields at the end,
+  only when UnityPy's own tree fails, the fixed one reads every byte, and no field of the missing
+  size fits before the fields android-data changes (`m_MTRendering`, `mobileMTRenderingBaked`,
+  `androidBlitType`, `androidUseSwappy`: the conversion stops otherwise). In all five the missing
+  bytes can only be among the last fields, and the object writes back byte for byte.
 - **PlayerSettings.** As in section 2, plus `--swappy off|keep|on`: `androidUseSwappy` (2019.3+,
   Android Frame Pacing), off by default. A desktop build never ran it, and the runtime keeps Swappy
   off; with the setting on, the 2019.4 player presents nothing and 2021.3+ stop after their first
   frames (runtime/android/README.md, "Frame pacing"). Off, Unity paces frames itself (vsync count,
   `targetFrameRate`), as on the desktop. Only 2019.3+ conversions carry the option in their state.
-- **OBB.** 2017.4 - 2020.3: the `assets/<build-id>` marker and `unity.build-id` meta-data. 2021.3+
+- **OBB.** 5.x: Java mounts the APK and each OBB with `nativeFile(path)` (an OBB only when the
+  APK's `settings.xml` lists the MD5 of its last 64 KiB); the runtime mounts the APK and every
+  main/patch OBB of the package that way (runtime/jni/up_legacy.c). 2017.1 - 2020.3: the
+  `assets/<build-id>` marker and `unity.build-id` meta-data. 2021.3+
   match an OBB by GUID: the APK's `assets/unity_obb_guid` (2021.3 reads it with
   `AssetManager.open("unity_obb_guid")`, 2022.3 as `<apk>/assets/unity_obb_guid`) must equal the
   OBB's `unity_obb_guid` at the root of the archive (2021.3: `ZipFile.getEntry("unity_obb_guid")`,
@@ -198,7 +228,10 @@ Six free Linux Mono games (2017.4.40f1, 2018.4.36f1, 2019.4.8f1, 2020.3.49f1, 20
 `--pack all`) with the Android player package of their own version (its `unity default resources`
 and Mono `Managed` set, fetched from Unity's installers): every serialized file loads back in
 UnityPy with the Android platform, every assembly the list names is present, APK and OBB verify.
-None has run in a player.
+Eight more (5.6.0f3, 2017.2.0f3, 2023.2.20f1, 6000.0.58f2, 6000.3.11f1, 6000.5.7f1, 6000.6.2f1,
+6000.6.3f1)
+go through shaders, settings and android-data the same way; all of them run in the emulated rig
+(compat/README.md, "Players run").
 
 ## 5. Native plugins
 
