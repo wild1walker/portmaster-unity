@@ -28,6 +28,8 @@ class Job:
             with open(self.state_path) as f:
                 self.state = json.load(f)
             self.state.setdefault('done', {}); self.state.setdefault('scaled', {})
+            if self.state.get('pending'):
+                self._finish_pending()
 
     @classmethod
     def reader(cls, src, cfg, log=None):
@@ -75,14 +77,35 @@ class Job:
     def write_file(self, rel, path):
         """Put a converted file written to <path> (on the same file system as <out>) in place, as
         write() does, without reading it into memory."""
+        self.commit([(rel, path)])
+
+    def commit(self, files):
+        """Puts several converted files [(rel, written path)] in place together: the journal lists
+        them first, so a job killed between two renames finishes them when it starts again (a
+        serialized file and its .resS must never be half old, half new)."""
         if self.state_path is None:
             raise RuntimeError('read-only job')
-        dst = os.path.join(self.out, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if self.inplace:
-            with open(path, 'rb+') as f:
-                os.fsync(f.fileno())
-        os.replace(path, dst)
+        moves = []
+        for rel, path in files:
+            dst = os.path.join(self.out, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if self.inplace:
+                with open(path, 'rb+') as f:
+                    os.fsync(f.fileno())
+            moves.append([path, dst])
+        if len(moves) > 1:
+            self.state['pending'] = moves
+            self.save_state()
+        for path, dst in moves:
+            os.replace(path, dst)
+        if self.state.pop('pending', None):
+            self.save_state()
+
+    def _finish_pending(self):
+        for path, dst in self.state.pop('pending', None) or ():
+            if os.path.exists(path):
+                os.replace(path, dst)
+        self.save_state()
 
     def work_dir(self, name):
         """An empty scratch folder for a step (<out>/.pmunity-work/<name>: a dot folder, which

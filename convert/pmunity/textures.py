@@ -43,6 +43,8 @@ DEFAULTS = {
     'pipeline': 'auto',          # decode the next texture while one is encoded: true | false | auto
                                  # (on, but on a system with under 2 GB of RAM a texture of more than
                                  # 16 MB decoded is decoded and encoded alone)
+    'strips': True,              # big single-level textures kept at their size: decoded and encoded
+                                 # a strip of rows at a time (the same blocks, far less memory)
     'spill_mb': 64,              # bundles with more than this (uncompressed) are unpacked to files
                                  # and rewritten from them (bigbundle.py): little memory, whatever
                                  # their size; 0 = always in memory
@@ -91,10 +93,13 @@ class Astc:
 
     def encode(self, img, block):
         """PIL RGBA image (top row first) -> ASTC blocks, bottom row first as Unity stores textures."""
-        import astc_encoder as A
         from PIL import Image
-        flipped = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-        src = A.ASTCImage(A.ASTCType.U8, flipped.width, flipped.height, 1, flipped.tobytes())
+        return self.encode_rows(img.transpose(Image.Transpose.FLIP_TOP_BOTTOM), block)
+
+    def encode_rows(self, img, block):
+        """PIL RGBA image whose rows are already in Unity's order (bottom first) -> ASTC blocks."""
+        import astc_encoder as A
+        src = A.ASTCImage(A.ASTCType.U8, img.width, img.height, 1, img.tobytes())
         return self._context(block).compress(src, A.ASTCSwizzle.from_str('RGBA'))
 
 
@@ -216,16 +221,30 @@ def fix_references(lf, sizes, stats):
 # ---------------------------------------------------------------- files
 
 class StreamFile:
-    """The new contents of a texture stream file (.resS): blobs, each 16-byte aligned."""
+    """The new contents of a texture stream file (.resS): blobs, each 16-byte aligned, in memory or
+    (path) written to that file as they come."""
 
-    def __init__(self):
-        self.data = bytearray()
+    def __init__(self, path=None):
+        self.path, self.size = path, 0
+        self.data = bytearray() if path is None else None
+        self._f = open(path, 'wb') if path else None
 
     def add(self, blob):
-        self.data += b'\0' * (-len(self.data) % 16)
-        off = len(self.data)
-        self.data += blob
+        pad = -self.size % 16
+        if self._f:
+            self._f.write(b'\0' * pad)
+            self._f.write(blob)
+        else:
+            self.data += b'\0' * pad
+            self.data += blob
+        off = self.size + pad
+        self.size = off + len(blob)
         return off
+
+    def close(self):
+        if self._f:
+            self._f.close()
+            self._f = None
 
 
 def _format_name(tree):
@@ -248,6 +267,44 @@ def texture_image(img, fmt_name):
     return img.convert('RGBA')
 
 
+STRIP_MIN_PX = 2048 * 2048      # single-level textures from this size up are converted in strips
+STRIP_PX = 1 << 21              # pixels per strip (8 MB of RGBA)
+
+
+def strip_blocks(o, t, raw, ch, enc, fmt_name):
+    """The ASTC blocks of a single-level texture kept at its size, decoded (UnityPy's decoder) and
+    encoded a strip of rows at a time, in the order Unity stores rows (bottom first) and both
+    formats store blocks. The blocks are the ones the whole image gives (every block is encoded on
+    its own), in a few MB instead of several copies of the whole image (an 8192x8192 atlas: 256 MB
+    each). None when the data cannot be cut in rows (crunched, console-swizzled, unexpected size)."""
+    from math import gcd
+    from UnityPy.enums import BuildTarget, TextureFormat as TF
+    from UnityPy.export import Texture2DConverter as C
+    fmt = TF(t['m_TextureFormat'])
+    platform = getattr(o, 'platform', BuildTarget.UnknownPlatform)
+    blob = t.get('m_PlatformBlob')
+    if 'Crunched' in fmt.name or platform == BuildTarget.XBOX360 or \
+            C.TextureSwizzler.is_switch_swizzled(platform, blob):
+        return None
+    w, h = t['m_Width'], t['m_Height']
+    bs = C.TEXTURE_FORMAT_BLOCK_SIZE_TABLE.get(fmt)
+    bh = bs[1] if bs else 1                          # the source's rows of blocks (or of pixels)
+    units = C.get_compressed_image_size(w, h, fmt)[1] // bh
+    if not units or len(raw) % units:
+        return None
+    per = len(raw) // units
+    step = bh * ch.block[1] // gcd(bh, ch.block[1])
+    rows = max(step, STRIP_PX // w // step * step)
+    out = []
+    for y in range(0, h, rows):
+        sh = min(rows, h - y)
+        part = raw[y // bh * per:-(-(y + sh) // bh) * per]
+        img = C.parse_image_data(part, w, sh, fmt, getattr(o, 'version', (0, 0, 0, 0)), platform, blob, flip=False)
+        out.append(enc.encode_rows(texture_image(img, fmt_name), ch.block))
+        del img
+    return b''.join(out)
+
+
 def mem_total_mb():
     """The system's RAM in MB (Linux; elsewhere: plenty)."""
     try:
@@ -266,9 +323,9 @@ def _prepare(o, ch, fmt_name=None):
     return mip_chain(downscale(img, ch.width, ch.height), ch.mips)
 
 
-def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
-    """Converts the textures of one opened file. Returns (stream name, new stream bytes or None,
-    {path id: sizes}) or None when nothing changed.
+def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None):
+    """Converts the textures of one opened file into stream (a StreamFile; default: in memory).
+    Returns (stream name, the StreamFile or None, {path id: sizes}) or None when nothing changed.
 
     Decoding and scaling a texture (one core each) run on a worker thread while the previous
     texture is encoded (ASTC on every core), one texture ahead at most. Everything else, and every
@@ -277,7 +334,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
     unity = getattr(lf.sf, 'unity_version', None)
     from concurrent.futures import ThreadPoolExecutor
     stream_name = None
-    stream = StreamFile()
+    stream = stream if stream is not None else StreamFile()
     sizes, save, converted = {}, [], 0
     items = [(pid, o, o.read_typetree()) for pid, o in lf.objects('Texture2D')]   # (no reads later)
     pool = ThreadPoolExecutor(max_workers=1) if c.get('pipeline', True) else None
@@ -285,28 +342,31 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
     pending = []
 
     def finish():
-        nonlocal converted
         while pending:
             pid, o, t, sd, streamed, ch, fut = pending.pop(0)
             levels = fut.result() if pool else _prepare(o, ch, _format_name(t))
             blob = b''.join(enc.encode(level, ch.block) for level in levels)
             nlevels = len(levels)
             del levels
-            old = (t['m_Width'], t['m_Height'])
-            if (ch.width, ch.height) != old:
-                sizes[pid] = (old[0], old[1], ch.width, ch.height)
-            stats['in'] += sd.get('size') or len(t.get('image data') or b'')
-            stats['out'] += len(blob)
-            t['m_TextureFormat'] = astc_format_id(ch.block, ch.alpha, unity)
-            t['m_Width'], t['m_Height'], t['m_MipCount'] = ch.width, ch.height, nlevels
-            t['m_CompleteImageSize'] = len(blob)
-            if streamed:
-                t['m_StreamData'] = dict(sd, offset=stream.add(blob), size=len(blob))
-                t['image data'] = b''
-            else:
-                t['image data'] = blob
-            save.append((o, t))
-            converted += 1
+            store(pid, o, t, sd, streamed, ch, blob, nlevels)
+
+    def store(pid, o, t, sd, streamed, ch, blob, nlevels):
+        nonlocal converted
+        old = (t['m_Width'], t['m_Height'])
+        if (ch.width, ch.height) != old:
+            sizes[pid] = (old[0], old[1], ch.width, ch.height)
+        stats['in'] += sd.get('size') or len(t.get('image data') or b'')
+        stats['out'] += len(blob)
+        t['m_TextureFormat'] = astc_format_id(ch.block, ch.alpha, unity)
+        t['m_Width'], t['m_Height'], t['m_MipCount'] = ch.width, ch.height, nlevels
+        t['m_CompleteImageSize'] = len(blob)
+        if streamed:
+            t['m_StreamData'] = dict(sd, offset=stream.add(blob), size=len(blob))
+            t['image data'] = b''
+        else:
+            t['image data'] = blob
+        save.append((o, t))
+        converted += 1
 
     try:
         for pid, o, t in items:
@@ -320,6 +380,15 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
             elif not c['inline'] or not t.get('image data'):
                 continue
             ch = choose(t, _format_name(t), c, sharp_rx)
+            if ch is not None and c['strips'] and ch.mips == 1 and t.get('m_MipCount', 1) == 1 and \
+                    (ch.width, ch.height) == (t['m_Width'], t['m_Height']) and ch.width * ch.height >= STRIP_MIN_PX:
+                finish()                                   # (the worker is idle while the file is read)
+                raw = read_stream(sd['path'], sd['offset'], sd['size']) if streamed else t['image data']
+                blob = strip_blocks(o, t, raw, ch, enc, _format_name(t))
+                del raw
+                if blob is not None:
+                    store(pid, o, t, sd, streamed, ch, blob, 1)
+                    continue
             if ch is None:
                 if streamed:                               # copied into the new stream file unchanged
                     finish()                               # (the worker is idle while the file is read)
@@ -356,7 +425,8 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log):
     save += fix_references(lf, sizes, stats)
     for o, t in save:
         o.save_typetree(t)
-    return stream_name, (bytes(stream.data) if stream_name else None), sizes
+    stream.close()
+    return stream_name, (stream if stream_name else None), sizes
 
 
 # classes besides Texture2D whose data can be in a .resS stream (StreamingInfo m_StreamData)
@@ -392,14 +462,16 @@ def run(job, only=None):
             continue
         src = job.path_in(rel)
         spilled = c['spill_mb'] and bigbundle.size(src) > c['spill_mb'] << 20
-        job.need_space(os.path.getsize(src) // 2 + (64 << 20) + (bigbundle.size(src) * 2 if spilled else 0),
+        beside = sum(os.path.getsize(p) for p in (src + '.resS', os.path.splitext(src)[0] + '.resS',
+                                                   os.path.splitext(src)[0] + '.resource') if os.path.isfile(p))
+        job.need_space(os.path.getsize(src) + beside + (64 << 20) + (bigbundle.size(src) * 2 if spilled else 0),
                        f'convert {rel}')
         before = (stats['in'], stats['out'])
         res_dir = os.path.dirname(os.path.join(job.src, rel))
         handles = {}
         b = sf_node = None
+        work = job.work_dir('textures')
         if spilled:
-            work = job.work_dir('textures')
             b = bigbundle.unpack(src, work)
             sfs = [n for n in b.nodes if not n.name.endswith(('.resS', '.resource'))] if b else []
             if len(sfs) == 1:
@@ -412,6 +484,8 @@ def run(job, only=None):
             lf = Loaded(sf_node.path, streams={n.name: n.path for n in b.nodes if n is not sf_node})
         else:
             lf = Loaded(src, res_dir)
+        # the new stream: written to a file as it is made, except for a bundle kept in memory
+        stream = StreamFile() if lf.is_bundle else StreamFile(os.path.join(work, 'stream.new'))
 
         def read_stream(path, off, size):
             name = os.path.basename(path)
@@ -430,51 +504,49 @@ def run(job, only=None):
             return handles[p].read(size)
 
         try:
-            r = convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, job.log)
+            r = convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, job.log, stream)
         finally:
             for h in handles.values():
                 h.close()
-        if r is not None and b:
-            # the bundle again from its node files: the serialized file and the stream rewritten
-            stream_name, stream_bytes, sizes = r
-            new = {sf_node.name: lf.save()}
-            if stream_bytes is not None:
-                new[os.path.basename(stream_name)] = stream_bytes
-            nodes = []
-            for n in b.nodes:
-                if n.name in new:
-                    p = n.path + '.new'
-                    with open(p, 'wb') as f:
-                        f.write(new.pop(n.name))
-                    n = n._replace(path=p)
-                nodes.append(n)
-            lf.close()
-            del new, stream_bytes
-            r = True                                       # (its bytes freed: only "changed" is left)
-            out = os.path.join(work, 'bundle.new')
-            bigbundle.pack(b, nodes, out)
-            job.write_file(rel, out)
-            if sizes:
-                job.state['scaled'][rel] = {str(k): list(v) for k, v in sizes.items()}
-        elif r is not None:
-            stream_name, stream_bytes, sizes = r
-            if lf.is_bundle:
-                if stream_bytes is not None:
-                    lf.set_bundle_res(os.path.basename(stream_name), stream_bytes)
+            stream.close()
+        if r is not None:
+            stream_name, new_stream, sizes = r
+            stream_node = os.path.basename(stream_name) if stream_name else None
+            if b:
+                # the bundle again from its node files: the serialized file and the stream rewritten
+                sf_new = sf_node.path + '.new'
+                with open(sf_new, 'wb') as f:
+                    f.write(lf.save())
+                nodes = [n._replace(path=sf_new) if n is sf_node else
+                         n._replace(path=new_stream.path) if new_stream and n.name == stream_node else n
+                         for n in b.nodes]
+                lf.close()
+                out = os.path.join(work, 'bundle.new')
+                bigbundle.pack(b, nodes, out)
+                job.write_file(rel, out)
+            elif lf.is_bundle:
+                if new_stream is not None:
+                    lf.set_bundle_res(stream_node, new_stream.data)
                 job.write(rel, lf.save())
             else:
-                if stream_bytes is not None:     # the stream first: a resumed run redoes the pair
-                    job.write(os.path.join(os.path.dirname(rel), os.path.basename(stream_name)), stream_bytes)
-                job.write(rel, lf.save())
+                sf_new = os.path.join(work, 'file.new')
+                with open(sf_new, 'wb') as f:
+                    f.write(lf.save())
+                lf.close()
+                pair = [(rel, sf_new)]
+                if new_stream is not None:
+                    pair.insert(0, (os.path.join(os.path.dirname(rel), stream_node), new_stream.path))
+                job.commit(pair)                   # the file and its stream together
             if sizes:
                 job.state['scaled'][rel] = {str(k): list(v) for k, v in sizes.items()}
+            r = True
         lf.close()
-        if spilled:
-            shutil.rmtree(work, ignore_errors=True)
-            try:
-                os.rmdir(os.path.dirname(work))
-            except OSError:
-                pass
+        stream = None
+        shutil.rmtree(work, ignore_errors=True)
+        try:
+            os.rmdir(os.path.dirname(work))
+        except OSError:
+            pass
         job.mark_done('textures', rel)
         if r is not None:
             job.log(f'textures: {rel}: {(stats["in"] - before[0]) >> 20} -> {(stats["out"] - before[1]) >> 20} MB ({i}/{len(files)})')

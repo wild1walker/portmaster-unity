@@ -64,5 +64,39 @@ class WindowsFormatsTest(unittest.TestCase):
         self.assertIsNone(T.choose(tree, 'BC6H', c, None))   # HDR: ASTC LDR cannot hold it
 
 
+class StripsTest(unittest.TestCase):
+    """strip_blocks: a strip of rows at a time gives the blocks of the whole image at once."""
+
+    def _same(self, fmt_name, fmt_id, w, h, nbytes, block=(4, 4)):
+        import random
+        from UnityPy.export import Texture2DConverter as C
+        raw = bytes(random.Random(w * h).getrandbits(8) for _ in range(nbytes))
+        t = {'m_TextureFormat': fmt_id, 'm_Width': w, 'm_Height': h}
+        ch = T.Choice(block, w, h, True, 1)
+        enc = T.Astc('fastest', 2)
+        whole = T.texture_image(C.parse_image_data(raw, w, h, fmt_id, (2021, 3, 0, 0), 0), fmt_name)
+        old_px = T.STRIP_PX
+        T.STRIP_PX = w * 8                           # strips of a few rows: many of them
+        try:
+            strips = T.strip_blocks(object(), t, raw, ch, enc, fmt_name)
+        finally:
+            T.STRIP_PX = old_px
+        self.assertEqual(strips, enc.encode(whole, block))
+
+    def test_rgba32(self):
+        self._same('RGBA32', 4, 37, 29, 37 * 29 * 4)
+
+    def test_dxt1_height_not_a_multiple_of_4(self):
+        self._same('DXT1', 10, 64, 50, (64 // 4) * (52 // 4) * 8)
+
+    def test_bc7_6x6_blocks(self):
+        self._same('BC7', 25, 48, 40, (48 // 4) * (40 // 4) * 16, block=(6, 6))
+
+    def test_unexpected_size_left_to_the_whole_image(self):
+        t = {'m_TextureFormat': 10, 'm_Width': 64, 'm_Height': 64}
+        self.assertIsNone(T.strip_blocks(object(), t, b'\0' * 1001, T.Choice((4, 4), 64, 64, False, 1),
+                                         T.Astc('fastest', 1), 'DXT1'))
+
+
 if __name__ == '__main__':
     unittest.main()

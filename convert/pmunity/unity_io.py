@@ -93,15 +93,18 @@ class Loaded:
             from UnityPy.streams import EndianBinaryReader
             for n, p in streams.items():
                 self.env.register_cab(n, EndianBinaryReader(p))
-        if resource_dir and os.path.realpath(resource_dir) != os.path.realpath(os.path.dirname(path)) \
-                and os.path.isdir(resource_dir):
-            from UnityPy.streams import EndianBinaryReader
-            base = os.path.basename(path)
-            stem = os.path.splitext(base)[0]
-            for n in os.listdir(resource_dir):
-                if n in (base + '.resS', stem + '.resource', stem + '.resS') and \
-                        not os.path.exists(os.path.join(os.path.dirname(path), n)):
-                    self.env.register_cab(n, EndianBinaryReader(os.path.join(resource_dir, n)))
+        # a plain file's streams (beside it, else in resource_dir) are read from their files where
+        # needed: UnityPy itself would read a whole .resS into memory at the first texture
+        base = os.path.basename(path)
+        stem = os.path.splitext(base)[0]
+        for n in (base + '.resS', stem + '.resource', stem + '.resS'):
+            if streams and n in streams:
+                continue
+            for d in (os.path.dirname(path), resource_dir):
+                if d and os.path.isfile(os.path.join(d, n)):
+                    from UnityPy.streams import EndianBinaryReader
+                    self.env.register_cab(n, EndianBinaryReader(os.path.join(d, n)))
+                    break
         f = self.env.file
         self.is_bundle = type(f).__name__ == 'BundleFile'
         if self.is_bundle:
