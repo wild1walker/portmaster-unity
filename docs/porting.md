@@ -41,6 +41,7 @@ reads the game and prints:
 | text input (InputField, TextMeshPro InputField, TouchScreenKeyboard, `Input.inputString`) | assemblies, scenes |
 | video (VideoPlayers, clips and their codecs; MovieTexture) | scenes, `.resource` headers |
 | native plugins, P/Invoke modules, services (Steamworks, GOG Galaxy, FMOD Studio, Wwise, ...) | `Plugins/`, assemblies |
+| file access: reads of StreamingAssets that reach System.IO (then `android_data.streaming_assets`), and of `dataPath`, `persistentDataPath`, the working directory | `asmpatch --survey`/`--list` (without asmpatch: assemblies that reference both the getter and System.IO, a hint) |
 | texture formats and sizes (main data) | the serialized files |
 | the routes that fit, the recommended one, and the port config values it suggests | all of the above |
 
@@ -127,7 +128,9 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
 | `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, else `off` | `auto`: tools/asmpatch runs on the game's assemblies (each patch changes only what it finds; the package then ships asmpatch); a list: only those patches |
-| `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them |
+| `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch) |
+| `android_data.data_path` | false | true: the reads of `Application.dataPath` that reach System.IO get `Game_Data/` beside the APK, with the data folder's own files (asmpatch's data-path patch; docs/android-data.md, section 6); the check notes such reads |
+| `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
 | `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`, `{setup}` = the setup folder), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
@@ -213,8 +216,10 @@ The rehearsal does not cover what only a handheld has. Check, with the release z
   part: ASTC encoding);
 - the game: the pad (the mapping from `get_controls`; `UA_PAD_NAME` for Rewired), pointer mode and
   `UA_KEYMAP` where the menus want a mouse or keys, sound (ALSA, else `ANDROID_SLES_OUTPUT=pipe`
-  when a sound server holds the card), video, saves (`ports/<name>/data/`), the exit hotkey, the
-  frame rate (`UA_FPS=5` in `log.txt`);
+  when a sound server holds the card), video, saves (`ports/<name>/data/`: `external/` is
+  `persistentDataPath`, `shared_prefs/` PlayerPrefs; they survive updates; moving them to and from
+  a PC: docs/android-data.md, "Saves", and `pmunity prefs`), the exit hotkey, the frame rate
+  (`UA_FPS=5` in `log.txt`);
 - the display path (`UA_DISPLAY`: Mali fbdev or SDL; `[display]` in `log.txt`).
 
 ## 8. By hand

@@ -20,7 +20,8 @@ Output (default ./android-out/):
     assets/AssetBundles/*, assets/Logo.png   StreamingAssets (jar:file://<root>!/assets);
                                              bundle clones whose first LZ4 block is re-encoded
                                              to the same length with the CAB platform set (a few
-                                             incompressible ones are rewritten)
+                                             incompressible ones are rewritten); any bundle there
+                                             likewise, an Addressables catalog's CRCs following them
   --beside files                             beside the root (default goggame-*.info: a GOG build's
                                              DLC checks read Application.dataPath + "/../goggame-<id>.info")
   plugins.map                                the native-plugin map for ua_host (plugins.py; also in zip/)
@@ -33,7 +34,9 @@ Re-running only redoes files whose source changed (state in <out>/.android_data_
   zip/ (--pack apk|obb|all)                  the same tree as archives for the stock Mount path:
                                              <name>.apk = assets/bin/Data/**, main.<code>.<pkg>.obb
                                              = the rest + assets/<build-id>; STORE, zip32, < 2 GiB each;
-                                             --loose-assets files (FMOD banks) in zip/assets/ instead
+                                             --loose-assets files (FMOD banks) in zip/assets/ instead;
+                                             --streaming-assets both|loose: StreamingAssets also/only in
+                                             zip/Game_Data/StreamingAssets/ (streaming.py)
 
 Game-specific additions are options: --managed-file (an assembly to ship instead of the data's
 copy, e.g. a port's helper), --assembly-patch (a command that writes a patched assembly from the
@@ -55,6 +58,7 @@ import sys
 import tempfile
 import time
 
+from . import streaming as ST
 from . import unity_version as UV
 from . import video
 
@@ -151,6 +155,15 @@ def _cstr(b, p):
 def lz4_decompress(comp, usize):
     import lz4.block
     return lz4.block.decompress(comp, uncompressed_size=usize)
+
+
+def lzma_decompress(comp, usize):
+    """A UnityFS LZMA block: 5 bytes of LZMA properties, then the raw stream."""
+    import lzma
+    d = comp[0]
+    lc, lp, pb = d % 9, (d // 9) % 5, d // 45
+    f = {'id': lzma.FILTER_LZMA1, 'dict_size': int.from_bytes(comp[1:5], 'little'), 'lc': lc, 'lp': lp, 'pb': pb}
+    return lzma.LZMADecompressor(lzma.FORMAT_RAW, filters=[f]).decompress(comp[5:], max_length=usize)
 
 
 def lz4_literal_pos(comp, target):
@@ -369,12 +382,16 @@ class Bundle:
                 f.seek(p)
                 ci = f.read(self.ci_size)
                 self.data_start = p + self.ci_size
+                if self.flags & 0x200:                      # (2022.3+: blocks start 16-aligned)
+                    self.data_start = (self.data_start + 15) & ~15
         comp = self.flags & 0x3f
         if comp == 0:
             ub = ci
         elif comp in (2, 3):
             ub = lz4_decompress(ci, self.ui_size)
-        else:                                               # LZMA blocks info: not used by these bundles
+        elif comp == 1:
+            ub = lzma_decompress(ci, self.ui_size)
+        else:
             raise ValueError(f'blocks info compression {comp}')
         self.hash = ub[:16]
         n, = struct.unpack_from('>i', ub, 16)
@@ -410,6 +427,8 @@ class Bundle:
             return raw, raw
         if c in (2, 3):
             return raw, lz4_decompress(raw, usz)
+        if c == 1:
+            return raw, lzma_decompress(raw, usz)
         raise ValueError(f'block compression {c} not handled')
 
     def read_plain(self, f, uoff, n):
@@ -452,6 +471,10 @@ def patch_bundle_platform(path, platform=ANDROID):
                 c = b.blocks[i][2] & 0x3f
                 if c == 0:
                     pos = rel
+                elif c == 1:                            # LZMA (BuildAssetBundleOptions.None): that block as LZ4HC
+                    rewrite_bundle_block(path, b, i, rel, new[k])
+                    done.append((name, cur, 'rewrite'))
+                    return done + patch_bundle_platform(path, platform)
                 else:
                     pos = lz4_literal_pos(raw, rel)
                     if pos is None:
@@ -504,6 +527,8 @@ def rewrite_bundle_block(path, b, i, rel, value):
             o.write(b'\0' * b.header_end)
             if not flags & 0x80:
                 o.write(ci)
+                if flags & 0x200:
+                    o.write(b'\0' * (-o.tell() % 16))
             for j, (usz, csz, bfl) in enumerate(b.blocks):
                 if j == i:
                     o.write(newraw)
@@ -830,6 +855,8 @@ def plan(args):
             items.append((os.path.join(data, n), p, 'link'))
         elif n in args.root_file:                           # read by the game from Application.dataPath/<n>
             items.append((os.path.join(args.name, n), p, 'link'))
+        elif getattr(args, 'data_path', False):            # --data-path: the data folder's own files
+            items.append((os.path.join(args.name, ST.FOLDER, n), p, 'link'))
         else:
             args.skipped.append(n)
     # realtime GI data (Enlighten: GI/level<n>/..), read by scene loads as in an Android build's Data
@@ -839,6 +866,8 @@ def plan(args):
         for f in sorted(fs):
             if not f.startswith('.'):
                 items.append((os.path.join(data, 'GI', os.path.relpath(os.path.join(r, f), gi)), os.path.join(r, f), 'link'))
+    if getattr(args, 'data_path', False):
+        items += ST.data_folder_items(src, os.path.join(args.name, ST.FOLDER))
     items.append((os.path.join(data, 'unity default resources'), os.path.join(pkg, 'Data', 'unity default resources'), 'link'))
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
     # the Android VideoPlayer's shader, made from the desktop one (video.py)
@@ -892,7 +921,9 @@ def plan(args):
                 continue
             s = os.path.join(r, n)
             rel = os.path.relpath(s, sa)
-            act = 'bundle' if rel.startswith('AssetBundles' + os.sep) and is_unityfs(s) else 'link'
+            # every asset bundle gets the Android platform (Addressables' aa/, a game's own folders);
+            # a catalog with bundle CRCs is rewritten after them (streaming.py)
+            act = 'bundle' if is_unityfs(s) else 'aacatalog' if ST.is_catalog(rel) and ST.catalog_has_crcs(s) else 'link'
             items.append((os.path.join(args.name, 'assets', rel), s, act))
     # files from the game's folder beside the root (GOG .info files: DLC detection)
     gd = os.path.dirname(src)
@@ -1118,6 +1149,15 @@ def main(argv=None):
     ap.add_argument('--loose-assets', action='append', default=None, metavar='GLOB',
                     help='StreamingAssets files kept beside the APK (assets/<path>) instead of in the OBB, for libraries '
                          'that open them with plain file I/O (default: *.bank when the game uses FMOD)')
+    ap.add_argument('--streaming-assets', choices=ST.MODES, default='obb',
+                    help=f"obb: StreamingAssets in the OBB (Unity's APIs read them there). both: also beside the APK as "
+                         f"{ST.SA_DIR}/, with asmpatch's streaming-assets patch (the game's System.IO reads get that "
+                         f"folder). loose: only beside the APK, with streaming-assets-all (every read gets the folder). "
+                         f"For code that reads StreamingAssets with System.IO (docs/android-data.md)")
+    ap.add_argument('--data-path', action='store_true',
+                    help=f"the game's reads of Application.dataPath that reach System.IO (on Android: the APK or OBB file) "
+                         f"get {ST.FOLDER}/ beside the APK (asmpatch data-path), with the data folder's own files (those "
+                         f"Unity does not read) in it")
     ap.add_argument('--beside', action='append', default=None, metavar='GLOB',
                     help="files of the game's folder (the parent of --src) put beside the APK root (default goggame-*.info)")
     ap.add_argument('--il2cpp', default=None, metavar='DIR',
@@ -1158,6 +1198,10 @@ def main(argv=None):
         if real_out.startswith(os.path.realpath(ro)):
             sys.exit(f'refusing to write inside {ro}')
     args.skipped, args.dropped_modules, args.inlined_ress = [], [], []
+    if args.streaming_assets != 'obb' and args.asmpatch:
+        args.asmpatch = ST.asmpatch_command(args.asmpatch, args.streaming_assets)
+    if args.data_path and args.asmpatch:
+        args.asmpatch += ' --with=data-path'
     try:
         check_source(args)
     except UV.Unsupported as ex:
@@ -1186,7 +1230,17 @@ def main(argv=None):
         except Exception:
             state = {}
     asmpatch_notes = run_asmpatch(args, log) if args.asmpatch else []
+    if args.data_path and not args.asmpatch:
+        log("WARNING: --data-path without --asmpatch: Game_Data/ is beside the APK, but the game's code still reads "
+            "Application.dataPath (asmpatch data-path)")
+    if args.streaming_assets != 'obb' and not args.asmpatch:
+        log(f'WARNING: --streaming-assets {args.streaming_assets} without --asmpatch: the files are beside the APK, '
+            f'but the game\'s code still reads the jar path (asmpatch {ST.PATCH[args.streaming_assets]})')
     items = plan(args)
+    crc = any(a == 'aacatalog' for _, _, a in items)       # bundle CRCs to follow (Addressables)
+    # source CRC -> patched CRC of every bundle placed: this run's and earlier runs' (a bundle left
+    # as it was, or moved here by an earlier --consume-src run, is not planned again)
+    crcs = {v[0]: v[1] for v in state.get('_crc', {}).values()}
     log(f'{len(items)} files planned from {args.src}')
     stats = {}
     report = {'bundles': {}, 'files': {}, 'notes': ['asmpatch: ' + n for n in asmpatch_notes]}
@@ -1200,6 +1254,9 @@ def main(argv=None):
             continue
         st = os.stat(src)
         key = [st.st_size, int(st.st_mtime_ns), act]
+        if act == 'aacatalog':
+            newstate[dst_rel] = key                     # (written after the bundles)
+            continue
         if state.get(dst_rel) == key and os.path.exists(dst):
             newstate[dst_rel] = key
             for kr in state.get('_kept', {}).get(dst_rel, ()):
@@ -1209,6 +1266,7 @@ def main(argv=None):
             stats['unchanged'] = stats.get('unchanged', 0) + 1
             continue
         mv = consumable(args, src, act)
+        crc0 = ST.bundle_crc(src) if crc and act == 'bundle' else None
         if act == 'link' or (act in ('sfpatch', 'bundle') and args.platform_patch == 'none'):
             how = move(src, dst) if mv else clone(src, dst, allow_hardlink=True)
         elif act == 'sfpatch':
@@ -1250,7 +1308,10 @@ def main(argv=None):
                 os.remove(src)
         elif act == 'bundle':
             how = move(src, dst) if mv else clone(src, dst, allow_hardlink=False)
-            res = patch_bundle_platform(dst)
+            try:
+                res = patch_bundle_platform(dst)
+            except ValueError as ex:                    # (e.g. LZMA blocks: rewritten as LZ4 by UnityPy)
+                res = ST.repack_bundle(dst, ANDROID, write_bytes, why=str(ex))
             report['bundles'][os.path.basename(dst)] = res
             if any(m == 'rewrite' for _, _, m in res):
                 log(f'  {dst_rel}: bundle rewritten (no same-size encoding of the patched block)')
@@ -1283,8 +1344,18 @@ def main(argv=None):
             raise ValueError(act)
         stats[how] = stats.get(how, 0) + 1
         newstate[dst_rel] = key
+        if crc0 is not None:
+            crcs[crc0] = ST.bundle_crc(dst)
+            newstate.setdefault('_crc', {})[dst_rel] = [crc0, crcs[crc0]]
         if (k + 1) % 100 == 0:
             log(f'  {k + 1}/{len(items)} ({time.time() - t0:.0f} s)')
+    # Addressables catalogs: the CRCs of the bundles as they are now
+    for dst_rel, src, act in items:
+        if act == 'aacatalog':
+            data, n = ST.catalog_crcs(open(src, 'rb').read(), crcs)
+            write_bytes(os.path.join(args.out, dst_rel), data)
+            report['files'][dst_rel] = f'Addressables catalog: {n} bundle CRCs updated'
+            log(f'  {dst_rel}: {n} bundle CRCs follow the patched bundles')
     # remove files from earlier runs that are no longer planned
     planned = {d for d, s, a in items} | kept
     for d in sorted(placed_before):
@@ -1296,6 +1367,9 @@ def main(argv=None):
             if os.path.lexists(p):
                 os.unlink(p)
                 log(f'removed stale {d}')
+    old_crc = {d: v for d, v in state.get('_crc', {}).items() if d in newstate and d not in newstate.get('_crc', {})}
+    if old_crc:
+        newstate.setdefault('_crc', {}).update(old_crc)
     json.dump(newstate, open(statep, 'w'), indent=0)
     log(f'placed: {stats}; skipped source files: {args.skipped}; engine modules not shipped: {args.dropped_modules}; '
         f'.resS moved into their serialized files: {len(args.inlined_ress)}')
@@ -1429,7 +1503,8 @@ def pack(args, log):
     obb_entries = [(a, p) for a, p in files if a.startswith('assets/') and not a.startswith('assets/bin/')]
     loose = [(a, p) for a, p in obb_entries if any(fnmatch.fnmatch(a[len('assets/'):], g) or
                                                    fnmatch.fnmatch(os.path.basename(a), g) for g in args.loose_assets)]
-    obb_entries = [e for e in obb_entries if e not in loose]
+    keep = ST.place(getattr(args, 'streaming_assets', 'obb'), obb_entries, zdir, clone, log)   # (both/loose: Game_Data/StreamingAssets)
+    obb_entries = [e for e in obb_entries if e not in loose and e in keep]
     beside = [(a, p) for a, p in files if not a.startswith('assets/')]   # read with plain file I/O (--root-file)
     marker = ('assets/' + bid, b'')
     res = {'build_id': bid, 'package': args.package, 'version_code': args.version_code}
@@ -1495,6 +1570,11 @@ def pack(args, log):
     # these files (runtime/host/plugins.c)
     for a, p in loose:
         clone(p, os.path.join(zdir, a), allow_hardlink=True)
+    if getattr(args, 'streaming_assets', 'obb') != 'obb':
+        res['streaming_assets'] = {'mode': args.streaming_assets, 'folder': ST.SA_DIR}
+    if getattr(args, 'data_path', False):
+        os.makedirs(os.path.join(zdir, ST.FOLDER), exist_ok=True)       # (written to like a desktop data folder)
+        res['data_path'] = ST.FOLDER
     if loose:
         res['loose_assets'] = [a for a, p in loose]
         log(f'pack: {len(loose)} StreamingAssets files beside the APK ({", ".join(args.loose_assets)})')

@@ -14,6 +14,7 @@ Android player on GLES handhelds.
     python -m pmunity port check|new|package ...              (a PortMaster port of a game: docs/porting.md)
     python -m pmunity apk <apk|xapk|apks|aab|obb...> <out>     (a game's own Android build, ready for ua_host)
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a]   (the game's assemblies compiled with IL2CPP; docs/il2cpp.md)
+    python -m pmunity prefs show|copy ...                      (PlayerPrefs between a PC's Unity player and the handheld)
 
 The data's Unity version is read from the data (unity_version.py); versions outside 2017.3 - 2022.3
 are refused unless --any-unity-version is given.
@@ -87,6 +88,9 @@ def main(argv=None):
     if argv[:1] == ['unpack']:
         from . import unpack
         return unpack.main(argv[1:])
+    if argv[:1] == ['prefs']:
+        from . import prefs
+        return prefs.main(argv[1:])
     if argv[:1] == ['apk']:
         from . import apk
         return apk.main(argv[1:])
