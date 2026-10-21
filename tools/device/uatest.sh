@@ -7,13 +7,14 @@
 #             ("[uatest] ..." and "exit <code>")
 #   mem.log   every 2 s: the system's free memory (MemAvailable), swap, the game's resident memory
 #   shot-<n>.ppm  a screenshot at each [screenshot seconds]
-# A memory watchdog stops the game (its own PID only) when MemAvailable falls below UA_MEM_MIN MB
-# (default 100): a game that runs out of memory can otherwise freeze a 1 GB handheld until it
-# reboots. UA_AUDIO=1 plays sound; other UA_* settings pass through to the runtime.
+# A memory watchdog stops the game (its own PID only) when MemAvailable falls below UA_MEM_MIN MB:
+# a game that runs out of memory can otherwise freeze a 1 GB handheld until it reboots. Default:
+# 100 MB, or 40 MB while at least 64 MB of swap are free (zram on most firmwares: the kernel moves
+# cold pages there, and a game runs with less available; Hollow Knight on the RG34XX-SP played on
+# at 58 MB with 95 MB in zram, where a 100 MB line stopped it). UA_AUDIO=1 plays sound; other UA_* settings pass through to the runtime.
 R=$1; SECS=${2:-60}; shift 2
 cd "$R" || exit 1
 rm -f shot-*.ppm shot.req mem.log
-MIN=${UA_MEM_MIN:-100}
 export UA_FPS=${UA_FPS:-5}
 if [ "$UA_AUDIO" = 1 ]; then export SDL_AUDIODRIVER=alsa AUDIODEV=${AUDIODEV:-plughw:0,0}; else export SDL_AUDIODRIVER=dummy; fi
 # the pad's SDL GameController mapping: PortMaster's database for this firmware, when there is one
@@ -32,6 +33,7 @@ t=0; low=
 while kill -0 $pid 2>/dev/null && [ $t -lt "$SECS" ]; do
   for s in "$@"; do [ "$s" = $t ] && touch shot.req; done
   a=$(mem MemAvailable)
+  MIN=${UA_MEM_MIN:-$([ "$(mem SwapFree)" -ge 64 ] && echo 40 || echo 100)}
   if [ $((t % 2)) = 0 ]; then
     echo "t=$t avail=${a}M swapfree=$(mem SwapFree)M rss=$(mem VmRSS /proc/$pid/status)M load=$(cut -d' ' -f1 /proc/loadavg)" >> mem.log
   fi
