@@ -18,7 +18,7 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 
 | game | Unity, build | route | emulated rig | handheld | notes (last checked) |
 |---|---|---|---|---|---|
-| Cuphead + The Delicious Last Course (GOG, macOS) | 2017.4.9f1, Mono .NET 3.5 | 32-bit | title, levels | **whole game**: setup from GOG's installers, title 59.6 fps, eight boss fights 59.0 - 59.5 fps | its own port (portmaster-cuphead); a 64-bit route is in progress (2026-10-21) |
+| Cuphead + The Delicious Last Course (GOG, macOS) | 2017.4.9f1, Mono .NET 3.5 | 32-bit | title, levels; the title screen at PortMaster's test sizes: 480x320 (3:2, the port's side crop), 640x480 and 720x720 (letterboxed), 1280x720 | **whole game**: setup from GOG's installers, title 59.6 fps, eight boss fights 59.0 - 59.5 fps | its own port (portmaster-cuphead); a 64-bit route is in progress (2026-10-21) |
 | Hollow Knight (GOG, Linux) | 6000.0.61f1, Mono .NET 4.x | 32-bit | first launch to gameplay: language, menus, calibration, both opening cinematics, King's Pass | title at ~30 fps (the 2021.1+ Android default; `UA_FRAME_RATE` is meant to fix it, not measured yet); stopped by the memory watchdog at the opening sequence (Mali 292 MB + 439 MB anonymous at the title) | needs less memory (the audio step, maybe smaller textures); Switch controls via `UA_PAD_NAME` (2026-10-21) |
 
 ## Linux builds, one per Unity line (32-bit route)
