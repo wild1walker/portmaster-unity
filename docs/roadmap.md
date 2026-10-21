@@ -33,7 +33,10 @@ are 32-bit ARM in every version.
 3. **Converter coverage**: shader program blob layouts per version, GraphicsSettings and
    MonoManager per version (the engine-module slot count), compressed builds (`data.unity3d`),
    bundles of all versions, Addressables; DXBC shaders (Windows builds).
-4. **IL2CPP pipeline** for Mono desktop games on 64-bit ARM.
+4. **IL2CPP pipeline** for Mono desktop games on 64-bit ARM: `pmunity il2cpp` (docs/il2cpp.md) compiles a
+   Mono game with the exact version's il2cpp and NDK parts on the porter's PC/Mac; 2018.4, 2019.4 and
+   2020.3 games reach their titles on the arm64-v8a IL2CPP player in the emulated rig. Left: 2017.4,
+   2021.x/2022.x (NDK r21d/r23b), .NET 3.5 games, plugins, a port template for the route, a handheld run.
 5. **Test corpus**: games across versions and build types, each with a deterministic smoke test
    (load to the first scene, screenshot) in the emulated rig (`tools/emu`) and on a handheld.
 6. **box64 route** for the games above ([box64-route.md](box64-route.md)): `pmunity route`,
