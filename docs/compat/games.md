@@ -100,7 +100,7 @@ The shaders left out everywhere are BlitToDepth_MSAA and the VR blit.
 | game | Unity | emulated rig | notes (last checked) |
 |---|---|---|---|
 | [MineRalph](https://chopchopgames.itch.io/mineralph) | 2018.3.2f1 | title menu | `streaming_assets = "both"` (2026-10-21) |
-| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher screen | the Play click did not advance in 480 s (2026-10-21) |
+| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it | a pointer click or touch on the launcher's Play does not: Rewired's UI module receives the touch but no click lands on the button (not looked into further) (2026-10-21) |
 
 ## box64 route (x86-64 Linux players)
 
