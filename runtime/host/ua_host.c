@@ -34,6 +34,10 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
+#if defined(__arm__)
+#include <sys/personality.h>
+#endif
 
 static char libdir[512];
 
@@ -299,9 +303,28 @@ static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
 static void on_signal(int s) { (void)s; quitting = 1; }
 
+#if defined(__arm__)
+// A 32-bit player on a 64-bit ARM kernel runs with the PER_LINUX32 personality, as Android's 32-bit
+// app processes do: /proc/cpuinfo then shows the 32-bit view (neon, vfpv3, ...) and uname "armv8l".
+// Without it the kernel prints the AArch64 format, and Unity 2019.4+'s CPU detection takes the
+// player for ARM64; its FMOD then crashes registering its audio output. UA_LINUX32=0: leave it.
+static void linux32_personality(void)
+{
+    struct utsname u;
+    const char *e = getenv("UA_LINUX32");
+    if ((e && !strcmp(e, "0")) || uname(&u) != 0 || strcmp(u.machine, "aarch64") != 0) return;
+    int p = personality(0xffffffff);
+    if (p != -1 && (p & PER_MASK) != PER_LINUX32 && personality((p & ~PER_MASK) | PER_LINUX32) != -1)
+        fprintf(stderr, "[host] 64-bit kernel: PER_LINUX32 personality (32-bit /proc/cpuinfo, as on Android)\n");
+}
+#endif
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
+#if defined(__arm__)
+    linux32_personality();
+#endif
     // Mono's Boehm collector starts with a 64 MB heap instead of growing from ~15 MB: in a fight it
     // collects about half as often (each collection is a 140-280 ms frame on the handheld) for ~7 MB
     // more resident memory. GC_INITIAL_HEAP_SIZE set by the caller wins (UA_GC_HEAP=0: Boehm's default).
