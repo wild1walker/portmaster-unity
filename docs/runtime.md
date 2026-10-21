@@ -82,6 +82,7 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | `UA_KEYMAP=<button>:<key>,...` | pad buttons (and `up/down/left/right`, the d-pad) that press keyboard keys instead, e.g. `start:escape,x:space` |
 | `UA_FPS` | frame stats every N s (avg/p99/worst, late >25 ms, hitch >50 ms, GC); `[hitch]` lines >100 ms |
 | `touch <root>/shot.req` | screenshot of the next frame -> `<root>/shot-<n>.ppm` |
+| `<root>/input.req` | live input: presses in `UA_INPUT_SCRIPT`'s syntax, times counted from when it is read (every 0.25 s; then deleted). Write it elsewhere and `mv` it into place. With `shot.req`, a test drives a game by what its screenshots show: `echo "0:b~2 6:down" > x && mv x <root>/input.req` |
 | `UA_MONO_OPTIONS` | Mono options; `--trace=T:Class,M:Class:Method` (no `<` in specs) |
 | `UA_MONO_TRACE` | log Mono class/method/field lookups that fail |
 | `FJ_TRACE` | log every JNI call |
