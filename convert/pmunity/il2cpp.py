@@ -862,6 +862,11 @@ def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg, profi
          '--platform=Android', f'--architecture={arch}', '--configuration=Release',
          f'--outputpath={so}', f'--cachedirectory={cache}', f'--generatedcppdir={cpp}',
          f'--directory={managed}', f'--tool-chain-path={ndk}', '--verbose']
+    if version.line < (2018, 1):
+        # 2017.x links with a map file and then runs MapFileParser on it for Data/SymbolMap-<arch>
+        # (which libil2cpp's managed stack traces can do without: it falls back to the method
+        # pointer table); with no --map-file-parser il2cpp builds one with the host's GCC
+        a.append('--map-file-parser=/bin/true')
     if settings.get('gcIncremental') and version.line >= (2019, 1):
         a.append(f'--incremental-g-c-time-slice={settings.get("gcTimeSlice", 3)}')
     baselib = os.path.join(pkg, 'Variations', 'il2cpp', 'Release', 'StaticLibs', abi)
@@ -927,7 +932,7 @@ def has_option(tool, field):
         return b'\0' + field.encode() + b'\0' in f.read()
 
 
-def link_args(version, abi, staged, linked, roots):
+def link_args(version, abi, staged, linked, roots, profile='unityaot'):
     """UnityLinker as an Android IL2CPP build with Managed Stripping Level "Low" runs it: the
     "Conservative" rules (the class libraries are linked with Unity's own descriptors; every root
     assembly is kept whole, MonoBehaviours, [Preserve] and [RequiredByNativeCode] members too).
@@ -935,7 +940,7 @@ def link_args(version, abi, staged, linked, roots):
     UnityEngine modules): a desktop build carries no record of the types its scenes use (the
     editor's TypesInScenes / editor data), so nothing the data might name is stripped."""
     a = [f'--out={linked}', f'--search-directory={staged}', f'--include-directory={staged}',
-         '--dotnetruntime=il2cpp', '--dotnetprofile=unityaot', '--use-editor-options',
+         '--dotnetruntime=il2cpp', f'--dotnetprofile={profile}', '--use-editor-options',
          '--rule-set=Conservative', '--platform=Android', f'--architecture={ABIS[abi][0]}']
     a += [f'--include-unity-root-assembly={os.path.join(staged, n)}' for n in sorted(roots)]
     return a
@@ -1050,7 +1055,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     roots = [n for n, src in chosen.items() if not src.startswith(os.path.join(tc['editor'], bcl) + os.sep)]
     linker = deploy_tool(tc['editor'], 'UnityLinker')
     if has_option(linker, 'IncludeUnityRootAssembly'):
-        largs = link_args(version, abi, staged, linked, roots)
+        largs = link_args(version, abi, staged, linked, roots, profile)
     else:                                       # 2017.x: the older UnityLinker
         engine = [n for n in roots if is_engine(n)]
         os.makedirs(work, exist_ok=True)

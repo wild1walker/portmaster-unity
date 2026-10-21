@@ -199,6 +199,17 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(a[6:], ['--include-assembly=/s/A.dll', '--include-assembly=/s/B.dll'])
         self.assertEqual(I.link_args_2017(2, '/s', '/l', [], '/d')[0], '--api=NET_2_0')
         self.assertEqual(I.link_args_2017(4, '/s', '/l', [], '/d')[0], '--api=NET_4_6')
+        self.assertIn('--include-link-xml=/k.xml', I.link_args_2017(2, '/s', '/l', [], '/d', keep_xml='/k.xml'))
+
+    def test_engine_keep_xml(self):
+        """the engine assemblies: kept whole, linked (so the linker's stubs are written into them)"""
+        import xml.etree.ElementTree as ET
+        with tempfile.TemporaryDirectory() as t:
+            p = I.engine_keep_xml(['UnityEngine.dll', 'UnityEngine.CoreModule.dll'], os.path.join(t, 'k.xml'))
+            root = ET.parse(p).getroot()
+            self.assertEqual(root.tag, 'linker')
+            self.assertEqual([(a.get('fullname'), a.get('preserve')) for a in root],
+                             [('UnityEngine.CoreModule', 'all'), ('UnityEngine', 'all')])
 
     def test_linker_descriptors(self):
         with tempfile.TemporaryDirectory() as t:
@@ -219,6 +230,9 @@ class ProfileTest(unittest.TestCase):
         a = I.il2cpp_args(UV.Version('2017.4.40f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p', 'legacyunity')
         self.assertIn('--dotnetprofile=legacyunity', a)
         self.assertNotIn('--dotnetprofile=unityaot', a)
+        self.assertIn('--map-file-parser=/bin/true', a)
+        a = I.il2cpp_args(UV.Version('2018.4.36f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p')
+        self.assertFalse(any(x.startswith('--map-file-parser') for x in a))
 
 
 class SpansTest(unittest.TestCase):
@@ -294,6 +308,9 @@ class StagingTest(unittest.TestCase):
     def test_link_args(self):
         a = I.link_args(UV.Version('2019.4.8f1'), 'arm64-v8a', '/s', '/l', ['B.dll', 'A.dll'])
         self.assertIn('--rule-set=Conservative', a)
+        self.assertIn('--dotnetprofile=unityaot', a)
+        self.assertIn('--dotnetprofile=legacyunity',
+                      I.link_args(UV.Version('2018.4.36f1'), 'arm64-v8a', '/s', '/l', [], 'legacyunity'))
         self.assertEqual([x for x in a if x.startswith('--include-unity-root-assembly')],
                          ['--include-unity-root-assembly=/s/A.dll', '--include-unity-root-assembly=/s/B.dll'])
 
