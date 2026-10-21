@@ -303,6 +303,30 @@ class JobSlotsTest(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), 'ran')
 
 
+class CaTest(unittest.TestCase):
+    def test_bundle_found(self):
+        import ssl
+        real = ssl.get_default_verify_paths
+        with tempfile.TemporaryDirectory() as d:
+            certs = os.path.join(d, 'certs')
+            os.makedirs(certs)
+            bundle = os.path.join(certs, 'ca-certificates.crt')
+            with open(bundle, 'w') as f:
+                f.write('')
+            P = type('P', (), {'cafile': os.path.join(d, 'cert.pem'), 'capath': certs})
+            ssl.get_default_verify_paths = lambda: P
+            files = D.CA_FILES
+            try:
+                D.CA_FILES = (os.path.join(d, 'none.crt'), bundle)
+                self.assertEqual(D.ca_file(), bundle)              # (a folder with only a bundle is no CA folder)
+                with open(os.path.join(certs, '5ad8a5d6.0'), 'w') as f:
+                    f.write('')
+                self.assertIsNone(D.ca_file())                     # hashed names: OpenSSL's own lookup works
+            finally:
+                ssl.get_default_verify_paths = real
+                D.CA_FILES = files
+
+
 class JobsTest(unittest.TestCase):
     def test_auto(self):
         mb = lambda total, avail: {'MemTotal': total, 'MemAvailable': avail}

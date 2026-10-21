@@ -183,7 +183,7 @@ finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` 
   function of a file until the end, although at `-Os` it outlines nothing; without it the objects
   are byte-identical and `Il2CppAttributes.cpp`'s compiler peak (14.7 MB, 15,000 functions)
   falls from 725 MB to 270-320 MB (at 450 MB it was killed with the outliner, and compiled
-  without it). The largest compile is then `Il2CppTypeDefinitions.cpp`, 334 MB.
+  without it). The largest compile is then `Il2CppTypeDefinitions.cpp`, 330-370 MB.
   A compiler killed by the OOM killer is noted in `.work/killed.log`; with more than one job the
   build then goes on once with one job at a time.
 - **Progress**: a line every 30 seconds (PortMaster's patcher shows the setup's output): MB of C++
@@ -205,21 +205,26 @@ while compiling, the build went on with the objects it had.
 |---|---|---|---|---|---|
 | fetch the tools (100 MB; 68 MB without .NET) | 2.5 min | - | 170 MB | 3-6 min (Wi-Fi, xz) | 1-2 min |
 | UnityLinker (Mono) | 0.1-0.4 min | 0.1 min | 300 MB | 2-3 min | < 1 min |
-| conversion to C++, il2cpp.exe on .NET 8 (default) | 4-6.5 min | 0.4 min | 469-488 MB | 8-12 min | 1-2 min |
-| (the same on Mono) | 9.5-13.6 min | 2.6 min | 535 MB | 45-55 min | 6-7 min |
-| compile 677 files, link, strip (3 jobs) | 42.5 min | 12.5 min (8.5 in the compilers) | 430 MB; largest compile 334 MB; lld 412 MB resident, much of it its mapped inputs | 1.7-2.5 h with 2 jobs (3.5-4.5 h with 1) | 6-10 min with 8 jobs |
-| all | about 1 h | 13 min | 607-731 MB in the container's cgroup (with its page cache) | **2-3 hours** | **10-15 minutes** |
+| conversion to C++, il2cpp.exe on .NET 8 (the default) | 4.1-6.5 min | 0.4-0.5 min | 468-488 MB | 8-12 min | 1-2 min |
+| (the same on Mono) | 9.5-13.6 min | 2.6 min | 535 MB | 40-55 min | 6-7 min |
+| compile 677 files, link, strip (3 jobs) | 26.4 min | 7.0 min (6.0 in the compilers; 12.5 with il2cpp.exe on Mono on a busier machine) | 422 MB; largest compile 372 MB (`Il2CppTypeDefinitions.cpp`), lld 412 MB resident with its mapped inputs | 1-1.3 h with 2 jobs, 2-2.5 h with 1 | 3-6 min with 8 jobs |
+| all | 32 min | 7.6 min | 821 MB in the container's cgroup, with its page cache; OOM events: none | **1.5 h (2 jobs) - 2.5 h (1 job)** | **5-10 min** |
 
 The estimates scale the CPU times: a 1.5 GHz Cortex-A53 core does about 1/15 - 1/20 of an M3
 core's work at compiling (single-core Geekbench 6: ~160-200 against ~3,000), a Snapdragon 865's
 Cortex-A77 cores about 1/2.4 (its four A55 cores add little). The job count is what
-`MemAvailable` allows: two on a 1 GB handheld with EmulationStation running (600-700 MB
-available), one below 650 MB, more with 2 GB and up. A source file over 4 MB compiles alone; the
-largest ones take 6-11 s of CPU here, 2-4 minutes on an A53.
+`MemAvailable` allows: two from 650 MB available (a 1 GB handheld with little else running),
+one below that, more with 2 GB and up. A source file over 4 MB compiles alone; the
+largest ones take 3-11 s of CPU here, 1-4 minutes on an A53. The library is the PC route's in
+size (30,633,664 bytes), exports (all 194 `il2cpp_*` the player looks up) and metadata (identical
+`Data/Managed`); its bytes differ in place (same section sizes, as from objects linked in another
+order: il2cpp names its cached objects by hashes of their compile commands, which hold the
+output folder), while Debian's and Ubuntu's clang 14.0.6 make the same objects but for their name
+in the producer string.
 
 Disk: the tools 330 MB (255 MB without .NET), Unity's parts for 2018.4 arm64 about 150 MB, the
-build files up to 650 MB (C++ 300 MB, objects 186 MB, the unstripped library and its symbols
-until the end): about 1.1 GB at the peak, then `lib/arm64-v8a/libil2cpp.so` (30 MB) and
+build files up to 650 MB (C++ 300 MB, objects 186 MB, the unstripped library (64 MB) and its
+symbols (36 MB) until the end): about 1.1 GB at the peak, then `lib/arm64-v8a/libil2cpp.so` (30 MB) and
 `Data/Managed` (5 MB) once `<home>` and `<out>/.work` are removed. The tools also run from an
 exFAT or FAT32 card (tested with loop-mounted images: fetch, compile, lld, strip, Mono, .NET).
 
@@ -233,8 +238,8 @@ The kernel's OOM killer stops the process with the most memory:
   "... failed (exit -9) (killed: out of memory?)". The conversion starts over when run again.
 
 Running the setup again continues where it stopped, so a build that ran out of memory once
-because something else was using it usually gets through the second time. It needs about 550 MB
-available for the conversion (700 MB for a 2020.x game) and 350 MB for the largest compile: on a
+because something else was using it usually gets through the second time. It needs about 500 MB
+available for the conversion (700 MB for a 2020.x game) and 380 MB for the largest compile: on a
 1 GB handheld, quit what can be quit; zram swap (which some firmwares have) helps. Below that
 the same step fails each time; the way out is swap on the card (`mkswap` / `swapon` need root,
 which this tool never asks for) or the PC route.
@@ -243,7 +248,7 @@ which this tool never asks for) or the PC route.
 
 ```
 pm il2cpp fetch "$VERSION" --on-device --home "$W/il2cpp-home"     # with Wi-Fi: about 155 MB
-pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # 2 - 3 hours on an A53 handheld
+pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # 1.5 - 2.5 hours on an A53 handheld
 pm android-data --src ... --pkg "$W/il2cpp-home/$VERSION/player-arm64-v8a" --il2cpp "$W/il2cpp" ...
 rm -rf "$W/il2cpp-home" "$W/il2cpp/.work"                          # the tools and build files, ~1 GB
 ```

@@ -200,11 +200,22 @@ CA_FILES = ('/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.
             '/etc/ssl/ca-bundle.pem', '/etc/pki/tls/cacert.pem', '/etc/ssl/certs/ca-bundle.crt')
 
 
-def ca_file():
-    """A CA bundle for HTTPS when Python's own default locations hold none (the setup's Python
-    looks in /etc/ssl; firmwares keep theirs in different places), else None."""
+def _default_ca():
+    """Whether OpenSSL's default locations hold certificates: the CA file, or hashed names
+    (<8 hex digits>.<n>) in the CA folder (a folder holding only a bundle does not count)."""
     p = ssl.get_default_verify_paths()
-    if (p.cafile and os.path.isfile(p.cafile)) or (p.capath and os.path.isdir(p.capath) and os.listdir(p.capath)):
+    if p.cafile and os.path.isfile(p.cafile):
+        return True
+    try:
+        return any(re.match(r'^[0-9a-f]{8}\.\d+$', n) for n in os.listdir(p.capath)) if p.capath else False
+    except OSError:
+        return False
+
+
+def ca_file():
+    """A CA bundle for HTTPS when OpenSSL's default locations hold none (the setup's Python looks
+    in /etc/ssl; firmwares keep theirs in different places), else None."""
+    if _default_ca():
         return None
     return next((f for f in CA_FILES if os.path.isfile(f)), None)
 
@@ -217,8 +228,7 @@ def install_ca():
         urllib.request.install_opener(urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=f))))
         return True
-    p = ssl.get_default_verify_paths()
-    return bool((p.cafile and os.path.isfile(p.cafile)) or (p.capath and os.path.isdir(p.capath) and os.listdir(p.capath)))
+    return _default_ca()
 
 
 _unverified = []
