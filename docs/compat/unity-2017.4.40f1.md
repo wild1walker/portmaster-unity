@@ -31,7 +31,16 @@ Analysed: Release players of both backends, `classes.jar`, `unity default resour
 - Java side: same classes and startup as 2017.4.9 (`ReflectionHelper.endUnityLaunch` added).
 
 ## Data
-- `unity default resources`: SerializedFile format 17, version string "2017.4.3f1", platform 13.
+- The player opens the game's serialized files (no type trees) only when they name 2017.4.40f1:
+  2017.4.9f1 data stops at "Invalid serialized file version" and "Unable to initialize the Unity
+  Engine". Of the classes a player reads, two changed layout from 2017.4.9 (UnityPy's type tree
+  package): PlayerSettings (`iosAppInBackgroundBehavior`, int, gone; `iosUseCustomAppBackgroundBehavior`,
+  bool, after `displayResolutionDialog`) and TilemapRenderer (`m_ChunkCullingBounds` added).
+  `android-data` retargets such data (android-data.md, "Versions"): Cuphead's 2017.4.9f1 data reaches
+  its title screen on this Mono armeabi-v7a player in the emulated rig (161 files retargeted, 10 of
+  them with their object data moved by 16 bytes; PlayerSettings converted).
+- `unity default resources`: SerializedFile format 17, version string "2017.4.3f1", platform 13
+  (the player's own built-in file: not checked against the player's version).
 - Shader programs: serializer 201708220 (already in `blob.py` LAYOUTS); GLES2/GLES3 entries parse
   and write back unchanged.
 - MonoManager: `GetAvailableDllAssemblyMask` is the same code: slots 0..46 are engine modules,

@@ -146,8 +146,19 @@ built-ins and six free Linux games (one per line):
   comes from its `player.json` (`pmunity player fetch`), its `ivy.xml` (5.x - 2018.x), the version
   string in its libunity, or, failing that, from its "unity default resources"
   (which gives only the line: the file is often from an earlier patch). Data and player of
-  different lines are refused (main data has no type trees: the player reads its own layouts);
-  another patch of the same line is a warning. The report has both, and the Mono runtime the game
+  different lines are refused (main data has no type trees: the player reads its own layouts).
+  Another patch release of the same line is **retargeted** (`--data-version player`, the default;
+  `retarget.py`): the player opens a data file only when it names the player's own version (2017.4.40f1
+  with 2017.4.9f1 data: "Invalid serialized file version ... Expected version: 2017.4.40f1. Actual
+  version: 2017.4.9f1", then "Unable to initialize the Unity Engine"), so every plain serialized file
+  gets the player's version in its metadata (in place, or with the object data moved by 16 bytes when
+  the space before it is too small; the objects' bytes do not change), and objects of the classes
+  whose layout differs between the two releases (UnityPy's type tree package, AssetRipper's dumps of
+  every release) are converted field by field (2017.4.9 -> 2017.4.40: PlayerSettings, whose
+  `iosAppInBackgroundBehavior` int became `iosUseCustomAppBackgroundBehavior`, a bool, in another
+  place). Bundles carry type trees and load in other releases as they are. A player package whose
+  exact version is unknown (only its "unity default resources" tells the line) is not retargeted
+  to. The report has both versions, and the Mono runtime the game
   needs: `.NET 3.5 (libmono)` (a `Mono/` folder, 2017.x - 2018.x) or `.NET 4.x (libmonobdwgc-2.0)`
   (`MonoBleedingEdge/`, and every 2019.1+ game).
 - **SerializedFile headers.** Formats 17 (5.6 - 2018.x), 21 (2019.x), 22 (2020.1 - 6000.4, a

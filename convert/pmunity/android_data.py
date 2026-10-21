@@ -59,6 +59,7 @@ import sys
 import tempfile
 import time
 
+from . import retarget
 from . import streaming as ST
 from . import typetrees
 from .unity_io import _trim
@@ -707,9 +708,10 @@ def inline_bundle(src, dst):
     return done, dropped
 
 
-def inline_serialized(src, dst):
-    """Serialized file with a <name>.resS beside it: textures inlined, target platform Android.
-    Returns (textures inlined, names of .resS files still read by other objects)."""
+def inline_serialized(src, dst, args=None):
+    """Serialized file with a <name>.resS beside it: textures inlined, target platform Android
+    (and retargeted to the player's version, args.retarget). Returns (textures inlined, names of
+    .resS files still read by other objects)."""
     import UnityPy
     env = UnityPy.load(src)
     sf = env.file
@@ -724,6 +726,7 @@ def inline_serialized(src, dst):
     # textures needed several times that: the inlined objects, then the whole file twice)
     plan, still = _inline_plan(sf.objects.values())
     sf._m_target_platform = ANDROID
+    _retarget(sf, args)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if _inline_streamed(sf, plan, read_stream, dst + '.tmp'):
         os.replace(dst + '.tmp', dst)
@@ -731,6 +734,17 @@ def inline_serialized(src, dst):
     done, still = inline_texture_streams(sf.objects.values(), read_stream)
     write_bytes(dst, sf.save())
     return done, still
+
+
+def _retarget(sf, args):
+    """A UnityPy SerializedFile about to be saved, for the player of another release of the line
+    (args.retarget): objects of changed layouts converted, the player's version (retarget.py)."""
+    if args is None or not getattr(args, 'retarget', None) or sf._enable_type_tree:
+        return []
+    notes = retarget.migrate(sf, sf.unity_version, args.retarget)
+    notes.append(f'version {sf.unity_version} -> {args.retarget}')
+    sf.unity_version = args.retarget
+    return notes
 
 
 # --------------------------------------------------------------------------- globalgamemanagers
@@ -854,6 +868,7 @@ def edit_globalgamemanagers(src, managed_names, args, log):
     old = sf._m_target_platform
     sf._m_target_platform = ANDROID
     notes.append(f'target platform {old} -> {ANDROID}')
+    notes += _retarget(sf, args)
     data = sf.save()
     log('globalgamemanagers: ' + '; '.join(notes))
     return data, notes
@@ -1207,6 +1222,7 @@ def check_source(args):
     the Mono player."""
     src = args.src
     args.warnings = []
+    args.retarget = None                # the player's version, when the data is retargeted to it
     if not os.path.isfile(os.path.join(src, 'globalgamemanagers')) and os.path.isfile(os.path.join(src, 'data.unity3d')):
         raise UV.Unsupported(f'{src}: a compressed build (data.unity3d): unpack it first with '
                              f'`python -m pmunity unpack {src}`')
@@ -1226,8 +1242,17 @@ def check_source(args):
                                  f'(serialized data has no type trees: the player must read the same layouts)')
         if getattr(args.player_unity, 'exact', True) and \
                 (args.player_unity.patch, args.player_unity.build) != (args.unity.patch, args.unity.build):
-            args.warnings.append(f'data of Unity {args.unity}, Android player {args.player_unity}: same line, other patch '
-                                 f'(layouts rarely change within a line; the same version is safest)')
+            if getattr(args, 'data_version', 'player') == 'player' and args.player_unity.line == args.unity.line:
+                # the player opens data files only when they name its version (retarget.py)
+                args.retarget = str(args.player_unity)
+                ch = [n for c, n in retarget.changed_classes(str(args.unity), args.retarget).items()
+                      if not 1000 <= c < 100000]                # (1000+: editor-only classes)
+                args.warnings.append(f'data of Unity {args.unity}, Android player {args.player_unity}: the data\'s serialized '
+                                     f'files are retargeted to {args.retarget} (classes whose layout differs: '
+                                     f'{", ".join(sorted(ch)) or "none"})')
+            else:
+                args.warnings.append(f'data of Unity {args.unity}, Android player {args.player_unity}: same line, other patch '
+                                     f'(the player refuses serialized files of another release: --data-version player)')
     args.runtime = scripting_runtime(src, args.unity)
     if getattr(args, 'il2cpp', None):
         ij = os.path.join(args.il2cpp, 'il2cpp.json')
@@ -1312,6 +1337,11 @@ def main(argv=None):
     ap.add_argument('--any-unity-version', action='store_true',
                     help='convert data of a Unity version outside 5.6 - 6000.6, or for an Android player of another '
                          'Unity line (untested; the formats are then guessed)')
+    ap.add_argument('--data-version', choices=['player', 'keep'], default='player',
+                    help="player (default): when the Android player is another release of the data's Unity line (e.g. "
+                         "2017.4.9f1 data, 2017.4.40f1 player), the serialized files are rewritten to name the player's "
+                         "version, which it requires, and objects of classes whose layout differs between the two are "
+                         "converted (retarget.py). keep: leave them as they are")
     ap.add_argument('--async-upload-buffer', type=int, default=0, help='QualitySettings.asyncUploadBufferSize in MB (0 = keep)')
     ap.add_argument('--no-inline-textures', dest='inline_textures', action='store_false',
                     help="keep textures' pixels in .resS streams (the Android player never finishes "
@@ -1465,6 +1495,14 @@ def main(argv=None):
         crc0 = ST.bundle_crc(src) if crc and act == 'bundle' else None
         if act == 'link' or (act in ('sfpatch', 'bundle') and args.platform_patch == 'none'):
             how = move(src, dst) if mv else clone(src, dst, allow_hardlink=True)
+        elif act == 'sfpatch' and args.retarget:
+            p = src if mv else dst              # (a moved file is retargeted first, then moved complete)
+            if not mv:
+                how = clone(src, dst, allow_hardlink=False)
+            from .unity_io import save_serialized_to
+            report['files'][dst_rel] = retarget.retarget_file(p, str(args.unity), args.retarget, ANDROID, save_serialized_to)
+            if mv:
+                how = move(src, dst)
         elif act == 'sfpatch':
             if mv:                              # patched first: a moved file is always complete
                 old = patch_sf_platform(src)
@@ -1485,7 +1523,7 @@ def main(argv=None):
             report['notes'].append(f'{name}: ' + ', '.join(l[5:] for l in r.stdout.splitlines() if l.startswith('ok')))
             how = 'patched'
         elif act == 'sfinline':
-            n, still = inline_serialized(src, dst)
+            n, still = inline_serialized(src, dst, args)
             report['files'][dst_rel] = f'platform -> {ANDROID}, {n} textures inlined'
             how = 'inlined'
             for name in sorted(still):          # e.g. mesh data: the .resS goes along
@@ -1531,8 +1569,9 @@ def main(argv=None):
             if pid != args.video_shader_pid:
                 raise SystemExit(f'video: shader got path id {pid}, globalgamemanagers maps {args.video_shader_pid}')
             sf._m_target_platform = ANDROID
+            rt = _retarget(sf, args)
             write_bytes(dst, sf.save())
-            report['files'][dst_rel] = f'platform -> {ANDROID}, {video.NAME} added (path id {pid})'
+            report['files'][dst_rel] = f'platform -> {ANDROID}, {video.NAME} added (path id {pid})' + ''.join('; ' + n for n in rt)
             how = 'video'
         elif act == 'monoconfig':
             txt = mono_config_text(open(src).read(), [d.split('=', 1) for d in args.dllmap])
@@ -1857,6 +1896,8 @@ def opts_key(args):
         key.append('il2cpp=' + args.il2cpp)
     if args.swappy != 'keep' and args.unity.line >= SWAPPY_FROM:     # the setting exists from 2019.3
         key.append('swappy=' + args.swappy)
+    if getattr(args, 'retarget', None):
+        key.append('retarget=' + args.retarget)
     return key
 
 
@@ -1882,6 +1923,8 @@ def verify(args, items, log):
                 bad.append((dst_rel, f'{len(sf.objects)} objects, source {len(env0.file.objects)}'))
             if want is not None and sf._m_target_platform != want:
                 bad.append((dst_rel, f'platform {sf._m_target_platform}'))
+            if args.retarget and not sf._enable_type_tree and sf.unity_version != args.retarget:
+                bad.append((dst_rel, f'version {sf.unity_version}, the player is {args.retarget}'))
             if act == 'ggm':
                 for o in sf.objects.values():
                     typetrees.read(o)
