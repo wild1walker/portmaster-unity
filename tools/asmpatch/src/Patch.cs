@@ -25,10 +25,14 @@ abstract class Patch
     /// <summary>Finds the patch's targets; with apply, changes them (and marks their assemblies
     /// changed). Without apply nothing is modified (--list).</summary>
     public abstract Result Run(Game game, bool apply);
+    /// <summary>Runs only when named (--only, --with): a patch that needs the port's data laid out
+    /// for it (e.g. streaming-assets: android-data --streaming-assets).</summary>
+    public virtual bool OptIn => false;
 
     public static readonly Patch[] All =
     {
         new RewiredAndroid(),
+        new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
     };
 }
 
