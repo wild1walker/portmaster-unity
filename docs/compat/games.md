@@ -30,7 +30,7 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 | [buggish](https://norrimo.itch.io/buggish) | 2019.4.8f1, Mono 4.x | splash, title; pointer starts the game | title 59.6 fps | mouse-driven menu (2026-10-21) |
 | [Tom City](https://tomanddad.itch.io/tomcity) | 2020.3.49f1, Mono 4.x | splash, title; a click starts a new city | title 59.6 fps | its crunched DXT textures froze the handheld until converted to ASTC (textures step) (2026-10-21) |
 | [Untitled Hook Game](https://bonionline.itch.io/untitled-hook-game) | 2021.3.16f1, URP | name prompt on first launch; on-screen keyboard types the name; main menu | title 59.6 fps | (2026-10-21) |
-| [Tiny Kingdom](https://neltile.itch.io/tiny-kingdom) | 2022.3.36f1, URP, FMOD, Steam, Burst | title (play/settings/exit) | title, a steady 30 fps | no ARM FMOD: silent; Steam stub; 30 fps is the 2021.1+ Android player's default, which `UA_FRAME_RATE=desktop` replaces with the desktop's vsync pacing (60 in the emulated rig's log; not measured on the handheld yet) (2026-10-21) |
+| [Tiny Kingdom](https://neltile.itch.io/tiny-kingdom) | 2022.3.36f1, URP, FMOD, Steam, Burst | title (play/settings/exit) | title **59.6 fps** with the desktop's pacing (`UA_FRAME_RATE=desktop`, the default for 2021.1+ conversions); 30 fps before | no ARM FMOD: silent; Steam stub; the 30 fps was the 2021.1+ Android player's default (2026-10-21) |
 
 ## More Unity versions
 
