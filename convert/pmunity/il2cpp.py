@@ -1119,10 +1119,12 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
     missing, nwanted = il2cpp_api_check(libunity, so) if os.path.isfile(libunity) else ([], 0)
     if missing:
         log(f'WARNING: the player\'s libunity.so looks up {len(missing)} il2cpp_* functions libil2cpp.so lacks: {missing[:8]}')
-    for extra in ('libil2cpp.dbg.so', 'libil2cpp.sym.so'):     # the unstripped library, its symbols
+    # the unstripped library and the linker's map (dropped), the symbols (kept in .work): 2019.4+
+    # name them .dbg.so / .sym.so, 2017.4 and 2018.4 .so.debug / .sym / .map
+    for extra in ('libil2cpp.dbg.so', 'libil2cpp.so.debug', 'libil2cpp.map', 'libil2cpp.sym.so', 'libil2cpp.sym'):
         p = os.path.join(os.path.dirname(so), extra)
         if os.path.exists(p):
-            if extra.endswith('.dbg.so'):
+            if extra.endswith(('.dbg.so', '.debug', '.map')):
                 os.unlink(p)
             else:
                 os.replace(p, os.path.join(work, extra))

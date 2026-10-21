@@ -117,7 +117,7 @@ What has run, by Unity version (the version numbers in the cells are the builds 
 |---|---|---|---|---|---|
 | 5.0 - 5.5 | Not yet (5.0 - 5.4 store shaders differently; 5.5 not checked) | Not yet | No (Unity made no 64-bit ARM player) | Not yet | Emulator: 5.5.1 menu. 32-bit-only builds: 5.3.2 menu with box64's experimental 32-bit mode; 5.0.0 crashes |
 | 5.6 - 2017.2 | Emulator: 5.6.0 main menu; 2017.2.0 stops at an old Steamworks plugin | Not yet (the Direct3D path covers 2017.3 - 2022.3) | No (Unity made no 64-bit ARM player) | Not yet | Not yet |
-| 2017.3 - 2017.4 | **Handheld**: Cuphead (2017.4.9), every level, 55 - 60 fps in most; 2017.4.40: title, 59.6 fps, intro video plays | Not yet (only Unity's built-in shaders checked) | Not yet | Not yet | Emulator: 2017.4.40 title menu |
+| 2017.3 - 2017.4 | **Handheld**: Cuphead (2017.4.9), every level, 55 - 60 fps in most; 2017.4.40: title, 59.6 fps, intro video plays | Not yet (only Unity's built-in shaders checked) | Emulator: 2017.4.40 (.NET 3.5) intro videos and title menu, no sound yet | Not yet | Emulator: 2017.4.40 title menu |
 | 2018 | **Handheld**: 2018.4 title, 59.6 fps | Emulator: 2018.3.7 starts its first level | **Handheld**: 2018.4 title, 59.4 - 59.6 fps | Not yet | Emulator: 2018.4.36 title menu |
 | 2019 | **Handheld**: 2019.4 title, 59.6 fps | Emulator: 2019.2.5 title; 2019.3.14 (URP) title menu | **Handheld**: 2019.4 title, 59.4 - 59.6 fps | Emulator: 2019.4.18 Mono, 32-bit: title | Emulator: 2019.4.8 title |
 | 2020 | **Handheld**: 2020.3 title, 59.6 fps | Emulator: 2020.3.44 first screen | **Handheld**: 2020.3 title, 59.4 - 59.6 fps | **Handheld**: 2020.3 IL2CPP, 64-bit: title | Emulator: 2020.3.49 Mono title menu; 2020.3.28 IL2CPP main menu (desktop GL only) |
@@ -165,8 +165,9 @@ Most impact for the most games first:
 2. **Handhelds without 32-bit libraries** (ROCKNIX and other 64-bit-only firmwares). Column C runs
    2018.4 - 2020.3 games on a handheld, but only as a porter's manual build: IL2CPP has to run on a
    computer, not on the handheld, `port new` has no template for it, and `port check` does not
-   offer it yet. Unity 2017.4 and 2021 - 2022, .NET 3.5 games, native plugins, Burst and the Input
-   System package are not done or not tested on this route.
+   offer it yet. Unity 2021 - 2022, sound with 2017.4's 64-bit player, 2017.4 .NET 4.x games,
+   native plugins, Burst and the Input System package are not done or not tested on this route
+   (2017.4 .NET 3.5 games reach their titles in the emulator).
 3. **Windows-only games on a handheld.** Six reached their first screens in the emulator; none has
    run on a handheld yet. No Windows game of 2017.3 - 2017.4 has been tried (only Unity's own
    shaders of 2017.4), Windows builds of 2023 and Unity 6 are not covered yet, and games with BC7,
