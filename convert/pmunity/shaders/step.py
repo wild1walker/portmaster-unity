@@ -79,7 +79,8 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             if src == 'd3d11':
                 if translator is None:
                     translator = dxbc.Translator(hlslcc)
-                r = C.add_gles3_d3d11(t, translator, precision=precision, replace=replace, optimize=opt)
+                r = C.add_gles3_d3d11(t, translator, precision=precision, replace=replace, optimize=opt,
+                                      unity=getattr(lf.sf, 'unity_version', None))
             else:
                 r = C.add_gles3(t, precision=precision, replace=replace, optimize=opt, glcore4x=gl4)
                 r.glcore4x = gl4
@@ -123,5 +124,6 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '
                 f'({sum(r.programs for r in d3d if r.status == "converted")} programs); '
-                f'{sum(len(r.failed) for r in d3d)} SubShaders left out; {sum(r.dropped for r in d3d)} VR-only variants left out')
+                f'{sum(len(r.failed) for r in d3d)} SubShaders left out; {sum(r.dropped for r in d3d)} VR-only variants and '
+                f'{sum(r.dropped_instancing for r in d3d)} GPU instancing variants left out')
     return results

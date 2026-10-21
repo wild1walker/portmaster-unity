@@ -1,0 +1,3 @@
+# A stand-in for PortMaster's utils/patcher.txt (tools/box64/test/port_test.sh): runs the port's
+# setup ($PATCHER_FILE) as the patcher would, without its progress screen. Not PortMaster's code.
+bash "$PATCHER_FILE"

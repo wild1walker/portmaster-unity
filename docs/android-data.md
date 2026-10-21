@@ -158,8 +158,10 @@ built-ins and six free Linux games (one per line):
   is. From 2020.2 the list is `ScriptingAssemblies.json` in the data folder (MonoManager keeps only
   script hashes); it is shipped with `RuntimeInitializeOnLoads.json`. The check (game assemblies
   present, engine modules the Android set lacks) reads whichever list the version has.
-- **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder
-  or (macOS) in `Contents/`.
+- **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder,
+  next to it (Windows) or (macOS) in `Contents/`. A Windows build's native plugins
+  (`Plugins/x86_64/*.dll`) are named in the warning; Unity 2021.2+ Windows builds' class libraries
+  are Windows-only (`pmunity.winbcl` gives the Unix ones, shipped with `--managed-file`).
 - **Texture streams.** Inlined in every version (the 2017.4 reason, section 2, is not known for
   later players; inline pixels load either way). From 2018 meshes can stream their vertex data
   from the same `.resS`: a `.resS` that a mesh still reads is shipped beside its file (2021.3 URP
@@ -197,6 +199,16 @@ Six free Linux Mono games (2017.4.40f1, 2018.4.36f1, 2019.4.8f1, 2020.3.49f1, 20
 and Mono `Managed` set, fetched from Unity's installers): every serialized file loads back in
 UnityPy with the Android platform, every assembly the list names is present, APK and OBB verify.
 None has run in a player.
+
+## 5. Native plugins
+
+`check_source` runs the plugin survey (`pmunity/plugins.py`, [plugins.md](plugins.md)) on the source
+data: one warning per library the game P/Invokes (what the runtime gives it), the full report in
+`android_data_report.json` (`plugins`), `plugins.map` in the output and zip folders (`--plugin-map`
+for the port's own entries). FMOD opens its banks with plain file I/O, so for a game that uses FMOD
+the `*.bank` files of StreamingAssets stay out of the OBB and go to `zip/assets/` beside the APK
+(`--loose-assets <glob>` for other files); ua_host gives FMOD's `jar:file://` and
+`file:///android_asset/` bank paths those files.
 
 ## Unsure / untested
 

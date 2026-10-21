@@ -7,7 +7,6 @@ import unittest
 
 from pmunity import route as R
 
-TEMPLATE = os.path.join(os.path.dirname(__file__), '..', '..', 'tools', 'box64', 'launcher.sh.in')
 
 
 def sf_header(version, target, fmt=17):
@@ -147,7 +146,7 @@ class RouteTest(unittest.TestCase):
                         plugins=['x86/libfmod.so'])
         f = R.examine(R.find_data_dirs(b.root)[0])
         self.assertIn('opengl2', f['player']['renderers'])
-        self.assertEqual(R.gl_mode(f), 'gl4es')           # 5.3: the converter cannot add GLES 3 shaders
+        self.assertEqual(R.gl_mode(f), 'gl4es')           # 5.3: the legacy OpenGL 2 renderer
         self.assertTrue(any('32-bit' in c for c in f['box64']['caveats']))
         self.assertTrue(any('FMOD' in c for c in f['android']['caveats']))
         # unknown x86-only plugins block the Android route
@@ -180,17 +179,60 @@ class RouteTest(unittest.TestCase):
     def test_launcher(self):
         b = linux_build(self, '2022.3.4f1', il2cpp=True, name='My Game')
         f = R.examine(R.find_data_dirs(b.root)[0])
-        text = R.launcher(f, TEMPLATE, port='mygame')
-        self.assertNotRegex(text, r'@[A-Z0-9_]+@')
-        self.assertIn('EXE="My Game.x86_64"', text)
-        self.assertIn('GAMEDIR=/$directory/ports/mygame', text)
+        text = R.launcher(f, port='mygame')
+        self.assertNotRegex(text, r'@@[A-Z0-9_]+@@')
+        self.assertIn('GAMEDIR="/$directory/ports/mygame"', text)
         self.assertIn('# PORTMASTER: mygame.zip, My Game.sh', text)
         with tempfile.TemporaryDirectory() as d:
             t = os.path.join(d, 't.in')
             with open(t, 'w') as fh:
-                fh.write('@EXE@ @NOPE@')
+                fh.write('@@TITLE@@ @@NOPE@@')
             with self.assertRaises(ValueError):
                 R.launcher(f, t)
+        # game.env: what the setup finds, for the launcher (paths relative to gamedata/)
+        env = dict(l.split('=', 1) for l in R.game_env(f, b.root).splitlines())
+        self.assertEqual(env['EXE'], "'My Game.x86_64'")
+        self.assertEqual((env['GAME_DIR'], env['DATA'], env['GL_MODE']), ('.', "'My Game_Data'", 'gles'))
+
+    def test_gl_modes(self):
+        # GLES mode needs the converter's versions; else desktop GL (mesa) or gl4es (GL 2 players)
+        for v, fmt, player, want in (('2019.4.1f1', 21, b'force-glcore\0GLX_EXT_create_context_es2_profile\0', 'gles'),
+                                     ('6000.5.9f1', 23, b'force-glcore\0GLX_EXT_create_context_es2_profile\0', 'mesa'),
+                                     ('5.3.2p3', 15, b'force-glcore\0force-opengl\0', 'gl4es')):
+            b = linux_build(self, v, fmt=fmt, player=player)
+            self.assertEqual(R.gl_mode(R.examine(R.find_data_dirs(b.root)[0])), want, v)
+
+    def test_port_hooks(self):
+        b = linux_build(self, '2022.3.4f1', il2cpp=True)
+        rep = {'data': R.find_data_dirs(b.root)[0], 'routes': [{'route': 'box64', 'ok': True, 'why': [], 'needs': []}]}
+        R.port_check(rep)
+        self.assertTrue(any('GL mode gles' in n for n in rep['routes'][0]['needs']))
+
+        class Ctx:
+            def __init__(self, route, out):
+                self.cfg = {'port': {'route': route, 'name': 'g', 'title': 'G', 'setup_time': 'a minute'},
+                            'game': {'what': 'the Linux build of G'}}
+                self.out, self.written = out, {}
+
+            def write(self, rel, data, mode=0o644):
+                self.written[rel] = data
+
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, 'g'))
+            with open(os.path.join(d, 'g', 'port.json'), 'w') as fh:
+                json.dump({'attr': {'desc': '', 'runtime': [], 'reqs': ['armhf']}}, fh)
+            with open(os.path.join(d, 'g', 'port.env'), 'w') as fh:
+                fh.write('# header\n[ -n "${PMU_GL+x}" ] || export PMU_GL=mesa\n')
+            c = Ctx('box64', d)
+            R.port_new(c)
+            self.assertIn('"graphics_apis": [11, 17]', c.written['g/setup/gles.json'])
+            pj = json.loads(c.written['g/port.json'])['attr']
+            self.assertEqual((pj['runtime'], pj['reqs'], pj['min_glibc']), (['weston_pkg_0.2.squashfs'], [], '2.29'))
+            self.assertIn('export PMU_GL=mesa', c.written['g/port.env'])
+            self.assertIn('#PMU_BOX64=default', c.written['g/port.env'])
+            c = Ctx('android', d)
+            R.port_new(c)
+            self.assertEqual(c.written, {})
 
     def test_cli(self):
         b = linux_build(self, '2022.3.4f1', il2cpp=True)
@@ -204,6 +246,10 @@ class RouteTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             R.main([b.root])
         self.assertIn('route: box64', out.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            R.main([b.root, '--env'])
+        self.assertIn("EXE=Game.x86_64", out.getvalue())
 
 
 if __name__ == '__main__':

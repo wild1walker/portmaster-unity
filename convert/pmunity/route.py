@@ -1,6 +1,6 @@
 """pmunity route: which way a Unity game fits a PortMaster handheld, and why.
 
-    python -m pmunity route <game folder | <Game>_Data | <Game>.app | executable> [--json]
+    python -m pmunity route <game folder | <Game>_Data | <Game>.app | executable> [--json | --env]
                             [--launcher OUT.sh [--port NAME] [--title TEXT] [--template FILE]]
 
 Two routes (docs/box64-route.md):
@@ -17,7 +17,9 @@ Two routes (docs/box64-route.md):
 
 Everything here only reads the game's files (ELF/PE/Mach-O headers, the data's serialized-file
 headers, strings in the player binary); nothing of the game is executed. With --launcher, the
-box64 route's PortMaster launcher (tools/box64/launcher.sh.in) is written for this game.
+box64 route's PortMaster launcher (port_template/box64/launcher.sh, the template `pmunity port new
+--route box64` uses) is written for this game; --env prints the game.env the box64 port's setup
+writes. port_check / port_new / port_package are `pmunity port`'s extension points (port.py).
 """
 import argparse
 import json
@@ -607,60 +609,157 @@ def report(facts):
     return out
 
 
-def _template_path():
-    here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(here, '..', '..', 'tools', 'box64', 'launcher.sh.in')
+HERE = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE_DIR = os.path.join(HERE, 'port_template', 'box64')       # the box64 route's port templates
+TOOLS = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'tools', 'box64')
 
 
 def gl_mode(facts):
-    """The launcher's default GL mode: gles (GLES-only drivers are the common case; the data gets
-    GLES 3 shaders), or gl4es for a player with the legacy OpenGL 2 renderer whose data the
-    converter cannot take (Unity 5.4 and older)."""
+    """How the game draws on a handheld: gles (the player's OpenGL ES mode; GLES-only drivers are
+    the common case) when the player has it and the converter can add GLES 3 shaders to the data
+    (its Unity versions), else gl4es for the legacy OpenGL 2 renderer (5.4 and older), else mesa
+    (OpenGL Core: a desktop-GL driver such as Panfrost)."""
     r = (facts.get('player') or {}).get('renderers', [])
     try:
         v = UV.Version(facts['unity']) if facts.get('unity') else None
     except ValueError:
         v = None
-    if 'opengl2' in r and ('glcore' not in r or v is None or v.line < UV.FIRST):
+    if 'gles' in r and v is not None and UV.FIRST <= v.line <= UV.LAST:
+        return 'gles'
+    if 'opengl2' in r:
         return 'gl4es'
-    return 'gles'
+    return 'mesa'
 
 
-def launcher(facts, template, port=None, title=None, zip_name=None, script=None, **extra):
-    """The box64 route's PortMaster launcher for this game: template text with @NAME@ fields filled
-    (tools/box64/launcher.sh.in lists them); extra = more @NAME@ values (upper-cased keys)."""
-    with open(template) as f:
+def game_env(facts, base):
+    """game.env for the box64 launcher (shell assignments): the game's folder relative to base
+    (the port's gamedata/), its executable and data folder, the GL mode."""
+    import shlex
+    x64 = next(e for e in facts['executables'] if e['format'] == 'elf' and e['arch'] == 'x86_64')
+    game_dir = os.path.relpath(os.path.dirname(facts['data']), os.path.abspath(base))
+    vals = {'GAME_DIR': game_dir, 'EXE': os.path.basename(x64['file']), 'DATA': os.path.basename(facts['data']),
+            'UNITY': facts['unity'] or '', 'BACKEND': facts['backend'] or '', 'GL_MODE': gl_mode(facts)}
+    return ''.join(f'{k}={shlex.quote(v)}\n' for k, v in vals.items())
+
+
+TOKENS = {'READY': '.setup_done', 'SETUP_TIME': 'a few minutes', 'ROUTE': 'box64'}
+
+
+def launcher(facts, template=None, port=None, title=None, **extra):
+    """The box64 route's launcher (port_template/box64/launcher.sh) with its @@NAME@@ values filled,
+    as `pmunity port new` fills them; extra = more values (upper-cased keys)."""
+    with open(template or os.path.join(TEMPLATE_DIR, 'launcher.sh')) as f:
         text = f.read()
-    x64 = next((e for e in facts['executables'] if e['format'] == 'elf' and e['arch'] == 'x86_64'), None)
-    exe = os.path.basename(x64['file']) if x64 else (facts['name'] or 'Game') + '.x86_64'
     port = port or re.sub(r'[^a-z0-9]+', '', (facts['name'] or 'game').lower()) or 'game'
     title = title or facts['name'] or port
-    r = (facts.get('player') or {}).get('renderers', [])
-    vals = {'TITLE': title, 'PORTDIR': port, 'EXE': exe, 'DATA': os.path.basename(facts['data']),
-            'ZIP': zip_name or f'{port}.zip', 'SCRIPT': script or f'{title}.sh', 'UNITY': facts['unity'] or '?',
-            'BACKEND': facts['backend'] or '?',
-            'GL': gl_mode(facts),
-            'BOX64_PROFILE': 'default'}
+    vals = dict(TOKENS, TITLE=title, PORTDIR=port, ZIP=f'{port}.zip', LAUNCHER=f'{title}.sh',
+                GAME_WHAT=f"the Linux build of {title}")
     vals.update({k.upper(): str(v) for k, v in extra.items()})
-    missing = sorted(set(re.findall(r'@([A-Z0-9_]+)@', text)) - set(vals))
+    missing = sorted(set(re.findall(r'@@([A-Z0-9_]+)@@', text)) - set(vals))
     if missing:
-        raise ValueError('template fields without a value: ' + ', '.join(missing))
-    return re.sub(r'@([A-Z0-9_]+)@', lambda m: vals[m.group(1)], text)
+        raise ValueError('template values missing: ' + ', '.join(missing))
+    return re.sub(r'@@([A-Z0-9_]+)@@', lambda m: vals[m.group(1)], text)
+
+
+# ---------------------------------------------------------------------------------------------
+# `pmunity port` extension points (port.py calls them in this module: HOOK_MODULES)
+
+def port_check(rep):
+    """Adds what this module knows to the box64 route candidate of a port check."""
+    if not rep.get('data') or not os.path.isdir(rep['data']):
+        return
+    f = examine(rep['data'])
+    r = next((x for x in rep.get('routes', []) if x['route'] == 'box64'), None)
+    if r is None or not r['ok']:
+        return
+    r['needs'] += [f"GL mode {gl_mode(f)} ({'GLES 3 shaders added by the setup' if gl_mode(f) == 'gles' else 'data as it is'})"]
+    r['needs'] += [c for c in f['box64']['caveats'] if 'Mono JIT' in c or 'plugin' in c]
+
+
+def port_new(ctx):
+    """What a box64 port needs besides its templates: the setup's shader config, and port.json
+    as PortMaster should list it (Westonpack, no 32-bit userland, box64's glibc)."""
+    p = ctx.cfg['port']
+    if p['route'] != 'box64':
+        return
+    with open(os.path.join(TOOLS, 'gles.json')) as f:
+        ctx.write(f"{p['name']}/setup/gles.json", f.read())
+    pj_path = os.path.join(ctx.out, p['name'], 'port.json')
+    if not os.path.isfile(pj_path):
+        return
+    with open(pj_path) as f:
+        pj = json.load(f)
+    a = pj['attr']
+    if not p.get('desc'):
+        a['desc'] = f"{p['title']}: the game's own Linux build under box64."
+    if not p.get('inst'):
+        a['inst'] = (f"Requires {ctx.cfg['game']['what']}: put it in ports/{p['name']}/gamedata. The first launch "
+                     f"prepares it ({p['setup_time']}).")
+    a['runtime'] = sorted(set(a.get('runtime') or []) | {'weston_pkg_0.2.squashfs'})
+    a['reqs'] = [r for r in a.get('reqs') or [] if r != 'armhf']
+    a['min_glibc'] = '2.29'                     # box64 built on Debian 11 (tools/box64/build.sh)
+    ctx.write(f"{p['name']}/port.json", json.dumps(pj, indent=4) + '\n')
+    # port.env: the launcher's options (port.toml's [runtime] values, then the others as comments)
+    env = os.path.join(ctx.out, p['name'], 'port.env')
+    kept = []
+    if os.path.isfile(env):
+        with open(env) as f:
+            kept = [l for l in f.read().splitlines() if l and not l.startswith('#')]
+    ctx.write(f"{p['name']}/port.env", '\n'.join(
+        ["# The game's options for the box64 launcher (docs/box64-route.md in portmaster-unity), sourced by it;",
+         '# a variable already set in the environment wins. Uncomment to change:'] + kept +
+        ['#PMU_GL=gles          # gles | mesa | gl4es (default: what the setup found, in game.env)',
+         '#PMU_BOX64=default    # safe | default | fast (box64.env)',
+         '#PMU_MAXCPU=2         # CPUs box64 reports to the game (Unity sizes its job threads by it)',
+         '#PMU_ARGS="-force-gfx-direct"   # more arguments for the game',
+         '#PMU_DYNACACHE=0      # box64 translates the game again at every start']) + '\n')
+
+
+def port_package(ctx):
+    """The release zip's box64 part: box64 and its x86-64 libraries, glxes, gl4es (tools/box64/build.sh
+    output: $BOX64_OUT or <runtime>/tools/box64/out), box64.env, unityprefs.sh, their licences."""
+    if ctx.cfg['port']['route'] != 'box64':
+        return
+    out = os.environ.get('BOX64_OUT') or os.path.join(ctx.runtime, 'tools', 'box64', 'out')
+    need = ['box64/box64', 'box64/x64lib', 'glxes/libGL.so.1', 'gl4es/libGL.so.1', 'licenses']
+    missing = [n for n in need if not os.path.exists(os.path.join(out, n))]
+    if missing:
+        raise SystemExit(f"box64 route: {out} lacks {', '.join(missing)} (run tools/box64/build.sh, or set BOX64_OUT)")
+    ctx.add(os.path.join(out, 'box64', 'box64'), 'box64/box64', 0o755)
+    ctx.add(os.path.join(out, 'box64', 'x64lib'), 'box64/x64lib')
+    ctx.add(os.path.join(out, 'glxes', 'libGL.so.1'), 'glxes/libGL.so.1')
+    ctx.add(os.path.join(out, 'gl4es', 'libGL.so.1'), 'gl4es/libGL.so.1')
+    tools = os.path.join(ctx.runtime, 'tools', 'box64')
+    for n in ('box64.env', 'unityprefs.sh'):
+        ctx.add(os.path.join(tools, n), f'box64/{n}')
+    for n in sorted(os.listdir(os.path.join(out, 'licenses'))):
+        ctx.license(n, os.path.join(out, 'licenses', n))
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='pmunity route', description='which route fits a Unity game, and why')
     ap.add_argument('path', help='game folder, <Game>_Data, <Game>.app or the executable')
     ap.add_argument('--json', action='store_true', help='all facts as JSON')
-    ap.add_argument('--launcher', metavar='OUT', help='write the box64 route\'s PortMaster launcher for the game')
-    ap.add_argument('--port', help='the port\'s folder name under ports/ (default: from the game\'s name)')
-    ap.add_argument('--title', help='the game\'s title in the launcher')
-    ap.add_argument('--template', default=None, help='launcher template (default: tools/box64/launcher.sh.in)')
+    ap.add_argument('--env', action='store_true',
+                    help="game.env of the first build that fits the box64 route (shell assignments, paths relative "
+                         "to <path>): what the box64 port's setup writes for its launcher")
+    ap.add_argument('--launcher', metavar='OUT', help="write the box64 route's launcher for the game (a port made "
+                                                     "with `pmunity port new --route box64` has it already)")
+    ap.add_argument('--port', help="the port's folder name under ports/ (default: from the game's name)")
+    ap.add_argument('--title', help="the game's title in the launcher")
+    ap.add_argument('--template', default=None, help='launcher template (default: port_template/box64/launcher.sh)')
     a = ap.parse_args(argv)
     dirs = find_data_dirs(a.path)
     if not dirs:
         sys.exit(f'{a.path}: no Unity data folder (<Game>_Data with globalgamemanagers, mainData or data.unity3d)')
     all_facts = [examine(d) for d in dirs]
+    if a.env:
+        f = next((x for x in all_facts if x['box64']['fits'] and
+                  any(e['format'] == 'elf' and e['arch'] == 'x86_64' for e in x['executables'])), None)
+        if not f:
+            sys.exit(f'{a.path}: no Linux x86-64 build here')
+        sys.stdout.write(game_env(f, a.path if os.path.isdir(a.path) else os.path.dirname(a.path)))
+        return
     if a.json:
         print(json.dumps(all_facts if len(all_facts) > 1 else all_facts[0], indent=1))
     else:
@@ -672,7 +771,7 @@ def main(argv=None):
         f = next((x for x in all_facts if x['box64']['fits']), None)
         if not f:
             sys.exit('no build here fits the box64 route: no launcher written')
-        text = launcher(f, a.template or _template_path(), port=a.port, title=a.title)
+        text = launcher(f, a.template, port=a.port, title=a.title)
         with open(a.launcher, 'w') as out:
             out.write(text)
         print(f'launcher: {a.launcher}', file=sys.stderr)

@@ -1,0 +1,7 @@
+Put your copy of @@TITLE@@ here, then launch @@TITLE@@ from the Ports menu:
+
+  @@GAME_WHAT@@.
+
+The Linux build: the folder with the game's executable and its _Data folder, or the archive it came
+in. The first launch prepares it here (@@SETUP_TIME@@, once) and the game then runs from here. See
+../README.md.

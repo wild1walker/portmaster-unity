@@ -1,7 +1,9 @@
 #!/bin/bash
-# Runs a box64-route launcher (made from tools/box64/launcher.sh.in) end to end in the test rig's
-# container, with a stand-in PortMaster (mockpm/: control.txt, Westonpack's westonwrap.sh) and the
-# port's folder laid out as on a handheld: box64, glxes/gl4es, box64.env, unityprefs.sh, gamedata.
+# Runs a box64-route launcher (convert/pmunity/port_template/box64/launcher.sh, as `pmunity route
+# --launcher` or `pmunity port new --route box64` writes it) end to end in the test rig's container,
+# with a stand-in PortMaster (mockpm/: control.txt, Westonpack's westonwrap.sh) and the port's
+# folder laid out as on a handheld after its setup: box64, glxes/gl4es, box64.env, unityprefs.sh,
+# game.env (`pmunity route --env`), gamedata. (port_test.sh tests a whole release zip, setup too.)
 #
 #   tools/box64/test/launcher_test.sh <launcher.sh> <game folder> <out dir> [seconds]
 #
@@ -16,6 +18,8 @@ OUTD=${3:?out dir}; SECS=${4:-80}
 mkdir -p "$OUTD"; OUTD=$(cd "$OUTD" && pwd); rm -rf "$OUTD"/shot_* "$OUTD/port"
 BIN=$(cd "${BIN:-$here/out}" && pwd)
 envs=(); for v in $(env | grep -oE '^PMU_[A-Z0-9_]*='); do envs+=(-e "${v%=}"); done
+python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); from pmunity.route import main; main([sys.argv[2], '--env'])" \
+  "$here/../../convert" "$GAME" > "$OUTD/game.env" || exit 1
 docker run --rm --platform linux/arm64 --network none --cpuset-cpus="${CPUS:-0-3}" --shm-size=512m --memory="${MEM:-1500m}" \
   -v "$GAME":/game:ro ${OVERLAY:+-v "$(cd "$OVERLAY" && pwd)":/overlay:ro} -v "$OUTD":/out -v "$BIN":/pm:ro \
   -v "$here":/rig:ro -v "$here/test/mockpm":/mockpm:ro -v "$LAUNCHER":/launcher.sh:ro \
@@ -31,13 +35,14 @@ export DISPLAY=:99 DISPLAY_WIDTH=$W DISPLAY_HEIGHT=$H
 [ "$GL" = gles ] && rm -f /usr/lib/aarch64-linux-gnu/libGL.so* /usr/lib/aarch64-linux-gnu/libGLX* /usr/lib/aarch64-linux-gnu/libOpenGL.so*
 # PortMaster stand-in and the port folder, as the launcher expects them
 PM=/roms/ports/PortMaster; mkdir -p $PM/libs; cp /mockpm/control.txt $PM/; : > $PM/libs/weston_pkg_0.2.squashfs
-port=$(sed -n "s|^GAMEDIR=/\$directory/ports/||p" /launcher.sh); P=/roms/ports/$port
+port=$(sed -n "s|^GAMEDIR=\"*/\$directory/ports/\([^\"]*\)\"*$|\1|p" /launcher.sh); P=/roms/ports/$port
 mkdir -p $P/box64 $P/glxes $P/gl4es $P/gamedata
 cp /pm/box64/box64 $P/box64/; ln -s /pm/box64/x64lib $P/box64/x64lib
 cp /rig/box64.env /rig/unityprefs.sh $P/box64/; cp /pm/glxes/libGL.so.1 $P/glxes/; cp /pm/gl4es/libGL.so.1 $P/gl4es/
 : > "$P/$port.gptk"
 for f in /game/*; do ln -s "$f" "$P/gamedata/$(basename "$f")"; done
-exe=$(sed -n "s|^EXE=\"\(.*\)\"$|\1|p" /launcher.sh); rm "$P/gamedata/$exe"; cp "/game/$exe" "$P/gamedata/$exe"
+cp /out/game.env $P/game.env; : > $P/.setup_done; . $P/game.env
+exe=$EXE; rm "$P/gamedata/$exe"; cp "/game/$exe" "$P/gamedata/$exe"
 D=$(cd /game && ls -d *_Data | head -1); rm "$P/gamedata/$D"; cp -as "/game/$D" "$P/gamedata/$D"
 if [ -d /overlay ]; then
   (cd /overlay && find . -type f ! -name .pmunity.json) | while read -r f; do

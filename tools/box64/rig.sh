@@ -21,7 +21,7 @@
 #   KEYS="t:key .." xdotool keys at those seconds (key+key together; key*N held N seconds)
 #   CLICKS="t:x,y .." mouse clicks at those seconds (screen coordinates)
 #   MEASURE=a-b     seconds between which frames and thread CPU are counted (default: last third)
-#   PROFILE=default|safe|fast   box64 settings (as tools/box64/launcher.sh.in: box64.env)
+#   PROFILE=default|safe|fast   box64 settings (box64.env, as the launcher)
 #   CPUS=0-3        container CPU set (4 cores, as the handhelds); BOX64_MAXCPU follows it
 #   MEM=1500m       container memory limit (a 1 GB handheld's game plus slack; keeps a runaway run,
 #                   e.g. GL=noop drawing a thousand frames a second, from starving other containers)

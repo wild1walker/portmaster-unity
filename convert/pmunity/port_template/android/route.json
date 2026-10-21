@@ -1,0 +1,13 @@
+{
+  "title": "Unity's Android player (armv7, Mono), run natively by ua_host on the handheld's 32-bit userland",
+  "files": {
+    "@@TITLE@@.sh": "launcher.sh",
+    "@@PORTDIR@@/setup/patchscript": "patchscript",
+    "@@PORTDIR@@/README.md": "README.player.md",
+    "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
+    "@@PORTDIR@@/@@PORTDIR@@.gptk": "hotkey.gptk",
+    "README.md": "README.port.md",
+    "package.sh": "package.sh"
+  },
+  "package": ["ua_host", "pmunity", "pybundle", "asmpatch?"]
+}

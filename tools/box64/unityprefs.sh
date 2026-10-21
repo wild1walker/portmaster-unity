@@ -1,4 +1,4 @@
-# Unity PlayerPrefs on Linux, from the shell (sourced by launcher.sh.in; bash, sed, no Python).
+# Unity PlayerPrefs on Linux, from the shell (sourced by the box64 launcher, port_template/box64/launcher.sh; bash, sed, no Python).
 # The Linux player keeps them in $HOME/.config/unity3d/<company>/<product>/prefs, an XML file:
 #   <unity_prefs version_major="1" version_minor="1">
 #   	<pref name="Screenmanager Resolution Width" type="int">640</pref> ...

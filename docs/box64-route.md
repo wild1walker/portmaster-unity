@@ -180,53 +180,62 @@ in this work; box64's 2.29 is measured (`tools/box64/out/versions.txt`).
 
 Unity made 32-bit Linux players until 2019.1 (the target was deprecated in 2019.1 and removed in
 2019.2); "Universal" builds ship both (`.x86` and `.x86_64`), so only x86-only builds are a
-problem. Two ways, both untested here:
+problem. Two ways:
 
+- **box64 with BOX32** (`BOX64_CMAKE=-DBOX32=ON tools/box64/build.sh`): 32-bit x86 on the 64-bit
+  userland, with box64's own 32-bit wrappers; "experimental, do not use" in box64 0.4.4, and the
+  32-bit `libstdc++.so.6`/`libgcc_s.so.1` come from box64's `x86lib`. In the rig a 5.3 x86-only
+  game reached its menu with desktop GL; a 5.0 one aborted after its window opened; gl4es under
+  BOX32 drew black (`LIBGL_FB=3`: abort). Not in the launcher yet.
 - **box86** on a 32-bit ARM userland (armhf `libc`, GL/GLES, SDL2, X11 client libraries). Knulli
   on H700 devices has one (`/lib32`, as the Android route uses); most other firmwares do not.
-  box86 0.3.8 is the last release (box86 is no longer developed actively).
-- **box64 with BOX32** (`BOX64_CMAKE=-DBOX32=ON tools/box64/build.sh`): 32-bit x86 on the 64-bit
-  userland, with box64's own 32-bit wrappers; "experimental, do not use" in box64 0.4.4.
+  box86 0.3.8 is the last release (box86 is no longer developed actively). Not tried: an Apple
+  Mac cannot run 32-bit ARM code natively, so the rig would need QEMU.
 
 ## Making a port
 
-1. `python -m pmunity route "<Game folder>"`: the route, the GL mode, the plugins, the libraries.
-2. `tools/box64/build.sh` -> `tools/box64/out/` (box64, gl4es, glxes, licences, versions).
-3. Port folder (PortMaster layout):
-   ```
-   ports/<port>/
-     box64/box64, box64/x64lib/, box64/box64.env, box64/unityprefs.sh   (tools/box64)
-     glxes/libGL.so.1                                                   (gles mode)
-     gl4es/libGL.so.1                                                   (gl4es mode, if not Westonpack's)
-     licenses/LICENSE.box64.txt, LICENSE.gl4es.txt, LICENSE.gcc-runtime.txt, LICENSE.<port>.txt
-     <port>.gptk                                                        (gptokeyb: keys, mouse, exit hotkey)
-     gamedata/                                                          (the player copies the Linux build here)
-   <Title>.sh                                                           (the launcher)
-   ```
-   `port.json`: `"runtime": ["weston_pkg_0.2.squashfs"]`, `"arch": ["aarch64"]`.
-4. The launcher: `python -m pmunity route "<Game folder>" --launcher "<Title>.sh" --port <port>
-   [--title "<Title>"]` fills `tools/box64/launcher.sh.in` (its `@FIELD@`s are listed at its top)
-   with the executable, the data folder, the GL mode (`gles`; `gl4es` for a player with only the
-   OpenGL 2 renderer or data the converter cannot take) and the box64 profile (`default`). It
-   follows PortMaster's conventions: `control.txt`, `$ESUDO`, `$GPTOKEYB`, `pm_platform_helper`,
-   Westonpack mounted and `westonwrap.sh` given box64's and the GL settings as `VAR=value`
-   arguments (Westonpack reloads PortMaster's settings before it starts the game, and ROCKNIX
-   exports its own `BOX64_LD_LIBRARY_PATH`), `pm_finish`. Unity's screen arguments come from
-   `$DISPLAY_WIDTH`/`$DISPLAY_HEIGHT`; `unityprefs.sh` writes the same values as Unity's own screen
-   keys in the game's prefs (resolution, full-screen window) and nothing else.
-   `tools/box64/test/launcher_test.sh <launcher> <game folder> <out>` runs a launcher end to end in
-   the test rig with a stand-in PortMaster (`test/mockpm/`: the names a launcher uses, a
-   `westonwrap.sh` that only applies the `VAR=value`s).
-5. GLES mode only: a first-start setup (PortMaster's patcher, as portmaster-cuphead's) that runs
-   `pmunity convert "<Game>_Data" --config gles.json` in place on the device.
-6. Input: Unity's Linux players have SDL2 built in and read pads with the firmware's
-   `SDL_GAMECONTROLLERCONFIG` mapping (the player's legacy SDL numbering can differ from the
-   firmware's; see the 20 Minutes Till Dawn port's launcher for a remap); gptokeyb gives keyboard and
-   mouse to games that want them, and the exit hotkey.
-7. Saves: `HOME=<port>/conf`, so Unity writes `conf/.config/unity3d/<company>/<product>/`.
+`pmunity port` (docs/porting.md) makes box64 ports like Android-route ones: its `box64` route is
+`convert/pmunity/port_template/box64/` (launcher, setup, READMEs; `route.json`) plus this route's
+hooks in `convert/pmunity/route.py` (`port_check`, `port_new`, `port_package`).
 
-User switches in `ports/<port>/options.txt`: `PMU_GL`, `PMU_BOX64`, `PMU_MAXCPU`, `PMU_ARGS`
-(more player arguments, e.g. `-force-gfx-direct`), `PMU_DYNACACHE=0`.
+```
+python -m pmunity port check "<Game folder>"                      # the routes; box64 for IL2CPP etc.
+python -m pmunity port new <port> --data "<Game folder>" [--route box64] [--title "<Title>"]
+tools/box64/build.sh                                               # -> tools/box64/out (once)
+python -m pmunity port package <port>                              # -> <port>/out/<port>.zip
+tools/box64/test/port_test.sh <port>/out/<port>.zip "<Game folder>" <work dir>   # the zip, as on a handheld
+```
+
+The release zip holds the launcher and `ports/<port>/`: `box64/` (box64, its `x64lib`, `box64.env`,
+`unityprefs.sh`), `glxes/` and `gl4es/` (`libGL.so.1`), `setup/` (the patchscript, `gles.json`,
+the converter and its Python: removed by the setup when it is done), `port.env` (the options),
+`port.json` (Westonpack as its runtime, no 32-bit userland, glibc 2.29), the licences. No game
+files, nothing of Unity.
+
+- **The setup** (first launch, PortMaster's patcher): finds the Linux x86-64 build in
+  `gamedata/` (the folder, or the archive it came in, unpacked in place) with `pmunity route --env`,
+  which writes `game.env` (`GAME_DIR`, `EXE`, `DATA`, `UNITY`, `BACKEND`, `GL_MODE`); in GLES mode
+  converts the data in place with `gles.json` (resumable); removes its tools. The game's code is
+  not changed.
+- **The launcher**: PortMaster's conventions (`control.txt`, `$ESUDO`, `$GPTOKEYB`,
+  `pm_platform_helper`, Westonpack mounted, `pm_finish`); box64's and the GL settings go on
+  `westonwrap.sh`'s command line as `VAR=value` (Westonpack reloads PortMaster's settings before it
+  starts the game, and ROCKNIX exports its own `BOX64_LD_LIBRARY_PATH`), the game's command in a
+  quoted script (`westonwrap.sh` evaluates its arguments again: names with spaces). Unity's screen
+  arguments come from `$DISPLAY_WIDTH`/`$DISPLAY_HEIGHT`, and `unityprefs.sh` writes the same values
+  as Unity's own screen keys in the game's prefs (resolution, full-screen window) and nothing else.
+  Saves: `HOME=<port>/conf` (Unity writes `conf/.config/unity3d/<company>/<product>/`).
+- **Options** (`ports/<port>/port.env`): `PMU_GL=gles|mesa|gl4es`, `PMU_BOX64=safe|default|fast`,
+  `PMU_MAXCPU`, `PMU_ARGS` (more player arguments, e.g. `-force-gfx-direct`), `PMU_DYNACACHE=0`.
+- **Input**: Unity's Linux players have SDL2 built in and read pads with the firmware's
+  `SDL_GAMECONTROLLERCONFIG` (the player's legacy SDL numbering can differ from the firmware's; the
+  20 Minutes Till Dawn port's launcher remaps it); gptokeyb (`<port>.gptk`) gives keys and mouse to
+  games that want them, and the exit hotkey.
+
+Without `pmunity port`: `python -m pmunity route "<Game folder>" --launcher "<Title>.sh" --port <port>`
+writes the same launcher; `tools/box64/test/launcher_test.sh <launcher> <game folder> <out>` runs a
+launcher with a prepared port folder (stand-in PortMaster: `test/mockpm/`, the names a launcher
+uses and a `westonwrap.sh` that only applies the `VAR=value`s).
 
 ## Test rig
 
@@ -247,7 +256,7 @@ H700's A53 cores at about 3.7x slower than this container for the same translate
 
 ## Results (emulated rig)
 
-Twelve free Linux builds (2026-10-20; box64 0.4.4 `default` profile, 640x480, 4 CPUs of an
+Thirteen free Linux builds (2026-10-20; box64 0.4.4 `default` profile, 640x480, 4 CPUs of an
 Apple-silicon Mac shared with other jobs; frame rates measured under that load, so rough).
 "GLES" = GLES mode in the rig's GLES-only container (no desktop GL library at all): converted
 data, `-force-gles`, glxes on Mesa's EGL. "est." = the player's main/render thread CPU time per
@@ -267,7 +276,8 @@ at 60: the CPU side only; a Mali-G31 adds its own limit for 3D scenes.
 | 2022.3.4 | **IL2CPP**, Burst | backend | opening scene | opening scene, same picture | 9-12 ms | ~20-30 |
 | 6000.5.9 (Unity 6) | **IL2CPP**, Burst | backend, version | sign-in screen (an online game) | - (format 23 data: no converter yet) | 7 ms | ~40 |
 | 6000.6.4 (Unity 6) | bdwgc, Burst | version | plays (it starts in the game) | - (format 23 data) | 9 ms | ~30 |
-| 5.0.0, 5.3.2 | Mono | 32-bit x86 only | not run: needs box86 or BOX32 | | | |
+| 5.3.2 | Mono, 32-bit x86 only | box64 BOX32 build | menu (OpenGL Core 4.5 device) | - (gl4es: black) | - | - |
+| 5.0.0 | Mono, 32-bit x86 only | box64 BOX32 build | aborts after its window opens | | | |
 
 - Every 64-bit build tried reached its menu (or its first screen) under box64 with no change to
   the game, and GLES mode drew the same pictures as desktop GL on all seven versions it could be
@@ -278,9 +288,12 @@ at 60: the CPU side only; a Mali-G31 adds its own limit for 3D scenes.
   newer an "OpenGL ES 3.2" one.
 - With nothing rasterized (`GL=noop`) the menus' main threads need 0.5-1.9 ms a frame here, so
   menus are not CPU-bound on an A53; gameplay is (Cuphead: ~30 fps in heavy levels).
-- The launcher end to end (`test/launcher_test.sh`, the 2020.3 game, GLES mode, stand-in PortMaster):
-  title menu at 640x480 full screen, prefs written. Xvfb has no window manager: without the input
-  focus that game hides its menu, so the test gives the window focus as Westonpack's kiosk shell
-  does.
+- A whole port (`pmunity port new --route box64`, `port package`, `test/port_test.sh`): the 2022.3
+  IL2CPP game's release zip unzipped into a ports folder with the game copied into `gamedata/`;
+  the first launch ran the setup (the zip's own aarch64 Python, `pmunity route --env`, the GLES
+  conversion in place: 15 s on the Mac) and then the game, in GLES mode with no desktop GL library,
+  at 640x480 full screen. `test/launcher_test.sh` with the 2020.3 game: title menu, prefs written.
+  Xvfb has no window manager: without the input focus that game hides its menu, so the tests give
+  the window the focus as Westonpack's kiosk shell does.
 - Not seen in the rig: sound (no sound device: FMOD's no-sound output), pads, a real Mali driver,
   Westonpack.
