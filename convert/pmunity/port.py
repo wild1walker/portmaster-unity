@@ -49,6 +49,7 @@ import tarfile
 import time
 import zipfile
 
+from . import typetrees
 from . import unity_version as UV
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -645,14 +646,14 @@ def survey_data(data, deep=True):
             for o in env.objects:
                 n = o.type.name
                 if n == 'PlayerSettings':
-                    t = o.read_typetree()
+                    t, _ = typetrees.read(o)          # a release newer than UnityPy's trees: fixed tree
                     r['product'], r['company'] = t.get('productName'), t.get('companyName')
                     r['screen'] = [t.get('defaultScreenWidth'), t.get('defaultScreenHeight')]
                     r['color_space'] = {0: 'gamma', 1: 'linear'}.get(t.get('m_ActiveColorSpace'))
                     if 'activeInputHandler' in t:
                         r['active_input'] = {0: 'Input Manager', 1: 'Input System package', 2: 'both'}.get(t['activeInputHandler'])
                 elif n == 'BuildSettings':
-                    t = o.read_typetree()
+                    t, _ = typetrees.read(o)
                     r['graphics_apis'] = list(t.get('m_GraphicsAPIs') or [])
                     r['scenes'] = len(t.get('scenes') or t.get('levels') or t.get('m_Scenes') or [])
         except Exception as ex:                       # (layouts of an unknown version)
