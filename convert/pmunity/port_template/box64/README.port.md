@@ -13,7 +13,7 @@ Made with portmaster-unity's `pmunity port new` (@@ROUTE@@ route: @@ROUTE_TEXT@@
 
 ## Notes
 
-The player provides @@GAME_WHAT@@ (Unity @@UNITY_VERSIONS@@); nothing of the game or of Unity is in
+The player provides @@GAME_WHAT@@; nothing of the game or of Unity is in
 this port. The game runs unmodified under box64; in its OpenGL ES mode (the default) the setup adds
 GLES 3 shader programs to the player's copy (docs/box64-route.md in portmaster-unity).
 

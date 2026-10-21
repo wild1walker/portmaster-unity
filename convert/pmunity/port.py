@@ -735,7 +735,7 @@ _INPUT_MODULES = {
 # =========================================================================== the check
 
 ROUTE_TEXT = {
-    'android': "Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: this repository's runtime",
+    'android': "Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime",
     'il2cpp-arm64': 'the game compiled with IL2CPP into an arm64 Android player (for 64-bit-only systems; `pmunity il2cpp`, coming)',
     'box64': "the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)",
     'apk': "the game's own Android build (`pmunity apk`)",
@@ -1471,7 +1471,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
               'ROUTE': cfg['port']['route'], 'ROUTE_TEXT': ROUTE_TEXT.get(cfg['port']['route'], cfg['port']['route']),
               'UNITY_VERSIONS': ', '.join(cfg['game']['unity_versions']) or 'any the converter supports',
               'SIZE_GB': max(1, ((int(cfg['game'].get('setup_space_mb') or 0) or 3 * int(cfg['game'].get('size_mb') or 0)) + 1023) // 1024),
-              'PORTER': ', '.join(cfg['port']['porter']) or 'the porter',
+              'PORTER': ', '.join(cfg['port']['porter']) or 'not named yet (port.toml: `port.porter`)',
               'READY': cfg['port'].get('ready_marker') or '.setup_done'}
     # the files a route renders: route.json "files": {output path: template name}; output paths
     # may use @@TOKENS@@; mode 755 for scripts

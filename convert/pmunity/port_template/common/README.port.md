@@ -13,7 +13,7 @@ Made with portmaster-unity's `pmunity port new` (@@ROUTE@@ route: @@ROUTE_TEXT@@
 
 ## Notes
 
-The player provides @@GAME_WHAT@@ (Unity @@UNITY_VERSIONS@@); nothing of the game or of Unity is in
+The player provides @@GAME_WHAT@@; nothing of the game or of Unity is in
 this port. The first launch builds the game on the handheld (@@SETUP_TIME@@).
 
 ## Controls
