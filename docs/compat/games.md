@@ -93,7 +93,7 @@ The shaders left out everywhere are BlitToDepth_MSAA and the VR blit.
 | [Nainai's Recipe](https://houkanshan.itch.io/nainais-recipe) | 2021.1.28f1, FMOD, SQLite, Rewired | FMOD test double: init, banks, events; SQLite through the system's library | compute kernels missing: black frames (2026-10-20) |
 | [Level UP - Mario's Minigames Mayhem](https://bookwormkevin.itch.io/lummm) | 2022.3.62f2, Discord SDK, Addressables | language screen; with the StreamingAssets fixes: title menu | (2026-10-21) |
 | [SPELLSWORN](https://xk.itch.io/spellsworn) | 2022.1.10f1, SQLite, GameAnalytics | SQLite through the system's library | (2026-10-20) |
-| [ADRORIUM](https://beholdernx.itch.io/adrorium) | 2018.1.0f1, Steam, Discord, Photon | crashes in a script's Awake | "script behaviour could not be instantiated" (2026-10-20) |
+| [ADRORIUM](https://beholdernx.itch.io/adrorium) | 2018.1.0f1, Steam, Discord, Photon | main menu with its name prompt (New Game, Continue, Join Server, news) | crashed in a script's Awake before the Steam and Discord stubs; Photon's native plugins are missing (online play) and its server lookup fails without a network, as on a PC offline. At the rig's 300 s stop, a pause that timed out at 0.2 fps ended in glibc's "unaligned fastbin chunk" abort (shutdown only, not looked into) (2026-10-21) |
 
 ## StreamingAssets read as files
 
