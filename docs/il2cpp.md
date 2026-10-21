@@ -223,7 +223,8 @@ What the runs showed:
   2017.4 .NET 4.x games (`net45`: none among the free 2017.4 builds surveyed, all were .NET 3.5),
   .NET 3.5 games of 2018.x (`legacyunity` / `net20` with the newer UnityLinker), the ".NET 2.0"
   (`net20`) profile.
-- Data of a 2017.4 release before 2017.4.16f1 on the 2017.4.40f1 player (Cuphead's case).
+- IL2CPP with data of a 2017.4 release before 2017.4.16f1 on the 2017.4.40f1 player (Cuphead's
+  case: its data, retargeted, reaches its title on the 2017.4.40f1 Mono armv7 player).
 - Games with native plugins, Burst (`lib_burst_generated` is not rebuilt: Burst jobs run as their
   managed code), the Input System package, link.xml-dependent reflection.
 - IL2CPP data over 2 GiB (APK + OBB, see above); 16 KiB-page kernels.
@@ -253,11 +254,10 @@ What the runs showed:
   the clobber lists of Unity's own 2019.4 file (`SOURCE_FIXES`: "cc", "memory"). For a .NET 3.5 game il2cpp copies the old Mono's
   `etc` (`Mono/etc/mono`: `config`, `2.0/machine.config`, ...) into the data, so that is fetched
   with its class libraries. A 64-bit ARM IL2CPP player exists from 2017.4.16f1; older data (Cuphead
-  is 2017.4.9f1) is built with 2017.4.40f1's IL2CPP and run on its player (`--unity`; android-data
-  then warns "same line, other patch", and refuses a player other than the one `libil2cpp.so` was
-  built for). Whether a 2017.4.9 game's data reads right on the 2017.4.40 player is the same
-  question as for its Mono player: the line kept its serialized layouts as far as the corpus
-  shows, but only a run of the game tells.
+  is 2017.4.9f1) is built with 2017.4.40f1's IL2CPP and run on its player (`--unity`; `il2cpp.json`
+  keeps both versions): android-data retargets the data to the player's release
+  ([android-data.md](android-data.md), "retargeted") and refuses a player other than the one
+  `libil2cpp.so` was built for (`il2cpp_mismatch`).
 - 2018.4: `il2cpp/build/il2cpp.exe` (no `deploy/`), NDK r16b (GNU binutils layout and GNU
   libstdc++ (`gnustl_static`): il2cpp passes `--sysroot`, `-gcc-toolchain` and a target without
   the API level, which ndk-clang.sh adds from `-D__ANDROID_API__`); armv7 there is API 16.
