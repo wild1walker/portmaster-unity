@@ -33,8 +33,9 @@ needed was outside the loader:
 The loader itself needed nothing for these libraries: their relocations, the guard slot, emulated
 TLS and the LP64 bionic types held (whether a C++ exception crossed the unwinder in these runs is
 not known). Not run yet: 2017.4 and 2018.4 IL2CPP arm64 builds (none in the corpus: the one 2018.4
-build found was a VR title), 2019.4 IL2CPP arm64, 16 KiB-page kernels, a real handheld's Mali/GPU
-driver with the 64-bit host.
+build found was a VR title), 2019.4 IL2CPP arm64, 16 KiB-page kernels. The 2020.3, 2021.3 and 2022.3
+builds have since reached their titles on a handheld's Mali driver with the 64-bit host
+(compat/README.md, "On a handheld").
 
 `runtime/loader` loads the Android libraries of its own build's architecture: armeabi-v7a on
 armhf (`runtime/loader/build.sh`, output `out/`) and arm64-v8a on aarch64 glibc

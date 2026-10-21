@@ -1,0 +1,140 @@
+name: Game porting report
+description: You tried to port a Unity game with these tools. Tell us how it went, whether it worked or not.
+title: "[Port report] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Reports of games that work are as useful as failures: they fill in the support table.
+
+        **Never attach game files or Unity's files** (no data folders, APKs, OBBs, player libraries,
+        converted data). Logs and command output are fine.
+
+  - type: input
+    id: game
+    attributes:
+      label: Game (optional)
+      description: The game's name, if you want to share it.
+
+  - type: input
+    id: unity
+    attributes:
+      label: Unity version
+      description: "`python -m pmunity version \"<Game>_Data\"` prints it."
+      placeholder: e.g. 2020.3.49f1 (supported)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: The build you have
+      options:
+        - Mono, Linux
+        - Mono, macOS
+        - Mono, Windows only
+        - IL2CPP, Linux
+        - IL2CPP, Windows or macOS only
+        - Android build (APK, XAPK, AAB)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: route
+    attributes:
+      label: Route you used
+      options:
+        - android (32-bit Android player, data converted)
+        - il2cpp-arm64 (64-bit, code compiled with pmunity il2cpp)
+        - apk (the game's own Android build, pmunity apk)
+        - box64 (the game's Linux x86-64 build)
+        - None yet (port check only)
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: check
+    attributes:
+      label: "`port check` output"
+      description: The output of `python -m pmunity port check "<game folder>"`. Replace personal folder names if you like.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: How far did it get?
+      options:
+        - Plays well
+        - Plays, with problems (please describe below)
+        - Reaches its title or menu, not tried further
+        - Starts, then stops or freezes
+        - Does not start
+        - The setup or conversion failed
+        - port check found no route
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: What worked, and where did it fail?
+      description: Controls, sound, video, saves, frame rate (`UA_FPS=5` writes it to log.txt), menus that need a mouse, text fields. The step or screen where it went wrong.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you run it?
+      multiple: true
+      options:
+        - A handheld
+        - The rehearsal (tools/port/rehearse.sh)
+        - The emulator (tools/emu or tools/box64/rig.sh)
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Handheld, firmware and PortMaster version
+      description: If you ran it on a handheld.
+      placeholder: e.g. Anbernic RG34XX-SP, Knulli (version), PortMaster (version)
+
+  - type: dropdown
+    id: firmware
+    attributes:
+      label: Firmware
+      options:
+        - Knulli
+        - ROCKNIX
+        - muOS
+        - ArkOS
+        - Other (please say which above)
+        - Did not run it on a handheld
+
+  - type: input
+    id: commit
+    attributes:
+      label: portmaster-unity version
+      description: The commit (`git rev-parse --short HEAD`).
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Drag and drop the files here: `ports/<name>/patchlog.txt` (the setup) and `ports/<name>/log.txt`
+        (the game), or the rehearsal's or emulator's logs. The port's `port.toml`, if you changed it, helps too.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I did not attach any game files or Unity files.
+          required: true

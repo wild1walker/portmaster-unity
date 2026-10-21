@@ -54,7 +54,7 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
 | `il2cpp-arm64` | a Mono build on a 64-bit-only system: the game compiled with IL2CPP into an arm64 Android player | `pmunity il2cpp` + `android-data --il2cpp` on the porter's PC/Mac (docs/il2cpp.md; 2018.4-2020.3 checked); no port template yet |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
-| `apk` | an Android build of the game | coming (`pmunity apk`) |
+| `apk` | an Android build of the game | `pmunity apk` by hand ([apk.md](apk.md)); no port template yet |
 
 Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from = ["d3d11"]` and
 `pmhlslcc` (`tools/hlslcc/build.sh`; docs/shaders.md, "Windows builds"). A Windows build of Unity

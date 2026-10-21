@@ -174,7 +174,9 @@ What the runs showed:
   class libraries are not the unityaot profile).
 - Games with native plugins, Burst (`lib_burst_generated` is not rebuilt: Burst jobs run as their
   managed code), the Input System package, link.xml-dependent reflection.
-- IL2CPP data over 2 GiB (APK + OBB, see above); 16 KiB-page kernels; a real handheld.
+- IL2CPP data over 2 GiB (APK + OBB, see above); 16 KiB-page kernels.
+- (Since run on a handheld: the 2018.4, 2019.4 and 2020.3 games reached their titles at 59.4 - 59.6
+  fps with the arm64 `ua_host` on an RG34XX-SP's 64-bit userland; compat/README.md, "On a handheld".)
 - `--strip none` end to end (it built 1 GB of C++ for the 2019.4 game; stopped there).
 - armv7 for 2018.4 and 2020.3.
 

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A problem with the Cuphead port
+    url: https://github.com/wild1walker/portmaster-cuphead/issues/new/choose
+    about: Setting up or playing Cuphead on a handheld. For problems with the tools, use the forms here.
+  - name: PortMaster itself
+    url: https://portmaster.games/
+    about: Installing PortMaster, its menus, or ports not made with these tools.

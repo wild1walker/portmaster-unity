@@ -1,7 +1,7 @@
 # The box64 route: a game's own Linux build under box64
 
 The main route ([design.md](design.md)) runs Unity's ARM Android player natively and converts the
-game's desktop data for it. It covers Mono builds of Unity 2017.3 - 2022.3. Some games cannot go
+game's desktop data for it. It covers Mono builds of Unity 5.6 - 6000.6 (compat/README.md). Some games cannot go
 that way, so this second route runs **the game's own Linux x86_64 build, unmodified, under
 [box64](https://github.com/ptitSeb/box64)**. box64 translates x86_64 code to ARM64 and runs the
 system libraries the game opens (GL, X11, audio) as the handheld's own ARM64 libraries.
@@ -11,7 +11,7 @@ system libraries the game opens (GL, X11, audio) as the handheld's own ARM64 lib
 | game code | the game's IL on the Android player's Mono, native ARM | x86_64 machine code (IL2CPP) or Mono's JIT output, translated by box64 |
 | Unity engine | Unity's ARM build | Unity's x86_64 Linux player, translated |
 | frame rate | Cuphead: 55-60 fps on an H700 | Cuphead: about half (about 30 fps in its heavy levels): the main thread is emulation-bound |
-| takes | Mono, 2017.3 - 2022.3, OpenGL shaders (or D3D11 for <= 2018.4) | any version with a Linux build, IL2CPP too, x86-only plugins |
+| takes | Mono, 5.6 - 6000.6, OpenGL shaders (or D3D11 for 2017.3 - 2022.3) | any version with a Linux build, IL2CPP too, x86-only plugins |
 | data | converted (GLES 3 shaders, textures, Android settings) | as it is (desktop GL), or GLES 3 shaders added (GLES mode, below) |
 
 ## When to use it
@@ -30,7 +30,7 @@ The box64 route is the one for:
 - **IL2CPP builds** (`GameAssembly.so` next to the executable, `<Game>_Data/il2cpp_data/`): the
   game's code is compiled x86 machine code; there is no IL for the Android player's Mono. (The
   game's own Android build, if the player owns one, is the other way: apk-arm64 work.)
-- **Unity versions the Android route does not cover** (5.x, 2017.1 - 2017.2, 2023.x, Unity 6).
+- **Unity versions the Android route does not cover** (5.0 - 5.5, 6000.7 and later).
 - **Native plugins that exist only for x86** and that the game cannot do without: FMOD Studio and
   Wwise (sound), AVPro (video), a game's own plugins. The detector names each plugin and what it
   costs on the Android route.

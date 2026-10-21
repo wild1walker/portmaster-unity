@@ -1,0 +1,89 @@
+name: Bug report
+description: A tool (pmunity, ua_host, the build scripts, a port's setup) fails or does the wrong thing.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! If this is about one game's port (for example Cuphead), please report it
+        on that port's page first. To tell us how porting a game went, use **Game porting report**
+        instead.
+
+        **Never attach game files or Unity's files** (no data folders, APKs, OBBs or player libraries).
+        Logs and command output are fine.
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The command you ran
+      description: The full command line, and which folder you ran it in. Replace personal folder names if you like.
+      render: shell
+      placeholder: python -m pmunity port check "<game folder>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did it run?
+      options:
+        - On my computer (converter, packaging, build scripts)
+        - On the handheld (a port's setup, or ua_host running a game)
+        - In the emulator or test rig (tools/emu, tools/box64/rig.sh, tools/port/rehearse.sh)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Computer OS
+      description: For problems on your computer. With Python and Docker versions if they matter.
+      placeholder: e.g. macOS 15 (Apple silicon), Python 3.12, Docker 28 / Ubuntu 24.04 x86-64
+
+  - type: input
+    id: commit
+    attributes:
+      label: portmaster-unity version
+      description: The commit (`git rev-parse --short HEAD`), or the port release that carries the tools.
+    validations:
+      required: true
+
+  - type: input
+    id: unity
+    attributes:
+      label: Unity version of the game
+      description: "`python -m pmunity version \"<Game>_Data\"` prints it."
+      placeholder: e.g. 2021.3.16f1 (supported)
+
+  - type: input
+    id: device
+    attributes:
+      label: Handheld, firmware and PortMaster version
+      description: For problems on the handheld.
+      placeholder: e.g. Anbernic RG34XX-SP, Knulli (version), PortMaster (version)
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and output
+      description: |
+        Drag and drop log files here, or paste the output. On a handheld: `ports/<name>/patchlog.txt`
+        (the setup) and `ports/<name>/log.txt` (the game; `log.prev.txt` is the run before).
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I did not attach any game files or Unity files.
+          required: true

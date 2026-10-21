@@ -105,7 +105,7 @@ Notes on the rows:
   (24.1 for 2018.3/2018.4, 24.2-24.5 across 2019.x, 27.1 for 2020.2.4+, 29.1 for 2022.x; late
   2022.3 patches are reported with 31). Read the header of the game's own file.
 
-## On a handheld (RG35XX SP: Allwinner H700, Mali-G31, 1 GB, Knulli; 2026-10-20)
+## On a handheld (RG34XX-SP: Allwinner H700, Mali-G31, 1 GB, Knulli; 2026-10-20)
 
 The first runs outside the emulated rig, with free games of each line (their names stay out of the
 repository) and Cuphead. Every game reached its title or first screen and drew it correctly.

@@ -1,0 +1,34 @@
+name: Feature request
+description: "Something the tools should do: a Unity version, a build type, a plugin, a handheld or firmware, a tool feature."
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Check [What is missing](https://github.com/wild1walker/portmaster-unity#what-is-missing)
+        in the README first: it may already be planned.
+
+        One rule shapes what a port may do: by default a game must look and play as the original.
+        Anything that changes the picture or the game play can only be an option, off by default.
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: What would it help with?
+      description: For example, which kind of games (Unity version, build type, plugins) it would let you port.
+    validations:
+      required: true
+
+  - type: input
+    id: unity
+    attributes:
+      label: Unity version and build type, if it is about a game
+      placeholder: e.g. 2022.3, IL2CPP, Windows only
