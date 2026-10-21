@@ -185,7 +185,7 @@ class CheckTest(unittest.TestCase):
 
     def test_unsupported(self):
         with tempfile.TemporaryDirectory() as t:
-            d = fake_game(t, version='5.6.7f1')
+            d = fake_game(t, version='5.5.4f1')
             rep = P.check(t, asmpatch='/nonexistent-asmpatch')
             self.assertFalse(next(r for r in rep['routes'] if r['route'] == 'android')['ok'])
             self.assertEqual(rep['route'], 'box64')         # (a Linux x86-64 build)
