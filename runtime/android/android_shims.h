@@ -46,6 +46,24 @@ extern so_shim android_mediandk_shims[]; // libmediandk.so only (AMEDIAFORMAT_KE
 const so_shim *android_shims_for_library(const char *path);
 // Lookup by symbol name over android_shims[] (NULL if absent).
 void *android_shims_lookup(const char *name);
+// The API level the game is told (Build.VERSION.SDK_INT): libandroid functions Android added later
+// read NULL in the tables (dlsym fails, weak imports are 0), as on a phone of that level, and
+// AConfiguration reports it. 0 (the default): every function present. Call before the loader's
+// first symbol lookup (it indexes the tables then).
+void android_shims_set_api_level(int api);
+int android_shims_api_level(void);
+
+// The vsync clock (choreographer.c): vsyncs at the multiples of 1e9/hz ns on CLOCK_MONOTONIC
+// (default 60 Hz), shared with runtime/jni's Java Choreographer. AChoreographer frame callbacks run
+// at the first vsync after they are due, with it as their frame time.
+void android_vsync_set_refresh_rate(float hz);
+int64_t android_vsync_period_ns(void);
+int64_t android_vsync_after(int64_t t_ns);       // the first vsync strictly after t
+// A host's own looper threads (runtime/jni's Java loopers): current() names the calling thread's
+// looper (NULL if it is none), post() runs fn(arg) on that looper after delay_ms. An AChoreographer
+// made on such a thread runs its callbacks as posted jobs; elsewhere it needs an ALooper.
+void android_set_host_looper(void *(*current)(void),
+                             void (*post)(void *looper, void (*fn)(void *), void *arg, int64_t delay_ms));
 
 // ---- host configuration --------------------------------------------------------------------
 // Logging: minimum priority printed (ANDROID_LOG_VERBOSE=2 .. ANDROID_LOG_FATAL=7).
@@ -174,13 +192,46 @@ int ASensorEventQueue_setEventRate(ASensorEventQueue *q, ASensor const *s, int32
 int ASensorEventQueue_hasEvents(ASensorEventQueue *q);
 ssize_t ASensorEventQueue_getEvents(ASensorEventQueue *q, ASensorEvent *events, size_t count);
 
-// Configuration (fixed: landscape, ~160 dpi, small screen, no touch)
+// Choreographer (API 24+; 64-bit callbacks 29, refresh rate callbacks 30, vsync callbacks 33)
+typedef struct AChoreographer AChoreographer;
+typedef struct AChoreographerFrameCallbackData AChoreographerFrameCallbackData;
+typedef void (*AChoreographer_frameCallback)(long frameTimeNanos, void *data);
+typedef void (*AChoreographer_frameCallback64)(int64_t frameTimeNanos, void *data);
+typedef void (*AChoreographer_vsyncCallback)(const AChoreographerFrameCallbackData *callbackData, void *data);
+typedef void (*AChoreographer_refreshRateCallback)(int64_t vsyncPeriodNanos, void *data);
+AChoreographer *AChoreographer_getInstance(void);
+void AChoreographer_postFrameCallback(AChoreographer *c, AChoreographer_frameCallback cb, void *data);
+void AChoreographer_postFrameCallbackDelayed(AChoreographer *c, AChoreographer_frameCallback cb, void *data, long delayMillis);
+void AChoreographer_postFrameCallback64(AChoreographer *c, AChoreographer_frameCallback64 cb, void *data);
+void AChoreographer_postFrameCallbackDelayed64(AChoreographer *c, AChoreographer_frameCallback64 cb, void *data, uint32_t delayMillis);
+int AChoreographer_postVsyncCallback(AChoreographer *c, AChoreographer_vsyncCallback cb, void *data);
+void AChoreographer_registerRefreshRateCallback(AChoreographer *c, AChoreographer_refreshRateCallback cb, void *data);
+void AChoreographer_unregisterRefreshRateCallback(AChoreographer *c, AChoreographer_refreshRateCallback cb, void *data);
+int64_t AChoreographerFrameCallbackData_getFrameTimeNanos(const AChoreographerFrameCallbackData *d);
+size_t AChoreographerFrameCallbackData_getFrameTimelinesLength(const AChoreographerFrameCallbackData *d);
+size_t AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex(const AChoreographerFrameCallbackData *d);
+int64_t AChoreographerFrameCallbackData_getFrameTimelineVsyncId(const AChoreographerFrameCallbackData *d, size_t i);
+int64_t AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(const AChoreographerFrameCallbackData *d, size_t i);
+int64_t AChoreographerFrameCallbackData_getFrameTimelineDeadlineNanos(const AChoreographerFrameCallbackData *d, size_t i);
+
+// Configuration (landscape, the window in dp at 160 dpi, no touch, D-pad; every NDK getter/setter)
 AConfiguration *AConfiguration_new(void);
 void AConfiguration_delete(AConfiguration *c);
 void AConfiguration_fromAssetManager(AConfiguration *out, AAssetManager *am);
 int32_t AConfiguration_getOrientation(AConfiguration *c);
 int32_t AConfiguration_getDensity(AConfiguration *c);
 int32_t AConfiguration_getSdkVersion(AConfiguration *c);
+int32_t AConfiguration_getTouchscreen(AConfiguration *c);
+int32_t AConfiguration_getNavigation(AConfiguration *c);
+int32_t AConfiguration_getScreenWidthDp(AConfiguration *c);
+int32_t AConfiguration_getScreenHeightDp(AConfiguration *c);
+int32_t AConfiguration_getLayoutDirection(AConfiguration *c);
+void AConfiguration_copy(AConfiguration *dst, AConfiguration *src);
+void AConfiguration_setOrientation(AConfiguration *c, int32_t v);
+void AConfiguration_setSdkVersion(AConfiguration *c, int32_t v);
+void AConfiguration_setLanguage(AConfiguration *c, const char *v);
+int32_t AConfiguration_diff(AConfiguration *a, AConfiguration *b);
+int32_t AConfiguration_match(AConfiguration *base, AConfiguration *requested);
 
 #ifdef __cplusplus
 }

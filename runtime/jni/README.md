@@ -157,7 +157,10 @@ which runs `runOnUiThread` jobs and `Handler(getMainLooper())` posts. Input can 
 (Android injects on the UI thread). Unity's own Handlers or HandlerThreads get real looper threads.
 `Choreographer.getInstance()` is per looper, as on Android: UnityMain's, the UI thread's and a
 looper-less thread's run their callbacks on UnityMain before each `nativeRender` (the 2017.4 model);
-a HandlerThread's run on that thread at the display's vsync times (`cfg.refresh_rate`). Unity 2021.3+
+a HandlerThread's run on that thread at the display's vsync times (`cfg.refresh_rate`; the libandroid
+shims' vsync clock, `android_vsync_period_ns()`, when the program links them, so that the NDK's
+AChoreographer ticks at the same instants; an AChoreographer made on one of these looper threads runs
+its callbacks as jobs posted to it, android/README.md). Unity 2021.3+
 keeps its vsync clock on one ("UnityChoreographer", `FrameTimeTracker`) and waits for its frames
 inside `nativeRender` (`AndroidVSync`, `WaitVSync`): run on UnityMain, they never came.
 
@@ -223,7 +226,7 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   UTF-8 byte[] forms, from C and from the static Java method), AndroidJavaProxy with int or long
   ids and each version's `newProxyInstance` (a Runnable posted with `runOnUiThread`, a call with
   an argument and a boxed result, managed exceptions of the 2019.4 and 2021.3 kinds, calls refused
-  after quit), the new UnityPlayer callbacks, Swappy's Java classes and its display query through
+  after quit), the new UnityPlayer callbacks, Swappy's Java classes (and the display modes its `SwappyDisplayManager` reports, under each version's native name) and its display query through
   `NativeActivity`, a 2021.3+ vsync HandlerThread whose frames `nativeRender` waits for, an OBB's
   `unity_obb_guid` read through `ZipFile` (2021.3+), Android's `loadLibrary`/`load` name rules, IL2CPP's library path
   and `<files>/il2cpp`, `up_resize`, the 2020.3/2022.3 startup natives, pause/resume/surface
@@ -296,11 +299,16 @@ as for a handheld:
 (`com.google.androidgamesdk.ChoreographerCallback`, `SwappyDisplayManager`, up_input.c) through the
 activity's ClassLoader; the dex class loaders it would otherwise load them with
 (`InMemoryDexClassLoader`, `PathClassLoader`) are absent, so no dex is written or run.
-ChoreographerCallback's frames come from UnityMain's Choreographer. Swappy reads the display as
+ChoreographerCallback's frames come from a looper thread of their own (`SwappyChoreo`); from API 24
+Swappy takes the NDK's AChoreographer instead (android/README.md). From API 28 it makes a
+`SwappyDisplayManager`, whose constructor reports the display's modes to native at once
+(`nSetSupportedRefreshPeriods`, `nSetSupportedRefreshRates` before 2021.3; Swappy's swap waits for
+that report): the panel's one mode, Display.Mode 1. `setPreferredDisplayModeId`
+(`setPreferredRefreshRate` before 2021.3) is accepted. Swappy reads the display as
 `NativeActivity.getWindowManager().getDefaultDisplay()` on Unity's activity (`android.app.NativeActivity`
 is defined as a subclass of Activity for that; before, a placeholder gave it a 0 Hz display) and
-`Build.DISPLAY` for its device list. It then stays off by the `swappy.disable` system property
-(android/README.md, "Frame pacing"). Unity itself must not use Swappy then: with
+`Build.DISPLAY` for its device list. For converted data it then stays off by the `swappy.disable` system property
+(android/README.md, "Frame pacing"); imported builds run it. Unity itself must not use Swappy then: with
 `PlayerSettings.androidUseSwappy` on, 2019.4 presents nothing and 2021.3+ stop after their first
 frames, which `pmunity android-data` avoids by turning the setting off (its default); runtime/jni
 logs a line when Swappy starts.

@@ -38,10 +38,10 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 static char libdir[512];
 
 // android_package.json beside the APK (pmunity android-data --pack, pmunity apk): "package",
-// "build_id", "apk", and from an imported Android build "version_code", "version_name", "min_sdk"
-// and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData)
+// "build_id", "apk", and from an imported Android build "version_code", "version_name", "min_sdk",
+// "target_sdk" and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData)
 static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32];
-static int pj_version_code, pj_min_sdk;
+static int pj_version_code, pj_min_sdk, pj_target_sdk;
 static char pj_meta[4096];                      // "key=value;key=value"
 
 static void json_str(const char *js, const char *key, char *out, size_t n)
@@ -116,8 +116,30 @@ static void read_package_json(const char *root)
     json_str(js, "version_name", pj_version_name, sizeof pj_version_name);
     pj_version_code = json_int(js, "version_code");
     pj_min_sdk = json_int(js, "min_sdk");
+    pj_target_sdk = json_int(js, "target_sdk");
     json_meta(js, pj_meta, sizeof pj_meta);
     json_str(js, "source", pj_source, sizeof pj_source);
+}
+
+// Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
+// (Cuphead's 2017.4 player among them), 5.1 (API 22) for 64-bit players (64-bit Android starts at
+// API 21); the loader's ro.build.version.sdk says the same. An imported Android build (pmunity apk):
+// its targetSdkVersion, the Android its makers tested it on, but at most SDK_CAP and at least its
+// minSdkVersion (a phone it installs on has that). UA_SDK_INT overrides.
+#if defined(__aarch64__)
+#define BASE_SDK 22
+#else
+#define BASE_SDK 19
+#endif
+#define SDK_CAP 33
+static int reported_sdk(void)
+{
+    if (getenv("UA_SDK_INT")) return atoi(getenv("UA_SDK_INT"));
+    if (strcmp(pj_source, "apk")) return BASE_SDK;
+    int t = pj_target_sdk > 0 ? pj_target_sdk : pj_min_sdk;
+    if (t > SDK_CAP) t = SDK_CAP;
+    if (t < pj_min_sdk) t = pj_min_sdk;
+    return t > BASE_SDK ? t : BASE_SDK;
 }
 
 static int only_apk(const char *root, char *out, size_t n)
@@ -348,6 +370,10 @@ int main(int argc, char **argv)
     sa.sa_flags = SA_SIGINFO;
     sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL); sigaction(SIGILL, &sa, NULL); sigaction(SIGFPE, &sa, NULL);
 
+    // Build.VERSION.SDK_INT (and ro.build.version.sdk, the libandroid functions present, AConfiguration)
+    const int sdk_int = reported_sdk();
+    android_shims_set_api_level(sdk_int);       // before the loader's first lookup
+
     // symbol resolution: ours win over libhybris's hooks, which win over the host
     so_set_library_path(libdir);
     g_mono_trace = getenv("UA_MONO_TRACE") != NULL;
@@ -413,23 +439,12 @@ int main(int argc, char **argv)
     cfg.height = ANativeWindow_getHeight(win);
     cfg.density_dpi = 160;
     cfg.refresh_rate = display_refresh_rate() > 0 ? (float)display_refresh_rate() : 60.f;
-    // Build.VERSION: 4.4 (API 19) as the 32-bit ports were made with, 5.1 (API 22) for 64-bit players
-    // (64-bit Android starts at API 21; the loader's ro.build.version.sdk says the same). An imported
-    // Android build reports at least its minSdkVersion, as a phone it installs on would, but at most
-    // 23: from API 24 on, Unity's frame pacing (Swappy) takes the NDK's AChoreographer, which the
-    // libandroid shims do not have, and stops pacing (Unity then waits for vsyncs forever).
-    // UA_SDK_INT overrides; the system property follows.
-#if defined(__aarch64__)
-    const int base_sdk = 22;
-#else
-    const int base_sdk = 19;
-#endif
-    cfg.sdk_int = getenv("UA_SDK_INT") ? atoi(getenv("UA_SDK_INT"))
-                : pj_min_sdk > base_sdk ? (pj_min_sdk < 23 ? pj_min_sdk : 23) : base_sdk;
+    android_vsync_set_refresh_rate(cfg.refresh_rate);   // the NDK's and Java's Choreographer: one clock
+    cfg.sdk_int = sdk_int;
     static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1.1", "6.0.1", "7.0", "7.1.2", "8.0.0", "8.1.0", "9",
                                             "10", "11", "12", "12", "13", "14", "15" };
     cfg.os_release = cfg.sdk_int >= 19 && cfg.sdk_int <= 35 ? releases[cfg.sdk_int - 19] : "4.4.4";
-    if (cfg.sdk_int != base_sdk && !getenv("SO_PROP_ro_build_version_sdk")) {
+    if (cfg.sdk_int != BASE_SDK && !getenv("SO_PROP_ro_build_version_sdk")) {
         char v[16];
         snprintf(v, sizeof v, "%d", cfg.sdk_int);
         setenv("SO_PROP_ro_build_version_sdk", v, 1);
@@ -447,7 +462,8 @@ int main(int argc, char **argv)
     cfg.on_quit = on_quit;
     input_init(cfg.width, cfg.height);
     frames_init(root, cfg.width, cfg.height);
-    fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d (%s)\n", apk, cfg.width, cfg.height, display_backend());
+    fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d (%s), API %d\n", apk, cfg.width, cfg.height,
+            display_backend(), cfg.sdk_int);
     if (up_start(&cfg) != 0) { fprintf(stderr, "[host] up_start failed\n"); return 1; }
     input_started();
 

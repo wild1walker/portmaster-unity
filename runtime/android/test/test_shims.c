@@ -209,6 +209,312 @@ static void test_looper_sensors_input(void)
     AConfiguration_delete(c);
 }
 
+// ---- AChoreographer, the vsync clock, newer NDK functions -------------------------------------
+static int64_t mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+struct frames { pthread_t thread; int n, bad_thread, bad_time, max; int64_t posted, t[16]; AChoreographer *c; long delay; };
+static void on_frame(long t, void *d)        // Swappy's pattern: each frame posts the next
+{
+    struct frames *f = d;
+    if (!pthread_equal(pthread_self(), f->thread)) f->bad_thread++;
+    int64_t now = mono_ns(), p = android_vsync_period_ns();
+    if (sizeof(long) == 8 && (t % p || t > now || t < f->posted - p)) f->bad_time++;
+    if (f->n < 16) f->t[f->n] = now / p * p;        // the vsync this frame runs in
+    if (++f->n < f->max) { f->posted = mono_ns(); AChoreographer_postFrameCallbackDelayed(f->c, on_frame, f, f->delay); }
+}
+static void on_frame64(int64_t t, void *d)
+{
+    struct frames *f = d;
+    int64_t now = mono_ns(), p = android_vsync_period_ns();
+    if (!pthread_equal(pthread_self(), f->thread)) f->bad_thread++;
+    if (t % p || t > now || t < f->posted - p) f->bad_time++;
+    f->n++;
+}
+static int64_t vs_frame, vs_deadline, vs_present, vs_id, vs_len;
+static void on_vsync(const AChoreographerFrameCallbackData *d, void *data)
+{
+    (void)data;
+    vs_len = AChoreographerFrameCallbackData_getFrameTimelinesLength(d);
+    size_t i = AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex(d);
+    vs_frame = AChoreographerFrameCallbackData_getFrameTimeNanos(d);
+    vs_deadline = AChoreographerFrameCallbackData_getFrameTimelineDeadlineNanos(d, i);
+    vs_present = AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(d, i);
+    vs_id = AChoreographerFrameCallbackData_getFrameTimelineVsyncId(d, i);
+}
+static int rr_calls; static int64_t rr_period; static pthread_t rr_thread; static int rr_bad_thread;
+static void on_rr(int64_t period, void *d)
+{
+    (void)d;
+    rr_calls++; rr_period = period;
+    if (!pthread_equal(pthread_self(), rr_thread)) rr_bad_thread++;
+}
+static void poll_until(int *counter, int want, int ms)
+{
+    int64_t end = mono_ns() + ms * 1000000LL;
+    while (*counter < want && mono_ns() < end) ALooper_pollOnce(50, NULL, NULL, NULL);
+}
+
+static void *no_looper_thread(void *r) { *(AChoreographer **)r = AChoreographer_getInstance(); return NULL; }
+
+// Swappy's NDKChoreographerThread: a looper thread blocked in ALooper_pollAll(-1); the frame
+// callbacks are posted from another thread under a lock the callback takes too
+static pthread_mutex_t sw_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sw_cv = PTHREAD_COND_INITIALIZER;
+static AChoreographer *sw_choreo; static ALooper *sw_looper; static int sw_running, sw_frames, sw_before_idle;
+static pthread_t sw_thread;
+static void sw_schedule(void);
+static void sw_on_frame(long t, void *d)
+{
+    (void)t; (void)d;
+    pthread_mutex_lock(&sw_mu);
+    if (--sw_before_idle > 0) sw_schedule();
+    sw_frames++;
+    pthread_cond_broadcast(&sw_cv);
+    pthread_mutex_unlock(&sw_mu);
+}
+static void sw_schedule(void) { AChoreographer_postFrameCallbackDelayed(sw_choreo, sw_on_frame, NULL, 1); }
+static void *sw_looper_main(void *a)
+{
+    (void)a;
+    pthread_mutex_lock(&sw_mu);
+    sw_looper = ALooper_prepare(0);
+    sw_choreo = AChoreographer_getInstance();
+    rr_thread = pthread_self();
+    AChoreographer_registerRefreshRateCallback(sw_choreo, on_rr, NULL);
+    pthread_cond_broadcast(&sw_cv);
+    while (sw_running) {
+        pthread_mutex_unlock(&sw_mu);
+        int fd, ev; void *data;
+        ALooper_pollAll(-1, &fd, &ev, &data);
+        pthread_mutex_lock(&sw_mu);
+    }
+    pthread_mutex_unlock(&sw_mu);
+    return NULL;
+}
+
+// a host looper of the kind runtime/jni has: a job list serviced by one thread
+static struct hjob { void (*fn)(void *); void *arg; int64_t at; } hjobs[64];
+static int nhjobs, hquit;
+static pthread_mutex_t hmu = PTHREAD_MUTEX_INITIALIZER;
+static __thread int t_is_host;
+static void *host_current(void) { return t_is_host ? (void *)hjobs : NULL; }
+static void host_post(void *looper, void (*fn)(void *), void *arg, int64_t delay_ms)
+{
+    (void)looper;
+    pthread_mutex_lock(&hmu);
+    if (nhjobs < 64) hjobs[nhjobs++] = (struct hjob){ fn, arg, mono_ns() + delay_ms * 1000000LL };
+    pthread_mutex_unlock(&hmu);
+}
+static struct frames hframes;
+static void *host_thread(void *a)
+{
+    (void)a;
+    t_is_host = 1;
+    hframes.thread = pthread_self();
+    hframes.c = AChoreographer_getInstance();
+    hframes.max = 5;
+    hframes.posted = mono_ns();
+    AChoreographer_postFrameCallback(hframes.c, on_frame, &hframes);
+    while (!hquit) {
+        struct hjob j = { 0 };
+        pthread_mutex_lock(&hmu);
+        for (int i = 0; i < nhjobs; i++)
+            if (hjobs[i].at <= mono_ns()) { j = hjobs[i]; hjobs[i] = hjobs[--nhjobs]; break; }
+        pthread_mutex_unlock(&hmu);
+        if (j.fn) j.fn(j.arg); else usleep(1000);
+    }
+    return NULL;
+}
+
+static void *choreo_thread(void *arg)
+{
+    (void)arg;
+    CHECK(AChoreographer_getInstance() == NULL);          // no looper yet
+    ALooper *l = ALooper_prepare(0);
+    AChoreographer *c = AChoreographer_getInstance();
+    CHECK(l && c && AChoreographer_getInstance() == c);
+    int64_t p = android_vsync_period_ns();
+    CHECK(p == 16666666);
+
+    // frames chained from the callback, at successive vsyncs, on this thread
+    struct frames f = { .thread = pthread_self(), .c = c, .max = 6, .delay = 0 };
+    f.posted = mono_ns();
+    AChoreographer_postFrameCallback(c, on_frame, &f);
+    poll_until(&f.n, 6, 5000);
+    CHECK(f.n == 6 && !f.bad_thread && !f.bad_time);
+    int mono_ok = 1;
+    for (int i = 1; i < 6; i++) if (f.t[i] <= f.t[i - 1]) mono_ok = 0;   // one per vsync
+    CHECK(mono_ok);
+
+    // delayed: not before its delay
+    struct frames d = { .thread = pthread_self(), .c = c, .max = 1, .delay = 0 };
+    int64_t t0 = mono_ns();
+    d.posted = t0;
+    AChoreographer_postFrameCallbackDelayed(c, on_frame, &d, 80);
+    poll_until(&d.n, 1, 5000);
+    CHECK(d.n == 1 && d.t[0] - t0 >= 80000000LL);
+
+    // 64-bit frame times (API 29) and vsync callbacks with their frame data (API 33)
+    struct frames g = { .thread = pthread_self(), .c = c };
+    g.posted = mono_ns();
+    AChoreographer_postFrameCallback64(c, on_frame64, &g);
+    AChoreographer_postFrameCallbackDelayed64(c, on_frame64, &g, 20);
+    poll_until(&g.n, 2, 5000);
+    CHECK(g.n == 2 && !g.bad_thread && !g.bad_time);
+    vs_len = 0;
+    int64_t before = mono_ns();
+    CHECK(AChoreographer_postVsyncCallback(c, on_vsync, NULL) == 0);
+    CHECK(AChoreographer_postVsyncCallback(c, NULL, NULL) != 0);
+    int got = 0;
+    for (int i = 0; i < 100 && !vs_len; i++) ALooper_pollOnce(50, NULL, NULL, NULL);
+    got = vs_len == 1;
+    CHECK(got && vs_frame % p == 0 && vs_frame > before - p && vs_deadline == vs_frame + p
+          && vs_present == vs_frame + 2 * p && vs_id > 0);
+
+    // refresh rate callbacks: once after registering, again when the period changes, not twice for a pair
+    rr_calls = 0; rr_thread = pthread_self();
+    AChoreographer_registerRefreshRateCallback(c, on_rr, NULL);
+    AChoreographer_registerRefreshRateCallback(c, on_rr, NULL);
+    poll_until(&rr_calls, 1, 3000);
+    for (int i = 0; i < 3; i++) ALooper_pollOnce(20, NULL, NULL, NULL);
+    CHECK(rr_calls == 1 && rr_period == p);
+    android_vsync_set_refresh_rate(30.0f);
+    poll_until(&rr_calls, 2, 3000);
+    CHECK(rr_calls == 2 && rr_period == 33333333 && android_vsync_period_ns() == 33333333);
+    struct frames h = { .thread = pthread_self(), .c = c, .max = 2 };
+    h.posted = mono_ns();
+    AChoreographer_postFrameCallback(c, on_frame, &h);
+    poll_until(&h.n, 2, 5000);
+    CHECK(h.n == 2 && !h.bad_time && h.t[1] - h.t[0] >= 33333333);    // 30 Hz vsyncs now
+    AChoreographer_unregisterRefreshRateCallback(c, on_rr, NULL);
+    android_vsync_set_refresh_rate(60.0f);
+    for (int i = 0; i < 4; i++) ALooper_pollOnce(20, NULL, NULL, NULL);
+    CHECK(rr_calls == 2 && !rr_bad_thread && android_vsync_period_ns() == 16666666);
+    return NULL;
+}
+
+static void test_choreographer(void)
+{
+    pthread_t t;
+    AChoreographer *none = (AChoreographer *)1;
+    pthread_create(&t, NULL, no_looper_thread, &none);
+    pthread_join(t, NULL);
+    CHECK(none == NULL);
+    pthread_create(&t, NULL, choreo_thread, NULL);
+    pthread_join(t, NULL);
+    CHECK(android_vsync_after(16666666 * 3) == 16666666 * 4 && android_vsync_after(16666666 * 3 + 5) == 16666666 * 4);
+
+    // Swappy's threads: the looper thread in pollAll(-1), callbacks posted from "the swap thread"
+    rr_calls = 0; rr_bad_thread = 0;
+    sw_running = 1;
+    pthread_mutex_lock(&sw_mu);
+    pthread_create(&sw_thread, NULL, sw_looper_main, NULL);
+    while (!sw_choreo) pthread_cond_wait(&sw_cv, &sw_mu);
+    for (int round = 0; round < 3; round++) {        // postFrameCallbacks() before each "swap"
+        if (sw_before_idle == 0) sw_schedule();
+        sw_before_idle = 3;
+        int want = sw_frames + 3;
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 5;
+        while (sw_frames < want && pthread_cond_timedwait(&sw_cv, &sw_mu, &ts) == 0) {}
+    }
+    CHECK(sw_frames >= 9 && sw_before_idle == 0);
+    sw_running = 0;                                    // ~NDKChoreographerThread
+    ALooper_acquire(sw_looper);
+    ALooper_wake(sw_looper);
+    pthread_mutex_unlock(&sw_mu);
+    pthread_join(sw_thread, NULL);
+    ALooper_release(sw_looper);
+    CHECK(rr_calls == 1 && !rr_bad_thread);
+
+    // on a host looper thread (runtime/jni's Java loopers)
+    android_set_host_looper(host_current, host_post);
+    pthread_create(&t, NULL, host_thread, NULL);
+    for (int i = 0; i < 500 && hframes.n < 5; i++) usleep(10000);
+    hquit = 1;
+    pthread_join(t, NULL);
+    android_set_host_looper(NULL, NULL);
+    CHECK(hframes.c != NULL && hframes.n == 5 && !hframes.bad_thread && !hframes.bad_time);
+}
+
+static void *table_fn(const so_shim *t, const char *name)
+{
+    for (; t->name; t++) if (!strcmp(t->name, name)) return t->fn;
+    return (void *)-1;
+}
+
+static void test_ndk_newer(void)
+{
+    // which functions a game sees follows the reported API level (dlsym table and global table alike)
+    CHECK(android_shims_api_level() == 0 && table_fn(android_ndk_shims, "AChoreographer_getInstance") != NULL);
+    android_shims_set_api_level(23);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_getInstance") == NULL);
+    CHECK(android_shims_lookup("AChoreographer_postFrameCallback") == NULL);
+    CHECK(table_fn(android_ndk_shims, "ATrace_isEnabled") != NULL && table_fn(android_ndk_shims, "ATrace_setCounter") == NULL);
+    CHECK(table_fn(android_ndk_shims, "ALooper_prepare") != NULL && table_fn(android_ndk_shims, "AConfiguration_getSdkVersion") != NULL);
+    android_shims_set_api_level(24);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_getInstance") == (void *)AChoreographer_getInstance);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_postFrameCallback64") == NULL);
+    CHECK(table_fn(android_ndk_shims, "AHardwareBuffer_acquire") == NULL);
+    android_shims_set_api_level(29);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_postFrameCallback64") != NULL);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_registerRefreshRateCallback") == NULL);
+    CHECK(table_fn(android_ndk_shims, "ANativeWindow_setFrameRate") == NULL && table_fn(android_ndk_shims, "AHardwareBuffer_isSupported") != NULL);
+    android_shims_set_api_level(30);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_registerRefreshRateCallback") != NULL && table_fn(android_ndk_shims, "ANativeWindow_setFrameRate") != NULL);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_postVsyncCallback") == NULL && table_fn(android_ndk_shims, "APerformanceHint_getManager") == NULL);
+    CHECK(table_fn(android_shims, "AThermal_acquireManager") != NULL && table_fn(android_shims, "AThermal_getThermalHeadroom") == NULL);
+    AConfiguration *c = AConfiguration_new();
+    AConfiguration_fromAssetManager(c, NULL);
+    CHECK(AConfiguration_getSdkVersion(c) == 30 && AConfiguration_getTouchscreen(c) == 1 && AConfiguration_getNavigation(c) == 2);
+    CHECK(AConfiguration_getScreenWidthDp(c) == ANativeWindow_getWidth(android_window_get()) && AConfiguration_getLayoutDirection(c) == 1);
+    AConfiguration *d = AConfiguration_new();
+    AConfiguration_copy(d, c);
+    CHECK(AConfiguration_diff(c, d) == 0 && AConfiguration_match(c, d));
+    AConfiguration_setOrientation(d, 1);
+    AConfiguration_setLanguage(d, "de");
+    CHECK(AConfiguration_diff(c, d) == (0x0080 | 0x0004) && !AConfiguration_match(c, d));
+    AConfiguration *e = AConfiguration_new();
+    AConfiguration_setSdkVersion(e, 21);
+    CHECK(AConfiguration_match(c, e) && AConfiguration_getOrientation(e) == 0);
+    AConfiguration_setSdkVersion(e, 31);
+    CHECK(!AConfiguration_match(c, e));
+    AConfiguration_delete(c); AConfiguration_delete(d); AConfiguration_delete(e);
+    android_shims_set_api_level(35);
+    CHECK(table_fn(android_ndk_shims, "AWorkDuration_create") != NULL && table_fn(android_ndk_shims, "ANativeWindow_clearFrameRate") != NULL);
+    android_shims_set_api_level(0);
+    CHECK(table_fn(android_ndk_shims, "AChoreographer_getInstance") != NULL && table_fn(android_shims, "APerformanceHint_getManager") != NULL);
+
+    // handheld answers, called through the tables as a game would (softfp on ARM)
+    ANativeWindow *w = android_window_get();
+    int32_t (SOFTFP *setfr)(ANativeWindow *, float, int8_t) = android_shims_lookup("ANativeWindow_setFrameRate");
+    CHECK(setfr && setfr(w, 60.0f, 0) == 0 && setfr(NULL, 60.0f, 0) != 0 && setfr(w, -1.0f, 0) != 0);
+    bool (*traceon)(void) = android_shims_lookup("ATrace_isEnabled");
+    CHECK(traceon && !traceon());
+    void *(*hintmgr)(void) = android_shims_lookup("APerformanceHint_getManager");
+    void *(*hintsess)(void *, const int32_t *, size_t, int64_t) = android_shims_lookup("APerformanceHint_createSession");
+    int64_t (*hintrate)(void *) = android_shims_lookup("APerformanceHint_getPreferredUpdateRateNanos");
+    int32_t tid = 1;
+    CHECK(hintmgr && hintmgr() && hintsess(hintmgr(), &tid, 1, 16666666) == NULL && hintrate(hintmgr()) == -1);
+    void *(*thmgr)(void) = android_shims_lookup("AThermal_acquireManager");
+    int (*thstatus)(void *) = android_shims_lookup("AThermal_getCurrentThermalStatus");
+    float (SOFTFP *headroom)(void *, int) = android_shims_lookup("AThermal_getThermalHeadroom");
+    CHECK(thmgr && thmgr() && thstatus(thmgr()) == 0 && headroom && headroom(thmgr(), 0) != headroom(thmgr(), 0));  // NaN
+    int (*hballoc)(const void *, void **) = android_shims_lookup("AHardwareBuffer_allocate");
+    void (*hbdesc)(const void *, void *) = android_shims_lookup("AHardwareBuffer_describe");
+    void *hb = (void *)1;
+    uint32_t desc[10]; memset(desc, 0xff, sizeof desc);
+    CHECK(hballoc && hballoc(desc, &hb) != 0 && hb == NULL);
+    hbdesc(NULL, desc);
+    CHECK(desc[0] == 0 && desc[3] == 0);
+}
+
 // ---- ANativeWindow + egl_glue -----------------------------------------------------------------
 static void *egl(const char *name)
 {
@@ -687,6 +993,8 @@ int main(int argc, char **argv)
     test_log();
     test_assets();
     test_looper_sensors_input();
+    test_choreographer();
+    test_ndk_newer();
     test_window_egl(fakeegl);
     test_host_display(fakeegl);
     test_mediandk();

@@ -13,6 +13,11 @@ ARCH=arm64 ./build.sh test   # the same under out/arm64/, built and run natively
 Link the host with `out/libandroidshims.a` (or `out/arm64/libandroidshims.a`) `-lSDL2 -ldl -lpthread -lm`.
 Do not link a real libEGL for the shims' sake: `egl_glue.c` dlopens it.
 
+The files: `log_shim.c` (liblog), `native_window.c`, `asset_manager.c`, `looper_input_sensor.c`
+(ALooper, input events, sensors, AConfiguration), `choreographer.c` (AChoreographer, the vsync
+clock), `ndk_newer.c` (API 23-35 additions), `opensles.c`, `media_ndk.c`, `egl_glue.c`,
+`shim_tables.c` (the tables and the API level gating).
+
 ## What the libraries need (from `readelf`; `tools/re/elfimports.py` lists them for any player)
 
 The DT_NEEDED entries and undefined dynamic symbols of the 2017.4 player; the Android-only ones are:
@@ -25,6 +30,24 @@ The DT_NEEDED entries and undefined dynamic symbols of the 2017.4 player; the An
 | libEGL.so | libunity | 21 `egl*` functions (host libEGL; 6 are wrapped, see below) |
 | libGLESv2.so | libunity | nothing imported: GL is loaded with dlopen/dlsym and eglGetProcAddress |
 | libmediandk.so | libunity 2022.3 (DT_NEEDED); 2017.4-2021.3 dlopen it | `AMediaCodec_*`, `AMediaExtractor_*`, `AMediaFormat_*`, the `AMEDIAFORMAT_KEY_*` string constants (data objects); weak `AImageReader_*`, `AImage_*`, `AMediaDataSource_*`, more keys |
+
+What the players of 2019.4 and later (and the Android builds of the corpus: their libunity, libil2cpp,
+Burst and plugin libraries) look up beyond that, by dlsym from `libandroid.so` or as weak imports
+(`tools/re/elfimports.py` for the imports, the libraries' strings for dlsym names):
+
+| Names | Who | API |
+|---|---|---|
+| `AChoreographer_getInstance`, `_postFrameCallback`, `_postFrameCallbackDelayed`, `_registerRefreshRateCallback`, `_unregisterRefreshRateCallback` | Swappy (2019.4+, dlsym; its NDK choreographer from API 24) | 24, 30 |
+| `AChoreographer_getInstance`, `_postFrameCallback`, `_postFrameCallback64` (weak imports) | Unity 6's own frame timing | 24, 29 |
+| `ATrace_beginSection`, `_endSection`, `_isEnabled`, `_setCounter` | Swappy's tracer (dlsym) | 23, 29 |
+| `ANativeWindow_setFrameRate` | Unity 2021.3+ and Swappy (dlsym) | 30 |
+| `AHardwareBuffer_acquire`, `_describe`, `_release` (weak) | 2022.3+, the Vulkan video path only (`AndroidVulkanVideo`) | 26 |
+| `ANativeWindow_toSurface` (weak, address checked) | 2022.3+ | 26 |
+
+Nothing in the corpus imports or looks up APerformanceHint, AThermal, AFont/ASystemFontIterator,
+AStorageManager, AAudio (Unity 6 names its functions, from `libaaudio.so`, whose dlopen the loader
+refuses) or ANativeActivity. The first two are provided anyway with a handheld's answers (a game's
+plugin may look them up from API 30/33); the others are not.
 
 Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sym.so`):
 - The `AInputEvent_*`/`AKeyEvent_*` imports have no relocations: Unity never calls them (input
@@ -47,10 +70,13 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
 | ALooper | Implemented with poll() and an eventfd: `forThread`, `prepare`, `acquire/release`, `addFd/removeFd` (callback or ident), `pollOnce/pollAll`, `wake`. |
 | Sensors | Implemented as "no sensors": a manager with an empty list, NULL default sensors, event queues that never have events. |
 | Input | Minimal: `AInputEvent_*`, `AKeyEvent_*`, `AMotionEvent_*` getters over our own event struct (`android_input_event_new_key()` builds one). `AInputQueue_*` are inert stubs. |
-| AConfiguration | Minimal fixed config: landscape, 160 dpi, SDK 26, no touch, D-pad, en_US. |
+| AConfiguration | Every getter and setter of `configuration.h` (API 9-34) and `diff`/`match`/`isBetterThan`: landscape, mdpi (160 dpi: the window's size in dp), no touch, no keys, D-pad, en-US, left to right, not round, screen size and "long" from the window, the reported API level (26 when the host set none). |
 | OpenSL ES | Implemented on SDL2: engine, output mix, audio player with a PCM buffer queue (`SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE` or `_BUFFERQUEUE`, 8/16/32-bit int and float PCM). Interfaces: Object, Engine, OutputMix, Play, BufferQueue/AndroidSimpleBufferQueue, Volume, AndroidConfiguration. Stubbed with `SL_RESULT_FEATURE_UNSUPPORTED`: audio recorder (`SL_IID_RECORD` exists but recording does not), MIDI, LED/vibra, listener/3D, metadata extractor, URI/fd players, effects. |
 | libmediandk | `media_ndk.c`: AMediaExtractor (fd ranges, paths, `AMediaDataSource`), AMediaFormat, AMediaCodec over the media core (`../media`, referenced weakly) when the program links it, as ua_host does: Unity 2022.3's VideoPlayer path, with the video decoder's output the window of a Java `Surface(SurfaceTexture)` (`ANativeWindow_fromSurface` gives such a Surface a window of its own, `android_window_media_surface()`). Without the core every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted), which this folder's tests check. `AImageReader`/`AImage` (the Vulkan video path) are failing stubs either way; `AImage_deleteAsync` closes its fence fd. The `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). `AMediaFormat_setFloat` is `SOFTFP`. In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
-| Frame pacing | No `AChoreographer_*` (dlsym answers NULL, as on API < 24), no Android frame timestamps, a no-op `eglPresentationTimeANDROID`; Swappy is kept off by its own switch (below). |
+| Choreographer | `choreographer.c`: `AChoreographer_*` (API 24-33): frame callbacks (32- and 64-bit frame times, delayed), vsync callbacks with their `AChoreographerFrameCallbackData` (one timeline: deadline the next vsync, expected presentation the one after), refresh rate callbacks (once after registering, again when the period changes). Callbacks run on the thread whose looper made the choreographer, at vsync times shared with the Java Choreographer of runtime/jni (below). |
+| Newer NDK functions | `ndk_newer.c`: `ANativeWindow_setFrameRate*` (accepted, nothing changes: one display mode), `ATrace_*` (never enabled), `APerformanceHint_*`/`AWorkDuration_*` (a manager without sessions: `createSession` NULL, update rate -1, as without the power HAL's hint support), `AThermal_*` (status NONE, headroom NaN: unknown), `AHardwareBuffer_*` (no gralloc: allocation fails, describe clears). |
+| API level | `android_shims_set_api_level(api)`: each function above is present from the API level Android added it in (`NDK_API_LEVELS` in `shim_tables.c`) and NULL below the reported level, in the import table and for dlsym alike, as on a phone of that level. |
+| Frame pacing | No Android frame timestamps, a no-op `eglPresentationTimeANDROID`; Swappy runs for imported builds and stays off for converted data (below). |
 | EGL | `egl_glue.c`, separate table `egl_shims[]` (below). |
 
 ## Using it from the host
@@ -69,6 +95,8 @@ so_register_fake_lib("libOpenSLES.so", android_sles_shims); // android_shims_for
 so_map_library("libmediandk.so", NULL);     // dlopen refused (2017.4-2021.3 take their JNI video path);
                                             // 2022.3's DT_NEEDED and imports still get media_ndk.c
 so_map_library("libvulkan.so", NULL);
+android_shims_set_api_level(sdk_int);        // before the loader's first lookup: what the game sees
+android_vsync_set_refresh_rate(display_hz);  // the vsync clock of both choreographers
 ```
 - For `SL_IID_*` the table entry is the address of the `SLInterfaceID` variable, which is what
   dlsym returns for a data symbol (FMOD dereferences it).
@@ -161,43 +189,63 @@ Display, config and contexts are the real EGL objects, so `eglGetCurrentContext`
 `eglGetConfigAttrib` and `eglGetError` need no wrapping. Not combined with `UA_EGL_PBUFFER` (the
 host never sets a display then).
 
-## Frame pacing (Swappy)
+## Frame pacing (Swappy) and the vsync clock
 
 Unity 2019.3+ contains Android Frame Pacing (Swappy, player setting "Optimized Frame Pacing",
-`androidUseSwappy`). Decision: Swappy stays off, and Unity presents with `eglSwapBuffers` at its
-swap interval, which the host's display paces (vsync on Mali fbdev, `SDL_GL_SetSwapInterval` on SDL):
-- Swappy's own off switch, the `swappy.disable` system property, is set (`loader/hybris_compat.c`;
-  `SO_PROP_swappy_disable=0` would let it run). It is read once Swappy's EGL table and its
-  display query (`NativeActivity.getWindowManager()`, runtime/jni) work.
-- Swappy's EGL table needs `eglPresentationTimeANDROID` (and `eglCreateSyncKHR`,
-  `eglDestroySyncKHR`, `eglGetSyncAttribKHR`, `eglSurfaceAttrib`, ...). `eglGetProcAddress` answers
-  a no-op that succeeds: a desired present time is a hint to SurfaceFlinger's queue, and no host
-  here queues frames. Before, it answered NULL so that Swappy switched itself off; but the Swappy of
-  2021.3+ keeps its disabled instance, Unity's present still calls `SwappyGL_swap`, and that falls
-  back to the table: a NULL dereference on `UnityGfxDeviceW` after two frames (`swappy::SwappyGL::swap`).
-  `eglGetNextFrameIdANDROID`, `eglGetFrameTimestampsANDROID`, `eglGetCompositorTimingANDROID` and
-  their `Supported` queries stay NULL (optional for Swappy too), also when the driver has them.
-- `AChoreographer_*` are absent from the libandroid shims (dlsym of them answers NULL, as on
-  Android before API 24): Swappy's NDK choreographer cannot start; its Java one
-  (`ChoreographerCallback`, runtime/jni) is driven by UnityMain's frame loop.
-- `ANativeWindow_setFrameRate` (2021.3+, dlsym) is absent too: Unity keeps its frame rate.
+`androidUseSwappy`). Converted desktop data has the setting off (`pmunity android-data`, `--swappy`), as
+the desktop build ran: Swappy stays off by its own switch, the `swappy.disable` system property
+(`loader/hybris_compat.c`; `SO_PROP_swappy_disable=0` would let it run), and Unity presents with
+`eglSwapBuffers` at its swap interval, which the host's display paces (vsync on Mali fbdev,
+`SDL_GL_SetSwapInterval` on SDL). A game's own Android build (`pmunity apk`, docs/apk.md) keeps its
+setting, so ua_host clears `swappy.disable` for it and Swappy paces the frames.
 
-Unity itself must not use Swappy then: with `androidUseSwappy` on and Swappy off, the 2019.4 player
-presents nothing (Swappy deletes a disabled instance, `SwappyGL_swap` returns false without
-swapping: "Failed to get SwappyGL instance in swap" for every frame), and 2021.3+ stop after their
-first frames (the disabled Swappy reports a swap duration of -1, Unity's target frame rate comes out
-near 0 and `AndroidVSync` waits for INT_MAX vsyncs). 2020.3 turns Swappy off itself below API 23.
-`pmunity android-data` therefore turns `androidUseSwappy` off by default (`--swappy`), which is
-also what a desktop build ran with; runtime/jni logs a line when Swappy starts anyway.
+What Swappy needs from here:
+- its EGL table: `eglPresentationTimeANDROID` (and `eglCreateSyncKHR`, `eglDestroySyncKHR`,
+  `eglGetSyncAttribKHR`, `eglSurfaceAttrib`, ...). `eglGetProcAddress` answers a no-op that succeeds
+  for the presentation time: a desired present time is a hint to SurfaceFlinger's queue, and no host
+  here queues frames. With NULL, the 2021.3+ Swappy kept a disabled instance whose fallback swap went
+  through the table: a NULL dereference on `UnityGfxDeviceW` after two frames. The frame-timestamp
+  queries (`eglGetNextFrameIdANDROID`, `eglGetFrameTimestampsANDROID`, `eglGetCompositorTimingANDROID`
+  and their `Supported` queries) stay NULL (optional for Swappy too), also when the driver has them.
+- a choreographer, picked by the reported API level: below 24 its Java `ChoreographerCallback`
+  (runtime/jni), whose ticks come on a looper thread of its own (`SwappyChoreo`, as Swappy's
+  `LooperThread`); from 24 the NDK's `AChoreographer` on a thread Swappy makes (`ALooper_prepare`,
+  `AChoreographer_getInstance`, then `ALooper_pollAll(-1)` until it is woken to stop), with its
+  frame callbacks posted from the swap thread under Swappy's own lock: the choreographer's timerfd on
+  that looper fires at the next vsync with a callback due, and no lock of ours is held while a
+  callback runs. From API 30 Swappy registers a refresh rate callback, which runs once soon after
+  (Android sends the current period then).
+- from API 28 its Java `SwappyDisplayManager`, whose constructor reports the display's modes
+  (`nSetSupportedRefreshPeriods`, `nSetSupportedRefreshRates` before 2021.3): Swappy's swap waits for
+  that report (runtime/jni sends the panel's one mode).
+- the display's refresh rate and vsync offsets (`NativeActivity.getWindowManager().getDefaultDisplay()`,
+  runtime/jni).
 
-A game's own Android build (`pmunity apk`, docs/apk.md) keeps its setting, so ua_host clears
-`swappy.disable` for it (`SO_PROP_swappy_disable=0` unless set): Swappy then paces the frames, with
-its Java `ChoreographerCallback` ticking on a looper thread of its own (`SwappyChoreo`,
-runtime/jni/up_input.c) as Swappy's `LooperThread` does on Android. Driven from UnityMain's frame
-loop instead, Swappy's swap waited for ticks the blocked loop could not give, and each frame took
-longer than the last (2021.3: 130 ms to 480 ms within 90 s in the emulated rig; with the thread,
-a steady 25-29 fps). The reported API level stays below 24 for these builds: from 24 Swappy takes
-the NDK choreographer, which these shims do not have.
+Driven from UnityMain's frame loop instead of a thread of its own, Swappy's swap waited for ticks the
+blocked loop could not give, and each frame took longer than the last (2021.3: 130 ms to 480 ms
+within 90 s in the emulated rig). Unity itself must not have the setting on while Swappy is off: the
+2019.4 player then presents nothing (Swappy deletes a disabled instance, `SwappyGL_swap` returns false
+without swapping) and 2021.3+ stop after their first frames (the disabled Swappy reports a swap
+duration of -1, Unity's target frame rate comes out near 0 and `AndroidVSync` waits for INT_MAX
+vsyncs); 2020.3 turns Swappy off itself below API 23.
+
+**The vsync clock** is one for both choreographers: vsyncs are the multiples of one refresh period on
+`CLOCK_MONOTONIC` (`android_vsync_set_refresh_rate(hz)`, which ua_host calls with the display's
+rate; runtime/jni's Java Choreographer reads `android_vsync_period_ns()` when the program links these
+shims). A frame callback posted at t, or due at t + delay, runs at the first vsync after it, with that
+vsync as its frame time; one posted while callbacks run goes to the next vsync. On 32-bit ARM the
+`long` frame time of `AChoreographer_postFrameCallback` is truncated as on Android (NDK issue 868),
+`postFrameCallback64` (API 29) has all of it.
+
+**Which thread**: `AChoreographer_getInstance()` is the calling thread's, as on Android. On a thread
+with an ALooper the callbacks run inside its `ALooper_pollOnce`/`pollAll` (a timerfd on the looper);
+on one of the host's own looper threads (`android_set_host_looper(current, post)`: runtime/jni
+registers its Java loopers, UnityMain and HandlerThreads, so Unity 6's frame timing on a HandlerThread
+gets that thread's choreographer) they run as jobs posted to it; elsewhere it is NULL ("no looper
+prepared for thread"), as on Android. `ALooper_forThread()` is still NULL on the Java loopers.
+
+`ANativeWindow_setFrameRate` (2021.3+, Swappy) is accepted and changes nothing: the display has one
+mode.
 
 ## Audio
 
@@ -237,9 +285,16 @@ The unit tests pass unchanged on both architectures.
 
 ## Tests
 
-`test/test_shims.c` (249 checks) covers: log formatting and filtering; assets (read/seek bounds,
+`test/test_shims.c` (296 checks) covers: log formatting and filtering; assets (read/seek bounds,
 getBuffer, openFileDescriptor, directory listing, `..` refusal); ALooper callbacks, idents, wake
-and timeout; sensors and input; the window and egl_glue against `test/fake_egl.c` (fbdev size
+and timeout; sensors and input; AChoreographer (NULL without a looper; frame callbacks chained from
+the callback at successive vsyncs on the looper's thread, delayed ones not before their delay, 64-bit
+and vsync callbacks with their frame data, refresh rate callbacks once per registration and again on
+a period change, Swappy's threads: a looper in `ALooper_pollAll(-1)` with callbacks posted from another
+thread under a lock the callback takes, woken to stop; a host looper's jobs); the API level gating of
+the newer functions in both tables; AConfiguration's fields, `diff` and `match`; the handheld answers
+of `ANativeWindow_setFrameRate`, ATrace, APerformanceHint, AThermal and AHardwareBuffer (through the
+tables, softfp on ARM); the window and egl_glue against `test/fake_egl.c` (fbdev size
 follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress, its
 hidden frame-timestamp functions and the no-op presentation time; with a host display: every mapping above, `eglSurfaceAttrib` and
 its re-application after a surface replacement, pass-through for other displays and surfaces,

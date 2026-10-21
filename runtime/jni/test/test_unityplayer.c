@@ -185,6 +185,7 @@ static int run_shape(int shape)
     CHECK(R(R_AUDIO_RATE) == 48000);
     CHECK(R(R_CALLBACKS_OK) == 1);
     CHECK(R(R_SWAPPY_JAVA) == 1);
+    if (shape >= SHAPE_2019_4) CHECK(R(R_SWAPPY_MODES) == 1);
     CHECK(R(R_IL2CPP_OK) == 1);
     CHECK(access("/tmp/uptest/data/files/il2cpp", W_OK) == 0);
     CHECK(R(R_ORIENT_LOCK) == (shape >= SHAPE_2020_3 ? 100 : 0));

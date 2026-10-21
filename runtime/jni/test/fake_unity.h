@@ -24,6 +24,7 @@ enum { R_ONLOAD, R_INITJNI, R_RESUME, R_PAUSE, R_DONE, R_FOCUS_TRUE, R_FOCUS_FAL
        R_CALLBACKS_OK,      /* new UnityPlayer callbacks answered as a handheld should (2018.4+)  */
        R_SWAPPY_JAVA,       /* Swappy's Java classes load and register; dex class loaders absent  */
        R_SWAPPY_FRAME,      /* ChoreographerCallback.postFrameCallback reached nOnChoreographer   */
+       R_SWAPPY_MODES,      /* SwappyDisplayManager's constructor reported the panel's one mode   */
        R_IL2CPP_OK,         /* findLibrary("il2cpp") and <filesDir>/il2cpp work                   */
        R_PROXY_RUN,         /* AndroidJavaProxy Runnable.run() reached nativeProxyInvoke          */
        R_PROXY_RET,         /* a proxy call with an argument and a boxed boolean result           */
