@@ -46,6 +46,7 @@ original game's ones), --asmpatch (tools/asmpatch's generic patches, e.g. Rewire
 import argparse
 import ctypes
 import errno
+import gc
 import fnmatch
 import json
 import os
@@ -60,6 +61,7 @@ import time
 
 from . import streaming as ST
 from . import typetrees
+from .unity_io import _trim
 from . import unity_version as UV
 from . import video
 
@@ -640,11 +642,13 @@ def _inline_streamed(sf, plan, read_stream, out_path):
 
 def inline_bundle(src, dst):
     """Bundle with .resS nodes: textures inlined, the .resS nodes dropped once unreferenced, every
-    CAB's target platform set to Android, saved as chunked LZ4 like the original. A big bundle
-    (over 64 MB) is unpacked to its node files and written back from them (bigbundle.py)."""
+    CAB's target platform set to Android, saved as chunked LZ4 like the original. Unpacked to its
+    node files and written back from them (bigbundle.py): one texture in memory at a time, whatever
+    the bundle's size (in UnityPy, a bundle needed about five times its size, and hundreds of
+    them in one process grew past what a 1 GB handheld has)."""
     import UnityPy
     from . import bigbundle
-    if bigbundle.size(src) > 64 << 20:
+    if bigbundle.size(src):                 # (0: a layout bigbundle does not read)
         work = dst + '.work'
         shutil.rmtree(work, ignore_errors=True)
         try:
@@ -1524,6 +1528,9 @@ def main(argv=None):
             raise ValueError(act)
         stats[how] = stats.get(how, 0) + 1
         newstate[dst_rel] = key
+        if how in ('inlined', 'unitypy', 'video', 'patched'):
+            gc.collect()
+            _trim()
         if crc0 is not None:
             crcs[crc0] = ST.bundle_crc(dst)
             newstate.setdefault('_crc', {})[dst_rel] = [crc0, crcs[crc0]]
