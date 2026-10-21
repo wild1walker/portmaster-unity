@@ -32,7 +32,8 @@ PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head
 if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4" 2>/dev/null; then
   step "unpacking the setup tools"
   rm -rf "$W/python"
-  tar -xzf "$S/python.tar.gz" -C "$W" || fail "Could not unpack the setup's Python (see patchlog.txt)."
+  # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
+  ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
   PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
   [ -n "$PY" ] || fail "The setup's Python is incomplete."
 fi
