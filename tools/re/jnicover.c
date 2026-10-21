@@ -6,7 +6,8 @@
  * It includes fakejni.c to query its tables directly; build it on any glibc host, e.g. in the
  * ua-build-arm64 image:
  *   gcc -O1 -w -Iruntime/jni -Iruntime/jni/include tools/re/jnicover.c runtime/jni/unityplayer.c \
- *       runtime/jni/up_android.c runtime/jni/up_input.c -lz -lpthread -lm -o /tmp/jnicover
+ *       runtime/jni/up_android.c runtime/jni/up_input.c runtime/jni/up_tls.c runtime/jni/up_fmod.c \
+ *       runtime/jni/up_http.c runtime/jni/up_unity6.c -lz -ldl -lpthread -lm -o /tmp/jnicover
  *   /tmp/jnicover < bindings.tsv
  */
 #include "fakejni.c"

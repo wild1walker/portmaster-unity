@@ -1690,6 +1690,17 @@ char *so_dlerror(void)
     return t_err;
 }
 
+const char *so_module_at(const void *addr, uintptr_t *bias)
+{
+    uintptr_t a = (uintptr_t)addr;
+    for (so_module *m = g_modules; m; m = m->next)      /* lock-free: modules are never unloaded */
+        if (a >= m->map_start && a < m->map_start + m->map_size) {
+            if (bias) *bias = m->bias;
+            return m->path;
+        }
+    return NULL;
+}
+
 /* bionic Dl_info has the same layout as glibc's */
 int so_dladdr(const void *addr, Dl_info *info)
 {

@@ -3,9 +3,10 @@
 A Windows build's shaders carry only Direct3D 11 programs (platform blob 4). One D3D11 blob
 entry (blob.Entry) holds one stage:
 
-  code   a 6-byte Unity header, then the DXBC container (fxc's output). Header: 1, then counts of
-         the slots Unity's D3D11 renderer binds (textures, constant buffers, samplers, 2 more);
-         kept as it is, not needed for GL.
+  code   Unity's header, then the DXBC container (fxc's output). The header is 6 bytes up to Unity
+         2019.3 (1, then counts of the slots Unity's D3D11 renderer binds: textures, constant
+         buffers, samplers, 2 more) and 38 from 2019.4 (2, then the same counts and more); kept
+         as it is, not needed for GL.
   rest   Unity's binding info. Unity strips the container's reflection chunk (RDEF: constant
          buffer layouts, resource names) in builds and keeps what it needs here instead:
 
@@ -14,17 +15,27 @@ entry (blob.Entry) holds one stage:
            int32 n; n x constant buffer           the first one (name '', size 0) holds the
                                                   globals outside any cbuffer (none in D3D11)
                string name; int32 size
-               int32 n; n x (string name, int32 type (0 float, 1 int; others refused), int32 rows,
+               int32 n; n x (string name, int32 type (0 float, 1 int, 5 uint), int32 rows,
                              int32 columns, int32 is matrix, int32 array size, int32 offset)
-               int32 n; n x struct member         (none in 2017.4 data seen: refused)
+               int32 n; n x struct (GPU instancing data): string name, int32 offset, int32
+                             array size, int32 size, int32 n; n x member as above
            int32 n; n x binding: string name, int32 kind, int32 index, then by kind:
-               kind 0 texture:          int32 dimension (2 2D, 3 3D, 4 cube, 5 2D array,
-                                        6 cube array), int32 (0 in all data seen)
+               kind 0 texture:          up to 2018.1 int32 dimension (2 2D, 3 3D, 4 cube, 5 2D
+                                        array, 6 cube array), int32 sampler index; from 2018.2
+                                        int32 sampler index (-1: an inline sampler state),
+                                        int32 dimension << 1 | multisampled
                kind 1 constant buffer:  int32 (0 in all data seen)
+               kind 4 inline sampler:   int32 the sampler state (filter and wrap bits from its
+                                        name, e.g. sampler_PointClamp), named '', index its register
                other kinds (buffers, UAVs) are refused
-         (strings: int32 length, bytes, padded to 4). Checked by writing every entry back byte for
-         byte (Bindings.serialize) and against the SerializedSubProgram that uses the entry
-         (check_parsed_form: Unity writes both from the same compile).
+         (strings: int32 length, bytes, padded to 4). From Unity 2021.2 (serializer 202012090) the
+         entry ends after the vertex inputs and the rest is a parameter entry of its own
+         (blob.ParamEntry, named by the program's m_ParameterBlobIndices); from 2020.1 what all
+         the subprograms of a program share is stored once, in the parsed form's
+         m_CommonParameters, and left out of the entries (with_common() puts it back). Checked by
+         writing every entry back byte for byte (Bindings.serialize) and against the
+         SerializedSubProgram that uses the entry (check_parsed_form: Unity writes both from the
+         same compile).
 
 Only the names and constant buffer layouts are missing from the bytecode; registers, resource
 types and sampler modes come from the declarations in the SHDR/SHEX chunk. with_reflection()
@@ -41,6 +52,12 @@ SV_Target<n>, a GLSL sampler per texture named as the texture, every constant bu
 plain uniform (Unity's GL backends bind uniforms by name). gl_program() joins the stages as
 Unity stores a GL program (#ifdef VERTEX / #ifdef FRAGMENT blocks); glsl.py turns it into GLSL ES
 3.00 as for a macOS/Linux build.
+
+From Unity 2019.1 a GL program has binding info of its own: the loose uniforms of each stage as
+a "$Globals" constant buffer with Unity's offsets, the uniform blocks, and the textures with their
+units. gl_bindings() writes it from the GL program's text as Unity's GL compiler does (checked
+byte for byte against every GLCore and GLES3 program of Unity's built-in resources 2019.4 -
+2022.3 and of games of each line: tests/test_glcore_corpus.py, PMUNITY_GLCORE_BINDINGS).
 """
 import os
 import re
@@ -48,25 +65,32 @@ import shutil
 import struct
 import subprocess
 
+from . import glsl
+
 
 class Unsupported(Exception):
     """A program that this path cannot give a GL twin (the message says why)."""
 
 
-# GPU program types (ShaderGpuProgramType, Unity 5.5 - 2018.x)
+# GPU program types (ShaderGpuProgramType, Unity 5.5 - 2022.3)
 GPU_DX11_VS40, GPU_DX11_VS50, GPU_DX11_PS40, GPU_DX11_PS50 = 15, 16, 17, 18
 GPU_DX11_GS40, GPU_DX11_GS50, GPU_DX11_HS50, GPU_DX11_DS50 = 19, 20, 21, 22
 VERTEX_TYPES = (GPU_DX11_VS40, GPU_DX11_VS50)
 PIXEL_TYPES = (GPU_DX11_PS40, GPU_DX11_PS50)
 OTHER_STAGE_TYPES = (GPU_DX11_GS40, GPU_DX11_GS50, GPU_DX11_HS50, GPU_DX11_DS50)
 
-HEADER_SIZE = 6
+HEADER_SIZE = 6                 # Unity's header before the DXBC container, up to 2019.3
+HEADER_SIZES = (6, 38)          # 2019.4+: 38 bytes
 
 # HLSLcc flags (include/hlslcc.h) for Unity's OpenGL Core style: constant buffer members as plain
-# uniforms (no uniform blocks, no struct around $Globals), matrices as vec4 arrays
+# uniforms (no uniform blocks, no struct around $Globals), matrices as vec4 arrays; from Unity
+# 2019.1 also explicit texture units in Unity's macro (UNITY_LOCATION(n), which the player turns
+# off where the driver lacks explicit uniform locations)
 HLSLCC_FLAG_DISABLE_GLOBALS_STRUCT = 0x800
 HLSLCC_FLAG_TRANSLATE_MATRICES = 0x20000
+HLSLCC_FLAG_FORCE_EXPLICIT_LOCATIONS = 0x8000000
 FLAGS = HLSLCC_FLAG_TRANSLATE_MATRICES | HLSLCC_FLAG_DISABLE_GLOBALS_STRUCT
+FLAGS_2019 = FLAGS | HLSLCC_FLAG_FORCE_EXPLICIT_LOCATIONS
 LANG = '150'
 
 
@@ -112,30 +136,44 @@ class Param:
         self.name, self.type, self.rows, self.cols = name, type, rows, cols
         self.is_matrix, self.array, self.offset = is_matrix, array, offset
 
+    def key(self):
+        return (self.name, self.type, self.rows, self.cols, self.is_matrix, self.array, self.offset)
+
     def __repr__(self):
         return f'{self.name}@{self.offset}'
+
+
+class StructParam:
+    """A struct member of a constant buffer (Unity's GPU instancing data: an array of structs)."""
+    __slots__ = ('name', 'offset', 'array', 'size', 'params')
+
+    def __init__(self, name, offset, array, size, params):
+        self.name, self.offset, self.array, self.size, self.params = name, offset, array, size, params
 
 
 class ConstantBuffer:
     __slots__ = ('name', 'size', 'params', 'structs')
 
-    def __init__(self, name, size, params, structs=0):
-        self.name, self.size, self.params, self.structs = name, size, params, structs
+    def __init__(self, name, size, params, structs=()):
+        self.name, self.size, self.params, self.structs = name, size, params, list(structs)
+
+    def __repr__(self):
+        return f'{self.name}[{self.size}]{self.params}'
 
 
 # serializer from which a texture binding's two ints are (sampler index, dimension << 1 |
 # multisampled) (Unity 2018.2+); before: (dimension, sampler index)
 PACKED_TEXTURE_FROM = 201802150
-# serializers this path reads: Unity 2017.3 - 2018.4. From 2019.1 Unity's GL programs carry
-# constant buffer layouts of their own (a "$Globals" of every loose uniform) that the D3D11 ones
-# do not give, and from 2020.1 the parameters a program's variants share are stored once, in the
-# parsed form (m_CommonParameters), not with each entry.
-SERIALIZERS = (201708220, 201802150)
+# serializers this path reads: Unity 2017.3 - 2018.4 (201708220, 201802150), 2019.1 - 2021.1
+# (201806140: from 2020.1 with m_CommonParameters), 2021.2 - 2022.3 (202012090: parameters as
+# entries of their own)
+SERIALIZERS = (201708220, 201802150, 201806140, 202012090)
+SEPARATE_PARAMS_FROM = 202012090
 
 
 class Binding:
-    KIND_TEXTURE, KIND_CBUFFER = 0, 1
-    EXTRA = {KIND_TEXTURE: 2, KIND_CBUFFER: 1}          # ints after the index, by kind
+    KIND_TEXTURE, KIND_CBUFFER, KIND_SAMPLER = 0, 1, 4
+    EXTRA = {KIND_TEXTURE: 2, KIND_CBUFFER: 1, KIND_SAMPLER: 1}     # ints after the index, by kind
     __slots__ = ('name', 'kind', 'index', 'extra', 'packed')
 
     def __init__(self, name, kind, index, extra, packed=False):
@@ -149,12 +187,27 @@ class Binding:
             return None
         return self.extra[1] >> 1 if self.packed else self.extra[0]
 
+    @property
+    def sampler(self):
+        """A texture's sampler index (-1: it is sampled with an inline sampler state)."""
+        if self.kind != self.KIND_TEXTURE:
+            return None
+        return self.extra[0] if self.packed else self.extra[1]
+
+    def key(self):
+        return (self.name, self.kind, self.index, tuple(self.extra))
+
     def __repr__(self):
         return f'{self.name}:{self.kind}/{self.index}'
 
 
+def _params(r):
+    return [Param(r.string(), *(r.i32() for _ in range(6))) for _ in range(r.count())]
+
+
 class Bindings:
-    """Unity's binding info of one D3D11 entry (the bytes after its code)."""
+    """Unity's binding info of one entry (the bytes after its code; 2021.2+: and its parameter
+    entry's)."""
 
     def __init__(self, source_map, channels, cbuffers, bindings):
         self.source_map, self.channels = source_map, channels
@@ -171,10 +224,8 @@ class Bindings:
             cbs = []
             for _ in range(r.count(256)):
                 name, size = r.string(), r.i32()
-                params = [Param(r.string(), *(r.i32() for _ in range(6))) for _ in range(r.count())]
-                structs = r.count()
-                if structs:
-                    raise Unsupported(f'constant buffer {name!r} has struct members (instancing data): layout not known')
+                params = _params(r)
+                structs = [StructParam(r.string(), r.i32(), r.i32(), r.i32(), _params(r)) for _ in range(r.count(64))]
                 cbs.append(ConstantBuffer(name, size, params, structs))
             binds = []
             for _ in range(r.count(256)):
@@ -189,28 +240,98 @@ class Bindings:
             raise Unsupported('binding info does not match the known layout (round trip)')
         return b
 
-    def serialize(self):
+    def head(self):
+        """The source map and vertex inputs (2021.2+: all of the code entry's binding info)."""
         out = bytearray(struct.pack('<ii', self.source_map, len(self.channels)))
         for s, t in self.channels:
             out += struct.pack('<ii', s, t)
-        out += struct.pack('<i', len(self.cbuffers))
+        return bytes(out)
+
+    def params_bytes(self):
+        """Constant buffers and bindings (2021.2+: a parameter entry's data)."""
+        out = bytearray(struct.pack('<i', len(self.cbuffers)))
         for cb in self.cbuffers:
             out += _wstr(cb.name) + struct.pack('<ii', cb.size, len(cb.params))
             for p in cb.params:
                 out += _wstr(p.name) + struct.pack('<6i', p.type, p.rows, p.cols, p.is_matrix, p.array, p.offset)
-            out += struct.pack('<i', cb.structs)
+            out += struct.pack('<i', len(cb.structs))
+            for st in cb.structs:
+                out += _wstr(st.name) + struct.pack('<4i', st.offset, st.array, st.size, len(st.params))
+                for p in st.params:
+                    out += _wstr(p.name) + struct.pack('<6i', p.type, p.rows, p.cols, p.is_matrix, p.array, p.offset)
         out += struct.pack('<i', len(self.bindings))
         for b in self.bindings:
             out += _wstr(b.name) + struct.pack('<ii', b.kind, b.index) + struct.pack('<%di' % len(b.extra), *b.extra)
         return bytes(out)
+
+    def serialize(self):
+        return self.head() + self.params_bytes()
+
+
+def entry_bindings(entry, param_entry=None):
+    """The Bindings of a blob entry (2021.2+: with its parameter entry)."""
+    data = entry.rest + (param_entry.data if param_entry is not None else b'')
+    return Bindings.parse(data, entry.version)
+
+
+def _parameters(sp):
+    """A subprogram's (or m_CommonParameters') parameter lists: 2020.1+ grouped in m_Parameters."""
+    return sp.get('m_Parameters') if isinstance(sp.get('m_Parameters'), dict) else sp
+
+
+def with_common(bindings, common, names):
+    """The Bindings with a program's m_CommonParameters (2020.1+: what all its subprograms share,
+    left out of their entries) put back: constant buffer members into the constant buffer of the
+    same name (the entry keeps its name and size; m_IsPartialCB), constant buffers the entry
+    lacks, bindings, textures and inline samplers. names: {name index: name} of the pass."""
+    if not common or not any(common.get(k) for k in ('m_ConstantBuffers', 'm_ConstantBufferBindings',
+                                                       'm_TextureParams', 'm_Samplers', 'm_VectorParams',
+                                                       'm_MatrixParams', 'm_BufferParams', 'm_UAVParams')):
+        return bindings
+    if common.get('m_BufferParams') or common.get('m_UAVParams'):
+        raise Unsupported('buffers or UAVs in the shared parameters')
+    if common.get('m_VectorParams') or common.get('m_MatrixParams'):
+        raise Unsupported('shared parameters outside constant buffers')
+    cbs = [ConstantBuffer(cb.name, cb.size, list(cb.params), cb.structs) for cb in bindings.cbuffers]
+    binds = list(bindings.bindings)
+    packed = True                       # (2020.1+: textures as sampler index, dimension << 1 | multisampled)
+    used = set()
+    for c in common.get('m_ConstantBuffers') or []:
+        name = names.get(c['m_NameIndex'])
+        if name is None:
+            raise Unsupported('shared constant buffer without a name')
+        if c.get('m_StructParams'):
+            raise Unsupported(f'constant buffer {name!r} has struct members (instancing data)')
+        params = [Param(names[v['m_NameIndex']], v['m_Type'], 1, v['m_Dim'], 0, v['m_ArraySize'], v['m_Index'])
+                  for v in c.get('m_VectorParams') or []]
+        params += [Param(names[m['m_NameIndex']], m['m_Type'], m['m_RowCount'], 4, 1, m['m_ArraySize'], m['m_Index'])
+                   for m in c.get('m_MatrixParams') or []]
+        mine = next((i for i, cb in enumerate(cbs) if cb.name == name and i not in used), None)
+        if mine is None:
+            cbs.append(ConstantBuffer(name, c['m_Size'], params))
+            used.add(len(cbs) - 1)
+        else:
+            used.add(mine)
+            cbs[mine].params = sorted(cbs[mine].params + params, key=lambda p: p.offset)
+    for b in common.get('m_ConstantBufferBindings') or []:
+        binds.append(Binding(names[b['m_NameIndex']], Binding.KIND_CBUFFER, b['m_Index'], [0], packed))
+    for t in common.get('m_TextureParams') or []:
+        extra = [t['m_SamplerIndex'], t['m_Dim'] << 1 | int(bool(t['m_MultiSampled']))] if packed \
+            else [t['m_Dim'], t['m_SamplerIndex']]
+        binds.append(Binding(names[t['m_NameIndex']], Binding.KIND_TEXTURE, t['m_Index'], extra, packed))
+    for smp in common.get('m_Samplers') or []:
+        binds.append(Binding('', Binding.KIND_SAMPLER, smp['bindPoint'], [smp['sampler']], packed))
+    return Bindings(bindings.source_map, bindings.channels, cbs, binds)
 
 
 def check_parsed_form(bindings, sp, names):
     """Differences between an entry's binding info and the SerializedSubProgram that points to it
     (m_ParsedForm: constant buffers, their bindings, textures; names: {name index: name} of the
     pass). The two are written by Unity from the same compile, so any difference means the
-    binding info was misread (another Unity version's layout): [] when they agree."""
+    binding info was misread (another Unity version's layout): [] when they agree. (From 2020.1
+    player builds keep these lists empty and the entries hold everything.)"""
     out = []
+    sp = _parameters(sp)
     cbs = {cb.name: cb for cb in bindings.cbuffers}
     have = {(b.name, b.index) for b in bindings.bindings if b.kind == Binding.KIND_CBUFFER}
     for b in sp.get('m_ConstantBufferBindings') or []:
@@ -233,26 +354,207 @@ def check_parsed_form(bindings, sp, names):
 
 
 def gl_rest(source_map):
-    """The binding info of a GL entry: Unity's GL backends find uniforms, textures and vertex
-    inputs by name in the linked program, so it is only the source map (the same in every one of
-    the 5782 GLCore entries of Cuphead and the GLES3 ones of Unity's own Android resources)."""
+    """The binding info of a GL entry up to Unity 2018: Unity's GL backends find uniforms,
+    textures and vertex inputs by name in the linked program, so it is only the source map (the
+    same in every one of the 5782 GLCore entries of Cuphead and the GLES3 ones of Unity's own
+    Android resources). From 2019.1: gl_bindings()."""
     return struct.pack('<8i', source_map, 0, 1, 0, 0, 0, 0, 0)
+
+
+# ---------------------------------------------------------------- GL binding info (2019.1+)
+
+_PREC = r'(?:(?:highp|mediump|lowp)\s+)?'
+_LOOSE = re.compile(r'^uniform\s+' + _PREC + r'(\w+)\s+(\w+)(?:\[(\d+)\])?\s*;', re.M)
+_TEX = re.compile(r'^(?:UNITY_LOCATION\((\d+)\)\s*)?uniform\s+' + _PREC + r'(\w*sampler\w+)\s+(\w+)\s*;', re.M)
+_BLOCK = re.compile(r'^(?:UNITY_BINDING\((\d+)\)\s*)?(?:layout\([^)]*\)\s*)?uniform\s+(\w+)\s*\{(.*?)^\s*'
+                    r'(?:#endif\s*\n\s*)?(?:#if HLSLCC_ENABLE_UNIFORM_BUFFERS\s*\n)?\s*\}[^;]*;', re.M | re.S)
+_MEMBER = re.compile(r'^\s*(?:UNITY_UNIFORM\s+)?' + _PREC + r'(\w+)\s+(\w+)(?:\[(\w+)\])?\s*;', re.M)
+_MTX = re.compile(r'^hlslcc_mtx(\d)x(\d)(\w+)$')
+_GL_TYPES = {'float': (0, 1), 'int': (5, 1), 'uint': (5, 1), 'bool': (5, 1)}
+_GL_TYPES.update({f'{p}vec{n}': (0 if p == '' else 5, n) for p in ('', 'i', 'u', 'b') for n in (2, 3, 4)})
+# GLSL sampler types -> Unity's TextureDimension
+_GL_SAMPLERS = {'2D': 2, '3D': 3, 'Cube': 4, '2DArray': 5, 'CubeArray': 6, '2DShadow': 2, 'CubeShadow': 4,
+                '2DArrayShadow': 5, '2DMS': 2, '2DMSArray': 5}
+GL_STAGE_ORDER = ('FRAGMENT', 'HULL', 'DOMAIN', 'GEOMETRY', 'VERTEX')       # HLSLcc's translation order
+
+
+def _gl_param(gltype, name, count):
+    """A Param (offset 0) of a GL uniform declaration: matrices are HLSLcc's hlslcc_mtx<R>x<C>
+    vec4 arrays, integer and bool types are reported as uint (5)."""
+    m = _MTX.match(name)
+    if m:
+        r, c = int(m.group(1)), int(m.group(2))
+        n = int(count or 1) // c
+        return Param(m.group(3), 0, r, c, 1, n if n > 1 else 0, 0)
+    if gltype not in _GL_TYPES:
+        raise Unsupported(f'uniform {name} of type {gltype}')
+    t, cols = _GL_TYPES[gltype]
+    return Param(name, t, 1, cols, 0, int(count) if count else 0, 0)
+
+
+def _gl_size(p):
+    return 16 * p.rows * max(p.array, 1) if p.is_matrix else p.cols * 4 * max(p.array, 1)
+
+
+def gl_globals_layout(params, unity):
+    """Offsets of a stage's loose uniforms in Unity's GL "$Globals" (in declaration order) and its
+    size. unity: (major, minor). 2020.1+: alignments 4 / 8 / 16 / 16 for 1 - 4 components, 16 for
+    arrays and matrices, arrays packed by their element size (glUniform*v), the size the end of
+    the last one. 2019: vec4s and matrices at 16; a smaller vector that would cross a 16-byte
+    boundary is moved on by as many bytes as it would cross it by (Unity 2019's rule, as its own
+    programs have it)."""
+    off = 0
+    for p in params:
+        sz = _gl_size(p)
+        if unity < (2020, 1):
+            if p.is_matrix or p.cols == 4:
+                off = (off + 15) & ~15
+            elif not p.array and (off % 16) + sz > 16:
+                off += (off % 16) + sz - 16
+        else:
+            al = 16 if (p.is_matrix or p.array) else {1: 4, 2: 8, 3: 16, 4: 16}[p.cols]
+            off = (off + al - 1) & ~(al - 1)
+        p.offset = off
+        off += sz
+    return params, off
+
+
+def _vectors_then_matrices(params):
+    return [p for p in params if not p.is_matrix] + [p for p in params if p.is_matrix]
+
+
+def gl_declarations(src, arrays=None):
+    """One stage's uniforms in declaration order: ('u', Param) loose uniforms, ('b', name,
+    binding, [Param]) uniform blocks (Xhlslcc_UnusedX padding members left out), ('t', name, unit,
+    dimension, multisampled) textures. arrays: {name: array size} where known (HLSLcc declares an
+    array of one element as a plain variable; Unity lists it as an array of 1)."""
+    items, spans = [], []
+    arrays = arrays or {}
+
+    def param(gltype, name, count):
+        p = _gl_param(gltype, name, count)
+        if not count and arrays.get(p.name) == 1:
+            p.array = 1
+        return p
+    for m in _BLOCK.finditer(src):
+        mem = []
+        for mm in _MEMBER.finditer(m.group(3)):
+            if mm.group(3) and not mm.group(3).isdigit():
+                raise Unsupported(f'uniform block {m.group(2)}: array size {mm.group(3)} (instancing data)')
+            mem.append(param(mm.group(1), mm.group(2), mm.group(3)))
+        items.append((m.start(), ('b', m.group(2), int(m.group(1) or 0), mem)))
+        spans.append((m.start(), m.end()))
+    for m in _LOOSE.finditer(src):
+        if 'sampler' not in m.group(1) and not any(a <= m.start() < b for a, b in spans):
+            items.append((m.start(), ('u', param(m.group(1), m.group(2), m.group(3)))))
+    for m in _TEX.finditer(src):
+        st = re.sub(r'^[iu]?sampler', '', m.group(2))
+        if st not in _GL_SAMPLERS:
+            raise Unsupported(f'texture {m.group(3)} of type {m.group(2)}')
+        items.append((m.start(), ('t', m.group(3), int(m.group(1) or 0), _GL_SAMPLERS[st], 'MS' in st)))
+    if re.search(r'^\s*(?:layout\([^)]*\)\s*)?(?:(?:readonly|writeonly|coherent|restrict)\s+)*buffer\s', src, re.M):
+        raise Unsupported('storage buffer')
+    if re.search(r'^struct\s', src, re.M):
+        raise Unsupported('struct uniforms (instancing data)')
+    return [it for _, it in sorted(items, key=lambda x: x[0])]
+
+
+def gl_bindings(code, unity, source_map=0, arrays=None):
+    """The binding info Unity's GL compiler (2019.1+) gives a GL program (Bindings). code: the
+    program (#ifdef VERTEX / FRAGMENT blocks); unity: (major, minor); arrays: {name: array size}
+    of the uniforms where known (gl_declarations).
+
+    Constant buffers: the empty one, then per stage in HLSLcc's order (fragment first) a
+    "$Globals" of its loose uniforms (gl_globals_layout; vectors listed before matrices) and its
+    uniform blocks (laid out alike, with 2020's rule; a block of the same name once). Bindings: the textures (each name
+    once, hlslcc_zcmp<name> being <name>; index and sampler index the unit), then the blocks.
+    2022.1+: one "$Globals" for all stages, its members keyed by offset (a later stage's member at
+    an offset already taken is not listed: Unity's own programs have it so), listed by offset,
+    vectors then matrices, first; the blocks after it in reverse order, and a binding for it."""
+    stages = gl_stages(code)
+    cbs, merged = [ConstantBuffer('', 0, [])], None
+    texs, blocks = [], []
+    seen_tex, seen_blocks = set(), set()
+    for st in GL_STAGE_ORDER:
+        if st not in stages:
+            continue
+        items = gl_declarations(stages[st], arrays)
+        loose = [it[1] for it in items if it[0] == 'u']
+        done_loose = False
+        for it in items:
+            if it[0] == 'u':
+                if done_loose:
+                    continue
+                done_loose = True
+                params, size = gl_globals_layout(loose, unity)
+                if unity >= (2022, 1):
+                    if merged is None:
+                        merged = ConstantBuffer('$Globals', size, sorted(params, key=lambda p: p.offset))
+                    else:
+                        taken = {p.offset for p in merged.params}
+                        merged.params = sorted(merged.params + [p for p in params if p.offset not in taken],
+                                               key=lambda p: p.offset)
+                else:
+                    cbs.append(ConstantBuffer('$Globals', size, _vectors_then_matrices(params)))
+            elif it[0] == 'b':
+                _, name, binding, mem = it
+                if name in seen_blocks:
+                    continue
+                seen_blocks.add(name)
+                params, size = gl_globals_layout(mem, max(unity, (2020, 1)))
+                params = [p for p in params if not p.name.startswith('Xhlslcc_UnusedX')]
+                blocks.append((ConstantBuffer(name, size, _vectors_then_matrices(params)),
+                               Binding(name, Binding.KIND_CBUFFER, binding, [0], True)))
+                if unity < (2022, 1):
+                    cbs.append(blocks[-1][0])
+            else:
+                _, name, unit, dim, ms = it
+                if name.startswith('hlslcc_zcmp'):
+                    name = name[len('hlslcc_zcmp'):]
+                if name not in seen_tex:
+                    seen_tex.add(name)
+                    texs.append(Binding(name, Binding.KIND_TEXTURE, unit, [unit, dim << 1 | int(ms)], True))
+    binds = texs
+    if unity >= (2022, 1):
+        if merged is not None:
+            merged.params = _vectors_then_matrices(merged.params)
+            cbs.append(merged)
+            binds = binds + [Binding('$Globals', Binding.KIND_CBUFFER, 0, [0], True)]
+        cbs += [cb for cb, _ in blocks[::-1]]
+        binds += [b for _, b in blocks[::-1]]
+    else:
+        binds = binds + [b for _, b in blocks]
+    return Bindings(source_map, [], cbs, binds)
+
+
+def gl_stages(code):
+    """{'VERTEX': src, ...} of a GL program (#ifdef VERTEX ... #endif blocks)."""
+    return glsl.stage_sources(code)
 
 
 # ---------------------------------------------------------------- the DXBC container
 
+def header_size(code):
+    """The size of Unity's header before an entry's DXBC container (6 or 38), or None."""
+    for n in HEADER_SIZES:
+        if len(code) >= n + 32 and code[n:n + 4] == b'DXBC':
+            return n
+    return None
+
+
 def split_code(code):
-    """A D3D11 entry's code -> (Unity's 6-byte header, the DXBC container)."""
-    if len(code) < HEADER_SIZE + 32 or code[HEADER_SIZE:HEADER_SIZE + 4] != b'DXBC':
+    """A D3D11 entry's code -> (Unity's header, the DXBC container)."""
+    n = header_size(code)
+    if n is None:
         raise Unsupported('not a D3D11 program (no DXBC container after the header)')
-    size, = struct.unpack_from('<I', code, HEADER_SIZE + 24)
-    if size != len(code) - HEADER_SIZE:
-        raise Unsupported(f'DXBC container size {size} != {len(code) - HEADER_SIZE}')
-    return bytes(code[:HEADER_SIZE]), bytes(code[HEADER_SIZE:])
+    size, = struct.unpack_from('<I', code, n + 24)
+    if size != len(code) - n:
+        raise Unsupported(f'DXBC container size {size} != {len(code) - n}')
+    return bytes(code[:n]), bytes(code[n:])
 
 
 def is_d3d11_code(code):
-    return len(code) >= HEADER_SIZE + 32 and code[HEADER_SIZE:HEADER_SIZE + 4] == b'DXBC'
+    return header_size(code) is not None
 
 
 def chunks(dxbc):
@@ -294,7 +596,8 @@ _DIMS = {1: (1, None), 2: (2, None), 3: (4, 2), 4: (6, 2), 5: (8, 3), 6: (9, 4),
          8: (5, 5), 9: (7, 5), 10: (10, 6)}
 _DIM_NAMES = {1: 'buffer', 2: '1D', 3: '2D', 4: '2D MS', 5: '3D', 6: 'cube', 7: '1D array', 8: '2D array',
               9: '2D MS array', 10: 'cube array'}
-_ES3_DIMS = (3, 5, 6, 8)                # 2D, 3D, cube, 2D array: the sampler types GLSL ES 3.00 has
+# 2D, 3D, cube, 2D array: the sampler types GLSL ES 3.00 has; 2D multisampled: GLSL ES 3.10 (GLES 3.1 programs)
+_ES3_DIMS = (3, 4, 5, 6, 8)
 
 
 def _is_declaration(op):
@@ -493,6 +796,8 @@ def with_reflection(dxbc, bindings):
         name = cb_regs.get(reg)
         if name is None or name not in by_name:
             raise Unsupported(f'constant buffer cb{reg} is not named in the binding info')
+        if by_name[name].structs:
+            raise Unsupported(f'constant buffer {name!r} has struct members (GPU instancing data): not translated')
         cbs.append((reg, by_name[name]))
     extents = {reg: [(p.offset, p.offset + _var_layout(p)[2]) for p in cb.params] for reg, cb in cbs}
     for reg, vec, comp in sorted(prog.cb_reads or ()):
@@ -508,7 +813,7 @@ def with_reflection(dxbc, bindings):
         if dim not in _DIMS:
             raise Unsupported(f'texture {b.name!r}: resource dimension {dim}')
         if dim not in _ES3_DIMS:
-            raise Unsupported(f'{_DIM_NAMES[dim]} texture {b.name!r} (not in GLSL ES 3.00)')
+            raise Unsupported(f'{_DIM_NAMES[dim]} texture {b.name!r} (not in GLSL ES 3.10)')
         if _DIMS[dim][1] is not None and b.dim != _DIMS[dim][1]:
             raise Unsupported(f'texture {b.name!r}: declared {_DIM_NAMES[dim]} but Unity says dimension {b.dim}')
         textures.append((reg, b.name))
@@ -560,11 +865,13 @@ class Translator:
             self.proc.stdout.close()
             self.proc = None
 
-    def translate(self, stages):
-        """[DXBC container] -> [GLSL text] (same order). Raises Unsupported with HLSLcc's log."""
+    def translate(self, stages, flags=None):
+        """[DXBC container] -> [GLSL text] (same order). flags: HLSLcc flags for this request
+        (default the translator's). Raises Unsupported with HLSLcc's log."""
         if self.proc is None:
             self.proc = subprocess.Popen([self.exe, '-s'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        head = f'{len(stages)} {self.flags:#x} {self.lang}' + ''.join(f' {len(s)}' for s in stages) + '\n'
+        flags = self.flags if flags is None else flags
+        head = f'{len(stages)} {flags:#x} {self.lang}' + ''.join(f' {len(s)}' for s in stages) + '\n'
         try:
             self.proc.stdin.write(head.encode() + b''.join(stages))
             self.proc.stdin.flush()
@@ -614,24 +921,90 @@ def tidy(glsl):
     return re.sub(r'\bUNITY_UNIFORM\b', 'uniform', glsl)
 
 
-def gl_program(stages):
-    """{'VERTEX': glsl, 'FRAGMENT': glsl, ...} -> one GL program as Unity stores it."""
+def gl_program(stages, tidy_up=True):
+    """{'VERTEX': glsl, 'FRAGMENT': glsl, ...} -> one GL program as Unity stores it. tidy_up: as
+    Unity 2017-2018 stored it (tidy()); from 2019.1 Unity keeps HLSLcc's text as it is."""
     out = []
     for st in ('VERTEX', 'HULL', 'DOMAIN', 'GEOMETRY', 'FRAGMENT'):
         if st in stages:
-            out.append(f'#ifdef {st}\n{tidy(stages[st])}\n#endif\n')
+            out.append(f'#ifdef {st}\n{tidy(stages[st]) if tidy_up else stages[st]}\n#endif\n')
     return ''.join(out)
 
 
-def translate_program(translator, vs, ps, serializer=None):
-    """vs, ps: (code, rest) of the D3D11 vertex and pixel entries -> GL program text (GLSL 1.50,
-    as Unity's GLCore programs). serializer: the entries' serializer version. Raises Unsupported."""
+def unity_line(serializer):
+    """(major, minor) of the oldest Unity version that writes a serializer's entries."""
+    return {201708220: (2017, 3), 201802150: (2018, 2), 201806140: (2019, 1), 202012090: (2021, 2)}.get(serializer, (2017, 3))
+
+
+_UNIFORM_LINE = re.compile(r'^uniform\s+(?:(?:highp|mediump|lowp)\s+)?\w+\s+(\w+)(?:\[\d+\])?\s*;$')
+
+
+def unity_uniform_order(glsl, bindings, prog):
+    """The stage's loose uniforms in the order Unity's own GL compile declares them. There every
+    built-in and material value is a member of one $Globals in the order of the HLSL source,
+    where the D3D11 compile has the built-ins in Unity's named constant buffers (UnityPerDraw,
+    UnityPerFrame, ...), declared before the shader's own values: HLSLcc declares the members of
+    each constant buffer in the order of their registers ($Globals, cb0, first), so the named
+    ones' members are moved before $Globals'. Only declarations move; it decides the offsets
+    of Unity's GL $Globals (gl_bindings)."""
+    regs = {b.index: b.name for b in bindings.bindings if b.kind == Binding.KIND_CBUFFER}
+    by_name = {cb.name: cb for cb in bindings.cbuffers}
+    rank = {}
+    for n, reg in enumerate(sorted(prog.cbuffers)):
+        cb = by_name.get(regs.get(reg))
+        for p in (cb.params if cb else ()):
+            gl = ('hlslcc_mtx%dx%d' % (p.rows, p.cols) + p.name) if p.is_matrix else p.name
+            rank.setdefault(gl, (1 if cb.name == '$Globals' else 0, n))
+    lines = glsl.split('\n')
+    at = [i for i, l in enumerate(lines) if _UNIFORM_LINE.match(l) and 'sampler' not in l]
+    if not at or at != list(range(at[0], at[0] + len(at))):
+        return glsl
+    block = [lines[i] for i in at]
+    key = lambda l: rank.get(_UNIFORM_LINE.match(l).group(1), (1, len(rank)))
+    lines[at[0]:at[0] + len(at)] = sorted(block, key=key)
+    return '\n'.join(lines)
+
+
+_NO_ES = re.compile(r'\b(textureSamples|imageSamples|textureQueryLevels|textureQueryLod)\s*\(')
+
+
+def gl_fixups(glsl_text):
+    """HLSLcc's GLSL 1.50 where GLSL ES has no such call, written as Unity's own GLES3 programs
+    have it: a cube shadow map compared at level 0 (D3D's SampleCmpLevelZero, point-light shadows:
+    textureLod on a samplerCubeShadow, which no GLSL ES has) becomes texture() on it (Unity's
+    Android builds, and the same on a shadow map without mipmaps). Functions GLSL ES lacks
+    (texture sample counts, LOD queries) raise Unsupported."""
+    m = _NO_ES.search(glsl_text)
+    if m:
+        raise Unsupported(f'{m.group(1)}() (not in GLSL ES)')
+    cubes = re.findall(r'^\s*(?:UNITY_LOCATION\(\d+\)\s*)?uniform\s+(?:(?:highp|mediump|lowp)\s+)?samplerCubeShadow\s+(\w+)\s*;',
+                       glsl_text, re.M)
+    for name in cubes:
+        glsl_text = re.sub(r'\btextureLod\(\s*' + name + r'\s*,\s*([^;]*?),\s*0\.0\s*\)', r'texture(' + name + r', \1)', glsl_text)
+    return glsl_text
+
+
+def translate_program(translator, vs, ps, serializer=None, unity=None):
+    """vs, ps: (code, binding info) of the D3D11 vertex and pixel entries (binding info: the
+    entry's rest, or Bindings with the parameter entry and shared parameters put back) -> GL
+    program text (GLSL 1.50, as Unity's GLCore programs). serializer: the entries' serializer
+    version; unity: (major, minor) of the data (default: from the serializer). Up to 2018 the
+    text is tidy()'d as Unity 2017-2018 stored it; from 2019.1 Unity's macro blocks stay and
+    textures get their units (UNITY_LOCATION), and the uniforms are in Unity's order
+    (unity_uniform_order). Raises Unsupported."""
+    unity = unity or unity_line(serializer)
+    new = unity >= (2019, 1)
     stages = []
     for code, rest in (vs, ps):
         _, dxbc = split_code(code)
-        cont, prog = with_reflection(dxbc, Bindings.parse(rest, serializer))
-        stages.append((prog, cont))
-    if [p.stage for p, _ in stages] != [1, 0]:
-        raise Unsupported('expected a vertex and a pixel shader, got ' + ', '.join(STAGE_NAMES.get(p.stage, '?') for p, _ in stages))
-    vs_glsl, ps_glsl = translator.translate([c for _, c in stages])
-    return gl_program({'VERTEX': vs_glsl, 'FRAGMENT': ps_glsl})
+        b = rest if isinstance(rest, Bindings) else Bindings.parse(rest, serializer)
+        cont, prog = with_reflection(dxbc, b)
+        stages.append((prog, cont, b))
+    if [p.stage for p, _, _ in stages] != [1, 0]:
+        raise Unsupported('expected a vertex and a pixel shader, got ' + ', '.join(STAGE_NAMES.get(p.stage, '?') for p, _, _ in stages))
+    vs_glsl, ps_glsl = translator.translate([c for _, c, _ in stages], flags=FLAGS_2019 if new else None)
+    vs_glsl, ps_glsl = gl_fixups(vs_glsl), gl_fixups(ps_glsl)
+    if new:
+        vs_glsl = unity_uniform_order(vs_glsl, stages[0][2], stages[0][0])
+        ps_glsl = unity_uniform_order(ps_glsl, stages[1][2], stages[1][0])
+    return gl_program({'VERTEX': vs_glsl, 'FRAGMENT': ps_glsl}, tidy_up=not new)

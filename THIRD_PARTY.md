@@ -34,6 +34,13 @@ The system's [FFmpeg](https://ffmpeg.org/) `libavcodec` (LGPL 2.1+, or GPL depen
 firmware's build), opened with `dlopen` by `runtime/media/um_ffmpeg.c` when present: AAC, MP3,
 HEVC and some H.264. Nothing of FFmpeg is linked, compiled in or distributed.
 
+The system's [libcurl](https://curl.se/) (curl licence, MIT-style), opened with `dlopen` by
+`runtime/jni/up_http.c` only when `UA_HTTP=1` (Unity 2017.4 - 2018.4 web requests). The system's CA
+bundle is read as data (runtime/jni/up_tls.c). Native plugins a port supplies (e.g. FMOD's or
+Wwise's libraries, docs/plugins.md) come under their own licences and are never part of this
+repository. The TLS tests (`runtime/jni/test/tls_test.sh`) run Debian's mbedTLS (Apache 2.0),
+OpenSSL (Apache 2.0), Python and libcurl in a test image; nothing of them is kept.
+
 ## Not included
 
 - Unity's Android player (`libunity.so`, `libmain.so`, `libmono.so`, the managed `UnityEngine*.dll`,
@@ -56,3 +63,16 @@ Mono.Cecil's licence and the runtime pack's `LICENSE.TXT` and `THIRD-PARTY-NOTIC
 `tools/hlslcc/build.sh` at a pinned commit and compiled into `pmhlslcc` (Direct3D 11 shaders,
 `pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the
 build writes next to it.
+
+## Shipped in a port's release zip (`pmunity port package`)
+
+Besides `ua_host` (above) and asmpatch when the port uses it (above, with the .NET runtime's and
+Mono.Cecil's licences), a port made with `pmunity port new` carries the setup's Python,
+`tools/port/build_pybundle.sh`'s bundle: [python-build-standalone](https://github.com/astral-sh/python-build-standalone)'s
+CPython 3.12 (PSF licence) with UnityPy (MIT), lz4 (BSD), astc-encoder-py (MIT; ARM's
+astc-encoder inside it: Apache 2.0), Pillow (MIT-CMU), texture2ddecoder (MIT), etcpak (MIT),
+brotli (MIT), archspec (Apache 2.0 or MIT), attrs (MIT), fsspec (BSD-3-Clause), tpk_ar (MIT) and
+pyfmodex (MIT), downloaded from their releases and PyPI when the bundle is built (none of it is in
+this repository). The packager collects each one's licence
+text from the bundle into the zip's `licenses/LICENSE.setup-python.txt`; the setup removes the
+bundle from the handheld when it is done.

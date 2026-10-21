@@ -204,6 +204,14 @@ static int fmt(char *out, size_t n, uintptr_t v)
         }
         return snprintf(out, n, "anon:0x%lx", (unsigned long)v);
     }
+    // Android libraries by the loader's own load bias (ELF addresses, as the symbol tools want):
+    // /proc/self/maps cannot tell their images from other mappings of the same file
+    uintptr_t bias;
+    const char *path = m ? so_module_at((void *)v, &bias) : NULL;
+    if (path) {
+        const char *b = strrchr(path, '/');
+        return snprintf(out, n, "%s+0x%lx", b ? b + 1 : path, (unsigned long)(v - bias));
+    }
     return m ? snprintf(out, n, "%s+0x%lx", m->name, (unsigned long)(v - m->base)) : snprintf(out, n, "0x%lx", (unsigned long)v);
 }
 

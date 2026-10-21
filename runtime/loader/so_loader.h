@@ -102,6 +102,9 @@ void        so_foreach_unresolved(so_module *m, void (*cb)(const char *name, int
 void       *so_resolve(const char *name);
 /* lookup in the registered shim tables only */
 void       *so_shim_lookup(const char *name);
+/* the Android module holding addr: its path and load bias (addr - bias = the ELF address that
+ * symbol files use), else NULL. Takes no lock (safe while a sampled thread is stopped anywhere) */
+const char *so_module_at(const void *addr, uintptr_t *bias);
 
 /* Directories (':' separated) searched for Android libraries by name: used for
  * DT_NEEDED of Android modules and for dlopen() calls made by Android code.

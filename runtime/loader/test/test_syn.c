@@ -194,6 +194,10 @@ static void test_mediandk(const char *dir)
     void *(*ext)(void) = (void *(*)(void))sym(m, "syn_media_extractor");
     const char *(*mime)(void) = (const char *(*)(void))sym(m, "syn_media_mime");
     CHECK(ext && ext() == (void *)0x3e7 && mime && mime() && !strcmp(mime(), "mime"), "libmediandk imports");
+    uintptr_t bias = 1;                                     /* the samplers' lock-free lookup */
+    const char *at = so_module_at((void *)ext, &bias);
+    CHECK(at && strstr(at, "libsyn_media.so") && bias == so_base(m) && !so_module_at((void *)&bias, NULL),
+          "so_module_at: %s, bias %#lx", at ? at : "(null)", (unsigned long)bias);
     so_map_library("libmediandk.so", NULL);                 /* the host refuses dlopen of it (ua_host does) */
     CHECK(!so_dlopen("libmediandk.so", 0), "dlopen(libmediandk.so) after so_map_library(NULL)");
     static const so_shim own[] = { { "AMediaExtractor_new", (void *)shim_add }, { NULL, NULL } };
@@ -213,6 +217,9 @@ static uintptr_t pcs[32];
 static int npcs;
 __attribute__((noinline)) static int host_cb(void) { npcs = backtrace_fn(pcs, 32); return npcs + 1; }
 #endif
+
+static unsigned long (*tid_fn)(void);
+static void *host_tid(void *arg) { (void)arg; return (void *)tid_fn(); }
 
 int main(int argc, char **argv)
 {
@@ -317,6 +324,17 @@ int main(int argc, char **argv)
     CHECK(guard_addr && guard_addr() == so_shim_lookup("__stack_chk_guard"), "__stack_chk_guard not bionic's");
 #endif
 
+    // bionic's thread id slot: non-zero and per thread, also on a thread the host started
+    tid_fn = (unsigned long (*)(void))sym(m[0], "syn_thread_id");
+    if (tid_fn) {
+        pthread_t th;
+        void *other = NULL;
+        pthread_create(&th, NULL, host_tid, NULL);
+        pthread_join(th, &other);
+        CHECK(tid_fn() && other && (unsigned long)other != tid_fn(), "thread id slot: main %#lx, host thread %#lx",
+              tid_fn(), (unsigned long)other);
+    } else CHECK(0, "syn_thread_id missing");
+
     // overrunning a buffer in Android code ends in __stack_chk_fail (SIGABRT)
     fflush(stdout);
     pid_t pid = fork();
@@ -338,7 +356,7 @@ int main(int argc, char **argv)
 out:
     if (fails) printf("syn: %d FAILED\n", fails);
     else printf("syn: ok (%s: 5 relocation encodings alike, imports, init order, dl*, setjmp, signals, pthread, stat, "
-                "newer bionic symbols, libmediandk routing, stack guard%s)\n",
+                "newer bionic symbols, libmediandk routing, stack guard, thread id slot%s)\n",
                 sizeof(void *) == 8 ? "arm64" : "arm32", sizeof(void *) == 8 ? ", unwinding" : "");
     return fails != 0;
 }

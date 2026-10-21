@@ -1,0 +1,8 @@
+Put your copy of @@TITLE@@ here, then launch @@TITLE@@ from the Ports menu:
+
+  @@GAME_WHAT@@.
+
+Optional: UnitySetup-Android-Support-for-Editor-<version>.exe (from Unity's download archive, the
+version the game was built with); otherwise the setup downloads what it needs from Unity (about
+10 MB, Wi-Fi needed). The first launch builds the game on the handheld (@@SETUP_TIME@@, once); it
+uses up the game's folder here. See ../README.md.
