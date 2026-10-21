@@ -92,4 +92,19 @@ hook post_install
 rm -rf "$W" "$S"
 sync
 touch "$GAMEDIR/$READY"
-step "setup finished. Archives left in gamedata/ can be deleted now."
+# archives and installers the setup unpacked (the game's, Unity's player installer) are not needed
+# any more: removed, as PortMaster ports' setups do, unless setup.txt says keep_installers=1
+keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
+for a in "$GD"/*; do
+  [ -f "$a" ] || continue
+  case "$(lower "$a")" in
+    *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.pkg|*/unitysetup-*.exe) ;;
+    *.sh) head -c 65536 "$a" | grep -aqE 'Makeself|MojoSetup' || continue;;
+    *) continue;;
+  esac
+  if [ "$keep" = 1 ]; then echo "kept $(basename "$a") (keep_installers=1)"; continue; fi
+  echo "removing $(basename "$a"): not needed to play (keep_installers=1 in setup.txt keeps it)"
+  rm -f "$a"
+done
+sync
+step "setup finished."

@@ -1372,14 +1372,19 @@ def questions_lua(qs):
 
 
 def setup_txt(cfg):
-    out = [f"# {cfg['port']['title']} setup options, read once by the first-launch setup. PortMaster's setup",
-           '# screen asks these itself; this file is used when it does not (older PortMaster versions).']
+    out = [f"# {cfg['port']['title']} setup options, read once by the first-launch setup."]
+    if cfg['questions']:
+        out.append("# PortMaster's setup screen asks the questions below itself; this file answers them when it")
+        out.append('# does not (older PortMaster versions).')
     for x in cfg['questions']:
         out.append('#')
         out.append('# ' + x['question'])
         for o in x['options']:
             out.append(f'#   {o[0]}  {o[1] if len(o) > 1 else ""}')
         out.append(f"{x['id'].lower()}={x.get('default') or x['options'][0][0]}")
+    out += ['#', '# keep_installers: 1 keeps the archives or installers you put in gamedata/ after the setup;',
+            '#   by default the setup deletes them once the game is built (they are not needed to play)',
+            'keep_installers=0']
     return '\n'.join(out) + '\n'
 
 
@@ -1489,7 +1494,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     ctx.write(f'{pd}/setup/convert.json', json.dumps(conv, indent=1) + '\n')
     if cfg['questions']:
         ctx.write(f'{pd}/setup/questions.lua', questions_lua(cfg['questions']))
-        ctx.write(f'{pd}/setup.txt', setup_txt(cfg))
+    ctx.write(f'{pd}/setup.txt', setup_txt(cfg))
     # the porter's files
     base = os.path.dirname(os.path.abspath(config)) if config else os.getcwd()
     fl = cfg['files']

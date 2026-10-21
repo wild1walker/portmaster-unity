@@ -418,7 +418,9 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertIn("--asmpatch '" + os.path.join(g, 'setup', 'asmpatch') + "'", log)
             self.assertIn('--set textures.quality=medium', log)          # (the default)
             self.assertNotIn('libmonobdwgc-2.0.so', os.listdir(os.path.join(g, 'lib')))
-            self.assertTrue(os.path.isfile(z))                           # (the archive stays; its copy went)
+            self.assertFalse(os.path.isfile(z))                          # (the archive is removed once built)
+            self.assertIn('removing game-linux.zip: not needed to play', P._read(os.path.join(g, 'patchlog.txt')))
+            self.assertIn('keep_installers=0', P._read(os.path.join(g, 'setup.txt')))
 
 
 class RoutesTest(unittest.TestCase):
