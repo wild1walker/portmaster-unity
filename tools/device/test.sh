@@ -1,5 +1,5 @@
 #!/bin/bash
-# PC side: test a packed game on a handheld over SSH, and bring back what happened.
+# PC side: test a packed game on a handheld over SSH or adb, and bring back what happened.
 #   DEVICE=root@<handheld> tools/device/test.sh <game folder> <seconds> [screenshot seconds...]
 # <game folder> holds what the handheld needs: lib/ with the player's libraries
 # (Variations/mono/Release/Libs/<abi>/*.so plus the Mono runtime the game uses, see docs/porting.md
@@ -12,7 +12,8 @@
 #      second, memory, how the run ended
 # Settings (environment):
 #   DEVICE=user@host  the handheld (required). SSH must log in without a password prompt: a key, or
-#                     a ControlMaster connection opened beforehand (see SSH_OPTS).
+#                     a ControlMaster connection opened beforehand (see SSH_OPTS). DEVICE=adb (or
+#                     adb:<serial>): over adb instead, e.g. USB without a network (transport.sh)
 #   SSH_OPTS="..."    extra ssh/scp options, e.g. "-o ControlPath=~/.ssh/cm-%r@%h" to reuse an open
 #                     ControlMaster connection
 #   REMOTE=<dir>      the folder on the handheld (default: uatest/<game folder's name> in the login's
@@ -42,17 +43,14 @@ esac
 [ -f "$BIN" ] || { echo "no ua_host at $BIN: build it first (docs/building.md)"; exit 1; }
 [ -d "$GAME/lib" ] || { echo "$GAME has no lib/ folder with the player's libraries"; exit 1; }
 ls "$GAME"/*.apk >/dev/null 2>&1 || { echo "$GAME has no APK (copy android-data's zip/ folder into it)"; exit 1; }
-# shellcheck disable=SC2206
-OPTS=(${SSH_OPTS:-})
-rsh() { ssh ${OPTS[@]+"${OPTS[@]}"} "$DEVICE" "$@"; }         # with stdin (tar streams)
-rshn() { ssh -n ${OPTS[@]+"${OPTS[@]}"} "$DEVICE" "$@"; }     # without
+. "$HERE/transport.sh"                                        # dev_sh, dev_tar_in, dev_tar_out
 q() { [ $# = 0 ] || printf '%q ' "$@"; }
 # macOS tar (bsdtar) would add its metadata (._ files, xattr headers) to the archive
 TARC=(); tar --version 2>/dev/null | grep -q bsdtar && TARC=(--no-xattrs --no-mac-metadata)
 
-echo "== copying to $DEVICE:$REMOTE"
-remote_sizes=$(rshn "mkdir -p $(q "$REMOTE") && cd $(q "$REMOTE") && find . -type f ! -name 'shot-*' ! -name '*.log' -exec stat -c '%s %Y %n' {} ';'") || {
-  echo "cannot reach $DEVICE (ssh must work without a password prompt)"; exit 1; }
+echo "== copying to $(dev_name):$REMOTE"
+remote_sizes=$(dev_sh "mkdir -p $(q "$REMOTE") && cd $(q "$REMOTE") && find . -type f ! -name 'shot-*' ! -name '*.log' -exec stat -c '%s %Y %n' {} ';'") || {
+  echo "cannot reach $(dev_name) (ssh must work without a password prompt; adb: adb devices lists it)"; exit 1; }
 changed=$(cd "$GAME" && REMOTE_SIZES="$remote_sizes" python3 -I -c '
 import os
 have = {}
@@ -72,13 +70,13 @@ if [ -n "$changed" ]; then
   n=$(printf '%s\n' "$changed" | wc -l | tr -d ' ')
   mb=$(cd "$GAME" && printf '%s\n' "$changed" | python3 -I -c 'import os,sys; print(sum(os.path.getsize(l.strip()) for l in sys.stdin) >> 20)')
   echo "   $n changed file(s), $mb MB"
-  (cd "$GAME" && printf '%s\n' "$changed" | COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -T -) | rsh "cd $(q "$REMOTE") && tar -xof -" ||
+  (cd "$GAME" && printf '%s\n' "$changed" | COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -T -) | dev_tar_in "$REMOTE" ||
     { echo "copy failed"; exit 1; }
 else
   echo "   up to date"
 fi
-COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$BIN")" "$(basename "$BIN")" -C "$HERE" uatest.sh |
-  rsh "cd $(q "$REMOTE") && tar -xof - && { [ $(q "$(basename "$BIN")") = ua_host ] || mv -f $(q "$(basename "$BIN")") ua_host; } && chmod +x ua_host uatest.sh" ||
+COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$BIN")" "$(basename "$BIN")" -C "$HERE" uatest.sh | dev_tar_in "$REMOTE" &&
+  dev_sh "cd $(q "$REMOTE") && { [ $(q "$(basename "$BIN")") = ua_host ] || mv -f $(q "$(basename "$BIN")") ua_host; } && chmod +x ua_host uatest.sh" ||
   { echo "copying ua_host failed"; exit 1; }
 
 # the game's settings: UA_*, SDL_*, GC_*, MONO_* and DEV_ENV's prefixes
@@ -92,11 +90,14 @@ done
 # EmulationStation stopped; this end waits for its uatest.done and reconnects when it can
 [ "${STOP_ES:-0}" = 1 ] && { envs+=("UATEST_STOP_ES=1"); echo "== EmulationStation is stopped for the run and started again after it (on the handheld)"; }
 echo "== running for ${SECS} s${*:+, screenshots at $* s}"
-rshn "cd $(q "$REMOTE") && rm -f uatest.done && { setsid nohup env $(q "${envs[@]+"${envs[@]}"}")./uatest.sh . $(q "$SECS" "$@") > uatest.out 2>&1 < /dev/null & }" ||
+# (detached: util-linux's setsid -f forks first, which an adb shell's end does not reach, as it
+# reaches a plain background job; BusyBox's setsid has no -f: there the background job, as over SSH)
+run="nohup env $(q "${envs[@]+"${envs[@]}"}")./uatest.sh . $(q "$SECS" "$@") > uatest.out 2>&1 < /dev/null"
+dev_sh "cd $(q "$REMOTE") && rm -f uatest.done && if setsid -f true 2>/dev/null; then setsid -f $run; else { setsid $run & }; fi" ||
   { echo "starting the run failed"; exit 1; }
 deadline=$((SECONDS + SECS + 600)); lost=0
-until rshn "[ -f $(q "$REMOTE/uatest.done")]" 2>/dev/null; do
-  if ! rshn true 2>/dev/null; then
+until dev_sh "[ -f $(q "$REMOTE/uatest.done")]" 2>/dev/null; do
+  if ! dev_sh true 2>/dev/null; then
     [ $lost = 0 ] && echo "   (the handheld is not answering; the run goes on there, waiting for it)"; lost=1
   fi
   [ $SECONDS -gt $deadline ] && { echo "no end of the run after $((SECS + 600)) s (see uatest.out on the handheld)"; exit 1; }
@@ -106,7 +107,7 @@ done
 
 echo "== results in $OUT"
 mkdir -p "$OUT" && rm -f "$OUT"/shot-*.ppm "$OUT"/shot-*.png
-rshn "cd $(q "$REMOTE") && tar -cf - \$(ls run.log mem.log shot-*.ppm 2>/dev/null)" | tar -xf - -C "$OUT" ||
+dev_tar_out "$REMOTE" run.log mem.log 'shot-*.ppm' | tar -xf - -C "$OUT" ||
   { echo "fetching the results failed"; exit 1; }
 python3 -I - "$OUT" <<'EOF'
 import glob, os, re, sys
