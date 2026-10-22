@@ -126,6 +126,10 @@ class GraphTest(unittest.TestCase):
             self.assertIn('compiled a', f.read())
         # again: nothing to do; a changed source compiles and links again, the rest stays
         self.assertEqual(self.run_graph(), (0, 3))
+        with open(self.src, 'w') as f:          # (written again, the same: as il2cpp converting again)
+            f.write('int a;\n')
+        os.utime(self.src, (2, 2))
+        self.assertEqual(self.run_graph(), (0, 3))
         with open(self.src, 'w') as f:
             f.write('int a2;\n')
         os.utime(self.src, (1, 1))
@@ -160,6 +164,45 @@ class GraphTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as e:
             self.run_graph(jobs=1)
         self.assertIn('did not write dq/a.o', str(e.exception))
+
+
+class PayloadTest(unittest.TestCase):
+    def test_write_file(self):
+        """2022.x: WriteFile nodes' bytes in the graph's payloads file; an input written by another
+        node is a dependency even without ToBuildDependencies"""
+        with tempfile.TemporaryDirectory() as t:
+            pay = os.path.join(t, 'bee.dag.payloads')
+            body = b'//Generated lump file\n#include "a.cpp"\n'
+            head = b'Payload for "MakeLump lu/1.lump.cpp"\n\n'
+            with open(pay, 'wb') as f:
+                f.write(head + body + bytes([0, 0, 0, 0, 10, 10]))
+            nodes = [
+                {'Annotation': 'C lu/1.o', 'Action': 'cp lu/1.lump.cpp lu/1.o', 'Inputs': ['lu/1.lump.cpp'],
+                 'Outputs': ['lu/1.o'], 'OverwriteOutputs': False},
+                {'Annotation': 'MakeLump lu/1.lump.cpp', 'ActionType': 'WriteFile', 'PayloadOffset': len(head),
+                 'PayloadLength': len(body), 'PayloadDebugContentSnippet': '//Generated', 'Outputs': ['lu/1.lump.cpp']},
+                {'Annotation': 'FinalProgram', 'Action': '', 'ToBuildDependencies': [0]},
+            ]
+            d = graph(nodes, {'FinalProgram': 2})
+            d['PayloadsFile'] = pay
+            dag = os.path.join(t, 'bee.dag.json')
+            with open(dag, 'w') as f:
+                json.dump(d, f)
+            self.assertEqual(B.Graph(dag).prerequisites(0), {1})
+            self.assertEqual(B.run_graph(dag, local_shell(), 2, lambda m: None, os.path.join(t, 'build.log')), (1, 0))
+            with open(os.path.join(t, 'lu', '1.o'), 'rb') as f:
+                self.assertEqual(f.read(), body)
+
+    def test_rpc_refused(self):
+        with tempfile.TemporaryDirectory() as t:
+            dag = os.path.join(t, 'bee.dag.json')
+            with open(dag, 'w') as f:
+                json.dump(graph([{'Annotation': 'CSharp x', 'ActionType': 'RunRPCCommand'},
+                                 {'Annotation': 'FinalProgram', 'Action': '', 'ToBuildDependencies': [0]}],
+                                {'FinalProgram': 1}), f)
+            with self.assertRaises(SystemExit) as e:
+                B.run_graph(dag, local_shell(), 1, lambda m: None, os.path.join(t, 'build.log'))
+            self.assertIn('RunRPCCommand', str(e.exception))
 
 
 class NdkApiTest(unittest.TestCase):

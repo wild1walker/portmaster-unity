@@ -15,10 +15,13 @@ puts a stand-in there (install):
     handheld), the response and lump files and the copies written directly.
 
 The graph's node kinds (Bee.TundraBackend): RunShellCommand (`Action`, run with /bin/sh -c in the
-graph's folder with its `Env`), WriteTextFile (`WriteTextFilePayload` -> the output) and CopyFiles
-(`Inputs[i]` -> `Outputs[i]`). `ToBuildDependencies` must be built before a node; a dependency's
-`ToUseDependencies` are needed by whoever uses it, so they are built first too. A node done in an
-earlier run (`pmunity-done.jsonl`: its command, environment and inputs' sizes and times) is not
+graph's folder with its `Env`), WriteTextFile (2021.x: `WriteTextFilePayload` -> the output) or
+WriteFile (2022.x: `PayloadLength` bytes at `PayloadOffset` of the graph's `PayloadsFile`), and
+CopyFiles (`Inputs[i]` -> `Outputs[i]`); 2022.x's RunRPCCommand (C# actions run inside Bee) is not
+supported (il2cpp's Android build has none). `ToBuildDependencies` must be built before a node, and
+so must a node writing one of its inputs; a dependency's `ToUseDependencies` are needed by whoever
+uses it, so they are built first too. A node done in an
+earlier run (`pmunity-done.jsonl`: its command, environment and inputs' contents) is not
 run again, so an interrupted build continues where it stopped, as with il2cpp's own object cache
 in 2017.4 - 2020.3.
 """
@@ -120,6 +123,24 @@ class Graph:
         self.nodes = d['Nodes']
         self.named = d.get('NamedNodes') or {}
         self.root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), d.get('RelativePathToRoot') or '.'))
+        self.payloads = d.get('PayloadsFile')       # (2022.x: WriteFile nodes' contents)
+        if self.payloads and not os.path.isabs(self.payloads):
+            self.payloads = os.path.join(self.root, self.payloads)
+        # an input another node writes is a dependency too, as for the backend
+        self.writer = {}
+        for i, n in enumerate(self.nodes):
+            for o in n.get('Outputs') or []:
+                self.writer.setdefault(self.path_of(o), i)
+
+    def payload(self, node):
+        if 'PayloadOffset' not in node:
+            return (node.get('WriteTextFilePayload') or '').encode('utf-8')
+        with open(self.payloads, 'rb') as f:
+            f.seek(node['PayloadOffset'])
+            data = f.read(node['PayloadLength'])
+        if len(data) != node['PayloadLength']:
+            raise SystemExit(f'{self.payloads}: {node.get("Annotation")}: payload cut short')
+        return data
 
     def index(self, target):
         if target in self.named:
@@ -130,7 +151,9 @@ class Graph:
         raise SystemExit(f'{self.path}: no node "{target}" in the build graph')
 
     def deps(self, i):
-        return self.nodes[i].get('ToBuildDependencies') or []
+        n = self.nodes[i]
+        implicit = [self.writer[self.path_of(p)] for p in n.get('Inputs') or [] if self.path_of(p) in self.writer]
+        return list(n.get('ToBuildDependencies') or []) + [j for j in implicit if j != i]
 
     def use_deps(self, i):
         return self.nodes[i].get('ToUseDependencies') or []
@@ -171,15 +194,37 @@ def env_of(node):
     return {e['Key']: e['Value'] for e in node.get('Env') or [] if 'Key' in e}
 
 
-def signature(g, node):
-    h = hashlib.sha256(json.dumps([kind(node), node.get('Action'), node.get('WriteTextFilePayload'),
-                                   node.get('Inputs'), node.get('Outputs'), env_of(node)]).encode())
-    for p in node.get('Inputs') or []:
+class Digests:
+    """Files' contents' digests, each file read once per run (by size and time)."""
+
+    def __init__(self):
+        self.memo, self.lock = {}, threading.Lock()
+
+    def __call__(self, path):
         try:
-            st = os.stat(g.path_of(p))
-            h.update(f'{p}\0{st.st_size}\0{st.st_mtime_ns}\0'.encode())
+            st = os.stat(path)
         except OSError:
-            h.update(f'{p}\0-\0'.encode())
+            return '-'
+        k = (path, st.st_size, st.st_mtime_ns)
+        with self.lock:
+            if k in self.memo:
+                return self.memo[k]
+        h = hashlib.sha1()
+        with open(path, 'rb') as f:
+            for b in iter(lambda: f.read(1 << 20), b''):
+                h.update(b)
+        with self.lock:
+            self.memo[k] = h.hexdigest()
+        return self.memo[k]
+
+
+def signature(g, node, digest):
+    """A command's record: its command line, environment and its inputs' contents (contents, not
+    times: il2cpp writes all the C++ again when it converts again, mostly the same)."""
+    h = hashlib.sha256(json.dumps([kind(node), node.get('Action'), node.get('Inputs'), node.get('Outputs'),
+                                   env_of(node)]).encode())
+    for p in node.get('Inputs') or []:
+        h.update(f'{p}\0{digest(g.path_of(p))}\0'.encode())
     return h.hexdigest()
 
 
@@ -203,18 +248,20 @@ def _key(node):
     return outs[0] if outs else node.get('Annotation', '')
 
 
-def write_text(g, node):
+def write_file(g, node):
+    """WriteTextFile (2021.x: the text in the node) and WriteFile (2022.x: bytes in the graph's
+    payloads file) nodes."""
     dst = g.path_of(node['Outputs'][0])
-    text = node.get('WriteTextFilePayload') or ''
+    data = g.payload(node)
     try:
-        with open(dst, encoding='utf-8', newline='') as f:
-            if f.read() == text:
+        with open(dst, 'rb') as f:
+            if f.read() == data:
                 return                      # (unchanged: its time stays, nothing using it reruns)
     except OSError:
         pass
     os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
-    with open(dst, 'w', encoding='utf-8', newline='') as f:
-        f.write(text)
+    with open(dst, 'wb') as f:
+        f.write(data)
 
 
 def copy_files(g, node):
@@ -260,6 +307,7 @@ def run_graph(dag, shell, jobs, log, logfile, target=None, progress=None, every=
     left = {i: len(ps) for i, ps in pre.items()}
     donefile = os.path.join(os.path.dirname(dag), DONE_FILE)
     done = _load_done(donefile)
+    digest = Digests()
     shells = sum(1 for i in need if kind(g.nodes[i]) == 'RunShellCommand' and g.nodes[i].get('Action'))
     lock = threading.Lock()
     counts = {'ran': 0, 'before': 0, 'finished': 0}
@@ -294,53 +342,58 @@ def run_graph(dag, shell, jobs, log, logfile, target=None, progress=None, every=
         rc, out = shell(n['Action'], g.root, env_of(n))
         return i, finished_shell(i, sig, rc, out)
 
-    ready = [i for i, c in left.items() if c == 0]
-    running = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        def complete(i):
-            for u in users[i]:
-                left[u] -= 1
-                if left[u] == 0:
-                    ready.append(u)
+    try:
+        ready = [i for i, c in left.items() if c == 0]
+        running = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            def complete(i):
+                for u in users[i]:
+                    left[u] -= 1
+                    if left[u] == 0:
+                        ready.append(u)
 
-        while ready or running:
-            while ready and not failed and len(running) < max(1, jobs):
-                i = ready.pop()
-                n = g.nodes[i]
-                k = kind(n)
-                if k == 'WriteTextFile':
-                    write_text(g, n)
-                    complete(i)
-                elif k == 'CopyFiles':
-                    copy_files(g, n)
-                    complete(i)
-                elif not n.get('Action'):
-                    complete(i)                          # (a named group: all_tundra_nodes, FinalProgram)
-                else:
-                    sig = signature(g, n)
-                    if done.get(_key(n)) == sig and all(os.path.exists(g.path_of(p)) for p in n.get('Outputs') or []):
-                        counts['before'] += 1
+            while ready or running:
+                while ready and not failed and len(running) < max(1, jobs):
+                    i = ready.pop()
+                    n = g.nodes[i]
+                    k = kind(n)
+                    if k in ('WriteTextFile', 'WriteFile'):
+                        write_file(g, n)
                         complete(i)
-                        continue
-                    prepare(g, n)
-                    running[pool.submit(run_shell, i, sig)] = i
-            if not running:
-                break
-            fin, _ = concurrent.futures.wait(list(running), timeout=2, return_when=concurrent.futures.FIRST_COMPLETED)
-            for f in fin:
-                i = running.pop(f)
-                _, ok = f.result()
-                if ok:
-                    complete(i)
-            if progress and time.time() - last[0] >= every:
-                last[0] = time.time()
-                msg = progress(counts['ran'] + counts['before'], shells, time.time() - t0)
-                if msg:
-                    log(msg)
-    lf.write(f'graph done: {counts["ran"]} commands run, {counts["before"]} done before, '
-             f'{len(failed)} failed, {time.time() - t0:.0f} s\n')
-    lf.close()
-    df.close()
+                    elif k == 'CopyFiles':
+                        copy_files(g, n)
+                        complete(i)
+                    elif k != 'RunShellCommand':
+                        raise SystemExit(f'{dag}: {n.get("Annotation")}: a {k} node, which this backend stand-in '
+                                         f'does not run (il2cpp_bee.py)')
+                    elif not n.get('Action'):
+                        complete(i)                          # (a named group: all_tundra_nodes, FinalProgram)
+                    else:
+                        sig = signature(g, n, digest)
+                        if done.get(_key(n)) == sig and all(os.path.exists(g.path_of(p)) for p in n.get('Outputs') or []):
+                            counts['before'] += 1
+                            complete(i)
+                            continue
+                        prepare(g, n)
+                        running[pool.submit(run_shell, i, sig)] = i
+                if not running:
+                    break
+                fin, _ = concurrent.futures.wait(list(running), timeout=2, return_when=concurrent.futures.FIRST_COMPLETED)
+                for f in fin:
+                    i = running.pop(f)
+                    _, ok = f.result()
+                    if ok:
+                        complete(i)
+                if progress and time.time() - last[0] >= every:
+                    last[0] = time.time()
+                    msg = progress(counts['ran'] + counts['before'], shells, time.time() - t0)
+                    if msg:
+                        log(msg)
+    finally:
+        lf.write(f'graph done: {counts["ran"]} commands run, {counts["before"]} done before, '
+                 f'{len(failed)} failed, {time.time() - t0:.0f} s\n')
+        lf.close()
+        df.close()
     if failed:
         n, rc, out = failed[0]
         tail = '\n'.join(out.strip().splitlines()[-30:])

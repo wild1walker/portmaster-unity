@@ -160,9 +160,10 @@ stand-in there (convert/pmunity/il2cpp_bee.py, a POSIX sh script, written into t
   (`RunShellCommand`: `/bin/sh -c` in the graph's folder with the node's environment) at most
   `--jobs` at a time, in one container kept running for them (`docker exec`), or natively with
   `--on-device`; the `WriteTextFile` nodes (response files, "lump" files that `#include` several
-  libil2cpp sources) and `CopyFiles` nodes directly. A command whose record in
-  `<cache>/buildstate/pmunity-done.jsonl` (its command line, environment, and its inputs' sizes and
-  times) still matches and whose outputs exist is not run again, so an interrupted build continues,
+  libil2cpp sources; 2022.x: `WriteFile`, the bytes in the graph's `bee.dag.payloads`) and
+  `CopyFiles` nodes directly; a node whose input another node writes waits for it. A command whose record in
+  `<cache>/buildstate/pmunity-done.jsonl` (its command line, environment, and its inputs' contents:
+  il2cpp writes all the C++ again when it converts again, mostly unchanged) still matches and whose outputs exist is not run again, so an interrupted build continues,
   as with il2cpp's own object cache in 2017.4 - 2020.3. The first failing command stops the build
   (no new commands start) with its output and command line.
 
