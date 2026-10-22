@@ -91,9 +91,16 @@ calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointe
 whether code selects UI elements (pad/keyboard menu navigation), InControl's Android device
 profiles and the pad names they match (so a port can set `UA_PAD_NAME` to one), and text entry (`InputField`,
 `TMP_InputField`, `TouchScreenKeyboard`: the soft keyboard, which ua_host's on-screen keyboard
-answers). The verdict line says whether the
-menus are likely pointer-only (then the port needs ua_host's pointer mode, `UA_POINTER=1`, see
-docs/input.md).
+answers), pointer locks (`Cursor.lockState = Locked`) and UI hit tests of the game's own
+(`BaseRaycaster.Raycast`, `EventSystem.RaycastAll` outside an input module, in a method that does
+not read the mouse's or a touch's position). Library code compiled into the game's assemblies is
+counted apart, as it says nothing about how the game's menus work: Rewired's source edition
+(namespace `Rewired`: its UI input module, demos, control mapper) and the scripts assets ship in
+`Demo(s)`/`Example(s)`/`Sample(s)` namespaces; a Rewired UI input module in the build gets a note. The verdict line says whether the menus are likely pointer-only (then the port needs
+ua_host's pointer mode, `UA_POINTER=1`, see docs/input.md), or whether the game likely has a
+cursor of its own (a pointer lock and a UI hit test: it moves the cursor by mouse motion, so
+pointer mode's position and touches do not steer it; docs/input.md, "Games with their own
+cursor").
 
 Then the file access section: for each folder getter the game reads, how many reads there are, how
 many reach System.IO or a native library (and whether they write), the APIs they reach, Unity's
@@ -120,8 +127,12 @@ patched, loaded into the test process and called; a fake `Unity.InputSystem` (an
 `InputSystem` whose plugin initialization returns early or not, a logging `RegisterLayout` and a
 decoy overload; no package code) is patched and called, and the layouts it registers are parsed
 and checked control by control; plus the not-applicable, already-applied, failing and
-command-line cases. For streaming-assets and data-path: a fake `UnityEngine.CoreModule`
-(Application getters that return settable values, an AssetBundle and a UnityWebRequest that record
+command-line cases. The survey runs on fake games (references to Unity's types only): one with a
+cursor of its own beside Rewired's UI input module, Rewired's demos, an asset's examples, an input
+module of its own and a hit test at the mouse's position (none of which counts), one that locks
+the pointer for mouse look and hit-tests at the mouse's position, and a pointer-driven one whose
+only UI selection calls are Rewired's. For streaming-assets and data-path: a fake
+`UnityEngine.CoreModule` (Application getters that return settable values, an AssetBundle and a UnityWebRequest that record
 the path they get) and a game whose paths go straight into System.IO, through a property and a
 helper, a static field, an array, a virtual method, a delegate, into Unity's APIs only, and into
 both; the patched game runs against a `jar:file://` path (and an OBB dataPath) whose folder has the

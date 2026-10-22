@@ -1,5 +1,7 @@
 // --survey: which input stacks a game's code uses, and what each needs on Unity's Android player.
-// Read only. Counts call sites in the game's own assemblies (not Unity's or the class libraries).
+// Read only. Counts call sites in the game's own assemblies (not Unity's or the class libraries);
+// library code compiled into them (Rewired's source edition: its UI input module, demos, control
+// mapper; asset demos and examples) is counted apart, as it does not tell how the game's menus work.
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
@@ -32,7 +34,10 @@ static class Survey
         var pointerTypes = new List<string>();
         var navTypes = new List<string>();
         var rewired = new List<string>();
-        bool inControlLib = false;
+        bool inControlLib = false, rewiredUiModule = false;
+        var library = new Counter();            // input call sites in library code (LibraryCode)
+        var locks = new Counter();              // Cursor.lockState = Locked
+        var uiRaycasts = new Counter();         // UI hit tests outside an input module, at a position not read from the pointer
 
         foreach (var asm in game.GameAssemblies)
         {
@@ -40,8 +45,11 @@ static class Survey
             foreach (var t in Cecil.AllTypes(asm.MainModule))
             {
                 if (t.FullName == "InControl.InputManager" || t.FullName == "InControl.InControlManager") inControlLib = true;
+                if (t.FullName == "Rewired.Integration.UnityUI.RewiredStandaloneInputModule") rewiredUiModule = true;
+                bool lib = LibraryCode(t), inputModule = DerivesFrom(t, "UnityEngine.EventSystems.BaseInputModule");
                 foreach (var i in t.Interfaces)
                 {
+                    if (lib) break;
                     var n = i.InterfaceType.Name;
                     if (i.InterfaceType.Namespace != "UnityEngine.EventSystems") continue;
                     if (PointerHandlers.Contains(n) && !pointerTypes.Contains(t.FullName)) pointerTypes.Add(t.FullName);
@@ -49,11 +57,12 @@ static class Survey
                 }
                 foreach (var m in t.Methods)
                 {
-                    if (!m.IsStatic && m.Parameters.Count == 0 && MouseMessages.Contains(m.Name) && DerivesFromMonoBehaviour(t))
+                    if (!lib && !m.IsStatic && m.Parameters.Count == 0 && MouseMessages.Contains(m.Name) && DerivesFromMonoBehaviour(t))
                         mouseMsgs.Add($"{t.FullName}.{m.Name}");
                     if (m.Name == "DetectPlatform" && m.HasBody && Cecil.Hierarchy(t).Skip(1).Any(b => b.FullName == "Rewired.InputManager_Base"))
                         rewired.Add($"{file}: {t.FullName} ({(file.StartsWith("Assembly-CSharp") ? "source edition" : "DLL edition")}), DetectPlatform sets {Platform(m)}");
                     if (!m.HasBody) continue;
+                    bool readsPointer = m.Body.Instructions.Any(i => i.Operand is MethodReference r && PointerRead(r));
                     foreach (var ins in m.Body.Instructions)
                     {
                         if (ins.Operand is not MemberReference mr || mr.DeclaringType == null) continue;
@@ -61,10 +70,16 @@ static class Survey
                         var where = $"{t.FullName}.{m.Name}";
                         if (dt == "UnityEngine.Input")
                             foreach (var (g, members) in LegacyGroups)
-                                if (members.Contains(mr.Name)) legacy[g].Add(where);
+                                if (members.Contains(mr.Name)) (lib ? library : legacy[g]).Add(where);
                         if ((dt == "UnityEngine.EventSystems.EventSystem" && (mr.Name == "SetSelectedGameObject" || mr.Name == "set_firstSelectedGameObject")) ||
                             (dt == "UnityEngine.UI.Selectable" || dt.StartsWith("UnityEngine.UI.")) && mr.Name == "Select")
-                            selects.Add(where);
+                            (lib ? library : selects).Add(where);
+                        if (lib) continue;
+                        if (dt == "UnityEngine.Cursor" && mr.Name == "set_lockState" && ins.Previous != null && Cecil.ConstInt(ins.Previous) == 1)
+                            locks.Add(where);           // CursorLockMode.Locked
+                        if (!inputModule && !readsPointer && (mr.Name == "Raycast" && (dt == "UnityEngine.EventSystems.BaseRaycaster" || dt == "UnityEngine.UI.GraphicRaycaster") ||
+                                             mr.Name == "RaycastAll" && dt == "UnityEngine.EventSystems.EventSystem"))
+                            uiRaycasts.Add(where);
                         if (dt.StartsWith("UnityEngine.InputSystem")) inputSystemRefs.Add(where);
                         if (dt.StartsWith("InControl.") && !asm.Name.Name.StartsWith("InControl")) inControlRefs.Add(where);
                         if (dt == "UnityEngine.TouchScreenKeyboard" || dt == "UnityEngine.UI.InputField" || dt == "TMPro.TMP_InputField") textEntry.Add(where);
@@ -79,6 +94,10 @@ static class Survey
         foreach (var s in rewired) Console.WriteLine("  " + s);
         if (rewired.Count > 0)
             Console.WriteLine("  -> asmpatch rewired-android (Rewired then reads pads through Unity input; android-data adds its Joy<j>Axis<a> axes)");
+        if (rewiredUiModule)
+            Console.WriteLine("  Rewired's UI input module (RewiredStandaloneInputModule) is in the build: it takes Unity's mouse and touches as Unity's\n" +
+                              "  StandaloneInputModule does, so pointer mode reaches the uGUI elements it serves (with its \"Allow Mouse Input If Touch\n" +
+                              "  Supported\" off it takes only touches on Android, where Input.touchSupported is true: UA_POINTER=touch)");
         Console.WriteLine("InControl: " + (inControlLib || inControlRefs.N > 0 ? $"yes ({inControlRefs.N} call sites); picks its device profiles at run time, by the running platform and the pad's name" : "no"));
         if (inControlLib || inControlRefs.N > 0)
         {
@@ -105,10 +124,19 @@ static class Survey
         Console.WriteLine($"UI navigation: {navTypes.Count} handler types, {selects.N} selection calls (SetSelectedGameObject/Select){selects.Examples()}");
         Console.WriteLine($"text entry (InputField, TMP_InputField, TouchScreenKeyboard): {textEntry.N}{textEntry.Examples()}" +
                           (textEntry.N > 0 ? " -> the soft keyboard opens ua_host's on-screen keyboard" : ""));
+        Console.WriteLine($"pointer locked (Cursor.lockState = Locked): {locks.N}{locks.Examples()}");
+        Console.WriteLine($"UI hit tests of its own (Raycast, RaycastAll outside an input module, at no mouse or touch position): {uiRaycasts.N}{uiRaycasts.Examples()}");
+        if (library.N > 0)
+            Console.WriteLine($"not counted above: {library.N} input call sites in library code compiled into the game (Rewired's own, asset demos/examples){library.Examples()}");
         Console.WriteLine();
         bool pointerUse = legacy["mouse"].N > 0 || mouseMsgs.Count > 0 || pointerTypes.Count > 0;
         bool padUse = rewired.Count > 0 || inControlLib || legacy["axes/buttons"].N > 0 || selects.N > 0 || navTypes.Count > 0;
-        if (pointerUse && selects.N == 0 && navTypes.Count == 0)
+        if (locks.N > 0 && uiRaycasts.N > 0)
+            Console.WriteLine($"verdict: likely its own cursor: the game locks the system pointer and hit-tests its UI itself{uiRaycasts.Examples()},\n" +
+                              "  so it draws a cursor and moves it by mouse motion (and by the pad, where it maps one). Pointer mode's position and\n" +
+                              "  touches do not steer it: try the pad without UA_POINTER; else UA_POINTER=1 UA_POINTER_CURSOR=0 (the stick moves the\n" +
+                              "  game's cursor through mouse motion, the buttons click). docs/input.md, \"Games with their own cursor\"");
+        else if (pointerUse && selects.N == 0 && navTypes.Count == 0)
             Console.WriteLine("verdict: pointer-driven UI (no code selects UI elements for pad/keyboard navigation): UA_POINTER=1 likely needed for menus");
         else if (pointerUse)
             Console.WriteLine("verdict: reads the mouse, but also selects UI elements (pad navigation may work; UA_POINTER=1 where it does not)");
@@ -116,6 +144,9 @@ static class Survey
             Console.WriteLine("verdict: pad/keyboard input");
         else
             Console.WriteLine("verdict: no input code found in the game's assemblies (UI built in scenes only? check the title screen)");
+        if (locks.N > 0 && uiRaycasts.N == 0)
+            Console.WriteLine("  the game locks the system pointer in places (mouse look, or a cursor of its own there): while it is locked the game\n" +
+                              "  reads mouse motion, not the pointer's position");
         PathFlow.Print(game);
         return 0;
     }
@@ -172,6 +203,39 @@ static class Survey
             if (i.OpCode.Code == Code.Stfld && i.Operand is FieldReference f && f.Name == "platform" && i.Previous != null && Cecil.ConstInt(i.Previous) is int v)
                 last = Cecil.EnumName(Cecil.TryResolve(f.FieldType), v);
         return last;
+    }
+
+    /// <summary>Library code compiled into a game assembly, whose input calls say nothing about the
+    /// game's own UI: Rewired's source edition (namespace Rewired: its UI input module, demos, control
+    /// mapper) and the demo/example scripts assets ship (a Demos/Examples/Samples namespace).</summary>
+    static bool LibraryCode(TypeDefinition t)
+    {
+        while (t.DeclaringType != null) t = t.DeclaringType;
+        var ns = t.Namespace ?? "";
+        return ns == "Rewired" || ns.StartsWith("Rewired.") ||
+               ns.Split('.').Any(s => s is "Demo" or "Demos" or "Example" or "Examples" or "Sample" or "Samples");
+    }
+
+    /// <summary>A read of the pointer's position: the mouse's or a touch's (legacy Input, Touch, the
+    /// Input System's Pointer.position or a Vector2 control's value).</summary>
+    static bool PointerRead(MethodReference r)
+    {
+        var dt = r.DeclaringType?.FullName ?? "";
+        return dt == "UnityEngine.Input" && r.Name is "get_mousePosition" or "GetTouch" or "get_touches" ||
+               dt == "UnityEngine.Touch" && r.Name == "get_position" ||
+               dt.StartsWith("UnityEngine.InputSystem.") && (r.Name == "get_position" || r.Name == "ReadValue" && dt.EndsWith("<UnityEngine.Vector2>"));
+    }
+
+    static bool DerivesFrom(TypeDefinition t, string baseName)
+    {
+        for (var b = t.BaseType; b != null; )
+        {
+            if (b.FullName == baseName) return true;
+            var d = Cecil.TryResolve(b);
+            if (d == null) return false;
+            b = d.BaseType;
+        }
+        return false;
     }
 
     static bool DerivesFromMonoBehaviour(TypeDefinition t) => Cecil.Hierarchy(t).Any(b => b.FullName == "UnityEngine.MonoBehaviour") ||
