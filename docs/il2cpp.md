@@ -564,10 +564,11 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
 | 2D, menus from localization XML in StreamingAssets read with System.IO, Steamworks.NET, I18N plugins | 2018.3.2f1 | arm64-v8a | 34.5 MiB | 24 | 46 min (NDK r16b; UnityLinker 3 min, il2cpp 42, the machine's Docker file sharing busy) | title menu with its localized text: `--asmpatch ... --streaming-assets both`, the folder beside the APK (android-data `--streaming-assets both`), ~20 fps in the rig. Steamworks.NET's callbacks throw `NotSupportedException` ("IL2CPP does not support marshaling delegates that point to generic methods"); the Steam stub fails its init first anyway |
 | 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
+| 2D, Addressables, Localization, TextMeshPro, Steamworks.NET, incremental GC | 6000.0.58f2 (mixed: 2022.3.62f3's il2cpp) | arm64-v8a | 68.0 MiB | 31 | 35 min (UnityLinker 1 min, conversion 9 min, Bee graph: 663 commands in 26 min; NDK r23b, API 23) | title, 60 fps in the rig, no exception |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
-2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3); the metadata versions match those of real IL2CPP builds
-of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31). 2021.x and 2022.x
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3, 157 for 6000.0); the metadata versions match those of real IL2CPP builds
+of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31, and 31 is what 6000.0's libil2cpp reads). 2021.x and 2022.x
 builds have no `Managed/etc` (nor have Unity's: Cat Cove Inn's, The Ump Show's APKs), and their
 APKs get `assets/bin/Data/unity_app_guid` (android-data, above). The layout of the APK matches Unity's IL2CPP
 builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
