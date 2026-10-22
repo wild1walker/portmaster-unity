@@ -17,10 +17,15 @@ the emulated armv7 rig; a Mono game does not need it there, but it is how the IL
 tested before a 64-bit runtime and handheld are at hand).
 
 Options for ports: `--managed-file DLL` compiles that assembly instead of the data's copy of the
-same name (a port's patched `Assembly-CSharp.dll`, its helper assembly), `--asmpatch COMMAND`
-runs tools/asmpatch on the game's `Managed` and compiles what it changed (as `android-data
---asmpatch`: e.g. `--asmpatch "dotnet asmpatch.dll --only=rewired-android"`). With IL2CPP the
-assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data.
+same name (a port's patched `Assembly-CSharp.dll`, its helper assembly), `--assembly-patch NAME
+COMMAND` runs a port's patch command (as `android-data --assembly-patch`: `{managed}` is the data's
+`Managed` folder, `{out}` a folder where it writes NAME) and compiles what it writes, `--asmpatch
+COMMAND` runs tools/asmpatch on the game's `Managed` and compiles what it changed (as `android-data
+--asmpatch`: e.g. `--asmpatch "dotnet asmpatch.dll --only=rewired-android"`), and with it
+`--streaming-assets both|loose` and `--data-path` add asmpatch's opt-in patches for StreamingAssets
+and the data folder read with System.IO (below, "Files the game reads"). With IL2CPP the
+assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data
+(which refuses `--asmpatch`, `--managed-file` and `--assembly-patch` with `--il2cpp`).
 **Unity versions**: 2017.4 - 2022.3. Their il2cpp is a .NET program the container's (or, with
 `--on-device`, the handheld's) .NET runs; from 2021.2 the class libraries are per platform and the
 build takes `unityaot-linux`, as Unity's Android builds do, and il2cpp builds the C++ with Bee,
@@ -103,6 +108,11 @@ newer compiler's code generation.
    Which runtime: the version of the `mscorlib.dll` the game ships (2.0.0.0: .NET 3.5). Which API
    level: its types (the "unity" profile has Unity's `MonoTouchAOTHelper` and no console
    drivers); a desktop build ships the profile it ran on, so IL2CPP compiles that one.
+   An assembly with a class library's name that the data lists among its script assemblies
+   (`ScriptingAssemblies.json`, else MonoManager's `m_AssemblyNames`) is the game's own, e.g. a
+   project's `Plugins/I18N.dll` and `I18N.CJK.dll` for code pages, which nothing references (they
+   are loaded by name): it is staged from the game's copy and kept whole, as Unity's build treats a
+   plugin assembly (without that, android-data stopped: "MonoManager lists assemblies missing").
 2. **UnityLinker** (`--strip low`, the default) as an Android IL2CPP build with Managed Stripping
    Level "Low" runs it: `--rule-set=Conservative --use-editor-options --dotnetprofile=<profile>
    --dotnetruntime=il2cpp --platform=Android`. The class libraries are linked with Unity's own
@@ -195,6 +205,73 @@ under the runtime's root) and runs IL2CPP from there. Two packing rules follow f
 - **`buildDate` in boot.config** (Unity 2020.x; a value from the metadata's hash): libunity keeps
   it in `il2cpp/unity.ver` and copies the data again only when it changes; without it the copy is
   redone at every start.
+
+### Files the game reads (StreamingAssets, the data folder)
+
+A desktop game that reads StreamingAssets with System.IO (localization XML, JSON, SQLite, level
+files) needs them beside the APK and its reads pointed there (android-data.md, section 6): android-data
+`--streaming-assets both|loose` puts the folder there, asmpatch's `streaming-assets` /
+`streaming-assets-all` patch points the reads at it, and `--data-path` does the same for
+`Application.dataPath`. Under IL2CPP the patch must be in the code IL2CPP compiles:
+
+```
+python -m pmunity il2cpp <Game>_Data out/il2cpp --asmpatch "dotnet asmpatch.dll --only=" --streaming-assets both
+python -m pmunity android-data --src work/data --pkg <IL2CPP player> --il2cpp out/il2cpp --streaming-assets both \
+    --out work/android --pack all
+```
+
+(`--only=` runs no patch but the opt-in ones the options name; without it asmpatch's default
+patches run too.) `il2cpp.json` keeps `streaming_assets` and `data_path`, and android-data refuses
+to pack a build whose compiled reads look for files its options leave out (built with `both` or
+`loose`, packed with another mode; built with `--data-path`, packed without it). The il2cpp-arm64
+port route does both from port.toml's `android_data.streaming_assets` and `data_path`.
+
+## Android builds with Mono (`pmunity apk --il2cpp`)
+
+A game owned as an Android build made with Mono has only Unity's armeabi-v7a player, which a
+64-bit-only firmware cannot run. Its `assets/bin/Data/Managed/*.dll` are the assemblies IL2CPP
+compiles (already the Android ones, with the game's Android code paths), and its data is already
+Android data, so the same build applies without a conversion:
+
+```
+python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp [--home DIR] [--jobs N]   # PC: Docker
+python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --on-device --home DIR    # on the handheld
+```
+
+`--il2cpp` acts only when the target needs arm64-v8a and the build is Mono with only armeabi-v7a
+(`--target armhf,arm64 --il2cpp` on a system with a 32-bit userland keeps the build's own player).
+It runs `pmunity il2cpp` on the APK's assemblies and `boot.config` (the version from its data:
+`globalgamemanagers` or `data.unity3d`) into `out/.il2cpp`, which a rerun continues, then writes the
+arm64 layout:
+
+- `lib/`: `libmain.so` and `libunity.so` of Unity's arm64 IL2CPP player of the build's version
+  (`<home>/<version>/player-arm64-v8a`, fetched by the build), and the new `libil2cpp.so`. The
+  build's own native plugins are 32-bit and left out (calls into them fail; the dry run's notes
+  list them);
+- `base.apk`: the APK without `lib/`, without `assets/bin/Data/Managed/` (the assemblies) and
+  without its signature, with IL2CPP's `Managed/` (Metadata, Resources, etc up to 2020.x) stored
+  and aligned, and libunity's re-extraction stamp from the metadata as android-data writes it
+  (2020.x `buildDate` in boot.config, 2021.x+ `unity_app_guid`);
+- `android_package.json`: `abi` arm64-v8a, `backend` il2cpp, `il2cpp_metadata`, and `il2cpp`
+  (`from: mono`, the IL2CPP release, NDK, size, build time); `source` stays `apk` (the build's
+  own frame pacing, Swappy as built).
+
+Refused with the reason: versions outside 2017.4 - 2022.3, a 2017.4 release before 2017.4.16f1
+(no arm64 player of it, and an Android build's data is not moved to another release here), an
+IL2CPP build with only armeabi-v7a (no assemblies left to compile). The apk port route offers it
+with `player.il2cpp = true` (porting.md, apk.md).
+
+Run so far (PC route, then the native arm64 rig), two free itch.io Mono APKs whose data is a
+`data.unity3d`:
+
+| game | Unity | assemblies | build | `libil2cpp.so`, metadata | base.apk | result |
+|---|---|---|---|---|---|---|
+| card battler, GLES2, Unity Services config | 2022.3.23f1 | 109 (24 of the game) | 31 min (Bee graph, 607 commands; incremental GC) | 53.1 MiB, 29 | 18.7 MiB (from 28.9) | title at the build's 30 fps; pointer taps go into its first battle's tutorial |
+| 2D, portrait, Vulkan + GLES3 | 2019.4.18f1 | 89 (8 of the game) | 15 min | 30.0 MiB, 24 | 18.3 MiB (from 28.4) | title (~140 fps in the rig); `UA_POINTER=touch` taps PLAY and a run starts |
+
+Neither logged an exception. Not tried yet: a Mono APK whose data is in an OBB (with an OBB mounted
+libunity 2020.3 listed no `Managed/` to copy out, above), split APKs and App Bundles with Mono,
+2017.4 and 2018.x Mono APKs, a game with native plugins of its own (left out, as said).
 
 ## On the handheld (`--on-device`)
 
@@ -397,6 +474,7 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; sound since the loader raises small thread stacks (below) |
 | same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
 | 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
+| 2D, menus from localization XML in StreamingAssets read with System.IO, Steamworks.NET, I18N plugins | 2018.3.2f1 | arm64-v8a | 34.5 MiB | 24 | 46 min (NDK r16b; UnityLinker 3 min, il2cpp 42, the machine's Docker file sharing busy) | title menu with its localized text: `--asmpatch ... --streaming-assets both`, the folder beside the APK (android-data `--streaming-assets both`), ~20 fps in the rig. Steamworks.NET's callbacks throw `NotSupportedException` ("IL2CPP does not support marshaling delegates that point to generic methods"); the Steam stub fails its init first anyway |
 | 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
@@ -439,9 +517,12 @@ What the runs showed:
 
 ## Not tested yet
 
+- `--streaming-assets loose` and `--data-path` with IL2CPP (the same patches as `both`, by the same
+  path; only `both` has run);
 - Unity 2021.1 - 2021.2 and 2022.1 (NDK r21d, like 2021.3; 2021.1 has no Bee yet if its editor
   installer has no `bee_backend` folder: then il2cpp's own builder runs, as for 2020.3), armv7
-  with 2021.x / 2022.x; 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
+  with 2021.x / 2022.x; 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player; 2018.3
+  has run, above);
   2017.4 .NET 4.x games (`net45`: none among the free 2017.4 builds surveyed, all were .NET 3.5),
   .NET 3.5 games of 2018.x (`legacyunity` / `net20` with the newer UnityLinker), the ".NET 2.0"
   (`net20`) profile.
@@ -480,6 +561,10 @@ What the runs showed:
   keeps both versions): android-data retargets the data to the player's release
   ([android-data.md](android-data.md), "retargeted") and refuses a player other than the one
   `libil2cpp.so` was built for (`il2cpp_mismatch`).
+- 2018.3: as 2018.4 (NDK r16b, `il2cpp.exe`), but like 2017.x it links with a map file and
+  then builds MapFileParser from sources the installer does not carry (it stopped with
+  `DirectoryNotFoundException: .../il2cpp/MapFileParser` after the whole compile): 2018.1 - 2018.3
+  get `--map-file-parser=/bin/true` and the SymbolMap from the symbol table, as 2017.x.
 - 2018.4: `il2cpp/build/il2cpp.exe` (no `deploy/`), NDK r16b (GNU binutils layout and GNU
   libstdc++ (`gnustl_static`): il2cpp passes `--sysroot`, `-gcc-toolchain` and a target without
   the API level, which ndk-clang.sh adds from `-D__ANDROID_API__`); armv7 there is API 16.

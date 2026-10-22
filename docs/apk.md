@@ -22,6 +22,27 @@ Then copy `out/` to the handheld and start `ua_host out/` with the build of the 
 `runtime/host/out/ua_host` (armhf, armeabi-v7a; `LD_LIBRARY_PATH=/lib32:/usr/lib32`) or
 `runtime/host/out/arm64/ua_host` (aarch64, arm64-v8a).
 
+## Mono builds on 64-bit-only systems (`--il2cpp`)
+
+Unity's Android players with Mono are armeabi-v7a only, so a Mono build needs a 32-bit userland.
+With `--il2cpp` it runs on a 64-bit one too: its assemblies (`assets/bin/Data/Managed/*.dll`) are
+compiled with Unity's IL2CPP (`pmunity il2cpp`, docs/il2cpp.md) for Unity's arm64 IL2CPP player
+of the build's version, and `out/` gets that player, the new `libil2cpp.so` and an APK with
+IL2CPP's metadata in place of the assemblies:
+
+```sh
+python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --home <IL2CPP tools> [--jobs 3]        # PC (Docker)
+python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --on-device --home <dir>                # an aarch64 handheld
+```
+
+It takes what `pmunity il2cpp` takes (`--home`, `--pkg`, `--jobs`, `--on-device`, `--toolchain`,
+`--link-xml`, `--strip`, `--keep-cpp`) and acts only when the chosen player is arm64-v8a and the
+build has none (a target list that starts with `armhf` on a system with a 32-bit userland keeps
+the build's own player). Unity 2017.4.16f1 - 2022.3 (the IL2CPP route's range; docs/il2cpp.md,
+"Android builds with Mono", lists what changes in the layout). The build's own native plugins are
+32-bit ARM and left out. The same AOT limits as for desktop games apply (docs/il2cpp.md, "AOT
+limits"), but the code is the Android build's own, so its Android code paths are the ones compiled.
+
 ## As a port (`pmunity port new --route apk`)
 
 ```sh
@@ -50,7 +71,13 @@ and suggests `game.package` (the setup takes only that package), `game.unity_ver
   the exit hotkey, SDL's own audio driver and the build's own frame pacing (`UA_FRAME_RATE=android`);
 - port.json asks for the 32-bit userland (`reqs = ["armhf"]`) only when the port runs nothing but
   armeabi-v7a; a card set up with the 32-bit player and moved to a 64-bit-only handheld is set up
-  again from the installed APK (the launcher says how).
+  again from the installed APK (the launcher says how);
+- a Mono build (armeabi-v7a only) with `player.il2cpp = true` in port.toml (the check says when a
+  build can take it): the release ships `ua_host64` too, port.json drops the 32-bit userland, and
+  on a system without one the setup runs `pmunity apk --il2cpp --on-device`, which compiles the
+  build's code on the handheld (one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi for
+  Unity's, Debian's and Microsoft's files; an interrupted build continues on the next launch). A
+  system with a 32-bit userland still takes the build's own player.
 
 ## What it writes
 
@@ -155,6 +182,10 @@ Vulkan-first and Swappy-on builds all reach their title screens. No free build w
 found; one was made locally by moving an IL2CPP 2021.3 build's `data.unity3d` into a main OBB with
 the 2021.1+ GUID files, as Unity's "Split Application Binary" does: `pmunity apk` found it beside
 the APK, named it `main.1.<package>.obb`, and the player mounted it and reached the title screen.
+
+Mono builds through `--il2cpp` (arm64 rig): a 2022.3 card battler (title, then into its first
+battle with pointer taps) and a 2019.4 portrait game (title, a run started with touch taps), each
+compiled in Docker in 15 - 31 minutes; docs/il2cpp.md, "Android builds with Mono", has the figures.
 
 ## Debugging
 

@@ -62,9 +62,9 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | route | when | status |
 |---|---|---|
 | `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
-| `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. Not yet: assembly patches (`files.assembly_patches`), StreamingAssets read as files (`streaming_assets` other than `obb`) |
+| `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
-| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; [apk.md](apk.md), "As a port") |
+| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
 Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from = ["d3d11"]` and
 `pmhlslcc` (`tools/hlslcc/build.sh`; docs/shaders.md, "Windows builds"). A Windows build of Unity
@@ -159,10 +159,11 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `[controls]` | none | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
 | `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player package `pmunity player fetch` gets; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
 | `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
+| `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
 | `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
 | `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, else `off` | `auto`: tools/asmpatch runs on the game's assemblies (each patch changes only what it finds; the package then ships asmpatch); a list: only those patches |
-| `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch) |
+| `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch); the il2cpp-arm64 route compiles the patch into the game's IL2CPP build (`pmunity il2cpp --streaming-assets`) and packs the same mode |
 | `android_data.data_path` | false | true: the reads of `Application.dataPath` that reach System.IO get `Game_Data/` beside the APK, with the data folder's own files (asmpatch's data-path patch; docs/android-data.md, section 6); the check notes such reads |
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
@@ -203,6 +204,14 @@ continues where it stopped on the next launch. Free space: about three times the
 runs. The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
 (the launcher checks for `/lib/ld-linux-armhf.so.3` first).
 
+The il2cpp-arm64 route's setup takes the same steps with step 3 replaced: `pmunity il2cpp
+--on-device` compiles the game's code on the handheld (it also fetches the IL2CPP player), with
+the port's managed files, assembly patches (run on the game's original assemblies) and asmpatch,
+which gets the opt-in patches `streaming_assets` and `data_path` ask for (`--streaming-assets`,
+`--data-path`); step 5 packs with `--il2cpp` and the same `--streaming-assets` / `--data-path`
+(android-data checks them against the build's `il2cpp.json`), and nothing of the code goes to
+android-data.
+
 The apk route's setup is shorter: the setup's Python; the players this system runs, in order (the
 APK's armeabi-v7a one where `/lib/ld-linux-armhf.so.3` exists and the port has `ua_host`, its
 arm64-v8a one where the port has `ua_host64`; `player.abi = "arm64-v8a"` puts that first); the
@@ -216,7 +225,12 @@ Unity version checked against `game.package` and `game.unity_versions`; then ins
 `android_package.json` moved into the port folder, the player's files in `gamedata/` deleted
 (`keep_installers=1` keeps them). Free space: about the build's size. The launcher picks `ua_host`
 or `ua_host64` by `android_package.json`'s `abi`, and keeps the build's own frame pacing (ua_host
-runs imported builds with `UA_FRAME_RATE=android`).
+runs imported builds with `UA_FRAME_RATE=android`). With `player.il2cpp` (a Mono build) the
+players are `armhf,arm64` (`ua_host64` is in the release), and on a system without the 32-bit
+loader the call is `pmunity apk --target arm64 --il2cpp --on-device --home <work>/il2cpp-home`: the
+build's assemblies compiled for Unity's arm64 IL2CPP player of its version (one to a few hours,
+about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continues from
+`<work>/apk/.il2cpp`), its output shown as it goes.
 
 ## 5. package
 
