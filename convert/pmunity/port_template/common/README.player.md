@@ -11,7 +11,7 @@ handheld.
   for @@UNITY_VERSIONS@@).
 - Wi-Fi on the first launch, to download Unity's Android player of that version from Unity (about
   10 MB of its installer). Or put `UnitySetup-Android-Support-for-Editor-<version>.exe` from Unity's
-  download archive into `gamedata/` yourself.
+  download archive into `gamedata/` yourself.@@DOWNLOAD_MORE@@
 - About @@SIZE_GB@@ GB free on the card during the setup.
 - A handheld with a 32-bit (armhf) userland and GLES 3 (e.g. Knulli on Allwinner H700 devices),
   and a 64-bit (aarch64) system for the setup's tools.

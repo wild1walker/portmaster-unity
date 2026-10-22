@@ -9,7 +9,8 @@
 #      --on-device): Unity's IL2CPP tools and its arm64 IL2CPP player for the game's Unity version
 #      (range reads from Unity), compilers from Debian and .NET from Microsoft (pinned by checksum),
 #      then UnityLinker, il2cpp and the C++ build: one to a few hours, Wi-Fi for the downloads
-#   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps)
+#   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps; a Windows
+#      build's Direct3D 11 shaders with setup/pmhlslcc)
 #   4. the APK + OBB the player reads (pmunity android-data --il2cpp: IL2CPP's metadata instead of
 #      the assemblies)
 #   5. installing: the IL2CPP player's libraries with the game's libil2cpp.so, the game
@@ -182,6 +183,8 @@ if [ ! -f "$W/.step_convert" ]; then
   step "converting the game (if this is interrupted, the next launch continues where it stopped)"
   sed "s|{setup}|$S|g" "$S/convert.json" > "$W/convert.json"
   plugins=(); for f in "${CONVERT_PLUGINS[@]}"; do plugins+=(--plugin "$S/$f"); done
+  # a Windows build's Direct3D 11 shaders: HLSLcc (the release's pmhlslcc, aarch64)
+  if [ -f "$S/pmhlslcc" ]; then chmod +x "$S/pmhlslcc"; export PMHLSLCC="$S/pmhlslcc"; fi
   pm convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" \
     || fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."
   hook post_convert

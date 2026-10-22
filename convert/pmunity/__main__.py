@@ -11,6 +11,7 @@ Android player on GLES handhelds.
     python -m pmunity unpack <data> [--out DIR] [--remove]   (a compressed build's data.unity3d -> files)
     python -m pmunity version <data>                          (the Unity version the data was built with)
     python -m pmunity player fetch <version> <dir>            (Unity's Android player of that version, from Unity)
+    python -m pmunity winbcl <data> <dir> [--player PKG]      (Unity's class libraries a build lacks for it: winbcl.py)
     python -m pmunity port check|new|package ...              (a PortMaster port of a game: docs/porting.md)
     python -m pmunity apk <apk|xapk|apks|aab|obb...> <out>     (a game's own Android build, ready for ua_host)
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a]   (the game's assemblies compiled with IL2CPP; docs/il2cpp.md)
@@ -97,6 +98,9 @@ def main(argv=None):
     if argv[:1] == ['player']:
         from . import player
         return player.main(argv[1:])
+    if argv[:1] == ['winbcl']:          # Windows 2021.2+ class libraries, missing facades (winbcl.py)
+        from . import winbcl
+        return sys.exit(winbcl.main(argv[1:]))
     if argv[:1] == ['route']: from . import route; return route.main(argv[1:])  # noqa: E701,E702 (docs/box64-route.md)
     if argv[:1] == ['port']:            # port check / new / package (port.py, docs/porting.md)
         from . import port

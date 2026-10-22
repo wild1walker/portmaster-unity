@@ -43,7 +43,7 @@ loading, startup, input or data conversion) · "-" not applicable.
 | shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
 | GLCore41/43 programs (converter) | - (output as before) | ⚠️ off by default (`shaders.glcore4x`) | ✅ GLES3 / GLES 3.1 | ✅ | ✅ | ✅ + stripped shaders' empty blobs | ✅ |
 | D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ✅ GL binding info (Unity's 2019 layout) | ✅ + common params | ✅ + param entries | ✅ merged `$Globals` |
-| class libraries (Windows builds) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ unityjit-win32: `pmunity.winbcl` (2021.2+) | ⚠️ same |
+| class libraries (Windows builds) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ unityjit-win32: `pmunity winbcl` (2021.2+; a port's setup runs it) | ⚠️ same; also a missing `netstandard.dll` facade (winbcl `--player`) |
 | assembly list (converter) | fixed 48 slots ✅ | fixed 48 ✅ | flags (`m_AssemblyTypes`) ✅ | flags ✅ | `ScriptingAssemblies.json` ✅ (2020.2+) | json ✅ | json ✅ |
 | texture formats (converter) | ASTC RGB/RGBA ✅ | ✅ | ✅ | `ASTC_nxn` ✅ | ✅ | ✅ | ✅ |
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
@@ -98,7 +98,7 @@ Notes on the rows:
   line, the GL programs' own binding info (2019.1+) written as Unity's GL compiler does
   (docs/shaders.md, "Windows builds"); a 2021.2+ Windows build's class libraries are the Windows
   profile's (`unityjit-win32`, kernel32 P/Invokes) and are replaced by the Unix profile's from
-  Unity's editor installer (`python -m pmunity.winbcl`). Six free Windows-only games (2018.3 -
+  Unity's editor installer (`pmunity winbcl`, run by a port's setup). Six free Windows-only games (2018.3 -
   2022.3) reach their first screens in the emulated rig ("Players run" below).
 - IL2CPP metadata: the header's integer version (`global-metadata.dat` starts with 0xFAB11BAF
   and the version). These values come from public reverse-engineering tools, not from these
@@ -154,7 +154,7 @@ Windows builds (Direct3D 11 shaders translated with HLSLcc, `--set shaders.from=
 Windows-only Mono games, docs/shaders.md "Windows builds"): a 2018.3.7f1 3D game starts in its
 first level; 2019.2.5f1: title screen; 2019.3.14f1 (URP): Unity splash, title menu; 2020.3.44f1:
 splash, first screen; 2021.3.28f1: title menu once its class libraries are the Unix ones
-(`pmunity.winbcl`; with the Windows ones Mono asserts in the Input System's start, then SIGSEGV);
+(`pmunity winbcl`; with the Windows ones Mono asserts in the Input System's start, then SIGSEGV);
 2022.3.62f3 (URP): title menu (its Windows class libraries had failed only System.Console).
 
 What these runs still show: Unity's optional Java classes (`GoogleARCoreApi`, `Camera2Wrapper`,

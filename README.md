@@ -106,7 +106,7 @@ Each column is one kind of game build and the way it runs on the handheld (a *ro
 | Column | The build you have | How it runs on the handheld | Made with |
 |---|---|---|---|
 | **A** | Mono build for Linux or macOS | Unity's 32-bit ARM Android player, on the handheld's 32-bit userland; the game's data is converted on the handheld | `pmunity port new` (route `android`) |
-| **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES | route `android` with `shaders.from = ["d3d11"]` (build `tools/hlslcc/build.sh` first) |
+| **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES on the handheld, and a 2021.2+ build's class libraries are swapped for Unity's Unix ones | `pmunity port new` (route `android`; the release ships HLSLcc for the setup: `ARCH=arm64 tools/hlslcc/build.sh`) |
 | **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmunity port new --route il2cpp-arm64`; by hand: `pmunity il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
 | **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmunity apk`, by hand ([docs/apk.md](docs/apk.md)) |
 | **E** | Linux x86-64 build, Mono or IL2CPP | the game's own Linux player, translated by box64; about half the frame rate of A | `pmunity port new --route box64` ([docs/box64-route.md](docs/box64-route.md)) |
@@ -121,8 +121,8 @@ What has run, by Unity version (the version numbers in the cells are the builds 
 | 2018 | **Handheld**: 2018.4 title, 59.6 fps | Emulator: 2018.3.7 starts its first level | **Handheld**: 2018.4 title, 59.4 - 59.6 fps | Not yet | Emulator: 2018.4.36 title menu |
 | 2019 | **Handheld**: 2019.4 title, 59.6 fps | Emulator: 2019.2.5 title; 2019.3.14 (URP) title menu | **Handheld**: 2019.4 title, 59.4 - 59.6 fps | Emulator: 2019.4.18 Mono, 32-bit: title | Emulator: 2019.4.8 title |
 | 2020 | **Handheld**: 2020.3 title, 59.6 fps | Emulator: 2020.3.44 first screen | **Handheld**: 2020.3 title, 59.4 - 59.6 fps | **Handheld**: 2020.3 IL2CPP, 64-bit: title | Emulator: 2020.3.49 Mono title menu; 2020.3.28 IL2CPP main menu (desktop GL only) |
-| 2021 | **Handheld**: 2021.3 (URP) title, 59.6 fps | Emulator: 2021.3.28 title menu (with the class library swap, `pmunity.winbcl`) | Not yet | **Handheld**: 2021.3 IL2CPP, 64-bit: title (its 32-bit libraries: emulator) | Emulator: 2021.3.16 (URP) main menu |
-| 2022 | **Handheld**: 2022.3 (URP) title, 59.6 fps (with the desktop's frame pacing: Unity's 2021.1+ Android players default to 30) | Emulator: 2022.3.62 (URP) title menu | Not yet | **Handheld**: 2022.3 IL2CPP, 64-bit: title. 2022.3.23 Mono, 32-bit: emulator | Emulator: 2022.3.36 (URP) title menu; 2022.3.4 IL2CPP opening scene |
+| 2021 | **Handheld**: 2021.3 (URP) title, 59.6 fps | Emulator: 2021.3.28 title menu (with the class library swap, `pmunity winbcl`), also as a port (its setup rehearsed) | Not yet | **Handheld**: 2021.3 IL2CPP, 64-bit: title (its 32-bit libraries: emulator) | Emulator: 2021.3.16 (URP) main menu |
+| 2022 | **Handheld**: 2022.3 (URP) title, 59.6 fps (with the desktop's frame pacing: Unity's 2021.1+ Android players default to 30) | Emulator: 2022.3.62 (URP) and 2022.2.17 title menus, both also as ports (their setups rehearsed) | Not yet | **Handheld**: 2022.3 IL2CPP, 64-bit: title. 2022.3.23 Mono, 32-bit: emulator | Emulator: 2022.3.36 (URP) title menu; 2022.3.4 IL2CPP opening scene |
 | 2023.1 - 2023.2 | Emulator: 2023.2.20 main menu (2023.1 not tried) | Not yet | Not yet | Not yet | Not yet |
 | 6000.0 - 6000.6 (Unity 6) | **Handheld**: Hollow Knight (6000.0.61) from first launch to gameplay (King's Pass, 32 - 34 fps; the 1 GB is tight). Emulator: Hollow Knight from first launch to gameplay; 6000.0.58, 6000.3.11, 6000.5.7 and 6000.6.2 reach their menus or first scenes; 6000.6.3 gets as far as generating its world | Not yet | Not yet | Not yet | Emulator, desktop GL only: 6000.5.9 IL2CPP sign-in screen, 6000.6.4 Mono in game. GLES mode, which most handhelds need: not yet |
 | 6000.7 and later | Not yet (betas are refused) | Not yet | Not yet | Not yet | Not yet |
@@ -168,8 +168,9 @@ Most impact for the most games first:
    offer it yet. Unity 2021 - 2022, sound with 2017.4's 64-bit player, 2017.4 .NET 4.x games,
    native plugins, Burst and the Input System package are not done or not tested on this route
    (2017.4 .NET 3.5 games reach their titles in the emulator).
-3. **Windows-only games on a handheld.** Six reached their first screens in the emulator; none has
-   run on a handheld yet. No Windows game of 2017.3 - 2017.4 has been tried (only Unity's own
+3. **Windows-only games on a handheld.** Six reached their first screens in the emulator, and
+   ports of three (2021.3, 2022.2, 2022.3) were set up in a handheld-like container with HLSLcc
+   and the class library swap done there; none has run on a handheld yet. No Windows game of 2017.3 - 2017.4 has been tried (only Unity's own
    shaders of 2017.4), Windows builds of 2023 and Unity 6 are not covered yet, and games with BC7,
    BC4 or BC5 textures have not been checked.
 4. **The box64 route on a handheld** (IL2CPP desktop games, versions or x86-only plugins the other

@@ -204,6 +204,17 @@ class CheckTest(unittest.TestCase):
                 android = next(r for r in rep['routes'] if r['route'] == 'android')
                 self.assertEqual(any('winbcl' in n for n in android['needs']), want, android['needs'])
 
+    def test_unity6_netstandard(self):
+        # a Unity 6 build without netstandard.dll: the setup's winbcl adds Unity's facade (the check says so)
+        for have in (False, True):
+            with tempfile.TemporaryDirectory() as t:
+                d = fake_game(t, version='6000.2.6f2')
+                if have:
+                    put(os.path.join(d, 'Managed', 'netstandard.dll'), b'MZ')
+                rep = P.check(t, asmpatch='/nonexistent-asmpatch', deep=False)
+                android = next(r for r in rep['routes'] if r['route'] == 'android')
+                self.assertEqual(any('netstandard' in n for n in android['needs']), not have, android['needs'])
+
     def test_compressed_settings(self):
         # a compressed build: globalgamemanagers is read from inside data.unity3d (graphics APIs)
         from test_android_data import archive
@@ -303,6 +314,8 @@ case "$1" in
           for f in libmain.so libunity.so; do echo x > "$L/Libs/armeabi-v7a/$f"; done
           for f in libmono.so libmonobdwgc-2.0.so libMonoPosixHelper.so; do echo x > "$L/MonoLibs/armeabi-v7a/$f"; done;;
   unpack) rm "$2/data.unity3d"; touch "$2/globalgamemanagers";;
+  winbcl) if [ -n "$STUB_WINBCL" ]; then mkdir -p "$3"; for n in $STUB_WINBCL; do echo x > "$3/$n"; done; fi;;
+  convert) if [ -n "$PMHLSLCC" ]; then echo "env PMHLSLCC=$PMHLSLCC" >> "$STUB_LOG"; fi;;
   il2cpp) out=$3; while [ $# -gt 0 ]; do case "$1" in --pkg) pkg=$2;; esac; shift; done
           L=$pkg/Variations/il2cpp/Release/Libs/arm64-v8a; mkdir -p "$out/lib/arm64-v8a" "$L"
           echo x > "$out/lib/arm64-v8a/libil2cpp.so"; for f in libmain.so libunity.so; do echo x > "$L/$f"; done;;
@@ -324,9 +337,15 @@ esac
 
 @unittest.skipUnless(shutil.which('bash'), 'needs bash')
 class NewAndSetupTest(unittest.TestCase):
-    def make(self, t, cfg_extra=None, version='2019.4.8f1'):
+    def make(self, t, cfg_extra=None, version='2019.4.8f1', windows=False):
         game = os.path.join(t, 'src', 'My Game')
-        fake_game(game, version=version, name='My Game')
+        d = fake_game(game, version=version, name='My Game')
+        if windows:             # the Windows layout (My Game.exe beside the data), unityjit-win32 class libraries
+            os.remove(os.path.join(game, 'My Game.x86_64'))
+            exe = bytearray(b'MZ' + b'\0' * 0x3A + struct.pack('<I', 0x80) + b'\0' * 0x40)
+            exe[0x80:0x86] = b'PE\0\0' + struct.pack('<H', 0x8664)
+            put(os.path.join(game, 'My Game.exe'), bytes(exe) + b'\0' * 64)
+            put(os.path.join(d, 'Managed', 'mscorlib.dll'), b'MZ Interop+Kernel32 SetThreadErrorMode')
         cfg = {'port': {'title': 'My Game', 'porter': ['someone']},
                'questions': [{'id': 'TEXTURE_QUALITY', 'question': 'Texture quality?',
                               'options': [['medium', 'Medium'], ['fast', 'Fast']], 'default': 'medium',
@@ -387,6 +406,86 @@ class NewAndSetupTest(unittest.TestCase):
             # again, without questions: their files go
             self.make(t, {'questions': []})
             self.assertFalse(os.path.exists(os.path.join(out, 'mygame', 'setup', 'questions.lua')))
+
+    def test_windows_port(self):
+        """a Windows build of 2021.2+: Direct3D 11 shaders (pmhlslcc in the release, PMHLSLCC in the setup)
+        and the Unix class libraries (pmunity winbcl in the setup, its files shipped with --managed-file)"""
+        with tempfile.TemporaryDirectory() as t:
+            game, out = self.make(t, version='2022.2.17f1', windows=True)
+            build = json.load(open(os.path.join(out, 'port.build.json')))
+            cfg = build['config']
+            self.assertEqual((cfg['game']['build'], cfg['port']['route']), ('windows', 'android'))
+            self.assertEqual(cfg['convert']['shaders']['from'], ['d3d11'])
+            self.assertTrue(P.needs_pmhlslcc(cfg) and P.needs_winbcl(cfg))
+            self.assertIn("WINBCL=auto", P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            self.assertIn('winbcl = "auto"', P.dump_toml(cfg))
+            readme = P._read(os.path.join(out, 'README.md'))
+            self.assertIn('ARCH=arm64 tools/hlslcc/build.sh', readme)
+            self.assertIn('Windows-only class libraries', readme)
+            self.assertIn(f'about {P.WINBCL_MB} MB of its Windows editor installer', P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertIn(f'(about\n{P.PLAYER_MB + P.WINBCL_MB} MB', P._read(os.path.join(out, 'mygame', 'gamedata', 'PUT_GAME_FILES_HERE.txt')))
+            pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
+            self.assertIn(f'player and class libraries from Unity, about {P.PLAYER_MB + P.WINBCL_MB} MB', pj['attr']['inst'])
+            # before 2021.2 there is nothing to replace: the READMEs say the player only
+            cfg19 = P.merge(cfg, {'game': {'unity_versions': ['2019.4.8f1']}})
+            self.assertTrue(P.needs_pmhlslcc(cfg19))
+            self.assertFalse(P.needs_winbcl(cfg19))
+            self.assertEqual(P.download_more(cfg19), '')
+            # the release: pmhlslcc (aarch64) with HLSLcc's licence
+            rt = os.path.join(t, 'rt')
+            for d in ('runtime/host/out', 'runtime/media/out/licenses', 'hl'):
+                os.makedirs(os.path.join(rt, d))
+            put(os.path.join(rt, 'runtime/host/out/ua_host'), 'host')
+            put(os.path.join(rt, 'runtime/media/out/licenses/libvpx.copyright'), 'BSD')
+            put(os.path.join(rt, 'hl', 'pmhlslcc'), 'elf')
+            pyb = os.path.join(t, 'py.tar.gz')
+            with tarfile.open(pyb, 'w:gz') as tf:
+                ti = tarfile.TarInfo('python/lib/python3.12/LICENSE.txt')
+                ti.size = 3
+                tf.addfile(ti, io.BytesIO(b'PSF'))
+            with self.assertRaises(SystemExit) as cm:   # (no licence beside the binary)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+                          pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
+            self.assertIn('pmhlslcc.LICENSE.txt', str(cm.exception))
+            put(os.path.join(rt, 'hl', 'pmhlslcc.LICENSE.txt'), 'MIT HLSLcc, BSD bstrlib')
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+                          pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
+            with zipfile.ZipFile(z) as zf:
+                modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.pmhlslcc-HLSLcc.txt'), b'MIT HLSLcc, BSD bstrlib')
+            self.assertEqual(modes['mygame/setup/pmhlslcc'], 0o755)
+            with self.assertRaises(SystemExit) as cm:   # (the default place, not built)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            self.assertIn('ARCH=arm64 tools/hlslcc/build.sh', str(cm.exception))
+            # the setup: winbcl with the player after the fetch, PMHLSLCC for the conversion, its files
+            # shipped with --managed-file
+            g = os.path.join(t, 'ports', 'mygame')
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            put(os.path.join(g, 'setup', 'pmhlslcc'), '#!/bin/sh\n')
+            g, r, log = self.run_setup(t, out, {'STUB_VERSION': '2022.2.17f1', 'STUB_WINBCL': 'System.dll netstandard.dll'})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            W, S = os.path.join(g, 'gamedata', '.setup'), os.path.join(g, 'setup')
+            wb = next(l for l in log.splitlines() if l.startswith('pm winbcl '))
+            self.assertEqual(wb, f"pm winbcl {g}/gamedata/My Game/My Game_Data {W}/bcl --version 2022.2.17f1 "
+                                 f"--player {W}/player")
+            self.assertIn(f'env PMHLSLCC={S}/pmhlslcc', log)
+            ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
+            self.assertIn(f'--managed-file {W}/bcl/System.dll --managed-file {W}/bcl/netstandard.dll', ad)
+            self.assertLess(log.index('pm player fetch'), log.index('pm winbcl'))
+            self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
+            # winbcl = "off": not run
+            shutil.rmtree(g)
+            game, out = self.make(t, {'android_data': {'winbcl': 'off'}}, version='2022.2.17f1', windows=True)
+            self.assertFalse(P.needs_winbcl(json.load(open(os.path.join(out, 'port.build.json')))['config']))
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            os.unlink(os.path.join(t, 'pm.log'))
+            g, r, log = self.run_setup(t, out, {'STUB_VERSION': '2022.2.17f1', 'STUB_WINBCL': 'System.dll'})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertNotIn('pm winbcl', log)
+            self.assertNotIn('--managed-file', log)
+            self.assertNotIn('PMHLSLCC', log)                # (no pmhlslcc in this copy of the port)
 
     def test_il2cpp_arm64_route(self):
         # the 64-bit route: offered by the check, its player defaults, a launcher without the 32-bit
@@ -481,6 +580,7 @@ class NewAndSetupTest(unittest.TestCase):
                 self.assertIn(n, names)
             self.assertFalse(any('port_template' in n or '__pycache__' in n for n in names))
             self.assertNotIn('mygame/setup/asmpatch', names)        # (the port does not use it)
+            self.assertNotIn('mygame/setup/pmhlslcc', names)        # (nor Direct3D 11 shaders)
             self.assertEqual(modes['My Game.sh'], 0o755)
             self.assertEqual(modes['mygame/ua_host'], 0o755)
             self.assertEqual(modes['mygame/setup/patchscript'], 0o755)

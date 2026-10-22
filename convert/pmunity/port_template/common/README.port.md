@@ -5,7 +5,7 @@
 This port does not include the game: you need @@GAME_WHAT@@. Copy it into
 `ports/@@PORTDIR@@/gamedata/`, then start @@TITLE@@ from the Ports menu. The first launch builds the
 game on the handheld from your copy (@@SETUP_TIME@@, once) and downloads Unity's Android player for
-it from Unity (about 10 MB, Wi-Fi). @@ROUTE_NEEDS@@
+it from Unity (about @@PLAYER_MB@@ MB, Wi-Fi).@@DOWNLOAD_MORE@@ @@ROUTE_NEEDS@@
 
 The game runs on Unity's own Android player, through
 [portmaster-unity](https://github.com/wild1walker/portmaster-unity)'s `ua_host` (its @@ROUTE@@
