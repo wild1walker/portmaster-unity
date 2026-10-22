@@ -1051,13 +1051,21 @@ def plan(args):
             items.append((os.path.join(args.name, ST.FOLDER, n), p, 'link'))
         else:
             args.skipped.append(n)
-    # realtime GI data (Enlighten: GI/level<n>/..), read by scene loads as in an Android build's Data
+    # realtime GI data (Enlighten: GI/level<n>/..), read by scene loads as in an Android build's Data.
+    # Its runtime files (.iws input workspaces, .rsc radiosity cores) are per CPU family: '.sse' in a
+    # desktop build, '.neo' (NEON) what the ARM players open; --realtime-gi neon (the default) gives
+    # each SSE file its NEON name (the same bytes), so the scene's realtime GI loads
     gi = os.path.join(src, 'GI')
+    args.gi_neon = 0
     for r, ds, fs in os.walk(gi):
         ds.sort()
         for f in sorted(fs):
             if not f.startswith('.'):
-                items.append((os.path.join(data, 'GI', os.path.relpath(os.path.join(r, f), gi)), os.path.join(r, f), 'link'))
+                dst = os.path.join(data, 'GI', os.path.relpath(os.path.join(r, f), gi))
+                items.append((dst, os.path.join(r, f), 'link'))
+                if getattr(args, 'realtime_gi', 'neon') == 'neon' and f.endswith('.sse') and f[:-4] + '.neo' not in fs:
+                    items.append((dst[:-4] + '.neo', os.path.join(r, f), 'link'))
+                    args.gi_neon += 1
     if getattr(args, 'data_path', False):
         items += ST.data_folder_items(src, os.path.join(args.name, ST.FOLDER))
     udr_dst = os.path.join(data, *default_resources_path(getattr(args, 'unity', None)))
@@ -1462,6 +1470,10 @@ def main(argv=None):
                     help=f"android_package.json's min_sdk, the Android API level ua_host reports (at least): auto = "
                          f"{GLES31_SDK} for a game with compute kernels (OpenGL ES 3.1 contexts need API 21+), else "
                          f"none (ua_host's own, 19 for 32-bit players); 0 = none")
+    ap.add_argument('--realtime-gi', choices=['neon', 'as-is'], default='neon',
+                    help="realtime GI (Enlighten) data of a desktop build is for SSE (GI/**/*.sse); the ARM players open "
+                         "*.neo. neon (default): each SSE file also under its NEON name, the same bytes; as-is: SSE only "
+                         "(docs/android-data.md)")
     ap.add_argument('--data-path', action='store_true',
                     help=f"the game's reads of Application.dataPath that reach System.IO (on Android: the APK or OBB file) "
                          f"get {ST.FOLDER}/ beside the APK (asmpatch data-path), with the data folder's own files (those "
@@ -1705,6 +1717,9 @@ def main(argv=None):
     save_state(statep, newstate)
     log(f'placed: {stats}; skipped source files: {args.skipped}; engine modules not shipped: {args.dropped_modules}; '
         f'.resS moved into their serialized files: {len(args.inlined_ress)}')
+    if getattr(args, 'gi_neon', 0):
+        log(f'realtime GI: {args.gi_neon} SSE files also under their NEON names (.neo)')
+        report['notes'].append(f'realtime GI: {args.gi_neon} SSE files also under their NEON names (.neo)')
     report['stats'] = stats
     report['unity'] = {'data': str(args.unity), 'player': str(args.player_unity) if args.player_unity else None,
                        'scripting_runtime': args.runtime, 'warnings': args.warnings}

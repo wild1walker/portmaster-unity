@@ -316,6 +316,21 @@ class PlanTest(unittest.TestCase):
         for f in ('abc.vis', 'abc.rgb'):
             self.assertEqual(dst.get(os.path.join(data, 'GI', 'level1', 'f8', f)), os.path.join(src, 'GI', 'level1', 'f8', f))
         self.assertNotIn('GI', args.skipped)
+        # the SSE runtime files: as they are, and with --realtime-gi neon also under their NEON names
+        gi = os.path.join(src, 'GI', 'level1', 'f8')
+        for f in ('abc.iws.sse', 'abc.rsc.sse', 'def.rsc.sse', 'def.rsc.neo'):
+            open(os.path.join(gi, f), 'wb').close()
+        args.realtime_gi = 'as-is'
+        dst = {d: s for d, s, a in A.plan(args)}
+        gd = os.path.join(data, 'GI', 'level1', 'f8')
+        self.assertEqual(dst.get(os.path.join(gd, 'abc.rsc.sse')), os.path.join(gi, 'abc.rsc.sse'))
+        self.assertNotIn(os.path.join(gd, 'abc.rsc.neo'), dst)
+        del args.realtime_gi                                         # the default: neon
+        dst = {d: s for d, s, a in A.plan(args)}
+        self.assertEqual(dst.get(os.path.join(gd, 'abc.iws.neo')), os.path.join(gi, 'abc.iws.sse'))
+        self.assertEqual(dst.get(os.path.join(gd, 'abc.rsc.neo')), os.path.join(gi, 'abc.rsc.sse'))
+        self.assertEqual(dst.get(os.path.join(gd, 'def.rsc.neo')), os.path.join(gi, 'def.rsc.neo'))   # its own kept
+        self.assertEqual(args.gi_neon, 2)
 
 
 class GlesLevelTest(unittest.TestCase):

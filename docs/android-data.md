@@ -104,6 +104,16 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
   gets `"min_sdk": 22` in `android_package.json` (`--min-sdk auto`, the default; a number or 0 to
   choose), and ua_host reports that level. Checked in the emulated rig with Nainai's Recipe
   (2021.1): at API 19 every `FindKernel` failed, at 22 compute is supported and its kernels found.
+- **Realtime GI (Enlighten).** A scene's precomputed realtime GI is in `Data/GI/level<n>/`
+  (`.ecm`, `.caw`, `.vis`, `.rgb`, and per CPU family `.iws` input workspaces and `.rsc` radiosity
+  cores). A desktop build has the SSE ones (`*.iws.sse`, `*.rsc.sse`); the ARM players open `.neo`
+  (NEON) ones ("Failed opening GI file at relative path: '<hash>.iws.neo'"), and the scene never
+  finished loading (Butterflies Episode 1, 2020.3: its main menu has realtime GI). android-data
+  ships each SSE file under its NEON name too, the same bytes (`--realtime-gi neon`, the default;
+  `as-is` leaves them out): both are 128-bit little-endian SIMD layouts, and the headers (magic,
+  type, system GUID) carry no CPU tag. Checked in the emulated rig (QEMU runs NEON): the 2020.3
+  player's Enlighten loads them without an error, and Butterflies loads into its main menu, whose
+  realtime-GI-lit background draws; not compared with the desktop build's picture.
 - Shaders: the Android GLES3 device uses shader platform 9, the same one the converter added.
 - Textures in main data: ASTC 4x4 / Alpha8 / RGBA32. Audio: Vorbis + PCM in FSB5 `.resource`
   files, the same FMOD; streamed clips are read through the VFS.
