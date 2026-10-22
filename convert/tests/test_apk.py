@@ -267,6 +267,73 @@ class ImportTest(unittest.TestCase):
         self.assertEqual((r['abi'], r['backend']), ('armeabi-v7a', 'mono'))
         self.assertTrue(os.path.isfile(os.path.join(self.out, 'assets/bin/Data/Managed/etc/mono/config')))
 
+    def test_mono_to_il2cpp(self):
+        """--il2cpp: a Mono build (armeabi-v7a only) on a 64-bit target: its assemblies go to `pmunity il2cpp`
+        (stubbed here), lib/ gets the arm64 IL2CPP player with the new libil2cpp.so, base.apk the APK with
+        IL2CPP's metadata instead of the assemblies, its 32-bit libraries and signature"""
+        from pmunity import il2cpp as IL
+        p = make_apk(os.path.join(self.d, 'g.apk'), manifest(), abis=('armeabi-v7a',), backend='mono', version='2022.3.23f1',
+                     extra={'assets/bin/Data/Managed/Assembly-CSharp.dll': b'MZgame', 'assets/bin/Data/Managed/mscorlib.dll': b'MZ',
+                            'assets/bin/Data/boot.config': b'gc-max-time-slice=3\n', 'assets/bin/Data/unity_app_guid': b'old',
+                            'assets/bin/Data/data.unity3d': b'x' * 100, 'META-INF/CERT.SF': b's', 'META-INF/MANIFEST.MF': b'm',
+                            'lib/armeabi-v7a/libfmod.so': b'p'})
+        calls = []
+        pkg = os.path.join(self.d, 'home', '2022.3.23f1', 'player-arm64-v8a')
+
+        def fake_build(data, out, abi, home, pkg_, jobs, **kw):
+            calls.append((sorted(os.listdir(os.path.join(data, 'Managed'))), open(os.path.join(data, 'boot.config')).read(),
+                          abi, pkg_, str(kw['data_version']), kw['on_device']))
+            L = os.path.join(pkg_, 'Variations', 'il2cpp', 'Release', 'Libs', 'arm64-v8a')
+            os.makedirs(L, exist_ok=True)
+            for n in ('libmain.so', 'libunity.so'):
+                with open(os.path.join(L, n), 'wb') as f:
+                    f.write(b'il2cpp player ' + n.encode())
+            for rel, b in (('lib/arm64-v8a/libil2cpp.so', b'code'), ('Data/Managed/Metadata/global-metadata.dat',
+                                                                      struct.pack('<II', 0xFAB11BAF, 31)),
+                           ('Data/Managed/Resources/mscorlib.dll-resources.dat', b'r')):
+                os.makedirs(os.path.dirname(os.path.join(out, rel)), exist_ok=True)
+                with open(os.path.join(out, rel), 'wb') as f:
+                    f.write(b)
+            return {'unity': '2022.3.23f1', 'metadata_version': 31, 'libil2cpp_bytes': 4, 'ndk': 'r23b', 'build_seconds': 1}
+        orig = IL.build
+        IL.build = fake_build
+        try:
+            # without --il2cpp (and with it on a 32-bit target) the build stays what it is
+            self.refused([p], 'needs a 32-bit (armhf) userland', target='arm64')
+            self.assertEqual(self.run_apk([p], target='armhf,arm64', il2cpp={})['backend'], 'mono')
+            self.assertEqual(calls, [])
+            dry = A.run([p], self.out, target='arm64', dry_run=True, log=self.logs.append, il2cpp={})
+            self.assertEqual((dry['abi'], dry['backend'], dry['il2cpp_from'], dry['abis']),
+                             ('arm64-v8a', 'il2cpp', 'mono', ['armeabi-v7a']))
+            self.assertIn('32-bit ARM only (libfmod.so)', ' '.join(dry['notes']))
+            r = self.run_apk([p], target='armhf,arm64'.split(',')[1], il2cpp={'home': os.path.join(self.d, 'home')})
+        finally:
+            IL.build = orig
+        self.assertEqual(calls, [(['Assembly-CSharp.dll', 'mscorlib.dll'], 'gc-max-time-slice=3\n', 'arm64-v8a', pkg,
+                                  '2022.3.23f1', False)])
+        self.assertEqual((r['abi'], r['backend'], r['il2cpp_metadata'], r['il2cpp']['from']), ('arm64-v8a', 'il2cpp', 31, 'mono'))
+        self.assertNotIn('plugins', r)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.out, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+        self.assertEqual(rd(os.path.join(self.out, 'lib', 'libunity.so')), b'il2cpp player libunity.so')
+        self.assertEqual(rd(os.path.join(self.out, 'lib', 'libil2cpp.so')), b'code')
+        with zipfile.ZipFile(os.path.join(self.out, 'base.apk')) as z:
+            names = z.namelist()
+            self.assertFalse([n for n in names if n.startswith(('lib/', 'META-INF/')) or n.endswith('.dll')], names)
+            self.assertIn('assets/bin/Data/data.unity3d', names)
+            self.assertEqual(z.read('assets/bin/Data/Managed/Metadata/global-metadata.dat')[:4], struct.pack('<I', 0xFAB11BAF))
+            self.assertIn('assets/bin/Data/Managed/Resources/mscorlib.dll-resources.dat', names)
+            self.assertRegex(z.read('assets/bin/Data/unity_app_guid').decode(), r'^[0-9a-f]{8}-[0-9a-f]{4}-')
+            self.assertEqual(z.getinfo('assets/bin/Data/Managed/Metadata/global-metadata.dat').compress_type, zipfile.ZIP_STORED)
+        self.assertFalse(os.path.exists(os.path.join(self.out, A.IL2CPP_WORK)))
+        self.assertFalse(os.path.exists(os.path.join(self.out, 'assets/bin/Data/Managed/etc')))   # (an earlier Mono layout's)
+        # out of the IL2CPP route's range: refused with the reason
+        p = make_apk(os.path.join(self.d, 'old.apk'), manifest(), abis=('armeabi-v7a',), backend='mono', version='2017.4.9f1')
+        self.refused([p], 'has no arm64 IL2CPP player', target='arm64', il2cpp={})
+        p = make_apk(os.path.join(self.d, 'new.apk'), manifest(), abis=('armeabi-v7a',), backend='mono', version='6000.0.61f1')
+        self.refused([p], 'native Windows/macOS/Linux', target='arm64', il2cpp={})
+        p = make_apk(os.path.join(self.d, 'v7il.apk'), manifest(), abis=('armeabi-v7a',), backend='il2cpp')
+        self.refused([p], 'compiled for 32-bit ARM', target='arm64', il2cpp={})
+
     def test_refusals(self):
         p = make_apk(os.path.join(self.d, 'x86.apk'), manifest(), abis=('x86',))
         self.refused([p], 'only for x86')

@@ -244,6 +244,17 @@ class ConfigTest(unittest.TestCase):
         self.assertIn('{ "x", "X" },', lua)
 
 
+def roomy_path(t):
+    """PATH with a `df` that reports a card with 64 GB free first (the IL2CPP setups' space checks
+    then do not depend on this machine's own free space)."""
+    d = os.path.join(t, 'roomy')
+    os.makedirs(d, exist_ok=True)
+    put(os.path.join(d, 'df'), '#!/bin/sh\necho "Filesystem 1048576-blocks Used Available Capacity Mounted on"\n'
+                               'echo "card 65536 0 65536 0% /card"\n')
+    os.chmod(os.path.join(d, 'df'), 0o755)
+    return d + os.pathsep + os.environ.get('PATH', '')
+
+
 def stub_tools(t):
     """A stand-in for the setup's Python (pmunity commands that log and make what the setup reads)
     packed as python.tar.gz, and for PortMaster's 7-Zip (unzip)."""
@@ -260,6 +271,9 @@ case "$1" in
           for f in libmain.so libunity.so; do echo x > "$L/Libs/armeabi-v7a/$f"; done
           for f in libmono.so libmonobdwgc-2.0.so libMonoPosixHelper.so; do echo x > "$L/MonoLibs/armeabi-v7a/$f"; done;;
   unpack) rm "$2/data.unity3d"; touch "$2/globalgamemanagers";;
+  il2cpp) out=$3; while [ $# -gt 0 ]; do case "$1" in --pkg) pkg=$2;; esac; shift; done
+          L=$pkg/Variations/il2cpp/Release/Libs/arm64-v8a; mkdir -p "$out/lib/arm64-v8a" "$L"
+          echo x > "$out/lib/arm64-v8a/libil2cpp.so"; for f in libmain.so libunity.so; do echo x > "$L/$f"; done;;
   android-data) while [ $# -gt 0 ]; do case "$1" in --out) out=$2;; --name) name=$2;; --src) src=$2;; esac; shift; done
           mkdir -p "$out/zip/assets/bin/Data/Managed/etc"; echo apk > "$out/zip/$name.apk"
           echo '{}' > "$out/android_data_report.json"; rm -rf "$src"/*;;
@@ -509,6 +523,47 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertIn('removing game-linux.zip: not needed to play', P._read(os.path.join(g, 'patchlog.txt')))
             self.assertIn('keep_installers=0', P._read(os.path.join(g, 'setup.txt')))
 
+    def test_setup_il2cpp_arm64(self):
+        """the il2cpp-arm64 setup: what changes the game's code (the port's assembly patches, asmpatch with
+        the opt-in patches for StreamingAssets and dataPath read with System.IO) goes to the IL2CPP build,
+        and android-data packs the same StreamingAssets and dataPath modes"""
+        with tempfile.TemporaryDirectory() as t:
+            put(os.path.join(t, 'mypatch.sh'), '#!/bin/sh\n')
+            game, out = self.make(t, {'port': {'route': 'il2cpp-arm64'},
+                                      'android_data': {'streaming_assets': 'both', 'data_path': True},
+                                      'files': {'assembly_patches': [{'name': 'Assembly-CSharp.dll', 'files': ['mypatch.sh'],
+                                                                      'command': 'sh {setup}/files/mypatch.sh {managed} {out}'}]}})
+            self.assertIn('asmpatch?', json.load(open(os.path.join(P.TEMPLATES, 'il2cpp-arm64', 'route.json')))['package'])
+            self.assertTrue(P.needs_asmpatch(json.load(open(os.path.join(out, 'port.build.json')))['config']))
+            g = os.path.join(t, 'ports', 'mygame')
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            put(os.path.join(g, 'setup', 'asmpatch'), '#!/bin/sh\n')
+            g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t)})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
+            S = os.path.join(g, 'setup')
+            self.assertIn(f"--assembly-patch Assembly-CSharp.dll sh {S}/files/mypatch.sh {{managed}} {{out}}", il)
+            self.assertIn(f"--streaming-assets both --data-path --asmpatch '{S}/asmpatch' --only=", il)
+            ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
+            self.assertIn('--streaming-assets both --data-path', ad)
+            for o in ('--asmpatch', '--managed-file', '--assembly-patch'):
+                self.assertNotIn(o, ad)
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+            self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
+            # asmpatch = "auto" and the modes left at obb: asmpatch's own choice of patches, nothing opt-in
+            shutil.rmtree(g)
+            game, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}, 'android_data': {'asmpatch': 'auto'}})
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            put(os.path.join(g, 'setup', 'asmpatch'), '#!/bin/sh\n')
+            os.unlink(os.path.join(t, 'pm.log'))
+            g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t)})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
+            self.assertTrue(il.endswith(f"--streaming-assets obb --asmpatch '{os.path.join(g, 'setup', 'asmpatch')}'"), il)
+
+
 @unittest.skipUnless(shutil.which('bash'), 'needs bash')
 class ApkRouteTest(unittest.TestCase):
     """The apk route: the check of an Android build, the port it makes and ships, and its setup run
@@ -722,6 +777,68 @@ class ApkRouteTest(unittest.TestCase):
                 r = self.run_setup(g)
                 self.assertIn('needs a 32-bit (armhf) userland', r.stdout)
                 self.assertNotIn('unpacking the setup tools', r.stdout)
+
+    @unittest.skipIf(os.path.exists('/lib/ld-linux-armhf.so.3'), 'a 32-bit userland here: the setup takes armeabi-v7a')
+    def test_mono_build_il2cpp(self):
+        """player.il2cpp: a Mono build (armeabi-v7a only) also on 64-bit-only systems: the release ships
+        ua_host64, port.json asks for no 32-bit userland, and the setup there has `pmunity apk --il2cpp
+        --on-device` compile its code (pmunity il2cpp stubbed: it fails once, then the rerun goes on)"""
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t, abis=('armeabi-v7a',), backend='mono',
+                         extra={'assets/bin/Data/Managed/Assembly-CSharp.dll': b'MZ', 'assets/bin/Data/boot.config': b''})
+            rep = P.check(a)
+            self.assertIn('player.il2cpp = true', ' '.join(rep['notes']))
+            with self.assertRaises(SystemExit) as cm:          # (an IL2CPP build has nothing to compile)
+                cp = os.path.join(t, 'c.json')
+                with open(cp, 'w') as f:
+                    json.dump({'player': {'il2cpp': True}}, f)
+                P.new('il', self.apk(t, 'il', 'il.apk'), cp, os.path.join(t, 'port-il'), log=lambda m: None)
+            self.assertIn('player.il2cpp', str(cm.exception))
+            cfg = {'player': {'il2cpp': True}}
+            g = self.setup_port(t, a, [a], cfg=cfg)
+            out = os.path.join(t, 'port')
+            self.assertIn('PLAYER_IL2CPP=1', P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            pj = json.loads(P._read(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn("compiles the game's code with Unity's IL2CPP", pj['attr']['inst'])
+            self.assertIn('without a 32-bit userland the first launch compiles', P._read(os.path.join(out, 'README.md')))
+            self.assertTrue(P.wants('ua_host64', json.load(open(os.path.join(out, 'port.build.json')))['config']))
+            log = os.path.join(t, 'il2cpp.log')
+            with open(os.path.join(g, 'setup', 'pmunity', 'il2cpp.py'), 'a') as f:
+                f.write(f'''
+
+def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, **kw):   # (the test's stand-in)
+    import json as J
+    with open({log!r}, 'a') as f:
+        f.write(J.dumps([sorted(os.listdir(os.path.join(data, 'Managed'))), out, home, pkg, kw['on_device']]) + '\\n')
+    os.makedirs(os.path.join(out, 'partial'), exist_ok=True)
+    if not os.path.exists(os.path.join(out, 'partial', 'once')):
+        open(os.path.join(out, 'partial', 'once'), 'w').close()
+        raise SystemExit('killed while compiling')
+    L = os.path.join(pkg, 'Variations', 'il2cpp', 'Release', 'Libs', 'arm64-v8a')
+    os.makedirs(L, exist_ok=True)
+    for n in ('libmain.so', 'libunity.so'):
+        open(os.path.join(L, n), 'w').write('player')
+    for rel in ('lib/arm64-v8a/libil2cpp.so', 'Data/Managed/Metadata/global-metadata.dat'):
+        os.makedirs(os.path.dirname(os.path.join(out, rel)), exist_ok=True)
+        open(os.path.join(out, rel), 'wb').write(struct.pack('<II', 0xFAB11BAF, 29))
+    return {{'unity': '2021.3.4f1', 'metadata_version': 29, 'libil2cpp_bytes': 8}}
+''')
+            r = self.run_setup(g, {'PATH': roomy_path(t)})
+            self.assertIn("PATCH_FAIL_MSG:Compiling the game's code failed", r.stdout, r.stdout + r.stderr)
+            self.assertTrue(os.path.isdir(os.path.join(g, 'gamedata', '.setup', 'apk', '.il2cpp', 'partial')))
+            r = self.run_setup(g, {'PATH': roomy_path(t)})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('the players this system runs, in this order: arm64', r.stdout)
+            calls = [json.loads(x) for x in P._read(log).splitlines()]
+            self.assertEqual(len(calls), 2)
+            W = os.path.join(g, 'gamedata', '.setup')
+            self.assertEqual(calls[1], [['Assembly-CSharp.dll'], os.path.join(W, 'apk', '.il2cpp'), os.path.join(W, 'il2cpp-home'),
+                                        os.path.join(W, 'il2cpp-home', '2021.3.4f1', 'player-arm64-v8a'), True])
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+            info = json.loads(P._read(os.path.join(g, 'android_package.json')))
+            self.assertEqual((info['abi'], info['backend'], info['il2cpp']['from']), ('arm64-v8a', 'il2cpp', 'mono'))
+            self.assertFalse(os.path.exists(W))
 
     def test_choose_abi_preferences(self):
         from pmunity import apk as A

@@ -962,6 +962,13 @@ def check_android(rep, inputs, log=None):
         if abis == ['armeabi-v7a']:
             route['needs'].append('armeabi-v7a only: a system with a 32-bit (armhf) userland (ua_host); not 64-bit-only '
                                   'ones (ROCKNIX, ...)')
+            if info['backend'] == 'mono':
+                why_not = A.il2cpp_refusal(v)
+                notes = rep['notes']
+                notes.append(f'64-bit-only systems: {why_not}' if why_not else
+                             '64-bit-only systems too: player.il2cpp = true has the setup compile the build\'s code with '
+                             'Unity\'s IL2CPP on such a handheld, for Unity\'s arm64 IL2CPP player (`pmunity apk --il2cpp '
+                             '--on-device`: one to a few hours, about 1.6 GB free, Wi-Fi; the release then ships ua_host64 too)')
         elif abis == ['arm64-v8a']:
             route['needs'].append('arm64-v8a only: the 64-bit ua_host (ua_host64), on any aarch64 system')
         else:
@@ -1330,6 +1337,9 @@ def validate(cfg):
     a = cfg['android_data']['asmpatch']
     if not (a in ('auto', 'off') or isinstance(a, list) and all(VALUE_RX.match(x) for x in a)):
         errs.append(f'android_data.asmpatch {a!r}: auto, off or a list of patch names')
+    if cfg['player'].get('il2cpp') and (p['route'] != 'apk' or cfg['player'].get('backend') != 'mono'):
+        errs.append('player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP '
+                    'player where the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds')
     if cfg['android_data'].get('streaming_assets', 'obb') not in ('obb', 'both', 'loose'):
         errs.append(f"android_data.streaming_assets {cfg['android_data']['streaming_assets']!r}: obb, both or loose")
     for k in cfg['files'].get('hooks', {}):
@@ -1508,7 +1518,8 @@ def setup_env(cfg, extra=(), sections=None):
              f'PLAYER_BACKEND={q(pl["backend"])}', f'PLAYER_ABI={q(pl["abi"])}',
              f'PLAYER_URL={q(pl.get("url") or "")}',
              f'PLAYER_URL_VERSION={q(g["unity_versions"][0] if g["unity_versions"] and pl.get("url") else "")}',
-             'PLAYER_SHA256=' + q(' '.join(f'{k}={v}' for k, v in sorted((pl.get('sha256') or {}).items())))]
+             'PLAYER_SHA256=' + q(' '.join(f'{k}={v}' for k, v in sorted((pl.get('sha256') or {}).items())))] + \
+            (['PLAYER_IL2CPP=1'] if pl.get('il2cpp') else [])     # (apk route: a Mono build compiled for arm64)
     if sections is None or 'android_data' in sections:
         lines += [
              f'APK_NAME={q(ad["name"])}', f'PACKAGE={q(ad["package"])}',
@@ -1632,6 +1643,10 @@ ROUTE_NEEDS = {
 ROUTE_SETUP = {
     'il2cpp-arm64': "The first launch also compiles the game's code with Unity's IL2CPP on the handheld: one to a few "
                     "hours, about 1.6 GB free, Wi-Fi for Unity's and Debian's files.",
+    # the apk route with player.il2cpp (a Mono build: its 32-bit player, or IL2CPP's 64-bit one)
+    'apk+il2cpp': "On a handheld without a 32-bit userland the first launch compiles the game's code with Unity's "
+                  "IL2CPP for Unity's 64-bit player: one to a few hours, about 1.6 GB free, Wi-Fi for Unity's and "
+                  "Debian's files.",
 }
 # the commands that build each part a route's release takes (route.json "package"), for the README
 BUILD_STEPS = {
@@ -1723,9 +1738,11 @@ def thanks_sentence(cfg):
     return f"Thanks to {f'[{dev}]({url})' if url else dev} for creating {p['title']}."
 
 
-def route_needs(route):
+def route_needs(route, cfg=None):
     """The README's sentences on what the route needs of the handheld and what its setup also does."""
     out = [f'It needs {ROUTE_NEEDS[route]}.'] if ROUTE_NEEDS.get(route) else []
+    if route == 'apk' and cfg and cfg['player'].get('il2cpp'):
+        return ' '.join(out + [ROUTE_SETUP['apk+il2cpp']])
     return ' '.join(out + ([ROUTE_SETUP[route]] if ROUTE_SETUP.get(route) else []))
 
 
@@ -1985,7 +2002,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
               'READY': cfg['port'].get('ready_marker') or '.setup_done',
               # PortMaster's README sections (Notes, Controls, Compile)
               'THANKS': thanks_sentence(cfg), 'CONTROLS': controls_markdown(cfg),
-              'ROUTE_NEEDS': route_needs(cfg['port']['route']), 'BUILD_STEPS': build_steps(cfg, r)}
+              'ROUTE_NEEDS': route_needs(cfg['port']['route'], cfg), 'BUILD_STEPS': build_steps(cfg, r)}
     # the files a route renders: route.json "files": {output path: template name}; output paths
     # may use @@TOKENS@@; mode 755 for scripts
     for dst, spec in r['files'].items():
@@ -2235,7 +2252,8 @@ def wants(part, cfg):
     armeabi-v7a, arm64-v8a; the apk route)."""
     abis = cfg['player'].get('abis') or []
     return {'asmpatch': needs_asmpatch(cfg), 'ua_host': not abis or 'armeabi-v7a' in abis,
-            'ua_host64': not abis or 'arm64-v8a' in abis}.get(part, True)
+            # (player.il2cpp: a Mono build's code compiled for the arm64 IL2CPP player on 64-bit-only systems)
+            'ua_host64': not abis or 'arm64-v8a' in abis or bool(cfg['player'].get('il2cpp'))}.get(part, True)
 
 
 def _write_zip(zpath, root, items):

@@ -303,6 +303,20 @@ class JobSlotsTest(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), 'ran')
 
 
+class DiskFreeTest(unittest.TestCase):
+    def test_override(self):
+        """PMUNITY_DISK_FREE_MB (a rehearsal on Docker Desktop's file sharing) replaces statvfs's figure"""
+        old = os.environ.pop('PMUNITY_DISK_FREE_MB', None)
+        try:
+            self.assertGreater(D.disk_free('.'), 0)
+            os.environ['PMUNITY_DISK_FREE_MB'] = '5000'
+            self.assertEqual(D.disk_free('.'), 5000 << 20)
+        finally:
+            os.environ.pop('PMUNITY_DISK_FREE_MB', None)
+            if old is not None:
+                os.environ['PMUNITY_DISK_FREE_MB'] = old
+
+
 class CaTest(unittest.TestCase):
     def test_bundle_found(self):
         import ssl
