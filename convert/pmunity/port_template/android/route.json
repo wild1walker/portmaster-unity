@@ -9,5 +9,5 @@
     "README.md": "README.port.md",
     "package.sh": "package.sh"
   },
-  "package": ["ua_host", "pmunity", "pybundle", "asmpatch?", "pmhlslcc?"]
+  "package": ["ua_host", "pmunity", "pybundle", "asmpatch?", "pmhlslcc?", "pmspirvcross?"]
 }

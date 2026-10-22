@@ -70,6 +70,17 @@ build writes next to it. A port that translates Direct3D 11 shaders ships the aa
 (`ARCH=arm64 tools/hlslcc/build.sh`: GCC's libstdc++ and libgcc linked in, under the GCC Runtime
 Library Exception) as `setup/pmhlslcc`, with that licence as `licenses/LICENSE.pmhlslcc-HLSLcc.txt`.
 
+[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) (Apache 2.0; its headers `spirv.hpp` and
+`GLSL.std.450.h` MIT, The Khronos Group) and [SMOL-V](https://github.com/aras-p/smol-v) (MIT or
+public domain, Aras Pranckevicius), fetched by `tools/spirvcross/build.sh` at pinned commits and
+compiled into `pmspirvcross` (Vulkan shaders, `pmunity shaders --from vulkan`): distribute that
+binary with `pmspirvcross.LICENSE.txt` (both licences, Apache 2.0's text included), which the build
+writes next to it. A port that translates Vulkan shaders ships the aarch64 build (`ARCH=arm64
+tools/spirvcross/build.sh`: GCC's libstdc++ and libgcc linked in, under the GCC Runtime Library
+Exception) as `setup/pmspirvcross`, with that licence as
+`licenses/LICENSE.pmspirvcross-SPIRV-Cross-SMOL-V.txt`. The Metal path (`--from metal`) is the
+converter's own Python (`convert/pmunity/shaders/metal.py`); nothing third-party.
+
 ## Downloaded on the handheld by a port's setup (`pmunity il2cpp --on-device`), not shipped
 
 The IL2CPP build on a 64-bit-only handheld (docs/il2cpp.md, "On the handheld") fetches its

@@ -4,7 +4,8 @@
     python -m pmunity port new <name> --data <game> [--config port.toml|.json] [--out DIR]
                                [--route R] [--title T] [--player PKG] [--force]
     python -m pmunity port package <port dir> [--out DIR] [--pybundle FILE] [--runtime DIR]
-                                   [--ua-host FILE] [--asmpatch-bin FILE] [--pmhlslcc-bin FILE] [--no-build]
+                                   [--ua-host FILE] [--asmpatch-bin FILE] [--pmhlslcc-bin FILE]
+                                   [--pmspirvcross-bin FILE] [--no-build]
                                    [--submission]
     python -m pmunity port shot <game folder | shot.ppm> [--out screenshot.png] [--timeout S]
     python -m pmunity port routes
@@ -22,7 +23,7 @@ the first launch (PortMaster's patcher: fetch Unity's player, convert the player
 game, pack it, install it), port.json, gameinfo.xml, READMEs, the testing thread's post, and the
 settings it was made with (port.toml, the porter's file; port.build.json, everything resolved).
 `package` turns that folder into the release zip: the runtime (ua_host), the converter, the setup's
-Python, asmpatch and pmhlslcc when the port uses them, the screenshot and cover, and every
+Python, asmpatch, pmhlslcc and pmspirvcross when the port uses them, the screenshot and cover, and every
 licence; it lists what a PortMaster submission still lacks, and --submission also lays the port
 out as PortMaster's repository wants it. `shot` saves a frame of a game ua_host runs (shot.req) as a PNG.
 docs/porting.md is the porter's guide; the templates are in port_template/<route>/ (route.json
@@ -815,6 +816,15 @@ def decide_routes(rep):
     elif gl == 'd3d11':
         needs.append('Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc '
                      '(HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)')
+    elif gl == 'vulkan':
+        needs.append('Vulkan shaders only: `shaders.from = ["vulkan"]`, translated on the handheld by pmspirvcross '
+                     '(SPIRV-Cross; the release ships it: `ARCH=arm64 tools/spirvcross/build.sh`)')
+    elif gl == 'metal':
+        needs.append('Metal shaders only (a macOS build of Unity 2020.3+): `shaders.from = ["metal"]`, translated by '
+                     'the converter\'s Metal reader (metal.py; checked on three macOS games, docs/shaders.md)')
+    if rep.get('hdrp'):
+        why.append('HDRP (Unity\'s High Definition pipeline) does not run on OpenGL ES: its shaders translate, '
+                   'the pipeline does not render on the Android player\'s GLES3 device')
     if mono and b.get('build') == 'windows' and b.get('data'):
         from . import winbcl
         if winbcl.is_win32_profile(os.path.join(b['data'], 'Managed')):
@@ -927,10 +937,18 @@ def check(path, asmpatch=None, deep=True, log=None):
         rep['shader_source'] = 'glcore'
     elif 2 in apis:
         rep['shader_source'] = 'd3d11'
+    elif 21 in apis:
+        rep['shader_source'] = 'vulkan'
+    elif 16 in apis:
+        rep['shader_source'] = 'metal'
     else:
         rep['shader_source'] = None
         rep['shader_why'] = (f'the build has {", ".join(rep["graphics_apis"]) or "no"} shaders only; '
-                             f'the converter translates OpenGL Core (macOS/Linux builds made with OpenGL Core) and Direct3D 11')
+                             f'the converter translates OpenGL Core (macOS/Linux builds made with OpenGL Core), '
+                             f'Direct3D 11, Vulkan and Metal')
+    if rep['shader_source'] == 'vulkan' and b['backend'] == 'mono' and \
+            os.path.isfile(os.path.join(b['data'], 'Managed', 'Unity.RenderPipelines.HighDefinition.Runtime.dll')):
+        rep['hdrp'] = True
     # the code
     managed = os.path.join(b['data'], 'Managed')
     s = survey_assemblies(managed) if b['backend'] == 'mono' else None
@@ -1065,8 +1083,8 @@ def suggest_config(rep):
     ad = sug.setdefault('android_data', {})
     cv = sug.setdefault('convert', {})
     notes = rep['notes']
-    if rep.get('shader_source') == 'd3d11':
-        cv.setdefault('shaders', {})['from'] = ['d3d11']
+    if rep.get('shader_source') in ('d3d11', 'vulkan', 'metal'):
+        cv.setdefault('shaders', {})['from'] = [rep['shader_source']]
     if s.get('rewired'):
         rt.setdefault('UA_PAD_NAME', 'Xbox Wireless Controller')
         notes.append(f"Rewired ({s['rewired']}): asmpatch's rewired-android patch (Rewired then reads the pad "
@@ -1699,6 +1717,7 @@ BUILD_STEPS = {
     'pybundle': "tools/port/build_pybundle.sh tools/port/out/python.tar.gz   # the setup's Python, aarch64 (Docker)",
     'asmpatch': 'tools/asmpatch/build.sh                                     # asmpatch (.NET 8 SDK)',
     'pmhlslcc': 'ARCH=arm64 tools/hlslcc/build.sh                            # pmhlslcc, HLSLcc for the setup, aarch64 (Docker)',
+    'pmspirvcross': 'ARCH=arm64 tools/spirvcross/build.sh                        # pmspirvcross, SPIRV-Cross for the setup, aarch64 (Docker)',
     'box64': 'tools/box64/build.sh                                        # box64, gl4es, glxes (Docker)',
 }
 # PortMaster's standard first lines of a launcher (after "#!/bin/bash" and the PORTMASTER line)
@@ -2332,17 +2351,43 @@ def _component_pmhlslcc(ctx, opts):
     ctx.license('LICENSE.pmhlslcc-HLSLcc.txt', lic)
 
 
+def needs_pmspirvcross(cfg):
+    """Whether the setup translates Vulkan shaders (a Vulkan-only Linux build: convert.shaders.from)."""
+    return 'vulkan' in ((cfg.get('convert') or {}).get('shaders') or {}).get('from', [])
+
+
+def _component_pmspirvcross(ctx, opts):
+    """pmspirvcross for linux-arm64 (`ARCH=arm64 tools/spirvcross/build.sh`: SPIRV-Cross, Apache 2.0, and
+    SMOL-V, MIT) as setup/pmspirvcross, for a port whose setup translates Vulkan shaders; its licences
+    beside the others."""
+    p = opts.get('pmspirvcross_bin') or os.path.join(ctx.runtime, 'tools', 'spirvcross', 'out', 'linux-arm64', 'pmspirvcross')
+    if not os.path.isfile(p):
+        if opts.get('no_build'):
+            raise SystemExit(f'{p}: build pmspirvcross for the handheld first (ARCH=arm64 tools/spirvcross/build.sh)')
+        ctx.log('building pmspirvcross for linux-arm64 (ARCH=arm64 tools/spirvcross/build.sh, Docker)')
+        subprocess.run([os.path.join(ctx.runtime, 'tools', 'spirvcross', 'build.sh'), os.path.dirname(p)], check=True,
+                       env=dict(os.environ, ARCH='arm64'))
+    lic = os.path.join(os.path.dirname(p), 'pmspirvcross.LICENSE.txt')
+    if not os.path.isfile(lic):
+        raise SystemExit(f'{lic}: SPIRV-Cross\'s and SMOL-V\'s licences go with pmspirvcross (tools/spirvcross/build.sh '
+                         f'writes them)')
+    ctx.add(p, os.path.join('setup', 'pmspirvcross'), 0o755)
+    ctx.license('LICENSE.pmspirvcross-SPIRV-Cross-SMOL-V.txt', lic)
+
+
 COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'ua_host64': _component_ua_host64,
               'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'asmpatch': _component_asmpatch,
-              'pmhlslcc': _component_pmhlslcc}
+              'pmhlslcc': _component_pmhlslcc, 'pmspirvcross': _component_pmspirvcross}
 
 
 def wants(part, cfg):
     """Whether a release needs a part route.json names with '?' (only when the port uses it): asmpatch
-    for ports that run it, pmhlslcc for ports that translate Direct3D 11 shaders; ua_host / ua_host64
+    for ports that run it, pmhlslcc for ports that translate Direct3D 11 shaders, pmspirvcross for Vulkan
+    ones; ua_host / ua_host64
     for the player ABIs the port runs (player.abis: armeabi-v7a, arm64-v8a; the apk route)."""
     abis = cfg['player'].get('abis') or []
-    return {'asmpatch': needs_asmpatch(cfg), 'pmhlslcc': needs_pmhlslcc(cfg), 'ua_host': not abis or 'armeabi-v7a' in abis,
+    return {'asmpatch': needs_asmpatch(cfg), 'pmhlslcc': needs_pmhlslcc(cfg), 'pmspirvcross': needs_pmspirvcross(cfg),
+            'ua_host': not abis or 'armeabi-v7a' in abis,
             # (player.il2cpp: a Mono build's code compiled for the arm64 IL2CPP player on 64-bit-only systems)
             'ua_host64': not abis or 'arm64-v8a' in abis or bool(cfg['player'].get('il2cpp'))}.get(part, True)
 
@@ -2576,6 +2621,8 @@ def main(argv):
     p.add_argument('--asmpatch-bin', help='asmpatch for linux-arm64 (default <runtime>/tools/asmpatch/out/linux-arm64/asmpatch)')
     p.add_argument('--pmhlslcc-bin', help='pmhlslcc for linux-arm64, with pmhlslcc.LICENSE.txt beside it '
                                           '(default <runtime>/tools/hlslcc/out/linux-arm64/pmhlslcc)')
+    p.add_argument('--pmspirvcross-bin', help='pmspirvcross for linux-arm64, with pmspirvcross.LICENSE.txt beside it '
+                                              '(default <runtime>/tools/spirvcross/out/linux-arm64/pmspirvcross)')
     p.add_argument('--no-build', action='store_true', help='stop instead of building what is missing')
     p.add_argument('--submission', action='store_true',
                    help="also lay the port out as PortMaster's repository holds it (<out>/submission/<name>/)")
@@ -2598,7 +2645,8 @@ def main(argv):
         return 0
     if a.cmd == 'package':
         package(a.port, a.out, a.runtime, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle,
-                asmpatch_bin=a.asmpatch_bin, pmhlslcc_bin=a.pmhlslcc_bin, no_build=a.no_build, submission=a.submission)
+                asmpatch_bin=a.asmpatch_bin, pmhlslcc_bin=a.pmhlslcc_bin, pmspirvcross_bin=a.pmspirvcross_bin,
+                no_build=a.no_build, submission=a.submission)
         return 0
     if a.cmd == 'shot':
         shot(a.src, a.out, a.timeout)

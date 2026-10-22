@@ -135,20 +135,21 @@ setup on a 1 GB + 1 GB swap stand-in (2026-10-22); not yet on a handheld.
 The `android` route translates a macOS build's OpenGL Core programs, which Unity's macOS builds
 listed next to Metal up to 2020.1 and dropped from 2020.3 on: of the free itch.io macOS builds
 whose settings were read (range requests, 2026-10-22), all 14 games of 2017.3 - 2020.1 have
-OpenGL Core, 17 of the 18 of 2020.3 - 6000.6 (ten of them macOS-only games) Metal only. Such a
-build needs the game's Linux or Windows build; `port check` and the converter say so.
+OpenGL Core, 17 of the 18 of 2020.3 - 6000.6 (ten of them macOS-only games) Metal only. A
+Metal-only build is translated from its Metal programs (`shaders.from = ["metal"]`, which
+`port check` sets; docs/shaders.md, "macOS builds: Metal programs").
 
 | game | Unity, build | emulated rig | notes (last checked) |
 |---|---|---|---|
-| [Liberal Crime Squad](https://the-cheshire-cat.itch.io/lcs) | 2019.1.15f1, Metal + OpenGL Core, .NET 3.5; reads its game data (XML in StreamingAssets) with System.IO | Unity splash, title menu (New Game / Continue / High Scores / Exit) | aborted at start before the fix ("Runtime critical type System.RuntimeType not found": 2019.1 still has the .NET 3.5 runtime, android-data took every 2019.x game as .NET 4.x); `streaming_assets = "both"` (the check's suggestion) gives its XML reads the folder beside the APK (2026-10-22) |
-| [Chapéu de Papel](https://carambo.itch.io/paper-hat) | 2022.3.62f3, Metal only | - | no programs to translate; its APK takes the `apk` route (above) (2026-10-22) |
-| [Rhythm Quest (Demo)](https://ddrkirbyisq.itch.io/rhythm-quest) | 6000.2.6f2, Metal only; Localization, Addressables, Input System, InControl, Steam, Discord | - | no programs to translate; its Linux build is IL2CPP (`box64` route, not run) (2026-10-22) |
+| [Liberal Crime Squad](https://the-cheshire-cat.itch.io/lcs) | 2019.1.15f1, Metal + OpenGL Core, .NET 3.5; reads its game data (XML in StreamingAssets) with System.IO | Unity splash, title menu (New Game / Continue / High Scores / Exit) | aborted at start before the fix ("Runtime critical type System.RuntimeType not found": 2019.1 still has the .NET 3.5 runtime, android-data took every 2019.x game as .NET 4.x); `streaming_assets = "both"` (the check's suggestion) gives its XML reads the folder beside the APK. Its Metal programs translated instead (`--from metal`, in memory): 41 shaders, 208 programs, every one of the 223 variants compared declares what the same pass's OpenGL Core program does; 194 / 194 link on Mesa (2026-10-22) |
+| [Chapéu de Papel](https://carambo.itch.io/paper-hat) | 2022.3.62f3 (URP), Metal only, Mono .NET 4.x, Input System | title menu, its backgrounds cycling (2004, 1987, 1954) as in its own Android build's run, the right way up | the 32-bit route with `shaders.from = ["metal"]` (the check's suggestion, with asmpatch and `streaming_assets = "both"`): 92 of 93 shaders, 1250 programs translated from Metal (URP's HDR debug view left out), the full-screen passes' coordinates given GL's origin (869 stages); its APK takes the `apk` route (above) (2026-10-22) |
+| [Rhythm Quest (Demo)](https://ddrkirbyisq.itch.io/rhythm-quest) | 6000.2.6f2, Metal only; Localization, Addressables, Input System, InControl, Steam, Discord | - | its Metal programs translated in memory (`--from metal`): 113 of 114 shaders, 320 programs, 209 / 209 distinct link on Mesa; its Addressables bundles carry no Unity version in their headers, which stopped the shaders step (now given the data's). Not run; its Linux build is IL2CPP (`box64` route, not run) (2026-10-22) |
 
 ## Checked only (no route through the Android players)
 
 | game | Unity, build | what `port check` says (last checked) |
 |---|---|---|
-| [Suvalf](https://cheesykirah.itch.io/suvalf) | 6000.3.5f1, HDRP, compressed (`data.unity3d`) | Vulkan shaders only (as every HDRP Linux build): no route; `box64` too needs OpenGL. Before: the check could not read a compressed build's settings and passed it, the converter translated nothing and android-data failed in video.py; both now stop with the reason (2026-10-22) |
+| [Suvalf](https://cheesykirah.itch.io/suvalf) | 6000.3.5f1, HDRP, compressed (`data.unity3d`) | Vulkan shaders only (as every HDRP Linux build); `box64` too needs OpenGL. Its shaders translate from Vulkan (`shaders.from = ["vulkan"]`): 116 of 142, 718 programs, all 553 distinct link on Mesa; converted that way and run in the emulated rig anyway, the player logs "graphics API OpenGLES3 is not supported with HDRP" and HDRP's `Render` throws a NullReferenceException every frame (the loop runs at 57 fps, the screen stays black): the check blocks the route for HDRP. Before: the check could not read a compressed build's settings and passed it, the converter translated nothing and android-data failed in video.py; both now stop with the reason (2026-10-22) |
 | [RTS Siege Up!](https://abuksigun.itch.io/siegeup) | 6000.3.16f1, IL2CPP, compressed, Firebase C++ SDK (analytics, auth, messaging, remote config) | `box64` (GLES mode); the Firebase libraries are x86-64 like the game (not run) (2026-10-22) |
 | [Space Dash](https://jasdv.itch.io/space-dash) | 5.4.2f2, .NET 3.5 | below the converter's 5.6: `box64` with gl4es (not run) (2026-10-22) |
 

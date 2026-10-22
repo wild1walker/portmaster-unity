@@ -424,6 +424,43 @@ class NewAndSetupTest(unittest.TestCase):
             self.make(t, {'questions': []})
             self.assertFalse(os.path.exists(os.path.join(out, 'mygame', 'setup', 'questions.lua')))
 
+    def test_vulkan_port(self):
+        """a Vulkan-only build (shaders.from = ["vulkan"]): pmspirvcross (aarch64) in the release with SPIRV-Cross's and
+        SMOL-V's licences; other ports do not take it"""
+        with tempfile.TemporaryDirectory() as t:
+            game, out = self.make(t, {'convert': {'shaders': {'from': ['vulkan']}}}, version='2022.3.36f1')
+            cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertTrue(P.needs_pmspirvcross(cfg) and P.wants('pmspirvcross', cfg))
+            self.assertFalse(P.needs_pmhlslcc(cfg))
+            self.assertFalse(P.needs_pmspirvcross(P.merge(cfg, {'convert': {'shaders': {'from': ['glcore']}}})))
+            rt = os.path.join(t, 'rt')
+            for d in ('runtime/host/out', 'runtime/media/out/licenses', 'sc'):
+                os.makedirs(os.path.join(rt, d))
+            put(os.path.join(rt, 'runtime/host/out/ua_host'), 'host')
+            put(os.path.join(rt, 'runtime/media/out/licenses/libvpx.copyright'), 'BSD')
+            put(os.path.join(rt, 'sc', 'pmspirvcross'), 'elf')
+            pyb = os.path.join(t, 'py.tar.gz')
+            with tarfile.open(pyb, 'w:gz') as tf:
+                ti = tarfile.TarInfo('python/lib/python3.12/LICENSE.txt')
+                ti.size = 3
+                tf.addfile(ti, io.BytesIO(b'PSF'))
+            with self.assertRaises(SystemExit) as cm:   # (no licence beside the binary)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+                          pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
+            self.assertIn('pmspirvcross.LICENSE.txt', str(cm.exception))
+            put(os.path.join(rt, 'sc', 'pmspirvcross.LICENSE.txt'), 'Apache 2.0 SPIRV-Cross, MIT SMOL-V')
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+                          pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
+            with zipfile.ZipFile(z) as zf:
+                modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.pmspirvcross-SPIRV-Cross-SMOL-V.txt'),
+                                 b'Apache 2.0 SPIRV-Cross, MIT SMOL-V')
+            self.assertEqual(modes['mygame/setup/pmspirvcross'], 0o755)
+            self.assertNotIn('mygame/setup/pmhlslcc', modes)
+            with self.assertRaises(SystemExit) as cm:   # (the default place, not built)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            self.assertIn('ARCH=arm64 tools/spirvcross/build.sh', str(cm.exception))
+
     def test_windows_port(self):
         """a Windows build of 2021.2+: Direct3D 11 shaders (pmhlslcc in the release, PMHLSLCC in the setup)
         and the Unix class libraries (pmunity winbcl in the setup, its files shipped with --managed-file)"""

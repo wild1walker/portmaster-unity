@@ -3,7 +3,7 @@ Android player on GLES handhelds.
 
     python -m pmunity convert <data> [<out>] --config game.json [--steps a,b] [--plugin steps.py] [--only REGEX]
     python -m pmunity shaders <data> [<out>] [--precision highp|default-samplers] [--replace] [--bundles REGEX]
-                              [--from glcore|d3d11|glcore,d3d11] [--hlslcc PATH]
+                              [--from glcore|d3d11|vulkan|metal|glcore,d3d11] [--hlslcc PATH] [--spirv-cross PATH]
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
     python -m pmunity plugins <data> [--map F] [--json F]    (native plugins: what the port gives each)
@@ -46,7 +46,8 @@ def _builtin(name):
             src = c.get('from', ['glcore'])
             return step.run(job, c.get('precision', 'highp'), c.get('replace', False), c.get('bundles', '.'),
                             optimize=tuple(c.get('optimize', ('const-arrays', 'unroll'))),
-                            sources=tuple(src.split(',') if isinstance(src, str) else src), hlslcc=c.get('hlslcc'))
+                            sources=tuple(src.split(',') if isinstance(src, str) else src), hlslcc=c.get('hlslcc'),
+                            spirv_cross=c.get('spirv_cross'))
         if name == 'textures':
             from . import textures
             return textures.run(job, a.only)
@@ -133,8 +134,11 @@ def main(argv=None):
                    help="exact rewrites, comma-separated ('' = none): const-arrays, unroll")
     s.add_argument('--from', dest='sources', default='glcore',
                    help='desktop programs to translate, in order of preference: glcore (macOS/Linux builds), '
-                        'd3d11 (Windows builds, needs tools/hlslcc), e.g. glcore,d3d11')
+                        'd3d11 (Windows builds, needs tools/hlslcc), vulkan (Vulkan-only Linux builds, needs '
+                        'tools/spirvcross), metal (Metal-only macOS builds), e.g. glcore,d3d11')
     s.add_argument('--hlslcc', help='the pmhlslcc binary (default: $PMHLSLCC, tools/hlslcc/out/pmhlslcc, PATH)')
+    s.add_argument('--spirv-cross', help='the pmspirvcross binary (default: $PMSPIRVCROSS, '
+                                         'tools/spirvcross/out/pmspirvcross, PATH)')
     for p in (c, s):
         p.add_argument('--any-unity-version', action='store_true',
                        help='convert data of a Unity version outside 5.6 - 6000.6 (untested; layouts guessed)')
@@ -177,7 +181,7 @@ def main(argv=None):
         from .shaders import step
         job = Job(a.data, a.out or a.data, cfg)
         step.run(job, a.precision, a.replace, a.bundles, a.log_each, tuple(x for x in a.optimize.split(',') if x),
-                 sources=tuple(x for x in a.sources.split(',') if x), hlslcc=a.hlslcc)
+                 sources=tuple(x for x in a.sources.split(',') if x), hlslcc=a.hlslcc, spirv_cross=a.spirv_cross)
     elif a.cmd == 'shaders-export':
         from .shaders import export
         export.export(Job.reader(a.data, cfg), a.dir, a.bundles)
