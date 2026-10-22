@@ -15,6 +15,11 @@ give shaders whose variants were all stripped an empty GLES3 blob (convert.add_g
 default, for data of every Unity version; config `"shaders": {"glcore4x": false}` (or `pmunity
 convert --set shaders.glcore4x=false`) keeps a port on the output the converter wrote before
 (Cuphead's port, which was checked on the device that way, sets it).
+
+`compute`: ComputeShader assets with OpenGL Core kernels get a GLES3 variant, their kernels
+translated to GLSL ES 3.10 (compute.py), so a game's own kernels run on the Android player as in
+an Android build (OpenGL ES 3.1+). On by default; `"shaders": {"compute": false}` leaves them as
+they are (FindKernel then fails on the device: "Kernel 'X' not found").
 """
 import os
 import re
@@ -22,6 +27,7 @@ import shutil
 
 from ..unity_io import Loaded, NotOneSerializedFile
 from . import blob as B
+from . import compute as CS
 from . import convert as C
 from . import dxbc
 
@@ -54,17 +60,22 @@ def _is_bundle(path):
 
 
 def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, optimize=None, sources=('glcore',),
-        hlslcc=None, glcore4x=None):
+        hlslcc=None, glcore4x=None, compute=None):
     """Returns the per-shader results. hlslcc: the pmhlslcc binary (default dxbc.find_hlslcc());
-    glcore4x: see the module docstring."""
+    glcore4x, compute: see the module docstring."""
     if glcore4x is None:
         glcore4x = (job.cfg.get('shaders') or {}).get('glcore4x')
     if glcore4x not in (None, True, False):
         raise ValueError(f'shaders.glcore4x: {glcore4x!r} (true or false)')
+    if compute is None:
+        compute = (job.cfg.get('shaders') or {}).get('compute', True)
+    if compute not in (True, False):
+        raise ValueError(f'shaders.compute: {compute!r} (true or false)')
     for src in sources:
         if src not in SOURCES:
             raise ValueError(f'unknown shader source {src!r} (known: {", ".join(SOURCES)})')
     results = []
+    cresults = []
     changed_files = 0
     translator = None
     opt = C.glsl.OPTIMIZE if optimize is None else optimize
@@ -101,6 +112,17 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 job.log(f'shaders: {rel}: {r}')
             if r.guessed_layout:
                 job.log(f'shaders: {rel}: {r.name}: program layout of an unverified Unity version (guessed, checked by round trip)')
+        for pid, o in (lf.objects('ComputeShader') if compute else ()):
+            t = o.read_typetree()
+            r = CS.add_gles3(t, unity=getattr(lf.sf, 'unity_version', None), precision=precision, replace=replace,
+                             optimize=opt)
+            r.file = rel
+            cresults.append(r)
+            if r.status == 'converted':
+                o.save_typetree(t)
+                n += 1
+            if r.status == 'skipped' or r.failed or log_each:
+                job.log(f'shaders: {rel}: compute shader {r}')
         if n:
             lf.write_to(job, rel)
             changed_files += 1
@@ -133,6 +155,12 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     vr = sum(r.dropped for r in conv if r.source == 'glcore')
     if vr:
         job.log(f'shaders: {vr} VR-only OpenGL Core variants not translatable (left out, never used on a handheld)')
+    if cresults:
+        cc = [r for r in cresults if r.status == 'converted']
+        job.log(f'shaders: {len(cc)} of {len(cresults)} compute shaders given GLES3 kernels ({sum(r.kernels for r in cc)} '
+                f'kernels, {sum(r.variants for r in cc)} kernel variants, GLSL ES 3.10: used where the device has OpenGL ES '
+                f'3.1+); {sum(len(r.failed) for r in cresults)} kernels left out; '
+                f'{sum(r.why.startswith("no OpenGL Core") for r in cresults)} without OpenGL Core kernels')
     d3d = [r for r in results if r.source == 'd3d11']
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '
