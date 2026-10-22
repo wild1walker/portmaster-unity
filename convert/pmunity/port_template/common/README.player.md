@@ -31,6 +31,10 @@ handheld.
 Saves and settings: `ports/@@PORTDIR@@/data/`. PortMaster's exit hotkey quits. The game's options
 (pointer mode, keys, ...) are in `ports/@@PORTDIR@@/port.env`; `log.txt` is the last run's log.
 
+## Controls
+
+@@CONTROLS@@
+
 ## Licences
 
 The port's code is MIT (`licenses/`). The setup tools are removed when the setup is done; their

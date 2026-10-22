@@ -60,13 +60,17 @@ The shaders left out everywhere are BlitToDepth_MSAA and the VR blit.
 
 ## Android builds (APK route)
 
+As ports (`pmunity port new --route apk`): the release zip rehearsed with `tools/port/rehearse.sh`
+(the setup in an arm64 container that stands in for the handheld, with its 32-bit loader or,
+`REHEARSE_64ONLY=1`, without), then the installed game in the emulated rig.
+
 | game | Unity, build | emulated rig | handheld | notes (last checked) |
 |---|---|---|---|---|
-| [Imperium Host](https://vectorinox.itch.io/imperium-host) | 2020.3.3f1, IL2CPP arm64 + armv7 | title menu | title 59.6 fps (64-bit) | (2026-10-20) |
-| [Cat Cove Inn](https://loaflabs.itch.io/cat-cove-inn) | 2021.3.4f1, IL2CPP + Burst | intro, title (arm64 and armv7) | title 30 fps (64-bit) | leaves Unity's Android default frame rate (2026-10-20) |
+| [Imperium Host](https://vectorinox.itch.io/imperium-host) | 2020.3.3f1, IL2CPP arm64 + armv7 | title menu; as a port: the setup takes the armeabi-v7a player where the system has a 32-bit userland and the arm64-v8a one on a 64-bit-only system, and the 64-bit install reaches the title menu in the arm64 rig | title 59.6 fps (64-bit, by hand) | the port's setup takes 40 s in the container; nothing downloaded (2026-10-21) |
+| [Cat Cove Inn](https://loaflabs.itch.io/cat-cove-inn) | 2021.3.4f1, IL2CPP + Burst | intro, title (arm64 and armv7); as a port from an `.xapk`: the 64-bit-only setup, then intro and title menu in the arm64 rig at the build's own 30 fps | title 30 fps (64-bit, by hand) | leaves Unity's Android default frame rate, as the port keeps it (2026-10-21) |
 | [The Ump Show (Demo)](https://azeemba.itch.io/the-ump-show) | 2022.3.14f1, IL2CPP + Burst, FMOD, 3D | title over its 3D scene | title 30 fps (64-bit) | leaves Unity's Android default frame rate (2026-10-20) |
 | [ROOTS](https://pierre-vandermaesen.itch.io/roots) | 2019.4.18f1, Mono armv7 | title | | stalls for minutes at times under QEMU (2026-10-20) |
-| [Calculords](https://richjoslin.itch.io/calculords) | 2022.3.23f1, Mono armv7, GLES2 | title | | (2026-10-20) |
+| [Calculords](https://richjoslin.itch.io/calculords) | 2022.3.23f1, Mono armv7, GLES2 | title; as a port: the setup with a 32-bit userland (armeabi-v7a only, so the release ships only `ua_host` and port.json asks for armhf), then "Tap anywhere to start" in the armhf rig | | the check suggests `UA_POINTER=1` (UI pointer handlers, no pad navigation) (2026-10-22) |
 
 ## 64-bit IL2CPP route (desktop Mono games compiled with `pmunity il2cpp`)
 
@@ -105,7 +109,7 @@ built in an arm64 container limited like the RG34XX-SP (1 GB, 4 CPUs, no swap), 
 | game | Unity | emulated rig | notes (last checked) |
 |---|---|---|---|
 | [MineRalph](https://chopchopgames.itch.io/mineralph) | 2018.3.2f1 | title menu | `streaming_assets = "both"` (2026-10-21) |
-| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it | a pointer click or touch on the launcher's Play does not: Rewired's UI module receives the touch but no click lands on the button (not looked into further) (2026-10-21) |
+| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it; the left stick moves the launcher's cursor and A on Play starts it | its own cursor (docs/input.md, "Games with their own cursor"): its buttons are not uGUI's, so pointer mode's position and touches do not click them; no `UA_POINTER` (the pad drives its cursor), or `UA_POINTER=1 UA_POINTER_CURSOR=0` (Play clicked by mouse in the rig) (2026-10-22) |
 
 ## box64 route (x86-64 Linux players)
 

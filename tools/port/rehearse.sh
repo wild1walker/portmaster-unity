@@ -19,6 +19,10 @@
 #   EMU_ONLY=1      skip the setup: run what an earlier rehearsal in <work> installed
 #   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
 #                   is removed in the container first, so a launcher takes its 64-bit path
+#   REHEARSE_NAME   the setup container's name (to docker kill it)
+#   EMU_ARCH        the emulated rig's architecture (tools/emu/emu.sh: armhf or arm64); default:
+#                   arm64 when the installed game is an arm64-v8a build (android_package.json "abi"),
+#                   which then runs with the port's ua_host64 when it has one (the apk route)
 # Game files stay in <work>; nothing of them goes anywhere else.
 set -euo pipefail
 ZIP=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); GAME=$2; WORK=$3; SECS=${4:-0}; INP=${5:-}
@@ -92,7 +96,7 @@ SH
 chmod +x "$WORK/rbin/df"
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
-docker run --rm --platform linux/arm64 --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
+docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
   -e REHEARSE_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
@@ -103,12 +107,18 @@ echo "installed: $(du -sm "$P" | cut -f1) MB; lib: $(ls "$P/lib" | tr '\n' ' ')"
 fi
 [ "$SECS" -gt 0 ] || exit 0
 
-echo "== the installed game in the emulated rig, $SECS s ($(date +%T))"
-E="$WORK/emuroot"; rm -rf "$E"; mkdir -p "$E"; cp "$P/ua_host" "$E/"
+# the ua_host that runs the installed build: the port's ua_host, or its ua_host64 for an arm64-v8a
+# build when it has both (the apk route)
+abi=$(sed -n 's/^ *"abi": *"\([^"]*\)".*/\1/p' "$P/android_package.json" 2>/dev/null | head -1)
+[ "$abi" = arm64-v8a ] && export EMU_ARCH=${EMU_ARCH:-arm64}
+H="$WORK/hostbin"; rm -rf "$H"; mkdir -p "$H"
+if [ "${EMU_ARCH:-${ARCH:-armhf}}" = arm64 ] && [ -f "$P/ua_host64" ]; then cp "$P/ua_host64" "$H/ua_host"; else cp "$P/ua_host" "$H/ua_host"; fi
+echo "== the installed game in the emulated rig (${EMU_ARCH:-${ARCH:-armhf}}${abi:+, $abi}), $SECS s ($(date +%T))"
+E="$WORK/emuroot"; rm -rf "$E"; mkdir -p "$E"; cp "$H/ua_host" "$E/"
 (
   set +u
   . "$P/port.env"; [ -f "$P/answers.env" ] && . "$P/answers.env"
-  cd "$PU" && UA_INPUT_SCRIPT="$INP" EMU_ROOT="$E" EMU_ZIP="$P" EMU_HOSTBIN="$P" tools/emu/emu.sh run.log "$SECS" release
+  cd "$PU" && UA_INPUT_SCRIPT="$INP" EMU_ROOT="$E" EMU_ZIP="$P" EMU_HOSTBIN="$H" tools/emu/emu.sh run.log "$SECS" release
 ) >/dev/null 2>&1 &
 prev=0
 for f in 0.2 0.4 0.65 0.9; do

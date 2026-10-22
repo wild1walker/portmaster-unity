@@ -235,6 +235,9 @@ cd convert
    ```sh
    python -m pmunity port package mygame              # or: mygame/package.sh
    ```
+   It also lists what a PortMaster submission still needs (a screenshot, the controls, the
+   game's developer, ...); `--submission` lays the port out for PortMaster's repository
+   ([docs/porting.md](docs/porting.md), section 11).
 4. **Test it.** First the rehearsal: it runs the port's first launch in a container that looks
    like a handheld, then the game in the emulator, and saves screenshots to `work/mygame/shots.png`
    (`PM_7ZZ` is PortMaster's own `7zzs.aarch64`, from its release). Then on a handheld: unzip the
