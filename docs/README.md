@@ -16,7 +16,7 @@ the five-step quick start. This page lists every document and the repository's l
 | [plugins.md](plugins.md) | native plugins, the plugin map, FMOD, Steam and other service stubs, HTTPS |
 | [shaders.md](shaders.md) | the shader converter (OpenGL Core and Direct3D 11 to GLSL ES), checks, what costs what on a Mali-G31 |
 | [android-data.md](android-data.md) | the APK and OBB the converter writes, per Unity version; StreamingAssets; saves |
-| [il2cpp.md](il2cpp.md) | Mono desktop games compiled with IL2CPP for the 64-bit ARM player |
+| [il2cpp.md](il2cpp.md) | Mono desktop games compiled with IL2CPP for the 64-bit ARM player, on a PC or on the handheld (`--on-device`) |
 | [apk.md](apk.md) | games owned as Android builds (`pmunity apk`) |
 | [arm64.md](arm64.md) | the 64-bit ARM loader |
 | [box64-route.md](box64-route.md) | the game's own Linux x86-64 build under box64 |

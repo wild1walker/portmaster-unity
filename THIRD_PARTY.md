@@ -66,6 +66,26 @@ Mono.Cecil's licence and the runtime pack's `LICENSE.TXT` and `THIRD-PARTY-NOTIC
 `pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the
 build writes next to it.
 
+## Downloaded on the handheld by a port's setup (`pmunity il2cpp --on-device`), not shipped
+
+The IL2CPP build on a 64-bit-only handheld (docs/il2cpp.md, "On the handheld") fetches its
+tools at setup time from Debian's and Microsoft's servers, each file pinned by sha256 in
+`convert/pmunity/il2cpp_device_lock.py`; none of it is in this repository or in a port's zip,
+and the setup removes it when the build is done. From Debian 12 ("bookworm", arm64), under each
+package's own terms (its `/usr/share/doc/<package>/copyright`):
+
+| what | Debian packages | licence |
+|---|---|---|
+| [LLVM](https://llvm.org/) 14: clang, lld, llvm-objcopy / -ar / -nm, clang's headers | `clang-14`, `libclang-cpp14`, `libllvm14`, `libclang-common-14-dev`, `lld-14`, `llvm-14` | Apache 2.0 with LLVM exception |
+| [Mono](https://www.mono-project.com/) 6.8: the runtime and class libraries | `mono-runtime-sgen`, `mono-runtime-common`, `libmono-corlib4.5-dll`, `libmono-system*-cil`, `libmono-security4.0-cil`, `libmono-posix4.0-cil`; for Unity 2019.x `mono-devel` (only its `4.5/Facades`) and `libmono-system-web*-cil` | MIT (runtime and class libraries; a few class library parts Apache 2.0 / MS-PL, per Debian's copyright file) |
+| GNU C library 2.36 (the loader every tool runs through), libstdc++ / libgcc (GCC 12) | `libc6`, `libstdc++6`, `libgcc-s1` | LGPL 2.1+; GPL 3 with the GCC runtime library exception |
+| what libLLVM and Mono load: zlib, ncurses' libtinfo, libedit, libbsd, libmd, libffi, libxml2, ICU 72, liblzma, Z3, MIT Kerberos (GSSAPI), keyutils, com_err | `zlib1g`, `libtinfo6`, `libedit2`, `libbsd0`, `libmd0`, `libffi8`, `libxml2`, `libicu72`, `liblzma5`, `libz3-4`, `libgssapi-krb5-2`, `libkrb5-3`, `libk5crypto3`, `libkrb5support0`, `libcom-err2`, `libkeyutils1` | zlib; MIT/X11; BSD-3-Clause; BSD / ISC; BSD-style / ISC / public domain; MIT; MIT; Unicode (ICU); public domain; MIT; MIT-style; LGPL 2.1+ (keyutils library); MIT-style |
+| OpenSSL 3 (Unity 2020.1+ builds: .NET hashes with it) | `libssl3` | Apache 2.0 |
+
+and [.NET](https://dotnet.microsoft.com/) 8's runtime for linux-arm64 (Unity 2020.1+ builds only),
+Microsoft's `dotnet-runtime-8.0.x-linux-arm64.tar.gz`: MIT (its `LICENSE.txt` and
+`ThirdPartyNotices.txt` are in the tarball).
+
 ## Shipped in a port's release zip (`pmunity port package`)
 
 Besides `ua_host` (above) and asmpatch when the port uses it (above, with the .NET runtime's and
