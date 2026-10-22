@@ -191,6 +191,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '
                 f'({sum(r.programs for r in d3d if r.status == "converted")} programs); '
-                f'{sum(len(r.failed) for r in d3d)} SubShaders left out; {sum(r.dropped for r in d3d)} VR-only variants and '
-                f'{sum(r.dropped_instancing for r in d3d)} GPU instancing variants left out')
+                f'{sum(len(r.failed) for r in d3d)} SubShaders left out; {sum(r.dropped for r in d3d)} VR-only variants, '
+                f'{sum(r.dropped_instancing for r in d3d)} GPU instancing and {sum(r.dropped_skinning for r in d3d)} '
+                f'GPU sprite skinning variants left out')
     return results
