@@ -1100,8 +1100,13 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     total, cost = sources_estimate(cpp, editor)
     before = count_objects(cache)
     comp = [w for w in icmd if w != '--convert-to-cpp']
-    log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
-        '(the long part: one to a few hours on a 4-core ARM handheld)')
+    from . import il2cpp_bee
+    if il2cpp_bee.uses_bee(editor):         # (2021.2+: the build graph says what, il2cpp_bee counts it)
+        log(f'il2cpp: compiling ({box.jobs} at a time), then linking (the long part: one to a few hours on a '
+            '4-core ARM handheld)')
+    else:
+        log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
+            '(the long part: one to a few hours on a 4-core ARM handheld)')
     cclog = CompileLog(os.path.join(work, 'cc.log'))
     left0 = cost * max(0, total - before) / max(1, total)     # (what a resumed build has left, roughly)
 
