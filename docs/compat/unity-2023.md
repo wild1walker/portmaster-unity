@@ -27,5 +27,15 @@ int)`, `nativeMemoryUsageChanged` in place of `nativeLowMemory` (from 2023.2; 20
 Nothing beyond the 6000.x work: the converter's 2022.3 formats, the default resources path from
 2023.2 (`DEFAULT_RESOURCES_IN_RESOURCES_FROM`), the runtime's natives on both player classes, the
 2023.1+ UnityPlayer members and the UI thread's ALooper (unity-6000.md); 2023.2.20f1's
-PlayerSettings is one byte longer than UnityPy's tree (typetrees.py keeps it). 2023.1 is untested
-in a game.
+PlayerSettings is one byte longer than UnityPy's tree (typetrees.py keeps it).
+
+2023.1 in a game (2023.1.8f1, 2026-10-22): its libunity reads the Android Game SDK's Memory
+Advice models from the APK's assets at start (`realtime_features.json`, then `realtime.tflite`,
+through AAssetManager; the strings sit with `predictRealtime` among the GL/Vulkan feature names,
+and are not in 6000.0's libunity). A desktop build has none: the player logged "TuningForkUtils:
+Can't find realtime_features.json in APK" and aborted (`std::length_error: basic_string`); with an
+empty JSON it crashed on the missing model. The installer has them in `Apk/MemoryAdvice/`
+(`available`, `oom`, `realtime` models and their feature lists, about 20 KB): `pmunity player
+fetch` takes them and android-data ships them (loose beside the APK, where ua_host's
+AAssetManager looks) to players whose libunity names them. The game then starts ("Initialized
+TensorFlow Lite runtime") and draws its loading screen.
