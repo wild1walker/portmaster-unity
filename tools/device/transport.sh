@@ -54,10 +54,12 @@ dev_tar_in() {
 
 dev_tar_out() {
   local dir=$1; shift
-  if [ ${#ADBS[@]} -eq 0 ]; then ssh -n ${OPTS[@]+"${OPTS[@]}"} "$DEVICE" "cd $(printf '%q' "$dir") && tar -cf - \$(ls $* 2>/dev/null)"; return; fi
+  # (the paths there that exist: globs expanded, missing ones left out; directories whole)
+  local keep='k=; for f in '"$*"'; do if [ -e "$f" ]; then k="$k $f"; fi; done'
+  if [ ${#ADBS[@]} -eq 0 ]; then ssh -n ${OPTS[@]+"${OPTS[@]}"} "$DEVICE" "cd $(printf '%q' "$dir") && $keep && tar -cf - \$k"; return; fi
   local remote_tar local_tar rc
   remote_tar=$(_dev_abs "$dir/.uatransfer.$$.tar")
-  dev_sh "cd $(printf '%q' "$dir") && tar -cf $(printf '%q' "$remote_tar") \$(ls $* 2>/dev/null)" >/dev/null || return 1
+  dev_sh "cd $(printf '%q' "$dir") && $keep && tar -cf $(printf '%q' "$remote_tar") \$k" >/dev/null || return 1
   local_tar=$(mktemp "${TMPDIR:-/tmp}/uatransfer.XXXXXX")
   "${ADBS[@]}" pull "$remote_tar" "$local_tar" >/dev/null 2>&1; rc=$?
   dev_sh "rm -f $(printf '%q' "$remote_tar")" >/dev/null

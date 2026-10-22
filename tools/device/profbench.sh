@@ -15,7 +15,7 @@
 #   again. Nothing on the handheld changes but <game folder>/bench/: clocks and governors are read,
 #   never set.
 # Settings (environment):
-#   DEVICE, SSH_OPTS     as for test.sh
+#   DEVICE, SSH_OPTS     as for test.sh (user@host over SSH, or adb / adb:<serial>: transport.sh)
 #   OUT=<dir>            results (default ./profbench)
 #   PLAN, MEASURE        defaults for every run (a run's own VAR=value wins)
 #   STOP_ES=0            leave EmulationStation running (default: stopped during the runs: it
@@ -35,10 +35,8 @@ case "${ARCH:-armhf}" in
   arm64) BIN=${HOST_BIN:-$PU/runtime/host/out/arm64/ua_host} ;;
   *) echo "ARCH=${ARCH}: armhf or arm64"; exit 1 ;;
 esac
-# shellcheck disable=SC2206
-OPTS=(${SSH_OPTS:-})
-rsh() { ssh ${OPTS[@]+"${OPTS[@]}"} "$DEVICE" "$@"; }
-rshn() { ssh -n ${OPTS[@]+"${OPTS[@]}"} "$DEVICE" "$@"; }
+. "$HERE/transport.sh"                                        # dev_sh, dev_tar_in, dev_tar_out
+rshn() { dev_sh "$@"; }
 q() { [ $# = 0 ] || printf '%q ' "$@"; }
 TARC=(); tar --version 2>/dev/null | grep -q bsdtar && TARC=(--no-xattrs --no-mac-metadata)
 B=$DIR/bench
@@ -57,17 +55,17 @@ else
   runs+=("$(printf '%q ' "$@")")
 fi
 
-echo "== $DEVICE:$DIR (${#runs[@]} run(s))"
+echo "== $(dev_name):$DIR (${#runs[@]} run(s))"
 rshn "cd $(q "$DIR") && [ -d lib ] && ls *.apk >/dev/null 2>&1 && mkdir -p bench" ||
-  { echo "$DIR on $DEVICE has no game (lib/ and an APK: send it with test.sh first), or the handheld is not answering"; exit 1; }
+  { echo "$DIR on $(dev_name) has no game (lib/ and an APK: send it with test.sh first), or the handheld is not answering"; exit 1; }
 if [ "${SEND_HOST:-1}" = 1 ]; then
   [ -f "$BIN" ] || { echo "no ua_host at $BIN: build it first (docs/building.md)"; exit 1; }
-  COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$BIN")" "$(basename "$BIN")" -C "$HERE" profrun.sh |
-    rsh "cd $(q "$B") && tar -xof - && { [ $(q "$(basename "$BIN")") = ua_host ] || mv -f $(q "$(basename "$BIN")") ua_host; } && chmod +x ua_host profrun.sh" ||
+  COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$BIN")" "$(basename "$BIN")" -C "$HERE" profrun.sh | dev_tar_in "$B" &&
+    rshn "cd $(q "$B") && { [ $(q "$(basename "$BIN")") = ua_host ] || mv -f $(q "$(basename "$BIN")") ua_host; } && chmod +x ua_host profrun.sh" ||
     { echo "copying ua_host failed"; exit 1; }
 else
-  COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$HERE" profrun.sh |
-    rsh "cd $(q "$B") && tar -xof - && cp -f ../ua_host ua_host && chmod +x ua_host profrun.sh" || { echo "copying failed"; exit 1; }
+  COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$HERE" profrun.sh | dev_tar_in "$B" &&
+    rshn "cd $(q "$B") && cp -f ../ua_host ua_host && chmod +x ua_host profrun.sh" || { echo "copying failed"; exit 1; }
 fi
 
 base=()
@@ -89,7 +87,9 @@ for r in "${runs[@]}"; do
     envs+=("$kv")
   done
   echo "== $name: ${*:-defaults}"
-  rshn "cd $(q "$B") && rm -f bench.done && { setsid nohup env $(q "${envs[@]+"${envs[@]}"}") ./profrun.sh $(q "$DIR" "$name") > $(q "$name.out") 2>&1 < /dev/null & }" ||
+  # (detached as test.sh does: setsid -f where there is one, which an adb shell's end does not reach)
+  run="nohup env $(q "${envs[@]+"${envs[@]}"}") ./profrun.sh $(q "$DIR" "$name") > $(q "$name.out") 2>&1 < /dev/null"
+  rshn "cd $(q "$B") && rm -f bench.done && if setsid -f true 2>/dev/null; then setsid -f $run; else { setsid $run & }; fi" ||
     { echo "starting the run failed"; exit 1; }
   deadline=$((SECONDS + 3600)); lost=0; started=$((SECONDS + 30))
   until rshn "[ -f $(q "$B/bench.done") ]" 2>/dev/null; do
@@ -105,7 +105,7 @@ for r in "${runs[@]}"; do
     sleep 10
   done
   mkdir -p "$OUT" && rm -rf "${OUT:?}/$name"
-  rshn "cd $(q "$B") && tar -cf - $(q "$name" "$name.out")" | tar -xf - -C "$OUT" || { echo "fetching the results failed"; exit 1; }
+  dev_tar_out "$B" "$(q "$name" "$name.out")" | tar -xf - -C "$OUT" || { echo "fetching the results failed"; exit 1; }
   mv -f "$OUT/$name.out" "$OUT/$name/" 2>/dev/null
   echo "   $(cat "$OUT/$name/result" 2>/dev/null || echo 'no result')"
   names+=("$OUT/$name")
