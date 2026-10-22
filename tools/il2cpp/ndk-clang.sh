@@ -12,7 +12,8 @@
 #     per-API libraries; r16b builds pass --sysroot themselves),
 #   --gcc-toolchain=<the NDK's GCC folder> (libgcc, crtbegin.o),
 #   -rtlib=libgcc -unwindlib=none: the NDK's libgcc carries the unwinder (arm: libunwind, which
-#     il2cpp links itself); upstream clang would look for compiler-rt's Android builtins,
+#     il2cpp links itself); upstream clang would look for compiler-rt's Android builtins
+#     (r23b, which has no libgcc: those of its own clang, below),
 #   -fuse-ld=lld for the NDK's GNU linkers (bfd, gold).
 # -D__ANDROID_API__=N is dropped: clang defines it from the target (-target <triple><API>); a
 # target without the API level (r16b builds) gets N appended.
@@ -68,6 +69,17 @@ done
 # 2021.x / 2022.x's Bee build passes no -stdlib (2017.4 - 2020.3's builder passes -stdlib=libc++)
 [ "$name" = clang++ ] && [ -z "$stdlib" ] && [ -d "$tc/sysroot/usr/include/c++/v1" ] && set -- "$@" -stdlib=libc++
 [ -z "$gcc" ] && [ -d "$tc/lib/gcc" ] && set -- --gcc-toolchain="$tc" "$@"
-[ -n "$link" ] && set -- "$@" -rtlib=libgcc -unwindlib=none -fuse-ld=lld
+# the runtime library: the NDK's libgcc (with its unwinder) up to r21d; r23b has none, but
+# compiler-rt's builtins and a static libunwind in its clang's resource folder, which the link
+# then takes (-resource-dir: only libraries are looked up there at link time)
+rt="-rtlib=libgcc -unwindlib=none"; libgcc=
+for g in "$tc"/lib/gcc/*/*/libgcc.a; do [ -f "$g" ] && libgcc=1; done   # (r23b: lib/gcc has only crtbegin.o)
+if [ -n "$link" ] && [ -z "$libgcc" ]; then
+  for r in "$tc"/lib64/clang/*/lib/linux; do
+    [ -d "$r" ] && rt="-rtlib=compiler-rt -unwindlib=libunwind -resource-dir=${r%/lib/linux}"
+  done
+fi
+# shellcheck disable=SC2086
+[ -n "$link" ] && set -- "$@" $rt -fuse-ld=lld
 [ -n "$PMUNITY_IL2CPP_CCLOG" ] && echo "$cc $*" >> "$PMUNITY_IL2CPP_CCLOG"
 exec "$cc" "$@"

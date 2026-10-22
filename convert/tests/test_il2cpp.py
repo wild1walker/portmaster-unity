@@ -465,6 +465,23 @@ class NdkClangTest(unittest.TestCase):
         out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/aarch64-linux-android/bin/objcopy', '--strip-all', 'a', 'b')
         self.assertEqual(out, ['llvm-objcopy', '--strip-all', 'a', 'b'])     # (r21d's, Unity 2021.x's Bee build)
 
+    def test_runtime_r23b(self):
+        """r23b has no libgcc: links take compiler-rt and libunwind from its clang's resource folder"""
+        tool = 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang++'
+        tc = os.path.join(self.ndk, 'toolchains/llvm/prebuilt/linux-x86_64')
+        os.makedirs(os.path.join(tc, 'lib/gcc/aarch64-linux-android/4.9.x'))      # (r23b: crtbegin.o, no libgcc.a)
+        open(os.path.join(tc, 'lib/gcc/aarch64-linux-android/4.9.x/crtbegin.o'), 'w').close()
+        os.makedirs(os.path.join(tc, 'lib64/clang/12.0.8/lib/linux/aarch64'))
+        out = self.run_tool(tool, '@objs.rsp', '-shared', '-o', 'x.so')
+        self.assertIn('-rtlib=compiler-rt', out)
+        self.assertIn('-unwindlib=libunwind', out)
+        self.assertIn('-resource-dir=' + os.path.join(tc, 'lib64/clang/12.0.8'), out)
+        self.assertNotIn('-rtlib=libgcc', out)
+        out = self.run_tool(tool, '-c', 'a.cpp')                        # (compiles: clang's own headers)
+        self.assertFalse(any(a.startswith(('-resource-dir', '-rtlib')) for a in out))
+        open(os.path.join(tc, 'lib/gcc/aarch64-linux-android/4.9.x/libgcc.a'), 'w').close()   # (r19 - r21d)
+        self.assertIn('-rtlib=libgcc', self.run_tool(tool, '@objs.rsp', '-shared', '-o', 'x.so'))
+
     def test_libcxx_default(self):
         """the unified sysroot's libc++ for C++ without -stdlib (Unity 2021.x / 2022.x's Bee build), as the
         NDK's clang++ does; nothing added for C, an explicit -stdlib, or an NDK without libc++ headers"""

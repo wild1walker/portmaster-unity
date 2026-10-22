@@ -76,7 +76,9 @@ il2cpp's Android toolchain runs them (`toolchains/llvm/prebuilt/linux-x86_64/bin
 `<triple>-objcopy`, `<triple>/bin/objcopy`, `llvm-objcopy`, ...) and runs Ubuntu's clang 14 and
 lld with the NDK's sysroot, libc++ and libgcc (the NDK's clang finds those next to itself, and its
 clang++ takes libc++ without being told: the stand-in adds `-stdlib=libc++` to C++ when the
-command has no `-stdlib`, as 2021.x's Bee build's commands have none). The tools thus run natively on arm64
+command has no `-stdlib`, as 2021.x's Bee build's commands have none; r23b has no libgcc, and its
+links take compiler-rt's builtins and a static libunwind from the NDK clang's resource folder,
+`lib64/clang/12.0.8`, as the NDK's clang does). The tools thus run natively on arm64
 hosts (Apple Silicon) as on x86-64 ones. Differences from the NDK's own clang 8 (r19): lld instead
 of GNU ld, no `-g` (debug info changes no code; `PMUNITY_IL2CPP_DEBUG_INFO=1` keeps it), and the
 newer compiler's code generation.
@@ -386,10 +388,11 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
 | 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; sound since the loader raises small thread stacks (below) |
 | same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
+| 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
-2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3); the metadata versions match those of real IL2CPP builds
-of these lines (a 2020.3 Android build's is 27). The layout of the APK matches Unity's IL2CPP
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3); the metadata versions match those of real IL2CPP builds
+of these lines (a 2020.3 Android build's is 27, 2021.3's 29). The layout of the APK matches Unity's IL2CPP
 builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
 `Managed/Resources/mscorlib.dll-resources.dat`, the 18 `Managed/etc/mono` files (2020.3), no
 assemblies; `libil2cpp.so` needs the same four libraries (`liblog`, `libm`, `libdl`, `libc`).
@@ -425,9 +428,9 @@ What the runs showed:
 
 ## Not tested yet
 
-- Unity 2021.x / 2022.x (NDK r21d / r23b: the NDK selection and `ndk_wanted` know them, r23b's
-  compiler-rt builtins and libunwind in `lib64/clang/<ver>/lib/linux` are fetched but the link
-  flags for them are not); 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
+- Unity 2021.1 - 2021.2 and 2022.1 (NDK r21d, like 2021.3; 2021.1 has no Bee yet if its editor
+  installer has no `bee_backend` folder: then il2cpp's own builder runs, as for 2020.3), armv7
+  with 2021.x / 2022.x; 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
   2017.4 .NET 4.x games (`net45`: none among the free 2017.4 builds surveyed, all were .NET 3.5),
   .NET 3.5 games of 2018.x (`legacyunity` / `net20` with the newer UnityLinker), the ".NET 2.0"
   (`net20`) profile.
