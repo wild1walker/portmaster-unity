@@ -879,7 +879,7 @@ def port_new(ctx):
         pj = json.load(f)
     a = pj['attr']
     abis = ctx.cfg['player'].get('abis') or list(ABIS)
-    a['reqs'] = ['armhf'] if abis == ['armeabi-v7a'] else [r for r in a.get('reqs') or [] if r != 'armhf']
+    a['reqs'] = (['armhf'] if abis == ['armeabi-v7a'] else []) + [r for r in a.get('reqs') or [] if r != 'armhf']
     if not p.get('desc'):
         a['desc'] = f"{p['title']}: the game's own Android build, run on the handheld by ua_host."
     if not p.get('inst'):

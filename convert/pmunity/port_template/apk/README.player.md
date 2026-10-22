@@ -34,12 +34,16 @@ Saves and settings: `ports/@@PORTDIR@@/data/`. PortMaster's exit hotkey quits. T
 is the last run's log.
 
 The game's Java code does not run: Google Play services, ads, purchases and other Java SDKs see a
-phone without them. The pad reaches the game as an Android gamepad; games made only for touch need
-the pointer mode (`UA_POINTER=touch` in `port.env`).
+phone without them. Games made only for touch need the pointer mode (`UA_POINTER=touch` in
+`port.env`).
 
 Moved the card to a handheld without a 32-bit userland after a 32-bit setup? Install the port
 again, delete `ports/@@PORTDIR@@/@@READY@@` and launch: the setup takes the installed APK again,
 with its 64-bit player.
+
+## Controls
+
+@@CONTROLS@@
 
 ## Licences
 
