@@ -1068,6 +1068,10 @@ def plan(args):
                     args.gi_neon += 1
     if getattr(args, 'data_path', False):
         items += ST.data_folder_items(src, os.path.join(args.name, ST.FOLDER))
+    for n, path in memory_advice(pkg, getattr(args, 'il2cpp', None)):
+        # read through AAssetManager (ua_host: the loose assets beside the APK), as from an Android build's APK
+        items.append((os.path.join(args.name, 'assets', n), path, 'link'))
+        args.loose_assets = list(args.loose_assets or []) + [n]
     udr_dst = os.path.join(data, *default_resources_path(getattr(args, 'unity', None)))
     items.append((udr_dst, pkg_default_resources(pkg), 'link'))
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
@@ -1290,6 +1294,25 @@ def player_version(pkg):
         v.exact = False                 # the file is often from an earlier patch of the line
         return v
     return None
+
+
+def memory_advice(pkg, il2cpp=None):
+    """[(name, path)]: the Memory Advice files (Apk/MemoryAdvice/ of the player package) when the
+    player reads them: Unity 2023.1's libunity opens realtime_features.json and realtime.tflite from
+    the APK's assets at start, and without them aborts (std::length_error) or crashes; an Android
+    build of 2023.1 carries them. Players without that code get nothing."""
+    ma = os.path.join(pkg, 'Apk', 'MemoryAdvice')
+    if not os.path.isdir(ma):
+        return []
+    libs = os.path.join(pkg, 'Variations', 'il2cpp' if il2cpp else 'mono', 'Release', 'Libs')
+    uses = False
+    for abi in sorted(os.listdir(libs)) if os.path.isdir(libs) else ():
+        p = os.path.join(libs, abi, 'libunity.so')
+        if os.path.isfile(p):
+            with open(p, 'rb') as f:
+                uses = b'realtime_features.json' in f.read()
+            break
+    return [(n, os.path.join(ma, n)) for n in sorted(os.listdir(ma))] if uses else []
 
 
 def missing_references(amanaged, names):

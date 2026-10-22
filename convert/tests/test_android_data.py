@@ -198,6 +198,24 @@ class OlderNewerLinesTest(unittest.TestCase):
             self.assertEqual(A.missing_references(d, names), {'netstandard': ['UnityEngine.CoreModule']})
             self.assertEqual(A.missing_references(d, names | {'netstandard.dll'}), {})
 
+    def test_memory_advice(self):
+        """2023.1's players read the Memory Advice models from the APK's assets: shipped only to a player
+        whose libunity names them"""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, 'Apk', 'MemoryAdvice'))
+            for n in ('realtime.tflite', 'realtime_features.json'):
+                with open(os.path.join(d, 'Apk', 'MemoryAdvice', n), 'wb') as f:
+                    f.write(b'{}')
+            lib = os.path.join(d, 'Variations', 'mono', 'Release', 'Libs', 'armeabi-v7a')
+            os.makedirs(lib)
+            with open(os.path.join(lib, 'libunity.so'), 'wb') as f:
+                f.write(b'\x7fELF...TuningForkUtils...realtime_features.json\0predictRealtime')
+            self.assertEqual([n for n, _ in A.memory_advice(d)], ['realtime.tflite', 'realtime_features.json'])
+            with open(os.path.join(lib, 'libunity.so'), 'wb') as f:
+                f.write(b'\x7fELF...')
+            self.assertEqual(A.memory_advice(d), [])
+            self.assertEqual(A.memory_advice(os.path.join(d, 'nothing')), [])
+
     def test_typetree_neighbours(self):
         """typetrees.read: an object a field shorter than UnityPy's tree for its version (6000.2.6f2's
         UnityConnectSettings lacks InsightsSettings, which UnityPy's trees have from 6000.2.0b7 on)
