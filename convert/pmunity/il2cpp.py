@@ -160,9 +160,11 @@ def _write(path, data, mode=None):
 
 
 def nsis_fetch(src, select, dest, log=log):
-    """Files of a non-solid NSIS installer (local or URL, or an nsis.Nsis) chosen by select(nsis path) -> relative
-    output path or None, written under dest. Neighbouring blocks are read together and several
-    reads run at once. Returns the relative paths written."""
+    """Files of an NSIS installer (local or URL, or an nsis.Nsis) chosen by select(nsis path) -> relative
+    output path or None, written under dest. Per-file blocks: neighbouring blocks are read together
+    and several reads run at once (Unity 6's chunked installers: 8-byte block words and LZMA in
+    chunks, nsis.dechunk). A solid Unity 6 installer is read file by file (nsis.Nsis.extract).
+    Returns the relative paths written."""
     from . import nsis
     ns = src if isinstance(src, nsis.Nsis) else nsis.Nsis(src)
     src = ns.s.src
@@ -173,8 +175,18 @@ def nsis_fetch(src, select, dest, log=log):
             want.setdefault(off, (size, []))[1].append(rel)
     if not want:
         return []
-    items = [(ns.data_base + off, size + 4 + 64, off) for off, (size, _) in want.items()]
     got, total = [], 0
+    if ns.solid:
+        for off, (size, rels) in sorted(want.items()):
+            data = ns.extract(off)
+            total += len(data)
+            for rel in rels:
+                _write(os.path.join(dest, rel), data)
+                got.append(rel)
+        log(f'  {len(got)} files, {total / 1e6:.1f} MB (uncompressed) read')
+        return got
+    word = 8 if ns.chunked else 4
+    items = [(ns.data_base + off, size + word + 64, off) for off, (size, _) in want.items()]
 
     def read_span(span):
         start, end, lst = span
@@ -182,12 +194,19 @@ def nsis_fetch(src, select, dest, log=log):
         return start, buf, lst
 
     def block(buf, p, off):
-        w, = struct.unpack_from('<I', buf, p)
-        n = w & 0x7fffffff
-        blk = buf[p + 4:p + 4 + n]
+        if word == 8:
+            w, = struct.unpack_from('<Q', buf, p)
+            n, packed = w & 0x7fffffffffffffff, w >> 63
+        else:
+            w, = struct.unpack_from('<I', buf, p)
+            n, packed = w & 0x7fffffff, w & 0x80000000
+        blk = buf[p + word:p + word + n]
         if len(blk) < n:                    # the size estimate was short (last block): read it alone
-            blk = _get(src, ns.data_base + off + 4, n) if src.startswith('http') else _local(src, ns.data_base + off + 4, n)
-        return nsis.decompress(blk) if w & 0x80000000 else blk
+            at = ns.data_base + off + word
+            blk = _get(src, at, n) if src.startswith('http') else _local(src, at, n)
+        if not packed:
+            return blk
+        return nsis.dechunk(blk) if ns.chunked else nsis.decompress(blk)
 
     for start, buf, lst in _parallel(read_span, _spans(items)):
         total += len(buf)
@@ -581,6 +600,11 @@ def deploy_tool(editor, name):
     p = os.path.join(d, f'{name}.dll')
     if os.path.isfile(p):
         return p
+    if os.path.isfile(os.path.join(d, f'{name}.exe')):
+        # Unity 6: il2cpp is a natively compiled program (the Windows editor's a Windows x86-64 one),
+        # with no .NET il2cpp.dll for the container's or the handheld's .NET to run
+        raise SystemExit(f'{editor}: this Unity\'s {name} is a native Windows program ({name}.exe without a .NET '
+                         f'{name}.dll); the IL2CPP route runs Unity 2017.4 - 2022.3\'s .NET il2cpp (docs/il2cpp.md)')
     raise SystemExit(f'{editor}: no {name} program under il2cpp/build')
 
 
@@ -602,7 +626,11 @@ def bcl_profile(version, net, subset=False):
       .NET 3.5, ".NET 2.0 Subset"   legacyunity  Mono/lib/mono/unity       (2017.x, 2018.x)
       .NET 3.5, ".NET 2.0"          net20        Mono/lib/mono/2.0
       .NET 4.x, 2017.x              net45        MonoBleedingEdge/lib/mono/4.5
-      .NET 4.x, 2018.1+             unityaot     MonoBleedingEdge/lib/mono/unityaot
+      .NET 4.x, 2018.1 - 2021.1     unityaot     MonoBleedingEdge/lib/mono/unityaot
+      .NET 4.x, 2021.2+             unityaot-linux  MonoBleedingEdge/lib/mono/unityaot-linux (the
+                                    class libraries became per platform: -linux, -macos, -win32;
+                                    Android builds take the Linux one; Unity 6's installer has no
+                                    plain unityaot folder)
     `subset`: the game's own class libraries are the "unity" profile (subset_profile)."""
     if net == 2:
         if version.line >= (2019, 1):
@@ -610,6 +638,8 @@ def bcl_profile(version, net, subset=False):
         return ('legacyunity', 'Mono/lib/mono/unity') if subset else ('net20', 'Mono/lib/mono/2.0')
     if version.line < (2018, 1):
         return 'net45', 'MonoBleedingEdge/lib/mono/4.5'
+    if version.line >= (2021, 2):
+        return 'unityaot-linux', 'MonoBleedingEdge/lib/mono/unityaot-linux'
     return 'unityaot', BCL_DIR
 
 

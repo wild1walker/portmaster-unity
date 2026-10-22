@@ -798,6 +798,9 @@ def decide_routes(rep):
         vv = None
     if vv and vv.line < (2017, 4):
         why.append(f'Unity {v}: the arm64 IL2CPP players start with 2017.4')
+    elif vv and vv.line >= (2023, 1):
+        why.append(f'Unity {v}: its il2cpp is a native Windows/macOS/Linux x86-64 program, not a .NET one '
+                   f'(the route runs 2017.4 - 2022.3\'s)')
     elif v and not supported:
         why.append(f'Unity {v}: the converter supports {UV.FIRST[0]}.{UV.FIRST[1]} - {UV.LAST[0]}.{UV.LAST[1]}')
     if gl is None:

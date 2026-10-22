@@ -21,6 +21,12 @@ same name (a port's patched `Assembly-CSharp.dll`, its helper assembly), `--asmp
 runs tools/asmpatch on the game's `Managed` and compiles what it changed (as `android-data
 --asmpatch`: e.g. `--asmpatch "dotnet asmpatch.dll --only=rewired-android"`). With IL2CPP the
 assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data.
+**Unity versions**: 2017.4 - 2022.3. Their il2cpp is a .NET program the container's (or, with
+`--on-device`, the handheld's) .NET runs; from 2021.2 the class libraries are per platform and the
+build takes `unityaot-linux`, as Unity's Android builds do. From 2023.1 (Unity 6 included) il2cpp
+is a natively compiled program for the editor's own system (the Windows installer's `il2cpp.exe`
+is Windows x86-64 code, with no `il2cpp.dll`): not runnable here yet, so the route stops with a
+message (a Linux x86-64 il2cpp under emulation would be the way).
 `--link-xml FILE` gives UnityLinker a port's own link.xml (what the game reaches only by reflection,
 e.g. the types XmlSerializer writes into saves); the 2017.x linker ignores the whole file when
 anything, even a comment, comes before `<linker>`.
