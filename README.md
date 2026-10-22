@@ -107,7 +107,7 @@ Each column is one kind of game build and the way it runs on the handheld (a *ro
 |---|---|---|---|
 | **A** | Mono build for Linux or macOS | Unity's 32-bit ARM Android player, on the handheld's 32-bit userland; the game's data is converted on the handheld | `pmunity port new` (route `android`) |
 | **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES | route `android` with `shaders.from = ["d3d11"]` (build `tools/hlslcc/build.sh` first) |
-| **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmunity il2cpp`, by hand ([docs/il2cpp.md](docs/il2cpp.md)) |
+| **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmunity port new --route il2cpp-arm64`; by hand: `pmunity il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
 | **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmunity apk`, by hand ([docs/apk.md](docs/apk.md)) |
 | **E** | Linux x86-64 build, Mono or IL2CPP | the game's own Linux player, translated by box64; about half the frame rate of A | `pmunity port new --route box64` ([docs/box64-route.md](docs/box64-route.md)) |
 

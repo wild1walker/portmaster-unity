@@ -1,0 +1,248 @@
+#!/bin/bash
+# First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
+# `pmunity port new`, il2cpp-arm64 route): builds the game for Unity's 64-bit (arm64) IL2CPP
+# Android player from the player's own copy in ports/<port>/gamedata/, for systems without a 32-bit
+# userland (Unity's Android Mono players are 32-bit only):
+#   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
+#      Linux installer .sh: its zip is unpacked, the script never runs) put there
+#   2. the game's code compiled with Unity's IL2CPP here on the handheld (pmunity il2cpp
+#      --on-device): Unity's IL2CPP tools and its arm64 IL2CPP player for the game's Unity version
+#      (range reads from Unity), compilers from Debian and .NET from Microsoft (pinned by checksum),
+#      then UnityLinker, il2cpp and the C++ build: one to a few hours, Wi-Fi for the downloads
+#   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps)
+#   4. the APK + OBB the player reads (pmunity android-data --il2cpp: IL2CPP's metadata instead of
+#      the assemblies)
+#   5. installing: the IL2CPP player's libraries with the game's libil2cpp.so, the game
+# Settings: setup/setup.env (from port.toml). Every step can be interrupted (battery, power button):
+# the next launch continues where it stopped. Log: ports/<port>/patchlog.txt.
+# PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why the setup failed.
+S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+. "$S/setup.env"
+
+exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
+echo "=== $(date) $PORT_TITLE setup ==="
+fail() { echo "PATCH_FAIL_MSG:$1"; echo "Setup failed: $1"; echo "Patching process failed!"; exit 1; }
+step() { echo; echo "== $(date +%H:%M:%S) $*"; }
+hook() {                                # the port's own step at a fixed point (setup/hooks/<name>.sh)
+  [ -f "$S/hooks/$1.sh" ] || return 0
+  step "$PORT_TITLE: $1"
+  . "$S/hooks/$1.sh" || fail "The port's $1 step failed (see patchlog.txt)."
+}
+lower() { echo "$1" | tr 'A-Z' 'a-z'; }
+free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
+room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB>: that much free (or unknown)
+[ "$DEVICE_ARCH" = aarch64 ] || fail "The setup needs a 64-bit (aarch64) system for its tools (this one: $DEVICE_ARCH)."
+SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
+mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
+echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
+# Python's TLS needs the system's CA certificates (for Unity's servers)
+if [ -z "$SSL_CERT_FILE" ]; then
+  for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
+    [ -f "$f" ] && { export SSL_CERT_FILE="$f"; break; }
+  done
+fi
+export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+
+# ---- the setup's Python (CPython + UnityPy and the image/audio libraries, aarch64)
+PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4, PIL" 2>/dev/null; then
+  step "unpacking the setup tools"
+  rm -rf "$W/python"
+  # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
+  ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
+  PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+  [ -n "$PY" ] || fail "The setup's Python is incomplete."
+fi
+export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
+pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
+
+# ---- answers to the port's questions: kept from the first run, else PortMaster's patcher (<ID> in
+# the environment), else setup.txt (<id>=<value>, older PortMaster), else the default
+CONVERT_SET=(); : > "$W/answers.env.new"
+for id in $QUESTIONS; do
+  eval "opts=\$Q_${id}_OPTIONS def=\$Q_${id}_DEFAULT qset=\$Q_${id}_SET qenv=\$Q_${id}_ENV"
+  v=$(cat "$W/answers/$id" 2>/dev/null)
+  [ -n "$v" ] || v=${!id}
+  [ -n "$v" ] || v=$(sed -n "s/^[[:space:]]*$(lower "$id")[[:space:]]*=[[:space:]]*\([A-Za-z0-9._:+-]*\).*/\1/p" "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
+  case " $opts " in *" $v "*) ;; *) v=$def;; esac
+  mkdir -p "$W/answers"; echo "$v" > "$W/answers/$id"
+  echo "$id: $v"
+  [ -n "$qset" ] && CONVERT_SET+=(--set "$qset=$v")
+  [ -n "$qenv" ] && echo "export $qenv='$v'" >> "$W/answers.env.new"
+done
+mv -f "$W/answers.env.new" "$W/answers.env"
+
+# ---- 1. the game's data folder
+find_data() {   # find_data <dir> <glob>: the first folder named <glob> under <dir> with Unity's files
+  find "$1" -maxdepth 6 -name .setup -prune -o -type d -name "$2" -print 2>/dev/null | while read -r d; do
+    if [ -f "$d/globalgamemanagers" ] || [ -f "$d/data.unity3d" ] || [ -f "$d/mainData" ]; then echo "$d"; break; fi
+  done
+}
+find_any() {    # the port's data folder, else any Unity data folder
+  local d; d=$(find_data "$1" "$GAME_DATA")
+  [ -n "$d" ] || d=$(find_data "$1" '*_Data')
+  [ -n "$d" ] || d=$(find_data "$1" 'Data')
+  echo "$d"
+}
+if [ ! -f "$W/.step_game" ]; then
+  D=$(find_any "$GD")
+  if [ -z "$D" ]; then
+    need=$((GAME_SIZE_MB * 3 + 500)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+    for a in "$GD"/*; do
+      [ -f "$a" ] || continue
+      case "$(lower "$a")" in
+        *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2) ;;
+        *.sh) head -c 65536 "$a" | grep -aqE 'Makeself|MojoSetup' || continue;;   # GOG's Linux installer (read, never run)
+        *) continue;;
+      esac
+      room "$need" || fail "Unpacking $(basename "$a") needs about $need MB free on the card ($(free_mb) MB free)."
+      step "unpacking $(basename "$a")"
+      [ -x "$SEVENZ" ] || fail "PortMaster's 7-Zip is missing: update PortMaster, or unpack $(basename "$a") into gamedata/ yourself."
+      rm -rf "$W/unpacked"; mkdir -p "$W/unpacked"
+      case "$(lower "$a")" in
+        *.tar|*.zip|*.7z|*.rar) "$SEVENZ" x -y -o"$W/unpacked" "$a" >/dev/null ;;
+        *.sh) "$SEVENZ" x -tzip -y -o"$W/unpacked" "$a" >/dev/null ;;        # the zip after the installer's script
+        *) "$SEVENZ" x -so "$a" 2>/dev/null | "$SEVENZ" x -si -ttar -y -o"$W/unpacked" >/dev/null ;;
+      esac || fail "Could not unpack $(basename "$a") (see patchlog.txt)."
+      D=$(find_any "$W/unpacked")
+      [ -n "$D" ] && break
+      rm -rf "$W/unpacked"
+    done
+  fi
+  if [ -z "$D" ] && ls "$GD"/*.pkg >/dev/null 2>&1; then
+    need=$((GAME_SIZE_MB * 3 + 500)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+    room "$need" || fail "Unpacking the installers needs about $need MB free on the card ($(free_mb) MB free)."
+    step "unpacking the macOS installers"
+    rm -rf "$W/pkgroot"
+    # shellcheck disable=SC2046
+    pm macpkg "$W/pkgroot" $(ls -S "$GD"/*.pkg) || fail "Could not unpack the installers (see patchlog.txt)."
+    D=$(find_any "$W/pkgroot")
+  fi
+  hook game                               # (a port's own way to find or unpack the game: sets D)
+  [ -n "$D" ] || fail "Put $GAME_WHAT in ports/$PORT_NAME/gamedata, then launch again."
+  echo "the game's data: ${D#$GAMEDIR/}"
+  if [ ! -f "$D/globalgamemanagers" ] && [ -f "$D/data.unity3d" ]; then
+    step "unpacking the game's data.unity3d"
+    pm unpack "$D" --remove || fail "Could not unpack the game's data.unity3d (see patchlog.txt)."
+  fi
+  V=$(pm version "$D") || fail "This is not a Unity game's data folder the setup can read: ${D#$GAMEDIR/}."
+  case "$V" in *"not supported"*) fail "Your copy was built with Unity ${V%% *}, which the converter does not support.";; esac
+  V=${V%% *}
+  echo "Unity $V"
+  if [ -n "$UNITY_VERSIONS" ]; then
+    case " $UNITY_VERSIONS " in *" $V "*) ;; *)
+      fail "This port is made for $PORT_TITLE built with Unity $UNITY_VERSIONS; your copy was built with Unity $V (another version of the game?).";;
+    esac
+  fi
+  echo "$D" > "$W/.data"; echo "$V" > "$W/.version"
+  touch "$W/.step_game"
+fi
+D=$(cat "$W/.data"); V=$(cat "$W/.version")
+
+# ---- 2. the game's code, compiled with Unity's IL2CPP for its arm64 player (the patched and
+# added assemblies, and asmpatch's patches, are compiled in: they do not go to android-data)
+P="$W/player"
+if [ ! -f "$W/.step_il2cpp" ]; then
+  [ ${#ASSEMBLY_PATCHES[@]} -eq 0 ] || fail "This port's assembly patches are not supported on the il2cpp-arm64 route yet."
+  room 1600 || fail "Compiling the game's code needs about 1600 MB free on the card ($(free_mb) MB free)."
+  step "compiling the game's code with Unity's IL2CPP (downloads about 160 MB, needs Wi-Fi; one to a few hours; an interrupted build continues)"
+  args=("$D" "$W/il2cpp" --on-device --abi arm64-v8a --home "$W/il2cpp-home" --pkg "$P")
+  for f in "${MANAGED_FILES[@]}"; do args+=(--managed-file "$S/$f"); done
+  if [ "$ASMPATCH" != off ] && [ -f "$S/asmpatch" ]; then
+    chmod +x "$S/asmpatch"
+    a="'$S/asmpatch'"
+    case "$ASMPATCH" in auto) ;; *) a="$a --only=$ASMPATCH";; esac
+    args+=(--asmpatch "$a")
+  fi
+  pm il2cpp "${args[@]}" || fail "Compiling the game's code failed (see patchlog.txt). Launch again to continue."
+  [ -f "$W/il2cpp/lib/arm64-v8a/libil2cpp.so" ] || fail "The IL2CPP build made no libil2cpp.so (see patchlog.txt)."
+  [ -f "$P/Variations/il2cpp/Release/Libs/arm64-v8a/libunity.so" ] || fail "Unity's IL2CPP player is incomplete (see patchlog.txt)."
+  for kv in $PLAYER_SHA256; do
+    f=${kv%%=*}; h=${kv#*=}
+    got=$(sha256sum "$P/Variations/il2cpp/Release/Libs/arm64-v8a/$f" 2>/dev/null | cut -d' ' -f1)
+    [ "$got" = "$h" ] || fail "Unity's player file $f is not the one this port was made with (checksum)."
+  done
+  rm -rf "$W/il2cpp-home" "$W/il2cpp/.work"     # the tools and the generated C++ (about 1 GB)
+  touch "$W/.step_il2cpp"
+fi
+
+# ---- 3. the conversion
+if [ ! -f "$W/.step_convert" ]; then
+  hook pre_convert
+  need=$((GAME_SIZE_MB * 3 / 2 + 300)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+  room "$need" || fail "Converting the game needs about $need MB free on the card ($(free_mb) MB free)."
+  step "converting the game (if this is interrupted, the next launch continues where it stopped)"
+  sed "s|{setup}|$S|g" "$S/convert.json" > "$W/convert.json"
+  plugins=(); for f in "${CONVERT_PLUGINS[@]}"; do plugins+=(--plugin "$S/$f"); done
+  pm convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" \
+    || fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."
+  hook post_convert
+  touch "$W/.step_convert"
+fi
+
+# ---- 4. what Unity's IL2CPP player reads: APK + OBB (the data's files are moved into them), with
+# IL2CPP's metadata in place of the assemblies
+if [ ! -f "$W/.step_package" ]; then
+  step "packing the game for the player"
+  args=(--src "$D" --pkg "$P" --il2cpp "$W/il2cpp" --out "$W/android" --name "$APK_NAME" --package "$PACKAGE"
+        --swappy "$SWAPPY" --consume-src --verify-bundles 2 --pack all)
+  [ "$VIDEO_SHADER" = 1 ] || args+=(--no-video-shader)
+  args+=(--streaming-assets "${STREAMING_ASSETS:-obb}")
+  [ "${DATA_PATH:-0}" = 1 ] && args+=(--data-path)
+  pm android-data "${args[@]}" "${ANDROID_DATA_ARGS[@]}" \
+    || fail "Packing the game failed (see patchlog.txt). Launch again to continue."
+  hook post_pack
+  touch "$W/.step_package"
+fi
+
+# ---- 5. into place: the IL2CPP player's libraries with the game's libil2cpp.so, and the APK and OBB
+step "installing"
+Z="$W/android/zip"
+L="$P/Variations/il2cpp/Release/Libs/arm64-v8a"
+mkdir -p "$GAMEDIR/lib"
+rm -f "$GAMEDIR/lib/"*.so
+for f in "$L"/*.so; do
+  [ -f "$f" ] || continue
+  [ "$(basename "$f")" = libil2cpp.so ] && continue
+  cp "$f" "$GAMEDIR/lib/" || fail "Could not install Unity's player."
+done
+cp "$W/il2cpp/lib/arm64-v8a/libil2cpp.so" "$GAMEDIR/lib/" || fail "Could not install the game's libil2cpp.so."
+[ -f "$GAMEDIR/lib/libunity.so" ] || fail "Unity's player is incomplete (see patchlog.txt)."
+[ -d "$Z/assets" ] && rm -rf "$GAMEDIR/assets"        # (an interrupted install moved it already)
+if [ -d "$Z/Game_Data" ] && [ -d "$GAMEDIR/Game_Data" ]; then
+  rm -rf "$GAMEDIR/Game_Data/StreamingAssets"
+  for f in "$Z/Game_Data"/*; do
+    [ -e "$f" ] || continue
+    rm -rf "$GAMEDIR/Game_Data/$(basename "$f")"
+    mv -f "$f" "$GAMEDIR/Game_Data/" || fail "Could not install $(basename "$f")."
+  done
+  rm -rf "$Z/Game_Data"
+fi
+for f in "$Z"/*; do
+  [ -e "$f" ] || continue
+  mv -f "$f" "$GAMEDIR/" || fail "Could not install $(basename "$f")."
+done
+cp "$W/answers.env" "$GAMEDIR/answers.env"
+hook post_install
+# the copy of the game the setup used up (its files went into the APK and OBB), and the tools
+top=${D#$GD/}; top=${top%%/*}
+case "$D" in "$W"/*) ;; *) [ -n "$top" ] && [ "$top" != "$(basename "$W")" ] && rm -rf "${GD:?}/$top";; esac
+rm -rf "$W" "$S"
+sync
+touch "$GAMEDIR/$READY"
+# archives and installers the setup unpacked (the game's, Unity's player installer) are not needed
+# any more: removed, as PortMaster ports' setups do, unless setup.txt says keep_installers=1
+keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
+for a in "$GD"/*; do
+  [ -f "$a" ] || continue
+  case "$(lower "$a")" in
+    *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.pkg|*/unitysetup-*.exe) ;;
+    *.sh) head -c 65536 "$a" | grep -aqE 'Makeself|MojoSetup' || continue;;
+    *) continue;;
+  esac
+  if [ "$keep" = 1 ]; then echo "kept $(basename "$a") (keep_installers=1)"; continue; fi
+  echo "removing $(basename "$a"): not needed to play (keep_installers=1 in setup.txt keeps it)"
+  rm -f "$a"
+done
+sync
+step "setup finished: $(du -sm "$GAMEDIR" | cut -f1) MB."

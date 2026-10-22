@@ -52,7 +52,7 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | route | when | status |
 |---|---|---|
 | `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
-| `il2cpp-arm64` | a Mono build on a 64-bit-only system: the game compiled with IL2CPP into an arm64 Android player | `pmunity il2cpp` + `android-data --il2cpp` on the porter's PC/Mac (docs/il2cpp.md; 2018.4-2020.3 checked); no port template yet |
+| `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. Not yet: assembly patches (`files.assembly_patches`), StreamingAssets read as files (`streaming_assets` other than `obb`) |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
 | `apk` | an Android build of the game | `pmunity apk` by hand ([apk.md](apk.md)); no port template yet |
 
@@ -74,7 +74,8 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
 {
   "title": "what the route is",
   "files": {"@@TITLE@@.sh": "launcher.sh", "@@PORTDIR@@/setup/patchscript": "patchscript", "...": "..."},
-  "package": ["ua_host", "pmunity", "pybundle", "asmpatch?"]
+  "package": ["ua_host", "pmunity", "pybundle", "asmpatch?"],
+  "defaults": {"player": {"backend": "il2cpp", "abi": "arm64-v8a"}}
 }
 ```
 
@@ -84,8 +85,8 @@ and then in `port_template/common/` (the READMEs, the gamedata note, the exit-ho
 `SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`; an unknown
 name is an error). Everything else a launcher or setup needs comes from files `port new` writes
 next to them: `setup/setup.env` (shell assignments), `setup/convert.json`, `port.env`,
-`setup/questions.lua`. `package` names the parts the release zip gets (`asmpatch?`: only when the
-port uses it); a part the packager does not know comes from a hook module (below). The box64
+`setup/questions.lua`. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host; `asmpatch?`: only
+when the port uses it); `defaults` are port.toml values the route sets where port.toml says nothing; a part the packager does not know comes from a hook module (below). The box64
 route can bring its own launcher and setup this way and share the common files.
 
 ## 3. port new

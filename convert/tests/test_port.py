@@ -320,6 +320,38 @@ class NewAndSetupTest(unittest.TestCase):
             self.make(t, {'questions': []})
             self.assertFalse(os.path.exists(os.path.join(out, 'mygame', 'setup', 'questions.lua')))
 
+    def test_il2cpp_arm64_route(self):
+        # the 64-bit route: offered by the check, its player defaults, a launcher without the 32-bit
+        # userland, and a port.json PortMaster offers to 64-bit-only systems
+        with tempfile.TemporaryDirectory() as t:
+            game = os.path.join(t, 'src', 'My Game')
+            fake_game(game, version='2019.4.8f1', name='My Game')
+            rep = P.check(game, asmpatch='/nonexistent-asmpatch')
+            r = next(x for x in rep['routes'] if x['route'] == 'il2cpp-arm64')
+            self.assertTrue(r['ok'] and r['available'], r)
+            self.assertEqual(rep['route'], 'android')           # (still the recommended one)
+            _, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}})
+            env = open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read()
+            self.assertIn('PORT_ROUTE=il2cpp-arm64', env)
+            self.assertIn('PLAYER_BACKEND=il2cpp', env)
+            self.assertIn('PLAYER_ABI=arm64-v8a', env)
+            launcher = open(os.path.join(out, 'My Game.sh')).read()
+            self.assertNotIn('lib32', launcher)
+            self.assertNotIn('SDL_AUDIODRIVER', launcher)
+            self.assertIn('uname -m', launcher)
+            setup = open(os.path.join(out, 'mygame', 'setup', 'patchscript')).read()
+            self.assertIn('--on-device', setup)
+            self.assertIn('--il2cpp "$W/il2cpp"', setup)
+            self.assertNotIn('MonoLibs', setup)
+            for f in ('My Game.sh', 'mygame/setup/patchscript'):
+                subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
+            pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn('IL2CPP', pj['attr']['inst'])
+            # a player set in port.toml wins over the route's default
+            _, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}, 'player': {'abi': 'armeabi-v7a'}})
+            self.assertIn('PLAYER_ABI=armeabi-v7a', open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read())
+
     def test_package(self):
         with tempfile.TemporaryDirectory() as t:
             _, out = self.make(t, {'build': {'commands': ['echo tool > "$BUILD/tool" && chmod +x "$BUILD/tool"'],

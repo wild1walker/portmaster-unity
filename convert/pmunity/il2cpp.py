@@ -1236,6 +1236,28 @@ def default_home():
     return os.environ.get('PMUNITY_IL2CPP_HOME') or os.path.join(os.path.expanduser('~'), '.cache', 'pmunity', 'il2cpp')
 
 
+def port_new(ctx):
+    """`pmunity port new` hook: port.json for the il2cpp-arm64 route (no 32-bit userland needed; the
+    setup compiles the game's code on the handheld)."""
+    p = ctx.cfg['port']
+    if p['route'] != 'il2cpp-arm64':
+        return
+    pj_path = os.path.join(ctx.out, p['name'], 'port.json')
+    if not os.path.isfile(pj_path):
+        return
+    with open(pj_path) as f:
+        pj = json.load(f)
+    a = pj['attr']
+    a['reqs'] = [r for r in a.get('reqs') or [] if r != 'armhf']
+    if not p.get('desc'):
+        a['desc'] = f"{p['title']} on Unity's 64-bit Android player (its code compiled with IL2CPP on the handheld)."
+    if not p.get('inst'):
+        a['inst'] = (f"Requires {ctx.cfg['game']['what']}: put it in ports/{p['name']}/gamedata. The first launch builds "
+                     f"the game on the handheld and compiles its code with Unity's IL2CPP ({p['setup_time']}, plus one to a "
+                     f"few hours for the code; about 1.6 GB free; Wi-Fi for Unity's and Debian's files).")
+    ctx.write(f"{p['name']}/port.json", json.dumps(pj, indent=4) + '\n')
+
+
 def main(argv):
     if argv[:1] == ['fetch']:
         ap = argparse.ArgumentParser(prog='pmunity il2cpp fetch')

@@ -1,0 +1,14 @@
+{
+  "title": "the game's code compiled with IL2CPP on the handheld, run on Unity's arm64 IL2CPP Android player by ua_host (for 64-bit-only systems)",
+  "defaults": {"player": {"backend": "il2cpp", "abi": "arm64-v8a"}},
+  "files": {
+    "@@TITLE@@.sh": "launcher.sh",
+    "@@PORTDIR@@/setup/patchscript": "patchscript",
+    "@@PORTDIR@@/README.md": "README.player.md",
+    "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
+    "@@PORTDIR@@/@@PORTDIR@@.ini": "hotkey.ini",
+    "README.md": "README.port.md",
+    "package.sh": "package.sh"
+  },
+  "package": ["ua_host_arm64", "pmunity", "pybundle", "asmpatch?"]
+}

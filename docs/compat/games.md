@@ -72,7 +72,7 @@ The shaders left out everywhere are BlitToDepth_MSAA and the VR blit.
 
 | game | Unity | emulated rig (arm64) | handheld (64-bit userland) | last checked |
 |---|---|---|---|---|
-| Loco Motive (Game Jam) | 2018.4.36f1 | title menu | title 59.4 - 59.6 fps | 2026-10-20 |
+| Loco Motive (Game Jam) | 2018.4.36f1 | title menu; as a port made with `--route il2cpp-arm64`, its setup (the IL2CPP build on the device included) rehearsed in an arm64 container with 1 GB, then the title menu | title 59.4 - 59.6 fps | 2026-10-21 |
 | buggish | 2019.4.8f1 | title | title 59.4 - 59.6 fps | 2026-10-20 |
 | Tom City | 2020.3.49f1 | title | title 59.4 - 59.6 fps | 2026-10-20 |
 | [Unsung Warriors - Prologue](https://unsungwarriors.itch.io/unsung-warriors-prologue) | 2017.4.40f1, .NET 3.5, Rewired | both intro videos, title menu (about 45 fps in the native arm64 rig); with `--asmpatch rewired-android` the pad skips the intro and opens the main menu. Sound: 2017.4's arm64 FMOD lost its mixer thread to glibc's larger minimum stack until the loader raised small stack sizes. The armv7 IL2CPP build reaches its title in the armhf rig, with sound | not yet | 2026-10-21 |

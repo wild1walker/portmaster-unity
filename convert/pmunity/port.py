@@ -736,7 +736,7 @@ _INPUT_MODULES = {
 
 ROUTE_TEXT = {
     'android': "Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime",
-    'il2cpp-arm64': 'the game compiled with IL2CPP into an arm64 Android player (for 64-bit-only systems; `pmunity il2cpp`, coming)',
+    'il2cpp-arm64': "the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)",
     'box64': "the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)",
     'apk': "the game's own Android build (`pmunity apk`)",
 }
@@ -790,10 +790,25 @@ def decide_routes(rep):
     if b.get('compressed'):
         needs.append('a compressed build: the setup unpacks it first (pmunity unpack)')
     routes.append({'route': 'android', 'ok': not why, 'why': why, 'needs': needs})
-    # IL2CPP to arm64 (64-bit only systems)
-    routes.append({'route': 'il2cpp-arm64', 'ok': False, 'available': False,
-                   'why': ['not available yet (il2cpp-build: `pmunity il2cpp`)'] + ([] if mono else ['needs a Mono build']),
-                   'needs': []})
+    # IL2CPP to arm64 (64-bit only systems): the game's code compiled on the handheld in the setup
+    why = [] if mono else ['needs a Mono build (an IL2CPP desktop build is compiled for its own system)']
+    try:
+        vv = UV.Version(str(v)) if v else None
+    except ValueError:
+        vv = None
+    if vv and vv.line < (2017, 4):
+        why.append(f'Unity {v}: the arm64 IL2CPP players start with 2017.4')
+    elif v and not supported:
+        why.append(f'Unity {v}: the converter supports {UV.FIRST[0]}.{UV.FIRST[1]} - {UV.LAST[0]}.{UV.LAST[1]}')
+    if gl is None:
+        why.append('no shader programs the converter translates')
+    routes.append({'route': 'il2cpp-arm64', 'ok': not why,
+                   'available': os.path.isfile(os.path.join(TEMPLATES, 'il2cpp-arm64', 'route.json')),
+                   'why': why, 'needs': [] if why else [
+                       "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp "
+                       "--on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of "
+                       "memory, Wi-Fi for Unity's and Debian's files",
+                       'tested to the title in the arm64 rig with Unity 2017.4 - 2020.3']})
     # box64: the game's own x86-64 Linux player
     why = []
     if b.get('build') != 'linux':
@@ -1450,6 +1465,12 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     if title:
         over.setdefault('port', {})['title'] = title
     cfg = build_config(name, rep, merge(user, over))
+    # the route's own defaults (route.json "defaults", e.g. the IL2CPP player), where port.toml
+    # says nothing
+    for sec, vals in ((routes().get(cfg['port']['route']) or {}).get('defaults') or {}).items():
+        for k, v in vals.items():
+            if k not in (user.get(sec) or {}):
+                cfg[sec][k] = v
     if player:
         pj = os.path.join(player, 'player.json')
         if os.path.isfile(pj):
@@ -1639,6 +1660,17 @@ def _component_ua_host(ctx, opts):
         ctx.license(f'LICENSE.{n[:-len(".copyright")]}.txt', os.path.join(ml, n))
 
 
+def _component_ua_host_arm64(ctx, opts):
+    """The 64-bit ua_host (runtime/host/out/arm64), for the il2cpp-arm64 route."""
+    rt = os.path.join(ctx.runtime, 'runtime')
+    o = dict(opts, ua_host=opts.get('ua_host_arm64') or os.path.join(rt, 'host', 'out', 'arm64', 'ua_host'),
+             media_licenses=opts.get('media_licenses') or os.path.join(rt, 'media', 'out', 'arm64', 'licenses'))
+    if not os.path.isfile(o['ua_host']) and not opts.get('no_build'):
+        ctx.log('building the 64-bit runtime (runtime/build.sh, Docker)')
+        subprocess.run([os.path.join(rt, 'build.sh')], check=True, env=dict(os.environ, ARCH='arm64'))
+    _component_ua_host(ctx, o)
+
+
 def _component_pmunity(ctx, opts):
     src = HERE
     for r, ds, fs in os.walk(src):
@@ -1685,7 +1717,7 @@ def _component_asmpatch(ctx, opts):
     ctx.license('LICENSE.mono.cecil.txt', text=CECIL_LICENSE)
 
 
-COMPONENTS = {'ua_host': _component_ua_host, 'pmunity': _component_pmunity, 'pybundle': _component_pybundle,
+COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'pmunity': _component_pmunity, 'pybundle': _component_pybundle,
               'asmpatch': _component_asmpatch}
 
 
