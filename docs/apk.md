@@ -186,6 +186,10 @@ the APK, named it `main.1.<package>.obb`, and the player mounted it and reached 
 Mono builds through `--il2cpp` (arm64 rig): a 2022.3 card battler (title, then into its first
 battle with pointer taps) and a 2019.4 portrait game (title, a run started with touch taps), each
 compiled in Docker in 15 - 31 minutes; docs/il2cpp.md, "Android builds with Mono", has the figures.
+The 2022.3 one as a port with `player.il2cpp = true`, rehearsed on a 64-bit-only stand-in
+(`REHEARSE_64ONLY=1`, an arm64 container with 1 GB + 1 GB swap): the setup compiled it with
+`--on-device` in 38 minutes (peak 989 MB, the conversion), installed 106 MB, and the installed game
+reached its first battle in the arm64 rig.
 
 ## Debugging
 

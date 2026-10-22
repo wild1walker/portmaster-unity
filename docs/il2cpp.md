@@ -269,7 +269,11 @@ Run so far (PC route, then the native arm64 rig), two free itch.io Mono APKs who
 | card battler, GLES2, Unity Services config | 2022.3.23f1 | 109 (24 of the game) | 31 min (Bee graph, 607 commands; incremental GC) | 53.1 MiB, 29 | 18.7 MiB (from 28.9) | title at the build's 30 fps; pointer taps go into its first battle's tutorial |
 | 2D, portrait, Vulkan + GLES3 | 2019.4.18f1 | 89 (8 of the game) | 15 min | 30.0 MiB, 24 | 18.3 MiB (from 28.4) | title (~140 fps in the rig); `UA_POINTER=touch` taps PLAY and a run starts |
 
-Neither logged an exception. Not tried yet: a Mono APK whose data is in an OBB (with an OBB mounted
+Neither logged an exception. The card battler's apk port (`player.il2cpp = true`) ran its setup on a
+64-bit-only stand-in (1 GB + 1 GB swap): `pmunity apk --il2cpp --on-device` in 38 minutes with
+the downloads (UnityLinker 0.4 min, peak 549 MB; the conversion 8.6 min, 474 MiB of C++, peak 989
+MB; 607 graph commands with 2 jobs in 11.6 min, peak 573 MB), and the install reached the same
+battle. Not tried yet: a Mono APK whose data is in an OBB (with an OBB mounted
 libunity 2020.3 listed no `Managed/` to copy out, above), split APKs and App Bundles with Mono,
 2017.4 and 2018.x Mono APKs, a game with native plugins of its own (left out, as said).
 
