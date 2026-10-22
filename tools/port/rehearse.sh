@@ -17,6 +17,8 @@
 #   PYTHON          a Python with Pillow, for shots.png (default python3)
 #   EMU_ENV         more variable prefixes for the emulated run (tools/emu/emu.sh), e.g. "UM_"
 #   EMU_ONLY=1      skip the setup: run what an earlier rehearsal in <work> installed
+#   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
+#                   is removed in the container first, so a launcher takes its 64-bit path
 # Game files stay in <work>; nothing of them goes anywhere else.
 set -euo pipefail
 ZIP=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); GAME=$2; WORK=$3; SECS=${4:-0}; INP=${5:-}
@@ -77,7 +79,7 @@ TXT
 echo "== setup in the container ($(date +%T))"
 t0=$(date +%s)
 docker run --rm --platform linux/arm64 --memory 1g --memory-swap 2g -v "$R":/roms -e ANSWERS="${ANSWERS:-}" \
-  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; export PATH=/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
+  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
