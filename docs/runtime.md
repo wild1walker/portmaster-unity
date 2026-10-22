@@ -68,6 +68,7 @@ Xvfb instead of `UA_EGL_PBUFFER=1`.
 | variable | effect |
 |---|---|
 | `UA_LIBDIR` | player libraries (default `<root>/lib`) |
+| `UA_SDK_INT` | the Android API level reported (`Build.VERSION.SDK_INT`, `ro.build.version.sdk`). Default: converted data 19 on armhf, 22 on arm64, or `android_package.json`'s `min_sdk` (22 for a game with compute kernels: Unity uses OpenGL ES 3.1+ only from API 21, [android-data.md](android-data.md#2-platform-differences)); an imported APK its targetSdkVersion ([apk.md](apk.md)) |
 | `UA_PACKAGE`, `UA_META` | package name; manifest meta-data (`unity.build-id=...` ties the APK to its OBB). Default: from `android_package.json` |
 | `UA_APK_NAME` | the APK's name without `.apk` (default: from `android_package.json`, else the only `.apk` in the root) |
 | `UA_OBB_DIR` | where the OBB is (default: beside the APK) |

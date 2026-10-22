@@ -66,6 +66,20 @@ the same, plus:
   * what only desktop GL 4.x or ES 3.20 has stays Unsupported: cube map array, buffer and 1D
     textures, image atomics, `textureQueryLevels`, interpolation functions, interface blocks
     (`out gl_PerVertex {...}`), layout qualifiers such as `component` or `index`.
+
+Compute kernels (ComputeShader assets, kernel_to_es) are HLSLcc's GLSL 4.20 / 4.30 compute
+shaders for OpenGL Core, one shader per kernel variant. They become GLSL ES 3.10 compute shaders
+under the GLSL 4.x rules, plus what ES 3.10 has for compute: `barrier()`,
+`memoryBarrierShared()`, `groupMemoryBarrier()`, `shared` variables and atomic counters
+(`GL_ARB_compute_shader` and `GL_ARB_shader_atomic_counters` are dropped too). Image atomics get
+`GL_OES_shader_image_atomic` (core in ES 3.20). Two image rules of ES 3.10 that desktop GL lacks:
+every image has a format qualifier (HLSLcc leaves it out of write-only images for desktop GL: the
+caller gives it, from the kernel's Vulkan SPIR-V, where HLSLcc wrote the format it would also
+write for GLES), and an image of a format other than r32f, r32i and r32ui is readonly or
+writeonly. Unity's own GLES3 kernels in its built-in resources (which hold GLCore and GLES3
+kernels of the same compute shaders) differ from the GLCore ones in the header only (version,
+the 420pack extension, the `precise` dummies) and in how HLSLcc writes the same operations
+(`uint(...)` around a value that already is one, `for` loops for `while(true)` ones).
 """
 import re
 
@@ -355,6 +369,124 @@ def precision_block(body, precision='highp', images=False):
         if precision == 'highp' or t not in ('sampler2D', 'samplerCube'):
             p.append(f'precision highp {t};\n')      # (types other than these two have no default in ES)
     return ''.join(p)
+
+
+# ---- compute kernels (ComputeShader assets)
+DROP_EXTENSIONS_COMPUTE = DROP_EXTENSIONS_4X | {
+    'GL_ARB_compute_shader',                 # ES 3.10: compute shaders
+    'GL_ARB_shader_atomic_counters',         # ES 3.10: atomic counters
+}
+ES_IMAGE_FORMATS = IMAGE_FORMATS
+_RW_IMAGE_FORMATS = ('r32f', 'r32i', 'r32ui')    # ES 3.10: the only formats an image may be read and written in
+_COMPUTE_ONLY = re.compile(r'\b(barrier|groupMemoryBarrier|memoryBarrierShared|atomicCounter\w*)\s*\(')
+_UNSUPPORTED_COMPUTE = [
+    _UNSUPPORTED_4X[0], _UNSUPPORTED_4X[1], _UNSUPPORTED_4X[2],
+    (re.compile(r'\b(textureQueryLod|textureQueryLevels|textureSamples|imageSamples|fma|interpolateAt\w+)\s*\('),
+     'ES 3.2+ / desktop function'),
+    _UNSUPPORTED_4X[4],
+    # `offset` only on atomic counters (ES 3.10 has them in compute shaders)
+    (re.compile(r'layout\s*\([^)]*\b(index|component|xfb_\w+|origin_upper_left|pixel_center_integer|depth_\w+|align|'
+                r'stream)\b|layout\s*\([^)]*\boffset\b[^)]*\)(?!\s*uniform\s+atomic_uint\b)'), 'layout qualifier'),
+    _UNSUPPORTED_4X[6], _UNSUPPORTED_4X[7], _UNSUPPORTED_4X[8],
+]
+_IMAGE_DECL_LINE = re.compile(r'^(?P<pre>[^\n;{}]*?)\b(?P<type>%s)\s+(?P<name>\w+)\s*(?P<arr>\[[^\]]*\])?\s*;' % '|'.join(IMAGE_TYPES), re.M)
+
+
+def _image_formats(src, formats):
+    """Gives each image declared without a format qualifier the one formats names (ES 3.10 needs one)."""
+    def fix(m):
+        pre = m.group('pre')
+        lay = re.search(r'layout\s*\(([^)]*)\)', pre)
+        if lay and re.search(r'\b(%s)\b' % '|'.join(IMAGE_FORMATS), lay.group(1)):
+            return m.group(0)
+        fmt = (formats or {}).get(m.group('name'))
+        if not fmt:
+            return m.group(0)
+        if fmt not in ES_IMAGE_FORMATS:
+            raise Unsupported(f'COMPUTE: image {m.group("name")!r} of format {fmt} (GLSL ES has no such image format)')
+        if lay:
+            pre = pre[:lay.start()] + f'layout({lay.group(1).strip()}, {fmt})' + pre[lay.end():]
+        else:
+            pre = re.sub(r'\b(uniform)\b', rf'layout({fmt}) \1', pre, count=1)
+        return pre + m.group(0)[len(m.group('pre')):]
+    return _IMAGE_DECL_LINE.sub(fix, src)
+
+
+def _check_image_access(code):
+    """ES 3.10: an image of a format other than r32f, r32i and r32ui is readonly or writeonly."""
+    for m in _IMAGE_DECL_LINE.finditer(code):
+        pre = m.group('pre')
+        fmt = re.search(r'\b(%s)\b' % '|'.join(IMAGE_FORMATS), pre)
+        if fmt and fmt.group(1) not in _RW_IMAGE_FORMATS and not re.search(r'\b(readonly|writeonly)\b', pre):
+            raise Unsupported(f'COMPUTE: image {m.group("name")!r} read and written ({fmt.group(1)}: GLSL ES reads and '
+                              f'writes only r32f, r32i and r32ui images)')
+
+
+def image_names(src):
+    """The names of the images a kernel declares without a format qualifier."""
+    out = []
+    for m in _IMAGE_DECL_LINE.finditer(_strip_comments(src)):
+        lay = re.findall(r'layout\s*\(([^)]*)\)', m.group('pre'))
+        if not any(re.search(r'\b(%s)\b' % '|'.join(IMAGE_FORMATS), q) for q in lay):
+            out.append(m.group('name'))
+    return out
+
+
+def kernel_to_es(src, precision='highp', image_formats=None, optimize=OPTIMIZE, notes=None):
+    """One compute kernel (HLSLcc's GLSL 4.20 / 4.30 for OpenGL Core: one compute shader, starting
+    with its #version line) -> GLSL ES 3.10. image_formats: {image name: format qualifier} for the
+    images the kernel declares without a format (image_names(); write-only images). Raises
+    Unsupported for what ES 3.10 compute shaders do not have (the module docstring)."""
+    m = re.match(r'\s*#\s*version\s+(\d+)\s*(\w*)', src)
+    if not m or m.group(1) not in VERSIONS_4X or m.group(2) not in ('', 'core'):
+        raise Unsupported('COMPUTE: ' + (f'#version {m.group(1)} {m.group(2)}'.rstrip() if m else 'no #version line'))
+    if not re.search(r'layout\s*\([^)]*\blocal_size_x\b', src):
+        raise Unsupported('COMPUTE: not a compute shader (no local_size layout)')
+    src = _drop_precise_dummies(src)
+    src = _image_formats(src, image_formats)
+    body = _strip_comments(src)
+    code = _code_lines(body)
+    for rx, what in _UNSUPPORTED_COMPUTE:
+        mm = rx.search(code)
+        if mm:
+            raise Unsupported(f'COMPUTE: {what} {mm.group(0).strip()!r}')
+    _check_images(code, 'COMPUTE')
+    _check_image_access(code)
+    lines = src.splitlines(keepends=True)
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    out = ['#version 310 es\n']
+    i += 1
+    while i < len(lines):
+        s = lines[i].strip()
+        e = re.match(r'#\s*extension\s+(\w+)\s*:\s*(\w+)', s)
+        w = re.match(r'#\s*ifdef\s+(\w+)$', s)
+        if e:
+            if e.group(1) not in DROP_EXTENSIONS_COMPUTE:
+                out.append(lines[i])
+            i += 1
+        elif w and i + 2 < len(lines) and re.match(r'#\s*extension\s+%s\s*:' % w.group(1), lines[i + 1].strip()) \
+                and re.match(r'#\s*endif\b', lines[i + 2].strip()):
+            if w.group(1) not in DROP_EXTENSIONS_COMPUTE:
+                out += lines[i:i + 3]
+            i += 3
+        elif not s:
+            i += 1
+        else:
+            break
+    if re.search(r'\bimageAtomic\w+\s*\(', code):
+        out.append('#extension GL_OES_shader_image_atomic : require\n')
+    out.append(precision_block(body, precision, images=True))
+    rest = ''.join(lines[i:])
+    if 'const-arrays' in optimize:
+        rest, n = const_arrays(rest)
+        if n and notes is not None: notes.append(f'COMPUTE const-arrays {n}')
+    if 'unroll' in optimize:
+        rest, n = unroll(rest)
+        if n and notes is not None: notes.append(f'COMPUTE unroll {n}')
+    out.append(rest)
+    return ''.join(out)
 
 
 def program_to_es(code, precision='highp', optimize=OPTIMIZE, notes=None, es='300'):

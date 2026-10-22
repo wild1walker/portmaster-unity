@@ -3,14 +3,16 @@
     python -m pmunity shaders-export <data> <dir>
 
 Writes <dir>/<nnnn>.vert and <nnnn>.frag (each the source Unity hands the driver for that stage;
-identical programs once) and <dir>/index.tsv: number, shader, file, blob index, keywords. The
-runtime's tools/shadercheck compiles and links every pair with the device's own driver.
+identical programs once), <nnnn>.comp for each GLES3 compute kernel (ComputeShader assets) and
+<dir>/index.tsv: number, shader, file, blob index (kernels: the kernel's name), keywords. The
+runtime's tools/shadercheck compiles and links every pair and kernel with the device's own driver.
 """
 import hashlib
 import os
 
 from ..unity_io import Loaded, NotOneSerializedFile
 from . import blob as B
+from . import compute as CS
 from . import convert as C
 from . import glsl
 from .step import shader_files
@@ -54,6 +56,22 @@ def export(job, out_dir, bundles=r'.'):
                     with open(os.path.join(out_dir, f'{n:04d}.{ext}'), 'w') as f:
                         f.write(as_driver_sees(src))
                 rows.append(f'{n:04d}\t{name}\t{rel}\t{i}\t{" ".join(entries[i].keywords)}')
+        for pid, o in lf.objects('ComputeShader'):
+            t = o.read_typetree()
+            for v in t['variants']:
+                if v['targetRenderer'] != CS.RENDERER_GLES3:
+                    continue
+                for k in v['kernels']:
+                    for kv in CS.kernel_variants(k):
+                        code = bytes(kv['code']).rstrip(b'\0').decode('utf-8', 'replace')
+                        h = hashlib.sha1(code.encode()).hexdigest()
+                        if h in seen:
+                            continue
+                        n = seen[h] = len(seen)
+                        with open(os.path.join(out_dir, f'{n:04d}.comp'), 'w') as f:
+                            f.write(code)
+                        kw = k.get('globalKeywords') or k.get('keywords') or []
+                        rows.append(f'{n:04d}\t{t["m_Name"]}\t{rel}\tkernel {k["name"]}\t{" ".join(map(str, kw))}')
         lf.close()
     with open(os.path.join(out_dir, 'index.tsv'), 'w') as f:
         f.write('\n'.join(rows) + '\n')

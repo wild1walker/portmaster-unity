@@ -131,9 +131,12 @@ static void read_package_json(const char *root)
 
 // Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
 // (Cuphead's 2017.4 player among them), 5.1 (API 22) for 64-bit players (64-bit Android starts at
-// API 21); the loader's ro.build.version.sdk says the same. An imported Android build (pmunity apk):
-// its targetSdkVersion, the Android its makers tested it on, but at most SDK_CAP and at least its
-// minSdkVersion (a phone it installs on has that). UA_SDK_INT overrides.
+// API 21), or the data's min_sdk where android-data wrote one (22 for a game with compute kernels:
+// Unity's Android players create OpenGL ES 3.1+ contexts, and so run compute shaders and GLES 3.1
+// programs, only from Android 5.0, API 21); the loader's ro.build.version.sdk says the same. An
+// imported Android build (pmunity apk): its targetSdkVersion, the Android its makers tested it on,
+// but at most SDK_CAP and at least its minSdkVersion (a phone it installs on has that). UA_SDK_INT
+// overrides.
 #if defined(__aarch64__)
 #define BASE_SDK 22
 #else
@@ -143,7 +146,7 @@ static void read_package_json(const char *root)
 static int reported_sdk(void)
 {
     if (getenv("UA_SDK_INT")) return atoi(getenv("UA_SDK_INT"));
-    if (strcmp(pj_source, "apk")) return BASE_SDK;
+    if (strcmp(pj_source, "apk")) return pj_min_sdk > BASE_SDK && pj_min_sdk <= SDK_CAP ? pj_min_sdk : BASE_SDK;
     int t = pj_target_sdk > 0 ? pj_target_sdk : pj_min_sdk;
     if (t > SDK_CAP) t = SDK_CAP;
     if (t < pj_min_sdk) t = pj_min_sdk;

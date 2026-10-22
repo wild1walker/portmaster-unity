@@ -316,6 +316,47 @@ class PlanTest(unittest.TestCase):
         for f in ('abc.vis', 'abc.rgb'):
             self.assertEqual(dst.get(os.path.join(data, 'GI', 'level1', 'f8', f)), os.path.join(src, 'GI', 'level1', 'f8', f))
         self.assertNotIn('GI', args.skipped)
+        # the SSE runtime files: as they are, and with --realtime-gi neon also under their NEON names
+        gi = os.path.join(src, 'GI', 'level1', 'f8')
+        for f in ('abc.iws.sse', 'abc.rsc.sse', 'def.rsc.sse', 'def.rsc.neo'):
+            open(os.path.join(gi, f), 'wb').close()
+        args.realtime_gi = 'as-is'
+        dst = {d: s for d, s, a in A.plan(args)}
+        gd = os.path.join(data, 'GI', 'level1', 'f8')
+        self.assertEqual(dst.get(os.path.join(gd, 'abc.rsc.sse')), os.path.join(gi, 'abc.rsc.sse'))
+        self.assertNotIn(os.path.join(gd, 'abc.rsc.neo'), dst)
+        del args.realtime_gi                                         # the default: neon
+        dst = {d: s for d, s, a in A.plan(args)}
+        self.assertEqual(dst.get(os.path.join(gd, 'abc.iws.neo')), os.path.join(gi, 'abc.iws.sse'))
+        self.assertEqual(dst.get(os.path.join(gd, 'abc.rsc.neo')), os.path.join(gi, 'abc.rsc.sse'))
+        self.assertEqual(dst.get(os.path.join(gd, 'def.rsc.neo')), os.path.join(gi, 'def.rsc.neo'))   # its own kept
+        self.assertEqual(args.gi_neon, 2)
+
+
+class GlesLevelTest(unittest.TestCase):
+    """PlayerSettings.playerMinOpenGLESVersion and android_package.json's min_sdk."""
+
+    def test_min_gles(self):
+        args = type('Args', (), {})()
+        self.assertEqual(A.min_gles_level(args, 0), 2)              # a desktop build's 0: ES 3.0
+        self.assertIsNone(A.min_gles_level(args, 2))
+        self.assertIsNone(A.min_gles_level(args, None))             # before 2020.2: no such field
+        args.min_gles = '3.1'
+        self.assertEqual(A.min_gles_level(args, 0), 3)
+        args.min_gles = 'keep'
+        self.assertIsNone(A.min_gles_level(args, 0))
+
+    def test_min_sdk(self):
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, True)
+        args = type('Args', (), dict(src=td))()
+        self.assertEqual(A.min_sdk(args), 0)                        # no compute kernels
+        args.compute_kernels = True
+        self.assertEqual(A.min_sdk(args), A.GLES31_SDK)
+        args.min_sdk = '0'
+        self.assertEqual(A.min_sdk(args), 0)
+        args.min_sdk = '24'
+        self.assertEqual(A.min_sdk(args), 24)
 
 
 class SplitBigApkTest(unittest.TestCase):
