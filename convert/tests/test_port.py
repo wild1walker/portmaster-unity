@@ -244,6 +244,17 @@ class ConfigTest(unittest.TestCase):
         self.assertIn('{ "x", "X" },', lua)
 
 
+def roomy_path(t):
+    """PATH with a `df` that reports a card with 64 GB free first (the IL2CPP setups' space checks
+    then do not depend on this machine's own free space)."""
+    d = os.path.join(t, 'roomy')
+    os.makedirs(d, exist_ok=True)
+    put(os.path.join(d, 'df'), '#!/bin/sh\necho "Filesystem 1048576-blocks Used Available Capacity Mounted on"\n'
+                               'echo "card 65536 0 65536 0% /card"\n')
+    os.chmod(os.path.join(d, 'df'), 0o755)
+    return d + os.pathsep + os.environ.get('PATH', '')
+
+
 def stub_tools(t):
     """A stand-in for the setup's Python (pmunity commands that log and make what the setup reads)
     packed as python.tar.gz, and for PortMaster's 7-Zip (unzip)."""
@@ -528,7 +539,7 @@ class NewAndSetupTest(unittest.TestCase):
             shutil.copytree(os.path.join(out, 'mygame'), g)
             shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
             put(os.path.join(g, 'setup', 'asmpatch'), '#!/bin/sh\n')
-            g, r, log = self.run_setup(t, out, {})
+            g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t)})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
             S = os.path.join(g, 'setup')
@@ -547,7 +558,7 @@ class NewAndSetupTest(unittest.TestCase):
             shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
             put(os.path.join(g, 'setup', 'asmpatch'), '#!/bin/sh\n')
             os.unlink(os.path.join(t, 'pm.log'))
-            g, r, log = self.run_setup(t, out, {})
+            g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t)})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
             self.assertTrue(il.endswith(f"--streaming-assets obb --asmpatch '{os.path.join(g, 'setup', 'asmpatch')}'"), il)
@@ -813,10 +824,10 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, **kw):   #
         open(os.path.join(out, rel), 'wb').write(struct.pack('<II', 0xFAB11BAF, 29))
     return {{'unity': '2021.3.4f1', 'metadata_version': 29, 'libil2cpp_bytes': 8}}
 ''')
-            r = self.run_setup(g)
+            r = self.run_setup(g, {'PATH': roomy_path(t)})
             self.assertIn("PATCH_FAIL_MSG:Compiling the game's code failed", r.stdout, r.stdout + r.stderr)
             self.assertTrue(os.path.isdir(os.path.join(g, 'gamedata', '.setup', 'apk', '.il2cpp', 'partial')))
-            r = self.run_setup(g)
+            r = self.run_setup(g, {'PATH': roomy_path(t)})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn('the players this system runs, in this order: arm64', r.stdout)
             calls = [json.loads(x) for x in P._read(log).splitlines()]

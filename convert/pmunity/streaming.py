@@ -138,7 +138,7 @@ def place(mode, files, zdir, clone, log):
         size += os.path.getsize(p)
     os.makedirs(dst, exist_ok=True)
     log(f'pack: StreamingAssets: {len(files)} files ({size / 2**20:.1f} MiB) beside the APK in {SA_DIR}/' +
-        (', and in the OBB' if mode == 'both' else ' (not in the OBB)'))
+        (', and in the OBB (or the APK)' if mode == 'both' else ' (not in the OBB or APK)'))
     return files if mode == 'both' else []
 
 

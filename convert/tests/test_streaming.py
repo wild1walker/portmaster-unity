@@ -193,7 +193,7 @@ class PlaceTest(unittest.TestCase):
             put(os.path.join(z, 'Game_Data', 'StreamingAssets', 'stale.txt'), 'old')
             self.assertEqual(ST.place('loose', files[:1], z, A.clone, log.append), [])
             self.assertEqual(sorted(os.listdir(os.path.join(z, 'Game_Data', 'StreamingAssets'))), ['config.json'])
-            self.assertIn('(not in the OBB)', log[-1])
+            self.assertIn('(not in the OBB or APK)', log[-1])
             self.assertEqual(ST.place('obb', files, z, A.clone, log.append), files)
             self.assertFalse(os.path.exists(os.path.join(z, 'Game_Data')))
 
