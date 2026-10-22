@@ -563,13 +563,14 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
     compact = line >= (2020, 1)             # GL: vertex subprograms only, entries numbered anew
     separate = serializer == dxbc.SEPARATE_PARAMS_FROM
     bind_of = {}                            # id(subprogram) -> dxbc.Bindings (with shared parameters)
+    translate_notes = []                    # dxbc.translate_program's (uv-origin), for r.notes
     if translate is None:
         if translator is None:
             raise ValueError('add_gles3_d3d11 needs a translator or a translate function')
 
         def translate(vs, ps):
             return dxbc.translate_program(translator, (vs.code, bind_of[id(vs)]), (ps.code, bind_of[id(ps)]),
-                                          vs.version, line)
+                                          vs.version, line, translate_notes)
     cache = {}                              # (vs index, vs params, ps index, ps params) -> (ES text, GL bindings) | Unsupported
 
     def program(vkey, vs, vb, pkey, ps, pb):
@@ -581,7 +582,9 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                 r.guessed_layout |= vs.guessed or ps.guessed
                 notes = []
                 bind_of[id(vs)], bind_of[id(ps)] = vb, pb
+                del translate_notes[:]
                 gl = translate(vs, ps)
+                uv_notes = list(translate_notes)
                 info = None
                 if gl_info:
                     arrays = {p.name: p.array for b in (vb, pb) for cb in b.cbuffers for p in cb.params}
@@ -592,7 +595,7 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                     notes = []
                     es, typ = glsl.program_to_es(gl, precision, optimize, notes, es='310'), B.GPU_GLES31
                 cache[k] = (es, info, typ)
-                r.notes += notes
+                r.notes += notes + uv_notes
             except (dxbc.Unsupported, glsl.Unsupported) as ex:
                 cache[k] = ex
         return cache[k]
