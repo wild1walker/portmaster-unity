@@ -77,7 +77,10 @@ installs on has that), its `minSdkVersion` when the manifest names no target. Th
 then offer what that level has (runtime/android/README.md: AChoreographer from 24, refresh rate
 callbacks and `ANativeWindow_setFrameRate` from 30, ...; newer functions read NULL, as on a phone of
 that level). `UA_SDK_INT` overrides. Converted desktop data stays at API 19 on armhf (the level the
-32-bit ports were made with, Cuphead's among them) and 22 on arm64 (64-bit Android starts at 21).
+32-bit ports were made with, Cuphead's among them) and 22 on arm64 (64-bit Android starts at 21),
+or the `min_sdk` android-data writes into `android_package.json`: 22 for a game with compute
+kernels, because Unity's players only create OpenGL ES 3.1+ contexts from Android 5.0 (API 21)
+([android-data.md](android-data.md#2-platform-differences)).
 Until AChoreographer existed here, imported builds were held at 23 and below: from 24 Swappy takes
 the NDK's choreographer.
 

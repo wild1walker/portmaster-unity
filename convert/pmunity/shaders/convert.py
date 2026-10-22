@@ -326,8 +326,12 @@ def gles3_programs(tree):
 # ---------------------------------------------------------------- Direct3D 11 (Windows builds)
 
 # variants only VR rendering asks for (stereo instancing writes gl_Layer, which ES 3.00 lacks):
-# one of these that cannot be translated is left out; Unity never enables them on a handheld
-VR_KEYWORDS = ('STEREO_INSTANCING_ON', 'STEREO_MULTIVIEW_ON', 'UNITY_SINGLE_PASS_STEREO', 'STEREO_CUBEMAP_RENDER_ON')
+# one of these that cannot be translated is left out; Unity never enables them on a handheld.
+# Unity's own keywords, and the Post-processing Stack v2's (its Uber, FinalPass and other shaders
+# have STEREO_INSTANCING_ENABLED variants that write gl_Layer: without them counted here the whole
+# shader got no GLES3 programs, and its final pass drew nothing, a black picture)
+VR_KEYWORDS = ('STEREO_INSTANCING_ON', 'STEREO_MULTIVIEW_ON', 'UNITY_SINGLE_PASS_STEREO', 'STEREO_CUBEMAP_RENDER_ON',
+               'STEREO_INSTANCING_ENABLED', 'STEREO_DOUBLEWIDE_TARGET')
 # variants only GPU instancing draws use (instance data in arrays of structs, procedural instancing's
 # structured buffers): one of these that cannot be translated from Direct3D 11 is left out, and the
 # pass's instancing flags (2021.2+) are cleared, so the player draws such objects one by one

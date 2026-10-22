@@ -46,9 +46,12 @@ Unity's HLSLcc ([below](#windows-builds-direct3d-11-programs)).
    no GLES3 programs at all, and the run says which. Unity then treats it as unsupported on the
    device, as it would a shader without GLES3 programs in an Android build. For Cuphead that is
    only `Hidden/VideoDecodeOSX` (the macOS video decoder; Android decodes video elsewhere).
-   Variants only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords) that do not translate
-   (they write `gl_Layer`) are left out instead, with their subprograms; Unity never asks for them
-   on a handheld. A SubShader with a GLCore41/43 program that does not translate gets no twins
+   Variants only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords, among them the
+   Post-processing Stack v2's own `STEREO_INSTANCING_ENABLED` and `STEREO_DOUBLEWIDE_TARGET`) that
+   do not translate (they write `gl_Layer`) are left out instead, with their subprograms; Unity
+   never asks for them on a handheld. (Before PPv2's keywords were counted, its `Uber` and
+   `FinalPass` shaders got no GLES3 programs at all, and a game with PPv2 on its camera drew a
+   black picture: Nainai's Recipe.) A SubShader with a GLCore41/43 program that does not translate gets no twins
    for its GLCore41/43 variants (Unity uses the next SubShader or the Fallback, as for a
    SubShader an Android build has no programs for); the rest of the shader is converted.
 6. A shader whose variants were all stripped from the build (a GLCore blob without entries, e.g.
@@ -99,6 +102,66 @@ SubShaders of its post-processing keep no GLES programs; the 2017.4 player logs 
 compiler platform 9 is not available" for the two blits at startup and runs on). On, Cuphead's 14
 GLCore43 programs translate as well (9 of them GLES 3.1: the eye adaptation histogram's storage
 buffer, `textureGather` in depth of field) and link on Mesa.
+
+### Compute shaders (ComputeShader assets)
+
+A ComputeShader keeps one variant per renderer: a desktop build has OpenGL Core kernels (GLSL
+4.20 / 4.30 compute shaders by HLSLcc), Vulkan's (SPIR-V), Direct3D's or Metal's. The Android
+player on GLES3 looks for the OpenGL ES 3 variant; without one every `FindKernel` fails ("Kernel
+'X' not found"), and a game that runs its own kernels (particle or swarm simulations, GPU culling)
+draws nothing of them or stops in an exception every frame. The shaders step
+(`shaders/compute.py`) gives each ComputeShader with OpenGL Core kernels the variant an Android
+build has: a copy of the GLCore variant with the GLES3 renderer (11) and level (3; 2 from 2023.1),
+every kernel translated to GLSL ES 3.10 (`glsl.kernel_to_es`). Everything else (kernel names,
+keywords, constant buffers, textures, buffers and their bind points, thread group sizes) is the
+GLCore variant's. Unity runs them where the device has OpenGL ES 3.1+ (`SystemInfo.
+supportsComputeShaders`), as it does an Android build's.
+
+- the GLSL 4.x rules above, plus what ES 3.10 has for compute shaders: `barrier()`,
+  `memoryBarrierShared()`, `groupMemoryBarrier()`, `shared` variables, atomic counters;
+  `GL_ARB_compute_shader` and `GL_ARB_shader_atomic_counters` are dropped; image atomics get
+  `GL_OES_shader_image_atomic` (core in ES 3.2);
+- ES needs a format qualifier on every image, which HLSLcc leaves out of write-only images for
+  desktop GL: it comes from the Vulkan SPIR-V of the same kernel and keywords, where HLSLcc wrote
+  the format it derives from the HLSL type (`float4` -> `rgba32f`, `float` -> `r32f`, as for
+  GLES). A kernel whose image has no such format, or one ES lacks (`rg32f`, `rg16f`), or that
+  reads and writes an image of a format other than `r32f`, `r32i`, `r32ui`, is left out of the
+  GLES3 variant (the run names it); the shader's other kernels are kept;
+- the layouts: up to 2019.4 each kernel has its code, 2020.1 - 2021.1 a `variantMap` of keyword
+  sets, from 2021.2 `uniqueVariants`; the GLES3 variant goes after the GLCore one (up to 2021.x)
+  or in renderer order (2022.1+), where Unity's own builds have it.
+
+Checked on Unity's built-in resources of Linux players 2017.4 - 6000.5 (games' "unity default
+resources"; Internal-Skinning,
+Internal-BlendShape, Internal-VT-TranslationTableReplace: they hold GLCore and GLES3 kernels of
+the same compute shaders): with the GLES3 variant taken out and made again, it has the same
+place, level, kernels and metadata as Unity's; from 2019.4 every kernel declares the same uniform
+blocks, buffers, images, samplers and shared memory as Unity's (the bodies differ where HLSLcc
+writes the same operations differently for GLES: `uint(...)` around a value that is one, `for`
+loops for `while(true)` ones). 2017.4 and 2018.4's GLES3 kernels give their uniform block an
+explicit `binding = 0` (the default binding of a block without one), and 2017.4's read typed
+buffers through `samplerBuffer` / `imageBuffer`, which ES 3.10 lacks without
+`GL_EXT_texture_buffer`; ours keep the storage buffers of the GLCore kernels. On ten free games'
+compute shaders (2018.1 - 6000.6: the Post-processing Stack v2's, a game's own particle and swarm
+kernels, Unity 6's GPU culling and depth pyramids) 109 kernels translate and 22 are left out (PPv2's
+ambient occlusion: `rg32f` images, or write-only images whose Vulkan kernel gives no format;
+Unity 6's color pyramid). Of all 495 translated kernels (built-ins and games,
+`tests/test_compute_corpus.py`), 374 compile and link on Mesa (llvmpipe, ES 3.2; `shadercheck`,
+below) and 121 exceed its 8 storage buffers per compute shader: Unity's batched skinning and
+blend shape kernels (15 - 16 buffers; Unity's own GLES3 kernels of them declare the same) and one
+Unity 6 kernel (9). A GLES 3.1 device need only allow 4; Unity then reports the kernel as not
+supported, as for an Android build. Nainai's Recipe: all its 1818 GLES3 programs and 29 kernels
+link on Mesa.
+
+```sh
+cd convert && PMUNITY_COMPUTE_CORPUS=<file>[:...] PMUNITY_COMPUTE_EXPORT=/tmp/comp \
+    python -m unittest tests.test_compute_corpus -v                 # then shadercheck /tmp/comp
+```
+
+PPv2 keeps its compute paths off on Android's OpenGL ES (`RuntimeUtilities.isAndroidOpenGL`:
+auto exposure, ambient occlusion, the 3D LUT), so its kernels convert but are not used there.
+A Windows build's compute shaders (Direct3D 11 bytecode) are not translated yet.
+`"shaders": {"compute": false}` leaves compute shaders as they are.
 
 ## Unity versions
 
@@ -405,7 +468,9 @@ python -m pmunity shaders-export <converted data> glsl/       # every distinct p
 runtime/host/out/shadercheck glsl/                            # on the handheld: compile + link each
 ```
 
-`shadercheck` uses the device's own driver (a pbuffer, or the fbdev window on Mali). Run it in
+`shaders-export` also writes each GLES3 compute kernel as `<nnnn>.comp`, which `shadercheck`
+compiles and links as a compute program (OpenGL ES 3.1+). `shadercheck` uses the device's own
+driver (a pbuffer, or the fbdev window on Mali). Run it in
 `tools/emu` to compile with Mesa too. For Cuphead: 1566 distinct programs; all compile and link on
 the RG34XX-SP's Mali-G31 (driver r20p0); on Mesa all but one, the stereo multiview variant of one
 font shader (Mesa's llvmpipe lacks `GL_OVR_multiview2`; the game never uses it).

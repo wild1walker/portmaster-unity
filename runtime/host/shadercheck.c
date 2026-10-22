@@ -2,7 +2,8 @@
 // optionally times their fragment shaders, so a converted game's shaders are checked (and their
 // GPU cost compared) without starting the game.
 //
-//   shadercheck <dir> [first [count]]             compile + link every <dir>/<nnnn>.vert/.frag pair
+//   shadercheck <dir> [first [count]]             compile + link every <dir>/<nnnn>.vert/.frag pair,
+//                                                 and every <dir>/<nnnn>.comp (a compute kernel)
 //   shadercheck -t <dir> <nnnn>... [-s WxH] [-n N] [-o]
 //                                                 time each program's fragment shader: N full-screen
 //                                                 quads (default 720x480, 200) into an RGBA8 texture
@@ -16,6 +17,9 @@
 // EGL: a pbuffer surface (Mesa: EGL_PLATFORM=surfaceless), else the Mali fbdev window.
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#ifndef GL_COMPUTE_SHADER
+#define GL_COMPUTE_SHADER 0x91B9                   // (OpenGL ES 3.1)
+#endif
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/fb.h>
@@ -87,6 +91,29 @@ static GLuint build(const char *dir, int n, int quiet_missing)
     glAttachShader(pr, v); glAttachShader(pr, f);
     glLinkProgram(pr);
     glDeleteShader(v); glDeleteShader(f);
+    GLint ok = 0; glGetProgramiv(pr, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[4096] = ""; glGetProgramInfoLog(pr, sizeof log, NULL, log);
+        printf("FAIL %04d link (%s): %s\n", n, g_names[n], log);
+        glDeleteProgram(pr);
+        return 0;
+    }
+    return pr;
+}
+
+// a compute kernel (ComputeShader assets): compiled and linked alone (OpenGL ES 3.1+)
+static GLuint build_compute(const char *dir, int n)
+{
+    char p[1024];
+    snprintf(p, sizeof p, "%s/%04d.comp", dir, n); char *cs = slurp(p);
+    if (!cs) return 0;
+    GLuint c = compile(GL_COMPUTE_SHADER, cs, "compute", n);
+    free(cs);
+    if (!c) return 0;
+    GLuint pr = glCreateProgram();
+    glAttachShader(pr, c);
+    glLinkProgram(pr);
+    glDeleteShader(c);
     GLint ok = 0; glGetProgramiv(pr, GL_LINK_STATUS, &ok);
     if (!ok) {
         char log[4096] = ""; glGetProgramInfoLog(pr, sizeof log, NULL, log);
@@ -173,16 +200,25 @@ int main(int argc, char **argv)
     if (!egl_up(64, 64)) return 1;
     if (!timing) {
         int first = argc > 2 ? atoi(argv[2]) : 0, count = argc > 3 ? atoi(argv[3]) : 10000;
-        int ok = 0, bad = 0;
+        int ok = 0, bad = 0, cok = 0, cbad = 0;
         double t0 = now();
         for (int n = first; n < first + count && n < 10000; n++) {
-            char p[1024]; snprintf(p, sizeof p, "%s/%04d.vert", dir, n);
+            char p[1024], q[1024];
+            snprintf(p, sizeof p, "%s/%04d.vert", dir, n);
+            snprintf(q, sizeof q, "%s/%04d.comp", dir, n);
+            if (access(q, R_OK) == 0) {
+                GLuint pr = build_compute(dir, n);
+                if (pr) { cok++; glDeleteProgram(pr); } else cbad++;
+                continue;
+            }
             if (access(p, R_OK) != 0) { if (n > first && !g_names[n][0]) break; continue; }
             GLuint pr = build(dir, n, 0);
             if (pr) { ok++; glDeleteProgram(pr); } else bad++;
         }
-        printf("%d programs linked, %d failed (%.1f s)\n", ok, bad, now() - t0);
-        return bad != 0;
+        printf("%d programs linked, %d failed", ok, bad);
+        if (cok || cbad) printf("; %d compute kernels linked, %d failed", cok, cbad);
+        printf(" (%.1f s)\n", now() - t0);
+        return bad + cbad != 0;
     }
     // timing: an RGBA8 target of w x h, a 256x256 RGBA8 noise texture, one full-screen quad per draw
     GLuint tex, rt, fbo;
