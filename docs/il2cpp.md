@@ -262,7 +262,11 @@ finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` 
   Mono (it uses .NET Framework-only types).
 - **Memory**: UnityLinker and the conversion run with their CPU affinity set to one CPU (the 2017.4 -
   2019.4 tools size their thread pools by the CPUs they may use); .NET with
-  `DOTNET_GCConserveMemory=9` (2020.3 conversion: 766 -> 666 MB). Compiler jobs: one per 200 MB of
+  `DOTNET_GCConserveMemory=9` (2020.3 conversion: 766 -> 666 MB). Under a cgroup memory limit (a
+  container standing in for a handheld) .NET caps its heap at 75% of the limit, 750 MB of 1 GB,
+  which 2021.3's il2cpp exceeded converting a URP game (`OutOfMemoryException`); there the cap is
+  the limit plus the cgroup's swap, less 64 MB (`DOTNET_GCHeapHardLimit`), as a handheld's setup,
+  which has no such limit, may use all memory and swap. Compiler jobs: one per 200 MB of
   `MemAvailable` beyond 250 MB, at most one per CPU (`PMUNITY_IL2CPP_JOB_MB`,
   `PMUNITY_IL2CPP_RESERVE_MB`; `--jobs` sets it). The compiler wrappers hold job slots (POSIX sh,
   `mkdir` locks; a killed run's slots are taken over), so however many compilers il2cpp starts,

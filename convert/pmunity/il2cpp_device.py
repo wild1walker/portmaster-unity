@@ -701,6 +701,28 @@ def cgroup_limits():
     return cpus, mem
 
 
+def dotnet_heap_limit(root='/sys/fs/cgroup'):
+    """Bytes for .NET's GC heap limit under a cgroup memory limit, else None. In a container with
+    a memory limit .NET caps its heap at 75% of it (a 1 GB stand-in for a handheld: 750 MB, which
+    Unity 2021.3's il2cpp exceeded converting a URP game: OutOfMemoryException); a handheld's setup
+    has no such limit and its .NET may use all memory and swap. So: the limit plus the swap the
+    cgroup may use, less 64 MB."""
+    def num(name):
+        try:
+            with open(os.path.join(root, name)) as f:
+                v = f.read().strip()
+        except OSError:
+            return None
+        return None if v == 'max' else int(v) if v.isdigit() else None
+    mem = num('memory.max')
+    if mem is None:
+        return None
+    swap = num('memory.swap.max')
+    if swap is None:                    # (no limit of its own: the system's free swap)
+        swap = meminfo().get('SwapFree', 0) << 20
+    return max(mem * 3 // 4, mem + swap - (64 << 20))
+
+
 def cpu_count():
     n = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)
     q = cgroup_limits()[0]
@@ -799,6 +821,9 @@ class Native:
             'PMUNITY_IL2CPP_BIG_KB': str(BIG_KB),
             'PMUNITY_IL2CPP_KILLED': self.killed_log,
         })
+        hard = dotnet_heap_limit()
+        if hard and 'DOTNET_GCHeapHardLimit' not in os.environ:
+            e['DOTNET_GCHeapHardLimit'] = hex(hard)
         return e
 
     def run(self, cmd, logname, quiet=False, affinity=None):
