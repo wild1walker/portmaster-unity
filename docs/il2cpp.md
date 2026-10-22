@@ -191,8 +191,9 @@ generated C++, libil2cpp in lumps of a few files, the Boehm GC), one link with a
 `libil2cpp.so`, `libil2cpp.dbg.so`, `libil2cpp.sym.so` and `Data/` into `lib/<abi>/`.
 
 `android-data --il2cpp <out>` then packs the data as for Mono, but with IL2CPP's `Managed/`
-(Metadata, Resources, etc) instead of the assemblies and Mono's dllmap config, and checks the
-assembly list against what IL2CPP compiled. The player package (`--pkg`) is the IL2CPP one
+(Metadata, Resources, etc) instead of the assemblies and Mono's dllmap config, checks the
+assembly list against what IL2CPP compiled, and writes the build's `abi` into
+`android_package.json` (as `pmunity apk` does; the rehearsal picks the arm64 rig by it). The player package (`--pkg`) is the IL2CPP one
 (`<home>/<ver>/player-<abi>`). `libil2cpp.so` goes into the runtime's `lib/` next to
 `libmain.so` and `libunity.so` of the IL2CPP player; libunity loads it, copies
 `assets/bin/Data/Managed` out of the APK into `<external files>/il2cpp` (`data/external/il2cpp`
@@ -436,7 +437,10 @@ table below through UnityLinker and the conversion into compiling, and the 2021.
 in its port's setup on a 64-bit-only stand-in (1 GB + 1 GB swap): UnityLinker 0.4 min (peak 548 MB),
 the conversion 10.6 min (CPU 2.4 min, peak 987 MB: above .NET's 750 MB container cap, see
 "Memory"), the Bee graph's 605 commands in 9 min with 3 jobs (CPU 6.3 min, peak 599 MB); the
-whole setup 32 min, and the installed game reaches its main menu. Not yet on a handheld.
+whole setup 32 min, and the installed game reaches its main menu; and the 2018.3 game with
+StreamingAssets read as files (`streaming_assets = "both"`: asmpatch's patch compiled in on the
+device) in 33 min, UnityLinker 0.2 min (328 MB), the conversion 4.2 min (626 MB), the compile 14.7
+min (692 MB), its install reaching the title menu with its localized text. Not yet on a handheld.
 
 ## AOT limits
 

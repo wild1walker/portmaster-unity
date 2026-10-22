@@ -1948,6 +1948,10 @@ def pack(args, log):
     marker = ('assets/' + bid, b'')
     # unity_version: ua_host paces 2021.1+ converted data as the desktop did (runtime/host/framerate.c)
     res = {'build_id': bid, 'package': args.package, 'version_code': args.version_code, 'unity_version': str(args.unity)}
+    if getattr(args, 'il2cpp', None):
+        # the player's ABI (the IL2CPP build's), as `pmunity apk` writes it: what picks the 64-bit
+        # ua_host and rig (a Mono player's is always armeabi-v7a and is not written)
+        res['abi'] = args.il2cpp_info.get('abi')
     if args.unity.line >= OBB_GUID_FROM:
         apk_entries.append((OBB_GUID_FILE, bid.encode('ascii')))
         marker = [marker, (OBB_GUID_FILE_IN_OBB, bid.encode('ascii'))]

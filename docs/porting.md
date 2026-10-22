@@ -277,7 +277,7 @@ runs in the emulated armv7 rig (`tools/emu`, QEMU and Mesa's llvmpipe: slow, abo
 same frames and game logic) with the port's `port.env` and `answers.env`, and four screenshots
 go to `<work>/shots.png`; `UA_INPUT_SCRIPT`-style input (`"60:ptr=0.5/0.5 70:a~1.5"`) drives it.
 `EMU_ONLY=1` reruns only the game. An install of an arm64-v8a build (`android_package.json`'s
-`abi`; the apk route on a 64-bit-only system, `REHEARSE_64ONLY=1`) runs in the arm64 rig
+`abi`: the il2cpp-arm64 route, the apk route on a 64-bit-only system, `REHEARSE_64ONLY=1`) runs in the arm64 rig
 (`EMU_ARCH=arm64`) with the port's `ua_host64`. `REHEARSE_NAME` and `EMU_NAME` name the containers.
 The setup's space checks see the work folder's drive as the card (a `df` stand-in, and
 `PMUNITY_DISK_FREE_MB` for pmunity's own checks: Docker Desktop's file sharing reports another
