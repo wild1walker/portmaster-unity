@@ -40,7 +40,7 @@ as HLSLcc's GL programs of the same shader look:
   * fragment outputs SV_Target<n> at their locations;
   * each stage's globals as plain uniforms (matrices hlslcc_mtx4x4<name> vec4 arrays), the other
     constant buffers (URP's UnityPerDraw, UnityPerMaterial, ...) as uniform blocks of their name
-    with Unity's member names (members the program does not use: Xhlslcc_UnusedX_<offset>) - up
+    with Unity's member names (members the program does not use: Xhlslcc_UnusedX_<block>_<offset>) - up
     to 2018 these too as plain uniforms, as Unity's GL programs of 2017 - 2018 have them;
   * every texture combined with its sampler as one GLSL sampler named as the texture
     (hlslcc_zcmp<name> for a comparison, as HLSLcc names it); from 2019.1 with its unit and each
@@ -318,7 +318,7 @@ def name_stage(m, plan, stage):
                 off = m.member_decoration(t.id, k, S.DEC_OFFSET)
                 name = _member_name(m, t.id, k, mt, by_off.get(off), f'{where}: {cbname}')
                 if name is None:
-                    name = f'Xhlslcc_UnusedX_{off}'
+                    name = f'Xhlslcc_UnusedX_{cbname}_{off}'     # (block members share one namespace)
                 m.set_member_name(t.id, k, name)
                 members.append((k, off, name, mt))
             g = is_globals(cbname)
@@ -394,7 +394,7 @@ def _flatten_blocks(src, flatten_named):
                     raise Unsupported(f'uniform block member {l.strip()!r}')
                 if re.search(r'\b%s\.%s\b' % (inst, ml.group(2)), rest):
                     if ml.group(2).startswith('Xhlslcc_UnusedX'):
-                        raise Unsupported(f'a uniform the binding info does not name is read (offset {ml.group(2)[16:]})')
+                        raise Unsupported(f'a uniform the binding info does not name is read ({ml.group(2)[16:]})')
                     decls.append(f'uniform {ml.group(1)} {ml.group(2)}{ml.group(3)};\n')
             src = src.replace(mm.group(0), ''.join(decls))
         else:

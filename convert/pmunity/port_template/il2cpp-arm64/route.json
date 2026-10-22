@@ -10,5 +10,5 @@
     "README.md": "README.port.md",
     "package.sh": "package.sh"
   },
-  "package": ["ua_host_arm64", "pmunity", "pybundle", "asmpatch?", "pmhlslcc?"]
+  "package": ["ua_host_arm64", "pmunity", "pybundle", "asmpatch?", "pmhlslcc?", "pmspirvcross?"]
 }

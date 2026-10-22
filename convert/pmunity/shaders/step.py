@@ -7,8 +7,9 @@ changes). The player's own "unity default resources" comes with the Android play
 has GLES3 programs.
 
 `sources` names the desktop platforms to translate, in order of preference: 'glcore' (OpenGL
-Core, macOS / Linux builds; the default) and 'd3d11' (Direct3D 11, Windows builds, with Unity's
-HLSLcc: tools/hlslcc). A shader is translated from the first one it has.
+Core, macOS / Linux builds; the default), 'd3d11' (Direct3D 11, Windows builds, with Unity's
+HLSLcc: tools/hlslcc) and 'vulkan' (Vulkan, Linux builds without OpenGL Core such as HDRP's, with
+SPIRV-Cross: tools/spirvcross). A shader is translated from the first one it has.
 
 `glcore4x`: also translate the GLCore41 / GLCore43 programs (`#pragma target 4.5` and up) and
 give shaders whose variants were all stripped an empty GLES3 blob (convert.add_gles3). On by
@@ -30,14 +31,15 @@ from . import blob as B
 from . import compute as CS
 from . import convert as C
 from . import dxbc
+from . import vulkan as VK
 
-SOURCES = {'glcore': B.PLATFORM_GLCORE, 'd3d11': B.PLATFORM_D3D11}
-SOURCE_NAMES = {'glcore': 'OpenGL Core', 'd3d11': 'Direct3D 11'}
+SOURCES = {'glcore': B.PLATFORM_GLCORE, 'd3d11': B.PLATFORM_D3D11, 'vulkan': B.PLATFORM_VULKAN}
+SOURCE_NAMES = {'glcore': 'OpenGL Core', 'd3d11': 'Direct3D 11', 'vulkan': 'Vulkan'}
 # Shader.platforms values (Unity's ShaderCompilerPlatform) as names, for messages
 PLATFORM_NAMES = {0: 'OpenGL (legacy)', 1: 'Direct3D 9', 4: 'Direct3D 11', 5: 'OpenGL ES 2', 8: 'Direct3D 11 9.x',
                   9: 'OpenGL ES 3', 14: 'Metal', 15: 'OpenGL Core', 18: 'Vulkan', 20: 'Direct3D 12 (Xbox)',
                   25: 'WebGPU'}
-NO_SOURCE = ('no OpenGL Core programs', 'no Direct3D 11 programs')
+NO_SOURCE = ('no OpenGL Core programs', 'no Direct3D 11 programs', 'no Vulkan programs')
 
 
 def nothing_to_translate(results, sources):
@@ -50,10 +52,14 @@ def nothing_to_translate(results, sources):
     if not plats:                       # (no programs anywhere: nothing to say about the build)
         return None
     names = ', '.join(PLATFORM_NAMES.get(p, f'platform {p}') for p in plats)
+    hint = ''
+    if B.PLATFORM_VULKAN in plats and 'vulkan' not in sources:
+        hint = ('. They have Vulkan programs: translate those with `"shaders": {"from": ["vulkan"]}` (or '
+                '`--from vulkan`; tools/spirvcross/build.sh). HDRP does not run on OpenGL ES')
     return (f'shaders: none of the {len(results)} shaders has {" or ".join(SOURCE_NAMES[s] for s in sources)} '
-            f'programs (their programs: {names}), so the Android player would draw nothing. A build made '
-            f'without OpenGL Core (Vulkan or Metal only: HDRP\'s Linux and macOS builds, recent macOS builds) '
-            f'cannot be converted; another build of the game may have OpenGL Core or Direct3D 11 programs')
+            f'programs (their programs: {names}), so the Android player would draw nothing{hint}. A build '
+            f'made without OpenGL Core (Vulkan or Metal only: HDRP\'s Linux and macOS builds, recent macOS '
+            f'builds) cannot be converted from it; another build of the game may have OpenGL Core or Direct3D 11 programs')
 
 
 def glcore4x_for(path, glcore4x=None):
@@ -82,9 +88,10 @@ def _is_bundle(path):
 
 
 def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, optimize=None, sources=('glcore',),
-        hlslcc=None, glcore4x=None, compute=None):
+        hlslcc=None, glcore4x=None, compute=None, spirv_cross=None):
     """Returns the per-shader results. hlslcc: the pmhlslcc binary (default dxbc.find_hlslcc());
-    glcore4x, compute: see the module docstring."""
+    spirv_cross: the pmspirvcross binary (default vulkan.find_spirv_cross()); glcore4x, compute: see
+    the module docstring."""
     if glcore4x is None:
         glcore4x = (job.cfg.get('shaders') or {}).get('glcore4x')
     if glcore4x not in (None, True, False):
@@ -100,6 +107,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     cresults = []
     changed_files = 0
     translator = None
+    vk_translator = None
     opt = C.glsl.OPTIMIZE if optimize is None else optimize
     for rel in shader_files(job, bundles):
         if job.is_done('shaders', rel):
@@ -122,6 +130,11 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                     translator = dxbc.Translator(hlslcc)
                 r = C.add_gles3_d3d11(t, translator, precision=precision, replace=replace, optimize=opt,
                                       unity=getattr(lf.sf, 'unity_version', None))
+            elif src == 'vulkan':
+                if vk_translator is None:
+                    vk_translator = VK.Translator(spirv_cross)
+                r = VK.add_gles3_vulkan(t, vk_translator, precision=precision, replace=replace,
+                                        unity=getattr(lf.sf, 'unity_version', None))
             else:
                 r = C.add_gles3(t, precision=precision, replace=replace, optimize=opt, glcore4x=gl4)
                 r.glcore4x = gl4
@@ -158,6 +171,8 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
         job.mark_done('shaders', rel)
     if translator is not None:
         translator.close()
+    if vk_translator is not None:
+        vk_translator.close()
     err = nothing_to_translate(results, sources)
     if err:
         raise SystemExit(err)
@@ -187,6 +202,12 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 f'kernels, {sum(r.variants for r in cc)} kernel variants, GLSL ES 3.10: used where the device has OpenGL ES '
                 f'3.1+); {sum(len(r.failed) for r in cresults)} kernels left out; '
                 f'{sum(r.why.startswith("no OpenGL Core") for r in cresults)} without OpenGL Core kernels')
+    vk = [r for r in results if r.source == 'vulkan']
+    if vk:
+        job.log(f'shaders: from Vulkan: {sum(r.status == "converted" for r in vk)} of {len(vk)} shaders '
+                f'({sum(r.programs for r in vk if r.status == "converted")} programs); '
+                f'{sum(len(r.failed) for r in vk)} SubShaders left out; {sum(r.dropped for r in vk)} VR-only and '
+                f'{sum(r.dropped_instancing for r in vk)} GPU instancing variants left out')
     d3d = [r for r in results if r.source == 'd3d11']
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '

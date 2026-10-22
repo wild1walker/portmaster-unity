@@ -200,6 +200,8 @@ if [ ! -f "$W/.step_convert" ]; then
   plugins=(); for f in "${CONVERT_PLUGINS[@]}"; do plugins+=(--plugin "$S/$f"); done
   # a Windows build's Direct3D 11 shaders: HLSLcc (the release's pmhlslcc, aarch64)
   if [ -f "$S/pmhlslcc" ]; then chmod +x "$S/pmhlslcc"; export PMHLSLCC="$S/pmhlslcc"; fi
+  # a Vulkan-only build's shaders: SPIRV-Cross (the release's pmspirvcross, aarch64)
+  if [ -f "$S/pmspirvcross" ]; then chmod +x "$S/pmspirvcross"; export PMSPIRVCROSS="$S/pmspirvcross"; fi
   pm convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" \
     || fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."
   hook post_convert
