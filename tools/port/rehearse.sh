@@ -82,7 +82,8 @@ TXT
 
 # the card's free space as the PC sees it: Docker Desktop's file sharing reports another disk's for a
 # folder on an external drive, which a setup's space checks would trust (rbin/df, first on PATH,
-# answers `df -Pm` with it; the figure does not shrink as the setup writes)
+# answers `df -Pm` with it, and PMUNITY_DISK_FREE_MB tells pmunity's own checks; the figure does not
+# shrink as the setup writes)
 FREE_MB=$(df -Pm "$WORK" | awk 'NR==2{print $4}')
 mkdir -p "$WORK/rbin"
 cat > "$WORK/rbin/df" <<'SH'
@@ -97,7 +98,7 @@ chmod +x "$WORK/rbin/df"
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
 docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
-  -e REHEARSE_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
+  -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
