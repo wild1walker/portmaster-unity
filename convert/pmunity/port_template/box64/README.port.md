@@ -1,28 +1,32 @@
-# @@TITLE@@ (PortMaster port)
-
-Made with portmaster-unity's `pmunity port new` (@@ROUTE@@ route: @@ROUTE_TEXT@@). Porter:
-@@PORTER@@.
-
-| file | what |
-|---|---|
-| `port.toml` | the port's settings: edit, then `python -m pmunity port new @@PORTDIR@@ --data <game> --route box64` again |
-| `port.build.json` | everything resolved from port.toml and the game check (written by `port new`) |
-| `@@LAUNCHER@@` | the launcher (PortMaster conventions; the first launch runs the setup) |
-| `@@PORTDIR@@/` | the folder installed as `ports/@@PORTDIR@@/`: `setup/patchscript` (the setup), `setup/gles.json` (its shader conversion), `port.env` (the options), `port.json`, READMEs |
-| `package.sh` | builds the release zip (`out/@@ZIP@@`): box64, glxes, gl4es (portmaster-unity's `tools/box64/build.sh` output), the converter and the setup's Python |
-
 ## Notes
 
-The player provides @@GAME_WHAT@@; nothing of the game or of Unity is in
-this port. The game runs unmodified under box64; in its OpenGL ES mode (the default) the setup adds
-GLES 3 shader programs to the player's copy (docs/box64-route.md in portmaster-unity).
+@@THANKS@@
+
+This port does not include the game: you need @@GAME_WHAT@@. Copy the game's Linux files into
+`ports/@@PORTDIR@@/gamedata/`, then start @@TITLE@@ from the Ports menu. The first launch finds the
+game and, for its OpenGL ES mode, adds OpenGL ES shaders next to its own (@@SETUP_TIME@@, once); the
+game's code and pictures stay as they are. @@ROUTE_NEEDS@@
+
+The game runs as its own Linux build, unmodified, under [box64](https://github.com/ptitSeb/box64),
+set up by [portmaster-unity](https://github.com/wild1walker/portmaster-unity)'s box64 route. Saves
+and settings are in `ports/@@PORTDIR@@/conf/`; options (how the game draws, box64's settings) are
+in `ports/@@PORTDIR@@/port.env`.
 
 ## Controls
 
-The game's own SDL2 reads the pad (PortMaster's `SDL_GAMECONTROLLERCONFIG`); `@@PORTDIR@@.ini`
-(gptokeyb2) can give keys and mouse to games that want them, and holds the exit hotkey.
+@@CONTROLS@@
 
-## Building
+## Compile
 
-`./package.sh` (needs a portmaster-unity checkout with `tools/box64/build.sh` run:
-`PMUNITY=<checkout>`). Test the launcher in the box64 rig: `tools/box64/test/launcher_test.sh`.
+The port folder is made by portmaster-unity's `pmunity port new` from the port's settings,
+`port.toml`. On Linux or macOS with git, Docker and Python 3.11 or newer:
+
+```sh
+git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity.git
+cd portmaster-unity
+@@BUILD_STEPS@@
+python3 -m pip install -r convert/requirements.txt
+cd convert
+python3 -m pmunity port new @@PORTDIR@@ --out <port folder>   # reads <port folder>/port.toml
+python3 -m pmunity port package <port folder>                  # -> <port folder>/out/@@ZIP@@
+```
