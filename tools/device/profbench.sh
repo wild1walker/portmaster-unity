@@ -22,7 +22,8 @@
 #                        holds GPU memory and CPU time)
 #   ARCH, HOST_BIN       the ua_host to send (default this checkout's runtime/host/out/ua_host);
 #                        SEND_HOST=0 runs the game folder's own ua_host
-#   SYMS=<dir>           Unity's symbol files for the summaries (benchsum.py --syms)
+#   SYMS=<dir>           Unity's symbol files for the summaries (benchsum.py --syms; naming them needs
+#                        pyelftools in PYTHON, default python3)
 #   UA_*, SDL_*, GC_*, MONO_* in the environment pass through to every run, as with test.sh
 set -u
 DIR=${1:?usage: DEVICE=user@host profbench.sh <game folder on the handheld> <name> [VAR=value ...] | --list <file>}; shift
@@ -110,4 +111,4 @@ for r in "${runs[@]}"; do
   names+=("$OUT/$name")
 done
 echo "== results in $OUT"
-python3 -I "$PU/tools/analysis/benchsum.py" ${SYMS:+--syms "$SYMS"} "${names[@]}"
+"${PYTHON:-python3}" -I "$PU/tools/analysis/benchsum.py" ${SYMS:+--syms "$SYMS"} "${names[@]}"

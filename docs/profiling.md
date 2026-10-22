@@ -41,9 +41,10 @@ state from `/proc/self/task/<tid>/stat`:
   into code with tables that was reached by an indirect call (`BLX <register>`: how Mono's runtime
   and Unity's scripting calls enter JIT code; the callee pushed lr at the top of its frame, so the
   caller's sp is the next word). The engine's frames below the scripts are thus unwound too: only
-  the managed frames themselves come from the scan. The handler names nothing, takes no lock, allocates nothing, and reads the stack
-  only inside the thread's stack mapping. A thread whose previous signal is still pending is
-  counted as **Q**: runnable but not on a CPU, or in a long kernel path;
+  the managed frames themselves come from the scan, which stops at the thread's start. The handler
+  names nothing, takes no lock, allocates nothing, and reads the stack only inside the thread's
+  stack mapping. A thread whose previous signal is still pending is counted as **Q**: runnable but
+  not on a CPU, or in a long kernel path;
 - **blocked**: the thread is left alone (it is not woken, its wait does not return early):
   `/proc/self/task/<tid>/syscall` gives the call it waits in with its sp and pc, and the sampler
   scans its stack from there. Under QEMU that file shows the emulator's registers, so blocked
@@ -58,23 +59,25 @@ time over the recording (`schedstat`: on a CPU and waiting for one; utime, stime
 `/proc/stat` counters and the frame times (every `eglSwapBuffers` and every UnityMain frame), so the
 profile can be read against the frame rate.
 
-Cost. Memory: (4 + depth) words a sample, `hz x secs` samples a thread, allocated when a recording
-starts and freed when it is written: 500 Hz, 20 s, depth 32 is 1.4 MB a thread. Time: a running
-sample is a signal and a scan of at most 16 KB of stack against a table of the code mappings (a
-bitmap first, then a binary search); a blocked one is two `pread`s on the sampler's own core.
-`runtime/host/test/prof_test.sh` measures what a sampled thread loses (`test_prof spin`); compare
-`UA_PROF` runs with runs without it on the device (the bench does) before reading small
-differences. Nothing runs, and nothing is allocated, while no recording is on.
+Cost. Memory: (9 + depth) words a sample, `hz x secs` samples a thread, allocated when a recording
+starts and freed when it is written: 500 Hz, 20 s, depth 32 is 1.6 MB a thread. Time: a running
+sample is a signal, an unwind through the tables and a scan of at most 16 KB of stack against a
+table of the code mappings (a bitmap first, then a binary search); a blocked one is two `pread`s
+on the sampler's own core. `runtime/host/test/prof_test.sh` measures what a sampled thread loses
+(`test_prof spin`: on an arm64 PC, natively, nothing measurable at 500 or 1000 Hz, within the
+2% run-to-run noise); on the device compare `UA_PROF` runs with runs without it (the bench does)
+before reading small differences. Nothing runs, and nothing is allocated, while no recording is on.
 
 Limits. The managed frames are a scan, so a stale return address can appear among them, and a
 wrong re-start of the unwind is possible ("on the stack" is an upper bound; `profsum.py --exact`
 counts only unwound callers, the profile marks scanned ones `~`, and the summary says how many
 samples were unwound and how deep). ua_host and the fake JNI are built with `-funwind-tables`, so
-the unwind goes on below Unity's `nativeRender` to the thread's start. A sample taken in a function's
-prologue or epilogue can stop the unwind early (the tables describe the body). Blocked samples have
+the unwind goes on below Unity's `nativeRender` to the thread's start. A sample taken in a
+function's prologue or epilogue can stop the unwind early (the tables describe the body). Blocked samples have
 only sp and pc (from `/proc`): their callers are always a scan. Mono's trampolines and code it has
-no information for are "anonymous code". Libraries the profile names only by exported symbols (a stripped libc or GLES
-driver) are named by the nearest exported function, which is often not the function itself.
+no information for are "anonymous code". Libraries the profile names only by exported symbols (a
+stripped libc or GLES driver) are named by the nearest exported function, which is often not the
+function itself.
 
 ## profsum.py
 
@@ -90,8 +93,8 @@ names ua_host's own functions.) For each sampled thread:
   blocked and in which call (`futex` from a libunity function: waiting for another thread; `ioctl`
   from the GLES driver: the GPU);
 - **on a CPU**: how many of the samples were unwound (and the average number of unwound
-  callers), then **by module**: Unity's engine, Mono's runtime (GC, JIT, the wrappers that call into the engine),
-  managed code (JIT-compiled methods), libc, the GLES driver, ua_host;
+  callers), then **by module**: Unity's engine, Mono's runtime (GC, JIT, the wrappers that call
+  into the engine), managed code (JIT-compiled methods), libc, the GLES driver, ua_host;
 - **self**: the function the pc was in; **on the stack**: every function in the sample, once (the
   callers of hot code add up here: the engine's update loop, a camera's render, Physics2D);
 - **managed code itself** and **by innermost managed method**: the time of each JIT-compiled method,
