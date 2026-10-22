@@ -22,7 +22,9 @@
 #   HOST_BIN=<file>   another ua_host build to send instead
 #   OUT=<dir>         where results go (default: devtest-<game folder's name>/ in the current folder)
 #   STOP_ES=1         stop EmulationStation during the run and start it again afterwards (Knulli and
-#                     Batocera: /etc/init.d/S31emulationstation); it holds GPU memory and CPU time
+#                     Batocera: /etc/init.d/S31emulationstation); it holds GPU memory and CPU time.
+#                     The handheld does both itself: the run is detached there, and a dropped
+#                     connection neither ends it early nor leaves EmulationStation stopped
 #   UA_*, SDL_*, GC_*, MONO_* and the prefixes in DEV_ENV (space-separated) pass through to the game,
 #   e.g. UA_PAD_NAME="Xbox Wireless Controller" UA_MEM_MIN=150 UA_AUDIO=1
 # Nothing runs on the handheld except the files sent here, and the watchdog only stops that game.
@@ -85,15 +87,22 @@ for v in $(compgen -e); do
   for p in UA_ SDL_ GC_ MONO_ ${DEV_ENV:-}; do [[ $v == "$p"* ]] && envs+=("$v=${!v}") && break; done
 done
 
-ES=/etc/init.d/S31emulationstation
-if [ "${STOP_ES:-0}" = 1 ]; then
-  echo "== stopping EmulationStation"
-  rshn "[ -x $ES ] && $ES stop >/dev/null 2>&1; sleep 2" || true
-  trap 'rshn "[ -x $ES ] && $ES start >/dev/null 2>&1"; echo "== EmulationStation started again"' EXIT
-fi
-
+# The run happens on the handheld by itself (detached, with its own EmulationStation stop and
+# start: uatest.sh's UATEST_STOP_ES), so a dropped connection neither ends it early nor leaves
+# EmulationStation stopped; this end waits for its uatest.done and reconnects when it can
+[ "${STOP_ES:-0}" = 1 ] && { envs+=("UATEST_STOP_ES=1"); echo "== EmulationStation is stopped for the run and started again after it (on the handheld)"; }
 echo "== running for ${SECS} s${*:+, screenshots at $* s}"
-rshn "cd $(q "$REMOTE") && env $(q "${envs[@]+"${envs[@]}"}")./uatest.sh . $(q "$SECS" "$@")"
+rshn "cd $(q "$REMOTE") && rm -f uatest.done && { setsid nohup env $(q "${envs[@]+"${envs[@]}"}")./uatest.sh . $(q "$SECS" "$@") > uatest.out 2>&1 < /dev/null & }" ||
+  { echo "starting the run failed"; exit 1; }
+deadline=$((SECONDS + SECS + 600)); lost=0
+until rshn "[ -f $(q "$REMOTE/uatest.done")]" 2>/dev/null; do
+  if ! rshn true 2>/dev/null; then
+    [ $lost = 0 ] && echo "   (the handheld is not answering; the run goes on there, waiting for it)"; lost=1
+  fi
+  [ $SECONDS -gt $deadline ] && { echo "no end of the run after $((SECS + 600)) s (see uatest.out on the handheld)"; exit 1; }
+  sleep 10
+done
+[ "${STOP_ES:-0}" = 1 ] && echo "== EmulationStation started again (on the handheld)"
 
 echo "== results in $OUT"
 mkdir -p "$OUT" && rm -f "$OUT"/shot-*.ppm "$OUT"/shot-*.png

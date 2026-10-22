@@ -14,7 +14,17 @@
 # at 58 MB with 95 MB in zram, where a 100 MB line stopped it). UA_AUDIO=1 plays sound; other UA_* settings pass through to the runtime.
 R=$1; SECS=${2:-60}; shift 2
 cd "$R" || exit 1
-rm -f shot-*.ppm shot.req mem.log
+rm -f shot-*.ppm shot.req mem.log uatest.done
+# UATEST_STOP_ES=1: EmulationStation is stopped for the run and started again after it, here on the
+# handheld (test.sh runs this detached, so a dropped connection cannot leave it stopped);
+# uatest.done marks the end either way
+ES=/etc/init.d/S31emulationstation
+if [ "${UATEST_STOP_ES:-0}" = 1 ] && [ -x $ES ]; then
+  $ES stop >/dev/null 2>&1; sleep 2
+  trap '$ES start >/dev/null 2>&1; touch uatest.done' EXIT
+else
+  trap 'touch uatest.done' EXIT
+fi
 export UA_FPS=${UA_FPS:-5}
 if [ "$UA_AUDIO" = 1 ]; then export SDL_AUDIODRIVER=alsa AUDIODEV=${AUDIODEV:-plughw:0,0}; else export SDL_AUDIODRIVER=dummy; fi
 # the pad's SDL GameController mapping: PortMaster's database for this firmware, when there is one
