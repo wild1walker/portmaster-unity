@@ -46,9 +46,12 @@ Unity's HLSLcc ([below](#windows-builds-direct3d-11-programs)).
    no GLES3 programs at all, and the run says which. Unity then treats it as unsupported on the
    device, as it would a shader without GLES3 programs in an Android build. For Cuphead that is
    only `Hidden/VideoDecodeOSX` (the macOS video decoder; Android decodes video elsewhere).
-   Variants only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords) that do not translate
-   (they write `gl_Layer`) are left out instead, with their subprograms; Unity never asks for them
-   on a handheld. A SubShader with a GLCore41/43 program that does not translate gets no twins
+   Variants only VR uses (`STEREO_INSTANCING_ON` and the other VR keywords, among them the
+   Post-processing Stack v2's own `STEREO_INSTANCING_ENABLED` and `STEREO_DOUBLEWIDE_TARGET`) that
+   do not translate (they write `gl_Layer`) are left out instead, with their subprograms; Unity
+   never asks for them on a handheld. (Before PPv2's keywords were counted, its `Uber` and
+   `FinalPass` shaders got no GLES3 programs at all, and a game with PPv2 on its camera drew a
+   black picture: Nainai's Recipe.) A SubShader with a GLCore41/43 program that does not translate gets no twins
    for its GLCore41/43 variants (Unity uses the next SubShader or the Fallback, as for a
    SubShader an Android build has no programs for); the rest of the shader is converted.
 6. A shader whose variants were all stripped from the build (a GLCore blob without entries, e.g.
