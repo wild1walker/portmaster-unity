@@ -1163,6 +1163,17 @@ static int bionic_fpclassifyf(float x) { return bionic_fp_class(fpclassify(x)); 
 static int bionic_fpclassifyl(long double x) { return bionic_fp_class(fpclassify(x)); }
 #endif
 
+// bionic takes any thread stack size from its 16 KB PTHREAD_STACK_MIN; glibc refuses one below its
+// own minimum with EINVAL (on aarch64 128 KB, from the 64 KB page size), and the thread is then never
+// created: Unity 2017.4's arm64 FMOD lost its mixer thread that way ("An error occured that wasn't
+// supposed to", on the real and the null output). A smaller size is raised to glibc's minimum.
+static int bionic_attr_setstacksize(pthread_attr_t *attr, size_t size)
+{
+    long min = sysconf(_SC_THREAD_STACK_MIN);
+    if (min > 0 && size < (size_t)min) size = (size_t)min;
+    return _hybris_hook_pthread_attr_setstacksize(attr, size);
+}
+
 static const so_shim ours[] = {
     { "dlopen", (void *)so_dlopen }, { "dlsym", (void *)so_dlsym }, { "dlclose", (void *)so_dlclose },
     { "dlerror", (void *)so_dlerror },
@@ -1187,6 +1198,7 @@ static const so_shim ours[] = {
     { "stat64", (void *)bionic_stat }, { "lstat64", (void *)bionic_lstat }, { "fstat64", (void *)bionic_fstat },
     { "fstatat64", (void *)bionic_fstatat }, { "statfs64", (void *)bionic_statfs }, { "fstatfs64", (void *)bionic_fstatfs },
     { "pthread_sigmask", (void *)bionic_pthread_sigmask }, { "sigaction", (void *)bionic_sigaction },
+    { "pthread_attr_setstacksize", (void *)bionic_attr_setstacksize },
     { "sigprocmask", (void *)bionic_sigprocmask }, { "sigsuspend", (void *)bionic_sigsuspend },
     { "sigemptyset", (void *)bionic_sigemptyset }, { "sigfillset", (void *)bionic_sigfillset },
     { "sigaddset", (void *)bionic_sigaddset }, { "sigdelset", (void *)bionic_sigdelset },

@@ -330,7 +330,7 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | same | 2019.4.8f1 | armeabi-v7a | 25.6 MiB | 24 | 8 min (cached) | splash, title screen (QEMU: ~1 fps) once the loader routes `__gnu_Unwind_Find_exidx` (below) |
 | 2D city builder, incremental GC | 2020.3.49f1 | arm64-v8a | 33.6 MiB | 27 | 8 min | title menu (40-50 fps in the rig) once packed as one APK with `buildDate` (above) |
 | 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
-| 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; no sound (below) |
+| 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; sound since the loader raises small thread stacks (below) |
 | same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
@@ -355,14 +355,13 @@ What the runs showed:
   back to the invariant culture. Harmless; a runtime that sets `LANG` would avoid it.
 - **Pointer-driven menus**: clicking a menu entry with the pointer mode did not start the
   2018.4 game in one scripted try (its Mono build does); not looked into.
-- **2017.4 arm64, no sound in the rig**: the 2017.4.40 arm64 player's FMOD creates its OpenSL ES
-  player, starts and stops it at once, reports "FMOD failed to initialize the output device", and
-  its null output fails too ("An error occured that wasn't supposed to"): the game runs silent.
-  Not the rig's missing `CAP_SYS_NICE` (the `setpriority(-20)` that fails without it is SDL's
-  audio thread; granting it changes nothing), not the API level (19 and 22 alike). The same game's
-  armv7 IL2CPP build (2017.4.40's armv7 IL2CPP player) and the 2018.4+ arm64 players start their
-  audio in the rigs: something between 2017.4's arm64 FMOD and the 64-bit runtime. Open; not
-  yet tried on a handheld.
+- **2017.4 arm64 sound** (fixed): the 2017.4.40 arm64 player's FMOD created its OpenSL ES player,
+  started and stopped it at once, reported "FMOD failed to initialize the output device", and its
+  null output failed too ("An error occured that wasn't supposed to"). Its mixer thread was never
+  created: it asks for a stack smaller than glibc's aarch64 minimum (128 KB, from the 64 KB page
+  size; bionic accepts anything from 16 KB), and glibc refuses that with EINVAL. The loader now
+  raises a smaller size to glibc's minimum (runtime/loader/hybris_compat.c); the OpenSL player
+  then plays until the game quits. Not yet tried on a handheld.
 - **Stack traces** (2017.4): with the SymbolMap written from the symbol table, Unity's logged
   stack traces name the same frames as the game's Mono build; without it they had extra frames
   named after neighbouring methods.
