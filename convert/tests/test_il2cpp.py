@@ -345,6 +345,20 @@ class RemoteZipTest(unittest.TestCase):
 
 
 class StagingTest(unittest.TestCase):
+    def test_android_note(self):
+        # .note.android.ident as crtbegin_so writes it: namesz 8, descsz 132, type 1, "Android", the
+        # API level, the NDK's revision (padded)
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'libunity.so')
+            note = struct.pack('<III', 8, 132, 1) + b'Android\0' + struct.pack('<I', 23) + b'r27c'.ljust(128, b'\0')
+            with open(p, 'wb') as f:
+                f.write(b'\x7fELF' + b'\0' * 60 + note + b'\0' * 16)
+            self.assertEqual(I.android_note(p), (23, 'r27c'))
+            with open(p, 'wb') as f:
+                f.write(b'\x7fELF' + b'\0' * 60)
+            self.assertEqual(I.android_note(p), (None, None))
+            self.assertEqual(I.android_note(os.path.join(t, 'none.so')), (None, None))
+
     def test_metadata_version(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(struct.pack('<Ii', 0xFAB11BAF, 24) + bytes(64))
@@ -476,6 +490,19 @@ class NdkClangTest(unittest.TestCase):
         self.assertNotIn('-D__ANDROID_API__=21', out)
         out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang', '-c', '-target', 'armv7-linux-androideabi19', 'a.c')
         self.assertIn('armv7-linux-androideabi19', out)
+
+    def test_raised_api_level(self):
+        """PMUNITY_ANDROID_API (Unity 2023.1+ built with 2022.3's il2cpp): a lower target API is raised"""
+        tool = 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang++'
+        out = self.run_tool(tool, '-c', '-target', 'aarch64-linux-android22', 'a.cpp', PMUNITY_ANDROID_API='23')
+        self.assertIn('aarch64-linux-android23', out)
+        self.assertNotIn('aarch64-linux-android22', out)
+        out = self.run_tool(tool, '-shared', '--target=armv7a-linux-androideabi22', '-o', 'x.so', PMUNITY_ANDROID_API='23')
+        self.assertIn('--target=armv7a-linux-androideabi23', out)
+        out = self.run_tool(tool, '-c', '-target', 'aarch64-linux-android24', 'a.cpp', PMUNITY_ANDROID_API='23')
+        self.assertIn('aarch64-linux-android24', out)                 # (never lowered)
+        out = self.run_tool(tool, '-c', '-target', 'aarch64-linux-android22', 'a.cpp')
+        self.assertIn('aarch64-linux-android22', out)                 # (unset: as given)
 
     def test_pic_wins(self):
         """2017.4's il2cpp: -fPIC then -fPIE for a shared library's objects: PIC stays"""
