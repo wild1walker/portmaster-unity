@@ -506,7 +506,8 @@ uniform block per constant buffer, a separate texture and sampler per texture), 
 SPIRV-Cross (Apache 2.0) writes GLSL ES from it. `tools/spirvcross/build.sh` fetches SPIRV-Cross
 and Aras Pranckevicius' SMOL-V decoder at pinned commits and builds `pmspirvcross`, a small front
 end (one-shot, or a server the converter keeps open); `ARCH=arm64` builds the aarch64 binary for
-the handheld in `ua-build-arm64` (libstdc++ and libgcc linked in), which `pmunity port package`
+the handheld in `ua-build-arm64` (libstdc++ and libgcc linked in; it writes the same GLSL as a
+macOS clang build, byte for byte, on the 61 modules of a URP game compared), which `pmunity port package`
 ships as `setup/pmspirvcross` for a port with `shaders.from = ["vulkan"]` (the setup sets
 `PMSPIRVCROSS`), with its licences (THIRD_PARTY.md).
 
@@ -587,7 +588,7 @@ for byte, and every distinct translated program compiles and links on Mesa (llvm
 | 2022.2.15f1 (URP) | 84 (5) of 86 | 1026 (324) | VR blit, a UAV | 689 of 1061 (URP's light arrays sized for Vulkan) | 798 / 798 |
 | 2022.3.36f1 (URP) | 84 (1) of 87 | 1177 (866) | VR blit, a `noperspective` outline, a UAV; 3 instancing variants | 1248 of 1255 | 934 / 934 |
 | 2023.1.8f1 (URP) | 97 (4) of 102 | 1666 (529) | VR blit, 4 with buffers; 186 instancing variants | 995 of 1704 (light arrays) | 1438 / 1438 |
-| 6000.3.11f1 (URP 2D) | 66 (4) of 76 | 318 (13) | VR blit, framebuffer fetch, 2D MS arrays, 7 with buffers | 317 of 332 | 282 / 282 |
+| 6000.3.11f1 (URP 2D) | 66 (4) of 76 | 1342 (13) | VR blit, framebuffer fetch, 2D MS arrays, 7 with buffers | 1341 of 1356 | 1002 / 1002 |
 | 6000.4.6f1 (URP) | 112 (8) of 123 | 1553 (1181) | as 6000.3; 192 instancing variants | 1355 of 1557 (light arrays) | 1419 / 1419 |
 
 (The other differences: a fragment output named `SV_TARGET0` in GL, varyings a GL stage leaves

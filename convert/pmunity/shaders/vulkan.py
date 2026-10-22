@@ -66,7 +66,6 @@ from . import glsl
 from . import spirv as S
 
 GPU_SPIRV = 25
-STAGE_SLOTS = ('VERTEX', 'FRAGMENT', 'HULL', 'DOMAIN', 'GEOMETRY')    # (slot 4: geometry; its globals GGlobals)
 MAX_SLOTS = 9                   # stage slots of the code's table (2022.1+: other data follows them)
 ATTRIB_BASE = 13                # a channel's target: 13 + the vertex input's location (before 2018.2: 12)
 ATTRIB_BASE_2017 = 12
@@ -77,7 +76,6 @@ CHANNELS_2017 = ('in_POSITION0', 'in_NORMAL0', 'in_COLOR0', 'in_TEXCOORD0', 'in_
                  'in_TEXCOORD3', 'in_TANGENT0')        # Unity 5.x - 2018.1 (serializers before 201802150)
 NEW_CHANNELS_FROM = 201802150
 _GLOBALS = re.compile(r'^(?:\$Globals|[A-Z]Globals\d*)$')   # a stage's loose globals: VGlobals<hash>, PGlobals<hash>
-STAGE_BITS = {'VERTEX': 4, 'FRAGMENT': 8}
 _DERIVATIVES = {S.OP_DPDX_FINE: S.OP_DPDX, S.OP_DPDX_COARSE: S.OP_DPDX, S.OP_DPDY_FINE: S.OP_DPDY,
                 S.OP_DPDY_COARSE: S.OP_DPDY, S.OP_FWIDTH_FINE: S.OP_FWIDTH, S.OP_FWIDTH_COARSE: S.OP_FWIDTH}
 

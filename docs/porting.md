@@ -85,14 +85,17 @@ route compiles with Unity's own class libraries and needs only `pmhlslcc` (shipp
 not tried with a Windows build yet).
 
 macOS and Linux builds take the `android` route with their OpenGL Core programs. A build made
-without OpenGL Core has none to translate: Metal only, or Vulkan only (every HDRP Linux build,
-which also rules out `box64`'s GL modes). Unity's macOS builds listed OpenGL Core next to Metal
-up to 2020.1 and Metal alone from 2020.3 on: of the free itch.io macOS builds whose settings were
-read (2026-10-22), all 14 games of 2017.3 - 2020.1 have OpenGL Core, and 17 of the 18 of 2020.3 -
-6000.6 Metal only (macOS-only games among them). `port check` says so (for a compressed build
-too: it reads the settings inside `data.unity3d`), and the converter's shaders step stops with
-the platforms the shaders have; the game's Linux or Windows build, where it has one, has
-programs to translate.
+without OpenGL Core has others: Unity's macOS builds listed OpenGL Core next to Metal up to 2020.1
+and Metal alone from 2020.3 on (of the free itch.io macOS builds whose settings were read,
+2026-10-22: all 14 games of 2017.3 - 2020.1 have OpenGL Core, 17 of the 18 of 2020.3 - 6000.6 Metal
+only, macOS-only games among them), and every HDRP Linux build has Vulkan only. `port check` reads
+the build's graphics APIs (for a compressed build too: the settings inside `data.unity3d`) and
+sets `convert.shaders.from`: `["metal"]` for a Metal-only build (translated by the converter
+itself, `metal.py`; nothing more ships), `["vulkan"]` for a Vulkan-only one, whose release then
+ships `setup/pmspirvcross` (SPIRV-Cross for aarch64, built in Docker by `ARCH=arm64
+tools/spirvcross/build.sh`, with SPIRV-Cross's and SMOL-V's licences; the `pmspirvcross?` part of
+route.json), which the setup gives the converter (`PMSPIRVCROSS`; docs/shaders.md). An HDRP build
+is refused for the Android route all the same: HDRP does not run on OpenGL ES.
 
 Native plugins: `python -m pmunity plugins <Data>` lists the libraries the game's code P/Invokes
 and what the port gives each: built-in stubs answering as a PC without the service (Steam,
@@ -124,7 +127,8 @@ writes next to them: `setup/setup.env` (shell assignments), `setup/convert.json`
 `setup/questions.lua`; `port.json`, `gameinfo.xml` and `testing_thread.txt` are written for every
 route by `port new` itself. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host as `ua_host`;
 `ua_host64` for it beside a 32-bit `ua_host`; a `?` part only when the port uses it: `asmpatch?`
-when it runs asmpatch, `pmhlslcc?` when it translates Direct3D 11 shaders, `ua_host?` /
+when it runs asmpatch, `pmhlslcc?` when it translates Direct3D 11 shaders, `pmspirvcross?`
+when it translates Vulkan ones, `ua_host?` /
 `ua_host64?` for the ABIs in `player.abis`); `defaults` are
 port.toml values the route sets where port.toml says nothing; `config` lists the port.toml
 sections the route uses (port.toml and `setup.env` get only those; default all) and `config_doc`
@@ -221,7 +225,7 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    and missing facades, from Unity's Windows editor installer (or `UnitySetup64-<version>.exe` in
    `gamedata/`);
 4. `pmunity convert` with `setup/convert.json`, the plugins and the answers (a Windows build's
-   Direct3D 11 shaders with `setup/pmhlslcc`);
+   Direct3D 11 shaders with `setup/pmhlslcc`, a Vulkan-only build's with `setup/pmspirvcross`);
 5. `pmunity android-data --consume-src --pack all`, with asmpatch, the class libraries of step 3,
    the managed files and assembly patches, and `android_data.args`;
 6. installing: the player's libraries into `lib/` with only the Mono runtime the game needs (with
@@ -267,7 +271,7 @@ about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continue
 ```
 python -m pmunity port package <port folder> [--out DIR] [--runtime DIR] [--ua-host FILE]
                                [--media-licenses DIR] [--pybundle FILE] [--asmpatch-bin FILE]
-                               [--pmhlslcc-bin FILE] [--no-build]
+                               [--pmhlslcc-bin FILE] [--pmspirvcross-bin FILE] [--no-build]
 ```
 
 (or the port's `package.sh`) builds `<out>/<name>.zip` (default `<port>/out/`): the launcher and
@@ -277,11 +281,13 @@ converter (`convert/pmunity`), the setup's Python (`--pybundle`, else
 converter's wheels for aarch64), asmpatch for linux-arm64 when the port uses it
 (`tools/asmpatch/build.sh`), pmhlslcc for linux-arm64 when it translates Direct3D 11 shaders
 (`ARCH=arm64 tools/hlslcc/build.sh`, Docker; `--pmhlslcc-bin` another build, with its
-`pmhlslcc.LICENSE.txt` beside it; glibc 2.17 symbols only, libstdc++ linked in), and `licenses/`:
+`pmhlslcc.LICENSE.txt` beside it; glibc 2.17 symbols only, libstdc++ linked in), pmspirvcross
+likewise when it translates Vulkan shaders (`ARCH=arm64 tools/spirvcross/build.sh`;
+`--pmspirvcross-bin`), and `licenses/`:
 portmaster-unity's licence and THIRD_PARTY.md, libhybris (Apache 2.0, in ua_host), the video
 decoders' licences (`runtime/media/out/licenses`), the setup Python's and its packages' licences,
-for asmpatch the .NET runtime's licence and third-party notices and Mono.Cecil's, and for pmhlslcc
-HLSLcc's (MIT, with bstrlib's BSD). `--runtime` points at another checkout whose runtime and
+for asmpatch the .NET runtime's licence and third-party notices and Mono.Cecil's, for pmhlslcc
+HLSLcc's (MIT, with bstrlib's BSD), and for pmspirvcross SPIRV-Cross's (Apache 2.0) and SMOL-V's (MIT). `--runtime` points at another checkout whose runtime and
 asmpatch are built. Zip entries keep their Unix modes and get a fixed date. The il2cpp-arm64 route
 ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build.sh`) as
 `ua_host`; the apk route ships `ua_host` for an APK's armeabi-v7a player and that 64-bit one as

@@ -156,7 +156,6 @@ _FUNCS_SAME = {'abs', 'floor', 'ceil', 'fract', 'sqrt', 'exp2', 'log2', 'exp', '
                'refract', 'cross', 'atan', 'sinh', 'cosh', 'tanh', 'radians', 'degrees'}
 _FUNCS_RENAMED = {'rsqrt': 'inversesqrt', 'rint': 'roundEven', 'round': 'round', 'dfdx': 'dFdx', 'dfdy': 'dFdy',
                   'fwidth': 'fwidth', 'atan2': 'atan', 'isnan': 'isnan', 'isinf': 'isinf', 'all': 'all', 'any': 'any'}
-_FUNCS_SCALAR = {'dot': None, 'length': None, 'distance': None}
 _CMP = {'<': 'lessThan', '<=': 'lessThanEqual', '>': 'greaterThan', '>=': 'greaterThanEqual', '==': 'equal',
         '!=': 'notEqual'}
 _BINARY = [('||',), ('&&',), ('|',), ('^',), ('&',), ('==', '!='), ('<', '<=', '>', '>='), ('<<', '>>'), ('+', '-'),
