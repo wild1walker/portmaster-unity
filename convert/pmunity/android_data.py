@@ -1112,6 +1112,11 @@ def plan(args):
             items.append((os.path.join(data, 'Managed', n), os.path.join(gmanaged, n), 'link'))
         names.add(n)
     args.managed_names = names
+    for ref, users in missing_references(amanaged, names).items():
+        args.warnings.append(f'{ref}.dll: the Android engine modules reference it ({", ".join(users[:3])}'
+                             f'{"..." if len(users) > 3 else ""}) and the game\'s Managed folder has none: their types '
+                             f'fail to load ("Could not load file or assembly \'{ref}\'"); ship Unity\'s copy of the '
+                             f'game\'s version (--managed-file)')
     # Mono config tree (dllmaps); libunity passes "assets/bin/Data/Managed/etc" (relative) as config dir
     metc = args.mono_etc or mono_etc_dir(src)
     for r, ds, fs in os.walk(metc):
@@ -1285,6 +1290,27 @@ def player_version(pkg):
         v.exact = False                 # the file is often from an earlier patch of the line
         return v
     return None
+
+
+def missing_references(amanaged, names):
+    """{assembly name: [engine modules]}: assemblies the player's engine modules (amanaged) reference
+    that are not among the names shipped (a build made without netstandard.dll, which the Android
+    modules of Unity 6 reference)."""
+    from . import clrmeta as CM
+    have = {n[:-4].lower() for n in names if n.lower().endswith('.dll')} | {'mscorlib'}
+    out = {}
+    for n in sorted(os.listdir(amanaged)) if os.path.isdir(amanaged) else ():
+        if not n.endswith('.dll'):
+            continue
+        try:
+            a = CM.Assembly(os.path.join(amanaged, n))
+            refs = [a.string(r[6]) for r in a.rows(CM.ASSEMBLYREF)]
+        except Exception:  # noqa: BLE001 - not an assembly we can read: nothing to say
+            continue
+        for ref in refs:
+            if ref.lower() not in have:
+                out.setdefault(ref, []).append(n[:-4])
+    return out
 
 
 def scripting_runtime(src, unity):

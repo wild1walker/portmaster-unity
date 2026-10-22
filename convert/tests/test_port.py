@@ -24,7 +24,8 @@ from test_apk import BID, make_apk, make_obb, manifest as apk_manifest
 
 # ---------------------------------------------------------------- a .NET assembly, written here
 
-def write_assembly(path, name, typedefs=(), typerefs=(), methods=(), memberrefs=(), pinvokes=(), version=1):
+def write_assembly(path, name, typedefs=(), typerefs=(), methods=(), memberrefs=(), pinvokes=(), version=1,
+                   assemblyrefs=()):
     """A minimal PE/CLI file with metadata tables: Module, TypeRef, TypeDef, MethodDef, MemberRef,
     ModuleRef, ImplMap, Assembly (version <version>.0.0.0). memberrefs: (typeref index from 1,
     name); pinvokes: (method index from 1, module, entry)."""
@@ -50,6 +51,7 @@ def write_assembly(path, name, typedefs=(), typerefs=(), methods=(), memberrefs=
     rows[0x1A] = [struct.pack('<H', s(m)) for m in modules]
     rows[0x1C] = [struct.pack('<HHHH', 0, (mi << 1) | 1, s(e), modules.index(mod) + 1) for mi, mod, e in pinvokes]
     rows[0x20] = [struct.pack('<IHHHHIHHH', 0x8004, version, 0, 0, 0, 0, 0, s(name), 0)]
+    rows[0x23] = [struct.pack('<HHHHIHHHH', 2, 1, 0, 0, 0, 0, s(a), 0, 0) for a in assemblyrefs]
     rows = {t: r for t, r in rows.items() if r}
     valid = sum(1 << t for t in rows)
     tables = struct.pack('<IBBBBQQ', 0, 2, 0, 0, 1, valid, 0)

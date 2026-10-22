@@ -181,6 +181,23 @@ class OlderNewerLinesTest(unittest.TestCase):
             os.makedirs(os.path.join(d, 'MonoBleedingEdge', 'etc'))
             self.assertEqual(A.scripting_runtime(d, UV.Version('2018.4.36f1')), '.NET 4.x (libmonobdwgc-2.0)')
 
+    def test_missing_references(self):
+        """engine modules that reference an assembly the data does not ship (a Unity 6 build without
+        netstandard.dll) are named"""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_port import write_assembly
+        from pmunity import clrmeta as CM
+        with tempfile.TemporaryDirectory() as d:
+            write_assembly(os.path.join(d, 'UnityEngine.CoreModule.dll'), 'UnityEngine.CoreModule',
+                           assemblyrefs=['mscorlib', 'netstandard', 'UnityEngine.SharedInternalsModule'])
+            write_assembly(os.path.join(d, 'UnityEngine.SharedInternalsModule.dll'), 'UnityEngine.SharedInternalsModule',
+                           assemblyrefs=['mscorlib'])
+            a = CM.Assembly(os.path.join(d, 'UnityEngine.CoreModule.dll'))
+            self.assertEqual([a.string(r[6]) for r in a.rows(CM.ASSEMBLYREF)][1], 'netstandard')
+            names = {'UnityEngine.CoreModule.dll', 'UnityEngine.SharedInternalsModule.dll', 'Assembly-CSharp.dll'}
+            self.assertEqual(A.missing_references(d, names), {'netstandard': ['UnityEngine.CoreModule']})
+            self.assertEqual(A.missing_references(d, names | {'netstandard.dll'}), {})
+
     def test_typetree_neighbours(self):
         """typetrees.read: an object a field shorter than UnityPy's tree for its version (6000.2.6f2's
         UnityConnectSettings lacks InsightsSettings, which UnityPy's trees have from 6000.2.0b7 on)
