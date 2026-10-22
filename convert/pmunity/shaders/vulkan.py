@@ -487,11 +487,12 @@ def _check_es(src, stage, es):
                 raise glsl.NeedsES31(f'{stage}: {what} {mm.group(0).strip()!r} (GLSL ES 3.10)')
 
 
-def translate_program(translator, code, bindings, serializer=None, unity=None, precision='highp'):
+def translate_program(translator, code, bindings, serializer=None, unity=None, precision='highp', notes=None):
     """One Vulkan entry (code, its dxbc.Bindings with the parameter entry and shared parameters
     put back) -> (GL program text, GPU program type: GLES3 or GLES31). unity: (major, minor) of the
     data (2019.1+: Unity's macro blocks, texture units, uniform blocks; before: plain uniforms).
-    Raises Unsupported."""
+    The vertex stage's full-screen texture coordinates get GL's origin (uv_origin; notes, a list:
+    'VERTEX uv-origin <n>' where it changed anything). Raises Unsupported."""
     unity = unity or dxbc.unity_line(serializer)
     macros = unity >= (2019, 1)
     _, mods = split_code(code)
@@ -582,6 +583,9 @@ def translate_program(translator, code, bindings, serializer=None, unity=None, p
         if 'ESSL 310' not in str(ex) and 'ES 3.1' not in str(ex) and '310' not in str(ex):
             raise
         texts, typ = compile_all(310), 3
+    texts['VERTEX'], flips = uv_origin(texts['VERTEX'])
+    if flips and notes is not None:
+        notes.append(f'VERTEX uv-origin {flips}')
     return ''.join(f'#ifdef {st}\n{texts[st]}\n#endif\n' for st in ('VERTEX', 'FRAGMENT')), typ
 
 
@@ -674,7 +678,7 @@ def add_gles3_vulkan(tree, translator=None, precision='highp', replace=False, un
             raise ValueError('add_gles3_vulkan needs a translator or a translate function')
 
         def translate(code, b):
-            return translate_program(translator, code, b, serializer, line, precision)
+            return translate_program(translator, code, b, serializer, line, precision, r.notes)
     cache = {}
 
     def program(key, e, b):
@@ -873,3 +877,134 @@ def _restore_common(tree, plan, entries, blobs, separate):
         C._clear_common(prog)
     if changed:
         blobs.set_entries(B.PLATFORM_VULKAN, entries, blobs.segments(B.PLATFORM_VULKAN) if blobs.nested else None)
+
+
+# ---------------------------------------------------------------- full-screen texture coordinates
+
+_DECL_TYPE = r'(?:(?:const\s+)?(?:(?:highp|mediump|lowp)\s+)?(?:float|int|uint|bool|[iub]?vec[234])\s+)?'
+_STMT = re.compile(r'^(\s*)(' + _DECL_TYPE + r')(\w+)(?:\.([xyzw]+))?\s*([-+]?=)\s*(.+?);\s*$')
+_OPER = re.compile(r'^(\w+)(?:\.([xyzw]+))?$')
+_VERTEX_ID = re.compile(r'^(?:u?int\()?(?:uint\(gl_VertexID\)|gl_VertexID)\)?$')
+_FLIP = re.compile(r'^\(?-(\w+(?:\.[xyzw]+)?)\)?\s*\+\s*(?:1\.0|vec[234]\((?:1\.0,\s*)*1\.0\))$')
+
+
+def _strip_parens(s):
+    s = s.strip()
+    while s.startswith('(') and s.endswith(')') and _closing(s, 0) == len(s) - 1:
+        s = s[1:-1].strip()
+    return s
+
+
+def _closing(s, i):
+    depth = 0
+    for j in range(i, len(s)):
+        depth += s[j] == '('
+        depth -= s[j] == ')'
+        if depth == 0:
+            return j
+    return -1
+
+
+def _top_split(s, sep):
+    """s split at sep outside parentheses (sep: one character)."""
+    out, depth, cur = [], 0, ''
+    for ch in s:
+        depth += ch == '('
+        depth -= ch == ')'
+        if ch == sep and depth == 0:
+            out.append(cur)
+            cur = ''
+        else:
+            cur += ch
+    return out + [cur]
+
+
+def uv_origin(vs):
+    """The vertex stage of a program from Vulkan (SPIRV-Cross's GLSL) or Metal (metal.py's) with the
+    texture coordinate flips of the SRP core library's full-screen triangle and quad undone, as
+    dxbc.gl_uv_origin does for Direct3D 11 (docs/shaders.md): Vulkan and Metal have Direct3D's
+    top-left texture origin (UNITY_UV_STARTS_AT_TOP), GL does not, and URP's C# side asks the
+    running API. GetFullScreenTriangleTexCoord's v = 1 - (id & 2) and GetQuadTexCoord's
+    v = 1 - ((id >> 1) + (id & 1)) & 1 are traced from gl_VertexID through the stage's temporaries
+    (declarations, swizzles, constructors, `+=`); `t = (-v) + 1.0;` becomes `t = v;`. Shader
+    Graph's `_FlipY < 0.5` becomes false. Returns (text, flips undone)."""
+    if 'gl_VertexID' not in vs:
+        return vs, 0
+    tags = {}
+
+    def operand(s):
+        m = _OPER.match(s.strip())
+        if not m:
+            return None
+        var, swz = m.groups()
+        if swz:
+            return [tags.get((var, c)) for c in swz]
+        return [tags.get((var, ''), tags.get((var, 'x')))]
+
+    def value(rhs):
+        r = _strip_parens(rhs)
+        if _VERTEX_ID.match(r):
+            return ['id']
+        m = re.match(r'^(u?int|float|vec[234]|[iu]vec[234])\((.*)\)$', r)
+        if m and _closing(r, len(m.group(1))) == len(r) - 1:
+            args = [value(a) for a in _top_split(m.group(2), ',')]
+            if any(a is None for a in args):
+                return None
+            flat = [x for a in args for x in a]
+            if m.group(1) in ('int', 'uint') or m.group(1).startswith(('ivec', 'uvec')):
+                return flat
+            return [x if x in ('tri.f', 'quad.f') else {'tri': 'tri.f', 'quad': 'quad.f'}.get(x) for x in flat]
+        parts = _top_split(r, '+')
+        if len(parts) == 2:
+            fm = _FLIP.match(r)
+            if fm:
+                t = operand(fm.group(1))
+                if t and all(x in ('tri.f', 'quad.f') for x in t):
+                    return ['flip'] * len(t)
+            a, b = value(parts[0]), value(parts[1])
+            if a and b and len(a) == len(b) == 1 and {a[0], b[0]} == {'top', 'bot'}:
+                return ['sum']
+            return None
+        parts = _top_split(r, '&')
+        if len(parts) == 2 and re.match(r'^\s*(?:0x)?[12]u?\s*$', parts[1]):
+            a = value(parts[0])
+            k = int(parts[1].strip().rstrip('u'), 0)
+            if a and len(a) == 1:
+                return [{('id', 2): 'tri', ('id', 1): 'bot', ('sum', 1): 'quad'}.get((a[0], k))]
+            return None
+        m = re.match(r'^(.*)>>\s*1u?$', r)
+        if m:
+            a = value(m.group(1))
+            return ['top'] if a == ['id'] else None
+        if re.match(r'^-?\d', r):
+            return [None]
+        return operand(r)
+
+    n = 0
+    out = []
+    for line in vs.split('\n'):
+        m = _STMT.match(line)
+        if m and not line.lstrip().startswith('#'):
+            ind, decl, var, swz, op, rhs = m.groups()
+            v = value(f'{var}{"." + swz if swz else ""} + {rhs}' if op == '+=' else rhs) if op != '-=' else None
+            if v and v[0] == 'flip':
+                src = _FLIP.match(_strip_parens(rhs)).group(1)
+                line = f'{ind}{decl}{var}{"." + swz if swz else ""} = {src};'
+                v = operand(src)
+                n += 1
+            keys = [(var, c) for c in swz] if swz else None
+            if keys is None:
+                keys = [(var, '')] if not v or len(v) == 1 else [(var, c) for c in 'xyzw'[:len(v)]]
+                for c in 'xyzw':
+                    tags.pop((var, c), None)
+                tags.pop((var, ''), None)
+            if v is not None and len(v) == 1 and len(keys) > 1:
+                v = v * len(keys)
+            for i, k in enumerate(keys):
+                tags[k] = v[i] if v is not None and i < len(v) else None
+        out.append(line)
+    text = '\n'.join(out)
+    if re.search(r'^\s*uniform\s+(?:highp\s+|mediump\s+)?float\s+_FlipY\s*;', text, re.M):
+        text, k = re.subn(r'\b_FlipY\s*<\s*0\.5\b', 'false', text)
+        n += k
+    return text, n

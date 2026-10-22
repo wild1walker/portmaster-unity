@@ -154,6 +154,38 @@ class CodeTest(unittest.TestCase):
         self.assertTrue(V.is_globals('VGlobals2505651496') and V.is_globals('PGlobals1') and not V.is_globals('UnityPerDraw'))
 
 
+class UvOriginTest(unittest.TestCase):
+    """The SRP core library's full-screen coordinates (UNITY_UV_STARTS_AT_TOP's flips) in the forms
+    SPIRV-Cross and metal.py write them."""
+
+    def test_triangle(self):
+        vs = ('void main()\n{\n    _9.x = uint(bitfieldInsert(0, gl_VertexID, 1, 1));\n    _9.w = uint(gl_VertexID) & 2u;\n'
+              '    vec2 _35 = vec2(_9.xw);\n    _30 = vec3(_35.x, _35.y, _30.z);\n    _30.z = (-_30.y) + 1.0;\n'
+              '    vs_LOCATION0 = (_30.xz * _BlitScaleBias.xy) + _BlitScaleBias.zw;\n}\n')
+        out, n = V.uv_origin(vs)
+        self.assertEqual(n, 1)
+        self.assertIn('    _30.z = _30.y;\n', out)
+        self.assertEqual(out.replace('_30.z = _30.y;', '_30.z = (-_30.y) + 1.0;'), vs)
+
+    def test_quad(self):
+        vs = ('    _8 = int(uint(gl_VertexID) & 1u);\n    _18 = uint(gl_VertexID) >> 1u;\n    _8 += int(_18);\n'
+              '    _36.x = float(_18);\n    _42 = uint(_8) & 1u;\n    _46 = float(_42);\n    _36.z = (-_46) + 1.0;\n'
+              '    vs_LOCATION0.x = (-_36.x) + 1.0;\n')
+        out, n = V.uv_origin(vs)
+        self.assertEqual(n, 1)
+        self.assertIn('    _36.z = _46;\n', out)
+        self.assertIn('vs_LOCATION0.x = (-_36.x) + 1.0;', out)     # (x is not the flipped coordinate)
+
+    def test_metal_form_and_flip_y(self):
+        vs = ('uniform float _FlipY;\n    u_xlatu0.w = uint(gl_VertexID) & 0x2u;\n    u_xlat0.xy = vec2(u_xlatu0.xw);\n'
+              '    u_xlat0.z = -u_xlat0.y + 1.0;\n    if(_FlipY < 0.5){\n')
+        out, n = V.uv_origin(vs)
+        self.assertEqual(n, 2)
+        self.assertIn('u_xlat0.z = u_xlat0.y;', out)
+        self.assertIn('if(false){', out)
+        self.assertEqual(V.uv_origin('    u_xlat0.z = -u_xlat0.y + 1.0;\n'), ('    u_xlat0.z = -u_xlat0.y + 1.0;\n', 0))
+
+
 @unittest.skipUnless(TRANSLATOR, 'pmspirvcross not built (tools/spirvcross/build.sh)')
 class TranslateTest(unittest.TestCase):
     def setUp(self):

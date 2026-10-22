@@ -1104,10 +1104,12 @@ def emit(st, body, precision='highp', es='300'):
     return '\n'.join(out) + '\n'
 
 
-def translate_program(vs_src, fs_src, precision='highp', unity=None):
+def translate_program(vs_src, fs_src, precision='highp', unity=None, notes=None):
     """MSL of a vertex and a fragment stage -> (GL program text, gpu type 4 or 3: GLES 3.1). unity:
     (major, minor) of the data: from 2019.1 the samplers get their units in Unity's macro
-    (UNITY_LOCATION(n), program-wide, the fragment stage's first), as Unity's GL programs have them."""
+    (UNITY_LOCATION(n), program-wide, the fragment stage's first), as Unity's GL programs have them.
+    The vertex stage's full-screen texture coordinates get GL's origin (vulkan.uv_origin; notes: as
+    there)."""
     v, vb = translate_stage(vs_src, precision)
     f, fb = translate_stage(fs_src, precision)
     if v.stage != 'VERTEX' or f.stage != 'FRAGMENT':
@@ -1125,13 +1127,16 @@ def translate_program(vs_src, fs_src, precision='highp', unity=None):
             v.outs[v.outs.index(vout[name])] = 'flat ' + vout[name]
     es = '310' if (v.needs_es31 or f.needs_es31) else '300'
     try:
-        return _program(v, vb, f, fb, precision, unity, es)
+        return _program(v, vb, f, fb, precision, unity, es, notes)
     except glsl.NeedsES31:
-        return _program(v, vb, f, fb, precision, unity, '310')
+        return _program(v, vb, f, fb, precision, unity, '310', notes)
 
 
-def _program(v, vb, f, fb, precision, unity, es):
+def _program(v, vb, f, fb, precision, unity, es, notes):
     texts = {'VERTEX': emit(v, vb, precision, es), 'FRAGMENT': emit(f, fb, precision, es)}
+    texts['VERTEX'], flips = VK.uv_origin(texts['VERTEX'])
+    if flips and notes is not None:
+        notes.append(f'VERTEX uv-origin {flips}')
     if unity is not None and unity >= (2019, 1):
         units = {}
         for st in ('FRAGMENT', 'VERTEX'):
@@ -1211,7 +1216,7 @@ def add_gles3_metal(tree, precision='highp', replace=False, unity=None, translat
     separate = serializer == dxbc.SEPARATE_PARAMS_FROM and any(pbi is not None for *_, pbi in lists)
     if translate is None:
         def translate(vs, ps):
-            return translate_program(msl_of(vs.code), msl_of(ps.code), precision, line)
+            return translate_program(msl_of(vs.code), msl_of(ps.code), precision, line, r.notes)
     cache = {}
 
     def program(vi, fi):

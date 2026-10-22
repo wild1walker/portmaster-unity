@@ -561,7 +561,13 @@ What the path does (`vulkan.py`, `spirv.py`), for Unity 2017.4 - 6000.x:
 
 What the Vulkan compile decided by platform stays as for Direct3D 11 ([above](#windows-builds-direct3d-11-programs)):
 `UNITY_REVERSED_Z`, `UNITY_UV_STARTS_AT_TOP` and `UNITY_NEAR_CLIP_VALUE` are Direct3D's on Vulkan,
-and so are platform-sized arrays (URP's additional lights: 256 for Vulkan, 32 for GL). Compute
+and so are platform-sized arrays (URP's additional lights: 256 for Vulkan, 32 for GL). The same
+exception is made as for Direct3D 11: the full-screen passes' texture coordinates of the SRP core
+library get GL's origin (`vulkan.uv_origin`, the same trace as `dxbc.gl_uv_origin` in SPIRV-Cross's
+form of the code: declarations, constructors, `+=`; logged as `uv-origin`). In a URP 2022.3 game 962
+of 2071 programs of the shaders in `globalgamemanagers.assets` get it (UberPost's 720 variants,
+FinalPost, the blits, Bloom, TAA, SMAA, depth of field, the LUT builders, ...); the lens flare's own
+`u = 1 - u` stays. Compute
 shaders' Vulkan kernels are not translated yet (the GLCore path's `compute` needs GLCore kernels).
 
 **Checked** (`tests/test_vulkan_corpus.py`, eleven free Linux games that have both OpenGL Core and
@@ -632,7 +638,9 @@ expressions have) and writes HLSLcc's GL form of it:
   samplers' units in Unity's macro, as the other paths.
 
 Unity's Metal compile has Metal's platform choices as Direct3D's (`UNITY_REVERSED_Z`,
-`UNITY_UV_STARTS_AT_TOP`); Metal's clip space has y up, as GL's. Left out: device buffers
+`UNITY_UV_STARTS_AT_TOP`); Metal's clip space has y up, as GL's. The full-screen passes' texture
+coordinates get GL's origin as for Vulkan (`vulkan.uv_origin` on metal.py's output: 870 of the 957
+programs of the URP game's `globalgamemanagers.assets`). Left out: device buffers
 (structured buffers), writable textures, VR's render target array index, tessellation.
 
 **Checked** (`tests/test_metal_corpus.py`, `tests/test_metal.py` on hand-written MSL): every entry
