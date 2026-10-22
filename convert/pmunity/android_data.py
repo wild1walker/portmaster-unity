@@ -1136,7 +1136,7 @@ def plan(args):
             rel = os.path.relpath(s, sa)
             # every asset bundle gets the Android platform (Addressables' aa/, a game's own folders);
             # a catalog with bundle CRCs is rewritten after them (streaming.py)
-            act = 'bundle' if is_unityfs(s) else 'aacatalog' if ST.is_catalog(rel) and ST.catalog_has_crcs(s) else 'link'
+            act = 'bundle' if is_unityfs(s) else 'aacatalog' if ST.is_catalog(rel) and ST.catalog_needs_fix(s) else 'link'
             items.append((os.path.join(args.name, 'assets', rel), s, act))
     # files from the game's folder beside the root (GOG .info files: DLC detection)
     gd = os.path.dirname(src)
@@ -1746,10 +1746,11 @@ def main(argv=None):
     # Addressables catalogs: the CRCs of the bundles as they are now
     for dst_rel, src, act in items:
         if act == 'aacatalog':
-            data, n = ST.catalog_crcs(open(src, 'rb').read(), crcs)
+            data, n, n_paths = ST.fix_catalog(src, open(src, 'rb').read(), crcs)
             write_bytes(os.path.join(args.out, dst_rel), data)
-            report['files'][dst_rel] = f'Addressables catalog: {n} bundle CRCs updated'
-            log(f'  {dst_rel}: {n} bundle CRCs follow the patched bundles')
+            report['files'][dst_rel] = f'Addressables catalog: {n} bundle CRCs updated, {n_paths} Windows paths'
+            log(f'  {dst_rel}: {n} bundle CRCs follow the patched bundles' +
+                (f'; {n_paths} bundle paths with backslashes (a Windows build) now with /' if n_paths else ''))
     # remove files from earlier runs that are no longer planned
     planned = {d for d, s, a in items} | kept
     for d in sorted(placed_before):

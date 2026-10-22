@@ -51,8 +51,67 @@ def bundle_crc(path):
 
 
 def is_catalog(rel):
-    """An Addressables content catalog (JSON) in StreamingAssets (aa/catalog.json, aa/catalog_*.json)."""
-    return re.match(r'^aa[/\\]catalog[^/\\]*\.json$', rel) is not None
+    """An Addressables content catalog in StreamingAssets: JSON (aa/catalog.json, aa/catalog_*.json)
+    or, Addressables 2.x, binary (aa/catalog.bin)."""
+    return re.match(r'^aa[/\\]catalog[^/\\]*\.(json|bin)$', rel) is not None
+
+
+# a Windows build's catalog names its bundles {RuntimePath}\StandaloneWindows64\<bundle> (Path.Combine);
+# AssetBundleProvider refuses such a path elsewhere ("Invalid path in AssetBundleProvider")
+_RUNTIME_PATH = rb'\{UnityEngine\.AddressableAssets\.Addressables\.RuntimePath\}'
+_WIN_ID_BIN = re.compile(_RUNTIME_PATH + rb'(?:\\[^\\\x00-\x1f"]+?)+?\.bundle')      # (up to the name's end)
+_WIN_ID_JSON = re.compile(_RUNTIME_PATH + rb'(?:\\\\[^\\"]+?)+?\.bundle')
+
+
+def catalog_fix_paths(data, binary):
+    """(data, n): the catalog with the backslashes of its {RuntimePath} ids made '/' (in a binary
+    catalog byte for byte, so its lengths and offsets stay)."""
+    rx, sep = (_WIN_ID_BIN, b'\\') if binary else (_WIN_ID_JSON, b'\\\\')
+    n = 0
+
+    def fix(m):
+        nonlocal n
+        n += 1
+        return m.group(0).replace(sep, b'/')
+    return rx.sub(fix, data), n
+
+
+def catalog_needs_fix(path):
+    """Whether a catalog is rewritten after the bundles: bundle CRCs (JSON with m_Crc, any binary
+    catalog: its CRCs are matched by value) or Windows paths."""
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return False
+    binary = path.endswith('.bin')
+    return binary or catalog_fix_paths(data, binary)[1] > 0 or catalog_has_crcs(path)
+
+
+def catalog_bin_crcs(data, crcs):
+    """(data, n): a binary catalog (Addressables 2.x) with each bundle CRC in `crcs` ({old: new})
+    replaced where its 4 little-endian bytes occur exactly once (each did in the catalogs seen;
+    one found twice or not at all is left as it is)."""
+    out = bytearray(data)
+    n = 0
+    for old, new in crcs.items():
+        b = struct.pack('<I', old)
+        if old != new and data.count(b) == 1:
+            i = data.index(b)
+            out[i:i + 4] = struct.pack('<I', new)
+            n += 1
+    return bytes(out), n
+
+
+def fix_catalog(path, data, crcs):
+    """(data, CRCs replaced, paths made '/'): a catalog as the Android player's Addressables reads it."""
+    binary = path.endswith('.bin')
+    data, n_paths = catalog_fix_paths(data, binary)
+    if binary:
+        data, n = catalog_bin_crcs(data, crcs)
+    else:
+        data, n = catalog_crcs(data, crcs)
+    return data, n, n_paths
 
 
 def _records(c):
