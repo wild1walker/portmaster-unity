@@ -1626,9 +1626,8 @@ ROUTE_NEEDS = {
                'devices)',
     'il2cpp-arm64': 'a 64-bit (aarch64) handheld',
     'box64': "a 64-bit (aarch64) handheld with OpenGL ES 3, and PortMaster's Westonpack (downloaded on the first launch)",
-    'apk': "a 64-bit (aarch64) handheld with OpenGL ES 3; the game's 32-bit (armeabi-v7a) player runs where the handheld "
-           "also has a 32-bit (armhf) userland (e.g. Knulli), its 64-bit (arm64-v8a) player everywhere, as far as the "
-           "game's APK has them",
+    'apk': "a 64-bit (aarch64) handheld with OpenGL ES 3, and a 32-bit (armhf) userland beside its 64-bit system (e.g. "
+           "Knulli) for a game whose APK has only its 32-bit player",
 }
 ROUTE_SETUP = {
     'il2cpp-arm64': "The first launch also compiles the game's code with Unity's IL2CPP on the handheld: one to a few "
