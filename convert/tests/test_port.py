@@ -614,8 +614,10 @@ class NewAndSetupTest(unittest.TestCase):
         if os.path.isdir(os.path.join(g, 'setup')):
             shutil.copy(pyb, os.path.join(g, 'setup', 'python.tar.gz'))
         log = os.path.join(t, 'pm.log')
-        e = dict(os.environ, GAMEDIR=g, controlfolder=pm, DEVICE_ARCH='aarch64', STUB_LOG=log,
-                 STUB_RUNTIME='.NET 4.x (libmonobdwgc-2.0)', STUB_VERSION='2019.4.8f1', STUB_FAIL='')
+        # (not the caller's PMHLSLCC: the setup sets it only for a port that ships pmhlslcc)
+        e = dict({k: v for k, v in os.environ.items() if k != 'PMHLSLCC'}, GAMEDIR=g, controlfolder=pm,
+                 DEVICE_ARCH='aarch64', STUB_LOG=log, STUB_RUNTIME='.NET 4.x (libmonobdwgc-2.0)',
+                 STUB_VERSION='2019.4.8f1', STUB_FAIL='')
         e.update(env)
         r = subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
         return g, r, (P._read(log) if os.path.exists(log) else '')
