@@ -17,6 +17,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "input.h"
 #include "frames.h"
 #include "framerate.h"
+#include "gcbudget.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
@@ -314,6 +315,7 @@ static void *dlsym_hook(const char *sym, void *p)
 {
     p = plugins_dlsym_hook(sym, p);            // FMOD's file paths (plugins.c)
     p = framerate_dlsym_hook(sym, p);          // UA_FRAME_RATE (framerate.c)
+    p = gcbudget_dlsym_hook(sym, p);           // UA_GC_BUDGET (gcbudget.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
@@ -324,6 +326,9 @@ static void *dlsym_hook(const char *sym, void *p)
     if (!strcmp(sym, "mono_array_class_get")) { r_array_class_get = p; return (void *)w_array_class_get; }
     return p;
 }
+
+// UnityMain, after each frame
+static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
@@ -470,7 +475,8 @@ int main(int argc, char **argv)
     // 2021.1+ Android players pace at targetFrameRate only (-1: 30 fps); converted desktop data gets
     // the desktop's vsync pacing back (framerate.c). An imported Android build keeps its own.
     framerate_init(strcmp(pj_source, "apk") && atoi(pj_unity) >= 2021 ? "desktop" : "android", cfg.refresh_rate);
-    cfg.on_frame = framerate_frame;
+    gcbudget_init();
+    cfg.on_frame = on_frame;
     cfg.sdk_int = sdk_int;
     static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1.1", "6.0.1", "7.0", "7.1.2", "8.0.0", "8.1.0", "9",
                                             "10", "11", "12", "12", "13", "14", "15" };

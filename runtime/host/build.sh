@@ -18,7 +18,7 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
-    for f in ua_host input pointer osk frames framerate glhooks hitches gltrace display display_sdl steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches gltrace display display_sdl steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
     # dl_iterate_phdr (docs/arm64.md): no flags for that. -lrt: libhybris'"'"'s timer_* and shm_open
@@ -51,6 +51,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c osk.c -o out/osk.o
   arm-linux-gnueabihf-gcc $F -c frames.c -o out/frames.o
   arm-linux-gnueabihf-gcc $F -c framerate.c -o out/framerate.o
+  arm-linux-gnueabihf-gcc $F -c gcbudget.c -o out/gcbudget.o
   arm-linux-gnueabihf-gcc $F -c glhooks.c -o out/glhooks.o
   arm-linux-gnueabihf-gcc $F -c hitches.c -o out/hitches.o
   arm-linux-gnueabihf-gcc $F -c gltrace.c -o out/gltrace.o
@@ -59,7 +60,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c steamstub.c -o out/steamstub.o
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/glhooks.o out/hitches.o out/gltrace.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/gltrace.o \
     out/display.o out/display_sdl.o out/steamstub.o out/plugins.o out/plugstubs.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
     -lSDL2 -lz -ldl -lpthread -lm
