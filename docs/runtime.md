@@ -61,7 +61,9 @@ Unity's EGL call sequence on a render thread while the main thread pumps SDL eve
 reading back and presenting, with SDL 2.0.10 (X11 on Xvfb, Wayland on a headless weston, the
 fbdev fallback) and SDL 2.26 (Wayland on a headless sway at 1920x1080, X11, offscreen). The whole
 game also runs this way in the emulated rig: `UA_DISPLAY=auto SDL_VIDEODRIVER=x11` against an
-Xvfb instead of `UA_EGL_PBUFFER=1`.
+Xvfb instead of `UA_EGL_PBUFFER=1`, or, with no X server, on SDL's offscreen driver (tools/emu's
+own image): `UA_EGL_PBUFFER=0 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=720x480 EMU_ENV=SDL_
+SDL_VIDEODRIVER=offscreen tools/emu/emu.sh ...`.
 
 ## Host switches (environment)
 
