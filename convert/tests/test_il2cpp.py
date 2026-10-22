@@ -462,6 +462,20 @@ class NdkClangTest(unittest.TestCase):
         out = self.run_tool('toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-objcopy',
                             '--strip-all', 'a', 'b')
         self.assertEqual(out, ['llvm-objcopy', '--strip-all', 'a', 'b'])
+        out = self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/aarch64-linux-android/bin/objcopy', '--strip-all', 'a', 'b')
+        self.assertEqual(out, ['llvm-objcopy', '--strip-all', 'a', 'b'])     # (r21d's, Unity 2021.x's Bee build)
+
+    def test_libcxx_default(self):
+        """the unified sysroot's libc++ for C++ without -stdlib (Unity 2021.x / 2022.x's Bee build), as the
+        NDK's clang++ does; nothing added for C, an explicit -stdlib, or an NDK without libc++ headers"""
+        tool = 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang++'
+        self.assertNotIn('-stdlib=libc++', self.run_tool(tool, '-c', 'a.cpp'))
+        os.makedirs(os.path.join(self.ndk, 'toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/c++/v1'))
+        self.assertIn('-stdlib=libc++', self.run_tool(tool, '-c', 'a.cpp'))
+        self.assertIn('-stdlib=libc++', self.run_tool(tool, '@objs.rsp', '-shared', '-static-libstdc++', '-o', 'x.so'))
+        self.assertEqual(self.run_tool(tool, '-c', '-stdlib=libstdc++', 'a.cpp').count('-stdlib=libc++'), 0)
+        self.assertNotIn('-stdlib=libc++', self.run_tool('toolchains/llvm/prebuilt/linux-x86_64/bin/clang', '-c', 'a.c'))
+        self.assertNotIn('-stdlib=libc++', self.run_tool(tool, '-c', '-x', 'c', 'gc.c'))     # (Bee: C through clang++)
 
 
 class AndroidDataIl2cppTest(unittest.TestCase):
@@ -516,9 +530,16 @@ class AndroidDataIl2cppTest(unittest.TestCase):
             got = AD.il2cpp_items(args, [(os.path.join(data, 'boot.config'), '/src/boot.config', 'link')], data)
             self.assertEqual(got[0][2], 'il2cppboot')
             self.assertTrue(6 * 10 ** 17 <= args.il2cpp_build_date < 7 * 10 ** 17)
+            self.assertNotIn('il2cppguid', [a for d, s, a in got])
+            # 2021.x+: boot.config as it is; the stamp is unity_app_guid, a GUID from the metadata
             args.unity = UV.Version('2021.3.16f1')
             got = AD.il2cpp_items(args, [(os.path.join(data, 'boot.config'), '/src/boot.config', 'link')], data)
             self.assertEqual(got[0][2], 'link')
+            self.assertEqual(got[-1], (os.path.join(data, 'unity_app_guid'),
+                                       os.path.join(md, 'global-metadata.dat'), 'il2cppguid'))
+            g = AD.il2cpp_app_guid(os.path.join(md, 'global-metadata.dat'))
+            self.assertRegex(g, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+            self.assertEqual(g, AD.il2cpp_app_guid(os.path.join(md, 'global-metadata.dat')))
 
 
 if __name__ == '__main__':
