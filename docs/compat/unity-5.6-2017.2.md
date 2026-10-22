@@ -52,8 +52,19 @@ request per file). Run in the emulated rig: free Linux games of 5.6.0f3 and 2017
   player stops at a `TypeLoadException`; android-data ships the game's desktop copy of such a
   module (android-data.md, section 4).
 
+## Graphics
+- 2017.1 - 2017.3 (2017.2.0f3 seen): a quality level with MSAA makes the player present through
+  its blit path whatever `androidBlitType` says (an MSAA framebuffer of its own, resolved into a
+  texture that is drawn over the window), but its display manager turns that path on only after
+  the window's first setup, and only a framebuffer created with the path on becomes Unity's
+  default framebuffer (2017.4 sets the buffers up again once the path is on). Every frame is then
+  drawn into the window and the untouched framebuffer presented over it: black (Shiver). The
+  player also takes a multisampled window config (4x in the rig) without asking for samples. The
+  runtime presents the window instead and keeps the window single-sampled (`UA_MSAA_FIX`,
+  runtime/host/msaafix.c; on for these players): the frames show, without MSAA.
+
 ## What the tools need for this version
 - converter: the 201609010 serializer, the assembly slots, 5.x GraphicsSettings, desktop engine
   modules where needed: done.
-- runtime: `nativeFile`, `nativeInitWWW` + WWW, the SHA1 shims: done. Not done: the 5.x
+- runtime: `nativeFile`, `nativeInitWWW` + WWW, the SHA1 shims, the MSAA present: done. Not done: the 5.x
   `settings.xml` itself (the Java side's splash and OBB flags; nothing in libunity reads it).

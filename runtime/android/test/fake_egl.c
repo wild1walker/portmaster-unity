@@ -25,11 +25,22 @@ EGLSurface eglCreateWindowSurface(EGLDisplay d, EGLConfig c, void *win, const EG
     return (EGLSurface)0x5f;
 }
 
+// A request with EGL_CONFIG_CAVEAT (0x3027, the tests' marker) lists three configs, as a driver with
+// multisampled ones does: 0x11 (4 samples, 1 sample buffer), 0x12 and 0x13 (none)
 EGLBoolean eglChooseConfig(EGLDisplay d, const EGLint *a, EGLConfig *cfgs, EGLint size, EGLint *num)
 {
-    int i = 0;
-    for (; a && a[i] != 0x3038 && i < 62; i += 2) { fake_last_config_attribs[i] = a[i]; fake_last_config_attribs[i + 1] = a[i + 1]; }
+    int i = 0, three = 0;
+    for (; a && a[i] != 0x3038 && i < 62; i += 2) {
+        fake_last_config_attribs[i] = a[i]; fake_last_config_attribs[i + 1] = a[i + 1];
+        if (a[i] == 0x3027) three = 1;
+    }
     fake_last_config_attribs[i] = 0x3038;
+    if (three) {
+        int n = 0;
+        for (; n < 3 && (!cfgs || n < size); n++) if (cfgs) cfgs[n] = (EGLConfig)(uintptr_t)(0x11 + n);
+        if (num) *num = cfgs ? n : 3;
+        return 1;
+    }
     if (cfgs && size > 0) cfgs[0] = (EGLConfig)0x1;
     if (num) *num = 1;
     return 1;
@@ -38,6 +49,8 @@ EGLBoolean eglChooseConfig(EGLDisplay d, const EGLint *a, EGLConfig *cfgs, EGLin
 EGLBoolean eglGetConfigAttrib(EGLDisplay d, EGLConfig c, EGLint attr, EGLint *v)
 {
     if (attr >= 0x3140 && attr <= 0x314F) { last_error = 0x3004; return 0; }
+    uintptr_t id = (uintptr_t)c;
+    if (id >= 0x11 && id <= 0x13 && (attr == 0x3031 || attr == 0x3032)) { *v = id == 0x11 ? (attr == 0x3031 ? 4 : 1) : 0; return 1; }
     *v = 42;
     return 1;
 }

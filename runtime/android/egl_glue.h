@@ -20,6 +20,13 @@ void *egl_glue_real(const char *name);
 // Called on Unity's render thread right before each real eglSwapBuffers (NULL to remove).
 void egl_glue_set_swap_hook(void (*hook)(void *ctx), void *ctx);
 
+// Single-sampled window configs (0, the default: the driver's list as it is). With it on,
+// eglChooseConfig returns only the driver's single-sampled configs (requests for EGL_SAMPLES or
+// EGL_SAMPLE_BUFFERS ask for none). Unity 2017.1 - 2017.3 with MSAA pick a multisampled config from
+// a request without samples, which they never render MSAA into (runtime/host/msaafix.c). Set before
+// Unity's first EGL call; the host display's config (egl_host_shims) is not affected.
+void egl_glue_set_single_sample_window(int on);
+
 // ---- host display ------------------------------------------------------------------------------
 // A window whose EGL display, config and window surface the host created itself (SDL2:
 // runtime/host/display_sdl.c), with the window system's own present path. With one set and

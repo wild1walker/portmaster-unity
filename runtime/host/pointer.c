@@ -380,6 +380,33 @@ void pointer_start(void)
     send_move();
 }
 
+// The start position again, once Unity takes input events. Unity's Android player empties its
+// queue of input events when it sets up its input (UnityInitApplication, inside the first frame)
+// and when it is unpaused (ResetInputAfterPause; the host resumes it at start): the hover sent at
+// start is dropped, and Unity's mouse stays at (0,0), the bottom left corner, until the first
+// motion. Unity's mouse delta for an event (the "Mouse X/Y" axes, Rewired's mouse axes, a game
+// cursor moved by them) is the event's position less the last one Unity had, and a frame's delta
+// is its last event's: from (0,0), the first motion would move such a cursor by the whole start
+// position. So after the second frame is presented (both resets of the first frames are done), the
+// hover goes again as a pair: half a pixel beside the cursor, then the cursor. Unity's mouse is then
+// on the cursor, and that frame's delta is half a pixel. A pointer moved before that is sent where
+// it is.
+#define RESEND_FRAME 2
+void pointer_frames(unsigned long presented)
+{
+    static int resent;
+    if (resent || presented < RESEND_FRAME || !pointer_enabled() || P.events != EV_MOUSE) return;
+    resent = 1;
+    int x = (int)lround(px), y = (int)lround(py);
+    float beside = (float)x + (x < P.width - 1 ? 0.5f : -0.5f);
+    int action = held ? UP_ACTION_MOVE : UP_ACTION_HOVER_MOVE;
+    if (!held) up_inject_mouse(P.mouse_dev, UP_ACTION_HOVER_ENTER, 0, beside, (float)y, 0, 0);
+    up_inject_mouse(P.mouse_dev, action, held, beside, (float)y, 0, 0);
+    up_inject_mouse(P.mouse_dev, action, held, (float)x, (float)y, 0, 0);
+    sent_x = x; sent_y = y;
+    fprintf(stderr, "[input] pointer at %d,%d sent again after frame %lu (Unity drops what was sent before)\n", x, y, presented);
+}
+
 void pointer_tick(void)
 {
     if (!pointer_enabled()) return;

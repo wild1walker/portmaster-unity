@@ -207,6 +207,12 @@ static void *real(const char *name)
     return p;
 }
 
+void *gltrace_wrapper(const char *name)
+{
+    for (const so_shim *s = g_shims; s->name; s++) if (!strcmp(s->name, name)) return s->fn;
+    return NULL;
+}
+
 const so_shim *gltrace_table(void)
 {
     int k = 0;

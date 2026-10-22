@@ -21,6 +21,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
+#include "msaafix.h"
 #include "arch.h"
 #include "display.h"
 #include "steamstub.h"
@@ -151,6 +152,18 @@ static int reported_sdk(void)
     if (t > SDK_CAP) t = SDK_CAP;
     if (t < pj_min_sdk) t = pj_min_sdk;
     return t > BASE_SDK ? t : BASE_SDK;
+}
+
+// Unity 2017.1 - 2017.3 players with a quality level that uses MSAA draw every frame into the
+// window and present a framebuffer of their own that nothing drew into (msaafix.c). The fix is on
+// for them (android_package.json's unity_version), off for every other player and for packages that
+// do not name their version; UA_MSAA_FIX=0|1 overrides.
+static int msaa_fix(void)
+{
+    const char *e = getenv("UA_MSAA_FIX");
+    if (e && *e) return atoi(e) != 0;
+    int major = 0, minor = 0;
+    return sscanf(pj_unity, "%d.%d", &major, &minor) == 2 && major == 2017 && minor <= 3;
 }
 
 static int only_apk(const char *root, char *out, size_t n)
@@ -414,7 +427,17 @@ int main(int argc, char **argv)
     g_mono_trace = getenv("UA_MONO_TRACE") != NULL;
     so_set_dlsym_hook(dlsym_hook);
     hitches_init();                            // UA_HITCH_TRACE
-    so_add_shims(gltrace_table());             // UA_GL_TRACE
+    const so_shim *trace = gltrace_table();    // UA_GL_TRACE
+    int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
+    so_add_shims(msaafix_table(msaa, gltrace_wrapper));   // (before the tracer's wrappers it calls)
+    so_add_shims(trace);
+    if (msaa) {
+        egl_glue_set_single_sample_window(1);
+        if (getenv("UA_DISPLAY_SAMPLES") && atoi(getenv("UA_DISPLAY_SAMPLES")) > 0) {
+            fprintf(stderr, "[host] UA_DISPLAY_SAMPLES ignored: Unity %s needs a single-sampled window (UA_MSAA_FIX)\n", pj_unity);
+            unsetenv("UA_DISPLAY_SAMPLES");
+        }
+    }
     so_add_shims(glhooks_table());             // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
     // the window: Mali fbdev (nothing to open), or an SDL2 window whose EGL objects Unity gets
     if (display_init(pkg) != 0) { fprintf(stderr, "[host] no display (UA_DISPLAY)\n"); return 1; }
@@ -498,6 +521,7 @@ int main(int argc, char **argv)
     cfg.audio_frames_per_buffer = getenv("UA_AUDIO_FRAMES") ? atoi(getenv("UA_AUDIO_FRAMES")) : 512;
     cfg.libmain_onload = (up_onload_fn)so_sym(m, "JNI_OnLoad");
     cfg.native_window = win;
+    msaafix_set_size(cfg.width, cfg.height);
     cfg.on_load_library = load_library;
     cfg.on_quit = on_quit;
     input_init(cfg.width, cfg.height);

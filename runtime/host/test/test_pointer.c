@@ -72,6 +72,7 @@ static void off(void)
     CHECK(pad[0] == 1 && pad[1] == -1 && pad[2] == 0.3f && pad[4] == 1 && pad[5] == 1);   // the game gets it all
     pointer_warp(0.5, 0.5, 1);
     run_ticks(0.05);
+    for (unsigned long f = 0; f < 5; f++) pointer_frames(f);
     unity_state();
     pointer_draw();
     CHECK(nev == 0);
@@ -88,6 +89,18 @@ static void mouse(void)
     pointer_start();
     struct ev *e = last('m');
     CHECK(e && e->action == UP_ACTION_HOVER_MOVE && e->x == 160 && e->y == 240 && e->a == 0 && e->dev == 3);
+    // Unity drops what was sent before its first frames: the hover again after the second frame, once,
+    // half a pixel beside and then on the cursor (that frame's mouse delta: the last event's)
+    int n0 = nev;
+    pointer_frames(0); pointer_frames(1);
+    CHECK(nev == n0);
+    pointer_frames(2);
+    CHECK(nev == n0 + 3 && evs[n0].action == UP_ACTION_HOVER_ENTER && evs[n0].x == 160.5f && evs[n0].y == 240 &&
+          evs[n0 + 1].action == UP_ACTION_HOVER_MOVE && evs[n0 + 1].x == 160.5f && evs[n0 + 1].y == 240 &&
+          evs[n0 + 2].action == UP_ACTION_HOVER_MOVE && evs[n0 + 2].x == 160 && evs[n0 + 2].y == 240 &&
+          evs[n0 + 2].a == 0 && evs[n0 + 2].dev == 3);
+    pointer_frames(3); pointer_frames(50);
+    CHECK(nev == n0 + 3);
     // the left stick and the d-pad are the cursor's; the rest still the game's
     axes(1, 0, 0, 0);
     CHECK(pad[0] == 0 && pad[1] == 0 && pad[4] == 0 && pad[5] == 0 && pad[2] == 0.3f);
@@ -98,7 +111,7 @@ static void mouse(void)
     // 1.2 screen heights per second at full deflection: ~173 px in 0.3 s (scheduling slack allowed)
     CHECK(e && e->action == UP_ACTION_HOVER_MOVE && e->x > 160 + 120 && e->x < 600 && e->y == 240);
     float x = e->x;
-    int n0 = nev;
+    n0 = nev;
     run_ticks(0.05);
     CHECK(nev == n0);                                   // still: nothing more is sent
     // d-pad up: moves at a quarter of the speed at first
@@ -180,6 +193,7 @@ static void touch(void)
     CHECK(pointer_init(640, 480, &id) == 1);
     CHECK(id == 1 && ndev == 0);                        // no mouse device
     pointer_start();
+    pointer_frames(2);
     CHECK(nev == 0);                                    // no finger, no event
     axes(1, 0, 0, 0);
     run_ticks(0.1);
