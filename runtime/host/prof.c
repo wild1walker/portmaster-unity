@@ -21,9 +21,10 @@
 //     the recording: pc, lr and its callers. Callers are unwound exactly while the code has unwind
 //     tables (32-bit ARM: the .ARM.exidx/.ARM.extab EHABI opcodes of libunity, Mono's runtime, libc,
 //     the GLES driver; AArch64: the frame-pointer chain); from where that stops (Mono's JIT code has
-//     no such tables) the rest of the stack is scanned for words that are return addresses (the
-//     instruction before them is a call: arch.h). Nothing is named, locked or allocated in the
-//     handler, and every stack read stays inside the thread's stack mapping.
+//     no such tables) the stack is scanned for words that are return addresses (the instruction
+//     before them is a call: arch.h), and on 32-bit ARM the exact unwind starts again where JIT
+//     code was entered from native code (see record()). Nothing is named, locked or allocated in
+//     the handler, and every stack read stays inside the thread's stack mapping.
 //     A thread whose last signal is still pending is counted as Q (runnable, not on a CPU, or in a
 //     long kernel path);
 //   - blocked (S, D): the thread is not disturbed: /proc/self/task/<tid>/syscall gives the system
@@ -38,8 +39,8 @@
 // the recording, the system's per-core counters (/proc/stat), and the frame times (swaps and
 // UnityMain's frames), so a profile can be read against the frame rate.
 //
-// Memory: (5 + UA_PROF_DEPTH) words per sample, <hz> x UA_PROF_SECS samples per thread, allocated
-// when a recording starts and freed when it is written (500 Hz, 20 s, depth 32: 1.4 MB a thread).
+// Memory: (9 + UA_PROF_DEPTH) words per sample, <hz> x UA_PROF_SECS samples per thread, allocated
+// when a recording starts and freed when it is written (500 Hz, 20 s, depth 32: 1.6 MB a thread).
 //
 // File format (text, one record per line, addresses in hex): see write_profile().
 #define _GNU_SOURCE
@@ -82,7 +83,7 @@ typedef struct { int n, nrd; range r[MAX_RANGES]; span rd[MAX_READABLE]; uint8_t
 typedef struct {
     _Atomic int tid;                // 0: unused slot
     char name[16];
-    int stat_fd, sys_fd, dead, no_signal;
+    int stat_fd, sys_fd, dead;
     uintptr_t stk_lo, stk_hi;       // the mapping that holds the stack (0: unknown, no scan)
     _Atomic uintptr_t probe_sp;
     _Atomic unsigned sent, got;
@@ -133,13 +134,6 @@ static const range *code_range(const rtab *t, uintptr_t v)
     return NULL;
 }
 
-// v is a return address in mapped code (async-signal-safe: reads the table and the code only)
-static int in_code(const rtab *t, uintptr_t v)
-{
-    const range *r = code_range(t, v);
-    return r && is_return_address(v, r->lo);
-}
-
 // [a, a + n) lies in a file-backed readable mapping (where unwind tables are)
 static int readable(const rtab *t, uintptr_t a, uintptr_t n)
 {
@@ -173,7 +167,8 @@ static int ehabi_ops(const rtab *tab, const range *r, uintptr_t key, uint8_t *op
         int m = (lo + hi) / 2;
         if (prel31(&e[2 * m]) <= key) { f = m; lo = m + 1; } else hi = m - 1;
     }
-    if (f < 0 || e[2 * f + 1] == 1) return -1;           // before the first function, or CANTUNWIND
+    if (f < 0) return -1;                                 // before the first function
+    if (e[2 * f + 1] == 1) return -2;                     // EXIDX_CANTUNWIND: the end (a thread's start)
     uint32_t w = e[2 * f + 1], w0;
     const uint32_t *d = NULL, *more;
     int k = 0, words;
@@ -212,13 +207,15 @@ static inline int call_is_indirect(uintptr_t v)
     return (*(const uint32_t *)(v - 4) & 0x0FFFFFF0) == 0x012FFF30;
 }
 
-// one frame up: r[] (r0-r15) from the callee's to the caller's; 0 when it cannot be done
+// one frame up: r[] (r0-r15) from the callee's to the caller's: 1; 0 when it cannot be done here
+// (no tables, a refused or unreadable step); -1 at the end of the stack (CANTUNWIND, lr 0)
 static int ehabi_step(const pthr *t, const rtab *tab, uint32_t *r, int first)
 {
     uintptr_t pc = r[15] & ~1u, key = first ? pc : pc - 2, v;
     const range *rg = code_range(tab, key);
     uint8_t ops[64];
     int n = rg ? ehabi_ops(tab, rg, key, ops, sizeof ops) : -1, set15 = 0;
+    if (n == -2) return -1;
     if (n < 0) return 0;
     uintptr_t vsp = r[13];
     for (int i = 0; i < n; ) {
@@ -269,7 +266,8 @@ static int ehabi_step(const pthr *t, const rtab *tab, uint32_t *r, int first)
     if (!set15) r[15] = r[14];
     uintptr_t osp = r[13];
     r[13] = (uint32_t)vsp;
-    if (!r[15] || vsp < osp || (vsp == osp && (r[15] & ~1u) == pc) || vsp >= t->stk_hi) return 0;
+    if (!r[15]) return -1;                                // no caller: the outermost frame
+    if (vsp < osp || (vsp == osp && (r[15] & ~1u) == pc) || vsp >= t->stk_hi) return 0;
     return 1;
 }
 #endif
@@ -300,12 +298,14 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
             const unsigned long *g = &uc->uc_mcontext.arm_r0;          // r0-r10, fp, ip, sp, lr, pc in order
             for (int k = 0; k < 16; k++) r[k] = (uint32_t)g[k];
             const range *rg;
-            for (int first = 1; d < depth && ehabi_step(t, tab, r, first) && (rg = code_range(tab, r[15] & ~1u)); first = 0) {
+            int rc = 0;
+            for (int first = 1; d < depth && (rc = ehabi_step(t, tab, r, first)) == 1 && (rg = code_range(tab, r[15] & ~1u)); first = 0) {
                 s[HDR + d++] = r[15];
                 from = r[13];
                 last = rg;
             }
             exact = d;
+            if (rc < 0) depth = d;                         // the thread's start: nothing above to scan
         }
         int after_jit = last && last->anon;
 #elif defined(__aarch64__)
@@ -334,8 +334,10 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
                 unsigned at = d;
                 s[HDR + d++] = v;
                 const range *rg2 = rg;
-                while (d < depth && ehabi_step(t, tab, r, 0) && (rg2 = code_range(tab, r[15] & ~1u))) s[HDR + d++] = r[15];
+                int rc = 0;
+                while (d < depth && (rc = ehabi_step(t, tab, r, 0)) == 1 && (rg2 = code_range(tab, r[15] & ~1u))) s[HDR + d++] = r[15];
                 if (d == at + 1) scanned[at >> 5] |= (uintptr_t)1 << (at & 31);   // nothing unwound from it: a scan's find
+                else if (rc < 0) break;                    // unwound to the thread's start: the rest is old data
                 after_jit = rg2 && rg2->anon;
                 w = (const uintptr_t *)(uintptr_t)r[13] - 1;   // the scan goes on above the unwound frames
                 if ((uintptr_t)(w + 1) < from) break;
@@ -397,6 +399,15 @@ static mapline *read_maps(int *n)
     fclose(f);
     *n = k;
     return v;
+}
+
+// the mapping that holds the thread's stack, from the sp its first signal saw (lo before hi: the
+// handler reads them)
+static void stack_bounds(pthr *t, const mapline *m, int n)
+{
+    uintptr_t sp = atomic_load(&t->probe_sp);
+    for (int k = 0; sp && k < n; k++)
+        if (sp >= m[k].lo && sp < m[k].hi) { t->stk_lo = m[k].lo; atomic_thread_fence(memory_order_release); t->stk_hi = m[k].hi; return; }
 }
 
 // the code ranges into the table the handlers are not reading, then switch them over (handlers
@@ -493,7 +504,7 @@ static void find_threads(void)
         t->stat_fd = open(p, O_RDONLY | O_CLOEXEC);
         snprintf(p, sizeof p, "/proc/self/task/%d/syscall", tid);
         t->sys_fd = open(p, O_RDONLY | O_CLOEXEC);
-        t->dead = t->no_signal = 0;
+        t->dead = 0;
         t->stk_lo = t->stk_hi = 0;
         t->buf = NULL; t->cap = 0;
         atomic_store(&t->n, 0);
@@ -538,7 +549,6 @@ static char thread_state(pthr *t)
 
 static void signal_thread(pthr *t)
 {
-    if (t->no_signal) { record(t, 'R', NO_SYSCALL, 0, 0, 0, NULL); return; }
     if ((int)(atomic_load(&t->sent) - atomic_load(&t->got)) > 0) { record(t, 'Q', NO_SYSCALL, 0, 0, 0, NULL); return; }
     atomic_fetch_add(&t->sent, 1);
     if (syscall(SYS_tgkill, getpid(), atomic_load(&t->tid), g_sig) != 0) { atomic_fetch_sub(&t->sent, 1); t->dead = 1; }
@@ -907,11 +917,8 @@ static void record_for(double secs)
     for (int i = 0; i < n; i++) {
         pthr *t = &g_thr[i];
         if (!atomic_load(&t->tid)) continue;
-        uintptr_t sp = atomic_load(&t->probe_sp);
-        t->no_signal = !sp;
-        if (!sp) fprintf(stderr, "[prof] %s does not answer signal %d: its running samples have no addresses\n", t->name, g_sig);
         t->stk_lo = t->stk_hi = 0;
-        for (int k = 0; k < nmaps; k++) if (sp >= maps[k].lo && sp < maps[k].hi) { t->stk_lo = maps[k].lo; t->stk_hi = maps[k].hi; break; }
+        stack_bounds(t, maps, nmaps);                     // (later, from the next maps, if it answers late)
         size_t sz = (size_t)cap * g_stride * sizeof(uintptr_t);
         void *b = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         t->buf = b == MAP_FAILED ? NULL : b;
@@ -920,7 +927,6 @@ static void record_for(double secs)
         atomic_store(&t->sent, 0); atomic_store(&t->got, 0);
         bytes += t->buf ? sz : 0;
     }
-    free(maps);
     unsigned fcap = (unsigned)(secs * 250) + 64;        // up to 250 frames a second
     for (int w = 0; w < 2; w++) {
         atomic_store(&g_nframes[w], 0);
@@ -947,13 +953,18 @@ static void record_for(double secs)
         if (up_is_finishing()) { aborted = 1; break; }
         for (int i = 0; i < n; i++) if (atomic_load(&g_thr[i].tid) && !g_thr[i].dead) tick(&g_thr[i]);
         if (t >= refresh) {                                // new code (JIT chunks, libraries)
-            maps = read_maps(&nmaps);
-            if (maps) build_table(maps, nmaps);
-            free(maps);
+            mapline *m2 = read_maps(&nmaps);
+            if (m2) { build_table(m2, nmaps); free(maps); maps = m2; }
             refresh = t + 2000000000ll;
         }
+        for (int i = 0; i < n; i++)                        // a thread whose first signal came late
+            if (!g_thr[i].stk_hi && atomic_load(&g_thr[i].probe_sp)) stack_bounds(&g_thr[i], maps, nmaps);
     }
     double took = (now_ns() - g_rec_start) / 1e9;
+    free(maps);
+    for (int i = 0; i < n; i++)
+        if (atomic_load(&g_thr[i].tid) && atomic_load(&g_thr[i].sent) && !atomic_load(&g_thr[i].got))
+            fprintf(stderr, "[prof] %s never took signal %d: its R and Q samples have no addresses (Q: its signals waited)\n", g_thr[i].name, g_sig);
     atomic_store(&g_recording, 0);
     // signals still on their way, handlers still writing: the buffers stay until they are done
     for (int w = 0; w < 500 && (w < 10 || atomic_load(&g_inflight)); w++) { struct timespec ts = { 0, 2000000 }; nanosleep(&ts, NULL); }
