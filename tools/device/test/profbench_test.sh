@@ -55,7 +55,7 @@ one
 two X_SETTING='a b' UA_AUDIO=1
 L
 export PATH="$T/bin:$PATH" DEVICE=fake@handheld OUT="$T/out" HOST_BIN="$T/ua_host" PROF_SAMPLE="$T/prof.txt"
-export PLAN='log:title ready; steady:2; press:0:b; hitch:1000; steady:2; shot' MEASURE=3 UA_PROF=100 STEP_TIMEOUT=30
+export PLAN='log:title ready; steady:2; press:0:b; hitch:1000; seen:title ready; steady:2; shot' MEASURE=3 UA_PROF=100 STEP_TIMEOUT=30
 log=$("$PU/tools/device/profbench.sh" "$T/dev/game" --list "$T/list.txt" 2>&1)
 fail() { echo "profbench_test: FAILED: $*"; printf '%s\n' "$log" | tail -40; exit 1; }
 for n in one two; do

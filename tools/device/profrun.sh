@@ -20,7 +20,9 @@
 # again with UATEST_STOP_ES=1): clocks, governors and thermal settings are only read.
 #
 # PLAN: steps separated by ';', each waiting (up to STEP_TIMEOUT s, default 300) or acting:
-#   log:<ERE>       a log line matches the extended regular expression (awk's)
+#   log:<ERE>       a new log line (after what the last wait matched, or the last press) matches the
+#                   extended regular expression (awk's)
+#   seen:<ERE>      the game has logged a matching line, at any time since it started
 #   steady:<n>      n new [fps] windows in a row without a hitch (a frame over 50 ms)
 #   hitch:<ms>      a new frame of at least <ms> ms (a scene load)
 #   sleep:<s>       wait
@@ -62,7 +64,7 @@ mem() { awk -v k="$1:" '$1 == k {print int($2 / 1024)}' "${2:-/proc/meminfo}"; }
 : > "$LOG"
 log "name $NAME, plan: ${PLAN:-none}, measure ${MEASURE:-30} s${PROF:+, profile at $PROF Hz}"
 for v in $(compgen -e); do case $v in UA_*|SDL_*|GC_*|MONO_*|ANDROID_*) log "env $v=${!v}" ;; esac; done
-pos=$(lines)
+pos=$(lines); start=$pos
 "$BIN" "$ROOT" >> "$LOG" 2>&1 &
 pid=$!
 
@@ -110,6 +112,7 @@ for step in "${steps[@]}"; do
   log "step $step"
   case $step in
     log:*) wait_for "$T_LOG" "${step#log:}" ;;
+    seen:*) p0=$pos; pos=$start; wait_for "$T_LOG" "${step#seen:}"; [ "$pos" -lt "$p0" ] && pos=$p0 ;;
     steady:*) wait_for "$T_STEADY" "${step#steady:}" ;;
     hitch:*) wait_for "$T_HITCH" "${step#hitch:}" ;;
     sleep:*) sleep "${step#sleep:}" ;;

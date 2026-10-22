@@ -10,7 +10,7 @@ import elfsyms  # noqa: E402
 # libunity at 0x10000 (bias 0x10000), libc at 0x80000, JIT code at 0x200000; UnityMain 100 samples
 # at 100 Hz over 1 s: 50 in libunity's "Update" called from a managed method, 20 in the managed
 # method itself, 10 in libc memcpy (dladdr name), 10 blocked in futex, 10 Q
-PROFILE = """ua_prof 2
+PROFILE = """ua_prof 3
 arch armhf
 hz 100
 secs 1.000
@@ -31,12 +31,12 @@ cpu 102 Job.Worker_0 10000000 0 20 1 0
 stat cpu 100 0 20 280 0 0 0
 stat cpu0 80 0 10 10 0 0 0
 stat cpu1 20 0 10 70 0 0 0
-stack 0 50 0 R ffff 11010 200041 1 200045 30001
-stack 1 20 0 R ffff 200020 0 0 30001
+stack 0 50 0 R ffff 11010 200041 1 200045 ~30001
+stack 1 20 0 R ffff 200020 0 0 ~30001
 stack 2 10 0 R ffff 80010 11011 1 11011 200041
-stack 3 10 0 S f0 80100 0 0 11801
+stack 3 10 0 S f0 80100 0 0 ~11801
 stack 4 10 0 Q ffff 0 0 0
-stack 5 10 1 S f0 80100 0 0 12001
+stack 5 10 1 S f0 80100 0 0 ~12001
 seq 0 0:0 10000:0 20000:0 30000:0 40000:0 50000:1 60000:2 70000:3 80000:4 90000:0
 swap 0 16000 33000 50000
 main 0 10000 100000 200000
@@ -108,12 +108,21 @@ class ProfsumTest(unittest.TestCase):
 
     def test_version1(self):
         # the first format: no <exact> field
-        v1 = PROFILE.replace('ua_prof 2', 'ua_prof 1').replace('11010 200041 1 200045', '11010 200041 200045')
+        v1 = PROFILE.replace('ua_prof 3', 'ua_prof 1').replace('11010 200041 1 200045 ~30001', '11010 200041 200045 30001')
         with open(self.path, 'w') as f:
             f.write(v1)
         p = profsum.Profile(self.path)
         self.assertEqual(p.stacks[0]['rets'], [0x200045, 0x30001])
         self.assertEqual(p.stacks[0]['exact'], 0)
+
+    def test_version2(self):
+        # the second format: callers after <exact> were scanned, no ~ marks
+        v2 = PROFILE.replace('ua_prof 3', 'ua_prof 2').replace('~', '')
+        with open(self.path, 'w') as f:
+            f.write(v2)
+        p = profsum.Profile(self.path)
+        self.assertEqual(p.stacks[0]['scanned'], [False, True])
+        self.assertEqual(p.stacks[2]['scanned'], [False, True])
 
     def test_exact(self):
         out = self.run_sum('--exact', '--thread', 'UnityMain')

@@ -60,10 +60,18 @@ class Profile:
                 continue
             k = p[0]
             if k == 'stack':
-                v2 = self.version >= 2                    # (version 1 has no <exact> field)
-                rets = [int(x, 16) for x in p[9 if v2 else 8:]]
+                # version 1: no <exact> field, every caller scanned; 2: the first <exact> unwound, the
+                # rest scanned; 3: scanned callers written ~<address>
+                v2 = self.version >= 2
+                words = p[9 if v2 else 8:]
+                rets = [int(x.lstrip('~'), 16) for x in words]
+                exact = int(p[8]) if v2 else 0
+                if self.version >= 3:
+                    scanned = [x.startswith('~') for x in words]
+                else:
+                    scanned = [i >= exact for i in range(len(words))]
                 self.stacks[int(p[1])] = dict(count=int(p[2]), thread=int(p[3]), state=p[4], sysnr=int(p[5], 16),
-                                              pc=int(p[6], 16), lr=int(p[7], 16), exact=int(p[8]) if v2 else 0, rets=rets)
+                                              pc=int(p[6], 16), lr=int(p[7], 16), exact=exact, rets=rets, scanned=scanned)
             elif k == 'seq':
                 t = int(p[1])
                 for e in p[2:]:
@@ -167,7 +175,7 @@ def sample_frames(p, s, exact_only):
     from lr; AArch64's frame chain starts at the caller's caller), the unwound ones, then (unless
     exact_only) the scanned ones"""
     use_lr = s['lr'] and not (p.arch == 'armhf' and s['exact'])
-    rets = s['rets'][:s['exact']] if exact_only else s['rets']
+    rets = [r for r, sc in zip(s['rets'], s['scanned']) if not sc] if exact_only else s['rets']
     return [s['pc']] + ([s['lr']] if use_lr else []) + rets
 
 
@@ -269,7 +277,7 @@ def main(argv=None):
                 names = [name(x) for x in frames]
                 if s['exact']:
                     unwound += n
-                    udepth += n * s['exact']
+                    udepth += n * sum(1 for sc in s['scanned'] if not sc)
                 for fnn in {x[1] for x in names}:
                     incl[fnn] += n
                 inner = next((x[1] for x in names if x[0] == 'managed'), None)

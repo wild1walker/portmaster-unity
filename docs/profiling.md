@@ -35,9 +35,13 @@ state from `/proc/self/task/<tid>/stat`:
   buffer allocated for the recording: pc, lr and its callers. The callers are unwound exactly as far
   as the code has unwind tables: on 32-bit ARM the EHABI opcodes of `.ARM.exidx`/`.ARM.extab`
   (libunity, Mono's runtime, libc and the GLES driver have them), on AArch64 the frame-pointer
-  chain. Mono's JIT code has no such tables: from the first managed frame on, the rest of the stack
-  is scanned for words that are return addresses (the instruction before them is a call; ARM, Thumb
-  and A64 forms). The handler names nothing, takes no lock, allocates nothing, and reads the stack
+  chain. Mono's JIT code has no such tables: from the first managed frame on, the stack is
+  scanned for words that are return addresses (the instruction before them is a call; ARM, Thumb
+  and A64 forms), and on 32-bit ARM the unwind starts again, exactly, at the first return address
+  into code with tables that was reached by an indirect call (`BLX <register>`: how Mono's runtime
+  and Unity's scripting calls enter JIT code; the callee pushed lr at the top of its frame, so the
+  caller's sp is the next word). The engine's frames below the scripts are thus unwound too: only
+  the managed frames themselves come from the scan. The handler names nothing, takes no lock, allocates nothing, and reads the stack
   only inside the thread's stack mapping. A thread whose previous signal is still pending is
   counted as **Q**: runnable but not on a CPU, or in a long kernel path;
 - **blocked**: the thread is left alone (it is not woken, its wait does not return early):
@@ -62,9 +66,11 @@ bitmap first, then a binary search); a blocked one is two `pread`s on the sample
 `UA_PROF` runs with runs without it on the device (the bench does) before reading small
 differences. Nothing runs, and nothing is allocated, while no recording is on.
 
-Limits. Below the first managed frame the callers are a scan, so a stale return address can
-appear there ("on the stack" is an upper bound; `profsum.py --exact` counts only unwound callers,
-and the summary says how many samples were unwound and how deep). A sample taken in a function's
+Limits. The managed frames are a scan, so a stale return address can appear among them, and a
+wrong re-start of the unwind is possible ("on the stack" is an upper bound; `profsum.py --exact`
+counts only unwound callers, the profile marks scanned ones `~`, and the summary says how many
+samples were unwound and how deep). ua_host and the fake JNI are built with `-funwind-tables`, so
+the unwind goes on below Unity's `nativeRender` to the thread's start. A sample taken in a function's
 prologue or epilogue can stop the unwind early (the tables describe the body). Blocked samples have
 only sp and pc (from `/proc`): their callers are always a scan. Mono's trampolines and code it has
 no information for are "anonymous code". Libraries the profile names only by exported symbols (a stripped libc or GLES
@@ -112,7 +118,8 @@ saves in data/); only `<game folder>/bench/` is written: this checkout's ua_host
 1. stops EmulationStation (`STOP_ES=0`: leave it), starts the game silent (SDL's dummy audio
    driver, always; `UA_AUDIO` is dropped) with `UA_FPS=1`, and a memory watchdog as uatest.sh's;
 2. follows `PLAN` to the point to measure: steps separated by `;`: `log:<regex>` (a new log line
-   matches), `steady:<n>` (n one-second windows in a row without a frame over 50 ms), `hitch:<ms>`
+   matches, after what the last step matched), `seen:<regex>` (the game logged such a line at any
+   time), `steady:<n>` (n one-second windows in a row without a frame over 50 ms), `hitch:<ms>`
    (a frame of at least `<ms>`: a scene load), `sleep:<s>`, `press:<presses>` (UA_INPUT_SCRIPT's
    syntax, through `input.req`), `shot`;
 3. measures for `MEASURE` seconds (30): the frame rate every second; raw copies of `/proc` and `/sys`
@@ -153,7 +160,7 @@ tools/device/profbench.sh /userdata/uatest/hollowknight --list hk-session.txt
 base
 prof      UA_PROF=500 MEASURE=20
 # where the frame goes, including the job threads
-prof-all  UA_PROF=250 MEASURE=20 UA_PROF_THREADS=UnityMain,UnityGfxDeviceW,Job.Worker*
+prof-all  UA_PROF=250 MEASURE=20 UA_PROF_THREADS='UnityMain,UnityGfxDeviceW,Job.Worker*,FMOD*'
 # what the frame costs without the vsync wait (a measurement: tears on fbdev)
 novsync   UA_SWAP_INTERVAL=0 UA_FRAME_RATE=200
 novsync-prof UA_SWAP_INTERVAL=0 UA_FRAME_RATE=200 UA_PROF=500 MEASURE=20
@@ -166,6 +173,8 @@ jobs-1    UA_UNITY_ARGS='-job-worker-count 1'
 gfx-st    UA_UNITY_ARGS=-force-gfx-st
 # Mono's collector: fewer, larger collections (hitches, not the steady frame rate)
 gc-64     UA_GC_BUDGET=64
+# FMOD's mixer wakes half as often (more output latency, the same sound)
+audio-1024     UA_AUDIO_FRAMES=1024
 base-end
 ```
 
@@ -179,8 +188,9 @@ What each answers:
 | `novsync` | the real frame cost: 40 fps unpaced means 25 ms of work, short of 16.7 by 8 ms; 55 means a little work away from 60 |
 | `novsync-prof` | the same with the profile, and `--frames`: UnityMain's time per frame |
 | `mono-*` | whether JIT code quality matters (only if managed code is a large share of the profile); the log's `[host] mono options` line confirms they were applied |
-| `jobs-*`, `gfx-st` | whether fewer threads compete with UnityMain on the four cores (schedstat's wait for a CPU) and what the render thread's hand-off costs; `JobSystem: Creating JobQueue using job-worker-count value <n>` in the log confirms the job count was taken |
+| `jobs-*`, `gfx-st` | whether fewer threads compete with UnityMain on the four cores (schedstat's wait for a CPU) and what the render thread's hand-off costs; `JobSystem: Creating JobQueue using job-worker-count value <n>` in the log confirms the job count was taken (it is, in the emulated rig: boot.config switches work as `UA_UNITY_ARGS`), and a run without a `UnityGfxDeviceW` thread confirms `-force-gfx-st` |
 | `gc-64` | collections and their pauses (`gc` in the fps lines); memory: available MB at the end |
+| `audio-1024` | what FMOD's mixer thread costs (its CPU in the thread table) when it runs every 1024 frames instead of 512 |
 
 Read the profile against what the scene holds: the number of active sprite renderers, cameras,
 behaviours with `Update`/`FixedUpdate` (PlayMaker FSMs among them), 2D colliders and rigidbodies,
