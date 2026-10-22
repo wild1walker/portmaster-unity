@@ -4,8 +4,8 @@ data it reads (GLES shaders, ASTC/ETC textures); the tool picks the ABI, extract
 libraries, keeps the APK as the package code path, names the OBBs as the player looks for them and
 writes android_package.json.
 
-    python -m pmunity apk <file>... <out> [--target auto|arm64|armhf] [--abi arm64-v8a|armeabi-v7a]
-                          [--any-unity-version] [--force] [--dry-run]
+    python -m pmunity apk <file>... <out> [--target auto|arm64|armhf|armhf,arm64] [--abi arm64-v8a|armeabi-v7a]
+                          [--any-unity-version] [--force] [--dry-run] [--json]
 
 <file>: an .apk (with OBBs beside it or given too), split APKs (base + config.<abi> + asset packs),
 an .xapk / .apks / .apkm-style zip of those (and of OBBs under Android/obb/), or an .aab (Android
@@ -22,9 +22,12 @@ App Bundle: rebuilt into one APK, as bundletool would for a device).
   android_package.json           package, versionCode/Name, min/target SDK, manifest meta-data
                                  (unity.build-id ties the OBB to the APK), ABI, backend, Unity version
 
-ABI: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one (--target; auto = the machine
-running the tool when it is an ARM Linux, else arm64-v8a when the build has it). Unity ships
-arm64-v8a players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one directly.
+ABI: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one (--target; a list = the first
+of those userlands the build has a player for, as a port's setup asks; auto = the machine running
+the tool when it is an ARM Linux, else arm64-v8a when the build has it). Unity ships arm64-v8a
+players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one directly. --json: what the
+build is (android_package.json's fields; with --dry-run the check's report) on stdout, the log on
+stderr. `pmunity port new --data <file>` makes a PortMaster port of it (the apk route).
 
 Refused, with the reason: builds without Unity's player (libmain/libunity) for an ARM ABI, x86-only
 builds, an ABI the target cannot run, Vulkan-only builds (the runtime draws with GLES), IL2CPP
