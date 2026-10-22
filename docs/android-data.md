@@ -325,6 +325,17 @@ value back for anything else (a desktop player, the directory route). Without `-
 folder is made but the code still reads the jar path (a warning says so). FMOD's banks stay in
 `assets/` beside the APK too, for ua_host's FMOD path mapping (section 5).
 
+With IL2CPP (`--il2cpp`, [il2cpp.md](il2cpp.md)) the game's code is in `libil2cpp.so`, so the
+patch is compiled in: `pmunity il2cpp --asmpatch <command> --streaming-assets both|loose` (and
+`--data-path`) adds it to the asmpatch run whose assemblies IL2CPP compiles, and its `il2cpp.json`
+says which mode it was built for. android-data `--il2cpp` then takes the same `--streaming-assets`
+and `--data-path`: a build whose compiled reads look for a folder or archive this packing would
+leave empty (built `both` or `loose`, packed otherwise; built with the data-path patch, packed
+without `--data-path`) is refused; folders made for a build without the patch get the same warning
+as above. `--asmpatch`, `--managed-file` and `--assembly-patch` are refused with `--il2cpp`: they go
+to `pmunity il2cpp`. With IL2CPP the data is one APK (no OBB) when it fits, so `both` keeps the
+files in the APK and beside it.
+
 In the emulated rig: a 2018.3 game whose menus take their text from localization XML files that it
 lists and opens in StreamingAssets (`DirectoryInfo.GetFiles`, `File.Exists`, `FileStream`) showed
 a dark screen and `KeyNotFoundException`s as before; with `both` its title menu. A 2020.3 game
@@ -402,6 +413,7 @@ registry and macOS's plist are not read: there a game's own save files are what 
 - The Mount patch and the OBB route have not been tried.
 - MT rendering and blit type are left at the game's values.
 - StreamingAssets (section 6): the rig ran the `obb` route on an Addressables game and `both` on
-  games reading localization XML and subtitle JSON with System.IO; `loose` and `--data-path` only
+  games reading localization XML and subtitle JSON with System.IO (and `both` with IL2CPP, the
+  2018.3 one); `loose` and `--data-path` only
   in the unit tests and the asmpatch tests; an FMOD game with `both` not run. Binary Addressables
   catalogs, Windows and macOS PlayerPrefs not handled.

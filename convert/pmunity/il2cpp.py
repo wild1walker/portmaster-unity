@@ -4,8 +4,9 @@ Android players (arm64-v8a) are IL2CPP players only; this is how a Mono game rea
 
     python -m pmunity il2cpp <data> <out> [--abi arm64-v8a|armeabi-v7a] [--pkg DIR] [--home DIR]
                              [--jobs N] [--strip low|none] [--keep-cpp] [--unity VERSION]
-                             [--managed-file DLL]... [--asmpatch COMMAND] [--dry-run]
-                             [--on-device [--toolchain DIR]]
+                             [--managed-file DLL]... [--assembly-patch NAME COMMAND]...
+                             [--asmpatch COMMAND [--streaming-assets obb|both|loose] [--data-path]]
+                             [--link-xml FILE]... [--dry-run] [--on-device [--toolchain DIR]]
     python -m pmunity il2cpp fetch <version> [--abi ...] [--net 2|2subset|4] [--pkg DIR] [--home DIR]
                                    [--on-device]                                   (toolchain only)
 --on-device: natively on an aarch64 Linux handheld, in a port's setup, without Docker
@@ -18,6 +19,10 @@ only). <out> gets
   Data/Managed/Resources/*-resources.dat        (`android-data --il2cpp <out>` puts them there)
   il2cpp.json                                   versions, assemblies, metadata version, options
 Then `pmunity android-data --il2cpp <out> --pkg <the IL2CPP player package> ...` packs the data.
+The game's code is compiled into libil2cpp.so, so what changes it goes here, not to android-data:
+--managed-file, --assembly-patch, --asmpatch; and with --streaming-assets both|loose / --data-path
+(StreamingAssets or the data folder read with System.IO) asmpatch's opt-in patches for them, which
+android-data's options of the same names then match with the folders beside the APK.
 
 What it uses, all fetched once into --home (default $PMUNITY_IL2CPP_HOME, else
 ~/.cache/pmunity/il2cpp) with HTTP range requests, never whole installers:
@@ -59,6 +64,7 @@ import urllib.request
 import zlib
 
 from . import il2cpp_bee as BEE
+from . import streaming as ST
 from . import unity_version as UV
 
 ABIS = {'arm64-v8a': ('ARM64', 'aarch64-linux-android', 21),
@@ -102,6 +108,7 @@ METADATA_MAGIC = 0xFAB11BAF
 # the first 2017.4 release with a 64-bit ARM IL2CPP player, and the line's last
 ARM64_2017 = (16, '2017.4.40f1')
 BCL_DIR = 'MonoBleedingEdge/lib/mono/unityaot'   # the class libraries of IL2CPP builds from 2018.1 (bcl_profile)
+MAP_FILE_UNTIL = (2018, 4)              # il2cpp's Android builds before 2018.4 run MapFileParser on a linker map
 
 
 def log(msg):
@@ -832,13 +839,49 @@ class _AsmRefs:
             self.refs.append(d[strings + name_idx:e].decode('utf-8', 'replace'))
 
 
-def stage_assemblies(data, tc, out_dir, log=log, managed_files=()):
+def listed_assemblies(data):
+    """The script assemblies the data names (ScriptingAssemblies.json, Unity 2019.3+, else
+    MonoManager.m_AssemblyNames in globalgamemanagers): the game's, its packages' and its plugin
+    assemblies, which the player loads by name. Empty when neither can be read."""
+    p = os.path.join(data, 'ScriptingAssemblies.json')
+    try:
+        if os.path.isfile(p):
+            with open(p, encoding='utf-8') as f:
+                return {n for n in json.load(f).get('names') or [] if n}
+        g = os.path.join(data, 'globalgamemanagers')
+        if os.path.isfile(g):
+            return monomanager_names(g)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return set()
+
+
+def monomanager_names(src):
+    """MonoManager.m_AssemblyNames of a globalgamemanagers file, a data.unity3d (its path or bytes)."""
+    try:
+        import UnityPy
+    except ImportError:
+        return set()
+    try:
+        env = UnityPy.load(src)
+        for o in env.objects:
+            if o.type.name == 'MonoManager':
+                return {n for n in o.read_typetree().get('m_AssemblyNames') or [] if n}
+    except Exception:                       # noqa: BLE001 - only a hint for staging
+        pass
+    return set()
+
+
+def stage_assemblies(data, tc, out_dir, log=log, managed_files=(), listed=()):
     """The assembly set il2cpp compiles, in out_dir: the game's own assemblies (and Unity's package
     assemblies the build shipped) from <data>/Managed, the IL2CPP player's UnityEngine assemblies
     instead of the desktop ones, and the IL2CPP class libraries (tc['bcl']: bcl_profile) instead of
     the desktop Mono's, following references from the game's assemblies. `managed_files`: assemblies
     compiled instead of the data's copies of the same name, or added (a port's patched
-    Assembly-CSharp, its helper, asmpatch's output). Returns {name: source}."""
+    Assembly-CSharp, its helper, asmpatch's output). `listed`: the data's script assemblies
+    (listed_assemblies): one with a class library's name (a project's Plugins/I18N.dll for code
+    pages, which nothing references) is the game's, staged from its own copy and kept whole, as
+    Unity's build does with a plugin assembly. Returns {name: source}."""
     gm = os.path.join(data, 'Managed')
     eng = os.path.join(tc['pkg'], 'Variations', 'il2cpp', 'Managed')
     bcl = os.path.join(tc['editor'], tc.get('bcl', BCL_DIR))
@@ -850,10 +893,13 @@ def stage_assemblies(data, tc, out_dir, log=log, managed_files=()):
     engine = {n: os.path.join(eng, n) for n in os.listdir(eng) if n.endswith('.dll')}
     override = {os.path.basename(f): os.path.abspath(f) for f in managed_files}
     game = {}
+    listed = set(listed or ())
     for n in sorted(set(os.listdir(gm)) | set(override)):
-        if not n.endswith('.dll') or (n not in override and (is_engine(n) or n in bcl_files)):
+        if not n.endswith('.dll') or (n not in override and (is_engine(n) or n in bcl_files and n not in listed)):
             continue
         game[n] = override.get(n) or os.path.join(gm, n)
+        if n in bcl_files and n in listed and n not in override:
+            log(f'  {n}: a class library\'s name, but one of the game\'s own assemblies (the data lists it): its copy, whole')
     chosen = dict(engine)
     chosen.update(game)
     todo = list(chosen)
@@ -999,10 +1045,11 @@ def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg, profi
          '--platform=Android', f'--architecture={arch}', '--configuration=Release',
          f'--outputpath={so}', f'--cachedirectory={cache}', f'--generatedcppdir={cpp}',
          f'--directory={managed}', f'--tool-chain-path={ndk}', '--verbose']
-    if version.line < (2018, 1):
-        # 2017.x links with a map file and then runs MapFileParser on it for Data/SymbolMap-<arch>
-        # (which libil2cpp's managed stack traces can do without: it falls back to the method
-        # pointer table); with no --map-file-parser il2cpp builds one with the host's GCC
+    if version.line < MAP_FILE_UNTIL:
+        # 2017.x - 2018.3 link with a map file and then run MapFileParser on it for
+        # Data/SymbolMap-<arch> (which libil2cpp's managed stack traces can do without: it falls
+        # back to the method pointer table); with no --map-file-parser il2cpp builds one from its
+        # sources with the host's GCC (finish() writes the file from the symbol table instead)
         a.append('--map-file-parser=/bin/true')
     if settings.get('gcIncremental') and version.line >= (2019, 1):
         a.append(f'--incremental-g-c-time-slice={settings.get("gcTimeSlice", 3)}')
@@ -1202,12 +1249,58 @@ def run_asmpatch(command, managed, work):
     return [os.path.join(dst, n) for n in sorted(os.listdir(dst)) if n.endswith('.dll')] if os.path.isdir(dst) else []
 
 
+def run_assembly_patches(patches, managed, work):
+    """A port's assembly patches ([(name, command)], as android-data --assembly-patch): each command
+    runs with {managed} = the game's Managed folder and {out} = an empty folder, where it writes
+    <name>; the results go to <work>/assembly-patch for --managed-file."""
+    import shlex
+    dst = os.path.join(work, 'assembly-patch')
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(dst)
+    out = []
+    for name, command in patches:
+        tmp = os.path.join(work, 'assembly-patch.tmp')
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp)
+        cmd = [w.replace('{managed}', managed).replace('{out}', tmp) for w in shlex.split(command)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            log(f'assembly patch {name}: {line}')
+        if r.returncode != 0 or not os.path.isfile(os.path.join(tmp, name)):
+            raise SystemExit(f'assembly patch for {name} failed (exit {r.returncode}' +
+                             ('' if r.returncode else f', no {name} written') + f'):\n{r.stdout}{r.stderr}')
+        os.replace(os.path.join(tmp, name), os.path.join(dst, name))
+        shutil.rmtree(tmp, ignore_errors=True)
+        out.append(os.path.join(dst, name))
+    return out
+
+
+def folder_patches(streaming_assets='obb', data_path=False):
+    """asmpatch's opt-in patches for StreamingAssets and the data folder read with System.IO (the
+    folders android-data --streaming-assets / --data-path puts beside the APK)."""
+    if streaming_assets not in ST.MODES:
+        raise SystemExit(f'--streaming-assets {streaming_assets!r}: one of {", ".join(ST.MODES)}')
+    return ([ST.PATCH[streaming_assets]] if streaming_assets in ST.PATCH else []) + (['data-path'] if data_path else [])
+
+
 def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAGE, keep_cpp=False, dry=False,
-          strip='low', unity=None, managed_files=(), asmpatch=None, on_device=False, device_tc=None, link_xml=()):
+          strip='low', unity=None, managed_files=(), asmpatch=None, on_device=False, device_tc=None, link_xml=(),
+          assembly_patches=(), streaming_assets='obb', data_path=False, data_version=None, listed=None):
     """on_device: run the tools natively on this aarch64 Linux machine (a handheld's setup) with the
     device toolchain (il2cpp_device.py; fetched into device_tc, default <home>/device-arm64) instead
-    of Docker; the steps resume after a kill and the compiler jobs fit the memory."""
-    data_version = UV.of_data(data)
+    of Docker; the steps resume after a kill and the compiler jobs fit the memory.
+    streaming_assets (both, loose) and data_path add asmpatch's opt-in patches for files the game
+    reads with System.IO to the asmpatch command (as android-data does for Mono): they are compiled
+    in, and il2cpp.json says so, for android-data's options of the same names.
+    data_version: the Unity version, when `data` has no serialized file to read it from (`pmunity apk
+    --il2cpp` gives the assemblies and boot.config of an Android build's data.unity3d), and listed
+    the data's script assemblies (else listed_assemblies(data))."""
+    with_patches = folder_patches(streaming_assets, data_path)
+    if with_patches and not asmpatch:
+        raise SystemExit(f'--streaming-assets {streaming_assets}' + (' --data-path' if data_path else '') +
+                         f': these need --asmpatch (tools/asmpatch\'s command): its {", ".join(with_patches)} '
+                         f'patch is what gives the game\'s code the folder, compiled into libil2cpp.so')
+    data_version = data_version or UV.of_data(data)
     UV.check(data_version)
     version = tool_version(data_version, abi, unity)
     home = os.path.abspath(home or default_home())
@@ -1222,14 +1315,32 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     work = os.path.join(out, '.work')
     staged, linked = os.path.join(work, 'Managed-in'), os.path.join(work, 'Managed')
     managed_files = list(managed_files)
-    if asmpatch:
-        patched = run_asmpatch(asmpatch, os.path.join(data, 'Managed'), work)
-        clash = sorted({os.path.basename(f) for f in patched} & {os.path.basename(f) for f in managed_files})
+    given = {os.path.basename(f) for f in managed_files}
+    patches = {'managed_file': sorted(given)}
+    if assembly_patches:
+        names = [n for n, _ in assembly_patches]
+        clash = sorted(set(n for n in names if names.count(n) > 1) | (set(names) & given))
         if clash:
-            raise SystemExit(f'asmpatch changed {", ".join(clash)}, which --managed-file also gives: run asmpatch on '
-                             f'that assembly when making it instead')
+            raise SystemExit(f'--assembly-patch {", ".join(clash)}: given twice, or also by --managed-file')
+        managed_files += run_assembly_patches(assembly_patches, os.path.join(data, 'Managed'), work)
+        given |= set(names)
+        patches['assembly_patch'] = sorted(names)
+    if asmpatch:
+        asmpatch = ' '.join([asmpatch] + [f'--with={p}' for p in with_patches])
+        patched = run_asmpatch(asmpatch, os.path.join(data, 'Managed'), work)
+        clash = sorted({os.path.basename(f) for f in patched} & given)
+        if clash:
+            raise SystemExit(f'asmpatch changed {", ".join(clash)}, which --managed-file or --assembly-patch also '
+                             f'gives: run asmpatch on that assembly when making it instead')
         managed_files += patched
-    chosen = stage_assemblies(data, tc, staged, managed_files=managed_files)
+        patches['asmpatch'] = sorted(os.path.basename(f) for f in patched)
+        patches['asmpatch_with'] = with_patches
+    # (android-data --streaming-assets / --data-path check these against their own)
+    patches['streaming_assets'] = streaming_assets
+    patches['data_path'] = bool(data_path)
+    if listed is None:
+        listed = listed_assemblies(data)
+    chosen = stage_assemblies(data, tc, staged, managed_files=managed_files, listed=listed)
     settings = player_settings(data)
     cpp, cache = os.path.join(work, 'cpp'), os.path.join(work, 'cache')
     so = os.path.join(out, 'lib', abi, 'libil2cpp.so')
@@ -1298,7 +1409,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         dev.fetch(device_tc, dev.groups_for(tools, net471))
         secs = dev.run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, tc['editor'], strip)
         return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
-                      data_version=data_version, profile=profile, more={'on_device': dev.report(box)})
+                      data_version=data_version, profile=profile, more={'on_device': dev.report(box), **patches})
     for where, need in ((out, 2 << 30), (home, 1 << 30)):
         st = os.statvfs(where)
         if st.f_bavail * st.f_frsize < need:
@@ -1318,7 +1429,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     secs += t
     log(f'il2cpp: done in {t:.0f} s')
     return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
-                  data_version=data_version, profile=profile)
+                  data_version=data_version, profile=profile, more=patches)
 
 
 def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip, data_version=None,
@@ -1346,7 +1457,7 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
     if missing:
         log(f'WARNING: the player\'s libunity.so looks up {len(missing)} il2cpp_* functions libil2cpp.so lacks: {missing[:8]}')
     syms = [p for p in (os.path.join(os.path.dirname(so), n) for n in ('libil2cpp.so.debug', 'libil2cpp.sym')) if os.path.isfile(p)]
-    if version.line < (2018, 1) and syms:      # (2017.x: see il2cpp_args' --map-file-parser)
+    if version.line < MAP_FILE_UNTIL and syms:  # (2017.x - 2018.3: see il2cpp_args' --map-file-parser)
         n = write_symbol_map(syms[0], os.path.join(dst, 'SymbolMap-' + ABIS[abi][0]), abi == 'armeabi-v7a')
         log(f'SymbolMap-{ABIS[abi][0]}: {n} code symbols')
     # the unstripped library and the linker's map (dropped), the symbols (kept in .work): 2019.4+
@@ -1454,6 +1565,16 @@ def main(argv):
     ap.add_argument('--asmpatch', metavar='COMMAND',
                     help="tools/asmpatch's command (e.g. 'asmpatch --only=rewired-android'), run on <data>/Managed; the "
                          "assemblies it changes are compiled instead of the game's copies (as android-data --asmpatch)")
+    ap.add_argument('--assembly-patch', nargs=2, action='append', default=[], metavar=('NAME', 'COMMAND'),
+                    help="a port's patch of one of the game's assemblies (as android-data --assembly-patch): COMMAND runs "
+                         "with {managed} = <data>/Managed and {out} = a folder where it writes NAME, which is compiled "
+                         "instead of the game's copy")
+    ap.add_argument('--streaming-assets', choices=ST.MODES, default='obb',
+                    help="both / loose: also compile asmpatch's streaming-assets / streaming-assets-all patch (needs "
+                         "--asmpatch): the game's System.IO reads of StreamingAssets get the folder android-data "
+                         "--streaming-assets of the same mode puts beside the APK (docs/android-data.md, section 6)")
+    ap.add_argument('--data-path', action='store_true',
+                    help="also compile asmpatch's data-path patch (needs --asmpatch), for android-data --data-path")
     ap.add_argument('--link-xml', action='append', default=[], metavar='FILE',
                     help="a link.xml for UnityLinker (types and members to keep: what the game reaches only by "
                          "reflection, e.g. XmlSerializer's); nothing may come before <linker>, not even a comment, "
@@ -1469,6 +1590,7 @@ def main(argv):
         dev.install_ca()
     try:
         build(a.data, a.out, a.abi, a.home, a.pkg, a.jobs, a.image, a.keep_cpp, a.dry_run, a.strip, a.unity,
-              a.managed_file, a.asmpatch, a.on_device, a.toolchain, [os.path.abspath(x) for x in a.link_xml])
+              a.managed_file, a.asmpatch, a.on_device, a.toolchain, [os.path.abspath(x) for x in a.link_xml],
+              [tuple(x) for x in a.assembly_patch], a.streaming_assets, a.data_path)
     except UV.Unsupported as ex:
         sys.exit(str(ex))

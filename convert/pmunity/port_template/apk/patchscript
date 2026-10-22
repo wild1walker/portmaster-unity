@@ -6,7 +6,11 @@
 #      .aab (or a .zip of them) put there; `pmunity apk` checks it (Unity version, graphics APIs,
 #      IL2CPP metadata, OBBs) and lays it out for ua_host, with the player this system runs: the
 #      build's armeabi-v7a one where the system has a 32-bit (armhf) userland (ua_host), else its
-#      arm64-v8a one (ua_host64)
+#      arm64-v8a one (ua_host64); with player.il2cpp (PLAYER_IL2CPP=1), a Mono build (armeabi-v7a
+#      only) on a system without a 32-bit userland: its code compiled with Unity's IL2CPP here on the
+#      handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: Unity's IL2CPP
+#      and player by range reads, compilers from Debian and .NET from Microsoft, pinned by checksum;
+#      one to a few hours, Wi-Fi; an interrupted build continues)
 #   2. installing: lib/ (that player's libraries), the APK and the OBBs under the names the player
 #      looks for, android_package.json
 # Settings: setup/setup.env (from port.toml). An interrupted setup (battery, power button)
@@ -43,6 +47,19 @@ if [ -z "$TARGETS" ]; then
   fail "This copy of the port has no ua_host: install it again."
 fi
 echo "the players this system runs, in this order: $TARGETS"
+
+IL2CPP_ARGS=(); need_il2cpp=0
+if [ "${PLAYER_IL2CPP:-0}" = 1 ]; then
+  IL2CPP_ARGS=(--il2cpp --on-device --home "$W/il2cpp-home")
+  case "$TARGETS" in arm64*) need_il2cpp=1;; esac      # (the 64-bit player first: the build is compiled)
+  # Python's TLS needs the system's CA certificates (Unity's servers); .NET without ICU
+  if [ -z "$SSL_CERT_FILE" ]; then
+    for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
+      [ -f "$f" ] && { export SSL_CERT_FILE="$f"; break; }
+    done
+  fi
+  export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+fi
 
 # ---- the setup's Python (CPython + UnityPy, aarch64)
 PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
@@ -100,18 +117,23 @@ if [ ! -f "$W/.step_import" ]; then
   [ ${#INPUTS[@]} -gt 0 ] || fail "Put $GAME_WHAT in ports/$PORT_NAME/gamedata, then launch again."
   printf '  %s\n' "${INPUTS[@]#$GAMEDIR/}"
   in_mb=$(du -cm "${INPUTS[@]}" 2>/dev/null | tail -1 | cut -f1)
-  need=$((${in_mb:-0} + 200)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+  need=$((${in_mb:-0} + 200 + need_il2cpp * 1600)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$((SETUP_SPACE_MB + need_il2cpp * 1600))
   room "$need" || fail "Installing the game needs about $need MB free on the card ($(free_mb) MB free)."
-  step "checking the game and laying it out for the player (${in_mb:-?} MB; files are linked or copied)"
-  rm -rf "$A"
-  if ! pm apk "${INPUTS[@]}" "$A" --target "$TARGETS" --json > "$W/apk.json" 2> "$W/apk.err"; then
-    cat "$W/apk.err"
+  if [ "$need_il2cpp" = 1 ]; then
+    step "checking the game and laying it out for the player; a Mono build's code is compiled with Unity's IL2CPP for the 64-bit player (downloads about 160 MB, needs Wi-Fi; one to a few hours; an interrupted build continues)"
+  else
+    step "checking the game and laying it out for the player (${in_mb:-?} MB; files are linked or copied)"
+  fi
+  # (an earlier layout goes; an interrupted IL2CPP build in $A/.il2cpp continues)
+  [ -d "$A" ] && find "$A" -mindepth 1 -maxdepth 1 ! -name .il2cpp -exec rm -rf {} +
+  pm apk "${INPUTS[@]}" "$A" --target "$TARGETS" "${IL2CPP_ARGS[@]}" --json 2>&1 > "$W/apk.json" | tee "$W/apk.err"
+  if [ "${PIPESTATUS[0]}" != 0 ]; then
     why=$(sed -n 's/^pmunity apk: refused: //p' "$W/apk.err" | tail -1)
+    [ -n "$why" ] && { rm -rf "$A"; fail "The game's files cannot run here: $why"; }
+    [ "$need_il2cpp" = 1 ] && fail "Compiling the game's code failed (see patchlog.txt). Launch again to continue."
     rm -rf "$A"
-    [ -n "$why" ] && fail "The game's files cannot run here: $why"
     fail "Reading the game's files failed (see patchlog.txt)."
   fi
-  cat "$W/apk.err"
   eval "$("$PY" -c 'import json, shlex, sys
 d = json.load(open(sys.argv[1]))
 for k in ("package", "unity_version", "abi", "backend", "version_name"):

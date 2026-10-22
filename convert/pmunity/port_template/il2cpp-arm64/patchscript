@@ -142,16 +142,24 @@ D=$(cat "$W/.data"); V=$(cat "$W/.version")
 # ---- 2. the game's code, compiled with Unity's IL2CPP for its arm64 player (the patched and
 # added assemblies, and asmpatch's patches, are compiled in: they do not go to android-data)
 P="$W/player"
+SA=${STREAMING_ASSETS:-obb}
 if [ ! -f "$W/.step_il2cpp" ]; then
-  [ ${#ASSEMBLY_PATCHES[@]} -eq 0 ] || fail "This port's assembly patches are not supported on the il2cpp-arm64 route yet."
   room 1600 || fail "Compiling the game's code needs about 1600 MB free on the card ($(free_mb) MB free)."
   step "compiling the game's code with Unity's IL2CPP (downloads about 160 MB, needs Wi-Fi; one to a few hours; an interrupted build continues)"
   args=("$D" "$W/il2cpp" --on-device --abi arm64-v8a --home "$W/il2cpp-home" --pkg "$P")
   for f in "${MANAGED_FILES[@]}"; do args+=(--managed-file "$S/$f"); done
-  if [ "$ASMPATCH" != off ] && [ -f "$S/asmpatch" ]; then
+  # the port's own patches, run on the game's original assemblies (the data is not converted yet)
+  for ((i = 0; i < ${#ASSEMBLY_PATCHES[@]}; i += 2)); do
+    args+=(--assembly-patch "${ASSEMBLY_PATCHES[i]}" "${ASSEMBLY_PATCHES[i+1]//\{setup\}/$S}")
+  done
+  # StreamingAssets the game reads as files, files at Application.dataPath: asmpatch's opt-in
+  # patches for them (pmunity il2cpp adds them to the asmpatch command); step 4 makes the folders
+  args+=(--streaming-assets "$SA")
+  [ "${DATA_PATH:-0}" = 1 ] && args+=(--data-path)
+  if { [ "$ASMPATCH" != off ] || [ "$SA" != obb ] || [ "${DATA_PATH:-0}" = 1 ]; } && [ -f "$S/asmpatch" ]; then
     chmod +x "$S/asmpatch"
     a="'$S/asmpatch'"
-    case "$ASMPATCH" in auto) ;; *) a="$a --only=$ASMPATCH";; esac
+    case "$ASMPATCH" in auto) ;; off) a="$a --only=";; *) a="$a --only=$ASMPATCH";; esac
     args+=(--asmpatch "$a")
   fi
   pm il2cpp "${args[@]}" || fail "Compiling the game's code failed (see patchlog.txt). Launch again to continue."
@@ -187,7 +195,9 @@ if [ ! -f "$W/.step_package" ]; then
   args=(--src "$D" --pkg "$P" --il2cpp "$W/il2cpp" --out "$W/android" --name "$APK_NAME" --package "$PACKAGE"
         --swappy "$SWAPPY" --consume-src --verify-bundles 2 --pack all)
   [ "$VIDEO_SHADER" = 1 ] || args+=(--no-video-shader)
-  args+=(--streaming-assets "${STREAMING_ASSETS:-obb}")
+  # StreamingAssets the game reads as files: beside the APK too (Game_Data/StreamingAssets); files
+  # at Application.dataPath: Game_Data/ (the same modes as step 2, whose patches read them)
+  args+=(--streaming-assets "$SA")
   [ "${DATA_PATH:-0}" = 1 ] && args+=(--data-path)
   pm android-data "${args[@]}" "${ANDROID_DATA_ARGS[@]}" \
     || fail "Packing the game failed (see patchlog.txt). Launch again to continue."

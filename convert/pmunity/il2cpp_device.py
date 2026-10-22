@@ -380,6 +380,10 @@ def lock_id(groups):
 
 
 def disk_free(path):
+    # PMUNITY_DISK_FREE_MB: the free space to assume instead (tools/port/rehearse.sh: a container on
+    # Docker Desktop's file sharing, whose statvfs reports another disk than the folder's)
+    if os.environ.get('PMUNITY_DISK_FREE_MB', '').isdigit():
+        return int(os.environ['PMUNITY_DISK_FREE_MB']) << 20
     st = os.statvfs(path)
     return st.f_bavail * st.f_frsize
 

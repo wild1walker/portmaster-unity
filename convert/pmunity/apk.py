@@ -6,6 +6,8 @@ writes android_package.json.
 
     python -m pmunity apk <file>... <out> [--target auto|arm64|armhf|armhf,arm64] [--abi arm64-v8a|armeabi-v7a]
                           [--any-unity-version] [--force] [--dry-run] [--json]
+                          [--il2cpp [--home DIR] [--pkg DIR] [--jobs N] [--on-device [--toolchain DIR]]
+                                    [--link-xml FILE]... [--strip low|none]]
 
 <file>: an .apk (with OBBs beside it or given too), split APKs (base + config.<abi> + asset packs),
 an .xapk / .apks / .apkm-style zip of those (and of OBBs under Android/obb/), or an .aab (Android
@@ -25,7 +27,13 @@ App Bundle: rebuilt into one APK, as bundletool would for a device).
 ABI: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one (--target; a list = the first
 of those userlands the build has a player for, as a port's setup asks; auto = the machine running
 the tool when it is an ARM Linux, else arm64-v8a when the build has it). Unity ships arm64-v8a
-players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one directly. --json: what the
+players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one directly. --il2cpp: a Mono
+build (armeabi-v7a only) on a 64-bit target gets the arm64-v8a layout anyway: its assemblies
+(assets/bin/Data/Managed/*.dll) compiled with Unity's IL2CPP (`pmunity il2cpp`, in Docker or with
+--on-device on the handheld) for Unity's arm64 IL2CPP player of its version, which <out>/lib gets
+with the new libil2cpp.so, and base.apk is the APK with IL2CPP's Managed/ (metadata) instead of
+the assemblies and without its 32-bit libraries (docs/apk.md, "Mono builds on 64-bit-only
+systems"). A target that runs armeabi-v7a keeps the build's own player. --json: what the
 build is (android_package.json's fields; with --dry-run the check's report) on stdout, the log on
 stderr. `pmunity port new --data <file>` makes a PortMaster port of it (the apk route).
 
@@ -540,10 +548,13 @@ def player_settings(z, n, log):
     try:
         env = UnityPy.load(z.read(n))
         for o in env.objects:
-            if o.type.name not in ('PlayerSettings', 'BuildSettings'):
+            if o.type.name not in ('PlayerSettings', 'BuildSettings', 'MonoManager'):
                 continue
             t = o.read_typetree()
-            if o.type.name == 'BuildSettings':
+            if o.type.name == 'MonoManager':
+                if t.get('m_AssemblyNames'):            # (up to 2020.1; then ScriptingAssemblies.json)
+                    out['assemblies'] = [a for a in t['m_AssemblyNames'] if a]
+            elif o.type.name == 'BuildSettings':
                 out['graphics_apis'] = list(t.get('m_GraphicsAPIs') or [])
                 out['build_version'] = t.get('m_Version')
             else:
@@ -658,23 +669,150 @@ def _inside(path, d):
 
 
 # --------------------------------------------------------------------------------------------
+# --il2cpp: a Mono build for Unity's arm64 IL2CPP player
+# --------------------------------------------------------------------------------------------
+
+IL2CPP_WORK = '.il2cpp'             # in <out>: `pmunity il2cpp`'s output while it builds (a rerun continues)
+IL2CPP_PLAYER_LIBS = ('Variations', 'il2cpp', 'Release', 'Libs', 'arm64-v8a')
+SIGNATURE = re.compile(r'^META-INF/([^/]+\.(SF|RSA|DSA|EC)|MANIFEST\.MF)$', re.I)
+
+
+def il2cpp_refusal(ver):
+    """Why a Mono build of Unity `ver` cannot be compiled for the arm64 IL2CPP player, or None."""
+    from . import il2cpp as IL
+    if ver.line < (2017, 4):
+        return f'Unity {ver}: the arm64 IL2CPP players start with 2017.4'
+    if ver.line >= (2023, 1):
+        return (f'Unity {ver}: its il2cpp is a native Windows/macOS/Linux x86-64 program, not a .NET one '
+                f'(`pmunity il2cpp` runs 2017.4 - 2022.3\'s)')
+    if ver.line == (2017, 4) and ver.patch < IL.ARM64_2017[0]:
+        return (f'Unity {ver} has no arm64 IL2CPP player (2017.4.{IL.ARM64_2017[0]}f1 and later have one); an '
+                f'Android build\'s data is not moved to another release here')
+    return None
+
+
+def il2cpp_stub(zips, dst):
+    """What `pmunity il2cpp` reads of a data folder, from an Android build: the assemblies
+    (assets/bin/Data/Managed/*.dll), boot.config (incremental GC) and ScriptingAssemblies.json (the
+    script assemblies, 2020.2+). Returns the assembly count."""
+    n = 0
+    for z in zips:
+        for nm in z.namelist():
+            m = re.match(r'^assets/bin/Data/(Managed/[^/]+\.dll|boot\.config|ScriptingAssemblies\.json)$', nm)
+            if not m or os.path.exists(os.path.join(dst, m.group(1))):
+                continue
+            os.makedirs(os.path.dirname(os.path.join(dst, m.group(1))), exist_ok=True)
+            with z.open(nm) as fi, open(os.path.join(dst, m.group(1)), 'wb') as fo:
+                shutil.copyfileobj(fi, fo, 1 << 20)
+            n += nm.endswith('.dll')
+    return n
+
+
+def il2cpp_apk(srcs, out_apk, il_out, ver, log):
+    """The Mono build's APK for Unity's IL2CPP player. srcs: [(zipfile, [names])] (the base APK, then
+    asset packs' assets). Left out: lib/ (the 32-bit Mono player; ua_host loads <out>/lib),
+    assets/bin/Data/Managed/ (the assemblies, now in libil2cpp.so) and the signature (it would not
+    match). Added, stored and aligned: IL2CPP's Managed/ (Metadata/global-metadata.dat, Resources/,
+    etc/ up to 2020.x), as Unity's IL2CPP builds have it, and the stamp by which libunity copies it
+    out again only when it changes (android-data --il2cpp's: 2020.x boot.config's buildDate, 2021.x+
+    unity_app_guid, both from the metadata)."""
+    from . import android_data as AD
+    import hashlib
+    meta = os.path.join(il_out, 'Data', 'Managed', 'Metadata', 'global-metadata.dat')
+    with open(meta, 'rb') as f:
+        mhash = hashlib.sha256(f.read()).hexdigest()
+    drop = ('lib/', 'assets/bin/Data/Managed/')
+    guid = 'assets/bin/Data/unity_app_guid'
+    tmp = out_apk + '.tmp'
+    n = 0
+    with zipfile.ZipFile(tmp, 'w', allowZip64=False) as zo:
+        def add(arc, data=None, src=None, info=None):
+            ni = zipfile.ZipInfo(arc, date_time=info.date_time if info else (2018, 8, 2, 0, 0, 0))
+            ni.compress_type = info.compress_type if info else zipfile.ZIP_STORED
+            ni.external_attr = 0o644 << 16
+            if ni.compress_type == zipfile.ZIP_STORED:
+                off = zo.fp.tell() + 30 + len(arc.encode())
+                pad = (-(off + 4)) % 4
+                ni.extra = struct.pack('<HH', 0xD935, pad) + b'\0' * pad
+            if data is not None:
+                zo.writestr(ni, data)
+            else:
+                with src() as fi, zo.open(ni, 'w') as fo:
+                    shutil.copyfileobj(fi, fo, 1 << 20)
+        seen = set()
+        for z, names in srcs:
+            for nm in names:
+                if nm in seen or nm.endswith('/') or nm.startswith(drop) or SIGNATURE.match(nm) or nm == guid:
+                    continue
+                seen.add(nm)
+                info = z.getinfo(nm)
+                if nm == 'assets/bin/Data/boot.config' and ver.major == 2020:
+                    txt = z.read(nm).decode('utf-8', 'replace')
+                    if not re.search(r'^buildDate=', txt, re.M):
+                        txt = txt.rstrip('\n') + f'\nbuildDate={6 * 10 ** 17 + int(mhash, 16) % 10 ** 17}\n'
+                    add(nm, data=txt.encode(), info=info)
+                else:
+                    add(nm, src=lambda z=z, nm=nm: z.open(nm), info=info)
+                n += 1
+        if ver.major >= 2021:
+            add(guid, data=AD.il2cpp_app_guid(meta).encode())
+        md = os.path.join(il_out, 'Data', 'Managed')
+        for r, ds, fs in os.walk(md):
+            ds.sort()
+            for f in sorted(fs):
+                p = os.path.join(r, f)
+                add('assets/bin/Data/Managed/' + os.path.relpath(p, md).replace(os.sep, '/'), src=lambda p=p: open(p, 'rb'))
+                n += 1
+    os.replace(tmp, out_apk)
+    log(f'  base.apk ({n} entries: the APK without its 32-bit libraries and assemblies, with IL2CPP\'s metadata; '
+        f'{os.path.getsize(out_apk) / 2**20:.1f} MiB)')
+
+
+def il2cpp_build(zips, ver, out, tmp, opts, log, listed=None):
+    """`pmunity il2cpp` on the build's assemblies, into <out>/.il2cpp (kept until the layout is
+    written, so an interrupted build continues). Returns (il2cpp.json, the IL2CPP player package)."""
+    from . import il2cpp as IL
+    stub = os.path.join(tmp, 'il2cpp-data')
+    n = il2cpp_stub(zips, stub)
+    if not n:
+        raise Refused('a Mono build without assemblies in assets/bin/Data/Managed/: nothing to compile')
+    home = os.path.abspath(opts.get('home') or IL.default_home())
+    pkg = os.path.abspath(opts.get('pkg') or os.path.join(home, str(ver), 'player-arm64-v8a'))
+    log(f'IL2CPP: compiling the build\'s {n} assemblies for Unity {ver}\'s arm64 IL2CPP player '
+        f'({"on this machine" if opts.get("on_device") else "in Docker"}; docs/il2cpp.md)')
+    try:
+        info = IL.build(stub, os.path.join(out, IL2CPP_WORK), 'arm64-v8a', home, pkg, opts.get('jobs'),
+                        keep_cpp=bool(opts.get('keep_cpp')), strip=opts.get('strip') or 'low',
+                        on_device=bool(opts.get('on_device')), device_tc=opts.get('toolchain'),
+                        link_xml=[os.path.abspath(x) for x in opts.get('link_xml') or ()], data_version=ver,
+                        listed=listed)
+    except UV.Unsupported as ex:
+        raise Refused(f'IL2CPP: {ex}')
+    if info['unity'] != str(ver):
+        raise Refused(f'IL2CPP built for Unity {info["unity"]}, the build is {ver}')
+    return info, pkg
+
+
+# --------------------------------------------------------------------------------------------
 
 def run(inputs, out, target='auto', abi=None, any_version=False, force=False, dry_run=False, log=print,
-        managed_to=None):
+        managed_to=None, il2cpp=None):
     """Imports the build into out (or with dry_run only reads it) and returns what it is: the
     android_package.json fields, and for a dry run the report (`abis`, `graphics_apis`, `obbs`, ...).
     managed_to: a folder that gets a Mono build's assemblies (assets/bin/Data/Managed/*.dll), for
-    `pmunity port check`'s code survey."""
+    `pmunity port check`'s code survey. il2cpp: None, or the options of `pmunity il2cpp` ({home,
+    pkg, jobs, on_device, toolchain, link_xml, strip, keep_cpp}) for a Mono build on a 64-bit
+    target: its code compiled for the arm64 IL2CPP player."""
     if not dry_run:
         os.makedirs(out, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix='.apk-', dir=None if dry_run else out)
     try:
-        return _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, managed_to)
+        return _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, managed_to, il2cpp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, managed_to=None):
+def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, managed_to=None, il2cpp=None):
     apks, obbs, aabs = unpack_inputs(inputs, tmp, log)
     if aabs:
         if len(aabs) > 1 or apks:
@@ -702,20 +840,29 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
 
     # native libraries: the base APK and its ABI splits
     have = sorted(set(base.abis).union(*[a.abis for a in configs]) if configs else base.abis)
-    pick, why = choose_abi(have, target, abi, log)
-    lib_src = [(a, n) for a in [base] + configs for n in a.libs(pick)]
+    # --il2cpp: a build with only the 32-bit player is offered to a 64-bit target too (its code
+    # compiled for the arm64 IL2CPP player, below)
+    virtual = il2cpp is not None and 'armeabi-v7a' in have and 'arm64-v8a' not in have
+    pick, why = choose_abi(sorted(set(have) | {'arm64-v8a'}) if virtual else have, target, abi, log)
+    compile_il2cpp = virtual and pick == 'arm64-v8a'
+    real = 'armeabi-v7a' if compile_il2cpp else pick
+    lib_src = [(a, n) for a in [base] + configs for n in a.libs(real)]
     libnames = sorted({os.path.basename(n) for _, n in lib_src})
     missing = [n for n in ('libmain.so', 'libunity.so') if n not in libnames]
     if missing:
-        raise Refused(f'lib/{pick} has no {" or ".join(missing)}: not a Unity Android build '
+        raise Refused(f'lib/{real} has no {" or ".join(missing)}: not a Unity Android build '
                       f'(libraries: {", ".join(libnames) or "none"})')
     if 'libil2cpp.so' in libnames:
         backend = 'il2cpp'
     elif any(n in libnames for n in ('libmonobdwgc-2.0.so', 'libmono.so', 'libmonosgen-2.0.so')):
         backend = 'mono'
     else:
-        raise Refused(f'lib/{pick} has neither libil2cpp.so nor a Mono runtime (libmono*.so)')
-    log(f'ABI {why}; scripting backend {backend}')
+        raise Refused(f'lib/{real} has neither libil2cpp.so nor a Mono runtime (libmono*.so)')
+    if compile_il2cpp and backend != 'mono':
+        raise Refused('an IL2CPP build with only armeabi-v7a: its code is compiled for 32-bit ARM, and the build '
+                      'has no assemblies to compile again; it needs a 32-bit (armhf) userland')
+    log(f'ABI {why}; scripting backend {backend}' +
+        ('; --il2cpp: its code is compiled with IL2CPP for the arm64-v8a IL2CPP player' if compile_il2cpp else ''))
 
     # OBBs
     obb_plan = {}
@@ -760,8 +907,12 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
         lo, hi = '%d.%d' % UV.FIRST, '%d.%d' % UV.LAST
         raise Refused(f'Unity {ver}: the runtime runs players of Unity {lo} - {hi} (docs/compat/README.md); '
                       '--any-unity-version tries anyway')
-    if backend == 'mono' and pick == 'arm64-v8a':
+    if backend == 'mono' and pick == 'arm64-v8a' and not compile_il2cpp:
         raise Refused('a Mono build with arm64-v8a libraries: Unity never shipped one; the APK looks modified')
+    if compile_il2cpp:
+        why_not = il2cpp_refusal(ver)
+        if why_not:
+            raise Refused(f'--il2cpp: {why_not}; this build needs a 32-bit (armhf) userland')
     ps = player_settings(z, n, log)
     apis = ps.get('graphics_apis') or []
     if apis and not any(a in (8, 11) for a in apis):
@@ -785,6 +936,10 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
                                                 'libmono.so', 'libMonoPosixHelper.so', 'libmono-native.so', 'libmonosgen-2.0.so')]
     if plugins:
         log(f'native plugins: {", ".join(plugins)}')
+    if plugins and compile_il2cpp:
+        notes.append(f'its native plugins are 32-bit ARM only ({", ".join(plugins)}): the arm64 player cannot load '
+                     f'them (calls into them fail, as on a phone without them)')
+        plugins = []
     vr = sorted(set(plugins) & VR_LIBS) + [c for c in mf.categories if c in VR_CATEGORIES] + \
         [f for f, req in mf.features if req and f.startswith('android.hardware.vr.')]
     if vr:
@@ -803,10 +958,13 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
                 if re.match(r'^assets/bin/Data/Managed/[^/]+\.dll$', nm):
                     with x.open(nm) as fi, open(os.path.join(managed_to, nm.rsplit('/', 1)[1]), 'wb') as fo:
                         shutil.copyfileobj(fi, fo, 1 << 20)
+    if compile_il2cpp:
+        backend = 'il2cpp'
     if dry_run:
         return {'package': mf.package, 'version_code': code, 'version_name': mf.version_name, 'min_sdk': mf.min_sdk,
                 'target_sdk': mf.target_sdk, 'abi': pick, 'abi_why': why, 'abis': [x for x in ABIS if x in have],
                 'all_abis': have, 'backend': backend, 'unity_version': str(ver),
+                **({'il2cpp_from': 'mono'} if compile_il2cpp else {}),
                 'data_in': 'obb' if z in obb_zips else 'asset pack' if z is not base.z else 'apk',
                 'obbs': {kind: name for kind, (_, name) in sorted(obb_plan.items())},
                 'graphics_apis': [GFX.get(x, str(x)) for x in apis], 'swappy': bool(ps.get('androidUseSwappy')),
@@ -816,11 +974,22 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
                 'size_mb': int(sum(os.path.getsize(p) for p in set(inputs) | {p for p, _ in obb_plan.values()
                                                                              if not _inside(p, tmp)}) / 2**20 + 0.5)}
 
+    # --il2cpp: the long part first (a failed or interrupted build leaves the layout as it was)
+    data_packs = [a for a in packs if any(x.startswith('assets/') for x in a.names)]
+    il_info = None
+    if compile_il2cpp:
+        il_info, il_pkg = il2cpp_build([base.z] + [a.z for a in data_packs] + obb_zips, ver, out, tmp, il2cpp, log,
+                                       listed=ps.get('assemblies'))
     # write the layout
     log(f'-> {out}')
     apk_out = os.path.join(out, 'base.apk')
-    data_packs = [a for a in packs if any(x.startswith('assets/') for x in a.names)]
-    if data_packs:
+    if compile_il2cpp:
+        seen = set(base.names)
+        srcs = [(base.z, base.names)]
+        for a in data_packs:
+            srcs.append((a.z, [x for x in a.names if x.startswith('assets/') and x not in seen]))
+        il2cpp_apk(srcs, apk_out, os.path.join(out, IL2CPP_WORK), ver, log)
+    elif data_packs:
         merge_apks(base, data_packs, apk_out, log)
         log(f'  base.apk (merged with {len(data_packs)} asset pack split(s), {os.path.getsize(apk_out) / 2**20:.1f} MiB)')
     else:
@@ -831,10 +1000,22 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
             if x.endswith('.so'):
                 os.unlink(os.path.join(libdir, x))
     os.makedirs(libdir, exist_ok=True)
-    for a, nm in lib_src:
-        with a.z.open(nm) as fi, open(os.path.join(libdir, os.path.basename(nm)), 'wb') as fo:
-            shutil.copyfileobj(fi, fo, 1 << 20)
-    log(f'  lib/: {len(libnames)} libraries from lib/{pick}')
+    if compile_il2cpp:
+        # Unity's arm64 IL2CPP player of the build's version, with the build's code
+        pl = os.path.join(il_pkg, *IL2CPP_PLAYER_LIBS)
+        got = []
+        for x in sorted(os.listdir(pl)):
+            if x.endswith('.so') and x != 'libil2cpp.so':
+                shutil.copyfile(os.path.join(pl, x), os.path.join(libdir, x))
+                got.append(x)
+        shutil.copyfile(os.path.join(out, IL2CPP_WORK, 'lib', 'arm64-v8a', 'libil2cpp.so'), os.path.join(libdir, 'libil2cpp.so'))
+        log(f'  lib/: {", ".join(got)} (Unity {ver}\'s arm64 IL2CPP player), libil2cpp.so '
+            f'({il_info["libil2cpp_bytes"] / 2**20:.1f} MiB, the build\'s code)')
+    else:
+        for a, nm in lib_src:
+            with a.z.open(nm) as fi, open(os.path.join(libdir, os.path.basename(nm)), 'wb') as fo:
+                shutil.copyfileobj(fi, fo, 1 << 20)
+        log(f'  lib/: {len(libnames)} libraries from lib/{pick}')
     for x in os.listdir(out):
         if re.match(r'^(main|patch)\.\d+\..+\.obb$', x):
             os.unlink(os.path.join(out, x))
@@ -842,7 +1023,9 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
     for kind, (p, name) in sorted(obb_plan.items()):
         place(p, os.path.join(out, name), log, move=_inside(p, tmp))
         res[f'{kind}_obb'] = name
-    if backend == 'mono':
+    if compile_il2cpp:
+        shutil.rmtree(os.path.join(out, 'assets', 'bin', 'Data', 'Managed', 'etc'), ignore_errors=True)  # (an earlier Mono layout's)
+    elif backend == 'mono':
         etc = [nm for nm in base.names if nm.startswith('assets/bin/Data/Managed/etc/') and not nm.endswith('/')]
         for nm in etc:
             dst = os.path.join(out, *nm.split('/'))
@@ -857,6 +1040,10 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
                 'backend': backend, 'unity_version': str(ver), 'source': 'apk'})
     if meta_ver:
         res['il2cpp_metadata'] = meta_ver
+    if il_info:
+        res['il2cpp_metadata'] = il_info['metadata_version']
+        res['il2cpp'] = {'from': 'mono', **{k: il_info[k] for k in ('unity', 'ndk', 'dotnet_profile', 'strip',
+                                                                     'libil2cpp_bytes', 'build_seconds') if k in il_info}}
     if plugins:
         res['plugins'] = plugins
     if ps.get('productName'):
@@ -865,6 +1052,8 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
         res['notes'] = notes
     with open(os.path.join(out, 'android_package.json'), 'w') as f:
         json.dump(res, f, indent=1)
+    if il_info and not il2cpp.get('keep_cpp'):
+        shutil.rmtree(os.path.join(out, IL2CPP_WORK), ignore_errors=True)     # (in base.apk and lib/ now)
     log(f'  android_package.json; run: ua_host ({"aarch64" if pick == "arm64-v8a" else "armhf"} build) {out}')
     return res
 
@@ -882,12 +1071,17 @@ def port_new(ctx):
         pj = json.load(f)
     a = pj['attr']
     abis = ctx.cfg['player'].get('abis') or list(ABIS)
-    a['reqs'] = (['armhf'] if abis == ['armeabi-v7a'] else []) + [r for r in a.get('reqs') or [] if r != 'armhf']
+    il2cpp = bool(ctx.cfg['player'].get('il2cpp'))         # (a Mono build compiled for arm64 where needed)
+    a['reqs'] = (['armhf'] if abis == ['armeabi-v7a'] and not il2cpp else []) + [r for r in a.get('reqs') or [] if r != 'armhf']
     if not p.get('desc'):
         a['desc'] = f"{p['title']}: the game's own Android build, run on the handheld by ua_host."
     if not p.get('inst'):
         a['inst'] = (f"Requires {ctx.cfg['game']['what']}: put it in ports/{p['name']}/gamedata. The first launch "
-                     f"installs it ({p['setup_time']}; nothing is downloaded).")
+                     f"installs it ({p['setup_time']}; nothing is downloaded)." if not il2cpp else
+                     f"Requires {ctx.cfg['game']['what']}: put it in ports/{p['name']}/gamedata. The first launch "
+                     f"installs it ({p['setup_time']}); on a handheld without a 32-bit userland it also compiles the "
+                     f"game's code with Unity's IL2CPP (one to a few hours; about 1.6 GB free; Wi-Fi for Unity's and "
+                     f"Debian's files).")
     ctx.write(f"{p['name']}/port.json", json.dumps(pj, indent=4) + '\n')
 
 
@@ -903,13 +1097,33 @@ def main(argv):
     ap.add_argument('--force', action='store_true', help='place OBBs of another build too')
     ap.add_argument('--dry-run', action='store_true', help='report only')
     ap.add_argument('--json', action='store_true', help='what the build is, as JSON on stdout (the log goes to stderr)')
+    g = ap.add_argument_group('IL2CPP', 'a Mono build (32-bit ARM only) for a 64-bit target: its code compiled with '
+                                        "Unity's IL2CPP for the arm64 IL2CPP player (docs/apk.md, docs/il2cpp.md)")
+    g.add_argument('--il2cpp', action='store_true',
+                   help='when the target needs arm64-v8a and the build is Mono with only armeabi-v7a: compile its '
+                        'assemblies with IL2CPP (minutes in Docker on a PC, hours with --on-device on a handheld)')
+    g.add_argument('--home', help="IL2CPP's tool folder (default $PMUNITY_IL2CPP_HOME, else ~/.cache/pmunity/il2cpp)")
+    g.add_argument('--pkg', help="Unity's IL2CPP Android player package (default <home>/<version>/player-arm64-v8a)")
+    g.add_argument('--jobs', type=int, help='parallel compiles')
+    g.add_argument('--on-device', action='store_true', help='build natively on this aarch64 Linux machine (a handheld), '
+                                                            'without Docker')
+    g.add_argument('--toolchain', help='--on-device: the tools folder (default <home>/device-arm64)')
+    g.add_argument('--link-xml', action='append', default=[], metavar='FILE', help='a link.xml for UnityLinker')
+    g.add_argument('--strip', default='low', choices=['low', 'none'], help='managed code stripping (pmunity il2cpp)')
+    g.add_argument('--keep-cpp', action='store_true', help="keep IL2CPP's generated C++ and objects (<out>/.il2cpp/.work)")
     a = ap.parse_args(argv)
     if len(a.files) < 2:
         ap.error('give the input file(s) and the output directory')
     *inputs, out = a.files
     log = (lambda m: print(m, file=sys.stderr, flush=True)) if a.json else (lambda m: print(m, flush=True))
+    il2cpp = None
+    if a.il2cpp:
+        il2cpp = {k: getattr(a, k) for k in ('home', 'pkg', 'jobs', 'on_device', 'toolchain', 'link_xml', 'strip', 'keep_cpp')}
+        if a.on_device and not a.dry_run:
+            from . import il2cpp_device as dev
+            dev.install_ca()
     try:
-        res = run(inputs, out, a.target, a.abi, a.any_unity_version, a.force, a.dry_run, log=log)
+        res = run(inputs, out, a.target, a.abi, a.any_unity_version, a.force, a.dry_run, log=log, il2cpp=il2cpp)
     except Refused as ex:
         sys.exit(f'pmunity apk: refused: {ex}')
     if a.json:
