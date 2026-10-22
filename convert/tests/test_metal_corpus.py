@@ -22,6 +22,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import UnityPy
 from pmunity import unity_version as UV
 from pmunity.job import Job
 from pmunity.shaders import blob as B
@@ -86,6 +87,7 @@ class MetalCorpusTest(unittest.TestCase):
         for gi, data in enumerate(GAMES):
             v = UV.check(UV.of_data(data))
             job = Job.reader(data, {'version': 1}, log=lambda m: None)
+            UnityPy.config.FALLBACK_UNITY_VERSION = str(v)    # (version-stripped bundles)
             c = collections.Counter()
             seen, rows = set(), []
             for rel in shader_files(job):

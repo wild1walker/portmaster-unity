@@ -66,6 +66,20 @@ def nothing_to_translate(results, sources):
             f'builds) cannot be converted from it; another build of the game may have OpenGL Core or Direct3D 11 programs')
 
 
+def bundle_version_fallback(job):
+    """Asset bundles built with their Unity version stripped from the header (Addressables' option:
+    Rhythm Quest's 46 bundles) do not open in UnityPy without a fallback version: the data's own,
+    where UnityPy has none set."""
+    import UnityPy
+    from .. import unity_version as UV
+    if getattr(UnityPy.config, 'FALLBACK_UNITY_VERSION', None):
+        return
+    try:
+        UnityPy.config.FALLBACK_UNITY_VERSION = str(UV.of_data(job.src))
+    except Exception:
+        pass
+
+
 def glcore4x_for(path, glcore4x=None):
     """Whether the GLCore41/43 programs of a serialized file or bundle are translated (None: yes)."""
     return True if glcore4x is None else bool(glcore4x)
@@ -107,6 +121,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     for src in sources:
         if src not in SOURCES:
             raise ValueError(f'unknown shader source {src!r} (known: {", ".join(SOURCES)})')
+    bundle_version_fallback(job)
     results = []
     cresults = []
     changed_files = 0

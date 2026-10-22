@@ -652,7 +652,7 @@ ES 3.2):
 |---|---|---|---|---|---|
 | 2019.1.15f1 (Metal + OpenGL Core) | 41 (3) | 208 | UIElements' SubShader with a structured buffer (its fallback kept) | 223 of 223 as the same pass's GLCore program | 194 / 194 |
 | 2022.3.62f3 (URP, Metal only) | 92 (4) of 93 | 1250 (8) | URP's HDR debug view (a writable texture) | 610 of 1369 as Unity's own GLES3 programs of the game's Android build (shader, pass, keywords) | 991 / 991 |
-| 6000.2.6f2 (Metal only) | 67 (2) of 68 | 214 | VR blit | - | 195 / 195 |
+| 6000.2.6f2 (Metal only; Addressables) | 113 (2) of 114 | 320 | VR blit | - | 209 / 209 |
 
 Against Unity's own GLES3 programs of the same game (its Android build), the differences are what
 the HLSL decided by platform: Metal-only uniforms (foveated rendering keywords and its distortion
@@ -660,8 +660,10 @@ values, which are 0 on a GL device, so their branches stay off), the desktop qua
 light probe volumes and box-projected reflections, mobile's light counts (16, desktop 256), a
 `float` output Android's compile widens to `vec4`. In the 2019.1 game, where the same pass has
 OpenGL Core programs, all 223 compared programs declare the same uniforms, samplers, inputs,
-varyings and outputs as the GL ones. 46 Addressables bundles of the 6000.2 game do not open in
-UnityPy (no Unity version in their header): their shaders are not reached.
+varyings and outputs as the GL ones. The 6000.2 game's 44 Addressables bundles (46 shaders of
+their own) were built with the Unity version left out of their headers, which UnityPy then does
+not open: the shaders step gives it the data's version for them (`step.bundle_version_fallback`;
+before, the step stopped on the first such bundle, whatever the source).
 
 ## Checking a conversion
 
