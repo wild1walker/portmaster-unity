@@ -600,6 +600,24 @@ static void test_window_egl(const char *fakeegl)
     void *cfg = NULL; int32_t num = 0;
     CHECK(ChooseConfig(NULL, cattr, &cfg, 1, &num) == 1 && num == 1);
     CHECK(cfg_attr[0] == 0x3024 && cfg_attr[2] == 0x3040 && cfg_attr[4] == 0x3038);
+    // Single-sampled window configs (egl_glue_set_single_sample_window): off, the driver's list
+    // as it is; on, only its single-sampled configs, whether or not the request names samples
+    // (a request for some asks for none)
+    const int32_t listattr[] = { 0x3024, 8, 0x3027 /* the fake's marker: three configs */, 0x3038, 0x3038 };
+    const int32_t msattr[] = { 0x3024, 8, 0x3027, 0x3038, 0x3031 /* SAMPLES */, 2, 0x3032 /* SAMPLE_BUFFERS */, 1, 0x3038 };
+    void *ms[4] = { 0 };
+    CHECK(ChooseConfig(NULL, listattr, ms, 4, &num) == 1 && num == 3 && ms[0] == (void *)0x11);
+    CHECK(ChooseConfig(NULL, msattr, ms, 4, &num) == 1 && num == 3 && cfg_attr[5] == 2 && cfg_attr[7] == 1);
+    egl_glue_set_single_sample_window(1);
+    memset(ms, 0, sizeof ms);
+    CHECK(ChooseConfig(NULL, listattr, ms, 4, &num) == 1 && num == 2 && ms[0] == (void *)0x12 && ms[1] == (void *)0x13 && !ms[2]);
+    CHECK(ChooseConfig(NULL, msattr, ms, 4, &num) == 1 && num == 2 && ms[0] == (void *)0x12);
+    CHECK(cfg_attr[4] == 0x3031 && cfg_attr[5] == 0 && cfg_attr[6] == 0x3032 && cfg_attr[7] == 0 && cfg_attr[8] == 0x3038);
+    CHECK(ChooseConfig(NULL, listattr, NULL, 0, &num) == 1 && num == 2);                    // the count
+    CHECK(ChooseConfig(NULL, listattr, ms, 1, &num) == 1 && num == 1 && ms[0] == (void *)0x12);
+    CHECK(ChooseConfig(NULL, cattr, &cfg, 1, &num) == 1 && num == 1 && cfg == (void *)0x1);   // none single-sampled: as listed
+    egl_glue_set_single_sample_window(0);
+    CHECK(ChooseConfig(NULL, listattr, ms, 4, &num) == 1 && num == 3);
     int32_t v = -1;
     CHECK(GetConfigAttrib(NULL, cfg, 0x3142, &v) == 1 && v == 0);
     CHECK(GetConfigAttrib(NULL, cfg, 0x302E, &v) == 1 && v == 42);
