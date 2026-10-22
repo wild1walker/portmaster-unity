@@ -4,4 +4,5 @@
 #include "../loader/so_loader.h"
 const so_shim *gltrace_table(void);   // register with so_add_shims() before the EGL glue
 void gltrace_frame(void);             // from the swap hook, every frame
+void *gltrace_wrapper(const char *name);   // its wrapper of that GL function (NULL: none, or off)
 #endif

@@ -15,6 +15,9 @@
 # EMU_NAME=<name>  the container's name (to docker kill it)
 # Environment passed into the container: UA_*, GC_*, ANDROID_*, GALLIUM_*, LP_*, and the prefixes
 # in EMU_ENV (space-separated, e.g. EMU_ENV="CUPHEAD_" for a port's own switches).
+# Display: a pbuffer the size of ANDROID_WINDOW_SIZE (UA_EGL_PBUFFER=1, the default). The SDL
+# window path a handheld takes (runtime/host/display_sdl.c) runs on SDL's offscreen driver:
+#   UA_EGL_PBUFFER=0 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=720x480 EMU_ENV=SDL_ SDL_VIDEODRIVER=offscreen
 here=$(cd "$(dirname "$0")/../.." && pwd)
 E=${EMU_ROOT:?set EMU_ROOT=<emulated device root>}
 Z=${EMU_ZIP:?set EMU_ZIP=<the data tool zip folder>}

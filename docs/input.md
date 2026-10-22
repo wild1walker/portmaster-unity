@@ -175,6 +175,16 @@ docs/runtime.md.
   and the UI's input module handles touches, so clicks work, but nothing follows the cursor in
   between, and there is no right button or wheel. Touch is for a game that reads only
   `Input.touches`.
+- **The start position** (`UA_POINTER_START`, the screen's centre) is sent as a hover when Unity
+  starts, and again once Unity has presented its second frame. Unity's Android player empties its
+  queue of input events when it sets up its input (in its first frame) and when it is unpaused
+  (ua_host resumes it at start), so the first hover never arrives: Unity's mouse stays at (0,0),
+  the bottom left corner, and the first motion's delta (the `Mouse X` / `Mouse Y` axes, Rewired's
+  mouse axes, a game cursor moved by them) is measured from there, so a game's own cursor jumps
+  towards the top right corner. Unity's delta for a frame is its last mouse event's, so the second
+  hover is a pair, half a pixel beside the cursor and then on it: Unity's mouse lands on the cursor
+  with a delta of half a pixel, and the first motion moves a game's cursor by what the pointer
+  moved (Baldi's launcher, whose cursor reads the mouse from its first frame, in the rig).
 - **The cursor.** ua_host draws an arrow (scaled with the screen, `UA_POINTER_SIZE`) over Unity's
   frame in the swap hook, right before `eglSwapBuffers`, with scissored `glClear`s only: no
   shader, texture, buffer or vertex state of Unity's is touched, and the five states the clears
@@ -233,7 +243,8 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
 
 - `runtime/host/test/pointer_test.sh` (`ARCH=arm64` too): pointer.c against stand-ins for the
   runtime and a fake libGLESv2 window: what each scenario sends and takes (off, mouse, touch,
-  keymap, toggle), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off.
+  keymap, toggle; the start position sent again, once, after Unity's second frame, as a half-pixel
+  pair), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off.
 - `runtime/jni/build.sh`: libunity's view of a mouse MotionEvent (source, action, tool type,
   button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape.
 - `runtime/host/test/pointer_test.sh` also runs `test_osk` (osk.c against a stand-in field and the

@@ -45,6 +45,8 @@ typedef void (*eglproc)(void);
 #define EGL_BAD_NATIVE_WINDOW 0x300B
 #define EGL_CONTEXT_CLIENT_VERSION 0x3098
 #define EGL_GL_COLORSPACE_KHR 0x309D
+#define EGL_SAMPLES 0x3031
+#define EGL_SAMPLE_BUFFERS 0x3032
 #define EGL_SURFACE_TYPE 0x3033
 #define EGL_PBUFFER_BIT 0x0001
 #define EGL_WIDTH 0x3057
@@ -173,6 +175,41 @@ static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, voi
     return s;
 }
 
+// egl_glue_set_single_sample_window (egl_glue.h): off unless the host turns it on
+static int g_single_sample;
+void egl_glue_set_single_sample_window(int on) { g_single_sample = on; }
+
+static int config_multisampled(EGLDisplay dpy, EGLConfig c)
+{
+    EGLint samples = 0, buffers = 0;
+    if (!real.GetConfigAttrib(dpy, c, EGL_SAMPLES, &samples)) samples = 0;
+    if (!real.GetConfigAttrib(dpy, c, EGL_SAMPLE_BUFFERS, &buffers)) buffers = 0;
+    return samples > 1 || buffers > 0;
+}
+
+// The driver's configs less the multisampled ones (EGL_SAMPLES selects "at least": a request
+// without it, or for 0, lists them too, and Unity may take one); all of them if none is
+// single-sampled.
+static EGLBoolean choose_single_sampled(EGLDisplay dpy, const EGLint *use, EGLConfig *cfgs, EGLint size, EGLint *num)
+{
+    EGLint n = 0;
+    if (!real.ChooseConfig(dpy, use, NULL, 0, &n) || n <= 0) return real.ChooseConfig(dpy, use, cfgs, size, num);
+    EGLConfig *all = calloc((size_t)n, sizeof *all);
+    if (!all) return real.ChooseConfig(dpy, use, cfgs, size, num);
+    EGLint got = 0, kept = 0, single = 0;
+    EGLBoolean r = real.ChooseConfig(dpy, use, all, n, &got);
+    for (EGLint i = 0; r && i < got; i++) single += !config_multisampled(dpy, all[i]);
+    for (EGLint i = 0; r && i < got; i++) {
+        if (single && config_multisampled(dpy, all[i])) continue;
+        if (cfgs) { if (kept >= size) break; cfgs[kept] = all[i]; }
+        kept++;
+    }
+    free(all);
+    if (num) *num = kept;
+    SHIM_TRACE("eglChooseConfig -> %u, %d single-sampled configs of %d", r, kept, got);
+    return r;
+}
+
 static EGLBoolean shim_eglChooseConfig(EGLDisplay dpy, const EGLint *attribs, EGLConfig *cfgs, EGLint size, EGLint *num)
 {
     if (!ensure() || !real.ChooseConfig) return EGL_FALSE;
@@ -184,11 +221,13 @@ static EGLBoolean shim_eglChooseConfig(EGLDisplay dpy, const EGLint *attribs, EG
         for (const EGLint *a = attribs; a[0] != EGL_NONE && n < 126; a += 2) {
             if (is_android_attr(a[0])) { SHIM_TRACE("eglChooseConfig: dropping attribute 0x%x", a[0]); continue; }
             filtered[n++] = a[0];
-            filtered[n++] = a[0] == EGL_SURFACE_TYPE && pbuffer_mode() ? EGL_PBUFFER_BIT : a[1];
+            filtered[n++] = a[0] == EGL_SURFACE_TYPE && pbuffer_mode() ? EGL_PBUFFER_BIT
+                          : g_single_sample && (a[0] == EGL_SAMPLES || a[0] == EGL_SAMPLE_BUFFERS) ? 0 : a[1];
         }
         filtered[n] = EGL_NONE;
         use = filtered;
     }
+    if (g_single_sample) return choose_single_sampled(dpy, use, cfgs, size, num);
     EGLBoolean r = real.ChooseConfig(dpy, use, cfgs, size, num);
     SHIM_TRACE("eglChooseConfig -> %u, %d configs", r, num ? *num : -1);
     return r;

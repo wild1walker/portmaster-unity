@@ -27,7 +27,7 @@ needed for `tools/asmpatch`. See [docs/building.md](docs/building.md).
 | Android shims | `runtime/android/build.sh test` | in Docker, no GPU |
 | fake JNI and UnityPlayer | `TESTS=1 runtime/build.sh` (or `runtime/jni/build.sh`) | armhf under QEMU; some QEMU builds crash on their threads: the test binaries also run on a handheld |
 | video core | `runtime/media/build.sh test` | |
-| ua_host parts | `runtime/host/test/pointer_test.sh`, `display_test.sh`, `plugins_test.sh`; `runtime/jni/test/tls_test.sh` | `ARCH=arm64` where the script supports it |
+| ua_host parts | `runtime/host/test/pointer_test.sh` (pointer mode, on-screen keyboard, the 2017.x MSAA present fix), `display_test.sh`, `plugins_test.sh`; `runtime/jni/test/tls_test.sh` | `ARCH=arm64` where the script supports it |
 | asmpatch | `tools/asmpatch/build.sh test` | fake assemblies built with Mono.Cecil |
 | box64 route | `tools/box64/test/launcher_test.sh`, `tools/box64/test/port_test.sh` | need a Linux build of a game you own |
 | a whole port | `tools/port/rehearse.sh` ([docs/porting.md](docs/porting.md#6-rehearsal)) | the first launch in a handheld-like container, then the game in the emulator |

@@ -14,6 +14,7 @@
 #include "glhooks.h"
 #include "hitches.h"
 #include "gltrace.h"
+#include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
 #include "../android/egl_glue.h"
@@ -133,6 +134,7 @@ static void on_swap(void *ctx)
     if (++total == 1) glhooks_first_frame();
     hitches_frame();
     gltrace_frame();
+    msaafix_frame();
     if (last > 0)
     {
         double dt = t - last;
