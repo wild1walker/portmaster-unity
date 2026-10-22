@@ -112,7 +112,7 @@ setup on a 1 GB + 1 GB swap stand-in (2026-10-22); not yet on a handheld.
 | game | Unity | emulated rig | notes (last checked) |
 |---|---|---|---|
 | [MineRalph](https://chopchopgames.itch.io/mineralph) | 2018.3.2f1 | title menu | `streaming_assets = "both"` (2026-10-21) |
-| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it; the left stick moves the launcher's cursor and A on Play starts it | its own cursor (docs/input.md, "Games with their own cursor"): its buttons are not uGUI's, so pointer mode's position and touches do not click them; no `UA_POINTER` (the pad drives its cursor), or `UA_POINTER=1 UA_POINTER_CURSOR=0` (Play clicked by mouse in the rig) (2026-10-22) |
+| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it; the left stick moves the launcher's cursor and A on Play starts it | its own cursor (docs/input.md, "Games with their own cursor"): its buttons are not uGUI's, so pointer mode's position and touches do not click them; no `UA_POINTER` (the pad drives its cursor), or `UA_POINTER=1 UA_POINTER_CURSOR=0`: the pointer's first motion now moves its cursor by as much as the pointer moved (it jumped to the launcher's top right corner before: Unity dropped the start position, docs/input.md), and a click on Play starts it (2026-10-22) |
 
 ## box64 route (x86-64 Linux players)
 
