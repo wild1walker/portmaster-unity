@@ -21,6 +21,9 @@ same name (a port's patched `Assembly-CSharp.dll`, its helper assembly), `--asmp
 runs tools/asmpatch on the game's `Managed` and compiles what it changed (as `android-data
 --asmpatch`: e.g. `--asmpatch "dotnet asmpatch.dll --only=rewired-android"`). With IL2CPP the
 assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data.
+`--link-xml FILE` gives UnityLinker a port's own link.xml (what the game reaches only by reflection,
+e.g. the types XmlSerializer writes into saves); the 2017.x linker ignores the whole file when
+anything, even a comment, comes before `<linker>`.
 `--unity VERSION` builds with another release of the data's line (its IL2CPP and its player):
 data of a 2017.4 release before 2017.4.16f1, which has no 64-bit ARM player, gets 2017.4.40f1 for
 arm64-v8a by itself (below, Unity 2017.4).

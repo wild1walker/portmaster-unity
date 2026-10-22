@@ -1068,7 +1068,7 @@ def run_asmpatch(command, managed, work):
 
 
 def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAGE, keep_cpp=False, dry=False,
-          strip='low', unity=None, managed_files=(), asmpatch=None, on_device=False, device_tc=None):
+          strip='low', unity=None, managed_files=(), asmpatch=None, on_device=False, device_tc=None, link_xml=()):
     """on_device: run the tools natively on this aarch64 Linux machine (a handheld's setup) with the
     device toolchain (il2cpp_device.py; fetched into device_tc, default <home>/device-arm64) instead
     of Docker; the steps resume after a kill and the compiler jobs fit the memory."""
@@ -1130,6 +1130,13 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         largs = link_args_2017(net, staged, linked, [n for n in roots if n not in engine],
                                linker_descriptors(tc['editor'], profile, work), subset,
                                engine_keep_xml(engine, os.path.join(work, 'engine-link.xml')))
+    # a port's own link.xml files (types the game reaches only by reflection, e.g. XmlSerializer):
+    # copied into the work folder, which the container and the device toolchain both see
+    for i, x in enumerate(link_xml or ()):
+        os.makedirs(work, exist_ok=True)
+        dst = os.path.join(work, f'port-link-{i}.xml')
+        shutil.copyfile(x, dst)
+        largs.append(f'--include-link-xml={dst}')
     lcmd = runner(linker) + largs
     tool = deploy_tool(tc['editor'], 'il2cpp')
     # (on the handheld il2cpp.exe runs on .NET 8 unless PMUNITY_IL2CPP_NET471=mono: the same C++ up
@@ -1306,6 +1313,10 @@ def main(argv):
     ap.add_argument('--asmpatch', metavar='COMMAND',
                     help="tools/asmpatch's command (e.g. 'asmpatch --only=rewired-android'), run on <data>/Managed; the "
                          "assemblies it changes are compiled instead of the game's copies (as android-data --asmpatch)")
+    ap.add_argument('--link-xml', action='append', default=[], metavar='FILE',
+                    help="a link.xml for UnityLinker (types and members to keep: what the game reaches only by "
+                         "reflection, e.g. XmlSerializer's); nothing may come before <linker>, not even a comment, "
+                         "or the 2017.x linker ignores the whole file")
     ap.add_argument('--dry-run', action='store_true', help='fetch and stage, print the commands, do not run them')
     ap.add_argument('--on-device', action='store_true',
                     help='run natively on this aarch64 Linux machine (a handheld\'s setup), without Docker: the tools '
@@ -1317,6 +1328,6 @@ def main(argv):
         dev.install_ca()
     try:
         build(a.data, a.out, a.abi, a.home, a.pkg, a.jobs, a.image, a.keep_cpp, a.dry_run, a.strip, a.unity,
-              a.managed_file, a.asmpatch, a.on_device, a.toolchain)
+              a.managed_file, a.asmpatch, a.on_device, a.toolchain, [os.path.abspath(x) for x in a.link_xml])
     except UV.Unsupported as ex:
         sys.exit(str(ex))
