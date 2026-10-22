@@ -89,6 +89,23 @@ static class Cecil
         return null;
     }
 
+    /// <summary>The local variable an stloc (store) or ldloc (load) form names, else null.</summary>
+    public static int? LocalIndex(Instruction i, bool store)
+    {
+        var c = i.OpCode.Code;
+        if (store)
+        {
+            if (c >= Code.Stloc_0 && c <= Code.Stloc_3) return c - Code.Stloc_0;
+            if (c is Code.Stloc or Code.Stloc_S) return ((VariableDefinition)i.Operand).Index;
+        }
+        else
+        {
+            if (c >= Code.Ldloc_0 && c <= Code.Ldloc_3) return c - Code.Ldloc_0;
+            if (c is Code.Ldloc or Code.Ldloc_S or Code.Ldloca or Code.Ldloca_S) return ((VariableDefinition)i.Operand).Index;
+        }
+        return null;
+    }
+
     public static bool SameField(object operand, FieldDefinition f) =>
         operand is FieldReference r && r.Name == f.Name && r.DeclaringType.FullName == f.DeclaringType.FullName;
 }

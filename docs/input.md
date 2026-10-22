@@ -229,6 +229,20 @@ wherever the game's cursor is); the mouse's motion does, one screen pixel per pi
 module at a position not read from the mouse or a touch): "verdict: likely its own cursor". A
 lock alone is usually mouse look.
 
+### The Input System's `Mouse.current`
+
+On the Android player the Input System has a `Mouse` only while Android reports one: without
+pointer mode a handheld has none, and `Mouse.current` is null. Desktop code that reads it with
+no null check (`Mouse.current.position.value` in an `Update`, as Hey, Listen!'s cursor and
+companion do) then throws a NullReferenceException every frame and never sees a click; pointer
+mode presents an Android mouse, which the Input System takes as its `Mouse`. `asmpatch
+--survey` counts the reads of `Mouse.current` / `Pointer.current` and names the methods that use
+the value without testing it (no branch on it, no `?.`, no comparison with null of the local it
+is kept in): "used with no null check in <n> methods (...)", and the verdict "needs a mouse".
+`pmunity port check` then suggests `UA_POINTER=1` even where the game also selects UI elements
+for pad navigation; a game that hides the system cursor and draws its own also wants
+`UA_POINTER_CURSOR=0`.
+
 ## Keys from the pad
 
 `UA_KEYMAP=<button>:<key>,...` (e.g. `start:escape,x:space,select:tab,up:up,down:down`) turns pad
@@ -264,4 +278,6 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
   applied, an Android build of the package, missing methods.
   The survey's pointer verdicts on fake games: a cursor of its own (Rewired's UI input module and
   demos, an asset's examples, the game's own input module and a hit test at the mouse's position
-  not counted), mouse look, and pointer-driven menus.
+  not counted), mouse look, and pointer-driven menus; `Mouse.current` dereferenced at once and
+  through a local (no null check) against tested uses (a branch on it, `?.`, a local compared
+  with null).

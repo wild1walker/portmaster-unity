@@ -38,6 +38,8 @@ static class Survey
         var library = new Counter();            // input call sites in library code (LibraryCode)
         var locks = new Counter();              // Cursor.lockState = Locked
         var uiRaycasts = new Counter();         // UI hit tests outside an input module, at a position not read from the pointer
+        var mouseCurrent = new Counter();       // the Input System's Mouse.current / Pointer.current
+        var mouseUnchecked = new Counter();     // ... in methods that use it without testing it for null
 
         foreach (var asm in game.GameAssemblies)
         {
@@ -63,6 +65,11 @@ static class Survey
                         rewired.Add($"{file}: {t.FullName} ({(file.StartsWith("Assembly-CSharp") ? "source edition" : "DLL edition")}), DetectPlatform sets {Platform(m)}");
                     if (!m.HasBody) continue;
                     bool readsPointer = m.Body.Instructions.Any(i => i.Operand is MethodReference r && PointerRead(r));
+                    if (!lib && DeviceCurrentUse(m) is var (reads, tested) && reads > 0)
+                    {
+                        for (int k = 0; k < reads; k++) mouseCurrent.Add($"{t.FullName}.{m.Name}");
+                        if (!tested) mouseUnchecked.Add($"{t.FullName}.{m.Name}");
+                    }
                     foreach (var ins in m.Body.Instructions)
                     {
                         if (ins.Operand is not MemberReference mr || mr.DeclaringType == null) continue;
@@ -117,6 +124,13 @@ static class Survey
         bool isys = names.Contains("Unity.InputSystem");
         Console.WriteLine("Input System package: " + (isys ? $"Unity.InputSystem.dll, {inputSystemRefs.N} call sites in game code{inputSystemRefs.Examples()}" : "no"));
         if (isys) Console.WriteLine("  -> asmpatch inputsystem-android (a desktop build has no layout for the Android player's pads; keyboard, mouse and touch need nothing)");
+        if (mouseCurrent.N > 0)
+        {
+            Console.WriteLine($"  Mouse.current / Pointer.current: {mouseCurrent.N} reads{mouseCurrent.Examples()}");
+            if (mouseUnchecked.N > 0)
+                Console.WriteLine($"  used with no null check in {mouseUnchecked.N} methods{mouseUnchecked.Examples()}: a handheld has no mouse unless pointer\n" +
+                                  "  mode presents one (UA_POINTER=1); without it these throw NullReferenceException (every frame from an Update)");
+        }
         Console.WriteLine("legacy Input (UnityEngine.Input):");
         foreach (var (g, c) in legacy) Console.WriteLine($"  {g,-15} {c.N,4}{c.Examples()}");
         Console.WriteLine($"mouse messages (OnMouse*): {mouseMsgs.Count}{Examples(mouseMsgs)}");
@@ -129,9 +143,12 @@ static class Survey
         if (library.N > 0)
             Console.WriteLine($"not counted above: {library.N} input call sites in library code compiled into the game (Rewired's own, asset demos/examples){library.Examples()}");
         Console.WriteLine();
-        bool pointerUse = legacy["mouse"].N > 0 || mouseMsgs.Count > 0 || pointerTypes.Count > 0;
+        bool pointerUse = legacy["mouse"].N > 0 || mouseMsgs.Count > 0 || pointerTypes.Count > 0 || mouseCurrent.N > 0;
         bool padUse = rewired.Count > 0 || inControlLib || legacy["axes/buttons"].N > 0 || selects.N > 0 || navTypes.Count > 0;
-        if (locks.N > 0 && uiRaycasts.N > 0)
+        if (mouseUnchecked.N > 0)
+            Console.WriteLine($"verdict: needs a mouse: the Input System's Mouse.current is used with no null check{mouseUnchecked.Examples()}: UA_POINTER=1\n" +
+                              "  (pointer mode's Android mouse); if the game draws its own cursor, also UA_POINTER_CURSOR=0");
+        else if (locks.N > 0 && uiRaycasts.N > 0)
             Console.WriteLine($"verdict: likely its own cursor: the game locks the system pointer and hit-tests its UI itself{uiRaycasts.Examples()},\n" +
                               "  so it draws a cursor and moves it by mouse motion (and by the pad, where it maps one). Pointer mode's position and\n" +
                               "  touches do not steer it: try the pad without UA_POINTER; else UA_POINTER=1 UA_POINTER_CURSOR=0 (the stick moves the\n" +
@@ -224,6 +241,40 @@ static class Survey
         return dt == "UnityEngine.Input" && r.Name is "get_mousePosition" or "GetTouch" or "get_touches" ||
                dt == "UnityEngine.Touch" && r.Name == "get_position" ||
                dt.StartsWith("UnityEngine.InputSystem.") && (r.Name == "get_position" || r.Name == "ReadValue" && dt.EndsWith("<UnityEngine.Vector2>"));
+    }
+
+    /// <summary>The method's reads of the Input System's Mouse.current / Pointer.current, and whether
+    /// it tests one for null: the value branched on (brtrue/brfalse, `?.`'s dup + branch) or compared
+    /// with null, directly or through the local it is stored in. A method that only dereferences it
+    /// (Mouse.current.position...) throws when there is no mouse.</summary>
+    static (int reads, bool tested) DeviceCurrentUse(MethodDefinition m)
+    {
+        int reads = 0;
+        bool tested = false;
+        var ins = m.Body.Instructions;
+        for (int i = 0; i < ins.Count; i++)
+        {
+            if (ins[i].Operand is not MethodReference r || r.Name != "get_current" ||
+                r.DeclaringType?.FullName is not ("UnityEngine.InputSystem.Mouse" or "UnityEngine.InputSystem.Pointer")) continue;
+            reads++;
+            var next = Skip(ins[i].Next);
+            if (next != null && next.OpCode.Code == Code.Dup) next = Skip(next.Next);
+            if (next != null && Cecil.LocalIndex(next, store: true) is int loc)
+            {
+                // the first load of that local after the store decides
+                var store = next;
+                next = null;
+                for (var j = store.Next; j != null; j = j.Next)
+                    if (Cecil.LocalIndex(j, store: false) == loc) { next = Skip(j.Next); break; }
+            }
+            if (next != null && Tests(next)) tested = true;
+        }
+        return (reads, tested);
+
+        static Instruction Skip(Instruction i) { while (i != null && i.OpCode.Code == Code.Nop) i = i.Next; return i; }
+        static bool Tests(Instruction i) => i.OpCode.Code is Code.Brtrue or Code.Brtrue_S or Code.Brfalse or Code.Brfalse_S ||
+            i.OpCode.Code == Code.Ldnull && i.Next != null && i.Next.OpCode.Code is Code.Ceq or Code.Cgt_Un or Code.Beq or Code.Beq_S or Code.Bne_Un or Code.Bne_Un_S ||
+            i.Operand is MethodReference r && r.Name is "op_Equality" or "op_Inequality" or "op_Implicit";
     }
 
     static bool DerivesFrom(TypeDefinition t, string baseName)

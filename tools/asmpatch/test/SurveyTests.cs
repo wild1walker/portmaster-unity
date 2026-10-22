@@ -130,6 +130,73 @@ static partial class TestMain
               "survey: a pointer lock and hit tests at the mouse's position only: mouse look, noted under the usual verdict");
         Check(!s.Contains("Rewired's UI input module"), "survey: no Rewired, no Rewired note");
 
+        // the Input System's Mouse.current: dereferenced at once (Hey, Listen!'s CursorHandler.Update), through a
+        // local, and tested first (a branch on it, `?.`, a local compared with null) in other methods
+        var d = new FakeGame();
+        var isys = new AssemblyNameReference("Unity.InputSystem", new Version(1, 0, 0, 0));
+        d.M.AssemblyReferences.Add(isys);
+        var mouse = new TypeReference("UnityEngine.InputSystem", "Mouse", d.M, isys);
+        var control = new TypeReference("UnityEngine.InputSystem.Controls", "Vector2Control", d.M, isys);
+        var current = d.Ref(mouse, "get_current", mouse, false);
+        var position = d.Ref(mouse, "get_position", control, true);
+        void Body(TypeDefinition t, string name, Action<ILProcessor, MethodDefinition> emit)
+        {
+            var md = new MethodDefinition(name, MethodAttributes.Public | MethodAttributes.HideBySig, d.M.TypeSystem.Void);
+            var il = md.Body.GetILProcessor();
+            emit(il, md);
+            il.Emit(OpCodes.Ret);
+            t.Methods.Add(md);
+        }
+        var cursor = d.Class("", "CursorHandler");
+        Body(cursor, "Update", (il, md) => { il.Emit(OpCodes.Call, current); il.Emit(OpCodes.Callvirt, position); il.Emit(OpCodes.Pop); });
+        var aim = d.Class("", "CompanionVisual");
+        Body(aim, "Update", (il, md) =>
+        {
+            md.Body.Variables.Add(new VariableDefinition(mouse));
+            il.Emit(OpCodes.Call, current); il.Emit(OpCodes.Stloc_0); il.Emit(OpCodes.Ldloc_0); il.Emit(OpCodes.Callvirt, position); il.Emit(OpCodes.Pop);
+        });
+        var safe = d.Class("", "SafeCursor");
+        Body(safe, "Update", (il, md) =>       // if (Mouse.current != null) Mouse.current.position...
+        {
+            var end = il.Create(OpCodes.Nop);
+            il.Emit(OpCodes.Call, current); il.Emit(OpCodes.Brfalse_S, end);
+            il.Emit(OpCodes.Call, current); il.Emit(OpCodes.Callvirt, position); il.Emit(OpCodes.Pop);
+            il.Append(end);
+        });
+        Body(safe, "LateUpdate", (il, md) =>   // Mouse.current?.position
+        {
+            var has = il.Create(OpCodes.Callvirt, position);
+            var end = il.Create(OpCodes.Pop);
+            il.Emit(OpCodes.Call, current); il.Emit(OpCodes.Dup); il.Emit(OpCodes.Brtrue_S, has); il.Emit(OpCodes.Br_S, end);
+            il.Append(has); il.Append(end);
+        });
+        Body(safe, "OnGUI", (il, md) =>        // var m = Mouse.current; if (m == null) return; m.position...
+        {
+            md.Body.Variables.Add(new VariableDefinition(mouse));
+            var go = il.Create(OpCodes.Ldloc_0);
+            il.Emit(OpCodes.Call, current); il.Emit(OpCodes.Stloc_0); il.Emit(OpCodes.Ldloc_0); il.Emit(OpCodes.Brtrue_S, go); il.Emit(OpCodes.Ret);
+            il.Append(go); il.Emit(OpCodes.Callvirt, position); il.Emit(OpCodes.Pop);
+        });
+        s = d.Survey(Dir("survey-mouse-current"));
+        Check(s.Contains("Mouse.current / Pointer.current: 6 reads"), "survey: Mouse.current reads counted");
+        Check(s.Contains("used with no null check in 2 methods (CursorHandler.Update, CompanionVisual.Update)"),
+              "survey: Mouse.current dereferenced at once or through a local, never tested: no null check; tested ones (branch, ?., local == null) not counted");
+        Check(s.Contains("verdict: needs a mouse") && s.Contains("UA_POINTER=1"), "survey: a game that cannot run without a mouse: pointer mode");
+        var e = new FakeGame();
+        var isys2 = new AssemblyNameReference("Unity.InputSystem", new Version(1, 0, 0, 0));
+        e.M.AssemblyReferences.Add(isys2);
+        var mouse2 = new TypeReference("UnityEngine.InputSystem", "Mouse", e.M, isys2);
+        var cur2 = e.Ref(mouse2, "get_current", mouse2, false);
+        var safe2 = e.Class("", "SafeCursor");
+        var m2 = new MethodDefinition("Update", MethodAttributes.Public | MethodAttributes.HideBySig, e.M.TypeSystem.Void);
+        var il2 = m2.Body.GetILProcessor();
+        var ret2 = il2.Create(OpCodes.Ret);
+        il2.Emit(OpCodes.Call, cur2); il2.Emit(OpCodes.Brfalse_S, ret2); il2.Append(ret2);
+        safe2.Methods.Add(m2);
+        s = e.Survey(Dir("survey-mouse-checked"));
+        Check(s.Contains("Mouse.current / Pointer.current: 1 reads") && !s.Contains("no null check") && s.Contains("verdict: pointer-driven UI"),
+              "survey: Mouse.current tested before use: a mouse read (pointer use), no NullReferenceException note");
+
         // pointer-driven menus: the only selection calls are Rewired's module's, so they do not hide the verdict
         var c = new FakeGame();
         c.RewiredModule();

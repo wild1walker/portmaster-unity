@@ -984,14 +984,111 @@ def gl_fixups(glsl_text):
     return glsl_text
 
 
-def translate_program(translator, vs, ps, serializer=None, unity=None):
+# ---- UNITY_UV_STARTS_AT_TOP in the SRP core library's procedural full-screen geometry
+_ASSIGN = re.compile(r'^(\s*)(\w+)(?:\.([xyzw]+))?\s*=\s*(.+?);\s*$')
+_OPERAND = r'(\w+)(?:\.([xyzw]+))?'
+_VID = r'(?:uint|int)\(gl_VertexID\)|gl_VertexID'
+
+
+def gl_uv_origin(vs_glsl):
+    """The vertex stage of a program translated from Direct3D 11 with the texture coordinate flips
+    the HLSL made for Direct3D's top-left texture origin at compile time (UNITY_UV_STARTS_AT_TOP)
+    taken out where they are the SRP core library's, so the program does what Unity's own GL
+    compile of it does (the macro is 0 there): (text, number of flips undone).
+
+    Unity's Core RP library (Common.hlsl) builds the full-screen triangle and quad of every SRP
+    full-screen pass from SV_VertexID: GetFullScreenTriangleTexCoord's v = 1 - (id & 2) and
+    GetQuadTexCoord's v = 1 - ((id >> 1) + (id & 1)) & 1 on Direct3D, against id & 2 and
+    ((id >> 1) + (id & 1)) & 1 on GL. URP's C# side does not flip for GL (it asks the running API,
+    SystemInfo.graphicsUVStartsAtTop), so with Direct3D's code every blit turns the picture upside
+    down and the passes that compute values from the coordinate get them mirrored: the color
+    grading LUT (LutBuilderLdr/Hdr) comes out upside down, and the final picture of a game with
+    post-processing turns green. HLSLcc writes the flip as `<t> = (-<v>) + 1.0;` with <v> traced
+    here through the integer operations on gl_VertexID; that line becomes `<t> = <v>;`. Shader
+    Graph's full-screen target flips under the macro unless its global _FlipY is set (`if (_FlipY
+    < 0.5) uv.y = 1 - uv.y`, URP never sets it): `_FlipY<0.5` becomes false in the vertex stage.
+    Programs without gl_VertexID are returned unchanged."""
+    if 'gl_VertexID' not in vs_glsl:
+        return vs_glsl, 0
+    tags = {}                               # (variable, component or '') -> what it holds
+
+    def comps(var, swz, n=1):
+        return [(var, c) for c in swz] if swz else [(var, '')] * n
+
+    def operand_tags(text):
+        m = re.fullmatch(_OPERAND, text.strip())
+        return [tags.get(k) for k in comps(m.group(1), m.group(2))] if m else None
+
+    def scalar(text):
+        t = operand_tags(text)
+        return t[0] if t and len(t) == 1 else None
+
+    def value(rhs):
+        """Per-component tags of a right-hand side (a list), or None."""
+        r = rhs.strip()
+        if re.fullmatch(r'(?:' + _VID + r')\s*&\s*2u?', r) or re.fullmatch(r'(?:u?int)\((?:' + _VID + r')\s*&\s*2u?\)', r):
+            return ['tri']                  # id & 2
+        if re.fullmatch(r'(?:u?int\()?(?:' + _VID + r')\s*&\s*1u?\)?', r):
+            return ['bot']                  # id & 1
+        if re.fullmatch(r'(?:u?int\()?(?:' + _VID + r')\s*>>\s*1u?\)?', r):
+            return ['top']                  # id >> 1
+        m = re.fullmatch(r'(?:u?int\()?(' + _OPERAND + r')\)?\s*\+\s*(?:u?int\()?(' + _OPERAND + r')\)?', r)
+        if m and {scalar(m.group(1)), scalar(m.group(4))} == {'top', 'bot'}:
+            return ['sum']                  # (id >> 1) + (id & 1)
+        m = re.fullmatch(r'(?:u?int\()?(' + _OPERAND + r')\)?\s*&\s*1u?', r)
+        if m and scalar(m.group(1)) == 'sum':
+            return ['quad']                 # ((id >> 1) + (id & 1)) & 1
+        m = re.fullmatch(r'(?:float|vec[234])\((' + _OPERAND + r')\)', r)
+        if m:
+            t = operand_tags(m.group(1))
+            return [{'tri': 'tri.f', 'quad': 'quad.f'}.get(x) for x in t] if t else None
+        if re.fullmatch(r'float\(1\.0\)', r):
+            return [None]
+        m = re.fullmatch(r'\(-(' + _OPERAND + r')\)\s*\+\s*(?:1\.0|vec[234]\((?:1\.0,\s*)*1\.0\))', r)
+        if m:
+            t = operand_tags(m.group(1))
+            if t and all(x in ('tri.f', 'quad.f') for x in t):
+                return ['flip:' + m.group(1)] * len(t)
+        return None
+
+    n = 0
+    out = []
+    for line in vs_glsl.split('\n'):
+        m = _ASSIGN.match(line)
+        if m and not line.lstrip().startswith(('//', '#')):
+            ind, var, swz, rhs = m.groups()
+            v = value(rhs)
+            keys = comps(var, swz)
+            if v and v[0] and v[0].startswith('flip:'):
+                src = v[0][5:]
+                line = f'{ind}{var}{"." + swz if swz else ""} = {src};'
+                v = operand_tags(src)
+                n += 1
+            if v is not None and len(v) == 1 and len(keys) > 1:
+                v = v * len(keys)
+            for i, k in enumerate(keys):
+                tags[k] = v[i] if v is not None and i < len(v) else None
+            if not swz:                     # a whole vector assigned: its components too
+                for c in 'xyzw':
+                    tags.pop((var, c), None)
+        out.append(line)
+    text = '\n'.join(out)
+    if re.search(r'^\s*uniform\s+(?:highp\s+|mediump\s+)?float\s+_FlipY\s*;', text, re.M):
+        text, k = re.subn(r'\b_FlipY\s*<\s*0\.5\b', 'false', text)
+        n += k
+    return text, n
+
+
+def translate_program(translator, vs, ps, serializer=None, unity=None, notes=None):
     """vs, ps: (code, binding info) of the D3D11 vertex and pixel entries (binding info: the
     entry's rest, or Bindings with the parameter entry and shared parameters put back) -> GL
     program text (GLSL 1.50, as Unity's GLCore programs). serializer: the entries' serializer
     version; unity: (major, minor) of the data (default: from the serializer). Up to 2018 the
     text is tidy()'d as Unity 2017-2018 stored it; from 2019.1 Unity's macro blocks stay and
     textures get their units (UNITY_LOCATION), and the uniforms are in Unity's order
-    (unity_uniform_order). Raises Unsupported."""
+    (unity_uniform_order). The vertex stage's full-screen texture coordinates get GL's origin
+    (gl_uv_origin; notes, a list: 'VERTEX uv-origin <n>' added where it changed anything).
+    Raises Unsupported."""
     unity = unity or unity_line(serializer)
     new = unity >= (2019, 1)
     stages = []
@@ -1004,6 +1101,9 @@ def translate_program(translator, vs, ps, serializer=None, unity=None):
         raise Unsupported('expected a vertex and a pixel shader, got ' + ', '.join(STAGE_NAMES.get(p.stage, '?') for p, _, _ in stages))
     vs_glsl, ps_glsl = translator.translate([c for _, c, _ in stages], flags=FLAGS_2019 if new else None)
     vs_glsl, ps_glsl = gl_fixups(vs_glsl), gl_fixups(ps_glsl)
+    vs_glsl, flips = gl_uv_origin(vs_glsl)
+    if flips and notes is not None:
+        notes.append(f'VERTEX uv-origin {flips}')
     if new:
         vs_glsl = unity_uniform_order(vs_glsl, stages[0][2], stages[0][0])
         ps_glsl = unity_uniform_order(ps_glsl, stages[1][2], stages[1][0])
