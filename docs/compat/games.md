@@ -149,7 +149,7 @@ Metal-only build is translated from its Metal programs (`shaders.from = ["metal"
 
 | game | Unity, build | what `port check` says (last checked) |
 |---|---|---|
-| [Suvalf](https://cheesykirah.itch.io/suvalf) | 6000.3.5f1, HDRP, compressed (`data.unity3d`) | Vulkan shaders only (as every HDRP Linux build): no route; `box64` too needs OpenGL. Before: the check could not read a compressed build's settings and passed it, the converter translated nothing and android-data failed in video.py; both now stop with the reason (2026-10-22) |
+| [Suvalf](https://cheesykirah.itch.io/suvalf) | 6000.3.5f1, HDRP, compressed (`data.unity3d`) | Vulkan shaders only (as every HDRP Linux build); `box64` too needs OpenGL. Its shaders translate from Vulkan (`shaders.from = ["vulkan"]`): 116 of 142, 718 programs, all 553 distinct link on Mesa; converted that way and run in the emulated rig anyway, the player logs "graphics API OpenGLES3 is not supported with HDRP" and HDRP's `Render` throws a NullReferenceException every frame (the loop runs at 57 fps, the screen stays black): the check blocks the route for HDRP. Before: the check could not read a compressed build's settings and passed it, the converter translated nothing and android-data failed in video.py; both now stop with the reason (2026-10-22) |
 | [RTS Siege Up!](https://abuksigun.itch.io/siegeup) | 6000.3.16f1, IL2CPP, compressed, Firebase C++ SDK (analytics, auth, messaging, remote config) | `box64` (GLES mode); the Firebase libraries are x86-64 like the game (not run) (2026-10-22) |
 | [Space Dash](https://jasdv.itch.io/space-dash) | 5.4.2f2, .NET 3.5 | below the converter's 5.6: `box64` with gl4es (not run) (2026-10-22) |
 

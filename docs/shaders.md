@@ -596,8 +596,9 @@ out.) **Suvalf** (6000.3.5f1, HDRP, Vulkan only, compressed: `pmunity unpack` fi
 shaders given GLES3 programs (16 of them empty), 718 programs (345 GLES 3.1), 553 distinct, all
 linking on Mesa; 26 left out (HDRP's lit and volumetric passes: structured buffers, 13 of them in
 the shared parameters; XR's 2D multisampled arrays; cube map arrays; framebuffer fetch); its 118
-compute shaders have Vulkan kernels only. HDRP itself does not run on OpenGL ES, so `port check`
-blocks the Android route for an HDRP build; see docs/compat/games.md for what the player does with it.
+compute shaders have Vulkan kernels only. HDRP itself does not run on OpenGL ES: converted so and run in the emulated rig, the
+player logs "graphics API OpenGLES3 is not supported with HDRP" and HDRP's `Render` throws every
+frame, the screen black. `port check` blocks the Android route for an HDRP build.
 
 ## macOS builds: Metal programs (MSL)
 
