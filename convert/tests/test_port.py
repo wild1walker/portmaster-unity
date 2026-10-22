@@ -189,6 +189,23 @@ class CheckTest(unittest.TestCase):
             P.print_report(rep, out)
             self.assertIn('recommended route: android', out.getvalue())
 
+    def test_mouse_current_unchecked(self):
+        # asmpatch --survey: the Input System's Mouse.current used with no null check -> pointer mode, even
+        # where the UI is also selected for pad navigation (a handheld has no mouse unless pointer mode
+        # presents one: Hey, Listen! threw NullReferenceException in CursorHandler.Update every frame)
+        survey = ('  Mouse.current / Pointer.current: 4 reads (CursorHandler.Update, CompanionVisual.Update)\n'
+                  '  used with no null check in 2 methods (CursorHandler.Update, CompanionVisual.Update): a handheld has no mouse unless pointer\n')
+        for text, want in ((survey, '1'), ('  Mouse.current / Pointer.current: 1 reads (A.Update)\n', None)):
+            rep = {'notes': [], 'code': {'input_system': True, 'legacy': {}}, 'input_verdict': 'mixed', 'asmpatch_survey': text}
+            P.suggest_config(rep)
+            self.assertEqual(rep['suggest']['runtime'].get('UA_POINTER'), want)
+            notes = ' '.join(rep['notes'])
+            if want:
+                self.assertIn('Mouse.current with no null check (CursorHandler.Update, CompanionVisual.Update)', notes)
+                self.assertNotIn('try the pad first', notes)
+            else:
+                self.assertIn('try the pad first', notes)
+
     def test_windows_class_libraries(self):
         # a Windows Mono build of 2021.2+ ships unityjit-win32 class libraries: the check names winbcl
         exe = bytearray(b'MZ' + b'\0' * 0x3A + struct.pack('<I', 0x80) + b'\0' * 0x40)
