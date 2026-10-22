@@ -76,10 +76,25 @@ bash "$PATCHER_FILE"
 echo "[patcher] exit $?"
 TXT
 
-echo "== setup in the container ($(date +%T))"
+# the card's free space as the PC sees it: Docker Desktop's file sharing reports another disk's for a
+# folder on an external drive, which a setup's space checks would trust (rbin/df, first on PATH,
+# answers `df -Pm` with it; the figure does not shrink as the setup writes)
+FREE_MB=$(df -Pm "$WORK" | awk 'NR==2{print $4}')
+mkdir -p "$WORK/rbin"
+cat > "$WORK/rbin/df" <<'SH'
+#!/bin/sh
+case " $* " in
+  *" -Pm "*) echo "Filesystem 1048576-blocks Used Available Capacity Mounted on"
+             echo "rehearsal 0 0 ${REHEARSE_FREE_MB:-0} 0% /roms"; exit 0 ;;
+esac
+exec /bb/df "$@"
+SH
+chmod +x "$WORK/rbin/df"
+echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
-docker run --rm --platform linux/arm64 --memory 1g --memory-swap 2g -v "$R":/roms -e ANSWERS="${ANSWERS:-}" \
-  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
+docker run --rm --platform linux/arm64 --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
+  -e REHEARSE_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
+  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
