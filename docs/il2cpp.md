@@ -107,7 +107,9 @@ newer compiler's code generation.
    descriptors; every other assembly (the game's, the packages', the UnityEngine modules) is a
    root and kept whole: a desktop build carries no list of the types its scenes and assets use
    (the editor's TypesInScenes / editor data), so nothing the data might name is removed.
-   `--strip none` compiles everything whole (3x the C++). 2017.x's UnityLinker is the older one
+   2022.x's linker resolves, with `--use-editor-options`, only the assemblies it is given by
+   `--allowed-assembly` (one per assembly of the build, as the editor passes them): every staged
+   assembly is. `--strip none` compiles everything whole (3x the C++). 2017.x's UnityLinker is the older one
    (Mono's linker with Unity's steps and options), run as that editor runs it: `--api=NET_2_0[_Subset]|NET_4_6
    --core-action=link --i18n=none --descriptor-directory=<il2cpp/LinkerDescriptors>` (for `net45` a
    copy where each `*45.xml` replaces the file without 45), the game's and the packages'

@@ -1257,6 +1257,10 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     linker = deploy_tool(tc['editor'], 'UnityLinker')
     if has_option(linker, 'IncludeUnityRootAssembly'):
         largs = link_args(version, abi, staged, linked, roots, profile)
+        if has_option(linker, 'AllowedAssembly'):
+            # (2022.x: with --use-editor-options the linker resolves only the assemblies it is
+            # given, as the editor gives it every assembly of the build)
+            largs += [f'--allowed-assembly={os.path.join(staged, n)}' for n in sorted(os.listdir(staged)) if n.endswith('.dll')]
     else:                                       # 2017.x: the older UnityLinker
         engine = [n for n in roots if is_engine(n)]
         os.makedirs(work, exist_ok=True)
