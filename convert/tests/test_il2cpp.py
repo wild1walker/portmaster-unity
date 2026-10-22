@@ -233,6 +233,9 @@ class ProfileTest(unittest.TestCase):
         self.assertIn('--map-file-parser=/bin/true', a)
         a = I.il2cpp_args(UV.Version('2018.4.36f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p')
         self.assertFalse(any(x.startswith('--map-file-parser') for x in a))
+        # (2018.3 still links with a map file and builds MapFileParser from sources it lacks)
+        a = I.il2cpp_args(UV.Version('2018.3.2f1'), 'arm64-v8a', '/m', '/c', '/k', '/o.so', '/ndk', {}, '/p')
+        self.assertIn('--map-file-parser=/bin/true', a)
 
 
 def write_elf(path, syms, is64=True):

@@ -108,6 +108,7 @@ METADATA_MAGIC = 0xFAB11BAF
 # the first 2017.4 release with a 64-bit ARM IL2CPP player, and the line's last
 ARM64_2017 = (16, '2017.4.40f1')
 BCL_DIR = 'MonoBleedingEdge/lib/mono/unityaot'   # the class libraries of IL2CPP builds from 2018.1 (bcl_profile)
+MAP_FILE_UNTIL = (2018, 4)              # il2cpp's Android builds before 2018.4 run MapFileParser on a linker map
 
 
 def log(msg):
@@ -1003,10 +1004,11 @@ def il2cpp_args(version, abi, managed, cpp, cache, so, ndk, settings, pkg, profi
          '--platform=Android', f'--architecture={arch}', '--configuration=Release',
          f'--outputpath={so}', f'--cachedirectory={cache}', f'--generatedcppdir={cpp}',
          f'--directory={managed}', f'--tool-chain-path={ndk}', '--verbose']
-    if version.line < (2018, 1):
-        # 2017.x links with a map file and then runs MapFileParser on it for Data/SymbolMap-<arch>
-        # (which libil2cpp's managed stack traces can do without: it falls back to the method
-        # pointer table); with no --map-file-parser il2cpp builds one with the host's GCC
+    if version.line < MAP_FILE_UNTIL:
+        # 2017.x - 2018.3 link with a map file and then run MapFileParser on it for
+        # Data/SymbolMap-<arch> (which libil2cpp's managed stack traces can do without: it falls
+        # back to the method pointer table); with no --map-file-parser il2cpp builds one from its
+        # sources with the host's GCC (finish() writes the file from the symbol table instead)
         a.append('--map-file-parser=/bin/true')
     if settings.get('gcIncremental') and version.line >= (2019, 1):
         a.append(f'--incremental-g-c-time-slice={settings.get("gcTimeSlice", 3)}')
@@ -1411,7 +1413,7 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
     if missing:
         log(f'WARNING: the player\'s libunity.so looks up {len(missing)} il2cpp_* functions libil2cpp.so lacks: {missing[:8]}')
     syms = [p for p in (os.path.join(os.path.dirname(so), n) for n in ('libil2cpp.so.debug', 'libil2cpp.sym')) if os.path.isfile(p)]
-    if version.line < (2018, 1) and syms:      # (2017.x: see il2cpp_args' --map-file-parser)
+    if version.line < MAP_FILE_UNTIL and syms:  # (2017.x - 2018.3: see il2cpp_args' --map-file-parser)
         n = write_symbol_map(syms[0], os.path.join(dst, 'SymbolMap-' + ABIS[abi][0]), abi == 'armeabi-v7a')
         log(f'SymbolMap-{ABIS[abi][0]}: {n} code symbols')
     # the unstripped library and the linker's map (dropped), the symbols (kept in .work): 2019.4+
