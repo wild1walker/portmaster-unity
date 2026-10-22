@@ -15,17 +15,48 @@ python -m pmunity apk base.apk split_config.arm64_v8a.apk main.12.com.x.obb out/
 python -m pmunity apk game.xapk out/                        # .xapk / .apks / a zip of APKs and OBBs
 python -m pmunity apk game.aab out/                         # an App Bundle
 python -m pmunity apk <game>.apk out/ --dry-run             # the report only
+python -m pmunity apk <game>.apk out/ --target armhf,arm64 --json   # the first player the build has; JSON on stdout
 ```
 
 Then copy `out/` to the handheld and start `ua_host out/` with the build of the chosen ABI:
 `runtime/host/out/ua_host` (armhf, armeabi-v7a; `LD_LIBRARY_PATH=/lib32:/usr/lib32`) or
 `runtime/host/out/arm64/ua_host` (aarch64, arm64-v8a).
 
+## As a port (`pmunity port new --route apk`)
+
+```sh
+cd convert
+python -m pmunity port check <game>.apk                  # what it is, its ABIs, the apk route
+python -m pmunity port new mygame --data <game>.apk      # -> mygame/ with port.toml and the port
+mygame/package.sh                                        # -> mygame/out/mygame.zip
+REHEARSE_64ONLY=1 PM_7ZZ=<PortMaster's 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip <game>.apk work/mygame 240
+```
+
+`--data` takes what `pmunity apk` takes: an `.apk` (with its `.obb` files beside it), an `.xapk`,
+`.apks` or `.aab`, or a folder of split APKs and OBBs. The check reads the build with the dry run
+and suggests `game.package` (the setup takes only that package), `game.unity_versions`,
+`player.abis` (the APK's ARM players) and, for a Mono build, the pointer mode its code wants
+(docs/porting.md, section 1). The port (`port_template/apk/`):
+
+- the release ships `ua_host` (armhf) when the APK has an armeabi-v7a player and `ua_host64` (the
+  aarch64 build) when it has an arm64-v8a one: both for a build with both, about 4 MB of the zip;
+- the setup (no download, no conversion: a few minutes) takes the player's copy from `gamedata/`
+  and runs `pmunity apk --target <the players this system runs>`: the armeabi-v7a one where the
+  system has a 32-bit userland (`/lib/ld-linux-armhf.so.3`; the tested route on the RG34XX-SP's
+  Mali driver), else the arm64-v8a one; `player.abi = "arm64-v8a"` takes the 64-bit one wherever
+  the APK has it. It installs `lib/`, `base.apk`, the OBBs and `android_package.json` into the port
+  folder and deletes the player's files from `gamedata/` (docs/porting.md, section 4);
+- the launcher runs `ua_host` or `ua_host64` by `android_package.json`'s `abi`, with gptokeyb2 for
+  the exit hotkey, SDL's own audio driver and the build's own frame pacing (`UA_FRAME_RATE=android`);
+- port.json asks for the 32-bit userland (`reqs = ["armhf"]`) only when the port runs nothing but
+  armeabi-v7a; a card set up with the 32-bit player and moved to a 64-bit-only handheld is set up
+  again from the installed APK (the launcher says how).
+
 ## What it writes
 
 | path | what |
 |---|---|
-| `base.apk` | the APK, unchanged (an APFS clone, a hard link or a copy). Unity reads its data through the package code path (`getPackageCodePath`, `ApplicationInfo.sourceDir`). For split installs whose Unity data sits in an asset-pack split, one APK with the packs' `assets/` merged in; for an App Bundle, one APK rebuilt from the base module and the asset packs |
+| `base.apk` | the APK, unchanged (an APFS clone, a hard link or a copy; moved when the tool unpacked or rebuilt it itself). Unity reads its data through the package code path (`getPackageCodePath`, `ApplicationInfo.sourceDir`). For split installs whose Unity data sits in an asset-pack split, one APK with the packs' `assets/` merged in; for an App Bundle, one APK rebuilt from the base module and the asset packs |
 | `main.<versionCode>.<package>.obb`, `patch....obb` | OBBs under the names the player derives from the manifest (`getObbDir()` + `main.<versionCode>.<package>.obb`): Google Play's names are kept, Unity's split-build output (`<name>.main.obb`) is renamed |
 | `lib/*.so` | `lib/<abi>/` of the APK and of its ABI split: the player, plugins (`lib_burst_generated.so`, ...) |
 | `assets/bin/Data/Managed/etc/` | Mono builds: Mono's config, which the runtime reads relative to the working directory (as for converted desktop data) |
@@ -53,9 +84,11 @@ the NDK's choreographer.
 ## Choices and checks
 
 - **ABI**: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one. `--target arm64|armhf`
-  names the userland; `--target auto` (default) is the machine running the tool when that is an
-  ARM Linux (a handheld running the setup), else arm64-v8a when the build has it. `--abi` takes one
-  directly. A build with only armeabi-v7a (every Mono build) needs the 32-bit userland.
+  names the userland, a list (`armhf,arm64`) the userlands the system has in order of preference
+  (the first the build has a player for; the port's setup passes it); `--target auto` (default) is
+  the machine running the tool when that is an ARM Linux, else arm64-v8a when the build has it.
+  `--abi` takes one directly. A build with only armeabi-v7a (every Mono build) needs the 32-bit
+  userland.
 - **Backend**: `libil2cpp.so` = IL2CPP, `libmono.so` / `libmonobdwgc-2.0.so` = Mono.
 - **Unity version**: from the data's header (`globalgamemanagers`, `data.unity3d` or `mainData`,
   in the APK, an asset pack or the OBB); the player's own build line is logged at startup too.

@@ -2,6 +2,7 @@
 # PORTMASTER: @@ZIP@@, @@LAUNCHER@@
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+
 if [ -d "/opt/system/Tools/PortMaster/" ]; then
   controlfolder="/opt/system/Tools/PortMaster"
 elif [ -d "/opt/tools/PortMaster/" ]; then
@@ -11,6 +12,7 @@ elif [ -d "$XDG_DATA_HOME/PortMaster/" ]; then
 else
   controlfolder="/roms/ports/PortMaster"
 fi
+
 source $controlfolder/control.txt
 get_controls
 

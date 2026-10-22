@@ -8,7 +8,7 @@
 #   3. ports/<port>/game.env: where the game is and the GL mode, for the launcher
 # The game's code is not changed. Every step can be interrupted: the next launch continues.
 # Log: ports/<port>/patchlog.txt. A line "PATCH_FAIL_MSG:<text>" says why the setup failed.
-S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+S="${GAMEDIR:?}/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
 . "$S/setup.env"
 
 exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1

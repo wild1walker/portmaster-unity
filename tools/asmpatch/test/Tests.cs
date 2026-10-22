@@ -33,6 +33,7 @@ static partial class TestMain
             NoAndroidConstant();
             InputSystemTests();
             InControlTests();
+            SurveyTests();
             StreamingAssets();
             Cli();
         }

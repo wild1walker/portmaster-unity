@@ -1,0 +1,20 @@
+{
+  "title": "the game's own Android build (APK and OBBs, XAPK, APKS, AAB), run by ua_host: armeabi-v7a on a 32-bit userland (ua_host), arm64-v8a on 64-bit-only systems (ua_host64)",
+  "defaults": {"player": {"abi": "auto"}},
+  "config": ["port", "game", "player", "runtime", "files"],
+  "config_doc": {
+    "game": "# what the player provides: the files the setup takes from gamedata/ (data: globs; .obb files\n# always), the build kind (android), the Unity versions and the Android package the setup accepts\n# (empty: any), how READMEs and messages describe it (what), its size in MB",
+    "player": "# the player in the APK: backend (from the APK); abis = the APK's ABIs the port runs, and so\n# the runtimes the release ships (armeabi-v7a: ua_host, 32-bit; arm64-v8a: ua_host64); abi = the\n# one taken where the system runs both: auto = armeabi-v7a where the system has a 32-bit\n# userland, else arm64-v8a; arm64-v8a = the 64-bit one wherever the APK has it",
+    "files": "# the porter's own files (paths relative to this file): hooks = {game|post_install = \"x.sh\"}\n# sourced by the setup (a game hook may set INPUTS=(<files>), the build's files), extra = files\n# for the port folder"
+  },
+  "files": {
+    "@@TITLE@@.sh": "launcher.sh",
+    "@@PORTDIR@@/setup/patchscript": "patchscript",
+    "@@PORTDIR@@/README.md": "README.player.md",
+    "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
+    "@@PORTDIR@@/@@PORTDIR@@.ini": "hotkey.ini",
+    "README.md": "README.port.md",
+    "package.sh": "package.sh"
+  },
+  "package": ["ua_host?", "ua_host64?", "pmunity", "pybundle"]
+}

@@ -19,7 +19,7 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 | game | Unity, build | route | emulated rig | handheld | notes (last checked) |
 |---|---|---|---|---|---|
 | Cuphead + The Delicious Last Course (GOG, macOS) | 2017.4.9f1, Mono .NET 3.5 | 32-bit | title, levels; the title screen at PortMaster's test sizes: 480x320 (3:2, the port's side crop), 640x480 and 720x720 (letterboxed), 1280x720 | **whole game**: setup from GOG's installers, title 59.6 fps, eight boss fights 59.0 - 59.5 fps | its own port (portmaster-cuphead). 64-bit (IL2CPP) build: Cuphead's code compiled with IL2CPP for 2017.4.40f1's arm64 player (7 min on the PC, `libil2cpp.so` 50.8 MB), the 2017.4.9 data retargeted to it; in the native arm64 rig: title screen with the DLC, menus with the handheld's button letters, a new game through the intro book into Elder Kettle's house (Dialoguer's dialogue; the saves, Dialoguer's XmlSerializer data included, written with the port's link.xml), sound starting. The port's own 64-bit setup (IL2CPP build on the device included) ran through on a 64-bit-only stand-in (arm64 container, 1 GB, no 32-bit loader) and its install reaches the main menu (2026-10-21) |
-| Hollow Knight (GOG, Linux) | 6000.0.61f1, Mono .NET 4.x | 32-bit | first launch to gameplay: language, menus, calibration, both opening cinematics, King's Pass | **first launch to gameplay**: title 37 fps, prologue 59.6, opening cinematic 30 (the video's rate), King's Pass 32 - 34 fps (its main thread is busy all the time); saving (Quit to Menu) and loading the save work; 30 minutes with steady memory (56 MB available at the lowest) | the game switches Unity's garbage collector off: without `UA_GC_BUDGET` (default 32 MB) Mono's heap grew from 64 to 192 MB in 28 minutes and memory ran out; with it, a collection every 4 - 5 minutes, a pause of about 0.6 s each; the desktop's frame pacing (`UA_FRAME_RATE`) lifted the 30 fps cap; the audio step keeps long clips compressed; the 64-bit IL2CPP route is not open to it yet (Unity 6's il2cpp is a native Windows/macOS/Linux x86-64 program); Switch controls via `UA_PAD_NAME` (2026-10-21) |
+| Hollow Knight (GOG, Linux) | 6000.0.61f1, Mono .NET 4.x | 32-bit | first launch to gameplay: language, menus, calibration, both opening cinematics, King's Pass; the port's setup rehearsed in an arm64 container (`tools/port/rehearse.sh`, 1 GB memory + 2 GB swap: 32 minutes, 3.9 GB installed) and the game it installed starts at its first-run language screen | **first launch to gameplay**: title 37 fps, prologue 59.6, opening cinematic 30 (the video's rate), King's Pass 32 - 34 fps (its main thread is busy all the time); saving (Quit to Menu) and loading the save work; 30 minutes with steady memory (56 MB available at the lowest) | the game switches Unity's garbage collector off: without `UA_GC_BUDGET` (default 32 MB) Mono's heap grew from 64 to 192 MB in 28 minutes and memory ran out; with it, a collection every 4 - 5 minutes, a pause of about 0.6 s each; the desktop's frame pacing (`UA_FRAME_RATE`) lifted the 30 fps cap; the audio step keeps long clips compressed; the 64-bit IL2CPP route is not open to it yet (Unity 6's il2cpp is a native Windows/macOS/Linux x86-64 program); Switch controls via `UA_PAD_NAME` (2026-10-21) |
 
 ## Linux builds, one per Unity line (32-bit route)
 
@@ -60,13 +60,17 @@ The shaders left out everywhere are BlitToDepth_MSAA and the VR blit.
 
 ## Android builds (APK route)
 
+As ports (`pmunity port new --route apk`): the release zip rehearsed with `tools/port/rehearse.sh`
+(the setup in an arm64 container that stands in for the handheld, with its 32-bit loader or,
+`REHEARSE_64ONLY=1`, without), then the installed game in the emulated rig.
+
 | game | Unity, build | emulated rig | handheld | notes (last checked) |
 |---|---|---|---|---|
-| [Imperium Host](https://vectorinox.itch.io/imperium-host) | 2020.3.3f1, IL2CPP arm64 + armv7 | title menu | title 59.6 fps (64-bit) | (2026-10-20) |
-| [Cat Cove Inn](https://loaflabs.itch.io/cat-cove-inn) | 2021.3.4f1, IL2CPP + Burst | intro, title (arm64 and armv7) | title 30 fps (64-bit) | leaves Unity's Android default frame rate (2026-10-20) |
+| [Imperium Host](https://vectorinox.itch.io/imperium-host) | 2020.3.3f1, IL2CPP arm64 + armv7 | title menu; as a port: the setup takes the armeabi-v7a player where the system has a 32-bit userland and the arm64-v8a one on a 64-bit-only system, and the 64-bit install reaches the title menu in the arm64 rig | title 59.6 fps (64-bit, by hand) | the port's setup takes 40 s in the container; nothing downloaded (2026-10-21) |
+| [Cat Cove Inn](https://loaflabs.itch.io/cat-cove-inn) | 2021.3.4f1, IL2CPP + Burst | intro, title (arm64 and armv7); as a port from an `.xapk`: the 64-bit-only setup, then intro and title menu in the arm64 rig at the build's own 30 fps | title 30 fps (64-bit, by hand) | leaves Unity's Android default frame rate, as the port keeps it (2026-10-21) |
 | [The Ump Show (Demo)](https://azeemba.itch.io/the-ump-show) | 2022.3.14f1, IL2CPP + Burst, FMOD, 3D | title over its 3D scene | title 30 fps (64-bit) | leaves Unity's Android default frame rate (2026-10-20) |
 | [ROOTS](https://pierre-vandermaesen.itch.io/roots) | 2019.4.18f1, Mono armv7 | title | | stalls for minutes at times under QEMU (2026-10-20) |
-| [Calculords](https://richjoslin.itch.io/calculords) | 2022.3.23f1, Mono armv7, GLES2 | title | | (2026-10-20) |
+| [Calculords](https://richjoslin.itch.io/calculords) | 2022.3.23f1, Mono armv7, GLES2 | title; as a port: the setup with a 32-bit userland (armeabi-v7a only, so the release ships only `ua_host` and port.json asks for armhf), then "Tap anywhere to start" in the armhf rig | | the check suggests `UA_POINTER=1` (UI pointer handlers, no pad navigation) (2026-10-22) |
 
 ## 64-bit IL2CPP route (desktop Mono games compiled with `pmunity il2cpp`)
 
@@ -105,7 +109,7 @@ built in an arm64 container limited like the RG34XX-SP (1 GB, 4 CPUs, no swap), 
 | game | Unity | emulated rig | notes (last checked) |
 |---|---|---|---|
 | [MineRalph](https://chopchopgames.itch.io/mineralph) | 2018.3.2f1 | title menu | `streaming_assets = "both"` (2026-10-21) |
-| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it | a pointer click or touch on the launcher's Play does not: Rewired's UI module receives the touch but no click lands on the button (not looked into further) (2026-10-21) |
+| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it; the left stick moves the launcher's cursor and A on Play starts it | its own cursor (docs/input.md, "Games with their own cursor"): its buttons are not uGUI's, so pointer mode's position and touches do not click them; no `UA_POINTER` (the pad drives its cursor), or `UA_POINTER=1 UA_POINTER_CURSOR=0` (Play clicked by mouse in the rig) (2026-10-22) |
 
 ## box64 route (x86-64 Linux players)
 

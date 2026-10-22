@@ -450,10 +450,10 @@ void up_pause(void)
         sem_init(&c->sem, 0, 0);
         post_msg(MSG_PAUSE);
         looper_post(&L_main, job_pause, c, NULL, 0);
+        int q = 0;
+        /* on timeout c is leaked on purpose: the queued job still runs later and posts to c->sem */
         if (!sem_wait_4s(&c->sem)) up_log("Timeout while trying to pause the Unity Engine.");
-        int q = c->quit;
-        /* c is leaked on timeout on purpose (the job may still run) */
-        if (!q) { sem_destroy(&c->sem); free(c); }
+        else { q = c->quit; sem_destroy(&c->sem); free(c); }
         S.running = 0;
         S.paused = 1;
         if (q) { up_quit(); return; }

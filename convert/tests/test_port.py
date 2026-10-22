@@ -4,18 +4,22 @@ tools (offline; nothing of a real game or of Unity)."""
 import io
 import json
 import os
+import shlex
 import shutil
 import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import unittest
 import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pmunity import port as P
+from test_apk import BID, make_apk, make_obb, manifest as apk_manifest
 
 
 # ---------------------------------------------------------------- a .NET assembly, written here
@@ -298,7 +302,7 @@ class NewAndSetupTest(unittest.TestCase):
             for f in ('My Game.sh', 'mygame/setup/patchscript', 'mygame/setup/setup.env', 'mygame/setup/convert.json',
                       'mygame/setup/questions.lua', 'mygame/setup.txt', 'mygame/port.json', 'mygame/port.env',
                       'mygame/README.md', 'mygame/gamedata/PUT_GAME_FILES_HERE.txt', 'mygame/mygame.ini',
-                      'README.md', 'package.sh', 'port.build.json'):
+                      'mygame/gameinfo.xml', 'README.md', 'package.sh', 'port.build.json', 'testing_thread.txt'):
                 self.assertIn(f, files)
             for f in files:
                 text = open(os.path.join(out, f), errors='replace').read()
@@ -313,6 +317,24 @@ class NewAndSetupTest(unittest.TestCase):
             launcher = open(os.path.join(out, 'My Game.sh')).read()
             self.assertIn('GAMEDIR="/$directory/ports/mygame"', launcher)
             self.assertIn('PATCHER_QUESTIONS', launcher)
+            self.assertEqual(P.launcher_warnings(launcher), [])
+            # the README in PortMaster's layout: Notes (a thank-you first), Controls, Compile; no title
+            readme = P._read(os.path.join(out, 'README.md'))
+            self.assertTrue(readme.startswith('## Notes\n\nThanks to the makers of My Game'), readme[:80])
+            heads = [l for l in readme.splitlines() if l.startswith('#')]
+            self.assertEqual(heads, ['## Notes', '## Controls', '## Compile'])
+            self.assertIn('| Select + Start | Quit |', readme)
+            self.assertIn('runtime/build.sh', readme)
+            self.assertIn('32-bit (armhf) userland', readme)
+            self.assertNotIn('tools/asmpatch/build.sh', readme)           # (the port does not use it)
+            self.assertNotIn('\u2014', readme)
+            self.assertIn('| Select + Start | Quit |', P._read(os.path.join(out, 'mygame', 'README.md')))
+            gi = P._read(os.path.join(out, 'mygame', 'gameinfo.xml'))
+            self.assertIn('<path>./My Game.sh</path>', gi)
+            self.assertIn('<image>./mygame/screenshot.png</image>', gi)
+            tt = P._read(os.path.join(out, 'testing_thread.txt'))
+            self.assertIn('Title: My Game', tt)
+            self.assertIn(pj['attr']['inst'], tt)
             build = json.load(open(os.path.join(out, 'port.build.json')))
             self.assertEqual(build['config']['game']['data'], 'My Game_Data')
             self.assertEqual(build['config']['runtime'], {'UA_POINTER': '1'})
@@ -348,6 +370,14 @@ class NewAndSetupTest(unittest.TestCase):
             pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
             self.assertNotIn('armhf', pj['attr']['reqs'])
             self.assertIn('IL2CPP', pj['attr']['inst'])
+            readme = P._read(os.path.join(out, 'README.md'))
+            self.assertIn('64-bit (aarch64) handheld', readme)
+            self.assertIn("Unity's IL2CPP on the handheld", readme)
+            self.assertIn('ARCH=arm64 runtime/build.sh', readme)
+            self.assertNotIn('armhf', readme)
+            self.assertIn('Needs a 64-bit (aarch64) handheld.', P._read(os.path.join(out, 'testing_thread.txt')))
+            # (gameinfo.xml takes the route's description when port.toml has none)
+            self.assertIn("<desc>My Game on Unity's 64-bit Android player", P._read(os.path.join(out, 'mygame', 'gameinfo.xml')))
             # a player set in port.toml wins over the route's default
             _, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}, 'player': {'abi': 'armeabi-v7a'}})
             self.assertIn('PLAYER_ABI=armeabi-v7a', open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read())
@@ -368,11 +398,35 @@ class NewAndSetupTest(unittest.TestCase):
                     ti = tarfile.TarInfo(n)
                     ti.size = len(data)
                     tf.addfile(ti, io.BytesIO(data))
-            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            P.write_png(os.path.join(out, 'screenshot.png'), 640, 480, bytes(640 * 480 * 3))   # (a stand-in capture)
+            msgs = []
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=msgs.append, pybundle=pyb, no_build=True, submission=True)
             with zipfile.ZipFile(z) as zf:
                 names = set(zf.namelist())
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
                 lic = zf.read('mygame/licenses/LICENSE.setup-python.txt').decode()
+                self.assertEqual(zf.read('mygame/screenshot.png'), P._read(os.path.join(out, 'screenshot.png'), 'rb'))
+            # PortMaster's files: gameinfo.xml and the screenshot in the port folder, the testing
+            # thread's post beside the zip only; what is still missing is listed
+            self.assertIn('mygame/gameinfo.xml', names)
+            self.assertNotIn('mygame/cover.png', names)
+            self.assertFalse(any('testing_thread' in n for n in names))
+            self.assertTrue(os.path.isfile(os.path.join(t, 'rel', 'testing_thread.txt')))
+            text = '\n'.join(msgs)
+            self.assertIn('no cover', text)
+            self.assertNotIn('no screenshot', text)
+            self.assertIn('[controls] is empty', text)
+            self.assertNotIn('standard lines', text)
+            # --submission: the layout of PortMaster's repository (ports/mygame/ there)
+            sub = os.path.join(t, 'rel', 'submission', 'mygame')
+            top = sorted(os.listdir(sub))
+            self.assertEqual(top, ['My Game.sh', 'README.md', 'gameinfo.xml', 'mygame', 'port.json', 'screenshot.png'])
+            self.assertTrue(P._read(os.path.join(sub, 'README.md')).startswith('## Notes'))
+            self.assertTrue(os.access(os.path.join(sub, 'My Game.sh'), os.X_OK))
+            inner = set(os.listdir(os.path.join(sub, 'mygame')))
+            self.assertFalse(inner & {'port.json', 'gameinfo.xml', 'screenshot.png'})
+            self.assertTrue({'ua_host', 'setup', 'licenses', 'README.md'} <= inner)
+            self.assertTrue(os.access(os.path.join(sub, 'mygame', 'ua_host'), os.X_OK))
             for n in ('My Game.sh', 'mygame/ua_host', 'mygame/setup/python.tar.gz', 'mygame/setup/pmunity/__main__.py',
                       'mygame/setup/pmunity/shaders/glsl.py', 'mygame/setup/pmunity/video_decode_android.shader',
                       'mygame/setup/pmunity/il2cpp_device_lock.py', 'mygame/setup/tools/il2cpp/ndk-clang.sh',
@@ -455,6 +509,231 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertIn('removing game-linux.zip: not needed to play', P._read(os.path.join(g, 'patchlog.txt')))
             self.assertIn('keep_installers=0', P._read(os.path.join(g, 'setup.txt')))
 
+@unittest.skipUnless(shutil.which('bash'), 'needs bash')
+class ApkRouteTest(unittest.TestCase):
+    """The apk route: the check of an Android build, the port it makes and ships, and its setup run
+    with the real `pmunity apk` (the setup's Python is this one)."""
+
+    def apk(self, t, sub='src', name='game.apk', abis=('arm64-v8a', 'armeabi-v7a'), backend='il2cpp', obb=False,
+            pkg='com.test.game', extra=None):
+        d = os.path.join(t, sub)
+        os.makedirs(d, exist_ok=True)
+        a = make_apk(os.path.join(d, name), apk_manifest(pkg=pkg, meta=(('unity.build-id', BID),)), abis=abis,
+                     backend=backend, extra=extra)
+        if obb:
+            make_obb(os.path.join(d, os.path.splitext(name)[0] + '.main.obb'), BID)
+        return a
+
+    def runtime(self, t):
+        rt = os.path.join(t, 'rt')
+        for arch in ('', 'arm64/'):
+            for d in (f'runtime/host/out/{arch}', f'runtime/media/out/{arch}licenses'):
+                os.makedirs(os.path.join(rt, d), exist_ok=True)
+            put(os.path.join(rt, f'runtime/host/out/{arch}ua_host'), f'host {arch}')
+            put(os.path.join(rt, f'runtime/media/out/{arch}licenses/libvpx.copyright'), f'BSD {arch}')
+        pyb = os.path.join(t, 'py.tar.gz')
+        with tarfile.open(pyb, 'w:gz') as tf:
+            ti = tarfile.TarInfo('python/lib/python3.12/LICENSE.txt')
+            ti.size = 3
+            tf.addfile(ti, io.BytesIO(b'PSF'))
+        return rt, pyb
+
+    def test_check(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.apk(t, obb=True)
+            rep = P.check(os.path.join(t, 'src'))
+            self.assertEqual(rep['build'], 'android')
+            self.assertEqual(rep['route'], 'apk')
+            r = rep['routes'][0]
+            self.assertTrue(r['ok'] and r['available'], r)
+            self.assertIn('ships both', ' '.join(r['needs']))
+            self.assertEqual(rep['unity_version'], '2021.3.4f1')
+            self.assertEqual(rep['apk_info']['obbs'], {'main': 'main.7.com.test.game.obb'})
+            self.assertEqual(rep['suggest']['player'], {'backend': 'il2cpp', 'abis': ['arm64-v8a', 'armeabi-v7a']})
+            self.assertEqual(rep['suggest']['game'], {'package': 'com.test.game'})
+            out = io.StringIO()
+            P.print_report(rep, out)
+            self.assertIn('package com.test.game, versionCode 7', out.getvalue())
+            self.assertIn('recommended route: apk', out.getvalue())
+            # a Mono build that reads only touches: pointer mode with touch events
+            dll = os.path.join(t, 'Assembly-CSharp.dll')
+            write_assembly(dll, 'Assembly-CSharp', [('', 'Game')], [('UnityEngine', 'Input')], ['Update'],
+                           [(1, 'GetTouch'), (1, 'get_touchCount')])
+            m = self.apk(t, 'mono', 'mono.apk', abis=('armeabi-v7a',), backend='mono',
+                         extra={'assets/bin/Data/Managed/Assembly-CSharp.dll': P._read(dll, 'rb')})
+            rep = P.check(m)
+            self.assertEqual(rep['route'], 'apk')
+            self.assertEqual(rep['suggest']['runtime'], {'UA_POINTER': 'touch'})
+            self.assertIn('armeabi-v7a only', ' '.join(rep['routes'][0]['needs']))
+            # refused, with the reason: x86 only
+            x = self.apk(t, 'x86', 'x.apk', abis=('x86',))
+            rep = P.check(x)
+            self.assertIsNone(rep['route'])
+            self.assertIn('x86', rep['unsupported'])
+            # nothing Android: no game
+            os.makedirs(os.path.join(t, 'empty'))
+            with self.assertRaises(SystemExit):
+                P.check(os.path.join(t, 'empty'))
+
+    def test_new_and_package(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t)
+            out = P.new('mygame', a, None, os.path.join(t, 'port'), title='My Game', log=lambda m: None)
+            files = set(P._read(os.path.join(out, '.port_files')).split('\n')) - {''}
+            for f in ('My Game.sh', 'mygame/setup/patchscript', 'mygame/setup/setup.env',
+                      'mygame/port.json', 'mygame/README.md', 'mygame/gamedata/PUT_GAME_FILES_HERE.txt', 'README.md',
+                      'mygame/gameinfo.xml', 'testing_thread.txt'):
+                self.assertIn(f, files)
+            self.assertNotIn('mygame/setup/convert.json', files)
+            for f in files:
+                if f != 'port.build.json':
+                    self.assertNotIn('@@', P._read(os.path.join(out, f)), f)
+                if f.endswith(('.sh', 'patchscript')):
+                    subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
+            env = P._read(os.path.join(out, 'mygame', 'setup', 'setup.env'))
+            for x in ('PORT_ROUTE=apk', 'GAME_PACKAGE=com.test.game', 'PLAYER_ABI=auto', 'GAME_BUILD=android',
+                      "GAME_DATA='*.apk *.xapk *.apks *.aab *.zip'", 'UNITY_VERSIONS=2021.3.4f1'):
+                self.assertIn(x, env)
+            self.assertNotIn('PACKAGE=com.pmunity', env)
+            toml = tomllib.loads(P._read(os.path.join(out, 'port.toml')))
+            self.assertNotIn('convert', toml)
+            self.assertNotIn('android_data', toml)
+            self.assertEqual(toml['player']['abis'], ['arm64-v8a', 'armeabi-v7a'])
+            launcher = P._read(os.path.join(out, 'My Game.sh'))
+            self.assertEqual(P.launcher_warnings(launcher), [])
+            for x in ('./ua_host64 "$GAMEDIR"', '/lib/ld-linux-armhf.so.3', '"abi"'):
+                self.assertIn(x, launcher)
+            self.assertNotRegex(launcher, r'(?m)^\s*(export\s+)?(SDL_AUDIODRIVER|UA_FRAME_RATE)=')
+            pj = json.loads(P._read(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn('nothing is downloaded', pj['attr']['inst'])
+            self.assertNotIn("downloads Unity's Android player", P._read(os.path.join(out, 'README.md')))
+            self.assertIn('ARCH=arm64 runtime/build.sh', P._read(os.path.join(out, 'README.md')))
+            # the release: both runtimes, each with its licences
+            rt, pyb = self.runtime(t)
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            with zipfile.ZipFile(z) as zf:
+                names = set(zf.namelist())
+                self.assertEqual(zf.read('mygame/ua_host64'), b'host arm64/')
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.libvpx.ua_host64.txt'), b'BSD arm64/')
+            for n in ('mygame/ua_host', 'mygame/licenses/LICENSE.libvpx.txt', 'mygame/setup/python.tar.gz',
+                      'mygame/setup/pmunity/apk.py'):
+                self.assertIn(n, names)
+            # port new again from port.toml alone (the README's Compile section)
+            P.new('mygame', None, None, out, log=lambda m: None)
+            self.assertEqual(P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')), env)
+            # an armeabi-v7a-only build: a 32-bit userland (port.json), ua_host alone
+            v7 = self.apk(t, 'v7', 'v7.apk', abis=('armeabi-v7a',))
+            out2 = P.new('v7game', v7, None, os.path.join(t, 'port2'), log=lambda m: None)
+            pj = json.loads(P._read(os.path.join(out2, 'v7game', 'port.json')))
+            self.assertEqual(pj['attr']['reqs'], ['armhf'])
+            self.assertNotIn('ARCH=arm64', P._read(os.path.join(out2, 'README.md')))
+            z = P.package(out2, os.path.join(t, 'rel2'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            with zipfile.ZipFile(z) as zf:
+                names = set(zf.namelist())
+            self.assertIn('v7game/ua_host', names)
+            self.assertNotIn('v7game/ua_host64', names)
+
+    def setup_port(self, t, data, files=(), hosts=('ua_host', 'ua_host64'), cfg=None, reinstall=False):
+        """A port made from the build `data`, installed as ports/mygame (over the installed one: as
+        PortMaster installs it again) with `files` in gamedata/ and the given runtimes; the setup's
+        Python is this one, pmunity this checkout's."""
+        cp = os.path.join(t, 'cfg.json')
+        with open(cp, 'w') as f:
+            json.dump(P.merge({'port': {'title': 'My Game'}}, cfg or {}), f)
+        out = P.new('mygame', data, cp, os.path.join(t, 'port'), log=lambda m: None)
+        g = os.path.join(t, 'ports', 'mygame')
+        if not reinstall:
+            shutil.rmtree(g, ignore_errors=True)
+        shutil.copytree(os.path.join(out, 'mygame'), g, dirs_exist_ok=True)
+        for h in hosts:
+            put(os.path.join(g, h), '#!/bin/sh\n')
+        shutil.copytree(P.HERE, os.path.join(g, 'setup', 'pmunity'), dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns('__pycache__', 'port_template'))
+        stub = os.path.join(t, 'stub', 'python', 'bin', 'python3.12')
+        os.makedirs(os.path.dirname(stub), exist_ok=True)
+        put(stub, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        os.chmod(stub, 0o755)
+        with tarfile.open(os.path.join(g, 'setup', 'python.tar.gz'), 'w:gz') as tf:
+            tf.add(os.path.join(t, 'stub', 'python'), 'python')
+        for f in files:
+            shutil.copy(f, os.path.join(g, 'gamedata'))
+        return g
+
+    def run_setup(self, g, env=None):
+        e = dict(os.environ, GAMEDIR=g, controlfolder=os.path.join(os.path.dirname(g), 'PortMaster'),
+                 DEVICE_ARCH='aarch64', PYTHONPATH='')
+        e.update(env or {})
+        return subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
+
+    @unittest.skipIf(os.path.exists('/lib/ld-linux-armhf.so.3'), 'a 32-bit userland here: the setup takes armeabi-v7a')
+    def test_setup(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t, obb=True)
+            g = self.setup_port(t, a, [a, os.path.join(t, 'src', 'game.main.obb')])
+            os.makedirs(os.path.join(g, 'gamedata', 'more'))
+            put(os.path.join(g, 'gamedata', '._game.apk'), 'AppleDouble')           # (macOS's, on exFAT: ignored)
+            shutil.move(os.path.join(g, 'gamedata', 'game.main.obb'), os.path.join(g, 'gamedata', 'more'))
+            r = self.run_setup(g)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('the players this system runs, in this order: arm64', r.stdout)
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+            self.assertEqual(P._read(os.path.join(g, 'lib', 'libunity.so'), 'rb'), b'\x7fELFarm64-v8a')
+            for f in ('base.apk', 'main.7.com.test.game.obb', '.setup_done', 'answers.env'):
+                self.assertTrue(os.path.isfile(os.path.join(g, f)), f)
+            info = json.loads(P._read(os.path.join(g, 'android_package.json')))
+            self.assertEqual((info['abi'], info['source'], info['main_obb']), ('arm64-v8a', 'apk', 'main.7.com.test.game.obb'))
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'gamedata'))), ['._game.apk', 'PUT_GAME_FILES_HERE.txt'])
+            self.assertFalse(os.path.exists(os.path.join(g, 'setup')))
+            self.assertIn('setup finished', P._read(os.path.join(g, 'patchlog.txt')))
+            # the setup again (the port installed anew, the marker deleted): the installed APK and OBB
+            os.remove(os.path.join(g, '.setup_done'))
+            self.setup_port(t, a, reinstall=True)
+            r = self.run_setup(g)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('no package in gamedata/: the installed one again', r.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(g, 'main.7.com.test.game.obb')))
+            self.assertTrue(os.path.isfile(os.path.join(g, 'base.apk')))
+
+    def test_setup_checks(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t)
+            # another game's package; another Unity version; nothing in gamedata/
+            other = self.apk(t, 'other', 'other.apk', pkg='com.other.game')
+            g = self.setup_port(t, a, [other])
+            r = self.run_setup(g)
+            self.assertIn('PATCH_FAIL_MSG:This port is made for My Game (com.test.game); your files are com.other.game',
+                          r.stdout)
+            g = self.setup_port(t, a, [a], cfg={'game': {'unity_versions': ['2021.3.5f1']}})
+            r = self.run_setup(g)
+            self.assertIn('your copy was built with Unity 2021.3.4f1', r.stdout)
+            g = self.setup_port(t, a)
+            r = self.run_setup(g)
+            self.assertIn('PATCH_FAIL_MSG:Put the Android build of My Game', r.stdout)
+            # refused by pmunity apk, with its reason
+            g = self.setup_port(t, a)
+            put(os.path.join(g, 'gamedata', 'game.apk'), 'not a zip')
+            r = self.run_setup(g)
+            self.assertIn("PATCH_FAIL_MSG:The game's files cannot run here:", r.stdout)
+            self.assertIn('not a zip archive', r.stdout)
+            # the 32-bit player only, on a system without a 32-bit userland: said before anything else
+            if not os.path.exists('/lib/ld-linux-armhf.so.3'):
+                g = self.setup_port(t, a, [a], hosts=('ua_host',))
+                r = self.run_setup(g)
+                self.assertIn('needs a 32-bit (armhf) userland', r.stdout)
+                self.assertNotIn('unpacking the setup tools', r.stdout)
+
+    def test_choose_abi_preferences(self):
+        from pmunity import apk as A
+        have = ['arm64-v8a', 'armeabi-v7a']
+        self.assertEqual(A.choose_abi(have, 'armhf,arm64', None, print)[0], 'armeabi-v7a')
+        self.assertEqual(A.choose_abi(have, 'arm64,armhf', None, print)[0], 'arm64-v8a')
+        self.assertEqual(A.choose_abi(['arm64-v8a'], 'armhf,arm64', None, print)[0], 'arm64-v8a')
+        with self.assertRaises(A.Refused):
+            A.choose_abi(['armeabi-v7a'], 'arm64', None, print)
+        with self.assertRaises(A.Refused):
+            A.choose_abi(have, 'auto,arm64', None, print)
+
 
 class RoutesTest(unittest.TestCase):
     def test_templates(self):
@@ -467,6 +746,178 @@ class RoutesTest(unittest.TestCase):
             P.render('@@NOPE@@', {})
 
 
+
+
+class PortMasterMetadataTest(unittest.TestCase):
+    """port.json's fields, gameinfo.xml, the README's controls, the testing thread, the screenshot
+    checks and the launcher's standard lines (PortMaster's submission files)."""
+
+    def cfg(self, **over):
+        cfg = P.build_config('mygame', None, P.merge({'game': {'unity_versions': ['2020.3.1f1']}}, over))
+        P.validate(cfg)
+        return cfg
+
+    def test_port_json(self):
+        cfg = self.cfg(port={'title': 'My Game', 'porter': 'someone', 'genres': ['Platformer', 'visual novel'],
+                             'desc_md': '**bold**', 'reqs': ['2gb', '!lowres'],
+                             'store': [{'name': 'Steam', 'gameurl': 'https://example.com/app/1'}]})
+        a = P.port_json(cfg)['attr']
+        self.assertEqual(list(a), ['title', 'porter', 'desc', 'desc_md', 'inst', 'inst_md', 'genres', 'image', 'rtr',
+                                   'exp', 'runtime', 'store', 'availability', 'reqs', 'arch', 'min_glibc'])
+        self.assertEqual(a['porter'], ['someone'])
+        self.assertEqual(a['genres'], ['platformer', 'visual novel'])
+        self.assertEqual((a['desc_md'], a['inst_md']), ('**bold**', None))
+        self.assertEqual(a['store'], [{'name': 'Steam', 'gameurl': 'https://example.com/app/1', 'developerurl': ''}])
+        self.assertEqual(a['availability'], 'paid')                 # (a store sells it)
+        self.assertEqual(a['reqs'], ['armhf', '2gb', '!lowres'])
+        self.assertIs(a['exp'], False)
+        self.assertIs(a['rtr'], False)
+        self.assertEqual(self.cfg()['port']['availability'], 'free')
+        self.assertEqual(self.cfg(port={'availability': 'demo'})['port']['availability'], 'demo')
+
+    def test_validate_metadata(self):
+        bad = P.build_config('g', None, {'game': {'unity_versions': ['2020.3.1f1'], 'release_date': '29/09/2017'},
+                                         'port': {'genres': ['shooter'], 'availability': 'maybe',
+                                                  'store': ['https://example.com'], 'reqs': ['Not Lowres'],
+                                                  'screenshot': 'shot.bmp'},
+                                         'controls': {'A': ''}})
+        with self.assertRaises(SystemExit) as cm:
+            P.validate(bad)
+        msg = str(cm.exception)
+        for part in ("'shooter'", 'port.availability', 'port.store', "'Not Lowres'", 'release_date', 'port.screenshot',
+                     'controls.A'):
+            self.assertIn(part, msg)
+
+    def test_gameinfo(self):
+        import xml.etree.ElementTree as ET
+        cfg = self.cfg(port={'title': 'My Game', 'genres': ['rpg'], 'desc': 'Short.'},
+                       game={'developer': 'Studio & Co', 'release_date': '2017-09-29', 'description': 'A <long> one.'})
+        xml = P.gameinfo_xml(cfg, 'cover.png')
+        g = ET.fromstring(xml).find('game')
+        self.assertEqual([c.tag for c in g], ['path', 'name', 'desc', 'releasedate', 'developer', 'genre', 'image'])
+        self.assertEqual(g.findtext('path'), './My Game.sh')
+        self.assertEqual(g.findtext('desc'), 'A <long> one.')
+        self.assertEqual(g.findtext('releasedate'), '20170929T000000')
+        self.assertEqual(g.findtext('developer'), 'Studio & Co')
+        self.assertEqual(g.findtext('genre'), 'RPG')
+        self.assertEqual(g.findtext('image'), './mygame/cover.png')
+        self.assertTrue(xml.startswith('<?xml version="1.0" encoding="utf-8"?>\n<gameList>'))
+        # the image: the cover when the port folder has one, else the screenshot
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(P.gameinfo_image(cfg, t), 'screenshot.png')
+            P.write_png(os.path.join(t, 'cover.png'), 4, 3, bytes(36))
+            self.assertEqual(P.gameinfo_image(cfg, t), 'cover.png')
+
+    def test_controls_and_thanks(self):
+        cfg = self.cfg(port={'title': 'G', 'store': [{'name': 'itch.io', 'gameurl': 'https://x.example/g',
+                                                      'developerurl': 'https://x.example'}]},
+                       game={'developer': 'X'}, controls={'D-Pad': 'Move', 'B': 'Jump | climb'})
+        self.assertEqual(P.controls_rows(cfg), [('D-Pad', 'Move'), ('B', 'Jump | climb'), ('Select + Start', 'Quit')])
+        md = P.controls_markdown(cfg)
+        self.assertTrue(md.startswith('| Button | Action |\n|--|--|\n| D-Pad | Move |'))
+        self.assertIn('| B | Jump \\| climb |', md)
+        self.assertEqual(P.thanks_sentence(cfg), 'Thanks to [X](https://x.example) for creating G.')
+        cfg['controls']['Select + Start'] = 'Back to the menu'
+        self.assertEqual(P.controls_rows(cfg)[-1], ('Select + Start', 'Back to the menu'))
+        self.assertIn("keeps its own gamepad controls", P.controls_markdown(self.cfg()))
+        self.assertEqual(P.thanks_sentence(self.cfg(port={'thanks': 'Thanks!'})), 'Thanks!')
+
+    def test_testing_thread(self):
+        cfg = self.cfg(port={'title': 'My Game'}, game={'url': 'https://example.com/g'}, controls={'A': 'Jump'})
+        tt = P.testing_thread_txt(cfg, 'Requires the game.')
+        for part in ('mygame.zip', 'harbourmaster install', 'Title: My Game', 'URL: https://example.com/g',
+                     'Instructions:\nRequires the game.\nNeeds a handheld with a 32-bit (armhf) userland',
+                     '| A | Jump |', '| Select + Start | Quit |', 'ROCKNIX\n-> [ ] Libmali', '[ ] Knulli',
+                     '[ ] 640x480'):
+            self.assertIn(part, tt)
+        self.assertNotIn('\u2014', tt)
+
+    def test_images(self):
+        with tempfile.TemporaryDirectory() as t:
+            png = os.path.join(t, 'a.png')
+            P.write_png(png, 3, 2, bytes(range(18)))
+            self.assertEqual(P.image_size(png), (3, 2))
+            import zlib
+            d = P._read(png, 'rb')
+            idat = d[d.index(b'IDAT') + 4:d.index(b'IEND') - 8]
+            self.assertEqual(zlib.decompress(idat), b'\0' + bytes(range(9)) + b'\0' + bytes(range(9, 18)))
+            jpg = os.path.join(t, 'b.jpg')
+            put(jpg, b'\xff\xd8\xff\xe0\x00\x04xx\xff\xc0\x00\x11\x08\x01\xe0\x02\x80\x03' + bytes(20))
+            self.assertEqual(P.image_size(jpg), (640, 480))
+            self.assertIsNone(P.image_size(os.path.join(t, 'none.png')))
+            # the screenshot checks: there, PNG or JPEG, 4:3 and at least 640x480
+            cfg = self.cfg(port={'screenshot': 'b.jpg'})
+            self.assertEqual(P.port_images(cfg, t), {'screenshot': (jpg, 'screenshot.jpg'), 'cover': None})
+            w = '\n'.join(P.submission_warnings(cfg, t))
+            self.assertNotIn('no screenshot', w)
+            self.assertNotIn('the screenshot is', w)
+            self.assertIn('no cover', w)
+            P.write_png(os.path.join(t, 'screenshot.png'), 720, 480, bytes(720 * 480 * 3))
+            self.assertIn('the screenshot is 720x480', '\n'.join(P.submission_warnings(self.cfg(), t)))
+
+    def test_submission_warnings(self):
+        cfg = P.build_config('my_game', None, {'game': {'unity_versions': ['2020.3.1f1']},
+                                               'port': {'desc': 'Fast \u2014 and **bold**.', 'exp': True}})
+        P.validate(cfg)
+        with tempfile.TemporaryDirectory() as t:
+            P.write_png(os.path.join(t, 'screenshot.png'), 640, 480, bytes(640 * 480 * 3))
+            gi = P.gameinfo_xml(cfg, 'cover.png')
+            w = '\n'.join(P.submission_warnings(cfg, t, P.port_json(cfg), gameinfo=gi))
+        for part in ('port.porter is empty', 'port.json desc: plain text', 'an em dash', 'port.exp = true',
+                     "port.name 'my_game'", 'game.publisher is empty', 'gameinfo.xml names cover.png'):
+            self.assertIn(part, w)
+        self.assertNotIn('port.desc is empty', w)
+        self.assertNotIn('screenshot', w.replace('shows the screenshot', ''))
+
+    def test_launchers(self):
+        # every route's launcher starts with PortMaster's standard lines (the PORTMASTER line allowed)
+        for name, r in P.routes().items():
+            spec = r['files'].get('@@TITLE@@.sh')
+            if spec:
+                text = P._read(P.template_path(r, spec if isinstance(spec, str) else spec['template']))
+                self.assertEqual(P.launcher_warnings(text), [], name)
+        bad = P._read(P.template_path(P.routes()['android'], 'launcher.sh'))
+        bad = bad.replace('\nget_controls\n', '\n').replace('$GPTOKEYB2 "ua_host"', '"$GPTOKEYB2" "ua_host"')
+        bad = bad.replace('pm_finish', 'true') + 'export SDL_VIDEODRIVER=kmsdrm\n'
+        w = '\n'.join(P.launcher_warnings(bad))
+        for part in ('standard lines', 'quoted', 'SDL_VIDEODRIVER', 'pm_finish'):
+            self.assertIn(part, w)
+
+    def test_toml_round_trip(self):
+        cfg = self.cfg(port={'store': [{'name': 'GOG', 'gameurl': 'https://example.com', 'developerurl': ''}]},
+                       controls={'D-Pad': 'Move', 'L1 + R1': 'Map'})
+        back = tomllib.loads(P.dump_toml(cfg))
+        self.assertEqual(P.merge(P.DEFAULTS, back), cfg)
+        self.assertEqual(list(back['controls']), ['D-Pad', 'L1 + R1'])
+
+    def test_shot(self):
+        import threading
+        with tempfile.TemporaryDirectory() as t:
+            px = bytes(range(256)) * 9                              # 32x24, RGB
+            ppm = os.path.join(t, 'shot-1.ppm')
+            put(ppm, b'P6\n# a comment\n32 24\n255\n' + px)
+            out = P.shot(ppm, os.path.join(t, 'a.png'), log=lambda m: None)
+            self.assertEqual(P.image_size(out), (32, 24))
+            # a folder ua_host runs a game in: shot.req asks for the next frame
+            def host():
+                req = os.path.join(t, 'shot.req')
+                for _ in range(100):
+                    if os.path.exists(req):
+                        os.remove(req)
+                        put(os.path.join(t, 'shot-2.ppm'), b'P6\n4 3\n255\n' + bytes(36))
+                        return
+                    time.sleep(0.05)
+            th = threading.Thread(target=host)
+            th.start()
+            msgs = []
+            out = P.shot(t, os.path.join(t, 'b.png'), timeout=10, log=msgs.append)
+            th.join()
+            self.assertEqual(P.image_size(out), (4, 3))
+            self.assertIn('from ' + os.path.join(t, 'shot-2.ppm'), msgs[0])
+            self.assertIn('4:3, at least 640x480', msgs[0])
+            put(os.path.join(t, 'c.ppm'), b'P5\n1 1\n255\n\0')
+            with self.assertRaises(SystemExit):
+                P.shot(os.path.join(t, 'c.ppm'), os.path.join(t, 'c.png'))
 
 
 class DecodedTexturesTest(unittest.TestCase):

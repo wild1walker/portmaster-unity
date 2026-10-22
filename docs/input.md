@@ -30,7 +30,7 @@ own assemblies. On the Android player:
 | `Input.GetKey` (keyboard) | only from keyboard KeyEvents | `UA_KEYMAP` (below): pad buttons press keys |
 | mouse (`GetMouseButton*`, `mousePosition`, `OnMouse*`, UI pointer events) | Android mouse MotionEvents | pointer mode, `UA_POINTER=1` (below) |
 | touch (`Input.touches`) | Android touch MotionEvents | `UA_POINTER=touch` |
-| [Rewired](https://guavaman.com/projects/rewired/) | decides its platform from the desktop build's compile-time symbols, so it looks for the desktop's input APIs (Linux: libudev) and leaves the Android pad unused | `asmpatch` `rewired-android` (via `pmunity android-data --asmpatch`): Rewired runs as on Android, reading pads through Unity's input. android-data always adds the `Joy<j>Axis<a>` axes it reads (`--rewired-joysticks`) |
+| [Rewired](https://guavaman.com/projects/rewired/) | decides its platform from the desktop build's compile-time symbols, so it looks for the desktop's input APIs (Linux: libudev) and leaves the Android pad unused | `asmpatch` `rewired-android` (via `pmunity android-data --asmpatch`): Rewired runs as on Android, reading pads through Unity's input. android-data always adds the `Joy<j>Axis<a>` axes it reads (`--rewired-joysticks`). Its UI input module (`RewiredStandaloneInputModule`) needs nothing: it reads Unity's mouse and touches as Unity's own module does (below) |
 | InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (below) | `UA_PAD_NAME` that one of its Android profiles knows (`asmpatch --survey` lists them), e.g. `Microsoft X-Box 360 pad` |
 | Input System package (`Unity.InputSystem.dll`) | the engine's Android backend reports keyboards, mice and touchscreens in the package's common formats (they work as they are) and pads as Android game controllers, for which the package has layouts only in Android builds: a desktop build's copy has its own platform's (Linux: SDL) | `asmpatch` `inputsystem-android` (below): the pad is a `Gamepad`. The player setting "Active Input Handling" decides whether the legacy stack runs too |
 | soft keyboard (`TouchScreenKeyboard`, UI `InputField` / `TMP_InputField` on Android) | Unity opens its input dialog (`UnityPlayer.showSoftInput`) | nothing: ua_host's on-screen keyboard (below) |
@@ -186,6 +186,38 @@ docs/runtime.md.
   `.`, else pixels) to put the pointer somewhere; scripted buttons and sticks go through pointer
   mode like the pad's own, so `"60:ptr=0.5/0.74 75:a~1.5"` clicks there (hold a click for more
   than a frame: the emulated rig draws a frame in about 0.3 s).
+- **UI input modules.** Unity's `StandaloneInputModule` and Rewired's `RewiredStandaloneInputModule`
+  (its source edition compiles it into `Assembly-CSharp`; it replaces Unity's on the game's
+  EventSystem) both read `Input.mousePosition`, the mouse buttons and `Input.touches`, and hit-test
+  the UI at that position, so pointer mode clicks the uGUI elements either serves; both leave the
+  mouse alone while the game has locked the pointer (`Cursor.lockState = Locked`). One difference
+  on Android: `Input.touchSupported` is true there (desktop players report false), and Rewired's
+  module with its "Allow Mouse Input If Touch Supported" setting off then takes only touches: such
+  a game wants `UA_POINTER=touch`.
+
+### Games with their own cursor
+
+Some games draw a cursor of their own and move it themselves: they lock and hide the system
+pointer (`Cursor.lockState = Locked`, `Cursor.visible = false`), add the mouse's motion (and often
+a stick's) to the cursor's position each frame, and hit-test their UI at that position with their
+own raycast; their buttons are not uGUI `Selectable`s, and the EventSystem's input module, which
+ignores a locked pointer anyway, never clicks them. Baldi's Basics Classic Remastered is one: its
+launcher's `CursorController` moves the cursor by Rewired actions (`CursorX`/`CursorY` from the
+left stick, `CursorXDelta`/`CursorYDelta` from the mouse's motion), raycasts the canvas at it,
+and presses the button under it on `MouseSubmit` (the left mouse button or the pad's A). Pointer
+mode's position does not reach such a cursor, and neither do touches (a touch is a click
+wherever the game's cursor is); the mouse's motion does, one screen pixel per pixel. So:
+
+- the pad: without `UA_POINTER` the game's own controller support moves its cursor (Baldi: left
+  stick, A clicks). This is the usual answer;
+- or `UA_POINTER=1 UA_POINTER_CURSOR=0`: the stick moves the game's cursor through the mouse's
+  motion and the pointer buttons click, with no second cursor drawn. ua_host's hidden pointer
+  still stops at the screen's edges: a game cursor that moves one pixel per pixel inside the
+  screen reaches all of its area, one with a sensitivity setting below 1 may not.
+
+`asmpatch --survey` reports the pattern (a pointer lock, and a UI hit test outside an input
+module at a position not read from the mouse or a touch): "verdict: likely its own cursor". A
+lock alone is usually mouse look.
 
 ## Keys from the pad
 
@@ -219,3 +251,6 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
   patch on a fake `Unity.InputSystem` (built with Cecil, no package code): the layouts it
   registers on every return, parsed and checked against the player's state format; already
   applied, an Android build of the package, missing methods.
+  The survey's pointer verdicts on fake games: a cursor of its own (Rewired's UI input module and
+  demos, an asset's examples, the game's own input module and a hit test at the mouse's position
+  not counted), mouse look, and pointer-driven menus.
