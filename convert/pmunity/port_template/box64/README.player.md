@@ -25,6 +25,10 @@ Saves and settings: `ports/@@PORTDIR@@/conf/`. PortMaster's exit hotkey quits. O
 (box64 settings; `fast` is quicker but can be unstable), `PMU_MAXCPU`, `PMU_ARGS` (more arguments for
 the game), `PMU_DYNACACHE=0`. `log.txt` and `player.log` are the last run's logs.
 
+## Controls
+
+@@CONTROLS@@
+
 ## Licences
 
 The port's code is MIT; box64 and gl4es are MIT, box64's x86-64 C++ runtime is GPL with the GCC

@@ -14,6 +14,7 @@ $EDITOR mygame/port.toml                                 # title, pointer mode, 
 python -m pmunity port new mygame --data <game>          # regenerate from the edited port.toml
 mygame/package.sh                                        # -> mygame/out/mygame.zip, the release
 PM_7ZZ=<PortMaster's 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip <game> work/mygame 300
+python -m pmunity port package mygame --submission       # + mygame/out/submission/mygame/ for PortMaster's repository
 ```
 
 `<game>` is the folder of a desktop build as you have it (the one with the executable and
@@ -82,10 +83,13 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
 `files` maps each output path of the port folder to a template, looked up in the route's folder
 and then in `port_template/common/` (the READMEs, the gamedata note, the exit-hotkey `.ini` for gptokeyb2,
 `package.sh`). Templates are text with `@@NAME@@` values (`PORTDIR`, `TITLE`, `ZIP`, `LAUNCHER`,
-`SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`; an unknown
-name is an error). Everything else a launcher or setup needs comes from files `port new` writes
-next to them: `setup/setup.env` (shell assignments), `setup/convert.json`, `port.env`,
-`setup/questions.lua`. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host; `asmpatch?`: only
+`SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`, and for
+PortMaster's README sections `THANKS`, `CONTROLS` (the controls table), `ROUTE_NEEDS` (what the
+route needs of the handheld), `BUILD_STEPS` (the build commands of the route's `package` parts);
+an unknown name is an error). Everything else a launcher or setup needs comes from files `port new`
+writes next to them: `setup/setup.env` (shell assignments), `setup/convert.json`, `port.env`,
+`setup/questions.lua`; `port.json`, `gameinfo.xml` and `testing_thread.txt` are written for every
+route by `port new` itself. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host; `asmpatch?`: only
 when the port uses it); `defaults` are port.toml values the route sets where port.toml says nothing; a part the packager does not know comes from a hook module (below). The box64
 route can bring its own launcher and setup this way and share the common files.
 
@@ -102,9 +106,11 @@ checks the game and writes `<out>` (default `./<name>`):
 |---|---|
 | `port.toml` | the port's settings (written once, with the values the check found; yours to edit). Run `port new` again to regenerate the rest from it (it is used when it is there, `--config` names another) |
 | `port.build.json` | the resolved settings, the route and the check's findings (what `package` reads) |
-| `<Title>.sh` | the launcher (PortMaster conventions: `control.txt`, `get_controls`, `$GPTOKEYB`, `$ESUDO`, `pm_message`, `pm_finish`; first launch: PortMaster's patcher runs the setup) |
-| `<name>/` | the folder installed as `ports/<name>/`: `setup/patchscript`, `setup/setup.env`, `setup/convert.json`, `setup/questions.lua` and `setup.txt` (with questions), `port.env`, `port.json`, `README.md`, `gamedata/PUT_GAME_FILES_HERE.txt`, `<name>.ini` (gptokeyb2: the exit hotkey) |
-| `README.md`, `package.sh` | the port's own README (PortMaster's layout: Notes, Controls) and its release build |
+| `<Title>.sh` | the launcher (PortMaster's standard first lines, then `$GPTOKEYB2`, `$ESUDO`, `pm_message`, `pm_platform_helper`, `pm_finish`, the log in `log.txt`; first launch: PortMaster's patcher runs the setup) |
+| `<name>/` | the folder installed as `ports/<name>/`: `setup/patchscript`, `setup/setup.env`, `setup/convert.json`, `setup/questions.lua` and `setup.txt` (with questions), `port.env`, `port.json`, `gameinfo.xml` (the frontend's game list entry), `README.md` (the player's), `gamedata/PUT_GAME_FILES_HERE.txt`, `<name>.ini` (gptokeyb2: the exit hotkey) |
+| `README.md` | the port's README in PortMaster's layout: `## Notes` (a thank-you to the game's makers, what to put where, what the route needs), `## Controls` (the `[controls]` table), `## Compile` (the commands that build the release from a portmaster-unity checkout) |
+| `testing_thread.txt` | the post for PortMaster's Discord testing channel that goes with the test zip: how to install it, the game's link, the instructions, the controls, the firmware and screen checklist (not in the zip) |
+| `package.sh` | the release build (`port package`) |
 
 `--player PKG` (a folder from `pmunity player fetch <version> PKG`) puts the installer's URL and
 the checksums of `libmain.so` and `libunity.so` into the setup, which then checks what it fetches.
@@ -116,7 +122,15 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `port.name` | `<name>` | folder in `ports/`, the zip's name (lowercase) |
 | `port.title` | the game's product name | menu entry; the launcher is `<title>.sh` |
 | `port.route` | the check's recommendation | a route with templates |
-| `port.porter`, `desc`, `inst`, `genres`, `availability`, `store`, `exp` | `inst` from `game.what` | `port.json` |
+| `port.porter`, `desc`, `inst` | `inst` from `game.what` | `port.json`: the porters' names (as on PortMaster's Discord), the description and the instructions the PortMaster app shows (plain text, one paragraph, no Markdown) |
+| `port.desc_md`, `inst_md` | none | Markdown versions for portmaster.games, only where they add something (lists, links) |
+| `port.genres` | none | one or more of `action`, `adventure`, `arcade`, `casino/card`, `fps`, `platformer`, `puzzle`, `racing`, `rhythm`, `rpg`, `simulation`, `sports`, `strategy`, `visual novel`, `other` (PortMaster's list; anything else is an error) |
+| `port.store` | none | where to get the game: `[{name = "Steam", gameurl = "https://...", developerurl = "https://..."}]` (tables; PortMaster takes no bare links) |
+| `port.availability` | `paid` with a store, else `free` | `free` / `paid` (the player provides the game's files, free or bought), `demo`, `full` (for these ports the game is never in the zip) |
+| `port.reqs` | none | device capabilities the port needs besides the route's own (the android route adds `armhf`): `!lowres`, `hires`, `2gb`, `4gb`, `power`, `opengl` (PortMaster's `device_info.txt` sets them) |
+| `port.exp` | false | true hides a released port unless players show experimental ports; not a "still being tested" flag |
+| `port.thanks` | a thank-you to `game.developer` | the README's first sentence: thank the game's makers in your own words, with a link and one thing that makes the game worth playing |
+| `port.screenshot`, `port.cover` | `screenshot.png`, `cover.png` | image files (relative to the port folder; PNG or JPEG) `package` ships as `<name>/screenshot.png` and `<name>/cover.png` |
 | `port.ready_marker` | `.setup_done` | the file that marks the setup done (a port moving onto these tools keeps its old one, so installed copies are not set up again) |
 | `port.setup_time` | from the size and steps | the patcher's estimate |
 | `game.data` | the data folder's name | what the setup looks for in `gamedata/` (a glob; then any Unity data folder) |
@@ -125,6 +139,10 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `game.what` | from the above | how READMEs and messages name what to put in `gamedata/` |
 | `game.size_mb` | the build's | the setup's free-space checks (about three times it) |
 | `game.setup_space_mb` | 0 | the free space the setup asks for instead, when the game is known to need more or less |
+| `game.developer`, `publisher`, `release_date` | the developer from the game's PlayerSettings (company name), else none | `gameinfo.xml`; `release_date` as `YYYY-MM-DD` |
+| `game.genre`, `description` | the first of `port.genres`, `port.desc` | `gameinfo.xml`'s genre (a display name: `Platformer`, `RPG`) and description (the frontend has room for more than `port.desc`) |
+| `game.url` | the first store's `gameurl` | the game's page (the testing thread) |
+| `[controls]` | none | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
 | `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player package `pmunity player fetch` gets |
 | `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
 | `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
@@ -187,6 +205,17 @@ libhybris (Apache 2.0, in ua_host), the video decoders' licences (`runtime/media
 the setup Python's and its packages' licences, and for asmpatch the .NET runtime's licence and
 third-party notices and Mono.Cecil's. `--runtime` points at another checkout whose runtime and
 asmpatch are built. Zip entries keep their Unix modes and get a fixed date.
+
+The zip also gets the screenshot and the cover (`port.screenshot`, `port.cover`) as
+`<name>/screenshot.png` and `<name>/cover.png`, where PortMaster's own release zips have them, and
+`testing_thread.txt` goes beside the zip in `<out>/`. Then `package` lists what a PortMaster
+submission still lacks or reviewers would ask about (none of it stops the build): port.toml fields
+still empty (porter, description, genres, developer, publisher, release date, the thank-you, the
+controls, the game's link), no screenshot or one that is not 4:3 and at least 640x480, no cover, a
+`gameinfo.xml` naming an image the port does not ship, an em dash or Markdown in the plain texts,
+`exp = true`, a launcher without PortMaster's standard first lines (or with `"$GPTOKEYB2"` quoted, a
+fixed `SDL_VIDEODRIVER`, no `pm_finish`), files over 90 MB. `--submission` also writes
+`<out>/submission/<name>/`, the port as PortMaster's repository holds it (section 11).
 
 ## 6. Rehearsal
 
@@ -299,3 +328,46 @@ module `pmunity.<name>` with a name in `port.HOOK_MODULES` (`route`, `box64`, `i
 | `port_package(ctx)` | the release being assembled: `ctx.cfg`, `ctx.port_dir`, `ctx.runtime`, `ctx.add(src, rel, mode)`, `ctx.license(name, path=, text=)` | add binaries and their licences (e.g. box64, pmhlslcc, an ARM plugin build) |
 
 A new route is a template folder (section 2); `port new --route <name>` uses it.
+
+## 11. Submitting to PortMaster
+
+A port goes into PortMaster through a pull request to its ports repository, after a test zip has
+been tried in its Discord testing channel. What PortMaster asks for, and what `pmunity port` makes:
+
+| PortMaster wants | made by | the porter's part |
+|---|---|---|
+| `port.json`, version 4 (`name`, `items`, `attr`: title, porter, desc, inst, genres, `rtr`, `exp`, runtime, store, availability, reqs, arch, min_glibc) | `port new` (`<name>/port.json`; route hooks set Westonpack, `armhf`, glibc) | porter, desc, genres, store in port.toml |
+| `gameinfo.xml` (path, name, desc, release date, developer, publisher, genre, image) | `port new` (`<name>/gameinfo.xml`; the image: `./<name>/cover.png` when the port has a cover, else the screenshot) | developer, publisher, release date (look them up) |
+| `README.md`: Notes (a thank-you to the game's makers first), Controls (a row per bound button), Compile | `port new` (`README.md`) | `port.thanks`, `[controls]` |
+| `screenshot.png`: a real capture of the game running, 4:3, at least 640x480 | `package` ships it and checks its size; `port shot` saves a frame | the capture |
+| `cover.png` (optional, expected) | `package` ships it | the image |
+| the launcher `<Title>.sh` and the folder `<name>/` | `port new`, `package` | explaining every line reviewers ask about |
+| `testing_thread.txt`, the testing channel's post | `port new` (beside the port; `package` copies it beside the zip) | the zip's link, the testers' results |
+| the repository's layout: `ports/<name>/` with the files above at the top | `package --submission` (`<out>/submission/<name>/`) | the pull request |
+
+`package --submission` lays the port out as the repository holds it: `port.json`, `README.md`,
+`gameinfo.xml`, `screenshot.png`, `cover.png` and `<Title>.sh` at the top, `<name>/` beside them
+(without the four files PortMaster's build puts back into it: its release zip has them in
+`<name>/`, and the README as `<name>/<name>.md`). Copy that folder to `ports/<name>/` in a checkout
+of the repository; files over 90 MB are split into pieces there by the repository's own tools.
+
+The screenshot is a frame of the game as the port runs it, never a made, scaled or cropped
+picture. On a handheld, start the game with `tools/device/test.sh` and take it with
+`DEVICE=root@<handheld> REMOTE=<the folder> tools/device/drive.sh "" 0 screenshot.png`; for a game
+ua_host runs in a folder this machine can reach (the emulated rig's `EMU_ROOT`), `python -m pmunity
+port shot <folder> --out screenshot.png` asks ua_host for the next frame (`shot.req`) and saves it
+as a PNG (`port shot <shot-N.ppm>` converts one already taken). PortMaster wants 4:3: a 3:2
+screen's capture (720x480) is what it is, and `package` says so; take it on a 4:3 handheld when one
+is at hand.
+
+The pull request's template asks the porter to confirm they understand the launcher and can
+explain every line that differs from PortMaster's usual ones. In these launchers that is: the
+first-launch setup through PortMaster's patcher (`PATCHER_FILE`, `PATCHER_GAME`, `PATCHER_TIME`,
+`PATCHER_QUESTIONS`), the 32-bit userland check and `/lib32:/usr/lib32` first on `LD_LIBRARY_PATH`
+(the android route's `ua_host` is an armhf program), `SDL_AUDIODRIVER=alsa` as the default there
+(the 32-bit `ua_host` finds no 32-bit PipeWire or PulseAudio client libraries on the firmwares;
+`port.env` can change it), `UA_FPS` (a frame-rate line in `log.txt`), `port.env` and
+`answers.env` (the game's options and the setup's answers), and for box64 the Westonpack block,
+box64's settings and the command written to `conf/run.sh`. Testing on the firmwares and screens
+of the testing thread's checklist is the testers' and the porter's work; the rehearsal
+(section 6) and `tools/device/test.sh` cover the setup and one handheld.
