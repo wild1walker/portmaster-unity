@@ -268,11 +268,100 @@ class ContainerTest(unittest.TestCase):
         with self.assertRaises(D.Unsupported):          # declared 2D, Unity says cube
             D.with_reflection(dx, cube)
 
+    def test_uv_origin(self):
+        # the full-screen triangle's v = 1 - (id & 2) of Direct3D becomes GL's v = id & 2
+        out, n = D.gl_uv_origin(FULLSCREEN_TRIANGLE_VS)
+        self.assertEqual(n, 1)
+        self.assertIn('    u_xlat0.z = u_xlat0.y;\n', out)
+        self.assertEqual(out.replace('    u_xlat0.z = u_xlat0.y;', '    u_xlat0.z = (-u_xlat0.y) + 1.0;'), FULLSCREEN_TRIANGLE_VS)
+        # the quad's v = 1 - ((id >> 1) + (id & 1)) & 1 too; the lens flare's own u = 1 - (id >> 1) stays
+        out, n = D.gl_uv_origin(QUAD_VS)
+        self.assertEqual(n, 1)
+        self.assertIn('    vs_TEXCOORD0.y = u_xlat0.x;\n', out)
+        self.assertIn('    vs_TEXCOORD0.x = (-u_xlat1.x) + 1.0;\n', out)
+        # Shader Graph's full-screen flip is never taken (as on GL, where the code is not compiled)
+        out, n = D.gl_uv_origin(SG_FULLSCREEN_VS)
+        self.assertEqual(n, 1)
+        self.assertIn('    u_xlatb6 = false;\n', out)
+        self.assertIn('    u_xlat4 = (-u_xlat1.y) + 1.0;\n', out)       # (0.5 is no texture coordinate of the id)
+        # a flip of anything else, and every program without gl_VertexID, is left alone
+        other = FULLSCREEN_TRIANGLE_VS.replace('u_xlatu0.w = uint(gl_VertexID) & 2u;', 'u_xlatu0.w = uint(gl_InstanceID) & 2u;')
+        self.assertEqual(D.gl_uv_origin(other), (other, 0))
+        moved = FULLSCREEN_TRIANGLE_VS.replace('    u_xlat0.z = (-u_xlat0.y) + 1.0;\n',
+                                               '    u_xlat0.y = in_POSITION0.y;\n    u_xlat0.z = (-u_xlat0.y) + 1.0;\n')
+        self.assertEqual(D.gl_uv_origin(moved)[1], 0)                   # overwritten before the flip: not the id's
+        plain = GL_PROGRAM.split('#endif')[0]
+        self.assertEqual(D.gl_uv_origin(plain), (plain, 0))
+
     def test_tidy(self):
         src = ('#version 150\n#ifdef GL_ARB_shader_bit_encoding\n#extension GL_ARB_shader_bit_encoding : enable\n#endif\n\n'
                + D._DEFINE_BLOCKS[0] + D._DEFINE_BLOCKS[1] + 'UNITY_LOCATION(0) uniform  sampler2D _MainTex;\n')
         self.assertEqual(D.tidy(src), '#version 150\n#extension GL_ARB_shader_bit_encoding : enable\n\n'
                                       'uniform  sampler2D _MainTex;\n')
+
+
+# HLSLcc's vertex stages of the SRP core library's procedural geometry, compiled for Direct3D
+# (UNITY_UV_STARTS_AT_TOP 1), in the shapes Unity 6's URP shaders have them
+FULLSCREEN_TRIANGLE_VS = '''uniform 	vec4 _BlitScaleBias;
+out vec2 vs_TEXCOORD0;
+vec3 u_xlat0;
+int u_xlati0;
+uvec4 u_xlatu0;
+void main()
+{
+    u_xlati0 = gl_VertexID << 1;
+    u_xlatu0.x = uint(u_xlati0) & 2u;
+    u_xlatu0.w = uint(gl_VertexID) & 2u;
+    u_xlat0.xy = vec2(u_xlatu0.xw);
+    gl_Position.xy = u_xlat0.xy * vec2(2.0, 2.0) + vec2(-1.0, -1.0);
+    u_xlat0.z = (-u_xlat0.y) + 1.0;
+    vs_TEXCOORD0.xy = u_xlat0.xz * _BlitScaleBias.xy + _BlitScaleBias.zw;
+    gl_Position.zw = vec2(1.0, 1.0);
+    return;
+}
+'''
+# GetQuadTexCoord (v flipped under the macro) and the lens flare's own u = 1 - u (every platform)
+QUAD_VS = '''out vec2 vs_TEXCOORD0;
+vec2 u_xlat0;
+int u_xlati0;
+uvec2 u_xlatu0;
+vec2 u_xlat1;
+int u_xlati4;
+void main()
+{
+    u_xlati0 = int(uint(gl_VertexID) & 1u);
+    u_xlatu0.y = uint(gl_VertexID) >> 1u;
+    u_xlati4 = (-u_xlati0) + (-int(u_xlatu0.y));
+    u_xlati0 = u_xlati0 + int(u_xlatu0.y);
+    u_xlatu0.x = uint(u_xlati0) & 1u;
+    u_xlat0.x = float(u_xlatu0.x);
+    vs_TEXCOORD0.y = (-u_xlat0.x) + 1.0;
+    u_xlati0 = u_xlati4 + 1;
+    u_xlatu0.x = uint(u_xlati0) & 1u;
+    u_xlat1.xy = vec2(u_xlatu0.yx);
+    vs_TEXCOORD0.x = (-u_xlat1.x) + 1.0;
+    gl_Position.xy = u_xlat1.xy * vec2(2.0, 2.0) + vec2(-1.0, -1.0);
+    gl_Position.zw = vec2(1.0, 1.0);
+    return;
+}
+'''
+# Shader Graph's full-screen target: `if (_FlipY < 0.5) uv.y = 1 - uv.y` under the macro
+SG_FULLSCREEN_VS = '''uniform 	float _FlipY;
+out vec4 vs_INTERP0;
+vec4 u_xlat1;
+float u_xlat4;
+bool u_xlatb6;
+void main()
+{
+    u_xlat1.y = 0.5;
+    u_xlat4 = (-u_xlat1.y) + 1.0;
+    u_xlatb6 = _FlipY<0.5;
+    u_xlat1.w = (u_xlatb6) ? u_xlat4 : u_xlat1.y;
+    vs_INTERP0 = u_xlat1.xwzz;
+    gl_Position = vec4(float(gl_VertexID));
+    return;
+}
+'''
 
 
 GL_PROGRAM = '''#ifdef VERTEX

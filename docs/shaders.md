@@ -376,6 +376,26 @@ equivalent in Unity's GL binding info as seen (every texture of every GL program
 checked samples with its own unit's sampler): such a texture is sampled with its own sampler
 state, as Unity's GL programs of shaders using them are assumed to.
 
+**Full-screen passes of the scriptable render pipelines** are the exception made: their flips
+are undone (`dxbc.gl_uv_origin`, logged as `uv-origin` among the step's rewrites). Every SRP
+full-screen pass (URP/HDRP 13+ blits, post-processing, SSAO, the colour-grading LUT, Shader
+Graph full-screen materials) draws a triangle or quad made from `SV_VertexID` by the Core RP
+library (`GetFullScreenTriangleTexCoord`, `GetQuadTexCoord`), whose texture coordinate is
+`1 - v` under `UNITY_UV_STARTS_AT_TOP`, and URP's C# side only flips for Direct3D when it runs on
+it (`SystemInfo.graphicsUVStartsAtTop`). With Direct3D's code on GL each blit turned the picture
+upside down, and the passes that compute values from the coordinate got them mirrored: URP's
+`LutBuilderLdr`/`LutBuilderHdr` wrote the colour-grading LUT upside down (green rows where the
+dark ones belong), so with post-processing on, the final `UberPost` turned a dark picture
+green (Die to Play, Unity 6000.1, URP 17). In a vertex stage that reads `gl_VertexID`, HLSLcc's
+`<t> = (-<v>) + 1.0;` where `<v>` is traced back (through the stage's temporaries) to
+`float(id & 2)` or `float(((id >> 1) + (id & 1)) & 1)` becomes `<t> = <v>;`, which is what
+Unity's own GL compile of the same HLSL gives; Shader Graph's full-screen target flips under the
+macro unless its global `_FlipY` is set (URP never sets it), so its `_FlipY<0.5` becomes `false`.
+Other flips of such geometry stay (the lens flare's own `u = 1 - u`). Still Direct3D's: the
+fragment-side reconstruction of clip-space positions (`ComputeClipSpacePosition`'s `y = -y`,
+used where a pass rebuilds world positions from depth: SSAO, motion vectors, depth of field) and
+reversed-Z depth arithmetic, which shift such effects rather than the picture.
+
 ### GL binding info (Unity 2019.1+)
 
 From 2019.1 Unity's GL programs (GLCore and GLES3 alike) carry binding info of their own, which

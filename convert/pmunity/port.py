@@ -1081,7 +1081,16 @@ def suggest_config(rep):
                      "controller (docs/input.md)")
     ad['asmpatch'] = 'auto' if s.get('rewired') or s.get('input_system') else 'off'
     verdict = rep.get('input_verdict')
-    if verdict == 'pointer':
+    # asmpatch --survey: the Input System's Mouse.current used with no null check (null on a handheld
+    # unless pointer mode presents a mouse)
+    unchecked = re.search(r'used with no null check in (\d+) methods( \([^)]*\))?', rep.get('asmpatch_survey') or '')
+    if unchecked and rt.get('UA_POINTER') != 'touch':
+        rt['UA_POINTER'] = '1'
+        notes.append(f"the code uses the Input System's Mouse.current with no null check{unchecked.group(2) or ''}: a "
+                     f"handheld has no mouse unless pointer mode presents one, else those throw "
+                     f"NullReferenceException (every frame from an Update): UA_POINTER=1; if the game draws its "
+                     f"own cursor, also UA_POINTER_CURSOR=0")
+    elif verdict == 'pointer':
         rt['UA_POINTER'] = '1'
         notes.append('menus look mouse-only (the code reads the mouse and selects no UI element for pad '
                      'navigation): pointer mode, UA_POINTER=1; if the game draws its own cursor, also '
