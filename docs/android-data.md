@@ -211,7 +211,15 @@ built-ins and six free Linux games (one per line):
 - **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder,
   next to it (Windows) or (macOS) in `Contents/`. A Windows build's native plugins
   (`Plugins/x86_64/*.dll`) are named in the warning; Unity 2021.2+ Windows builds' class libraries
-  are Windows-only (`pmunity.winbcl` gives the Unix ones, shipped with `--managed-file`).
+  are Windows-only (`pmunity winbcl` gives the Unix ones, shipped with `--managed-file`; a port's
+  setup runs it).
+- **Assemblies the engine modules reference.** The Android player's engine modules can reference
+  assemblies a desktop build does not ship (Unity 6's reference netstandard 2.1.0.0; a build made
+  without `netstandard.dll` lacks it): android-data warns for each (`missing_references`), and
+  `pmunity winbcl <data> <dir> --player <pkg>` writes Unity's own copy of the game's version
+  (the `unityjit-linux` profile's, or `unityjit`'s before 2021.2, from the Windows editor
+  installer) for `--managed-file`; what is not Unity's (a package's or the developer's assembly)
+  it only names. A port's setup does this by itself (`android_data.winbcl`).
 - **Texture streams.** Inlined in every version (the 2017.4 reason, section 2, is not known for
   later players; inline pixels load either way). From 2018 meshes can stream their vertex data
   from the same `.resS`: a `.resS` that a mesh still reads is shipped beside its file (2021.3 URP

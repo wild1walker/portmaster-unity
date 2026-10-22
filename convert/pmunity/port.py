@@ -4,7 +4,8 @@
     python -m pmunity port new <name> --data <game> [--config port.toml|.json] [--out DIR]
                                [--route R] [--title T] [--player PKG] [--force]
     python -m pmunity port package <port dir> [--out DIR] [--pybundle FILE] [--runtime DIR]
-                                   [--ua-host FILE] [--asmpatch-bin FILE] [--no-build] [--submission]
+                                   [--ua-host FILE] [--asmpatch-bin FILE] [--pmhlslcc-bin FILE] [--no-build]
+                                   [--submission]
     python -m pmunity port shot <game folder | shot.ppm> [--out screenshot.png] [--timeout S]
     python -m pmunity port routes
 
@@ -21,9 +22,9 @@ the first launch (PortMaster's patcher: fetch Unity's player, convert the player
 game, pack it, install it), port.json, gameinfo.xml, READMEs, the testing thread's post, and the
 settings it was made with (port.toml, the porter's file; port.build.json, everything resolved).
 `package` turns that folder into the release zip: the runtime (ua_host), the converter, the setup's
-Python, asmpatch when the port uses it, the screenshot and cover, and every licence; it lists what
-a PortMaster submission still lacks, and --submission also lays the port out as PortMaster's
-repository wants it. `shot` saves a frame of a game ua_host runs (shot.req) as a PNG.
+Python, asmpatch and pmhlslcc when the port uses them, the screenshot and cover, and every
+licence; it lists what a PortMaster submission still lacks, and --submission also lays the port
+out as PortMaster's repository wants it. `shot` saves a frame of a game ua_host runs (shot.req) as a PNG.
 docs/porting.md is the porter's guide; the templates are in port_template/<route>/ (route.json
 says what a route renders and ships).
 
@@ -61,6 +62,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, 'port_template')
 REPO = os.path.dirname(os.path.dirname(HERE))          # the portmaster-unity checkout
 HOOK_MODULES = ('route', 'box64', 'il2cpp', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows', 'streaming')
+PLAYER_MB = 10          # what the setup reads of Unity's Android support installer (`pmunity player fetch`)
+WINBCL_MB = 6           # ... and of its Windows editor installer for a Windows 2021.2+ build (`pmunity winbcl`)
 
 
 # =========================================================================== .NET metadata
@@ -810,12 +813,22 @@ def decide_routes(rep):
     if gl is None:
         why.append('no shader programs the converter translates: ' + (rep.get('shader_why') or 'unknown graphics APIs'))
     elif gl == 'd3d11':
-        needs.append('Direct3D 11 shaders: `shaders.from = ["d3d11"]` (tools/hlslcc; pmhlslcc for the handheld)')
+        needs.append('Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc '
+                     '(HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)')
     if mono and b.get('build') == 'windows' and b.get('data'):
         from . import winbcl
         if winbcl.is_win32_profile(os.path.join(b['data'], 'Managed')):
-            needs.append("Windows-only class libraries (unityjit-win32, Unity 2021.2+): the Unix ones instead, "
-                         "`python -m pmunity.winbcl <Data> <dir>` -> android-data `--managed-file` (docs/porting.md)")
+            needs.append(f"Windows-only class libraries (unityjit-win32, Unity 2021.2+): the setup fetches the Unix ones "
+                         f"from Unity's Windows editor installer (`pmunity winbcl`, about {WINBCL_MB} MB of range reads, "
+                         f"Wi-Fi; by hand: `python -m pmunity.winbcl <Data> <dir>` -> android-data `--managed-file`)")
+    try:
+        unity6 = bool(v) and UV.Version(str(v)).line >= (6000, 0)
+    except ValueError:
+        unity6 = False
+    if mono and unity6 and b.get('data') and not b.get('compressed') and \
+            not os.path.isfile(os.path.join(b['data'], 'Managed', 'netstandard.dll')):
+        needs.append("no netstandard.dll, which every Android engine module of Unity 6 references: the setup adds "
+                     "Unity's own facade of this version (`pmunity winbcl --player`, about 1 MB of range reads, Wi-Fi)")
     if b.get('compressed'):
         needs.append('a compressed build: the setup unpacks it first (pmunity unpack)')
     routes.append({'route': 'android', 'ok': not why, 'why': why, 'needs': needs})
@@ -1235,7 +1248,7 @@ DEFAULTS = {
     'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'url': '', 'sha256': {}},
     'convert': {'steps': list(DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
-                     'name': '', 'package': '', 'args': []},
+                     'winbcl': 'auto', 'name': '', 'package': '', 'args': []},
     'runtime': {},
     'questions': [],
     'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': []},
@@ -1355,6 +1368,8 @@ def validate(cfg):
     if cfg['player'].get('il2cpp') and (p['route'] != 'apk' or cfg['player'].get('backend') != 'mono'):
         errs.append('player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP '
                     'player where the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds')
+    if cfg['android_data'].get('winbcl', 'auto') not in ('auto', 'off'):
+        errs.append(f"android_data.winbcl {cfg['android_data']['winbcl']!r}: auto or off")
     if cfg['android_data'].get('streaming_assets', 'obb') not in ('obb', 'both', 'loose'):
         errs.append(f"android_data.streaming_assets {cfg['android_data']['streaming_assets']!r}: obb, both or loose")
     for k in cfg['files'].get('hooks', {}):
@@ -1416,6 +1431,8 @@ CONFIG_DOC = {
                     '# finds: Rewired, the Input System package) | off | ["patch", ...]; streaming_assets = obb |\n'
                     '# both | loose (code that reads StreamingAssets as files: also/only beside the APK,\n'
                     '# docs/android-data.md); data_path = true (files read or written at Application.dataPath);\n'
+                    '# winbcl = auto (the setup fetches Unity\'s class libraries a build lacks for the player: a\n'
+                    '# Windows 2021.2+ build\'s Unix ones, facades such as netstandard.dll) | off;\n'
                     '# name = the APK\'s, package (keep it: it names the PlayerPrefs file); args = more options',
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
@@ -1541,6 +1558,7 @@ def setup_env(cfg, extra=(), sections=None):
              f'ASMPATCH={q(",".join(a) if isinstance(a, list) else a)}',
              f'VIDEO_SHADER={1 if ad.get("video_shader", True) else 0}', f'SWAPPY={q(ad.get("swappy") or "off")}',
              f'STREAMING_ASSETS={q(ad.get("streaming_assets") or "obb")}', f'DATA_PATH={1 if ad.get("data_path") else 0}',
+             f'WINBCL={q(ad.get("winbcl") or "auto")}',
              'ANDROID_DATA_ARGS=(' + ' '.join(q(x) for x in ad.get('args', [])) + ')']
     if sections is None or 'convert' in sections:
         lines.append('CONVERT_PLUGINS=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('plugins', [])) + ')')
@@ -1614,7 +1632,8 @@ def port_json(cfg):
             'title': p['title'], 'porter': list(p['porter']), 'desc': p['desc'] or f"{p['title']} on Unity's Android player.",
             'desc_md': p.get('desc_md') or None,
             'inst': p.get('inst') or f"Requires {g['what']}: put it in ports/{p['name']}/gamedata. The first launch builds "
-                    f"the game on the handheld ({p['setup_time']}; downloads Unity's Android player from Unity, about 10 MB, Wi-Fi).",
+                    f"the game on the handheld ({p['setup_time']}; downloads Unity's Android player"
+                    f"{' and class libraries' if needs_winbcl(cfg) else ''} from Unity, about {download_mb(cfg)} MB, Wi-Fi).",
             'inst_md': p.get('inst_md') or None,
             'genres': [x.casefold() for x in p['genres']], 'image': None, 'rtr': False, 'exp': bool(p.get('exp', False)),
             'runtime': [],
@@ -1670,6 +1689,7 @@ BUILD_STEPS = {
     'ua_host64': 'ARCH=arm64 runtime/build.sh                                 # ua_host64, the 64-bit runtime (Docker)',
     'pybundle': "tools/port/build_pybundle.sh tools/port/out/python.tar.gz   # the setup's Python, aarch64 (Docker)",
     'asmpatch': 'tools/asmpatch/build.sh                                     # asmpatch (.NET 8 SDK)',
+    'pmhlslcc': 'ARCH=arm64 tools/hlslcc/build.sh                            # pmhlslcc, HLSLcc for the setup, aarch64 (Docker)',
     'box64': 'tools/box64/build.sh                                        # box64, gl4es, glxes (Docker)',
 }
 # PortMaster's standard first lines of a launcher (after "#!/bin/bash" and the PORTMASTER line)
@@ -1751,6 +1771,29 @@ def thanks_sentence(cfg):
     if not dev:
         return f"Thanks to the makers of {p['title']} for creating it."
     return f"Thanks to {f'[{dev}]({url})' if url else dev} for creating {p['title']}."
+
+
+def needs_winbcl(cfg):
+    """Whether the setup fetches Unity's Unix class libraries for the build (pmunity winbcl): a Windows
+    build of Unity 2021.2+ (or of versions not named) on the android route."""
+    g = cfg['game']
+    if g.get('build') != 'windows' or cfg['port']['route'] != 'android' or \
+            cfg['android_data'].get('winbcl', 'auto') == 'off':
+        return False
+    vs = [UV.Version(v) for v in g.get('unity_versions') or []]
+    return not vs or any(v.line >= (2021, 2) for v in vs)
+
+
+def download_mb(cfg):
+    return PLAYER_MB + (WINBCL_MB if needs_winbcl(cfg) else 0)
+
+
+def download_more(cfg):
+    """The READMEs' sentence on what the setup downloads besides the player (or nothing)."""
+    if not needs_winbcl(cfg):
+        return ''
+    return (f" A Windows build of Unity 2021.2+ comes with Windows-only class libraries: the setup also downloads "
+            f"the Unix ones of the game's version from Unity (about {WINBCL_MB} MB of its Windows editor installer).")
 
 
 def route_needs(route, cfg=None):
@@ -2015,6 +2058,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
               'SIZE_GB': max(1, ((int(cfg['game'].get('setup_space_mb') or 0) or 3 * int(cfg['game'].get('size_mb') or 0)) + 1023) // 1024),
               'PORTER': ', '.join(cfg['port']['porter']) or 'not named yet (port.toml: `port.porter`)',
               'READY': cfg['port'].get('ready_marker') or '.setup_done',
+              'PLAYER_MB': PLAYER_MB, 'DOWNLOAD_MB': download_mb(cfg), 'DOWNLOAD_MORE': download_more(cfg),
               # PortMaster's README sections (Notes, Controls, Compile)
               'THANKS': thanks_sentence(cfg), 'CONTROLS': controls_markdown(cfg),
               'ROUTE_NEEDS': route_needs(cfg['port']['route'], cfg), 'BUILD_STEPS': build_steps(cfg, r)}
@@ -2257,16 +2301,39 @@ def _component_asmpatch(ctx, opts):
     ctx.license('LICENSE.mono.cecil.txt', text=CECIL_LICENSE)
 
 
+def needs_pmhlslcc(cfg):
+    """Whether the setup translates Direct3D 11 shaders (a Windows build: convert.shaders.from)."""
+    return 'd3d11' in ((cfg.get('convert') or {}).get('shaders') or {}).get('from', [])
+
+
+def _component_pmhlslcc(ctx, opts):
+    """pmhlslcc for linux-arm64 (`ARCH=arm64 tools/hlslcc/build.sh`: HLSLcc, MIT with bstrlib BSD) as
+    setup/pmhlslcc, for a port whose setup translates Direct3D 11 shaders; its licence beside the others."""
+    p = opts.get('pmhlslcc_bin') or os.path.join(ctx.runtime, 'tools', 'hlslcc', 'out', 'linux-arm64', 'pmhlslcc')
+    if not os.path.isfile(p):
+        if opts.get('no_build'):
+            raise SystemExit(f'{p}: build pmhlslcc for the handheld first (ARCH=arm64 tools/hlslcc/build.sh)')
+        ctx.log('building pmhlslcc for linux-arm64 (ARCH=arm64 tools/hlslcc/build.sh, Docker)')
+        subprocess.run([os.path.join(ctx.runtime, 'tools', 'hlslcc', 'build.sh'), os.path.dirname(p)], check=True,
+                       env=dict(os.environ, ARCH='arm64'))
+    lic = os.path.join(os.path.dirname(p), 'pmhlslcc.LICENSE.txt')
+    if not os.path.isfile(lic):
+        raise SystemExit(f'{lic}: HLSLcc\'s licence goes with pmhlslcc (tools/hlslcc/build.sh writes it)')
+    ctx.add(p, os.path.join('setup', 'pmhlslcc'), 0o755)
+    ctx.license('LICENSE.pmhlslcc-HLSLcc.txt', lic)
+
+
 COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'ua_host64': _component_ua_host64,
-              'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'asmpatch': _component_asmpatch}
+              'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'asmpatch': _component_asmpatch,
+              'pmhlslcc': _component_pmhlslcc}
 
 
 def wants(part, cfg):
     """Whether a release needs a part route.json names with '?' (only when the port uses it): asmpatch
-    for ports that run it; ua_host / ua_host64 for the player ABIs the port runs (player.abis:
-    armeabi-v7a, arm64-v8a; the apk route)."""
+    for ports that run it, pmhlslcc for ports that translate Direct3D 11 shaders; ua_host / ua_host64
+    for the player ABIs the port runs (player.abis: armeabi-v7a, arm64-v8a; the apk route)."""
     abis = cfg['player'].get('abis') or []
-    return {'asmpatch': needs_asmpatch(cfg), 'ua_host': not abis or 'armeabi-v7a' in abis,
+    return {'asmpatch': needs_asmpatch(cfg), 'pmhlslcc': needs_pmhlslcc(cfg), 'ua_host': not abis or 'armeabi-v7a' in abis,
             # (player.il2cpp: a Mono build's code compiled for the arm64 IL2CPP player on 64-bit-only systems)
             'ua_host64': not abis or 'arm64-v8a' in abis or bool(cfg['player'].get('il2cpp'))}.get(part, True)
 
@@ -2498,6 +2565,8 @@ def main(argv):
     p.add_argument('--media-licenses', help="the video decoders' licences (default <runtime>/runtime/media/out/licenses)")
     p.add_argument('--pybundle', help="the setup's Python (default $PYBUNDLE, else tools/port/build_pybundle.sh builds it)")
     p.add_argument('--asmpatch-bin', help='asmpatch for linux-arm64 (default <runtime>/tools/asmpatch/out/linux-arm64/asmpatch)')
+    p.add_argument('--pmhlslcc-bin', help='pmhlslcc for linux-arm64, with pmhlslcc.LICENSE.txt beside it '
+                                          '(default <runtime>/tools/hlslcc/out/linux-arm64/pmhlslcc)')
     p.add_argument('--no-build', action='store_true', help='stop instead of building what is missing')
     p.add_argument('--submission', action='store_true',
                    help="also lay the port out as PortMaster's repository holds it (<out>/submission/<name>/)")
@@ -2520,7 +2589,7 @@ def main(argv):
         return 0
     if a.cmd == 'package':
         package(a.port, a.out, a.runtime, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle,
-                asmpatch_bin=a.asmpatch_bin, no_build=a.no_build, submission=a.submission)
+                asmpatch_bin=a.asmpatch_bin, pmhlslcc_bin=a.pmhlslcc_bin, no_build=a.no_build, submission=a.submission)
         return 0
     if a.cmd == 'shot':
         shot(a.src, a.out, a.timeout)
