@@ -22,7 +22,7 @@ done
 cp /hostbin/ua_host ./ua_host
 LOG=${1:-emu.log}; SECS=${2:-600}; FLAVOR=${3:-release}
 [ "$FLAVOR" = dev ] && export UA_LIBDIR=/emu/devlib
-export UA_EGL_PBUFFER=1 ANDROID_WINDOW_SIZE=${ANDROID_WINDOW_SIZE:-720x480} EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1
+export UA_EGL_PBUFFER=${UA_EGL_PBUFFER:-1} ANDROID_WINDOW_SIZE=${ANDROID_WINDOW_SIZE:-720x480} EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1
 export SDL_AUDIODRIVER=dummy SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-dummy}
 timeout -k 20 -s INT "$SECS" ./ua_host /emu > "$LOG" 2>&1   # (-k: a hung shutdown)
 echo "exit $?" >> "$LOG"

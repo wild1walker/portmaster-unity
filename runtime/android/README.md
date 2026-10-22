@@ -142,7 +142,10 @@ such a struct, so the pointer Unity passes is already a valid fbdev window. `egl
   (e.g. an X11 window for a desktop test); retried without attributes if the driver rejects
   Android-specific ones (e.g. `EGL_GL_COLORSPACE_KHR`).
 - `eglChooseConfig`: drops Android-only attributes (0x3140-0x314F: `EGL_RECORDABLE_ANDROID`,
-  `EGL_FRAMEBUFFER_TARGET_ANDROID`, ...). `eglGetConfigAttrib` answers them with 0.
+  `EGL_FRAMEBUFFER_TARGET_ANDROID`, ...). `eglGetConfigAttrib` answers them with 0. With
+  `egl_glue_set_single_sample_window(1)` (the host's `UA_MSAA_FIX`, for Unity 2017.1 - 2017.3:
+  docs/runtime.md) only the driver's single-sampled configs are returned, and a request for
+  `EGL_SAMPLES` / `EGL_SAMPLE_BUFFERS` asks for none.
 - `eglCreateContext`: on `EGL_BAD_ATTRIBUTE` retries with only `EGL_CONTEXT_CLIENT_VERSION`.
 - `eglSwapBuffers`: host hook, then the real call. `eglGetProcAddress`: returns the wrappers for
   wrapped names, NULL for Android's frame-timestamp queries, our no-op for
@@ -295,7 +298,8 @@ thread under a lock the callback takes, woken to stop; a host looper's jobs); th
 the newer functions in both tables; AConfiguration's fields, `diff` and `match`; the handheld answers
 of `ANativeWindow_setFrameRate`, ATrace, APerformanceHint, AThermal and AHardwareBuffer (through the
 tables, softfp on ARM); the window and egl_glue against `test/fake_egl.c` (fbdev size
-follows the buffer geometry, attribute filtering and retries, swap hook, eglGetProcAddress, its
+follows the buffer geometry, attribute filtering and retries, single-sampled configs when asked
+for, swap hook, eglGetProcAddress, its
 hidden frame-timestamp functions and the no-op presentation time; with a host display: every mapping above, `eglSurfaceAttrib` and
 its re-application after a surface replacement, pass-through for other displays and surfaces,
 no-op destroy/terminate); the libmediandk stubs (tables, key strings, a VideoPlayer's call

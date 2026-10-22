@@ -486,5 +486,6 @@ void input_poll(void)
     if (osk_tick())                             // the soft keyboard opened or closed: the game
         for (int i = 0; i < MAX_PADS; i++)      // sees a centred pad while it is open
             if (pads[i].gc || pads[i].virt) send_axes(&pads[i]);
+    pointer_frames(frames_presented());
     pointer_tick();
 }
