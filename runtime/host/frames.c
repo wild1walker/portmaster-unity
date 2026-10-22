@@ -13,6 +13,7 @@
 #include "frames.h"
 #include "glhooks.h"
 #include "hitches.h"
+#include "prof.h"
 #include "gltrace.h"
 #include "msaafix.h"
 #include "osk.h"
@@ -133,6 +134,7 @@ static void on_swap(void *ctx)
     if (cursor && !cursor_first) pointer_draw();          // UA_POINTER's cursor (nothing when off)
     if (++total == 1) glhooks_first_frame();
     hitches_frame();
+    prof_swap();
     gltrace_frame();
     msaafix_frame();
     if (last > 0)

@@ -17,7 +17,7 @@ TEST_LDFLAGS   :=
 else ifeq ($(ARCH),armhf)
 CROSS   ?= arm-linux-gnueabihf-
 OUT     := out
-CFLAGS  += -march=armv7-a -mfpu=neon -mfloat-abi=hard
+CFLAGS  += -march=armv7-a -mfpu=neon -mfloat-abi=hard -funwind-tables
 # "Android side" of the tests: built like NDK armeabi-v7a code (softfp calling convention)
 ANDROID_CFLAGS := -std=gnu11 -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=softfp \
                   -ffreestanding -fno-builtin -fno-stack-protector

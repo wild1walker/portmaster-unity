@@ -28,6 +28,8 @@ level[0-9]*
 *.ppm
 shots/
 *.glsl
+prof-*.txt
+profbench/
 .DS_Store
 ._*
 syms_*.txt

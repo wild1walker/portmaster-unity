@@ -18,7 +18,7 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches gltrace msaafix display display_sdl steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof gltrace msaafix display display_sdl steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
     # dl_iterate_phdr (docs/arm64.md): no flags for that. -lrt: libhybris'"'"'s timer_* and shm_open
@@ -44,7 +44,7 @@ mkdir -p out
 docker image inspect ua-host-armhf >/dev/null 2>&1 || docker build -q -t ua-host-armhf . >/dev/null
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   set -e
-  F="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -I../jni/include -I../jni"
+  F="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -funwind-tables -I../jni/include -I../jni"
   arm-linux-gnueabihf-gcc $F -c ua_host.c -o out/ua_host.o
   arm-linux-gnueabihf-gcc $F -c input.c -o out/input.o
   arm-linux-gnueabihf-gcc $F -c pointer.c -o out/pointer.o
@@ -54,6 +54,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c gcbudget.c -o out/gcbudget.o
   arm-linux-gnueabihf-gcc $F -c glhooks.c -o out/glhooks.o
   arm-linux-gnueabihf-gcc $F -c hitches.c -o out/hitches.o
+  arm-linux-gnueabihf-gcc $F -c prof.c -o out/prof.o
   arm-linux-gnueabihf-gcc $F -c gltrace.c -o out/gltrace.o
   arm-linux-gnueabihf-gcc $F -c msaafix.c -o out/msaafix.o
   arm-linux-gnueabihf-gcc $F -c display.c -o out/display.o
@@ -61,7 +62,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c steamstub.c -o out/steamstub.o
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/gltrace.o out/msaafix.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/gltrace.o out/msaafix.o \
     out/display.o out/display_sdl.o out/steamstub.o out/plugins.o out/plugstubs.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
     -lSDL2 -lz -ldl -lpthread -lm

@@ -20,6 +20,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "gcbudget.h"
 #include "glhooks.h"
 #include "hitches.h"
+#include "prof.h"
 #include "gltrace.h"
 #include "msaafix.h"
 #include "arch.h"
@@ -344,7 +345,7 @@ static void *dlsym_hook(const char *sym, void *p)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); }
+static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); prof_main_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
@@ -427,6 +428,7 @@ int main(int argc, char **argv)
     g_mono_trace = getenv("UA_MONO_TRACE") != NULL;
     so_set_dlsym_hook(dlsym_hook);
     hitches_init();                            // UA_HITCH_TRACE
+    prof_init(root);                           // UA_PROF
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     so_add_shims(msaafix_table(msaa, gltrace_wrapper));   // (before the tracer's wrappers it calls)

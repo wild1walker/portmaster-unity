@@ -107,7 +107,8 @@ SDL_VIDEODRIVER=offscreen tools/emu/emu.sh ...`.
 | `UA_HTTP=1` | Unity 2017.4 - 2018.4: UnityWebRequest/WWW make real requests through the system's libcurl (default: they fail at once, as without a network; [plugins.md](plugins.md#https)) |
 | `UA_AUDIO_RATE`, `UA_AUDIO_FRAMES` | output rate and buffer size AudioManager reports to FMOD (default 48000, 512) |
 | `UM_TRACE`, `UM_VIDEO_BUFFERS`, `UM_VPX_THREADS`, `UM_H264`, `UM_FFMPEG` | video (Unity's VideoPlayer, `runtime/media`): per-buffer log, a video decoder's output queue (default 4), libvpx threads, OpenH264 for every H.264 stream, the system's libavcodec off / from a path (see Video below) |
-| `UA_HITCH_TRACE=<ms>` | in frames longer than `<ms>`, sample `UA_HITCH_THREADS` (default `UnityMain`) every `UA_HITCH_EVERY` ms (20): pc, lr, return addresses as module+offset (runtime/host/hitches.c; `tools/analysis/sym.py` names libunity offsets, `tools/analysis/hitchsum.py` sums them up) |
+| `UA_HITCH_TRACE=<ms>` | in frames longer than `<ms>`, sample `UA_HITCH_THREADS` (default `UnityMain`) every `UA_HITCH_EVERY` ms (20): pc, lr, return addresses as module+offset (runtime/host/hitches.c; `tools/analysis/sym.py` names libunity offsets, `tools/analysis/hitchsum.py` sums them up). `UA_PROF_EVERY=<ms>` logs such a sample of those threads every `<ms>` all the time (`hitchsum.py --prof`; heavy: `UA_PROF` replaces it) |
+| `UA_PROF=<hz>` | the sampling profiler, off by default: recordings of `UA_PROF_THREADS` (default `UnityMain,UnityGfxDeviceW`; `Job.Worker*` style prefixes, `@swap` the presenting thread) at `<hz>` samples a second, `UA_PROF_SECS` long (20), started by `touch <root>/prof.req` (a number in it: the length) or once `UA_PROF_START` s after the first frame; `UA_PROF_DEPTH` (32) return addresses a sample from `UA_PROF_SCAN` bytes of stack (16384). Each one is written to `<root>/prof-<n>.txt`: states (on a CPU, runnable, blocked in which call), pc, lr and callers (unwound through code with unwind tables, scanned above Mono's JIT frames), Mono's JIT methods by name, per-thread CPU time, frame times; `tools/analysis/profsum.py` sums it up by module, function and managed method (runtime/host/prof.c, [profiling.md](profiling.md)) |
 
 ## Video
 
@@ -126,6 +127,7 @@ At start the log names the decoders (`[media] decoders: vp8 (libvpx-vp8), ...`);
 tracks and decoders. `umbench <file> [offset size]` (`runtime/media/out/umbench`, a device check)
 decodes a clip as fast as it goes and prints the cost per frame.
 
+Profiling on the device (`UA_PROF`, the bench `tools/device/profbench.sh`): [profiling.md](profiling.md).
 Debugging on the device: `python3 tools/device/stacks.py <pid> [thread]` (each thread's syscall and the
 libunity return addresses on its stack; name them with `tools/analysis/sym.py`), and gdb attaches to the
 32-bit process (`set arm force-mode arm`, `break *<libunity base + offset>`).
