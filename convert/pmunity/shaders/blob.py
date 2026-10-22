@@ -49,6 +49,7 @@ PLATFORM_D3D11, PLATFORM_GLES20, PLATFORM_GLES3PLUS, PLATFORM_METAL, PLATFORM_GL
 # GPU program types (ShaderGpuProgramType, the same numbers in Unity 5.5 - 2022.3)
 GPU_GLES31AEP, GPU_GLES31, GPU_GLES3, GPU_GLES = 2, 3, 4, 5
 GPU_GLCORE32, GPU_GLCORE41, GPU_GLCORE43 = 6, 7, 8
+GPU_SPIRV = 25                                  # Vulkan
 
 
 class Layout:
@@ -79,6 +80,23 @@ def _is_d3d11(code):
     container (dxbc.py)."""
     i = code.find(b'DXBC', 0, 64)
     return i >= 6 and len(code) >= i + 32
+
+
+def _is_vulkan(code):
+    """Vulkan program code: int32 flags, a table of (int32 offset, int32 size) per stage, then the
+    stages' SPIR-V modules, SMOL-V compressed (vulkan.py): a stage at its offset starts with
+    SMOL-V's or SPIR-V's magic."""
+    if len(code) < 20:
+        return False
+    first, p, found = len(code), 4, False
+    while p + 8 <= first and p < 4 + 8 * 9:     # at most 9 stage slots (2022.1+: more data after them)
+        off, size = struct.unpack_from('<ii', code, p)
+        if size:
+            if size < 0 or off < p + 8 or off + size > len(code) or code[off:off + 4] not in (b'LOMS', b'\x03\x02\x23\x07'):
+                return False
+            first, found = min(first, off), True
+        p += 8
+    return found
 
 
 def _strings(data, p):
@@ -149,6 +167,8 @@ class Entry:
             rest = bytes(data[_pad4(p + 4 + n):])
             if _is_d3d11(code):
                 pass                            # D3D11: Unity's header + DXBC (dxbc.py)
+            elif gpu_type == GPU_SPIRV and _is_vulkan(code):
+                pass                            # Vulkan: a stage table + SMOL-V modules (vulkan.py)
             elif code and not code.lstrip()[:1] in (b'#', b'/'):
                 return None
             else:
