@@ -351,7 +351,11 @@ for the 64-bit-only ones (no `/lib/ld-linux-armhf.so.3`).
 
 So far run in the arm64 containers only: the 2018.4 game end to end (the same UnityLinker output
 as the PC route but for each assembly's MVID; 677 objects), the 2019.4 and 2020.3 games of the
-table below through UnityLinker and the conversion into compiling. Not yet on a handheld.
+table below through UnityLinker and the conversion into compiling, and the 2021.3 game end to end
+in its port's setup on a 64-bit-only stand-in (1 GB + 1 GB swap): UnityLinker 0.4 min (peak 548 MB),
+the conversion 10.6 min (CPU 2.4 min, peak 987 MB: above .NET's 750 MB container cap, see
+"Memory"), the Bee graph's 605 commands in 9 min with 3 jobs (CPU 6.3 min, peak 599 MB); the
+whole setup 32 min, and the installed game reaches its main menu. Not yet on a handheld.
 
 ## AOT limits
 
@@ -393,10 +397,13 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; sound since the loader raises small thread stacks (below) |
 | same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
 | 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
+| 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
-2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3); the metadata versions match those of real IL2CPP builds
-of these lines (a 2020.3 Android build's is 27, 2021.3's 29). The layout of the APK matches Unity's IL2CPP
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3); the metadata versions match those of real IL2CPP builds
+of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31). 2021.x and 2022.x
+builds have no `Managed/etc` (nor have Unity's: Cat Cove Inn's, The Ump Show's APKs), and their
+APKs get `assets/bin/Data/unity_app_guid` (android-data, above). The layout of the APK matches Unity's IL2CPP
 builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
 `Managed/Resources/mscorlib.dll-resources.dat`, the 18 `Managed/etc/mono` files (2020.3), no
 assemblies; `libil2cpp.so` needs the same four libraries (`liblog`, `libm`, `libdl`, `libc`).
@@ -481,6 +488,14 @@ What the runs showed:
 - 2020.3: `il2cpp/build/deploy/netcoreapp3.1/` (self-contained Windows .NET Core builds: only the
   application files are fetched, the .NET runtime it carries is left out by its `deps.json`),
   `baselib.a` from the player's `StaticLibs/<abi>`; il2cpp takes `--jobs`.
+- 2021.3: `il2cpp/build/deploy/il2cpp.dll` (.NET 5/6 build), class libraries `unityaot-linux`,
+  NDK r21d, API 22; the C++ build is Bee's graph (above, "Unity 2021.2+: Bee"): about 600 compiles
+  (libil2cpp in lumps), `-fuse-ld=bfd` (lld here) with `-Wl,--wrap,sigaction`, objcopy for
+  `libil2cpp.so` / `.dbg.so` / `.sym.so`; libunity re-extracts the IL2CPP data unless
+  `assets/bin/Data/unity_app_guid` matches `il2cpp/unity.ver`.
+- 2022.3: as 2021.3 with NDK r23b (no libgcc: compiler-rt and libunwind, above), `WriteFile`
+  graph nodes with a payloads file, UnityLinker's `--allowed-assembly` list; libunity looks up
+  fewer `il2cpp_*` functions by name (162).
 
 ## Debugging a build
 

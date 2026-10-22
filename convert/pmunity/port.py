@@ -826,7 +826,7 @@ def decide_routes(rep):
                        "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp "
                        "--on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of "
                        "memory, Wi-Fi for Unity's and Debian's files",
-                       'tested to the title in the arm64 rig with Unity 2017.4 - 2020.3']})
+                       'tested to the title in the arm64 rig with Unity 2017.4 - 2022.3']})
     # box64: the game's own x86-64 Linux player
     why = []
     if b.get('build') != 'linux':

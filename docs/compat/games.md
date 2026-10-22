@@ -79,11 +79,14 @@ As ports (`pmunity port new --route apk`): the release zip rehearsed with `tools
 | Loco Motive (Game Jam) | 2018.4.36f1 | title menu; as a port made with `--route il2cpp-arm64`, its setup (the IL2CPP build on the device included) rehearsed in an arm64 container with 1 GB, then the title menu | title 59.4 - 59.6 fps | 2026-10-21 |
 | buggish | 2019.4.8f1 | title | title 59.4 - 59.6 fps | 2026-10-20 |
 | Tom City | 2020.3.49f1 | title | title 59.4 - 59.6 fps | 2026-10-20 |
+| [Untitled Hook Game](https://bonionline.itch.io/untitled-hook-game) | 2021.3.16f1, URP | the first-launch name prompt, then (a name in PlayerPrefs) the main menu, about 30 fps in the native arm64 rig; the first 2021.x build of the route: il2cpp's Bee build graph run by pmunity (605 commands, `libil2cpp.so` 53.2 MiB, metadata 29). As a port made with `--route il2cpp-arm64`: its setup rehearsed on a 64-bit-only stand-in (`REHEARSE_64ONLY=1`, arm64 container, 1 GB + 1 GB swap) in 32 min (the IL2CPP conversion 10.6 min with a 987 MB peak, the compile 9 min with 3 jobs, 599 MB peak), installed 230 MB; the installed game reaches the name prompt and the main menu in the arm64 rig | not yet | 2026-10-22 |
+| [Tiny Kingdom](https://neltile.itch.io/tiny-kingdom) | 2022.3.36f1, URP, FMOD, Steam, Burst | title menu at 60 fps in the native arm64 rig; the first 2022.x build of the route (NDK r23b, 780 Bee commands, `libil2cpp.so` 82.0 MiB, metadata 31); silent as on the Mono route until FMOD's ARM libraries are supplied, the Steam stub answers | not yet | 2026-10-22 |
 | [Unsung Warriors - Prologue](https://unsungwarriors.itch.io/unsung-warriors-prologue) | 2017.4.40f1, .NET 3.5, Rewired | both intro videos, title menu (about 45 fps in the native arm64 rig); with `--asmpatch rewired-android` the pad skips the intro and opens the main menu. Sound: 2017.4's arm64 FMOD lost its mixer thread to glibc's larger minimum stack until the loader raised small stack sizes. The armv7 IL2CPP build reaches its title in the armhf rig, with sound | not yet | 2026-10-21 |
 
 The IL2CPP build itself can also run on the handheld (`pmunity il2cpp --on-device`): Loco Motive
 built in an arm64 container limited like the RG34XX-SP (1 GB, 4 CPUs, no swap), with the same
-`libil2cpp.so` as the PC route; not yet on a handheld (2026-10-21).
+`libil2cpp.so` as the PC route (2026-10-21), and Untitled Hook Game (2021.3, Bee) in its port's
+setup on a 1 GB + 1 GB swap stand-in (2026-10-22); not yet on a handheld.
 
 ## Input
 
