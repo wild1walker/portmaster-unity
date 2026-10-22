@@ -121,6 +121,7 @@ class Result:
         self.source = 'glcore'          # the platform translated: glcore | d3d11
         self.dropped = 0                # VR-only variants left out (not translatable)
         self.dropped_instancing = 0     # D3D11: GPU instancing variants left out (not translatable)
+        self.dropped_skinning = 0       # D3D11: GPU sprite skinning variants left out (not translatable)
         self.es31 = 0                   # programs that need GLSL ES 3.10 (GLES 3.1 programs, type 3)
         self.programs4x = 0             # of the translated entries: GLCore41/43 ones
         self.empty = False              # no programs at all: given an empty GLES3 blob
@@ -336,6 +337,11 @@ VR_KEYWORDS = ('STEREO_INSTANCING_ON', 'STEREO_MULTIVIEW_ON', 'UNITY_SINGLE_PASS
 # structured buffers): one of these that cannot be translated from Direct3D 11 is left out, and the
 # pass's instancing flags (2021.2+) are cleared, so the player draws such objects one by one
 INSTANCING_KEYWORDS = ('INSTANCING_ON', 'PROCEDURAL_INSTANCING_ON', 'DOTS_INSTANCING_ON')
+# variants only GPU sprite skinning uses (URP 2D of Unity 2023+: the 2D Animation package's bone
+# matrices in a StructuredBuffer, _SpriteBoneTransforms): one of these that cannot be translated is
+# left out, as a build strips a variant nothing asks for; otherwise URP's Sprite-Lit-Default and
+# Sprite-Unlit-Default got no GLES3 programs at all and every sprite drew with the error shader
+SKINNING_KEYWORDS = ('SKINNED_SPRITE',)
 # SerializedSubProgram fields a GL subprogram leaves empty (its backend finds everything by name)
 _D3D_ONLY_LISTS = ('m_VectorParams', 'm_MatrixParams', 'm_TextureParams', 'm_BufferParams', 'm_ConstantBuffers',
                    'm_ConstantBufferBindings', 'm_UAVParams', 'm_Samplers')
@@ -648,6 +654,8 @@ def add_gles3_d3d11(tree, translator=None, precision='highp', replace=False, opt
                     elif any(kw in INSTANCING_KEYWORDS for kw in kws):
                         r.dropped_instancing += 1
                         no_instancing.add(id(p))
+                    elif any(kw in SKINNING_KEYWORDS for kw in kws):
+                        r.dropped_skinning += 1
                     elif why is None:
                         why = f'pass {pi_} variant {" ".join(kws) or "(no keywords)"}: {err}'
         if why is None and todo:

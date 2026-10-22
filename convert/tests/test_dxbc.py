@@ -369,6 +369,21 @@ class AddGles3D3D11Test(unittest.TestCase):
         self.assertEqual(dict(C.gles3_programs(tree)).keys(), {0, 5})
         self.assertEqual(C.add_gles3_d3d11(tree, translate=translate).status, 'unchanged')
 
+    def test_sprite_skinning_left_out(self):
+        # URP 2D's SKINNED_SPRITE variants (bones in a StructuredBuffer) are left out, not the shader
+        vs, ps = VS_BIND.serialize(), PS_BIND.serialize()
+        e = [_entry(15, VS_CODE, vs), _entry(17, PS_CODE, ps), _entry(15, VS_CODE + b'', vs, ['SKINNED_SPRITE']),
+             _entry(17, PS_CODE, ps, ['SKINNED_SPRITE'])]
+        tree = d3d11_tree(e, [[([_sp(0, 15, [], 9, 1), _sp(2, 15, [2], 9, 1)], [_sp(1, 17, []), _sp(3, 17, [2])])]])
+
+        def translate(vs, ps):
+            if 'SKINNED_SPRITE' in vs.keywords:
+                raise D.Unsupported("binding '_SpriteBoneTransforms' of kind 2 (buffer or UAV?): not supported")
+            return GL_PROGRAM
+        r = C.add_gles3_d3d11(tree, translate=translate)
+        self.assertEqual((r.status, r.programs, r.dropped, r.dropped_skinning), ('converted', 1, 0, 1), r)
+        self.assertEqual(r.failed, [])
+
     def test_subshader_left_out(self):
         e = self.entries()
         bad = [([_sp(0, 15, [], 9, 1)], [_sp(1, 17, [])])]

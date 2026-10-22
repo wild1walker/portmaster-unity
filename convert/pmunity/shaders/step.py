@@ -32,6 +32,28 @@ from . import convert as C
 from . import dxbc
 
 SOURCES = {'glcore': B.PLATFORM_GLCORE, 'd3d11': B.PLATFORM_D3D11}
+SOURCE_NAMES = {'glcore': 'OpenGL Core', 'd3d11': 'Direct3D 11'}
+# Shader.platforms values (Unity's ShaderCompilerPlatform) as names, for messages
+PLATFORM_NAMES = {0: 'OpenGL (legacy)', 1: 'Direct3D 9', 4: 'Direct3D 11', 5: 'OpenGL ES 2', 8: 'Direct3D 11 9.x',
+                  9: 'OpenGL ES 3', 14: 'Metal', 15: 'OpenGL Core', 18: 'Vulkan', 20: 'Direct3D 12 (Xbox)',
+                  25: 'WebGPU'}
+NO_SOURCE = ('no OpenGL Core programs', 'no Direct3D 11 programs')
+
+
+def nothing_to_translate(results, sources):
+    """The error for data whose shaders all lack the source platforms' programs (a Vulkan- or
+    Metal-only build, HDRP), else None. Shaders already carrying GLES3 programs or none at all
+    (stripped) do not count against it."""
+    if not results or any(r.why not in NO_SOURCE for r in results):
+        return None
+    plats = sorted({p for r in results for p in getattr(r, 'platforms', ())})
+    if not plats:                       # (no programs anywhere: nothing to say about the build)
+        return None
+    names = ', '.join(PLATFORM_NAMES.get(p, f'platform {p}') for p in plats)
+    return (f'shaders: none of the {len(results)} shaders has {" or ".join(SOURCE_NAMES[s] for s in sources)} '
+            f'programs (their programs: {names}), so the Android player would draw nothing. A build made '
+            f'without OpenGL Core (Vulkan or Metal only: HDRP\'s Linux and macOS builds, recent macOS builds) '
+            f'cannot be converted; another build of the game may have OpenGL Core or Direct3D 11 programs')
 
 
 def glcore4x_for(path, glcore4x=None):
@@ -104,6 +126,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 r = C.add_gles3(t, precision=precision, replace=replace, optimize=opt, glcore4x=gl4)
                 r.glcore4x = gl4
             r.file = rel
+            r.platforms = tuple(t['platforms'])
             results.append(r)
             if r.status == 'converted' or r.changed:
                 o.save_typetree(t)
@@ -135,6 +158,9 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
         job.mark_done('shaders', rel)
     if translator is not None:
         translator.close()
+    err = nothing_to_translate(results, sources)
+    if err:
+        raise SystemExit(err)
     conv = [r for r in results if r.status == 'converted']
     job.log(f'shaders: {len(conv)} shaders given GLES3 programs ({sum(r.programs for r in conv)} programs, '
             f'{sum(r.twins for r in conv)} subprograms) in {changed_files} files; '
@@ -165,6 +191,7 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '
                 f'({sum(r.programs for r in d3d if r.status == "converted")} programs); '
-                f'{sum(len(r.failed) for r in d3d)} SubShaders left out; {sum(r.dropped for r in d3d)} VR-only variants and '
-                f'{sum(r.dropped_instancing for r in d3d)} GPU instancing variants left out')
+                f'{sum(len(r.failed) for r in d3d)} SubShaders left out; {sum(r.dropped for r in d3d)} VR-only variants, '
+                f'{sum(r.dropped_instancing for r in d3d)} GPU instancing and {sum(r.dropped_skinning for r in d3d)} '
+                f'GPU sprite skinning variants left out')
     return results

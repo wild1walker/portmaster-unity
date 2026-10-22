@@ -412,6 +412,9 @@ def examine(data):
             e.update(needed=ei.get('needed', []), glibc=ei.get('glibc'), glibcxx=ei.get('glibcxx'))
         exes.append(e)
     facts['executables'] = exes
+    if facts['platform'] is None:               # a compressed build: its serialized files are in data.unity3d
+        kinds = {e['format'] for e in exes}
+        facts['platform'] = {frozenset({'pe'}): 'windows', frozenset({'elf'}): 'linux'}.get(frozenset(kinds))
     elf = sorted((e for e in exes if e['format'] == 'elf'), key=lambda e: e['arch'] != 'x86_64')
     player = L['player_lib'] if L['player_lib'] and L['player_lib'].endswith('.so') else next(
         (os.path.join(L['game_dir'], e['file']) for e in elf), None)
@@ -507,11 +510,11 @@ def _android_verdict(f, v):
     if plat in ('linux', 'macos'):
         why.append(f'{plat} build: OpenGL Core shaders, converted to GLES 3')
     elif plat == 'windows':
-        if v is not None and v.line >= (2019, 1):
-            block.append('Windows build of 2019.1+: Direct3D 11 shaders only, and their GL constant-buffer '
-                         'layouts are not in the data (docs/compat); get the macOS or Linux build')
-        else:
-            caveats.append('Windows build: Direct3D 11 shaders only, translated with `pmunity shaders --from d3d11`')
+        caveats.append('Windows build: Direct3D 11 shaders only, translated with `shaders.from = ["d3d11"]` '
+                       '(tools/hlslcc; pmhlslcc for the handheld)')
+        if v is not None and v.line >= (2021, 2):
+            caveats.append('Windows build of 2021.2+: its class libraries are the Windows-only unityjit-win32 ones; '
+                           '`python -m pmunity.winbcl` fetches the Unix ones for `android-data --managed-file`')
     elif plat:
         block.append(f'{plat} build: not a desktop build')
     if f.get('compressed'):
@@ -671,6 +674,13 @@ def port_check(rep):
     f = examine(rep['data'])
     r = next((x for x in rep.get('routes', []) if x['route'] == 'box64'), None)
     if r is None or not r['ok']:
+        return
+    apis = rep.get('graphics_apis')
+    if apis is not None and not {'OpenGLCore', 'OpenGL2'} & set(apis):
+        # (Vulkan only: HDRP's Linux builds, or OpenGL Core taken out of the build's graphics APIs)
+        r['ok'] = False
+        r['why'].append(f"the data has {', '.join(apis) or 'no'} shaders, no OpenGL ones: the box64 port draws with "
+                        f"OpenGL (gles, gl4es or Mesa); this player would need Vulkan on the handheld")
         return
     r['needs'] += [f"GL mode {gl_mode(f)} ({'GLES 3 shaders added by the setup' if gl_mode(f) == 'gles' else 'data as it is'})"]
     r['needs'] += [c for c in f['box64']['caveats'] if 'Mono JIT' in c or 'plugin' in c]

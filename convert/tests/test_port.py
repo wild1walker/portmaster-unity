@@ -24,7 +24,8 @@ from test_apk import BID, make_apk, make_obb, manifest as apk_manifest
 
 # ---------------------------------------------------------------- a .NET assembly, written here
 
-def write_assembly(path, name, typedefs=(), typerefs=(), methods=(), memberrefs=(), pinvokes=(), version=1):
+def write_assembly(path, name, typedefs=(), typerefs=(), methods=(), memberrefs=(), pinvokes=(), version=1,
+                   assemblyrefs=()):
     """A minimal PE/CLI file with metadata tables: Module, TypeRef, TypeDef, MethodDef, MemberRef,
     ModuleRef, ImplMap, Assembly (version <version>.0.0.0). memberrefs: (typeref index from 1,
     name); pinvokes: (method index from 1, module, entry)."""
@@ -50,6 +51,7 @@ def write_assembly(path, name, typedefs=(), typerefs=(), methods=(), memberrefs=
     rows[0x1A] = [struct.pack('<H', s(m)) for m in modules]
     rows[0x1C] = [struct.pack('<HHHH', 0, (mi << 1) | 1, s(e), modules.index(mod) + 1) for mi, mod, e in pinvokes]
     rows[0x20] = [struct.pack('<IHHHHIHHH', 0x8004, version, 0, 0, 0, 0, 0, s(name), 0)]
+    rows[0x23] = [struct.pack('<HHHHIHHHH', 2, 1, 0, 0, 0, 0, s(a), 0, 0) for a in assemblyrefs]
     rows = {t: r for t, r in rows.items() if r}
     valid = sum(1 << t for t in rows)
     tables = struct.pack('<IBBBBQQ', 0, 2, 0, 0, 1, valid, 0)
@@ -186,6 +188,36 @@ class CheckTest(unittest.TestCase):
             out = io.StringIO()
             P.print_report(rep, out)
             self.assertIn('recommended route: android', out.getvalue())
+
+    def test_windows_class_libraries(self):
+        # a Windows Mono build of 2021.2+ ships unityjit-win32 class libraries: the check names winbcl
+        exe = bytearray(b'MZ' + b'\0' * 0x3A + struct.pack('<I', 0x80) + b'\0' * 0x40)
+        exe[0x80:0x86] = b'PE\0\0' + struct.pack('<H', 0x8664)
+        for marker, want in ((b'Interop+Kernel32 SetThreadErrorMode', True), (b'Interop+Sys', False)):
+            with tempfile.TemporaryDirectory() as t:
+                d = fake_game(t, version='2021.3.28f1')
+                os.remove(os.path.join(t, 'Game.x86_64'))
+                put(os.path.join(t, 'Game.exe'), bytes(exe) + b'\0' * 64)
+                put(os.path.join(d, 'Managed', 'mscorlib.dll'), b'MZ' + marker)
+                rep = P.check(t, asmpatch='/nonexistent-asmpatch', deep=False)
+                self.assertEqual((rep['build'], rep['backend']), ('windows', 'mono'))
+                android = next(r for r in rep['routes'] if r['route'] == 'android')
+                self.assertEqual(any('winbcl' in n for n in android['needs']), want, android['needs'])
+
+    def test_compressed_settings(self):
+        # a compressed build: globalgamemanagers is read from inside data.unity3d (graphics APIs)
+        from test_android_data import archive
+        with tempfile.TemporaryDirectory() as t:
+            d = fake_game(t)
+            os.remove(os.path.join(d, 'globalgamemanagers'))
+            put(os.path.join(d, 'data.unity3d'), archive([('globalgamemanagers', b'not a serialized file' * 4)]))
+            r = P.survey_data(d, deep=False)
+            self.assertTrue(any(n.startswith('globalgamemanagers: not read') for n in r['notes']), r['notes'])
+            P.COMPRESSED_SURVEY_MAX, keep = 16, P.COMPRESSED_SURVEY_MAX
+            try:
+                self.assertEqual(P.survey_data(d, deep=False)['notes'], [])     # too big to open: not tried
+            finally:
+                P.COMPRESSED_SURVEY_MAX = keep
 
     def test_unsupported(self):
         with tempfile.TemporaryDirectory() as t:

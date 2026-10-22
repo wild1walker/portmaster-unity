@@ -1068,6 +1068,10 @@ def plan(args):
                     args.gi_neon += 1
     if getattr(args, 'data_path', False):
         items += ST.data_folder_items(src, os.path.join(args.name, ST.FOLDER))
+    for n, path in memory_advice(pkg, getattr(args, 'il2cpp', None)):
+        # read through AAssetManager (ua_host: the loose assets beside the APK), as from an Android build's APK
+        items.append((os.path.join(args.name, 'assets', n), path, 'link'))
+        args.loose_assets = list(args.loose_assets or []) + [n]
     udr_dst = os.path.join(data, *default_resources_path(getattr(args, 'unity', None)))
     items.append((udr_dst, pkg_default_resources(pkg), 'link'))
     bex = os.path.join(src, 'Resources', 'unity_builtin_extra')
@@ -1112,6 +1116,11 @@ def plan(args):
             items.append((os.path.join(data, 'Managed', n), os.path.join(gmanaged, n), 'link'))
         names.add(n)
     args.managed_names = names
+    for ref, users in missing_references(amanaged, names).items():
+        args.warnings.append(f'{ref}.dll: the Android engine modules reference it ({", ".join(users[:3])}'
+                             f'{"..." if len(users) > 3 else ""}) and the game\'s Managed folder has none: their types '
+                             f'fail to load ("Could not load file or assembly \'{ref}\'"); ship Unity\'s copy of the '
+                             f'game\'s version (--managed-file)')
     # Mono config tree (dllmaps); libunity passes "assets/bin/Data/Managed/etc" (relative) as config dir
     metc = args.mono_etc or mono_etc_dir(src)
     for r, ds, fs in os.walk(metc):
@@ -1131,7 +1140,7 @@ def plan(args):
             rel = os.path.relpath(s, sa)
             # every asset bundle gets the Android platform (Addressables' aa/, a game's own folders);
             # a catalog with bundle CRCs is rewritten after them (streaming.py)
-            act = 'bundle' if is_unityfs(s) else 'aacatalog' if ST.is_catalog(rel) and ST.catalog_has_crcs(s) else 'link'
+            act = 'bundle' if is_unityfs(s) else 'aacatalog' if ST.is_catalog(rel) and ST.catalog_needs_fix(s) else 'link'
             items.append((os.path.join(args.name, 'assets', rel), s, act))
     # files from the game's folder beside the root (GOG .info files: DLC detection)
     gd = os.path.dirname(src)
@@ -1287,11 +1296,58 @@ def player_version(pkg):
     return None
 
 
+def memory_advice(pkg, il2cpp=None):
+    """[(name, path)]: the Memory Advice files (Apk/MemoryAdvice/ of the player package) when the
+    player reads them: Unity 2023.1's libunity opens realtime_features.json and realtime.tflite from
+    the APK's assets at start, and without them aborts (std::length_error) or crashes; an Android
+    build of 2023.1 carries them. Players without that code get nothing."""
+    ma = os.path.join(pkg, 'Apk', 'MemoryAdvice')
+    if not os.path.isdir(ma):
+        return []
+    libs = os.path.join(pkg, 'Variations', 'il2cpp' if il2cpp else 'mono', 'Release', 'Libs')
+    uses = False
+    for abi in sorted(os.listdir(libs)) if os.path.isdir(libs) else ():
+        p = os.path.join(libs, abi, 'libunity.so')
+        if os.path.isfile(p):
+            with open(p, 'rb') as f:
+                uses = b'realtime_features.json' in f.read()
+            break
+    return [(n, os.path.join(ma, n)) for n in sorted(os.listdir(ma))] if uses else []
+
+
+def missing_references(amanaged, names):
+    """{assembly name: [engine modules]}: assemblies the player's engine modules (amanaged) reference
+    that are not among the names shipped (a build made without netstandard.dll, which the Android
+    modules of Unity 6 reference)."""
+    from . import clrmeta as CM
+    have = {n[:-4].lower() for n in names if n.lower().endswith('.dll')} | {'mscorlib'}
+    out = {}
+    for n in sorted(os.listdir(amanaged)) if os.path.isdir(amanaged) else ():
+        if not n.endswith('.dll'):
+            continue
+        try:
+            a = CM.Assembly(os.path.join(amanaged, n))
+            refs = [a.string(r[6]) for r in a.rows(CM.ASSEMBLYREF)]
+        except Exception:  # noqa: BLE001 - not an assembly we can read: nothing to say
+            continue
+        for ref in refs:
+            if ref.lower() not in have:
+                out.setdefault(ref, []).append(n[:-4])
+    return out
+
+
 def scripting_runtime(src, unity):
     """'.NET 3.5 (libmono)' or '.NET 4.x (libmonobdwgc-2.0)': which Mono runtime of the Android
-    player the game needs (Unity 2017.x / 2018.x had both; 2019.1+ only the second)."""
-    if unity.major >= 2019:
+    player the game needs (Unity 2017.x - 2019.1 had both; 2019.2+ only the second). The class
+    libraries the game ships say it (mscorlib 2.0.0.0: .NET 3.5), else its Mono folder: a macOS
+    build has it outside the data folder (Contents/Mono or Contents/MonoBleedingEdge)."""
+    if unity.line >= (2019, 2):
         return '.NET 4.x (libmonobdwgc-2.0)'
+    from .il2cpp import dotnet_level
+    try:
+        return {2: '.NET 3.5 (libmono)', 4: '.NET 4.x (libmonobdwgc-2.0)'}[dotnet_level(src)]
+    except UV.Unsupported:
+        pass
     etc = mono_etc_dir(src)
     if os.path.basename(os.path.dirname(etc)) == 'MonoBleedingEdge':
         return '.NET 4.x (libmonobdwgc-2.0)'
@@ -1755,10 +1811,11 @@ def main(argv=None):
     # Addressables catalogs: the CRCs of the bundles as they are now
     for dst_rel, src, act in items:
         if act == 'aacatalog':
-            data, n = ST.catalog_crcs(open(src, 'rb').read(), crcs)
+            data, n, n_paths = ST.fix_catalog(src, open(src, 'rb').read(), crcs)
             write_bytes(os.path.join(args.out, dst_rel), data)
-            report['files'][dst_rel] = f'Addressables catalog: {n} bundle CRCs updated'
-            log(f'  {dst_rel}: {n} bundle CRCs follow the patched bundles')
+            report['files'][dst_rel] = f'Addressables catalog: {n} bundle CRCs updated, {n_paths} Windows paths'
+            log(f'  {dst_rel}: {n} bundle CRCs follow the patched bundles' +
+                (f'; {n_paths} bundle paths with backslashes (a Windows build) now with /' if n_paths else ''))
     # remove files from earlier runs that are no longer planned
     planned = {d for d, s, a in items} | kept
     for d in sorted(placed_before):

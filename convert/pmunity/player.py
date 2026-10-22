@@ -15,6 +15,9 @@ a non-solid NSIS installer, so only the files a port needs are read, one HTTP ra
   Variations/mono/Managed/*.dll                  the Android UnityEngine assemblies (mono)
   Variations/<backend>/Release/Libs/<abi>/*.so   libmain.so, libunity.so
   Variations/mono/Release/MonoLibs/<abi>/*.so    libmono.so (Mono 2.x), libmonobdwgc-2.0.so (4.x), ...
+  Apk/MemoryAdvice/*                             the Android Game SDK's Memory Advice models (realtime.tflite,
+                                                 realtime_features.json, ...): 2023.1's players read them from
+                                                 the APK's assets and abort without them
   player.json                                    version, changeset, backend, abi, installer
   Variations/<backend>/Release/Symbols/<abi>/*.sym.so   with --symbols: libunity's and libmain's symbol
                                                  files, for crash reports and samplers (tools/analysis); a
@@ -74,7 +77,7 @@ def wanted(backend, abi, symbols=False, symbols_only=False):
     sym = [f'Variations/{backend}/Release/Symbols/{abi}/*.sym.so']
     if symbols_only:
         return sym
-    g = list(DEFAULT_RESOURCES) + [f'Variations/{backend}/Release/Libs/{abi}/*.so']
+    g = list(DEFAULT_RESOURCES) + [f'Variations/{backend}/Release/Libs/{abi}/*.so', 'Apk/MemoryAdvice/*']
     if backend == 'mono':
         g += ['Variations/mono/Managed/*.dll', f'Variations/mono/Release/MonoLibs/{abi}/*.so']
     return g + (sym if symbols else [])

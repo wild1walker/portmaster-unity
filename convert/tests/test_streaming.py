@@ -174,7 +174,37 @@ class CatalogTest(unittest.TestCase):
             put(p, b'{"not": "a catalog"}')
             self.assertFalse(ST.catalog_has_crcs(p))
         self.assertTrue(ST.is_catalog('aa/catalog.json') and ST.is_catalog('aa/catalog_2024.json'))
+        self.assertTrue(ST.is_catalog('aa/catalog.bin'))
         self.assertFalse(ST.is_catalog('aa/settings.json') or ST.is_catalog('x/aa/catalog.json'))
+
+    def test_windows_paths(self):
+        # a Windows build's {RuntimePath}\StandaloneWindows64\<bundle> ids get '/', byte for byte in a binary catalog
+        rp = b'{UnityEngine.AddressableAssets.Addressables.RuntimePath}'
+        binc = (b'\x05\x00' + rp + b'\\StandaloneWindows64\\locales(en)_all.bundle' + b'uP\\\x01\x02' +
+                rp + b'/StandaloneLinux64/a.bundle' + struct.pack('<I', 123456789) + b'\\')
+        out, n = ST.catalog_fix_paths(binc, True)
+        self.assertEqual((n, len(out)), (1, len(binc)))
+        self.assertIn(rp + b'/StandaloneWindows64/locales(en)_all.bundleuP\\', out)      # bytes after it kept
+        self.assertTrue(out.endswith(struct.pack('<I', 123456789) + b'\\'))
+        js = b'{"m_InternalIds":["' + rp + b'\\\\StandaloneWindows64\\\\a.bundle","Assets\\\\x.prefab"]}'
+        out, n = ST.catalog_fix_paths(js, False)
+        self.assertEqual(n, 1)
+        self.assertEqual(json.loads(out)['m_InternalIds'], [rp.decode() + '/StandaloneWindows64/a.bundle', 'Assets\\x.prefab'])
+        # binary catalogs: each CRC found exactly once is replaced
+        data = b'abc' + struct.pack('<I', 111) + b'def' + struct.pack('<I', 222) * 2
+        out, n = ST.catalog_bin_crcs(data, {111: 333, 222: 444, 555: 666})
+        self.assertEqual(n, 1)
+        self.assertEqual(out, b'abc' + struct.pack('<I', 333) + b'def' + struct.pack('<I', 222) * 2)
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'catalog.json')
+            put(p, js)
+            self.assertTrue(ST.catalog_needs_fix(p))                   # Windows paths, no CRCs
+            put(p, b'{"m_InternalIds":["' + rp + b'/StandaloneLinux64/a.bundle"]}')
+            self.assertFalse(ST.catalog_needs_fix(p))
+            self.assertTrue(ST.catalog_needs_fix(os.path.join(t, 'catalog.bin')) is False)    # (missing)
+            put(os.path.join(t, 'catalog.bin'), data)
+            self.assertTrue(ST.catalog_needs_fix(os.path.join(t, 'catalog.bin')))
+            self.assertEqual(ST.fix_catalog(os.path.join(t, 'catalog.bin'), binc, {123456789: 7})[1:], (1, 1))
 
 
 class PlaceTest(unittest.TestCase):

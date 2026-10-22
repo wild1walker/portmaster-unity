@@ -607,6 +607,25 @@ class GLCore4xConvertTest(unittest.TestCase):
         sb = B.ShaderBlobs(tree)
         self.assertEqual(sb.platforms[9], sb.platforms[15])
 
+    def test_nothing_to_translate(self):
+        """step.nothing_to_translate: an error only when every shader lacks the source programs."""
+        from pmunity.shaders import step
+
+        def res(why, plats):
+            r = C.Result('S')
+            r.why, r.platforms = why, plats
+            return r
+        vulkan = [res('no OpenGL Core programs', (18,)), res('no OpenGL Core programs', (18, 14))]
+        err = step.nothing_to_translate(vulkan, ('glcore',))
+        self.assertIn('none of the 2 shaders has OpenGL Core programs', err)
+        self.assertIn('Metal, Vulkan', err)
+        self.assertIsNone(step.nothing_to_translate(vulkan + [res('', (15,))], ('glcore',)))     # one translatable
+        self.assertIsNone(step.nothing_to_translate([res('already has GLES3 programs', (9, 15))], ('glcore',)))
+        self.assertIsNone(step.nothing_to_translate([], ('glcore',)))
+        self.assertIsNone(step.nothing_to_translate([res('no OpenGL Core programs', ())], ('glcore',)))
+        err = step.nothing_to_translate([res('no Direct3D 11 programs', (18,))], ('d3d11',))
+        self.assertIn('Direct3D 11 programs (their programs: Vulkan)', err)
+
     def test_glcore4x_default(self):
         """step.glcore4x_for: on unless a port's config turns it off, for data of every version."""
         from pmunity.shaders import step
