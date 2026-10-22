@@ -837,13 +837,49 @@ class _AsmRefs:
             self.refs.append(d[strings + name_idx:e].decode('utf-8', 'replace'))
 
 
-def stage_assemblies(data, tc, out_dir, log=log, managed_files=()):
+def listed_assemblies(data):
+    """The script assemblies the data names (ScriptingAssemblies.json, Unity 2019.3+, else
+    MonoManager.m_AssemblyNames in globalgamemanagers): the game's, its packages' and its plugin
+    assemblies, which the player loads by name. Empty when neither can be read."""
+    p = os.path.join(data, 'ScriptingAssemblies.json')
+    try:
+        if os.path.isfile(p):
+            with open(p, encoding='utf-8') as f:
+                return {n for n in json.load(f).get('names') or [] if n}
+        g = os.path.join(data, 'globalgamemanagers')
+        if os.path.isfile(g):
+            return monomanager_names(g)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return set()
+
+
+def monomanager_names(src):
+    """MonoManager.m_AssemblyNames of a globalgamemanagers file, a data.unity3d (its path or bytes)."""
+    try:
+        import UnityPy
+    except ImportError:
+        return set()
+    try:
+        env = UnityPy.load(src)
+        for o in env.objects:
+            if o.type.name == 'MonoManager':
+                return {n for n in o.read_typetree().get('m_AssemblyNames') or [] if n}
+    except Exception:                       # noqa: BLE001 - only a hint for staging
+        pass
+    return set()
+
+
+def stage_assemblies(data, tc, out_dir, log=log, managed_files=(), listed=()):
     """The assembly set il2cpp compiles, in out_dir: the game's own assemblies (and Unity's package
     assemblies the build shipped) from <data>/Managed, the IL2CPP player's UnityEngine assemblies
     instead of the desktop ones, and the IL2CPP class libraries (tc['bcl']: bcl_profile) instead of
     the desktop Mono's, following references from the game's assemblies. `managed_files`: assemblies
     compiled instead of the data's copies of the same name, or added (a port's patched
-    Assembly-CSharp, its helper, asmpatch's output). Returns {name: source}."""
+    Assembly-CSharp, its helper, asmpatch's output). `listed`: the data's script assemblies
+    (listed_assemblies): one with a class library's name (a project's Plugins/I18N.dll for code
+    pages, which nothing references) is the game's, staged from its own copy and kept whole, as
+    Unity's build does with a plugin assembly. Returns {name: source}."""
     gm = os.path.join(data, 'Managed')
     eng = os.path.join(tc['pkg'], 'Variations', 'il2cpp', 'Managed')
     bcl = os.path.join(tc['editor'], tc.get('bcl', BCL_DIR))
@@ -855,10 +891,13 @@ def stage_assemblies(data, tc, out_dir, log=log, managed_files=()):
     engine = {n: os.path.join(eng, n) for n in os.listdir(eng) if n.endswith('.dll')}
     override = {os.path.basename(f): os.path.abspath(f) for f in managed_files}
     game = {}
+    listed = set(listed or ())
     for n in sorted(set(os.listdir(gm)) | set(override)):
-        if not n.endswith('.dll') or (n not in override and (is_engine(n) or n in bcl_files)):
+        if not n.endswith('.dll') or (n not in override and (is_engine(n) or n in bcl_files and n not in listed)):
             continue
         game[n] = override.get(n) or os.path.join(gm, n)
+        if n in bcl_files and n in listed and n not in override:
+            log(f'  {n}: a class library\'s name, but one of the game\'s own assemblies (the data lists it): its copy, whole')
     chosen = dict(engine)
     chosen.update(game)
     todo = list(chosen)
@@ -1244,7 +1283,7 @@ def folder_patches(streaming_assets='obb', data_path=False):
 
 def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAGE, keep_cpp=False, dry=False,
           strip='low', unity=None, managed_files=(), asmpatch=None, on_device=False, device_tc=None, link_xml=(),
-          assembly_patches=(), streaming_assets='obb', data_path=False, data_version=None):
+          assembly_patches=(), streaming_assets='obb', data_path=False, data_version=None, listed=None):
     """on_device: run the tools natively on this aarch64 Linux machine (a handheld's setup) with the
     device toolchain (il2cpp_device.py; fetched into device_tc, default <home>/device-arm64) instead
     of Docker; the steps resume after a kill and the compiler jobs fit the memory.
@@ -1252,7 +1291,8 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     reads with System.IO to the asmpatch command (as android-data does for Mono): they are compiled
     in, and il2cpp.json says so, for android-data's options of the same names.
     data_version: the Unity version, when `data` has no serialized file to read it from (`pmunity apk
-    --il2cpp` gives the assemblies and boot.config of an Android build's data.unity3d)."""
+    --il2cpp` gives the assemblies and boot.config of an Android build's data.unity3d), and listed
+    the data's script assemblies (else listed_assemblies(data))."""
     with_patches = folder_patches(streaming_assets, data_path)
     if with_patches and not asmpatch:
         raise SystemExit(f'--streaming-assets {streaming_assets}' + (' --data-path' if data_path else '') +
@@ -1296,7 +1336,9 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     # (android-data --streaming-assets / --data-path check these against their own)
     patches['streaming_assets'] = streaming_assets
     patches['data_path'] = bool(data_path)
-    chosen = stage_assemblies(data, tc, staged, managed_files=managed_files)
+    if listed is None:
+        listed = listed_assemblies(data)
+    chosen = stage_assemblies(data, tc, staged, managed_files=managed_files, listed=listed)
     settings = player_settings(data)
     cpp, cache = os.path.join(work, 'cpp'), os.path.join(work, 'cache')
     so = os.path.join(out, 'lib', abi, 'libil2cpp.so')

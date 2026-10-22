@@ -548,10 +548,13 @@ def player_settings(z, n, log):
     try:
         env = UnityPy.load(z.read(n))
         for o in env.objects:
-            if o.type.name not in ('PlayerSettings', 'BuildSettings'):
+            if o.type.name not in ('PlayerSettings', 'BuildSettings', 'MonoManager'):
                 continue
             t = o.read_typetree()
-            if o.type.name == 'BuildSettings':
+            if o.type.name == 'MonoManager':
+                if t.get('m_AssemblyNames'):            # (up to 2020.1; then ScriptingAssemblies.json)
+                    out['assemblies'] = [a for a in t['m_AssemblyNames'] if a]
+            elif o.type.name == 'BuildSettings':
                 out['graphics_apis'] = list(t.get('m_GraphicsAPIs') or [])
                 out['build_version'] = t.get('m_Version')
             else:
@@ -690,11 +693,12 @@ def il2cpp_refusal(ver):
 
 def il2cpp_stub(zips, dst):
     """What `pmunity il2cpp` reads of a data folder, from an Android build: the assemblies
-    (assets/bin/Data/Managed/*.dll) and boot.config (incremental GC). Returns the assembly count."""
+    (assets/bin/Data/Managed/*.dll), boot.config (incremental GC) and ScriptingAssemblies.json (the
+    script assemblies, 2020.2+). Returns the assembly count."""
     n = 0
     for z in zips:
         for nm in z.namelist():
-            m = re.match(r'^assets/bin/Data/(Managed/[^/]+\.dll|boot\.config)$', nm)
+            m = re.match(r'^assets/bin/Data/(Managed/[^/]+\.dll|boot\.config|ScriptingAssemblies\.json)$', nm)
             if not m or os.path.exists(os.path.join(dst, m.group(1))):
                 continue
             os.makedirs(os.path.dirname(os.path.join(dst, m.group(1))), exist_ok=True)
@@ -764,7 +768,7 @@ def il2cpp_apk(srcs, out_apk, il_out, ver, log):
         f'{os.path.getsize(out_apk) / 2**20:.1f} MiB)')
 
 
-def il2cpp_build(zips, ver, out, tmp, opts, log):
+def il2cpp_build(zips, ver, out, tmp, opts, log, listed=None):
     """`pmunity il2cpp` on the build's assemblies, into <out>/.il2cpp (kept until the layout is
     written, so an interrupted build continues). Returns (il2cpp.json, the IL2CPP player package)."""
     from . import il2cpp as IL
@@ -780,7 +784,8 @@ def il2cpp_build(zips, ver, out, tmp, opts, log):
         info = IL.build(stub, os.path.join(out, IL2CPP_WORK), 'arm64-v8a', home, pkg, opts.get('jobs'),
                         keep_cpp=bool(opts.get('keep_cpp')), strip=opts.get('strip') or 'low',
                         on_device=bool(opts.get('on_device')), device_tc=opts.get('toolchain'),
-                        link_xml=[os.path.abspath(x) for x in opts.get('link_xml') or ()], data_version=ver)
+                        link_xml=[os.path.abspath(x) for x in opts.get('link_xml') or ()], data_version=ver,
+                        listed=listed)
     except UV.Unsupported as ex:
         raise Refused(f'IL2CPP: {ex}')
     if info['unity'] != str(ver):
@@ -973,7 +978,8 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, manage
     data_packs = [a for a in packs if any(x.startswith('assets/') for x in a.names)]
     il_info = None
     if compile_il2cpp:
-        il_info, il_pkg = il2cpp_build([base.z] + [a.z for a in data_packs] + obb_zips, ver, out, tmp, il2cpp, log)
+        il_info, il_pkg = il2cpp_build([base.z] + [a.z for a in data_packs] + obb_zips, ver, out, tmp, il2cpp, log,
+                                       listed=ps.get('assemblies'))
     # write the layout
     log(f'-> {out}')
     apk_out = os.path.join(out, 'base.apk')

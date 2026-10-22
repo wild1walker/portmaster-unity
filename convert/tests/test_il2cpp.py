@@ -377,6 +377,30 @@ class StagingTest(unittest.TestCase):
             self.assertIn('--architecture=ARMv7', a)
             self.assertNotIn('--incremental-g-c-time-slice=3', a)
 
+    def test_listed_class_library_names(self):
+        """an assembly the data lists that has a class library's name (a project's Plugins/I18N.dll) is the
+        game's own: staged from its copy, a root; unlisted ones follow references as before"""
+        with tempfile.TemporaryDirectory() as t:
+            gm, eng, bcl = os.path.join(t, 'Data', 'Managed'), os.path.join(t, 'pkg', 'Variations', 'il2cpp', 'Managed'), \
+                os.path.join(t, 'editor', 'bcl')
+            for d, names in ((gm, ('Assembly-CSharp', 'I18N', 'I18N.CJK', 'System.Xml', 'UnityEngine')),
+                             (eng, ('UnityEngine',)), (bcl, ('mscorlib', 'I18N', 'I18N.CJK', 'System.Xml'))):
+                os.makedirs(d, exist_ok=True)
+                for n in names:
+                    write_assembly(os.path.join(d, n + '.dll'), n)
+            tc = {'pkg': os.path.join(t, 'pkg'), 'editor': os.path.join(t, 'editor'), 'bcl': 'bcl'}
+            got = I.stage_assemblies(os.path.join(t, 'Data'), tc, os.path.join(t, 'st'), log=lambda m: None)
+            self.assertEqual(sorted(got), ['Assembly-CSharp.dll', 'UnityEngine.dll'])
+            with open(os.path.join(t, 'Data', 'ScriptingAssemblies.json'), 'w') as f:
+                json.dump({'names': ['Assembly-CSharp.dll', 'I18N.dll', 'I18N.CJK.dll', 'UnityEngine.dll'], 'types': []}, f)
+            listed = I.listed_assemblies(os.path.join(t, 'Data'))
+            self.assertEqual(listed, {'Assembly-CSharp.dll', 'I18N.dll', 'I18N.CJK.dll', 'UnityEngine.dll'})
+            got = I.stage_assemblies(os.path.join(t, 'Data'), tc, os.path.join(t, 'st'), log=lambda m: None, listed=listed)
+            self.assertEqual(sorted(got), ['Assembly-CSharp.dll', 'I18N.CJK.dll', 'I18N.dll', 'UnityEngine.dll'])
+            self.assertEqual(got['I18N.dll'], os.path.join(gm, 'I18N.dll'))
+            self.assertEqual(got['UnityEngine.dll'], os.path.join(eng, 'UnityEngine.dll'))
+            self.assertEqual(I.listed_assemblies(os.path.join(t, 'none')), set())
+
     def test_link_args(self):
         a = I.link_args(UV.Version('2019.4.8f1'), 'arm64-v8a', '/s', '/l', ['B.dll', 'A.dll'])
         self.assertIn('--rule-set=Conservative', a)
