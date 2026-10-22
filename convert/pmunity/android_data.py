@@ -834,7 +834,7 @@ def edit_globalgamemanagers(src, managed_names, args, log):
         elif n == 'PlayerSettings':
             # (6000.x, 2023.2.20f1: fields UnityPy's trees lack, after the ones changed here)
             t, node = typetrees.read(o, edits=('m_MTRendering', 'mobileMTRenderingBaked', 'androidBlitType',
-                                               'androidUseSwappy'))
+                                               'androidUseSwappy', 'playerMinOpenGLESVersion'))
             if node is not None:
                 notes.append('PlayerSettings read with a fixed type tree (typetrees.py)')
             changed = False
@@ -849,6 +849,15 @@ def edit_globalgamemanagers(src, managed_names, args, log):
             if 'mobileMTRenderingBaked' in t and t['mobileMTRenderingBaked'] != t['m_MTRendering']:
                 t['mobileMTRenderingBaked'] = t['m_MTRendering']
                 notes.append(f'PlayerSettings.mobileMTRenderingBaked = m_MTRendering ({t["m_MTRendering"]})')
+                changed = True
+            # (2020.2+) the lowest OpenGL ES level the game requires (GfxDeviceLevelGL: 2 = ES 3.0, 3 =
+            # ES 3.1, 5 = ES 3.2), which an Android build sets from its graphics APIs and "Require
+            # ES3.1 / ES3.2" settings, a desktop build leaves at 0: 2, as an Android GLES3 build
+            # without those has (the player still uses ES 3.1 / 3.2 where it can: min_sdk below)
+            level = min_gles_level(args, t.get('playerMinOpenGLESVersion'))
+            if level is not None and t.get('playerMinOpenGLESVersion') != level:
+                t['playerMinOpenGLESVersion'] = level
+                notes.append(f'PlayerSettings.playerMinOpenGLESVersion = {level} (OpenGL ES {GLES_LEVELS[level]})')
                 changed = True
             if args.blit != 'keep':
                 t['androidBlitType'] = {'always': 0, 'never': 1, 'auto': 2}[args.blit]
@@ -961,6 +970,59 @@ def mono_etc_dir(src):
             if os.path.isdir(p):
                 return p
     return os.path.join(src, 'Mono', 'etc')
+
+
+GLES_LEVELS = {2: '3.0', 3: '3.1', 5: '3.2'}          # GfxDeviceLevelGL (4: ES 3.1 + AEP)
+
+
+def has_compute_kernels(src):
+    """Whether the game's serialized files hold compute shaders with GLES3 kernels (renderer 11)."""
+    import UnityPy
+    from .shaders import compute as CS
+    from .shaders.step import _is_bundle
+    names = [n for n in sorted(os.listdir(src)) if n.endswith('.assets') or re.match(r'level\d+$', n)]
+    names += [os.path.join('Resources', 'unity_builtin_extra')]
+    for n in names:
+        p = os.path.join(src, n)
+        if not os.path.isfile(p) or _is_bundle(p):
+            continue
+        try:
+            env = UnityPy.load(p)
+        except Exception:
+            continue
+        for o in env.objects:
+            if o.type.name == 'ComputeShader' and any(
+                    v['targetRenderer'] == CS.RENDERER_GLES3 and v['kernels'] for v in o.read_typetree()['variants']):
+                return True
+    return False
+
+
+def min_gles_level(args, have=None):
+    """PlayerSettings.playerMinOpenGLESVersion to write (--min-gles), None to keep the data's."""
+    m = getattr(args, 'min_gles', 'auto')
+    if m == 'keep' or have is None:
+        return None
+    if m == 'auto':
+        return 2 if have < 2 else None
+    return {v: k for k, v in GLES_LEVELS.items()}[m]
+
+
+# Android 5.0 (API 21) is where Unity's Android players start creating OpenGL ES 3.1+ contexts
+# (UnityGetSelectedGLESVersion / IsGLApiAvailable: ES 3.1 AEP and 3.2 need API 21; 2021.1 needs it
+# for ES 3.1 too); below it they run at ES 3.0, without compute shaders. ua_host reports API 19 for
+# converted 32-bit data unless android_package.json gives a min_sdk (runtime/host/ua_host.c).
+GLES31_SDK = 22
+
+
+def min_sdk(args):
+    """android_package.json's min_sdk (--min-sdk): auto = GLES31_SDK for a game with compute
+    kernels (the shaders step's GLES3 ones), else none (0)."""
+    m = getattr(args, 'min_sdk', 'auto')
+    if m == 'auto':
+        if getattr(args, 'compute_kernels', None) is None:
+            args.compute_kernels = has_compute_kernels(args.src)
+        return GLES31_SDK if args.compute_kernels else 0
+    return int(m)
 
 
 def plan(args):
@@ -1393,6 +1455,13 @@ def main(argv=None):
                          f"{ST.SA_DIR}/, with asmpatch's streaming-assets patch (the game's System.IO reads get that "
                          f"folder). loose: only beside the APK, with streaming-assets-all (every read gets the folder). "
                          f"For code that reads StreamingAssets with System.IO (docs/android-data.md)")
+    ap.add_argument('--min-gles', choices=['auto', 'keep', '3.0', '3.1', '3.2'], default='auto',
+                    help="PlayerSettings.playerMinOpenGLESVersion (2020.2+), the OpenGL ES version the game requires: "
+                         "auto = 3.0 where the data has none, as an Android GLES3 build (docs/android-data.md)")
+    ap.add_argument('--min-sdk', default='auto', metavar='API',
+                    help=f"android_package.json's min_sdk, the Android API level ua_host reports (at least): auto = "
+                         f"{GLES31_SDK} for a game with compute kernels (OpenGL ES 3.1 contexts need API 21+), else "
+                         f"none (ua_host's own, 19 for 32-bit players); 0 = none")
     ap.add_argument('--data-path', action='store_true',
                     help=f"the game's reads of Application.dataPath that reach System.IO (on Android: the APK or OBB file) "
                          f"get {ST.FOLDER}/ beside the APK (asmpatch data-path), with the data folder's own files (those "
@@ -1885,6 +1954,10 @@ def pack(args, log):
     write_plugin_map(args, zdir, log)
     # read by ua_host from beside the APK (package, build id, APK name): file names only, so the
     # folder can be copied anywhere
+    sdk = min_sdk(args)
+    if sdk:
+        res['min_sdk'] = sdk
+        log(f'pack: min_sdk {sdk} (ua_host reports Android API {sdk}: OpenGL ES 3.1+, compute shaders)')
     pj = {k: (os.path.basename(v) if k in ('apk', 'main_obb', 'patch_obb') else v) for k, v in res.items()}
     json.dump(dict(pj, meta_data={'unity.build-id': bid}), open(os.path.join(zdir, 'android_package.json'), 'w'), indent=1)
     log(f'pack: build-id {bid}; host: getPackageCodePath -> {apk}, getObbDir -> {zdir}, '

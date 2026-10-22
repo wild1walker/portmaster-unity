@@ -91,6 +91,19 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
     absent on Android, unused).
   - PlayerSettings is left as is: m_MTRendering on, androidBlitType 0 = Always. Use `--mt-rendering`
     and `--blit never` to try others.
+  - `PlayerSettings.playerMinOpenGLESVersion` (2020.2+), the OpenGL ES version the game requires
+    (GfxDeviceLevelGL: 2 = ES 3.0, 3 = ES 3.1, 5 = ES 3.2): an Android build has 2 unless "Require
+    ES3.1 / ES3.2" is ticked, a desktop build 0; it becomes 2 (`--min-gles 3.0|3.1|3.2|keep`).
+- **OpenGL ES 3.1 and compute shaders: the API level.** Unity's Android players pick their GLES
+  version from the build's graphics APIs, trying ES 3.2, 3.1 + AEP, 3.1, 3.0 in that order, and
+  only create ES 3.1+ contexts from Android 5.0 (2017.4's `IsGLApiAvailable`: AEP and 3.2 need API
+  21, 3.1 API 18; the 2021.1 player ran at ES 3.0 at API 19 and at ES 3.1+ at 22). At ES 3.0
+  `SystemInfo.supportsComputeShaders` is false and GLES 3.1 programs are not used, whatever the
+  device has (`gles::InitCaps` sets compute for ES 3.1 - 3.2 and GL 4.3+ only). ua_host reports
+  API 19 for converted 32-bit data, so a game with compute kernels (the shaders step's GLES3 ones)
+  gets `"min_sdk": 22` in `android_package.json` (`--min-sdk auto`, the default; a number or 0 to
+  choose), and ua_host reports that level. Checked in the emulated rig with Nainai's Recipe
+  (2021.1): at API 19 every `FindKernel` failed, at 22 compute is supported and its kernels found.
 - Shaders: the Android GLES3 device uses shader platform 9, the same one the converter added.
 - Textures in main data: ASTC 4x4 / Alpha8 / RGBA32. Audio: Vorbis + PCM in FSB5 `.resource`
   files, the same FMOD; streamed clips are read through the VFS.
