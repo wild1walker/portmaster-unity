@@ -1314,6 +1314,35 @@ def il2cpp_mismatch(info, data_unity, player_unity):
     return None
 
 
+def il2cpp_folder_patches(info, streaming_assets, data_path):
+    """(error, [warnings]) for packing an IL2CPP build (its il2cpp.json) with --streaming-assets and
+    --data-path: asmpatch's patches for them are compiled into libil2cpp.so (`pmunity il2cpp
+    --streaming-assets / --data-path`), so the folders this run puts beside the APK must be the ones
+    that code reads. A build whose patches read a folder or archive this packing leaves empty is
+    refused; folders made for code that never reads them are a warning, as for Mono without asmpatch."""
+    built = info.get('streaming_assets', 'obb')
+    built_dp = bool(info.get('data_path'))
+    if built != streaming_assets:
+        if built == 'obb':
+            warn = [f'--streaming-assets {streaming_assets}: the IL2CPP build has no streaming-assets patch (its '
+                    f'il2cpp.json: obb), so the files are beside the APK but the game\'s code still reads the jar path '
+                    f'(`pmunity il2cpp --streaming-assets {streaming_assets} --asmpatch ...`)']
+        else:
+            return (f'built with --streaming-assets {built} (asmpatch\'s {ST.PATCH[built]} patch is compiled in: '
+                    f'its reads look for StreamingAssets ' + ('beside the APK only' if built == 'loose' else
+                                                              'beside the APK and in the archive') +
+                    f'), packed with --streaming-assets {streaming_assets}: use the same mode for both'), []
+    else:
+        warn = []
+    if built_dp and not data_path:
+        return ('built with --data-path (asmpatch\'s data-path patch is compiled in): pack with --data-path too, '
+                f'which puts {ST.FOLDER}/ beside the APK'), []
+    if data_path and not built_dp:
+        warn.append(f'--data-path: the IL2CPP build has no data-path patch, so {ST.FOLDER}/ is beside the APK but '
+                    f'the game\'s code still reads Application.dataPath (`pmunity il2cpp --data-path --asmpatch ...`)')
+    return None, warn
+
+
 def check_source(args):
     """The data's Unity version (supported range, the player's Unity line) and build kind: a
     compressed build (data.unity3d) must be unpacked first; an IL2CPP build has no assemblies for
@@ -1360,6 +1389,11 @@ def check_source(args):
         why = il2cpp_mismatch(args.il2cpp_info, args.unity, args.player_unity)
         if why:
             raise UV.Unsupported(f'--il2cpp {args.il2cpp}: {why}')
+        why, warn = il2cpp_folder_patches(args.il2cpp_info, getattr(args, 'streaming_assets', 'obb'),
+                                          getattr(args, 'data_path', False))
+        if why:
+            raise UV.Unsupported(f'--il2cpp {args.il2cpp}: {why}')
+        args.warnings += warn
         args.runtime = f'IL2CPP ({args.il2cpp_info["abi"]}, metadata v{args.il2cpp_info["metadata_version"]})'
     # native plugins: what the managed code P/Invokes and what the port gives each (plugins.py)
     from . import plugins as PL
@@ -1513,6 +1547,13 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if not args.pkg:
         sys.exit('--pkg: the unpacked Unity Android player package is needed (or set PMUNITY_ANDROID_PLAYER)')
+    if args.il2cpp:
+        # the game's code is in libil2cpp.so: what changes it went to `pmunity il2cpp`
+        given = [o for o, v in (('--asmpatch', args.asmpatch), ('--managed-file', args.managed_file),
+                                ('--assembly-patch', args.assembly_patch)) if v]
+        if given:
+            sys.exit(f'{", ".join(given)} with --il2cpp: the assemblies are compiled into libil2cpp.so, so these go to '
+                     f'`pmunity il2cpp` (its options of the same names), not to android-data')
     if args.name is None:
         base = os.path.basename(os.path.normpath(args.src))
         args.name = base[:-5] if base.endswith('_Data') else os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(args.src))))).replace('.app', '')
@@ -1564,10 +1605,11 @@ def main(argv=None):
         except Exception:
             state = {}
     asmpatch_notes = run_asmpatch(args, log) if args.asmpatch else []
-    if args.data_path and not args.asmpatch:
+    # (--il2cpp: the patches are compiled in; check_source compared them with these options)
+    if args.data_path and not args.asmpatch and not args.il2cpp:
         log("WARNING: --data-path without --asmpatch: Game_Data/ is beside the APK, but the game's code still reads "
             "Application.dataPath (asmpatch data-path)")
-    if args.streaming_assets != 'obb' and not args.asmpatch:
+    if args.streaming_assets != 'obb' and not args.asmpatch and not args.il2cpp:
         log(f'WARNING: --streaming-assets {args.streaming_assets} without --asmpatch: the files are beside the APK, '
             f'but the game\'s code still reads the jar path (asmpatch {ST.PATCH[args.streaming_assets]})')
     items = plan(args)

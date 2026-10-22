@@ -260,6 +260,9 @@ case "$1" in
           for f in libmain.so libunity.so; do echo x > "$L/Libs/armeabi-v7a/$f"; done
           for f in libmono.so libmonobdwgc-2.0.so libMonoPosixHelper.so; do echo x > "$L/MonoLibs/armeabi-v7a/$f"; done;;
   unpack) rm "$2/data.unity3d"; touch "$2/globalgamemanagers";;
+  il2cpp) out=$3; while [ $# -gt 0 ]; do case "$1" in --pkg) pkg=$2;; esac; shift; done
+          L=$pkg/Variations/il2cpp/Release/Libs/arm64-v8a; mkdir -p "$out/lib/arm64-v8a" "$L"
+          echo x > "$out/lib/arm64-v8a/libil2cpp.so"; for f in libmain.so libunity.so; do echo x > "$L/$f"; done;;
   android-data) while [ $# -gt 0 ]; do case "$1" in --out) out=$2;; --name) name=$2;; --src) src=$2;; esac; shift; done
           mkdir -p "$out/zip/assets/bin/Data/Managed/etc"; echo apk > "$out/zip/$name.apk"
           echo '{}' > "$out/android_data_report.json"; rm -rf "$src"/*;;
@@ -508,6 +511,47 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertFalse(os.path.isfile(z))                          # (the archive is removed once built)
             self.assertIn('removing game-linux.zip: not needed to play', P._read(os.path.join(g, 'patchlog.txt')))
             self.assertIn('keep_installers=0', P._read(os.path.join(g, 'setup.txt')))
+
+    def test_setup_il2cpp_arm64(self):
+        """the il2cpp-arm64 setup: what changes the game's code (the port's assembly patches, asmpatch with
+        the opt-in patches for StreamingAssets and dataPath read with System.IO) goes to the IL2CPP build,
+        and android-data packs the same StreamingAssets and dataPath modes"""
+        with tempfile.TemporaryDirectory() as t:
+            put(os.path.join(t, 'mypatch.sh'), '#!/bin/sh\n')
+            game, out = self.make(t, {'port': {'route': 'il2cpp-arm64'},
+                                      'android_data': {'streaming_assets': 'both', 'data_path': True},
+                                      'files': {'assembly_patches': [{'name': 'Assembly-CSharp.dll', 'files': ['mypatch.sh'],
+                                                                      'command': 'sh {setup}/files/mypatch.sh {managed} {out}'}]}})
+            self.assertIn('asmpatch?', json.load(open(os.path.join(P.TEMPLATES, 'il2cpp-arm64', 'route.json')))['package'])
+            self.assertTrue(P.needs_asmpatch(json.load(open(os.path.join(out, 'port.build.json')))['config']))
+            g = os.path.join(t, 'ports', 'mygame')
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            put(os.path.join(g, 'setup', 'asmpatch'), '#!/bin/sh\n')
+            g, r, log = self.run_setup(t, out, {})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
+            S = os.path.join(g, 'setup')
+            self.assertIn(f"--assembly-patch Assembly-CSharp.dll sh {S}/files/mypatch.sh {{managed}} {{out}}", il)
+            self.assertIn(f"--streaming-assets both --data-path --asmpatch '{S}/asmpatch' --only=", il)
+            ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
+            self.assertIn('--streaming-assets both --data-path', ad)
+            for o in ('--asmpatch', '--managed-file', '--assembly-patch'):
+                self.assertNotIn(o, ad)
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+            self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
+            # asmpatch = "auto" and the modes left at obb: asmpatch's own choice of patches, nothing opt-in
+            shutil.rmtree(g)
+            game, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}, 'android_data': {'asmpatch': 'auto'}})
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            put(os.path.join(g, 'setup', 'asmpatch'), '#!/bin/sh\n')
+            os.unlink(os.path.join(t, 'pm.log'))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
+            self.assertTrue(il.endswith(f"--streaming-assets obb --asmpatch '{os.path.join(g, 'setup', 'asmpatch')}'"), il)
+
 
 @unittest.skipUnless(shutil.which('bash'), 'needs bash')
 class ApkRouteTest(unittest.TestCase):

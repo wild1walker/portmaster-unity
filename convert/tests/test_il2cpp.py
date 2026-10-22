@@ -558,6 +558,65 @@ class AndroidDataIl2cppTest(unittest.TestCase):
             self.assertRegex(g, r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
             self.assertEqual(g, AD.il2cpp_app_guid(os.path.join(md, 'global-metadata.dat')))
 
+    def test_folder_patches(self):
+        """StreamingAssets / dataPath read with System.IO: the packing must match the patches compiled in"""
+        f = AD.il2cpp_folder_patches
+        self.assertEqual(f({}, 'obb', False), (None, []))                       # (an il2cpp.json from before)
+        self.assertEqual(f({'streaming_assets': 'both'}, 'both', False), (None, []))
+        self.assertEqual(f({'streaming_assets': 'loose', 'data_path': True}, 'loose', True), (None, []))
+        why, warn = f({'streaming_assets': 'obb'}, 'both', False)              # (no patch: as Mono without asmpatch)
+        self.assertIsNone(why)
+        self.assertIn('still reads the jar path', warn[0])
+        self.assertIn('--streaming-assets both', warn[0])
+        for built, packed in (('both', 'obb'), ('both', 'loose'), ('loose', 'obb'), ('loose', 'both')):
+            why, _ = f({'streaming_assets': built}, packed, False)
+            self.assertIn(f'built with --streaming-assets {built}', why)
+        self.assertIn('pack with --data-path', f({'data_path': True}, 'obb', False)[0])
+        why, warn = f({}, 'obb', True)
+        self.assertIsNone(why)
+        self.assertIn('no data-path patch', warn[0])
+
+    def test_code_options_refused(self):
+        """with --il2cpp, what changes the game's code belongs to `pmunity il2cpp`"""
+        with tempfile.TemporaryDirectory() as t:
+            for extra in (['--asmpatch', 'asmpatch'], ['--managed-file', 'a.dll'],
+                          ['--assembly-patch', 'Assembly-CSharp.dll', 'cp x {out}']):
+                with self.assertRaises(SystemExit) as cm:
+                    AD.main(['--src', t, '--pkg', t, '--out', os.path.join(t, 'o'), '--il2cpp', t] + extra)
+                self.assertIn('go to `pmunity il2cpp`', str(cm.exception.code))
+
+
+class CodePatchTest(unittest.TestCase):
+    def test_folder_patches(self):
+        self.assertEqual(I.folder_patches(), [])
+        self.assertEqual(I.folder_patches('both'), ['streaming-assets'])
+        self.assertEqual(I.folder_patches('loose', True), ['streaming-assets-all', 'data-path'])
+        with self.assertRaises(SystemExit):
+            I.folder_patches('folder')
+        # the patches are asmpatch's: without it there is nothing to compile them from
+        with self.assertRaises(SystemExit) as cm:
+            I.build('/nonexistent', '/nonexistent-out', streaming_assets='both')
+        self.assertIn('need --asmpatch', str(cm.exception.code))
+
+    def test_assembly_patches(self):
+        with tempfile.TemporaryDirectory() as t:
+            managed = os.path.join(t, 'Managed')
+            os.makedirs(managed)
+            with open(os.path.join(managed, 'Assembly-CSharp.dll'), 'wb') as f:
+                f.write(b'original')
+            script = os.path.join(t, 'patch.py')
+            with open(script, 'w') as f:
+                f.write('import sys\nprint("ok patched")\n'
+                        'open(sys.argv[2] + "/" + sys.argv[3], "wb").write(open(sys.argv[1] + "/" + sys.argv[3], "rb").read() + b"+p")\n')
+            cmd = f'{sys.executable} -I {script} {{managed}} {{out}} Assembly-CSharp.dll'
+            got = I.run_assembly_patches([('Assembly-CSharp.dll', cmd)], managed, os.path.join(t, 'work'))
+            self.assertEqual(got, [os.path.join(t, 'work', 'assembly-patch', 'Assembly-CSharp.dll')])
+            self.assertEqual(open(got[0], 'rb').read(), b'original+p')
+            # a command that writes nothing (or fails) stops the build
+            with self.assertRaises(SystemExit) as cm:
+                I.run_assembly_patches([('Other.dll', f'{sys.executable} -c pass')], managed, os.path.join(t, 'work'))
+            self.assertIn('no Other.dll written', str(cm.exception.code))
+
 
 if __name__ == '__main__':
     unittest.main()
