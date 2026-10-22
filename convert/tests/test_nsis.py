@@ -99,14 +99,18 @@ def installer(layout, files):
         hb = chunks(h) + bytes(3)
         body = struct.pack('<Q', 0) + struct.pack('<Q', (1 << 63) | len(hb)) + hb + data
         return pre + first_header(0x70, len(h), 28 + len(body)) + body
-    if layout == 'solid':
+    if layout in ('solid', 'solid-header-chunks'):
         stream, offs = b'', []
         for name, d in files:
             offs.append((name, len(stream)))
             stream += struct.pack('<Q', len(d)) + d
         h = header(offs, wide=True)
-        hb = lzma_block(struct.pack('<Q', len(h)) + h)
-        body = struct.pack('<Q', len(stream)) + len(hb).to_bytes(3, 'little') + hb + chunks(stream)
+        if layout == 'solid':
+            hb = lzma_block(struct.pack('<Q', len(h)) + h)
+            hb = len(hb).to_bytes(3, 'little') + hb
+        else:   # a header bigger than a chunk (an editor installer's: 3.4 MB), here in 64-byte chunks
+            hb = chunks(struct.pack('<Q', len(h)) + h, 64)
+        body = struct.pack('<Q', len(stream)) + hb + chunks(stream)
         return pre + first_header(0x70, len(h), 28 + len(body)) + body
     raise ValueError(layout)
 
@@ -148,6 +152,10 @@ class NsisLayoutTest(unittest.TestCase):
 
     def test_unity6_solid(self):
         ns = self.check('solid')
+        self.assertTrue(ns.solid)
+
+    def test_unity6_solid_header_chunks(self):
+        ns = self.check('solid-header-chunks')
         self.assertTrue(ns.solid)
 
     def test_dechunk(self):

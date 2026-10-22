@@ -11,7 +11,8 @@ installers (an NSIS of 2025, first-header flag 0x40) cut LZMA data into chunks o
   - per-file blocks (e.g. 6000.0.58, 6000.1, 6000.2, 6000.3.11): 8-byte block words (top bit:
     compressed), the chunks of a block end with a zero length;
   - solid (e.g. 6000.0.85, 6000.3.26, 6000.4 - 6000.6): the first header holds the 64-bit
-    uncompressed size, then the header is one chunk and all files follow as one stream of 2 MiB
+    uncompressed size, then the header comes in chunks of its own (one for a player installer,
+    two for the Windows editor installer's 3.4 MB header) and all files follow as one stream of 2 MiB
     chunks (each file: 8-byte length + data, at its offset in that stream). A file is read by
     walking the chunk lengths (3 bytes per 2 MiB chunk, one small range request each on a
     kept-alive connection) to the chunks it spans.
@@ -156,16 +157,20 @@ class Nsis:
         get = lambda p, n: head[p:p + n] if p + n <= len(head) else self.s.read(p, n)
         if self.chunked:
             self.usize = struct.unpack_from('<Q', head, self.fh + 28)[0]
-            if self.usize:                   # solid: header chunk, then the data stream's chunks
+            if self.usize:                   # solid: header chunks, then the data stream's chunks
                 self.solid = True
-                p = self.fh + 36
-                n = int.from_bytes(get(p, 3), 'little')
-                blk = get(p, 3 + n + 3)
-                h = decompress(blk[3:3 + n])
-                if struct.unpack_from('<Q', h, 0)[0] != self.hdr_len:
+                p, h = self.fh + 36, b''
+                while len(h) < 8 + self.hdr_len:  # (an editor installer's header takes more than one)
+                    n = int.from_bytes(get(p, 3), 'little')
+                    if n == 0:
+                        break
+                    blk = get(p, 3 + n + 3)
+                    h += decompress(blk[3:3 + n])
+                    p += 3 + n
+                if len(h) < 8 or struct.unpack_from('<Q', h, 0)[0] != self.hdr_len or len(h) != 8 + self.hdr_len:
                     raise SystemExit('unknown Unity 6 installer layout (header chunk)')
-                self.h = h[8:8 + self.hdr_len]
-                self.chunk_pos = [p + 3 + n]  # compressed position of each data chunk found so far
+                self.h = h[8:]
+                self.chunk_pos = [p]          # compressed position of each data chunk found so far
                 self.chunk_len = [int.from_bytes(blk[3 + n:], 'little')]
                 self.end = self.fh + 28 + self.total
                 fhsize = 36
