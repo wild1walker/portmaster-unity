@@ -767,6 +767,68 @@ class ApkRouteTest(unittest.TestCase):
                 self.assertIn('needs a 32-bit (armhf) userland', r.stdout)
                 self.assertNotIn('unpacking the setup tools', r.stdout)
 
+    @unittest.skipIf(os.path.exists('/lib/ld-linux-armhf.so.3'), 'a 32-bit userland here: the setup takes armeabi-v7a')
+    def test_mono_build_il2cpp(self):
+        """player.il2cpp: a Mono build (armeabi-v7a only) also on 64-bit-only systems: the release ships
+        ua_host64, port.json asks for no 32-bit userland, and the setup there has `pmunity apk --il2cpp
+        --on-device` compile its code (pmunity il2cpp stubbed: it fails once, then the rerun goes on)"""
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t, abis=('armeabi-v7a',), backend='mono',
+                         extra={'assets/bin/Data/Managed/Assembly-CSharp.dll': b'MZ', 'assets/bin/Data/boot.config': b''})
+            rep = P.check(a)
+            self.assertIn('player.il2cpp = true', ' '.join(rep['notes']))
+            with self.assertRaises(SystemExit) as cm:          # (an IL2CPP build has nothing to compile)
+                cp = os.path.join(t, 'c.json')
+                with open(cp, 'w') as f:
+                    json.dump({'player': {'il2cpp': True}}, f)
+                P.new('il', self.apk(t, 'il', 'il.apk'), cp, os.path.join(t, 'port-il'), log=lambda m: None)
+            self.assertIn('player.il2cpp', str(cm.exception))
+            cfg = {'player': {'il2cpp': True}}
+            g = self.setup_port(t, a, [a], cfg=cfg)
+            out = os.path.join(t, 'port')
+            self.assertIn('PLAYER_IL2CPP=1', P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            pj = json.loads(P._read(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn("compiles the game's code with Unity's IL2CPP", pj['attr']['inst'])
+            self.assertIn('without a 32-bit userland the first launch compiles', P._read(os.path.join(out, 'README.md')))
+            self.assertTrue(P.wants('ua_host64', json.load(open(os.path.join(out, 'port.build.json')))['config']))
+            log = os.path.join(t, 'il2cpp.log')
+            with open(os.path.join(g, 'setup', 'pmunity', 'il2cpp.py'), 'a') as f:
+                f.write(f'''
+
+def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, **kw):   # (the test's stand-in)
+    import json as J
+    with open({log!r}, 'a') as f:
+        f.write(J.dumps([sorted(os.listdir(os.path.join(data, 'Managed'))), out, home, pkg, kw['on_device']]) + '\\n')
+    os.makedirs(os.path.join(out, 'partial'), exist_ok=True)
+    if not os.path.exists(os.path.join(out, 'partial', 'once')):
+        open(os.path.join(out, 'partial', 'once'), 'w').close()
+        raise SystemExit('killed while compiling')
+    L = os.path.join(pkg, 'Variations', 'il2cpp', 'Release', 'Libs', 'arm64-v8a')
+    os.makedirs(L, exist_ok=True)
+    for n in ('libmain.so', 'libunity.so'):
+        open(os.path.join(L, n), 'w').write('player')
+    for rel in ('lib/arm64-v8a/libil2cpp.so', 'Data/Managed/Metadata/global-metadata.dat'):
+        os.makedirs(os.path.dirname(os.path.join(out, rel)), exist_ok=True)
+        open(os.path.join(out, rel), 'wb').write(struct.pack('<II', 0xFAB11BAF, 29))
+    return {{'unity': '2021.3.4f1', 'metadata_version': 29, 'libil2cpp_bytes': 8}}
+''')
+            r = self.run_setup(g)
+            self.assertIn("PATCH_FAIL_MSG:Compiling the game's code failed", r.stdout, r.stdout + r.stderr)
+            self.assertTrue(os.path.isdir(os.path.join(g, 'gamedata', '.setup', 'apk', '.il2cpp', 'partial')))
+            r = self.run_setup(g)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('the players this system runs, in this order: arm64', r.stdout)
+            calls = [json.loads(x) for x in P._read(log).splitlines()]
+            self.assertEqual(len(calls), 2)
+            W = os.path.join(g, 'gamedata', '.setup')
+            self.assertEqual(calls[1], [['Assembly-CSharp.dll'], os.path.join(W, 'apk', '.il2cpp'), os.path.join(W, 'il2cpp-home'),
+                                        os.path.join(W, 'il2cpp-home', '2021.3.4f1', 'player-arm64-v8a'), True])
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+            info = json.loads(P._read(os.path.join(g, 'android_package.json')))
+            self.assertEqual((info['abi'], info['backend'], info['il2cpp']['from']), ('arm64-v8a', 'il2cpp', 'mono'))
+            self.assertFalse(os.path.exists(W))
+
     def test_choose_abi_preferences(self):
         from pmunity import apk as A
         have = ['arm64-v8a', 'armeabi-v7a']

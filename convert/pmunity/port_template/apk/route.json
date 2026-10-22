@@ -1,10 +1,10 @@
 {
   "title": "the game's own Android build (APK and OBBs, XAPK, APKS, AAB), run by ua_host: armeabi-v7a on a 32-bit userland (ua_host), arm64-v8a on 64-bit-only systems (ua_host64)",
-  "defaults": {"player": {"abi": "auto"}},
+  "defaults": {"player": {"abi": "auto", "il2cpp": false}},
   "config": ["port", "game", "player", "runtime", "files"],
   "config_doc": {
     "game": "# what the player provides: the files the setup takes from gamedata/ (data: globs; .obb files\n# always), the build kind (android), the Unity versions and the Android package the setup accepts\n# (empty: any), how READMEs and messages describe it (what), its size in MB",
-    "player": "# the player in the APK: backend (from the APK); abis = the APK's ABIs the port runs, and so\n# the runtimes the release ships (armeabi-v7a: ua_host, 32-bit; arm64-v8a: ua_host64); abi = the\n# one taken where the system runs both: auto = armeabi-v7a where the system has a 32-bit\n# userland, else arm64-v8a; arm64-v8a = the 64-bit one wherever the APK has it",
+    "player": "# the player in the APK: backend (from the APK); abis = the APK's ABIs the port runs, and so\n# the runtimes the release ships (armeabi-v7a: ua_host, 32-bit; arm64-v8a: ua_host64); abi = the\n# one taken where the system runs both: auto = armeabi-v7a where the system has a 32-bit\n# userland, else arm64-v8a; arm64-v8a = the 64-bit one wherever the APK has it; il2cpp = true\n# (a Mono build, armeabi-v7a only): where the system has no 32-bit userland, the setup compiles\n# the build's code with Unity's IL2CPP for Unity's arm64 IL2CPP player (hours on the handheld,\n# Wi-Fi, about 1.6 GB free; the release also ships ua_host64)",
     "files": "# the porter's own files (paths relative to this file): hooks = {game|post_install = \"x.sh\"}\n# sourced by the setup (a game hook may set INPUTS=(<files>), the build's files), extra = files\n# for the port folder"
   },
   "files": {
