@@ -333,8 +333,9 @@ sets the ES device level.
    unpack`, GLCore41/43 programs (2018.1+), the 2021.3+ OBB GUID (the OBB's `unity_obb_guid` at
    its root, the APK's `assets/unity_obb_guid`), D3D11 programs of Windows builds of every line
    (2019.1+: the GL binding info Unity's GL compiler writes).
-5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.x on (and of any
-   .NET 4.x game of 2017.4/2018.4), never run on this runtime. Bring-up test: Boehm GC thread
+5. **Mono 5/6 (`libmonobdwgc-2.0.so`)**: the only Mono runtime from 2019.2 on (and that of any
+   .NET 4.x game of 2017.4/2018.4; 2019.1 still has the deprecated .NET 3.5 one, `libmono.so`,
+   and its .NET 3.5 games ship the 2.0.0.0 mscorlib, which android-data reads), never run on this runtime. Bring-up test: Boehm GC thread
    suspend/restart signals through the loader's signal translation, `sigaltstack`,
    `libmono-native.so` (2021.3+, needs its SONAME dependency `libmonoboehm-2.0.so` loaded first).
 6. ~~**UnityPlayer callbacks added since 2018.4**~~ (done in runtime/jni, with handheld answers):

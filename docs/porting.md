@@ -72,6 +72,16 @@ Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from
 pmunity.winbcl <Game>_Data <dir>` fetches them from Unity (about 5 MB) and prints the
 `--managed-file` options for `android-data` (in a port: `android_data.args`).
 
+macOS and Linux builds take the `android` route with their OpenGL Core programs. A build made
+without OpenGL Core has none to translate: Metal only, or Vulkan only (every HDRP Linux build,
+which also rules out `box64`'s GL modes). Unity's macOS builds listed OpenGL Core next to Metal
+up to 2020.1 and Metal alone from 2020.3 on: of the free itch.io macOS builds whose settings were
+read (2026-10-22), all 14 games of 2017.3 - 2020.1 have OpenGL Core, and 17 of the 18 of 2020.3 -
+6000.6 Metal only (macOS-only games among them). `port check` says so (for a compressed build
+too: it reads the settings inside `data.unity3d`), and the converter's shaders step stops with
+the platforms the shaders have; the game's Linux or Windows build, where it has one, has
+programs to translate.
+
 Native plugins: `python -m pmunity plugins <Data>` lists the libraries the game's code P/Invokes
 and what the port gives each: built-in stubs answering as a PC without the service (Steam,
 Discord, EOS), or ARM libraries of the game's exact version that the porter supplies (FMOD, Wwise;
