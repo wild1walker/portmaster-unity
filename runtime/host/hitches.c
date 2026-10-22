@@ -130,33 +130,6 @@ static const map_ent *find_map(uintptr_t v)
     return NULL;
 }
 
-#if defined(__aarch64__)
-// v is a return address: the instruction before it is a BL or BLR (or the pointer-authenticating
-// BLRAA/BLRAB forms)
-static int after_call(uintptr_t v, const map_ent *m)
-{
-    if (!code_aligned(v) || v < m->lo + 4) return 0;
-    uint32_t i = *(const uint32_t *)(v - 4);
-    return (i & 0xFC000000) == 0x94000000          // BL imm26
-        || (i & 0xFFFFFC1F) == 0xD63F0000          // BLR Xn
-        || (i & 0xFEFFF800) == 0xD63F0800;         // BLRAA/BLRAAZ/BLRAB/BLRABZ
-}
-#else
-// v is a return address: the instruction before it is a BL/BLX (ARM or Thumb)
-static int after_call(uintptr_t v, const map_ent *m)
-{
-    if (v & 1) {
-        uintptr_t a = v - 1;
-        if (a < m->lo + 4) return 0;
-        uint16_t h1 = *(const uint16_t *)(a - 4), h2 = *(const uint16_t *)(a - 2);
-        if ((h1 & 0xF800) == 0xF000 && (h2 & 0xC000) == 0xC000) return 1;      // BL / BLX imm
-        return (h2 & 0xFF87) == 0x4780;                                        // BLX reg
-    }
-    if ((v & 3) || v < m->lo + 4) return 0;
-    uint32_t i = *(const uint32_t *)(v - 4);
-    return (i & 0x0F000000) == 0x0B000000 || (i & 0xFE000000) == 0xFA000000 || (i & 0x0FFFFFF0) == 0x012FFF30;
-}
-#endif
 
 // Mono, for JIT code: loaded lazily from the Android libmono.so (pointer arguments only: no softfp issue)
 static void *(*mono_root)(void);
@@ -284,7 +257,7 @@ static void sample(pid_t tid, double ms, int prof)
     int frames = 0;
     for (long i = 0; got > 0 && i < got / (long)sizeof stack[0] && frames < MAX_FRAMES && len < (int)sizeof line - 64; i++) {
         const map_ent *m = find_map(stack[i]);
-        if (!m || !after_call(stack[i], m)) continue;
+        if (!m || !is_return_address(stack[i], m->lo)) continue;
         line[len++] = ' ';
         len += fmt(line + len, sizeof line - len, stack[i]);
         frames++;
