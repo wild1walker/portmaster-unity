@@ -3,14 +3,17 @@
 # ships them as x86-64 programs only, so `pmunity il2cpp` keeps just the NDK's target files
 # (sysroot, libc++, libgcc) and puts this script where il2cpp's Android build looks for its tools:
 #   <ndk>/toolchains/llvm/prebuilt/linux-x86_64/bin/clang, clang++
-#   <ndk>/toolchains/<triple>-4.9/prebuilt/linux-x86_64/bin/<triple>-objcopy, -strip, -ar
+#   <ndk>/toolchains/<triple>-4.9/prebuilt/linux-x86_64/bin/<triple>-objcopy, -strip, -ar, -nm
+#   <ndk>/toolchains/llvm/prebuilt/linux-x86_64/<triple>/bin/objcopy, ... and bin/llvm-objcopy, ...
+#     (what Unity 2021.x / 2022.x's Bee build runs from NDK r21d / r23b)
 # It runs the system's LLVM ($PMUNITY_LLVM, default /usr/lib/llvm-14/bin) with what the NDK's
 # clang has built in or finds next to itself:
 #   --sysroot=<ndk>/toolchains/llvm/prebuilt/linux-x86_64/sysroot (r19+: the unified sysroot with
 #     per-API libraries; r16b builds pass --sysroot themselves),
 #   --gcc-toolchain=<the NDK's GCC folder> (libgcc, crtbegin.o),
 #   -rtlib=libgcc -unwindlib=none: the NDK's libgcc carries the unwinder (arm: libunwind, which
-#     il2cpp links itself); upstream clang would look for compiler-rt's Android builtins,
+#     il2cpp links itself); upstream clang would look for compiler-rt's Android builtins
+#     (r23b, which has no libgcc: those of its own clang, below),
 #   -fuse-ld=lld for the NDK's GNU linkers (bfd, gold).
 # -D__ANDROID_API__=N is dropped: clang defines it from the target (-target <triple><API>); a
 # target without the API level (r16b builds) gets N appended.
@@ -28,13 +31,17 @@ case $name in
   *objcopy) exec "$llvm/llvm-objcopy" "$@" ;;
   *strip) exec "$llvm/llvm-strip" "$@" ;;
   *-ar | ar) exec "$llvm/llvm-ar" "$@" ;;
-  *-nm) exec "$llvm/llvm-nm" "$@" ;;
+  *-nm | nm) exec "$llvm/llvm-nm" "$@" ;;
   clang++) cc=$llvm/clang++ ;;
   *) cc=$llvm/clang ;;
 esac
 tc=$(dirname "$bin")                         # toolchains/llvm/prebuilt/linux-x86_64
-api=; pic=
-for a do case $a in -D__ANDROID_API__=*) api=${a#-D__ANDROID_API__=} ;; -fPIC | -fpic) pic=1 ;; esac; done
+api=; pic=; stdlib=; px=
+for a do
+  case $a in -D__ANDROID_API__=*) api=${a#-D__ANDROID_API__=} ;; -fPIC | -fpic) pic=1 ;; -stdlib=* | -nostdinc++ | -nostdlib++ | -xc) stdlib=1 ;; esac
+  [ "$px" = -x ] && [ "$a" = c ] && stdlib=1          # (C: no C++ library to choose)
+  px=$a
+done
 link=1; sysroot=; gcc=; prev=
 for a do
   shift
@@ -58,7 +65,21 @@ for a do
   set -- "$@" "$a"
 done
 [ -z "$sysroot" ] && [ -d "$tc/sysroot" ] && set -- --sysroot="$tc/sysroot" "$@"
+# C++ with the unified sysroot's libc++ (r19+), which the NDK's clang++ uses by default: Unity
+# 2021.x / 2022.x's Bee build passes no -stdlib (2017.4 - 2020.3's builder passes -stdlib=libc++)
+[ "$name" = clang++ ] && [ -z "$stdlib" ] && [ -d "$tc/sysroot/usr/include/c++/v1" ] && set -- "$@" -stdlib=libc++
 [ -z "$gcc" ] && [ -d "$tc/lib/gcc" ] && set -- --gcc-toolchain="$tc" "$@"
-[ -n "$link" ] && set -- "$@" -rtlib=libgcc -unwindlib=none -fuse-ld=lld
+# the runtime library: the NDK's libgcc (with its unwinder) up to r21d; r23b has none, but
+# compiler-rt's builtins and a static libunwind in its clang's resource folder, which the link
+# then takes (-resource-dir: only libraries are looked up there at link time)
+rt="-rtlib=libgcc -unwindlib=none"; libgcc=
+for g in "$tc"/lib/gcc/*/*/libgcc.a; do [ -f "$g" ] && libgcc=1; done   # (r23b: lib/gcc has only crtbegin.o)
+if [ -n "$link" ] && [ -z "$libgcc" ]; then
+  for r in "$tc"/lib64/clang/*/lib/linux; do
+    [ -d "$r" ] && rt="-rtlib=compiler-rt -unwindlib=libunwind -resource-dir=${r%/lib/linux}"
+  done
+fi
+# shellcheck disable=SC2086
+[ -n "$link" ] && set -- "$@" $rt -fuse-ld=lld
 [ -n "$PMUNITY_IL2CPP_CCLOG" ] && echo "$cc $*" >> "$PMUNITY_IL2CPP_CCLOG"
 exec "$cc" "$@"

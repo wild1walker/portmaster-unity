@@ -23,7 +23,8 @@ runs tools/asmpatch on the game's `Managed` and compiles what it changed (as `an
 assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data.
 **Unity versions**: 2017.4 - 2022.3. Their il2cpp is a .NET program the container's (or, with
 `--on-device`, the handheld's) .NET runs; from 2021.2 the class libraries are per platform and the
-build takes `unityaot-linux`, as Unity's Android builds do. From 2023.1 (Unity 6 included) il2cpp
+build takes `unityaot-linux`, as Unity's Android builds do, and il2cpp builds the C++ with Bee,
+whose native backend pmunity stands in for (below, "Unity 2021.2+: Bee"). From 2023.1 (Unity 6 included) il2cpp
 is a natively compiled program for the editor's own system (the Windows installer's `il2cpp.exe`
 is Windows x86-64 code, with no `il2cpp.dll`): not runnable here yet, so the route stops with a
 message (a Linux x86-64 il2cpp under emulation would be the way).
@@ -68,11 +69,16 @@ or of what is built from them, is in this repository.
 
 NDK per Unity line (what that line's IL2CPP checks for): r13b for 2017.1 - 2018.2 (their Android
 extension: "IL2CPP requires r13b"), r16b for 2018.3 - 2019.2, r19 for 2019.3 - 2020.3, r21d for
-2021.x - 2022.1, r23b for 2022.2+. The NDK's compilers and binutils are x86-64
+2021.x - 2022.1, r23b for 2022.2+ (with r21d and r23b the API 22 libraries too, which 2021.x and
+2022.x link against). The NDK's compilers and binutils are x86-64
 programs, so only its target files are fetched; `tools/il2cpp/ndk-clang.sh` is put where
 il2cpp's Android toolchain runs them (`toolchains/llvm/prebuilt/linux-x86_64/bin/clang++`,
-`<triple>-objcopy`, ...) and runs Ubuntu's clang 14 and lld with the NDK's sysroot, libc++
-and libgcc (the NDK's clang finds those next to itself). The tools thus run natively on arm64
+`<triple>-objcopy`, `<triple>/bin/objcopy`, `llvm-objcopy`, ...) and runs Ubuntu's clang 14 and
+lld with the NDK's sysroot, libc++ and libgcc (the NDK's clang finds those next to itself, and its
+clang++ takes libc++ without being told: the stand-in adds `-stdlib=libc++` to C++ when the
+command has no `-stdlib`, as 2021.x's Bee build's commands have none; r23b has no libgcc, and its
+links take compiler-rt's builtins and a static libunwind from the NDK clang's resource folder,
+`lib64/clang/12.0.8`, as the NDK's clang does). The tools thus run natively on arm64
 hosts (Apple Silicon) as on x86-64 ones. Differences from the NDK's own clang 8 (r19): lld instead
 of GNU ld, no `-g` (debug info changes no code; `PMUNITY_IL2CPP_DEBUG_INFO=1` keeps it), and the
 newer compiler's code generation.
@@ -103,7 +109,9 @@ newer compiler's code generation.
    descriptors; every other assembly (the game's, the packages', the UnityEngine modules) is a
    root and kept whole: a desktop build carries no list of the types its scenes and assets use
    (the editor's TypesInScenes / editor data), so nothing the data might name is removed.
-   `--strip none` compiles everything whole (3x the C++). 2017.x's UnityLinker is the older one
+   2022.x's linker resolves, with `--use-editor-options`, only the assemblies it is given by
+   `--allowed-assembly` (one per assembly of the build, as the editor passes them): every staged
+   assembly is. `--strip none` compiles everything whole (3x the C++). 2017.x's UnityLinker is the older one
    (Mono's linker with Unity's steps and options), run as that editor runs it: `--api=NET_2_0[_Subset]|NET_4_6
    --core-action=link --i18n=none --descriptor-directory=<il2cpp/LinkerDescriptors>` (for `net45` a
    copy where each `*45.xml` replaces the file without 45), the game's and the packages'
@@ -120,7 +128,8 @@ newer compiler's code generation.
    (the incremental GC that line turns on in the player needs the write barriers in the code), and
    `--baselib-directory` (2020.1+). il2cpp's own builder compiles the generated C++ and libil2cpp
    and links `libil2cpp.so` against the NDK (API 21 for arm64; for armv7 19, 16 with NDK r13b and
-   r16b; libc++ static, GNU libstdc++ with r13b and r16b), then strips it. The .NET Framework
+   r16b; 22 for both from 2021.x; libc++ static, GNU libstdc++ with r13b and r16b), then strips it
+   (from 2021.2 il2cpp only writes that build as a graph, which pmunity runs: below). The .NET Framework
    builds of the tools (2017.4 - 2019.4) run on Mono, as in Unity's
    Linux and macOS editors (UnityLinker uses .NET Framework-only types); the .NET Core / .NET
    builds (2020.1+) on .NET 8 with roll-forward.
@@ -131,7 +140,45 @@ newer compiler's code generation.
 Output (`<out>`): `lib/<abi>/libil2cpp.so`; `Data/Managed/Metadata/global-metadata.dat`,
 `Data/Managed/Resources/*.dat`, `Data/Managed/etc/` (Mono's config files, which IL2CPP builds
 ship); `il2cpp.json`. The build files are in `<out>/.work` (`--keep-cpp` keeps the C++ and the
-object cache; logs: `unitylinker.log`, `il2cpp.log`, `cc.log` with every compiler command).
+object cache; logs: `unitylinker.log`, `il2cpp.log`, `cc.log` with every compiler command,
+`build.log` with the Bee graph's commands that printed something, 2021.2+).
+
+### Unity 2021.2+: Bee
+
+From 2021.2 il2cpp's C++ build is Bee, Unity's build system: il2cpp's build program (inside
+il2cpp.dll) writes the build as a graph, `<cache>/buildstate/bee.dag.json`, and `bee_backend`
+runs it. That backend is a native program, and the editor installers carry it only for their own
+system (the Windows one: `il2cpp/build/deploy/bee_backend/win-x64/bee_backend.exe`); il2cpp on
+Linux runs `bee_backend/linux-x64/bee_backend`. As for the NDK's compilers, pmunity puts a
+stand-in there (convert/pmunity/il2cpp_bee.py, a POSIX sh script, written into the fetched
+`Editor/Data` like ndk-clang.sh into the NDK):
+
+- without `--dagfilejson` (no graph yet) it exits 4, Bee's way of asking for the build program;
+  Bee runs it, which writes the graph, and calls the backend again with `--dagfilejson`;
+- then it notes its arguments (the target, `FinalProgram`) and exits 0: il2cpp ends with "Build
+  succeeded with 0 successful nodes";
+- pmunity runs the graph: the nodes the target needs (both of Bee's dependency kinds,
+  `ToBuildDependencies` before a node and the `ToUseDependencies` of those), the commands
+  (`RunShellCommand`: `/bin/sh -c` in the graph's folder with the node's environment) at most
+  `--jobs` at a time, in one container kept running for them (`docker exec`), or natively with
+  `--on-device`; the `WriteTextFile` nodes (response files, "lump" files that `#include` several
+  libil2cpp sources; 2022.x: `WriteFile`, the bytes in the graph's `bee.dag.payloads`) and
+  `CopyFiles` nodes directly; a node whose input another node writes waits for it. A command whose record in
+  `<cache>/buildstate/pmunity-done.jsonl` (its command line, environment, and its inputs' contents:
+  il2cpp writes all the C++ again when it converts again, mostly unchanged) still matches and whose outputs exist is not run again, so an interrupted build continues,
+  as with il2cpp's own object cache in 2017.4 - 2020.3. The first failing command stops the build
+  (no new commands start) with its output and command line.
+
+il2cpp also hands the build program the way to start il2cpp itself: `deploy/il2cpp` (the editor's
+apphost) when it exists, else the .NET in the editor's `il2cpp-deps`, which the installers do not
+have ("Run build.pl to populate il2cpp-deps"): pmunity writes a `deploy/il2cpp` that runs
+il2cpp.dll on the .NET in `PATH` (in this build mode nothing runs it).
+
+What the graph does is what Unity's Android build does with that NDK: about 600 compiles (the
+generated C++, libil2cpp in lumps of a few files, the Boehm GC), one link with a response file
+(`-fuse-ld=bfd`, which the stand-in turns into lld, `-static-libstdc++`, `baselib.a`, `-llog`),
+`objcopy --strip-all` / `--only-keep-debug` / `--add-gnu-debuglink`, and copies of
+`libil2cpp.so`, `libil2cpp.dbg.so`, `libil2cpp.sym.so` and `Data/` into `lib/<abi>/`.
 
 `android-data --il2cpp <out>` then packs the data as for Mono, but with IL2CPP's `Managed/`
 (Metadata, Resources, etc) instead of the assemblies and Mono's dllmap config, and checks the
@@ -215,7 +262,11 @@ finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` 
   Mono (it uses .NET Framework-only types).
 - **Memory**: UnityLinker and the conversion run with their CPU affinity set to one CPU (the 2017.4 -
   2019.4 tools size their thread pools by the CPUs they may use); .NET with
-  `DOTNET_GCConserveMemory=9` (2020.3 conversion: 766 -> 666 MB). Compiler jobs: one per 200 MB of
+  `DOTNET_GCConserveMemory=9` (2020.3 conversion: 766 -> 666 MB). Under a cgroup memory limit (a
+  container standing in for a handheld) .NET caps its heap at 75% of the limit, 750 MB of 1 GB,
+  which 2021.3's il2cpp exceeded converting a URP game (`OutOfMemoryException`); there the cap is
+  the limit plus the cgroup's swap, less 64 MB (`DOTNET_GCHeapHardLimit`), as a handheld's setup,
+  which has no such limit, may use all memory and swap. Compiler jobs: one per 200 MB of
   `MemAvailable` beyond 250 MB, at most one per CPU (`PMUNITY_IL2CPP_JOB_MB`,
   `PMUNITY_IL2CPP_RESERVE_MB`; `--jobs` sets it). The compiler wrappers hold job slots (POSIX sh,
   `mkdir` locks; a killed run's slots are taken over), so however many compilers il2cpp starts,
@@ -300,7 +351,11 @@ for the 64-bit-only ones (no `/lib/ld-linux-armhf.so.3`).
 
 So far run in the arm64 containers only: the 2018.4 game end to end (the same UnityLinker output
 as the PC route but for each assembly's MVID; 677 objects), the 2019.4 and 2020.3 games of the
-table below through UnityLinker and the conversion into compiling. Not yet on a handheld.
+table below through UnityLinker and the conversion into compiling, and the 2021.3 game end to end
+in its port's setup on a 64-bit-only stand-in (1 GB + 1 GB swap): UnityLinker 0.4 min (peak 548 MB),
+the conversion 10.6 min (CPU 2.4 min, peak 987 MB: above .NET's 750 MB container cap, see
+"Memory"), the Bee graph's 605 commands in 9 min with 3 jobs (CPU 6.3 min, peak 599 MB); the
+whole setup 32 min, and the installed game reaches its main menu. Not yet on a handheld.
 
 ## AOT limits
 
@@ -341,10 +396,14 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
 | 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; sound since the loader raises small thread stacks (below) |
 | same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
+| 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
+| 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
-2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3); the metadata versions match those of real IL2CPP builds
-of these lines (a 2020.3 Android build's is 27). The layout of the APK matches Unity's IL2CPP
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3); the metadata versions match those of real IL2CPP builds
+of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31). 2021.x and 2022.x
+builds have no `Managed/etc` (nor have Unity's: Cat Cove Inn's, The Ump Show's APKs), and their
+APKs get `assets/bin/Data/unity_app_guid` (android-data, above). The layout of the APK matches Unity's IL2CPP
 builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
 `Managed/Resources/mscorlib.dll-resources.dat`, the 18 `Managed/etc/mono` files (2020.3), no
 assemblies; `libil2cpp.so` needs the same four libraries (`liblog`, `libm`, `libdl`, `libc`).
@@ -380,9 +439,9 @@ What the runs showed:
 
 ## Not tested yet
 
-- Unity 2021.x / 2022.x (NDK r21d / r23b: the NDK selection and `ndk_wanted` know them, r23b's
-  compiler-rt builtins and libunwind in `lib64/clang/<ver>/lib/linux` are fetched but the link
-  flags for them are not); 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
+- Unity 2021.1 - 2021.2 and 2022.1 (NDK r21d, like 2021.3; 2021.1 has no Bee yet if its editor
+  installer has no `bee_backend` folder: then il2cpp's own builder runs, as for 2020.3), armv7
+  with 2021.x / 2022.x; 2017.1 - 2017.3 and 2018.1 - 2018.2 (NDK r13b; no 64-bit ARM player);
   2017.4 .NET 4.x games (`net45`: none among the free 2017.4 builds surveyed, all were .NET 3.5),
   .NET 3.5 games of 2018.x (`legacyunity` / `net20` with the newer UnityLinker), the ".NET 2.0"
   (`net20`) profile.
@@ -429,6 +488,14 @@ What the runs showed:
 - 2020.3: `il2cpp/build/deploy/netcoreapp3.1/` (self-contained Windows .NET Core builds: only the
   application files are fetched, the .NET runtime it carries is left out by its `deps.json`),
   `baselib.a` from the player's `StaticLibs/<abi>`; il2cpp takes `--jobs`.
+- 2021.3: `il2cpp/build/deploy/il2cpp.dll` (.NET 5/6 build), class libraries `unityaot-linux`,
+  NDK r21d, API 22; the C++ build is Bee's graph (above, "Unity 2021.2+: Bee"): about 600 compiles
+  (libil2cpp in lumps), `-fuse-ld=bfd` (lld here) with `-Wl,--wrap,sigaction`, objcopy for
+  `libil2cpp.so` / `.dbg.so` / `.sym.so`; libunity re-extracts the IL2CPP data unless
+  `assets/bin/Data/unity_app_guid` matches `il2cpp/unity.ver`.
+- 2022.3: as 2021.3 with NDK r23b (no libgcc: compiler-rt and libunwind, above), `WriteFile`
+  graph nodes with a payloads file, UnityLinker's `--allowed-assembly` list; libunity looks up
+  fewer `il2cpp_*` functions by name (162).
 
 ## Debugging a build
 

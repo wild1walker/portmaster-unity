@@ -41,6 +41,7 @@ The build is the PC route's (il2cpp.py), with what a 1 GB, 4 x Cortex-A53 handhe
     build continues where it stopped (il2cpp's object cache; conversion and compilation run as two
     il2cpp invocations).
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -700,6 +701,28 @@ def cgroup_limits():
     return cpus, mem
 
 
+def dotnet_heap_limit(root='/sys/fs/cgroup'):
+    """Bytes for .NET's GC heap limit under a cgroup memory limit, else None. In a container with
+    a memory limit .NET caps its heap at 75% of it (a 1 GB stand-in for a handheld: 750 MB, which
+    Unity 2021.3's il2cpp exceeded converting a URP game: OutOfMemoryException); a handheld's setup
+    has no such limit and its .NET may use all memory and swap. So: the limit plus the swap the
+    cgroup may use, less 64 MB."""
+    def num(name):
+        try:
+            with open(os.path.join(root, name)) as f:
+                v = f.read().strip()
+        except OSError:
+            return None
+        return None if v == 'max' else int(v) if v.isdigit() else None
+    mem = num('memory.max')
+    if mem is None:
+        return None
+    swap = num('memory.swap.max')
+    if swap is None:                    # (no limit of its own: the system's free swap)
+        swap = meminfo().get('SwapFree', 0) << 20
+    return max(mem * 3 // 4, mem + swap - (64 << 20))
+
+
 def cpu_count():
     n = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)
     q = cgroup_limits()[0]
@@ -798,6 +821,9 @@ class Native:
             'PMUNITY_IL2CPP_BIG_KB': str(BIG_KB),
             'PMUNITY_IL2CPP_KILLED': self.killed_log,
         })
+        hard = dotnet_heap_limit()
+        if hard and 'DOTNET_GCHeapHardLimit' not in os.environ:
+            e['DOTNET_GCHeapHardLimit'] = hex(hard)
         return e
 
     def run(self, cmd, logname, quiet=False, affinity=None):
@@ -859,6 +885,61 @@ class Native:
                          'out of memory, most likely')
             raise SystemExit(f'{prog} failed (exit {rcode}){hint}; full log: {path}')
         return secs
+
+
+    @contextlib.contextmanager
+    def shell(self):
+        """Many commands (Unity 2021.2+'s Bee graph, il2cpp_bee): yields sh(command, cwd, env) ->
+        (exit code, output), callable from several threads; the peak memory of the commands running
+        at once and their CPU time are kept as the 'build.log' step's."""
+        jd = os.path.join(self.work, 'jobs')
+        shutil.rmtree(jd, ignore_errors=True)            # (slots of a killed run)
+        os.makedirs(jd, exist_ok=True)
+        base = self.env()
+        pids, lock, stop = set(), threading.Lock(), threading.Event()
+        peak, cpu = [0], [0.0]
+
+        def watch():
+            while not stop.wait(2):
+                with lock:
+                    now = list(pids)
+                kb = 0
+                for pid in now:
+                    try:
+                        kb += tree_rss_kb(pid)
+                    except OSError:
+                        pass
+                peak[0] = max(peak[0], kb)
+
+        def sh(command, cwd, env):
+            p = subprocess.Popen(['/bin/sh', '-c', command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, errors='replace', env=dict(base, **env), cwd=cwd, start_new_session=True)
+            with lock:
+                pids.add(p.pid)
+            ru = None
+            try:
+                out = p.stdout.read()
+                p.stdout.close()
+                _, status, ru = os.wait4(p.pid, 0)
+                p.returncode = os.waitstatus_to_exitcode(status)
+            except BaseException:
+                os.killpg(p.pid, 9)
+                raise
+            finally:
+                with lock:
+                    pids.discard(p.pid)
+                    if ru is not None:
+                        cpu[0] += ru.ru_utime + ru.ru_stime
+            return p.returncode, out
+        th = threading.Thread(target=watch, daemon=True)
+        th.start()
+        try:
+            yield sh
+        finally:
+            stop.set()
+            th.join()
+            self.peaks['build.log'] = max(self.peaks.get('build.log', 0), peak[0] // 1024)
+            self.cpu['build.log'] = self.cpu.get('build.log', 0) + round(cpu[0])
 
 
 # --------------------------------------------------------------------------- the steps, resumable
@@ -1019,8 +1100,13 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     total, cost = sources_estimate(cpp, editor)
     before = count_objects(cache)
     comp = [w for w in icmd if w != '--convert-to-cpp']
-    log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
-        '(the long part: one to a few hours on a 4-core ARM handheld)')
+    from . import il2cpp_bee
+    if il2cpp_bee.uses_bee(editor):         # (2021.2+: the build graph says what, il2cpp_bee counts it)
+        log(f'il2cpp: compiling ({box.jobs} at a time), then linking (the long part: one to a few hours on a '
+            '4-core ARM handheld)')
+    else:
+        log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
+            '(the long part: one to a few hours on a 4-core ARM handheld)')
     cclog = CompileLog(os.path.join(work, 'cc.log'))
     left0 = cost * max(0, total - before) / max(1, total)     # (what a resumed build has left, roughly)
 
@@ -1038,19 +1124,29 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
         if so and os.path.exists(os.path.join(os.path.dirname(so), n)):
             os.unlink(os.path.join(os.path.dirname(so), n))
     killed = len(box.killed())
+    from . import il2cpp as I
+
+    def compile_():
+        # (Unity 2021.2+: il2cpp writes the Bee build graph, whose commands then run here, il2cpp_bee)
+        I.clear_bee_graph(editor, cache)
+        return box.run(comp, 'il2cpp.log') + I.run_bee_graph(box, editor, cache, work, progress=bee_progress)
+
+    def bee_progress(n, total, el):
+        eta = f', about {max(1, el / n * (total - n) / 60):.0f} min left' if n >= 5 else ''
+        return f'  compiled {n} of {total} ({100 * n // max(1, total)}%), {el / 60:.0f} min{eta}'
     try:
-        t = box.run(comp, 'il2cpp.log')
+        t = compile_()
     except SystemExit:
         if len(box.killed()) == killed or box.jobs == 1:
             raise
         # a compiler ran out of memory: once more, one at a time (the objects made so far are kept)
         log(f'il2cpp: a compiler was killed (out of memory, most likely): going on with one job at a time')
         box.jobs = 1
-        t = box.run(comp, 'il2cpp.log')
+        t = compile_()
     secs += t
     box.progress = None
-    log(f'il2cpp: compiled and linked in {t / 60:.1f} min (CPU {box.cpu["il2cpp.log"] / 60:.1f} min, '
-        f'peak {box.peaks["il2cpp.log"]} MB)')
+    log(f'il2cpp: compiled and linked in {t / 60:.1f} min (CPU {(box.cpu["il2cpp.log"] + box.cpu.get("build.log", 0)) / 60:.1f} min, '
+        f'peak {max(box.peaks["il2cpp.log"], box.peaks.get("build.log", 0))} MB)')
     for n in SIDE_FILES:
         p = os.path.join(os.path.dirname(so), n) if so else None
         if p and os.path.exists(p):

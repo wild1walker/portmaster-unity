@@ -328,6 +328,23 @@ class CaTest(unittest.TestCase):
 
 
 class JobsTest(unittest.TestCase):
+    def test_dotnet_heap_limit(self):
+        """under a cgroup memory limit .NET gets the limit and the cgroup's swap (less 64 MB) instead
+        of its own 75%; without a limit (a handheld's setup) nothing is set"""
+        with tempfile.TemporaryDirectory() as t:
+            self.assertIsNone(D.dotnet_heap_limit(t))
+            with open(os.path.join(t, 'memory.max'), 'w') as f:
+                f.write('max\n')
+            self.assertIsNone(D.dotnet_heap_limit(t))
+            with open(os.path.join(t, 'memory.max'), 'w') as f:
+                f.write(str(1 << 30) + '\n')
+            with open(os.path.join(t, 'memory.swap.max'), 'w') as f:
+                f.write(str(1 << 30) + '\n')
+            self.assertEqual(D.dotnet_heap_limit(t), (2 << 30) - (64 << 20))
+            with open(os.path.join(t, 'memory.swap.max'), 'w') as f:
+                f.write('0\n')
+            self.assertEqual(D.dotnet_heap_limit(t), (1 << 30) - (64 << 20))
+
     def test_auto(self):
         mb = lambda total, avail: {'MemTotal': total, 'MemAvailable': avail}
         self.assertEqual(D.auto_jobs(4, mb(973, 600)), 1)               # a 1 GB handheld

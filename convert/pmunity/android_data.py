@@ -1156,12 +1156,26 @@ def il2cpp_items(args, items, data):
     # Unity 2020.x extracts that data to <external files>/il2cpp unless il2cpp/unity.ver holds
     # boot.config's buildDate (an IL2CPP build writes one; a desktop build has none): a value
     # from the metadata, so the copy is redone exactly when the IL2CPP build changes
+    metadata = os.path.join(args.il2cpp, 'Data', 'Managed', 'Metadata', 'global-metadata.dat')
     if args.unity.major == 2020:
         import hashlib
-        with open(os.path.join(args.il2cpp, 'Data', 'Managed', 'Metadata', 'global-metadata.dat'), 'rb') as f:
+        with open(metadata, 'rb') as f:
             args.il2cpp_build_date = 6 * 10 ** 17 + int(hashlib.sha256(f.read()).hexdigest(), 16) % 10 ** 17
         items = [(d, s, 'il2cppboot' if os.path.basename(d) == 'boot.config' else a) for d, s, a in items]
+    # 2021.x+: the stamp is assets/bin/Data/unity_app_guid (a GUID an Android build writes; without
+    # it libunity logs "unity_app_guid is empty. Will re-extract il2cpp resources on next run" and
+    # copies the data at every start): one from the metadata, as above
+    elif args.unity.major >= 2021:
+        items.append((os.path.join(data, 'unity_app_guid'), metadata, 'il2cppguid'))
     return items
+
+
+def il2cpp_app_guid(metadata):
+    """unity_app_guid for an IL2CPP build: a GUID (8-4-4-4-12, as Unity writes) from its metadata."""
+    import hashlib
+    with open(metadata, 'rb') as f:
+        h = hashlib.sha256(f.read()).hexdigest()
+    return f'{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}'
 
 
 # The player's built-in resources: assets/bin/Data/unity default resources up to 2023.1, then
@@ -1672,6 +1686,9 @@ def main(argv=None):
         elif act == 'monoconfig':
             txt = mono_config_text(open(src).read(), [d.split('=', 1) for d in args.dllmap])
             write_bytes(dst, txt.encode())
+            how = 'written'
+        elif act == 'il2cppguid':                       # (il2cpp_items)
+            write_bytes(dst, il2cpp_app_guid(src).encode())
             how = 'written'
         elif act == 'il2cppboot':                       # (il2cpp_items)
             txt = open(src, encoding='utf-8', errors='replace').read()

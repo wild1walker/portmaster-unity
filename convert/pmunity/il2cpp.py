@@ -45,6 +45,7 @@ Unity's files stay where the porter downloads them; nothing of them is in this r
 """
 import argparse
 import concurrent.futures
+import contextlib
 import fnmatch
 import json
 import os
@@ -57,6 +58,7 @@ import time
 import urllib.request
 import zlib
 
+from . import il2cpp_bee as BEE
 from . import unity_version as UV
 
 ABIS = {'arm64-v8a': ('ARM64', 'aarch64-linux-android', 21),
@@ -65,8 +67,14 @@ ABIS = {'arm64-v8a': ('ARM64', 'aarch64-linux-android', 21),
 
 def api_level(rev, abi):
     """The Android API level il2cpp's Android toolchain builds for: 21 on arm64; on armv7 16 with
-    NDK r13b / r16b (Unity 2017.1 - 2019.2), 19 from r19 (2019.3+)."""
+    NDK r13b / r16b (Unity 2017.1 - 2019.2), 19 from r19 (2019.3+). Unity 2021.x and 2022.x
+    (NDK r21d, r23b; their Bee build) link for API 22 on both (ndk_apis)."""
     return 16 if abi == 'armeabi-v7a' and rev in GNU_NDKS else ABIS[abi][2]
+
+
+def ndk_apis(rev, abi):
+    """The API levels whose libraries (sysroot/usr/lib/<triple>/<api>) are fetched from that NDK."""
+    return sorted({api_level(rev, abi)} | ({22} if rev in BEE_NDKS else set()))
 
 
 IMAGE = 'ubuntu:24.04'                   # stock; the tools are in <home>/root (tools/il2cpp/root.sh)
@@ -89,6 +97,7 @@ NDKS = [  # (first Unity line, name, Pkg.Revision, zip)
     ((2022, 2), 'r23b', '23.1.7779620', 'android-ndk-r23b-linux.zip'),
 ]
 GNU_NDKS = ('r13b', 'r16b')              # GNU binutils layout: platforms/, sources/cxx-stl, gnustl
+BEE_NDKS = ('r21d', 'r23b')              # the NDKs of Unity 2021.x / 2022.x, whose il2cpp builds with Bee (API 22)
 METADATA_MAGIC = 0xFAB11BAF
 # the first 2017.4 release with a 64-bit ARM IL2CPP player, and the line's last
 ARM64_2017 = (16, '2017.4.40f1')
@@ -434,10 +443,12 @@ def fetch_editor(version, dest, installer=None, bcl=BCL_DIR):
     return dest
 
 
-def ndk_wanted(name, rev, abi):
-    """NDK zip member -> relative path (without the top folder) when il2cpp's Android build needs it."""
+def ndk_wanted(name, rev, abi, apis=None):
+    """NDK zip member -> relative path (without the top folder) when il2cpp's Android build needs it
+    (apis: the per-API library folders, default ndk_apis)."""
     _, triple, _ = ABIS[abi]
     api = api_level(rev, abi)
+    apis = ndk_apis(rev, abi) if apis is None else apis
     parts = name.split('/', 1)
     if len(parts) < 2:
         return None
@@ -463,7 +474,7 @@ def ndk_wanted(name, rev, abi):
         return rel                        # (usr/local/include: libandroid_support's headers, API < 21)
     if r.startswith(f'sysroot/usr/lib/{triple}/'):
         rest = r[len(f'sysroot/usr/lib/{triple}/'):]
-        return rel if '/' not in rest or rest.startswith(f'{api}/') else None
+        return rel if '/' not in rest or rest.split('/', 1)[0] in {str(a) for a in apis} else None
     if r.startswith(f'lib/gcc/{triple}/') or r.startswith(f'{triple}/lib'):
         return rel if 'ldscripts' not in r else None
     if re.match(r'^lib64/clang/[^/]+/lib/linux/', r) and ('android' in r or f'/{triple.split("-")[0]}/' in r or '/arm/' in r):
@@ -471,11 +482,34 @@ def ndk_wanted(name, rev, abi):
     return None
 
 
+def ndk_api_dir(ndk, rev, abi, api):
+    """The per-API library folder of the unified sysroot (r19+), else None."""
+    if rev in GNU_NDKS:
+        return None
+    return os.path.join(ndk, 'toolchains', 'llvm', 'prebuilt', 'linux-x86_64', 'sysroot', 'usr', 'lib', ABIS[abi][1], str(api))
+
+
 def fetch_ndk(rev_name, zipname, abi, dest):
     mark = os.path.join(dest, f'.complete-{abi}')
-    if os.path.isfile(mark):
-        return dest
     url = NDK_BASE + zipname
+    apis = ndk_apis(rev_name, abi)
+    if os.path.isfile(mark):
+        # a folder fetched before an API level was added (r21d / r23b: 22): only those libraries
+        more = [a for a in apis if ndk_api_dir(dest, rev_name, abi, a) and
+                not os.path.isfile(os.path.join(ndk_api_dir(dest, rev_name, abi, a), 'libc.so'))]
+        if not more:
+            return dest
+        log(f'NDK {rev_name} ({abi}): the API {", ".join(map(str, more))} libraries from {url}')
+        dirs = tuple(f'/{ABIS[abi][1]}/{a}/' for a in more)
+        got = RemoteZip(url).extract(lambda n: (lambda r: r if r and any(x in r for x in dirs) else None)(
+            ndk_wanted(n, rev_name, abi, more)), dest)
+        with open(mark) as f:
+            info = json.load(f)
+        info['apis'] = apis
+        info['files'] = info.get('files', 0) + len(got)
+        with open(mark, 'w') as f:
+            json.dump(info, f)
+        return dest
     log(f'NDK {rev_name} ({abi}): sysroot, C++ runtime and libgcc from {url}')
     z = RemoteZip(url)
     got = z.extract(lambda n: ndk_wanted(n, rev_name, abi), dest)
@@ -483,7 +517,7 @@ def fetch_ndk(rev_name, zipname, abi, dest):
         raise SystemExit(f'{url}: not an NDK archive (no source.properties)')
     install_ndk_shims(dest, abi)
     with open(mark, 'w') as f:
-        json.dump({'ndk': rev_name, 'zip': url, 'files': len(got)}, f)
+        json.dump({'ndk': rev_name, 'zip': url, 'files': len(got), 'apis': apis}, f)
     return dest
 
 
@@ -492,12 +526,22 @@ def install_ndk_shims(ndk, abi):
     with open(os.path.join(TOOLS, 'ndk-clang.sh'), 'rb') as f:
         script = f.read()
     _, triple, _ = ABIS[abi]
-    paths = ['toolchains/llvm/prebuilt/linux-x86_64/bin/clang', 'toolchains/llvm/prebuilt/linux-x86_64/bin/clang++']
+    llvm = 'toolchains/llvm/prebuilt/linux-x86_64/'
+    paths = [llvm + 'bin/clang', llvm + 'bin/clang++']
     for tool in ('objcopy', 'strip', 'ar', 'nm'):
         paths.append(f'toolchains/{triple}-4.9/prebuilt/linux-x86_64/bin/{triple}-{tool}')
-        paths.append(f'toolchains/llvm/prebuilt/linux-x86_64/bin/{triple}-{tool}')
+        paths.append(f'{llvm}bin/{triple}-{tool}')
+        paths.append(f'{llvm}{triple}/bin/{tool}')        # (r21d's binutils, which Unity 2021.x's Bee build runs)
+        paths.append(f'{llvm}bin/llvm-{tool}')            # (r23b has LLVM's only)
     for p in paths:
-        _write(os.path.join(ndk, p), script, 0o755)
+        dst = os.path.join(ndk, p)
+        try:
+            with open(dst, 'rb') as f:
+                if f.read() == script and os.access(dst, os.X_OK):
+                    continue                # (unchanged: its time stays, which the Bee graph's records use)
+        except OSError:
+            pass
+        _write(dst, script, 0o755)
 
 
 def player_wanted(abi):
@@ -557,6 +601,7 @@ def toolchain(version, abi, home, pkg=None, bcl=BCL_DIR):
     editor = fetch_editor(version, os.path.join(vdir, 'editor'), bcl=bcl)
     for rel in fix_editor_sources(editor):
         log(f'{rel}: armv7 asm clobber lists as in later Unity releases (SOURCE_FIXES)')
+    BEE.install(editor)                          # (2021.2+: the stand-in for Bee's native backend)
     name, rev, zipname = ndk_for(version)
     ndk = fetch_ndk(name, zipname, abi, os.path.join(home, 'ndk-' + name))
     install_ndk_shims(ndk, abi)                  # (again: the script may be newer than the fetch)
@@ -980,7 +1025,7 @@ class Container:
         ms = sorted({os.path.realpath(p) for p in mounts})
         self.mounts = [m for m in ms if not any(m != o and m.startswith(o + os.sep) for o in ms)]
 
-    def run(self, cmd, logname, quiet=False):
+    def docker_args(self, name):
         # --cpuset-cpus as well as --cpus: il2cpp starts one compiler per CPU it sees (Mono counts the
         # CPUs it may run on, not the quota)
         tmp = os.path.join(self.work, 'tmp')
@@ -995,9 +1040,20 @@ class Container:
             d += ['--user', f'{os.getuid()}:{os.getgid()}']
         if os.environ.get('PMUNITY_IL2CPP_DEBUG_INFO'):
             d += ['-e', 'PMUNITY_IL2CPP_DEBUG_INFO=1']
+        if name:
+            d += ['--name', name]
         for m in self.mounts:
             d += ['-v', f'{m}:{m}']
-        d += ['-w', self.work, self.image] + cmd
+        return d + ['-w', self.work, self.image]
+
+    @staticmethod
+    def name_for(step):
+        # PMUNITY_IL2CPP_DOCKER_NAME: a name for `docker ps` / `docker kill` (+ the step)
+        n = os.environ.get('PMUNITY_IL2CPP_DOCKER_NAME')
+        return f'{n}-{step}' if n else None
+
+    def run(self, cmd, logname, quiet=False):
+        d = self.docker_args(self.name_for(logname.split('.')[0])) + cmd
         path = os.path.join(self.work, logname)
         t0 = time.time()
         with open(path, 'w') as lf:
@@ -1013,6 +1069,53 @@ class Container:
             prog = next((os.path.basename(w) for w in cmd if w.endswith(('.exe', '.dll'))), cmd[0])
             raise SystemExit(f'{prog} failed (exit {rcode}); full log: {path}')
         return time.time() - t0
+
+    @contextlib.contextmanager
+    def shell(self):
+        """A container kept running for many commands (the Bee graph's): yields
+        sh(command, cwd, env) -> (exit code, output), callable from several threads."""
+        name = self.name_for('cc') or f'pmunity-il2cpp-{os.getpid()}-{int(time.time())}'
+        subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
+        r = subprocess.run(['docker', 'run', '-d'] + self.docker_args(name)[2:] + ['sleep', 'infinity'],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f'docker run failed: {r.stderr.strip()}')
+
+        def sh(command, cwd, env):
+            e = [w for k, v in sorted(env.items()) for w in ('-e', f'{k}={v}')]
+            p = subprocess.run(['docker', 'exec', '-w', cwd] + e + [name, 'sh', '-c', command],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+            return p.returncode, p.stdout
+        try:
+            yield sh
+        finally:
+            subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
+
+
+def run_bee_graph(box, editor, cache, work, progress=None):
+    """Unity 2021.2+ (il2cpp_bee): il2cpp only wrote the build graph; its commands run here, in the
+    container or on the handheld. Returns the seconds spent."""
+    if not BEE.uses_bee(editor):
+        return 0
+    dag = BEE.graph_path(cache)
+    if not os.path.isfile(dag):
+        raise SystemExit(f'il2cpp wrote no build graph ({dag})')
+    t0 = time.time()
+    with box.shell() as sh:
+        ran, before = BEE.run_graph(dag, sh, box.jobs, log, os.path.join(work, 'build.log'), progress=progress or (
+            lambda n, total, el: f'  compiled {n} of {total} ({100 * n // max(1, total)}%), {el / 60:.0f} min'))
+    t = time.time() - t0
+    log(f'il2cpp: build graph run, {ran} commands ({before} done before) in {t:.0f} s')
+    return t
+
+
+def clear_bee_graph(editor, cache):
+    """An earlier run's graph is removed before il2cpp writes this one (run_bee_graph reads it)."""
+    if BEE.uses_bee(editor):
+        for n in ('bee.dag.json', BEE.ARGS_FILE):
+            p = os.path.join(cache, 'buildstate', n)
+            if os.path.exists(p):
+                os.unlink(p)
 
 
 def has_option(tool, field):
@@ -1154,6 +1257,10 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     linker = deploy_tool(tc['editor'], 'UnityLinker')
     if has_option(linker, 'IncludeUnityRootAssembly'):
         largs = link_args(version, abi, staged, linked, roots, profile)
+        if has_option(linker, 'AllowedAssembly'):
+            # (2022.x: with --use-editor-options the linker resolves only the assemblies it is
+            # given, as the editor gives it every assembly of the build)
+            largs += [f'--allowed-assembly={os.path.join(staged, n)}' for n in sorted(os.listdir(staged)) if n.endswith('.dll')]
     else:                                       # 2017.x: the older UnityLinker
         engine = [n for n in roots if is_engine(n)]
         os.makedirs(work, exist_ok=True)
@@ -1203,7 +1310,9 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         kept = sorted(n for n in os.listdir(linked) if n.endswith('.dll'))
         log(f'UnityLinker: {len(kept)} assemblies kept, {sum(os.path.getsize(os.path.join(linked, n)) for n in kept) / 2**20:.1f} MiB '
             f'(from {sum(os.path.getsize(os.path.join(staged, n)) for n in chosen) / 2**20:.1f} MiB) in {secs:.0f} s')
+    clear_bee_graph(tc['editor'], cache)
     t = box.run(icmd, 'il2cpp.log')
+    t += run_bee_graph(box, tc['editor'], cache, work)
     secs += t
     log(f'il2cpp: done in {t:.0f} s')
     return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
