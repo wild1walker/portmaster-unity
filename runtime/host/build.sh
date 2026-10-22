@@ -44,7 +44,7 @@ mkdir -p out
 docker image inspect ua-host-armhf >/dev/null 2>&1 || docker build -q -t ua-host-armhf . >/dev/null
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   set -e
-  F="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -I../jni/include -I../jni"
+  F="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -funwind-tables -I../jni/include -I../jni"
   arm-linux-gnueabihf-gcc $F -c ua_host.c -o out/ua_host.o
   arm-linux-gnueabihf-gcc $F -c input.c -o out/input.o
   arm-linux-gnueabihf-gcc $F -c pointer.c -o out/pointer.o

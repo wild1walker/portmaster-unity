@@ -206,7 +206,7 @@ static int check(const char *path, double want_secs)
     while (fgets(line, sizeof line, f)) {
         unsigned long a, b, c;
         char n[256];
-        if (!strncmp(line, "ua_prof 2", 9)) header = 1;
+        if (!strncmp(line, "ua_prof 3", 9)) header = 1;
         if (sscanf(line, "secs %lf", &secs) == 1) continue;
         if (sscanf(line, "jit %lx %lx %255s", &a, &b, n) == 3 && !strcmp(n, "M:Fake.Jit:Loop")) { jit_lo = a; jit_hi = a + b; }
         if (sscanf(line, "sym %lx %255s %lx", &a, n, &c) == 3) {
@@ -238,6 +238,7 @@ static int check(const char *path, double want_secs)
         for (int k = 0; k < nouter; k++) if (outer[k] == lr) is_outer = 1;
         for (char *p = line + used; *p; ) {
             char *e;
+            while (*p == ' ' || *p == '~') p++;             // (~: found by scanning)
             unsigned long v = strtoul(p, &e, 16);
             if (e == p) break;
             for (int k = 0; k < nouter; k++) if (outer[k] == v) is_outer = 1;

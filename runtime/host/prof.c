@@ -69,12 +69,13 @@
 #define MAX_THREADS 32
 #define MAX_RANGES 2048             // executable mappings: libraries, Mono's code chunks
 #define MAX_READABLE 4096           // file-backed readable mappings (unwind tables)
-#define HDR 5                       // a sample: time (us), state|syscall<<8, depth|exact<<8, pc, lr, then frames
+#define HDR 9                       // a sample: time (us), state|syscall<<8, depth|exact<<8, pc, lr,
+                                    // 4 words of "scanned" bits (one a frame), then the frames
 #define BITS (1u << 16)             // prefilter, one bit per MB of address space (hashed above 4 GB)
 #define NO_SYSCALL 0xffffu          // a running sample, or a blocked one whose call is unknown
 #define NOT_IN_SYSCALL 0xfffeu      // blocked outside a system call (a page fault)
 
-typedef struct { uintptr_t lo, hi; const uint32_t *exidx; int nexidx; } range;
+typedef struct { uintptr_t lo, hi; const uint32_t *exidx; int nexidx, anon; } range;
 typedef struct { uintptr_t lo, hi; } span;
 typedef struct { int n, nrd; range r[MAX_RANGES]; span rd[MAX_READABLE]; uint8_t bits[BITS / 8]; } rtab;
 
@@ -203,6 +204,14 @@ static int ehabi_ops(const rtab *tab, const range *r, uintptr_t key, uint8_t *op
     return k;
 }
 
+// the call before return address v (checked: arch.h) was BLX <register>: how native code enters
+// JIT-compiled code (Mono's runtime invoke, Unity's scripting calls), never a direct BL
+static inline int call_is_indirect(uintptr_t v)
+{
+    if (v & 1) return (*(const uint16_t *)((v & ~1u) - 2) & 0xFF87) == 0x4780;
+    return (*(const uint32_t *)(v - 4) & 0x0FFFFFF0) == 0x012FFF30;
+}
+
 // one frame up: r[] (r0-r15) from the callee's to the caller's; 0 when it cannot be done
 static int ehabi_step(const pthr *t, const rtab *tab, uint32_t *r, int first)
 {
@@ -267,33 +276,42 @@ static int ehabi_step(const pthr *t, const rtab *tab, uint32_t *r, int first)
 
 // one sample into the thread's buffer: from its own signal handler (uc: running) or from the
 // sampler (blocked: pc and sp only). The slot is reserved atomically: both may write the buffer.
+// Callers: unwound while the code has tables; above that the stack is scanned. On 32-bit ARM a
+// scanned return address into code with tables, after one into JIT code reached through BLX
+// <register> (how native code calls into JIT code), starts an exact unwind again from there: the
+// callee pushed lr at the top of its frame, so the caller's sp is the next word.
 static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t lr, uintptr_t sp, const ucontext_t *uc)
 {
     unsigned i = atomic_fetch_add(&t->n, 1);
     if (!t->buf || i >= t->cap) return;
-    uintptr_t *s = t->buf + (size_t)i * g_stride;
+    uintptr_t *s = t->buf + (size_t)i * g_stride, *scanned = s + 5;
     s[0] = (uintptr_t)((now_ns() - g_rec_start) / 1000);
     s[3] = pc;
     s[4] = lr;
-    unsigned d = 0, exact = 0;
+    scanned[0] = scanned[1] = scanned[2] = scanned[3] = 0;
+    unsigned d = 0, exact = 0, depth = (unsigned)g_depth;
     const rtab *tab = atomic_load(&g_tab);
     uintptr_t from = sp;
-    if (g_depth && sp && t->stk_hi && sp >= t->stk_lo && sp < t->stk_hi) {
+    if (depth && sp && t->stk_hi && sp >= t->stk_lo && sp < t->stk_hi) {
 #if defined(__arm__)
+        uint32_t r[16];
+        const range *last = code_range(tab, pc);
         if (uc) {
-            uint32_t r[16];
             const unsigned long *g = &uc->uc_mcontext.arm_r0;          // r0-r10, fp, ip, sp, lr, pc in order
             for (int k = 0; k < 16; k++) r[k] = (uint32_t)g[k];
-            for (int first = 1; d < (unsigned)g_depth && ehabi_step(t, tab, r, first) && code_range(tab, r[15] & ~1u); first = 0) {
+            const range *rg;
+            for (int first = 1; d < depth && ehabi_step(t, tab, r, first) && (rg = code_range(tab, r[15] & ~1u)); first = 0) {
                 s[HDR + d++] = r[15];
                 from = r[13];
+                last = rg;
             }
             exact = d;
         }
+        int after_jit = last && last->anon;
 #elif defined(__aarch64__)
         if (uc) {                                          // the frame records: [fp] = caller's fp, [fp + 8] = lr
             uintptr_t fp = uc->uc_mcontext.regs[29], v, ret;
-            while (d < (unsigned)g_depth && fp >= sp && stack_word(t, fp, &v) && stack_word(t, fp + 8, &ret) && ret) {
+            while (d < depth && fp >= sp && stack_word(t, fp, &v) && stack_word(t, fp + 8, &ret) && ret) {
                 s[HDR + d++] = ret;
                 from = fp + 16;
                 if (v <= fp) break;
@@ -304,9 +322,30 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
 #endif
         uintptr_t end = t->stk_hi - from > (uintptr_t)g_scan ? from + g_scan : t->stk_hi;
         for (const uintptr_t *w = (const uintptr_t *)((from + sizeof(uintptr_t) - 1) & ~(sizeof(uintptr_t) - 1));
-             (uintptr_t)(w + 1) <= end && d < (unsigned)g_depth; w++) {
+             (uintptr_t)(w + 1) <= end && d < depth; w++) {
             uintptr_t v = *w;
-            if (in_code(tab, v)) s[HDR + d++] = v;
+            const range *rg = code_range(tab, v);
+            if (!rg || !is_return_address(v, rg->lo)) continue;
+#if defined(__arm__)
+            if (uc && rg->exidx && (!after_jit || call_is_indirect(v))) {
+                memset(r, 0, sizeof r);
+                r[15] = (uint32_t)v;
+                r[13] = (uint32_t)(uintptr_t)(w + 1);
+                unsigned at = d;
+                s[HDR + d++] = v;
+                const range *rg2 = rg;
+                while (d < depth && ehabi_step(t, tab, r, 0) && (rg2 = code_range(tab, r[15] & ~1u))) s[HDR + d++] = r[15];
+                if (d == at + 1) scanned[at >> 5] |= (uintptr_t)1 << (at & 31);   // nothing unwound from it: a scan's find
+                after_jit = rg2 && rg2->anon;
+                w = (const uintptr_t *)(uintptr_t)r[13] - 1;   // the scan goes on above the unwound frames
+                if ((uintptr_t)(w + 1) < from) break;
+                from = (uintptr_t)(w + 1);
+                continue;
+            }
+            after_jit = rg->anon;
+#endif
+            scanned[d >> 5] |= (uintptr_t)1 << (d & 31);
+            s[HDR + d++] = v;
         }
     }
     s[2] = (uintptr_t)d | (uintptr_t)exact << 8;
@@ -377,6 +416,7 @@ static void build_table(const mapline *m, int n)
         if (!strcmp(m[i].path, "[vectors]") || !strcmp(m[i].path, "[vsyscall]")) continue;
         range *r = &t->r[t->n++];
         r->lo = m[i].lo; r->hi = m[i].hi; r->exidx = NULL; r->nexidx = 0;
+        r->anon = !m[i].path[0] && !so_module_at((void *)m[i].lo, NULL);   // Mono's JIT code, trampolines
         int cnt = 0;
         // the loader's modules, else glibc's (dl_iterate_phdr: an address inside the segment, not its page)
         uintptr_t x = so_find_exidx(m[i].lo + (m[i].hi - m[i].lo) / 2, &cnt);
@@ -635,7 +675,8 @@ static int same_stack(const uintptr_t *x, const uintptr_t *y)
 static const char *base_name(const char *p) { const char *b = strrchr(p, '/'); return b ? b + 1 : p; }
 
 // File format (one record per line; addresses in hex without 0x; times in us since the start):
-//   ua_prof 2                       format version (1: no <exact> field)
+//   ua_prof 3                       format version (2: no ~ marks, callers after <exact> scanned;
+//                                    1: no <exact> field)
 //   arch armhf|arm64, hz <n>, secs <s>, depth <n> scan <bytes>, signal <n>, mono yes|no
 //   thread <i> <tid> <name> <samples> <dropped>     the sampled threads
 //   module <lo> <hi> <bias> <name>  code an address falls in: <name>+(address - bias), an ELF address
@@ -647,8 +688,9 @@ static const char *base_name(const char *p) { const char *b = strrchr(p, '/'); r
 //   stack <id> <count> <thread> <state> <syscall> <pc> <lr> <exact> <callers...>
 //       state R (on a CPU, sampled by its signal), S/D (blocked; syscall = the call's number,
 //       fffe outside a call, ffff unknown), Q (runnable, its signal still pending: no addresses);
-//       the first <exact> callers were unwound (each the caller of the one before: lr is then
-//       already among them), the others found by scanning the stack above them
+//       the first <exact> callers were unwound from the sample's registers (lr is then already
+//       among them); a caller written ~<address> was found by scanning the stack, the others
+//       were unwound (also after a scanned one, from a call into JIT code)
 //   seq <thread> <us>:<stack id> ...   every sample of that thread in time order
 //   swap <us> ...                   presented frames (eglSwapBuffers)
 //   main <us> ...                   UnityMain's frames (after each nativeRender)
@@ -661,7 +703,7 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
     FILE *f = fopen(tmp, "w");
     if (!f) { fprintf(stderr, "[prof] %s: %s\n", tmp, strerror(errno)); return; }
     int nthr = atomic_load(&g_nthr);
-    fprintf(f, "ua_prof 2\narch %s\nhz %d\nsecs %.3f\ndepth %d scan %d\nsignal %d\n",
+    fprintf(f, "ua_prof 3\narch %s\nhz %d\nsecs %.3f\ndepth %d scan %d\nsignal %d\n",
 #if defined(__aarch64__)
             "arm64",
 #else
@@ -791,7 +833,8 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
             while (e < n && same_stack(s, t->buf + (size_t)idx[e] * g_stride)) e++;
             unsigned d = (unsigned)(s[2] & 0xff), exact = (unsigned)(s[2] >> 8) & 0xff, sysnr = (unsigned)(s[1] >> 8) & 0xffff;
             fprintf(f, "stack %d %u %d %c %x %lx %lx %u", id, e - k, i, (char)(s[1] & 0xff), sysnr, (unsigned long)s[3], (unsigned long)s[4], exact);
-            for (unsigned j = 0; j < d; j++) fprintf(f, " %lx", (unsigned long)s[HDR + j]);
+            for (unsigned j = 0; j < d; j++)
+                fprintf(f, " %s%lx", (s[5 + (j >> 5)] >> (j & 31)) & 1 ? "~" : "", (unsigned long)s[HDR + j]);
             fputc('\n', f);
             for (unsigned j = k; j < e; j++) ids[idx[j]] = (uint32_t)id;
             id++;
