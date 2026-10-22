@@ -1289,9 +1289,16 @@ def player_version(pkg):
 
 def scripting_runtime(src, unity):
     """'.NET 3.5 (libmono)' or '.NET 4.x (libmonobdwgc-2.0)': which Mono runtime of the Android
-    player the game needs (Unity 2017.x / 2018.x had both; 2019.1+ only the second)."""
-    if unity.major >= 2019:
+    player the game needs (Unity 2017.x - 2019.1 had both; 2019.2+ only the second). The class
+    libraries the game ships say it (mscorlib 2.0.0.0: .NET 3.5), else its Mono folder: a macOS
+    build has it outside the data folder (Contents/Mono or Contents/MonoBleedingEdge)."""
+    if unity.line >= (2019, 2):
         return '.NET 4.x (libmonobdwgc-2.0)'
+    from .il2cpp import dotnet_level
+    try:
+        return {2: '.NET 3.5 (libmono)', 4: '.NET 4.x (libmonobdwgc-2.0)'}[dotnet_level(src)]
+    except UV.Unsupported:
+        pass
     etc = mono_etc_dir(src)
     if os.path.basename(os.path.dirname(etc)) == 'MonoBleedingEdge':
         return '.NET 4.x (libmonobdwgc-2.0)'

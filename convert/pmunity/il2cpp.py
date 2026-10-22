@@ -679,7 +679,8 @@ def bcl_profile(version, net, subset=False):
     `subset`: the game's own class libraries are the "unity" profile (subset_profile)."""
     if net == 2:
         if version.line >= (2019, 1):
-            raise UV.Unsupported(f'Unity {version}: a .NET 3.5 game of a line without the .NET 3.5 runtime')
+            raise UV.Unsupported(f'Unity {version}: a .NET 3.5 game (IL2CPP builds of .NET 3.5 games are made for '
+                                 f'2017.x - 2018.x; 2019.1 is the last line with that runtime, 2019.2+ have none)')
         return ('legacyunity', 'Mono/lib/mono/unity') if subset else ('net20', 'Mono/lib/mono/2.0')
     if version.line < (2018, 1):
         return 'net45', 'MonoBleedingEdge/lib/mono/4.5'
@@ -691,9 +692,10 @@ def bcl_profile(version, net, subset=False):
 def dotnet_level(data, version=None):
     """2 or 4: the game's scripting runtime, .NET 3.5 (class libraries 2.0.0.0) or .NET 4.x: the
     version of the mscorlib.dll it ships, else of the one Assembly-CSharp references (netstandard:
-    4). Unity 2019.1+ has only .NET 4.x."""
+    4). Unity 2019.2+ has only .NET 4.x (2019.1 still had the deprecated .NET 3.5 runtime: its
+    Android player package has libmono.so, and such games ship the 2.0.0.0 mscorlib)."""
     from . import clrmeta as CM
-    if version is not None and version.line >= (2019, 1):
+    if version is not None and version.line >= (2019, 2):
         return 4
     gm = os.path.join(data, 'Managed')
     try:

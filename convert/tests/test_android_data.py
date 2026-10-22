@@ -163,6 +163,60 @@ class OlderNewerLinesTest(unittest.TestCase):
         self.assertEqual(tree, {'tail': True})
         self.assertEqual(used.m_Children[-1].m_Type, 'UInt8')
 
+    def test_scripting_runtime(self):
+        """2019.1 still had .NET 3.5 (a macOS build's Mono folder is outside its data): the shipped
+        mscorlib says which runtime; 2019.2+ have only .NET 4.x"""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_port import write_assembly
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, 'Managed'))
+            ms = os.path.join(d, 'Managed', 'mscorlib.dll')
+            write_assembly(ms, 'mscorlib', version=2)
+            self.assertEqual(A.scripting_runtime(d, UV.Version('2019.1.15f1')), '.NET 3.5 (libmono)')
+            self.assertEqual(A.scripting_runtime(d, UV.Version('2018.4.36f1')), '.NET 3.5 (libmono)')
+            self.assertEqual(A.scripting_runtime(d, UV.Version('2019.2.5f1')), '.NET 4.x (libmonobdwgc-2.0)')
+            write_assembly(ms, 'mscorlib', version=4)
+            self.assertEqual(A.scripting_runtime(d, UV.Version('2019.1.15f1')), '.NET 4.x (libmonobdwgc-2.0)')
+            os.remove(ms)                   # no assemblies to read: the Mono folder decides
+            os.makedirs(os.path.join(d, 'MonoBleedingEdge', 'etc'))
+            self.assertEqual(A.scripting_runtime(d, UV.Version('2018.4.36f1')), '.NET 4.x (libmonobdwgc-2.0)')
+
+    def test_typetree_neighbours(self):
+        """typetrees.read: an object a field shorter than UnityPy's tree for its version (6000.2.6f2's
+        UnityConnectSettings lacks InsightsSettings, which UnityPy's trees have from 6000.2.0b7 on)
+        is read with UnityPy's tree of a neighbouring version that reads every byte"""
+        from UnityPy.helpers import Tpk, TypeTreeHelper
+        from UnityPy.helpers.UnityVersion import UnityVersion
+        from UnityPy.streams import EndianBinaryReader, EndianBinaryWriter
+        from pmunity import typetrees as T
+        info = [(v, c) for v, c in Tpk.get_typetree().ClassInformation[310] if c is not None]
+        older = next(Tpk.generate_node(c) for v, c in reversed(info) if v < UnityVersion.from_str('6000.2.0b7'))
+        self.assertNotIn('InsightsSettings', [c.m_Name for c in older.m_Children])
+        # an object written with that tree (default values; nothing of a game)
+        zero = TypeTreeHelper.read_typetree(older, EndianBinaryReader(bytes(4096), endian='<'), check_read=False)
+        w = EndianBinaryWriter(endian='<')
+        TypeTreeHelper.write_typetree(zero, older, w)
+        data = w.bytes
+
+        class Obj:
+            class_id, serialized_type = 310, None
+            type = type('t', (), {'name': 'UnityConnectSettings'})
+            def __init__(self, version):
+                self.version = UnityVersion.from_str(version)
+            def _get_typetree_node(self, nodes=None):
+                return nodes or Tpk.get_typetree_node(310, self.version)
+            def read_typetree(self, nodes=None):
+                return TypeTreeHelper.read_typetree(self._get_typetree_node(nodes), EndianBinaryReader(data, endian='<'),
+                                                    byte_size=len(data), check_read=True)
+        with self.assertRaises(ValueError):
+            Obj('6000.2.6f2').read_typetree()                      # UnityPy's own tree
+        tree, node = T.read(Obj('6000.2.6f2'))
+        self.assertIsNotNone(node)
+        self.assertNotIn('InsightsSettings', tree)
+        self.assertEqual(T.read(Obj('6000.2.6f2'), edits=('m_Enabled',))[1].m_Children[0].m_Name, 'm_Enabled')
+        self.assertIsNone(T.read(Obj('6000.2.0a8'))[1])            # its own tree reads it: no other tree
+        self.assertEqual(T.neighbours(type('O', (), {'serialized_type': type('s', (), {'node': older})()})()), [])
+
 
 class SwappyTest(unittest.TestCase):
     def test_options_key(self):
