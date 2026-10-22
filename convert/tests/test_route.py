@@ -173,8 +173,24 @@ class RouteTest(unittest.TestCase):
         m.file('Game_Data/globalgamemanagers', sf_header('2020.3.1f1', 19, 22))
         m.dir('Game_Data/Managed')
         f = R.examine(R.find_data_dirs(m.root)[0])
-        self.assertIsNone(f['route'])                       # Direct3D only, 2019.1+: neither
-        self.assertTrue(any('Direct3D' in x for x in f['android']['blockers']))
+        self.assertEqual(f['route'], 'android')             # Direct3D 11 programs translated (2019.1+ too)
+        self.assertTrue(any('Direct3D' in x for x in f['android']['caveats']))
+        self.assertFalse(any('winbcl' in x for x in f['android']['caveats']))
+        self.assertFalse(f['box64']['fits'])                # no Linux player for Direct3D data
+        n = Build(self)
+        n.file('Game_Data/globalgamemanagers', sf_header('2021.3.28f1', 19, 22))
+        n.dir('Game_Data/Managed')
+        f = R.examine(R.find_data_dirs(n.root)[0])
+        self.assertEqual(f['route'], 'android')
+        self.assertTrue(any('winbcl' in x for x in f['android']['caveats']))   # unityjit-win32 libraries
+        # a compressed build (data.unity3d only): the platform from its executable
+        c = Build(self)
+        c.file('Game_Data/data.unity3d', b'UnityFS\0\0\0\0\x065.x.x\x002021.3.28f1\0' + bytes(64))
+        c.dir('Game_Data/Managed')
+        c.file('Game.exe', pe())
+        f = R.examine(R.find_data_dirs(c.root)[0])
+        self.assertEqual((f['platform'], f['compressed'], f['route']), ('windows', True, 'android'))
+        self.assertTrue(any('Direct3D' in x for x in f['android']['caveats']))
 
     def test_launcher(self):
         b = linux_build(self, '2022.3.4f1', il2cpp=True, name='My Game')

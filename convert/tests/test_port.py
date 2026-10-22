@@ -187,6 +187,21 @@ class CheckTest(unittest.TestCase):
             P.print_report(rep, out)
             self.assertIn('recommended route: android', out.getvalue())
 
+    def test_windows_class_libraries(self):
+        # a Windows Mono build of 2021.2+ ships unityjit-win32 class libraries: the check names winbcl
+        exe = bytearray(b'MZ' + b'\0' * 0x3A + struct.pack('<I', 0x80) + b'\0' * 0x40)
+        exe[0x80:0x86] = b'PE\0\0' + struct.pack('<H', 0x8664)
+        for marker, want in ((b'Interop+Kernel32 SetThreadErrorMode', True), (b'Interop+Sys', False)):
+            with tempfile.TemporaryDirectory() as t:
+                d = fake_game(t, version='2021.3.28f1')
+                os.remove(os.path.join(t, 'Game.x86_64'))
+                put(os.path.join(t, 'Game.exe'), bytes(exe) + b'\0' * 64)
+                put(os.path.join(d, 'Managed', 'mscorlib.dll'), b'MZ' + marker)
+                rep = P.check(t, asmpatch='/nonexistent-asmpatch', deep=False)
+                self.assertEqual((rep['build'], rep['backend']), ('windows', 'mono'))
+                android = next(r for r in rep['routes'] if r['route'] == 'android')
+                self.assertEqual(any('winbcl' in n for n in android['needs']), want, android['needs'])
+
     def test_unsupported(self):
         with tempfile.TemporaryDirectory() as t:
             d = fake_game(t, version='5.5.4f1')

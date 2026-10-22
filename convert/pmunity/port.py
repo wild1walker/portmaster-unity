@@ -802,6 +802,11 @@ def decide_routes(rep):
         why.append('no shader programs the converter translates: ' + (rep.get('shader_why') or 'unknown graphics APIs'))
     elif gl == 'd3d11':
         needs.append('Direct3D 11 shaders: `shaders.from = ["d3d11"]` (tools/hlslcc; pmhlslcc for the handheld)')
+    if mono and b.get('build') == 'windows' and b.get('data'):
+        from . import winbcl
+        if winbcl.is_win32_profile(os.path.join(b['data'], 'Managed')):
+            needs.append("Windows-only class libraries (unityjit-win32, Unity 2021.2+): the Unix ones instead, "
+                         "`python -m pmunity.winbcl <Data> <dir>` -> android-data `--managed-file` (docs/porting.md)")
     if b.get('compressed'):
         needs.append('a compressed build: the setup unpacks it first (pmunity unpack)')
     routes.append({'route': 'android', 'ok': not why, 'why': why, 'needs': needs})
