@@ -12,7 +12,7 @@
 # Settings: setup/setup.env (from port.toml). An interrupted setup (battery, power button)
 # continues on the next launch. Log: ports/<port>/patchlog.txt.
 # PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why the setup failed.
-S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+S="${GAMEDIR:?}/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
 . "$S/setup.env"
 
 exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
