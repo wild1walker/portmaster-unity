@@ -223,6 +223,13 @@ class RouteTest(unittest.TestCase):
         rep = {'data': R.find_data_dirs(b.root)[0], 'routes': [{'route': 'box64', 'ok': True, 'why': [], 'needs': []}]}
         R.port_check(rep)
         self.assertTrue(any('GL mode gles' in n for n in rep['routes'][0]['needs']))
+        # data with Vulkan shaders only (an HDRP Linux build): no GL mode draws it
+        for apis, ok in ((['Vulkan'], False), (['Vulkan', 'OpenGLCore'], True), (None, True)):
+            rep = {'data': R.find_data_dirs(b.root)[0], 'graphics_apis': apis,
+                   'routes': [{'route': 'box64', 'ok': True, 'why': [], 'needs': []}]}
+            R.port_check(rep)
+            self.assertEqual(rep['routes'][0]['ok'], ok, apis)
+            self.assertEqual(any('Vulkan on the handheld' in w for w in rep['routes'][0]['why']), not ok)
 
         class Ctx:
             def __init__(self, route, out):

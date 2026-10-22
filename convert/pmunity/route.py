@@ -675,6 +675,13 @@ def port_check(rep):
     r = next((x for x in rep.get('routes', []) if x['route'] == 'box64'), None)
     if r is None or not r['ok']:
         return
+    apis = rep.get('graphics_apis')
+    if apis is not None and not {'OpenGLCore', 'OpenGL2'} & set(apis):
+        # (Vulkan only: HDRP's Linux builds, or OpenGL Core taken out of the build's graphics APIs)
+        r['ok'] = False
+        r['why'].append(f"the data has {', '.join(apis) or 'no'} shaders, no OpenGL ones: the box64 port draws with "
+                        f"OpenGL (gles, gl4es or Mesa); this player would need Vulkan on the handheld")
+        return
     r['needs'] += [f"GL mode {gl_mode(f)} ({'GLES 3 shaders added by the setup' if gl_mode(f) == 'gles' else 'data as it is'})"]
     r['needs'] += [c for c in f['box64']['caveats'] if 'Mono JIT' in c or 'plugin' in c]
 

@@ -202,6 +202,21 @@ class CheckTest(unittest.TestCase):
                 android = next(r for r in rep['routes'] if r['route'] == 'android')
                 self.assertEqual(any('winbcl' in n for n in android['needs']), want, android['needs'])
 
+    def test_compressed_settings(self):
+        # a compressed build: globalgamemanagers is read from inside data.unity3d (graphics APIs)
+        from test_android_data import archive
+        with tempfile.TemporaryDirectory() as t:
+            d = fake_game(t)
+            os.remove(os.path.join(d, 'globalgamemanagers'))
+            put(os.path.join(d, 'data.unity3d'), archive([('globalgamemanagers', b'not a serialized file' * 4)]))
+            r = P.survey_data(d, deep=False)
+            self.assertTrue(any(n.startswith('globalgamemanagers: not read') for n in r['notes']), r['notes'])
+            P.COMPRESSED_SURVEY_MAX, keep = 16, P.COMPRESSED_SURVEY_MAX
+            try:
+                self.assertEqual(P.survey_data(d, deep=False)['notes'], [])     # too big to open: not tried
+            finally:
+                P.COMPRESSED_SURVEY_MAX = keep
+
     def test_unsupported(self):
         with tempfile.TemporaryDirectory() as t:
             d = fake_game(t, version='5.5.4f1')

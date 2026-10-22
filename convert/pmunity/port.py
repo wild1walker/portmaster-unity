@@ -643,6 +643,9 @@ def plugin_notes(names):
     return out
 
 
+COMPRESSED_SURVEY_MAX = 768 << 20     # a compressed build's data.unity3d up to this size is opened for its settings
+
+
 def survey_data(data, deep=True):
     """From the serialized files (UnityPy, read only): player settings, the scripts scenes use
     (input modules, text fields), video, texture formats, scenes."""
@@ -655,10 +658,16 @@ def survey_data(data, deep=True):
         r['notes'].append('UnityPy is not installed: settings and scenes not read (pip install -r convert/requirements.txt)')
         return r
     ggm = os.path.join(data, 'globalgamemanagers')
-    if os.path.isfile(ggm):
+    u3d = os.path.join(data, 'data.unity3d')
+    if os.path.isfile(ggm) or os.path.isfile(u3d) and os.path.getsize(u3d) <= COMPRESSED_SURVEY_MAX:
         try:
-            env = UnityPy.load(ggm)
-            for o in env.objects:
+            if os.path.isfile(ggm):
+                objects = UnityPy.load(ggm).objects
+            else:                                   # a compressed build: its globalgamemanagers in the archive
+                env = UnityPy.load(u3d)
+                sf = (getattr(env.file, 'files', None) or {}).get('globalgamemanagers')
+                objects = list(sf.objects.values()) if sf is not None else []
+            for o in objects:
                 n = o.type.name
                 if n == 'PlayerSettings':
                     t, _ = typetrees.read(o)          # a release newer than UnityPy's trees: fixed tree
@@ -885,9 +894,10 @@ def check(path, asmpatch=None, deep=True, log=None):
         except Exception:
             rep['scripting_runtime'] = None
     log('reading the game\'s settings and scenes')
-    d = survey_data(b['data'], deep and not b['compressed']) if not b['compressed'] else \
-        {'notes': ['a compressed build: settings and scenes are read after `pmunity unpack`'], 'graphics_apis': None,
-         'scripts_used': {}, 'textures': {}, 'video_clips': {}, 'video_players': 0, 'movie_textures': 0}
+    d = survey_data(b['data'], deep and not b['compressed'])
+    if b['compressed']:
+        d['notes'].append('a compressed build: its settings read from data.unity3d; scenes, textures and video '
+                          'are read after `pmunity unpack`')
     rep['data_survey'] = d
     rep['notes'] += d.get('notes', [])
     rep['product'] = d.get('product')
