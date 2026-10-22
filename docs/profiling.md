@@ -79,6 +79,12 @@ no information for are "anonymous code". Libraries the profile names only by exp
 stripped libc or GLES driver) are named by the nearest exported function, which is often not the
 function itself.
 
+Known issue (RG34XX-SP, Hollow Knight, 2026-10-22): with `UA_SWAP_INTERVAL=0 UA_FRAME_RATE=200`
+and `UA_PROF` together, the game ended twice: once a scan read past the render thread's stack after
+an unwind through Mali's driver (fixed: an unwound stack pointer off the thread's stack ends the
+scan), once with glibc's heap check failing after the recording (not found yet). With vsync (the
+default) `UA_PROF=500` and `UA_PROF=250` with the job threads ran through.
+
 ## profsum.py
 
 ```sh

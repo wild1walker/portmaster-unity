@@ -320,6 +320,9 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
             exact = d;
         }
 #endif
+        // an unwind through code with wrong or missing tables (Mali's driver) can leave a stack pointer
+        // outside the thread's stack: then nothing is scanned (stk_hi - from would wrap around)
+        if (from < t->stk_lo || from >= t->stk_hi) depth = d;
         uintptr_t end = t->stk_hi - from > (uintptr_t)g_scan ? from + g_scan : t->stk_hi;
         for (const uintptr_t *w = (const uintptr_t *)((from + sizeof(uintptr_t) - 1) & ~(sizeof(uintptr_t) - 1));
              (uintptr_t)(w + 1) <= end && d < depth; w++) {
@@ -339,6 +342,7 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
                 if (d == at + 1) scanned[at >> 5] |= (uintptr_t)1 << (at & 31);   // nothing unwound from it: a scan's find
                 else if (rc < 0) break;                    // unwound to the thread's start: the rest is old data
                 after_jit = rg2 && rg2->anon;
+                if (r[13] < from || r[13] >= t->stk_hi) break;      // (unwound off the stack: stop here)
                 w = (const uintptr_t *)(uintptr_t)r[13] - 1;   // the scan goes on above the unwound frames
                 if ((uintptr_t)(w + 1) < from) break;
                 from = (uintptr_t)(w + 1);
