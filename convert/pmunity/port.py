@@ -50,6 +50,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import zipfile
 
@@ -406,17 +407,27 @@ def find_builds(path, depth=4):
     return out
 
 
+ANDROID_PACKAGES = ('.apk', '.xapk', '.apks', '.aab')          # what `pmunity apk` reads (and .obb, .zip)
+
+
 def android_packages(path, depth=4):
-    """Android builds (.apk files) under path, for `pmunity apk` (the Android-build route)."""
+    """An Android build at path, for `pmunity apk` (the apk route): the file itself (.apk, .xapk,
+    .apks, .aab), or a folder's packages and OBBs (an APK with its OBBs, split APKs)."""
     if os.path.isfile(path):
-        return [path] if path.lower().endswith('.apk') else []
+        return [path] if path.lower().endswith(ANDROID_PACKAGES) else []
     out = []
     base = os.path.abspath(path).count(os.sep)
     for r, ds, fs in os.walk(path):
-        ds[:] = sorted(x for x in ds if not x.startswith('.'))
-        out += [os.path.join(r, n) for n in sorted(fs) if n.lower().endswith('.apk')]
+        ds[:] = sorted(x for x in ds if not x.startswith('.') and x != '__MACOSX')
+        out += [os.path.join(r, n) for n in sorted(fs) if n.lower().endswith(ANDROID_PACKAGES)]
         if r.count(os.sep) - base >= depth:
             ds[:] = []
+    if out:                                     # (OBBs only with a package: they are no game alone)
+        for r, ds, fs in os.walk(path):
+            ds[:] = sorted(x for x in ds if not x.startswith('.') and x != '__MACOSX')
+            out += [os.path.join(r, n) for n in sorted(fs) if n.lower().endswith('.obb')]
+            if r.count(os.sep) - base >= depth:
+                ds[:] = []
     return out
 
 
@@ -842,14 +853,9 @@ def check(path, asmpatch=None, deep=True, log=None):
     if not builds:
         apks = android_packages(path)
         if apks:
-            rep.update(build='android', apk=apks[0], backend=None, routes=[{'route': 'apk', 'ok': False, 'why': [
-                'an Android build: `pmunity apk` (the Android-build route) reads it; not part of this check yet'], 'needs': []}])
-            _call_hooks('port_check', rep)
-            rep['route'] = next((r['route'] for r in rep['routes'] if r['ok']), None)
-            if not rep['route']:
-                rep['unsupported'] = rep['routes'][0]['why'][0]
-            return rep
-        raise SystemExit(f'{path}: no Unity game here (no folder with globalgamemanagers, mainData or data.unity3d)')
+            return check_android(rep, apks, log)
+        raise SystemExit(f'{path}: no Unity game here (no folder with globalgamemanagers, mainData or data.unity3d, '
+                         f'no Android build: {", ".join(ANDROID_PACKAGES)})')
     # prefer a Mono build with OpenGL Core shaders (Linux, macOS), then any Mono build
     order = {'linux': 0, 'macos': 1, 'windows': 2}
     builds.sort(key=lambda b: (b['backend'] != 'mono', order.get(b['build'], 3)))
@@ -917,6 +923,99 @@ def check(path, asmpatch=None, deep=True, log=None):
     rep['plugins'] = plugin_notes(_plugin_files(b))
     decide_routes(rep)
     suggest_config(rep)
+    return rep
+
+
+APK_GLOBS = '*.apk *.xapk *.apks *.aab *.zip'     # game.data of an apk port: what the setup takes (and *.obb)
+
+
+def check_android(rep, inputs, log=None):
+    """The check of an Android build (an APK with its OBBs, split APKs, .xapk, .apks, .aab):
+    `pmunity apk`'s dry run (what it is, whether the runtime runs it, its ABIs), a Mono build's code
+    survey (input), and the apk route."""
+    from . import apk as A
+    log = log or (lambda m: None)
+    rep.update(build='android', apk=inputs[0], apk_inputs=inputs, data=None, backend=None, code=None,
+               unity_version=None, unity_supported=False)
+    route = {'route': 'apk', 'ok': False, 'why': [], 'needs': [],
+             'available': os.path.isfile(os.path.join(TEMPLATES, 'apk', 'route.json'))}
+    rep['routes'] = [route]
+    lines, info = [], None
+    log('reading the Android build (pmunity apk --dry-run)')
+    with tempfile.TemporaryDirectory(prefix='pmunity-check-') as td:
+        managed = os.path.join(td, 'Managed')
+        try:
+            info = A.run(inputs, os.path.join(td, 'out'), dry_run=True, log=lines.append, managed_to=managed)
+        except A.Refused as ex:
+            route['why'].append(str(ex))
+        if info and info['backend'] == 'mono' and os.path.isdir(managed):
+            rep['code'] = survey_assemblies(managed)
+    rep['apk_log'] = lines
+    if info:
+        v = UV.Version(info['unity_version'])
+        rep.update(package=info['package'], version_code=info['version_code'], version_name=info['version_name'],
+                   backend=info['backend'], unity_version=info['unity_version'], unity_line=f'{v.major}.{v.minor}',
+                   unity_supported=True, abis=info['abis'], graphics_apis=info['graphics_apis'],
+                   product=info.get('product_name'), size_mb=info.get('size_mb', 0), apk_info=info)
+        route['ok'] = True
+        abis = info['abis']
+        if abis == ['armeabi-v7a']:
+            route['needs'].append('armeabi-v7a only: a system with a 32-bit (armhf) userland (ua_host); not 64-bit-only '
+                                  'ones (ROCKNIX, ...)')
+        elif abis == ['arm64-v8a']:
+            route['needs'].append('arm64-v8a only: the 64-bit ua_host (ua_host64), on any aarch64 system')
+        else:
+            route['needs'].append('armeabi-v7a (ua_host) where the system has a 32-bit userland, arm64-v8a (ua_host64) '
+                                  'on 64-bit-only systems: the release ships both')
+        route['needs'].append("nothing converted or downloaded: the setup installs the player's APK and OBBs "
+                              "(a few minutes; about the build's size free on the card)")
+        notes = rep['notes']
+        notes += info.get('notes') or []
+        if info.get('data_in') != 'apk':
+            notes.append(f"the Unity data is in {'the OBB' if info['data_in'] == 'obb' else 'an asset pack'}: players "
+                         f"need it too (the .obb beside the APK, or the .xapk / .apks / .aab with everything)")
+        if info.get('plugins'):
+            notes.append(f"native plugins: {', '.join(info['plugins'])} (the build's own ARM libraries; those that only "
+                         f"call into Java SDKs see a phone without them)")
+        if info.get('orientation') in ('portrait', 'portrait upside down'):
+            notes.append("made for portrait screens: Unity gets the handheld's landscape window (the game decides how "
+                         "it fits; setRequestedOrientation is ignored)")
+        sug = rep['suggest']
+        sug['player'] = {'backend': info['backend'], 'abis': abis}
+        sug['game'] = {'package': info['package']}
+        rt = sug.setdefault('runtime', {})
+        s = rep.get('code')
+        if s is not None:
+            rep['input_verdict'] = input_verdict(s)
+            touch_only = s['legacy']['touch'] > 0 and rep['input_verdict'] in ('none', 'pad') and not \
+                (s['legacy']['axes/buttons'] or s['rewired'] or s['incontrol'] or s['selects'] or s['navigation'])
+            if touch_only:
+                rt['UA_POINTER'] = 'touch'
+                notes.append('reads touches (Input.touches) and nothing of a pad: pointer mode with touch events, '
+                             'UA_POINTER=touch (docs/input.md)')
+            elif rep['input_verdict'] == 'pointer':
+                rt['UA_POINTER'] = '1'
+                notes.append('menus look pointer-driven (mouse or UI pointer handlers, no UI selection for a pad): '
+                             'pointer mode, UA_POINTER=1')
+            if s.get('rewired') or s.get('incontrol'):
+                rt.setdefault('UA_PAD_NAME', 'Xbox Wireless Controller')
+                notes.append(f"{'Rewired' if s.get('rewired') else 'InControl'} knows Android pads by name: UA_PAD_NAME "
+                             f"names the pad as one of its Android profiles does")
+            if s.get('text_input'):
+                notes.append(f"text input ({', '.join(s['text_input'])}): ua_host's on-screen keyboard opens for Unity's "
+                             f"soft keyboard; UA_OSK = \"done\" where the text does not matter")
+        else:
+            notes.append('IL2CPP: the code is not surveyed (no assemblies); a touch-only game needs UA_POINTER=touch, '
+                         'mouse-driven menus UA_POINTER=1 (docs/input.md)')
+        if rep['size_mb'] > 600:
+            notes.append(f"{rep['size_mb']} MB: the setup needs about that much free on the card (exFAT/FAT: the files are "
+                         f"copied; ext4: linked)")
+    _call_hooks('port_check', rep)              # (other modules may add to it)
+    best = next((r for r in rep['routes'] if r['ok'] and r.get('available', True)), None) or \
+        next((r for r in rep['routes'] if r['ok']), None)
+    rep['route'] = best['route'] if best else None
+    if not best:
+        rep['unsupported'] = '; '.join(w for r in rep['routes'] for w in r['why'][:1]) or 'not a build pmunity apk reads'
     return rep
 
 
@@ -1019,7 +1118,23 @@ def print_report(rep, out=sys.stdout):
     w = lambda s='': print(s, file=out)
     w(f"game: {rep.get('product') or os.path.basename(rep.get('data') or rep['path'])}")
     if rep.get('build') == 'android':
-        w(f"  Android build: {rep['apk']}")
+        w(f"  Android build: {', '.join(rep.get('apk_inputs') or [rep['apk']])} ({rep.get('size_mb', '?')} MB)")
+        i = rep.get('apk_info')
+        if i:
+            w(f"  package {i['package']}, versionCode {i['version_code']}, versionName {i['version_name']!r}, "
+              f"minSdk {i['min_sdk']}, targetSdk {i['target_sdk']}")
+            w(f"  Unity {i['unity_version']}, {i['backend']}; ABIs {', '.join(i['abis'])}"
+              + (f" (also {', '.join(x for x in i['all_abis'] if x not in i['abis'])})" if len(i['all_abis']) > len(i['abis']) else '')
+              + f"; graphics APIs {', '.join(i['graphics_apis']) or 'not read'}"
+              + (f"; OBBs: {', '.join(i['obbs'].values())}" if i.get('obbs') else '')
+              + (f"; screen {i['orientation']}" if i.get('orientation') else ''))
+        s = rep.get('code')
+        if s:
+            lg = ', '.join(f'{k} {v}' for k, v in s['legacy'].items() if v)
+            w(f"  input: Rewired {s['rewired'] or 'no'}; InControl {'yes' if s['incontrol'] else 'no'}; "
+              f"Input System {'yes' if s['input_system'] else 'no'}; legacy Input: {lg or 'none'}; "
+              f"UI pointer handlers {s['pointer_handlers']}; UI selection calls {s['selects']}; "
+              f"verdict {rep.get('input_verdict')}")
     else:
         w(f"  data: {rep['data']} ({rep.get('data_mb')} MB; the build: {rep.get('size_mb')} MB)")
         w(f"  build: {rep['build']}" + (f", {rep['exe']} ({rep['arch']})" if rep.get('exe') else '') +
@@ -1134,7 +1249,16 @@ def title_case(s):
 def build_config(name, rep, user):
     """The resolved config: DEFAULTS <- what the check found <- the porter's config."""
     cfg = merge(DEFAULTS, {})
-    if rep:
+    if rep and rep.get('build') == 'android':
+        found = {
+            'port': {'title': title_case(rep.get('product') or name), 'route': rep.get('route') or 'apk'},
+            'game': {'data': APK_GLOBS, 'build': 'android',
+                     'unity_versions': [rep['unity_version']] if rep.get('unity_version') else [],
+                     'size_mb': rep.get('size_mb', 0)},
+        }
+        cfg = merge(cfg, found)
+        cfg = merge(cfg, rep.get('suggest') or {})
+    elif rep:
         b = rep.get('build')
         data_name = 'Data' if b == 'macos' else os.path.basename(rep['data'])
         product = rep.get('product') or (os.path.basename(rep['data'])[:-5] if rep['data'].endswith('_Data') else name)
@@ -1162,6 +1286,10 @@ def build_config(name, rep, user):
                   for s in p['store']]
     # what players need to get: the game is never in these ports; one sold in a store is "paid"
     p['availability'] = p['availability'] or ('paid' if p['store'] else 'free')
+    if not g['what'] and g['build'] == 'android':
+        vs = ', '.join(g['unity_versions'])
+        g['what'] = (f"the Android build of {p['title']}" + (f' (Unity {vs})' if vs else '') +
+                     ': its APK with its .obb files if it has any, or the .xapk, .apks or .aab it came as')
     if not g['what']:
         kind = {'linux': 'Linux', 'macos': 'macOS', 'windows': 'Windows'}.get(g['build'], g['build'])
         vs = ', '.join(g['unity_versions'])
@@ -1286,13 +1414,16 @@ QUESTIONS_DOC = """# Questions PortMaster's patcher asks before the setup (each 
 """
 
 
-def dump_toml(cfg):
-    """port.toml text for a resolved config, with the keys explained."""
+def dump_toml(cfg, route=None):
+    """port.toml text for a resolved config, with the keys explained: the sections the route uses
+    (route.json "config"; default all), its own explanations (route.json "config_doc")."""
+    route = route or {}
+    docs = dict(CONFIG_DOC, **(route.get('config_doc') or {}))
     out = ['# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).',
            '# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.', '']
-    for sec in ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'runtime', 'files', 'build'):
+    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'runtime', 'files', 'build'):
         val = cfg.get(sec, {})
-        out.append(CONFIG_DOC[sec])
+        out.append(docs[sec])
         out.append(f'[{sec}]')
         subs = []
         for k, v in val.items():
@@ -1362,28 +1493,34 @@ def q(v):
     return shlex.quote(str(v))
 
 
-def setup_env(cfg, extra=()):
-    """setup/setup.env: everything the setup reads, as shell assignments (sourced by patchscript)."""
+def setup_env(cfg, extra=(), sections=None):
+    """setup/setup.env: everything the setup reads, as shell assignments (sourced by patchscript);
+    sections: the port.toml sections the route uses (route.json "config"; default all)."""
     p, g, pl, ad, fl = cfg['port'], cfg['game'], cfg['player'], cfg['android_data'], cfg['files']
     a = ad['asmpatch']
     lines = ['# Written by `pmunity port new` from port.toml: the setup\'s settings (sourced by patchscript).',
              f'PORT_NAME={q(p["name"])}', f'PORT_TITLE={q(p["title"])}', f'PORT_ROUTE={q(p["route"])}',
              f'GAME_DATA={q(g["data"])}', f'GAME_BUILD={q(g["build"])}', f'GAME_WHAT={q(g["what"])}',
-             f'GAME_SIZE_MB={int(g.get("size_mb") or 0)}', f'SETUP_SPACE_MB={int(g.get("setup_space_mb") or 0)}',
+             f'GAME_SIZE_MB={int(g.get("size_mb") or 0)}', f'SETUP_SPACE_MB={int(g.get("setup_space_mb") or 0)}'] + \
+            ([f'GAME_PACKAGE={q(g["package"])}'] if g.get('package') else []) + [
              f'READY={q(p.get("ready_marker") or ".setup_done")}',
              f'UNITY_VERSIONS={q(" ".join(g["unity_versions"]))}',
              f'PLAYER_BACKEND={q(pl["backend"])}', f'PLAYER_ABI={q(pl["abi"])}',
              f'PLAYER_URL={q(pl.get("url") or "")}',
              f'PLAYER_URL_VERSION={q(g["unity_versions"][0] if g["unity_versions"] and pl.get("url") else "")}',
-             'PLAYER_SHA256=' + q(' '.join(f'{k}={v}' for k, v in sorted((pl.get('sha256') or {}).items()))),
+             'PLAYER_SHA256=' + q(' '.join(f'{k}={v}' for k, v in sorted((pl.get('sha256') or {}).items())))]
+    if sections is None or 'android_data' in sections:
+        lines += [
              f'APK_NAME={q(ad["name"])}', f'PACKAGE={q(ad["package"])}',
              f'ASMPATCH={q(",".join(a) if isinstance(a, list) else a)}',
              f'VIDEO_SHADER={1 if ad.get("video_shader", True) else 0}', f'SWAPPY={q(ad.get("swappy") or "off")}',
              f'STREAMING_ASSETS={q(ad.get("streaming_assets") or "obb")}', f'DATA_PATH={1 if ad.get("data_path") else 0}',
-             'ANDROID_DATA_ARGS=(' + ' '.join(q(x) for x in ad.get('args', [])) + ')',
-             'CONVERT_PLUGINS=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('plugins', [])) + ')',
-             'MANAGED_FILES=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('managed', [])) + ')',
-             'ASSEMBLY_PATCHES=(' + ' '.join(q(ap['name']) + ' ' + q(ap['command']) for ap in fl.get('assembly_patches', [])) + ')']
+             'ANDROID_DATA_ARGS=(' + ' '.join(q(x) for x in ad.get('args', [])) + ')']
+    if sections is None or 'convert' in sections:
+        lines.append('CONVERT_PLUGINS=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('plugins', [])) + ')')
+    if sections is None or 'android_data' in sections:
+        lines += ['MANAGED_FILES=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('managed', [])) + ')',
+                  'ASSEMBLY_PATCHES=(' + ' '.join(q(ap['name']) + ' ' + q(ap['command']) for ap in fl.get('assembly_patches', [])) + ')']
     qs = cfg.get('questions', [])
     lines.append(f'QUESTIONS={q(" ".join(x["id"] for x in qs))}')
     for x in qs:
@@ -1489,6 +1626,8 @@ ROUTE_NEEDS = {
                'devices)',
     'il2cpp-arm64': 'a 64-bit (aarch64) handheld',
     'box64': "a 64-bit (aarch64) handheld with OpenGL ES 3, and PortMaster's Westonpack (downloaded on the first launch)",
+    'apk': "a 64-bit (aarch64) handheld with OpenGL ES 3, and a 32-bit (armhf) userland beside its 64-bit system (e.g. "
+           "Knulli) for a game whose APK has only its 32-bit player",
 }
 ROUTE_SETUP = {
     'il2cpp-arm64': "The first launch also compiles the game's code with Unity's IL2CPP on the handheld: one to a few "
@@ -1498,6 +1637,7 @@ ROUTE_SETUP = {
 BUILD_STEPS = {
     'ua_host': 'runtime/build.sh                                            # ua_host, the 32-bit runtime (Docker)',
     'ua_host_arm64': 'ARCH=arm64 runtime/build.sh                                 # ua_host, the 64-bit runtime (Docker)',
+    'ua_host64': 'ARCH=arm64 runtime/build.sh                                 # ua_host64, the 64-bit runtime (Docker)',
     'pybundle': "tools/port/build_pybundle.sh tools/port/out/python.tar.gz   # the setup's Python, aarch64 (Docker)",
     'asmpatch': 'tools/asmpatch/build.sh                                     # asmpatch (.NET 8 SDK)',
     'box64': 'tools/box64/build.sh                                        # box64, gl4es, glxes (Docker)',
@@ -1593,8 +1733,8 @@ def build_steps(cfg, route):
     """The commands (from a portmaster-unity checkout) that build what the route's release takes."""
     out = []
     for c in route.get('package', []):
-        c = c.rstrip('?')
-        if c == 'asmpatch' and not needs_asmpatch(cfg):
+        opt, c = c.endswith('?'), c.rstrip('?')
+        if (opt or c == 'asmpatch') and not wants(c, cfg):
             continue
         if c in BUILD_STEPS:
             out.append(BUILD_STEPS[c])
@@ -1857,9 +1997,10 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     pd = pn                                     # the folder installed as ports/<name>
     ctx.write(f'{pd}/port.json', json.dumps(port_json(cfg), indent=4) + '\n')
     ctx.write(f'{pd}/port.env', port_env(cfg))
-    ctx.write(f'{pd}/setup/setup.env', setup_env(cfg))
-    conv = {k: v for k, v in cfg['convert'].items()}
-    ctx.write(f'{pd}/setup/convert.json', json.dumps(conv, indent=1) + '\n')
+    ctx.write(f'{pd}/setup/setup.env', setup_env(cfg, sections=r.get('config')))
+    if 'convert' in (r.get('config') or ['convert']):
+        conv = {k: v for k, v in cfg['convert'].items()}
+        ctx.write(f'{pd}/setup/convert.json', json.dumps(conv, indent=1) + '\n')
     if cfg['questions']:
         ctx.write(f'{pd}/setup/questions.lua', questions_lua(cfg['questions']))
     ctx.write(f'{pd}/setup.txt', setup_txt(cfg))
@@ -1890,7 +2031,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     ctx.write('testing_thread.txt', testing_thread_txt(cfg, pj['attr'].get('inst') or ''))
     # what was made, and from what
     if not config:
-        ctx.write('port.toml', dump_toml(cfg))
+        ctx.write('port.toml', dump_toml(cfg, r))
     build = {'made_by': 'pmunity port new', 'config': cfg, 'route': {k: v for k, v in r.items() if k != 'dir'},
              'files': sorted(set(ctx.written))}
     if rep:
@@ -1994,14 +2135,16 @@ def needs_asmpatch(cfg):
     return ad.get('asmpatch', 'off') != 'off' or ad.get('streaming_assets', 'obb') != 'obb' or bool(ad.get('data_path'))
 
 
-def _component_ua_host(ctx, opts):
+def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
+    """ua_host (armhf, runtime/host/out) as <port>/<dst>, with the licences of what it links
+    (LICENSE.<part><suffix>.txt)."""
     p = opts.get('ua_host') or os.path.join(ctx.runtime, 'runtime', 'host', 'out', 'ua_host')
     if not os.path.isfile(p):
         if opts.get('no_build'):
             raise SystemExit(f'{p}: build the runtime first (runtime/build.sh)')
         ctx.log('building the runtime (runtime/build.sh, Docker)')
         subprocess.run([os.path.join(ctx.runtime, 'runtime', 'build.sh')], check=True)
-    ctx.add(p, 'ua_host', 0o755)
+    ctx.add(p, dst, 0o755)
     hyb = os.path.join(ctx.runtime, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
     if not os.path.isfile(hyb):
         hyb = os.path.join(REPO, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
@@ -2009,23 +2152,31 @@ def _component_ua_host(ctx, opts):
     ml = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(p))), 'media', 'out', 'licenses') \
         if opts.get('ua_host') else os.path.join(ctx.runtime, 'runtime', 'media', 'out', 'licenses')
     ml = opts.get('media_licenses') or ml
-    lic = sorted(n for n in os.listdir(ml) if n.endswith('.copyright')) if os.path.isdir(ml) else []
+    ext = ('.copyright', '.LICENSE')            # (Debian's copyright files; OpenH264's own LICENSE)
+    lic = sorted(n for n in os.listdir(ml) if n.endswith(ext)) if os.path.isdir(ml) else []
     if not lic:
         raise SystemExit(f'no decoder licences in {ml} (ua_host links the video decoders: build the runtime, '
                          f'or --media-licenses DIR)')
     for n in lic:
-        ctx.license(f'LICENSE.{n[:-len(".copyright")]}.txt', os.path.join(ml, n))
+        ctx.license(f'LICENSE.{n.rsplit(".", 1)[0]}{suffix}.txt', os.path.join(ml, n))
 
 
-def _component_ua_host_arm64(ctx, opts):
+def _component_ua_host_arm64(ctx, opts, dst='ua_host', suffix=''):
     """The 64-bit ua_host (runtime/host/out/arm64), for the il2cpp-arm64 route."""
     rt = os.path.join(ctx.runtime, 'runtime')
     o = dict(opts, ua_host=opts.get('ua_host_arm64') or os.path.join(rt, 'host', 'out', 'arm64', 'ua_host'),
-             media_licenses=opts.get('media_licenses') or os.path.join(rt, 'media', 'out', 'arm64', 'licenses'))
+             media_licenses=opts.get('media_licenses_arm64') or (opts.get('media_licenses') if not suffix else None)
+             or os.path.join(rt, 'media', 'out', 'arm64', 'licenses'))
     if not os.path.isfile(o['ua_host']) and not opts.get('no_build'):
         ctx.log('building the 64-bit runtime (runtime/build.sh, Docker)')
         subprocess.run([os.path.join(rt, 'build.sh')], check=True, env=dict(os.environ, ARCH='arm64'))
-    _component_ua_host(ctx, o)
+    _component_ua_host(ctx, o, dst, suffix)
+
+
+def _component_ua_host64(ctx, opts):
+    """The 64-bit ua_host as ua_host64, beside a 32-bit ua_host (the apk route: the setup picks by
+    the system); its licences as LICENSE.<part>.ua_host64.txt."""
+    _component_ua_host_arm64(ctx, opts, 'ua_host64', '.ua_host64')
 
 
 def _component_pmunity(ctx, opts):
@@ -2074,8 +2225,17 @@ def _component_asmpatch(ctx, opts):
     ctx.license('LICENSE.mono.cecil.txt', text=CECIL_LICENSE)
 
 
-COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'pmunity': _component_pmunity, 'pybundle': _component_pybundle,
-              'asmpatch': _component_asmpatch}
+COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'ua_host64': _component_ua_host64,
+              'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'asmpatch': _component_asmpatch}
+
+
+def wants(part, cfg):
+    """Whether a release needs a part route.json names with '?' (only when the port uses it): asmpatch
+    for ports that run it; ua_host / ua_host64 for the player ABIs the port runs (player.abis:
+    armeabi-v7a, arm64-v8a; the apk route)."""
+    abis = cfg['player'].get('abis') or []
+    return {'asmpatch': needs_asmpatch(cfg), 'ua_host': not abis or 'armeabi-v7a' in abis,
+            'ua_host64': not abis or 'arm64-v8a' in abis}.get(part, True)
 
 
 def _write_zip(zpath, root, items):
@@ -2131,10 +2291,10 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
         if os.path.isfile(p):
             os.chmod(p, 0o755)
     for c in route.get('package', []):
-        c = c.rstrip('?')                       # ('?': only when the port uses it; the part decides)
+        opt, c = c.endswith('?'), c.rstrip('?')     # ('?': only when the port uses it: wants())
         if c not in COMPONENTS:
             continue                            # (a hook module provides it)
-        if c == 'asmpatch' and not needs_asmpatch(cfg):
+        if (opt or c == 'asmpatch') and not wants(c, cfg):
             continue
         log(f'== {c}')
         COMPONENTS[c](ctx, opts)

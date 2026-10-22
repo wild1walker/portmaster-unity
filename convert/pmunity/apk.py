@@ -4,8 +4,8 @@ data it reads (GLES shaders, ASTC/ETC textures); the tool picks the ABI, extract
 libraries, keeps the APK as the package code path, names the OBBs as the player looks for them and
 writes android_package.json.
 
-    python -m pmunity apk <file>... <out> [--target auto|arm64|armhf] [--abi arm64-v8a|armeabi-v7a]
-                          [--any-unity-version] [--force] [--dry-run]
+    python -m pmunity apk <file>... <out> [--target auto|arm64|armhf|armhf,arm64] [--abi arm64-v8a|armeabi-v7a]
+                          [--any-unity-version] [--force] [--dry-run] [--json]
 
 <file>: an .apk (with OBBs beside it or given too), split APKs (base + config.<abi> + asset packs),
 an .xapk / .apks / .apkm-style zip of those (and of OBBs under Android/obb/), or an .aab (Android
@@ -22,9 +22,12 @@ App Bundle: rebuilt into one APK, as bundletool would for a device).
   android_package.json           package, versionCode/Name, min/target SDK, manifest meta-data
                                  (unity.build-id ties the OBB to the APK), ABI, backend, Unity version
 
-ABI: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one (--target; auto = the machine
-running the tool when it is an ARM Linux, else arm64-v8a when the build has it). Unity ships
-arm64-v8a players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one directly.
+ABI: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one (--target; a list = the first
+of those userlands the build has a player for, as a port's setup asks; auto = the machine running
+the tool when it is an ARM Linux, else arm64-v8a when the build has it). Unity ships arm64-v8a
+players only with IL2CPP; Mono builds are armeabi-v7a. --abi picks one directly. --json: what the
+build is (android_package.json's fields; with --dry-run the check's report) on stdout, the log on
+stderr. `pmunity port new --data <file>` makes a PortMaster port of it (the apk route).
 
 Refused, with the reason: builds without Unity's player (libmain/libunity) for an ARM ABI, x86-only
 builds, an ABI the target cannot run, Vulkan-only builds (the runtime draws with GLES), IL2CPP
@@ -47,6 +50,7 @@ import zipfile
 from . import unity_version as UV
 
 ABIS = ('arm64-v8a', 'armeabi-v7a')
+TARGETS = {'arm64': 'arm64-v8a', 'armhf': 'armeabi-v7a'}    # --target userland -> ABI
 # headset runtimes (Oculus / Meta, OpenXR, Pico) and VR launcher categories: such builds render for
 # a headset's two eyes and need its tracking
 VR_LIBS = {'libvrapi.so', 'libOVRPlugin.so', 'libopenxr_loader.so', 'libpxr_api.so', 'libPvr_UnitySDK.so',
@@ -56,6 +60,8 @@ VR_CATEGORIES = ('com.oculus.intent.category.VR', 'org.khronos.openxr.intent.cat
 OTHER_ABIS = ('x86', 'x86_64', 'armeabi', 'mips', 'mips64', 'riscv64')
 IL2CPP_MAGIC = 0xFAB11BAF
 GFX = {8: 'GLES2', 11: 'GLES3', 21: 'Vulkan', 17: 'Metal', 16: 'GLCore', 2: 'D3D11'}
+# PlayerSettings.defaultScreenOrientation
+ORIENTATIONS = {0: 'portrait', 1: 'portrait upside down', 2: 'landscape right', 3: 'landscape left', 4: 'auto rotation'}
 
 
 class Refused(Exception):
@@ -564,6 +570,8 @@ def il2cpp_metadata(z):
 
 
 def choose_abi(have, target, abi, log):
+    """(ABI, why) for the build's ARM ABIs `have`: --abi, else the first userland of `target` the
+    build has a player for (target: auto, arm64, armhf, or a preference list "armhf,arm64")."""
     arm = [a for a in ABIS if a in have]
     if abi:
         if abi not in have:
@@ -574,21 +582,28 @@ def choose_abi(have, target, abi, log):
             raise Refused(f'the build has native libraries only for {", ".join(have)}: the runtime runs arm64-v8a or armeabi-v7a')
         raise Refused('the build has no native libraries (lib/<abi>/): not a Unity Android build, or its libraries '
                       'are in a split APK (config.arm64_v8a / config.armeabi_v7a) that was not given')
-    if target == 'auto':
+    targets = [t.strip() for t in (target or 'auto').split(',') if t.strip()] or ['auto']
+    bad = [t for t in targets if t not in TARGETS and t != 'auto']
+    if bad or ('auto' in targets and len(targets) > 1):
+        raise Refused(f'--target {target}: auto, arm64, armhf, or a list of arm64 and armhf (the first the build has)')
+    if targets == ['auto']:
         m = platform.machine().lower()
         if sys.platform.startswith('linux') and m in ('aarch64', 'arm64', 'armv8l', 'armv7l', 'armhf', 'armv7', 'arm'):
-            target = 'arm64' if m in ('aarch64', 'arm64') and struct.calcsize('P') == 8 else 'armhf'
+            targets = ['arm64' if m in ('aarch64', 'arm64') and struct.calcsize('P') == 8 else 'armhf']
             why = f'this machine ({m}, {8 * struct.calcsize("P")}-bit userland)'
         else:
             pick = arm[0]
             return pick, (f'{pick} (the build has {", ".join(arm)}; --target armhf or --abi picks the 32-bit one)'
                           if len(arm) > 1 else f'{pick}, the only ARM ABI of the build')
     else:
-        why = f'--target {target}'
-    want = 'arm64-v8a' if target == 'arm64' else 'armeabi-v7a'
-    if want in have:
-        return want, f'{want} for {why}'
-    if target == 'arm64':
+        why = f'--target {",".join(targets)}'
+    for t in targets:
+        want = TARGETS[t]
+        if want in have:
+            return want, f'{want} for {why}' + (f' (the build has {", ".join(arm)})' if len(targets) > 1 else '')
+    if len(targets) > 1:
+        raise Refused(f'the build has {", ".join(arm)}, a player for none of {why}')
+    if targets == ['arm64']:
         raise Refused(f'the build has only armeabi-v7a (Unity: Mono builds, and IL2CPP builds without ARM64), which needs a '
                       f'32-bit (armhf) userland; {why} is 64-bit. On a firmware with a 32-bit userland use --target armhf')
     raise Refused(f'the build has only arm64-v8a, which needs a 64-bit userland; {why} is 32-bit (--target arm64 for a '
@@ -622,25 +637,44 @@ def obb_build_id(path):
         raise Refused(f'{os.path.basename(path)}: not a zip (Unity OBBs are zips)')
 
 
-def place(src, dst, log):
-    from .android_data import clone
-    how = clone(src, dst, allow_hardlink=True)
+def place(src, dst, log, move=False):
+    """dst = src: moved when src is this tool's own (unpacked from a container, rebuilt), else a clone,
+    a hard link or a copy (the input stays as it was)."""
+    how = None
+    if move:
+        try:
+            os.replace(src, dst)
+            how = 'moved'
+        except OSError:
+            pass
+    if how is None:
+        from .android_data import clone
+        how = clone(src, dst, allow_hardlink=True)
     log(f'  {os.path.basename(dst)} ({how}, {os.path.getsize(dst) / 2**20:.1f} MiB)')
+
+
+def _inside(path, d):
+    return os.path.commonpath([os.path.abspath(path), os.path.abspath(d)]) == os.path.abspath(d)
 
 
 # --------------------------------------------------------------------------------------------
 
-def run(inputs, out, target='auto', abi=None, any_version=False, force=False, dry_run=False, log=print):
+def run(inputs, out, target='auto', abi=None, any_version=False, force=False, dry_run=False, log=print,
+        managed_to=None):
+    """Imports the build into out (or with dry_run only reads it) and returns what it is: the
+    android_package.json fields, and for a dry run the report (`abis`, `graphics_apis`, `obbs`, ...).
+    managed_to: a folder that gets a Mono build's assemblies (assets/bin/Data/Managed/*.dll), for
+    `pmunity port check`'s code survey."""
     if not dry_run:
         os.makedirs(out, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix='.apk-', dir=None if dry_run else out)
     try:
-        return _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log)
+        return _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, managed_to)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log):
+def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log, managed_to=None):
     apks, obbs, aabs = unpack_inputs(inputs, tmp, log)
     if aabs:
         if len(aabs) > 1 or apks:
@@ -762,8 +796,25 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log):
         notes.append(f'the manifest asks for OpenGL ES {mf.gles >> 16}.{mf.gles & 0xffff}')
     for nm in notes:
         log('note: ' + nm)
+    if managed_to and backend == 'mono':
+        os.makedirs(managed_to, exist_ok=True)
+        for x in data_zips:
+            for nm in x.namelist():
+                if re.match(r'^assets/bin/Data/Managed/[^/]+\.dll$', nm):
+                    with x.open(nm) as fi, open(os.path.join(managed_to, nm.rsplit('/', 1)[1]), 'wb') as fo:
+                        shutil.copyfileobj(fi, fo, 1 << 20)
     if dry_run:
-        return {'package': mf.package, 'abi': pick, 'backend': backend, 'unity_version': str(ver)}
+        return {'package': mf.package, 'version_code': code, 'version_name': mf.version_name, 'min_sdk': mf.min_sdk,
+                'target_sdk': mf.target_sdk, 'abi': pick, 'abi_why': why, 'abis': [x for x in ABIS if x in have],
+                'all_abis': have, 'backend': backend, 'unity_version': str(ver),
+                'data_in': 'obb' if z in obb_zips else 'asset pack' if z is not base.z else 'apk',
+                'obbs': {kind: name for kind, (_, name) in sorted(obb_plan.items())},
+                'graphics_apis': [GFX.get(x, str(x)) for x in apis], 'swappy': bool(ps.get('androidUseSwappy')),
+                'product_name': ps.get('productName'), 'company_name': ps.get('companyName'),
+                'orientation': ORIENTATIONS.get(ps.get('defaultScreenOrientation')),
+                'il2cpp_metadata': meta_ver, 'plugins': plugins, 'notes': notes, 'meta_data': mf.meta,
+                'size_mb': int(sum(os.path.getsize(p) for p in set(inputs) | {p for p, _ in obb_plan.values()
+                                                                             if not _inside(p, tmp)}) / 2**20 + 0.5)}
 
     # write the layout
     log(f'-> {out}')
@@ -773,7 +824,7 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log):
         merge_apks(base, data_packs, apk_out, log)
         log(f'  base.apk (merged with {len(data_packs)} asset pack split(s), {os.path.getsize(apk_out) / 2**20:.1f} MiB)')
     else:
-        place(base.path, apk_out, log)
+        place(base.path, apk_out, log, move=_inside(base.path, tmp))
     libdir = os.path.join(out, 'lib')
     if os.path.isdir(libdir):
         for x in os.listdir(libdir):
@@ -789,7 +840,7 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log):
             os.unlink(os.path.join(out, x))
     res = {'package': mf.package, 'version_code': code, 'version_name': mf.version_name, 'apk': 'base.apk'}
     for kind, (p, name) in sorted(obb_plan.items()):
-        place(p, os.path.join(out, name), log)
+        place(p, os.path.join(out, name), log, move=_inside(p, tmp))
         res[f'{kind}_obb'] = name
     if backend == 'mono':
         etc = [nm for nm in base.names if nm.startswith('assets/bin/Data/Managed/etc/') and not nm.endswith('/')]
@@ -818,21 +869,48 @@ def _run(inputs, out, tmp, target, abi, any_version, force, dry_run, log):
     return res
 
 
+def port_new(ctx):
+    """`pmunity port new` hook: port.json for the apk route (no download, no conversion; the 32-bit
+    userland only when the port runs nothing but armeabi-v7a)."""
+    p = ctx.cfg['port']
+    if p['route'] != 'apk':
+        return
+    pj_path = os.path.join(ctx.out, p['name'], 'port.json')
+    if not os.path.isfile(pj_path):
+        return
+    with open(pj_path) as f:
+        pj = json.load(f)
+    a = pj['attr']
+    abis = ctx.cfg['player'].get('abis') or list(ABIS)
+    a['reqs'] = (['armhf'] if abis == ['armeabi-v7a'] else []) + [r for r in a.get('reqs') or [] if r != 'armhf']
+    if not p.get('desc'):
+        a['desc'] = f"{p['title']}: the game's own Android build, run on the handheld by ua_host."
+    if not p.get('inst'):
+        a['inst'] = (f"Requires {ctx.cfg['game']['what']}: put it in ports/{p['name']}/gamedata. The first launch "
+                     f"installs it ({p['setup_time']}; nothing is downloaded).")
+    ctx.write(f"{p['name']}/port.json", json.dumps(pj, indent=4) + '\n')
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='pmunity apk', description=__doc__.split('\n\n')[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split('\n\n', 1)[1])
     ap.add_argument('files', nargs='+', help='APK / split APKs / XAPK / APKS / AAB / OBB files, then the output dir')
-    ap.add_argument('--target', choices=['auto', 'arm64', 'armhf'], default='auto',
-                    help='the handheld userland: arm64 (64-bit) -> arm64-v8a, armhf (32-bit) -> armeabi-v7a')
+    ap.add_argument('--target', default='auto',
+                    help='the handheld userland: arm64 (64-bit) -> arm64-v8a, armhf (32-bit) -> armeabi-v7a, auto; '
+                         'or a list in order of preference, the first the build has a player for (armhf,arm64)')
     ap.add_argument('--abi', choices=list(ABIS), help='take this ABI\'s libraries')
     ap.add_argument('--any-unity-version', action='store_true', help='also Unity versions outside the runtime\'s range')
     ap.add_argument('--force', action='store_true', help='place OBBs of another build too')
     ap.add_argument('--dry-run', action='store_true', help='report only')
+    ap.add_argument('--json', action='store_true', help='what the build is, as JSON on stdout (the log goes to stderr)')
     a = ap.parse_args(argv)
     if len(a.files) < 2:
         ap.error('give the input file(s) and the output directory')
     *inputs, out = a.files
+    log = (lambda m: print(m, file=sys.stderr, flush=True)) if a.json else (lambda m: print(m, flush=True))
     try:
-        run(inputs, out, a.target, a.abi, a.any_unity_version, a.force, a.dry_run, log=lambda m: print(m, flush=True))
+        res = run(inputs, out, a.target, a.abi, a.any_unity_version, a.force, a.dry_run, log=log)
     except Refused as ex:
         sys.exit(f'pmunity apk: refused: {ex}')
+    if a.json:
+        print(json.dumps(res, indent=1, default=str))

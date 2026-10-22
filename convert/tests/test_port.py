@@ -4,6 +4,7 @@ tools (offline; nothing of a real game or of Unity)."""
 import io
 import json
 import os
+import shlex
 import shutil
 import struct
 import subprocess
@@ -16,7 +17,9 @@ import unittest
 import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pmunity import port as P
+from test_apk import BID, make_apk, make_obb, manifest as apk_manifest
 
 
 # ---------------------------------------------------------------- a .NET assembly, written here
@@ -505,6 +508,231 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertFalse(os.path.isfile(z))                          # (the archive is removed once built)
             self.assertIn('removing game-linux.zip: not needed to play', P._read(os.path.join(g, 'patchlog.txt')))
             self.assertIn('keep_installers=0', P._read(os.path.join(g, 'setup.txt')))
+
+@unittest.skipUnless(shutil.which('bash'), 'needs bash')
+class ApkRouteTest(unittest.TestCase):
+    """The apk route: the check of an Android build, the port it makes and ships, and its setup run
+    with the real `pmunity apk` (the setup's Python is this one)."""
+
+    def apk(self, t, sub='src', name='game.apk', abis=('arm64-v8a', 'armeabi-v7a'), backend='il2cpp', obb=False,
+            pkg='com.test.game', extra=None):
+        d = os.path.join(t, sub)
+        os.makedirs(d, exist_ok=True)
+        a = make_apk(os.path.join(d, name), apk_manifest(pkg=pkg, meta=(('unity.build-id', BID),)), abis=abis,
+                     backend=backend, extra=extra)
+        if obb:
+            make_obb(os.path.join(d, os.path.splitext(name)[0] + '.main.obb'), BID)
+        return a
+
+    def runtime(self, t):
+        rt = os.path.join(t, 'rt')
+        for arch in ('', 'arm64/'):
+            for d in (f'runtime/host/out/{arch}', f'runtime/media/out/{arch}licenses'):
+                os.makedirs(os.path.join(rt, d), exist_ok=True)
+            put(os.path.join(rt, f'runtime/host/out/{arch}ua_host'), f'host {arch}')
+            put(os.path.join(rt, f'runtime/media/out/{arch}licenses/libvpx.copyright'), f'BSD {arch}')
+        pyb = os.path.join(t, 'py.tar.gz')
+        with tarfile.open(pyb, 'w:gz') as tf:
+            ti = tarfile.TarInfo('python/lib/python3.12/LICENSE.txt')
+            ti.size = 3
+            tf.addfile(ti, io.BytesIO(b'PSF'))
+        return rt, pyb
+
+    def test_check(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.apk(t, obb=True)
+            rep = P.check(os.path.join(t, 'src'))
+            self.assertEqual(rep['build'], 'android')
+            self.assertEqual(rep['route'], 'apk')
+            r = rep['routes'][0]
+            self.assertTrue(r['ok'] and r['available'], r)
+            self.assertIn('ships both', ' '.join(r['needs']))
+            self.assertEqual(rep['unity_version'], '2021.3.4f1')
+            self.assertEqual(rep['apk_info']['obbs'], {'main': 'main.7.com.test.game.obb'})
+            self.assertEqual(rep['suggest']['player'], {'backend': 'il2cpp', 'abis': ['arm64-v8a', 'armeabi-v7a']})
+            self.assertEqual(rep['suggest']['game'], {'package': 'com.test.game'})
+            out = io.StringIO()
+            P.print_report(rep, out)
+            self.assertIn('package com.test.game, versionCode 7', out.getvalue())
+            self.assertIn('recommended route: apk', out.getvalue())
+            # a Mono build that reads only touches: pointer mode with touch events
+            dll = os.path.join(t, 'Assembly-CSharp.dll')
+            write_assembly(dll, 'Assembly-CSharp', [('', 'Game')], [('UnityEngine', 'Input')], ['Update'],
+                           [(1, 'GetTouch'), (1, 'get_touchCount')])
+            m = self.apk(t, 'mono', 'mono.apk', abis=('armeabi-v7a',), backend='mono',
+                         extra={'assets/bin/Data/Managed/Assembly-CSharp.dll': P._read(dll, 'rb')})
+            rep = P.check(m)
+            self.assertEqual(rep['route'], 'apk')
+            self.assertEqual(rep['suggest']['runtime'], {'UA_POINTER': 'touch'})
+            self.assertIn('armeabi-v7a only', ' '.join(rep['routes'][0]['needs']))
+            # refused, with the reason: x86 only
+            x = self.apk(t, 'x86', 'x.apk', abis=('x86',))
+            rep = P.check(x)
+            self.assertIsNone(rep['route'])
+            self.assertIn('x86', rep['unsupported'])
+            # nothing Android: no game
+            os.makedirs(os.path.join(t, 'empty'))
+            with self.assertRaises(SystemExit):
+                P.check(os.path.join(t, 'empty'))
+
+    def test_new_and_package(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t)
+            out = P.new('mygame', a, None, os.path.join(t, 'port'), title='My Game', log=lambda m: None)
+            files = set(P._read(os.path.join(out, '.port_files')).split('\n')) - {''}
+            for f in ('My Game.sh', 'mygame/setup/patchscript', 'mygame/setup/setup.env',
+                      'mygame/port.json', 'mygame/README.md', 'mygame/gamedata/PUT_GAME_FILES_HERE.txt', 'README.md',
+                      'mygame/gameinfo.xml', 'testing_thread.txt'):
+                self.assertIn(f, files)
+            self.assertNotIn('mygame/setup/convert.json', files)
+            for f in files:
+                if f != 'port.build.json':
+                    self.assertNotIn('@@', P._read(os.path.join(out, f)), f)
+                if f.endswith(('.sh', 'patchscript')):
+                    subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
+            env = P._read(os.path.join(out, 'mygame', 'setup', 'setup.env'))
+            for x in ('PORT_ROUTE=apk', 'GAME_PACKAGE=com.test.game', 'PLAYER_ABI=auto', 'GAME_BUILD=android',
+                      "GAME_DATA='*.apk *.xapk *.apks *.aab *.zip'", 'UNITY_VERSIONS=2021.3.4f1'):
+                self.assertIn(x, env)
+            self.assertNotIn('PACKAGE=com.pmunity', env)
+            toml = tomllib.loads(P._read(os.path.join(out, 'port.toml')))
+            self.assertNotIn('convert', toml)
+            self.assertNotIn('android_data', toml)
+            self.assertEqual(toml['player']['abis'], ['arm64-v8a', 'armeabi-v7a'])
+            launcher = P._read(os.path.join(out, 'My Game.sh'))
+            self.assertEqual(P.launcher_warnings(launcher), [])
+            for x in ('./ua_host64 "$GAMEDIR"', '/lib/ld-linux-armhf.so.3', '"abi"'):
+                self.assertIn(x, launcher)
+            self.assertNotRegex(launcher, r'(?m)^\s*(export\s+)?(SDL_AUDIODRIVER|UA_FRAME_RATE)=')
+            pj = json.loads(P._read(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn('nothing is downloaded', pj['attr']['inst'])
+            self.assertNotIn("downloads Unity's Android player", P._read(os.path.join(out, 'README.md')))
+            self.assertIn('ARCH=arm64 runtime/build.sh', P._read(os.path.join(out, 'README.md')))
+            # the release: both runtimes, each with its licences
+            rt, pyb = self.runtime(t)
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            with zipfile.ZipFile(z) as zf:
+                names = set(zf.namelist())
+                self.assertEqual(zf.read('mygame/ua_host64'), b'host arm64/')
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.libvpx.ua_host64.txt'), b'BSD arm64/')
+            for n in ('mygame/ua_host', 'mygame/licenses/LICENSE.libvpx.txt', 'mygame/setup/python.tar.gz',
+                      'mygame/setup/pmunity/apk.py'):
+                self.assertIn(n, names)
+            # port new again from port.toml alone (the README's Compile section)
+            P.new('mygame', None, None, out, log=lambda m: None)
+            self.assertEqual(P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')), env)
+            # an armeabi-v7a-only build: a 32-bit userland (port.json), ua_host alone
+            v7 = self.apk(t, 'v7', 'v7.apk', abis=('armeabi-v7a',))
+            out2 = P.new('v7game', v7, None, os.path.join(t, 'port2'), log=lambda m: None)
+            pj = json.loads(P._read(os.path.join(out2, 'v7game', 'port.json')))
+            self.assertEqual(pj['attr']['reqs'], ['armhf'])
+            self.assertNotIn('ARCH=arm64', P._read(os.path.join(out2, 'README.md')))
+            z = P.package(out2, os.path.join(t, 'rel2'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            with zipfile.ZipFile(z) as zf:
+                names = set(zf.namelist())
+            self.assertIn('v7game/ua_host', names)
+            self.assertNotIn('v7game/ua_host64', names)
+
+    def setup_port(self, t, data, files=(), hosts=('ua_host', 'ua_host64'), cfg=None, reinstall=False):
+        """A port made from the build `data`, installed as ports/mygame (over the installed one: as
+        PortMaster installs it again) with `files` in gamedata/ and the given runtimes; the setup's
+        Python is this one, pmunity this checkout's."""
+        cp = os.path.join(t, 'cfg.json')
+        with open(cp, 'w') as f:
+            json.dump(P.merge({'port': {'title': 'My Game'}}, cfg or {}), f)
+        out = P.new('mygame', data, cp, os.path.join(t, 'port'), log=lambda m: None)
+        g = os.path.join(t, 'ports', 'mygame')
+        if not reinstall:
+            shutil.rmtree(g, ignore_errors=True)
+        shutil.copytree(os.path.join(out, 'mygame'), g, dirs_exist_ok=True)
+        for h in hosts:
+            put(os.path.join(g, h), '#!/bin/sh\n')
+        shutil.copytree(P.HERE, os.path.join(g, 'setup', 'pmunity'), dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns('__pycache__', 'port_template'))
+        stub = os.path.join(t, 'stub', 'python', 'bin', 'python3.12')
+        os.makedirs(os.path.dirname(stub), exist_ok=True)
+        put(stub, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        os.chmod(stub, 0o755)
+        with tarfile.open(os.path.join(g, 'setup', 'python.tar.gz'), 'w:gz') as tf:
+            tf.add(os.path.join(t, 'stub', 'python'), 'python')
+        for f in files:
+            shutil.copy(f, os.path.join(g, 'gamedata'))
+        return g
+
+    def run_setup(self, g, env=None):
+        e = dict(os.environ, GAMEDIR=g, controlfolder=os.path.join(os.path.dirname(g), 'PortMaster'),
+                 DEVICE_ARCH='aarch64', PYTHONPATH='')
+        e.update(env or {})
+        return subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
+
+    @unittest.skipIf(os.path.exists('/lib/ld-linux-armhf.so.3'), 'a 32-bit userland here: the setup takes armeabi-v7a')
+    def test_setup(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t, obb=True)
+            g = self.setup_port(t, a, [a, os.path.join(t, 'src', 'game.main.obb')])
+            os.makedirs(os.path.join(g, 'gamedata', 'more'))
+            put(os.path.join(g, 'gamedata', '._game.apk'), 'AppleDouble')           # (macOS's, on exFAT: ignored)
+            shutil.move(os.path.join(g, 'gamedata', 'game.main.obb'), os.path.join(g, 'gamedata', 'more'))
+            r = self.run_setup(g)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('the players this system runs, in this order: arm64', r.stdout)
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
+            self.assertEqual(P._read(os.path.join(g, 'lib', 'libunity.so'), 'rb'), b'\x7fELFarm64-v8a')
+            for f in ('base.apk', 'main.7.com.test.game.obb', '.setup_done', 'answers.env'):
+                self.assertTrue(os.path.isfile(os.path.join(g, f)), f)
+            info = json.loads(P._read(os.path.join(g, 'android_package.json')))
+            self.assertEqual((info['abi'], info['source'], info['main_obb']), ('arm64-v8a', 'apk', 'main.7.com.test.game.obb'))
+            self.assertEqual(sorted(os.listdir(os.path.join(g, 'gamedata'))), ['._game.apk', 'PUT_GAME_FILES_HERE.txt'])
+            self.assertFalse(os.path.exists(os.path.join(g, 'setup')))
+            self.assertIn('setup finished', P._read(os.path.join(g, 'patchlog.txt')))
+            # the setup again (the port installed anew, the marker deleted): the installed APK and OBB
+            os.remove(os.path.join(g, '.setup_done'))
+            self.setup_port(t, a, reinstall=True)
+            r = self.run_setup(g)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('no package in gamedata/: the installed one again', r.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(g, 'main.7.com.test.game.obb')))
+            self.assertTrue(os.path.isfile(os.path.join(g, 'base.apk')))
+
+    def test_setup_checks(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self.apk(t)
+            # another game's package; another Unity version; nothing in gamedata/
+            other = self.apk(t, 'other', 'other.apk', pkg='com.other.game')
+            g = self.setup_port(t, a, [other])
+            r = self.run_setup(g)
+            self.assertIn('PATCH_FAIL_MSG:This port is made for My Game (com.test.game); your files are com.other.game',
+                          r.stdout)
+            g = self.setup_port(t, a, [a], cfg={'game': {'unity_versions': ['2021.3.5f1']}})
+            r = self.run_setup(g)
+            self.assertIn('your copy was built with Unity 2021.3.4f1', r.stdout)
+            g = self.setup_port(t, a)
+            r = self.run_setup(g)
+            self.assertIn('PATCH_FAIL_MSG:Put the Android build of My Game', r.stdout)
+            # refused by pmunity apk, with its reason
+            g = self.setup_port(t, a)
+            put(os.path.join(g, 'gamedata', 'game.apk'), 'not a zip')
+            r = self.run_setup(g)
+            self.assertIn("PATCH_FAIL_MSG:The game's files cannot run here:", r.stdout)
+            self.assertIn('not a zip archive', r.stdout)
+            # the 32-bit player only, on a system without a 32-bit userland: said before anything else
+            if not os.path.exists('/lib/ld-linux-armhf.so.3'):
+                g = self.setup_port(t, a, [a], hosts=('ua_host',))
+                r = self.run_setup(g)
+                self.assertIn('needs a 32-bit (armhf) userland', r.stdout)
+                self.assertNotIn('unpacking the setup tools', r.stdout)
+
+    def test_choose_abi_preferences(self):
+        from pmunity import apk as A
+        have = ['arm64-v8a', 'armeabi-v7a']
+        self.assertEqual(A.choose_abi(have, 'armhf,arm64', None, print)[0], 'armeabi-v7a')
+        self.assertEqual(A.choose_abi(have, 'arm64,armhf', None, print)[0], 'arm64-v8a')
+        self.assertEqual(A.choose_abi(['arm64-v8a'], 'armhf,arm64', None, print)[0], 'arm64-v8a')
+        with self.assertRaises(A.Refused):
+            A.choose_abi(['armeabi-v7a'], 'arm64', None, print)
+        with self.assertRaises(A.Refused):
+            A.choose_abi(have, 'auto,arm64', None, print)
 
 
 class RoutesTest(unittest.TestCase):

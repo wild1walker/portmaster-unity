@@ -1,0 +1,172 @@
+#!/bin/bash
+# First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
+# `pmunity port new`, apk route): installs the game's own Android build from the player's copy in
+# ports/<port>/gamedata/. Nothing is converted and nothing is downloaded:
+#   1. the build: its APK (and the .obb files that come with it), split APKs, or the .xapk / .apks /
+#      .aab (or a .zip of them) put there; `pmunity apk` checks it (Unity version, graphics APIs,
+#      IL2CPP metadata, OBBs) and lays it out for ua_host, with the player this system runs: the
+#      build's armeabi-v7a one where the system has a 32-bit (armhf) userland (ua_host), else its
+#      arm64-v8a one (ua_host64)
+#   2. installing: lib/ (that player's libraries), the APK and the OBBs under the names the player
+#      looks for, android_package.json
+# Settings: setup/setup.env (from port.toml). An interrupted setup (battery, power button)
+# continues on the next launch. Log: ports/<port>/patchlog.txt.
+# PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why the setup failed.
+S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+. "$S/setup.env"
+
+exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
+echo "=== $(date) $PORT_TITLE setup ==="
+fail() { echo "PATCH_FAIL_MSG:$1"; echo "Setup failed: $1"; echo "Patching process failed!"; exit 1; }
+step() { echo; echo "== $(date +%H:%M:%S) $*"; }
+hook() {                                # the port's own step at a fixed point (setup/hooks/<name>.sh)
+  [ -f "$S/hooks/$1.sh" ] || return 0
+  step "$PORT_TITLE: $1"
+  . "$S/hooks/$1.sh" || fail "The port's $1 step failed (see patchlog.txt)."
+}
+lower() { echo "$1" | tr 'A-Z' 'a-z'; }
+free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
+room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB>: that much free (or unknown)
+[ "$DEVICE_ARCH" = aarch64 ] || fail "The setup needs a 64-bit (aarch64) system for its tools (this one: $DEVICE_ARCH)."
+mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
+echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
+
+# ---- which of the build's players this system runs, in order: the 32-bit one where there is a
+# 32-bit userland and the port has ua_host, the 64-bit one where it has ua_host64 (any aarch64
+# system); port.toml's player.abi (PLAYER_ABI) puts arm64-v8a first
+t32=; [ -e /lib/ld-linux-armhf.so.3 ] && [ -f "$GAMEDIR/ua_host" ] && t32=armhf
+t64=; [ -f "$GAMEDIR/ua_host64" ] && t64=arm64
+case "$PLAYER_ABI" in arm64-v8a) TARGETS="$t64 $t32";; *) TARGETS="$t32 $t64";; esac
+TARGETS=$(echo $TARGETS | tr ' ' ,)
+if [ -z "$TARGETS" ]; then
+  [ -f "$GAMEDIR/ua_host" ] && fail "$PORT_TITLE runs the game's 32-bit player, which needs a 32-bit (armhf) userland, and this system has none (no /lib/ld-linux-armhf.so.3)."
+  fail "This copy of the port has no ua_host: install it again."
+fi
+echo "the players this system runs, in this order: $TARGETS"
+
+# ---- the setup's Python (CPython + UnityPy, aarch64)
+PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4, PIL" 2>/dev/null; then
+  step "unpacking the setup tools"
+  rm -rf "$W/python"
+  # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
+  ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
+  PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+  [ -n "$PY" ] || fail "The setup's Python is incomplete."
+fi
+export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1 TMPDIR="$W/tmp"
+mkdir -p "$TMPDIR"
+pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
+
+# ---- answers to the port's questions: kept from the first run, else PortMaster's patcher (<ID> in
+# the environment), else setup.txt (<id>=<value>, older PortMaster), else the default
+: > "$W/answers.env.new"
+for id in $QUESTIONS; do
+  eval "opts=\$Q_${id}_OPTIONS def=\$Q_${id}_DEFAULT qenv=\$Q_${id}_ENV"
+  v=$(cat "$W/answers/$id" 2>/dev/null)
+  [ -n "$v" ] || v=${!id}
+  [ -n "$v" ] || v=$(sed -n "s/^[[:space:]]*$(lower "$id")[[:space:]]*=[[:space:]]*\([A-Za-z0-9._:+-]*\).*/\1/p" "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
+  case " $opts " in *" $v "*) ;; *) v=$def;; esac
+  mkdir -p "$W/answers"; echo "$v" > "$W/answers/$id"
+  echo "$id: $v"
+  [ -n "$qenv" ] && echo "export $qenv='$v'" >> "$W/answers.env.new"
+done
+mv -f "$W/answers.env.new" "$W/answers.env"
+
+# ---- 1. the build: the packages in gamedata/ (game.data's globs, any depth) with the .obb files
+# there; without a package there, the one installed before (the setup again, e.g. for another
+# system); a port's game hook may set INPUTS itself
+A="$W/apk"
+if [ ! -f "$W/.step_import" ]; then
+  INPUTS=(); pkgs=0
+  set -f                                # (GAME_DATA's globs are patterns for the names below)
+  while IFS= read -r f; do
+    n=$(lower "$(basename "$f")")
+    case "$n" in ._*) continue;; esac   # (macOS's AppleDouble files on exFAT/FAT cards)
+    for g in $GAME_DATA "*.obb"; do
+      case "$n" in $g) INPUTS+=("$f"); case "$n" in *.obb) ;; *) pkgs=$((pkgs + 1));; esac; break;; esac
+    done
+  done < <(find "$GD" -maxdepth 6 \( -name .setup -o -name __MACOSX \) -prune -o -type f -print 2>/dev/null | sort)
+  set +f
+  if [ "$pkgs" = 0 ]; then
+    INPUTS=()
+    if [ -f "$GAMEDIR/base.apk" ]; then
+      INPUTS=("$GAMEDIR/base.apk")
+      for f in "$GAMEDIR"/main.*.obb "$GAMEDIR"/patch.*.obb; do [ -f "$f" ] && INPUTS+=("$f"); done
+      echo "no package in gamedata/: the installed one again"
+    fi
+  fi
+  hook game                             # (a port's own way to find or unpack the build: sets INPUTS)
+  [ ${#INPUTS[@]} -gt 0 ] || fail "Put $GAME_WHAT in ports/$PORT_NAME/gamedata, then launch again."
+  printf '  %s\n' "${INPUTS[@]#$GAMEDIR/}"
+  in_mb=$(du -cm "${INPUTS[@]}" 2>/dev/null | tail -1 | cut -f1)
+  need=$((${in_mb:-0} + 200)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+  room "$need" || fail "Installing the game needs about $need MB free on the card ($(free_mb) MB free)."
+  step "checking the game and laying it out for the player (${in_mb:-?} MB; files are linked or copied)"
+  rm -rf "$A"
+  if ! pm apk "${INPUTS[@]}" "$A" --target "$TARGETS" --json > "$W/apk.json" 2> "$W/apk.err"; then
+    cat "$W/apk.err"
+    why=$(sed -n 's/^pmunity apk: refused: //p' "$W/apk.err" | tail -1)
+    rm -rf "$A"
+    [ -n "$why" ] && fail "The game's files cannot run here: $why"
+    fail "Reading the game's files failed (see patchlog.txt)."
+  fi
+  cat "$W/apk.err"
+  eval "$("$PY" -c 'import json, shlex, sys
+d = json.load(open(sys.argv[1]))
+for k in ("package", "unity_version", "abi", "backend", "version_name"):
+    print("APK_%s=%s" % (k.upper(), shlex.quote(str(d.get(k) or ""))))' "$W/apk.json")" \
+    || fail "Reading the game's files failed (see patchlog.txt)."
+  [ -n "$APK_PACKAGE" ] && [ -n "$APK_ABI" ] || fail "Reading the game's files failed (see patchlog.txt)."
+  echo "the game: $APK_PACKAGE $APK_VERSION_NAME, Unity $APK_UNITY_VERSION, $APK_BACKEND; its $APK_ABI player"
+  if [ -n "$GAME_PACKAGE" ] && [ "$GAME_PACKAGE" != "$APK_PACKAGE" ]; then
+    rm -rf "$A"
+    fail "This port is made for $PORT_TITLE ($GAME_PACKAGE); your files are $APK_PACKAGE (another game?)."
+  fi
+  if [ -n "$UNITY_VERSIONS" ]; then
+    case " $UNITY_VERSIONS " in *" $APK_UNITY_VERSION "*) ;; *)
+      rm -rf "$A"
+      fail "This port is made for $PORT_TITLE built with Unity $UNITY_VERSIONS; your copy was built with Unity $APK_UNITY_VERSION (another version of the game?).";;
+    esac
+  fi
+  printf '%s\n' "${INPUTS[@]}" > "$W/.inputs"
+  touch "$W/.step_import"
+fi
+
+# ---- 2. into place: the player's libraries, the APK and its OBBs, android_package.json (renames:
+# the layout is on the same card)
+step "installing"
+[ -d "$A" ] || fail "The setup's work folder is incomplete: delete ports/$PORT_NAME/gamedata/.setup and launch again."
+if [ ! -f "$W/.step_cleared" ]; then        # (an earlier install's files: the new ones are in $A)
+  rm -rf "$GAMEDIR/lib" "$GAMEDIR/assets" "$GAMEDIR/android_package.json"
+  rm -f "$GAMEDIR"/main.*.obb "$GAMEDIR"/patch.*.obb
+  touch "$W/.step_cleared"
+fi
+for d in lib assets; do
+  [ -d "$A/$d" ] || continue
+  rm -rf "${GAMEDIR:?}/$d"
+  mv "$A/$d" "$GAMEDIR/" || fail "Could not install $d/."
+done
+for f in "$A"/*.apk "$A"/*.obb "$A"/android_package.json; do
+  [ -f "$f" ] || continue
+  mv -f "$f" "$GAMEDIR/" || fail "Could not install $(basename "$f")."
+done
+[ -f "$GAMEDIR/lib/libunity.so" ] && [ -f "$GAMEDIR/base.apk" ] && [ -f "$GAMEDIR/android_package.json" ] \
+  || fail "The installed game is incomplete (see patchlog.txt): delete ports/$PORT_NAME/gamedata/.setup and launch again."
+cp "$W/answers.env" "$GAMEDIR/answers.env"
+hook post_install
+# the player's copy in gamedata/ (installed: linked or copied) is not needed to play: removed, as
+# PortMaster ports' setups do with installers, unless setup.txt says keep_installers=1
+keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
+while IFS= read -r f; do
+  case "$f" in "$GD"/*) ;; *) continue;; esac       # (not the installed files of a setup again)
+  [ -f "$f" ] || continue
+  if [ "$keep" = 1 ]; then echo "kept ${f#$GD/} (keep_installers=1)"; continue; fi
+  echo "removing ${f#$GD/}: installed, not needed to play (keep_installers=1 in setup.txt keeps it)"
+  rm -f "$f"
+done < "$W/.inputs"
+rm -rf "$W" "$S"
+find "$GD" -mindepth 1 -depth -type d 2>/dev/null | while IFS= read -r d; do rmdir "$d" 2>/dev/null; done
+sync
+touch "$GAMEDIR/$READY"
+step "setup finished: the game's $(sed -n 's/^ *"abi": *"\([^"]*\)".*/\1/p' "$GAMEDIR/android_package.json" | head -1) player, $(du -sm "$GAMEDIR" | cut -f1) MB."

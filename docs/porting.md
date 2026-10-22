@@ -18,7 +18,9 @@ python -m pmunity port package mygame --submission       # + mygame/out/submissi
 ```
 
 `<game>` is the folder of a desktop build as you have it (the one with the executable and
-`<Game>_Data`), a macOS `<Game>.app`, or the data folder itself. Nothing in it is run or changed;
+`<Game>_Data`), a macOS `<Game>.app`, or the data folder itself; or the game's own Android build
+(an `.apk`, with its `.obb` files beside it, an `.xapk`, `.apks` or `.aab`, or a folder of them: the
+`apk` route, section 2). Nothing in it is run or changed;
 run the commands with `python -I` (and `sys.path` pointing at `convert/`) when you do not trust the
 game's files. Cuphead's port ([portmaster-cuphead](https://github.com/wild1walker/portmaster-cuphead))
 was written by hand before these tools; it shows what a game may need beyond them (its own code
@@ -46,6 +48,13 @@ reads the game and prints:
 | texture formats and sizes (main data) | the serialized files |
 | the routes that fit, the recommended one, and the port config values it suggests | all of the above |
 
+An Android build (the `apk` route) is read with `pmunity apk`'s dry run instead: package,
+versionCode and versionName, Unity version, backend, the ARM ABIs it has (and so which systems run
+it), graphics APIs, OBBs, native plugins, the screen orientation, and for a Mono build the same
+input survey of its assemblies (`assets/bin/Data/Managed/`): `UA_POINTER = "touch"` for a game
+that reads only touches, `"1"` for pointer-driven menus. A build `pmunity apk` refuses (x86 only,
+Vulkan only, VR, IL2CPP without its metadata, Unity data in an OBB not given, ...) gets the reason.
+
 The exit status is 0 when a route fits. `--json` gives the whole report (`port new` uses the same).
 
 ## 2. Routes
@@ -55,7 +64,7 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
 | `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. Not yet: assembly patches (`files.assembly_patches`), StreamingAssets read as files (`streaming_assets` other than `obb`) |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
-| `apk` | an Android build of the game | `pmunity apk` by hand ([apk.md](apk.md)); no port template yet |
+| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; [apk.md](apk.md), "As a port") |
 
 Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from = ["d3d11"]` and
 `pmhlslcc` (`tools/hlslcc/build.sh`; docs/shaders.md, "Windows builds"). A Windows build of Unity
@@ -89,9 +98,13 @@ route needs of the handheld), `BUILD_STEPS` (the build commands of the route's `
 an unknown name is an error). Everything else a launcher or setup needs comes from files `port new`
 writes next to them: `setup/setup.env` (shell assignments), `setup/convert.json`, `port.env`,
 `setup/questions.lua`; `port.json`, `gameinfo.xml` and `testing_thread.txt` are written for every
-route by `port new` itself. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host; `asmpatch?`: only
-when the port uses it); `defaults` are port.toml values the route sets where port.toml says nothing; a part the packager does not know comes from a hook module (below). The box64
-route can bring its own launcher and setup this way and share the common files.
+route by `port new` itself. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host as `ua_host`;
+`ua_host64` for it beside a 32-bit `ua_host`; a `?` part only when the port uses it: `asmpatch?`
+when it runs asmpatch, `ua_host?` / `ua_host64?` for the ABIs in `player.abis`); `defaults` are
+port.toml values the route sets where port.toml says nothing; `config` lists the port.toml
+sections the route uses (port.toml and `setup.env` get only those; default all) and `config_doc`
+replaces their explanations; a part the packager does not know comes from a hook module (below).
+The box64 route can bring its own launcher and setup this way and share the common files.
 
 ## 3. port new
 
@@ -133,8 +146,9 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `port.screenshot`, `port.cover` | `screenshot.png`, `cover.png` | image files (relative to the port folder; PNG or JPEG) `package` ships as `<name>/screenshot.png` and `<name>/cover.png` |
 | `port.ready_marker` | `.setup_done` | the file that marks the setup done (a port moving onto these tools keeps its old one, so installed copies are not set up again) |
 | `port.setup_time` | from the size and steps | the patcher's estimate |
-| `game.data` | the data folder's name | what the setup looks for in `gamedata/` (a glob; then any Unity data folder) |
-| `game.build` | the check's | `linux`, `macos` or `windows`: what players provide |
+| `game.data` | the data folder's name; apk route: `*.apk *.xapk *.apks *.aab *.zip` | what the setup looks for in `gamedata/` (a glob; then any Unity data folder); apk route: the packages it takes (globs, any depth), with every `.obb` there |
+| `game.build` | the check's | `linux`, `macos`, `windows` or `android`: what players provide |
+| `game.package` | apk route: the APK's | the Android package the setup accepts (another one: it stops and says so); empty: any |
 | `game.unity_versions` | the game's | the versions the setup accepts (another one: the setup stops and says so); empty: any the converter supports |
 | `game.what` | from the above | how READMEs and messages name what to put in `gamedata/` |
 | `game.size_mb` | the build's | the setup's free-space checks (about three times it) |
@@ -143,7 +157,8 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `game.genre`, `description` | the first of `port.genres`, `port.desc` | `gameinfo.xml`'s genre (a display name: `Platformer`, `RPG`) and description (the frontend has room for more than `port.desc`) |
 | `game.url` | the first store's `gameurl` | the game's page (the testing thread) |
 | `[controls]` | none | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
-| `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player package `pmunity player fetch` gets |
+| `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player package `pmunity player fetch` gets; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
+| `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
 | `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
 | `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, else `off` | `auto`: tools/asmpatch runs on the game's assemblies (each patch changes only what it finds; the package then ships asmpatch); a list: only those patches |
@@ -188,6 +203,21 @@ continues where it stopped on the next launch. Free space: about three times the
 runs. The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
 (the launcher checks for `/lib/ld-linux-armhf.so.3` first).
 
+The apk route's setup is shorter: the setup's Python; the players this system runs, in order (the
+APK's armeabi-v7a one where `/lib/ld-linux-armhf.so.3` exists and the port has `ua_host`, its
+arm64-v8a one where the port has `ua_host64`; `player.abi = "arm64-v8a"` puts that first); the
+packages in `gamedata/` (`game.data`, any depth, macOS's `._` files skipped) with the `.obb` files
+there, else the APK installed before (a setup again, e.g. after moving the card to a 64-bit-only
+handheld), else the `game` hook (it sets `INPUTS`); `pmunity apk --target <those players> --json`,
+which checks the build and lays it out in the work folder (APKs and OBBs hard-linked, or copied
+on exFAT/FAT; what it unpacks from an `.xapk` or rebuilds from an `.aab` moved); the package and the
+Unity version checked against `game.package` and `game.unity_versions`; then installing: `lib/`,
+`base.apk`, the OBBs under the names the player looks for, Mono's config and
+`android_package.json` moved into the port folder, the player's files in `gamedata/` deleted
+(`keep_installers=1` keeps them). Free space: about the build's size. The launcher picks `ua_host`
+or `ua_host64` by `android_package.json`'s `abi`, and keeps the build's own frame pacing (ua_host
+runs imported builds with `UA_FRAME_RATE=android`).
+
 ## 5. package
 
 ```
@@ -204,7 +234,11 @@ converter's wheels for aarch64), asmpatch for linux-arm64 when the port uses it
 libhybris (Apache 2.0, in ua_host), the video decoders' licences (`runtime/media/out/licenses`),
 the setup Python's and its packages' licences, and for asmpatch the .NET runtime's licence and
 third-party notices and Mono.Cecil's. `--runtime` points at another checkout whose runtime and
-asmpatch are built. Zip entries keep their Unix modes and get a fixed date.
+asmpatch are built. Zip entries keep their Unix modes and get a fixed date. The il2cpp-arm64 route
+ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build.sh`) as `ua_host`;
+the apk route ships `ua_host` for an APK's armeabi-v7a player and that 64-bit one as `ua_host64`
+for its arm64-v8a player (`player.abis`), each with its build's decoder licences (the 64-bit
+one's as `LICENSE.<part>.ua_host64.txt`).
 
 The zip also gets the screenshot and the cover (`port.screenshot`, `port.cover`) as
 `<name>/screenshot.png` and `<name>/cover.png`, where PortMaster's own release zips have them, and
@@ -228,7 +262,10 @@ unpacks the release into `<work>/roms/ports` as PortMaster would, copies the gam
 runs in the emulated armv7 rig (`tools/emu`, QEMU and Mesa's llvmpipe: slow, about 1 fps, but the
 same frames and game logic) with the port's `port.env` and `answers.env`, and four screenshots
 go to `<work>/shots.png`; `UA_INPUT_SCRIPT`-style input (`"60:ptr=0.5/0.5 70:a~1.5"`) drives it.
-`EMU_ONLY=1` reruns only the game. The rig decodes ASTC in software and keeps the result, so a
+`EMU_ONLY=1` reruns only the game. An install of an arm64-v8a build (`android_package.json`'s
+`abi`; the apk route on a 64-bit-only system, `REHEARSE_64ONLY=1`) runs in the arm64 rig
+(`EMU_ARCH=arm64`) with the port's `ua_host64`. `REHEARSE_NAME` and `EMU_NAME` name the containers.
+The rig decodes ASTC in software and keeps the result, so a
 game converted with the textures step may run out of the rig's memory where the handheld's GPU
 would not.
 

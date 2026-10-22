@@ -1,0 +1,7 @@
+Put your copy of @@TITLE@@ here, then launch @@TITLE@@ from the Ports menu:
+
+  @@GAME_WHAT@@.
+
+The .apk with its .obb files (on a phone: Android/obb/<package>/), the split APKs of an install
+(base.apk, split_config.*.apk), or the .xapk / .apks / .aab file. Nothing is downloaded. The first
+launch installs the game (@@SETUP_TIME@@, once) and then deletes these files. See ../README.md.
