@@ -3,7 +3,7 @@ Android player on GLES handhelds.
 
     python -m pmunity convert <data> [<out>] --config game.json [--steps a,b] [--plugin steps.py] [--only REGEX]
     python -m pmunity shaders <data> [<out>] [--precision highp|default-samplers] [--replace] [--bundles REGEX]
-                              [--from glcore|d3d11|vulkan|glcore,d3d11] [--hlslcc PATH] [--spirv-cross PATH]
+                              [--from glcore|d3d11|vulkan|metal|glcore,d3d11] [--hlslcc PATH] [--spirv-cross PATH]
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
     python -m pmunity plugins <data> [--map F] [--json F]    (native plugins: what the port gives each)
@@ -135,7 +135,7 @@ def main(argv=None):
     s.add_argument('--from', dest='sources', default='glcore',
                    help='desktop programs to translate, in order of preference: glcore (macOS/Linux builds), '
                         'd3d11 (Windows builds, needs tools/hlslcc), vulkan (Vulkan-only Linux builds, needs '
-                        'tools/spirvcross), e.g. glcore,d3d11')
+                        'tools/spirvcross), metal (Metal-only macOS builds), e.g. glcore,d3d11')
     s.add_argument('--hlslcc', help='the pmhlslcc binary (default: $PMHLSLCC, tools/hlslcc/out/pmhlslcc, PATH)')
     s.add_argument('--spirv-cross', help='the pmspirvcross binary (default: $PMSPIRVCROSS, '
                                          'tools/spirvcross/out/pmspirvcross, PATH)')

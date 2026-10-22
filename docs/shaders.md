@@ -6,7 +6,12 @@ for `#pragma target 4.5` and up), Metal on macOS, and maybe Vulkan. `python -m p
 (convert/pmunity/shaders/) gives every OpenGL Core program a GLSL ES 3.00 (or 3.10) twin in the
 same Shader asset, so the Android player finds a GLES3 program for every variant the game uses. A
 Windows build has only Direct3D 11 programs (DXBC bytecode): `--from d3d11` translates those with
-Unity's HLSLcc ([below](#windows-builds-direct3d-11-programs)).
+Unity's HLSLcc ([below](#windows-builds-direct3d-11-programs)). A Linux build made without OpenGL
+Core (HDRP's, or one that lists only Vulkan) has Vulkan programs: `--from vulkan` translates them
+with SPIRV-Cross ([below](#vulkan-only-builds-vulkan-programs-spir-v)); a macOS build of Unity 2020.3
+and later has Metal programs only: `--from metal` reads Unity's MSL
+([below](#macos-builds-metal-programs-msl)). The default stays `glcore`; with several sources a shader
+is translated from the first one it has, so a game with OpenGL Core programs converts as before.
 
 ## What the converter does
 
@@ -467,6 +472,167 @@ BC4 or BC5 textures (the step's decoding of those is tested on hand-made blocks,
 
 `tests/test_dxbc.py` checks the path on hand-assembled vertex and pixel programs (no Unity files;
 the HLSLcc part runs when pmhlslcc is built).
+
+## Vulkan-only builds: Vulkan programs (SPIR-V)
+
+```sh
+tools/spirvcross/build.sh                                  # once: SPIRV-Cross + SMOL-V (pinned commits) + pmspirvcross
+python -m pmunity shaders <Game>_Data <out> --from vulkan     # config: "shaders": {"from": ["vulkan"]}
+```
+
+Unity compiles its Vulkan programs as it does its GL ones: HLSLcc turns the HLSL's DXBC into
+Vulkan GLSL, glslang into SPIR-V. So the SPIR-V keeps HLSLcc's shape (matrices as vec4 arrays, one
+uniform block per constant buffer, a separate texture and sampler per texture), and Khronos'
+SPIRV-Cross (Apache 2.0) writes GLSL ES from it. `tools/spirvcross/build.sh` fetches SPIRV-Cross
+and Aras Pranckevicius' SMOL-V decoder at pinned commits and builds `pmspirvcross`, a small front
+end (one-shot, or a server the converter keeps open); `ARCH=arm64` builds the aarch64 binary for
+the handheld in `ua-build-arm64` (libstdc++ and libgcc linked in), which `pmunity port package`
+ships as `setup/pmspirvcross` for a port with `shaders.from = ["vulkan"]` (the setup sets
+`PMSPIRVCROSS`), with its licences (THIRD_PARTY.md).
+
+What the path does (`vulkan.py`, `spirv.py`), for Unity 2017.4 - 6000.x:
+
+1. **Entries.** The Vulkan blob (platform 18, gpu program type 25) has the GL layout of the same
+   Unity version: up to 2019.x a vertex and a fragment subprogram per variant (the fragment
+   entry without code), from 2020.1 one subprogram per variant, 2021.2+ with a parameter entry.
+   An entry's code is an int32 (0 up to 2019; from 2020.1 32 | requirement bits), a table of
+   (offset, size) per stage slot (5 in 2017.x, 6 in 2019.x, 9 from 2020.1: vertex, fragment,
+   hull, domain, geometry, ...; 2022.1+ followed by an int32 1 and two 16-byte hashes), then each
+   stage's SPIR-V module compressed with SMOL-V. Unity 2017 - 2019 wrote SMOL-V's older encoding
+   (smolv's 2016-08-31 code; the header does not tell): pmspirvcross takes the decoding SPIRV-Cross
+   parses. After the code, Unity's binding info in the Direct3D 11 layout (`dxbc.Bindings`): the
+   vertex channels (source ShaderChannel, target 13 + the input's location; 12 before 2018.2),
+   the constant buffers with the members the program reads, and the bindings, whose index is
+   stage bits << 24 | descriptor set << 16 | binding (stage bits 4 vertex, 8 fragment, 64 geometry;
+   a texture's first int its sampler's index alike). Every entry writes back byte for byte.
+2. **Names.** Unity strips the modules' debug names (but some varyings'). The path names, in the
+   SPIR-V (OpName / OpMemberName), everything the way Unity's GL backend binds HLSLcc's GL programs:
+   vertex inputs by their channel (`in_POSITION0`, `in_NORMAL0`, `in_TANGENT0`, `in_COLOR0`,
+   `in_TEXCOORD0-7`, `in_BLENDWEIGHTS0`, `in_BLENDINDICES0`: libunity's list; 2017.x's channel
+   numbering before 2018.2), varyings by location (`vs_LOCATION<n>` in both stages), fragment
+   outputs `SV_Target<n>`, constant buffer members by offset from the binding info (matrices
+   `hlslcc_mtx4x4<name>`; Unity's array size is the part the program reads, so the SPIR-V's
+   declared size is kept), textures and samplers by their binding.
+3. **GLSL.** SPIRV-Cross writes GLSL ES 3.00 (3.10 where the program needs it: `textureGather`,
+   `bitfieldInsert` in URP's full-screen vertex shader, multisampled textures), each texture
+   combined with its sampler as one GLSL sampler named as the texture (`hlslcc_zcmp<name>` for a
+   comparison, after the texture's plain sampler, as HLSLcc declares both; a texture sampled with
+   a second sampler uses its own: GL has one sampler state per texture), without descriptor sets,
+   bindings or input locations, default precision highp. Then, as Unity's GL programs have it:
+   each stage's globals (`VGlobals<hash>`, `PGlobals<hash>`) as plain uniforms, only those the
+   stage reads; other constant buffers (URP's `UnityPerDraw`, `UnityPerMaterial`, ...) as uniform
+   blocks of their name (unread members `Xhlslcc_UnusedX_<block>_<offset>`; up to 2018 as plain
+   uniforms too); from 2019.1 Unity's macro block with each sampler's unit (`UNITY_LOCATION(n)`,
+   program-wide, the fragment stage's first) and each block's binding (`UNITY_BINDING(n)`);
+   `ddx_fine` and the other derivative kinds as GLSL ES's one (`dFdx`, as HLSLcc writes them for
+   GL). Unity's Vulkan programs end their vertex stage with `gl_Position.y = -gl_Position.y`
+   (before every return; Vulkan's clip space has y down): left out, since the engine gives a GL
+   device GL's matrices.
+4. **GL data**, as for the GLCore path: up to 2019.x the GLES3 blob keeps the Vulkan indices
+   (`dxbc.gl_rest` up to 2018; 2019.x the GL binding info, `dxbc.gl_bindings`, in the vertex entry
+   and subprogram), from 2020.1 entries numbered anew with Unity's GL binding info (2021.2+ in
+   parameter entries, shared where equal), the Vulkan program's `m_CommonParameters` put back
+   into its Vulkan entries and cleared. The twins keep the Vulkan subprograms' keywords, tier and
+   requirements.
+5. **Left out**, with the reason, as for Direct3D 11: a SubShader with a variant that cannot be
+   translated (geometry and tessellation stages, storage buffers and images, subpass inputs, cube
+   map arrays, what GLSL ES lacks); VR-only, GPU instancing and sprite skinning variants are left
+   out instead, the SubShader keeping its other variants.
+
+What the Vulkan compile decided by platform stays as for Direct3D 11 ([above](#windows-builds-direct3d-11-programs)):
+`UNITY_REVERSED_Z`, `UNITY_UV_STARTS_AT_TOP` and `UNITY_NEAR_CLIP_VALUE` are Direct3D's on Vulkan,
+and so are platform-sized arrays (URP's additional lights: 256 for Vulkan, 32 for GL). Compute
+shaders' Vulkan kernels are not translated yet (the GLCore path's `compute` needs GLCore kernels).
+
+**Checked** (`tests/test_vulkan_corpus.py`, eleven free Linux games that have both OpenGL Core and
+Vulkan programs, translated from Vulkan alone and compared with the same pass's GLCore program of
+the variant; `tests/test_vulkan.py` on hand-assembled SPIR-V): every Vulkan entry writes back byte
+for byte, and every distinct translated program compiles and links on Mesa (llvmpipe, ES 3.2;
+`ua-build-arm64`'s Mesa 21.2):
+
+| game data | shaders given GLES3 (empty blobs) | programs (GLES 3.1) | left out | interface as the GL program's | distinct programs linked on Mesa |
+|---|---|---|---|---|---|
+| 2017.4.40f1 | 77 of 77 | 282 | - | 283 of 290 (the editor-only Meta pass's `bool4` is `uvec4`; a post effect's `UNITY_UV_STARTS_AT_TOP` branch) | 243 / 243 |
+| 2018.4.36f1 | 36 of 36 | 156 | - | 160 of 160 | 147 / 147 |
+| 2019.4.8f1 | 36 of 37 | 169 | VR blit (geometry stage); 14 instancing variants | 175 of 175 | 154 / 154 |
+| 2020.3.49f1 | 53 of 54 | 213 | VR blit | 220 of 220 | 184 / 184 |
+| 2021.2.9f1 (URP) | 71 (2) of 79 | 633 (8) | VR blit, 7 with structured buffers | 671 of 677 | 541 / 541 |
+| 2021.3.16f1 (URP) | 84 (1) of 86 | 2556 (33) | VR blit, XR occlusion mesh (`gl_Layer`) | 2541 of 2548 | 988 / 988 |
+| 2022.2.15f1 (URP) | 84 (5) of 86 | 1026 (324) | VR blit, a UAV | 689 of 1061 (URP's light arrays sized for Vulkan) | 798 / 798 |
+| 2022.3.36f1 (URP) | 84 (1) of 87 | 1177 (866) | VR blit, a `noperspective` outline, a UAV; 3 instancing variants | 1248 of 1255 | 934 / 934 |
+| 2023.1.8f1 (URP) | 97 (4) of 102 | 1666 (529) | VR blit, 4 with buffers; 186 instancing variants | 995 of 1704 (light arrays) | 1438 / 1438 |
+| 6000.3.11f1 (URP 2D) | 66 (4) of 76 | 318 (13) | VR blit, framebuffer fetch, 2D MS arrays, 7 with buffers | 317 of 332 | 282 / 282 |
+| 6000.4.6f1 (URP) | 112 (8) of 123 | 1553 (1181) | as 6000.3; 192 instancing variants | 1355 of 1557 (light arrays) | 1419 / 1419 |
+
+(The other differences: a fragment output named `SV_TARGET0` in GL, varyings a GL stage leaves
+out.) **Suvalf** (6000.3.5f1, HDRP, Vulkan only, compressed: `pmunity unpack` first): 116 of 142
+shaders given GLES3 programs (16 of them empty), 718 programs (345 GLES 3.1), 553 distinct, all
+linking on Mesa; 26 left out (HDRP's lit and volumetric passes: structured buffers, 13 of them in
+the shared parameters; XR's 2D multisampled arrays; cube map arrays; framebuffer fetch); its 118
+compute shaders have Vulkan kernels only. HDRP itself does not run on OpenGL ES, so `port check`
+blocks the Android route for an HDRP build; see docs/compat/games.md for what the player does with it.
+
+## macOS builds: Metal programs (MSL)
+
+```sh
+python -m pmunity shaders <Game>.app/Contents/Resources/Data <out> --from metal    # config: "shaders": {"from": ["metal"]}
+```
+
+macOS builds of Unity 2020.3 and later have Metal programs only (17 of 18 free macOS builds
+sampled; 2017.3 - 2020.1 ones also have OpenGL Core). No open tool reads MSL (Apple's compiler is
+closed; SPIRV-Cross, Tint, glslang only write it), but Unity's MSL is HLSLcc's too: its Metal
+backend writes the same DXBC instruction stream it writes as GL programs, one statement per
+instruction with the same names (`u_xlat0`, `hlslcc_mtx4x4...`, `VGlobals`, `input.TEXCOORD0`).
+`metal.py` reads that subset of MSL (a tokenizer, an expression parser with the types MSL's
+expressions have) and writes HLSLcc's GL form of it:
+
+- entries: a vertex and a fragment subprogram per variant (types 23, 24), their code Unity's
+  header (0xf00dcafe, sizes, the entry point's name `xlatMtlMain`) and the MSL, the binding info in
+  the Direct3D 11 layout; the two are paired, and each pair stored as a GL program, as for
+  Direct3D 11 ([above](#windows-builds-direct3d-11-programs), item 4);
+- the constant buffer structs (`constant VGlobals_Type& VGlobals [[ buffer(0) ]]`) as plain
+  uniforms, those the stage reads (MSL's structs list every member, for the offsets); the
+  `Mtl_VertexIn` members as `in_<semantic>`, `Mtl_VertexOut` / `Mtl_FragmentIn` members
+  (`[[ user(TEXCOORD0) ]]`) as `vs_<semantic>` (the fragment input's `[[ flat ]]` on both), outputs
+  at their `[[ color(n) ]]`, `[[ position ]]` as `gl_Position` / `gl_FragCoord`, vertex and
+  instance ids;
+- textures (`texture2d<float, access::sample>`, `texturecube`, `texture3d`, `texture2d_array`,
+  `depth2d`, `depthcube`, `texture2d_ms`) as GLSL samplers named as the texture (a depth texture
+  compared: its plain sampler and `hlslcc_zcmp<name>`), `.sample` with `level`, `bias` and
+  `gradient2d`, `.sample_compare`, `.read`, `.gather` (with a component and an offset) as
+  `texture`, `textureLod`, `textureGrad`, `texelFetch`, `textureGather`; inline sampler states
+  (`constexpr sampler`) as the texture's own, as on the other paths;
+- Metal's functions as GLSL's (`fma`, `rsqrt`, `rint`, `saturate`, `select`, `as_type`, `dfdx`,
+  `fmod`, HLSLcc's `bitFieldInsert` template as an ES 3.00 function), its types (`half` as float,
+  for desktop precision) and what GLSL ES needs spelled out: vector comparisons (`lessThan`, ...),
+  the scalar conversions MSL makes implicitly, `&&`/`||` of bool vectors per component;
+- function constants at their defaults (no base vertex, no variable rasterization rate: Unity's
+  `#if __METAL_VERSION__ >= 230` blocks and the code behind `has_vrr_api` are left out, the
+  identity render target remap), immediate constant buffers as `const` arrays; from 2019.1 the
+  samplers' units in Unity's macro, as the other paths.
+
+Unity's Metal compile has Metal's platform choices as Direct3D's (`UNITY_REVERSED_Z`,
+`UNITY_UV_STARTS_AT_TOP`); Metal's clip space has y up, as GL's. Left out: device buffers
+(structured buffers), writable textures, VR's render target array index, tessellation.
+
+**Checked** (`tests/test_metal_corpus.py`, `tests/test_metal.py` on hand-written MSL): every entry
+writes back byte for byte, and every distinct translated program compiles and links on Mesa (llvmpipe,
+ES 3.2):
+
+| game data | shaders given GLES3 (empty blobs) | programs (GLES 3.1) | left out | compared | distinct programs linked on Mesa |
+|---|---|---|---|---|---|
+| 2019.1.15f1 (Metal + OpenGL Core) | 41 (3) | 208 | UIElements' SubShader with a structured buffer (its fallback kept) | 223 of 223 as the same pass's GLCore program | 194 / 194 |
+| 2022.3.62f3 (URP, Metal only) | 92 (4) of 93 | 1250 (8) | URP's HDR debug view (a writable texture) | 610 of 1369 as Unity's own GLES3 programs of the game's Android build (shader, pass, keywords) | 991 / 991 |
+| 6000.2.6f2 (Metal only) | 67 (2) of 68 | 214 | VR blit | - | 195 / 195 |
+
+Against Unity's own GLES3 programs of the same game (its Android build), the differences are what
+the HLSL decided by platform: Metal-only uniforms (foveated rendering keywords and its distortion
+values, which are 0 on a GL device, so their branches stay off), the desktop quality tier's
+light probe volumes and box-projected reflections, mobile's light counts (16, desktop 256), a
+`float` output Android's compile widens to `vec4`. In the 2019.1 game, where the same pass has
+OpenGL Core programs, all 223 compared programs declare the same uniforms, samplers, inputs,
+varyings and outputs as the GL ones. 46 Addressables bundles of the 6000.2 game do not open in
+UnityPy (no Unity version in their header): their shaders are not reached.
 
 ## Checking a conversion
 

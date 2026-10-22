@@ -37,8 +37,8 @@ The layouts in SERIALIZERS are checked by writing every entry back byte for byte
 built-in resources of every LTS line, 2017.4 - 2022.3, and Cuphead's 5914 GLCore entries). For
 another version the entries are tried with each candidate layout; one is only taken when the
 keywords decode, the code is GLSL (or DXBC) and the entry writes back to the same bytes, and the
-converter says so (Entry.guessed). Only GL and D3D11 platforms are parsed here; Metal and others
-are kept as they are.
+converter says so (Entry.guessed). GL, D3D11, Vulkan (a stage table + SMOL-V modules) and Metal
+(Unity's 0xf00dcafe header + MSL) entries are parsed; others are kept as they are.
 """
 import struct
 
@@ -50,6 +50,8 @@ PLATFORM_D3D11, PLATFORM_GLES20, PLATFORM_GLES3PLUS, PLATFORM_METAL, PLATFORM_GL
 GPU_GLES31AEP, GPU_GLES31, GPU_GLES3, GPU_GLES = 2, 3, 4, 5
 GPU_GLCORE32, GPU_GLCORE41, GPU_GLCORE43 = 6, 7, 8
 GPU_SPIRV = 25                                  # Vulkan
+GPU_METAL_VS, GPU_METAL_FS = 23, 24
+METAL_MAGIC = b'\xfe\xca\x0d\xf0'                # (0xf00dcafe: Unity's header before a Metal program's MSL)
 
 
 class Layout:
@@ -169,6 +171,8 @@ class Entry:
                 pass                            # D3D11: Unity's header + DXBC (dxbc.py)
             elif gpu_type == GPU_SPIRV and _is_vulkan(code):
                 pass                            # Vulkan: a stage table + SMOL-V modules (vulkan.py)
+            elif gpu_type in (GPU_METAL_VS, GPU_METAL_FS) and code[:4] == METAL_MAGIC:
+                pass                            # Metal: Unity's header + MSL text (metal.py)
             elif code and not code.lstrip()[:1] in (b'#', b'/'):
                 return None
             else:

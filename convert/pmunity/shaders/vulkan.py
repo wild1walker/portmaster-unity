@@ -46,8 +46,9 @@ as HLSLcc's GL programs of the same shader look:
     (hlslcc_zcmp<name> for a comparison, as HLSLcc names it); from 2019.1 with its unit and each
     block its binding in Unity's macros (UNITY_LOCATION(n), UNITY_BINDING(n)), which the GL
     binding info (dxbc.gl_bindings) gives the backend;
-  * the y flip Unity's Vulkan programs end their vertex stage with (gl_Position.y = -gl_Position.y:
-    Vulkan's clip space has y down) is left out: the engine gives a GL device GL's matrices.
+  * the y flip Unity's Vulkan programs end their vertex stage with (gl_Position.y = -gl_Position.y,
+    before every return: Vulkan's clip space has y down) is left out: the engine gives a GL device
+    GL's matrices.
 What Unity's Vulkan compile decided by platform stays as for Direct3D 11 (UNITY_REVERSED_Z,
 UNITY_UV_STARTS_AT_TOP and UNITY_NEAR_CLIP_VALUE are Direct3D's on Vulkan): docs/shaders.md.
 Programs that need GLSL ES 3.10 (texture gather, multisampled textures, ...) are written as
@@ -543,9 +544,10 @@ def translate_program(translator, code, bindings, serializer=None, unity=None, p
         for st, m in stages.items():
             src = translator.compile(m.serialize(), es)
             if st == 'VERTEX':
+                # (Unity flips before every return of the vertex stage: one at the end, one per early return)
                 src, n = _FLIP_Y.subn('', src)
-                if n != 1:
-                    raise Unsupported('VERTEX: no Vulkan clip-space y flip at the end' if not n else 'VERTEX: two y flips')
+                if not n:
+                    raise Unsupported('VERTEX: no Vulkan clip-space y flip')
             src, named_blocks = _flatten_blocks(src, flatten_named)
             src = _write_blocks(src, named_blocks, binding_of, macros)
             src, decls[st] = _samplers(src, precision)

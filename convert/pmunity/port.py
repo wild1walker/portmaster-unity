@@ -819,6 +819,9 @@ def decide_routes(rep):
     elif gl == 'vulkan':
         needs.append('Vulkan shaders only: `shaders.from = ["vulkan"]`, translated on the handheld by pmspirvcross '
                      '(SPIRV-Cross; the release ships it: `ARCH=arm64 tools/spirvcross/build.sh`)')
+    elif gl == 'metal':
+        needs.append('Metal shaders only (a macOS build of Unity 2020.3+): `shaders.from = ["metal"]`, translated by '
+                     'the converter\'s Metal reader (metal.py; checked on three macOS games, docs/shaders.md)')
     if rep.get('hdrp'):
         why.append('HDRP (Unity\'s High Definition pipeline) does not run on OpenGL ES: its shaders translate, '
                    'the pipeline does not render on the Android player\'s GLES3 device')
@@ -936,11 +939,13 @@ def check(path, asmpatch=None, deep=True, log=None):
         rep['shader_source'] = 'd3d11'
     elif 21 in apis:
         rep['shader_source'] = 'vulkan'
+    elif 16 in apis:
+        rep['shader_source'] = 'metal'
     else:
         rep['shader_source'] = None
         rep['shader_why'] = (f'the build has {", ".join(rep["graphics_apis"]) or "no"} shaders only; '
                              f'the converter translates OpenGL Core (macOS/Linux builds made with OpenGL Core), '
-                             f'Direct3D 11 and Vulkan')
+                             f'Direct3D 11, Vulkan and Metal')
     if rep['shader_source'] == 'vulkan' and b['backend'] == 'mono' and \
             os.path.isfile(os.path.join(b['data'], 'Managed', 'Unity.RenderPipelines.HighDefinition.Runtime.dll')):
         rep['hdrp'] = True
@@ -1078,7 +1083,7 @@ def suggest_config(rep):
     ad = sug.setdefault('android_data', {})
     cv = sug.setdefault('convert', {})
     notes = rep['notes']
-    if rep.get('shader_source') in ('d3d11', 'vulkan'):
+    if rep.get('shader_source') in ('d3d11', 'vulkan', 'metal'):
         cv.setdefault('shaders', {})['from'] = [rep['shader_source']]
     if s.get('rewired'):
         rt.setdefault('UA_PAD_NAME', 'Xbox Wireless Controller')
