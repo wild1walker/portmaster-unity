@@ -249,7 +249,7 @@ Compared on each line's Windows editor installer (libil2cpp's headers only, 1 - 
 
 | Unity | metadata | converter | |
 |---|---|---|---|
-| 2023.1.8f1, 2023.2.20f1 | 29 | 2022.3.23f1 | agrees (not built yet) |
+| 2023.1.8f1, 2023.2.20f1 | 29 | 2022.3.23f1 | agrees; 2023.2.20f1 built and run (below) |
 | 6000.0.58f2, 6000.0.61f1 | 31 | 2022.3.62f3 | agrees; built and run (below) |
 | 6000.1.4f1, 6000.2.6f2 | 31 | 2022.3.62f3 | agrees (not built yet) |
 | 6000.3.16f1, 6000.4.6f1 | 39 | - | refused: a new metadata header, string literal, type and assembly tables |
@@ -268,6 +268,28 @@ and sets `PMUNITY_ANDROID_API`, which ndk-clang.sh uses to raise every command's
 `android_api`. The NDK stays r23b (Unity 6000.0 builds with r27c; the compiler is Ubuntu's clang
 14 either way), the compiler flags 2022.3's (Unity 6 drops `-funwind-tables` and a DSE workaround,
 and stops defining `NO_GETENV` / `DONT_USE_ATEXIT`).
+
+**Hollow Knight** (GOG Linux, 6000.0.61f1, Mono .NET 4.x; its 32-bit port runs at 32 - 34 fps in
+King's Pass with the main thread busy all the time): built this way with the port's asmpatch
+patches compiled in (inputsystem-android, streaming-assets: `--asmpatch ... --streaming-assets
+both`): UnityLinker 15 min (102 assemblies, the USB drive busy), the conversion 6 min (828 MB of
+C++, metadata 16.4 MB, 127,427 methods), 763 Bee commands in 22 min; `libil2cpp.so` 80.0 MiB,
+metadata 31, all 157 lookups exported. HK_RIG_RESULT
+
+A handheld test of it needs what 64-bit Cuphead's does (tools/device/test.sh with `ARCH=arm64`,
+the arm64 `ua_host`, a 64-bit userland; nothing of the 32-bit userland is used): a folder with
+`lib/` = `libmain.so` and `libunity.so` of the 6000.0.61f1 IL2CPP arm64-v8a player
+(`<home>/6000.0.61f1/player-arm64-v8a/Variations/il2cpp/Release/Libs/arm64-v8a`) and the new
+`libil2cpp.so`, next to android-data's `zip/` contents (packed with `--il2cpp <out> --pkg <that
+player> --streaming-assets both --swappy off`, the port's settings: `HollowKnight.apk`, its OBB,
+`android_package.json`, `Game_Data/StreamingAssets`), the port's `UA_PAD_NAME`, and
+`DEVICE=root@<handheld> ARCH=arm64 STOP_ES=1 tools/device/test.sh <folder> 600`. What to watch:
+fps in King's Pass against the 32-bit port's 32 - 34, memory (`libil2cpp.so` is 80 MiB of
+file-backed code; IL2CPP's heap replaces Mono's, `UA_GC_BUDGET` hooks both runtimes'
+`GarbageCollector.SetMode`), and the first start, when libunity copies `Managed/` out of the APK.
+As a port, the il2cpp-arm64 route's setup would build it on the handheld (`--on-device`): 828 MB of
+C++ and 763 compiles, so hours on a Cortex-A53 (above, "Fitting a 1 GB, 4 x Cortex-A53 handheld");
+the setup on a 64-bit-only system is not written for Hollow Knight yet.
 
 The other ways, measured (not taken):
 - **The macOS editor's il2cpp**: on macOS, `il2cpp/build/deploy` is a self-contained .NET (CoreCLR)
@@ -565,9 +587,10 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D, menus from localization XML in StreamingAssets read with System.IO, Steamworks.NET, I18N plugins | 2018.3.2f1 | arm64-v8a | 34.5 MiB | 24 | 46 min (NDK r16b; UnityLinker 3 min, il2cpp 42, the machine's Docker file sharing busy) | title menu with its localized text: `--asmpatch ... --streaming-assets both`, the folder beside the APK (android-data `--streaming-assets both`), ~20 fps in the rig. Steamworks.NET's callbacks throw `NotSupportedException` ("IL2CPP does not support marshaling delegates that point to generic methods"); the Steam stub fails its init first anyway |
 | 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
 | 2D, Addressables, Localization, TextMeshPro, Steamworks.NET, incremental GC | 6000.0.58f2 (mixed: 2022.3.62f3's il2cpp) | arm64-v8a | 68.0 MiB | 31 | 35 min (UnityLinker 1 min, conversion 9 min, Bee graph: 663 commands in 26 min; NDK r23b, API 23) | title, 60 fps in the rig, no exception |
+| 2D platformer, incremental GC | 2023.2.20f1 (mixed: 2022.3.23f1's il2cpp) | arm64-v8a | 75.4 MiB | 29 | 54 min (UnityLinker 4 min, Bee graph: 707 commands in 40 min, the USB drive busy; NDK r23b, API 22 as its player) | main menu, 60 fps in the rig, no exception |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
-2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3, 157 for 6000.0); the metadata versions match those of real IL2CPP builds
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3, 163 for 2023.2, 157 for 6000.0); the metadata versions match those of real IL2CPP builds
 of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31, and 31 is what 6000.0's libil2cpp reads). 2021.x and 2022.x
 builds have no `Managed/etc` (nor have Unity's: Cat Cove Inn's, The Ump Show's APKs), and their
 APKs get `assets/bin/Data/unity_app_guid` (android-data, above). The layout of the APK matches Unity's IL2CPP
