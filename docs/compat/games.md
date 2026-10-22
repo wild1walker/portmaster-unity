@@ -105,7 +105,7 @@ built in an arm64 container limited like the RG34XX-SP (1 GB, 4 CPUs, no swap), 
 | game | Unity | emulated rig | notes (last checked) |
 |---|---|---|---|
 | [MineRalph](https://chopchopgames.itch.io/mineralph) | 2018.3.2f1 | title menu | `streaming_assets = "both"` (2026-10-21) |
-| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it | a pointer click or touch on the launcher's Play does not: Rewired's UI module receives the touch but no click lands on the button (not looked into further) (2026-10-21) |
+| [Baldi's Basics Classic Remastered](https://basically-games.itch.io/baldis-basics-classic-remastered) | 2020.3.38f1, Rewired | launcher, then its title screen: the pad's Start (Rewired's "Pause") starts it; the left stick moves the launcher's cursor and A on Play starts it | its own cursor (docs/input.md, "Games with their own cursor"): its buttons are not uGUI's, so pointer mode's position and touches do not click them; no `UA_POINTER` (the pad drives its cursor), or `UA_POINTER=1 UA_POINTER_CURSOR=0` (Play clicked by mouse in the rig) (2026-10-22) |
 
 ## box64 route (x86-64 Linux players)
 
