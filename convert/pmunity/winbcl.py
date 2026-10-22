@@ -59,10 +59,22 @@ def _rel(path):
     return '/'.join(parts[1:]) if parts and parts[0].startswith('$') else path
 
 
+def assembly_version(path):
+    """(major, minor, build, revision) of a .NET assembly, or None."""
+    from . import clrmeta as CM
+    try:
+        r = CM.Assembly(path).rows(0x20)
+        return tuple(r[0][1:5]) if r else None
+    except Exception:  # noqa: BLE001 - not an assembly we can read
+        return None
+
+
 def replacements(managed, installer, out, log=print):
     """Writes the unityjit-linux twins of the game's unityjit-win32 class libraries to out: every
     DLL of the Managed folder that both profiles have (Unity's own names; the build's are stripped
-    by Unity's linker, the editor's are whole, a superset with the same identity). Returns
+    by Unity's linker, the editor's are whole, a superset with the same identity). A DLL of the
+    same name but another assembly version is the game's own (a NuGet package's
+    System.ComponentModel.Annotations 5.0.0.0 next to Unity's 4.x facade) and is kept. Returns
     [(name, path)]."""
     from . import nsis
     ns = nsis.Nsis(installer)
@@ -82,6 +94,12 @@ def replacements(managed, installer, out, log=print):
         dst = os.path.join(out, n)
         with open(dst + '.part', 'wb') as f:
             f.write(ns.extract(files[(LINUX, sub)]))
+        theirs, ours = assembly_version(os.path.join(managed, n)), assembly_version(dst + '.part')
+        if theirs is not None and ours is not None and theirs != ours:
+            os.remove(dst + '.part')
+            log(f"winbcl: {n}: kept the game's own (version {'.'.join(map(str, theirs))}; Unity's is "
+                f"{'.'.join(map(str, ours))})")
+            continue
         os.replace(dst + '.part', dst)
         out_list.append((n, dst))
     log(f'winbcl: {len(out_list)} class libraries as unityjit-linux ({ns.s.fetched / 1e6:.1f} MB read): '
