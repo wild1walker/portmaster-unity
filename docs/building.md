@@ -23,7 +23,8 @@ same steps by hand.
   ([compat/README.md](compat/README.md): what each line needs and what has run). The macOS or
   Linux build is the usual choice (its OpenGL Core shaders convert to GLES 3); a Windows build
   carries only Direct3D 11 shaders, which `pmunity shaders --from d3d11` translates with Unity's
-  HLSLcc (`tools/hlslcc/build.sh`; [shaders.md](shaders.md)). Other builds: the routes in
+  HLSLcc (`tools/hlslcc/build.sh`; for a port's setup on the handheld `ARCH=arm64
+  tools/hlslcc/build.sh`; [shaders.md](shaders.md)). Other builds: the routes in
   [porting.md](porting.md#2-routes).
 
 ## The runtime

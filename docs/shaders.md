@@ -272,6 +272,12 @@ by platform at compile time (below). `tools/hlslcc/build.sh` fetches HLSLcc at a
 builds `pmhlslcc`, a small front end (one-shot, or a server the converter keeps open); macOS
 clang, Linux gcc (aarch64 in `ua-build-arm64`, armhf with `ua-host-armhf`'s cross compiler) give
 byte-identical output. Ship the binary with `pmhlslcc.LICENSE.txt` (HLSLcc MIT, bstrlib BSD).
+A port's setup translates on the handheld: `ARCH=arm64 tools/hlslcc/build.sh` builds the aarch64
+binary in that image (into `tools/hlslcc/out/linux-arm64/`; libstdc++ and libgcc linked in, so it
+needs only glibc 2.17's symbols), `pmunity port package` ships it as `setup/pmhlslcc` with its
+licence for a port with `shaders.from = ["d3d11"]`, and the setup sets `PMHLSLCC` (docs/porting.md,
+"Routes"). In the rehearsal container (aarch64, tools/port/rehearse.sh) Tacticsweeper's 45 shaders
+(177 programs) translate in 4 s.
 
 What the path does (`dxbc.py`, `convert.add_gles3_d3d11`), for Unity 2017.3 - 2022.3 (all four
 program serializers):
@@ -453,7 +459,8 @@ its GL one, and HLSLcc's translation of each variant is checked as above only wh
 program is at hand (built-ins). Textures of these games (RGBA32, RGB24, Alpha8, DXT1/5, crunched
 DXT, BC6H cube maps) go through the textures step as before (BC6H left as it is); the rig's Mesa
 samples BC textures itself, so the runs use the unconverted ones. The 2021.2+ games need Unix
-class libraries in place of their Windows ones (`python -m pmunity.winbcl`, docs/porting.md).
+class libraries in place of their Windows ones (`pmunity winbcl`, which a port's setup runs;
+docs/porting.md).
 Not checked: a run on the handheld, pictures against the Windows build, and any game with BC7,
 BC4 or BC5 textures (the step's decoding of those is tested on hand-made blocks,
 `tests/test_textures.py`).

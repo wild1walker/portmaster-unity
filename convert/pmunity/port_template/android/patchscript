@@ -5,8 +5,12 @@
 #   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
 #      Linux installer .sh: its zip is unpacked, the script never runs) put there
 #   2. Unity's Android player of the game's exact version, from Unity (about 10 MB: only the files
-#      the port needs, read with range requests), or from its installer put in gamedata/
-#   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps)
+#      the port needs, read with range requests), or from its installer put in gamedata/; then
+#      Unity's class libraries the build lacks for it (pmunity winbcl: a Windows build of 2021.2+
+#      has Windows-only ones, about 6 MB more; a facade such as netstandard.dll), from Unity's
+#      Windows editor installer the same way (nothing is read when the build needs none)
+#   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps; a Windows
+#      build's Direct3D 11 shaders with setup/pmhlslcc)
 #   4. the APK + OBB the player reads (pmunity android-data; asmpatch when the port uses it)
 #   5. installing: the player's libraries (and only the Mono runtime the game needs), the game
 # Settings: setup/setup.env (from port.toml). Every step can be interrupted (battery, power button):
@@ -170,6 +174,22 @@ if [ ! -f "$W/.step_player" ]; then
   touch "$W/.step_player"
 fi
 
+# ---- 2b. Unity's own class libraries the build lacks for that player: a Windows build of 2021.2+
+# ships Windows-only ones (unityjit-win32: their Unix twins instead), and a build may lack a facade
+# Unity's Android engine modules reference (netstandard.dll); read from Unity's Windows editor
+# installer with range requests (about 6 MB for a Windows build), or from that installer in gamedata/
+if [ ! -f "$W/.step_bcl" ]; then
+  rm -rf "$W/bcl"
+  if [ "${WINBCL:-auto}" != off ]; then
+    step "Unity's class libraries for the player (downloaded from Unity only when the game needs them, Wi-Fi)"
+    I=$(ls "$GD"/UnitySetup64-"$V".exe 2>/dev/null | head -1)
+    src=(); [ -n "$I" ] && src=(--installer "$I")
+    pm winbcl "$D" "$W/bcl" --version "$V" --player "$P" "${src[@]}" >/dev/null \
+      || fail "Could not read Unity's class libraries from Unity's servers: is Wi-Fi on? Launch again to retry (see patchlog.txt)."
+  fi
+  touch "$W/.step_bcl"
+fi
+
 # ---- 3. the conversion
 if [ ! -f "$W/.step_convert" ]; then
   hook pre_convert
@@ -178,6 +198,8 @@ if [ ! -f "$W/.step_convert" ]; then
   step "converting the game (if this is interrupted, the next launch continues where it stopped)"
   sed "s|{setup}|$S|g" "$S/convert.json" > "$W/convert.json"
   plugins=(); for f in "${CONVERT_PLUGINS[@]}"; do plugins+=(--plugin "$S/$f"); done
+  # a Windows build's Direct3D 11 shaders: HLSLcc (the release's pmhlslcc, aarch64)
+  if [ -f "$S/pmhlslcc" ]; then chmod +x "$S/pmhlslcc"; export PMHLSLCC="$S/pmhlslcc"; fi
   pm convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" \
     || fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."
   hook post_convert
@@ -201,6 +223,7 @@ if [ ! -f "$W/.step_package" ]; then
     case "$ASMPATCH" in auto) ;; off) a="$a --only=";; *) a="$a --only=$ASMPATCH";; esac
     args+=(--asmpatch "$a")
   fi
+  for f in "$W"/bcl/*.dll; do [ -f "$f" ] && args+=(--managed-file "$f"); done     # (step 2b's; the port's own win)
   for f in "${MANAGED_FILES[@]}"; do args+=(--managed-file "$S/$f"); done
   if [ ${#ASSEMBLY_PATCHES[@]} -gt 0 ]; then
     args+=(--game-managed "$D/Managed")
@@ -259,7 +282,7 @@ keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*
 for a in "$GD"/*; do
   [ -f "$a" ] || continue
   case "$(lower "$a")" in
-    *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.pkg|*/unitysetup-*.exe) ;;
+    *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.pkg|*/unitysetup-*.exe|*/unitysetup64-*.exe) ;;
     *.sh) head -c 65536 "$a" | grep -aqE 'Makeself|MojoSetup' || continue;;
     *) continue;;
   esac

@@ -47,7 +47,9 @@ OpenSSL (Apache 2.0), Python and libcurl in a test image; nothing of them is kep
 
 - Unity's Android player (`libunity.so`, `libmain.so`, `libmono.so`, the managed `UnityEngine*.dll`,
   `unity default resources`): proprietary, from Unity's editor installers, under Unity's terms. You
-  unpack it yourself; this repository only reads it.
+  unpack it yourself; this repository only reads it. The same for Unity's class libraries
+  (`mscorlib.dll`, `System*.dll`, facades) that `pmunity winbcl` reads from Unity's Windows editor
+  installer for a build (a port's setup reads them on the handheld).
 - Any game's files. The converter works on your own copy.
 
 ## Used at build or conversion time (not vendored)
@@ -64,7 +66,9 @@ Mono.Cecil's licence and the runtime pack's `LICENSE.TXT` and `THIRD-PARTY-NOTIC
 [HLSLcc](https://github.com/Unity-Technologies/HLSLcc) (MIT; it includes bstrlib, BSD), fetched by
 `tools/hlslcc/build.sh` at a pinned commit and compiled into `pmhlslcc` (Direct3D 11 shaders,
 `pmunity shaders --from d3d11`): distribute that binary with `pmhlslcc.LICENSE.txt`, which the
-build writes next to it.
+build writes next to it. A port that translates Direct3D 11 shaders ships the aarch64 build
+(`ARCH=arm64 tools/hlslcc/build.sh`: GCC's libstdc++ and libgcc linked in, under the GCC Runtime
+Library Exception) as `setup/pmhlslcc`, with that licence as `licenses/LICENSE.pmhlslcc-HLSLcc.txt`.
 
 ## Downloaded on the handheld by a port's setup (`pmunity il2cpp --on-device`), not shipped
 

@@ -61,16 +61,28 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 
 | route | when | status |
 |---|---|---|
-| `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, needs `pmhlslcc`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
+| `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, translated on the handheld by the release's `pmhlslcc`; a 2021.2+ Windows build's class libraries fetched by the setup, `pmunity winbcl`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
 | `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
 | `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
-Windows builds (Direct3D 11 shaders) take the `android` route with `shaders.from = ["d3d11"]` and
-`pmhlslcc` (`tools/hlslcc/build.sh`; docs/shaders.md, "Windows builds"). A Windows build of Unity
-2021.2+ also needs the Unix class libraries, because its own are Windows-only: `python -m
-pmunity.winbcl <Game>_Data <dir>` fetches them from Unity (about 5 MB) and prints the
-`--managed-file` options for `android-data` (in a port: `android_data.args`).
+Windows builds (Direct3D 11 shaders) take the `android` route as they come: players put the game's
+folder (`<Game>.exe` beside `<Game>_Data`) or the zip it came in into `gamedata/`, and `port new`
+sets the rest up from the check. The shaders: `convert.shaders.from = ["d3d11"]`, and the release
+ships `setup/pmhlslcc` (HLSLcc for aarch64, built in Docker by `ARCH=arm64 tools/hlslcc/build.sh`,
+with HLSLcc's licence; the `pmhlslcc?` part of route.json), which the setup gives the converter
+(`PMHLSLCC`; docs/shaders.md, "Windows builds"). A Windows build of Unity 2021.2+ also needs the
+Unix class libraries, because its own are Windows-only: right after the player, the setup runs
+`pmunity winbcl`, which reads them from Unity's Windows editor installer of the game's version with
+range requests (about 6 MB, a minute over Wi-Fi; about 17 MB on the card; or from
+`UnitySetup64-<version>.exe` in `gamedata/`) for android-data's `--managed-file`. The same step
+gives any build the facades Unity's Android engine modules reference and the build lacks (a Unity 6
+build without `netstandard.dll`: about 1 MB read), and names, without faking them, the other
+assemblies they reference that are not Unity's own; when nothing is missing it reads nothing.
+`android_data.winbcl = "off"` leaves the step out. By hand: `python -m pmunity winbcl <Game>_Data
+<dir> [--player <pkg>]` prints the `--managed-file` options for `android-data`. The il2cpp-arm64
+route compiles with Unity's own class libraries and needs only `pmhlslcc` (shipped the same way;
+not tried with a Windows build yet).
 
 macOS and Linux builds take the `android` route with their OpenGL Core programs. A build made
 without OpenGL Core has none to translate: Metal only, or Vulkan only (every HDRP Linux build,
@@ -102,7 +114,9 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
 `files` maps each output path of the port folder to a template, looked up in the route's folder
 and then in `port_template/common/` (the READMEs, the gamedata note, the exit-hotkey `.ini` for gptokeyb2,
 `package.sh`). Templates are text with `@@NAME@@` values (`PORTDIR`, `TITLE`, `ZIP`, `LAUNCHER`,
-`SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`, and for
+`SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`, `PLAYER_MB`
+and `DOWNLOAD_MB` (what the setup downloads from Unity), `DOWNLOAD_MORE` (a sentence on the class
+libraries a Windows 2021.2+ build gets, else empty), and for
 PortMaster's README sections `THANKS`, `CONTROLS` (the controls table), `ROUTE_NEEDS` (what the
 route needs of the handheld), `BUILD_STEPS` (the build commands of the route's `package` parts);
 an unknown name is an error). Everything else a launcher or setup needs comes from files `port new`
@@ -110,7 +124,8 @@ writes next to them: `setup/setup.env` (shell assignments), `setup/convert.json`
 `setup/questions.lua`; `port.json`, `gameinfo.xml` and `testing_thread.txt` are written for every
 route by `port new` itself. `package` names the parts the release zip gets (`ua_host_arm64` for the 64-bit host as `ua_host`;
 `ua_host64` for it beside a 32-bit `ua_host`; a `?` part only when the port uses it: `asmpatch?`
-when it runs asmpatch, `ua_host?` / `ua_host64?` for the ABIs in `player.abis`); `defaults` are
+when it runs asmpatch, `pmhlslcc?` when it translates Direct3D 11 shaders, `ua_host?` /
+`ua_host64?` for the ABIs in `player.abis`); `defaults` are
 port.toml values the route sets where port.toml says nothing; `config` lists the port.toml
 sections the route uses (port.toml and `setup.env` get only those; default all) and `config_doc`
 replaces their explanations; a part the packager does not know comes from a hook module (below).
@@ -174,6 +189,7 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, else `off` | `auto`: tools/asmpatch runs on the game's assemblies (each patch changes only what it finds; the package then ships asmpatch); a list: only those patches |
 | `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch); the il2cpp-arm64 route compiles the patch into the game's IL2CPP build (`pmunity il2cpp --streaming-assets`) and packs the same mode |
+| `android_data.winbcl` | `auto` | `auto`: after the player, the setup runs `pmunity winbcl`: a Windows 2021.2+ build gets the Unix class libraries of its version, any build the facades the player's engine modules reference that it lacks (e.g. `netstandard.dll`), both from Unity's Windows editor installer (range requests; nothing is read when nothing is missing); `off`: not run |
 | `android_data.data_path` | false | true: the reads of `Application.dataPath` that reach System.IO get `Game_Data/` beside the APK, with the data folder's own files (asmpatch's data-path patch; docs/android-data.md, section 6); the check notes such reads |
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
@@ -200,10 +216,14 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
 3. Unity's Android player of that version: `pmunity player fetch` (about 10 MB of the installer
    with HTTP range requests); from `UnitySetup-Android-Support-for-Editor-<version>.exe` when the
    player put it in `gamedata/`; if Unity's servers cannot be read that way, the whole installer
-   with curl or wget; checksums when the port has them;
-4. `pmunity convert` with `setup/convert.json`, the plugins and the answers;
-5. `pmunity android-data --consume-src --pack all`, with asmpatch, the managed files and assembly
-   patches, and `android_data.args`;
+   with curl or wget; checksums when the port has them; then `pmunity winbcl` (unless
+   `android_data.winbcl = "off"`): the class libraries a Windows 2021.2+ build needs (about 6 MB)
+   and missing facades, from Unity's Windows editor installer (or `UnitySetup64-<version>.exe` in
+   `gamedata/`);
+4. `pmunity convert` with `setup/convert.json`, the plugins and the answers (a Windows build's
+   Direct3D 11 shaders with `setup/pmhlslcc`);
+5. `pmunity android-data --consume-src --pack all`, with asmpatch, the class libraries of step 3,
+   the managed files and assembly patches, and `android_data.args`;
 6. installing: the player's libraries into `lib/` with only the Mono runtime the game needs (with
    both, libunity takes the .NET 4.x one and a .NET 3.5 game aborts), the APK, OBB and Mono's
    config into the port folder; the game's copy in `gamedata/` (used up by step 5), the tools and
@@ -246,7 +266,8 @@ about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continue
 
 ```
 python -m pmunity port package <port folder> [--out DIR] [--runtime DIR] [--ua-host FILE]
-                               [--media-licenses DIR] [--pybundle FILE] [--asmpatch-bin FILE] [--no-build]
+                               [--media-licenses DIR] [--pybundle FILE] [--asmpatch-bin FILE]
+                               [--pmhlslcc-bin FILE] [--no-build]
 ```
 
 (or the port's `package.sh`) builds `<out>/<name>.zip` (default `<port>/out/`): the launcher and
@@ -254,15 +275,18 @@ the port folder, `ua_host` (`runtime/host/out/`, built with `runtime/build.sh` w
 converter (`convert/pmunity`), the setup's Python (`--pybundle`, else
 `tools/port/build_pybundle.sh` builds it: python-build-standalone's CPython 3.12 and the
 converter's wheels for aarch64), asmpatch for linux-arm64 when the port uses it
-(`tools/asmpatch/build.sh`), and `licenses/`: portmaster-unity's licence and THIRD_PARTY.md,
-libhybris (Apache 2.0, in ua_host), the video decoders' licences (`runtime/media/out/licenses`),
-the setup Python's and its packages' licences, and for asmpatch the .NET runtime's licence and
-third-party notices and Mono.Cecil's. `--runtime` points at another checkout whose runtime and
+(`tools/asmpatch/build.sh`), pmhlslcc for linux-arm64 when it translates Direct3D 11 shaders
+(`ARCH=arm64 tools/hlslcc/build.sh`, Docker; `--pmhlslcc-bin` another build, with its
+`pmhlslcc.LICENSE.txt` beside it; glibc 2.17 symbols only, libstdc++ linked in), and `licenses/`:
+portmaster-unity's licence and THIRD_PARTY.md, libhybris (Apache 2.0, in ua_host), the video
+decoders' licences (`runtime/media/out/licenses`), the setup Python's and its packages' licences,
+for asmpatch the .NET runtime's licence and third-party notices and Mono.Cecil's, and for pmhlslcc
+HLSLcc's (MIT, with bstrlib's BSD). `--runtime` points at another checkout whose runtime and
 asmpatch are built. Zip entries keep their Unix modes and get a fixed date. The il2cpp-arm64 route
-ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build.sh`) as `ua_host`;
-the apk route ships `ua_host` for an APK's armeabi-v7a player and that 64-bit one as `ua_host64`
-for its arm64-v8a player (`player.abis`), each with its build's decoder licences (the 64-bit
-one's as `LICENSE.<part>.ua_host64.txt`).
+ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build.sh`) as
+`ua_host`; the apk route ships `ua_host` for an APK's armeabi-v7a player and that 64-bit one as
+`ua_host64` for its arm64-v8a player (`player.abis`), each with its build's decoder licences (the
+64-bit one's as `LICENSE.<part>.ua_host64.txt`).
 
 The zip also gets the screenshot and the cover (`port.screenshot`, `port.cover`) as
 `<name>/screenshot.png` and `<name>/cover.png`, where PortMaster's own release zips have them, and
@@ -389,7 +413,7 @@ module `pmunity.<name>` with a name in `port.HOOK_MODULES` (`route`, `box64`, `i
 |---|---|---|
 | `port_check(report)` | the check's report (a dict: `build`, `backend`, `unity_version`, `code`, `data_survey`, `plugins`, `routes`, ...) | append to `report['notes']`, change or add `report['routes']` entries (`{route, ok, why, needs, available}`), put port config values in `report['suggest']` |
 | `port_new(ctx)` | the port being written: `ctx.cfg`, `ctx.out`, `ctx.route`, `ctx.write(rel, data, mode)` | add files (e.g. a plugin map, an on-screen keyboard's settings) |
-| `port_package(ctx)` | the release being assembled: `ctx.cfg`, `ctx.port_dir`, `ctx.runtime`, `ctx.add(src, rel, mode)`, `ctx.license(name, path=, text=)` | add binaries and their licences (e.g. box64, pmhlslcc, an ARM plugin build) |
+| `port_package(ctx)` | the release being assembled: `ctx.cfg`, `ctx.port_dir`, `ctx.runtime`, `ctx.add(src, rel, mode)`, `ctx.license(name, path=, text=)` | add binaries and their licences (e.g. box64, an ARM plugin build) |
 
 A new route is a template folder (section 2); `port new --route <name>` uses it.
 
