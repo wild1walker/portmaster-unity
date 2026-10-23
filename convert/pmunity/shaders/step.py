@@ -22,6 +22,15 @@ convert --set shaders.glcore4x=false`) keeps a port on the output the converter 
 translated to GLSL ES 3.10 (compute.py), so a game's own kernels run on the Android player as in
 an Android build (OpenGL ES 3.1+). On by default; `"shaders": {"compute": false}` leaves them as
 they are (FindKernel then fails on the device: "Kernel 'X' not found").
+
+`grab_fetch` (off by default; it changes the picture slightly): shaders whose passes sample an
+unnamed GrabPass's copy at the fragment's own screen position (blend modes) get a SubShader that
+reads the framebuffer instead, without the GrabPass (grabfetch.py). true: Unity uses it where it
+reports framebuffer fetch (6000.0: GL_EXT_shader_framebuffer_fetch), the original elsewhere;
+"always": wherever its programs compile (GL_EXT_ or GL_ARM_shader_framebuffer_fetch: Mali's drivers
+have ARM's), the original elsewhere (Unity 6000.0).
+`grab_fetch_names`: a regex, only the shaders whose names match (default: every shader). Applied
+to the GLES3 programs a shader has after the translation, also to ones it already had.
 """
 import os
 import re
@@ -32,6 +41,7 @@ from . import blob as B
 from . import compute as CS
 from . import convert as C
 from . import dxbc
+from . import grabfetch as GF
 from . import metal as MT
 from . import vulkan as VK
 
@@ -105,11 +115,22 @@ def _is_bundle(path):
         return False
 
 
+def grab_fetch_mode(value):
+    """shaders.grab_fetch as False, True or 'always' (ValueError for anything else)."""
+    if value in (None, False, 'off', 'false'):
+        return False
+    if value in (True, 'on', 'true'):
+        return True
+    if value == 'always':
+        return 'always'
+    raise ValueError(f'shaders.grab_fetch: {value!r} (false, true or "always")')
+
+
 def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, optimize=None, sources=('glcore',),
-        hlslcc=None, glcore4x=None, compute=None, spirv_cross=None):
+        hlslcc=None, glcore4x=None, compute=None, spirv_cross=None, grab_fetch=None, grab_fetch_names=None):
     """Returns the per-shader results. hlslcc: the pmhlslcc binary (default dxbc.find_hlslcc());
-    spirv_cross: the pmspirvcross binary (default vulkan.find_spirv_cross()); glcore4x, compute: see
-    the module docstring."""
+    spirv_cross: the pmspirvcross binary (default vulkan.find_spirv_cross()); glcore4x, compute,
+    grab_fetch, grab_fetch_names: see the module docstring."""
     if glcore4x is None:
         glcore4x = (job.cfg.get('shaders') or {}).get('glcore4x')
     if glcore4x not in (None, True, False):
@@ -118,6 +139,12 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
         compute = (job.cfg.get('shaders') or {}).get('compute', True)
     if compute not in (True, False):
         raise ValueError(f'shaders.compute: {compute!r} (true or false)')
+    if grab_fetch is None:
+        grab_fetch = (job.cfg.get('shaders') or {}).get('grab_fetch')
+    grab_fetch = grab_fetch_mode(grab_fetch)
+    if grab_fetch_names is None:
+        grab_fetch_names = (job.cfg.get('shaders') or {}).get('grab_fetch_names')
+    gresults = []
     for src in sources:
         if src not in SOURCES:
             raise ValueError(f'unknown shader source {src!r} (known: {", ".join(SOURCES)})')
@@ -162,7 +189,15 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             r.file = rel
             r.platforms = tuple(t['platforms'])
             results.append(r)
-            if r.status == 'converted' or r.changed:
+            changed = r.status == 'converted' or r.changed
+            if grab_fetch:
+                g = GF.apply(t, grab_fetch, grab_fetch_names)
+                g.file = rel
+                gresults.append(g)
+                changed |= g.changed
+                if g.status != 'unchanged' or log_each:
+                    job.log(f'shaders: {rel}: grab_fetch: {g}')
+            if changed:
                 o.save_typetree(t)
                 n += 1
             if r.status == 'skipped' or r.failed or log_each:
@@ -235,6 +270,12 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 f'({sum(r.programs for r in vk if r.status == "converted")} programs); '
                 f'{sum(len(r.failed) for r in vk)} SubShaders left out; {sum(r.dropped for r in vk)} VR-only and '
                 f'{sum(r.dropped_instancing for r in vk)} GPU instancing variants left out')
+    if grab_fetch:
+        gc = [g for g in gresults if g.changed]
+        job.log(f'shaders: grab_fetch ({"always" if grab_fetch == "always" else "where Unity reports framebuffer fetch"}): '
+                f'{len(gc)} shaders read the framebuffer instead of a GrabPass copy ({sum(g.subshaders for g in gc)} '
+                f'SubShaders, {sum(g.grabs for g in gc)} GrabPasses left out, {sum(g.programs for g in gc)} programs); '
+                f'{sum(g.status == "skipped" for g in gresults)} shaders with GrabPasses left as they are')
     d3d = [r for r in results if r.source == 'd3d11']
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '

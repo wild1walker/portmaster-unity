@@ -63,6 +63,8 @@ is translated from the first one it has, so a game with OpenGL Core programs con
    URP's `StencilDeferred` in a forward-rendered game) gets an empty GLES3 blob, as Unity's own
    builds have a blob for each of their platforms: the player then finds its platform there
    (without one it logs "Desired shader compiler platform 9 is not available in shader blob").
+7. Opt-in, off by default (it changes the picture slightly): `grab_fetch`, blend-mode passes that
+   read the framebuffer instead of a GrabPass copy ([below](#blend-modes-without-grabpass-copies-grab_fetch-opt-in)).
 
 ### GLCore41/43 programs (`#pragma target 4.5` and up)
 
@@ -741,3 +743,135 @@ full-screen passes and render target sizes, not shader code. The rewrites above 
 passes by ~4 %; fewer fetches (e.g. a 7-tap blur as 4 bilinear fetches) would help more, but
 bilinear weights are quantized by the hardware, so the picture changes: that kind of change
 belongs in a game's port as an option, not in the converter's defaults.
+
+## Blend modes without GrabPass copies (`grab_fetch`, opt-in)
+
+```sh
+python -m pmunity shaders <data> <out> --grab-fetch on        # or always; config: "shaders": {"grab_fetch": true}
+```
+
+A pass after an unnamed `GrabPass {}` samples `_GrabTexture`, Unity's copy of what the camera drew
+so far, taken again for every batch drawn with the shader. On the Mali-G31 each copy is a full-screen
+blit into another framebuffer, and the camera stores its attachments and loads them again around it
+([profiling.md](profiling.md#gpu-pass-by-pass): Hollow Knight's King's Pass has three a frame, its
+main menu six). Where a pass samples the copy only at its own fragment's screen position (a blend
+mode: screen, overlay, vivid light ... of a sprite against what is under it), the colour it reads is
+the framebuffer's own at that pixel, which a fragment shader can read directly: framebuffer fetch,
+`GL_EXT_shader_framebuffer_fetch` (an `inout` output) or `GL_ARM_shader_framebuffer_fetch`
+(`gl_LastFragColorARM`). `shaders.grab_fetch` (`shaders/grabfetch.py`) gives such shaders a SubShader
+that does that, without the GrabPass; off by default, because the picture is not always the same:
+
+- sprites of one batch that overlap see each other's output (with the copy, the picture before the
+  batch: Unity grabs once per object, or per batch where it batches them);
+- ARM's fetched colour is mediump (16-bit floats: 1/255 steps of an RGBA8 target are not all exact),
+  EXT's has the output's precision (highp here); with the copy, a highp sample of an RGBA8 texture;
+- a GrabPass no pass of its SubShader samples is left out too (the same picture, unless another
+  shader samples `_GrabTexture` without a GrabPass of its own, counting on this one's copy).
+
+**Which shaders.** A SubShader is converted when every pass that samples `_GrabTexture` comes right
+after an unnamed GrabPass (SerializedPass `m_Type` 2, `m_TextureName` empty; a named
+`GrabPass {"_Name"}`, copied once a frame and shared by every object, is left as it is, with its
+SubShader), and each of its GLES3 programs samples it only at the fragment's screen position. The
+check (`grabfetch.screen_uv`) evaluates both stages of each program symbolically (values as
+polynomials over the stage's inputs and uniforms; branches, loops and functions it does not follow
+become opaque): each `texture(_GrabTexture, uv)` (also `textureProj`, `textureLod` at 0) must have
+`uv = N / D + c` per component with N and D linear in the varyings, the varyings written by the
+vertex stage as linear combinations of its final `gl_Position` P without a constant term (so they
+interpolate as P does), and then D = k P.w, u = 0.5 P.x / P.w + 0.5, v = 0.5 P.y / P.w + 0.5: the
+fragment's window position in OpenGL's convention (row 0 at the bottom, as the copy is). That is
+what `ComputeGrabScreenPos` gives on OpenGL, and a clip position divided in the fragment stage.
+Refused, with the reason in the log: offsets and blur taps (`_GrabTexture_TexelSize`), distortion,
+flipped or scaled coordinates, `ComputeScreenPos` (its `_ProjectionParams.x` is a uniform), a UV
+computed from the position before Unity's pixel snapping (`PIXELSNAP_ON` variants: the sample is
+up to half a pixel off), any other use of the sampler (`textureSize`). One variant that does not
+qualify keeps the whole SubShader as it is; variants that do not sample `_GrabTexture` are kept
+unchanged.
+
+**The data edit.** The GrabPass is an entry of the SubShader's pass list in the Shader's parsed form
+(`m_SubShaders[i].m_Passes`, the same SerializedPass fields `m_Type`, `m_Name`, `m_TextureName`,
+`m_UseName` in Unity 2017.4 - 6000.x), so leaving it out is a list edit; nothing else in the Shader
+refers to a pass by its index (a script that draws one pass by index, `Material.SetPass`,
+`Graphics.Blit` with a pass, would get another pass: leave such a shader out with
+`grab_fetch_names`). For each SubShader that qualifies, a copy is put in front of it:
+
+- without its GrabPasses; each remaining pass with only its GLES3 / GLES 3.1 subprograms (OpenGL
+  Core, Vulkan and others stay in the original), listing only the GLES3 platform (2020.1+
+  `m_Platforms`); 2021.2+ `m_ParameterBlobIndices` kept parallel;
+- the sampling pass's programs as new entries appended to the GLES3 blob (in the segment of the
+  entry they come from; 2021.2+ the same parameter entry), their fragment stage reading the
+  framebuffer; up to 2019.x the fragment subprograms (entries without code) keep their entries;
+- the vertex stage, parameters, keywords, render state and blend state as before; the program
+  still declares `_GrabTexture` (unused, so Unity's bindings stay valid).
+
+The fragment stage: after `#version`,
+
+```glsl
+#ifdef GL_EXT_shader_framebuffer_fetch
+#extension GL_EXT_shader_framebuffer_fetch : enable
+#elif defined(GL_ARM_shader_framebuffer_fetch)
+#extension GL_ARM_shader_framebuffer_fetch : enable
+#else
+#error "framebuffer fetch: ..."
+#endif
+```
+
+its one output `inout` where the driver has EXT's extension (`#ifdef`), `out` otherwise, and at the
+start of `main()` `vec4 ua_FramebufferColor = SV_Target0;` (EXT: the output's value is the colour
+under the fragment until the shader writes it) or `= gl_LastFragColorARM;`; each sample of
+`_GrabTexture` becomes `ua_FramebufferColor`. The driver's extension macros choose, so one program
+serves both kinds of driver.
+
+**Which devices: the two modes.** Unity picks programs by GLES level, but SubShaders by their
+requirements: a SubShader whose programs ask for what the device lacks is skipped for the next one,
+as `#pragma require` makes it in an Android build.
+
+- `grab_fetch: true` (`--grab-fetch on`): the copy's sampling subprograms require framebuffer fetch
+  (`m_ShaderRequirements` bit `framebufferfetch`, 0x80000, libunity's own name table), so Unity runs
+  the copy where its GLES backend reports framebuffer fetch and the original SubShader, GrabPass and
+  all, everywhere else. Unity 6000.0's backend reports it with `GL_EXT_shader_framebuffer_fetch`
+  (its extension table has no ARM or NV fetch extension; 2022.3's lists the same one, not run);
+  2017.4 - 2021.3 have no fetch extension name in libunity at all: assume they never report it, so
+  the original runs. Mali's own drivers have only ARM's extension (the RG34XX-SP's r20p0 libmali:
+  `GL_ARM_shader_framebuffer_fetch`, no EXT), so there this mode changes nothing.
+- `grab_fetch: "always"`: no requirement: Unity takes the copy wherever its programs compile, which
+  is where the driver has either extension (Mali's own drivers: ARM's; Mesa: EXT's where it lists
+  it). On a driver with neither they stop at the `#error`, and Unity 6000.0 then uses the original
+  SubShader after the copy: in the rig (Mesa 21.2, the program binary cache emptied) each such
+  program was compiled once and the frame was the original's, 24 passes with the three grab copies,
+  the same picture. Older players were not tried; a player that does not fall back would leave out
+  what is drawn with those shaders. The mode for Mali handhelds.
+
+`grab_fetch_names` (a regex) limits it to the shaders whose names match. The run logs each shader
+with a GrabPass (`grab_fetch: <shader>: changed ...` or why not) and a summary; the step applies it
+to the GLES3 programs a shader has after the translation, also to ones it already had (data
+converted before; a second run finds its own programs, by the comment line after `#version`, and
+leaves the shader alone).
+
+**Checked** (`tests/test_grabfetch.py`: hand-written programs, 2019 and 2021.2+ layouts):
+
+- Hollow Knight (6000.0.61f1): 64 shaders have GrabPasses; 34 get a copy, the `UI/BlendModes/*`
+  shaders with an unnamed GrabPass (33 sample at the screen position, `Font/LinearBurn` has a
+  GrabPass nothing samples), 35 programs; left: the 28 `UI/BlendModes/Optimized/*` (named
+  `_GUIBlendingSharedGT`), `UI/Blur/UIBlur` (blur taps), `Custom/Heat Effect` (distortion). The 230
+  distinct programs of `resources.assets` afterwards compile and link on Mesa 22.3 (llvmpipe, EXT's
+  coherent fetch) and on Mesa 21.2 with `MESA_EXTENSION_OVERRIDE=+GL_EXT_shader_framebuffer_fetch`
+  (21.2 lists only the non-coherent one: there the 35 stop at the `#error`, as meant).
+- In the arm64 rig (the game's 64-bit IL2CPP build to King's Pass, `UA_GL_TRACE`): with `true` and a
+  driver without EXT (Mesa 21.2) Unity runs the original SubShaders: 24 passes and 93 draws a frame,
+  the scene split into four by three grab copies, as without the option, the picture the same on
+  every pixel that does not animate (80 % of the window); with EXT (the override) it runs the copies,
+  in either mode: 18 passes, 90 draws, the scene one pass of 51 draws, no copies. (`"always"` without
+  EXT: above, the original after one failed compile of each program.) The three blend-mode sprites (each
+  its own batch) cover 91 % of the picture (found by drawing them magenta, `UA_SHADER_OVERRIDE`);
+  on the 229,667 of their pixels that do not change during either run, the picture equals the
+  original's bit for bit (EXT's highp fetch of an RGBA8 target is the copy's texel); the animated
+  rest (particles, fireflies, the knight) differs between the two runs no more than between two
+  frames of one run 3 s apart (7 % of the pixels).
+- The corpus's 46 data folders (free games, Unity 5.x - 6000.x): 14 have shaders with GrabPasses, none
+  qualifies: Unity's own `Particles/Standard Unlit` (a named GrabPass, `"_GrabTexture"`, in 11 of
+  them), refraction, blur, outline and distortion shaders, and one game's blend-mode shaders
+  (2018.3), whose `PIXELSNAP_ON` variants compute the UV before the snap.
+
+Not checked here: Mali's compiler on the ARM branch (`shadercheck` on the handheld), the frame rate
+(the rig's are not the device's: [profiling.md](profiling.md#gpu-pass-by-pass) has the measurement
+it is for), Unity players before 6000.0.

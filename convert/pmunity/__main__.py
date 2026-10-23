@@ -4,6 +4,7 @@ Android player on GLES handhelds.
     python -m pmunity convert <data> [<out>] --config game.json [--steps a,b] [--plugin steps.py] [--only REGEX]
     python -m pmunity shaders <data> [<out>] [--precision highp|default-samplers] [--replace] [--bundles REGEX]
                               [--from glcore|d3d11|vulkan|metal|glcore,d3d11] [--hlslcc PATH] [--spirv-cross PATH]
+                              [--grab-fetch off|on|always]
     python -m pmunity shaders-export <data> <dir> [--bundles REGEX]
     python -m pmunity android-data --src <converted data> --pkg <Unity Android player> [...]   (--help)
     python -m pmunity plugins <data> [--map F] [--json F]    (native plugins: what the port gives each)
@@ -139,6 +140,11 @@ def main(argv=None):
     s.add_argument('--hlslcc', help='the pmhlslcc binary (default: $PMHLSLCC, tools/hlslcc/out/pmhlslcc, PATH)')
     s.add_argument('--spirv-cross', help='the pmspirvcross binary (default: $PMSPIRVCROSS, '
                                          'tools/spirvcross/out/pmspirvcross, PATH)')
+    s.add_argument('--grab-fetch', choices=['off', 'on', 'always'], default='off',
+                   help='blend-mode passes read the framebuffer instead of an unnamed GrabPass copy (changes the '
+                        'picture slightly): on = where Unity reports framebuffer fetch, always = wherever the '
+                        'programs compile (docs/shaders.md)')
+    s.add_argument('--grab-fetch-names', help='regex: only these shaders (with --grab-fetch)')
     for p in (c, s):
         p.add_argument('--any-unity-version', action='store_true',
                        help='convert data of a Unity version outside 5.6 - 6000.6 (untested; layouts guessed)')
@@ -181,7 +187,8 @@ def main(argv=None):
         from .shaders import step
         job = Job(a.data, a.out or a.data, cfg)
         step.run(job, a.precision, a.replace, a.bundles, a.log_each, tuple(x for x in a.optimize.split(',') if x),
-                 sources=tuple(x for x in a.sources.split(',') if x), hlslcc=a.hlslcc, spirv_cross=a.spirv_cross)
+                 sources=tuple(x for x in a.sources.split(',') if x), hlslcc=a.hlslcc, spirv_cross=a.spirv_cross,
+                 grab_fetch=step.grab_fetch_mode(a.grab_fetch), grab_fetch_names=a.grab_fetch_names)
     elif a.cmd == 'shaders-export':
         from .shaders import export
         export.export(Job.reader(a.data, cfg), a.dir, a.bundles)

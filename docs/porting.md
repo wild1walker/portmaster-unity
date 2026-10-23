@@ -205,7 +205,27 @@ Keep the game's look and play: options that change the picture or the game play 
 a player asks for them (a question with the vanilla choice as its default). The `textures` step
 (ASTC instead of BC/DXT: less memory, slightly different pixels, a much longer setup on the
 handheld) is such an option; the check says when a game has enough BC/DXT textures for it to
-matter.
+matter. The shaders step's `grab_fetch` is another: blend-mode sprites (an unnamed `GrabPass`
+sampled at the sprite's own pixels) read the framebuffer instead of a copy of the picture made for
+each of them, which a tiler pays for (Hollow Knight's King's Pass: three copies a frame); where
+sprites of one batch overlap, or with Mali's 16-bit fetched colour, the blend differs slightly
+([shaders.md](shaders.md#blend-modes-without-grabpass-copies-grab_fetch-opt-in)). As a question:
+
+```toml
+[[questions]]
+id = "BLEND_FETCH"
+question = "Blend-mode effects (light, glow): exactly as on PC, or faster with slightly different blending?"
+options = [["false", "As on PC"], ["always", "Faster (slightly different blending)"]]
+default = "false"
+convert_set = "shaders.grab_fetch"
+```
+
+`"always"` reads the framebuffer where the GPU driver has `GL_ARM_shader_framebuffer_fetch` (Mali's
+own drivers) or `GL_EXT_shader_framebuffer_fetch`; on a driver with neither the programs do not
+compile and Unity 6000.0 uses the original shader (older players: not tried). `true` leaves the
+choice to Unity's own check, which in 6000.0 knows only EXT's extension: on Mali's drivers it changes
+nothing. Or set it in `[convert.shaders]` (`grab_fetch = "always"`) for every install. The answer
+applies when the setup converts the data; changing it later means running the setup again.
 
 ## 4. The setup on the handheld
 
