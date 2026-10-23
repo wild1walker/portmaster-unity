@@ -338,7 +338,7 @@ must be in the library folder for a 2021.3+ .NET 4.x game, as in an Android buil
 the display), `Display.getRealMetrics/getSupportedModes/getMode` (one mode: the panel),
 `getAppVsyncOffsetNanos` (0) and `getPresentationDeadlineNanos` (one refresh period), HDR and wide
 colour gamut (none), window insets (none), `PowerManager.isSustainedPerformanceModeSupported`
-(false), `Process.setThreadPriority` (ignored: thread priorities stay as on 2017.4),
+(false), `Process.setThreadPriority` (logged and ignored, applied with `UA_THREAD_PRIORITY=1`: docs/runtime.md),
 `AudioManager.getDevices` (the built-in speaker), `Settings.Global` `DEVICE_NAME` (the model),
 `Activity.moveTaskToBack` (ignored, false), `PackageInfo.getLongVersionCode`, more KeyEvent/
 MotionEvent getters, and `PlayAssetDeliveryUnityWrapper` answering as in an app built without

@@ -129,6 +129,25 @@ class ProfsumTest(unittest.TestCase):
         self.assertIn('75.0% unwound', out)                              # stacks 0 and 2: 60 of 80
         self.assertNotIn('anon', out)                                    # 0x30001 was scanned, not unwound
 
+    def test_areas(self):
+        # the same samples with player-loop names: the behaviours' Update loop, a present wait
+        def table(this, mod):
+            if mod == 'libunity.so':
+                rows = [(0x1000, 0x100, 'void BaseBehaviourManager::CommonUpdate<BehaviourManager>()'), (0x1800, 0x100, 'PlayerLoop()'),
+                        (0x2000, 0x10, 'GfxDeviceClient::WaitForPendingPresent()')]
+                return rows, [r[0] for r in rows]
+            return [], []
+        elfsyms.ElfNames._table = table
+        with open(self.path, 'w') as f:
+            f.write(PROFILE.replace('stack 3 10 0 S f0 80100 0 0 ~11801', 'stack 3 10 0 S f0 80100 0 0 ~12001 ~11801'))
+        out = self.run_sum('--areas', '--thread', 'UnityMain')
+        # 3 frames at 100 Hz: a sample is 10 ms / 3 frames; stacks 0 and 2 (60 samples) are in Update
+        self.assertIn('areas, ms a frame (3 UnityMain frames', out)
+        self.assertIn('200.00 ms  60.0%  scripts: Update', out)
+        self.assertIn('33.33 ms  10.0%  wait: the previous frame presented', out)
+        self.assertIn('runnable, not on a CPU (Q)', out)
+        self.assertIn('managed code (JIT)', out)                         # stack 1: pc in JIT code
+
     def test_offsets(self):
         out = self.run_sum('--offsets', '--thread', 'UnityMain')
         self.assertIn('M:HeroController:Update+0x20', out)

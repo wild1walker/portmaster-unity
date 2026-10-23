@@ -39,7 +39,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
   set -e
   CC=${T}gcc
   mkdir -p $OUT
-  for f in so_loader.c softfp.c bionic_setjmp.S; do
+  for f in so_loader.c softfp.c fastclock.c bionic_setjmp.S; do
     $CC $CFLAGS -c $f -o $OUT/$(basename $f .${f##*.}).o
   done
   # libhybris (../thirdparty/libhybris, Apache 2.0): its hook functions and their helpers
@@ -52,7 +52,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
   $CC $HF -c $H/properties/hybris_properties.c -o $OUT/hybris_hybris_properties.o
   ${T}g++ $HF -c $H/common/dso_handle_counters.cpp -o $OUT/hybris_dso.o
   rm -f $OUT/libsoloader.a
-  ${T}ar rcs $OUT/libsoloader.a $OUT/so_loader.o $OUT/softfp.o $OUT/bionic_setjmp.o $OUT/hybris_*.o
+  ${T}ar rcs $OUT/libsoloader.a $OUT/so_loader.o $OUT/softfp.o $OUT/fastclock.o $OUT/bionic_setjmp.o $OUT/hybris_*.o
   # -lrt: timer_* and shm_open live there before glibc 2.34 (Ubuntu 20.04: 2.31)
   L="$OUT/libsoloader.a $EXPORT -ldl -lpthread -lm -lrt -lstdc++"
   $CC $CFLAGS test_load.c $L -o $OUT/test_load
@@ -60,7 +60,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
 
   D=$OUT/test
   mkdir -p $D
-  for t in test_sem test_sync test_syn; do $CC $CFLAGS test/$t.c $L -o $D/$t; done
+  for t in test_sem test_sync test_syn test_clock; do $CC $CFLAGS test/$t.c $L -o $D/$t; done
   # synthetic Android libraries: freestanding, -nostdlib, DT_NEEDED "libc.so" (an empty stand-in)
   A="-O2 -g -fPIC -ffreestanding -fstack-protector-all $SYNFLAGS"
   S="-shared -nostdlib -Wl,--hash-style=both -Wl,--no-as-needed"
@@ -88,8 +88,8 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
 echo "built: $DIR/$OUT/libsoloader.a $DIR/$OUT/test_load"
 [ $TEST = 1 ] || exit 0
 if [ "$ARCH" = arm64 ]; then
-  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && ./test_sync && ./test_syn .'
+  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
 else
   docker run --rm --pull never --platform linux/arm/v7 -v "$DIR/$OUT/test":/t -w /t debian:bookworm-slim \
-    sh -c './test_sem && ./test_sync && ./test_syn .'
+    sh -c './test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
 fi

@@ -149,7 +149,8 @@ static int readable(const rtab *t, uintptr_t a, uintptr_t n)
 
 static inline int stack_word(const pthr *t, uintptr_t a, uintptr_t *v)
 {
-    if (a < t->stk_lo || a + sizeof *v > t->stk_hi || (a & (sizeof *v - 1))) return 0;
+    // (a + 4 can wrap around: an unwind that popped a garbage stack pointer, 0xfffffffc)
+    if (a < t->stk_lo || a >= t->stk_hi || t->stk_hi - a < sizeof *v || (a & (sizeof *v - 1))) return 0;
     *v = *(const uintptr_t *)a;
     return 1;
 }
@@ -305,7 +306,10 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
                 last = rg;
             }
             exact = d;
-            if (rc < 0) depth = d;                         // the thread's start: nothing above to scan
+            // the thread's start: nothing above to scan. Not when the sample's own function has no
+            // tables (EXIDX_CANTUNWIND: glibc's assembly functions, syscall, memcpy): its callers
+            // are found by the scan (from sp: lr is still in its register, profsum.py takes it)
+            if (rc < 0 && d) depth = d;
         }
         int after_jit = last && last->anon;
 #elif defined(__aarch64__)

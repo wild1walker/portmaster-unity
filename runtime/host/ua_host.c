@@ -21,6 +21,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "glhooks.h"
 #include "hitches.h"
 #include "prof.h"
+#include "threads.h"
 #include "gltrace.h"
 #include "glopt.h"
 #include "msaafix.h"
@@ -441,6 +442,7 @@ int main(int argc, char **argv)
     so_set_dlsym_hook(dlsym_hook);
     hitches_init();                            // UA_HITCH_TRACE
     prof_init(root);                           // UA_PROF
+    threads_init();                            // UA_AFFINITY, UA_NICE
     // GL wrappers, each calling the next: the player -> glopt.c -> msaafix.c -> gltrace.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window

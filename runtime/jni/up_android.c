@@ -13,6 +13,7 @@
 #include <zlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -980,7 +981,26 @@ H(pad_init)
 }
 H(pad_logged)      { up_log("Play Asset Delivery: getAssetPackState(%s): no asset packs here", jstr(a[0])); return fj_v(); }
 H(act_moveTaskToBack) { up_log("Activity.moveTaskToBack(%d): ignored (no other task to show)", a[0].z); return fj_z(0); }
-H(proc_setPriority)   { if (fj_tracing()) up_log("Process.setThreadPriority(%d, %d) ignored", a[0].i, a[1].i); return fj_v(); }
+/* Process.setThreadPriority(tid, priority): Android's priorities are nice values (THREAD_PRIORITY_DISPLAY
+   -4, URGENT_DISPLAY -8, URGENT_AUDIO -19, BACKGROUND 10). UA_THREAD_PRIORITY=1 applies them with
+   setpriority, as Android does (a negative value needs root or CAP_SYS_NICE; else it stays) */
+H(proc_setPriority)
+{
+    static int mode = -1, logged;
+    if (mode < 0) { const char *e = getenv("UA_THREAD_PRIORITY"); mode = e && *e == '1'; }
+    int tid = a[0].i, prio = a[1].i, r = 0;
+    if (mode) r = setpriority(PRIO_PROCESS, (id_t)tid, prio);
+    if (fj_tracing() || logged < 32) {
+        char path[64], comm[32] = "?";
+        snprintf(path, sizeof path, "/proc/self/task/%d/comm", tid);
+        FILE *f = fopen(path, "r");
+        if (f) { if (fgets(comm, sizeof comm, f)) comm[strcspn(comm, "\n")] = 0; fclose(f); }
+        up_log("Process.setThreadPriority(%d \"%s\", %d) %s", tid, comm, prio,
+               !mode ? "ignored (UA_THREAD_PRIORITY=1 applies it)" : r ? strerror(errno) : "applied");
+        logged++;
+    }
+    return fj_v();
+}
 
 /* ---- UnityPlayer (Java methods native code calls) ------------------------------------- */
 H(up_execGL)        { up_run_gl_jobs(); return fj_v(); }
