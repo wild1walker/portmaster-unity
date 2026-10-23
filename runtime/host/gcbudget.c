@@ -4,7 +4,8 @@
 // stay in one scene runs out of memory (Hollow Knight: Mono's heap 64 -> 192 MB in 28 minutes of
 // King's Pass, with 4 collections). While the game has the collector off, the host collects once
 // whenever the used heap has grown by the budget since the last collection, the way the game's own
-// forced collections do it (mode Enabled, a full collection, mode Disabled again):
+// forced collections do it (mode Enabled, a full collection, mode Disabled again), with Mono's
+// collector or IL2CPP's:
 //   UA_GC_BUDGET=<MB>   the budget (default 32; 0 = off). Games that keep the collector on, and
 //                       players without the GarbageCollector API (before 2018.3), are not affected.
 // Each collection is one pause (logged with its length); the game sees its mode unchanged.
@@ -71,6 +72,8 @@ void *gcbudget_dlsym_hook(const char *symbol, void *found)
     return found;
 }
 
+static int il2cpp_max_gen(void) { return 0; }
+
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
 void gcbudget_frame(void *user)
@@ -79,10 +82,17 @@ void gcbudget_frame(void *user)
     if (g_budget <= 0 || !g_mode_known || g_mode != GC_DISABLED || !r_set_mode) return;
     if (!m_collect) {
         void *h = mono_runtime_lib();
-        if (!h) return;                     // IL2CPP: not handled yet
-        m_collect = (void (*)(int))so_dlsym(h, "mono_gc_collect");
-        m_max_gen = (int (*)(void))so_dlsym(h, "mono_gc_max_generation");
-        m_used = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_used_size");
+        if (h) {
+            m_collect = (void (*)(int))so_dlsym(h, "mono_gc_collect");
+            m_max_gen = (int (*)(void))so_dlsym(h, "mono_gc_max_generation");
+            m_used = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_used_size");
+        } else if ((h = so_dlopen("libil2cpp.so", 4 /* RTLD_NOLOAD */))) {
+            // IL2CPP (its Boehm collector): il2cpp_gc_collect collects everything whatever the
+            // generation it is given; UnityMain, where this runs, is attached to the runtime
+            m_collect = (void (*)(int))so_dlsym(h, "il2cpp_gc_collect");
+            m_used = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_used_size");
+            m_max_gen = il2cpp_max_gen;
+        }
         if (!m_collect || !m_max_gen || !m_used) { m_collect = NULL; g_budget = 0; return; }
     }
     int64_t used = m_used();

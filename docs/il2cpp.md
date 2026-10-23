@@ -296,11 +296,11 @@ player> --streaming-assets both --swappy off`, the port's settings: `HollowKnigh
 `android_package.json`, `Game_Data/StreamingAssets`), the port's `UA_PAD_NAME`, and
 `DEVICE=root@<handheld> ARCH=arm64 STOP_ES=1 tools/device/test.sh <folder> 600`. What to watch:
 fps in King's Pass against the 32-bit port's 32 - 34, memory (`libil2cpp.so` is 80 MiB of
-file-backed code; IL2CPP's heap replaces Mono's, `UA_GC_BUDGET` hooks both runtimes'
-`GarbageCollector.SetMode` but collects only Mono's heap: gcbudget.c returns for IL2CPP, "not
-handled yet"; Hollow Knight switches the collector off, so IL2CPP's heap grows for as long as a
-scene lasts, as Mono's did before the budget: the rig's resident size rose about 9 MB a minute in
-King's Pass (2029 to 2075 MB in 5 minutes standing still); IL2CPP has `il2cpp_gc_collect` and `il2cpp_gc_get_used_size` for it), and the first
+file-backed code; IL2CPP's heap replaces Mono's, and `UA_GC_BUDGET` covers both: Hollow Knight
+switches the collector off, and without the budget the rig's resident size rose about 9 MB a minute
+in King's Pass (2029 to 2075 MB in 5 minutes standing still); with it, IL2CPP's heap (115 - 131 MB
+live, up to 163 MB) is collected about every 4 minutes there, pauses of 88 - 107 ms in the rig,
+and the resident size stayed flat for 12 minutes), and the first
 start, when libunity copies `Managed/` out of the APK.
 As a port, the il2cpp-arm64 route's setup would build it on the handheld (`--on-device`): 828 MB of
 C++ and 763 compiles, so hours on a Cortex-A53 (above, "Fitting a 1 GB, 4 x Cortex-A53 handheld");
