@@ -44,6 +44,7 @@ python3 tools/regress/regress.py list                      # the list: games x l
 python3 tools/regress/regress.py fast --update             # record this run as the baseline
 python3 tools/regress/regress.py fast --checkout ../other  # test another checkout with this list and baseline
 python3 tools/regress/regress.py bisect <good> <bad> --level fast --only '^tom-city$'
+python3 tools/regress/regress.py recheck <scratch>/results/rig-<time>   # a finished run, judged again
 python3 -m unittest discover -s tools/regress              # the tool's own tests (synthetic data)
 ```
 
@@ -104,7 +105,9 @@ repository rules ([CONTRIBUTING.md](../../CONTRIBUTING.md)) hold for it.
 
 The fast level compares exactly: any difference fails, with the keys that differ (and for a
 per-file digest, which files: the names are printed, not stored). `--update` records the values
-of the games it ran (also when they fail an expectation: look at the reason first).
+of the games it ran (also when they fail an expectation: look at the reason first; not when a
+step itself failed). `recheck <results folder>` judges a finished run again by the list and the
+baseline as they are now (after tuning an expectation), without running the games.
 
 ## Finding the commit that broke a game
 
