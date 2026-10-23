@@ -872,6 +872,13 @@ leaves the shader alone).
   them), refraction, blur, outline and distortion shaders, and one game's blend-mode shaders
   (2018.3), whose `PIXELSNAP_ON` variants compute the UV before the snap.
 
-Not checked here: Mali's compiler on the ARM branch (`shadercheck` on the handheld), the frame rate
-(the rig's are not the device's: [profiling.md](profiling.md#gpu-pass-by-pass) has the measurement
-it is for), Unity players before 6000.0.
+On the RG34XX-SP (Mali-G31, r20p0), Hollow Knight converted with `"always"`:
+- `shadercheck` on the handheld: all 230 GLES3 programs of `resources.assets` compile and link (the
+  first try did not: Mali's compiler refuses a `"` even in a skipped `#else`, so the `#error` line
+  has no quotes).
+- King's Pass, three runs each, interleaved with runs without it: 33.2 -> 37.0 fps (+11 %; +8 % at
+  the same GPU clock), 18 passes a frame instead of 24 (`UA_GL_TRACE`).
+- Pictures: about 1.6 % of the pixels that are static in both runs differ, by 1 - 6 of 255 (ARM's
+  fetched colour is mediump); two runs without it differ on 48 of them, by 1.
+
+Not checked: Unity players before 6000.0.
