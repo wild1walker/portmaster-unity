@@ -36,34 +36,55 @@ Run it with the 32-bit libraries first: `LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_
 | `UA_DISPLAY` | what |
 |---|---|
 | `auto` (default) | `fbdev` when the framebuffer (`ANDROID_FBDEV`, default `/dev/fb0`) exists and libEGL is an fbdev-only one: no window-system platform (`EGL_*_platform_gbm/wayland/x11/xcb/device/surfaceless`) in its client extensions, which Mesa and the Wayland/GBM/X11 flavors of vendor drivers always list. Otherwise `sdl`; if SDL cannot open a GLES window, `fbdev`. The choice and the reason are logged (`[display] auto: ...`) |
-| `fbdev` | Mali's fbdev EGL, exactly the path the host always had (Knulli on the Allwinner H700): nothing is probed or opened |
+| `fbdev` | Mali's fbdev EGL (Knulli on the Allwinner H700): no window system is probed; the framebuffer's buffers and the flips are the host's (below) |
 | `sdl` | an SDL2 window (Wayland, KMSDRM, X11 through EGL, SDL's offscreen driver; `SDL_VIDEODRIVER` picks one) whose EGL display, config and window surface Unity is given (`runtime/android/README.md`, "Host display"); stops if SDL cannot open one |
 
 With `UA_EGL_PBUFFER=1` (tests on Mesa's surfaceless platform) the fbdev code path is always taken.
 
-The SDL window is fullscreen on the desktop mode, with a high-DPI drawable; Unity is told the
-drawable size (`SDL_GL_GetDrawableSize`) and the display's refresh rate, and renders at that size
-(`ANDROID_WINDOW_SIZE` does not apply). Its config is what Unity's Android player asks for: GLES
-3.0, RGBA8888, depth 24, stencil 8 (then weaker ones, then GLES 2.0). Vsync is on (swap interval
-1, EGL's default). The main loop keeps pumping SDL events (Wayland needs it); closing the window
-quits like SIGTERM.
+### The fbdev path's flips
 
-| variable | effect (sdl) |
+Mali's fbdev EGL draws the window into the framebuffer itself and shows a finished frame by panning
+to it (`FBIOPAN_DISPLAY`). On the RG34XX-SP (sunxi's fbdev, Mali-G31 r20p0) the pan returns at the
+vblank that shows the frame, whatever `eglSwapInterval` says, and the driver makes it on the thread
+that also feeds the GPU (`mali-cmar-backend`): while it waits, the GPU gets no work. A frame of 18 ms
+of GPU work was shown every second refresh (30 fps), the GPU idle a third of the time and clocked
+down for it (simple_ondemand: 420 - 504 MHz, at times 336 MHz and 20 fps); a third buffer alone
+changed nothing (Cell Machine 29.7 fps with 2 or 3). So ua_host makes the flips
+(`runtime/host/fbdev.c`): it exports `ioctl`, the driver's pans come to it and are queued to a thread
+of the host (`ua_flip`) that makes them in order, and the driver's call returns at once; the screen
+info the driver reads before each pan is answered from the host's copy (the kernel would answer only
+once a pending pan is done: its fb lock). The driver takes the return as "shown" and hands the buffer
+shown before to the next frame, so the framebuffer gets four buffers (its virtual height; the
+RG34XX-SP's framebuffer memory holds five 720x480 screens; the old geometry is put back when ua_host
+ends, by a small watcher process, `ua_fbrestore`, if ua_host is killed) and Unity's render thread
+waits after each `eglSwapBuffers` until the buffer its next frame draws into has really left the
+screen (the driver uses its buffers in turn). Nothing the GPU draws into is on the screen, every
+frame is shown at a vblank, in order: no tearing (`runtime/host/test/fbdev_test.sh`: a fake driver
+and display; without the wait the same scenarios tear).
+
+On the RG34XX-SP (fps, then the time from a frame's swap to its flip):
+
+| game | driver's flips (before) | host flips | without vsync (`mailbox`, tears) |
+|---|---|---|---|
+| Cell Machine (2019.3, URP), level 1 | 29.7, 31 ms | **53.6**, 25 ms | 53.4 |
+| Chapéu de Papel (2022.3 macOS, URP), title | 20.2 - 29.6 (GPU at 336 or 600 MHz), 90 ms | **36.4**, 73 ms | 36.3 |
+| Cuphead 64-bit (2017.4 IL2CPP), title | 59.4, 45 ms | 59.4, 28 ms | |
+| Tom City (2020.3), title | 59.3, 47 ms | 59.4, 30.5 ms | |
+
+Frames that keep up with the refresh are shown a refresh sooner than with the driver's own flips
+(it queued swapped frames on its thread); frames the GPU is late with keep two queued, so the GPU
+always has the next one.
+
+| variable | effect (fbdev) |
 |---|---|
-| `UA_DISPLAY_WINDOW=WxH` | a WxH window instead of fullscreen (desktop tests) |
-| `UA_DISPLAY_SAMPLES=<n>` | multisampled window surface, for a game whose quality settings use MSAA (Unity's Android player renders MSAA straight into the window surface) |
-| `UA_DISPLAY_SRGB=1` | sRGB window surface, for a linear-color-space game (logged as a warning when Unity asks for one and this is off) |
-| `UA_SWAP_INTERVAL` | also the SDL window's initial interval (SDL paces Wayland and KMSDRM swaps itself) |
-| `SDL_VIDEODRIVER`, `SDL_VIDEO_EGL_DRIVER` | SDL's own; `SDL_VIDEO_EGL_DRIVER` and `ANDROID_SHIM_LIBEGL` are set to each other when only one is given (SDL and Unity must share one libEGL) |
+| `UA_FB_FLIP=host\|driver\|mailbox` | `host` (default): the flips above; falls back to `driver` with fewer than three buffers or when the driver does not use its buffers in turn. `driver`: the driver's own pans (the old behaviour). `mailbox`: a measurement, tears: the driver's pan returns at once and only the newest frame is flipped to, so the frame rate is what the frames cost (above the refresh rate when they cost less); `UA_SWAP_INTERVAL=0` changes nothing on this driver |
+| `UA_FB_BUFFERS=<n>` | the framebuffer's virtual height as `n` screens, when its memory holds them. Default: 4 with host flips (3 if the memory holds no more), else the firmware's (2 on Knulli) |
+| `UA_FB_QUEUE=<n>` | frames the render thread may be ahead of the screen, at most buffers - 2 (and 2). Default: automatic, 2 while frames miss refreshes (the GPU always has the next frame), 1 once 30 frames in a row were done while the one before still waited for its flip (the game keeps up with the refresh, and a second queued frame would only be latency); back to 2 at a missed refresh, for 2 s (doubling up to a minute at each fall-back, so a game at the edge does not go back and forth) |
+| `UA_FB_TRACE=<n>`, `UA_FB_TRACE_START=<s>` | `[fbtrace]` lines: the times of `n` swaps, the driver's pans and the flips, from `s` (40) seconds after the first swap |
 
-Test without a device: `runtime/host/test/display_test.sh` (aarch64 in Docker, Mesa llvmpipe):
-Unity's EGL call sequence on a render thread while the main thread pumps SDL events, drawing,
-reading back and presenting, with SDL 2.0.10 (X11 on Xvfb, Wayland on a headless weston, the
-fbdev fallback) and SDL 2.26 (Wayland on a headless sway at 1920x1080, X11, offscreen). The whole
-game also runs this way in the emulated rig: `UA_DISPLAY=auto SDL_VIDEODRIVER=x11` against an
-Xvfb instead of `UA_EGL_PBUFFER=1`, or, with no X server, on SDL's offscreen driver (tools/emu's
-own image): `UA_EGL_PBUFFER=0 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=720x480 EMU_ENV=SDL_
-SDL_VIDEODRIVER=offscreen tools/emu/emu.sh ...`.
+`UA_FPS`'s lines end with, on the fbdev path, the time from each swap to the flip that shows it
+(`shown <avg> / <worst> ms after the swap`), the buffers, the queue depth allowed and the render
+thread's wait for its next buffer (`gate`).
 
 ## Host switches (environment)
 
@@ -83,7 +104,7 @@ SDL_VIDEODRIVER=offscreen tools/emu/emu.sh ...`.
 | `UA_POINTER_SPEED`, `UA_POINTER_START`, `UA_POINTER_TOGGLE` | full speed in screen heights/s (1.2); start position `<x>/<y>` (fractions, `0.5/0.5`); a button that turns pointer mode off and on |
 | `UA_POINTER_CURSOR=0`, `UA_POINTER_SIZE`, `UA_POINTER_HIDE`, `UA_POINTER_SHOTS=1` | no cursor drawn (the game draws its own); its scale; hide it after `<s>` idle; draw it into `shot.req` screenshots too (by default they show only the game) |
 | `UA_KEYMAP=<button>:<key>,...` | pad buttons (and `up/down/left/right`, the d-pad) that press keyboard keys instead, e.g. `start:escape,x:space` |
-| `UA_FPS` | frame stats every N s (avg/p99/worst, late >25 ms, hitch >50 ms, GC); `[hitch]` lines >100 ms |
+| `UA_FPS` | frame stats every N s (avg/p99/worst, late >25 ms, hitch >50 ms, GC; on the fbdev path the time from the swap to the flip: Display above); `[hitch]` lines >100 ms |
 | `touch <root>/shot.req` | screenshot of the next frame -> `<root>/shot-<n>.ppm` |
 | `<root>/input.req` | live input: presses in `UA_INPUT_SCRIPT`'s syntax, times counted from when it is read (every 0.25 s; then deleted). Write it elsewhere and `mv` it into place. With `shot.req`, a test drives a game by what its screenshots show: `echo "0:b~2 6:down" > x && mv x <root>/input.req` |
 | `UA_MONO_OPTIONS` | Mono options; `--trace=T:Class,M:Class:Method` (no `<` in specs) |
@@ -93,9 +114,9 @@ SDL_VIDEODRIVER=offscreen tools/emu/emu.sh ...`.
 | `ANDROID_SLES_APLAY_DEVICES` | the ALSA devices the `aplay` client tries in order (default `plughw:0,0 default`: the card directly, without dmix's buffer, else the system's default device when the card is busy) |
 | `UA_SHADER_DUMP=<dir>` | write every GLSL source Unity compiles to `<dir>/<fnv64>.glsl` (runtime/host/glhooks.c) |
 | `UA_SHADER_OVERRIDE=<dir>` | compile `<dir>/<fnv64>.glsl` instead of that source (both switches turn Unity's program binary cache off) |
-| `UA_SWAP_INTERVAL` | eglSwapInterval forced (0: no vsync; Unity's own frame cap still applies) |
+| `UA_SWAP_INTERVAL` | eglSwapInterval forced (0: no vsync; Unity's own frame cap still applies). Mali's fbdev driver on the RG34XX-SP flips at the vblank whatever the interval: `UA_FB_FLIP=mailbox` there (Display above) |
 | `UA_FRAME_RATE=desktop\|android\|<n>` | frame pacing. From 2021.1 Unity's Android players ignore `QualitySettings.vSyncCount` and render at `Application.targetFrameRate`, whose default (-1) is a fixed 30 fps; a desktop game that leaves its frame rate to vsync drops from 60 to 30. `desktop`: paced as the desktop player does (vSyncCount > 0: the display's rate / vSyncCount; 0: targetFrameRate, -1 = the display's rate; the game reads back what it set); `android`: Unity's Android pacing; `<n>`: n fps whatever the game asks. Before 2021.1 the players follow vSyncCount, but a game with vsync off and no targetFrameRate gets the same 30 fps default (Forsaken Castle, Liberal Crime Squad: 30 -> 59 fps with `desktop`). Default: `desktop` for converted desktop data of any Unity version (`unity_version` in `android_package.json`; games with vsync on pace as before), else `android` (imported APKs, older packages without the field) (runtime/host/framerate.c) |
-| `UA_DISPLAY`, `UA_DISPLAY_*` | the EGL window: Mali fbdev or SDL2 (see Display above) |
+| `UA_DISPLAY`, `UA_DISPLAY_*`, `UA_FB_*` | the EGL window: Mali fbdev or SDL2, and the fbdev path's flips (see Display above) |
 | `UA_MSAA_FIX=0\|1` | Unity 2017.1 - 2017.3 with a quality level that uses MSAA: those players always present through their blit path then (a multisampled framebuffer of Unity's own, resolved into a texture drawn over the window), but the window's first setup leaves Unity drawing every frame into the window itself, and the present then draws the untouched framebuffer over it: every frame black (Shiver, 2017.2). With the fix the present's resolve reads the window instead (the frame shows, without MSAA), and the window's EGL config is single-sampled (`UA_DISPLAY_SAMPLES` is ignored); runtime/host/msaafix.c. Default: on for those players (`unity_version` in `android_package.json`), off for all others and for packages that do not name their version |
 | `UA_GL_TRACE=<s>` | one whole frame every `<s>` seconds logged pass by pass: framebuffer, size, clears, draws, vertices (index counts), invalidates, blits, copies (`glCopyTex(Sub)Image`), compute dispatches, uploads, and which draw entry points the frame used (`calls:`). Every draw entry point of GLES 3.2 and its extensions is counted (Instanced, Range, BaseVertex in its core, OES and EXT forms, BaseInstance, MultiDraw, Indirect), also when Unity takes them through `eglGetProcAddress`. `UA_GL_TRACE_START=<s>`: the first traced frame `<s>` seconds after the first frame (past the menus, so the traced frames' stalls do not disturb a bench plan); runtime/host/gltrace.c |
 | `UA_GL_TRACE_DRAWS=<n>` | with `UA_GL_TRACE`: the traced frame's first `<n>` clears, draws and blits one by one, as they happen: each pass's colour buffer (texture, size, format), each draw's program with its shaders' source hashes (the names `UA_SHADER_DUMP` gives their files: run with it, which also keeps Unity's program binary cache off), its samplers (`name=unit:texture`), the pixel at the centre and at (1/4, 1/4) read back after the call, and its fixed-function state (`| depth <func>[ write] stencil <func> ref <n> <fail>/<zfail>/<zpass>[ write] blend <src>,<dst>|off [mask <rgba>] [scissor]`: what decides whether a pass's depth/stencil or old colour matter); a clear's colour; each pass's depth/stencil attachment (`depth tex<n> D24S8`). What draws a wrong picture, and from what: e.g. `#76 draw fb51 prog81 vs <hash> fs <hash> 3 _BlitTexture=0:tex916 _InternalLut=1:tex922 -> (0.00392,0.984,0.00762,1)`: a full-screen pass that turned a dark picture green through its colour-grading LUT (each read waits for the GPU: a traced frame takes much longer; the bindings Unity had are put back after each read: runtime/host/test/pointer_test.sh runs test_gltrace on a fake libGLESv2) |

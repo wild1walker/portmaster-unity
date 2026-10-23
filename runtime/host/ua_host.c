@@ -26,6 +26,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "msaafix.h"
 #include "arch.h"
 #include "display.h"
+#include "fbdev.h"
 #include "steamstub.h"
 #include "plugins.h"
 
@@ -236,6 +237,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx)
     {
         static const char msg[] = "[host] Unity shut down\n";
         (void)!write(2, msg, sizeof msg - 1);
+        fbdev_restore();
         _exit(0);
     }
     fprintf(stderr, "[crash] signal %d (code %d) at address %p, thread %ld\n", sig, si->si_code, si->si_addr, (long)syscall(SYS_gettid));
@@ -251,6 +253,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx)
             if (so_dladdr((void *)v, &di) && di.dli_fname && strstr(di.dli_fname, ".so") && di.dli_fbase && v - (uintptr_t)di.dli_fbase > 0x1000)
             { char t[16]; snprintf(t, sizeof t, "s%d", i); where(t, v); shown++; }
     }
+    fbdev_restore();                         // the framebuffer's geometry, if UA_FB_BUFFERS changed it
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -560,6 +563,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "[host] Unity stopped\n");
     // Unity has saved and shut down; the libraries' exit handlers (Mono's thread cleanup, static
     // destructors) have nothing left to do but can block on threads that are gone
+    fbdev_restore();
     fflush(NULL);
     _exit(0);
 }

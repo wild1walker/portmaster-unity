@@ -24,7 +24,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       libsdl2-dev libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri sway xvfb && rm -rf /var/lib/apt/lists/* && \
     useradd -m u
 EOF
-SRC="host/test/test_display.c host/display.c host/display_sdl.c android/egl_glue.c android/native_window.c android/log_shim.c"
+SRC="host/test/test_display.c host/display.c host/display_sdl.c host/fbdev.c android/egl_glue.c android/native_window.c android/log_shim.c"
 CFLAGS="-O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter"
 
 echo "##### SDL 2.0.10 (Ubuntu 20.04)"

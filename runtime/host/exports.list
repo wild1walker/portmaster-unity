@@ -1,0 +1,5 @@
+/* Symbols ua_host exports beyond those shared libraries linked to it import (ld --dynamic-list):
+   ioctl: fbdev.c's wrapper, which the GLES driver's flips (FBIOPAN_DISPLAY) must reach. */
+{
+  ioctl;
+};

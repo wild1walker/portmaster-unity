@@ -1,6 +1,7 @@
 // Unity's display: the EGL window it draws into, picked before up_start (UA_DISPLAY, display.c).
 //   fbdev  Mali's fbdev EGL: egl_glue hands Unity's ANativeWindow to the driver as its fbdev_window
-//          (Knulli on the Allwinner H700 and other fbdev-flavor Mali blobs). Nothing is opened here.
+//          (Knulli on the Allwinner H700 and other fbdev-flavor Mali blobs); fbdev.c sets up the
+//          framebuffer's buffers and makes the driver's flips.
 //   sdl    an SDL2 window and the EGL display, config and surface SDL created for it
 //          (display_sdl.c): Wayland, KMSDRM, X11, ... with Mesa or vendor GLES drivers.
 //   auto   (default) fbdev when the framebuffer exists and libEGL is an fbdev-only one (no

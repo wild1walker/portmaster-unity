@@ -147,7 +147,10 @@ such a struct, so the pointer Unity passes is already a valid fbdev window. `egl
   docs/runtime.md) only the driver's single-sampled configs are returned, and a request for
   `EGL_SAMPLES` / `EGL_SAMPLE_BUFFERS` asks for none.
 - `eglCreateContext`: on `EGL_BAD_ATTRIBUTE` retries with only `EGL_CONTEXT_CLIENT_VERSION`.
-- `eglSwapBuffers`: host hook, then the real call. `eglGetProcAddress`: returns the wrappers for
+- `eglSwapBuffers`: host hook, the real call, a second host hook (`egl_glue_set_swap_done_hook`:
+  ua_host's fbdev flips wait there for the next frame's buffer, runtime/host/fbdev.c).
+  `eglCreateWindowSurface` of Unity's window calls `egl_glue_set_window_hook`'s hook first (the
+  host's queued flips are waited for). `eglGetProcAddress`: returns the wrappers for
   wrapped names, NULL for Android's frame-timestamp queries, our no-op for
   `eglPresentationTimeANDROID` (see Frame pacing).
 - `eglSurfaceAttrib` (Unity 2020.3+) is not wrapped: Unity's surface is the driver's.

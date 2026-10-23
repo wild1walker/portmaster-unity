@@ -19,6 +19,12 @@ void *egl_glue_real(const char *name);
 
 // Called on Unity's render thread right before each real eglSwapBuffers (NULL to remove).
 void egl_glue_set_swap_hook(void (*hook)(void *ctx), void *ctx);
+// Called on Unity's render thread right after each real eglSwapBuffers returned, with its result
+// (NULL to remove).
+void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx);
+// Called right before the driver creates a window surface for Unity's window (not with a host
+// display, nor for UA_EGL_PBUFFER's pbuffer; NULL to remove).
+void egl_glue_set_window_hook(void (*hook)(void));
 
 // Single-sampled window configs (0, the default: the driver's list as it is). With it on,
 // eglChooseConfig returns only the driver's single-sampled configs (requests for EGL_SAMPLES or
