@@ -74,7 +74,12 @@ wrong re-start of the unwind is possible ("on the stack" is an upper bound; `pro
 counts only unwound callers, the profile marks scanned ones `~`, and the summary says how many
 samples were unwound and how deep). ua_host and the fake JNI are built with `-funwind-tables`, so
 the unwind goes on below Unity's `nativeRender` to the thread's start. A sample taken in a
-function's prologue or epilogue can stop the unwind early (the tables describe the body). Blocked samples have
+function's prologue or epilogue can stop the unwind early (the tables describe the body). A sample
+in a function without tables (`EXIDX_CANTUNWIND`: glibc's assembly, `syscall`, `memcpy`) is scanned
+from its stack pointer, lr naming the caller (until 2026-10-23 such a sample was taken for the
+thread's start and kept no callers: a fifth of Hollow Knight's UnityMain samples, every futex wake
+among them; the restarts this brought found a stack check that a popped garbage stack pointer
+could wrap, now closed). Blocked samples have
 only sp and pc (from `/proc`): their callers are always a scan. Mono's trampolines and code it has
 no information for are "anonymous code". Libraries the profile names only by exported symbols (a
 stripped libc or GLES driver) are named by the nearest exported function, which is often not the
@@ -114,6 +119,14 @@ names ua_host's own functions.) For each sampled thread:
 `--frames` gives UnityMain's time on a CPU per frame (a frame that needs more than 16.7 ms misses
 the vsync), `--slow 20` limits the tables to samples in frames longer than 20 ms, `--callers
 <text>` lists the callers of the functions matching it, `--offsets` keeps offsets in method names.
+`--areas` adds UnityMain's frame by area of Unity's player loop, in ms a frame: rendering by camera
+stage (offscreen cameras, the cameras' sorting, batching and draw calls, culling, image effects),
+scripts by callback (Update, FixedUpdate, LateUpdate, coroutines, OnGUI), physics, animation,
+particles, audio, UI; the waits (for the previous frame's present, i.e. the render thread or the
+GPU, and for the job threads); and, across those areas, the futex and clock system calls, managed
+code, Mono's runtime, memory management, the job system and Physics2D queries. A sample's area is
+the first rule one of its unwound frames matches (`AREAS` in profsum.py; the scanned frames when
+none does).
 
 ## The device bench
 
@@ -154,15 +167,19 @@ measurement (what the frame costs when it is not paced), not a setting.
 
 ## Worked example: Hollow Knight, King's Pass (Unity 6000.0, Mono)
 
-On the RG34XX-SP the game runs King's Pass at 32 - 34 fps with UnityMain busy the whole frame. The
-saved game continues from the title screen with two presses (Switch layout: `b` confirms), and the
-title and the save load are frames of several seconds, so the plan needs no log lines:
+On the RG34XX-SP the game ran King's Pass at 32 - 34 fps (2026-10-22; 33 - 37 with the host's flips:
+[what limits it](#what-limits-kings-pass-32-bit-2026-10-23)). The saved game continues from the title
+screen with Start Game and the save slot (Switch layout: `b` confirms); the title and the save load
+are frames of several seconds, and memory is tight while the save loads (`UA_MEM_MIN=20`):
 
 ```sh
-export DEVICE=root@<handheld> UA_PAD_NAME='Nintendo Switch Pro Controller'
-export PLAN='hitch:5000; steady:3; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5'
+export DEVICE=root@<handheld> UA_PAD_NAME='Nintendo Switch Pro Controller' UA_MEM_MIN=20 MEASURE=25
+export PLAN='log:find GameCameras; hitch:2500; steady:3; sleep:2; press:0:b; sleep:6; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5; shot'
 tools/device/profbench.sh /userdata/uatest/hollowknight --list hk-session.txt
 ```
+
+(the third press lands while the save loads when the second one already started it; the `shot`
+step's screenshot shows that the measurement is King's Pass and not the menu).
 
 `hk-session.txt`, about two and a half minutes a run:
 
@@ -209,6 +226,84 @@ behaviours with `Update`/`FixedUpdate` (PlayMaker FSMs among them), 2D colliders
 and the project's fixed timestep (a 50 Hz fixed update runs 1.6 times in a 32 fps frame and less
 than once in a 60 fps one). UnityPy reads those from the game's own files (the level file of the
 scene and globalgamemanagers); keep such numbers out of this repository like any other game data.
+
+### What limits King's Pass (32-bit, 2026-10-23)
+
+With today's runtime (`UA_GL_DSCLEAR`, host flips) King's Pass runs 36.6 fps on a cool handheld and
+33.3 fps once it is warm, and the difference is the GPU's clock, not the main thread:
+
+- **The frame rate follows the Mali's clock.** At 696 MHz (simple_ondemand keeps it there: the GPU
+  is busy past the governor's threshold) the scene runs 36.6 fps; when the SoC reaches about 68 C the
+  thermal governor caps the GPU at 600 MHz (`thermal-devfreq-0` cooling state 1, `freq.log`'s
+  `gpu=600`), after about 20 s of play from a cool start, and the frame rate settles at 33.3 fps (a
+  150 s run: 33.1 - 33.4 in every 15 s window, the GPU at 600 MHz 95 % of the time; the CPUs are
+  capped at 1416 - 1512 MHz too). Bench runs of 25 s therefore drift with the session's heat: in one
+  session the same setting measured 36.6 and 35.0 fps, the GPU at 696 MHz 100 % and 60 % of the
+  time. Compare runs only with their `gpu=` residency, or as below without the GPU.
+- **UnityMain waits for the GPU.** In the normal frame (30 ms at 33 fps) UnityMain waits 3.4 ms in
+  `GfxDeviceClient::WaitForPendingPresent` (the render thread has not presented the previous frame),
+  and the render thread spends about 11 ms of its frame blocked inside Mali's driver, in the draws
+  of the grab passes' copies and the first draws after a framebuffer change.
+- **Without the GPU's work the main thread makes 49 fps.** A measurement, not a setting: every
+  fragment shader the scene compiles replaced by one that writes a constant colour (a run with
+  `UA_SHADER_DUMP=<dir>`, then `tools/device/flatshaders.py <dir> <flat dir>` and runs with
+  `UA_SHADER_OVERRIDE=<flat dir>`, a folder outside `bench/`: profrun.sh empties `bench/<run name>`;
+  the picture is grey, the draws, passes, blending and every CPU-side step stay). The GPU then idles at 240 MHz and the
+  same scene runs **49.1 - 49.6 fps** with UnityMain 95 % on a CPU, 19.3 ms of CPU a frame (24 - 25.5
+  ms in the normal frame: the same work, slower; with more fixed steps a frame at 33 fps, the DRAM
+  the GPU keeps busy and the warmer CPU). This is the way to measure a main-thread change on this
+  scene: with the GPU in the loop its clock decides the result.
+
+UnityMain's frame by area (`profsum.py --areas`, 500 Hz; the profiler costs about 4 %), normal and
+with the GPU's work left out:
+
+| ms a frame | normal (33.3 fps, GPU 600 MHz) | without the GPU's work (47.4 fps) |
+|---|---|---|
+| render: the cameras (sorting, batching, draw calls of the sprites) | 5.6 | 4.7 |
+| render: offscreen camera (the blurred background) | 2.7 | 1.8 |
+| render: culling | 1.2 | 1.1 |
+| render: image effects (OnRenderImage blits), other | 1.2 | 1.0 |
+| scripts: Update (PlayMaker FSMs most of it) | 3.9 | 3.1 |
+| scripts: FixedUpdate, LateUpdate, coroutines, OnGUI | 1.9 | 1.1 |
+| animation (Animator, Director) | 1.6 | 1.2 |
+| physics: 2D step (50 Hz: 1.5 steps a frame at 33 fps, 1.06 at 47) | 1.2 | 0.8 |
+| audio (FMOD's update on UnityMain) | 1.3 | 0.9 |
+| particles, UI, input, transforms, other player loop | 2.4 | 1.5 |
+| not attributed (unwind stopped) | 2.2 | 1.8 |
+| wait: the previous frame's present (render thread, GPU) | 3.4 | 0 |
+| wait: job threads, other | 0.6 | 0.5 |
+| **frame** | **30.0** | **21.1** |
+| across the areas: managed code (JIT) | 4.0 | 3.0 |
+| job system (scheduling and waking the workers: 1.1 ms of futex wakes) | 3.3 | 2.8 |
+| Mono's runtime | 1.7 | 1.3 |
+| memory management (Unity's allocators) | 1.5 | 1.2 |
+| futex system calls | 1.5 | 1.2 |
+| Physics2D queries | 0.9 | 0.7 |
+| clock_gettime / gettimeofday system calls | 0.2 | 0.3 |
+
+No single area is large: rendering is a third, the scripts a quarter (managed code 3 - 4 ms, the
+rest the engine and Mono calls they make), the job system's wake-ups of its mostly idle workers
+about 1 ms. What the runtime and the converted data make Unity do that an Android device would not,
+looked for and measured (A/B in one session, each value one run):
+
+| change (layer) | result |
+|---|---|
+| `clock_gettime` without a system call: the kernel gives 32-bit processes no vDSO, about 6,000 calls a second at 1.1 us each (`UA_FAST_CLOCK=1`, runtime.md) | UnityMain's kernel time -35 to -40 %; without the GPU's work 49.1 / 49.2 fps, without the change 49.2 / 49.1: no gain that can be measured. Option, off |
+| Unity's `Process.setThreadPriority` calls applied (render thread -2, background jobs 10: `UA_THREAD_PRIORITY=1`) | 49.4 against 49.1 - 49.6: noise. Option, off |
+| Mono's inline limit 40 (`MONO_INLINELIMIT=40`, default 20) | 49.3: noise |
+| Mali's submission thread `mali-cmar-backe` at nice -10 (it waits for a CPU as long as it runs, 17 % of the time) | its wait for a CPU 15 -> 6 %; 33.1 fps against 33.4 (GPU at 600 MHz): no gain |
+| FMOD's threads on core 0 and every other thread on cores 1 - 3 (`UA_AFFINITY='FMOD*:0 SDLAudio*:0 *:1-3'`; FMOD's mixer runs at nice -19, 57 % of a core, and preempts whatever shares its core) | without the GPU's work 50.8 / 50.9 / 50.6 fps against 49.1 - 49.6 (**+3 %**); only UnityMain kept off core 0: +1.2 %; UnityMain, the render thread and Mali's thread: +2.8 %. In the game itself nothing: King's Pass 33.0 against 33.4, the main menu 43.2 / 43.0 against 42.8 / 43.1, both GPU-bound. Option, off |
+| Unity's job threads: `-job-worker-count` 2 / 1 / 0 (`UA_UNITY_ARGS`; the default is 3 on four cores, and their wake-ups cost UnityMain about 1 ms a frame) | 49.5 / 50.0, 49.6 / 48.4 and 46.8 fps against 49.2 / 49.0: none pays (0 workers: every job on UnityMain, -5 %) |
+| `gfx-threading-mode=4` in the converted boot.config (the Mac build's native graphics jobs) | none to make: libunity's `AdjustThreadingModeForAPI` turns any jobs mode into 2 (a render thread) for OpenGL ES, as an Android build gets |
+| Earlier (2026-10-22, GPU-bound then too, so read with care): Mono `-O=abcrem`, `-O=abcrem,ssapre`, `UA_GC_BUDGET=64`, `UA_AUDIO_FRAMES=1024` | within noise |
+
+The ceiling this leaves: King's Pass is held by the GPU at 33 fps warm and 37 cool; the main
+thread alone would allow about 49 - 51 fps. 60 fps needs the GPU's frame cut by about 45 % at 600
+MHz (the grab passes and the 4-pass background blur are its largest pieces: [GPU, pass by
+pass](#gpu-pass-by-pass)) and the main thread's by about 15 % (19.3 -> 16.7 ms); neither has a
+picture-identical change of that size in sight in the runtime. IL2CPP (the 64-bit build) replaces
+the managed code and Mono's runtime (4 - 5.5 ms here) but runs the same engine and the same GPU work
+(30.6 - 32.4 fps in King's Pass).
 
 ## GPU, pass by pass
 
