@@ -250,7 +250,7 @@ Compared on each line's Windows editor installer (libil2cpp's headers only, 1 - 
 | Unity | metadata | converter | |
 |---|---|---|---|
 | 2023.1.8f1, 2023.2.20f1 | 29 | 2022.3.23f1 | agrees; 2023.2.20f1 built and run (below) |
-| 6000.0.58f2, 6000.0.61f1 | 31 | 2022.3.62f3 | agrees; built and run (below) |
+| 6000.0.58f2, 6000.0.61f1 | 31 | 2022.3.62f3 | agrees; built and run (below; 6000.0.61f1: Hollow Knight) |
 | 6000.1.4f1, 6000.2.6f2 | 31 | 2022.3.62f3 | agrees (not built yet) |
 | 6000.3.16f1, 6000.4.6f1 | 39 | - | refused: a new metadata header, string literal, type and assembly tables |
 | 6000.5.7f1, 6000.6.3f1 | 107, 108 | - | refused: as 6000.3, and the code registration structures changed too |
@@ -274,7 +274,18 @@ King's Pass with the main thread busy all the time): built this way with the por
 patches compiled in (inputsystem-android, streaming-assets: `--asmpatch ... --streaming-assets
 both`): UnityLinker 15 min (102 assemblies, the USB drive busy), the conversion 6 min (828 MB of
 C++, metadata 16.4 MB, 127,427 methods), 763 Bee commands in 22 min; `libil2cpp.so` 80.0 MiB,
-metadata 31, all 157 lookups exported. HK_RIG_RESULT
+metadata 31, all 157 lookups exported. Packed with android-data
+`--il2cpp` (an APK of 1.93 GiB and a 1.84 GiB OBB: over 2 GiB, so APK + OBB; 2 h 14 min with the USB drives busy) it runs in the native
+arm64 rig from its title through Start Game, the profile, the prologue, the opening cinematic
+(VP8 from StreamingAssets, through the compiled-in patch) into King's Pass, where the Knight
+walks, jumps and the tutorial's Switch prompt shows; no exception (the logged errors are those of
+its Mono runs: PlayMaker's 2D proxy, the Opening_Sequence tilemap fallbacks). So with an OBB
+mounted 6000.0's libunity still copied `Managed/` out of the APK (the 2020.3 problem above did not
+show). The rig: title about 50 fps, King's Pass about 40 fps, the 8 llvmpipe threads at 65 - 72 %
+of a core each (Mesa renders on the CPU), UnityMain at 6 % of one Mac core, about 1.5 ms of CPU a
+frame. Not comparable with the 32-bit port: its rig runs the armv7 player under QEMU (0.7 - 3.6
+fps there), and no Mono arm64 player exists to run natively; how far King's Pass gets from 32 - 34
+fps on the handheld is a handheld measurement.
 
 A handheld test of it needs what 64-bit Cuphead's does (tools/device/test.sh with `ARCH=arm64`,
 the arm64 `ua_host`, a 64-bit userland; nothing of the 32-bit userland is used): a folder with
@@ -286,7 +297,11 @@ player> --streaming-assets both --swappy off`, the port's settings: `HollowKnigh
 `DEVICE=root@<handheld> ARCH=arm64 STOP_ES=1 tools/device/test.sh <folder> 600`. What to watch:
 fps in King's Pass against the 32-bit port's 32 - 34, memory (`libil2cpp.so` is 80 MiB of
 file-backed code; IL2CPP's heap replaces Mono's, `UA_GC_BUDGET` hooks both runtimes'
-`GarbageCollector.SetMode`), and the first start, when libunity copies `Managed/` out of the APK.
+`GarbageCollector.SetMode` but collects only Mono's heap: gcbudget.c returns for IL2CPP, "not
+handled yet"; Hollow Knight switches the collector off, so IL2CPP's heap grows for as long as a
+scene lasts, as Mono's did before the budget: the rig's resident size rose about 9 MB a minute in
+King's Pass (2029 to 2075 MB in 5 minutes standing still); IL2CPP has `il2cpp_gc_collect` and `il2cpp_gc_get_used_size` for it), and the first
+start, when libunity copies `Managed/` out of the APK.
 As a port, the il2cpp-arm64 route's setup would build it on the handheld (`--on-device`): 828 MB of
 C++ and 763 compiles, so hours on a Cortex-A53 (above, "Fitting a 1 GB, 4 x Cortex-A53 handheld");
 the setup on a 64-bit-only system is not written for Hollow Knight yet.
@@ -646,6 +661,9 @@ What the runs showed:
 - (Since run on a handheld: the 2018.4, 2019.4 and 2020.3 games reached their titles at 59.4 - 59.6
   fps with the arm64 `ua_host` on an RG34XX-SP's 64-bit userland; compat/README.md, "On a handheld".)
 - `--strip none` end to end (it built 1 GB of C++ for the 2019.4 game; stopped there).
+- Mixed builds (Unity 2023.1+): 2023.1, 6000.1 and 6000.2 (compared, not built), `--on-device`
+  (the same steps with the mixed folder; not run), `pmunity apk --il2cpp` with a Unity 6 Mono APK,
+  the il2cpp-arm64 port route with a Unity 6 game, armv7, and any of it on a handheld.
 - armv7 for 2018.4 and 2020.3.
 
 ## Notes per version

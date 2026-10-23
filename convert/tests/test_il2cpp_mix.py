@@ -206,5 +206,44 @@ class PrepareTest(unittest.TestCase):
             self.assertIn('version 35', str(cm.exception))
 
 
+class ToolchainTest(unittest.TestCase):
+    """il2cpp.toolchain for Unity 2023.1+: the mixed folder and the player's API level (stand-ins
+    for the fetches)"""
+
+    def run_toolchain(self, version, api):
+        calls = {'ndk': []}
+        saved = (I.fetch_editor, I.fetch_ndk, I.fetch_player, I.install_ndk_shims, I.android_note, M.prepare)
+        try:
+            I.fetch_editor = lambda v, dest, installer=None, bcl=I.BCL_DIR: dest
+            I.fetch_ndk = lambda name, z, abi, dest, extra_apis=(): calls['ndk'].append(tuple(extra_apis)) or dest
+            I.fetch_player = lambda v, pkg, abi: {'version': str(v)}
+            I.install_ndk_shims = lambda ndk, abi: None
+            I.android_note = lambda path: (api, 'r27c')
+            M.prepare = lambda v, editor, home, log=None: (editor + '-mix', '2022.3.62f3')
+            with tempfile.TemporaryDirectory() as t:
+                tc = I.toolchain(UV.Version(version), 'arm64-v8a', t)
+        finally:
+            (I.fetch_editor, I.fetch_ndk, I.fetch_player, I.install_ndk_shims, I.android_note, M.prepare) = saved
+        return tc, calls
+
+    def test_unity6(self):
+        tc, calls = self.run_toolchain('6000.0.61f1', 23)
+        self.assertTrue(tc['il2cpp_editor'].endswith('-mix'))
+        self.assertEqual(tc['converter'], '2022.3.62f3')
+        self.assertEqual(tc['android_api'], 23)
+        self.assertEqual(calls['ndk'], [(), (23,)])          # (API 23's libraries fetched too)
+
+    def test_api_22_player(self):
+        tc, calls = self.run_toolchain('2023.2.20f1', 22)
+        self.assertNotIn('android_api', tc)
+        self.assertEqual(calls['ndk'], [()])
+
+    def test_2022_unchanged(self):
+        tc, calls = self.run_toolchain('2022.3.62f3', 22)
+        self.assertEqual(tc['il2cpp_editor'], tc['editor'])
+        self.assertNotIn('converter', tc)
+        self.assertNotIn('android_api', tc)
+
+
 if __name__ == '__main__':
     unittest.main()
