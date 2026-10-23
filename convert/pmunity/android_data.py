@@ -46,7 +46,6 @@ original game's ones), --asmpatch (tools/asmpatch's generic patches, e.g. Rewire
 import argparse
 import ctypes
 import errno
-import gc
 import fnmatch
 import json
 import os
@@ -62,7 +61,7 @@ import time
 from . import retarget
 from . import streaming as ST
 from . import typetrees
-from .unity_io import _trim
+from .unity_io import collect
 from . import unity_version as UV
 from . import video
 
@@ -662,14 +661,19 @@ def inline_bundle(src, dst):
     if bigbundle.size(src):                 # (0: a layout bigbundle does not read)
         work = dst + '.work'
         shutil.rmtree(work, ignore_errors=True)
+        b = None
         try:
-            b = bigbundle.unpack(src, work)
+            # (the .resS nodes stay in the bundle, read from it texture by texture)
+            b = bigbundle.unpack(src, work, lazy=True)
             sfs = [n for n in b.nodes if n.flags & 4] if b else []
             if len(sfs) == 1:
                 files = {n.name: n.path for n in b.nodes}
 
                 def read_node(path, off, size):
-                    with open(files[path.split('/')[-1]], 'rb') as f:
+                    p = files[path.split('/')[-1]]
+                    if isinstance(p, bigbundle.Part):
+                        return p[off:off + size]
+                    with open(p, 'rb') as f:
                         f.seek(off)
                         return f.read(size)
                 sf = UnityPy.load(sfs[0].path).file
@@ -682,9 +686,12 @@ def inline_bundle(src, dst):
                              for n in b.nodes if n.name not in dropped]
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     bigbundle.pack(b, nodes, dst + '.tmp')
+                    b.close()
                     os.replace(dst + '.tmp', dst)
                     return len(plan), dropped
         finally:
+            if b:
+                b.close()
             shutil.rmtree(work, ignore_errors=True)
     env = UnityPy.load(src)
     bf = env.file
@@ -1801,8 +1808,7 @@ def main(argv=None):
         if mv or (k + 1) % 50 == 0:         # what is placed so far, for a run that is killed
             save_state(statep, dict(state, **newstate))
         if how in ('inlined', 'unitypy', 'video', 'patched'):
-            gc.collect()
-            _trim()
+            collect()
         if crc0 is not None:
             crcs[crc0] = ST.bundle_crc(dst)
             newstate.setdefault('_crc', {})[dst_rel] = [crc0, crcs[crc0]]
@@ -2170,7 +2176,7 @@ def verify(args, items, log):
             if bigbundle.size(path) > 64 << 20:          # big: its serialized files from its nodes
                 work = os.path.join(args.out, '.verify-work')
                 shutil.rmtree(work, ignore_errors=True)
-                b = bigbundle.unpack(path, work)
+                b = bigbundle.unpack(path, work, lazy=True)
             if b:
                 files = [UnityPy.load(n.path).file for n in b.nodes if n.flags & 4]
             else:
@@ -2182,6 +2188,8 @@ def verify(args, items, log):
                     for o in f.objects.values():
                         o.read_typetree(); cnt += 1
             files = None
+            if b:
+                b.close()
             if work:
                 shutil.rmtree(work, ignore_errors=True)
             log(f'verify: {d}: {cnt} objects parsed')

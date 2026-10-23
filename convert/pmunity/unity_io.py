@@ -1,7 +1,9 @@
 """Loading and saving Unity serialized files and UnityFS asset bundles with UnityPy."""
 import gc
-import os
 import inspect
+import io
+import os
+import re
 import textwrap
 
 _patched = False
@@ -49,12 +51,61 @@ def _recompile(module, cls, method, old, new, extra):
     return True
 
 
+_orig_chunk_based_compress = None
+
+
+def _chunk_based_compress(data, block_info_flag):
+    """UnityPy's CompressionHelper.chunk_based_compress (a bundle's blocks when it is saved), its
+    LZ4 chunks compressed on every core: each chunk is compressed on its own, so the bytes and the
+    blocks are the ones the original makes (the same raw-chunk rule)."""
+    from UnityPy.helpers import CompressionHelper as C
+    from . import bigbundle
+    switch = block_info_flag & 0x3F
+    size = C.COMPRESSION_CHUNK_SIZE_MAP.get(switch)
+    if switch not in (2, 3) or not size or bigbundle.threads() <= 1:
+        return _orig_chunk_based_compress(data, block_info_flag)
+    out, info = bytearray(), []
+    for chunk, c in bigbundle.compress_chunks((data[p:p + size] for p in range(0, len(data), size)),
+                                              C.COMPRESSION_MAP[switch]):
+        if len(c) >= size if len(chunk) == size else len(c) > len(chunk):
+            out += chunk
+            info.append((len(chunk), len(chunk), block_info_flag ^ switch))
+        else:
+            out += c
+            info.append((len(chunk), len(c), block_info_flag))
+    return bytes(out), info
+
+
+_BULK = {}                              # type name -> struct code, for arrays written in one go
+
+
+def _write_items(value, subtype, writer, config, write_value):
+    """The elements of an array in a type tree (UnityPy's write_value calls this for them): an
+    array of a plain number type without per-element alignment in one struct.pack (the bytes each
+    element's own pack gives: a shader's compressed blob is millions of bytes, one Python call
+    each before), anything else element by element as UnityPy does."""
+    code = _BULK.get(subtype.m_Type)
+    if code and not subtype.m_Children and not (subtype.m_MetaFlag or 0) & 0x4000:
+        if code == 'B' and isinstance(value, (bytes, bytearray)):
+            writer.write(bytes(value))
+        elif value:
+            import struct
+            writer.write(struct.pack(f'{writer.endian}{len(value)}{code}', *value))
+        return
+    for sub_value in value:
+        write_value(sub_value, subtype, writer, config)
+
+
 def _patch_unitypy():
     """Opening a bundle, UnityPy (1.25) holds two copies of its decompressed contents: b"".join() of the
     decompressed blocks (every block plus the joined copy), then a copy of each file node read out of
     it. For the largest Cuphead bundle that is ~1.2 GB, more than a 1 GB handheld has. Recompiled
-    here to decompress into one buffer and give the nodes views into it."""
-    global _patched
+    here to decompress into one buffer and give the nodes views into it.
+
+    Speed, the same bytes: a saved bundle's LZ4 chunks are compressed on every core
+    (_chunk_based_compress), and type-tree arrays of numbers are written in one call each
+    (_write_items)."""
+    global _patched, _orig_chunk_based_compress
     if _patched:
         return
     _patched = True
@@ -63,6 +114,37 @@ def _patch_unitypy():
     FM = importlib.import_module('UnityPy.files.File')         # the classes under the same names)
     _recompile(BF, BF.BundleFile, 'read_fs', 'b"".join(', '_join_blocks(self, reader, m_BlocksInfo)', {'_join_blocks': _join_blocks})
     _recompile(FM, FM.File, 'read_files', 'reader.read(node.size)', '_node_view(reader, node.size)', {'_node_view': _node_view})
+    CH = importlib.import_module('UnityPy.helpers.CompressionHelper')
+    if callable(getattr(CH, 'chunk_based_compress', None)) and getattr(CH, 'COMPRESSION_CHUNK_SIZE_MAP', None):
+        _orig_chunk_based_compress = CH.chunk_based_compress
+        CH.chunk_based_compress = _chunk_based_compress
+    TT = importlib.import_module('UnityPy.helpers.TypeTreeHelper')
+    W = importlib.import_module('UnityPy.streams.EndianBinaryWriter').EndianBinaryWriter
+    codes = {W.write_byte: 'b', W.write_u_byte: 'B', W.write_short: 'h', W.write_u_short: 'H', W.write_int: 'i',
+             W.write_u_int: 'I', W.write_long: 'q', W.write_u_long: 'Q', W.write_float: 'f', W.write_double: 'd',
+             W.write_boolean: '?'}
+    _BULK.update({t: codes[f] for t, f in getattr(TT, 'FUNCTION_WRITE_MAP', {}).items() if f in codes})
+    if _BULK:
+        _recompile(TT, TT, 'write_value', '[write_value(sub_value, subtype, writer, config) for sub_value in value]',
+                   '_write_items(value, subtype, writer, config, write_value)', {'_write_items': _write_items})
+
+
+_collects = 0
+
+
+def collect():
+    """Frees a closed file's objects (UnityPy's are cycles) and hands the memory back (_trim).
+    After the first collection, what is left (modules, UnityPy's tables: ~130,000 objects) is
+    frozen, so the collection after each later file walks only that file's objects (on a handheld
+    ~0.1 s a file before, for thousands of files); every 64th collection walks everything again."""
+    global _collects
+    _collects += 1
+    if _collects % 64 == 0:
+        gc.unfreeze()
+    gc.collect()
+    if _collects == 1 or _collects % 64 == 0:
+        gc.freeze()
+    _trim()
 
 
 def _trim():
@@ -103,12 +185,84 @@ def _make_save_streamed():
     return ns['save_streamed']
 
 
+class _Sink(io.RawIOBase):
+    """A write-only stream that keeps nothing (a dry run's object data: none)."""
+
+    def __init__(self):
+        super().__init__()
+        self.pos = self.end = 0
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def write(self, b):
+        self.pos += len(b)
+        self.end = max(self.end, self.pos)
+        return len(b)
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, pos, whence=0):
+        self.pos = pos if whence == 0 else self.pos + pos if whence == 1 else self.end + pos
+        return self.pos
+
+
+class _At(io.RawIOBase):
+    """The file f from offset base on, as a stream of its own (positions relative to base)."""
+
+    def __init__(self, f, base):
+        super().__init__()
+        self.f, self.base = f, base
+        f.seek(base)
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def write(self, b):
+        return self.f.write(b)
+
+    def tell(self):
+        return self.f.tell() - self.base
+
+    def seek(self, pos, whence=0):
+        if whence == 0:
+            return self.f.seek(self.base + pos) - self.base
+        return self.f.seek(pos, whence) - self.base
+
+
+def _head_size(sf):
+    """The length of what sf.save() writes before the object data (header and metadata, padded to
+    16): a dry run of the streamed save with every object's data empty, whose metadata has the same
+    layout (an object's entry holds its offset and size in fixed-size fields)."""
+    objs = list(sf.objects.values())
+    old = [o.data for o in objs]
+    try:
+        for o in objs:
+            o.data = b''
+        return len(_save_streamed(sf, _Sink(), lambda o: False))
+    finally:
+        for o, d in zip(objs, old):
+            o.data = d
+
+
 def save_serialized_to(sf, path, prepare=None):
-    """Writes a SerializedFile to path, the bytes sf.save() gives, its object data streamed through
-    a file beside it: in memory only the metadata and one object at a time. prepare(obj) is called
+    """Writes a SerializedFile to path, the bytes sf.save() gives, its object data streamed into
+    the file: in memory only the metadata and one object at a time. prepare(obj) is called
     before each object is written and returns True when it set obj.data for this write only (a
     texture given its pixels): that data is dropped again once written. Returns False, writing
-    nothing, for a layout it does not stream (header version < 9, another UnityPy version)."""
+    nothing, for a layout it does not stream (header version < 9, another UnityPy version).
+
+    The data goes straight to its place (after the header and metadata, whose length a dry run
+    gives first), then the header and metadata are written before it: one pass over the file,
+    where a copy through a second file was needed before (on a handheld's card, the file's size
+    written and read once more)."""
     global _save_streamed
     if sf.header.version < 9:
         return False
@@ -117,17 +271,28 @@ def save_serialized_to(sf, path, prepare=None):
     if not _save_streamed:
         return False
     import shutil
-    tmp = path + '.data'
-    try:
-        with open(tmp, 'w+b') as d:
-            head = _save_streamed(sf, d, prepare or (lambda o: False))
-            with open(path, 'wb') as out:
+    base = _head_size(sf)
+    with open(path, 'w+b') as out:
+        out.write(b'\0' * base)
+        head = _save_streamed(sf, _At(out, base), prepare or (lambda o: False))
+        if len(head) == base:
+            out.seek(0)
+            out.write(head)
+            return True
+        # (not seen: the metadata came out another length) the data moved after the real head
+        tmp = path + '.data'
+        try:
+            with open(tmp, 'w+b') as d:
+                out.seek(base)
+                shutil.copyfileobj(out, d, 1 << 20)
+                out.seek(0)
+                out.truncate()
                 out.write(head)
                 d.seek(0)
                 shutil.copyfileobj(d, out, 1 << 20)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
     return True
 
 
@@ -147,7 +312,9 @@ class Loaded:
         spill_dir: an empty scratch folder on the output's file system. A bundle of more than
         spill_mb MB (uncompressed) is then unpacked there into its nodes (bigbundle.py) and opened
         from them: the same objects in little memory (UnityPy holds a whole bundle, twice while
-        reading it). Write it with write_to()."""
+        reading it). Only its serialized file is written there: its streams (.resS) are read from
+        the bundle itself where a texture needs them (bigbundle's lazy nodes), for a chunked
+        bundle. Write it with write_to()."""
         import os
         import UnityPy
         from . import bigbundle
@@ -155,17 +322,29 @@ class Loaded:
         self.path = path
         self.spilled = None                  # (bigbundle.Bundle, its serialized file's node)
         self._res, self._maps = {}, {}       # a spilled bundle's changed nodes; {file: (mmap, view)}
+        self.env, self._spill_dir = None, spill_dir
         load = path
         if spill_dir and spill_mb and bigbundle.size(path) > spill_mb << 20:
-            b = bigbundle.unpack(path, spill_dir)
+            b = bigbundle.unpack(path, spill_dir, lazy=True)
             if b:
-                sfs = [n for n in b.nodes if n.flags & 4] or \
-                    [n for n in b.nodes if not n.name.endswith(('.resS', '.resource'))]
+                sfs = bigbundle.serialized_nodes(b.nodes)
                 if len(sfs) != 1:
+                    b.close()
                     raise NotOneSerializedFile(f'{path}: expected one serialized file in the bundle, found {len(sfs)}')
                 self.spilled = (b, sfs[0])
-                streams = dict(streams or {}, **{n.name: n.path for n in b.nodes if n is not sfs[0]})
+                streams = dict(streams or {}, **{n.name: n.path.open() if isinstance(n.path, bigbundle.Part) else n.path
+                                                 for n in b.nodes if n is not sfs[0]})
                 load = sfs[0].path
+        try:
+            self._open(path, load, resource_dir, streams)
+        except BaseException:
+            if self.spilled:
+                self.spilled[0].close()
+            raise
+
+    def _open(self, path, load, resource_dir, streams):
+        import os
+        import UnityPy
         self.env = UnityPy.load(load)
         if streams:
             from UnityPy.streams import EndianBinaryReader
@@ -208,13 +387,18 @@ class Loaded:
 
     def bundle_res(self, name):
         """A node (e.g. CAB-xxx.resS) inside the bundle as a memoryview (no copy), or None. A
-        spilled bundle's node is its file, mapped (its pages stay the file's, not the process's)."""
+        spilled bundle's node is its file, mapped (its pages stay the file's, not the process's),
+        or a node left in the bundle: a bigbundle.Part, sliced the same way (part[a:b] reads those
+        bytes from the bundle)."""
         if self.spilled:
             import mmap
+            from . import bigbundle
             n = next((n for n in self.spilled[0].nodes if n.name == name), None)
             if n is None:
                 return None
             p = self._res.get(name, n.path)
+            if isinstance(p, bigbundle.Part):
+                return p
             if p not in self._maps:
                 with open(p, 'rb') as f:
                     if not os.fstat(f.fileno()).st_size:
@@ -236,9 +420,11 @@ class Loaded:
             if isinstance(data, str):
                 self._res[name] = data
             else:
-                with open(n.path + '.new', 'wb') as f:
+                p = (n.path if isinstance(n.path, str) else
+                     os.path.join(self._spill_dir, re.sub(r'[^A-Za-z0-9._-]', '_', n.name))) + '.new'
+                with open(p, 'wb') as f:
                     f.write(data)
-                self._res[name] = n.path + '.new'
+                self._res[name] = p
             return
         from UnityPy.streams import EndianBinaryReader
         old = self.bundle.files[name]
@@ -269,6 +455,7 @@ class Loaded:
                  n._replace(path=self._res.get(n.name, n.path)) for n in b.nodes]
         out = os.path.join(os.path.dirname(sf_node.path), 'bundle.new')
         bigbundle.pack(b, nodes, out)
+        b.close()                            # (the bundle it read from is replaced next)
         job.write_file(rel, out)
 
     def close(self):
@@ -283,6 +470,7 @@ class Loaded:
             f = getattr(r, 'stream', None)          # streams registered from files
             if f is not None and hasattr(f, 'close'):
                 f.close()
+        if self.spilled:
+            self.spilled[0].close()
         self.env = self.sf = self.bundle = None
-        gc.collect()
-        _trim()
+        collect()
