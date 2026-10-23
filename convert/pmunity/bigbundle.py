@@ -385,7 +385,7 @@ def threads():
 
 def compress_chunks(chunks, compress, n=None):
     """(chunk, compress(chunk)) for each chunk, in order, compressed on n threads (default: every
-    core) with a few chunks in flight (LZ4 lets go of the GIL while it compresses)."""
+    core) with two chunks a thread in flight (LZ4 lets go of the GIL while it compresses)."""
     n = threads() if n is None else n
     if n <= 1:
         for c in chunks:
@@ -396,7 +396,7 @@ def compress_chunks(chunks, compress, n=None):
         window = deque()
         for c in chunks:
             window.append((c, ex.submit(compress, c)))
-            if len(window) >= 4 * n:
+            if len(window) >= 2 * n:
                 c0, f0 = window.popleft()
                 yield c0, f0.result()
         while window:

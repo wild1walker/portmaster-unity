@@ -1,6 +1,7 @@
 """The setup's speed-ups give the bytes they replace (docs/setup-speed.md): bundles read in place
 (bigbundle's lazy nodes), chunks compressed on several threads, UnityPy's chunked compression and
-type-tree array writes, serialized files written in one pass, installer payloads read ahead.
+type-tree array writes, serialized files written in one pass and read through a map, installer
+payloads read ahead.
 
     python -m unittest tests.test_setup_speed            (from convert/)
     PMUNITY_GAMES=<Game>_Data[:...] python -m unittest tests.test_setup_speed   (also: real files)
@@ -199,6 +200,37 @@ class StreamedSave(unittest.TestCase):
                     sf2 = UnityPy.load(p).file
                     sf2.objects[tex.path_id].save_typetree(t)
                     self.assertEqual(_read(out), sf2.save(), p + ' (changed)')
+        finally:
+            shutil.rmtree(d)
+
+
+    def test_mapped_load(self):
+        """unity_io.load (the file mapped) gives the objects and the bytes UnityPy.load gives."""
+        import UnityPy
+        for data in GAMES:
+            names = sorted(n for n in os.listdir(data) if n.endswith('.assets') or n.startswith('level'))
+            for n in names[:4] + names[-4:]:
+                p = os.path.join(data, n)
+                a, b = UnityPy.load(p), unity_io.load(p)
+                self.assertIsNotNone(getattr(b, '_pmunity_map', None), p)
+                self.assertEqual(sorted(a.file.objects), sorted(b.file.objects), p)
+                for pid in list(a.file.objects)[:50]:
+                    self.assertEqual(a.file.objects[pid].read_typetree(), b.file.objects[pid].read_typetree(), (p, pid))
+                self.assertEqual(a.file.save(), b.file.save(), p)
+                a = b = None
+
+
+class Mapped(unittest.TestCase):
+    def test_bundle_is_left_to_unitypy(self):
+        d = tempfile.mkdtemp()
+        try:
+            path, _, _ = _bundle(d)
+            env = unity_io.load(path)
+            self.assertIsNone(getattr(env, '_pmunity_map', None))
+            self.assertEqual(sorted(env.file.files), ['CAB-00ff', 'CAB-00ff.resS'])
+            empty = os.path.join(d, 'empty')
+            open(empty, 'wb').close()
+            unity_io.release(unity_io.load(empty))
         finally:
             shutil.rmtree(d)
 

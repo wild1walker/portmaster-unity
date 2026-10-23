@@ -296,6 +296,41 @@ def save_serialized_to(sf, path, prepare=None):
     return True
 
 
+def load(path):
+    """UnityPy.load(path), a plain serialized file read through a read-only map of it: UnityPy
+    then parses its metadata (the type and object tables: a scene can list 10,000 objects) from
+    memory, about 2.5 times faster than through a file object, one small read call per field;
+    the same objects and bytes. The map's pages are the file's (the page cache's, as a read's),
+    not the process's. A bundle, an empty file or anything that cannot be mapped is left to
+    UnityPy.load. release(env) unmaps it when nothing reads it any more (else it goes with env)."""
+    import mmap
+    import UnityPy
+    try:
+        with open(path, 'rb') as f:
+            if f.read(8) == b'UnityFS\0' or not os.fstat(f.fileno()).st_size:
+                raise ValueError('a bundle or empty')
+            m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    except (OSError, ValueError):
+        return UnityPy.load(path)
+    env = UnityPy.Environment()
+    env.path = os.path.dirname(path) or os.curdir          # (as UnityPy.load(path) sets it)
+    env.load_file(memoryview(m), name=path)
+    if len(env.files) == 1:
+        env.file = list(env.files.values())[0]
+    env._pmunity_map = m
+    return env
+
+
+def release(env):
+    """Unmaps a file load() mapped (once its objects are gone; a view still alive keeps it)."""
+    m = getattr(env, '_pmunity_map', None) if env is not None else None
+    if m is not None:
+        try:
+            m.close()
+        except BufferError:
+            pass
+
+
 class NotOneSerializedFile(ValueError):
     """A bundle with no serialized file or several (scene bundles): not opened."""
 
@@ -342,10 +377,9 @@ class Loaded:
                 self.spilled[0].close()
             raise
 
-    def _open(self, path, load, resource_dir, streams):
+    def _open(self, path, load_path, resource_dir, streams):
         import os
-        import UnityPy
-        self.env = UnityPy.load(load)
+        self.env = load(load_path)
         if streams:
             from UnityPy.streams import EndianBinaryReader
             for n, p in streams.items():
@@ -472,5 +506,13 @@ class Loaded:
                 f.close()
         if self.spilled:
             self.spilled[0].close()
-        self.env = self.sf = self.bundle = None
+        env, self.env = self.env, None
+        self.sf = self.bundle = None
+        m = getattr(env, '_pmunity_map', None)
+        env = None
         collect()
+        if m is not None:                    # (the file is replaced next: not mapped any more)
+            try:
+                m.close()
+            except BufferError:
+                pass

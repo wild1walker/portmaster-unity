@@ -61,6 +61,7 @@ import time
 from . import retarget
 from . import streaming as ST
 from . import typetrees
+from . import unity_io as U
 from .unity_io import collect
 from . import unity_version as UV
 from . import video
@@ -676,7 +677,7 @@ def inline_bundle(src, dst):
                     with open(p, 'rb') as f:
                         f.seek(off)
                         return f.read(size)
-                sf = UnityPy.load(sfs[0].path).file
+                sf = U.load(sfs[0].path).file
                 plan, still = _inline_plan(sf.objects.values())
                 sf._m_target_platform = ANDROID
                 if _inline_streamed(sf, plan, read_node, sfs[0].path + '.new'):
@@ -719,8 +720,7 @@ def inline_serialized(src, dst, args=None):
     """Serialized file with a <name>.resS beside it: textures inlined, target platform Android
     (and retargeted to the player's version, args.retarget). Returns (textures inlined, names of
     .resS files still read by other objects)."""
-    import UnityPy
-    env = UnityPy.load(src)
+    env = U.load(src)
     sf = env.file
     d = os.path.dirname(src)
 
@@ -984,7 +984,6 @@ GLES_LEVELS = {2: '3.0', 3: '3.1', 5: '3.2'}          # GfxDeviceLevelGL (4: ES 
 
 def has_compute_kernels(src):
     """Whether the game's serialized files hold compute shaders with GLES3 kernels (renderer 11)."""
-    import UnityPy
     from .shaders import compute as CS
     from .shaders.step import _is_bundle
     names = [n for n in sorted(os.listdir(src)) if n.endswith('.assets') or re.match(r'level\d+$', n)]
@@ -994,13 +993,16 @@ def has_compute_kernels(src):
         if not os.path.isfile(p) or _is_bundle(p):
             continue
         try:
-            env = UnityPy.load(p)
+            env = U.load(p)
         except Exception:
             continue
-        for o in env.objects:
-            if o.type.name == 'ComputeShader' and any(
-                    v['targetRenderer'] == CS.RENDERER_GLES3 and v['kernels'] for v in o.read_typetree()['variants']):
-                return True
+        found = any(o.type.name == 'ComputeShader' and any(
+            v['targetRenderer'] == CS.RENDERER_GLES3 and v['kernels'] for v in o.read_typetree()['variants'])
+            for o in env.objects)
+        env = None
+        collect()                           # (its objects and the file's map go now)
+        if found:
+            return True
     return False
 
 
@@ -2142,11 +2144,11 @@ def verify(args, items, log):
     for dst_rel, src, act in items:
         dst = os.path.join(args.out, dst_rel)
         if act in ('sfpatch', 'sfinline', 'ggm', 'sfvideo', 'sfvideo709'):
-            env = UnityPy.load(dst)
+            env = U.load(dst)
             sf = env.file
             if not isinstance(sf, SerializedFile):
                 bad.append((dst_rel, 'not a serialized file')); continue
-            env0 = UnityPy.load(src) if os.path.exists(src) else None      # (gone with --consume-src)
+            env0 = U.load(src) if os.path.exists(src) else None      # (gone with --consume-src)
             added = 1 if act.startswith('sfvideo') else 0                 # Hidden/VideoDecodeAndroid
             if env0 is not None and len(sf.objects) != len(env0.file.objects) + added:
                 bad.append((dst_rel, f'{len(sf.objects)} objects, source {len(env0.file.objects)}'))
@@ -2158,6 +2160,8 @@ def verify(args, items, log):
                 for o in sf.objects.values():
                     typetrees.read(o)
             n_sf += 1
+            env = env0 = sf = None
+            collect()                       # (their objects and the files' maps go now)
     log(f'verify: {n_sf} serialized files load in UnityPy')
     bundles = [(d, s) for d, s, a in items if a == 'bundle']
     for d, s in bundles:
@@ -2178,7 +2182,7 @@ def verify(args, items, log):
                 shutil.rmtree(work, ignore_errors=True)
                 b = bigbundle.unpack(path, work, lazy=True)
             if b:
-                files = [UnityPy.load(n.path).file for n in b.nodes if n.flags & 4]
+                files = [UnityPy.load(n.path).file for n in b.nodes if n.flags & 4]   # (every page read: not mapped)
             else:
                 files = list(UnityPy.load(path).file.files.values())
             for f in files:
