@@ -15,6 +15,7 @@
 #include "hitches.h"
 #include "prof.h"
 #include "gltrace.h"
+#include "glopt.h"
 #include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
@@ -136,6 +137,7 @@ static void on_swap(void *ctx)
     hitches_frame();
     prof_swap();
     gltrace_frame();
+    glopt_frame();
     msaafix_frame();
     if (last > 0)
     {
