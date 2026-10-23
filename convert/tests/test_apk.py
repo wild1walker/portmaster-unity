@@ -329,8 +329,9 @@ class ImportTest(unittest.TestCase):
         # out of the IL2CPP route's range: refused with the reason
         p = make_apk(os.path.join(self.d, 'old.apk'), manifest(), abis=('armeabi-v7a',), backend='mono', version='2017.4.9f1')
         self.refused([p], 'has no arm64 IL2CPP player', target='arm64', il2cpp={})
-        p = make_apk(os.path.join(self.d, 'new.apk'), manifest(), abis=('armeabi-v7a',), backend='mono', version='6000.0.61f1')
-        self.refused([p], 'native Windows/macOS/Linux', target='arm64', il2cpp={})
+        # (2023.1 - 6000.2 are built with 2022.3's il2cpp, il2cpp_mix.py; 6000.3+ read another metadata format)
+        p = make_apk(os.path.join(self.d, 'new.apk'), manifest(), abis=('armeabi-v7a',), backend='mono', version='6000.3.16f1')
+        self.refused([p], 'global-metadata.dat version 39', target='arm64', il2cpp={})
         p = make_apk(os.path.join(self.d, 'v7il.apk'), manifest(), abis=('armeabi-v7a',), backend='il2cpp')
         self.refused([p], 'compiled for 32-bit ARM', target='arm64', il2cpp={})
 

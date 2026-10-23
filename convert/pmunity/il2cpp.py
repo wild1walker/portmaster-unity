@@ -64,6 +64,7 @@ import urllib.request
 import zlib
 
 from . import il2cpp_bee as BEE
+from . import il2cpp_mix as MIX
 from . import streaming as ST
 from . import unity_version as UV
 
@@ -496,10 +497,10 @@ def ndk_api_dir(ndk, rev, abi, api):
     return os.path.join(ndk, 'toolchains', 'llvm', 'prebuilt', 'linux-x86_64', 'sysroot', 'usr', 'lib', ABIS[abi][1], str(api))
 
 
-def fetch_ndk(rev_name, zipname, abi, dest):
+def fetch_ndk(rev_name, zipname, abi, dest, extra_apis=()):
     mark = os.path.join(dest, f'.complete-{abi}')
     url = NDK_BASE + zipname
-    apis = ndk_apis(rev_name, abi)
+    apis = sorted(set(ndk_apis(rev_name, abi)) | set(extra_apis))
     if os.path.isfile(mark):
         # a folder fetched before an API level was added (r21d / r23b: 22): only those libraries
         more = [a for a in apis if ndk_api_dir(dest, rev_name, abi, a) and
@@ -526,6 +527,22 @@ def fetch_ndk(rev_name, zipname, abi, dest):
     with open(mark, 'w') as f:
         json.dump({'ndk': rev_name, 'zip': url, 'files': len(got), 'apis': apis}, f)
     return dest
+
+
+def android_note(path):
+    """(API level, NDK revision) of an NDK-built library's .note.android.ident (crtbegin_so's note:
+    name "Android", the API level it was linked for, the NDK's revision string), else (None, None).
+    Unity 6000.0's arm64 players: (23, 'r27c'); 2022.3's: (22, 'r23b')."""
+    try:
+        with open(path, 'rb') as f:
+            b = f.read()
+    except OSError:
+        return None, None
+    i = b.find(b'\x08\x00\x00\x00\x84\x00\x00\x00\x01\x00\x00\x00Android\x00')
+    if i < 0:
+        return None, None
+    api, = struct.unpack_from('<I', b, i + 20)
+    return api, b[i + 24:i + 24 + 64].split(b'\0')[0].decode('ascii', 'replace') or None
 
 
 def install_ndk_shims(ndk, abi):
@@ -614,7 +631,21 @@ def toolchain(version, abi, home, pkg=None, bcl=BCL_DIR):
     install_ndk_shims(ndk, abi)                  # (again: the script may be newer than the fetch)
     pkg = pkg or os.path.join(vdir, 'player-' + abi)
     info = fetch_player(version, pkg, abi)
-    return {'editor': editor, 'ndk': ndk, 'ndk_name': name, 'ndk_revision': rev, 'pkg': pkg, 'player': info, 'bcl': bcl}
+    tc = {'editor': editor, 'ndk': ndk, 'ndk_name': name, 'ndk_revision': rev, 'pkg': pkg, 'player': info, 'bcl': bcl,
+          'il2cpp_editor': editor}
+    if MIX.needed(version):
+        # Unity 2023.1+: il2cpp is a native program; 2022.3's .NET one converts for this
+        # version's libil2cpp (il2cpp_mix.py), from a folder that is this editor's il2cpp/ with
+        # the converter's build/
+        tc['il2cpp_editor'], tc['converter'] = MIX.prepare(version, editor, home, log=log)
+        # ... and its build program targets 2022.3's API level (22): a player linked for a later
+        # one (Unity 6: 23, whose baselib.a calls API 23's libc) gets libil2cpp.so built for that
+        # (ndk-clang.sh raises the target to PMUNITY_ANDROID_API)
+        api, _ = android_note(os.path.join(pkg, 'Variations', 'il2cpp', 'Release', 'Libs', abi, 'libunity.so'))
+        if api and api > max(ndk_apis(name, abi)):
+            fetch_ndk(name, zipname, abi, ndk, extra_apis=(api,))
+            tc['android_api'] = api
+    return tc
 
 
 def tool_version(data_version, abi, unity=None):
@@ -1089,6 +1120,8 @@ class Container:
             d += ['--user', f'{os.getuid()}:{os.getgid()}']
         if os.environ.get('PMUNITY_IL2CPP_DEBUG_INFO'):
             d += ['-e', 'PMUNITY_IL2CPP_DEBUG_INFO=1']
+        if os.environ.get('PMUNITY_ANDROID_API'):
+            d += ['-e', f'PMUNITY_ANDROID_API={os.environ["PMUNITY_ANDROID_API"]}']
         if name:
             d += ['--name', name]
         for m in self.mounts:
@@ -1312,6 +1345,8 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     log(f'data: Unity {data_version}, .NET {"3.5" if net == 2 else "4.x"}; IL2CPP of {version} for {abi} '
         f'(profile {profile}, {bcl})')
     tc = toolchain(version, abi, home, pkg and os.path.abspath(pkg), bcl)
+    if tc.get('android_api'):                   # (the container and the handheld's commands see it)
+        os.environ['PMUNITY_ANDROID_API'] = str(tc['android_api'])
     work = os.path.join(out, '.work')
     staged, linked = os.path.join(work, 'Managed-in'), os.path.join(work, 'Managed')
     managed_files = list(managed_files)
@@ -1388,7 +1423,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         shutil.copyfile(x, dst)
         largs.append(f'--include-link-xml={dst}')
     lcmd = runner(linker) + largs
-    tool = deploy_tool(tc['editor'], 'il2cpp')
+    tool = deploy_tool(tc['il2cpp_editor'], 'il2cpp')
     # (on the handheld il2cpp.exe runs on .NET 8 unless PMUNITY_IL2CPP_NET471=mono: the same C++ up
     # to how floating-point literals are written (the same values, byte-identical objects), with a
     # sixth of Mono's CPU time and less memory; il2cpp_device.py falls back to Mono if it fails)
@@ -1407,7 +1442,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
     if on_device:
         tools = [deploy_tool(tc['editor'], 'UnityLinker'), tool]
         dev.fetch(device_tc, dev.groups_for(tools, net471))
-        secs = dev.run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, tc['editor'], strip)
+        secs = dev.run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, tc['il2cpp_editor'], strip)
         return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
                       data_version=data_version, profile=profile, more={'on_device': dev.report(box), **patches})
     for where, need in ((out, 2 << 30), (home, 1 << 30)):
@@ -1423,9 +1458,9 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         kept = sorted(n for n in os.listdir(linked) if n.endswith('.dll'))
         log(f'UnityLinker: {len(kept)} assemblies kept, {sum(os.path.getsize(os.path.join(linked, n)) for n in kept) / 2**20:.1f} MiB '
             f'(from {sum(os.path.getsize(os.path.join(staged, n)) for n in chosen) / 2**20:.1f} MiB) in {secs:.0f} s')
-    clear_bee_graph(tc['editor'], cache)
+    clear_bee_graph(tc['il2cpp_editor'], cache)
     t = box.run(icmd, 'il2cpp.log')
-    t += run_bee_graph(box, tc['editor'], cache, work)
+    t += run_bee_graph(box, tc['il2cpp_editor'], cache, work)
     secs += t
     log(f'il2cpp: done in {t:.0f} s')
     return finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, secs, strip,
@@ -1475,6 +1510,8 @@ def finish(out, work, cpp, so, version, abi, tc, chosen, settings, keep_cpp, sec
         'libil2cpp_bytes': os.path.getsize(so),
         'player_api': {'looked_up': nwanted, 'missing': missing},
         'ndk': tc['ndk_name'], 'player': tc['player'].get('version'),
+        **({'il2cpp_converter': tc['converter']} if tc.get('converter') else {}),
+        **({'android_api': tc['android_api']} if tc.get('android_api') else {}),
         'assemblies': sorted(chosen), 'gc_incremental': settings.get('gcIncremental', False), 'strip': strip,
         'build_seconds': round(secs),
         **(more or {}),
@@ -1537,10 +1574,11 @@ def main(argv):
         bcl = bcl_profile(v, int(a.net[0]), a.net == '2subset')[1]
         tc = toolchain(v, a.abi, home, a.pkg, bcl)
         if a.on_device:
-            tools = [deploy_tool(tc['editor'], 'UnityLinker'), deploy_tool(tc['editor'], 'il2cpp')]
+            tools = [deploy_tool(tc['editor'], 'UnityLinker'), deploy_tool(tc['il2cpp_editor'], 'il2cpp')]
             tc['device_toolchain'] = dev.fetch(a.toolchain or dev.default_toolchain(home),
                                                dev.groups_for(tools, os.environ.get('PMUNITY_IL2CPP_NET471', 'dotnet')))
-        print(json.dumps({k: v for k, v in tc.items() if k != 'player'}, indent=1))
+        print(json.dumps({k: v for k, v in tc.items() if k != 'player' and not (k == 'il2cpp_editor' and v == tc['editor'])},
+                         indent=1))
         return
     ap = argparse.ArgumentParser(prog='pmunity il2cpp', description=__doc__.split('\n\n')[0],
                                  epilog='See docs/il2cpp.md.')

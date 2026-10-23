@@ -680,11 +680,11 @@ SIGNATURE = re.compile(r'^META-INF/([^/]+\.(SF|RSA|DSA|EC)|MANIFEST\.MF)$', re.I
 def il2cpp_refusal(ver):
     """Why a Mono build of Unity `ver` cannot be compiled for the arm64 IL2CPP player, or None."""
     from . import il2cpp as IL
+    from . import il2cpp_mix as MIX
     if ver.line < (2017, 4):
         return f'Unity {ver}: the arm64 IL2CPP players start with 2017.4'
-    if ver.line >= (2023, 1):
-        return (f'Unity {ver}: its il2cpp is a native Windows/macOS/Linux x86-64 program, not a .NET one '
-                f'(`pmunity il2cpp` runs 2017.4 - 2022.3\'s)')
+    if MIX.refusal(ver):                 # (2023.1 - 6000.2: built with 2022.3's il2cpp, il2cpp_mix.py)
+        return MIX.refusal(ver)
     if ver.line == (2017, 4) and ver.patch < IL.ARM64_2017[0]:
         return (f'Unity {ver} has no arm64 IL2CPP player (2017.4.{IL.ARM64_2017[0]}f1 and later have one); an '
                 f'Android build\'s data is not moved to another release here')

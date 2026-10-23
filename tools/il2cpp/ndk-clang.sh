@@ -23,6 +23,9 @@
 # -g is dropped unless PMUNITY_IL2CPP_DEBUG_INFO=1: debug info triples the objects' size and the
 # compiler's memory, and the shipped libil2cpp.so is stripped anyway (il2cpp keeps the debug info
 # in libil2cpp.sym.so). Code generation is the same either way.
+# PMUNITY_ANDROID_API=N: the lowest API level to build for: a lower one in the target (-target /
+# --target=<triple><API>) is raised to N (Unity 2023.1+ built with 2022.3's il2cpp, whose build
+# program targets API 22, for a player built for 23: baselib.a needs API 23's libc).
 # PMUNITY_IL2CPP_CCLOG=<file>: every rewritten command line is appended there.
 name=$(basename "$0")
 bin=$(cd "$(dirname "$0")" && pwd)
@@ -36,6 +39,14 @@ case $name in
   *) cc=$llvm/clang ;;
 esac
 tc=$(dirname "$bin")                         # toolchains/llvm/prebuilt/linux-x86_64
+raise_api() {                                # <triple><API> -> <triple><max(API, PMUNITY_ANDROID_API)>
+  n=${1##*[!0-9]}
+  if [ -n "$PMUNITY_ANDROID_API" ] && [ -n "$n" ] && [ "$n" -lt "$PMUNITY_ANDROID_API" ]; then
+    printf '%s' "${1%"$n"}$PMUNITY_ANDROID_API"
+  else
+    printf '%s' "$1"
+  fi
+}
 api=; pic=; stdlib=; px=
 for a do
   case $a in -D__ANDROID_API__=*) api=${a#-D__ANDROID_API__=} ;; -fPIC | -fpic) pic=1 ;; -stdlib=* | -nostdinc++ | -nostdlib++ | -xc) stdlib=1 ;; esac
@@ -50,7 +61,11 @@ for a do
   fi
   if [ "$prev" = -target ]; then              # r16b builds name no API level in the triple
     case $a in *[0-9]) ;; *) a=$a$api ;; esac
+    [ -n "$PMUNITY_ANDROID_API" ] && a=$(raise_api "$a")
   fi
+  case $a in
+    --target=*) [ -n "$PMUNITY_ANDROID_API" ] && a=--target=$(raise_api "${a#--target=}") ;;
+  esac
   case $a in
     -gcc-toolchain) prev=$a; continue ;;
     --gcc-toolchain=*) gcc=1 ;;

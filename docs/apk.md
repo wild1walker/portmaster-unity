@@ -38,8 +38,9 @@ python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --on-device --home
 It takes what `pmunity il2cpp` takes (`--home`, `--pkg`, `--jobs`, `--on-device`, `--toolchain`,
 `--link-xml`, `--strip`, `--keep-cpp`) and acts only when the chosen player is arm64-v8a and the
 build has none (a target list that starts with `armhf` on a system with a 32-bit userland keeps
-the build's own player). Unity 2017.4.16f1 - 2022.3 (the IL2CPP route's range; docs/il2cpp.md,
-"Android builds with Mono", lists what changes in the layout). The build's own native plugins are
+the build's own player). Unity 2017.4.16f1 - 6000.2 (the IL2CPP route's range, 2023.1 - 6000.2 as a
+mixed build with 2022.3's il2cpp, not tried with an APK yet; docs/il2cpp.md, "Android builds with
+Mono", lists what changes in the layout). The build's own native plugins are
 32-bit ARM and left out. The same AOT limits as for desktop games apply (docs/il2cpp.md, "AOT
 limits"), but the code is the Android build's own, so its Android code paths are the ones compiled.
 

@@ -56,6 +56,7 @@ import tempfile
 import time
 import zipfile
 
+from . import il2cpp_mix as MIX
 from . import typetrees
 from . import unity_version as UV
 
@@ -850,9 +851,8 @@ def decide_routes(rep):
         vv = None
     if vv and vv.line < (2017, 4):
         why.append(f'Unity {v}: the arm64 IL2CPP players start with 2017.4')
-    elif vv and vv.line >= (2023, 1):
-        why.append(f'Unity {v}: its il2cpp is a native Windows/macOS/Linux x86-64 program, not a .NET one '
-                   f'(the route runs 2017.4 - 2022.3\'s)')
+    elif vv and MIX.refusal(vv):
+        why.append(MIX.refusal(vv))
     elif v and not supported:
         why.append(f'Unity {v}: the converter supports {UV.FIRST[0]}.{UV.FIRST[1]} - {UV.LAST[0]}.{UV.LAST[1]}')
     if gl is None:
@@ -863,7 +863,10 @@ def decide_routes(rep):
                        "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp "
                        "--on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of "
                        "memory, Wi-Fi for Unity's and Debian's files",
-                       'tested to the title in the arm64 rig with Unity 2017.4 - 2022.3']})
+                       'tested to the title in the arm64 rig with Unity 2017.4 - 2022.3'] + (
+                       ["Unity 2023.1+: its own il2cpp is a native program; Unity 2022.3's .NET il2cpp converts the "
+                        "game's code for this version's libil2cpp and player (docs/il2cpp.md, \"Unity 2023.1+\"; "
+                        "about 8 MB more downloads)"] if vv and MIX.needed(vv) else [])})
     # box64: the game's own x86-64 Linux player
     why = []
     if b.get('build') != 'linux':

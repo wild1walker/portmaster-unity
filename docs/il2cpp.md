@@ -26,13 +26,14 @@ COMMAND` runs tools/asmpatch on the game's `Managed` and compiles what it change
 and the data folder read with System.IO (below, "Files the game reads"). With IL2CPP the
 assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data
 (which refuses `--asmpatch`, `--managed-file` and `--assembly-patch` with `--il2cpp`).
-**Unity versions**: 2017.4 - 2022.3. Their il2cpp is a .NET program the container's (or, with
+**Unity versions**: 2017.4 - 6000.2. Up to 2022.3 il2cpp is a .NET program the container's (or, with
 `--on-device`, the handheld's) .NET runs; from 2021.2 the class libraries are per platform and the
 build takes `unityaot-linux`, as Unity's Android builds do, and il2cpp builds the C++ with Bee,
-whose native backend pmunity stands in for (below, "Unity 2021.2+: Bee"). From 2023.1 (Unity 6 included) il2cpp
-is a natively compiled program for the editor's own system (the Windows installer's `il2cpp.exe`
-is Windows x86-64 code, with no `il2cpp.dll`): not runnable here yet, so the route stops with a
-message (a Linux x86-64 il2cpp under emulation would be the way).
+whose native backend pmunity stands in for (below, "Unity 2021.2+: Bee"). From 2023.1 (Unity 6
+included) il2cpp is a natively compiled program for the editor's own system (the Windows
+installer's `il2cpp.exe` is Windows x86-64 code, with no `il2cpp.dll`): 2023.1 - 6000.2 are built
+with Unity 2022.3's .NET il2cpp for the data version's own libil2cpp and player, a "mixed" build
+(below, "Unity 2023.1+"); 6000.3 and later read another metadata format and are refused.
 `--link-xml FILE` gives UnityLinker a port's own link.xml (what the game reaches only by reflection,
 e.g. the types XmlSerializer writes into saves); the 2017.x linker ignores the whole file when
 anything, even a comment, comes before `<linker>`.
@@ -70,6 +71,7 @@ or of what is built from them, is in this repository.
 | `Editor/Data/il2cpp` (il2cpp, UnityLinker, libil2cpp and Boehm GC sources), `MonoBleedingEdge/etc` and the class libraries IL2CPP builds of the game's kind use (below: `MonoBleedingEdge/lib/mono/unityaot`; .NET 3.5 games `Mono/lib/mono/unity` or `2.0` and `Mono/etc`; .NET 4.x of 2017.x `MonoBleedingEdge/lib/mono/4.5`) | the Windows editor installer `UnitySetup64-<ver>.exe` (Unity's release API names it): a non-solid NSIS installer like the Android support ones, so `nsis.py` reads only these files' blocks (neighbouring blocks in one request) | 10-13 MB of 1.6-2.4 GB | 45-50 MB |
 | the Android NDK's target files: unified sysroot (headers, per-API libraries), libc++, libgcc | Google's `android-ndk-<rev>-linux-x86_64.zip`: its central directory, then only those members | 34 MB (arm64-v8a), +24 MB (armeabi-v7a) of 820 MB | 145 MB / 200 MB both |
 | the IL2CPP Android player: `libmain.so`, `libunity.so`, `unity default resources` (`pmunity player fetch --backend il2cpp`), the IL2CPP UnityEngine assemblies (`Variations/il2cpp/Managed`), `baselib.a` (2020.1+) | the Android Build Support installer | 9 MB | 30 MB per ABI |
+| Unity 2023.1+ only: a 2022.3 release's `il2cpp/build` (`il2cpp.dll`, Bee) and libil2cpp's headers (below, "Unity 2023.1+"); NDK r23b's API 23 libraries for Unity 6 | that release's Windows editor installer; the NDK's zip | 3.8 MB; 3.8 MB | 12 MB; 17 MB, + the mixed folder (33 MB, hard links where possible) |
 | `<home>/root/usr`, `root/etc` (tools/il2cpp/root.sh): .NET 8, Mono 6.8, clang/lld 14, unpacked with `dpkg-deb -x` over a copy of the stock image's own `/usr` and `/etc`, then mounted over them | Ubuntu 24.04's archive | 180 MB | 0.85 GB |
 
 NDK per Unity line (what that line's IL2CPP checks for): r13b for 2017.1 - 2018.2 (their Android
@@ -207,6 +209,121 @@ under the runtime's root) and runs IL2CPP from there. Two packing rules follow f
   it in `il2cpp/unity.ver` and copies the data again only when it changes; without it the copy is
   redone at every start.
 
+### Unity 2023.1+ (Unity 6): a mixed build
+
+From 2023.1 Unity's il2cpp is a NativeAOT program for the editor's own system: the Windows
+installers' `il2cpp.exe` is Windows x86-64 (or, in the Windows ARM64 editor, ARM64) code of 21 MB
+with no `il2cpp.dll`, and no editor exists for Linux on ARM. The other tools next to it are still
+.NET programs (UnityLinker.dll, il2cpp-compile.dll, Bee). What il2cpp writes, though, is C++ for
+libil2cpp and a `global-metadata.dat` for it, and 2022.3's .NET il2cpp writes the same thing for
+the libil2cpp of these lines as far as the build depends on it. So `pmunity il2cpp` converts with
+a 2022.3 release's `il2cpp.dll` (convert/pmunity/il2cpp_mix.py) and takes everything else from the
+data's own version:
+
+| part | from |
+|---|---|
+| the conversion to C++ and `global-metadata.dat`, the Bee build program (compiler flags, the graph) | Unity 2022.3's `il2cpp/build` (`il2cpp.dll`): 2022.3.62f3 (the line's last release) for libil2cpps reading metadata 31, 2022.3.23f1 for those reading 29 |
+| UnityLinker, the class libraries (`unityaot-linux`), the IL2CPP UnityEngine assemblies, `baselib.a` | the data's version (its editor installer, its player) |
+| libil2cpp, the Boehm GC, baselib's headers, `libil2cpp.icalls` (the icalls il2cpp calls directly) | the data's version: the C++ is compiled with them, so `libil2cpp.so` is the runtime its player's `libunity.so` was built against |
+
+il2cpp finds libil2cpp, its icall list and the sources it compiles next to itself (the
+`il2cpp_root` file marks the folder), so the build runs in `<home>/<version>/mix-<converter>/il2cpp`:
+the data version's `Editor/Data/il2cpp` (hard links where the file system has them, copies
+elsewhere: 33 MB) with the converter's `build/` in place of its own. The converter's parts are
+fetched once (`<home>/<converter>/converter`: `il2cpp/build` and libil2cpp's headers, 3.8 MB of
+range reads), or taken from a full home of that version.
+
+**What is checked first** (il2cpp_mix.compat, on the fetched sources; the build stops with the
+differences otherwise): the metadata version libil2cpp reads (`version == N` in
+`vm/GlobalMetadata.cpp`) against the one the converter writes, the layout of every table of
+`global-metadata.dat` (`vm/GlobalMetadataFileInternals.h`), and the structures the generated C++
+fills in itself (code and metadata registration, codegen modules, `Il2CppType`, generic
+instances, classes and methods, RGCTX definitions, type sizes, interop data). Structures only the
+runtime fills in may differ (Unity 6's `MethodInfo` has an `is_unmanaged_callers_only` bit,
+`Il2CppClass` a pointer-sized GC handle): the generated code reaches those through the data
+version's own headers. The functions the generated C++ calls (`codegen/il2cpp-codegen.h`) are the
+same in 2022.3.62f3 and 6000.0 up to 2022.3's Tiny-only ones, and the icall list is
+byte-identical, so no compatibility header is needed: a name missing would stop the compile.
+
+Compared on each line's Windows editor installer (libil2cpp's headers only, 1 - 20 MB of reads):
+
+| Unity | metadata | converter | |
+|---|---|---|---|
+| 2023.1.8f1, 2023.2.20f1 | 29 | 2022.3.23f1 | agrees; 2023.2.20f1 built and run (below) |
+| 6000.0.58f2, 6000.0.61f1 | 31 | 2022.3.62f3 | agrees; built and run (below; 6000.0.61f1: Hollow Knight) |
+| 6000.1.4f1, 6000.2.6f2 | 31 | 2022.3.62f3 | agrees (not built yet) |
+| 6000.3.16f1, 6000.4.6f1 | 39 | - | refused: a new metadata header, string literal, type and assembly tables |
+| 6000.5.7f1, 6000.6.3f1 | 107, 108 | - | refused: as 6000.3, and the code registration structures changed too |
+
+(2022.3 itself moved from metadata 29 to 31 between 2022.3.23f1 and 2022.3.36f1: an element more in
+each method definition, `returnParameterToken`.) `port check` and `pmunity apk --il2cpp` refuse
+6000.3+ with the metadata version before fetching anything.
+
+**API level**: 2022.3's build program compiles and links for Android API 22; Unity 6's players are
+linked for 23 (their `.note.android.ident`: API 23, NDK r27c; 2022.3's: 22, r23b), and 6000.0's
+`baselib.a` calls API 23's libc (`__gnu_strerror_r`: the first link failed on it). The build reads
+the player's note and, when it is above 22, fetches that API's libraries from NDK r23b (3.8 MB)
+and sets `PMUNITY_ANDROID_API`, which ndk-clang.sh uses to raise every command's target
+(`-target aarch64-linux-android22` -> `...23`). `il2cpp.json` records `il2cpp_converter` and
+`android_api`. The NDK stays r23b (Unity 6000.0 builds with r27c; the compiler is Ubuntu's clang
+14 either way), the compiler flags 2022.3's (Unity 6 drops `-funwind-tables` and a DSE workaround,
+and stops defining `NO_GETENV` / `DONT_USE_ATEXIT`).
+
+**Hollow Knight** (GOG Linux, 6000.0.61f1, Mono .NET 4.x; its 32-bit port runs at 32 - 34 fps in
+King's Pass with the main thread busy all the time): built this way with the port's asmpatch
+patches compiled in (inputsystem-android, streaming-assets: `--asmpatch ... --streaming-assets
+both`): UnityLinker 15 min (102 assemblies, the USB drive busy), the conversion 6 min (828 MB of
+C++, metadata 16.4 MB, 127,427 methods), 763 Bee commands in 22 min; `libil2cpp.so` 80.0 MiB,
+metadata 31, all 157 lookups exported. Packed with android-data
+`--il2cpp` (an APK of 1.93 GiB and a 1.84 GiB OBB: over 2 GiB, so APK + OBB; 2 h 14 min with the USB drives busy) it runs in the native
+arm64 rig from its title through Start Game, the profile, the prologue, the opening cinematic
+(VP8 from StreamingAssets, through the compiled-in patch) into King's Pass, where the Knight
+walks, jumps and the tutorial's Switch prompt shows; no exception (the logged errors are those of
+its Mono runs: PlayMaker's 2D proxy, the Opening_Sequence tilemap fallbacks). So with an OBB
+mounted 6000.0's libunity still copied `Managed/` out of the APK (the 2020.3 problem above did not
+show). The rig: title about 50 fps, King's Pass about 40 fps, the 8 llvmpipe threads at 65 - 72 %
+of a core each (Mesa renders on the CPU), UnityMain at 6 % of one Mac core, about 1.5 ms of CPU a
+frame. Not comparable with the 32-bit port: its rig runs the armv7 player under QEMU (0.7 - 3.6
+fps there), and no Mono arm64 player exists to run natively; how far King's Pass gets from 32 - 34
+fps on the handheld is a handheld measurement.
+
+A handheld test of it needs what 64-bit Cuphead's does (tools/device/test.sh with `ARCH=arm64`,
+the arm64 `ua_host`, a 64-bit userland; nothing of the 32-bit userland is used): a folder with
+`lib/` = `libmain.so` and `libunity.so` of the 6000.0.61f1 IL2CPP arm64-v8a player
+(`<home>/6000.0.61f1/player-arm64-v8a/Variations/il2cpp/Release/Libs/arm64-v8a`) and the new
+`libil2cpp.so`, next to android-data's `zip/` contents (packed with `--il2cpp <out> --pkg <that
+player> --streaming-assets both --swappy off`, the port's settings: `HollowKnight.apk`, its OBB,
+`android_package.json`, `Game_Data/StreamingAssets`), the port's `UA_PAD_NAME`, and
+`DEVICE=root@<handheld> ARCH=arm64 STOP_ES=1 tools/device/test.sh <folder> 600`. What to watch:
+fps in King's Pass against the 32-bit port's 32 - 34, memory (`libil2cpp.so` is 80 MiB of
+file-backed code; IL2CPP's heap replaces Mono's, `UA_GC_BUDGET` hooks both runtimes'
+`GarbageCollector.SetMode` but collects only Mono's heap: gcbudget.c returns for IL2CPP, "not
+handled yet"; Hollow Knight switches the collector off, so IL2CPP's heap grows for as long as a
+scene lasts, as Mono's did before the budget: the rig's resident size rose about 9 MB a minute in
+King's Pass (2029 to 2075 MB in 5 minutes standing still); IL2CPP has `il2cpp_gc_collect` and `il2cpp_gc_get_used_size` for it), and the first
+start, when libunity copies `Managed/` out of the APK.
+As a port, the il2cpp-arm64 route's setup would build it on the handheld (`--on-device`): 828 MB of
+C++ and 763 compiles, so hours on a Cortex-A53 (above, "Fitting a 1 GB, 4 x Cortex-A53 handheld");
+the setup on a 64-bit-only system is not written for Hollow Knight yet.
+
+The other ways, measured (not taken):
+- **The macOS editor's il2cpp**: on macOS, `il2cpp/build/deploy` is a self-contained .NET (CoreCLR)
+  deployment, with `Unity.IL2CPP.dll` (1.4 MB), `Unity.IL2CPP.DataModel.dll`, `il2cpp.pdb` and
+  .NET's own `System.Private.CoreLib.dll`: Unity 6's own converter as .NET code, which .NET on
+  Linux could run. But the editor's `.pkg` (a xar archive; 4.94 GB) keeps everything in one
+  `Payload` that is a single gzip stream (not pbzx: no independently compressed chunks), a cpio
+  archive in the build machine's directory order with `Contents/il2cpp` almost at the end:
+  sampling the stream by deflate blocks decoded with a stand-in window (`il2cpp/` starts at 4.770
+  GB, `build/deploy` ends near 4.82 GB, in both the arm64 and the x86-64 pkg) puts the cost at
+  about 4.82 GB streamed, nearly the whole download, for about 60 MB of files.
+- **The Linux x86-64 editor's il2cpp** (`Unity-<ver>.tar.xz`, 4.46 GB): one xz stream with a
+  single block (its index has one record), so nothing is reachable without decompressing from the
+  start; then il2cpp under Docker's amd64 emulation (Rosetta) on a Mac, or under box64 on a
+  handheld. Not downloaded.
+- **The Windows ARM64 editor** (`UnitySetupArm64-<ver>.exe`, a non-solid NSIS one, so range reads
+  work): its `il2cpp.exe` is a 5 MB-compressed NativeAOT ARM64 program as well, without the
+  managed assemblies.
+
 ### Files the game reads (StreamingAssets, the data folder)
 
 A desktop game that reads StreamingAssets with System.IO (localization XML, JSON, SQLite, level
@@ -257,7 +374,7 @@ arm64 layout:
   (`from: mono`, the IL2CPP release, NDK, size, build time); `source` stays `apk` (the build's
   own frame pacing, Swappy as built).
 
-Refused with the reason: versions outside 2017.4 - 2022.3, a 2017.4 release before 2017.4.16f1
+Refused with the reason: versions outside 2017.4 - 6000.2 (2023.1 - 6000.2 as a mixed build, above), a 2017.4 release before 2017.4.16f1
 (no arm64 player of it, and an Android build's data is not moved to another release here), an
 IL2CPP build with only armeabi-v7a (no assemblies left to compile). The apk port route offers it
 with `player.il2cpp = true` (porting.md, apk.md).
@@ -484,10 +601,12 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
 | 2D, menus from localization XML in StreamingAssets read with System.IO, Steamworks.NET, I18N plugins | 2018.3.2f1 | arm64-v8a | 34.5 MiB | 24 | 46 min (NDK r16b; UnityLinker 3 min, il2cpp 42, the machine's Docker file sharing busy) | title menu with its localized text: `--asmpatch ... --streaming-assets both`, the folder beside the APK (android-data `--streaming-assets both`), ~20 fps in the rig. Steamworks.NET's callbacks throw `NotSupportedException` ("IL2CPP does not support marshaling delegates that point to generic methods"); the Steam stub fails its init first anyway |
 | 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
+| 2D, Addressables, Localization, TextMeshPro, Steamworks.NET, incremental GC | 6000.0.58f2 (mixed: 2022.3.62f3's il2cpp) | arm64-v8a | 68.0 MiB | 31 | 35 min (UnityLinker 1 min, conversion 9 min, Bee graph: 663 commands in 26 min; NDK r23b, API 23) | title, 60 fps in the rig, no exception |
+| 2D platformer, incremental GC | 2023.2.20f1 (mixed: 2022.3.23f1's il2cpp) | arm64-v8a | 75.4 MiB | 29 | 54 min (UnityLinker 4 min, Bee graph: 707 commands in 40 min, the USB drive busy; NDK r23b, API 22 as its player) | main menu, 60 fps in the rig, no exception |
 
 Every `il2cpp_*` function the players' `libunity.so` look up by name was exported (175 for
-2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3); the metadata versions match those of real IL2CPP builds
-of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31). 2021.x and 2022.x
+2017.4, 194 for 2018.4, 222 for 2019.4, 225 for 2020.3, 228 for 2021.3, 162 for 2022.3, 163 for 2023.2, 157 for 6000.0); the metadata versions match those of real IL2CPP builds
+of these lines (a 2020.3 Android build's is 27, 2021.3's 29, 2022.3's 31, and 31 is what 6000.0's libil2cpp reads). 2021.x and 2022.x
 builds have no `Managed/etc` (nor have Unity's: Cat Cove Inn's, The Ump Show's APKs), and their
 APKs get `assets/bin/Data/unity_app_guid` (android-data, above). The layout of the APK matches Unity's IL2CPP
 builds: `assets/bin/Data/Managed/Metadata/global-metadata.dat`,
@@ -542,6 +661,9 @@ What the runs showed:
 - (Since run on a handheld: the 2018.4, 2019.4 and 2020.3 games reached their titles at 59.4 - 59.6
   fps with the arm64 `ua_host` on an RG34XX-SP's 64-bit userland; compat/README.md, "On a handheld".)
 - `--strip none` end to end (it built 1 GB of C++ for the 2019.4 game; stopped there).
+- Mixed builds (Unity 2023.1+): 2023.1, 6000.1 and 6000.2 (compared, not built), `--on-device`
+  (the same steps with the mixed folder; not run), `pmunity apk --il2cpp` with a Unity 6 Mono APK,
+  the il2cpp-arm64 port route with a Unity 6 game, armv7, and any of it on a handheld.
 - armv7 for 2018.4 and 2020.3.
 
 ## Notes per version
@@ -589,6 +711,11 @@ What the runs showed:
 - 2022.3: as 2021.3 with NDK r23b (no libgcc: compiler-rt and libunwind, above), `WriteFile`
   graph nodes with a payloads file, UnityLinker's `--allowed-assembly` list; libunity looks up
   fewer `il2cpp_*` functions by name (162).
+- 2023.1 - 6000.2: a mixed build (above, "Unity 2023.1+"): 2022.3's il2cpp.dll and Bee build
+  program in a folder with the data version's libil2cpp; the data version's UnityLinker
+  (`deploy/UnityLinker.dll`, a .NET 7 build: run on .NET 8 with roll-forward), class libraries
+  (`unityaot-linux`; Unity 6's installer has no plain `unityaot`), player and `baselib.a`; NDK r23b;
+  Unity 6: API 23. 6000.3+: refused (metadata 39, 107, 108).
 
 ## Debugging a build
 
