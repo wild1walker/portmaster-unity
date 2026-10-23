@@ -27,6 +27,7 @@
  */
 #include "../thirdparty/libhybris/hybris/common/hooks.c"
 #include "so_loader.h"
+#include "fastclock.h"
 
 #include <fnmatch.h>
 #include <ftw.h>
@@ -1246,6 +1247,8 @@ static const so_shim ours[] = {
     { "sem_open", (void *)bionic_sem_open }, { "sem_close", (void *)bionic_sem_close },
     { "sem_unlink", (void *)bionic_sem_unlink }, { "newlocale", (void *)bionic_newlocale },
 #if defined(__arm__)
+    /* without a vDSO for 32-bit processes (64-bit kernels before 5.3): the timer's counter (fastclock.c) */
+    { "clock_gettime", (void *)fastclock_gettime }, { "gettimeofday", (void *)fastclock_gettimeofday },
     { "__mmap2", (void *)bionic_mmap2 },
     { "getpwuid", (void *)bionic_getpwuid }, { "getpwnam", (void *)bionic_getpwnam },
     { "getpwuid_r", (void *)bionic_getpwuid_r }, { "getpwnam_r", (void *)bionic_getpwnam_r },
@@ -1270,6 +1273,7 @@ const so_shim *bionic_compat_table(void)
 {
     if (table) return table;
     init_tables();
+    fastclock_init();
     size_t n = 0, k = 0;
     for (const so_shim *s = ours; s->name; s++) n++;
     const struct _hook *lists[] = { hooks_properties, hooks_common };
