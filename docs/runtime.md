@@ -68,12 +68,18 @@ On the RG34XX-SP (fps, then the time from a frame's swap to its flip):
 |---|---|---|---|
 | Cell Machine (2019.3, URP), level 1 | 29.7, 31 ms | **53.6**, 25 ms | 53.4 |
 | Chapéu de Papel (2022.3 macOS, URP), title | 20.2 - 29.6 (GPU at 336 or 600 MHz), 90 ms | **36.4**, 73 ms | 36.3 |
+| Hollow Knight 64-bit (6000.0), main menu | 38.2, 23 ms | **42.6**, 28 ms | |
+| The Third Eye (2022.2, URP 3D), first scene | 29.6, 26 ms | 31.9, 27 ms | |
+| White Mirror (2021.2, URP), in game | 43.0 (197 frames over 25 ms in 25 s), 35 ms | 43.1 (12), 36 ms | |
+| Chapéu de Papel APK (IL2CPP arm64), first scene | 32.9, 31 ms | 33.4, 31 ms | |
 | Cuphead 64-bit (2017.4 IL2CPP), title | 59.4, 45 ms | 59.4, 28 ms | |
 | Tom City (2020.3), title | 59.3, 47 ms | 59.4, 30.5 ms | |
 
-Frames that keep up with the refresh are shown a refresh sooner than with the driver's own flips
-(it queued swapped frames on its thread); frames the GPU is late with keep two queued, so the GPU
-always has the next one.
+Games the GPU limits gain what the wait for the vblank cost (the GPU now at 696 MHz throughout;
+those already at it gain little). Frames that keep up with the refresh are shown a refresh sooner
+than with the driver's own flips (it queued swapped frames on its thread); frames the GPU is late
+with keep two queued, so the GPU always has the next one (a few ms more from swap to screen than
+the driver's flips in Hollow Knight's menu, at 11 % more frames).
 
 | variable | effect (fbdev) |
 |---|---|
