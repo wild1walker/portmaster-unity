@@ -2,8 +2,9 @@
 // (on Unity's render thread, with Unity's context current):
 //   UA_FPS=<seconds>  log fps and frame times every <seconds> (0 = off; default 5): average, 99th
 //                     percentile and worst frame, frames over 25 ms (late: a missed vsync) and over
-//                     50 ms (hitch), Mono GC collections and heap; any frame over 100 ms is also
-//                     logged at once ("[hitch]", seconds since start) to line it up with game logs
+//                     50 ms (hitch), Mono GC collections and heap, and on the fbdev path how long
+//                     frames took from their swap to their flip (fbdev.c); any frame over 100 ms is
+//                     also logged at once ("[hitch]", seconds since start) to line it up with game logs
 //   touch <root>/shot.req   save the next frame as <root>/shot-<n>.ppm (the back buffer being
 //                     presented; checked once a second, the request file is removed). Pointer
 //                     mode's cursor is drawn after it (UA_POINTER_SHOTS=1: before), so shots show
@@ -11,6 +12,7 @@
 //                     not)
 #define _GNU_SOURCE
 #include "frames.h"
+#include "fbdev.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "prof.h"
@@ -139,6 +141,7 @@ static void on_swap(void *ctx)
     gltrace_frame();
     glopt_frame();
     msaafix_frame();
+    fbdev_swap();                               // the fbdev path's flip times (fbdev.c)
     if (last > 0)
     {
         double dt = t - last;
@@ -167,12 +170,23 @@ static void on_swap(void *ctx)
         long rss_pages = 0;
         FILE *sm = fopen("/proc/self/statm", "r");
         if (sm) { if (fscanf(sm, "%*s %ld", &rss_pages) != 1) rss_pages = 0; fclose(sm); }
-        fprintf(stderr, "[fps] %.1f fps, frame %.1f avg / %.1f p99 / %.1f worst ms, late %d hitch %d, gc %d heap %lld MB (%d frames, %d total, %.0f s) rss %ld MB\n",
+        double shown_avg = 0, shown_max = 0, waited = 0, queued = 0;
+        char shown[160] = "";
+        if (fbdev_take_stats(&shown_avg, &shown_max, &waited, &queued) > 0)
+            snprintf(shown, sizeof shown, ", shown %.1f avg / %.1f worst ms after the swap (%d buffers, queue %.1f, gate %.1f ms a frame)",
+                     shown_avg, shown_max, fbdev_buffers(), queued / n, waited / n);
+        fprintf(stderr, "[fps] %.1f fps, frame %.1f avg / %.1f p99 / %.1f worst ms, late %d hitch %d, gc %d heap %lld MB (%d frames, %d total, %.0f s) rss %ld MB%s\n",
                 n / sum, 1000 * sum / n, p99, 1000 * worst, late, hitch, gc_prev >= 0 && gc >= 0 ? gc - gc_prev : 0,
-                mono_heap ? (long long)(mono_heap() >> 20) : -1LL, n, total, t - g_t_start, rss_pages * (sysconf(_SC_PAGESIZE) >> 10) >> 10);
+                mono_heap ? (long long)(mono_heap() >> 20) : -1LL, n, total, t - g_t_start, rss_pages * (sysconf(_SC_PAGESIZE) >> 10) >> 10, shown);
         gc_prev = gc;
         t0 = t; sum = 0; worst = 0; n = 0; late = 0; hitch = 0;
     }
+}
+
+static void on_swap_done(void *ctx, int ok)
+{
+    (void)ctx;
+    fbdev_swap_done(ok);                        // host flips: wait for the next frame's buffer (fbdev.c)
 }
 
 void frames_init(const char *root, int width, int height)
@@ -182,4 +196,6 @@ void frames_init(const char *root, int width, int height)
     if (getenv("UA_FPS")) g_interval = atof(getenv("UA_FPS"));
     snprintf(g_req, sizeof g_req, "%s/shot.req", root);
     egl_glue_set_swap_hook(on_swap, NULL);
+    egl_glue_set_swap_done_hook(on_swap_done, NULL);
+    egl_glue_set_window_hook(fbdev_new_window);
 }

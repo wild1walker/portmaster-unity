@@ -172,9 +172,10 @@ base
 prof      UA_PROF=500 MEASURE=20
 # where the frame goes, including the job threads
 prof-all  UA_PROF=250 MEASURE=20 UA_PROF_THREADS='UnityMain,UnityGfxDeviceW,Job.Worker*,FMOD*'
-# what the frame costs without the vsync wait (a measurement: tears on fbdev)
-novsync   UA_SWAP_INTERVAL=0 UA_FRAME_RATE=200
-novsync-prof UA_SWAP_INTERVAL=0 UA_FRAME_RATE=200 UA_PROF=500 MEASURE=20
+# what the frame costs without the vsync wait (a measurement: tears). Mali's fbdev driver flips at
+# the vblank whatever the swap interval: UA_FB_FLIP=mailbox there; UA_SWAP_INTERVAL=0 on SDL displays
+novsync   UA_FB_FLIP=mailbox UA_FRAME_RATE=200
+novsync-prof UA_FB_FLIP=mailbox UA_FRAME_RATE=200 UA_PROF=500 MEASURE=20
 # Mono's JIT: optimizations that keep the program's meaning (no 'unsafe', float32 untouched)
 mono-abcrem UA_MONO_OPTIONS=-O=abcrem
 mono-ssapre UA_MONO_OPTIONS=-O=abcrem,ssapre

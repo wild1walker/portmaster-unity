@@ -1,6 +1,7 @@
 // Display backend selection (display.h): UA_DISPLAY=auto|fbdev|sdl.
 #define _GNU_SOURCE
 #include "display.h"
+#include "fbdev.h"
 #include "../android/android_shims.h"
 
 #include <dlfcn.h>
@@ -61,6 +62,13 @@ const char *display_auto_choice(char *why, size_t n)
     return "fbdev";
 }
 
+// The fbdev path: Mali's fbdev EGL on the framebuffer; fbdev.c sets up its buffers and flips.
+static int use_fbdev(void)
+{
+    if (!pbuffer_mode()) fbdev_setup();
+    return 0;
+}
+
 int display_init(const char *title)
 {
     const char *want = getenv("UA_DISPLAY");
@@ -70,7 +78,7 @@ int display_init(const char *title)
         fprintf(stderr, "[display] UA_DISPLAY=%s: auto, fbdev or sdl\n", want);
         return -1;
     }
-    if (!strcmp(want, "fbdev")) return 0;
+    if (!strcmp(want, "fbdev")) return use_fbdev();
     if (pbuffer_mode()) {
         if (!is_auto) fprintf(stderr, "[display] UA_EGL_PBUFFER is set: pbuffer path, UA_DISPLAY=sdl ignored\n");
         return 0;
@@ -79,13 +87,13 @@ int display_init(const char *title)
         char why[160];
         const char *pick = display_auto_choice(why, sizeof why);
         fprintf(stderr, "[display] auto: %s (%s)\n", pick, why);
-        if (strcmp(pick, "sdl")) return 0;
+        if (strcmp(pick, "sdl")) return use_fbdev();
     }
     int w = 0, h = 0, hz = 0;
     if (display_sdl_open(title, &g_hd, &w, &h, &hz) != 0) {
         if (!is_auto) return -1;
         fprintf(stderr, "[display] no SDL window: falling back to the fbdev path\n");
-        return 0;
+        return use_fbdev();
     }
     egl_glue_set_host_display(&g_hd);
     android_window_set_size(w, h);

@@ -8,7 +8,8 @@
 //   eglChooseConfig         drops Android-only attributes (EGL_RECORDABLE_ANDROID, ...)
 //   eglGetConfigAttrib      answers Android-only attributes with 0 instead of EGL_BAD_ATTRIBUTE
 //   eglCreateContext        retried with only EGL_CONTEXT_CLIENT_VERSION on EGL_BAD_ATTRIBUTE
-//   eglSwapBuffers          optional host hook before each swap (input pumping, pacing, stats)
+//   eglSwapBuffers          optional host hooks before and after each swap (input pumping, pacing,
+//                           stats)
 //   UA_EGL_PBUFFER=1        tests without a display (Mesa's surfaceless platform): the window surface
 //                           is a pbuffer of the window's size, configs are chosen for pbuffers
 //   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
@@ -82,8 +83,8 @@ static struct {
 } real;
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
-static void (*g_swap_hook)(void *ctx);
-static void *g_swap_ctx;
+static void (*g_swap_hook)(void *ctx), (*g_swap_done_hook)(void *ctx, int ok);
+static void *g_swap_ctx, *g_swap_done_ctx;
 
 // The loader's softfp wrapper for float-taking GL entry points (loader/so_loader.h); weak so the
 // glue also links without the loader (tests).
@@ -128,6 +129,22 @@ void egl_glue_set_swap_hook(void (*hook)(void *ctx), void *ctx)
     g_swap_hook = hook;
 }
 
+static void (*g_window_hook)(void);
+void egl_glue_set_window_hook(void (*hook)(void)) { g_window_hook = hook; }
+
+void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx)
+{
+    g_swap_done_ctx = ctx;
+    g_swap_done_hook = hook;
+}
+
+static EGLBoolean swap_done(EGLBoolean r)
+{
+    void (*hook)(void *, int) = g_swap_done_hook;
+    if (hook) hook(g_swap_done_ctx, r == EGL_TRUE);
+    return r;
+}
+
 static int is_android_attr(EGLint a)
 {
     return a >= EGL_NATIVE_BUFFER_ANDROID && a <= 0x314F;
@@ -165,6 +182,8 @@ static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, voi
         SHIM_WARN("egl_glue: window surface replaced by a %dx%d pbuffer (UA_EGL_PBUFFER): %p", pa[1], pa[3], ps);
         return ps;
     }
+    void (*wh)(void) = g_window_hook;
+    if (wh && android_window_is_ours(win)) wh();
     EGLSurface s = real.CreateWindowSurface(dpy, cfg, native, attribs);
     if (!s && attribs && attribs[0] != EGL_NONE) {
         EGLint err = real.GetError ? real.GetError() : 0;
@@ -267,7 +286,7 @@ static EGLBoolean shim_eglSwapBuffers(EGLDisplay dpy, EGLSurface s)
     if (!ensure() || !real.SwapBuffers) return EGL_FALSE;
     void (*hook)(void *) = g_swap_hook;
     if (hook) hook(g_swap_ctx);
-    return real.SwapBuffers(dpy, s);
+    return swap_done(real.SwapBuffers(dpy, s));
 }
 
 static eglproc shim_eglGetProcAddress(const char *name);
@@ -507,10 +526,10 @@ static EGLBoolean host_eglSwapBuffers(EGLDisplay d, EGLSurface s)
     void (*hook)(void *) = g_swap_hook;
     if (hook) hook(g_swap_ctx);
     if (host_dpy(d) && s == HOST_SURFACE) {
-        if (g_host.swap(g_host.user) == 0) { host_track_current(); return EGL_TRUE; }
+        if (g_host.swap(g_host.user) == 0) { host_track_current(); return swap_done(EGL_TRUE); }
         s = host_real_surface();
     }
-    return real.SwapBuffers(d, s);
+    return swap_done(real.SwapBuffers(d, s));
 }
 
 // Unity 2020.3+: an attribute of its window surface goes to the host's real one, and is kept for a

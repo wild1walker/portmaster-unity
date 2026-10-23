@@ -546,8 +546,13 @@ static void *egl(const char *name)
     return NULL;
 }
 
-static int hook_calls;
+static int hook_calls, done_calls, window_calls, done_after_swap;
+static int *g_fake_swaps;
 static void swap_hook(void *ctx) { hook_calls += *(int *)ctx; }
+// the post-swap hook runs once the real swap returned
+static int done_ok;
+static void swap_done_hook(void *ctx, int ok) { done_calls += *(int *)ctx; done_ok = ok; done_after_swap = g_fake_swaps && *g_fake_swaps == hook_calls; }
+static void window_hook(void) { window_calls++; }
 
 static void test_window_egl(const char *fakeegl)
 {
@@ -625,8 +630,21 @@ static void test_window_egl(const char *fakeegl)
     CHECK(CreateContext(NULL, cfg, NULL, ctxattr) == (void *)0xc0);
     int inc = 1;
     egl_glue_set_swap_hook(swap_hook, &inc);
-    CHECK(SwapBuffers(NULL, NULL) == 1 && *swaps == 1 && hook_calls == 1);
+    egl_glue_set_swap_done_hook(swap_done_hook, &inc);
+    g_fake_swaps = swaps;
+    CHECK(SwapBuffers(NULL, NULL) == 1 && *swaps == 1 && hook_calls == 1 && done_calls == 1 && done_after_swap && done_ok);
     egl_glue_set_swap_hook(NULL, NULL);
+    egl_glue_set_swap_done_hook(NULL, NULL);
+    CHECK(SwapBuffers(NULL, NULL) == 1 && *swaps == 2 && hook_calls == 1 && done_calls == 1);
+    // the window hook: before the driver makes a surface for Unity's window, not for another one
+    egl_glue_set_window_hook(window_hook);
+    CreateWindowSurface(NULL, NULL, w, NULL);
+    CHECK(window_calls == 1);
+    CreateWindowSurface(NULL, NULL, (void *)0x777, NULL);
+    CHECK(window_calls == 1);
+    egl_glue_set_window_hook(NULL);
+    CreateWindowSurface(NULL, NULL, w, NULL);
+    CHECK(window_calls == 1);
     CHECK(GetProcAddress("eglCreateWindowSurface") == (void *)CreateWindowSurface);
     CHECK(GetProcAddress("eglFakeOnly") != NULL && GetProcAddress("eglNope") == NULL);
     CHECK(egl_glue_real("eglSwapBuffers") == dlsym(lib, "eglSwapBuffers"));
@@ -766,6 +784,18 @@ static void test_host_display(const char *fakeegl)
     CHECK(SurfaceAttrib(D, (void *)0x99, 0x3093, 0x3094) == 1 && *attrib_surface == (void *)0x99);   // a pbuffer
     CHECK(SurfaceAttrib((void *)0xd0, S, 0x3093, 0x3094) == 1 && *attrib_surface == S);              // another display
     CHECK(SwapBuffers(D, (void *)0x99) == 1 && hd_swaps == 3 && hook_calls == 4 && *swaps == s0 + 1);
+    // the post-swap hook: after the host's swap and after a real one
+    done_calls = 0;
+    g_fake_swaps = NULL;
+    egl_glue_set_swap_done_hook(swap_done_hook, &inc);
+    CHECK(SwapBuffers(D, H) == 1 && hd_swaps == 4 && done_calls == 1);
+    CHECK(SwapBuffers(D, (void *)0x99) == 1 && *swaps == s0 + 2 && done_calls == 2);
+    egl_glue_set_swap_done_hook(NULL, NULL);
+    // the window hook is the fbdev path's: not called for the host's window
+    window_calls = 0;
+    egl_glue_set_window_hook(window_hook);
+    CHECK(CreateWindowSurface(D, C, w, NULL) == H && window_calls == 0);
+    egl_glue_set_window_hook(NULL);
     egl_glue_set_swap_hook(NULL, NULL);
     CHECK(SwapInterval(D, 2) == 1 && hd_interval == 2 && *interval == -1);
     CHECK(SwapInterval((void *)0xd0, 0) == 1 && *interval == 0);

@@ -18,16 +18,17 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof gltrace glopt msaafix display display_sdl steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof gltrace glopt msaafix display display_sdl fbdev steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
-    # dl_iterate_phdr (docs/arm64.md): no flags for that. -lrt: libhybris'"'"'s timer_* and shm_open
+    # dl_iterate_phdr (docs/arm64.md): no flags for that. ioctl is exported (fbdev.c interposes the
+    # GLES driver'"'"'s calls; this ld predates --export-dynamic-symbol). -lrt: libhybris'"'"'s timer_* and shm_open
     # are there before glibc 2.34. The loader must be in the executable itself (its thread-local
     # block holds bionic'"'"'s stack guard slot, so_loader.h).
     LOADER=../loader/out/arm64/libsoloader.a
     if [ -f $LOADER ]; then
       g++ -o $O/ua_host $OBJS $LOADER ../android/out/arm64/libandroidshims.a ../jni/out/arm64/libfakejni.a \
-        ../media/out/arm64/libuamedia.a -lSDL2 -lz -ldl -lpthread -lm -lrt
+        ../media/out/arm64/libuamedia.a -Wl,--dynamic-list=exports.list -lSDL2 -lz -ldl -lpthread -lm -lrt
       file $O/ua_host | sed "s|, BuildID[^,]*||"
     else
       rm -f $O/ua_host
@@ -60,12 +61,13 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c msaafix.c -o out/msaafix.o
   arm-linux-gnueabihf-gcc $F -c display.c -o out/display.o
   arm-linux-gnueabihf-gcc $F -c display_sdl.c -o out/display_sdl.o
+  arm-linux-gnueabihf-gcc $F -c fbdev.c -o out/fbdev.o
   arm-linux-gnueabihf-gcc $F -c steamstub.c -o out/steamstub.o
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
   arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/gltrace.o out/glopt.o out/msaafix.o \
-    out/display.o out/display_sdl.o out/steamstub.o out/plugins.o out/plugstubs.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
-    ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
+    out/display.o out/display_sdl.o out/fbdev.o out/steamstub.o out/plugins.o out/plugstubs.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
+    ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/egltest egltest.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/sdltest sdltest.c -lSDL2
