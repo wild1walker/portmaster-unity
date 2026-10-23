@@ -51,12 +51,24 @@ class Source:
 
     def _get(self, url, rng, depth=0):
         u = urllib.parse.urlsplit(url)
+        # the environment's proxy (https_proxy / http_proxy, as urllib and curl use it): https through
+        # a CONNECT tunnel, http with the whole URL as the request's target
+        proxy = None if urllib.request.proxy_bypass(u.hostname or '') else urllib.request.getproxies().get(u.scheme)
         if self.conn is None or self.conn_host != (u.scheme, u.netloc):
             if self.conn is not None:
                 self.conn.close()
             cls = http.client.HTTPSConnection if u.scheme == 'https' else http.client.HTTPConnection
-            self.conn, self.conn_host = cls(u.netloc, timeout=120), (u.scheme, u.netloc)
+            if proxy:
+                p = urllib.parse.urlsplit(proxy if '://' in proxy else 'http://' + proxy)
+                self.conn = cls(p.hostname, p.port or 8080, timeout=120)
+                if u.scheme == 'https':
+                    self.conn.set_tunnel(u.hostname, u.port or 443)
+            else:
+                self.conn = cls(u.netloc, timeout=120)
+            self.conn_host = (u.scheme, u.netloc)
         path = u.path + ('?' + u.query if u.query else '')
+        if proxy and u.scheme == 'http':
+            path = url
         self.conn.request('GET', path, headers={'Range': rng, 'User-Agent': 'pmunity'})
         r = self.conn.getresponse()
         data = r.read()
