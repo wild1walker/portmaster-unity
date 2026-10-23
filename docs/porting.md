@@ -255,7 +255,7 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
 
 Each step leaves a marker in `gamedata/.setup/`: an interrupted setup (battery, power button)
 continues where it stopped on the next launch. Free space: about three times the game while it
-runs. The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
+runs. Where the time goes on a handheld (textures and the card, mostly): [setup-speed.md](setup-speed.md). The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
 (the launcher checks for `/lib/ld-linux-armhf.so.3` first).
 
 The il2cpp-arm64 route's setup takes the same steps with step 3 replaced: `pmunity il2cpp
