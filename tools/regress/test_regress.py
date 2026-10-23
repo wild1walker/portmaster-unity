@@ -103,6 +103,16 @@ class RunLog(unittest.TestCase):
         self.assertEqual((r['frames'], r['fps_lines'], r['shots_logged'], r['exceptions'], r['exit'], r['crash']),
                          (98, 2, 1, 1, 124, None))
 
+    def test_slow_shutdown(self):
+        r = K.run_log(['[fps] 1.0 fps, frame 1 avg / 1 p99 / 1 worst ms, late 0 hitch 0, gc 0 heap 64 MB (5 frames, 50 total, '
+                       '200 s) rss 1 MB', '[fj 56] up: quit', '[fj 56] up: Timeout while trying to pause the Unity Engine.',
+                       'Killed', 'exit 137'])
+        c = dict((k, ok) for k, ok, _ in K.expectations_rig({}, r, [], ''))
+        self.assertTrue(c['exit'])
+        r = K.run_log(['Killed', 'exit 137'])                      # killed before the time was up: a fault
+        c = dict((k, ok) for k, ok, _ in K.expectations_rig({}, r, [], ''))
+        self.assertFalse(c['exit'])
+
     def test_crash(self):
         r = K.run_log(['[crash] signal 11 (code 1) at address 0x0, thread 12', 'exit 139'])
         self.assertEqual((r['crash'], r['exit']), (11, 139))

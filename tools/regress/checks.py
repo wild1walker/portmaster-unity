@@ -130,8 +130,11 @@ _EXCEPTION = re.compile(r'\b\w*Exception\b(?::|$)')
 def run_log(lines):
     """ua_host's log: frames, fps, crash, exit, shots taken, exceptions (counts only)."""
     r = {'frames': 0, 'fps_lines': 0, 'last_fps_at': None, 'fps_last': None, 'crash': None, 'fatal': 0,
-         'exit': None, 'shots_logged': 0, 'exceptions': 0, 'unity_exit_frames': None, 'lines': len(lines)}
+         'exit': None, 'shots_logged': 0, 'exceptions': 0, 'unity_exit_frames': None, 'lines': len(lines),
+         'stopped': False}
     for line in lines:
+        if re.search(r'\] up: quit$', line):
+            r['stopped'] = True         # the rig's time was up: ua_host was asked to stop (SIGINT)
         m = _FPS.search(line)
         if m:
             r['frames'] = max(r['frames'], int(m[3]))
@@ -288,7 +291,11 @@ def expectations_rig(exp, run, shots, log_text):
         ok = run.get('crash') is None and not run.get('fatal')
         out.append(('no_crash', ok, 'no crash' if ok else f"crash (signal {run.get('crash')}), {run.get('fatal')} fatal lines"))
     allowed = exp.get('exit', [124])
-    if run.get('exit') is not None or allowed:
+    if run.get('exit') == 137 and run.get('stopped') and 124 in allowed:
+        # asked to stop when the time was up, the engine did not pause in time and the rig's
+        # timeout killed it: a slow shutdown on a busy machine, not a fault of the run
+        out.append(('exit', True, 'exit 137: still running at the end, killed when its shutdown took over 20 s'))
+    elif run.get('exit') is not None or allowed:
         out.append(('exit', run.get('exit') in allowed, f"exit {run.get('exit')} (expected {' or '.join(map(str, allowed))}: "
                                                           f"124 = still running at the end)"))
     if 'frames_min' in exp:

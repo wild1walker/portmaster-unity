@@ -7,6 +7,7 @@ See README.md.
     regress.py rig  [--only REGEX] [--update] [--keep] [--checkout DIR]   the games in the emulated rig
     regress.py list [--only REGEX]                                        the list: games x levels x checks
     regress.py bisect GOOD BAD --level fast|rig --only REGEX [--build CMD] the first commit at which they fail
+    regress.py recheck <results folder>                                   a finished run judged again (list, baseline now)
 
 Exit status: 0 when nothing failed, 1 when a check failed, 2 for a usage or setup error.
 """
@@ -1136,10 +1137,55 @@ def cmd_bisect(a, local):
     return 0
 
 
+def cmd_recheck(a, games):
+    """A finished run's results (its results.json) judged again by the list and baseline as they are
+    now: expectations tuned after a run, or a baseline recorded since, without running the games."""
+    if len(a.rest) != 1:
+        raise SetupError('recheck <results folder of a run>')
+    d = a.rest[0]
+    with open(os.path.join(d, 'results.json')) as f:
+        run_ = json.load(f)
+    level = run_['level']
+    by_id = {g['id']: g for g in games}
+    base = load_baseline(level)
+    out = []
+    for r in run_['results']:
+        g = by_id.get(r['slug'])
+        if g is None or r['status'] == 'skip' or not r['values']:
+            out.append(r)
+            continue
+        v = r['values']
+        if level == 'fast':
+            checks = K.expectations_fast(g.get('expect') or {}, v)
+            golden = base.get(r['slug'])
+            if golden:
+                diffs = K.compare_exact(golden, v)
+                checks.append(('baseline', not diffs, 'same as the baseline' if not diffs else
+                               f'{len(diffs)} values differ from the baseline: ' +
+                               '; '.join(f'{k}: {short(x)} -> {short(y)}' for k, x, y in diffs[:6])))
+        else:
+            log = '\n'.join(read_lines(os.path.join(d, r['slug'], 'emu-run.log')))
+            runv = K.run_log(log.splitlines())
+            checks = K.expectations_rig(g.get('rig') or {}, runv, v.get('shots') or [], log)
+            checks += K.compare_rig(base.get(r['slug']), runv, v.get('shots') or [])
+        # what failed before the checks (a step) stays failed
+        step_failed = r['status'] == 'fail' and not any(not c[1] for c in r.get('checks') or ())
+        bad = [c for c in checks if not c[1]]
+        r = dict(r, checks=[list(c) for c in checks], notes=[n for n in r['notes'] if not n.startswith('baseline updated')])
+        if step_failed:
+            out.append(r)
+            continue
+        r['status'], r['reason'] = ('fail', '; '.join(c[2] for c in bad)) if bad else ('pass', '')
+        out.append(r)
+    print(f"recheck of {d} ({level}, {run_.get('checkout')})\n")
+    print(table(out))
+    return 1 if any(r['status'] == 'fail' for r in out) else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='regress.py', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('level', choices=LEVELS + ('list', 'bisect'))
-    ap.add_argument('rest', nargs='*', help='bisect: GOOD BAD (commits)')
+    ap.add_argument('level', choices=LEVELS + ('list', 'bisect', 'recheck'))
+    ap.add_argument('rest', nargs='*', help='bisect: GOOD BAD (commits); recheck: a results folder')
     ap.add_argument('--level', dest='bisect_level', choices=LEVELS, default='fast', help='bisect: the level to run')
     ap.add_argument('--build', help='bisect: a command run in the worktree before each test (e.g. runtime/build.sh)')
     ap.add_argument('--bisect-run', action='store_true', help=argparse.SUPPRESS)
@@ -1157,6 +1203,8 @@ def main(argv=None):
         if a.level == 'list':
             cmd_list(a, games)
             return 0
+        if a.level == 'recheck':
+            return cmd_recheck(a, games)
         local = load_local(a.config)
         if a.level == 'bisect':
             return cmd_bisect(a, local)
