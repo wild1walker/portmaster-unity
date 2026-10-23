@@ -305,7 +305,10 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
                 last = rg;
             }
             exact = d;
-            if (rc < 0) depth = d;                         // the thread's start: nothing above to scan
+            // the thread's start: nothing above to scan. Not when the sample's own function has no
+            // tables (EXIDX_CANTUNWIND: glibc's assembly functions, syscall, memcpy): its callers
+            // are found by the scan (from sp: lr is still in its register, profsum.py takes it)
+            if (rc < 0 && d) depth = d;
         }
         int after_jit = last && last->anon;
 #elif defined(__aarch64__)
