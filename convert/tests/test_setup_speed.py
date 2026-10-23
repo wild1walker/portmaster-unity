@@ -5,6 +5,7 @@ type-tree array writes, serialized files written in one pass, installer payloads
     python -m unittest tests.test_setup_speed            (from convert/)
     PMUNITY_GAMES=<Game>_Data[:...] python -m unittest tests.test_setup_speed   (also: real files)
 """
+import io
 import os
 import random
 import shutil
@@ -15,7 +16,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from pmunity import bigbundle, unity_io  # noqa: E402
+from pmunity import bigbundle, macpkg, unity_io  # noqa: E402
 
 GAMES = [p for p in os.environ.get('PMUNITY_GAMES', '').split(os.pathsep) if p]
 
@@ -200,6 +201,51 @@ class StreamedSave(unittest.TestCase):
                     self.assertEqual(_read(out), sf2.save(), p + ' (changed)')
         finally:
             shutil.rmtree(d)
+
+
+class ReadAhead(unittest.TestCase):
+    def test_buffer(self):
+        b = macpkg._Buffer()
+        for piece in (b'abc', b'', b'defgh', b'i'):
+            b.add(piece)
+        self.assertEqual([b.take(n) for n in (2, 3, 0, 10, 1)], [b'ab', b'cde', b'', b'fghi', b''])
+
+    def test_ahead_reads_the_same(self):
+        rnd = random.Random(9)
+        data = bytes(rnd.getrandbits(8) for _ in range(3_000_001))
+        a = macpkg.Ahead(io.BytesIO(data), piece=65536, depth=2)
+        got, sizes = [], [1, 6, 70, 65536, 200_000, 3]
+        i = 0
+        while True:
+            c = a.read(sizes[i % len(sizes)])
+            if not c:
+                break
+            got.append(c)
+            i += 1
+        a.close()
+        self.assertEqual(b''.join(got), data)
+
+    def test_ahead_raises_what_the_stream_raised(self):
+        class Bad(io.RawIOBase):
+            def __init__(self):
+                self.n = 0
+
+            def read(self, n=-1):
+                self.n += 1
+                if self.n > 2:
+                    raise EOFError('cut short')
+                return b'x' * 10
+        a = macpkg.Ahead(Bad())
+        with self.assertRaises(EOFError):
+            while a.read(7):
+                pass
+        a.close()
+
+    def test_ahead_stops_early(self):
+        a = macpkg.Ahead(io.BytesIO(b'y' * (10 << 20)), piece=1 << 16, depth=2)
+        self.assertEqual(a.read(5), b'yyyyy')
+        a.close()                                    # (the thread does not stay blocked)
+        self.assertFalse(a.t.is_alive())
 
 
 if __name__ == '__main__':
