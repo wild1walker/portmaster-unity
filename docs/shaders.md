@@ -811,7 +811,7 @@ The fragment stage: after `#version`,
 #elif defined(GL_ARM_shader_framebuffer_fetch)
 #extension GL_ARM_shader_framebuffer_fetch : enable
 #else
-#error "framebuffer fetch: ..."
+#error framebuffer fetch: ...
 #endif
 ```
 

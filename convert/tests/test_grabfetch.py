@@ -93,6 +93,7 @@ class ScreenPositionTest(unittest.TestCase):
         f = stages(out)['FRAGMENT']
         self.assertNotIn('texture(_GrabTexture', f)
         self.assertIn('u_xlat1 = ua_FramebufferColor;', f)
+        self.assertNotIn('"', f)        # not in GLSL ES's character set: Mali refuses it even in a skipped #else
         self.assertEqual(stages(out)['VERTEX'], stages(code)['VERTEX'])
         return f
 

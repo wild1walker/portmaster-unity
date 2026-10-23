@@ -912,8 +912,8 @@ EXTENSIONS = (
     '#elif defined(GL_ARM_shader_framebuffer_fetch)\n'
     '#extension GL_ARM_shader_framebuffer_fetch : enable\n'
     '#else\n'
-    '#error "framebuffer fetch: the driver has neither GL_EXT_shader_framebuffer_fetch nor GL_ARM_shader_framebuffer_fetch"\n'
-    '#endif\n')
+    '#error framebuffer fetch: the driver has neither GL_EXT_shader_framebuffer_fetch nor GL_ARM_shader_framebuffer_fetch\n'
+    '#endif\n')                         # (no quotes: GLSL ES has no '"', and Mali's compiler refuses it in a skipped branch too)
 
 
 def _header_end(src):
