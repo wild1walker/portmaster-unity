@@ -741,7 +741,10 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
         for (unsigned k = 0; k < n; k++) {
             const uintptr_t *s = t->buf + (size_t)k * g_stride;
             unsigned d = (unsigned)(s[2] & 0xff);
-            for (unsigned j = 3; j < HDR + d; j++) if (s[j]) addrs[na++] = s[j];
+            // pc and lr (s[3], s[4]), then the callers from HDR on: s[5..8] is the scanned-frame bitmap,
+            // not addresses (counting it overran addrs, sized 2 + depth a sample: heap corruption)
+            for (unsigned j = 3; j < 5; j++) if (s[j]) addrs[na++] = s[j];
+            for (unsigned j = HDR; j < HDR + d; j++) if (s[j]) addrs[na++] = s[j];
         }
     }
     if (addrs) qsort(addrs, na, sizeof *addrs, cmp_uptr);
