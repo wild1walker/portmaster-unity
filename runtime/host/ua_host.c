@@ -514,7 +514,7 @@ int main(int argc, char **argv)
     android_vsync_set_refresh_rate(cfg.refresh_rate);   // the NDK's and Java's Choreographer: one clock
     // 2021.1+ Android players pace at targetFrameRate only (-1: 30 fps); converted desktop data gets
     // the desktop's vsync pacing back (framerate.c). An imported Android build keeps its own.
-    framerate_init(strcmp(pj_source, "apk") && atoi(pj_unity) >= 2021 ? "desktop" : "android", cfg.refresh_rate);
+    framerate_init(strcmp(pj_source, "apk") && atoi(pj_unity) > 0 ? "desktop" : "android", cfg.refresh_rate);
     gcbudget_init();
     cfg.on_frame = on_frame;
     cfg.sdk_int = sdk_int;

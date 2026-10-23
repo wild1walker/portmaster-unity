@@ -1,17 +1,20 @@
 // Frame pacing of converted desktop data. From 2021.1 Unity's Android players ignore
 // QualitySettings.vSyncCount and render at Application.targetFrameRate, whose default (-1) is a
 // fixed 30 fps (Unity's documentation: "to conserve battery power"); before 2021.1 they follow
-// vSyncCount as desktop players do (2018.4 - 2020.3 games that never set a frame rate run at the
-// panel's 60 Hz on the handheld). A 2021.1+ desktop game that leaves its frame rate to vsync ran at
-// the monitor's rate on the desktop and runs at 30 fps on the Android player. The host gives it the
-// desktop's pacing back:
+// vSyncCount, but with vSyncCount 0 and no targetFrameRate they too render at that default 30 fps
+// where a desktop player runs as fast as it can (Forsaken Castle 2018.2, Liberal Crime Squad 2019.1:
+// 30 fps on the RG34XX-SP, 59 with the desktop's pacing). A 2021.1+ desktop game that leaves its
+// frame rate to vsync, or an older one that switches vsync off, ran at the monitor's rate (or
+// faster) on the desktop and runs at 30 fps on the Android player. The host gives it the desktop's
+// pacing back:
 //   UA_FRAME_RATE=desktop  vSyncCount > 0: the display's rate / vSyncCount (targetFrameRate is
 //                          ignored, as on the desktop); 0: targetFrameRate, -1 = the display's rate
 //                          (the desktop's "as fast as it can", which vsync caps here)
 //                 android  Unity's Android pacing, unchanged (nothing is wrapped)
 //                 <n>      n fps whatever the game asks for (a porter's cap for a heavy game)
-// The default (ua_host.c): desktop for converted desktop data of Unity 2021.1+, android for imported
-// Android builds (pmunity apk), older players and packages that do not name their Unity version.
+// The default (ua_host.c): desktop for converted desktop data (any Unity version its
+// android_package.json names; games with vsync on are paced as before), android for imported
+// Android builds (pmunity apk) and packages that do not name their Unity version.
 // How: the targetFrameRate setter and getter icalls are wrapped as libunity registers them
 // (mono_add_internal_call / il2cpp_add_internal_call, which it gets through dlsym). The game reads
 // back what it set; Unity gets the rate above, checked again on UnityMain after each frame, since a
