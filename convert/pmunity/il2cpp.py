@@ -587,7 +587,13 @@ def fetch_player(version, pkg, abi):
     if not (os.path.isdir(man) and any(n.endswith('.dll') for n in os.listdir(man))):
         log(f'player {version}: the IL2CPP UnityEngine assemblies and static libraries')
         globs = player_wanted(abi)
-        nsis_fetch(info['installer'], lambda p: (lambda r: r if r and any(fnmatch.fnmatchcase(r, g) for g in globs) else None)(
+        src = info['installer']
+        if not src.startswith(('http://', 'https://')) and not os.path.isfile(src):
+            # (a local installer the player was read from, removed since: a setup deletes the copy
+            # it downloaded once the player is out of it) Unity's own, by range requests
+            src = player.installer_url(player.release(str(version)))
+            log(f'player {version}: {info["installer"]} is gone: from {src}')
+        nsis_fetch(src, lambda p: (lambda r: r if r and any(fnmatch.fnmatchcase(r, g) for g in globs) else None)(
             player.package_path(p)), pkg)
     return info
 
