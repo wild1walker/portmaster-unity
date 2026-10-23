@@ -32,6 +32,7 @@ needed for `tools/asmpatch`. See [docs/building.md](docs/building.md).
 | asmpatch | `tools/asmpatch/build.sh test` | fake assemblies built with Mono.Cecil |
 | box64 route | `tools/box64/test/launcher_test.sh`, `tools/box64/test/port_test.sh` | need a Linux build of a game you own |
 | a whole port | `tools/port/rehearse.sh` ([docs/porting.md](docs/porting.md#6-rehearsal)) | the first launch in a handheld-like container, then the game in the emulator |
+| the games (regression) | `tools/regress/regress.py fast` (convert, pack and checks), `regress.py rig` (the games in the emulator) | **before merging a branch that touches `convert/` or `runtime/`**: a list of games per Unity line and route, compared with the recorded baseline ([tools/regress/README.md](tools/regress/README.md)); needs your own game corpus |
 
 If your change touches what a game sees, say in the pull request how you checked it: unit tests,
 the emulator (`tools/emu`), or a handheld (model and firmware).

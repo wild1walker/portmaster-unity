@@ -35,3 +35,5 @@ profbench/
 syms_*.txt
 obj/
 bin/
+# the regression run's machine paths (tools/regress/local.example.toml)
+tools/regress/local.toml

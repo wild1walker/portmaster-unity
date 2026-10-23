@@ -1,0 +1,45 @@
+# tools/regress/local.toml: this machine's paths for the regression run (copy this file to
+# local.toml, which git ignores, or point REGRESS_CONFIG at your copy). Nothing here goes into the
+# repository: the list (games.toml) names games by their corpus slug only.
+# Each key can also be given as an environment variable REGRESS_<KEY> (REGRESS_SCRATCH, ...).
+
+# the game corpus: games/<slug>/source.json and games/<slug>/game/ (the game as downloaded)
+corpus = "/path/to/corpus"
+
+# where each game's work goes (converted files, APKs, the rig's device root) and the results
+# (results/<level>-<time>/: logs, small PNGs of the rig's shots, results.md / results.json).
+# Each game's work folder is deleted after its checks (--keep keeps it). A folder on the same
+# APFS volume as the corpus is fastest: android-data then clones the game's files.
+scratch = "/path/to/scratch"
+
+# Python with the converter's requirements (convert/requirements.txt); default: the one running
+# regress.py
+# python = "/path/to/venv/bin/python3"
+
+# folders holding Unity Android players (`pmunity player fetch <version> <dir>/<version>/pkg`, or
+# <dir>/<version> itself); a missing version is fetched into <scratch>/players
+players = ["/path/to/unity-players"]
+
+# the IL2CPP route's tools (`pmunity il2cpp --home`, PMUNITY_IL2CPP_HOME)
+# il2cpp_home = "/path/to/il2cpp-home"
+
+# built tools: the rig's ua_host (runtime/host/out, runtime/host/out/arm64), asmpatch's command,
+# the shader translators (default: this checkout's tools/*/out)
+# hostbin = "/path/to/portmaster-unity/runtime/host/out"
+# hostbin64 = "/path/to/portmaster-unity/runtime/host/out/arm64"
+# asmpatch = "dotnet /path/to/portmaster-unity/tools/asmpatch/out/any/asmpatch.dll"
+# pmhlslcc = "/path/to/portmaster-unity/tools/hlslcc/out/pmhlslcc"
+# pmspirvcross = "/path/to/pmspirvcross"
+
+# games outside the corpus (your own copies): slug = the game folder or its data folder
+[games]
+# cuphead = "/path/to/Cuphead.app/Contents/Resources/Data"
+# hollowknight = "/path/to/Hollow Knight_Data"
+
+# route "prebuilt": a game packaged before, run with the runtime under test (zip = android-data's
+# zip folder, lib = the device root's lib/, root_files = files copied into the device root)
+# [prebuilt.cuphead-title]
+# zip = "/path/to/android-data-out/zip"
+# lib = "/path/to/emu-root/lib"
+# root_files = []
+# arch = "armhf"
