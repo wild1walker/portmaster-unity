@@ -39,6 +39,9 @@ APK_FACTS = ('abi', 'abis', 'backend', 'min_sdk', 'target_sdk', 'unity_version',
 MONOLIBS = 'Variations/mono/Release/MonoLibs/armeabi-v7a'
 
 
+DRY_RUN_LINE = re.compile(r'(data|assemblies|asmpatch|UnityLinker|il2cpp|mix\w*|bee\w*|Bee\w*): |\S+\.(h|c|cpp): ')
+
+
 class SetupError(Exception):
     pass
 
@@ -210,6 +213,12 @@ def digest(ctx, args, log):
     return run([ctx.py, '-I', os.path.join(HERE, 'digest.py')] + args, log, env=ctx.env)
 
 
+def children_cpu():
+    import resource
+    r = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return r.ru_utime + r.ru_stime
+
+
 def rmtree(p):
     if os.path.lexists(p):
         if os.path.islink(p) or not os.path.isdir(p):
@@ -327,6 +336,14 @@ def view_dir(src, overlays, dst, skip=('data.unity3d',)):
     return dst
 
 
+def docker_names():
+    try:
+        return subprocess.run(['docker', 'ps', '--format', '{{.Names}}'], capture_output=True, text=True,
+                              timeout=60).stdout.split()
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+
 def docker_gate(ctx, log):
     """At most one container of this run at a time (names regress*), and none started while two or
     more others run (the Mac's Docker VM is shared)."""
@@ -359,26 +376,31 @@ class Game:
     def __init__(self, ctx, g, level):
         self.ctx, self.g, self.level = ctx, g, level
         self.slug, self.id = g['slug'], g['id']
-        self.work = os.path.join(ctx.scratch, 'work', self.id)
+        self.work = os.path.join(ctx.scratch, 'work', f'{level}-{self.id}')
         self.out = os.path.join(ctx.results, self.id)
         self.log = os.path.join(self.out, 'run.txt')
         self.values = {}
         self.checks = []
         self.notes = []
         self.timing = {}
+        self.cpu = {}
 
     def step(self, name):
+        """A timed step: wall seconds (timing) and the CPU seconds of the commands it ran (cpu: what
+        the step costs on a machine whose disk keeps up)."""
         g = self
 
         class T:
             def __enter__(self):
                 self.t = time.time()
+                self.c = children_cpu()
                 print(f'    {name}', flush=True)
                 with open(g.log, 'a') as f:
                     f.write(f'\n== {name}\n')
 
             def __exit__(self, *a):
                 g.timing[name] = round(time.time() - self.t, 1)
+                g.cpu[name] = round(children_cpu() - self.c, 1)
         return T()
 
     # ---- the game's data
@@ -407,9 +429,10 @@ class Game:
             if ctx.asmpatch:
                 args[3:3] = ['--asmpatch', ctx.asmpatch]
             rc, rep = run_json([ctx.py, '-m', 'pmunity'] + args, j, cwd=ctx.convert_dir, env=ctx.env, timeout=1800)
-            if rc or rep is None:
+            if rep is None or rc not in (0, 1):         # (1: its report says no route fits)
                 raise Fail(f'port check failed (exit {rc}): {tail(j)}')
             self.values['check'] = K.check_verdict(rep)
+            self.values['check']['exit'] = rc
             want = self.g.get('unity')
             if want and rep.get('unity_version') and rep['unity_version'] != want:
                 self.checks.append(('unity', False, f"data is Unity {rep['unity_version']}, the list says {want}"))
@@ -558,7 +581,8 @@ class Game:
                 raise Fail('android-data wrote no report')
             p = K.pack_summary(report, read_lines(alog))
             dj = os.path.join(self.work, 'tree.json')
-            if digest(ctx, ['tree', out, dj, 'android_data_report.json', 'make_android_data.log', '*.log'], self.log):
+            if digest(ctx, ['tree', out, dj, '--state', os.path.join(out, '.android_data_state.json'),
+                            'android_data_report.json', 'make_android_data.log', '*.log'], self.log):
                 raise Fail('digest of the android-data output failed')
             t = json.load(open(dj))
             p['tree'] = {'total': t['total'], 'files': t['count'], 'mb': t['bytes'] >> 20,
@@ -628,6 +652,9 @@ class Game:
             raise SetupError('EMU_ROOT and EMU_ZIP are the same folder')
         runlog = os.path.join(root, 'run.log')
         docker_gate(ctx, self.log)
+        others = [n for n in docker_names() if not n.startswith('regress')]
+        if others:      # (frames and timing depend on what else runs: noted with the result)
+            self.notes.append(f'{len(others)} other container{"s" if len(others) > 1 else ""} running at the start')
         with self.step(f'rig {arch} {secs} s'):
             with open(self.log, 'a') as f:
                 f.write('env: ' + ' '.join(f'{k}={env[k]}' for k in sorted(env) if k.startswith(('UA_', 'EMU_')) or k in env_extra) + '\n')
@@ -769,10 +796,14 @@ def il2cpp_args(G, rep):
     args = ['--abi', i.get('abi', 'arm64-v8a')]
     sug = ((rep or {}).get('suggest') or {}).get('android_data') or {}
     asm = G.g.get('asmpatch', sug.get('asmpatch', 'off'))
+    sam = G.g.get('streaming_assets', sug.get('streaming_assets'))
     if asm not in (None, 'off', False) and G.ctx.asmpatch:
         args += ['--asmpatch', G.ctx.asmpatch if asm in ('auto', True) else f"{G.ctx.asmpatch} --only={','.join(asm)}"]
-    sam = G.g.get('streaming_assets', sug.get('streaming_assets'))
+    elif sam and sam != 'obb' and G.ctx.asmpatch:
+        args += ['--asmpatch', f'{G.ctx.asmpatch} --only=']     # (the streaming-assets patch alone, as android-data)
     if sam and sam != 'obb':
+        if not G.ctx.asmpatch:
+            raise Skip(f'streaming_assets {sam} on the IL2CPP route needs asmpatch (none here)')
         args += ['--streaming-assets', sam]
     return args + [str(x) for x in i.get('args', ())]
 
@@ -789,12 +820,15 @@ def fast_il2cpp(G, pack_override):
     with G.step('il2cpp --dry-run'):
         dlog = os.path.join(G.work, 'dry.log')
         rc = pmunity(ctx, ['il2cpp', src, out, '--dry-run'] + il2cpp_args(G, rep), dlog, timeout=3600)
+        shutil.copyfile(dlog, os.path.join(G.out, 'il2cpp-dry-run.log'))
         if rc:
             raise Fail(f'il2cpp --dry-run failed (exit {rc}): {tail(dlog)}')
         text = open(dlog, errors='replace').read()
+        text = text.replace(G.work, '<work>')
         for p, name in ctx.paths_to_hide():
             text = text.replace(p, name)
-        cmds = [l for l in text.splitlines()[1:] if l.strip()]
+        # what it decided and would run; not what it fetched first (a first run fetches the tools)
+        cmds = [l for l in text.splitlines()[1:] if DRY_RUN_LINE.match(l)]
         open(os.path.join(G.out, 'il2cpp-dry-run.log'), 'w').write(text)
         import hashlib
         staged = os.path.join(out, '.work', 'Managed-in')
@@ -1004,7 +1038,7 @@ def run_game(ctx, g, level, golden):
             rmtree(G.work)
     secs = round(time.time() - t0)
     res = {'slug': g['id'], 'route': g['route'], 'level': level, 'covers': g.get('covers', []), 'status': status,
-           'reason': reason, 'notes': G.notes, 'seconds': secs, 'timing': G.timing, 'values': G.values,
+           'reason': reason, 'notes': G.notes, 'seconds': secs, 'timing': G.timing, 'cpu': G.cpu, 'values': G.values,
            'checks': [list(c) for c in G.checks]}
     with open(os.path.join(G.out, 'result.json'), 'w') as f:
         json.dump(res, f, indent=1)
@@ -1021,8 +1055,10 @@ def table(results):
                     f"{fmt_secs(r['seconds'])} | {why.replace('|', '/')} |")
     n = {s: sum(r['status'] == s for r in results) for s in ('pass', 'fail', 'skip')}
     total = sum(r['seconds'] for r in results)
+    cpu = round(sum(sum((r.get('cpu') or {}).values()) for r in results))
     rows.append('')
-    rows.append(f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip; {fmt_secs(total)} in all")
+    rows.append(f"{n['pass']} pass, {n['fail']} fail, {n['skip']} skip; {fmt_secs(total)} in all "
+                f"(the tools' CPU time {fmt_secs(cpu)})")
     return '\n'.join(rows)
 
 

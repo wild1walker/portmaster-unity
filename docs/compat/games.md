@@ -9,6 +9,11 @@ pointer walks them), *in game* (a level or the first scene plays). The **emulate
 Mesa's software renderer (tools/emu: correct pictures and game logic, about 1 fps); **handheld** is
 an Anbernic RG34XX-SP (Allwinner H700, Mali-G31, 1 GB RAM, Knulli, 720x480) unless noted.
 
+Most of these games are also in the regression run's list ([tools/regress](../../tools/regress/README.md)):
+`regress.py fast` takes them through the converter and android-data again before a branch that
+touches `convert/` or `runtime/` is merged, `regress.py rig` runs 17 of them in the emulated rig,
+and both compare with the recorded results.
+
 Routes: **32-bit** = Unity's Android Mono player (armv7) on `ua_host`, the desktop data converted;
 **64-bit IL2CPP** = the desktop game compiled with `pmunity il2cpp`, on the arm64 player; **APK** =
 the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linux player under box64

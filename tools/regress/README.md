@@ -76,8 +76,8 @@ One `[[game]]` per game and route, named by its corpus slug; the header of
 builds, compressed builds, the IL2CPP route (2017.4 - 6000.0, the mixed Unity 6 build included),
 Android builds (APK route), box64, and the features that have broken before: compute shaders,
 StreamingAssets read as files, Rewired, the Input System, InControl, FMOD (silent), video,
-Addressables, Unity's Memory Advice files, winbcl. Cuphead and Hollow Knight are in it by their
-own port's convert config (`route = "shaders"`); `cuphead-title` runs the packaged Cuphead with
+Addressables, Unity's Memory Advice files, winbcl. Cuphead and Hollow Knight are in it with their
+ports' shaders and settings steps (`route = "shaders"`); `cuphead-title` runs the packaged Cuphead with
 the runtime under test (`route = "prebuilt"`, paths in the local config).
 
 A game's expectations come from what docs/compat/games.md records for it (e.g. "title": a
@@ -122,13 +122,16 @@ nothing ran (all skipped) is skipped.
 
 ## How long it takes
 
-Measured on the development Mac (Apple M-series, 8 GB; the scratch folder on a USB stick that
-writes about 2 MB/s, shared with other jobs), see the end of this file for the latest run. The
-fast level's time is mostly android-data writing the packed games' trees: the shaders step runs
-in memory (digest.py) for games that are not packed, and packing on the same APFS volume as the
-corpus makes android-data's tree clones.
+Measured on the development Mac (Apple M-series, 8 cores, 8 GB) with the corpus on the internal
+disk and two USB sticks, and the scratch folder on a USB stick that writes about 1 - 2 MB/s,
+shared with another agent's conversions and IL2CPP builds (2026-10-23):
 
-| level | games | time |
-|---|---|---|
-| fast | 59 | see below |
-| rig | 17 | see below |
+| level | games | wall time | the tools' CPU time | what the time goes into |
+|---|---|---|---|---|
+| fast | 54 | 73 min (60 min the second time, with the rig level running beside it) | 13 - 17 min | android-data writing the ten packed games' trees to the stick (0.5 - 7 min each); the rest is CPU: the shaders step in memory (5 s - 4 min a game: Hollow Knight and Cuphead the longest), port checks, `il2cpp --dry-run` (15 - 40 s), `pmunity apk` (about 1 min) |
+| rig | 17 | RIGTIME | | per game: packing (1 - 7 min on the stick), then the rig run itself (2.5 - 10 min, the list's seconds); the two IL2CPP builds (buggish about 15 min, the Unity 6 mixed build about 40) |
+
+The fast level's own work is its CPU time: with the scratch folder on an SSD, or on the corpus'
+APFS volume (android-data then clones the game's files instead of copying them), it should take
+little more than that, 15 - 20 minutes (an estimate: not measured on such a disk here). Each run
+prints the CPU time under its table.

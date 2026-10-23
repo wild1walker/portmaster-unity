@@ -9,9 +9,11 @@ first on sys.path.
         bundle's packed file is hashed and removed). The step's log lines are kept.
     python -I digest.py files <checkout> <dir> <out.json> [<rel>...]
         the same digests of files a real `pmunity convert` wrote into an overlay folder.
-    python -I digest.py tree <dir> <out.json> [<skip glob>...]
+    python -I digest.py tree <dir> <out.json> [--state <file>] [<skip glob>...]
         every file under <dir> but dot files and the globs (matched against each relative path):
-        size and SHA-256 (android-data's tree), and an APK's or OBB's zip members.
+        size and SHA-256 (android-data's tree), and an APK's or OBB's zip members. --state:
+        android-data's .android_data_state.json; the files it placed unchanged ('link': a clone,
+        hard link or copy of the game's file) count by their size only (not read again).
 
 Digests (all of the tools' own output; nothing of a game's content is kept, only hashes):
   file      SHA-256 of the whole written file
@@ -184,8 +186,13 @@ def zip_members(path):
     return h.hexdigest(), n, size
 
 
-def cmd_tree(root, out, skip=()):
+def cmd_tree(root, out, skip=(), state=None):
     import fnmatch
+    unchanged = set()
+    if state:
+        with open(state) as f:
+            st = json.load(f)
+        unchanged = {k for k, v in st.items() if isinstance(v, list) and v and v[-1] == 'link'}
     files = {}
     zips = {}
     h = hashlib.sha256()
@@ -206,6 +213,8 @@ def cmd_tree(root, out, skip=()):
                 except zipfile.BadZipFile:
                     zips[rel] = {'members': 'bad zip', 'entries': 0, 'bytes': 0}
                 d_ = zips[rel]['members']        # (the members' CRCs stand for the zip's contents)
+            elif rel in unchanged:
+                d_ = 'link'
             else:
                 d_ = sha256_file(p)
             files[rel] = [s, d_]
@@ -222,7 +231,10 @@ def main(argv):
     if cmd == 'files' and len(argv) >= 4:
         return cmd_files(argv[1], argv[2], argv[3], argv[4:])
     if cmd == 'tree' and len(argv) >= 3:
-        return cmd_tree(argv[1], argv[2], argv[3:])
+        rest, state = argv[3:], None
+        if rest[:1] == ['--state']:
+            state, rest = rest[1], rest[2:]
+        return cmd_tree(argv[1], argv[2], rest, state)
     sys.exit(__doc__)
 
 

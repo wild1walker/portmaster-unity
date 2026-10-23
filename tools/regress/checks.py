@@ -298,6 +298,8 @@ def expectations_rig(exp, run, shots, log_text):
         s = next((s for s in shots if s['t'] == t), None)
         if s is None:
             out.append((f'content@{t}', False, f'no shot at {t} s (the run ended before it?)'))
+        elif s.get('missing'):
+            out.append((f'content@{t}', False, f'no shot at {t} s: no frame came after the request (the game drew nothing more)'))
         else:
             out.append((f'content@{t}', s['content'], f"shot at {t} s: {'a picture' if s['content'] else 'black or one colour'}"
                                                       f" (dark {s['dark']:.0%}, {s['colours']} colours)"))
@@ -324,7 +326,8 @@ def compare_rig(golden, run, shots, frames_ratio=0.3):
     for s in shots:
         g = gs.get(s['t'])
         if g and g.get('content') and not s['content']:
-            out.append((f'baseline:content@{s["t"]}', False, f'shot at {s["t"]} s had a picture in the baseline, now black or one colour'))
+            now = 'no frame came after the request' if s.get('missing') else 'black or one colour'
+            out.append((f'baseline:content@{s["t"]}', False, f'shot at {s["t"]} s had a picture in the baseline, now {now}'))
     gf = (golden.get('run') or {}).get('frames') or 0
     if gf:
         ok = run.get('frames', 0) >= frames_ratio * gf
