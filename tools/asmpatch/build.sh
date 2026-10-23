@@ -14,9 +14,14 @@ export DOTNET_ROOT=${DOTNET_ROOT:-$(dirname "$DOTNET")} DOTNET_CLI_TELEMETRY_OPT
 "$DOTNET" build asmpatch.csproj -c Release -o out/any -v q -nologo | grep -E "error|warn" || true
 [ -f out/any/asmpatch.dll ] || { echo "asmpatch: build failed"; exit 1; }
 "$DOTNET" publish asmpatch.csproj -c Release -r linux-arm64 --self-contained -p:PublishSingleFile=true \
-  -p:PublishTrimmed=true -p:InvariantGlobalization=true -p:DebugType=none -o out/linux-arm64 -v q -nologo \
-  | grep -E "error|warn" || true
+  -p:PublishTrimmed=true -p:InvariantGlobalization=true -p:DebugType=none -p:TrimmerRemoveSymbols=true \
+  -o out/linux-arm64 -v q -nologo | grep -E "error|warn" || true
 [ -f out/linux-arm64/asmpatch ] || { echo "asmpatch: linux-arm64 publish failed"; exit 1; }
+# it goes into ports: it must not name this machine's folders (ILLink stamps the trimmed DLLs with
+# obj/'s path unless TrimmerRemoveSymbols; an obj/ trimmed before it keeps them: delete obj/)
+if LC_ALL=C grep -a -q -F "$PWD" out/linux-arm64/asmpatch; then
+  echo "asmpatch: out/linux-arm64/asmpatch names $PWD (delete obj/ and build again)"; exit 1
+fi
 echo "built out/any/asmpatch.dll, out/linux-arm64/asmpatch"
 if [ "${1:-}" = test ]; then
   "$DOTNET" build test/asmpatch-test.csproj -c Release -o out/test -v q -nologo | grep -E "error|warn" || true
