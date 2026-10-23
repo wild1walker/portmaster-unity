@@ -11,6 +11,7 @@ whole measured session:
 | the same, measured and compared across settings | `tools/device/profbench.sh` + `tools/analysis/benchsum.py`: one run per setting with frame rate, clocks, CPU, memory and the profile (below) |
 | what a thread waits in right now | `python3 tools/device/stacks.py <pid> [thread]` on the device, or `kill -s RTMIN+7 <pid>` (every thread's stack into the log) |
 | CPU per thread, clocks, temperatures while playing | `python3 tools/device/profcpu.py <pid>` on the device |
+| what the GPU does, pass by pass, and what each pass costs | `UA_GL_TRACE=<s>` (+ `UA_GL_TRACE_DRAWS`, `UA_SHADER_DUMP`): below, [GPU, pass by pass](#gpu-pass-by-pass) |
 
 ## UA_PROF: the sampling profiler
 
@@ -207,3 +208,75 @@ behaviours with `Update`/`FixedUpdate` (PlayMaker FSMs among them), 2D colliders
 and the project's fixed timestep (a 50 Hz fixed update runs 1.6 times in a 32 fps frame and less
 than once in a 60 fps one). UnityPy reads those from the game's own files (the level file of the
 scene and globalgamemanagers); keep such numbers out of this repository like any other game data.
+
+## GPU, pass by pass
+
+`UA_GL_TRACE=<s>` logs one whole frame every `<s>` seconds ([runtime.md](runtime.md)): its passes
+(each `glBindFramebuffer` of a draw framebuffer starts one), per pass the framebuffer and size,
+whether it starts with a clear or an invalidate (else a tiler loads the old contents), draws and
+vertices (index counts), blits and copies, and the GPU time of each pass (`UA_GL_TRACE_GPU`, default
+3: the host waits for the GPU at each pass's end, so passes run one at a time and each carries
+about 0.3 ms of submission and start-up on the RG34XX-SP; the frame's first pass also carries the
+vsync wait). `UA_GL_TRACE_START=<s>` puts the first traced frame past the menus: a traced frame
+is a long one, and a plan's `steady:` step waits for a second without long frames.
+`UA_GL_TRACE_DRAWS=<n>` then lists the frame's draws one by one with their programs' source hashes
+(the file names `UA_SHADER_DUMP` writes), samplers and textures, and depth, stencil and blend state:
+which shader each full-screen pass is, and whether a pass's depth/stencil buffer ever matters. A
+dumped shader's uniforms and samplers (`_GrabTexture`, `_Bloom`, `_RgbTex`, ...) name it; the
+game's Shader assets (UnityPy: `m_ParsedForm.m_Name`, `m_PropInfo`, the passes' `m_Type`, 2 = a
+grab pass) confirm which.
+
+Two things to check before reading a trace: that the frame is the scene meant (a plan's `shot`
+step, then look at `shot-<n>.ppm`: a Hollow Knight plan that stopped one press short measured the
+main menu for a day), and that the timings come from the clock the game runs at (`freq.log`: the
+Mali's governor moves between 600 and 696 MHz).
+
+### Hollow Knight, King's Pass (6000.0, 64-bit)
+
+Reaching it from a cold start takes the menu's own load, then Start Game and the save slot; the
+64-bit build reaches the save with 40 - 50 MB of memory available and swaps while it loads (one
+load took 30 s), so the bench's memory watchdog line is lowered:
+
+```sh
+export DEVICE=adb ARCH=arm64 UA_PAD_NAME='Nintendo Switch Pro Controller' UA_MEM_MIN=20 MEASURE=25
+export PLAN='log:find GameCameras; hitch:2500; steady:3; sleep:2; press:0:b; sleep:6; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5; shot'
+tools/device/profbench.sh /userdata/uatest/hk64 trace UA_GL_TRACE=4 UA_GL_TRACE_START=90 MEASURE=40
+```
+
+(the third press lands while the save loads when the second one already started it). One frame:
+24 passes, about 90 draws (`glDrawElements`, two `glDrawElementsBaseVertexOES`), 13,500 indices.
+The GPU time per pass, median of 72 traced frames (serialized; each includes about 0.3 ms of
+submission and start-up):
+
+| passes | what | ms |
+|---|---|---|
+| 576x360 x6 | the background layer's camera (7 sprites) into its own target, a two-iteration separable blur (4 passes), the result back into its target | 2.4 + 4.7 + 0.6 |
+| 720x480 | two black bars into the window (the picture is 720x450) | 1.0 |
+| 720x450 x4 | the scene: clear, the blurred background, ~50 sprites and particles (the game's dynamic batches: 2970 and 3948 indices) | 3.8 + 3.2 + 6.0 + 5.7 |
+| 720x450 x3 | between those: three grab passes (blend-mode sprites: screen, overlay, vivid light, each `GrabPass {}`), each a full-screen copy of the scene's colour texture by Unity's internal blit program into another framebuffer | 0.8 + 0.7 + 0.8 |
+| 180x112 x5 | bloom: downsample, two blur iterations | 1.9 |
+| 720x450 x2 | bloom composite, colour correction (`_RgbTex` curves) | 0.9 + 1.3 |
+| 720x450 | brightness/contrast back into the scene's target, then the HUD (14 draws) | 1.5 |
+| 720x450 | the result copied into the window | 1.2 |
+
+About 36.6 ms serialized, about 29 ms of GPU work once the per-pass overhead is taken off; the
+frame takes 32.7 ms (30.6 fps) and UnityMain is on a CPU 80 % of it: the GPU and the main thread
+are both near their limits here. Each grab pass makes the camera leave its framebuffer and come
+back: the Mali stores its colour and depth/stencil buffers and loads them again. The depth/stencil
+buffer never changes after its clear (the sprites test depth with writes off, the stencil
+operations keep), so `UA_GL_DSCLEAR` (runtime/host/glopt.c, on by default) clears it again
+instead of loading it: 30.6 -> 32.4 fps (two runs each; the main menu, 6 grab passes a frame,
+36.1 -> 38.7; the 32-bit build in King's Pass 31.8 -> 32.5, one run each). Exact: the buffer gets
+the values it holds.
+
+What did not pay, or is not exact:
+
+| change | result |
+|---|---|
+| invalidate the grab copy's target before Unity's blit (it overwrites every pixel; exact) | 36.1 -> 36.2 (menu): the copy's load is not what costs |
+| invalidate the depth/stencil buffer when the camera leaves its framebuffer (not exact if the depth texture is read later) | nothing over `UA_GL_DSCLEAR` (38.7 -> 38.6, menu): the stores are cheap, the loads were not |
+| no grab copies at all (a measurement: the blend-mode sprites read a stale texture) | menu 36.1 -> 41.4 (+14 %), 41.7 with `UA_GL_DSCLEAR` |
+| the blend-mode shaders read the framebuffer instead (`GL_ARM_shader_framebuffer_fetch`, `gl_LastFragColorARM`, through `UA_SHADER_OVERRIDE`) with the grab copies left out | menu 41.8 (+16 % over no change); King's Pass 32.4 -> 35.0 - 35.3 (+8 % over `UA_GL_DSCLEAR`), screenshots that differ no more than two of the same run a second apart. Not exact: sprites of one batch that overlap see each other (with the grab, the picture before the batch), and the fetched colour is mediump; a data change (the shader's `GrabPass` removed, its GLSL rewritten) would be needed for a real option |
+| a window without depth/stencil (an EGL config with none; the two bars write the window's depth, nothing reads it; Android's "Disable Depth and Stencil" player setting does the same) | King's Pass 32.6 -> 32.8 (two runs each): noise |
+| GL_EXT_disjoint_timer_query per pass | the driver's answers cannot be right (0 ms for most of the scene's passes): `UA_GL_TRACE_GPU=3` instead |
+

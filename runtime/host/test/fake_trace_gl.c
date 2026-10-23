@@ -3,7 +3,12 @@
 // texture bound on each, the pixel pack buffer, one program (5) with a vec4 and a sampler uniform,
 // shader sources, and glReadPixels answering a fixed pixel per framebuffer. It records what the
 // tracer's reads leave behind: the bindings must be Unity's again afterwards.
+// The other draw entry points (Range, BaseVertex, Instanced BaseVertex, MultiDraw, Indirect),
+// glCopyTexSubImage2D, and EXT_disjoint_timer_query (in the extension string with FAKE_GL_TIMER=1):
+// a GL_TIME_ELAPSED_EXT query adds 1 ms per draw call made while it runs, 0.5 ms per clear, 2 ms
+// per blit, 0.25 ms per copy; beginning one while another runs, or ending none, counts an error.
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define GL_FRAMEBUFFER 0x8D40
@@ -43,17 +48,65 @@ int fake_read_fb, fake_draw_fb, fake_active = GL_TEXTURE0, fake_tex[8], fake_pbo
 int fake_vp[4];
 static int fake_error;
 
+// time queries
+#define GL_EXTENSIONS 0x1F03
+#define GL_TIME_ELAPSED_EXT 0x88BF
+#define GL_QUERY_COUNTER_BITS_EXT 0x8864
+#define GL_QUERY_RESULT_EXT 0x8866
+#define GL_QUERY_RESULT_AVAILABLE_EXT 0x8867
+int fake_begins, fake_query_errors, fake_flushes;
+static unsigned fake_next_query = 1, fake_running;   // the running query (0: none)
+static uint64_t fake_elapsed[1024];                  // ns per query
+static void work(uint64_t ns) { if (fake_running && fake_running < 1024) fake_elapsed[fake_running] += ns; }
+const unsigned char *glGetString(unsigned name)
+{
+    if (name != GL_EXTENSIONS) return (const unsigned char *)"fake";
+    return (const unsigned char *)(getenv("FAKE_GL_TIMER") ? "GL_OES_foo GL_EXT_disjoint_timer_query GL_EXT_bar" :
+                                                              "GL_OES_foo GL_EXT_disjoint_timer_query_webgl2");
+}
+void glFlush(void) { fake_flushes++; }
+int fake_finishes;
+void glFinish(void) { fake_finishes++; }
+// blending on (src alpha, 1 - src alpha), depth and stencil tests off, all colour channels written
+unsigned char glIsEnabled(unsigned cap) { return cap == 0x0BE2; }
+void glGenQueriesEXT(int n, unsigned *q) { for (int i = 0; i < n; i++) q[i] = fake_next_query++; }
+void glBeginQueryEXT(unsigned t, unsigned q)
+{
+    if (t != GL_TIME_ELAPSED_EXT) return;
+    if (fake_running || q == 0 || q >= 1024) { fake_query_errors++; return; }
+    fake_running = q; fake_elapsed[q] = 0; fake_begins++;
+}
+void glEndQueryEXT(unsigned t) { if (t != GL_TIME_ELAPSED_EXT) return; if (!fake_running) fake_query_errors++; fake_running = 0; }
+void glBeginQuery(unsigned t, unsigned q) { glBeginQueryEXT(t, q); }
+void glEndQuery(unsigned t) { glEndQueryEXT(t); }
+void glGetQueryivEXT(unsigned t, unsigned p, int *v) { *v = t == GL_TIME_ELAPSED_EXT && p == GL_QUERY_COUNTER_BITS_EXT ? 32 : 0; }
+void glGetQueryObjectuivEXT(unsigned q, unsigned p, unsigned *v)
+{ *v = p == GL_QUERY_RESULT_AVAILABLE_EXT ? q != fake_running : q < 1024 ? (unsigned)fake_elapsed[q] : 0; }
+void glGetQueryObjectui64vEXT(unsigned q, unsigned p, uint64_t *v) { (void)p; *v = q < 1024 ? fake_elapsed[q] : 0; }
+
 void glBindFramebuffer(unsigned t, unsigned fb)
 {
     if (t == GL_FRAMEBUFFER || t == GL_READ_FRAMEBUFFER) fake_read_fb = (int)fb;
     if (t == GL_FRAMEBUFFER || t == GL_DRAW_FRAMEBUFFER) fake_draw_fb = (int)fb;
 }
 void glViewport(int x, int y, int w, int h) { fake_vp[0] = x; fake_vp[1] = y; fake_vp[2] = w; fake_vp[3] = h; }
-void glClear(unsigned m) { (void)m; }
-void glDrawArrays(unsigned m, int f, int c) { (void)m; (void)f; (void)c; }
-void glDrawElements(unsigned m, int c, unsigned t, const void *i) { (void)m; (void)c; (void)t; (void)i; }
+void glClear(unsigned m) { (void)m; work(500000); }
+void glDrawArrays(unsigned m, int f, int c) { (void)m; (void)f; (void)c; work(1000000); }
+void glDrawElements(unsigned m, int c, unsigned t, const void *i) { (void)m; (void)c; (void)t; (void)i; work(1000000); }
+void glDrawRangeElements(unsigned m, unsigned s, unsigned e, int c, unsigned t, const void *i)
+{ (void)m; (void)s; (void)e; (void)c; (void)t; (void)i; work(1000000); }
+void glDrawElementsBaseVertex(unsigned m, int c, unsigned t, const void *i, int b)
+{ (void)m; (void)c; (void)t; (void)i; (void)b; work(1000000); }
+void glDrawElementsBaseVertexOES(unsigned m, int c, unsigned t, const void *i, int b)
+{ (void)m; (void)c; (void)t; (void)i; (void)b; work(1000000); }
+void glDrawElementsInstancedBaseVertex(unsigned m, int c, unsigned t, const void *i, int n, int b)
+{ (void)m; (void)c; (void)t; (void)i; (void)n; (void)b; work(1000000); }
+void glMultiDrawArraysEXT(unsigned m, const int *f, const int *c, int n) { (void)m; (void)f; (void)c; (void)n; work(1000000); }
+void glDrawArraysIndirect(unsigned m, const void *p) { (void)m; (void)p; work(1000000); }
+void glCopyTexSubImage2D(unsigned t, int l, int xo, int yo, int x, int y, int w, int h)
+{ (void)t; (void)l; (void)xo; (void)yo; (void)x; (void)y; (void)w; (void)h; work(250000); }
 void glBlitFramebuffer(int a, int b, int c, int d, int e, int f, int g, int h, unsigned m, unsigned fl)
-{ (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)m; (void)fl; }
+{ (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)m; (void)fl; work(2000000); }
 void glUseProgram(unsigned p) { fake_prog = (int)p; }
 void glActiveTexture(unsigned u) { fake_active = (int)u; }
 void glBindTexture(unsigned t, unsigned tex) { (void)t; fake_tex[fake_active - GL_TEXTURE0] = (int)tex; }
@@ -71,6 +124,9 @@ void glGetIntegerv(unsigned p, int *v)
     case GL_CURRENT_PROGRAM: *v = fake_prog; break;
     case GL_PIXEL_PACK_BUFFER_BINDING: *v = fake_pbo; break;
     case GL_SAMPLE_BUFFERS: *v = 0; break;
+    case 0x80C9: *v = 0x0302; break;                             // GL_BLEND_SRC_RGB
+    case 0x80C8: *v = 0x0303; break;                             // GL_BLEND_DST_RGB
+    case 0x0C23: v[0] = v[1] = v[2] = v[3] = 1; break;           // GL_COLOR_WRITEMASK
     default: *v = 0;
     }
 }
