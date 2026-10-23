@@ -41,6 +41,7 @@ DEFAULTS = {
     'files': r'.',               # regex on the relative path: which files to look at
     'threads': 0,                # encoder threads, 0 = all cores
     'pipeline': 'auto',          # decode the next texture while one is encoded: true | false | auto
+    'prepare_split': True,       # big textures decoded and scaled in strips on every core (same pixels)
                                  # (on, but on a system with under 2 GB of RAM a texture of more than
                                  # 16 MB decoded is decoded and encoded alone)
     'strips': True,              # big single-level textures kept at their size: decoded and encoded
@@ -317,10 +318,83 @@ def mem_total_mb():
     return 1 << 20
 
 
-def _prepare(o, ch, fmt_name=None):
-    """Decoded and scaled mip levels of one texture (runs on the worker thread)."""
-    img = texture_image(o.read().image, fmt_name)
-    return mip_chain(downscale(img, ch.width, ch.height), ch.mips)
+PREP_MIN_PX = 1 << 20           # textures from this size up are decoded and scaled on every core
+
+
+def decode_parallel(o, tex, pool, cores):
+    """tex.image (UnityPy's decoder, top row first) decoded a strip of block rows per task: block
+    formats decode every block on its own, so the pixels are the same as one decode. None when the
+    data cannot be cut in rows (as strip_blocks)."""
+    from UnityPy.enums import BuildTarget, TextureFormat as TF
+    from UnityPy.export import Texture2DConverter as C
+    from PIL import Image
+    fmt = TF(tex.m_TextureFormat)
+    platform = getattr(o, 'platform', BuildTarget.UnknownPlatform)
+    blob = getattr(tex, 'm_PlatformBlob', None)
+    if 'Crunched' in fmt.name or platform == BuildTarget.XBOX360 or \
+            C.TextureSwizzler.is_switch_swizzled(platform, blob):
+        return None
+    w, h, raw = tex.m_Width, tex.m_Height, tex.get_image_data()      # (streamed data read as .image does)
+    bs = C.TEXTURE_FORMAT_BLOCK_SIZE_TABLE.get(fmt)
+    bh = bs[1] if bs else 1
+    units = C.get_compressed_image_size(w, h, fmt)[1] // bh
+    if not raw or not units or len(raw) % units:
+        return None
+    per = len(raw) // units
+    rows = max(bh, -(-h // (4 * cores)) // bh * bh)      # a few strips per core
+    version = getattr(o, 'version', (0, 0, 0, 0))
+
+    def strip(y):
+        sh = min(rows, h - y)
+        part = raw[y // bh * per:-(-(y + sh) // bh) * per]
+        return y, C.parse_image_data(part, w, sh, fmt, version, platform, blob, flip=False)
+    img = None
+    for y, part in pool.map(strip, range(0, h, rows)):               # rows bottom first, as stored
+        img = img or Image.new(part.mode, (w, h))
+        img.paste(part, (0, y))
+    return img.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+
+
+def downscale_parallel(img, w, h, pool, cores):
+    """downscale() a strip of output rows per task (Pillow's box= reads the rows around each strip
+    as one resize would). Only where every strip edge falls on a whole source row and the strip's
+    scale is the whole image's, so each output row gets the same filter: the same pixels as
+    downscale(). None otherwise."""
+    from math import gcd
+    from PIL import Image
+    W, H = img.size
+    if (W, H) == (w, h):
+        return img
+    unit = h // gcd(H, h)                                    # output rows per whole number of source rows
+    n = min(4 * cores, h // unit)
+    if n < 2:
+        return None
+    bounds = [round(i * (h // unit) / n) * unit for i in range(n + 1)]
+    if any(abs((b1 * H // h - b0 * H // h) / (b1 - b0) - H / h) > 0 for b0, b1 in zip(bounds, bounds[1:])):
+        return None
+    pm = img.convert('RGBa')
+
+    def strip(i):
+        y0, y1 = bounds[i], bounds[i + 1]
+        return y0, pm.resize((w, y1 - y0), Image.Resampling.LANCZOS, box=(0, y0 * H // h, W, y1 * H // h))
+    out = Image.new('RGBa', (w, h))
+    for y0, part in pool.map(strip, range(n)):
+        out.paste(part, (0, y0))
+    return out.convert('RGBA')
+
+
+def _prepare(o, ch, fmt_name=None, pool=None, cores=1):
+    """Decoded and scaled mip levels of one texture (runs on the worker thread; with pool, a big
+    texture's decoding and scaling are split over every core, with the same pixels)."""
+    if pool is None or ch is None:
+        img = texture_image(o.read().image, fmt_name)
+        return mip_chain(downscale(img, ch.width, ch.height), ch.mips)
+    tex = o.read()
+    big = tex.m_Width * tex.m_Height >= PREP_MIN_PX
+    img = (big and decode_parallel(o, tex, pool, cores)) or tex.image
+    img = texture_image(img, fmt_name)
+    small = (big and downscale_parallel(img, ch.width, ch.height, pool, cores)) or downscale(img, ch.width, ch.height)
+    return mip_chain(small, ch.mips)
 
 
 def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None):
@@ -338,13 +412,14 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
     sizes, save, converted = {}, [], 0
     items = [(pid, o, o.read_typetree()) for pid, o in lf.objects('Texture2D')]   # (no reads later)
     pool = ThreadPoolExecutor(max_workers=1) if c.get('pipeline', True) else None
+    prep = ThreadPoolExecutor(max_workers=enc.threads) if c.get('prepare_split', True) else None
     solo_px = (16 << 20) // 4 if c.get('pipeline', True) == 'auto' and mem_total_mb() < 2048 else None
     pending = []
 
     def finish():
         while pending:
             pid, o, t, sd, streamed, ch, fut = pending.pop(0)
-            levels = fut.result() if pool else _prepare(o, ch, _format_name(t))
+            levels = fut.result() if pool else _prepare(o, ch, _format_name(t), prep, enc.threads)
             blob = b''.join(enc.encode(level, ch.block) for level in levels)
             nlevels = len(levels)
             del levels
@@ -399,7 +474,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
             solo = pool and solo_px and t['m_Width'] * t['m_Height'] > solo_px
             if solo:                                       # a big one on a small system: alone
                 finish()
-            fut = pool.submit(_prepare, o, ch, _format_name(t)) if pool else None
+            fut = pool.submit(_prepare, o, ch, _format_name(t), prep, enc.threads) if pool else None
             finish()                                       # the previous one, while this one is prepared
             pending.append((pid, o, t, sd, streamed, ch, fut))
             if solo:
@@ -408,6 +483,8 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
     finally:
         if pool:
             pool.shutdown(wait=True)
+        if prep:
+            prep.shutdown(wait=True)
     if not converted:
         return None
     if stream_name:
