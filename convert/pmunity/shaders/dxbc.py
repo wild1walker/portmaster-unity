@@ -37,6 +37,26 @@ entry (blob.Entry) holds one stage:
          SerializedSubProgram that uses the entry (check_parsed_form: Unity writes both from the
          same compile).
 
+         Unity 6000.6 (serializer 202605290) writes the parameter entry otherwise (Bindings.parse
+         with typed=True reads it; only the Vulkan path asks for it so far): each binding is
+         Unity's Binding struct, (int32 encoded data, int32 slot), the slot what the index was
+         (0 encoded data in all data seen), and the lists are by kind:
+           int32 n; n x constant buffer: string name, int32 size,
+               int32 n; n x vector (string name, int32 dimension | type << 16, int32 array size,
+                                    int32 offset)
+               int32 n; n x matrix (string name, int32 rows | type << 16, int32 array size,
+                                    int32 offset; 4 columns)
+               int32 n; n x struct: string name, int32 offset, int32 array size, int32 size,
+                                    its vectors and matrices as above
+           int32 n; n x texture: string name, binding, sampler binding (slot -1: an inline
+                                 sampler state), int32 dimension << 1 | multisampled
+           int32 n; n x UAV: string name, binding, original binding
+           int32 n; n x constant buffer binding: string name, binding
+           int32 n; n x buffer: string name, binding, 2 x int32 (1, 1 in all data seen)
+           int32 n; n x inline sampler: binding, int32 the sampler state
+         Read into the same Bindings (a binding's extra ints as the kind's before, its encoded
+         data in enc) and written back in its own layout (Bindings.typed).
+
 Only the names and constant buffer layouts are missing from the bytecode; registers, resource
 types and sampler modes come from the declarations in the SHDR/SHEX chunk. with_reflection()
 puts both back together as an RDEF chunk in the form HLSLcc reads (D3D11_SHADER_DESC tables:
@@ -169,16 +189,24 @@ PACKED_TEXTURE_FROM = 201802150
 # entries of their own)
 SERIALIZERS = (201708220, 201802150, 201806140, 202012090)
 SEPARATE_PARAMS_FROM = 202012090
+# serializer of Unity 6000.6's binding info: typed lists, bindings as (encoded data, slot) (see above)
+TYPED_FROM = 202605290
 
 
 class Binding:
-    KIND_TEXTURE, KIND_CBUFFER, KIND_SAMPLER = 0, 1, 4
+    KIND_TEXTURE, KIND_CBUFFER, KIND_BUFFER, KIND_UAV, KIND_SAMPLER = 0, 1, 2, 3, 4
     EXTRA = {KIND_TEXTURE: 2, KIND_CBUFFER: 1, KIND_SAMPLER: 1}     # ints after the index, by kind
-    __slots__ = ('name', 'kind', 'index', 'extra', 'packed')
+    TYPED_ORDER = (KIND_TEXTURE, KIND_UAV, KIND_CBUFFER, KIND_BUFFER, KIND_SAMPLER)   # 6000.6's lists
+    __slots__ = ('name', 'kind', 'index', 'extra', 'packed', 'enc')
 
-    def __init__(self, name, kind, index, extra, packed=False):
+    def __init__(self, name, kind, index, extra, packed=False, enc=None):
         self.name, self.kind, self.index, self.extra = name, kind, index, list(extra)
         self.packed = packed
+        # 6000.6 (typed): the encoded data of the binding (textures: and of the sampler's; UAVs:
+        # and of the original binding); extra then: texture [sampler slot, dimension << 1 |
+        # multisampled], UAV [original slot], buffer [2 ints], inline sampler [state], none for a
+        # constant buffer
+        self.enc = None if enc is None else tuple(enc)
 
     @property
     def dim(self):
@@ -195,7 +223,7 @@ class Binding:
         return self.extra[0] if self.packed else self.extra[1]
 
     def key(self):
-        return (self.name, self.kind, self.index, tuple(self.extra))
+        return (self.name, self.kind, self.index, tuple(self.extra)) + ((self.enc,) if self.enc is not None else ())
 
     def __repr__(self):
         return f'{self.name}:{self.kind}/{self.index}'
@@ -205,17 +233,50 @@ def _params(r):
     return [Param(r.string(), *(r.i32() for _ in range(6))) for _ in range(r.count())]
 
 
+def _typed_members(r):
+    """6000.6: a constant buffer's (or struct's) vectors and matrices -> [Param]."""
+    out = []
+    for matrix in (0, 1):
+        for _ in range(r.count()):
+            name, packed, array, offset = r.string(), r.i32(), r.i32(), r.i32()
+            n, typ = packed & 0xffff, packed >> 16
+            out.append(Param(name, typ, n, 4, 1, array, offset) if matrix else Param(name, typ, 1, n, 0, array, offset))
+    return out
+
+
+def _typed_members_bytes(params):
+    out = bytearray()
+    for matrix in (0, 1):
+        ps = [p for p in params if bool(p.is_matrix) == bool(matrix)]
+        out += struct.pack('<i', len(ps))
+        for p in ps:
+            if matrix and (p.cols != 4 or p.is_matrix != 1):
+                raise Unsupported(f'matrix {p.name} of {p.rows}x{p.cols}: not in the 6000.6 layout')
+            if not matrix and (p.rows != 1 or p.is_matrix != 0):
+                raise Unsupported(f'vector {p.name} of {p.rows} rows: not in the 6000.6 layout')
+            n = p.rows if matrix else p.cols
+            if not 0 <= n <= 0xffff:
+                raise Unsupported(f'parameter {p.name}: size {n} not in the 6000.6 layout')
+            out += _wstr(p.name) + struct.pack('<3i', n | p.type << 16, p.array, p.offset)
+    return bytes(out)
+
+
 class Bindings:
     """Unity's binding info of one entry (the bytes after its code; 2021.2+: and its parameter
-    entry's)."""
+    entry's). typed: in Unity 6000.6's layout (see the module docstring), written back so."""
 
-    def __init__(self, source_map, channels, cbuffers, bindings):
+    def __init__(self, source_map, channels, cbuffers, bindings, typed=False):
         self.source_map, self.channels = source_map, channels
         self.cbuffers, self.bindings = cbuffers, bindings
+        self.typed = typed
 
     @classmethod
-    def parse(cls, data, serializer=None):
-        """serializer: the entry's serializer version (texture bindings changed in 2018.2)."""
+    def parse(cls, data, serializer=None, typed=False):
+        """serializer: the entry's serializer version (texture bindings changed in 2018.2).
+        typed: read Unity 6000.6's layout where the serializer is 6000.6's (TYPED_FROM; else the
+        entry is read as before, and 6000.6's does not match it)."""
+        if typed and serializer is not None and serializer >= TYPED_FROM:
+            return cls._parse_typed(data)
         packed = serializer is not None and serializer >= PACKED_TEXTURE_FROM
         r = _Reader(data)
         try:
@@ -240,6 +301,49 @@ class Bindings:
             raise Unsupported('binding info does not match the known layout (round trip)')
         return b
 
+    @classmethod
+    def _parse_typed(cls, data):
+        r = _Reader(data)
+        K = Binding
+        try:
+            source_map = r.i32()
+            channels = [(r.i32(), r.i32()) for _ in range(r.count(64))]
+            cbs = []
+            for _ in range(r.count(256)):
+                name, size = r.string(), r.i32()
+                params = _typed_members(r)
+                structs = [StructParam(r.string(), r.i32(), r.i32(), r.i32(), _typed_members(r)) for _ in range(r.count(64))]
+                cbs.append(ConstantBuffer(name, size, params, structs))
+            binds = []
+            for kind in K.TYPED_ORDER:
+                for _ in range(r.count(256)):
+                    name = r.string() if kind != K.KIND_SAMPLER else ''
+                    enc, slot = r.i32(), r.i32()
+                    if kind == K.KIND_TEXTURE:
+                        senc, sslot, dim = r.i32(), r.i32(), r.i32()
+                        binds.append(K(name, kind, slot, [sslot, dim], True, (enc, senc)))
+                    elif kind == K.KIND_UAV:
+                        oenc, oslot = r.i32(), r.i32()
+                        binds.append(K(name, kind, slot, [oslot], True, (enc, oenc)))
+                    elif kind == K.KIND_BUFFER:
+                        binds.append(K(name, kind, slot, [r.i32(), r.i32()], True, (enc,)))
+                    elif kind == K.KIND_SAMPLER:
+                        binds.append(K(name, kind, slot, [r.i32()], True, (enc,)))
+                    else:
+                        binds.append(K(name, kind, slot, [], True, (enc,)))
+        except (struct.error, ValueError, UnicodeDecodeError) as ex:
+            raise Unsupported(f'binding info does not match the 6000.6 layout ({ex})')
+        b = cls(source_map, channels, cbs, binds, typed=True)
+        if r.p != len(data) or b.serialize() != bytes(data):
+            raise Unsupported('binding info does not match the 6000.6 layout (round trip)')
+        for x in binds:
+            if x.kind in (K.KIND_BUFFER, K.KIND_UAV):
+                raise Unsupported(f'binding {x.name!r} of kind {x.kind} ({"buffer" if x.kind == K.KIND_BUFFER else "UAV"}): '
+                                  f'not supported')
+            if any(x.enc):
+                raise Unsupported(f'binding {x.name!r} with encoded data {x.enc} (6000.6): not understood')
+        return b
+
     def head(self):
         """The source map and vertex inputs (2021.2+: all of the code entry's binding info)."""
         out = bytearray(struct.pack('<ii', self.source_map, len(self.channels)))
@@ -249,6 +353,8 @@ class Bindings:
 
     def params_bytes(self):
         """Constant buffers and bindings (2021.2+: a parameter entry's data)."""
+        if self.typed:
+            return self._params_bytes_typed()
         out = bytearray(struct.pack('<i', len(self.cbuffers)))
         for cb in self.cbuffers:
             out += _wstr(cb.name) + struct.pack('<ii', cb.size, len(cb.params))
@@ -264,14 +370,44 @@ class Bindings:
             out += _wstr(b.name) + struct.pack('<ii', b.kind, b.index) + struct.pack('<%di' % len(b.extra), *b.extra)
         return bytes(out)
 
+    def _params_bytes_typed(self):
+        K = Binding
+        out = bytearray(struct.pack('<i', len(self.cbuffers)))
+        for cb in self.cbuffers:
+            out += _wstr(cb.name) + struct.pack('<i', cb.size) + _typed_members_bytes(cb.params)
+            out += struct.pack('<i', len(cb.structs))
+            for st in cb.structs:
+                out += _wstr(st.name) + struct.pack('<3i', st.offset, st.array, st.size) + _typed_members_bytes(st.params)
+        kinds = {b.kind for b in self.bindings}
+        if kinds - set(K.TYPED_ORDER):
+            raise Unsupported(f'binding kinds {sorted(kinds - set(K.TYPED_ORDER))} not in the 6000.6 layout')
+        for kind in K.TYPED_ORDER:
+            bs = [b for b in self.bindings if b.kind == kind]
+            out += struct.pack('<i', len(bs))
+            for b in bs:
+                want = {K.KIND_TEXTURE: (2, 2), K.KIND_UAV: (2, 1), K.KIND_BUFFER: (1, 2), K.KIND_SAMPLER: (1, 1),
+                        K.KIND_CBUFFER: (1, 0)}[kind]          # (encoded data ints, extra ints)
+                enc = b.enc if b.enc is not None else (0,) * want[0]
+                if len(enc) != want[0] or len(b.extra) != want[1]:
+                    raise Unsupported(f'binding {b.name!r} (kind {kind}): {b.extra} not in the 6000.6 layout')
+                if kind != K.KIND_SAMPLER:
+                    out += _wstr(b.name)
+                out += struct.pack('<ii', enc[0], b.index)
+                if kind in (K.KIND_TEXTURE, K.KIND_UAV):
+                    out += struct.pack('<ii', enc[1], b.extra[0]) + struct.pack('<%di' % (len(b.extra) - 1), *b.extra[1:])
+                else:
+                    out += struct.pack('<%di' % len(b.extra), *b.extra)
+        return bytes(out)
+
     def serialize(self):
         return self.head() + self.params_bytes()
 
 
-def entry_bindings(entry, param_entry=None):
-    """The Bindings of a blob entry (2021.2+: with its parameter entry)."""
+def entry_bindings(entry, param_entry=None, typed=False):
+    """The Bindings of a blob entry (2021.2+: with its parameter entry). typed: read 6000.6's
+    layout (Bindings.parse)."""
     data = entry.rest + (param_entry.data if param_entry is not None else b'')
-    return Bindings.parse(data, entry.version)
+    return Bindings.parse(data, entry.version, typed)
 
 
 def _parameters(sp):
@@ -295,16 +431,18 @@ def with_common(bindings, common, names):
     cbs = [ConstantBuffer(cb.name, cb.size, list(cb.params), cb.structs) for cb in bindings.cbuffers]
     binds = list(bindings.bindings)
     packed = True                       # (2020.1+: textures as sampler index, dimension << 1 | multisampled)
+    typed = bindings.typed              # (6000.6: offsets m_OffsetInConstantBuffer, bindings m_Binding structs)
     used = set()
+    off = 'm_OffsetInConstantBuffer' if typed else 'm_Index'
     for c in common.get('m_ConstantBuffers') or []:
         name = names.get(c['m_NameIndex'])
         if name is None:
             raise Unsupported('shared constant buffer without a name')
         if c.get('m_StructParams'):
             raise Unsupported(f'constant buffer {name!r} has struct members (instancing data)')
-        params = [Param(names[v['m_NameIndex']], v['m_Type'], 1, v['m_Dim'], 0, v['m_ArraySize'], v['m_Index'])
+        params = [Param(names[v['m_NameIndex']], v['m_Type'], 1, v['m_Dim'], 0, v['m_ArraySize'], v[off])
                   for v in c.get('m_VectorParams') or []]
-        params += [Param(names[m['m_NameIndex']], m['m_Type'], m['m_RowCount'], 4, 1, m['m_ArraySize'], m['m_Index'])
+        params += [Param(names[m['m_NameIndex']], m['m_Type'], m['m_RowCount'], 4, 1, m['m_ArraySize'], m[off])
                    for m in c.get('m_MatrixParams') or []]
         mine = next((i for i, cb in enumerate(cbs) if cb.name == name and i not in used), None)
         if mine is None:
@@ -313,6 +451,23 @@ def with_common(bindings, common, names):
         else:
             used.add(mine)
             cbs[mine].params = sorted(cbs[mine].params + params, key=lambda p: p.offset)
+    if typed:
+        for b in common.get('m_ConstantBufferBindings') or []:
+            enc, slot = _typed_binding(b['m_Binding'])
+            if b.get('m_ArraySize', 1) != 1 or b.get('m_ResourceType', 1) != 1:
+                raise Unsupported(f'shared constant buffer binding {names[b["m_NameIndex"]]!r}: array or resource type')
+            binds.append(Binding(names[b['m_NameIndex']], Binding.KIND_CBUFFER, slot, [], packed, (enc,)))
+        for t in common.get('m_TextureParams') or []:
+            enc, slot = _typed_binding(t['m_Binding'])
+            senc, sslot = _typed_binding(t['m_SamplerBinding'])
+            binds.append(Binding(names[t['m_NameIndex']], Binding.KIND_TEXTURE, slot,
+                                 [sslot, t['m_Dim'] << 1 | int(bool(t['m_MultiSampled']))], packed, (enc, senc)))
+        for smp in common.get('m_Samplers') or []:
+            enc, slot = _typed_binding(smp['m_Binding'])
+            binds.append(Binding('', Binding.KIND_SAMPLER, slot, [smp['sampler']], packed, (enc,)))
+        if any(x.enc and any(x.enc) for x in binds):
+            raise Unsupported('shared parameters with encoded binding data (6000.6): not understood')
+        return Bindings(bindings.source_map, bindings.channels, cbs, binds, typed=True)
     for b in common.get('m_ConstantBufferBindings') or []:
         binds.append(Binding(names[b['m_NameIndex']], Binding.KIND_CBUFFER, b['m_Index'], [0], packed))
     for t in common.get('m_TextureParams') or []:
@@ -322,6 +477,13 @@ def with_common(bindings, common, names):
     for smp in common.get('m_Samplers') or []:
         binds.append(Binding('', Binding.KIND_SAMPLER, smp['bindPoint'], [smp['sampler']], packed))
     return Bindings(bindings.source_map, bindings.channels, cbs, binds)
+
+
+def _typed_binding(b):
+    """6000.6: (encoded data, slot) of a Binding struct of the parsed form (as int32s, as the blob has them)."""
+    def i32(v):
+        return v - (1 << 32) if v >= 1 << 31 else v
+    return i32(b['m_EncodedData']), i32(b['m_Slot'])
 
 
 def check_parsed_form(bindings, sp, names):
@@ -459,10 +621,12 @@ def gl_declarations(src, arrays=None):
     return [it for _, it in sorted(items, key=lambda x: x[0])]
 
 
-def gl_bindings(code, unity, source_map=0, arrays=None):
+def gl_bindings(code, unity, source_map=0, arrays=None, typed=False):
     """The binding info Unity's GL compiler (2019.1+) gives a GL program (Bindings). code: the
     program (#ifdef VERTEX / FRAGMENT blocks); unity: (major, minor); arrays: {name: array size}
-    of the uniforms where known (gl_declarations).
+    of the uniforms where known (gl_declarations); typed: in 6000.6's layout (Bindings.typed:
+    the same buffers and bindings, the "$Globals" binding at slot -1, as Unity's 6000.6 GL
+    programs have it).
 
     Constant buffers: the empty one, then per stage in HLSLcc's order (fragment first) a
     "$Globals" of its loose uniforms (gl_globals_layout; vectors listed before matrices) and its
@@ -504,7 +668,8 @@ def gl_bindings(code, unity, source_map=0, arrays=None):
                 params, size = gl_globals_layout(mem, max(unity, (2020, 1)))
                 params = [p for p in params if not p.name.startswith('Xhlslcc_UnusedX')]
                 blocks.append((ConstantBuffer(name, size, _vectors_then_matrices(params)),
-                               Binding(name, Binding.KIND_CBUFFER, binding, [0], True)))
+                               Binding(name, Binding.KIND_CBUFFER, binding, [] if typed else [0], True,
+                                       (0,) if typed else None)))
                 if unity < (2022, 1):
                     cbs.append(blocks[-1][0])
             else:
@@ -513,18 +678,20 @@ def gl_bindings(code, unity, source_map=0, arrays=None):
                     name = name[len('hlslcc_zcmp'):]
                 if name not in seen_tex:
                     seen_tex.add(name)
-                    texs.append(Binding(name, Binding.KIND_TEXTURE, unit, [unit, dim << 1 | int(ms)], True))
+                    texs.append(Binding(name, Binding.KIND_TEXTURE, unit, [unit, dim << 1 | int(ms)], True,
+                                        (0, 0) if typed else None))
     binds = texs
     if unity >= (2022, 1):
         if merged is not None:
             merged.params = _vectors_then_matrices(merged.params)
             cbs.append(merged)
-            binds = binds + [Binding('$Globals', Binding.KIND_CBUFFER, 0, [0], True)]
+            binds = binds + [Binding('$Globals', Binding.KIND_CBUFFER, -1, [], True, (0,)) if typed else
+                             Binding('$Globals', Binding.KIND_CBUFFER, 0, [0], True)]
         cbs += [cb for cb, _ in blocks[::-1]]
         binds += [b for _, b in blocks[::-1]]
     else:
         binds = binds + [b for _, b in blocks]
-    return Bindings(source_map, [], cbs, binds)
+    return Bindings(source_map, [], cbs, binds, typed=typed)
 
 
 def gl_stages(code):

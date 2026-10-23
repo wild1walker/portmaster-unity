@@ -266,6 +266,59 @@ class TranslateTest(unittest.TestCase):
         self.assertEqual([b.name for b in info.bindings], ['_MainTex', '$Globals'][:len(info.bindings)])
         self.assertEqual(V.add_gles3_vulkan(tree, self.tr).status, 'unchanged')
 
+    def test_shader_6000_6(self):
+        """Unity 6000.6 (serializer 202605290): the parameter entries in 6000.6's layout, read and written
+        so; the shared parameters (6000.6's names) put back into the Vulkan parameter entry."""
+        ser = D.TYPED_FROM
+        own = D.Bindings(25, [(0, 13), (4, 14)], [
+            D.ConstantBuffer('', 0, []), D.ConstantBuffer('VGlobals1234', 80, [D.Param('_MainTex_ST', 0, 1, 4, 0, 0, 64)])],
+            [D.Binding('_MainTex', 0, 0x08000001, [0x08000000, 4], True, (0, 0)),
+             D.Binding('VGlobals1234', 1, 0x04010001, [], True, (0,))], typed=True)
+        code = B.Entry(ser, 25, [0, 0, 0, 0], [], vulkan_code([VERTEX, FRAGMENT]), own.head())
+        params = B.ParamEntry(ser, own.params_bytes())
+        self.assertEqual(D.entry_bindings(code, params, typed=True).serialize(), own.serialize())
+        raw = B.build_segments([code, params])
+        comp = lz4.block.compress(raw[0], store_size=False)
+        empty = ('m_VectorParams', 'm_MatrixParams', 'm_TextureParams', 'm_BufferParams', 'm_ConstantBuffers',
+                 'm_ConstantBufferBindings', 'm_UAVParams', 'm_Samplers')
+        common = {k: [] for k in empty}
+        common['m_ConstantBuffers'] = [{'m_NameIndex': 0, 'm_VectorParams': [], 'm_StructParams': [], 'm_Size': 80,
+                                        'm_IsPartialCB': True, 'm_MatrixParams': [
+                                            {'m_NameIndex': 1, 'm_OffsetInConstantBuffer': 0, 'm_ArraySize': 0, 'm_Type': 0,
+                                             'm_RowCount': 4}]}]
+        sp = {'m_BlobIndex': 0, 'm_Channels': {'m_Channels': [{'source': 0, 'target': 13}], 'm_SourceMap': 25},
+              'm_GlobalKeywordIndices': [], 'm_LocalKeywordIndices': [], 'm_ShaderHardwareTier': -1,
+              'm_GpuProgramType': 25, 'm_ShaderRequirements': 33}
+        prog = {'m_SubPrograms': [], 'm_PlayerSubPrograms': [[], [], [], [sp]], 'm_ParameterBlobIndices': [[], [], [], [1]],
+                'm_CommonParameters': common, 'm_SerializedKeywordStateMask': []}
+        tree = {'m_ParsedForm': {'m_Name': 'Test/Vulkan66', 'm_SubShaders': [{'m_Passes': [
+                    {'m_NameIndices': [['VGlobals1234', 0], ['unity_ObjectToWorld', 1]], 'm_Platforms': [18],
+                     'm_SerializedKeywordStateMask': [], 'progVertex': prog, 'progFragment': {}}]}]},
+                'platforms': [18], 'offsets': [[0]], 'compressedLengths': [[len(comp)]], 'decompressedLengths': [[len(raw[0])]],
+                'compressedBlob': list(comp), 'stageCounts': [1]}
+        r = V.add_gles3_vulkan(tree, self.tr, unity='6000.6.2f1')
+        self.assertEqual((r.status, r.programs, r.twins), ('converted', 1, 1), r.why)
+        p = tree['m_ParsedForm']['m_SubShaders'][0]['m_Passes'][0]
+        self.assertEqual(p['progVertex']['m_ParameterBlobIndices'][3], [1, 1])
+        es = C.platform_entries(tree, B.PLATFORM_GLES3PLUS)
+        self.assertEqual([type(e).__name__ for e in es], ['Entry', 'ParamEntry'])
+        self.assertEqual((es[0].version, es[1].version), (ser, ser))
+        self.assertTrue(es[0].code.startswith(b'#ifdef VERTEX\n#version 300 es\n'))
+        self.assertIn(b'uniform vec4 hlslcc_mtx4x4unity_ObjectToWorld[4];', es[0].code)
+        gl = D.entry_bindings(es[0], es[1], typed=True)
+        self.assertTrue(gl.typed)
+        self.assertEqual([(x.name, x.kind, x.index) for x in gl.bindings], [('_MainTex', 0, 0), ('$Globals', 1, -1)])
+        self.assertEqual([(p.name, p.offset) for cb in gl.cbuffers for p in cb.params],
+                         [('_MainTex_ST', 64), ('unity_ObjectToWorld', 0)])
+        with self.assertRaises(D.Unsupported):          # (not the layout of the lines before)
+            D.entry_bindings(es[0], es[1])
+        # the shared parameters are in the Vulkan parameter entry now, in its layout
+        blobs = B.ShaderBlobs(tree)
+        ves = blobs.entries(B.PLATFORM_VULKAN, {1}, {0})
+        vk = D.entry_bindings(ves[0], ves[1], typed=True)
+        self.assertEqual([p.name for p in vk.cbuffers[1].params], ['_MainTex_ST', 'unity_ObjectToWorld'])   # (vectors, matrices)
+        self.assertEqual(p['progVertex']['m_CommonParameters']['m_ConstantBuffers'], [])
+
 
 if __name__ == '__main__':
     unittest.main()

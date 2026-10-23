@@ -8,7 +8,8 @@ serialized file (and asset bundle under StreamingAssets): every Shader with Vulk
 Vulkan blob whose entries read and write back byte for byte and converts in memory
 with add_gles3_vulkan (nothing written; GLCore programs, where the shader has them too, are left
 as they are). Every GLES subprogram names a translated entry of its own type, every program is
-GLSL ES 3.00 or 3.10 with a vertex and a fragment stage. Where the same pass also has a GLCore
+GLSL ES 3.00 or 3.10 with a vertex and a fragment stage, and (2019.1+) its GL binding info reads
+back (6000.6: in that version's layout, dxbc.Bindings typed). Where the same pass also has a GLCore
 program of the variant (a Linux build with both APIs), the translated program's interface is
 compared with it: the uniforms, uniform blocks, samplers, vertex inputs and fragment outputs it
 declares (names and types; varyings by type, their names differ) should be the GL program's, or
@@ -29,6 +30,7 @@ from pmunity import unity_version as UV
 from pmunity.job import Job
 from pmunity.shaders import blob as B
 from pmunity.shaders import convert as C
+from pmunity.shaders import dxbc as D
 from pmunity.shaders import export as X
 from pmunity.shaders import glsl as G
 from pmunity.shaders import vulkan as V
@@ -145,6 +147,14 @@ class VulkanCorpusTest(unittest.TestCase):
                         c['GLES 3.1 programs'] += r.es31
                         ours = C.platform_entries(t, B.PLATFORM_GLES3PLUS)
                         gl = C.platform_entries(t, B.PLATFORM_GLCORE) if B.PLATFORM_GLCORE in t['platforms'] else None
+                        if v >= (2019, 1):
+                            # the twins' GL binding info reads back (6000.6: in its own layout)
+                            for _, _, lst, pbi in C.subprogram_lists(t):
+                                for j, sp in enumerate(lst):
+                                    e = ours[sp['m_BlobIndex']] if sp['m_GpuProgramType'] in (B.GPU_GLES3, B.GPU_GLES31) else None
+                                    if e is not None and e.code:
+                                        D.entry_bindings(e, ours[pbi[j]] if pbi is not None else None, typed=True)
+                                        c['GL binding info read back'] += 1
                         for p, _, lst in C.subprograms(t):
                             glsp = {C._variant_key(sp): sp for sp in lst if sp['m_GpuProgramType'] == B.GPU_GLCORE32}
                             for sp in lst:

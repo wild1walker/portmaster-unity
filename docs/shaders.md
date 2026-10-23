@@ -189,7 +189,7 @@ The other lines use these layouts too (their built-ins read and write back with 
 |---|---|---|
 | 5.5 - 2017.2 | 201609010, written as 201708220 (4 statistics, one keyword list) | one block per platform, `m_SubPrograms`; 5.x GraphicsSettings has no `m_ShaderDefinesPerShaderCompiler` |
 | 2023.1 - 6000.5 | 202012090 | as 2022.3 |
-| 6000.6 | 202605290, written as 202012090 | as 2022.3 |
+| 6000.6 | 202605290, written as 202012090 | as 2022.3; the parameter entries in a layout of their own (typed lists, bindings as Unity's (encoded data, slot) structs; `m_CommonParameters` with `m_OffsetInConstantBuffer`, `m_Binding`): the GL path keeps them as they are, the Vulkan path reads and writes them ([below](#vulkan-only-builds-vulkan-programs-spir-v)), the Direct3D 11 and Metal paths do not read them yet |
 
 5.5 writes 201609010 too but has not been checked (refused with the rest of 5.x before 5.6); 5.0 -
 5.4 keep their programs in another Shader layout (no `compressedBlob`).
@@ -526,6 +526,21 @@ What the path does (`vulkan.py`, `spirv.py`), for Unity 2017.4 - 6000.x:
    the constant buffers with the members the program reads, and the bindings, whose index is
    stage bits << 24 | descriptor set << 16 | binding (stage bits 4 vertex, 8 fragment, 64 geometry;
    a texture's first int its sampler's index alike). Every entry writes back byte for byte.
+   **6000.6** (serializer 202605290; 6000.5 still writes the layout above) lays the parameter entry
+   out anew (`dxbc.Bindings` with `typed`): a constant buffer's members as a vector list and a
+   matrix list, each (name, dimension or rows | type << 16, array size, offset), structs alike; then
+   the bindings as lists by kind, textures, UAVs, constant buffers, buffers, inline samplers, each
+   binding Unity's Binding struct (int32 encoded data, int32 slot: the slot is the index above, the
+   encoded data 0 in all data seen), a texture with its sampler's binding and dimension << 1 |
+   multisampled, an inline sampler without a name. The program's `m_CommonParameters` use 6000.6's
+   names too (`m_OffsetInConstantBuffer`, `m_Binding`, `m_SamplerBinding`, slots stored unsigned).
+   The GLES3 twins' GL binding info is written in that layout, as Unity's own 6000.6 GL programs
+   have it (the same buffers and bindings as before, the `$Globals` binding at slot -1):
+   `dxbc.gl_bindings` writes it byte for byte for 1450 of the 1526 GLCore programs of Phasing Gun,
+   IronQuiet and Cold Apples it reads (all without uniform blocks; the others differ as on the lines
+   before, a one-element array in a block, the order of several stages' blocks;
+   `tests/test_gl_bindings_corpus.py`), and for Unity's own GLES3 programs of the 6000.6.0b3
+   built-ins IronQuiet carries but three VR variants (66 of 69: the order of the stereo blocks).
 2. **Names.** Unity strips the modules' debug names (but some varyings'). The path names, in the
    SPIR-V (OpName / OpMemberName), everything the way Unity's GL backend binds HLSLcc's GL programs:
    vertex inputs by their channel (`in_POSITION0`, `in_NORMAL0`, `in_TANGENT0`, `in_COLOR0`,

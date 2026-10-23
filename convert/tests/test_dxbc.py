@@ -225,6 +225,136 @@ class BindingsTest(unittest.TestCase):
         self.assertEqual(D.gl_rest(13), struct.pack('<8i', 13, 0, 1, 0, 0, 0, 0, 0))
 
 
+def _s(name):
+    b = name.encode()
+    return struct.pack('<i', len(b)) + b + b'\0' * (-len(b) % 4)
+
+
+def _i(*v):
+    return struct.pack('<%di' % len(v), *v)
+
+
+# Unity 6000.6's binding info of a Vulkan program (the head, then its parameter entry), written out
+# by hand as the layout is described in dxbc's docstring
+TYPED_HEAD = _i(17, 2, 0, 13, 4, 14)
+TYPED_PARAMS = (
+    _i(4) +                                                         # constant buffers
+    _s('') + _i(0, 0, 0, 0) +                                       # the empty one
+    _s('PGlobals77') + _i(32, 2) + _s('_Color') + _i(4, 0, 0) + _s('_Steps') + _i(1 | 1 << 16, 0, 16) + _i(0, 0) +
+    _s('VGlobals77') + _i(208, 2) + _s('_MainTex_ST') + _i(4, 0, 192) + _s('_Weights') + _i(4, 8, 64) +
+    _i(1) + _s('unity_ObjectToWorld') + _i(4, 0, 0) + _i(0) +
+    _s('UnityInstancing_PerDraw0') + _i(4096, 0, 0, 1) + _s('unity_Builtins0Array') + _i(0, 32, 128, 0, 2) +
+    _s('unity_ObjectToWorldArray') + _i(4, 0, 0) + _s('unity_WorldToObjectArray') + _i(4, 0, 64) +
+    _i(2) + _s('_MainTex') + _i(0, 0x08000000, 0, -1, 4) + _s('_Noise') + _i(0, 0x08000002, 0, 0x08000003, 6) +
+    _i(0) +                                                         # UAVs
+    _i(2) + _s('PGlobals77') + _i(0, 0x08010000) + _s('VGlobals77') + _i(0, 0x04010001) +
+    _i(0) +                                                         # buffers
+    _i(1) + _i(0, 0x08000001, 84))                                  # an inline sampler state
+
+
+class TypedBindingsTest(unittest.TestCase):
+    """Unity 6000.6's binding info (serializer 202605290): typed lists, (encoded data, slot) bindings."""
+
+    def test_read_and_write_back(self):
+        data = TYPED_HEAD + TYPED_PARAMS
+        b = D.Bindings.parse(data, D.TYPED_FROM, typed=True)
+        self.assertTrue(b.typed)
+        self.assertEqual(b.serialize(), data)
+        self.assertEqual((b.head(), b.params_bytes()), (TYPED_HEAD, TYPED_PARAMS))
+        self.assertEqual((b.source_map, b.channels), (17, [(0, 13), (4, 14)]))
+        self.assertEqual([(cb.name, cb.size) for cb in b.cbuffers],
+                         [('', 0), ('PGlobals77', 32), ('VGlobals77', 208), ('UnityInstancing_PerDraw0', 4096)])
+        pg, vg, inst = b.cbuffers[1:]
+        self.assertEqual([p.key() for p in pg.params], [('_Color', 0, 1, 4, 0, 0, 0), ('_Steps', 1, 1, 1, 0, 0, 16)])
+        self.assertEqual([p.key() for p in vg.params], [('_MainTex_ST', 0, 1, 4, 0, 0, 192), ('_Weights', 0, 1, 4, 0, 8, 64),
+                                                        ('unity_ObjectToWorld', 0, 4, 4, 1, 0, 0)])
+        st = inst.structs[0]
+        self.assertEqual((st.name, st.offset, st.array, st.size), ('unity_Builtins0Array', 0, 32, 128))
+        self.assertEqual([(p.name, p.is_matrix, p.offset) for p in st.params],
+                         [('unity_ObjectToWorldArray', 1, 0), ('unity_WorldToObjectArray', 1, 64)])
+        self.assertEqual([(x.name, x.kind, x.index) for x in b.bindings],
+                         [('_MainTex', 0, 0x08000000), ('_Noise', 0, 0x08000002), ('PGlobals77', 1, 0x08010000),
+                          ('VGlobals77', 1, 0x04010001), ('', 4, 0x08000001)])
+        tex, noise = b.bindings[:2]
+        self.assertEqual((tex.sampler, tex.dim, noise.sampler, noise.dim), (-1, 2, 0x08000003, 3))
+        self.assertEqual(b.bindings[4].extra, [84])
+        # the same entry as before 6000.6 (or not asked for): not this layout
+        with self.assertRaisesRegex(D.Unsupported, 'known layout'):
+            D.Bindings.parse(data, D.TYPED_FROM)
+        with self.assertRaisesRegex(D.Unsupported, 'known layout'):
+            D.Bindings.parse(data, D.SEPARATE_PARAMS_FROM, typed=True)
+
+    def test_refused(self):
+        params = TYPED_PARAMS[:-len(_i(0) + _i(1) + _i(0, 0x08000001, 84))]
+        for tail, why in ((_i(1) + _s('_Buf') + _i(0, 0x08000004, 1, 1) + _i(0), r"'_Buf' of kind 2 \(buffer\)"),
+                          (_i(0), r'6000.6 layout \(unpack'),                          # the sampler list is missing
+                          (_i(0, 0, 0), r'6000.6 layout \(round trip')):              # trailing bytes
+            with self.assertRaisesRegex(D.Unsupported, why):
+                D.Bindings.parse(TYPED_HEAD + params + tail, D.TYPED_FROM, typed=True)
+        uav = TYPED_PARAMS.replace(_i(0) + _i(2) + _s('PGlobals77'),
+                                   _i(1) + _s('_Out') + _i(0, 0x08000004, 0, 1) + _i(2) + _s('PGlobals77'))
+        with self.assertRaisesRegex(D.Unsupported, r"'_Out' of kind 3 \(UAV\)"):
+            D.Bindings.parse(TYPED_HEAD + uav, D.TYPED_FROM, typed=True)
+        enc = TYPED_PARAMS.replace(_s('VGlobals77') + _i(0, 0x04010001), _s('VGlobals77') + _i(5, 0x04010001))
+        with self.assertRaisesRegex(D.Unsupported, 'encoded data'):
+            D.Bindings.parse(TYPED_HEAD + enc, D.TYPED_FROM, typed=True)
+        with self.assertRaisesRegex(D.Unsupported, '6000.6 layout'):           # a 4x3 matrix: not in the layout
+            D.Bindings(0, [], [D.ConstantBuffer('$Globals', 48, [D.Param('m', 0, 4, 3, 1, 0, 0)])], [], typed=True).serialize()
+
+    def test_with_common(self):
+        """6000.6's m_CommonParameters (m_OffsetInConstantBuffer, Binding structs, slots read as unsigned)."""
+        b = D.Bindings.parse(TYPED_HEAD + TYPED_PARAMS, D.TYPED_FROM, typed=True)
+        names = {0: 'VGlobals77', 1: 'unity_MatrixVP', 2: '_Ramp', 3: 'UnityPerDraw'}
+        common = {'m_VectorParams': [], 'm_MatrixParams': [], 'm_BufferParams': [], 'm_UAVParams': [],
+                  'm_ConstantBuffers': [{'m_NameIndex': 0, 'm_MatrixParams': [
+                      {'m_NameIndex': 1, 'm_OffsetInConstantBuffer': 128, 'm_ArraySize': 0, 'm_Type': 0, 'm_RowCount': 4}],
+                      'm_VectorParams': [], 'm_StructParams': [], 'm_Size': 208, 'm_IsPartialCB': True}],
+                  'm_TextureParams': [{'m_NameIndex': 2, 'm_Binding': {'m_EncodedData': 0, 'm_Slot': 0x08000004},
+                                       'm_SamplerBinding': {'m_EncodedData': 0, 'm_Slot': 4294967295},
+                                       'm_MultiSampled': False, 'm_Dim': 2}],
+                  'm_ConstantBufferBindings': [{'m_NameIndex': 3, 'm_Binding': {'m_EncodedData': 0, 'm_Slot': 0x04010002},
+                                                'm_ArraySize': 1, 'm_ResourceType': 1}],
+                  'm_Samplers': [{'sampler': 85, 'm_Binding': {'m_EncodedData': 0, 'm_Slot': 0x08000005}}]}
+        w = D.with_common(b, common, names)
+        self.assertTrue(w.typed)
+        self.assertEqual([p.name for p in w.cbuffers[2].params], ['unity_ObjectToWorld', '_Weights', 'unity_MatrixVP',
+                                                                  '_MainTex_ST'])
+        ramp = next(x for x in w.bindings if x.name == '_Ramp')
+        self.assertEqual((ramp.index, ramp.sampler, ramp.dim), (0x08000004, -1, 2))
+        back = D.Bindings.parse(w.serialize(), D.TYPED_FROM, typed=True)
+        self.assertEqual(back.serialize(), w.serialize())
+        self.assertEqual([(x.name, x.kind) for x in back.bindings],
+                         [('_MainTex', 0), ('_Noise', 0), ('_Ramp', 0), ('PGlobals77', 1), ('VGlobals77', 1),
+                          ('UnityPerDraw', 1), ('', 4), ('', 4)])
+        common['m_TextureParams'][0]['m_Binding']['m_EncodedData'] = 3
+        with self.assertRaisesRegex(D.Unsupported, 'encoded'):
+            D.with_common(b, common, names)
+
+    def test_gl_bindings(self):
+        """A GL program's binding info in 6000.6's layout: as before, the "$Globals" binding at slot -1."""
+        code = ('#ifdef VERTEX\n#version 150\nuniform vec4 _MainTex_ST;\nuniform vec4 hlslcc_mtx4x4unity_MatrixVP[4];\n'
+                'UNITY_BINDING(1) uniform UnityPerDraw {\n\tvec4 hlslcc_mtx4x4unity_ObjectToWorld[4];\n};\n'
+                'in vec4 in_POSITION0;\nvoid main() {}\n#endif\n'
+                '#ifdef FRAGMENT\n#version 150\nuniform vec4 _Color;\nUNITY_LOCATION(0) uniform sampler2D _MainTex;\n'
+                'out vec4 SV_Target0;\nvoid main() {}\n#endif\n')
+        old = D.gl_bindings(code, (6000, 5), 17)
+        new = D.gl_bindings(code, (6000, 6), 17, typed=True)
+        self.assertFalse(old.typed)
+        self.assertTrue(new.typed)
+        self.assertEqual([(cb.name, cb.size, [p.key() for p in cb.params]) for cb in new.cbuffers],
+                         [(cb.name, cb.size, [p.key() for p in cb.params]) for cb in old.cbuffers])
+        self.assertEqual([(x.name, x.kind, x.index) for x in old.bindings],
+                         [('_MainTex', 0, 0), ('$Globals', 1, 0), ('UnityPerDraw', 1, 1)])
+        self.assertEqual([(x.name, x.kind, x.index) for x in new.bindings],
+                         [('_MainTex', 0, 0), ('$Globals', 1, -1), ('UnityPerDraw', 1, 1)])
+        self.assertTrue(new.params_bytes().endswith(
+            _s('_MainTex') + _i(0, 0, 0, 0, 4) + _i(0) + _i(2) + _s('$Globals') + _i(0, -1) + _s('UnityPerDraw') + _i(0, 1) +
+            _i(0) + _i(0)))
+        back = D.Bindings.parse(new.serialize(), D.TYPED_FROM, typed=True)
+        self.assertEqual(back.serialize(), new.serialize())
+        self.assertEqual([x.key() for x in back.bindings], [x.key() for x in new.bindings])
+
+
 class ContainerTest(unittest.TestCase):
     def test_split_and_chunks(self):
         head, dx = D.split_code(PS_CODE)

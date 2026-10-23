@@ -4,7 +4,8 @@ the repository):
 
     PMUNITY_GL_BINDINGS=<file or folder>[:...] python -m unittest tests.test_gl_bindings_corpus -v   (from convert/)
 
-Each path is a Unity serialized file with OpenGL Core or GLES3 programs (Unity 2019.1 - 2022.3),
+Each path is a Unity serialized file with OpenGL Core or GLES3 programs (Unity 2019.1 - 6000.6;
+6000.6's binding info in its own layout, Bindings.typed),
 or a folder searched for them (a Linux or macOS game's data, an Android build's, the built-in
 resources of Unity's players). For every program that is not VR-only and has no uniform blocks
 (what the Direct3D 11 path writes: loose uniforms and textures) the binding info gl_bindings()
@@ -87,8 +88,9 @@ class GLBindingsCorpusTest(unittest.TestCase):
                                 continue
                             code = e.code.decode()
                             try:
-                                unity = D.with_common(D.entry_bindings(e, es[pbi[j]] if pbi is not None else None), common, names)
-                                ours = D.gl_bindings(code, line, unity.source_map)
+                                unity = D.with_common(D.entry_bindings(e, es[pbi[j]] if pbi is not None else None, typed=True),
+                                                      common, names)
+                                ours = D.gl_bindings(code, line, unity.source_map, typed=unity.typed)
                             except D.Unsupported as ex:
                                 count(f'not read ({str(ex).split(":")[0]})')
                                 continue
