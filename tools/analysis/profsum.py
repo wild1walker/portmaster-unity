@@ -23,6 +23,11 @@ over the recording and each core's use.
   --offsets    keep offsets in managed method names (hot spots inside a method)
   --exact      only the callers that were unwound (not those found by scanning) for "on the
                stack", the managed method and --callers
+  --areas      UnityMain's frame by area of Unity's player loop, in ms a frame: rendering (each
+               camera stage), scripts (Update, FixedUpdate, LateUpdate, coroutines, OnGUI), physics,
+               animation, particles, audio, UI; the waits (the previous frame's present: the render
+               thread or the GPU; the job threads); and across them the system calls, managed code,
+               Mono's runtime and memory management
 Callers are unwound exactly through code with unwind tables (32-bit ARM EHABI; AArch64 frame
 pointers) and found by scanning the stack above that (Mono's JIT code has no tables): scanned
 entries can be stale, so without --exact "on the stack" is an upper bound."""
@@ -189,6 +194,88 @@ def frame_of(times, us):
     return i - 1 if 0 < i < len(times) else None
 
 
+# --areas: the first rule whose text is in a sample's frames (the unwound ones; if none matches, the
+# scanned ones too) names its area. Engine function names of Unity's player loop (5.x - 6000)
+AREAS = [
+    ('render: offscreen cameras (render textures)', ('RenderManager::RenderOffscreenCameras',)),
+    ('render: image effects (OnRenderImage, blits)', ('RenderImageFilters',)),
+    ('render: culling', ('Camera::Cull', 'Camera::CustomCull')),
+    ('render: cameras (sorting, batching, draw calls)', ('RenderManager::RenderCameras',)),
+    ('render: other', ('PlayerRender',)),
+    ('physics: 2D step', ('PhysicsManager2D::Simulate',)),
+    ('physics: 3D step', ('PhysicsManager::Simulate', 'PhysicsManager::FixedUpdate')),
+    ('scripts: FixedUpdate', ('CommonUpdate<FixedBehaviourManager>',)),
+    ('scripts: LateUpdate', ('CommonUpdate<LateBehaviourManager>',)),
+    ('scripts: OnGUI (IMGUI)', ('GUIManager::', 'MonoBehaviourDoGUI')),
+    ('scripts: coroutines, Invoke', ('DelayedCallManager::Update',)),
+    ('scripts: Update', ('CommonUpdate<BehaviourManager>',)),
+    ('animation (Animator, Director, Animation)', ('DirectorManager', 'AnimationManager', 'Animator::')),
+    ('particles', ('ParticleSystem::',)),
+    ('audio (FMOD update)', ('AudioManager::Update', 'AudioModule::Update', 'FMOD::System')),
+    ('UI canvases', ('UI::Canvas',)),
+    ('transforms, renderer bounds', ('RendererUpdateManager', 'RenderManager::UpdateAllRenderers', 'TransformChangeDispatch')),
+    ('input', ('InputUpdate', 'InputManager::')),
+    ('other player loop', ('ExecutePlayerLoop', 'PlayerLoop')),
+]
+ACROSS = [
+    ('futex system calls (waking or waiting for threads)', 'self', ('Baselib_SystemFutex', 'futex')),
+    ('clock_gettime / gettimeofday system calls', 'self', ('clock_gettime', 'gettimeofday')),
+    ('managed code (JIT)', 'cat', ('managed',)),
+    ("Mono's runtime", 'cat', ('Mono runtime (GC, JIT, icall wrappers)',)),
+    ('memory (allocators, malloc/free)', 'any', ('MemoryManager::', 'malloc', 'free_alloc', 'DynamicHeapAllocator',
+                                                 'TLSAllocator', 'ThreadsafeLinearAllocator', 'realloc')),
+    ('job system (scheduling, helping, waiting on a CPU)', 'any', ('ujob_', 'JobQueue::', 'lane_')),
+    ('Physics2D queries (raycasts, casts, overlaps)', 'any', ('PhysicsQuery2D', 'PhysicsScene2D')),
+]
+
+
+def areas_view(p, name, stacks, frames):
+    """UnityMain's samples by area, in ms per UnityMain frame"""
+    period = 1000.0 / p.hz if p.hz else 0
+    tot = sum(n for n, _ in stacks)
+    if not tot or not frames or not period:
+        return
+    area, across = collections.Counter(), collections.Counter()
+    for n, s in stacks:
+        if s['state'] in 'SD':
+            nm = [name(x)[1] for x in [s['pc']] + s['rets'] if x]
+            if any('WaitForPendingPresent' in x or 'WaitForLastPresent' in x or 'PresentFrame' in x for x in nm):
+                a = 'wait: the previous frame presented (render thread, GPU)'
+            elif any('ujob_' in x or 'JobQueue::' in x or 'JobGroup' in x for x in nm):
+                a = 'wait: job threads'
+            else:
+                a = 'wait: other'
+            area[a] += n
+            continue
+        if s['state'] != 'R' or not s['pc']:
+            area['runnable, not on a CPU (Q)'] += n
+            continue
+        named = [name(x) for x in sample_frames(p, s, True) if x]
+        nm = [x[1] for x in named]
+        a = next((ar for ar, subs in AREAS if any(t in x for t in subs for x in nm)), None)
+        if not a:
+            nm2 = [name(x)[1] for x in sample_frames(p, s, False) if x]
+            a = next((ar for ar, subs in AREAS if any(t in x for t in subs for x in nm2)), None)
+            a = (a + ' (scanned)') if a else 'not attributed (the unwind stopped: no player loop frame)'
+        area[a] += n
+        for label, how, subs in ACROSS:
+            if how == 'self':
+                hit = any(t in nm[0] for t in subs) or (len(nm) > 1 and 'syscall' in nm[0] and any(t in nm[1] for t in subs))
+            elif how == 'cat':
+                hit = named[0][0] in subs
+            else:
+                hit = any(t in x for t in subs for x in nm)
+            if hit:
+                across[label] += n
+    ms = lambda n: n * period / frames
+    print(f'  areas, ms a frame ({frames} UnityMain frames, {tot * period / frames:.1f} ms of samples a frame):')
+    for k, v in sorted(area.items(), key=lambda kv: -kv[1]):
+        print(f'    {ms(v):6.2f} ms {pct(v, tot)}  {k}')
+    print('  across the areas (system calls and managed code: the sample\'s own function; the rest: anywhere on the stack):')
+    for k, v in sorted(across.items(), key=lambda kv: -kv[1]):
+        print(f'    {ms(v):6.2f} ms {pct(v, tot)}  {k}')
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('profile')
@@ -201,6 +288,7 @@ def main(argv=None):
     ap.add_argument('--callers')
     ap.add_argument('--offsets', action='store_true')
     ap.add_argument('--exact', action='store_true')
+    ap.add_argument('--areas', action='store_true')
     a = ap.parse_args(argv)
     p = Profile(a.profile)
     elf = ElfNames(dirs=a.syms, files=a.lib)
@@ -261,6 +349,8 @@ def main(argv=None):
             states[st] += n
         print('  state: ' + ', '.join(f'{k} {pct(v, total).strip()}' for k, v in states.most_common()) +
               '   (R on a CPU, Q runnable but its sample came late: no CPU or a long kernel path, S/D blocked in <call>)')
+        if a.areas and th['name'] == 'UnityMain':
+            areas_view(p, name, stacks, max(0, len(mains) - 1))
         run = [(n, s) for n, s in stacks if s['state'] == 'R' and s['pc']]
         nrun = sum(n for n, _ in run)
         if nrun:
