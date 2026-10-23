@@ -112,6 +112,32 @@ built in an arm64 container limited like the RG34XX-SP (1 GB, 4 CPUs, no swap), 
 `libil2cpp.so` as the PC route (2026-10-21), and Untitled Hook Game (2021.3, Bee) in its port's
 setup on a 1 GB + 1 GB swap stand-in (2026-10-22); not yet on a handheld.
 
+## Handheld benches (RG34XX-SP, 2026-10-23)
+
+Folders packed with the current tools, run with `tools/device/profbench.sh` over USB (adb): a plan of
+presses with no one at the handheld, then 20 - 30 s measured. "Limit" is what the measurement shows:
+the GPU at its 696 MHz maximum, the main thread busy, or a frame-rate cap.
+
+| game | Unity, route | where the plan got | fps | limit, notes |
+|---|---|---|---|---|
+| Petty Puny Planet | 5.6.0f3, 32-bit | the planet (in game) | 59.5 | - |
+| Arthur's Nightmare | 2017.3.1f1, 32-bit | title 59.3; the 3D room after the cutscene 12.9 | 12.9 | GPU (3D room) |
+| Forsaken Castle Demo | 2018.2.7f1, 32-bit, InControl | in game | 58.9 (30.6 before defeed7) | vsync off and no frame rate: Android's 30 fps default until the desktop's pacing became the default for every Unity version |
+| Liberal Crime Squad | 2019.1.15f1 macOS, 32-bit | title menu | 59.4 (30.2 before defeed7) | as Forsaken |
+| Cell Machine | 2019.3.14f1 Windows (D3D11), URP, 32-bit | level 1 | 29.0 | vsync on, GPU not at its maximum and the main thread at 21 %: frames just over 16.7 ms wait for the next refresh (60 -> 30) |
+| White Mirror | 2021.2.9f1, URP, FMOD (silent), 32-bit | in game | 43.0 (title 58) | GPU |
+| The Third Eye | 2022.2.15f1, URP 3D, 32-bit | first scene | 29.7 | GPU |
+| Tacticsweeper | 2022.2.17f1 Windows (D3D11), 32-bit | level 1 board | 59.5 | - |
+| Chapéu de Papel | 2022.3.62f3 macOS (Metal), 32-bit | title menu | 29.6 | neither the GPU nor the main thread full: vsync rounding as Cell Machine |
+| Chassis Chase | 2023.2.20f1, 32-bit | the race (in game) | 59.5 | - |
+| DIG UP (test) | 6000.3.11f1, shaders from Vulkan, 32-bit | main menu | 59.5 | - |
+| Phasing Gun | 6000.6.2f1, URP 3D, 32-bit | first scene | 11.8 | GPU |
+| Calculords | 2022.3.23f1 APK (Mono armv7) | first battle | 30.2 | the build's own Android pacing (30 fps) |
+| Chapéu de Papel (APK) | 2022.3.62f3 APK (IL2CPP arm64) | first scene's dialogue | 33.3 - 36.0 | GPU |
+| ROOTS | 2019.4.18f1 Mono APK through `pmunity apk --il2cpp` (arm64) | a run | 59.4 | - |
+| Unsung Warriors - Prologue | 2017.4.40f1, 64-bit IL2CPP | main menu | 59.4 | - |
+| Lo-Fi Room | 6000.0.58f2, 64-bit IL2CPP (mixed build) | title | 59.0 | - |
+
 ## Input
 
 | game | Unity, input | emulated rig | notes (last checked) |
@@ -178,4 +204,4 @@ Apples' Vulkan programs translate too (`--from vulkan`, checked in memory, 2026-
 shaders, 871 programs, and 83 of 93, 426 programs (Cold Apples', 6000.6, none before the converter
 read 6000.6's parameter entries); all their distinct programs (811, 361) link on Mesa.
 
-**Total: 60 games** (58 free games, Cuphead and Hollow Knight); 11 have run on the handheld.
+**Total: 60 games** (58 free games, Cuphead and Hollow Knight); 27 have run on the handheld.
