@@ -144,8 +144,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 126,
     "inlined": 4,
+    "placed": 126,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -274,9 +274,8 @@
    "plugins_map": 0,
    "scripting_runtime": "IL2CPP (arm64-v8a, metadata v24)",
    "stats": {
-    "clone": 20,
-    "copy": 16,
     "inlined": 4,
+    "placed": 36,
     "unitypy": 1,
     "video": 1
    },
@@ -396,8 +395,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 3.5 (libmono)",
    "stats": {
-    "clone": 310,
     "inlined": 1,
+    "placed": 310,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -527,8 +526,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 130,
     "inlined": 4,
+    "placed": 130,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -657,8 +656,8 @@
    "plugins_map": 1,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 154,
     "inlined": 4,
+    "placed": 154,
     "unitypy": 1,
     "written": 1
    },
@@ -830,9 +829,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 1,
-    "copy": 141,
     "inlined": 13,
+    "placed": 142,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -961,8 +959,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 129,
     "inlined": 5,
+    "placed": 129,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -1084,9 +1082,8 @@
    "plugins_map": 3,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 1,
-    "copy": 169,
     "inlined": 4,
+    "placed": 170,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -1221,8 +1218,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 126,
     "inlined": 2,
+    "placed": 126,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -1354,9 +1351,8 @@
    "plugins_map": 1,
    "scripting_runtime": ".NET 3.5 (libmono)",
    "stats": {
-    "clone": 2,
-    "copy": 97,
     "inlined": 12,
+    "placed": 99,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -1486,9 +1482,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 1,
-    "copy": 177,
     "inlined": 5,
+    "placed": 178,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -1624,8 +1619,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 136,
     "inlined": 3,
+    "placed": 136,
     "unitypy": 1,
     "video": 1,
     "written": 1

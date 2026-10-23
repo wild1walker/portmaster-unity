@@ -128,8 +128,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 126,
     "inlined": 4,
+    "placed": 126,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -261,8 +261,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 3.5 (libmono)",
    "stats": {
-    "clone": 87,
     "inlined": 4,
+    "placed": 87,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -510,8 +510,8 @@
    "plugins_map": 1,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 566,
     "inlined": 6,
+    "placed": 566,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -760,8 +760,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 3.5 (libmono)",
    "stats": {
-    "clone": 310,
     "inlined": 1,
+    "placed": 310,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -936,8 +936,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 130,
     "inlined": 4,
+    "placed": 130,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -2168,9 +2168,8 @@
    "plugins_map": 3,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 1,
-    "copy": 169,
     "inlined": 4,
+    "placed": 170,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -2595,8 +2594,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 155,
     "inlined": 4,
+    "placed": 155,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -2792,9 +2791,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 1,
-    "copy": 177,
     "inlined": 5,
+    "placed": 178,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -3215,9 +3213,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "clone": 11,
-    "copy": 91,
     "inlined": 2,
+    "placed": 102,
     "unitypy": 1,
     "video": 1,
     "written": 1
@@ -3311,8 +3308,8 @@
    "plugins_map": 0,
    "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
    "stats": {
-    "copy": 136,
     "inlined": 3,
+    "placed": 136,
     "unitypy": 1,
     "video": 1,
     "written": 1

@@ -97,12 +97,25 @@ def route_verdict(rep):
 
 # --------------------------------------------------------------------------- android-data
 
+PLACEMENT = ('clone', 'copy', 'link', 'hardlink', 'symlink')
+
+
+def placement_stats(stats):
+    out = {k: v for k, v in stats.items() if k not in PLACEMENT}
+    placed = sum(v for k, v in stats.items() if k in PLACEMENT and isinstance(v, int))
+    if placed:
+        out['placed'] = placed
+    return dict(sorted(out.items()))
+
+
 def pack_summary(report, log_lines):
     """android-data's report (android_data_report.json) and log: what it placed and checked."""
     v = report.get('verify') or {}
     u = report.get('unity') or {}
     s = {
-        'stats': dict(sorted((report.get('stats') or {}).items())),
+        # how files were placed (a clone, a hard link or a copy) depends on the drives the game and
+        # the scratch folder are on: only their total is compared, beside the other actions
+        'stats': placement_stats(report.get('stats') or {}),
         'changed_files': len(report.get('files') or {}),
         'bundles': len(report.get('bundles') or {}),
         'verify_problems': len(v.get('problems') or ()),

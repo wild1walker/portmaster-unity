@@ -43,6 +43,7 @@ python3 tools/regress/regress.py fast --only 'tom-city|d3d11'   # regex over ids
 python3 tools/regress/regress.py list                      # the list: games x levels x checks
 python3 tools/regress/regress.py fast --update             # record this run as the baseline
 python3 tools/regress/regress.py fast --checkout ../other  # test another checkout with this list and baseline
+# (a worktree has no built tools: set asmpatch, pmhlslcc, pmspirvcross, hostbin in local.toml to built ones)
 python3 tools/regress/regress.py bisect <good> <bad> --level fast --only '^tom-city$'
 python3 tools/regress/regress.py recheck <scratch>/results/rig-<time>   # a finished run, judged again
 python3 -m unittest discover -s tools/regress              # the tool's own tests (synthetic data)
