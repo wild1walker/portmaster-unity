@@ -129,7 +129,7 @@ shared with another agent's conversions and IL2CPP builds (2026-10-23):
 | level | games | wall time | the tools' CPU time | what the time goes into |
 |---|---|---|---|---|
 | fast | 54 | 73 min (60 min the second time, with the rig level running beside it) | 13 - 17 min | android-data writing the ten packed games' trees to the stick (0.5 - 7 min each); the rest is CPU: the shaders step in memory (5 s - 4 min a game: Hollow Knight and Cuphead the longest), port checks, `il2cpp --dry-run` (15 - 40 s), `pmunity apk` (about 1 min) |
-| rig | 17 | RIGTIME | | per game: packing (1 - 7 min on the stick), then the rig run itself (2.5 - 10 min, the list's seconds); the two IL2CPP builds (buggish about 15 min, the Unity 6 mixed build about 40) |
+| rig | 17 | about 3 hours (2 h 56 min for 16 of them) | 3 min (the rest is the emulator in Docker) | per game: packing (1 - 12 min on the stick), then the rig run itself (the list's 2 - 10 minutes); the two IL2CPP builds (2019.4: 16 min in all, the Unity 6 mixed build 24 min and 44 in all) |
 
 The fast level's own work is its CPU time: with the scratch folder on an SSD, or on the corpus'
 APFS volume (android-data then clones the game's files instead of copying them), it should take

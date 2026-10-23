@@ -689,7 +689,12 @@ class Game:
                 p.wait()
                 self.notes.append('the rig did not stop by itself: killed')
         lines = read_lines(runlog)
-        shutil.copyfile(runlog, os.path.join(self.out, 'emu-run.log')) if os.path.isfile(runlog) else None
+        emu_out = os.path.join(self.work, 'emu.out')
+        if os.path.isfile(emu_out):
+            shutil.copyfile(emu_out, os.path.join(self.out, 'emu.out'))
+        if not os.path.isfile(runlog):
+            raise Fail(f'the rig did not start the game (no run log): {tail(emu_out) or "no output"}')
+        shutil.copyfile(runlog, os.path.join(self.out, 'emu-run.log'))
         runv = K.run_log(lines)
         files = sorted(glob.glob(os.path.join(root, 'shot-*.ppm')), key=lambda f: int(re.findall(r'(\d+)\.ppm$', f)[0]))
         stats = []
@@ -1005,6 +1010,7 @@ def run_game(ctx, g, level, golden):
     os.makedirs(G.out, exist_ok=True)
     t0 = time.time()
     status, reason = 'pass', ''
+    step_failed = False                 # a step itself failed (not a check): nothing to record
     try:
         if level not in g['levels']:
             raise Skip(f'not in the {level} level')
@@ -1028,19 +1034,19 @@ def run_game(ctx, g, level, golden):
     except Skip as ex:
         status, reason = 'skip', str(ex)
     except Fail as ex:
-        status, reason = 'fail', str(ex)
+        status, reason, step_failed = 'fail', str(ex), True
     except Exception as ex:                 # a fault of this tool: the run goes on with the next game
         import traceback
         with open(G.log, 'a') as f:
             traceback.print_exc(file=f)
-        status, reason = 'fail', f'regress.py: {type(ex).__name__}: {ex}'
+        status, reason, step_failed = 'fail', f'regress.py: {type(ex).__name__}: {ex}', True
     finally:
         if not ctx.a.keep:
             rmtree(G.work)
     secs = round(time.time() - t0)
     res = {'slug': g['id'], 'route': g['route'], 'level': level, 'covers': g.get('covers', []), 'status': status,
            'reason': reason, 'notes': G.notes, 'seconds': secs, 'timing': G.timing, 'cpu': G.cpu, 'values': G.values,
-           'checks': [list(c) for c in G.checks]}
+           'checks': [list(c) for c in G.checks], 'step_failed': step_failed}
     with open(os.path.join(G.out, 'result.json'), 'w') as f:
         json.dump(res, f, indent=1)
     return res
@@ -1169,9 +1175,11 @@ def cmd_recheck(a, games):
             checks = K.expectations_rig(g.get('rig') or {}, runv, v.get('shots') or [], log)
             checks += K.compare_rig(base.get(r['slug']), runv, v.get('shots') or [])
         # what failed before the checks (a step) stays failed
-        step_failed = r['status'] == 'fail' and not any(not c[1] for c in r.get('checks') or ())
+        step_failed = r.get('step_failed', r['status'] == 'fail' and not any(not c[1] for c in r.get('checks') or ()))
         bad = [c for c in checks if not c[1]]
-        r = dict(r, checks=[list(c) for c in checks], notes=[n for n in r['notes'] if not n.startswith('baseline updated')])
+        r = dict(r, checks=[list(c) for c in checks],
+                 notes=[n for n in r['notes'] if not n.startswith('baseline updated')
+                        and not (n == 'no baseline yet' and base.get(r['slug']))])
         if step_failed:
             out.append(r)
             continue
@@ -1227,9 +1235,11 @@ def main(argv=None):
         r = run_game(ctx, g, a.level, base.get(g['id']))
         print(f"    -> {r['status']} {fmt_secs(r['seconds'])} {r['reason'][:300]}", flush=True)
         results.append(r)
-        if a.update and r['status'] != 'skip' and r['values']:
+        if a.update and r['status'] != 'skip' and r['values'] and not r['step_failed']:
             base[g['id']] = r['values']
             save_baseline(a.level, base)
+        elif a.update and r['step_failed']:
+            print('    (baseline not updated: a step failed)', flush=True)
     out = table(results)
     summary = {'level': a.level, 'checkout': head, 'run': ctx.run_id, 'seconds': round(time.time() - t0),
                'results': results}
@@ -1240,7 +1250,8 @@ def main(argv=None):
     print()
     print(out)
     if a.update:
-        print(f'baseline: {baseline_path(a.level)} updated for {sum(1 for r in results if r["status"] != "skip" and r["values"])} games')
+        print(f'baseline: {baseline_path(a.level)} updated for '
+              f'{sum(1 for r in results if r["status"] != "skip" and r["values"] and not r["step_failed"])} games')
     if a.bisect_run and all(r['status'] == 'skip' for r in results):
         return 125                      # (git bisect: this commit cannot be judged)
     return 1 if any(r['status'] == 'fail' for r in results) else 0

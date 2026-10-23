@@ -1,0 +1,1722 @@
+{
+ "apk-calculords": {
+  "apk": {
+   "facts": {
+    "abi": "armeabi-v7a",
+    "backend": "mono",
+    "min_sdk": 22,
+    "source": "apk",
+    "target_sdk": 32,
+    "unity_version": "2022.3.23f1"
+   },
+   "tree": {
+    "files": 7,
+    "mb": 53,
+    "total": "7f2a9bdfa249b6714094f00f505d3cf30146158bc729068be9e39770919d7f2a",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 137,
+      "members": "5fe2becf1350a94e"
+     }
+    }
+   }
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 43,
+   "frames": 625
+  },
+  "shots": [
+   {
+    "colours": 148,
+    "content": true,
+    "dark": 0.3,
+    "t": 60,
+    "top": 0.182
+   },
+   {
+    "colours": 158,
+    "content": true,
+    "dark": 0.306,
+    "t": 140,
+    "top": 0.182
+   },
+   {
+    "colours": 159,
+    "content": true,
+    "dark": 0.3,
+    "t": 220,
+    "top": 0.182
+   }
+  ]
+ },
+ "apk-imperium": {
+  "apk": {
+   "facts": {
+    "abi": "arm64-v8a",
+    "backend": "il2cpp",
+    "min_sdk": 19,
+    "source": "apk",
+    "target_sdk": 29,
+    "unity_version": "2020.3.3f1"
+   },
+   "tree": {
+    "files": 5,
+    "mb": 64,
+    "total": "34c0cd23f82f5303696ab1b41ce63aa73736e52a8938f884bc94ef77b2e04a1b",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 50,
+      "members": "c8412adc96d1b2d6"
+     }
+    }
+   }
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 23,
+   "frames": 6544
+  },
+  "shots": [
+   {
+    "colours": 405,
+    "content": true,
+    "dark": 0.031,
+    "t": 40,
+    "top": 0.235
+   },
+   {
+    "colours": 405,
+    "content": true,
+    "dark": 0.031,
+    "t": 90,
+    "top": 0.235
+   },
+   {
+    "colours": 405,
+    "content": true,
+    "dark": 0.031,
+    "t": 140,
+    "top": 0.235
+   }
+  ]
+ },
+ "buggish": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 2,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off"
+    },
+    "convert": {},
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2019.4.8f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 16,
+   "dropped_modules": 2,
+   "pack_verified": 2,
+   "player": "2019.4.8f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "copy": 126,
+    "inlined": 4,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 157,
+    "mb": 122,
+    "total": "0ebd2a7f4da730d9a1868d8e0c3a5929dacf88cb1ed7f4404c52bfdf6de2847a",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 133,
+      "members": "efc60da7584472ca"
+     },
+     "zip/main.1.com.regress.buggish.obb": {
+      "entries": 1,
+      "members": "3df50df2c0d602e8"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 32,
+   "frames": 277
+  },
+  "shaders": {
+   "es31_programs": 14,
+   "files": 2,
+   "gl4x_empty": 0,
+   "gl4x_programs": 16,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 1,
+   "precision": "highp",
+   "programs": 183,
+   "rewrites": 1,
+   "shaders": 36,
+   "subprograms": 382
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 2,
+   "per_file": {
+    "Resources/unity_builtin_extra": "e2544e09ad30051a",
+    "sharedassets0.assets": "a3ebe3fc35467b0d"
+   },
+   "shaders": 36,
+   "total": "f392f720a901ab97f45b365113ef84d63d01b5b645b46ba8f8307354984fd30a"
+  },
+  "shots": [
+   {
+    "colours": 24,
+    "content": true,
+    "dark": 0.0,
+    "t": 60,
+    "top": 0.638
+   },
+   {
+    "colours": 24,
+    "content": true,
+    "dark": 0.0,
+    "t": 140,
+    "top": 0.641
+   },
+   {
+    "colours": 24,
+    "content": true,
+    "dark": 0.0,
+    "t": 220,
+    "top": 0.635
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "f80efe069c917d20"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "buggish-il2cpp": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 2,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off"
+    },
+    "convert": {},
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2019.4.8f1",
+   "warnings": 0
+  },
+  "il2cpp": {
+   "libil2cpp_mb": 31.9,
+   "metadata": "24"
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 16,
+   "dropped_modules": 2,
+   "pack_verified": 1,
+   "player": "2019.4.8f1",
+   "plugins_map": 0,
+   "scripting_runtime": "IL2CPP (arm64-v8a, metadata v24)",
+   "stats": {
+    "clone": 20,
+    "copy": 16,
+    "inlined": 4,
+    "unitypy": 1,
+    "video": 1
+   },
+   "tree": {
+    "files": 64,
+    "mb": 97,
+    "total": "69d00aed576758c87781b49f2bd15d539eb2b79e6535aff53ec06eab2fb8ef9e",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 42,
+      "members": "d99fb50a33a75733"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 21,
+   "frames": 17872
+  },
+  "shaders": {
+   "es31_programs": 14,
+   "files": 2,
+   "gl4x_empty": 0,
+   "gl4x_programs": 16,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 1,
+   "precision": "highp",
+   "programs": 183,
+   "rewrites": 1,
+   "shaders": 36,
+   "subprograms": 382
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 2,
+   "per_file": {
+    "Resources/unity_builtin_extra": "e2544e09ad30051a",
+    "sharedassets0.assets": "a3ebe3fc35467b0d"
+   },
+   "shaders": 36,
+   "total": "f392f720a901ab97f45b365113ef84d63d01b5b645b46ba8f8307354984fd30a"
+  },
+  "shots": [
+   {
+    "colours": 24,
+    "content": true,
+    "dark": 0.0,
+    "t": 30,
+    "top": 0.64
+   },
+   {
+    "colours": 25,
+    "content": true,
+    "dark": 0.0,
+    "t": 70,
+    "top": 0.639
+   },
+   {
+    "colours": 22,
+    "content": true,
+    "dark": 0.0,
+    "t": 110,
+    "top": 0.639
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "f80efe069c917d20"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "cs-lcs": {
+  "check": {
+   "backend": "mono",
+   "build": "macos",
+   "compressed": false,
+   "exit": 0,
+   "notes": 4,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 3.5 (libmono)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off",
+     "streaming_assets": "both"
+    },
+    "convert": {},
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2019.1.15f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 5,
+   "dropped_modules": 2,
+   "pack_verified": 2,
+   "player": "2019.1.15f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 3.5 (libmono)",
+   "stats": {
+    "clone": 310,
+    "inlined": 1,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 558,
+    "mb": 49,
+    "total": "e21f61baf7ca0dfed0f77bfa53351059ca33588fb2c10cb48fe6ac7c57044192",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 85,
+      "members": "073c02b097eaa15f"
+     },
+     "zip/main.1.com.regress.cslcs.obb": {
+      "entries": 230,
+      "members": "b3f8f434cd2194b2"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 45,
+   "frames": 1274
+  },
+  "shaders": {
+   "es31_programs": 1,
+   "files": 2,
+   "gl4x_empty": 1,
+   "gl4x_programs": 3,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 2,
+   "precision": "highp",
+   "programs": 209,
+   "rewrites": 1,
+   "shaders": 39,
+   "subprograms": 440
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 2,
+   "per_file": {
+    "Resources/unity_builtin_extra": "7e97d977467ce9aa",
+    "resources.assets": "719a50d710e69af1"
+   },
+   "shaders": 39,
+   "total": "63c07391de37be05cec7db4f13fb5d4c07d3b63d1662e87d4fd1bd0c323d3625"
+  },
+  "shots": [
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.929,
+    "t": 60,
+    "top": 0.929
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.929,
+    "t": 150,
+    "top": 0.929
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.929,
+    "t": 250,
+    "top": 0.929
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "ee2f60084b0d40f0"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "cs-tacticsweeper": {
+  "check": {
+   "backend": "mono",
+   "build": "windows",
+   "compressed": false,
+   "exit": 0,
+   "notes": 3,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "d3d11",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off"
+    },
+    "convert": {
+     "shaders": {
+      "from": [
+       "d3d11"
+      ]
+     }
+    },
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2022.2.17f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 7,
+   "dropped_modules": 4,
+   "pack_verified": 2,
+   "player": "2022.2.17f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "clone": 130,
+    "inlined": 4,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 160,
+    "mb": 86,
+    "total": "e56967c4d2f75c559461b2514277fcf2c9c68077742988b994ee66ad8ca27cb2",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 138,
+      "members": "0b45d355bb1a593c"
+     },
+     "zip/main.1.com.regress.cstacticsweeper.obb": {
+      "entries": 2,
+      "members": "28bf5bc9951a60e9"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 41,
+   "frames": 185
+  },
+  "shaders": {
+   "d3d11": {
+    "converted": 45,
+    "instancing": 0,
+    "programs": 177,
+    "skinning": 0,
+    "subshaders_left_out": 3,
+    "total": 47,
+    "vr": 0
+   },
+   "files": 3,
+   "not_translatable": 2,
+   "precision": "highp",
+   "programs": 177,
+   "rewrites": 1,
+   "shaders": 45,
+   "subprograms": 186
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 3,
+   "per_file": {
+    "Resources/unity_builtin_extra": "af47f2f9b7b3c86e",
+    "resources.assets": "6473479127213975",
+    "sharedassets0.assets": "68c3d593a2962a4e"
+   },
+   "shaders": 45,
+   "total": "8cc6cc79ac7dfb353f97152f0ef102edd845f6a1e1c68d759eb1de4670df3009"
+  },
+  "shots": [
+   {
+    "colours": 18,
+    "content": true,
+    "dark": 0.454,
+    "t": 100,
+    "top": 0.359
+   },
+   {
+    "colours": 17,
+    "content": true,
+    "dark": 0.615,
+    "t": 250,
+    "top": 0.525
+   },
+   {
+    "colours": 18,
+    "content": true,
+    "dark": 0.716,
+    "t": 430,
+    "top": 0.664
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "b9f7a711c1aab2a0"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "cs-whitemirror": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 7,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "auto"
+    },
+    "convert": {},
+    "runtime": {}
+   },
+   "unity_supported": true,
+   "unity_version": "2021.2.9f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 7,
+   "dropped_modules": 3,
+   "pack_verified": 2,
+   "player": "2021.2.9f1",
+   "plugins_map": 1,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "clone": 154,
+    "inlined": 4,
+    "unitypy": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 186,
+    "mb": 233,
+    "total": "f30e182fd3bcb3b8c5b63771c654f2878af454fca165addb246f620edde870c8",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 159,
+      "members": "1d5acfb7e4eefb31"
+     },
+     "zip/main.1.com.regress.cswhitemirror.obb": {
+      "entries": 2,
+      "members": "34183255991d47e2"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 2
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 8,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 51,
+   "frames": 452
+  },
+  "shaders": {
+   "compute": 0,
+   "compute_total": 22,
+   "compute_without_glcore": 22,
+   "es31_programs": 8,
+   "files": 5,
+   "gl4x_empty": 2,
+   "gl4x_programs": 20,
+   "gl4x_subshaders_left_out": 0,
+   "kernel_variants": 0,
+   "kernels": 0,
+   "kernels_left_out": 0,
+   "not_translatable": 1,
+   "precision": "highp",
+   "programs": 649,
+   "rewrites": 7,
+   "shaders": 78,
+   "subprograms": 703
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 5,
+   "per_file": {
+    "Resources/unity_builtin_extra": "b05736f8c6f882ef",
+    "globalgamemanagers.assets": "0fffac3171b74215",
+    "resources.assets": "b2e5bddfd25a3733",
+    "sharedassets0.assets": "3ce80df2d865aa2c",
+    "sharedassets1.assets": "89bbf79aed3b68ce"
+   },
+   "shaders": 78,
+   "total": "2555fb75783065c06e29746188fd7c3d65f9431f5a6a57f8e1c86b14c48891b9"
+  },
+  "shots": [
+   {
+    "colours": 1,
+    "content": false,
+    "dark": 1.0,
+    "t": 100,
+    "top": 1.0
+   },
+   {
+    "colours": 24,
+    "content": true,
+    "dark": 0.488,
+    "t": 250,
+    "top": 0.492
+   },
+   {
+    "colours": 24,
+    "content": true,
+    "dark": 0.488,
+    "t": 430,
+    "top": 0.492
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "4b9c0584f5e83187"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "cuphead-title": {
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 70,
+   "frames": 403
+  },
+  "shots": [
+   {
+    "colours": 3,
+    "content": false,
+    "dark": 1.0,
+    "t": 200,
+    "top": 0.998
+   },
+   {
+    "colours": 1378,
+    "content": true,
+    "dark": 0.043,
+    "t": 400,
+    "top": 0.069
+   },
+   {
+    "colours": 1460,
+    "content": true,
+    "dark": 0.05,
+    "t": 580,
+    "top": 0.073
+   }
+  ]
+ },
+ "hook-game": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 6,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off",
+     "streaming_assets": "both"
+    },
+    "convert": {
+     "steps": [
+      "shaders",
+      "settings",
+      "audio",
+      "textures"
+     ]
+    },
+    "runtime": {}
+   },
+   "unity_supported": true,
+   "unity_version": "2021.3.16f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 17,
+   "dropped_modules": 3,
+   "pack_verified": 2,
+   "player": "2021.3.16f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "clone": 1,
+    "copy": 141,
+    "inlined": 13,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 186,
+    "mb": 262,
+    "total": "9d39173b645a94314fc8f549333780260cc66b595153bc808212ab19e3daf348",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 161,
+      "members": "fe5bebd0a67088ac"
+     },
+     "zip/main.1.com.regress.hookgame.obb": {
+      "entries": 3,
+      "members": "e42c583cca9a4379"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 2,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 21,
+   "frames": 64
+  },
+  "shaders": {
+   "es31_programs": 10,
+   "files": 6,
+   "gl4x_empty": 1,
+   "gl4x_programs": 112,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 2,
+   "precision": "highp",
+   "programs": 2607,
+   "rewrites": 13,
+   "shaders": 84,
+   "subprograms": 2692
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 6,
+   "per_file": {
+    "Resources/unity_builtin_extra": "57230bbbb6d100ea",
+    "globalgamemanagers.assets": "84959f0e6db6775a",
+    "resources.assets": "1868921a68754d32",
+    "sharedassets0.assets": "d49887ae500e5dbc",
+    "sharedassets1.assets": "41a731e365144b6e",
+    "sharedassets6.assets": "52c673361d6c7879"
+   },
+   "shaders": 84,
+   "total": "6c681823a22987f59dee9ee48f32892c8ee70e798ecf994ab5bb9419b3baebdd"
+  },
+  "shots": [
+   {
+    "colours": 28,
+    "content": true,
+    "dark": 0.245,
+    "t": 60,
+    "top": 0.697
+   },
+   {
+    "colours": 23,
+    "content": true,
+    "dark": 0.863,
+    "t": 140,
+    "top": 0.849
+   },
+   {
+    "colours": 23,
+    "content": true,
+    "dark": 0.863,
+    "t": 220,
+    "top": 0.849
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "8c2de22c48169ad0"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "loco-motive": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 3,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off"
+    },
+    "convert": {},
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2018.4.36f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 25,
+   "dropped_modules": 2,
+   "pack_verified": 2,
+   "player": "2018.4.36f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "copy": 129,
+    "inlined": 5,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 160,
+    "mb": 157,
+    "total": "9232827222eafa3caf979be57e3cc73a50b3903678b3c4255f416ffd2a196c45",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 137,
+      "members": "a119931b5624b382"
+     },
+     "zip/main.1.com.regress.locomotive.obb": {
+      "entries": 1,
+      "members": "50410f14ac123026"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 37,
+   "frames": 878
+  },
+  "shaders": {
+   "files": 2,
+   "gl4x_empty": 0,
+   "gl4x_programs": 2,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 0,
+   "precision": "highp",
+   "programs": 156,
+   "rewrites": 1,
+   "shaders": 36,
+   "subprograms": 324
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 2,
+   "per_file": {
+    "Resources/unity_builtin_extra": "f4780b1aadce0558",
+    "sharedassets0.assets": "3056a15a3c4ea0b3"
+   },
+   "shaders": 36,
+   "total": "03cbf2c545e51f5c0f72fb048b0b9b7c0bfc7330ea2938792ba26d5df84e47f5"
+  },
+  "shots": [
+   {
+    "colours": 85,
+    "content": true,
+    "dark": 0.204,
+    "t": 60,
+    "top": 0.204
+   },
+   {
+    "colours": 83,
+    "content": true,
+    "dark": 0.204,
+    "t": 140,
+    "top": 0.208
+   },
+   {
+    "colours": 91,
+    "content": true,
+    "dark": 0.204,
+    "t": 220,
+    "top": 0.21
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "957eb10860fabb86"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "tiny-kingdom": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 10,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "auto"
+    },
+    "convert": {},
+    "runtime": {}
+   },
+   "unity_supported": true,
+   "unity_version": "2022.3.36f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 9,
+   "dropped_modules": 3,
+   "pack_verified": 2,
+   "player": "2022.3.36f1",
+   "plugins_map": 3,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "clone": 1,
+    "copy": 169,
+    "inlined": 4,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 206,
+    "mb": 113,
+    "total": "47a6a311ea3a866a33f08b4839b34bc9cb3c7cd143bb22b4797b470fa4dccf7d",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 173,
+      "members": "bb5cb6fb65cec778"
+     },
+     "zip/main.1.com.regress.tinykingdom.obb": {
+      "entries": 2,
+      "members": "f7c5329d2ff20bf2"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 4
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 6,
+   "exit": 137,
+   "fatal": 0,
+   "fps_lines": 36,
+   "frames": 288
+  },
+  "shaders": {
+   "es31_programs": 57,
+   "files": 5,
+   "gl4x_empty": 1,
+   "gl4x_programs": 59,
+   "gl4x_subshaders_left_out": 1,
+   "not_translatable": 3,
+   "precision": "highp",
+   "programs": 1199,
+   "rewrites": 1,
+   "shaders": 84,
+   "subprograms": 1314
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 5,
+   "per_file": {
+    "Resources/unity_builtin_extra": "ddb178e9201a4cdd",
+    "globalgamemanagers.assets": "fea206741ea9b232",
+    "resources.assets": "2a6cca968f04d56a",
+    "sharedassets0.assets": "7c3debf961933d9d",
+    "sharedassets1.assets": "a7413a9aba637b56"
+   },
+   "shaders": 84,
+   "total": "2b547ce79c6d4e7d697d77f0e714aa2f5dadb80d3a48ecf00f9d218608f2c6d7"
+  },
+  "shots": [
+   {
+    "colours": 13,
+    "content": true,
+    "dark": 0.015,
+    "t": 60,
+    "top": 0.795
+   },
+   {
+    "colours": 13,
+    "content": true,
+    "dark": 0.015,
+    "t": 140,
+    "top": 0.79
+   },
+   {
+    "colours": 13,
+    "content": true,
+    "dark": 0.015,
+    "t": 220,
+    "top": 0.793
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "77aacef719e38cae"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "tom-city": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 6,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off"
+    },
+    "convert": {
+     "steps": [
+      "shaders",
+      "settings",
+      "audio",
+      "textures"
+     ]
+    },
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2020.3.49f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 7,
+   "dropped_modules": 3,
+   "pack_verified": 2,
+   "player": "2020.3.49f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "copy": 126,
+    "inlined": 2,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 154,
+    "mb": 172,
+    "total": "5e6538bc47687e84264cb76000cddb3aa92a06700d64eacb24ab08afcf6b1db2",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 131,
+      "members": "b64772438c247ad5"
+     },
+     "zip/main.1.com.regress.tomcity.obb": {
+      "entries": 1,
+      "members": "b7121eb1dac097ba"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 40,
+   "frames": 722
+  },
+  "shaders": {
+   "files": 3,
+   "gl4x_empty": 0,
+   "gl4x_programs": 2,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 1,
+   "precision": "highp",
+   "programs": 213,
+   "rewrites": 1,
+   "shaders": 53,
+   "subprograms": 222
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 3,
+   "per_file": {
+    "Resources/unity_builtin_extra": "9d15d69e4b08d9d2",
+    "globalgamemanagers.assets": "14b7e96411572e42",
+    "sharedassets0.assets": "5aecc0dbb19f5490"
+   },
+   "shaders": 53,
+   "total": "acc75f0f333d010c72d1011f54f5e33becd00d01b6256d3a33060e7647ca1a83"
+  },
+  "shots": [
+   {
+    "colours": 68,
+    "content": true,
+    "dark": 0.002,
+    "t": 60,
+    "top": 0.351
+   },
+   {
+    "colours": 66,
+    "content": true,
+    "dark": 0.002,
+    "t": 140,
+    "top": 0.351
+   },
+   {
+    "colours": 68,
+    "content": true,
+    "dark": 0.002,
+    "t": 220,
+    "top": 0.351
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "d714da41b87cf1c7"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "unsung-warriors": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 8,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 3.5 (libmono)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "auto"
+    },
+    "convert": {
+     "steps": [
+      "shaders",
+      "settings",
+      "audio",
+      "textures"
+     ]
+    },
+    "runtime": {
+     "UA_PAD_NAME": "Xbox Wireless Controller"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2017.4.40f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 25,
+   "dropped_modules": 2,
+   "pack_verified": 2,
+   "player": "2017.4.40f1",
+   "plugins_map": 1,
+   "scripting_runtime": ".NET 3.5 (libmono)",
+   "stats": {
+    "clone": 2,
+    "copy": 97,
+    "inlined": 12,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 129,
+    "mb": 398,
+    "total": "49d49f6edd77cdb8b32c56c6e836efef38c2d9a03587878806d3b7f8ab20aef1",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 113,
+      "members": "64afcae83f0cdf83"
+     },
+     "zip/main.1.com.regress.unsungwarriors.obb": {
+      "entries": 2,
+      "members": "99f03bf85d01f1ed"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 1
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 45,
+   "frames": 280
+  },
+  "shaders": {
+   "files": 9,
+   "gl4x_empty": 0,
+   "gl4x_programs": 2,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 0,
+   "precision": "highp",
+   "programs": 282,
+   "rewrites": 9,
+   "shaders": 77,
+   "subprograms": 566
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 9,
+   "per_file": {
+    "Resources/unity_builtin_extra": "03032160dc3244c0",
+    "globalgamemanagers.assets": "3fcdc8dd8a7fe9ba",
+    "resources.assets": "8ae05879701c2269",
+    "sharedassets0.assets": "06bcf8b3eb2431d2",
+    "sharedassets2.assets": "c4c7eba58433a9fa",
+    "sharedassets3.assets": "2557443381abcc47",
+    "sharedassets4.assets": "3657acfdede132b7",
+    "sharedassets5.assets": "5437e1991b5bb9bd",
+    "sharedassets6.assets": "65cf4d7bdf2e2d85"
+   },
+   "shaders": 77,
+   "total": "efe785d3e5c7f8af2313906833971c9c57e5793f545789b2648c20c8613f43fd"
+  },
+  "shots": [
+   {
+    "colours": 65,
+    "content": true,
+    "dark": 0.745,
+    "t": 60,
+    "top": 0.563
+   },
+   {
+    "colours": 486,
+    "content": true,
+    "dark": 0.001,
+    "t": 150,
+    "top": 0.039
+   },
+   {
+    "colours": 483,
+    "content": true,
+    "dark": 0.001,
+    "t": 280,
+    "top": 0.04
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "4f24d1ab74270a33"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "v6-ashley": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 4,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "auto"
+    },
+    "convert": {},
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "6000.5.7f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 15,
+   "dropped_modules": 3,
+   "pack_verified": 2,
+   "player": "6000.5.7f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "clone": 1,
+    "copy": 177,
+    "inlined": 5,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 208,
+    "mb": 126,
+    "total": "cfb899eef4644dbf4d4879a304a84ea36b32c1e3419f6bf429a9a37d1ad0b8af",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 186,
+      "members": "25415b55a05e3bbf"
+     },
+     "zip/main.1.com.regress.v6ashley.obb": {
+      "entries": 2,
+      "members": "e9acbd4f8614580d"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 36,
+   "frames": 133
+  },
+  "shaders": {
+   "compute": 1,
+   "compute_total": 2,
+   "compute_without_glcore": 1,
+   "es31_programs": 47,
+   "files": 4,
+   "gl4x_empty": 5,
+   "gl4x_programs": 41,
+   "gl4x_subshaders_left_out": 2,
+   "kernel_variants": 1,
+   "kernels": 1,
+   "kernels_left_out": 0,
+   "not_translatable": 8,
+   "precision": "highp",
+   "programs": 2188,
+   "rewrites": 9,
+   "shaders": 82,
+   "subprograms": 2233
+  },
+  "shaders_digest": {
+   "compute": 1,
+   "files": 4,
+   "per_file": {
+    "Resources/unity_builtin_extra": "e7b28895b040259b",
+    "globalgamemanagers.assets": "4f4504036a199eaf",
+    "sharedassets0.assets": "2d86107bed293514",
+    "sharedassets2.assets": "9ec4e61c82bddd4f"
+   },
+   "shaders": 82,
+   "total": "54a8a12437849bcfacfe35e7ce2e6311df4ac0e1990d68f1fc704a4d0e68f011"
+  },
+  "shots": [
+   {
+    "colours": 498,
+    "content": true,
+    "dark": 0.069,
+    "t": 80,
+    "top": 0.158
+   },
+   {
+    "colours": 498,
+    "content": true,
+    "dark": 0.069,
+    "t": 180,
+    "top": 0.158
+   },
+   {
+    "colours": 498,
+    "content": true,
+    "dark": 0.069,
+    "t": 280,
+    "top": 0.158
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "d6fb77f63082f689"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "win-outofctrl": {
+  "check": {
+   "backend": "mono",
+   "build": "windows",
+   "compressed": false,
+   "exit": 0,
+   "notes": 1,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "il2cpp-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "d3d11",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off"
+    },
+    "convert": {
+     "shaders": {
+      "from": [
+       "d3d11"
+      ]
+     }
+    },
+    "runtime": {}
+   },
+   "unity_supported": true,
+   "unity_version": "2019.2.5f1",
+   "warnings": 0
+  },
+  "pack": {
+   "bundles": 0,
+   "changed_files": 35,
+   "dropped_modules": 2,
+   "pack_verified": 2,
+   "player": "2019.2.5f1",
+   "plugins_map": 0,
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "stats": {
+    "copy": 136,
+    "inlined": 3,
+    "unitypy": 1,
+    "video": 1,
+    "written": 1
+   },
+   "tree": {
+    "files": 165,
+    "mb": 56,
+    "total": "8554529e01b717aa4a60010ac51301a490f4d649dc42a14bf232e1b3dc0464d2",
+    "zips": {
+     "zip/Game.apk": {
+      "entries": 142,
+      "members": "1da28801562aea60"
+     },
+     "zip/main.1.com.regress.winoutofctrl.obb": {
+      "entries": 1,
+      "members": "046942cc92af8125"
+     }
+    }
+   },
+   "verify_ok": true,
+   "verify_problems": 0,
+   "warnings": 0
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 39,
+   "frames": 1813
+  },
+  "shaders": {
+   "d3d11": {
+    "converted": 42,
+    "instancing": 0,
+    "programs": 205,
+    "skinning": 0,
+    "subshaders_left_out": 3,
+    "total": 44,
+    "vr": 0
+   },
+   "files": 3,
+   "not_translatable": 2,
+   "precision": "highp",
+   "programs": 205,
+   "rewrites": 1,
+   "shaders": 42,
+   "subprograms": 424
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 3,
+   "per_file": {
+    "Resources/unity_builtin_extra": "26aca21b29031a41",
+    "resources.assets": "7642119714b15c00",
+    "sharedassets0.assets": "51ef25b156b2b379"
+   },
+   "shaders": 42,
+   "total": "e8ec2f51d8b5ea00ee008594f0c35571ab970515c98d00763a78cd8f58c3ce9e"
+  },
+  "shots": [
+   {
+    "colours": 21,
+    "content": true,
+    "dark": 0.0,
+    "t": 60,
+    "top": 0.862
+   },
+   {
+    "colours": 22,
+    "content": true,
+    "dark": 0.0,
+    "t": 150,
+    "top": 0.862
+   },
+   {
+    "colours": 21,
+    "content": true,
+    "dark": 0.0,
+    "t": 250,
+    "top": 0.862
+   }
+  ],
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "3aef4c06397eaac0"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ }
+}
