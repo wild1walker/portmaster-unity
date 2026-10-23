@@ -52,9 +52,9 @@ the game's own Android build (`pmunity apk`); **box64** = the game's x86-64 Linu
 | [DEEP (Beta)](https://fog-icmc.itch.io/deep) | 6000.2.6f2, URP, FMOD + Resonance, Input System, Unity Services | **crashes at start** (Mono SIGSEGV in `mono_class_from_name`, before the first frame) | the first 6000.2 game. android-data first failed in its check of globalgamemanagers (UnityConnectSettings: UnityPy's tree for 6000.2.6 has a field the data lacks; fixed). The build ships no `netstandard.dll` (and 21 more of the assemblies its ScriptingAssemblies.json lists); the Android player's own UnityEngine.CoreModule references netstandard 2.1.0.0, so its types do not load ("Could not load file or assembly 'netstandard, Version=2.1.0.0'", then 306 "Unable to find type [UnityEngine.CoreModule.dll]...") and Mono crashes. android-data warns about it, and `pmunity winbcl --player` (which a port's setup runs) now adds Unity's own facade of the game's version (`unityjit-linux/Facades/netstandard.dll` 2.1.0.0 from the 6000.2.6f2 Windows editor installer, 1.1 MB read); netstandard is the only assembly the engine modules reference that the build lacks. With it those types load, and the next stop is "globalgamemanagers is corrupted" ("Position out of bounds"), "Desired shader compiler platform 9 is not available in shader blob", "TypeLoadException: VTable setup of type UnityEngine.Rendering.ShaderStrippingSetting failed" (URP's core package), SIGSEGV. The other 21 missing assemblies are package assemblies only the developer has (ProBuilder's Csg, KdTree, Poly2Tri and Stl, Splines, URP's Config and Shaders, Core.ShaderLibrary, LightTransport, parts of Unity Services, ...; no shipped assembly references them): an incomplete build, not faked; not fixed (2026-10-22) |
 | [DIG UP (test)](https://asestr.itch.io/dig-up-test) | 6000.3.11f1 | main menu | (2026-10-21) |
 | [Flowerist's Horror](https://trazam-dev.itch.io/flowerists-horror) | 6000.4.6f1, URP (HDRP's assembly shipped, not used), PlayMaker, Buto fog, FBX SDK, Input System | title menu (PLAY / CREDITS / SETTINGS / QUIT) | the first 6000.4 game; 115 shaders and 9 of 11 compute shaders translated (2026-10-22) |
-| [Ashley's Wacky Abandoned Building](https://davadoo.itch.io/ashleys-wacky-abandoned-building) | 6000.5.7f1 | title menu | (2026-10-21) |
-| [Phasing Gun](https://atalachy.itch.io/phasing-gun) | 6000.6.2f1 | first scene (in game) | (2026-10-21) |
-| [IronQuiet](https://aeroforger.itch.io/ironquiet) | 6000.6.3f1 | title menu over its 3D scene | about a minute per frame in the rig (2026-10-21) |
+| [Ashley's Wacky Abandoned Building](https://davadoo.itch.io/ashleys-wacky-abandoned-building) | 6000.5.7f1 | title menu | (2026-10-21); its Vulkan programs also translate (`--from vulkan`, checked in memory): 80 of 90 shaders, 2180 programs, interfaces as the GLCore twins', all 1673 distinct link on Mesa (2026-10-23) |
+| [Phasing Gun](https://atalachy.itch.io/phasing-gun) | 6000.6.2f1 | first scene (in game) | (2026-10-21); its Vulkan programs (`--from vulkan`, checked in memory) gave no program until the converter read 6000.6's new parameter entries; now 97 of 107 shaders, 526 programs, interfaces as the GLCore twins', all 464 distinct link on Mesa (2026-10-23) |
+| [IronQuiet](https://aeroforger.itch.io/ironquiet) | 6000.6.3f1 | title menu over its 3D scene | about a minute per frame in the rig (2026-10-21); Vulkan programs (`--from vulkan`, in memory): none before 6000.6's parameter entries were read, now 48 of 54 shaders, 300 programs, all 273 distinct link on Mesa (2026-10-23) |
 
 ## Windows-only builds (D3D11 shaders translated)
 
@@ -173,6 +173,9 @@ Metal-only build is translated from its Metal programs (`shaders.from = ["metal"
 | [Cold Apples](https://zohmer.itch.io/cold-apples) | 6000.6.4f1, Mono | starts in game | 2026-10-21 |
 | [2:22AM](https://umbrella-isle.itch.io/222am) | 5.0.0f4, 32-bit | aborts | 2026-10-21 |
 
-The six Linux Mono games of the 32-bit table also reach their menus under box64.
+The six Linux Mono games of the 32-bit table also reach their menus under box64. Tigan's and Cold
+Apples' Vulkan programs translate too (`--from vulkan`, checked in memory, 2026-10-23): 82 of 92
+shaders, 871 programs, and 83 of 93, 426 programs (Cold Apples', 6000.6, none before the converter
+read 6000.6's parameter entries); all their distinct programs (811, 361) link on Mesa.
 
 **Total: 60 games** (58 free games, Cuphead and Hollow Knight); 11 have run on the handheld.

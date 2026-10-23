@@ -189,7 +189,7 @@ The other lines use these layouts too (their built-ins read and write back with 
 |---|---|---|
 | 5.5 - 2017.2 | 201609010, written as 201708220 (4 statistics, one keyword list) | one block per platform, `m_SubPrograms`; 5.x GraphicsSettings has no `m_ShaderDefinesPerShaderCompiler` |
 | 2023.1 - 6000.5 | 202012090 | as 2022.3 |
-| 6000.6 | 202605290, written as 202012090 | as 2022.3 |
+| 6000.6 | 202605290, written as 202012090 | as 2022.3; the parameter entries in a layout of their own (typed lists, bindings as Unity's (encoded data, slot) structs; `m_CommonParameters` with `m_OffsetInConstantBuffer`, `m_Binding`): the GL path keeps them as they are, the Vulkan path reads and writes them ([below](#vulkan-only-builds-vulkan-programs-spir-v)), the Direct3D 11 and Metal paths do not read them yet |
 
 5.5 writes 201609010 too but has not been checked (refused with the rest of 5.x before 5.6); 5.0 -
 5.4 keep their programs in another Shader layout (no `compressedBlob`).
@@ -526,6 +526,21 @@ What the path does (`vulkan.py`, `spirv.py`), for Unity 2017.4 - 6000.x:
    the constant buffers with the members the program reads, and the bindings, whose index is
    stage bits << 24 | descriptor set << 16 | binding (stage bits 4 vertex, 8 fragment, 64 geometry;
    a texture's first int its sampler's index alike). Every entry writes back byte for byte.
+   **6000.6** (serializer 202605290; 6000.5 still writes the layout above) lays the parameter entry
+   out anew (`dxbc.Bindings` with `typed`): a constant buffer's members as a vector list and a
+   matrix list, each (name, dimension or rows | type << 16, array size, offset), structs alike; then
+   the bindings as lists by kind, textures, UAVs, constant buffers, buffers, inline samplers, each
+   binding Unity's Binding struct (int32 encoded data, int32 slot: the slot is the index above, the
+   encoded data 0 in all data seen), a texture with its sampler's binding and dimension << 1 |
+   multisampled, an inline sampler without a name. The program's `m_CommonParameters` use 6000.6's
+   names too (`m_OffsetInConstantBuffer`, `m_Binding`, `m_SamplerBinding`, slots stored unsigned).
+   The GLES3 twins' GL binding info is written in that layout, as Unity's own 6000.6 GL programs
+   have it (the same buffers and bindings as before, the `$Globals` binding at slot -1):
+   `dxbc.gl_bindings` writes it byte for byte for 1450 of the 1526 GLCore programs of Phasing Gun,
+   IronQuiet and Cold Apples it reads (all without uniform blocks; the others differ as on the lines
+   before, a one-element array in a block, the order of several stages' blocks;
+   `tests/test_gl_bindings_corpus.py`), and for Unity's own GLES3 programs of the 6000.6.0b3
+   built-ins IronQuiet carries but three VR variants (66 of 69: the order of the stereo blocks).
 2. **Names.** Unity strips the modules' debug names (but some varyings'). The path names, in the
    SPIR-V (OpName / OpMemberName), everything the way Unity's GL backend binds HLSLcc's GL programs:
    vertex inputs by their channel (`in_POSITION0`, `in_NORMAL0`, `in_TANGENT0`, `in_COLOR0`,
@@ -571,11 +586,12 @@ FinalPost, the blits, Bloom, TAA, SMAA, depth of field, the LUT builders, ...); 
 `u = 1 - u` stays. Compute
 shaders' Vulkan kernels are not translated yet (the GLCore path's `compute` needs GLCore kernels).
 
-**Checked** (`tests/test_vulkan_corpus.py`, eleven free Linux games that have both OpenGL Core and
+**Checked** (`tests/test_vulkan_corpus.py`, sixteen free Linux games that have both OpenGL Core and
 Vulkan programs, translated from Vulkan alone and compared with the same pass's GLCore program of
-the variant; `tests/test_vulkan.py` on hand-assembled SPIR-V): every Vulkan entry writes back byte
-for byte, and every distinct translated program compiles and links on Mesa (llvmpipe, ES 3.2;
-`ua-build-arm64`'s Mesa 21.2):
+the variant; `tests/test_vulkan.py` on hand-assembled SPIR-V, `tests/test_dxbc.py` on hand-made
+6000.6 parameter entries): every Vulkan entry writes back byte for byte, every twin's GL binding
+info reads back, and every distinct translated program compiles and links on Mesa (llvmpipe, ES
+3.2; `ua-build-arm64`'s Mesa 21.2):
 
 | game data | shaders given GLES3 (empty blobs) | programs (GLES 3.1) | left out | interface as the GL program's | distinct programs linked on Mesa |
 |---|---|---|---|---|---|
@@ -590,9 +606,17 @@ for byte, and every distinct translated program compiles and links on Mesa (llvm
 | 2023.1.8f1 (URP) | 97 (4) of 102 | 1666 (529) | VR blit, 4 with buffers; 186 instancing variants | 995 of 1704 (light arrays) | 1438 / 1438 |
 | 6000.3.11f1 (URP 2D) | 66 (4) of 76 | 1342 (13) | VR blit, framebuffer fetch, 2D MS arrays, 7 with buffers | 1341 of 1356 | 1002 / 1002 |
 | 6000.4.6f1 (URP) | 112 (8) of 123 | 1553 (1181) | as 6000.3; 192 instancing variants | 1355 of 1557 (light arrays) | 1419 / 1419 |
+| 6000.5.7f1 (URP) | 80 (4) of 90 | 2180 (842) | as 6000.3 | 2176 of 2194 | 1673 / 1673 |
+| 6000.5.9f1 (URP, IL2CPP) | 82 (7) of 92 | 871 (595) | as 6000.3 | 834 of 882 (light arrays; `_ScaleBiasRt`, which the Vulkan fragment stages read) | 811 / 811 |
+| 6000.6.2f1 (URP) | 97 (12) of 107 | 526 (228) | as 6000.3; 57 instancing variants | 466 of 498 (light arrays, `_ScaleBiasRt`) | 464 / 464 |
+| 6000.6.3f1 (built-in pipeline) | 48 of 54 | 300 | VR blit, 5 with buffers; 28 instancing variants | 307 of 315 (`UI/Default`'s `_SpaceWarpNDCModifier`, read in Vulkan only) | 273 / 273 |
+| 6000.6.4f1 (URP) | 83 (10) of 93 | 426 (124) | as 6000.3 | 422 of 440 (light arrays) | 361 / 361 |
 
 (The other differences: a fragment output named `SV_TARGET0` in GL, varyings a GL stage leaves
-out.) **Suvalf** (6000.3.5f1, HDRP, Vulkan only, compressed: `pmunity unpack` first): 116 of 142
+out.) The 6000.6 games gave no program before the path read 6000.6's parameter entries (the 2021.2
+reader took the string `PGlobals...` for a count: "binding info does not match the known layout");
+the games of 2017.4 - 6000.5 are unchanged by it (every converted Shader the same, checked in
+memory), and so is the Direct3D 11, Metal and GL paths' output. **Suvalf** (6000.3.5f1, HDRP, Vulkan only, compressed: `pmunity unpack` first): 116 of 142
 shaders given GLES3 programs (16 of them empty), 718 programs (345 GLES 3.1), 553 distinct, all
 linking on Mesa; 26 left out (HDRP's lit and volumetric passes: structured buffers, 13 of them in
 the shared parameters; XR's 2D multisampled arrays; cube map arrays; framebuffer fetch); its 118

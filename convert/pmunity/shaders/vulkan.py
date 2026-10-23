@@ -27,7 +27,12 @@ constant buffers with the members the program uses (name, type, rows, columns, m
 offset), the bindings. A binding's index is stage bits << 24 | descriptor set << 16 | binding (stage
 bits 4 vertex, 8 fragment, 64 geometry); a texture's first extra int is its sampler's index in the
 same form, kind 4 an inline sampler state. From 2021.2 the constant buffers and bindings are a
-parameter entry of their own, as for the other platforms.
+parameter entry of their own, as for the other platforms. Unity 6000.6 (serializer 202605290)
+writes that parameter entry in a layout of its own (dxbc's docstring: typed lists, each binding
+an (encoded data, slot) pair, the slot the index above); it is read so (dxbc.Bindings typed), the
+GLES3 twins get their GL binding info in it too (dxbc.gl_bindings typed: as Unity's 6000.6 GL
+programs, the "$Globals" binding at slot -1), and so do the Vulkan entries the shared parameters
+are put back into (m_CommonParameters: 6000.6's names, m_OffsetInConstantBuffer, m_Binding).
 
 translate_program() turns one entry into a GL program the way Unity's GLES3 backend binds them,
 as HLSLcc's GL programs of the same shader look:
@@ -617,7 +622,7 @@ def vulkan_indices(tree):
 
 
 def _vk_bindings(entry, param_entry, common, names):
-    b = dxbc.entry_bindings(entry, param_entry)
+    b = dxbc.entry_bindings(entry, param_entry, typed=True)        # (6000.6: its own layout)
     return dxbc.with_common(b, common, names)
 
 
@@ -669,8 +674,9 @@ def add_gles3_vulkan(tree, translator=None, precision='highp', replace=False, un
     gl_info = line >= (2019, 1)
     compact = line >= (2020, 1)
     # parameters in entries of their own (2021.2+ m_PlayerSubPrograms; 2021.2's first patches still
-    # list m_SubPrograms with the parameters in the program entries)
-    separate = serializer == dxbc.SEPARATE_PARAMS_FROM and any(pbi is not None for *_, pbi in _vk_lists(tree))
+    # list m_SubPrograms with the parameters in the program entries; 6000.6 in its own layout)
+    separate = (serializer == dxbc.SEPARATE_PARAMS_FROM or (serializer or 0) >= dxbc.TYPED_FROM) and \
+        any(pbi is not None for *_, pbi in _vk_lists(tree))
     if translate is None:
         if translator is None:
             raise ValueError('add_gles3_vulkan needs a translator or a translate function')
@@ -685,7 +691,7 @@ def add_gles3_vulkan(tree, translator=None, precision='highp', replace=False, un
             try:
                 r.guessed_layout |= e.guessed
                 es, typ = translate(e.code, b)
-                info = dxbc.gl_bindings(es, line, b.source_map) if gl_info else None
+                info = dxbc.gl_bindings(es, line, b.source_map, typed=b.typed) if gl_info else None
                 cache[key] = (es, info, B.GPU_GLES31 if typ == B.GPU_GLES31 else B.GPU_GLES3)
             except (Unsupported, dxbc.Unsupported, glsl.Unsupported) as ex:
                 cache[key] = ex

@@ -31,7 +31,8 @@ Every entry is one serialized subprogram:
 From 2021.2 (serializer 202012090) the constant buffers and bindings are entries of their own in
 the same blob (ParamEntry: int32 version, then the binding info from the constant buffers on); a
 subprogram names its code entry by m_BlobIndex and its parameter entry by the program's
-m_ParameterBlobIndices. Code entries then end after the channels.
+m_ParameterBlobIndices. Code entries then end after the channels. 6000.6 (serializer 202605290)
+lays the parameter entries out anew (dxbc's docstring; dxbc.Bindings typed).
 
 The layouts in SERIALIZERS are checked by writing every entry back byte for byte (Unity's own
 built-in resources of every LTS line, 2017.4 - 2022.3, and Cuphead's 5914 GLCore entries). For
