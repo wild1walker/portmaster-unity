@@ -39,7 +39,9 @@ is translated from the first one it has, so a game with OpenGL Core programs con
    - two rewrites that keep every operation and operand (`--optimize`, both on):
      **const-arrays** (HLSLcc fills constant tables, e.g. blur weights, element by element at the
      start of every invocation; they become `const` arrays) and **unroll** (loops with literal
-     bounds and a plain body are written out, the counter becoming a literal).
+     bounds and a plain body are written out, the counter becoming a literal: up to 16 trips and
+     120 statements in all; a larger one written out costs the Mali several times its loop,
+     [below](#exact-rewrites-for-the-mali-g31s-compiler-looked-for-2026-10-23)).
 4. A program that needs what GLSL ES 3.10 has and 3.00 lacks (multisampled textures
    `sampler2DMS`, `textureGather`, bit-field functions; for GLSL 4.x also storage buffers, binding
    points, images) is written as `#version 310 es` and typed GLES31 (gpu program type 3, with all
@@ -743,6 +745,177 @@ full-screen passes and render target sizes, not shader code. The rewrites above 
 passes by ~4 %; fewer fetches (e.g. a 7-tap blur as 4 bilinear fetches) would help more, but
 bilinear weights are quantized by the hardware, so the picture changes: that kind of change
 belongs in a game's port as an option, not in the converter's defaults.
+
+That holds for sprites and short post-processing passes. The URP 3D games' passes are long
+programs in highp, and there arithmetic does decide the cost ([below](#exact-rewrites-for-the-mali-g31s-compiler-looked-for-2026-10-23)).
+
+The timing options (2026-10-23):
+
+```sh
+shadercheck -t <dir> <n>... [-r R] [-n N] [-u name=v,v,...]... [-b|-B <out>] [-w <out>] [-o|-p] [-s WxH]
+```
+
+- `-r R`: R rounds over the list, the programs interleaved (a GPU clock that moves affects each
+  the same way); the median and the range of the rounds;
+- `-u name=v,...`: a uniform's values (a plain uniform, a member of a uniform block, an array from
+  its first element), e.g. a light count that decides a loop's trips, or an SSAO radius that keeps
+  every pixel off the early exit. Uniform blocks are bound to buffers of 0.5 floats (ints 0),
+  every sampler type gets a texture (3D, cube, 2D array, depth compared for shadow samplers), and
+  Unity's matrices (`hlslcc_mtx4x4unity_ObjectToWorld`, `..._MatrixVP`, ...) are the identity
+  in blocks too;
+- `-b`: each program's binary size (`glGetProgramBinary`), the compiled code and the driver's
+  tables: a static check of what a rewrite of the source changed; `-B <out>`: the binaries
+  themselves (`<out>/<n>.bin`; their Bifrost code is in the `OBJC` chunks, which Mesa's
+  disassembler reads: [profiling.md](profiling.md));
+- `-w <out>`: what each program draws, one quad unblended into an RGBA32F target
+  (`<out>/<n>.f32`): a rewrite's picture compared with the original's bit for bit, on the
+  device's driver;
+- blending is additive (ONE, ONE). With premultiplied alpha (`-p`, as before) a program that writes
+  alpha 1 makes its quads opaque, and the Mali's forward pixel kill drops the fragments of the
+  quads under the last ones: such programs measured less than a constant colour costs (if the
+  table's constant colour above wrote alpha 1, its 0.37-0.42 ms was such a measurement).
+- a second of quads before the rounds, and the GPU's devfreq clock at the start and the end (the
+  governor starts at 240 MHz: short programs' first rounds ran at a lower clock; compare the
+  medians, and the range).
+
+## Exact rewrites for the Mali-G31's compiler (looked for, 2026-10-23)
+
+The question: can the GLSL ES the converter writes be rewritten, with the same IEEE operations
+and the same precision, so that the RG34XX-SP's driver (Mali-G31, r20p0) compiles faster code?
+The six GPU-bound games of [compat/games.md](compat/games.md#handheld-benches-rg34xx-sp-2026-10-23)
+(and Hollow Knight) were traced pass by pass (`UA_GL_TRACE`, `UA_GL_TRACE_DRAWS` with
+`UA_SHADER_DUMP`), the programs of their expensive passes taken from the dumps, the patterns
+translated code carries timed in small programs, and each hot program timed with `shadercheck -t`
+next to its rewrites on the handheld. Where the passes go (GPU ms a frame, serialized,
+`UA_GL_TRACE_GPU=3`):
+
+| game, route | the expensive passes | what they run |
+|---|---|---|
+| Phasing Gun, 6000.6 glcore, URP 3D | SSAO 40.3, its three blurs 4.2 - 4.7 each, 2048x2048 shadow map 17.0, forward 13.9 (of 88.6) | URP's ScreenSpaceAmbientOcclusion (8 samples: sin, cos, 9 fetches, divides), its bilateral blurs, URP Lit (Forward+) |
+| The Third Eye, 2022.2 glcore, URP 3D | two cameras: the same SSAO blurs 1.8 - 4.4 each, forward 1.3 + 3.7 (of 39.7) | the same blur programs, URP Lit (a light loop) |
+| Arthur's Nightmare, 2017.3 glcore | the 3D room's forward pass 65.2 (of 81.7): 132 draws, 84,000 indices | Standard (forward base, spot-shadow and point forward add) |
+| Chapéu de Papel, 2022.3 Metal | the window pass 23.2 (of 26.1) | UberPost, a full-screen watercolour wash (6 fetches), UI with a paper shader |
+| White Mirror, 2021.2 glcore, URP 2D | Bokeh depth of field 5.5 a camera (two cameras; of 29.9), UberPost 2.0 - 3.6 | URP's BokehDepthOfField blur: a 42-tap loop |
+| Cell Machine, 2019.3 D3D11, URP | the window pass 14.4 (of 23.8) | UberPost with lens distortion and chromatic aberration |
+| Hollow Knight, 6000.0 glcore | ([profiling.md](profiling.md#gpu-pass-by-pass)) | sprites (one texture fetch), a 5-tap blur; no loops, no arrays |
+
+What every route hands the driver is HLSLcc's code: Unity's GL programs are HLSLcc's GLSL, its
+D3D11 programs go through HLSLcc here too, and its Metal programs are HLSLcc's MSL, read back
+statement by statement. It is the code of Unity's own GLES3 programs for the same shaders, up to
+the precision qualifiers (Chapéu de Papel's Android build has both: the same statements, with
+`mediump` where the HLSL says `half`). Timed on the handheld (ms per full-screen 720x480 layer,
+medians of 5 interleaved rounds at 696 MHz, every program shaded in full):
+
+| pattern | as translated | exact rewrite | result |
+|---|---|---|---|
+| a SPIR-V round trip: glslang -> spirv-opt (only passes that keep every float operation: SSA, dead code, CSE by value numbering, block merging, dead branches, copy propagation, vector DCE) -> SPIRV-Cross, declarations kept | SSAO 59.9, its blurs 4.27 / 4.24 / 3.93, Chapéu's UberPost 5.92, wash 3.65, UI paper 5.28 | 59.5, 4.25 / 4.27 / 3.94, 5.91, 3.65, 5.34 (without passes the same) | nothing: the binaries are the same size within 1 % (16,368 -> 16,464 bytes for SSAO); the driver's own optimizer does what spirv-opt's exact passes do. spirv-opt's folding is not exact (it turns `x*0` into 0 and `x+0` into `x`), so it was not used |
+| HLSLcc's identity table `ImmCB_0[k]` in URP's light loop (`dot(unity_LightIndices[i >> 2], ImmCB_0[i & 3])`) | The Third Eye's Lit, 4 lights: 40.6 | `vec4(equal(ivec4(k), ivec4(0,1,2,3)))`: 43.2 | slower; constant arrays indexed at run time are cheap on this driver (a table of 8 offsets read by a pixel's index: 1.20 ms, as a chain of selects 1.93) |
+| a chain of uniform-only arithmetic in the fragment stage (divide, `exp2`, `log2`, `inversesqrt`; HLSLcc writes these per pixel) | 0.567 | its result as a uniform: 0.577; computed in the vertex stage, a flat varying: 0.753 | nothing to gain: the driver computes uniform-only expressions once a draw |
+| a temporary array indexed at run time (in memory on Mali) | 11.8 | selects: 1.66 | 7 times slower, but no converted program of the six games has one (none of their 7,464 stages but one vertex stage of Phasing Gun's). Unity's own GLES3 programs do: HLSLcc fills its constant tables element by element in `main()` for GLES, 26 stages in Chapéu de Papel's Android build; the converter's `const-arrays` rewrite (and metal.py) write them as `const` arrays |
+| the Metal route's `i = 0; while(true){ if(i >= 42) break; ... i = i + 1; }` (HLSLcc's MSL form) | Chapéu's Bokeh blur: 45.0 | the same as `for(int i = 0 ; i<42 ; i++)`: 45.0 | the same code |
+| loops written out (the converter's `unroll`, up to 16 trips) | see below | | never faster; up to 10 times slower: now limited by size (default) |
+| the varyings a program reads packed into as few `vec4`s as their components fill (each varying read costs the G31 about 4 cycles a warp whatever its width: [profiling.md](profiling.md#gpu-counters-gpucnt)) | see below | | exact (the same bits), but no gain on the blob's code: not kept |
+
+Loops. A blur of N taps (a fetch and a multiply-add each, the kernel in a uniform array) and the
+same N trips of URP's Bokeh body (15 statements: two accumulators, two divides), as a loop, written
+out, and as a loop whose bound the compiler cannot see is constant (`i < N + int(gl_FragCoord.x <
+0.0)`: a fragment's window coordinates are never negative, so the same trips):
+
+| trips | 4 | 8 | 12 | 16 | 24 | 32 | 42 |
+|---|---|---|---|---|---|---|---|
+| blur, loop | 1.60 | 2.84 | 4.20 | 8.55 | 32.5 | 196 | 24.7 |
+| blur, written out | 1.61 | 2.84 | 4.19 | 8.55 | 31.9 | 196 | 260 |
+| blur, loop with an opaque bound | | | 7.91 | 10.2 | 14.9 | 19.6 | 25.4 |
+| Bokeh body, loop | | 7.48 | 12.6 | 16.4 | 24.1 | | 41.2 |
+| Bokeh body, written out | | 7.48 | 51.2 | 167 | | | |
+| Bokeh body, loop with an opaque bound | | | 13.1 | 16.9 | 24.6 | | 41.9 |
+
+and the real 42-tap Bokeh blur: White Mirror's (glcore) 41.4 ms as a loop, 758 written out;
+Chapéu's (Metal) 45.0 and 1,957. Written out, a loop costs the same as the loop up to the size
+where the driver runs out of registers, and then several times more (spilled to memory, as a
+temporary array is). The driver itself writes out short loops of a small body (the blur's 24 and 32
+trips cost far more than its 42; with the bound hidden they cost what the trips predict) and keeps
+loops of a larger body. Hidden bounds would therefore pay only for 17 - 32 trips of a body of a
+few statements, and no program of the corpus has one (its loops of more than 16 trips are the
+depth-of-field kernels: 22 - 71 trips of 16 - 24 statements), so that is not done.
+
+**The default change: written-out loops limited by size.** The converter wrote out every plain loop
+of up to 16 trips. On the 49 data folders of the free-game corpus and Cuphead's that is a few
+small blurs (3 - 12 trips of 3 - 6 statements: Cuphead's 7-tap blur passes, Unsung Warriors,
+Forsaken Castle) and the Post-processing Stack v2's depth of field with its small kernel, 16 trips
+of 22 statements, in five games (Forsaken Castle, Mineral Ph, Adrorium, Nainai's Recipe and
+Cuphead), which written out costs 2.7 times its loop: Forsaken Castle's program, 62.3 ms per
+full-screen layer as converted, 22.8 as the loop. `unroll` now also stops at 120 statements written
+out (trips x statements of the body, `glsl.UNROLL_STATEMENTS`: the largest size measured as cheap
+as the loop, the Bokeh body 8 times; the smallest measured slower is 180): the small blurs are still
+written out, the depth of field stays the loop HLSLcc wrote. Exact: the loop is the program as
+translated (what Unity's own GL program runs), and on the handheld the two forms of Forsaken
+Castle's program draw the same picture bit for bit (`shadercheck -w`, an RGBA32F target: every
+float equal). None of the GPU-bound games' benched scenes draws such a program (their converted
+data does not change), so there is no in-game frame rate to show; a game whose scene uses PPv2's
+depth of field with the small kernel gets that pass 2.7 times cheaper.
+
+The other two candidates on the handheld, in the games:
+
+- *The SPIR-V round trip* for every fragment program Phasing Gun's first scene compiles (14,
+  through `UA_SHADER_OVERRIDE`; A B A B, each run from a cooled handheld at 696 MHz all the time):
+  11.8, 11.8 fps as converted, 11.8, 11.8 round-tripped. The screenshots of the two A runs are the
+  same; the B runs differ from them, and from each other, only in a strip of the picture (4,300 -
+  4,600 pixels, by up to 5 of 255) where two unchanged runs of the gpu-survey differ the same way.
+- *Packed varyings* (the mesa-kbase measurement: five varyings packed into four `vec4`s cost 11 %
+  less in a synthetic shape of Hollow Knight's lit sprites). Built: the fragment stage's float
+  varyings packed, texture coordinates whole and first, the varyings every path reads before
+  those read only in a branch, the vertex stage writing the packed components. Exact: each packed
+  program below draws the same RGBA32F picture as its original (`shadercheck -w`), and the packed
+  programs of the six games' data compile and link on the handheld as their originals do (all
+  but 16 of Chapéu de Papel's, which fail unpacked too: below). But on the blob's code
+  (ms per layer, 200 quads, 7 rounds after a second of warm-up):
+
+  | program | as converted | packed |
+  |---|---|---|
+  | Hollow Knight: lit sprites (5 varyings -> 4; 3 on the path without light probes) | 0.535 | 0.535 |
+  | Hollow Knight: bloom prefilter (4 -> 2: the texture coordinates two to a `vec4`) | 1.65 | 1.73 (the fused varying-and-texture fetch is lost) |
+  | Hollow Knight: sprites with a separate alpha texture (3 -> 2) | 1.22 | 1.16 |
+  | the built-in procedural skybox (The Third Eye, Phasing Gun: 4 -> 3) | 1.67, 1.66 | 1.57, 1.58 |
+  | White Mirror's 2D lit sprite (3 -> 2), Arthur's Nightmare's outline buffer pass (3 -> 2) | 2.95, 1.31 | 3.01, 1.42 |
+  | The Third Eye's URP Lit, three variants (4 -> 3) | 53.7, 42.3, 50.6 | 54.4, 42.1, 51.8 (the driver spills: 3 - 4 more stores) |
+
+  and in the game, Hollow Knight's King's Pass with its lit sprites packed: 34.6, 34.9 fps as
+  converted (GPU at 696 MHz 54 / 61 % of the time), 34.1, 34.1 packed (48 / 51 %). Not kept in the
+  converter.
+
+Precision. Not exact, so not a default, but the one difference between these translations and
+Unity's own GLES3 programs, and the one change that moved the long programs (all floats
+`mediump`, which is more than Unity gives: only its `half` values):
+
+| program | as converted (highp) | everything mediump | Unity's own GLES3 (Android build) |
+|---|---|---|---|
+| Phasing Gun's SSAO | 59.9 | 46.3 (-23 %) | |
+| the SSAO blurs | 4.27 / 4.24 / 3.93 | 4.09 / 4.01 / 3.69 (-4 to -6 %) | |
+| Chapéu's Bokeh blur | 45.0 | | 43.7 (-3 %) |
+| Chapéu's UberPost (title menu) | 5.92 | 6.93 (+17 %) | 6.51 (+10 %) |
+| Chapéu's UberPost, sRGB variant | 7.30 | | 7.91 (+8 %) |
+| Chapéu's wash | 3.65 | 3.65 | 3.64 |
+| Chapéu's UI paper | 5.28 | 4.85 (-8 %) | 5.19 (-2 %) |
+
+So Unity's own output is not faster across the board on this GPU (its UberPost, where colour
+grading mixes `half` colours with float LUT coordinates, is slower: conversions), and the
+translation is clearly slower than it would be only where most of a program is `half` arithmetic:
+URP's SSAO, about a fifth. Two more differences from what an Android build would run, neither of
+them exact either: the built-in pipeline's Standard shader in a desktop build is compiled for the
+desktop tier (BRDF1, the full GGX; an Android build's tiers use the cheaper BRDF2/BRDF3), and it
+draws Arthur's Nightmare's 65 ms room; and the desktop builds' quality settings (Phasing Gun's
+shadow map pass, 17 ms) are the PC's.
+
+Not a cost but a failure, found on the way (the Metal route; not changed here): 24 of Chapéu de
+Papel's 993 programs as converted do not link on the handheld, its URP Lit and terrain-detail
+variants with per-pixel additional lights (`_ADDITIONAL_LIGHTS`): "the number of fragment uniform
+components (4,156 - 9,597) is greater than the maximum number allowed (4,096)". metal.py writes
+URP's constant buffers as plain uniforms, and the macOS build's light arrays have 256 entries
+(`_AdditionalLightsPosition[256]` and three more: 4,096 components alone); Unity's own GLES3
+programs (and the glcore route's, The Third Eye's) keep them in uniform blocks, which that limit
+does not count. Those variants cannot run on a Mali (the title menu benched does not use them)
+until the Metal route keeps the constant buffers as blocks, as Unity's GL programs of 2019+ do.
 
 ## Blend modes without GrabPass copies (`grab_fetch`, opt-in)
 
