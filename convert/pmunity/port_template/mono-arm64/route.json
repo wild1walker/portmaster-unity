@@ -1,0 +1,27 @@
+{
+  "title": "Unity's arm64 Android player with the game's own assemblies on Unity's Mono (built for aarch64 Linux, shipped with the port), run natively by ua_host (for 64-bit systems, no IL2CPP compile)",
+  "defaults": {
+    "player": {
+      "backend": "il2cpp",
+      "abi": "arm64-v8a"
+    }
+  },
+  "files": {
+    "@@TITLE@@.sh": "launcher.sh",
+    "@@PORTDIR@@/setup/patchscript": "patchscript",
+    "@@PORTDIR@@/README.md": "README.player.md",
+    "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
+    "@@PORTDIR@@/@@PORTDIR@@.ini": "hotkey.ini",
+    "README.md": "README.port.md",
+    "package.sh": "package.sh"
+  },
+  "package": [
+    "ua_host_arm64",
+    "mono64",
+    "pmunity",
+    "pybundle",
+    "asmpatch?",
+    "pmhlslcc?",
+    "pmspirvcross?"
+  ]
+}

@@ -100,8 +100,11 @@ def facade_profile(version, managed=None):
 
 
 def player_managed(player):
-    """The engine modules of a `pmunity player fetch` folder (the Mono player's Managed/)."""
-    return os.path.join(player, 'Variations', 'mono', 'Managed')
+    """The engine modules of a `pmunity player fetch` folder (the Mono player's Managed/; the IL2CPP
+    player's, fetched with --managed, for the Mono route on it)."""
+    mono = os.path.join(player, 'Variations', 'mono', 'Managed')
+    il2cpp = os.path.join(player, 'Variations', 'il2cpp', 'Managed')
+    return il2cpp if not os.path.isdir(mono) and os.path.isdir(il2cpp) else mono
 
 
 def missing(managed, player):

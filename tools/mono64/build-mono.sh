@@ -46,7 +46,7 @@ if [ ! -f "$D/.fetched" ]; then
     CF=$(api Unity-Technologies/mono external/corefx "$B")
     mkdir -p "$D/external/corefx"
     W1=; tar --version 2>/dev/null | grep -q 'GNU tar' && W1=--wildcards      # (bsdtar: patterns as is)
-    tarball mono/corefx "$CF" | tar xz $W1 -C "$D/external/corefx" --strip-components=1 '*/src/Native/*'
+    tarball mono/corefx "$CF" | tar xz $W1 -C "$D/external/corefx" --strip-components=1 '*/src/Native/*' '*/LICENSE.TXT'
     tarball Unity-Technologies/mono "refs/heads/$B" | tar xz $W1 -C "$D" --strip-components=1 '*/external/corefx-bugfix/*'
   fi
   # the left-out test folders configure.ac and the m4 files name: empty stand-ins

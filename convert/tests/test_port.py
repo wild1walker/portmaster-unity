@@ -581,6 +581,40 @@ class NewAndSetupTest(unittest.TestCase):
             _, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}, 'player': {'abi': 'armeabi-v7a'}})
             self.assertIn('PLAYER_ABI=armeabi-v7a', open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read())
 
+    def test_mono_arm64_route(self):
+        # Mono on the 64-bit player: offered by the check for a .NET 4.x Mono build (not recommended
+        # over the others), the IL2CPP player with its engine modules, android-data --mono64, the
+        # release's Mono runtime of the game's line installed as lib/libil2cpp.so and beside it
+        with tempfile.TemporaryDirectory() as t:
+            game = os.path.join(t, 'src', 'My Game')
+            fake_game(game, version='2019.4.8f1', name='My Game')
+            rep = P.check(game, asmpatch='/nonexistent-asmpatch')
+            r = next(x for x in rep['routes'] if x['route'] == 'mono-arm64')
+            self.assertTrue(r['ok'] and r['available'], r)
+            self.assertEqual(rep['route'], 'android')
+            _, out = self.make(t, {'port': {'route': 'mono-arm64'}})
+            env = open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read()
+            self.assertIn('PORT_ROUTE=mono-arm64', env)
+            self.assertIn('PLAYER_BACKEND=il2cpp', env)
+            self.assertIn('PLAYER_ABI=arm64-v8a', env)
+            launcher = open(os.path.join(out, 'My Game.sh')).read()
+            self.assertNotIn('lib32', launcher)
+            self.assertIn('uname -m', launcher)
+            setup = open(os.path.join(out, 'mygame', 'setup', 'patchscript')).read()
+            self.assertIn('--abi "$PLAYER_ABI" --managed', setup)
+            self.assertIn('--mono64', setup)
+            self.assertIn('$S/mono64/$line', setup)
+            self.assertNotIn('--on-device', setup)
+            self.assertNotIn('MonoLibs', setup)
+            for f in ('My Game.sh', 'mygame/setup/patchscript'):
+                subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
+            pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn("Unity's Mono", pj['attr']['desc'])
+            self.assertIn('mono64', json.load(open(os.path.join(P.TEMPLATES, 'mono-arm64', 'route.json')))['package'])
+            self.assertEqual(P.mono64_lines({'game': {'unity_versions': ['2019.4.8f1', '2019.4.40f1', '6000.0.61f1']}}),
+                             ['2019.4', '6000.0'])
+
     def test_package(self):
         with tempfile.TemporaryDirectory() as t:
             _, out = self.make(t, {'build': {'commands': ['echo tool > "$BUILD/tool" && chmod +x "$BUILD/tool"'],
