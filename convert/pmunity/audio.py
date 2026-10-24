@@ -64,11 +64,11 @@ def plan(clips, scenes, budget, min_s, resident=2):
     length rule does. A scene over the budget switches its own clips first, the largest first, then
     the resident ones (they are loaded, and switched, everywhere), the largest first.
     Returns (set of keys to switch, {scene: bytes of PCM it holds})."""
-    def long(k):
+    def switchable(k):
         c = clips[k]
         return c.load == DECOMPRESS_ON_LOAD and c.fmt == VORBIS and c.length >= min_s
     used = set().union(*scenes.values()) if scenes else set()
-    switch = {k for k in clips if long(k) and (budget is None or k not in used)}
+    switch = {k for k in clips if switchable(k) and (budget is None or k not in used)}
     if budget is None:
         return switch, {}
     base = set().union(*(s for i, s in scenes.items() if i < resident))
@@ -76,7 +76,7 @@ def plan(clips, scenes, budget, min_s, resident=2):
     for i in sorted(scenes):
         held = [k for k in scenes[i] | base if clips[k].load == DECOMPRESS_ON_LOAD and k not in switch]
         total = sum(clips[k].pcm for k in held)
-        order = sorted((k for k in held if long(k)), key=lambda k: (i >= resident and k in base, -clips[k].pcm, k))
+        order = sorted((k for k in held if switchable(k)), key=lambda k: (i >= resident and k in base, -clips[k].pcm, k))
         for k in order:
             if total <= budget:
                 break
