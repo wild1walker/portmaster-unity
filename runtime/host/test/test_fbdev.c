@@ -10,6 +10,9 @@
 // will show, every frame is flipped to, in order (not with mailbox flips: those drop frames), and
 // host flips let the GPU work while a flip waits (frames slower than a refresh at more than half the
 // refresh rate); a new window in the middle (fbdev_new_window) restarts at the buffer on the screen.
+// A window smaller than the 720x480 screen: from its first frame on, every pan carries its size (the
+// display engine's crop) at the same offsets; and the render sizes UA_RENDER_SIZE / UA_RENDER_SCALE
+// pick.
 // Built and run by fbdev_test.sh (armhf under QEMU, arm64).
 #define _GNU_SOURCE
 #include "../fbdev.h"
@@ -43,6 +46,8 @@ static int on_screen;                    // buffer the display shows
 static int drawing = -1;                 // buffer the GPU draws into now
 static int pending_flips[64], npending;  // buffers the driver panned to, not shown yet (host flips)
 static int tears, overwrites, flips, out_of_order, last_flipped_frame;
+static int crop_w, crop_h;               // the size the pans should carry (the window's)
+static int pans_full, pans_cropped, pans_wrong;   // pans with the screen's size, the window's, another
 static int frame_of_buffer[16];          // the frame last drawn into each buffer
 static double t0;
 
@@ -60,6 +65,9 @@ static int fake_pan(int fd, unsigned long req, ...)
     sleep_us(next - t);
     pthread_mutex_lock(&m);
     int b = v->yoffset / YRES;
+    if (v->xres == 720 && v->yres == YRES) pans_full++;
+    if (crop_w && (int)v->xres == crop_w && (int)v->yres == crop_h) pans_cropped++;
+    else if (v->xres != 720 || v->yres != YRES) pans_wrong++;
     on_screen = b;
     if (drawing == b) tears++;                         // the GPU is drawing into what is shown now
     for (int i = 0; i < npending; i++)
@@ -107,6 +115,7 @@ static void *gpu_main(void *arg)
         // the driver's thread: pan to it (the GPU waits meanwhile: Mali's backend feeds it)
         struct fb_var_screeninfo v;
         memset(&v, 0, sizeof v);
+        v.xres = 720;
         v.yres = YRES;
         v.yoffset = b * YRES;
         pthread_mutex_lock(&m);
@@ -124,6 +133,8 @@ static void *gpu_main(void *arg)
     return NULL;
 }
 
+static int start_w = 720, start_h = YRES, new_w = 720, new_h = YRES;   // the windows: at the start, at new_window_at
+
 // one run; returns the frame rate
 static double run(const char *name, int mode, int buffers, int queue, int frames, int cpu_us_, int gpu_us_, int new_window_at)
 {
@@ -137,11 +148,13 @@ static double run(const char *name, int mode, int buffers, int queue, int frames
     next_idx = 1;
     npending = qh = qn = 0;
     tears = overwrites = flips = out_of_order = 0;
+    pans_full = pans_cropped = pans_wrong = 0;
     last_flipped_frame = -1;
     stop = 0;
     gpu_us = gpu_us_;
     gpu_work_us = 0;
     pthread_mutex_unlock(&m);
+    fbdev_new_window(start_w, start_h);
     t0 = now_us();
     pthread_t g;
     pthread_create(&g, NULL, gpu_main, NULL);
@@ -149,7 +162,7 @@ static double run(const char *name, int mode, int buffers, int queue, int frames
     for (int f = 0; f < frames; f++) {
         if (f == new_window_at) {
             // the window is made again: the driver's new window starts at the buffer on the screen
-            fbdev_new_window();
+            fbdev_new_window(new_w, new_h);
             pthread_mutex_lock(&m);
             while (qn) pthread_cond_wait(&c, &m);     // (the old window's frames are done)
             next_idx = (on_screen + 1) % B;
@@ -234,6 +247,57 @@ int main(void)
     // the test sees tearing: mailbox flips (a measurement) tear with fast frames
     run("mailbox, fast frames (tears)", 2, 2, 0, 200, US(100), US(300), -1);
     CHECK(tears + overwrites > 0);
+    // a 540x360 window: every pan carries its size, the offsets as before (the driver's flips, and
+    // host flips from a new window at frame 60 on)
+    crop_w = 540; crop_h = 360;
+    start_w = 540; start_h = 360;
+    run("driver, a 540x360 window", 0, 2, 0, 120, US(300), US(600), -1);
+    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 120);
+    CHECK(pans_wrong == 0 && pans_full == 0 && pans_cropped == 120);
+    start_w = 720; start_h = YRES; new_w = 540; new_h = 360;
+    run("host, a 540x360 window at frame 60", 1, 4, 0, 150, US(300), US(600), 60);
+    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 150);
+    CHECK(pans_wrong == 0 && pans_full == 60 && pans_cropped == 90);
+    printf("  pans: %d with the screen's size, %d with the window's\n", pans_full, pans_cropped);
+    // and back to a whole-screen window
+    start_w = 540; start_h = 360; new_w = 720; new_h = YRES;
+    run("host, 540x360, a 720x480 window at frame 60", 1, 4, 0, 150, US(300), US(600), 60);
+    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 150);
+    CHECK(pans_wrong == 0 && pans_cropped == 60 && pans_full == 90);
+    printf("  pans: %d with the screen's size, %d with the window's\n", pans_full, pans_cropped);
+    start_w = 720; start_h = YRES;
+    // the render sizes (UA_RENDER_SIZE / UA_RENDER_SCALE / UA_RENDER_RAM)
+    static const struct { int pw, ph; const char *size, *scale, *ram; long kb; int ok, w, h; } rs[] = {
+        { 720, 480, NULL, "0.75", NULL, 0, 1, 540, 360 },
+        { 720, 480, NULL, "0.8333", NULL, 0, 1, 600, 400 },
+        { 720, 480, NULL, "0.9167", NULL, 0, 1, 660, 440 },
+        { 720, 480, NULL, "0.9", NULL, 0, 1, 648, 432 },
+        { 720, 480, "600x400", NULL, NULL, 0, 1, 600, 400 },
+        { 720, 480, "576x384", "0.5", NULL, 0, 1, 576, 384 },        // the size before the scale
+        { 720, 480, "640x360", NULL, NULL, 0, 1, 540, 360 },         // the panel's aspect within it
+        { 720, 480, "601x401", NULL, NULL, 0, 1, 600, 400 },         // even
+        { 720, 480, NULL, "0.1", NULL, 0, 1, 180, 120 },             // a quarter at least
+        { 720, 480, NULL, "1", NULL, 0, 0, 0, 0 },
+        { 720, 480, "720x480", NULL, NULL, 0, 0, 0, 0 },
+        { 720, 480, "800x600", NULL, NULL, 0, 0, 0, 0 },
+        { 720, 480, "big", NULL, NULL, 0, 0, 0, 0 },
+        { 720, 480, NULL, "0", NULL, 0, 0, 0, 0 },
+        { 720, 480, NULL, NULL, "1024", 996352, 0, 0, 0 },           // nothing asked
+        { 720, 480, NULL, "0.75", "1024", 996352, 1, 540, 360 },     // 973 MB: a 1 GB device
+        { 720, 480, NULL, "0.75", "1024", 2 * 1048576L, 0, 0, 0 },   // 2 GB: the panel's size
+        { 640, 480, NULL, "0.75", NULL, 0, 1, 480, 360 },
+        { 1280, 720, NULL, "0.75", NULL, 0, 1, 960, 540 },
+        { 1920, 1152, NULL, "0.5", NULL, 0, 1, 960, 576 },
+        { 854, 480, NULL, "0.75", NULL, 0, 1, 640, 360 },           // no whole aspect step: the nearest even sizes
+    };
+    for (size_t i = 0; i < sizeof rs / sizeof rs[0]; i++) {
+        int w = 0, h = 0;
+        int ok = fbdev_pick_render_size(rs[i].pw, rs[i].ph, rs[i].size, rs[i].scale, rs[i].ram, rs[i].kb, &w, &h);
+        CHECK(ok == rs[i].ok && (!ok || (w == rs[i].w && h == rs[i].h)));
+        if (ok != rs[i].ok || (ok && (w != rs[i].w || h != rs[i].h)))
+            fprintf(stderr, "  render size %dx%d size %s scale %s ram %s: %d %dx%d\n", rs[i].pw, rs[i].ph, rs[i].size ? rs[i].size : "-",
+                    rs[i].scale ? rs[i].scale : "-", rs[i].ram ? rs[i].ram : "-", ok, w, h);
+    }
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

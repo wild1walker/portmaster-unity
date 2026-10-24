@@ -87,10 +87,43 @@ the driver's flips in Hollow Knight's menu, at 11 % more frames).
 | `UA_FB_BUFFERS=<n>` | the framebuffer's virtual height as `n` screens, when its memory holds them. Default: 4 with host flips (3 if the memory holds no more), else the firmware's (2 on Knulli) |
 | `UA_FB_QUEUE=<n>` | frames the render thread may be ahead of the screen, at most buffers - 2 (and 2). Default: automatic, 2 while frames miss refreshes (the GPU always has the next frame), 1 once 30 frames in a row were done while the one before still waited for its flip (the game keeps up with the refresh, and a second queued frame would only be latency); back to 2 at a missed refresh, for 2 s (doubling up to a minute at each fall-back, so a game at the edge does not go back and forth) |
 | `UA_FB_TRACE=<n>`, `UA_FB_TRACE_START=<s>` | `[fbtrace]` lines: the times of `n` swaps, the driver's pans and the flips, from `s` (40) seconds after the first swap |
+| `UA_RENDER_SIZE=<w>x<h>`, `UA_RENDER_SCALE=<s>` | (off by default: a visual setting) Unity's window at that size, smaller than the panel, and the display engine's scaler draws it over the whole panel at no GPU or CPU cost (below). The size keeps the panel's aspect and is even (720x480: 660x440, 630x420, 600x400, 576x384, 540x360, ...); a size of another aspect becomes the largest of the panel's aspect within it, a scale the nearest such size; a quarter of the panel at least. Logged as `[fbdev] render size ...`. The fbdev path only (an SDL window keeps its size) |
+| `UA_RENDER_RAM=<MB>` | the render size only on a device with at most that much memory (`MemTotal`): e.g. `UA_RENDER_SIZE=600x400 UA_RENDER_RAM=1024` in a port's launcher softens the picture on 1 GB handhelds and leaves larger ones at the panel's size |
 
 `UA_FPS`'s lines end with, on the fbdev path, the time from each swap to the flip that shows it
 (`shown <avg> / <worst> ms after the swap`), the buffers, the queue depth allowed and the render
 thread's wait for its next buffer (`gate`).
+
+### A smaller window, scaled by the display engine (`UA_RENDER_SIZE`)
+
+Mali's fbdev driver draws a window smaller than the framebuffer into the top left of each buffer,
+at the framebuffer's pitch, the buffers still a screen apart, and pans with the framebuffer's own
+size. sunxi's fbdev (the Allwinner BSP kernel Knulli, muOS and the stock firmware run on the H700)
+takes a pan's `xres`/`yres` as the display layer's source crop and keeps the layer's screen window
+at the panel's size. With `UA_RENDER_SIZE` the host makes every pan with the window's size, and the
+display engine's scaler draws the window over the whole panel: no GPU pass, no CPU work, no
+latency. Checked on the RG34XX-SP with a test program (now `runtime/host/egltest <s> <w>x<h>`: a
+still pattern in a smaller window, the pans made with its size) and the display engine's own
+capture of what it sends to the panel (`echo <file>.bmp > /sys/class/disp/disp/attr/capture_dump`; `cat
+/sys/class/disp/disp/attr/sys` lists the layer's `crop[...]` and `frame[...]`): 540x360 and 600x400
+fill the 720x480 panel, the 1-pixel border at its edges, nothing sheared. A profbench plan's `cap`
+step saves that capture (`cap-<n>.bmp`); `shot` still saves the frame Unity drew, at the render size.
+
+What has the render size: the ANativeWindow and everything the host answers from its size (the EGL
+surface, so `Screen.width`/`height`; DisplayMetrics, `Display.getWidth`/`getRealMetrics` and its
+mode's size, the View, the AConfiguration's dp size), pointer mode (cursor, speed, `ptr=` pixels; fractions are the same
+point on the screen), the on-screen keyboard and screenshots. The game draws its frame, its UI
+included, at that size, and the panel shows it scaled: the picture is softer, which makes it a
+visual setting, never a default for every port. A game that sizes its view in pixels (a pixel-perfect
+camera, a zoom picked from `Screen.height`) could show more or less of a level at another size:
+compare `shot` screenshots of one scene at both sizes before turning it on for a port
+([profiling.md](profiling.md#rendering-smaller-the-display-engines-scaler-ua_render_size)).
+Resize requests stay inside the window: `SurfaceHolder.setFixedSize` is a no-op as before, and an `ANativeWindow_setBuffersGeometry` larger than
+the window is cut to it, side by side (Mali refuses a window larger than the framebuffer's screen:
+`eglCreateWindowSurface` fails with `EGL_BAD_NATIVE_WINDOW`); a smaller one is scaled to the panel
+the same way (the pans carry the size of whatever window the driver draws). The crop is put back to the whole screen when the host ends, after a crash, and by
+`ua_fbrestore` if the host is killed. URP's own render scale (`m_RenderScale`, a converter setting)
+multiplies with it: the URP camera renders at its scale of the window.
 
 ## Host switches (environment)
 

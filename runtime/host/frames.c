@@ -26,6 +26,7 @@
 #include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
+#include "../android/android_shims.h"
 #include "../android/egl_glue.h"
 #include "../loader/so_loader.h"
 
@@ -199,6 +200,13 @@ static void on_swap_done(void *ctx, int ok)
     fbdev_swap_done(ok);                        // host flips: wait for the next frame's buffer (fbdev.c)
 }
 
+// right before Unity's window surface is made: the size the driver will draw it at
+static void on_new_window(void)
+{
+    ANativeWindow *w = android_window_get();
+    fbdev_new_window(ANativeWindow_getWidth(w), ANativeWindow_getHeight(w));
+}
+
 void frames_init(const char *root, int width, int height)
 {
     snprintf(g_root, sizeof g_root, "%s", root);
@@ -207,5 +215,5 @@ void frames_init(const char *root, int width, int height)
     snprintf(g_req, sizeof g_req, "%s/shot.req", root);
     egl_glue_set_swap_hook(on_swap, NULL);
     egl_glue_set_swap_done_hook(on_swap_done, NULL);
-    egl_glue_set_window_hook(fbdev_new_window);
+    egl_glue_set_window_hook(on_new_window);
 }

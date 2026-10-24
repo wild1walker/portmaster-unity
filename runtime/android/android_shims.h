@@ -79,6 +79,9 @@ void android_set_asset_dir(const char *dir);
 typedef struct ANativeWindow ANativeWindow;
 ANativeWindow *android_window_get(void);                 // creates on first use, not ref-counted
 void android_window_set_size(int width, int height);     // physical window size
+// The largest buffer geometry setBuffersGeometry may set (0: any): a larger request is cut to it,
+// side by side (Mali's fbdev window must fit the framebuffer's screen; the host's fbdev path).
+void android_window_set_max_size(int width, int height);
 // Optional: a host-provided EGLNativeWindowType (X11 Window, SDL-created fbdev window, ...)
 // handed to the real eglCreateWindowSurface instead of the built-in fbdev_window.
 void android_window_set_native(void *native_window);

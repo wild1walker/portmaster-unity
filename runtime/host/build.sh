@@ -34,7 +34,7 @@ if [ "$ARCH" = arm64 ]; then
       rm -f $O/ua_host
       echo "ua_host not linked: no arm64 loader yet ($LOADER); objects compiled in $O"
     fi
-    gcc -O2 -Wall -o $O/egltest egltest.c -lEGL -lGLESv2
+    gcc -O2 -Wall -rdynamic -o $O/egltest egltest.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/passbench passbench.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/sdltest sdltest.c -lSDL2
     gcc -O2 -Wall -o $O/audiocheck audiocheck.c -lSDL2
@@ -80,7 +80,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
     out/display.o out/display_sdl.o out/fbdev.o out/steamstub.o out/plugins.o out/plugstubs.o out/mono64.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
-  arm-linux-gnueabihf-gcc -O2 -Wall -o out/egltest egltest.c -lEGL -lGLESv2
+  arm-linux-gnueabihf-gcc -O2 -Wall -rdynamic -o out/egltest egltest.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/passbench passbench.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/sdltest sdltest.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/audiocheck audiocheck.c -lSDL2

@@ -1112,6 +1112,85 @@ a tenth of the render thread's time at first (its sprite batches are flushed thr
 that is slow to read: 63 -> 73 %, 35.0 -> 34.1 fps): mapped writes are now copied only into small buffers a keyed draw
 reads.
 
+## Rendering smaller: the display engine's scaler (`UA_RENDER_SIZE`)
+
+Every game below 60 fps on the handheld is limited by the Mali's fragment work, which falls with the
+pixel count. The H700's display engine scales its layers in hardware, so a window smaller than the
+panel, shown through it, costs the GPU and the CPUs nothing more. `UA_RENDER_SIZE=<w>x<h>` (or
+`UA_RENDER_SCALE`; [runtime.md](runtime.md#a-smaller-window-scaled-by-the-display-engine-ua_render_size))
+gives Unity a window of that size and makes the host's pans carry it. Off by default: the picture is
+softer, a visual setting (a port for 1 GB devices may choose it with `UA_RENDER_RAM`; what the game
+shows and does stays the same, checked below).
+
+### The probe (2026-10-24)
+
+A test program (now `runtime/host/egltest <s> <w>x<h>`) drew a still pattern (four coloured quarters,
+a marker near the top left, a 1-pixel white border, a dotted middle line) into a Mali fbdev window,
+logged the driver's framebuffer calls, and read what the display engine sent to the panel (its own
+capture, `/sys/class/disp/disp/attr/capture_dump`), the layer's state (`attr/sys`) and the
+framebuffer's memory; a parent process put the framebuffer back after each case.
+
+| window, pans | the driver | the layer | the panel |
+|---|---|---|---|
+| 720x480, the driver's | pans 720x480 at y 0 / 480 | `crop[0, 480, 720, 480] frame[0, 0, 720, 480]` | the pattern |
+| 540x360, the driver's | draws the window into the top left of each 720x480 buffer, at the framebuffer's pitch (2,880 bytes), the buffers still 480 rows apart; pans 720x480 | `crop[0, 480, 720, 480]` | the pattern at 1:1 in the top left, the buffers' old contents around it |
+| 540x360, the pans made with 540x360 | the same | `crop[0, 480, 540, 360] frame[0, 0, 720, 480]` | **the whole pattern over the whole panel**: the border on the panel's edge rows and columns, nothing sheared |
+| 600x400, the pans made with 600x400 | the same | `crop[0, 480, 600, 400]` | the same |
+| 1280x720, larger than the framebuffer | `eglCreateWindowSurface` fails (`EGL_BAD_NATIVE_WINDOW`) | | |
+
+The scaler's filter, read from the capture: horizontally a 4-tap kernel (a red-to-grey step rings by
+a pixel on each side: 255, 106, 52, 64), vertically linear (255, 112, 64). After each case the layer
+showed `crop[0, 0, 720, 480]` again.
+
+### On the handheld
+
+`tools/device/profbench.sh`, one hold per game: the panel's size, 600x400 (69 % of the pixels),
+540x360 (56 %), the panel's size again, each run from a cool start (CPU and GPU at or under 50 C),
+25 s measured. fps, with the seconds at the GPU's 696 / 600 MHz where they were not all at one clock;
+GPU memory is the game's pages in `/sys/kernel/debug/mali0/gpu_memory` at the measurement's end.
+
+| game | 720x480 | 600x400 | 540x360 | 720x480 again | GPU memory (MB) | what limits it at 540x360 |
+|---|---|---|---|---|---|---|
+| Hollow Knight, King's Pass, 64-bit | 33.9 (8 / 17 s) | **40.0** (600 MHz) | **41.1** (600 MHz) | 33.7 (6 / 19 s) | 311.4 -> 306.5, 304.9 | UnityMain: 94 % of a core (82 - 83 % at 720x480), the CPUs at their thermal cap (1512 MHz) |
+| Hollow Knight, King's Pass, 32-bit | 35.2 (16 / 9 s) | **40.7** (600 MHz) | **41.7** (2 / 23 s) | 34.7 (13 / 12 s) | 312.0 -> 306.1, 305.6 | UnityMain: 94 - 95 % of a core (84 - 86 % at 720x480) |
+| Phasing Gun, first scene | 11.6 (696 MHz) | **15.5** | **18.0** | 11.6 | 106.5 -> 104.1, 102.9 | the GPU (its 4096x4096 shadow atlas does not shrink) |
+| The Third Eye, first scene | 34.2 (696 MHz) | **41.1** | **43.4** | 34.2 | 64.1 -> 55.0, 52.0 | the render thread (98 % of a core; 78 % at 720x480) |
+| Arthur's Nightmare, the 3D room | 12.9 (696 MHz) | **17.8** | **21.4** | 12.9 | 150.1 -> 146.6, 145.1 | the GPU (its forward pass, three light passes a pixel at 2x MSAA) |
+| White Mirror, in game | 53.6 (696 MHz) | **58.6** | **59.3**, the refresh rate (the Mali at 504 MHz) | 53.5 | 94.4 -> 92.2, 90.5 | the refresh rate |
+| Chapéu de Papel, title menu | 33.8 (696 MHz) | **40.3** | **50.3** | 38.4 (its animated title varies from run to run) | 116.4 -> 114.8, 114.1 | the GPU (UnityMain 67 % of a core) |
+
+Hollow Knight gets nearly all of it at 600x400: below that the main thread is the limit (the
+thermal governor caps the CPUs at 1512 MHz and the Mali at 600 MHz within 20 s of King's Pass, as
+before). The games limited by fragment shading alone gain about what the pixel count says: Phasing
+Gun +33 / +55 %, Arthur's Nightmare +39 / +67 %, Chapéu 40.3 / 50.3 against 33.8 - 38.4. GPU memory falls by the
+screen-sized targets (2 - 12 MB); the process's resident size and the device's available memory
+move by less than they do from run to run.
+
+Framing (`tools/analysis/framecmp.py`: `shot` screenshots of the same scene, the panel-size one scaled
+by (small / full) x k and compared in the picture's middle 70 % for k = 0.70 - 1.45, and the two side
+by side for the HUD): Hollow Knight's King's Pass (both builds), Phasing Gun,
+Arthur's Nightmare and White Mirror show the same part of the scene at every size (the least
+difference at k = 1.00; a camera that kept its pixels would be at 1.20 and 1.33), their HUDs (Hollow
+Knight's masks and soul vessel, Arthur's counter, Phasing Gun's bars, White Mirror's timer) at the
+same place and size; what differs is edges (softer) and what moves (particles, the timer; two
+panel-size runs differ as much there). Chapéu's menu card is at the same place and size (its
+background animates). The Third Eye's first scene is a dark dithered vignette with nothing to line
+up (3D, a perspective camera: its framing follows the aspect, which stays the same). None of the
+six compared sizes its view by pixels. White Mirror's timer read 9.3 s at the screenshot in the first
+panel-size run and 12.2, 12.5 and 12.1 s in the others: when the level starts, not the size.
+
+What the panel shows, for judging the softness: the plans' `cap` step (the display engine's capture,
+720x480) at each size, kept with the bench results outside the repository (game pictures are never
+in it). The cost model from the survey (GPU frame = fragment work x pixels + a fixed part) holds for
+the fragment-bound games; it stops where another limit takes over (Hollow Knight's main thread, The
+Third Eye's render thread, White Mirror's refresh rate).
+
+What to choose per port (a proposal; not a default, the user's call): where a game is GPU-bound and
+its framing is the same, `UA_RENDER_SIZE=600x400 UA_RENDER_RAM=1024` for the 1 GB handhelds (Hollow
+Knight: +16 - 18 %, nearly all there is before its main thread; The Third Eye 41, White Mirror 59),
+540x360 where the GPU still limits it there (Phasing Gun, Arthur's Nightmare, Chapéu: +31 - 67 %). URP's own render scale (a converter setting) is the alternative for URP games
+that keeps their Screen Space Overlay UI at the panel's size.
+
 ## GPU counters: gpucnt
 
 `runtime/host/gpucnt` (built with the host programs, static, so the armhf binary runs on both

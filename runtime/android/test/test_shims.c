@@ -593,6 +593,16 @@ static void test_window_egl(const char *fakeegl)
     CHECK(*surface_calls == before + 2 && fb[0] == 320 && fb[1] == 240);
     CHECK(ANativeWindow_setBuffersGeometry(w, 0, 0, 0) == 0 && ANativeWindow_getWidth(w) == 640);
     CHECK(ANativeWindow_setBuffersGeometry(w, 10, 0, 0) != 0);
+    // the host's fbdev path: a buffer geometry larger than the window is cut to it, side by side
+    android_window_set_max_size(640, 480);
+    CHECK(ANativeWindow_setBuffersGeometry(w, 1920, 1080, 0) == 0);
+    CHECK(ANativeWindow_getWidth(w) == 640 && ANativeWindow_getHeight(w) == 480);
+    CHECK(ANativeWindow_setBuffersGeometry(w, 600, 1080, 0) == 0);
+    CHECK(ANativeWindow_getWidth(w) == 600 && ANativeWindow_getHeight(w) == 480);
+    CHECK(ANativeWindow_setBuffersGeometry(w, 320, 240, 0) == 0);
+    CHECK(ANativeWindow_getWidth(w) == 320 && ANativeWindow_getHeight(w) == 240);
+    android_window_set_max_size(0, 0);
+    CHECK(ANativeWindow_setBuffersGeometry(w, 0, 0, 0) == 0 && ANativeWindow_getWidth(w) == 640);
     CreateWindowSurface(NULL, NULL, w, NULL);
     CHECK(fb[0] == 640 && fb[1] == 480);
     // A host-provided native window replaces the fbdev one.

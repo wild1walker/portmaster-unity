@@ -65,7 +65,7 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
 | Area | State |
 |---|---|
 | liblog | Implemented: `__android_log_{write,print,vprint,buf_write,buf_print,assert,is_loggable,set/get_minimum_priority}` print `I/Unity(tid): msg` to stderr with one write() per line, trailing newlines trimmed. `ANDROID_LOG_LEVEL=V/D/I/W/E/F` (default D). |
-| ANativeWindow | Implemented: one window, its size is the `/dev/fb0` visible size (`FBIOGET_VSCREENINFO`), or `ANDROID_WINDOW_SIZE=WxH`, or 720x480. `setBuffersGeometry` sets the buffer size reported by `getWidth/getHeight` and used for the EGL surface (0,0 resets). `fromSurface` returns the window for any non-NULL Surface. Stubbed: `lock`/`unlockAndPost` return -EINVAL (no CPU rendering). |
+| ANativeWindow | Implemented: one window, its size is the `/dev/fb0` visible size (`FBIOGET_VSCREENINFO`), or `ANDROID_WINDOW_SIZE=WxH`, or 720x480. `android_window_set_size` sets it (the host: an SDL window's drawable, or the fbdev path's render size, `UA_RENDER_SIZE`). `setBuffersGeometry` sets the buffer size reported by `getWidth/getHeight` and used for the EGL surface (0,0 resets); with `android_window_set_max_size` (the host's fbdev path: the window's size) a larger request is cut to it, side by side (Mali's fbdev driver refuses a window larger than the framebuffer's screen: `eglCreateWindowSurface` fails with `EGL_BAD_NATIVE_WINDOW`). `fromSurface` returns the window for any non-NULL Surface. Stubbed: `lock`/`unlockAndPost` return -EINVAL (no CPU rendering). |
 | AAssetManager | Implemented over a directory: `fromJava`, `open`, `openDir`, `AAssetDir_{getNextFileName,rewind,close}` (regular files only, as on Android), `AAsset_{read,seek,seek64,getLength(64),getRemainingLength(64),getBuffer (mmap),openFileDescriptor(64),isAllocated,close}`. Names with `..` are refused. |
 | ALooper | Implemented with poll() and an eventfd: `forThread`, `prepare`, `acquire/release`, `addFd/removeFd` (callback or ident), `pollOnce/pollAll`, `wake`. |
 | Sensors | Implemented as "no sensors": a manager with an empty list, NULL default sensors, event queues that never have events. |
@@ -150,7 +150,7 @@ such a struct, so the pointer Unity passes is already a valid fbdev window. `egl
 - `eglSwapBuffers`: host hook, the real call, a second host hook (`egl_glue_set_swap_done_hook`:
   ua_host's fbdev flips wait there for the next frame's buffer, runtime/host/fbdev.c).
   `eglCreateWindowSurface` of Unity's window calls `egl_glue_set_window_hook`'s hook first (the
-  host's queued flips are waited for). `eglGetProcAddress`: returns the wrappers for
+  host's queued flips are waited for, and the size the driver draws the window at sets the crop of its pans). `eglGetProcAddress`: returns the wrappers for
   wrapped names, NULL for Android's frame-timestamp queries, our no-op for
   `eglPresentationTimeANDROID` (see Frame pacing).
 - `eglSurfaceAttrib` (Unity 2020.3+) is not wrapped: Unity's surface is the driver's.
