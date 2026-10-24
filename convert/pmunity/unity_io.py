@@ -129,21 +129,31 @@ def _patch_unitypy():
                    '_write_items(value, subtype, writer, config, write_value)', {'_write_items': _write_items})
 
 
-_collects = 0
+_frozen = []                            # the freezes done (at most two: see collect)
+
+
+def _tpk_loaded():
+    """Whether UnityPy has read its type tree database yet (tpk: ~46,000 objects, read the first
+    time a file without type trees is opened, then kept)."""
+    try:
+        from UnityPy.helpers import Tpk
+        return Tpk.get_typetree.cache_info().currsize > 0
+    except (ImportError, AttributeError):
+        return True
 
 
 def collect():
     """Frees a closed file's objects (UnityPy's are cycles) and hands the memory back (_trim).
-    After the first collection, what is left (modules, UnityPy's tables: ~130,000 objects) is
-    frozen, so the collection after each later file walks only that file's objects (on a handheld
-    ~0.1 s a file before, for thousands of files); every 64th collection walks everything again."""
-    global _collects
-    _collects += 1
-    if _collects % 64 == 0:
-        gc.unfreeze()
+    What is still alive after the first collection (modules, UnityPy's classes and type tree
+    database: 80,000-130,000 objects) is frozen (gc.freeze), so the collection after each later
+    file walks only the objects made since (on a handheld ~0.1 s a file before, for thousands of
+    files). It is frozen once more when the type tree database is read after that, and never
+    again: a freeze also keeps whatever the caller still holds at that moment, until the end."""
     gc.collect()
-    if _collects == 1 or _collects % 64 == 0:
+    tpk = _tpk_loaded()
+    if not _frozen or (len(_frozen) == 1 and tpk and not _frozen[0]):
         gc.freeze()
+        _frozen.append(tpk)
     _trim()
 
 
