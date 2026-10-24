@@ -185,7 +185,7 @@ typedef struct __GLsync *GLsync; typedef uint64_t GLuint64;
 #define GL_FRAGMENT_SHADER 0x8B30
 #define GL_READ_ONLY 0x88B8
 
-static int g_on, g_check;
+static int g_on, g_check, g_near;   // UA_GL_RENAME=check, =near (copies close to exact too: not exact)
 static pthread_t g_thread;
 static int g_have_thread;
 // The render context: the first EGL context that makes a texture or framebuffer call (framebuffer
@@ -931,7 +931,8 @@ static int key_program(rkey_t *k, GLuint prog)
 
 // ---- probes: the candidate draw made once more on noise
 #define MAX_KEYS 256
-typedef struct { uint64_t key; signed char result; } known_t;   // result: 1 an exact copy, 0 not, -1 measuring
+typedef struct { uint64_t key; signed char result; } known_t;   // result: 1 an exact copy, 0 not, -1 measuring,
+                                                                 // 2 close to one on noise, 3 also in the game (near)
 static known_t g_known[MAX_KEYS];
 static int g_nknown;
 static known_t *known(uint64_t key) { for (int i = 0; i < g_nknown; i++) if (g_known[i].key == key) return &g_known[i]; return NULL; }
@@ -1115,11 +1116,18 @@ static void probe_poll(void)
     q_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack);
     known_t *k = known(g_probe.key);
     int yes = got && diff == 0;
-    if (k) k->result = (signed char)yes;
+    // close to a copy: at least 90 % of the channels within 15 of the noise's (a copy that filters a
+    // little, as Unity's blits do on the Mali-G31; a blur or a colour change is far off)
+    size_t channels = (size_t)t->w * t->h * 4;
+    int near = got && !yes && by[3] * 10 <= channels;
+    int result = yes ? 1 : near ? 2 : 0;
+    if (k) k->result = (signed char)result;
     if (yes) g_probe_yes++;
-    else { g_probe_no++; if (g_probe.prog < MAX_PROG && g_prog_no[g_probe.prog] < 255) g_prog_no[g_probe.prog]++; }
+    else g_probe_no++;
+    if ((result == 0 || (result == 2 && !g_near)) && g_probe.prog < MAX_PROG && g_prog_no[g_probe.prog] < 255) g_prog_no[g_probe.prog]++;
     fprintf(stderr, "[glrename] program %u, %dx%d: %s (%zu of %d pixels differ from the noise)\n", g_probe.prog, t->w, t->h,
-            yes ? "an exact copy: such draws are left out" : "not an exact copy", diff, t->w * t->h);
+            yes ? "an exact copy: such draws are left out" : near ? (g_near ? "close to a copy: such draws are left out (UA_GL_RENAME=near)" :
+            "not an exact copy (close to one)") : "not an exact copy", diff, t->w * t->h);
     g_probe.busy = 0;
 }
 
@@ -1147,13 +1155,15 @@ static texinfo tex_info(GLuint real)
 // UA_GL_RENAME=check: a draw's result (in rc) and its source (ra) read back and compared; for one
 // found an exact copy every time, for one that was not the first three times (how far off it is)
 static unsigned char g_compared[MAX_PROG];
-static void compare_copy(GLint prog, GLuint ra, GLuint rc, int w, int h, int exact)
+static int compare_copy(GLint prog, GLuint ra, GLuint rc, int w, int h, int exact);
+// (0: the same; 1: at most 1 % of the pixels differ, by at most 3; 2: more)
+static int compare_copy(GLint prog, GLuint ra, GLuint rc, int w, int h, int exact)
 {
     static unsigned char *bufs[2];
     static size_t have;
     size_t n = (size_t)w * h * 4;
     if (n > have) { free(bufs[0]); free(bufs[1]); bufs[0] = malloc(n); bufs[1] = malloc(n); have = bufs[0] && bufs[1] ? n : 0; }
-    if (n > have) return;
+    if (n > have) return 2;
     GLint pack = 0;
     GLuint rfb = g_read_fb;
     q_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
@@ -1173,7 +1183,7 @@ static void compare_copy(GLint prog, GLuint ra, GLuint rc, int w, int h, int exa
     if (exact) g_checked++;
     if (!memcmp(bufs[0], bufs[1], n)) {
         if (!exact) fprintf(stderr, "[glrename] check: program %d (not exact on noise) gives its source unchanged here (%dx%d)\n", prog, w, h);
-        return;
+        return 0;
     }
     size_t dd = 0, by[4] = { 0, 0, 0, 0 };
     for (size_t i = 0; i < n; i += 4) {
@@ -1184,6 +1194,7 @@ static void compare_copy(GLint prog, GLuint ra, GLuint rc, int w, int h, int exa
     if (exact) g_check_bad++;
     fprintf(stderr, "[glrename] check: program %d%s: its result differs from its source (%dx%d) on %zu pixels; channels off by 1: %zu, 2-3: %zu, 4-15: %zu, more: %zu\n",
             prog, exact ? " (an exact copy on noise)" : " (not exact on noise)", w, h, dd, by[0], by[1], by[2], by[3]);
+    return dd * 100 <= (size_t)w * h && !by[2] && !by[3] ? 1 : 2;
 }
 
 // ---- the candidate check: 0 the caller makes the draw, 1 it was made here, 2 it was left out
@@ -1258,7 +1269,18 @@ static int candidate(const drawcall *d)
     khi(&k, d->kind); khi(&k, d->mode); khi(&k, d->first); khi(&k, d->count); khi(&k, d->start); khi(&k, d->end);
     if (!key_vertices(&k, (GLuint)prog, d)) return 0;
     known_t *kn = known(k.h);
-    if (kn && kn->result == 1) {
+    if (kn && kn->result == 2 && g_near) {
+        // (near: close to a copy on noise; made once more and compared with its source in the game:
+        // left out from then on only if at most 1 % of the pixels differ, by at most 3)
+        redraw(d);
+        int r = compare_copy(prog, ra, rc, tc.w, tc.h, 0);
+        kn->result = r <= 1 ? 3 : 0;
+        if (r > 1) g_prog_no[prog]++;
+        fprintf(stderr, "[glrename] program %d: %s\n", prog, r <= 1 ? "close to its source in the game too: left out from here (not exact)" :
+                "too far from its source in the game: made as it is");
+        return 1;
+    }
+    if (kn && (kn->result == 1 || (kn->result == 3 && g_near))) {
         if (g_check) { redraw(d); compare_copy(prog, ra, rc, tc.w, tc.h, 1); return 1; }
         // left out: c gets a's storage (the copy's result), a gets c's (owing it)
         if (g_nrel >= MAX_REL) return 0;
@@ -1700,6 +1722,7 @@ const so_shim *glrename_table(void *(*next)(const char *name))
     const char *e = getenv("UA_GL_RENAME");
     if (!e || !strcmp(e, "0")) return g_shims;
     g_check = !strcmp(e, "check");
+    g_near = !strcmp(e, "near");
 #define Q(var, name) *(void **)&var = gl(NULL, name)
     Q(q_GetIntegerv, "glGetIntegerv"); Q(q_GetFloatv, "glGetFloatv"); Q(q_IsEnabled, "glIsEnabled");
     Q(q_GetFbAttachment, "glGetFramebufferAttachmentParameteriv"); Q(q_GetTexLevelParameteriv, "glGetTexLevelParameteriv");
@@ -1801,7 +1824,7 @@ const so_shim *glrename_table(void *(*next)(const char *name))
         return g_shims;
     }
     g_on = 1;
-    fprintf(stderr, "[glrename] on%s: copies of one texture into another left out where they are exact (%d entry points)\n",
-            g_check ? " (check: made and compared instead)" : "", k);
+    fprintf(stderr, "[glrename] on%s: copies of one texture into another left out where they are exact%s (%d entry points)\n",
+            g_check ? " (check: made and compared instead)" : "", g_near ? " or close to it (not exact)" : "", k);
     return g_shims;
 }

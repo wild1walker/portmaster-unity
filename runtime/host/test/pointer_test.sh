@@ -8,7 +8,7 @@ set -e
 cd "$(dirname "$0")/.."
 ARCH=${ARCH:-armhf}
 PASS_TESTS="same late drawn colour partial mask dither upload delete invalidate blit otherfb depth inval_late renderbuffer foreign nothread off"
-RENAME_TESTS="grab copyback notcopy params queries delete context check off"
+RENAME_TESTS="grab copyback notcopy params queries delete context near nearoff check off"
 run='set -e
   mkdir -p $O
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/libGLESv2.so.2 test/fake_gles.c

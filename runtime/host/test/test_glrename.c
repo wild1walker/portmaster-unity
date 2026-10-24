@@ -11,6 +11,8 @@
 //   delete     C deleted after the copies were left out, a new texture made: no name in use twice,
 //              A's picture right
 //   context    another context attaches C to a framebuffer of its own: C is never renamed
+//   near       the grab copied by a program that is close to a copy (program 9): left out with
+//              UA_GL_RENAME=near (it is exact on the pictures here), not with =1 (nearoff)
 //   check      UA_GL_RENAME=check: the copies are made and compared, none left out
 //   off        UA_GL_RENAME unset: nothing wrapped
 #include <pthread.h>
@@ -79,7 +81,8 @@ static int read_is(unsigned fb, const unsigned char *want, const char *what, int
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "grab";
-    if (strcmp(mode, "off")) setenv("UA_GL_RENAME", !strcmp(mode, "check") ? "check" : "1", 1);
+    if (strcmp(mode, "off")) setenv("UA_GL_RENAME", !strcmp(mode, "check") ? "check" : !strcmp(mode, "near") ? "near" : "1", 1);
+    unsigned copyprog = !strncmp(mode, "near", 4) ? 9 : 5;
     const so_shim *t = glrename_table(NULL);
     Bind = fn(t, "glBindFramebuffer"); BindTex = fn(t, "glBindTexture"); Active = fn(t, "glActiveTexture"); Clear = fn(t, "glClear");
     Draw = fn(t, "glDrawElements"); Attach = fn(t, "glFramebufferTexture2D"); Read = fn(t, "glReadPixels");
@@ -136,7 +139,7 @@ int main(int argc, char **argv)
             // the camera paints A; the grab copies A into C; a sprite in A reads C; an effect reads A
             Bind(GL_FRAMEBUFFER, fbA); glClearColor(0, 0, 0, 0); Clear(GL_COLOR_BUFFER_BIT); glUseProgram(7); Draw(4, 6, 0x1403, 0);
             if (!deleted) {
-                Bind(GL_FRAMEBUFFER, fbC); BindTex(GL_TEXTURE_2D, A); glUseProgram(5); Draw(4, 3, 0x1403, 0);
+                Bind(GL_FRAMEBUFFER, fbC); BindTex(GL_TEXTURE_2D, A); glUseProgram(copyprog); Draw(4, 3, 0x1403, 0);
                 Bind(GL_FRAMEBUFFER, fbA); BindTex(GL_TEXTURE_2D, C); glUseProgram(8); Draw(4, 6, 0x1403, 0);
             } else {
                 // (C is gone: the camera's picture is the paint, and a texture made now has a fresh name)
@@ -176,7 +179,7 @@ int main(int argc, char **argv)
         glrename_frame();
     }
     int late = copies_at[45] - copies_at[40];              // copy draws made in the last frames
-    if (!strcmp(mode, "notcopy") || !strcmp(mode, "check") || !strcmp(mode, "context")) CHECK(late >= 5);
+    if (!strcmp(mode, "notcopy") || !strcmp(mode, "check") || !strcmp(mode, "context") || !strcmp(mode, "nearoff")) CHECK(late >= 5);
     else if (strcmp(mode, "delete")) CHECK(late == 0);
     CHECK(copies_at[45] >= 30);                              // (made until measured)
     if (copyback) CHECK(fake_blits == 0);

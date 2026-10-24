@@ -6,6 +6,7 @@
 //   program 6  "invert": out = 255 - texture(tex)
 //   program 7  "paint": out = (x + 16 y + seed) per channel, seed a uniform float
 //   program 8  "add": out = texture(tex) + 1 per channel (the blend-mode sprite of a grab pass)
+//   program 9  "near": a copy, but 250 - 254 come out one higher (a copy that is close, not exact)
 //   programs it links itself from source: texelFetch of unit 0 at the fragment (glrename.c's copy)
 // The texture a sampler reads is unit n's 2D binding (n the sampler uniform's value). An
 // invalidated colour buffer is filled with 0xCD, so a picture that relied on it shows.
@@ -174,7 +175,7 @@ static unsigned char at(int unit, int i, int c)
 static void run(void)
 {
     fake_draws++;
-    if (fake_prog == 5) fake_copies++;
+    if (fake_prog == 5 || fake_prog == 9) fake_copies++;
     unsigned char *d = colour(fake_draw_fb);
     if (!d) return;
     int w = colour_w(fake_draw_fb), h = colour_h(fake_draw_fb);
@@ -187,6 +188,7 @@ static void run(void)
                 else if (fake_prog == 6) v = 255 - at(fake_sampler_unit, i, c);
                 else if (fake_prog == 7) v = (x + 16 * y + (int)fake_seed) & 255;
                 else if (fake_prog == 8) v = at(fake_sampler_unit, i, c) + 1;
+                else if (fake_prog == 9) { v = at(fake_sampler_unit, i, c); if (v >= 250 && v < 255) v++; }
                 else if (fake_prog < 64 && prog_is_fetch[fake_prog]) v = at(fake_ours_unit, i, c);
                 else v = d[4 * i + c];
                 d[4 * i + c] = (unsigned char)(v > 255 ? 255 : v);
