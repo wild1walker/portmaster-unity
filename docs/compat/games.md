@@ -136,7 +136,7 @@ Unity's arm64 IL2CPP player ([mono-arm64.md](../mono-arm64.md)); no IL2CPP compi
 
 | game | Unity | emulated rig (arm64) | handheld (64-bit userland) | last checked |
 |---|---|---|---|---|
-| buggish | 2019.4.8f1 | title (75 - 170 fps under llvmpipe), 92 assemblies, 7,626 internal calls, Mono up 31 - 104 ms after `il2cpp_init` | | 2026-10-23 |
+| buggish | 2019.4.8f1 | title (75 - 170 fps under llvmpipe), 92 assemblies, 7,626 internal calls, Mono up 31 - 104 ms after `il2cpp_init` | **title 59.5 - 59.7 fps** (each second after the first; 57.6 over 21 s with the start), resident 255 MB, 677 MB available; Mono up 123 ms after `il2cpp_init` | 2026-10-24 |
 | Tom City | 2020.3.49f1 | title; as a port made with `--route mono-arm64`, its setup rehearsed on a 64-bit-only stand-in (1 GB) in 13 min (no compile), 324 MB installed, then the title | | 2026-10-23 |
 | Untitled Hook Game | 2021.3.16f1, URP | the first-launch name prompt at about 28 fps, as the IL2CPP build (about 30) | | 2026-10-23 |
 | Hollow Knight (GOG, Linux) | 6000.0.61f1 | first launch's language screen at 60 fps, 116 assemblies (the port's asmpatch patches applied to its assemblies), resident 1,543 - 1,573 MB as the IL2CPP build's in the same rig | | 2026-10-23 |
