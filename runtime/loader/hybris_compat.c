@@ -28,6 +28,7 @@
 #include "../thirdparty/libhybris/hybris/common/hooks.c"
 #include "so_loader.h"
 #include "fastclock.h"
+#include "armtimer.h"
 
 #include <fnmatch.h>
 #include <ftw.h>
@@ -285,9 +286,41 @@ static int bionic_sem_post(void *s)
     else if (old == BSEM_VALUE_MAX) { errno = EOVERFLOW; return -1; }
     return 0;
 }
+/* UA_FUTEX_SPIN=<us> (runtime/host/futex.c, opt-in): sem_wait on a semaphore at 0 first watches it
+ * for up to <us> microseconds (the timer's counter, armtimer.h) and takes a post made meanwhile;
+ * only then does it mark the word "waiters" and sleep. A post during the watch sees no waiters and
+ * makes no system call. Unity 2017.4's job queue workers sleep here (PlatformSemaphore), as
+ * Baselib's do in futex.c. sem_timedwait is left as it was (its deadline may be shorter). */
+static uint64_t g_sem_spin;                        /* ticks; 0: off */
+static atomic_ullong g_sem_spun, g_sem_slept;
+static void sem_spin_init(void)
+{
+    const char *e = getenv("UA_FUTEX_SPIN");
+    long us = e && *e ? atol(e) : 0;
+    if (us <= 0) return;
+    if (us > 1000) us = 1000;
+    uint64_t f = armtimer_probe();
+    if (f) g_sem_spin = f * (uint64_t)us / 1000000u;
+}
+void bionic_sem_stats(unsigned long long *spun, unsigned long long *slept)
+{
+    *spun = atomic_load(&g_sem_spun);
+    *slept = atomic_load(&g_sem_slept);
+}
 static int bionic_sem_wait(void *s)
 {
     atomic_uint *w = s;
+    if (g_sem_spin && BSEM_VAL(atomic_load_explicit(w, memory_order_relaxed)) == 0) {
+        uint64_t end = armtimer_ticks() + g_sem_spin;
+        do {
+            if (BSEM_VAL(atomic_load_explicit(w, memory_order_relaxed)) > 0 && bsem_trydec(w) > 0) {
+                atomic_fetch_add_explicit(&g_sem_spun, 1, memory_order_relaxed);
+                return 0;
+            }
+            armtimer_relax();
+        } while (armtimer_ticks() < end);
+        atomic_fetch_add_explicit(&g_sem_slept, 1, memory_order_relaxed);
+    }
     for (;;)
     {
         if (bsem_dec(w) > 0) return 0;
@@ -1274,6 +1307,7 @@ const so_shim *bionic_compat_table(void)
     if (table) return table;
     init_tables();
     fastclock_init();
+    sem_spin_init();
     size_t n = 0, k = 0;
     for (const so_shim *s = ours; s->name; s++) n++;
     const struct _hook *lists[] = { hooks_properties, hooks_common };

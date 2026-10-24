@@ -306,6 +306,128 @@ picture-identical change of that size in sight in the runtime. IL2CPP (the 64-bi
 the managed code and Mono's runtime (4 - 5.5 ms here) but runs the same engine and the same GPU work
 (30.6 - 32.4 fps in King's Pass).
 
+## Reverse engineering libunity, and what an exact in-memory change can reach
+
+Unity publishes symbol files for its Android players (`pmunity player fetch <version> --symbols`:
+`Variations/<backend>/Release/Symbols/<abi>/libunity.sym.so`), which name libunity's functions by
+`module+offset` in a profile ([profsum.py](#profsumpy)). With them the hot frames above were read
+back to the engine code that spends the time, to look for work this platform makes Unity do that a
+newer Android device would not and for an exact faster replacement. The finding: the pieces an
+in-memory hook can replace *without changing a pixel* are small (about 1 % of UnityMain each), and
+the frame the GPU holds does not move. The largest platform cost is the job system's own futex
+traffic, 0.8 ms of UnityMain's frame in `FUTEX_WAKE` system calls; an exact hook for it was built and
+measured (`UA_FUTEX_SPIN`, [runtime.md](runtime.md)) and did not pay on the four-core handheld, so it
+stays an option, off. No decompiled Unity code is kept in this repository; functions are named by
+their symbol and described in our own words.
+
+### Where UnityMain's engine time goes (King's Pass, the GPU's work left out)
+
+Read with the flat-shader method ([What limits King's Pass](#what-limits-kings-pass-32-bit-2026-10-23)),
+so the GPU clock does not hide a main-thread change, the 32-bit King's Pass frame (47 fps, UnityMain
+95 % on a CPU) breaks down inside the engine as (`profsum.py --exact`, as a call tree from
+`PlayerRender` / `ExecutePlayerLoop`, running samples as a share of UnityMain's on-a-CPU time):
+
+- **the job system's scheduling and wake-ups, ~1.3 ms a frame.** `JobQueue::ScheduleGroups` ->
+  `ujob_schedule_job_internal` -> `wake_or_exhaust_lane` -> `lane_wake_buddies` ->
+  `ujob_lane_t::set_steal_hint_and_wake` -> `UnityClassic::Baselib_SystemFutex_Notify` is 1.0 - 1.1 ms
+  of UnityMain alone: a `FUTEX_WAKE` system call each time a job batch is scheduled (culling,
+  sprite and particle geometry, the render queue). The three worker threads are mostly idle (a few
+  percent of a core each) and spend essentially all of their time asleep in `lane_guts` ->
+  `Baselib_SystemFutex_Wait` (in a `prof-all` recording every worker sample was blocked there); each
+  batch wakes one. The render thread reaches the same wake when it schedules its geometry jobs.
+- **rendering, ~8.6 ms**: `RenderManager::RenderCameras` 6.4, the offscreen (blur) camera 1.8, the
+  HUD/IMGUI repaint 0.2. Inside a camera the time is the draw-call build (`ForwardRenderLoopJob`,
+  `BatchRenderer::ApplyShaderPass` -> `ShaderLab::Pass::ApplyPass`), the culling-result teardown
+  (`RenderNodeQueue::Reset`, a memset of the per-frame node queue), and waits on the geometry jobs
+  the camera scheduled (`CompleteFenceInternal` -> `JobQueue::WaitForJobGroupID` -> `ujob_wait_for`,
+  which runs a job itself while it waits).
+- **scripts, animation, physics, audio** as the area table shows; `MonoBehaviour::CallUpdateMethod`
+  calls `MonoBehaviour::IsStateMachineBehaviour` first for every behaviour every frame (0.5 ms,
+  through `SerializableManagedRef::GetScriptCache` and a `std::shared_weak_count` lock), and
+  `GetCameraTargetRect` asks the display manager for the display's rect on every camera-rect query.
+
+### The job system's futex traffic (`UA_FUTEX_SPIN`, `UA_FUTEX_STATS`)
+
+What the engine does that an Android phone would not is nothing in the arithmetic; it is the round
+trips through the kernel. A Baselib worker that runs out of jobs tries ten times to steal one (a few
+microseconds, `lane_guts`) and then sleeps in a `FUTEX_WAIT`; here the three workers are so lightly
+loaded that they are nearly always asleep, so every batch's wake is a real `FUTEX_WAKE` system call.
+(Unity 6000.0 also has a boot option, `job-system-wait-spin-time-ns`, default 20,000: how long a
+thread waiting for a job handle spins in `ujob_sleep_state::try_sleep_until_handle_done` before it
+sleeps; it applies to the waiting thread, not to the workers' ten tries.)
+
+The engine reaches the kernel futex through one libc import, `syscall`, which the loader resolves
+like any other; `runtime/host/futex.c` registers a wrapper for it before the player loads (the
+player's own code untouched). `UA_FUTEX_STATS=<s>` counts the waits and wakes per thread.
+`UA_FUTEX_SPIN=<us>` makes each `FUTEX_WAIT` watch its word in user space for up to `<us>`
+microseconds before it sleeps, and skips a `FUTEX_WAKE` when no thread is asleep in the kernel on
+that word; the same spin is given to bionic's `sem_wait` (`runtime/loader/hybris_compat.c`), where
+Unity 2017.4's older job queue sleeps (its `PlatformSemaphore` is a POSIX semaphore, bionic's a
+futex word).
+
+**Exact by construction.** A futex wait may return early at any time, and every caller re-reads its
+own word and loops, so returning from the user-space watch computes nothing different: only the
+instant a waiting thread resumes moves (up to `<us>` sooner). A wake is dropped only when there is
+provably no kernel waiter: a wait that is about to sleep increments a per-word count, issues a
+seq_cst fence and re-reads its word before the system call (returning without entering the kernel if
+it already changed); a wake issues a seq_cst fence after the caller's store to the word and then
+reads the count. The waiter's word read and the waker's count read are a store-buffering pair that
+the two fences forbid both sides of, so a wake is dropped only when the waiter will not sleep.
+Operations the skip cannot reason about (bitset waits, PI locks, requeues) turn it off while they
+are in the kernel. `runtime/host/test/test_futex.c` and the loader's `test_sem` run a ping-pong and
+a producer/consumer semaphore with the spin on and off and assert no wake-up is lost (QEMU cannot
+read the timer, so `test_futex` skips there; on the RG34XX-SP it passes with the spin at 0, 20 and
+100 us).
+
+**Which versions it covers.** Every Unity Android player imports libc `syscall` and bionic
+`sem_post`/`sem_wait` (checked in the players of the handheld benches: 2017.3, 2017.4, 2018.2,
+2019.3, 2021.2, 2022.2 and 6000.0, Mono and IL2CPP, armv7 and arm64). The hook sits at that libc/bionic boundary, not inside libunity, so it
+needs no Unity symbol and no signature match and cannot mis-target a version it has not seen; on a
+kernel or emulator where the ARM generic timer cannot be read from user space (QEMU) it turns
+itself off (a probe at start, as `fastclock.c` does) and the calls pass straight through.
+
+**On the handheld (2026-10-23).** King's Pass, 32-bit, the GPU's work left out (flat fragment
+shaders, so the GPU idles at 240 MHz in every run: 97 - 100 % of the time; the CPUs at 1512 MHz
+throughout), A B A B in one hold, 20 s measured:
+
+| run | fps | frames over 25 ms | Job.Worker 0/1/2 (% of a core, waiting for one) | render thread waiting for a CPU |
+|---|---|---|---|---|
+| off, `UA_FUTEX_STATS=5` | 48.3 | 97 | 6/12/8 %, 11/8/14 % | 3 % |
+| `UA_FUTEX_SPIN=50` (+ stats) | 47.2 | 200 | 13/16/14 %, 13/17/20 % | 9 % |
+| off | 48.4 | 120 | 6/12/8 %, 12/7/14 % | 3 % |
+| `UA_FUTEX_SPIN=50` | 47.6 | 194 | 13/16/14 %, 14/17/20 % | 10 % |
+
+`UA_FUTEX_STATS` with it off: UnityMain makes about 3,100 `FUTEX_WAKE`s a second (2,500 of them wake
+a thread), each 12 - 13 us in the kernel: 37 - 40 ms a second, 0.8 ms of its 21 ms frame, which is
+what the profile showed. The render thread makes 1,900 a second (8 - 9 us each), and one worker
+wakes the others (1,170 a second, 23 us each). Each worker waits 1,200 - 2,450 times a second and
+is asleep 86 - 94 % of the time; its sleeps are spread out: about a third under 50 us, most under
+1 ms. The stats themselves cost nothing measurable (48.3 against 48.4).
+
+With `UA_FUTEX_SPIN=50` UnityMain's wake system calls fall to about 2,000 a second (700 - 980 skipped
+because the worker was still watching), but each remaining wake takes longer (14 - 30 us: its
+target core is busier), so UnityMain's time in wakes does not drop, and each worker spends 56 - 97 ms
+a second watching. The four cores are already about 75 % busy (UnityMain, the render thread, FMOD's
+mixer at 57 % of a core, Mali's submission thread), so the watching workers take CPU from the render
+thread (its wait for a CPU 3 % -> 9 - 10 %) and from Mali's thread (16 % -> 21 - 22 %): **-2 %** and
+twice the frames over 25 ms. The sleep histogram says no watch length helps here: one short enough
+to cost little catches only the few sleeps under 10 us, and one long enough to catch the 50 us - 1
+ms sleeps costs more CPU than the handheld has free. The 12 us each wake costs is spent in the
+kernel's wake-up path (Linux 4.9 on the Cortex-A53), which a game process cannot change.
+`UA_FUTEX_SPIN` therefore stays an option, off; `UA_FUTEX_STATS`
+is the measuring tool. (In the game as it ships the GPU sets the rate, King's Pass at 33 fps warm,
+so a main-thread change would not show there either. The 2017.4 `sem_wait` path passes the loader's
+tests but has not been benched in a 2017.4 game.)
+
+### What did not pay, or is not exact
+
+| change (how it would hook) | result |
+|---|---|
+| `UA_FUTEX_SPIN=50`: workers watch their futex word 50 us before sleeping, wakes with nobody asleep skipped (the libc `syscall` import; exact) | 47.2 / 47.6 fps against 48.3 / 48.4 with the GPU's work left out (-2 %), frames over 25 ms doubled: the watching takes CPU from the render thread and Mali's thread (above). Option, off |
+| `InvertMatrix4x4_Full` (self time ~1 % of UnityMain; called per camera from `Camera::ExtractCameraRenderingParams`, image-effect blits, `ScreenPointToRay`) replaced by a NEON inverse, or memoized (it reads only its 16 input floats and writes only its output, no globals or calls) | a rewritten 4x4 inverse reassociates the arithmetic, so it is not bit-identical and cannot be a default (the exactness rule forbids it); a last-inputs memo would be exact but the function is small next to the wake traffic |
+| `ShaderVariantAnalytics::...::SumUpVariants*` (editor telemetry summed per draw inside `ShaderLab::Pass::ApplyPass`, ~0.4 % of UnityMain and of the render thread) | computes an internal analytics counter the game never reads; could be no-op'd, but the saving is below the run-to-run noise |
+| hooking `GfxDeviceGLES` to drop redundant GL state or uniform re-uploads on the render thread | the render thread's time is spent blocked inside Mali's driver (the grab copies and the first draw after a framebuffer change), not in redundant state Unity sends; the driver's buffer handling, not Unity's call count, is the cost ([GPU, pass by pass](#gpu-pass-by-pass)) |
+
 ## GPU, pass by pass
 
 `UA_GL_TRACE=<s>` logs one whole frame every `<s>` seconds ([runtime.md](runtime.md)): its passes

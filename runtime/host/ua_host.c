@@ -22,6 +22,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "hitches.h"
 #include "prof.h"
 #include "threads.h"
+#include "futex.h"
 #include "gltrace.h"
 #include "glopt.h"
 #include "msaafix.h"
@@ -443,6 +444,7 @@ int main(int argc, char **argv)
     hitches_init();                            // UA_HITCH_TRACE
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
+    so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
     // GL wrappers, each calling the next: the player -> glopt.c -> msaafix.c -> gltrace.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
