@@ -558,6 +558,7 @@ class AndroidDataIl2cppTest(unittest.TestCase):
         mono = AD.opts_key(types.SimpleNamespace(**base))
         self.assertEqual(AD.opts_key(types.SimpleNamespace(il2cpp=None, **base)), mono)
         self.assertEqual(AD.opts_key(types.SimpleNamespace(il2cpp='/x', **base)), mono + ['il2cpp=/x'])
+        self.assertEqual(AD.opts_key(types.SimpleNamespace(il2cpp=None, mono64=True, **base)), mono + ['mono64'])
 
     def test_items(self):
         args = types.SimpleNamespace(il2cpp='/il2', unity=UV.Version('2019.4.8f1'), il2cpp_info={

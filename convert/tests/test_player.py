@@ -27,6 +27,10 @@ class PlayerTest(unittest.TestCase):
         self.assertNotIn('Variations/mono/Managed/*.dll', P.wanted('il2cpp', 'arm64-v8a'))
         self.assertIn('Variations/il2cpp/Release/Symbols/arm64-v8a/*.sym.so', P.wanted('il2cpp', 'arm64-v8a', symbols=True))
         self.assertEqual(P.wanted('il2cpp', 'arm64-v8a', symbols_only=True), ['Variations/il2cpp/Release/Symbols/arm64-v8a/*.sym.so'])
+        # --managed: the IL2CPP player's engine modules (the Mono route on it); never with --symbols-only
+        self.assertIn('Variations/il2cpp/Managed/*.dll', P.wanted('il2cpp', 'arm64-v8a', managed=True))
+        self.assertEqual(P.wanted('il2cpp', 'arm64-v8a', symbols_only=True, managed=True),
+                         ['Variations/il2cpp/Release/Symbols/arm64-v8a/*.sym.so'])
 
 
 if __name__ == '__main__':

@@ -2138,6 +2138,8 @@ def opts_key(args):
         key.append('no-video-shader')
     if getattr(args, 'il2cpp', None):
         key.append('il2cpp=' + args.il2cpp)
+    if getattr(args, 'mono64', False):
+        key.append('mono64')                # (the IL2CPP player's engine modules)
     if args.swappy != 'keep' and args.unity.line >= SWAPPY_FROM:     # the setting exists from 2019.3
         key.append('swappy=' + args.swappy)
     if getattr(args, 'retarget', None):

@@ -229,8 +229,8 @@ typedef gboolean (*MonoStackWalk)(MonoMethod *method, int32_t native_offset, int
     X(void, mono_unity_gc_heap_foreach, (void (*)(void *, void *), void *)) \
     X(void, mono_unity_stop_gc_world, (void)) \
     X(void, mono_unity_start_gc_world, (void)) \
-    X(void *, mono_gc_alloc_fixed, (size_t, void *, int, const char *)) \
-    X(void, mono_gc_free_fixed, (void *)) \
+    X(int, mono_gc_register_root, (char *, size_t, void *, int, void *, const char *)) \
+    X(void, mono_gc_deregister_root, (char *)) \
     X(uint32_t, mono_unity_object_header_size, (void)) \
     X(uint32_t, mono_unity_array_object_header_size, (void)) \
     X(uint32_t, mono_unity_offset_of_array_length_in_array_object_header, (void)) \
@@ -318,6 +318,14 @@ static int unity_at_least(int major, int minor)
     return g_unity_major > major || (g_unity_major == major && g_unity_minor >= minor);
 }
 
+static char g_runtime_dir[PATH_MAX];   // the folder of libmonobdwgc-2.0.so
+static int runtime_dir_file(const char *name, char *out, size_t n)
+{
+    struct stat st;
+    snprintf(out, n, "%s/%s", g_runtime_dir, name);
+    return stat(out, &st) == 0;
+}
+
 static void bind_mono(void)
 {
     if (g_mono) return;
@@ -336,6 +344,9 @@ static void bind_mono(void)
     }
     g_mono = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
     if (!g_mono) { logf_("cannot load Mono (%s): %s", path, dlerror()); abort(); }
+    snprintf(g_runtime_dir, sizeof g_runtime_dir, "%s", path);
+    char *slash = strrchr(g_runtime_dir, '/');
+    if (slash) *slash = 0; else snprintf(g_runtime_dir, sizeof g_runtime_dir, ".");
 #define BIND(r, n, a) m_##n = (r (*) a)dlsym(g_mono, #n);
     MONO_FUNCS(BIND)
 #undef BIND
@@ -551,6 +562,16 @@ static void init_mono(const char *domain_name)
     m_mono_set_assemblies_path(g_managed);
     if (m_mono_set_config_dir) m_mono_set_config_dir(etc);
     m_mono_config_parse(NULL);
+    // the class libraries' native helpers are this runtime's, next to it (the desktop config
+    // names them in $mono_libdir, the Managed folder here); later entries win
+    static const char *const helpers[][2] = {
+        { "MonoPosixHelper", "libMonoPosixHelper.so" }, { "System.Native", "libmono-native.so" },
+        { "System.Net.Security.Native", "libmono-native.so" }, { "System.Globalization.Native", "libmono-native.so" },
+    };
+    for (size_t i = 0; i < sizeof helpers / sizeof helpers[0] && m_mono_dllmap_insert; i++) {
+        char p[PATH_MAX];
+        if (runtime_dir_file(helpers[i][1], p, sizeof p)) m_mono_dllmap_insert(NULL, helpers[i][0], NULL, p, NULL);
+    }
     if (m_mono_set_signal_chaining) m_mono_set_signal_chaining(1);
     if (m_mono_trace_set_log_handler) m_mono_trace_set_log_handler(mono_log, NULL);
     if (m_mono_dl_fallback_register) m_mono_dl_fallback_register((void *)dl_load, (void *)dl_symbol, (void *)dl_close, NULL);
@@ -566,7 +587,6 @@ static void init_mono(const char *domain_name)
     clock_gettime(CLOCK_MONOTONIC, &t0);
     g_domain = m_mono_jit_init_version(domain_name && *domain_name ? domain_name : "IL2CPP Root Domain", "v4.0.30319");
     if (!g_domain) { logf_("mono_jit_init_version failed"); abort(); }
-    if (m_mono_dllmap_insert) m_mono_dllmap_insert(NULL, "__Internal", NULL, "libunity.so", NULL);
     for (int i = 0; i < g_nicalls; i++) m_mono_add_internal_call(g_icalls[i].name, g_icalls[i].fn);
     if (g_argc && m_mono_runtime_set_main_args) m_mono_runtime_set_main_args(g_argc, g_argv);
     g_incremental = m_mono_gc_is_incremental && m_mono_gc_is_incremental();
@@ -1030,12 +1050,18 @@ API void il2cpp_gc_set_external_wbarrier_tracker(void (*fn)(void **)) { (void)fn
 API void il2cpp_gc_foreach_heap(void (*fn)(void *, void *), void *ud) { if (m_mono_unity_gc_heap_foreach) m_mono_unity_gc_heap_foreach(fn, ud); }
 API void il2cpp_stop_gc_world(void) { if (m_mono_unity_stop_gc_world) m_mono_unity_stop_gc_world(); }
 API void il2cpp_start_gc_world(void) { if (m_mono_unity_start_gc_world) m_mono_unity_start_gc_world(); }
+// memory the collector scans but never frees (IL2CPP: GC_MALLOC_UNCOLLECTABLE): a root
 API void *il2cpp_gc_alloc_fixed(size_t size)
 {
-    if (m_mono_gc_alloc_fixed) return m_mono_gc_alloc_fixed(size, NULL, 0 /* MONO_ROOT_SOURCE_EXTERNAL */, "unity");
-    return calloc(1, size);
+    char *p = calloc(1, size ? size : 1);
+    if (p && m_mono_gc_register_root) m_mono_gc_register_root(p, size, NULL, 0 /* MONO_ROOT_SOURCE_EXTERNAL */, NULL, "unity");
+    return p;
 }
-API void il2cpp_gc_free_fixed(void *p) { if (m_mono_gc_free_fixed) m_mono_gc_free_fixed(p); else free(p); }
+API void il2cpp_gc_free_fixed(void *p)
+{
+    if (p && m_mono_gc_deregister_root) m_mono_gc_deregister_root(p);
+    free(p);
+}
 
 // GC handles: 32-bit before 2021.2 (uint32_t in both runtimes), pointer-sized from IL2CPP's
 // Il2CppGCHandle (Mono's *_v2 handles where the runtime has them)
