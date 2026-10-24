@@ -16,6 +16,7 @@ whole measured session:
 | which of the GPU's units a frame or a shader keeps busy (arithmetic, texturing, varyings, tile writes, memory) | `runtime/host/gpucnt` (the Mali's hardware counters; `GPUCNT=1` in a bench run): [below](#gpu-counters-gpucnt) |
 | what a pass's loads and stores cost the GPU itself | `runtime/host/passbench` on the device: [below](#what-a-pass-costs-on-the-mali-g31-passbench) |
 | which passes, loads and stores a frame could do without | `tools/analysis/framegraph.py` on a `UA_GL_TRACE_DRAWS` log; the GL calls a frame makes, by entry point: `UA_GL_REC=census` ([holding the whole frame](#holding-the-whole-frame-ua_gl_rec)) |
+| whether the GPU ever waits for work inside the frames | `UA_GPU_IDLE=<s>` ([runtime.md](runtime.md); below, [the handheld around the game](#the-handheld-around-the-game-2026-10-23)) |
 
 ## UA_PROF: the sampling profiler
 
@@ -154,8 +155,9 @@ saves in data/); only `<game folder>/bench/` is written: this checkout's ua_host
    counters at the start and the end (per-core and per-thread CPU time, memory and swap traffic,
    cpufreq `time_in_state`, devfreq `trans_stat` (the GPU's clock residency, and the memory
    controller's where it has one), governors, temperatures, cooling states, every process's CPU
-   time); each core's and the GPU's clock every second; with `UA_PROF=<hz>` a profile of the same
-   seconds;
+   time); each core's and the GPU's clock, every thermal zone's temperature and each cooling
+   device's state every second (`freq.log`; benchsum.py's `per second:` line: each zone's range and
+   average, the seconds at each GPU clock); with `UA_PROF=<hz>` a profile of the same seconds;
 4. stops the game, starts EmulationStation again and writes `result` (`ok`, or where it stopped).
 
 Clocks, governors and thermal settings are read, never written. The results come back to
@@ -308,6 +310,69 @@ pass](#gpu-pass-by-pass)) and the main thread's by about 15 % (19.3 -> 16.7 ms);
 picture-identical change of that size in sight in the runtime. IL2CPP (the 64-bit build) replaces
 the managed code and Mono's runtime (4 - 5.5 ms here) but runs the same engine and the same GPU work
 (30.6 - 32.4 fps in King's Pass).
+
+### The handheld around the game (2026-10-23)
+
+What the system around the game costs in King's Pass, both builds (the plan above, 30 s measured,
+the GPU at 600 MHz, the SoC at 69 - 73 C), from the bench's counters and `UA_GPU_IDLE`:
+
+| question | measured | reading |
+|---|---|---|
+| does the GPU wait for work inside a frame (a sync, a readback, the swap, a late submission)? | `UA_GPU_IDLE=5`: 0.08 ms (32-bit) and 0.10 ms (64-bit) of a 31 ms frame, 0.2 - 0.3 %, in every 5 s window; 25 spans (framebuffer changes) a frame. At the title (60 fps) 11 ms of a 17 ms frame, during loads most of it. The same in two GPU-bound URP games: Chapéu de Papel's title 0.11 ms of 28.6 (4 spans a frame), The Third Eye's first scene 0.07 ms of 31.5 (84 spans); Cuphead's title (64-bit, held at 60 fps by vsync, the GPU at 504 MHz) 2.5 ms of 16.9 | no. The render thread's ~11 ms a frame blocked in Mali's driver is the driver holding it back while the GPU is behind, not the GPU waiting for it: there are no bubbles to fill |
+| does the presentation add waits (a frame done just after a vblank)? | host flips: the render thread's wait for its next buffer (`gate`) 0.0 ms a frame, 2 frames queued; without vsync (`mailbox`) the same frame rate (runtime.md: Cell Machine 53.6 / 53.4, Chapéu de Papel 36.4 / 36.3) | no: the GPU always has the next frame |
+| memory pressure | 64-bit: 48 MB available at the end, 240 MB of swap in use (zram, lz4); in the 44 s measured 28 swap-ins, 1157 swap-outs (26 a second), 36 major faults, kswapd 0.1 % of a core. 32-bit: 76 MB available, 0 swap-ins, 0 swap-outs, 7 major faults | the swapping happens while the save loads; a frame of play pays nothing measurable for it |
+| other processes | about 7 % of a core: Mali's job-completion kworkers 6 %, the FUSE daemon of `/userdata` (exFAT) 1 %, schedutil's thread 0.5 %. The bench's own sampling script 2 % | nothing that a game's frame waits for |
+| the host's own threads | the UI thread 3 % of a core (its 4 ms poll of SDL and the looper: 270 wake-ups a second), `ua_flip` 1.7 % (nearly all kernel time in the sunxi driver's pan) | small; see the power budget below |
+| interrupts, context switches | 8,000 - 9,400 interrupts a second (the timer 1,500 - 2,800, the GPU's job interrupt 1,450, the vblank 60), 15,000 context switches a second (Mali's submission thread 2,200, Unity's three job workers 3,600: they sleep and wake for each job batch, and 50 - 84 % of their time on a CPU is that futex system call) | the job workers' sleep and wake is about 15 % of a core |
+| the loader's shims (bionic's pthread, stdio, the softfp thunks), the host's GL wrappers | ua_host's code is 1.1 % of UnityMain's samples, 0.3 % of the render thread's | nothing to gain |
+
+**The GPU's clock is a share of one power budget, and the CPU's busy time takes from it.** The
+thermal governor of the RG34XX-SP's kernel is the power allocator (`power_allocator`, read from
+`/sys/class/thermal`): on the CPU's thermal zone only, it starts at 60 C (trip 0) and holds the
+zone at 70 C (trip 1) with a power budget of 1000 mW (`sustainable_power`) plus a proportional term
+(`k_pu` 40, `k_po` 20, no integral or derivative: about 20 mW less per degree over 70 C). Both
+cooling devices hang on that zone with the same weight (1024): `thermal-cpufreq-0`, the four
+cores' clock, and `thermal-devfreq-0`, the Mali's. Each period the budget is split between them
+in proportion to the power each one asks for: the CPU's from the busy time of its cores at their
+clock (a nice 19 thread's included), the GPU's from kbase's power model (`mali-simple-power-model`:
+dynamic coefficient 750, static 17000) at its utilization; each then gets the highest clock its
+share pays for. The GPU's own thermal zone has no cooling device. So once the SoC is warm, a
+GPU-bound game's frame rate depends on how busy the CPUs are, whatever they are busy with.
+
+Measured (King's Pass, 32-bit, 300 s from a cool start, the CPU zone at 69 - 74 C once in the
+level): with one extra busy loop at nice 19 for 60 s (it takes only the cores' idle time, about one
+core of it), the Mali went from 600 to 504 MHz within about 5 s and the frame rate from 33.2 to
+27.7 - 28.8 fps (-16 %); when it stopped, 600 MHz and 33.2 fps again within about 5 s. Outside
+that minute the GPU stayed at 600 MHz once the first 10 s were over, 696 MHz in 2 of the samples
+(696 MHz needs a larger share than the CPUs leave it; the CPUs ran at 1416 - 1512 of their 1704
+MHz). A second run, the busy loop on during seconds 60 - 120 and 180 - 240 of 300: the first minute
+on, while the SoC still warmed (68 -> 72 C), took the GPU from 696 MHz (38 of the 60 s before) to
+600 and the CPUs to 1416 MHz, 35.9 -> 33.1 fps; the second, once warm, 600 -> 504 MHz (56 of its 60
+s), 33.3 -> 28.8 fps (-13 %), and 33.2 fps at 600 MHz in the minute after it. The other way,
+CPU time taken away (a measurement: FMOD mixing at 12 kHz, `UA_AUDIO_RATE=12000`, which halves its
+mixer's CPU time, 56 -> 29 % of a core; the sound is not the game's), two runs of 120 s from 48 C:
+the Mali at 696 MHz for all 120 s against 28 s at 48 kHz, **37.5 fps against 34.2 (+9.7 %)**, the
+SoC as warm (the CPU zone 69.6 against 69.3 C on average). So CPU time a frame does not need is
+GPU clock lost, on every GPU-bound game once warm (about a quarter of a core is the step from
+600 to 696 MHz in King's Pass), and a run's frame rate depends on the bench's own CPU time too
+(profrun.sh's per-second loops now read with bash's builtins: they started 14 processes a second,
+about 3.5 % of a core). It also means a
+bench run must start as cool as the one it is compared with (the device lock waits for 50 C):
+King's Pass from 47 C ran 34.5 fps, the GPU at 696 MHz 22 of 60 s; the same run from a warm start
+at 69 C, 32.3 fps at 600 MHz throughout.
+
+Where King's Pass's 2.6 cores of CPU time go (32-bit, 60 s; % of a core): UnityMain 83, the render
+thread 57, FMOD's mixer 56, Mali's submission thread 17 (+ its job-completion kworkers 6), Unity's
+three job workers 21, the host's UI thread 3, `ua_flip` 1.7, Unity's choreographer and background
+job threads 3. What of it a frame could do without, measured or read from the profiles:
+
+| CPU time | measured | reading |
+|---|---|---|
+| Unity's job workers sleeping and waking for each job batch (3,600 wake-ups a second) | `-job-worker-count 2` (`UA_UNITY_ARGS`), two runs from 47 C: 34.9 fps (696 MHz 24 of 60 s) against 34.5 (22 s); the workers' CPU 19 % of a core against 21 %, every core as busy (64 - 68 %) | the job batches' wake-ups move to the remaining workers: about 2 % of a core, within noise. Not taken |
+| the host's UI thread: a 4 ms poll of the looper and SDL's events | profiled (1000 Hz, 15 s): 2.9 % of a core, 272 wake-ups a second; 59 % of its CPU time is the sleep's own system call, 25 % SDL 2.32's event pump (udev monitor, the pads), 8 % `poll` | half of it would need half the wake-ups: a longer poll (input up to 4 ms later, not the game as it is) or the pads' events waking it, which SDL does not offer. About 1.5 % of a core, a sixth of the quarter of a core that is one GPU clock step: not done |
+| `ua_flip`: the framebuffer pan | 1.7 % of a core, all of it kernel time in the sunxi driver's `FBIOPAN_DISPLAY` (0.5 ms a pan) | the kernel's, a pan a frame |
+| FMOD's mixer decoding Vorbis | 40 % of the mixer's samples (2026-10-22 profile, `fmod_tremor_*`): about 22 % of a core. It decodes the clips that play compressed: the game's Streaming clips and those the converter's audio step switched from DecompressOnLoad to CompressedInMemory (321 of Hollow Knight's clips of 2 s or more: [audio.py](../convert/pmunity/audio.py)); which of them King's Pass plays was not looked up. The rest of the mixer is the game's AudioMixer effects (fader, SFX reverb, filters, flange: about half) | for the clips the converter switched, the same Vorbis data is decoded either way: decoding them at load, as the desktop build does, would give the GPU their share of that CPU time back (all of it, about a fifth of a core, is close to what took King's Pass from 600 to 696 MHz above) for the clips' PCM in memory. A port's choice (`audio.compressed_min_s`), weighed against its memory: Hollow Knight's 64-bit build has 48 MB left in King's Pass. Not measured |
+| FMOD mixing at 48 kHz (`UA_AUDIO_RATE`) for 44.1 kHz clips | the resamplers are 2 - 3 % of the mixer's samples; 44.1 kHz would mix 8 % fewer samples (12 kHz, a measurement: the mixer 56 -> 29 % of a core, +9.7 %, above) | not the same sound (the mix and its effects at another rate, resampled elsewhere): not a default |
 
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 

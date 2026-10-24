@@ -11,7 +11,8 @@
 #                     swap traffic (meminfo, vmstat), CPU and GPU clocks and their residency
 #                     (cpufreq stats, devfreq trans_stat), temperatures, throttling, every
 #                     process's CPU time; tools/analysis/benchsum.py turns them into deltas
-#   freq.log          every second of the measurement: each core's clock, the GPU's, MemAvailable
+#   freq.log          every second of the measurement: each core's clock, the GPU's, MemAvailable,
+#                     SwapFree, each thermal zone's temperature (C) and each cooling device's state
 #   mem.log           every 2 s of the run: MemAvailable, swap, the game's resident memory
 #   prof-<n>.txt      with UA_PROF=<hz>: the profile of the measurement (runtime/host/prof.c)
 #   gpucnt.txt        with GPUCNT=1 (and gpucnt beside this script): the GPU's hardware counters
@@ -62,6 +63,25 @@ PROF=${UA_PROF:-}; unset UA_PROF_START
 log() { echo "[bench] $*" >> "$LOG"; }
 lines() { wc -l < "$LOG" | tr -d ' '; }
 mem() { awk -v k="$1:" '$1 == k {print int($2 / 1024)}' "${2:-/proc/meminfo}"; }
+# The loops that run every second read with bash's builtins only (no cat or awk process a read):
+# on the RG34XX-SP the thermal governor shares one power budget between the CPU and the GPU, so
+# the bench's own CPU time would lower the GPU's clock (docs/profiling.md, "the handheld around the
+# game"). memkv <file> <key>...: each key's kB / 1024 (MB) into M_<key>
+memkv() {
+  local f=$1 k v _ w; shift
+  for w in "$@"; do printf -v "M_$w" '%s' ''; done
+  [ -r "$f" ] || return 0
+  while read -r k v _; do
+    k=${k%:}
+    for w in "$@"; do [ "$k" = "$w" ] && printf -v "M_$w" '%s' $(( v / 1024 )); done
+  done < "$f"
+}
+# rdlist <var> <divisor> <file>...: each file's number / divisor, comma-separated, into <var>
+rdlist() {
+  local out=$1 div=$2 x v r=""; shift 2
+  for x in "$@"; do [ -r "$x" ] && read -r v < "$x" && r="$r${r:+,}$(( v / div ))"; done
+  printf -v "$out" '%s' "$r"
+}
 
 : > "$LOG"
 log "name $NAME, plan: ${PLAN:-none}, measure ${MEASURE:-30} s${PROF:+, profile at $PROF Hz}"
@@ -74,8 +94,12 @@ pid=$!
 (
   t=0
   while kill -0 $pid 2>/dev/null; do
-    a=$(mem MemAvailable); MIN=${UA_MEM_MIN:-$([ "$(mem SwapFree)" -ge 64 ] && echo 40 || echo 100)}
-    [ $((t % 2)) = 0 ] && echo "t=$t avail=${a}M swapfree=$(mem SwapFree)M rss=$(mem VmRSS /proc/$pid/status)M load=$(cut -d' ' -f1 /proc/loadavg)" >> "$OUT/mem.log"
+    memkv /proc/meminfo MemAvailable SwapFree; a=$M_MemAvailable
+    if [ -n "${UA_MEM_MIN:-}" ]; then MIN=$UA_MEM_MIN; elif [ "${M_SwapFree:-0}" -ge 64 ]; then MIN=40; else MIN=100; fi
+    if [ $((t % 2)) = 0 ]; then
+      memkv /proc/$pid/status VmRSS; ld=""; [ -r /proc/loadavg ] && read -r ld _ < /proc/loadavg
+      echo "t=$t avail=${a}M swapfree=${M_SwapFree}M rss=${M_VmRSS}M load=$ld" >> "$OUT/mem.log"
+    fi
     if [ "${a:-$MIN}" -lt "$MIN" ]; then
       echo "[bench] LOW MEMORY at $t s (${a} MB available, under UA_MEM_MIN=$MIN): stopping the game" >> "$LOG"
       kill -KILL $pid; break
@@ -159,12 +183,24 @@ snapshot "$OUT/snap-0.txt"
 if [ "${GPUCNT:-0}" = 1 ] && [ -x "$HERE/gpucnt" ]; then
   "$HERE/gpucnt" sample "$((M - 1))" 100 "$NAME" > "$OUT/gpucnt.txt" 2>&1 &
 fi
+# t counts seconds of the measurement: each sample waits for the next whole second since its start
+# (bash 5's EPOCHREALTIME and a sleep that takes fractions; else one second after the last sample)
+us() { local e=${EPOCHREALTIME:-}; printf -v "$1" '%s' "${e//[!0-9]/}"; }
+us t0us; { [ -n "$t0us" ] && sleep 0.001 2>/dev/null; } || t0us=""
 for t in $(seq 1 "$M"); do
-  sleep 1
+  if [ -n "$t0us" ]; then
+    us nowus; d=$(( t0us + t * 1000000 - nowus ))
+    if [ "$d" -gt 0 ]; then printf -v ds '%d.%06d' $(( d / 1000000 )) $(( d % 1000000 )); sleep "$ds"; fi
+  else
+    sleep 1
+  fi
   kill -0 $pid 2>/dev/null || fail "the game exited during the measurement"
-  f=""; for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq; do [ -r "$c" ] && f="$f${f:+,}$(( $(cat "$c") / 1000 ))"; done
-  g=""; for c in /sys/class/devfreq/*/cur_freq; do [ -r "$c" ] && g="$g${g:+,}$(( $(cat "$c") / 1000000 ))"; done
-  echo "t=$t cpu=${f:-?} gpu=${g:-?} avail=$(mem MemAvailable)M swapfree=$(mem SwapFree)M" >> "$OUT/freq.log"
+  rdlist f 1000 /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq
+  rdlist g 1000000 /sys/class/devfreq/*/cur_freq
+  rdlist z 1000 /sys/class/thermal/thermal_zone[0-9]*/temp
+  rdlist k 1 /sys/class/thermal/cooling_device[0-9]*/cur_state
+  memkv /proc/meminfo MemAvailable SwapFree
+  echo "t=$t cpu=${f:-?} gpu=${g:-?} avail=${M_MemAvailable}M swapfree=${M_SwapFree}M temp=${z:-?} cool=${k:-?}" >> "$OUT/freq.log"
 done
 snapshot "$OUT/snap-1.txt"
 log "measure end"
