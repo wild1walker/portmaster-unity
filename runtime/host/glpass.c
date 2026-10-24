@@ -1,6 +1,6 @@
 // Passes a GLES frame can do without, on a tiler like the Mali, without changing a pixel.
 //
-// UA_GL_SAMECLEAR=1 (default) / 0: a clear that would write what the buffer already holds.
+// UA_GL_SAMECLEAR=1 / 0 (default: opt-in) / check: a clear that would write what the buffer already holds.
 //   A pass that only clears a colour buffer still costs a tiler a whole pass: every tile is
 //   written to memory. Unity clears some render textures every frame that nothing draws into
 //   (Hollow Knight: a 720x450 "darkness cutout" texture cleared to 0 each frame), so the clear
@@ -19,7 +19,8 @@
 //   Only the render thread's draws are followed (glpass_frame names it, from the swap hook);
 //   uploads and deletions from any thread count.
 //
-// Measured on the RG34XX-SP (Mali-G31): see docs/profiling.md.
+// Measured on the RG34XX-SP (Mali-G31): exact, but nothing to gain in Hollow Knight's King's Pass (its
+// clear-only pass costs nothing that shows), so opt-in; docs/profiling.md.
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -651,7 +652,7 @@ const so_shim *glpass_table(void *(*next)(const char *name))
     memset(g_fb, 0, sizeof g_fb);
     g_nuimg = 0; g_ntex2d = 0; g_have_thread = 0; g_cur = 0; g_pending = 0; g_skipped = g_late = 0; g_foreign = 0;
     const char *e = getenv("UA_GL_SAMECLEAR");
-    g_sameclear = !(e && !strcmp(e, "0"));
+    g_sameclear = e && (!strcmp(e, "1") || !strcmp(e, "check"));     // (opt-in: it gains nothing measurable in King's Pass)
     g_check = e && !strcmp(e, "check");
     if (!g_sameclear) return g_shims;
 #define Q(var, name) *(void **)&var = gl(NULL, name)

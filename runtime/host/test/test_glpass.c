@@ -60,7 +60,7 @@ static void *other_thread(void *a) { (void)a; Draw(4, 0, 3); return NULL; }
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "same";
-    if (!strcmp(mode, "off")) setenv("UA_GL_SAMECLEAR", "0", 1);
+    setenv("UA_GL_SAMECLEAR", !strcmp(mode, "off") ? "0" : "1", 1);
     const so_shim *t = glpass_table(NULL);
     Bind = fn(t, "glBindFramebuffer"); Clear = fn(t, "glClear"); Draw = fn(t, "glDrawArrays");
     void (*Attach)(unsigned, unsigned, unsigned, unsigned, int) = fn(t, "glFramebufferTexture2D");

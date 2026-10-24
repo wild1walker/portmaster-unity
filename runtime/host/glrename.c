@@ -1,5 +1,6 @@
 // Copies a GLES frame can do without: a full-screen copy of one texture into another, left out by
-// giving the copy's name the source's storage (texture name virtualisation). UA_GL_RENAME=1 / 0 / check.
+// giving the copy's name the source's storage (texture name virtualisation). UA_GL_RENAME=1 / near / check;
+// off by default (see the end of this comment).
 //
 // Unity copies textures with draws: a grab pass (a blend-mode sprite samples "the picture so far")
 // is a full-screen draw of the camera's colour texture A into the grab texture C, after which the
@@ -49,7 +50,19 @@
 // again (its key is not even computed: the check costs the render thread little).
 //
 // UA_GL_RENAME=check: nothing is left out; at each draw that would be, the copy is made and then
-// compared with its source (both read back: slow): any difference is logged.
+// compared with its source (both read back: slow): any difference is logged; a draw that is not an
+// exact copy on noise is compared with its source the first three times too (how far off it is).
+//
+// UA_GL_RENAME=near (not exact): a draw within 15 of the noise on 90 % of its channels that, made
+// once more in the game, then differs from its source on at most 1 % of its pixels and by at most 3,
+// is left out like an exact copy: the picture changes by that much.
+//
+// Measured on the RG34XX-SP (Mali-G31, docs/profiling.md): none of Hollow Knight's copies is exact
+// there (Unity's grab blit samples at mediump, its other blit filters a little), so =1 leaves nothing
+// out on that device; in Mesa's llvmpipe they are, and King's Pass loses three of its 24 passes (five
+// with UA_GL_SAMECLEAR: the blur's copy back, whose other command is a depth/stencil clear, and a
+// clear-only pass).
+// Off by default: it pays only where a driver copies exactly.
 //
 // Only the render thread's draws are followed (glrename_frame names it, from the swap hook); a
 // texture or framebuffer call of another thread on a name this has swapped gives every picture

@@ -90,7 +90,7 @@ static int g_on;
 static pthread_t g_thread;
 static int g_have_thread;
 static long g_restored, g_dropped;
-static int g_sameclear;              // UA_GL_SAMECLEAR (default 1): a clear of what the buffer holds is left out (glpass.c for colour)
+static int g_sameclear;              // UA_GL_SAMECLEAR=1 (opt-in): a clear of what the buffer holds is left out (glpass.c for colour)
 
 // ---- depth/stencil buffers: what they hold
 #define MAX_DS 256
@@ -515,7 +515,7 @@ const so_shim *glopt_table(void *(*next)(const char *name))
     g_ntex2d = 0;
     g_on = 0; g_have_thread = 0; g_cur = 0; g_pass_started = 0; g_restored = 0; g_dropped = 0;
     const char *sc = getenv("UA_GL_SAMECLEAR");
-    g_sameclear = !(sc && !strcmp(sc, "0"));
+    g_sameclear = sc && (!strcmp(sc, "1") || !strcmp(sc, "check"));
     const char *e = getenv("UA_GL_DSCLEAR");
     if (e && !strcmp(e, "0")) return g_shims;
 #define Q(var, name) *(void **)&var = gl(NULL, name)

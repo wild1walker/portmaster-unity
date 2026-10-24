@@ -61,7 +61,7 @@ int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "restore";
     if (!strcmp(mode, "off")) setenv("UA_GL_DSCLEAR", "0", 1);
-    if (!strcmp(mode, "sameclear_off")) setenv("UA_GL_SAMECLEAR", "0", 1);
+    setenv("UA_GL_SAMECLEAR", !strcmp(mode, "sameclear_off") ? "0" : "1", 1);
     const so_shim *t = glopt_table(NULL);
     void (*Bind)(unsigned, unsigned) = fn(t, "glBindFramebuffer");
     void (*Clear)(unsigned) = fn(t, "glClear");
