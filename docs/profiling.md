@@ -675,6 +675,40 @@ is the measuring tool. (In the game as it ships the GPU sets the rate, King's Pa
 so a main-thread change would not show there either. The 2017.4 `sem_wait` path passes the loader's
 tests but has not been benched in a 2017.4 game.)
 
+### Legacy graphics jobs on OpenGL ES (`UA_GFX_JOBS`)
+
+`AdjustThreadingModeForAPI(mode, renderer, flags)` (6000.0 and later) maps every graphics-jobs mode
+(3 ClientWorkerJobs, 4 ClientWorkerNativeJobs, 5 DirectNativeJobs, 6 SplitJobs) to 2 (a plain
+render thread) for renderer 11, OpenGL ES 3.x, and only there: OpenGL Core keeps ClientWorkerJobs.
+That mode needs no second GL context: `GfxDeviceClient::ExecuteAsync` gives each job a deferred
+client device from a pool, the job records into it, and the main command stream carries a command
+that makes the render thread play that buffer back. `-force-gfx-jobs legacy` selects mode 3
+(`CalculateGfxDeviceThreadingMode`); `UA_GFX_JOBS=legacy` hooks the adjustment (runtime.md) so the
+mode stays. In Threaded mode the same `ForwardRenderLoopJob` runs once, on UnityMain, over the
+whole render queue (1.9 ms of the main camera, 0.3 ms of the offscreen one in the flat profile
+above); with jobs it runs on the workers over the job count's share each. Unity 2021.2 and 2022.2
+players have no such function (the check is inlined into `CreateGfxDevice`, and their
+`ExecuteAsync` has no ClientWorkerJobs path left), and the 2017.x Android players have no client
+`ExecuteAsync`: White Mirror, The Third Eye and Arthur's Nightmare cannot use it.
+
+On the handheld (32-bit King's Pass, flat fragment shaders, the GPU at 240 MHz in every run, each
+run from 48 C, one hold, 2026-10-24):
+
+| run | fps | UnityMain on a CPU | render thread | job workers (on a CPU / waiting for one) |
+|---|---|---|---|---|
+| jobs | 54.2 | 92 % | 68 % | 10 - 19 % / 15 - 30 % |
+| as it is | 49.3 | 95 % | 60 % | 7 - 13 % / 8 - 15 % |
+| jobs | 54.0 | | | |
+
+(+10 %; a second base run was disturbed by another process on the handheld, 42.3 fps with an
+`md5sum` and the exFAT daemon at 15 % of a core each, and is not counted.) The game ran through the
+menus, the save load and King's Pass with the hook in every run. Not measured yet: the game with
+its own shaders (GPU-bound: the extra worker CPU time takes from the power budget the GPU's clock
+shares), the picture (static-frame shots against the plain render thread: a job boundary can split
+a sprite batch, which could draw a single sprite with its own matrix instead of CPU-transformed
+vertices), the 64-bit build, the URP path (Phasing Gun, 6000.6), a long play. Until then it stays
+an option, off.
+
 ### What did not pay, or is not exact
 
 | change (how it would hook) | result |

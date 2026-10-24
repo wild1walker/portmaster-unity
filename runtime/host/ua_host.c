@@ -37,6 +37,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "steamstub.h"
 #include "plugins.h"
 #include "mono64.h"
+#include "unityhooks.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -504,6 +505,7 @@ int main(int argc, char **argv)
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
+    so_set_load_hook(unityhooks_on_load);      // UA_GFX_JOBS: functions inside libunity, by symbol (unityhooks.c)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
     // on) -> glrec.c (UA_GL_REC: it calls glopt.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->
@@ -575,6 +577,14 @@ int main(int argc, char **argv)
     cfg.version_code = pj_version_code > 0 ? pj_version_code : 1;
     cfg.version_name = pj_version_name[0] ? pj_version_name : "1.0";
     cfg.command_line = getenv("UA_UNITY_ARGS");
+    // UA_GFX_JOBS=legacy: Unity's legacy graphics jobs, chosen on its command line unless the
+    // command line already picks a threading mode (unityhooks.c keeps it on OpenGL ES)
+    static char cmdline[1024];
+    if (unityhooks_gfx_jobs() && !(cfg.command_line && strstr(cfg.command_line, "-force-gfx"))) {
+        snprintf(cmdline, sizeof cmdline, "%s%s-force-gfx-jobs legacy", cfg.command_line ? cfg.command_line : "",
+                 cfg.command_line && *cfg.command_line ? " " : "");
+        cfg.command_line = cmdline;
+    }
     // ApplicationInfo.metaData: UA_META="key=value;key=value" (e.g. unity.build-id=..., which ties
     // the APK to its OBB)
     static const char *meta[32];
