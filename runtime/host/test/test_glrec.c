@@ -6,6 +6,9 @@
 //   copy        uniform data and buffer data are copied when the call is made (changed after: the copy)
 //   clientidx   indices in client memory (no element buffer) are copied; with an element buffer, an offset
 //   clientarray a draw from a client-side vertex array is submitted at once (with what was held before it)
+//   map         a buffer map for writing (flush explicit) is held: the game writes host memory, the flushed
+//               range reaches the real mapping at the swap; a map that reads is made at once
+//   texsub      a texture upload from client memory is held with its pixels copied (row length, alignment)
 //   dead        UA_GL_REC=2: a pass whose colour is cleared again before anything reads it is left out
 //               (its draws and clears; its state calls stay)
 //   live        the same with a pass in between that samples it: kept
@@ -19,6 +22,8 @@
 //   fetch       the driver lets shaders read depth/stencil (ARM_shader_framebuffer_fetch_depth_stencil):
 //               the window scenario with a program not seen compiled from source keeps the second
 //               pass's depth/stencil load; compiled from a source without gl_LastFragDepth, not
+//   attach      an attachment changed by a held call is followed into later frames (texture 13 on
+//               framebuffer 2: a pass writing it, sampled later, is kept; the driver is not asked again)
 //   side        a shader storage buffer bound: no pass is left out
 //   opt         UA_GL_REC_OPT=end: only invalidates at pass ends
 #include <stdio.h>
@@ -62,7 +67,7 @@ int main(int argc, char **argv)
 {
     const char *m = argc > 1 ? argv[1] : "hold";
     const char *mode = !strcmp(m, "census") ? "census" : (!strcmp(m, "hold") || !strcmp(m, "copy") || !strcmp(m, "clientidx") ||
-                                                          !strcmp(m, "clientarray")) ? "1" : "2";
+                                                          !strcmp(m, "clientarray") || !strcmp(m, "map") || !strcmp(m, "texsub")) ? "1" : "2";
     setenv("UA_GL_REC", mode, 1);
     setenv("UA_GL_REC_LOG", "0", 1);
     if (!strcmp(m, "opt")) setenv("UA_GL_REC_OPT", "end", 1);
@@ -102,6 +107,36 @@ int main(int argc, char **argv)
         CALL(glDrawElements, void (*)(GLenum, GLsizei, GLenum, const void *), GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (const void *)64);
         SWAP();
         CHECK(HAS("drawel(fb0 3 idx 42)") && HAS("drawel(fb0 3 @64)"));
+    } else if (!strcmp(m, "map")) {
+        extern unsigned char fake_store[256];
+        CALL(glBindBuffer, void (*)(GLenum, GLuint), GL_ARRAY_BUFFER, 4);
+        unsigned char *p = CALL(glMapBufferRange, void *(*)(GLenum, GLintptr, GLsizeiptr, GLbitfield), GL_ARRAY_BUFFER, 16, 32,
+                                GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+        CHECK(p && p != fake_store + 16 && fake_log[0] == 0);
+        p[0] = 7; p[4] = 9; p[20] = 5;
+        CALL(glFlushMappedBufferRange, void (*)(GLenum, GLintptr, GLsizeiptr), GL_ARRAY_BUFFER, 0, 8);
+        CHECK(CALL(glUnmapBuffer, GLboolean (*)(GLenum), GL_ARRAY_BUFFER) == GL_TRUE);
+        p = NULL;
+        DRAW(3);
+        CHECK(fake_log[0] == 0 && fake_store[16] == 0);
+        SWAP();
+        CHECK(HAS("map(16 32) flushmap(0 8) unmap draw(fb0 3)") && fake_store[16] == 7 && fake_store[20] == 9 && fake_store[36] == 0);
+        RESET();
+        unsigned char *q = CALL(glMapBufferRange, void *(*)(GLenum, GLintptr, GLsizeiptr, GLbitfield), GL_ARRAY_BUFFER, 0, 8, GL_MAP_READ_BIT);
+        CHECK(q == fake_store && HAS("map(0 8 read)"));
+        CALL(glUnmapBuffer, GLboolean (*)(GLenum), GL_ARRAY_BUFFER);
+        CHECK(HAS("unmap"));
+        SWAP();
+    } else if (!strcmp(m, "texsub")) {
+        unsigned char px[3 * 8 * 4];
+        for (size_t i = 0; i < sizeof px; i++) px[i] = (unsigned char)i;
+        CALL(glPixelStorei, void (*)(GLenum, GLint), GL_UNPACK_ROW_LENGTH, 8);
+        CALL(glTexSubImage2D, void (*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *),
+             GL_TEXTURE_2D, 0, 0, 0, 5, 3, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        memset(px, 0xee, sizeof px);
+        CHECK(fake_log[0] == 0);
+        SWAP();
+        CHECK(HAS("texsub(5x3 0..83)"));
     } else if (!strcmp(m, "clientarray")) {
         CALL(glBindVertexArray, void (*)(GLuint), 2);
         CALL(glBindBuffer, void (*)(GLenum, GLuint), GL_ARRAY_BUFFER, 0);
@@ -161,6 +196,19 @@ int main(int argc, char **argv)
             else CHECK(HAS("draw(fb0 1) inval(fb0 DS) bind(2)") && HAS("inval(fb0 DS) draw(fb0 3) inval(fb0 DS)"));
             RESET();
         }
+    } else if (!strcmp(m, "attach")) {
+        USE(6);
+        BIND(2); CLEAR(GL_COLOR_BUFFER_BIT); DRAW(1);            // (framebuffer 2 asked about: texture 11)
+        SWAP();
+        BIND(2); CALL(glFramebufferTexture2D, void (*)(GLenum, GLenum, GLenum, GLuint, GLint), GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 13, 0);
+        SWAP();
+        RESET();
+        BIND(2); CLEAR(GL_COLOR_BUFFER_BIT); DRAW(2);            // texture 13
+        BIND(0); USE(5); TEX(13); DRAW(3); USE(6);               // read
+        BIND(2); CLEAR(GL_COLOR_BUFFER_BIT); DRAW(4);
+        BIND(0); USE(5); TEX(13); DRAW(5);
+        SWAP();
+        CHECK(HAS("draw(fb2 2)") && HAS("draw(fb2 4)"));
     } else if (!strcmp(m, "window")) {
         USE(6);
         BIND(0); DRAW(1);

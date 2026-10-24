@@ -48,7 +48,7 @@
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 
-#define GLREC_OPS_ONLY
+#define GLREC_PART 1
 #include "glrec_gen.h"
 #include "glrec_fg.h"
 
@@ -77,20 +77,22 @@ static inline uint64_t rkey(uint64_t kind, GLuint name, unsigned level, unsigned
 static inline uint64_t robj(uint64_t k) { return k & (0xffull << 56 | 0xffffffffull); }
 static inline int is_window(uint64_t k) { unsigned t = (unsigned)(k >> 56); return t >= RK_WIN_C; }
 
-// ---- framebuffers (looked up once per held frame)
+// ---- framebuffers: their attachments, asked from the driver once and followed from then on
+// (every attachment change is a held call; a held frame that deletes textures, renderbuffers or
+// framebuffers is submitted unchanged and the table forgotten, as at eglMakeCurrent)
 #define NSLOT 6                    // colour 0-3, depth, stencil
 enum { S_DEPTH = 4, S_STENCIL = 5 };
 typedef struct { GLuint fb; unsigned ver; int bad; uint64_t att[NSLOT]; } fbi_t;
 #define NFBI 256
 static fbi_t g_fbi[NFBI];
-static int g_nfbi;
+static int g_nfbi, g_fbi_reset;
 static int g_win_known, g_win_d, g_win_s;
 static GLint g_start_draw_fb;
 
 static fbi_t *fbi(GLuint fb)
 {
     for (int i = 0; i < g_nfbi; i++) if (g_fbi[i].fb == fb) return &g_fbi[i];
-    if (g_nfbi >= NFBI) return NULL;
+    if (g_nfbi >= NFBI) { g_fbi_reset = 1; return NULL; }
     fbi_t *f = &g_fbi[g_nfbi++];
     memset(f, 0, sizeof *f);
     f->fb = fb;
@@ -575,6 +577,9 @@ static void walk_cmd(size_t k, unsigned op, const uint64_t *a, const fg_frame *f
     case OP_glFramebufferRenderbuffer: attach(U(0), U(1), U(3) ? rkey(RK_RB, U(3), 0, 0) : 0, 0); break;
     case OP_glFramebufferTextureMultiviewOVR: case OP_glFramebufferTextureMultisampleMultiviewOVR: attach(U(0), U(1), 0, 1); break;
     case OP_glDrawBuffers: { fbi_t *f = fbi(s.draw_fb); if (f) f->ver++; g_cur = NULL; break; }
+    case OP_glDeleteTextures: case OP_glDeleteRenderbuffers: case OP_glDeleteFramebuffers:
+        g_opaque = 1; g_fbi_reset = 1;
+        break;
     case OP_glReadBuffer: { fbi_t *f = fbi(s.read_fb); if (f) f->ver++; break; }
     case OP_glActiveTexture: s.active = (int)(U(0) - GL_TEXTURE0); break;
     case OP_glBindTexture: {
@@ -705,7 +710,7 @@ static void analyse(const fg_frame *fr)
     g_koff = grow(g_koff, &g_capk, nk + 1, sizeof *g_koff);
     g_skip = grow(g_skip, &g_capskip, nk + 1, 1);
     memset(g_skip, 0, nk);
-    g_npass = 0; g_nrw = 0; g_nins = 0; g_cur = NULL; g_opaque = 0; g_nfbi = 0;
+    g_npass = 0; g_nrw = 0; g_nins = 0; g_cur = NULL; g_opaque = 0;
     state_from_driver();
     g_start_active = s.active;
     size_t k = 0;
@@ -897,6 +902,7 @@ void fg_submit(fg_frame *fr)
     fr->analysis_s = now() - t0;
     if (g_opaque) { g_nins = 0; memset(g_skip, 0, g_capskip); }
     replay(fr);
+    if (g_fbi_reset) { g_nfbi = 0; g_fbi_reset = 0; }
 }
 
 void fg_flush_call(const char *n)
@@ -908,7 +914,7 @@ void fg_flush_call(const char *n)
     else if (!strcmp(n, "glEndQuery") || !strcmp(n, "glEndQueryEXT")) { if (g_queries > 0) g_queries--; }
     else if (!strcmp(n, "glBeginTransformFeedback") || !strcmp(n, "glResumeTransformFeedback")) g_tf = 1;
     else if (!strcmp(n, "glEndTransformFeedback") || !strcmp(n, "glPauseTransformFeedback")) g_tf = 0;
-    else if (!strcmp(n, "eglMakeCurrent")) g_win_known = 0;
+    else if (!strcmp(n, "eglMakeCurrent")) { g_win_known = 0; g_nfbi = 0; }
 }
 
 void fg_swap(void) {}

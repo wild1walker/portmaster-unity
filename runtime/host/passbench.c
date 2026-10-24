@@ -11,7 +11,11 @@
 //   Content: each A pass draws its quad somewhere else and clears to another colour, so the GPU's
 //   transaction elimination (tiles written only when their CRC changed) does not hide stores;
 //   "same" cases repeat the frame exactly (what a pass that changes few tiles gets).
-// Build: host/build.sh; on the device: ./passbench [seconds per case] [width height]
+//   Ballast: every frame starts with a pass of a heavy shader (into its own 256x256 target, stored),
+//   about 4 ms, so the GPU is busy and its governor keeps the clock where a game holds it (the
+//   clock is printed per case); each case's time is printed less the ballast's alone, measured
+//   before and after it (0 as the last argument: no ballast).
+// Build: host/build.sh; on the device: ./passbench [seconds per case] [width height] [ballast ms]
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 #include <fcntl.h>
@@ -69,6 +73,20 @@ static GLuint program(const char *vs, const char *fs)
 
 static int W = 720, H = 450;
 static GLuint fbA, fbB, texA, dsA, texB, texS, progQuad, progCopy, vbo;
+static GLuint fbZ, texZ, progHeavy;
+static GLint uIter;
+static int g_iter;                   // the ballast's loop count (0: none)
+
+static void ballast(void)
+{
+    if (!g_iter) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbZ);
+    glViewport(0, 0, 256, 256);
+    glUseProgram(progHeavy);
+    glUniform1i(uIter, g_iter);
+    glDrawArrays(GL_TRIANGLE_STRIP, 4, 4);
+    glUseProgram(progQuad);
+}
 static GLint uOff, uCol;
 static unsigned frameno;
 
@@ -84,6 +102,7 @@ typedef struct {
     int seps;                   // separator passes (B) a frame; 0: 8 A and 8 B passes
     int window;                 // A is the window (fb 0)
     int merged;                 // (window) one pass: the A passes' draws all in one
+    int none;                   // nothing but the ballast
 } bench_case;
 
 static void quad(int k, int n)
@@ -134,7 +153,9 @@ static void b_pass(int k, unsigned n)
 
 static void frame(const bench_case *c, unsigned n)
 {
-    if (c->seps) {
+    ballast();
+    if (c->none) {
+    } else if (c->seps) {
         for (int k = 0; k < c->seps; k++) b_pass(k, n);
     } else if (c->merged) {
         // the A passes' draws in one pass on A, then the separators
@@ -173,6 +194,7 @@ int main(int argc, char **argv)
 {
     double secs = argc > 1 ? atof(argv[1]) : 2.0;
     if (argc > 3) { W = atoi(argv[2]); H = atoi(argv[3]); }
+    double ballast_ms = argc > 4 ? atof(argv[4]) : 4.0;
     struct fb_var_screeninfo vi = {0};
     int fd = open("/dev/fb0", O_RDWR);
     if (fd < 0 || ioctl(fd, FBIOGET_VSCREENINFO, &vi) != 0) { perror("fb0"); return 1; }
@@ -224,6 +246,14 @@ int main(int argc, char **argv)
     progCopy = program("#version 300 es\nin vec2 pos; out vec2 uv; void main() { uv = pos * 0.5 + 0.5; gl_Position = vec4(pos, 0.5, 1.0); }\n",
                        "#version 300 es\nprecision mediump float; uniform sampler2D t; in vec2 uv; out vec4 o; void main() { o = texture(t, uv); }\n");
     uOff = glGetUniformLocation(progQuad, "off"); uCol = glGetUniformLocation(progQuad, "col");
+    progHeavy = program("#version 300 es\nin vec2 pos; out vec2 uv; void main() { uv = pos; gl_Position = vec4(pos, 0.5, 1.0); }\n",
+                        "#version 300 es\nprecision highp float; uniform int iter; in vec2 uv; out vec4 o;\n"
+                        "void main() { float v = uv.x + uv.y; for (int i = 0; i < iter; i++) v = sin(v * 1.3 + 0.7); o = vec4(v); }\n");
+    uIter = glGetUniformLocation(progHeavy, "iter");
+    glGenTextures(1, &texZ); glBindTexture(GL_TEXTURE_2D, texZ); glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 256, 256);
+    glGenFramebuffers(1, &fbZ); glBindFramebuffer(GL_FRAMEBUFFER, fbZ);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texZ, 0);
+    glBindTexture(GL_TEXTURE_2D, texS);
     static const float v[] = { 0, 0, 1, 0, 0, 1, 1, 1, -1, -1, 1, -1, -1, 1, 1, 1 };
     glGenBuffers(1, &vbo); glBindBuffer(GL_ARRAY_BUFFER, vbo); glBufferData(GL_ARRAY_BUFFER, sizeof v, v, GL_STATIC_DRAW);
     glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
@@ -231,6 +261,19 @@ int main(int argc, char **argv)
     glUniform1i(glGetUniformLocation(progCopy, "t"), 0);
     glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND);
 
+    // the ballast's size: about ballast_ms a frame once the clock is up
+    if (ballast_ms > 0) {
+        static const bench_case only = { "ballast", .none = 1 };
+        g_iter = 16;
+        for (int round = 0; round < 6; round++) {
+            int lo, hi;
+            double ms = run(&only, 0.5, &lo, &hi);
+            if (ms > 0.01) g_iter = (int)(g_iter * ballast_ms / ms);
+            if (g_iter < 1) g_iter = 1;
+            if (g_iter > 100000) g_iter = 100000;
+        }
+    }
+    static const bench_case only = { "ballast", .none = 1 };
     static const bench_case cases[] = {
         { "sep 8 (8 separator passes)", .seps = 8 },
         { "sep 32", .seps = 32 },
@@ -255,10 +298,13 @@ int main(int argc, char **argv)
         { "win 8 quads in one pass, load all", LOAD, LOAD, STORE, DROP, .window = 1, .merged = 1 },
         { "sep 8 again", .seps = 8 },
     };
+    printf("ballast: %d iterations\n", g_iter);
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        int lo, hi;
+        int lo, hi, blo, bhi;
+        double b0 = g_iter ? run(&only, secs / 2, &blo, &bhi) : 0;
         double ms = run(&cases[i], secs, &lo, &hi);
-        printf("%-46s %7.3f ms a frame  (GPU %d-%d MHz)\n", cases[i].name, ms, lo, hi);
+        double b1 = g_iter ? run(&only, secs / 2, &blo, &bhi) : 0;
+        printf("%-46s %7.3f ms a frame  (GPU %d-%d MHz; ballast %.3f / %.3f ms)\n", cases[i].name, ms - (b0 + b1) / 2, lo, hi, b0, b1);
         fflush(stdout);
     }
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

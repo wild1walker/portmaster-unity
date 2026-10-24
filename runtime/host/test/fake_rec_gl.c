@@ -87,7 +87,31 @@ void glVertexAttribPointer(GLuint i, GLint s, GLenum t, GLboolean n, GLsizei st,
 { (void)s; (void)t; (void)n; (void)st; (void)p; if (i < 16) vao_buf[vao & 15][i] = array_buf; }
 void glEnableVertexAttribArray(GLuint i) { if (i < 16) vao_en[vao & 15] |= 1u << i; }
 void glDisableVertexAttribArray(GLuint i) { if (i < 16) vao_en[vao & 15] &= ~(1u << i); }
+// one buffer's store (any buffer: the maps write into it), and texture uploads
+unsigned char fake_store[256];
+static GLbitfield map_access;
+void *glMapBufferRange(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a)
+{
+    (void)t; (void)l;
+    map_access = a;
+    logf_("map(%ld %ld%s)", (long)o, (long)l, a & GL_MAP_READ_BIT ? " read" : "");
+    return fake_store + o;
+}
+void glFlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr l) { (void)t; logf_("flushmap(%ld %ld)", (long)o, (long)l); }
+GLboolean glUnmapBuffer(GLenum t) { (void)t; logf_("unmap"); return GL_TRUE; }
+static GLint unpack_align = 4, unpack_row;
+void glPixelStorei(GLenum p, GLint v) { if (p == GL_UNPACK_ALIGNMENT) unpack_align = v; if (p == GL_UNPACK_ROW_LENGTH) unpack_row = v; }
+void glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *p)
+{
+    (void)t; (void)l; (void)x; (void)y; (void)f; (void)ty;
+    size_t row = (size_t)(unpack_row ? unpack_row : w) * 4;
+    row = (row + (size_t)unpack_align - 1) / (size_t)unpack_align * (size_t)unpack_align;
+    const unsigned char *b = p;
+    logf_("texsub(%dx%d %u..%u)", w, h, b[0], b[(size_t)(h - 1) * row + (size_t)w * 4 - 1]);
+}
 void glBufferSubData(GLenum t, GLintptr o, GLsizeiptr s, const void *d) { (void)t; (void)o; logf_("bufsub(%ld %u)", (long)s, ((const unsigned char *)d)[0]); }
+// (attachments do not change here: test_glrec checks that glrec_fg.c follows the held calls)
+void glFramebufferTexture2D(GLenum t, GLenum a, GLenum tt, GLuint x, GLint l) { (void)t; (void)a; (void)tt; (void)x; (void)l; logf_("attach(%u)", x); }
 void glBindBufferBase(GLenum t, GLuint i, GLuint b) { (void)t; (void)i; (void)b; logf_("bindbase"); }
 void glFinish(void) { logf_("finish"); }
 void glFlush(void) { logf_("flush"); }
@@ -105,6 +129,8 @@ void glGetIntegerv(GLenum p, GLint *v)
     case GL_VERTEX_ARRAY_BINDING: *v = (GLint)vao; break;
     case GL_ELEMENT_ARRAY_BUFFER_BINDING: *v = (GLint)vao_ebo[vao & 15]; break;
     case GL_ARRAY_BUFFER_BINDING: *v = (GLint)array_buf; break;
+    case GL_UNPACK_ALIGNMENT: *v = unpack_align; break;
+    case GL_UNPACK_ROW_LENGTH: *v = unpack_row; break;
     case GL_DEPTH_FUNC: *v = (GLint)dfunc; break;
     case GL_STENCIL_FUNC: case GL_STENCIL_BACK_FUNC: *v = GL_ALWAYS; break;
     case GL_STENCIL_FAIL: case GL_STENCIL_PASS_DEPTH_FAIL: case GL_STENCIL_PASS_DEPTH_PASS:

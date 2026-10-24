@@ -16,7 +16,13 @@
 // values, buffer data, attachment lists, client-side indices); any other call (queries, maps,
 // fences, texture definitions, shader and program management, glFinish, eglMakeCurrent) first
 // submits what is held, then runs: the driver always sees the calls in the order Unity made
-// them. A draw that reads client-side vertex arrays (whose memory is read at the call) or an
+// them. Buffer maps for writing (Unity writes its dynamic geometry through a map, a flush of the
+// range and an unmap for each draw) are held too: the game writes into memory of the host's, and
+// the flushed ranges (or, without GL_MAP_FLUSH_EXPLICIT_BIT, the whole range of a map that
+// invalidates it) are written into the real mapping when the map is submitted, with the same
+// flags; a map that reads, a persistent one, or one whose untouched bytes must keep their contents
+// is made at once. Texture uploads are held with their pixels copied (the size from the pixel
+// store state), or as an offset into the bound unpack buffer. A draw that reads client-side vertex arrays (whose memory is read at the call) or an
 // indirect draw without a buffer submits first too: a small shadow of the vertex array state
 // (the bound vertex array object, its element buffer, its enabled attributes and which of them
 // have no buffer) knows; what it does not know yet it asks the driver, whose state is then that of
@@ -34,15 +40,19 @@
 
 #include "glrec.h"
 #include "glrec_fg.h"
+#define GLREC_PART 1
+#include "glrec_gen.h"
+#undef GLREC_PART
 
-#define MAXOP 512
+#ifndef GL_MAP_PERSISTENT_BIT_EXT
+#define GL_MAP_PERSISTENT_BIT_EXT 0x0040
+#endif
+#define MAXOP OP_N
 static int g_mode;               // 0 off, 1 census, 2 record, 3 record + frame graph
 static int g_on;                 // recording (the render thread is known)
 static pthread_t g_thread;
 static int g_have_thread;
 static inline int mine(void) { return g_have_thread && pthread_equal(pthread_self(), g_thread); }
-static inline int glrec_recording(void) { return g_on && pthread_equal(pthread_self(), g_thread); }
-
 // ---- the command buffer: [op | nargs << 32] then nargs 64-bit slots; blobs in a byte arena
 static uint64_t *g_cmd;
 static size_t g_ncmd, g_capcmd;
@@ -50,15 +60,21 @@ static unsigned char *g_blob;
 static size_t g_nblob, g_capblob;
 #define BLOB_TAG (1ull << 63)
 #define HOLD_MAX (32u << 20)         // bytes held before an early submission
+static unsigned long g_size_submits;
+static void submit(int at_swap);
+static inline int glrec_recording(void)
+{
+    if (!g_on || !pthread_equal(pthread_self(), g_thread)) return 0;
+    if (g_ncmd * 8 + g_nblob > HOLD_MAX) { g_size_submits++; submit(0); }     // (before this call: in order)
+    return 1;
+}
 
 // statistics (the render thread's), since the last log line
 static unsigned long g_calls[MAXOP], g_submits[MAXOP], g_rec_calls, g_held_words, g_held_blob;
-static unsigned long g_frames, g_swap_submits, g_size_submits;
+static unsigned long g_frames, g_swap_submits;
 static double g_replay_s, g_fg_s;
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
-
-static void submit(int at_swap);
 
 static void *grow(void *p, size_t *cap, size_t need, size_t elem)
 {
@@ -89,7 +105,7 @@ static inline uint64_t glrec_blob(const void *p, size_t n)
     g_nblob = at + n;
     return BLOB_TAG | at;
 }
-static inline const void *glrec_ptr(uint64_t v) { return v & BLOB_TAG ? (const void *)(g_blob + (v & ~BLOB_TAG)) : (const void *)(uintptr_t)v; }
+static const void *glrec_ptr(uint64_t v) { return v & BLOB_TAG ? (const void *)(g_blob + (v & ~BLOB_TAG)) : (const void *)(uintptr_t)v; }
 static inline uint64_t rec_fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static inline float rec_bitsf(uint64_t v) { uint32_t u = (uint32_t)v; float f; memcpy(&f, &u, 4); return f; }
 
@@ -111,11 +127,16 @@ static int g_nvao;
 static GLuint s_vao, s_array, s_indirect;
 static int s_vao_known, s_array_known, s_indirect_known;
 
+static void bindings_reset(void);
+static void pixelstore_reset(void);
+static void bp_set(GLenum target, GLuint buf);
 static void shadow_reset(void)
 {
     memset(g_vao, 0, sizeof g_vao);
     g_nvao = 0;
     s_vao_known = s_array_known = s_indirect_known = 0;
+    bindings_reset();
+    pixelstore_reset();
 }
 
 static vao_t *vao_get(GLuint name)
@@ -178,6 +199,7 @@ static int glrec_buffer_hook(int r, GLenum target, GLuint buffer)
 {
     (void)r;
     if (!mine()) return 0;
+    bp_set(target, buffer);
     if (target == GL_ARRAY_BUFFER) { s_array = buffer; s_array_known = 1; }
     else if (target == GL_DRAW_INDIRECT_BUFFER) { s_indirect = buffer; s_indirect_known = 1; }
     else if (target == GL_ELEMENT_ARRAY_BUFFER) { vao_t *v = cur_vao(); v->ebo = buffer; v->ebo_known = 1; }
@@ -204,6 +226,189 @@ static int glrec_attrib_hook(int r, GLuint index, int on)
     v->en_known |= b;
     return 0;
 }
+// the other buffer binding points (unpack buffer: an upload's pixels; any: which buffer a map is of)
+typedef struct { GLenum target, binding; GLuint buf; int known; } bindpoint;
+static bindpoint g_bp[] = {
+    { GL_PIXEL_UNPACK_BUFFER, GL_PIXEL_UNPACK_BUFFER_BINDING, 0, 0 }, { GL_PIXEL_PACK_BUFFER, GL_PIXEL_PACK_BUFFER_BINDING, 0, 0 },
+    { GL_UNIFORM_BUFFER, GL_UNIFORM_BUFFER_BINDING, 0, 0 }, { GL_COPY_READ_BUFFER, GL_COPY_READ_BUFFER_BINDING, 0, 0 },
+    { GL_COPY_WRITE_BUFFER, GL_COPY_WRITE_BUFFER_BINDING, 0, 0 }, { GL_TRANSFORM_FEEDBACK_BUFFER, GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 0, 0 },
+    { GL_SHADER_STORAGE_BUFFER, GL_SHADER_STORAGE_BUFFER_BINDING, 0, 0 }, { GL_ATOMIC_COUNTER_BUFFER, GL_ATOMIC_COUNTER_BUFFER_BINDING, 0, 0 },
+    { GL_DISPATCH_INDIRECT_BUFFER, GL_DISPATCH_INDIRECT_BUFFER_BINDING, 0, 0 }, { GL_TEXTURE_BUFFER, GL_TEXTURE_BUFFER_BINDING, 0, 0 },
+};
+#define NBP (sizeof g_bp / sizeof g_bp[0])
+static void bindings_reset(void) { for (size_t i = 0; i < NBP; i++) g_bp[i].known = 0; }
+static void bp_set(GLenum target, GLuint buf) { for (size_t i = 0; i < NBP; i++) if (g_bp[i].target == target) { g_bp[i].buf = buf; g_bp[i].known = 1; } }
+static int buffer_bound(GLenum target, GLuint *buf)
+{
+    if (target == GL_ARRAY_BUFFER) {
+        if (!s_array_known) { GLint b = 0; d_GetIntegerv(GL_ARRAY_BUFFER_BINDING, &b); s_array = (GLuint)b; s_array_known = 1; }
+        *buf = s_array; return 1;
+    }
+    if (target == GL_ELEMENT_ARRAY_BUFFER) { vao_t *v = cur_vao(); vao_learn(v, 0, 1); *buf = v->ebo; return 1; }
+    if (target == GL_DRAW_INDIRECT_BUFFER) {
+        if (!s_indirect_known) { GLint b = 0; d_GetIntegerv(GL_DRAW_INDIRECT_BUFFER_BINDING, &b); s_indirect = (GLuint)b; s_indirect_known = 1; }
+        *buf = s_indirect; return 1;
+    }
+    for (size_t i = 0; i < NBP; i++)
+        if (g_bp[i].target == target) {
+            if (!g_bp[i].known) { GLint b = 0; d_GetIntegerv(g_bp[i].binding, &b); g_bp[i].buf = (GLuint)b; g_bp[i].known = 1; }
+            *buf = g_bp[i].buf;
+            return 1;
+        }
+    return 0;
+}
+
+// the pixel store state an upload's size depends on
+static const GLenum g_ps_name[6] = { GL_UNPACK_ALIGNMENT, GL_UNPACK_ROW_LENGTH, GL_UNPACK_IMAGE_HEIGHT,
+                                     GL_UNPACK_SKIP_PIXELS, GL_UNPACK_SKIP_ROWS, GL_UNPACK_SKIP_IMAGES };
+static GLint g_ps[6];
+static int g_ps_known;
+static void pixelstore_reset(void) { g_ps_known = 0; }
+static GLint pixelstore(int i)
+{
+    if (!(g_ps_known >> i & 1)) { d_GetIntegerv(g_ps_name[i], &g_ps[i]); g_ps_known |= 1 << i; }
+    return g_ps[i];
+}
+static int glrec_pixelstore_hook(int r, GLenum pname, GLint v)
+{
+    (void)r;
+    if (!mine()) return 0;
+    for (int i = 0; i < 6; i++) if (g_ps_name[i] == pname) { g_ps[i] = v; g_ps_known |= 1 << i; }
+    return 0;
+}
+static size_t pixel_bytes(GLenum format, GLenum type)
+{
+    size_t comp;
+    switch (format) {
+    case GL_RED: case GL_RED_INTEGER: case GL_ALPHA: case GL_LUMINANCE: case GL_DEPTH_COMPONENT: case GL_STENCIL_INDEX: comp = 1; break;
+    case GL_RG: case GL_RG_INTEGER: case GL_LUMINANCE_ALPHA: case GL_DEPTH_STENCIL: comp = 2; break;
+    case GL_RGB: case GL_RGB_INTEGER: comp = 3; break;
+    case GL_RGBA: case GL_RGBA_INTEGER: case GL_BGRA_EXT: comp = 4; break;
+    default: return 0;
+    }
+    switch (type) {
+    case GL_UNSIGNED_BYTE: case GL_BYTE: return comp;
+    case GL_UNSIGNED_SHORT: case GL_SHORT: case GL_HALF_FLOAT: case GL_HALF_FLOAT_OES: return comp * 2;
+    case GL_UNSIGNED_INT: case GL_INT: case GL_FLOAT: return comp * 4;
+    case GL_UNSIGNED_SHORT_5_6_5: case GL_UNSIGNED_SHORT_4_4_4_4: case GL_UNSIGNED_SHORT_5_5_5_1: return 2;
+    case GL_UNSIGNED_INT_2_10_10_10_REV: case GL_UNSIGNED_INT_10F_11F_11F_REV: case GL_UNSIGNED_INT_5_9_9_9_REV:
+    case GL_UNSIGNED_INT_24_8: return 4;
+    case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: return 8;
+    default: return 0;
+    }
+}
+// nonzero: an upload this cannot size (submitted at once)
+static int glrec_pixels_hook(int r, GLenum format, GLenum type) { return r && !pixel_bytes(format, type); }
+static uint64_t glrec_pixels(const void *p, GLsizei w, GLsizei h, GLsizei d, GLenum format, GLenum type)
+{
+    GLuint pbo = 0;
+    buffer_bound(GL_PIXEL_UNPACK_BUFFER, &pbo);
+    if (pbo || !p || w <= 0 || h <= 0 || d <= 0) return (uint64_t)(uintptr_t)p;
+    size_t bpp = pixel_bytes(format, type), align = (size_t)pixelstore(0);
+    size_t rl = pixelstore(1) > 0 ? (size_t)pixelstore(1) : (size_t)w;
+    size_t ih = pixelstore(2) > 0 ? (size_t)pixelstore(2) : (size_t)h;
+    size_t row = rl * bpp;
+    if (align > 1) row = (row + align - 1) / align * align;
+    size_t img = ih * row;
+    size_t n = (size_t)pixelstore(5) * img + (size_t)(d - 1) * img + (size_t)pixelstore(4) * row + (size_t)pixelstore(3) * bpp +
+               (size_t)(h - 1) * row + (size_t)w * bpp;
+    return glrec_blob(p, n);
+}
+static uint64_t glrec_cpixels(const void *p, GLsizei size)
+{
+    GLuint pbo = 0;
+    buffer_bound(GL_PIXEL_UNPACK_BUFFER, &pbo);
+    if (pbo || !p || size <= 0) return (uint64_t)(uintptr_t)p;
+    return glrec_blob(p, (size_t)size);
+}
+
+// ---- buffer maps for writing: the game writes into host memory, put into the real mapping at submission
+#define NMAP 16
+typedef struct { int used; GLenum target; GLuint buf; GLbitfield access; GLsizeiptr len; unsigned char *shadow; uint32_t id; } map_t;
+static map_t g_map[NMAP];
+static uint32_t g_map_id;
+typedef struct { uint32_t id; void *p; GLsizeiptr len; } rmap_t;      // submitted maps (the real pointer)
+static rmap_t g_rmap[NMAP];
+static unsigned long g_maps_held;
+
+static map_t *map_of(GLenum target)
+{
+    GLuint buf = 0;
+    if (!buffer_bound(target, &buf)) return NULL;
+    for (int i = 0; i < NMAP; i++) if (g_map[i].used && g_map[i].target == target && g_map[i].buf == buf) return &g_map[i];
+    return NULL;
+}
+
+static void *glrec_custom_glMapBufferRange(GLenum target, GLintptr off, GLsizeiptr len, GLbitfield access)
+{
+    GLuint buf = 0;
+    if (glrec_recording() && (access & GL_MAP_WRITE_BIT) && !(access & (GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT_EXT)) &&
+        (access & (GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)) &&
+        off >= 0 && len > 0 && len <= (GLsizeiptr)(64 << 20) && buffer_bound(target, &buf) && buf && !map_of(target)) {
+        map_t *m = NULL;
+        for (int i = 0; i < NMAP && !m; i++) if (!g_map[i].used) m = &g_map[i];
+        unsigned char *sh = m ? malloc((size_t)len) : NULL;
+        if (sh) {
+            *m = (map_t){ 1, target, buf, access, len, sh, ++g_map_id };
+            uint64_t *a = glrec_cmd(OP_glMapBufferRange, 5);
+            a[0] = target; a[1] = (uint64_t)(int64_t)off; a[2] = (uint64_t)(int64_t)len; a[3] = access; a[4] = m->id;
+            g_maps_held++;
+            return sh;
+        }
+    }
+    glrec_submit_for(OP_glMapBufferRange);
+    return NX(glMapBufferRange)(target, off, len, access);
+}
+static void glrec_custom_glFlushMappedBufferRange(GLenum target, GLintptr off, GLsizeiptr len)
+{
+    map_t *m = glrec_recording() ? map_of(target) : NULL;
+    if (!m) { glrec_submit_for(OP_glFlushMappedBufferRange); NX(glFlushMappedBufferRange)(target, off, len); return; }
+    int ok = off >= 0 && len >= 0 && off + len <= m->len;
+    uint64_t data = ok ? glrec_blob(m->shadow + off, (size_t)len) : 0;
+    uint64_t *a = glrec_cmd(OP_glFlushMappedBufferRange, 5);
+    a[0] = target; a[1] = (uint64_t)(int64_t)off; a[2] = (uint64_t)(int64_t)len; a[3] = m->id; a[4] = data;
+}
+static GLboolean glrec_custom_glUnmapBuffer(GLenum target)
+{
+    map_t *m = glrec_recording() ? map_of(target) : NULL;
+    if (!m) { glrec_submit_for(OP_glUnmapBuffer); return NX(glUnmapBuffer)(target); }
+    uint64_t data = m->access & GL_MAP_FLUSH_EXPLICIT_BIT ? 0 : glrec_blob(m->shadow, (size_t)m->len);
+    uint64_t *a = glrec_cmd(OP_glUnmapBuffer, 4);
+    a[0] = target; a[1] = m->id; a[2] = data; a[3] = (uint64_t)m->len;
+    free(m->shadow);
+    m->used = 0;
+    return GL_TRUE;         // (the real unmap's answer is not known yet: a lost buffer store is not reported)
+}
+static rmap_t *rmap(uint32_t id, int add)
+{
+    for (int i = 0; i < NMAP; i++) if (g_rmap[i].id == id && g_rmap[i].p) return &g_rmap[i];
+    if (!add) return NULL;
+    for (int i = 0; i < NMAP; i++) if (!g_rmap[i].p) { g_rmap[i].id = id; return &g_rmap[i]; }
+    return NULL;
+}
+static void glrec_replay_glMapBufferRange(const uint64_t *a)
+{
+    void *p = NX(glMapBufferRange)((GLenum)a[0], (GLintptr)(int64_t)a[1], (GLsizeiptr)(int64_t)a[2], (GLbitfield)a[3]);
+    rmap_t *r = p ? rmap((uint32_t)a[4], 1) : NULL;
+    if (r) { r->p = p; r->len = (GLsizeiptr)(int64_t)a[2]; }
+}
+static const void *glrec_ptr(uint64_t v);
+static void glrec_replay_glFlushMappedBufferRange(const uint64_t *a)
+{
+    rmap_t *r = rmap((uint32_t)a[3], 0);
+    GLintptr off = (GLintptr)(int64_t)a[1];
+    GLsizeiptr len = (GLsizeiptr)(int64_t)a[2];
+    if (r && a[4]) memcpy((unsigned char *)r->p + off, glrec_ptr(a[4]), (size_t)len);
+    NX(glFlushMappedBufferRange)((GLenum)a[0], off, len);
+}
+static void glrec_replay_glUnmapBuffer(const uint64_t *a)
+{
+    rmap_t *r = rmap((uint32_t)a[1], 0);
+    if (r && a[2]) memcpy(r->p, glrec_ptr(a[2]), (size_t)a[3]);
+    NX(glUnmapBuffer)((GLenum)a[0]);
+    if (r) r->p = NULL;
+}
+
 // nonzero: the draw reads client memory at the call (vertex arrays, an indirect draw's command)
 static int glrec_draw_hook(int r, int indexed, int indirect)
 {
@@ -265,8 +470,8 @@ static void glrec_get_integerv(GLenum pname, GLint *data)
     if (g_mode == 3 && data && pname == GL_NUM_PROGRAM_BINARY_FORMATS && fg_sources_wanted()) *data = 0;
 }
 
+#define GLREC_PART 2
 #include "glrec_gen.h"
-_Static_assert(OP_N <= MAXOP, "MAXOP");
 
 // ---- submitting
 static void replay(size_t from, size_t to)
@@ -357,11 +562,12 @@ static void log_stats(void)
         fprintf(stderr, "[glrec] census, %lu frames: %.0f calls a frame; %.1f a frame would submit what is held first\n",
                 g_frames, calls / f, early / f);
     else
-        fprintf(stderr, "[glrec] %lu frames: %.0f calls a frame, %.0f held (%.0f KB of commands, %.0f KB of data); "
-                "submitted %.2f times a frame (%.2f at the swap); submitting %.2f ms a frame%s\n",
-                g_frames, calls / f, g_rec_calls / f, g_held_words * 8 / 1024.0 / f, g_held_blob / 1024.0 / f,
+        fprintf(stderr, "[glrec] %lu frames: %.0f calls a frame, %.0f held (%.0f KB of commands, %.0f KB of data, "
+                "%.1f buffer maps); submitted %.2f times a frame (%.2f at the swap); submitting %.2f ms a frame%s\n",
+                g_frames, calls / f, g_rec_calls / f, g_held_words * 8 / 1024.0 / f, g_held_blob / 1024.0 / f, g_maps_held / f,
                 (early + g_swap_submits + g_size_submits) / f, g_swap_submits / f, g_replay_s * 1000 / f,
                 g_mode == 3 ? "" : " (unchanged)");
+    g_maps_held = 0;
     top(g_submits, g_mode == 1 ? "would submit first" : "submitted first for", 16);
     if (g_mode == 1) top(g_calls, "calls a frame", 40);
     if (g_mode == 3) fg_log(g_frames, g_fg_s);
