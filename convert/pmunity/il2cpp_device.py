@@ -1070,6 +1070,10 @@ class Native:
             'DOTNET_CLI_TELEMETRY_OPTOUT': '1', 'DOTNET_NOLOGO': '1', 'DOTNET_ROLL_FORWARD': 'Major',
             'DOTNET_SYSTEM_GLOBALIZATION_INVARIANT': '1', 'DOTNET_gcServer': '0', 'DOTNET_GCgen0size': '0x2000000',
             'DOTNET_GCConserveMemory': '9',      # (.NET 8 converting a 2020.3 game: peak 766 -> 666 MB)
+            # every method compiled once, optimized, instead of first quickly and then again: the
+            # tools run long enough for that to pay (2017.4's il2cpp converting a game: CPU -30 %,
+            # the same C++)
+            'DOTNET_TieredCompilation': '0',
             'PMUNITY_LLVM': os.path.join(self.tc, 'bin'),
             'PMUNITY_IL2CPP_CCLOG': os.path.join(self.work, 'cc.log'),
             'PMUNITY_JOBS': str(self.jobs), 'PMUNITY_JOBS_DIR': os.path.join(self.work, 'jobs'),
