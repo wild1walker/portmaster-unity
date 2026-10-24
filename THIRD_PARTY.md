@@ -40,7 +40,7 @@ fetched source tree, `<work>/src/<branch>/`):
 
 | what | fetched from | licence | built into |
 |---|---|---|---|
-| Unity's fork of [Mono](https://github.com/Unity-Technologies/mono) (the runtime, eglib, support/), branch `unity-<line>-mbe` | GitHub tarball of the branch, without the class libraries | MIT, some files 3-clause BSD (its `LICENSE`; `PATENTS.TXT`: Microsoft's patent grant) | `libmonobdwgc-2.0.so`, `libMonoPosixHelper.so` |
+| Unity's fork of [Mono](https://github.com/Unity-Technologies/mono) (the runtime, eglib, support/), branch `unity-<line>-mbe` | GitHub tarball of the branch's head commit (resolved once; the commits are written to the output's `SOURCE.txt`), without the class libraries | MIT, some files 3-clause BSD (its `LICENSE`; `PATENTS.TXT`: Microsoft's patent grant) | `libmonobdwgc-2.0.so`, `libMonoPosixHelper.so` |
 | Unity's fork of [bdwgc](https://github.com/Unity-Technologies/bdwgc) (Boehm-Demers-Weiser GC), at the branch's pinned commit | GitHub tarball | the GC's MIT-style licence (its `README.md`) | `libmonobdwgc-2.0.so` |
 | [libatomic_ops](https://github.com/Unity-Technologies/libatomic_ops) headers, at bdwgc's pin | GitHub tarball | MIT-style for the parts used (its GPL'd extras are not built) | (headers only) |
 | corefx's native shims (`src/Native`) and the branch's `external/corefx-bugfix` (Mono 6, Unity 2021.2+) | GitHub tarballs of mono/corefx at the pin and of the branch | MIT | `libmono-native.so` |

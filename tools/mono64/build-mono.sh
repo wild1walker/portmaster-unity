@@ -8,7 +8,8 @@
 # Output: libmonobdwgc-2.0.so (stripped; .debug.so with symbols), libMonoPosixHelper.so and, for
 # Mono 6 (2021.2+), libmono-native.so: they go into the game's lib/ next to the bridge
 # (runtime/mono64, installed as lib/libil2cpp.so).
-# What it fetches (once, into <work>/src/<branch>): the branch's source tarball from GitHub without
+# What it fetches (once, into <work>/src/<branch>): the source tarball of the branch's head commit
+# (resolved once and printed; MONO_REF=<commit> builds that commit instead) from GitHub without
 # the class libraries, tests and external/ (about 45 MB on disk), then the pinned bdwgc and
 # libatomic_ops submodules (and for Mono 6 corefx's src/Native and the branch's corefx-bugfix,
 # which libmono-native is built from). The build runs in an arm64 container (ua-mono64-build: the
@@ -28,14 +29,17 @@ D=$W/src/$B
 PY=${PYTHON:-python3}
 api() { curl -sfL "https://api.github.com/repos/$1/contents/$2?ref=$3" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
 tarball() { curl -sfL "https://codeload.github.com/$1/tar.gz/$2"; }
+commit() { curl -sfL "https://api.github.com/repos/$1/commits/$2" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
 if [ ! -f "$D/.fetched" ]; then
   rm -rf "$D"; mkdir -p "$D"
-  echo "fetching Unity-Technologies/mono $B"
-  tarball Unity-Technologies/mono "refs/heads/$B" | tar xz -C "$D" --strip-components=1 \
+  # one commit for every file fetched (the branch may move between the downloads)
+  REF=${MONO_REF:-$(commit Unity-Technologies/mono "$B")} || { echo "cannot resolve $B on GitHub"; exit 1; }
+  echo "fetching Unity-Technologies/mono $B at $REF"
+  tarball Unity-Technologies/mono "$REF" | tar xz -C "$D" --strip-components=1 \
     --exclude='*/mcs/class' --exclude='*/mcs/tests' --exclude='*/mcs/errors' --exclude='*/mcs/docs' \
     --exclude='*/mcs/tools' --exclude='*/mcs/packages' --exclude='*/acceptance-tests' --exclude='*/mono/tests' \
     --exclude='*/netcore' --exclude='*/external/*'
-  GC=$(api Unity-Technologies/mono external/bdwgc "$B")
+  GC=$(api Unity-Technologies/mono external/bdwgc "$REF")
   mkdir -p "$D/external/bdwgc"; tarball Unity-Technologies/bdwgc "$GC" | tar xz -C "$D/external/bdwgc" --strip-components=1
   AO=$(api Unity-Technologies/bdwgc libatomic_ops "$GC" || true)
   if [ -n "$AO" ]; then
@@ -43,11 +47,11 @@ if [ ! -f "$D/.fetched" ]; then
     tarball Unity-Technologies/libatomic_ops "$AO" | tar xz -C "$D/external/bdwgc/libatomic_ops" --strip-components=1
   fi
   if [ -d "$D/mono/native" ]; then              # Mono 6: libmono-native from corefx's native code
-    CF=$(api Unity-Technologies/mono external/corefx "$B")
+    CF=$(api Unity-Technologies/mono external/corefx "$REF")
     mkdir -p "$D/external/corefx"
     W1=; tar --version 2>/dev/null | grep -q 'GNU tar' && W1=--wildcards      # (bsdtar: patterns as is)
     tarball mono/corefx "$CF" | tar xz $W1 -C "$D/external/corefx" --strip-components=1 '*/src/Native/*' '*/LICENSE.TXT'
-    tarball Unity-Technologies/mono "refs/heads/$B" | tar xz $W1 -C "$D" --strip-components=1 '*/external/corefx-bugfix/*'
+    tarball Unity-Technologies/mono "$REF" | tar xz $W1 -C "$D" --strip-components=1 '*/external/corefx-bugfix/*'
   fi
   # the left-out test folders configure.ac and the m4 files name: empty stand-ins
   "$PY" -I - "$D" <<'EOF'
@@ -70,8 +74,9 @@ for n in sorted(names):
         if not os.path.exists(p + '.in'):
             open(p + '.in', 'w').write('\n')
 EOF
-  echo "$B: bdwgc $GC, libatomic_ops $AO" > "$D/.fetched"
+  echo "$B: mono $REF, bdwgc $GC, libatomic_ops $AO${CF:+, corefx $CF}" > "$D/.fetched"
 fi
+cp "$D/.fetched" "$W/out/$B/SOURCE.txt"         # which commits the libraries were built from
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
 docker run --rm --platform linux/arm64 -v ua-mono64:/b -v "$D":/src:ro -v "$W/out/$B":/out ua-mono64-build bash -c '
