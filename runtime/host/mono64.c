@@ -21,7 +21,7 @@
 void *so_dlopen(const char *filename, int flags);
 void *so_dlsym(void *handle, const char *symbol);
 
-int mono64_init(const char *libdir, const char *scripting, const char *unity_version)
+int mono64_init(const char *libdir, const char *scripting, const char *unity_version, int gc_time_slice_ms)
 {
     const char *e = getenv("UA_SCRIPTING");
     const char *want = e && *e ? e : scripting;
@@ -43,6 +43,7 @@ int mono64_init(const char *libdir, const char *scripting, const char *unity_ver
     host.libdir = libdir;
     host.unity_version = unity_version;
     host.managed_dir = getenv("UA_MONO64_MANAGED");
+    host.gc_time_slice_ms = gc_time_slice_ms;      // (UA_MONO64_GC_SLICE wins, in the bridge)
     if (!setup || setup(&host) != 0) {
         fprintf(stderr, "[host] %s: not the Mono bridge (no ua_mono_setup: an IL2CPP build's?)\n", bridge);
         return -1;

@@ -1190,6 +1190,19 @@ def il2cpp_items(args, items, data):
     return items
 
 
+def gc_time_slice(src):
+    """boot.config's gc-max-time-slice (ms) of a data folder: the incremental collector is on
+    (Unity 2019.1+'s "Use incremental GC"), else 0."""
+    try:
+        for line in open(os.path.join(src, 'boot.config'), encoding='utf-8', errors='replace'):
+            k, _, v = line.strip().partition('=')
+            if k == 'gc-max-time-slice' and v.strip().isdecimal():
+                return int(v)
+    except OSError:
+        pass
+    return 0
+
+
 def il2cpp_app_guid(metadata):
     """unity_app_guid for an IL2CPP build: a GUID (8-4-4-4-12, as Unity writes) from its metadata."""
     import hashlib
@@ -2028,8 +2041,12 @@ def pack(args, log):
         # ua_host and rig (a Mono player's is always armeabi-v7a and is not written)
         res['abi'] = args.il2cpp_info.get('abi')
     elif getattr(args, 'mono64', False):
-        # ua_host maps the player's libil2cpp.so to the Mono bridge (runtime/host/mono64.c)
+        # ua_host maps the player's libil2cpp.so to the Mono bridge (runtime/host/mono64.c); the
+        # incremental collector's time slice the desktop player's Mono runs with (boot.config)
         res['abi'], res['scripting'] = 'arm64-v8a', 'mono'
+        slice_ms = gc_time_slice(args.src)
+        if slice_ms:
+            res['gc_time_slice_ms'] = slice_ms
     if args.unity.line >= OBB_GUID_FROM:
         apk_entries.append((OBB_GUID_FILE, bid.encode('ascii')))
         marker = [marker, (OBB_GUID_FILE_IN_OBB, bid.encode('ascii'))]

@@ -55,7 +55,7 @@ static char libdir[512];
 // "unity_version"
 static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32], pj_unity[32];
 static char pj_scripting[16];                  // "mono": a Mono game on the IL2CPP player (mono64.c)
-static int pj_version_code, pj_min_sdk, pj_target_sdk;
+static int pj_version_code, pj_min_sdk, pj_target_sdk, pj_gc_slice;
 static char pj_meta[4096];                      // "key=value;key=value"
 
 static void json_str(const char *js, const char *key, char *out, size_t n)
@@ -135,6 +135,7 @@ static void read_package_json(const char *root)
     json_str(js, "source", pj_source, sizeof pj_source);
     json_str(js, "unity_version", pj_unity, sizeof pj_unity);
     json_str(js, "scripting", pj_scripting, sizeof pj_scripting);
+    pj_gc_slice = json_int(js, "gc_time_slice_ms");
 }
 
 // Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
@@ -477,7 +478,7 @@ int main(int argc, char **argv)
     so_map_library("libvulkan.so", NULL);       // GLES only
     steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
     plugins_init(root, libdir);                 // the port's plugins.map: ARM builds, stubs (plugins.c)
-    if (mono64_init(libdir, pj_scripting, pj_unity) < 0) return 1;   // libil2cpp.so -> Mono (mono64.c)
+    if (mono64_init(libdir, pj_scripting, pj_unity, pj_gc_slice) < 0) return 1;   // libil2cpp.so -> Mono (mono64.c)
 
     char path[600];
     snprintf(path, sizeof path, "%s/libmain.so", libdir);

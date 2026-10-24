@@ -1,6 +1,6 @@
 // test_il2cpp_mono <libil2cpp_mono.so>: the bridge against fake_mono.c (UA_MONO64_RUNTIME):
 // internal calls registered before il2cpp_init reach Mono after it, method lookup by name searches
-// the parents (IL2CPP's semantics), the write barrier stores and marks only heap fields, 32-bit GC
+// the parents (IL2CPP's semantics), the write barrier stores and marks the slot, 32-bit GC
 // handles come back zero-extended, and a thread's first allocation attaches it.
 #include <dlfcn.h>
 #include <pthread.h>
@@ -61,12 +61,13 @@ int main(int argc, char **argv)
     CHECK(il2cpp_class_get_method_from_name(&derived, "Awake", 0) == &base, "method from a parent not found");
     CHECK(il2cpp_class_get_method_from_name(&derived, "Update", 0) == NULL, "method that is nowhere found");
 
-    // write barrier: always the store; Mono's barrier (incremental collector) only for heap objects
+    // write barrier: the store, and with the incremental collector Mono's barrier on the slot
+    // whatever the object argument is (IL2CPP looks at the address only)
     void *slot = NULL, *obj = &slot, *val = (void *)0x1234;
     il2cpp_gc_wbarrier_set_field(NULL, &slot, val);
-    CHECK(slot == val && *nostore == 0, "stack store: slot %p, barriers %d", slot, *nostore);
+    CHECK(slot == val && *nostore == 1, "store without object: slot %p, barriers %d", slot, *nostore);
     il2cpp_gc_wbarrier_set_field(obj, &slot, NULL);
-    CHECK(slot == NULL && *nostore == 1, "heap store: slot %p, barriers %d", slot, *nostore);
+    CHECK(slot == NULL && *nostore == 2, "heap store: slot %p, barriers %d", slot, *nostore);
 
     // 32-bit handles (Mono without *_v2), zero-extended as 2019.4's libunity reads them
     CHECK(il2cpp_gchandle_new(obj, 1) == 0x80000001u, "gchandle %lx", (unsigned long)il2cpp_gchandle_new(obj, 1));

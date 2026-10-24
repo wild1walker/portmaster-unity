@@ -198,6 +198,14 @@ class OlderNewerLinesTest(unittest.TestCase):
             self.assertEqual(A.missing_references(d, names), {'netstandard': ['UnityEngine.CoreModule']})
             self.assertEqual(A.missing_references(d, names | {'netstandard.dll'}), {})
 
+    def test_gc_time_slice(self):
+        # the Mono route on the 64-bit player starts the incremental collector as the desktop does
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(A.gc_time_slice(t), 0)
+            with open(os.path.join(t, 'boot.config'), 'w') as f:
+                f.write('wait-for-native-debugger=0\ngc-max-time-slice=3\n')
+            self.assertEqual(A.gc_time_slice(t), 3)
+
     def test_memory_advice(self):
         """2023.1's players read the Memory Advice models from the APK's assets: shipped only to a player
         whose libunity names them"""

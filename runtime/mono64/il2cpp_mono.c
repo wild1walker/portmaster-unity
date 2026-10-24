@@ -283,7 +283,8 @@ static MonoDomain *g_domain;             // the root domain (IL2CPP has one)
 static struct ua_mono_host g_host;
 static int g_unity_major, g_unity_minor; // the player's Unity line: some IL2CPP structs grew with it
 static int g_trace;                      // UA_MONO64_TRACE: log unusual calls
-static int g_incremental;
+static int g_incremental;                // the collector is incremental (then stores need its barrier)
+static int g_gc_slice_ms;                // boot.config's gc-max-time-slice (ua_host), 0: not incremental
 static char g_data_dir[PATH_MAX], g_config_dir[PATH_MAX], g_managed[PATH_MAX], g_temp_dir[PATH_MAX];
 static int g_argc;
 static char **g_argv;
@@ -369,6 +370,7 @@ API int ua_mono_setup(const struct ua_mono_host *host)
     g_host = *host;
     unity_version(host->unity_version);
     if (host->managed_dir && *host->managed_dir) snprintf(g_managed, sizeof g_managed, "%s", host->managed_dir);
+    g_gc_slice_ms = host->gc_time_slice_ms;
     return 0;
 }
 
@@ -584,6 +586,17 @@ static void init_mono(const char *domain_name)
         for (char *t = strtok(copy, " "); t && n < 16; t = strtok(NULL, " ")) v[n++] = t;
         m_mono_jit_parse_options(n, v);
     }
+    // the incremental collector with the game's time slice, as its desktop player starts Mono with
+    // boot.config's gc-max-time-slice (Boehm's incremental mode with that limit; MONO_GC_PARAMS is
+    // read once, by the collector's start in mono_jit_init)
+    const char *slice = getenv("UA_MONO64_GC_SLICE");
+    if (slice && *slice) g_gc_slice_ms = atoi(slice);
+    if (g_gc_slice_ms > 0) {
+        const char *old = getenv("MONO_GC_PARAMS");
+        char p[512];
+        snprintf(p, sizeof p, "incremental=%d%s%s", g_gc_slice_ms, old && *old ? "," : "", old && *old ? old : "");
+        setenv("MONO_GC_PARAMS", p, 1);
+    }
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     g_domain = m_mono_jit_init_version(domain_name && *domain_name ? domain_name : "IL2CPP Root Domain", "v4.0.30319");
@@ -593,7 +606,8 @@ static void init_mono(const char *domain_name)
     g_incremental = m_mono_gc_is_incremental && m_mono_gc_is_incremental();
     load_all_assemblies();
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    logf_("Mono up: %d internal calls, managed %s, config %s, %.0f ms", g_nicalls, g_managed, etc,
+    logf_("Mono up: %d internal calls, managed %s, config %s, %s collector, %.0f ms", g_nicalls, g_managed, etc,
+          g_incremental ? "incremental" : "stop-the-world",
           (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
 }
 
@@ -1068,11 +1082,14 @@ API int64_t il2cpp_gc_get_heap_size(void) { return m_mono_gc_get_heap_size(); }
 API int il2cpp_gc_is_incremental(void) { return g_incremental; }
 API int64_t il2cpp_gc_get_max_time_slice_ns(void) { return m_mono_gc_get_max_time_slice_ns ? m_mono_gc_get_max_time_slice_ns() : 0; }
 API void il2cpp_gc_set_max_time_slice_ns(int64_t ns) { if (m_mono_gc_set_max_time_slice_ns) m_mono_gc_set_max_time_slice_ns(ns); }
-// libunity stores every managed reference it keeps (on its stack too, obj == NULL) through this
+// libunity stores every managed reference it keeps (on its stack too, obj == NULL) through this.
+// With the incremental collector the slot is marked dirty whatever obj is, as IL2CPP does (it
+// looks only at the address): a store into the heap with obj == NULL must not be missed
 API void il2cpp_gc_wbarrier_set_field(MonoObject *obj, void **target, void *value)
 {
+    (void)obj;
     *target = value;
-    if (g_incremental && obj) m_mono_gc_wbarrier_generic_nostore(target);
+    if (g_incremental) m_mono_gc_wbarrier_generic_nostore(target);
 }
 API int il2cpp_gc_has_strict_wbarriers(void) { return 0; }
 API void il2cpp_gc_set_external_allocation_tracker(void (*fn)(void *, size_t, int)) { (void)fn; }

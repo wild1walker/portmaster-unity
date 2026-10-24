@@ -10,6 +10,8 @@ struct ua_mono_host {
     const char *libdir;                               /* the player's lib folder */
     const char *unity_version;                        /* the player's, e.g. "2019.4.8f1" */
     const char *managed_dir;                          /* NULL: found from il2cpp_set_data_dir */
+    int gc_time_slice_ms;                             /* boot.config's gc-max-time-slice: the incremental
+                                                         collector, as the desktop player runs it (0: off) */
 };
 
 /* exported by libil2cpp_mono.so; returns 0 */

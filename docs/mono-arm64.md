@@ -83,6 +83,11 @@ What libunity needs from `libil2cpp.so`, from Unity's IL2CPP arm64 players of 20
   method pointers are called directly. libunity never catches IL2CPP's C++ exception
   (`Il2CppExceptionWrapper` appears nowhere in it), so `il2cpp_raise_exception` is
   `mono_raise_exception`, as in Unity's Mono players.
+- **The incremental collector**: IL2CPP compiles it in (`--incremental-g-c-time-slice`), so its
+  libunity never reads `boot.config`'s `gc-max-time-slice`; a desktop player starts Mono with it.
+  `android-data --mono64` copies the value into `android_package.json` (`gc_time_slice_ms`) and the
+  bridge starts Boehm's incremental mode with it (`MONO_GC_PARAMS=incremental=<ms>`); then every
+  `il2cpp_gc_wbarrier_set_field` also marks its slot, whatever object it names, as IL2CPP's does.
 - **Threads**: `il2cpp_thread_attach` is `mono_thread_attach`; a thread whose first call into the
   runtime allocates or runs managed code is attached then (IL2CPP is lenient there).
 - **Unity's own Mono API covers the rest**: the liveness calculation of
