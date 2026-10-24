@@ -18,6 +18,8 @@
 #include "prof.h"
 #include "gltrace.h"
 #include "glopt.h"
+#include "glpass.h"
+#include "glrename.h"
 #include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
@@ -140,6 +142,8 @@ static void on_swap(void *ctx)
     prof_swap();
     gltrace_frame();
     glopt_frame();
+    glpass_frame();
+    glrename_frame();
     msaafix_frame();
     fbdev_swap();                               // the fbdev path's flip times (fbdev.c)
     if (last > 0)

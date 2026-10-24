@@ -89,7 +89,8 @@ typedef unsigned char GLboolean;
 static int g_on;
 static pthread_t g_thread;
 static int g_have_thread;
-static long g_restored;
+static long g_restored, g_dropped;
+static int g_sameclear;              // UA_GL_SAMECLEAR (default 1): a clear of what the buffer holds is left out (glpass.c for colour)
 
 // ---- depth/stencil buffers: what they hold
 #define MAX_DS 256
@@ -336,9 +337,37 @@ static void w_CopyImageSubData(GLuint s, GLenum st, GLint sl, GLint sx, GLint sy
     ds_forget(dt == GL_RENDERBUFFER ? GL_RENDERBUFFER : GL_TEXTURE, d);
 }
 
+// a clear of the depth/stencil buffer that writes the values it already holds (whole or not): left out
+static int redundant(GLbitfield ds)
+{
+    dsbuf *b = cur_ds(0);
+    fbinfo *f = info();
+    if (!b || !b->clean || !f) return 0;
+    if ((ds & GL_DEPTH_BUFFER_BIT) && f->has_d) {
+        GLint dm = 0;
+        float cd = 1;
+        q_GetIntegerv(GL_DEPTH_WRITEMASK, &dm);
+        q_GetFloatv(GL_DEPTH_CLEAR_VALUE, &cd);
+        if (dm && cd != b->depth) return 0;
+    }
+    if ((ds & GL_STENCIL_BUFFER_BIT) && f->has_s) {
+        GLint sm = 0, cs = 0;
+        q_GetIntegerv(GL_STENCIL_WRITEMASK, &sm);
+        q_GetIntegerv(GL_STENCIL_CLEAR_VALUE, &cs);
+        if ((cs ^ b->stencil) & sm & 0xff) return 0;
+    }
+    return 1;
+}
+
 static void w_Clear(GLbitfield m)
 {
     if (!mine()) { r_Clear(m); return; }
+    GLbitfield ds = m & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    if (ds && g_sameclear && redundant(ds)) {
+        m &= ~ds;
+        g_dropped++;
+        if (!m) return;              // (nothing else in it: as if it had not been made; a pass that goes on restores it)
+    }
     pass_start(m);
     r_Clear(m);
     if (!(m & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) return;
@@ -457,7 +486,7 @@ void glopt_frame(void)
     }
     static long frames;
     if (++frames % 3600 == 0)
-        fprintf(stderr, "[glopt] %ld frames: %ld depth/stencil buffers cleared instead of loaded\n", frames, g_restored);
+        fprintf(stderr, "[glopt] %ld frames: %ld depth/stencil buffers cleared instead of loaded, %ld clears of them left out\n", frames, g_restored, g_dropped);
 }
 
 static so_shim g_shims[64];
@@ -484,7 +513,9 @@ const so_shim *glopt_table(void *(*next)(const char *name))
     memset(g_ds, 0, sizeof g_ds);
     memset(g_fb, 0, sizeof g_fb);
     g_ntex2d = 0;
-    g_on = 0; g_have_thread = 0; g_cur = 0; g_pass_started = 0; g_restored = 0;
+    g_on = 0; g_have_thread = 0; g_cur = 0; g_pass_started = 0; g_restored = 0; g_dropped = 0;
+    const char *sc = getenv("UA_GL_SAMECLEAR");
+    g_sameclear = !(sc && !strcmp(sc, "0"));
     const char *e = getenv("UA_GL_DSCLEAR");
     if (e && !strcmp(e, "0")) return g_shims;
 #define Q(var, name) *(void **)&var = gl(NULL, name)
