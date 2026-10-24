@@ -24,6 +24,8 @@
 //               pass's depth/stencil load; compiled from a source without gl_LastFragDepth, not
 //   attach      an attachment changed by a held call is followed into later frames (texture 13 on
 //               framebuffer 2: a pass writing it, sampled later, is kept; the driver is not asked again)
+//   upload      a texture upload into a cleared target between its clear and its draws: the clear stays
+//               before the upload
 //   side        a shader storage buffer bound: no pass is left out
 //   opt         UA_GL_REC_OPT=end: only invalidates at pass ends
 #include <stdio.h>
@@ -196,6 +198,18 @@ int main(int argc, char **argv)
             else CHECK(HAS("draw(fb0 1) inval(fb0 DS) bind(2)") && HAS("inval(fb0 DS) draw(fb0 3) inval(fb0 DS)"));
             RESET();
         }
+    } else if (!strcmp(m, "upload")) {
+        static unsigned char px[2 * 2 * 4] = { 77 };
+        USE(6);
+        BIND(2); CLEAR(GL_COLOR_BUFFER_BIT);
+        BIND(1); CLEAR(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT); DRAW(1);
+        TEX(11);
+        CALL(glTexSubImage2D, void (*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *),
+             GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        BIND(2); DRAW(2);
+        BIND(0); USE(5); TEX(11); DRAW(3);
+        SWAP();
+        CHECK(at("clear(C fb2") >= 0 && at("clear(C fb2") < at("texsub(") && at("texsub(") < at("draw(fb2 2)"));
     } else if (!strcmp(m, "attach")) {
         USE(6);
         BIND(2); CLEAR(GL_COLOR_BUFFER_BIT); DRAW(1);            // (framebuffer 2 asked about: texture 11)

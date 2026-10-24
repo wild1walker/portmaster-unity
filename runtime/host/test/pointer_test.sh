@@ -23,7 +23,7 @@ run='set -e
   mkdir -p $O/rec
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/rec/libGLESv2.so.2 test/fake_rec_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c $O/rec/libGLESv2.so.2 -ldl -lpthread'
-RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach sink side opt'
+RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach upload sink side opt'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
     for s in off mouse touch keymap toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done

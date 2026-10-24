@@ -539,6 +539,24 @@ static void blit(size_t k, GLbitfield mask)
     wrote(p, w);
 }
 
+// a texture upload (between passes): a pass of its own that writes part of the texture, so that
+// nothing is moved across it or taken for overwritten by it
+#define FB_UPLOAD 0xffffffffu
+static void upload(size_t k, GLenum target)
+{
+    int t = tgt_index(target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X && target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z ? GL_TEXTURE_CUBE_MAP : target);
+    if (t < 0 || s.active < 0 || s.active >= 32) { g_opaque = 1; return; }
+    GLuint tex = tex_bound(s.active, t);
+    GLuint draw_fb = s.draw_fb;
+    g_cur = NULL;
+    g_pass = grow(g_pass, &g_cappass, g_npass + 1, sizeof *g_pass);
+    pass_t *p = &g_pass[g_npass++];
+    memset(p, 0, sizeof *p);
+    p->fb = FB_UPLOAD; p->k_first = p->k_last = k; p->r0 = (uint32_t)g_nrw; p->nother = 1;
+    if (tex) add_rw(p, rkey(RK_TEX, tex, 0, 0), 1);
+    s.draw_fb = draw_fb;
+}
+
 static void copy_tex(size_t k, GLenum target)
 {
     pass_t *p = work(k);
@@ -654,6 +672,9 @@ static void walk_cmd(size_t k, unsigned op, const uint64_t *a, const fg_frame *f
     case OP_glBlitFramebuffer: blit(k, U(8)); break;
     case OP_glCopyTexSubImage2D: copy_tex(k, U(0)); break;
     case OP_glCopyTexSubImage3D: copy_tex(k, U(0)); break;
+    case OP_glTexSubImage2D: case OP_glTexSubImage3D: case OP_glCompressedTexSubImage2D: case OP_glCompressedTexSubImage3D:
+        upload(k, U(0));
+        break;
     default:
         if (is_draw(op)) draw(k);
         break;
@@ -686,6 +707,16 @@ static int dead_after(size_t i, uint64_t key, int at_swap)
         if (through == 1) return 1;                  // loaded untested, invalidated at the end
     }
     return at_swap && (key >> 56 == RK_WIN_D || key >> 56 == RK_WIN_S);
+}
+
+// does the pass itself read this image (a blit or copy from its own framebuffer, a texture it draws into)?
+static int reads_own(const pass_t *p, uint64_t key)
+{
+    for (uint32_t r = 0; r < p->nr; r++) {
+        uint64_t k = g_rw[p->r0 + r];
+        if (!(k >> 55 & 1) && robj(k) == robj(key)) return 1;
+    }
+    return 0;
 }
 
 static unsigned long st_windows, st_opaque, st_passes, st_dead, st_end, st_end_ds, st_start, st_sunk;
@@ -730,7 +761,7 @@ static void analyse(const fg_frame *fr)
         changed = 0;
         for (size_t i = 0; i < g_npass; i++) {
             pass_t *p = &g_pass[i];
-            if (p->dead || p->fb == 0 || !(p->ndraws || p->nclears || p->nother)) continue;
+            if (p->dead || p->fb == 0 || p->fb == FB_UPLOAD || !(p->ndraws || p->nclears || p->nother)) continue;
             unsigned outs = (p->written | p->full) & present(p);
             int ok = outs || p->nw;
             for (int sl = 0; ok && sl < NSLOT; sl++) if ((outs >> sl & 1) && !dead_after(i, p->att[sl], fr->at_swap)) ok = 0;
@@ -797,7 +828,7 @@ static void analyse(const fg_frame *fr)
             int d = dead_after(i, key, fr->at_swap);
             if (!d) continue;
             if (o_end) end |= b;
-            if (sl >= S_DEPTH && o_start && !(p->full & b) && !(p->tested & b)) start |= b;
+            if (sl >= S_DEPTH && o_start && !(p->full & b) && !(p->tested & b) && !reads_own(p, key)) start |= b;
         }
         // (a packed depth/stencil buffer is one image: both its slots or neither)
         if (p->att[S_DEPTH] && p->att[S_DEPTH] == p->att[S_STENCIL]) {

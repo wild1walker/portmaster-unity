@@ -3,8 +3,9 @@
 // 720x450: Hollow Knight's), RGBA8 colour and a D24S8 depth/stencil texture. Each case is a frame
 // of 16 passes, alternating between framebuffer A (the one measured) and B (colour only, cleared
 // and invalidated: a separator), each pass one small draw (a 16x16 quad) unless the case says
-// otherwise; the frame ends with glFinish, frames run for <seconds> after a warm-up, and the time
-// per frame is the CPU's clock around them (no swaps: no vsync). A's passes start by clearing,
+// otherwise; frames run back to back for <seconds> after a warm-up (a glFinish every 8 frames, so the
+// GPU is never idle long and the driver's queue stays short), and the time per frame is the CPU's
+// clock around them (no swaps: no vsync). A's passes start by clearing,
 // loading (neither cleared nor invalidated) or invalidating colour and depth/stencil, and end by
 // storing or invalidating them; differences between cases give a load's and a store's cost per
 // pixel, and frames of 8 and 32 separator passes the cost of a pass itself.
@@ -172,21 +173,23 @@ static void frame(const bench_case *c, unsigned n)
     } else {
         for (int k = 0; k < 8; k++) { a_pass(c, k, n); b_pass(k, n); }
     }
-    glFinish();
+    glFlush();
 }
 
 static double run(const bench_case *c, double secs, int *mhz_lo, int *mhz_hi)
 {
     unsigned base = c->same ? 7 : 0;
-    for (int i = 0; i < 20; i++) frame(c, c->same ? base : ++frameno);
+    for (int i = 0; i < 40; i++) { frame(c, c->same ? base : ++frameno); if (i % 8 == 7) glFinish(); }
+    glFinish();
     *mhz_lo = 100000; *mhz_hi = 0;
     double t0 = now(), t;
     int frames = 0;
     do {
         frame(c, c->same ? base : ++frameno);
         frames++;
-        if (frames % 50 == 0) { int m = gpu_mhz(); if (m < *mhz_lo) *mhz_lo = m; if (m > *mhz_hi) *mhz_hi = m; }
-    } while ((t = now()) - t0 < secs);
+        if (frames % 8 == 0) glFinish();
+        if (frames % 48 == 0) { int m = gpu_mhz(); if (m < *mhz_lo) *mhz_lo = m; if (m > *mhz_hi) *mhz_hi = m; }
+    } while (frames % 8 || (t = now()) - t0 < secs);
     return (t - t0) * 1000 / frames;
 }
 
