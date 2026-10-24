@@ -1099,7 +1099,14 @@ def check_android(rep, inputs, log=None):
     return rep
 
 
-DEFAULT_STEPS = ('shaders', 'settings', 'audio')
+DEFAULT_STEPS = ('shaders', 'settings', 'audio', 'quality')
+# the handheld quality profile (quality.py, docs/quality.md): the setup takes it by the handheld's RAM
+# (a cheaper picture on 1 GB devices, the game's own elsewhere); the player can choose either
+QUALITY_QUESTION = {'id': 'PICTURE', 'question': 'Picture: lighter on handhelds with 1 GB of RAM (faster, the same game), '
+                                                 'or always as on PC?',
+                    'options': [['auto', 'By this handheld (recommended)'], ['handheld', 'Lighter (faster)'],
+                                ['full', 'As on PC']],
+                    'default': 'auto', 'convert_set': 'quality.profile'}
 
 
 def suggest_config(rep):
@@ -1125,6 +1132,8 @@ def suggest_config(rep):
                      "the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown "
                      "controller (docs/input.md)")
     ad['asmpatch'] = 'auto' if s.get('rewired') or s.get('input_system') else 'off'
+    if rep.get('build') != 'android':
+        sug['questions'] = [copy.deepcopy(QUALITY_QUESTION)]
     verdict = rep.get('input_verdict')
     # asmpatch --survey: the Input System's Mouse.current used with no null check (null on a handheld
     # unless pointer mode presents a mouse)
@@ -1363,6 +1372,8 @@ def build_config(name, rep, user):
         cfg = merge(cfg, found)
         cfg = merge(cfg, rep.get('suggest') or {})
     cfg = merge(cfg, user or {})
+    if 'quality' not in (cfg['convert'].get('steps') or []):    # (the picture question asks for that step)
+        cfg['questions'] = [q for q in cfg['questions'] if q != QUALITY_QUESTION]
     p, g, ad = cfg['port'], cfg['game'], cfg['android_data']
     p['name'] = p.get('name') or name
     p['title'] = p['title'] or title_case(name)

@@ -191,7 +191,7 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
 | `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
 | `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
-| `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
+| `convert` | `steps = ["shaders", "settings", "audio", "quality"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `quality.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld. `quality` is the handheld quality profile ([quality.md](quality.md)): a cheaper picture where the handheld has 1 GB of RAM, the game play the same; the `PICTURE` question (below) lets the player choose |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, else `off` | `auto`: tools/asmpatch runs on the game's assemblies (each patch changes only what it finds; the package then ships asmpatch); a list: only those patches |
 | `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch); the il2cpp-arm64 route compiles the patch into the game's IL2CPP build (`pmunity il2cpp --streaming-assets`) and packs the same mode |
 | `android_data.winbcl` | `auto` | `auto`: after the player, the setup runs `pmunity winbcl`: a Windows 2021.2+ build gets the Unix class libraries of its version, any build the facades the player's engine modules reference that it lacks (e.g. `netstandard.dll`), both from Unity's Windows editor installer (range requests; nothing is read when nothing is missing); `off`: not run |
@@ -203,7 +203,24 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
 
 Keep the game's look and play: options that change the picture or the game play stay off unless
-a player asks for them (a question with the vanilla choice as its default). The `textures` step
+a player asks for them (a question with the vanilla choice as its default). One exception, for
+handhelds with 1 GB of RAM: the `quality` step's handheld profile ([quality.md](quality.md)) makes
+the picture cheaper there by default (shadow maps, MSAA, SSAO, per-pixel lights, a few post
+effects; never the game play, never anything that would disappear), and keeps the game's own
+picture on bigger devices. `port new` adds the question that lets the player choose:
+
+```toml
+[[questions]]
+id = "PICTURE"
+question = "Picture: lighter on handhelds with 1 GB of RAM (faster, the same game), or always as on PC?"
+options = [["auto", "By this handheld (recommended)"], ["handheld", "Lighter (faster)"], ["full", "As on PC"]]
+default = "auto"
+convert_set = "quality.profile"
+```
+
+(a port.toml with questions of its own keeps only those: add this one to them; without the
+`quality` step in `convert.steps` it is left out). The answer applies when the setup converts the
+data; changing it later means running the setup again. The `textures` step
 (ASTC instead of BC/DXT: less memory, slightly different pixels, a much longer setup on the
 handheld) is such an option; the check says when a game has enough BC/DXT textures for it to
 matter. The shaders step's `grab_fetch` is another: blend-mode sprites (an unnamed `GrabPass`

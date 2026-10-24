@@ -18,7 +18,7 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof threads futex gltrace glopt glmemo gpuidle glpass glrename glrec glrec_fg msaafix display display_sdl fbdev steamstub plugins plugstubs mono64; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget quality glhooks hitches prof threads futex gltrace glopt glmemo gpuidle glpass glrename glrec glrec_fg msaafix display display_sdl fbdev steamstub plugins plugstubs mono64; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
     # dl_iterate_phdr (docs/arm64.md): no flags for that. ioctl is exported (fbdev.c interposes the
@@ -55,6 +55,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c frames.c -o out/frames.o
   arm-linux-gnueabihf-gcc $F -c framerate.c -o out/framerate.o
   arm-linux-gnueabihf-gcc $F -c gcbudget.c -o out/gcbudget.o
+  arm-linux-gnueabihf-gcc $F -c quality.c -o out/quality.o
   arm-linux-gnueabihf-gcc $F -c glhooks.c -o out/glhooks.o
   arm-linux-gnueabihf-gcc $F -c hitches.c -o out/hitches.o
   arm-linux-gnueabihf-gcc $F -c prof.c -o out/prof.o
@@ -76,7 +77,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
   arm-linux-gnueabihf-gcc $F -c mono64.c -o out/mono64.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glmemo.o out/gpuidle.o out/glpass.o out/glrename.o out/glrec.o out/glrec_fg.o out/msaafix.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/quality.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glmemo.o out/gpuidle.o out/glpass.o out/glrename.o out/glrec.o out/glrec_fg.o out/msaafix.o \
     out/display.o out/display_sdl.o out/fbdev.o out/steamstub.o out/plugins.o out/plugstubs.o out/mono64.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
