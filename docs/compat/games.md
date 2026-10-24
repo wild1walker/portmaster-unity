@@ -42,6 +42,12 @@ default): `clock_gettime` without system calls (`UA_FAST_CLOCK=1`) 0 %, Unity's 
 (`UA_THREAD_PRIORITY=1`) 0 %, `MONO_INLINELIMIT=40` 0 %, 2 or 1 job workers 0 % (0: -5 %), FMOD's
 threads on a core of their own (`UA_AFFINITY='FMOD*:0 SDLAudio*:0 *:1-3'`) +3 % there but 0 % in
 King's Pass and the main menu (both GPU-bound: the menu 43 fps with UnityMain 45 % busy). Details: [profiling.md](../profiling.md#what-limits-kings-pass-32-bit-2026-10-23).
+2026-10-24 (the system around the game): the GPU never waits for work in King's Pass (`UA_GPU_IDLE`:
+0.08 ms of a 31 ms frame 32-bit, 0.10 ms 64-bit), and its clock is a share of the thermal governor's
+power budget that the CPUs' busy time takes from: from a 47 C start 34.5 fps (696 MHz 22 of 60 s),
+from a warm 69 C start 32.3 (600 MHz); one more busy CPU core took the Mali to 504 MHz and 28 fps
+(-16 %). Unity's job workers 3 -> 2: 34.9 against 34.5, noise. Details:
+[profiling.md](../profiling.md#the-handheld-around-the-game-2026-10-23).
 
 ## Linux builds, one per Unity line (32-bit route)
 
@@ -143,9 +149,9 @@ the GPU at its 696 MHz maximum, the main thread busy, or a frame-rate cap.
 | Liberal Crime Squad | 2019.1.15f1 macOS, 32-bit | title menu | 59.4 (30.2 before defeed7) | as Forsaken |
 | Cell Machine | 2019.3.14f1 Windows (D3D11), URP, 32-bit | level 1 | 53.6 (29.0 - 29.7 before host flips) | GPU (696 MHz). Before: Mali's fbdev driver waited for each flip's vblank on the thread that feeds the GPU, so 18.6 ms frames were shown every second refresh with the GPU clocked down (420 - 504 MHz); ua_host makes the flips now (docs/runtime.md, "The fbdev path's flips"); without vsync 53.4 |
 | White Mirror | 2021.2.9f1, URP, FMOD (silent), 32-bit | in game | 43.1 (title 58) | GPU; host flips: frames over 25 ms 197 -> 12 in 25 s (43.0 before) |
-| The Third Eye | 2022.2.15f1, URP 3D, 32-bit | first scene | 31.9 (29.6 before host flips) | GPU |
+| The Third Eye | 2022.2.15f1, URP 3D, 32-bit | first scene | 31.9 (29.6 before host flips); 31.7 on 2026-10-24 from a 48 C start | GPU (696 MHz); the GPU idle 0.07 ms of a 31.5 ms frame, 84 framebuffer changes a frame (`UA_GPU_IDLE`, 2026-10-24) |
 | Tacticsweeper | 2022.2.17f1 Windows (D3D11), 32-bit | level 1 board | 59.5 | - |
-| Chapéu de Papel | 2022.3.62f3 macOS (Metal), 32-bit | title menu | 36.4 (20.2 - 29.6 before host flips) | GPU (696 MHz). Before: as Cell Machine, the GPU at 336 or 600 MHz from run to run (20 or 30 fps); without vsync 36.3 |
+| Chapéu de Papel | 2022.3.62f3 macOS (Metal), 32-bit | title menu | 36.4 (20.2 - 29.6 before host flips); 34.9 on 2026-10-24 from a 46 C start | GPU (696 MHz); the GPU idle 0.11 ms of a 28.6 ms frame (`UA_GPU_IDLE`, 2026-10-24). Before: as Cell Machine, the GPU at 336 or 600 MHz from run to run (20 or 30 fps); without vsync 36.3 |
 | Chassis Chase | 2023.2.20f1, 32-bit | the race (in game) | 59.5 | - |
 | DIG UP (test) | 6000.3.11f1, shaders from Vulkan, 32-bit | main menu | 59.5 | - |
 | Phasing Gun | 6000.6.2f1, URP 3D, 32-bit | first scene | 11.8 | GPU |
