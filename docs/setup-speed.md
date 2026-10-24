@@ -84,6 +84,13 @@ CPU (LZ4 on every core, less garbage collection); its packing reads half and wri
 Hollow Knight's shaders, settings and audio steps take a quarter of the time (and read a few
 percent of what they read), its packing reads and writes 30 % less.
 
+Measured on the RG34XX-SP afterwards (the setup's own Python, the data on the card's exFAT
+through FUSE): a Cuphead sample (Managed, `globalgamemanagers`, `level1`, `resources.assets` and
+`sharedassets8.assets` with their `.resS`, one font bundle and the 70 MB atlas bundle
+`atlas_world_4_spotlightsback`, spilled) through `convert --steps shaders,settings,textures,audio`
+at medium: 283 s -> 226 s (-20 %), all 72 files the same (sha256). Mapping the serialized files
+works on that file system, and so does replacing a file while it is still mapped.
+
 ### Same output
 
 - Hollow Knight, the whole setup with main and with the branch, file for file (sha256): shaders,
