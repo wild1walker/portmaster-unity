@@ -258,6 +258,15 @@ class Run:
         other = sorted(((q1[p][1] - q0[p][1], q1[p][0]) for p in q1 if p in q0 and p not in gp and q1[p][1] > q0[p][1]), reverse=True)[:5]
         if other and self.secs:
             print('  other processes: ' + ', '.join(f'{n} {t / self.secs:.0f}%' for t, n in other))
+        gc = os.path.join(self.dir, 'gpucnt.txt')
+        if os.path.exists(gc):
+            # GPUCNT=1 runs: the GPU's counters over the measurement (runtime/host/gpucnt.c)
+            lines = read(gc).splitlines()
+            if '# derived' in ''.join(lines):
+                derived = lines[[i for i, l in enumerate(lines) if l.startswith('# derived')][0] + 1:]
+                print('  GPU counters: ' + '\n                '.join(derived))
+            else:
+                print('  GPU counters: ' + ' '.join(lines[-2:])[:200])
         if brief:
             return
         for p in self.profiles:

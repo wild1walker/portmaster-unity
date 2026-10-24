@@ -13,6 +13,7 @@ whole measured session:
 | CPU per thread, clocks, temperatures while playing | `python3 tools/device/profcpu.py <pid>` on the device |
 | what the GPU does, pass by pass, and what each pass costs | `UA_GL_TRACE=<s>` (+ `UA_GL_TRACE_DRAWS`, `UA_SHADER_DUMP`): below, [GPU, pass by pass](#gpu-pass-by-pass) |
 | how many of the sprites' fragments sample only transparent texels | `tools/device/deadfrags.py` + `UA_SHADER_OVERRIDE`: [below](#sprites-transparent-texels-kings-pass-2026-10-23) |
+| which of the GPU's units a frame or a shader keeps busy (arithmetic, texturing, varyings, tile writes, memory) | `runtime/host/gpucnt` (the Mali's hardware counters; `GPUCNT=1` in a bench run): [below](#gpu-counters-gpucnt) |
 
 ## UA_PROF: the sampling profiler
 
@@ -582,3 +583,206 @@ building.
   copied each frame), and King's Pass's main thread alone allows only about 49 fps: a finer mesh moves
   work from the GPU to the next limit.
 
+## GPU counters: gpucnt
+
+`runtime/host/gpucnt` (built with the host programs, static, so the armhf binary runs on both
+userlands) reads the Mali's hardware counters through the kernel driver's own reader (kbase's
+vinstr interface, `KBASE_IOCTL_HWCNT_READER_SETUP`, present up to UK 11.32; the RG34XX-SP has
+11.17): every counter of the front end, the tiler, the L2 / memory system and the shader core,
+GPU-wide (every context's work: the game's, and EmulationStation's if it draws), summed over dumps
+100 ms apart. Nothing is changed on the handheld.
+
+```sh
+gpucnt sample <secs> [ms] [label]      # what the GPU did for <secs>
+gpucnt exec <label> <cmd> [args...]    # while <cmd> runs, e.g. one program's shadercheck -t
+gpucnt probe                           # the kernel interface (below, "Mesa's Panfrost ...")
+```
+
+Each counter is printed with Arm's name for the Mali-G31 (the counter database of Arm's
+libGPUCounters, MIT, as copied into Mesa), then the figures Arm derives from them for this GPU: the
+share of the shader core's active cycles in which the arithmetic unit issued (`EXEC_INSTR_COUNT`),
+the texture unit filtered (`TEX_FILT_NUM_OPERATIONS`), the varying unit interpolated (`VARY_SLOT_32`
++ `VARY_SLOT_16`), the load/store unit worked; per fragment warp (4 pixels on the G31) the core
+cycles and those issues; tiles written and eliminated (transaction elimination, the CRC check that
+skips a tile write whose contents did not change) and the bytes per written tile; external bus
+traffic (beats of the bus width `L2_FEATURES` gives: 128 bits here). In a bench run `GPUCNT=1`
+samples the measurement (`profbench.sh` sends `runtime/host/out/gpucnt`, `GPUCNT_BIN` another
+build; `<run>/gpucnt.txt`, and `benchsum.py` prints the derived lines).
+
+Reading the G31's counters (checked with programs of known code, below): `EXEC_INSTR_COUNT` counts
+one issue per two tuples of a warp's code (a program of 110 tuples: 54.9 per warp, and 54.9 core
+cycles per warp: the core issues two tuples a cycle), `FRAG_WARPS` is quads of pixels, a 32-bit
+varying slot is two components (a highp `vec4` is 2 slots, a mediump one 1 16-bit slot).
+
+**What a fragment costs on the G31, with Mali's driver** (`gpucnt exec` around `shadercheck -t` of
+synthetic programs, 720x480 blended quads; per warp of 4 pixels; the driver's code read from its
+program binary, below):
+
+| fragment shader | driver's code (tuples) | core cycles per warp | arithmetic / varying / texture issue share |
+|---|---|---|---|
+| constant colour | 4 | 2.1 | 95 / 0 / 0 % |
+| one varying: highp `float`, `vec2`, `vec4`, or mediump `vec4` | 2 - 4 (the varying preloaded) | 5.1 - 5.3 | 19 - 39 / 19 - 37 / 0 % |
+| a texture at a `vec2` varying | 2 (both preloaded) | 5.2 | 19 / 19 / 38 % |
+| two textures at one varying | 7 | 5.5 | 63 / 18 / 72 % |
+| two `vec2` varyings | 5 | 9.0 | 28 / 22 / 0 % |
+| a sprite: `vec2` uv, `vec4` colour, texture (or the uv in a `vec4`) | 8 | 9.4 (9.3) | 43 / 32 / 21 % |
+| five varyings (2, 3, 3, 4, 3 components: Hollow Knight's lit sprites' shape) and a texture | 17 | 14.0 | 61 / 64 / 14 % |
+| the same 15 components packed into four `vec4`s | 18 | 12.5 | 72 / 64 / 16 % |
+| 16 x (vec4 multiply-add, fract) on one varying | 110 | 54.9 | 100 / 4 / 0 % |
+
+A sprite's fragment is not limited by any one unit: each varying the shader reads costs about 3.5 -
+4 cycles a warp, whatever its width and precision, preloaded or not (no unit is busy for that long:
+it looks like each message's latency, with few warps in flight to hide it), a second texture at a uv already interpolated about
+0.3, arithmetic one cycle per two tuples, and a fragment's fixed part (rasterization, the alpha test
+and blend messages, the tile) about 2. That is shaders.md's table (a varying or a texture fetch ~0.3
+ms per full-screen layer, precision barely matters) seen from inside: only fewer varyings would make
+a sprite cheaper (packing the same values into fewer `vec4`s: -11 % for the lit-sprite shape above;
+interpolation is per component, so the values should be the same; not built, not checked on pixels).
+
+## Mesa's Panfrost instead of Mali's driver? (evaluated 2026-10-23: not pursued)
+
+Every Unity game runs on the RG34XX-SP through Arm's 2019 GLES driver (libmali r20p0) and its shader
+compiler. Other firmwares for the H700 run Mesa's Panfrost on the upstream `panfrost` kernel driver.
+Could Mesa's user-space driver run on this kernel's own driver (Arm's kbase), shipped inside a port
+with no kernel or system change, and would it be faster?
+
+**The kernel side** (read on the handheld; `gpucnt probe`). No DRM device at all (`/dev/dri` does not
+exist: the display is sunxi's fbdev). `/dev/mali0` is kbase `r20p0-01rel0`, UK interface 11.17 (the
+version handshake answers 11.17; `KBASE_IOCTL_GET_DDK_VERSION` `K:r20p0-01rel0(GPL)`), a Job Manager
+GPU: Mali-G31 r0p0 (`RAW_GPU_ID` 0x70930000), one shader core, one 64 KB L2 slice with 64-byte lines
+and a 128-bit bus (`RAW_L2_FEATURES` 0x07100206), 3 job slots, 8 address spaces, 33-bit GPU VAs,
+696 MHz at most. From a user process: the version check, `SET_FLAGS`, the GPU properties and
+`JOB_SUBMIT` work as they are (one no-op atom in UK 11.17's 48-byte `base_jd_atom_v2`, its event read
+back from the fd 0.03 - 0.04 ms later), the hardware counters too (above); memory once the context
+has its tracking page mapped (`BASE_MEM_MAP_TRACKING_HANDLE`; before that `MEM_ALLOC` refuses):
+a 32-bit process gets SAME_VA allocations (a cookie, then `mmap` places it, CPU and GPU address
+alike); without SAME_VA the GPU address lies above 4 GB, out of a 32-bit `mmap` offset's reach;
+`MEM_JIT_INIT` in 11.5's layout is accepted, `MEM_EXEC_INIT` with 1M pages refused (ENOMEM in a
+32-bit context). The blob itself draws the window straight into the framebuffer (fb0 exported as a
+dma-buf, `FBIOGET_DMABUF`, imported into kbase) and pans to it, which runtime/host/fbdev.c already
+takes over.
+
+**Past work.** Icecream95 (a Panfrost developer) wrote a kbase backend for Mesa in 2021-2022, never
+merged (his fork on Mesa's GitLab, branches `kbase-shim`, `kbase-g52`, `kbase-t860`, `csf`):
+`src/panfrost/base` drives three kbase ABIs from one source (the legacy UK 3 of Midgard kernels, the
+JM UK 11 of this one, and CSF), with allocation, dma-buf import, job submission (vertex/tiler and
+fragment chains as atoms with order dependencies from an emulated implicit sync), completion events
+and a user-space emulation of the DRM sync objects, and Gallium Panfrost patched to open
+`/dev/mali0` (the kbase layer itself is 1,570 lines, besides the imported kernel headers and the
+Gallium and EGL changes), on Mesa 22.2-devel. Mesa has since gained `pan_kmod` (24.0+: backends
+for the `panfrost` and `panthor` kernel drivers), which abstracts device properties, buffer objects
+and VMs but not submission or sync: Gallium's JM path (`pan_jm.c`) still calls
+`DRM_IOCTL_PANFROST_SUBMIT` and uses DRM sync objects in about 20 places.
+
+**What a port of Mesa 26.2 would need**: a kbase `pan_kmod` backend (properties from
+`GET_GPUPROPS`; buffers as kbase allocations behind a handle table; the tiler heap as a
+grow-on-fault allocation; dma-buf import; Icecream95's code is the model, its headers are UK 11.35's
+and need 11.17's atom), the JM submit and a sync-object emulation in Gallium, device probing without
+DRM (the pipe loader and EGL's surfaceless platform look for render nodes), and a window: Mesa has
+no fbdev EGL platform, so either Unity gets a pbuffer and the host blits it into an EGLImage of
+fb0's dma-buf at each swap (one more full-screen copy pass, about 1 ms on this GPU: Hollow Knight's
+own copy into the window is 1.2 ms) or a small fbdev platform in Mesa renders into fb0's buffers
+directly. AFBC would be a guess (kbase r20 does not report `AFBC_FEATURES`; Icecream95 assumed it
+works). Mesa's Panfrost has what Unity asks of the driver on this GPU (OpenGL ES 3.2 / ESSL 320 on
+v6+, ASTC LDR and ETC2, coherent `EXT_shader_framebuffer_fetch`, fence sync, program binaries),
+conformant on the Mali-G52 (the same v7 architecture), not certified on the G31. Building it needs
+meson, ninja and Mako, which neither this checkout's Docker images nor the Mac have.
+
+**Would it be faster?** Every game below 60 fps here is held by the GPU's fragment work, with the
+GPU busy all the frame, so the driver's CPU cost does not decide the frame rate; the GPU's time does.
+Which of the GPU's units hold it, with the blob (`GPUCNT=1`, one run each after the lock's cool-down,
+2026-10-24):
+
+| | King's Pass (64-bit), 33.7 fps, GPU 600 / 696 MHz 82 / 18 % | Phasing Gun, first scene, 11.7 fps, GPU 696 MHz |
+|---|---|---|
+| GPU active / shader core active | 99.9 % / 99.3 % of it | 100 % / 79.7 % (the rest: its 2048x2048 shadow map's depth-only pass) |
+| issue shares of the core's cycles: arithmetic / texture / varying / load-store | **80.8** / 38.2 / 28.7 / 0.6 % | **67.5** / 11.9 / 2.7 / 7.4 % |
+| per frame | 18.3 M core cycles, 2.0 M fragment warps (24 layers of 720x450), 29.5 M tuples | 47.3 M core cycles, 0.6 M warps, 64 M tuples |
+| tiles | 20,100 a frame, 28 % eliminated, 991 bytes per written tile | 76,200 a frame (the shadow map's 16,384 among them), 10 % eliminated |
+| external memory | 29 MB read, 15 MB written a frame (1.5 GB/s) | 24 MB read, 73 MB written a frame (1.1 GB/s) |
+
+Both frames are arithmetic-heavy (King's Pass's lit and blend-mode sprites, text, bloom; Phasing
+Gun's SSAO and lit passes): the arithmetic unit is the busiest unit, so the code a compiler makes
+decides much of the frame, and the comparison that matters is Mesa's code against the blob's:
+
+1. *The compilers, shader by shader.* Mesa 26.2.5's Bifrost compiler run offline on the GLSL the
+   games compile (`UA_SHADER_DUMP`): Mesa's GLSL front end, NIR and Bifrost back end built without
+   meson (the generators run with a small stand-in for Mako), driven the way st/mesa and Gallium
+   Panfrost prepare a program for a Mali-G31, printing Mesa's shader-db statistics and code. Against
+   it the blob's real code: `glGetProgramBinary` of the same programs on the handheld (its Bifrost
+   code is in the binary's `OBJC` chunks; Mesa's own disassembler reads it), and the counters above
+   for what the blob's code costs per warp. Hollow Knight's King's Pass, its 25 programs (tuples of
+   the fragment shader; the blob's first variant, the one that runs):
+
+   | program (King's Pass) | Mesa | blob | blob, cycles a warp (issue shares: arithmetic / texture / varying) |
+   |---|---|---|---|
+   | sprites (`Sprites/Default`-style: uv, colour, texture) | 10 tuples, 3 clauses | 8, 2 (varying and texture preloaded) | 8.8 - 9.0 (45 / 22 / 34 %) |
+   | additive sprites, particles | 13, 3 | 11, 2 | 8.9 (62 / 22 / 34 %) |
+   | `Sprites/Lit` (most of the level's art; both counts with its light-probe branch) | 57, 11 | 51, 9 | not measured (`shadercheck` drew nothing with it until its sampler fix) |
+   | background blur passes (5 taps) | 25, 7 | 21, 8 | 20 - 21 |
+   | blend-mode sprites (screen, overlay, vivid light) | 31, 25, 31 | 40, 31, 32 | 20.2, 15.8, 16.9 (94 - 99 % arithmetic) |
+   | bloom blur (7 taps) | 37, 9 | 38, 12 | 19.5 (97 % arithmetic) |
+   | colour correction (`_RgbTex` curves, dependent lookups) | 13, 6 | 9, 5 | 34.7 (13 % arithmetic: latency) |
+   | TextMesh Pro text | 74, 14 | 63, 14 | 33.1 (95 % arithmetic) |
+   | the other 12 (more sprite shaders, copies, HUD, black bars, brightness, the darkness overlay) | 2 - 25 | 2 - 26: the same or fewer in 11 | |
+
+   The blob's code is as short as Mesa's or shorter for 19 of the 25 programs; it preloads varyings
+   and the first texture fetch into registers before the shader starts (v7's message preload) more
+   than Mesa does. Mesa's is shorter for six: by 9 and 6 tuples in two of the blend-mode sprites (of
+   40 and 31), by one in the third, the two bloom passes and the darkness overlay. The blend-mode
+   sprites are arithmetic-bound: if they covered the whole picture once each, Mesa's code would save
+   about 0.6 ms of the 29 ms frame, against longer code in the sprites, the lit sprites, the blur and
+   the text.
+2. *The URP games' programs* (Phasing Gun's 14 and The Third Eye's 17 traced programs; fragment
+   tuples, Mesa / blob):
+
+   | program | Mesa | blob | Mesa's code |
+   |---|---|---|---|
+   | Phasing Gun: URP's SSAO (one full-screen draw, 40 ms of the 89 ms frame) | 698 (100 clauses, half the threads: 29 registers) | 574 (84 clauses) | +22 % |
+   | Phasing Gun: SSAO's three blur passes (4.5 ms each; 92 % arithmetic) | 77, 77, 68 | 61, 61, 56 | +21 - 26 % |
+   | Phasing Gun: URP's lit shader, two variants (the main pass, 14 ms) | 1,499, 1,480 (24 spills) | 1,192, 1,173 | +26 % |
+   | The Third Eye: post-processing (uber pass, colour grading LUT) | 336, 955 | 298, 814 | +13 %, +17 % |
+   | The Third Eye: lit shaders | 301, 497, 484 | 259, 388, 367 | +16 - 32 % |
+   | the small ones (copies, blits, depth) of both | 5 - 52 | 3 - 43 | about the same |
+
+   On top of the length, Gallium Panfrost pushes only the default uniform block (and its sysvals)
+   into the shader core's uniform registers, so URP's uniform blocks (`UnityPerDraw`,
+   `UnityPerMaterial`, the lights) are read with memory loads: Mesa's estimate for the lit shader is
+   load/store-bound (129 normalized load/store cycles against 54 arithmetic); the blob's lit shader
+   has 47 - 59 loads.
+3. *Tiles and memory.* The blob writes render targets uncompressed (1,040 bytes per 16x16 RGBA8
+   tile in `shadercheck`'s target: no AFBC) and eliminates unchanged tiles (transaction elimination
+   is on for textures too). Mesa would use AFBC where the GPU has it; on the G31 that is unknown
+   without the kernel's register (kbase r20 does not report it), and the passes' loads and stores
+   are Unity's (the same in any driver).
+
+**Verdict.** The kernel interface is reachable and Mesa could be made to run on it, but at the size of
+a driver port (a kbase backend, JM submission and sync in Gallium, a window system path), on a GPU
+Panfrost is not conformant on, with memory a game like Hollow Knight does not have to spare; and the
+measurements point the other way: the GPU-bound frames are arithmetic-heavy (81 % and 68 % of the
+shader core's cycles), and the blob's 2019 compiler makes shorter code than Mesa 26.2's for nearly
+every program that matters (the sprites by 2 tuples of 8 - 11, the URP passes by 13 - 32 %; Mesa's is
+shorter in 6 of Hollow Knight's 25, by more than one tuple in two blend-mode shaders); where a sprite
+is not arithmetic-bound its cost is the per-varying cost of the hardware, the same under any driver.
+Phasing Gun's SSAO pass, 40 ms of arithmetic-heavy work, would get 22 % more code. Step 3 of the plan
+(a prototype on the handheld) was therefore not started.
+
+How these were made (none of it is in this repository): Mesa 26.2.5 from Mesa's GitLab; its code
+generators run with a ~300-line stand-in for Mako's template subset they use, bison 3 and flex for
+the GLSL parser; about 490 sources compiled with a generated Makefile in the `ua-build-arm64` image;
+a small driver program around Mesa's standalone GLSL compiler (with the Bifrost NIR options and
+ES 3.x limits) that applies st/mesa's uniform, uniform-block and sampler lowering and Gallium
+Panfrost's CSO and variant steps before `pan_shader_compile`, viewport and noperspective sysvals as
+constants (Gallium pushes them: free on Bifrost). Its shader-db numbers are an approximation of
+Gallium's (no shader keys, no sysval UBO); the counts compared are the code itself. The blob's
+programs: `glGetProgramBinary` (format 0x8f61) on the handheld; its `OBJC` chunks hold the Bifrost
+code; the first fragment chunk is the one that runs (the counters' issues per warp match its length).
+
+Usable without Mesa: the counter tool above; the varying cost (packing a shader's varyings into
+fewer `vec4`s saved 11 % in the synthetic lit-sprite shape; interpolation is per component, so it
+should give the same values: not built, not checked on pixels); the blob's environment variables
+(its strings) are debugging only in this release build (`MALI_SAVE_FRAMES_TO_FILE`,
+`MALI_REPORT_MEM_USAGE`, `MALI_TIMELINE_*`, `MALI_HWC_DUMP_*`, `MALI_PREROTATE`,
+`MALI_CROP_RECTANGLE`, `MALI_CONFIG` / `.mali_config` for its debug channels), but for
+`MALI_SCHED_RT_THREAD_PRIORITY`, by its name and place a real-time priority for the back-end thread
+(not tried: the nice -10 test above showed that thread's priority does not pay in a GPU-bound game).

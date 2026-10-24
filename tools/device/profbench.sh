@@ -67,6 +67,13 @@ else
   COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$HERE" profrun.sh | dev_tar_in "$B" &&
     rshn "cd $(q "$B") && cp -f ../ua_host ua_host && chmod +x ua_host profrun.sh" || { echo "copying failed"; exit 1; }
 fi
+# the GPU counter sampler for GPUCNT=1 runs (runtime/host/gpucnt.c; a static armhf build serves
+# both userlands)
+GC=${GPUCNT_BIN:-$PU/runtime/host/out/gpucnt}
+if [ -f "$GC" ] && [ "$(basename "$GC")" = gpucnt ]; then
+  COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$GC")" gpucnt | dev_tar_in "$B" &&
+    rshn "chmod +x $(q "$B/gpucnt")" || echo "   (copying gpucnt failed: no GPU counters)"
+fi
 
 base=()
 for v in $(compgen -e); do
@@ -74,6 +81,7 @@ for v in $(compgen -e); do
 done
 [ -n "${PLAN:-}" ] && base+=("PLAN=$PLAN")
 [ -n "${MEASURE:-}" ] && base+=("MEASURE=$MEASURE")
+[ -n "${GPUCNT:-}" ] && base+=("GPUCNT=$GPUCNT")
 [ "${STOP_ES:-1}" = 1 ] && base+=("UATEST_STOP_ES=1")
 names=()
 for r in "${runs[@]}"; do

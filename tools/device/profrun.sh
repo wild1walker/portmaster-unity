@@ -14,6 +14,8 @@
 #   freq.log          every second of the measurement: each core's clock, the GPU's, MemAvailable
 #   mem.log           every 2 s of the run: MemAvailable, swap, the game's resident memory
 #   prof-<n>.txt      with UA_PROF=<hz>: the profile of the measurement (runtime/host/prof.c)
+#   gpucnt.txt        with GPUCNT=1 (and gpucnt beside this script): the GPU's hardware counters
+#                     over the measurement (runtime/host/gpucnt.c)
 #   shot-<n>.ppm      the screenshots the plan asked for
 #   result            one line: ok, or why the run stopped early
 # Nothing is changed on the handheld except that folder (and EmulationStation stopped and started
@@ -31,8 +33,8 @@
 # e.g. a saved game continued from its title screen:
 #   PLAN='log:pd.maxHealth; steady:3; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5'
 # Settings: MEASURE (s, default 30), UA_PROF (profile at that rate during the measurement),
-# UATEST_STOP_ES=1, UA_MEM_MIN (the memory watchdog's line, as uatest.sh), and every UA_* (but
-# UA_AUDIO: these runs are always silent).
+# GPUCNT=1 (the GPU's counters during the measurement), UATEST_STOP_ES=1, UA_MEM_MIN (the memory
+# watchdog's line, as uatest.sh), and every UA_* (but UA_AUDIO: these runs are always silent).
 set -u
 R=${1:?usage: profrun.sh <game folder> <name>}; NAME=${2:?name}
 HERE=$(cd "$(dirname "$0")" && pwd); BIN=$HERE/ua_host
@@ -154,6 +156,9 @@ M=${MEASURE:-30}
 log "measure start ($M s)"
 snapshot "$OUT/snap-0.txt"
 [ -n "$PROF" ] && { echo "$M" > prof.req.tmp && mv prof.req.tmp prof.req; }
+if [ "${GPUCNT:-0}" = 1 ] && [ -x "$HERE/gpucnt" ]; then
+  "$HERE/gpucnt" sample "$((M - 1))" 100 "$NAME" > "$OUT/gpucnt.txt" 2>&1 &
+fi
 for t in $(seq 1 "$M"); do
   sleep 1
   kill -0 $pid 2>/dev/null || fail "the game exited during the measurement"
