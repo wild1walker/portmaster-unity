@@ -274,6 +274,13 @@ def run(job, mem_mb=None):
         job.log('quality: no shader has GLES3 programs yet: run this step after `shaders`; nothing changed')
         return
     edits = _decide(job, scan, c, plan)
+    if not c.get('dry_run'):
+        # the run-time caps go into the journal before any file changes: a run interrupted and started
+        # again sees data already capped (and would find no pixel light cap to keep)
+        caps = merge_caps(job.state.get('quality_caps'), host_caps(scan.qcaps))
+        if caps:
+            job.state['quality_caps'] = caps            # android_package.json's "quality" (android_data.py)
+            job.save_state()
     for rel in files:
         if rel in edits:
             _edit(job, rel, edits[rel], scan, c, plan)
@@ -286,10 +293,8 @@ def run(job, mem_mb=None):
     job.log('quality: ' + ('would change: ' if c.get('dry_run') else '') + ('; '.join(plan.done) or 'nothing to change'))
     if c.get('dry_run'):
         return
-    caps = host_caps(scan.qcaps)
-    if caps:
-        job.state['quality_caps'] = caps            # android_package.json's "quality" (android_data.py)
-        job.log(f'quality: run-time caps for ua_host: {caps}')
+    if job.state.get('quality_caps'):
+        job.log(f'quality: run-time caps for ua_host: {job.state["quality_caps"]}')
     job.mark_done('quality', 'all')
 
 
@@ -302,6 +307,16 @@ HOST_CAPS = (('pixelLightCount', 'pixel_lights'), ('shadows', 'shadows'), ('shad
 def host_caps(qcaps):
     """The caps as ua_host reads them: "pixel_lights=1,msaa=0,..."."""
     return ','.join(f'{h}={int(qcaps[k])}' for k, h in HOST_CAPS if k in qcaps)
+
+
+def merge_caps(old, new):
+    """Two caps strings as one: every cap either names, the lower value where both do."""
+    caps = {}
+    for s in (old or '', new or ''):
+        for kv in filter(None, s.split(',')):
+            k, _, v = kv.partition('=')
+            caps[k] = min(int(v), caps.get(k, int(v)))
+    return ','.join(f'{h}={caps[h]}' for _, h in HOST_CAPS if h in caps)
 
 
 class Scan:

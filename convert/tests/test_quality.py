@@ -43,6 +43,10 @@ class Profile(unittest.TestCase):
         caps = Q.host_caps({'pixelLightCount': 1, 'antiAliasing': 0, 'softParticles': 0, 'anisotropicTextures': 1})
         self.assertEqual(caps, 'pixel_lights=1,msaa=0,anisotropic=1,soft_particles=0')
         self.assertEqual(Q.host_caps({}), '')
+        # a run started again over data it capped already keeps the caps it found the first time
+        self.assertEqual(Q.merge_caps(caps, 'msaa=0,anisotropic=1'), caps)
+        self.assertEqual(Q.merge_caps('msaa=2', 'msaa=0,shadows=1'), 'shadows=1,msaa=0')
+        self.assertEqual(Q.merge_caps(None, ''), '')
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(AD.quality_caps(d), '')
             with open(os.path.join(d, '.pmunity.json'), 'w') as f:
