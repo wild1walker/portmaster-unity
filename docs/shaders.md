@@ -912,10 +912,11 @@ Papel's 993 programs as converted do not link on the handheld, its URP Lit and t
 variants with per-pixel additional lights (`_ADDITIONAL_LIGHTS`): "the number of fragment uniform
 components (4,156 - 9,597) is greater than the maximum number allowed (4,096)". metal.py writes
 URP's constant buffers as plain uniforms, and the macOS build's light arrays have 256 entries
-(`_AdditionalLightsPosition[256]` and three more: 4,096 components alone); Unity's own GLES3
-programs (and the glcore route's, The Third Eye's) keep them in uniform blocks, which that limit
-does not count. Those variants cannot run on a Mali (the title menu benched does not use them)
-until the Metal route keeps the constant buffers as blocks, as Unity's GL programs of 2019+ do.
+(`_AdditionalLightsPosition[256]` and three more: 4,096 components alone). Unity's own GLES3
+programs of the same game have plain arrays of 16 (URP's light limit for mobile targets), and the
+glcore route's (The Third Eye's) keep their 32 in a uniform block, which that limit does not count.
+Those variants cannot run on a Mali (the title menu benched does not use them) until the Metal
+route keeps such a constant buffer as a uniform block.
 
 ## Blend modes without GrabPass copies (`grab_fetch`, opt-in)
 
