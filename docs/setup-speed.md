@@ -42,14 +42,15 @@ Knight's base files and scenes 10-19.
 | LZ4 HC chunks compressed on every core (each chunk on its own: the same blocks) | `bigbundle.pack`, UnityPy's `chunk_based_compress` | 3/4 of the LZ4 HC time (~110 MB/s on one Mac core, far less on an A53) |
 | a serialized file written in one pass: a dry run gives the header and metadata length, the object data goes straight to its place | `unity_io.save_serialized_to` | write and read each inlined file a second time (Hollow Knight: ~3.5 GB) |
 | serialized files parsed from a read-only map of them | `unity_io.load`, used by `Loaded` and android-data | ~2x the file read per load, and the per-field read calls (the 220 files: 16 MB of pages touched instead of 462 MB read; loading 2.5x faster) |
-| after the first garbage collection the long-lived objects are frozen (`gc.freeze()`; all are collected again every 64th time) | `unity_io.collect` | ~0.1 s a file in every step |
+| after the first garbage collection the long-lived objects are frozen (`gc.freeze()`; once more after UnityPy reads its type tree database, never again) | `unity_io.collect` | ~0.1 s a file in every step (Hollow Knight's shaders + audio in the container: 29 s of their 34 s of CPU) |
 | type-tree arrays of numbers written with one `struct.pack` | UnityPy's `write_value` (recompiled) | one Python call per byte of a shader blob |
 | installer payloads inflated on a thread of their own while the files are written | `macpkg.Ahead` | wait for the card and the inflate in turn |
 
 ### Before and after
 
-Container as above, two runs each (main = before, branch = after). "Read" counts read calls
-(`rchar`): a mapped file's pages do not appear in it.
+Container as above (main = before, branch = after): two runs on main before PR #4 was merged
+and, where a third figure is shown, one on main with PR #4 and the branch rebased on it. "Read"
+counts read calls (`rchar`): a mapped file's pages do not appear in it.
 
 | step | wall | CPU | peak RSS (VmHWM) | anonymous | read | written |
 |---|---|---|---|---|---|---|
@@ -57,19 +58,24 @@ Container as above, two runs each (main = before, branch = after). "Read" counts
 | Cuphead: textures | 156/138 -> 138/131 s | 538/489 -> 443/421 s | 1120/1125 -> 806/803 MB | 1104/1108 -> 788/786 MB | 2597 -> 918 MB | 1871 -> 484 MB |
 | Cuphead: audio | 3.6/3.4 -> 2.3/2.1 s | 3.0/3.0 -> 1.5/1.6 s | 157/158 -> 175/175 MB | 142/143 -> 144/144 MB | 314 MB -> (mapped) | 230 MB |
 | Cuphead: animclips | 2.5/2.3 -> 1.1/1.1 s | 2.4/2.3 -> 1.0/1.0 s | 100 -> 102 MB | 84 -> 85 MB | 107 MB -> (mapped) | 0 |
-| Cuphead: android-data | 20.5/14.3 -> 9.5/8.2 s | 10.0/9.7 -> 8.7/8.5 s | 126/125 -> see below | 98/98 -> 96/103 MB | 2337 -> 1161 MB | 2037 -> 1257 MB |
-| Hollow Knight, whole game: shaders + settings + audio | 38.8/40.6 -> 10.7/9.2 s | 36.6/37.7 -> 6.8/6.9 s | 218/216 -> 279/281 MB | 183/183 -> 188/183 MB | 3227 MB -> (mapped) | 151 MB |
+| Cuphead: android-data | 20.5/14.3/14.2 -> 9.5/8.2/7.8 s | 10.0/9.7/9.5 -> 8.7/8.5/8.2 s | 125-126 -> 137 MB | 98 -> 96-103 MB | 2337 -> 1161-1243 MB | 2037 -> 1257 MB |
+| Hollow Knight, whole game: shaders + settings + audio | 38.8/40.6/36.6 -> 9.8/7.8/7.9 s | 36.6/37.7/34.3 -> 5.8/5.6/5.6 s | 216-218 -> 279 MB | 183 -> 184-201 MB | 3227 MB -> (mapped) | 151 MB |
 | Hollow Knight: textures | 33.7/33.6 -> 32.8/42.4 s | 122/122 -> 121/158 s | 296/302 -> 295/294 MB | 277/281 -> 198/197 MB | 484 -> 420 MB | 312 MB |
 | Hollow Knight: android-data | 8.3/8.0 -> 6.3/6.5 s | 5.7/5.4 -> 4.5/4.7 s | 166/167 -> 168/169 MB | 145 -> 144/146 MB | 1167 -> 783 MB | 1032 -> 720 MB |
 | Cuphead's DLC installer: macpkg | 17.9/19.5 -> 12.5/16.5 s | 6.7 -> 7.1 s | 25 -> 34 MB | | 1576 MB | 1666 MB |
 
 The container's disk is a Mac's SSD behind a large page cache, so its wall times hide the I/O that
 the card pays for; the read and written columns are what changes on the handheld. The setup's
-peak is the textures step (Cuphead: one 8192x8192 BC7 atlas decoded and scaled), now ~320 MB
-lower. Where VmHWM rises (shaders, audio: up to ~60 MB) it is the mapped pages of the file being
-read, which read() calls would hold in the page cache instead; the anonymous peak (what the
-process itself holds) is unchanged. Mac, Hollow Knight's whole setup in chunks (below): textures
-200 -> 176 s, android-data 124 -> 106 s.
+peak is the textures step (Cuphead: one 8192x8192 BC7 atlas decoded and scaled): ~320 MB lower
+than main's before PR #4 was merged (the table); with PR #4 on both sides (its strips still hold
+the whole image) 1123 -> 1103 MB (anonymous 1106 -> 1086 MB); Hollow Knight's textures step
+with PR #4: 306 -> 322 MB VmHWM, 289 -> 279 MB anonymous. Where VmHWM rises (shaders, audio, Hollow Knight's textures: up
+to ~60 MB) it is mostly the mapped pages of the file being read (`unity_io.load`), which belong
+to the page cache (read() calls would put the same pages there, uncounted) and which the kernel
+can drop; reading through the maps also adds up to ~18 MB of anonymous memory in shaders and
+audio, far below the setup's peak. Mac, Hollow Knight's whole setup in chunks (below): shaders +
+settings + audio 37.5 -> 7.7 s, textures 170 -> 146 s, android-data 65 -> 53 s; Cuphead's
+textures step over the whole game 568 -> 550 s (all CPU there).
 
 What that should make of the handheld's times (an estimate: the device was busy with other
 tests): Cuphead's textures step no longer writes 10 GB and reads 10 GB it did not need (at the
