@@ -94,9 +94,10 @@ Where IL2CPP's semantics differ from the obvious Mono call, the bridge follows I
 lookup by name searches the parents, image names are file names ("UnityEngine.CoreModule.dll"),
 `il2cpp_domain_get_assemblies` lists every assembly of the build (the bridge loads each one in the
 Managed folder at `il2cpp_init`, as an IL2CPP runtime has them all), the stack frame struct has the
-size of the player's line (one field to 2019.4, two in 2020.x, five from 2021.1), GC handles are
-32-bit before Unity 2021.2 and pointer-sized after (Mono's `*_v2` handles where the runtime has
-them).
+size of the player's line (one field to 2019.4, two in 2020.3, five in 2021.3 and later), GC handles
+are 32-bit to 2022.3 and pointer-sized from 2023.2 (`Il2CppGCHandle`; Mono's `*_v2` handles then,
+which Unity's Mono has from 2021.2 on: a pointer handle given to a 2021.3 or 2022.3 libunity would be
+cut to 32 bits).
 
 ## The runtime: Unity's Mono for aarch64 Linux
 

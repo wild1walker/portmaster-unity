@@ -1093,28 +1093,33 @@ API void il2cpp_gc_free_fixed(void *p)
     free(p);
 }
 
-// GC handles: 32-bit before 2021.2 (uint32_t in both runtimes), pointer-sized from IL2CPP's
-// Il2CppGCHandle (Mono's *_v2 handles where the runtime has them)
+// GC handles: IL2CPP's are uint32_t to 2022.3 and pointer-sized (Il2CppGCHandle) from 2023.2
+// (2023.1 not checked); Mono's of the same line where the runtime has both (its *_v2 handles are
+// pointer-sized), so a handle always fits what libunity keeps of it
+static int pointer_handles(void)
+{
+    return unity_at_least(2023, 1) && m_mono_gchandle_new_v2 && m_mono_gchandle_new_weakref_v2 && m_mono_gchandle_get_target_v2 && m_mono_gchandle_free_v2;
+}
 API uintptr_t il2cpp_gchandle_new(MonoObject *o, int pinned)
 {
     attached();
-    if (m_mono_gchandle_new_v2) return (uintptr_t)m_mono_gchandle_new_v2(o, pinned);
+    if (pointer_handles()) return (uintptr_t)m_mono_gchandle_new_v2(o, pinned);
     return m_mono_gchandle_new(o, pinned);
 }
 API uintptr_t il2cpp_gchandle_new_weakref(MonoObject *o, int track)
 {
     attached();
-    if (m_mono_gchandle_new_weakref_v2) return (uintptr_t)m_mono_gchandle_new_weakref_v2(o, track);
+    if (pointer_handles()) return (uintptr_t)m_mono_gchandle_new_weakref_v2(o, track);
     return m_mono_gchandle_new_weakref(o, track);
 }
 API MonoObject *il2cpp_gchandle_get_target(uintptr_t h)
 {
-    if (m_mono_gchandle_get_target_v2) return m_mono_gchandle_get_target_v2((void *)h);
+    if (pointer_handles()) return m_mono_gchandle_get_target_v2((void *)h);
     return m_mono_gchandle_get_target((uint32_t)h);
 }
 API void il2cpp_gchandle_free(uintptr_t h)
 {
-    if (m_mono_gchandle_free_v2) m_mono_gchandle_free_v2((void *)h);
+    if (pointer_handles()) m_mono_gchandle_free_v2((void *)h);
     else m_mono_gchandle_free((uint32_t)h);
 }
 API void il2cpp_gchandle_foreach_get_target(void (*fn)(void *, void *), void *ud)
