@@ -50,6 +50,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import ssl
 import struct
 import subprocess
@@ -660,8 +661,9 @@ fi
 
 # The compiler wrapper (clang, clang++): with PMUNITY_SCHED (a folder the build's Scheduler
 # watches) the wrapper asks the scheduler for its turn instead of taking a slot itself: it writes
-# q/<its pid> ("<KiB of the source> <1: a compile, 0: a link> - <source>"), waits for go/<pid>, runs
-# the compiler, and removes both. A compiler killed by a signal (the OOM killer) is run once more,
+# q/<its pid> ("<KiB of the source> <1: a compile, 0: a link> - <source>"), waits for go/<pid> (the
+# scheduler then wakes it with SIGUSR1; it looks every second besides), runs the compiler, and
+# removes both. A compiler killed by a signal (the OOM killer) is run once more,
 # after asking for a turn alone ("<KiB> <c> alone <source>"; noted in <sched>/retried): il2cpp's
 # builder never sees it fail. The wrapper's oom_score_adj (and so its compiler's) is raised, which
 # needs no root for one's own processes: when memory runs out the kernel stops a compiler, which is
@@ -674,11 +676,12 @@ if [ -n "$sd" ] && [ -d "$sd/q" ]; then
   kb=0; [ -n "$src" ] && [ -f "$src" ] && kb=$(( $(wc -c < "$src") / 1024 ))
   release() { rm -f "$sd/q/$me" "$sd/go/$me"; }
   trap 'release; exit 130' INT TERM HUP
+  trap 'g=1' USR1
   { echo 500 > /proc/self/oom_score_adj; } 2>/dev/null
   for try in 1 2; do
     if [ $try = 1 ]; then how=-; else how=alone; fi
-    echo "$kb $c $how $src" > "$sd/q/$me.t" && mv "$sd/q/$me.t" "$sd/q/$me"
-    while [ ! -e "$sd/go/$me" ] && [ -d "$sd/q" ]; do sleep 0.2 2>/dev/null || sleep 1; done
+    g=; echo "$kb $c $how $src" > "$sd/q/$me.t" && mv "$sd/q/$me.t" "$sd/q/$me"
+    while [ -z "$g" ] && [ ! -e "$sd/go/$me" ] && [ -d "$sd/q" ]; do sleep 1 & s=$!; wait $s; kill $s 2>/dev/null; done
     @CC@
     st=$?
     release
@@ -892,7 +895,7 @@ class Scheduler:
     nothing else. Requests are files in a folder on a RAM file system (the wrappers poll for theirs);
     the scheduler is a thread of the setup's Python, checking every `tick` seconds."""
 
-    def __init__(self, jobs, reserve_mb=None, tick=0.2, root=None, available=None):
+    def __init__(self, jobs, reserve_mb=None, tick=0.1, root=None, available=None):
         self.dir = tempfile.mkdtemp(prefix='pmunity-cc-', dir=root or sched_root())
         os.makedirs(os.path.join(self.dir, 'q'))
         os.makedirs(os.path.join(self.dir, 'go'))
@@ -1001,6 +1004,8 @@ class Scheduler:
             try:
                 with open(os.path.join(go, str(p)), 'w'):
                     pass
+                if os.path.exists(os.path.join(self.dir, 'q', str(p))):
+                    os.kill(p, signal.SIGUSR1)                  # (the wrapper's trap: its turn now)
             except OSError:
                 break
             self.running[p] = [pred, kind, raw, 0, time.time()]

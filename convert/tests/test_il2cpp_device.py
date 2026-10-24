@@ -361,7 +361,8 @@ class SchedulerTest(unittest.TestCase):
         """With requests of 3, 2 and 1 MiB waiting and room for the largest only, the largest goes;
         nothing smaller passes a request that waits for memory."""
         D.SCHED_GEN = (0, 100)                                 # (100 MB per MiB of source)
-        sleepers = [subprocess.Popen(['sleep', '30']) for _ in range(3)]
+        # (stand-ins for waiting wrappers: they ignore the SIGUSR1 a turn sends)
+        sleepers = [subprocess.Popen(['sh', '-c', 'trap "" USR1; sleep 30']) for _ in range(3)]
         try:
             s = D.Scheduler(4, reserve_mb=0, root=self.d, available=lambda: 350)
             for p, kb in zip(sleepers, (1024, 3072, 2048)):
