@@ -383,7 +383,12 @@ The same steps without the setup, on a PC:
    others `tools/re/elfimports.py` lists a player's imports (compare with
    `runtime/android/README.md`) and `FJ_DUMP=1` lists the Java classes and methods Unity asked for
    and did not find. The handheld has little RAM (1 GB with the system): the textures step can
-   also scale textures down (`textures.scale`).
+   also scale textures down (`textures.scale`), and the audio step keeps the sound a scene holds
+   decompressed within `audio.pcm_budget_mb` (16 MiB by default): the game's DecompressOnLoad
+   clips are decoded once at load, as on the desktop, and only the largest long clips of a scene
+   over the budget play compressed (FMOD then decodes them on the CPU while they play, which
+   takes the GPU's clock in a warm handheld: [profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)).
+   A port with memory to spare raises it (the step's log names the scene that holds the most).
 2. **Convert**: `python -m pmunity convert <Data> [<out>] --config game.json` with a config like
    the `convert` table above (`{"steps": ["shaders", "settings", "audio"], "settings":
    {"graphics_apis": [11]}}`); a game's own steps go in a plugin (`--plugin steps.py` with
