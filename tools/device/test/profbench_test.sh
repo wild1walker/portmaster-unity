@@ -49,12 +49,21 @@ while :; do
 done
 G
 chmod +x "$T/ua_host"
+# a gpucnt that prints what the real one does (GPUCNT=1 runs)
+mkdir -p "$T/gc"
+cat > "$T/gc/gpucnt" <<'C'
+#!/bin/bash
+echo "# gpucnt $4: $2.00 s, 20 dumps, 4 blocks, GPU clock avg 600 MHz, bus beat 16 bytes"
+echo "# derived (Arm's formulas for the Mali-G31)"
+echo "GPU active 99.0% of $2.00 s at 600 MHz; fragment queue 95.0%, non-fragment 20.0%, tiler 5.0% of GPU active"
+C
+chmod +x "$T/gc/gpucnt"
 cat > "$T/list.txt" <<'L'
-# two runs, the second with its own setting and a sound request that must be dropped
+# two runs, the second with its own setting, the GPU counters and a sound request that must be dropped
 one
-two X_SETTING='a b' UA_AUDIO=1
+two X_SETTING='a b' UA_AUDIO=1 GPUCNT=1
 L
-export PATH="$T/bin:$PATH" DEVICE=fake@handheld OUT="$T/out" HOST_BIN="$T/ua_host" PROF_SAMPLE="$T/prof.txt"
+export PATH="$T/bin:$PATH" DEVICE=fake@handheld OUT="$T/out" HOST_BIN="$T/ua_host" PROF_SAMPLE="$T/prof.txt" GPUCNT_BIN="$T/gc/gpucnt"
 export PLAN='log:title ready; steady:2; press:0:b; hitch:1000; seen:title ready; steady:2; shot' MEASURE=3 UA_PROF=100 STEP_TIMEOUT=30
 log=$("$PU/tools/device/profbench.sh" "$T/dev/game" --list "$T/list.txt" 2>&1)
 fail() { echo "profbench_test: FAILED: $*"; printf '%s\n' "$log" | tail -40; exit 1; }
@@ -69,6 +78,8 @@ for n in one two; do
   grep -q 'SDL_AUDIODRIVER=dummy' "$T/out/$n/run.log" && grep -q 'UA_AUDIO=unset' "$T/out/$n/run.log" || fail "$n: not silent"
 done
 grep -q 'X_SETTING=a b' "$T/out/two/run.log" || fail "the run's own setting did not arrive"
+[ -f "$T/out/two/gpucnt.txt" ] && [ ! -f "$T/out/one/gpucnt.txt" ] || fail "GPUCNT=1: no gpucnt.txt in its run (or one in the other run)"
+printf '%s\n' "$log" | grep -q 'GPU counters: GPU active 99.0%' || fail "benchsum did not print the GPU counters"
 printf '%s\n' "$log" | grep -q 'frames: 33.0 fps' || fail "benchsum did not read the frame rate"
 printf '%s\n' "$log" | grep -q 'M:Fake.Player:Update' || fail "benchsum did not sum the profile"
 printf '%s\n' "$log" | grep -q 'runs are silent' || fail "UA_AUDIO=1 was not refused"
