@@ -25,6 +25,8 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "futex.h"
 #include "gltrace.h"
 #include "glopt.h"
+#include "glpass.h"
+#include "glrename.h"
 #include "msaafix.h"
 #include "arch.h"
 #include "display.h"
@@ -350,12 +352,32 @@ static void *dlsym_hook(const char *sym, void *p)
     return p;
 }
 
-// what glopt.c's GL wrappers call: msaafix.c's wrapper of that function, else gltrace.c's (NULL: the driver's)
-static const so_shim *g_msaa_shims;
+// what glopt.c's GL wrappers call: msaafix.c's wrapper of that function, else gltrace.c's, else
+// glhooks.c's (NULL: the driver's)
+static const so_shim *g_msaa_shims, *g_hook_shims;
+static void *find_shim(const so_shim *t, const char *name)
+{
+    for (; t && t->name; t++) if (!strcmp(t->name, name)) return t->fn;
+    return NULL;
+}
 static void *after_glopt(const char *name)
 {
-    for (const so_shim *t = g_msaa_shims; t && t->name; t++) if (!strcmp(t->name, name)) return t->fn;
-    return gltrace_wrapper(name);
+    void *p = find_shim(g_msaa_shims, name);
+    if (!p) p = gltrace_wrapper(name);
+    return p ? p : find_shim(g_hook_shims, name);
+}
+// what glpass.c's GL wrappers call: glopt.c's wrapper of that function, else after_glopt's
+static const so_shim *g_glopt_shims, *g_pass_shims;
+static void *after_glpass(const char *name)
+{
+    void *p = find_shim(g_glopt_shims, name);
+    return p ? p : after_glopt(name);
+}
+// what glrename.c's GL wrappers call: glpass.c's wrapper, else after_glpass's
+static void *after_glrename(const char *name)
+{
+    void *p = find_shim(g_pass_shims, name);
+    return p ? p : after_glpass(name);
 }
 
 // UnityMain, after each frame
@@ -445,11 +467,17 @@ int main(int argc, char **argv)
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
-    // GL wrappers, each calling the next: the player -> glopt.c -> msaafix.c -> gltrace.c -> the driver
+    // GL wrappers, each calling the next: the player -> glrename.c -> glpass.c -> glopt.c -> msaafix.c
+    // -> gltrace.c -> glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
+    g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
-    so_add_shims(glopt_table(after_glopt));    // UA_GL_DSCLEAR
+    g_glopt_shims = glopt_table(after_glopt);  // UA_GL_DSCLEAR
+    g_pass_shims = glpass_table(after_glpass); // UA_GL_SAMECLEAR
+    so_add_shims(glrename_table(after_glrename));   // UA_GL_RENAME
+    so_add_shims(g_pass_shims);
+    so_add_shims(g_glopt_shims);
     so_add_shims(g_msaa_shims);
     so_add_shims(trace);
     if (msaa) {
@@ -459,7 +487,7 @@ int main(int argc, char **argv)
             unsetenv("UA_DISPLAY_SAMPLES");
         }
     }
-    so_add_shims(glhooks_table());             // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
+    so_add_shims(g_hook_shims);
     // the window: Mali fbdev (nothing to open), or an SDL2 window whose EGL objects Unity gets
     if (display_init(pkg) != 0) { fprintf(stderr, "[host] no display (UA_DISPLAY)\n"); return 1; }
     so_add_shims(display_egl_shims());         // NULL for fbdev

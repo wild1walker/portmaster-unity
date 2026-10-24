@@ -15,6 +15,9 @@
 //   blit          a blit of depth into it: no clear
 //   renderbuffer  a depth-only renderbuffer (framebuffer 5): its clear restores depth only
 //   nothread      before the first swap (glopt_frame): nothing followed
+//   sameclear     the game clears depth and stencil again to the values they hold: left out, the
+//                 next draw's restoring clear made
+//   sameclear_off the same with UA_GL_SAMECLEAR=0: the game's clear made
 //   off           UA_GL_DSCLEAR=0: nothing wrapped
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +61,7 @@ int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "restore";
     if (!strcmp(mode, "off")) setenv("UA_GL_DSCLEAR", "0", 1);
+    setenv("UA_GL_SAMECLEAR", !strcmp(mode, "sameclear_off") ? "0" : "1", 1);
     const so_shim *t = glopt_table(NULL);
     void (*Bind)(unsigned, unsigned) = fn(t, "glBindFramebuffer");
     void (*Clear)(unsigned) = fn(t, "glClear");
@@ -103,12 +107,19 @@ int main(int argc, char **argv)
     int before = fake_nclears;
     if (!strcmp(mode, "unityclear")) { glDepthMask(1); glStencilMask(0xff); Clear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT); glDepthMask(0); glStencilMask(0x0f); }
     else if (!strcmp(mode, "colourclear")) Clear(GL_COLOR_BUFFER_BIT);
+    else if (!strncmp(mode, "sameclear", 9)) {
+        // the game clears it again to the values it holds: left out (the pass that goes on restores it)
+        glClearDepthf(1); glClearStencil(0); glDepthMask(1); glStencilMask(0xff);
+        Clear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        glDepthMask(0); glStencilMask(0x0f); glClearDepthf(0.25f); glClearStencil(7);
+        Draw(4, 0, 6);
+    }
     else Draw(4, 0, 6);
     int added = fake_nclears - before;
 
-    int restores = !strcmp(mode, "restore") || !strcmp(mode, "stencilkeep") || !strcmp(mode, "renderbuffer") ? 1 :
+    int restores = !strcmp(mode, "restore") || !strcmp(mode, "stencilkeep") || !strcmp(mode, "renderbuffer") || !strcmp(mode, "sameclear") ? 1 :
                    !strcmp(mode, "colourclear") ? 1 : 0;
-    int game_clears = !strcmp(mode, "unityclear") || !strcmp(mode, "colourclear");
+    int game_clears = !strcmp(mode, "unityclear") || !strcmp(mode, "colourclear") || !strcmp(mode, "sameclear_off");
     CHECK(added == restores + game_clears);
     if (restores) {
         fake_clear_t *c = &fake_clears[before];

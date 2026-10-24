@@ -18,7 +18,7 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof threads futex gltrace glopt msaafix display display_sdl fbdev steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof threads futex gltrace glopt glpass glrename msaafix display display_sdl fbdev steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
     # dl_iterate_phdr (docs/arm64.md): no flags for that. ioctl is exported (fbdev.c interposes the
@@ -61,6 +61,8 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c futex.c -o out/futex.o
   arm-linux-gnueabihf-gcc $F -c gltrace.c -o out/gltrace.o
   arm-linux-gnueabihf-gcc $F -c glopt.c -o out/glopt.o
+  arm-linux-gnueabihf-gcc $F -c glpass.c -o out/glpass.o
+  arm-linux-gnueabihf-gcc $F -c glrename.c -o out/glrename.o
   arm-linux-gnueabihf-gcc $F -c msaafix.c -o out/msaafix.o
   arm-linux-gnueabihf-gcc $F -c display.c -o out/display.o
   arm-linux-gnueabihf-gcc $F -c display_sdl.c -o out/display_sdl.o
@@ -68,7 +70,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c steamstub.c -o out/steamstub.o
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/msaafix.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glpass.o out/glrename.o out/msaafix.o \
     out/display.o out/display_sdl.o out/fbdev.o out/steamstub.o out/plugins.o out/plugstubs.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm

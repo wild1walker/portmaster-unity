@@ -214,6 +214,8 @@ static void new_pass(GLuint fb)
     pass_t *l = g_npass ? &g_pass[g_npass - 1] : NULL;
     if (l && !l->draws && !l->blits && !l->copies && !l->clear && !l->dispatches) {
         l->fb = fb;                             // nothing happened in the last one: reuse it (and its query)
+        l->inval_start = l->inval_end = 0;      // (an invalidation of that framebuffer is not this one's)
+        l->w = l->h = 0;
         return;
     }
     if (g_npass >= MAX_PASS) { g_overflow++; return; }
