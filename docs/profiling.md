@@ -443,7 +443,21 @@ original APK against one whose PlayMaker.dll is patched, 2026-10-24):
 | `playmaker-loopcount` + `playmaker-delayedevents` | 50.5, 50.7 | 63, 47 | 18.9 ms |
 
 **+3.1 %** with the GPU's work left out, 0.6 ms less of the main thread's frame: about what the two
-methods cost in the profile.
+methods cost in the profile (state changes are rare there: `FsmState.OnEnter` is not even 0.05 % of
+the samples, so the change counter seldom moves and nearly every reset loop is skipped).
+
+In the game as it is (the same APKs, A B A B from 49 - 50 C, 30 s each, two shots a second apart):
+
+| run | fps | GPU MHz (avg; share at 696) | fps per 100 MHz | UnityMain on a CPU |
+|---|---|---|---|---|
+| as it ships | 35.3, 33.8 | 665 (68 %), 625 (29 %) | 5.31, 5.41 | 87, 82 % |
+| with the optimizations | 35.0, 35.6 | 654 (63 %), 668 (71 %) | 5.35, 5.33 | 84, 86 % |
+
+The GPU holds King's Pass, so the frame rate follows its clock and per MHz nothing moves; the main
+thread's 0.6 ms are CPU time the thermal budget can give the GPU (above, "The handheld around the
+game"), within these runs' spread. Pictures: of the pixels static in both runs, a run with the
+optimizations differs from the first base run on 2.11 % and 1.97 % (99 % of them by 1 - 3 of 255),
+the second base run on 2.00 %: the same picture.
 
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 
