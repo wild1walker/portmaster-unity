@@ -311,6 +311,7 @@ picture-identical change of that size in sight in the runtime. IL2CPP (the 64-bi
 the managed code and Mono's runtime (4 - 5.5 ms here) but runs the same engine and the same GPU work
 (30.6 - 32.4 fps in King's Pass).
 
+
 ### The handheld around the game (2026-10-23)
 
 What the system around the game costs in King's Pass, both builds (the plan above, 30 s measured,
@@ -360,6 +361,12 @@ about 3.5 % of a core). It also means a
 bench run must start as cool as the one it is compared with (the device lock waits for 50 C):
 King's Pass from 47 C ran 34.5 fps, the GPU at 696 MHz 22 of 60 s; the same run from a warm start
 at 69 C, 32.3 fps at 600 MHz throughout.
+
+The same in 150 s runs from 48 C (the 32-bit build, silent; pairs interleaved in one hold): as it is, the GPU at 696
+MHz 15 and 11 % of the time (capped from the 14th and 16th second), 33.7 and 33.5 fps; FMOD at 24 kHz with 1024-frame
+buffers (`UA_AUDIO_RATE`, `UA_AUDIO_FRAMES`; its mixer 56 -> 38 % of a core) 59 %, 35.2 fps; that and one job worker
+(`-job-worker-count 1`) 78 and 91 %, 35.7 and 36.0 fps; one job worker alone 21 %, 33.8 fps. Every run ends as warm
+(the CPU zone 72 C, the GPU's 68 C, the cpufreq cooling state 3): the budget goes to the GPU, not the heat away.
 
 Where King's Pass's 2.6 cores of CPU time go (32-bit, 60 s; % of a core): UnityMain 83, the render
 thread 57, FMOD's mixer 56, Mali's submission thread 17 (+ its job-completion kworkers 6), Unity's
@@ -822,8 +829,9 @@ texture), so it draws the same every frame.
 
 Exactness. By construction the draw is left out only when its target holds its output. `UA_GL_MEMO=check` draws
 every draw that would be left out and reads its target back before and after it: The Third Eye 1,092 such draws in
-1,200 frames, White Mirror 356 (the in-game frames of a run that check mode's read-backs slow to 12 fps), Chapéu de Papel 746 in 1,200, Cell Machine
-920 in 1,200; every one wrote the same pixels as the texture held (`0 other ones`). Screenshots of the A/B runs differ only where two baseline runs differ from each other (The
+1,200 frames, White Mirror 356 (the in-game frames of a run that check mode's read-backs slow to 12 fps), Chapéu de
+Papel 746 in 1,200, Cell Machine 920 in 1,200, and with the final build again 794, 298, 735 and 1,048; every one wrote
+the same pixels as the texture held (`0 other ones`). Screenshots of the A/B runs differ only where two baseline runs differ from each other (The
 Third Eye: a dithered vignette that changes every frame, 33 - 51 of the 50,400 pixels of the picture's centre by
 up to 9/255 in both comparisons; Chapéu: its animated paper).
 
@@ -843,6 +851,14 @@ Not left out: a LUT whose volume settings change (a camera moving through volume
 gets a new key each frame and is drawn as before; after three keys in a row that do not repeat, keys are made again
 only after 4, 8, ... 512 frames (a target that gets new storage, a render texture pool's next one, starts over at
 once). The key is read back with about 60 - 100 GL queries on the render thread, once a frame for each such target.
+
+What it costs where nothing is left out: Hollow Knight's King's Pass (32-bit; its passes that begin with an
+invalidate are blurs, bloom and grab copies whose inputs change every frame), eight runs interleaved in both orders
+(off on off on, on off on off): 35.3 fps without, 35.0 with (the runs' spread is 34.6 - 35.9, the GPU's share at 696
+MHz 53 - 80 % from run to run), its render thread 58.8 against 61.3 % of a core. Shadow copies of mapped writes cost it
+a tenth of the render thread's time at first (its sprite batches are flushed through mappings, write-combined memory
+that is slow to read: 63 -> 73 %, 35.0 -> 34.1 fps): mapped writes are now copied only into small buffers a keyed draw
+reads.
 
 ## GPU counters: gpucnt
 
