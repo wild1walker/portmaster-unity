@@ -585,7 +585,7 @@
    "build": "linux",
    "compressed": false,
    "exit": 0,
-   "notes": 5,
+   "notes": 6,
    "route": "android",
    "routes_ok": [
     "android",

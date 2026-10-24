@@ -123,8 +123,9 @@ sealed class PlayMakerLoopCount : Patch
         // Fsm.States { get => states; }
         var gi = getStates.Body.Instructions;
         if (gi.Count != 3 || !PlayMakerLib.IsThis(getStates, gi[0]) || gi[1].OpCode.Code != Code.Ldfld || gi[2].OpCode.Code != Code.Ret ||
-            ((FieldReference)gi[1].Operand).Resolve() is not FieldDefinition statesField || statesField.DeclaringType != fsm)
-            return Result.NotApplicable($"{file}: Fsm.States is not a plain field getter");
+            ((FieldReference)gi[1].Operand).Resolve() is not FieldDefinition statesField || statesField.DeclaringType != fsm ||
+            statesField.FieldType is not ArrayType { Rank: 1 } || statesField.IsStatic)
+            return Result.NotApplicable($"{file}: Fsm.States is not a plain getter of an FsmState[] field");
         // FsmState.ResetLoopCount() { loopCount = 0; }: a write of 0 through the setter or the field
         var ri = reset.Body.Instructions;
         if (ri.Count != 4 || !PlayMakerLib.IsThis(reset, ri[0]) || Cecil.ConstInt(ri[1]) != 0 || ri[3].OpCode.Code != Code.Ret)
@@ -313,6 +314,7 @@ sealed class StateArrays
     {
         var body = m.Body;
         var ins = body.Instructions;
+        if (ins.Count == 0) return;
         var locals = new bool[body.Variables.Count];
         var entry = new Dictionary<Instruction, List<V>> { [ins[0]] = new() };
         foreach (var h in body.ExceptionHandlers)

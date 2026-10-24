@@ -99,7 +99,7 @@ until an environment variable asks for the reduction, so a port can turn it on p
 
 | patch | what |
 |---|---|
-| `hk-blur` | Hollow Knight's far background: the game draws it with a camera of its own (`LightBlurredBackground`) into a 576x360 texture, blurs it in four passes (two with the game's own Shader Quality "Low") and shows it on the blur planes. `ASMPATCH_HK_BLUR=half`: the texture at half the height and width (288x180; the same passes over larger texels: a little blurrier, the same layout). `ASMPATCH_HK_BLUR=off`: no background camera and no blur, the blur planes hidden, the scene's camera draws the background itself, sharp (the look of the NoBlur mod). Read when the camera rig starts (`LightBlurredBackground.Awake`, `BlurPlane.Awake`, the texture's size at each aspect change). Measured in [docs/profiling.md](../../docs/profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds). |
+| `hk-blur` | Hollow Knight's far background: the game draws it with a camera of its own (`LightBlurredBackground`) into a 576x360 texture, blurs it in four passes (`LightBlur`; two with the game's own Shader Quality "Low") and shows it on the blur planes. `ASMPATCH_HK_BLUR` (comma-separated words): `low`, two passes, as the game's own Low; `half`, the texture at half the height and width (288x180: the same passes over texels twice as large, blurrier, the same layout); `half,low`, both; `off`, no background camera and no blur, the blur planes' renderers off, the scene's camera draws the background itself, sharp (the look of Destalta's [NoBlur](https://github.com/Destalta/NoBlur) mod; here `LightBlurredBackground` does nothing instead of GameObjects being deactivated by name). Anything else, or unset: the game as it is. Read once, when the camera rig starts (`LightBlurredBackground.Awake`, `BlurPlane.Awake`, the texture's size at each aspect change, `LightBlur.BlurPassCount`). Measured in [docs/profiling.md](../../docs/profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds). Tested on a stand-in for those classes (`test/fakes/HollowKnight`): each word and a few that are not, patched and unpatched. |
 
 ## With pmunity android-data
 
@@ -186,3 +186,7 @@ the path they get) and a game whose paths go straight into System.IO, through a 
 helper, a static field, an array, a virtual method, a delegate, into Unity's APIs only, and into
 both; the patched game runs against a `jar:file://` path (and an OBB dataPath) whose folder has the
 files and against desktop paths (same results as unpatched), and the helpers against odd paths.
+The optimizations and reductions are tested on stand-ins written in C# for the tests (`test/fakes/`,
+built by `build.sh test` with the .NET SDK, no game or library code): a PlayMaker whose patched and
+unpatched copies are driven through the same seeded and directed sequences and must agree after
+every step (["Optimizations"](#optimizations)), and Hollow Knight's blur classes (["Reductions"](#reductions)).
