@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A stand-in for Hollow Knight's Assembly-CSharp for the hk-blur tests: the two classes that
+       patch looks at, written here (no game code). Built by ../../../build.sh test into
+       out/test/fakes/hk/. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Assembly-CSharp</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Blur.cs" />
+  </ItemGroup>
+</Project>

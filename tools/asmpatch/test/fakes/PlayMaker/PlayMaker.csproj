@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A stand-in for PlayMaker.dll for the playmaker-* tests: only the members those patches look
+       at, written here (no PlayMaker code), with a seeded driver that exercises them. Built by
+       ../../../build.sh test into out/test/fakes/; the tests patch it and compare the patched copy's
+       behaviour with this one's. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>PlayMaker</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="PlayMaker.cs" />
+  </ItemGroup>
+</Project>

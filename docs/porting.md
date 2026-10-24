@@ -192,12 +192,13 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 | `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
 | `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
 | `convert` | `steps = ["shaders", "settings", "audio"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld |
-| `android_data.asmpatch` | `auto` when the check finds Rewired, else `off` | `auto`: tools/asmpatch runs on the game's assemblies (each patch changes only what it finds; the package then ships asmpatch); a list: only those patches |
+| `android_data.asmpatch` | `auto` when the check finds Rewired, the Input System package or PlayMaker, else `off` | `auto`: tools/asmpatch runs on the game's assemblies with its default patches, the android ones and the exact optimizations (each changes only what it finds; the package then ships asmpatch); a list: only those patches; `["auto", "<patch>", ...]`: the default ones and those (opt-in ones such as the `reduce` patches) |
 | `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch); the il2cpp-arm64 route compiles the patch into the game's IL2CPP build (`pmunity il2cpp --streaming-assets`) and packs the same mode |
 | `android_data.winbcl` | `auto` | `auto`: after the player, the setup runs `pmunity winbcl`: a Windows 2021.2+ build gets the Unix class libraries of its version, any build the facades the player's engine modules reference that it lacks (e.g. `netstandard.dll`), both from Unity's Windows editor installer (range requests; nothing is read when nothing is missing); `off`: not run |
 | `android_data.data_path` | false | true: the reads of `Application.dataPath` that reach System.IO get `Game_Data/` beside the APK, with the data folder's own files (asmpatch's data-path patch; docs/android-data.md, section 6); the check notes such reads |
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
+| `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set: reductions of the picture that leave the game play as it is ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
 | `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`, `{setup}` = the setup folder), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
 | `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
@@ -227,6 +228,29 @@ compile and Unity 6000.0 uses the original shader (older players: not tried). `t
 choice to Unity's own check, which in 6000.0 knows only EXT's extension: on Mali's drivers it changes
 nothing. Or set it in `[convert.shaders]` (`grab_fetch = "always"`) for every install. The answer
 applies when the setup converts the data; changing it later means running the setup again.
+
+### Small handhelds (1 GB)
+
+On handhelds with 1 GB of RAM (the RG34XX-SP and most of Anbernic's H700 family) a big game may
+give up some of its picture, never its game play: what is drawn may be smaller or plainer, but
+timing, physics, collisions, scripts and everything that tells the player something (an attack's
+warning, a hitbox, a pickup) stay. Such a reduction is set per handheld at launch, not built in by
+the setup, so the same install shows the full picture on a bigger device and a player can have it
+back by editing `port.env`:
+
+```toml
+[android_data]
+asmpatch = ["auto", "hk-blur"]     # the default patches and the one that reads the variable
+
+[runtime_lowmem]
+ASMPATCH_HK_BLUR = "half"      # Hollow Knight's blurred background at half resolution (tools/asmpatch)
+```
+
+`port.env` then sets `ASMPATCH_HK_BLUR=half` where `MemTotal` is at most 1024 MB and leaves it
+unset elsewhere; a value set above it in `port.env` or in the environment (`ASMPATCH_HK_BLUR=full`)
+wins. The reductions so far are asmpatch's `reduce` patches (tools/asmpatch/README.md,
+"Reductions") and a game's own lighter settings; what each one gains on the RG34XX-SP, and what it
+costs the picture: [profiling.md](profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds).
 
 ## 4. The setup on the handheld
 

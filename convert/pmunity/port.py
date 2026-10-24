@@ -487,7 +487,7 @@ def survey_assemblies(managed):
     """The game's own code (not Unity's or the class libraries): input stacks, text input, video,
     P/Invoke modules, store/audio/network services. From names only: what the assemblies define
     and reference (the same questions as `asmpatch --survey`, without .NET)."""
-    s = {'assemblies': [], 'libraries': [], 'unreadable': [], 'rewired': None, 'incontrol': False,
+    s = {'assemblies': [], 'libraries': [], 'unreadable': [], 'rewired': None, 'incontrol': False, 'playmaker': None,
          'input_system': False, 'legacy': {k: 0 for k in _LEGACY}, 'mouse_messages': [], 'pointer_handlers': 0,
          'navigation': 0, 'selects': 0, 'text_input': [], 'video': [], 'pinvoke': {}, 'services': [],
          'cursor': [], 'screen': []}
@@ -512,6 +512,8 @@ def survey_assemblies(managed):
             if ns == 'Rewired' and tn == 'InputManager' or tn == 'InputManager_Base' and ns == 'Rewired':
                 ed = 'source edition' if n.startswith('Assembly-CSharp') else 'DLL edition'
                 s['rewired'] = s['rewired'] or f'{n} ({ed})'
+            if (ns, tn) == ('HutongGames.PlayMaker', 'Fsm'):
+                s['playmaker'] = n
             if ns.startswith('InControl') and tn in ('InputManager', 'InControlManager'):
                 s['incontrol'] = True
         if any(ns.startswith('InControl') for ns, _ in trefs):
@@ -1124,7 +1126,11 @@ def suggest_config(rep):
         notes.append("InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names "
                      "the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown "
                      "controller (docs/input.md)")
-    ad['asmpatch'] = 'auto' if s.get('rewired') or s.get('input_system') else 'off'
+    if s.get('playmaker'):
+        notes.append(f"PlayMaker ({s['playmaker']}): asmpatch's optimizations playmaker-loopcount and "
+                     f"playmaker-delayedevents (the same behaviour, less work every frame for every FSM: "
+                     f"tools/asmpatch/README.md, \"Optimizations\")")
+    ad['asmpatch'] = 'auto' if s.get('rewired') or s.get('input_system') or s.get('playmaker') else 'off'
     verdict = rep.get('input_verdict')
     # asmpatch --survey: the Input System's Mouse.current used with no null check (null on a handheld
     # unless pointer mode presents a mouse)
@@ -1304,6 +1310,7 @@ DEFAULTS = {
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
                      'winbcl': 'auto', 'name': '', 'package': '', 'args': []},
     'runtime': {},
+    'runtime_lowmem': {},
     'questions': [],
     'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': []},
     'build': {'commands': [], 'outputs': {}, 'licenses': {}},
@@ -1403,9 +1410,10 @@ def validate(cfg):
         errs.append(f"port.name {p['name']!r}: lowercase letters, digits, '.', '_', '-' (it is the folder in ports/)")
     if not p['title'] or '/' in p['title'] or p['title'].startswith('.'):
         errs.append(f"port.title {p['title']!r}: the launcher is '<title>.sh'")
-    for k in cfg['runtime']:
-        if not ENV_RX.match(k):
-            errs.append(f'runtime.{k}: not an environment variable name')
+    for sec in ('runtime', 'runtime_lowmem'):
+        for k in cfg.get(sec) or {}:
+            if not ENV_RX.match(k):
+                errs.append(f'{sec}.{k}: not an environment variable name')
     for q in cfg['questions']:
         if not ID_RX.match(q.get('id', '')):
             errs.append(f"questions: id {q.get('id')!r} must be like TEXTURE_QUALITY")
@@ -1417,8 +1425,8 @@ def validate(cfg):
         if q.get('env') and not ENV_RX.match(q['env']):
             errs.append(f"questions.{q.get('id')}: env {q['env']!r} is not a variable name")
     a = cfg['android_data']['asmpatch']
-    if not (a in ('auto', 'off') or isinstance(a, list) and all(VALUE_RX.match(x) for x in a)):
-        errs.append(f'android_data.asmpatch {a!r}: auto, off or a list of patch names')
+    if not (a in ('auto', 'off') or isinstance(a, list) and all(VALUE_RX.match(x) for x in a) and 'auto' not in a[1:]):
+        errs.append(f'android_data.asmpatch {a!r}: auto, off or a list of patch names (["auto", ...]: the default ones and those)')
     if cfg['player'].get('il2cpp') and (p['route'] != 'apk' or cfg['player'].get('backend') != 'mono'):
         errs.append('player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP '
                     'player where the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds')
@@ -1482,7 +1490,8 @@ CONFIG_DOC = {
     'convert': '# pmunity convert\'s config (each step\'s DEFAULTS); "textures" re-encodes BC/DXT as ASTC\n'
                '# (less memory, a longer setup, slightly different pixels: off unless you add it)',
     'android_data': '# pmunity android-data: asmpatch = auto (run tools/asmpatch; it changes only what it\n'
-                    '# finds: Rewired, the Input System package) | off | ["patch", ...]; streaming_assets = obb |\n'
+                    '# finds: Rewired, the Input System package; PlayMaker\'s exact optimizations) | off |\n'
+                    '# ["patch", ...]; streaming_assets = obb |\n'
                     '# both | loose (code that reads StreamingAssets as files: also/only beside the APK,\n'
                     '# docs/android-data.md); data_path = true (files read or written at Application.dataPath);\n'
                     '# winbcl = auto (the setup fetches Unity\'s class libraries a build lacks for the player: a\n'
@@ -1491,6 +1500,9 @@ CONFIG_DOC = {
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
                "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\"",
+    'runtime_lowmem': "# more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there\n"
+                      "# unless set already): reductions of the picture, never of the game play (docs/porting.md,\n"
+                      "# \"Small handhelds\"), e.g. ASMPATCH_HK_BLUR = \"half\" with asmpatch's hk-blur",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
              '# they make put into the port folder (outputs = {"setup/files/x" = "build/x"}), and their licences\n'
              '# (licenses = {"LICENSE.x.txt" = "path"})',
@@ -1517,7 +1529,8 @@ def dump_toml(cfg, route=None):
     docs = dict(CONFIG_DOC, **(route.get('config_doc') or {}))
     out = ['# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).',
            '# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.', '']
-    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'runtime', 'files', 'build'):
+    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'runtime', 'runtime_lowmem',
+                                       'files', 'build'):
         val = cfg.get(sec, {})
         out.append(docs[sec])
         out.append(f'[{sec}]')
@@ -1637,6 +1650,14 @@ def port_env(cfg):
              '# sourced by the launcher. Edit to taste; a variable already set in the environment wins.']
     for k, v in cfg['runtime'].items():
         lines.append(f'[ -n "${{{k}+x}}" ] || export {k}={q(v)}')
+    low = cfg.get('runtime_lowmem') or {}
+    if low:
+        lines += ['# handhelds with 1 GB of RAM or less: a smaller picture, the same game (set a variable above, or',
+                  '# in the environment, e.g. to "" or "full", and that wins)',
+                  "mem_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null)",
+                  'if [ "${mem_mb:-0}" -gt 0 ] && [ "${mem_mb:-0}" -le 1024 ]; then']
+        lines += [f'  [ -n "${{{k}+x}}" ] || export {k}={q(v)}' for k, v in low.items()]
+        lines.append('fi')
     return '\n'.join(lines) + '\n'
 
 
