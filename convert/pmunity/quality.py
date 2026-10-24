@@ -27,7 +27,7 @@ Built-in render pipeline (QualitySettings, every level; the scenes' lights; shad
   shadow_cascades  2: cap on the directional light's cascades (at least 2: no variant change)
   msaa             0: cap on QualitySettings.antiAliasing (URP: m_MSAA 1)
   anisotropic      1: cap on anisotropic filtering (2 = forced on, 1 = per texture)
-  soft_particles   false: soft particles off
+  soft_particles   false: soft particles off, where every SOFTPARTICLES_ON variant has its twin
   standard_lod150  true: the Standard shaders' (Standard, Standard (Specular setup), Autodesk
                    Interactive) LOD-150 SubShader first, which Unity then takes: Unity's own mobile
                    class (BRDF3, no box projection or probe blending, no parallax or detail normal
@@ -35,17 +35,21 @@ Built-in render pipeline (QualitySettings, every level; the scenes' lights; shad
   hdr_format       false (opt-in): the graphics tiers' HDR target R11G11B10 instead of FP16 (no alpha
                    channel: image effects that keep data in it break)
 
-URP (every UniversalRenderPipelineAsset the build uses, its renderers' features, volume profiles):
+URP (every UniversalRenderPipelineAsset in the data, the SSAO renderer features, volume profiles' components):
   urp_shadow_resolution 2048: cap on the main and additional lights' shadow atlas
   urp_soft_shadows  'low': soft shadow quality Low (URP 14+), where no variant needs to change
   ssao             true: Downsample on, the cheapest blur, the fewest samples a variant in the data has
-  post             ['ChromaticAberration', 'LensDistortion', 'FilmGrain', 'MotionBlur']: volume
-                   components switched off (not when the game's code or animations drive volumes)
+  post             ['ChromaticAberration', 'LensDistortion', 'MotionBlur']: volume
+                   components switched off (not when the game's code or animations drive volumes;
+                   film grain stays: it costs one fetch in the uber pass and dithers dark gradients,
+                   which band without it)
   render_scale     None: cap on m_RenderScale (e.g. 0.75; ua_host's display scaling is the general way)
 
   dry_run          true: log what would change, write nothing (`--set quality.dry_run=true`)
 
-Every change is logged; `quality: <what>` lines name what was found and left alone, and why.
+Every change is logged; `quality: kept: <what>` lines name what was found and left alone, and why.
+The caps on QualitySettings go into the journal (.pmunity.json), from where android-data writes
+them into android_package.json for ua_host (runtime/host/quality.c).
 """
 import os
 import re
@@ -59,7 +63,7 @@ DEFAULTS = {'profile': 'auto', 'ram_mb': 1536,
             'pixel_lights': 1, 'shadow_resolution': 1, 'hard_shadows': True, 'shadow_cascades': 2, 'msaa': 0,
             'anisotropic': 1, 'soft_particles': False, 'standard_lod150': True, 'hdr_format': False,
             'urp_shadow_resolution': 2048, 'urp_soft_shadows': 'low', 'ssao': True,
-            'post': ['ChromaticAberration', 'LensDistortion', 'FilmGrain', 'MotionBlur'], 'render_scale': None,
+            'post': ['ChromaticAberration', 'LensDistortion', 'MotionBlur'], 'render_scale': None,
             'dry_run': False}
 
 STANDARD = ('Standard', 'Standard (Specular setup)', 'Standard (Roughness setup)', 'Autodesk Interactive')
