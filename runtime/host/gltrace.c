@@ -537,14 +537,75 @@ static void draw_state(char *out, size_t n)
     drain_errors();
 }
 
+// the draw's buffers: " | vao <n> a<loc>=b<buffer>+<offset> ... e=b<buffer> u<block>=b<buffer>+<offset>/<size>" (vertex
+// attributes of the program that are arrays, the element buffer, the uniform blocks' ranges): whether the vertex and
+// constant data of a draw are the same buffers and offsets from frame to frame
+#define GL_VERTEX_ARRAY_BINDING 0x85B5
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING 0x8895
+#define GL_ACTIVE_ATTRIBUTES 0x8B89
+#define GL_VERTEX_ATTRIB_ARRAY_ENABLED 0x8622
+#define GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING 0x889F
+#define GL_VERTEX_ATTRIB_ARRAY_POINTER 0x8645
+#define GL_ACTIVE_UNIFORM_BLOCKS 0x8A36
+#define GL_UNIFORM_BLOCK_BINDING 0x8A3F
+#define GL_UNIFORM_BUFFER_BINDING 0x8A28
+#define GL_UNIFORM_BUFFER_START 0x8A29
+#define GL_UNIFORM_BUFFER_SIZE 0x8A2A
+static void (*r_GetActiveAttrib)(GLuint, GLuint, GLsizei, GLsizei *, GLint *, GLenum *, char *);
+static GLint (*r_GetAttribLocation)(GLuint, const char *);
+static void (*r_GetVertexAttribiv)(GLuint, GLenum, GLint *);
+static void (*r_GetVertexAttribPointerv)(GLuint, GLenum, void **);
+static void (*r_GetActiveUniformBlockiv)(GLuint, GLuint, GLenum, GLint *);
+static void (*r_GetIntegeri_v)(GLenum, GLuint, GLint *);
+static void (*r_GetInteger64i_v)(GLenum, GLuint, int64_t *);
+static void buffers(GLuint prog, char *out, size_t n)
+{
+    size_t o = 0;
+    out[0] = 0;
+    if (!prog || !r_GetActiveAttrib || !r_GetAttribLocation || !r_GetVertexAttribiv || !r_GetVertexAttribPointerv) return;
+    GLint vao = 0, na = 0, eb = 0;
+    r_GetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+    o += (size_t)snprintf(out + o, n - o, " | vao %d", vao);
+    r_GetProgramiv(prog, GL_ACTIVE_ATTRIBUTES, &na);
+    for (GLint i = 0; i < na && i < 16 && o + 40 < n; i++) {
+        char name[64]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
+        r_GetActiveAttrib(prog, (GLuint)i, sizeof name, &len, &size, &type, name);
+        GLint loc = r_GetAttribLocation(prog, name), en = 0, b = 0;
+        if (loc < 0) continue;                  // (gl_VertexID and the like)
+        r_GetVertexAttribiv((GLuint)loc, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &en);
+        if (!en) { o += (size_t)snprintf(out + o, n - o, " a%d=const", loc); continue; }
+        void *p = NULL;
+        r_GetVertexAttribiv((GLuint)loc, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &b);
+        r_GetVertexAttribPointerv((GLuint)loc, GL_VERTEX_ATTRIB_ARRAY_POINTER, &p);
+        o += (size_t)snprintf(out + o, n - o, " a%d=b%d+%ld", loc, b, (long)(intptr_t)p);
+    }
+    r_GetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &eb);
+    if (eb) o += (size_t)snprintf(out + o, n - o, " e=b%d", eb);
+    GLint nb = 0;
+    if (r_GetActiveUniformBlockiv && r_GetIntegeri_v) r_GetProgramiv(prog, GL_ACTIVE_UNIFORM_BLOCKS, &nb);
+    for (GLint i = 0; i < nb && i < 16 && o + 40 < n; i++) {
+        GLint bind = 0, b = 0;
+        int64_t start = 0, size = 0;
+        r_GetActiveUniformBlockiv(prog, (GLuint)i, GL_UNIFORM_BLOCK_BINDING, &bind);
+        r_GetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, (GLuint)bind, &b);
+        if (r_GetInteger64i_v) {
+            r_GetInteger64i_v(GL_UNIFORM_BUFFER_START, (GLuint)bind, &start);
+            r_GetInteger64i_v(GL_UNIFORM_BUFFER_SIZE, (GLuint)bind, &size);
+        }
+        o += (size_t)snprintf(out + o, n - o, " u%d=b%d+%lld/%lld", i, b, (long long)start, (long long)size);
+    }
+    drain_errors();
+}
+
 static void log_draw(long verts, int inst)
 {
     if (g_events >= g_draws_max) return;
     int i = g_events++;
     GLint prog = 0;
     r_GetIntegerv(GL_CURRENT_PROGRAM, &prog);
-    char smp[1024], px[160], st[128];
+    char smp[1024], px[160], st[128], bf[512];
     draw_state(st, sizeof st);
+    buffers((GLuint)prog, bf, sizeof bf);
     samplers((GLuint)prog, smp, sizeof smp);
     after(px, sizeof px);
     uint64_t vs = prog >= 0 && prog < MAX_PROG && g_vs_hash ? g_vs_hash[prog] : 0;
@@ -553,7 +614,37 @@ static void log_draw(long verts, int inst)
     if (vs) snprintf(vh, sizeof vh, "%016llx", (unsigned long long)vs);
     if (fs) snprintf(fh, sizeof fh, "%016llx", (unsigned long long)fs);
     if (inst > 1) snprintf(ni, sizeof ni, "x%d", inst);
-    fprintf(stderr, "[gl]   #%d draw fb%u prog%d vs %s fs %s %ld%s%s %s%s\n", i, g_cur_fb, prog, vh, fh, verts, ni, smp, px, st);
+    fprintf(stderr, "[gl]   #%d draw fb%u prog%d vs %s fs %s %ld%s%s %s%s%s\n", i, g_cur_fb, prog, vh, fh, verts, ni, smp, px, st, bf);
+}
+
+// a buffer upload of the traced frame: "#<n> upload <call> b<buffer> +<offset> <bytes>[ access <bits>]"
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_UNIFORM_BUFFER 0x8A11
+#define GL_COPY_READ_BUFFER 0x8F36
+#define GL_COPY_WRITE_BUFFER 0x8F37
+#define GL_PIXEL_UNPACK_BUFFER 0x88EC
+#define GL_ARRAY_BUFFER_BINDING 0x8894
+#define GL_COPY_READ_BUFFER_BINDING 0x8F36
+#define GL_COPY_WRITE_BUFFER_BINDING 0x8F37
+#define GL_PIXEL_UNPACK_BUFFER_BINDING 0x88EF
+static GLint bound_buffer(GLenum t)
+{
+    GLenum q = t == GL_ARRAY_BUFFER ? GL_ARRAY_BUFFER_BINDING : t == GL_ELEMENT_ARRAY_BUFFER ? GL_ELEMENT_ARRAY_BUFFER_BINDING :
+               t == GL_UNIFORM_BUFFER ? GL_UNIFORM_BUFFER_BINDING : t == GL_COPY_READ_BUFFER ? GL_COPY_READ_BUFFER_BINDING :
+               t == GL_COPY_WRITE_BUFFER ? GL_COPY_WRITE_BUFFER_BINDING : t == GL_PIXEL_UNPACK_BUFFER ? GL_PIXEL_UNPACK_BUFFER_BINDING :
+               t == GL_PIXEL_PACK_BUFFER ? GL_PIXEL_PACK_BUFFER_BINDING : 0;
+    GLint b = -1;
+    if (q) r_GetIntegerv(q, &b);
+    return b;
+}
+static void log_upload(const char *call, GLenum t, long off, long len, long access)
+{
+    if (!g_draws_max || g_events >= g_draws_max) return;
+    int i = g_events++;
+    char a[32] = "";
+    if (access >= 0) snprintf(a, sizeof a, " access %lx", access);
+    fprintf(stderr, "[gl]   #%d upload %s b%d +%ld %ld%s\n", i, call, bound_buffer(t), off, len, a);
 }
 
 static void log_clear(GLbitfield m)
@@ -725,9 +816,23 @@ static void w_DrawArraysIndirect(GLenum m, const void *p) { r_DrawArraysIndirect
 static void (*r_DrawElementsIndirect)(GLenum, GLenum, const void *);
 static void w_DrawElementsIndirect(GLenum m, GLenum t, const void *p) { r_DrawElementsIndirect(m, t, p); draw(D_DrawElementsIndirect, 0, 1, 1, 1); }
 
-static void w_BufferData(GLenum t, GLsizeiptr s, const void *d, GLenum u) { r_BufferData(t, s, d, u); if (ON && d) g_buf_bytes += s; }
-static void w_BufferSubData(GLenum t, GLintptr o, GLsizeiptr s, const void *d) { r_BufferSubData(t, o, s, d); if (ON) g_buf_bytes += s; }
-static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a) { if (ON) g_buf_bytes += l; return r_MapBufferRange(t, o, l, a); }
+static void w_BufferData(GLenum t, GLsizeiptr s, const void *d, GLenum u)
+{ r_BufferData(t, s, d, u); if (ON && d) g_buf_bytes += s; if (ON) log_upload(d ? "BufferData" : "BufferData(null)", t, 0, (long)s, -1); }
+static void w_BufferSubData(GLenum t, GLintptr o, GLsizeiptr s, const void *d)
+{ r_BufferSubData(t, o, s, d); if (ON) { g_buf_bytes += s; log_upload("BufferSubData", t, (long)o, (long)s, -1); } }
+static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a)
+{ if (ON) { g_buf_bytes += l; log_upload("MapBufferRange", t, (long)o, (long)l, (long)a); } return r_MapBufferRange(t, o, l, a); }
+static void (*r_FlushMappedBufferRange)(GLenum, GLintptr, GLsizeiptr);
+static void w_FlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr l)
+{ r_FlushMappedBufferRange(t, o, l); if (ON) log_upload("FlushMappedBufferRange", t, (long)o, (long)l, -1); }
+static unsigned char (*r_UnmapBuffer)(GLenum);
+static unsigned char w_UnmapBuffer(GLenum t) { if (ON) log_upload("UnmapBuffer", t, 0, 0, -1); return r_UnmapBuffer(t); }
+static void (*r_BufferStorageEXT)(GLenum, GLsizeiptr, const void *, GLbitfield);
+static void w_BufferStorageEXT(GLenum t, GLsizeiptr s, const void *d, GLbitfield f)
+{ r_BufferStorageEXT(t, s, d, f); if (ON) log_upload("BufferStorageEXT", t, 0, (long)s, (long)f); }
+static void (*r_CopyBufferSubData)(GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr);
+static void w_CopyBufferSubData(GLenum rt, GLenum wt, GLintptr ro, GLintptr wo, GLsizeiptr s)
+{ r_CopyBufferSubData(rt, wt, ro, wo, s); if (ON) log_upload("CopyBufferSubData", wt, (long)wo, (long)s, -1); }
 static void w_TexImage2D(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLint b, GLenum fm, GLenum ty, const void *p)
 { r_TexImage2D(t, l, f, w, h, b, fm, ty, p); if (ON && p) g_tex_bytes += (long)w * h * 4; }
 static void w_TexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *p)
@@ -917,6 +1022,17 @@ const so_shim *gltrace_table(void)
             r_GetUniformLocation = real("glGetUniformLocation");
             r_GetUniformiv = real("glGetUniformiv");
             r_IsEnabled = real("glIsEnabled");
+            r_GetActiveAttrib = real("glGetActiveAttrib");
+            r_GetAttribLocation = real("glGetAttribLocation");
+            r_GetVertexAttribiv = real("glGetVertexAttribiv");
+            r_GetVertexAttribPointerv = real("glGetVertexAttribPointerv");
+            r_GetActiveUniformBlockiv = real("glGetActiveUniformBlockiv");
+            r_GetIntegeri_v = real("glGetIntegeri_v");
+            r_GetInteger64i_v = real("glGetInteger64i_v");
+            W("glFlushMappedBufferRange", r_FlushMappedBufferRange, w_FlushMappedBufferRange);
+            W("glUnmapBuffer", r_UnmapBuffer, w_UnmapBuffer);
+            W("glBufferStorageEXT", r_BufferStorageEXT, w_BufferStorageEXT);
+            W("glCopyBufferSubData", r_CopyBufferSubData, w_CopyBufferSubData);
             g_vs_hash = calloc(MAX_PROG, sizeof *g_vs_hash);
             g_fs_hash = calloc(MAX_PROG, sizeof *g_fs_hash);
             W("glAttachShader", r_AttachShader, w_AttachShader);

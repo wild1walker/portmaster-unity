@@ -172,7 +172,21 @@ void glGetShaderSource(unsigned sh, int n, int *len, char *out)
     memcpy(out, src(sh), (size_t)l); out[l] = 0;
     if (len) *len = l;
 }
-void glGetProgramiv(unsigned prog, unsigned p, int *v) { if (p == GL_ACTIVE_UNIFORMS) *v = prog == 5 ? 2 : 0; }
+void glGetProgramiv(unsigned prog, unsigned p, int *v)
+{
+    if (p == GL_ACTIVE_UNIFORMS) *v = prog == 5 ? 2 : 0;
+    if (p == 0x8B89) *v = prog == 5 ? 1 : 0;                     // GL_ACTIVE_ATTRIBUTES
+    if (p == 0x8A36) *v = 0;                                     // GL_ACTIVE_UNIFORM_BLOCKS
+}
+// its attribute in_POSITION0 (location 0) reads buffer 4 from byte 16
+void glGetActiveAttrib(unsigned prog, unsigned i, int n, int *len, int *size, unsigned *type, char *name)
+{ (void)prog; (void)i; (void)n; strcpy(name, "in_POSITION0"); *len = 12; *size = 1; *type = 0x8B52; }
+int glGetAttribLocation(unsigned prog, const char *name) { (void)prog; return !strcmp(name, "in_POSITION0") ? 0 : -1; }
+void glGetVertexAttribiv(unsigned i, unsigned p, int *v) { *v = i != 0 ? 0 : p == 0x8622 ? 1 : p == 0x889F ? 4 : 0; }
+void glGetVertexAttribPointerv(unsigned i, unsigned p, void **v) { (void)i; (void)p; *v = (void *)(intptr_t)16; }
+void glGetActiveUniformBlockiv(unsigned prog, unsigned i, unsigned p, int *v) { (void)prog; (void)i; (void)p; *v = 0; }
+void glGetIntegeri_v(unsigned p, unsigned i, int *v) { (void)p; (void)i; *v = 0; }
+void glGetInteger64i_v(unsigned p, unsigned i, int64_t *v) { (void)p; (void)i; *v = 0; }
 void glGetActiveUniform(unsigned prog, unsigned i, int n, int *len, int *size, unsigned *type, char *name)
 {
     (void)prog; (void)n;

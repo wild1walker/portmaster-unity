@@ -1,6 +1,6 @@
 // gltrace.c check against fake_trace_gl.c (as libGLESv2.so.2): a traced frame's pass summary, and
 // with UA_GL_TRACE_DRAWS its clears, draws and blits one by one (colour buffer, program and shader
-// hashes, samplers, pixels read back), with Unity's bindings as they were after each read; without
+// hashes, samplers, pixels read back, the vertex attributes' buffers), with Unity's bindings as they were after each read; without
 // it no such lines and no glAttachShader wrapper; UA_GL_TRACE_DRAWS=<n> logs the first n only.
 // Every draw entry point counts (Range, BaseVertex OES, Instanced BaseVertex, MultiDraw, Indirect),
 // copies too. GPU times (EXT_disjoint_timer_query in the fake's extension string): one query per
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
             snprintf(want, sizeof want, "#1 draw fb3 prog5 vs %016llx fs %016llx 3 _MainTex=2:tex11 -> (0.25,0.5,0.75,1)",
                      (unsigned long long)fnv("void main() { gl_Position = vec4(0.0); }"), (unsigned long long)fnv("void main() {}"));
             CHECK(has(log, want));
-            CHECK(has(log, "(0.25,0.5,0.75,1) | depth off stencil off blend sa,1-sa\n"));
+            CHECK(has(log, "(0.25,0.5,0.75,1) | depth off stencil off blend sa,1-sa | vao 0 a0=b4+16\n"));
             CHECK(has(log, "#2 blit fb3 -> fb0 (0,0,64,32) -> (0,0,720,480) C -> (10,20,30,255)"));
             CHECK(has(log, "#3 draw fb0 prog5"));
             CHECK(has(log, "6 _MainTex=2:tex11 -> (10,20,30,255) (10,20,30,255)"));
