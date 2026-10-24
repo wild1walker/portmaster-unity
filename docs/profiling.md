@@ -14,6 +14,8 @@ whole measured session:
 | what the GPU does, pass by pass, and what each pass costs | `UA_GL_TRACE=<s>` (+ `UA_GL_TRACE_DRAWS`, `UA_SHADER_DUMP`): below, [GPU, pass by pass](#gpu-pass-by-pass) |
 | how many of the sprites' fragments sample only transparent texels | `tools/device/deadfrags.py` + `UA_SHADER_OVERRIDE`: [below](#sprites-transparent-texels-kings-pass-2026-10-23) |
 | which of the GPU's units a frame or a shader keeps busy (arithmetic, texturing, varyings, tile writes, memory) | `runtime/host/gpucnt` (the Mali's hardware counters; `GPUCNT=1` in a bench run): [below](#gpu-counters-gpucnt) |
+| what a pass's loads and stores cost the GPU itself | `runtime/host/passbench` on the device: [below](#what-a-pass-costs-on-the-mali-g31-passbench) |
+| which passes, loads and stores a frame could do without | `tools/analysis/framegraph.py` on a `UA_GL_TRACE_DRAWS` log; the GL calls a frame makes, by entry point: `UA_GL_REC=census` ([holding the whole frame](#holding-the-whole-frame-ua_gl_rec)) |
 
 ## UA_PROF: the sampling profiler
 
@@ -868,3 +870,134 @@ Not built:
   thermal cap 99 - 100 % of the measured time and the per-pass GPU times adding up to the frame,
   these waits are the GPU's backpressure, not stalls that leave it idle: a change of the call
   pattern cannot give the frame more GPU time; only less GPU work can.
+
+## Holding the whole frame (UA_GL_REC)
+
+The question (2026-10-23): a tiler pays for every pass (a load of each attachment it does not clear
+or invalidate first, a store of each at the pass's end) and the driver sees the frame one call at a
+time. ua_host sits between Unity and the driver: holding a whole frame's calls until the swap, it
+would know, for each pass, what comes after it, and could submit an equivalent stream that is
+cheaper: passes whose results are overwritten before anything reads them left out, invalidates
+where an attachment is not read again (no store) or not needed at a pass's start (no load), passes
+on one framebuffer separated by independent ones submitted next to each other. Measured first from
+the traces, then built (`UA_GL_REC`, [runtime.md](runtime.md)) and measured on the handheld. In
+short: holding the frame costs nothing that can be measured; the frame graph finds little to change
+in these games: White Mirror +2.2 % (two clear-only passes a frame made part of the passes after
+them), Hollow Knight and the others nothing. Off by default.
+
+### What the traced frames could give (framegraph.py)
+
+`tools/analysis/framegraph.py <UA_GL_TRACE_DRAWS run.log> --gpu <UA_GL_TRACE_GPU run.log>` reads a
+traced frame's passes and draws and lists what a replay could do without changing a pixel: dead
+passes; stores nobody needs (an attachment not read before a later whole clear or invalidate in the
+frame, or before the swap for the window's depth/stencil); depth/stencil loads a pass does not test
+and nothing needs afterwards; passes on one framebuffer with no chain of dependencies through the
+passes between them (textures sampled, blit and copy sources, attachments loaded and written). A
+texture keeps its contents into the next frame, so only what is overwritten within the frame
+counts; a colour load always counts as needed (whether a pass's draws cover every pixel is not in
+the trace).
+
+| game (scene, traced on the RG34XX-SP) | passes | what a replay could change |
+|---|---|---|
+| Hollow Knight (King's Pass, 64-bit) | 24 | the two window passes (the black bars, the final copy) could be one: nothing between them reads the window; the window's depth/stencil is written by the bars, never tested, and loaded by the final pass; one blur target's depth is stored and invalidated by the next pass on it. Nothing is dead: every texture written is read in the frame |
+| White Mirror (in game, two cameras) | 22 | one dead pass a frame: a 360x120 copy of the camera's colour that nothing samples (URP's downsampled opaque texture), written again by the second camera before anything reads it (the second copy is read by nothing either, but only the next frame could show that); the camera's target cleared in a pass of its own, then a 4x4 clear on another framebuffer, then the drawing pass on the first: the clear can go into the drawing pass (twice a frame); the second window pass loads the window's depth/stencil without testing it |
+| The Third Eye (first scene) | 35 | nothing: URP invalidates every target at its passes' starts; the two cameras' 1x1 depth targets are cleared and sampled (empty shadow maps) |
+| Phasing Gun, Chapéu de Papel, Cell Machine, Arthur's Nightmare | 9, 3, 22, 7 | nothing (Chapéu's cleared colour target is sampled by the scene's draws); at most the window's depth/stencil at the frame's end, which the swap discards anyway |
+| Cuphead (Forest Follies, 64-bit) | 4 | nothing: the scene, the two film effects, the copy into the window, each read by the next |
+
+These frames' GPU time is shading (Hollow Knight's scene sub-passes, the URP games' SSAO, bloom and
+uber passes, Phasing Gun's 2048x2048 shadow map and its screen-space pass), not what a replay can
+leave out. The one merge of passes with draws (Hollow Knight's two window passes) is not done here:
+it needs the GL state moved with the pass, and it is one game's case.
+
+### What a pass costs on the Mali-G31 (passbench)
+
+`runtime/host/passbench [seconds] [width height] [ballast ms]` (a device check, built with the host;
+EmulationStation stopped, as the bench does): frames of 16 passes on offscreen targets of 720x450
+(RGBA8, a D24S8 texture), alternating the target measured with a colour-only one cleared and
+invalidated, one 16x16 quad each unless the case says otherwise, run back to back (a `glFinish`
+every 8 frames) behind a ballast pass of about 4 ms that keeps the GPU busy, so its governor holds
+696 MHz; each case's time a frame against the ballast's alone. Read the differences between cases:
+the absolute times carry a constant that the frames' mix adds (about 22 ms with any case, not
+understood), the same in every case. 2026-10-24, 696 MHz throughout:
+
+| what (8 passes a frame of the target measured) | cost |
+|---|---|
+| a pass that clears and invalidates its attachments (16 a frame: 8 or 32 make no difference) | nothing measurable on the GPU (its submission, about 25 us of CPU) |
+| a colour store of a 720x450 target whose tiles all changed | 0.18 ms (0.56 ns a pixel) |
+| a colour load of it (the store then mostly skipped: unchanged tiles are not written) | 0.19 ms |
+| a depth/stencil store (the buffer cleared, never written) / its load, tested or not | 0.035 ms / nothing measurable |
+| eight quads in one pass instead of eight passes (each with a load and a store) | 1.25 ms less: 0.18 ms a pass |
+| a full-screen copy into the target, stored / its output invalidated | 0.30 ms / nothing (the driver skips a pass whose results are all invalidated) |
+
+What a replay can save is therefore colour traffic, about 0.2 ms per 720x450 load or store a frame,
+and nearly nothing in depth/stencil (as invalidating Hollow Knight's depth/stencil when its camera
+leaves the framebuffer gave nothing over `UA_GL_DSCLEAR`; that `UA_GL_DSCLEAR` itself gained 1.8 ms a
+frame is not explained by these loads). A pass whose attachments are all invalidated already costs
+nothing. By these costs `framegraph.py` puts White Mirror's changes at about 0.6 ms a frame (2.5 %),
+Hollow Knight's at 0.5 ms (0.44 of it the two window passes made one), the others' at 0.03 ms.
+
+### The recorder (UA_GL_REC)
+
+What a frame asks of the driver, `UA_GL_REC=census` (Hollow Knight, King's Pass): about 2,000 GL calls
+a frame, the most `glVertexAttribPointer` (282), `glBindTexture` (198), `glBindBuffer` (192),
+`glUniform4fv` (153), and 144 each of `glMapBufferRange`, `glFlushMappedBufferRange` and
+`glUnmapBuffer`: Unity writes its dynamic geometry through a map of its vertex buffer for nearly
+every draw (90 draws; White Mirror: 44 maps for 25 draws). A call that returns something ends what a
+recorder can hold, so one that made the maps at once held one draw at a time (150 submissions a
+frame, measured: the frame graph then saw single passes); holding the maps too (the game writes host
+memory, the flushed ranges go into the real mapping when it is submitted) leaves one held frame a
+frame, submitted at the swap: 2,000 calls, 69 KB of commands and 136 KB of data in Hollow Knight,
+720 calls in White Mirror. What else ends a held frame: one `glFenceSync` a frame (a wait on a fence
+or its deletion needs nothing submitted: a fence is only made once what came before it is in the
+driver), texture definitions, shader and program management.
+
+On the RG34XX-SP (Hollow Knight 64-bit, runs one after another from a warm handheld, 2026-10-23; White
+Mirror 32-bit, every run from 47 - 48 C, 2026-10-24):
+
+| game, run | fps | GPU clock | render thread (% of a core) | frame graph |
+|---|---|---|---|---|
+| Hollow Knight, baseline (warm start) | 32.6, 32.8 | 600 MHz 96 - 99 % | 62, 61 | |
+| census | 32.5 | 600 MHz 97 % | 63 | |
+| recorder, maps made at once (150 submissions a frame) | 32.3 | 600 MHz 95 % | 65 | |
+| frame graph, maps made at once | 31.8 | 600 MHz 87 % | 72 | the graph's work 150 times a frame |
+| frame graph, maps held (one held frame a frame) | 32.8 | 600 MHz 94 % | 58 | 0.3 ms a frame |
+| White Mirror, baseline (cool start) | 42.8, 42.7; 42.7, 42.8 | 696 MHz 99 - 100 % | 40, 41; 40, 40 | |
+| frame graph, clear passes not yet sunk (a check too strict, since fixed) | 43.1, 43.0 | 696 MHz 100 % | 40, 40 | 0.17 ms a frame |
+| frame graph | 43.7, 43.7 | 696 MHz 100 % | 39, 39 | 0.16 ms a frame |
+
+Holding the whole frame and submitting it at the swap costs nothing that shows: the GPU starts each
+frame later, but it is still busy with the one before. In Hollow Knight the frame graph finds every
+frame what the trace analysis found: 24 passes, nothing dead, nothing to sink; the window's
+depth/stencil invalidated at the end of the bars' pass and at the start and end of the final copy,
+a blur target's depth at its end (two end and one start invalidates a frame). They save depth/stencil
+traffic, which costs the Mali little (passbench above), and the frame rate does not move. In White
+Mirror it sinks the two clear-only passes into the passes that draw on their framebuffer (each
+camera's target: a 720x240 store and a load fewer, twice), invalidates four attachments at their
+pass's end (three depth/stencil, and the colour of the dead opaque-texture copy, which the driver
+then skips: passbench's last line) and two depth/stencil buffers at a pass's start: 42.7 - 42.8 ->
+43.7 fps (+2.2 %, two runs each, interleaved, every run from 48 C at 696 MHz throughout); the
+invalidates alone gave +0.7 %. The copy is not left out: the game binds a shader storage buffer or
+an image, and after that the frame graph leaves no pass out (a draw could write through it); its
+invalidated output costs nothing anyway.
+
+Pictures. Of the pixels static in both runs compared (two screenshots a second apart in each run):
+Hollow Knight, baseline against the frame graph 0.73 % differ (1 - 2 of 255 for 96 % of them, at most
+43), two baseline runs 0.66 % (at most 67), the frame graph against the second baseline 0.55 %: the
+same, at the edges of the scene's animated foliage and particles. White Mirror, two baseline runs: 0
+and 22 pixels differ; the frame graph against a baseline: 1, 15, 45 and 143 pixels, in the game's
+on-screen clock (its digits and their reflection) or within a few levels of 255 beside them: runs that
+reach the screenshot at another moment of the game's clock.
+
+Cuphead (Forest Follies, 64-bit, the port's test hooks): 4 passes (the scene, the two film effects,
+the copy into the window), nothing to change, and the level runs 55.6 fps with UnityMain 97 % busy:
+not GPU-bound.
+
+What did not pay, or was not done:
+
+| change | result |
+|---|---|
+| holding the frame (`UA_GL_REC=1`), maps made at once | Hollow Knight 32.3 against 32.6 fps, render thread +3 % of a core: no gain possible, a small cost |
+| the frame graph's invalidates (depth/stencil at pass ends and starts, a dead colour at its end) | Hollow Knight 32.8 against 32.8, White Mirror 43.0 - 43.1 against 42.7 - 42.8: noise to +0.7 % (the clear-pass sinking is what gives White Mirror its +2.2 %) |
+| merging two passes on one framebuffer that have draws (Hollow Knight's two window passes: about 0.4 ms by passbench's costs) | not built: the moved pass needs the GL state of its original place (bindings, uniforms of shared programs, vertex arrays), and it is one game's pattern |
+| a default | none: off by default. Exact by construction (the fake driver's tests; pictures within the run-to-run floor), but of the seven games measured one gains (White Mirror +2.2 %), and a wrapper for every GL entry point is a large layer to put in front of every game: a candidate for a default only after the regression rig has run every game with it |

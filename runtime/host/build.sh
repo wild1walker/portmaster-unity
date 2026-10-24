@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the host programs: ua_host (loader + android shims + fake JNI + media core), and the device
-# checks egltest / sdltest / audiocheck / shadercheck, and gpucnt (GPU counters; static). Build ../loader, ../android, ../jni and ../media
+# checks egltest / passbench / sdltest / audiocheck / shadercheck, and gpucnt (GPU counters; static). Build ../loader, ../android, ../jni and ../media
 # first for the same ARCH (../build.sh does).
 #   ARCH=armhf (default): cross-compiled for the device's 32-bit userland in the ua-host-armhf image
 #     -> out/
@@ -18,7 +18,7 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof threads futex gltrace glopt glpass glrename msaafix display display_sdl fbdev steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget glhooks hitches prof threads futex gltrace glopt glpass glrename glrec glrec_fg msaafix display display_sdl fbdev steamstub plugins plugstubs; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
     # dl_iterate_phdr (docs/arm64.md): no flags for that. ioctl is exported (fbdev.c interposes the
@@ -35,6 +35,7 @@ if [ "$ARCH" = arm64 ]; then
       echo "ua_host not linked: no arm64 loader yet ($LOADER); objects compiled in $O"
     fi
     gcc -O2 -Wall -o $O/egltest egltest.c -lEGL -lGLESv2
+    gcc -O2 -Wall -o $O/passbench passbench.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/sdltest sdltest.c -lSDL2
     gcc -O2 -Wall -o $O/audiocheck audiocheck.c -lSDL2
     gcc -O2 -Wall -o $O/shadercheck shadercheck.c -lEGL -lGLESv2
@@ -63,6 +64,8 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c glopt.c -o out/glopt.o
   arm-linux-gnueabihf-gcc $F -c glpass.c -o out/glpass.o
   arm-linux-gnueabihf-gcc $F -c glrename.c -o out/glrename.o
+  arm-linux-gnueabihf-gcc $F -c glrec.c -o out/glrec.o
+  arm-linux-gnueabihf-gcc $F -c glrec_fg.c -o out/glrec_fg.o
   arm-linux-gnueabihf-gcc $F -c msaafix.c -o out/msaafix.o
   arm-linux-gnueabihf-gcc $F -c display.c -o out/display.o
   arm-linux-gnueabihf-gcc $F -c display_sdl.c -o out/display_sdl.o
@@ -70,11 +73,12 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   arm-linux-gnueabihf-gcc $F -c steamstub.c -o out/steamstub.o
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glpass.o out/glrename.o out/msaafix.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glpass.o out/glrename.o out/glrec.o out/glrec_fg.o out/msaafix.o \
     out/display.o out/display_sdl.o out/fbdev.o out/steamstub.o out/plugins.o out/plugstubs.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/egltest egltest.c -lEGL -lGLESv2
+  arm-linux-gnueabihf-gcc -O2 -Wall -o out/passbench passbench.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/sdltest sdltest.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/audiocheck audiocheck.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/shadercheck shadercheck.c -lEGL -lGLESv2

@@ -27,6 +27,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "glopt.h"
 #include "glpass.h"
 #include "glrename.h"
+#include "glrec.h"
 #include "msaafix.h"
 #include "arch.h"
 #include "display.h"
@@ -379,6 +380,21 @@ static void *after_glrename(const char *name)
     void *p = find_shim(g_pass_shims, name);
     return p ? p : after_glpass(name);
 }
+// what glrec.c's wrappers call: glopt.c's wrapper of that name and the layers under it, in their
+// order (glopt.c's float-taking ones with the host's calling convention), else NULL (the driver's)
+static void *after_glrec(const char *name)
+{
+    void *h = glopt_hard(name);
+    if (h) return h;
+    void *p = find_shim(g_glopt_shims, name);
+    if (!p) p = after_glopt(name);
+    if (p) return p;
+    if (!strncmp(name, "egl", 3)) {
+        if ((p = find_shim(display_egl_shims(), name))) return p;
+        if ((p = find_shim(egl_shims, name))) return p;
+    }
+    return NULL;
+}
 
 // UnityMain, after each frame
 static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); prof_main_frame(); }
@@ -467,15 +483,21 @@ int main(int argc, char **argv)
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
-    // GL wrappers, each calling the next: the player -> glrename.c -> glpass.c -> glopt.c -> msaafix.c
-    // -> gltrace.c -> glhooks.c -> the driver
+    // GL wrappers, each calling the next: the player -> glrec.c (UA_GL_REC: it calls glopt.c's layer
+    // next, so glrename.c and glpass.c are left out while it is on) -> glrename.c -> glpass.c ->
+    // glopt.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
     g_glopt_shims = glopt_table(after_glopt);  // UA_GL_DSCLEAR
     g_pass_shims = glpass_table(after_glpass); // UA_GL_SAMECLEAR
-    so_add_shims(glrename_table(after_glrename));   // UA_GL_RENAME
+    const so_shim *rename = glrename_table(after_glrename);   // UA_GL_RENAME
+    const so_shim *rec = glrec_table(after_glrec);            // UA_GL_REC: above all of them
+    if (rec[0].name && (rename[0].name || g_pass_shims[0].name))
+        fprintf(stderr, "[host] UA_GL_REC is on: UA_GL_RENAME and UA_GL_SAMECLEAR are left out\n");
+    so_add_shims(rec);
+    so_add_shims(rename);
     so_add_shims(g_pass_shims);
     so_add_shims(g_glopt_shims);
     so_add_shims(g_msaa_shims);

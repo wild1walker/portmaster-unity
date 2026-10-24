@@ -20,6 +20,7 @@
 #include "glopt.h"
 #include "glpass.h"
 #include "glrename.h"
+#include "glrec.h"
 #include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
@@ -130,6 +131,7 @@ static void on_swap(void *ctx)
         checked = t;
         if (access(g_req, F_OK) == 0) { unlink(g_req); shot = 1; }
     }
+    glrec_swap();                               // the held frame to the driver first (UA_GL_REC)
     int osk_first = !shot || osk_in_shots(), cursor_first = shot && pointer_in_shots();
     if (osk_first) osk_draw();                  // the on-screen keyboard (nothing unless the game opened its own)
     int cursor = !osk_active();                 // no cursor while the keyboard has the pad
