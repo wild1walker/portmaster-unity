@@ -459,6 +459,18 @@ game"), within these runs' spread. Pictures: of the pixels static in both runs, 
 optimizations differs from the first base run on 2.11 % and 1.97 % (99 % of them by 1 - 3 of 255),
 the second base run on 2.00 %: the same picture.
 
+The 64-bit build on its Mono route ([mono-arm64.md](mono-arm64.md); the hk64 folder's APK and OBB, the
+port's assemblies from `UA_MONO64_MANAGED`, with and without the patched PlayMaker.dll), flat
+shaders, A B A B in one hold: **46.3 / 46.3 -> 48.3 / 47.9 fps (+3.9 %)**, UnityMain 95 - 96 % on a CPU
+in every run (its frame 20.6 -> 19.8 ms), frames over 25 ms 140 / 158 -> 105 / 115. The IL2CPP build
+compiles the patched IL into its code when it is built (`pmunity il2cpp --asmpatch`, as the
+il2cpp-arm64 route's setup runs asmpatch); Hollow Knight's IL2CPP build was not rebuilt with them
+here (about 2 GB of build space and an hour), so the IL2CPP figure is not measured.
+
+Game play with them (the bench's plan: title, the menus, Start Game, the save into King's Pass,
+then the Knight walks right into the next screen, jumps, walks back and attacks, six shots): as
+before, the tutorial's prompt showing, no exception in the log but the absent store plugins'.
+
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 
 Unity publishes symbol files for its Android players (`pmunity player fetch <version> --symbols`:

@@ -51,7 +51,8 @@ from a warm 69 C start 32.3 (600 MHz); one more busy CPU core took the Mali to 5
 [profiling.md](../profiling.md#the-handheld-around-the-game-2026-10-23).
 2026-10-24 (asmpatch's PlayMaker optimizations, exact, on by default for PlayMaker games:
 `playmaker-loopcount`, `playmaker-delayedevents`): with the GPU's work left out 49.3 / 48.9 -> 50.5 /
-50.7 fps (+3.1 %, UnityMain's frame 19.5 -> 18.9 ms); in game, GPU-bound, 35.3 / 33.8 against 35.0 /
+50.7 fps (+3.1 %, UnityMain's frame 19.5 -> 18.9 ms; the 64-bit build on its Mono route 46.3 / 46.3
+-> 48.3 / 47.9, +3.9 %); in game, GPU-bound, 35.3 / 33.8 against 35.0 /
 35.6 fps, per 100 MHz of the GPU's clock the same (5.31 / 5.41 against 5.35 / 5.33); pictures as two
 base runs (2.0 % of the static pixels by 1 - 3). Picture reductions for 1 GB handhelds (asmpatch's
 opt-in `hk-blur`, the 64-bit build on its Mono route, one run each, per 100 MHz): the game's own
@@ -157,7 +158,7 @@ Unity's arm64 IL2CPP player ([mono-arm64.md](../mono-arm64.md)); no IL2CPP compi
 | buggish | 2019.4.8f1 | title (75 - 170 fps under llvmpipe), 92 assemblies, 7,626 internal calls, Mono up 31 - 104 ms after `il2cpp_init` | **title 59.5 - 59.7 fps** (each second after the first; 57.6 over 21 s with the start), resident 255 MB, 677 MB available; Mono up 123 ms after `il2cpp_init` | 2026-10-24 |
 | Tom City | 2020.3.49f1 | title; as a port made with `--route mono-arm64`, its setup rehearsed on a 64-bit-only stand-in (1 GB) in 13 min (no compile), 324 MB installed, then the title | | 2026-10-23 |
 | Untitled Hook Game | 2021.3.16f1, URP | the first-launch name prompt at about 28 fps, as the IL2CPP build (about 30) | | 2026-10-23 |
-| Hollow Knight (GOG, Linux) | 6000.0.61f1 | first launch's language screen at 60 fps, 116 assemblies (the port's asmpatch patches applied to its assemblies), resident 1,543 - 1,573 MB as the IL2CPP build's in the same rig | **King's Pass 34.0 fps** (IL2CPP 34.4, the 32-bit port 35.2 in the same session, at their GPU clocks: GPU-bound); with flat fragment shaders 46.1 fps (IL2CPP 48.8, 32-bit 48.9: the main thread 6 % slower); resident 720 - 731 MB, 47 - 62 MB available, as the IL2CPP build ([mono-arm64.md](../mono-arm64.md#hollow-knight-on-the-handheld-the-mono-route-against-il2cpp-and-the-32-bit-port)) | 2026-10-24 |
+| Hollow Knight (GOG, Linux) | 6000.0.61f1 | first launch's language screen at 60 fps, 116 assemblies (the port's asmpatch patches applied to its assemblies), resident 1,543 - 1,573 MB as the IL2CPP build's in the same rig | **King's Pass 34.0 fps** (IL2CPP 34.4, the 32-bit port 35.2 in the same session, at their GPU clocks: GPU-bound); with flat fragment shaders 46.1 fps (IL2CPP 48.8, 32-bit 48.9: the main thread 6 % slower); resident 720 - 731 MB, 47 - 62 MB available, as the IL2CPP build ([mono-arm64.md](../mono-arm64.md#hollow-knight-on-the-handheld-the-mono-route-against-il2cpp-and-the-32-bit-port)). With asmpatch's PlayMaker optimizations, flat shaders, A B A B: 46.3 / 46.3 -> 48.3 / 47.9 fps (+3.9 %, [profiling.md](../profiling.md#playmakers-per-frame-work-asmpatch-optimizations)); the `hk-blur` reductions measured on this route ([profiling.md](../profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds)) | 2026-10-24 |
 
 ## Handheld benches (RG34XX-SP, 2026-10-23)
 

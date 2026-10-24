@@ -87,7 +87,9 @@ add, clear or change state while they are updated, a missing list) and a directe
 same counts, events and exceptions after every step patched and unpatched; game assemblies that
 write into a state array, pass it on, keep it in a field or write through their own wrapper of the
 getter leave it unpatched. The patches find the same shapes in Hollow Knight's PlayMaker.dll and in
-the free corpus's other PlayMaker game.
+the free corpus's other PlayMaker game. On the RG34XX-SP, Hollow Knight's King's Pass with the GPU's
+work left out: +3.1 % (32-bit), +3.9 % (64-bit, Mono route); in game it is GPU-bound and runs the same
+per MHz of the GPU's clock, with the same pictures ([docs/profiling.md](../../docs/profiling.md#playmakers-per-frame-work-asmpatch-optimizations)).
 
 ## Reductions
 
