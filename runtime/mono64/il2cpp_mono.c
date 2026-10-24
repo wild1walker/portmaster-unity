@@ -36,6 +36,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -596,7 +597,36 @@ static void init_mono(const char *domain_name)
           (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6);
 }
 
-API int il2cpp_init(const char *domain_name) { init_mono(domain_name); return 1; }
+// Mono turns faults in JIT code into NullReferenceExceptions with its SIGSEGV handler (and chains
+// to the one before it for other faults): one installed later by libunity takes them over
+static void *g_mono_segv;
+static void *signal_watch(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 60; i++) {
+        sleep(1);
+        struct sigaction sa;
+        sigaction(SIGSEGV, NULL, &sa);
+        if ((void *)sa.sa_sigaction != g_mono_segv) {
+            Dl_info di;
+            logf_("SIGSEGV's handler is no longer Mono's after %d s: %p (%s)", i + 1, (void *)sa.sa_sigaction,
+                  dladdr((void *)sa.sa_sigaction, &di) && di.dli_fname ? di.dli_fname : "?");
+            return NULL;
+        }
+    }
+    logf_("SIGSEGV's handler is Mono's 60 s after il2cpp_init");
+    return NULL;
+}
+
+API int il2cpp_init(const char *domain_name)
+{
+    init_mono(domain_name);
+    struct sigaction sa;
+    sigaction(SIGSEGV, NULL, &sa);
+    g_mono_segv = (void *)sa.sa_sigaction;
+    if (g_trace) { pthread_t t; pthread_create(&t, NULL, signal_watch, NULL); pthread_detach(t); }
+    return 1;
+}
 API int il2cpp_init_utf16(const Il2CppChar *domain_name)
 {
     char *n = utf16_to_utf8(domain_name);
