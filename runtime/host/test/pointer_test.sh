@@ -2,7 +2,8 @@
 # pointer.c's and osk.c's unit tests (test_pointer.c, test_osk.c with fake_gles.c as libGLESv2.so.2), each scenario in its
 # own process, msaafix.c's (test_msaafix.c with fake_msaa_gl.c as its libGLESv2.so.2), gltrace.c's (test_gltrace.c with
 # fake_trace_gl.c), glopt.c's (test_glopt.c with fake_opt_gl.c), glpass.c's (test_glpass.c with fake_pass_gl.c),
-# glrename.c's (test_glrename.c with fake_rename_gl.c) and glrec.c's (test_glrec.c with fake_rec_gl.c).
+# glrename.c's (test_glrename.c with fake_rename_gl.c), glrec.c's (test_glrec.c with fake_rec_gl.c) and
+# glmemo.c's (test_glmemo.c with fake_memo_gl.c).
 # ARCH=armhf (default): built in
 # ua-host-armhf, run in an arm/v7 container; ARCH=arm64: built and run in ua-build-arm64.
 set -e
@@ -32,8 +33,12 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrename test/test_glrename.c glrename.c $O/rename/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/rec
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/rec/libGLESv2.so.2 test/fake_rec_gl.c
-  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c $O/rec/libGLESv2.so.2 -ldl -lpthread'
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c $O/rec/libGLESv2.so.2 -ldl -lpthread
+  mkdir -p $O/memo
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/memo/libGLESv2.so.2 test/fake_memo_gl.c
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glmemo test/test_glmemo.c glmemo.c $O/memo/libGLESv2.so.2 -ldl -lpthread'
 RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach upload sink side opt'
+MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
     for s in off mouse touch keymap toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done
@@ -43,7 +48,8 @@ if [ "$ARCH" = arm64 ]; then
     for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread off; do LD_LIBRARY_PATH=\$O/opt \$O/test_glopt \$s; done
     for s in $PASS_TESTS; do LD_LIBRARY_PATH=\$O/pass \$O/test_glpass \$s; done
     for s in $RENAME_TESTS; do LD_LIBRARY_PATH=\$O/rename \$O/test_glrename \$s; done
-    for s in $RECS; do LD_LIBRARY_PATH=\$O/rec \$O/test_glrec \$s; done"
+    for s in $RECS; do LD_LIBRARY_PATH=\$O/rec \$O/test_glrec \$s; done
+    for s in $MEMO; do LD_LIBRARY_PATH=\$O/memo \$O/test_glmemo \$s; done"
   exit
 fi
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c "O=out/test CC=arm-linux-gnueabihf-gcc; $run"
@@ -55,4 +61,5 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
    for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread off; do LD_LIBRARY_PATH=out/test/opt out/test/test_glopt $s; done
    for s in '"$PASS_TESTS"'; do LD_LIBRARY_PATH=out/test/pass out/test/test_glpass $s; done
    for s in '"$RENAME_TESTS"'; do LD_LIBRARY_PATH=out/test/rename out/test/test_glrename $s; done
-   for s in '"$RECS"'; do LD_LIBRARY_PATH=out/test/rec out/test/test_glrec $s; done'
+   for s in '"$RECS"'; do LD_LIBRARY_PATH=out/test/rec out/test/test_glrec $s; done
+   for s in '"$MEMO"'; do LD_LIBRARY_PATH=out/test/memo out/test/test_glmemo $s; done'
