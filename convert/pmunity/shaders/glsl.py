@@ -32,12 +32,18 @@ default (`optimize`):
   * const-arrays: HLSLcc writes a constant table (blur weights, sample offsets) as a global array
     that main() fills element by element on every invocation (`ImmCB_0_0_0[0] = vec4(...);`). It
     becomes a `const` array with the same values, which the driver folds into the code.
-  * unroll: a loop with literal bounds (`for(int i = 0 ; i<7 ; i++)`, at most UNROLL_MAX trips)
-    whose body only computes (no break / continue / return / discard / declarations / nested
-    loop, the counter only read) is written out once per trip with the counter as a literal.
+  * unroll: a loop with literal bounds (`for(int i = 0 ; i<7 ; i++)`, at most UNROLL_MAX trips
+    and UNROLL_STATEMENTS statements written out in all) whose body only computes (no break /
+    continue / return / discard / declarations / nested loop, the counter only read) is written
+    out once per trip with the counter as a literal.
 
 On the RGSP's Mali-G31 both together make Cuphead's 7-tap blur passes ~4% cheaper (see
-tools/shadercheck -t); the rest of a pass is texture fetches.
+tools/shadercheck -t); the rest of a pass is texture fetches. A loop written out costs what the
+loop costs until the driver runs out of registers, and then several times more: URP's Bokeh tap
+(15 statements) written out 8 times costs the same as its loop, 12 times 4 times as much, 16
+times 10 times; the Post-processing Stack's 16-sample depth of field (22 statements) 2.7 times.
+Hence the statement limit (docs/shaders.md, "Exact rewrites for the Mali-G31's compiler"); a
+loop over it stays a loop, as HLSLcc wrote it.
 
 Programs that use what GLSL ES 3.10 has and 3.00 lacks (multisampled textures, texture gather,
 bit-field functions) raise NeedsES31; translated with es='310' (`#version 310 es`) they become
@@ -222,6 +228,7 @@ def _strip_comments(s):
 
 
 UNROLL_MAX = 16
+UNROLL_STATEMENTS = 120     # trips x statements of the body: as cheap as the loop up to here (Mali-G31)
 OPTIMIZE = ('const-arrays', 'unroll')
 _NUM = r'[-+]?(?:\d+\.?\d*(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?)[uU]?'
 _TYPES = r'(?:float|int|uint|bool|[biu]?vec[234]|mat[234](?:x[234])?)'
@@ -258,8 +265,9 @@ def const_arrays(src):
     return src, done
 
 
-def unroll(src, limit=UNROLL_MAX):
-    """Loops with literal bounds and a plain body -> one copy of the body per trip."""
+def unroll(src, limit=UNROLL_MAX, statements=UNROLL_STATEMENTS):
+    """Loops with literal bounds and a plain body -> one copy of the body per trip (at most `limit`
+    trips and `statements` statements written out)."""
     done = 0
     rx = re.compile(r'^([ \t]*)for\(int (\w+) = (?:int\()?(-?\d+)\)? ?; ?\2 ?(<|<=) ?(-?\d+) ?; ?\2\+\+\)\n\1\{\n', re.M)
     pos = 0
@@ -273,7 +281,8 @@ def unroll(src, limit=UNROLL_MAX):
             pos = m.end(); continue
         body = src[m.end():end.start()]
         trips = list(range(a, b + 1 if op == '<=' else b))
-        bad = (not 0 < len(trips) <= limit or '{' in body or '}' in body or
+        bad = (not 0 < len(trips) <= limit or len(trips) * body.count(';') > statements or
+               '{' in body or '}' in body or
                re.search(r'\b(break|continue|return|discard|for|while|do)\b', body) or
                re.search(r'^\s*(const\s+)?(highp |mediump |lowp )?%s\s+\w+' % _TYPES, body, re.M) or
                re.search(r'\b%s\s*([-+*/%%&|^]?=(?!=)|\+\+|--)' % var, body) or

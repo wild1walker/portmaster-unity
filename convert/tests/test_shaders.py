@@ -96,6 +96,17 @@ class GlslTest(unittest.TestCase):
             f = G.stage_sources(G.program_to_es(p))['FRAGMENT']
             self.assertIn('for(int u_xlati_loop_1', f, body)
 
+    def test_no_unroll_over_the_statement_limit(self):
+        # 3 trips of 2 statements are written out (test_rewrites); 16 trips of 8 are not (128 > 120:
+        # on the Mali-G31 such a body written out spills, several times slower than the loop)
+        body = '        u_xlat1.x = u_xlat1.x + 0.01;\n'
+        p = PROGRAM.replace('u_xlati_loop_1<3 ;', 'u_xlati_loop_1<16 ;').replace(body, body * 7)
+        f = G.stage_sources(G.program_to_es(p))['FRAGMENT']
+        self.assertIn('for(int u_xlati_loop_1 = 0 ; u_xlati_loop_1<16 ; u_xlati_loop_1++)', f)
+        self.assertEqual(G.UNROLL_STATEMENTS, 120)
+        p = PROGRAM.replace('u_xlati_loop_1<3 ;', 'u_xlati_loop_1<15 ;').replace(body, body * 7)
+        self.assertNotIn('for(int u_xlati_loop_1', G.stage_sources(G.program_to_es(p))['FRAGMENT'])  # 15 x 8: at it
+
     def test_no_const_array_when_written_later(self):
         p = PROGRAM.replace('    SV_Target0 = u_xlat0', '    ImmCB_0_0_0[1].x = 2.0;\n    SV_Target0 = u_xlat0')
         f = G.stage_sources(G.program_to_es(p))['FRAGMENT']

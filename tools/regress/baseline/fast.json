@@ -1211,7 +1211,7 @@
    "not_translatable": 1,
    "precision": "default-samplers",
    "programs": 3037,
-   "rewrites": 56,
+   "rewrites": 55,
    "shaders": 147,
    "subprograms": 6058
   },
@@ -1251,7 +1251,7 @@
     "f-fdfd22884a28": "5e099d0f91107ce0",
     "f-ff9d9078717f": "36bb34fe83020698",
     "globalgamemanagers.assets": "225fddcf2d0aee69",
-    "resources.assets": "4e9fc8b3db893485",
+    "resources.assets": "d7c6d3c8d1a01041",
     "sharedassets1.assets": "eff35dead12f1971",
     "sharedassets11.assets": "35cf5faca4af8cb7",
     "sharedassets13.assets": "d18a0c3eb6bedba2",
@@ -1275,7 +1275,7 @@
     "sharedassets9.assets": "8f66f5dc3b65dad7"
    },
    "shaders": 147,
-   "total": "19e8f0e8236a015d79f72b775d625aa137107836806e64c10a40bc4fb4f6205e"
+   "total": "1fea6f428fe54f5687595491d164634cbcaaaeb93a51d81fe4eabc6c0d659d26"
   },
   "steps": {
    "files": 1,
@@ -1329,7 +1329,7 @@
    "not_translatable": 0,
    "precision": "highp",
    "programs": 1860,
-   "rewrites": 6,
+   "rewrites": 5,
    "shaders": 84,
    "subprograms": 3748,
    "vr_left_out": 588
@@ -1342,12 +1342,12 @@
     "globalgamemanagers.assets": "5aca92875b451d9c",
     "resources.assets": "685403876420bc6d",
     "sharedassets0.assets": "3c70083f2f1a4cb2",
-    "sharedassets1.assets": "7cc86886e8dee29a",
+    "sharedassets1.assets": "aff4485cb8ee8e5d",
     "sharedassets10.assets": "2f5c06ed61d6ebe4",
     "sharedassets6.assets": "fbfd014c35c0a88e"
    },
    "shaders": 84,
-   "total": "753720e8128526bb594eeb25af086f991a550620b8969029e3bd9752b5a07cef"
+   "total": "90db5f2d1dd8ec970a23d58f8fc42be3214583e441d93c21552c0546faf6c0cd"
   },
   "steps": {
    "files": 1,
@@ -1658,7 +1658,7 @@
    "not_translatable": 0,
    "precision": "highp",
    "programs": 3122,
-   "rewrites": 8,
+   "rewrites": 7,
    "shaders": 79,
    "subprograms": 6247
   },
@@ -1668,11 +1668,11 @@
    "per_file": {
     "Resources/unity_builtin_extra": "b590351322b52994",
     "globalgamemanagers.assets": "9b84b86b77a39009",
-    "resources.assets": "a82c8308f02893da",
+    "resources.assets": "4eed2bc7ae600924",
     "sharedassets0.assets": "5643a85ce6903fb5"
    },
    "shaders": 79,
-   "total": "3841aa3084424642d45ef8f1e7f229177cb35ca618b331d5250fee149c6a866b"
+   "total": "bc957f4df7a1749e70a6600c2befd7bc8cf1e992f66d1dfd1f4b62db9d518a15"
   },
   "steps": {
    "files": 1,
@@ -1725,7 +1725,7 @@
    "not_translatable": 1,
    "precision": "highp",
    "programs": 2097,
-   "rewrites": 8,
+   "rewrites": 7,
    "shaders": 116,
    "subprograms": 2129,
    "vr_left_out": 588
@@ -1736,12 +1736,12 @@
    "per_file": {
     "Resources/unity_builtin_extra": "f98bef3f70ecd578",
     "resources.assets": "ed8a2db32b53c923",
-    "sharedassets0.assets": "0739fe7b77d03e53",
+    "sharedassets0.assets": "7083d89373413579",
     "sharedassets1.assets": "c6eaa7bafd3cf530",
     "sharedassets2.assets": "c651e9783631795e"
    },
    "shaders": 116,
-   "total": "a80b8f0a0a20b0ff8886ac1750397b0be428697d9fbff741f13853ea422fd0a4"
+   "total": "b8ede4449862a5323968481281c1ea4df5ff70231c225b58f7eacb0790bc124e"
   },
   "steps": {
    "files": 1,
@@ -1893,7 +1893,7 @@
    "not_translatable": 0,
    "precision": "highp",
    "programs": 2346,
-   "rewrites": 6,
+   "rewrites": 5,
    "shaders": 73,
    "subprograms": 4652,
    "vr_left_out": 588
@@ -1904,10 +1904,10 @@
    "per_file": {
     "Resources/unity_builtin_extra": "050b8422390263e5",
     "resources.assets": "25f06377ba370035",
-    "sharedassets0.assets": "da002c4eb2c5748a"
+    "sharedassets0.assets": "029be7ac25ed6530"
    },
    "shaders": 73,
-   "total": "e937eabb2ebdf8a9d1653aa687ea62ca97ace9b3a71aa63e85e22306d78ca575"
+   "total": "f84f866a9b6ae26f0c8300d20c0f2174b409b8073cf0b1f1283d28c0e6094397"
   },
   "steps": {
    "files": 1,
@@ -2041,7 +2041,7 @@
    "not_translatable": 2,
    "precision": "highp",
    "programs": 2447,
-   "rewrites": 222,
+   "rewrites": 221,
    "shaders": 254,
    "subprograms": 2473,
    "vr_left_out": 594
@@ -2053,11 +2053,11 @@
     "Resources/unity_builtin_extra": "8d0dc70ac0349770",
     "globalgamemanagers.assets": "4a7926677803a7a1",
     "resources.assets": "b02d15113ced4005",
-    "sharedassets0.assets": "d823207f9c80ac74",
+    "sharedassets0.assets": "e244bc2637842a24",
     "sharedassets1.assets": "3a61707d80e7d7a4"
    },
    "shaders": 254,
-   "total": "950131d72a8de36542b3d684a70572752f60bbf618b3f14788db80a3b6943129"
+   "total": "bd955a4015e2275611d542575e2fa2a9a375f5e55dd3d57eba588b12c0105293"
   },
   "steps": {
    "files": 1,
