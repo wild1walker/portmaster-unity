@@ -178,8 +178,17 @@ M=${MEASURE:-30}
 log "measure start ($M s)"
 snapshot "$OUT/snap-0.txt"
 [ -n "$PROF" ] && { echo "$M" > prof.req.tmp && mv prof.req.tmp prof.req; }
+# t counts seconds of the measurement: each sample waits for the next whole second since its start
+# (bash 5's EPOCHREALTIME and a sleep that takes fractions; else one second after the last sample)
+us() { local e=${EPOCHREALTIME:-}; printf -v "$1" '%s' "${e//[!0-9]/}"; }
+us t0us; { [ -n "$t0us" ] && sleep 0.001 2>/dev/null; } || t0us=""
 for t in $(seq 1 "$M"); do
-  sleep 1
+  if [ -n "$t0us" ]; then
+    us nowus; d=$(( t0us + t * 1000000 - nowus ))
+    if [ "$d" -gt 0 ]; then printf -v ds '%d.%06d' $(( d / 1000000 )) $(( d % 1000000 )); sleep "$ds"; fi
+  else
+    sleep 1
+  fi
   kill -0 $pid 2>/dev/null || fail "the game exited during the measurement"
   rdlist f 1000 /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq
   rdlist g 1000000 /sys/class/devfreq/*/cur_freq
