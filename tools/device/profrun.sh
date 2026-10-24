@@ -11,7 +11,8 @@
 #                     swap traffic (meminfo, vmstat), CPU and GPU clocks and their residency
 #                     (cpufreq stats, devfreq trans_stat), temperatures, throttling, every
 #                     process's CPU time; tools/analysis/benchsum.py turns them into deltas
-#   freq.log          every second of the measurement: each core's clock, the GPU's, MemAvailable
+#   freq.log          every second of the measurement: each core's clock, the GPU's, MemAvailable,
+#                     SwapFree, each thermal zone's temperature (C) and each cooling device's state
 #   mem.log           every 2 s of the run: MemAvailable, swap, the game's resident memory
 #   prof-<n>.txt      with UA_PROF=<hz>: the profile of the measurement (runtime/host/prof.c)
 #   shot-<n>.ppm      the screenshots the plan asked for
@@ -159,7 +160,9 @@ for t in $(seq 1 "$M"); do
   kill -0 $pid 2>/dev/null || fail "the game exited during the measurement"
   f=""; for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq; do [ -r "$c" ] && f="$f${f:+,}$(( $(cat "$c") / 1000 ))"; done
   g=""; for c in /sys/class/devfreq/*/cur_freq; do [ -r "$c" ] && g="$g${g:+,}$(( $(cat "$c") / 1000000 ))"; done
-  echo "t=$t cpu=${f:-?} gpu=${g:-?} avail=$(mem MemAvailable)M swapfree=$(mem SwapFree)M" >> "$OUT/freq.log"
+  z=""; for c in /sys/class/thermal/thermal_zone[0-9]*/temp; do [ -r "$c" ] && z="$z${z:+,}$(( $(cat "$c") / 1000 ))"; done
+  k=""; for c in /sys/class/thermal/cooling_device[0-9]*/cur_state; do [ -r "$c" ] && k="$k${k:+,}$(cat "$c")"; done
+  echo "t=$t cpu=${f:-?} gpu=${g:-?} avail=$(mem MemAvailable)M swapfree=$(mem SwapFree)M temp=${z:-?} cool=${k:-?}" >> "$OUT/freq.log"
 done
 snapshot "$OUT/snap-1.txt"
 log "measure end"

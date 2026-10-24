@@ -150,8 +150,9 @@ saves in data/); only `<game folder>/bench/` is written: this checkout's ua_host
    counters at the start and the end (per-core and per-thread CPU time, memory and swap traffic,
    cpufreq `time_in_state`, devfreq `trans_stat` (the GPU's clock residency, and the memory
    controller's where it has one), governors, temperatures, cooling states, every process's CPU
-   time); each core's and the GPU's clock every second; with `UA_PROF=<hz>` a profile of the same
-   seconds;
+   time); each core's and the GPU's clock, every thermal zone's temperature and each cooling
+   device's state every second (`freq.log`; benchsum.py's `per second:` line: each zone's range and
+   average, the seconds at each GPU clock); with `UA_PROF=<hz>` a profile of the same seconds;
 4. stops the game, starts EmulationStation again and writes `result` (`ok`, or where it stopped).
 
 Clocks, governors and thermal settings are read, never written. The results come back to

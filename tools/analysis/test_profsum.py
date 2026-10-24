@@ -221,7 +221,8 @@ class BenchsumTest(unittest.TestCase):
         with open(os.path.join(d, 'snap-1.txt'), 'w') as f:
             f.write(snap(102.0, [250, 0, 100, 850, 0, 0, 0], 11_900_000_000, 1_100_000_000, 25, (1150, 550), (300, 2000), 63000, 104))
         with open(os.path.join(d, 'freq.log'), 'w') as f:
-            f.write('t=1 cpu=1512,1512,1512,1512 gpu=600 avail=60M swapfree=390M\nt=2 cpu=1008,1512,1512,1512 gpu=252 avail=60M swapfree=390M\n')
+            f.write('t=1 cpu=1512,1512,1512,1512 gpu=600 avail=60M swapfree=390M temp=61,60 cool=1,0\n'
+                    't=2 cpu=1008,1512,1512,1512 gpu=252 avail=60M swapfree=390M temp=63,60 cool=1,1\n')
         return d
 
     def test_report_and_compare(self):
@@ -240,6 +241,8 @@ class BenchsumTest(unittest.TestCase):
         self.assertIn('UnityMain 95/5%', o)                                  # 1.9 s of 2 s on a CPU, 0.1 s waiting
         self.assertIn('swap-ins 20', o)
         self.assertIn('cpu_thermal_zone 60->63 C', o)
+        self.assertIn('per second: cpu_thermal_zone 61-63 (avg 62.0)', o)    # freq.log's temp= (first zone)
+        self.assertIn('GPU 600 MHz 1 s, 252 MHz 1 s', o)
         self.assertIn('emulationstation 2%', o)
         self.assertIn('mono-abcrem            34.0   +6.2%', o)
 

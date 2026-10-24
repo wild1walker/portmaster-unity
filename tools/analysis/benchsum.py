@@ -8,7 +8,7 @@ threads by CPU time and their wait for a CPU (schedstat), memory and swap traffi
 throttling, other processes that took CPU time, and the profile's summary (profsum.py). With more
 than one run, a table compares them with the first (the baseline: run it first and last to see
 the drift)."""
-import argparse, contextlib, glob, io, os, re, sys
+import collections, argparse, contextlib, glob, io, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -192,6 +192,21 @@ class Run:
                     gpu += [int(x) for x in m.group(2).split(',')[:1]]
         return cpu, gpu
 
+    def temp_samples(self):
+        """each thermal zone's per-second temperatures (C) from freq.log (profrun.sh since 2026-10-23)"""
+        f = os.path.join(self.dir, 'freq.log')
+        zones = []
+        if os.path.exists(f):
+            for l in read(f).splitlines():
+                m = re.search(r'temp=([\d,]+)', l)
+                if m:
+                    v = [int(x) for x in m.group(1).split(',')]
+                    while len(zones) < len(v):
+                        zones.append([])
+                    for i, x in enumerate(v):
+                        zones[i].append(x)
+        return zones
+
     def report(self, syms, top, brief):
         print(f'\n######## {self.name}: {self.result}')
         for n in self.notes:
@@ -252,6 +267,13 @@ class Run:
                 if 'cooling_device' in k and k.endswith('/type') and self.s1.get(k[:-5] + '/cur_state')]
         if temps or cool:
             print(f'  thermal: {", ".join(temps)}' + (f'; cooling {", ".join(cool)}' if cool else ''))
+        zs = self.temp_samples()
+        if zs and fg:
+            zk = [k for k in self.s1 if k.startswith('/sys/class/thermal/thermal_zone') and k.endswith('/type') and self.s1[k]]
+            names = [self.s1[k][0] for k in sorted(zk, key=lambda k: int(re.sub(r'\D', '', k.split('/')[4]) or 0))]
+            per = ', '.join(f'{names[i] if i < len(names) else i} {min(z)}-{max(z)} (avg {sum(z) / len(z):.1f})' for i, z in enumerate(zs) if z)
+            clk = ', '.join(f'{c} MHz {n} s' for c, n in sorted(collections.Counter(fg).items(), reverse=True))
+            print(f'  per second: {per} C; GPU {clk}')
         q0, q1 = procs(self.s0), procs(self.s1)
         game = {k for k in self.s1 if k.startswith('/proc/') and k.endswith('/status')}
         gp = {int(k.split('/')[2]) for k in game}
