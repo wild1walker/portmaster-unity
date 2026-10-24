@@ -12,6 +12,7 @@ whole measured session:
 | what a thread waits in right now | `python3 tools/device/stacks.py <pid> [thread]` on the device, or `kill -s RTMIN+7 <pid>` (every thread's stack into the log) |
 | CPU per thread, clocks, temperatures while playing | `python3 tools/device/profcpu.py <pid>` on the device |
 | what the GPU does, pass by pass, and what each pass costs | `UA_GL_TRACE=<s>` (+ `UA_GL_TRACE_DRAWS`, `UA_SHADER_DUMP`): below, [GPU, pass by pass](#gpu-pass-by-pass) |
+| how many of the sprites' fragments sample only transparent texels | `tools/device/deadfrags.py` + `UA_SHADER_OVERRIDE`: [below](#sprites-transparent-texels-kings-pass-2026-10-23) |
 
 ## UA_PROF: the sampling profiler
 
@@ -375,4 +376,87 @@ What did not pay, or is not exact:
 | the blend-mode shaders read the framebuffer instead (`GL_ARM_shader_framebuffer_fetch`, `gl_LastFragColorARM`, through `UA_SHADER_OVERRIDE`) with the grab copies left out | menu 41.8 (+16 % over no change); King's Pass 32.4 -> 35.0 - 35.3 (+8 % over `UA_GL_DSCLEAR`), screenshots that differ no more than two of the same run a second apart. Not exact: sprites of one batch that overlap see each other (with the grab, the picture before the batch), and the fetched colour is mediump. As a data change: `shaders.grab_fetch` ([shaders.md](shaders.md#blend-modes-without-grabpass-copies-grab_fetch-opt-in); `"always"` for this device's ARM-only driver) |
 | a window without depth/stencil (an EGL config with none; the two bars write the window's depth, nothing reads it; Android's "Disable Depth and Stencil" player setting does the same) | King's Pass 32.6 -> 32.8 (two runs each): noise |
 | GL_EXT_disjoint_timer_query per pass | the driver's answers cannot be right (0 ms for most of the scene's passes): `UA_GL_TRACE_GPU=3` instead |
+
+### Sprites' transparent texels (King's Pass, 2026-10-23)
+
+A sprite is drawn as a mesh, and the mesh covers texels of alpha 0 too: their fragments are
+rasterized, shaded, sample the texture and are blended like the others. Where the texture sample's
+alpha is exactly 0 such a fragment cannot change the picture under the scene's blend states: the
+`Sprites/Default`-style shaders premultiply in the shader and blend One/OneMinusSrcAlpha (rgb and
+alpha 0: dst stays), `tk2d/BlendVertexColor` blends SrcAlpha/OneMinusSrcAlpha, the additive
+particles SrcAlpha/One, the blend-mode sprites discard below 0.01; nothing in these passes writes
+depth or stencil (the stencil operations keep). (Not every shader: the darkness overlay adds a dither and a cutout term whatever
+the texel.) A mesh cut down to the texels that can show would skip those fragments. How many are
+there?
+
+**Counted on the handheld.** `tools/device/deadfrags.py shaders <dump> <trace run.log> <dir>` turns
+every fragment shader of a `UA_GL_TRACE_DRAWS` frame that samples `_MainTex` at a varying into a
+counter: each fragment adds one code to red when the sample (the same texture, sampler and UV as
+the game's, so the GPU's own bilinear footprint decides) has alpha exactly 0, to green otherwise;
+the blend state each is drawn with makes that an exact sum (`1,1-sa` adds; `sa,1-sa` with alpha
+1/255 adds one code and keeps the others below 127; `sa,1` adds). The post effects become copies
+(`--copy`), the background copy and the darkness overlay add to blue (`--mark`), the HUD's own
+shaders write nothing (`--hide`); `deadfrags.py sum` adds a run's screenshots up. Four shots of the
+scene, 64-bit build, the whole 720x450 picture (leaving the HUD's box out, 4 % of it, moves the
+shares by 0.1 point):
+
+| fragments of the scene passes | full-screen layers | sampling only alpha 0 |
+|---|---|---|
+| every sprite, particle and blend-mode sprite | 6.98 | 0.56 (8.0 %) |
+| of them `Sprites/Lit` (the material of 2,645 of the level's 2,946 SpriteRenderers: its art) | 3.14 | 0.37 (11.6 %) |
+| `tk2d/BlendVertexColor` (the two large batches: the floor's dark fill) | 0.27 | 0.00 |
+| the rest: `Sprites/Default`, the knight, particles, the three blend-mode sprites | 3.57 | 0.19 (5.3 %) |
+| marked: the blurred background's copy (opaque) and the darkness overlay (full screen) | 2.00 | - |
+
+The background camera's 7 sprites (576x360, blurred afterwards), counted with the blur passes as
+copies (`--copy`) and the background copy passing the counts through (hand-written), less the
+counts above: 1.44 of its layers, 0.11 of them dead (7.5 %). The counters were in every pixel's
+range (at most 6 dead and 17 live fragments a pixel), the four shots agree within 0.2 %.
+
+**Offline, from the converted data** (UnityPy; the King's Pass level's SpriteRenderers use 203
+distinct sprites, all of them Unity's Tight meshes, packed into SpriteAtlases; the ASTC pages decoded
+exactly in both of the GPU's decode modes, FP16 and UNORM8, a texel counting as transparent only when
+both give 0; one mip level, bilinear, clamped): 17.9 % of the meshes' texel area has a bilinear
+footprint of four alpha-0 texels. Unity's tight outlines are coarse (a fan of a few large triangles
+over the gaps between stalactites, grass blades and leaves), so that area lies inside the outline,
+in the gaps. A cut mesh needs a margin (UV interpolation is not exact to the texel, and the hardware
+quantizes bilinear weights): with one texel around every texel that can show 15.0 % is left, cutting
+at 8x8-texel blocks (a mesh of a sensible vertex count) 7.9 %, dropping only whole triangles that lie
+in the dead area 0.1 %. On screen the dead share is smaller than in texel area (11.6 % of the
+`Sprites/Lit` fragments): the sprites that cover most of the picture are the large, mostly opaque
+layers.
+
+**What it could save.** With every one of those fragment shaders discarding at once (a measurement,
+`UA_GL_TRACE=4`), the four scene passes take 6.2 ms instead of 17.7 ms, the background camera's
+pass 0.8 instead of 2.3; that run's GPU was at 504 MHz against 696 (less work: the governor clocked
+down; the blur passes take 1.37 times as long), so at the same clock about 4.7 and 0.6 ms. The
+sprites' fragment work beyond rasterization is thus about 13 ms a frame, 1.85 ms per full-screen
+layer in the scene (1.2 per layer of the 576x360 target), and the dead fragments' share of it about
+1.05 + 0.13 = 1.2 ms: **about 4 % of the 29 ms GPU frame for a mesh that followed every texel with
+no margin at no cost.** Scaled by the offline ratios, a one-texel margin leaves about 1.0 ms (3.4 %),
+a mesh cut at 8x8-texel blocks about 0.5 ms (1.7 %); at the warm handheld's 600 MHz cap (33.3 fps)
+that is 34.7 and 34.0 fps at best, before the extra triangle edges (along every edge a mesh gains inside
+the sprite the 2x2 quads are shaded for both triangles) and vertices are paid for. Below the 5 % worth
+building.
+
+**Not built**, for three reasons besides the size:
+
+- *It is not bit-exact.* Unity computes a sprite's UVs at load from its vertex positions (the stored
+  UV channel is zeros; `SpriteRenderData::CalculateUVsIfNeeded` -> `RecalculateUVs`: `(pos.xy *
+  uvTransform.xz + uvTransform.yw) / texture size`, mirrored inside the atlas rect for flipped
+  packing), so new vertices get UVs of the same affine map; but a pixel inside a new, smaller triangle
+  interpolates its UV from other vertices than before, which can round differently in the last bits,
+  and where that moves a bilinear weight by one step the colour can change by one code (expected, not
+  measured: no tightened data was made). Only dropping whole original triangles keeps every remaining
+  pixel's interpolation, and that is 0.1 % of the area.
+- *The sprites' other uses are safe, the material is not.* Sprite bounds (culling, the sort point)
+  come from the sprite's rect and pivot, not its vertices (6000.0's player: `SpriteRenderer::
+  GetSpriteBounds` -> `Sprite::GetBounds`, which reads scalar fields only), physics shapes are separate data; but which shader draws
+  a sprite is decided at run time (Animator sprite swaps, scripts that set sprites or materials), and
+  the rule above holds only for shaders whose output vanishes with the texel's alpha (the darkness
+  overlay's does not). A converter step would have to prove that for every material a sprite can be
+  drawn with.
+- *Vertices cost the main thread.* Unity batches sprites on the CPU (every vertex transformed and
+  copied each frame), and King's Pass's main thread alone allows only about 49 fps: a finer mesh moves
+  work from the GPU to the next limit.
 
