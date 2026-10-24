@@ -1286,6 +1286,9 @@ static int parse_dynamic(so_module *m)
 
 static so_module *load_locked(const char *path, const so_shim *shims, int depth);
 
+static void (*g_load_hook)(so_module *m);
+void so_set_load_hook(void (*hook)(so_module *m)) { g_load_hook = hook; }
+
 static int load_needed(so_module *m, int depth)
 {
     for (int i = 0; i < m->nneeded; i++) {
@@ -1441,6 +1444,7 @@ static so_module *load_locked(const char *path, const so_shim *shims, int depth)
     m->next = NULL;
     if (!g_modules) g_modules = m;
     else { so_module *t = g_modules; while (t->next) t = t->next; t->next = m; }
+    if (g_load_hook) g_load_hook(m);
     if (m->nunres && !trace())
         fprintf(stderr, "[so] %s: %d unresolved imports (SO_TRACE=1 lists them)\n", m->name, m->nunres);
     else if (trace())

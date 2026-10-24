@@ -155,6 +155,10 @@ void *so_dlsym(void *handle, const char *symbol);
 /* debugging: every symbol Android code gets through dlsym passes through hook(symbol, found),
  * which may return a wrapper instead */
 void so_set_dlsym_hook(void *(*hook)(const char *symbol, void *found));
+/* hook(m) for each Android module once it is relocated and protected, before its initializers run;
+ * the loader's lock is held: the hook may read and patch the module (so_base, so_size, so_name), not
+ * load or look up others */
+void so_set_load_hook(void (*hook)(so_module *m));
 int   so_dlclose(void *handle);
 char *so_dlerror(void);
 
