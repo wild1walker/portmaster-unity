@@ -222,7 +222,7 @@ if [ ! -f "$W/.step_package" ]; then
   if { [ "$ASMPATCH" != off ] || [ "$SA" != obb ] || [ "${DATA_PATH:-0}" = 1 ]; } && [ -f "$S/asmpatch" ]; then
     chmod +x "$S/asmpatch"
     a="'$S/asmpatch'"
-    case "$ASMPATCH" in auto) ;; off) a="$a --only=";; *) a="$a --only=$ASMPATCH";; esac
+    case "$ASMPATCH" in auto) ;; off) a="$a --only=";; auto,*) a="$a --with=${ASMPATCH#auto,}";; *) a="$a --only=$ASMPATCH";; esac
     args+=(--asmpatch "$a")
   fi
   for f in "$W"/bcl/*.dll; do [ -f "$f" ] && args+=(--managed-file "$f"); done     # (step 2b's; the port's own win)

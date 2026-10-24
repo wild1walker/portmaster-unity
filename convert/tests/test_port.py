@@ -156,6 +156,19 @@ class AssemblyTest(unittest.TestCase):
             s['selects'] = 2
             self.assertEqual(P.input_verdict(s), 'mixed')
 
+    def test_playmaker(self):
+        # a game with PlayMaker.dll: asmpatch auto, for its optimizations
+        with tempfile.TemporaryDirectory() as t:
+            d = fake_game(t, pointer=False)
+            write_assembly(os.path.join(d, 'Managed', 'PlayMaker.dll'), 'PlayMaker', [('HutongGames.PlayMaker', 'Fsm')], [], [], [], [])
+            self.assertEqual(P.survey_assemblies(os.path.join(d, 'Managed'))['playmaker'], 'PlayMaker.dll')
+            rep = P.check(t, asmpatch='/nonexistent-asmpatch')
+            self.assertEqual(rep['suggest']['android_data']['asmpatch'], 'auto')
+            self.assertTrue(any('playmaker-loopcount' in n for n in rep['notes']))
+        with tempfile.TemporaryDirectory() as t:
+            fake_game(t, pointer=False)
+            self.assertEqual(P.check(t, asmpatch='/nonexistent-asmpatch')['suggest']['android_data']['asmpatch'], 'off')
+
 
 class CheckTest(unittest.TestCase):
     def test_builds(self):
@@ -309,6 +322,35 @@ class ConfigTest(unittest.TestCase):
                                   'echo "$GAME_DATA|${ANDROID_DATA_ARGS[1]}|$UA_KEYMAP|$UA_POINTER"'],
                                  capture_output=True, text=True, check=True).stdout.strip()
             self.assertEqual(out, 'My Game_Data|2|start:escape,x:space|0')
+
+    def test_lowmem_env(self):
+        # runtime_lowmem: set on handhelds with 1 GB of RAM or less, unless set already
+        cfg = P.build_config('g', None, {'game': {'unity_versions': ['2020.3.1f1']}, 'runtime': {'UA_POINTER': '1'},
+                                         'runtime_lowmem': {'ASMPATCH_HK_BLUR': 'half', 'UA_X': 'a b'}})
+        P.validate(cfg)
+        self.assertEqual(P.merge(P.DEFAULTS, tomllib.loads(P.dump_toml(cfg))), cfg)
+        with tempfile.TemporaryDirectory() as t:
+            for kb, pre, want in ((973 * 1024, '', 'half|a b'), (1990 * 1024, '', '|'),
+                                  (973 * 1024, 'ASMPATCH_HK_BLUR=full; ', 'full|a b')):
+                put(os.path.join(t, 'meminfo'), f'MemTotal:     {kb} kB\nMemFree: 1 kB\n')
+                put(os.path.join(t, 'port.env'), P.port_env(cfg).replace('/proc/meminfo', os.path.join(t, 'meminfo')))
+                out = subprocess.run(['bash', '-c', f'{pre}. {t}/port.env; echo "$ASMPATCH_HK_BLUR|$UA_X"'],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+                self.assertEqual(out, want, (kb, pre))
+        self.assertNotIn('MemTotal', P.port_env(P.build_config('g', None, {'game': {'unity_versions': ['2020.3.1f1']}})))
+        # asmpatch = ["auto", <opt-in>]: the default patches and those; "auto" only first
+        cfg['android_data']['asmpatch'] = ['auto', 'hk-blur']
+        P.validate(cfg)
+        self.assertIn("ASMPATCH=auto,hk-blur", P.setup_env(cfg).replace("'", ''))
+        case = 'case "$ASMPATCH" in auto) ;; off) a="$a --only=";; auto,*) a="$a --with=${ASMPATCH#auto,}";; *) a="$a --only=$ASMPATCH";; esac'
+        for route in ('android', 'il2cpp-arm64', 'mono-arm64'):
+            with open(os.path.join(P.TEMPLATES, route, 'patchscript')) as f:
+                self.assertIn(case, f.read(), route)
+        out = subprocess.run(['bash', '-c', 'ASMPATCH=auto,hk-blur; a=x; ' + case + '; echo "$a"'], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(out, 'x --with=hk-blur')
+        cfg['android_data']['asmpatch'] = ['hk-blur', 'auto']
+        with self.assertRaises(SystemExit):
+            P.validate(cfg)
 
     def test_questions_lua(self):
         lua = P.questions_lua([{'id': 'A', 'question': 'say "hi"', 'options': [['x', 'X'], ['y', 'Y']]}])

@@ -18,15 +18,23 @@ sealed class Result
     public static Result Failed(string why) => new() { Outcome = Outcome.Failed, Reason = why };
 }
 
+/// <summary>Android: makes the game do on Unity's Android player what its own Android build does.
+/// Optimize: the game's code does the same, with less work (README.md, "Optimizations"): a
+/// default-on one must leave every value the game can observe as it was. Reduce: a smaller picture
+/// for small handhelds (README.md, "Reductions"): never the game play, always opt-in.</summary>
+enum Kind { Android, Optimize, Reduce }
+
 abstract class Patch
 {
     public abstract string Name { get; }
     public abstract string Summary { get; }
+    public virtual Kind Kind => Kind.Android;
     /// <summary>Finds the patch's targets; with apply, changes them (and marks their assemblies
     /// changed). Without apply nothing is modified (--list).</summary>
     public abstract Result Run(Game game, bool apply);
     /// <summary>Runs only when named (--only, --with): a patch that needs the port's data laid out
-    /// for it (e.g. streaming-assets: android-data --streaming-assets).</summary>
+    /// for it (e.g. streaming-assets: android-data --streaming-assets), or an optimization that is
+    /// not behaviour-identical.</summary>
     public virtual bool OptIn => false;
 
     public static readonly Patch[] All =
@@ -34,6 +42,10 @@ abstract class Patch
         new RewiredAndroid(),
         new InputSystemAndroid(),
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
+        // optimizations
+        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(),
+        // reductions
+        new HollowKnightBlur(),
     };
 }
 

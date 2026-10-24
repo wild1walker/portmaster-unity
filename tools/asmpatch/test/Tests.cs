@@ -35,6 +35,8 @@ static partial class TestMain
             InControlTests();
             SurveyTests();
             StreamingAssets();
+            PlayMakerTests();
+            HollowKnightTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }
@@ -139,14 +141,14 @@ static partial class TestMain
     }
 
     // ---- running and calling ----------------------------------------------------------------
-    static (int status, string output) Patch(string inDir, string outDir, string[] only = null, string[] with = null)
+    static (int status, string output) Patch(string inDir, string outDir, string[] only = null, string[] with = null, bool noOptimize = false)
     {
         var w = new StringWriter();
         var old = Console.Out;
         Console.SetOut(w);
         int status;
         var game = new Game(inDir);
-        try { status = Program.Run(game, outDir, only, Array.Empty<string>(), with); }
+        try { status = Program.Run(game, outDir, only, Array.Empty<string>(), with, noOptimize); }
         finally { game.Dispose(); Console.SetOut(old); }
         foreach (var l in w.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)) Console.WriteLine("     | " + l);
         return (status, w.ToString());
