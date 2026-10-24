@@ -31,6 +31,9 @@
 #   sleep:<s>       wait
 #   press:<presses> buttons, in UA_INPUT_SCRIPT's syntax ("0:b 3:down~0.5"; times from now)
 #   shot            a screenshot (shot.req)
+#   cap             what the panel shows: the display engine's own capture of its output (sunxi's
+#                   /sys/class/disp/disp/attr/capture_dump, a BMP of the panel's size; takes 1 s),
+#                   cap-<n>.bmp; with UA_RENDER_SIZE it shows the scaled picture, which shot does not
 # e.g. a saved game continued from its title screen:
 #   PLAN='log:pd.maxHealth; steady:3; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5'
 # Settings: MEASURE (s, default 30), UA_PROF (profile at that rate during the measurement),
@@ -144,6 +147,8 @@ for step in "${steps[@]}"; do
     sleep:*) sleep "${step#sleep:}" ;;
     press:*) printf '%s' "${step#press:}" > input.req.tmp && mv input.req.tmp input.req; pos=$(lines) ;;
     shot) touch shot.req ;;
+    cap) caps=$((${caps:-0} + 1)); CAP=/sys/class/disp/disp/attr/capture_dump
+         if [ -w $CAP ]; then rm -f "$OUT/cap-$caps.bmp"; echo "$OUT/cap-$caps.bmp" > $CAP; else log "no display engine capture ($CAP)"; fi ;;
     *) fail "unknown plan step '$step'" ;;
   esac
 done

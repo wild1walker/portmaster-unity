@@ -44,6 +44,25 @@
 // Flip times: each frame's flip is matched with its eglSwapBuffers (fbdev_swap, in the order they
 // were made): frames.c logs the time from the swap to the end of its flip. UA_FB_TRACE=<n>: the
 // times of n swaps, pans and flips, UA_FB_TRACE_START s (40) after the first swap.
+//
+// A window smaller than the screen (the render size). Mali's driver draws a window smaller than the
+// framebuffer into the top left of each buffer, at the framebuffer's pitch, the buffers still one
+// screen apart, and pans with the framebuffer's own size (RG34XX-SP: a 540x360 window in the
+// 720x480 buffers). sunxi's fbdev takes a pan's xres/yres as the display layer's source crop and
+// leaves its screen window at the panel's size: so the pans carry the window's size (made here, on
+// whichever thread makes them), and the display engine's scaler draws the window over the whole
+// panel, with no GPU or CPU work (checked with the display engine's own capture of what it sends to
+// the panel). The crop follows the window the driver draws (fbdev_new_window: the render size, or
+// a smaller buffer geometry the game set) and is put back to the whole screen when the host ends,
+// as the geometry is (ua_fbrestore too).
+//   UA_RENDER_SIZE=<w>x<h> | UA_RENDER_SCALE=<s>  Unity's window at that size (fbdev_render_size:
+//                     display.c sizes the ANativeWindow with it, so the EGL surface, Screen.width
+//                     and height, DisplayMetrics, the View, pointer mode and screenshots all have
+//                     it): at the panel's aspect, even, a quarter of the panel's size at least; a
+//                     size of another aspect is made the largest one of the panel's aspect within
+//                     it. Off by default (the picture is softer: a visual setting).
+//   UA_RENDER_RAM=<MB> only on a device with at most that much memory (MemTotal), e.g. 1024: a
+//                     port's default for 1 GB handhelds that leaves bigger ones at the panel's size
 #define _GNU_SOURCE
 #include "fbdev.h"
 
@@ -75,6 +94,12 @@ static volatile int g_track;                // fbdev path: flips are counted
 static struct fb_var_screeninfo g_var;
 static dev_t g_rdev;
 static volatile int g_var_ok;
+// A window smaller than the screen: the panel's size, the render size, the crop the pans carry (the
+// window the driver draws, 0 while it is the whole screen), and whether the crop needs putting back
+static int g_fb_w, g_fb_h;
+static int g_rw, g_rh;
+static volatile int g_cw, g_ch;
+static volatile int g_crop;
 
 static long fb_ioctl(int fd, unsigned long req, void *arg) { return syscall(SYS_ioctl, fd, req, arg); }
 
@@ -82,28 +107,41 @@ static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
 
 static void say(const char *s) { (void)!write(2, s, strlen(s)); }
 
-// async-signal-safe: also run by the watcher and the crash handler
+// async-signal-safe: also run by the watcher and the crash handler. The crop: a pan to the buffer on
+// the screen with the framebuffer's own size (the kernel's var, which pans never change), so the
+// display layer shows the whole buffer again; the geometry: put back if it is still ours (a put
+// pans with the old geometry's size too).
 static int restore_now(void)
 {
     g_var_ok = 0;                            // the kernel's answers again
-    if (!g_changed) return 0;
+    if (!g_changed && !g_crop) return 0;
     int fd = open(g_path, O_RDWR | O_CLOEXEC);
     if (fd < 0) return 0;
     struct fb_var_screeninfo v;
     int done = 0;
-    if (fb_ioctl(fd, FBIOGET_VSCREENINFO, &v) == 0 && v.yres_virtual == g_ours_vy) {
-        struct fb_var_screeninfo o = g_orig;
-        o.activate = FB_ACTIVATE_NOW;
-        done = fb_ioctl(fd, FBIOPUT_VSCREENINFO, &o) == 0;
+    if (fb_ioctl(fd, FBIOGET_VSCREENINFO, &v) == 0) {
+        if (g_crop) {
+            struct fb_var_screeninfo p = v;
+            done |= fb_ioctl(fd, FBIOPAN_DISPLAY, &p) == 0 ? 2 : 0;
+        }
+        if (g_changed && v.yres_virtual == g_ours_vy) {
+            struct fb_var_screeninfo o = g_orig;
+            o.activate = FB_ACTIVATE_NOW;
+            done |= fb_ioctl(fd, FBIOPUT_VSCREENINFO, &o) == 0 ? 1 : 0;
+        }
     }
     close(fd);
     g_changed = 0;
+    g_crop = 0;
     return done;
 }
 
 void fbdev_restore(void)
 {
-    if (restore_now()) say("[fbdev] framebuffer geometry put back\n");
+    g_cw = g_ch = 0;                         // a flip still made after this one shows the whole buffer
+    int done = restore_now();
+    if (done & 1) say("[fbdev] framebuffer geometry put back\n");
+    if (done & 2) say("[fbdev] the display layer shows the whole framebuffer again\n");
 }
 
 // A process of its own (its own session: a kill of the host's process group leaves it) that waits
@@ -121,9 +159,10 @@ static void start_watcher(void)
         prctl(PR_SET_NAME, "ua_fbrestore", 0, 0, 0);
         setsid();                            // a kill of the host's process group leaves it
         signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN); signal(SIGHUP, SIG_IGN); signal(SIGQUIT, SIG_IGN);
+        g_crop = 1;                          // (a crop the host makes after the fork: always the whole screen)
         char c;
         while (read(p[0], &c, 1) < 0 && errno == EINTR) {}
-        if (restore_now()) say("[fbdev] framebuffer geometry put back (watcher)\n");
+        if (restore_now() & 1) say("[fbdev] framebuffer geometry put back (watcher)\n");
         _exit(0);
     }
     close(p[0]);
@@ -131,6 +170,70 @@ static void start_watcher(void)
 }
 
 int fbdev_buffers(void) { return g_buffers; }
+
+// UA_RENDER_SIZE / UA_RENDER_SCALE (fbdev.h) for a pw x ph panel and mem_kb of memory: 1 and the size,
+// 0 for the panel's own. The size is m times the aspect's smallest whole step (720x480: 3x2), m
+// even where a step is odd, so both sides are even; a quarter of the panel at least.
+int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, long mem_kb, int *w, int *h)
+{
+    if (pw <= 0 || ph <= 0) return 0;
+    double s = 0;
+    int sw = 0, sh = 0;
+    if (size && *size) {
+        if (sscanf(size, "%dx%d", &sw, &sh) != 2 || sw <= 0 || sh <= 0) {
+            fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: <width>x<height>; the panel's size\n", size);
+            return 0;
+        }
+        s = (double)sw / pw < (double)sh / ph ? (double)sw / pw : (double)sh / ph;
+    } else if (scale && *scale) {
+        s = atof(scale);
+        if (s <= 0) { fprintf(stderr, "[fbdev] UA_RENDER_SCALE=%s: a number up to 1; the panel's size\n", scale); return 0; }
+    } else {
+        return 0;
+    }
+    if (ram && *ram && atol(ram) > 0 && mem_kb > 0 && mem_kb > atol(ram) * 1024L) {
+        fprintf(stderr, "[fbdev] render size: the device has %ld MB, more than UA_RENDER_RAM=%s: the panel's size\n", mem_kb >> 10, ram);
+        return 0;
+    }
+    if (s >= 1) return 0;
+    if (s < 0.25) s = 0.25;
+    int a = pw, b = ph;
+    while (b) { int t = a % b; a = b; b = t; }         // a = gcd: the aspect's step is (pw / a) x (ph / a)
+    int ux = pw / a, uy = ph / a, even = (ux | uy) & 1;
+    if (a < 16) {                                       // (854x480: no whole step worth taking) the nearest even sizes
+        *w = (int)(pw * s + 1) & ~1;
+        *h = (int)(ph * s + 1) & ~1;
+        if (*w >= pw || *h >= ph) return 0;
+    } else {
+        int m = (int)(s * a + 0.5);
+        if (even) m &= ~1;
+        if (m < 1 || m * ux < pw / 4 || m * uy < ph / 4) m += even ? 2 : 1;
+        if (m >= a) return 0;
+        *w = m * ux;
+        *h = m * uy;
+    }
+    if (size && *size && (*w != sw || *h != sh))
+        fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: %dx%d (the panel's aspect, even)\n", size, *w, *h);
+    return 1;
+}
+
+int fbdev_render_size(int *w, int *h)
+{
+    if (!g_rw) return 0;
+    *w = g_rw;
+    *h = g_rh;
+    return 1;
+}
+
+static long mem_total_kb(void)
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    long kb = 0;
+    char line[128];
+    while (f && fgets(line, sizeof line, f)) if (sscanf(line, "MemTotal: %ld kB", &kb) == 1) break;
+    if (f) fclose(f);
+    return kb;
+}
 
 enum { FLIP_DRIVER, FLIP_HOST, FLIP_MAILBOX };
 static int g_mode = FLIP_DRIVER;
@@ -165,6 +268,16 @@ void fbdev_setup(void)
     }
     g_buffers = v.yres_virtual / v.yres;
     int fit = screens_in_memory(&v, &f);
+    g_fb_w = v.xres;
+    g_fb_h = v.yres;
+    if (fbdev_pick_render_size(v.xres, v.yres, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
+                               mem_total_kb(), &g_rw, &g_rh)) {
+        g_cw = g_rw;
+        g_ch = g_rh;
+        g_crop = 1;                          // before the watcher starts: it puts the crop back
+        fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the display engine scales the window to the panel\n",
+                g_rw, g_rh, 100.0 * g_rw * g_rh / ((double)v.xres * v.yres), v.xres, v.yres);
+    }
     // the refresh period from the mode's timings, when the driver gives them (else 60 Hz until the
     // flips tell)
     double ht = (double)v.xres + v.left_margin + v.right_margin + v.hsync_len, vt = (double)v.yres + v.upper_margin + v.lower_margin + v.vsync_len;
@@ -187,13 +300,19 @@ void fbdev_setup(void)
             if (fb_ioctl(fd, FBIOPUT_VSCREENINFO, &n) != 0 || fb_ioctl(fd, FBIOGET_VSCREENINFO, &got) != 0 || !got.yres) {
                 fprintf(stderr, "[fbdev] %d buffers: the driver refused the virtual size %ux%u (%s)\n", want,
                         n.xres_virtual, n.yres_virtual, strerror(errno));
+                int crop = g_crop;
                 restore_now();
-                if (g_watch_fd >= 0) { close(g_watch_fd); g_watch_fd = -1; }   // the watcher has nothing to do
+                g_crop = crop;
+                if (!crop && g_watch_fd >= 0) { close(g_watch_fd); g_watch_fd = -1; }   // the watcher has nothing to do
             } else {
                 g_ours_vy = got.yres_virtual;
                 g_buffers = got.yres_virtual / got.yres;
             }
         }
+    }
+    if (g_crop && g_watch_fd < 0) {          // the render size alone: the crop is put back too
+        start_watcher();
+        atexit(fbdev_restore);
     }
     close(fd);
     if (g_mode == FLIP_HOST && g_buffers < 3) {
@@ -323,13 +442,26 @@ void fbdev_swap_done(int ok)
     pthread_mutex_unlock(&g_lock);
 }
 
+// The crop of the pans from now on: the new window's size when it is smaller than the screen
+static void set_crop(int w, int h)
+{
+    int cw = 0, ch = 0;
+    if (g_fb_w > 0 && w > 0 && h > 0 && w <= g_fb_w && h <= g_fb_h && (w < g_fb_w || h < g_fb_h)) { cw = w; ch = h; }
+    if (cw == g_cw && ch == g_ch) return;
+    g_cw = cw;
+    g_ch = ch;
+    if (cw) fprintf(stderr, "[fbdev] window %dx%d: the display engine scales it to %dx%d\n", cw, ch, g_fb_w, g_fb_h);
+    else fprintf(stderr, "[fbdev] window %dx%d: the whole screen\n", w, h);
+}
+
 // A new window surface takes the buffer on the screen (the framebuffer's yoffset, which our flips
 // update when they happen) as shown and draws its first frame into the next one. Once every queued
 // flip has happened, that is where the frame count's turn already is; frames that never flipped
-// (a swap of a window going away) are counted out.
-void fbdev_new_window(void)
+// (a swap of a window going away) are counted out. Its size gives the crop of the pans from then
+// on (the old window's queued flips keep theirs: they are waited for first).
+void fbdev_new_window(int w, int h)
 {
-    if (g_mode != FLIP_HOST) return;
+    if (g_mode != FLIP_HOST) { if (g_track) set_crop(w, h); return; }
     pthread_once(&g_cond_once, cond_init);
     pthread_mutex_lock(&g_lock);
     struct timespec until;
@@ -339,6 +471,7 @@ void fbdev_new_window(void)
     while (((long)g_flips < (long)g_swaps - g_skew || g_fqn) && pthread_cond_timedwait(&g_cond, &g_lock, &until) != ETIMEDOUT) {}
     g_skew = (long)g_swaps - (long)g_flips;
     g_last_y = ~0u;                             // the turn check starts again
+    set_crop(w, h);
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -404,6 +537,19 @@ static void flipped(double t, unsigned yoffset, unsigned yres, double t_call, in
 static int (*r_ioctl)(int, unsigned long, ...);
 __attribute__((constructor)) static void fbdev_resolve(void) { r_ioctl = (int (*)(int, unsigned long, ...))dlsym(RTLD_NEXT, "ioctl"); }
 
+// The driver's pan as the kernel gets it: with the crop of a window smaller than the screen (the
+// offsets stay: the driver's buffers are a screen apart whatever its window's size)
+static int pan(int fd, struct fb_var_screeninfo *v)
+{
+    int cw = g_cw, ch = g_ch;
+    if (cw <= 0 || ch <= 0 || ((unsigned)cw >= v->xres && (unsigned)ch >= v->yres)) return r_ioctl(fd, FBIOPAN_DISPLAY, v);
+    struct fb_var_screeninfo c = *v;
+    c.xres = cw;
+    c.yres = ch;
+    g_crop = 1;
+    return r_ioctl(fd, FBIOPAN_DISPLAY, &c);
+}
+
 // Host and mailbox flips: the driver's pans, made by "ua_flip" in order (mailbox: the newest only).
 static pthread_once_t g_flip_once = PTHREAD_ONCE_INIT;
 static int g_flip_ok;
@@ -425,7 +571,7 @@ static void *flip_main(void *arg)
         pthread_cond_broadcast(&g_cond);
         pthread_mutex_unlock(&g_lock);
         double tc = now();
-        int r = r_ioctl(fd, FBIOPAN_DISPLAY, &v);
+        int r = pan(fd, &v);
         if (r != 0 && !warned++) fprintf(stderr, "[fbdev] FBIOPAN_DISPLAY to y %u failed: %s\n", v.yoffset, strerror(errno));
         if (r == 0) { pthread_mutex_lock(&g_lock); g_var.xoffset = v.xoffset; g_var.yoffset = v.yoffset; pthread_mutex_unlock(&g_lock); }
         flipped(now(), v.yoffset, v.yres, tc, b2b);   // a failed one counts too: the gate must go on
@@ -495,16 +641,20 @@ int ioctl(int fd, unsigned long req, ...)
     }
     unsigned y = v->yoffset, yres = v->yres;
     double tc = now();
-    int r = r_ioctl(fd, req, arg);
+    int r = pan(fd, v);
     if (r == 0) flipped(now(), y, yres, tc, 0);
     return r;
 }
 
 #ifdef FBDEV_TEST
 // test_fbdev.c: the flip modes without a framebuffer (mode 0 driver, 1 host, 2 mailbox), the fake
-// display's FBIOPAN_DISPLAY in place of the C library's ioctl.
+// display's FBIOPAN_DISPLAY in place of the C library's ioctl, a 720x480 panel (whole-screen windows
+// until fbdev_new_window says otherwise).
 void fbdev_test_init(int mode, int buffers, int queue, double period, int (*pan)(int, unsigned long, ...))
 {
+    g_fb_w = 720;
+    g_fb_h = 480;
+    g_cw = g_ch = 0;
     pthread_once(&g_cond_once, cond_init);
     pthread_mutex_lock(&g_lock);
     g_swaps = g_flips = 0;

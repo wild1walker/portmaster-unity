@@ -37,6 +37,7 @@ struct ANativeWindow {
     int width, height;          // physical size
     int buf_width, buf_height;  // setBuffersGeometry (0 = physical size)
     int buf_format;             // setBuffersGeometry format (0 = default)
+    int max_width, max_height;  // the largest buffer geometry (0 = any): android_window_set_max_size
     void *native;               // host-provided EGLNativeWindowType, or NULL
     void *media;                // a SurfaceTexture's window: its um_surface (ANW_MEDIA_MAGIC)
 };
@@ -89,6 +90,15 @@ void android_window_set_size(int width, int height)
     g_win.height = height;
     g_win.fb.width = g_win.buf_width ? g_win.buf_width : width;
     g_win.fb.height = g_win.buf_height ? g_win.buf_height : height;
+    pthread_mutex_unlock(&g_lock);
+}
+
+void android_window_set_max_size(int width, int height)
+{
+    android_window_get();
+    pthread_mutex_lock(&g_lock);
+    g_win.max_width = width > 0 ? width : 0;
+    g_win.max_height = height > 0 ? height : 0;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -175,6 +185,14 @@ int32_t ANativeWindow_setBuffersGeometry(ANativeWindow *w, int32_t width, int32_
     if (!w || width < 0 || height < 0 || (!width) != (!height)) return -EINVAL;
     SHIM_TRACE("ANativeWindow_setBuffersGeometry(%d, %d, format %d)", width, height, format);
     pthread_mutex_lock(&g_lock);
+    if ((w->max_width && width > w->max_width) || (w->max_height && height > w->max_height)) {
+        static int warned;
+        int cw = w->max_width && width > w->max_width ? w->max_width : width;
+        int ch = w->max_height && height > w->max_height ? w->max_height : height;
+        if (!warned++) SHIM_WARN("ANativeWindow_setBuffersGeometry(%d, %d): %dx%d, the most the window holds", width, height, cw, ch);
+        width = cw;
+        height = ch;
+    }
     w->buf_width = width;
     w->buf_height = height;
     w->buf_format = format;

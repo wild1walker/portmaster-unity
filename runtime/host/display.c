@@ -62,10 +62,16 @@ const char *display_auto_choice(char *why, size_t n)
     return "fbdev";
 }
 
-// The fbdev path: Mali's fbdev EGL on the framebuffer; fbdev.c sets up its buffers and flips.
+// The fbdev path: Mali's fbdev EGL on the framebuffer; fbdev.c sets up its buffers and flips, and
+// with UA_RENDER_SIZE / UA_RENDER_SCALE the window has that size (the display engine scales it up).
 static int use_fbdev(void)
 {
-    if (!pbuffer_mode()) fbdev_setup();
+    if (pbuffer_mode()) return 0;
+    fbdev_setup();
+    int w, h;
+    if (fbdev_render_size(&w, &h)) android_window_set_size(w, h);
+    ANativeWindow *win = android_window_get();
+    android_window_set_max_size(ANativeWindow_getWidth(win), ANativeWindow_getHeight(win));
     return 0;
 }
 
@@ -97,6 +103,9 @@ int display_init(const char *title)
     }
     egl_glue_set_host_display(&g_hd);
     android_window_set_size(w, h);
+    const char *rs = getenv("UA_RENDER_SIZE"), *rc = getenv("UA_RENDER_SCALE");
+    if ((rs && *rs) || (rc && *rc))
+        fprintf(stderr, "[display] UA_RENDER_SIZE / UA_RENDER_SCALE: the fbdev path only; the SDL window's size %dx%d\n", w, h);
     g_refresh = hz;
     g_backend = "sdl";
     return 0;
