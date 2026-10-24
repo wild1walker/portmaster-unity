@@ -176,3 +176,15 @@ IL2CPP build's and the 32-bit port's 20.5 ms: on this game the route costs a lit
 time rather than saving any, and its memory is that of the IL2CPP build. What it saves is the
 setup: no IL2CPP conversion and compile (48 minutes for this game in Docker on a Mac; on the
 handheld not tried, an hour for Cuphead's smaller build), and none of their downloads.
+
+Where the 1.2 ms go (`UA_PROF=500` in the flat-shader scene, one hold, `profsum.py --syms` with
+the 6000.0.61f1 IL2CPP player's libunity symbols and the runtime's own; 44.2 and 47.1 fps with the
+profiler): UnityMain's engine time is the same, 14.4 ms a frame (Mono route) and 14.2 ms (IL2CPP);
+the game's code is not. The Mono route spends 4.9 ms a frame in JIT-compiled code (17.0 % of its
+samples), Mono's runtime (3.8 %: `mono_jit_runtime_invoke` and the invoke wrappers, the JIT info
+table) and trampolines (2.2 %), IL2CPP 3.4 ms in `libil2cpp.so` (17.5 %, its AOT code and runtime);
+the bridge itself is 0.4 % (0.08 ms). PlayMaker's FSMs lead the managed methods
+(`Fsm:UpdateStateChanges`, `UpdateDelayedEvents`, `FsmState:OnUpdate`). Unity's own Mono players
+enter managed code the same way (`mono_runtime_invoke`: the 32-bit player's libunity imports no
+other entry point), so what is slower is Mono's 64-bit code for these methods against IL2CPP's C++
+of them; 32-bit Mono on the same scene keeps up with IL2CPP (48.9 fps).
