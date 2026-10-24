@@ -208,7 +208,8 @@ jobs-1    UA_UNITY_ARGS='-job-worker-count 1'
 gfx-st    UA_UNITY_ARGS=-force-gfx-st
 # Mono's collector: fewer, larger collections (hitches, not the steady frame rate)
 gc-64     UA_GC_BUDGET=64
-# FMOD's mixer wakes half as often (more output latency, the same sound)
+# FMOD's output reported with 1024 frames a buffer (Unity 6000.0's FMOD then takes its AudioTrack
+# output at 24 kHz: another sound, a measurement)
 audio-1024     UA_AUDIO_FRAMES=1024
 base-end
 ```
@@ -225,7 +226,7 @@ What each answers:
 | `mono-*` | whether JIT code quality matters (only if managed code is a large share of the profile); the log's `[host] mono options` line confirms they were applied |
 | `jobs-*`, `gfx-st` | whether fewer threads compete with UnityMain on the four cores (schedstat's wait for a CPU) and what the render thread's hand-off costs; `JobSystem: Creating JobQueue using job-worker-count value <n>` in the log confirms the job count was taken (it is, in the emulated rig: boot.config switches work as `UA_UNITY_ARGS`), and a run without a `UnityGfxDeviceW` thread confirms `-force-gfx-st` |
 | `gc-64` | collections and their pauses (`gc` in the fps lines); memory: available MB at the end |
-| `audio-1024` | what FMOD's mixer thread costs (its CPU in the thread table) when it runs every 1024 frames instead of 512 |
+| `audio-1024` | what FMOD costs with another output: in Hollow Knight (6000.0) it is not a longer buffer but FMOD's AudioTrack output at 24 kHz (its `FMODAudioDevice` thread 38 % of a core against the mixer's 56 - 57 % at 48 kHz, 2026-10-24) |
 
 Read the profile against what the scene holds: the number of active sprite renderers, cameras,
 behaviours with `Update`/`FixedUpdate` (PlayMaker FSMs among them), 2D colliders and rigidbodies,
@@ -371,8 +372,98 @@ job threads 3. What of it a frame could do without, measured or read from the pr
 | Unity's job workers sleeping and waking for each job batch (3,600 wake-ups a second) | `-job-worker-count 2` (`UA_UNITY_ARGS`), two runs from 47 C: 34.9 fps (696 MHz 24 of 60 s) against 34.5 (22 s); the workers' CPU 19 % of a core against 21 %, every core as busy (64 - 68 %) | the job batches' wake-ups move to the remaining workers: about 2 % of a core, within noise. Not taken |
 | the host's UI thread: a 4 ms poll of the looper and SDL's events | profiled (1000 Hz, 15 s): 2.9 % of a core, 272 wake-ups a second; 59 % of its CPU time is the sleep's own system call, 25 % SDL 2.32's event pump (udev monitor, the pads), 8 % `poll` | half of it would need half the wake-ups: a longer poll (input up to 4 ms later, not the game as it is) or the pads' events waking it, which SDL does not offer. About 1.5 % of a core, a sixth of the quarter of a core that is one GPU clock step: not done |
 | `ua_flip`: the framebuffer pan | 1.7 % of a core, all of it kernel time in the sunxi driver's `FBIOPAN_DISPLAY` (0.5 ms a pan) | the kernel's, a pan a frame |
-| FMOD's mixer decoding Vorbis | 40 % of the mixer's samples (2026-10-22 profile, `fmod_tremor_*`): about 22 % of a core. It decodes the clips that play compressed: the game's Streaming clips and those the converter's audio step switched from DecompressOnLoad to CompressedInMemory (321 of Hollow Knight's clips of 2 s or more: [audio.py](../convert/pmunity/audio.py)); which of them King's Pass plays was not looked up. The rest of the mixer is the game's AudioMixer effects (fader, SFX reverb, filters, flange: about half) | for the clips the converter switched, the same Vorbis data is decoded either way: decoding them at load, as the desktop build does, would give the GPU their share of that CPU time back (all of it, about a fifth of a core, is close to what took King's Pass from 600 to 696 MHz above) for the clips' PCM in memory. A port's choice (`audio.compressed_min_s`), weighed against its memory: Hollow Knight's 64-bit build has 48 MB left in King's Pass. Not measured |
+| FMOD's mixer decoding Vorbis | 40 % of the mixer's samples (2026-10-22 profile, `fmod_tremor_*`): about 22 % of a core. More than a third of it (8 points of a core) was the converter's doing: the 12 atmosphere loops the game keeps loaded from the title on, which it marks DecompressOnLoad and the audio step had switched to CompressedInMemory | measured, and the audio step changed: [below](#fmods-mixer-and-the-audio-step-2026-10-24) |
 | FMOD mixing at 48 kHz (`UA_AUDIO_RATE`) for 44.1 kHz clips | the resamplers are 2 - 3 % of the mixer's samples; 44.1 kHz would mix 8 % fewer samples (12 kHz, a measurement: the mixer 56 -> 29 % of a core, +9.7 %, above) | not the same sound (the mix and its effects at another rate, resampled elsewhere): not a default |
+
+### FMOD's mixer and the audio step (2026-10-24)
+
+Unity decodes a clip marked DecompressOnLoad to 16-bit PCM once, when the clip loads, and keeps the
+PCM while it stays loaded; a CompressedInMemory clip keeps its Vorbis data, and FMOD's mixer decodes
+it every time it plays. The converter's audio step used to switch every DecompressOnLoad Vorbis clip
+of 2 s or more to CompressedInMemory (for Cuphead's Devil fight: 53 MiB of PCM in what its scene loads):
+the same Vorbis data, decoded while it plays instead of once, the sound unchanged, the mixer's CPU
+time not.
+
+**What Hollow Knight holds.** Its data has 1,999 AudioClips: 1,023 CompressedInMemory and 61
+Streaming as the game ships them, 915 DecompressOnLoad (506 MiB of PCM), of which the step switched
+321 (450 MiB of PCM, 60 MiB of Vorbis; read with UnityPy, every clip's load type, length, rate and
+channels). What a scene keeps loaded is its own shared assets file (`sharedassets<n>.assets`: the
+assets the build put there are the ones scene n uses) and the assets its PreloadData lists from
+other files: King's Pass (`Tutorial_01`) 139 clips, 11.3 MiB of them DecompressOnLoad PCM; the title
+132 clips, 41.4 MiB, most of it 12 loops (cave wind, Dirtmouth's winds, rain, a waterfall, the
+crystal shimmer, Fog Canyon, the shade's music, Grimm's bat: 29.6 MiB of PCM, 4.1 MiB of Vorbis)
+on 14 AudioSources of a prefab in `resources.assets` that the game creates at the title and keeps
+from scene to scene.
+
+**What King's Pass decodes** (32-bit, the bench's plan, runs from 48 C; the installed OBB against
+copies of it whose AudioClips got their original load type back, the 4 bytes of `m_LoadType` and
+the entries' CRCs patched in place, nothing else of the files moved; FMOD's mixer thread from the
+bench's per-thread CPU time):
+
+| load types in the OBB | FMOD's mixer, % of a core | available memory in King's Pass (MB, lowest / average over the run) | GPU at 696 MHz, first 45 s |
+|---|---|---|---|
+| the step's length rule (as installed), 6 runs | 56 - 57 | 55 - 71 / 61 - 76 | 25 - 31 s (45 from a 45 C start) |
+| King's Pass's own 11 switched clips back (1 of the 12 resident loops among them) | 56 | 53 / 56 | 30 s |
+| 4 of the 12 resident loops back | 55 | 67 / 70 | 31 s |
+| 7 of the 12 | 53 | 63 / 64 | 33 s |
+| the budgeted step at 16 MiB (7 of the 12) | 54 | 56 / 59 | 40 s |
+| the budgeted step at 36 MiB (all 12) | 49 | 46 / 49 | 45 s |
+| every clip the step switched back, 3 runs | 48 | 35 / 41 - 55, 60 - 95 MB more in swap | 38 s |
+
+The decoding the step had added is the resident loops: all of them play all the time in every
+scene (the game's AudioMixer snapshots set what is heard, so FMOD decodes each one whatever its
+level), 8 points of a core, more than a third of the mixer's Vorbis decoding; King's Pass's own
+clips are not playing there. The rest of the decoding is the game's own CompressedInMemory clips. The frame rate,
+120 s runs from equal 48 C starts, every switched clip back against the length rule: 34.1 -> 34.7
+and 34.1 -> 34.5 fps (+1.7 %, +1.1 %), the Mali at 696 MHz 50 and 49 s of the 120 against 28 and
+28; that variant swapped while it ran (available memory down to 35 MB, 60 - 95 MB more swap), which
+the 36 MiB budget, with the same mixer time, does not (46 MB at the lowest, no swap traffic): 36.9
+fps over its first 45 s at 696 MHz throughout (35.0 - 35.5 as installed in the same sessions). The loads do not get longer: the title's 7.9 - 8.1 s
+and the save's 3.7 + 5.6 s are the same in every variant (within 0.15 s).
+
+The 64-bit build (`hk64`, two runs of each, 45 s, interleaved): FMOD's mixer 54 - 55 % of a core
+as installed, 50 - 51 with the 16 MiB budget, 47 with the 36 MiB one; 34.7 / 34.5 fps (the Mali at
+696 MHz 22 / 22 of 45 s), 35.1 / 34.9 (24 / 21 s) and 35.8 / 35.3 (32 / 28 s). Its memory in King's
+Pass hardly moves (available 41 - 51 MB as installed, 43 - 47 MB with either budget: the kernel
+keeps about 240 - 300 MB of the game in zram either way); the load from the save swaps for 11 - 107
+s in every variant (79 and 11 s as installed, the first run of a session the shortest; grab_fetch's
+runs of the same data: 11 - 91 s), nothing the variants can be told apart by.
+
+The mixer's profile (32-bit, 250 Hz, 20 s each, `UA_PROF_THREADS='FMOD*'`), as installed and with
+the 36 MiB budget: on a CPU 56 and 45 % of the time; Vorbis decoding (`fmod_tremor_*`, the codebook
+lookups, `CodecVorbis`) 41 and 32 % of its samples, 23 -> 14 points of a core; Unity's AudioMixer
+fader 15 / 17 %, the SFX reverb 12 / 16 %, `FMOD::DSPFilter::read` (the lowpass filters) 14 / 15 %,
+flange 4 / 5 %, the resamplers 3 / 3 %, libc's copies 5 / 6 % (the same work, a larger share of
+less). What is left to decode is the game's own CompressedInMemory clips (1,023 of them, the
+Knight's and the enemies' sounds among them, which it decodes while they play on every platform;
+which of them King's Pass plays was not looked up). The rest of the audio path, also measured:
+
+| piece | measured | reading |
+|---|---|---|
+| ua_host's output: the OpenSL ES shim's buffer queue into SDL (the bench's dummy driver; on the handheld SDL's ALSA driver, into PipeWire's ALSA plugin) | the `SDLAudioP2` thread 0.4 % of a core in King's Pass (125 s); FMOD's stream thread 0.4 % | a copy of each 2 KB buffer, no gain stage at full volume: nothing to take away. PipeWire's own cost needs the card (the runs stay silent): not measured |
+| the output rate | ua_host reports 48 kHz (`UA_AUDIO_RATE`), FMOD mixes at it, and Knulli's PipeWire runs its graph at its default 48 kHz (`default.clock.rate`, `allowed-rates` left at `[ 48000 ]`), the H700's codec too | the mix reaches the card with no second resampling; FMOD's resamplers (3 % of the mixer) take the game's 44.1 kHz clips (1,730 of its 1,999) to 48 kHz as on an Android phone with a 48 kHz output. 44.1 kHz would mix the 48 kHz clips and the effects at another rate and leave PipeWire to resample: not the same samples, not done |
+| a longer DSP buffer (`UA_AUDIO_FRAMES=1024`) | Unity 6000.0's FMOD then leaves OpenSL ES for its AudioTrack output at 24 kHz (log: `FMODAudioDevice: rate 24000`): 38 % of a core, 37.0 fps over 45 s at 696 MHz throughout | another sound (half the rate), not a buffer: a measurement, and it says the earlier `audio-1024` runs measured that too. A real buffer change (AudioManager's DSP buffer size) is more latency, a feel change: opt-in at most, not built |
+| the mixer thread's page faults | blocked in a page fault in 6 - 7 % of its samples | pages it reads that are not resident (swapped out, or file pages); which, not looked into |
+
+**The step now** ([audio.py](../convert/pmunity/audio.py)): a DecompressOnLoad clip stays as the game
+has it unless its scene's PCM would pass the port's budget (`audio.pcm_budget_mb`, default 16): per
+scene, what it keeps loaded (as above) plus what the first two scenes keep (the start scene and the
+title, where games create what they keep from scene to scene: Hollow Knight's loops), all formats
+counted; a scene over the budget switches its own long clips first, the largest first, then the
+resident ones. Only clips the length rule would switch (Vorbis, 2 s or more) are ever switched, so
+the budget never keeps less of the game's choice than the old rule did, and clips no scene uses
+(loaded by scripts) keep the length rule. Hollow Knight at 16 MiB: 82 clips switched (302 MiB of
+PCM, the Godhome bosses' music and the cutscenes'), King's Pass holding 13.1 MiB; at 36 MiB, 51 clips,
+King's Pass 34.7 MiB. Cuphead at 16 MiB: the Devil fight's short clips alone hold 18.9 MiB, so it
+keeps the length rule there. `pcm_budget_mb: null` is the length rule alone.
+
+Cuphead's Devil fight (the 64-bit build, the port's test hooks: `CUPHEAD_TEST_LEVEL=Devil`, god
+mode, the homing weapon; 45 s from the fight's start, one run each): 59.4 fps, held by vsync with
+the Mali at 504 MHz, FMOD's mixer 41 % of a core, 266 MB available; with every clip the step had
+switched back (909 clips, 75 of them in the fight's set) 59.5 fps, the mixer 34 %, 243 MB available,
+the level's load 2.05 s against 1.95. The fight is not held by the GPU, so the 7 points of a core
+are power and heat, not frames; the memory is there for a port that raises the budget (at 32 MiB
+the fight would hold 31.8 MiB, 39 of its long clips as the game has them).
 
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 
