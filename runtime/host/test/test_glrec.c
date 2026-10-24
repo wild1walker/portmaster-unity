@@ -233,8 +233,10 @@ int main(int argc, char **argv)
         CHECK(at("inval(fb0 DS) draw(fb0 3) inval(fb0 DS)") >= 0);
     } else if (!strcmp(m, "sink")) {
         USE(6);
-        CLEARCOLOR(0.5f);
-        BIND(2); CLEAR(GL_COLOR_BUFFER_BIT);
+        BIND(2);
+        CALL(glInvalidateFramebuffer, void (*)(GLenum, GLsizei, const GLenum *), GL_FRAMEBUFFER, 1, (const GLenum[]){ GL_COLOR_ATTACHMENT0 });
+        CLEARCOLOR(0.5f);                                       // (as URP: invalidate, then set the clear colour, then clear)
+        CLEAR(GL_COLOR_BUFFER_BIT);
         CLEARCOLOR(0.25f);
         BIND(1); CLEAR(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT); DRAW(1);
         BIND(2); DRAW(2);

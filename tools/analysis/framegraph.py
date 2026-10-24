@@ -29,7 +29,7 @@ colour is presented; its depth/stencil is undefined after the swap). Colour load
 counted as avoidable: whether a pass's draws cover every pixel is not in the trace.
 
 The estimate in ms uses a cost model (--pass-ms, --load-c, --load-ds, --store-c, --store-ds: per
-pass, and ns per pixel), measured on the handheld with tools/device/passbench (docs/profiling.md).
+pass, and ns per pixel), measured on the handheld with runtime/host/passbench (docs/profiling.md).
 With --gpu, each pass also gets its measured GPU time (UA_GL_TRACE_GPU=3) from a run without
 UA_GL_TRACE_DRAWS (whose reads split the passes): the frames are matched by their pass sequence.
 """
@@ -388,11 +388,12 @@ def main():
     ap.add_argument('--frame', type=int, help='only this traced frame (its number)')
     ap.add_argument('--all', action='store_true', help='every traced frame, not only the first with draws')
     ap.add_argument('--passes', action='store_true', help='list each pass with its reads and writes')
-    ap.add_argument('--pass-ms', type=float, default=0.10, help='GPU cost of a pass itself, ms (default 0.10)')
-    ap.add_argument('--load-c', type=float, default=1.0, help='colour load, ns a pixel')
-    ap.add_argument('--load-ds', type=float, default=1.9, help='depth/stencil load, ns a pixel')
-    ap.add_argument('--store-c', type=float, default=0.5, help='colour store, ns a pixel')
-    ap.add_argument('--store-ds', type=float, default=0.5, help='depth/stencil store, ns a pixel')
+    # (defaults: passbench on the RG34XX-SP's Mali-G31 at 696 MHz, 720x450 RGBA8 / D24S8; docs/profiling.md)
+    ap.add_argument('--pass-ms', type=float, default=0.02, help='cost of a pass itself, ms (default 0.02: its submission)')
+    ap.add_argument('--load-c', type=float, default=0.6, help='colour load, ns a pixel (0.6)')
+    ap.add_argument('--load-ds', type=float, default=0.05, help='depth/stencil load, ns a pixel (0.05)')
+    ap.add_argument('--store-c', type=float, default=0.55, help='colour store of changed tiles, ns a pixel (0.55)')
+    ap.add_argument('--store-ds', type=float, default=0.1, help='depth/stencil store, ns a pixel (0.1)')
     a = ap.parse_args()
     cost = {'pass': a.pass_ms, 'load_c': a.load_c, 'load_ds': a.load_ds, 'store_c': a.store_c, 'store_ds': a.store_ds}
     frames, fbs = parse(a.log)

@@ -37,8 +37,8 @@
 // reads it: a program whose shaders' sources name gl_LastFragDepth/gl_LastFragStencil, or one this
 // did not see compiled from source (Unity's program binary cache is then turned off, as
 // UA_SHADER_DUMP does, so that it compiles every program from source).
-//   UA_GL_REC_OPT=dead,end,start,sink (default all) picks the changes; UA_GL_REC_VERBOSE=<n> logs
-//   the decisions of the first <n> held frames.
+//   UA_GL_REC_OPT=dead,end,start,sink (default all) picks the changes; UA_GL_REC_VERBOSE=<n>[@<m>]
+//   logs the decisions of <n> held frames (after the first <m>).
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -367,7 +367,9 @@ typedef struct {
     unsigned full, written, tested, inval_end;        // over slots
     int ndraws, nclears, nother;
     uint32_t r0, nr, w0, nw;                           // reads / other writes in g_rw
-    clearstate cs_first; unsigned csver_first, csver_last;
+    clearstate cs_first;                               // the state at its first command
+    clearstate cs_clear; unsigned csver_clear;         // at its first clear
+    int has_clear, clear_varies;                       // (the clear state changed between its clears)
     int dead, sunk;
 } pass_t;
 static pass_t *g_pass;
@@ -408,12 +410,11 @@ static pass_t *work(size_t k)
         if (!p->f || p->f->bad) g_opaque = 1;
         if (p->f) { p->ver = p->f->ver; memcpy(p->att, p->f->att, sizeof p->att); }
         p->k_first = k;
-        p->cs_first = s.cs; p->csver_first = s.csver;
+        p->cs_first = s.cs;
         p->r0 = (uint32_t)g_nrw;
         g_cur = p;
     }
     g_cur->k_last = k;
-    g_cur->csver_last = s.csver;
     return g_cur;
 }
 static void add_rw(pass_t *p, uint64_t key, int write)
@@ -423,6 +424,12 @@ static void add_rw(pass_t *p, uint64_t key, int write)
     p->nr++;
 }
 static int started(const pass_t *p) { return p->ndraws || p->nother; }
+static void note_clear(pass_t *p)
+{
+    p->nclears++;
+    if (!p->has_clear) { p->has_clear = 1; p->cs_clear = s.cs; p->csver_clear = s.csver; }
+    else if (s.csver != p->csver_clear) p->clear_varies = 1;
+}
 static unsigned present(const pass_t *p) { unsigned m = 0; for (int i = 0; i < NSLOT; i++) if (p->att[i]) m |= 1u << i; return m; }
 static void wrote(pass_t *p, unsigned slots) { p->written |= slots & present(p); p->inval_end &= ~slots; }
 
@@ -648,7 +655,7 @@ static void walk_cmd(size_t k, unsigned op, const uint64_t *a, const fg_frame *f
         break;
     case OP_glClear: {
         pass_t *p = work(k);
-        p->nclears++;
+        note_clear(p);
         GLbitfield m = U(0);
         clear_slots(p, (m & GL_COLOR_BUFFER_BIT ? 0xfu : 0) | (m & GL_DEPTH_BUFFER_BIT ? 1u << S_DEPTH : 0) |
                        (m & GL_STENCIL_BUFFER_BIT ? 1u << S_STENCIL : 0));
@@ -656,7 +663,7 @@ static void walk_cmd(size_t k, unsigned op, const uint64_t *a, const fg_frame *f
     }
     case OP_glClearBufferfv: case OP_glClearBufferiv: case OP_glClearBufferuiv: case OP_glClearBufferfi: {
         pass_t *p = work(k);
-        p->nclears++;
+        note_clear(p);
         GLenum b = U(0);
         GLint d = I(1);
         unsigned sl = b == GL_COLOR ? (d >= 0 && d < 4 ? 1u << d : 0) : b == GL_DEPTH ? 1u << S_DEPTH :
@@ -790,7 +797,7 @@ static void analyse(const fg_frame *fr)
     // clear-only passes made at the start of the next pass on their framebuffer
     for (size_t i = 0; o_sink && i < g_npass; i++) {
         pass_t *p = &g_pass[i];
-        if (p->dead || p->ndraws || p->nother || !p->nclears || p->csver_first != p->csver_last || s.cmaski) continue;
+        if (p->dead || p->ndraws || p->nother || !p->nclears || p->clear_varies || s.cmaski) continue;
         size_t j;
         for (j = i + 1; j < g_npass; j++) {
             pass_t *q = &g_pass[j];
@@ -872,7 +879,7 @@ static void set_clearstate(const fg_frame *fr, const clearstate *c)
 }
 static void emit_sunk(const fg_frame *fr, const pass_t *p, const pass_t *q)
 {
-    set_clearstate(fr, &p->cs_first);
+    set_clearstate(fr, &p->cs_clear);
     for (size_t kk = p->k_first; kk <= p->k_last; kk++) {
         const uint64_t *c = fr->cmd + g_koff[kk];
         unsigned op = (unsigned)(c[0] & 0xffffffffu);
@@ -904,13 +911,15 @@ static void replay(const fg_frame *fr)
     }
 }
 
-static unsigned long g_logged;
+static unsigned long g_logged, g_verbose_skip;
 static void verbose(const fg_frame *fr)
 {
+    if (g_verbose_skip) { g_verbose_skip--; return; }
     if (g_logged >= (unsigned long)g_verbose) return;
     g_logged++;
-    fprintf(stderr, "[glrec] held frame: %zu passes%s%s\n", g_npass, g_opaque ? ", not followed: submitted unchanged" : "",
-            fr->at_swap ? "" : " (submitted before the swap)");
+    fprintf(stderr, "[glrec] held frame: %zu passes%s%s%s%s%s\n", g_npass, g_opaque ? ", not followed: submitted unchanged" : "",
+            fr->at_swap ? "" : " (submitted before the swap)", g_side ? "; shader storage or images bound" : "",
+            g_queries ? "; a query running" : "", g_tf ? "; transform feedback" : "");
     for (size_t i = 0; i < g_npass; i++) {
         pass_t *p = &g_pass[i];
         unsigned end = 0, start = 0, sink = 0;
@@ -918,8 +927,15 @@ static void verbose(const fg_frame *fr)
             if (g_ins[n].pass != i) continue;
             if (g_ins[n].kind == 1) sink = 1; else if (g_ins[n].after) end |= g_ins[n].slots; else start |= g_ins[n].slots;
         }
-        fprintf(stderr, "[glrec]   %zu fb%u draws %d clears %d other %d full %02x written %02x tested %02x inval %02x%s%s%s%s%s\n",
-                i, p->fb, p->ndraws, p->nclears, p->nother, p->full, p->written, p->tested, p->inval_end,
+        char rd[160] = "";
+        size_t o = 0;
+        for (uint32_t r = 0; r < p->nr && o + 16 < sizeof rd; r++) {
+            uint64_t k = g_rw[p->r0 + r];
+            o += (size_t)snprintf(rd + o, sizeof rd - o, " %s%u", k >> 55 & 1 ? "w" : "", (unsigned)(k & 0xffffffffu));
+        }
+        fprintf(stderr, "[glrec]   %zu fb%u c%u ds%u draws %d clears %d other %d full %02x written %02x tested %02x inval %02x reads%s%s%s%s%s%s\n",
+                i, p->fb, (unsigned)(p->att[0] & 0xffffffffu), (unsigned)(p->att[S_DEPTH] & 0xffffffffu), p->ndraws, p->nclears,
+                p->nother, p->full, p->written, p->tested, p->inval_end, rd,
                 p->dead ? " DEAD" : "", p->sunk ? " SUNK" : "", sink ? " +clears" : "",
                 end ? " end-inval" : "", start ? " start-inval" : "");
     }
@@ -978,7 +994,8 @@ int fg_init(void)
         o_start = strstr(o, "start") != NULL; o_sink = strstr(o, "sink") != NULL;
     }
     const char *v = getenv("UA_GL_REC_VERBOSE");
-    g_verbose = v ? atoi(v) : 0;
+    g_verbose = v ? atoi(v) : 0;                // <n>[@<held frames to skip first>]
+    if (v && strchr(v, '@')) g_verbose_skip = strtoul(strchr(v, '@') + 1, NULL, 10);
     // (the extension list needs a context: read at the first held frame)
     return 0;
 }
