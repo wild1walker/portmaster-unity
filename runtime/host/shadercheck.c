@@ -11,7 +11,8 @@
 //
 // <dir> is what `python -m pmunity shaders-export` writes (index.tsv names the shaders). Prints one
 // line per failure with the driver's log, then a summary; exit status 1 if any program failed.
-// Timing binds every sampler to a 256x256 RGBA8 texture and sets every float uniform to 0.5, so
+// Timing binds every 2D sampler to a 256x256 RGBA8 texture (other sampler types get a unit each with
+// no texture: they sample zeros) and sets every float uniform to 0.5, so
 // it measures the shader's own cost (ALU, texture fetches, bandwidth of one RGBA8 target), not the
 // game's data. Quads are blended (premultiplied alpha, as sprites), so each one is shaded in full.
 // EGL: a pbuffer surface (Mesa: EGL_PLATFORM=surfaceless), else the Mali fbdev window.
@@ -176,6 +177,15 @@ static void default_uniforms(GLuint pr, GLuint tex2d)
         case GL_FLOAT_MAT4: glUniformMatrix4fv(loc, size, GL_FALSE, half); break;
         case GL_SAMPLER_2D:
             glActiveTexture(GL_TEXTURE0 + unit); glBindTexture(GL_TEXTURE_2D, tex2d);
+            glUniform1i(loc, unit++); break;
+        // other sampler types get a unit of their own with no texture (they sample zeros): left on
+        // unit 0 beside the 2D texture they would make every draw fail (two sampler types on one
+        // unit), and the program would time as free (Hollow Knight's Sprites/Lit, a sampler3D)
+        case GL_SAMPLER_3D: case GL_SAMPLER_CUBE: case GL_SAMPLER_2D_SHADOW: case GL_SAMPLER_2D_ARRAY:
+        case GL_SAMPLER_2D_ARRAY_SHADOW: case GL_SAMPLER_CUBE_SHADOW: case GL_INT_SAMPLER_2D:
+        case GL_INT_SAMPLER_3D: case GL_INT_SAMPLER_CUBE: case GL_INT_SAMPLER_2D_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_2D: case GL_UNSIGNED_INT_SAMPLER_3D: case GL_UNSIGNED_INT_SAMPLER_CUBE:
+        case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
             glUniform1i(loc, unit++); break;
         default: break;
         }
