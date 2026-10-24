@@ -189,6 +189,19 @@ class CheckTest(unittest.TestCase):
             P.print_report(rep, out)
             self.assertIn('recommended route: android', out.getvalue())
 
+    def test_hdrp_no_android_player_route(self):
+        # HDRP does not render on the Android player's GLES3 device: no route on it fits, the arm64 ones
+        # neither (Suvalf, 6000.3 HDRP with Vulkan shaders only, got mono-arm64 recommended)
+        for v in ('2021.3.28f1', '6000.0.61f1'):
+            rep = {'backend': 'mono', 'unity_version': v, 'unity_supported': True, 'shader_source': 'vulkan',
+                   'hdrp': True, 'scripting_runtime': '.NET 4.x', 'build': 'linux', 'arch': 'x86_64'}
+            P.decide_routes(rep)
+            for name in ('android', 'il2cpp-arm64', 'mono-arm64'):
+                r = next(r for r in rep['routes'] if r['route'] == name)
+                self.assertFalse(r['ok'], (v, name))
+                self.assertTrue(any('HDRP' in w for w in r['why']), (v, name))
+            self.assertNotIn(rep['route'], ('android', 'il2cpp-arm64', 'mono-arm64'))
+
     def test_mouse_current_unchecked(self):
         # asmpatch --survey: the Input System's Mouse.current used with no null check -> pointer mode, even
         # where the UI is also selected for pad navigation (a handheld has no mouse unless pointer mode
@@ -580,6 +593,40 @@ class NewAndSetupTest(unittest.TestCase):
             # a player set in port.toml wins over the route's default
             _, out = self.make(t, {'port': {'route': 'il2cpp-arm64'}, 'player': {'abi': 'armeabi-v7a'}})
             self.assertIn('PLAYER_ABI=armeabi-v7a', open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read())
+
+    def test_mono_arm64_route(self):
+        # Mono on the 64-bit player: offered by the check for a .NET 4.x Mono build (not recommended
+        # over the others), the IL2CPP player with its engine modules, android-data --mono64, the
+        # release's Mono runtime of the game's line installed as lib/libil2cpp.so and beside it
+        with tempfile.TemporaryDirectory() as t:
+            game = os.path.join(t, 'src', 'My Game')
+            fake_game(game, version='2019.4.8f1', name='My Game')
+            rep = P.check(game, asmpatch='/nonexistent-asmpatch')
+            r = next(x for x in rep['routes'] if x['route'] == 'mono-arm64')
+            self.assertTrue(r['ok'] and r['available'], r)
+            self.assertEqual(rep['route'], 'android')
+            _, out = self.make(t, {'port': {'route': 'mono-arm64'}})
+            env = open(os.path.join(out, 'mygame', 'setup', 'setup.env')).read()
+            self.assertIn('PORT_ROUTE=mono-arm64', env)
+            self.assertIn('PLAYER_BACKEND=il2cpp', env)
+            self.assertIn('PLAYER_ABI=arm64-v8a', env)
+            launcher = open(os.path.join(out, 'My Game.sh')).read()
+            self.assertNotIn('lib32', launcher)
+            self.assertIn('uname -m', launcher)
+            setup = open(os.path.join(out, 'mygame', 'setup', 'patchscript')).read()
+            self.assertIn('--abi "$PLAYER_ABI" --managed', setup)
+            self.assertIn('--mono64', setup)
+            self.assertIn('$S/mono64/$line', setup)
+            self.assertNotIn('--on-device', setup)
+            self.assertNotIn('MonoLibs', setup)
+            for f in ('My Game.sh', 'mygame/setup/patchscript'):
+                subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
+            pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
+            self.assertNotIn('armhf', pj['attr']['reqs'])
+            self.assertIn("Unity's Mono", pj['attr']['desc'])
+            self.assertIn('mono64', json.load(open(os.path.join(P.TEMPLATES, 'mono-arm64', 'route.json')))['package'])
+            self.assertEqual(P.mono64_lines({'game': {'unity_versions': ['2019.4.8f1', '2019.4.40f1', '6000.0.61f1']}}),
+                             ['2019.4', '6000.0'])
 
     def test_package(self):
         with tempfile.TemporaryDirectory() as t:

@@ -2,7 +2,7 @@
 
     python -m pmunity player url <version>
     python -m pmunity player fetch <version> <dir> [--backend mono|il2cpp] [--abi armeabi-v7a|arm64-v8a]
-                                                   [--installer FILE|URL] [--symbols | --symbols-only]
+                                                   [--installer FILE|URL] [--symbols | --symbols-only] [--managed]
 
 A game runs on the Android player of the Unity version it was built with (`python -m pmunity version
 <data>` reads it). Unity's release API (services.api.unity.com) names that version's Android Build
@@ -12,7 +12,8 @@ a non-solid NSIS installer, so only the files a port needs are read, one HTTP ra
 
 <dir> gets the player package layout `android-data --pkg` reads:
   Data/unity default resources                   (Unity 6: Data/Resources/unity default resources)
-  Variations/mono/Managed/*.dll                  the Android UnityEngine assemblies (mono)
+  Variations/mono/Managed/*.dll                  the Android UnityEngine assemblies (mono; il2cpp with --managed:
+                                                 the IL2CPP player's, for the Mono route on it, docs/mono-arm64.md)
   Variations/<backend>/Release/Libs/<abi>/*.so   libmain.so, libunity.so
   Variations/mono/Release/MonoLibs/<abi>/*.so    libmono.so (Mono 2.x), libmonobdwgc-2.0.so (4.x), ...
   Apk/MemoryAdvice/*                             the Android Game SDK's Memory Advice models (realtime.tflite,
@@ -73,17 +74,20 @@ def package_path(nsis_path):
 DEFAULT_RESOURCES = ('Data/unity default resources', 'Data/Resources/unity default resources')   # Unity 6: the second
 
 
-def wanted(backend, abi, symbols=False, symbols_only=False):
+def wanted(backend, abi, symbols=False, symbols_only=False, managed=False):
     sym = [f'Variations/{backend}/Release/Symbols/{abi}/*.sym.so']
     if symbols_only:
         return sym
     g = list(DEFAULT_RESOURCES) + [f'Variations/{backend}/Release/Libs/{abi}/*.so', 'Apk/MemoryAdvice/*']
     if backend == 'mono':
         g += ['Variations/mono/Managed/*.dll', f'Variations/mono/Release/MonoLibs/{abi}/*.so']
+    elif managed:
+        g += [f'Variations/{backend}/Managed/*.dll']
     return g + (sym if symbols else [])
 
 
-def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=print, symbols=False, symbols_only=False):
+def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=print, symbols=False, symbols_only=False,
+          managed=False):
     from . import nsis
     rec = None
     if not installer:
@@ -93,7 +97,7 @@ def fetch(version, out, backend='mono', abi='armeabi-v7a', installer=None, log=p
         installer = installer_url(rec)
     log(f'player {version} ({backend}, {abi}) from {installer}')
     ns = nsis.Nsis(installer)
-    globs = wanted(backend, abi, symbols, symbols_only)
+    globs = wanted(backend, abi, symbols, symbols_only, managed)
     got = []
     for path, off, _ in sorted(ns.files()):
         rel = package_path(path)
@@ -140,6 +144,8 @@ def main(argv):
     f.add_argument('--installer', help='a local copy (or another URL) of the installer')
     f.add_argument('--symbols', action='store_true', help="also libunity's and libmain's symbol files (*.sym.so)")
     f.add_argument('--symbols-only', action='store_true', help='only the symbol files (for a game\'s own Android build)')
+    f.add_argument('--managed', action='store_true',
+                   help="with --backend il2cpp: also the IL2CPP player's UnityEngine assemblies (the Mono route on it)")
     a = ap.parse_args(argv)
     if a.cmd == 'url':
         rec = release(a.version)
@@ -148,4 +154,4 @@ def main(argv):
         print(installer_url(rec))
     else:
         fetch(a.version, a.dir, a.backend, a.abi, a.installer, log=lambda m: print(m, file=sys.stderr),
-              symbols=a.symbols, symbols_only=a.symbols_only)
+              symbols=a.symbols, symbols_only=a.symbols_only, managed=a.managed)

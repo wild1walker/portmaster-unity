@@ -5,7 +5,7 @@
                                [--route R] [--title T] [--player PKG] [--force]
     python -m pmunity port package <port dir> [--out DIR] [--pybundle FILE] [--runtime DIR]
                                    [--ua-host FILE] [--asmpatch-bin FILE] [--pmhlslcc-bin FILE]
-                                   [--pmspirvcross-bin FILE] [--no-build]
+                                   [--pmspirvcross-bin FILE] [--mono64-work DIR] [--no-build]
                                    [--submission]
     python -m pmunity port shot <game folder | shot.ppm> [--out screenshot.png] [--timeout S]
     python -m pmunity port routes
@@ -16,7 +16,8 @@
 `check` reports what the game is (Unity version, scripting backend, platform build, compressed or
 not), what it needs on the handheld (input stacks, mouse-only menus, text input, video, native
 plugins, FMOD, store clients) and the route that fits: Unity's Android player (32-bit Mono, this
-repository's runtime), IL2CPP to arm64, the x86-64 player under box64, or why none does.
+repository's runtime), IL2CPP to arm64, Mono on the arm64 player (mono-arm64), the x86-64 player
+under box64, or why none does.
 
 `new` writes the port's folder: the PortMaster launcher, the setup that runs on the handheld on
 the first launch (PortMaster's patcher: fetch Unity's player, convert the player's own copy of the
@@ -63,7 +64,7 @@ from . import unity_version as UV
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, 'port_template')
 REPO = os.path.dirname(os.path.dirname(HERE))          # the portmaster-unity checkout
-HOOK_MODULES = ('route', 'box64', 'il2cpp', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows', 'streaming')
+HOOK_MODULES = ('route', 'box64', 'il2cpp', 'mono64', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows', 'streaming')
 PLAYER_MB = 10          # what the setup reads of Unity's Android support installer (`pmunity player fetch`)
 WINBCL_MB = 6           # ... and of its Windows editor installer for a Windows 2021.2+ build (`pmunity winbcl`)
 
@@ -766,6 +767,8 @@ _INPUT_MODULES = {
 ROUTE_TEXT = {
     'android': "Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime",
     'il2cpp-arm64': "the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)",
+    'mono-arm64': "the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android "
+                  "player (for 64-bit systems; no IL2CPP compile)",
     'box64': "the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)",
     'apk': "the game's own Android build (`pmunity apk`)",
 }
@@ -823,9 +826,10 @@ def decide_routes(rep):
     elif gl == 'metal':
         needs.append('Metal shaders only (a macOS build of Unity 2020.3+): `shaders.from = ["metal"]`, translated by '
                      'the converter\'s Metal reader (metal.py; checked on three macOS games, docs/shaders.md)')
-    if rep.get('hdrp'):
-        why.append('HDRP (Unity\'s High Definition pipeline) does not run on OpenGL ES: its shaders translate, '
-                   'the pipeline does not render on the Android player\'s GLES3 device')
+    # (every route on Unity's Android player draws with OpenGL ES: the two arm64 ones below too)
+    hdrp = ['HDRP (Unity\'s High Definition pipeline) does not run on OpenGL ES: its shaders translate, '
+            'the pipeline does not render on the Android player\'s GLES3 device'] if rep.get('hdrp') else []
+    why += hdrp
     if mono and b.get('build') == 'windows' and b.get('data'):
         from . import winbcl
         if winbcl.is_win32_profile(os.path.join(b['data'], 'Managed')):
@@ -857,6 +861,7 @@ def decide_routes(rep):
         why.append(f'Unity {v}: the converter supports {UV.FIRST[0]}.{UV.FIRST[1]} - {UV.LAST[0]}.{UV.LAST[1]}')
     if gl is None:
         why.append('no shader programs the converter translates')
+    why += hdrp
     routes.append({'route': 'il2cpp-arm64', 'ok': not why,
                    'available': os.path.isfile(os.path.join(TEMPLATES, 'il2cpp-arm64', 'route.json')),
                    'why': why, 'needs': [] if why else [
@@ -867,6 +872,25 @@ def decide_routes(rep):
                        ["Unity 2023.1+: its own il2cpp is a native program; Unity 2022.3's .NET il2cpp converts the "
                         "game's code for this version's libil2cpp and player (docs/il2cpp.md, \"Unity 2023.1+\"; "
                         "about 8 MB more downloads)"] if vv and MIX.needed(vv) else [])})
+    # Mono on the arm64 player: the game's assemblies on Unity's Mono built for aarch64 Linux, which
+    # the release ships; .NET 4.x only (Unity's .NET 3.5 Mono has no 64-bit ARM code generator)
+    why = [] if mono else ['needs a Mono build']
+    rt = str(rep.get('scripting_runtime') or '')
+    if mono and '3.5' in rt:
+        why.append('a .NET 3.5 game: Unity\'s Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator')
+    if vv and vv.line < (2017, 4):
+        why.append(f'Unity {v}: the arm64 Android players start with 2017.4')
+    elif v and not supported:
+        why.append(f'Unity {v}: the converter supports {UV.FIRST[0]}.{UV.FIRST[1]} - {UV.LAST[0]}.{UV.LAST[1]}')
+    if gl is None:
+        why.append('no shader programs the converter translates')
+    why += hdrp
+    routes.append({'route': 'mono-arm64', 'ok': not why,
+                   'available': os.path.isfile(os.path.join(TEMPLATES, 'mono-arm64', 'route.json')),
+                   'why': why, 'needs': [] if why else [
+                       "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux "
+                       "(`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+                       'tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0']})
     # box64: the game's own x86-64 Linux player
     why = []
     if b.get('build') != 'linux':
@@ -1700,6 +1724,7 @@ ROUTE_NEEDS = {
     'android': 'a handheld with a 32-bit (armhf) userland beside its 64-bit system (e.g. Knulli on Allwinner H700 '
                'devices)',
     'il2cpp-arm64': 'a 64-bit (aarch64) handheld',
+    'mono-arm64': 'a 64-bit (aarch64) handheld',
     'box64': "a 64-bit (aarch64) handheld with OpenGL ES 3, and PortMaster's Westonpack (downloaded on the first launch)",
     'apk': "a 64-bit (aarch64) handheld with OpenGL ES 3, and a 32-bit (armhf) userland beside its 64-bit system (e.g. "
            "Knulli) for a game whose APK has only its 32-bit player",
@@ -1722,6 +1747,7 @@ BUILD_STEPS = {
     'pmhlslcc': 'ARCH=arm64 tools/hlslcc/build.sh                            # pmhlslcc, HLSLcc for the setup, aarch64 (Docker)',
     'pmspirvcross': 'ARCH=arm64 tools/spirvcross/build.sh                        # pmspirvcross, SPIRV-Cross for the setup, aarch64 (Docker)',
     'box64': 'tools/box64/build.sh                                        # box64, gl4es, glxes (Docker)',
+    'mono64': 'runtime/mono64/build.sh; tools/mono64/build-mono.sh <line> tools/mono64/work  # the Mono bridge and Unity\'s Mono, aarch64 (Docker)',
 }
 # PortMaster's standard first lines of a launcher (after "#!/bin/bash" and the PORTMASTER line)
 STANDARD_HEADER = '''XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -2378,9 +2404,57 @@ def _component_pmspirvcross(ctx, opts):
     ctx.license('LICENSE.pmspirvcross-SPIRV-Cross-SMOL-V.txt', lic)
 
 
+def mono64_lines(cfg):
+    """The Unity lines ("2019.4") whose Mono runtime a mono-arm64 release ships (game.unity_versions)."""
+    out = []
+    for v in cfg['game'].get('unity_versions') or []:
+        m = re.match(r'(\d+\.\d+)', str(v))
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
+def _component_mono64(ctx, opts):
+    """The mono-arm64 route's runtime as setup/mono64/<line>/ for each Unity line of
+    game.unity_versions: the bridge (runtime/mono64/build.sh) as libil2cpp.so and Unity's Mono for
+    aarch64 Linux of that line (tools/mono64/build-mono.sh <line> <work>: libmonobdwgc-2.0.so,
+    libMonoPosixHelper.so, Mono 6's libmono-native.so), with Mono's, bdwgc's and corefx's licences.
+    The work folder: --mono64-work, else $PMUNITY_MONO64_WORK, else tools/mono64/work."""
+    lines = mono64_lines(ctx.cfg)
+    if not lines:
+        raise SystemExit('game.unity_versions: the mono-arm64 route ships the Mono runtime of the game\'s Unity line')
+    rt = ctx.runtime
+    bridge = opts.get('mono64_bridge') or os.path.join(rt, 'runtime', 'mono64', 'out', 'arm64', 'libil2cpp_mono.so')
+    if not os.path.isfile(bridge):
+        if opts.get('no_build'):
+            raise SystemExit(f'{bridge}: build the Mono bridge first (runtime/mono64/build.sh)')
+        ctx.log('building the Mono bridge (runtime/mono64/build.sh, Docker)')
+        subprocess.run([os.path.join(rt, 'runtime', 'mono64', 'build.sh')], check=True)
+    work = opts.get('mono64_work') or os.environ.get('PMUNITY_MONO64_WORK') or os.path.join(rt, 'tools', 'mono64', 'work')
+    for line in lines:
+        branch = f'unity-{line}-mbe'
+        out = os.path.join(work, 'out', branch)
+        if not os.path.isfile(os.path.join(out, 'libmonobdwgc-2.0.so')):
+            if opts.get('no_build'):
+                raise SystemExit(f'{out}: build Unity\'s Mono for {line} first (tools/mono64/build-mono.sh {line} {work})')
+            ctx.log(f'building Unity\'s Mono {branch} for aarch64 Linux (tools/mono64/build-mono.sh, Docker)')
+            subprocess.run([os.path.join(rt, 'tools', 'mono64', 'build-mono.sh'), line, work], check=True)
+        ctx.add(bridge, os.path.join('setup', 'mono64', line, 'libil2cpp.so'), 0o755)
+        for n in ('libmonobdwgc-2.0.so', 'libMonoPosixHelper.so', 'libmono-native.so'):
+            if os.path.isfile(os.path.join(out, n)):
+                ctx.add(os.path.join(out, n), os.path.join('setup', 'mono64', line, n), 0o755)
+        src = os.path.join(work, 'src', branch)
+        ctx.license(f'LICENSE.mono-{line}.txt', os.path.join(src, 'LICENSE'))
+        ctx.license(f'PATENTS.mono-{line}.txt', os.path.join(src, 'PATENTS.TXT'))
+        ctx.license(f'LICENSE.bdwgc-{line}.txt', os.path.join(src, 'external', 'bdwgc', 'README.QUICK'))
+        cf = os.path.join(src, 'external', 'corefx', 'LICENSE.TXT')
+        if os.path.isfile(os.path.join(out, 'libmono-native.so')) and os.path.isfile(cf):
+            ctx.license(f'LICENSE.corefx-{line}.txt', cf)
+
+
 COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'ua_host64': _component_ua_host64,
               'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'asmpatch': _component_asmpatch,
-              'pmhlslcc': _component_pmhlslcc, 'pmspirvcross': _component_pmspirvcross}
+              'pmhlslcc': _component_pmhlslcc, 'pmspirvcross': _component_pmspirvcross, 'mono64': _component_mono64}
 
 
 def wants(part, cfg):
@@ -2626,6 +2700,8 @@ def main(argv):
                                           '(default <runtime>/tools/hlslcc/out/linux-arm64/pmhlslcc)')
     p.add_argument('--pmspirvcross-bin', help='pmspirvcross for linux-arm64, with pmspirvcross.LICENSE.txt beside it '
                                               '(default <runtime>/tools/spirvcross/out/linux-arm64/pmspirvcross)')
+    p.add_argument('--mono64-work', help="the mono-arm64 route's Mono builds (tools/mono64/build-mono.sh's work folder; default "
+                                         "$PMUNITY_MONO64_WORK, else <runtime>/tools/mono64/work)")
     p.add_argument('--no-build', action='store_true', help='stop instead of building what is missing')
     p.add_argument('--submission', action='store_true',
                    help="also lay the port out as PortMaster's repository holds it (<out>/submission/<name>/)")
@@ -2649,6 +2725,7 @@ def main(argv):
     if a.cmd == 'package':
         package(a.port, a.out, a.runtime, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle,
                 asmpatch_bin=a.asmpatch_bin, pmhlslcc_bin=a.pmhlslcc_bin, pmspirvcross_bin=a.pmspirvcross_bin,
+                mono64_work=a.mono64_work,
                 no_build=a.no_build, submission=a.submission)
         return 0
     if a.cmd == 'shot':

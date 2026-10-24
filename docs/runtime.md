@@ -97,6 +97,10 @@ thread's wait for its next buffer (`gate`).
 | variable | effect |
 |---|---|
 | `UA_LIBDIR` | player libraries (default `<root>/lib`) |
+| `UA_SCRIPTING=mono` | the Mono route on the 64-bit IL2CPP player ([mono-arm64.md](mono-arm64.md)): `<lib>/libil2cpp.so` is the Mono bridge, loaded as a host library with Mono's `libmonobdwgc-2.0.so` beside it. Default: `android_package.json`'s `"scripting"` (`android-data --mono64` writes `"mono"`) |
+| `UA_MONO64_MANAGED=<dir>` | the Mono route's assemblies (default: what libunity copied out of the APK's `assets/bin/Data/Managed`, `data/external/il2cpp`) |
+| `UA_MONO64_TRACE=1`, `UA_MONO64_OPTIONS`, `UA_MONO64_RUNTIME` | the bridge's log of unusual calls (P/Invoke libraries, assemblies not found, threads attached on their first call); options for Mono's JIT (`mono_jit_parse_options`, e.g. `--optimize=...`); another `libmonobdwgc-2.0.so`. Mono's own `MONO_*` variables pass through |
+| `UA_MONO64_GC_SLICE=<ms>` | the Mono route's incremental collector with that time slice (0: off). Default: `android_package.json`'s `gc_time_slice_ms`, which `android-data --mono64` takes from the game's `boot.config` (`gc-max-time-slice`, Unity 2019.1+'s "Use incremental GC"), as the desktop player starts Mono with it (`MONO_GC_PARAMS=incremental=<ms>`) |
 | `UA_SDK_INT` | the Android API level reported (`Build.VERSION.SDK_INT`, `ro.build.version.sdk`). Default: converted data 19 on armhf, 22 on arm64, or `android_package.json`'s `min_sdk` (22 for a game with compute kernels: Unity uses OpenGL ES 3.1+ only from API 21, [android-data.md](android-data.md#2-platform-differences)); an imported APK its targetSdkVersion ([apk.md](apk.md)) |
 | `UA_PACKAGE`, `UA_META` | package name; manifest meta-data (`unity.build-id=...` ties the APK to its OBB). Default: from `android_package.json` |
 | `UA_APK_NAME` | the APK's name without `.apk` (default: from `android_package.json`, else the only `.apk` in the root) |

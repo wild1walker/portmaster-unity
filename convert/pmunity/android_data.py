@@ -1077,7 +1077,7 @@ def plan(args):
                     args.gi_neon += 1
     if getattr(args, 'data_path', False):
         items += ST.data_folder_items(src, os.path.join(args.name, ST.FOLDER))
-    for n, path in memory_advice(pkg, getattr(args, 'il2cpp', None)):
+    for n, path in memory_advice(pkg, getattr(args, 'il2cpp', None) or getattr(args, 'mono64', False)):
         # read through AAssetManager (ua_host: the loose assets beside the APK), as from an Android build's APK
         items.append((os.path.join(args.name, 'assets', n), path, 'link'))
         args.loose_assets = list(args.loose_assets or []) + [n]
@@ -1091,7 +1091,9 @@ def plan(args):
     items.append((os.path.join(data, 'Resources', 'unity_builtin_extra'), bex, act))
     # Managed: the Android engine assemblies, the game's own and Unity's extension/BCL assemblies
     il2cpp = getattr(args, 'il2cpp', None)
-    amanaged = os.path.join(pkg, 'Variations', 'il2cpp' if il2cpp else 'mono', 'Managed')
+    # --mono64: the IL2CPP player's engine modules (its libunity registers their internal calls),
+    # run by Mono with the game's own assemblies (docs/mono-arm64.md)
+    amanaged = os.path.join(pkg, 'Variations', 'il2cpp' if il2cpp or getattr(args, 'mono64', False) else 'mono', 'Managed')
     names = set()
     override = {os.path.basename(f): os.path.abspath(f) for f in args.managed_file}
     for n, why in desktop_modules_needed(os.path.join(src, 'Managed'), amanaged).items():
@@ -1186,6 +1188,19 @@ def il2cpp_items(args, items, data):
     elif args.unity.major >= 2021:
         items.append((os.path.join(data, 'unity_app_guid'), metadata, 'il2cppguid'))
     return items
+
+
+def gc_time_slice(src):
+    """boot.config's gc-max-time-slice (ms) of a data folder: the incremental collector is on
+    (Unity 2019.1+'s "Use incremental GC"), else 0."""
+    try:
+        for line in open(os.path.join(src, 'boot.config'), encoding='utf-8', errors='replace'):
+            k, _, v = line.strip().partition('=')
+            if k == 'gc-max-time-slice' and v.strip().isdecimal():
+                return int(v)
+    except OSError:
+        pass
+    return 0
 
 
 def il2cpp_app_guid(metadata):
@@ -1289,8 +1304,8 @@ def player_version(pkg):
             m = re.search(VERSION_RE.decode() + r'\b', open(p, encoding='utf-8', errors='replace').read())
             if m:
                 return UV.Version(m.group(1))
-    for abi in ('armeabi-v7a', 'arm64-v8a'):
-        lib = os.path.join(pkg, 'Variations', 'mono', 'Release', 'Libs', abi, 'libunity.so')
+    for abi, backend in (('armeabi-v7a', 'mono'), ('arm64-v8a', 'mono'), ('arm64-v8a', 'il2cpp'), ('armeabi-v7a', 'il2cpp')):
+        lib = os.path.join(pkg, 'Variations', backend, 'Release', 'Libs', abi, 'libunity.so')
         if os.path.isfile(lib):
             with open(lib, 'rb') as f:
                 found = re.findall(VERSION_RE + rb'\x00', f.read())
@@ -1460,6 +1475,11 @@ def check_source(args):
             raise UV.Unsupported(f'--il2cpp {args.il2cpp}: {why}')
         args.warnings += warn
         args.runtime = f'IL2CPP ({args.il2cpp_info["abi"]}, metadata v{args.il2cpp_info["metadata_version"]})'
+    elif getattr(args, 'mono64', False):
+        if not os.path.isdir(os.path.join(args.pkg, 'Variations', 'il2cpp', 'Managed')):
+            raise UV.Unsupported(f'--mono64: {args.pkg} is no IL2CPP player package with its engine modules '
+                                 f'(Variations/il2cpp/Managed: `pmunity player fetch <version> --backend il2cpp --abi arm64-v8a`)')
+        args.runtime = f'{args.runtime} on the IL2CPP player (arm64-v8a, Mono for aarch64 Linux)'
     # native plugins: what the managed code P/Invokes and what the port gives each (plugins.py)
     from . import plugins as PL
     try:
@@ -1593,6 +1613,9 @@ def main(argv=None):
                          f"Unity does not read) in it")
     ap.add_argument('--beside', action='append', default=None, metavar='GLOB',
                     help="files of the game's folder (the parent of --src) put beside the APK root (default goggame-*.info)")
+    ap.add_argument('--mono64', action='store_true',
+                    help="package for Unity's 64-bit IL2CPP player (--pkg: the IL2CPP arm64-v8a player package) with the game's "
+                         "assemblies, run there by Unity's Mono built for aarch64 Linux (docs/mono-arm64.md)")
     ap.add_argument('--il2cpp', default=None, metavar='DIR',
                     help="the output of `pmunity il2cpp` for this data: package for Unity's IL2CPP player (--pkg: the IL2CPP "
                          "player package) with IL2CPP's metadata instead of the assemblies (docs/il2cpp.md)")
@@ -2017,6 +2040,13 @@ def pack(args, log):
         # the player's ABI (the IL2CPP build's), as `pmunity apk` writes it: what picks the 64-bit
         # ua_host and rig (a Mono player's is always armeabi-v7a and is not written)
         res['abi'] = args.il2cpp_info.get('abi')
+    elif getattr(args, 'mono64', False):
+        # ua_host maps the player's libil2cpp.so to the Mono bridge (runtime/host/mono64.c); the
+        # incremental collector's time slice the desktop player's Mono runs with (boot.config)
+        res['abi'], res['scripting'] = 'arm64-v8a', 'mono'
+        slice_ms = gc_time_slice(args.src)
+        if slice_ms:
+            res['gc_time_slice_ms'] = slice_ms
     if args.unity.line >= OBB_GUID_FROM:
         apk_entries.append((OBB_GUID_FILE, bid.encode('ascii')))
         marker = [marker, (OBB_GUID_FILE_IN_OBB, bid.encode('ascii'))]
@@ -2027,7 +2057,7 @@ def pack(args, log):
     main_obb = os.path.join(zdir, f'main.{args.version_code}.{args.package}.obb')
     patch_obb = os.path.join(zdir, f'patch.{args.version_code}.{args.package}.obb')
     pack_what = args.pack
-    if getattr(args, 'il2cpp', None) and pack_what == 'all':
+    if (getattr(args, 'il2cpp', None) or getattr(args, 'mono64', False)) and pack_what == 'all':
         # IL2CPP: one APK when it fits, as Unity's builds (no "split application binary"). libunity
         # 2020.3 extracts IL2CPP's data by listing assets/bin/Data/Managed, and with an OBB mounted
         # that listing comes back empty (nothing extracted: "Could not open global-metadata.dat")
@@ -2125,6 +2155,8 @@ def opts_key(args):
         key.append('no-video-shader')
     if getattr(args, 'il2cpp', None):
         key.append('il2cpp=' + args.il2cpp)
+    if getattr(args, 'mono64', False):
+        key.append('mono64')                # (the IL2CPP player's engine modules)
     if args.swappy != 'keep' and args.unity.line >= SWAPPY_FROM:     # the setting exists from 2019.3
         key.append('swappy=' + args.swappy)
     if getattr(args, 'retarget', None):
