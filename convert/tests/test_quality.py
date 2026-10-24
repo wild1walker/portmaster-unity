@@ -102,6 +102,22 @@ def standard(lods=(300, 150), passes150=('FORWARDBASE', 'FORWARDADD', 'SHADOWCAS
     return tree, info
 
 
+class Plausible(unittest.TestCase):
+    def test_fields(self):
+        asset = {'m_MSAA': 4, 'm_MainLightShadowmapResolution': 4096, 'm_AdditionalLightsShadowmapResolution': 2048,
+                 'm_SoftShadowQuality': 3, 'm_RenderScale': 1.0}
+        self.assertTrue(Q.plausible('UniversalRenderPipelineAsset', asset))
+        self.assertFalse(Q.plausible('UniversalRenderPipelineAsset', dict(asset, m_MSAA=3)))
+        self.assertFalse(Q.plausible('UniversalRenderPipelineAsset', dict(asset, m_RenderScale=7.5e-41)))
+        self.assertIsNone(Q._urp_edit('UniversalRenderPipelineAsset', dict(asset, m_MainLightShadowmapResolution=1 << 30),
+                                      Q.Scan(), dict(Q.DEFAULTS)))
+        ssao = {'m_Settings': {'Downsample': 0, 'Source': 1, 'NormalSamples': 1, 'Samples': 0, 'BlurQuality': 0, 'SampleCount': -1}}
+        self.assertTrue(Q.plausible('ScreenSpaceAmbientOcclusion', ssao))
+        self.assertFalse(Q.plausible('ScreenSpaceAmbientOcclusion', {'m_Settings': dict(ssao['m_Settings'], Samples=9)}))
+        self.assertFalse(Q.plausible('FilmGrain', {'active': 7}))
+        self.assertTrue(Q.plausible('FilmGrain', {'active': True}))
+
+
 class StandardShader(unittest.TestCase):
     def test_reorder(self):
         tree, info = standard()
@@ -178,6 +194,15 @@ class Decide(unittest.TestCase):
         self.assertNotIn('pixelLightCount', s.qcaps)
         self.assertNotIn('shadows', s.qcaps)
         self.assertEqual(len(plan.kept), 2)
+
+    def test_soft_particles_twin(self):
+        s, plan = self.scan(), Q.Plan()
+        s.variants.shaders['Particles/Additive'] = [(0, 0, '', '', {frozenset({'SOFTPARTICLES_ON'})})]
+        Q._decide(None, s, dict(Q.DEFAULTS), plan)
+        self.assertNotIn('softParticles', s.qcaps)
+        s.variants.shaders['Particles/Additive'][0][4].add(frozenset())
+        Q._decide(None, s, dict(Q.DEFAULTS), Q.Plan())
+        self.assertEqual(s.qcaps['softParticles'], 0)
 
     def test_srp_leaves_forward_lights(self):
         s, plan = self.scan(srp=True), Q.Plan()

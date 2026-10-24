@@ -43,6 +43,8 @@ URP (every UniversalRenderPipelineAsset the build uses, its renderers' features,
                    components switched off (not when the game's code or animations drive volumes)
   render_scale     None: cap on m_RenderScale (e.g. 0.75; ua_host's display scaling is the general way)
 
+  dry_run          true: log what would change, write nothing (`--set quality.dry_run=true`)
+
 Every change is logged; `quality: <what>` lines name what was found and left alone, and why.
 """
 import os
@@ -57,7 +59,8 @@ DEFAULTS = {'profile': 'auto', 'ram_mb': 1536,
             'pixel_lights': 1, 'shadow_resolution': 1, 'hard_shadows': True, 'shadow_cascades': 2, 'msaa': 0,
             'anisotropic': 1, 'soft_particles': False, 'standard_lod150': True, 'hdr_format': False,
             'urp_shadow_resolution': 2048, 'urp_soft_shadows': 'low', 'ssao': True,
-            'post': ['ChromaticAberration', 'LensDistortion', 'FilmGrain', 'MotionBlur'], 'render_scale': None}
+            'post': ['ChromaticAberration', 'LensDistortion', 'FilmGrain', 'MotionBlur'], 'render_scale': None,
+            'dry_run': False}
 
 STANDARD = ('Standard', 'Standard (Specular setup)', 'Standard (Roughness setup)', 'Autodesk Interactive')
 SSAO_SHADER = 'Hidden/Universal Render Pipeline/ScreenSpaceAmbientOcclusion'
@@ -150,15 +153,18 @@ class Variants:
                 if mode is None or m == mode:
                     yield name, si, lod, m, pn, kws
 
-    def soft_without_hard(self):
-        """Shaders with a SHADOWS_SOFT variant whose hard twin (the same keywords without it) is not
-        in the data."""
+    def without_twin(self, kw):
+        """Shaders with a variant of keyword `kw` whose twin without it (the same other keywords) is
+        not in the data: turning `kw` off would ask them for a variant the build stripped."""
         bad = set()
         for name, si, lod, m, pn, kws in self.passes():
             for k in kws:
-                if 'SHADOWS_SOFT' in k and (k - {'SHADOWS_SOFT'}) not in kws:
+                if kw in k and (k - {kw}) not in kws:
                     bad.add(name)
         return sorted(bad)
+
+    def soft_without_hard(self):
+        return self.without_twin('SHADOWS_SOFT')
 
     def vertex_lights(self):
         """(ForwardBase passes, of them with VERTEXLIGHT_ON variants)."""
@@ -277,7 +283,9 @@ def run(job, mem_mb=None):
                   f'there keep the game\'s quality)')
     for k in plan.kept:
         job.log(f'quality: kept: {k}')
-    job.log('quality: ' + ('; '.join(plan.done) or 'nothing to change'))
+    job.log('quality: ' + ('would change: ' if c.get('dry_run') else '') + ('; '.join(plan.done) or 'nothing to change'))
+    if c.get('dry_run'):
+        return
     caps = host_caps(scan.qcaps)
     if caps:
         job.state['quality_caps'] = caps            # android_package.json's "quality" (android_data.py)
@@ -423,8 +431,13 @@ def _decide(job, s, c, plan):
                       ('antiAliasing', 'msaa'), ('anisotropicTextures', 'anisotropic')):
             if c[ck] is not None:
                 gq[k] = c[ck]
-        if c['soft_particles'] is False:
-            gq['softParticles'] = 0
+        if c['soft_particles'] is False and any(lv.get('softParticles') for lv in levels):
+            bad = s.variants.without_twin('SOFTPARTICLES_ON')
+            if bad:
+                plan.keep(f'soft particles: no variant without SOFTPARTICLES_ON in {", ".join(bad[:5])}'
+                          f'{" ..." if len(bad) > 5 else ""}')
+            else:
+                gq['softParticles'] = 0
     s.qcaps = gq
     if gq or c['hdr_format']:
         edits.setdefault('globalgamemanagers', set()).add('settings')
@@ -543,13 +556,15 @@ def _edit(job, rel, what, s, c, plan):
                     plan.keep(f'{rel}: {cls} {pid}: not read ({node})')
                     continue
                 ch = _urp_edit(cls, tree, s, c)
-                if ch:
+                if ch is None:
+                    plan.keep(f'{rel}: {cls} {pid}: left alone (its fields read with values they cannot hold)')
+                elif ch:
                     o.save_typetree(tree, nodes=node)
                     n += 1
                     plan.did(f'{rel}: {cls} {tree.get("m_Name") or pid}: ' + ', '.join(ch))
         if lights:
             plan.did(f'{rel}: ' + ', '.join(f'{v} {k}' for k, v in sorted(lights.items())))
-        if n:
+        if n and not c.get('dry_run'):
             lf.write_to(job, rel)
     finally:
         lf.close()
@@ -563,8 +578,39 @@ def _cap(tree, key, cap, ch, name=None):
     tree[key] = type(tree[key])(cap)
 
 
+# the values the fields the step edits can hold: an object whose fields read outside them is left
+# alone (a second guard, after the exact read, against a tree with the right size and the fields
+# in the wrong places)
+PLAUSIBLE = {
+    'UniversalRenderPipelineAsset': {'m_MSAA': {1, 2, 4, 8},
+                                     'm_MainLightShadowmapResolution': {256, 512, 1024, 2048, 4096, 8192},
+                                     'm_AdditionalLightsShadowmapResolution': {256, 512, 1024, 2048, 4096, 8192},
+                                     'm_SoftShadowQuality': {0, 1, 2, 3}, 'm_SupportsHDR': {0, 1}},
+    'ScreenSpaceAmbientOcclusion': {'Downsample': {0, 1}, 'BlurQuality': {0, 1, 2}, 'Samples': {0, 1, 2},
+                                    'Source': {0, 1}, 'NormalSamples': {0, 1, 2}, 'AfterOpaque': {0, 1}},
+}
+
+
+def plausible(cls, t):
+    """Whether the fields the step may edit hold values they can hold (None: which one does not)."""
+    if cls == 'ScreenSpaceAmbientOcclusion':
+        t = t.get('m_Settings')
+        if not isinstance(t, dict):
+            return False
+        if 'SampleCount' in t and not -1 <= t['SampleCount'] <= 64:
+            return False
+    elif cls == 'UniversalRenderPipelineAsset':
+        if 'm_RenderScale' in t and not 0.05 <= t['m_RenderScale'] <= 2.0:
+            return False
+    elif 'active' in t and t['active'] not in (0, 1):
+        return False
+    return all(k not in t or t[k] in vals for k, vals in PLAUSIBLE.get(cls, {}).items())
+
+
 def _urp_edit(cls, t, s, c):
     ch = []
+    if not plausible(cls, t):
+        return None
     if cls == 'UniversalRenderPipelineAsset':
         if c['msaa'] is not None:
             _cap(t, 'm_MSAA', max(1, c['msaa']), ch)
