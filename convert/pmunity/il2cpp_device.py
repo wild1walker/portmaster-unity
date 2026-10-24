@@ -892,8 +892,9 @@ class Scheduler:
     grow (their prediction less their anonymous memory now). The first compile always runs (with
     nothing else running, there is nothing to wait for); a request that does not fit waits, and
     nothing smaller passes it (the big files never starve). A retried compile ("alone") runs with
-    nothing else. Requests are files in a folder on a RAM file system (the wrappers poll for theirs);
-    the scheduler is a thread of the setup's Python, checking every `tick` seconds."""
+    nothing else. Requests are files in a folder on a RAM file system; a turn is a go/<pid> file and
+    a SIGUSR1 to the waiting wrapper. The scheduler is a thread of the setup's Python, looking every
+    `tick` seconds."""
 
     def __init__(self, jobs, reserve_mb=None, tick=0.1, root=None, available=None):
         self.dir = tempfile.mkdtemp(prefix='pmunity-cc-', dir=root or sched_root())

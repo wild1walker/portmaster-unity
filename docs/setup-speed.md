@@ -128,6 +128,113 @@ works on that file system, and so does replacing a file while it is still mapped
 - The textures step still asks for twice a spilled bundle's uncompressed size in free space,
   which only the old node files needed.
 
+## The 64-bit setup: compiling and encoding (2026-10-24)
+
+The release's whole 64-bit Cuphead setup on the RG34XX-SP (GOG's installers and the DLC, textures
+medium; 2026-10-22, before the changes above), from its log:
+
+| step | time | what it does |
+|---|---|---|
+| converting | 2 h 39 min | shaders 4.4 min, settings 1 s, **textures 2 h 32 min**, audio 1.2 min, animclips 0.7 min |
+| IL2CPP | 61 min | UnityLinker 0.6 min, the conversion to C++ 6.3 min (one CPU), **compiling 755 files 50 min** with two compilers, then one killed and the rest with one: 3.6 min more, link and strip in that |
+| packing (android-data) | 19 min | not changed here (mostly the card: the changes above read half and write 40 % less) |
+
+**Textures.** Cuphead converts 1185 textures: 860 BC7 (13.2 Gpix decoded, 1879 Mpix of ASTC
+out), 224 crunched DXT5 (1.6 Gpix, 223 Mpix out), the rest small; 851 of them 4096x4096 or
+larger. The encoder is the step: on the handheld it encodes 0.42 Mpix/s at medium with
+four threads (one thread: 0.105; it scales by 3.99x over four cores), so the
+game's 2104 Mpix of ASTC are 84 min of encoding alone at medium. What changes the blocks
+was not touched (the same astc-encoder build and preset), so the default stays as long as that;
+what was left around it:
+
+- On a system under 2 GB of RAM the step decoded and scaled every texture over 16 MB decoded
+  alone, only then encoding it: on the handheld that is each of the 851 pages of 4096x4096 and up,
+  so the single-threaded passes around their decode and scale (full-size copies and conversions,
+  ~1 s a page on an A53 by the Mac's ratio) left three cores idle each time. What overlaps a decode
+  is the encoding of the page before, which holds only its scaled levels, so now only decodes over
+  128 MB (`textures.solo_mb`: Cuphead's 8192x8192 and 4096x8192 pages) go alone, and
+  `texture_image` no longer copies an image that is already RGBA. The five biggest bundles in the
+  arm64 container told it has 973 MB: the same files, peak 1051-1089 MB (main, two runs) -> 1025
+  MB; no faster there (the M3 does those passes in ~0.03 s a page). **Not measured on the handheld
+  yet**: expected some minutes of the step (up to ~10, by the Mac's ratio of the passes).
+- Checked and left: BC7 is decoded by Pillow, which releases the GIL, so the decode strips do run
+  on every core; the encoder releases it too.
+
+**IL2CPP: the compiles had two of four cores.** The handheld's build chose two compilers from
+`MemAvailable` at the start (200 MB each) and pinned them to two CPUs, while a generated file's
+compile needs 60-80 MB of anonymous memory (measured over all 755 compiles: the libil2cpp sources
+10-32 MB, the 2-3 MiB `Bulk_` files at most 77 MB; only the metadata tables are big:
+`Il2CppAttributes.cpp` 508 MB, `Il2CppTypeDefinitions.cpp` 446 MB). With four slots the old
+wrappers ran one compiler at a time (il2cpp hands out its largest files first, and three of its
+four threads waited inside wrappers of metadata tables for every slot). The compiles now get their
+turns from a scheduler (il2cpp.md, "Fitting a 1 GB, 4 x Cortex-A53 handheld"): one per CPU as the
+predicted memory allows, the largest first; il2cpp's builder keeps three requests per CPU in
+flight; a compile the OOM killer stops runs again alone. And .NET's tiered compilation is off
+for il2cpp.exe (the conversion's CPU -30 %).
+
+| IL2CPP, measured | old slots | branch |
+|---|---|---|
+| 1 GB arm64 container (M3): the compile step, all 755 files | 4.9 min (one compiler at a time) | 2.2 min (2.5 before the wrappers were woken by a signal) |
+| 1 GB container: the conversion to C++, CPU | 30.7 s | 21.5 s |
+| 1 GB container: the whole build (UnityLinker, conversion, compile) | 334 s | 179 s (its compile step still the 2.5 min one) |
+| RG34XX-SP: 37 of the compiles (`Il2CppAttributes.cpp`, eight `Bulk_` files, 28 libil2cpp sources), the toolchain and the files on the card | 391 s (2 slots, as the setup chose) | 276 s (4; the 17 MiB metadata table still alone: 188 s of it) |
+| RG34XX-SP, the whole compile step: simulated from every file's measured CPU time and memory, scaled so the old slots take the 50 min they took | 50 min | **27-28 min** (all four cores busy throughout would be 23.5) |
+
+On the handheld the sample's objects are the same with both. The whole IL2CPP step then comes to
+about 35 min instead of 61 (UnityLinker 0.6 min, the conversion ~4.5 instead of 6.3, the compile
+~28 instead of 50 plus 3.6 after the OOM kill, link and strip ~2); the 1 GB handheld's
+`MemAvailable` at the compile's start (750-780 MB) holds four `Bulk_` compiles (113 MB predicted
+each) beside the 160 MB reserve.
+
+**Shaders.** A stage's sampler types came from one regex search per type over the stage (18-30 of
+them, for each of the game's 6,075 stages: a fifth of the step); they are now the type names among
+the stage's words, what `\b<type>\b` matched. The whole game's shaders step on a Mac 8.9 -> 6.9 s,
+every converted file the same. **Not measured on the handheld yet** (expected ~-20 % of the step's
+2.5-4 min there).
+
+### Same output
+
+- IL2CPP: a fresh build with the branch (UnityLinker, conversion, compile) in a 1 GB arm64
+  container: the C++ and `Data/Managed` identical to main's build, 754 of 755 objects identical,
+  the other one libil2cpp's `Runtime.cpp`, which holds `__DATE__ __TIME__` and differs in any two
+  builds; with main's copy of that object the linked `libil2cpp.so` is byte-identical
+  (53,828,488 bytes). The conversion with tiered compilation off: the C++ identical.
+- Shaders: the whole game's shaders step, main and branch: every converted file identical.
+- Textures: the five biggest bundles (above) with main and the branch: every file identical; the unit
+  tests (`tests/test_textures.py`, `tests/test_setup_speed.py`).
+- `tools/regress/regress.py fast` on the branch: 54 pass, 0 fail, every count and digest as in the
+  baseline.
+
+### The visual option: texture quality "fast"
+
+The port already asks for the texture quality (medium, the default, or fast). Measured, for
+deciding the default on 1 GB handhelds (where a visual change may be the default):
+
+| preset | encoder on the handheld (4 threads) | the game's 2104 Mpix | PSNR against the image encoded (49 Cuphead textures, 86 Mpix) | texels more than 8/255 from medium's |
+|---|---|---|---|---|
+| thorough | | | 42.76 dB (visible texels 39.77) | 0.95 % |
+| **medium** (default) | 0.42 Mpix/s | 84 min | 42.28 dB (39.29) | - |
+| fast | 1.24 Mpix/s | 28 min | 41.37 dB (38.40) | 1.53 % |
+| fastest | 2.13 Mpix/s | 16 min | 39.87 dB (36.91) | 2.75 % |
+
+Fast is 0.9 dB below medium, about twice the step from thorough to medium (0.48 dB), and saves
+about 56 min of the setup; fastest 2.4 dB.
+
+### Not done, or did not pay
+
+- **A faster build of the encoder** (clang, `-mcpu=cortex-a53`, profile-guided; the same
+  astc-encoder release, its invariance option kept, every block compared): needs astc-encoder's
+  sources, a download the setup's tools do not make yet. The wheel's NEON build (GCC 10, `-O3`,
+  LTO) already scales by 3.99x over the four cores.
+- **Encoding a block or a texture once when it repeats**: no two of the 1185 textures have the
+  same pixels; of a sample's 4x4 blocks 56 % are one colour (which the encoder already handles at
+  once) and 93 % of the others unique: a cache would save a few percent of the encoder's work.
+- **IL2CPP**: `-O1` compiles in 95 % of `-Os`'s time (different code), a precompiled header could
+  save at most a tenth (il2cpp.md); stripping the game's own assemblies (UnityLinker "Medium")
+  would change what the code may reach by reflection.
+- **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
+  conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
+
 ## Measuring
 
 `tools/port/stepstat.py` runs one pmunity command as the setup does and prints its wall and CPU
