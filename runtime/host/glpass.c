@@ -341,10 +341,11 @@ static void w_Clear(GLbitfield m)
         sr = g_srgb_ctl ? q_IsEnabled(GL_FRAMEBUFFER_SRGB_EXT) : 0;
     }
     uimg *u = whole ? uimg_find(f->att[0].type, f->att[0].name) : NULL;
-    if (m == GL_COLOR_BUFFER_BIT && u && !memcmp(u->v, v, sizeof v) && u->dither == di && u->srgb == sr) {
-        if (g_check) { check_clear(f); return; }
+    if (u && !memcmp(u->v, v, sizeof v) && u->dither == di && u->srgb == sr) {
+        if (g_check) { check_clear(f); if (m & ~GL_COLOR_BUFFER_BIT) r_Clear(m & ~GL_COLOR_BUFFER_BIT); return; }
         if (!g_pending) g_skipped++;
         g_pending = 1;               // (it holds these values already: made only if the pass goes on)
+        if (m & ~GL_COLOR_BUFFER_BIT) r_Clear(m & ~GL_COLOR_BUFFER_BIT);   // (depth/stencil: glopt.c's)
         return;
     }
     make_pending();

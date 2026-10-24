@@ -15,7 +15,7 @@
 //   invalidate    the game invalidates the colour buffer in between: made
 //   blit          a blit into it in between: made
 //   otherfb       a draw into another framebuffer the texture is attached to: made
-//   depth         the second clear also clears depth: made (only colour-only clears are left out)
+//   depth         the second clear also clears depth: only its depth part made
 //   inval_late    the second clear held back, then the game invalidates: the clear is made first
 //   renderbuffer  a colour renderbuffer (framebuffer 5): left out
 //   foreign       a draw on another thread in between: made
@@ -123,7 +123,8 @@ int main(int argc, char **argv)
     CHECK(made == (left_out ? 0 : 1));
     if (made == 1) {
         fake_clear_t *c = &fake_clears[before];
-        CHECK(c->fb == fb && (c->mask & GL_COLOR_BUFFER_BIT));
+        // (depth: the colour part held back, the depth part passed on)
+        CHECK(c->fb == fb && (!strcmp(mode, "depth") ? c->mask == GL_DEPTH_BUFFER_BIT : (c->mask & GL_COLOR_BUFFER_BIT) != 0));
         if (later) {
             // made with the first clear's colour and a whole, unmasked clear; then before the draw
             CHECK(c->c[0] == 0 && c->c[3] == 0 && !c->scissor && c->cmask[0] && c->cmask[1] && c->cmask[2] && c->cmask[3]);

@@ -1069,11 +1069,11 @@ static void probe_poll(void)
 }
 
 // ---- texture facts
-typedef struct { int w, h, ok; } texinfo;
+typedef struct { int w, h, ok, imm; } texinfo;
 // a 2D RGBA8 texture with one level (on the active unit's binding, restored)
 static texinfo tex_info(GLuint real)
 {
-    texinfo t = { 0, 0, 0 };
+    texinfo t = { 0, 0, 0, 0 };
     GLint old = 0, fmt = 0, imm = 0, lv = 0, w1 = 0;
     q_GetIntegerv(GL_TEXTURE_BINDING_2D, &old);
     q_BindTexture(GL_TEXTURE_2D, real);
@@ -1085,6 +1085,7 @@ static texinfo tex_info(GLuint real)
     else q_GetTexLevelParameteriv(GL_TEXTURE_2D, 1, GL_TEXTURE_WIDTH, &w1);
     q_BindTexture(GL_TEXTURE_2D, (GLuint)old);
     t.ok = t.w > 0 && t.h > 0 && fmt == GL_RGBA8 && (imm ? lv == 1 : w1 == 0);
+    t.imm = imm != 0;
     return t;
 }
 
@@ -1129,7 +1130,7 @@ static int candidate(const drawcall *d)
     q_GetIntegerv(GL_ACTIVE_TEXTURE, &act);
     GLuint ra = to_real(a), rc = to_real(c);
     texinfo ta = tex_info(ra), tc = tex_info(rc);
-    if (!ta.ok || !tc.ok || ta.w != tc.w || ta.h != tc.h) return 0;
+    if (!ta.ok || !tc.ok || ta.w != tc.w || ta.h != tc.h || ta.imm != tc.imm) return 0;   // (storages that behave alike)
     GLint vp[4] = { 0, 0, 0, 0 }, box[4] = { 0, 0, 0, 0 };
     q_GetIntegerv(GL_VIEWPORT, vp);
     if (vp[0] || vp[1] || vp[2] != tc.w || vp[3] != tc.h) return 0;
