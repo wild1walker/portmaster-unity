@@ -381,6 +381,70 @@ job threads 3. What of it a frame could do without, measured or read from the pr
 | FMOD's mixer decoding Vorbis | 40 % of the mixer's samples (2026-10-22 profile, `fmod_tremor_*`): about 22 % of a core. It decodes the clips that play compressed: the game's Streaming clips and those the converter's audio step switched from DecompressOnLoad to CompressedInMemory (321 of Hollow Knight's clips of 2 s or more: [audio.py](../convert/pmunity/audio.py)); which of them King's Pass plays was not looked up. The rest of the mixer is the game's AudioMixer effects (fader, SFX reverb, filters, flange: about half) | for the clips the converter switched, the same Vorbis data is decoded either way: decoding them at load, as the desktop build does, would give the GPU their share of that CPU time back (all of it, about a fifth of a core, is close to what took King's Pass from 600 to 696 MHz above) for the clips' PCM in memory. A port's choice (`audio.compressed_min_s`), weighed against its memory: Hollow Knight's 64-bit build has 48 MB left in King's Pass. Not measured |
 | FMOD mixing at 48 kHz (`UA_AUDIO_RATE`) for 44.1 kHz clips | the resamplers are 2 - 3 % of the mixer's samples; 44.1 kHz would mix 8 % fewer samples (12 kHz, a measurement: the mixer 56 -> 29 % of a core, +9.7 %, above) | not the same sound (the mix and its effects at another rate, resampled elsewhere): not a default |
 
+### PlayMaker's per-frame work (asmpatch optimizations)
+
+Hollow Knight's enemies, props and much of its game logic are PlayMaker FSMs (Hutong Games'
+PlayMaker.dll: 88 in King's Pass's level file, more on the Knight, the HUD and the game's managers,
+which stay loaded). In the flat-shader profile above (32-bit,
+47.4 fps, UnityMain 95 % on a CPU, 2026-10-23), `PlayMakerFSM.Update` is 7.0 % of UnityMain's
+samples on the stack, and two of PlayMaker's own methods are the main thread's largest managed
+code: `Fsm.UpdateStateChanges` 2.7 % self (0.52 ms a frame) and `Fsm.UpdateDelayedEvents` 1.0 % self,
+2.3 % with the list calls it makes (0.44 ms). Both are bookkeeping that changes nothing in nearly
+every call:
+
+- `UpdateStateChanges` runs after every update of every FSM (Update, FixedUpdate, LateUpdate) and
+  after each transition, and sets `loopCount = 0` on every state of the FSM (the count behind
+  PlayMaker's guard: an FSM entering states `MaxLoopCount` times in one update is disabled with an
+  error). Most FSMs did not enter a state since their last update, so the loop stores 0 over 0, one
+  `FsmState` object (a cache line) a state: thousands a frame.
+- `UpdateDelayedEvents` runs every Update of every FSM: it clears two private work lists and copies
+  the FSM's delayed events into one of them, nearly always all three empty.
+
+The idea of rewriting them comes from Clazex's
+[HollowKnight.AlreadyEnoughPlayMaker](https://github.com/Clazex/HollowKnight.AlreadyEnoughPlayMaker)
+mod (MIT), whose rewrites trade some of PlayMaker's behaviour for speed. Read against the game's
+PlayMaker.dll (decompiled locally, nothing of it kept here), each one:
+
+| the mod's rewrite | what it does | behaviour-identical? | here |
+|---|---|---|---|
+| NoLoopCount | removes the reset loop and the guard (`MaxLoopCount`) | no: an FSM that loops is no longer stopped | not built: with `playmaker-loopcount` the loop runs only after state changes, so leaving out the guard would save next to nothing more |
+| BetterDelayedEventUpdate | swaps the lists instead of copying, keeps the unfinished events in a new list | no: a delayed event added while the events are updated lands between the surviving ones instead of after them (their order next frame changes), and one `ClearDelayedEvents` during the update no longer drops the events after the current one; it also allocates two lists a call | `playmaker-delayedevents`: the same saving where it matters (nothing to update), exactly |
+| DirectAccessTime | `FsmTime.RealtimeSinceStartup` returns `Time.realtimeSinceStartup`; the `RealtimeBugFix` call in `Fsm.Update` removed | no: PlayMaker's value is the clock minus its value at the last read before the first FSM update (in a player: the first FSM's start, some seconds in), so every absolute value shifts and the float differences round differently | not built: no PlayMaker frame calls the clock in King's Pass's profile (its clock reads there are InControl's) |
+| ReplaceForeach | `BroadcastEvent` over `FsmList.ToArray()`, `BroadcastEventToGameObject` over `GetComponents<PlayMakerFSM>()` | no: `GetComponents` also returns disabled FSMs (`FsmList` holds the enabled ones) and in another order; `ToArray` still copies | not built: neither method is on King's Pass's profile |
+| InitActionsOnce (off in the mod too) | each action's `Init` once instead of at every call | no: `Init` sets the action's state and FSM each time | not built |
+
+The two in tools/asmpatch (kind optimize, on by default where PlayMaker is found; README.md
+"Optimizations" has the full rules and preconditions):
+
+- **`playmaker-loopcount`**: a program-wide change counter that goes up after every write of a loop
+  count other than a constant 0 (`FsmState.OnEnter`) and after every store into a state array or
+  into `Fsm.states`; each FSM keeps the counter's value at its last whole reset, and
+  `UpdateStateChanges` skips the loop while the two agree. Then no state anywhere was entered and no
+  state array changed since this FSM's states were all set to 0, so every store the loop would make
+  is 0 over 0: the counts, the guard and its error are exactly as before. The patch follows every
+  state array through every assembly of the game and is not applied where a use cannot be followed.
+- **`playmaker-delayedevents`**: `UpdateDelayedEvents` returns at once when the delayed events and
+  both work lists are empty; the original would only have bumped the two private lists' version
+  numbers, which nothing reads (the patch checks that nothing but this method and the constructors
+  touches those lists).
+
+In Hollow Knight's PlayMaker.dll the first counts at one loop-count write and nine state-array
+stores in four methods (constructors, `Reset`, the template copy); Assembly-CSharp only reads state
+arrays. The same patches apply to the free corpus's other PlayMaker game (Flowerist's Horror, Unity
+6000.4).
+
+**On the handheld** (32-bit, King's Pass, the flat-shader method above: the GPU at 240 MHz 99 - 100
+% of every run, UnityMain 95 - 96 % on a CPU; A B A B in one hold, each run from 49 - 50 C, the
+original APK against one whose PlayMaker.dll is patched, 2026-10-24):
+
+| run | fps | frames over 25 ms | UnityMain's frame |
+|---|---|---|---|
+| as it ships | 49.3, 48.9 | 78, 89 | 19.5 ms |
+| `playmaker-loopcount` + `playmaker-delayedevents` | 50.5, 50.7 | 63, 47 | 18.9 ms |
+
+**+3.1 %** with the GPU's work left out, 0.6 ms less of the main thread's frame: about what the two
+methods cost in the profile.
+
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 
 Unity publishes symbol files for its Android players (`pmunity player fetch <version> --symbols`:
@@ -574,6 +638,77 @@ What did not pay, or is not exact:
 | the blend-mode shaders read the framebuffer instead (`GL_ARM_shader_framebuffer_fetch`, `gl_LastFragColorARM`, through `UA_SHADER_OVERRIDE`) with the grab copies left out | menu 41.8 (+16 % over no change); King's Pass 32.4 -> 35.0 - 35.3 (+8 % over `UA_GL_DSCLEAR`), screenshots that differ no more than two of the same run a second apart. Not exact: sprites of one batch that overlap see each other (with the grab, the picture before the batch), and the fetched colour is mediump. As a data change: `shaders.grab_fetch` ([shaders.md](shaders.md#blend-modes-without-grabpass-copies-grab_fetch-opt-in); `"always"` for this device's ARM-only driver) |
 | a window without depth/stencil (an EGL config with none; the two bars write the window's depth, nothing reads it; Android's "Disable Depth and Stencil" player setting does the same) | King's Pass 32.6 -> 32.8 (two runs each): noise |
 | GL_EXT_disjoint_timer_query per pass | the driver's answers cannot be right (0 ms for most of the scene's passes): `UA_GL_TRACE_GPU=3` instead |
+
+### Hollow Knight's blur and particles on 1 GB handhelds
+
+Not vanilla: the options here change the picture (never the game play), for handhelds with 1 GB of
+RAM where a port may give some of it up (porting.md, "Small handhelds"). The background blur is the
+largest single piece of the GPU frame above (the background camera, its 4-pass blur and the copy
+back: 7.7 ms of 29). The game itself has two lighter settings in Options, Video: **Shader Quality**
+(`ShaderQuality` in its PlayerPrefs; Medium, the default, blurs in two pass groups of two passes,
+Low in one; High turns the background camera off and gives the blur planes their own GrabPass blur
+material, `UI/Blur/UIBlur`, the heaviest) and **Particle Effects** (`VidParticles`; Low halves the
+emission and the particle count of the systems the developers tagged with `ReduceParticleEffects`).
+Two mods go further: Destalta's [NoBlur](https://github.com/Destalta/NoBlur) deactivates every
+GameObject named like a blur plane at each scene load, Clazex's
+[NoParticles](https://github.com/Clazex/HollowKnight.NoParticles) turns off the emission of nearly
+every particle system, with a short list of exceptions for attacks. asmpatch's `hk-blur` (opt-in,
+tools/asmpatch/README.md "Reductions") gives the blur's choices at run time,
+`ASMPATCH_HK_BLUR=low|half|half,low|off`: the game's own two-pass blur, the background camera and
+blur at half resolution (288x180), both, or no background camera and no blur, the blur planes
+hidden and the background drawn sharp by the scene's camera (NoBlur's look, without deactivating
+GameObjects by name: `LightBlurredBackground` does nothing and `BlurPlane` hides its renderer).
+
+**Measured** (King's Pass in game, the 64-bit build on its Mono route with the patched assemblies,
+`UA_MONO64_MANAGED`, PlayMaker's optimizations in every run; each run from a cool handheld,
+`devlock.py cool`, 30 s measured after the save's load, two shots a second apart; 2026-10-24). The
+GPU's clock moves between 600 and 696 MHz in these runs, so the table gives its average and the
+frame rate per 100 MHz too, which compares runs only while the GPU holds the frame:
+
+| variant | fps | GPU MHz (avg; share at 696) | fps per 100 MHz | UnityMain on a CPU | resident / available MB | static pixels that differ from the first base run (of them by 1 - 3 of 255; at most) |
+|---|---|---|---|---|---|---|
+| as it is (two runs) | 34.4, 33.5 | 645 (47 %), 624 (33 %) | 5.33, 5.37 | 87, 85 % | 746 / 42, 734 / 43 | the second base run: 2.8 % (99 %; 35): particles, foliage |
+| Shader Quality Low (the game's own setting, through its PlayerPrefs) | 36.4 | 652 (55 %) | 5.58 (+4.5 %) | 90 % | 740 / 43 | 19.2 % (94 %; 100): the background a little less blurred |
+| `ASMPATCH_HK_BLUR=low` | 35.8 | 635 (40 %) | 5.64 (+5.4 %) | 88 % | 738 / 45 | 19.2 % (94 %; 20); against the game's own Low 2.0 %, as two base runs: the same picture |
+| `ASMPATCH_HK_BLUR=half` | 37.8 | 603 (6 %) | 6.27 (+17 %) | 94 % | 745 / 42 | 31.5 % (81 %; 41): the background more blurred, its shapes softer |
+| `ASMPATCH_HK_BLUR=half,low` | 37.6 | 678 (84 %) | 5.55 | 94 % | 742 / 43 | 25.1 % (94 %; 41): nearer the base picture than `half` (fewer passes over the larger texels) |
+| `ASMPATCH_HK_BLUR=off` | 40.0 | 657 (59 %) | 6.09 (+14 %) | 90 % | 730 / 46 | 38.8 % (59 %; 32): the background sharp |
+| every particle system stopped at the level's start (a measurement, not an option) | 35.1 | 654 (60 %) | 5.37 (+0.4 %) | 82 % | 729 / 43 | 2.0 % |
+
+Reading it. Every blur reduction pays: the game's own Low (two passes) about +5 %, half resolution
+or none +10 - 16 % (one run each). From about 38 fps on the main thread holds the frame instead of
+the GPU (UnityMain on a CPU 94 % with `half` and `half,low`; the Mali then idles part of the frame
+and its clock rises to 696 MHz without the frame rate following), so `half,low` gains no more than
+`half`, and `off` (40.0) is close to what this build's main thread allows. In memory none of them
+gains much: the blur's own targets are small (the 576x360 colour and 32-bit depth texture and its
+three temporary 576x360 targets, about 5 MB, a quarter of it with `half`); the resident size of the
+runs spreads by 17 MB (729 - 746) and the available memory stays at 42 - 46 MB, `off` at the top of
+both. The choice for a 1 GB handheld is a picture choice: `low` keeps the game's own look (its
+Low setting), `half` costs some of the background's shapes, `off` shows a sharp background the
+game was not drawn to show. None touches the game play: the blur planes and the background camera
+draw scenery behind the level (only `LightBlurredBackground` reads them; nothing else in the game
+looks for the `BlurCamera` it makes), and with `off` the Knight walks King's Pass, jumps and walks
+back, the background moving with the camera and the tutorial's prompt showing, and the log has no
+exception but the absent store plugins' (GOG Galaxy, Steam's ticket library), as every run's.
+
+**Particles cost King's Pass nothing that can be measured**: with every particle system of the
+level and of the camera rig stopped and cleared when the level starts (a measurement build, not
+kept), 5.37 fps per 100 MHz against 5.33 and 5.37 without. So no particle reduction is built. What
+one would take away, read from the game's own data (UnityPy, the level files; names as the game has
+them):
+
+| scene | particle systems | tagged `ReduceParticleEffects` (the game's own Low halves them) | what a NoParticles-style switch would also take away |
+|---|---|---|---|
+| King's Pass (`Tutorial_01`) | 186 | none | the dust that falls from each stalactite before it drops (`Dust Fall`, 8), the doors' and walls' break dust and rocks, the cut grass, the chest's and tablets' glows |
+| Forgotten Crossroads (`Crossroads_01`) | 54 | 4: `Particle System dots`, three `wispy smoke` | rocks, grass, `Charge Dust` |
+| Hornet (`GG_Hornet_1`) | 10 | 3: `Particle System BG`, `Particle System FG`, `dream_particle_03` | `Attack Pt` (2), `Summon Pt`, `Pt Blast 1`, `Pt Blast 2`: her attacks' effects |
+| Mantis Lords (`GG_Mantis_Lords`) | 9 | none | all nine: `Pt Dash`, `Pt Land`, `Attack Pt`, `Pt DU`, `Pt UD`, the lords' dashes, dives and landings |
+
+The mod's exceptions (attacks of a few bosses, by GameObject and scene name) do not cover the
+Mantis Lords' or Hornet's effects nor the stalactites' warning dust: such a list is no proof that
+the game plays the same. The developers' own tags are the decorative systems (dots, wispy smoke,
+background and foreground motes), which their Particle Effects setting already reduces in the
+game's menu.
 
 ### Sprites' transparent texels (King's Pass, 2026-10-23)
 
