@@ -243,14 +243,15 @@ back by editing `port.env`:
 asmpatch = ["auto", "hk-blur"]     # the default patches and the one that reads the variable
 
 [runtime_lowmem]
-ASMPATCH_HK_BLUR = "half"      # Hollow Knight's blurred background at half resolution (tools/asmpatch)
+ASMPATCH_HK_BLUR = "low"       # Hollow Knight's blur as its own Shader Quality Low ("half", "off": more, tools/asmpatch)
 ```
 
-`port.env` then sets `ASMPATCH_HK_BLUR=half` where `MemTotal` is at most 1024 MB and leaves it
+`port.env` then sets `ASMPATCH_HK_BLUR=low` where `MemTotal` is at most 1024 MB and leaves it
 unset elsewhere; a value set above it in `port.env` or in the environment (`ASMPATCH_HK_BLUR=full`)
 wins. The reductions so far are asmpatch's `reduce` patches (tools/asmpatch/README.md,
-"Reductions") and a game's own lighter settings; what each one gains on the RG34XX-SP, and what it
-costs the picture: [profiling.md](profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds).
+"Reductions"); a game's own lighter settings stay the player's, in its menus. What each one gains
+on the RG34XX-SP, and what it costs the picture:
+[profiling.md](profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds).
 
 ## 4. The setup on the handheld
 

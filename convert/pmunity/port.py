@@ -1502,7 +1502,7 @@ CONFIG_DOC = {
                "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\"",
     'runtime_lowmem': "# more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there\n"
                       "# unless set already): reductions of the picture, never of the game play (docs/porting.md,\n"
-                      "# \"Small handhelds\"), e.g. ASMPATCH_HK_BLUR = \"half\" with asmpatch's hk-blur",
+                      "# \"Small handhelds\"), e.g. ASMPATCH_HK_BLUR = \"low\" with asmpatch's hk-blur",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
              '# they make put into the port folder (outputs = {"setup/files/x" = "build/x"}), and their licences\n'
              '# (licenses = {"LICENSE.x.txt" = "path"})',
