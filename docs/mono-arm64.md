@@ -29,11 +29,12 @@ player's `libmain.so` and `libunity.so`, the bridge **as `libil2cpp.so`**, and M
 `scripting: mono` (or `UA_SCRIPTING=mono`), hands it the loader's `dlopen`/`dlsym`, and maps
 libunity's `dlopen("libil2cpp.so")` to it.
 
-**Unity versions**: games on Unity's MonoBleedingEdge (.NET 4.x scripting runtime, 2017.1 and
-later; the default from 2018.3), with the `unity-<line>-mbe` branch of Unity-Technologies/mono for
-the runtime. .NET 3.5 games cannot take this route: their desktop players run Unity's older Mono
-fork (Mono 2.6.5, the `unity-<line>` branches), which has no 64-bit ARM code generator
-(`mono/mini` has `mini-arm.c` for 32-bit ARM only; `mini-arm64.c` came with Mono 3.10). Running
+**Unity versions**: games on Unity's MonoBleedingEdge (the .NET 4.x scripting runtime, the default
+from 2018.3) of 2017.4 and later (the arm64 players start with 2017.4.16), with the
+`unity-<line>-mbe` branch of Unity-Technologies/mono for the runtime; checked with 2019.4, 2020.3,
+2021.3 and 6000.0. .NET 3.5 games cannot take this route: their desktop players run Unity's older
+Mono fork (Mono 2.6.5, the `unity-<line>` branches), which has no 64-bit ARM code generator
+(its `mono/mini` has `mini-arm.c`, 32-bit ARM, and no `mini-arm64.c`). Running
 their assemblies on MonoBleedingEdge would mean other class libraries than the game's (4.x instead
 of the 2.0 "unity" profile), so not the game as it is: Cuphead (2017.4, .NET 3.5) stays on the
 IL2CPP route or the 32-bit player.
