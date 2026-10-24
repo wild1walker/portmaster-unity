@@ -341,7 +341,10 @@ core of it), the Mali went from 600 to 504 MHz within about 5 s and the frame ra
 27.7 - 28.8 fps (-16 %); when it stopped, 600 MHz and 33.2 fps again within about 5 s. Outside
 that minute the GPU stayed at 600 MHz once the first 10 s were over, 696 MHz in 2 of the samples
 (696 MHz needs a larger share than the CPUs leave it; the CPUs ran at 1416 - 1512 of their 1704
-MHz). The same holds in both directions: CPU
+MHz). A second run, the busy loop on during seconds 60 - 120 and 180 - 240 of 300: the first minute
+on, while the SoC still warmed (68 -> 72 C), took the GPU from 696 MHz (38 of the 60 s before) to
+600 and the CPUs to 1416 MHz, 35.9 -> 33.1 fps; the second, once warm, 600 -> 504 MHz (56 of its 60
+s), 33.3 -> 28.8 fps (-13 %), and 33.2 fps at 600 MHz in the minute after it. The same holds in both directions: CPU
 time a frame does not need is GPU clock lost, on every GPU-bound game once warm, and a run's
 frame rate depends on the bench's own CPU time too (profrun.sh's per-second loops now read with
 bash's builtins: they started 14 processes a second, about 3.5 % of a core). It also means a
