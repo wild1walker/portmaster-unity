@@ -88,8 +88,8 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
 echo "built: $DIR/$OUT/libsoloader.a $DIR/$OUT/test_load"
 [ $TEST = 1 ] || exit 0
 if [ "$ARCH" = arm64 ]; then
-  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
+  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && UA_FUTEX_SPIN=50 ./test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
 else
   docker run --rm --pull never --platform linux/arm/v7 -v "$DIR/$OUT/test":/t -w /t debian:bookworm-slim \
-    sh -c './test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
+    sh -c './test_sem && UA_FUTEX_SPIN=50 ./test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
 fi

@@ -163,6 +163,8 @@ char *so_dlerror(void);
  * environment overrides a property). Register it after the android/egl/jni tables:
  *     so_add_shims(bionic_compat_table()); */
 const so_shim *bionic_compat_table(void);
+/* UA_FUTEX_SPIN (hybris_compat.c): bionic sem_waits that ended watching the semaphore, and that slept */
+void bionic_sem_stats(unsigned long long *spun, unsigned long long *slept);
 
 #ifdef __cplusplus
 }
