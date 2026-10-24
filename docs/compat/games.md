@@ -46,7 +46,8 @@ King's Pass and the main menu (both GPU-bound: the menu 43 fps with UnityMain 45
 0.08 ms of a 31 ms frame 32-bit, 0.10 ms 64-bit), and its clock is a share of the thermal governor's
 power budget that the CPUs' busy time takes from: from a 47 C start 34.5 fps (696 MHz 22 of 60 s),
 from a warm 69 C start 32.3 (600 MHz); one more busy CPU core took the Mali to 504 MHz and 28 fps
-(-16 %). Unity's job workers 3 -> 2: 34.9 against 34.5, noise. Details:
+(-16 %), and half of FMOD's mixer taken away (a measurement: mixing at 12 kHz) kept it at 696 MHz,
+37.5 against 34.2 fps. Unity's job workers 3 -> 2: 34.9 against 34.5, noise. Details:
 [profiling.md](../profiling.md#the-handheld-around-the-game-2026-10-23).
 
 ## Linux builds, one per Unity line (32-bit route)

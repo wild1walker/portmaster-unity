@@ -344,10 +344,15 @@ that minute the GPU stayed at 600 MHz once the first 10 s were over, 696 MHz in 
 MHz). A second run, the busy loop on during seconds 60 - 120 and 180 - 240 of 300: the first minute
 on, while the SoC still warmed (68 -> 72 C), took the GPU from 696 MHz (38 of the 60 s before) to
 600 and the CPUs to 1416 MHz, 35.9 -> 33.1 fps; the second, once warm, 600 -> 504 MHz (56 of its 60
-s), 33.3 -> 28.8 fps (-13 %), and 33.2 fps at 600 MHz in the minute after it. The same holds in both directions: CPU
-time a frame does not need is GPU clock lost, on every GPU-bound game once warm, and a run's
-frame rate depends on the bench's own CPU time too (profrun.sh's per-second loops now read with
-bash's builtins: they started 14 processes a second, about 3.5 % of a core). It also means a
+s), 33.3 -> 28.8 fps (-13 %), and 33.2 fps at 600 MHz in the minute after it. The other way,
+CPU time taken away (a measurement: FMOD mixing at 12 kHz, `UA_AUDIO_RATE=12000`, which halves its
+mixer's CPU time, 56 -> 29 % of a core; the sound is not the game's), two runs of 120 s from 48 C:
+the Mali at 696 MHz for all 120 s against 28 s at 48 kHz, **37.5 fps against 34.2 (+9.7 %)**, the
+SoC as warm (the CPU zone 69.6 against 69.3 C on average). So CPU time a frame does not need is
+GPU clock lost, on every GPU-bound game once warm (about a quarter of a core is the step from
+600 to 696 MHz in King's Pass), and a run's frame rate depends on the bench's own CPU time too
+(profrun.sh's per-second loops now read with bash's builtins: they started 14 processes a second,
+about 3.5 % of a core). It also means a
 bench run must start as cool as the one it is compared with (the device lock waits for 50 C):
 King's Pass from 47 C ran 34.5 fps, the GPU at 696 MHz 22 of 60 s; the same run from a warm start
 at 69 C, 32.3 fps at 600 MHz throughout.
@@ -360,10 +365,10 @@ job threads 3. What of it a frame could do without, measured or read from the pr
 | CPU time | measured | reading |
 |---|---|---|
 | Unity's job workers sleeping and waking for each job batch (3,600 wake-ups a second) | `-job-worker-count 2` (`UA_UNITY_ARGS`), two runs from 47 C: 34.9 fps (696 MHz 24 of 60 s) against 34.5 (22 s); the workers' CPU 19 % of a core against 21 %, every core as busy (64 - 68 %) | the job batches' wake-ups move to the remaining workers: about 2 % of a core, within noise. Not taken |
-| the host's UI thread: a 4 ms poll of the looper and SDL's events | profiled (1000 Hz, 15 s): 2.9 % of a core, 272 wake-ups a second; 59 % of its CPU time is the sleep's own system call, 25 % SDL 2.32's event pump (udev monitor, the pads), 8 % `poll` | half of it would need half the wake-ups: a longer poll (input up to 4 ms later, not the game as it is) or the pads' events waking it, which SDL does not offer. Worth about 0.3 % of the GPU's clock: not done |
+| the host's UI thread: a 4 ms poll of the looper and SDL's events | profiled (1000 Hz, 15 s): 2.9 % of a core, 272 wake-ups a second; 59 % of its CPU time is the sleep's own system call, 25 % SDL 2.32's event pump (udev monitor, the pads), 8 % `poll` | half of it would need half the wake-ups: a longer poll (input up to 4 ms later, not the game as it is) or the pads' events waking it, which SDL does not offer. About 1.5 % of a core, a sixth of the quarter of a core that is one GPU clock step: not done |
 | `ua_flip`: the framebuffer pan | 1.7 % of a core, all of it kernel time in the sunxi driver's `FBIOPAN_DISPLAY` (0.5 ms a pan) | the kernel's, a pan a frame |
-| FMOD's mixer decoding Vorbis | 40 % of the mixer's samples (2026-10-22 profile, `fmod_tremor_*`): about 22 % of a core. It decodes the clips that play compressed: the game's Streaming clips and those the converter's audio step switched from DecompressOnLoad to CompressedInMemory (321 of Hollow Knight's clips of 2 s or more: [audio.py](../convert/pmunity/audio.py)); which of them King's Pass plays was not looked up. The rest of the mixer is the game's AudioMixer effects (fader, SFX reverb, filters, flange: about half) | for the clips the converter switched, the same Vorbis data is decoded either way: decoding them at load, as the desktop build does, would give the GPU their share of that CPU time back (all of it would be about 3 % of its clock at the rate above) for the clips' PCM in memory. A port's choice (`audio.compressed_min_s`), weighed against its memory: Hollow Knight's 64-bit build has 48 MB left in King's Pass. Not measured |
-| FMOD mixing at 48 kHz (`UA_AUDIO_RATE`) for 44.1 kHz clips | the resamplers are 2 - 3 % of the mixer's samples; 44.1 kHz would mix 8 % fewer samples | not the same sound (the mix and its effects at another rate, resampled elsewhere): not a default |
+| FMOD's mixer decoding Vorbis | 40 % of the mixer's samples (2026-10-22 profile, `fmod_tremor_*`): about 22 % of a core. It decodes the clips that play compressed: the game's Streaming clips and those the converter's audio step switched from DecompressOnLoad to CompressedInMemory (321 of Hollow Knight's clips of 2 s or more: [audio.py](../convert/pmunity/audio.py)); which of them King's Pass plays was not looked up. The rest of the mixer is the game's AudioMixer effects (fader, SFX reverb, filters, flange: about half) | for the clips the converter switched, the same Vorbis data is decoded either way: decoding them at load, as the desktop build does, would give the GPU their share of that CPU time back (all of it, about a fifth of a core, is close to what took King's Pass from 600 to 696 MHz above) for the clips' PCM in memory. A port's choice (`audio.compressed_min_s`), weighed against its memory: Hollow Knight's 64-bit build has 48 MB left in King's Pass. Not measured |
+| FMOD mixing at 48 kHz (`UA_AUDIO_RATE`) for 44.1 kHz clips | the resamplers are 2 - 3 % of the mixer's samples; 44.1 kHz would mix 8 % fewer samples (12 kHz, a measurement: the mixer 56 -> 29 % of a core, +9.7 %, above) | not the same sound (the mix and its effects at another rate, resampled elsewhere): not a default |
 
 ## GPU, pass by pass
 
