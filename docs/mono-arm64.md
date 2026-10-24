@@ -120,6 +120,23 @@ class libraries' native helpers (`System.Native`, `MonoPosixHelper`) are mapped 
 folder. P/Invokes into Android libraries (plugins) go through the loader (Mono's `dlopen`
 fallback); a game's Linux plugins are glibc libraries already.
 
+## As a port (`--route mono-arm64`)
+
+`pmunity port check` lists the route for a .NET 4.x Mono build of 2017.4 or later (not yet as the
+recommended one); `pmunity port new <name> --data <game> --route mono-arm64` writes it. Its setup is
+the android route's, with three changes: the player is the arm64 IL2CPP one with its engine modules
+(`player fetch --backend il2cpp --abi arm64-v8a --managed`, about 15 MB read), the packing is
+`android-data --mono64`, and the install takes the IL2CPP player's `libmain.so`/`libunity.so` plus
+the release's `setup/mono64/<line>/` (the bridge as `libil2cpp.so`, `libmonobdwgc-2.0.so`,
+`libMonoPosixHelper.so`, from Unity 2021.2 `libmono-native.so`). Nothing is compiled on the handheld.
+`pmunity port package` builds that folder for each line of `game.unity_versions` (the package part
+`mono64`: `runtime/mono64/build.sh`, `tools/mono64/build-mono.sh <line> <work>` in Docker;
+`--mono64-work DIR` or `$PMUNITY_MONO64_WORK` for an existing work folder) and adds Mono's, bdwgc's
+and corefx's licences (THIRD_PARTY.md). Tom City (2020.3.49f1) as such a port, rehearsed on a
+64-bit-only stand-in (`REHEARSE_64ONLY=1`, 1 GB): the setup in 13 minutes (the player 30 s, the
+conversion with its texture step 3.4 min, the packing 7.3 min), 324 MB installed, then the title in
+the arm64 rig, Mono up 310 ms after `il2cpp_init` (2026-10-23).
+
 ## Results
 
 | game | Unity | emulated rig (native arm64) | handheld | notes |
