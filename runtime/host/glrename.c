@@ -45,8 +45,8 @@
 // viewport and fixed-function state, the draw's arguments, the vertex attributes' formats and the
 // contents of the vertex and index data they read (a buffer's write count, or the bytes of its
 // last small write: Unity writes each blit's quad anew). Same inputs, same result: from then on
-// such a draw is left out as above. A program found not to be an exact copy four times is not
-// measured again.
+// such a draw is left out as above. A program found not to be an exact copy once is not measured
+// again (its key is not even computed: the check costs the render thread little).
 //
 // UA_GL_RENAME=check: nothing is left out; at each draw that would be, the copy is made and then
 // compared with its source (both read back: slow): any difference is logged.
@@ -940,6 +940,27 @@ static probe_tex g_ptex[4];
 typedef struct { int busy; uint64_t key; GLuint prog; GLsync fence; probe_tex *t; int frames; } probe_t;
 static probe_t g_probe;
 
+// the pixel store state around our own uploads and reads (Unity may leave a row length or skips set)
+static const GLenum g_pixst[] = { 0x0CF5, 0x0CF2, 0x0CF3, 0x0CF4, 0x806E, 0x806D, 0x0D05, 0x0D02, 0x0D03, 0x0D04 };
+#define NPIXST (int)(sizeof g_pixst / sizeof g_pixst[0])
+static void pixst_default(GLint *saved)
+{
+    for (int i = 0; i < NPIXST; i++) {
+        q_GetIntegerv(g_pixst[i], &saved[i]);
+        GLint want = g_pixst[i] == 0x0CF5 || g_pixst[i] == 0x0D05 ? 4 : 0;   // (alignments 4, the rest 0)
+        if (saved[i] != want) q_PixelStorei(g_pixst[i], want);
+        static int told;
+        if (saved[i] != want && told < 4) { told++; fprintf(stderr, "[glrename] the game's pixel store %04x is %d (ours: %d)\n", g_pixst[i], saved[i], want); }
+    }
+}
+static void pixst_restore(const GLint *saved)
+{
+    for (int i = 0; i < NPIXST; i++) {
+        GLint want = g_pixst[i] == 0x0CF5 || g_pixst[i] == 0x0D05 ? 4 : 0;
+        if (saved[i] != want) q_PixelStorei(g_pixst[i], saved[i]);
+    }
+}
+
 static probe_tex *probe_textures(int w, int h)
 {
     for (int i = 0; i < 4; i++) if (g_ptex[i].w == w && g_ptex[i].h == h) return &g_ptex[i];
@@ -961,10 +982,10 @@ static probe_tex *probe_textures(int w, int h)
     t->noise = tx[0]; t->out = tx[1];
     q_BindTexture(GL_TEXTURE_2D, t->noise);
     q_TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, w, h);
-    q_PixelStorei(0x0CF5, 1);                               // GL_UNPACK_ALIGNMENT (restored to Unity's 4 below)
-    q_PixelStorei(0x0CF2, 0);                               // GL_UNPACK_ROW_LENGTH
+    GLint ps[NPIXST];
+    pixst_default(ps);
     q_TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, t->bytes);
-    q_PixelStorei(0x0CF5, 4);
+    pixst_restore(ps);
     q_BindTexture(GL_TEXTURE_2D, t->out);
     q_TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, w, h);
     q_BindTexture(GL_TEXTURE_2D, (GLuint)old);
@@ -982,6 +1003,25 @@ static probe_tex *probe_textures(int w, int h)
     q_BufferData(GL_PIXEL_PACK_BUFFER, (GLsizeiptr)w * h * 4, NULL, GL_STREAM_READ);
     q_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack);
     t->w = w; t->h = h;
+    // (once: the noise texture read back, so that a probe compares with what the GPU holds)
+    unsigned char *back = malloc((size_t)w * h * 4);
+    if (back) {
+        GLuint rfb = g_read_fb;
+        if (!g_tmp_fb[0]) q_GenFramebuffers(2, g_tmp_fb);
+        r_BindFramebuffer(GL_READ_FRAMEBUFFER, g_tmp_fb[0]);
+        r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->noise, 0);
+        GLint ps2[NPIXST];
+        pixst_default(ps2);
+        q_ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, back);
+        pixst_restore(ps2);
+        r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        r_BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
+        size_t bad = 0;
+        for (size_t i = 0; i < (size_t)w * h; i++) bad += memcmp(back + 4 * i, t->bytes + 4 * i, 4) != 0;
+        if (bad) fprintf(stderr, "[glrename] the %dx%d noise texture reads back different on %zu pixels: probes compare with what it holds\n", w, h, bad);
+        if (bad) memcpy(t->bytes, back, (size_t)w * h * 4);
+        free(back);
+    }
     return t;
 }
 static void redraw(const drawcall *d)
@@ -1014,9 +1054,10 @@ static void probe_start(uint64_t key, GLuint prog, const drawcall *d, int unit, 
     q_GetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack);
     if (unpack) q_BindBuffer(0x88EC, 0);
     q_BindTexture(GL_TEXTURE_2D, t->out);
-    q_PixelStorei(0x0CF5, 1);
+    GLint ps[NPIXST];
+    pixst_default(ps);
     q_TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, inv);
-    q_PixelStorei(0x0CF5, 4);
+    pixst_restore(ps);
     if (unpack) q_BindBuffer(0x88EC, (GLuint)unpack);
     free(inv);
     q_BindTexture(GL_TEXTURE_2D, (GLuint)old);
@@ -1034,8 +1075,9 @@ static void probe_start(uint64_t key, GLuint prog, const drawcall *d, int unit, 
     q_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
     r_BindFramebuffer(GL_READ_FRAMEBUFFER, t->fb);
     q_BindBuffer(GL_PIXEL_PACK_BUFFER, t->pbo);
-    q_PixelStorei(0x0D05, 4);                               // GL_PACK_ALIGNMENT
+    pixst_default(ps);
     q_ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    pixst_restore(ps);
     q_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack);
     r_BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
     g_probe = (probe_t){ 1, key, prog, q_FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), t, 0 };
@@ -1054,8 +1096,21 @@ static void probe_poll(void)
     q_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
     q_BindBuffer(GL_PIXEL_PACK_BUFFER, t->pbo);
     const unsigned char *got = q_MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, (GLsizeiptr)t->w * t->h * 4, GL_MAP_READ_BIT);
-    size_t diff = 0;
-    if (got) for (size_t i = 0; i < (size_t)t->w * t->h; i++) diff += memcmp(got + 4 * i, t->bytes + 4 * i, 4) != 0;
+    size_t diff = 0, by[4] = { 0, 0, 0, 0 };          // channels off by 1, 2 - 3, 4 - 15, 16 or more
+    int first = -1;
+    if (got) for (size_t i = 0; i < (size_t)t->w * t->h; i++) {
+        if (!memcmp(got + 4 * i, t->bytes + 4 * i, 4)) continue;
+        diff++;
+        if (first < 0) first = (int)i;
+        for (int c = 0; c < 4; c++) {
+            int d = abs((int)got[4 * i + c] - (int)t->bytes[4 * i + c]);
+            if (d) by[d == 1 ? 0 : d < 4 ? 1 : d < 16 ? 2 : 3]++;
+        }
+    }
+    if (got && first >= 0)
+        fprintf(stderr, "[glrename] program %u: channels off by 1: %zu, 2-3: %zu, 4-15: %zu, more: %zu; first at (%d,%d): %d,%d,%d,%d for %d,%d,%d,%d\n",
+                g_probe.prog, by[0], by[1], by[2], by[3], first % t->w, first / t->w, got[4 * first], got[4 * first + 1], got[4 * first + 2],
+                got[4 * first + 3], t->bytes[4 * first], t->bytes[4 * first + 1], t->bytes[4 * first + 2], t->bytes[4 * first + 3]);
     if (got) q_UnmapBuffer(GL_PIXEL_PACK_BUFFER);
     q_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack);
     known_t *k = known(g_probe.key);
@@ -1089,6 +1144,48 @@ static texinfo tex_info(GLuint real)
     return t;
 }
 
+// UA_GL_RENAME=check: a draw's result (in rc) and its source (ra) read back and compared; for one
+// found an exact copy every time, for one that was not the first three times (how far off it is)
+static unsigned char g_compared[MAX_PROG];
+static void compare_copy(GLint prog, GLuint ra, GLuint rc, int w, int h, int exact)
+{
+    static unsigned char *bufs[2];
+    static size_t have;
+    size_t n = (size_t)w * h * 4;
+    if (n > have) { free(bufs[0]); free(bufs[1]); bufs[0] = malloc(n); bufs[1] = malloc(n); have = bufs[0] && bufs[1] ? n : 0; }
+    if (n > have) return;
+    GLint pack = 0;
+    GLuint rfb = g_read_fb;
+    q_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
+    if (pack) q_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (!g_tmp_fb[0]) q_GenFramebuffers(2, g_tmp_fb);
+    r_BindFramebuffer(GL_READ_FRAMEBUFFER, g_tmp_fb[0]);
+    GLint ps[NPIXST];
+    pixst_default(ps);
+    r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ra, 0);
+    q_ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, bufs[0]);
+    r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rc, 0);
+    q_ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, bufs[1]);
+    pixst_restore(ps);
+    r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    r_BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
+    if (pack) q_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack);
+    if (exact) g_checked++;
+    if (!memcmp(bufs[0], bufs[1], n)) {
+        if (!exact) fprintf(stderr, "[glrename] check: program %d (not exact on noise) gives its source unchanged here (%dx%d)\n", prog, w, h);
+        return;
+    }
+    size_t dd = 0, by[4] = { 0, 0, 0, 0 };
+    for (size_t i = 0; i < n; i += 4) {
+        if (!memcmp(bufs[0] + i, bufs[1] + i, 4)) continue;
+        dd++;
+        for (int c = 0; c < 4; c++) { int v = abs((int)bufs[0][i + c] - (int)bufs[1][i + c]); if (v) by[v == 1 ? 0 : v < 4 ? 1 : v < 16 ? 2 : 3]++; }
+    }
+    if (exact) g_check_bad++;
+    fprintf(stderr, "[glrename] check: program %d%s: its result differs from its source (%dx%d) on %zu pixels; channels off by 1: %zu, 2-3: %zu, 4-15: %zu, more: %zu\n",
+            prog, exact ? " (an exact copy on noise)" : " (not exact on noise)", w, h, dd, by[0], by[1], by[2], by[3]);
+}
+
 // ---- the candidate check: 0 the caller makes the draw, 1 it was made here, 2 it was left out
 static int g_started;                // frames since the first swap (no probes in the first ones)
 static int candidate(const drawcall *d)
@@ -1100,7 +1197,7 @@ static int candidate(const drawcall *d)
     GLuint c = f->s[0].name;
     GLint prog = 0;
     q_GetIntegerv(GL_CURRENT_PROGRAM, &prog);
-    if (prog <= 0 || prog >= MAX_PROG || g_prog_no[prog] >= 4) return 0;    // (not a copy four times: not measured again)
+    if (prog <= 0 || prog >= MAX_PROG || (g_prog_no[prog] && !g_check)) return 0;    // (not a copy once: not measured again)
     // fixed-function state that a plain copy has
     if (q_IsEnabled(GL_BLEND) || q_IsEnabled(GL_RASTERIZER_DISCARD) || q_IsEnabled(GL_SAMPLE_ALPHA_TO_COVERAGE) ||
         q_IsEnabled(GL_SAMPLE_COVERAGE) || q_IsEnabled(GL_STENCIL_TEST)) return 0;
@@ -1162,43 +1259,20 @@ static int candidate(const drawcall *d)
     if (!key_vertices(&k, (GLuint)prog, d)) return 0;
     known_t *kn = known(k.h);
     if (kn && kn->result == 1) {
-        if (g_check) {
-            // made, and compared with its source: both read back
-            redraw(d);
-            static unsigned char *bufs[2];
-            static size_t have;
-            size_t n = (size_t)tc.w * tc.h * 4;
-            if (n > have) { free(bufs[0]); free(bufs[1]); bufs[0] = malloc(n); bufs[1] = malloc(n); have = bufs[0] && bufs[1] ? n : 0; }
-            if (n <= have) {
-                GLint pack = 0;
-                GLuint rfb = g_read_fb;
-                q_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
-                if (pack) q_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-                if (!g_tmp_fb[0]) q_GenFramebuffers(2, g_tmp_fb);
-                r_BindFramebuffer(GL_READ_FRAMEBUFFER, g_tmp_fb[0]);
-                r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ra, 0);
-                q_ReadPixels(0, 0, tc.w, tc.h, GL_RGBA, GL_UNSIGNED_BYTE, bufs[0]);
-                r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rc, 0);
-                q_ReadPixels(0, 0, tc.w, tc.h, GL_RGBA, GL_UNSIGNED_BYTE, bufs[1]);
-                r_FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-                r_BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
-                if (pack) q_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack);
-                g_checked++;
-                if (memcmp(bufs[0], bufs[1], n)) {
-                    size_t dd = 0;
-                    for (size_t i = 0; i < n; i += 4) dd += memcmp(bufs[0] + i, bufs[1] + i, 4) != 0;
-                    g_check_bad++;
-                    fprintf(stderr, "[glrename] check: program %d's copy (%dx%d) differs from its source on %zu pixels\n", prog, tc.w, tc.h, dd);
-                }
-            }
-            return 1;
-        }
+        if (g_check) { redraw(d); compare_copy(prog, ra, rc, tc.w, tc.h, 1); return 1; }
         // left out: c gets a's storage (the copy's result), a gets c's (owing it)
         if (g_nrel >= MAX_REL) return 0;
         swap_names(a, c);
         g_rel[g_nrel++] = (rel_t){ a, c, ra, tc.w, tc.h };
         g_renamed++;
         return 2;
+    }
+    if (kn && kn->result == 0 && g_check && g_compared[prog] < 3) {
+        // (check: how a draw that is not an exact copy on noise differs from its source in the game)
+        g_compared[prog]++;
+        redraw(d);
+        compare_copy(prog, ra, rc, tc.w, tc.h, 0);
+        return 1;
     }
     if (kn) return 0;                                       // (being measured, or not a copy)
     if (g_probe.busy || g_started < 30) return 0;

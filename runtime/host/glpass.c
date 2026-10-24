@@ -288,6 +288,7 @@ static unsigned char *g_check_buf[2];
 static size_t g_check_size;
 static void (*q_ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *);
 static void (*q_BindFramebuffer)(GLenum, GLuint);
+static void (*q_PixelStorei)(GLenum, GLint);
 static void check_clear(fbinfo *f)
 {
     size_t n = (size_t)f->w * (size_t)f->h * 4;
@@ -301,9 +302,14 @@ static void check_clear(fbinfo *f)
     q_GetIntegerv(0x88ED, &pbo);                                    // GL_PIXEL_PACK_BUFFER_BINDING
     q_BindFramebuffer(GL_READ_FRAMEBUFFER, g_cur);
     if (pbo) q_BindBuffer(0x88EB, 0);
+    // (the pack state the game may have changed: row length, skips, alignment)
+    static const GLenum pk[4] = { 0x0D05, 0x0D02, 0x0D03, 0x0D04 };
+    GLint ps[4];
+    for (int i = 0; i < 4; i++) { q_GetIntegerv(pk[i], &ps[i]); q_PixelStorei(pk[i], i ? 0 : 4); }
     q_ReadPixels(0, 0, f->w, f->h, 0x1908, 0x1401, g_check_buf[0]);  // GL_RGBA, GL_UNSIGNED_BYTE
     r_Clear(GL_COLOR_BUFFER_BIT);
     q_ReadPixels(0, 0, f->w, f->h, 0x1908, 0x1401, g_check_buf[1]);
+    for (int i = 0; i < 4; i++) q_PixelStorei(pk[i], ps[i]);
     if (pbo) q_BindBuffer(0x88EB, (GLuint)pbo);
     q_BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)rfb);
     g_checked++;
@@ -654,6 +660,7 @@ const so_shim *glpass_table(void *(*next)(const char *name))
     Q(q_GetRenderbufferParameteriv, "glGetRenderbufferParameteriv"); Q(q_BindTexture, "glBindTexture");
     Q(q_BindRenderbuffer, "glBindRenderbuffer"); Q(q_GetString, "glGetString");
     Q(q_ReadPixels, "glReadPixels"); Q(q_BindFramebuffer, "glBindFramebuffer"); Q(q_BindBuffer, "glBindBuffer");
+    Q(q_PixelStorei, "glPixelStorei");
     Q(s_Enable, "glEnable"); Q(s_Disable, "glDisable"); Q(s_ColorMask, "glColorMask"); Q(s_ClearColor, "glClearColor");
 #undef Q
     int k = 0, ok = 1;
