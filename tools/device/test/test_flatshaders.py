@@ -37,6 +37,28 @@ class FlatShadersTest(unittest.TestCase):
         self.assertIn('gl_FragColor = vec4(0.5', flatshaders.flatten(FS2))
         self.assertIsNone(flatshaders.flatten(VS))                                 # vertex shaders stay
 
+    def test_notex(self):
+        fs = """#version 300 es
+precision highp float;
+uniform highp sampler2D _MainTex;
+uniform highp sampler2DShadow _Shadow;
+in vec2 uv;
+layout(location = 0) out vec4 SV_Target0;
+void main()
+{
+    vec4 c = texture(_MainTex, uv * 2.0 + vec2(0.5), 0.0);
+    float s = texture(_Shadow, vec3(uv, c.x));
+    SV_Target0 = c * s + textureLod(_MainTex, (uv).yx, 1.0);
+}
+"""
+        out = flatshaders.notex(fs)
+        body = out[out.index('void main()'):]
+        self.assertNotIn('texture', body)                                         # no lookup left in main()
+        self.assertIn('vec4((float((uv * 2.0 + vec2(0.5)).x) + float(0.0) * 0.0) * 0.5 + 0.25)', body)   # from the coordinate
+        self.assertIn('float s = ((float((vec3(uv, c.x)).x)) * 0.5 + 0.25);', body)                    # a shadow lookup: a float
+        self.assertIn('uniform highp sampler2D _MainTex;', out)                   # declarations kept
+        self.assertIsNone(flatshaders.notex(VS))
+
     def test_dirs(self):
         src, dst = tempfile.mkdtemp(), tempfile.mkdtemp()
         for name, text in (('a.glsl', FS3), ('b.glsl', VS), ('c.txt', FS2)):
