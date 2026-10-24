@@ -14,22 +14,167 @@ LZ4 chunks and raw-chunk rule), so the player reads both the same.
     b = unpack(path, work_dir)          # None: a layout this module leaves to UnityPy
     b.nodes                             # [Node(name, flags, path)], in the bundle's order
     pack(b, nodes, out_path)            # nodes: the same, with new files for the changed ones
+
+With lazy=True (a chunked bundle: Unity's LZ4 bundles, 128 KiB blocks) only the serialized files'
+nodes are written to the work folder; every other node (the .resS / .resource streams, nearly all
+of a texture bundle) stays where it is and is read from the bundle a block at a time when a
+texture needs it: its Node.path is then a Part (open() gives a file-like reader), and b.close()
+closes the bundle. On a handheld's card that saves writing the bundle's whole uncompressed
+contents and reading them back (Cuphead's atlases: 12.6 GB).
+
+pack() compresses its chunks on every core (LZ4 HC is the slow part of writing a bundle; each
+chunk is compressed on its own, so the bytes are the same) and writes the bundle in one pass.
 """
+import io
 import os
 import re
 import struct
-from collections import namedtuple
+import threading
+from collections import OrderedDict, deque, namedtuple
 
 Node = namedtuple('Node', 'name flags path')
 CHUNK = 0x20000                  # UnityPy's LZ4 chunk (COMPRESSION_CHUNK_SIZE_MAP)
 MAX_BLOCK = 64 << 20             # bigger blocks (an LZMA bundle is one) are decompressed in pieces
+LAZY_MAX_BLOCK = 4 << 20         # lazy=True: bundles whose blocks are all at most this are read in place
 DATA_FLAG, BLOCK_FLAG = 194, 2   # UnityPy's packer='lz4': blocks info at the end, directory, LZ4
 
 
 class Bundle:
-    def __init__(self, path, version, player, engine, aligned, nodes, size):
+    def __init__(self, path, version, player, engine, aligned, nodes, size, source=None):
         self.path, self.version, self.player, self.engine = path, version, player, engine
         self.aligned, self.nodes, self.size = aligned, nodes, size       # size: the nodes' bytes
+        self.source = source             # lazy: the Source its Part nodes read from
+
+    def close(self):
+        """Closes the bundle file lazy nodes read from (before the bundle is replaced)."""
+        if self.source is not None:
+            self.source.close()
+
+
+class Source:
+    """A chunked bundle's uncompressed contents, read where they are: a block is decompressed when
+    a read reaches it (the last few are kept)."""
+
+    KEEP = 4
+
+    def __init__(self, path, blocks, start):
+        self.path = path
+        self.f = open(path, 'rb')
+        self.blocks = []                                 # (uncompressed offset, size, file offset, csize, flags)
+        u, fp = 0, start
+        for usize, csize, bflags in blocks:
+            self.blocks.append((u, usize, fp, csize, bflags))
+            u += usize
+            fp += csize
+        self.starts = [b[0] for b in self.blocks]
+        self.size = u
+        self._cache = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _block(self, i):
+        b = self._cache.get(i)
+        if b is not None:
+            self._cache.move_to_end(i)
+            return b
+        u, usize, fp, csize, flags = self.blocks[i]
+        self.f.seek(fp)
+        raw = self.f.read(csize)
+        if len(raw) != csize:
+            raise ValueError(f'{self.path}: block {i} ends early')
+        b = _decompress(raw, usize, flags)
+        if len(b) != usize:
+            raise ValueError(f'{self.path}: block {i} decompressed to {len(b)} bytes, not {usize}')
+        self._cache[i] = b
+        while len(self._cache) > self.KEEP:
+            self._cache.popitem(last=False)
+        return b
+
+    def read(self, off, n):
+        """bytes [off, off + n) of the uncompressed contents (fewer at the end)."""
+        import bisect
+        n = max(0, min(n, self.size - off))
+        if not n:
+            return b''
+        with self._lock:
+            i = bisect.bisect_right(self.starts, off) - 1
+            parts, end = [], off + n
+            while off < end:
+                u, usize = self.blocks[i][:2]
+                b = self._block(i)
+                lo, hi = off - u, min(end, u + usize) - u
+                parts.append(b if (lo, hi) == (0, len(b)) else memoryview(b)[lo:hi])
+                off += hi - lo
+                i += 1
+            return parts[0] if len(parts) == 1 and isinstance(parts[0], bytes) else b''.join(parts)
+
+    def close(self):
+        if self.f:
+            self.f.close()
+            self.f = None
+            self._cache.clear()
+
+
+class Part:
+    """A node left in the bundle (lazy=True): size, and open() for a file-like reader of its bytes."""
+
+    def __init__(self, source, offset, size):
+        self.source, self.offset, self.size = source, offset, size
+
+    def open(self):
+        return PartReader(self)
+
+    def __getitem__(self, s):
+        """part[a:b]: those bytes (as a memoryview of a node file is sliced)."""
+        if not isinstance(s, slice) or s.step not in (None, 1):
+            raise TypeError('a Part is read by slices')
+        a, b, _ = s.indices(self.size)
+        return self.source.read(self.offset + a, max(0, b - a))
+
+    def __len__(self):
+        return self.size
+
+
+class PartReader(io.RawIOBase):
+    """A Part's bytes as a read-only, seekable file (UnityPy reads streams through one)."""
+
+    def __init__(self, part):
+        super().__init__()
+        self.part, self.pos = part, 0
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self.pos
+
+    def seek(self, pos, whence=0):
+        self.pos = max(0, pos if whence == 0 else self.pos + pos if whence == 1 else self.part.size + pos)
+        return self.pos
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = self.part.size - self.pos
+        b = self.part[self.pos:self.pos + n]
+        self.pos += len(b)
+        return b
+
+    def readinto(self, buf):
+        b = self.read(len(buf))
+        buf[:len(b)] = b
+        return len(b)
+
+
+def node_size(n):
+    """A node's bytes: its file's size, or a Part's."""
+    return n.path.size if isinstance(n.path, Part) else os.path.getsize(n.path)
+
+
+def node_open(n):
+    """A node's bytes as a file opened for reading (its file, or a Part's reader)."""
+    return n.path.open() if isinstance(n.path, Part) else open(n.path, 'rb')
 
 
 def _cstr(f):
@@ -143,9 +288,17 @@ def size(path):
     return sum(n[1] for n in h[6]) if h else 0
 
 
-def unpack(path, work_dir):
+def serialized_nodes(nodes):
+    """The nodes UnityPy opens as serialized files: those flagged so (4), else every node that is
+    not a .resS / .resource stream."""
+    return [n for n in nodes if n.flags & 4] or [n for n in nodes if not n.name.endswith(('.resS', '.resource'))]
+
+
+def unpack(path, work_dir, lazy=False):
     """The bundle's nodes as files in work_dir (a block, or a few MB of a big one, in memory at a
-    time), or None when this module leaves the bundle to UnityPy (a layout it does not read)."""
+    time), or None when this module leaves the bundle to UnityPy (a layout it does not read).
+    lazy: only the serialized files' nodes are written, the others are Parts read from the bundle
+    (a bundle of blocks up to LAZY_MAX_BLOCK; else everything is written as without it)."""
     h = header(path)
     if h is None:
         return None
@@ -158,6 +311,26 @@ def unpack(path, work_dir):
     for i, (off, sz, nflags, name) in enumerate(nodes):
         safe = re.fullmatch(r'[A-Za-z0-9._-]+', name) and name not in ('.', '..')
         out.append(Node(name, nflags, os.path.join(work_dir, name if safe else f'node{i}')))
+    if lazy and all(b[0] <= LAZY_MAX_BLOCK and b[2] & 0x3F in (0, 1, 2, 3) for b in blocks):
+        src = Source(path, blocks, start)
+        try:
+            if max((n[0] + n[1] for n in nodes), default=0) > src.size:
+                raise ValueError(f'{path}: the nodes reach past the blocks\' {src.size} bytes')
+            files = {id(n) for n in serialized_nodes(out)}
+            for i, n in enumerate(out):
+                off, sz = nodes[i][0], nodes[i][1]
+                if id(n) in files:
+                    with open(n.path, 'wb') as f:
+                        for p in range(off, off + sz, 4 << 20):
+                            f.write(src.read(p, min(4 << 20, off + sz - p)))
+                    if os.path.getsize(n.path) != sz:
+                        raise ValueError(f'{path}: node {n.name}: {os.path.getsize(n.path)} bytes unpacked, not {sz}')
+                else:
+                    out[i] = n._replace(path=Part(src, off, sz))
+        except BaseException:
+            src.close()
+            raise
+        return Bundle(path, version, player, engine, aligned, out, sum(n[1] for n in nodes), src)
     files = {i: open(out[i].path, 'wb') for i in range(len(nodes))}
     try:
         with open(path, 'rb') as f:
@@ -185,11 +358,11 @@ def unpack(path, work_dir):
     return Bundle(path, version, player, engine, aligned, out, sum(n[1] for n in nodes))
 
 
-def _chunks(paths):
-    """The files' bytes, concatenated, in CHUNK-sized pieces (the last one shorter)."""
+def _chunks(nodes):
+    """The nodes' bytes, concatenated, in CHUNK-sized pieces (the last one shorter)."""
     buf = bytearray()
-    for p in paths:
-        with open(p, 'rb') as f:
+    for n in nodes:
+        with node_open(n) as f:
             while True:
                 b = f.read(CHUNK - len(buf))
                 if not b:
@@ -202,50 +375,71 @@ def _chunks(paths):
         yield bytes(buf)
 
 
+def threads():
+    """Threads for compressing chunks: the cores this process may use."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+def compress_chunks(chunks, compress, n=None):
+    """(chunk, compress(chunk)) for each chunk, in order, compressed on n threads (default: every
+    core) with two chunks a thread in flight (LZ4 lets go of the GIL while it compresses)."""
+    n = threads() if n is None else n
+    if n <= 1:
+        for c in chunks:
+            yield c, compress(c)
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        window = deque()
+        for c in chunks:
+            window.append((c, ex.submit(compress, c)))
+            if len(window) >= 2 * n:
+                c0, f0 = window.popleft()
+                yield c0, f0.result()
+        while window:
+            c0, f0 = window.popleft()
+            yield c0, f0.result()
+
+
 def pack(bundle, nodes, out_path):
-    """Writes the bundle with these node files to out_path, as UnityPy's save(packer='lz4') does."""
+    """Writes the bundle with these node files (or Parts) to out_path, as UnityPy's
+    save(packer='lz4') does: the header first with its sizes left zero, the blocks as they are
+    compressed, the blocks info, then the header's sizes (the same bytes, written in one pass)."""
     from UnityPy.helpers import CompressionHelper as C
     lz4 = C.COMPRESSION_MAP[BLOCK_FLAG & 0x3F]
-    data_path = out_path + '.data'
     blocks = []
-    with open(data_path, 'wb') as d:
-        for chunk in _chunks([n.path for n in nodes]):
-            c = lz4(chunk)
-            # UnityPy keeps a chunk raw when LZ4 does not make it smaller (a full chunk: >=, the
-            # last one: >)
-            raw = len(c) >= CHUNK if len(chunk) == CHUNK else len(c) > len(chunk)
-            if raw:
-                d.write(chunk)
-                blocks.append((len(chunk), len(chunk), BLOCK_FLAG ^ (BLOCK_FLAG & 0x3F)))
-            else:
-                d.write(c)
-                blocks.append((len(chunk), len(c), BLOCK_FLAG))
-    info = bytearray(16) + struct.pack('>i', len(blocks))
-    for u, c, fl in blocks:
-        info += struct.pack('>IIH', u, c, fl)
-    info += struct.pack('>i', len(nodes))
-    off = 0
-    for n in nodes:
-        sz = os.path.getsize(n.path)
-        info += struct.pack('>qqI', off, sz, n.flags) + n.name.encode() + b'\0'
-        off += sz
-    cinfo = C.COMPRESSION_MAP[DATA_FLAG & 0x3F](bytes(info))
     with open(out_path, 'wb') as o:
         o.write(b'UnityFS\0' + struct.pack('>I', bundle.version) + bundle.player.encode() + b'\0' +
                 bundle.engine.encode() + b'\0')
         size_pos = o.tell()
-        o.write(struct.pack('>qIII', 0, len(cinfo), len(info), DATA_FLAG))
+        o.write(struct.pack('>qIII', 0, 0, 0, DATA_FLAG))               # (the sizes: below)
         if bundle.aligned:
             o.write(b'\0' * (-o.tell() % 16))
         # DATA_FLAG has 0x80 (blocks info at the end) and not 0x200 (no padding)
-        with open(data_path, 'rb') as d:
-            while True:
-                b = d.read(1 << 20)
-                if not b:
-                    break
-                o.write(b)
+        for chunk, c in compress_chunks(_chunks(nodes), lz4):
+            # UnityPy keeps a chunk raw when LZ4 does not make it smaller (a full chunk: >=, the
+            # last one: >)
+            raw = len(c) >= CHUNK if len(chunk) == CHUNK else len(c) > len(chunk)
+            if raw:
+                o.write(chunk)
+                blocks.append((len(chunk), len(chunk), BLOCK_FLAG ^ (BLOCK_FLAG & 0x3F)))
+            else:
+                o.write(c)
+                blocks.append((len(chunk), len(c), BLOCK_FLAG))
+        info = bytearray(16) + struct.pack('>i', len(blocks))
+        for u, c, fl in blocks:
+            info += struct.pack('>IIH', u, c, fl)
+        info += struct.pack('>i', len(nodes))
+        off = 0
+        for n in nodes:
+            sz = node_size(n)
+            info += struct.pack('>qqI', off, sz, n.flags) + n.name.encode() + b'\0'
+            off += sz
+        cinfo = C.COMPRESSION_MAP[DATA_FLAG & 0x3F](bytes(info))
         o.write(cinfo)
         total = o.tell()
         o.seek(size_pos)
-        o.write(struct.pack('>q', total))
-    os.remove(data_path)
+        o.write(struct.pack('>qIII', total, len(cinfo), len(info), DATA_FLAG))

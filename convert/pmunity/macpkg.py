@@ -85,23 +85,49 @@ class Xar:
         return s.read()
 
 
+class _Buffer:
+    """Bytes waiting to be read: appended at the end, taken from the front (a list of pieces and an
+    offset into the first: taking n bytes copies n bytes, not everything left behind them)."""
+
+    def __init__(self):
+        self.parts, self.off, self.size = [], 0, 0
+
+    def add(self, b):
+        if b:
+            self.parts.append(b)
+            self.size += len(b)
+
+    def take(self, n):
+        n = min(n, self.size)
+        out = []
+        while n:
+            p = self.parts[0]
+            k = min(n, len(p) - self.off)
+            out.append(p[self.off:self.off + k] if (self.off, k) != (0, len(p)) else p)
+            self.off += k
+            n -= k
+            self.size -= k
+            if self.off == len(p):
+                self.parts.pop(0)
+                self.off = 0
+        return out[0] if len(out) == 1 else b''.join(out)
+
+
 class Inflate:
     """zlib stream (xar's 'gzip' encoding is zlib) as a file-like object."""
 
     def __init__(self, raw):
-        self.raw, self.z, self.buf = raw, zlib.decompressobj(), b''
+        self.raw, self.z, self.buf, self.eof = raw, zlib.decompressobj(), _Buffer(), False
 
     def read(self, n=-1):
-        while n < 0 or len(self.buf) < n:
+        while not self.eof and (n < 0 or self.buf.size < n):
             c = self.raw.read(1 << 20)
             if not c:
-                self.buf += self.z.flush()
+                self.buf.add(self.z.flush())
+                self.eof = True
                 break
-            self.buf += self.z.decompress(c)
-        if n < 0:
-            n = len(self.buf)
-        out, self.buf = self.buf[:n], self.buf[n:]
-        return out
+            self.buf.add(self.z.decompress(c))
+        return self.buf.take(self.buf.size if n < 0 else n)
 
 
 class Pbzx:
@@ -109,7 +135,7 @@ class Pbzx:
     stream or stored as is."""
 
     def __init__(self, raw):
-        self.raw, self.buf, self.done = raw, b'', False
+        self.raw, self.buf, self.done = raw, _Buffer(), False
         head = raw.read(12)
         if head[:4] != b'pbzx':
             raise ValueError('not a pbzx stream')
@@ -121,15 +147,61 @@ class Pbzx:
             return
         _flags, length = struct.unpack('>QQ', h)
         data = self.raw.read(length)
-        self.buf += lzma.decompress(data) if data[:6] == b'\xfd7zXZ\x00' else data
+        self.buf.add(lzma.decompress(data) if data[:6] == b'\xfd7zXZ\x00' else data)
 
     def read(self, n=-1):
-        while not self.done and (n < 0 or len(self.buf) < n):
+        while not self.done and (n < 0 or self.buf.size < n):
             self._chunk()
-        if n < 0:
-            n = len(self.buf)
-        out, self.buf = self.buf[:n], self.buf[n:]
-        return out
+        return self.buf.take(self.buf.size if n < 0 else n)
+
+
+class Ahead:
+    """A stream read ahead on a thread of its own: the decompression of the next megabytes runs
+    while the caller writes the last ones (zlib and xz let go of the GIL), so unpacking takes about
+    as long as the slower of the two instead of both. At most `depth` pieces wait in memory."""
+
+    def __init__(self, s, piece=1 << 20, depth=4):
+        import queue
+        import threading
+        self.q, self.buf, self.eof, self.err = queue.Queue(depth), _Buffer(), False, None
+        self.stop = threading.Event()
+        self.t = threading.Thread(target=self._run, args=(s, piece), daemon=True)
+        self.t.start()
+
+    def _run(self, s, piece):
+        try:
+            while not self.stop.is_set():
+                b = s.read(piece)
+                self._put(b)
+                if not b:
+                    return
+        except BaseException as ex:            # (handed to the reader)
+            self.err = ex
+            self._put(b'')
+
+    def _put(self, b):
+        import queue
+        while not self.stop.is_set():
+            try:
+                self.q.put(b, timeout=0.5)
+                return
+            except queue.Full:
+                pass
+
+    def read(self, n=-1):
+        while not self.eof and (n < 0 or self.buf.size < n):
+            b = self.q.get()
+            if not b:
+                self.eof = True
+                if self.err is not None:
+                    raise self.err
+                break
+            self.buf.add(b)
+        return self.buf.take(self.buf.size if n < 0 else n)
+
+    def close(self):
+        self.stop.set()
+        self.t.join()
 
 
 class Peek:
@@ -222,7 +294,8 @@ def extract(pkg, root, log=print, keep=None):
             loc = info.get('install-location') or '/'
         if pre + 'Payload' in files and files[pre + 'Payload'].find('data') is not None:
             before = totals[0]
-            _unpack(payload_stream(x.open(files[pre + 'Payload'])), root, loc, None, keep, totals)
+            with _ahead(payload_stream(x.open(files[pre + 'Payload']))) as s:
+                _unpack(s, root, loc, None, keep, totals)
             log(f'{os.path.basename(pkg)}: {c or "package"} Payload -> {loc}: {totals[0] - before} files')
         if pre + 'Scripts' in files and files[pre + 'Scripts'].find('data') is not None:
             # GOG: payload/ goes to <install location>/<gog_bundle_name> (the postinstall script's
@@ -232,7 +305,8 @@ def extract(pkg, root, log=print, keep=None):
             stage = os.path.join(root, '.pmunity-payload', c or 'package')
             before = totals[0]
             scripts = {}
-            _unpack(payload_stream(x.open(files[pre + 'Scripts'])), stage, '/', 'payload', None, totals, scripts)
+            with _ahead(payload_stream(x.open(files[pre + 'Scripts']))) as s:
+                _unpack(s, stage, '/', 'payload', None, totals, scripts)
             if totals[0] > before:
                 m = re.search(r'gog_bundle_name="([^"/]+)"', scripts.get('postinstall', b'').decode('utf-8', 'replace'))
                 dest = os.path.join(loc.lstrip('/'), m.group(1)) if m else loc.lstrip('/')
@@ -244,6 +318,20 @@ def extract(pkg, root, log=print, keep=None):
         log(f'{os.path.basename(pkg)}: no files found; the package holds: ' +
             ', '.join(f'{p} ({_size(fe)})' for p, fe in sorted(files.items()))[:2000])
     return tuple(totals)
+
+
+class _ahead:
+    """with _ahead(stream) as s: s reads the stream ahead (Ahead), stopped when the block ends."""
+
+    def __init__(self, s):
+        self.s = Ahead(s)
+
+    def __enter__(self):
+        return self.s
+
+    def __exit__(self, *exc):
+        self.s.close()
+        return False
 
 
 def _size(fe):

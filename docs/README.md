@@ -12,6 +12,7 @@ the five-step quick start. This page lists every document and the repository's l
 | [roadmap.md](roadmap.md) | the ways a game can get in, and the work items |
 | [building.md](building.md) | what building needs, and converting and running a game by hand |
 | [runtime.md](runtime.md) | `ua_host`: its folder layout and every `UA_*` switch |
+| [setup-speed.md](setup-speed.md) | where a port's first-launch setup spends its time on a handheld (unpacking, each convert step, packing, the card), what was made faster with the same output, what is left |
 | [profiling.md](profiling.md) | where a frame goes on the handheld: the sampling profiler (`UA_PROF`, `profsum.py`), the device bench (`tools/device/profbench.sh`, `benchsum.py`), A/B runs and how to read them |
 | [input.md](input.md) | pads, Rewired, InControl, the Input System package, pointer mode, keys from the pad, the on-screen keyboard |
 | [plugins.md](plugins.md) | native plugins, the plugin map, FMOD, Steam and other service stubs, HTTPS |
