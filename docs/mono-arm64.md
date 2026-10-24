@@ -150,4 +150,29 @@ the arm64 rig, Mono up 310 ms after `il2cpp_init` (2026-10-23).
 | buggish | 2019.4.8f1 | title, 75 - 170 fps (Mesa llvmpipe), Mono up 31 - 104 ms after `il2cpp_init`, 92 assemblies, 7,626 internal calls | title 59.5 - 59.7 fps (as the 32-bit and the IL2CPP builds: 59.4 - 59.6), resident 255 MB | the first game on the route (2026-10-24) |
 | Tom City | 2020.3.49f1 | title, 210 - 350 fps, 100 assemblies, 8,117 internal calls | | runtime built with `tools/mono64/build-mono.sh` (2026-10-23) |
 | Untitled Hook Game | 2021.3.16f1, URP | the first-launch name prompt at about 28 fps, as the IL2CPP build in the same rig (about 30); 114 assemblies, 8,410 internal calls; 32-bit GC handles from Mono 6's runtime | | the first Mono 6 line of the route (2026-10-23) |
-| Hollow Knight (GOG, Linux) | 6000.0.61f1 | first launch's language screen at 60 fps; 116 assemblies (the port's asmpatch patches applied to the desktop assemblies), 9,644 internal calls; resident 1,543 - 1,573 MB, as the IL2CPP build's 1,552 - 1,575 MB in the same rig | | (2026-10-23) |
+| Hollow Knight (GOG, Linux) | 6000.0.61f1 | first launch's language screen at 60 fps; 116 assemblies (the port's asmpatch patches applied to the desktop assemblies), 9,644 internal calls; resident 1,543 - 1,573 MB, as the IL2CPP build's 1,552 - 1,575 MB in the same rig | **King's Pass 34.0 fps**, as the IL2CPP build's 34.4 and the 32-bit port's 35.2 (GPU-bound: below); Mono up 1.6 s after `il2cpp_init`; resident 720 - 731 MB, 47 - 62 MB available (IL2CPP 723 - 825 MB, 52 - 54 MB) | the hk64 folder's APK, OBB and saves with lib/ swapped (2026-10-24) |
+
+### Hollow Knight on the handheld: the Mono route against IL2CPP and the 32-bit port
+
+King's Pass with the bench plan of profiling.md (`log:find GameCameras; ...; shot`, 20 s
+measured), RG34XX-SP, every run from a cool handheld (`devlock.py cool`), 2026-10-24; the 64-bit
+runs in one folder (hk64's APK, OBB and save; `lib/` the IL2CPP build's, `lib-mono/` the Mono
+route's: `UA_SCRIPTING`, `UA_LIBDIR`; this branch's ua_host), the 32-bit ones in the 32-bit port's
+folder (main's ua_host of the same day). Pairs measured in one hold: the Mono route and IL2CPP
+with flat shaders; the 32-bit port and the Mono route with flat shaders (the second Mono run):
+
+| run | fps | GPU clock (residency) | UnityMain on a CPU | resident, available |
+|---|---|---|---|---|
+| Mono route (64-bit) | 34.0 | 650 MHz (696: 54 %, 600: 46 %) | 90 % | 720 MB, 62 MB |
+| IL2CPP (64-bit) | 34.4 | 645 MHz (696: 47 %, 600: 53 %) | 86 % | 825 MB, 52 MB |
+| 32-bit Mono port | 35.2 | 662 MHz (696: 67 %, 600: 32 %) | 88 % | 802 MB, 80 MB |
+| flat fragment shaders (the CPU side): Mono route | 46.1, 46.1 (two runs) | 240 MHz | 95 - 96 % | 725 - 731 MB, 47 - 55 MB |
+| flat: IL2CPP | 48.8 | 240 MHz | 94 % | 723 MB, 54 MB |
+| flat: 32-bit Mono port | 48.9 | 240 MHz | 96 % | 801 MB, 81 MB |
+
+The scene is GPU-bound and all three run it at the frame rate their GPU clock gives. Without the
+GPU's work the main thread of the Mono route takes 21.7 ms a frame, 1.2 ms (6 %) more than the
+IL2CPP build's and the 32-bit port's 20.5 ms: on this game the route costs a little main-thread
+time rather than saving any, and its memory is that of the IL2CPP build. What it saves is the
+setup: no IL2CPP conversion and compile (48 minutes for this game in Docker on a Mac; on the
+handheld not tried, an hour for Cuphead's smaller build), and none of their downloads.
