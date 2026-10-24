@@ -376,3 +376,84 @@ What did not pay, or is not exact:
 | a window without depth/stencil (an EGL config with none; the two bars write the window's depth, nothing reads it; Android's "Disable Depth and Stencil" player setting does the same) | King's Pass 32.6 -> 32.8 (two runs each): noise |
 | GL_EXT_disjoint_timer_query per pass | the driver's answers cannot be right (0 ms for most of the scene's passes): `UA_GL_TRACE_GPU=3` instead |
 
+
+### Passes left out (glpass.c, glrename.c)
+
+What each candidate could gain was measured first, with a measurement build that leaves the work
+out whether or not that is right (King's Pass, the program cache off in every run, the GPU at 600
+MHz in all of them, one run each, interleaved):
+
+| left out (a measurement: the picture is wrong) | fps |
+|---|---|
+| nothing (first and last run) | 32.4, 32.5 |
+| the three grab copies (the sprites read a stale grab texture) | 34.6 (+6.7 %) |
+| the same with a `glFlush` in their place: the camera still stores its picture and loads it again, as it does when the copies are renamed (below) | 34.8 (+7.4 %) |
+| the blur's copy back into the background camera's target (its pass stays: Unity also clears depth/stencil in it) | 32.4 (0) |
+| the clear of the 720x450 texture nothing draws into (a pass that only clears) | 32.2 (-0.7 %) |
+| the two black bars drawn into the window (their pass) | 32.6 (+0.5 %) |
+
+So a grab copy costs about what its own pass costs, not the camera's store and reload around it,
+and the passes that only clear or draw the two bars cost nothing that shows. What each scheme does
+per grab (720x450 RGBA8, 1.3 MB):
+
+| | passes | written | read |
+|---|---|---|---|
+| Unity's copy: the camera stores A; the copy pass loads C, samples A, stores C; the camera's next pass loads A | 2 | 2.6 MB | 3.9 MB |
+| renamed: the camera stores A; its next pass, on C's old storage, starts with a texel copy of A | 1 | 1.3 MB | 1.3 MB |
+
+Built ([runtime.md](runtime.md)), both off by default:
+
+- **`UA_GL_SAMECLEAR`** (glpass.c, glopt.c): a clear that writes what the buffer already holds is
+  held back (colour) or left out (depth/stencil). Exact by construction; `UA_GL_SAMECLEAR=check` in
+  the emulated rig (the 64-bit build to King's Pass): 21,430 such clears, in the menus and in King's
+  Pass, made and their image read back before and after: none changed a pixel. On the handheld
+  (two runs each, interleaved, each from 50 C; 1,638 clears left out in 2,400 frames): of the
+  pixels static within each run, 553 - 1,112 of about 305,000 differ between a run with it and one
+  without, as many as between two runs without it (700) or two with it (1,159): the particles and
+  plants. Cuphead's title and Petty Puny Planet's planet (59.3 / 59.4 and 59.4 / 59.4 fps without
+  / with it) have no such clear. It gains nothing in
+  King's Pass (the clear-only pass, above), so it is opt-in; with the rename it also removes the
+  blur's copy-back pass, whose only other command is a depth/stencil clear to the values that
+  buffer holds.
+- **`UA_GL_RENAME`** (glrename.c): the copy's texture name gets the source's storage, the source's
+  name the copy's, which gets the picture in the next pass that draws into it (one texelFetch
+  triangle in place of the tile load) or never if it is replaced whole first; a draw counts as a
+  copy only once measured to be one, on random noise, per set of inputs. In the rig (Mesa's
+  llvmpipe) Unity's copies are exact: King's Pass draws 19 passes instead of 24 (with
+  `UA_GL_SAMECLEAR`; three grab copies, the copy back and the clear-only pass gone), 5 copies left
+  out a frame, and `UA_GL_RENAME=check` compared 135,901 such copies with their source in the game:
+  none differed. **On the Mali-G31 none of them is exact**, so nothing is left out (and nothing
+  gained: 33.0 / 33.1 fps against 33.7 / 33.5, the GPU at 606 against 617 MHz on average). The probe
+  on noise: Unity's grab blit (its fragment stage is `mediump`) differs on 323,978 of 324,000
+  pixels, 2 % of the channels by more than 15; the image effects' blit (`highp`, times `_Color`)
+  on 206,062 of 207,360, by 1 - 15 (bilinear weights a little off the texel centres). In the game
+  the grab copy differs from the picture it copies on 869 - 1,470 of 324,000 pixels by 1 - 3 (and
+  the blit gave its source unchanged): the vanilla picture on this device has that in it, so giving
+  the sprites the source itself would not be exact. `UA_GL_RENAME=near` (opt-in, **not exact**)
+  takes such near copies too. King's Pass with `UA_GL_RENAME=near UA_GL_SAMECLEAR=1`, two runs each,
+  interleaved, each from 50 C: **33.3 / 33.9 -> 36.0 / 36.5 fps** (+8 - 10 %; the GPU at 612 / 631
+  against 634 / 638 MHz on average, so +4 - 7 % per MHz), 5 copies left out a frame (the three grab
+  copies, the copy back, and the brightness pass, which at the game's default brightness is close to
+  a copy), every renamed picture given in a pass, no blit. The picture: of the pixels static within
+  each run, 8,797 - 9,453 of about 303,000 differ from a run without it, 77 % of them by 1, most of
+  the rest by 2 - 3, at most 12 (a blend mode amplifying the grab's difference); two runs without
+  it differ on 1,874 (particles). Opt-in, like `shaders.grab_fetch` (+8 %, 1.6 % of the static pixels
+  off by 1 - 6), and for the same reason.
+
+Not built:
+
+- **Memoising the background camera and its blur** (about 7.7 ms when its inputs repeat): the
+  blurred background (576x360, after the copy back) read back every frame and hashed, in the rig: the
+  same as the frame before in 0 of 1,200 frames standing in King's Pass, 0 of 1,200 walking, 4 of
+  about 8,000 in the menus. The background layer has particles (its 60-quad particle batch has 354
+  or 360 indices from frame to frame even standing): nothing repeats.
+- **The black bars' pass deferred into the window's copy**: at most what leaving the bars out gives,
+  +0.5 %, within noise; doing it exactly would mean recording two draws with all their state and
+  vertex data for later.
+- **The render thread's waits.** In the 32-bit build's 500 Hz profile (31 fps, symbols named) the
+  render thread is blocked 9.6 ms a frame: 6.0 ms in `FrameTimingManager::RenderThreadWaitCallback`
+  (Unity's render thread waiting for the GPU to finish an earlier frame) and 2.9 ms in futexes inside
+  Mali's driver; on a CPU it spends 18 ms a frame, half of it in the driver. With the GPU at the
+  thermal cap 99 - 100 % of the measured time and the per-pass GPU times adding up to the frame,
+  these waits are the GPU's backpressure, not stalls that leave it idle: a change of the call
+  pattern cannot give the frame more GPU time; only less GPU work can.
