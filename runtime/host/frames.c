@@ -18,6 +18,7 @@
 #include "prof.h"
 #include "gltrace.h"
 #include "glopt.h"
+#include "gpuidle.h"
 #include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
@@ -140,6 +141,7 @@ static void on_swap(void *ctx)
     prof_swap();
     gltrace_frame();
     glopt_frame();
+    gpuidle_frame();                            // UA_GPU_IDLE: the frame's last fence
     msaafix_frame();
     fbdev_swap();                               // the fbdev path's flip times (fbdev.c)
     if (last > 0)

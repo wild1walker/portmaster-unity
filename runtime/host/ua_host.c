@@ -24,6 +24,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "threads.h"
 #include "gltrace.h"
 #include "glopt.h"
+#include "gpuidle.h"
 #include "msaafix.h"
 #include "arch.h"
 #include "display.h"
@@ -350,11 +351,17 @@ static void *dlsym_hook(const char *sym, void *p)
 }
 
 // what glopt.c's GL wrappers call: msaafix.c's wrapper of that function, else gltrace.c's (NULL: the driver's)
-static const so_shim *g_msaa_shims;
+static const so_shim *g_msaa_shims, *g_glopt_shims;
 static void *after_glopt(const char *name)
 {
     for (const so_shim *t = g_msaa_shims; t && t->name; t++) if (!strcmp(t->name, name)) return t->fn;
     return gltrace_wrapper(name);
+}
+// what gpuidle.c's wrapper calls: glopt.c's, else the ones after it
+static void *after_gpuidle(const char *name)
+{
+    for (const so_shim *t = g_glopt_shims; t && t->name; t++) if (!strcmp(t->name, name)) return t->fn;
+    return after_glopt(name);
 }
 
 // UnityMain, after each frame
@@ -443,11 +450,13 @@ int main(int argc, char **argv)
     hitches_init();                            // UA_HITCH_TRACE
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
-    // GL wrappers, each calling the next: the player -> glopt.c -> msaafix.c -> gltrace.c -> the driver
+    // GL wrappers, each calling the next: the player -> gpuidle.c -> glopt.c -> msaafix.c -> gltrace.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
-    so_add_shims(glopt_table(after_glopt));    // UA_GL_DSCLEAR
+    g_glopt_shims = glopt_table(after_glopt);  // UA_GL_DSCLEAR
+    so_add_shims(gpuidle_table(after_gpuidle));   // UA_GPU_IDLE
+    so_add_shims(g_glopt_shims);
     so_add_shims(g_msaa_shims);
     so_add_shims(trace);
     if (msaa) {
