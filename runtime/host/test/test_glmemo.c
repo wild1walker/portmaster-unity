@@ -11,7 +11,8 @@
 //   noinval     a pass that does not begin with an invalidate (its old contents are loaded): never left out
 //   blend       blending on: never left out
 //   depth       a framebuffer with a depth attachment: never left out
-//   ubo         the uniform block rewritten every frame through a mapping with the same bytes: left out from frame 2
+//   ubo         the uniform block rewritten every frame through a mapping with the same bytes: left out from frame 3 (frame 1's
+//               key finds the mapped bytes not copied; a small buffer a key reads has its mapped writes copied from then on)
 //   ubochange   ... with other bytes: drawn
 //   ubofresh    the uniform block's data written every frame into another new small buffer (glBufferData through the array
 //               buffer binding, then bound as a uniform buffer), the same bytes: left out
@@ -233,10 +234,10 @@ int main(int argc, char **argv)
         CHECK(fake_draws == n && fake_invalidates == n);
     } else if (!strcmp(mode, "ubo")) {
         g_use_ubo = 1; g_prog = 6; frames(n);
-        CHECK(fake_draws == 1);
+        CHECK(fake_draws == 2);                  // (frame 1 finds the mapped buffer not copied: from then on it is)
     } else if (!strcmp(mode, "ubochange")) {
         g_use_ubo = 1; g_prog = 6; g_between = ubo_change; frames(n);
-        CHECK(fake_draws == 2);
+        CHECK(fake_draws == 3);
     } else if (!strcmp(mode, "ubofresh")) {
         g_use_ubo = 2; g_prog = 6; frames(n);
         CHECK(fake_draws == 1);

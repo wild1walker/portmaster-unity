@@ -35,11 +35,12 @@
 // the draws that sample it: they do not change what a draw wrote into it (Unity sets a render
 // texture's filtering when it binds it for sampling). A parameter set to the value it has is no
 // change (Unity sets the same ones again). A buffer written a second time gets a shadow of its bytes
-// (at most 256 KB a buffer, 8 MB in all), one of at most 4 KB or written as a uniform buffer from its
+// (at most 64 KB a buffer, 8 MB in all), one of at most 4 KB or written as a uniform buffer from its
 // first write, so a draw whose vertex, index or uniform-block data the game uploads again every
 // frame, as Unity does for its blit quads and per-draw constants (2021.2: into a new buffer each
-// time), is compared by content; bytes the shadow does not know (written before it existed, or
-// mapped and not flushed) never compare equal.
+// time), is compared by content. Mapped writes are copied only into small buffers a keyed draw read
+// (the mapping is slow to read). Bytes the shadow does not know (written before it existed, mapped
+// and not copied or not flushed) never compare equal.
 //
 // UA_GL_MEMO=check: nothing is left out; each draw that would have been is drawn, its target read
 // back before and after it and the two compared (logged: same / other pixels): the evidence, on a
@@ -252,7 +253,7 @@ static void bump(uint32_t *gen, GLuint n) { if (gen && n < MAX_NAME) __atomic_ad
 static uint32_t gen_of(const uint32_t *gen, GLuint n) { return n < MAX_NAME ? __atomic_load_n(&gen[n], __ATOMIC_RELAXED) : 0; }
 
 // ---- buffer shadows: the bytes of small buffers the game writes more than once
-#define SHADOW_MAX (256 * 1024)
+#define SHADOW_MAX (64 * 1024)
 #define SHADOW_SMALL 4096                          // small buffers: shadowed from their first write
 #define SHADOW_TOTAL (8 * 1024 * 1024)
 #define CHUNK 16                                   // validity per 16 bytes (std140's vec4)
@@ -260,6 +261,7 @@ typedef struct { unsigned char *data, *valid; uint32_t size; } shadow_t;
 static shadow_t **g_shadow;
 static uint32_t *g_buf_size;
 static unsigned char *g_buf_writes;
+static unsigned char *g_buf_wanted;                // read by a keyed draw: its mapped writes are copied too
 static size_t g_shadow_bytes;
 typedef struct { GLuint buf; GLintptr off; GLsizeiptr len; GLbitfield access; unsigned char *ptr; } mapping_t;
 #define MAX_MAP 32
@@ -315,6 +317,17 @@ static shadow_t *buffer_written(GLuint b, GLenum t)
         g_shadow_bytes += size;
     }
     return s;
+}
+// a mapped write of buffer b: copied into its shadow only when a keyed draw reads b and b is small (the mapping is
+// write-combined memory, slow to read: Hollow Knight's sprite batches flushed through mappings every frame cost its
+// render thread a tenth of its time when they were copied); otherwise its count is bumped and its shadow forgets it
+static int mapped_copy(GLuint b) { return g_buf_wanted[b] && g_buf_size[b] && g_buf_size[b] <= SHADOW_SMALL; }
+static shadow_t *buffer_bumped(GLuint b)
+{
+    if (!b || b >= MAX_NAME) return NULL;
+    bump(g_buf_gen, b);
+    if (g_buf_writes[b] < 2) g_buf_writes[b]++;
+    return g_shadow[b];
 }
 static mapping_t *mapping(GLuint b) { for (int i = 0; i < MAX_MAP; i++) if (g_map[i].buf == b && b) return &g_map[i]; return NULL; }
 
@@ -558,6 +571,7 @@ static void put_range(GLuint b, uint64_t off, uint64_t len)
     if (!b || b >= MAX_NAME || g_buf_vol[b]) { g_kfail = 1; return; }
     pthread_mutex_lock(&g_lock);
     shadow_t *s = g_shadow[b];
+    if (!s || !shadow_valid(s, off, len)) g_buf_wanted[b] = 1;
     if (s) {
         if (shadow_valid(s, off, len)) { put_i(-1); put_i((int64_t)len); put(s->data + off, len); }
         else g_kfail = 1;
@@ -1256,7 +1270,7 @@ static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a)
     if (!b) return p;
     pthread_mutex_lock(&g_lock);
     if (a & GL_MAP_PERSISTENT_BIT_EXT) g_buf_vol[b] = 1;
-    shadow_t *sh = buffer_written(b, t);
+    shadow_t *sh = mapped_copy(b) ? buffer_written(b, t) : buffer_bumped(b);
     if (sh) { if (a & GL_MAP_INVALIDATE_BUFFER_BIT) shadow_invalidate(sh, 0, sh->size); else shadow_invalidate(sh, (uint64_t)o, (uint64_t)l); }
     mapping_t *m = mapping(b);
     for (int i = 0; !m && i < MAX_MAP; i++) if (!g_map[i].buf) m = &g_map[i];
@@ -1272,8 +1286,13 @@ static void w_FlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr l)
     if (b) {
         pthread_mutex_lock(&g_lock);
         mapping_t *m = mapping(b);
-        shadow_t *sh = buffer_written(b, t);
-        if (m && sh && o >= 0 && l >= 0 && o + l <= m->len) shadow_write(sh, (uint64_t)(m->off + o), (uint64_t)l, m->ptr + o);
+        if (m && mapped_copy(b)) {
+            shadow_t *sh = buffer_written(b, t);
+            if (sh && o >= 0 && l >= 0 && o + l <= m->len) shadow_write(sh, (uint64_t)(m->off + o), (uint64_t)l, m->ptr + o);
+        } else {
+            shadow_t *sh = buffer_bumped(b);
+            if (sh) shadow_invalidate(sh, (uint64_t)((m ? m->off : 0) + o), (uint64_t)l);
+        }
         pthread_mutex_unlock(&g_lock);
     }
     r_FlushMappedBufferRange(t, o, l);
@@ -1286,8 +1305,12 @@ static GLboolean w_UnmapBuffer(GLenum t)
         pthread_mutex_lock(&g_lock);
         mapping_t *m = mapping(b);
         if (m && (m->access & GL_MAP_WRITE_BIT)) {
-            shadow_t *sh = buffer_written(b, t);
-            if (sh && !(m->access & GL_MAP_FLUSH_EXPLICIT_BIT)) shadow_write(sh, (uint64_t)m->off, (uint64_t)m->len, m->ptr);
+            int copy = mapped_copy(b);
+            shadow_t *sh = copy ? buffer_written(b, t) : buffer_bumped(b);
+            if (sh && !(m->access & GL_MAP_FLUSH_EXPLICIT_BIT)) {
+                if (copy) shadow_write(sh, (uint64_t)m->off, (uint64_t)m->len, m->ptr);
+                else shadow_invalidate(sh, (uint64_t)m->off, (uint64_t)m->len);
+            }
         }
         if (m) m->buf = 0;
         pthread_mutex_unlock(&g_lock);
@@ -1321,7 +1344,7 @@ static void w_DeleteBuffers(GLsizei n, const GLuint *bs)
         if (!b || b >= MAX_NAME) continue;
         bump(g_buf_gen, b);
         shadow_free(b);
-        g_buf_size[b] = 0; g_buf_writes[b] = 0;
+        g_buf_size[b] = 0; g_buf_writes[b] = 0; g_buf_wanted[b] = 0;
         mapping_t *m = mapping(b);
         if (m) m->buf = 0;
     }
@@ -1446,9 +1469,10 @@ const so_shim *glmemo_table(void *(*next)(const char *name))
         g_smp_gen = calloc(MAX_NAME, sizeof *g_smp_gen); g_prog_gen = calloc(MAX_NAME, sizeof *g_prog_gen);
         g_tex_vol = calloc(MAX_NAME, 1); g_buf_vol = calloc(MAX_NAME, 1); g_buf_writes = calloc(MAX_NAME, 1);
         g_buf_size = calloc(MAX_NAME, sizeof *g_buf_size); g_shadow = calloc(MAX_NAME, sizeof *g_shadow);
+        g_buf_wanted = calloc(MAX_NAME, 1);
         g_pinfo = calloc(MAX_NAME, sizeof *g_pinfo);
     }
-    if (!(g_tex_gen && g_tpar_gen && g_buf_gen && g_smp_gen && g_prog_gen && g_tex_vol && g_buf_vol && g_buf_writes && g_buf_size && g_shadow && g_pinfo))
+    if (!(g_tex_gen && g_tpar_gen && g_buf_gen && g_smp_gen && g_prog_gen && g_tex_vol && g_buf_vol && g_buf_writes && g_buf_wanted && g_buf_size && g_shadow && g_pinfo))
         return g_shims;
     memset(g_fb, 0, sizeof g_fb); memset(g_memo, 0, sizeof g_memo); memset(g_map, 0, sizeof g_map);
     g_def.on = 0;
