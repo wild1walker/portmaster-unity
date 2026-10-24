@@ -131,6 +131,14 @@ Frame rates (fps over the measured seconds, the runs in the order they ran; the 
 | Phasing Gun | first scene | 11.8, 11.7 | **31.9, 31.9 (+171 %)** | 284 / 288 -> 238 / 236 MB (the 4096x4096 shadow atlas, 64 MB, is 16 MB at 2048); 620 / 616 -> 661 / 659 MB |
 | The Third Eye | first scene | 34.2, 34.2 | **50.3, 50.8 (+48 %)** with film grain off too (the first build of the profile); the main thread is the limit then (UnityMain 94 % of a core, from 65 %), and the GPU governor runs the Mali at 420 - 504 MHz in 90 % of the seconds (696 MHz in every second before) | 264 / 267 -> 253 / 255 MB; 633 / 630 -> 640 / 632 MB |
 
+Arthur's Nightmare item by item (one run each, the GPU at 696 MHz in 99 - 100 % of the seconds): the
+Standard shader's LOD-150 SubShader alone 23.0 fps; everything but it 23.1; everything but the pixel
+light cap 33.5 (the room keeps its dark look: the point lights stay per pixel); all of it 42.4. Its
+traced frame (`UA_GL_TRACE_GPU=3`, serialized): 81.7 -> 26.2 ms of GPU work; the forward pass 65.2 ->
+15.9 ms (132 -> 104 draws: no additive pass for the point lights), the spot light's shadow map 1024
+-> 512 (2.8 -> 1.3 ms), the copy back into the camera's target 4.2 -> 2.0 ms (no 2x MSAA RGBA16F
+target), and 2017.3's MSAA present path gone (7 -> 6 passes).
+
 The pictures (static-frame shots of the same plan, judged by eye; these changes are visual by
 design, never claimed identical):
 
@@ -141,14 +149,14 @@ design, never claimed identical):
   its per-pixel falloff): the back wall and the door show where the PC picture is dark; the
   flashlight (the spot light, per pixel), the outlines of the objects to collect and the HUD are as
   before. The biggest look change of the profile: `pixel_lights = null` keeps the per-pixel point
-  lights.
+  lights (33.5 fps instead of 42.4, above).
 - **The Third Eye**: the dark room the same but for its vignette, whose 8-bit steps showed as a hard
   ellipse once film grain was off in the first build; film grain is now kept by default (its
   frame rate with grain kept was not measured again).
 
 Not measured (stopped to save device time): White Mirror, Cell Machine (already at the 60 fps
 refresh rate with `UA_GL_MEMO`), Chapéu de Papel (its frame is UI overdraw: nothing of the profile
-applies), the ablation runs of single items, URP render scale against ua_host's display scaling,
+applies), the single items of the URP games, URP render scale against ua_host's display scaling,
 and the run-time caps of quality.c on the handheld (unit-tested: `runtime/host/test/test_quality.c`).
 None of the six games calls a QualitySettings setter (their assemblies reference none).
 
