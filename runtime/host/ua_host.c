@@ -29,6 +29,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "glrename.h"
 #include "glrec.h"
 #include "gpuidle.h"
+#include "glmemo.h"
 #include "msaafix.h"
 #include "arch.h"
 #include "display.h"
@@ -408,6 +409,13 @@ static void *after_gpuidle(const char *name)
     void *p = find_shim(g_rename_shims, name);
     return p ? p : after_glrename(name);
 }
+// what glmemo.c's call: gpuidle.c's wrapper of that function, else the layers after it
+static const so_shim *g_idle_shims;
+static void *after_glmemo(const char *name)
+{
+    void *p = find_shim(g_idle_shims, name);
+    return p ? p : after_gpuidle(name);
+}
 
 // UnityMain, after each frame
 static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); prof_main_frame(); }
@@ -496,7 +504,8 @@ int main(int argc, char **argv)
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
-    // GL wrappers, each calling the next: the player -> glrec.c (UA_GL_REC: it calls glopt.c's layer
+    // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
+    // on) -> glrec.c (UA_GL_REC: it calls glopt.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->
     // glrename.c -> glpass.c -> glopt.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
@@ -506,10 +515,11 @@ int main(int argc, char **argv)
     g_glopt_shims = glopt_table(after_glopt);  // UA_GL_DSCLEAR
     g_pass_shims = glpass_table(after_glpass); // UA_GL_SAMECLEAR
     g_rename_shims = glrename_table(after_glrename);          // UA_GL_RENAME
-    const so_shim *idle = gpuidle_table(after_gpuidle);       // UA_GPU_IDLE
+    const so_shim *idle = g_idle_shims = gpuidle_table(after_gpuidle);   // UA_GPU_IDLE
     const so_shim *rec = glrec_table(after_glrec);            // UA_GL_REC: above all of them
     if (rec[0].name && (idle[0].name || g_rename_shims[0].name || g_pass_shims[0].name))
         fprintf(stderr, "[host] UA_GL_REC is on: UA_GPU_IDLE, UA_GL_RENAME and UA_GL_SAMECLEAR are left out\n");
+    so_add_shims(glmemo_table(after_glmemo));                 // UA_GL_MEMO: above all of them
     so_add_shims(rec);
     so_add_shims(idle);
     so_add_shims(g_rename_shims);

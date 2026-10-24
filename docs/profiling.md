@@ -311,6 +311,7 @@ picture-identical change of that size in sight in the runtime. IL2CPP (the 64-bi
 the managed code and Mono's runtime (4 - 5.5 ms here) but runs the same engine and the same GPU work
 (30.6 - 32.4 fps in King's Pass).
 
+
 ### The handheld around the game (2026-10-23)
 
 What the system around the game costs in King's Pass, both builds (the plan above, 30 s measured,
@@ -360,6 +361,12 @@ about 3.5 % of a core). It also means a
 bench run must start as cool as the one it is compared with (the device lock waits for 50 C):
 King's Pass from 47 C ran 34.5 fps, the GPU at 696 MHz 22 of 60 s; the same run from a warm start
 at 69 C, 32.3 fps at 600 MHz throughout.
+
+The same in 150 s runs from 48 C (the 32-bit build, silent; pairs interleaved in one hold): as it is, the GPU at 696
+MHz 15 and 11 % of the time (capped from the 14th and 16th second), 33.7 and 33.5 fps; FMOD at 24 kHz with 1024-frame
+buffers (`UA_AUDIO_RATE`, `UA_AUDIO_FRAMES`; its mixer 56 -> 38 % of a core) 59 %, 35.2 fps; that and one job worker
+(`-job-worker-count 1`) 78 and 91 %, 35.7 and 36.0 fps; one job worker alone 21 %, 33.8 fps. Every run ends as warm
+(the CPU zone 72 C, the GPU's 68 C, the cpufreq cooling state 3): the budget goes to the GPU, not the heat away.
 
 Where King's Pass's 2.6 cores of CPU time go (32-bit, 60 s; % of a core): UnityMain 83, the render
 thread 57, FMOD's mixer 56, Mali's submission thread 17 (+ its job-completion kworkers 6), Unity's
@@ -508,7 +515,8 @@ vsync wait). `UA_GL_TRACE_START=<s>` puts the first traced frame past the menus:
 is a long one, and a plan's `steady:` step waits for a second without long frames.
 `UA_GL_TRACE_DRAWS=<n>` then lists the frame's draws one by one with their programs' source hashes
 (the file names `UA_SHADER_DUMP` writes), samplers and textures, and depth, stencil and blend state:
-which shader each full-screen pass is, and whether a pass's depth/stencil buffer ever matters. A
+which shader each full-screen pass is, and whether a pass's depth/stencil buffer ever matters; and each draw's vertex,
+index and uniform-block buffers with the frame's buffer writes (whether a draw reads the same data every frame). A
 dumped shader's uniforms and samplers (`_GrabTexture`, `_Bloom`, `_RgbTex`, ...) name it; the
 game's Shader assets (UnityPy: `m_ParsedForm.m_Name`, `m_PropInfo`, the passes' `m_Type`, 2 = a
 grab pass) confirm which.
@@ -649,6 +657,208 @@ building.
 - *Vertices cost the main thread.* Unity batches sprites on the CPU (every vertex transformed and
   copied each frame), and King's Pass's main thread alone allows only about 49 fps: a finer mesh moves
   work from the GPU to the next limit.
+
+### Six more GPU-bound games, pass by pass (2026-10-23)
+
+The games of [games.md](compat/games.md#handheld-benches-rg34xx-sp-2026-10-23) that the GPU holds below 60 fps, traced
+where their bench plans get (`tools/device/profbench.sh` from a first launch, `data/` cleared; the plans below),
+`UA_GL_TRACE=3 UA_GL_TRACE_GPU=3` (8 - 10 traced frames, the median of each pass; each pass carries 0.15 - 0.3 ms of
+the serialized timing's start-up, so a frame's sum is above its real GPU time, most where there are many small
+passes), then `UA_GL_TRACE_DRAWS=3000` with `UA_SHADER_DUMP` for the draws, their programs and buffers. The GPU ran
+at 696 MHz in every run (`freq.log`).
+
+| game | where | plan (`PLAN`) | fps | passes, draws | serialized GPU |
+|---|---|---|---|---|---|
+| Arthur's Nightmare (2017.3.1f1, built-in forward) | the 3D room after the cutscene | `sleep:25; shot; press:0:ptr=0.87/0.925 0.5:a~0.3; sleep:12; shot; sleep:40; shot` (`UA_POINTER=1`) | 12.9 | 7, 163 | 81.9 ms |
+| Phasing Gun (6000.6.2f1, URP 17) | first scene | `sleep:30; shot` | 11.8 | 9, 68 | 88.9 ms |
+| The Third Eye (2022.2.15f1, URP 14) | first scene | `sleep:30; shot` (`UA_POINTER=1`) | 31.9 | 35, 342 | 38.4 ms |
+| Chapéu de Papel (2022.3.62f3 macOS build, Metal programs, URP 14) | title menu | `sleep:30; shot` | 33.4 - 36.7 | 3, 22 | 26.2 ms |
+| White Mirror (2021.2.9f1, URP 12, 2D renderer) | in game (split screen) | `sleep:25; shot; press:0:a~0.3; sleep:15; shot` | 43.1 | 22, 25 | 30.4 ms |
+| Cell Machine (2019.3.14f1 Windows build, D3D11 programs, URP 7) | level 1 | `sleep:20; shot; press:0:ptr=0.5/0.595 0.5:a~0.3; sleep:4; shot; press:0:ptr=0.29/0.38 0.5:a~0.3; sleep:8; shot` (`UA_POINTER=1`) | 53.7 | 22, 29 | 23.8 ms |
+
+(Chapéu's title cycles its backgrounds and animates its paper: 33.4 - 36.7 fps between runs of the same build.)
+
+#### Arthur's Nightmare, the 3D room
+
+| passes | what | ms |
+|---|---|---|
+| 720x480 RGBA8 + depth | the outline effect's source: 10 objects | 1.4 |
+| 1024x1024 depth | the spot light's shadow map (14 draws) | 2.8 |
+| 720x480, 2x MSAA (`EXT_multisampled_render_to_texture`, RGBA16F; D24S8 renderbuffer) | the camera: each object drawn three times, the base pass (Standard: light probe proxy volume, two reflection probes, occlusion; 8 samplers, ~200 statements) and two additive light passes (the spot light with its shadow map and cookie, ~180 statements; a point light, ~110); 132 draws, 84,000 indices | 65.2 |
+| 720x480 RGBA16F | the outline image effect (10 fetches, 130 statements) | 5.0 |
+| 720x480, the MSAA target | the effect's result copied back into the camera's target | 4.2 |
+| 720x480, 2x MSAA RGBA8 | 2017.3's own back buffer of its MSAA present (msaafix.c): the copy, a stencil clear, the UI (3 quads) | 1.2 |
+| 720x480 window | the present blit (the window is loaded first: 2017.3 invalidates nothing) | 1.9 |
+
+#### Phasing Gun, first scene
+
+| passes | what | ms |
+|---|---|---|
+| 4096x4096 D24, four 2048x2048 cascades | main light shadows: 30 draws of 1,000 indices into 64 MB of depth (4 bytes a texel), written back whole | 17.0 |
+| 720x480 RGBA16F + D32S8 | depth and normals prepass (13 draws) | 1.6 |
+| 720x480 RGBA8 | SSAO: the occlusion (blue noise, 18 fetches, 485 statements) | 40.3 |
+| 720x480 x3 | SSAO's three bilateral blurs (5 fetches, 60 statements each) | 4.7 + 4.6 + 4.2 |
+| 720x480 R11G11B10F + D32S8 | the opaque pass: 14 draws of URP Lit (Forward+: a light loop, the reflection probe atlas; 95 texture calls and 1,170 statements in the program) | 13.9 |
+| 360x240 | the opaque texture's downsampled copy (nothing in the frame samples it) | 0.7 |
+| 720x480 window, 4x MSAA | the final blit, a depth/stencil clear, the UI (5 quads) | 1.5 |
+
+#### The Third Eye, first scene
+
+Two cameras: A renders the room into a 503x288 texture that the UI shows, B is the player's view.
+
+| passes | what | ms |
+|---|---|---|
+| 1x1 x4 | URP's empty shadow maps (nothing casts shadows), a clear each | 0.2 |
+| 503x288 RGBA16F + D32S8 | A: depth and normals prepass (106 draws) | 1.1 |
+| 1024x32 RGBA8 | the colour grading LUT ([below](#the-colour-grading-lut-drawn-again-ua_gl_memo)) | 2.4 |
+| 503x288 x4 | A: SSAO, the occlusion (14 fetches, 630 statements) and three blurs | 0.6 + 1.9 + 1.9 + 1.8 |
+| 503x288 | A: opaque (109 draws, URP Lit with the SSAO texture) | 1.3 |
+| 251x144 ... 7x4 x16 | A: bloom (prefilter, six down/blur pairs, five upsamples) | 2.8 |
+| 503x288 | A: uber post (bloom, LUT, grain) | 2.5 |
+| 720x480 RGBA16F + D32S8 | B: depth and normals prepass (48 draws) | 1.5 |
+| 720x480 x4 | B: SSAO, the occlusion and three blurs | 1.1 + 4.3 + 4.3 + 4.0 |
+| 720x480, 4x MSAA (`EXT_multisampled_render_to_texture`, R11G11B10F) | B: opaque (50 draws) | 3.6 |
+| 720x480 window, 4x MSAA | the final blit, a stencil clear, the UI (A's picture, the crosshair) | 2.1 |
+
+SSAO is 19.7 ms of the 38.4 (both cameras); its blurs cost three to four times its occlusion pass (the occlusion
+returns early for most of the dark room's pixels, the blurs do not).
+
+#### Chapéu de Papel, title menu
+
+| passes | what | ms |
+|---|---|---|
+| 1024x32 RGBA8 | the colour grading LUT ([below](#the-colour-grading-lut-drawn-again-ua_gl_memo)) | 2.7 |
+| 720x480 sRGB RGBA8 + D32S8 | the camera's target: cleared, nothing drawn into it (the menu is UI) | 0.2 |
+| 720x480 window | the uber post blit of that target, a depth/stencil clear, the UI: a full-screen watercolour background (6 fetches, 54 statements) and about 17 paper-textured images (5 fetches, 84 statements each) | 23.2 |
+
+#### White Mirror, in game
+
+Split screen: two cameras of 720x240 with the same chain.
+
+| passes | what | ms (each camera) |
+|---|---|---|
+| 1024x32 RGBA16F | the colour grading LUT, drawn by both cameras ([below](#the-colour-grading-lut-drawn-again-ua_gl_memo)) | 2.5 |
+| 720x240 R11G11B10F + D32S8 | the camera's target cleared, a 4x4 white light texture (no 2D lights) cleared, the target again (its colour loaded), 3 - 5 sprite draws | 0.4 + 0.1 + 0.9 |
+| 360x120, 720x240 x5 | depth of field (Bokeh): downsample, circle of confusion, prefilter, the bokeh blur (a 42-tap loop), postfilter, composite | 0.4 + 0.8 + 0.5 + 5.4 + 0.5 + 0.8 |
+| 720x240 of the window | uber post into its half of the window (the window is loaded: no invalidate), then the UI | 2.0 / 3.6 |
+
+#### Cell Machine, level 1
+
+| passes | what | ms |
+|---|---|---|
+| 1024x32 RGBA8 | the colour grading LUT ([below](#the-colour-grading-lut-drawn-again-ua_gl_memo)) | 2.5 |
+| 720x480 R11G11B10F + D24S8 | the scene (4 draws) | 1.0 |
+| 360x240 ... 5x3 x19 | bloom | 5.2 (most of it the per-pass start-up) |
+| 720x480 window | uber post (lens distortion, chromatic aberration with three distorted samples, bloom, vignette, grain, LUT: 9 fetches, 215 statements), the UI (4 draws) | 14.2 |
+
+#### What the tiler and the driver could do without
+
+Looked for in these traces, with what was found:
+
+| candidate | found |
+|---|---|
+| multisampled renderbuffers resolved by `glBlitFramebuffer` | none: every MSAA target here (Arthur's 2017.3 camera and back buffer, The Third Eye's camera) is a texture attached with `glFramebufferTexture2DMultisampleEXT`, resolved in tile; the windows of The Third Eye and Phasing Gun are 4x multisampled EGL surfaces (their quality level's MSAA, as the desktop's back buffer), resolved at the swap. No blit in any traced frame |
+| Unity's DontCare load actions reaching the driver | they do, from 2019.3 on: URP's passes begin with `glInvalidateFramebuffer` of colour, depth and stencil. 2017.3 (Arthur) invalidates nothing. Loads that remain: White Mirror's camera target re-entered after a pass that only cleared it (twice a frame, 720x240 R11G11B10F), its window halves and Arthur's present blit (the window, 1.4 MB), The Third Eye's SSAO results (R8, a Load action) |
+| depth copies | none (URP's depth prepasses write the depth textures directly) |
+| redundant clears | none whole; mid-pass depth/stencil clears of the window after the final blit (The Third Eye, Chapéu, Phasing Gun; URP 14 - 17) and of Arthur's targets, which a tiler does as a full-screen write: not timed apart (Phasing Gun's whole window pass, blit, clear and 5 UI quads at 4x MSAA, is 1.5 ms) |
+| render targets larger than needed | none provable: Phasing Gun's 4096x4096 shadow atlas is its URP asset's setting, every cascade drawn into |
+| passes the window path adds | Arthur (2017.3 with MSAA): its MSAA present path's copy into its own back buffer and the blit into the window, 3.1 ms of 77; the later players draw the last pass straight into the window |
+| the same pass drawn again with the same inputs | URP's colour grading LUT, every frame in four of the six: `UA_GL_MEMO`, below |
+
+#### What limits them
+
+Measured per pass (`UA_GL_TRACE=3 UA_GL_MEMO=0`) with two kinds of fragment shaders put in through
+`UA_SHADER_OVERRIDE`, made from the run's `UA_SHADER_DUMP` by `tools/device/flatshaders.py` (measurements, never
+settings: the pictures are wrong): **flat**, every fragment shader writing a constant (what is left is vertex work,
+rasterization, blending, the tile loads and stores), and **notex** (`--notex`), every texture lookup replaced by an
+expression of its coordinate (the arithmetic stays, the fetches go; Bifrost runs the two side by side, so a pass
+that takes as long without its fetches is arithmetic-bound). A notex shader whose branches or loops depend on what it
+fetched runs other paths (Phasing Gun's and The Third Eye's SSAO occlusion took 52 and 83 ms): those passes are read
+from the flat run and the shader's static counts (lookups and scalar operations of `main()`, counted from the dumped
+source). The Third Eye's flat run had the GPU at 336 MHz (the governor's choice for the lighter load): its flat
+numbers are halved below to compare at 696.
+
+| game | pass | ms | flat | notex | lookups, scalar ops | limited by |
+|---|---|---|---|---|---|---|
+| Phasing Gun | shadow atlas (depth only) | 17.0 | 18.5 | 17.1 | - | memory: 64 MB of depth written a frame, ~3.8 GB/s |
+| | SSAO occlusion | 40.3 | 0.4 | (other paths) | 18, ~900 | arithmetic (the G31's two cores make about 5.6 G fused multiply-adds a second at 696 MHz: 900 operations over 345,600 pixels is 28 - 56 ms of them, as many fuse or not) |
+| | SSAO blurs (3) | 13.5 | 1.2 | 7.3 | 5, ~150 each | half fetches, half arithmetic |
+| | opaque, URP Lit Forward+ | 13.9 | 1.5 | 12.6 | 95 (in a light loop), ~1,700 | arithmetic |
+| | frame | 88.6 | 24.4 | | | fragment shading 72 % of the GPU's time, the shadow atlas's writes 19 % |
+| The Third Eye | LUT | 2.4 | 0.1 | 2.5 | 10, ~500 | arithmetic |
+| | SSAO occlusion x2 | 1.8 | 0.6 | (other paths) | 14, ~1,240 | arithmetic, where it does not return early |
+| | SSAO blurs x6 | 18.1 | ~1.6 | 12.5 | 5, ~150 each | fetches and arithmetic about evenly |
+| | uber post (camera A) | 2.5 | 0.2 | 2.0 | 7, ~300 | arithmetic |
+| | opaque passes (4x MSAA in B) | 4.9 | ~3.7 | 6.0 | 7, ~530 | vertex and raster work as much as shading (flat leaves 75 %) |
+| | frame | 37.3 | ~13 | | | fragment shading about two thirds |
+| Arthur's Nightmare | forward pass, three passes a pixel | 65.2 | 14.4 | 60.0 | 8, ~430 (base); 8, ~320 (spot); 3, ~210 (point) | arithmetic: about 46 ms; fetches ~5; the rest raster, 2x MSAA RGBA16F writes and the additive passes' blending |
+| | outline effect | 5.0 | 0.9 | 2.4 | 10, ~260 | fetches and arithmetic about evenly |
+| | copy back into the MSAA target | 4.2 | 4.0 | 4.1 | 1, - | the write into a 2x MSAA RGBA16F target, not its shader |
+| | frame | 81.7 | 25.6 | 73.1 | | fragment shading 69 % |
+| Chapéu de Papel | the UI over the window | 23.2 | | | 5 - 6, 75 - 130 per image | by its counts (not run flat): overdraw of textured full-screen layers, fetches and blending ([shaders.md](shaders.md#what-costs-what-on-a-mali-g31-rg34xx-sp): about 0.7 ms a layer and fetch) |
+| White Mirror | bokeh blur x2 | 10.9 | | | 43 (a 42-tap loop), ~60 | by its counts: fetches |
+| Cell Machine | uber post | 14.2 | | | 9, ~430, 36 transcendentals | by its counts: arithmetic |
+
+What would pay, from this: in the 3D games, fragment arithmetic, which only fewer or cheaper operations change
+(mediump, fewer SSAO samples, lower SSAO or shadow resolution: the game's settings, none of them the same picture);
+Phasing Gun's 4096x4096 shadow atlas is a fifth of its frame in memory writes alone (a 2048 atlas would quarter them:
+a setting, not the same shadows). The tile loads left in these frames are few and small (above) and the stores are
+of targets read later: the exact runtime win in them was the pass drawn again with the same inputs.
+
+#### The colour grading LUT drawn again: `UA_GL_MEMO`
+
+Every URP game with post-processing draws URP's colour grading LUT every frame: a 1024x32 texture (32x32x32 entries),
+one full-screen draw of LutBuilderLdr/Hdr (10 fetches, 200 - 420 statements: white balance, channel mixer,
+lift/gamma/gain, curves, tonemapping), 2.2 - 2.4 ms of GPU work at 696 MHz; White Mirror's two cameras draw it twice.
+Its inputs are the volume settings, which do not change while the camera does not move through volumes: the draw
+writes the pixels the texture already holds. `UA_GL_MEMO` (runtime/host/glmemo.c, on by default) leaves such a draw
+out. It follows passes that begin by invalidating the only attachment of their framebuffer (a single-sampled texture;
+URP's DontCare load action) and keys the pass's first draw: everything its pixels depend on (blending off and no
+depth or stencil attachment, so not what is under it): the program, the state that affects rasterization and the
+colour write, the uniform values read back, the sampled textures and samplers by a count bumped at every write into
+them, the bytes of the uniform blocks and of the vertex and index data, the call's arguments, the target. When the
+next such pass comes for that texture, nothing wrote the texture since and the first draw's key is the same byte for
+byte, neither the draw nor the pass's invalidate is sent: the texture keeps what the draw would write. The URP
+versions draw the LUT three ways, all followed: URP 14's procedural full-screen triangle (The Third Eye, Chapéu),
+URP 12's full-screen mesh with its per-draw constants in a uniform buffer (White Mirror: 2021.2 writes them into
+a new 656-byte buffer for each such draw), URP 7's blit quad, its vertex and index buffers mapped and written again
+every frame (Cell Machine); such buffers are compared by the bytes of a shadow copy (buffers of at most 4 KB and
+uniform buffers from their first write, others from their second). White Mirror's depth-of-field
+circle-of-confusion pass is left out too: it reads a depth texture its 2D renderer never writes (Unity's default
+texture), so it draws the same every frame.
+
+Exactness. By construction the draw is left out only when its target holds its output. `UA_GL_MEMO=check` draws
+every draw that would be left out and reads its target back before and after it: The Third Eye 1,092 such draws in
+1,200 frames, White Mirror 356 (the in-game frames of a run that check mode's read-backs slow to 12 fps), Chapéu de
+Papel 746 in 1,200, Cell Machine 920 in 1,200, and with the final build again 794, 298, 735 and 1,048; every one wrote
+the same pixels as the texture held (`0 other ones`). Screenshots of the A/B runs differ only where two baseline runs differ from each other (The
+Third Eye: a dithered vignette that changes every frame, 33 - 51 of the 50,400 pixels of the picture's centre by
+up to 9/255 in both comparisons; Chapéu: its animated paper).
+
+On the handheld (one session each, off, on, off, on; the GPU at 696 MHz every second):
+
+| game | off | on | the LUT's pass (serialized trace) |
+|---|---|---|---|
+| The Third Eye | 31.8, 31.8 (steady seconds 32.1) | 33.4, 33.5 (steady 34.5): **+7.5 %** | 2.4 ms |
+| Chapéu de Papel | 36.7, 36.4 | 37.2, 39.5: **+5 %** (its animated title varies by more than that from run to run) | 2.7 ms |
+| Cell Machine | 53.6, 53.5 (steady 53.8) | 58.5, 58.7 (steady 59.6, the refresh rate): **+11 %** | 2.5 ms |
+| White Mirror | 43.1, 43.1 (steady 43.4) | 53.6, 53.6 (steady 53.9): **+24 %**; both cameras' LUT and their depth-of-field circle-of-confusion pass, which reads a depth texture the 2D renderer never writes (Unity's default texture) | 2 x 2.5 + 2 x 0.8 ms |
+
+Every run started at CPU 47 - 48 C and GPU 50 C (`devlock.py cool`; The Third Eye's and Chapéu's before that rule,
+at 63 - 67 C, the GPU at 696 MHz every second all the same).
+
+Not left out: a LUT whose volume settings change (a camera moving through volumes, an animated colour adjustment)
+gets a new key each frame and is drawn as before; after three keys in a row that do not repeat, keys are made again
+only after 4, 8, ... 512 frames (a target that gets new storage, a render texture pool's next one, starts over at
+once). The key is read back with about 60 - 100 GL queries on the render thread, once a frame for each such target.
+
+What it costs where nothing is left out: Hollow Knight's King's Pass (32-bit; its passes that begin with an
+invalidate are blurs, bloom and grab copies whose inputs change every frame), eight runs interleaved in both orders
+(off on off on, on off on off): 35.3 fps without, 35.0 with (the runs' spread is 34.6 - 35.9, the GPU's share at 696
+MHz 53 - 80 % from run to run), its render thread 58.8 against 61.3 % of a core. Shadow copies of mapped writes cost it
+a tenth of the render thread's time at first (its sprite batches are flushed through mappings, write-combined memory
+that is slow to read: 63 -> 73 %, 35.0 -> 34.1 fps): mapped writes are now copied only into small buffers a keyed draw
+reads.
 
 ## GPU counters: gpucnt
 
