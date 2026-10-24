@@ -32,10 +32,13 @@ argv[0]), Mono a copy of the loader named mono/bin/mono (Mono derives its prefix
 .NET a copy named dotnet/dotnet (the muxer wants that name and finds host/fxr next to itself).
 
 The build is the PC route's (il2cpp.py), with what a 1 GB, 4 x Cortex-A53 handheld needs:
-  - memory: compiler jobs from MemAvailable (one or two on a 1 GB handheld), files above
-    PMUNITY_IL2CPP_BIG_KB compiled alone, -mno-outline (identical objects, a third of the memory
-    for the largest file), one CPU for UnityLinker and the conversion (the 2017.4 - 2019.4 tools
-    size their thread pools by the CPUs they may use), one job after an OOM kill;
+  - memory: the compiles given their turns by a scheduler (Scheduler: up to one per CPU, the
+    largest first, each only while the memory the running ones are predicted to reach leaves room
+    for it; a compile the OOM killer stopped runs again alone), -mno-outline (identical objects, a
+    third of the memory for the largest file), one CPU for UnityLinker and the conversion (the
+    2017.4 - 2019.4 tools size their thread pools by the CPUs they may use);
+    PMUNITY_IL2CPP_SCHED=0: the earlier job slots instead (jobs from MemAvailable at the start,
+    files above PMUNITY_IL2CPP_BIG_KB alone, one job after an OOM kill);
   - progress lines (PortMaster's patcher shows them) and a log per step in <out>/.work;
   - resumable: UnityLinker, the C++ conversion and every compiled object are kept, so a killed
     build continues where it stopped (il2cpp's object cache; conversion and compilation run as two
@@ -52,6 +55,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import urllib.error
@@ -566,8 +570,8 @@ def write_wrappers(tc, groups):
     w = {}
     # clang: its install dir (resource headers, ld.lld) from argv[0] instead of /proc/self/exe
     for name, mode in (('clang', ''), ('clang++', ' --driver-mode=g++')):
-        w[name] = WRAP.format(what=name) + JOBS_SH + NO_OUTLINE_SH + \
-            f'$PMUNITY_IL2CPP_CC_WRAPPER {ld} "{llvm}/clang"{mode} -no-canonical-prefixes $nool "$@"\nst=$?\nrelease\n' + KILLED_SH + 'exit $st\n'
+        cc = f'$PMUNITY_IL2CPP_CC_WRAPPER {ld} "{llvm}/clang"{mode} -no-canonical-prefixes $nool "$@"'
+        w[name] = WRAP.format(what=name) + NO_OUTLINE_SH + SCHED_SH.replace('@CC@', cc) + KILLED_SH + 'exit $st\n'
     w['ld.lld'] = WRAP.format(what='lld') + f'exec {ld} "{llvm}/lld" -flavor gnu $PMUNITY_LLD_FLAGS "$@"\n'
     for name, real in (('llvm-objcopy', 'llvm-objcopy'), ('llvm-strip', 'llvm-objcopy'), ('llvm-ar', 'llvm-ar'),
                        ('llvm-ranlib', 'llvm-ar'), ('llvm-nm', 'llvm-nm')):
@@ -651,6 +655,41 @@ if [ -n "$jd" ] && [ "$slots" -gt 0 ]; then
       sleep 1
     done
   fi
+fi
+'''
+
+# The compiler wrapper (clang, clang++): with PMUNITY_SCHED (a folder the build's Scheduler
+# watches) the wrapper asks the scheduler for its turn instead of taking a slot itself: it writes
+# q/<its pid> ("<KiB of the source> <1: a compile, 0: a link> - <source>"), waits for go/<pid>, runs
+# the compiler, and removes both. A compiler killed by a signal (the OOM killer) is run once more,
+# after asking for a turn alone ("<KiB> <c> alone <source>"; noted in <sched>/retried): il2cpp's
+# builder never sees it fail. The wrapper's oom_score_adj (and so its compiler's) is raised, which
+# needs no root for one's own processes: when memory runs out the kernel stops a compiler, which is
+# run again, rather than il2cpp or the setup's Python.
+# Without PMUNITY_SCHED: the slots above (JOBS_SH).
+SCHED_SH = r'''sd=$PMUNITY_SCHED; me=$$; st=0
+if [ -n "$sd" ] && [ -d "$sd/q" ]; then
+  src=; c=0
+  for a do case $a in *.cpp|*.c|*.cc) src=$a ;; -c) c=1 ;; esac; done
+  kb=0; [ -n "$src" ] && [ -f "$src" ] && kb=$(( $(wc -c < "$src") / 1024 ))
+  release() { rm -f "$sd/q/$me" "$sd/go/$me"; }
+  trap 'release; exit 130' INT TERM HUP
+  { echo 500 > /proc/self/oom_score_adj; } 2>/dev/null
+  for try in 1 2; do
+    if [ $try = 1 ]; then how=-; else how=alone; fi
+    echo "$kb $c $how $src" > "$sd/q/$me.t" && mv "$sd/q/$me.t" "$sd/q/$me"
+    while [ ! -e "$sd/go/$me" ] && [ -d "$sd/q" ]; do sleep 0.2 2>/dev/null || sleep 1; done
+    @CC@
+    st=$?
+    release
+    { [ "$st" -gt 128 ] && [ "$st" -ne 130 ] && [ $try = 1 ] && [ -d "$sd/q" ]; } || break
+    echo "$st ${src:-?}" >> "$sd/retried"
+  done
+else
+''' + JOBS_SH.replace('\n', '\n  ').rstrip() + r'''
+  @CC@
+  st=$?
+  release
 fi
 '''
 
@@ -782,17 +821,230 @@ def tree_rss_kb(root):
     return anon + filed
 
 
+def sched_root():
+    """Where the scheduler's request files go: a RAM file system when there is one (/dev/shm, /tmp;
+    the wrappers poll them), else None (the work folder)."""
+    for d in ('/dev/shm', '/tmp'):
+        try:
+            st = os.statvfs(d)
+            if os.access(d, os.W_OK) and st.f_bavail * st.f_frsize > (4 << 20):
+                with open('/proc/mounts') as f:
+                    if any(line.split()[1] == d and line.split()[2] in ('tmpfs', 'ramfs') for line in f):
+                        return d
+        except (OSError, IndexError):
+            pass
+    return None
+
+
+def children(pid):
+    """A process's children (pids), from /proc/<pid>/task/*/children; None when the kernel has no
+    such files."""
+    out, seen = [], False
+    try:
+        tasks = os.listdir(f'/proc/{pid}/task')
+    except OSError:
+        return []
+    for t in tasks:
+        try:
+            with open(f'/proc/{pid}/task/{t}/children') as f:
+                out += [int(x) for x in f.read().split()]
+            seen = True
+        except (OSError, ValueError):
+            pass
+    return out if seen else None
+
+
+def anon_kb(pid):
+    try:
+        with open(f'/proc/{pid}/status') as f:
+            for line in f:
+                if line.startswith('RssAnon:'):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+# The scheduler's memory model: a compile's peak anonymous memory (MB) from its source's size, an
+# upper bound over Cuphead's 755 compiles (Unity 2017.4's il2cpp, clang 14, -Os, -mno-outline,
+# measured one at a time in an arm64 container; docs/il2cpp.md, "Fitting a 1 GB, 4 x Cortex-A53
+# handheld"): il2cpp's metadata tables (Il2Cpp*.cpp: TypeDefinitions 11 MiB 446 MB, Attributes
+# 17 MiB 508 MB, ...) SCHED_META, everything else (Bulk files of 2-3 MiB: at most 77 MB, libil2cpp's
+# own sources: 10-32 MB) SCHED_GEN, as (MB, MB per MiB of source); a link (no source) SCHED_LINK_MB.
+# Each kind's prediction is raised to what this build's own compiles of that kind reached (+10 %):
+# another game or compiler cannot make it run out.
+SCHED_GEN = (40, 26)
+SCHED_META = (40, 37)
+SCHED_LINK_MB = 400
+# kept free besides the compiles' predicted memory: the compiler's and LLVM's code (file pages the
+# compilers share, which MemAvailable counts as available) and a margin
+SCHED_RESERVE_MB = int(os.environ.get('PMUNITY_IL2CPP_SCHED_RESERVE_MB', '160'))
+
+
+class Scheduler:
+    """Gives the compiler wrappers (SCHED_SH) their turns: at most `jobs` compiles at once, the
+    largest waiting request first, and a further one only while the memory the running ones are
+    predicted to reach still leaves room for it: MemAvailable (the cgroup's limit too) less
+    SCHED_RESERVE_MB must hold the new compile's predicted peak plus what the running ones may still
+    grow (their prediction less their anonymous memory now). The first compile always runs (with
+    nothing else running, there is nothing to wait for); a request that does not fit waits, and
+    nothing smaller passes it (the big files never starve). A retried compile ("alone") runs with
+    nothing else. Requests are files in a folder on a RAM file system (the wrappers poll for theirs);
+    the scheduler is a thread of the setup's Python, checking every `tick` seconds."""
+
+    def __init__(self, jobs, reserve_mb=None, tick=0.2, root=None, available=None):
+        self.dir = tempfile.mkdtemp(prefix='pmunity-cc-', dir=root or sched_root())
+        os.makedirs(os.path.join(self.dir, 'q'))
+        os.makedirs(os.path.join(self.dir, 'go'))
+        self.jobs = max(1, jobs)
+        self.reserve = SCHED_RESERVE_MB if reserve_mb is None else reserve_mb
+        self.tick = tick
+        self.available = available or available_mb
+        self.running = {}            # pid -> [predicted MB, kind, raw prediction, peak anon kB, started]
+        self.scale = {'gen': 1.0, 'meta': 1.0, 'link': 1.0}
+        self.stats = {'compiles': 0, 'most_at_once': 0, 'waited_for_memory': 0.0}
+        self._stop = threading.Event()
+        self._th = threading.Thread(target=self._loop, daemon=True)
+
+    def __enter__(self):
+        self._th.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._th.join()
+        try:
+            self.step()                                    # (the last compiles counted)
+        except Exception:                                  # noqa: BLE001 (the folder may be gone)
+            pass
+        shutil.rmtree(self.dir, ignore_errors=True)       # (a wrapper still waiting then runs)
+        return False
+
+    def retried(self):
+        try:
+            with open(os.path.join(self.dir, 'retried')) as f:
+                return [line.split() for line in f if line.strip()]
+        except OSError:
+            return []
+
+    @staticmethod
+    def predict(kb, compile_, src):
+        if not compile_:
+            return 'link', float(SCHED_LINK_MB)
+        base, per = SCHED_META if os.path.basename(src).startswith('Il2Cpp') else SCHED_GEN
+        return ('meta' if (base, per) == SCHED_META else 'gen'), base + per * kb / 1024
+
+    def _requests(self):
+        q = os.path.join(self.dir, 'q')
+        out = {}
+        for n in os.listdir(q):
+            if not n.isdigit():
+                continue
+            try:
+                with open(os.path.join(q, n)) as f:
+                    kb, c, how, src = (f.read().split(None, 3) + ['', '', '', ''])[:4]
+                out[int(n)] = (int(kb), c == '1', how == 'alone', src.strip())
+            except (OSError, ValueError):
+                continue
+        return out
+
+    def _alive(self, pid):
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def _finish(self, pid):
+        """A compile is over (its wrapper removed go/<pid>, or is gone): what it reached raises its
+        kind's predictions; a gone wrapper's files are removed (a wrapper running again has queued
+        anew)."""
+        pred, kind, raw, peak, _ = self.running.pop(pid)
+        if peak and raw:
+            self.scale[kind] = max(self.scale[kind], peak / 1024 / raw * 1.1)
+        self.stats['compiles'] += 1
+        if not self._alive(pid):
+            self._finish_stale(pid)
+
+    def step(self):
+        go = os.path.join(self.dir, 'go')
+        for pid in list(self.running):
+            if not os.path.exists(os.path.join(go, str(pid))) or not self._alive(pid):
+                self._finish(pid)
+                continue
+            kids = children(pid)
+            kb = sum(anon_kb(k) for k in (kids or ()))
+            r = self.running[pid]
+            r[3] = max(r[3], kb)
+        reqs = {p: r for p, r in self._requests().items() if p not in self.running}
+        for p in [p for p in reqs if not self._alive(p)]:          # (a wrapper killed while it waited)
+            self._finish_stale(p)
+            del reqs[p]
+        if not reqs or len(self.running) >= self.jobs:
+            return
+        order = []
+        for p, (kb, c, alone, src) in reqs.items():
+            kind, raw = self.predict(kb, c, src)
+            order.append((not alone, -raw * self.scale[kind], p, kind, raw, alone))
+        order.sort()
+        avail = self.available()
+        growth = sum(max(0.0, r[0] - r[3] / 1024) for r in self.running.values())
+        for _, neg, p, kind, raw, alone in order:
+            pred = -neg
+            if len(self.running) >= self.jobs or (alone and self.running):
+                break
+            if self.running and pred + growth + self.reserve > avail:
+                self.stats['waited_for_memory'] += self.tick
+                break
+            try:
+                with open(os.path.join(go, str(p)), 'w'):
+                    pass
+            except OSError:
+                break
+            self.running[p] = [pred, kind, raw, 0, time.time()]
+            growth += pred
+            self.stats['most_at_once'] = max(self.stats['most_at_once'], len(self.running))
+            if alone:
+                break
+
+    def _finish_stale(self, pid):
+        for d in ('q', 'go'):
+            try:
+                os.unlink(os.path.join(self.dir, d, str(pid)))
+            except OSError:
+                pass
+
+    def _loop(self):
+        while not self._stop.wait(self.tick):
+            try:
+                self.step()
+            except Exception as ex:          # (never stop the build: the wrappers run once the folder goes)
+                log(f'il2cpp: compile scheduler: {ex!r}; the compiles now run without it')
+                shutil.rmtree(self.dir, ignore_errors=True)
+                return
+
+
 class Native:
     """Runs the build's commands on this machine with the device toolchain (the Container's
     counterpart): <tc>/bin first in PATH (mono, dotnet, the compilers), HOME and TMPDIR in the work
-    folder, CPU affinity limited to the job count, compiler job slots (JOBS_SH). Prints a progress
-    line now and then and keeps the peak memory of each step."""
+    folder, CPU affinity limited to the job count (UnityLinker, the conversion), the compiles given
+    their turns by a Scheduler (or compiler job slots, JOBS_SH). Prints a progress line now and then
+    and keeps the peak memory of each step."""
 
     def __init__(self, tc, jobs, work, progress=None):
         self.tc, self.work = tc, work
         cpus = cpu_count()
-        self.jobs = max(1, min(jobs, cpus)) if jobs else auto_jobs(cpus)
+        # the compiles: with the scheduler (the default; PMUNITY_IL2CPP_SCHED=0: the slots, JOBS_SH)
+        # up to one per CPU as the memory allows, else as many as auto_jobs() thinks fit at the start
+        self.sched = os.environ.get('PMUNITY_IL2CPP_SCHED', '1') != '0'
+        self.jobs = max(1, min(jobs, cpus)) if jobs else (cpus if self.sched else auto_jobs(cpus))
+        # what il2cpp's builder (its compiler threads: .NET's ProcessorCount) and the Bee graph keep
+        # in flight: with the scheduler more than run, so it always has the next files to choose from
+        self.threads = max(8, 3 * cpus) if self.sched else self.jobs
         self.cpus = cpus
+        self.sched_stats = {}
         self.peaks = {}                  # step log name -> peak MB (the process tree's resident memory)
         self.cpu = {}                    # step log name -> CPU seconds (the step and every process it waited for)
         self.progress = progress
@@ -830,12 +1082,34 @@ class Native:
             e['DOTNET_GCHeapHardLimit'] = hex(hard)
         return e
 
-    def run(self, cmd, logname, quiet=False, affinity=None):
+    @contextlib.contextmanager
+    def scheduled(self, on):
+        """The environment additions for compiles given their turns by a Scheduler (on and
+        self.sched), else {}; the scheduler's figures go to self.sched_stats."""
+        if not (on and self.sched):
+            yield {}
+            return
+        with Scheduler(self.jobs) as s:
+            yield {'PMUNITY_SCHED': s.dir, 'DOTNET_PROCESSOR_COUNT': str(self.threads)}
+        st = self.sched_stats
+        st['compiles'] = st.get('compiles', 0) + s.stats['compiles']
+        st['most_at_once'] = max(st.get('most_at_once', 0), s.stats['most_at_once'])
+        st['waited_for_memory_s'] = round(st.get('waited_for_memory_s', 0) + s.stats['waited_for_memory'])
+        st['retried_alone'] = st.get('retried_alone', 0) + len(s.retried())
+        st['memory_scale'] = {k: round(v, 2) for k, v in s.scale.items()}
+        if s.retried():
+            log(f'il2cpp: {len(s.retried())} compile(s) killed (out of memory, most likely) and run again alone')
+
+    def run(self, cmd, logname, quiet=False, affinity=None, sched=False):
+        with self.scheduled(sched) as extra:
+            return self._run(cmd, logname, affinity, extra)
+
+    def _run(self, cmd, logname, affinity, extra):
         jd = os.path.join(self.work, 'jobs')
         shutil.rmtree(jd, ignore_errors=True)            # (slots of a killed run)
         os.makedirs(jd, exist_ok=True)
         path = os.path.join(self.work, logname)
-        n = affinity or self.jobs
+        n = affinity or (self.cpus if extra else self.jobs)
         cpus = sorted(os.sched_getaffinity(0))[:n] if hasattr(os, 'sched_getaffinity') else None
 
         def pre():
@@ -845,7 +1119,7 @@ class Native:
         peak = [0]
         with open(path, 'w') as lf:
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace',
-                                 env=self.env(), cwd=self.work, preexec_fn=pre, start_new_session=True)
+                                 env=dict(self.env(), **extra), cwd=self.work, preexec_fn=pre, start_new_session=True)
             stop = threading.Event()
 
             def watch():
@@ -894,12 +1168,19 @@ class Native:
     @contextlib.contextmanager
     def shell(self):
         """Many commands (Unity 2021.2+'s Bee graph, il2cpp_bee): yields sh(command, cwd, env) ->
-        (exit code, output), callable from several threads; the peak memory of the commands running
-        at once and their CPU time are kept as the 'build.log' step's."""
+        (exit code, output), callable from several threads (self.threads at once: the compiles among
+        them get their turns from a Scheduler); the peak memory of the commands running at once and
+        their CPU time are kept as the 'build.log' step's."""
+        with self.scheduled(True) as extra:
+            with self._shell(extra) as sh:
+                yield sh
+
+    @contextlib.contextmanager
+    def _shell(self, extra):
         jd = os.path.join(self.work, 'jobs')
         shutil.rmtree(jd, ignore_errors=True)            # (slots of a killed run)
         os.makedirs(jd, exist_ok=True)
-        base = self.env()
+        base = dict(self.env(), **extra)
         pids, lock, stop = set(), threading.Lock(), threading.Event()
         peak, cpu = [0], [0.0]
 
@@ -1060,8 +1341,9 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
         raise SystemExit(f'{work}: {free >> 20} MB free; the build needs about {need >> 20} MB '
                          '(generated C++ and objects, removed when it is done)')
     mem = meminfo()
+    jobs = f'up to {box.jobs} compiles at a time as the memory allows' if box.sched else f'{box.jobs} compiler job(s)'
     log(f'IL2CPP build on this machine: {box.cpus} CPUs, {mem.get("MemTotal", 0)} MB RAM '
-        f'({available_mb()} MB available, swap {mem.get("SwapFree", 0)} MB free), {box.jobs} compiler job(s); '
+        f'({available_mb()} MB available, swap {mem.get("SwapFree", 0)} MB free), {jobs}; '
         'it continues where it stopped if interrupted')
     link_id = 'none'
     if strip != 'none':
@@ -1104,13 +1386,16 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     total, cost = sources_estimate(cpp, editor)
     before = count_objects(cache)
     comp = [w for w in icmd if w != '--convert-to-cpp']
+    if box.sched:           # (2020.x+'s il2cpp: its compiler threads; the scheduler decides what runs)
+        comp = [f'--jobs={box.threads}' if w.startswith('--jobs=') else w for w in comp]
     from . import il2cpp_bee
+    at = f'up to {box.jobs}' if box.sched else box.jobs
     if il2cpp_bee.uses_bee(editor):         # (2021.2+: the build graph says what, il2cpp_bee counts it)
-        log(f'il2cpp: compiling ({box.jobs} at a time), then linking (the long part: one to a few hours on a '
+        log(f'il2cpp: compiling ({at} at a time), then linking (the long part: half an hour to a few hours on a '
             '4-core ARM handheld)')
     else:
-        log(f'il2cpp: compiling about {total} files ({before} done before), {box.jobs} at a time, then linking '
-            '(the long part: one to a few hours on a 4-core ARM handheld)')
+        log(f'il2cpp: compiling about {total} files ({before} done before), {at} at a time, then linking '
+            '(the long part: half an hour to a few hours on a 4-core ARM handheld)')
     cclog = CompileLog(os.path.join(work, 'cc.log'))
     left0 = cost * max(0, total - before) / max(1, total)     # (what a resumed build has left, roughly)
 
@@ -1133,7 +1418,7 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
     def compile_():
         # (Unity 2021.2+: il2cpp writes the Bee build graph, whose commands then run here, il2cpp_bee)
         I.clear_bee_graph(editor, cache)
-        return box.run(comp, 'il2cpp.log') + I.run_bee_graph(box, editor, cache, work, progress=bee_progress)
+        return box.run(comp, 'il2cpp.log', sched=True) + I.run_bee_graph(box, editor, cache, work, progress=bee_progress)
 
     def bee_progress(n, total, el):
         eta = f', about {max(1, el / n * (total - n) / 60):.0f} min left' if n >= 5 else ''
@@ -1162,5 +1447,6 @@ def run_steps(box, lcmd, icmd, work, staged, linked, cpp, cache, editor, strip):
 
 
 def report(box):
-    return {'jobs': box.jobs, 'cpus': box.cpus, 'peak_mb': dict(box.peaks), 'cpu_seconds': dict(box.cpu),
+    return {'jobs': box.jobs, 'cpus': box.cpus, 'scheduler': dict(box.sched_stats) if box.sched else None,
+            'peak_mb': dict(box.peaks), 'cpu_seconds': dict(box.cpu),
             'mem_total_mb': meminfo().get('MemTotal')}

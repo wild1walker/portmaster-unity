@@ -303,6 +303,118 @@ class JobSlotsTest(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), 'ran')
 
 
+@unittest.skipUnless(shutil.which('sh'), 'needs sh')
+class SchedulerTest(unittest.TestCase):
+    """The compile scheduler and its wrappers (SCHED_SH): never more compiles at once than its
+    jobs, none beyond what the memory holds, the largest request first and nothing passing it, a
+    killed compile run once more alone, the wrappers running on once the scheduler is gone."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.saved = D.SCHED_GEN, D.SCHED_META
+
+    def tearDown(self):
+        D.SCHED_GEN, D.SCHED_META = self.saved
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def wrapper(self, cc):
+        script = os.path.join(self.d, 'cc')
+        with open(script, 'w') as f:
+            f.write('#!/bin/sh\n' + D.SCHED_SH.replace('@CC@', cc) + 'exit $st\n')
+        return script
+
+    def run_many(self, sched, files, cc=None):
+        events = os.path.join(self.d, 'events')
+        if os.path.exists(events):
+            os.unlink(events)
+        script = self.wrapper(cc or f'echo "start $src" >> "{events}"; sleep 0.4; echo "end $src" >> "{events}"; true')
+        env = dict(os.environ, PMUNITY_SCHED=sched.dir)
+        ps = [subprocess.Popen(['sh', script, '-c', f], env=env) for f in files]
+        rcs = [p.wait(timeout=60) for p in ps]
+        running = peak = 0
+        with open(events) as f:
+            for line in f:
+                running += 1 if line.startswith('start') else -1
+                peak = max(peak, running)
+        return rcs, peak
+
+    def test_jobs(self):
+        with D.Scheduler(2, reserve_mb=0, root=self.d, available=lambda: 100000) as s:
+            rcs, peak = self.run_many(s, [f'Bulk_{i}.cpp' for i in range(6)])
+            self.assertEqual(rcs, [0] * 6)
+            self.assertEqual(peak, 2)
+            self.assertEqual(os.listdir(os.path.join(s.dir, 'q')), [])
+            self.assertEqual(os.listdir(os.path.join(s.dir, 'go')), [])
+        self.assertEqual(s.stats['compiles'], 6)
+
+    def test_memory(self):
+        D.SCHED_GEN = (100, 0)                                 # (every compile: 100 MB)
+        with D.Scheduler(4, reserve_mb=0, root=self.d, available=lambda: 250) as s:
+            rcs, peak = self.run_many(s, [f'Bulk_{i}.cpp' for i in range(6)])
+        self.assertEqual(rcs, [0] * 6)
+        self.assertEqual(peak, 2)
+        with D.Scheduler(4, reserve_mb=0, root=self.d, available=lambda: 50) as s:   # (the first runs anyway)
+            rcs, peak = self.run_many(s, ['Bulk_0.cpp', 'Bulk_1.cpp'])
+        self.assertEqual((rcs, peak), ([0, 0], 1))
+
+    def test_largest_first(self):
+        """With requests of 3, 2 and 1 MiB waiting and room for the largest only, the largest goes;
+        nothing smaller passes a request that waits for memory."""
+        D.SCHED_GEN = (0, 100)                                 # (100 MB per MiB of source)
+        sleepers = [subprocess.Popen(['sleep', '30']) for _ in range(3)]
+        try:
+            s = D.Scheduler(4, reserve_mb=0, root=self.d, available=lambda: 350)
+            for p, kb in zip(sleepers, (1024, 3072, 2048)):
+                with open(os.path.join(s.dir, 'q', str(p.pid)), 'w') as f:
+                    f.write(f'{kb} 1 - Bulk_{kb}.cpp\n')
+            s.step()
+            self.assertEqual(os.listdir(os.path.join(s.dir, 'go')), [str(sleepers[1].pid)])
+            s.step()                                           # (2 MiB: 300 MB + 200 > 350: waits, and so does 1 MiB)
+            self.assertEqual(os.listdir(os.path.join(s.dir, 'go')), [str(sleepers[1].pid)])
+            os.unlink(os.path.join(s.dir, 'go', str(sleepers[1].pid)))       # (the 3 MiB compile is done)
+            os.unlink(os.path.join(s.dir, 'q', str(sleepers[1].pid)))
+            s.step()                                           # (then 200 + 100 fit together)
+            self.assertEqual(sorted(os.listdir(os.path.join(s.dir, 'go'))), sorted([str(sleepers[2].pid), str(sleepers[0].pid)]))
+        finally:
+            for p in sleepers:
+                p.kill()
+                p.wait()
+            shutil.rmtree(s.dir, ignore_errors=True)
+
+    def test_killed_runs_again_alone(self):
+        marker, events = os.path.join(self.d, 'once'), os.path.join(self.d, 'events')
+        cc = (f'echo "start $src" >> "{events}"; if [ "$src" = Bulk_0.cpp ] && [ ! -e "{marker}" ]; then '
+              f': > "{marker}"; echo "end $src" >> "{events}"; sh -c \'kill -9 $$\'; else sleep 0.3; '
+              f'echo "end $src" >> "{events}"; true; fi')
+        with D.Scheduler(4, reserve_mb=0, root=self.d, available=lambda: 100000) as s:
+            rcs, _ = self.run_many(s, ['Bulk_0.cpp', 'Bulk_1.cpp', 'Bulk_2.cpp'], cc)
+            self.assertEqual(rcs, [0, 0, 0])
+            self.assertEqual([r[1] for r in s.retried()], ['Bulk_0.cpp'])
+        with open(events) as f:
+            lines = f.read().splitlines()
+        i = len(lines) - 1 - lines[::-1].index('start Bulk_0.cpp')      # the second run: nothing else at once
+        self.assertEqual(lines[i + 1], 'end Bulk_0.cpp')
+        self.assertEqual(sum(1 for x in lines[:i] if x.startswith('start')), sum(1 for x in lines[:i] if x.startswith('end')))
+
+    def test_no_scheduler(self):
+        """The scheduler's folder gone (it stopped): a waiting wrapper runs its compile anyway."""
+        script = self.wrapper('echo ran; true')
+        sd = os.path.join(self.d, 'sched')
+        os.makedirs(os.path.join(sd, 'q'))
+        p = subprocess.Popen(['sh', script, '-c', 'a.cpp'], env=dict(os.environ, PMUNITY_SCHED=sd),
+                             stdout=subprocess.PIPE, text=True)
+        time.sleep(0.5)
+        shutil.rmtree(sd)
+        out, _ = p.communicate(timeout=20)
+        self.assertEqual((p.returncode, out.strip()), (0, 'ran'))
+
+    def test_predict(self):
+        self.assertEqual(D.Scheduler.predict(2048, True, '/x/Bulk_Assembly-CSharp_1.cpp'),
+                         ('gen', D.SCHED_GEN[0] + 2 * D.SCHED_GEN[1]))
+        self.assertEqual(D.Scheduler.predict(10240, True, '/x/Il2CppTypeDefinitions.cpp')[0], 'meta')
+        self.assertEqual(D.Scheduler.predict(0, False, ''), ('link', float(D.SCHED_LINK_MB)))
+
+
 class DiskFreeTest(unittest.TestCase):
     def test_override(self):
         """PMUNITY_DISK_FREE_MB (a rehearsal on Docker Desktop's file sharing) replaces statvfs's figure"""
