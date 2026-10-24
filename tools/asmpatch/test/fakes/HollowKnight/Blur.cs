@@ -39,6 +39,14 @@ public class LightBlurredBackground
     public void Start(float aspect) { Awake(); OnCameraAspectChanged(aspect); }
 }
 
+public class LightBlur
+{
+    private int passGroupCount = 2;
+
+    public int PassGroupCount { get { return passGroupCount; } set { passGroupCount = value; } }
+    public int BlurPassCount { get { return passGroupCount * 2; } }
+}
+
 public class BlurPlane
 {
     private MeshRenderer meshRenderer;

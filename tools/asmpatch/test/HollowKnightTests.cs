@@ -1,5 +1,5 @@
 // hk-blur on a stand-in Assembly-CSharp (test/fakes/HollowKnight, built by build.sh test): opt-in,
-// then patched, loaded and started with ASMPATCH_HK_BLUR unset, "full", "half" and "off".
+// then patched, loaded and started with ASMPATCH_HK_BLUR unset and set to each of its words.
 using System.Runtime.Loader;
 using Assembly = System.Reflection.Assembly;
 
@@ -9,8 +9,9 @@ static partial class TestMain
 {
     static readonly string FakeHollowKnight = Path.Combine(AppContext.BaseDirectory, "fakes", "hk", "Assembly-CSharp.dll");
 
-    /// <summary>(texture width, height, cancelled, plane renderer enabled) after the rig's start at aspect 1.6.</summary>
-    static (int w, int h, bool cancelled, bool visible) StartRig(string dir, string blur)
+    /// <summary>(texture width, height, blur passes with 2 pass groups and with 1, cancelled, plane
+    /// renderer enabled) after the rig's start at aspect 1.6.</summary>
+    static (int w, int h, int passes, int passes1, bool cancelled, bool visible) StartRig(string dir, string blur)
     {
         var old = Environment.GetEnvironmentVariable(HollowKnightBlur.Variable);
         Environment.SetEnvironmentVariable(HollowKnightBlur.Variable, blur);
@@ -25,7 +26,12 @@ static partial class TestMain
             var plane = Activator.CreateInstance(planeT);
             planeT.GetMethod("Start").Invoke(plane, null);
             var r = planeT.GetProperty("Renderer").GetValue(plane);
-            return ((int)lbbT.GetField("TextureWidth").GetValue(lbb), (int)lbbT.GetField("TextureHeight").GetValue(lbb),
+            var blurT = a.GetType("LightBlur", true);
+            var lb = Activator.CreateInstance(blurT);
+            int passes = (int)blurT.GetProperty("BlurPassCount").GetValue(lb);
+            blurT.GetProperty("PassGroupCount").SetValue(lb, 1);
+            int passes1 = (int)blurT.GetProperty("BlurPassCount").GetValue(lb);
+            return ((int)lbbT.GetField("TextureWidth").GetValue(lbb), (int)lbbT.GetField("TextureHeight").GetValue(lbb), passes, passes1,
                     (bool)lbbT.GetProperty("Cancelled").GetValue(lbb), (bool)r.GetType().GetProperty("enabled").GetValue(r));
         }
         finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightBlur.Variable, old); }
@@ -43,13 +49,17 @@ static partial class TestMain
         Check(st == 0 && outp.Contains("ok   hk-blur: Assembly-CSharp.dll: LightBlurredBackground") && File.Exists(Path.Combine(o, "Assembly-CSharp.dll")),
               "hk-blur: applied when named");
         if (!File.Exists(Path.Combine(o, "Assembly-CSharp.dll"))) return;
-        var full = (576, 360, false, true);
+        var full = (576, 360, 4, 2, false, true);
         Check(StartRig(d, "off") == full, "hk-blur: the unpatched stand-in ignores the variable");
-        foreach (var v in new[] { null, "", "full", "HALF" })
+        foreach (var v in new[] { null, "", "full", "HALF", "halfway", "lower" })
             Check(StartRig(o, v) == full, $"hk-blur: ASMPATCH_HK_BLUR={v ?? "(unset)"}: the game as it is");
-        Check(StartRig(o, "half") == (288, 180, false, true), $"hk-blur: half: the texture at half size {StartRig(o, "half")}");
-        var off = StartRig(o, "off");
-        Check(off.cancelled && !off.visible, $"hk-blur: off: no background camera, the blur plane hidden {off}");
+        foreach (var (v, want) in new[]
+                 {
+                     ("low", (576, 360, 2, 2, false, true)), ("half", (288, 180, 4, 2, false, true)),
+                     ("half,low", (288, 180, 2, 2, false, true)), ("low,half", (288, 180, 2, 2, false, true)),
+                     ("off", (576, 360, 4, 2, true, false)),
+                 })
+            Check(StartRig(o, v) == want, $"hk-blur: {v}: {StartRig(o, v)}");
         (st, outp) = Patch(o, Path.Combine(tmp, "hk-again"), with: new[] { "hk-blur" });
         Check(st == 0 && outp.Contains("done hk-blur") && NoDlls(Path.Combine(tmp, "hk-again")), "hk-blur: a second run finds it applied");
         var none = Dir("hk-none");
