@@ -907,6 +907,36 @@ desktop tier (BRDF1, the full GGX; an Android build's tiers use the cheaper BRDF
 draws Arthur's Nightmare's 65 ms room; and the desktop builds' quality settings (Phasing Gun's
 shadow map pass, 17 ms) are the PC's.
 
+Unity's own Android precision from the game's data (looked for, 2026-10-25). The idea: an Android
+build compiles HLSL `half` / `fixed` as mediump / lowp; a Linux build's Vulkan programs carry the
+same information as SPIR-V `RelaxedPrecision` decorations and a macOS build's MSL as `half` types,
+so a GLCore / D3D11 program with such a twin in the same pass and keyword set could take its
+qualifiers from it (vulkan.py and metal.py read both). Surveyed over the 60-game corpus and Hollow
+Knight (every shader; the Vulkan modules decoded, their float-typed values counted, the MSL's
+`half` tokens, and the GL programs' HLSLcc temporaries, which HLSLcc names by their precision:
+`u_xlat16_<n>` for `half`, `u_xlat10_<n>` for `fixed`):
+
+| Unity | builds | GLCore / D3D11 programs with a Vulkan or Metal twin | the twins' `RelaxedPrecision` float values | the GL programs' `half` / `fixed` temporaries | MSL `half` |
+|---|---|---|---|---|---|
+| 5.5 - 2019.4 (Linux) | 10 | 13,152 of 21,012 GLCore (every Linux build with both APIs; two ship GLCore alone or partly) | 1,086,329 of 5,506,626 (20 %; 7 - 34 % per build) | 69,511 of 188,953 (37 %; 26 - 45 % per build) | |
+| 2019.1 (macOS) | 1 | 440 of 449 | | 32 % | 2 tokens in 440 stages |
+| 2020.1 - 6000.6 (Linux) | 25 | 51,358 of 53,340 | **0 of 53,874,270** (every build) | **0 of 825,924** | |
+| 2022.3, 6000.2 (macOS) | 2 | | | | 1 token in 2,455 stages |
+| 2018.3 - 6000.3 (Windows) | 8 | no twin (D3D11 alone) | | | |
+
+From Unity 2020.1 on, a desktop build's shaders have no `half` left anywhere: Unity's compiler makes
+`half` a `float` for desktop targets (GLCore, Vulkan on Linux, Metal on macOS, D3D11) before HLSLcc
+sees the code, and the SPIR-V, the MSL and the GL programs all agree. Hollow Knight (6000.0): 867 of
+868 GLCore programs have a Vulkan twin, 0 of 82,582 float values relaxed, 0 of 4,851 temporaries
+`half`; its Vulkan modules keep their names (734 of 734 stages; stripped up to 2018.1, kept from
+2018.2). The same for every GPU-bound game of the handheld benches but Arthur's Nightmare (2017.3:
+25 of the 93 temporaries of its hot programs are `half`, 32 % of its Vulkan values relaxed). So the
+precision an Android build would run is not in the data of any game of 2020.1 or later, and
+"everything mediump" above is the only version of it that can be made, not exact and not Unity's:
+no converter option was built. For a 5.5 - 2019.4 build it is in the data, and the GL program
+itself names its `half` temporaries; the Vulkan twin would add the uniforms', varyings' and block
+members' precision (by name from 2018.2, by location / binding / offset before).
+
 Not a cost but a failure, found on the way (the Metal route; not changed here): 24 of Chapéu de
 Papel's 993 programs as converted do not link on the handheld, its URP Lit and terrain-detail
 variants with per-pixel additional lights (`_ADDITIONAL_LIGHTS`): "the number of fragment uniform
