@@ -42,8 +42,8 @@ DEFAULTS = {
     'threads': 0,                # encoder threads, 0 = all cores
     'pipeline': 'auto',          # decode the next texture while one is encoded: true | false | auto
     'prepare_split': True,       # big textures decoded and scaled in strips on every core (same pixels)
-                                 # (on, but on a system with under 2 GB of RAM a texture of more than
-                                 # 16 MB decoded is decoded and encoded alone)
+    'solo_mb': 128,              # (pipeline auto, a system with under 2 GB of RAM) a texture of more
+                                 # than this decoded is decoded and encoded alone, nothing overlapped
     'strips': True,              # big single-level textures kept at their size: decoded and encoded
                                  # a strip of rows at a time (the same blocks, far less memory)
     'spill_mb': 64,              # bundles with more than this (uncompressed) are unpacked to files
@@ -265,7 +265,7 @@ def texture_image(img, fmt_name):
         r = img.convert('L')
         zero = Image.new('L', r.size, 0)
         return Image.merge('RGBA', (r, zero, zero, Image.new('L', r.size, 255)))
-    return img.convert('RGBA')
+    return img if img.mode == 'RGBA' else img.convert('RGBA')     # (convert would copy an RGBA image)
 
 
 STRIP_MIN_PX = 2048 * 2048      # single-level textures from this size up are converted in strips
@@ -413,7 +413,9 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
     items = [(pid, o, o.read_typetree()) for pid, o in lf.objects('Texture2D')]   # (no reads later)
     pool = ThreadPoolExecutor(max_workers=1) if c.get('pipeline', True) else None
     prep = ThreadPoolExecutor(max_workers=enc.threads) if c.get('prepare_split', True) else None
-    solo_px = (16 << 20) // 4 if c.get('pipeline', True) == 'auto' and mem_total_mb() < 2048 else None
+    # (what overlaps a texture's decoding is the encoding of the one before, which holds only its
+    # scaled levels: a few MB beside the decode's own peak. Only the largest decodes go alone)
+    solo_px = (c.get('solo_mb', 128) << 20) // 4 if c.get('pipeline', True) == 'auto' and mem_total_mb() < 2048 else None
     pending = []
 
     def finish():

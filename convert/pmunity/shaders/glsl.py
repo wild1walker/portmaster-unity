@@ -109,6 +109,7 @@ SAMPLER_TYPES = ('sampler2D', 'sampler3D', 'samplerCube', 'sampler2DShadow', 'sa
                  'isampler2DArray', 'usampler2D', 'usampler3D', 'usamplerCube', 'usampler2DArray',
                  'sampler2DMS', 'isampler2DMS', 'usampler2DMS')          # (the last three: ES 3.10)
 _SAMPLER_RE = re.compile(r'\b(%s)\b' % '|'.join(SAMPLER_TYPES))
+_WORD = re.compile(r'\w+')
 
 # no ES 3.00 equivalent
 _UNSUPPORTED = [
@@ -373,7 +374,10 @@ def precision_block(body, precision='highp', images=False):
     """Default precision statements for one stage (body: its source without comments); images:
     also for the image types it declares (GLSL 4.x stages)."""
     p = ['precision highp float;\n', 'precision highp int;\n']
-    used = [t for t in SAMPLER_TYPES + (IMAGE_TYPES if images else ()) if re.search(r'\b%s\b' % t, body)]
+    # (the types used: names that are a whole word of the source, as re.search(r'\b<type>\b') finds
+    # them, from one pass over its words instead of one search per type)
+    words = set(_WORD.findall(body))
+    used = [t for t in SAMPLER_TYPES + (IMAGE_TYPES if images else ()) if t in words]
     for t in used:
         if precision == 'highp' or t not in ('sampler2D', 'samplerCube'):
             p.append(f'precision highp {t};\n')      # (types other than these two have no default in ES)

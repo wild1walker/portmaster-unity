@@ -1190,7 +1190,7 @@ def run_bee_graph(box, editor, cache, work, progress=None):
         raise SystemExit(f'il2cpp wrote no build graph ({dag})')
     t0 = time.time()
     with box.shell() as sh:
-        ran, before = BEE.run_graph(dag, sh, box.jobs, log, os.path.join(work, 'build.log'), progress=progress or (
+        ran, before = BEE.run_graph(dag, sh, getattr(box, 'threads', box.jobs), log, os.path.join(work, 'build.log'), progress=progress or (
             lambda n, total, el: f'  compiled {n} of {total} ({100 * n // max(1, total)}%), {el / 60:.0f} min'))
     t = time.time() - t0
     log(f'il2cpp: build graph run, {ran} commands ({before} done before) in {t:.0f} s')

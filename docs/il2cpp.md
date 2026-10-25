@@ -465,19 +465,57 @@ finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` 
   container standing in for a handheld) .NET caps its heap at 75% of the limit, 750 MB of 1 GB,
   which 2021.3's il2cpp exceeded converting a URP game (`OutOfMemoryException`); there the cap is
   the limit plus the cgroup's swap, less 64 MB (`DOTNET_GCHeapHardLimit`), as a handheld's setup,
-  which has no such limit, may use all memory and swap. Compiler jobs: one per 200 MB of
-  `MemAvailable` beyond 250 MB, at most one per CPU (`PMUNITY_IL2CPP_JOB_MB`,
-  `PMUNITY_IL2CPP_RESERVE_MB`; `--jobs` sets it). The compiler wrappers hold job slots (POSIX sh,
-  `mkdir` locks; a killed run's slots are taken over), so however many compilers il2cpp starts,
-  only that many run; a further one starts only while `MemAvailable` stays above a job's size, and
-  a source file over 4 MB (`PMUNITY_IL2CPP_BIG_KB`: IL2CPP's metadata tables) compiles alone.
-  AArch64 compiles get `-mno-outline`: LLVM's machine outliner keeps the machine code of every
+  which has no such limit, may use all memory and swap. .NET's tiered compilation is off
+  (`DOTNET_TieredCompilation=0`: each method compiled once, optimized; the tools run for minutes):
+  2017.4's il2cpp converting a game, CPU 30.7 -> 21.5 s and peak 821 -> 804 MB in the container,
+  the same C++.
+- **The compiles: a scheduler** (`Scheduler` in il2cpp_device.py). The clang wrappers do not
+  start a compiler themselves: each writes a request (its source's size) into a folder on a RAM
+  file system (`/dev/shm`, else `/tmp`) and waits for its turn, which a thread of the setup's
+  Python gives: up to one compile per CPU (`--jobs` lowers it), the largest waiting request
+  first, a further one only while `MemAvailable` (and a cgroup's limit) less a reserve
+  (`PMUNITY_IL2CPP_SCHED_RESERVE_MB`, 160: the compilers' shared code, a margin) holds its
+  predicted peak plus what the running compiles may still grow (their prediction less their
+  anonymous memory now). Nothing passes a request that waits for memory, so the metadata tables
+  never starve; with nothing running the largest always goes. The prediction is the anonymous
+  peak from the source's size, an upper bound over a 2017.4 game's 755 compiles measured one at
+  a time (Bulk files of 2-3 MiB: 60-77 MB, libil2cpp's own sources 10-32 MB: 40 MB + 26 MB per
+  MiB; `Il2Cpp*.cpp` metadata tables: 40 + 37 per MiB, `Il2CppAttributes.cpp` 17.3 MiB 508 MB,
+  `Il2CppTypeDefinitions.cpp` 11.2 MiB 446 MB; a link 400 MB), raised to what the build's own
+  compiles of each kind reach (+10 %). il2cpp's builder is given more threads than compiles
+  (`DOTNET_PROCESSOR_COUNT`, 3 per CPU; 2020.x+ `--jobs`; the Bee graph's threads) so that the
+  scheduler always has the next files to choose from. A compile the OOM killer stops runs again
+  alone, which il2cpp never sees (the wrapper raises its own `oom_score_adj`, which needs no root,
+  so the kernel picks a compiler rather than il2cpp or the setup's Python); one killed again fails
+  the build as before. `il2cpp.json` `on_device.scheduler`: compiles, the most at once, seconds a
+  request waited for memory, compiles run again, the measured/predicted scale per kind.
+  The fixed slots it replaces (`PMUNITY_IL2CPP_SCHED=0` keeps them: one compiler per 200 MB of
+  `MemAvailable` beyond 250 MB at the start, `PMUNITY_IL2CPP_JOB_MB`, `PMUNITY_IL2CPP_RESERVE_MB`;
+  files over 4 MB, `PMUNITY_IL2CPP_BIG_KB`, alone) gave a 1 GB handheld two compilers on two of
+  its four cores, and with four slots ran one compiler at a time: il2cpp hands out its largest
+  files first, and three of its four threads sat in wrappers of metadata tables waiting for every
+  slot (a 1 GB container: 4.9 min for the compile step, as long as one compile after another).
+  With the scheduler: 2.5 min, every object and the library the same (the one object that differs
+  in any two builds is libil2cpp's `Runtime.cpp`, which embeds `__DATE__ __TIME__`; with the first
+  build's copy of it the library is byte-identical).
+- AArch64 compiles get `-mno-outline`: LLVM's machine outliner keeps the machine code of every
   function of a file until the end, although at `-Os` it outlines nothing; without it the objects
   are byte-identical and `Il2CppAttributes.cpp`'s compiler peak (14.7 MB, 15,000 functions)
   falls from 725 MB to 270-320 MB (at 450 MB it was killed with the outliner, and compiled
-  without it). The largest compile is then `Il2CppTypeDefinitions.cpp`, 330-370 MB.
-  A compiler killed by the OOM killer is noted in `.work/killed.log`; with more than one job the
-  build then goes on once with one job at a time.
+  without it). The largest compile is then `Il2CppTypeDefinitions.cpp`, 330-370 MB (that game;
+  a 2017.4 game with 17 MiB of attributes: `Il2CppAttributes.cpp` 597 MB resident, 508 MB of it
+  anonymous). A compiler killed by a signal a second time (or under `PMUNITY_IL2CPP_SCHED=0`) is
+  noted in `.work/killed.log`; with more than one job the build then goes on once with one job at
+  a time.
+- **Tried for speed, not done** (a 2017.4 game's 755 compiles, clang 14 in the arm64 container,
+  one at a time): the optimization level is not where the time goes: `-O1` compiles in 95 % of
+  `-Os`'s time, `-O2` in 103 % (both different code), only `-O0` is much faster (40 %: unoptimized
+  code, no). Debug info is already off (ndk-clang.sh drops `-g`). The front end is a fifth of a
+  generated file's compile and the shared headers every generated file starts with
+  (`il2cpp-config.h`, `il2cpp-codegen.h`, ...) 7.5 % (0.09 of 1.2 s for a 2.8 MiB `Bulk_` file),
+  so a precompiled header would save at most about a tenth of the compile, with objects that may
+  no longer be byte for byte the same: not done. Two builds' objects differ only in libil2cpp's
+  `Runtime.cpp`, which embeds `__DATE__ __TIME__`.
 - **Progress**: a line every 30 seconds (PortMaster's patcher shows the setup's output): MB of C++
   written while converting, files compiled of the total with an estimate of the time left while
   compiling (from the size of the files started so far). `il2cpp.json` gets `on_device`: jobs,
@@ -505,9 +543,14 @@ while compiling, the build went on with the objects it had.
 The estimates scale the CPU times: a 1.5 GHz Cortex-A53 core does about 1/15 - 1/20 of an M3
 core's work at compiling (single-core Geekbench 6: ~160-200 against ~3,000), a Snapdragon 865's
 Cortex-A77 cores about 1/2.4 (its four A55 cores add little). The job count is what
-`MemAvailable` allows: two from 650 MB available (a 1 GB handheld with little else running),
-one below that, more with 2 GB and up. A source file over 4 MB compiles alone; the
-largest ones take 3-11 s of CPU here, 1-4 minutes on an A53. The library is the PC route's in
+`MemAvailable` allowed (these were the old fixed slots): two from 650 MB available (a 1 GB
+handheld with little else running), one below that, more with 2 GB and up. A source file over 4 MB
+compiled alone; the largest ones take 3-11 s of CPU here, 1-4 minutes on an A53. With the
+scheduler (2026-10-24) a 1 GB handheld runs up to four compiles where their predicted memory fits
+(a generated file 60-80 MB of anonymous memory): Cuphead's 755 compiles on the RG34XX-SP took 50
+min with the old two slots and come to 27-28 min (simulated from each file's measured CPU and
+memory, checked against 37 of them compiled on the handheld both ways: 391 -> 276 s;
+setup-speed.md, "The 64-bit setup"). The library is the PC route's in
 size (30,633,664 bytes), exports (all 194 `il2cpp_*` the player looks up) and metadata (identical
 `Data/Managed`); its bytes differ in place (same section sizes, as from objects linked in another
 order: il2cpp names its cached objects by hashes of their compile commands, which hold the
@@ -540,7 +583,7 @@ which this tool never asks for) or the PC route.
 
 ```
 pm il2cpp fetch "$VERSION" --on-device --home "$W/il2cpp-home"     # with Wi-Fi: about 155 MB
-pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # 1.5 - 2.5 hours on an A53 handheld
+pm il2cpp "$D" "$W/il2cpp" --on-device --home "$W/il2cpp-home"     # Cuphead: ~35 min on an A53 (estimated; 61 before 2026-10-24)
 pm android-data --src ... --pkg "$W/il2cpp-home/$VERSION/player-arm64-v8a" --il2cpp "$W/il2cpp" ...
 rm -rf "$W/il2cpp-home" "$W/il2cpp/.work"                          # the tools and build files, ~1 GB
 ```
