@@ -412,6 +412,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -495,6 +496,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -674,6 +676,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -1478,6 +1481,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -1550,6 +1554,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2038,6 +2043,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2308,6 +2314,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2377,6 +2384,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2423,6 +2431,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2497,6 +2506,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2542,6 +2552,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2743,6 +2754,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -2972,6 +2984,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },
@@ -3044,6 +3057,7 @@
       "shaders",
       "settings",
       "audio",
+      "quality",
       "textures"
      ]
     },

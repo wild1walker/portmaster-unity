@@ -25,7 +25,7 @@ are refused unless --any-unity-version is given.
 the converted files go there and <data> is only read (an overlay: later steps read a file from
 <out> once an earlier step wrote it); without it the conversion runs in place and can be resumed.
 
-The config file (JSON) holds one section per step (shaders, textures, settings, audio) with the
+The config file (JSON) holds one section per step (shaders, textures, settings, audio, quality) with the
 step's settings; see each module's DEFAULTS. A plugin is a Python file with STEPS = {name:
 function(job)} for a game's own steps, run in the order --steps names them.
 """
@@ -37,6 +37,9 @@ import sys
 from .job import Job
 
 BUILTIN_STEPS = ('shaders', 'textures', 'settings', 'audio')
+# steps a config names to run them (not in the default list): `quality`, the handheld quality
+# profile (quality.py, docs/quality.md)
+OPTIONAL_STEPS = ('quality',)
 
 
 def _builtin(name):
@@ -58,6 +61,9 @@ def _builtin(name):
         if name == 'audio':
             from . import audio
             return audio.run(job)
+        if name == 'quality':
+            from . import quality
+            return quality.run(job)
     return run
 
 
@@ -166,7 +172,7 @@ def main(argv=None):
             except ValueError:
                 pass
             cfg.setdefault(sec, {})[key] = v
-        steps = {n: _builtin(n) for n in BUILTIN_STEPS}
+        steps = {n: _builtin(n) for n in BUILTIN_STEPS + OPTIONAL_STEPS}
         for i, p in enumerate(a.plugin):
             spec = importlib.util.spec_from_file_location(f'pmunity_plugin_{i}', p)
             mod = importlib.util.module_from_spec(spec)

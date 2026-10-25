@@ -1923,6 +1923,17 @@ OBB_GUID_FILE = 'assets/unity_obb_guid'
 OBB_GUID_FILE_IN_OBB = 'unity_obb_guid'
 
 
+def quality_caps(src):
+    """The caps the `quality` step applied to the data in src ('' if it did not run there): its
+    record in the conversion's journal (.pmunity.json)."""
+    try:
+        with open(os.path.join(src, '.pmunity.json')) as f:
+            caps = json.load(f).get('quality_caps') or ''
+    except (OSError, ValueError, AttributeError):
+        return ''
+    return caps if isinstance(caps, str) and re.fullmatch(r'[a-z_]+=\d+(,[a-z_]+=\d+)*', caps) else ''
+
+
 def _write_zip(path, entries, log, align=4):
     """Uncompressed (STORE) zip, no zip64, every file's data 4-byte aligned (zipalign-style
     extra field), written to path.tmp then renamed. entries: [(arcname, src path or bytes)]."""
@@ -2131,6 +2142,12 @@ def pack(args, log):
     if sdk:
         res['min_sdk'] = sdk
         log(f'pack: min_sdk {sdk} (ua_host reports Android API {sdk}: OpenGL ES 3.1+, compute shaders)')
+    # the handheld quality profile's caps (the quality step's, in the conversion's journal): ua_host
+    # keeps quality settings the game sets while it runs within them (runtime/host/quality.c)
+    caps = quality_caps(args.src)
+    if caps:
+        res['quality'] = caps
+        log(f'pack: quality caps {caps} (ua_host applies them to the settings the game changes)')
     pj = {k: (os.path.basename(v) if k in ('apk', 'main_obb', 'patch_obb') else v) for k, v in res.items()}
     json.dump(dict(pj, meta_data={'unity.build-id': bid}), open(os.path.join(zdir, 'android_package.json'), 'w'), indent=1)
     log(f'pack: build-id {bid}; host: getPackageCodePath -> {apk}, getObbDir -> {zdir}, '

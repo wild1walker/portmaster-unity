@@ -18,6 +18,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "frames.h"
 #include "framerate.h"
 #include "gcbudget.h"
+#include "quality.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "prof.h"
@@ -62,6 +63,7 @@ static char libdir[512];
 // "unity_version"
 static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32], pj_unity[32];
 static char pj_scripting[16];                  // "mono": a Mono game on the IL2CPP player (mono64.c)
+static char pj_quality[256];                   // the quality step's caps, "msaa=0,pixel_lights=1,..." (quality.c)
 static int pj_version_code, pj_min_sdk, pj_target_sdk, pj_gc_slice;
 static char pj_meta[4096];                      // "key=value;key=value"
 
@@ -143,6 +145,7 @@ static void read_package_json(const char *root)
     json_str(js, "unity_version", pj_unity, sizeof pj_unity);
     json_str(js, "scripting", pj_scripting, sizeof pj_scripting);
     pj_gc_slice = json_int(js, "gc_time_slice_ms");
+    json_str(js, "quality", pj_quality, sizeof pj_quality);
 }
 
 // Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
@@ -349,6 +352,7 @@ static void *dlsym_hook(const char *sym, void *p)
     p = plugins_dlsym_hook(sym, p);            // FMOD's file paths (plugins.c)
     p = framerate_dlsym_hook(sym, p);          // UA_FRAME_RATE (framerate.c)
     p = gcbudget_dlsym_hook(sym, p);           // UA_GC_BUDGET (gcbudget.c)
+    p = quality_dlsym_hook(sym, p);            // the quality profile's caps (quality.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
@@ -419,7 +423,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); prof_main_frame(); }
+static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); quality_frame(user); prof_main_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
@@ -609,6 +613,7 @@ int main(int argc, char **argv)
     // the desktop's vsync pacing back (framerate.c). An imported Android build keeps its own.
     framerate_init(strcmp(pj_source, "apk") && atoi(pj_unity) > 0 ? "desktop" : "android", cfg.refresh_rate);
     gcbudget_init();
+    quality_init(pj_quality);
     cfg.on_frame = on_frame;
     cfg.sdk_int = sdk_int;
     static const char *const releases[] = { "4.4.4", "4.4W", "5.0", "5.1.1", "6.0.1", "7.0", "7.1.2", "8.0.0", "8.1.0", "9",
