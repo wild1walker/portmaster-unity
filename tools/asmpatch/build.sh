@@ -26,6 +26,7 @@ echo "built out/any/asmpatch.dll, out/linux-arm64/asmpatch"
 if [ "${1:-}" = test ]; then
   # the stand-ins the playmaker-* and hk-blur tests patch (test/fakes: written for the tests)
   "$DOTNET" build test/fakes/PlayMaker/PlayMaker.csproj -c Release -o out/test/fakes -v q -nologo | grep -E "error|warn" || true
+  "$DOTNET" build test/fakes/HollowKnight/Assembly-CSharp-firstpass.csproj -c Release -o out/test/fakes/hk -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/fakes/HollowKnight/Assembly-CSharp.csproj -c Release -o out/test/fakes/hk -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/asmpatch-test.csproj -c Release -o out/test -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" out/test/asmpatch-test.dll
