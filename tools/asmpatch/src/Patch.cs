@@ -45,7 +45,7 @@ abstract class Patch
         // optimizations
         new PlayMakerLoopCount(), new PlayMakerDelayedEvents(),
         // reductions
-        new HollowKnightBlur(),
+        new HollowKnightBlur(), new HollowKnightPost(),
     };
 }
 

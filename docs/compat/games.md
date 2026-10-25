@@ -101,6 +101,14 @@ it with the Mali at 600 MHz, 46 MB available and 103 MB of swap at the end, no w
 Hollow Knight port ships this as its `[runtime_lowmem]` (portmaster-hollowknight port.toml) with
 `grab_fetch = "always"` and `pcm_budget_mb = 36` in its convert config and `asmpatch = ["auto",
 "hk-blur"]`.
+2026-10-25 (the three post-processing passes at the end of the frame drawn as one: the converter's
+`shaders.fused_post` + asmpatch's `hk-post`, `ASMPATCH_HK_POST=fused`, opt-in, not exact by a
+rounding step): on the 1 GB profile's data 16 -> 14 passes a frame, the chain's GPU time 2.7 -> 2.2
+ms serialized at 600x375, the render thread 70 -> 68 % of a core; fps the same (52.7 / 53.7 against
+52.7 / 49.4 at 600x400, main-thread bound; 40.1 against 39.9 at 720x480 GPU-bound, all at 696 MHz
+but one); pictures within a rounding step (4.2 % of the static pixels differ by 1 - 3 against 2.5 %
+between two base runs). Did not pay in frames: not in the port's profile. Details:
+[profiling.md](../profiling.md#hollow-knights-post-chain-as-one-pass-fused_post--hk-post).
 
 
 ## Linux builds, one per Unity line (32-bit route)

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A stand-in for Hollow Knight's Assembly-CSharp-firstpass for the hk-post tests: the engine
+       types and the two Standard Assets effects the patch looks at, written here (no game code).
+       Built by ../../../build.sh test into out/test/fakes/hk/, before Assembly-CSharp.csproj, which
+       references it. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Assembly-CSharp-firstpass</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Post.cs" />
+  </ItemGroup>
+</Project>

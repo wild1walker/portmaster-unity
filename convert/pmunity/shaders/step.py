@@ -31,6 +31,12 @@ reports framebuffer fetch (6000.0: GL_EXT_shader_framebuffer_fetch), the origina
 have ARM's), the original elsewhere (Unity 6000.0).
 `grab_fetch_names`: a regex, only the shaders whose names match (default: every shader). Applied
 to the GLES3 programs a shader has after the translation, also to ones it already had.
+
+`fused_post` (config only, `shaders.fused_post`; none by default; the picture may differ by a
+rounding step): chains of full-screen post-processing passes, each given one pass that draws the
+whole chain, appended to the chain's last shader (fusedpost.py; Hollow Knight: the bloom composite,
+colour curves and brightness, with asmpatch's hk-post and ASMPATCH_HK_POST=fused). A chain's
+shaders must all be in one assets file; applied to their GLES3 programs after the translation.
 """
 import os
 import re
@@ -41,6 +47,7 @@ from . import blob as B
 from . import compute as CS
 from . import convert as C
 from . import dxbc
+from . import fusedpost as FP
 from . import grabfetch as GF
 from . import metal as MT
 from . import vulkan as VK
@@ -144,7 +151,10 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
     grab_fetch = grab_fetch_mode(grab_fetch)
     if grab_fetch_names is None:
         grab_fetch_names = (job.cfg.get('shaders') or {}).get('grab_fetch_names')
+    fused_post = FP.chains_of(job.cfg)
+    fused_names = FP.chain_names(fused_post)
     gresults = []
+    presults = []
     for src in sources:
         if src not in SOURCES:
             raise ValueError(f'unknown shader source {src!r} (known: {", ".join(SOURCES)})')
@@ -168,8 +178,11 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
             continue
         gl4 = glcore4x_for(job.path_in(rel), glcore4x)
         n = 0
+        chain_trees = {}                 # the file's shaders a fused_post chain names: name -> (object, tree)
         for pid, o in lf.objects('Shader'):
             t = o.read_typetree()
+            if t['m_ParsedForm']['m_Name'] in fused_names:
+                chain_trees[t['m_ParsedForm']['m_Name']] = (o, t)
             src = next((s for s in sources if SOURCES[s] in t['platforms']), sources[0])
             if src == 'd3d11':
                 if translator is None:
@@ -215,6 +228,18 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 n += 1
             if r.status == 'skipped' or r.failed or log_each:
                 job.log(f'shaders: {rel}: compute shader {r}')
+        for chain in fused_post:
+            # a chain is fused in the file of its last shader (the one the fused pass is appended to)
+            last = FP.chain_items(chain)[-1][0]
+            if last not in chain_trees:
+                continue
+            fr = FP.apply({k: v[1] for k, v in chain_trees.items()}, chain, getattr(lf.sf, 'unity_version', None))
+            fr.file = rel
+            presults.append(fr)
+            job.log(f'shaders: {rel}: fused_post: {fr}')
+            if fr.changed:
+                chain_trees[last][0].save_typetree(chain_trees[last][1])
+                n += 1
         if n:
             lf.write_to(job, rel)
             changed_files += 1
@@ -276,6 +301,13 @@ def run(job, precision='highp', replace=False, bundles=r'.', log_each=False, opt
                 f'{len(gc)} shaders read the framebuffer instead of a GrabPass copy ({sum(g.subshaders for g in gc)} '
                 f'SubShaders, {sum(g.grabs for g in gc)} GrabPasses left out, {sum(g.programs for g in gc)} programs); '
                 f'{sum(g.status == "skipped" for g in gresults)} shaders with GrabPasses left as they are')
+    if fused_post:
+        pc = [p for p in presults if p.changed]
+        job.log(f'shaders: fused_post: {len(pc)} of {len(fused_post)} chains given one pass that draws them'
+                + (' (' + '; '.join(f'"{p.shader}" pass {p.pass_index}' for p in pc) + ')' if pc else '')
+                + (f'; left as they are: ' + '; '.join(f'"{p.shader}": {p.why}' for p in presults if not p.changed)
+                   if any(not p.changed for p in presults) else '')
+                + (f'; {len(fused_post) - len(presults)} chains whose last shader no file has' if len(presults) < len(fused_post) else ''))
     d3d = [r for r in results if r.source == 'd3d11']
     if d3d:
         job.log(f'shaders: from Direct3D 11: {sum(r.status == "converted" for r in d3d)} of {len(d3d)} shaders '

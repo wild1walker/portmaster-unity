@@ -861,6 +861,53 @@ the game plays the same. The developers' own tags are the decorative systems (do
 background and foreground motes), which their Particle Effects setting already reduces in the
 game's menu.
 
+### Hollow Knight's post chain as one pass (fused_post + hk-post)
+
+Opt-in, not exact by a rounding step. The frame ends with three full-screen image effects in a row
+(the table above: the bloom composite 0.9 ms, the colour curves 1.3, brightness/contrast 1.5 at
+720x450, serialized), each a blit of the one before into a temporary of its own. The converter's
+`shaders.fused_post` writes one program that computes all three from the scene, the bloom texture
+and the curves texture, rounding between the stages as the 8-bit stores did, and appends it to the
+brightness shader as a pass named `PMUNITY_FUSED_POST`
+([shaders.md](shaders.md#post-processing-chains-as-one-pass-fused_post-opt-in)); asmpatch's `hk-post`
+with `ASMPATCH_HK_POST=fused` makes the three components draw that pass instead of their own
+([tools/asmpatch/README.md](../tools/asmpatch/README.md#reductions): the bloom keeps its small blur
+passes and skips its composite, the curves skip their blit, the brightness draws the fused pass from
+the scene; fused only while all three run in order every frame).
+
+**Measured** (2026-10-25, the 32-bit build, King's Pass, `tools/device/profbench.sh`, 25 s after the
+save's load, every run from a cool handheld, two static shots a second apart; the data of the
+shipped 1 GB profile with the fused pass added, the APK with the PlayMaker optimizations, `hk-blur`
+and `hk-post`; A and B interleaved inside one hold):
+
+| setting | base | `ASMPATCH_HK_POST=fused` |
+|---|---|---|
+| passes a frame (`UA_GL_TRACE=4`, 12 traced frames each, 600x375 picture in a 600x400 window) | 16 | 14: the two temporaries' passes gone |
+| the chain's GPU time, serialized (median) | 0.62 + 0.90 + 1.17 ms (the last with the HUD's 13 draws) | 2.19 ms (one pass with the HUD) |
+| the whole frame, serialized (median) | 23.5 ms | 22.7 ms |
+| the 1 GB profile (`UA_RENDER_SIZE=600x400 ASMPATCH_HK_BLUR=low UA_GFX_JOBS=legacy`): fps; GPU MHz avg | 52.7 (traced); 683 and 49.4; 598 | 52.7 (traced); 662 and 53.7; 682 |
+| UnityMain / render thread on a CPU (those runs) | 92 / 70 %, 91 / 68 % | 90 / 68 %, 87 / 68 % |
+| 720x480 with `ASMPATCH_HK_BLUR=low UA_GFX_JOBS=legacy`: fps at 696 MHz | 42.8 | 42.6 |
+| 720x480, the game's own blur, no graphics jobs (GPU-bound): fps at 696 MHz | 39.9 | 40.1 |
+| static pixels differing from a base run (of them by 1 - 3 of 255; largest), 600x400 | 2.5 % (99.6 %; 22): a second base run | 4.2 - 4.3 % (99.6 %; 24 - 40); two fused runs 1.7 % (40) |
+
+Reading it. The fusion works as designed: `Material.FindPass` finds the appended pass by its
+`m_State.m_Name` (the pass count falls, so the name lookup the parked `hk-blur fast` branch also
+counts on is confirmed), the picture is the game's within a rounding step (about 2 % more of the
+static pixels differ by 1 - 3 than between two base runs; nothing larger than the runs' own
+particle noise), and the render thread has a little less to do (70 -> 68 %). But it does not pay
+in frames: the Mali-G31's full-screen RGBA8 store and load at this size cost about 0.25 ms each
+(the two passes that disappear took 0.62 and 0.90 ms serialized, about 0.3 ms of which is each
+pass's submission), while the fused pass costs about 1 ms more than the brightness pass did (three
+textures and the three stages' arithmetic per pixel, with the HUD's draws on top), so the GPU frame
+loses about 0.5 - 0.8 ms of 23 - 27, within the run-to-run noise even where the GPU holds the frame
+(39.9 -> 40.1 at 696 MHz); in the 1 GB profile the main thread holds it (UnityMain 87 - 92 %). It
+stays an opt-in that a port may try where a game's chain is longer or its passes larger; it does
+not go into Hollow Knight's `[runtime_lowmem]`. Not tried: `quantize: "none"` (fewer operations, a
+picture a step or two further from the game's), and the blur drawn twice in one pass from the
+parked branch (two more 576x360 passes gone; the same name lookup, the same small store costs, so
+the same small gain is to be expected).
+
 ### Sprites' transparent texels (King's Pass, 2026-10-23)
 
 A sprite is drawn as a mesh, and the mesh covers texels of alpha 0 too: their fragments are

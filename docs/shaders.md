@@ -1086,3 +1086,49 @@ On the RG34XX-SP (Mali-G31, r20p0), Hollow Knight converted with `"always"`:
   fetched colour is mediump); two runs without it differ on 48 of them, by 1.
 
 Not checked: Unity players before 6000.0.
+
+## Post-processing chains as one pass (`fused_post`, opt-in)
+
+```json
+"shaders": {"fused_post": [{"name": "PMUNITY_FUSED_POST", "quantize": "rgba8",
+                            "chain": ["Hidden/FastBloom", "Hidden/ColorCorrectionCurvesSimple", "Custom/Brightness Effect"]}]}
+```
+
+A built-in-pipeline camera's `OnRenderImage` components run in a row, each a full-screen blit of the
+one before it into a temporary of its own: Hollow Knight ends its frame with the bloom composite
+(`_MainTex + _Bloom`), the colour curves (`_RgbTex`, saturation) and brightness/contrast, three
+720x450 passes ([profiling.md](profiling.md#gpu-pass-by-pass): 0.9 + 1.3 + 1.5 ms serialized), each a
+store of the picture, a load of it by the next, a pass's start-up on the Mali and a job chain of
+driver time on the render thread. Where each later pass reads the one before only at its own pixel,
+the chain is one function of the first pass's inputs, and one pass can draw it.
+`shaders.fused_post` (`shaders/fusedpost.py`) writes that pass from the game's own GLES3 programs and
+appends it to the chain's last shader, named for `Material.FindPass`; the game draws as before until
+its components are made to use it (asmpatch's `hk-post`, `ASMPATCH_HK_POST=fused`,
+[tools/asmpatch/README.md](../tools/asmpatch/README.md#reductions)). Config only (no CLI option):
+each chain's `chain` lists its shaders in order (`"Name"` or `"Name:<pass>"`, pass 0 of SubShader 0
+by default), all in one assets file, the pass goes to the last one.
+
+**Which chains.** Every pass's GLES3 program is one vertex + fragment program with no keyword
+variants; the vertex stages are the same text (a blit's quad, `vs_TEXCOORD0 = in_TEXCOORD0`); each
+fragment stage declares loose uniforms, samplers, varyings and one output (no uniform blocks); every
+pass but the first reads `_MainTex` only as `texture(_MainTex, vs_TEXCOORD0.xy)`, its own pixel (the
+textures of a chain are one size), nothing else of it (no `_MainTex_TexelSize`, no other sampling
+function), and uses no screen position, derivative or `discard`; a uniform or sampler name other
+than `_MainTex` belongs to one pass only (the fused material holds one value per name). Anything
+else leaves the chain as it is, with the reason in the log.
+
+**The fused program.** The last pass's vertex stage; a fragment stage with the union of the passes'
+declarations (samplers renumbered, the hlslcc header kept), each pass's `main()` as a function (its
+globals local, its output a local, a later pass's `_MainTex` read its argument) and a `main()` that
+chains them. `quantize: "rgba8"` (the default) rounds each component to the nearest of 255 steps
+after clamping to 0 - 1 between the passes, as the game's 8-bit stores did, so the chain computes
+the values the game's does (a float rounding tie apart; not promised exact: measured on the
+device, below); `"none"` carries the full-precision value on (fewer operations, a picture a step
+or two from the game's where the curves' lookup falls between two texels).
+
+**The data edit.** The last shader's chain pass is copied and appended to its SubShader, named
+`name`, with only its GLES3 subprograms, each pointing to a new program entry (the fused program)
+and a new parameter entry with the binding info Unity's GL compiler would give it
+(`dxbc.gl_bindings`; first checked to reproduce the last pass's own parameter entry byte for byte,
+else the layout is not understood and nothing changes). `python -m unittest tests.test_fusedpost`
+checks the program and the edit on hand-written passes shaped like Hollow Knight's.

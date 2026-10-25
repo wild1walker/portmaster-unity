@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- A stand-in for Hollow Knight's Assembly-CSharp for the hk-blur tests: the two classes that
-       patch looks at, written here (no game code). Built by ../../../build.sh test into
-       out/test/fakes/hk/. -->
+  <!-- A stand-in for Hollow Knight's Assembly-CSharp for the hk-blur and hk-post tests: the classes
+       those patches look at, written here (no game code). Built by ../../../build.sh test into
+       out/test/fakes/hk/, after Assembly-CSharp-firstpass.csproj (the engine types and the two
+       Standard Assets effects, which Brightness.cs uses). -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>disable</Nullable>
@@ -13,5 +14,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Blur.cs" />
+    <Compile Include="Brightness.cs" />
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/hk/Assembly-CSharp-firstpass.dll</HintPath>
+    </Reference>
   </ItemGroup>
 </Project>
