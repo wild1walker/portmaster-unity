@@ -30,6 +30,16 @@ DEFAULTS = {
     'scale': 1.0,                # texture size factor (1.0 = only re-encode)
     'block': [4, 4],             # ASTC block footprint (4x4 = 8 bits per texel)
     'quality': 'medium',         # astc-encoder preset: fastest | fast | medium | thorough
+    'mode': 'guided',            # guided: blocks that need no search are written directly (one colour,
+                                 # close to one line, an unscaled DXT block), the others go to
+                                 # astc-encoder at `quality` (guided_astc, convert/native); search:
+                                 # every block through astc-encoder
+    'guided_max_err': 64,        # a fitted block is kept when its squared error (16 texels x RGBA,
+                                 # 8-bit) is at most this
+    'guided_line': 128,          # blocks left to the encoder whose texels are this close to one line
+    'guided_near': 1024,         # (or this close: the principal axis's residual, a sum of squares
+                                 # as above) are searched with one partition (or at most two); -1: off.
+                                 # docs/setup-speed.md, "Guided ASTC encoding"
     'sharp_names': '',           # regex: textures given scale_sharp / sharp_block instead
     'scale_sharp': 1.0,
     'sharp_block': [4, 4],
@@ -72,36 +82,85 @@ def downscale(img, w, h):
     return img.convert('RGBa').resize((w, h), Image.Resampling.LANCZOS).convert('RGBA')
 
 
+def guided_module():
+    """The guided_astc extension, or None when it is not installed (then every block is searched)."""
+    try:
+        import guided_astc
+        return guided_astc
+    except ImportError:
+        return None
+
+
 class Astc:
-    """astc-encoder contexts, one per block footprint."""
+    """astc-encoder contexts, one per block footprint (and, guided, per search effort)."""
 
     PRESETS = ('fastest', 'fast', 'medium', 'thorough')
+    MODES = ('guided', 'search')
+    # guided: what blocks close to one line are searched with (the preset's other limits kept)
+    TIERS = {'line': {'tune_partition_count_limit': 1}, 'near': {'tune_partition_count_limit': 2}, 'other': {}}
+    GATHER_COLS = 256                        # blocks across the image of the blocks left to the encoder
 
-    def __init__(self, quality, threads):
+    def __init__(self, quality, threads, mode='search', max_err=64, line=128, near=1024, log=None):
         if quality not in self.PRESETS:
             raise ValueError(f'ASTC quality {quality!r}: one of {", ".join(self.PRESETS)}')
+        if mode not in self.MODES:
+            raise ValueError(f'textures mode {mode!r}: one of {", ".join(self.MODES)}')
         self.quality, self.threads = quality, threads or os.cpu_count() or 4
+        self.guided = guided_module() if mode == 'guided' else None
+        if mode == 'guided' and self.guided is None and log:
+            log('textures: guided_astc is not installed: every block is searched (mode "search")')
+        self.mode = mode if self.guided else 'search'
+        self.max_err, self.line, self.near = max_err, line, near
+        self.counts = [0] * 6                # guided: one colour, fitted, seeded, line, near, other
         self._ctx = {}
 
-    def _context(self, block):
+    def _context(self, block, tier='other'):
         import astc_encoder as A
-        if block not in self._ctx:
+        key = (tuple(block), tier)
+        if key not in self._ctx:
             cfg = A.ASTCConfig(A.ASTCProfile.LDR, block[0], block[1], block_z=1,
                                quality=getattr(A.ASTCQualityPreset, self.quality.upper()),
                                flags=A.ASTCConfigFlags.USE_DECODE_UNORM8)
-            self._ctx[block] = A.ASTCContext(cfg, threads=self.threads)
-        return self._ctx[block]
+            for k, v in self.TIERS[tier].items():
+                setattr(cfg, k, min(v, getattr(cfg, k)))
+            self._ctx[key] = A.ASTCContext(cfg, threads=self.threads)
+        return self._ctx[key]
 
-    def encode(self, img, block):
-        """PIL RGBA image (top row first) -> ASTC blocks, bottom row first as Unity stores textures."""
+    def encode(self, img, block, seed=None):
+        """PIL RGBA image (top row first) -> ASTC blocks, bottom row first as Unity stores textures.
+        seed: (the DXT1 or DXT5 blocks these pixels were decoded from, in Unity's order, is DXT5)."""
         from PIL import Image
-        return self.encode_rows(img.transpose(Image.Transpose.FLIP_TOP_BOTTOM), block)
+        return self.encode_rows(img.transpose(Image.Transpose.FLIP_TOP_BOTTOM), block, seed)
 
-    def encode_rows(self, img, block):
+    def encode_rows(self, img, block, seed=None):
         """PIL RGBA image whose rows are already in Unity's order (bottom first) -> ASTC blocks."""
         import astc_encoder as A
-        src = A.ASTCImage(A.ASTCType.U8, img.width, img.height, 1, img.tobytes())
+        data = img.tobytes()
+        if self.guided is not None:
+            return self._guided_rows(data, img.width, img.height, tuple(block), seed)
+        src = A.ASTCImage(A.ASTCType.U8, img.width, img.height, 1, data)
         return self._context(block).compress(src, A.ASTCSwizzle.from_str('RGBA'))
+
+    def _guided_rows(self, data, w, h, block, seed):
+        """guided_astc writes the blocks that need no search; each group of the others is gathered
+        into one image and encoded by astc-encoder (every block on its own: the blocks it would
+        write for the whole image, at that group's effort), then put in its place."""
+        import astc_encoder as A
+        G = self.guided
+        dxt, dxt5 = seed if seed is not None and block == (4, 4) else (None, 0)
+        blocks, rests, counts, _ = G.encode(data, w, h, block[0], block[1], self.max_err, self.threads,
+                                            self.line, self.near, dxt, int(bool(dxt5)))
+        for i, n in enumerate(counts):
+            self.counts[i] += n
+        for tier, rest in zip(('line', 'near', 'other'), rests):
+            n = len(rest) // 4
+            if not n:
+                continue
+            cols = min(n, self.GATHER_COLS)
+            sub = G.gather(data, w, h, block[0], block[1], rest, cols)
+            img = A.ASTCImage(A.ASTCType.U8, cols * block[0], -(-n // cols) * block[1], 1, sub)
+            G.place(blocks, self._context(block, tier).compress(img, A.ASTCSwizzle.from_str('RGBA')), rest)
+        return bytes(blocks)
 
 
 def astc_format_id(block, alpha, unity=None):
@@ -268,6 +327,23 @@ def texture_image(img, fmt_name):
     return img if img.mode == 'RGBA' else img.convert('RGBA')     # (convert would copy an RGBA image)
 
 
+DXT_SEED = {'DXT1': False, 'DXT5': True}     # source formats whose blocks seed guided encoding: is DXT5
+
+
+def dxt_seed(o, tex, fmt_name, raw):
+    """(the first level's DXT1 or DXT5 blocks, is DXT5) of an unscaled texture, for guided encoding
+    (Unity stores them bottom row first, as the encoder is given the image), or None."""
+    from UnityPy.enums import BuildTarget
+    from UnityPy.export import Texture2DConverter as C
+    if fmt_name not in DXT_SEED or not raw:
+        return None
+    platform = getattr(o, 'platform', BuildTarget.UnknownPlatform)
+    if platform == BuildTarget.XBOX360 or C.TextureSwizzler.is_switch_swizzled(platform, getattr(tex, 'm_PlatformBlob', None)):
+        return None
+    n = -(-tex.m_Width // 4) * -(-tex.m_Height // 4) * (16 if DXT_SEED[fmt_name] else 8)
+    return (bytes(raw[:n]), DXT_SEED[fmt_name]) if len(raw) >= n else None
+
+
 STRIP_MIN_PX = 2048 * 2048      # single-level textures from this size up are converted in strips
 STRIP_PX = 1 << 21              # pixels per strip (8 MB of RGBA)
 
@@ -301,7 +377,8 @@ def strip_blocks(o, t, raw, ch, enc, fmt_name):
         sh = min(rows, h - y)
         part = raw[y // bh * per:-(-(y + sh) // bh) * per]
         img = C.parse_image_data(part, w, sh, fmt, getattr(o, 'version', (0, 0, 0, 0)), platform, blob, flip=False)
-        out.append(enc.encode_rows(texture_image(img, fmt_name), ch.block))
+        seed = (part, DXT_SEED[fmt_name]) if fmt_name in DXT_SEED else None
+        out.append(enc.encode_rows(texture_image(img, fmt_name), ch.block, seed))
         del img
     return b''.join(out)
 
@@ -383,18 +460,24 @@ def downscale_parallel(img, w, h, pool, cores):
     return out.convert('RGBA')
 
 
-def _prepare(o, ch, fmt_name=None, pool=None, cores=1):
+def _prepare(o, ch, fmt_name=None, pool=None, cores=1, seeds=False):
     """Decoded and scaled mip levels of one texture (runs on the worker thread; with pool, a big
-    texture's decoding and scaling are split over every core, with the same pixels)."""
-    if pool is None or ch is None:
-        img = texture_image(o.read().image, fmt_name)
-        return mip_chain(downscale(img, ch.width, ch.height), ch.mips)
+    texture's decoding and scaling are split over every core, with the same pixels). seeds: also
+    the first level's DXT blocks when it keeps its size (dxt_seed): returns (levels, seed)."""
     tex = o.read()
-    big = tex.m_Width * tex.m_Height >= PREP_MIN_PX
-    img = (big and decode_parallel(o, tex, pool, cores)) or tex.image
-    img = texture_image(img, fmt_name)
-    small = (big and downscale_parallel(img, ch.width, ch.height, pool, cores)) or downscale(img, ch.width, ch.height)
-    return mip_chain(small, ch.mips)
+    seed = None
+    if seeds and fmt_name in DXT_SEED and (ch.width, ch.height) == (tex.m_Width, tex.m_Height):
+        seed = dxt_seed(o, tex, fmt_name, tex.get_image_data())
+    if pool is None or ch is None:
+        img = texture_image(tex.image, fmt_name)
+        levels = mip_chain(downscale(img, ch.width, ch.height), ch.mips)
+    else:
+        big = tex.m_Width * tex.m_Height >= PREP_MIN_PX
+        img = (big and decode_parallel(o, tex, pool, cores)) or tex.image
+        img = texture_image(img, fmt_name)
+        small = (big and downscale_parallel(img, ch.width, ch.height, pool, cores)) or downscale(img, ch.width, ch.height)
+        levels = mip_chain(small, ch.mips)
+    return (levels, seed) if seeds else levels
 
 
 def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None):
@@ -421,8 +504,8 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
     def finish():
         while pending:
             pid, o, t, sd, streamed, ch, fut = pending.pop(0)
-            levels = fut.result() if pool else _prepare(o, ch, _format_name(t), prep, enc.threads)
-            blob = b''.join(enc.encode(level, ch.block) for level in levels)
+            levels, seed = fut.result() if pool else _prepare(o, ch, _format_name(t), prep, enc.threads, True)
+            blob = b''.join(enc.encode(level, ch.block, seed if i == 0 else None) for i, level in enumerate(levels))
             nlevels = len(levels)
             del levels
             store(pid, o, t, sd, streamed, ch, blob, nlevels)
@@ -476,7 +559,7 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
             solo = pool and solo_px and t['m_Width'] * t['m_Height'] > solo_px
             if solo:                                       # a big one on a small system: alone
                 finish()
-            fut = pool.submit(_prepare, o, ch, _format_name(t), prep, enc.threads) if pool else None
+            fut = pool.submit(_prepare, o, ch, _format_name(t), prep, enc.threads, True) if pool else None
             finish()                                       # the previous one, while this one is prepared
             pending.append((pid, o, t, sd, streamed, ch, fut))
             if solo:
@@ -531,7 +614,7 @@ def texture_files(job, files_rx):
 def run(job, only=None):
     c = dict(DEFAULTS, **job.cfg.get('textures', {}))
     sharp_rx = re.compile('(?i)' + c['sharp_names']) if c['sharp_names'] else None
-    enc = Astc(c['quality'], c['threads'])
+    enc = Astc(c['quality'], c['threads'], c['mode'], c['guided_max_err'], c['guided_line'], c['guided_near'], job.log)
     stats = dict(textures=0, sprites=0, atlas_entries=0, **{'in': 0, 'out': 0})
     files = texture_files(job, c['files'])
     if only:
@@ -608,4 +691,8 @@ def run(job, only=None):
             job.log(f'textures: {rel}: {(stats["in"] - before[0]) >> 20} -> {(stats["out"] - before[1]) >> 20} MB ({i}/{len(files)})')
     job.log(f'textures: {stats["textures"]} converted ({stats["in"] >> 20} -> {stats["out"] >> 20} MB), '
             f'{stats["atlas_entries"]} atlas entries and {stats["sprites"]} sprites follow their scaled textures')
+    if enc.mode == 'guided' and sum(enc.counts):
+        job.log('textures: guided blocks: ' + ', '.join(
+            f'{k} {n * 100 / sum(enc.counts):.1f} %' for k, n in
+            zip(('one colour', 'fitted', 'DXT seed', 'one partition', 'two partitions', 'searched'), enc.counts)))
     return stats
