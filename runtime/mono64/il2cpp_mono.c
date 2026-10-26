@@ -77,6 +77,7 @@ typedef gboolean (*MonoStackWalk)(MonoMethod *method, int32_t native_offset, int
 // stays NULL and the il2cpp_* function using it falls back)
 #define MONO_FUNCS(X) \
     X(MonoDomain *, mono_jit_init_version, (const char *, const char *)) \
+    X(void, mono_domain_set_config, (MonoDomain *, const char *, const char *)) \
     X(void, mono_set_dirs, (const char *, const char *)) \
     X(void, mono_set_assemblies_path, (const char *)) \
     X(void, mono_set_config_dir, (const char *)) \
@@ -601,6 +602,15 @@ static void init_mono(const char *domain_name)
     clock_gettime(CLOCK_MONOTONIC, &t0);
     g_domain = m_mono_jit_init_version(domain_name && *domain_name ? domain_name : "IL2CPP Root Domain", "v4.0.30319");
     if (!g_domain) { logf_("mono_jit_init_version failed"); abort(); }
+    // the domain's application base and configuration file, as Unity's MonoBleedingEdge players
+    // set them: without a configuration file, System.Configuration fails ("The 'ExeConfigFilename'
+    // argument cannot be null"), e.g. under XmlSerializer's constructor (its diagnostics switch)
+    // on Mono 5's 4.x class libraries. The file need not exist (an empty configuration then)
+    if (m_mono_domain_set_config) {
+        char cf[PATH_MAX + 16];
+        snprintf(cf, sizeof cf, "%s/app.config", g_managed);
+        m_mono_domain_set_config(g_domain, g_managed, cf);
+    }
     for (int i = 0; i < g_nicalls; i++) m_mono_add_internal_call(g_icalls[i].name, g_icalls[i].fn);
     if (g_argc && m_mono_runtime_set_main_args) m_mono_runtime_set_main_args(g_argc, g_argv);
     g_incremental = m_mono_gc_is_incremental && m_mono_gc_is_incremental();

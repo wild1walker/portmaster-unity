@@ -45,6 +45,8 @@ fetched source tree, `<work>/src/<branch>/`):
 | Unity's fork of [bdwgc](https://github.com/Unity-Technologies/bdwgc) (Boehm-Demers-Weiser GC), at the branch's pinned commit | GitHub tarball | the GC's MIT-style licence (its `README.md`) | `libmonobdwgc-2.0.so` |
 | [libatomic_ops](https://github.com/Unity-Technologies/libatomic_ops) headers, at bdwgc's pin | GitHub tarball | MIT-style for the parts used (its GPL'd extras are not built) | (headers only) |
 | corefx's native shims (`src/Native`) and the branch's `external/corefx-bugfix` (Mono 6, Unity 2021.2+) | GitHub tarballs of mono/corefx at the pin and of the branch | MIT | `libmono-native.so` |
+| Mono's class libraries, the `unityjit` profile (`tools/mono64/build-classlibs.sh`, for a .NET 3.5 game: [docs/mono-arm64.md](docs/mono-arm64.md#a-net-35-game-on-the-4x-class-libraries-cuphead)): Mono's own (`mcs/class`), Microsoft's reference source (`mcs/class/referencesource`), parts of corefx and CoreRT (submodules at the branch's pins), Mono's `data/config` and `data/net_4_5/machine.config` | GitHub tarballs of the same commit as the runtime (the whole tree without tests) and of mono/cecil, mono/ikvm-fork, mono/corert, mono/corefx at the pins | MIT (`LICENSE`, `mcs/class/LICENSE`, the reference source's, corefx's and CoreRT's `LICENSE`: collected in the output's `LICENSE.txt`) | `mscorlib.dll`, `System*.dll`, `Mono.*.dll` |
+| Mono's bootstrap compiler (`monolite`: `mcs.exe` and a minimal class library, for the first compile of the class libraries only; not shipped) | download.mono-project.com/monolite/, as Mono's Makefile (`get-monolite-latest`) fetches it for a source build | MIT | (nothing shipped) |
 
 ## Used at run time when the system has it (not shipped)
 
