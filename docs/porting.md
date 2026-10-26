@@ -158,6 +158,12 @@ checks the game and writes `<out>` (default `./<name>`):
 `--player PKG` (a folder from `pmunity player fetch <version> PKG`) puts the installer's URL and
 the checksums of `libmain.so` and `libunity.so` into the setup, which then checks what it fetches.
 
+A setup that needs no network gets the player from donors instead: small games of the port's own,
+built with the game's Unity version and a free Unity licence (`tools/donor/build.sh <editor>
+MonoArmv7|Il2cppArm64 <out>`: one empty scene, no engine stripping), shipped in the port; the setup
+runs `pmunity player donor <version> PKG --apk <donor.apk>` (an IL2CPP donor's player with `--managed`
+takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead's setups do this.
+
 ### port.toml
 
 | key | default | what |
