@@ -19,7 +19,9 @@
 // file system cannot open; the wrappers below give FMOD the file on disk (android-data puts the
 // banks beside the APK, in assets/).
 #include "plugins.h"
+#ifndef UA_NO_STEAMSTUB
 #include "steamstub.h"
+#endif
 
 #include <dlfcn.h>
 #include <dirent.h>
@@ -642,13 +644,18 @@ void *plugins_thunk(void *fn, const char *ret, const char *args)
 
 // ------------------------------------------------------------------------------------- stubs
 
-extern const so_shim plugstub_csteamworks[], plugstub_discord_game_sdk[], plugstub_discord_rpc[], plugstub_eos[];
+extern const so_shim plugstub_discord_game_sdk[], plugstub_discord_rpc[], plugstub_eos[];
+#ifndef UA_NO_STEAMSTUB
+extern const so_shim plugstub_csteamworks[];
+#endif
 
 const so_shim *plugins_stub_table(const char *id)
 {
     if (!id) return NULL;
+#ifndef UA_NO_STEAMSTUB                         // (build.sh STEAMSTUB=0: no Steamworks stand-ins)
     if (!strcmp(id, "steam")) return steamstub_table();
     if (!strcmp(id, "csteamworks")) return plugstub_csteamworks;
+#endif
     if (!strcmp(id, "discord_game_sdk")) return plugstub_discord_game_sdk;
     if (!strcmp(id, "discord-rpc")) return plugstub_discord_rpc;
     if (!strcmp(id, "eos")) return plugstub_eos;

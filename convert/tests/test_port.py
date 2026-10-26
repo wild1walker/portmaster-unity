@@ -4,6 +4,7 @@ tools (offline; nothing of a real game or of Unity)."""
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import struct
@@ -447,7 +448,7 @@ class NewAndSetupTest(unittest.TestCase):
                     self.assertNotIn('@@', text, f)
                 if f.endswith(('.sh', 'patchscript')):
                     subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
-                    self.assertTrue(os.access(os.path.join(out, f), os.X_OK), f)
+                    self.assertFalse(os.access(os.path.join(out, f), os.X_OK), f)   # (644: the launcher sets exec bits)
             pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
             self.assertEqual(pj['items'], ['My Game.sh', 'mygame'])
             self.assertEqual(pj['name'], 'mygame.zip')
@@ -710,7 +711,7 @@ class NewAndSetupTest(unittest.TestCase):
             top = sorted(os.listdir(sub))
             self.assertEqual(top, ['My Game.sh', 'README.md', 'gameinfo.xml', 'mygame', 'port.json', 'screenshot.png'])
             self.assertTrue(P._read(os.path.join(sub, 'README.md')).startswith('## Notes'))
-            self.assertTrue(os.access(os.path.join(sub, 'My Game.sh'), os.X_OK))
+            self.assertFalse(os.access(os.path.join(sub, 'My Game.sh'), os.X_OK))
             inner = set(os.listdir(os.path.join(sub, 'mygame')))
             self.assertFalse(inner & {'port.json', 'gameinfo.xml', 'screenshot.png'})
             self.assertTrue({'ua_host', 'setup', 'licenses', 'README.md'} <= inner)
@@ -719,14 +720,16 @@ class NewAndSetupTest(unittest.TestCase):
                       'mygame/setup/pmunity/shaders/glsl.py', 'mygame/setup/pmunity/video_decode_android.shader',
                       'mygame/setup/pmunity/il2cpp_device_lock.py', 'mygame/setup/tools/il2cpp/ndk-clang.sh',
                       'mygame/licenses/LICENSE.libvpx.txt', 'mygame/licenses/LICENSE.portmaster-unity.txt',
-                      'mygame/licenses/LICENSE.libhybris-Apache-2.0.txt', 'mygame/setup/patchscript'):
+                      'mygame/licenses/LICENSE.libhybris.txt', 'mygame/setup/patchscript'):
                 self.assertIn(n, names)
             self.assertFalse(any('port_template' in n or '__pycache__' in n for n in names))
             self.assertNotIn('mygame/setup/asmpatch', names)        # (the port does not use it)
             self.assertNotIn('mygame/setup/pmhlslcc', names)        # (nor Direct3D 11 shaders)
-            self.assertEqual(modes['My Game.sh'], 0o755)
+            self.assertEqual(modes['My Game.sh'], 0o644)
             self.assertEqual(modes['mygame/ua_host'], 0o755)
-            self.assertEqual(modes['mygame/setup/patchscript'], 0o755)
+            self.assertEqual(modes['mygame/setup/patchscript'], 0o644)
+            self.assertFalse([n for n in names if n.startswith('mygame/licenses/') and
+                              not re.match(r'mygame/licenses/LICENSE\.[^/]+\.txt$', n)])   # (one flat folder)
             self.assertEqual(modes['mygame/setup/files/tool'], 0o755)          # (a build output)
             self.assertIn('MIT a', lic)
             self.assertNotIn('port.toml', ' '.join(names))
@@ -947,7 +950,8 @@ class ApkRouteTest(unittest.TestCase):
             with zipfile.ZipFile(z) as zf:
                 names = set(zf.namelist())
                 self.assertEqual(zf.read('mygame/ua_host64'), b'host arm64/')
-                self.assertEqual(zf.read('mygame/licenses/LICENSE.libvpx.ua_host64.txt'), b'BSD arm64/')
+                self.assertTrue(zf.read('mygame/licenses/LICENSE.libvpx.txt').endswith(b'BSD arm64/'))
+                self.assertNotIn('mygame/licenses/LICENSE.libvpx.ua_host64.txt', names)
             for n in ('mygame/ua_host', 'mygame/licenses/LICENSE.libvpx.txt', 'mygame/setup/python.tar.gz',
                       'mygame/setup/pmunity/apk.py'):
                 self.assertIn(n, names)

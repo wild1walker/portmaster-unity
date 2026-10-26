@@ -46,10 +46,13 @@ const so_shim plugstub_discord_rpc[] = {
     F("Discord_Respond", z_void),
     F("Discord_UpdateHandlers", z_void),
     F("Discord_Register", z_void),
+#ifndef UA_NO_STEAMSTUB
     F("Discord_RegisterSteamGame", z_void),
+#endif
     { NULL, NULL },
 };
 
+#ifndef UA_NO_STEAMSTUB
 // CSteamworks (Steamworks.NET before 9.0 put a C glue library between C# and libsteam_api): Init
 // and InitSafe fail as without a running Steam client, RestartAppIfNecessary is false. The
 // interface accessors (SteamClient_, SteamGameServerClient_) give NULL, as libsteam_api does before
@@ -100,6 +103,7 @@ const so_shim plugstub_csteamworks[] = {
     F("GameServer_RunCallbacks", z_void),
     { NULL, NULL },
 };
+#endif
 
 // Epic Online Services: EOS_Initialize succeeds (it only sets up the SDK), EOS_Platform_Create
 // gives no platform (NULL, the SDK's documented failure), so a game takes its "EOS unavailable"

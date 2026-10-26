@@ -20,7 +20,8 @@ What the host answers for itself (besides the Android shims): `System.loadLibrar
 that file, with the library's `JNI_OnLoad` called the first time (runtime/host/ua_host.c); and
 `libsteam_api.so`, unless the library folder has a real ARM one, is a stub of the Steamworks flat
 API that answers as a PC without a running Steam client (Init fails, the game goes on without
-Steam; runtime/host/steamstub.c). The game's other native plugins follow `plugins.map`
+Steam; runtime/host/steamstub.c; `STEAMSTUB=0 runtime/host/build.sh` builds a ua_host without it and
+without the old Steamworks.NET stub, for games that do not use Steamworks). The game's other native plugins follow `plugins.map`
 ([plugins.md](plugins.md)): ARM builds in `lib/`, the system's libraries, built-in stubs of
 platform SDKs (Discord, EOS, old Steamworks.NET), or refused. Android system properties come from the loader
 (`SO_PROP_<name, '.' as '_'>` overrides them; `swappy.disable=1` keeps Android Frame Pacing off).

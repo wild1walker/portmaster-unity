@@ -45,7 +45,6 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     export PATCHER_TIME="@@SETUP_TIME@@, once"
     [ -f "$GAMEDIR/setup/questions.lua" ] && export PATCHER_QUESTIONS="$GAMEDIR/setup/questions.lua"
     source "$controlfolder/utils/patcher.txt"
-    $ESUDO kill -9 $(pidof gptokeyb gptokeyb2) 2>/dev/null
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
@@ -95,5 +94,4 @@ else
 fi
 echo "game exited ($?)"
 
-$ESUDO kill -9 $(pidof gptokeyb gptokeyb2) 2>/dev/null
 pm_finish

@@ -35,7 +35,9 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "arch.h"
 #include "display.h"
 #include "fbdev.h"
+#ifndef UA_NO_STEAMSTUB
 #include "steamstub.h"
+#endif
 #include "plugins.h"
 #include "mono64.h"
 #include "unityhooks.h"
@@ -555,7 +557,9 @@ int main(int argc, char **argv)
     so_map_library("libmediandk.so", NULL);
     up_media_init();                            // the media core's decoders (../media)
     so_map_library("libvulkan.so", NULL);       // GLES only
+#ifndef UA_NO_STEAMSTUB
     steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
+#endif
     plugins_init(root, libdir);                 // the port's plugins.map: ARM builds, stubs (plugins.c)
     if (mono64_init(libdir, pj_scripting, pj_unity, pj_gc_slice) < 0) return 1;   // libil2cpp.so -> Mono (mono64.c)
 

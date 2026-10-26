@@ -2158,7 +2158,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         text = _read(template_path(r, tname))
         dst_r = render(dst, values, 'route.json')
         ctx.write(dst_r, render(text, values, tname), int(mode, 8) if mode else
-                  (0o755 if dst_r.endswith(('.sh', 'patchscript')) else 0o644))
+                  0o644)                 # (scripts too: the launcher sets the exec bits it needs)
     pd = pn                                     # the folder installed as ports/<name>
     ctx.write(f'{pd}/port.json', json.dumps(port_json(cfg), indent=4) + '\n')
     ctx.write(f'{pd}/port.env', port_env(cfg))
@@ -2313,7 +2313,7 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
     hyb = os.path.join(ctx.runtime, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
     if not os.path.isfile(hyb):
         hyb = os.path.join(REPO, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
-    ctx.license('LICENSE.libhybris-Apache-2.0.txt', hyb)
+    ctx.license('LICENSE.libhybris.txt', hyb)
     ml = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(p))), 'media', 'out', 'licenses') \
         if opts.get('ua_host') else os.path.join(ctx.runtime, 'runtime', 'media', 'out', 'licenses')
     ml = opts.get('media_licenses') or ml
@@ -2322,8 +2322,13 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
     if not lic:
         raise SystemExit(f'no decoder licences in {ml} (ua_host links the video decoders: build the runtime, '
                          f'or --media-licenses DIR)')
-    for n in lic:
-        ctx.license(f'LICENSE.{n.rsplit(".", 1)[0]}{suffix}.txt', os.path.join(ml, n))
+    for n in lic:                               # (one file per component: a second build's is appended)
+        name = f'LICENSE.{n.rsplit(".", 1)[0]}.txt'
+        old = os.path.join(ctx.licenses, name)
+        text = _read(os.path.join(ml, n))
+        if suffix and os.path.isfile(old) and _read(old) != text:
+            text = _read(old) + f'\n\n==== {dst} ({suffix.strip(".")}) ====\n\n' + text
+        ctx.license(name, text=text)
 
 
 def _component_ua_host_arm64(ctx, opts, dst='ua_host', suffix=''):
@@ -2385,9 +2390,9 @@ def _component_asmpatch(ctx, opts):
         if os.path.isdir(rt) else []
     if not vers:
         raise SystemExit(f'{rt}: the .NET runtime pack (its LICENSE.TXT and THIRD-PARTY-NOTICES.TXT go with asmpatch)')
-    ctx.license('LICENSE.dotnet-runtime.txt', os.path.join(rt, vers[-1], 'LICENSE.TXT'))
-    ctx.license('THIRD-PARTY-NOTICES.dotnet-runtime.txt', os.path.join(rt, vers[-1], 'THIRD-PARTY-NOTICES.TXT'))
-    ctx.license('LICENSE.mono.cecil.txt', text=CECIL_LICENSE)
+    ctx.license('LICENSE.dotnet-runtime.txt', text=_read(os.path.join(rt, vers[-1], 'LICENSE.TXT')) + '\n\n' +
+                _read(os.path.join(rt, vers[-1], 'THIRD-PARTY-NOTICES.TXT')))
+    ctx.license('LICENSE.mono-cecil.txt', text=CECIL_LICENSE)
 
 
 def needs_pmhlslcc(cfg):
@@ -2476,8 +2481,8 @@ def _component_mono64(ctx, opts):
             if os.path.isfile(os.path.join(out, n)):
                 ctx.add(os.path.join(out, n), os.path.join('setup', 'mono64', line, n), 0o755)
         src = os.path.join(work, 'src', branch)
-        ctx.license(f'LICENSE.mono-{line}.txt', os.path.join(src, 'LICENSE'))
-        ctx.license(f'PATENTS.mono-{line}.txt', os.path.join(src, 'PATENTS.TXT'))
+        ctx.license(f'LICENSE.mono-{line}.txt', text=_read(os.path.join(src, 'LICENSE')) + '\n\n' +
+                    _read(os.path.join(src, 'PATENTS.TXT')))
         ctx.license(f'LICENSE.bdwgc-{line}.txt', os.path.join(src, 'external', 'bdwgc', 'README.QUICK'))
         cf = os.path.join(src, 'external', 'corefx', 'LICENSE.TXT')
         if os.path.isfile(os.path.join(out, 'libmono-native.so')) and os.path.isfile(cf):
@@ -2547,12 +2552,8 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
             subprocess.run(cmd, shell=True, cwd=port_src, env=env, check=True)
     launcher = f'{title}.sh'
     shutil.copyfile(os.path.join(port_src, launcher), os.path.join(zipdir, launcher))
-    os.chmod(os.path.join(zipdir, launcher), 0o755)
+    os.chmod(os.path.join(zipdir, launcher), 0o644)   # (PortMaster's convention: .sh committed 644)
     ctx.add(os.path.join(port_src, name), '.')
-    for rel in ('setup/patchscript',):
-        p = os.path.join(ctx.port_dir, rel)
-        if os.path.isfile(p):
-            os.chmod(p, 0o755)
     for c in route.get('package', []):
         opt, c = c.endswith('?'), c.rstrip('?')     # ('?': only when the port uses it: wants())
         if c not in COMPONENTS:
@@ -2569,8 +2570,8 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     for n, src in (bld.get('licenses') or {}).items():
         ctx.license(n, os.path.join(port_src, src))
     _call_hooks('port_package', ctx)
-    ctx.license('LICENSE.portmaster-unity.txt', os.path.join(REPO, 'LICENSE'))
-    ctx.license('THIRD_PARTY.portmaster-unity.md', os.path.join(REPO, 'THIRD_PARTY.md'))
+    ctx.license('LICENSE.portmaster-unity.txt', text=_read(os.path.join(REPO, 'LICENSE')) + '\n\n' +
+                _read(os.path.join(REPO, 'THIRD_PARTY.md')))
     for n in ('LICENSE', 'LICENSE.md', 'LICENSE.txt'):
         if os.path.isfile(os.path.join(port_src, n)):
             ctx.license('LICENSE.port.txt', os.path.join(port_src, n))
@@ -2625,7 +2626,7 @@ def write_submission(ctx, port_src, out, launcher, imgs):
     if os.path.isfile(os.path.join(port_src, 'README.md')):
         shutil.copyfile(os.path.join(port_src, 'README.md'), os.path.join(sub, 'README.md'))
     shutil.copyfile(os.path.join(ctx.zipdir, launcher), os.path.join(sub, launcher))
-    os.chmod(os.path.join(sub, launcher), 0o755)
+    os.chmod(os.path.join(sub, launcher), 0o644)
     return sub
 
 
