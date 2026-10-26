@@ -126,7 +126,8 @@ CPython 3.12 (PSF licence) with UnityPy (MIT), lz4 (BSD), astc-encoder-py (MIT; 
 astc-encoder inside it: Apache 2.0), Pillow (MIT-CMU), texture2ddecoder (MIT), etcpak (MIT),
 brotli (MIT), archspec (Apache 2.0 or MIT), attrs (MIT), fsspec (BSD-3-Clause), tpk_ar (MIT) and
 pyfmodex (MIT), downloaded from their releases and PyPI when the bundle is built (none of it is in
-this repository). The packager collects each one's licence
+this repository), and this repository's own guided_astc extension (`convert/native/guided_astc`,
+built from its source in the same container). The packager collects each one's licence
 text from the bundle into the zip's `licenses/LICENSE.setup-python.txt`; the setup removes the
 bundle from the handheld when it is done.
 

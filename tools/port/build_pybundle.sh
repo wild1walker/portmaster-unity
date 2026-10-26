@@ -9,7 +9,8 @@
 #   wheels/*.whl                               manylinux aarch64 wheels from PyPI (pip download)
 #   wheels/unitypy-1.25.4-*.whl                built from source in a manylinux_2_28_aarch64 container
 #                                              (PyPI has no aarch64 wheel of UnityPy 1.25.4)
-# Needs: curl, a Python 3 with pip, Docker (for the UnityPy wheel only).
+#   wheels/guided_astc-1.0-*.whl               convert/native/guided_astc, built in the same container
+# Needs: curl, a Python 3 with pip, Docker (for the UnityPy and guided_astc wheels).
 set -euo pipefail
 OUT=${1:?usage: build_pybundle.sh <out.tar.gz> [cache dir]}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -32,6 +33,17 @@ done
 if ! ls "$C/wheels/" | grep -q '^unitypy-1.25.4-'; then
   docker run --rm --platform linux/arm64 -v "$C/wheels":/out quay.io/pypa/manylinux_2_28_aarch64 bash -c '
     /opt/python/cp312-cp312/bin/pip wheel --no-deps -w /tmp/w UnityPy==1.25.4 && auditwheel repair -w /out /tmp/w/unitypy-*.whl'
+fi
+# guided_astc (convert/native/guided_astc: textures.mode "guided"), from this checkout's source in the
+# same container; built again when the source changes (its digest in wheels/guided_astc.sum)
+GA="$HERE/../../convert/native/guided_astc"
+GA_SUM=$(cat "$GA/guided_astc.c" "$GA/setup.py" | { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; } | cut -c1-16)
+if [ "$(cat "$C/wheels/guided_astc.sum" 2>/dev/null)" != "$GA_SUM" ]; then
+  rm -f "$C/wheels"/guided_astc-*.whl
+  docker run --rm --platform linux/arm64 -v "$(cd "$GA" && pwd)":/src:ro -v "$C/wheels":/out quay.io/pypa/manylinux_2_28_aarch64 bash -c '
+    mkdir /tmp/ga && cp /src/guided_astc.c /src/setup.py /tmp/ga/ &&
+    /opt/python/cp312-cp312/bin/pip wheel --no-deps -w /tmp/w /tmp/ga && auditwheel repair -w /out /tmp/w/guided_astc-*.whl'
+  echo "$GA_SUM" > "$C/wheels/guided_astc.sum"
 fi
 
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

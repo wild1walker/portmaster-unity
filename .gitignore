@@ -3,6 +3,8 @@ out/
 *.o
 *.a
 __pycache__/
+*.egg-info/
+convert/native/*/build/
 *.pyc
 # conversion output and inputs that must never be committed: game data, Unity's player
 android-out/

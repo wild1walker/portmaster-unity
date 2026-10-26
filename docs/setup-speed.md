@@ -2,8 +2,9 @@
 
 Where a port's first-launch setup (`setup/patchscript`: unpacking, `pmunity convert`, `pmunity
 android-data`, installing) spends its time on a handheld, and what was done about it. Every
-change here leaves the output byte for byte as it was: the same converted files, the same APK and
-OBB.
+change here leaves the output byte for byte as it was (the same converted files, the same APK and
+OBB), except guided ASTC encoding ([below](#guided-astc-encoding-2026-10-26)), which writes some
+texture blocks itself: a measured, small change of the picture.
 
 ## Measured on the handheld
 
@@ -111,7 +112,8 @@ works on that file system, and so does replacing a file while it is still mapped
 ## What is left
 
 - **ASTC encoding** is most of a texture-heavy setup (Cuphead: ~60 % of the textures step's CPU)
-  and cannot get cheaper without changing the blocks: it already runs on every core.
+  and cannot get cheaper without changing the blocks: it already runs on every core. (Guided
+  encoding, below, changes some blocks for a measured share of it.)
 - **Decoding and scaling** run on one core: PR #4 splits them over the cores. After it, the
   full-size `convert('RGBA')` copy in `texture_image` and the premultiply in `downscale` are the
   next single-threaded passes over a big atlas.
@@ -234,6 +236,104 @@ about 56 min of the setup; fastest 2.4 dB.
   would change what the code may reach by reflection.
 - **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
   conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
+
+## Guided ASTC encoding (2026-10-26)
+
+`textures.mode = "guided"` (the default; `"search"` is the encoder alone, as before): the blocks
+that need no search are written by a small C extension, `guided_astc` (`convert/native/guided_astc`),
+and only the others go to astc-encoder, at the preset the port chose (`textures.quality`).
+
+**What Cuphead's textures are.** 1185 textures converted (the inventory above): 860 BC7 (13.2 Gpix
+decoded, 1879 Mpix of ASTC out), 224 crunched DXT5 (1582 Mpix, 223 out), 65 DXT5 (10.5, 1.5), 3
+DXT1, 32 RGBA32, 1 RGB24. The port scales them by 0.375 (0.5 for text): only 0.05 Mpix of the
+2104 Mpix of ASTC come from unscaled source blocks, so what a BC7 or DXT block knows does not
+reach the encoder; what it is given is a Lanczos-scaled RGBA image. Its 4x4 blocks (110 textures
+from 17 bundles and `resources.assets`, 165 Mpix, 10.3 M blocks): one colour 50.2 % (38.4 %
+fully transparent), fully transparent with colours that vary 0.01 %, opaque 26.5 %, with alpha
+23.3 % (none with only 0 and 255: scaling leaves no 1-bit alpha).
+
+**What each block gets.**
+
+| block | what is written | share (the sample) |
+|---|---|---|
+| one colour | a void-extent block, the bytes astc-encoder writes for it | 50.2 % |
+| close to one line in RGBA (squared error of the fit at most `guided_max_err` = 64 over the 16 texels' four channels, an RMS of 1/255) | fitted here: the texels' principal axis, endpoints from its extremes, one least-squares refinement, every weight chosen against the exact decode; direct RGB endpoints (8 bits) with 12 weight levels, or RGBA (192 levels) with 8; one more try with 16 levels / 10 levels when it comes within 4x the bound | 22.0 % |
+| from an unscaled DXT1/DXT5 texture (scale 1, the first mip level) | also tried: the source block's own endpoints and indices as an ASTC block (4 or 3 weight levels, 8-bit endpoints; a block with one alpha) | (Cuphead: none) |
+| the rest, by the residual of the principal axis: up to `guided_line` = 128 | astc-encoder at the preset with one partition (`tune_partition_count_limit` 1) | 9.4 % |
+| up to `guided_near` = 1024 | astc-encoder, at most two partitions | 6.0 % |
+| the rest | astc-encoder at the preset | 12.3 % |
+
+The blocks left to the encoder are gathered into an image of whole blocks (past an edge, the last
+row and column repeated, as the encoder reads them) and put back in their places; astc-encoder
+encodes each block on its own, so they are exactly the blocks it writes for the whole image with
+the same settings (checked on every block of the sample, and by the unit tests). The extension
+runs on every core, without the GIL, in plain C (no SIMD): on the M3, 3.7 s of one core for the
+sample's 165 Mpix, about 4 % of the encoder's time.
+
+**Quality and time**, the sample on the M3 (4 threads; CPU seconds, other work running on the
+machine: search-medium measured at 86 and 94 s); PSNR over every texel and over the texels
+the source shows (alpha > 0) against the image the encoder is given:
+
+| | CPU | PSNR | visible | against medium | texels > 8/255 from medium |
+|---|---|---|---|---|---|
+| search, medium (as before) | 86-94 s | 41.444 dB | 38.991 dB | | |
+| guided, fits only (`guided_line` = `guided_near` = -1: every other block searched at medium) | 77.8 s | 41.425 | 38.972 | 60.3 dB | 0.000 % |
+| **guided** (default: 64, 128, 1024) | **62.5-63.6 s** | **41.389** | **38.936** | 55.5 dB | 0.011 % |
+| guided, 64, 256, 4096 | 57.9 s | 41.349 | 38.896 | 52.8 dB | 0.057 % |
+| search, fast | 56.4 s | 40.572 | 38.133 | 41.9 dB | 1.03 % |
+
+Guided saves about 30 % of the encoder's CPU for 0.055 dB against the source; the preset fast
+saves 40 % for 0.87 dB, and both together (guided, fast) 66 % (32.1 s) for 0.88 dB. Per texture
+(the 86 of 110 whose medium PSNR is under 50 dB; above that the textures are nearly flat and a
+fitted block's error of 1/255 shows as several dB): median -0.05 dB, the 67 1536x1536 pages
+-0.06 (worst -0.44, DiceKingMainLevel at 49.5 dB instead of 49.9), the worst a 114x29 icon
+-1.5 dB (48.1 instead of 49.6); the largest error of a texel is medium's in every one of them
+(the fitted blocks are at most 1/255 RMS, a few levels at one texel).
+
+Where the time goes (one thread): medium spends 18 % of its time on the blocks fitted here (45 %
+of the blocks that are not one colour: the ones it finishes early) and about half of it on the
+blocks far from any line (12 % of the blocks), which keep the full search.
+
+What did not pay: more weight ranges per block (six instead of two), a second least-squares pass,
+or a search over the quantized endpoints (each step up or down while it lowers the error) fitted
+1-4 % more of the blocks for 2-5 times the extension's time; the fitted blocks' error bound at 32
+(-0.005 dB) or 128 (-0.04 dB) moves 10 % of the blocks either way for a few percent of the
+encoder's time; `tune_candidate_limit` 2 for the far blocks saved 14 % of their time for 1.1 % more
+error (not done: those blocks keep the preset as it is).
+
+One thread, the sample: search 80.3 s; guided 55.7 s (-31 %): the extension 3.7 s, gathering 0.1,
+the encoder on the line blocks 3.9, the near blocks 8.7, the rest 39.3.
+
+**The whole textures step**, Cuphead's 318 texture files and 1185 textures on the M3 (the step's
+work: reading, decoding, scaling, encoding; the output kept in memory, the disk being full; four
+threads, other work on the machine): search 507 s wall, 1468 s CPU; guided 478 s wall, 1140 s CPU
+(-22 % CPU; peak RSS 768 -> 763 MB; blocks: one colour 49.8 %, fitted 22.8 %, line 5.3 %, near
+9.5 %, the rest 12.6 %). On the M3 the wall time is mostly the single-threaded decoding and
+scaling around the encoder; on the handheld the encoder is half of the step.
+
+**On the handheld** (offline while this was measured; an estimate): the encoder's 84 min at medium
+for Cuphead's 2104 Mpix, scaled by the one-thread split above (the encoder's share 0.646, at the
+encoder's own Mac-to-handheld ratio), is about 54 min, plus the extension: 4 min at the same
+ratio, up to 8 if the A53 does its scalar C twice as badly as the encoder's NEON. About 58-62 min
+instead of 84: the textures step ~2 h 8 min instead of 2 h 32. Not measured on the device yet.
+
+**DXT sources at scale 1** (Hollow Knight's port converts at 1.0): Cuphead's plain DXT1/DXT5
+textures at their own size (11.5 Mpix, mostly flat): guided 58.54 dB, with the DXT blocks as
+seeds 58.96 (7 % of the blocks are the transcoded source blocks), medium 60.88; a 3D corpus game's
+(Arthur's Nightmare, 20.3 Mpix): guided 55.33 dB, seeded 55.62 (23 % transcoded), medium 55.68.
+
+Same output: with `guided_max_err`, `guided_line` and `guided_near` at -1 the blocks are byte for
+byte the encoder's (only one-colour blocks are written here, as astc-encoder writes them): checked
+by the unit tests (`tests/test_guided_astc.py`: void-extent bytes, the reported error against
+astc-encoder's own decoder, the classes, the gathering at the edges, DXT1/DXT5 seeds against
+texture2ddecoder's decode, strips against the whole image, the fall-back without the module), on
+the Mac and with the module built for aarch64 Linux run by the setup's Python in the arm64
+container.
+
+The extension: `convert/native/guided_astc/guided_astc.c` (CPython's limited API: one build for
+3.11 and later), `setup.py` for the wheel (`tools/port/build_pybundle.sh` builds it in the
+manylinux container with UnityPy's), `build.py` for a local build (tests, Mac). Without it the
+step logs that and searches every block.
 
 ## Measuring
 
