@@ -11,8 +11,8 @@
 // time a buffer is used up, like Android's AudioTrack callback thread does.
 //
 // Output (ANDROID_SLES_OUTPUT): sdl = an SDL audio device; pipe = raw PCM piped into a sound-server
-// client (ANDROID_SLES_PIPE_CMD, else pw-cat for PipeWire or pacat for PulseAudio, found through
-// XDG_RUNTIME_DIR, else the system's aplay on ALSA alone) - for 32-bit programs on a 64-bit system
+// client (ANDROID_SLES_PIPE_CMD, else the first that works of pw-cat for PipeWire and pacat for
+// PulseAudio, found through XDG_RUNTIME_DIR, and the system's aplay) - for 32-bit programs on a 64-bit system
 // whose sound server they cannot reach directly (PipeWire holding the card, no 32-bit client
 // plugins) or whose 32-bit alsa-lib cannot drive the kernel; auto (default) = sdl, else pipe.
 #define _GNU_SOURCE
@@ -312,24 +312,49 @@ static int aplay_cmd(char *cmd, size_t n, const char *fmt, int rate, int ch)
     return k > 0;
 }
 
+// The sound-server clients the system has, in order: PipeWire's pw-cat, PulseAudio's pacat (also
+// pipewire-pulse), the system's aplay. Each is tried in turn when the one before fails at once:
+// a client fails before it reads stdin (pw-cat before 0.3.80 lacks --raw; no server; no ALSA
+// device), so no sound is lost. 0 if none is there.
+static int pipe_cmd(obj *o, char *cmd, size_t n)
+{
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    const char *fmt = pipe_format(o->p.spec.format, 0), *pfmt = pipe_format(o->p.spec.format, 1);
+    char sock[300], part[3][512];
+    int k = 0;
+    if (fmt && rt && (snprintf(sock, sizeof sock, "%s/pipewire-0", rt), access(sock, F_OK) == 0) && in_path("pw-cat"))
+        snprintf(part[k++], sizeof part[0], "pw-cat --playback --raw --format %s --rate %d --channels %d --latency 20ms -",
+                 fmt[0] == 's' && fmt[1] == '1' ? "s16" : fmt[0] == 's' ? "s32" : fmt, o->p.spec.freq, o->p.spec.channels);
+    if (pfmt && rt && (snprintf(sock, sizeof sock, "%s/pulse/native", rt), access(sock, F_OK) == 0) && in_path("pacat"))
+        snprintf(part[k++], sizeof part[0], "pacat --playback --raw --format=%s --rate=%d --channels=%d --latency-msec=20",
+                 pfmt, o->p.spec.freq, o->p.spec.channels);
+    if (aplay_format(o->p.spec.format) && in_path("aplay") &&
+        aplay_cmd(part[k], sizeof part[0], aplay_format(o->p.spec.format), o->p.spec.freq, o->p.spec.channels))
+        k++;
+    if (!k) return 0;
+    // a || { echo next; b || { echo next; c; }; }: the last one exec'd (aplay's chain execs its own)
+    size_t len = 0;
+    for (int i = 0; i < k; i++) {
+        int last = i == k - 1, aplay = !strncmp(part[i], "aplay", 5) || strstr(part[i], " aplay ");
+        int w = snprintf(cmd + len, n - len, "%s%s%s%s", i ? " || { echo 'OpenSL: pipe: next client' >&2; " : "",
+                         last && !aplay ? "exec " : "", part[i], last ? "" : " 2>/dev/null");
+        if (w < 0 || (size_t)w >= n - len) return 0;
+        len += w;
+    }
+    for (int i = 1; i < k; i++) {
+        if (len + 3 >= n) return 0;
+        memcpy(cmd + len, "; }", 4); len += 3;
+    }
+    return 1;
+}
+
 static int pipe_open(obj *o)
 {
-    char cmd[512];
-    const char *user = getenv("ANDROID_SLES_PIPE_CMD"), *rt = getenv("XDG_RUNTIME_DIR");
-    const char *fmt = pipe_format(o->p.spec.format, 0), *pfmt = pipe_format(o->p.spec.format, 1);
-    char sock[300];
+    char cmd[2048];
+    const char *user = getenv("ANDROID_SLES_PIPE_CMD");
     if (user && *user)
         snprintf(cmd, sizeof cmd, "%s", user);
-    else if (fmt && rt && (snprintf(sock, sizeof sock, "%s/pipewire-0", rt), access(sock, F_OK) == 0) && in_path("pw-cat"))
-        snprintf(cmd, sizeof cmd, "exec pw-cat --playback --raw --format %s --rate %d --channels %d --latency 20ms -",
-                 fmt[0] == 's' && fmt[1] == '1' ? "s16" : fmt[0] == 's' ? "s32" : fmt, o->p.spec.freq, o->p.spec.channels);
-    else if (pfmt && rt && (snprintf(sock, sizeof sock, "%s/pulse/native", rt), access(sock, F_OK) == 0) && in_path("pacat"))
-        snprintf(cmd, sizeof cmd, "exec pacat --playback --raw --format=%s --rate=%d --channels=%d --latency-msec=20",
-                 pfmt, o->p.spec.freq, o->p.spec.channels);
-    else if (aplay_format(o->p.spec.format) && in_path("aplay") &&
-             aplay_cmd(cmd, sizeof cmd, aplay_format(o->p.spec.format), o->p.spec.freq, o->p.spec.channels))
-        ;
-    else
+    else if (!pipe_cmd(o, cmd, sizeof cmd))
         return 0;
     int fds[2];
     if (pipe(fds) != 0) return 0;
