@@ -797,6 +797,21 @@ def edit_globalgamemanagers(src, managed_names, args, log):
             names = t['m_AssemblyNames']
             game, engine = split_assemblies(names, getattr(args, 'unity', None))
             missing = [a for a in game if a not in managed_names]
+            # --drop-missing-assembly: a store SDK the build lists but does not ship (Cuphead's Steam
+            # build still names GOG's GalaxyCSharp.dll); its game slot is removed, with its
+            # m_AssemblyTypes entry (the two lists are parallel)
+            drop = [i for i, a in enumerate(names) if a in missing and a in getattr(args, "drop_missing_assembly", ())
+                    and i >= builtin_assembly_slots(getattr(args, 'unity', None))]
+            if drop:
+                types = t.get('m_AssemblyTypes')
+                if types is not None and len(types) != len(names):
+                    raise SystemExit('MonoManager: m_AssemblyTypes and m_AssemblyNames differ in length')
+                notes.append(f'MonoManager: removed {[names[i] for i in drop]} (not in Managed/)')
+                t['m_AssemblyNames'] = [a for i, a in enumerate(names) if i not in drop]
+                if types is not None:
+                    t['m_AssemblyTypes'] = [a for i, a in enumerate(types) if i not in drop]
+                o.save_typetree(t)
+                missing = [a for a in missing if a not in getattr(args, "drop_missing_assembly", ())]
             if missing:
                 raise SystemExit(f'MonoManager lists assemblies missing from Managed/: {missing}')
             absent = [a for a in engine if a not in managed_names]
@@ -1573,6 +1588,8 @@ def main(argv=None):
     ap.add_argument('--assembly-patch', action='append', default=[], nargs=2, metavar=('NAME', 'COMMAND'),
                     help='NAME (e.g. Assembly-CSharp.dll) is written by COMMAND, which gets {managed} (the original '
                          'game\'s Managed folder, --game-managed) and {out} (a folder to write NAME into)')
+    ap.add_argument('--drop-missing-assembly', action='append', default=[], metavar='DLL',
+                    help="a game assembly MonoManager lists but Managed/ lacks, removed from the list instead of failing")
     ap.add_argument('--game-managed', default=None, help="the original game's Managed folder (input of --assembly-patch)")
     ap.add_argument('--asmpatch', default=None, metavar='COMMAND',
                     help="tools/asmpatch's command (its path and options, e.g. 'asmpatch --only=rewired-android' or "
