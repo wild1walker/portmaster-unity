@@ -15,6 +15,9 @@ int fbdev_buffers(void);
 int fbdev_render_size(int *w, int *h);
 // The render size for a pw x ph panel and mem_kb of memory from the variables' values (NULL: unset):
 // 1 and the size, or 0 for the panel's own (fbdev_setup's choice; tests).
+// UA_RENDER_SIZE / UA_RENDER_SCALE without Allwinner's display engine: 1, the render size and the
+// panel's (display.c's GPU scaler draws the frame over the panel), else 0
+int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph);
 int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, long mem_kb, int *w, int *h);
 
 // Flips (fbdev.c interposes the driver's FBIOPAN_DISPLAY calls). fbdev_swap() is called right

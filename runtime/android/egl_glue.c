@@ -168,6 +168,9 @@ static int pbuffer_mode(void)
     return m;
 }
 
+static EGLSurface g_window_surface;            // the window surface (egl_glue_set_report_size)
+static int g_report_w, g_report_h;
+
 static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, void *win, const EGLint *attribs)
 {
     if (!ensure() || !real.CreateWindowSurface) return NULL;
@@ -191,7 +194,20 @@ static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, voi
         s = real.CreateWindowSurface(dpy, cfg, native, NULL);
     }
     SHIM_TRACE("eglCreateWindowSurface(%p -> native %p) = %p", win, native, s);
+    if (s && android_window_is_ours(win)) g_window_surface = s;
     return s;
+}
+
+void egl_glue_set_report_size(int width, int height) { g_report_w = width; g_report_h = height; }
+
+static EGLBoolean shim_eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, EGLint *value)
+{
+    if (!ensure() || !real.QuerySurface) return EGL_FALSE;
+    if (g_report_w > 0 && s && s == g_window_surface && value && (attr == EGL_WIDTH || attr == EGL_HEIGHT)) {
+        *value = attr == EGL_WIDTH ? g_report_w : g_report_h;
+        return EGL_TRUE;
+    }
+    return real.QuerySurface(d, s, attr, value);
 }
 
 // egl_glue_set_single_sample_window (egl_glue.h): off unless the host turns it on
@@ -322,6 +338,7 @@ static EGLBoolean shim_eglPresentationTimeANDROID(EGLDisplay dpy, EGLSurface s, 
 
 so_shim egl_shims[] = {
     { "eglCreateWindowSurface", (void *)shim_eglCreateWindowSurface },
+    { "eglQuerySurface", (void *)shim_eglQuerySurface },
     { "eglChooseConfig", (void *)shim_eglChooseConfig },
     { "eglGetConfigAttrib", (void *)shim_eglGetConfigAttrib },
     { "eglCreateContext", (void *)shim_eglCreateContext },

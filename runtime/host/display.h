@@ -29,6 +29,9 @@ const char *display_auto_choice(char *why, size_t n);
 int display_sdl_open(const char *title, egl_host_display *out, int *width, int *height, int *refresh);
 int display_sdl_quit_requested(void);
 void *display_sdl_window(void);             // the SDL_Window, NULL if none
-// UA_RENDER_SIZE / UA_RENDER_SCALE on the SDL path: Unity's frame (drawn at the smaller size in the
-// lower left of the window's buffer) scaled up to the whole window; render thread, before the swap
-void display_sdl_present_scaled(void);
+// The GPU scaler (UA_RENDER_SIZE / UA_RENDER_SCALE where no display engine scales: SDL windows, and
+// framebuffers other than Allwinner's): Unity is told rw x rh and draws its frame in the lower left
+// of the dw x dh surface; display_present_scaled (render thread, before the swap) scales it up over
+// the whole surface. Nothing runs unless display_gpu_scale was called.
+void display_gpu_scale(int rw, int rh, int dw, int dh);
+void display_present_scaled(void);

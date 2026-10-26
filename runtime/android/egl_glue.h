@@ -71,6 +71,10 @@ typedef struct egl_host_display {
 
 // Set before Unity's first EGL call (NULL: none, the default; Mali fbdev / UA_EGL_PBUFFER path).
 void egl_glue_set_host_display(const egl_host_display *d);
+
+// The size eglQuerySurface reports for the window surface (the fbdev path's GPU scaler: Unity draws
+// a frame that size in the lower left of the panel-sized surface); 0: the surface's own.
+void egl_glue_set_report_size(int width, int height);
 // The wrappers above (and eglGetProcAddress returning them). Register them with so_add_shims
 // before egl_shims[], only when a host display is set.
 extern so_shim egl_host_shims[];

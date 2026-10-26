@@ -98,6 +98,7 @@ static volatile int g_var_ok;
 // window the driver draws, 0 while it is the whole screen), and whether the crop needs putting back
 static int g_fb_w, g_fb_h;
 static int g_rw, g_rh;
+static int g_gw, g_gh;                      // the render size for the GPU scaler (no Allwinner display engine)
 static volatile int g_cw, g_ch;
 static volatile int g_crop;
 
@@ -217,6 +218,13 @@ int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, 
     return 1;
 }
 
+int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph)
+{
+    if (!g_gw) return 0;
+    *w = g_gw; *h = g_gh; *pw = g_fb_w; *ph = g_fb_h;
+    return 1;
+}
+
 int fbdev_render_size(int *w, int *h)
 {
     if (!g_rw) return 0;
@@ -272,11 +280,24 @@ void fbdev_setup(void)
     g_fb_h = v.yres;
     if (fbdev_pick_render_size(v.xres, v.yres, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
                                mem_total_kb(), &g_rw, &g_rh)) {
-        g_cw = g_rw;
-        g_ch = g_rh;
-        g_crop = 1;                          // before the watcher starts: it puts the crop back
-        fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the display engine scales the window to the panel\n",
-                g_rw, g_rh, 100.0 * g_rw * g_rh / ((double)v.xres * v.yres), v.xres, v.yres);
+        // the display engine's scaler: Allwinner's (sunxi disp, /sys/class/disp) shows a cropped
+        // framebuffer over the whole panel; other drivers (Rockchip's) would show it smaller or
+        // shifted, so there the GPU scales (UA_RENDER_SCALER=display|gpu chooses)
+        const char *sc = getenv("UA_RENDER_SCALER");
+        int de = sc && !strcmp(sc, "display") ? 1 : sc && !strcmp(sc, "gpu") ? 0 : access("/sys/class/disp", F_OK) == 0;
+        if (de) {
+            g_cw = g_rw;
+            g_ch = g_rh;
+            g_crop = 1;                      // before the watcher starts: it puts the crop back
+            fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the display engine scales the window to the panel\n",
+                    g_rw, g_rh, 100.0 * g_rw * g_rh / ((double)v.xres * v.yres), v.xres, v.yres);
+        } else {
+            g_gw = g_rw;
+            g_gh = g_rh;
+            g_rw = g_rh = 0;
+            fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the GPU scales the window to the panel "
+                    "(no Allwinner display engine)\n", g_gw, g_gh, 100.0 * g_gw * g_gh / ((double)v.xres * v.yres), v.xres, v.yres);
+        }
     }
     // the refresh period from the mode's timings, when the driver gives them (else 60 Hz until the
     // flips tell)

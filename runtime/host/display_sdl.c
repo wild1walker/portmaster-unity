@@ -28,10 +28,8 @@
 //                           Unity asks for one and this is off)
 //   UA_SWAP_INTERVAL=<n>    initial (and forced) swap interval; default 1, EGL's own default
 //   UA_RENDER_SIZE / UA_RENDER_SCALE  (as on the fbdev path, fbdev_pick_render_size) Unity is told
-//                           the smaller size and draws its frame in the lower left of the window's
-//                           buffer; before each swap the GPU scales it up to the whole window (two
-//                           glBlitFramebuffer: into a texture, then linear back over the window).
-//                           GLES 3 only; unset (the default), nothing here runs
+//                           the smaller size; display.c's GPU scaler draws it over the whole window.
+//                           GLES 3 only; unset (the default), nothing of it runs
 // SDL's own variables apply (SDL_VIDEODRIVER=wayland|kmsdrm|x11|offscreen, SDL_VIDEO_EGL_DRIVER).
 #define _GNU_SOURCE
 #include "display.h"
@@ -84,108 +82,7 @@ static struct {
 static SDL_Window *g_win;
 static SDL_GLContext g_ctx;
 static volatile int g_quit;
-static int g_dw, g_dh, g_rw, g_rh;             // the window's drawable; the render size (0: the same)
-
-// ---- the smaller frame scaled up (render thread, Unity's context current, before the swap) -------
-#define GL_TEXTURE_2D 0x0DE1
-#define GL_RGBA8 0x8058
-#define GL_RGBA 0x1908
-#define GL_UNSIGNED_BYTE 0x1401
-#define GL_LINEAR 0x2601
-#define GL_NEAREST 0x2600
-#define GL_TEXTURE_MIN_FILTER 0x2801
-#define GL_TEXTURE_MAG_FILTER 0x2800
-#define GL_TEXTURE_BINDING_2D 0x8069
-#define GL_READ_FRAMEBUFFER 0x8CA8
-#define GL_DRAW_FRAMEBUFFER 0x8CA9
-#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
-#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
-#define GL_COLOR_ATTACHMENT0 0x8CE0
-#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
-#define GL_SCISSOR_TEST 0x0C11
-#define GL_RASTERIZER_DISCARD 0x8C89
-#define GL_COLOR_WRITEMASK 0x0C23
-static struct {
-    void (*GetIntegerv)(unsigned, int *);
-    void (*GetBooleanv)(unsigned, unsigned char *);
-    unsigned char (*IsEnabled)(unsigned);
-    void (*Enable)(unsigned), (*Disable)(unsigned);
-    void (*ColorMask)(unsigned char, unsigned char, unsigned char, unsigned char);
-    void (*GenTextures)(int, unsigned *);
-    void (*BindTexture)(unsigned, unsigned);
-    void (*TexImage2D)(unsigned, int, int, int, int, int, unsigned, unsigned, const void *);
-    void (*TexParameteri)(unsigned, unsigned, int);
-    void (*GenFramebuffers)(int, unsigned *);
-    void (*BindFramebuffer)(unsigned, unsigned);
-    void (*FramebufferTexture2D)(unsigned, unsigned, unsigned, unsigned, int);
-    unsigned (*CheckFramebufferStatus)(unsigned);
-    void (*BlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned, unsigned);
-} G;
-static unsigned g_fbo;
-static int g_scale_state;                      // 0 not set up, 1 on, -1 failed (frames go unscaled)
-
-static int scale_setup(void)
-{
-#define L(f) *(void **)&G.f = SDL_GL_GetProcAddress("gl" #f)
-    L(GetIntegerv); L(GetBooleanv); L(IsEnabled); L(Enable); L(Disable); L(ColorMask); L(GenTextures);
-    L(BindTexture); L(TexImage2D); L(TexParameteri); L(GenFramebuffers); L(BindFramebuffer);
-    L(FramebufferTexture2D); L(CheckFramebufferStatus); L(BlitFramebuffer);
-#undef L
-    void **f = (void **)&G;
-    for (unsigned i = 0; i < sizeof G / sizeof *f; i++) if (!f[i]) return 0;
-    int tex0 = 0, rfb = 0, dfb = 0;
-    unsigned tex;
-    G.GetIntegerv(GL_TEXTURE_BINDING_2D, &tex0);
-    G.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
-    G.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
-    G.GenTextures(1, &tex);
-    G.BindTexture(GL_TEXTURE_2D, tex);
-    G.TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, g_rw, g_rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    G.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    G.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    G.GenFramebuffers(1, &g_fbo);
-    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, g_fbo);
-    G.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
-    int ok = G.CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    G.BindTexture(GL_TEXTURE_2D, (unsigned)tex0);
-    G.BindFramebuffer(GL_READ_FRAMEBUFFER, (unsigned)rfb);
-    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (unsigned)dfb);
-    return ok;
-}
-
-void display_sdl_present_scaled(void)
-{
-    if (!g_rw || g_scale_state < 0 || SDL_GL_GetCurrentWindow() != g_win) return;
-    if (!g_scale_state) {
-        g_scale_state = scale_setup() ? 1 : -1;
-        fprintf(stderr, g_scale_state > 0 ? "[display] render size %dx%d, scaled to %dx%d by the GPU\n"
-                                          : "[display] render size %dx%d: no GLES 3 framebuffer copy, frames stay in the corner of %dx%d\n",
-                g_rw, g_rh, g_dw, g_dh);
-        if (g_scale_state < 0) return;
-    }
-    int rfb = 0, dfb = 0;
-    unsigned char mask[4];
-    G.GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
-    G.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
-    G.GetBooleanv(GL_COLOR_WRITEMASK, mask);
-    unsigned char sc = G.IsEnabled(GL_SCISSOR_TEST), rd = G.IsEnabled(GL_RASTERIZER_DISCARD);
-    if (sc) G.Disable(GL_SCISSOR_TEST);
-    if (rd) G.Disable(GL_RASTERIZER_DISCARD);
-    G.ColorMask(1, 1, 1, 1);
-    // the frame into the texture (the same size: also resolves a multisampled window), then the
-    // texture over the whole window (a blit within one framebuffer may not overlap)
-    G.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, g_fbo);
-    G.BlitFramebuffer(0, 0, g_rw, g_rh, 0, 0, g_rw, g_rh, 0x4000, GL_NEAREST);
-    G.BindFramebuffer(GL_READ_FRAMEBUFFER, g_fbo);
-    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    G.BlitFramebuffer(0, 0, g_rw, g_rh, 0, 0, g_dw, g_dh, 0x4000, GL_LINEAR);
-    G.BindFramebuffer(GL_READ_FRAMEBUFFER, (unsigned)rfb);
-    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (unsigned)dfb);
-    G.ColorMask(mask[0], mask[1], mask[2], mask[3]);
-    if (sc) G.Enable(GL_SCISSOR_TEST);
-    if (rd) G.Enable(GL_RASTERIZER_DISCARD);
-}
+static int g_rw, g_rh;                         // the render size (0: the window's)
 
 static long mem_total_kb(void)
 {
@@ -420,7 +317,6 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
     fprintf(stderr, "[display] %s %dx%d%s, %d Hz, swap interval %d\n", windowed ? "window" : "fullscreen", dw, dh,
             t ? " (fallback config)" : "", hz, interval);
 
-    g_dw = dw; g_dh = dh;
     if (fbdev_pick_render_size(dw, dh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
                                mem_total_kb(), &g_rw, &g_rh)) {
         if (tries[t].major < 3) {
@@ -429,6 +325,7 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
         } else {
             fprintf(stderr, "[display] render size %dx%d (%d %% of %dx%d's pixels): the GPU scales it to the window\n",
                     g_rw, g_rh, (int)(100.0 * g_rw * g_rh / ((double)dw * dh) + 0.5), dw, dh);
+            display_gpu_scale(g_rw, g_rh, dw, dh);
         }
     }
 
