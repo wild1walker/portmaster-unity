@@ -115,7 +115,7 @@ Android loader, so its threads, signals and `dlopen` are the host's. It fetches 
 tarball without the class libraries and tests (45 MB on disk), the pinned bdwgc and libatomic_ops,
 and for Mono 6 corefx's native code (libmono-native); the build runs in an arm64 container
 (`ua-mono64-build`: ua-build-arm64 plus autotools, glibc 2.31) in about 5 minutes on 8 cores.
-Results: `libmonobdwgc-2.0.so` 3.9 MB (2019.4, 2020.3), 4.2 MB (6000.0) stripped. The branch head
+Results: `libmonobdwgc-2.0.so` 3.6 MB (2017.4: Mono 5.0.1), 3.9 MB (2019.4, 2020.3), 4.2 MB (6000.0) stripped. The branch head
 is used, not the exact commit of the game's release (Unity does not publish that mapping): the
 game's `mscorlib.dll` must fit the runtime's internal calls, which change between lines, not
 within one (each run checks that: Mono refuses a corlib of another version at start).
