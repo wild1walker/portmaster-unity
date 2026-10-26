@@ -31,13 +31,13 @@ libunity's `dlopen("libil2cpp.so")` to it.
 
 **Unity versions**: games on Unity's MonoBleedingEdge (the .NET 4.x scripting runtime, the default
 from 2018.3) of 2017.4 and later (the arm64 players start with 2017.4.16), with the
-`unity-<line>-mbe` branch of Unity-Technologies/mono for the runtime; checked with 2019.4, 2020.3,
-2021.3 and 6000.0. .NET 3.5 games cannot take this route: their desktop players run Unity's older
-Mono fork (Mono 2.6.5, the `unity-<line>` branches), which has no 64-bit ARM code generator
-(its `mono/mini` has `mini-arm.c`, 32-bit ARM, and no `mini-arm64.c`). Running
-their assemblies on MonoBleedingEdge would mean other class libraries than the game's (4.x instead
-of the 2.0 "unity" profile), so not the game as it is: Cuphead (2017.4, .NET 3.5) stays on the
-IL2CPP route or the 32-bit player.
+`unity-<line>-mbe` branch of Unity-Technologies/mono for the runtime; checked with 2017.4, 2019.4,
+2020.3, 2021.3 and 6000.0. A .NET 3.5 game's own runtime cannot run there: its desktop players run
+Unity's older Mono fork (Mono 2.6.5, the `unity-<line>` branches), which has no 64-bit ARM code
+generator (its `mono/mini` has `mini-arm.c`, 32-bit ARM, and no `mini-arm64.c`). Its assemblies
+run on the line's MonoBleedingEdge instead, with Mono's 4.x class libraries built from the same
+sources in place of the game's 2.0 ones ([below](#a-net-35-game-on-the-4x-class-libraries-cuphead):
+Cuphead, 2017.4.9f1, on 2017.4.40f1's player and Mono 5.0.1).
 
 ## Why it works (the feasibility study, 2026-10-23)
 
@@ -120,11 +120,58 @@ is used, not the exact commit of the game's release (Unity does not publish that
 game's `mscorlib.dll` must fit the runtime's internal calls, which change between lines, not
 within one (each run checks that: Mono refuses a corlib of another version at start).
 
-The game's class libraries are its own (`Managed/mscorlib.dll` ... of the desktop build), and so is
+The game's class libraries are its own (`Managed/mscorlib.dll` ... of the desktop build; a .NET 3.5
+game's are Mono's 4.x ones instead, [below](#a-net-35-game-on-the-4x-class-libraries-cuphead)), and so is
 Mono's config (`MonoBleedingEdge/etc/mono/config`, whose Linux dllmaps fit a glibc runtime); the
 class libraries' native helpers (`System.Native`, `MonoPosixHelper`) are mapped to the runtime's
 folder. P/Invokes into Android libraries (plugins) go through the loader (Mono's `dlopen`
 fallback); a game's Linux plugins are glibc libraries already.
+
+## A .NET 3.5 game on the 4.x class libraries (Cuphead)
+
+Unity 2017.4's MonoBleedingEdge is Mono 5.0.1 (`unity-2017.4-mbe`, its `mono/mini` has
+`mini-arm64.c`), so a .NET 3.5 game of the line runs on it if it gets 4.x class libraries: its
+desktop build ships Unity's 2.0 profile (`mscorlib` 2.0.0.0 ...), whose internal calls and corlib
+version are Mono 2.6's, so Mono 5 refuses that `mscorlib`. The game's own assemblies need no change:
+Mono 5 binds their references to the 2.0 framework assemblies (`mscorlib`, `System`, `System.Core`
+3.5, `System.Xml`) to the 4.0 ones (its framework remapping, as .NET 4 does), and the 2.0 API is a
+subset of 4.x's.
+
+**The class libraries** come from the same tree as the runtime, so nothing of Unity's editor or
+Mono installers is shipped: `tools/mono64/build-classlibs.sh <line> <work>` builds the branch's
+`unityjit` profile (Unity's 4.x profile for JIT players) as Unity's `build.pl` does
+(`configure --with-unityjit=yes`, then the class libraries with `mcs`), in the `ua-mono64-build`
+image; Mono's own bootstrap compiler (`monolite`, which Mono's Makefile fetches for a source build)
+compiles the first `mcs`. 2017.4: 65 assemblies of the profile and 121 facades, 27 MB, in about
+20 minutes on 8 cores (the runtime the compiler runs on, the bootstrap profiles, the profile); some
+of the profile's assemblies need submodules the tool leaves out (System.Web, WCF: not what games
+use) and are not built. With its Linux config (`etc/mono/config`: `libc` -> `libc.so.6`, ...) and
+`etc/mono/4.5/machine.config`, also from the tree.
+
+What Cuphead takes from them (its assemblies' references and theirs, followed to the end): `mscorlib`,
+`System`, `System.Core`, `System.Xml`, `Mono.Security`, `System.Configuration`, `System.Security`,
+`Mono.Posix`: 12.0 MB, every reference resolved. The runtime is `build-mono.sh 2017.4`'s
+(`libmonobdwgc-2.0.so` 3.6 MB stripped); libunity 2017.4.40f1 names 175 `il2cpp_*` functions, all
+in the bridge, and 32 of the Mono functions the bridge binds are missing from Mono 5.0 (incremental
+GC, `*_v2` GC handles, the memory profiler's walks, `mono_unity_gc_disable`/`enable`,
+`mono_type_get_attrs`, ...): each use of one by the 2017.4 player's 175 functions is behind a
+check with a fallback (`il2cpp_gc_disable` does nothing, GC handles stay 32-bit, ...). One bridge change for it: the domain gets an application
+configuration file (`mono_domain_set_config(<Managed>, <Managed>/app.config)`, as Unity's
+MonoBleedingEdge players set one): without it `XmlSerializer`'s constructor, through its
+diagnostics switch, fails in `System.Configuration` ("The 'ExeConfigFilename' argument cannot be
+null"), which stopped Cuphead's slot select (Dialoguer's global variables are XML in the save).
+
+**Behaviour against the game's own class libraries** (Cuphead in the arm64 rig, the IL2CPP build's
+APK and OBB, the Managed folder above; the port's test hooks; 2026-10-26):
+
+| check | result |
+|---|---|
+| title, slot select, Veggies, Frogs, Forest Follies (1-1), the win screen | reached, no managed exception (none either in the IL2CPP build's run of title, slot select and Veggies, or in the 32-bit build's rig logs of them); Mono up 54 - 84 ms after `il2cpp_init`, 64 assemblies, 6,027 internal calls |
+| saves (JSON from Unity's `JsonUtility`, with Dialoguer's global variables as `XmlSerializer` XML in a string) | seed slots migrated and rewritten at the slot screen: byte for byte the files the 32-bit build (Mono 2.6, the game's 2.0 libraries) wrote from the same seed. The 32-bit build's slot with progress loads; after a won fight its 1,344 other fields are as the 32-bit build and the IL2CPP build (the game's 2.0 libraries) write them, and the Dialoguer XML differs in one place: the root element declares `xmlns:xsd` before `xmlns:xsi` (the 2.0 libraries: `xsi` first). The reference source's `XmlSerializer` keeps the default namespaces in a `Hashtable`, whose order follows Mono's string hash. Both read either order: the IL2CPP build loaded the Mono route's save and, after the same fight, wrote the 32-bit build's file byte for byte |
+| deterministic replay (`CUPHEAD_TEST_DETERMINISTIC`, Veggies, frames 300, 900, 1500 against the IL2CPP build in the same rig) | each build repeats its own frames exactly; between them frame 900 is identical and frames 300 and 1500 differ in 74 and 105 of 345,600 pixels by 1/255 (rounding in some float arithmetic of the game's code: JIT-compiled 64-bit Mono against IL2CPP's C++), the same scene otherwise |
+| Dialoguer | its dialogue data is Unity-serialized (`DialogueEditorMasterObject`), not `XmlSerializer`'s; only its global variables go through `XmlSerializer` (the save check above) |
+| `System.Random`, hash containers, sorts | the game's code (a Cecil scan of every call): `System.Random` only in a UI animation's shuffle (`UIImageAnimationLoop`, time-seeded); `Dictionary`/`HashSet` enumeration in 63 places, mostly the two players' dictionary: both libraries enumerate in insertion order with removed slots reused last-freed first (Mono 2.6's own `Dictionary` and the reference source's), so the same order; 6 unstable sorts in gameplay code (Merdusa's dots, Saltbaker's cutters, the spider's mines, Jack Frost's shards, coin order in run-and-gun levels): 2.6's quicksort and 4.x's introsort can order equal keys differently; the keys are positions and distances (`float`), equal ones not seen |
+| culture | `float`/`int` parsing and formatting go through `CultureInfo.CurrentCulture`, which both runtimes take from the same environment (`LANG`); the game's own `Parser` uses the invariant culture |
 
 ## As a port (`--route mono-arm64`)
 
@@ -147,6 +194,7 @@ the arm64 rig, Mono up 310 ms after `il2cpp_init` (2026-10-23).
 
 | game | Unity | emulated rig (native arm64) | handheld | notes |
 |---|---|---|---|---|
+| Cuphead (GOG macOS, .NET 3.5) | 2017.4.9f1 data on the 2017.4.40f1 player; Mono 5.0.1 (`unity-2017.4-mbe`) with Mono's 4.x class libraries | title, slot select, Veggies, Frogs, Forest Follies, the win screen; 64 assemblies, 6,027 internal calls, Mono up 54 - 84 ms after `il2cpp_init` | not yet (the handheld was off) | the first .NET 3.5 game on the route ([above](#a-net-35-game-on-the-4x-class-libraries-cuphead), 2026-10-26) |
 | buggish | 2019.4.8f1 | title, 75 - 170 fps (Mesa llvmpipe), Mono up 31 - 104 ms after `il2cpp_init`, 92 assemblies, 7,626 internal calls | title 59.5 - 59.7 fps (as the 32-bit and the IL2CPP builds: 59.4 - 59.6), resident 255 MB | the first game on the route (2026-10-24) |
 | Tom City | 2020.3.49f1 | title, 210 - 350 fps, 100 assemblies, 8,117 internal calls | | runtime built with `tools/mono64/build-mono.sh` (2026-10-23) |
 | Untitled Hook Game | 2021.3.16f1, URP | the first-launch name prompt at about 28 fps, as the IL2CPP build in the same rig (about 30); 114 assemblies, 8,410 internal calls; 32-bit GC handles from Mono 6's runtime | | the first Mono 6 line of the route (2026-10-23) |

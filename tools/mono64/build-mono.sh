@@ -98,12 +98,15 @@ if [ ! -f config.status ]; then
     --with-sgen=no $GC > /out/configure.log 2>&1 || { tail -40 /out/configure.log; exit 1; }
 fi
 : > /out/make.log
-for d in external/bdwgc mono/culture mono/eglib mono/arch mono/utils mono/cil mono/zlib mono/sgen \
+# (eglib: at the top of the tree in Mono 5.0 - 2017.4 - and in mono/ later)
+for d in external/bdwgc eglib mono/culture mono/eglib mono/arch mono/utils mono/cil mono/zlib mono/sgen \
          mono/metadata mono/mini mono/profiler mono/native support; do
   [ -d $d ] && [ -f $d/Makefile ] || continue
   # mono/mini: the runtime library only (its mono executable wants files of the full build)
   if [ $d = mono/mini ]; then make -k -j$(nproc) -C $d >> /out/make.log 2>&1 || true
   elif [ $d = mono/native ]; then make -j$(nproc) -C $d >> /out/make.log 2>&1 || echo "mono/native: not built (make.log)"
+  # (the profilers are not shipped; Mono 5.0'"'"'s want the old Boehm runtime this build leaves out)
+  elif [ $d = mono/profiler ]; then make -j$(nproc) -C $d >> /out/make.log 2>&1 || echo "mono/profiler: not built (make.log)"
   else make -j$(nproc) -C $d >> /out/make.log 2>&1 || { grep -n -B3 -A12 -m2 " error\|No rule" /out/make.log | head -60; exit 1; }
   fi
 done
