@@ -29,3 +29,6 @@ const char *display_auto_choice(char *why, size_t n);
 int display_sdl_open(const char *title, egl_host_display *out, int *width, int *height, int *refresh);
 int display_sdl_quit_requested(void);
 void *display_sdl_window(void);             // the SDL_Window, NULL if none
+// UA_RENDER_SIZE / UA_RENDER_SCALE on the SDL path: Unity's frame (drawn at the smaller size in the
+// lower left of the window's buffer) scaled up to the whole window; render thread, before the swap
+void display_sdl_present_scaled(void);

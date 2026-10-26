@@ -516,7 +516,13 @@ static EGLSurface host_eglGetCurrentSurface(EGLint which)
 static EGLBoolean host_eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, EGLint *value)
 {
     if (!ensure() || !real.QuerySurface) return EGL_FALSE;
-    if (host_dpy(d) && s == HOST_SURFACE) s = host_real_surface();
+    if (host_dpy(d) && s == HOST_SURFACE) {
+        if (value && g_host.width > 0 && (attr == EGL_WIDTH || attr == EGL_HEIGHT)) {
+            *value = attr == EGL_WIDTH ? g_host.width : g_host.height;
+            return EGL_TRUE;
+        }
+        s = host_real_surface();
+    }
     return real.QuerySurface(d, s, attr, value);
 }
 

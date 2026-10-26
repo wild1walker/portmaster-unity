@@ -102,10 +102,7 @@ int display_init(const char *title)
         return use_fbdev();
     }
     egl_glue_set_host_display(&g_hd);
-    android_window_set_size(w, h);
-    const char *rs = getenv("UA_RENDER_SIZE"), *rc = getenv("UA_RENDER_SCALE");
-    if ((rs && *rs) || (rc && *rc))
-        fprintf(stderr, "[display] UA_RENDER_SIZE / UA_RENDER_SCALE: the fbdev path only; the SDL window's size %dx%d\n", w, h);
+    android_window_set_size(w, h);              // (with UA_RENDER_SIZE / UA_RENDER_SCALE: the smaller size)
     g_refresh = hz;
     g_backend = "sdl";
     return 0;

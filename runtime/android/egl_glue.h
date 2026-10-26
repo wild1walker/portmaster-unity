@@ -64,6 +64,9 @@ typedef struct egl_host_display {
     int (*swap)(void *user);
     int (*swap_interval)(void *user, int interval);   // 0 on success
     void *user;
+    // the size eglQuerySurface reports for the host surface (0: the surface's own): Unity draws a
+    // frame this size into the lower left of the surface, which the host scales up before the swap
+    int width, height;
 } egl_host_display;
 
 // Set before Unity's first EGL call (NULL: none, the default; Mali fbdev / UA_EGL_PBUFFER path).
