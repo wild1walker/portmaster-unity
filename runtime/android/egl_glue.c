@@ -188,10 +188,20 @@ static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, voi
     void (*wh)(void) = g_window_hook;
     if (wh && android_window_is_ours(win)) wh();
     EGLSurface s = real.CreateWindowSurface(dpy, cfg, native, attribs);
+    EGLint err = 0;
     if (!s && attribs && attribs[0] != EGL_NONE) {
-        EGLint err = real.GetError ? real.GetError() : 0;
+        err = real.GetError ? real.GetError() : 0;
         SHIM_WARN("egl_glue: eglCreateWindowSurface failed (0x%x), retrying without attributes", err);
         s = real.CreateWindowSurface(dpy, cfg, native, NULL);
+    }
+    // PowerVR's fbdev EGL (IMG's "nullws", e.g. the A133P's GE8300) takes no window struct: the
+    // whole screen is native window 0, and Mali's fbdev_window is EGL_BAD_NATIVE_WINDOW there
+    if (!s && native && android_window_is_ours(win)) {
+        EGLint e2 = real.GetError ? real.GetError() : 0;
+        if (e2 == EGL_BAD_NATIVE_WINDOW || err == EGL_BAD_NATIVE_WINDOW) {
+            s = real.CreateWindowSurface(dpy, cfg, NULL, NULL);
+            SHIM_WARN("egl_glue: the fbdev window was refused (EGL_BAD_NATIVE_WINDOW): native window 0 (PowerVR's whole screen): %p", s);
+        }
     }
     SHIM_TRACE("eglCreateWindowSurface(%p -> native %p) = %p", win, native, s);
     if (s && android_window_is_ours(win)) g_window_surface = s;
