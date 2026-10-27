@@ -467,7 +467,8 @@ void fbdev_swap_done(int ok)
 static void set_crop(int w, int h)
 {
     int cw = 0, ch = 0;
-    if (g_fb_w > 0 && w > 0 && h > 0 && w <= g_fb_w && h <= g_fb_h && (w < g_fb_w || h < g_fb_h)) { cw = w; ch = h; }
+    // (the GPU scaler draws the smaller window over the whole screen: no crop)
+    if (!g_gw && g_fb_w > 0 && w > 0 && h > 0 && w <= g_fb_w && h <= g_fb_h && (w < g_fb_w || h < g_fb_h)) { cw = w; ch = h; }
     if (cw == g_cw && ch == g_ch) return;
     g_cw = cw;
     g_ch = ch;
