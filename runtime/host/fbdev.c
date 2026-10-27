@@ -667,6 +667,24 @@ int ioctl(int fd, unsigned long req, ...)
     return r;
 }
 
+int fbdev_driver_presents(int *w, int *h, int *pw, int *ph)
+{
+    pthread_once(&g_cond_once, cond_init);
+    pthread_mutex_lock(&g_lock);
+    int was = g_mode;
+    g_mode = FLIP_DRIVER;                    // the driver's own flips: no gate waits for ours
+    pthread_cond_broadcast(&g_cond);
+    pthread_mutex_unlock(&g_lock);
+    int had = g_rw > 0;
+    if (had) { g_gw = g_rw; g_gh = g_rh; g_rw = g_rh = 0; }
+    g_cw = g_ch = 0;                         // no crop: the driver draws the whole screen
+    if (g_crop) { int c = restore_now(); (void)c; }
+    fprintf(stderr, "[fbdev] the EGL driver presents the whole screen itself (%s before)%s\n",
+            was == FLIP_HOST ? "host flips" : was == FLIP_MAILBOX ? "mailbox flips" : "the driver's flips",
+            had ? ": the render size goes to the GPU scaler" : "");
+    return fbdev_gpu_render_size(w, h, pw, ph);
+}
+
 #ifdef FBDEV_TEST
 // test_fbdev.c: the flip modes without a framebuffer (mode 0 driver, 1 host, 2 mailbox), the fake
 // display's FBIOPAN_DISPLAY in place of the C library's ioctl, a 720x480 panel (whole-screen windows

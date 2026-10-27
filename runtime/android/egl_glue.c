@@ -169,6 +169,8 @@ static int pbuffer_mode(void)
 }
 
 static EGLSurface g_window_surface;            // the window surface (egl_glue_set_report_size)
+static void (*g_whole_screen_hook)(void);
+void egl_glue_set_whole_screen_hook(void (*hook)(void)) { g_whole_screen_hook = hook; }
 static int g_report_w, g_report_h;
 
 static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, void *win, const EGLint *attribs)
@@ -201,6 +203,7 @@ static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, voi
         if (e2 == EGL_BAD_NATIVE_WINDOW || err == EGL_BAD_NATIVE_WINDOW) {
             s = real.CreateWindowSurface(dpy, cfg, NULL, NULL);
             SHIM_WARN("egl_glue: the fbdev window was refused (EGL_BAD_NATIVE_WINDOW): native window 0 (PowerVR's whole screen): %p", s);
+            if (s && g_whole_screen_hook) { g_window_surface = s; g_whole_screen_hook(); }
         }
     }
     SHIM_TRACE("eglCreateWindowSurface(%p -> native %p) = %p", win, native, s);

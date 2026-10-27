@@ -176,10 +176,24 @@ const char *display_auto_choice(char *why, size_t n)
 // with UA_RENDER_SIZE / UA_RENDER_SCALE the window has that size: on Allwinner's display engine the
 // framebuffer is cropped to it and the engine scales it up; elsewhere Unity is told it, the EGL
 // surface keeps the panel's size and the GPU scaler draws the frame over it.
+// PowerVR's whole-screen window: its driver presents (fbdev_driver_presents), and a render size
+// goes to the GPU scaler over the whole screen
+static void on_whole_screen(void)
+{
+    static int done;
+    if (done++) return;
+    int w, h, pw, ph;
+    if (fbdev_driver_presents(&w, &h, &pw, &ph)) {
+        egl_glue_set_report_size(w, h);
+        display_gpu_scale(w, h, pw, ph);
+    }
+}
+
 static int use_fbdev(void)
 {
     if (pbuffer_mode()) return 0;
     fbdev_setup();
+    egl_glue_set_whole_screen_hook(on_whole_screen);
     int w, h, pw, ph;
     if (fbdev_render_size(&w, &h)) android_window_set_size(w, h);
     else if (fbdev_gpu_render_size(&w, &h, &pw, &ph)) {

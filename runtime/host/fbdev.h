@@ -18,6 +18,10 @@ int fbdev_render_size(int *w, int *h);
 // UA_RENDER_SIZE / UA_RENDER_SCALE without Allwinner's display engine: 1, the render size and the
 // panel's (display.c's GPU scaler draws the frame over the panel), else 0
 int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph);
+// The EGL driver draws and presents the whole screen itself (PowerVR's native window 0): the
+// driver's flips from now on, no display-engine crop; 1 and the sizes when a render size is left
+// for the GPU scaler, else 0.
+int fbdev_driver_presents(int *w, int *h, int *pw, int *ph);
 int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, long mem_kb, int *w, int *h);
 
 // Flips (fbdev.c interposes the driver's FBIOPAN_DISPLAY calls). fbdev_swap() is called right

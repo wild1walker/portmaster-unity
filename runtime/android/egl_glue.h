@@ -75,6 +75,10 @@ void egl_glue_set_host_display(const egl_host_display *d);
 // The size eglQuerySurface reports for the window surface (the fbdev path's GPU scaler: Unity draws
 // a frame that size in the lower left of the panel-sized surface); 0: the surface's own.
 void egl_glue_set_report_size(int width, int height);
+
+// Called (on the thread creating it) when the window surface is the driver's whole screen instead of
+// the host's fbdev window (PowerVR's native window 0).
+void egl_glue_set_whole_screen_hook(void (*hook)(void));
 // The wrappers above (and eglGetProcAddress returning them). Register them with so_add_shims
 // before egl_shims[], only when a host display is set.
 extern so_shim egl_host_shims[];
