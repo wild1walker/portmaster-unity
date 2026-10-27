@@ -360,11 +360,13 @@ static int pipe_open(obj *o)
     if (pipe(fds) != 0) return 0;
     fcntl(fds[1], F_SETPIPE_SZ, 4096);         // one page: ~21 ms of 48 kHz stereo s16 in flight
     fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-    // the client is a program of the host system: none of our (32-bit) library overrides
+    // the client is a program of the host system: none of our (32-bit) library overrides, nor the
+    // 32-bit PipeWire plugin folders PortMaster's PORT_32BIT sets for the game itself
     char *envp[256];
     int ne = 0;
     for (char **e = environ; *e && ne < 255; e++)
-        if (strncmp(*e, "LD_LIBRARY_PATH=", 16) && strncmp(*e, "LD_PRELOAD=", 11)) envp[ne++] = *e;
+        if (strncmp(*e, "LD_LIBRARY_PATH=", 16) && strncmp(*e, "LD_PRELOAD=", 11) &&
+            strncmp(*e, "SPA_PLUGIN_DIR=", 15) && strncmp(*e, "PIPEWIRE_MODULE_DIR=", 20)) envp[ne++] = *e;
     envp[ne] = NULL;
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
