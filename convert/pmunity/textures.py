@@ -460,6 +460,53 @@ def downscale_parallel(img, w, h, pool, cores):
     return out.convert('RGBA')
 
 
+HUGE_PX = 1 << 24              # textures from 4096 x 4096 up that are scaled: decoded a band at a time
+
+
+def decode_downscale(o, tex, w, h, fmt_name, pool=None):
+    """downscale(texture_image(tex.image)) without the whole decoded image: each band of output
+    rows is scaled from just the source rows its Lanczos filter reads (decoded from the block rows
+    holding them), so a 8192 x 8192 texture needs a few bands' memory instead of its 256 MB plus
+    copies (Cuphead's DLC map atlas, killed on 1 GB handhelds). Every output row gets the same
+    filter and the same source pixels as one resize: the same image. None when the data cannot be
+    cut in rows (as decode_parallel)."""
+    from math import ceil, floor
+    from UnityPy.enums import BuildTarget, TextureFormat as TF
+    from UnityPy.export import Texture2DConverter as C
+    from PIL import Image
+    fmt = TF(tex.m_TextureFormat)
+    platform = getattr(o, 'platform', BuildTarget.UnknownPlatform)
+    blob = getattr(tex, 'm_PlatformBlob', None)
+    if 'Crunched' in fmt.name or platform == BuildTarget.XBOX360 or \
+            C.TextureSwizzler.is_switch_swizzled(platform, blob):
+        return None
+    W, H, raw = tex.m_Width, tex.m_Height, tex.get_image_data()
+    bs = C.TEXTURE_FORMAT_BLOCK_SIZE_TABLE.get(fmt)
+    bh = bs[1] if bs else 1
+    units = C.get_compressed_image_size(W, H, fmt)[1] // bh
+    if not raw or not units or len(raw) % units:
+        return None
+    per = len(raw) // units
+    version = getattr(o, 'version', (0, 0, 0, 0))
+    sy = H / h
+    margin = ceil(3 * max(sy, 1.0)) + 2                       # Lanczos' support (3 taps, scaled) and a row
+    rows = max(1, int(512 / sy))                              # output rows a band (about 512 source rows)
+
+    def band(y0):
+        y1 = min(h, y0 + rows)
+        a, b = max(0, floor(y0 * sy) - margin), min(H, ceil(y1 * sy) + margin)    # source rows, top first
+        s0, s1 = (H - b) // bh * bh, min(H, -(-(H - a) // bh) * bh)              # stored rows (bottom first)
+        part = C.parse_image_data(raw[s0 // bh * per:s1 // bh * per], W, s1 - s0, fmt, version, platform, blob, flip=False)
+        top = part.transpose(Image.Transpose.FLIP_TOP_BOTTOM)    # top first: row r is source row H - s1 + r
+        off = H - s1
+        img = texture_image(top.crop((0, a - off, W, b - off)), fmt_name).convert('RGBa')
+        return y0, img.resize((w, y1 - y0), Image.Resampling.LANCZOS, box=(0, y0 * sy - a, W, y1 * sy - a))
+    out = Image.new('RGBa', (w, h))
+    for y0, part in (pool.map(band, range(0, h, rows)) if pool else map(band, range(0, h, rows))):
+        out.paste(part, (0, y0))
+    return out.convert('RGBA')
+
+
 def _prepare(o, ch, fmt_name=None, pool=None, cores=1, seeds=False):
     """Decoded and scaled mip levels of one texture (runs on the worker thread; with pool, a big
     texture's decoding and scaling are split over every core, with the same pixels). seeds: also
@@ -468,7 +515,11 @@ def _prepare(o, ch, fmt_name=None, pool=None, cores=1, seeds=False):
     seed = None
     if seeds and fmt_name in DXT_SEED and (ch.width, ch.height) == (tex.m_Width, tex.m_Height):
         seed = dxt_seed(o, tex, fmt_name, tex.get_image_data())
-    if pool is None or ch is None:
+    huge = ch is not None and tex.m_Width * tex.m_Height >= HUGE_PX and (ch.width, ch.height) != (tex.m_Width, tex.m_Height)
+    small = huge and decode_downscale(o, tex, ch.width, ch.height, fmt_name, pool)
+    if small:
+        levels = mip_chain(small, ch.mips)
+    elif pool is None or ch is None:
         img = texture_image(tex.image, fmt_name)
         levels = mip_chain(downscale(img, ch.width, ch.height), ch.mips)
     else:
