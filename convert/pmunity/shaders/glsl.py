@@ -297,6 +297,18 @@ def unroll(src, limit=UNROLL_MAX, statements=UNROLL_STATEMENTS):
     return src, done
 
 
+_ANY = {}
+
+
+def _any_of(rules):
+    """One regex that matches where any of rules' does (each keeps its own flags): the rules are
+    searched one by one only when it matches, to report the first that does."""
+    if id(rules) not in _ANY:
+        _ANY[id(rules)] = re.compile('|'.join(f'(?{"m" if rx.flags & re.M else ""}:{rx.pattern})' if rx.flags & re.M
+                                              else f'(?:{rx.pattern})' for rx, _ in rules))
+    return _ANY[id(rules)]
+
+
 def _code_lines(body):
     """A stage's source without comments and preprocessor lines (the macro blocks of Unity 2019+
     define layout qualifiers the player switches by device: not code the stage necessarily uses)."""
@@ -313,7 +325,8 @@ def stage_to_es(src, stage, precision='highp', optimize=OPTIMIZE, notes=None, es
         src = _drop_precise_dummies(src)
     body = _strip_comments(src)
     code = _code_lines(body)
-    for rx, what in (_UNSUPPORTED_4X if gl4 else _UNSUPPORTED):
+    rules = _UNSUPPORTED_4X if gl4 else _UNSUPPORTED
+    for rx, what in (rules if _any_of(rules).search(code) else ()):     # (one pass when none matches)
         m = rx.search(code)
         if m:
             raise Unsupported(f'{stage}: {what} {m.group(0).strip()!r}')

@@ -132,6 +132,29 @@ class Result:
         return f'{self.name}: {self.status} {self.why}'.rstrip()
 
 
+_ES = {}            # (code, precision, optimize, es) -> (GLSL ES or the Unsupported raised, the notes added)
+
+
+def program_to_es_once(code, precision, optimize, notes, es='300'):
+    """glsl.program_to_es of a program's bytes, each distinct program translated once (Unity repeats
+    the same program across variants and shaders: half of Cuphead's 3038). The notes it adds, and
+    the Unsupported it raises, come again on every use, as from a fresh translation."""
+    key = (bytes(code), precision, tuple(optimize), es)
+    hit = _ES.get(key)
+    if hit is None:
+        added = []
+        try:
+            res = glsl.program_to_es(code.decode('utf-8'), precision, optimize, added, es=es).encode('utf-8')
+        except glsl.Unsupported as ex:
+            res = ex
+        hit = _ES[key] = (res, added)
+    res, added = hit
+    notes.extend(added)
+    if isinstance(res, Exception):
+        raise res
+    return res
+
+
 def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=glsl.OPTIMIZE, glcore4x=True):
     """Adds GLES3 programs to one Shader typetree in place. Returns a Result.
     replace: a shader that already has GLES programs gets them rebuilt from its GLCore ones
@@ -187,9 +210,8 @@ def add_gles3(tree, precision='highp', replace=False, translate=None, optimize=g
     both = set(used) & {i for s in used4.values() for i in s}
     if both:
         raise ValueError(f'{name}: blob entry {min(both)} is both a GLCore32 and a GLCore41/43 program')
-    tr = translate or (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes).encode('utf-8'))
-    tr31 = None if translate else \
-        (lambda code: glsl.program_to_es(code.decode('utf-8'), precision, optimize, r.notes, es='310').encode('utf-8'))
+    tr = translate or (lambda code: program_to_es_once(code, precision, optimize, r.notes))
+    tr31 = None if translate else (lambda code: program_to_es_once(code, precision, optimize, r.notes, es='310'))
     out = [e.copy() if e is not None else None for e in entries]
     dropped = set()                     # VR-only programs that do not translate: no twins
     es31 = set()                        # programs translated as GLES 3.1 ones
