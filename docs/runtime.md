@@ -140,6 +140,7 @@ multiplies with it: the URP camera renders at its scale of the window.
 | `UA_APK_NAME` | the APK's name without `.apk` (default: from `android_package.json`, else the only `.apk` in the root) |
 | `UA_OBB_DIR` | where the OBB is (default: beside the APK) |
 | `UA_PAD_NAME` | name the pad reports (Rewired knows Android pads by name: `Xbox Wireless Controller`) |
+| `UA_PAD_LAYOUT` | `nintendo`: the face buttons by their Nintendo labels (A on the right, B at the bottom): A<->B and X<->Y. Default: by position, as on an Xbox pad |
 | `UA_INPUT_SCRIPT` | scripted presses: `"<sec>[@<period>]:<button>[~<hold>][+...] ..."`; `ptr=<x>/<y>` puts pointer mode's cursor there (fractions with a `.`, else pixels); `text=<chars>` types into an open soft keyboard (`_` = space). Without a real pad they press a virtual one, registered at the first press (`UA_VIRTUAL_PAD=1`: at start). A release waits until 2 frames were presented since the press, and the first press until 3 frames after the pad is taken, so a slow game (the emulated rig, a long load) still sees every press |
 | `UA_OSK=0\|done\|cancel`, `UA_OSK_SCALE`, `UA_OSK_SHOTS=0` | the on-screen keyboard for the game's soft keyboard (on by default, shown only when the game opens it; see [input.md](input.md)): off; answer every keyboard at once (OK / Back); glyph scale; keep it out of `shot.req` screenshots |
 | `UA_KEYBOARD=1` | an SDL window's key events also reach the game as an Android hardware keyboard (they always type into an open soft keyboard) |

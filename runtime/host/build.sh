@@ -18,7 +18,7 @@ export STEAM NOSTEAM
 if [ "$ARCH" = arm64 ]; then
   mkdir -p out/arm64
   docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 ../docker/arm64
-  docker run --rm --platform linux/arm64 -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-build-arm64 bash -c '
+  docker run --rm --pull=never --platform linux/arm64 -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-build-arm64 bash -c '
     set -e
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni $NOSTEAM"
@@ -50,7 +50,7 @@ fi
 [ "$ARCH" = armhf ] || { echo "ARCH must be armhf or arm64"; exit 1; }
 mkdir -p out
 docker image inspect ua-host-armhf >/dev/null 2>&1 || docker build -q -t ua-host-armhf . >/dev/null
-docker run --rm -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
+docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-host-armhf bash -c '
   set -e
   F="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -funwind-tables -I../jni/include -I../jni $NOSTEAM"
   arm-linux-gnueabihf-gcc $F -c ua_host.c -o out/ua_host.o

@@ -57,8 +57,26 @@ static struct pad *scripted_pad(void);
 // a pad button: the on-screen keyboard first, then pointer mode / UA_KEYMAP; 1 if taken
 static int take_key(int keycode, int down) { return osk_key(keycode, down) || pointer_key(keycode, down); }
 
+// UA_PAD_LAYOUT=nintendo: the face buttons by their Nintendo labels (A on the right, B at the bottom)
+// instead of by position as on an Xbox pad: A<->B and X<->Y
+static int nintendo_layout(void)
+{
+    static int v = -1;
+    if (v < 0) v = getenv("UA_PAD_LAYOUT") && !strcmp(getenv("UA_PAD_LAYOUT"), "nintendo");
+    return v;
+}
+
 static int keycode(int b)
 {
+    if (nintendo_layout()) {
+        switch (b) {
+        case SDL_CONTROLLER_BUTTON_A: return UP_KEYCODE_BUTTON_B;
+        case SDL_CONTROLLER_BUTTON_B: return UP_KEYCODE_BUTTON_A;
+        case SDL_CONTROLLER_BUTTON_X: return UP_KEYCODE_BUTTON_Y;
+        case SDL_CONTROLLER_BUTTON_Y: return UP_KEYCODE_BUTTON_X;
+        default: break;
+        }
+    }
     switch (b) {
     case SDL_CONTROLLER_BUTTON_A: return UP_KEYCODE_BUTTON_A;
     case SDL_CONTROLLER_BUTTON_B: return UP_KEYCODE_BUTTON_B;
