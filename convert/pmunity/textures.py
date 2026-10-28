@@ -56,6 +56,10 @@ DEFAULTS = {
                                  # than this decoded is decoded and encoded alone, nothing overlapped
     'strips': True,              # big single-level textures kept at their size: decoded and encoded
                                  # a strip of rows at a time (the same blocks, far less memory)
+    'inline_streams': False,     # bundles written with their textures' pixels inline and no .resS nodes
+                                 # left, as android-data's packing makes them for Unity's Android player
+                                 # (Unity 2017.4 never finishes a streamed texture): packing then only
+                                 # moves them, instead of unpacking and recompressing each one again
     'spill_mb': 64,              # bundles with more than this (uncompressed) are unpacked to files
                                  # and rewritten from them (bigbundle.py): little memory, whatever
                                  # their size; 0 = always in memory
@@ -717,7 +721,7 @@ def run(job, only=None):
                 if lf.is_bundle:
                     if new_stream is not None:
                         lf.set_bundle_res(stream_node, new_stream.path if lf.spilled else new_stream.data)
-                    lf.write_to(job, rel)
+                    lf.write_to(job, rel, inline=c['inline_streams'])
                 else:
                     sf_new = os.path.join(work, 'file.new')
                     with open(sf_new, 'wb') as f:

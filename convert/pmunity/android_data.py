@@ -580,17 +580,18 @@ def inline_texture_streams(objects, read_stream):
     finishes such a texture, so LoadAssetAsync / LoadSceneAsync of anything holding one waits
     forever (Cuphead: atlas_playerfx at the start screen). Inline pixels are read like any other
     field, the way a texture without stream data always loads."""
+    from .unity_io import current_typetree
     done, still = 0, set()
     for o in objects:
         if o.type.name == 'Mesh':
             # Unity 2018+ meshes can keep their vertex data in the .resS too: left there
-            sd = o.read_typetree().get('m_StreamData')
+            sd = current_typetree(o).get('m_StreamData')
             if sd and sd.get('path') and sd.get('size'):
                 still.add(sd['path'].split('/')[-1])
             continue
         if o.type.name not in ('Texture2D', 'Cubemap', 'Texture2DArray', 'Texture3D'):
             continue
-        t = o.read_typetree()
+        t = current_typetree(o)
         sd = t.get('m_StreamData')
         if not sd or not sd.get('path'):
             continue
@@ -610,16 +611,17 @@ def inline_texture_streams(objects, read_stream):
 def _inline_plan(objects):
     """inline_texture_streams' choice without changing anything: (path ids of the textures to
     inline, .resS names still referenced)."""
+    from .unity_io import current_typetree
     plan, still = set(), set()
     for o in objects:
         if o.type.name == 'Mesh':
-            sd = o.read_typetree().get('m_StreamData')
+            sd = current_typetree(o).get('m_StreamData')
             if sd and sd.get('path') and sd.get('size'):
                 still.add(sd['path'].split('/')[-1])
             continue
         if o.type.name not in ('Texture2D', 'Cubemap', 'Texture2DArray', 'Texture3D'):
             continue
-        t = o.read_typetree()
+        t = current_typetree(o)
         sd = t.get('m_StreamData')
         if not sd or not sd.get('path'):
             continue
@@ -634,12 +636,12 @@ def _inline_streamed(sf, plan, read_stream, out_path):
     """sf (target platform set) written to out_path with the planned textures' pixels inlined, one
     texture in memory at a time (unity_io.save_serialized_to); False when that layout does not
     stream (the caller inlines in memory)."""
-    from .unity_io import save_serialized_to
+    from .unity_io import save_serialized_to, current_typetree
 
     def prepare(o):
         if o.path_id not in plan:
             return False
-        t = o.read_typetree()
+        t = current_typetree(o)
         sd = t['m_StreamData']
         data = read_stream(sd['path'], sd['offset'], sd['size'])
         if len(data) != sd['size']:

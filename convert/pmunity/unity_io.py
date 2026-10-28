@@ -345,6 +345,17 @@ class NotOneSerializedFile(ValueError):
     """A bundle with no serialized file or several (scene bundles): not opened."""
 
 
+def current_typetree(o):
+    """o.read_typetree(), but of the object's data as last saved (save_typetree): UnityPy's
+    read_typetree reads the bytes the file was loaded with, even after a save."""
+    if getattr(o, 'data', None) is None:
+        return o.read_typetree()
+    from UnityPy.helpers import TypeTreeHelper
+    from UnityPy.streams import EndianBinaryReader
+    return TypeTreeHelper.read_typetree(o._get_typetree_node(None), EndianBinaryReader(o.data, endian=o.reader.endian),
+                                        as_dict=True, byte_size=len(o.data), assetsfile=o.assets_file)
+
+
 class Loaded:
     """One data file opened with UnityPy: a plain serialized file (.assets, level, globalgamemanagers)
     or a UnityFS bundle holding one serialized file (CAB-...) and optionally its .resS."""
@@ -457,6 +468,19 @@ class Loaded:
             return n.view
         return memoryview(n.bytes if hasattr(n, 'bytes') else n)
 
+    def _read_node(self, path, off, size):
+        """read_stream for inlining: <size> bytes at <off> of the bundle's node <path> (its new
+        contents when set_bundle_res changed it). A node written to a file is read with a seek and
+        a read (through a memory map, each page faulted in on its own: seconds a texture on some
+        drives)."""
+        name = path.split('/')[-1]
+        p = self._res.get(name) if self.spilled else None
+        if isinstance(p, str):
+            with open(p, 'rb') as f:
+                f.seek(off)
+                return f.read(size)
+        return bytes(self.bundle_res(name)[off:off + size])
+
     def set_bundle_res(self, name, data):
         """A node's new contents: bytes, or (a spilled bundle) the path of a file holding them."""
         if self.spilled:
@@ -484,19 +508,38 @@ class Loaded:
             return self.bundle.save(packer='lz4')
         return self.sf.save()
 
-    def write_to(self, job, rel):
+    def write_to(self, job, rel, inline=False):
         """The file, changed, into the job's output as <rel> (a spilled bundle: packed again from
-        its node files, one chunk at a time)."""
+        its node files, one chunk at a time). inline (a bundle): its textures' streamed pixels go
+        into the texture objects and the .resS nodes nothing reads any more are dropped, as
+        android-data's packing does for Unity's Android player (android_data.inline_bundle), so
+        packing has nothing left to rewrite."""
         if not self.spilled:
+            if inline and self.is_bundle:
+                from .android_data import inline_texture_streams
+                _, still = inline_texture_streams(self.sf.objects.values(), self._read_node)
+                for n in [n for n in self.bundle.files if n.endswith('.resS') and n not in still]:
+                    del self.bundle.files[n]
             job.write(rel, self.save())
             return
         import os
         from . import bigbundle
         b, sf_node = self.spilled
-        with open(sf_node.path + '.new', 'wb') as f:
-            f.write(self.sf.save())
+        dropped = set()
+        if inline:
+            from .android_data import _inline_plan, _inline_streamed
+            plan, still = _inline_plan(self.sf.objects.values())
+            if not _inline_streamed(self.sf, plan, self._read_node, sf_node.path + '.new'):
+                from .android_data import inline_texture_streams     # (a layout that does not stream)
+                inline_texture_streams(self.sf.objects.values(), self._read_node)
+                with open(sf_node.path + '.new', 'wb') as f:
+                    f.write(self.sf.save())
+            dropped = {n.name for n in b.nodes if n.name.endswith('.resS') and n.name not in still}
+        else:
+            with open(sf_node.path + '.new', 'wb') as f:
+                f.write(self.sf.save())
         nodes = [n._replace(path=sf_node.path + '.new') if n is sf_node else
-                 n._replace(path=self._res.get(n.name, n.path)) for n in b.nodes]
+                 n._replace(path=self._res.get(n.name, n.path)) for n in b.nodes if n.name not in dropped]
         out = os.path.join(os.path.dirname(sf_node.path), 'bundle.new')
         bigbundle.pack(b, nodes, out)
         b.close()                            # (the bundle it read from is replaced next)

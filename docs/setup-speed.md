@@ -237,6 +237,16 @@ about 56 min of the setup; fastest 2.4 dB.
 - **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
   conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
 
+## Textures inlined by the texture step (2026-10-28)
+
+Unity 2017.4's Android player needs every texture's pixels inside its object (android-data,
+`inline_texture_streams`), so packing unpacked each converted bundle again, inlined its .resS and
+compressed it once more (LZ4 HC): a second full pass over every atlas, on the handheld's card
+and CPU. `textures.inline_streams` (Cuphead: on) writes the bundles that way in the first place,
+from the new stream file, one texture in memory at a time; packing then only sets the platform and
+moves them. Three Cuphead bundles packed both ways: every node byte-identical once unpacked;
+packing 17 s -> under 0.1 s (Mac), the texture step the same (2.3 s on the Mac's SSD either way).
+
 ## Guided ASTC encoding (2026-10-26)
 
 `textures.mode = "guided"` (the default; `"search"` is the encoder alone, as before): the blocks
