@@ -242,6 +242,42 @@ static void keymap(void)
     CHECK(fake_calls == 0);
 }
 
+// UA_DPAD_SWAP: the d-pad steers (arrow keys) until select swaps it with the stick, which moves the cursor
+static void swap(void)
+{
+    setenv("UA_KEYMAP", "left:left,right:right", 1);
+    setenv("UA_POINTER", "mouse", 1);
+    setenv("UA_POINTER_MOVE", "lstick", 1);
+    setenv("UA_DPAD_SWAP", "select", 1);
+    int id = 1;
+    CHECK(pointer_init(640, 480, &id) == 1);
+    pointer_start();
+    axes(0, 0, -1, 0);                                  // d-pad left: the left arrow
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_DOWN);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 1) == 1);    // swapped while held: the key is let go
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_UP);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 0) == 1);
+    int nk = 0;
+    for (int i = 0; i < nev; i++) nk += evs[i].kind == 'k';
+    axes(0, 0, 1, 0);                                   // d-pad right now moves the cursor
+    CHECK(pad[4] == 0 && pad[0] == 0);
+    run_ticks(0.2);
+    axes(0, 0, 0, 0);
+    run_ticks(0.03);
+    struct ev *e = last('m');
+    CHECK(e && e->action == UP_ACTION_HOVER_MOVE && e->x > 320 + 50);
+    int nk2 = 0;
+    for (int i = 0; i < nev; i++) nk2 += evs[i].kind == 'k';
+    CHECK(nk2 == nk);                                   // no key for it
+    axes(1, 0, 0, 0);                                   // the stick now steers
+    CHECK(last('k')->a == 22 && last('k')->action == UP_ACTION_DOWN && pad[0] == 0);
+    axes(0, 0, 0, 0);
+    CHECK(last('k')->a == 22 && last('k')->action == UP_ACTION_UP);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 1) == 1);    // back
+    axes(0, 0, -1, 0);
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_DOWN);
+}
+
 static void toggle(void)
 {
     setenv("UA_POINTER", "mouse", 1);
@@ -276,9 +312,10 @@ int main(int argc, char **argv)
     else if (!strcmp(s, "mouse")) mouse();
     else if (!strcmp(s, "touch")) touch();
     else if (!strcmp(s, "keymap")) keymap();
+    else if (!strcmp(s, "swap")) swap();
     else if (!strcmp(s, "toggle")) toggle();
     else if (!strcmp(s, "es2")) es2();
-    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|toggle|es2\n"); return 2; }
+    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|swap|toggle|es2\n"); return 2; }
     printf("%s %s: %d failure(s)\n", failures ? "FAILED" : "PASSED", s, failures);
     return failures != 0;
 }

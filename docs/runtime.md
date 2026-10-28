@@ -148,6 +148,7 @@ multiplies with it: the URP camera renders at its scale of the window.
 | `UA_POINTER_SPEED`, `UA_POINTER_START`, `UA_POINTER_TOGGLE` | full speed in screen heights/s (1.2); start position `<x>/<y>` (fractions, `0.5/0.5`); a button that turns pointer mode off and on |
 | `UA_POINTER_CURSOR=0`, `UA_POINTER_SIZE`, `UA_POINTER_HIDE`, `UA_POINTER_SHOTS=1` | no cursor drawn (the game draws its own); its scale; hide it after `<s>` idle; draw it into `shot.req` screenshots too (by default they show only the game) |
 | `UA_KEYMAP=<button>:<key>,...` | pad buttons (and `up/down/left/right`, the d-pad) that press keyboard keys instead, e.g. `start:escape,x:space` |
+| `UA_DPAD_SWAP=<button>` | that button swaps the d-pad and the left stick, and back (keymap, cursor and the game's axes follow), so a d-pad-only device can play and move the cursor; see [input.md](input.md) |
 | `UA_FPS` | frame stats every N s (avg/p99/worst, late >25 ms, hitch >50 ms, GC; on the fbdev path the time from the swap to the flip: Display above); `[hitch]` lines >100 ms |
 | `touch <root>/shot.req` | screenshot of the next frame -> `<root>/shot-<n>.ppm` |
 | `<root>/input.req` | live input: presses in `UA_INPUT_SCRIPT`'s syntax, times counted from when it is read (every 0.25 s; then deleted). Write it elsewhere and `mv` it into place. With `shot.req`, a test drives a game by what its screenshots show: `echo "0:b~2 6:down" > x && mv x <root>/input.req` |
