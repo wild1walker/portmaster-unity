@@ -106,6 +106,9 @@ def main(argv=None):
     if argv[:1] == ['patch-obb']:      # an add-on's bundles beside an installed game (patch_obb.py)
         from . import patch_obb
         return patch_obb.main(argv[1:])
+    if argv[:1] == ['astc-guide']:     # per-block encoder effort chosen on a PC (astc_guide.py)
+        from . import astc_guide
+        return astc_guide.main(argv[1:])
     if argv[:1] == ['player']:
         from . import player
         return player.main(argv[1:])

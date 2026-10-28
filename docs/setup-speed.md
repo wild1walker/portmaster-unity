@@ -237,6 +237,28 @@ about 56 min of the setup; fastest 2.4 dB.
 - **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
   conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
 
+## ASTC guide files (2026-10-28)
+
+`pmunity astc-guide` (astc_guide.py) runs the texture step on a PC with a recorder: each texture
+level's hard blocks (the ones guided_astc leaves to astc-encoder) are encoded at eleven tiers
+(presets with partition limits, cheapest first) and each block gets the cheapest tier whose error
+is at most the target preset's. The guide holds a tier byte per hard block (zlib), keyed by file,
+path id and level, with the hard blocks' count and CRC; `textures.guide` makes the texture step
+encode each hard block at its tier only. No pixels are in it. Two Cuphead atlases (14 levels,
+363k hard blocks), the Mac, 4 threads:
+
+| run | encoding | PSNR |
+|---|---|---|
+| fast (heuristic tiers) | 1.46 s | 41.41 dB |
+| medium (heuristic tiers) | 2.64 s | 42.43 dB |
+| guide, target medium | 1.90 s | 42.48 dB |
+| guide, target fast | 1.26 s | 41.48 dB |
+
+Measured block by block (every hard block at every tier, one call each) a medium-target guide
+cost what fast does and a fast-target one 0.55x; in a conversion each tier is its own, smaller
+astc-encoder call, and the gap is that overhead. Not measured on a handheld yet. A guide for all of
+Cuphead: about 12 MB.
+
 ## Textures inlined by the texture step (2026-10-28)
 
 Unity 2017.4's Android player needs every texture's pixels inside its object (android-data,

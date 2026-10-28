@@ -56,6 +56,8 @@ DEFAULTS = {
                                  # than this decoded is decoded and encoded alone, nothing overlapped
     'strips': True,              # big single-level textures kept at their size: decoded and encoded
                                  # a strip of rows at a time (the same blocks, far less memory)
+    'guide': '',                 # an ASTC guide file (astc_guide.py, made on a PC): each hard block of a
+                                 # guided texture searched at the effort the guide chose for it
     'inline_streams': False,     # bundles written with their textures' pixels inline and no .resS nodes
                                  # left, as android-data's packing makes them for Unity's Android player
                                  # (Unity 2017.4 never finishes a streamed texture): packing then only
@@ -117,35 +119,43 @@ class Astc:
         self.max_err, self.line, self.near = max_err, line, near
         self.counts = [0] * 6                # guided: one colour, fitted, seeded, line, near, other
         self._ctx = {}
+        self.guide = self.recorder = None    # astc_guide.Reader / Recorder (guided mode)
 
     def _context(self, block, tier='other'):
+        """tier: one of TIERS (at the quality preset), or ('guide', i): astc_guide.TIERS[i]."""
         import astc_encoder as A
         key = (tuple(block), tier)
         if key not in self._ctx:
+            if isinstance(tier, tuple):
+                from .astc_guide import TIERS as GT
+                preset, limits = GT[tier[1]]
+            else:
+                preset, limits = self.quality, self.TIERS[tier]
             cfg = A.ASTCConfig(A.ASTCProfile.LDR, block[0], block[1], block_z=1,
-                               quality=getattr(A.ASTCQualityPreset, self.quality.upper()),
+                               quality=getattr(A.ASTCQualityPreset, preset.upper()),
                                flags=A.ASTCConfigFlags.USE_DECODE_UNORM8)
-            for k, v in self.TIERS[tier].items():
+            for k, v in limits.items():
                 setattr(cfg, k, min(v, getattr(cfg, k)))
             self._ctx[key] = A.ASTCContext(cfg, threads=self.threads)
         return self._ctx[key]
 
-    def encode(self, img, block, seed=None):
+    def encode(self, img, block, seed=None, key=None):
         """PIL RGBA image (top row first) -> ASTC blocks, bottom row first as Unity stores textures.
-        seed: (the DXT1 or DXT5 blocks these pixels were decoded from, in Unity's order, is DXT5)."""
+        seed: (the DXT1 or DXT5 blocks these pixels were decoded from, in Unity's order, is DXT5).
+        key: the texture level's name in an ASTC guide."""
         from PIL import Image
-        return self.encode_rows(img.transpose(Image.Transpose.FLIP_TOP_BOTTOM), block, seed)
+        return self.encode_rows(img.transpose(Image.Transpose.FLIP_TOP_BOTTOM), block, seed, key)
 
-    def encode_rows(self, img, block, seed=None):
+    def encode_rows(self, img, block, seed=None, key=None):
         """PIL RGBA image whose rows are already in Unity's order (bottom first) -> ASTC blocks."""
         import astc_encoder as A
         data = img.tobytes()
         if self.guided is not None:
-            return self._guided_rows(data, img.width, img.height, tuple(block), seed)
+            return self._guided_rows(data, img.width, img.height, tuple(block), seed, key)
         src = A.ASTCImage(A.ASTCType.U8, img.width, img.height, 1, data)
         return self._context(block).compress(src, A.ASTCSwizzle.from_str('RGBA'))
 
-    def _guided_rows(self, data, w, h, block, seed):
+    def _guided_rows(self, data, w, h, block, seed, key=None):
         """guided_astc writes the blocks that need no search; each group of the others is gathered
         into one image and encoded by astc-encoder (every block on its own: the blocks it would
         write for the whole image, at that group's effort), then put in its place."""
@@ -156,7 +166,17 @@ class Astc:
                                             self.line, self.near, dxt, int(bool(dxt5)))
         for i, n in enumerate(counts):
             self.counts[i] += n
-        for tier, rest in zip(('line', 'near', 'other'), rests):
+        groups = zip(('line', 'near', 'other'), rests)
+        if key is not None and (self.guide or self.recorder) and any(rests):
+            from . import astc_guide
+            hard = b''.join(rests)
+            if self.recorder:                # (making a guide: every tier tried, the chosen blocks kept)
+                G.place(blocks, self.recorder.choose(self, G, data, w, h, block, hard, key)[1], hard)
+                return bytes(blocks)
+            codes = self.guide.codes(key, hard)
+            if codes is not None:
+                groups = ((('guide', i), part) for i, part in enumerate(astc_guide.split(hard, codes)))
+        for tier, rest in groups:
             n = len(rest) // 4
             if not n:
                 continue
@@ -560,7 +580,8 @@ def convert_file(lf, rel, c, enc, sharp_rx, read_stream, stats, log, stream=None
         while pending:
             pid, o, t, sd, streamed, ch, fut = pending.pop(0)
             levels, seed = fut.result() if pool else _prepare(o, ch, _format_name(t), prep, enc.threads, True)
-            blob = b''.join(enc.encode(level, ch.block, seed if i == 0 else None) for i, level in enumerate(levels))
+            blob = b''.join(enc.encode(level, ch.block, seed if i == 0 else None, f'{rel}|{pid}|{i}')
+                            for i, level in enumerate(levels))
             nlevels = len(levels)
             del levels
             store(pid, o, t, sd, streamed, ch, blob, nlevels)
@@ -666,10 +687,21 @@ def texture_files(job, files_rx):
     return [r for r in out if rx.search(r)]
 
 
-def run(job, only=None):
+def run(job, only=None, recorder=None):
+    """recorder: an astc_guide.Recorder (making a guide)."""
     c = dict(DEFAULTS, **job.cfg.get('textures', {}))
     sharp_rx = re.compile('(?i)' + c['sharp_names']) if c['sharp_names'] else None
     enc = Astc(c['quality'], c['threads'], c['mode'], c['guided_max_err'], c['guided_line'], c['guided_near'], job.log)
+    if enc.mode == 'guided':
+        enc.recorder = recorder
+        if c['guide'] and recorder is None:
+            from . import astc_guide
+            if os.path.isfile(c['guide']):
+                enc.guide = astc_guide.Reader(c['guide'], c, job.log)
+            else:
+                job.log(f'textures: no ASTC guide at {c["guide"]}')
+    elif recorder is not None:
+        raise SystemExit('an ASTC guide needs the guided mode (guided_astc installed)')
     stats = dict(textures=0, sprites=0, atlas_entries=0, **{'in': 0, 'out': 0})
     files = texture_files(job, c['files'])
     if only:
@@ -746,6 +778,10 @@ def run(job, only=None):
             job.log(f'textures: {rel}: {(stats["in"] - before[0]) >> 20} -> {(stats["out"] - before[1]) >> 20} MB ({i}/{len(files)})')
     job.log(f'textures: {stats["textures"]} converted ({stats["in"] >> 20} -> {stats["out"] >> 20} MB), '
             f'{stats["atlas_entries"]} atlas entries and {stats["sprites"]} sprites follow their scaled textures')
+    if enc.guide:
+        job.log(f'textures: ASTC guide: {enc.guide.used} texture levels guided, {enc.guide.missed} not in it '
+                f'(searched at {c["quality"]})')
+        enc.guide.close()
     if enc.mode == 'guided' and sum(enc.counts):
         job.log('textures: guided blocks: ' + ', '.join(
             f'{k} {n * 100 / sum(enc.counts):.1f} %' for k, n in
