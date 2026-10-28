@@ -15,6 +15,9 @@
 #                   as a PortMaster without questions)
 #   REHEARSE_IMAGE  the container image (default ua-port-rehearse, built from rehearse/Dockerfile)
 #   PYTHON          a Python with Pillow, for shots.png (default python3)
+#   REHEARSE_DONE   the file a finished setup leaves in the port folder (default .setup_done)
+#   PM_PYTHON       PortMaster's python_3.11.squashfs, for a launcher that mounts it (libs/): unpacked
+#                   into $HOME/python_3.11 in the container instead (mount and umount do nothing there)
 #   EMU_ENV         more variable prefixes for the emulated run (tools/emu/emu.sh), e.g. "UM_"
 #   EMU_ONLY=1      skip the setup: run what an earlier rehearsal in <work> installed
 #   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
@@ -55,12 +58,13 @@ P="$R/ports/$name"
 echo "port $name, launcher $launcher"
 case "$GAME" in
   *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.pkg|*.exe) cp "$GAME" "$P/gamedata/";;
-  *) cp -R "$GAME" "$P/gamedata/";;
+  *) cp -cR "$GAME" "$P/gamedata/" 2>/dev/null || cp -R "$GAME" "$P/gamedata/";;   # (-c: an APFS clone on a Mac, at once)
 esac
 
 # a stand-in for PortMaster: control.txt, the patcher, 7-Zip
 PMD="$R/ports/PortMaster"; mkdir -p "$PMD/utils"
 cp "$PM7Z" "$PMD/7zzs.aarch64"; chmod +x "$PMD/7zzs.aarch64"
+[ -n "${PM_PYTHON:-}" ] && { mkdir -p "$PMD/libs"; cp "$PM_PYTHON" "$PMD/libs/python_3.11.squashfs"; }
 cat > "$PMD/control.txt" <<'TXT'
 # rehearsal stand-in for PortMaster's control.txt
 directory=roms
@@ -95,15 +99,18 @@ esac
 exec /bb/df "$@"
 SH
 chmod +x "$WORK/rbin/df"
+for c in mount umount; do
+  if [ -n "${PM_PYTHON:-}" ]; then printf '#!/bin/sh\nexit 0\n' > "$WORK/rbin/$c"; chmod +x "$WORK/rbin/$c"; else rm -f "$WORK/rbin/$c"; fi
+done
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
 docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
-  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
+  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
-[ -f "$P/.setup_done" ] || { echo "setup did not finish"; tail -20 "$WORK/launch1.log"; exit 1; }
+[ -f "$P/${REHEARSE_DONE:-.setup_done}" ] || { echo "setup did not finish"; tail -20 "$WORK/launch1.log"; exit 1; }
 echo "installed: $(du -sm "$P" | cut -f1) MB; lib: $(ls "$P/lib" | tr '\n' ' ')"
 fi
 [ "$SECS" -gt 0 ] || exit 0
