@@ -98,5 +98,36 @@ class StripsTest(unittest.TestCase):
                                          T.Astc('fastest', 1), 'DXT1'))
 
 
+class DecodeDownscaleTest(unittest.TestCase):
+    """decode_downscale: a band of rows at a time, on several threads, gives the image one decode and
+    one resize give (tall textures: several bands of about 512 source rows)."""
+
+    def _same(self, fmt_name, fmt_id, w, h, nbytes, scale):
+        import random
+        from concurrent.futures import ThreadPoolExecutor
+        from UnityPy.export import Texture2DConverter as C
+        raw = random.Random(w * h).randbytes(nbytes)
+
+        class Tex:
+            m_TextureFormat, m_Width, m_Height, m_PlatformBlob = fmt_id, w, h, None
+
+            def get_image_data(self):
+                return raw
+        nw, nh = round(w * scale), round(h * scale)
+        whole = T.downscale(T.texture_image(C.parse_image_data(raw, w, h, fmt_id, (0, 0, 0, 0), 0), fmt_name), nw, nh)
+        with ThreadPoolExecutor(3) as pool:
+            self.assertEqual(T.decode_downscale(object(), Tex(), nw, nh, fmt_name, pool).tobytes(), whole.tobytes())
+        self.assertEqual(T.decode_downscale(object(), Tex(), nw, nh, fmt_name).tobytes(), whole.tobytes())
+
+    def test_bc7_at_cupheads_scale(self):
+        self._same('BC7', 25, 64, 4096, (64 // 4) * (4096 // 4) * 16, 0.375)
+
+    def test_dxt5_halved(self):
+        self._same('DXT5', 12, 64, 2048, (64 // 4) * (2048 // 4) * 16, 0.5)
+
+    def test_dxt1(self):
+        self._same('DXT1', 10, 64, 2048, (64 // 4) * (2048 // 4) * 8, 0.375)
+
+
 if __name__ == '__main__':
     unittest.main()

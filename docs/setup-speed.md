@@ -46,6 +46,7 @@ Knight's base files and scenes 10-19.
 | after the first garbage collection the long-lived objects are frozen (`gc.freeze()`; once more after UnityPy reads its type tree database, never again) | `unity_io.collect` | ~0.1 s a file in every step (Hollow Knight's shaders + audio in the container: 29 s of their 34 s of CPU) |
 | type-tree arrays of numbers written with one `struct.pack` | UnityPy's `write_value` (recompiled) | one Python call per byte of a shader blob |
 | installer payloads inflated on a thread of their own while the files are written | `macpkg.Ahead` | wait for the card and the inflate in turn |
+| a big scaled texture's bands each hold two copies of their pixels at most, and memory blocks from 1 MB up are mapped on their own and handed back when freed (glibc's `M_MMAP_THRESHOLD`, fixed at 1 MB) | `textures.decode_downscale`, `unity_io.map_big_blocks` | hold four copies of every band on each core, and keep freed image blocks in the heap between files: the textures step's peak memory on 31 Cuphead-sized bundles (202 BC7 pages of 4096 x 4096 and an 8192 x 8192 atlas, scaled 0.375; 4 CPUs, told 895 MB of RAM) 380 MB on average and 524 MB at the atlas, now 261 and 362 MB, the same files (an RG351MP's setup was killed for memory at that atlas) |
 
 ### Before and after
 
