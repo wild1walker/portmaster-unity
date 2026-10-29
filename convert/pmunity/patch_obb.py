@@ -4,6 +4,11 @@
     python -m pmunity patch-obb ggm <game dir> <out file>        the game's globalgamemanagers (its
                                                                  Unity version, for `convert`)
     python -m pmunity patch-obb pack <bundles dir> <game dir>    patch.<version>.<package>.obb
+    python -m pmunity patch-obb check <names file> <bundles dir>... [--game <game dir>]
+                                                                 exits 3 when a copy stopped early: a
+                                                                 bundle shorter than its header says,
+                                                                 or some of the add-on's bundles (the
+                                                                 names file) there and some not
 
 An add-on that comes after the setup (Cuphead's DLC: asset bundles only) is converted on its own
 (`convert` on a folder of the new bundles beside the game's globalgamemanagers) and packed beside the
@@ -15,6 +20,7 @@ textures inlined, the CAB platform set), the OBB the build-id marker. The built 
 import json
 import os
 import shutil
+import struct
 import sys
 import zipfile
 
@@ -48,6 +54,41 @@ def new(bundles, game):
     got = have(game)
     return sorted(n for n in os.listdir(bundles) if not n.startswith('.') and n not in got
                   and os.path.isfile(os.path.join(bundles, n)))
+
+
+def short(path):
+    """(size, the size its header gives) of a UnityFS bundle cut short, else None."""
+    have = os.path.getsize(path)
+    with open(path, 'rb') as f:
+        head = f.read(512)
+    need = 1                                            # (an empty file)
+    if head.startswith(b'UnityFS\0'):
+        try:
+            _, p = AD._cstr(head, 12)
+            _, p = AD._cstr(head, p)
+            need, = struct.unpack_from('>q', head, p)
+        except (ValueError, struct.error):
+            need = len(head) + 1
+    return (have, need) if have < need else None
+
+
+def incomplete(names, dirs, game=None):
+    """What a download or copy that stopped early left out: (the add-on's bundles missing, though
+    some of them are there; [(name, size, header size)] of the bundles cut short). The add-on's
+    bundles count where the installed game already has them."""
+    got = have(game) if game else set()
+    cut = []
+    for d in dirs:
+        for n in sorted(os.listdir(d)):
+            p = os.path.join(d, n)
+            if n.startswith('.') or not os.path.isfile(p):
+                continue
+            got.add(n)
+            s = short(p)
+            if s:
+                cut.append((n, *s))
+    missing = sorted(set(names) - got)
+    return (missing if len(missing) < len(set(names)) else []), cut
 
 
 def ggm(game, out):
@@ -94,5 +135,19 @@ def main(argv):
         ggm(argv[1], argv[2])
     elif len(argv) == 3 and argv[0] == 'pack':
         pack(argv[1], argv[2], log=lambda m: print(m, file=sys.stderr))
+    elif len(argv) >= 3 and argv[0] == 'check':
+        a = argv[1:]
+        game = a[a.index('--game') + 1] if '--game' in a else None
+        if game:
+            del a[a.index('--game'):a.index('--game') + 2]
+        with open(a[0]) as f:
+            names = [n.strip() for n in f if n.strip()]
+        missing, cut = incomplete(names, a[1:], game)
+        if missing or cut:
+            say = [f"{len(missing)} of the {len(names)} add-on bundles missing ({', '.join(missing[:5])}"
+                   f"{', ...' if len(missing) > 5 else ''})"] if missing else []
+            say += [f'{n} cut short: {h} of {s} bytes' for n, h, s in cut[:5]]
+            print('incomplete (a download or copy that stopped early): ' + '; '.join(say), file=sys.stderr)
+            sys.exit(3)
     else:
         sys.exit(__doc__.split('\n\n')[0] + '\n' + __doc__.split('\n\n')[1])
