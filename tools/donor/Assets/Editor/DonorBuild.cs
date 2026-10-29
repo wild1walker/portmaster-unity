@@ -2,7 +2,8 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-// Builds a donor: an empty one-scene game whose APK carries Unity's Android player (build.sh runs it).
+// Builds a donor: a one-scene game (a tiny game of pong, Assets/Scripts/Pong.cs) whose APK carries
+// Unity's Android player (build.sh runs it).
 public static class DonorBuild
 {
     static void Build(ScriptingImplementation backend, string abi, string apk)
@@ -13,14 +14,15 @@ public static class DonorBuild
         EditorPrefs.SetString("AndroidNdkRoot", System.Environment.GetEnvironmentVariable("DONOR_NDK") ?? "");
         System.IO.Directory.CreateDirectory("out");
         var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+        new GameObject("Pong").AddComponent<Pong>();
         EditorSceneManager.SaveScene(scene, "Assets/Donor.unity");
         PlayerSettings.companyName = "portmaster-unity";
-        PlayerSettings.productName = "Donor";
+        PlayerSettings.productName = "Pong";
         PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "org.portmasterunity.donor");
         PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, backend);
         PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Android, ApiCompatibilityLevel.NET_2_0);
         PlayerSettings.strippingLevel = StrippingLevel.Disabled;
-        PlayerSettings.stripEngineCode = false;     // (IL2CPP: else libunity is relinked without what the empty scene leaves unused)
+        PlayerSettings.stripEngineCode = false;     // (IL2CPP: else libunity is relinked without what the small game leaves unused)
         // ARM64: PlayerSettings.Android.targetArchitectures (2017.4.16+); ARMv7: targetDevice
         var arch = typeof(PlayerSettings.Android).GetProperty("targetArchitectures");
         if (arch != null)

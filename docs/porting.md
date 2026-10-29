@@ -160,7 +160,7 @@ the checksums of `libmain.so` and `libunity.so` into the setup, which then check
 
 A setup that needs no network gets the player from donors instead: small games of the port's own,
 built with the game's Unity version and a free Unity licence (`tools/donor/build.sh <editor>
-MonoArmv7|Il2cppArm64 <out>`: one empty scene, no engine stripping), shipped in the port; the setup
+MonoArmv7|Il2cppArm64 <out>`: a one-scene game of pong, no engine stripping), shipped in the port; the setup
 runs `pmunity player donor <version> PKG --apk <donor.apk>` (an IL2CPP donor's player with `--managed`
 takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead's setups do this.
 
