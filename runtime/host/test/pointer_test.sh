@@ -41,7 +41,7 @@ RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend 
 MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
-    for s in off mouse touch keymap toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done
+    for s in off mouse touch keymap swap toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done
     for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=\$O \$O/test_osk \$s; done
     for s in off on; do LD_LIBRARY_PATH=\$O/msaa \$O/test_msaafix \$s; done
     for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=\$O/trace \$O/test_gltrace \$s; done
@@ -54,7 +54,7 @@ if [ "$ARCH" = arm64 ]; then
 fi
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c "O=out/test CC=arm-linux-gnueabihf-gcc; $run"
 docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookworm-slim sh -c \
-  'for s in off mouse touch keymap toggle es2; do LD_LIBRARY_PATH=out/test out/test/test_pointer $s; done
+  'for s in off mouse touch keymap swap toggle es2; do LD_LIBRARY_PATH=out/test out/test/test_pointer $s; done
    for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=out/test out/test/test_osk $s; done
    for s in off on; do LD_LIBRARY_PATH=out/test/msaa out/test/test_msaafix $s; done
    for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=out/test/trace out/test/test_gltrace $s; done
