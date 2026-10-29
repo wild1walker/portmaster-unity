@@ -108,5 +108,14 @@ class MacpkgTest(unittest.TestCase):
         self.assertEqual(self.read('Applications', 'x'), b'x')       # no bundle name: the install location
         self.assertEqual(os.listdir(root), ['Applications'])
 
+    def test_incomplete_installer(self):
+        data = gog_pkg('dlc', [('Contents/Data/a', b'dlc a' * 1000)])
+        pkg = self.write('dlc.pkg', data[:-200])                     # a download that stopped early
+        with self.assertRaisesRegex(macpkg.Incomplete, 'dlc.pkg is incomplete'):
+            macpkg.extract(pkg, os.path.join(self.tmp, 'root'), log=lambda *a: None)
+        with self.assertRaises(SystemExit) as e:
+            macpkg.main([os.path.join(self.tmp, 'root'), pkg])
+        self.assertEqual(e.exception.code, 3)
+
 if __name__ == '__main__':
     unittest.main()

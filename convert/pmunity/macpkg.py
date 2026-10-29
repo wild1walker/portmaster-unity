@@ -45,6 +45,10 @@ class Region:
         return True
 
 
+class Incomplete(ValueError):
+    pass
+
+
 class Xar:
     def __init__(self, path):
         self.f = open(path, 'rb')
@@ -55,6 +59,14 @@ class Xar:
         self.f.seek(hsize)
         self.toc = ET.fromstring(zlib.decompress(self.f.read(toc_c)))
         self.heap = hsize + toc_c
+        # a download or copy that stopped early: the table of contents is whole but the data it
+        # points to is not (GOG's installers keep PackageInfo after the game, at the very end)
+        need = self.heap + max((int(d.findtext('offset')) + int(d.findtext('length'))
+                                for d in self.toc.iter('data')), default=0)
+        have = os.fstat(self.f.fileno()).st_size
+        if have < need:
+            raise Incomplete(f'{os.path.basename(path)} is incomplete: {have} of {need} bytes '
+                             '(a download or copy that stopped early); download or copy it again')
 
     def files(self):
         """(path, element) of every file in the archive."""
@@ -409,7 +421,11 @@ def main(argv):
     root = argv[0]
     os.makedirs(root, exist_ok=True)
     for pkg in argv[1:]:
-        n, total, links = extract(pkg, root)
+        try:
+            n, total, links = extract(pkg, root)
+        except Incomplete as e:
+            print(e, file=sys.stderr)
+            sys.exit(3)
         print(f'{os.path.basename(pkg)}: {n} files, {total >> 20} MB' + (f', {links} symbolic links skipped' if links else ''))
 
 
