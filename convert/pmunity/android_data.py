@@ -1905,6 +1905,7 @@ def main(argv=None):
 
 # --------------------------------------------------------------------------- zip archives
 
+NO_SPACE = 4                    # the exit status when the card is too full to pack (the setup says so)
 ZIP_LIMIT = 2 ** 31 - 1     # libunity reads archives with fopen/fseek(long)/ftell: 32-bit offsets
 
 
@@ -2041,6 +2042,18 @@ def split_big_apk(apk_entries, limit=None):
     return [e for e in apk_entries if e[0] not in keep], sorted(moved)
 
 
+def check_space(zdir, entries, replaced, log):
+    """Exits NO_SPACE when the archives of these entries would leave less than 1 GiB free in zdir
+    (the archives in replaced, written again, free their old copies)."""
+    need = sum(len(p) if isinstance(p, bytes) else os.path.getsize(p) for a, p in entries)
+    st = os.statvfs(zdir)
+    free = st.f_bavail * st.f_frsize + sum(os.path.getsize(p) for p in replaced if os.path.isfile(p))
+    if free < need + (1 << 30):
+        log(f'pack: the APK and OBB need {need / 2**30:.2f} GiB, {free / 2**30:.2f} GiB free (keeping 1 GiB spare): '
+            f'free {(need + (1 << 30) - free) / 2**30:.1f} GiB more on the card')
+        raise SystemExit(NO_SPACE)
+
+
 def pack(args, log):
     """APK = assets/bin/Data/** (what Unity reads first: Mono assemblies, settings, scenes);
     main OBB = assets/AssetBundles/**, assets/Logo.png and the build-id marker; a patch OBB takes
@@ -2107,6 +2120,10 @@ def pack(args, log):
             log(f'pack: the data passes 2 GiB: {len(moved)} files of later scenes and resources '
                 f'({sum(os.path.getsize(p) for a, p in moved) / 2**30:.2f} GiB) go into the OBBs, as Unity\'s '
                 f'"split application binary" does (the player looks bin/Data up in every mounted archive)')
+    # the space both archives need, checked before either is written (a full card stops here, not
+    # after the APK); an archive written again frees its old copy
+    check_space(zdir, (apk_entries if pack_what in ('apk', 'all') else []) + (obb_entries if pack_what in ('obb', 'all') else []),
+                (apk, main_obb, patch_obb), log)
     if pack_what in ('apk', 'all'):
         _write_zip(apk, apk_entries, log)
         verify_zip(apk, apk_entries, log)
@@ -2116,7 +2133,8 @@ def pack(args, log):
         st = os.statvfs(zdir)
         free = st.f_bavail * st.f_frsize
         if free < need + (1 << 30):
-            raise SystemExit(f'pack: OBB needs {need / 2**30:.2f} GiB, only {free / 2**30:.2f} GiB free (keeping 1 GiB spare)')
+            log(f'pack: OBB needs {need / 2**30:.2f} GiB, only {free / 2**30:.2f} GiB free (keeping 1 GiB spare)')
+            raise SystemExit(NO_SPACE)
         main, rest, size = list(marker), [], 0
         for a, p in obb_entries:
             sz = os.path.getsize(p) + 30 + 46 + 2 * len(a) + 8
