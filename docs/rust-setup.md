@@ -57,10 +57,12 @@ Later (on top of `unityfs`): the convert job and its steps, `android-data`, `pat
 
 The image `ua-rust` (arm64 Debian bookworm) has Rust 1.88 with the `aarch64-unknown-linux-musl`
 target, and the reference Python: PortMaster's `python_3.11` at `/opt/py` with the setup's
-packages at `/opt/pylibs`. On Apple silicon it runs natively.
+packages at `/opt/pylibs`. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
+live in Docker volumes (bind mounts of the host's disks are slow; a build's output is copied out
+with `docker cp` or a `cat` from the container when needed).
 
 ```bash
-RS_ROOT=<a folder for builds> setup-rs/tools/rs.sh <worktree> cargo test
+RS_ROOT=<the shared setup's folder> setup-rs/tools/rs.sh <worktree> cargo test
 RS_ROOT=... setup-rs/tools/rs.sh <worktree> cargo build --release --target aarch64-unknown-linux-musl
 ```
 
