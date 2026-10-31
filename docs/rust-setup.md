@@ -77,6 +77,11 @@ APKs), `guides/` (ASTC guides), `cuphead/` (`cuphead.json`, `animclips.py`, `dlc
 are mounted read-only: a test that changes files works on its own copy in a scratch folder. Unit
 tests use small made-up data built in the test (no Unity or game files in the repository).
 
+`shaderx`'s golden data comes from the reference Python: `tests/golden/shaderx_golden.py <data>
+<config.json> <out> [--converted <converted data>]` runs the shaders step's own code on every Shader
+and saves inputs, outputs and every program translation to `<out>`; then
+`rs.sh <worktree> env SHADERX_GOLDEN=<out> cargo test --release -p shaderx` compares them.
+
 ## Rules
 
 - Byte-identical outputs (above). Exit statuses and the files a command leaves are part of it.
