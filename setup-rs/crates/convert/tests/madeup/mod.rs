@@ -851,6 +851,204 @@ pub fn game(db: &ClassDb, dir: &Path) {
         "StreamingAssets/AssetBundles/tmpfont_text",
         b"not a bundle\n",
     );
+    textures_of(db, dir);
+}
+
+/// Bytes that look random (xorshift), for texture pixels the encoder has to search.
+pub fn noise(seed: u64, n: usize) -> Vec<u8> {
+    let mut x = seed | 1;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 24) as u8
+        })
+        .collect()
+}
+
+/// Smooth RGBA pixels (gradients with a little noise): what the encoder fits or searches.
+pub fn pixels(seed: u64, w: usize, h: usize) -> Vec<u8> {
+    let n = noise(seed, w * h);
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let k = n[y * w + x] / 16;
+            out.extend_from_slice(&[
+                (x * 255 / w.max(1)) as u8 ^ k,
+                (y * 255 / h.max(1)) as u8,
+                ((x + y) * 3) as u8 ^ (seed as u8),
+                if (x / 8 + y / 8) % 3 == 0 { 0 } else { 255 - k },
+            ]);
+        }
+    }
+    out
+}
+
+/// DXT1 (8 bytes) or DXT5 (16) blocks of a w x h texture: two-colour blocks with noisy indices.
+pub fn dxt(seed: u64, w: usize, h: usize, dxt5: bool) -> Vec<u8> {
+    let blocks = w.div_ceil(4) * h.div_ceil(4);
+    let n = noise(seed, blocks * 8);
+    let mut out = Vec::new();
+    for b in 0..blocks {
+        let r = &n[b * 8..b * 8 + 8];
+        if dxt5 {
+            out.extend_from_slice(&[255, (b % 251) as u8, r[0], r[1], r[2], r[3], r[4], r[5]]);
+        }
+        let c0 = 0x8000u16 | (b as u16 % 0x7fff);
+        let c1 = c0 / 3;
+        out.extend_from_slice(&c0.to_le_bytes());
+        out.extend_from_slice(&c1.to_le_bytes());
+        out.extend_from_slice(&r[4..8]);
+    }
+    out
+}
+
+/// The textures step's files: a scene's assets with streamed textures (scaled, sharp, kept,
+/// readable, too small, a sprite and an atlas that follow), a big unscaled one (strips, when
+/// the scale is 1), an inline one; a bundle of atlas textures (written inline); one the `files`
+/// regex leaves out.
+fn textures_of(db: &ClassDb, dir: &Path) {
+    let o = |class_id, path_id, value| Obj {
+        class_id,
+        path_id,
+        value,
+    };
+    let mut res = Vec::new();
+    let mut add = |data: Vec<u8>| {
+        while res.len() % 16 != 0 {
+            res.push(0);
+        }
+        let off = res.len() as u32;
+        let size = data.len() as u32;
+        res.extend_from_slice(&data);
+        (off, size)
+    };
+    let stream = "sharedassets3.assets.resS";
+    let mut objs = Vec::new();
+    let mut tex = |pid: i64,
+                   name: &str,
+                   (w, h): (usize, usize),
+                   fmt: i32,
+                   data: Vec<u8>,
+                   objs: &mut Vec<Obj>| {
+        let (off, size) = add(data);
+        objs.push(o(
+            28,
+            pid,
+            texture(
+                db,
+                name,
+                (w as i32, h as i32),
+                fmt,
+                &[],
+                Some((off, size, stream)),
+            ),
+        ));
+    };
+    tex(
+        1,
+        "big_background",
+        (256, 128),
+        10,
+        dxt(1, 256, 128, false),
+        &mut objs,
+    );
+    tex(
+        2,
+        "title_card_logo",
+        (128, 64),
+        12,
+        dxt(2, 128, 64, true),
+        &mut objs,
+    );
+    tex(3, "small_icon", (64, 64), 4, pixels(3, 64, 64), &mut objs);
+    tex(4, "tiny", (2, 2), 4, pixels(4, 2, 2), &mut objs);
+    tex(
+        5,
+        "boss_sheet",
+        (2048, 2048),
+        10,
+        dxt(5, 2048, 2048, false),
+        &mut objs,
+    );
+    tex(
+        6,
+        "readable_mask",
+        (32, 32),
+        4,
+        pixels(6, 32, 32),
+        &mut objs,
+    );
+    let mut readable = objs.pop().unwrap();
+    readable
+        .value
+        .set("m_IsReadable", Value::Bool(true))
+        .unwrap();
+    objs.push(readable);
+    objs.push(o(
+        28,
+        7,
+        texture(db, "inline_glyph", (32, 32), 4, &pixels(7, 32, 32), None),
+    ));
+    objs.push(o(213, 8, sprite(db, "background", 1)));
+    objs.push(o(687078895, 9, sprite_atlas(db, "atlas", &[1, 3, 2])));
+    write(
+        dir,
+        "sharedassets3.assets",
+        &serialized(db, &objs, &[], true),
+    );
+    write(dir, "sharedassets3.assets.resS", &res);
+    // an atlas bundle: its textures stream from its .resS node
+    let cab = "CAB-a71a5a71a5a71a5a71a5a71a5a71a5a7";
+    let path = format!("archive:/{cab}/{cab}.resS");
+    let mut node = Vec::new();
+    let mut objs = Vec::new();
+    for (pid, name, w, fmt) in [
+        (1, "atlas_page_0", 512usize, 12),
+        (2, "atlas_page_1", 256, 10),
+    ] {
+        while node.len() % 16 != 0 {
+            node.push(0);
+        }
+        let d = dxt(pid as u64 + 10, w, w, fmt == 12);
+        objs.push(o(
+            28,
+            pid,
+            texture(
+                db,
+                name,
+                (w as i32, w as i32),
+                fmt,
+                &[],
+                Some((node.len() as u32, d.len() as u32, &path)),
+            ),
+        ));
+        node.extend_from_slice(&d);
+    }
+    objs.push(o(213, 3, sprite(db, "page_sprite", 2)));
+    let sf = serialized(db, &objs, &[], true);
+    write(
+        dir,
+        "StreamingAssets/AssetBundles/atlas_main",
+        &bundle(&[(cab, 4, sf), (&format!("{cab}.resS"), 0, node)], 1 << 17),
+    );
+    // a bundle the files regex leaves out
+    let sf = serialized(
+        db,
+        &[o(
+            28,
+            1,
+            texture(db, "ui", (64, 64), 4, &pixels(9, 64, 64), None),
+        )],
+        &[],
+        true,
+    );
+    write(
+        dir,
+        "StreamingAssets/AssetBundles/ui_bundle",
+        &bundle(&[("CAB-c0c0", 4, sf)], 1 << 17),
+    );
 }
 
 /// Cuphead's config, as portmaster-cuphead's convert/cuphead.json has it.

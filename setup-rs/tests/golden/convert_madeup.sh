@@ -20,6 +20,23 @@ rm -rf "$src"
 "$tgt/examples/madeup" "$src"
 cp "$anim" "$src/animclips.py"
 echo '{"steps": ["shaders", "settings", "audio"]}' > "$src/defaults.json"
+# an ASTC guide of the atlas bundle's textures, made by the Python (astc_guide.py, which needs numpy:
+# fetched with pip into the scratch folder when the image has none) for Cuphead's settings
+pyx() { PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH="$wt/convert:/opt/pylibs:$out/numpy" /opt/py/bin/python3 "$@"; }
+if ! pyx -c 'import numpy' 2>/dev/null; then
+  # (PortMaster's Python has no ssl module for pip: the wheel comes with curl)
+  whl=$(curl -fsSL https://pypi.org/pypi/numpy/2.2.6/json | pyx -c 'import json, sys
+print(next(u["filename"] + " " + u["url"] for u in json.load(sys.stdin)["urls"]
+           if "cp311-cp311-manylinux" in u["filename"] and "aarch64" in u["filename"]))' 2>/dev/null) &&
+    curl -fsSL -o "$out/${whl%% *}" "${whl#* }" &&
+    pyx -m pip install -q --no-index --target "$out/numpy" "$out/${whl%% *}" > /dev/null 2>&1 || true
+fi
+if pyx -m pmunity astc-guide "$src/Data" "$src/guide_fast.bin" --config "$src/cuphead.json" --set textures.quality=fast \
+     --target fast --only atlas_main > "$src/guide.txt" 2>&1; then
+  GUIDE=$src/guide_fast.bin
+else
+  echo "(no ASTC guide: textures_guide skipped)"; tail -n 3 "$src/guide.txt"; GUIDE=
+fi
 
 impl() {  # impl py|rs <args...>: one convert run (from the run folder)
   side=$1; shift
@@ -56,17 +73,21 @@ case_() {
   fi
 }
 
-case_ cuphead - - Data $C $STEPS
-case_ again both "$C $STEPS" Data $C $STEPS
-case_ resumed both "$C --steps shaders" Data $C $STEPS
-case_ from_python py "$C --steps shaders,settings" Data $C $STEPS
-case_ from_pmu rs "$C --steps shaders,settings,audio" Data $C $STEPS
+case_ cuphead - - Data $C
+case_ again both "$C" Data $C
+case_ resumed both "$C --steps shaders" Data $C
+case_ from_python py "$C --steps shaders,settings,textures" Data $C
+case_ from_pmu rs "$C --steps shaders,settings,textures" Data $C
+case_ textures_unscaled - - Data $C --steps textures --set textures.scale=1.0 --set textures.scale_sharp=1.0 --set textures.inline=true --set textures.inline_streams=false
+case_ textures_search - - Data $C --steps textures --set textures.mode=search --set textures.quality=fastest --set textures.mips=keep
+[ -n "$GUIDE" ] && case_ textures_guide - - Data $C --steps textures --set "textures.guide=$GUIDE"
+case_ textures_only - - Data $C --steps textures --only atlas_
 case_ budget_none - - Data $C $STEPS --set audio.pcm_budget_mb=null --set audio.compressed_min_s=10
 case_ budget_float - - Data $C $STEPS --set audio.pcm_budget_mb=4.5 --set audio.resident_scenes=1
 case_ audio_cfg both "$C --steps audio" Data $C --steps audio --set audio.compressed_min_s=3
 case_ options - - Data $C $STEPS --set shaders.precision=highp --set shaders.glcore4x=true --set settings.audio_sample_rate=24000 --set settings.real_voices=16 --set settings.graphics_apis=null
 case_ defaults - - Data --config "$src/defaults.json"
-case_ overlay - - Data Out $C $STEPS
+case_ overlay - - Data Out $C
 case_ unknown_step - - Data $C --steps settings,nope
 case_ no_data - - Missing $C
 echo "$fails failed"

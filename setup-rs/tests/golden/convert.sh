@@ -21,13 +21,13 @@
 #   both   the Python and pmu, each on its own copy (twice the data's size free): logs (timings
 #          and the copies' paths apart), statuses and trees compared with each other
 #
-# Default: rs-py py-rs. Trees are compared file by file (convert_compare.py: bytes, empty folders,
+# Default: rs py-rs. Trees are compared file by file (convert_compare.py: bytes, empty folders,
 # the journal with audio.switch in any order); logs and trees are kept under <scratch>/<mode> until
 # the next run of that mode, the data copies are removed. Exits 1 when a mode differs.
 set -u
 S=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
-MODES=${*:-rs-py py-rs}
+MODES=${*:-rs py-rs}
 HERE=$(cd "$(dirname "$0")" && pwd)
 WT=$(cd "$HERE/../../.." && pwd)
 PMU=${PMU:-${CARGO_TARGET_DIR:-$WT/setup-rs/target}/aarch64-unknown-linux-musl/release/pmu}

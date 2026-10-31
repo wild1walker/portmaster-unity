@@ -66,8 +66,8 @@ error's message. Anything not ported stops the run with status 2 and says so, af
 before it have journaled their files, so a setup can run the Python on the same folder to finish:
 the `quality` step, plugins other than animclips, shaders from Direct3D 11, Vulkan or Metal,
 compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off), `grab_fetch`,
-`fused_post`, and the textures step until texcodec is wired in (its Unity-file layer is here,
-behind `steps::textures::Codec`).
+`fused_post`. The textures step is textures.py's Unity-file layer in `convert` with texcodec as
+its per-texture codec (`steps::textures::Codec`; the made-up tests also run it with a stand-in).
 
 `pmu journal-files <data>/.pmunity.json` prints the files the journal's steps have finished (0
 when there is none), as resume.txt's `journal_files` does with Python, for the setup's loop that
@@ -80,7 +80,9 @@ Tests: `cargo test -p convert` (with `PMU_TPK` set to UnityPy's lzma.tpk) runs t
 data (crates/convert/tests/madeup: Unity 2017.4 files written from the class database's type
 trees, bundles laid out as Unity writes them). `tests/golden/convert_madeup.sh <dir>` runs the
 Python and pmu on copies of that data, case by case (Cuphead's arguments, reruns, a run continued
-by the other implementation, options, errors), and compares statuses, output and trees;
+by the other implementation, the textures step unscaled (strips), in search mode, with an ASTC guide
+the Python makes for the data (astc_guide.py: numpy, fetched with curl when the image has none),
+options, errors), and compares statuses, output and trees;
 `tests/golden/convert.sh <dir> [rs|rs-py|py-rs|both]` does it on Cuphead's data from
 `$PMU_TEST_DATA` with the setup's arguments, against `converted-fast`.
 

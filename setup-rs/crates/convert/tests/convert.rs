@@ -95,6 +95,7 @@ fn cuphead_steps_on_made_up_data() {
             "sharedassets0.assets",
             "sharedassets1.assets",
             "sharedassets2.assets",
+            "sharedassets3.assets",
             "Resources/unity_builtin_extra",
             "StreamingAssets/AssetBundles/tmpfont_big",
             "StreamingAssets/AssetBundles/tmpfont_main",
@@ -216,9 +217,25 @@ fn cuphead_steps_on_made_up_data() {
     cli::run(&cuphead(&dir, "shaders,settings,audio,animclips")).unwrap();
     assert_eq!(tree(&data), after);
 
-    // the textures step is not ported: status 2, after the journal of the steps before it
-    let e = cli::run(&cuphead(&dir, "settings,textures")).unwrap_err();
-    assert_eq!(e.status(), 2);
+    // the textures step: the files its regex names, the scaled textures journaled
+    cli::run(&cuphead(&dir, "textures")).unwrap();
+    let j = journal(&data);
+    assert_eq!(
+        strs(j.get("done").unwrap().get("textures").unwrap()),
+        [
+            "resources.assets",
+            "sharedassets0.assets",
+            "sharedassets1.assets",
+            "sharedassets2.assets",
+            "sharedassets3.assets",
+            "StreamingAssets/AssetBundles/atlas_main",
+            "StreamingAssets/AssetBundles/atlas_other",
+        ]
+    );
+    assert_eq!(
+        j.get("scaled").unwrap().dumps(),
+        r#"{"sharedassets3.assets": {"1": [256, 128, 96, 48], "2": [128, 64, 64, 32], "5": [2048, 2048, 768, 768]}, "StreamingAssets/AssetBundles/atlas_main": {"1": [512, 512, 192, 192], "2": [256, 256, 96, 96]}}"#
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

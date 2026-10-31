@@ -9,11 +9,11 @@
 //! aligned, or inline), the textures it leaves and the meshes that stream from the same file
 //! copied into the new stream, sprite atlases and sprites of scaled textures fixed
 //! (fix_references), then the file and its stream committed together and the sizes journaled
-//! (`scaled`). The codec is texcodec's; without it the step stops as not ported.
+//! (`scaled`). The codec is texcodec's (decoding, scaling, guided ASTC, the guide).
 use super::{field, field_mut, float, int, objects, opt, section, Args};
 use crate::error::{Error, Result};
 use crate::job::{text, Job};
-use crate::pyjson::Json;
+use crate::pyjson::{format_f, Json};
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -72,10 +72,162 @@ pub trait Codec {
     fn summary(&mut self) -> Vec<String>;
 }
 
-/// The step's codec for its settings (logging what the Python logs while it sets up: a missing
-/// guide), or not ported.
-fn codec(_c: &Json, _job: &Job) -> Result<Box<dyn Codec>> {
-    Err(Error::NotPorted("the textures step (texcodec)".into()))
+/// A config value as texcodec takes its settings (serde_json).
+fn to_serde(v: &Json) -> serde_json::Value {
+    use serde_json::Value as V;
+    match v {
+        Json::Null => V::Null,
+        Json::Bool(b) => V::Bool(*b),
+        Json::Int(i) => match (i64::try_from(*i), u64::try_from(*i)) {
+            (Ok(x), _) => V::from(x),
+            (_, Ok(x)) => V::from(x),
+            _ => V::from(*i as f64),
+        },
+        Json::Float(f) => serde_json::Number::from_f64(*f).map_or(V::Null, V::Number),
+        Json::Str(s) => V::String(s.clone()),
+        Json::List(l) => V::Array(l.iter().map(to_serde).collect()),
+        Json::Dict(d) => V::Object(d.iter().map(|(k, x)| (k.clone(), to_serde(x))).collect()),
+    }
+}
+
+fn tex_err(e: texcodec::Error) -> Error {
+    match e {
+        texcodec::Error::Io(e) => Error::Io(e),
+        e => Error::Value(e.to_string()),
+    }
+}
+
+/// texcodec as the step's codec: its settings, encoder and guide (textures.py's Astc and
+/// astc_guide.Reader).
+struct TexCodec {
+    s: texcodec::texture::Settings,
+    enc: texcodec::astc::Encoder,
+    quality: String,
+}
+
+impl TexCodec {
+    fn texture<'a>(t: &'a Tex, name: &'a str) -> texcodec::texture::Texture<'a> {
+        texcodec::texture::Texture {
+            name,
+            width: t.width,
+            height: t.height,
+            format: t.format,
+            mip_count: t.mip_count,
+            is_readable: t.is_readable,
+            dimension: t.dimension,
+            image_count: t.image_count,
+            platform: t.platform,
+            platform_blob: &t.platform_blob,
+            version: t.version,
+        }
+    }
+}
+
+impl Codec for TexCodec {
+    fn choose(&self, t: &Tex) -> Option<Choice> {
+        let name = String::from_utf8_lossy(&t.name);
+        texcodec::texture::choose(&Self::texture(t, &name), &self.s).map(|c| Choice {
+            block: c.block,
+            width: c.width,
+            height: c.height,
+            alpha: c.alpha,
+            mips: c.mips,
+        })
+    }
+
+    fn convert(
+        &mut self,
+        t: &Tex,
+        raw: &[u8],
+        ch: &Choice,
+        key: &str,
+        unity: Option<&str>,
+    ) -> Result<Converted> {
+        let name = String::from_utf8_lossy(&t.name);
+        let c = texcodec::texture::Choice {
+            block: ch.block,
+            width: ch.width,
+            height: ch.height,
+            alpha: ch.alpha,
+            mips: ch.mips,
+        };
+        let out = texcodec::texture::convert(
+            &Self::texture(t, &name),
+            raw,
+            &c,
+            &self.s,
+            &mut self.enc,
+            key,
+            unity,
+        )
+        .map_err(tex_err)?;
+        Ok(Converted {
+            format: out.format,
+            width: out.width,
+            height: out.height,
+            mip_count: out.mip_count,
+            data: out.data,
+        })
+    }
+
+    fn summary(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(g) = &self.enc.guide {
+            out.push(format!(
+                "textures: ASTC guide: {} texture levels guided, {} not in it (searched at {})",
+                g.used, g.missed, self.quality
+            ));
+        }
+        let total: u64 = self.enc.counts.iter().sum();
+        if self.enc.settings.guided && total > 0 {
+            let names = [
+                "one colour",
+                "fitted",
+                "DXT seed",
+                "one partition",
+                "two partitions",
+                "searched",
+            ];
+            let parts: Vec<String> = names
+                .iter()
+                .zip(self.enc.counts)
+                .map(|(k, n)| format!("{k} {} %", format_f(n as f64 * 100.0 / total as f64, 1)))
+                .collect();
+            out.push(format!("textures: guided blocks: {}", parts.join(", ")));
+        }
+        out
+    }
+}
+
+/// The step's codec for its settings: textures.py's Astc (the quality and mode checked) and,
+/// guided, the ASTC guide `guide` names, with what the Python logs while it sets them up.
+fn codec(c: &Json, job: &Job) -> Result<Box<dyn Codec>> {
+    let s = texcodec::texture::Settings::from_config(Some(&to_serde(c))).map_err(tex_err)?;
+    let es = s.encoder().map_err(tex_err)?;
+    let mut guide = None;
+    if es.guided && opt(c, "guide").truthy() {
+        let p = PathBuf::from(&s.guide);
+        if p.is_file() {
+            let g = texcodec::guide::Guide::open(&p, &s.json).map_err(tex_err)?;
+            if !g.ok {
+                job.log(&format!(
+                    "textures: {} was made for other texture settings: not used",
+                    p.file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default()
+                ));
+            }
+            guide = Some(g);
+        } else {
+            job.log(&format!(
+                "textures: no ASTC guide at {}",
+                opt(c, "guide").to_str()
+            ));
+        }
+    }
+    let quality = opt(c, "quality").to_str();
+    let enc = texcodec::astc::Encoder::new(es, guide).map_err(tex_err)?;
+    Ok(Box::new(TexCodec { s, enc, quality }))
 }
 
 fn defaults() -> Vec<(&'static str, Json)> {
