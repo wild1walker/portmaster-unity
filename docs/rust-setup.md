@@ -77,6 +77,18 @@ APKs), `guides/` (ASTC guides), `cuphead/` (`cuphead.json`, `animclips.py`, `dlc
 are mounted read-only: a test that changes files works on its own copy in a scratch folder. Unit
 tests use small made-up data built in the test (no Unity or game files in the repository).
 
+`unityfs`'s golden test runs the crate (its example `golden`) and the Python (pmunity with UnityPy)
+over every Unity file of a data folder and compares what each reads and writes: every object's
+value tree and its bytes written back, the file saved unchanged, after an edit, and (a bundle) with
+its textures inlined, every block decompressed and compressed again, the platform patched in place:
+
+```bash
+RS_ROOT=... setup-rs/tools/rs.sh <worktree> sh tests/golden/unityfs.sh "$PMU_TEST_DATA/Cuphead.app/Contents/Resources/Data" <scratch>/out
+```
+
+A build folder in a Docker volume (`RS_MOUNTS="$RS_MOUNTS <volume>:/rt"`, `CARGO_TARGET_DIR=/rt`)
+builds far faster than one on a shared host folder.
+
 ## Rules
 
 - Byte-identical outputs (above). Exit statuses and the files a command leaves are part of it.
