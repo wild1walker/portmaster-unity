@@ -96,6 +96,7 @@ fn cuphead_steps_on_made_up_data() {
             "sharedassets1.assets",
             "sharedassets2.assets",
             "Resources/unity_builtin_extra",
+            "StreamingAssets/AssetBundles/tmpfont_big",
             "StreamingAssets/AssetBundles/tmpfont_main",
             "StreamingAssets/AssetBundles/tmpfont_ready",
             "StreamingAssets/AssetBundles/tmpfont_scenes",
@@ -187,6 +188,10 @@ fn cuphead_steps_on_made_up_data() {
     assert_eq!(plats("Resources/unity_builtin_extra", 8), [4]);
     assert_eq!(
         plats("StreamingAssets/AssetBundles/tmpfont_main", 1),
+        [9, 15]
+    );
+    assert_eq!(
+        plats("StreamingAssets/AssetBundles/tmpfont_big", 1),
         [9, 15]
     );
     let after = tree(&data);

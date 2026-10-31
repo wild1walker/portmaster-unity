@@ -798,6 +798,19 @@ pub fn game(db: &ClassDb, dir: &Path) {
             1 << 12,
         ),
     );
+    // a bundle of more than 64 MB: the step opens it from its unpacked nodes (bigbundle)
+    let big: Vec<u8> = (0..(66u32 << 20)).map(|i| (i / 4096 % 251) as u8).collect();
+    write(
+        dir,
+        "StreamingAssets/AssetBundles/tmpfont_big",
+        &bundle(
+            &[
+                ("CAB-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 4, font.clone()),
+                ("CAB-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.resS", 0, big),
+            ],
+            1 << 17,
+        ),
+    );
     let gles = serialized(
         db,
         &[o(48, 1, shader(db, "TMP/Ready", ShaderKind::HasGles))],
