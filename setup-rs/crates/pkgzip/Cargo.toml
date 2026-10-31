@@ -1,0 +1,17 @@
+[package]
+name = "pkgzip"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Installers and zips: macOS .pkg (xar, cpio, pbzx), zip reading and extraction, the aligned STORE zip writer, Unity's player from donor APKs, patch-obb's simple commands"
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+crc32fast = "1"
+roxmltree = "0.20"
+serde_json = "1"
+lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "optimization"] }
+bzip2 = "0.6"
+
+[dev-dependencies]
+lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "encoder"] }

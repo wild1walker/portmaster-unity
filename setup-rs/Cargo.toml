@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["pmu", "crates/shaderx", "crates/unityfs"]   # (each crate under crates/ is added here)
+members = ["pmu", "crates/pkgzip", "crates/shaderx", "crates/unityfs"]   # (each crate under crates/ is added here)
 
 [workspace.package]
 edition = "2021"

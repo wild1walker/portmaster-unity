@@ -10,3 +10,4 @@ name = "pmu"
 path = "src/main.rs"
 
 [dependencies]
+pkgzip = { path = "../crates/pkgzip" }
