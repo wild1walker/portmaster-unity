@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unity Port Prepatcher</title>
+<style>
+:root {
+  --bg: #f6f6f3; --card: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+  --accent: #2f6fdf; --accent-ink: #ffffff; --ok: #1f8a4c; --warn: #b26a00; --bad: #c0392b;
+  --code: #f0efea; --drop: #eef3fd;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151514; --card: #1f1f1d; --ink: #ecebe6; --muted: #9c9b94; --line: #33332f;
+    --accent: #6d9cf0; --accent-ink: #0d1424; --ok: #4cc27f; --warn: #e3a440; --bad: #ef6b5d;
+    --code: #262624; --drop: #1d2536;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151514; --card: #1f1f1d; --ink: #ecebe6; --muted: #9c9b94; --line: #33332f;
+  --accent: #6d9cf0; --accent-ink: #0d1424; --ok: #4cc27f; --warn: #e3a440; --bad: #ef6b5d;
+  --code: #262624; --drop: #1d2536;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0 0 10px; display: flex; gap: 8px; align-items: baseline; }
+h2 .n { color: var(--muted); font-weight: 500; }
+p { margin: 6px 0; }
+.sub { color: var(--muted); margin-bottom: 20px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 14px 0; }
+.card.off { opacity: .5; pointer-events: none; }
+.drop { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; text-align: center; color: var(--muted); }
+.drop.hover { border-color: var(--accent); background: var(--drop); color: var(--ink); }
+.row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin-top: 8px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.need { background: var(--code); border-radius: 6px; padding: 10px 12px; margin-top: 10px; white-space: pre-wrap; }
+.msg { margin-top: 10px; padding: 9px 12px; border-radius: 6px; border-left: 3px solid var(--warn); background: var(--code); }
+.msg.bad { border-left-color: var(--bad); }
+.msg.ok { border-left-color: var(--ok); }
+ul.files { list-style: none; padding: 0; margin: 10px 0 0; }
+ul.files li { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+ul.files li:first-child { border-top: 0; }
+ul.files .name { flex: 1 1 200px; overflow-wrap: anywhere; }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 1px 8px; white-space: nowrap; }
+.x { border: 0; background: none; color: var(--muted); padding: 2px 6px; }
+.hint { color: var(--muted); font-size: 13px; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); }
+ul.plain { margin: 6px 0 0; padding-left: 20px; }
+pre.log { background: var(--code); border-radius: 6px; padding: 10px; max-height: 260px; overflow: auto;
+  font: 12px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; }
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+label.opt { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+.q { margin: 0 0 12px; }
+.q label { display: block; margin-bottom: 4px; }
+.hh { display: flex; flex-wrap: wrap; gap: 0 16px; }
+select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; max-width: 100%; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Unity Port Prepatcher</h1>
+  <p class="sub">For ports made with <a href="https://github.com/wild1walker/portmaster-unity" target="_blank" rel="noopener">portmaster-unity</a>.
+    Give it the port's zip and your copy of the game. In your browser it unpacks the game and converts its textures, the longest part
+    of the setup on a handheld, with the same code the handheld uses, on every core of your computer. The zip it writes has the game
+    where the port's setup looks for it, so the first launch on the handheld only does the rest. Nothing leaves your computer.</p>
+
+  <section class="card" id="c-port">
+    <h2><span class="n">1</span> Port zip</h2>
+    <div class="drop" id="drop-port">Drop the port's release zip here
+      <div class="row" style="justify-content:center"><button id="b-port">Choose zip…</button></div></div>
+    <input type="file" id="f-port" accept=".zip" hidden>
+    <div id="port-info"></div>
+  </section>
+
+  <section class="card off" id="c-game">
+    <h2><span class="n">2</span> Game files</h2>
+    <div id="game-need"></div>
+    <div class="drop" id="drop-game">Drop the game's installers, archives or folder here
+      <div class="row" style="justify-content:center"><button id="b-files">Choose files…</button><button id="b-folder">Choose a folder…</button></div></div>
+    <input type="file" id="f-files" multiple hidden>
+    <input type="file" id="f-folder" webkitdirectory hidden>
+    <ul class="files" id="games"></ul>
+  </section>
+
+  <section class="card off" id="c-build">
+    <h2><span class="n">3</span> Build the zip</h2>
+    <div id="questions"></div>
+    <label class="opt"><input type="checkbox" id="o-compress" checked>
+      <span>Compress the game's files <span class="hint">(a much smaller zip; building takes longer)</span></span></label>
+    <div id="work" hidden><div class="msg" id="work-msg"></div>
+      <div class="row"><button id="b-work">Choose a work folder…</button><span id="work-st" class="hint"></span></div></div>
+    <div class="row"><button class="primary" id="b-build">Build zip…</button><button id="b-stop" disabled>Stop</button>
+      <span id="st" class="hint"></span></div>
+    <div class="bar" id="bar" hidden><i></i></div>
+    <div id="result"></div>
+    <pre class="log" id="log" hidden></pre>
+  </section>
+</main>
+
+<!--SCRIPTS-->
+
+</body>
+</html>

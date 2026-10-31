@@ -1,0 +1,6 @@
+{
+ "about": "the ports codepatch builds of this folder match: the CRC-32 of the setup/codepatch binary each was built for",
+ "tag": "2026.10.29",
+ "repo": "wild1walker/portmaster-cuphead",
+ "crcs": [2187712766]
+}
