@@ -368,6 +368,16 @@ The extension: `convert/native/guided_astc/guided_astc.c` (CPython's limited API
 manylinux container with UnityPy's), `build.py` for a local build (tests, Mac). Without it the
 step logs that and searches every block.
 
+## The setup on a PC: tools/prepatch (2026-10-31)
+
+[tools/prepatch](../tools/prepatch/README.md) is a web page that runs a port's setup in the browser, with
+the converter's steps ported to JavaScript and WebAssembly and checked byte for byte against `pmunity`
+on the same input. For every port it unpacks the game and converts the textures, the settings, the audio
+and known port plugins, so the handheld's converter skips that work. For the Cuphead port (2026.10.29)
+it does the whole setup and writes a ready-to-run zip: the port folder is file for file what the
+release's setup writes, and the game starts on a handheld on the first launch, without Python or a
+network. On a 12-core PC the textures of Cuphead with its add-on take 7.4 min.
+
 ## Measuring
 
 `tools/port/stepstat.py` runs one pmunity command as the setup does and prints its wall and CPU

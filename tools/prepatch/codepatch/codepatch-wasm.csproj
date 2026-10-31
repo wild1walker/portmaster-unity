@@ -1,0 +1,35 @@
+<!-- The port's codepatch (Program.cs of wild1walker/portmaster-cuphead, fetched by build.sh) for WebAssembly, for tools/prepatch's page:
+     the same source and Mono.Cecil as the aarch64 binary, run from JavaScript through Entry.Run. -->
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <StartupObject>Program</StartupObject>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <WasmEmitSymbolMap>false</WasmEmitSymbolMap>
+    <!-- (size: fully trimmed, no debugger, ICU, resource strings or event tracing; native code linked for size) -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <DebuggerSupport>false</DebuggerSupport>
+    <WasmEnableWebcil>false</WasmEnableWebcil>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <UseNativeHttpHandler>false</UseNativeHttpHandler>
+    <WasmEnableSIMD>false</WasmEnableSIMD>
+    <EmccCompileOptimizationFlag>-Oz</EmccCompileOptimizationFlag>
+    <EmccLinkOptimizationFlag>-Oz</EmccLinkOptimizationFlag>
+    <WasmNativeStrip>true</WasmNativeStrip>
+    <WasmLinkIcu>false</WasmLinkIcu>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../repo/codepatch/Program.cs" Link="Program.cs" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+  </ItemGroup>
+</Project>
