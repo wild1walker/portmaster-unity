@@ -39,3 +39,6 @@ obj/
 bin/
 # the regression run's machine paths (tools/regress/local.example.toml)
 tools/regress/local.toml
+
+# setup-rs build output
+setup-rs/target/
