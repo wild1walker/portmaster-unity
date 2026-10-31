@@ -45,7 +45,8 @@ def main():
                     diffs.append(f'{f}: object {x[:3]} (python) vs {y[:3]} (rust)')
                     continue
                 if x[3].startswith('ERR') or y[3].startswith('ERR'):
-                    if x[3].startswith('ERR') and y[3].startswith('ERR'):
+                    ex = [z[3] for z in (x, y) if z[3].startswith('ERR Expected')]
+                    if x[3].startswith('ERR') and y[3].startswith('ERR') and (len(ex) != 2 or ex[0] == ex[1]):
                         tot['read_err_both'] += 1
                     else:
                         diffs.append(f'{f}: object {x[0]} ({x[2]}): read python={x[3]} rust={y[3]}')

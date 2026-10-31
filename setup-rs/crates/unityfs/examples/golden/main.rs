@@ -263,7 +263,20 @@ fn blocks(p: &Path) -> Result<String> {
 
 fn patch(p: &Path, scratch: &Path) -> Result<String> {
     let cp = scratch.join("patch.copy");
-    std::fs::copy(p, &cp)?;
+    // (a plain copy: copy_file_range crawls on a shared folder)
+    {
+        use std::io::{Read, Write};
+        let mut i = std::fs::File::open(p)?;
+        let mut o = std::fs::File::create(&cp)?;
+        let mut b = vec![0u8; 1 << 20];
+        loop {
+            let n = i.read(&mut b)?;
+            if n == 0 {
+                break;
+            }
+            o.write_all(&b[..n])?;
+        }
+    }
     let res = (|| -> Result<String> {
         let res: Vec<String> = if unityfs::bundle::is_unityfs(p) {
             platform::patch_bundle_platform(&cp, platform::ANDROID)?

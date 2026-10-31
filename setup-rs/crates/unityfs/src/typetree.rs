@@ -233,6 +233,11 @@ impl TypeTree {
                     .map(Arc::from)
                     .map_err(|_| Error::Format("type tree string is not UTF-8".into()))
             } else {
+                if common.is_empty() {
+                    return bad(
+                        "type tree blob with common strings, and no class database for them",
+                    );
+                }
                 let o = off & 0x7FFF_FFFF;
                 Ok(common
                     .get(o)

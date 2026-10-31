@@ -703,9 +703,26 @@ impl SerializedFile {
         }
     }
 
-    /// The metadata as UnityPy's save writes it, with each object's (offset, size) in the data
-    /// (sorted by path id).
-    fn metadata(&self, placed: &[(u64, u32)], order: &[usize]) -> Result<Vec<u8>> {
+    /// The metadata as the file holds it, each object where it is, in the table's order
+    /// (retarget.metadata_bytes: the version string and platform as now set).
+    pub fn metadata_in_place(&self) -> Result<Vec<u8>> {
+        let order: Vec<usize> = (0..self.objects.len()).collect();
+        let placed: Vec<(u64, u32)> = self
+            .objects
+            .iter()
+            .map(|o| {
+                (
+                    o.byte_start.wrapping_sub(self.header.data_offset),
+                    o.byte_size,
+                )
+            })
+            .collect();
+        self.metadata(&placed, &order)
+    }
+
+    /// The metadata as UnityPy's save writes it: the objects in `order` (indices into
+    /// `objects`), each at its (offset in the data, size) in `placed`.
+    pub fn metadata(&self, placed: &[(u64, u32)], order: &[usize]) -> Result<Vec<u8>> {
         let h = &self.header;
         let v = h.version;
         let mut w = Writer::new(h.big);

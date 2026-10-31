@@ -142,7 +142,8 @@ def objects_of(path, spill):
                 b = w.bytes
                 rec[4] = '=' if b == bytes(o.get_raw_data()) else sha(b)[:16]
             except Exception as ex:  # noqa: BLE001 - recorded: the Rust side must fail on it too
-                rec[3] = 'ERR ' + type(ex).__name__
+                # (a type tree that reads too few bytes: the counts, which the Rust side gives too)
+                rec[3] = 'ERR ' + (str(ex) if str(ex).startswith('Expected to read') else type(ex).__name__)
             out.append(rec)
     finally:
         lf.close()
@@ -207,7 +208,12 @@ def blocks(path):
 def patch(path, scratch):
     from pmunity import android_data as AD
     cp = os.path.join(scratch, 'patch.copy')
-    shutil.copyfile(path, cp)
+    with open(path, 'rb') as fi, open(cp, 'wb') as fo:     # (no sendfile: it crawls on a shared folder)
+        while True:
+            b = fi.read(1 << 20)
+            if not b:
+                break
+            fo.write(b)
     try:
         if is_unityfs(path):
             res = [list(r) for r in AD.patch_bundle_platform(cp, AD.ANDROID)]

@@ -465,3 +465,91 @@ fn safe_name(n: &str) -> String {
         })
         .collect()
 }
+
+/// A bundle with every node UnityPy opens as a serialized file (any number of them: scene
+/// bundles have several), as `UnityPy.load(bundle)` gives them: streaming.repack_bundle sets
+/// each one's platform and saves the bundle with packer='lz4'; android_data's verify reads them.
+pub struct BundleFiles {
+    pub path: PathBuf,
+    pub bundle: Bundle,
+    /// (node index, its serialized file), in the nodes' order.
+    pub files: Vec<(usize, SerializedFile)>,
+}
+
+impl BundleFiles {
+    pub fn open(path: impl AsRef<Path>, db: Option<Arc<ClassDb>>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let bundle = Bundle::open(&path)?;
+        let mut files = Vec::new();
+        for i in unitypy_serialized(&bundle)? {
+            let name = bundle.header.nodes[i].name.clone();
+            files.push((
+                i,
+                SerializedFile::open(
+                    &name,
+                    bundle.node(i),
+                    db.clone(),
+                    Some(&bundle.header.engine),
+                )?,
+            ));
+        }
+        Ok(BundleFiles {
+            path,
+            bundle,
+            files,
+        })
+    }
+
+    /// The bundle written to `out` as UnityPy's save(packer='lz4') writes it: every serialized
+    /// file saved again (held in `work` while the bundle is packed, else in memory), the other
+    /// nodes as they are.
+    pub fn write_to(&self, out: &Path, work: Option<&Path>) -> Result<()> {
+        let mut saved: HashMap<usize, SharedSource> = HashMap::new();
+        let mut tmps = Vec::new();
+        let res = (|| -> Result<()> {
+            for (k, (i, sf)) in self.files.iter().enumerate() {
+                let src: SharedSource = match work {
+                    Some(d) => {
+                        std::fs::create_dir_all(d)?;
+                        let p = d.join(format!("sf{k}.new"));
+                        tmps.push(p.clone());
+                        let mut w =
+                            std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&p)?);
+                        sf.save_to(&mut w, |_, _| Ok(None))?;
+                        std::io::Write::flush(&mut w)?;
+                        drop(w);
+                        Arc::new(FileSource::open(&p)?)
+                    }
+                    None => Arc::new(MemSource(sf.save()?)),
+                };
+                saved.insert(*i, src);
+            }
+            let nodes: Vec<PackNode> = self
+                .bundle
+                .header
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| PackNode {
+                    name: n.name.clone(),
+                    flags: n.flags,
+                    src: saved
+                        .get(&i)
+                        .cloned()
+                        .unwrap_or_else(|| self.bundle.node(i)),
+                })
+                .collect();
+            bundle::pack_file(
+                out,
+                &PackHeader::of(&self.bundle.header),
+                &nodes,
+                bundle::LZ4_DATA_FLAG,
+                bundle::LZ4_BLOCK_FLAG,
+            )
+        })();
+        for p in tmps {
+            let _ = std::fs::remove_file(p);
+        }
+        res
+    }
+}
