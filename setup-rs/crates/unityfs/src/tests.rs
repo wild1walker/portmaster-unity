@@ -1084,3 +1084,64 @@ fn bundle_files() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn referenced_objects() {
+    // a managed reference (format 20+): its data read with the file's reference type tree
+    let mut l = vec![
+        node(0, "Holder", "Base", -1, 0),
+        node(1, "ManagedReferencesRegistry", "references", -1, 0),
+        node(2, "int", "version", 4, 0),
+        node(2, "ReferencedObject", "obj", -1, 0),
+        node(3, "SInt64", "rid", 8, 0),
+        node(3, "ReferencedManagedType", "type", -1, 0),
+        node(4, "string", "class", -1, 0),
+        node(4, "string", "ns", -1, 0),
+        node(4, "string", "asm", -1, 0),
+        node(3, "ReferencedObjectData", "data", -1, 0),
+        node(1, "ManagedReferencesRegistry", "again", -1, 0),
+        node(2, "int", "version", 4, 0),
+    ];
+    for (i, n) in l.iter_mut().enumerate() {
+        n.index = Some(i as i32);
+    }
+    let t = TypeTree::from_list(l).unwrap();
+    let mut f = vec![node(0, "Foo", "Base", -1, 0), node(1, "float", "x", 4, 0)];
+    f[0].index = Some(0);
+    f[1].index = Some(1);
+    let foo = Arc::new(TypeTree::from_list(f).unwrap());
+    let refs = vec![(b"Foo".to_vec(), b"N".to_vec(), b"A".to_vec(), Some(foo))];
+    let mut w = Writer::new(false);
+    w.i32(2);
+    w.i64(7);
+    for s in [&b"Foo"[..], b"N", b"A"] {
+        w.i32(s.len() as i32);
+        w.bytes(s);
+        w.align(4);
+    }
+    w.u32(2.5f32.to_bits());
+    // (a second registry in the same class is skipped)
+    let (v, n) = value::read(&t, &w.buf, false, Some(&refs)).unwrap();
+    assert_eq!(n, w.buf.len());
+    assert_eq!(
+        v.path(&["references", "obj", "data", "x"]),
+        Some(&Value::F32(2.5))
+    );
+    assert!(v.get("again").is_none());
+    assert_eq!(value::write(&t, &v, false, Some(&refs)).unwrap(), w.buf);
+    // a null reference (no class): no data read, and the Python cannot write it back
+    let mut z = Writer::new(false);
+    z.i32(2);
+    z.i64(-2);
+    for _ in 0..3 {
+        z.i32(0);
+    }
+    let (v, n) = value::read(&t, &z.buf, false, Some(&refs)).unwrap();
+    assert_eq!(n, z.buf.len());
+    assert!(v.path(&["references", "obj", "data"]).is_none());
+    assert!(value::write(&t, &v, false, Some(&refs)).is_err());
+    // an unknown class: an error
+    let mut u = w.buf.clone();
+    u[16..19].copy_from_slice(b"Bar");
+    assert!(value::read(&t, &u, false, Some(&refs)).is_err());
+}

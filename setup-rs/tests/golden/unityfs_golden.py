@@ -5,6 +5,7 @@ writes the same lines; unityfs.sh runs both and compares them.
     python3 unityfs_golden.py <data dir> <scratch dir> [--only TEXT] [--stage DIR] [--no-write] [--no-patch] > py.jsonl
 
 --stage: each file is copied into DIR first and read from there (a slow shared folder is read once).
+--skip JSONL: files that file has lines of are skipped (a run continued).
 
 Per file:
   objects    [[path id, class id, class name, read, rewrite]]: read is the SHA-256 (16 hex) of the
@@ -258,18 +259,25 @@ def main():
     ap.add_argument('scratch')
     ap.add_argument('--only')
     ap.add_argument('--stage')
+    ap.add_argument('--skip')
     ap.add_argument('--no-write', action='store_true')
     ap.add_argument('--no-patch', action='store_true')
     ap.add_argument('--no-objects', action='store_true')
     a = ap.parse_args()
     from pmunity.unity_io import map_big_blocks
     map_big_blocks()
+    skip = set()
+    if a.skip and os.path.exists(a.skip):
+        with open(a.skip) as f:
+            skip = {json.loads(line)['file'] for line in f if line.strip()}
     work = a.stage or a.scratch
     os.makedirs(work, exist_ok=True)
     spill = os.path.join(work, 'spill')
     for p in unity_files(a.data):
         rel = os.path.relpath(p, a.data)
         if a.only and a.only not in rel:
+            continue
+        if rel in skip:
             continue
         staged = os.path.join(a.stage, os.path.basename(p)) if a.stage else None
         if staged:

@@ -333,12 +333,27 @@ fn main() {
         .iter()
         .position(|a| a == "--stage")
         .map(|i| PathBuf::from(&args[i + 1]));
+    let skip: Vec<String> = args
+        .iter()
+        .position(|a| a == "--skip")
+        .and_then(|i| std::fs::read_to_string(&args[i + 1]).ok())
+        .map(|t| {
+            t.lines()
+                .filter_map(|l| {
+                    l.strip_prefix("{\"file\": \"")
+                        .and_then(|r| r.split('"').next())
+                        .map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let pos: Vec<&String> = args
         .iter()
         .enumerate()
         .filter(|(i, a)| {
             !a.starts_with("--")
-                && (*i == 0 || !["--only", "--stage"].contains(&args[i - 1].as_str()))
+                && (*i == 0 || !["--only", "--stage", "--skip"].contains(&args[i - 1].as_str()))
         })
         .map(|(_, a)| a)
         .collect();
@@ -359,6 +374,9 @@ fn main() {
             if !rel.contains(t.as_str()) {
                 continue;
             }
+        }
+        if skip.contains(&rel) {
+            continue;
         }
         // (staged: the file read once from the data folder, then from the stage folder)
         let staged = stage.as_ref().map(|d| d.join(p.file_name().unwrap()));
