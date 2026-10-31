@@ -50,8 +50,39 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `unityfs` | UnityFS bundles (LZ4, LZ4HC, LZMA blocks), serialized files, type trees (the files' own, and the class database the Python takes from UnityPy/TPK), objects as typed value trees; reading and writing them as the Python does |
 | `texcodec` | texture decoding, scaling, ASTC encoding with the guide; textures.py's work on one texture as a pure function |
 | `shaderx` | shader blobs (shaders/blob.py) and the GLSL rewriting the convert step does (shaders/convert.py, glsl.py, step.py and what they call), as pure functions |
+| `convert` | `pmu convert` (on unityfs, shaderx, texcodec): __main__.py's convert path, job.py (the in-place run and its journal), the steps shaders (step.py's files and summary), settings, audio, textures (textures.py's Unity-file layer) and Cuphead's plugin step animclips |
 
-Later (on top of `unityfs`): the convert job and its steps, `android-data`, `patch-obb`.
+Later (on top of `unityfs`): `android-data`, `patch-obb pack`.
+
+### `pmu convert`
+
+The same command line as `python -m pmunity convert` (argparse's rules), the same files, journal
+(`.pmunity.json`, json.dump's text) and log lines (timings apart), the same exit statuses (0; 1
+with sys.exit's message or the error's; 2 for bad arguments; 3 when the card is too full). Either
+implementation continues the other's journal. Two differences, both outside the bytes compared:
+the Python writes the journal's `audio.switch` in its set's hash order (it changes from run to
+run; pmu writes the files in order), and where the Python prints a traceback pmu prints the
+error's message. Anything not ported stops the run with status 2 and says so, after the steps
+before it have journaled their files, so a setup can run the Python on the same folder to finish:
+the `quality` step, plugins other than animclips, shaders from Direct3D 11, Vulkan or Metal,
+compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off), `grab_fetch`,
+`fused_post`, and the textures step until texcodec is wired in (its Unity-file layer is here,
+behind `steps::textures::Codec`).
+
+`pmu journal-files <data>/.pmunity.json` prints the files the journal's steps have finished (0
+when there is none), as resume.txt's `journal_files` does with Python, for the setup's loop that
+reruns a conversion the kernel killed.
+
+Plugins: pmu has the plugin steps built in, by the file's name: `--plugin <path>/animclips.py` (the
+path need not exist) or `--plugin animclips` is portmaster-cuphead's convert/animclips.py.
+
+Tests: `cargo test -p convert` (with `PMU_TPK` set to UnityPy's lzma.tpk) runs the job on made-up
+data (crates/convert/tests/madeup: Unity 2017.4 files written from the class database's type
+trees, bundles laid out as Unity writes them). `tests/golden/convert_madeup.sh <dir>` runs the
+Python and pmu on copies of that data, case by case (Cuphead's arguments, reruns, a run continued
+by the other implementation, options, errors), and compares statuses, output and trees;
+`tests/golden/convert.sh <dir> [rs|rs-py|py-rs|both]` does it on Cuphead's data from
+`$PMU_TEST_DATA` with the setup's arguments, against `converted-fast`.
 
 ## Building and testing
 
@@ -63,6 +94,9 @@ packages at `/opt/pylibs`. On Apple silicon it runs natively.
 RS_ROOT=<a folder for builds> setup-rs/tools/rs.sh <worktree> cargo test
 RS_ROOT=... setup-rs/tools/rs.sh <worktree> cargo build --release --target aarch64-unknown-linux-musl
 ```
+
+The musl build links with the image's gcc and musl-tools (`aarch64-linux-musl-gcc` for the C
+parts the crates build): no cross linker is needed on an arm64 host.
 
 The reference Python, in the same image:
 

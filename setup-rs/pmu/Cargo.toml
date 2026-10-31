@@ -11,3 +11,4 @@ path = "src/main.rs"
 
 [dependencies]
 pkgzip = { path = "../crates/pkgzip" }
+convert = { path = "../crates/convert" }
