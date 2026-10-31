@@ -70,6 +70,18 @@ OpenSSL (Apache 2.0), Python and libcurl in a test image; nothing of them is kep
   installer for a build (a port's setup reads them on the handheld).
 - Any game's files. The converter works on your own copy.
 
+## Built into `pmu` (setup-rs, crates from crates.io)
+
+| what | crate | licence | used for |
+|---|---|---|---|
+| [lz4](https://github.com/lz4/lz4) 1.9.4, the C library python-lz4 4.4.5 bundles, compiled by its crate | `lz4-sys` 1.9.4 | BSD-2-Clause (the library), MIT (the crate) | LZ4 / LZ4 HC blocks of bundles (`crates/unityfs`): the same compressed bytes as the Python |
+| [lzma-rs](https://github.com/gendx/lzma-rs) | `lzma-rs` 0.3 | MIT | LZMA blocks of bundles (decompression) |
+| UnityPy's class id names (`UnityPy/enums/ClassIDType.py` of UnityPy 1.25.4) | (a table in `crates/unityfs/src/classes.rs`) | MIT, Copyright (c) K0lb3 | the class names the Python gives objects |
+
+`crates/unityfs` reads Unity's class database (UnityPy's `resources/lzma.tpk`, from AssetRipper's
+type tree dumps) at run time, or embeds it when built with `PMU_TPK` set: it is not in this
+repository.
+
 ## Used at build or conversion time (not vendored)
 
 Debian's armhf cross toolchains and libraries (Dockerfiles), SDL2, Mesa (test rig), Python
