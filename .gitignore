@@ -45,3 +45,5 @@ tools/prepatch/wasm/pmucore.wasm
 tools/prepatch/src/typetrees.json
 tools/prepatch/codepatch/_framework/
 tools/prepatch/codepatch/tag.txt
+# setup-rs build output
+setup-rs/target/
