@@ -5,7 +5,8 @@
 # with the same arguments (a case's prep runs first on both copies, by the implementation it
 # names) and convert_compare.py compares their exit statuses, output and trees, byte for byte.
 # Cuphead's plugin: $ANIMCLIPS_PY, else $PMU_TEST_DATA/cuphead/animclips.py (portmaster-cuphead's
-# convert/animclips.py). CASES="a b" runs only those.
+# convert/animclips.py). CASES="a b" runs only those; PMU=<binary> tests that pmu (default: the
+# native release build).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 wt=$(cd "$here/../../.." && pwd)
@@ -15,6 +16,7 @@ anim=${ANIMCLIPS_PY:-${PMU_TEST_DATA:-}/cuphead/animclips.py}
 export PMU_TPK="${PMU_TPK:-/opt/pylibs/UnityPy/resources/lzma.tpk}"
 (cd "$wt/setup-rs" && CARGO_INCREMENTAL=0 cargo build --release -q -p pmu && CARGO_INCREMENTAL=0 cargo build --release -q -p convert --example madeup)
 tgt=${CARGO_TARGET_DIR:-$wt/setup-rs/target}/release
+PMU=${PMU:-$tgt/pmu}      # (PMU=<the musl build> tests the binary a setup ships)
 src=$out/src
 rm -rf "$src"
 "$tgt/examples/madeup" "$src"
@@ -43,7 +45,7 @@ impl() {  # impl py|rs <args...>: one convert run (from the run folder)
   if [ "$side" = py ]; then
     PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH="$wt/convert:/opt/pylibs" /opt/py/bin/python3 -m pmunity convert "$@"
   else
-    "$tgt/pmu" convert "$@"
+    "$PMU" convert "$@"
   fi
 }
 

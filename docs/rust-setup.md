@@ -69,6 +69,10 @@ compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off
 `fused_post`. The textures step is textures.py's Unity-file layer in `convert` with texcodec as
 its per-texture codec (`steps::textures::Codec`; the made-up tests also run it with a stand-in).
 
+Player builds keep no type trees in their files: pmu reads them with UnityPy's class database
+(lzma.tpk), embedded when the binary is built with `PMU_TPK=<lzma.tpk>`, else from `$PMU_TPK` at
+run time (without either, the first such file stops the run, status 1, saying so).
+
 `pmu journal-files <data>/.pmunity.json` prints the files the journal's steps have finished (0
 when there is none), as resume.txt's `journal_files` does with Python, for the setup's loop that
 reruns a conversion the kernel killed.
@@ -82,7 +86,8 @@ trees, bundles laid out as Unity writes them). `tests/golden/convert_madeup.sh <
 Python and pmu on copies of that data, case by case (Cuphead's arguments, reruns, a run continued
 by the other implementation, the textures step unscaled (strips), in search mode, with an ASTC guide
 the Python makes for the data (astc_guide.py: numpy, fetched with curl when the image has none),
-options, errors), and compares statuses, output and trees;
+options, errors), and compares statuses, output and trees (`PMU=<the musl build>` tests the binary
+a setup ships);
 `tests/golden/convert.sh <dir> [rs|rs-py|py-rs|both]` does it on Cuphead's data from
 `$PMU_TEST_DATA` with the setup's arguments, against `converted-fast`.
 
