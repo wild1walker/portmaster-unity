@@ -66,8 +66,10 @@ run; pmu writes the files in order), and where the Python prints a traceback pmu
 error's message. Anything not ported stops the run with status 2 and says so, after the steps
 before it have journaled their files, so a setup can run the Python on the same folder to finish:
 the `quality` step, plugins other than animclips, shaders from Direct3D 11, Vulkan or Metal,
-compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off), `grab_fetch`,
-`fused_post`. The textures step is textures.py's Unity-file layer in `convert` with texcodec as
+compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off),
+`fused_post`. `grab_fetch` (and `grab_fetch_names`) is ported: shaderx's `grabfetch` checks and
+rewrites a program as grabfetch.py does (its symbolic evaluation with exact rationals), the
+convert crate edits the Shader object (Hollow Knight's port sets `"always"`). The textures step is textures.py's Unity-file layer in `convert` with texcodec as
 its per-texture codec (`steps::textures::Codec`; the made-up tests also run it with a stand-in).
 
 Player builds keep no type trees in their files: pmu reads them with UnityPy's class database

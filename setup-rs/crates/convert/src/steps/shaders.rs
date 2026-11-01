@@ -9,8 +9,10 @@
 //! Shader trees read, given to shaderx, the changed ones saved and the file written in place.
 //!
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
-//! `glcore4x`, `bundles`. Direct3D 11, Vulkan and Metal sources, compute shaders, `grab_fetch`
-//! and `fused_post` stop the step as not ported (the setup runs the Python for those).
+//! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs). Direct3D 11, Vulkan
+//! and Metal sources, compute shaders and `fused_post` stop the step as not ported (the setup
+//! runs the Python for those).
+use super::grabfetch;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
 use crate::job::Job;
@@ -43,6 +45,11 @@ struct Settings {
     sources: Vec<String>,
     glcore4x: bool,
     compute: bool,
+    /// grab_fetch: None (off), Some(false) (true: where Unity reports framebuffer fetch),
+    /// Some(true) ("always").
+    grab_fetch: Option<bool>,
+    /// grab_fetch_names: the regex, or why it does not compile.
+    grab_fetch_names: Option<std::result::Result<regex::Regex, String>>,
 }
 
 /// A Python-style value check: `v in (allowed...)` with Python's == (1 == True).
@@ -119,6 +126,7 @@ fn settings(cfg: &Json) -> Result<Settings> {
             compute.repr()
         )));
     }
+    // (step.grab_fetch_mode)
     let gf = get("grab_fetch").cloned().unwrap_or(Json::Null);
     let off = [
         Json::Null,
@@ -126,21 +134,38 @@ fn settings(cfg: &Json) -> Result<Settings> {
         Json::Str("off".into()),
         Json::Str("false".into()),
     ];
-    if !one_of(&gf, &off) {
-        let on = [
-            Json::Bool(true),
-            Json::Str("on".into()),
-            Json::Str("true".into()),
-            Json::Str("always".into()),
-        ];
-        if one_of(&gf, &on) {
-            return Err(Error::NotPorted("shaders.grab_fetch".into()));
-        }
+    let on = [
+        Json::Bool(true),
+        Json::Str("on".into()),
+        Json::Str("true".into()),
+    ];
+    let grab_fetch = if one_of(&gf, &off) {
+        None
+    } else if one_of(&gf, &on) {
+        Some(false)
+    } else if gf == Json::Str("always".into()) {
+        Some(true)
+    } else {
         return Err(Error::Value(format!(
             "shaders.grab_fetch: {} (false, true or \"always\")",
             gf.repr()
         )));
-    }
+    };
+    let grab_fetch_names = match get("grab_fetch_names") {
+        None | Some(Json::Null) => None,
+        Some(Json::Str(s)) if s.is_empty() => None,
+        Some(Json::Str(s)) => Some(regex::Regex::new(s).map_err(|e| {
+            format!(
+                "shaders.grab_fetch_names {}: {e}",
+                crate::pyjson::str_repr(s)
+            )
+        })),
+        Some(v) if !v.truthy() => None,
+        Some(v) => Some(Err(format!(
+            "shaders.grab_fetch_names: {} is not a regular expression",
+            v.repr()
+        ))),
+    };
     if get("fused_post").is_some_and(Json::truthy) {
         return Err(Error::NotPorted("shaders.fused_post".into()));
     }
@@ -152,6 +177,8 @@ fn settings(cfg: &Json) -> Result<Settings> {
         sources,
         glcore4x: glcore4x.is_null_or_true(),
         compute: compute.truthy(),
+        grab_fetch,
+        grab_fetch_names,
     })
 }
 
@@ -336,10 +363,8 @@ pub fn shader_of(t: &Value) -> Result<Shader> {
     })
 }
 
-/// The tree with an Edit written into it, as add_gles3 leaves the Python's tree: the blob fields,
-/// each changed subprogram list (copies of its old subprograms, retyped), passes' m_Platforms.
-pub fn apply(t: &mut Value, edit: &Edit) -> Result<()> {
-    let b = &edit.blob;
+/// The blob fields written into a Shader's tree (blob.ShaderBlobs.store).
+pub fn set_blob(t: &mut Value, b: &shaderx::blob::BlobFields) -> Result<()> {
     t.set("platforms", int_list(&b.platforms))?;
     t.set("offsets", lengths_value(&b.offsets))?;
     t.set("compressedLengths", lengths_value(&b.compressed_lengths))?;
@@ -351,6 +376,13 @@ pub fn apply(t: &mut Value, edit: &Edit) -> Result<()> {
     if let Some(sc) = &b.stage_counts {
         t.set("stageCounts", int_list(sc))?;
     }
+    Ok(())
+}
+
+/// The tree with an Edit written into it, as add_gles3 leaves the Python's tree: the blob fields,
+/// each changed subprogram list (copies of its old subprograms, retyped), passes' m_Platforms.
+pub fn apply(t: &mut Value, edit: &Edit) -> Result<()> {
+    set_blob(t, &edit.blob)?;
     for le in &edit.lists {
         let pass = pass_mut(t, le.at.sub_shader, le.at.pass)?;
         let prog = field_mut(pass, STAGES[le.at.stage])?;
@@ -427,6 +459,7 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     };
     let mut tr = Translations::new();
     let mut results: Vec<convert::Report> = Vec::new();
+    let mut gresults: Vec<grabfetch::GfResult> = Vec::new();
     let mut changed_files = 0usize;
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
@@ -470,8 +503,25 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
             let out = convert::add_gles3(&shader, &opts, &mut tr)
                 .map_err(|e| Error::Value(e.to_string()))?;
             let r = out.report;
+            let mut changed = false;
             if let Some(edit) = &out.edit {
                 apply(&mut t, edit)?;
+                changed = true;
+            }
+            if let Some(always) = s.grab_fetch {
+                let names = match &s.grab_fetch_names {
+                    None => None,
+                    Some(Ok(rx)) => Some(rx),
+                    Some(Err(m)) => return Err(Error::Value(m.clone())),
+                };
+                let g = grabfetch::apply(&mut t, always, names)?;
+                changed |= g.changed();
+                if g.status != "unchanged" {
+                    job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
+                }
+                gresults.push(g);
+            }
+            if changed {
                 f.sf.save_typetree(pid, &t)?;
                 n += 1;
             }
@@ -500,6 +550,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     for line in shaderx::step::summary(&results, changed_files, &s.precision) {
         job.log(&line);
+    }
+    if let Some(always) = s.grab_fetch {
+        job.log(&grabfetch::summary(&gresults, always));
     }
     Ok(())
 }

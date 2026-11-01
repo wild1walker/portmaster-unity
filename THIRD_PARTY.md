@@ -85,6 +85,7 @@ OpenSSL (Apache 2.0), Python and libcurl in a test image; nothing of them is kep
 |---|---|---|---|
 | [lz4](https://github.com/lz4/lz4) 1.9.4, the C library python-lz4 4.4.5 bundles, compiled by its crate | `lz4-sys` 1.9.4 | BSD-2-Clause (the library), MIT (the crate) | LZ4 / LZ4 HC blocks of bundles (`crates/unityfs`): the same compressed bytes as the Python |
 | [lzma-rs](https://github.com/gendx/lzma-rs) | `lzma-rs` 0.3 | MIT | LZMA blocks of bundles (decompression) |
+| [num-bigint](https://github.com/rust-num/num-bigint), [num-rational](https://github.com/rust-num/num-rational), [num-integer](https://github.com/rust-num/num-integer), [num-traits](https://github.com/rust-num/num-traits) | `num-bigint` 0.4, `num-rational` 0.4, `num-integer` 0.1, `num-traits` 0.2 | MIT or Apache-2.0 | `shaders.grab_fetch`'s exact rational arithmetic (`crates/shaderx`), as the Python's `Fraction` |
 | UnityPy's class id names (`UnityPy/enums/ClassIDType.py` of UnityPy 1.25.4) | (a table in `crates/unityfs/src/classes.rs`) | MIT, Copyright (c) K0lb3 | the class names the Python gives objects |
 
 `crates/unityfs` reads Unity's class database (UnityPy's `resources/lzma.tpk`, from AssetRipper's

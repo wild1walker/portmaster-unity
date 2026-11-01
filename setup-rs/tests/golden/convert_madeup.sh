@@ -87,6 +87,9 @@ case_ textures_only - - Data $C --steps textures --only atlas_
 case_ budget_none - - Data $C $STEPS --set audio.pcm_budget_mb=null --set audio.compressed_min_s=10
 case_ budget_float - - Data $C $STEPS --set audio.pcm_budget_mb=4.5 --set audio.resident_scenes=1
 case_ audio_cfg both "$C --steps audio" Data $C --steps audio --set audio.compressed_min_s=3
+case_ grab_fetch - - Data $C --steps shaders --set shaders.grab_fetch=always
+case_ grab_fetch_true - - Data $C --steps shaders --set shaders.grab_fetch=true
+case_ grab_fetch_names - - Data $C --steps shaders --set shaders.grab_fetch=always --set 'shaders.grab_fetch_names=Offset|Screen'
 case_ options - - Data $C $STEPS --set shaders.precision=highp --set shaders.glcore4x=true --set settings.audio_sample_rate=24000 --set settings.real_voices=16 --set settings.graphics_apis=null
 case_ defaults - - Data --config "$src/defaults.json"
 case_ overlay - - Data Out $C

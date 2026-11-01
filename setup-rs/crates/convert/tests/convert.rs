@@ -239,6 +239,142 @@ fn cuphead_steps_on_made_up_data() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A pass: its type, and its vertex subprograms' (blob index, GPU program type).
+type PassSubs = (i128, Vec<(i128, i128)>);
+
+/// Each SubShader of a Shader object: its passes.
+fn sub_shaders(f: &DataFile, pid: i64) -> Vec<Vec<PassSubs>> {
+    let t = f.sf.read_typetree(pid).unwrap();
+    t.path(&["m_ParsedForm", "m_SubShaders"])
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|ss| {
+            ss.get("m_Passes")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    let subs = p
+                        .path(&["progVertex", "m_SubPrograms"])
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|sp| {
+                            (
+                                sp.get("m_BlobIndex").unwrap().as_int().unwrap(),
+                                sp.get("m_GpuProgramType").unwrap().as_int().unwrap(),
+                            )
+                        })
+                        .collect();
+                    (p.get("m_Type").unwrap().as_int().unwrap(), subs)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn grab_fetch_on_made_up_data() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    let opts = Options {
+        db: Some(db.clone()),
+        ..Default::default()
+    };
+    // "always": the screen-position shader gets a copy of its SubShader in front, without the
+    // GrabPass, its GLES3 subprograms only, the reading variant's program a new blob entry
+    let dir = temp("grabfetch");
+    let data = dir.join("Data");
+    madeup::game(&db, &data);
+    let mut c = cuphead(&dir, "shaders");
+    c.sets.push("shaders.grab_fetch=always".into());
+    cli::run(&c).unwrap();
+    let f = DataFile::open(data.join("level0"), &opts).unwrap();
+    let (gl, gles) = (6i128, 4i128); // GPU_GLCORE32, GPU_GLES3
+    assert_eq!(
+        sub_shaders(&f, 6),
+        [
+            vec![(0, vec![(4, gles), (2, gles)])],
+            vec![
+                (2, vec![]),
+                (0, vec![(0, gl), (2, gl), (0, gles), (2, gles)])
+            ],
+        ]
+    );
+    let t = f.sf.read_typetree(6).unwrap();
+    let sh = convert::steps::shaders::shader_of(&t).unwrap();
+    let blobs = shaderx::blob::ShaderBlobs::read(&sh.blob).unwrap();
+    let e = blobs.entries(9, &Default::default(), None).unwrap();
+    assert_eq!(e.len(), 5);
+    let code = |i: usize| match &e[i] {
+        Some(shaderx::blob::Slot::Program(p)) => String::from_utf8(p.code.clone()).unwrap(),
+        _ => String::new(),
+    };
+    assert!(code(4).contains(shaderx::grabfetch::MARK));
+    assert!(code(4).contains("SV_Target0 = ua_FramebufferColor;"));
+    assert!(!code(0).contains(shaderx::grabfetch::MARK));
+    // an offset and a named GrabPass: as add_gles3 leaves them
+    for pid in [9, 10] {
+        assert_eq!(sub_shaders(&f, pid).len(), 1, "{pid}");
+    }
+    // a second run changes nothing (the journal has the files)
+    let after = tree(&data);
+    cli::run(&c).unwrap();
+    assert_eq!(tree(&data), after);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // true: the copy's subprograms of the reading pass require framebuffer fetch
+    let dir = temp("grabfetch-true");
+    let data = dir.join("Data");
+    madeup::game(&db, &data);
+    let mut c = cuphead(&dir, "shaders");
+    c.sets.push("shaders.grab_fetch=true".into());
+    cli::run(&c).unwrap();
+    let f = DataFile::open(data.join("level0"), &opts).unwrap();
+    assert_eq!(sub_shaders(&f, 6).len(), 2);
+    let t = f.sf.read_typetree(6).unwrap();
+    let req = |ss: usize| -> Vec<i128> {
+        t.path(&["m_ParsedForm", "m_SubShaders"])
+            .unwrap()
+            .as_array()
+            .unwrap()[ss]
+            .get("m_Passes")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .path(&["progVertex", "m_SubPrograms"])
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|sp| sp.get("m_ShaderRequirements").unwrap().as_int().unwrap() & 0x80000)
+            .collect()
+    };
+    assert_eq!(req(0), [0x80000, 0x80000]);
+    assert_eq!(req(1), [0, 0, 0, 0]);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // a value grab_fetch does not take
+    let dir = temp("grabfetch-bad");
+    madeup::game(&db, &dir.join("Data"));
+    let mut c = cuphead(&dir, "shaders");
+    c.sets.push("shaders.grab_fetch=sometimes".into());
+    let e = cli::run(&c).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "shaders.grab_fetch: 'sometimes' (false, true or \"always\")"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn journal_pending_renames_finished() {
     let dir = temp("pending");
@@ -312,12 +448,16 @@ fn journal_damaged_by_a_restart() {
     // the rename's copy alone (a file system that dropped the journal before the rename)
     std::fs::remove_file(&j).unwrap();
     std::fs::write(&tmp, good).unwrap();
-    assert!(Job::new(&data, &data, cfg.clone()).unwrap().is_done("textures", "x"));
+    assert!(Job::new(&data, &data, cfg.clone())
+        .unwrap()
+        .is_done("textures", "x"));
     // nothing readable: status 5, the journal left as it is
     for bad in [&b""[..], b"{\"version\": 1, \"do", b"[]"] {
         std::fs::write(&j, bad).unwrap();
         let _ = std::fs::remove_file(&tmp);
-        let e = Job::new(&data, &data, cfg.clone()).err().expect("a damaged journal");
+        let e = Job::new(&data, &data, cfg.clone())
+            .err()
+            .expect("a damaged journal");
         assert_eq!(e.status(), convert::job::DAMAGED_JOURNAL);
         assert_eq!(std::fs::read(&j).unwrap(), bad);
     }

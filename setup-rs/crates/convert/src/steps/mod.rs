@@ -3,6 +3,7 @@
 //! writes each converted file through the job and journals it.
 pub mod animclips;
 pub mod audio;
+pub mod grabfetch;
 pub mod settings;
 pub mod shaders;
 pub mod textures;
