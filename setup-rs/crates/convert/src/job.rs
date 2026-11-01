@@ -78,6 +78,25 @@ fn fsync(path: &Path) -> std::io::Result<()> {
         .sync_all()
 }
 
+/// A folder's entries (a rename in it) on the card (a file system that cannot sync a folder: as
+/// it is).
+fn fsync_dir(dir: &Path) {
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
+/// A journal's text as the state, when it is one (a dict); None for a damaged one (e.g. empty: a
+/// handheld that restarted before a journal written without a sync reached the card).
+fn read_journal(path: &Path) -> Option<Json> {
+    let text = std::fs::read_to_string(path).ok()?;
+    pyjson::loads(&text).ok().filter(|j| matches!(j, Json::Dict(_)))
+}
+
+/// Status of a conversion whose journal is damaged: the files converted in place before cannot be
+/// told from the others, so the setup starts again from the game's files (its message).
+pub const DAMAGED_JOURNAL: u8 = 5;
+
 /// The files a journal's steps have finished, 0 when it cannot be read (resume.txt's
 /// journal_files: a setup reruns a killed conversion as long as this grows).
 pub fn journal_files(path: &Path) -> usize {
@@ -127,15 +146,23 @@ impl Job {
             ]),
             db: OnceLock::new(),
         };
-        if job.state_path.exists() {
-            let text = std::fs::read_to_string(&job.state_path)?;
-            job.state = pyjson::loads(&text)
-                .map_err(|e| Error::Value(format!("{}: {e}", job.state_path.display())))?;
-            if !matches!(job.state, Json::Dict(_)) {
-                return Err(Error::Value(format!(
-                    "{}: not a dict",
-                    job.state_path.display()
-                )));
+        // the journal, or the copy a save had synced but not yet renamed over it
+        let tmp = with_suffix(&job.state_path, ".tmp");
+        let found = job.state_path.exists() || tmp.exists();
+        let state = read_journal(&job.state_path).or_else(|| read_journal(&tmp));
+        if found && state.is_none() {
+            println!(
+                "ERROR: {}: the conversion's journal is damaged (the handheld restarted or lost power \
+                 while it was written): the files already converted cannot be told apart, so the \
+                 setup has to start again from the game's files",
+                job.state_path.display()
+            );
+            return Err(Error::Status(DAMAGED_JOURNAL));
+        }
+        if let Some(state) = state {
+            job.state = state;
+            if read_journal(&job.state_path).is_none() {
+                job.save_state()?;
             }
             job.state.setdefault("done", Json::dict());
             job.state.setdefault("scaled", Json::dict());
@@ -298,6 +325,14 @@ impl Job {
         for (p, d) in &moves {
             std::fs::rename(p, d)?;
         }
+        if self.inplace {
+            // the renames on the card before the journal says the files are done
+            let mut dirs: Vec<&Path> = moves.iter().filter_map(|(_, d)| d.parent()).collect();
+            dirs.dedup();
+            for d in dirs {
+                fsync_dir(d);
+            }
+        }
         if self.state.pop("pending").is_some_and(|p| p.truthy()) {
             self.save_state()?;
         }
@@ -357,11 +392,19 @@ impl Job {
         self.save_state()
     }
 
-    /// Writes the journal (json.dump, through <journal>.tmp and a rename).
+    /// Writes the journal (json.dump, through <journal>.tmp and a rename), synced before and after
+    /// the rename: a handheld that restarts or loses power finds the journal before or after
+    /// this save, never an empty one.
     pub fn save_state(&self) -> Result<()> {
         let tmp = with_suffix(&self.state_path, ".tmp");
-        std::fs::write(&tmp, self.state.dumps())?;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(self.state.dumps().as_bytes())?;
+        f.sync_all()?;
+        drop(f);
         std::fs::rename(&tmp, &self.state_path)?;
+        if let Some(d) = self.state_path.parent() {
+            fsync_dir(d);
+        }
         Ok(())
     }
 

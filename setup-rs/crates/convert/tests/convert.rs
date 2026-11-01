@@ -294,6 +294,37 @@ fn journal_pending_renames_finished() {
 }
 
 #[test]
+fn journal_damaged_by_a_restart() {
+    let dir = temp("damaged");
+    let data = dir.join("Data");
+    std::fs::create_dir_all(&data).unwrap();
+    let cfg = pyjson::loads(r#"{"version": 1}"#).unwrap();
+    let j = data.join(".pmunity.json");
+    let tmp = data.join(".pmunity.json.tmp");
+    let good = r#"{"version": 1, "done": {"textures": ["x"]}, "scaled": {}}"#;
+    // empty (a save that never reached the card) with the synced copy not renamed yet: that copy
+    std::fs::write(&j, b"").unwrap();
+    std::fs::write(&tmp, good).unwrap();
+    let job = Job::new(&data, &data, cfg.clone()).unwrap();
+    assert!(job.is_done("textures", "x"));
+    assert_eq!(std::fs::read_to_string(&j).unwrap(), good);
+    assert!(!tmp.exists());
+    // the rename's copy alone (a file system that dropped the journal before the rename)
+    std::fs::remove_file(&j).unwrap();
+    std::fs::write(&tmp, good).unwrap();
+    assert!(Job::new(&data, &data, cfg.clone()).unwrap().is_done("textures", "x"));
+    // nothing readable: status 5, the journal left as it is
+    for bad in [&b""[..], b"{\"version\": 1, \"do", b"[]"] {
+        std::fs::write(&j, bad).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        let e = Job::new(&data, &data, cfg.clone()).err().expect("a damaged journal");
+        assert_eq!(e.status(), convert::job::DAMAGED_JOURNAL);
+        assert_eq!(std::fs::read(&j).unwrap(), bad);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn errors_and_statuses() {
     let dir = temp("errors");
     let data = dir.join("Data");
