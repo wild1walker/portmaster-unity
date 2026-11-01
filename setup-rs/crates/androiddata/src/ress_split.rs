@@ -22,20 +22,37 @@ pub const STREAMS_FROM: (u32, u32) = (2018, 3);
 /// When a file is split, and into parts of what size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SplitRule {
-    /// The largest part (and the largest file with its textures inlined): one archive's room.
+    /// Each archive's limit (pack.rs: 2 GiB - 1, or $PMU_ZIP_LIMIT).
+    pub limit: u64,
+    /// The largest part: the room of the APK (the archive with the least), so each part fits
+    /// any archive.
     pub part: u64,
+    /// (tests: $PMU_RESS_SPLIT set) files split by `part` instead of by what an archive holds.
+    pub forced: bool,
     /// (tests) the files split whatever their size; None: by size.
     pub only: Option<Vec<String>>,
 }
 
+/// The build-id marker's entry (`assets/<36-character id>`, empty) and, from 2021.1, the OBB
+/// GUID's (`unity_obb_guid`, the id), in an OBB beside its other entries: their size as
+/// write_zip reckons it (pack.rs zip_size), and the archive's end record.
+fn obb_base(guid: bool) -> u64 {
+    22 + (84 + 2 * 43) + if guid { 84 + 2 * 14 + 36 } else { 0 }
+}
+
 impl SplitRule {
-    /// The rule for an archive limit (the APK's margin off it), or (tests only)
-    /// $PMU_RESS_SPLIT = `<bytes>[:<file>,<file>...]`: parts of that size, and only the files
-    /// named split (all that pass it inlined without names).
+    /// The rule for an archive limit, or (tests only) $PMU_RESS_SPLIT = `<bytes>[:<file>,...]`:
+    /// parts of that size, and only the files named split (all that pass it inlined without
+    /// names).
     pub fn new(limit: u64, env: Option<&str>) -> Result<SplitRule, String> {
         let part = limit - crate::pack::apk_margin(limit);
         let Some(v) = env else {
-            return Ok(SplitRule { part, only: None });
+            return Ok(SplitRule {
+                limit,
+                part,
+                forced: false,
+                only: None,
+            });
         };
         let (n, names) = match v.split_once(':') {
             Some((n, l)) => (n, Some(l)),
@@ -53,15 +70,33 @@ impl SplitRule {
                 .map(String::from)
                 .collect()
         });
-        Ok(SplitRule { part, only })
+        Ok(SplitRule {
+            limit,
+            part,
+            forced: true,
+            only,
+        })
+    }
+
+    /// Whether a file of bin/Data of `size` bytes fits in some archive whole: alone in the patch
+    /// OBB (write_zip's limit, no margin), the most room any archive can give it. `guid`: the
+    /// OBBs carry unity_obb_guid (2021.1+).
+    pub fn fits(&self, name: &str, size: u64, guid: bool) -> bool {
+        let arc = 16 + name.len() as u64; // assets/bin/Data/<name>
+        obb_base(guid) + 84 + 2 * arc + size <= self.limit
     }
 
     /// Whether a file is split: its size with its textures inlined, a .resS kept beside it (for
-    /// meshes) and its size.
-    pub fn wants(&self, name: &str, inlined: u64, kept: Option<u64>) -> bool {
+    /// meshes) and its size; only when one of them fits in no archive (anything that fits
+    /// somewhere is inlined and packed as before).
+    pub fn wants(&self, name: &str, inlined: u64, kept: Option<u64>, guid: bool) -> bool {
         match &self.only {
             Some(l) => l.iter().any(|n| n == name),
-            None => inlined > self.part || kept.is_some_and(|k| k > self.part),
+            None if self.forced => inlined > self.part || kept.is_some_and(|k| k > self.part),
+            None => {
+                !self.fits(name, inlined, guid)
+                    || kept.is_some_and(|k| !self.fits(&format!("{name}.resS"), k, guid))
+            }
         }
     }
 }
@@ -376,13 +411,27 @@ mod tests {
         let l = (1u64 << 31) - 1;
         let r = SplitRule::new(l, None).unwrap();
         assert_eq!(r.part, l - (64 << 20));
-        assert!(!r.wants("resources.assets", r.part, None));
-        assert!(r.wants("resources.assets", r.part + 1, None));
-        assert!(r.wants("resources.assets", 1, Some(r.part + 1)));
+        let n = "resources.assets";
+        // the largest file that fits whole: alone in the patch OBB (its end record, the
+        // build-id marker, the GUID from 2021.1, the file's headers: write_zip's reckoning)
+        let max = |guid: bool| l - 22 - 170 - if guid { 148 } else { 0 } - 84 - 2 * 32;
+        for guid in [false, true] {
+            assert!(r.fits(n, max(guid), guid) && !r.fits(n, max(guid) + 1, guid));
+            assert!(!r.wants(n, max(guid), None, guid));
+            assert!(r.wants(n, max(guid) + 1, None, guid));
+            // the window between the APK's margin (64 MiB) and the OBBs' (16 MiB): not split
+            for mib in [63, 40, 17, 16, 15] {
+                assert!(!r.wants(n, l - (mib << 20), None, guid), "{mib} MiB under");
+            }
+            assert!(r.wants(n, 1, Some(max(guid) - 10 + 1), guid));
+            assert!(!r.wants(n, 1, Some(max(guid) - 10), guid));
+        }
         let t = SplitRule::new(l, Some("1000:resources.assets,level1")).unwrap();
         assert_eq!(t.part, 1000);
-        assert!(t.wants("level1", 1, None) && !t.wants("level2", 1 << 40, None));
-        assert_eq!(SplitRule::new(l, Some("4096")).unwrap().only, None);
+        assert!(t.wants("level1", 1, None, false) && !t.wants("level2", 1 << 40, None, false));
+        let f = SplitRule::new(l, Some("4096")).unwrap();
+        assert_eq!(f.only, None);
+        assert!(f.wants(n, 4097, None, false) && !f.wants(n, 4096, None, false));
         assert!(SplitRule::new(l, Some("x")).is_err());
         assert_eq!(part_name("resources.assets", 0), "resources.assets.resS");
         assert_eq!(part_name("resources.assets", 2), "resources.assets.2.resS");

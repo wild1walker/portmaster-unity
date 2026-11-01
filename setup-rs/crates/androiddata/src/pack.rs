@@ -95,11 +95,16 @@ pub fn obb_margin(limit: u64) -> u64 {
     (limit + 1) / 128
 }
 
+/// An entry's size in an archive as write_zip reckons it (headers and data).
+fn entry_size(a: &str, s: &Src) -> Result<u64, Stop> {
+    Ok(30 + 46 + 2 * a.len() as u64 + 8 + size_of(s)?)
+}
+
 /// An archive's size as write_zip reckons it (its end record, each entry's headers and data).
 fn zip_size(entries: &[&Entry]) -> Result<u64, Stop> {
     let mut t = 22;
     for (a, s) in entries {
-        t += 30 + 46 + 2 * a.len() as u64 + 8 + size_of(s)?;
+        t += entry_size(a, s)?;
     }
     Ok(t)
 }
@@ -182,8 +187,8 @@ fn src_key(s: &Src) -> String {
 /// Where the OBBs' entries go: (indices into `obb` added to the APK, the main OBB's, the patch
 /// OBB's). In order, as the main OBB holds them and the rest in the patch OBB; when that passes
 /// the limit, spread by size instead: the largest first, each into the first archive with room,
-/// the APK (`apk_room`: its free bytes, files of bin/Data only), the main OBB, the patch OBB.
-/// The flag: spread.
+/// the APK (`apk_room`: its free bytes, files of bin/Data only), the main OBB (its margin kept,
+/// as in order), the patch OBB (up to the limit, as in order). The flag: spread.
 #[allow(clippy::type_complexity)]
 fn obb_places(
     obb: &[Entry],
@@ -213,17 +218,20 @@ fn obb_places(
     }
     order.sort_by(|x, y| y.0.cmp(&x.0));
     let (mut to_apk, mut main, mut patch) = (Vec::new(), Vec::new(), Vec::new());
-    let (mut a_used, mut m_used, mut p_used) = (0, 0, 0);
+    let (mut a_used, mut m_used) = (0, 0);
+    let mut p_size = zip_size(&marker.iter().collect::<Vec<_>>())?;
     for (sz, i) in order {
-        if obb[i].0.starts_with("assets/bin/") && apk_room.is_some_and(|r| a_used + sz < r) {
+        let (a, s) = &obb[i];
+        let bytes = entry_size(a, s)?;
+        if a.starts_with("assets/bin/") && apk_room.is_some_and(|r| a_used + sz < r) {
             to_apk.push(i);
             a_used += sz;
         } else if m_used + sz < cap {
             main.push(i);
             m_used += sz;
-        } else if p_used + sz < cap {
+        } else if p_size + bytes <= limit {
             patch.push(i);
-            p_used += sz;
+            p_size += bytes;
         } else {
             return Err(Stop::Exit(format!(
                 "pack: {} ({:.2} GiB) fits in none of the archives: the APK and both OBBs are full ({:.2} GiB each at most)",

@@ -1428,11 +1428,11 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                         .collect::<Vec<_>>()
                         .join(", ");
                     let note = format!(
-                        "platform -> {ANDROID}, textures not inlined ({} so, one archive holds {}): {file}.resS kept, split at stream \
-                         boundaries into {} parts: {parts}; {} textures and {} meshes stream from them ({} moved to a later part)",
+                        "platform -> {ANDROID}, textures not inlined ({} so: no archive holds it whole): {file}.resS kept, split at stream \
+                         boundaries into {} parts of at most {}: {parts}; {} textures and {} meshes stream from them ({} moved to a later part)",
                         sz(inlined),
-                        sz(ctx.split.part),
                         sp.parts.len(),
+                        sz(ctx.split.part),
                         sp.textures,
                         sp.meshes,
                         sp.moved

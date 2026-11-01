@@ -65,7 +65,8 @@ pub fn inline_serialized(ctx: &Ctx, src: &str, dst: &str, consume: bool) -> Resu
             .map(|r| r.size)
             .sum::<u64>();
     let kept = still.contains(&own).then_some(res_len);
-    if res_len > 0 && ctx.split.wants(py::basename(src), inlined, kept) {
+    let guid = ctx.unity.line() >= crate::android_data::OBB_GUID_FROM;
+    if res_len > 0 && ctx.split.wants(py::basename(src), inlined, kept, guid) {
         return crate::ress_split::split_for(ctx, &mut f.sf, refs, src, dst, consume)
             .map(|s| Placed::Split(inlined, s));
     }

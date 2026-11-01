@@ -304,10 +304,10 @@ fn split_place_read_back() {
     let rule = SplitRule::new(limit, Some("10000")).unwrap();
     let inlined =
         std::fs::metadata(&srcf).unwrap().len() + refs.iter().map(|r| r.size).sum::<u64>();
-    assert!(rule.wants("resources.assets", inlined, None));
+    assert!(rule.wants("resources.assets", inlined, None, true));
     assert!(SplitRule::new(limit, None)
         .unwrap()
-        .wants("resources.assets", inlined, None));
+        .wants("resources.assets", inlined, None, true));
 
     let mut sf = open(&srcf, &db);
     let dst = out.join("resources.assets");
@@ -563,5 +563,79 @@ fn in_order_unchanged() {
         ["assets/AssetBundles/b3", "assets/AssetBundles/b4"]
     );
     assert!(log.is_empty(), "{log:?}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A file that fits in some archive whole is not split and packs as before: one in the old
+/// 48 MiB window (under the APK's margin, over the OBBs') alone in the main OBB, the largest
+/// that fits at all alone in the patch OBB (sparse files: nothing is written).
+#[test]
+fn whole_files_not_split() {
+    let d = tmpdir("c");
+    let sparse = |n: &str, size: u64| {
+        let p = d.join(n);
+        std::fs::File::create(&p).unwrap().set_len(size).unwrap();
+        Src::Path(p.to_string_lossy().into_owned())
+    };
+    let rule = SplitRule::new(ZIP_LIMIT, None).unwrap();
+    let name = "resources.assets";
+    let bid = "0123abcd-0000-1111-2222-333344445555";
+    let marker = vec![
+        (format!("assets/{bid}"), Src::Bytes(Vec::new())),
+        (
+            "unity_obb_guid".to_string(),
+            Src::Bytes(bid.as_bytes().to_vec()),
+        ),
+    ];
+    let n = ["a.apk".to_string(), "m.obb".into(), "p.obb".into()];
+    let names = |v: &[(String, Src)]| v.iter().map(|e| e.0.clone()).collect::<Vec<_>>();
+    let window = ZIP_LIMIT - (40 << 20);
+    let max = ZIP_LIMIT - 22 - 170 - 148 - 84 - 2 * 32;
+    for (size, main_has_it) in [(window, true), (max, false)] {
+        assert!(!rule.wants(name, size, None, true), "{size}");
+        let apk = vec![
+            (
+                "assets/bin/Data/level0".to_string(),
+                sparse("level0", 1 << 20),
+            ),
+            (format!("assets/bin/Data/{name}"), sparse(name, size)),
+        ];
+        let obb = if main_has_it {
+            vec![("assets/AssetBundles/a".to_string(), sparse("a", 100 << 20))]
+        } else {
+            Vec::new()
+        };
+        let mut log = Vec::new();
+        let (a, m, p) = place_archives(apk, obb, &marker, ZIP_LIMIT, "all", &n, &mut |l| {
+            log.push(l.to_string())
+        })
+        .unwrap();
+        assert_eq!(names(&a), ["assets/bin/Data/level0"]);
+        assert_eq!(log.len(), 1, "{log:?}"); // the move to the OBBs, nothing spread
+        let it = vec![format!("assets/bin/Data/{name}")];
+        if main_has_it {
+            assert_eq!(names(&m)[2..], it[..]);
+            assert_eq!(names(&p), ["assets/AssetBundles/a"]);
+        } else {
+            assert_eq!(m.len(), 2);
+            assert_eq!(names(&p), it);
+            // the patch OBB is then exactly the limit
+            let mut all: Vec<&(String, Src)> = marker.iter().collect();
+            all.extend(p.iter());
+            let total: u64 = 22
+                + all
+                    .iter()
+                    .map(|(a, s)| {
+                        84 + 2 * a.len() as u64
+                            + match s {
+                                Src::Bytes(b) => b.len() as u64,
+                                Src::Path(p) => std::fs::metadata(p).unwrap().len(),
+                            }
+                    })
+                    .sum::<u64>();
+            assert_eq!(total, ZIP_LIMIT);
+        }
+    }
+    assert!(rule.wants(name, max + 1, None, true));
     let _ = std::fs::remove_dir_all(&d);
 }
