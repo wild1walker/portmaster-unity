@@ -2,7 +2,10 @@
 Unity file of a data folder, one JSON line a file. The Rust side (crates/unityfs/examples/golden.rs)
 writes the same lines; unityfs.sh runs both and compares them.
 
-    python3 unityfs_golden.py <data dir> <scratch dir> [--only TEXT] [--no-write] [--no-patch] > py.jsonl
+    python3 unityfs_golden.py <data dir> <scratch dir> [--only TEXT] [--stage DIR] [--no-write] [--no-patch] > py.jsonl
+
+--stage: each file is copied into DIR first and read from there (a slow shared folder is read once).
+--skip JSONL: files that file has lines of are skipped (a run continued).
 
 Per file:
   objects    [[path id, class id, class name, read, rewrite]]: read is the SHA-256 (16 hex) of the
@@ -101,17 +104,18 @@ def sha_file(p):
 
 
 class Job:
-    """What Loaded.write_to needs of a convert job: the output written to one path."""
+    """What Loaded.write_to needs of a convert job: the output's SHA-256 (bytes hashed as they are,
+    a file hashed and removed)."""
 
     def __init__(self, out):
-        self.out = out
+        self.out, self.sha = out, None
 
     def write(self, rel, data):
-        with open(self.out, 'wb') as f:
-            f.write(data)
+        self.sha = sha(data)
 
     def write_file(self, rel, path):
-        os.replace(path, self.out)
+        self.sha = sha_file(path)
+        os.remove(path)
 
 
 def is_unityfs(p):
@@ -165,21 +169,18 @@ def edit_one(lf):
 
 
 def write(path, out, spill, edit=False, inline=False):
-    from pmunity.unity_io import Loaded, save_serialized_to
+    from pmunity.unity_io import Loaded
     lf = Loaded(path, spill_dir=spill, spill_mb=64)
     try:
         if edit:
             edit_one(lf)
         if lf.is_bundle:
-            lf.write_to(Job(out), 'x', inline=inline)
-        elif not save_serialized_to(lf.sf, out):
-            with open(out, 'wb') as f:
-                f.write(lf.save())
+            job = Job(out)
+            lf.write_to(job, 'x', inline=inline)
+            return job.sha
+        return sha(lf.save())               # (save_serialized_to writes the same bytes)
     finally:
         lf.close()
-    h = sha_file(out)
-    os.remove(out)
-    return h
 
 
 def blocks(path):
@@ -205,15 +206,20 @@ def blocks(path):
             'kinds': {str(k): v for k, v in sorted(kinds.items())}}
 
 
-def patch(path, scratch):
-    from pmunity import android_data as AD
-    cp = os.path.join(scratch, 'patch.copy')
-    with open(path, 'rb') as fi, open(cp, 'wb') as fo:     # (no sendfile: it crawls on a shared folder)
+def copy(src, dst):
+    """A plain copy (sendfile crawls on a shared folder)."""
+    with open(src, 'rb') as fi, open(dst, 'wb') as fo:
         while True:
             b = fi.read(1 << 20)
             if not b:
                 break
             fo.write(b)
+
+
+def patch(path, scratch):
+    from pmunity import android_data as AD
+    cp = os.path.join(scratch, 'patch.copy')
+    copy(path, cp)
     try:
         if is_unityfs(path):
             res = [list(r) for r in AD.patch_bundle_platform(cp, AD.ANDROID)]
@@ -252,24 +258,37 @@ def main():
     ap.add_argument('data')
     ap.add_argument('scratch')
     ap.add_argument('--only')
+    ap.add_argument('--stage')
+    ap.add_argument('--skip')
     ap.add_argument('--no-write', action='store_true')
     ap.add_argument('--no-patch', action='store_true')
     ap.add_argument('--no-objects', action='store_true')
     a = ap.parse_args()
     from pmunity.unity_io import map_big_blocks
     map_big_blocks()
-    os.makedirs(a.scratch, exist_ok=True)
-    spill = os.path.join(a.scratch, 'spill')
+    skip = set()
+    if a.skip and os.path.exists(a.skip):
+        with open(a.skip) as f:
+            skip = {json.loads(line)['file'] for line in f if line.strip()}
+    work = a.stage or a.scratch
+    os.makedirs(work, exist_ok=True)
+    spill = os.path.join(work, 'spill')
     for p in unity_files(a.data):
         rel = os.path.relpath(p, a.data)
         if a.only and a.only not in rel:
             continue
+        if rel in skip:
+            continue
+        staged = os.path.join(a.stage, os.path.basename(p)) if a.stage else None
+        if staged:
+            copy(p, staged)
+            p = staged
         rec = {'file': rel, 'kind': 'bundle' if is_unityfs(p) else 'serialized'}
         try:
             if not a.no_objects:
                 rec['objects'], rec['classes'] = objects_of(p, spill)
             if not a.no_write:
-                out = os.path.join(a.scratch, 'out.bin')
+                out = os.path.join(work, 'out.bin')
                 rec['save'] = write(p, out, spill)
                 rec['edit'] = write(p, out, spill, edit=True)
                 if rec['kind'] == 'bundle':
@@ -277,11 +296,13 @@ def main():
             if rec['kind'] == 'bundle':
                 rec['blocks'] = blocks(p)
             if not a.no_patch:
-                rec['patch'] = patch(p, a.scratch)
+                rec['patch'] = patch(p, work)
         except Exception as ex:  # noqa: BLE001
             rec['error'] = f'{type(ex).__name__}: {ex}'
             traceback.print_exc(file=sys.stderr)
-        shutil.rmtree(spill, ignore_errors=True)
+        if staged:
+            os.remove(staged)
+            shutil.rmtree(spill, ignore_errors=True)
         rec['rss_mb'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss >> 10
         print(json.dumps(rec), flush=True)
 

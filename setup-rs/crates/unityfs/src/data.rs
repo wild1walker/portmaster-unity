@@ -61,6 +61,10 @@ pub fn not_one(path: &Path, n: usize) -> Error {
     ))
 }
 
+/// A writer that can seek (the header's sizes are written last).
+pub trait WriteSeek: std::io::Write + std::io::Seek {}
+impl<T: std::io::Write + std::io::Seek> WriteSeek for T {}
+
 /// New contents for a bundle node.
 pub enum NodeData {
     Bytes(Vec<u8>),
@@ -375,37 +379,47 @@ impl DataFile {
     /// bundle): textures' streamed pixels go into the texture objects, one texture in memory at a
     /// time, and the .resS nodes nothing reads any more are dropped (android_data's inlining).
     pub fn write_to(&mut self, out: &Path, inline: bool) -> Result<()> {
+        let f = std::fs::File::create(out)?;
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+        let tmp = out.with_file_name(format!(
+            "{}.cab.tmp",
+            out.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        self.write_into(&mut w, inline, &tmp)?;
+        std::io::Write::flush(&mut w)?;
+        Ok(())
+    }
+
+    /// write_to into any writer. A bundle's new serialized file is held in memory while the
+    /// bundle is packed when the bundle is no bigger than spill_mb (UnityPy holds it so), else
+    /// in a file: in the spill folder, or at `tmp` without one.
+    pub fn write_into<W: std::io::Write + std::io::Seek>(
+        &mut self,
+        out: &mut W,
+        inline: bool,
+        tmp: &Path,
+    ) -> Result<()> {
         if !self.is_bundle {
-            let f = std::fs::File::create(out)?;
-            let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
-            self.sf.save_to(&mut w, |_, _| Ok(None))?;
-            std::io::Write::flush(&mut w)?;
-            return Ok(());
+            return self.sf.save_to(out, |_, _| Ok(None));
         }
+        let small =
+            self.bundle.as_ref().unwrap().bundle.header.nodes_size() <= self.opts.spill_mb << 20;
         let tmp = match &self.opts.spill_dir {
-            Some(d) => {
-                std::fs::create_dir_all(d)?;
-                d.join(format!(
-                    "{}.new",
-                    safe_name(self.cab_name.as_deref().unwrap_or("cab"))
-                ))
-            }
-            None => out.with_file_name(format!(
-                "{}.cab.tmp",
-                out.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
+            Some(d) => d.join(format!(
+                "{}.new",
+                safe_name(self.cab_name.as_deref().unwrap_or("cab"))
             )),
+            None => tmp.to_path_buf(),
         };
         let res = (|| -> Result<()> {
             let mut drop_nodes = Vec::new();
-            {
-                let f = std::fs::File::create(&tmp)?;
-                let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+            let mut save = |w: &mut dyn WriteSeek| -> Result<()> {
                 if inline {
                     let (plan, still) = crate::inline::plan(&self.sf)?;
                     let this = &*self;
-                    this.sf.save_to(&mut w, |sf, o| {
+                    this.sf.save_to(w, |sf, o| {
                         if !plan.contains(&o.path_id) {
                             return Ok(None);
                         }
@@ -419,24 +433,42 @@ impl DataFile {
                             drop_nodes.push(n);
                         }
                     }
+                    Ok(())
                 } else {
-                    self.sf.save_to(&mut w, |_, _| Ok(None))?;
+                    self.sf.save_to(w, |_, _| Ok(None))
                 }
+            };
+            let sf_src: SharedSource = if small {
+                let mut c = std::io::Cursor::new(Vec::new());
+                save(&mut c)?;
+                Arc::new(MemSource(c.into_inner()))
+            } else {
+                if let Some(d) = tmp.parent() {
+                    std::fs::create_dir_all(d)?;
+                }
+                let f = std::fs::File::create(&tmp)?;
+                let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+                save(&mut w)?;
                 std::io::Write::flush(&mut w)?;
-            }
+                drop(w);
+                Arc::new(FileSource::open(&tmp)?)
+            };
             for n in drop_nodes {
                 self.remove_node(&n)?;
             }
-            let nodes = self.pack_nodes(Arc::new(FileSource::open(&tmp)?));
-            bundle::pack_file(
+            let nodes = self.pack_nodes(sf_src);
+            bundle::pack(
                 out,
                 &self.pack_header(),
                 &nodes,
                 bundle::LZ4_DATA_FLAG,
                 bundle::LZ4_BLOCK_FLAG,
+                crate::compress::threads(),
             )
         })();
-        let _ = std::fs::remove_file(&tmp);
+        if !small {
+            let _ = std::fs::remove_file(&tmp);
+        }
         res
     }
 

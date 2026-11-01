@@ -219,10 +219,18 @@ fn edit_one(f: &mut DataFile) -> Result<Option<i64>> {
     Ok(None)
 }
 
+/// SHA-256 of the file written (write_into: in memory up to 256 MB, else through a file).
 fn write(p: &Path, o: &Options, out: &Path, edit: bool, inline: bool) -> Result<String> {
     let mut f = DataFile::open(p, o)?;
     if edit {
         edit_one(&mut f)?;
+    }
+    let big = f.bundle_header().map(|h| h.nodes_size()).unwrap_or(0) > 256 << 20;
+    let tmp = out.with_extension("tmp");
+    if !big {
+        let mut c = std::io::Cursor::new(Vec::new());
+        f.write_into(&mut c, inline, &tmp)?;
+        return Ok(sha256::hex(&c.into_inner()));
     }
     f.write_to(out, inline)?;
     drop(f);
@@ -263,20 +271,7 @@ fn blocks(p: &Path) -> Result<String> {
 
 fn patch(p: &Path, scratch: &Path) -> Result<String> {
     let cp = scratch.join("patch.copy");
-    // (a plain copy: copy_file_range crawls on a shared folder)
-    {
-        use std::io::{Read, Write};
-        let mut i = std::fs::File::open(p)?;
-        let mut o = std::fs::File::create(&cp)?;
-        let mut b = vec![0u8; 1 << 20];
-        loop {
-            let n = i.read(&mut b)?;
-            if n == 0 {
-                break;
-            }
-            o.write_all(&b[..n])?;
-        }
-    }
+    copy_file(p, &cp)?;
     let res = (|| -> Result<String> {
         let res: Vec<String> = if unityfs::bundle::is_unityfs(p) {
             platform::patch_bundle_platform(&cp, platform::ANDROID)?
@@ -294,6 +289,21 @@ fn patch(p: &Path, scratch: &Path) -> Result<String> {
     })();
     let _ = std::fs::remove_file(&cp);
     res
+}
+
+/// A plain copy (copy_file_range crawls on a shared folder).
+fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let mut i = std::fs::File::open(src)?;
+    let mut o = std::fs::File::create(dst)?;
+    let mut b = vec![0u8; 1 << 20];
+    loop {
+        let n = i.read(&mut b)?;
+        if n == 0 {
+            return Ok(());
+        }
+        o.write_all(&b[..n])?;
+    }
 }
 
 fn rss_mb() -> u64 {
@@ -319,15 +329,41 @@ fn main() {
         .iter()
         .position(|a| a == "--only")
         .map(|i| args[i + 1].clone());
+    let stage = args
+        .iter()
+        .position(|a| a == "--stage")
+        .map(|i| PathBuf::from(&args[i + 1]));
+    let skip: Vec<String> = args
+        .iter()
+        .position(|a| a == "--skip")
+        .and_then(|i| std::fs::read_to_string(&args[i + 1]).ok())
+        .map(|t| {
+            t.lines()
+                .filter_map(|l| {
+                    l.strip_prefix("{\"file\": \"")
+                        .and_then(|r| r.split('"').next())
+                        .map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let pos: Vec<&String> = args
         .iter()
-        .filter(|a| !a.starts_with("--") && Some(*a) != only.as_ref())
+        .enumerate()
+        .filter(|(i, a)| {
+            !a.starts_with("--")
+                && (*i == 0 || !["--only", "--stage", "--skip"].contains(&args[i - 1].as_str()))
+        })
+        .map(|(_, a)| a)
         .collect();
     let data = PathBuf::from(pos[0]);
     let scratch = PathBuf::from(pos[1]);
-    std::fs::create_dir_all(&scratch).unwrap();
+    let work = stage.clone().unwrap_or_else(|| scratch.clone());
+    std::fs::create_dir_all(&work).unwrap();
     let db = Arc::new(ClassDb::default_db().expect("class database ($PMU_TPK)"));
-    let o = opts(&db, &scratch);
+    let o = opts(&db, &work);
+    let scratch = work;
     for p in unity_files(&data) {
         let rel = p
             .strip_prefix(&data)
@@ -339,15 +375,30 @@ fn main() {
                 continue;
             }
         }
+        if skip.contains(&rel) {
+            continue;
+        }
+        // (staged: the file read once from the data folder, then from the stage folder)
+        let staged = stage.as_ref().map(|d| d.join(p.file_name().unwrap()));
+        if let Some(s) = &staged {
+            copy_file(&p, s).unwrap();
+        }
+        let p = staged.clone().unwrap_or(p);
         let is_bundle = unityfs::bundle::is_unityfs(&p);
         let mut line = format!(
             "{{\"file\": {}, \"kind\": {}",
             js(&rel),
             js(if is_bundle { "bundle" } else { "serialized" })
         );
+        let t0 = std::time::Instant::now();
+        let mut times: Vec<(&str, u128)> = Vec::new();
+        let lap = |name: &'static str, times: &mut Vec<(&str, u128)>| {
+            times.push((name, t0.elapsed().as_millis()));
+        };
         let res = (|| -> Result<()> {
             if !flag("--no-objects") {
                 objects(&p, &o, &mut line)?;
+                lap("objects", &mut times);
             }
             if !flag("--no-write") {
                 let out = scratch.join("out.bin");
@@ -356,32 +407,49 @@ fn main() {
                     ", \"save\": {}",
                     js(&write(&p, &o, &out, false, false)?)
                 );
+                lap("save", &mut times);
                 let _ = write!(
                     line,
                     ", \"edit\": {}",
                     js(&write(&p, &o, &out, true, false)?)
                 );
+                lap("edit", &mut times);
                 if is_bundle {
                     let _ = write!(
                         line,
                         ", \"inline\": {}",
                         js(&write(&p, &o, &out, false, true)?)
                     );
+                    lap("inline", &mut times);
                 }
             }
             if is_bundle {
                 let _ = write!(line, ", \"blocks\": {}", blocks(&p)?);
+                lap("blocks", &mut times);
             }
             if !flag("--no-patch") {
                 let _ = write!(line, ", \"patch\": {}", patch(&p, &scratch)?);
+                lap("patch", &mut times);
             }
             Ok(())
         })();
         if let Err(e) = res {
             let _ = write!(line, ", \"error\": {}", js(&e.to_string()));
         }
-        let _ = std::fs::remove_dir_all(scratch.join("spill"));
-        let _ = write!(line, ", \"rss_mb\": {}}}", rss_mb());
+        if let Some(s) = &staged {
+            let _ = std::fs::remove_file(s);
+            let _ = std::fs::remove_dir_all(scratch.join("spill"));
+        }
+        let ms: Vec<String> = times
+            .iter()
+            .map(|(n, t)| format!("{}: {t}", js(n)))
+            .collect();
+        let _ = write!(
+            line,
+            ", \"ms\": {{{}}}, \"rss_mb\": {}}}",
+            ms.join(", "),
+            rss_mb()
+        );
         println!("{line}");
     }
 }

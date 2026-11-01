@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Bytes read at offsets.
 pub trait Source: Send + Sync {
@@ -47,17 +47,28 @@ pub trait Source: Send + Sync {
 
 pub type SharedSource = Arc<dyn Source>;
 
-/// A file, read with pread.
+/// A file, read with pread through a window of WINDOW bytes: the small reads of a serialized
+/// file's objects (thousands of a few dozen bytes, mostly in order) are one system call a
+/// window, as the Python's memory map reads them a page at a time.
 pub struct FileSource {
     f: File,
     len: u64,
+    /// (offset, bytes) of the last window read.
+    win: Mutex<(u64, Vec<u8>)>,
 }
 
 impl FileSource {
+    /// Bytes a small read brings in.
+    pub const WINDOW: usize = 256 << 10;
+
     pub fn open(path: impl AsRef<std::path::Path>) -> io::Result<Self> {
         let f = File::open(path)?;
         let len = f.metadata()?.len();
-        Ok(FileSource { f, len })
+        Ok(FileSource {
+            f,
+            len,
+            win: Mutex::new((0, Vec::new())),
+        })
     }
 }
 
@@ -66,7 +77,24 @@ impl Source for FileSource {
         self.len
     }
     fn read_at(&self, off: u64, buf: &mut [u8]) -> io::Result<()> {
-        self.f.read_exact_at(buf, off)
+        let n = buf.len() as u64;
+        if n >= Self::WINDOW as u64 / 4 {
+            return self.f.read_exact_at(buf, off);
+        }
+        let mut w = self.win.lock().unwrap();
+        if !(off >= w.0 && off + n <= w.0 + w.1.len() as u64) {
+            let end = (off + Self::WINDOW as u64).min(self.len).max(off + n);
+            let mut v = std::mem::take(&mut w.1);
+            v.resize((end - off) as usize, 0);
+            if let Err(e) = self.f.read_exact_at(&mut v, off) {
+                w.1 = Vec::new();
+                return Err(e);
+            }
+            *w = (off, v);
+        }
+        let s = (off - w.0) as usize;
+        buf.copy_from_slice(&w.1[s..s + buf.len()]);
+        Ok(())
     }
 }
 

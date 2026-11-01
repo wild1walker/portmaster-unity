@@ -5,7 +5,8 @@
 # read, rewrite, edit, inline, recompress and platform-patch every Unity file of the data folder,
 # each into <out dir>/rs or <out dir>/py one file at a time, and unityfs_compare.py compares their
 # lines (<out dir>/rs.jsonl, py.jsonl). The class database is UnityPy's ($PMU_TPK).
-# RUST_ONLY=1 / PY_ONLY=1 run one side (the other's lines kept from before).
+# RUST_ONLY=1 / PY_ONLY=1 run one side (the other's lines kept from before); RESUME=1 continues a run
+# that stopped (the files with lines already are skipped).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 wt=$(cd "$here/../../.." && pwd)
@@ -15,11 +16,19 @@ export PMU_TPK="${PMU_TPK:-/opt/pylibs/UnityPy/resources/lzma.tpk}"
 py() { PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH="$wt/convert:/opt/pylibs" /opt/py/bin/python3 "$@"; }
 if [ -z "${PY_ONLY:-}" ]; then
   (cd "$wt/setup-rs" && CARGO_INCREMENTAL=0 cargo build --release -q -p unityfs --example golden)
-  "${CARGO_TARGET_DIR:-$wt/setup-rs/target}/release/examples/golden" "$data" "$out/rs" "$@" > "$out/rs.jsonl"
+  if [ -n "${RESUME:-}" ]; then
+    "${CARGO_TARGET_DIR:-$wt/setup-rs/target}/release/examples/golden" "$data" "$out/rs" --skip "$out/rs.jsonl" "$@" >> "$out/rs.jsonl"
+  else
+    "${CARGO_TARGET_DIR:-$wt/setup-rs/target}/release/examples/golden" "$data" "$out/rs" "$@" > "$out/rs.jsonl"
+  fi
   rm -rf "$out/rs"
 fi
 if [ -z "${RUST_ONLY:-}" ]; then
-  py "$here/unityfs_golden.py" "$data" "$out/py" "$@" > "$out/py.jsonl"
+  if [ -n "${RESUME:-}" ]; then
+    py "$here/unityfs_golden.py" "$data" "$out/py" --skip "$out/py.jsonl" "$@" >> "$out/py.jsonl"
+  else
+    py "$here/unityfs_golden.py" "$data" "$out/py" "$@" > "$out/py.jsonl"
+  fi
   rm -rf "$out/py"
 fi
 py "$here/unityfs_compare.py" "$out/py.jsonl" "$out/rs.jsonl"

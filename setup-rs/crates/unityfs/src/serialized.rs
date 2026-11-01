@@ -883,7 +883,7 @@ impl SerializedFile {
     /// data streamed: in memory the metadata and one object at a time. `prepare(file, object)`
     /// is called before each object is written and may return bytes to write for it this time
     /// only (pmunity's prepare: a texture given its pixels for this write).
-    pub fn save_to<W: Write + Seek>(
+    pub fn save_to<W: Write + Seek + ?Sized>(
         &self,
         out: &mut W,
         mut prepare: impl FnMut(&SerializedFile, &ObjectInfo) -> Result<Option<Vec<u8>>>,
@@ -906,7 +906,9 @@ impl SerializedFile {
                     d.len() as u64
                 }
                 (None, None) => {
-                    self.src.copy_to(o.byte_start, o.byte_size as u64, out)?;
+                    let mut o2 = &mut *out;
+                    self.src
+                        .copy_to(o.byte_start, o.byte_size as u64, &mut o2)?;
                     o.byte_size as u64
                 }
             };
