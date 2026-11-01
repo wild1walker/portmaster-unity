@@ -35,7 +35,7 @@ room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB
 SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
 echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
-# Python's TLS needs the system's CA certificates (for Unity's servers)
+# the setup's tools need the system's CA certificates for Unity's servers (HTTPS)
 if [ -z "$SSL_CERT_FILE" ]; then
   for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
     [ -f "$f" ] && { export SSL_CERT_FILE="$f"; break; }
@@ -43,18 +43,26 @@ if [ -z "$SSL_CERT_FILE" ]; then
 fi
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
-# ---- the setup's Python (CPython + UnityPy and the image/audio libraries, aarch64)
-PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4, PIL" 2>/dev/null; then
-  step "unpacking the setup tools"
-  rm -rf "$W/python"
-  # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
-  ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
+# ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs); a
+# port whose conversion needs what pmu does not do yet ships the setup's Python instead (CPython +
+# UnityPy and the image/audio libraries, aarch64: setup/python.tar.gz and the converter)
+if [ -f "$S/pmu" ]; then
+  chmod +x "$S/pmu" 2>/dev/null
+  "$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
+  pm() { "$S/pmu" "$@"; }
+else
   PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-  [ -n "$PY" ] || fail "The setup's Python is incomplete."
+  if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4, PIL" 2>/dev/null; then
+    step "unpacking the setup tools"
+    rm -rf "$W/python"
+    # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
+    ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
+    PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
+    [ -n "$PY" ] || fail "The setup's Python is incomplete."
+  fi
+  export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
+  pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
 fi
-export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
 
 # ---- answers to the port's questions: kept from the first run, else PortMaster's patcher (<ID> in
 # the environment), else setup.txt (<id>=<value>, older PortMaster), else the default
@@ -203,7 +211,8 @@ if [ ! -f "$W/.step_convert" ]; then
   # a Vulkan-only build's shaders: SPIRV-Cross (the release's pmspirvcross, aarch64)
   if [ -f "$S/pmspirvcross" ]; then chmod +x "$S/pmspirvcross"; export PMSPIRVCROSS="$S/pmspirvcross"; fi
   pm convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" \
-    || fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."
+    || { [ $? = 2 ] && [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python."
+         fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."; }
   hook post_convert
   touch "$W/.step_convert"
 fi
@@ -243,8 +252,8 @@ fi
 # the .NET 4.x one) and the APK, OBB, Mono's config
 step "installing"
 Z="$W/android/zip"
-rt=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['unity'].get('scripting_runtime') or '')" \
-     "$W/android/android_data_report.json" 2>/dev/null)
+# (the report's "unity" section names the scripting runtime: json.dump's one key a line)
+rt=$(sed -n 's/^  "scripting_runtime": "\(.*\)",\{0,1\}$/\1/p' "$W/android/android_data_report.json" 2>/dev/null | head -1)
 case "$rt" in *bdwgc*) other=libmono.so;; *) other=libmonobdwgc-2.0.so;; esac
 mkdir -p "$GAMEDIR/lib"
 rm -f "$GAMEDIR/lib/"*.so

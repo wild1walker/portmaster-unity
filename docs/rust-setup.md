@@ -34,6 +34,18 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
+## The setups that run pmu
+
+Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android route: its
+patchscript runs `setup/pmu` when the release has it (`pm() { "$S/pmu" "$@"; }`; the install step
+reads the report's scripting runtime with sed), else the setup's Python. `pmunity port package`
+ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts of what is compiled into
+it) when it runs every command of the port's setup (`port.py`'s `pmu_covers`: no shaders from
+Direct3D 11, Vulkan or Metal, no `fused_post`, no quality step, no converter plugins of the
+porter's own), else the converter and the Python as before. Hollow Knight's whole setup (player
+fetch, winbcl, convert with grab_fetch, android-data with the video shader and asmpatch) runs on
+pmu and gives the Python's APK and OBB, byte for byte.
+
 ## Layout
 
 ```
