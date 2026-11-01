@@ -407,7 +407,14 @@ fn pass_mut(t: &mut Value, ss: usize, p: usize) -> Result<&mut Value> {
 /// Whether a DataFile::open error is the Python's NotOneSerializedFile (a bundle with no or
 /// several serialized files, or whose serialized node is not one).
 pub fn not_one(path: &Path, e: &unityfs::Error) -> bool {
-    matches!(e, unityfs::Error::Unsupported(_)) && is_bundle(path)
+    match e {
+        unityfs::Error::Unsupported(m) => {
+            is_bundle(path)
+                && (m.contains(": expected one serialized file in the bundle, found ")
+                    || m.ends_with(" is not a serialized file"))
+        }
+        _ => false,
+    }
 }
 
 pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
