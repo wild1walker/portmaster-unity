@@ -84,6 +84,15 @@ tests use small made-up data built in the test (no Unity or game files in the re
 and saves inputs, outputs and every program translation to `<out>`; then
 `rs.sh <worktree> env SHADERX_GOLDEN=<out> cargo test --release -p shaderx` compares them.
 
+texcodec's golden tests take their data from the Python, run in the same image:
+`tests/golden/textures_golden.py dump <data> <config.json> <dir> [--set textures.k=v] [--range a:b]`
+runs the textures step's own per-texture code and writes each texture's fields, raw pixels and
+result to `<dir>`; `TEXCODEC_GOLDEN=<dir> cargo test -p texcodec --release --test golden` checks
+texcodec against it (same decisions, same bytes). `tests/golden/texcodec_fuzz.py <dir>` and
+`TEXCODEC_FUZZ=<dir> ... --test libs` do the same for the libraries on made-up images (every
+format, resize boxes, every ASTC preset and tier, other block sizes). Run them for the musl target
+too (`--target aarch64-unknown-linux-musl`): the shipped binary has musl's libm.
+
 ## Rules
 
 - Byte-identical outputs (above). Exit statuses and the files a command leaves are part of it.
