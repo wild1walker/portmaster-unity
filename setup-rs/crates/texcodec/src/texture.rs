@@ -281,10 +281,8 @@ pub fn choose(t: &Texture, s: &Settings) -> Option<Choice> {
 /// Unity's TextureFormat of ASTC LDR with this footprint (textures.py astc_format_id): up to Unity
 /// 2018 RGB (48-53) and RGBA (54-59); from 2019 only the first set. unity: the data's version.
 pub fn astc_format_id(block: (u32, u32), alpha: bool, unity: Option<&str>) -> Result<i32, Error> {
-    let alpha = alpha
-        && !unity
-            .and_then(|u| u.split('.').next()?.parse::<i64>().ok())
-            .is_some_and(|v| v >= 2019);
+    let major = unity.and_then(|u| u.split('.').next()?.parse::<i64>().ok());
+    let alpha = alpha && major.is_none_or(|v| v < 2019);
     let i = [4, 5, 6, 8, 10, 12]
         .iter()
         .position(|&n| block == (n, n))

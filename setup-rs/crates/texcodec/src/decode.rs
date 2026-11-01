@@ -561,8 +561,8 @@ fn decode_bc7_block(col: &mut [[u8; 4]; 16], src: &[u8]) {
         }
         for e in ep.iter_mut().take(numep) {
             let val = load(1);
-            for c in 0..3 {
-                assign(&mut e[c], val);
+            for v in &mut e[..3] {
+                assign(v, val);
             }
             if ab != 0 {
                 assign(&mut e[3], val);
@@ -578,8 +578,8 @@ fn decode_bc7_block(col: &mut [[u8; 4]; 16], src: &[u8]) {
         for i in (0..numep).step_by(2) {
             let val = load(1);
             for e in ep[i..i + 2].iter_mut() {
-                for c in 0..3 {
-                    assign(&mut e[c], val);
+                for v in &mut e[..3] {
+                    assign(v, val);
                 }
                 if ab != 0 {
                     assign(&mut e[3], val);
@@ -588,8 +588,8 @@ fn decode_bc7_block(col: &mut [[u8; 4]; 16], src: &[u8]) {
         }
     }
     for e in ep.iter_mut().take(numep) {
-        for c in 0..3 {
-            e[c] = expand_quantized(e[c], cb);
+        for v in &mut e[..3] {
+            *v = expand_quantized(*v, cb);
         }
         if ab != 0 {
             e[3] = expand_quantized(e[3], ab);

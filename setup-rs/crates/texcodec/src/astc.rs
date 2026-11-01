@@ -394,6 +394,7 @@ pub fn preset(name: &str) -> Result<f32, Error> {
 }
 
 /// guided_astc's load_block: a block's texels, past the image's edge its last row and column.
+#[allow(clippy::too_many_arguments)]
 fn load_block(
     img: &[u8],
     w: usize,
