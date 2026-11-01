@@ -11,7 +11,8 @@
 # the output tree (paths, types, modes, sizes, SHA-256 of every file) and stderr (where the Python
 # ends with a message rather than a traceback). Big outputs are hashed and removed before the next
 # run: the game's installer unpacks to ~4 GB. A real setup.zip at <scratch dir>/setup.zip is tested
-# too. Prints one line a case and the totals; exits 1 when a case differs.
+# too. KEEP_PY=1 keeps the Python's results of an earlier run (its runs of the big installers take
+# the longest). Prints one line a case and the totals; exits 1 when a case differs.
 set -u
 S=$(cd "$1" && pwd)
 shift
@@ -39,6 +40,8 @@ run() {
   shift 3
   local r=$S/r/$name.$impl t0=$SECONDS
   mkdir -p "$S/r"
+  rm -rf "$out"
+  if [ "$impl" = py ] && [ -n "${KEEP_PY:-}" ] && [ -f "$r.tree" ]; then return; fi   # (a Python run kept)
   if [ "$impl" = py ]; then
     if [ "$1" = zip-extract ]; then shift; PY -m zipfile -e "$@"; else PY -m pmunity "$@"; fi
   else
@@ -46,7 +49,7 @@ run() {
   fi > "$r.out" 2> "$r.err"
   echo $? > "$r.rc"
   echo $((SECONDS - t0)) > "$r.time"
-  tree "$out" "$r.tree"
+  tree "$out" "$r.tree.part" && mv "$r.tree.part" "$r.tree"     # (whole, or not there)
   rm -rf "$out"
 }
 
