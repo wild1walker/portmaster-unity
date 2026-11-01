@@ -1428,9 +1428,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                         .collect::<Vec<_>>()
                         .join(", ");
                     let note = format!(
-                        "platform -> {ANDROID}, textures not inlined ({} so: no archive holds it whole): {file}.resS kept, split at stream \
+                        "platform -> {ANDROID}, textures not inlined ({} so: {}): {file}.resS kept, split at stream \
                          boundaries into {} parts of at most {}: {parts}; {} textures and {} meshes stream from them ({} moved to a later part)",
                         sz(inlined),
+                        if ctx.split.forced {
+                            "split as PMU_RESS_SPLIT asks (tests)"
+                        } else {
+                            "no archive holds it whole"
+                        },
                         sp.parts.len(),
                         sz(ctx.split.part),
                         sp.textures,
