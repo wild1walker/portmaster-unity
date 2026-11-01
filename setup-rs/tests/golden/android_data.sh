@@ -15,6 +15,7 @@
 #   obb     setup/dlcscript step 3: a game built (by the Python, as mini32) without the DLC's
 #           bundles ($PMU_TEST_DATA/cuphead/dlc_bundles.txt), then patch-obb pack of the DLC's
 #           converted bundles beside it
+#   video   mini32 with the video shader (no --no-video-shader: Hidden/VideoDecodeAndroid, video.py)
 #   space   mini32 on a card that is too full ($PMU_TEST_FREE_BYTES free: the Python's os.statvfs
 #           and pmu's statvfs report it): exit 4 (NO_SPACE) and the message, before any archive
 #
@@ -183,7 +184,7 @@ setup32() {
     --root-file animclips.txt --drop-missing-assembly GalaxyCSharp.dll --managed-file "$S/setup/CupheadPort.dll" \
     --game-managed "$D/Managed" \
     --assembly-patch Assembly-CSharp.dll "env DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 '$S/setup/codepatch' --target=android $DLC {managed} {out}" \
-    --mono-etc "$GD/mono-etc" --dllmap SDL2=libSDL2-2.0.so.0 --consume-src --verify-bundles 2 --pack all --no-video-shader
+    --mono-etc "$GD/mono-etc" --dllmap SDL2=libSDL2-2.0.so.0 --consume-src --verify-bundles 2 --pack all ${VIDEO:---no-video-shader}
   rm -rf "$GD"
 }
 
@@ -218,6 +219,9 @@ case64() { setup64 64 "$1" ""; }
 casemini32() { setup32 mini32 "$1" mini; }
 casemini64() { setup64 mini64 "$1" mini; }
 casespace() { PMU_TEST_FREE_BYTES=$((600 << 20)) setup32 space "$1" mini; }
+# mini32 with the video shader (Hidden/VideoDecodeAndroid made from the data's Hidden/VideoDecode:
+# video.py), as the setups of ports with video clips run it
+casevideo() { VIDEO=" " setup32 video "$1" mini; }
 
 # the game built without the DLC (by the Python, once: the input of both packs; patch-obb pack
 # reads its android_package.json), then the DLC's bundles packed beside it (the converted

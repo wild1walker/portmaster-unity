@@ -7,6 +7,15 @@ description = "The shaders step's work on one shader: Unity's shader program blo
 
 [dependencies]
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+# (grab_fetch's exact rational arithmetic, as the Python's Fraction)
+num-bigint = { version = "0.4", default-features = false, features = ["std"] }
+num-rational = { version = "0.4", default-features = false, features = ["std", "num-bigint"] }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
+# (feature tree: a Shader object's tree and its blob, for the steps that edit Shader trees)
+unityfs = { path = "../unityfs", optional = true }
+
+[features]
+tree = ["dep:unityfs"]
 
 [dev-dependencies]
 serde_json = "1"

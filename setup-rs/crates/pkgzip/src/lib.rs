@@ -1,13 +1,16 @@
 //! Installers and zips, as the setup's Python tools read and write them (convert/pmunity):
 //! macOS installer packages (macpkg.py: xar, cpio, gzip/bzip2/pbzx payloads), zip archives (reading,
 //! `python -m zipfile -e`), the aligned STORE zip android-data packs (android_data.py `_write_zip`,
-//! `verify_zip`), Unity's player out of donor APKs (player.py `donor`) and patch_obb.py's `new`,
+//! `verify_zip`), Unity's player out of donor APKs (player.py `donor`) or from Unity's installers
+//! over HTTPS (player.py `fetch` and `url`, nsis.py: http.rs, nsis.rs) and patch_obb.py's `new`,
 //! `ggm` and `check`. Same files, same bytes, same exit statuses as the Python.
 use std::fmt;
 use std::io;
 
 pub mod cpio;
+pub mod http;
 pub mod macpkg;
+pub mod nsis;
 pub mod patch_obb;
 pub mod player;
 pub mod py;

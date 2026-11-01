@@ -281,7 +281,11 @@ on the RG34XX-SP, and what it costs the picture:
 `setup/patchscript`, run by PortMaster's patcher (log: `ports/<name>/patchlog.txt`; a failure is
 a `PATCH_FAIL_MSG:` line the patcher shows):
 
-1. the setup's Python (`python.tar.gz`: CPython with UnityPy and the image libraries, aarch64);
+1. the setup's tools: `setup/pmu`, one static aarch64 program (setup-rs, docs/rust-setup.md:
+   the same files as the converter's Python, byte for byte); a port whose conversion needs what pmu
+   does not do yet (shaders from Direct3D 11, Vulkan or Metal, `fused_post`, the quality step, the
+   porter's own converter plugins: `port.py`'s `pmu_covers`) ships the setup's Python instead
+   (`python.tar.gz`: CPython with UnityPy and the image libraries, aarch64), and the setup unpacks it;
 2. the game: the data folder in `gamedata/` (any depth), else one from an archive there (`.zip`,
    `.7z`, `.rar`, `.tar.*`, with PortMaster's 7-Zip), else macOS installers (`.pkg`, `pmunity
    macpkg`), else the port's `game` hook; a compressed build is unpacked (`pmunity unpack`); its
@@ -339,13 +343,15 @@ about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continue
 
 ```
 python -m pmunity port package <port folder> [--out DIR] [--runtime DIR] [--ua-host FILE]
-                               [--media-licenses DIR] [--pybundle FILE] [--asmpatch-bin FILE]
+                               [--media-licenses DIR] [--pmu DIR] [--pybundle FILE] [--asmpatch-bin FILE]
                                [--pmhlslcc-bin FILE] [--pmspirvcross-bin FILE] [--no-build]
 ```
 
 (or the port's `package.sh`) builds `<out>/<name>.zip` (default `<port>/out/`): the launcher and
 the port folder, `ua_host` (`runtime/host/out/`, built with `runtime/build.sh` when missing), the
-converter (`convert/pmunity`), the setup's Python (`--pybundle`, else
+setup's tools: pmu where it runs the whole setup (`--pmu DIR` with `pmu` and `licenses/`, else
+`setup-rs/tools/build_pmu.sh tools/port/out/pmu` builds it in setup-rs's Rust image), else the
+converter (`convert/pmunity`) and the setup's Python (`--pybundle`, else
 `tools/port/build_pybundle.sh` builds it: python-build-standalone's CPython 3.12 and the
 converter's wheels for aarch64), asmpatch for linux-arm64 when the port uses it
 (`tools/asmpatch/build.sh`), pmhlslcc for linux-arm64 when it translates Direct3D 11 shaders
@@ -354,7 +360,8 @@ converter's wheels for aarch64), asmpatch for linux-arm64 when the port uses it
 likewise when it translates Vulkan shaders (`ARCH=arm64 tools/spirvcross/build.sh`;
 `--pmspirvcross-bin`), and `licenses/`:
 portmaster-unity's licence and THIRD_PARTY.md, libhybris (Apache 2.0, in ua_host), the video
-decoders' licences (`runtime/media/out/licenses`), the setup Python's and its packages' licences,
+decoders' licences (`runtime/media/out/licenses`), pmu's (what is compiled into it) or the setup
+Python's and its packages' licences,
 for asmpatch the .NET runtime's licence and third-party notices and Mono.Cecil's, for pmhlslcc
 HLSLcc's (MIT, with bstrlib's BSD), and for pmspirvcross SPIRV-Cross's (Apache 2.0) and SMOL-V's (MIT). `--runtime` points at another checkout whose runtime and
 asmpatch are built. Zip entries keep their Unix modes and get a fixed date. The il2cpp-arm64 route

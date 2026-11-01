@@ -428,7 +428,8 @@ pub fn stage_blocks(code: &str) -> Vec<(String, usize, usize)> {
     out
 }
 
-fn strip_comments(s: &str) -> String {
+/// glsl._strip_comments: each comment replaced by a space.
+pub fn strip_comments(s: &str) -> String {
     RX.comments.replace_all(s, " ").into_owned()
 }
 

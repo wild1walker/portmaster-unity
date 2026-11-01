@@ -1775,6 +1775,7 @@ BUILD_STEPS = {
     'ua_host_arm64': 'ARCH=arm64 runtime/build.sh                                 # ua_host, the 64-bit runtime (Docker)',
     'ua_host64': 'ARCH=arm64 runtime/build.sh                                 # ua_host64, the 64-bit runtime (Docker)',
     'pybundle': "tools/port/build_pybundle.sh tools/port/out/python.tar.gz   # the setup's Python, aarch64 (Docker)",
+    'pmu': "setup-rs/tools/build_pmu.sh tools/port/out/pmu               # the setup's tools, pmu, aarch64 (Docker)",
     'asmpatch': 'tools/asmpatch/build.sh                                     # asmpatch (.NET 8 SDK)',
     'pmhlslcc': 'ARCH=arm64 tools/hlslcc/build.sh                            # pmhlslcc, HLSLcc for the setup, aarch64 (Docker)',
     'pmspirvcross': 'ARCH=arm64 tools/spirvcross/build.sh                        # pmspirvcross, SPIRV-Cross for the setup, aarch64 (Docker)',
@@ -2361,6 +2362,49 @@ def _component_pmunity(ctx, opts):
     ctx.add(os.path.join(REPO, 'tools', 'il2cpp', 'ndk-clang.sh'), os.path.join('setup', 'tools', 'il2cpp', 'ndk-clang.sh'), 0o755)
 
 
+def pmu_covers(cfg):
+    """Whether the setup's commands all run on pmu (setup-rs: one static aarch64 program instead of
+    the setup's Python) with this port's options: (True, []), or (False, [what pmu does not do yet]):
+    shaders from Direct3D 11, Vulkan or Metal, `shaders.fused_post`, the quality step, the porter's
+    own converter plugins (Python), android-data --il2cpp. (A game's compute shaders also stop pmu
+    convert, `shaders.compute` being on by default: the setup then says so.)"""
+    why = []
+    conv = cfg.get('convert') or {}
+    sh = conv.get('shaders') or {}
+    src = sh.get('from', ['glcore'])
+    src = src.split(',') if isinstance(src, str) else list(src or ())
+    other = [x for x in src if x != 'glcore']
+    if other:
+        why.append(f"shaders from {', '.join(other)}")
+    if sh.get('fused_post'):
+        why.append('shaders.fused_post')
+    if 'quality' in (conv.get('steps') or ()):
+        why.append('the quality step')
+    if (cfg.get('files') or {}).get('plugins'):
+        why.append("the port's converter plugins")
+    if '--il2cpp' in ((cfg.get('android_data') or {}).get('args') or ()):
+        why.append('android-data --il2cpp')
+    return not why, why
+
+
+def _component_pmu(ctx, opts):
+    """The setup's tools, pmu (setup-rs/tools/build_pmu.sh: aarch64 musl, built in setup-rs's Rust
+    image), as setup/pmu with the licences of what is compiled into it."""
+    d = opts.get('pmu') or os.environ.get('PMU_DIR')
+    if not d:
+        d = os.path.join(REPO, 'tools', 'port', 'out', 'pmu')
+        if not os.path.isfile(os.path.join(d, 'pmu')):
+            if opts.get('no_build'):
+                raise SystemExit("the setup's tools: --pmu DIR (setup-rs/tools/build_pmu.sh builds it)")
+            ctx.log("building the setup's tools, pmu (setup-rs/tools/build_pmu.sh, Docker)")
+            subprocess.run([os.path.join(REPO, 'setup-rs', 'tools', 'build_pmu.sh'), d], check=True)
+    if not os.path.isfile(os.path.join(d, 'pmu')) or not os.path.isdir(os.path.join(d, 'licenses')):
+        raise SystemExit(f'{d}: no pmu and licenses/ (setup-rs/tools/build_pmu.sh {d})')
+    ctx.add(os.path.join(d, 'pmu'), os.path.join('setup', 'pmu'), 0o755)
+    for n in sorted(os.listdir(os.path.join(d, 'licenses'))):
+        ctx.license(n, os.path.join(d, 'licenses', n))
+
+
 def _component_pybundle(ctx, opts):
     p = opts.get('pybundle') or os.environ.get('PYBUNDLE')
     if not p:
@@ -2490,17 +2534,21 @@ def _component_mono64(ctx, opts):
 
 
 COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'ua_host64': _component_ua_host64,
-              'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'asmpatch': _component_asmpatch,
+              'pmunity': _component_pmunity, 'pybundle': _component_pybundle, 'pmu': _component_pmu,
+              'asmpatch': _component_asmpatch,
               'pmhlslcc': _component_pmhlslcc, 'pmspirvcross': _component_pmspirvcross, 'mono64': _component_mono64}
 
 
 def wants(part, cfg):
     """Whether a release needs a part route.json names with '?' (only when the port uses it): asmpatch
     for ports that run it, pmhlslcc for ports that translate Direct3D 11 shaders, pmspirvcross for Vulkan
-    ones; ua_host / ua_host64
+    ones; pmu where it runs every command of the setup (pmu_covers), else the converter and the
+    setup's Python (pmunity, pybundle); ua_host / ua_host64
     for the player ABIs the port runs (player.abis: armeabi-v7a, arm64-v8a; the apk route)."""
     abis = cfg['player'].get('abis') or []
+    pmu = pmu_covers(cfg)[0]
     return {'asmpatch': needs_asmpatch(cfg), 'pmhlslcc': needs_pmhlslcc(cfg), 'pmspirvcross': needs_pmspirvcross(cfg),
+            'pmu': pmu, 'pmunity': not pmu, 'pybundle': not pmu,
             'ua_host': not abis or 'armeabi-v7a' in abis,
             # (player.il2cpp: a Mono build's code compiled for the arm64 IL2CPP player on 64-bit-only systems)
             'ua_host64': not abis or 'arm64-v8a' in abis or bool(cfg['player'].get('il2cpp'))}.get(part, True)
@@ -2728,6 +2776,8 @@ def main(argv):
     p.add_argument('--ua-host', help='the ua_host binary (default <runtime>/runtime/host/out/ua_host)')
     p.add_argument('--media-licenses', help="the video decoders' licences (default <runtime>/runtime/media/out/licenses)")
     p.add_argument('--pybundle', help="the setup's Python (default $PYBUNDLE, else tools/port/build_pybundle.sh builds it)")
+    p.add_argument('--pmu', help="the setup's tools: a folder with pmu and licenses/ (default $PMU_DIR, else "
+                                 "setup-rs/tools/build_pmu.sh builds them in tools/port/out/pmu)")
     p.add_argument('--asmpatch-bin', help='asmpatch for linux-arm64 (default <runtime>/tools/asmpatch/out/linux-arm64/asmpatch)')
     p.add_argument('--pmhlslcc-bin', help='pmhlslcc for linux-arm64, with pmhlslcc.LICENSE.txt beside it '
                                           '(default <runtime>/tools/hlslcc/out/linux-arm64/pmhlslcc)')
@@ -2756,7 +2806,7 @@ def main(argv):
         new(a.name, a.data, a.config, a.out, a.route, a.title, a.player, a.force, a.asmpatch)
         return 0
     if a.cmd == 'package':
-        package(a.port, a.out, a.runtime, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle,
+        package(a.port, a.out, a.runtime, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle, pmu=a.pmu,
                 asmpatch_bin=a.asmpatch_bin, pmhlslcc_bin=a.pmhlslcc_bin, pmspirvcross_bin=a.pmspirvcross_bin,
                 mono64_work=a.mono64_work,
                 no_build=a.no_build, submission=a.submission)

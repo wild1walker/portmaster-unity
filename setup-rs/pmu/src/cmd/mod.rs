@@ -2,10 +2,14 @@
 use std::process::ExitCode;
 
 mod android_data;
+mod argp;
 mod convert;
 mod macpkg;
 mod patch_obb;
 mod player;
+mod unpack;
+mod version;
+mod winbcl;
 mod zip_extract;
 
 /// The commands this binary has, as the setup scripts name them.
@@ -17,6 +21,9 @@ pub const NAMES: &[&str] = &[
     "convert",
     "journal-files",
     "android-data",
+    "version",
+    "unpack",
+    "winbcl",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -29,6 +36,9 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "convert" => Some(convert::run(args)),
         "journal-files" => Some(convert::journal_files(args)),
         "android-data" => Some(android_data::run(args)),
+        "version" => Some(version::run(args)),
+        "unpack" => Some(unpack::run(args)),
+        "winbcl" => Some(winbcl::run(args)),
         _ => None,
     }
 }

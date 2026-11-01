@@ -7,7 +7,7 @@ description = "The setup's convert job (python -m pmunity convert): its journal 
 
 [dependencies]
 unityfs = { path = "../unityfs" }
-shaderx = { path = "../shaderx" }
+shaderx = { path = "../shaderx", features = ["tree"] }
 texcodec = { path = "../texcodec" }
 serde_json = "1"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }

@@ -154,6 +154,272 @@ pub fn donor(
     Ok(())
 }
 
+// ---------------------------------------------------------------- fetched from Unity (player.py)
+
+/// Unity's release API.
+pub const API: &str = "https://services.api.unity.com/unity/editor/release/v1/releases";
+/// The Android Build Support installer on Unity's CDN, by changeset and version.
+pub fn cdn(rev: &str, ver: &str) -> String {
+    format!(
+        "https://download.unity3d.com/download_unity/{rev}/TargetSupportInstaller/UnitySetup-Android-Support-for-Editor-{ver}.exe"
+    )
+}
+
+/// release(): Unity's release record of a version, or None if Unity does not list it.
+pub fn release(version: &str) -> Result<Option<serde_json::Value>> {
+    let q = format!("version={}&limit=1", crate::http::quote_plus(version));
+    let body = crate::http::fetch(&format!("{API}?{q}"))?;
+    let d: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| Error::Fail(format!("json.decoder.JSONDecodeError: {e}")))?;
+    let recs = d
+        .get("results")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(recs
+        .into_iter()
+        .find(|r| r.get("version").and_then(|v| v.as_str()) == Some(version)))
+}
+
+/// str(x) of a JSON value as the Python's str() gives it for the strings it compares.
+fn jstr(v: Option<&serde_json::Value>) -> String {
+    match v {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Null) | None => "None".into(),
+        Some(v) => v.to_string(),
+    }
+}
+
+/// installer_url(): the record's Windows Android Build Support installer (its module URL, else
+/// the CDN path from the changeset).
+pub fn installer_url(rec: &serde_json::Value) -> Result<String> {
+    let empty = Vec::new();
+    for dl in rec
+        .get("downloads")
+        .and_then(|d| d.as_array())
+        .unwrap_or(&empty)
+    {
+        if dl.get("platform").and_then(|p| p.as_str()) != Some("WINDOWS") {
+            continue;
+        }
+        for m in dl
+            .get("modules")
+            .and_then(|m| m.as_array())
+            .unwrap_or(&empty)
+        {
+            let url = m.get("url").map(|u| jstr(Some(u))).unwrap_or_default();
+            if m.get("id").and_then(|i| i.as_str()) == Some("android") && url.ends_with(".exe") {
+                return Ok(url);
+            }
+        }
+    }
+    match rec
+        .get("shortRevision")
+        .and_then(|r| r.as_str())
+        .filter(|r| !r.is_empty())
+    {
+        Some(rev) => Ok(cdn(rev, &jstr(rec.get("version")))),
+        None => Err(Error::Exit(format!(
+            "Unity's release record of {} has no Android installer or changeset",
+            jstr(rec.get("version"))
+        ))),
+    }
+}
+
+/// package_path(): an installer path relative to the AndroidPlayer folder (its first part is
+/// the install folder's variable).
+pub fn package_path(nsis_path: &str) -> Option<String> {
+    let mut parts = nsis_path.split('/');
+    let first = parts.next()?;
+    first
+        .starts_with('$')
+        .then(|| parts.collect::<Vec<_>>().join("/"))
+}
+
+pub const DEFAULT_RESOURCES: [&str; 2] = [
+    "Data/unity default resources",
+    "Data/Resources/unity default resources",
+];
+
+/// The globs of the files fetched (player.wanted).
+pub fn wanted(
+    backend: &str,
+    abi: &str,
+    symbols: bool,
+    symbols_only: bool,
+    managed: bool,
+) -> Vec<String> {
+    let sym = vec![format!(
+        "Variations/{backend}/Release/Symbols/{abi}/*.sym.so"
+    )];
+    if symbols_only {
+        return sym;
+    }
+    let mut g: Vec<String> = DEFAULT_RESOURCES.iter().map(|s| s.to_string()).collect();
+    g.push(format!("Variations/{backend}/Release/Libs/{abi}/*.so"));
+    g.push("Apk/MemoryAdvice/*".into());
+    if backend == "mono" {
+        g.push("Variations/mono/Managed/*.dll".into());
+        g.push(format!("Variations/mono/Release/MonoLibs/{abi}/*.so"));
+    } else if managed {
+        g.push(format!("Variations/{backend}/Managed/*.dll"));
+    }
+    if symbols {
+        g.extend(sym);
+    }
+    g
+}
+
+/// fnmatch.fnmatchcase with `*`, `?` and `[...]` (`*` matches `/` too).
+pub fn fnmatch(name: &str, pat: &str) -> bool {
+    fn m(n: &[char], p: &[char]) -> bool {
+        match p.first() {
+            None => n.is_empty(),
+            Some('*') => (0..=n.len()).any(|k| m(&n[k..], &p[1..])),
+            Some('?') => !n.is_empty() && m(&n[1..], &p[1..]),
+            Some('[') => {
+                let Some(close) = p.iter().skip(2).position(|&c| c == ']').map(|i| i + 2) else {
+                    return n.first() == Some(&'[') && m(&n[1..], &p[1..]);
+                };
+                let Some(&c) = n.first() else { return false };
+                let set = &p[1..close];
+                let (neg, set) = match set.first() {
+                    Some('!') => (true, &set[1..]),
+                    _ => (false, set),
+                };
+                let mut hit = false;
+                let mut i = 0;
+                while i < set.len() {
+                    if i + 2 < set.len() && set[i + 1] == '-' {
+                        hit |= set[i] <= c && c <= set[i + 2];
+                        i += 3;
+                    } else {
+                        hit |= set[i] == c;
+                        i += 1;
+                    }
+                }
+                hit != neg && m(&n[1..], &p[close + 1..])
+            }
+            Some(&c) => n.first() == Some(&c) && m(&n[1..], &p[1..]),
+        }
+    }
+    let n: Vec<char> = name.chars().collect();
+    let p: Vec<char> = pat.chars().collect();
+    m(&n, &p)
+}
+
+/// player.py `fetch`: the player files a port needs, from Unity's installer (a URL, a local
+/// copy, else the one Unity's release API names), into `out` with player.json.
+#[allow(clippy::too_many_arguments)]
+pub fn fetch(
+    version: &str,
+    out: &str,
+    backend: &str,
+    abi: &str,
+    installer: Option<&str>,
+    symbols: bool,
+    symbols_only: bool,
+    managed: bool,
+    log: &mut dyn FnMut(&str),
+) -> Result<()> {
+    let mut rec = None;
+    let installer = match installer.filter(|i| !i.is_empty()) {
+        Some(i) => i.to_string(),
+        None => {
+            let Some(r) = release(version)? else {
+                return Err(Error::Exit(format!(
+                    "Unity does not list version {version} (check `python -m pmunity version <data>`)"
+                )));
+            };
+            let u = installer_url(&r)?;
+            rec = Some(r);
+            u
+        }
+    };
+    log(&format!(
+        "player {version} ({backend}, {abi}) from {installer}"
+    ));
+    let mut ns = crate::nsis::Nsis::open(&installer, Box::new(|m| eprintln!("{m}")))?;
+    let globs = wanted(backend, abi, symbols, symbols_only, managed);
+    let mut files = ns.files()?;
+    files.sort();
+    let mut got: Vec<String> = Vec::new();
+    for (path, off, _) in files {
+        let Some(rel) = package_path(&path) else {
+            continue;
+        };
+        if !globs.iter().any(|g| fnmatch(&rel, g)) {
+            continue;
+        }
+        if (rel.ends_with(".sym.so") || rel.ends_with(".dbg.so")) && !rel.contains("/Symbols/") {
+            continue;
+        }
+        let data = ns.extract(off)?;
+        let mut dst = out.to_string();
+        for part in rel.split('/') {
+            dst = py::join(&dst, part);
+        }
+        fs::create_dir_all(py::dirname(&dst)).map_err(io_at(py::dirname(&dst)))?;
+        let part = format!("{dst}.part");
+        fs::write(&part, &data).map_err(io_at(&part))?;
+        fs::rename(&part, &dst).map_err(io_at(&dst))?;
+        got.push(rel);
+    }
+    let libs = format!("Variations/{backend}/Release/Libs/{abi}/");
+    let mut missing: Vec<String> = ["libmain.so", "libunity.so"]
+        .iter()
+        .filter(|n| !got.contains(&format!("{libs}{n}")))
+        .map(|n| n.to_string())
+        .collect();
+    if !DEFAULT_RESOURCES.iter().any(|n| got.iter().any(|g| g == n)) {
+        missing.push("Data/unity default resources".into());
+    }
+    if symbols_only {
+        missing = if got.iter().any(|r| r.ends_with("/libunity.sym.so")) {
+            Vec::new()
+        } else {
+            vec!["libunity.sym.so".into()]
+        };
+    }
+    if !missing.is_empty() {
+        return Err(Error::Exit(format!(
+            "the installer has no {} for {backend}/{abi} (Unity ships arm64-v8a players only with IL2CPP, from 2017.4.16 / 2018.2)",
+            missing.join(", ")
+        )));
+    }
+    let changeset = match rec.as_ref().and_then(|r| r.get("shortRevision")) {
+        Some(serde_json::Value::String(s)) => Json::Str(s.clone()),
+        _ => Json::Null,
+    };
+    let mut info = vec![
+        ("version".to_string(), Json::Str(version.into())),
+        ("changeset".to_string(), changeset),
+        ("backend".to_string(), Json::Str(backend.into())),
+        ("abi".to_string(), Json::Str(abi.into())),
+        ("installer".to_string(), Json::Str(installer.clone())),
+        ("files".to_string(), Json::Int(got.len() as i64)),
+    ];
+    if symbols || symbols_only {
+        let mut s: Vec<&String> = got.iter().filter(|r| r.contains("/Symbols/")).collect();
+        s.sort();
+        info.push((
+            "symbols".into(),
+            Json::List(s.into_iter().map(|x| Json::Str(x.clone())).collect()),
+        ));
+    }
+    if !symbols_only {
+        let p = py::join(out, "player.json");
+        fs::write(&p, py::json_dump(&Json::Obj(info))).map_err(io_at(&p))?;
+    }
+    log(&format!(
+        "{} files, {:.1} MB read ({} requests) -> {out}",
+        got.len(),
+        ns.s.fetched as f64 / 1e6,
+        ns.s.requests
+    ));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

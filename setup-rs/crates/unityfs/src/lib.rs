@@ -45,6 +45,7 @@ pub mod serialized;
 pub mod source;
 pub mod tpk;
 pub mod typetree;
+pub mod unpack;
 pub mod value;
 pub mod version;
 

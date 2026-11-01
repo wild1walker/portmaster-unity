@@ -26,9 +26,25 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `player donor <unity> <dir> --apk <apk>... [--backend il2cpp --abi arm64-v8a --managed]` | player.py | Unity's Android player out of the donor APKs |
 | `convert <data dir> --config <json> [--plugin <py>] [--steps a,b] [--set k=v]...` | job.py and the steps: shaders/, settings.py, textures.py (astc_guide.py), audio.py; the plugin animclips.py (portmaster-cuphead/convert) | in place, with the journal `.pmunity.json` (an interrupted run continues) |
 | `android-data --src --pkg --out --name --package ... --pack all` | android_data.py (streaming.py, plugins.py, retarget.py, typetrees.py, video.py, unity_version.py) | the APK and OBB(s) the player reads; exit 4 (NO_SPACE) when the card is too full |
+| `version <data>` | unity_version.py | the data's Unity version, "(supported)" or "(not supported)" |
+| `unpack <data> [--out DIR] [--remove]` | unpack.py | a compressed build's data.unity3d unpacked into its files (unityfs::unpack) |
+| `player fetch <version> <dir> [--backend --abi --installer FILE\|URL --symbols --symbols-only --managed]`, `player url <version>` | player.py, nsis.py | Unity's Android player from Unity's installer: its NSIS header and the files wanted read with HTTPS range requests (pkgzip's http.rs on rustls, the system's CA certificates: `$SSL_CERT_FILE`, `$SSL_CERT_DIR`, else the usual bundle files; `https_proxy`), or from a local copy; the installer's URL from Unity's release API |
+| `winbcl <data> <dir> [--version --installer --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll), read from Unity's Windows editor installer the same way |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
+
+## The setups that run pmu
+
+Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android route: its
+patchscript runs `setup/pmu` when the release has it (`pm() { "$S/pmu" "$@"; }`; the install step
+reads the report's scripting runtime with sed), else the setup's Python. `pmunity port package`
+ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts of what is compiled into
+it) when it runs every command of the port's setup (`port.py`'s `pmu_covers`: no shaders from
+Direct3D 11, Vulkan or Metal, no `fused_post`, no quality step, no converter plugins of the
+porter's own), else the converter and the Python as before. Hollow Knight's whole setup (player
+fetch, winbcl, convert with grab_fetch, android-data with the video shader and asmpatch) runs on
+pmu and gives the Python's APK and OBB, byte for byte.
 
 ## Layout
 
@@ -66,8 +82,10 @@ run; pmu writes the files in order), and where the Python prints a traceback pmu
 error's message. Anything not ported stops the run with status 2 and says so, after the steps
 before it have journaled their files, so a setup can run the Python on the same folder to finish:
 the `quality` step, plugins other than animclips, shaders from Direct3D 11, Vulkan or Metal,
-compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off), `grab_fetch`,
-`fused_post`. The textures step is textures.py's Unity-file layer in `convert` with texcodec as
+compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off),
+`fused_post`. `grab_fetch` (and `grab_fetch_names`) is ported: shaderx's `grabfetch` checks and
+rewrites a program as grabfetch.py does (its symbolic evaluation with exact rationals), the
+convert crate edits the Shader object (Hollow Knight's port sets `"always"`). The textures step is textures.py's Unity-file layer in `convert` with texcodec as
 its per-texture codec (`steps::textures::Codec`; the made-up tests also run it with a stand-in).
 
 Player builds keep no type trees in their files: pmu reads them with UnityPy's class database
@@ -121,7 +139,18 @@ APKs), `guides/` (ASTC guides), `cuphead/` (`cuphead.json`, `animclips.py`, `dlc
 are mounted read-only: a test that changes files works on its own copy in a scratch folder. Unit
 tests use small made-up data built in the test (no Unity or game files in the repository).
 
-`androiddata`'s golden test, `tests/golden/android_data.sh <scratch> [mini32 mini64 obb space 32 64]`,
+`pmu android-data` makes the video shader as video.py does (Hidden/VideoDecodeAndroid from the
+data's Hidden/VideoDecode, the game's clips sniffed for BT.601 or BT.709; the GLSL is
+`crates/androiddata/src/video_decode_android.shader`, a copy of the Python's); `--il2cpp` and a
+bundle with several serialized files and streamed textures (`--inline-textures`) stop it with
+status 2. A serialized file too big for one archive with its textures inlined keeps its `.resS`,
+split into parts that fit one (`crates/androiddata/src/ress_split.rs`; the Python stops at
+packing there): [android-data.md](android-data.md), section 4. `cargo test -p androiddata` (with
+`PMU_TPK`) runs that on made-up 2021.3 data (`tests/ress_split.rs`): the parts, the rewritten
+streams, the archives within a lowered limit, every texture read back from them. The test-only
+knobs `PMU_ZIP_LIMIT` and `PMU_RESS_SPLIT` (same page) make it happen on small data.
+
+`androiddata`'s golden test, `tests/golden/android_data.sh <scratch> [mini32 mini64 obb video space 32 64]`,
 runs the Python and pmu with the setups' exact invocations on copies of `converted-fast` (the whole
 game, or a part of it for the mini cases) and compares status, the output folder, every archive's
 entries and the data `--consume-src` leaves.

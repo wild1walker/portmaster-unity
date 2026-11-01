@@ -9,6 +9,7 @@ use crate::pyjson::{self, Json};
 use crate::retarget;
 use crate::streaming as ST;
 use crate::uversion::{self as UV, Version};
+use crate::video;
 use pkgzip::py;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -112,9 +113,17 @@ pub struct Ctx {
     pub skipped: Vec<String>,
     pub dropped_modules: Vec<String>,
     pub inlined_ress: Vec<String>,
+    /// The .resS split instead of inlined (ress_split.rs).
+    pub split_ress: Vec<String>,
+    /// Each archive's limit (pack.rs: 2 GiB - 1; tests: $PMU_ZIP_LIMIT) and the split's rule.
+    pub zip_limit: u64,
+    pub split: crate::ress_split::SplitRule,
     pub managed_names: BTreeSet<String>,
     pub gi_neon: usize,
     pub compute_kernels: Option<bool>,
+    /// Hidden/VideoDecodeAndroid's path id in unity_builtin_extra (video.rs), and its conversion.
+    pub video_shader_pid: Option<i64>,
+    pub video_bt709: bool,
     pub db: Arc<ClassDb>,
     logf: Option<File>,
 }
@@ -202,7 +211,7 @@ pub fn copyfile(src: &str, dst: &str) -> Result<(), Stop> {
     Ok(())
 }
 
-fn mv(src: &str, dst: &str) -> Result<&'static str, Stop> {
+pub(crate) fn mv(src: &str, dst: &str) -> Result<&'static str, Stop> {
     makedirs(py::dirname(dst))?;
     fs::rename(src, dst).map_err(io_at(src))?;
     Ok("moved")
@@ -396,7 +405,7 @@ fn desktop_modules_needed(gmanaged: &str, amanaged: &str) -> Vec<(String, Vec<St
 
 /// {assembly: [engine modules]}: assemblies the player's engine modules reference that are not
 /// shipped.
-fn missing_references(amanaged: &str, names: &BTreeSet<String>) -> Vec<(String, Vec<String>)> {
+pub fn missing_references(amanaged: &str, names: &BTreeSet<String>) -> Vec<(String, Vec<String>)> {
     use crate::clrmeta::Assembly;
     let mut have: BTreeSet<String> = names
         .iter()
@@ -847,17 +856,22 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
     let udr_dst = py::join(&data, default_resources_path(&ctx.unity));
     items.push(item(udr_dst, pkg_default_resources(&pkg), "link"));
     let bex = py::join(&src, "Resources/unity_builtin_extra");
-    if ctx.args.video_shader
-        && fs::read(&bex).is_ok_and(|b| py::find(&b, b"Hidden/VideoDecode").is_some())
-    {
-        return Err(Stop::NotPorted(
-            "the video shader (Hidden/VideoDecodeAndroid; --no-video-shader skips it)".into(),
-        ));
-    }
+    // the Android VideoPlayer's shader, made from the desktop one (video.rs)
+    ctx.video_shader_pid = if ctx.args.video_shader && video::has_template(&bex) {
+        video::path_id_for(&bex, ctx)?
+    } else {
+        None
+    };
+    ctx.video_bt709 = ctx.video_shader_pid.is_some() && video::wants_bt709(&src, ctx)?;
+    let act = match (ctx.video_shader_pid, ctx.video_bt709) {
+        (Some(_), true) => "sfvideo709",
+        (Some(_), false) => "sfvideo",
+        _ => "sfpatch",
+    };
     items.push(item(
         py::join(&data, "Resources/unity_builtin_extra"),
         bex,
-        "sfpatch",
+        act,
     ));
     let backend = if ctx.args.il2cpp.is_some() || ctx.args.mono64 {
         "il2cpp"
@@ -1010,6 +1024,12 @@ fn opts_key(ctx: &Ctx) -> Json {
     if let Some(r) = &ctx.retarget {
         k.push(format!("retarget={r}").into());
     }
+    // (tests only: the knobs that change what is split, when set)
+    for v in ["PMU_ZIP_LIMIT", "PMU_RESS_SPLIT"] {
+        if let Ok(x) = std::env::var(v) {
+            k.push(format!("{v}={x}").into());
+        }
+    }
     Json::List(k)
 }
 
@@ -1116,6 +1136,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         }
     }
     let db = Arc::new(ClassDb::default_db().map_err(|e| Stop::Fail(e.to_string()))?);
+    // (tests only: a lower archive limit, the split's part size)
+    let zip_limit = crate::pack::limit_from(std::env::var("PMU_ZIP_LIMIT").ok().as_deref())
+        .map_err(Stop::Exit)?;
+    let split = crate::ress_split::SplitRule::new(
+        zip_limit,
+        std::env::var("PMU_RESS_SPLIT").ok().as_deref(),
+    )
+    .map_err(Stop::Exit)?;
     let mut ctx = Ctx {
         args,
         unity: Version::parse("0.0.0").unwrap(),
@@ -1132,9 +1160,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         skipped: Vec::new(),
         dropped_modules: Vec::new(),
         inlined_ress: Vec::new(),
+        split_ress: Vec::new(),
+        zip_limit,
+        split,
         managed_names: BTreeSet::new(),
         gi_neon: 0,
         compute_kernels: None,
+        video_shader_pid: None,
+        video_bt709: false,
         db,
         logf: None,
     };
@@ -1341,31 +1374,97 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             }
             how = "patched".into();
         } else if act == "sfinline" {
-            let (n, still) = crate::inline::inline_serialized(&ctx, src, &dst)?;
-            let mut note = format!("platform -> {ANDROID}, {n} textures inlined");
-            how = "inlined".into();
-            let mut still_sorted: Vec<&String> = still.iter().collect();
-            still_sorted.sort();
-            for name in still_sorted {
-                let sd = py::dirname(src);
-                let (s_res, d_res) = (py::join(sd, name), py::join(py::dirname(&dst), name));
-                if mv_ {
-                    mv(&s_res, &d_res)?;
-                } else {
-                    clone(&s_res, &d_res, true)?;
+            match crate::inline::inline_serialized(&ctx, src, &dst, mv_)? {
+                crate::inline::Placed::Inlined(n, still) => {
+                    let mut note = format!("platform -> {ANDROID}, {n} textures inlined");
+                    how = "inlined".into();
+                    let mut still_sorted: Vec<&String> = still.iter().collect();
+                    still_sorted.sort();
+                    for name in still_sorted {
+                        let sd = py::dirname(src);
+                        let (s_res, d_res) =
+                            (py::join(sd, name), py::join(py::dirname(&dst), name));
+                        if mv_ {
+                            mv(&s_res, &d_res)?;
+                        } else {
+                            clone(&s_res, &d_res, true)?;
+                        }
+                        let kr = py::join(py::dirname(dst_rel), name);
+                        kept.insert(kr.clone());
+                        newstate.set(&kr, key.clone());
+                        push_kept(&mut newstate, dst_rel, &kr);
+                        note.push_str(&format!("; {name} kept (still read by meshes)"));
+                    }
+                    report.get_mut("files").unwrap().set(dst_rel, note.into());
+                    if mv_ {
+                        fs::remove_file(src).map_err(io_at(src))?;
+                        let res = format!("{src}.resS");
+                        if exists(&res) && !still.contains(&format!("{}.resS", py::basename(src))) {
+                            fs::remove_file(&res).map_err(io_at(&res))?;
+                        }
+                    }
                 }
-                let kr = py::join(py::dirname(dst_rel), name);
-                kept.insert(kr.clone());
-                newstate.set(&kr, key.clone());
-                push_kept(&mut newstate, dst_rel, &kr);
-                note.push_str(&format!("; {name} kept (still read by meshes)"));
-            }
-            report.get_mut("files").unwrap().set(dst_rel, note.into());
-            if mv_ {
-                fs::remove_file(src).map_err(io_at(src))?;
-                let res = format!("{src}.resS");
-                if exists(&res) && !still.contains(&format!("{}.resS", py::basename(src))) {
-                    fs::remove_file(&res).map_err(io_at(&res))?;
+                crate::inline::Placed::Split(inlined, sp) => {
+                    how = "split".into();
+                    let file = py::basename(src).to_string();
+                    let sd = py::dirname(dst_rel).to_string();
+                    for (name, _) in &sp.parts {
+                        let kr = py::join(&sd, name);
+                        kept.insert(kr.clone());
+                        newstate.set(&kr, key.clone());
+                        push_kept(&mut newstate, dst_rel, &kr);
+                    }
+                    let sz = |n: u64| {
+                        if n >= 1 << 30 {
+                            format!("{:.2} GiB", n as f64 / (1u64 << 30) as f64)
+                        } else {
+                            format!("{:.1} MiB", n as f64 / (1u64 << 20) as f64)
+                        }
+                    };
+                    let parts = sp
+                        .parts
+                        .iter()
+                        .map(|(n, z)| format!("{n} ({})", sz(*z)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let note = format!(
+                        "platform -> {ANDROID}, textures not inlined ({} so: {}): {file}.resS kept, split at stream \
+                         boundaries into {} parts of at most {}: {parts}; {} textures and {} meshes stream from them ({} moved to a later part)",
+                        sz(inlined),
+                        if ctx.split.forced {
+                            "split as PMU_RESS_SPLIT asks (tests)"
+                        } else {
+                            "no archive holds it whole"
+                        },
+                        sp.parts.len(),
+                        sz(ctx.split.part),
+                        sp.textures,
+                        sp.meshes,
+                        sp.moved
+                    );
+                    report
+                        .get_mut("files")
+                        .unwrap()
+                        .set(dst_rel, note.clone().into());
+                    let mut m = format!("  {dst_rel}: {note}");
+                    if sp.unread > 0 {
+                        m.push_str(&format!(
+                            " ({} bytes of the .resS read by none of them, carried along)",
+                            sp.unread
+                        ));
+                    }
+                    ctx.log(&m);
+                    if ctx.unity.line() < crate::ress_split::STREAMS_FROM {
+                        let w = format!(
+                            "{dst_rel}: its textures stream from {file}.resS (too big inlined); Unity {}.{}'s Android player is not known to \
+                             load streamed textures (2017.4: an asynchronous load of one never finishes)",
+                            ctx.unity.line().0,
+                            ctx.unity.line().1
+                        );
+                        ctx.log(&format!("WARNING: {w}"));
+                        ctx.warnings.push(w);
+                    }
+                    ctx.split_ress.push(format!("{file}.resS"));
                 }
             }
         } else if act == "bundle" && ctx.args.inline_textures && crate::inline::has_ress_node(src)?
@@ -1427,6 +1526,30 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                     "  {dst_rel}: bundle rewritten (no same-size encoding of the patched block)"
                 ));
             }
+        } else if act == "sfvideo" || act == "sfvideo709" {
+            let mut f = unityfs::DataFile::open(src, &ctx.opts())?;
+            let pid = video::add_to_builtin_extra(&mut f.sf, &mut ctx, act == "sfvideo709")?;
+            if pid != ctx.video_shader_pid {
+                let s = |p: Option<i64>| p.map_or("None".to_string(), |p| p.to_string());
+                return Err(Stop::Exit(format!(
+                    "video: shader got path id {}, globalgamemanagers maps {}",
+                    s(pid),
+                    s(ctx.video_shader_pid)
+                )));
+            }
+            f.sf.target_platform = ANDROID as i32;
+            let rt = ctx.retarget_sf(&mut f.sf)?;
+            write_bytes(&dst, &f.sf.save()?)?;
+            let mut note = format!(
+                "platform -> {ANDROID}, {} added (path id {})",
+                video::NAME,
+                pid.unwrap()
+            );
+            for n in rt {
+                note.push_str(&format!("; {n}"));
+            }
+            report.get_mut("files").unwrap().set(dst_rel, note.into());
+            how = "video".into();
         } else if act == "ggm" {
             let (data, notes) = ggm::edit(Path::new(src), &mut ctx)?;
             write_bytes(&dst, &data)?;
@@ -1538,12 +1661,18 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let line = format!(
+    let mut line = format!(
         "placed: {stats_repr}; skipped source files: {}; engine modules not shipped: {}; .resS moved into their serialized files: {}",
         list_repr(&ctx.skipped),
         list_repr(&ctx.dropped_modules),
-        ctx.inlined_ress.len()
+        ctx.inlined_ress.len() - ctx.split_ress.len()
     );
+    if !ctx.split_ress.is_empty() {
+        line.push_str(&format!(
+            "; .resS kept and split (their files too big for one archive inlined): {}",
+            list_repr(&ctx.split_ress)
+        ));
+    }
     ctx.log(&line);
     if ctx.gi_neon > 0 {
         let m = format!(

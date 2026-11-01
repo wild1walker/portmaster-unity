@@ -619,6 +619,95 @@ pub fn shader(db: &ClassDb, name: &str, kind: ShaderKind) -> Value {
     v
 }
 
+/// What a made-up GrabPass shader does (shaders.grab_fetch).
+#[derive(Clone, Copy, PartialEq)]
+pub enum GrabKind {
+    /// samples the grab texture at the fragment's screen position: given a copy that reads the
+    /// framebuffer
+    Screen,
+    /// at the screen position plus an offset: left as it is
+    Offset,
+    /// a named GrabPass ("_Named"): left as it is
+    Named,
+}
+
+const GRAB_VS: &str = "#ifdef VERTEX\n#version 150\n#extension GL_ARB_explicit_attrib_location : require\nuniform vec4 hlslcc_mtx4x4unity_MatrixVP[4];\nin vec4 in_POSITION0;\nout vec4 vs_TEXCOORD0;\nvec4 u_xlat0;\nvec4 u_xlat1;\nvoid main()\n{\n    u_xlat0 = hlslcc_mtx4x4unity_MatrixVP[1] * in_POSITION0.yyyy;\n    u_xlat0 = hlslcc_mtx4x4unity_MatrixVP[0] * in_POSITION0.xxxx + u_xlat0;\n    u_xlat0 = hlslcc_mtx4x4unity_MatrixVP[3] * in_POSITION0.wwww + u_xlat0;\n    gl_Position = u_xlat0;\n    u_xlat1.xzw = u_xlat0.xwy * vec3(0.5, 0.5, 0.5);\n    vs_TEXCOORD0.zw = u_xlat0.zw;\n    vs_TEXCOORD0.xy = u_xlat1.zz + u_xlat1.xw;\n    return;\n}\n#endif\n";
+
+fn grab_fs(uv: &str) -> String {
+    format!("#ifdef FRAGMENT\n#version 150\n#extension GL_ARB_explicit_attrib_location : require\nuniform sampler2D _GrabTexture;\nin vec4 vs_TEXCOORD0;\nlayout(location = 0) out vec4 SV_Target0;\nvec2 u_xlat0;\nvoid main()\n{{\n    u_xlat0.xy = {uv};\n    SV_Target0 = texture(_GrabTexture, u_xlat0.xy);\n    return;\n}}\n#endif\n")
+}
+
+/// A Shader with a GrabPass before the pass that samples `_GrabTexture` (Unity 2017.4 layout,
+/// OpenGL Core programs; the FOG_LINEAR variant does not sample it).
+pub fn grab_shader(db: &ClassDb, name: &str, kind: GrabKind) -> Value {
+    let mut v = shader(db, name, ShaderKind::Good);
+    let uv = match kind {
+        GrabKind::Offset => "vs_TEXCOORD0.xy / vs_TEXCOORD0.ww + vec2(0.25, 0.0)",
+        _ => "vs_TEXCOORD0.xy / vs_TEXCOORD0.ww",
+    };
+    let p1 = format!("{GRAB_VS}{}", grab_fs(uv));
+    let p2 = format!(
+        "{GRAB_VS}{}",
+        fs("    SV_Target0 = vec4(0.25, 0.5, 0.75, 1.0);\n")
+    );
+    let entries = vec![
+        entry(&p1, &[]),
+        entry("", &[]),
+        entry(&p2, &["FOG_LINEAR"]),
+        entry("", &["FOG_LINEAR"]),
+    ];
+    let mut plats = BTreeMap::new();
+    plats.insert(
+        blob::PLATFORM_GLCORE,
+        PlatformBlob::One(blob::build_blob(&entries)),
+    );
+    let fields = ShaderBlobs {
+        nested: false,
+        platforms: plats,
+        stage_counts: None,
+    }
+    .store()
+    .unwrap();
+    let ints = |l: &[i64]| Value::Array(l.iter().map(|&x| Value::U32(x as u32)).collect());
+    let flat = |l: &blob::Lengths| match l {
+        blob::Lengths::Flat(x) => ints(x),
+        blob::Lengths::Nested(_) => unreachable!(),
+    };
+    set(&mut v, &["offsets"], flat(&fields.offsets));
+    set(
+        &mut v,
+        &["compressedLengths"],
+        flat(&fields.compressed_lengths),
+    );
+    set(
+        &mut v,
+        &["decompressedLengths"],
+        flat(&fields.decompressed_lengths),
+    );
+    set(
+        &mut v,
+        &["compressedBlob"],
+        Value::Bytes(fields.compressed_blob),
+    );
+    // SubShader 0: the GrabPass (no programs), then the reading pass
+    let t = tree(db, 48);
+    let mut grab = default_of(&t, pass_tree(&t));
+    grab.set("m_Type", Value::I32(2)).unwrap();
+    if kind == GrabKind::Named {
+        grab.set("m_TextureName", Value::str("_Named")).unwrap();
+    }
+    let ss = v
+        .path_mut(&["m_ParsedForm", "m_SubShaders"])
+        .and_then(Value::as_array_mut)
+        .unwrap();
+    let passes = ss[0]
+        .get_mut("m_Passes")
+        .and_then(Value::as_array_mut)
+        .unwrap();
+    passes.insert(0, grab);
+    v
+}
+
 /// The element node of an array field below node `i`.
 fn array_element(t: &TypeTree, i: usize) -> usize {
     let arr = t.nodes[i].children[0];
@@ -760,7 +849,12 @@ pub fn game(db: &ClassDb, dir: &Path) {
     // a scene file with a shader, and Unity's built-in extra resources
     let l0 = serialized(
         db,
-        &[o(48, 5, shader(db, "Level/Shader", ShaderKind::Good))],
+        &[
+            o(48, 5, shader(db, "Level/Shader", ShaderKind::Good)),
+            o(48, 6, grab_shader(db, "UI/Blend/Screen", GrabKind::Screen)),
+            o(48, 9, grab_shader(db, "UI/Blend/Offset", GrabKind::Offset)),
+            o(48, 10, grab_shader(db, "UI/Blend/Named", GrabKind::Named)),
+        ],
         &[],
         true,
     );

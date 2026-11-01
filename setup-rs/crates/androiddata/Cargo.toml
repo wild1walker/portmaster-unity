@@ -8,6 +8,7 @@ description = "android-data and patch-obb pack: the APK and OBBs Unity's Android
 [dependencies]
 unityfs = { path = "../unityfs" }
 pkgzip = { path = "../pkgzip" }
+shaderx = { path = "../shaderx", features = ["tree"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 crc32fast = "1"
 libc = "0.2"
