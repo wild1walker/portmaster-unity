@@ -143,7 +143,12 @@ tests use small made-up data built in the test (no Unity or game files in the re
 data's Hidden/VideoDecode, the game's clips sniffed for BT.601 or BT.709; the GLSL is
 `crates/androiddata/src/video_decode_android.shader`, a copy of the Python's); `--il2cpp` and a
 bundle with several serialized files and streamed textures (`--inline-textures`) stop it with
-status 2.
+status 2. A serialized file too big for one archive with its textures inlined keeps its `.resS`,
+split into parts that fit one (`crates/androiddata/src/ress_split.rs`; the Python stops at
+packing there): [android-data.md](android-data.md), section 4. `cargo test -p androiddata` (with
+`PMU_TPK`) runs that on made-up 2021.3 data (`tests/ress_split.rs`): the parts, the rewritten
+streams, the archives within a lowered limit, every texture read back from them. The test-only
+knobs `PMU_ZIP_LIMIT` and `PMU_RESS_SPLIT` (same page) make it happen on small data.
 
 `androiddata`'s golden test, `tests/golden/android_data.sh <scratch> [mini32 mini64 obb video space 32 64]`,
 runs the Python and pmu with the setups' exact invocations on copies of `converted-fast` (the whole

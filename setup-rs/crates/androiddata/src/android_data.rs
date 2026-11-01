@@ -113,6 +113,11 @@ pub struct Ctx {
     pub skipped: Vec<String>,
     pub dropped_modules: Vec<String>,
     pub inlined_ress: Vec<String>,
+    /// The .resS split instead of inlined (ress_split.rs).
+    pub split_ress: Vec<String>,
+    /// Each archive's limit (pack.rs: 2 GiB - 1; tests: $PMU_ZIP_LIMIT) and the split's rule.
+    pub zip_limit: u64,
+    pub split: crate::ress_split::SplitRule,
     pub managed_names: BTreeSet<String>,
     pub gi_neon: usize,
     pub compute_kernels: Option<bool>,
@@ -206,7 +211,7 @@ pub fn copyfile(src: &str, dst: &str) -> Result<(), Stop> {
     Ok(())
 }
 
-fn mv(src: &str, dst: &str) -> Result<&'static str, Stop> {
+pub(crate) fn mv(src: &str, dst: &str) -> Result<&'static str, Stop> {
     makedirs(py::dirname(dst))?;
     fs::rename(src, dst).map_err(io_at(src))?;
     Ok("moved")
@@ -1019,6 +1024,12 @@ fn opts_key(ctx: &Ctx) -> Json {
     if let Some(r) = &ctx.retarget {
         k.push(format!("retarget={r}").into());
     }
+    // (tests only: the knobs that change what is split, when set)
+    for v in ["PMU_ZIP_LIMIT", "PMU_RESS_SPLIT"] {
+        if let Ok(x) = std::env::var(v) {
+            k.push(format!("{v}={x}").into());
+        }
+    }
     Json::List(k)
 }
 
@@ -1125,6 +1136,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         }
     }
     let db = Arc::new(ClassDb::default_db().map_err(|e| Stop::Fail(e.to_string()))?);
+    // (tests only: a lower archive limit, the split's part size)
+    let zip_limit = crate::pack::limit_from(std::env::var("PMU_ZIP_LIMIT").ok().as_deref())
+        .map_err(Stop::Exit)?;
+    let split = crate::ress_split::SplitRule::new(
+        zip_limit,
+        std::env::var("PMU_RESS_SPLIT").ok().as_deref(),
+    )
+    .map_err(Stop::Exit)?;
     let mut ctx = Ctx {
         args,
         unity: Version::parse("0.0.0").unwrap(),
@@ -1141,6 +1160,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         skipped: Vec::new(),
         dropped_modules: Vec::new(),
         inlined_ress: Vec::new(),
+        split_ress: Vec::new(),
+        zip_limit,
+        split,
         managed_names: BTreeSet::new(),
         gi_neon: 0,
         compute_kernels: None,
@@ -1352,31 +1374,92 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             }
             how = "patched".into();
         } else if act == "sfinline" {
-            let (n, still) = crate::inline::inline_serialized(&ctx, src, &dst)?;
-            let mut note = format!("platform -> {ANDROID}, {n} textures inlined");
-            how = "inlined".into();
-            let mut still_sorted: Vec<&String> = still.iter().collect();
-            still_sorted.sort();
-            for name in still_sorted {
-                let sd = py::dirname(src);
-                let (s_res, d_res) = (py::join(sd, name), py::join(py::dirname(&dst), name));
-                if mv_ {
-                    mv(&s_res, &d_res)?;
-                } else {
-                    clone(&s_res, &d_res, true)?;
+            match crate::inline::inline_serialized(&ctx, src, &dst, mv_)? {
+                crate::inline::Placed::Inlined(n, still) => {
+                    let mut note = format!("platform -> {ANDROID}, {n} textures inlined");
+                    how = "inlined".into();
+                    let mut still_sorted: Vec<&String> = still.iter().collect();
+                    still_sorted.sort();
+                    for name in still_sorted {
+                        let sd = py::dirname(src);
+                        let (s_res, d_res) =
+                            (py::join(sd, name), py::join(py::dirname(&dst), name));
+                        if mv_ {
+                            mv(&s_res, &d_res)?;
+                        } else {
+                            clone(&s_res, &d_res, true)?;
+                        }
+                        let kr = py::join(py::dirname(dst_rel), name);
+                        kept.insert(kr.clone());
+                        newstate.set(&kr, key.clone());
+                        push_kept(&mut newstate, dst_rel, &kr);
+                        note.push_str(&format!("; {name} kept (still read by meshes)"));
+                    }
+                    report.get_mut("files").unwrap().set(dst_rel, note.into());
+                    if mv_ {
+                        fs::remove_file(src).map_err(io_at(src))?;
+                        let res = format!("{src}.resS");
+                        if exists(&res) && !still.contains(&format!("{}.resS", py::basename(src))) {
+                            fs::remove_file(&res).map_err(io_at(&res))?;
+                        }
+                    }
                 }
-                let kr = py::join(py::dirname(dst_rel), name);
-                kept.insert(kr.clone());
-                newstate.set(&kr, key.clone());
-                push_kept(&mut newstate, dst_rel, &kr);
-                note.push_str(&format!("; {name} kept (still read by meshes)"));
-            }
-            report.get_mut("files").unwrap().set(dst_rel, note.into());
-            if mv_ {
-                fs::remove_file(src).map_err(io_at(src))?;
-                let res = format!("{src}.resS");
-                if exists(&res) && !still.contains(&format!("{}.resS", py::basename(src))) {
-                    fs::remove_file(&res).map_err(io_at(&res))?;
+                crate::inline::Placed::Split(inlined, sp) => {
+                    how = "split".into();
+                    let file = py::basename(src).to_string();
+                    let sd = py::dirname(dst_rel).to_string();
+                    for (name, _) in &sp.parts {
+                        let kr = py::join(&sd, name);
+                        kept.insert(kr.clone());
+                        newstate.set(&kr, key.clone());
+                        push_kept(&mut newstate, dst_rel, &kr);
+                    }
+                    let sz = |n: u64| {
+                        if n >= 1 << 30 {
+                            format!("{:.2} GiB", n as f64 / (1u64 << 30) as f64)
+                        } else {
+                            format!("{:.1} MiB", n as f64 / (1u64 << 20) as f64)
+                        }
+                    };
+                    let parts = sp
+                        .parts
+                        .iter()
+                        .map(|(n, z)| format!("{n} ({})", sz(*z)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let note = format!(
+                        "platform -> {ANDROID}, textures not inlined ({} so, one archive holds {}): {file}.resS kept, split at stream \
+                         boundaries into {} parts: {parts}; {} textures and {} meshes stream from them ({} moved to a later part)",
+                        sz(inlined),
+                        sz(ctx.split.part),
+                        sp.parts.len(),
+                        sp.textures,
+                        sp.meshes,
+                        sp.moved
+                    );
+                    report
+                        .get_mut("files")
+                        .unwrap()
+                        .set(dst_rel, note.clone().into());
+                    let mut m = format!("  {dst_rel}: {note}");
+                    if sp.unread > 0 {
+                        m.push_str(&format!(
+                            " ({} bytes of the .resS read by none of them, carried along)",
+                            sp.unread
+                        ));
+                    }
+                    ctx.log(&m);
+                    if ctx.unity.line() < crate::ress_split::STREAMS_FROM {
+                        let w = format!(
+                            "{dst_rel}: its textures stream from {file}.resS (too big inlined); Unity {}.{}'s Android player is not known to \
+                             load streamed textures (2017.4: an asynchronous load of one never finishes)",
+                            ctx.unity.line().0,
+                            ctx.unity.line().1
+                        );
+                        ctx.log(&format!("WARNING: {w}"));
+                        ctx.warnings.push(w);
+                    }
+                    ctx.split_ress.push(format!("{file}.resS"));
                 }
             }
         } else if act == "bundle" && ctx.args.inline_textures && crate::inline::has_ress_node(src)?
@@ -1573,12 +1656,18 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let line = format!(
+    let mut line = format!(
         "placed: {stats_repr}; skipped source files: {}; engine modules not shipped: {}; .resS moved into their serialized files: {}",
         list_repr(&ctx.skipped),
         list_repr(&ctx.dropped_modules),
-        ctx.inlined_ress.len()
+        ctx.inlined_ress.len() - ctx.split_ress.len()
     );
+    if !ctx.split_ress.is_empty() {
+        line.push_str(&format!(
+            "; .resS kept and split (their files too big for one archive inlined): {}",
+            list_repr(&ctx.split_ress)
+        ));
+    }
     ctx.log(&line);
     if ctx.gi_neon > 0 {
         let m = format!(

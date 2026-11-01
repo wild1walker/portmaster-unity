@@ -14,6 +14,7 @@ pub mod patch_obb;
 pub mod paths;
 pub mod plugins;
 pub mod pyjson;
+pub mod ress_split;
 pub mod retarget;
 pub mod sha1;
 pub mod streaming;

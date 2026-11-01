@@ -8,6 +8,7 @@ use crate::android_data::{
 use crate::paths;
 use crate::plugins::Survey;
 use crate::pyjson::{self, Json};
+use crate::ress_split;
 use crate::streaming as ST;
 use pkgzip::py;
 use pkgzip::zipwrite::{verify_zip, write_zip, Src, ZIP_LIMIT};
@@ -65,6 +66,44 @@ fn src_clone(s: &Src) -> Src {
 
 type Entry = (String, Src);
 
+/// The entries of the APK, the main OBB (the marker first) and the patch OBB.
+pub type Archives = (Vec<Entry>, Vec<Entry>, Vec<Entry>);
+
+/// Each archive's limit: 2 GiB - 1 (Unity's zip reader seeks with a 32-bit long), or (tests
+/// only: a small one to try the split and spread paths on small data) $PMU_ZIP_LIMIT bytes.
+pub fn limit_from(v: Option<&str>) -> Result<u64, String> {
+    match v {
+        None => Ok(ZIP_LIMIT),
+        Some(t) => t
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|&n| (1 << 10..=ZIP_LIMIT).contains(&n))
+            .ok_or_else(|| {
+                format!("PMU_ZIP_LIMIT={t}: a number of bytes (1024 to {ZIP_LIMIT}) expected")
+            }),
+    }
+}
+
+/// The room split_big_apk leaves in the APK: 64 MiB at 2 GiB, the same share of a lower limit.
+pub fn apk_margin(limit: u64) -> u64 {
+    (limit + 1) / 32
+}
+
+/// The room the OBBs keep: 16 MiB at 2 GiB, the same share of a lower limit.
+pub fn obb_margin(limit: u64) -> u64 {
+    (limit + 1) / 128
+}
+
+/// An archive's size as write_zip reckons it (its end record, each entry's headers and data).
+fn zip_size(entries: &[&Entry]) -> Result<u64, Stop> {
+    let mut t = 22;
+    for (a, s) in entries {
+        t += 30 + 46 + 2 * a.len() as u64 + 8 + size_of(s)?;
+    }
+    Ok(t)
+}
+
 fn apk_first(rel: &str) -> bool {
     rel.starts_with("Managed/")
         || rel.starts_with("Resources/")
@@ -79,9 +118,14 @@ fn apk_first(rel: &str) -> bool {
 }
 
 /// A game whose assets/bin/Data passes the APK's 2 GiB: the largest files of later scenes and
-/// resources move to the OBBs until the APK fits. Returns (apk entries, moved entries).
-fn split_big_apk(apk: Vec<Entry>) -> Result<(Vec<Entry>, Vec<Entry>), Stop> {
-    let limit = ZIP_LIMIT - (64 << 20);
+/// resources move to the OBBs until the APK fits (`parts`: a split .resS's parts, which may move
+/// whatever their file). Returns (apk entries, moved entries).
+fn split_big_apk(
+    apk: Vec<Entry>,
+    limit: u64,
+    parts: &[(String, Vec<String>)],
+) -> Result<(Vec<Entry>, Vec<Entry>), Stop> {
+    let limit = limit - apk_margin(limit);
     let mut total = 0;
     for (a, s) in &apk {
         total += room(a, s)?;
@@ -92,7 +136,10 @@ fn split_big_apk(apk: Vec<Entry>) -> Result<(Vec<Entry>, Vec<Entry>), Stop> {
     let pre = "assets/bin/Data/";
     let mut movable: Vec<(u64, usize)> = Vec::new();
     for (i, (a, s)) in apk.iter().enumerate() {
-        if a.starts_with(pre) && matches!(s, Src::Path(_)) && !apk_first(&a[pre.len()..]) {
+        if a.starts_with(pre)
+            && matches!(s, Src::Path(_))
+            && (!apk_first(&a[pre.len()..]) || ress_split::is_part(parts, a))
+        {
             movable.push((room(a, s)?, i));
         }
     }
@@ -130,6 +177,168 @@ fn src_key(s: &Src) -> String {
         Src::Path(p) => p.clone(),
         Src::Bytes(_) => String::new(),
     }
+}
+
+/// Where the OBBs' entries go: (indices into `obb` added to the APK, the main OBB's, the patch
+/// OBB's). In order, as the main OBB holds them and the rest in the patch OBB; when that passes
+/// the limit, spread by size instead: the largest first, each into the first archive with room,
+/// the APK (`apk_room`: its free bytes, files of bin/Data only), the main OBB, the patch OBB.
+/// The flag: spread.
+#[allow(clippy::type_complexity)]
+fn obb_places(
+    obb: &[Entry],
+    marker: &[Entry],
+    apk_room: Option<u64>,
+    limit: u64,
+) -> Result<(Vec<usize>, Vec<usize>, Vec<usize>, bool), Stop> {
+    let cap = limit - obb_margin(limit);
+    let (mut main, mut rest) = (Vec::new(), Vec::new());
+    let mut size = 0;
+    for (i, (a, s)) in obb.iter().enumerate() {
+        let sz = room(a, s)?;
+        if size + sz < cap && rest.is_empty() {
+            main.push(i);
+            size += sz;
+        } else {
+            rest.push(i);
+        }
+    }
+    let patch: Vec<&Entry> = marker.iter().chain(rest.iter().map(|&i| &obb[i])).collect();
+    if rest.is_empty() || zip_size(&patch)? <= limit {
+        return Ok((Vec::new(), main, rest, false));
+    }
+    let mut order: Vec<(u64, usize)> = Vec::new();
+    for (i, (a, s)) in obb.iter().enumerate() {
+        order.push((room(a, s)?, i));
+    }
+    order.sort_by(|x, y| y.0.cmp(&x.0));
+    let (mut to_apk, mut main, mut patch) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut a_used, mut m_used, mut p_used) = (0, 0, 0);
+    for (sz, i) in order {
+        if obb[i].0.starts_with("assets/bin/") && apk_room.is_some_and(|r| a_used + sz < r) {
+            to_apk.push(i);
+            a_used += sz;
+        } else if m_used + sz < cap {
+            main.push(i);
+            m_used += sz;
+        } else if p_used + sz < cap {
+            patch.push(i);
+            p_used += sz;
+        } else {
+            return Err(Stop::Exit(format!(
+                "pack: {} ({:.2} GiB) fits in none of the archives: the APK and both OBBs are full ({:.2} GiB each at most)",
+                obb[i].0,
+                gib(sz as f64),
+                gib(limit as f64)
+            )));
+        }
+    }
+    for v in [&mut to_apk, &mut main, &mut patch] {
+        v.sort();
+    }
+    Ok((to_apk, main, patch, true))
+}
+
+/// Where the entries go (`what`: --pack all, apk or obb): the APK's entries, the main OBB's (the
+/// marker first) and the patch OBB's. With all, the APK's later files move to the OBBs when it
+/// passes the limit (split_big_apk); the OBBs' entries fill the main OBB in order and the rest go
+/// to the patch OBB, or, when that would pass the limit, are spread by size (obb_places). The
+/// log says where a split .resS's parts went. `names`: the archives' file names.
+pub fn place_archives(
+    mut apk: Vec<Entry>,
+    obb: Vec<Entry>,
+    marker: &[Entry],
+    limit: u64,
+    what: &str,
+    names: &[String; 3],
+    log: &mut dyn FnMut(&str),
+) -> Result<Archives, Stop> {
+    let mut obb = obb;
+    // a .resS split into parts (ress_split.rs: too big for one archive inlined)
+    let groups = ress_split::groups(
+        apk.iter()
+            .map(|(a, _)| a.as_str())
+            .filter(|a| a.starts_with("assets/bin/")),
+    );
+    if what == "all" {
+        let (a, moved) = split_big_apk(apk, limit, &groups)?;
+        apk = a;
+        if !moved.is_empty() {
+            let mut sz = 0;
+            for (_, s) in &moved {
+                sz += size_of(s)?;
+            }
+            log(&format!(
+                "pack: the data passes 2 GiB: {} files of later scenes and resources ({:.2} GiB) go into the OBBs, as Unity's \
+                 \"split application binary\" does (the player looks bin/Data up in every mounted archive)",
+                moved.len(),
+                gib(sz as f64)
+            ));
+            let mut v = moved;
+            v.append(&mut obb);
+            obb = v;
+        }
+    }
+    let both_apk = matches!(what, "apk" | "all");
+    let mut main: Vec<Entry> = marker
+        .iter()
+        .map(|(a, s)| (a.clone(), src_clone(s)))
+        .collect();
+    let mut rest: Vec<Entry> = Vec::new();
+    if matches!(what, "obb" | "all") {
+        let apk_room = if both_apk {
+            let mut used = 0;
+            for (a, s) in &apk {
+                used += room(a, s)?;
+            }
+            Some((limit - apk_margin(limit)).saturating_sub(used))
+        } else {
+            None
+        };
+        let (to_apk, m, r, spread) = obb_places(&obb, marker, apk_room, limit)?;
+        if spread {
+            log(&format!(
+                "pack: in order the patch OBB would pass {:.2} GiB: the files spread by size instead, the largest first: {} into the APK, \
+                 {} into the main OBB, {} into the patch OBB",
+                gib(limit as f64),
+                to_apk.len(),
+                m.len(),
+                r.len()
+            ));
+        }
+        let mut slots: Vec<Option<Entry>> = obb.into_iter().map(Some).collect();
+        for i in to_apk {
+            apk.push(slots[i].take().unwrap());
+        }
+        main.extend(m.into_iter().map(|i| slots[i].take().unwrap()));
+        rest.extend(r.into_iter().map(|i| slots[i].take().unwrap()));
+    }
+    let nm = marker.len();
+    for (base, members) in &groups {
+        let at = |m: &str| {
+            let has = |v: &[Entry]| v.iter().any(|(a, _)| a == m);
+            if both_apk && has(&apk) {
+                names[0].clone()
+            } else if has(&main[nm..]) {
+                names[1].clone()
+            } else if has(&rest) {
+                names[2].clone()
+            } else {
+                "no archive (not packed)".into()
+            }
+        };
+        let wh: Vec<String> = members
+            .iter()
+            .map(|m| format!("{} in {}", py::basename(m), at(m)))
+            .collect();
+        log(&format!(
+            "pack: {} split in {} parts (its file too big for one archive with its textures inlined): {}",
+            py::basename(base),
+            members.len(),
+            wh.join(", ")
+        ));
+    }
+    Ok((apk, main, rest))
 }
 
 /// Free bytes for an unprivileged writer (f_bavail * f_frsize; u32 on 32-bit targets).
@@ -273,13 +482,14 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
     let apk = py::join(&zdir, &format!("{name}.apk"));
     let main_obb = py::join(&zdir, &format!("main.{code}.{}.obb", ctx.package));
     let patch_obb = py::join(&zdir, &format!("patch.{code}.{}.obb", ctx.package));
+    let limit = ctx.zip_limit;
     let mut pack_what = ctx.args.pack.clone();
     if ctx.args.mono64 && pack_what == "all" {
         let mut total = 0;
         for (_, s) in apk_entries.iter().chain(obb_entries.iter()) {
             total += size_of(s)?;
         }
-        if total < ZIP_LIMIT - (64 << 20) {
+        if total < limit - apk_margin(limit) {
             apk_entries.append(&mut obb_entries);
             pack_what = "apk".into();
             for old in [&main_obb, &patch_obb] {
@@ -292,34 +502,30 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
             ctx.log("pack: WARNING: IL2CPP data over 2 GiB: APK + OBB (Unity 2020.3 then extracts no IL2CPP data: untested)");
         }
     }
-    if pack_what == "all" {
-        let (a, moved) = split_big_apk(apk_entries)?;
-        apk_entries = a;
-        if !moved.is_empty() {
-            let mut sz = 0;
-            for (_, s) in &moved {
-                sz += size_of(s)?;
-            }
-            let m = format!(
-                "pack: the data passes 2 GiB: {} files of later scenes and resources ({:.2} GiB) go into the OBBs, as Unity's \
-                 \"split application binary\" does (the player looks bin/Data up in every mounted archive)",
-                moved.len(),
-                gib(sz as f64)
-            );
-            ctx.log(&m);
-            let mut v = moved;
-            v.append(&mut obb_entries);
-            obb_entries = v;
-        }
-    }
     let both_apk = matches!(pack_what.as_str(), "apk" | "all");
     let both_obb = matches!(pack_what.as_str(), "obb" | "all");
+    let names = [
+        py::basename(&apk).to_string(),
+        py::basename(&main_obb).to_string(),
+        py::basename(&patch_obb).to_string(),
+    ];
+    let (apk_entries, main, rest) = place_archives(
+        apk_entries,
+        obb_entries,
+        &marker,
+        limit,
+        &pack_what,
+        &names,
+        &mut |m| ctx.log(m),
+    )?;
+    let nm = marker.len();
     let mut space: Vec<&Entry> = Vec::new();
     if both_apk {
         space.extend(apk_entries.iter());
     }
     if both_obb {
-        space.extend(obb_entries.iter());
+        space.extend(main[nm..].iter());
+        space.extend(rest.iter());
     }
     check_space(ctx, &zdir, &space, &[&apk, &main_obb, &patch_obb])?;
     if both_apk {
@@ -330,7 +536,7 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
     flush_log(ctx);
     if both_obb {
         let mut need = 0;
-        for (_, s) in &obb_entries {
+        for (_, s) in main[nm..].iter().chain(rest.iter()) {
             need += size_of(s)?;
         }
         let free = free_space(&zdir)?;
@@ -342,21 +548,6 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
             );
             ctx.log(&m);
             return Err(Stop::Status(NO_SPACE));
-        }
-        let mut main: Vec<Entry> = marker
-            .iter()
-            .map(|(a, s)| (a.clone(), src_clone(s)))
-            .collect();
-        let mut rest: Vec<Entry> = Vec::new();
-        let mut size = 0;
-        for (a, s) in obb_entries {
-            let sz = room(&a, &s)?;
-            if size + sz < ZIP_LIMIT - (16 << 20) && rest.is_empty() {
-                main.push((a, s));
-                size += sz;
-            } else {
-                rest.push((a, s));
-            }
         }
         write_zip(&main_obb, &main, &mut |m| ctx_log(m), 4)?;
         verify_zip(&main_obb, &main, &mut |m| ctx_log(m), 40)?;
@@ -541,7 +732,7 @@ mod tests {
             "assets/bin/Data/level1".into(),
             Src::Path(file("a", 1 << 20)),
         )];
-        let (apk, moved) = split_big_apk(small).unwrap();
+        let (apk, moved) = split_big_apk(small, ZIP_LIMIT, &[]).unwrap();
         assert_eq!((apk.len(), moved.len()), (1, 0));
         let big: Vec<Entry> = vec![
             (
@@ -565,7 +756,7 @@ mod tests {
                 Src::Path(file("l1", 400 << 20)),
             ),
         ];
-        let (apk, moved) = split_big_apk(big).unwrap();
+        let (apk, moved) = split_big_apk(big, ZIP_LIMIT, &[]).unwrap();
         let names = |v: &[Entry]| v.iter().map(|e| e.0.clone()).collect::<Vec<_>>();
         // (the largest later files, until the APK fits: sharedassets1 then level2; sorted by name)
         assert_eq!(

@@ -37,15 +37,38 @@ fn save_inlined(
     Ok(())
 }
 
+/// What became of a serialized file with a .resS beside it.
+pub enum Placed {
+    /// Its textures inlined: (textures inlined, .resS names still read).
+    Inlined(usize, HashSet<String>),
+    /// Too big for one archive so: its .resS kept and split (ress_split.rs), src consumed when
+    /// asked. The file's size had its textures been inlined, and the split.
+    Split(u64, crate::ress_split::Split),
+}
+
 /// A serialized file with a <name>.resS beside it: textures inlined, target platform Android,
-/// retargeted to the player's version. Returns (textures inlined, .resS names still read).
-pub fn inline_serialized(
-    ctx: &Ctx,
-    src: &str,
-    dst: &str,
-) -> Result<(usize, HashSet<String>), Stop> {
+/// retargeted to the player's version; or, when it would then pass one archive (ctx.split), its
+/// .resS kept and split into parts that fit one (with `consume`, src and its .resS used up).
+pub fn inline_serialized(ctx: &Ctx, src: &str, dst: &str, consume: bool) -> Result<Placed, Stop> {
     let mut f = unityfs::DataFile::open(src, &ctx.opts())?;
     let d = py::dirname(src).to_string();
+    let refs = unityfs::inline::stream_refs(&f.sf, unityfs::inline::PLANNED)?;
+    let (plan, still) = unityfs::inline::plan_of(&refs);
+    let own = format!("{}.resS", py::basename(src));
+    let res_len = std::fs::metadata(py::join(&d, &own))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let inlined = std::fs::metadata(src)?.len()
+        + refs
+            .iter()
+            .filter(|r| plan.contains(&r.path_id))
+            .map(|r| r.size)
+            .sum::<u64>();
+    let kept = still.contains(&own).then_some(res_len);
+    if res_len > 0 && ctx.split.wants(py::basename(src), inlined, kept) {
+        return crate::ress_split::split_for(ctx, &mut f.sf, refs, src, dst, consume)
+            .map(|s| Placed::Split(inlined, s));
+    }
     let read = move |path: &str, off: u64, size: usize| -> unityfs::Result<Vec<u8>> {
         let name = path.rsplit('/').next().unwrap_or(path);
         let mut fh = std::fs::File::open(py::join(&d, name))?;
@@ -54,7 +77,6 @@ pub fn inline_serialized(
         fh.take(size as u64).read_to_end(&mut v)?;
         Ok(v)
     };
-    let (plan, still) = unityfs::inline::plan(&f.sf)?;
     f.sf.target_platform = ANDROID as i32;
     ctx.retarget_sf(&mut f.sf)?;
     std::fs::create_dir_all(py::dirname(dst))?;
@@ -62,7 +84,7 @@ pub fn inline_serialized(
     save_inlined(&f.sf, &plan, &read, Path::new(&tmp))?;
     drop(f);
     std::fs::rename(&tmp, dst)?;
-    Ok((plan.len(), still))
+    Ok(Placed::Inlined(plan.len(), still))
 }
 
 /// A bundle with .resS nodes: textures inlined, the .resS nodes nothing reads any more dropped,

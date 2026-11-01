@@ -46,7 +46,7 @@ So two layouts work:
 | route | what the host gives the player | libunity patch | Mac disk | notes |
 |---|---|---|---|---|
 | **directory** `out/Cuphead/` | getPackageCodePath = that directory; chdir there | `Mount`: at file offset/vaddr **0x2eab20**, `1a00001d` (bne 0x2eab9c) → **`1a000007`** (bne 0x2eab44): a non-regular path is then taken as the app path (zip files still mount normally) | ~0.4 GB | Application.dataPath is a real directory, so the DLC check (`dataPath/../goggame-2048763853.info`) and helper files work |
-| **zip** `out/zip/` (`--pack all`) | getPackageCodePath = `Cuphead.apk`; getObbDir = `out/zip`; versionCode 1; package `com.cupheadport.game`; meta-data `unity.build-id` (all in `zip/android_package.json`) | none | +2.3 GB | each archive must stay **< 2 GiB** (32-bit fseek). APK = `assets/bin/Data/**` (389 MiB). Main OBB = `assets/AssetBundles/**` + Logo + `assets/<build-id>` marker (1.857 GiB, 146 MiB headroom). Overflow goes to `patch.1.….obb`. STORE, zip32, 4-byte aligned |
+| **zip** `out/zip/` (`--pack all`) | getPackageCodePath = `Cuphead.apk`; getObbDir = `out/zip`; versionCode 1; package `com.cupheadport.game`; meta-data `unity.build-id` (all in `zip/android_package.json`) | none | +2.3 GB | each archive must stay **< 2 GiB** (32-bit fseek). APK = `assets/bin/Data/**` (389 MiB). Main OBB = `assets/AssetBundles/**` + Logo + `assets/<build-id>` marker (1.857 GiB, 146 MiB headroom). Overflow goes to `patch.1.….obb`; a file too big for one archive with its textures inlined keeps its `.resS`, split (section 4). STORE, zip32, 4-byte aligned |
 
 Zip-route caveats: `Application.dataPath` is the .apk file. The DLC check
 (`File.Exists(dataPath + "/../goggame-2048763853.info")`, from codepatch DlcFromGogInstall) and
@@ -226,6 +226,24 @@ built-ins and six free Linux games (one per line):
   game: 19 meshes in 3 files). The textures step likewise carries those blobs when it rewrites a
   `.resS`, and writes ASTC as `ASTC_<n>x<n>` (48-53) from 2019.1, where the RGBA numbers are
   deprecated.
+- **A file too big for one archive with its textures inlined** (pmu only; the Python stops at
+  packing): no archive may pass 2 GiB, so a serialized file that would pass 2 GiB less the APK's
+  64 MiB margin inlined (Darkwood, 2021.3: `resources.assets` with its 2.27 GiB `.resS`, 2.32 GiB)
+  is not inlined. Its `.resS` is kept and cut, only where no streamed blob spans, into parts of
+  at most that size, as even as the blobs allow: `<file>.resS` keeps bytes 0 to the first cut (what
+  streams from there is unchanged), `<file>.<k>.resS` the bytes from cut k on, and every texture
+  and mesh that streams from a later part gets that path and its offset there in `m_StreamData`
+  (each such object must first write back to its own bytes; nothing else in it changes). The
+  pixels and vertices are the same bytes. Packing may move the parts out of the APK whatever
+  their file; when the patch OBB would pass the limit in order, the OBBs' files (the APK's moved
+  ones also into its free room) are spread by size instead, the largest first, into the first
+  archive with room. The log says what was split and which archive each part went to. Unity's
+  Android players read external `.resS` streams through the VFS, from the APK or an OBB (Unity's
+  own Android builds ship `.resS` files in `assets/bin/Data`; the meshes above already do). Before
+  2018.3 a warning says the player is not known to load them (2017.4's never finishes an
+  asynchronous load of a streamed texture). Tests only: `PMU_ZIP_LIMIT=<bytes>` lowers the archive
+  limit (the margins are the same shares of it), `PMU_RESS_SPLIT=<bytes>[:<file>,...]` sets the
+  part size and, with names, splits those files whatever their size.
 - **GraphicsSettings.** `m_ShaderDefinesPerShaderCompiler` has the same layout in every version
   that has it (2017.1+; 5.x has none, and nothing is added); the GLES3 entry is copied from GLCore
   (from D3D11 for a Windows build).
