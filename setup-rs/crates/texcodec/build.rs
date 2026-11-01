@@ -59,7 +59,13 @@ fn main() {
     let aor = vendor.join("optimized-routines/math");
     let mut m = cc::Build::new();
     m.opt_level(2).debug(false).warnings(false).include(&aor);
-    for f in ["sinf.c", "cosf.c", "sincosf.c", "sincosf_data.c", "math_errf.c"] {
+    for f in [
+        "sinf.c",
+        "cosf.c",
+        "sincosf.c",
+        "sincosf_data.c",
+        "math_errf.c",
+    ] {
         m.file(aor.join(f));
     }
     m.compile("tc_libm");

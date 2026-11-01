@@ -1,6 +1,7 @@
 //! One module a command; each `run(args) -> ExitCode` takes the arguments after the command's name.
 use std::process::ExitCode;
 
+mod android_data;
 mod convert;
 mod macpkg;
 mod patch_obb;
@@ -15,6 +16,7 @@ pub const NAMES: &[&str] = &[
     "patch-obb",
     "convert",
     "journal-files",
+    "android-data",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -26,6 +28,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "patch-obb" => Some(patch_obb::run(args)),
         "convert" => Some(convert::run(args)),
         "journal-files" => Some(convert::journal_files(args)),
+        "android-data" => Some(android_data::run(args)),
         _ => None,
     }
 }

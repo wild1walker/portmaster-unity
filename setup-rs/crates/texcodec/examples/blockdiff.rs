@@ -7,9 +7,11 @@ use texcodec::texture::{self, Settings, Texture};
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();
+    let r: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&a[1]).unwrap()).unwrap();
     let raw = std::fs::read(&a[2]).unwrap();
-    let header: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&a[3]).unwrap()).unwrap();
+    let header: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&a[3]).unwrap()).unwrap();
     let py = std::fs::read(&a[4]).unwrap();
     let threads: Vec<usize> = if a.len() > 5 {
         a[5..].iter().map(|t| t.parse().unwrap()).collect()
@@ -27,7 +29,10 @@ fn main() {
         image_count: r["images"].as_i64(),
         platform: r["platform"].as_i64().unwrap() as i32,
         platform_blob: &[],
-        version: [r["version"][0].as_i64().unwrap(), r["version"][1].as_i64().unwrap()],
+        version: [
+            r["version"][0].as_i64().unwrap(),
+            r["version"][1].as_i64().unwrap(),
+        ],
     };
     let key = format!("{}|{}", r["rel"].as_str().unwrap(), r["pid"]);
     let mut first: Option<Vec<u8>> = None;

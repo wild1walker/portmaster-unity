@@ -10,5 +10,6 @@ name = "pmu"
 path = "src/main.rs"
 
 [dependencies]
+androiddata = { path = "../crates/androiddata" }
 pkgzip = { path = "../crates/pkgzip" }
 convert = { path = "../crates/convert" }

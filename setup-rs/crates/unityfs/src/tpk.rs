@@ -285,6 +285,13 @@ impl ClassDb {
         ret
     }
 
+    /// Every class id the database has, in order (get_typetree().ClassInformation's keys, sorted).
+    pub fn class_ids(&self) -> Vec<i32> {
+        let mut v: Vec<i32> = self.classes.keys().copied().collect();
+        v.sort();
+        v
+    }
+
     /// Every entry of a class: (first version, class or None).
     pub fn class_entries(&self, class_id: i32) -> &[(UnityVersion, Option<TpkClass>)] {
         self.classes.get(&class_id).map(|v| &v[..]).unwrap_or(&[])
