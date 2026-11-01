@@ -723,3 +723,65 @@ pub fn format_name(format: i32) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn px(img: &Decoded, x: usize, y: usize) -> &[u8] {
+        let b = bytes_per_pixel(img.mode);
+        &img.px[(y * img.width + x) * b..(y * img.width + x + 1) * b]
+    }
+
+    #[test]
+    fn dxt1_four_and_three_colour_blocks() {
+        // c0 red > c1 blue: index 2 is 2/3 red; c0 <= c1: index 3 is transparent black
+        let four = [0x00, 0xF8, 0x1F, 0x00, 0xAA, 0xAA, 0xAA, 0xAA];
+        let three = [0x1F, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF];
+        let img = parse_image_data(&[four, three].concat(), 8, 4, tf::DXT1, [2017, 4]).unwrap();
+        assert_eq!(px(&img, 0, 0), [170, 0, 85, 255]);
+        assert_eq!(px(&img, 7, 3), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn dxt5_alpha_ramp_and_crop() {
+        // a0 255 > a1 0: index 2 is 6/7 of a0; the 5 x 3 image keeps the block's top-left texels
+        let mut b = [0u8; 16];
+        b[0] = 255;
+        b[2] = 0b0000_0010; // texel 0: index 2
+        b[8..12].copy_from_slice(&[0xFF, 0xFF, 0x00, 0x00]); // white over the colour block
+        let img = parse_image_data(&[b, b].concat(), 5, 3, tf::DXT5, [2017, 4]).unwrap();
+        assert_eq!((img.width, img.height, img.px.len()), (5, 3, 5 * 3 * 4));
+        assert_eq!(px(&img, 0, 0), [255, 255, 255, 218]);
+        assert_eq!(px(&img, 1, 0)[3], 255);
+    }
+
+    #[test]
+    fn bc7_empty_mode_is_opaque_black_and_bc4_is_luminance() {
+        let img = parse_image_data(&[0u8; 16], 4, 4, tf::BC7, [2017, 4]).unwrap();
+        assert!(img.px.chunks(4).all(|p| p == [0, 0, 0, 255]));
+        let l = parse_image_data(&[200, 10, 0, 0, 0, 0, 0, 0], 4, 4, tf::BC4, [2017, 4]).unwrap();
+        assert_eq!((l.mode, l.px.len()), (Mode::L, 16));
+        assert!(l.px.iter().all(|&v| v == 200));
+    }
+
+    #[test]
+    fn raw_formats_reorder_channels() {
+        let argb = parse_image_data(&[1, 2, 3, 4], 1, 1, tf::ARGB32, [2017, 4]).unwrap();
+        assert_eq!(argb.px, [2, 3, 4, 1]);
+        let bgra = parse_image_data(&[1, 2, 3, 4], 1, 1, tf::BGRA32, [2017, 4]).unwrap();
+        assert_eq!(bgra.px, [3, 2, 1, 4]);
+        let rgb = parse_image_data(&[1, 2, 3], 1, 1, tf::RGB24, [2017, 4]).unwrap();
+        assert_eq!((rgb.mode, rgb.px), (Mode::Rgb, vec![1, 2, 3, 255]));
+    }
+
+    #[test]
+    fn short_and_bad_data_are_errors() {
+        assert!(parse_image_data(&[0u8; 8], 8, 4, tf::DXT1, [2017, 4]).is_err());
+        assert!(parse_image_data(&[0u8; 7], 1, 2, tf::RGBA32, [2017, 4]).is_err());
+        assert!(
+            parse_image_data(b"not crunched data", 4, 4, tf::DXT5_CRUNCHED, [2017, 4]).is_err()
+        );
+        assert!(parse_image_data(&[0u8; 16], 4, 4, 34, [2017, 4]).is_err()); // ETC: not here
+    }
+}
