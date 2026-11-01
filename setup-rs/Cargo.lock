@@ -384,6 +384,7 @@ dependencies = [
  "androiddata",
  "convert",
  "pkgzip",
+ "unityfs",
 ]
 
 [[package]]
