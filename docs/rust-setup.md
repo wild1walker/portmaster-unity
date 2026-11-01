@@ -88,10 +88,12 @@ by the other implementation, options, errors), and compares statuses, output and
 
 The image `ua-rust` (arm64 Debian bookworm) has Rust 1.88 with the `aarch64-unknown-linux-musl`
 target, and the reference Python: PortMaster's `python_3.11` at `/opt/py` with the setup's
-packages at `/opt/pylibs`. On Apple silicon it runs natively.
+packages at `/opt/pylibs`. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
+live in Docker volumes (bind mounts of the host's disks are slow; a build's output is copied out
+with `docker cp` or a `cat` from the container when needed).
 
 ```bash
-RS_ROOT=<a folder for builds> setup-rs/tools/rs.sh <worktree> cargo test
+RS_ROOT=<the shared setup's folder> setup-rs/tools/rs.sh <worktree> cargo test
 RS_ROOT=... setup-rs/tools/rs.sh <worktree> cargo build --release --target aarch64-unknown-linux-musl
 ```
 
@@ -115,6 +117,15 @@ tests use small made-up data built in the test (no Unity or game files in the re
 <config.json> <out> [--converted <converted data>]` runs the shaders step's own code on every Shader
 and saves inputs, outputs and every program translation to `<out>`; then
 `rs.sh <worktree> env SHADERX_GOLDEN=<out> cargo test --release -p shaderx` compares them.
+
+texcodec's golden tests take their data from the Python, run in the same image:
+`tests/golden/textures_golden.py dump <data> <config.json> <dir> [--set textures.k=v] [--range a:b]`
+runs the textures step's own per-texture code and writes each texture's fields, raw pixels and
+result to `<dir>`; `TEXCODEC_GOLDEN=<dir> cargo test -p texcodec --release --test golden` checks
+texcodec against it (same decisions, same bytes). `tests/golden/texcodec_fuzz.py <dir>` and
+`TEXCODEC_FUZZ=<dir> ... --test libs` do the same for the libraries on made-up images (every
+format, resize boxes, every ASTC preset and tier, other block sizes). Run them for the musl target
+too (`--target aarch64-unknown-linux-musl`): the shipped binary has musl's libm.
 
 ## Rules
 
