@@ -60,11 +60,10 @@ pub struct Parsed {
 
 impl Parsed {
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.opts.get(name).and_then(|v| v.last()).map(String::as_str)
-    }
-
-    pub fn all(&self, name: &str) -> Vec<String> {
-        self.opts.get(name).cloned().unwrap_or_default()
+        self.opts
+            .get(name)
+            .and_then(|v| v.last())
+            .map(String::as_str)
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -73,7 +72,9 @@ impl Parsed {
 }
 
 fn metavar(name: &str) -> String {
-    name.trim_start_matches('-').replace('-', "_").to_uppercase()
+    name.trim_start_matches('-')
+        .replace('-', "_")
+        .to_uppercase()
 }
 
 impl Parser {
@@ -102,7 +103,11 @@ impl Parser {
         if let Some(o) = self.opts.iter().find(|o| o.name == tok) {
             return Ok(Some(o));
         }
-        let hits: Vec<&Opt> = self.opts.iter().filter(|o| o.name.starts_with(tok)).collect();
+        let hits: Vec<&Opt> = self
+            .opts
+            .iter()
+            .filter(|o| o.name.starts_with(tok))
+            .collect();
         match hits.as_slice() {
             [o] => Ok(Some(o)),
             [] => Ok(None),
@@ -128,7 +133,9 @@ impl Parser {
                 only_pos = true;
                 continue;
             }
-            if tok == "-h" || (tok.starts_with("--") && "--help".starts_with(tok.as_str()) && tok.len() > 2) {
+            if tok == "-h"
+                || (tok.starts_with("--") && "--help".starts_with(tok.as_str()) && tok.len() > 2)
+            {
                 println!("{}", self.usage());
                 return Err(ExitCode::SUCCESS);
             }
@@ -163,7 +170,9 @@ impl Parser {
                 None => match it.next() {
                     Some(v) if !(v.starts_with('-') && v.len() > 1) => v.clone(),
                     _ => {
-                        return Err(self.error(&format!("argument {}: expected one argument", o.name)))
+                        return Err(
+                            self.error(&format!("argument {}: expected one argument", o.name))
+                        )
                     }
                 },
             };

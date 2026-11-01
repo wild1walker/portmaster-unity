@@ -12,7 +12,11 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(v) => {
             let (lo, hi) = (convert::version::FIRST, convert::version::LAST);
             let ok = lo <= v.line && v.line <= hi;
-            println!("{} ({})", v.text, if ok { "supported" } else { "not supported" });
+            println!(
+                "{} ({})",
+                v.text,
+                if ok { "supported" } else { "not supported" }
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {

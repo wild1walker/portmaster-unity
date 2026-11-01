@@ -47,10 +47,7 @@ impl Archive {
         (&mut f).take(4096).read_to_end(&mut head)?;
         let (sig, mut p) = cstr(&head, 0)?;
         if sig != b"UnityFS" {
-            return Err(value(format!(
-                "{}: not a UnityFS archive",
-                path.display()
-            )));
+            return Err(value(format!("{}: not a UnityFS archive", path.display())));
         }
         let format = u32::from_be_bytes(be(&head, p)?);
         p += 4;
@@ -229,7 +226,7 @@ fn read_some(f: &mut File, buf: &mut [u8]) -> Result<usize> {
 fn decompress(data: &[u8], usize: usize, comp: u32) -> Result<Vec<u8>> {
     match comp {
         0 => Ok(data.to_vec()),
-        1 | 2 | 3 => compress::decompress(data, usize, comp),
+        1..=3 => compress::decompress(data, usize, comp),
         c => Err(value(format!("unknown block compression {c}"))),
     }
 }
@@ -329,7 +326,10 @@ mod tests {
         for extra in [0, 0x200] {
             std::fs::write(
                 d.join(ARCHIVE),
-                archive(&[("globalgamemanagers", &ggm), ("level0.resS", &res)], extra),
+                archive(
+                    &[("globalgamemanagers", &ggm), ("level0.resS", &res)],
+                    extra,
+                ),
             )
             .unwrap();
             let mut lines = Vec::new();
@@ -339,12 +339,19 @@ mod tests {
             assert_eq!(std::fs::read(d.join("level0.resS")).unwrap(), res);
             assert!(!d.join(ARCHIVE).exists());
             assert_eq!(lines[0], "unpack: globalgamemanagers (5000 bytes)");
-            assert!(lines[2].starts_with("unpack: 2 files from ") && lines[2].ends_with(" (archive removed)"));
+            assert!(
+                lines[2].starts_with("unpack: 2 files from ")
+                    && lines[2].ends_with(" (archive removed)")
+            );
         }
         // a name that leaves the folder
         std::fs::write(d.join(ARCHIVE), archive(&[("../x", b"abc")], 0)).unwrap();
         let e = unpack(&d, None, false, &mut |_| {}).unwrap_err();
-        assert!(e.to_string().ends_with("file name '../x' leaves the folder"), "{e}");
+        assert!(
+            e.to_string()
+                .ends_with("file name '../x' leaves the folder"),
+            "{e}"
+        );
         let _ = std::fs::remove_dir_all(&d);
         assert!(unpack(&d, None, false, &mut |_| {}).is_err());
     }

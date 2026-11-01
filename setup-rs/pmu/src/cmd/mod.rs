@@ -9,6 +9,7 @@ mod patch_obb;
 mod player;
 mod unpack;
 mod version;
+mod winbcl;
 mod zip_extract;
 
 /// The commands this binary has, as the setup scripts name them.
@@ -22,6 +23,7 @@ pub const NAMES: &[&str] = &[
     "android-data",
     "version",
     "unpack",
+    "winbcl",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -36,6 +38,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "android-data" => Some(android_data::run(args)),
         "version" => Some(version::run(args)),
         "unpack" => Some(unpack::run(args)),
+        "winbcl" => Some(winbcl::run(args)),
         _ => None,
     }
 }

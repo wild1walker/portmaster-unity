@@ -400,7 +400,7 @@ fn desktop_modules_needed(gmanaged: &str, amanaged: &str) -> Vec<(String, Vec<St
 
 /// {assembly: [engine modules]}: assemblies the player's engine modules reference that are not
 /// shipped.
-fn missing_references(amanaged: &str, names: &BTreeSet<String>) -> Vec<(String, Vec<String>)> {
+pub fn missing_references(amanaged: &str, names: &BTreeSet<String>) -> Vec<(String, Vec<String>)> {
     use crate::clrmeta::Assembly;
     let mut have: BTreeSet<String> = names
         .iter()

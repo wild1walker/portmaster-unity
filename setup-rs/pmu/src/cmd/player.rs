@@ -1,7 +1,10 @@
 //! `pmu player donor <version> <dir> --apk APK [--apk APK] [--backend mono|il2cpp]
 //! [--abi armeabi-v7a|arm64-v8a] [--managed]` (pkgzip::player), its arguments read as player.py's
 //! argparse reads them (options anywhere, `--opt=value`, unique prefixes); argument errors exit 2.
-//! `player url` and `player fetch` (Unity's servers) are not ported.
+//! `player url <version>` and `player fetch <version> <dir> [--backend] [--abi] [--installer FILE|URL]
+//! [--symbols | --symbols-only] [--managed]`: Unity's Android player from Unity's installer, read
+//! with HTTPS range requests (pkgzip::player::fetch, nsis.rs, http.rs).
+use super::argp::{choice, flag, val, Parser};
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: pmunity player donor [-h] --apk APK [--backend {mono,il2cpp}] \
@@ -41,10 +44,8 @@ pub fn run(args: &[String]) -> ExitCode {
             println!("usage: pmunity player [-h] {{url,fetch,donor}} ...");
             return ExitCode::SUCCESS;
         }
-        Some(c @ ("url" | "fetch")) => {
-            eprintln!("pmu: player {c}: not ported yet (run `python -m pmunity player {c}`)");
-            return ExitCode::from(2);
-        }
+        Some("url") => return url(&args[1..]),
+        Some("fetch") => return fetch(&args[1..]),
         Some(c) => {
             eprintln!(
                 "usage: pmunity player [-h] {{url,fetch,donor}} ...\npmunity player: error: argument cmd: \
@@ -154,5 +155,64 @@ pub fn run(args: &[String]) -> ExitCode {
     let r = pkgzip::player::donor(&pos[0], &pos[1], &apks, &backend, &abi, managed, &mut |m| {
         eprintln!("{m}")
     });
+    super::status("player", r)
+}
+
+/// `player url <version>`: the version's Android Build Support installer, from Unity's API.
+fn url(args: &[String]) -> ExitCode {
+    let p = Parser {
+        prog: "pmunity player url",
+        positionals: &["version"],
+        opts: vec![],
+    };
+    let a = match p.parse(args) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+    let r = pkgzip::player::release(&a.pos[0]).and_then(|rec| match rec {
+        None => Err(pkgzip::Error::Exit(format!(
+            "Unity does not list version {}",
+            a.pos[0]
+        ))),
+        Some(rec) => pkgzip::player::installer_url(&rec),
+    });
+    match r {
+        Ok(u) => {
+            println!("{u}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => super::status("player", Err(e)),
+    }
+}
+
+/// `player fetch <version> <dir> ...`: the player files a port needs.
+fn fetch(args: &[String]) -> ExitCode {
+    let p = Parser {
+        prog: "pmunity player fetch",
+        positionals: &["version", "dir"],
+        opts: vec![
+            choice("--backend", &["mono", "il2cpp"]),
+            choice("--abi", &["armeabi-v7a", "arm64-v8a"]),
+            val("--installer"),
+            flag("--symbols"),
+            flag("--symbols-only"),
+            flag("--managed"),
+        ],
+    };
+    let a = match p.parse(args) {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+    let r = pkgzip::player::fetch(
+        &a.pos[0],
+        &a.pos[1],
+        a.get("--backend").unwrap_or("mono"),
+        a.get("--abi").unwrap_or("armeabi-v7a"),
+        a.get("--installer"),
+        a.has("--symbols"),
+        a.has("--symbols-only"),
+        a.has("--managed"),
+        &mut |m| eprintln!("{m}"),
+    );
     super::status("player", r)
 }

@@ -207,6 +207,7 @@ pub fn json_str(t: &str) -> String {
 
 /// A value json.dump writes: what the port's JSON files hold.
 pub enum Json {
+    Null,
     Str(String),
     Int(i64),
     List(Vec<Json>),
@@ -226,6 +227,7 @@ fn dump(v: &Json, depth: usize, s: &mut String) {
         s.push_str(&" ".repeat(d));
     };
     match v {
+        Json::Null => s.push_str("null"),
         Json::Str(t) => s.push_str(&json_str(t)),
         Json::Int(i) => {
             let _ = write!(s, "{i}");
