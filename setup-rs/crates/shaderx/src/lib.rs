@@ -8,7 +8,8 @@
 //!   ([`convert::Edit`]) and its report;
 //! * [`step`]: the step's summary lines;
 //! * [`grabfetch`]: `grab_fetch`'s check of a program and its rewrite (the Shader object's side is
-//!   the convert crate's).
+//!   the convert crate's);
+//! * [`tree`] (feature `tree`): a Shader object's tree (unityfs) and its blob.
 //!
 //! Only the OpenGL Core source is ported (Direct3D 11, Vulkan and Metal programs, compute
 //! kernels and fused_post are not).
@@ -19,5 +20,7 @@ pub mod grabfetch;
 pub mod lz4;
 pub mod py;
 pub mod step;
+#[cfg(feature = "tree")]
+pub mod tree;
 
 pub use convert::{add_gles3, Edit, Options, Outcome, Report, Shader, Status, Translations};

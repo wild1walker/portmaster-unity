@@ -6,22 +6,16 @@
 //! makes the copy's reading subprograms require framebuffer fetch; "always" does not.
 use super::{field, field_mut};
 use crate::error::{Error, Result};
-use shaderx::blob::{self, Entry, ShaderBlobs, Slot};
+use shaderx::blob::{self, Entry, Slot};
 use shaderx::convert::STAGES;
 use shaderx::grabfetch::{self as gf, Fail};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use shaderx::tree;
+use std::collections::{BTreeMap, HashMap};
 use unityfs::Value;
 
 const GRAB_PASS: i128 = 2; // SerializedPass m_Type: 0 normal, 1 use, 2 grab
 const FBFETCH: i128 = 0x80000; // ShaderRequirements: framebufferfetch
 const GLES3_TYPES: [i128; 2] = [blob::GPU_GLES3 as i128, blob::GPU_GLES31 as i128];
-/// The GPU program types of the GLES3Plus platform's entries (convert.PLATFORM_TYPES).
-const GLES3PLUS_TYPES: [i128; 3] = [
-    blob::GPU_GLES31AEP as i128,
-    blob::GPU_GLES31 as i128,
-    blob::GPU_GLES3 as i128,
-];
-
 /// One shader's outcome (grabfetch.Result).
 #[derive(Clone, Debug)]
 pub struct GfResult {
@@ -103,69 +97,6 @@ fn tier_lists(prog: Option<&Value>) -> Result<Vec<&Vec<Value>>> {
         Some(l) if truthy(Some(l)) => Ok(vec![arr(l, "m_SubPrograms")?]),
         _ => Ok(Vec::new()),
     }
-}
-
-/// A subprogram list and its parameter blob indices (2021.2+).
-type ListPbi<'a> = (&'a Vec<Value>, Option<&'a Vec<Value>>);
-
-/// convert.subprogram_lists: every list of subprograms (and its parameter indices, 2021.2+).
-fn subprogram_lists(t: &Value) -> Result<Vec<ListPbi<'_>>> {
-    let mut out = Vec::new();
-    for ss in arr(
-        field(field(t, "m_ParsedForm")?, "m_SubShaders")?,
-        "m_SubShaders",
-    )? {
-        for p in arr(field(ss, "m_Passes")?, "m_Passes")? {
-            for st in STAGES {
-                let Some(prog) = p.get(st).filter(|p| truthy(Some(p))) else {
-                    continue;
-                };
-                if let Some(l) = prog.get("m_SubPrograms") {
-                    out.push((arr(l, "m_SubPrograms")?, None));
-                }
-                if truthy(prog.get("m_PlayerSubPrograms")) {
-                    let pbi = arr(
-                        field(prog, "m_ParameterBlobIndices")?,
-                        "m_ParameterBlobIndices",
-                    )?;
-                    for (tier, l) in
-                        arr(field(prog, "m_PlayerSubPrograms")?, "m_PlayerSubPrograms")?
-                            .iter()
-                            .enumerate()
-                    {
-                        let pi = pbi.get(tier).ok_or_else(|| {
-                            Error::Value("IndexError: list index out of range".into())
-                        })?;
-                        out.push((
-                            arr(l, "m_PlayerSubPrograms[]")?,
-                            Some(arr(pi, "m_ParameterBlobIndices[]")?),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// convert.platform_entries for GLES3Plus: the parameter and program indices its subprograms name.
-fn gles3_indices(t: &Value) -> Result<(BTreeSet<i64>, BTreeSet<i64>)> {
-    let (mut params, mut progs) = (BTreeSet::new(), BTreeSet::new());
-    for (lst, pi) in subprogram_lists(t)? {
-        for (i, sp) in lst.iter().enumerate() {
-            if !GLES3PLUS_TYPES.contains(&sp_type(sp)?) {
-                continue;
-            }
-            progs.insert(sp_index(sp)? as i64);
-            if let Some(pi) = pi {
-                let v = pi
-                    .get(i)
-                    .ok_or_else(|| Error::Value("IndexError: list index out of range".into()))?;
-                params.insert(int_of(v, "m_ParameterBlobIndices")? as i64);
-            }
-        }
-    }
-    Ok((params, progs))
 }
 
 fn entry(entries: &[Option<Slot>], i: i128) -> Option<&Entry> {
@@ -311,11 +242,6 @@ fn not_sp(m: String) -> Fail {
     Fail::Not(m)
 }
 
-/// The blob fields of a Shader's tree.
-fn blob_fields(t: &Value) -> Result<blob::BlobFields> {
-    Ok(super::shaders::shader_of(t)?.blob)
-}
-
 /// grabfetch.apply: the tree edited in place; `always` is mode "always" (else true: the copies
 /// require framebuffer fetch); `names`: only shaders whose names match.
 pub fn apply(t: &mut Value, always: bool, names: Option<&regex::Regex>) -> Result<GfResult> {
@@ -358,11 +284,9 @@ pub fn apply(t: &mut Value, always: bool, names: Option<&regex::Regex>) -> Resul
         return Ok(r);
     }
     let bad = |e: blob::BlobError| Error::Value(e.to_string());
-    let mut blobs = ShaderBlobs::read(&blob_fields(t)?).map_err(bad)?;
-    let (params, progs) = gles3_indices(t)?;
-    let entries = blobs
-        .entries(blob::PLATFORM_GLES3PLUS, &params, Some(&progs))
-        .map_err(bad)?;
+    let mut blobs = tree::blobs(t).map_err(Error::Value)?;
+    let entries =
+        tree::platform_entries(t, blob::PLATFORM_GLES3PLUS, &blobs).map_err(Error::Value)?;
     let mark = gf::MARK.as_bytes();
     if entries.iter().any(
         |e| matches!(e, Some(Slot::Program(e)) if e.code.windows(mark.len()).any(|w| w == mark)),
@@ -520,7 +444,7 @@ pub fn apply(t: &mut Value, always: bool, names: Option<&regex::Regex>) -> Resul
     }
     blobs.set_entries(blob::PLATFORM_GLES3PLUS, &out, &segs, None);
     let fields = blobs.store().map_err(bad)?;
-    super::shaders::set_blob(t, &fields)?;
+    tree::set_blob(t, &fields).map_err(Error::Value)?;
     let subs = arr_mut(
         field_mut(field_mut(t, "m_ParsedForm")?, "m_SubShaders")?,
         "m_SubShaders",

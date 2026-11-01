@@ -328,6 +328,10 @@ pub fn edit(src: &Path, ctx: &mut Ctx) -> Result<(Vec<u8>, Vec<String>), Stop> {
                 ));
                 sf.save_typetree(pid, &t)?;
             }
+            "ScriptMapper" if ctx.video_shader_pid.is_some() => {
+                // Hidden/VideoDecodeAndroid (video.rs)
+                crate::video::map_shader(sf, ctx.video_shader_pid.unwrap(), &mut notes)?;
+            }
             "PlayerSettings" => {
                 let edits = [
                     "m_MTRendering",

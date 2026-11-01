@@ -123,7 +123,13 @@ APKs), `guides/` (ASTC guides), `cuphead/` (`cuphead.json`, `animclips.py`, `dlc
 are mounted read-only: a test that changes files works on its own copy in a scratch folder. Unit
 tests use small made-up data built in the test (no Unity or game files in the repository).
 
-`androiddata`'s golden test, `tests/golden/android_data.sh <scratch> [mini32 mini64 obb space 32 64]`,
+`pmu android-data` makes the video shader as video.py does (Hidden/VideoDecodeAndroid from the
+data's Hidden/VideoDecode, the game's clips sniffed for BT.601 or BT.709; the GLSL is
+`crates/androiddata/src/video_decode_android.shader`, a copy of the Python's); `--il2cpp` and a
+bundle with several serialized files and streamed textures (`--inline-textures`) stop it with
+status 2.
+
+`androiddata`'s golden test, `tests/golden/android_data.sh <scratch> [mini32 mini64 obb video space 32 64]`,
 runs the Python and pmu with the setups' exact invocations on copies of `converted-fast` (the whole
 game, or a part of it for the mini cases) and compares status, the output folder, every archive's
 entries and the data `--consume-src` leaves.

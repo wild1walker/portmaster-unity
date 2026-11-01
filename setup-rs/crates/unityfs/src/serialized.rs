@@ -696,6 +696,24 @@ impl SerializedFile {
         Ok(())
     }
 
+    /// Adds an object (UnityPy's `new = copy.copy(like); new.path_id = path_id;
+    /// new.save_typetree(...); sf.objects[path_id] = new`): `like`'s table entry (its type) with
+    /// another path id and these bytes. The file saves its objects by path id.
+    pub fn add_object(&mut self, like: i64, path_id: i64, data: Vec<u8>) -> Result<()> {
+        if self.index.contains_key(&path_id) {
+            return Err(Error::Value(format!(
+                "{}: there is an object {path_id} already",
+                self.name
+            )));
+        }
+        let mut o = self.obj(like)?.clone();
+        o.path_id = path_id;
+        o.data = Some(data);
+        self.index.insert(path_id, self.objects.len());
+        self.objects.push(o);
+        Ok(())
+    }
+
     /// Drops an object's saved bytes (it is written as the file has it again).
     pub fn clear_raw(&mut self, path_id: i64) {
         if let Some(o) = self.object_mut(path_id) {

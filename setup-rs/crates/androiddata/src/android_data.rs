@@ -9,6 +9,7 @@ use crate::pyjson::{self, Json};
 use crate::retarget;
 use crate::streaming as ST;
 use crate::uversion::{self as UV, Version};
+use crate::video;
 use pkgzip::py;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -115,6 +116,9 @@ pub struct Ctx {
     pub managed_names: BTreeSet<String>,
     pub gi_neon: usize,
     pub compute_kernels: Option<bool>,
+    /// Hidden/VideoDecodeAndroid's path id in unity_builtin_extra (video.rs), and its conversion.
+    pub video_shader_pid: Option<i64>,
+    pub video_bt709: bool,
     pub db: Arc<ClassDb>,
     logf: Option<File>,
 }
@@ -847,17 +851,22 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
     let udr_dst = py::join(&data, default_resources_path(&ctx.unity));
     items.push(item(udr_dst, pkg_default_resources(&pkg), "link"));
     let bex = py::join(&src, "Resources/unity_builtin_extra");
-    if ctx.args.video_shader
-        && fs::read(&bex).is_ok_and(|b| py::find(&b, b"Hidden/VideoDecode").is_some())
-    {
-        return Err(Stop::NotPorted(
-            "the video shader (Hidden/VideoDecodeAndroid; --no-video-shader skips it)".into(),
-        ));
-    }
+    // the Android VideoPlayer's shader, made from the desktop one (video.rs)
+    ctx.video_shader_pid = if ctx.args.video_shader && video::has_template(&bex) {
+        video::path_id_for(&bex, ctx)?
+    } else {
+        None
+    };
+    ctx.video_bt709 = ctx.video_shader_pid.is_some() && video::wants_bt709(&src, ctx)?;
+    let act = match (ctx.video_shader_pid, ctx.video_bt709) {
+        (Some(_), true) => "sfvideo709",
+        (Some(_), false) => "sfvideo",
+        _ => "sfpatch",
+    };
     items.push(item(
         py::join(&data, "Resources/unity_builtin_extra"),
         bex,
-        "sfpatch",
+        act,
     ));
     let backend = if ctx.args.il2cpp.is_some() || ctx.args.mono64 {
         "il2cpp"
@@ -1135,6 +1144,8 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         managed_names: BTreeSet::new(),
         gi_neon: 0,
         compute_kernels: None,
+        video_shader_pid: None,
+        video_bt709: false,
         db,
         logf: None,
     };
@@ -1427,6 +1438,30 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                     "  {dst_rel}: bundle rewritten (no same-size encoding of the patched block)"
                 ));
             }
+        } else if act == "sfvideo" || act == "sfvideo709" {
+            let mut f = unityfs::DataFile::open(src, &ctx.opts())?;
+            let pid = video::add_to_builtin_extra(&mut f.sf, &mut ctx, act == "sfvideo709")?;
+            if pid != ctx.video_shader_pid {
+                let s = |p: Option<i64>| p.map_or("None".to_string(), |p| p.to_string());
+                return Err(Stop::Exit(format!(
+                    "video: shader got path id {}, globalgamemanagers maps {}",
+                    s(pid),
+                    s(ctx.video_shader_pid)
+                )));
+            }
+            f.sf.target_platform = ANDROID as i32;
+            let rt = ctx.retarget_sf(&mut f.sf)?;
+            write_bytes(&dst, &f.sf.save()?)?;
+            let mut note = format!(
+                "platform -> {ANDROID}, {} added (path id {})",
+                video::NAME,
+                pid.unwrap()
+            );
+            for n in rt {
+                note.push_str(&format!("; {n}"));
+            }
+            report.get_mut("files").unwrap().set(dst_rel, note.into());
+            how = "video".into();
         } else if act == "ggm" {
             let (data, notes) = ggm::edit(Path::new(src), &mut ctx)?;
             write_bytes(&dst, &data)?;
