@@ -125,7 +125,9 @@ void operator delete[](void* p, std::size_t) noexcept
 	std::free(p);
 }
 
-// (as libstdc++'s condition_variable.cc: a pthread condition variable)
+// (as libstdc++'s condition_variable.cc: a pthread condition variable; from GCC 11 wrapped in
+// __condvar, before that the pthread_cond_t itself)
+#if _GLIBCXX_RELEASE >= 11
 std::condition_variable::condition_variable() noexcept = default;
 std::condition_variable::~condition_variable() noexcept = default;
 
@@ -143,6 +145,29 @@ void std::condition_variable::notify_all() noexcept
 {
 	_M_cond.notify_all();
 }
+#else
+std::condition_variable::condition_variable() noexcept = default;
+
+std::condition_variable::~condition_variable() noexcept
+{
+	pthread_cond_destroy(&_M_cond);
+}
+
+void std::condition_variable::wait(std::unique_lock<std::mutex>& lock)
+{
+	pthread_cond_wait(&_M_cond, lock.mutex()->native_handle());
+}
+
+void std::condition_variable::notify_one() noexcept
+{
+	pthread_cond_signal(&_M_cond);
+}
+
+void std::condition_variable::notify_all() noexcept
+{
+	pthread_cond_broadcast(&_M_cond);
+}
+#endif
 
 namespace std
 {

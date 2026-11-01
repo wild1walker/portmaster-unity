@@ -1,0 +1,11 @@
+# ua-rust with GCC 10 (Debian bullseye's g++-10, 10.2.1) beside its GCC 12: texcodec compiles the
+# vendored astc-encoder with it (build.rs: TC_CXX=g++-10), the compiler the Python's astc_encoder_py
+# wheel was built with (manylinux2014's GCC 10.2.1). GCC 12 generates other floating-point code
+# for a few of its functions, and a few blocks in a million come out with other bits.
+#   docker build --platform linux/arm64 -t ua-rust -f setup-rs/docker/Dockerfile.gcc10 setup-rs/docker
+FROM ua-rust
+RUN echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250101T000000Z bullseye main' \
+        > /etc/apt/sources.list.d/bullseye.list \
+    && apt-get update && apt-get install -y --no-install-recommends g++-10 \
+    && rm -rf /var/lib/apt/lists/* && g++-10 --version | head -1
+ENV TC_CXX=g++-10

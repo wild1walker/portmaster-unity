@@ -17,17 +17,26 @@ fn main() {
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
 
     // astc-encoder: always g++ (also for the musl target: the code needs only libc, pthreads and
-    // the runtime functions in astcenc_capi.cpp)
+    // the runtime functions in astcenc_capi.cpp). TC_CXX names it: GCC 10 (g++-10, as
+    // setup-rs/docker/Dockerfile.gcc10 adds) is the compiler of the Python's wheel; GCC 12 makes
+    // other floating-point code for a few functions, and a few blocks in a million differ.
+    let cxx = std::env::var("TC_CXX").unwrap_or_else(|_| "g++".into());
+    if !cxx.contains("-10") {
+        println!("cargo:warning=texcodec: astc-encoder built with {cxx}, not GCC 10 (TC_CXX=g++-10): a few ASTC blocks may differ from the Python's");
+    }
     let src = vendor.join("astc-encoder/Source");
     let mut b = cc::Build::new();
     b.cpp(true)
-        .compiler(std::env::var("TC_CXX").unwrap_or_else(|_| "g++".into()))
+        .compiler(&cxx)
         .cpp_link_stdlib(None)
         .opt_level(3)
         .debug(false)
         .warnings(false)
         .include(&src)
         .define("NDEBUG", None)
+        // (pthreads called directly: GCC 10's headers would refer to them weakly, which a static
+        // musl link resolves to nothing)
+        .define("_GLIBCXX_GTHREAD_USE_WEAK", "0")
         .flag("-std=c++14")
         .flag("-fwrapv")
         .flag("-ffp-contract=fast")
@@ -75,11 +84,12 @@ fn main() {
     let t2d = vendor.join("texture2ddecoder/src/Texture2DDecoder");
     cc::Build::new()
         .cpp(true)
-        .compiler(std::env::var("TC_CXX").unwrap_or_else(|_| "g++".into()))
+        .compiler(&cxx)
         .cpp_link_stdlib(None)
         .opt_level(3)
         .debug(false)
         .warnings(false)
+        .define("_GLIBCXX_GTHREAD_USE_WEAK", "0")
         .include(&t2d)
         .define("NDEBUG", None)
         .flag("-std=c++17")
