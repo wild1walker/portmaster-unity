@@ -132,7 +132,8 @@ fn src_key(s: &Src) -> String {
     }
 }
 
-/// Free bytes for an unprivileged writer (f_bavail * f_frsize).
+/// Free bytes for an unprivileged writer (f_bavail * f_frsize; u32 on 32-bit targets).
+#[allow(clippy::unnecessary_cast)]
 fn free_space(dir: &str) -> Result<u64, Stop> {
     let c = std::ffi::CString::new(dir).map_err(|e| Stop::Fail(e.to_string()))?;
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -158,6 +159,18 @@ fn gib(n: f64) -> f64 {
     n / (1u64 << 30) as f64
 }
 
+/// What check_space says when the archives (need bytes) would leave less than 1 GiB of free.
+fn short_of_space(need: u64, free: u64) -> Option<String> {
+    (free < need + (1 << 30)).then(|| {
+        format!(
+            "pack: the APK and OBB need {:.2} GiB, {:.2} GiB free (keeping 1 GiB spare): free {:.1} GiB more on the card",
+            gib(need as f64),
+            gib(free as f64),
+            gib((need + (1 << 30) - free) as f64)
+        )
+    })
+}
+
 /// Exits NO_SPACE when the archives of these entries would leave less than 1 GiB free.
 fn check_space(
     ctx: &mut Ctx,
@@ -175,13 +188,7 @@ fn check_space(
             free += fs::metadata(p)?.len();
         }
     }
-    if free < need + (1 << 30) {
-        let m = format!(
-            "pack: the APK and OBB need {:.2} GiB, {:.2} GiB free (keeping 1 GiB spare): free {:.1} GiB more on the card",
-            gib(need as f64),
-            gib(free as f64),
-            gib((need + (1 << 30) - free) as f64)
-        );
+    if let Some(m) = short_of_space(need, free) {
         ctx.log(&m);
         return Err(Stop::Status(NO_SPACE));
     }
@@ -509,5 +516,73 @@ mod tests {
         assert!(apk_first("Managed/x.dll"));
         assert!(apk_first("sharedassets0.assets.resS"));
         assert!(!apk_first("level1"));
+    }
+
+    #[test]
+    fn space() {
+        assert_eq!(short_of_space(1 << 30, 3 << 30), None);
+        assert_eq!(
+            short_of_space(1_500_000_000, 1 << 30).unwrap(),
+            "pack: the APK and OBB need 1.40 GiB, 1.00 GiB free (keeping 1 GiB spare): free 1.4 GiB more on the card"
+        );
+    }
+
+    #[test]
+    fn big_apk_split() {
+        let d = std::env::temp_dir().join(format!("androiddata-split-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let file = |n: &str, size: u64| {
+            let p = d.join(n);
+            fs::File::create(&p).unwrap().set_len(size).unwrap(); // (sparse)
+            p.to_string_lossy().into_owned()
+        };
+        let small: Vec<Entry> = vec![(
+            "assets/bin/Data/level1".into(),
+            Src::Path(file("a", 1 << 20)),
+        )];
+        let (apk, moved) = split_big_apk(small).unwrap();
+        assert_eq!((apk.len(), moved.len()), (1, 0));
+        let big: Vec<Entry> = vec![
+            (
+                "assets/bin/Data/Managed/x.dll".into(),
+                Src::Path(file("m", 900 << 20)),
+            ),
+            (
+                "assets/bin/Data/level0".into(),
+                Src::Path(file("l0", 300 << 20)),
+            ),
+            (
+                "assets/bin/Data/level2".into(),
+                Src::Path(file("l2", 500 << 20)),
+            ),
+            (
+                "assets/bin/Data/sharedassets1.assets".into(),
+                Src::Path(file("s1", 600 << 20)),
+            ),
+            (
+                "assets/bin/Data/level1".into(),
+                Src::Path(file("l1", 400 << 20)),
+            ),
+        ];
+        let (apk, moved) = split_big_apk(big).unwrap();
+        let names = |v: &[Entry]| v.iter().map(|e| e.0.clone()).collect::<Vec<_>>();
+        // (the largest later files, until the APK fits: sharedassets1 then level2; sorted by name)
+        assert_eq!(
+            names(&moved),
+            [
+                "assets/bin/Data/level2",
+                "assets/bin/Data/sharedassets1.assets"
+            ]
+        );
+        assert_eq!(
+            names(&apk),
+            [
+                "assets/bin/Data/Managed/x.dll",
+                "assets/bin/Data/level0",
+                "assets/bin/Data/level1"
+            ]
+        );
+        let _ = fs::remove_dir_all(&d);
     }
 }

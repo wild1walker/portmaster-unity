@@ -271,7 +271,7 @@ fn catalog_has_crcs(data: &[u8]) -> bool {
     recs.iter().any(|(_, _, _, js)| {
         crc_re()
             .captures_iter(js)
-            .any(|m| m[1].parse::<u128>().map_or(true, |v| v != 0))
+            .any(|m| !matches!(m[1].parse::<u128>(), Ok(0)))
     })
 }
 

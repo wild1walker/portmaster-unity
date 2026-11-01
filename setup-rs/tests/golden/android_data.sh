@@ -23,7 +23,7 @@
 # exit status, stdout's pack: lines, and every file left: the output folder (APK, OBBs,
 # android_package.json, plugins.map, the report and state), each archive's entries, and what
 # --consume-src leaves of the data. Logs are not compared. Files under 4 MB of both runs are kept in
-# <scratch>/keep/<case>.<impl>/ to look at a difference. PY_ONLY=1 / RUST_ONLY=1 run one side (the
+# <scratch>/keep/<case>.<impl>/ when they differ, to look at the difference. PY_ONLY=1 / RUST_ONLY=1 run one side (the
 # other's results kept from before). The tools the setups use (codepatch, CupheadPort.dll, Mono
 # 4.x's class libraries) come from $PMU_TEST_DATA/port/setup*/setup*.zip; the players from the
 # donors with the Python's player donor. pmu reads UnityPy's class database ($PMU_TPK).
@@ -117,6 +117,9 @@ run() {
   keep "$out" "$S/keep/$c.$impl"
 }
 
+# rss <file>: "<own> MB (with what it ran <all> MB)" of peak_rss.py's numbers
+rss() { read -r own all < "$1"; echo "$((own / 1024)) MB (with what it ran $((all / 1024)) MB)"; }
+
 check() {
   local r=$S/r/$1 why=""
   cmp -s "$r.py.rc" "$r.rs.rc" || why="$why status $(cat "$r.py.rc") vs $(cat "$r.rs.rc");"
@@ -129,8 +132,9 @@ check() {
   e=$(grep -v '^[fdl] \|^[0-9a-f]\{64\} \|^== ' "$r.py.tree" | wc -l)
   if [ -z "$why" ]; then
     pass=$((pass + 1))
+    rm -rf "$S/keep/$1.py" "$S/keep/$1.rs"            # (kept only to look at a difference)
     echo "ok   $1 (status $(cat "$r.rs.rc"); $n files, $z archives, $e archive entries identical;" \
-      "py $(cat "$r.py.time") s $(( $(cat "$r.py.rss") / 1024 )) MB, pmu $(cat "$r.rs.time") s $(( $(cat "$r.rs.rss") / 1024 )) MB)"
+      "py $(cat "$r.py.time") s $(rss "$r.py.rss"), pmu $(cat "$r.rs.time") s $(rss "$r.rs.rss"))"
   else
     fail=$((fail + 1))
     echo "FAIL $1:$why"

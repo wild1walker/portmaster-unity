@@ -15,13 +15,18 @@ use unityfs::{ClassDb, FileSource, SerializedFile, Source, TypeTree, UnityVersio
 
 type Change = Option<(Arc<TypeTree>, Arc<TypeTree>)>;
 
-fn cache() -> &'static Mutex<HashMap<(i32, String, String), Change>> {
-    static C: OnceLock<Mutex<HashMap<(i32, String, String), Change>>> = OnceLock::new();
+type Cache = Mutex<HashMap<(i32, String, String), Change>>;
+
+fn cache() -> &'static Cache {
+    static C: OnceLock<Cache> = OnceLock::new();
     C.get_or_init(Default::default)
 }
 
-/// A node's subtree as retarget._flat compares it: (level, type, name, size, align flag).
-fn flat(t: &TypeTree, i: usize) -> Vec<(i32, Arc<str>, Arc<str>, i32, i32)> {
+/// (level, type, name, size, align flag)
+type Flat = (i32, Arc<str>, Arc<str>, i32, i32);
+
+/// A node's subtree as retarget._flat compares it.
+fn flat(t: &TypeTree, i: usize) -> Vec<Flat> {
     let mut out = Vec::new();
     let mut stack = vec![i];
     while let Some(n) = stack.pop() {

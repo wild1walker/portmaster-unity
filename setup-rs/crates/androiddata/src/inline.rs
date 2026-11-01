@@ -10,6 +10,9 @@ use std::sync::Arc;
 use unityfs::bundle::{self, Bundle, PackHeader, PackNode};
 use unityfs::{FileSource, SerializedFile, SharedSource};
 
+/// A stream's bytes: (path, offset, size).
+type ReadStream<'a> = dyn Fn(&str, u64, usize) -> unityfs::Result<Vec<u8>> + 'a;
+
 /// Whether a bundle has a .resS node (android_data.Bundle's node names).
 pub fn has_ress_node(src: &str) -> Result<bool, Stop> {
     let b = unityfs::platform::MiniBundle::open(Path::new(src))?;
@@ -19,7 +22,7 @@ pub fn has_ress_node(src: &str) -> Result<bool, Stop> {
 fn save_inlined(
     sf: &SerializedFile,
     plan: &HashSet<i64>,
-    read: &dyn Fn(&str, u64, usize) -> unityfs::Result<Vec<u8>>,
+    read: &ReadStream<'_>,
     out: &Path,
 ) -> Result<(), Stop> {
     let f = std::fs::File::create(out)?;
