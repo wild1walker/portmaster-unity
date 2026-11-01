@@ -3,6 +3,8 @@
 //!   * astc-encoder (vendor/astc-encoder, as astc_encoder_py 0.1.12 builds it: C++14, -O3,
 //!     -ffp-contract=fast, NEON on aarch64) and the C interface to it (csrc/astcenc_capi.cpp, with
 //!     the few C++ runtime functions it needs: no libstdc++ is linked);
+//!   * sinf / cosf / sincosf from Arm's optimized-routines (vendor/optimized-routines): glibc's,
+//!     which the Python's astc-encoder calls, rather than the C library's;
 //!   * texture2ddecoder's crunch unpackers (vendor/texture2ddecoder) and csrc/crunch_capi.cpp;
 //!   * Pillow's Resample.c (vendor/pillow, -O3 as Pillow's wheel) with csrc/pillow_shim.c;
 //!   * guided_astc (vendor/guided_astc, -O2 as its wheel).
@@ -49,6 +51,18 @@ fn main() {
     }
     b.file(csrc.join("astcenc_capi.cpp"));
     b.compile("tc_astcenc");
+
+    // sinf, cosf, sincosf as glibc computes them (astc-encoder's angular tables; musl's differ in
+    // the last bit for about 1 % of inputs): Arm's optimized-routines, which glibc's are, linked
+    // ahead of the C library's. Same results as glibc for every float input (GCC's default
+    // contraction, as glibc builds them).
+    let aor = vendor.join("optimized-routines/math");
+    let mut m = cc::Build::new();
+    m.opt_level(2).debug(false).warnings(false).include(&aor);
+    for f in ["sinf.c", "cosf.c", "sincosf.c", "sincosf_data.c", "math_errf.c"] {
+        m.file(aor.join(f));
+    }
+    m.compile("tc_libm");
 
     // texture2ddecoder's crunch unpackers (C++17 as its wheel; crn_decomp.h asks for
     // -fno-strict-aliasing)
