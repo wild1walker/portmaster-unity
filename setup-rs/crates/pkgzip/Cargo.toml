@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 description = "Installers and zips: macOS .pkg (xar, cpio, pbzx), zip reading and extraction, the aligned STORE zip writer, Unity's player from donor APKs, patch-obb's simple commands"
 
-[dependencies]
+[dependencies]   # (all pure Rust: zlib-rs for zlib/deflate, lzma-rust2 for xz, libbz2-rs-sys for bzip2)
 flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 crc32fast = "1"
 roxmltree = "0.20"
@@ -13,5 +13,5 @@ serde_json = "1"
 lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "optimization"] }
 bzip2 = "0.6"
 
-[dev-dependencies]
+[dev-dependencies]   # (the xz encoder, for the tests' made-up pbzx payloads)
 lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "encoder"] }
