@@ -50,6 +50,7 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `unityfs` | UnityFS bundles (LZ4, LZ4HC, LZMA blocks), serialized files, type trees (the files' own, and the class database the Python takes from UnityPy/TPK), objects as typed value trees; reading and writing them as the Python does |
 | `texcodec` | texture decoding, scaling, ASTC encoding with the guide; textures.py's work on one texture as a pure function |
 | `shaderx` | shader blobs (shaders/blob.py) and the GLSL rewriting the convert step does (shaders/convert.py, glsl.py, step.py and what they call), as pure functions |
+| `androiddata` | `android-data` and `patch-obb pack` (android_data.py and what it uses on a setup's path: clrmeta.py, plugins.py, retarget.py, typetrees.py, streaming.py, unity_version.py), on `unityfs` and `pkgzip` |
 
 Later (on top of `unityfs`): the convert job and its steps, `android-data`, `patch-obb`.
 
@@ -76,6 +77,11 @@ repository by its path): `Cuphead.app` (GOG, with the DLC), `pkg/` (GOG's instal
 APKs), `guides/` (ASTC guides), `cuphead/` (`cuphead.json`, `animclips.py`, `dlc_bundles.txt`). They
 are mounted read-only: a test that changes files works on its own copy in a scratch folder. Unit
 tests use small made-up data built in the test (no Unity or game files in the repository).
+
+`androiddata`'s golden test, `tests/golden/android_data.sh <scratch> [mini32 mini64 obb space 32 64]`,
+runs the Python and pmu with the setups' exact invocations on copies of `converted-fast` (the whole
+game, or a part of it for the mini cases) and compares status, the output folder, every archive's
+entries and the data `--consume-src` leaves.
 
 `shaderx`'s golden data comes from the reference Python: `tests/golden/shaderx_golden.py <data>
 <config.json> <out> [--converted <converted data>]` runs the shaders step's own code on every Shader

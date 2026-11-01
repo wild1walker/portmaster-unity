@@ -12,6 +12,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "androiddata"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "libc",
+ "pkgzip",
+ "regex",
+ "unityfs",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -204,6 +215,7 @@ dependencies = [
 name = "pmu"
 version = "0.1.0"
 dependencies = [
+ "androiddata",
  "pkgzip",
 ]
 

@@ -9,7 +9,10 @@ mod cmd;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(name) = args.first() else {
-        eprintln!("usage: pmu <command> [args...]\ncommands: {}", cmd::NAMES.join(", "));
+        eprintln!(
+            "usage: pmu <command> [args...]\ncommands: {}",
+            cmd::NAMES.join(", ")
+        );
         return ExitCode::from(2);
     };
     match cmd::run(name, &args[1..]) {

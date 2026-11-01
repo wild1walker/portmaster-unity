@@ -1,13 +1,20 @@
 //! One module a command; each `run(args) -> ExitCode` takes the arguments after the command's name.
 use std::process::ExitCode;
 
+mod android_data;
 mod macpkg;
 mod patch_obb;
 mod player;
 mod zip_extract;
 
 /// The commands this binary has, as the setup scripts name them.
-pub const NAMES: &[&str] = &["macpkg", "zip-extract", "player", "patch-obb"];
+pub const NAMES: &[&str] = &[
+    "macpkg",
+    "zip-extract",
+    "player",
+    "patch-obb",
+    "android-data",
+];
 
 /// Runs a command, or None when it is not ported yet.
 pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
@@ -16,6 +23,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "zip-extract" => Some(zip_extract::run(args)),
         "player" => Some(player::run(args)),
         "patch-obb" => Some(patch_obb::run(args)),
+        "android-data" => Some(android_data::run(args)),
         _ => None,
     }
 }
