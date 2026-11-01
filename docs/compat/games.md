@@ -109,6 +109,18 @@ ms serialized at 600x375, the render thread 70 -> 68 % of a core; fps the same (
 but one); pictures within a rounding step (4.2 % of the static pixels differ by 1 - 3 against 2.5 %
 between two base runs). Did not pay in frames: not in the port's profile. Details:
 [profiling.md](../profiling.md#hollow-knights-post-chain-as-one-pass-fused_post--hk-post).
+2026-11-01 (King's Pass, the whole 1 GB profile, 30 s windows from a cool handheld; Knulli's own CPU cap is
+1512 MHz, its default, the chip goes to 1704): 50.0 - 51.1 fps at 1512 MHz; **48.8 at 1704 MHz** (Knulli's CPU
+setting, set for the run only): the thermal governor (power_allocator, one budget for the CPUs and the Mali)
+then holds the Mali at 600 MHz the whole run, so a faster CPU makes the frame slower. The game's full blur
+instead of `hk-blur` low: 46.3 - 46.9. The 64-bit builds with the same options: IL2CPP 43.9 - 44.9, Mono
+41.6 (the Mali at 600 MHz). Thread placement and priorities, each alone (FMOD's mixer on a core of its own,
+Mali's `mali-cmar-backe` at nice -10, both, `UA_THREAD_PRIORITY=1`, `UA_FAST_CLOCK=1`): 48.5 - 51.1 against
+48.3 / 50.0 for two base runs, noise. UnityMain is on a CPU 86 % of the time and waits 11 % (futex,
+2.2 ms a frame); its own system calls are 7.7 % of its CPU time. The same game set up on the handheld by
+`pmu` (no Python, 47 minutes, the Python's APK and OBB byte for byte): 49.4; with `resources.assets`'
+texture streams split into three `.resS` parts in the main OBB (portmaster-unity issue 7's fix): title,
+menus and King's Pass render, 52.7.
 
 
 ## Linux builds, one per Unity line (32-bit route)
