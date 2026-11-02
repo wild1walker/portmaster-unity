@@ -167,7 +167,15 @@ pub fn verify(ctx: &mut Ctx, items: &[Item]) -> Result<Json, Stop> {
     }
     let mdir = py::join(&data, "Managed");
     for (what, names) in lists {
-        let have = |a: &str| Path::new(&py::join(&mdir, a)).exists();
+        let il2cpp = ctx.args.il2cpp.is_some();
+        let compiled = ctx.managed_names.clone();
+        let have = |a: &str| {
+            if il2cpp {
+                compiled.contains(a)
+            } else {
+                Path::new(&py::join(&mdir, a)).exists()
+            }
+        };
         let (game, engine) = ggm::split_assemblies(&names, Some(&ctx.unity));
         let miss: Vec<String> = game.iter().filter(|a| !have(a)).cloned().collect();
         if !miss.is_empty() {
