@@ -63,7 +63,8 @@ and suggests `game.package` (the setup takes only that package), `game.unity_ver
 - the release ships `ua_host` (armhf) when the APK has an armeabi-v7a player and `ua_host64` (the
   aarch64 build) when it has an arm64-v8a one: both for a build with both, about 4 MB of the zip;
 - the setup (no download, no conversion: a few minutes) takes the player's copy from `gamedata/`
-  and runs `pmunity apk --target <the players this system runs>`: the armeabi-v7a one where the
+  and runs `pmunity apk --target <the players this system runs>` (the release's `setup/pmu apk`,
+  the same command in setup-rs: no Python in the release, unless `player.il2cpp`): the armeabi-v7a one where the
   system has a 32-bit userland (`/lib/ld-linux-armhf.so.3`; the tested route on the RG34XX-SP's
   Mali driver), else the arm64-v8a one; `player.abi = "arm64-v8a"` takes the 64-bit one wherever
   the APK has it. It installs `lib/`, `base.apk`, the OBBs and `android_package.json` into the port

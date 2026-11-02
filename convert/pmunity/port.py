@@ -1020,7 +1020,10 @@ def check_android(rep, inputs, log=None):
     with tempfile.TemporaryDirectory(prefix='pmunity-check-') as td:
         managed = os.path.join(td, 'Managed')
         try:
-            info = A.run(inputs, os.path.join(td, 'out'), dry_run=True, log=lines.append, managed_to=managed)
+            # (every ARM player the build has, whatever machine checks it: auto would take an aarch64
+            # Linux machine's own userland and refuse an armeabi-v7a-only build)
+            info = A.run(inputs, os.path.join(td, 'out'), target='arm64,armhf', dry_run=True, log=lines.append,
+                         managed_to=managed)
         except A.Refused as ex:
             route['why'].append(str(ex))
         if info and info['backend'] == 'mono' and os.path.isdir(managed):
@@ -2363,21 +2366,23 @@ def _component_pmunity(ctx, opts):
 
 
 # converter plugins pmu has built in (setup-rs/crates/convert/src/steps/mod.rs, plugin()): a port's
-# files.plugins entry of that file name runs on pmu (portmaster-cuphead's convert/animclips.py)
+# files.plugins entry of that file name runs on pmu (portmaster-cuphead's convert/animclips.py).
+# A JSON plugin (field edits: edits.py, docs/plugins.md) runs on pmu too.
 PMU_PLUGINS = ('animclips',)
 # the shader sources a release runs on pmu (Direct3D 11 with setup/pmhlslcc, Vulkan with
-# setup/pmspirvcross, as the Python). pmu translates Metal too, the same as the Python on the
-# players' built-in shaders and hand-written MSL; a Metal port keeps the Python until a macOS
-# game's own shaders have been compared (docs/rust-setup.md)
-PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan')
+# setup/pmspirvcross, as the Python; Metal compared on macOS games of 2020.3 - 6000.3:
+# docs/rust-setup.md)
+PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan', 'metal')
 
 
 def pmu_covers(cfg):
     """Whether the setup's commands all run on pmu (setup-rs: one static aarch64 program instead of
     the setup's Python) with this port's options: (True, []), or (False, [what pmu does not do yet]):
-    shaders from Metal, converter plugins pmu has not built in (PMU_PLUGINS), android-data
-    --il2cpp. (The quality step, compute shaders, fused_post and shaders from Direct3D 11 and
-    Vulkan with the release's pmhlslcc and pmspirvcross run on pmu, docs/rust-setup.md.)"""
+    a porter's Python converter plugins (pmu has some built in, PMU_PLUGINS, and runs JSON ones),
+    android-data --il2cpp, a Mono build compiled with IL2CPP on the handheld (the apk route's
+    player.il2cpp: il2cpp --on-device). (Shaders from OpenGL Core, Direct3D 11, Vulkan and Metal,
+    the quality step, compute shaders, fused_post, and the apk route's install run on pmu,
+    docs/rust-setup.md.)"""
     why = []
     conv = cfg.get('convert') or {}
     sh = conv.get('shaders') or {}
@@ -2387,11 +2392,13 @@ def pmu_covers(cfg):
     if other:
         why.append(f"shaders from {', '.join(other)}")
     own = [p for p in (cfg.get('files') or {}).get('plugins') or ()
-           if os.path.splitext(os.path.basename(p))[0] not in PMU_PLUGINS]
+           if not p.lower().endswith('.json') and os.path.splitext(os.path.basename(p))[0] not in PMU_PLUGINS]
     if own:
         why.append("the port's converter plugins (" + ', '.join(os.path.basename(p) for p in own) + ')')
     if '--il2cpp' in ((cfg.get('android_data') or {}).get('args') or ()):
         why.append('android-data --il2cpp')
+    if (cfg.get('port') or {}).get('route') == 'apk' and (cfg.get('player') or {}).get('il2cpp'):
+        why.append('player.il2cpp (il2cpp --on-device)')
     return not why, why
 
 

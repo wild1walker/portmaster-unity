@@ -99,6 +99,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 name = "convert"
 version = "0.1.0"
 dependencies = [
+ "androiddata",
  "regex",
  "rustix",
  "serde_json",
@@ -372,6 +373,7 @@ dependencies = [
  "convert",
  "crc32fast",
  "flate2",
+ "libc",
  "libfuzzer-sys",
  "lzma-rust2",
  "pkgzip",

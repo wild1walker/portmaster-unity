@@ -18,6 +18,7 @@ shaderx = { path = "../crates/shaderx", features = ["tree"] }
 convert = { path = "../crates/convert" }
 androiddata = { path = "../crates/androiddata" }
 serde_json = "1"
+libc = "0.2"   # (cmd/argp.rs: the terminal's width, as argparse wraps its usage)
 
 [dev-dependencies]   # (the seeds example: made-up archives and streams)
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }

@@ -493,9 +493,9 @@ class NewAndSetupTest(unittest.TestCase):
 
     def test_pmu_covers(self):
         """the setup ships pmu (no Python) for the default convert steps, the quality step, compute
-        shaders, fused_post and shaders from Direct3D 11 and Vulkan included, and for plugins pmu has
-        built in (by file name); not for shaders from Metal, the porter's own plugins or android-data
-        --il2cpp"""
+        shaders, fused_post and shaders from Direct3D 11, Vulkan and Metal included, for plugins pmu
+        has built in (by file name) and JSON plugins, and for the apk route; not for the porter's own
+        Python plugins, android-data --il2cpp or the apk route's player.il2cpp"""
         base = {'convert': {'steps': list(P.DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
                 'player': {}, 'files': {'plugins': []}, 'android_data': {}}
         self.assertEqual(P.pmu_covers(base), (True, []))
@@ -510,16 +510,20 @@ class NewAndSetupTest(unittest.TestCase):
         vk = P.merge(base, {'convert': {'shaders': {'from': ['vulkan']}}})
         self.assertEqual(P.pmu_covers(vk), (True, []))
         self.assertTrue(P.wants('pmu', vk) and P.wants('pmspirvcross', vk))
-        for over, why in (({'convert': {'shaders': {'from': ['metal']}}}, 'shaders from metal'),
-                          ({'convert': {'shaders': {'from': ['glcore', 'metal']}}}, 'shaders from metal'),
-                          ({'files': {'plugins': ['steps/mine.py']}}, "the port's converter plugins (mine.py)"),
-                          ({'android_data': {'args': ['--il2cpp', 'x']}}, 'android-data --il2cpp')):
+        for over in ({'convert': {'shaders': {'from': ['metal']}}}, {'convert': {'shaders': {'from': ['glcore', 'metal']}}},
+                     {'files': {'plugins': ['steps/tweaks.json', 'convert/animclips.py']}},
+                     {'port': {'route': 'apk'}, 'player': {'il2cpp': False}}):
+            self.assertEqual(P.pmu_covers(P.merge(base, over)), (True, []), over)
+        for over, why in (({'convert': {'shaders': {'from': ['glcore', 'gles']}}}, 'shaders from gles'),
+                          ({'files': {'plugins': ['steps/mine.py', 'x.json']}}, "the port's converter plugins (mine.py)"),
+                          ({'android_data': {'args': ['--il2cpp', 'x']}}, 'android-data --il2cpp'),
+                          ({'port': {'route': 'apk'}, 'player': {'il2cpp': True}}, 'player.il2cpp (il2cpp --on-device)')):
             ok, whys = P.pmu_covers(P.merge(base, over))
             self.assertFalse(ok)
             self.assertEqual(whys, [why])
             self.assertTrue(P.wants('pmunity', P.merge(base, over)))
         # the routes whose release can ship pmu instead of the Python
-        for route in ('android', 'mono-arm64', 'box64'):
+        for route in ('android', 'mono-arm64', 'box64', 'apk'):
             r = json.load(open(os.path.join(os.path.dirname(P.__file__), 'port_template', route, 'route.json')))
             self.assertTrue({'pmu?', 'pmunity?', 'pybundle?'} <= set(r['package']), route)
 
@@ -1042,17 +1046,19 @@ class ApkRouteTest(unittest.TestCase):
             self.assertIn('nothing is downloaded', pj['attr']['inst'])
             self.assertNotIn("downloads Unity's Android player", P._read(os.path.join(out, 'README.md')))
             self.assertIn('ARCH=arm64 runtime/build.sh', P._read(os.path.join(out, 'README.md')))
-            # the release: both runtimes, each with its licences
+            # the release: both runtimes, each with its licences; the setup's pmu (no Python)
             rt, pyb = self.runtime(t)
-            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            pmu = stub_pmu(t)
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
             with zipfile.ZipFile(z) as zf:
                 names = set(zf.namelist())
                 self.assertEqual(zf.read('mygame/ua_host64'), b'host arm64/')
                 self.assertTrue(zf.read('mygame/licenses/LICENSE.libvpx.txt').endswith(b'BSD arm64/'))
                 self.assertNotIn('mygame/licenses/LICENSE.libvpx.ua_host64.txt', names)
-            for n in ('mygame/ua_host', 'mygame/licenses/LICENSE.libvpx.txt', 'mygame/setup/python.tar.gz',
-                      'mygame/setup/pmunity/apk.py'):
+            for n in ('mygame/ua_host', 'mygame/licenses/LICENSE.libvpx.txt', 'mygame/setup/pmu'):
                 self.assertIn(n, names)
+            for n in ('mygame/setup/python.tar.gz', 'mygame/setup/pmunity/apk.py'):
+                self.assertNotIn(n, names)
             # port new again from port.toml alone (the README's Compile section)
             P.new('mygame', None, None, out, log=lambda m: None)
             self.assertEqual(P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')), env)
@@ -1062,7 +1068,7 @@ class ApkRouteTest(unittest.TestCase):
             pj = json.loads(P._read(os.path.join(out2, 'v7game', 'port.json')))
             self.assertEqual(pj['attr']['reqs'], ['armhf'])
             self.assertNotIn('ARCH=arm64', P._read(os.path.join(out2, 'README.md')))
-            z = P.package(out2, os.path.join(t, 'rel2'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+            z = P.package(out2, os.path.join(t, 'rel2'), rt, log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
             with zipfile.ZipFile(z) as zf:
                 names = set(zf.namelist())
             self.assertIn('v7game/ua_host', names)
@@ -1086,7 +1092,11 @@ class ApkRouteTest(unittest.TestCase):
                         ignore=shutil.ignore_patterns('__pycache__', 'port_template'))
         stub = os.path.join(t, 'stub', 'python', 'bin', 'python3.12')
         os.makedirs(os.path.dirname(stub), exist_ok=True)
-        put(stub, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        # (the setup sets PYTHONPATH to its own folder: this Python's packages, where they are on
+        # PYTHONPATH as in setup-rs's image, are put after it)
+        extra = os.environ.get('PYTHONPATH', '')
+        put(stub, '#!/bin/sh\n' + (f'PYTHONPATH="$PYTHONPATH:"{shlex.quote(extra)}; export PYTHONPATH\n' if extra else '') +
+            f'exec {shlex.quote(sys.executable)} "$@"\n')
         os.chmod(stub, 0o755)
         with tarfile.open(os.path.join(g, 'setup', 'python.tar.gz'), 'w:gz') as tf:
             tf.add(os.path.join(t, 'stub', 'python'), 'python')
@@ -1181,7 +1191,11 @@ class ApkRouteTest(unittest.TestCase):
             self.assertNotIn('armhf', pj['attr']['reqs'])
             self.assertIn("compiles the game's code with Unity's IL2CPP", pj['attr']['inst'])
             self.assertIn('without a 32-bit userland the first launch compiles', P._read(os.path.join(out, 'README.md')))
-            self.assertTrue(P.wants('ua_host64', json.load(open(os.path.join(out, 'port.build.json')))['config']))
+            bcfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertTrue(P.wants('ua_host64', bcfg))
+            # (its code is compiled on the handheld by the Python's il2cpp: the release ships the Python)
+            self.assertEqual(P.pmu_covers(bcfg), (False, ['player.il2cpp (il2cpp --on-device)']))
+            self.assertTrue(P.wants('pybundle', bcfg) and not P.wants('pmu', bcfg))
             log = os.path.join(t, 'il2cpp.log')
             with open(os.path.join(g, 'setup', 'pmunity', 'il2cpp.py'), 'a') as f:
                 f.write(f'''

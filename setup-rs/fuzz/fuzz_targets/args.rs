@@ -39,6 +39,7 @@ fn parsers() -> Vec<Parser> {
                     choices: &[],
                     append: true,
                     required: true,
+                    metavar: Some("APK"),
                 },
                 flag("--managed"),
                 flag("--man"),
@@ -52,6 +53,10 @@ fuzz_target!(|data: &[u8]| {
     for p in parsers() {
         if let Ok(a) = p.parse(&args) {
             let _ = (a.get("--out"), a.has("--remove"));
+        }
+        // (apk's: its one positional takes one or more values)
+        if let Ok(a) = p.parse_many(&args) {
+            let _ = a.pos.len();
         }
     }
     if let Ok(Some(c)) = convert::cli::parse(&args) {

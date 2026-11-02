@@ -206,7 +206,7 @@ takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set: reductions of the picture that leave the game play as it is ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
-| `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`, `{setup}` = the setup folder), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
+| `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`, `{setup}` = the setup folder), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
 | `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
 
 Keep the game's look and play: options that change the picture or the game play stay off unless
@@ -282,9 +282,9 @@ on the RG34XX-SP, and what it costs the picture:
 a `PATCH_FAIL_MSG:` line the patcher shows):
 
 1. the setup's tools: `setup/pmu`, one static aarch64 program (setup-rs, docs/rust-setup.md:
-   the same files as the converter's Python, byte for byte); a port whose conversion needs what pmu
-   does not do yet (shaders from Direct3D 11, Vulkan or Metal, `fused_post`, the quality step, the
-   porter's own converter plugins: `port.py`'s `pmu_covers`) ships the setup's Python instead
+   the same files as the converter's Python, byte for byte); a port whose setup needs what pmu
+   does not do yet (a porter's Python converter plugin, `il2cpp --on-device`: `port.py`'s
+   `pmu_covers`) ships the setup's Python instead
    (`python.tar.gz`: CPython with UnityPy and the image libraries, aarch64), and the setup unpacks it;
 2. the game: the data folder in `gamedata/` (any depth), else one from an archive there (`.zip`,
    `.7z`, `.rar`, `.tar.*`, with PortMaster's 7-Zip), else macOS installers (`.pkg`, `pmunity
@@ -446,8 +446,9 @@ The same steps without the setup, on a PC:
    A port with memory to spare raises it (the step's log names the scene that holds the most).
 2. **Convert**: `python -m pmunity convert <Data> [<out>] --config game.json` with a config like
    the `convert` table above (`{"steps": ["shaders", "settings", "audio"], "settings":
-   {"graphics_apis": [11]}}`); a game's own steps go in a plugin (`--plugin steps.py` with
-   `STEPS = {"name": function(job)}`). Check the shaders on the device:
+   {"graphics_apis": [11]}}`); a game's own steps go in a plugin: field edits in a JSON file
+   (`--plugin tweaks.json`, which the setup's pmu runs too: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)),
+   else a Python file (`--plugin steps.py` with `STEPS = {"name": function(job)}`). Check the shaders on the device:
    `python -m pmunity shaders-export <converted Data> glsl/`, then `runtime/host/out/shadercheck
    glsl` there (docs/shaders.md).
 3. **Package**: `python -m pmunity player fetch <version> <pkg>`, then

@@ -16,5 +16,5 @@
     "README.md": "README.port.md",
     "package.sh": "package.sh"
   },
-  "package": ["ua_host?", "ua_host64?", "pmunity", "pybundle"]
+  "package": ["ua_host?", "ua_host64?", "pmu?", "pmunity?", "pybundle?"]
 }

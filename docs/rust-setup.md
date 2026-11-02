@@ -32,25 +32,28 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `winbcl <data> <dir> [--version --installer --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll), read from Unity's Windows editor installer the same way |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 | `route <path> --env` | route.py | the box64 route's game.env: the first build under the path with a Linux x86-64 executable, its Unity version, backend and GL mode (the report, `--json` and `--launcher` stay with the Python: status 2) |
+| `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp` where it would compile a Mono build for the arm64 IL2CPP player: status 2 (the Python's `il2cpp --on-device`) |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
 ## The setups that run pmu
 
-Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64 and
-box64 routes: their patchscript runs `setup/pmu` when the release has it (`pm() { "$S/pmu" "$@"; }`;
-the install step reads the report's scripting runtime with sed), else the setup's Python. `pmunity
-port package` ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts of what is
-compiled into it) when it runs every command of the port's setup (`port.py`'s `pmu_covers`: no
-shaders from Metal, no converter plugins pmu has not built in, no `android-data --il2cpp`), else the
-converter and the Python as before. The default convert config of `port new` (shaders, settings,
+Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64,
+box64 and apk routes: their patchscript runs `setup/pmu` when the release has it (`pm() { "$S/pmu"
+"$@"; }`; the install step reads the report's scripting runtime with sed, the apk route's setup
+apk.json's fields with sed), else the setup's Python. `pmunity port package` ships pmu
+(`setup-rs/tools/build_pmu.sh`: the binary and the licence texts of what is compiled into it) when
+it runs every command of the port's setup (`port.py`'s `pmu_covers`: no Python converter plugin of
+the porter's, no `android-data --il2cpp`, no apk route `player.il2cpp`), else the converter and the
+Python as before. The default convert config of `port new` (shaders, settings,
 audio, quality; compute shaders on), a Windows build's (`from: ["d3d11"]`, the release's pmhlslcc
 beside pmu), a Vulkan-only build's (`from: ["vulkan"]`, the release's pmspirvcross), `grab_fetch`
-and `fused_post` run on pmu. Hollow Knight's whole setup (player fetch, winbcl, convert with
-grab_fetch, android-data with the video shader and asmpatch) runs on pmu and gives the Python's
-APK and OBB, byte for byte. pmu translates Metal programs too (below), but `pmu_covers` keeps a
-Metal port on the Python until a macOS game's own shaders have been compared: so far only the
-players' built-in shaders and hand-written MSL have been.
+a Metal-only macOS build's (`from: ["metal"]`), `grab_fetch`, `fused_post` and JSON converter
+plugins ([plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)) run on pmu.
+Hollow Knight's whole setup (player fetch, winbcl, convert with grab_fetch, android-data with the
+video shader and asmpatch) runs on pmu and gives the Python's APK and OBB, byte for byte. Metal
+was compared on four free macOS games of 2020.3 - 6000.3 (below) before `metal` went into
+`PMU_SHADER_SOURCES` (2026-11-02).
 
 ## What each setup runs on the handheld
 
@@ -64,22 +67,24 @@ curl or wget for Unity's whole installer when range reads fail, and a port's own
 |---|---|---|
 | android (macOS, Linux and Windows builds) | `macpkg` (macpkg.py), `unpack <data> --remove`, `version`, `player fetch` / `player url`, `winbcl` | yes |
 | | `convert <data> --config convert.json [--plugin P] [--set k=v]`: shaders from OpenGL Core, Direct3D 11 (Windows builds, with `setup/pmhlslcc`) or Vulkan (with `setup/pmspirvcross`), compute kernels, grab_fetch, fused_post; settings, audio, quality, textures; the plugin animclips | yes |
-| | the same with shaders from Metal (metal.py) | pmu translates them; the release ships the Python until a macOS game has been compared (above) |
-| | the same with a porter's own plugin, or Vulkan programs of Unity 6000.6's typed layout | no: status 2, the release ships the Python |
+| | the same with shaders from Metal (metal.py), Vulkan programs of Unity 6000.6's typed layout, or a JSON converter plugin (edits.py) | yes (2026-11-02) |
+| | the same with a porter's Python converter plugin | no: status 2, the release ships the Python |
 | | `android-data ... --consume-src --verify-bundles 2 --pack all` (with asmpatch, StreamingAssets modes, `--managed-file`) | yes |
 | mono-arm64 | the android route's commands, with `player fetch --managed` and `android-data --mono64` | yes (the template ran the Python before 2026-11-02; it now takes pmu when the release has it) |
 | il2cpp-arm64 | `macpkg`, `unpack`, `version`, `convert` | yes (as the android route) |
 | | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py, monotree.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build | no |
 | | `android-data --il2cpp <dir>` | no (status 2) |
-| apk | `apk <inputs> <dir> --target T --json` (apk.py; with `player.il2cpp` also `--il2cpp --on-device`, the IL2CPP build above) | no |
-| | `"$PY" -c '...'`: apk.json read into shell variables | no (the setup's own Python one-liner) |
+| apk | `apk <inputs> <dir> --target T --json` (apk.py) | yes (2026-11-02) |
+| | with `player.il2cpp`: `apk ... --il2cpp --on-device` (the IL2CPP build above, on a system without a 32-bit userland) | no: the release ships the Python |
+| | apk.json's fields read into shell variables | sed (before 2026-11-02 a `"$PY" -c` one-liner) |
 | box64 | `route <gamedata> --env` (route.py: the Linux x86-64 build found, its Unity version, backend and GL mode) | yes (the template ran the Python before 2026-11-02) |
 | | `convert <data> --config gles.json` (shaders, settings) | yes |
 | Cuphead (portmaster-cuphead: `setup/patchscript`, `setup64/patchscript`, `setup/dlcscript`, `setup/resume.txt`, the launcher) | `zip-extract`, `macpkg`, `patch-obb check / new / ggm / pack`, `player donor` (mono armv7; il2cpp arm64 `--managed`), `convert --plugin animclips` (the DLC: `--steps shaders,textures,audio`), `journal-files`, `android-data` (64-bit: `--mono64`) | yes: the release ships no Python (its `codepatch` is .NET) |
 
-So the android, mono-arm64 and box64 routes' releases ship pmu and no Python unless the port's
-shaders are Metal ones or it brings converter plugins of its own; the il2cpp-arm64 and apk routes
-still ship the Python for the commands marked no (what is left, and why: the end of this page).
+So the android, mono-arm64, box64 and apk routes' releases ship pmu and no Python unless the port
+brings a Python converter plugin of its own (a JSON one runs on pmu) or, on the apk route, has
+`player.il2cpp`; the il2cpp-arm64 route still ships the Python for the commands marked no (what is
+left, and why: the end of this page).
 
 ## Layout
 
@@ -102,8 +107,9 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `unityfs` | UnityFS bundles (LZ4, LZ4HC, LZMA blocks), serialized files, type trees (the files' own, and the class database the Python takes from UnityPy/TPK), objects as typed value trees; reading and writing them as the Python does |
 | `texcodec` | texture decoding, scaling, ASTC encoding with the guide; textures.py's work on one texture as a pure function |
 | `shaderx` | shader blobs (shaders/blob.py) and the GLSL rewriting the convert step does (shaders/convert.py, glsl.py, step.py and what they call), as pure functions; Unity's binding info (dxbc.py's Bindings), Direct3D 11 (dxbc.py, with pmhlslcc), Vulkan (vulkan.py, spirv.py, with pmspirvcross), Metal (metal.py), grab_fetch and fused_post programs |
-| `convert` | `pmu convert` (on unityfs, shaderx, texcodec): __main__.py's convert path, job.py (the in-place run and its journal), the steps shaders (step.py's files and summary; on the Shader objects: Direct3D 11, Vulkan and Metal sources, compute shaders, grab_fetch, fused_post), settings, audio, quality (with monotree.rs), textures (textures.py's Unity-file layer) and Cuphead's plugin step animclips |
+| `convert` | `pmu convert` (on unityfs, shaderx, texcodec): __main__.py's convert path, job.py (the in-place run and its journal), the steps shaders (step.py's files and summary; on the Shader objects: Direct3D 11, Vulkan and Metal sources, compute shaders, grab_fetch, fused_post), settings, audio, quality (with monotree.rs), textures (textures.py's Unity-file layer), Cuphead's plugin step animclips and JSON plugins' field edits (edits.py) |
 | `androiddata` | `android-data` and `patch-obb pack` (android_data.py and what it uses on a setup's path: clrmeta.py, plugins.py, retarget.py, typetrees.py, streaming.py, unity_version.py), on `unityfs` and `pkgzip` |
+| `apk` | `apk` (apk.py): manifests (binary AXML, an App Bundle's protobuf XML), the ABI choice, OBBs, PlayerSettings on `unityfs`, zips read with `pkgzip` and written as zipfile writes them (deflate: zlib's own, `libz-sys`'s bundled copy) |
 
 Later (on top of `unityfs`): `android-data`, `patch-obb pack`.
 
@@ -117,7 +123,7 @@ the Python writes the journal's `audio.switch` in its set's hash order (it chang
 run; pmu writes the files in order), and where the Python prints a traceback pmu prints the
 error's message. Anything not ported stops the run with status 2 and says so, after the steps
 before it have journaled their files, so a setup can run the Python on the same folder to finish:
-plugins other than animclips, Vulkan programs of 6000.6's typed layout. `grab_fetch`
+Python plugins other than animclips. `grab_fetch`
 (and `grab_fetch_names`) is ported: shaderx's `grabfetch` checks and rewrites a program as
 grabfetch.py does (its symbolic evaluation with exact rationals), the convert crate edits the
 Shader object (Hollow Knight's port sets `"always"`). `shaders.dead_varyings` (off by default) is
@@ -151,8 +157,9 @@ its SHDR/SHEX declarations and constant buffer reads, the RDEF chunk rebuilt fro
 pmhlslcc as a server process, the GLSL as Unity stores a GL program of the version) and the convert
 crate's `steps/d3d11.rs` (convert.add_gles3_d3d11 and dxbc.with_common / check_parsed_form on the
 Shader object). The setup gives pmu the release's `setup/pmhlslcc` through `$PMHLSLCC`, as it
-gives the Python. Unity 6000.6's typed binding info (dxbc.py's `typed`) is not ported: the Vulkan
-path is the only one that reads it.
+gives the Python. Unity 6000.6's typed binding info (dxbc.py's `typed`: each binding an (encoded
+data, slot) pair, lists by kind) is read and written by `bindings::Bindings::parse_typed`,
+`entry_bindings_typed` and `gl_bindings_as` (the Vulkan path is the only one that asks for it).
 
 Shaders from Vulkan (`from: ["vulkan"]`, Vulkan-only builds such as HDRP's Linux ones) are ported:
 shaderx's `spirv` (SPIR-V modules as spirv.py reads and edits them: names, decorations, types,
@@ -160,9 +167,8 @@ the entry point) and `vulkan` (vulkan.py: the entry's stage modules decoded from
 the names Unity's GL programs have, pmspirvcross as a server process, its GLSL made Unity's GL form: constant buffers flattened or kept as blocks, samplers and
 their units, input and output locations, the uv origin of full-screen passes, the ES check), and
 the convert crate's `steps/vulkan.rs` (add_gles3_vulkan: the programs stored by the data's Unity
-version, the shared parameters put back into the Vulkan entries). The setup gives pmu
-`setup/pmspirvcross` through `$PMSPIRVCROSS`. Vulkan programs of 6000.6's typed layout stop the
-step with status 2.
+version, the shared parameters put back into the Vulkan entries; 6000.6's in its typed layout, by
+its names). The setup gives pmu `setup/pmspirvcross` through `$PMSPIRVCROSS`.
 
 Shaders from Metal (`from: ["metal"]`, macOS builds without OpenGL Core: Unity 2020.3 and later)
 are ported: shaderx's `metal` reads the MSL Unity writes as metal.py does (tokens, the
@@ -174,7 +180,8 @@ program; the convert crate's `steps/metal.rs` pairs the vertex and fragment subp
 (both stop with status 1: "shader program entry ... does not match its layout", Cuphead's and the
 2017.4 players' built-in resources). `cargo test -p shaderx --test metal` compares
 the translator with the Python on 17 hand-written cases (`tests/metal_golden.json`, written by
-`tests/golden/metal_golden.py` from convert/tests/test_metal.py's MSL and variants of it).
+`tests/golden/metal_golden.py` from convert/tests/test_metal.py's MSL and variants of it); on
+games, `regress.py pmu` (below: four macOS builds of 2020.3 - 6000.3, the same files).
 
 Player builds keep no type trees in their files: pmu reads them with UnityPy's class database
 (lzma.tpk), embedded when the binary is built with `PMU_TPK=<lzma.tpk>`, else from `$PMU_TPK` at
@@ -193,8 +200,10 @@ the memory the textures step's workers may hold.
 when there is none), as resume.txt's `journal_files` does with Python, for the setup's loop that
 reruns a conversion the kernel killed.
 
-Plugins: pmu has the plugin steps built in, by the file's name: `--plugin <path>/animclips.py` (the
-path need not exist) or `--plugin animclips` is portmaster-cuphead's convert/animclips.py.
+Plugins: a JSON plugin (`--plugin <file>.json`: field edits, `steps/edits.rs`, the Python's
+edits.py) runs on pmu; pmu has Cuphead's plugin step built in, by the file's name: `--plugin
+<path>/animclips.py` (the path need not exist) or `--plugin animclips` is portmaster-cuphead's
+convert/animclips.py. Any other plugin stops with status 2.
 
 Tests: `cargo test -p convert` (with `PMU_TPK` set to UnityPy's lzma.tpk) runs the job on made-up
 data (crates/convert/tests/madeup: Unity 2017.4 files written from the class database's type
@@ -252,6 +261,22 @@ runs the Python and pmu with the setups' exact invocations on copies of `convert
 game, or a part of it for the mini cases) and compares status, the output folder, every archive's
 entries and the data `--consume-src` leaves.
 
+`pmu apk` (crates/apk) is apk.py's import: the zips it writes (split asset packs merged into one
+APK, an App Bundle rebuilt) are zipfile's, entry by entry (the local header written again with the
+CRC and sizes, stored data aligned by the zipalign-style extra field), deflated with zlib's own
+deflate at its default level (`libz-sys` built with its bundled zlib: Python's zipfile compresses
+with the system's zlib, and zlib-rs, which pkgzip reads with, gives other bytes); PlayerSettings,
+BuildSettings and MonoManager are read with unityfs and UnityPy's class database (a stored entry in
+place, a compressed one in memory, as the Python holds it). `cargo test -p apk` (with `PMU_TPK`)
+runs it on made-up builds (binary and protobuf manifests written in the test); the golden test runs
+both implementations case by case and compares status, stdout, stderr and every output file:
+
+```bash
+RS_ROOT=... setup-rs/tools/rs.sh <worktree> bash -c 'PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk \
+  PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH=<worktree>/convert:/opt/pylibs \
+  /opt/py/bin/python3 tests/golden/apk_golden.py <scratch> --pmu <pmu> [--real <a folder of APKs>]'
+```
+
 `shaderx`'s golden data comes from the reference Python: `tests/golden/shaderx_golden.py <data>
 <config.json> <out> [--converted <converted data>]` runs the shaders step's own code on every Shader
 and saves inputs, outputs and every program translation to `<out>`; then
@@ -308,44 +333,60 @@ run below gave the same files on both sides.
 | Metal (`from: ["metal"]`) | the built-in resources of the five games of 2018.4 - 2022.3 and Hollow Knight | the same (19 - 23 programs each, every layout of the GL programs: 2018, 2019, 2020.1+, 2021.2+ with parameter entries); unsung-warriors' and Cuphead's (2017.4): both stop the same way |
 | `route --env` | 16 paths (each Linux build, its data folder and executable, the folders above up to the whole corpus, Hollow Knight, Cuphead's app, missing folders) and 16 made-up builds | the same output and exit status in all 64 runs (with `--env` and `--env --json`) |
 
+Then on 2026-11-02 (branch rust-apk), with free games downloaded for it (itch.io; deleted after):
+
+| what | data | result |
+|---|---|---|
+| Metal, the games' own shaders (`--set 'shaders.from=["metal"]' --convert-only`: port new's steps and the check's suggestions) | four Metal-only macOS builds: 2020.3.49, 2021.3.16 (URP), 2022.3.4 (URP), 6000.3.11 | the same files (184, 318, 220 and 1342 programs; the SubShaders left out the same: MSL with `base_vertex`, writable textures, device buffers, multisampled arrays) |
+| | a 6000.6.5 macOS build | both stop the same way in the shaders step (writing a Shader object: the Python's struct.error, pmu's "data: -1 out of range"): 6000.6's Metal entries are a gap of the Python's too |
+| Vulkan of 6000.6's typed layout (`--set 'shaders.from=["vulkan"]' --convert-only`, and `--builtin`) | two 6000.6 Linux builds (6000.6.2, 6000.6.5) | the same files: the games' own shaders (97 shaders, 526 programs; 85, 701) and their players' built-in resources (5 shaders, 14 programs each); pmu stopped with status 2 before |
+| a JSON converter plugin (`pmu_pair.py --plugin`: QualitySettings, AudioManager, Light, Camera and Material fields) | three corpus games (2018.4, 2020.3, 2022.3) | the same files (26 objects edited in the 2020.3 game); the 2022.3 game: both stop with the same message (a field its Materials do not have) |
+| `apk` (`tests/golden/apk_golden.py`, the musl build) | 71 made-up builds; four free games' APKs (2019.4 and 2022.3 Mono armv7, 2021.3 and 2022.3 IL2CPP), each as it is and laid out again from its own files as split APKs, an XAPK, an APKS, an App Bundle and an APK with its data in an OBB | 107 of 107 the same: exit status, stdout, stderr, every output file (base.apk merged or rebuilt, lib/, OBBs, android_package.json) |
+
 ## Porter plugins without Python
 
-A port's converter plugin is Python (a file with `STEPS = {name: function(job)}`, run in the
-converter's process with the job's API), so pmu cannot run it. pmu has plugins built in instead,
-chosen by the file's name (`--plugin <dir>/animclips.py` or `--plugin animclips`; `plugin()` in
-`crates/convert/src/steps/mod.rs`, `PMU_PLUGINS` in port.py): Cuphead's animclips. The way for a
-porter's plugin to run without Python is the same: the plugin's step ported into
-`crates/convert/src/steps/<name>.rs` (as animclips.rs was), checked against the plugin on the game's
-data (`pmu_pair.py --plugin <file>` runs both converts with it), and its name added to `plugin()` and
-`PMU_PLUGINS`; the port's release then ships pmu and no Python. Most plugins edit fields of objects
-the steps already read, so a declarative step (a list of edits in the convert config: file, class,
-object name, field path, value) that both implementations run would cover them without code; it is
-not written. Until a plugin is built in, `pmu_covers` keeps its port on the Python. Built-ins are
-matched by the file's name only: a porter's own plugin called `animclips.py` would run Cuphead's
-step, so a new plugin needs a name of its own (comparing the file's hash with the ported one's in
-`pmu_covers` would catch it).
+A port's converter plugin in Python (a file with `STEPS = {name: function(job)}`, run in the
+converter's process with the job's API) cannot run on pmu. Two ways keep such a port's release free
+of the Python ([plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)):
+
+- A JSON plugin (2026-11-02): named steps of field edits (a glob over the data files, the class,
+  a glob over m_Name, field paths and values), which pmu (`crates/convert/src/steps/edits.rs`) and
+  the Python (`convert/pmunity/edits.py`, plugged into `--plugin` by the file's `.json`) run the
+  same way, with the same messages; `pmu_covers` counts it as pmu's. Nothing of the porter's runs,
+  so nothing needs a sandbox or a protocol. Checked with `tests/golden/convert_madeup.sh` (the
+  `edits` cases) and `pmu_pair.py --plugin` (above). MonoBehaviours are refused (their fields
+  need the game's assemblies' type trees, which neither implementation gives a plugin).
+- A step built into pmu, chosen by the file's name (`--plugin <dir>/animclips.py` or `--plugin
+  animclips`; `plugin()` in `crates/convert/src/steps/mod.rs`, `PMU_PLUGINS` in port.py):
+  Cuphead's animclips. The plugin's step is ported into `crates/convert/src/steps/<name>.rs`,
+  checked against the plugin on the game's data (`pmu_pair.py --plugin <file>`), its name added
+  to `plugin()` and `PMU_PLUGINS`. Built-ins are matched by the file's name only: a porter's own
+  plugin called `animclips.py` would run Cuphead's step, so a new plugin needs a name of its own.
+
+A porter's program speaking a JSON protocol with pmu was the other design looked at: it would
+need the job's API (files, objects, type trees, the journal) as a protocol, a program the
+handheld can run, and the porter's code run by the setup; field edits cover what the ports seen
+change, with none of that. This repository has no converter plugins of its own (animclips lives
+in portmaster-cuphead and is built in).
 
 ## What is left, and why
 
 - `il2cpp --on-device` (the il2cpp-arm64 route, and the apk route with `player.il2cpp`): il2cpp.py,
   il2cpp_device.py, il2cpp_bee.py and il2cpp_mix.py (about 3800 lines) fetch Unity's IL2CPP and
   player by range reads, Debian's compilers and .NET (pinned by checksum), then run UnityLinker,
-  il2cpp and the C++ build. It is orchestration of other programs more than conversion, but large,
-  and its outputs (a built libil2cpp.so) need their own comparison; not started.
+  il2cpp and the C++ build; being ported on its own branch. `pmu apk --il2cpp` stops with status
+  2 where the Python would start that build (its checks before it are pmu's); the IL2CPP
+  build's own part of apk.py (il2cpp_stub, il2cpp_apk: the APK with IL2CPP's metadata) goes with
+  it.
 - `android-data --il2cpp` (il2cpp-arm64): small (the IL2CPP output's files instead of Managed/, the
   metadata's app guid, the version checks), but its route needs the Python for `il2cpp` anyway;
   status 2.
-- The apk route: `apk` (apk.py, about 1100 lines: APK, split APKs, XAPK and APKS zips, an AAB
-  rebuilt into one APK, the OBBs' names, android_package.json) and the setup's `"$PY" -c` line that
-  reads apk.json into shell variables (a `pmu` subcommand or sed would do); not started.
-- Metal releases: pmu translates them as the Python does on everything compared so far, but no
-  macOS game's own shaders were on this machine; one corpus run (`regress.py pmu --set
-  'shaders.from=["metal"]' --convert-only` on macOS builds of 2020.3+) and `metal` in port.py's
-  `PMU_SHADER_SOURCES` would let Metal ports ship pmu alone.
-- Vulkan programs of Unity 6000.6's typed layout (dxbc.py's `typed` binding info): status 2.
-- Porter plugins other than animclips (above).
+- A porter's Python converter plugin (above): the release ships the Python; a JSON plugin or a
+  built-in step avoids it.
+- Metal entries of Unity 6000.6: the Python stops on them too (a 6000.6.5 macOS build: both
+  stop in the shaders step, status 1), so there is nothing to compare yet.
 - The comparison itself: the corpus games of the regression list that are gone from this machine
-  (Windows builds through Direct3D 11, macOS and Unity 6 games, compressed builds, Vulkan-only
+  (Windows builds through Direct3D 11, more macOS and Unity 6 games, compressed builds, Vulkan-only
   ones) are where a divergence would show next.
 
 ## Fuzzing
