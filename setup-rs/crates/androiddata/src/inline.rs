@@ -4,7 +4,7 @@
 use crate::android_data::{Ctx, Stop, ANDROID};
 use pkgzip::py;
 use std::collections::HashSet;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 use unityfs::bundle::{self, Bundle, PackHeader, PackNode};
@@ -25,15 +25,14 @@ fn save_inlined(
     read: &ReadStream<'_>,
     out: &Path,
 ) -> Result<(), Stop> {
-    let f = std::fs::File::create(out)?;
-    let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+    let mut w = unityfs::bgwrite::BgWriter::create(out)?;
     sf.save_to(&mut w, |sf, o| {
         if !plan.contains(&o.path_id) {
             return Ok(None);
         }
         unityfs::inline::inlined(sf, o.path_id, read).map(Some)
     })?;
-    w.flush()?;
+    w.finish()?;
     Ok(())
 }
 

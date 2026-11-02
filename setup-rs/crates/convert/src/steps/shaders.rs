@@ -15,7 +15,7 @@
 use super::grabfetch;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
-use crate::job::Job;
+use crate::job::{drop_spill, Job};
 use crate::pyjson::Json;
 use shaderx::blob::{BlobFields, Lengths};
 use shaderx::convert::{self, Edit, Pass, Shader, StageProgram, SubProgram, STAGES};
@@ -461,11 +461,14 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     let mut results: Vec<convert::Report> = Vec::new();
     let mut gresults: Vec<grabfetch::GfResult> = Vec::new();
     let mut changed_files = 0usize;
+    // (one scratch folder for the step: a bundle too big for memory is spilled into it, emptied
+    // after each file; made only when one is)
+    let work = job.work_dir_lazy("shaders")?;
+    let mut parent_left = false;
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
             continue;
         }
-        let work = job.work_dir("shaders")?;
         let path = job.path_in(&rel);
         let o = unityfs::Options {
             spill_dir: Some(work.clone()),
@@ -475,74 +478,102 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
             Ok(f) => f,
             Err(Error::Unity(e)) if not_one(&path, &e) => {
                 job.log(&format!("shaders: {rel}: left as it is ({e})"));
-                let _ = std::fs::remove_dir_all(&work);
-                job.mark_done("shaders", &rel)?;
+                drop_spill(&work);
+                job.mark_unchanged("shaders", &rel)?;
+                // (the Python removes only its scratch folder here: .pmunity-work stays
+                // until the next file's end_work)
+                parent_left = true;
                 continue;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                let _ = std::fs::create_dir_all(&work);
+                return Err(e);
+            }
         };
         let mut n = 0usize;
-        for (pid, class) in objects(&f) {
-            if class == "ComputeShader" && s.compute {
-                return Err(Error::NotPorted(format!("{rel}: compute shaders")));
-            }
-            if class != "Shader" {
-                continue;
-            }
-            let mut t = f.sf.read_typetree(pid)?;
-            let platforms = ints(field(&t, "platforms")?, "platforms")?;
-            let src = s
-                .sources
-                .iter()
-                .find(|x| platforms.contains(&source_platform(x)))
-                .unwrap_or(&s.sources[0]);
-            if src != "glcore" {
-                return Err(Error::NotPorted(format!("{rel}: shaders from {src}")));
-            }
-            let shader = shader_of(&t)?;
-            let out = convert::add_gles3(&shader, &opts, &mut tr)
-                .map_err(|e| Error::Value(e.to_string()))?;
-            let r = out.report;
-            let mut changed = false;
-            if let Some(edit) = &out.edit {
-                apply(&mut t, edit)?;
-                changed = true;
-            }
-            if let Some(always) = s.grab_fetch {
-                let names = match &s.grab_fetch_names {
-                    None => None,
-                    Some(Ok(rx)) => Some(rx),
-                    Some(Err(m)) => return Err(Error::Value(m.clone())),
-                };
-                let g = grabfetch::apply(&mut t, always, names)?;
-                changed |= g.changed();
-                if g.status != "unchanged" {
-                    job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
+        let mut each = || -> Result<()> {
+            for (pid, class) in objects(&f) {
+                if class == "ComputeShader" && s.compute {
+                    return Err(Error::NotPorted(format!("{rel}: compute shaders")));
                 }
-                gresults.push(g);
-            }
-            if changed {
-                f.sf.save_typetree(pid, &t)?;
-                n += 1;
-            }
-            if r.status == convert::Status::Skipped || !r.failed.is_empty() {
-                job.log(&format!("shaders: {rel}: {r}"));
-            }
-            if r.guessed_layout {
-                job.log(&format!(
+                if class != "Shader" {
+                    continue;
+                }
+                let mut t = f.sf.read_typetree(pid)?;
+                let platforms = ints(field(&t, "platforms")?, "platforms")?;
+                let src = s
+                    .sources
+                    .iter()
+                    .find(|x| platforms.contains(&source_platform(x)))
+                    .unwrap_or(&s.sources[0]);
+                if src != "glcore" {
+                    return Err(Error::NotPorted(format!("{rel}: shaders from {src}")));
+                }
+                let shader = shader_of(&t)?;
+                let out = convert::add_gles3(&shader, &opts, &mut tr)
+                    .map_err(|e| Error::Value(e.to_string()))?;
+                let r = out.report;
+                let mut changed = false;
+                if let Some(edit) = &out.edit {
+                    apply(&mut t, edit)?;
+                    changed = true;
+                }
+                if let Some(always) = s.grab_fetch {
+                    let names = match &s.grab_fetch_names {
+                        None => None,
+                        Some(Ok(rx)) => Some(rx),
+                        Some(Err(m)) => return Err(Error::Value(m.clone())),
+                    };
+                    let g = grabfetch::apply(&mut t, always, names)?;
+                    changed |= g.changed();
+                    if g.status != "unchanged" {
+                        job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
+                    }
+                    gresults.push(g);
+                }
+                if changed {
+                    f.sf.save_typetree(pid, &t)?;
+                    n += 1;
+                }
+                if r.status == convert::Status::Skipped || !r.failed.is_empty() {
+                    job.log(&format!("shaders: {rel}: {r}"));
+                }
+                if r.guessed_layout {
+                    job.log(&format!(
                     "shaders: {rel}: {}: program layout of an unverified Unity version (guessed, checked by round trip)",
                     r.name
                 ));
+                }
+                results.push(r);
             }
-            results.push(r);
+            Ok(())
+        };
+        if let Err(e) = each() {
+            // (the Python's scratch folder for the file is there when a step stops in it)
+            let _ = std::fs::create_dir_all(&work);
+            return Err(e);
         }
+        parent_left = false;
         if n > 0 {
-            job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))?;
+            job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))
+                .inspect_err(|_| {
+                    let _ = std::fs::create_dir_all(&work);
+                })?;
             changed_files += 1;
+            drop(f);
+            drop_spill(&work);
+            job.mark_done("shaders", &rel)?;
+        } else {
+            drop(f);
+            drop_spill(&work);
+            job.mark_unchanged("shaders", &rel)?;
         }
-        drop(f);
-        job.end_work(&work);
-        job.mark_done("shaders", &rel)?;
+    }
+    job.end_work(&work);
+    if parent_left {
+        if let Some(p) = work.parent() {
+            std::fs::create_dir_all(p)?;
+        }
     }
     let sources: Vec<&str> = s.sources.iter().map(String::as_str).collect();
     if let Some(err) = shaderx::step::nothing_to_translate(&results, &sources) {

@@ -379,8 +379,7 @@ impl DataFile {
     /// bundle): textures' streamed pixels go into the texture objects, one texture in memory at a
     /// time, and the .resS nodes nothing reads any more are dropped (android_data's inlining).
     pub fn write_to(&mut self, out: &Path, inline: bool) -> Result<()> {
-        let f = std::fs::File::create(out)?;
-        let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+        let mut w = crate::bgwrite::BgWriter::create(out)?;
         let tmp = out.with_file_name(format!(
             "{}.cab.tmp",
             out.file_name()
@@ -388,7 +387,7 @@ impl DataFile {
                 .unwrap_or_default()
         ));
         self.write_into(&mut w, inline, &tmp)?;
-        std::io::Write::flush(&mut w)?;
+        w.finish()?;
         Ok(())
     }
 

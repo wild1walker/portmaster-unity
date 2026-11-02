@@ -20,6 +20,13 @@ pub fn say(e: androiddata::Stop) -> u8 {
             "pmu: android-data: not ported yet: {m} (run `python -m pmunity android-data`)"
         ),
         Stop::Status(_) => {}
+        Stop::Full(m) => {
+            eprintln!("pmu: error: {m}");
+            eprintln!(
+                "the card is full: free some space on it, then launch again (the setup goes on \
+                 where it stopped)"
+            );
+        }
     }
     code
 }

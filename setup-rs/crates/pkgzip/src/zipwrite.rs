@@ -10,6 +10,10 @@ use crate::pyrandom::Random;
 use crate::zip::{Archive, STORED};
 use crate::{fail, io_at, py, Error, Result};
 
+/// The chunks an entry's file is copied in, and how many are read ahead.
+const CHUNK: usize = 1 << 20;
+const AHEAD: usize = 3;
+
 /// libunity reads archives with fopen/fseek(long)/ftell: 32-bit offsets.
 pub const ZIP_LIMIT: u64 = (1 << 31) - 1;
 
@@ -120,7 +124,6 @@ pub fn write_zip(
     let mut done: Vec<Written> = Vec::new();
     let mut names: HashMap<&str, ()> = HashMap::new();
     let mut pos = 0u64;
-    let mut buf = vec![0u8; 1 << 20];
     let mut result = Ok(());
     for (arc, src) in entries {
         // ZipInfo cuts a name at a NUL; the padding is reckoned on the whole name, as the Python does
@@ -178,15 +181,34 @@ pub fn write_zip(
                     crc.update(b);
                     n = b.len() as u64;
                 }
-                (_, Some(sf)) => loop {
-                    let k = sf.read(&mut buf)?;
-                    if k == 0 {
-                        break;
-                    }
-                    f.write_all(&buf[..k])?;
-                    crc.update(&buf[..k]);
-                    n += k as u64;
-                },
+                (_, Some(sf)) => {
+                    // (read on a thread of its own, a few chunks ahead: the card reads the
+                    // entry's next chunks while this one is written)
+                    let (tx, rx) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(AHEAD);
+                    std::thread::scope(|s| -> Result<()> {
+                        s.spawn(move || loop {
+                            let mut b = vec![0u8; CHUNK];
+                            let r = sf.read(&mut b).map(|k| {
+                                b.truncate(k);
+                                b
+                            });
+                            let end = !matches!(&r, Ok(b) if !b.is_empty());
+                            if tx.send(r).is_err() || end {
+                                break;
+                            }
+                        });
+                        for c in rx {
+                            let c = c?;
+                            if c.is_empty() {
+                                break;
+                            }
+                            f.write_all(&c)?;
+                            crc.update(&c);
+                            n += c.len() as u64;
+                        }
+                        Ok(())
+                    })?;
+                }
                 _ => unreachable!(),
             }
             if n > ZIP_LIMIT {

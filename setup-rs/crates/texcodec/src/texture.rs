@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::astc::{Encoder, EncoderSettings, Seed};
 use crate::decode::{self, platform, tf};
 use crate::image::{self, Rgba};
+use crate::prof::{self, Stage};
 use crate::Error;
 
 /// Single-level textures from this size up that keep their size are converted in strips.
@@ -333,7 +334,7 @@ pub fn convert(
         && (ch.width, ch.height) == (t.width, t.height)
         && ch.width * ch.height >= STRIP_MIN_PX
     {
-        out = strip_blocks(t, raw, ch, enc)?.map(|b| (b, 1));
+        out = prof::time(Stage::Strips, || strip_blocks(t, raw, ch, enc))?.map(|b| (b, 1));
     }
     let (data, nlevels) = match out {
         Some(o) => o,
@@ -438,25 +439,27 @@ pub fn prepare(
     } else {
         None
     };
-    let first = match small {
-        Some(s) => s,
-        None => {
-            // tex.image (decoded top first; big ones a strip of rows a core), texture_image, then
-            // downscale (on every core where downscale_parallel can)
-            let big = w * h >= PREP_MIN_PX;
-            let mut img = match (split && big).then(|| decode_parallel(t, raw, threads)) {
-                Some(Some(img)) => img?,
-                _ => decode_rgba(t, raw, w, h)?,
-            };
-            img.flip_rows();
-            if split && big {
-                downscale_parallel(img, ch.width, ch.height, threads)?
-            } else {
-                image::downscale(img, ch.width, ch.height)?
+    let first = prof::time(Stage::Prepare, || -> Result<Rgba, Error> {
+        Ok(match small {
+            Some(s) => s,
+            None => {
+                // tex.image (decoded top first; big ones a strip of rows a core), texture_image, then
+                // downscale (on every core where downscale_parallel can)
+                let big = w * h >= PREP_MIN_PX;
+                let mut img = match (split && big).then(|| decode_parallel(t, raw, threads)) {
+                    Some(Some(img)) => img?,
+                    _ => decode_rgba(t, raw, w, h)?,
+                };
+                img.flip_rows();
+                if split && big {
+                    downscale_parallel(img, ch.width, ch.height, threads)?
+                } else {
+                    image::downscale(img, ch.width, ch.height)?
+                }
             }
-        }
-    };
-    let levels = mip_chain(first, ch.mips)?;
+        })
+    })?;
+    let levels = prof::time(Stage::Mips, || mip_chain(first, ch.mips))?;
     Ok(Prepared {
         nlevels: levels.len(),
         levels,
@@ -688,9 +691,15 @@ pub fn decode_downscale(
     Ok(Some(out))
 }
 
+/// A strip's blocks once a thread has encoded them.
+type Slot = Mutex<Option<Result<Vec<u8>, Error>>>;
+
 /// textures.py strip_blocks(): the ASTC blocks of a single-level texture kept at its size, decoded
 /// and encoded a strip of rows at a time in the order Unity stores rows (bottom first). None when
-/// the data cannot be cut in rows.
+/// the data cannot be cut in rows. With more than one thread (and no guide) the strips, smaller
+/// ones, are decoded and encoded on every core at once, each thread with an encoder of its own on
+/// one core: every block is encoded on its own, so the blocks are the same, and nothing waits for
+/// the slowest thread of each strip.
 pub fn strip_blocks(
     t: &Texture,
     raw: &[u8],
@@ -703,17 +712,67 @@ pub fn strip_blocks(
     let (w, h) = (t.width, t.height);
     let by = ch.block.1 as usize;
     let step = bh * by / gcd(bh, by);
-    let rows = step.max(STRIP_PX / w / step * step);
     let seed5 = dxt_seed_format(t.format);
-    let mut out = Vec::new();
-    let mut y = 0;
-    while y < h {
-        let sh = rows.min(h - y);
+    let strip = |enc: &mut Encoder, y: usize, sh: usize| -> Result<Vec<u8>, Error> {
         let part =
             &raw[(y / bh * per).min(raw.len())..((y + sh).div_ceil(bh) * per).min(raw.len())];
         let img = decode_rgba(t, part, w, sh)?;
         let seed = seed5.map(|dxt5| Seed { blocks: part, dxt5 });
-        out.extend(enc.encode_rows(&img.px, img.width, img.height, ch.block, seed, None)?);
+        enc.encode_rows(&img.px, img.width, img.height, ch.block, seed, None)
+    };
+    let threads = enc.settings.threads;
+    if threads > 1 && enc.guide.is_none() {
+        let rows = step.max(STRIP_PX / 4 / w / step * step);
+        let starts: Vec<usize> = (0..h).step_by(rows).collect();
+        let one = EncoderSettings {
+            threads: 1,
+            ..enc.settings.clone()
+        };
+        let mut encs = (0..threads.min(starts.len()))
+            .map(|_| Encoder::new(one.clone(), None))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let next = AtomicUsize::new(0);
+        let slots: Vec<Slot> = starts.iter().map(|_| Mutex::new(None)).collect();
+        std::thread::scope(|s| {
+            for e in encs.iter_mut() {
+                let (next, slots, starts, strip) = (&next, &slots, &starts, &strip);
+                s.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= starts.len() {
+                        break;
+                    }
+                    let y = starts[i];
+                    let r = strip(e, y, rows.min(h - y));
+                    let failed = r.is_err();
+                    *slots[i].lock().unwrap() = Some(r);
+                    if failed {
+                        // (the strips after it are not needed: the first error is the result)
+                        next.fetch_max(starts.len(), Ordering::Relaxed);
+                        break;
+                    }
+                });
+            }
+        });
+        for e in &encs {
+            for (a, b) in enc.counts.iter_mut().zip(e.counts) {
+                *a += b;
+            }
+        }
+        let mut out = Vec::with_capacity(w.div_ceil(ch.block.0 as usize) * h.div_ceil(by) * 16);
+        for slot in slots {
+            match slot.into_inner().unwrap() {
+                Some(r) => out.extend(r?),
+                // (a strip not done: one before it failed, and its error came first)
+                None => return Err(Error::Decode("a strip was not converted".into())),
+            }
+        }
+        return Ok(Some(out));
+    }
+    let rows = step.max(STRIP_PX / w / step * step);
+    let mut out = Vec::new();
+    let mut y = 0;
+    while y < h {
+        out.extend(strip(enc, y, rows.min(h - y))?);
         y += rows;
     }
     Ok(Some(out))

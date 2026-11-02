@@ -33,6 +33,7 @@
 //! - [`platform`]: android_data's in-place target platform patching; [`inline`]: texture
 //!   streams moved into the textures; [`compress`]: LZ4 / LZ4 HC as python-lz4, LZMA blocks.
 //! - [`classes`]: the class names UnityPy gives class ids.
+pub mod bgwrite;
 pub mod bin;
 pub mod bundle;
 pub mod classes;
