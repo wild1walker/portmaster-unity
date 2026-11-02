@@ -408,7 +408,8 @@ python -m pmunity il2cpp <Game>_Data <out> --on-device --home <dir>      # the b
 `--on-device` runs everything natively on the aarch64 Linux machine it is started on (convert/
 pmunity/il2cpp_device.py). It needs no root, installs nothing, never touches the firmware's
 `/usr` and works with the setup's own Python (the port's `python.tar.gz`; urllib, tarfile and lzma
-only).
+only), or, as a port's release runs it since 2026-11-02, with `pmu il2cpp` (setup-rs's crates/il2cpp:
+the same steps, files and commands, no Python; docs/rust-setup.md, "`pmu il2cpp`").
 
 ### The tools
 
@@ -443,8 +444,9 @@ headers and `ld.lld` from argv[0]), Mono a copy of the loader named `mono/bin/mo
 its prefix from that path), .NET a copy named `dotnet/dotnet` (the muxer insists on its name and
 finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`, `llvm-ar`,
 `llvm-ranlib`, `llvm-nm`, `mono`, `dotnet`; tools/il2cpp/ndk-clang.sh runs them as on the PC
-(`PMUNITY_LLVM=<toolchain>/bin`), so a port ships `setup/tools/il2cpp/ndk-clang.sh` next to
-`setup/pmunity` (`pmunity port package` does).
+(`PMUNITY_LLVM=<toolchain>/bin`), so a port that ships the Python ships `setup/tools/il2cpp/ndk-clang.sh`
+next to `setup/pmunity` (`pmunity port package` does); pmu has a copy built in
+(`setup-rs/crates/il2cpp/src/ndk-clang.sh`, a test checks it is the same file).
 
 ### Fitting a 1 GB, 4 x Cortex-A53 handheld
 

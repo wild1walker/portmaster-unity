@@ -23,7 +23,31 @@ def unhash(t):
     return t
 
 
+CC_OBJ = re.compile(r' (\S+\.(?:cpp|c|cc)) -o (\S+\.o)\b')
+
+
+def objects_by_source(run):
+    """il2cpp's object cache names its objects by hashes, of the source's contents among other
+    things: {object path under out/: 'out/.work/cache/<its source, under out/ or home/>.o'} from
+    cc.log, so that runs whose generated C++ differs in a file (2020.x's metadata tables are not
+    written the same each time) compare that file's object by its source."""
+    p = os.path.join(run, 'records', 'out', '.work', 'cc.log')
+    out = {}
+    try:
+        text = open(p, encoding='utf-8', errors='replace').read()
+    except OSError:
+        return out
+    for m in CC_OBJ.finditer(text):
+        src, obj = m.group(1), m.group(2)
+        i = obj.rfind('/out/')
+        j = max(src.rfind('/out/'), src.rfind('/home/'))
+        if i >= 0 and j >= 0:
+            out[obj[i + 1:]] = 'out/.work/cache/<' + src[j + 1:] + '>.o'
+    return out
+
+
 def manifest(run):
+    by_src = objects_by_source(run)
     out = {}
     with open(os.path.join(run, 'manifest')) as f:
         for line in f:
@@ -33,7 +57,7 @@ def manifest(run):
                 out[unhash(path)] = ('link', target)
             else:
                 sha, mode, path = line.split(' ', 2)
-                out[unhash(path)] = (sha, mode)
+                out[unhash(by_src.get(path, path))] = (sha, mode)
     return out
 
 
@@ -56,12 +80,15 @@ def norm_text(name, text):
                 l = rx.sub(rep, l)
             out.append(l)
         return out
-    if name in ('cc.log', 'pmunity-done.jsonl', 'killed.log'):
+    if name == 'cc.log':
+        # (the objects' names: hashes of what they are built from, see objects_by_source)
+        return sorted(re.sub(r' -o \S+/cache/[0-9A-F]{32}\.o\b', ' -o <object>', l) for l in lines)
+    if name in ('pmunity-done.jsonl', 'killed.log'):
         return sorted(lines)
     if name == 'il2cpp.log':
         # (il2cpp's own timings: the ten longest compiles and the totals)
-        return [re.sub(r'\d+ milliseconds', '<n> milliseconds', l) for l in lines
-                if not l.startswith('\tTime Compile: ')]
+        return [re.sub(r'Duration: \d+s\d+ms', 'Duration: <t>', re.sub(r'\d+ milliseconds', '<n> milliseconds', l))
+                for l in lines if not l.startswith('\tTime Compile: ')]
     if name == 'build.log':
         # (blocks in the order the parallel commands finished; the timing of the last line)
         return sorted(re.sub(r', \d+ s$', ', <n> s', l) for l in lines)

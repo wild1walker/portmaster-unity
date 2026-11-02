@@ -32,18 +32,19 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `winbcl <data> <dir> [--version --installer --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll), read from Unity's Windows editor installer the same way |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 | `route <path> --env` | route.py | the box64 route's game.env: the first build under the path with a Linux x86-64 executable, its Unity version, backend and GL mode (the report, `--json` and `--launcher` stay with the Python: status 2) |
+| `il2cpp <data> <out> --on-device ...`, `il2cpp fetch <version> [--on-device]` | il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py | the il2cpp-arm64 route's build on the handheld: Unity's IL2CPP and player by range reads, Debian's compilers and Microsoft's .NET (pinned by sha256), UnityLinker, il2cpp, the C++ build (Bee's graph from 2021.2), libil2cpp.so and Data/Managed (below, "`pmu il2cpp`"); the Docker route of a porter's PC (no `--on-device`) stays with the Python: status 2 |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
 ## The setups that run pmu
 
-Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64 and
-box64 routes: their patchscript runs `setup/pmu` when the release has it (`pm() { "$S/pmu" "$@"; }`;
+Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64,
+il2cpp-arm64 and box64 routes: their patchscript runs `setup/pmu` when the release has it (`pm() { "$S/pmu" "$@"; }`;
 the install step reads the report's scripting runtime with sed), else the setup's Python. `pmunity
 port package` ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts of what is
 compiled into it) when it runs every command of the port's setup (`port.py`'s `pmu_covers`: no
-shaders from Metal, no converter plugins pmu has not built in, no `android-data --il2cpp`), else the
-converter and the Python as before. The default convert config of `port new` (shaders, settings,
+shaders from Metal, no converter plugins pmu has not built in), else the converter and the Python
+as before. The default convert config of `port new` (shaders, settings,
 audio, quality; compute shaders on), a Windows build's (`from: ["d3d11"]`, the release's pmhlslcc
 beside pmu), a Vulkan-only build's (`from: ["vulkan"]`, the release's pmspirvcross), `grab_fetch`
 and `fused_post` run on pmu. Hollow Knight's whole setup (player fetch, winbcl, convert with
@@ -69,17 +70,17 @@ curl or wget for Unity's whole installer when range reads fail, and a port's own
 | | `android-data ... --consume-src --verify-bundles 2 --pack all` (with asmpatch, StreamingAssets modes, `--managed-file`) | yes |
 | mono-arm64 | the android route's commands, with `player fetch --managed` and `android-data --mono64` | yes (the template ran the Python before 2026-11-02; it now takes pmu when the release has it) |
 | il2cpp-arm64 | `macpkg`, `unpack`, `version`, `convert` | yes (as the android route) |
-| | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py, monotree.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build | no |
-| | `android-data --il2cpp <dir>` | no (status 2) |
-| apk | `apk <inputs> <dir> --target T --json` (apk.py; with `player.il2cpp` also `--il2cpp --on-device`, the IL2CPP build above) | no |
+| | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build | yes (crates/il2cpp, 2026-11-02; the template ran the Python before) |
+| | `android-data --il2cpp <dir> ... --consume-src --verify-bundles 2 --pack all` | yes |
+| apk | `apk <inputs> <dir> --target T --json` (apk.py; with `player.il2cpp` also `--il2cpp --on-device`, the IL2CPP build above: `il2cpp::build`) | no |
 | | `"$PY" -c '...'`: apk.json read into shell variables | no (the setup's own Python one-liner) |
 | box64 | `route <gamedata> --env` (route.py: the Linux x86-64 build found, its Unity version, backend and GL mode) | yes (the template ran the Python before 2026-11-02) |
 | | `convert <data> --config gles.json` (shaders, settings) | yes |
 | Cuphead (portmaster-cuphead: `setup/patchscript`, `setup64/patchscript`, `setup/dlcscript`, `setup/resume.txt`, the launcher) | `zip-extract`, `macpkg`, `patch-obb check / new / ggm / pack`, `player donor` (mono armv7; il2cpp arm64 `--managed`), `convert --plugin animclips` (the DLC: `--steps shaders,textures,audio`), `journal-files`, `android-data` (64-bit: `--mono64`) | yes: the release ships no Python (its `codepatch` is .NET) |
 
-So the android, mono-arm64 and box64 routes' releases ship pmu and no Python unless the port's
-shaders are Metal ones or it brings converter plugins of its own; the il2cpp-arm64 and apk routes
-still ship the Python for the commands marked no (what is left, and why: the end of this page).
+So the android, mono-arm64, il2cpp-arm64 and box64 routes' releases ship pmu and no Python unless
+the port's shaders are Metal ones or it brings converter plugins of its own; the apk route still
+ships the Python for the commands marked no (what is left, and why: the end of this page).
 
 ## Layout
 
@@ -104,6 +105,7 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `shaderx` | shader blobs (shaders/blob.py) and the GLSL rewriting the convert step does (shaders/convert.py, glsl.py, step.py and what they call), as pure functions; Unity's binding info (dxbc.py's Bindings), Direct3D 11 (dxbc.py, with pmhlslcc), Vulkan (vulkan.py, spirv.py, with pmspirvcross), Metal (metal.py), grab_fetch and fused_post programs |
 | `convert` | `pmu convert` (on unityfs, shaderx, texcodec): __main__.py's convert path, job.py (the in-place run and its journal), the steps shaders (step.py's files and summary; on the Shader objects: Direct3D 11, Vulkan and Metal sources, compute shaders, grab_fetch, fused_post), settings, audio, quality (with monotree.rs), textures (textures.py's Unity-file layer) and Cuphead's plugin step animclips |
 | `androiddata` | `android-data` and `patch-obb pack` (android_data.py and what it uses on a setup's path: clrmeta.py, plugins.py, retarget.py, typetrees.py, streaming.py, unity_version.py), on `unityfs` and `pkgzip` |
+| `il2cpp` | `il2cpp --on-device` and `il2cpp fetch` (il2cpp.py's toolchain and build, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py, il2cpp_device_lock.py), on `pkgzip` (range reads, NSIS), `androiddata` (.NET metadata, versions, JSON) and `unityfs` (MonoManager's assembly list) |
 
 Later (on top of `unityfs`): `android-data`, `patch-obb pack`.
 
@@ -206,6 +208,62 @@ options, errors), and compares statuses, output and trees (`PMU=<the musl build>
 a setup ships);
 `tests/golden/convert.sh <dir> [rs|rs-py|py-rs|both]` does it on Cuphead's data from
 `$PMU_TEST_DATA` with the setup's arguments, against `converted-fast`.
+
+### `pmu il2cpp`
+
+`pmu il2cpp <data> <out> --on-device [--abi --home --pkg --jobs --keep-cpp --strip --unity
+--managed-file --asmpatch --assembly-patch NAME COMMAND --streaming-assets --data-path --link-xml
+--dry-run --toolchain]` and `pmu il2cpp fetch <version> [--on-device ...]` are crates/il2cpp:
+il2cpp.py's toolchain and build (`tools.rs`, `build.rs`), il2cpp_device.py (`device.rs`: the tool
+folder from Debian's packages (ar, data.tar.xz, `tar.rs`) and Microsoft's .NET tarball, pinned
+by `lock.rs`, a copy of il2cpp_device_lock.py that a test checks; `native.rs`: the steps, the
+compile scheduler, the wrappers' scripts), il2cpp_bee.py (`bee.rs`), il2cpp_mix.py (`mix.rs`),
+the range reads of `fetch.rs` (pkgzip's HTTP client and NSIS reader; NDK zip members) and
+tools/il2cpp/ndk-clang.sh built in (`src/ndk-clang.sh`, checked against the repository's by a
+test). The build runs the same programs (UnityLinker, il2cpp, clang/lld 14 through the wrappers)
+with the same command lines, environment and folders as the Python; what pmu writes itself (the
+fetched parts, the tool folder and its wrappers, the staged assemblies, link.xml files, Bee's
+written and copied files, the step records `.done-*` and `pmunity-done.jsonl`, il2cpp.json) is
+written as the Python writes it, so either one continues the other's interrupted
+build. The Docker route (no `--on-device`) stays with the Python (status 2).
+
+`android-data --il2cpp <out>` is androiddata's: IL2CPP's Managed/ (Metadata, Resources, etc)
+instead of the assemblies, the assembly list checked against il2cpp.json's, the build's versions
+and StreamingAssets / data-path patches checked (il2cpp_mismatch, il2cpp_folder_patches), Unity
+2020.x's `buildDate` in boot.config and 2021.x+'s `unity_app_guid` from the metadata's sha256,
+`abi` in android_package.json, one APK when the data fits.
+
+Compared with the Python (2026-11-02), in the `ua-rust` image (arm64, natively, as on the
+handheld; 8 CPUs, 4 GB): `tests/golden/il2cpp_device.sh <data> <scratch> py1|rs1|py2 [options]`
+runs one build at the same paths (`--keep-cpp`, so the generated C++ and the objects are kept)
+and records every file left (sha256, mode) and the text the build writes;
+`tests/golden/il2cpp_compare.py <a> <b> --noise <c>` compares two runs, where <c> is a second run
+of the Python: what differs between two Python runs differs from build to build anyway (il2cpp's
+cached objects are named by hashes of what they are built from, so they are compared by their
+source, from cc.log). `KILL_AT=<n>` kills a build, every process of it, after n compiles, and
+`RESUME=1` runs the next one on what it left.
+`tests/golden/il2cpp_android_data.sh` runs android-data --il2cpp by both on copies of the data.
+The reference Python needs OpenSSL 1.1 (handhelds have it, the image has not: `PY_SSL_LIB`).
+
+Results (2026-11-02; every run with the setup's options, `--streaming-assets obb`):
+
+| data | what it takes through | result |
+|---|---|---|
+| a 2018.4.36f1 Linux game (.NET 4.x), `--dry-run` | Unity's editor parts (il2cpp, the unityaot class libraries), NDK r16b and the IL2CPP player by range reads; UnityLinker's and il2cpp's command lines | the home's 4345 files the same, the messages and command lines the same |
+| the same, the whole build | UnityLinker.exe on Mono, il2cpp.exe on .NET 8, il2cpp's own builder given its turns by the scheduler (677 compiles); the tool folder (37 Debian packages, .NET) | 5757 of 5773 files the same: the tool folder, Unity's parts, the staged assemblies, the 286 MiB of C++, global-metadata.dat, 676 of the 677 objects; libil2cpp.so of the same size. The 16 others differ between two Python runs too: UnityLinker's output (each assembly's MVID), the object of libil2cpp's Runtime.cpp (`__DATE__`, `__TIME__`) and what is linked from it, il2cpp.log's timings, cc.log's response-file name, il2cpp.json's times and memory |
+| the same, killed (every process, as a power cut) after 300 compiles by one implementation and run again by the other, both ways | `.done-*`, il2cpp's object cache | "UnityLinker: done before", "il2cpp: C++ written before", "(279 / 289 done before)"; every file as a fresh build's (but for the build-to-build ones) |
+| the same, `PMUNITY_IL2CPP_SCHED=0` | the job slots instead of the scheduler | the same |
+| Cuphead (macOS, 2017.4.9f1, built with 2017.4.40f1's IL2CPP; .NET 3.5, the "unity" profile) | 2017.x's UnityLinker with its link.xml, Mono's class libraries, NDK r13b, MonoManager's assembly list (unityfs), 752 compiles | 4561 of 4618 files the same (451 MiB of C++, the metadata); the 57 others differ between two Python runs too (the 50 linked assemblies' MVIDs, Runtime.cpp's object, ...) |
+| a 2020.3.49f1 Linux game (incremental GC) | a self-contained .NET Core il2cpp (deps.json), baselib.a, `--jobs`, the time slice, NDK r19 | 5403 of 5428 files the same; the 25 others differ between two Python runs too: 2020.3's il2cpp writes seven of its metadata tables, and so global-metadata.dat, in another order each run, and their objects with them |
+| a 2022.3.36f1 Linux game (URP) | Bee's graph (780 commands; WriteFile payloads, copies), `--allowed-assembly`, NDK r23b | 6176 of 6183 files the same (libil2cpp.so too); the 7 others differ between two Python runs too (Runtime.cpp's object, Bee's own trace, the logs, the done records of what links it) |
+| the same, killed after 250 compiles by pmu and finished by the Python | Bee's pmunity-done.jsonl | "553 commands (227 done before)": every file as a fresh build's (and the compiles cut short's `.o.tmp`) |
+| `il2cpp fetch 6000.0.58f2 --on-device` | a mixed build's toolchain: Unity 6's editor parts, the converter (2022.3.62f3) and its compat check, the mixed folder, NDK r23b and its API 23 libraries, the tool folder | the 6856 files and the printed JSON the same |
+| `android-data --il2cpp` on the builds of 2018.4, 2020.3 (boot.config's buildDate), 2022.3 (unity_app_guid) | the setup's arguments, `--consume-src --pack all` | status, every file (189, 183, 203: the APK, android_package.json, the report, what is left of the data) and the state the same |
+| the 2018.4 game through the route on pmu alone | `il2cpp --on-device`, `convert` (shaders, settings), `android-data --il2cpp`, then the arm64 rig (tools/emu) | its title menu ("Scripting Backend 'il2cpp', CPU 'arm64-v8a'"), no exception |
+
+pmu is not faster at this: the time is UnityLinker's, il2cpp's and the compilers' (the same programs);
+what pmu saves is the setup's Python (its unpacking and its memory beside the compilers). Not run on
+a handheld yet (the builds are an hour or more on a Cortex-A53).
 
 ## Building and testing
 
@@ -327,17 +385,17 @@ step, so a new plugin needs a name of its own (comparing the file's hash with th
 
 ## What is left, and why
 
-- `il2cpp --on-device` (the il2cpp-arm64 route, and the apk route with `player.il2cpp`): il2cpp.py,
-  il2cpp_device.py, il2cpp_bee.py and il2cpp_mix.py (about 3800 lines) fetch Unity's IL2CPP and
-  player by range reads, Debian's compilers and .NET (pinned by checksum), then run UnityLinker,
-  il2cpp and the C++ build. It is orchestration of other programs more than conversion, but large,
-  and its outputs (a built libil2cpp.so) need their own comparison; not started.
-- `android-data --il2cpp` (il2cpp-arm64): small (the IL2CPP output's files instead of Managed/, the
-  metadata's app guid, the version checks), but its route needs the Python for `il2cpp` anyway;
-  status 2.
+- `il2cpp` without `--on-device` (the Docker route of a porter's PC: tools/il2cpp/root.sh's
+  folders in a stock container): status 2. pmu is for the handheld; a PC runs the Python.
+- Unity 2023.1 - 6000.2's mixed builds (crates/il2cpp's mix.rs) are compared on `il2cpp fetch` (the
+  converter, the mixed folder, NDK r23b's API 23 libraries) but not on a whole build: no Mono game
+  of those versions was on this machine.
 - The apk route: `apk` (apk.py, about 1100 lines: APK, split APKs, XAPK and APKS zips, an AAB
   rebuilt into one APK, the OBBs' names, android_package.json) and the setup's `"$PY" -c` line that
-  reads apk.json into shell variables (a `pmu` subcommand or sed would do); not started.
+  reads apk.json into shell variables (a `pmu` subcommand or sed would do). Its `--il2cpp
+  --on-device` build is `il2cpp::build` (crates/il2cpp: `BuildOpts` with `data_version` and
+  `listed`, as apk.py calls il2cpp.build; `Error::Unsupported` where the Python raises
+  unity_version.Unsupported, which apk.py turns into a refusal).
 - Metal releases: pmu translates them as the Python does on everything compared so far, but no
   macOS game's own shaders were on this machine; one corpus run (`regress.py pmu --set
   'shaders.from=["metal"]' --convert-only` on macOS builds of 2020.3+) and `metal` in port.py's

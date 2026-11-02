@@ -36,7 +36,7 @@ for impl in py rs; do
       while IFS= read -r f; do echo "$(sha256sum < "$f" | cut -c1-64) $f"; done ) > "$S/ad.$impl/manifest"
   # the state without the sources' times (they are the copies' own)
   sed -E 's/\[[0-9]+, [0-9]+, /[<size>, <mtime>, /g' "$S/work/android/.android_data_state.json" > "$S/ad.$impl/state" 2>/dev/null
-  cp "$S/work/android/android_package.json" "$S/ad.$impl/" 2>/dev/null
+  cp "$S/work/android/zip/android_package.json" "$S/ad.$impl/" 2>/dev/null
 done
 rm -rf "$S/work"
 for f in status manifest state android_package.json; do
