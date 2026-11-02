@@ -551,3 +551,26 @@ impl Job {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rustix::fs::{flock, FlockOperation};
+
+    #[test]
+    fn the_folder_is_locked_while_a_job_holds_it() {
+        let d = std::env::temp_dir().join(format!("pmu-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let held = super::lock_dir(&d).unwrap().unwrap();
+        // (another job of this process shares it)
+        assert!(super::lock_dir(&d).unwrap().is_some());
+        // another open of the folder, as another process's: refused while held
+        let other = std::fs::File::open(&d).unwrap();
+        assert_eq!(
+            flock(&other, FlockOperation::NonBlockingLockExclusive),
+            Err(rustix::io::Errno::WOULDBLOCK)
+        );
+        drop(held);
+        assert!(flock(&other, FlockOperation::NonBlockingLockExclusive).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

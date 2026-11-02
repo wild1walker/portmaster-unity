@@ -17,6 +17,8 @@ use unityfs::{DataFile, Options, Value};
 /// texture's blocks a byte pattern of its name's length (16 bytes a 4x4 block).
 struct Fake {
     seen: Vec<String>,
+    /// whether the step may convert several textures at once (worker codecs)
+    workers: bool,
 }
 
 impl Codec for Fake {
@@ -66,10 +68,23 @@ impl Codec for Fake {
     fn summary(&mut self) -> Vec<String> {
         vec![format!("fake: {} textures", self.seen.len())]
     }
+
+    fn worker(&self) -> Option<Box<dyn Codec + Send>> {
+        self.workers.then(|| {
+            Box::new(Fake {
+                seen: Vec::new(),
+                workers: false,
+            }) as Box<dyn Codec + Send>
+        })
+    }
 }
 
 fn temp(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("pmu-textures-{}-{name}", std::process::id()));
+    let d = std::env::temp_dir().join(format!(
+        "pmu-textures-{}-{name}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -84,6 +99,16 @@ fn f32_of(v: &Value, path: &[&str]) -> f32 {
 
 #[test]
 fn textures_layer_with_a_stand_in_codec() {
+    textures_layer(false);
+}
+
+/// The same with the file's small textures converted on workers: the same files.
+#[test]
+fn textures_layer_with_workers() {
+    textures_layer(true);
+}
+
+fn textures_layer(workers: bool) {
     let Some(db) = madeup::db() else {
         eprintln!("PMU_TPK not set: skipped");
         return;
@@ -188,7 +213,10 @@ fn textures_layer_with_a_stand_in_codec() {
     textures::run_with(
         &mut job,
         &Args::default(),
-        Box::new(Fake { seen: Vec::new() }),
+        Box::new(Fake {
+            seen: Vec::new(),
+            workers,
+        }),
     )
     .unwrap();
 
