@@ -4,12 +4,16 @@
 //!
 //! - [`cli`]: the arguments, the config and `--set`, the step order, the run.
 //! - [`job`]: [`job::Job`], the in-place conversion with its journal `.pmunity.json`.
-//! - [`steps`]: shaders, settings, audio, textures and Cuphead's plugin step animclips.
+//! - [`steps`]: shaders (compute shaders too), settings, audio, textures, quality and Cuphead's
+//!   plugin step animclips.
+//! - [`monotree`]: MonoBehaviour type trees from the game's assemblies (the quality step's URP
+//!   assets).
 //! - [`pyjson`]: JSON and the Python values the job prints, as Python has them.
 //! - [`version`]: the data's Unity version and the check made first.
 pub mod cli;
 pub mod error;
 pub mod job;
+pub mod monotree;
 pub mod pyjson;
 pub mod steps;
 pub mod version;

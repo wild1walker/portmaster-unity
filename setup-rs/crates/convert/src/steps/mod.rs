@@ -3,7 +3,9 @@
 //! writes each converted file through the job and journals it.
 pub mod animclips;
 pub mod audio;
+pub mod compute;
 pub mod grabfetch;
+pub mod quality;
 pub mod settings;
 pub mod shaders;
 pub mod textures;
@@ -29,9 +31,7 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         ("textures".into(), textures::run),
         ("settings".into(), |job, _| settings::run(job)),
         ("audio".into(), |job, _| audio::run(job)),
-        ("quality".into(), |_, _| {
-            Err(Error::NotPorted("the quality step".into()))
-        }),
+        ("quality".into(), |job, _| quality::run(job)),
     ]
 }
 

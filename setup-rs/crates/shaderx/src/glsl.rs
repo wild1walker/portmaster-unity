@@ -2,8 +2,8 @@
 //! renderer, as shaders/glsl.py does it (its docstring has the rules): the #version line, the
 //! desktop extensions ES has built in dropped, default precisions, the const-arrays and unroll
 //! rewrites, and the checks that make a program Unsupported (no ES equivalent) or NeedsES31 (GLSL
-//! ES 3.10). GLSL 4.x stages (GLCore41/43 programs) get the 4.x rules too. Compute kernels
-//! (glsl.kernel_to_es) are not ported.
+//! ES 3.10). GLSL 4.x stages (GLCore41/43 programs) get the 4.x rules too; compute kernels
+//! (ComputeShader assets) become GLSL ES 3.10 compute shaders (kernel_to_es).
 //!
 //! The Python works with `re` on str; the patterns here are the same with the `regex` crate, with
 //! Python's `\s` (which also takes \x1c - \x1f) and what `regex` lacks (look-ahead, back
@@ -812,6 +812,279 @@ pub fn program_to_es(
         last = b;
     }
     out.push_str(&code[last..]);
+    Ok(out)
+}
+
+// ---- compute kernels (ComputeShader assets): glsl.kernel_to_es
+
+const DROP_EXTENSIONS_COMPUTE: [&str; 7] = [
+    "GL_ARB_explicit_attrib_location",
+    "GL_ARB_shader_bit_encoding",
+    "GL_ARB_shading_language_420pack",
+    "GL_ARB_shader_storage_buffer_object",
+    "GL_ARB_shader_image_load_store",
+    "GL_ARB_compute_shader",
+    "GL_ARB_shader_atomic_counters",
+];
+/// ES 3.10: the only formats an image may be read and written in.
+const RW_IMAGE_FORMATS: [&str; 3] = ["r32f", "r32i", "r32ui"];
+
+struct KernelPatterns {
+    /// _UNSUPPORTED_COMPUTE, in its order; `offset_rule`: the index of the layout rule whose
+    /// second alternative has a negative look-ahead (checked by hand: group 2 is that alternative)
+    unsupported: Vec<Rule>,
+    offset_rule: usize,
+    not_atomic_uint: Regex,
+    image_decl_line: Regex,
+    local_size: Regex,
+    image_atomic: Regex,
+    uniform_word: Regex,
+    rw_qualifier: Regex,
+}
+
+static KX: LazyLock<KernelPatterns> = LazyLock::new(|| {
+    let r = &*RX;
+    let from4x = |i: usize| Rule {
+        re: r.unsupported_4x[i].re.clone(),
+        what: r.unsupported_4x[i].what,
+        group: r.unsupported_4x[i].group,
+    };
+    let unsupported = vec![
+        from4x(0),
+        from4x(1),
+        from4x(2),
+        rule(
+            r"\b(textureQueryLod|textureQueryLevels|textureSamples|imageSamples|fma|interpolateAt\w+)\s*\(",
+            "ES 3.2+ / desktop function",
+        ),
+        from4x(4),
+        // `offset` only on atomic counters (ES 3.10 has them in compute shaders):
+        // ...|layout\s*\([^)]*\boffset\b[^)]*\)(?!\s*uniform\s+atomic_uint\b)
+        rule(
+            r"layout\s*\([^)]*\b(index|component|xfb_\w+|origin_upper_left|pixel_center_integer|depth_\w+|align|stream)\b|(layout\s*\([^)]*\boffset\b[^)]*\))",
+            "layout qualifier",
+        ),
+        from4x(6),
+        from4x(7),
+        from4x(8),
+    ];
+    KernelPatterns {
+        unsupported,
+        offset_rule: 5,
+        not_atomic_uint: re(r"\A\s*uniform\s+atomic_uint\b"),
+        image_decl_line: re(&format!(
+            r"(?m)^(?P<pre>[^\n;{{}}]*?)\b(?P<type>{})\s+(?P<name>\w+)\s*(?P<arr>\[[^\]]*\])?\s*;",
+            IMAGE_TYPES.join("|")
+        )),
+        local_size: re(r"layout\s*\([^)]*\blocal_size_x\b"),
+        image_atomic: re(r"\bimageAtomic\w+\s*\("),
+        uniform_word: re(r"\b(uniform)\b"),
+        rw_qualifier: re(r"\b(readonly|writeonly)\b"),
+    }
+});
+
+/// The first rule of _UNSUPPORTED_COMPUTE that matches (rx.search in the rules' order).
+fn first_kernel_match(code: &str) -> Option<(&'static str, String)> {
+    let k = &*KX;
+    k.unsupported.iter().enumerate().find_map(|(i, r)| {
+        let c = if i == k.offset_rule {
+            find_checked(&r.re, code, 0, |c| match c.get(2) {
+                Some(m) => !k.not_atomic_uint.is_match(&code[m.end()..]),
+                None => true,
+            })
+        } else {
+            r.re.captures(code)
+        }?;
+        Some((
+            r.what,
+            py::strip(c.get(r.group).unwrap().as_str()).to_string(),
+        ))
+    })
+}
+
+/// Whether an image declaration's `pre` (what precedes its type on the line) has a layout with a
+/// format qualifier.
+fn has_format(pre: &str) -> bool {
+    let r = &*RX;
+    r.layout_args
+        .captures_iter(pre)
+        .any(|q| r.image_format.is_match(&q[1]))
+}
+
+/// Gives each image declared without a format qualifier the one `formats` names (ES 3.10 needs one).
+fn image_formats(
+    src: &str,
+    formats: Option<&std::collections::HashMap<String, String>>,
+) -> Result<String, Unsupported> {
+    let (r, k) = (&*RX, &*KX);
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut last = 0;
+    for m in k.image_decl_line.captures_iter(src) {
+        let whole = m.get(0).unwrap();
+        out.push_str(&src[last..whole.start()]);
+        last = whole.end();
+        let pre = &m["pre"];
+        let lay = r.layout_args.captures(pre);
+        if lay.as_ref().is_some_and(|l| r.image_format.is_match(&l[1])) {
+            out.push_str(whole.as_str());
+            continue;
+        }
+        let Some(fmt) = formats
+            .and_then(|f| f.get(&m["name"]))
+            .filter(|f| !f.is_empty())
+        else {
+            out.push_str(whole.as_str());
+            continue;
+        };
+        if !IMAGE_FORMATS.contains(&fmt.as_str()) {
+            return Err(Unsupported::new(format!(
+                "COMPUTE: image {} of format {fmt} (GLSL ES has no such image format)",
+                py::repr(&m["name"])
+            )));
+        }
+        let new_pre = match &lay {
+            Some(l) => {
+                let g = l.get(0).unwrap();
+                format!(
+                    "{}layout({}, {fmt}){}",
+                    &pre[..g.start()],
+                    py::strip(&l[1]),
+                    &pre[g.end()..]
+                )
+            }
+            None => k
+                .uniform_word
+                .replacen(pre, 1, NoExpand(&format!("layout({fmt}) uniform")))
+                .into_owned(),
+        };
+        out.push_str(&new_pre);
+        out.push_str(&whole.as_str()[pre.len()..]);
+    }
+    out.push_str(&src[last..]);
+    Ok(out)
+}
+
+/// ES 3.10: an image of a format other than r32f, r32i and r32ui is readonly or writeonly.
+fn check_image_access(code: &str) -> Result<(), Unsupported> {
+    let (r, k) = (&*RX, &*KX);
+    for m in k.image_decl_line.captures_iter(code) {
+        let pre = &m["pre"];
+        if let Some(f) = r.image_format.captures(pre) {
+            if !RW_IMAGE_FORMATS.contains(&&f[1]) && !k.rw_qualifier.is_match(pre) {
+                return Err(Unsupported::new(format!(
+                    "COMPUTE: image {} read and written ({}: GLSL ES reads and writes only r32f, r32i and r32ui images)",
+                    py::repr(&m["name"]),
+                    &f[1]
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The names of the images a kernel declares without a format qualifier (glsl.image_names).
+pub fn image_names(src: &str) -> Vec<String> {
+    let k = &*KX;
+    let body = strip_comments(src);
+    k.image_decl_line
+        .captures_iter(&body)
+        .filter(|m| !has_format(&m["pre"]))
+        .map(|m| m["name"].to_string())
+        .collect()
+}
+
+/// One compute kernel (HLSLcc's GLSL 4.20 / 4.30 for OpenGL Core: one compute shader, starting
+/// with its #version line) -> GLSL ES 3.10 (glsl.kernel_to_es). `image_formats`: {image name:
+/// format qualifier} for the images the kernel declares without one (write-only images). `notes`
+/// gets the rewrites applied ("COMPUTE const-arrays <n>", "COMPUTE unroll <n>").
+pub fn kernel_to_es(
+    src: &str,
+    precision: &str,
+    image_formats_of: Option<&std::collections::HashMap<String, String>>,
+    optimize: Optimize,
+    notes: &mut Vec<String>,
+) -> Result<String, Unsupported> {
+    let (r, k) = (&*RX, &*KX);
+    match r.version_line.captures(src) {
+        Some(m) if VERSIONS_4X.contains(&&m[1]) && (m[2].is_empty() || &m[2] == "core") => {}
+        Some(m) => {
+            return Err(Unsupported::new(format!(
+                "COMPUTE: {}",
+                py::rstrip(&format!("#version {} {}", &m[1], &m[2]))
+            )))
+        }
+        None => return Err(Unsupported::new("COMPUTE: no #version line")),
+    }
+    if !k.local_size.is_match(src) {
+        return Err(Unsupported::new(
+            "COMPUTE: not a compute shader (no local_size layout)",
+        ));
+    }
+    let src = drop_precise_dummies(src.to_string());
+    let src = image_formats(&src, image_formats_of)?;
+    let body = strip_comments(&src);
+    let code = code_lines(&body);
+    if let Some((what, m)) = first_kernel_match(&code) {
+        return Err(Unsupported::new(format!(
+            "COMPUTE: {what} {}",
+            py::repr(&m)
+        )));
+    }
+    check_images(&code, "COMPUTE")?;
+    check_image_access(&code)?;
+    let lines = py::splitlines(&src);
+    let mut i = 0;
+    while i < lines.len() && py::strip(lines[i]).is_empty() {
+        i += 1;
+    }
+    let mut out = String::with_capacity(src.len() + 256);
+    out.push_str("#version 310 es\n");
+    i += 1;
+    while i < lines.len() {
+        let s = py::strip(lines[i]);
+        if let Some(e) = r.extension.captures(s) {
+            if !DROP_EXTENSIONS_COMPUTE.contains(&&e[1]) {
+                out.push_str(lines[i]);
+            }
+            i += 1;
+        } else if let Some(w) = r.ifdef_name.captures(s).filter(|w| {
+            i + 2 < lines.len()
+                && re(&format!(r"\A#\s*extension\s+{}\s*:", &w[1]))
+                    .is_match(py::strip(lines[i + 1]))
+                && r.endif.is_match(py::strip(lines[i + 2]))
+        }) {
+            if !DROP_EXTENSIONS_COMPUTE.contains(&&w[1]) {
+                for l in &lines[i..i + 3] {
+                    out.push_str(l);
+                }
+            }
+            i += 3;
+        } else if s.is_empty() {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if k.image_atomic.is_match(&code) {
+        out.push_str("#extension GL_OES_shader_image_atomic : require\n");
+    }
+    out.push_str(&precision_block(&body, precision, true));
+    let mut rest: String = lines[i.min(lines.len())..].concat();
+    if optimize.const_arrays {
+        let (s, n) = const_arrays(&rest);
+        rest = s;
+        if n > 0 {
+            notes.push(format!("COMPUTE const-arrays {n}"));
+        }
+    }
+    if optimize.unroll {
+        let (s, n) = unroll(&rest, UNROLL_MAX, UNROLL_STATEMENTS);
+        rest = s;
+        if n > 0 {
+            notes.push(format!("COMPUTE unroll {n}"));
+        }
+    }
+    out.push_str(&rest);
     Ok(out)
 }
 

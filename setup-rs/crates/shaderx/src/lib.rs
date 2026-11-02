@@ -3,7 +3,8 @@
 //!
 //! * [`blob`]: the per-platform program blob of a Shader (LZ4 blocks, entry tables, entries);
 //! * [`lz4`]: LZ4 blocks as python-lz4 reads and writes them (LZ4HC level 9, liblz4 1.9.4);
-//! * [`glsl`]: OpenGL Core GLSL -> GLSL ES 3.00 / 3.10 (a program's text in, its text out);
+//! * [`glsl`]: OpenGL Core GLSL -> GLSL ES 3.00 / 3.10 (a program's text in, its text out), and
+//!   compute kernels -> GLSL ES 3.10 (`kernel_to_es`);
 //! * [`convert`]: a Shader's fields in ([`convert::Shader`]), the fields the step writes out
 //!   ([`convert::Edit`]) and its report;
 //! * [`step`]: the step's summary lines;
@@ -11,8 +12,8 @@
 //!   the convert crate's);
 //! * [`tree`] (feature `tree`): a Shader object's tree (unityfs) and its blob.
 //!
-//! Only the OpenGL Core source is ported (Direct3D 11, Vulkan and Metal programs, compute
-//! kernels and fused_post are not).
+//! Only the OpenGL Core source is ported (Direct3D 11, Vulkan and Metal programs and fused_post
+//! are not).
 pub mod blob;
 pub mod convert;
 pub mod glsl;

@@ -649,6 +649,11 @@ impl Assembly {
         Ok(out)
     }
 
+    /// The type a method row belongs to (clrmeta.type_of_method).
+    pub fn type_of_method(&self, row: u32) -> Result<Option<&TypeInfo>> {
+        self.owner(true, row)
+    }
+
     /// The type whose member list (methods or fields) holds row.
     fn owner(&self, methods: bool, row: u32) -> Result<Option<&TypeInfo>> {
         let ts = self.types()?;

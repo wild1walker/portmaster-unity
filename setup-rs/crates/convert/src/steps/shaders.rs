@@ -9,9 +9,10 @@
 //! Shader trees read, given to shaderx, the changed ones saved and the file written in place.
 //!
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
-//! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs). Direct3D 11, Vulkan
-//! and Metal sources, compute shaders and `fused_post` stop the step as not ported (the setup
-//! runs the Python for those).
+//! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs), compute shaders
+//! (`compute`, on by default: compute.rs). Direct3D 11, Vulkan and Metal sources and `fused_post`
+//! stop the step as not ported (the setup runs the Python for those).
+use super::compute;
 use super::grabfetch;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
@@ -234,7 +235,12 @@ fn shader_files(job: &Job, bundles: Option<&regex::Regex>) -> Vec<String> {
 
 // ---- a Shader object's tree as shaderx's Shader, and an Edit written back into it
 
+/// A list of integers; a UInt8 array too, which unityfs keeps as bytes (UnityPy reads a
+/// vector<UInt8> such as a pass's m_Platforms (2020.1+) as a list).
 fn ints(v: &Value, what: &str) -> Result<Vec<i64>> {
+    if let Value::Bytes(b) = v {
+        return Ok(b.iter().map(|&x| x as i64).collect());
+    }
     let bad = || Error::Value(format!("{what}: not a list of integers"));
     v.as_array()
         .ok_or_else(bad)?
@@ -460,6 +466,7 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     let mut tr = Translations::new();
     let mut results: Vec<convert::Report> = Vec::new();
     let mut gresults: Vec<grabfetch::GfResult> = Vec::new();
+    let mut cresults: Vec<compute::ComputeResult> = Vec::new();
     let mut changed_files = 0usize;
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
@@ -482,10 +489,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
             Err(e) => return Err(e),
         };
         let mut n = 0usize;
-        for (pid, class) in objects(&f) {
-            if class == "ComputeShader" && s.compute {
-                return Err(Error::NotPorted(format!("{rel}: compute shaders")));
-            }
+        let objs = objects(&f);
+        for (pid, class) in &objs {
+            let pid = *pid;
             if class != "Shader" {
                 continue;
             }
@@ -536,6 +542,24 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
             }
             results.push(r);
         }
+        if s.compute {
+            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+            for (pid, class) in &objs {
+                if class != "ComputeShader" {
+                    continue;
+                }
+                let mut t = f.sf.read_typetree(*pid)?;
+                let r = compute::add_gles3(&mut t, &unity, &s.precision, s.replace, s.optimize)?;
+                if r.status == "converted" {
+                    f.sf.save_typetree(*pid, &t)?;
+                    n += 1;
+                }
+                if r.status == "skipped" || !r.failed.is_empty() {
+                    job.log(&format!("shaders: {rel}: compute shader {r}"));
+                }
+                cresults.push(r);
+            }
+        }
         if n > 0 {
             job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))?;
             changed_files += 1;
@@ -550,6 +574,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     for line in shaderx::step::summary(&results, changed_files, &s.precision) {
         job.log(&line);
+    }
+    if !cresults.is_empty() {
+        job.log(&compute::summary(&cresults));
     }
     if let Some(always) = s.grab_fetch {
         job.log(&grabfetch::summary(&gresults, always));
