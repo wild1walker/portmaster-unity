@@ -591,6 +591,44 @@ mod tests {
     }
 
     #[test]
+    fn damaged_tables_of_contents() {
+        // (the fuzz target's findings) a TOC size of 2^64 - 1: refused, not the whole file read
+        // and not an overflow of the heap's offset
+        let tmp = Tmp::new("toc");
+        let mut x = xar(&[("Payload", b"x")]);
+        x[8..16].copy_from_slice(&u64::MAX.to_be_bytes());
+        let e = Xar::open(&tmp.write("a.pkg", &x))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            e.contains("a table of contents of 18446744073709551615 bytes"),
+            "{e}"
+        );
+        // a TOC that inflates past MAX_TOC (a zlib bomb): an error, not gigabytes of XML
+        let bomb = zlib(&vec![b' '; crate::xar::MAX_TOC as usize + 1]);
+        let mut x = xar(&[("Payload", b"x")]);
+        x.truncate(28);
+        x[8..16].copy_from_slice(&(bomb.len() as u64).to_be_bytes());
+        x.extend(bomb);
+        let e = Xar::open(&tmp.write("b.pkg", &x))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("a table of contents of more than"), "{e}");
+        // data at offsets that overflow 128 bits added up: the installer is short of them
+        let toc = "<xar><toc><file><name>Payload</name><data><offset>99999999999999999999999999999999999999</offset>\
+                   <length>99999999999999999999999999999999999999</length></data></file></toc></xar>";
+        let z = zlib(toc.as_bytes());
+        let mut x = xar(&[]);
+        x.truncate(28);
+        x[8..16].copy_from_slice(&(z.len() as u64).to_be_bytes());
+        x.extend(z);
+        let e = Xar::open(&tmp.write("c.pkg", &x)).err().unwrap();
+        assert_eq!(e.status(), 3);
+    }
+
+    #[test]
     fn bundle_name() {
         assert_eq!(
             gog_bundle_name("a gog_bundle_name=\"x/y\" gog_bundle_name=\"Game.app\""),

@@ -17,6 +17,9 @@ pub struct Cpio<R> {
     pad: usize,
 }
 
+/// The longest member name read: odc's 6 octal digits' most, far more than any path.
+const MAX_NAME: i128 = 1 << 18;
+
 /// macpkg._exact: n bytes, else the EOFError of an archive cut short.
 pub fn exact(s: &mut impl Read, n: usize, what: &str) -> Result<Vec<u8>> {
     let mut v = Vec::new();
@@ -91,6 +94,12 @@ impl<R: Read> Cpio<R> {
     }
 
     fn name(&mut self, namesize: i128) -> Result<String> {
+        // (newc's 8 hex digits could ask for a name of 4 GB, read into memory)
+        if namesize > MAX_NAME {
+            return Err(Error::Fail(format!(
+                "ValueError: cpio name size {namesize}"
+            )));
+        }
         let n = usize::try_from(namesize.max(0)).unwrap_or(usize::MAX);
         let mut b = exact(&mut self.s, n, "cpio archive ends early")?;
         b.pop();
@@ -209,5 +218,11 @@ pub(crate) mod tests {
         let a = odc(&[("./a", Some(b"abc"))]);
         let e = Cpio::new(&a[..40]).next_member().err().unwrap().to_string();
         assert_eq!(e, "EOFError: cpio archive ends early");
+        // a newc name of 4 GB (the fuzz target's): refused before it is read into memory
+        let mut h = newc(&[("x", 0o100644, b"")]);
+        h[94..102].copy_from_slice(b"FFFFFFFF");
+        h.extend(vec![b'n'; 1 << 20]);
+        let e = Cpio::new(&h[..]).next_member().err().unwrap().to_string();
+        assert_eq!(e, "ValueError: cpio name size 4294967295");
     }
 }

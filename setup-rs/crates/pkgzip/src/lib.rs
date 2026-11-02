@@ -69,6 +69,11 @@ impl From<Error> for io::Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// The largest LZMA dictionary allocated for a stream whose dictionary size is read from the
+/// file (zip's LZMA, NSIS, .lzma and xz in pbzx): a damaged size could ask for 4 GB. Clamping is
+/// exact for output up to this size (no match reaches further back than the output).
+pub const MAX_DICT: u32 = 1 << 28;
+
 /// An exception the Python would raise, as an Err.
 pub fn fail<T>(msg: impl Into<String>) -> Result<T> {
     Err(Error::Fail(msg.into()))

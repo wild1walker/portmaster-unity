@@ -32,14 +32,19 @@ pub struct Xar {
     pub entries: Vec<Entry>,
 }
 
-/// zlib.decompress: the whole stream, or the error of one cut short.
-fn zlib_decompress(data: &[u8]) -> Result<Vec<u8>> {
+/// The largest table of contents read, compressed or not (a game's lists its few thousand
+/// files in a few MB): it is held in memory and parsed whole, and its sizes come from the file.
+pub const MAX_TOC: u64 = 64 << 20;
+
+/// zlib.decompress: the whole stream, or the error of one cut short; more than `max` bytes out
+/// is an error.
+fn zlib_decompress(data: &[u8], max: u64) -> Result<Vec<u8>> {
     let mut z = Decompress::new(true);
-    let mut out = Vec::with_capacity(data.len() * 4);
+    let mut out = Vec::with_capacity(data.len().saturating_mul(4).min(max as usize));
     loop {
         let pos = z.total_in() as usize;
         if out.len() == out.capacity() {
-            out.reserve(out.len().max(1 << 16));
+            out.reserve(out.len().max(1 << 16).min(max as usize + 1 - out.len()));
         }
         let st = z
             .decompress_vec(&data[pos..], &mut out, FlushDecompress::Finish)
@@ -48,6 +53,11 @@ fn zlib_decompress(data: &[u8]) -> Result<Vec<u8>> {
                     "zlib.error: Error -3 while decompressing data: {e}"
                 ))
             })?;
+        if out.len() as u64 > max {
+            return fail(format!(
+                "ValueError: a table of contents of more than {max} bytes"
+            ));
+        }
         if st == Status::StreamEnd {
             return Ok(out); // (what follows the stream is ignored, as zlib.decompress does)
         }
@@ -102,10 +112,15 @@ impl Xar {
         }
         let hsize = u16::from_be_bytes([head[4], head[5]]) as u64;
         let toc_c = u64::from_be_bytes(head[8..16].try_into().unwrap());
+        if toc_c > MAX_TOC {
+            return fail(format!(
+                "ValueError: {path}: a table of contents of {toc_c} bytes (a damaged installer)"
+            ));
+        }
         f.seek(SeekFrom::Start(hsize))?;
         let mut toc = Vec::new();
         (&mut f).take(toc_c).read_to_end(&mut toc)?;
-        let xml = zlib_decompress(&toc)?;
+        let xml = zlib_decompress(&toc, MAX_TOC)?;
         let text = String::from_utf8(xml)
             .map_err(|e| Error::Fail(format!("xml.etree.ElementTree.ParseError: {e}")))?;
         let opts = roxmltree::ParsingOptions {
@@ -115,14 +130,15 @@ impl Xar {
         let doc = roxmltree::Document::parse_with_options(&text, opts)
             .map_err(|e| Error::Fail(format!("xml.etree.ElementTree.ParseError: {e}")))?;
         let root = doc.root_element();
+        // (toc_c is at most MAX_TOC: no overflow)
         let heap = hsize + toc_c;
         // a download or copy that stopped early: the table of contents is whole but the data it
         // points to is not (GOG's installers keep PackageInfo after the game, at the very end)
         let mut end: i128 = 0;
         for d in root.descendants().filter(|n| is(n, "data")) {
-            end = end.max(int_of(d, "offset")? + int_of(d, "length")?);
+            end = end.max(int_of(d, "offset")?.saturating_add(int_of(d, "length")?));
         }
-        let need = heap as i128 + end;
+        let need = (heap as i128).saturating_add(end);
         let have = f.metadata()?.len() as i128;
         if have < need {
             return Err(Error::Incomplete(format!(
