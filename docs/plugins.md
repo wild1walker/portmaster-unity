@@ -1,5 +1,7 @@
 # Native plugins, platform SDKs and HTTPS
 
+(A port's own conversion steps, `--plugin`: [Converter plugins](#converter-plugins-a-ports-own-conversion-steps).)
+
 A desktop build ships its native plugins as x86/x86-64 (or macOS) libraries in `<Game>_Data/Plugins`;
 none of them loads on ARM. What a port can give each library the game's managed code calls:
 
@@ -209,3 +211,62 @@ unknown host, a malformed URL, and the default without `UA_HTTP`).
 ## Corpus results (emulated rig)
 
 See the compat table (docs/compat/README.md, "Plugins and services").
+
+## Converter plugins (a port's own conversion steps)
+
+Not the game's native libraries: a port's own steps for `pmunity convert` (`files.plugins` in
+port.toml; the setup passes each as `--plugin`). Three kinds:
+
+| kind | file | runs on | the release ships |
+|---|---|---|---|
+| field edits | a `.json` file (below) | the setup's pmu and the Python alike (`steps/edits.rs`, `convert/pmunity/edits.py`) | pmu, no Python |
+| built into pmu | `animclips.py` (portmaster-cuphead's) | pmu by the file's name (`plugin()` in `setup-rs/crates/convert/src/steps/mod.rs`, `PMU_PLUGINS` in port.py) | pmu, no Python |
+| Python | any other `.py` with `STEPS = {name: function(job)}` | the Python only (the job's API, in the converter's process) | the setup's Python and the converter |
+
+Most of what a port changes in the data is a field of an object (a quality level, a camera's
+MSAA, a light, an audio setting, a material's keyword): a JSON plugin says which, without code.
+pmu and the Python run it the same way and write the same bytes (checked:
+`setup-rs/tests/golden/convert_madeup.sh`, its `edits` cases; `tools/regress/pmu_pair.py
+--plugin <file>` on a game's data), and a JSON plugin never runs anything, so it is the kind to
+use where it does the job. A Python plugin still works as before; it makes the release ship the
+Python (a bigger release, a slower setup), so port it into a JSON plugin, or into pmu (as
+animclips was: its step in `setup-rs/crates/convert/src/steps/<name>.rs`, checked against the
+plugin with `pmu_pair.py --plugin`), where it can be.
+
+### A JSON plugin
+
+```json
+{"about": "my game's tweaks (not read)",
+ "steps": {
+  "tweaks": [
+   {"file": "globalgamemanagers", "class": "QualitySettings", "set": {"m_CurrentQuality": 0}},
+   {"file": "*", "class": "Camera", "set": {"m_AllowMSAA": false, "far clip plane": 500}},
+   {"file": "level[0-9]*", "class": "Light", "name": "Sun*", "set": {"m_Shadows.m_Type": 0}},
+   {"file": "sharedassets*.assets", "class": "Material", "name": "Water",
+    "set": {"m_SavedProperties.m_Floats.2.1": 0.25}}]}}
+```
+
+port.toml: `files.plugins = ["tweaks.json"]` and the step in the convert section's
+`steps` (e.g. `["shaders", "settings", "audio", "quality", "tweaks"]`), as for a Python plugin.
+
+- `steps`: named steps, each a list of edits; they run where `--steps` or the config's `steps`
+  names them (a name of a built-in step replaces it).
+- An edit: `file`, a glob over the data files' paths relative to the data folder (`/`
+  separated; fnmatch's, case-sensitive: `*` any run of characters including `/`, `?` one,
+  `[seq]`, `[!seq]`); `class`, the object's class as UnityPy names it (`QualitySettings`,
+  `Material`, `Light`, `Camera`, `AudioClip`, `Shader`, ...); `name` (optional), a glob over the
+  object's `m_Name`; `set`, field paths and their new values.
+- A field path: field names joined with `.`; a decimal number indexes a list (0 / 1 the key /
+  value of a map entry, such as a material's `m_Floats`). Field names are the type tree's (as
+  UnityPy's `read_typetree` gives them; `python -m pmunity` has no dump of its own: UnityPy's
+  `o.read_typetree()` in a Python shell shows them).
+- A value: `true` / `false` for a bool, an integer for an integer field (its width is the field's:
+  a value past it is an error), a number for a float, a string for a string. Structs, lists and
+  byte arrays are not replaced whole.
+- Refused: `MonoBehaviour` (its script's fields need the game's assemblies' type trees: a Python
+  plugin, or a step built into pmu), a path that is not there, a value of another kind. The
+  setup stops with the plugin, step, file, object (path id) and field in the message (status 1).
+- Files the glob matches that are not Unity files (streams, configs) and bundles of several
+  serialized files (scene bundles) are left out; a file with an edited object is written again,
+  each file is journaled (an interrupted setup goes on), the log has one line a file and the
+  step's total.

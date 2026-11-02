@@ -22,6 +22,27 @@ rm -rf "$src"
 "$tgt/examples/madeup" "$src"
 cp "$anim" "$src/animclips.py"
 echo '{"steps": ["shaders", "settings", "audio"]}' > "$src/defaults.json"
+# converter plugins without code (edits.py, steps/edits.rs): field edits of every kind, in plain
+# files and bundles, by name and by index; a path that is not there; a plugin that is not one
+cat > "$src/edits.json" <<'EOF'
+{"about": "made-up edits",
+ "steps": {
+  "tweaks": [
+   {"file": "globalgamemanagers", "class": "AudioManager",
+    "set": {"m_Volume": 0.5, "Rolloff Scale": 2, "m_RealVoiceCount": 24, "m_DisableAudio": true, "m_SpatializerPlugin": "none"}},
+   {"file": "global*", "class": "InputManager", "set": {"m_Axes.0.sensitivity": 2.5, "m_Axes.1.invert": true, "m_Axes.2.m_Name": "Renamed"}},
+   {"file": "*", "class": "AudioClip", "name": "*_short", "set": {"m_LoadInBackground": true}},
+   {"file": "level[0-9]*", "class": "AudioClip", "set": {"m_Frequency": 32000}},
+   {"file": "*", "class": "Shader", "name": "TMP/*", "set": {"m_ParsedForm.m_Name": "TMP/Edited"}}],
+  "none": [{"file": "nothing*", "class": "Light", "set": {"m_Intensity": 1}}]}}
+EOF
+cat > "$src/edits_bad.json" <<'EOF'
+{"steps": {"oops": [{"file": "globalgamemanagers", "class": "AudioManager", "set": {"m_Volume.x": 1}}],
+           "kind": [{"file": "globalgamemanagers", "class": "AudioManager", "set": {"m_RealVoiceCount": 1.5}}],
+           "range": [{"file": "globalgamemanagers", "class": "AudioManager", "set": {"m_RealVoiceCount": 9999999999}}]}}
+EOF
+echo '{"steps": {"x": [{"file": "a", "class": "MonoBehaviour", "set": {"m_Enabled": false}}]}}' > "$src/edits_mono.json"
+echo '{"steps": {"x": [' > "$src/edits_broken.json"
 # an ASTC guide of the atlas bundle's textures, made by the Python (astc_guide.py, which needs numpy:
 # fetched with pip into the scratch folder when the image has none) for Cuphead's settings
 pyx() { PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH="$wt/convert:/opt/pylibs:$out/numpy" /opt/py/bin/python3 "$@"; }
@@ -95,5 +116,14 @@ case_ defaults - - Data --config "$src/defaults.json"
 case_ overlay - - Data Out $C
 case_ unknown_step - - Data $C --steps settings,nope
 case_ no_data - - Missing $C
+E="--config $src/defaults.json --plugin $src/edits.json"
+case_ edits - - Data $E --steps settings,tweaks,none
+case_ edits_again both "$E --steps tweaks" Data $E --steps tweaks,shaders
+case_ edits_from_python py "$E --steps tweaks" Data $E --steps settings,tweaks
+case_ edits_bad_path - - Data $E --plugin $src/edits_bad.json --steps oops
+case_ edits_bad_kind - - Data $E --plugin $src/edits_bad.json --steps kind
+case_ edits_bad_range - - Data $E --plugin $src/edits_bad.json --steps range
+case_ edits_mono - - Data --config $src/defaults.json --plugin $src/edits_mono.json --steps x
+case_ edits_broken - - Data --config $src/defaults.json --plugin $src/edits_broken.json --steps x
 echo "$fails failed"
 [ "$fails" = 0 ]

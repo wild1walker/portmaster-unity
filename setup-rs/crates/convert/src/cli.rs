@@ -228,7 +228,8 @@ pub fn run(cli: &Cli) -> Result<()> {
         only: cli.only.clone(),
     };
     for n in &order {
-        let Some(f): Option<StepFn> = steps.iter().find(|(k, _)| k == n).map(|(_, f)| *f) else {
+        let Some(f): Option<StepFn> = steps.iter().find(|(k, _)| k == n).map(|(_, f)| f.clone())
+        else {
             let names: Vec<&str> = steps.iter().map(|(k, _)| k.as_str()).collect();
             return Err(Error::Exit(format!(
                 "unknown step {n}; steps: {}",

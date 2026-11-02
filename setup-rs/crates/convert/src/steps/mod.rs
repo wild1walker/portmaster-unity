@@ -5,6 +5,7 @@ pub mod animclips;
 pub mod audio;
 pub mod compute;
 pub mod d3d11;
+pub mod edits;
 pub mod fusedpost;
 pub mod grabfetch;
 pub mod metal;
@@ -25,24 +26,38 @@ pub struct Args {
     pub only: Option<String>,
 }
 
-pub type StepFn = fn(&mut Job, &Args) -> Result<()>;
+pub type StepFn = std::sync::Arc<dyn Fn(&mut Job, &Args) -> Result<()>>;
 
 /// The steps by name, in the order the Python's dict has them (the built-in steps, `quality`,
 /// then the plugins' in the order they were given).
 pub fn builtin() -> Vec<(String, StepFn)> {
+    use std::sync::Arc;
     vec![
-        ("shaders".into(), shaders::run as StepFn),
-        ("textures".into(), textures::run),
-        ("settings".into(), |job, _| settings::run(job)),
-        ("audio".into(), |job, _| audio::run(job)),
-        ("quality".into(), |job, _| quality::run(job)),
+        ("shaders".into(), Arc::new(shaders::run) as StepFn),
+        ("textures".into(), Arc::new(textures::run)),
+        (
+            "settings".into(),
+            Arc::new(|job: &mut Job, _: &Args| settings::run(job)),
+        ),
+        (
+            "audio".into(),
+            Arc::new(|job: &mut Job, _: &Args| audio::run(job)),
+        ),
+        (
+            "quality".into(),
+            Arc::new(|job: &mut Job, _: &Args| quality::run(job)),
+        ),
     ]
 }
 
-/// The steps a plugin file gives (`--plugin <path>`): the plugins pmu has built in, by the
-/// file's name without .py (Cuphead's convert/animclips.py: `animclips`), so a setup can pass
-/// the same path it gives the Python, or just the name.
+/// The steps a plugin file gives (`--plugin <path>`): a JSON plugin's field edits (edits.rs, as
+/// the Python's edits.py runs them), else the plugins pmu has built in, by the file's name
+/// without .py (Cuphead's convert/animclips.py: `animclips`), so a setup can pass the same path
+/// it gives the Python, or just the name.
 pub fn plugin(path: &str) -> Result<Vec<(String, StepFn)>> {
+    if path.to_lowercase().ends_with(".json") {
+        return edits::steps(path);
+    }
     let name = std::path::Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -50,7 +65,7 @@ pub fn plugin(path: &str) -> Result<Vec<(String, StepFn)>> {
     match name.strip_suffix(".py").unwrap_or(&name) {
         "animclips" => Ok(vec![(
             animclips::STEP.into(),
-            (|job, _| animclips::run(job)) as StepFn,
+            std::sync::Arc::new(|job: &mut Job, _: &Args| animclips::run(job)) as StepFn,
         )]),
         _ => Err(Error::NotPorted(format!("the plugin {path}"))),
     }

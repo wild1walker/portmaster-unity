@@ -27,7 +27,8 @@ the converted files go there and <data> is only read (an overlay: later steps re
 
 The config file (JSON) holds one section per step (shaders, textures, settings, audio, quality) with the
 step's settings; see each module's DEFAULTS. A plugin is a Python file with STEPS = {name:
-function(job)} for a game's own steps, run in the order --steps names them.
+function(job)} for a game's own steps, run in the order --steps names them, or a JSON file of
+field edits (edits.py: steps the setup's pmu runs too).
 """
 import argparse
 import importlib.util
@@ -135,7 +136,8 @@ def main(argv=None):
     c.add_argument('data'); c.add_argument('out', nargs='?')
     c.add_argument('--config', required=True)
     c.add_argument('--steps', default=None, help='comma-separated (default: the config\'s "steps", else ' + ','.join(BUILTIN_STEPS) + ')')
-    c.add_argument('--plugin', action='append', default=[], help="a Python file with STEPS = {name: function(job)}")
+    c.add_argument('--plugin', action='append', default=[], help="a Python file with STEPS = {name: function(job)}, "
+                                                                 "or a JSON file of field edits (edits.py)")
     c.add_argument('--only', help='regex: only convert matching files (tests)')
     c.add_argument('--set', action='append', default=[], metavar='SECTION.KEY=VALUE',
                    help='override a config value (VALUE as JSON, else a string), e.g. --set shaders.precision=highp')
@@ -182,6 +184,11 @@ def main(argv=None):
             cfg.setdefault(sec, {})[key] = v
         steps = {n: _builtin(n) for n in BUILTIN_STEPS + OPTIONAL_STEPS}
         for i, p in enumerate(a.plugin):
+            if p.lower().endswith('.json'):      # a plugin without code: field edits (edits.py)
+                from . import edits
+                for n, f in edits.load(p).items():
+                    steps[n] = (lambda f: lambda job, a: f(job))(f)
+                continue
             spec = importlib.util.spec_from_file_location(f'pmunity_plugin_{i}', p)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
