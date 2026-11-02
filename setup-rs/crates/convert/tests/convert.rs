@@ -376,6 +376,76 @@ fn grab_fetch_on_made_up_data() {
 }
 
 #[test]
+fn dead_varyings_setting() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    let opts = Options {
+        db: Some(db.clone()),
+        ..Default::default()
+    };
+    // on: the grab shader's FOG_LINEAR program writes vs_TEXCOORD0, which its fragment stage never
+    // reads: that output becomes a plain global of the vertex stage; the other program reads it
+    // and stays as it is, and so does every file without such a program
+    let (plain, on) = (temp("dv-plain"), temp("dv-on"));
+    for (dir, set) in [(&plain, None), (&on, Some("shaders.dead_varyings=true"))] {
+        madeup::game(&db, &dir.join("Data"));
+        let mut c = cuphead(dir, "shaders");
+        c.sets.extend(set.map(String::from));
+        cli::run(&c).unwrap();
+    }
+    let files = |d: &Path| {
+        tree(&d.join("Data"))
+            .into_iter()
+            .filter(|(n, _)| !n.starts_with(".pmunity"))
+            .collect::<Vec<_>>()
+    };
+    let (a, b) = (files(&plain), files(&on));
+    let differ: Vec<&String> = a
+        .iter()
+        .zip(&b)
+        .filter(|(x, y)| x != y)
+        .map(|(x, _)| &x.0)
+        .collect();
+    assert_eq!(a.len(), b.len());
+    assert_eq!(differ, ["level0"]);
+    let gles3 = |d: &Path| {
+        let f = DataFile::open(d.join("Data/level0"), &opts).unwrap();
+        let t = f.sf.read_typetree(6).unwrap();
+        let sh = convert::steps::shaders::shader_of(&t).unwrap();
+        let blobs = shaderx::blob::ShaderBlobs::read(&sh.blob).unwrap();
+        let e = blobs.entries(9, &Default::default(), None).unwrap();
+        e.iter()
+            .map(|x| match x {
+                Some(shaderx::blob::Slot::Program(p)) => String::from_utf8(p.code.clone()).unwrap(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let (p, o) = (gles3(&plain), gles3(&on));
+    assert_eq!(p.len(), 4);
+    assert_eq!(o[0], p[0]);
+    assert!(p[2].contains("\nout vec4 vs_TEXCOORD0;\n"));
+    assert_eq!(
+        o[2],
+        p[2].replace("\nout vec4 vs_TEXCOORD0;\n", "\nvec4 vs_TEXCOORD0;\n")
+    );
+    // a value it does not take
+    let dir = temp("dv-bad");
+    madeup::game(&db, &dir.join("Data"));
+    let mut c = cuphead(&dir, "shaders");
+    c.sets.push("shaders.dead_varyings=sometimes".into());
+    assert_eq!(
+        cli::run(&c).unwrap_err().to_string(),
+        "shaders.dead_varyings: 'sometimes' (true or false)"
+    );
+    for d in [plain, on, dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
 fn journal_pending_renames_finished() {
     let dir = temp("pending");
     let data = dir.join("Data");

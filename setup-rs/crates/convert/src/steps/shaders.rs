@@ -9,7 +9,9 @@
 //! Shader trees read, given to shaderx, the changed ones saved and the file written in place.
 //!
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
-//! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs). Direct3D 11, Vulkan
+//! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs). Not in the Python:
+//! `dead_varyings` (true: vertex outputs the fragment stage never reads made plain globals,
+//! shaderx::glsl::dead_varyings; off by default). Direct3D 11, Vulkan
 //! and Metal sources, compute shaders and `fused_post` stop the step as not ported (the setup
 //! runs the Python for those).
 use super::grabfetch;
@@ -88,10 +90,21 @@ fn settings(cfg: &Json) -> Result<Settings> {
         ),
         None => None,
     };
-    let optimize = match get("optimize") {
+    let mut optimize = match get("optimize") {
         None => Optimize::ALL,
         Some(v) => Optimize::from_names(&str_list(v)),
     };
+    // (this port's own: the Python has no dead_varyings and ignores the key)
+    match get("dead_varyings") {
+        None | Some(Json::Null) => {}
+        Some(Json::Bool(b)) => optimize.dead_varyings = *b,
+        Some(other) => {
+            return Err(Error::Value(format!(
+                "shaders.dead_varyings: {} (true or false)",
+                other.repr()
+            )))
+        }
+    }
     let sources: Vec<String> = match get("from") {
         None => vec!["glcore".into()],
         Some(Json::Str(s)) => s.split(',').map(String::from).collect(),

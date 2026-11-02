@@ -6,12 +6,15 @@
 //                                                 and every <dir>/<nnnn>.comp (a compute kernel);
 //                                                 -b: also each program's binary size (BIN lines),
 //                                                 -B: and the binary itself (<out>/<nnnn>.bin)
-//   shadercheck -t <dir> <nnnn>... [-s WxH] [-n N] [-o|-p] [-r R] [-u name=v[,v...]]... [-b|-B out] [-w out]
+//   shadercheck -t <dir> <nnnn>... [-s WxH] [-n N] [-o|-p] [-r R] [-u name=v[,v...]]... [-b|-B out] [-w out] [-m CxR]
 //                                                 time each program's fragment shader: N full-screen
 //                                                 quads (default 720x480, 200) into an RGBA8 texture
 //                                                 (-o: opaque, no blending; -p: premultiplied alpha
 //                                                 blending, as before 2026-10-23), R rounds over the list
-//                                                 (default 1; with more, the median and the range)
+//                                                 (default 1; with more, the median and the range);
+//                                                 -m: each quad a grid of C x R cells (two indexed
+//                                                 triangles each, (C+1)(R+1) vertices) instead of two
+//                                                 triangles: the vertex shader's and the tiler's cost
 //
 // <dir> is what `python -m pmunity shaders-export` writes (index.tsv names the shaders). Prints one
 // line per failure with the driver's log, then a summary; exit status 1 if any program failed.
@@ -391,13 +394,22 @@ static void gpu_clock(char *out, size_t n)
     globfree(&g);
 }
 
+// what one "quad" is: two triangles (a strip), or with -m a grid of g_mc x g_mr cells
+static int g_mc, g_mr;
+static GLsizei g_mesh_count;
+static void draw_geom(void)
+{
+    if (g_mesh_count) glDrawElements(GL_TRIANGLES, g_mesh_count, GL_UNSIGNED_INT, 0);
+    else glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
 static int cmp_double(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return x < y ? -1 : x > y; }
 
 int main(int argc, char **argv)
 {
     int timing = argc > 1 && !strcmp(argv[1], "-t");
     if (argc < 2 + timing) {
-        fprintf(stderr, "usage: shadercheck <dir> [first [count]] [-b|-B out] | shadercheck -t <dir> <nnnn>... [-s WxH] [-n N] [-o|-p] [-r R] [-u name=v,...] [-b|-B out] [-w out]\n");
+        fprintf(stderr, "usage: shadercheck <dir> [first [count]] [-b|-B out] | shadercheck -t <dir> <nnnn>... [-s WxH] [-n N] [-o|-p] [-r R] [-u name=v,...] [-b|-B out] [-w out] [-m CxR]\n");
         return 2;
     }
     const char *dir = argv[1 + timing];
@@ -420,6 +432,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-B") && i + 1 < argc) { g_binary = 1; g_bindir = argv[++i]; }
         else if (!strcmp(argv[i], "-w") && i + 1 < argc) g_outdir = argv[++i];
         else if (!strcmp(argv[i], "-s") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &w, &h);
+        else if (!strcmp(argv[i], "-m") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &g_mc, &g_mr);
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) reps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) rounds = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-u") && i + 1 < argc && g_nuset < 64) {
@@ -468,6 +481,29 @@ int main(int argc, char **argv)
     static const GLfloat quad[] = { -1, -1, 0, 1, 1, -1, 0, 1, -1, 1, 0, 1, 1, 1, 0, 1 };
     GLuint vbo; glGenBuffers(1, &vbo); glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
+    if (g_mc > 0 && g_mr > 0) {
+        // -m: the same full-screen square as a grid of indexed triangles
+        size_t nv = (size_t)(g_mc + 1) * (g_mr + 1);
+        GLfloat *v = malloc(nv * 4 * sizeof *v);
+        GLuint *ix = malloc((size_t)g_mc * g_mr * 6 * sizeof *ix);
+        for (int y = 0; y <= g_mr; y++)
+            for (int x = 0; x <= g_mc; x++) {
+                GLfloat *q = v + ((size_t)y * (g_mc + 1) + x) * 4;
+                q[0] = -1 + 2.0f * x / g_mc; q[1] = -1 + 2.0f * y / g_mr; q[2] = 0; q[3] = 1;
+            }
+        size_t k = 0;
+        for (int y = 0; y < g_mr; y++)
+            for (int x = 0; x < g_mc; x++) {
+                GLuint a = y * (g_mc + 1) + x, b = a + 1, c = a + g_mc + 1, d = c + 1;
+                ix[k++] = a; ix[k++] = b; ix[k++] = c; ix[k++] = b; ix[k++] = d; ix[k++] = c;
+            }
+        glBufferData(GL_ARRAY_BUFFER, nv * 4 * sizeof *v, v, GL_STATIC_DRAW);
+        GLuint ibo; glGenBuffers(1, &ibo); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, k * sizeof *ix, ix, GL_STATIC_DRAW);
+        g_mesh_count = (GLsizei)k;
+        free(v); free(ix);
+        printf("mesh: %dx%d cells, %zu vertices, %zu triangles a quad\n", g_mc, g_mr, nv, k / 3);
+    }
     GLuint built[256];
     for (int p = 0; p < np; p++) built[p] = build(dir, progs[p], 0);
     if (g_outdir) {
@@ -494,7 +530,7 @@ int main(int argc, char **argv)
             default_uniforms(pr);
             glDisable(GL_BLEND);
             glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            draw_geom();
             char path[1024]; snprintf(path, sizeof path, "%s/%04d.%s", g_outdir, progs[p], fl ? "f32" : "rgba8");
             FILE *f = fopen(path, "wb");
             if (fl) { glReadPixels(0, 0, w, h, GL_RGBA, GL_FLOAT, px); if (f) fwrite(px, sizeof *px, (size_t)w * h * 4, f); }
@@ -521,7 +557,7 @@ int main(int argc, char **argv)
         }
         default_uniforms(built[p]);
         if (blend) { glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); }
-        for (double t1 = now() + 1.0; now() < t1;) { glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); glFinish(); }
+        for (double t1 = now() + 1.0; now() < t1;) { draw_geom(); glFinish(); }
         for (GLint a = 0; a < na; a++) glDisableVertexAttribArray(a);
         break;
     }
@@ -543,11 +579,11 @@ int main(int argc, char **argv)
             // blended: an opaque full-screen quad would let the GPU drop the hidden ones
             if (blend) { glEnable(GL_BLEND); glBlendFunc(GL_ONE, blend == 2 ? GL_ONE_MINUS_SRC_ALPHA : GL_ONE); }
             else glDisable(GL_BLEND);
-            for (int k = 0; k < 10; k++) glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            for (int k = 0; k < 10; k++) draw_geom();
             glFinish();
             double t0 = now();
             for (int k = 0; k < reps; k++) {
-                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                draw_geom();
                 if ((k & 15) == 15) glFlush();
             }
             unsigned char probe[4]; glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probe);

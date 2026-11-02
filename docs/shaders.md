@@ -67,6 +67,9 @@ is translated from the first one it has, so a game with OpenGL Core programs con
    (without one it logs "Desired shader compiler platform 9 is not available in shader blob").
 7. Opt-in, off by default (it changes the picture slightly): `grab_fetch`, blend-mode passes that
    read the framebuffer instead of a GrabPass copy ([below](#blend-modes-without-grabpass-copies-grab_fetch-opt-in)).
+8. Opt-in, pmu only, off by default (the same picture, no gain on the Mali-G31's driver):
+   `dead_varyings`, vertex outputs no fragment stage reads made plain globals
+   ([below](#vertex-outputs-no-fragment-stage-reads-dead_varyings-pmu-opt-in)).
 
 ### GLCore41/43 programs (`#pragma target 4.5` and up)
 
@@ -752,7 +755,7 @@ programs in highp, and there arithmetic does decide the cost ([below](#exact-rew
 The timing options (2026-10-23):
 
 ```sh
-shadercheck -t <dir> <n>... [-r R] [-n N] [-u name=v,v,...]... [-b|-B <out>] [-w <out>] [-o|-p] [-s WxH]
+shadercheck -t <dir> <n>... [-r R] [-n N] [-u name=v,v,...]... [-b|-B <out>] [-w <out>] [-o|-p] [-s WxH] [-m CxR]
 ```
 
 - `-r R`: R rounds over the list, the programs interleaved (a GPU clock that moves affects each
@@ -770,6 +773,9 @@ shadercheck -t <dir> <n>... [-r R] [-n N] [-u name=v,v,...]... [-b|-B <out>] [-w
 - `-w <out>`: what each program draws, one quad unblended into an RGBA32F target
   (`<out>/<n>.f32`): a rewrite's picture compared with the original's bit for bit, on the
   device's driver;
+- `-m CxR` (2026-11-02): each "quad" is the same full-screen square as a grid of C x R cells, two
+  indexed triangles each ((C+1)(R+1) vertices): the vertex shader's and the tiler's share of a draw
+  (a small `-s` with a fine grid leaves mostly them);
 - blending is additive (ONE, ONE). With premultiplied alpha (`-p`, as before) a program that writes
   alpha 1 makes its quads opaque, and the Mali's forward pixel kill drops the fragments of the
   quads under the last ones: such programs measured less than a constant colour costs (if the
@@ -947,6 +953,106 @@ programs of the same game have plain arrays of 16 (URP's light limit for mobile 
 glcore route's (The Third Eye's) keep their 32 in a uniform block, which that limit does not count.
 Those variants cannot run on a Mali (the title menu benched does not use them) until the Metal
 route keeps such a constant buffer as a uniform block.
+
+## Vertex outputs no fragment stage reads (`dead_varyings`, pmu, opt-in)
+
+```json
+"shaders": {"dead_varyings": true}            // pmu's convert only (the Python has no such rewrite)
+```
+
+HLSLcc translates each stage of a program alone. A vertex stage writes every member of the HLSL
+vertex-to-fragment struct, while the fragment stage declares only the inputs it reads, so many
+programs write outputs nothing reads: Hollow Knight (6000.0.61f1), 136 of its 564 distinct GLCore
+programs, 228 outputs (lit sprites `Sprites/Diffuse` 36 programs, `Standard` 31, planar
+reflections 16, `Legacy Shaders/Diffuse` 15, text, UI); Cuphead (2017.4), 1,179 of 1,566, 1,844
+outputs (1,080 of those programs are variants of the Post-processing Stack v1's Uber shader, one
+vertex stage text; the sprites the game draws have none). `shaders.dead_varyings`
+(shaderx `glsl::dead_varyings`, after the translation) declares each output whose name the
+fragment stage of the same program never uses as a plain global of the vertex stage instead of an
+`out`; the stage's compiler then drops its stores and the arithmetic that only fed it. Nothing else
+in the text changes: the fragment stage is the same text, and every statement of the vertex stage
+stays (GLSL ES links varyings by name; a program with `layout(location)` varyings, a dead name
+declared twice, or not one vertex and one fragment block is left as it is). Off by default.
+
+What the Mali Offline Compiler (2026.5, Mali-G31, driver r51p0) says, the 75 distinct vertex
+stages of Hollow Knight and 35 of Cuphead that change, per shader (averages; Bifrost splits a vertex
+shader into a position and a varying shader, the varying one is where the outputs are stored):
+
+| shader | stages | varying shader, arithmetic cycles | load/store cycles | work registers |
+|---|---|---|---|---|
+| Hollow Knight `Sprites/Diffuse` (lit sprites; 1 - 2 dead outputs) | 14 | 7.76 -> 6.82 | 15.7 -> 12.4 | 29.3 -> 28.1 |
+| `Standard` (1 - 4) | 18 | 7.32 -> 6.65 | 18.6 -> 15.3 | 29.9 -> 29.1 |
+| `Realtime Reflections/Planar Reflection` | 13 | 7.70 -> 7.23 | 13.5 -> 10.7 | 27.8 -> 27.0 |
+| `UI/Default` (2) | 1 | 3.00 -> 0.50 | 11 -> 6 | 27 -> 18 |
+| TextMeshPro, 6 shaders (1 - 2) | 10 | 8.4 - 18.4 -> 7.1 - 17.9 | 15 - 23.5 -> 13 - 20 | 30 - 46 -> 29 - 30 |
+| all 75 (sums) | 75 | 580 -> 518 (-11 %) | 1,166 -> 937 (-20 %) | 2,175 -> 2,019 |
+| Cuphead, all 35 (sums; TMPro, PPv1 passes, `Legacy Shaders/Diffuse`, 3 sprite shaders) | 35 | 194 -> 176 (-9 %) | 390 -> 302 (-23 %) | 778 -> 662 |
+
+The position shaders stay the same but for 14 TextMeshPro and planar reflection stages (3.62 - 4.25
+cycles, +-0.25), and 93 of the 107 changed varying shaders that malioc reports on are still
+load/store-bound (8 become arithmetic-bound). Without the rewrite 523 of the 560 varying shaders of
+Hollow Knight's data are, 1,552 of 1,566 of Cuphead's: in malioc's view a vertex costs the stores of
+its outputs.
+
+On the handheld (Mali-G31, r20p0, `shadercheck`) it is a different story, because the driver links
+the two stages together: the 75 Hollow Knight programs, as converted and with the rewrite, all
+compile and link, and each linked program's binary (`-B`) is smaller with it (1,084,292 -> 1,068,232
+bytes in all), but only by the varying symbol table's entries for the outputs made globals: the
+fragment shaders' sections are the same bytes, and so are all the code chunks (`OBJC`) of the
+vertex shaders. The driver already leaves out at link time what no fragment stage reads, which
+the offline compiler, given one stage, cannot. Cuphead's 35: the same (414,668 -> 407,448 bytes,
+every fragment section the same), but for two programs whose vertex code does change: the
+single-pass stereo variant of `Cuphead/Font/Alpha Mask Font` (a VR variant the handheld never draws)
+and `UI/Default` (2017.4's, whose dead output is a copy of the position: compiled as one code chunk
+instead of four). What the programs draw is the same bit for bit (`-w`, each on a 90 x 60 grid into
+a 180 x 120 RGBA32F target: 75 of 75 Hollow Knight pictures equal, 60 different pictures among them;
+35 of 35 of Cuphead's, 27 different). Timed with the vertex shader and the tiler doing nearly all
+the work (`-m 240x160 -s 64x64`: 38,801 vertices a draw, 40 draws, 15 rounds), the medians of four
+runs, each pair timed twice in either order (ms per draw, as converted / with the rewrite):
+
+| program | as converted | rewritten |
+|---|---|---|
+| `Sprites/Diffuse`, directional (1 dead output) | 1.144 (1.141 - 1.148) | 1.146 (1.144 - 1.148) |
+| `Sprites/Diffuse`, point light (2) | 1.055 (1.052 - 1.057) | 1.054 (1.051 - 1.059) |
+| `UI/Default` (2) | 1.99 (1.48 - 2.52) | 1.97 (1.40 - 2.53) |
+| `Standard` (4) | 1.39 (1.33 - 1.46) | 1.36 (1.32 - 1.44) |
+| `TextMeshPro/Distance Field (Surface)` (2) | 3.74 (3.56 - 3.99) | 3.73 (3.52 - 3.90) |
+| Cuphead `UI/Default` (1; the vertex code differs) | 1.81 (1.75 - 1.87) | 1.80 (1.75 - 1.86) |
+
+Whichever program of a pair ran first after the one before it was the slower one, by up to 75 %
+(`UI/Default`), in either order: a first timing in one order only (as converted first) showed the
+rewrite 10 - 30 % faster on the last three, which was that order. Per program the two versions are
+the same within 2 %.
+
+So on this device the rewrite changes nothing the GPU runs (but two programs Hollow Knight and
+Cuphead hardly draw), no frame-rate run was made, and the option stays off. It would matter only on
+a driver that compiles and keeps each stage as written (an offline compiler's view); none of the
+handhelds measured is one.
+
+Other exact savings looked for in the same 2,130 programs (Hollow Knight's and Cuphead's, as
+translated; malioc on every stage, 2026-11-02):
+
+- constants HLSLcc left to fold (`x * 1.0`, `vec4(1.0) *`, `+ 0.0`, `+ vec4(0.0)`, `float(int(`,
+  nested clamps, bit casts): none; HLSLcc writes from the DXBC FXC already optimized;
+- precision conversions: none; the translations carry no precision qualifiers (every float is
+  highp), so nothing converts between precisions;
+- outputs the fragment stage reads but the vertex stage writes as constants (which could be
+  constants in the fragment stage instead of interpolated): none;
+- components of read varyings that are never read (a `vec4` screen position whose `z` the
+  fragment stage ignores): 201 Hollow Knight programs, 522 components; 52 of Cuphead's, 110. Shrinking
+  them means retyping both stages' declarations and renaming swizzles; not built (at best it saves
+  vertex stores, which the result above suggests the driver may already drop);
+- `discard`, which turns the Mali's forward pixel kill off for the draw: 96 of Hollow Knight's
+  fragment stages, 44 of Cuphead's. The passes among them that are opaque (blend One Zero) are
+  cutout depth passes (`Hidden/Internal-DepthNormalsTexture`, `-ODSWorldTexture`), stencil masks
+  (`Sprites/Mask`, `Cuphead/Sprites/StencilMask`, colour writes off), TextMeshPro's surface shaders'
+  depth pass and a debug pattern: the discard draws the shape, removing it would not draw the same.
+  The rest are blended (the UI blend modes, `UI/Default` with `UNITY_UI_ALPHACLIP`), and a blended
+  fragment never hides what is under it, so forward pixel kill has nothing to gain there;
+- uniform-only arithmetic in fragment stages (malioc's "uniform computation", 140 of Hollow Knight's
+  564): the driver computes it once a draw already (the table above, 2026-10-23).
+
+Nothing there is both exact and cheaper on this GPU, so no other rewrite was built.
 
 ## Blend modes without GrabPass copies (`grab_fetch`, opt-in)
 

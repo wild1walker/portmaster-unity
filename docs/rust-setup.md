@@ -85,7 +85,9 @@ the `quality` step, plugins other than animclips, shaders from Direct3D 11, Vulk
 compute shaders (`shaders.compute`, on by default: Cuphead's config turns it off),
 `fused_post`. `grab_fetch` (and `grab_fetch_names`) is ported: shaderx's `grabfetch` checks and
 rewrites a program as grabfetch.py does (its symbolic evaluation with exact rationals), the
-convert crate edits the Shader object (Hollow Knight's port sets `"always"`). The textures step is textures.py's Unity-file layer in `convert` with texcodec as
+convert crate edits the Shader object (Hollow Knight's port sets `"always"`). `shaders.dead_varyings`
+(off by default) is pmu's own, a rewrite the Python does not have (it ignores the key): vertex
+outputs no fragment stage reads made plain globals ([shaders.md](shaders.md#vertex-outputs-no-fragment-stage-reads-dead_varyings-pmu-opt-in)). The textures step is textures.py's Unity-file layer in `convert` with texcodec as
 its per-texture codec (`steps::textures::Codec`; the made-up tests also run it with a stand-in).
 
 Player builds keep no type trees in their files: pmu reads them with UnityPy's class database
