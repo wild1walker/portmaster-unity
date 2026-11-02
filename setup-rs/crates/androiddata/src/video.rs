@@ -292,7 +292,11 @@ pub fn build(template: &Value, bt709: bool) -> Result<Value, Stop> {
                 }
             }
         }
-        if matches!(p.get("m_Platforms"), Some(Value::Array(_))) {
+        // (UnityPy reads a vector<UInt8> m_Platforms as a list; unityfs keeps it as bytes)
+        if matches!(
+            p.get("m_Platforms"),
+            Some(Value::Array(_) | Value::Bytes(_))
+        ) {
             p.set(
                 "m_Platforms",
                 Value::Array(vec![Value::I64(blob::PLATFORM_GLES3PLUS)]),

@@ -11,7 +11,7 @@ use crate::streaming as ST;
 use crate::uversion::{self as UV, Version};
 use crate::video;
 use pkgzip::py;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
@@ -1283,6 +1283,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     newstate.set("_opts", opts_key(&ctx));
     let mut kept: BTreeSet<String> = BTreeSet::new();
     let consume = ctx.args.consume_src;
+    // the last item that reads each source: an earlier one copies it instead of moving it away
+    // (--consume-src; a realtime GI file's .sse and its .neo twin: the Python stops there with
+    // FileNotFoundError, the second item's source moved by the first)
+    let last_use: HashMap<&str, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(k, it)| (it.src.as_str(), k))
+        .collect();
     for (k, it) in items.iter().enumerate() {
         let (dst_rel, src, act) = (&it.dst, &it.src, it.act.as_str());
         let dst = py::join(&out, dst_rel);
@@ -1319,7 +1327,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             bump(&mut stats, "unchanged");
             continue;
         }
-        let mv_ = consumable(&ctx, src, act);
+        let mv_ = consumable(&ctx, src, act) && last_use.get(src.as_str()) == Some(&k);
         let crc0 = if crc && act == "bundle" {
             Some(ST::bundle_crc(Path::new(src))?)
         } else {

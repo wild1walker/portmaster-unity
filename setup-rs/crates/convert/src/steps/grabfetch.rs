@@ -229,7 +229,11 @@ fn gles_only(p: &mut Value, rewritten: Option<&HashMap<i128, usize>>, require: b
             }
         }
     }
-    if matches!(p.get("m_Platforms"), Some(Value::Array(_))) {
+    // (UnityPy reads a vector<UInt8> m_Platforms as a list; unityfs keeps it as bytes)
+    if matches!(
+        p.get("m_Platforms"),
+        Some(Value::Array(_) | Value::Bytes(_))
+    ) {
         p.set(
             "m_Platforms",
             Value::Array(vec![int_value(blob::PLATFORM_GLES3PLUS as i128)]),
