@@ -4,6 +4,9 @@
 # sh tests/golden/convert_madeup.sh <dir>). Each case runs both on copies of the same data folder
 # with the same arguments (a case's prep runs first on both copies, by the implementation it
 # names) and convert_compare.py compares their exit statuses, output and trees, byte for byte.
+# The made-up bundle of two serialized files (a scene bundle) is left out of those cases: pmu
+# converts it and the Python does not; `scenes` checks it against the Python's conversion of its
+# serialized files taken out of it (scene_bundles.py) and every other file against `cuphead`'s.
 # Cuphead's plugin: $ANIMCLIPS_PY, else $PMU_TEST_DATA/cuphead/animclips.py (portmaster-cuphead's
 # convert/animclips.py). CASES="a b" runs only those; PMU=<binary> tests that pmu (default: the
 # native release build).
@@ -60,6 +63,13 @@ if pyx -m pmunity astc-guide "$src/Data" "$src/guide_fast.bin" --config "$src/cu
 else
   echo "(no ASTC guide: textures_guide skipped)"; tail -n 3 "$src/guide.txt"; GUIDE=
 fi
+
+# a bundle of two serialized files (a scene bundle): pmu converts it, the Python leaves it as it
+# is (it has no such mode), so the cases below run without it and `scenes` (at the end) checks
+# pmu's conversion of it against the Python's of the same serialized files taken out of it
+# (scene_bundles.py), and every other file against the `cuphead` case's
+mkdir -p "$out/scene"
+mv "$src/Data/StreamingAssets/AssetBundles/tmpfont_scenes" "$out/scene/"
 
 impl() {  # impl py|rs <args...>: one convert run (from the run folder)
   side=$1; shift
@@ -125,5 +135,24 @@ case_ edits_bad_kind - - Data $E --plugin $src/edits_bad.json --steps kind
 case_ edits_bad_range - - Data $E --plugin $src/edits_bad.json --steps range
 case_ edits_mono - - Data --config $src/defaults.json --plugin $src/edits_mono.json --steps x
 case_ edits_broken - - Data --config $src/defaults.json --plugin $src/edits_broken.json --steps x
+if [ -z "${CASES:-}" ] || echo " $CASES " | grep -q " scenes "; then
+  d=$out/scenes
+  rm -rf "$d"; mkdir -p "$d/src" "$d/rs"
+  cp -R "$src/Data" "$d/src/Data"
+  cp "$out/scene/tmpfont_scenes" "$d/src/Data/StreamingAssets/AssetBundles/"
+  cp -R "$d/src/Data" "$d/rs/Data"
+  (cd "$d/rs" && { "$PMU" convert Data $C > out.txt 2> err.txt; echo $? > status; } || true)
+  rest=; [ -d "$out/cuphead/rs/Data" ] && rest="--rest $out/cuphead/rs/Data"
+  set -f
+  sets=$(echo "$C" | awk '{for (i = 1; i <= NF; i++) if ($i == "--set") printf " --set %s", $(i + 1)}')
+  set +f
+  if [ "$(cat "$d/rs/status")" = 0 ] &&
+     PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH="$wt/convert:/opt/pylibs" /opt/py/bin/python3 \
+       "$here/scene_bundles.py" "$d/src/Data" "$d/rs/Data" "$d/ref" --config "$src/cuphead.json" $sets $rest > "$d/compare.txt" 2>&1; then
+    echo "ok   scenes ($(tail -n 1 "$d/compare.txt"))"
+  else
+    echo "FAIL scenes"; cat "$d/rs/err.txt" "$d/compare.txt" | tail -n 20; fails=$((fails + 1))
+  fi
+fi
 echo "$fails failed"
 [ "$fails" = 0 ]
