@@ -131,6 +131,15 @@ right, attacking and jumping 39.0 (UnityMain 19.9 ms on a CPU a frame against 17
 core 2.7 ms against 0.9 with all four cores 80 - 84 % busy; FMOD's mixer 46 % of a core in both, the
 silent run included; the power allocator took the Mali down to 420 - 504 MHz, sometimes 240 - 336, at
 64 - 69 C, against 600 standing).
+The profiler's own cost grows with the action: the same walk without `UA_PROF`, 2026-11-01 (the Knight walks
+right, attacks every 0.6 s and jumps every 2.2 s; 40 s measured, ~50 s of frames; each run from a cool handheld):
+the 1 GB profile 49.3 / 48.3 / 48.0 fps (195 - 262 frames over 25 ms); `ASMPATCH_HK_BLUR=off` 53.2; the game's
+own lowest settings (Shader Quality 0, particles, dithering and noise off, through its PlayerPrefs) 48.9;
+`UA_AUDIO_RATE=24000` 50.2 (FMOD's mixer 48 -> 31 % of a core); 540x360 48.7; 480x320 49.8; all of them at
+540x360 56.4 and 54.4, at 480x320 57.2; **blur off + 24 kHz at 600x400: 56.4 (36 frames over 25 ms)**, the
+same at 540x360 54.2. The CPU each option saves goes to the Mali's clock under the shared power budget,
+so together they gain more than each alone; the render size and the game's own settings add nothing on top.
+portmaster-hollowknight's `[runtime_lowmem]` is now blur off, 600x400, gfx jobs legacy and 24 kHz.
 
 
 ## Linux builds, one per Unity line (32-bit route)

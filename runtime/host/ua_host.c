@@ -632,9 +632,12 @@ int main(int argc, char **argv)
     cfg.cpu_count = 4;
     cfg.total_mem = 973LL << 20;
     // what AudioManager reports to FMOD as the output's native rate and buffer size
-    // (UA_AUDIO_RATE / UA_AUDIO_FRAMES: A/B of the mixer's cost)
-    cfg.audio_sample_rate = getenv("UA_AUDIO_RATE") ? atoi(getenv("UA_AUDIO_RATE")) : 48000;
-    cfg.audio_frames_per_buffer = getenv("UA_AUDIO_FRAMES") ? atoi(getenv("UA_AUDIO_FRAMES")) : 512;
+    // (UA_AUDIO_RATE: 24000 is a 1 GB port's trade-off, FMOD mixing at half the rate; UA_AUDIO_FRAMES:
+    // A/B of the mixer's cost; unset, empty or not a number: the defaults)
+    cfg.audio_sample_rate = getenv("UA_AUDIO_RATE") ? atoi(getenv("UA_AUDIO_RATE")) : 0;
+    if (cfg.audio_sample_rate < 8000 || cfg.audio_sample_rate > 192000) cfg.audio_sample_rate = 48000;
+    cfg.audio_frames_per_buffer = getenv("UA_AUDIO_FRAMES") ? atoi(getenv("UA_AUDIO_FRAMES")) : 0;
+    if (cfg.audio_frames_per_buffer < 64 || cfg.audio_frames_per_buffer > 16384) cfg.audio_frames_per_buffer = 512;
     cfg.libmain_onload = (up_onload_fn)so_sym(m, "JNI_OnLoad");
     cfg.native_window = win;
     msaafix_set_size(cfg.width, cfg.height);
