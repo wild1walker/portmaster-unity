@@ -125,7 +125,10 @@ Real play is heavier than the standing spot. A player's own session (2026-10-26,
 game): King's Pass at 29 - 47 fps a second, mostly 30 - 35; the opening cinematic (a 1920x1080 VP8 video,
 decoded in software) stopped the game for ~20 s in all (1.6, 4.8 and 13.2 s frames); loads of 8 s (title)
 and 11 s (King's Pass); in fights frames of 0.1 - 0.9 s, several as the game's object pools instantiate an
-effect for the first time ("Slash Impact R", "Strike Nail R", "Run Effects"). 2026-11-01, the same
+effect for the first time ("Slash Impact R", "Strike Nail R", "Run Effects"); not shader compiles: on a
+launch with Unity's shader cache emptied (2026-11-02, `UA_GL_PROGLOG`) the game made all its 26 programs
+inside the title's and King's Pass's loads (2.6 s of compiles and links), the walk and fight below none,
+and the next launch loaded them from the cache in 0.1 s ([profiling.md](../profiling.md#shader-programs-compiles-links-and-unitys-binary-cache)). 2026-11-01, the same
 profile with `UA_PROF=250` (both runs pay the profiler's ~15 % of a core): standing 49.2 fps; walking
 right, attacking and jumping 39.0 (UnityMain 19.9 ms on a CPU a frame against 17.7, waiting for a free
 core 2.7 ms against 0.9 with all four cores 80 - 84 % busy; FMOD's mixer 46 % of a core in both, the

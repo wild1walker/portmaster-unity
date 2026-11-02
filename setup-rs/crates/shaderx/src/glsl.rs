@@ -64,17 +64,21 @@ impl Es {
     }
 }
 
-/// The rewrites applied (glsl.OPTIMIZE: both by default).
+/// The rewrites applied (glsl.OPTIMIZE: const-arrays and unroll by default). `dead_varyings` is
+/// this crate's own (the Python has no such rewrite), off unless the config's
+/// `shaders.dead_varyings` turns it on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Optimize {
     pub const_arrays: bool,
     pub unroll: bool,
+    pub dead_varyings: bool,
 }
 
 impl Optimize {
     pub const ALL: Optimize = Optimize {
         const_arrays: true,
         unroll: true,
+        dead_varyings: false,
     };
 
     /// From the config's names ('const-arrays', 'unroll'; others are ignored, as in the Python).
@@ -82,6 +86,7 @@ impl Optimize {
         Optimize {
             const_arrays: names.iter().any(|n| n.as_ref() == "const-arrays"),
             unroll: names.iter().any(|n| n.as_ref() == "unroll"),
+            dead_varyings: false,
         }
     }
 }
@@ -247,6 +252,9 @@ struct Patterns {
     unroll_for: Regex,
     unroll_jump: Regex,
     unroll_decl: Regex,
+    out_decl: Regex,
+    location: Regex,
+    in_location: Regex,
 }
 
 static RX: LazyLock<Patterns> = LazyLock::new(|| {
@@ -362,6 +370,13 @@ static RX: LazyLock<Patterns> = LazyLock::new(|| {
         ),
         unroll_jump: re(r"\b(break|continue|return|discard|for|while|do)\b"),
         unroll_decl: re(&format!(r"(?m)^\s*(const\s+)?(highp |mediump |lowp )?{TYPES}\s+\w+")),
+        // a vertex output of one declarator: indentation, layout, interpolation / invariance
+        // qualifiers, then `out`, then what a plain global keeps (precision, type, name, array size)
+        out_decl: re(
+            r"(?m)^([ \t]*)((?:layout\s*\([^)]*\)\s*)?(?:(?:flat|smooth|centroid|noperspective|invariant)\s+)*)out\s+((?:(?:highp|mediump|lowp)\s+)?\w+\s+(\w+)\s*(?:\[[^\]]*\])?\s*;)",
+        ),
+        location: re(r"layout\s*\([^)]*\blocation\b"),
+        in_location: re(r"layout\s*\([^)]*\blocation\b[^)]*\)\s*(?:(?:flat|smooth|centroid|noperspective)\s+)*in\b"),
     }
 });
 
@@ -780,6 +795,69 @@ pub fn unroll(src: &str, limit: i128, statements: i128) -> (String, usize) {
     (src, done)
 }
 
+/// `dead_varyings`: the vertex stage's outputs that the fragment stage never names, each declared a
+/// plain global of the vertex stage instead of an `out`, in a whole translated program (both stage
+/// blocks). A vertex stage compiled on its own keeps every output it writes; as a private global the
+/// value is never read, so the stage's compiler drops its stores and the arithmetic that only fed
+/// it. (The Mali-G31's r20p0 driver already does that when it links the program: there only the
+/// binary's varying table changes, docs/shaders.md.) Nothing else changes: the fragment stage is the same text (its
+/// inputs, interpolated from the same vertex values, are the same), and so is every statement of
+/// the vertex stage. Varyings link by name in a GLSL ES program, so an output is dead when its name
+/// is nowhere in the fragment stage (a test that cannot miss a read). Left as it is: a program
+/// without exactly one vertex and one fragment block, or whose varyings have `layout(location)`
+/// (they would link by location), or that declares a dead name twice. Returns the program and how
+/// many outputs became globals.
+pub fn dead_varyings(program: &str) -> (String, usize) {
+    let r = &*RX;
+    let blocks = stage_blocks(program);
+    let one = |st: &str| {
+        let mut it = blocks.iter().filter(|b| b.0 == st);
+        match (it.next(), it.next()) {
+            (Some(b), None) => Some((b.1, b.2)),
+            _ => None,
+        }
+    };
+    let (Some((va, vb)), Some((fa, fb))) = (one("VERTEX"), one("FRAGMENT")) else {
+        return (program.to_string(), 0);
+    };
+    let vs = &program[va..vb];
+    let fs = strip_comments(&program[fa..fb]);
+    let read: std::collections::HashSet<&str> = r.word.find_iter(&fs).map(|m| m.as_str()).collect();
+    let vs_code = strip_comments(vs);
+    let mut dead = Vec::new();
+    for c in r.out_decl.captures_iter(&vs_code) {
+        if r.location.is_match(&c[2]) {
+            return (program.to_string(), 0);
+        }
+        let name = &c[4];
+        if !name.starts_with("gl_") && !read.contains(name) {
+            dead.push(name.to_string());
+        }
+    }
+    if dead.is_empty() || r.in_location.is_match(&fs) {
+        return (program.to_string(), 0);
+    }
+    for name in &dead {
+        let n = r
+            .out_decl
+            .captures_iter(&vs_code)
+            .filter(|c| &c[4] == name)
+            .count();
+        if n != 1 {
+            return (program.to_string(), 0);
+        }
+    }
+    let new_vs = r.out_decl.replace_all(vs, |c: &Captures| {
+        if dead.iter().any(|d| d == &c[4]) {
+            format!("{}{}", &c[1], &c[3])
+        } else {
+            c[0].to_string()
+        }
+    });
+    let out = format!("{}{}{}", &program[..va], new_vs, &program[vb..]);
+    (out, dead.len())
+}
+
 /// A whole GL program (every stage block) -> its GLSL ES 3.00 twin (`Es310`: 3.10, for programs
 /// that are NeedsES31). Text outside the stage blocks is kept. `notes` gets the rewrites applied,
 /// also those of stages translated before one that is Unsupported.
@@ -812,6 +890,13 @@ pub fn program_to_es(
         last = b;
     }
     out.push_str(&code[last..]);
+    if optimize.dead_varyings {
+        let (s, n) = dead_varyings(&out);
+        if n > 0 {
+            notes.push(format!("VERTEX dead-varyings {n}"));
+            return Ok(s);
+        }
+    }
     Ok(out)
 }
 
@@ -1293,5 +1378,62 @@ mod tests {
             stage_blocks("#ifdef VERTEX\n#if X\n#endif\n#endif\n#ifdef FRAGMENT\n#endif\n").len()
                 == 2
         );
+    }
+
+    #[test]
+    fn dead_varyings_rewrite() {
+        let vs = "#ifdef VERTEX\n#version 300 es\nin highp vec4 in_POSITION0;\nout highp vec2 vs_TEXCOORD0;\nflat out highp vec4 vs_TEXCOORD5;\nout vec3 vs_TEXCOORD1;\nvoid main()\n{\n    gl_Position = in_POSITION0;\n    vs_TEXCOORD0 = in_POSITION0.xy;\n    vs_TEXCOORD5 = vec4(0.0, 0.0, 0.0, 0.0);\n    vs_TEXCOORD1 = in_POSITION0.xyz * 2.0;\n    return;\n}\n#endif\n";
+        // the fragment stage names vs_TEXCOORD0; vs_TEXCOORD1 only in a comment, vs_TEXCOORD5 only
+        // inside a longer name
+        let fs = "#ifdef FRAGMENT\n#version 300 es\nin highp vec2 vs_TEXCOORD0;\n// vs_TEXCOORD1\nuniform vec4 vs_TEXCOORD5x;\nlayout(location = 0) out highp vec4 SV_Target0;\nvoid main()\n{\n    SV_Target0 = vs_TEXCOORD0.xyxy + vs_TEXCOORD5x;\n    return;\n}\n#endif\n";
+        let (out, n) = dead_varyings(&format!("{vs}{fs}"));
+        assert_eq!(n, 2);
+        assert!(out.contains("\nout highp vec2 vs_TEXCOORD0;\nhighp vec4 vs_TEXCOORD5;\nvec3 vs_TEXCOORD1;\nvoid main()"));
+        assert!(out.ends_with(fs), "the fragment stage is the same text");
+        assert_eq!(
+            out.replace(
+                "highp vec4 vs_TEXCOORD5;",
+                "flat out highp vec4 vs_TEXCOORD5;"
+            )
+            .replace("\nvec3 vs_TEXCOORD1;", "\nout vec3 vs_TEXCOORD1;"),
+            format!("{vs}{fs}")
+        );
+        // every output read: nothing changes
+        let fs_all = fs.replace(
+            "SV_Target0 = vs_TEXCOORD0.xyxy",
+            "SV_Target0 = vec4(vs_TEXCOORD1, 1.0) * vs_TEXCOORD5 + vs_TEXCOORD0.xyxy",
+        );
+        assert_eq!(
+            dead_varyings(&format!("{vs}{fs_all}")),
+            (format!("{vs}{fs_all}"), 0)
+        );
+        // left as they are: locations, one stage only, a dead name declared twice
+        let vs_loc = vs.replace(
+            "out highp vec2 vs_TEXCOORD0;",
+            "layout(location = 0) out highp vec2 vs_TEXCOORD0;",
+        );
+        assert_eq!(dead_varyings(&format!("{vs_loc}{fs}")).1, 0);
+        assert_eq!(dead_varyings(vs).1, 0);
+        let vs_twice = vs.replace(
+            "out vec3 vs_TEXCOORD1;\n",
+            "#if A\nout vec3 vs_TEXCOORD1;\n#else\nout vec3 vs_TEXCOORD1;\n#endif\n",
+        );
+        assert_eq!(dead_varyings(&format!("{vs_twice}{fs}")).1, 0);
+        // through program_to_es: off by default, a note when on
+        let gl = format!(
+            "{}{}",
+            vs.replace("#version 300 es", "#version 150"),
+            fs.replace("#version 300 es", "#version 150")
+        );
+        let mut notes = Vec::new();
+        let plain = program_to_es(&gl, "highp", Optimize::ALL, &mut notes, Es::Es300).unwrap();
+        assert!(plain.contains("flat out highp vec4 vs_TEXCOORD5;") && notes.is_empty());
+        let on = Optimize {
+            dead_varyings: true,
+            ..Optimize::ALL
+        };
+        let dv = program_to_es(&gl, "highp", on, &mut notes, Es::Es300).unwrap();
+        assert_eq!(notes, vec!["VERTEX dead-varyings 2".to_string()]);
+        assert_eq!(dv, dead_varyings(&plain).0);
     }
 }

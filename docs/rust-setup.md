@@ -119,7 +119,10 @@ before it have journaled their files, so a setup can run the Python on the same 
 plugins other than animclips, Vulkan programs of 6000.6's typed layout. `grab_fetch`
 (and `grab_fetch_names`) is ported: shaderx's `grabfetch` checks and rewrites a program as
 grabfetch.py does (its symbolic evaluation with exact rationals), the convert crate edits the
-Shader object (Hollow Knight's port sets `"always"`). The textures step is textures.py's
+Shader object (Hollow Knight's port sets `"always"`). `shaders.dead_varyings` (off by default) is
+pmu's own, a rewrite the Python does not have (it ignores the key): vertex outputs no fragment
+stage reads made plain globals ([shaders.md](shaders.md#vertex-outputs-no-fragment-stage-reads-dead_varyings-pmu-opt-in)).
+The textures step is textures.py's
 Unity-file layer in `convert` with texcodec as its per-texture codec (`steps::textures::Codec`;
 the made-up tests also run it with a stand-in).
 

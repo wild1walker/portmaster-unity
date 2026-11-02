@@ -13,7 +13,9 @@
 //! (`compute`, on by default: compute.rs), `fused_post` (fusedpost.rs), Direct3D 11 programs
 //! (`from: d3d11`, Windows builds: d3d11.rs with shaderx's dxbc and the setup's pmhlslcc), Vulkan
 //! programs (`from: vulkan`: vulkan.rs with shaderx's vulkan and the setup's pmspirvcross), Metal
-//! programs (`from: metal`, macOS builds without OpenGL Core: metal.rs with shaderx's metal).
+//! programs (`from: metal`, macOS builds without OpenGL Core: metal.rs with shaderx's metal). Not
+//! in the Python: `dead_varyings` (true: vertex outputs the fragment stage never reads made plain
+//! globals, shaderx::glsl::dead_varyings; off by default).
 use super::compute;
 use super::d3d11;
 use super::fusedpost;
@@ -96,10 +98,21 @@ fn settings(cfg: &Json) -> Result<Settings> {
         ),
         None => None,
     };
-    let optimize = match get("optimize") {
+    let mut optimize = match get("optimize") {
         None => Optimize::ALL,
         Some(v) => Optimize::from_names(&str_list(v)),
     };
+    // (this port's own: the Python has no dead_varyings and ignores the key)
+    match get("dead_varyings") {
+        None | Some(Json::Null) => {}
+        Some(Json::Bool(b)) => optimize.dead_varyings = *b,
+        Some(other) => {
+            return Err(Error::Value(format!(
+                "shaders.dead_varyings: {} (true or false)",
+                other.repr()
+            )))
+        }
+    }
     let sources: Vec<String> = match get("from") {
         None => vec!["glcore".into()],
         Some(Json::Str(s)) => s.split(',').map(String::from).collect(),
