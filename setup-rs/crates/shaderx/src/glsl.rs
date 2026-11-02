@@ -200,7 +200,7 @@ fn py_pattern(p: &str) -> String {
     out
 }
 
-fn re(p: &str) -> Regex {
+pub(crate) fn re(p: &str) -> Regex {
     Regex::new(&py_pattern(p)).unwrap_or_else(|e| panic!("pattern {p:?}: {e}"))
 }
 

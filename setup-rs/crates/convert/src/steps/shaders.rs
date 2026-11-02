@@ -10,9 +10,10 @@
 //!
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
 //! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs), compute shaders
-//! (`compute`, on by default: compute.rs). Direct3D 11, Vulkan and Metal sources and `fused_post`
-//! stop the step as not ported (the setup runs the Python for those).
+//! (`compute`, on by default: compute.rs), `fused_post` (fusedpost.rs). Direct3D 11, Vulkan and
+//! Metal sources stop the step as not ported (the setup runs the Python for those).
 use super::compute;
+use super::fusedpost;
 use super::grabfetch;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
@@ -22,6 +23,7 @@ use shaderx::blob::{BlobFields, Lengths};
 use shaderx::convert::{self, Edit, Pass, Shader, StageProgram, SubProgram, STAGES};
 use shaderx::glsl::Optimize;
 use shaderx::Translations;
+use std::collections::HashMap;
 use std::path::Path;
 use unityfs::Value;
 
@@ -167,9 +169,6 @@ fn settings(cfg: &Json) -> Result<Settings> {
             v.repr()
         ))),
     };
-    if get("fused_post").is_some_and(Json::truthy) {
-        return Err(Error::NotPorted("shaders.fused_post".into()));
-    }
     Ok(Settings {
         precision,
         replace,
@@ -457,6 +456,9 @@ pub fn not_one(path: &Path, e: &unityfs::Error) -> bool {
 
 pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     let s = settings(&job.cfg)?;
+    let chains = fusedpost::chains_of(&job.cfg)?;
+    let fused_names = fusedpost::chain_names(&chains);
+    let mut presults: Vec<fusedpost::FpResult> = Vec::new();
     let opts = convert::Options {
         precision: s.precision.clone(),
         replace: s.replace,
@@ -490,6 +492,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
         };
         let mut n = 0usize;
         let objs = objects(&f);
+        // the file's shaders a fused_post chain names: name -> tree (as the steps before left it)
+        let mut chain_trees: HashMap<String, Value> = HashMap::new();
+        let mut chain_pids: HashMap<String, i64> = HashMap::new();
         for (pid, class) in &objs {
             let pid = *pid;
             if class != "Shader" {
@@ -531,6 +536,15 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                 f.sf.save_typetree(pid, &t)?;
                 n += 1;
             }
+            if !fused_names.is_empty() {
+                let name =
+                    String::from_utf8_lossy(&super::text(field(&t, "m_ParsedForm")?, "m_Name")?)
+                        .into_owned();
+                if fused_names.contains(&name) {
+                    chain_pids.insert(name.clone(), pid);
+                    chain_trees.insert(name, t.clone());
+                }
+            }
             if r.status == convert::Status::Skipped || !r.failed.is_empty() {
                 job.log(&format!("shaders: {rel}: {r}"));
             }
@@ -560,6 +574,21 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                 cresults.push(r);
             }
         }
+        for chain in &chains {
+            // a chain is fused in the file of its last shader (the one the fused pass is appended to)
+            let last = &chain.items.last().unwrap().0;
+            if !chain_trees.contains_key(last) {
+                continue;
+            }
+            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+            let fr = fusedpost::apply(&mut chain_trees, chain, &unity)?;
+            job.log(&format!("shaders: {rel}: fused_post: {fr}"));
+            if fr.changed() {
+                f.sf.save_typetree(chain_pids[last], &chain_trees[last])?;
+                n += 1;
+            }
+            presults.push(fr);
+        }
         if n > 0 {
             job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))?;
             changed_files += 1;
@@ -580,6 +609,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     if let Some(always) = s.grab_fetch {
         job.log(&grabfetch::summary(&gresults, always));
+    }
+    if !chains.is_empty() {
+        job.log(&fusedpost::summary(&chains, &presults));
     }
     Ok(())
 }

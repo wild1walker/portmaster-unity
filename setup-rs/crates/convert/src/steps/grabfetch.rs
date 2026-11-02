@@ -149,7 +149,11 @@ fn int_value(v: i128) -> Value {
 /// _gles_only: a pass (a copy, edited in place) with only its GLES3 / GLES 3.1 subprograms;
 /// those whose entry was rewritten point to the new entry and, with require, ask for
 /// framebuffer fetch.
-fn gles_only(p: &mut Value, rewritten: Option<&HashMap<i128, usize>>, require: bool) -> Result<()> {
+pub(crate) fn gles_only(
+    p: &mut Value,
+    rewritten: Option<&HashMap<i128, usize>>,
+    require: bool,
+) -> Result<()> {
     for st in STAGES {
         let Some(prog) = p.get_mut(st) else { continue };
         if !truthy(Some(prog)) {

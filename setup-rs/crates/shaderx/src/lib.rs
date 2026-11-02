@@ -8,14 +8,18 @@
 //! * [`convert`]: a Shader's fields in ([`convert::Shader`]), the fields the step writes out
 //!   ([`convert::Edit`]) and its report;
 //! * [`step`]: the step's summary lines;
+//! * [`bindings`]: Unity's binding info of a blob entry, and the binding info Unity's GL compiler
+//!   gives a GL program (dxbc.py's Bindings and gl_bindings);
+//! * [`fusedpost`]: `fused_post`'s fused program (the Shader object's side is the convert crate's);
 //! * [`grabfetch`]: `grab_fetch`'s check of a program and its rewrite (the Shader object's side is
 //!   the convert crate's);
 //! * [`tree`] (feature `tree`): a Shader object's tree (unityfs) and its blob.
 //!
-//! Only the OpenGL Core source is ported (Direct3D 11, Vulkan and Metal programs and fused_post
-//! are not).
+//! Only the OpenGL Core source is ported (Direct3D 11, Vulkan and Metal programs are not).
+pub mod bindings;
 pub mod blob;
 pub mod convert;
+pub mod fusedpost;
 pub mod glsl;
 pub mod grabfetch;
 pub mod lz4;

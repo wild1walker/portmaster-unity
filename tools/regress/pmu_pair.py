@@ -232,6 +232,12 @@ class Pair:
             os.makedirs(self.data('py'))
             shutil.copy2(os.path.join(a.data, 'globalgamemanagers'), self.data('py'))
             shutil.copy2(res, os.path.join(self.data('py'), 'builtin.assets'))
+        elif a.files:
+            # only these files of the data (a big game's shaders and settings: its serialized files)
+            for rel in a.files.split(','):
+                dst = os.path.join(self.data('py'), rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(os.path.join(a.data, rel), dst)
         else:
             shutil.copytree(a.data, self.data('py'), symlinks=True)
         shutil.copytree(self.data('py'), self.data('rs'), symlinks=True)
@@ -283,6 +289,7 @@ def main(argv=None):
     ap.add_argument('--pkg', help="Unity's Android player (android-data runs only with one)")
     ap.add_argument('--no-consume', action='store_true', help='android-data without --consume-src')
     ap.add_argument('--logs', help='a folder the stages\' logs are copied to')
+    ap.add_argument('--files', help='only these files of the data (relative paths, comma-separated)')
     ap.add_argument('--builtin', action='store_true',
                     help="the data: its globalgamemanagers and the player's Resources/unity default resources as builtin.assets")
     ap.add_argument('--keep', action='store_true')
