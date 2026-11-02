@@ -82,6 +82,28 @@ pub trait Codec {
     /// Adds what a worker's codec counted for the summary to this one's.
     fn absorb(&mut self, _worker: &mut dyn Codec) {}
 
+    /// When convert() takes this texture in strips that workers may encode one at a time (on one
+    /// core each): how many. None (the default): it is converted whole.
+    fn strips(&self, _t: &Tex, _raw: &[u8], _ch: &Choice) -> Option<usize> {
+        None
+    }
+
+    /// Strip i's blocks (strips()'s cut).
+    fn strip(&mut self, _t: &Tex, _raw: &[u8], _ch: &Choice, _i: usize) -> Result<Vec<u8>> {
+        Err(Error::Value("this codec converts no strips".into()))
+    }
+
+    /// The texture converted in strips, from its strips' blocks in order (what convert() returns).
+    fn join_strips(
+        &self,
+        _t: &Tex,
+        _ch: &Choice,
+        _data: Vec<u8>,
+        _unity: Option<&str>,
+    ) -> Result<Converted> {
+        Err(Error::Value("this codec converts no strips".into()))
+    }
+
     /// The guided blocks' counts (absorb's).
     fn take_counts(&mut self) -> [u64; 6] {
         [0; 6]
@@ -122,6 +144,16 @@ struct TexCodec {
 }
 
 impl TexCodec {
+    fn choice(ch: &Choice) -> texcodec::texture::Choice {
+        texcodec::texture::Choice {
+            block: ch.block,
+            width: ch.width,
+            height: ch.height,
+            alpha: ch.alpha,
+            mips: ch.mips,
+        }
+    }
+
     fn texture<'a>(t: &'a Tex, name: &'a str) -> texcodec::texture::Texture<'a> {
         texcodec::texture::Texture {
             name,
@@ -200,6 +232,55 @@ impl Codec for TexCodec {
             enc,
             quality: self.quality.clone(),
         }))
+    }
+
+    fn strips(&self, t: &Tex, raw: &[u8], ch: &Choice) -> Option<usize> {
+        if self.enc.guide.is_some() {
+            return None;
+        }
+        let name = String::from_utf8_lossy(&t.name);
+        texcodec::texture::strips(
+            &Self::texture(t, &name),
+            raw,
+            &Self::choice(ch),
+            &self.s,
+            true,
+        )
+        .map(|s| s.n)
+    }
+
+    fn strip(&mut self, t: &Tex, raw: &[u8], ch: &Choice, i: usize) -> Result<Vec<u8>> {
+        let name = String::from_utf8_lossy(&t.name);
+        let tx = Self::texture(t, &name);
+        let c = Self::choice(ch);
+        let st = texcodec::texture::strips(&tx, raw, &c, &self.s, true)
+            .ok_or_else(|| Error::Value("a texture's strips changed".into()))?;
+        let _t = texcodec::prof::Timer::new(texcodec::prof::Stage::Strips);
+        texcodec::texture::strip(&tx, raw, &c, &st, i, &mut self.enc).map_err(tex_err)
+    }
+
+    fn join_strips(
+        &self,
+        t: &Tex,
+        ch: &Choice,
+        data: Vec<u8>,
+        unity: Option<&str>,
+    ) -> Result<Converted> {
+        let name = String::from_utf8_lossy(&t.name);
+        let out = texcodec::texture::from_strips(
+            &Self::texture(t, &name),
+            &Self::choice(ch),
+            data,
+            unity,
+        )
+        .map_err(tex_err)?;
+        Ok(Converted {
+            format: out.format,
+            width: out.width,
+            height: out.height,
+            mip_count: out.mip_count,
+            data: out.data,
+        })
     }
 
     fn absorb(&mut self, worker: &mut dyn Codec) {
@@ -604,9 +685,14 @@ impl Streams<'_> {
     /// Has a stream read by the reader thread (a plain file's: a bundle's nodes are read when
     /// needed), for read() to take: the card reads the next textures while the workers convert
     /// these. Left to read() when the streams ahead already hold AHEAD_BUDGET.
-    fn read_ahead(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) {
-        if f.is_bundle || size > AHEAD_MAX || self.ahead_bytes + size > AHEAD_BUDGET {
-            return;
+    /// False when the streams ahead hold AHEAD_BUDGET already: the caller offers this one again
+    /// later (the queue is in the textures' order).
+    fn read_ahead(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> bool {
+        if f.is_bundle || size > AHEAD_MAX {
+            return true;
+        }
+        if self.ahead_bytes + size > AHEAD_BUDGET {
+            return false;
         }
         if self.reader.is_none() {
             let (tx, rx) = std::sync::mpsc::channel::<ReadReq>();
@@ -638,7 +724,7 @@ impl Streams<'_> {
                         thread: Some(t),
                     })
                 }
-                Err(_) => return,
+                Err(_) => return true,
             }
         }
         let (tx, rx) = sync_channel(1);
@@ -654,6 +740,7 @@ impl Streams<'_> {
             self.ahead.push_back((path.to_string(), off, size, rx));
             self.ahead_bytes += size;
         }
+        true
     }
 
     /// The file a plain file's stream is read from: beside the converted file, else in the
@@ -679,16 +766,19 @@ impl Streams<'_> {
 
     fn read(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> Result<Vec<u8>> {
         let _t = texcodec::prof::Timer::new(texcodec::prof::Stage::Read);
-        // (the streams read ahead are asked for in their order: one not asked for is dropped)
-        while let Some(a) = self.ahead.pop_front() {
+        // (the streams read ahead come in the textures' order: this one is the first, or it was
+        // not read ahead)
+        if self
+            .ahead
+            .front()
+            .is_some_and(|a| a.0 == path && a.1 == off && a.2 == size)
+        {
+            let a = self.ahead.pop_front().unwrap();
             self.ahead_bytes -= a.2;
-            if a.0 == path && a.1 == off && a.2 == size {
-                if let Ok(Ok(v)) = a.3.recv() {
-                    return Ok(v);
-                }
-                // (a failed read ahead is read again here: its error comes from this read)
-                break;
+            if let Ok(Ok(v)) = a.3.recv() {
+                return Ok(v);
             }
+            // (a failed read ahead is read again here: its error comes from this read)
         }
         if f.is_bundle {
             let name = path.rsplit('/').next().unwrap_or(path);
@@ -720,14 +810,24 @@ type FileResult = Option<(
     Vec<i64>,
 )>;
 
-/// A texture handed to a worker: what Codec::convert takes, and where its result goes.
-struct Work {
-    tex: Tex,
-    raw: Vec<u8>,
-    ch: Choice,
-    key: String,
-    unity: String,
-    tx: SyncSender<Result<Converted>>,
+/// What a worker is handed: a texture (what Codec::convert takes) or one strip of a big one
+/// (Codec::strip), and where the result goes.
+enum Work {
+    Whole {
+        tex: Tex,
+        raw: Vec<u8>,
+        ch: Choice,
+        key: String,
+        unity: String,
+        tx: SyncSender<Result<Converted>>,
+    },
+    Strip {
+        tex: std::sync::Arc<Tex>,
+        raw: std::sync::Arc<Vec<u8>>,
+        ch: Choice,
+        i: usize,
+        tx: SyncSender<Result<Vec<u8>>>,
+    },
 }
 
 /// A texture's turn in the file's order: its stream's bytes as they are, or its conversion (done,
@@ -753,6 +853,18 @@ enum Turn {
 enum Out {
     Now(Result<Converted>),
     Later(Receiver<Result<Converted>>),
+    /// a texture in strips on the workers: the strips' results (those received), and the texture
+    /// as Codec::join_strips makes it, without its blocks
+    Strips {
+        rxs: Vec<Receiver<Result<Vec<u8>>>>,
+        parts: Vec<Option<Result<Vec<u8>>>>,
+        template: Converted,
+    },
+}
+
+/// A worker's message for a result channel it can no longer reach.
+fn stopped<T>(rel: &str) -> Result<T> {
+    Err(Error::Value(format!("{rel}: a texture's worker stopped")))
 }
 
 /// How many textures ahead the step reads the objects of (and has their streams read).
@@ -808,12 +920,31 @@ impl Turns<'_> {
                     Out::Later(rx) => {
                         self.inflight -= est;
                         self.later -= 1;
-                        rx.recv().unwrap_or_else(|_| {
-                            Err(Error::Value(format!(
-                                "{}: a texture's worker stopped",
-                                self.rel
-                            )))
-                        })
+                        rx.recv().unwrap_or_else(|_| stopped(self.rel))
+                    }
+                    Out::Strips {
+                        rxs,
+                        mut parts,
+                        template,
+                    } => {
+                        self.inflight -= est;
+                        self.later -= 1;
+                        let mut data = Vec::new();
+                        let mut r = Ok(());
+                        for (i, rx) in rxs.iter().enumerate() {
+                            let part = match parts[i].take() {
+                                Some(p) => p,
+                                None => rx.recv().unwrap_or_else(|_| stopped(self.rel)),
+                            };
+                            match part {
+                                Ok(b) => data.extend(b),
+                                Err(e) => {
+                                    r = Err(e);
+                                    break;
+                                }
+                            }
+                        }
+                        r.map(|_| Converted { data, ..template })
                     }
                 }
                 .map_err(|e| texture_error(self.rel, &tex, pid, e))?;
@@ -854,6 +985,21 @@ impl Turns<'_> {
         loop {
             match self.q.front_mut() {
                 None => return Ok(()),
+                Some(Turn::Conv {
+                    out: Out::Strips { rxs, parts, .. },
+                    ..
+                }) => {
+                    for (rx, part) in rxs.iter().zip(parts.iter_mut()) {
+                        if part.is_some() {
+                            continue;
+                        }
+                        match rx.try_recv() {
+                            Ok(r) => *part = Some(r),
+                            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                            Err(_) => *part = Some(stopped(self.rel)),
+                        }
+                    }
+                }
                 Some(Turn::Conv {
                     out: out @ Out::Later(_),
                     est,
@@ -952,10 +1098,30 @@ fn convert_file(
                 let rx = &job_rx;
                 s.spawn(move || loop {
                     let w = rx.lock().unwrap().recv();
-                    let Ok(w) = w else { break };
-                    let r = codec.convert(&w.tex, &w.raw, &w.ch, &w.key, Some(&w.unity));
-                    drop(w.raw);
-                    let _ = w.tx.send(r);
+                    match w {
+                        Ok(Work::Whole {
+                            tex,
+                            raw,
+                            ch,
+                            key,
+                            unity,
+                            tx,
+                        }) => {
+                            let r = codec.convert(&tex, &raw, &ch, &key, Some(&unity));
+                            drop(raw);
+                            let _ = tx.send(r);
+                        }
+                        Ok(Work::Strip {
+                            tex,
+                            raw,
+                            ch,
+                            i,
+                            tx,
+                        }) => {
+                            let _ = tx.send(codec.strip(&tex, &raw, &ch, i));
+                        }
+                        Err(_) => break,
+                    }
                 });
             }
         }
@@ -963,7 +1129,7 @@ fn convert_file(
         // (the next textures' objects read a few turns early, their streams read ahead in order
         // on a thread; an error reading one is raised in its own turn, as without)
         let mut next: std::collections::VecDeque<Result<Value>> = Default::default();
-        let mut looked = 0usize;
+        let (mut looked, mut offered) = (0usize, 0usize);
         for (k, &pid) in textures.iter().enumerate() {
             // (an error of this texture's own comes after the turns before it are finished; one
             // that finishing a turn before it met is the first, as is)
@@ -975,13 +1141,21 @@ fn convert_file(
                 };
                 let sd = stream_data(&t);
                 looked = looked.max(k + 1);
+                offered = offered.max(k + 1);
                 while looked < textures.len() && looked < k + 1 + LOOK {
-                    let nt = f.sf.read_typetree(textures[looked]).map_err(Error::from);
-                    if let Ok(Some((off, size, path))) = nt.as_ref().map(stream_data) {
-                        streams.read_ahead(f, &path, off, size);
-                    }
-                    next.push_back(nt);
+                    next.push_back(f.sf.read_typetree(textures[looked]).map_err(Error::from));
                     looked += 1;
+                }
+                // (their streams offered in order, as far as the budget goes)
+                while offered < looked {
+                    if let Ok(Some((off, size, path))) =
+                        next[offered - k - 1].as_ref().map(stream_data)
+                    {
+                        if !streams.read_ahead(f, &path, off, size) {
+                            break;
+                        }
+                    }
+                    offered += 1;
                 }
                 if let Some((_, _, path)) = &sd {
                     if let Some(n) = &stream_name {
@@ -1038,6 +1212,55 @@ fn convert_file(
                         .to_vec(),
                 };
                 let key = format!("{rel}|{pid}");
+                // a big texture in strips: each strip a worker's (its strips' blocks in order)
+                let n = if nworkers > 0 {
+                    enc.strips(&tex, &raw, &ch)
+                } else {
+                    None
+                };
+                if let Some(n) = n {
+                    let est = raw.len() as u64
+                        + (ch.width * ch.height) as u64
+                        + nworkers as u64 * (texcodec::texture::STRIP_PX as u64 * 6 / 4);
+                    while turns.later > 0
+                        && (turns.inflight + est > budget || turns.later >= 16 * nworkers)
+                    {
+                        turns
+                            .finish_front(f, stats)
+                            .inspect_err(|_| turn_failed = true)?;
+                    }
+                    let template = enc.join_strips(&tex, &ch, Vec::new(), Some(&unity))?;
+                    let (traw, ttex) = (std::sync::Arc::new(raw), std::sync::Arc::new(tex.clone()));
+                    let mut rxs = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let (tx, rx) = sync_channel(1);
+                        let w = Work::Strip {
+                            tex: ttex.clone(),
+                            raw: traw.clone(),
+                            ch: ch.clone(),
+                            i,
+                            tx,
+                        };
+                        job_tx.send(w).map_err(|_| {
+                            Error::Value(format!("{rel}: the texture workers stopped"))
+                        })?;
+                        rxs.push(rx);
+                    }
+                    turns.inflight += est;
+                    turns.later += 1;
+                    return Ok(Some(Turn::Conv {
+                        pid,
+                        t,
+                        tex,
+                        sd,
+                        est,
+                        out: Out::Strips {
+                            parts: (0..n).map(|_| None).collect(),
+                            rxs,
+                            template,
+                        },
+                    }));
+                }
                 let est = estimate(&tex, &ch, raw.len());
                 if nworkers == 0 || est > budget / 2 || ch.width * ch.height >= SOLO_PX {
                     // (alone, on every core: the turns before it are finished first)
@@ -1060,7 +1283,7 @@ fn convert_file(
                         .inspect_err(|_| turn_failed = true)?;
                 }
                 let (tx, rx) = sync_channel(1);
-                let w = Work {
+                let w = Work::Whole {
                     tex: tex.clone(),
                     raw,
                     ch,
