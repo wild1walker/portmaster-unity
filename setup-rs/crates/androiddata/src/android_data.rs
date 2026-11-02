@@ -92,7 +92,7 @@ impl From<pkgzip::Error> for Stop {
     }
 }
 
-fn io_at(p: impl AsRef<Path>) -> impl FnOnce(std::io::Error) -> Stop {
+pub(crate) fn io_at(p: impl AsRef<Path>) -> impl FnOnce(std::io::Error) -> Stop {
     move |e| {
         let m = format!(
             "{e}: {}",
