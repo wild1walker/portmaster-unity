@@ -568,7 +568,28 @@ struct Streams<'a> {
     /// size, the read's result), and the bytes they hold together.
     ahead: std::collections::VecDeque<Ahead>,
     ahead_bytes: u64,
-    reader: Option<std::sync::mpsc::Sender<ReadReq>>,
+    reader: Option<Reader>,
+}
+
+/// The reader thread: its requests, a flag that has it skip what is left, and the thread (joined
+/// when Streams goes: the files it reads are renamed over next, and a file kept open there would
+/// stay behind as a FUSE file system's hidden copy if the process died meanwhile).
+struct Reader {
+    tx: std::sync::mpsc::Sender<ReadReq>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Streams<'_> {
+    fn drop(&mut self) {
+        if let Some(mut r) = self.reader.take() {
+            r.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            drop(r.tx);
+            if let Some(t) = r.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
 }
 
 type Ahead = (String, u64, u64, Receiver<std::io::Result<Vec<u8>>>);
@@ -589,11 +610,16 @@ impl Streams<'_> {
         }
         if self.reader.is_none() {
             let (tx, rx) = std::sync::mpsc::channel::<ReadReq>();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopped = stop.clone();
             let spawned = std::thread::Builder::new()
                 .name("pmu-reader".into())
                 .spawn(move || {
                     let mut open: Option<(PathBuf, std::fs::File)> = None;
                     for (p, off, size, reply) in rx {
+                        if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         if open.as_ref().is_none_or(|(q, _)| *q != p) {
                             open = std::fs::File::open(&p).ok().map(|h| (p.clone(), h));
                         }
@@ -605,7 +631,13 @@ impl Streams<'_> {
                     }
                 });
             match spawned {
-                Ok(_) => self.reader = Some(tx),
+                Ok(t) => {
+                    self.reader = Some(Reader {
+                        tx,
+                        stop,
+                        thread: Some(t),
+                    })
+                }
                 Err(_) => return,
             }
         }
@@ -615,6 +647,7 @@ impl Streams<'_> {
             .reader
             .as_ref()
             .unwrap()
+            .tx
             .send((p, off, size, tx))
             .is_ok()
         {
