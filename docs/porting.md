@@ -26,6 +26,31 @@ game's files. Cuphead's port ([portmaster-cuphead](https://github.com/wild1walke
 was written by hand before these tools; it shows what a game may need beyond them (its own code
 patches and a helper assembly).
 
+## Before you start
+
+- **The computer:** Docker, Python 3.11+ (`pip install -r convert/requirements.txt`; `port.toml`
+  is read with `tomllib`), `runtime/build.sh` once. The .NET 8 SDK when `port check` says the
+  port uses asmpatch (`package` builds it: docs/building.md). For the rehearsal (section 6),
+  PortMaster's own 7-Zip: `PortMaster/7zzs.aarch64` inside `PortMaster.zip` from
+  [PortMaster-GUI's releases](https://github.com/PortsMaster/PortMaster-GUI/releases).
+- **The game as a folder:** GOG's Linux installer (`.sh`, a shell script with a zip appended) is
+  never run: `unzip -q <installer>.sh -d <dir>` (or `7zz x -tzip`), then the game is
+  `<dir>/data/noarch/game`. GOG's macOS `.pkg`: `python -m pmunity macpkg <dir> <installer>.pkg`
+  (the app lands under `<dir>` at the package's install location). Steam: the game's folder (the Linux depot where there is one). Keep the installer itself for
+  the handheld and the rehearsal: the setup takes it as it is.
+- **The port's own repository:** a GitHub repository per port holds `port new`'s output and
+  nothing of the game. Clone it (a new one holds a LICENSE and a README: `port new` writes into
+  such a clone without `--force`), run `port new <name> --data <game> --out <repo>`, edit
+  `port.toml`, run `port new` again, commit. `port new` writes a `.gitignore` once (the build
+  output `out/`, game and Unity file types, the rig's screenshots); `package.sh` there builds the
+  release, with `PMUNITY` pointing at a portmaster-unity checkout (default: one beside the
+  repository). A port's own code (an assembly patch, a hook) goes in the repository too, with its
+  build in `[build]` (section 9).
+- **The pad bindings:** a game's controls are in its input stack's defaults (Rewired's XML,
+  InControl's or the Input System's actions in the assemblies); `port check`'s input survey says
+  which stack. On a handheld without sticks a game that moves only with the left stick needs the
+  d-pad as that stick (docs/input.md).
+
 ## 1. port check
 
 ```
@@ -388,13 +413,21 @@ fixed `SDL_VIDEODRIVER`, no `pm_finish`), files over 90 MB. `--submission` also 
 `tools/port/rehearse.sh <zip> <game folder or archive> <work dir> [emu seconds] [input script]`
 unpacks the release into `<work>/roms/ports` as PortMaster would, copies the game into its
 `gamedata/` and starts the port's own launcher in an aarch64 container that looks like a handheld
-(busybox first on PATH, bash, curl, 1 GB of RAM, the network on), with a stand-in for PortMaster
+(busybox first on PATH, bash, curl, a 1 GB memory limit, the network on), with a stand-in for PortMaster
 (`control.txt`, `utils/patcher.txt`, PortMaster's own `7zzs.aarch64` from its release: `PM_7ZZ`).
-`ANSWERS="ID=value ..."` answers the port's questions. With `[emu seconds]` the installed game then
-runs in the emulated armv7 rig (`tools/emu`, QEMU and Mesa's llvmpipe: slow, about 1 fps, but the
-same frames and game logic) with the port's `port.env` and `answers.env`, and four screenshots
+`ANSWERS="ID=value ..."` answers the port's questions. The container's `/proc/meminfo` shows
+Docker's memory, not the 1 GB limit, so a setup that sizes itself from it (the `PICTURE` question's
+`auto`) takes the path of a bigger device: `ANSWERS="PICTURE=handheld"` rehearses the 1 GB one.
+After the setup the launcher also tries to start the game in the container and stops with
+`libSDL2-2.0.so.0` missing (exit 127): expected there, the game runs in the rig next. With `[emu seconds]` the installed game then
+runs in the emulated armv7 rig (`tools/emu`, QEMU and Mesa's llvmpipe: slow, from about 20 fps on a
+loading screen to under 1 fps on a busy scene, but the same frames and game logic; the screen is
+`ANDROID_WINDOW_SIZE`, default 720x480, the RG34XX-SP's) with the port's `port.env` and `answers.env`, and four screenshots
 go to `<work>/shots.png`; `UA_INPUT_SCRIPT`-style input (`"60:ptr=0.5/0.5 70:a~1.5"`) drives it.
-`EMU_ONLY=1` reruns only the game. An install of an arm64-v8a build (`android_package.json`'s
+`EMU_ONLY=1` reruns only the game. A run prints nothing until it ends; the game's log is
+`<work>/emuroot/run.log`. To stop one early, name the containers (`REHEARSE_NAME`, `EMU_NAME`)
+and `docker kill` them: killing `rehearse.sh` or the `docker run` client leaves the container
+running to its timeout. An install of an arm64-v8a build (`android_package.json`'s
 `abi`: the il2cpp-arm64 route, the apk route on a 64-bit-only system, `REHEARSE_64ONLY=1`) runs in the arm64 rig
 (`EMU_ARCH=arm64`) with the port's `ua_host64`. `REHEARSE_NAME` and `EMU_NAME` name the containers.
 The setup's space checks see the work folder's drive as the card (a `df` stand-in, and

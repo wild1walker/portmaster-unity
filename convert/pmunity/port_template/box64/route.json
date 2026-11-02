@@ -7,7 +7,7 @@
     "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
     "@@PORTDIR@@/@@PORTDIR@@.ini": "hotkey.ini",
     "README.md": "README.port.md",
-    "package.sh": "package.sh"
+    "package.sh": {"template": "package.sh", "mode": "755"}
   },
   "package": ["pmu?", "pmunity?", "pybundle?", "box64"]
 }

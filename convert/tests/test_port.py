@@ -443,6 +443,33 @@ class NewAndSetupTest(unittest.TestCase):
         out = P.new('mygame', game, cp, os.path.join(t, 'port'), asmpatch='/nonexistent-asmpatch', log=lambda m: None)
         return game, out
 
+    def test_new_into_repo_clone(self):
+        """port new writes into a fresh clone of the port's repository (LICENSE, README, .git only)
+        without --force, writes a .gitignore once and keeps the porter's own, and package.sh is
+        executable; a folder with other files still needs --force"""
+        with tempfile.TemporaryDirectory() as t:
+            game, _ = self.make(t)
+            repo = os.path.join(t, 'repo')
+            for f in ('LICENSE', 'README.md', '.git/HEAD'):
+                os.makedirs(os.path.dirname(os.path.join(repo, f)), exist_ok=True)
+                put(os.path.join(repo, f), b'x')
+            cp = os.path.join(t, 'cfg.json')
+            out = P.new('mygame', game, cp, repo, asmpatch='/nonexistent-asmpatch', log=lambda m: None)
+            gi = os.path.join(out, '.gitignore')
+            with open(gi) as f:
+                self.assertIn('out/', f.read().split('\n'))
+            self.assertTrue(os.access(os.path.join(out, 'package.sh'), os.X_OK))
+            with open(gi, 'w') as f:
+                f.write('mine\n')
+            P.new('mygame', game, cp, repo, asmpatch='/nonexistent-asmpatch', log=lambda m: None)
+            with open(gi) as f:
+                self.assertEqual(f.read(), 'mine\n')
+            other = os.path.join(t, 'other')
+            os.makedirs(other)
+            put(os.path.join(other, 'notes.txt'), b'x')
+            with self.assertRaises(SystemExit):
+                P.new('mygame', game, cp, other, asmpatch='/nonexistent-asmpatch', log=lambda m: None)
+
     def test_new_files(self):
         with tempfile.TemporaryDirectory() as t:
             _, out = self.make(t)
@@ -459,7 +486,8 @@ class NewAndSetupTest(unittest.TestCase):
                     self.assertNotIn('@@', text, f)
                 if f.endswith(('.sh', 'patchscript')):
                     subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
-                    self.assertFalse(os.access(os.path.join(out, f), os.X_OK), f)   # (644: the launcher sets exec bits)
+                    # (644: the launcher sets exec bits; package.sh, the porter's build, is not shipped)
+                    self.assertEqual(os.access(os.path.join(out, f), os.X_OK), f == 'package.sh', f)
             pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
             self.assertEqual(pj['items'], ['My Game.sh', 'mygame'])
             self.assertEqual(pj['name'], 'mygame.zip')

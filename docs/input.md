@@ -84,6 +84,12 @@ sets the name of InControl's Xbox Android profile:
 UA_PAD_NAME="Microsoft X-Box 360 pad"     # InControl's Xbox360AndroidProfile (also matches /360/)
 ```
 
+Which name: the one `port check` suggests. With asmpatch built it reads the Android profiles the
+game's own InControl has (`asmpatch --survey`) and picks one with the Xbox layout (often
+`Xbox Wireless Controller`); without asmpatch it falls back to the example above, which older
+InControl versions know. Both give the same buttons; the survey's is the one this game's copy of
+InControl is known to have.
+
 `asmpatch --survey <Managed>` lists the Android profiles of the game's own InControl (read from
 its profile classes, old constructor style and newer `Define()` style) with the names they
 match, Xbox profiles first, and suggests the first name.

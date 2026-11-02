@@ -2101,7 +2101,10 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         user = load_config(own_toml)
         config = own_toml
         log(f'using {own_toml}')
-    if os.path.exists(out) and os.listdir(out) and not os.path.isfile(os.path.join(out, 'port.build.json')) and not force:
+    # (a fresh clone of the port's own repository holds only these: port new writes into it)
+    repo_files = {'.git', '.github', '.gitignore', '.gitattributes', 'LICENSE', 'LICENSE.md', 'LICENSE.txt', 'README.md'}
+    if (os.path.exists(out) and set(os.listdir(out)) - repo_files
+            and not os.path.isfile(os.path.join(out, 'port.build.json')) and not force):
         raise SystemExit(f'{out} exists and is not a port made by `port new` (--force to write into it)')
     rep = None
     if data:
@@ -2193,6 +2196,11 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
             raise SystemExit(f'files.extra: {src} not found')
         ctx.write(f'{pd}/{os.path.basename(rel)}', _read(src, 'rb'))
     _call_hooks('port_new', ctx)
+    # a .gitignore for the port's repository, once (yours to edit: not regenerated)
+    gi = os.path.join(out, '.gitignore')
+    if not os.path.exists(gi):
+        with open(gi, 'w') as f:
+            f.write(GITIGNORE)
     # PortMaster's metadata from the final port.json (route hooks adjust its texts): the frontend's
     # entry (shipped in the port folder) and the testing thread's post (beside it, not shipped)
     pj = json.loads(_read(os.path.join(out, pd, 'port.json')))
@@ -2374,6 +2382,32 @@ PMU_PLUGINS = ('animclips',)
 # docs/rust-setup.md)
 PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan', 'metal')
 
+
+# the .gitignore port new writes into a port's folder: the build output, and the game's and Unity's
+# files a porter may have beside the port (never committed)
+GITIGNORE = """# build output (dotnet's obj/ holds local paths)
+out/
+obj/
+bin/
+__pycache__/
+*.pyc
+# never commit game files, Unity's player, logs or the rig's screenshots
+*.apk
+*.obb
+*.so
+*.dll
+*.assets
+*.resS
+*.resource
+*.bnk
+*_Data/
+*.app/
+*.log
+*.ppm
+shots/
+.DS_Store
+._*
+"""
 
 def pmu_covers(cfg):
     """Whether the setup's commands all run on pmu (setup-rs: one static aarch64 program instead of

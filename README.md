@@ -205,8 +205,22 @@ The plan behind these: [docs/roadmap.md](docs/roadmap.md). The detailed gap list
 
 ### Port a game in five steps
 
-You need a computer with Docker and Python 3.10 or newer (macOS or Linux; the commands below are
-for a shell; write `python3` where `python` is missing), and the game you own.
+You need a computer with Docker and Python 3.11 or newer (macOS or Linux; the commands below are
+for a shell; write `python3` where `python` is missing; with Homebrew's Python make a virtual
+environment first: `python3 -m venv .venv && . .venv/bin/activate`), and the game you own. Later,
+when needed:
+
+- the .NET 8 SDK, when `port check` says the port patches the game's assemblies (asmpatch:
+  PlayMaker, Rewired, StreamingAssets reads, ...): `package` builds asmpatch with it
+  ([docs/building.md](docs/building.md));
+- PortMaster's own 7-Zip for the rehearsal (step 4): `PortMaster/7zzs.aarch64` inside
+  `PortMaster.zip` from [PortMaster-GUI's releases](https://github.com/PortsMaster/PortMaster-GUI/releases).
+
+`port check` and `port new` read the game as a folder. GOG's Linux installer (`.sh`) is a shell
+script with a zip appended: never run it; unpack it with `unzip -q <installer>.sh -d <dir>` (or
+`7zz x -tzip`), and the game is `<dir>/data/noarch/game`. GOG's macOS installer (`.pkg`):
+`python -m pmunity macpkg <dir> <installer>.pkg`. Keep the installer as it is for the handheld:
+the port's setup takes it.
 
 Once:
 
@@ -232,7 +246,8 @@ cd convert
    python -m pmunity port new mygame --data "<game folder>"
    ```
 3. **Package it.** This makes the release zip, `mygame/out/mygame.zip`: the launcher, the setup,
-   `ua_host`, the converter, its Python and the licences. No game files, nothing of Unity.
+   `ua_host`, the setup's tool (`pmu`: one static program, no Python on the handheld) and the
+   licences. No game files, nothing of Unity.
    ```sh
    python -m pmunity port package mygame              # or: mygame/package.sh
    ```
@@ -254,8 +269,10 @@ cd convert
    firmware, and `patchlog.txt` and `log.txt`. Remove personal folder names from the output if
    you like, and never attach game files. Reports of games that work are as useful as failures.
 
-`port new` makes ports for the `android` (A, B) and `box64` (E) routes. Columns C and D are done
-by hand for now ([docs/il2cpp.md](docs/il2cpp.md), [docs/apk.md](docs/apk.md)). Publish only the
+`port new` makes ports for every route (`--route`; `port check` recommends one). A port's own
+GitHub repository is `port new`'s output: run `port new` into a fresh clone of it (`--out <repo>`)
+and commit; `package` builds into `out/`, which the `.gitignore` it writes leaves out
+([docs/porting.md](docs/porting.md), "The port's own repository"). Publish only the
 port's zip: never the game, a converted game, or Unity's files.
 
 ### Documentation
