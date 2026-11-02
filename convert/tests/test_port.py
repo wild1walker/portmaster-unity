@@ -480,6 +480,38 @@ class NewAndSetupTest(unittest.TestCase):
             self.make(t, {'questions': []})
             self.assertFalse(os.path.exists(os.path.join(out, 'mygame', 'setup', 'questions.lua')))
 
+    def test_pmu_covers(self):
+        """the setup ships pmu (no Python) for the default convert steps, the quality step, compute
+        shaders, fused_post and shaders from Direct3D 11 and Vulkan included, and for plugins pmu has
+        built in (by file name); not for shaders from Metal, the porter's own plugins or android-data
+        --il2cpp"""
+        base = {'convert': {'steps': list(P.DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
+                'player': {}, 'files': {'plugins': []}, 'android_data': {}}
+        self.assertEqual(P.pmu_covers(base), (True, []))
+        self.assertTrue(P.wants('pmu', base) and not P.wants('pmunity', base) and not P.wants('pybundle', base))
+        cup = P.merge(base, {'files': {'plugins': ['convert/animclips.py']}})
+        self.assertEqual(P.pmu_covers(cup), (True, []))
+        hk = P.merge(base, {'convert': {'shaders': {'grab_fetch': 'always', 'fused_post': [{'chain': ['A', 'B']}]}}})
+        self.assertEqual(P.pmu_covers(hk), (True, []))
+        win = P.merge(base, {'convert': {'shaders': {'from': ['d3d11']}}})
+        self.assertEqual(P.pmu_covers(win), (True, []))
+        self.assertTrue(P.wants('pmu', win) and P.wants('pmhlslcc', win))
+        vk = P.merge(base, {'convert': {'shaders': {'from': ['vulkan']}}})
+        self.assertEqual(P.pmu_covers(vk), (True, []))
+        self.assertTrue(P.wants('pmu', vk) and P.wants('pmspirvcross', vk))
+        for over, why in (({'convert': {'shaders': {'from': ['metal']}}}, 'shaders from metal'),
+                          ({'convert': {'shaders': {'from': ['glcore', 'metal']}}}, 'shaders from metal'),
+                          ({'files': {'plugins': ['steps/mine.py']}}, "the port's converter plugins (mine.py)"),
+                          ({'android_data': {'args': ['--il2cpp', 'x']}}, 'android-data --il2cpp')):
+            ok, whys = P.pmu_covers(P.merge(base, over))
+            self.assertFalse(ok)
+            self.assertEqual(whys, [why])
+            self.assertTrue(P.wants('pmunity', P.merge(base, over)))
+        # the routes whose release can ship pmu instead of the Python
+        for route in ('android', 'mono-arm64'):
+            r = json.load(open(os.path.join(os.path.dirname(P.__file__), 'port_template', route, 'route.json')))
+            self.assertTrue({'pmu?', 'pmunity?', 'pybundle?'} <= set(r['package']), route)
+
     def test_vulkan_port(self):
         """a Vulkan-only build (shaders.from = ["vulkan"]): pmspirvcross (aarch64) in the release with SPIRV-Cross's and
         SMOL-V's licences; other ports do not take it"""

@@ -2362,26 +2362,32 @@ def _component_pmunity(ctx, opts):
     ctx.add(os.path.join(REPO, 'tools', 'il2cpp', 'ndk-clang.sh'), os.path.join('setup', 'tools', 'il2cpp', 'ndk-clang.sh'), 0o755)
 
 
+# converter plugins pmu has built in (setup-rs/crates/convert/src/steps/mod.rs, plugin()): a port's
+# files.plugins entry of that file name runs on pmu (portmaster-cuphead's convert/animclips.py)
+PMU_PLUGINS = ('animclips',)
+# the shader sources pmu translates (Direct3D 11 with setup/pmhlslcc, Vulkan with
+# setup/pmspirvcross, as the Python)
+PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan')
+
+
 def pmu_covers(cfg):
     """Whether the setup's commands all run on pmu (setup-rs: one static aarch64 program instead of
     the setup's Python) with this port's options: (True, []), or (False, [what pmu does not do yet]):
-    shaders from Direct3D 11, Vulkan or Metal, `shaders.fused_post`, the quality step, the porter's
-    own converter plugins (Python), android-data --il2cpp. (A game's compute shaders also stop pmu
-    convert, `shaders.compute` being on by default: the setup then says so.)"""
+    shaders from Metal, converter plugins pmu has not built in (PMU_PLUGINS), android-data
+    --il2cpp. (The quality step, compute shaders, fused_post and shaders from Direct3D 11 and
+    Vulkan with the release's pmhlslcc and pmspirvcross run on pmu, docs/rust-setup.md.)"""
     why = []
     conv = cfg.get('convert') or {}
     sh = conv.get('shaders') or {}
     src = sh.get('from', ['glcore'])
     src = src.split(',') if isinstance(src, str) else list(src or ())
-    other = [x for x in src if x != 'glcore']
+    other = [x for x in src if x not in PMU_SHADER_SOURCES]
     if other:
         why.append(f"shaders from {', '.join(other)}")
-    if sh.get('fused_post'):
-        why.append('shaders.fused_post')
-    if 'quality' in (conv.get('steps') or ()):
-        why.append('the quality step')
-    if (cfg.get('files') or {}).get('plugins'):
-        why.append("the port's converter plugins")
+    own = [p for p in (cfg.get('files') or {}).get('plugins') or ()
+           if os.path.splitext(os.path.basename(p))[0] not in PMU_PLUGINS]
+    if own:
+        why.append("the port's converter plugins (" + ', '.join(os.path.basename(p) for p in own) + ')')
     if '--il2cpp' in ((cfg.get('android_data') or {}).get('args') or ()):
         why.append('android-data --il2cpp')
     return not why, why
