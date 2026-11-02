@@ -109,7 +109,9 @@ impl Source {
     }
 
     fn get(&mut self, off: u64, n: u64) -> std::io::Result<Vec<u8>> {
-        let rng = format!("bytes={}-{}", off, off + n - 1);
+        let rng = format!("bytes={}-{}", off, off.saturating_add(n - 1));
+        // (the range's bytes, and room for a redirect's or an error's page)
+        self.client.max_body = n.saturating_add(1 << 16);
         let r = self.client.get_following(
             &self.src.clone(),
             &[("Range", &rng), ("User-Agent", "pmunity")],
@@ -166,9 +168,20 @@ impl Source {
     }
 }
 
+/// The most a file (or the script header) may decompress to: it is held in memory, as the
+/// Python holds it, and a few bytes of a damaged block could make gigabytes.
+pub const MAX_FILE: u64 = 1 << 30;
+
+fn too_big<T>(what: &str) -> Result<T> {
+    Err(Error::Fail(format!(
+        "nsis: {what} of more than {MAX_FILE} bytes (a damaged installer)"
+    )))
+}
+
 /// An NSIS LZMA block (props byte, 32-bit dictionary size, the raw stream; a 0 / 1 byte first:
-/// the x86 BCJ filter off / on) or raw deflate, decompressed (nsis.decompress).
-pub fn decompress(blk: &[u8]) -> Result<Vec<u8>> {
+/// the x86 BCJ filter off / on) or raw deflate, decompressed (nsis.decompress): its first `max`
+/// bytes (the dictionary allocated for no more than that).
+pub fn decompress(blk: &[u8], max: u64) -> Result<Vec<u8>> {
     let lz = blk.first() == Some(&0x5d)
         || (matches!(blk.first(), Some(0 | 1)) && blk.get(1) == Some(&0x5d));
     let mut out = Vec::new();
@@ -178,14 +191,18 @@ pub fn decompress(blk: &[u8]) -> Result<Vec<u8>> {
             _ => (false, blk),
         };
         let props = b[0];
-        let dict = u32le(b, 1)?;
+        // (no match reaches further back than the output: a smaller dictionary is exact)
+        let dict = u32le(b, 1)?
+            .min(crate::MAX_DICT)
+            .min(u32::try_from(max).unwrap_or(u32::MAX));
         let reader = lzma_rust2::LzmaReader::new_with_props(&b[5..], u64::MAX, props, dict, None)
             .map_err(|e| Error::Fail(format!("LZMAError: {e}")))?;
         let res = if bcj {
-            lzma_rust2::filter::bcj::BcjReader::new_x86(reader, 0).read_to_end(&mut out)
+            lzma_rust2::filter::bcj::BcjReader::new_x86(reader, 0)
+                .take(max)
+                .read_to_end(&mut out)
         } else {
-            let mut r = reader;
-            r.read_to_end(&mut out)
+            reader.take(max).read_to_end(&mut out)
         };
         // (a stream without an end marker: what it holds, as Python's LZMADecompressor gives it)
         if let Err(e) = res {
@@ -195,7 +212,7 @@ pub fn decompress(blk: &[u8]) -> Result<Vec<u8>> {
         }
         return Ok(out);
     }
-    let mut d = flate2::read::DeflateDecoder::new(blk);
+    let mut d = flate2::read::DeflateDecoder::new(blk).take(max);
     match d.read_to_end(&mut out) {
         Ok(_) => Ok(out),
         Err(_) if !out.is_empty() => Ok(out),
@@ -203,7 +220,17 @@ pub fn decompress(blk: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// A Unity 6 block body: LZMA chunks, each a 3-byte length and a stream, up to a zero length.
+/// A file's block decompressed whole (at most MAX_FILE bytes).
+fn whole(blk: &[u8]) -> Result<Vec<u8>> {
+    let out = decompress(blk, MAX_FILE + 1)?;
+    if out.len() as u64 > MAX_FILE {
+        return too_big("a block");
+    }
+    Ok(out)
+}
+
+/// A Unity 6 block body: LZMA chunks, each a 3-byte length and a stream, up to a zero length
+/// (at most MAX_FILE bytes in all).
 pub fn dechunk(blk: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut p = 0;
@@ -213,7 +240,13 @@ pub fn dechunk(blk: &[u8]) -> Result<Vec<u8>> {
             break;
         }
         let end = (p + 3 + n).min(blk.len());
-        out.extend(decompress(&blk[p + 3..end])?);
+        out.extend(decompress(
+            &blk[p + 3..end],
+            MAX_FILE + 1 - out.len() as u64,
+        )?);
+        if out.len() as u64 > MAX_FILE {
+            return too_big("a block");
+        }
         p += 3 + n;
     }
     Ok(out)
@@ -268,6 +301,9 @@ impl Nsis {
         let fh = i - 4;
         let flags = u32le(&head, fh)?;
         let hdr_len = u32le(&head, fh + 20)?;
+        if hdr_len as u64 > MAX_FILE {
+            return too_big("a script header");
+        }
         let mut total = u32le(&head, fh + 24)? as u64;
         let chunked = flags & 0x40 != 0;
         let mut n = Nsis {
@@ -312,7 +348,10 @@ impl Nsis {
                         break;
                     }
                     blk = get(&mut n, &head, p, 3 + k + 3)?;
-                    h.extend(decompress(&blk[3..(3 + k as usize).min(blk.len())])?);
+                    // (one byte more than the header needs: a chunk making more fails below)
+                    let room = 8 + hdr_len as u64 + 1 - h.len() as u64;
+                    let c = blk.get(3..(3 + k as usize).min(blk.len())).unwrap_or(&[]);
+                    h.extend(decompress(c, room)?);
                     p += 3 + k;
                 }
                 if h.len() < 8 || u64le(&h, 0)? != hdr_len as u64 || h.len() != 8 + hdr_len as usize
@@ -327,6 +366,9 @@ impl Nsis {
             } else {
                 let w = u64le(&head, fh + 36)?;
                 let k = w & 0x7fff_ffff_ffff_ffff;
+                if k > MAX_FILE {
+                    return too_big("a script header");
+                }
                 let blk = get(&mut n, &head, fh as u64 + 44, k)?;
                 let h = if w >> 63 != 0 { dechunk(&blk)? } else { blk };
                 n.h = h[..(hdr_len as usize).min(h.len())].to_vec();
@@ -346,9 +388,13 @@ impl Nsis {
                 return exit("solid installer: use 7-Zip (this tool needs per-file blocks)");
             }
             let k = (w & 0x7fff_ffff) as u64;
+            if k > MAX_FILE {
+                return too_big("a script header");
+            }
             let p = fh as u64 + fs + 4;
             let blk = get(&mut n, &head, p, k)?;
-            let h = decompress(&blk)?;
+            // (its first hdr_len bytes are the header)
+            let h = decompress(&blk, hdr_len as u64)?;
             n.h = h[..(hdr_len as usize).min(h.len())].to_vec();
             n.data_base = p + k;
         }
@@ -359,18 +405,21 @@ impl Nsis {
             .collect::<Result<_>>()?;
         let so = n.blocks[3].0 as usize;
         let (eo, en) = n.blocks[2];
-        n.entsize = if en != 0 {
-            (so - eo as usize) / en as usize
+        // (Python's integers: a table before the entries gives a negative size)
+        let entsize = if en != 0 {
+            (so as i64 - eo as i64).div_euclid(en as i64)
         } else {
             28
         };
-        if n.entsize != 28 && n.entsize != 36 {
-            return exit(format!("unknown script entry size {}", n.entsize));
+        if entsize != 28 && entsize != 36 {
+            return exit(format!("unknown script entry size {entsize}"));
         }
+        n.entsize = entsize as usize;
         n.unicode = n.h.get(so..so + 2) == Some(&[0, 0][..]) && n.h.get(so + 3) == Some(&0);
         if n.unicode {
-            let end = n.blocks[4].0 as usize;
-            let words: Vec<u16> = (so..end - (end - so) % 2)
+            let end = n.blocks[4].0 as i64;
+            let stop = end - (end - so as i64).rem_euclid(2);
+            let words: Vec<u16> = (so..stop.max(so as i64) as usize)
                 .step_by(2)
                 .map(|p| u16le(&n.h, p))
                 .collect::<Result<_>>()?;
@@ -496,18 +545,19 @@ impl Nsis {
         let mut offs: Vec<u64> = seen.iter().map(|x| x.1).collect();
         offs.sort();
         offs.dedup();
+        // (Python's integers: a header that says less data than there is gives a negative size)
         let end = if self.solid {
-            self.usize
+            self.usize as i128
         } else {
-            self.fh + 28 + self.total - self.data_base
+            (self.fh + 28 + self.total) as i128 - self.data_base as i128
         };
         let word = if self.chunked { 8 } else { 4 };
         Ok(seen
             .into_iter()
             .map(|(path, o)| {
                 let j = offs.binary_search(&o).unwrap();
-                let e = offs.get(j + 1).copied().unwrap_or(end);
-                (path, o, e as i64 - o as i64 - word)
+                let e = offs.get(j + 1).map_or(end, |&x| x as i128);
+                (path, o, (e - o as i128 - word) as i64)
             })
             .collect())
     }
@@ -539,7 +589,11 @@ impl Nsis {
             self.chunk_pos.push(p + 3 + n);
             self.chunk_len.push(le3(&blk[n as usize..]));
         }
-        let data = decompress(&blk[..(n as usize).min(blk.len())])?;
+        // (every chunk but the last makes CHUNK bytes: the offsets of the files count on it)
+        let data = decompress(&blk[..(n as usize).min(blk.len())], CHUNK + 1)?;
+        if data.len() as u64 > CHUNK {
+            return exit(format!("chunk {k} makes more than {CHUNK} bytes"));
+        }
         if self.cache.len() >= 2 {
             let first = *self.cache.keys().next().unwrap();
             self.cache.remove(&first);
@@ -567,23 +621,145 @@ impl Nsis {
 
     /// The file whose block is at `off` (files()'s offset), uncompressed.
     pub fn extract(&mut self, off: u64) -> Result<Vec<u8>> {
+        // (the offset and the sizes are the installer's: a file is at most MAX_FILE bytes)
+        let at = self
+            .data_base
+            .checked_add(off)
+            .filter(|a| a.checked_add(16).is_some())
+            .ok_or_else(|| Error::Exit("offset beyond the installer data".into()))?;
         if self.solid {
             let n = u64le(&self.stream(off, 8)?, 0)?;
+            if n > MAX_FILE {
+                return too_big("a file");
+            }
             return self.stream(off + 8, n);
         }
         if self.chunked {
-            let w = u64le(&self.s.read(self.data_base + off, 8)?, 0)?;
+            let w = u64le(&self.s.read(at, 8)?, 0)?;
             let n = w & 0x7fff_ffff_ffff_ffff;
-            let blk = self.s.read(self.data_base + off + 8, n)?;
+            if n > MAX_FILE {
+                return too_big("a file");
+            }
+            let blk = self.s.read(at + 8, n)?;
             return if w >> 63 != 0 { dechunk(&blk) } else { Ok(blk) };
         }
-        let w = u32le(&self.s.read(self.data_base + off, 4)?, 0)?;
+        let w = u32le(&self.s.read(at, 4)?, 0)?;
         let n = (w & 0x7fff_ffff) as u64;
-        let blk = self.s.read(self.data_base + off + 4, n)?;
+        if n > MAX_FILE {
+            return too_big("a file");
+        }
+        let blk = self.s.read(at + 4, n)?;
         if w & 0x8000_0000 != 0 {
-            decompress(&blk)
+            whole(&blk)
         } else {
             Ok(blk)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    const STRINGS: &[u8] = b"\0$INSTDIR\\Data\0a.txt\0";
+
+    /// A made-up installer of one stored file (a.txt in $INSTDIR\Data): the first header at 0,
+    /// the script header (`edit` changes it first) deflated, the file's block. `total`: the first
+    /// header's data length, else the real one.
+    fn installer(edit: impl FnOnce(&mut Vec<u8>), total: Option<u32>) -> Vec<u8> {
+        let (eo, so) = (68u32, 68 + 2 * 28);
+        let lo = so + STRINGS.len() as u32;
+        let mut h = vec![0u8; 4];
+        for (o, n) in [
+            (0, 0),
+            (0, 0),
+            (eo, 2),
+            (so, 0),
+            (lo, 0),
+            (lo, 0),
+            (lo, 0),
+            (lo, 0),
+        ] {
+            h.extend(o.to_le_bytes());
+            h.extend((n as u32).to_le_bytes());
+        }
+        for w in [
+            [EW_CREATEDIR, 1, 1, 0, 0, 0, 0],
+            [EW_EXTRACTFILE, 0, 15, 0, 0, 0, 0],
+        ] {
+            for x in w {
+                h.extend(x.to_le_bytes());
+            }
+        }
+        h.extend(STRINGS);
+        edit(&mut h);
+        let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(&h).unwrap();
+        let hb = e.finish().unwrap();
+        let mut out = 0u32.to_le_bytes().to_vec();
+        out.extend(FH_SIG);
+        out.extend((h.len() as u32).to_le_bytes());
+        out.extend(0u32.to_le_bytes());
+        out.extend((hb.len() as u32 | 0x8000_0000).to_le_bytes());
+        out.extend(&hb);
+        out.extend(5u32.to_le_bytes());
+        out.extend(b"hello");
+        let t = total.unwrap_or((out.len() - 28) as u32);
+        out[24..28].copy_from_slice(&t.to_le_bytes());
+        out
+    }
+
+    fn open(data: &[u8], tag: &str) -> Result<Nsis> {
+        let p = std::env::temp_dir().join(format!("pkgzip-nsis-{tag}-{}", std::process::id()));
+        std::fs::write(&p, data).unwrap();
+        let n = Nsis::open(p.to_str().unwrap(), Box::new(|_| {}));
+        let _ = std::fs::remove_file(&p);
+        n
+    }
+
+    #[test]
+    fn made_up_installer() {
+        let mut n = open(&installer(|_| {}, None), "ok").unwrap();
+        assert_eq!(
+            n.files().unwrap(),
+            vec![("$INSTDIR/Data/a.txt".to_string(), 0, 5)]
+        );
+        assert_eq!(n.extract(0).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn damaged_headers_are_errors() {
+        // (the fuzz target's findings: subtractions of the header's numbers, as Python's
+        // integers make them, never an overflow) entries after the strings: a negative size
+        let i = installer(|h| h[20..24].copy_from_slice(&200u32.to_le_bytes()), None);
+        let e = open(&i, "ent").err().unwrap().to_string();
+        assert_eq!(e, "unknown script entry size -38");
+        // a first header that says less data than follows it: a negative file size
+        let n = open(&installer(|_| {}, Some(0)), "total").unwrap();
+        assert!(n.files().unwrap()[0].2 < 0);
+        // Unicode strings whose table ends before it begins: no strings to look at
+        let i = installer(
+            |h| {
+                h[125] = 0;
+                h[127] = 0;
+                h[36..40].copy_from_slice(&0u32.to_le_bytes());
+            },
+            None,
+        );
+        assert!(open(&i, "uni").is_ok());
+        // a script header of 4 GB: refused before it is read
+        let mut i = installer(|_| {}, None);
+        i[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        let e = open(&i, "len").err().unwrap().to_string();
+        assert!(e.contains("a script header of more than"), "{e}");
+        // Unity 6's solid layout, cut short in its first header chunk
+        let mut i = installer(|_| {}, None);
+        i[..4].copy_from_slice(&0x40u32.to_le_bytes());
+        i.truncate(38);
+        assert!(open(&i, "cut").is_err());
+        // a file's offset that wraps around the data's
+        let mut n = open(&installer(|_| {}, None), "wrap").unwrap();
+        assert!(n.extract(u64::MAX - 8).is_err());
     }
 }

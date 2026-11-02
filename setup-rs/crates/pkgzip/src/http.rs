@@ -255,23 +255,151 @@ impl Response {
     }
 }
 
+/// The longest status or header line and the most headers a response may have (http.client's
+/// _MAXLINE and _MAXHEADERS).
+const MAX_LINE: u64 = 65536;
+const MAX_HEADERS: usize = 100;
+/// The biggest body a response may have unless the request says otherwise (a server's lengths
+/// are not trusted: more is an error, not an allocation).
+pub const MAX_BODY: u64 = 64 << 20;
+
 /// HTTP/1.1 GET requests, one kept-alive connection at a time (http.client.HTTPConnection's).
-#[derive(Default)]
 pub struct Client {
     conn: Option<(String, String, BufReader<Stream>)>,
+    /// The biggest response body read; a longer one is an error.
+    pub max_body: u64,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Client {
+            conn: None,
+            max_body: MAX_BODY,
+        }
+    }
 }
 
 fn read_line(r: &mut impl BufRead) -> std::io::Result<String> {
     let mut l = Vec::new();
-    r.read_until(b'\n', &mut l)?;
+    r.take(MAX_LINE + 1).read_until(b'\n', &mut l)?;
     if l.is_empty() {
         return Err(io(
             "RemoteDisconnected: Remote end closed connection without response",
         ));
     }
+    if l.len() as u64 > MAX_LINE {
+        return Err(io(format!(
+            "LineTooLong: got more than {MAX_LINE} bytes when reading a line"
+        )));
+    }
     Ok(String::from_utf8_lossy(&l)
         .trim_end_matches(['\r', '\n'])
         .to_string())
+}
+
+/// Header lines up to the empty one (at most MAX_HEADERS).
+fn read_headers(r: &mut impl BufRead) -> std::io::Result<Vec<String>> {
+    let mut hs = Vec::new();
+    loop {
+        let l = read_line(r)?;
+        if l.is_empty() {
+            return Ok(hs);
+        }
+        if hs.len() == MAX_HEADERS {
+            return Err(io(format!(
+                "HTTPException: got more than {MAX_HEADERS} headers"
+            )));
+        }
+        hs.push(l);
+    }
+}
+
+/// A response read from a connection: its status line, headers and body (chunked, by its
+/// Content-Length, else up to the end), with whether the connection may be kept. A body of more
+/// than `max_body` bytes is an error.
+pub fn read_response(r: &mut impl BufRead, max_body: u64) -> std::io::Result<(Response, bool)> {
+    let status_line = loop {
+        let l = read_line(r)?;
+        // (1xx responses before the real one)
+        let code = l.split_whitespace().nth(1).unwrap_or("");
+        if code.starts_with('1') && code.len() == 3 {
+            read_headers(r)?;
+            continue;
+        }
+        break l;
+    };
+    let mut parts = status_line.splitn(3, ' ');
+    let version = parts.next().unwrap_or("").to_string();
+    let status: u16 = parts
+        .next()
+        .and_then(|c| c.parse().ok())
+        .ok_or_else(|| io(format!("BadStatusLine: {status_line:?}")))?;
+    let mut hs = Vec::new();
+    for l in read_headers(r)? {
+        if let Some((k, v)) = l.split_once(':') {
+            hs.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+        }
+    }
+    let resp_h = |k: &str| hs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let conn_h = resp_h("connection")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut keep = if version == "HTTP/1.0" {
+        conn_h.contains("keep-alive")
+    } else {
+        !conn_h.contains("close")
+    };
+    let too_big = || io(format!("response body of more than {max_body} bytes"));
+    let mut body = Vec::new();
+    let no_body = status == 204 || status == 304;
+    if no_body {
+    } else if resp_h("transfer-encoding")
+        .is_some_and(|t| t.to_ascii_lowercase().contains("chunked"))
+    {
+        loop {
+            let l = read_line(r)?;
+            let n = u64::from_str_radix(l.split(';').next().unwrap_or("").trim(), 16)
+                .map_err(|_| io(format!("IncompleteRead: bad chunk size {l:?}")))?;
+            if n == 0 {
+                read_headers(r)?;
+                break;
+            }
+            if n > max_body - body.len() as u64 {
+                return Err(too_big());
+            }
+            let at = body.len();
+            r.take(n).read_to_end(&mut body)?;
+            if ((body.len() - at) as u64) < n {
+                return Err(io(format!(
+                    "IncompleteRead: {} bytes read, {} more expected",
+                    body.len() - at,
+                    n - (body.len() - at) as u64
+                )));
+            }
+            read_line(r)?;
+        }
+    } else if let Some(n) = resp_h("content-length").and_then(|v| v.parse::<u64>().ok()) {
+        if n > max_body {
+            return Err(too_big());
+        }
+        body.resize(n as usize, 0);
+        r.read_exact(&mut body)
+            .map_err(|e| io(format!("IncompleteRead: {e}")))?;
+    } else {
+        r.take(max_body + 1).read_to_end(&mut body)?;
+        if body.len() as u64 > max_body {
+            return Err(too_big());
+        }
+        keep = false;
+    }
+    Ok((
+        Response {
+            status,
+            headers: hs,
+            body,
+        },
+        keep,
+    ))
 }
 
 impl Client {
@@ -303,7 +431,7 @@ impl Client {
             if code != "200" {
                 return Err(io(format!("Tunnel connection failed: {status}")));
             }
-            while !read_line(&mut r)?.is_empty() {}
+            read_headers(&mut r)?;
         }
         let name = ServerName::try_from(u.host.clone()).map_err(|e| io(e.to_string()))?;
         let c =
@@ -347,6 +475,7 @@ impl Client {
         proxied: bool,
         headers: &[(&str, &str)],
     ) -> std::io::Result<(Response, bool)> {
+        let max_body = self.max_body;
         let r = &mut self.conn.as_mut().unwrap().2;
         let target = if proxied { url } else { u.target.as_str() };
         let host = if (u.scheme == "https" && u.port == 443) || (u.scheme == "http" && u.port == 80)
@@ -363,77 +492,7 @@ impl Client {
         req.push_str("\r\n");
         r.get_mut().write_all(req.as_bytes())?;
         r.get_mut().flush()?;
-        let status_line = loop {
-            let l = read_line(r)?;
-            // (1xx responses before the real one)
-            let code = l.split_whitespace().nth(1).unwrap_or("");
-            if code.starts_with('1') && code.len() == 3 {
-                while !read_line(r)?.is_empty() {}
-                continue;
-            }
-            break l;
-        };
-        let mut parts = status_line.splitn(3, ' ');
-        let version = parts.next().unwrap_or("").to_string();
-        let status: u16 = parts
-            .next()
-            .and_then(|c| c.parse().ok())
-            .ok_or_else(|| io(format!("BadStatusLine: {status_line:?}")))?;
-        let mut hs = Vec::new();
-        loop {
-            let l = read_line(r)?;
-            if l.is_empty() {
-                break;
-            }
-            if let Some((k, v)) = l.split_once(':') {
-                hs.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
-            }
-        }
-        let resp_h = |k: &str| hs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        let conn_h = resp_h("connection")
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let mut keep = if version == "HTTP/1.0" {
-            conn_h.contains("keep-alive")
-        } else {
-            !conn_h.contains("close")
-        };
-        let mut body = Vec::new();
-        let no_body = status == 204 || status == 304;
-        if no_body {
-        } else if resp_h("transfer-encoding")
-            .is_some_and(|t| t.to_ascii_lowercase().contains("chunked"))
-        {
-            loop {
-                let l = read_line(r)?;
-                let n = usize::from_str_radix(l.split(';').next().unwrap_or("").trim(), 16)
-                    .map_err(|_| io(format!("IncompleteRead: bad chunk size {l:?}")))?;
-                if n == 0 {
-                    while !read_line(r)?.is_empty() {}
-                    break;
-                }
-                let at = body.len();
-                body.resize(at + n, 0);
-                r.read_exact(&mut body[at..])
-                    .map_err(|e| io(format!("IncompleteRead: {e}")))?;
-                read_line(r)?;
-            }
-        } else if let Some(n) = resp_h("content-length").and_then(|v| v.parse::<usize>().ok()) {
-            body.resize(n, 0);
-            r.read_exact(&mut body)
-                .map_err(|e| io(format!("IncompleteRead: {e}")))?;
-        } else {
-            r.read_to_end(&mut body)?;
-            keep = false;
-        }
-        Ok((
-            Response {
-                status,
-                headers: hs,
-                body,
-            },
-            keep,
-        ))
+        read_response(r, max_body)
     }
 
     /// A GET with redirects followed (up to `depth` more), as nsis.Source._get and urlopen do.
@@ -516,6 +575,41 @@ mod tests {
         assert!(Url::parse("ftp://h/x").is_err());
         assert_eq!(quote_plus("6000.0.61f1"), "6000.0.61f1");
         assert_eq!(quote_plus("a b/c"), "a+b%2Fc");
+    }
+
+    #[test]
+    fn hostile_responses() {
+        // (the fuzz target's) a server's lengths and lines are not trusted: errors, not
+        // allocations of what it claims or a line read forever
+        let read = |r: &[u8]| {
+            read_response(&mut BufReader::new(r), 1 << 20)
+                .map(|(r, _)| r.body.len())
+                .map_err(|e| e.to_string())
+        };
+        assert_eq!(
+            read(b"HTTP/1.1 206 Partial\r\nContent-Length: 5\r\n\r\nhello"),
+            Ok(5)
+        );
+        let e = read(b"HTTP/1.1 200 OK\r\nContent-Length: 99999999999999\r\n\r\nx").unwrap_err();
+        assert!(e.starts_with("response body of more than"), "{e}");
+        let e = read(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\nx")
+            .unwrap_err();
+        assert!(e.starts_with("response body of more than"), "{e}");
+        let e = read(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab").unwrap_err();
+        assert!(e.starts_with("IncompleteRead"), "{e}");
+        let long = [&b"HTTP/1.1 200 OK\r\nX: "[..], &[b'a'; 70_000]].concat();
+        assert!(read(&long).unwrap_err().starts_with("LineTooLong"));
+        let many = [
+            &b"HTTP/1.1 200 OK\r\n"[..],
+            &b"X: y\r\n".repeat(101),
+            b"\r\n",
+        ]
+        .concat();
+        assert!(read(&many).unwrap_err().contains("more than 100 headers"));
+        let endless = [&b"HTTP/1.0 200 OK\r\n\r\n"[..], &[0u8; (1 << 20) + 1]].concat();
+        assert!(read(&endless)
+            .unwrap_err()
+            .starts_with("response body of more than"));
     }
 
     /// A local server: range requests on a kept-alive connection, a redirect, a closed connection.

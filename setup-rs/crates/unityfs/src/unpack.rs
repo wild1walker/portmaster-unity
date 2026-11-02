@@ -63,18 +63,17 @@ impl Archive {
         if format >= 7 {
             p = (p + 15) & !15;
         }
-        let mut ci = vec![0u8; ci_size as usize];
+        // (the sizes are read from the file: what is there is read, never more than it has)
+        let mut ci = Vec::new();
         let mut data_start;
         if flags & 0x80 != 0 {
             // the block table at the end of the file
-            f.seek(SeekFrom::Start((size - ci_size as i64) as u64))?;
-            let n = read_some(&mut f, &mut ci)?;
-            ci.truncate(n);
+            f.seek(SeekFrom::Start(size.saturating_sub(ci_size as i64) as u64))?;
+            (&mut f).take(ci_size as u64).read_to_end(&mut ci)?;
             data_start = p as u64;
         } else {
             f.seek(SeekFrom::Start(p as u64))?;
-            let n = read_some(&mut f, &mut ci)?;
-            ci.truncate(n);
+            (&mut f).take(ci_size as u64).read_to_end(&mut ci)?;
             data_start = p as u64 + ci_size as u64;
         }
         if flags & 0x200 != 0 {
@@ -135,16 +134,15 @@ impl Archive {
                 std::fs::create_dir_all(d)?;
             }
             let fo = File::create(tmp(&dst))?;
-            outs.push((*off, off + sz, dst, fo));
+            outs.push((*off, off.saturating_add(*sz), dst, fo));
             names.push(name.clone());
         }
         let mut upos = 0u64;
         let mut f = File::open(&self.path)?;
         for &(fpos, csz, usz, bfl) in &self.blocks {
             f.seek(SeekFrom::Start(fpos))?;
-            let mut data = vec![0u8; csz as usize];
-            let n = read_some(&mut f, &mut data)?;
-            data.truncate(n);
+            let mut data = Vec::new();
+            (&mut f).take(csz as u64).read_to_end(&mut data)?;
             let plain = decompress(&data, usz as usize, (bfl & 0x3f) as u32)?;
             for (a, b, _, fo) in &mut outs {
                 let lo = (*a).max(upos);
@@ -208,18 +206,6 @@ fn realpath(p: &Path) -> PathBuf {
 
 fn repr(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-fn read_some(f: &mut File, buf: &mut [u8]) -> Result<usize> {
-    let mut n = 0;
-    while n < buf.len() {
-        let k = f.read(&mut buf[n..])?;
-        if k == 0 {
-            break;
-        }
-        n += k;
-    }
-    Ok(n)
 }
 
 /// unpack._decompress: stored, LZMA (1) or LZ4 (2, 3) blocks.

@@ -237,7 +237,9 @@ impl Archive {
                 end_offset: 0,
             };
             decode_extra(&mut e, &extra)?;
-            e.header_offset += concat as i64;
+            // (Python's integers; an offset past i64 is past the end of any file)
+            e.header_offset =
+                (e.header_offset as i128 + concat).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
             by_name.insert(e.name.clone(), entries.len());
             entries.push(e);
             total += 46 + (n_len + x_len + k_len) as u64;
@@ -400,7 +402,7 @@ fn decode_extra(e: &mut Entry, mut extra: &[u8]) -> Result<()> {
                 e.compress_size = next("Compress size")?;
             }
             if e.header_offset == 0xFFFF_FFFF {
-                e.header_offset = next("Header offset")? as i64;
+                e.header_offset = i64::try_from(next("Header offset")?).unwrap_or(i64::MAX);
             }
         }
         extra = &extra[ln + 4..];
@@ -538,7 +540,10 @@ impl EntryReader {
                         return Ok(0);
                     }
                     let rest = self.left_in - 4 - psize;
-                    let dict = u32::from_le_bytes(props[1..5].try_into().unwrap());
+                    // (the reader holds no more dictionary than the entry's size; the size is the
+                    // directory's, so a damaged one is bounded too)
+                    let dict =
+                        u32::from_le_bytes(props[1..5].try_into().unwrap()).min(crate::MAX_DICT);
                     let rd = lzma_rust2::LzmaReader::new_with_props(
                         self.raw.clone().take(rest),
                         self.left,
@@ -780,6 +785,33 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o111, 0); // (the archive's modes are not applied)
+    }
+
+    #[test]
+    fn damaged_directory_offsets() {
+        // (the fuzz target's) a zip64 header offset of 2^63 - 1 with data before the archive:
+        // no overflow, the entry's header is past the end of the file
+        let t = Tmp::new("off");
+        let mut cd = b"PK\x01\x02".to_vec();
+        cd.extend([20, 3, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        cd.extend([0; 12]); // crc, sizes
+        cd.extend(1u16.to_le_bytes());
+        cd.extend(12u16.to_le_bytes());
+        cd.extend([0; 10]); // comment length, disk, attributes
+        cd.extend(u32::MAX.to_le_bytes());
+        cd.push(b'a');
+        cd.extend(1u16.to_le_bytes());
+        cd.extend(8u16.to_le_bytes());
+        cd.extend((i64::MAX as u64).to_le_bytes());
+        let mut z = b"stub".to_vec();
+        z.extend(&cd);
+        z.extend(b"PK\x05\x06\0\0\0\0\x01\0\x01\0");
+        z.extend((cd.len() as u32).to_le_bytes());
+        z.extend(0u32.to_le_bytes());
+        z.extend(0u16.to_le_bytes());
+        let a = Archive::open(&t.put("z64.zip", &z)).unwrap();
+        assert_eq!(a.entries[0].header_offset, i64::MAX);
+        assert!(a.read("a").is_err());
     }
 
     #[test]

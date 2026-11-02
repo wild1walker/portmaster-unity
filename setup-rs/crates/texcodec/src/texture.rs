@@ -331,7 +331,7 @@ pub fn convert(
         && ch.mips == 1
         && t.mip_count.unwrap_or(1) == 1
         && (ch.width, ch.height) == (t.width, t.height)
-        && ch.width * ch.height >= STRIP_MIN_PX
+        && ch.width.saturating_mul(ch.height) >= STRIP_MIN_PX
     {
         out = strip_blocks(t, raw, ch, enc)?.map(|b| (b, 1));
     }
@@ -427,12 +427,15 @@ pub fn prepare(
     let mut seed = None;
     if let Some(dxt5) = dxt_seed_format(t.format).filter(|_| same) {
         // dxt_seed()
-        let n = w.div_ceil(4) * h.div_ceil(4) * if dxt5 { 16 } else { 8 };
+        let n = w
+            .div_ceil(4)
+            .saturating_mul(h.div_ceil(4))
+            .saturating_mul(if dxt5 { 16 } else { 8 });
         if !raw.is_empty() && !uncuttable(t) && raw.len() >= n {
             seed = Some((raw[..n].to_vec(), dxt5));
         }
     }
-    let huge = w * h >= HUGE_PX && !same;
+    let huge = w.saturating_mul(h) >= HUGE_PX && !same;
     let small = if huge {
         decode_downscale(t, raw, ch.width, ch.height, if split { threads } else { 1 })?
     } else {
@@ -443,7 +446,7 @@ pub fn prepare(
         None => {
             // tex.image (decoded top first; big ones a strip of rows a core), texture_image, then
             // downscale (on every core where downscale_parallel can)
-            let big = w * h >= PREP_MIN_PX;
+            let big = w.saturating_mul(h) >= PREP_MIN_PX;
             let mut img = match (split && big).then(|| decode_parallel(t, raw, threads)) {
                 Some(Some(img)) => img?,
                 _ => decode_rgba(t, raw, w, h)?,
@@ -611,7 +614,8 @@ pub fn downscale_parallel(img: Rgba, w: usize, h: usize, cores: usize) -> Result
 /// The source's rows of blocks (or of pixels) and the bytes each takes, when the data can be cut in
 /// rows (strip_blocks, decode_downscale); None otherwise.
 fn row_units(t: &Texture, raw: &[u8]) -> Option<(usize, usize)> {
-    if uncuttable(t) {
+    // (data too short for the image fails in a whole decode, before its pixels are allocated)
+    if uncuttable(t) || decode::too_short(raw.len(), t.width, t.height, t.format) {
         return None;
     }
     let bh = decode::block_size(t.format).map_or(1, |b| b.1);
@@ -853,5 +857,27 @@ mod tests {
         assert!(banded == whole, "banded differs");
         let par = downscale_parallel(img, 1536, 1536, 4).unwrap();
         assert!(par == whole, "parallel differs");
+    }
+
+    #[test]
+    fn damaged_sizes_are_errors() {
+        // a texture that says it is 2^20 x 2^20 (or wraps around) with a few bytes of data: the
+        // decode fails before the image's pixels are allocated (the fuzz target's findings)
+        let s = Settings::from_config(Some(&json!({"scale": 0.5, "threads": 2}))).unwrap();
+        let raw = vec![7u8; 1 << 20];
+        for (w, h, f) in [
+            (1usize << 20, 1usize << 20, tf::RGBA32),
+            (1 << 20, 1 << 20, tf::DXT5),
+            (usize::MAX - 2, 4, tf::DXT1),
+            (usize::MAX / 3, 4, tf::RGB24),
+        ] {
+            let t = tex("big", w, h, f);
+            let ch = choose(&t, &s).unwrap();
+            assert!(decode_downscale(&t, &raw, ch.width, ch.height, 2)
+                .unwrap()
+                .is_none());
+            let e = prepare(&t, &raw, &ch, 2, true).err().unwrap().to_string();
+            assert_eq!(e, "not enough image data");
+        }
     }
 }

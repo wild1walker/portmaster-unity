@@ -83,8 +83,29 @@ pub fn block_size(format: i32) -> Option<(usize, usize)> {
 pub fn compressed_size(width: usize, height: usize, format: i32) -> (usize, usize) {
     match block_size(format) {
         None => (width, height),
-        Some((bw, bh)) => (width.div_ceil(bw) * bw, height.div_ceil(bh) * bh),
+        Some((bw, bh)) => (
+            width.div_ceil(bw).saturating_mul(bw),
+            height.div_ceil(bh).saturating_mul(bh),
+        ),
     }
+}
+
+/// Whether `len` bytes are too few for a width x height image of a format decoded here
+/// (parse_image_data's "not enough image data"); a size too big to count is too big for any
+/// data. False for the formats this crate does not decode or cannot size (crunched).
+pub fn too_short(len: usize, width: usize, height: usize, format: i32) -> bool {
+    let (pw, ph) = compressed_size(width, height, format);
+    let need = match format {
+        tf::ALPHA8 => pw.checked_mul(ph),
+        tf::RGB24 => pw.checked_mul(ph).and_then(|n| n.checked_mul(3)),
+        tf::RGBA32 | tf::ARGB32 | tf::BGRA32 => pw.checked_mul(ph).and_then(|n| n.checked_mul(4)),
+        tf::DXT1 | tf::BC4 => (pw / 4).checked_mul(ph / 4).and_then(|n| n.checked_mul(8)),
+        tf::DXT3 | tf::DXT5 | tf::BC5 | tf::BC7 => {
+            (pw / 4).checked_mul(ph / 4).and_then(|n| n.checked_mul(16))
+        }
+        _ => return false,
+    };
+    need.is_none_or(|n| len < n)
 }
 
 /// Is the data swizzled for the Switch (UnityPy's TextureSwizzler.is_switch_swizzled)?
@@ -226,7 +247,11 @@ fn raw(
     mode: Mode,
     f: impl Fn(&[u8], &mut [u8]),
 ) -> Result<Decoded, Error> {
-    if data.len() < w * h * n {
+    // (sizes from the texture's fields: a product too big to count is more than the data)
+    if w.checked_mul(h)
+        .and_then(|p| p.checked_mul(n))
+        .is_none_or(|need| data.len() < need)
+    {
         return Err(Error::Decode("not enough image data".into()));
     }
     let mut px = vec![0u8; w * h * 4];
@@ -249,7 +274,11 @@ fn bcn(data: &[u8], w: usize, h: usize, n: u8, mode: Mode) -> Result<Decoded, Er
     let bpp = bytes_per_pixel(mode);
     let size = if n == 1 || n == 4 { 8 } else { 16 };
     let (bx, by) = (w / 4, h / 4);
-    if data.len() < bx * by * size {
+    if bx
+        .checked_mul(by)
+        .and_then(|p| p.checked_mul(size))
+        .is_none_or(|need| data.len() < need)
+    {
         return Err(Error::Decode("not enough image data".into()));
     }
     let mut px = vec![0u8; w * h * bpp];
@@ -501,8 +530,9 @@ fn get_bits(src: &[u8], bit: usize, count: u8) -> u8 {
 }
 
 fn expand_quantized(v: u8, bits: u8) -> u8 {
-    let v = ((v as u32) << (8 - bits as u32)) as u8;
-    v | (v >> bits)
+    // (C's int arithmetic: 8 bits shift a UINT8 to 0)
+    let v = ((v as u32) << (8 - bits as u32)) & 0xff;
+    (v | (v >> bits)) as u8
 }
 
 fn bc7_lerp(dst: &mut [u8; 4], e0: &[u8; 4], e1: &[u8; 4], s0: u8, s1: u8) {
@@ -783,5 +813,36 @@ mod tests {
             parse_image_data(b"not crunched data", 4, 4, tf::DXT5_CRUNCHED, [2017, 4]).is_err()
         );
         assert!(parse_image_data(&[0u8; 16], 4, 4, 34, [2017, 4]).is_err()); // ETC: not here
+    }
+
+    #[test]
+    fn sizes_too_big_to_count_are_short_data() {
+        // a damaged texture's width and height (the object's integers): the products overflow,
+        // the data is too short, never a panic (the fuzz target's findings)
+        for (w, h, f) in [
+            (usize::MAX / 2, 3, tf::RGBA32),
+            (usize::MAX / 3, 5, tf::RGB24),
+            (usize::MAX - 2, 4, tf::DXT1),
+            (1 << 40, 1 << 40, tf::BC7),
+        ] {
+            let e = parse_image_data(&[1, 2, 3, 4], w, h, f, [2017, 4]).unwrap_err();
+            assert_eq!(e.to_string(), "not enough image data");
+            assert!(too_short(4, w, h, f));
+        }
+        assert_eq!(compressed_size(usize::MAX, 1, tf::DXT1), (usize::MAX, 4));
+        assert!(!too_short(64, 4, 4, tf::DXT5) && too_short(15, 4, 4, tf::DXT5));
+        assert!(!too_short(3, 1 << 30, 1 << 30, tf::DXT1_CRUNCHED)); // (not sized here)
+    }
+
+    #[test]
+    fn bc7_eight_bit_endpoints() {
+        // modes 6 and 7 add a p-bit to 7 or 5 bits: 8 bits expand to themselves (C's shift by 8
+        // of a UINT8 promoted to int), where Rust's shift of a u8 by 8 overflowed
+        assert_eq!(expand_quantized(0xAB, 8), 0xAB);
+        assert_eq!(expand_quantized(0x15, 5), 0xAD);
+        let mut block = [0xA5u8; 16];
+        block[0] = 0x40; // mode 6
+        let img = parse_image_data(&block, 4, 4, tf::BC7, [2017, 4]).unwrap();
+        assert_eq!(img.px.len(), 64);
     }
 }

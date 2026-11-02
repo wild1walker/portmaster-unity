@@ -425,8 +425,22 @@ fn lzma_alone_header(h: &[u8]) -> Option<bool> {
     Some(size == u64::MAX || size < 1 << 38)
 }
 
+/// The most a pbzx chunk may be, compressed or not: one is held in memory, as the Python holds
+/// it (Apple's are 16 MB), and its length and its xz data are the file's.
+pub const MAX_CHUNK: u64 = 64 << 20;
+
+/// The memory an xz or .lzma decoder may take (KiB): MAX_DICT and the decoder's own.
+const MEM_LIMIT_KB: u32 = (crate::MAX_DICT >> 10) + 1024;
+
+fn chunk_too_big() -> io::Error {
+    err(format!(
+        "ValueError: a pbzx chunk of more than {MAX_CHUNK} bytes (a damaged installer)"
+    ))
+}
+
 /// lzma.decompress of one pbzx chunk (format auto): its streams one after another; data after the
-/// first that is no stream is ignored, a stream cut short is an error.
+/// first that is no stream is ignored, a stream cut short is an error. More than MAX_CHUNK bytes
+/// out is an error.
 pub fn xz_decompress(data: &[u8]) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut rest = data;
@@ -434,8 +448,11 @@ pub fn xz_decompress(data: &[u8]) -> io::Result<Vec<u8>> {
     while !rest.is_empty() {
         let mut cur = Cursor::new(rest);
         let mut piece = Vec::new();
+        let room = MAX_CHUNK + 1 - out.len() as u64;
         let r = if rest[0] == 0xfd {
-            lzma_rust2::XzReader::new(&mut cur, false).read_to_end(&mut piece)
+            lzma_rust2::XzReader::new_mem_limit(&mut cur, false, MEM_LIMIT_KB)
+                .take(room)
+                .read_to_end(&mut piece)
         } else {
             match lzma_alone_header(rest) {
                 None => return Err(err(ENDED)),
@@ -446,8 +463,8 @@ pub fn xz_decompress(data: &[u8]) -> io::Result<Vec<u8>> {
                     ))
                 }
                 Some(true) if rest.len() < 18 => return Err(err(ENDED)),
-                Some(true) => lzma_rust2::LzmaReader::new_mem_limit(&mut cur, u32::MAX, None)
-                    .and_then(|mut r| r.read_to_end(&mut piece)),
+                Some(true) => lzma_rust2::LzmaReader::new_mem_limit(&mut cur, MEM_LIMIT_KB, None)
+                    .and_then(|r| r.take(room).read_to_end(&mut piece)),
             }
         };
         match r {
@@ -455,6 +472,9 @@ pub fn xz_decompress(data: &[u8]) -> io::Result<Vec<u8>> {
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(err(ENDED)),
             Err(_) if !first => break,
             Err(e) => return Err(err(format!("_lzma.LZMAError: {e}"))),
+        }
+        if piece.len() as u64 == room {
+            return Err(chunk_too_big());
         }
         out.extend_from_slice(&piece);
         rest = &rest[cur.position() as usize..];
@@ -493,6 +513,9 @@ impl<R: Read> Pbzx<R> {
             return Ok(());
         }
         let length = u64::from_be_bytes(h[8..16].try_into().unwrap());
+        if length > MAX_CHUNK {
+            return Err(chunk_too_big());
+        }
         let mut data = Vec::new();
         (&mut self.raw).take(length).read_to_end(&mut data)?;
         self.buf = if data.starts_with(XZ_MAGIC) {
@@ -725,6 +748,37 @@ mod tests {
                 .contains("ended before"));
         }
         assert!(xz_decompress(&xz[..xz.len() - 5]).is_err());
+    }
+
+    #[test]
+    fn pbzx_damaged_sizes() {
+        // (the fuzz target's findings) a chunk length of 2^64 - 1: refused, not the rest of the
+        // payload read into memory
+        let mut d = b"pbzx".to_vec();
+        d.extend(1u64.to_be_bytes());
+        d.extend(0u64.to_be_bytes());
+        d.extend(u64::MAX.to_be_bytes());
+        d.extend([0u8; 64]);
+        let e = all(payload_stream(Box::new(Cursor::new(d))).unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("a pbzx chunk of more than"), "{e}");
+        // an .lzma stream that asks for a 3 GB dictionary: an error before it is allocated
+        let mut alone = vec![0x5d];
+        alone.extend(0xC000_0000u32.to_le_bytes());
+        alone.extend(u64::MAX.to_le_bytes());
+        alone.extend([0u8; 32]);
+        let e = xz_decompress(&alone).unwrap_err().to_string();
+        assert!(e.contains("memory"), "{e}");
+        // an xz chunk that makes more than MAX_CHUNK
+        let mut big = Vec::new();
+        let mut opts = lzma_rust2::XzOptions::with_preset(0);
+        opts.lzma_options.dict_size = 1 << 16;
+        let mut w = lzma_rust2::XzWriter::new(&mut big, opts).unwrap();
+        w.write_all(&vec![0u8; MAX_CHUNK as usize + 1]).unwrap();
+        w.finish().unwrap();
+        let e = xz_decompress(&big).unwrap_err().to_string();
+        assert!(e.contains("a pbzx chunk of more than"), "{e}");
     }
 
     #[test]

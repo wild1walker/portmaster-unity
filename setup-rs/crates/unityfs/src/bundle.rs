@@ -119,7 +119,8 @@ impl Header {
         let mut ir = Reader::new(&info, true);
         let hash: [u8; 16] = ir.take(16)?.try_into().unwrap();
         let nb = ir.i32()?;
-        let mut blocks = Vec::with_capacity(nb.max(0) as usize);
+        // (counts read from the file: room for no more entries than the bytes left can hold)
+        let mut blocks = Vec::with_capacity((nb.max(0) as usize).min(ir.remaining() / 10));
         for _ in 0..nb.max(0) {
             blocks.push(BlockInfo {
                 usize: ir.u32()?,
@@ -128,7 +129,7 @@ impl Header {
             });
         }
         let nn = ir.i32()?;
-        let mut nodes = Vec::with_capacity(nn.max(0) as usize);
+        let mut nodes = Vec::with_capacity((nn.max(0) as usize).min(ir.remaining() / 21));
         for _ in 0..nn.max(0) {
             let offset = ir.i64()?;
             let size = ir.i64()?;
@@ -325,6 +326,12 @@ impl Bundle {
 
     pub fn from_source(file: SharedSource) -> Result<Self> {
         let header = Header::read(&*file)?;
+        if let Some(n) = header.nodes.iter().find(|n| n.offset < 0 || n.size < 0) {
+            return bad(format!(
+                "bundle: node {} at {} of {} bytes",
+                n.name, n.offset, n.size
+            ));
+        }
         let data = Arc::new(Blocks::new(file.clone(), &header));
         let end = header
             .nodes
@@ -371,6 +378,8 @@ impl Bundle {
         let h = &self.header;
         let mut paths = Vec::new();
         let mut files = Vec::new();
+        // (a buffer a node, 4 MB in all however many nodes the bundle says it has)
+        let buf = ((4usize << 20) / h.nodes.len().max(4)).max(8 << 10);
         for (i, n) in h.nodes.iter().enumerate() {
             let safe = !n.name.is_empty()
                 && n.name
@@ -384,7 +393,7 @@ impl Bundle {
                 format!("node{i}")
             });
             files.push(io::BufWriter::with_capacity(
-                1 << 20,
+                buf,
                 std::fs::File::create(&p)?,
             ));
             paths.push(p);

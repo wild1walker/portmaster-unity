@@ -208,6 +208,30 @@ pub type RefTypes = [RefType];
 struct Ctx<'a> {
     refs: Option<&'a RefTypes>,
     has_registry: bool,
+    /// Nodes being read or written, one inside the other (a reference type's tree included).
+    depth: usize,
+    /// Values read, and the most the object may have.
+    values: usize,
+    max_values: usize,
+}
+
+/// The deepest nesting read or written: Unity's own trees are a few dozen levels deep; a damaged
+/// file's (the old format's levels, references that name each other) would overflow the stack.
+pub const MAX_DEPTH: usize = 256;
+
+/// Values one object may be read into: this many, and 16 for each byte of its data (Unity's
+/// objects have a few a byte). An array's count comes from the data, and elements of empty
+/// structs, or of structs nested around one byte, cost far more than their bytes.
+pub const MAX_VALUES: usize = 1 << 20;
+
+fn deeper(ctx: &mut Ctx) -> Result<()> {
+    ctx.depth += 1;
+    if ctx.depth > MAX_DEPTH {
+        return Err(Error::Format(format!(
+            "type tree nested more than {MAX_DEPTH} levels deep"
+        )));
+    }
+    Ok(())
 }
 
 /// An object's bytes read with a type tree: (value, bytes read). The bytes need not all be read
@@ -222,6 +246,9 @@ pub fn read(
     let mut ctx = Ctx {
         refs,
         has_registry: false,
+        depth: 0,
+        values: 0,
+        max_values: MAX_VALUES.saturating_add(data.len().saturating_mul(16)),
     };
     let v = read_value(tree, 0, &mut r, &mut ctx)?;
     Ok((v, r.pos))
@@ -281,6 +308,21 @@ fn read_len(r: &mut Reader) -> Result<usize> {
 }
 
 fn read_value(t: &TypeTree, i: usize, r: &mut Reader, ctx: &mut Ctx) -> Result<Value> {
+    deeper(ctx)?;
+    ctx.values += 1;
+    if ctx.values > ctx.max_values {
+        return Err(Error::Format(format!(
+            "an object of more than {} values in {} bytes",
+            ctx.max_values,
+            r.data.len()
+        )));
+    }
+    let v = read_node(t, i, r, ctx);
+    ctx.depth -= 1;
+    v
+}
+
+fn read_node(t: &TypeTree, i: usize, r: &mut Reader, ctx: &mut Ctx) -> Result<Value> {
     let node = &t.nodes[i];
     let mut align = node.aligned();
     let v = match node.kind {
@@ -442,9 +484,13 @@ fn ref_type_tree(s: &Struct, refs: Option<&RefTypes>) -> Result<Option<Arc<TypeT
 /// A value written with a type tree (UnityPy's write_typetree): the object's new bytes.
 pub fn write(tree: &TypeTree, v: &Value, big: bool, refs: Option<&RefTypes>) -> Result<Vec<u8>> {
     let mut w = Writer::new(big);
+    // (a value written is one read, or made by the steps: no count kept)
     let mut ctx = Ctx {
         refs,
         has_registry: false,
+        depth: 0,
+        values: 0,
+        max_values: usize::MAX,
     };
     write_value(tree, 0, v, &mut w, &mut ctx)?;
     Ok(w.buf)
@@ -510,6 +556,13 @@ fn write_num(k: Kind, v: &Value, w: &mut Writer, name: &str) -> Result<()> {
 }
 
 fn write_value(t: &TypeTree, i: usize, v: &Value, w: &mut Writer, ctx: &mut Ctx) -> Result<()> {
+    deeper(ctx).map_err(|e| Error::Value(e.to_string()))?;
+    let r = write_node(t, i, v, w, ctx);
+    ctx.depth -= 1;
+    r
+}
+
+fn write_node(t: &TypeTree, i: usize, v: &Value, w: &mut Writer, ctx: &mut Ctx) -> Result<()> {
     let node = &t.nodes[i];
     let mut align = node.aligned();
     let k = node.kind;
