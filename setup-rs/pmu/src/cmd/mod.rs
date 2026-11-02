@@ -7,6 +7,7 @@ mod convert;
 mod macpkg;
 mod patch_obb;
 mod player;
+mod route;
 mod unpack;
 mod version;
 mod winbcl;
@@ -24,6 +25,7 @@ pub const NAMES: &[&str] = &[
     "version",
     "unpack",
     "winbcl",
+    "route",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -39,6 +41,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "version" => Some(version::run(args)),
         "unpack" => Some(unpack::run(args)),
         "winbcl" => Some(winbcl::run(args)),
+        "route" => Some(route::run(args)),
         _ => None,
     }
 }

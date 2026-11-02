@@ -9,5 +9,5 @@
     "README.md": "README.port.md",
     "package.sh": "package.sh"
   },
-  "package": ["pmunity", "pybundle", "box64"]
+  "package": ["pmu?", "pmunity?", "pybundle?", "box64"]
 }

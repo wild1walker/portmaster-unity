@@ -508,7 +508,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(whys, [why])
             self.assertTrue(P.wants('pmunity', P.merge(base, over)))
         # the routes whose release can ship pmu instead of the Python
-        for route in ('android', 'mono-arm64'):
+        for route in ('android', 'mono-arm64', 'box64'):
             r = json.load(open(os.path.join(os.path.dirname(P.__file__), 'port_template', route, 'route.json')))
             self.assertTrue({'pmu?', 'pmunity?', 'pybundle?'} <= set(r['package']), route)
 
