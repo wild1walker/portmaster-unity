@@ -7,6 +7,7 @@ whole measured session:
 |---|---|
 | how fast, how steady | `UA_FPS=<s>` (on by default every 5 s): fps, average / p99 / worst frame, frames over 25 and 50 ms, Mono collections ([runtime.md](runtime.md)) |
 | what one slow frame did | `UA_HITCH_TRACE=<ms>` + `tools/analysis/hitchsum.py`: samples inside frames longer than `<ms>` |
+| whether a long frame is the driver making shader programs, and whether Unity's program binary cache is used | `UA_GL_PROGLOG=1` + `tools/analysis/hitchsum.py --glprog`: [below](#shader-programs-compiles-links-and-unitys-binary-cache) |
 | where the steady frame goes | `UA_PROF=<hz>` + `tools/analysis/profsum.py`: a sampling profile of UnityMain and the render thread (below) |
 | the same, measured and compared across settings | `tools/device/profbench.sh` + `tools/analysis/benchsum.py`: one run per setting with frame rate, clocks, CPU, memory and the profile (below) |
 | what a thread waits in right now | `python3 tools/device/stacks.py <pid> [thread]` on the device, or `kill -s RTMIN+7 <pid>` (every thread's stack into the log) |
@@ -717,6 +718,62 @@ an option, off.
 | `InvertMatrix4x4_Full` (self time ~1 % of UnityMain; called per camera from `Camera::ExtractCameraRenderingParams`, image-effect blits, `ScreenPointToRay`) replaced by a NEON inverse, or memoized (it reads only its 16 input floats and writes only its output, no globals or calls) | a rewritten 4x4 inverse reassociates the arithmetic, so it is not bit-identical and cannot be a default (the exactness rule forbids it); a last-inputs memo would be exact but the function is small next to the wake traffic |
 | `ShaderVariantAnalytics::...::SumUpVariants*` (editor telemetry summed per draw inside `ShaderLab::Pass::ApplyPass`, ~0.4 % of UnityMain and of the render thread) | computes an internal analytics counter the game never reads; could be no-op'd, but the saving is below the run-to-run noise |
 | hooking `GfxDeviceGLES` to drop redundant GL state or uniform re-uploads on the render thread | the render thread's time is spent blocked inside Mali's driver (the grab copies and the first draw after a framebuffer change), not in redundant state Unity sends; the driver's buffer handling, not Unity's call count, is the cost ([GPU, pass by pass](#gpu-pass-by-pass)) |
+
+## Shader programs: compiles, links and Unity's binary cache
+
+```sh
+tools/device/profbench.sh <game folder> cold UA_GL_PROGLOG=1     # after emptying <game folder>/data/cache/UnityShaderCache
+tools/device/profbench.sh <game folder> warm UA_GL_PROGLOG=1     # the next launch, with the cache the first one filled
+python3 tools/analysis/hitchsum.py <run>/run.log --glprog
+```
+
+`UA_GL_PROGLOG=1` (runtime/host/glhooks.c) times each `glCompileShader`, `glLinkProgram`,
+`glProgramBinary` (with the link status the driver gives the loaded binary) and `glGetProgramBinary`
+on the thread that makes it, with the time since the first frame (the clock of the `[hitch]` lines),
+and at the first frame logs the driver's program binary formats and whether its EGL has
+`EGL_ANDROID_blob_cache`. Nothing else changes. `hitchsum.py --glprog` puts the calls into the
+frames of over 100 ms they ended in.
+
+Unity's GLES backend keeps a program binary cache: a program it links is read back with
+`glGetProgramBinary` and written to `<temporaryCachePath>/UnityShaderCache/<hash>`, and the next
+time that source is wanted it is loaded with `glProgramBinary` instead of compiled. ua_host gives the player
+`data/cache/` as that path ([android-data.md](android-data.md)), so the cache lives next to the
+saves, and turns it off only for `UA_SHADER_DUMP` / `UA_SHADER_OVERRIDE` (a dumped or overridden
+source must be compiled) and `UA_GL_REC=2`.
+
+Hollow Knight on the RG34XX-SP (2026-11-02, the 32-bit game set up by `pmu`, the 1 GB options of
+its port; the walk-and-attack plan of [compat/games.md](compat/games.md), 40 s measured): the driver
+(Mali-G31, r20p0-01rel0) has one program binary format, `0x8f61` (`GL_MALI_PROGRAM_BINARY_ARM`), and
+no `EGL_ANDROID_blob_cache`. Two launches of the same save, the first with the cache folder emptied:
+
+| | first launch (no cache) | second launch |
+|---|---|---|
+| programs made, all on `UnityGfxDeviceW` | 52 compiles 394 ms, 26 links 2,248 ms (the longest 500, 395, 245, 214, 160 ms) | 26 binary loads 105 ms (25 of 0.5 - 1.4 ms, one 86 ms), every one accepted; no compiles |
+| the title screen's load (one frame) | 8,295 ms, 214 ms of it programs (7 links) | 7,777 ms, 4.7 ms (7 loads) |
+| King's Pass's load (its two longest frames) | 6,418 + 2,120 ms, 1,653 ms of them programs (12 links) | 5,821 + 1,605 ms, 94 ms (11 loads) |
+| walking right, attacking and jumping (50 s of frames) | no program made | no program made |
+| the cache afterwards | 27 files, 3.5 MB (a `version` file and one per program) | the same 27 files |
+
+So the cache works under ua_host: a launch after the first loads every program in about 1 % of
+the time the first spent compiling and linking it, and all of that work falls inside loading
+frames, never in play. The game makes the programs of a scene while it loads it; the walk, with
+its slashes, jumps and the first effects of their pools, made none in either launch. The 0.1 - 0.9 s
+frames in a player's first fights ([compat/games.md](compat/games.md)) are therefore not shader
+compiles: the first instantiations of pooled effects remain the suspects. A ua_host program binary
+cache of its own (hooks on `glLinkProgram` / `glProgramBinary`, or `EGL_ANDROID_blob_cache`, which
+this driver lacks) would repeat what Unity does; it was not built. What is left on a first launch
+is about 2.6 s of driver work spread over the title's and the first level's loads (the cache could
+be filled once at the end of a setup instead: not done). The two walks ran at 53.6 and 56.2 fps
+(185 and 55 frames over 25 ms): with no program made in either, that is the handheld's state (the
+second run had about 270 MB more in swap and 115 MB more memory available), not the cache.
+
+The hitch sampler's own cost: with `UA_HITCH_TRACE=50 UA_HITCH_THREADS=UnityMain,UnityGfxDeviceW`
+the same first launch took 1,560, 1,411 and 1,184 ms for the three longest links (500, 395, 245
+without it), and the walk began with ten frames of 0.3 - 8.7 s with the CPUs at their lowest clock
+and the sampled threads often not answering (samples about 100 ms apart instead of 20; probably
+one stopped thread holding what the other waits for). The second launch, sampled the same way,
+walked at once. Time program work with `UA_GL_PROGLOG`, not with the sampler, and read a sampled
+frame's length only as an upper bound.
 
 ## GPU, pass by pass
 
