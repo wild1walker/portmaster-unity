@@ -257,13 +257,13 @@ On a part of the game on the handheld (globalgamemanagers, resources and shareda
 | | main | lazy journal + read-ahead + pool | + strips on the pool, read-ahead in order, synced on the way |
 |---|---|---|---|
 | wall | 307.7 s | 281.5 s | **253.2 s** (-18 %) |
-| CPU (user) | 688 s (2.24 cores) | 713 s | 706 s (2.79 cores) |
+| CPU (user + system) | 705 s (2.3 cores) | 733 s | 720 s (2.8 cores) |
 | the main thread waiting for texture reads | 47.8 s | 21.6 s | 27.0 s |
 | ... for its syncs before the renames | 16.7 s | 20.1 s | 11.1 s |
 | ... for journal writes | 4.7 s | 4.2 s | 2.8 s |
 | peak RSS | 75 MB | 159 MB | 158 MB |
 
-(Without the workers, `PMU_TEXTURE_POOL_MB=0`, the first change's 304.7 s.) The rest of the time
+(The journal, scratch folders and a texture read ahead alone, without workers: 304.7 s.) The rest of the time
 is the encoder: astc-encoder's search on the blocks the guided encoder leaves to it (12 % of
 Hollow Knight's blocks) and the guided pass itself, at ~2.8 of the 4 cores; what keeps the fourth
 idle is the main thread's work at each file's start (its tables, the first textures' reads) and the
