@@ -15,7 +15,7 @@ through FUSE), before these changes:
 |---|---|---|---|
 | Cuphead 64-bit (GOG installers + DLC, textures medium) | (`macpkg`, 5.2 GB of gzip'd payload) | 2 h 39 min, textures ~85 % | 20 min |
 | Cuphead 32-bit | | ~3 h in all | |
-| Hollow Knight (GOG's Linux installer) | PortMaster's 7-Zip | not run yet (32 min rehearsed in the container, its work folder on a slow USB stick) | |
+| Hollow Knight (GOG's Linux installer) | PortMaster's 7-Zip, 8 min | with pmu (2026-11-02): 29 min, textures 26 min; 23.5 min (textures 22.7) after the changes in [rust-setup.md](rust-setup.md#on-the-handheld-time-memory-bad-conditions-2026-11-02), which says what limits each step | 13 min (the card) |
 
 ## Where the time goes
 

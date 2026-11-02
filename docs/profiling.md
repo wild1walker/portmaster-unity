@@ -17,6 +17,7 @@ whole measured session:
 | what a pass's loads and stores cost the GPU itself | `runtime/host/passbench` on the device: [below](#what-a-pass-costs-on-the-mali-g31-passbench) |
 | which passes, loads and stores a frame could do without | `tools/analysis/framegraph.py` on a `UA_GL_TRACE_DRAWS` log; the GL calls a frame makes, by entry point: `UA_GL_REC=census` ([holding the whole frame](#holding-the-whole-frame-ua_gl_rec)) |
 | whether the GPU ever waits for work inside the frames | `UA_GPU_IDLE=<s>` ([runtime.md](runtime.md); below, [the handheld around the game](#the-handheld-around-the-game-2026-10-23)) |
+| where a port's first-launch setup spends its time, memory and the card's I/O | `tools/device/setupstat.py` beside the setup + `tools/device/setupstat_report.py`, pmu's `PMU_PROF=1` (wall time per stage of each convert step), `tools/device/cardbench.py` (what the card's reads, writes and syncs cost): [rust-setup.md](rust-setup.md#on-the-handheld-time-memory-bad-conditions-2026-11-02) |
 
 ## UA_PROF: the sampling profiler
 
