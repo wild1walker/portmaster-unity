@@ -8,6 +8,7 @@ See README.md.
     regress.py list [--only REGEX]                                        the list: games x levels x checks
     regress.py bisect GOOD BAD --level fast|rig --only REGEX [--build CMD] the first commit at which they fail
     regress.py recheck <results folder>                                   a finished run judged again (list, baseline now)
+    regress.py pmu  [--only REGEX] [--set k=v] [--convert-only]           the setup's commands by the Python and by pmu, compared
 
 Exit status: 0 when nothing failed, 1 when a check failed, 2 for a usage or setup error.
 """
@@ -1108,6 +1109,167 @@ def cmd_list(a, games):
               f"{', '.join(g['levels'])} | {fast} | {rig} |")
 
 
+# --------------------------------------------------------------------------- pmu: setup-rs against the Python
+
+PORT_CONVERT = {'steps': ['shaders', 'settings', 'audio', 'quality'], 'settings': {'graphics_apis': [11]}}
+PMU_ROUTES = ('android', 'shaders', 'box64')
+
+
+def pmu_config(G, rep):
+    """The convert config a port's setup runs for the game: `port new`'s (port.DEFAULTS' convert
+    section with the check's suggestions merged in), the list's own convert table over it; the
+    box64 route: tools/box64/gles.json."""
+    if G.g['route'] == 'box64':
+        with open(os.path.join(G.ctx.checkout, 'tools', 'box64', 'gles.json')) as f:
+            cfg = json.load(f)
+        cfg.pop('comment', None)
+    else:
+        cfg = json.loads(json.dumps(PORT_CONVERT))
+        cfg = deep_merge(cfg, ((rep or {}).get('suggest') or {}).get('convert') or {})
+    return deep_merge(cfg, G.g.get('convert') or {})
+
+
+def pmu_android_args(G, rep, asmpatch):
+    """android-data's arguments besides the setup's fixed ones (pmu_pair.py adds those): the
+    check's suggestions as the android route's patchscript passes them."""
+    sug = ((rep or {}).get('suggest') or {}).get('android_data') or {}
+    sam = G.g.get('streaming_assets', sug.get('streaming_assets')) or 'obb'
+    out = ['--streaming-assets', sam]
+    if sug.get('data_path'):
+        out.append('--data-path')
+    asm = G.g.get('asmpatch', sug.get('asmpatch', 'off'))
+    if (asm not in (None, 'off', False) or sam != 'obb') and asmpatch:
+        a = shlex.quote(asmpatch)
+        if asm in (None, 'off', False):
+            a += ' --only='
+        elif asm not in ('auto', True):
+            a += f" --only={','.join(asm)}"
+        out += ['--asmpatch', a]
+    if not sug.get('video_shader', True):
+        out.append('--no-video-shader')
+    etc = mono_etc(G.data)
+    if etc and not os.path.isdir(os.path.join(G.data, 'MonoBleedingEdge', 'etc')) and \
+            not os.path.isdir(os.path.join(G.data, 'Mono', 'etc')):
+        out += ['--mono-etc', '/mnt/game/' + os.path.relpath(etc, G.root)]
+    return out + [str(x) for x in G.g.get('android_data', ())]
+
+
+def pmu_docker(ctx, name, mounts, env, cmd, log, mem='2g'):
+    """One container of setup-rs's image (ua-rust), as setup-rs/tools/rs.sh runs it; waits while
+    another container of this command runs (one heavy container at a time)."""
+    while any(n.startswith('regress-pmu') for n in docker_names()):
+        time.sleep(20)
+    args = ['docker', 'run', '--rm', '--pull=never', '--platform', 'linux/arm64', '--memory', mem, '--name', name,
+            '-v', f'{ctx.checkout}:{ctx.checkout}:ro', '-v', f'{ctx.a.pmu_target}:/target']
+    for m in mounts:
+        args += ['-v', m]
+    for k, v in dict({'PYTHONHOME': '/opt/py', 'LD_LIBRARY_PATH': '/opt/py/libs',
+                      'DOTNET_SYSTEM_GLOBALIZATION_INVARIANT': '1'}, **env).items():
+        args += ['-e', f'{k}={v}']
+    return run(args + ['ua-rust'] + cmd, log, timeout=4 * 3600)
+
+
+def cmd_pmu(a, games, local):
+    """Every android, shaders and box64 game of the list through the setup's commands twice, by the
+    Python and by pmu (tools/regress/pmu_pair.py in setup-rs's image), compared file by file."""
+    ctx = Ctx(a, local)
+    games = [g for g in selected(games, a.only) if g['route'] in PMU_ROUTES]
+    if not games:
+        print('regress.py: no android, shaders or box64 game of the list for --only', file=sys.stderr)
+        return 2
+    vol, vpath = a.pmu_scratch.split(':', 1)
+    wdir = f"{vpath}/{a.pmu_work.strip('/')}"
+    pmu = a.pmu_bin or f'/target/{os.path.basename(ctx.checkout)}/aarch64-unknown-linux-musl/release/pmu'
+    os.makedirs(ctx.results, exist_ok=True)
+    head = subprocess.run(['git', '-C', ctx.checkout, 'log', '-1', '--format=%h %s'], capture_output=True, text=True).stdout.strip()
+    print(f'regress pmu: {len(games)} games, checkout {ctx.checkout} ({head}); results {ctx.results}', flush=True)
+    results = []
+    t0 = time.time()
+    for i, g in enumerate(games, 1):
+        print(f"[{i}/{len(games)}] {g['id']} ({g['route']})", flush=True)
+        G = Game(ctx, g, 'pmu')
+        os.makedirs(G.out, exist_ok=True)
+        t = time.time()
+        status, reason, stages = 'pass', '', []
+        try:
+            G.locate()
+            mb = 0 if a.builtin else du_mb(G.data)
+            if mb > a.max_mb:
+                raise Skip(f'{mb} MB of data: over --max-mb {a.max_mb} (two copies and their archives in the scratch volume)')
+            rep = G.check() if g['route'] == 'android' and not a.builtin else None
+            cfg = pmu_config(G, rep)
+            cfgp = os.path.join(G.out, 'convert.json')
+            with open(cfgp, 'w') as f:
+                json.dump(cfg, f, indent=1)
+            mounts = [f'{vol}:{vpath}', f'{G.root}:/mnt/game:ro', f'{G.out}:{G.out}']
+            env = {}
+            asmpatch = None
+            if a.asmpatch_bin:
+                mounts.append(f'{a.asmpatch_bin}:/mnt/asmpatch:ro')
+                asmpatch = '/mnt/asmpatch'
+            for k, envk in (('pmhlslcc', 'PMHLSLCC'), ('pmspirvcross', 'PMSPIRVCROSS')):
+                if getattr(a, k):
+                    mounts.append(f'{getattr(a, k)}:/mnt/{k}:ro')
+                    env[envk] = f'/mnt/{k}'
+            pair = ['/opt/py/bin/python3', os.path.join(HERE, 'pmu_pair.py'),
+                    '--data', '/mnt/game/' + os.path.relpath(G.data, G.root), '--work', f'{wdir}/{G.id}',
+                    '--pmu', pmu, '--checkout', ctx.checkout, '--result', os.path.join(G.out, 'pair.json'),
+                    '--logs', G.out, '--config', cfgp]
+            if a.builtin:
+                # the player's built-in resources: every GLES3 program and kernel rebuilt from GLCore
+                cfg = {'steps': ['shaders'], 'shaders': {'replace': True}}
+                with open(cfgp, 'w') as f:
+                    json.dump(cfg, f, indent=1)
+                pair.append('--builtin')
+            for kv in a.set or ():
+                pair += ['--set', kv]
+            if a.steps:
+                pair += ['--steps', a.steps]
+            if g['route'] == 'android' and not a.convert_only and not a.builtin:
+                v = G.version
+                pkg = f'{wdir}/players/{v}'
+                # Unity's player (about 10 MB of range reads), fetched once into the scratch volume
+                fetch = ['sh', '-c', f'[ -f {pkg}/player.json ] || {pmu} player fetch {v} {pkg}']
+                if pmu_docker(ctx, f'regress-pmu-fetch-{G.id}', [f'{vol}:{vpath}'], {}, fetch, G.log, mem='1g'):
+                    raise Fail(f'player fetch {v} failed: {tail(G.log)}')
+                pair += ['--pkg', pkg, '--android-data', json.dumps(pmu_android_args(G, rep, asmpatch))]
+                if a.no_consume:
+                    pair.append('--no-consume')
+            rc = pmu_docker(ctx, f'regress-pmu-{re.sub(r"[^a-z0-9]", "", G.id)}', mounts, env, pair, G.log)
+            try:
+                res = json.load(open(os.path.join(G.out, 'pair.json')))
+            except (OSError, ValueError):
+                raise Fail(f'pmu_pair.py wrote no result (exit {rc}): {tail(G.log)}')
+            stages = res['stages']
+            bad = [s for s in stages if not s['same']]
+            if bad:
+                status = 'fail'
+                reason = '; '.join(f"{s['stage']}: " + '; '.join(s['diffs'][:3]) for s in bad)
+            elif any(s['py'] for s in stages):
+                reason = 'both stopped the same way: ' + ', '.join(f"{s['stage']} {s['py']}" for s in stages)
+        except Skip as ex:
+            status, reason = 'skip', str(ex)
+        except Fail as ex:
+            status, reason = 'fail', str(ex)
+        secs = round(time.time() - t)
+        r = {'slug': g['id'], 'route': g['route'], 'level': 'pmu', 'covers': g.get('covers', []), 'status': status,
+             'reason': reason, 'notes': [n for s in stages for n in s.get('notes', [])], 'seconds': secs,
+             'stages': [{k: s.get(k) for k in ('stage', 'py', 'rs', 'same', 'seconds')} for s in stages]}
+        with open(os.path.join(G.out, 'result.json'), 'w') as f:
+            json.dump(r, f, indent=1)
+        print(f"    -> {status} {fmt_secs(secs)} {reason[:300]}", flush=True)
+        results.append(r)
+    out = table(results)
+    with open(os.path.join(ctx.results, 'results.json'), 'w') as f:
+        json.dump({'level': 'pmu', 'checkout': head, 'run': ctx.run_id, 'seconds': round(time.time() - t0),
+                   'results': results}, f, indent=1)
+    with open(os.path.join(ctx.results, 'results.md'), 'w') as f:
+        f.write(f'# regress pmu, {head}, {ctx.run_id}\n\n{out}\n')
+    print()
+    print(out)
+    return 1 if any(r['status'] == 'fail' for r in results) else 0
+
+
 def cmd_bisect(a, local):
     """git bisect over a worktree of this repository (in the scratch folder): at each commit this
     regress.py, its list and baseline judge the worktree's tools."""
@@ -1192,7 +1354,7 @@ def cmd_recheck(a, games):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='regress.py', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('level', choices=LEVELS + ('list', 'bisect', 'recheck'))
+    ap.add_argument('level', choices=LEVELS + ('list', 'bisect', 'recheck', 'pmu'))
     ap.add_argument('rest', nargs='*', help='bisect: GOOD BAD (commits); recheck: a results folder')
     ap.add_argument('--level', dest='bisect_level', choices=LEVELS, default='fast', help='bisect: the level to run')
     ap.add_argument('--build', help='bisect: a command run in the worktree before each test (e.g. runtime/build.sh)')
@@ -1205,6 +1367,24 @@ def main(argv=None):
     ap.add_argument('--keep', action='store_true', help="keep each game's work folder (converted data, APK) in the scratch folder")
     ap.add_argument('--pack', choices=PACK, help='fast level: android-data for every android game this way (default: the list\'s pack)')
     ap.add_argument('--offline', action='store_true', help='fetch nothing (players, winbcl): skip what is not here')
+    p = ap.add_argument_group('pmu', 'regress.py pmu: the setup\'s commands by the Python and by setup-rs\'s pmu, compared')
+    p.add_argument('--pmu-scratch', default=os.environ.get('REGRESS_PMU_SCRATCH', 'pmu-scratch:/scratch'),
+                   help='VOLUME:PATH, the Docker volume the work goes to and where it is mounted (default pmu-scratch:/scratch)')
+    p.add_argument('--pmu-target', default=os.environ.get('RS_TARGET_VOLUME', 'pmu-target'),
+                   help="setup-rs's build volume (rs.sh's, default pmu-target): the musl pmu of the checkout under test")
+    p.add_argument('--pmu-work', default='pmu-pair', help='the work folder in that volume (default pmu-pair)')
+    p.add_argument('--pmu-bin', help='pmu inside the container (default /target/<checkout name>/aarch64-unknown-linux-musl/release/pmu)')
+    p.add_argument('--asmpatch-bin', help='asmpatch for linux-arm64 (tools/asmpatch/out/linux-arm64/asmpatch), for games the check gives it')
+    p.add_argument('--pmhlslcc', help='pmhlslcc for linux-arm64 (Windows builds)')
+    p.add_argument('--pmspirvcross', help='pmspirvcross for linux-arm64 (Vulkan-only builds)')
+    p.add_argument('--set', action='append', help='a convert --set for both (e.g. quality.profile=handheld)')
+    p.add_argument('--steps', help="convert's --steps for both (default: the config's steps)")
+    p.add_argument('--max-mb', type=int, default=1200, help='games with more data are skipped (default 1200)')
+    p.add_argument('--convert-only', action='store_true', help='no android-data')
+    p.add_argument('--no-consume', action='store_true', help="android-data without the setup's --consume-src")
+    p.add_argument('--builtin', action='store_true',
+                   help="convert the player's built-in resources (Resources/unity default resources) instead, with "
+                        "shaders.replace: Unity's own GLES3 programs and kernels rebuilt from the GLCore ones")
     a = ap.parse_args(argv)
     try:
         defaults, games = load_list(a.list)
@@ -1216,6 +1396,8 @@ def main(argv=None):
         local = load_local(a.config)
         if a.level == 'bisect':
             return cmd_bisect(a, local)
+        if a.level == 'pmu':
+            return cmd_pmu(a, games, local)
         ctx = Ctx(a, local)
     except SetupError as ex:
         print(f'regress.py: {ex}', file=sys.stderr)
