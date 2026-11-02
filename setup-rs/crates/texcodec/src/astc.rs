@@ -276,6 +276,7 @@ impl Encoder {
         key: Option<&str>,
     ) -> Result<Vec<u8>, Error> {
         if !self.settings.guided {
+            let _t = crate::prof::Timer::new(crate::prof::Stage::Astc);
             return self
                 .context(block, Tier::Other)?
                 .compress(rgba, w, h, block);
@@ -310,7 +311,7 @@ impl Encoder {
         let mut cls = vec![0u8; nb];
         let s = &self.settings;
         // SAFETY: the buffers have the sizes ga_encode reads and writes (checked above).
-        unsafe {
+        crate::prof::time(crate::prof::Stage::Guided, || unsafe {
             ga_encode(
                 rgba.as_ptr(),
                 w as c_int,
@@ -327,7 +328,7 @@ impl Encoder {
                 blocks.as_mut_ptr(),
                 cls.as_mut_ptr(),
             );
-        }
+        });
         // (guided_astc's encode(): counts and the line / near / other lists from the classes)
         const SLOT: [usize; 6] = [5, 0, 1, 2, 3, 4];
         for &c in &cls {
@@ -361,6 +362,7 @@ impl Encoder {
                 }
             }
         }
+        let _t = crate::prof::Timer::new(crate::prof::Stage::Astc);
         for (tier, rest) in groups {
             let n = rest.len() / 4;
             if n == 0 {

@@ -4,7 +4,7 @@
 use crate::android_data::{Ctx, Stop, ANDROID};
 use pkgzip::py;
 use std::collections::HashSet;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 use unityfs::bundle::{self, Bundle, PackHeader, PackNode};
@@ -25,15 +25,19 @@ fn save_inlined(
     read: &ReadStream<'_>,
     out: &Path,
 ) -> Result<(), Stop> {
-    let f = std::fs::File::create(out)?;
-    let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
-    sf.save_to(&mut w, |sf, o| {
+    let mut w = unityfs::bgwrite::BgWriter::create(out).map_err(crate::android_data::io_at(out))?;
+    let r = sf.save_to(&mut w, |sf, o| {
         if !plan.contains(&o.path_id) {
             return Ok(None);
         }
         unityfs::inline::inlined(sf, o.path_id, read).map(Some)
-    })?;
-    w.flush()?;
+    });
+    // (a write's error, the card's above all, with the file it was for)
+    match r {
+        Err(unityfs::Error::Io(e)) => return Err(crate::android_data::io_at(out)(e)),
+        r => r?,
+    }
+    w.finish().map_err(crate::android_data::io_at(out))?;
     Ok(())
 }
 

@@ -236,7 +236,13 @@ pub fn run(cli: &Cli) -> Result<()> {
             )));
         };
         job.log(&format!("== {n}"));
-        f(&mut job, &args)?;
+        let r = f(&mut job, &args);
+        let flushed = job.flush();
+        r?;
+        flushed?;
+        for l in texcodec::prof::report() {
+            eprintln!("prof: {n}: {l}");
+        }
     }
     job.log("done");
     Ok(())
@@ -257,6 +263,16 @@ pub fn main(args: &[String]) -> u8 {
     };
     match run(&cli) {
         Ok(()) => 0,
+        Err(e) if e.is_full() => {
+            // (the card filled up while a file was written: the status of need_space's check,
+            // which the conversion passed. The Python: a traceback, status 1)
+            eprintln!("pmu: convert: error: {e}");
+            println!(
+                "ERROR: the card is full: free some space on it, then launch again (the conversion \
+                 goes on where it stopped)"
+            );
+            3
+        }
         Err(e) => {
             match &e {
                 Error::Status(_) => {}

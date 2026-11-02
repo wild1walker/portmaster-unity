@@ -12,11 +12,12 @@
 //! (`scaled`). The codec is texcodec's (decoding, scaling, guided ASTC, the guide).
 use super::{field, field_mut, float, int, objects, opt, section, Args};
 use crate::error::{Error, Result};
-use crate::job::{text, Job};
+use crate::job::{drop_spill, text, Job};
 use crate::pyjson::{format_f, Json};
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use unityfs::{NodeData, Value};
 
 /// The fields of a Texture2D the codec reads (choose and convert).
@@ -70,6 +71,43 @@ pub trait Codec {
         unity: Option<&str>,
     ) -> Result<Converted>;
     fn summary(&mut self) -> Vec<String>;
+
+    /// A codec with the same settings for a worker thread, encoding on one core: the step then
+    /// converts several textures of a file at once (the blocks are the same: each is encoded on
+    /// its own). None (the default): one texture at a time, on every core.
+    fn worker(&self) -> Option<Box<dyn Codec + Send>> {
+        None
+    }
+
+    /// Adds what a worker's codec counted for the summary to this one's.
+    fn absorb(&mut self, _worker: &mut dyn Codec) {}
+
+    /// When convert() takes this texture in strips that workers may encode one at a time (on one
+    /// core each): how many. None (the default): it is converted whole.
+    fn strips(&self, _t: &Tex, _raw: &[u8], _ch: &Choice) -> Option<usize> {
+        None
+    }
+
+    /// Strip i's blocks (strips()'s cut).
+    fn strip(&mut self, _t: &Tex, _raw: &[u8], _ch: &Choice, _i: usize) -> Result<Vec<u8>> {
+        Err(Error::Value("this codec converts no strips".into()))
+    }
+
+    /// The texture converted in strips, from its strips' blocks in order (what convert() returns).
+    fn join_strips(
+        &self,
+        _t: &Tex,
+        _ch: &Choice,
+        _data: Vec<u8>,
+        _unity: Option<&str>,
+    ) -> Result<Converted> {
+        Err(Error::Value("this codec converts no strips".into()))
+    }
+
+    /// The guided blocks' counts (absorb's).
+    fn take_counts(&mut self) -> [u64; 6] {
+        [0; 6]
+    }
 }
 
 /// A config value as texcodec takes its settings (serde_json).
@@ -106,6 +144,16 @@ struct TexCodec {
 }
 
 impl TexCodec {
+    fn choice(ch: &Choice) -> texcodec::texture::Choice {
+        texcodec::texture::Choice {
+            block: ch.block,
+            width: ch.width,
+            height: ch.height,
+            alpha: ch.alpha,
+            mips: ch.mips,
+        }
+    }
+
     fn texture<'a>(t: &'a Tex, name: &'a str) -> texcodec::texture::Texture<'a> {
         texcodec::texture::Texture {
             name,
@@ -168,6 +216,81 @@ impl Codec for TexCodec {
             mip_count: out.mip_count,
             data: out.data,
         })
+    }
+
+    fn worker(&self) -> Option<Box<dyn Codec + Send>> {
+        // (a guide counts what it is asked for: kept on one codec)
+        if self.enc.guide.is_some() {
+            return None;
+        }
+        let mut s = self.s.clone();
+        s.threads = 1;
+        let es = s.encoder().ok()?;
+        let enc = texcodec::astc::Encoder::new(es, None).ok()?;
+        Some(Box::new(TexCodec {
+            s,
+            enc,
+            quality: self.quality.clone(),
+        }))
+    }
+
+    fn strips(&self, t: &Tex, raw: &[u8], ch: &Choice) -> Option<usize> {
+        if self.enc.guide.is_some() {
+            return None;
+        }
+        let name = String::from_utf8_lossy(&t.name);
+        texcodec::texture::strips(
+            &Self::texture(t, &name),
+            raw,
+            &Self::choice(ch),
+            &self.s,
+            true,
+        )
+        .map(|s| s.n)
+    }
+
+    fn strip(&mut self, t: &Tex, raw: &[u8], ch: &Choice, i: usize) -> Result<Vec<u8>> {
+        let name = String::from_utf8_lossy(&t.name);
+        let tx = Self::texture(t, &name);
+        let c = Self::choice(ch);
+        let st = texcodec::texture::strips(&tx, raw, &c, &self.s, true)
+            .ok_or_else(|| Error::Value("a texture's strips changed".into()))?;
+        let _t = texcodec::prof::Timer::new(texcodec::prof::Stage::Strips);
+        texcodec::texture::strip(&tx, raw, &c, &st, i, &mut self.enc).map_err(tex_err)
+    }
+
+    fn join_strips(
+        &self,
+        t: &Tex,
+        ch: &Choice,
+        data: Vec<u8>,
+        unity: Option<&str>,
+    ) -> Result<Converted> {
+        let name = String::from_utf8_lossy(&t.name);
+        let out = texcodec::texture::from_strips(
+            &Self::texture(t, &name),
+            &Self::choice(ch),
+            data,
+            unity,
+        )
+        .map_err(tex_err)?;
+        Ok(Converted {
+            format: out.format,
+            width: out.width,
+            height: out.height,
+            mip_count: out.mip_count,
+            data: out.data,
+        })
+    }
+
+    fn absorb(&mut self, worker: &mut dyn Codec) {
+        for (a, b) in self.enc.counts.iter_mut().zip(worker.take_counts()) {
+            *a += b;
+        }
+    }
+
+    fn take_counts(&mut self) -> [u64; 6] {
+        std::mem::take(&mut self.enc.counts)
     }
 
     fn summary(&mut self) -> Vec<String> {
@@ -313,29 +436,61 @@ fn stem(p: &Path) -> PathBuf {
 
 /// The new contents of a texture stream file: blobs, each 16-byte aligned, written to a file as
 /// they come (StreamFile).
+/// (The file is made with the first blob: most of a game's files have no textures.)
 struct StreamFile {
     path: PathBuf,
-    f: std::io::BufWriter<std::fs::File>,
+    f: Option<unityfs::bgwrite::BgWriter>,
     size: u64,
+    /// in place: its data synced as it is written (it is synced before its rename)
+    sync: bool,
 }
 
 impl StreamFile {
-    fn new(path: PathBuf) -> Result<StreamFile> {
-        let f = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?);
-        Ok(StreamFile { path, f, size: 0 })
+    fn new(path: PathBuf, sync: bool) -> Result<StreamFile> {
+        Ok(StreamFile {
+            path,
+            f: None,
+            size: 0,
+            sync,
+        })
+    }
+
+    fn file(&mut self) -> Result<&mut unityfs::bgwrite::BgWriter> {
+        if self.f.is_none() {
+            if let Some(d) = self.path.parent() {
+                std::fs::create_dir_all(d).map_err(crate::error::at(d))?;
+            }
+            let mut w = unityfs::bgwrite::BgWriter::create(&self.path)
+                .map_err(crate::error::at(&self.path))?;
+            if self.sync {
+                // (in place, the file is synced before it is renamed: most of it on the way)
+                w.sync_every(16 << 20)
+                    .map_err(crate::error::at(&self.path))?;
+            }
+            self.f = Some(w);
+        }
+        Ok(self.f.as_mut().unwrap())
     }
 
     fn add(&mut self, blob: &[u8]) -> Result<u64> {
         let pad = (16 - self.size % 16) % 16;
-        self.f.write_all(&vec![0u8; pad as usize])?;
-        self.f.write_all(blob)?;
+        let path = self.path.clone();
+        let f = self.file()?;
+        f.write_all(&vec![0u8; pad as usize])
+            .and_then(|_| f.write_all(blob))
+            .map_err(crate::error::at(&path))?;
         let off = self.size + pad;
         self.size = off + blob.len() as u64;
         Ok(off)
     }
 
     fn close(mut self) -> Result<PathBuf> {
-        self.f.flush()?;
+        self.file()?;
+        self.f
+            .take()
+            .unwrap()
+            .finish()
+            .map_err(crate::error::at(&self.path))?;
         Ok(self.path)
     }
 }
@@ -490,14 +645,108 @@ struct Streams<'a> {
     rel: &'a str,
     res_dir: PathBuf,
     handles: BTreeMap<PathBuf, std::fs::File>,
+    /// The streams of the next textures, read in order by a thread of their own: (path, offset,
+    /// size, the read's result), and the bytes they hold together.
+    ahead: std::collections::VecDeque<Ahead>,
+    ahead_bytes: u64,
+    reader: Option<Reader>,
 }
 
-impl Streams<'_> {
-    fn read(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> Result<Vec<u8>> {
-        let name = path.rsplit('/').next().unwrap_or(path);
-        if f.is_bundle {
-            return Ok(f.read_node(name, off, size as usize)?);
+/// The reader thread: its requests, a flag that has it skip what is left, and the thread (joined
+/// when Streams goes: the files it reads are renamed over next, and a file kept open there would
+/// stay behind as a FUSE file system's hidden copy if the process died meanwhile).
+struct Reader {
+    tx: std::sync::mpsc::Sender<ReadReq>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Streams<'_> {
+    fn drop(&mut self) {
+        if let Some(mut r) = self.reader.take() {
+            r.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            drop(r.tx);
+            if let Some(t) = r.thread.take() {
+                let _ = t.join();
+            }
         }
+    }
+}
+
+type Ahead = (String, u64, u64, Receiver<std::io::Result<Vec<u8>>>);
+type ReadReq = (PathBuf, u64, u64, SyncSender<std::io::Result<Vec<u8>>>);
+
+/// The most a stream read ahead may be, and what the streams read ahead may hold together: they
+/// wait beside the textures being converted.
+const AHEAD_MAX: u64 = 32 << 20;
+const AHEAD_BUDGET: u64 = 32 << 20;
+
+impl Streams<'_> {
+    /// Has a stream read by the reader thread (a plain file's: a bundle's nodes are read when
+    /// needed), for read() to take: the card reads the next textures while the workers convert
+    /// these. Left to read() when the streams ahead already hold AHEAD_BUDGET.
+    /// False when the streams ahead hold AHEAD_BUDGET already: the caller offers this one again
+    /// later (the queue is in the textures' order).
+    fn read_ahead(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> bool {
+        if f.is_bundle || size > AHEAD_MAX {
+            return true;
+        }
+        if self.ahead_bytes + size > AHEAD_BUDGET {
+            return false;
+        }
+        if self.reader.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel::<ReadReq>();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stopped = stop.clone();
+            let spawned = std::thread::Builder::new()
+                .name("pmu-reader".into())
+                .spawn(move || {
+                    let mut open: Option<(PathBuf, std::fs::File)> = None;
+                    for (p, off, size, reply) in rx {
+                        if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        if open.as_ref().is_none_or(|(q, _)| *q != p) {
+                            open = std::fs::File::open(&p).ok().map(|h| (p.clone(), h));
+                        }
+                        let r = match open.as_mut() {
+                            Some((_, h)) => read_range(h, off, size),
+                            None => Err(std::io::Error::other("not opened")),
+                        };
+                        let _ = reply.send(r);
+                    }
+                });
+            match spawned {
+                Ok(t) => {
+                    self.reader = Some(Reader {
+                        tx,
+                        stop,
+                        thread: Some(t),
+                    })
+                }
+                Err(_) => return true,
+            }
+        }
+        let (tx, rx) = sync_channel(1);
+        let p = self.resolve(path);
+        if self
+            .reader
+            .as_ref()
+            .unwrap()
+            .tx
+            .send((p, off, size, tx))
+            .is_ok()
+        {
+            self.ahead.push_back((path.to_string(), off, size, rx));
+            self.ahead_bytes += size;
+        }
+        true
+    }
+
+    /// The file a plain file's stream is read from: beside the converted file, else in the
+    /// source folder.
+    fn resolve(&self, path: &str) -> PathBuf {
+        let name = path.rsplit('/').next().unwrap_or(path);
         let dir = Path::new(self.rel)
             .parent()
             .map(|d| d.to_string_lossy().into_owned())
@@ -507,19 +756,49 @@ impl Streams<'_> {
         } else {
             format!("{dir}/{name}")
         };
-        let mut p = self.job.path_in(&rel);
-        if !p.exists() {
-            p = self.res_dir.join(name);
+        let p = self.job.path_in(&rel);
+        if p.exists() {
+            p
+        } else {
+            self.res_dir.join(name)
         }
-        if !self.handles.contains_key(&p) {
-            self.handles.insert(p.clone(), std::fs::File::open(&p)?);
-        }
-        let h = self.handles.get_mut(&p).unwrap();
-        h.seek(SeekFrom::Start(off))?;
-        let mut buf = Vec::new();
-        h.take(size).read_to_end(&mut buf)?;
-        Ok(buf)
     }
+
+    fn read(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> Result<Vec<u8>> {
+        let _t = texcodec::prof::Timer::new(texcodec::prof::Stage::Read);
+        // (the streams read ahead come in the textures' order: this one is the first, or it was
+        // not read ahead)
+        if self
+            .ahead
+            .front()
+            .is_some_and(|a| a.0 == path && a.1 == off && a.2 == size)
+        {
+            let a = self.ahead.pop_front().unwrap();
+            self.ahead_bytes -= a.2;
+            if let Ok(Ok(v)) = a.3.recv() {
+                return Ok(v);
+            }
+            // (a failed read ahead is read again here: its error comes from this read)
+        }
+        if f.is_bundle {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            return Ok(f.read_node(name, off, size as usize)?);
+        }
+        let p = self.resolve(path);
+        if !self.handles.contains_key(&p) {
+            let h = std::fs::File::open(&p).map_err(crate::error::at(&p))?;
+            self.handles.insert(p.clone(), h);
+        }
+        read_range(self.handles.get_mut(&p).unwrap(), off, size).map_err(crate::error::at(&p))
+    }
+}
+
+/// `size` bytes of a file from `off` (fewer where it ends first, as a Python read).
+fn read_range(h: &mut std::fs::File, off: u64, size: u64) -> std::io::Result<Vec<u8>> {
+    h.seek(SeekFrom::Start(off))?;
+    let mut buf = Vec::with_capacity(size.min(AHEAD_MAX) as usize);
+    h.take(size).read_to_end(&mut buf)?;
+    Ok(buf)
 }
 
 /// What convert_file leaves: the stream's name (None: no texture streams), the new stream file
@@ -531,12 +810,262 @@ type FileResult = Option<(
     Vec<i64>,
 )>;
 
+/// What a worker is handed: a texture (what Codec::convert takes) or one strip of a big one
+/// (Codec::strip), and where the result goes.
+enum Work {
+    Whole {
+        tex: Tex,
+        raw: Vec<u8>,
+        ch: Choice,
+        key: String,
+        unity: String,
+        tx: SyncSender<Result<Converted>>,
+    },
+    Strip {
+        tex: std::sync::Arc<Tex>,
+        raw: std::sync::Arc<Vec<u8>>,
+        ch: Choice,
+        i: usize,
+        tx: SyncSender<Result<Vec<u8>>>,
+    },
+}
+
+/// A texture's turn in the file's order: its stream's bytes as they are, or its conversion (done,
+/// or on a worker). Turns are finished in order, so the new stream, the objects and the totals
+/// come out as one texture at a time makes them.
+#[allow(clippy::large_enum_variant)]
+enum Turn {
+    Keep {
+        pid: i64,
+        t: Value,
+        blob: Vec<u8>,
+    },
+    Conv {
+        pid: i64,
+        t: Value,
+        tex: Tex,
+        sd: Option<(u64, u64, String)>,
+        est: u64,
+        out: Out,
+    },
+}
+
+enum Out {
+    Now(Result<Converted>),
+    Later(Receiver<Result<Converted>>),
+    /// a texture in strips on the workers: the strips' results (those received), and the texture
+    /// as Codec::join_strips makes it, without its blocks
+    Strips {
+        rxs: Vec<Receiver<Result<Vec<u8>>>>,
+        parts: Vec<Option<Result<Vec<u8>>>>,
+        template: Converted,
+    },
+}
+
+/// A worker's message for a result channel it can no longer reach.
+fn stopped<T>(rel: &str) -> Result<T> {
+    Err(Error::Value(format!("{rel}: a texture's worker stopped")))
+}
+
+/// How many textures ahead the step reads the objects of (and has their streams read).
+const LOOK: usize = 8;
+
+/// Textures this big (their new size) are converted alone, on every core (which their own work
+/// keeps busy), rather than on one worker while the others wait for their turn.
+const SOLO_PX: usize = 1 << 20;
+
+/// The memory a texture's conversion may take at most (its data, the decoded levels, the
+/// blocks): what the turns on workers may hold together is kept under a budget.
+fn estimate(tex: &Tex, ch: &Choice, raw: usize) -> u64 {
+    let px = (tex.width * tex.height).max(ch.width * ch.height) as u64;
+    let px = if ch.mips > 1 { px * 4 / 3 } else { px };
+    raw as u64 + px * 5
+}
+
+/// The file's textures converted (convert_file's state while its turns are finished).
+struct Turns<'a> {
+    rel: &'a str,
+    q: std::collections::VecDeque<Turn>,
+    /// (the budget's use by turns on workers, and how many there are)
+    inflight: u64,
+    later: usize,
+    stream: StreamFile,
+    sizes: BTreeMap<i64, [usize; 4]>,
+    order: Vec<i64>,
+    converted: u64,
+}
+
+impl Turns<'_> {
+    /// The first turn finished (waiting for its worker).
+    fn finish_front(&mut self, f: &mut unityfs::DataFile, stats: &mut Stats) -> Result<()> {
+        let Some(turn) = self.q.pop_front() else {
+            return Ok(());
+        };
+        match turn {
+            Turn::Keep { pid, mut t, blob } => {
+                let at = self.stream.add(&blob)?;
+                set_stream(&mut t, at, None)?;
+                f.sf.save_typetree(pid, &t)?;
+            }
+            Turn::Conv {
+                pid,
+                mut t,
+                tex,
+                sd,
+                est,
+                out,
+            } => {
+                let out = match out {
+                    Out::Now(r) => r,
+                    Out::Later(rx) => {
+                        self.inflight -= est;
+                        self.later -= 1;
+                        rx.recv().unwrap_or_else(|_| stopped(self.rel))
+                    }
+                    Out::Strips {
+                        rxs,
+                        mut parts,
+                        template,
+                    } => {
+                        self.inflight -= est;
+                        self.later -= 1;
+                        let mut data = Vec::new();
+                        let mut r = Ok(());
+                        for (i, rx) in rxs.iter().enumerate() {
+                            let part = match parts[i].take() {
+                                Some(p) => p,
+                                None => rx.recv().unwrap_or_else(|_| stopped(self.rel)),
+                            };
+                            match part {
+                                Ok(b) => data.extend(b),
+                                Err(e) => {
+                                    r = Err(e);
+                                    break;
+                                }
+                            }
+                        }
+                        r.map(|_| Converted { data, ..template })
+                    }
+                }
+                .map_err(|e| texture_error(self.rel, &tex, pid, e))?;
+                if (out.width, out.height) != (tex.width, tex.height) {
+                    self.sizes
+                        .insert(pid, [tex.width, tex.height, out.width, out.height]);
+                    self.order.push(pid);
+                }
+                stats.bytes_in += match &sd {
+                    Some((_, size, _)) => *size,
+                    None => t
+                        .get("image data")
+                        .and_then(Value::as_bytes)
+                        .map_or(0, |b| b.len() as u64),
+                };
+                stats.bytes_out += out.data.len() as u64;
+                t.set("m_TextureFormat", Value::I64(out.format as i64))?;
+                t.set("m_Width", Value::I64(out.width as i64))?;
+                t.set("m_Height", Value::I64(out.height as i64))?;
+                t.set("m_MipCount", Value::I64(out.mip_count as i64))?;
+                t.set("m_CompleteImageSize", Value::I64(out.data.len() as i64))?;
+                if sd.is_some() {
+                    let at = self.stream.add(&out.data)?;
+                    set_stream(&mut t, at, Some(out.data.len() as u64))?;
+                    t.set("image data", Value::Bytes(Vec::new()))?;
+                } else {
+                    t.set("image data", Value::Bytes(out.data))?;
+                }
+                f.sf.save_typetree(pid, &t)?;
+                self.converted += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// The first turns finished while they are ready (without waiting).
+    fn finish_ready(&mut self, f: &mut unityfs::DataFile, stats: &mut Stats) -> Result<()> {
+        loop {
+            match self.q.front_mut() {
+                None => return Ok(()),
+                Some(Turn::Conv {
+                    out: Out::Strips { rxs, parts, .. },
+                    ..
+                }) => {
+                    for (rx, part) in rxs.iter().zip(parts.iter_mut()) {
+                        if part.is_some() {
+                            continue;
+                        }
+                        match rx.try_recv() {
+                            Ok(r) => *part = Some(r),
+                            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                            Err(_) => *part = Some(stopped(self.rel)),
+                        }
+                    }
+                }
+                Some(Turn::Conv {
+                    out: out @ Out::Later(_),
+                    est,
+                    ..
+                }) => {
+                    let Out::Later(rx) = out else { unreachable!() };
+                    match rx.try_recv() {
+                        Ok(r) => {
+                            self.inflight -= *est;
+                            self.later -= 1;
+                            *out = Out::Now(r);
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                        Err(_) => {
+                            self.inflight -= *est;
+                            self.later -= 1;
+                            *out = Out::Now(Err(Error::Value(format!(
+                                "{}: a texture's worker stopped",
+                                self.rel
+                            ))));
+                        }
+                    }
+                }
+                Some(_) => {}
+            }
+            self.finish_front(f, stats)?;
+        }
+    }
+
+    /// Every turn finished, in order; then `e` (an error met while reading a later texture comes
+    /// after those of the textures before it, as one at a time).
+    fn drain(&mut self, f: &mut unityfs::DataFile, stats: &mut Stats) -> Result<()> {
+        while !self.q.is_empty() {
+            self.finish_front(f, stats)?;
+        }
+        Ok(())
+    }
+}
+
+/// A texture's conversion error, saying which texture it is.
+fn texture_error(rel: &str, tex: &Tex, pid: i64, e: Error) -> Error {
+    let what = format!(
+        "{rel}: texture {} (path id {pid})",
+        String::from_utf8_lossy(&tex.name)
+    );
+    match e {
+        Error::Io(io) => Error::Io(std::io::Error::new(io.kind(), format!("{what}: {io}"))),
+        Error::Value(m) => Error::Value(format!("{what}: {m}")),
+        e => e,
+    }
+}
+
+/// The workers' share of the step: their codecs (one core each) and the memory their turns may
+/// hold together.
+pub struct Pool {
+    pub codecs: Vec<Box<dyn Codec + Send>>,
+    pub budget: u64,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn convert_file(
     f: &mut unityfs::DataFile,
     rel: &str,
     c: &Json,
     enc: &mut dyn Codec,
+    pool: &mut Option<Pool>,
     streams: &mut Streams,
     stats: &mut Stats,
     stream_path: PathBuf,
@@ -549,101 +1078,254 @@ fn convert_file(
     let platform = f.sf.target_platform;
     let inline = opt(c, "inline").truthy();
     let mut stream_name: Option<String> = None;
-    let mut stream = Some(StreamFile::new(stream_path)?);
-    let mut sizes = BTreeMap::new();
-    let mut order = Vec::new();
-    let mut converted = 0u64;
+    let mut turns = Turns {
+        rel,
+        q: Default::default(),
+        inflight: 0,
+        later: 0,
+        stream: StreamFile::new(stream_path, streams.job.inplace)?,
+        sizes: BTreeMap::new(),
+        order: Vec::new(),
+        converted: 0,
+    };
     let textures = f.path_ids("Texture2D");
-    for pid in textures {
-        let mut t = f.sf.read_typetree(pid)?;
-        let sd = stream_data(&t);
-        if let Some((_, _, path)) = &sd {
-            if let Some(n) = &stream_name {
-                if n != path {
-                    return Err(Error::Value(format!(
-                        "{rel}: textures stream from more than one file ({n}, {path})"
-                    )));
+    let (budget, nworkers) = pool.as_ref().map_or((0, 0), |p| (p.budget, p.codecs.len()));
+    let (job_tx, job_rx) = std::sync::mpsc::channel::<Work>();
+    let job_rx = std::sync::Mutex::new(job_rx);
+    let r = std::thread::scope(|s| -> Result<()> {
+        if let Some(p) = pool.as_mut() {
+            for codec in p.codecs.iter_mut() {
+                let rx = &job_rx;
+                s.spawn(move || loop {
+                    let w = rx.lock().unwrap().recv();
+                    match w {
+                        Ok(Work::Whole {
+                            tex,
+                            raw,
+                            ch,
+                            key,
+                            unity,
+                            tx,
+                        }) => {
+                            let r = codec.convert(&tex, &raw, &ch, &key, Some(&unity));
+                            drop(raw);
+                            let _ = tx.send(r);
+                        }
+                        Ok(Work::Strip {
+                            tex,
+                            raw,
+                            ch,
+                            i,
+                            tx,
+                        }) => {
+                            let _ = tx.send(codec.strip(&tex, &raw, &ch, i));
+                        }
+                        Err(_) => break,
+                    }
+                });
+            }
+        }
+        let job_tx = job_tx;
+        // (the next textures' objects read a few turns early, their streams read ahead in order
+        // on a thread; an error reading one is raised in its own turn, as without)
+        let mut next: std::collections::VecDeque<Result<Value>> = Default::default();
+        let (mut looked, mut offered) = (0usize, 0usize);
+        for (k, &pid) in textures.iter().enumerate() {
+            // (an error of this texture's own comes after the turns before it are finished; one
+            // that finishing a turn before it met is the first, as is)
+            let mut turn_failed = false;
+            let step = (|| -> Result<Option<Turn>> {
+                let t = match next.pop_front() {
+                    Some(t) => t?,
+                    None => f.sf.read_typetree(pid)?,
+                };
+                let sd = stream_data(&t);
+                looked = looked.max(k + 1);
+                offered = offered.max(k + 1);
+                while looked < textures.len() && looked < k + 1 + LOOK {
+                    next.push_back(f.sf.read_typetree(textures[looked]).map_err(Error::from));
+                    looked += 1;
+                }
+                // (their streams offered in order, as far as the budget goes)
+                while offered < looked {
+                    if let Ok(Some((off, size, path))) =
+                        next[offered - k - 1].as_ref().map(stream_data)
+                    {
+                        if !streams.read_ahead(f, &path, off, size) {
+                            break;
+                        }
+                    }
+                    offered += 1;
+                }
+                if let Some((_, _, path)) = &sd {
+                    if let Some(n) = &stream_name {
+                        if n != path {
+                            return Err(Error::Value(format!(
+                                "{rel}: textures stream from more than one file ({n}, {path})"
+                            )));
+                        }
+                    }
+                    stream_name = Some(path.clone());
+                } else if !inline
+                    || t.get("image data")
+                        .and_then(Value::as_bytes)
+                        .is_none_or(<[u8]>::is_empty)
+                {
+                    return Ok(None);
+                }
+                let tex = Tex {
+                    name: super::text(&t, "m_Name")?,
+                    width: int(&t, "m_Width")? as usize,
+                    height: int(&t, "m_Height")? as usize,
+                    format: int(&t, "m_TextureFormat")? as i32,
+                    mip_count: opt_int(&t, "m_MipCount"),
+                    is_readable: t
+                        .get("m_IsReadable")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    dimension: opt_int(&t, "m_TextureDimension"),
+                    image_count: opt_int(&t, "m_ImageCount"),
+                    platform,
+                    platform_blob: t
+                        .get("m_PlatformBlob")
+                        .and_then(Value::as_bytes)
+                        .map(<[u8]>::to_vec)
+                        .unwrap_or_default(),
+                    version: [vmaj, vmin],
+                };
+                let Some(ch) = enc.choose(&tex) else {
+                    return Ok(match &sd {
+                        Some((off, size, path)) => Some(Turn::Keep {
+                            pid,
+                            blob: streams.read(f, path, *off, *size)?,
+                            t,
+                        }),
+                        None => None,
+                    });
+                };
+                let raw = match &sd {
+                    Some((off, size, path)) => streams.read(f, path, *off, *size)?,
+                    None => t
+                        .get("image data")
+                        .and_then(Value::as_bytes)
+                        .unwrap_or(&[])
+                        .to_vec(),
+                };
+                let key = format!("{rel}|{pid}");
+                // a big texture in strips: each strip a worker's (its strips' blocks in order)
+                let n = if nworkers > 0 {
+                    enc.strips(&tex, &raw, &ch)
+                } else {
+                    None
+                };
+                if let Some(n) = n {
+                    let est = raw.len() as u64
+                        + (ch.width * ch.height) as u64
+                        + nworkers as u64 * (texcodec::texture::STRIP_PX as u64 * 6 / 4);
+                    while turns.later > 0
+                        && (turns.inflight + est > budget || turns.later >= 16 * nworkers)
+                    {
+                        turns
+                            .finish_front(f, stats)
+                            .inspect_err(|_| turn_failed = true)?;
+                    }
+                    let template = enc.join_strips(&tex, &ch, Vec::new(), Some(&unity))?;
+                    let (traw, ttex) = (std::sync::Arc::new(raw), std::sync::Arc::new(tex.clone()));
+                    let mut rxs = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let (tx, rx) = sync_channel(1);
+                        let w = Work::Strip {
+                            tex: ttex.clone(),
+                            raw: traw.clone(),
+                            ch: ch.clone(),
+                            i,
+                            tx,
+                        };
+                        job_tx.send(w).map_err(|_| {
+                            Error::Value(format!("{rel}: the texture workers stopped"))
+                        })?;
+                        rxs.push(rx);
+                    }
+                    turns.inflight += est;
+                    turns.later += 1;
+                    return Ok(Some(Turn::Conv {
+                        pid,
+                        t,
+                        tex,
+                        sd,
+                        est,
+                        out: Out::Strips {
+                            parts: (0..n).map(|_| None).collect(),
+                            rxs,
+                            template,
+                        },
+                    }));
+                }
+                let est = estimate(&tex, &ch, raw.len());
+                if nworkers == 0 || est > budget / 2 || ch.width * ch.height >= SOLO_PX {
+                    // (alone, on every core: the turns before it are finished first)
+                    turns.drain(f, stats).inspect_err(|_| turn_failed = true)?;
+                    let out = enc.convert(&tex, &raw, &ch, &key, Some(&unity));
+                    return Ok(Some(Turn::Conv {
+                        pid,
+                        t,
+                        tex,
+                        sd,
+                        est,
+                        out: Out::Now(out),
+                    }));
+                }
+                while turns.later > 0
+                    && (turns.inflight + est > budget || turns.later >= 16 * nworkers)
+                {
+                    turns
+                        .finish_front(f, stats)
+                        .inspect_err(|_| turn_failed = true)?;
+                }
+                let (tx, rx) = sync_channel(1);
+                let w = Work::Whole {
+                    tex: tex.clone(),
+                    raw,
+                    ch,
+                    key,
+                    unity: unity.clone(),
+                    tx,
+                };
+                job_tx
+                    .send(w)
+                    .map_err(|_| Error::Value(format!("{rel}: the texture workers stopped")))?;
+                turns.inflight += est;
+                turns.later += 1;
+                Ok(Some(Turn::Conv {
+                    pid,
+                    t,
+                    tex,
+                    sd,
+                    est,
+                    out: Out::Later(rx),
+                }))
+            })();
+            match step {
+                Ok(Some(turn)) => {
+                    turns.q.push_back(turn);
+                    turns.finish_ready(f, stats)?;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    if !turn_failed {
+                        turns.drain(f, stats)?;
+                    }
+                    return Err(e);
                 }
             }
-            stream_name = Some(path.clone());
-        } else if !inline
-            || t.get("image data")
-                .and_then(Value::as_bytes)
-                .is_none_or(<[u8]>::is_empty)
-        {
-            continue;
         }
-        let tex = Tex {
-            name: super::text(&t, "m_Name")?,
-            width: int(&t, "m_Width")? as usize,
-            height: int(&t, "m_Height")? as usize,
-            format: int(&t, "m_TextureFormat")? as i32,
-            mip_count: opt_int(&t, "m_MipCount"),
-            is_readable: t
-                .get("m_IsReadable")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            dimension: opt_int(&t, "m_TextureDimension"),
-            image_count: opt_int(&t, "m_ImageCount"),
-            platform,
-            platform_blob: t
-                .get("m_PlatformBlob")
-                .and_then(Value::as_bytes)
-                .map(<[u8]>::to_vec)
-                .unwrap_or_default(),
-            version: [vmaj, vmin],
-        };
-        let ch = enc.choose(&tex);
-        let st = stream.as_mut().unwrap();
-        let Some(ch) = ch else {
-            if let Some((off, size, path)) = &sd {
-                let blob = streams.read(f, path, *off, *size)?;
-                let at = st.add(&blob)?;
-                set_stream(&mut t, at, None)?;
-                f.sf.save_typetree(pid, &t)?;
-            }
-            continue;
-        };
-        let raw = match &sd {
-            Some((off, size, path)) => streams.read(f, path, *off, *size)?,
-            None => t
-                .get("image data")
-                .and_then(Value::as_bytes)
-                .unwrap_or(&[])
-                .to_vec(),
-        };
-        let out = enc.convert(&tex, &raw, &ch, &format!("{rel}|{pid}"), Some(&unity))?;
-        drop(raw);
-        if (out.width, out.height) != (tex.width, tex.height) {
-            sizes.insert(pid, [tex.width, tex.height, out.width, out.height]);
-            order.push(pid);
-        }
-        stats.bytes_in += match &sd {
-            Some((_, size, _)) => *size,
-            None => t
-                .get("image data")
-                .and_then(Value::as_bytes)
-                .map_or(0, |b| b.len() as u64),
-        };
-        stats.bytes_out += out.data.len() as u64;
-        t.set("m_TextureFormat", Value::I64(out.format as i64))?;
-        t.set("m_Width", Value::I64(out.width as i64))?;
-        t.set("m_Height", Value::I64(out.height as i64))?;
-        t.set("m_MipCount", Value::I64(out.mip_count as i64))?;
-        t.set("m_CompleteImageSize", Value::I64(out.data.len() as i64))?;
-        if sd.is_some() {
-            let at = st.add(&out.data)?;
-            set_stream(&mut t, at, Some(out.data.len() as u64))?;
-            t.set("image data", Value::Bytes(Vec::new()))?;
-        } else {
-            t.set("image data", Value::Bytes(out.data))?;
-        }
-        f.sf.save_typetree(pid, &t)?;
-        converted += 1;
-    }
-    if converted == 0 {
+        turns.drain(f, stats)
+    });
+    r?;
+    if turns.converted == 0 {
         return Ok(None);
     }
+    let mut stream = turns.stream;
     if let Some(name) = &stream_name {
         // everything else that streams from the same file goes along into the new one
         for (pid, class) in objects(f) {
@@ -654,22 +1336,84 @@ fn convert_file(
             if let Some((off, size, path)) = stream_data(&t) {
                 if &path == name {
                     let blob = streams.read(f, &path, off, size)?;
-                    let at = stream.as_mut().unwrap().add(&blob)?;
+                    let at = stream.add(&blob)?;
                     set_stream(&mut t, at, None)?;
                     f.sf.save_typetree(pid, &t)?;
                 }
             }
         }
     }
-    stats.textures += converted;
-    fix_references(f, &sizes, stats)?;
-    let path = stream.take().unwrap().close()?;
-    Ok(Some((
-        stream_name.clone(),
-        stream_name.map(|_| path),
-        sizes,
-        order,
-    )))
+    stats.textures += turns.converted;
+    fix_references(f, &turns.sizes, stats)?;
+    let path = match &stream_name {
+        Some(_) => Some(stream.close()?),
+        None => None,
+    };
+    Ok(Some((stream_name.clone(), path, turns.sizes, turns.order)))
+}
+
+/// The workers for the step: one a core (`textures.threads`, else every core), and the memory
+/// their textures may hold together: a quarter of what the system has available when the step
+/// starts, at most 160 MB (PMU_TEXTURE_POOL_MB sets it; 0: no workers, one texture at a time).
+fn pool(enc: &dyn Codec, threads: usize) -> Option<Pool> {
+    let mb = match std::env::var("PMU_TEXTURE_POOL_MB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        Some(mb) => mb,
+        None => mem_available_mb().map_or(96, |a| (a / 4).min(160)),
+    };
+    if threads < 2 || mb < 16 {
+        return None;
+    }
+    let codecs = (0..threads)
+        .map(|_| enc.worker())
+        .collect::<Option<Vec<_>>>()?;
+    Some(Pool {
+        codecs,
+        budget: mb << 20,
+    })
+}
+
+/// /proc/meminfo's MemAvailable in MB, or less where a memory cgroup (a container) leaves less:
+/// its limit less its processes' anonymous memory (the page cache it is charged for can be
+/// reclaimed, as MemAvailable counts it).
+fn mem_available_mb() -> Option<u64> {
+    let m = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let l = m.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    let avail = l.split_whitespace().nth(1)?.parse::<u64>().ok()? >> 10;
+    let num = |p: &str| -> Option<u64> { std::fs::read_to_string(p).ok()?.trim().parse().ok() };
+    let stat = |p: &str, key: &str| -> Option<u64> {
+        let s = std::fs::read_to_string(p).ok()?;
+        let l = s.lines().find(|l| l.split(' ').next() == Some(key))?;
+        l.split(' ').nth(1)?.parse().ok()
+    };
+    let left = [
+        (
+            "/sys/fs/cgroup/memory.max",
+            "/sys/fs/cgroup/memory.stat",
+            "anon",
+        ),
+        (
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+            "/sys/fs/cgroup/memory/memory.stat",
+            "rss",
+        ),
+    ]
+    .iter()
+    .find_map(|(max, st, key)| Some(num(max)?.saturating_sub(stat(st, key)?) >> 20));
+    Some(left.map_or(avail, |l| l.min(avail)))
+}
+
+/// An error in a file's conversion, with the scratch folder as the Python leaves it there: made
+/// (job.work_dir at the file's start), and with the new stream file once convert_file has begun.
+fn left(work: &Path, e: Error, stream: bool) -> Error {
+    let _ = std::fs::create_dir_all(work);
+    let p = work.join("stream.new");
+    if stream && !p.exists() {
+        let _ = std::fs::File::create(p);
+    }
+    e
 }
 
 pub fn run(job: &mut Job, args: &Args) -> Result<()> {
@@ -695,6 +1439,13 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     let inline_streams = opt(&c, "inline_streams").truthy();
     let mut stats = Stats::default();
     let total = files.len();
+    let threads = match opt(&c, "threads").as_int() {
+        Some(n) if n > 0 => n as usize,
+        _ => texcodec::texture::cpu_count(),
+    };
+    let mut pool = pool(enc.as_ref(), threads);
+    // (one scratch folder for the step, made when a file needs it, emptied after each file)
+    let work = job.work_dir_lazy("textures")?;
     for (i, rel) in files.iter().enumerate() {
         if job.is_done("textures", rel) {
             continue;
@@ -724,7 +1475,6 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        let work = job.work_dir("textures")?;
         let opts = unityfs::Options {
             resource_dir: Some(res_dir.clone()),
             spill_dir: Some(work.join("nodes")),
@@ -736,23 +1486,28 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             Err(Error::Unity(e)) if super::shaders::not_one(&src, &e) => {
                 job.log(&format!("textures: {rel}: left as it is ({e})"));
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(left(&work, e, false)),
             Ok(mut f) => {
                 let mut streams = Streams {
                     job,
                     rel,
                     res_dir,
                     handles: BTreeMap::new(),
+                    ahead: Default::default(),
+                    ahead_bytes: 0,
+                    reader: None,
                 };
                 let r = convert_file(
                     &mut f,
                     rel,
                     &c,
                     enc.as_mut(),
+                    &mut pool,
                     &mut streams,
                     &mut stats,
                     work.join("stream.new"),
-                )?;
+                )
+                .map_err(|e| left(&work, e, true))?;
                 drop(streams);
                 if let Some((stream_name, new_stream, sizes, order)) = r {
                     let node = stream_name
@@ -762,11 +1517,16 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                         if let (Some(p), Some(node)) = (new_stream, &node) {
                             f.set_bundle_res(node, NodeData::File(p))?;
                         }
-                        job.write_with(rel, |tmp| Ok(f.write_to(tmp, inline_streams)?))?;
+                        job.write_with(rel, |tmp| Ok(f.write_to(tmp, inline_streams)?))
+                            .map_err(|e| left(&work, e, false))?;
                         drop(f);
                     } else {
                         let sf_new = work.join("file.new");
-                        f.write_to(&sf_new, false)?;
+                        std::fs::create_dir_all(&work)?;
+                        texcodec::prof::time(texcodec::prof::Stage::Write, || {
+                            f.write_to(&sf_new, false)
+                        })
+                        .map_err(|e| left(&work, e.into(), false))?;
                         drop(f);
                         let mut pair = vec![(rel.clone(), sf_new)];
                         if let (Some(p), Some(node)) = (new_stream, node) {
@@ -778,7 +1538,8 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                             };
                             pair.insert(0, (srel, p));
                         }
-                        job.commit(&pair)?;
+                        job.commit_then_mark(&pair)
+                            .map_err(|e| left(&work, e, false))?;
                     }
                     if !sizes.is_empty() {
                         let map = Json::Dict(
@@ -803,8 +1564,12 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                 }
             }
         }
-        job.end_work(&work);
-        job.mark_done("textures", rel)?;
+        drop_spill(&work);
+        if done {
+            job.mark_done("textures", rel)?;
+        } else {
+            job.mark_unchanged("textures", rel)?;
+        }
         if done {
             job.log(&format!(
                 "textures: {rel}: {} -> {} MB ({}/{total})",
@@ -814,6 +1579,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             ));
         }
     }
+    job.end_work(&work);
     job.log(&format!(
         "textures: {} converted ({} -> {} MB), {} atlas entries and {} sprites follow their scaled textures",
         stats.textures,
@@ -822,6 +1588,11 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
         stats.atlas_entries,
         stats.sprites
     ));
+    if let Some(p) = pool.as_mut() {
+        for w in p.codecs.iter_mut() {
+            enc.absorb(w.as_mut());
+        }
+    }
     for line in enc.summary() {
         job.log(&line);
     }

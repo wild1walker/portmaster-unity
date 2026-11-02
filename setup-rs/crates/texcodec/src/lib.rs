@@ -28,6 +28,7 @@ pub mod astc;
 pub mod decode;
 pub mod guide;
 pub mod image;
+pub mod prof;
 pub mod texture;
 
 use std::fmt;

@@ -18,6 +18,7 @@ use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
+use texcodec::prof::{Stage, Timer};
 use unityfs::ClassDb;
 
 /// The journal's file name in the output folder.
@@ -34,7 +35,41 @@ pub struct Job {
     /// The journal (a dict).
     pub state: Json,
     db: OnceLock<std::result::Result<Arc<ClassDb>, String>>,
+    /// When the journal was last written, and whether it holds marks not written yet (see
+    /// mark_unchanged).
+    saved: std::cell::Cell<Option<Instant>>,
+    unsaved: std::cell::Cell<bool>,
+    /// The output folder, locked while the job runs (lock_dir).
+    _lock: Arc<std::fs::File>,
 }
+
+/// Locks a folder for this process (flock on the folder itself: no file is made, and the lock
+/// goes with the process, also when it is killed); None when another process holds it. Jobs of
+/// one process on the same folder share the lock.
+pub fn lock_dir(dir: &Path) -> std::io::Result<Option<Arc<std::fs::File>>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, Weak};
+    static HELD: Mutex<Option<HashMap<PathBuf, Weak<std::fs::File>>>> = Mutex::new(None);
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let mut held = HELD.lock().unwrap();
+    let held = held.get_or_insert_with(HashMap::new);
+    if let Some(f) = held.get(&key).and_then(Weak::upgrade) {
+        return Ok(Some(f));
+    }
+    let f = std::fs::File::open(dir)?;
+    match rustix::fs::flock(&f, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::WOULDBLOCK) => return Ok(None),
+        // (a file system without locks: as without the lock)
+        Err(_) => {}
+    }
+    let f = Arc::new(f);
+    held.insert(key, Arc::downgrade(&f));
+    Ok(Some(f))
+}
+
+/// How long marks of files a step left unchanged may wait before the journal is written.
+const LAZY_SAVE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// os.path.abspath: absolute, '.' and '..' resolved lexically (symlinks left alone).
 pub fn abspath(p: &Path) -> PathBuf {
@@ -70,12 +105,13 @@ pub fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn fsync(path: &Path) -> std::io::Result<()> {
+fn fsync(path: &Path) -> Result<()> {
     std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(path)?
-        .sync_all()
+        .open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(crate::error::at(path))
 }
 
 /// A folder's entries (a rename in it) on the card (a file system that cannot sync a folder: as
@@ -90,12 +126,22 @@ fn fsync_dir(dir: &Path) {
 /// handheld that restarted before a journal written without a sync reached the card).
 fn read_journal(path: &Path) -> Option<Json> {
     let text = std::fs::read_to_string(path).ok()?;
-    pyjson::loads(&text).ok().filter(|j| matches!(j, Json::Dict(_)))
+    pyjson::loads(&text)
+        .ok()
+        .filter(|j| matches!(j, Json::Dict(_)))
 }
 
 /// Status of a conversion whose journal is damaged: the files converted in place before cannot be
 /// told from the others, so the setup starts again from the game's files (its message).
 pub const DAMAGED_JOURNAL: u8 = 5;
+
+/// What a file's work left in a step's scratch folder (work_dir_lazy) removed, when anything.
+pub fn drop_spill(work: &Path) {
+    let _t = Timer::new(Stage::WorkDir);
+    if work.exists() {
+        let _ = std::fs::remove_dir_all(work);
+    }
+}
 
 /// The files a journal's steps have finished, 0 when it cannot be read (resume.txt's
 /// journal_files: a setup reruns a killed conversion as long as this grows).
@@ -128,6 +174,15 @@ impl Job {
         let src = abspath(src);
         let out = abspath(out);
         std::fs::create_dir_all(&out)?;
+        // (a second setup started while one runs: two conversions of the same files would
+        // undo each other's)
+        let Some(lock) = lock_dir(&out)? else {
+            return Err(Error::Exit(format!(
+                "{}: another pmu convert is converting this folder (a setup still running?): \
+                 wait for it to end, then launch again",
+                out.display()
+            )));
+        };
         let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let inplace = real(&src) == real(&out);
         let state_path = out.join(STATE);
@@ -145,6 +200,9 @@ impl Job {
                 ("scaled".into(), Json::dict()),
             ]),
             db: OnceLock::new(),
+            saved: std::cell::Cell::new(None),
+            unsaved: std::cell::Cell::new(false),
+            _lock: lock,
         };
         // the journal, or the copy a save had synced but not yet renamed over it
         let tmp = with_suffix(&job.state_path, ".tmp");
@@ -198,7 +256,7 @@ impl Job {
         if opts.db.is_none() {
             opts.db = self.db().ok();
         }
-        let f = unityfs::DataFile::open(path, &opts)?;
+        let f = texcodec::prof::time(Stage::Open, || unityfs::DataFile::open(path, &opts))?;
         if !f.sf.enable_type_tree && opts.db.is_none() {
             self.db()?;
         }
@@ -287,11 +345,16 @@ impl Job {
             std::fs::create_dir_all(d)?;
         }
         let tmp = with_suffix(&dst, ".tmp");
-        f(&tmp)?;
+        texcodec::prof::time(Stage::Write, || f(&tmp)).map_err(|e| match e {
+            Error::Io(e) => crate::error::at(&tmp)(e),
+            Error::Unity(unityfs::Error::Io(e)) => crate::error::at(&tmp)(e),
+            e => e,
+        })?;
+        let _t = Timer::new(Stage::Commit);
         if self.inplace {
             fsync(&tmp)?;
         }
-        std::fs::rename(&tmp, &dst)?;
+        std::fs::rename(&tmp, &dst).map_err(crate::error::at(&dst))?;
         Ok(())
     }
 
@@ -303,6 +366,19 @@ impl Job {
     /// Puts several converted files [(rel, written path)] in place together: the journal lists
     /// them first, so a job killed between two renames finishes them when it starts again.
     pub fn commit(&mut self, files: &[(String, PathBuf)]) -> Result<()> {
+        self.commit_inner(files, true)
+    }
+
+    /// commit, the journal's end of `pending` written with the caller's next mark_done (one write
+    /// of the journal fewer, two syncs on a card): a run killed before that mark finds the
+    /// renames done and the file not marked, as it would between commit's last write and the
+    /// mark.
+    pub fn commit_then_mark(&mut self, files: &[(String, PathBuf)]) -> Result<()> {
+        self.commit_inner(files, false)
+    }
+
+    fn commit_inner(&mut self, files: &[(String, PathBuf)], save: bool) -> Result<()> {
+        let _t = Timer::new(Stage::Commit);
         let mut moves = Vec::new();
         for (rel, path) in files {
             let dst = self.out.join(rel);
@@ -323,7 +399,7 @@ impl Job {
             self.save_state()?;
         }
         for (p, d) in &moves {
-            std::fs::rename(p, d)?;
+            std::fs::rename(p, d).map_err(crate::error::at(d))?;
         }
         if self.inplace {
             // the renames on the card before the journal says the files are done
@@ -334,7 +410,11 @@ impl Job {
             }
         }
         if self.state.pop("pending").is_some_and(|p| p.truthy()) {
-            self.save_state()?;
+            if save {
+                self.save_state()?;
+            } else {
+                self.unsaved.set(true);
+            }
         }
         Ok(())
     }
@@ -356,14 +436,29 @@ impl Job {
     /// An empty scratch folder for a step (<out>/.pmunity-work/<name>: a dot folder, which
     /// packing leaves out).
     pub fn work_dir(&self, name: &str) -> Result<PathBuf> {
+        let _t = Timer::new(Stage::WorkDir);
         let d = self.out.join(".pmunity-work").join(name);
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d)?;
         Ok(d)
     }
 
+    /// The step's scratch folder (<out>/.pmunity-work/<name>) as work_dir names it, emptied of
+    /// what a killed run left but not made: what spills into it makes it (drop_spill empties it
+    /// after each file, end_work removes it). On a handheld's card, making and removing a folder
+    /// for each of a thousand files cost more than the files that need one.
+    pub fn work_dir_lazy(&self, name: &str) -> Result<PathBuf> {
+        let _t = Timer::new(Stage::WorkDir);
+        let d = self.out.join(".pmunity-work").join(name);
+        if d.exists() {
+            std::fs::remove_dir_all(&d)?;
+        }
+        Ok(d)
+    }
+
     /// A step's scratch folder removed, and .pmunity-work with it when nothing else is there.
     pub fn end_work(&self, work: &Path) {
+        let _t = Timer::new(Stage::WorkDir);
         let _ = std::fs::remove_dir_all(work);
         if let Some(p) = work.parent() {
             let _ = std::fs::remove_dir(p);
@@ -381,6 +476,34 @@ impl Job {
     }
 
     pub fn mark_done(&mut self, step: &str, rel: &str) -> Result<()> {
+        self.add_mark(step, rel)?;
+        self.save_state()
+    }
+
+    /// mark_done for a file the step looked at and left as it was: the journal is written with
+    /// the next mark of a changed file, at the end of the step (flush), or when the last write is
+    /// LAZY_SAVE old. On a handheld's card each write of the journal costs two syncs; a step that
+    /// looks at a thousand files and changes ten no longer waits for two thousand. A run killed
+    /// before such a mark is written looks at that file again and leaves it again: the same
+    /// files, the same journal at the end.
+    pub fn mark_unchanged(&mut self, step: &str, rel: &str) -> Result<()> {
+        self.add_mark(step, rel)?;
+        self.unsaved.set(true);
+        match self.saved.get() {
+            Some(t) if t.elapsed() < LAZY_SAVE => Ok(()),
+            _ => self.save_state(),
+        }
+    }
+
+    /// Writes the journal when it holds marks not written yet (the end of a step).
+    pub fn flush(&self) -> Result<()> {
+        if self.unsaved.get() {
+            self.save_state()?;
+        }
+        Ok(())
+    }
+
+    fn add_mark(&mut self, step: &str, rel: &str) -> Result<()> {
         let done = self
             .state
             .setdefault("done", Json::dict())
@@ -389,22 +512,27 @@ impl Job {
             Some(Json::List(l)) => l.push(Json::Str(rel.to_string())),
             _ => return Err(Error::Value(format!("{STATE}: done.{step} is not a list"))),
         }
-        self.save_state()
+        Ok(())
     }
 
     /// Writes the journal (json.dump, through <journal>.tmp and a rename), synced before and after
     /// the rename: a handheld that restarts or loses power finds the journal before or after
     /// this save, never an empty one.
     pub fn save_state(&self) -> Result<()> {
+        let _t = Timer::new(Stage::Journal);
         let tmp = with_suffix(&self.state_path, ".tmp");
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(self.state.dumps().as_bytes())?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, &self.state_path)?;
+        std::fs::File::create(&tmp)
+            .and_then(|mut f| {
+                f.write_all(self.state.dumps().as_bytes())?;
+                f.sync_all()
+            })
+            .map_err(crate::error::at(&tmp))?;
+        std::fs::rename(&tmp, &self.state_path).map_err(crate::error::at(&self.state_path))?;
         if let Some(d) = self.state_path.parent() {
             fsync_dir(d);
         }
+        self.saved.set(Some(Instant::now()));
+        self.unsaved.set(false);
         Ok(())
     }
 
@@ -421,5 +549,28 @@ impl Job {
             return Err(Error::Status(3));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rustix::fs::{flock, FlockOperation};
+
+    #[test]
+    fn the_folder_is_locked_while_a_job_holds_it() {
+        let d = std::env::temp_dir().join(format!("pmu-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let held = super::lock_dir(&d).unwrap().unwrap();
+        // (another job of this process shares it)
+        assert!(super::lock_dir(&d).unwrap().is_some());
+        // another open of the folder, as another process's: refused while held
+        let other = std::fs::File::open(&d).unwrap();
+        assert_eq!(
+            flock(&other, FlockOperation::NonBlockingLockExclusive),
+            Err(rustix::io::Errno::WOULDBLOCK)
+        );
+        drop(held);
+        assert!(flock(&other, FlockOperation::NonBlockingLockExclusive).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

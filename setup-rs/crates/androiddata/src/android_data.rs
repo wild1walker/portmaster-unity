@@ -38,6 +38,9 @@ pub enum Stop {
     Fail(String),
     /// What this port does not do (yet): exit 2, the setup runs the Python.
     NotPorted(String),
+    /// The card filled up while a file was written (ENOSPC; the space checks before packing say
+    /// NO_SPACE themselves): exit NO_SPACE with the error. (The Python: a traceback, exit 1.)
+    Full(String),
 }
 
 impl Stop {
@@ -46,19 +49,35 @@ impl Stop {
             Stop::Exit(_) | Stop::Fail(_) => 1,
             Stop::Status(s) => *s,
             Stop::NotPorted(_) => 2,
+            Stop::Full(_) => NO_SPACE,
         }
+    }
+}
+
+/// An error's message as a Stop: Full when it is the card's (ENOSPC, EDQUOT).
+fn fail(e: &std::io::Error, msg: String) -> Stop {
+    if matches!(
+        e.kind(),
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+    ) {
+        Stop::Full(msg)
+    } else {
+        Stop::Fail(msg)
     }
 }
 
 impl From<unityfs::Error> for Stop {
     fn from(e: unityfs::Error) -> Self {
-        Stop::Fail(e.to_string())
+        match &e {
+            unityfs::Error::Io(io) => fail(io, e.to_string()),
+            _ => Stop::Fail(e.to_string()),
+        }
     }
 }
 
 impl From<std::io::Error> for Stop {
     fn from(e: std::io::Error) -> Self {
-        Stop::Fail(e.to_string())
+        fail(&e, e.to_string())
     }
 }
 
@@ -66,17 +85,20 @@ impl From<pkgzip::Error> for Stop {
     fn from(e: pkgzip::Error) -> Self {
         match e {
             pkgzip::Error::Exit(m) => Stop::Exit(m),
+            // (pkgzip keeps an I/O error's message)
+            pkgzip::Error::Fail(m) if m.contains("(os error 28)") => Stop::Full(m),
             e => Stop::Fail(e.to_string()),
         }
     }
 }
 
-fn io_at(p: impl AsRef<Path>) -> impl FnOnce(std::io::Error) -> Stop {
+pub(crate) fn io_at(p: impl AsRef<Path>) -> impl FnOnce(std::io::Error) -> Stop {
     move |e| {
-        Stop::Fail(format!(
+        let m = format!(
             "{e}: {}",
             pkgzip::py::str_repr(&p.as_ref().to_string_lossy())
-        ))
+        );
+        fail(&e, m)
     }
 }
 
@@ -186,6 +208,25 @@ fn makedirs(d: &str) -> Result<(), Stop> {
 }
 
 // ------------------------------------------------------------------- file placement
+
+/// The game's data folder locked for this process (flock on the folder: no file is made, and the
+/// lock goes with the process, also when it is killed); Stop::Exit when another holds it. None
+/// when the folder cannot be opened (the checks after say why).
+fn lock_dir(dir: &str) -> Result<Option<File>, Stop> {
+    let Ok(f) = File::open(dir) else {
+        return Ok(None);
+    };
+    use std::os::fd::AsRawFd;
+    // SAFETY: flock on a descriptor this function owns.
+    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if r != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Err(Stop::Exit(format!(
+            "{dir}: another pmu is packing or converting this folder (a setup still running?): wait \
+             for it to end, then launch again"
+        )));
+    }
+    Ok(Some(f))
+}
 
 /// dst = a hard link of src (allow_hardlink) or a copy (no clones on Linux).
 pub fn clone(src: &str, dst: &str, allow_hardlink: bool) -> Result<&'static str, Stop> {
@@ -1059,6 +1100,8 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             "--pkg: the unpacked Unity Android player package is needed (or set PMUNITY_ANDROID_PLAYER)".into(),
         ));
     }
+    // (a second setup started while one runs: --consume-src moves the files the other reads)
+    let _lock = lock_dir(&args.src)?;
     if args.il2cpp.is_some() {
         let mut given = Vec::new();
         if args.asmpatch.is_some() {
@@ -1291,6 +1334,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         .enumerate()
         .map(|(k, it)| (it.src.as_str(), k))
         .collect();
+    let mut saved = std::time::Instant::now();
     for (k, it) in items.iter().enumerate() {
         let (dst_rel, src, act) = (&it.dst, &it.src, it.act.as_str());
         let dst = py::join(&out, dst_rel);
@@ -1585,8 +1629,12 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         }
         bump(&mut stats, &how);
         newstate.set(dst_rel, key);
-        if mv_ || (k + 1) % 50 == 0 {
+        // (the Python writes the state after each file it consumes; here at most every 2 s: a
+        // consumed file is told by its source gone and its copy there, as --consume-src's
+        // rerun finds it, so a run killed in between places the same files)
+        if (mv_ && saved.elapsed() >= std::time::Duration::from_secs(2)) || (k + 1) % 50 == 0 {
             save_state(&statep, &merged(&state, &newstate))?;
+            saved = std::time::Instant::now();
         }
         if let Some(c0) = crc0 {
             let c1 = ST::bundle_crc(Path::new(&dst))?;

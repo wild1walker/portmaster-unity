@@ -61,6 +61,31 @@ impl From<unityfs::Error> for Error {
     }
 }
 
+/// An I/O error with the file it happened to (its kind kept: a full card is told by it).
+pub fn at(p: &std::path::Path) -> impl FnOnce(std::io::Error) -> Error + '_ {
+    move |e| {
+        Error::Io(std::io::Error::new(
+            e.kind(),
+            format!("{}: {e}", p.display()),
+        ))
+    }
+}
+
+impl Error {
+    /// The card filled up (ENOSPC, EDQUOT).
+    pub fn is_full(&self) -> bool {
+        let io = match self {
+            Error::Io(e) => e,
+            Error::Unity(unityfs::Error::Io(e)) => e,
+            _ => return false,
+        };
+        matches!(
+            io.kind(),
+            std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+        )
+    }
+}
+
 /// A ValueError-like error.
 pub fn value<T>(msg: impl Into<String>) -> Result<T> {
     Err(Error::Value(msg.into()))

@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::astc::{Encoder, EncoderSettings, Seed};
 use crate::decode::{self, platform, tf};
 use crate::image::{self, Rgba};
+use crate::prof::{self, Stage};
 use crate::Error;
 
 /// Single-level textures from this size up that keep their size are converted in strips.
@@ -333,7 +334,7 @@ pub fn convert(
         && (ch.width, ch.height) == (t.width, t.height)
         && ch.width.saturating_mul(ch.height) >= STRIP_MIN_PX
     {
-        out = strip_blocks(t, raw, ch, enc)?.map(|b| (b, 1));
+        out = prof::time(Stage::Strips, || strip_blocks(t, raw, ch, enc))?.map(|b| (b, 1));
     }
     let (data, nlevels) = match out {
         Some(o) => o,
@@ -441,25 +442,27 @@ pub fn prepare(
     } else {
         None
     };
-    let first = match small {
-        Some(s) => s,
-        None => {
-            // tex.image (decoded top first; big ones a strip of rows a core), texture_image, then
-            // downscale (on every core where downscale_parallel can)
-            let big = w.saturating_mul(h) >= PREP_MIN_PX;
-            let mut img = match (split && big).then(|| decode_parallel(t, raw, threads)) {
-                Some(Some(img)) => img?,
-                _ => decode_rgba(t, raw, w, h)?,
-            };
-            img.flip_rows();
-            if split && big {
-                downscale_parallel(img, ch.width, ch.height, threads)?
-            } else {
-                image::downscale(img, ch.width, ch.height)?
+    let first = prof::time(Stage::Prepare, || -> Result<Rgba, Error> {
+        Ok(match small {
+            Some(s) => s,
+            None => {
+                // tex.image (decoded top first; big ones a strip of rows a core), texture_image, then
+                // downscale (on every core where downscale_parallel can)
+                let big = w.saturating_mul(h) >= PREP_MIN_PX;
+                let mut img = match (split && big).then(|| decode_parallel(t, raw, threads)) {
+                    Some(Some(img)) => img?,
+                    _ => decode_rgba(t, raw, w, h)?,
+                };
+                img.flip_rows();
+                if split && big {
+                    downscale_parallel(img, ch.width, ch.height, threads)?
+                } else {
+                    image::downscale(img, ch.width, ch.height)?
+                }
             }
-        }
-    };
-    let levels = mip_chain(first, ch.mips)?;
+        })
+    })?;
+    let levels = prof::time(Stage::Mips, || mip_chain(first, ch.mips))?;
     Ok(Prepared {
         nlevels: levels.len(),
         levels,
@@ -692,33 +695,153 @@ pub fn decode_downscale(
     Ok(Some(out))
 }
 
+/// A strip's blocks once a thread has encoded them.
+type Slot = Mutex<Option<Result<Vec<u8>, Error>>>;
+
+/// How a single-level texture that keeps its size is cut in strips of rows (strip_blocks): the
+/// rows a strip, how many, and the source's rows of blocks and their bytes. Every block is encoded
+/// on its own, so the blocks are the same however the strips are cut and whoever encodes them.
+#[derive(Clone, Debug)]
+pub struct Strips {
+    pub rows: usize,
+    pub n: usize,
+    bh: usize,
+    per: usize,
+}
+
+/// Whether convert() takes this texture in strips (textures.py's choice), and how they are cut:
+/// `small` cuts strips of a quarter of STRIP_PX (several cores at once), else as one core at a
+/// time takes them. None: not in strips (or data that cannot be cut in rows).
+pub fn strips(t: &Texture, raw: &[u8], ch: &Choice, s: &Settings, small: bool) -> Option<Strips> {
+    if !(s.strips
+        && ch.mips == 1
+        && t.mip_count.unwrap_or(1) == 1
+        && (ch.width, ch.height) == (t.width, t.height)
+        && ch.width * ch.height >= STRIP_MIN_PX)
+    {
+        return None;
+    }
+    cut(t, raw, ch, small)
+}
+
+/// The strips' cut (None: data that cannot be cut in rows).
+fn cut(t: &Texture, raw: &[u8], ch: &Choice, small: bool) -> Option<Strips> {
+    let (bh, per) = row_units(t, raw)?;
+    let by = ch.block.1 as usize;
+    let step = bh * by / gcd(bh, by);
+    let px = if small { STRIP_PX / 4 } else { STRIP_PX };
+    let rows = step.max(px / t.width / step * step);
+    Some(Strips {
+        rows,
+        n: t.height.div_ceil(rows),
+        bh,
+        per,
+    })
+}
+
+/// Strip i's ASTC blocks (rows in Unity's order, bottom first), decoded and encoded by `enc`.
+pub fn strip(
+    t: &Texture,
+    raw: &[u8],
+    ch: &Choice,
+    st: &Strips,
+    i: usize,
+    enc: &mut Encoder,
+) -> Result<Vec<u8>, Error> {
+    let (w, h) = (t.width, t.height);
+    let (bh, per) = (st.bh, st.per);
+    let y = i * st.rows;
+    let sh = st.rows.min(h - y);
+    let part = &raw[(y / bh * per).min(raw.len())..((y + sh).div_ceil(bh) * per).min(raw.len())];
+    let img = decode_rgba(t, part, w, sh)?;
+    let seed = dxt_seed_format(t.format).map(|dxt5| Seed { blocks: part, dxt5 });
+    enc.encode_rows(&img.px, img.width, img.height, ch.block, seed, None)
+}
+
+/// A texture converted in strips: its strips' blocks, in order, as convert() returns them.
+pub fn from_strips(
+    t: &Texture,
+    ch: &Choice,
+    data: Vec<u8>,
+    unity: Option<&str>,
+) -> Result<Converted, Error> {
+    Ok(Converted {
+        format: astc_format_id(ch.block, ch.alpha, unity)?,
+        width: ch.width,
+        height: ch.height,
+        mip_count: 1,
+        data,
+        scaled: ((ch.width, ch.height) != (t.width, t.height))
+            .then_some([t.width, t.height, ch.width, ch.height]),
+    })
+}
+
 /// textures.py strip_blocks(): the ASTC blocks of a single-level texture kept at its size, decoded
 /// and encoded a strip of rows at a time in the order Unity stores rows (bottom first). None when
-/// the data cannot be cut in rows.
+/// the data cannot be cut in rows. With more than one thread (and no guide) the strips, smaller
+/// ones, are decoded and encoded on every core at once, each thread with an encoder of its own on
+/// one core: every block is encoded on its own, so the blocks are the same, and nothing waits for
+/// the slowest thread of each strip.
 pub fn strip_blocks(
     t: &Texture,
     raw: &[u8],
     ch: &Choice,
     enc: &mut Encoder,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let Some((bh, per)) = row_units(t, raw) else {
+    let threads = enc.settings.threads;
+    let many = threads > 1 && enc.guide.is_none();
+    let Some(st) = cut(t, raw, ch, many) else {
         return Ok(None);
     };
-    let (w, h) = (t.width, t.height);
-    let by = ch.block.1 as usize;
-    let step = bh * by / gcd(bh, by);
-    let rows = step.max(STRIP_PX / w / step * step);
-    let seed5 = dxt_seed_format(t.format);
+    if many {
+        let one = EncoderSettings {
+            threads: 1,
+            ..enc.settings.clone()
+        };
+        let mut encs = (0..threads.min(st.n))
+            .map(|_| Encoder::new(one.clone(), None))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let next = AtomicUsize::new(0);
+        let slots: Vec<Slot> = (0..st.n).map(|_| Mutex::new(None)).collect();
+        std::thread::scope(|s| {
+            for e in encs.iter_mut() {
+                let (next, slots, st) = (&next, &slots, &st);
+                s.spawn(move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= st.n {
+                        break;
+                    }
+                    let r = strip(t, raw, ch, st, i, e);
+                    let failed = r.is_err();
+                    *slots[i].lock().unwrap() = Some(r);
+                    if failed {
+                        // (the strips after it are not needed: the first error is the result)
+                        next.fetch_max(st.n, Ordering::Relaxed);
+                        break;
+                    }
+                });
+            }
+        });
+        for e in &encs {
+            for (a, b) in enc.counts.iter_mut().zip(e.counts) {
+                *a += b;
+            }
+        }
+        let by = ch.block.1 as usize;
+        let mut out =
+            Vec::with_capacity(t.width.div_ceil(ch.block.0 as usize) * t.height.div_ceil(by) * 16);
+        for slot in slots {
+            match slot.into_inner().unwrap() {
+                Some(r) => out.extend(r?),
+                // (a strip not done: one before it failed, and its error came first)
+                None => return Err(Error::Decode("a strip was not converted".into())),
+            }
+        }
+        return Ok(Some(out));
+    }
     let mut out = Vec::new();
-    let mut y = 0;
-    while y < h {
-        let sh = rows.min(h - y);
-        let part =
-            &raw[(y / bh * per).min(raw.len())..((y + sh).div_ceil(bh) * per).min(raw.len())];
-        let img = decode_rgba(t, part, w, sh)?;
-        let seed = seed5.map(|dxt5| Seed { blocks: part, dxt5 });
-        out.extend(enc.encode_rows(&img.px, img.width, img.height, ch.block, seed, None)?);
-        y += rows;
+    for i in 0..st.n {
+        out.extend(strip(t, raw, ch, &st, i, enc)?);
     }
     Ok(Some(out))
 }

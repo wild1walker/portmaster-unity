@@ -24,7 +24,7 @@ use super::metal;
 use super::vulkan;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
-use crate::job::Job;
+use crate::job::{drop_spill, Job};
 use crate::pyjson::Json;
 use shaderx::blob::{BlobFields, Lengths};
 use shaderx::convert::{self, Edit, Pass, Shader, StageProgram, SubProgram, STAGES};
@@ -490,11 +490,14 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     let mut translator: Option<shaderx::dxbc::Translator> = None;
     let mut vk_translator: Option<shaderx::vulkan::Translator> = None;
     let mut changed_files = 0usize;
+    // (one scratch folder for the step: a bundle too big for memory is spilled into it, emptied
+    // after each file; made only when one is)
+    let work = job.work_dir_lazy("shaders")?;
+    let mut parent_left = false;
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
             continue;
         }
-        let work = job.work_dir("shaders")?;
         let path = job.path_in(&rel);
         let o = unityfs::Options {
             spill_dir: Some(work.clone()),
@@ -504,160 +507,192 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
             Ok(f) => f,
             Err(Error::Unity(e)) if not_one(&path, &e) => {
                 job.log(&format!("shaders: {rel}: left as it is ({e})"));
-                let _ = std::fs::remove_dir_all(&work);
-                job.mark_done("shaders", &rel)?;
+                drop_spill(&work);
+                job.mark_unchanged("shaders", &rel)?;
+                // (the Python removes only its scratch folder here: .pmunity-work stays
+                // until the next file's end_work)
+                parent_left = true;
                 continue;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                let _ = std::fs::create_dir_all(&work);
+                return Err(e);
+            }
         };
         let mut n = 0usize;
-        let objs = objects(&f);
-        // the file's shaders a fused_post chain names: name -> tree (as the steps before left it)
-        let mut chain_trees: HashMap<String, Value> = HashMap::new();
-        let mut chain_pids: HashMap<String, i64> = HashMap::new();
-        for (pid, class) in &objs {
-            let pid = *pid;
-            if class != "Shader" {
-                continue;
-            }
-            let mut t = f.sf.read_typetree(pid)?;
-            let platforms = ints(field(&t, "platforms")?, "platforms")?;
-            let src = s
-                .sources
-                .iter()
-                .find(|x| platforms.contains(&source_platform(x)))
-                .unwrap_or(&s.sources[0]);
-            let (r, mut changed) = match src.as_str() {
-                "glcore" => {
-                    let shader = shader_of(&t)?;
-                    let out = convert::add_gles3(&shader, &opts, &mut tr)
-                        .map_err(|e| Error::Value(e.to_string()))?;
-                    let changed = out.edit.is_some();
-                    if let Some(edit) = &out.edit {
-                        apply(&mut t, edit)?;
-                    }
-                    (out.report, changed)
-                }
-                "d3d11" => {
-                    if translator.is_none() {
-                        translator =
-                            Some(shaderx::dxbc::Translator::new(None).map_err(Error::Value)?);
-                    }
-                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                    let mut r = d3d11::add_gles3_d3d11(
-                        &mut t,
-                        translator.as_mut().unwrap(),
-                        &s.precision,
-                        s.replace,
-                        s.optimize,
-                        &unity,
-                    )?;
-                    r.platforms = ints(field(&t, "platforms")?, "platforms")?;
-                    let changed = r.status == convert::Status::Converted || r.changed;
-                    (r, changed)
-                }
-                "vulkan" => {
-                    if vk_translator.is_none() {
-                        vk_translator =
-                            Some(shaderx::vulkan::Translator::new(None).map_err(Error::Value)?);
-                    }
-                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                    let mut r = vulkan::add_gles3_vulkan(
-                        &mut t,
-                        vk_translator.as_mut().unwrap(),
-                        &s.precision,
-                        s.replace,
-                        &unity,
-                    )?;
-                    r.platforms = ints(field(&t, "platforms")?, "platforms")?;
-                    let changed = r.status == convert::Status::Converted || r.changed;
-                    (r, changed)
-                }
-                _ => {
-                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                    let mut r = metal::add_gles3_metal(&mut t, &s.precision, s.replace, &unity)?;
-                    r.platforms = ints(field(&t, "platforms")?, "platforms")?;
-                    let changed = r.status == convert::Status::Converted || r.changed;
-                    (r, changed)
-                }
-            };
-            if let Some(always) = s.grab_fetch {
-                let names = match &s.grab_fetch_names {
-                    None => None,
-                    Some(Ok(rx)) => Some(rx),
-                    Some(Err(m)) => return Err(Error::Value(m.clone())),
-                };
-                let g = grabfetch::apply(&mut t, always, names)?;
-                changed |= g.changed();
-                if g.status != "unchanged" {
-                    job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
-                }
-                gresults.push(g);
-            }
-            if changed {
-                f.sf.save_typetree(pid, &t)?;
-                n += 1;
-            }
-            if !fused_names.is_empty() {
-                let name =
-                    String::from_utf8_lossy(&super::text(field(&t, "m_ParsedForm")?, "m_Name")?)
-                        .into_owned();
-                if fused_names.contains(&name) {
-                    chain_pids.insert(name.clone(), pid);
-                    chain_trees.insert(name, t.clone());
-                }
-            }
-            if r.status == convert::Status::Skipped || !r.failed.is_empty() {
-                job.log(&format!("shaders: {rel}: {r}"));
-            }
-            if r.guessed_layout {
-                job.log(&format!(
-                    "shaders: {rel}: {}: program layout of an unverified Unity version (guessed, checked by round trip)",
-                    r.name
-                ));
-            }
-            results.push(r);
-        }
-        if s.compute {
-            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+        let mut each = || -> Result<()> {
+            let objs = objects(&f);
+            // the file's shaders a fused_post chain names: name -> tree (as the steps before left it)
+            let mut chain_trees: HashMap<String, Value> = HashMap::new();
+            let mut chain_pids: HashMap<String, i64> = HashMap::new();
             for (pid, class) in &objs {
-                if class != "ComputeShader" {
+                let pid = *pid;
+                if class != "Shader" {
                     continue;
                 }
-                let mut t = f.sf.read_typetree(*pid)?;
-                let r = compute::add_gles3(&mut t, &unity, &s.precision, s.replace, s.optimize)?;
-                if r.status == "converted" {
-                    f.sf.save_typetree(*pid, &t)?;
+                let mut t = f.sf.read_typetree(pid)?;
+                let platforms = ints(field(&t, "platforms")?, "platforms")?;
+                let src = s
+                    .sources
+                    .iter()
+                    .find(|x| platforms.contains(&source_platform(x)))
+                    .unwrap_or(&s.sources[0]);
+                let (r, mut changed) = match src.as_str() {
+                    "glcore" => {
+                        let shader = shader_of(&t)?;
+                        let out = convert::add_gles3(&shader, &opts, &mut tr)
+                            .map_err(|e| Error::Value(e.to_string()))?;
+                        let changed = out.edit.is_some();
+                        if let Some(edit) = &out.edit {
+                            apply(&mut t, edit)?;
+                        }
+                        (out.report, changed)
+                    }
+                    "d3d11" => {
+                        if translator.is_none() {
+                            translator =
+                                Some(shaderx::dxbc::Translator::new(None).map_err(Error::Value)?);
+                        }
+                        let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                        let mut r = d3d11::add_gles3_d3d11(
+                            &mut t,
+                            translator.as_mut().unwrap(),
+                            &s.precision,
+                            s.replace,
+                            s.optimize,
+                            &unity,
+                        )?;
+                        r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                        let changed = r.status == convert::Status::Converted || r.changed;
+                        (r, changed)
+                    }
+                    "vulkan" => {
+                        if vk_translator.is_none() {
+                            vk_translator =
+                                Some(shaderx::vulkan::Translator::new(None).map_err(Error::Value)?);
+                        }
+                        let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                        let mut r = vulkan::add_gles3_vulkan(
+                            &mut t,
+                            vk_translator.as_mut().unwrap(),
+                            &s.precision,
+                            s.replace,
+                            &unity,
+                        )?;
+                        r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                        let changed = r.status == convert::Status::Converted || r.changed;
+                        (r, changed)
+                    }
+                    _ => {
+                        let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                        let mut r =
+                            metal::add_gles3_metal(&mut t, &s.precision, s.replace, &unity)?;
+                        r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                        let changed = r.status == convert::Status::Converted || r.changed;
+                        (r, changed)
+                    }
+                };
+                if let Some(always) = s.grab_fetch {
+                    let names = match &s.grab_fetch_names {
+                        None => None,
+                        Some(Ok(rx)) => Some(rx),
+                        Some(Err(m)) => return Err(Error::Value(m.clone())),
+                    };
+                    let g = grabfetch::apply(&mut t, always, names)?;
+                    changed |= g.changed();
+                    if g.status != "unchanged" {
+                        job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
+                    }
+                    gresults.push(g);
+                }
+                if changed {
+                    f.sf.save_typetree(pid, &t)?;
                     n += 1;
                 }
-                if r.status == "skipped" || !r.failed.is_empty() {
-                    job.log(&format!("shaders: {rel}: compute shader {r}"));
+                if !fused_names.is_empty() {
+                    let name = String::from_utf8_lossy(&super::text(
+                        field(&t, "m_ParsedForm")?,
+                        "m_Name",
+                    )?)
+                    .into_owned();
+                    if fused_names.contains(&name) {
+                        chain_pids.insert(name.clone(), pid);
+                        chain_trees.insert(name, t.clone());
+                    }
                 }
-                cresults.push(r);
+                if r.status == convert::Status::Skipped || !r.failed.is_empty() {
+                    job.log(&format!("shaders: {rel}: {r}"));
+                }
+                if r.guessed_layout {
+                    job.log(&format!(
+                        "shaders: {rel}: {}: program layout of an unverified Unity version (guessed, checked by round trip)",
+                        r.name
+                    ));
+                }
+                results.push(r);
             }
+            if s.compute {
+                let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                for (pid, class) in &objs {
+                    if class != "ComputeShader" {
+                        continue;
+                    }
+                    let mut t = f.sf.read_typetree(*pid)?;
+                    let r =
+                        compute::add_gles3(&mut t, &unity, &s.precision, s.replace, s.optimize)?;
+                    if r.status == "converted" {
+                        f.sf.save_typetree(*pid, &t)?;
+                        n += 1;
+                    }
+                    if r.status == "skipped" || !r.failed.is_empty() {
+                        job.log(&format!("shaders: {rel}: compute shader {r}"));
+                    }
+                    cresults.push(r);
+                }
+            }
+            for chain in &chains {
+                // a chain is fused in the file of its last shader (the one the fused pass is appended to)
+                let last = &chain.items.last().unwrap().0;
+                if !chain_trees.contains_key(last) {
+                    continue;
+                }
+                let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                let fr = fusedpost::apply(&mut chain_trees, chain, &unity)?;
+                job.log(&format!("shaders: {rel}: fused_post: {fr}"));
+                if fr.changed() {
+                    f.sf.save_typetree(chain_pids[last], &chain_trees[last])?;
+                    n += 1;
+                }
+                presults.push(fr);
+            }
+            Ok(())
+        };
+        if let Err(e) = each() {
+            // (the Python's scratch folder for the file is there when a step stops in it)
+            let _ = std::fs::create_dir_all(&work);
+            return Err(e);
         }
-        for chain in &chains {
-            // a chain is fused in the file of its last shader (the one the fused pass is appended to)
-            let last = &chain.items.last().unwrap().0;
-            if !chain_trees.contains_key(last) {
-                continue;
-            }
-            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-            let fr = fusedpost::apply(&mut chain_trees, chain, &unity)?;
-            job.log(&format!("shaders: {rel}: fused_post: {fr}"));
-            if fr.changed() {
-                f.sf.save_typetree(chain_pids[last], &chain_trees[last])?;
-                n += 1;
-            }
-            presults.push(fr);
-        }
+        parent_left = false;
         if n > 0 {
-            job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))?;
+            job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))
+                .inspect_err(|_| {
+                    let _ = std::fs::create_dir_all(&work);
+                })?;
             changed_files += 1;
+            drop(f);
+            drop_spill(&work);
+            job.mark_done("shaders", &rel)?;
+        } else {
+            drop(f);
+            drop_spill(&work);
+            job.mark_unchanged("shaders", &rel)?;
         }
-        drop(f);
-        job.end_work(&work);
-        job.mark_done("shaders", &rel)?;
+    }
+    job.end_work(&work);
+    if parent_left {
+        if let Some(p) = work.parent() {
+            std::fs::create_dir_all(p)?;
+        }
     }
     let sources: Vec<&str> = s.sources.iter().map(String::as_str).collect();
     if let Some(err) = shaderx::step::nothing_to_translate(&results, &sources) {
