@@ -1,7 +1,8 @@
 //! `pmu apk <file>... <out> [--target T] [--abi A] [--any-unity-version] [--force] [--dry-run]
 //! [--json] [--il2cpp ...]` (crates/apk, apk.py): a game's own Android build laid out for ua_host.
-//! With --il2cpp, a Mono build that would be compiled for the arm64 IL2CPP player stops with
-//! status 2 (the Python's `pmunity apk --il2cpp` does that).
+//! With --il2cpp --on-device a Mono build is compiled for the arm64 IL2CPP player on this machine
+//! (crates/il2cpp); with --il2cpp alone (Docker, a porter's PC) it stops with status 2 (the
+//! Python's `pmunity apk --il2cpp` does that).
 use super::argp::{choice, flag, val, Opt, Parser};
 use std::io::Write;
 use std::process::ExitCode;
@@ -55,7 +56,23 @@ pub fn run(args: &[String]) -> ExitCode {
         force: a.has("--force"),
         dry_run: a.has("--dry-run"),
         il2cpp: a.has("--il2cpp"),
+        il2cpp_opts: apk::il2cpp::Il2cppOpts {
+            home: a.get("--home").map(str::to_string),
+            pkg: a.get("--pkg").map(str::to_string),
+            jobs: a
+                .get("--jobs")
+                .and_then(|j| pkgzip::py::int(j, 10))
+                .map(|j| j.max(0) as usize),
+            on_device: a.has("--on-device"),
+            toolchain: a.get("--toolchain").map(str::to_string),
+            link_xml: a.opts.get("--link-xml").cloned().unwrap_or_default(),
+            strip: a.get("--strip").map(str::to_string),
+            keep_cpp: a.has("--keep-cpp"),
+        },
     };
+    if o.il2cpp && o.il2cpp_opts.on_device && !o.dry_run {
+        il2cpp::device::install_ca();
+    }
     let mut log = |m: &str| {
         if json {
             eprintln!("{m}");
@@ -77,6 +94,10 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         Err(apk::Fail::Error(m)) => {
             eprintln!("pmu: error: {m}");
+            ExitCode::from(1)
+        }
+        Err(apk::Fail::Exit(m)) => {
+            eprintln!("{m}");
             ExitCode::from(1)
         }
         Err(apk::Fail::NotPorted(m)) => {

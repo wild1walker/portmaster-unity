@@ -32,7 +32,7 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `winbcl <data> <dir> [--version --installer --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll), read from Unity's Windows editor installer the same way |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 | `route <path> --env` | route.py | the box64 route's game.env: the first build under the path with a Linux x86-64 executable, its Unity version, backend and GL mode (the report, `--json` and `--launcher` stay with the Python: status 2) |
-| `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp` where it would compile a Mono build for the arm64 IL2CPP player: status 2 (the Python's `il2cpp --on-device`) |
+| `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
 | `il2cpp <data> <out> --on-device ...`, `il2cpp fetch <version> [--on-device]` | il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py | the il2cpp-arm64 route's build on the handheld: Unity's IL2CPP and player by range reads, Debian's compilers and Microsoft's .NET (pinned by sha256), UnityLinker, il2cpp, the C++ build (Bee's graph from 2021.2), libil2cpp.so and Data/Managed (below, "`pmu il2cpp`"); the Docker route of a porter's PC (no `--on-device`) stays with the Python: status 2 |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
@@ -40,12 +40,12 @@ The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 ## The setups that run pmu
 
 Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64,
-android, mono-arm64, il2cpp-arm64, box64 and apk routes: their patchscript runs `setup/pmu` when
+il2cpp-arm64, box64 and apk routes: their patchscript runs `setup/pmu` when
 the release has it (`pm() { "$S/pmu" "$@"; }`; the install step reads the report's scripting
 runtime with sed, the apk route's setup apk.json's fields with sed), else the setup's Python.
 `pmunity port package` ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts
 of what is compiled into it) when it runs every command of the port's setup (`port.py`'s
-`pmu_covers`: no Python converter plugin of the porter's, no apk route `player.il2cpp`), else the
+`pmu_covers`: no Python converter plugin of the porter's), else the
 converter and the Python as before. The default convert config of `port new` (shaders, settings,
 audio, quality; compute shaders on), a Windows build's (`from: ["d3d11"]`, the release's pmhlslcc
 beside pmu), a Vulkan-only build's (`from: ["vulkan"]`, the release's pmspirvcross), `grab_fetch`
@@ -76,15 +76,15 @@ curl or wget for Unity's whole installer when range reads fail, and a port's own
 | | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build | yes (crates/il2cpp, 2026-11-02; the template ran the Python before) |
 | | `android-data --il2cpp <dir> ... --consume-src --verify-bundles 2 --pack all` | yes |
 | apk | `apk <inputs> <dir> --target T --json` (apk.py) | yes (2026-11-02) |
-| | with `player.il2cpp`: `apk ... --il2cpp --on-device` (the IL2CPP build above, on a system without a 32-bit userland) | no: the release ships the Python |
+| | with `player.il2cpp`: `apk ... --il2cpp --on-device` (the IL2CPP build above, on a system without a 32-bit userland) | yes (crates/apk's il2cpp.rs on crates/il2cpp, 2026-11-02; the release shipped the Python before) |
 | | apk.json's fields read into shell variables | sed (before 2026-11-02 a `"$PY" -c` one-liner) |
 | box64 | `route <gamedata> --env` (route.py: the Linux x86-64 build found, its Unity version, backend and GL mode) | yes (the template ran the Python before 2026-11-02) |
 | | `convert <data> --config gles.json` (shaders, settings) | yes |
 | Cuphead (portmaster-cuphead: `setup/patchscript`, `setup64/patchscript`, `setup/dlcscript`, `setup/resume.txt`, the launcher) | `zip-extract`, `macpkg`, `patch-obb check / new / ggm / pack`, `player donor` (mono armv7; il2cpp arm64 `--managed`), `convert --plugin animclips` (the DLC: `--steps shaders,textures,audio`), `journal-files`, `android-data` (64-bit: `--mono64`) | yes: the release ships no Python (its `codepatch` is .NET) |
 
 So the android, mono-arm64, il2cpp-arm64, box64 and apk routes' releases ship pmu and no Python
-unless the port brings a Python converter plugin of its own (a JSON one runs on pmu) or, on the apk
-route, has `player.il2cpp` (what is left, and why: the end of this page).
+unless the port brings a Python converter plugin of its own (a JSON one runs on pmu): what is left,
+and why, is at the end of this page.
 
 ## Layout
 
@@ -267,6 +267,7 @@ Results (2026-11-02; every run with the setup's options, `--streaming-assets obb
 | the same, killed after 250 compiles by pmu and finished by the Python | Bee's pmunity-done.jsonl | "553 commands (227 done before)": every file as a fresh build's (and the compiles cut short's `.o.tmp`) |
 | `il2cpp fetch 6000.0.58f2 --on-device` | a mixed build's toolchain: Unity 6's editor parts, the converter (2022.3.62f3) and its compat check, the mixed folder, NDK r23b and its API 23 libraries, the tool folder | the 6856 files and the printed JSON the same |
 | `android-data --il2cpp` on the builds of 2018.4, 2020.3 (boot.config's buildDate), 2022.3 (unity_app_guid) | the setup's arguments, `--consume-src --pack all` | status, every file (189, 183, 203: the APK, android_package.json, the report, what is left of the data) and the state the same |
+| `apk <apk> --target arm64 --il2cpp --on-device` (the apk route's `player.il2cpp`) on two free Mono APKs (armeabi-v7a only): a 2022.3.23f1 card game (Bee, unity_app_guid) and a 2019.4.18f1 action game | apk.py's il2cpp_stub (the assemblies, boot.config, ScriptingAssemblies.json out of the APK), the build with the data's version and MonoManager's list, il2cpp_apk (base.apk without lib/, the assemblies and the signature, with IL2CPP's Managed/ stored and aligned), lib/ from the IL2CPP player | 5786 of 5794 and 5021 of 5032 files the same, base.apk among them (and libil2cpp.so for the 2022.3 game); the others differ between two Python runs too (Runtime.cpp's object and what is linked from it, the logs, android_package.json's `build_seconds`) |
 | the 2018.4 game through the route on pmu alone | `il2cpp --on-device`, `convert` (shaders, settings), `android-data --il2cpp`, then the arm64 rig (tools/emu) | its title menu ("Scripting Backend 'il2cpp', CPU 'arm64-v8a'"), no exception |
 
 pmu is not faster at this: the time is UnityLinker's, il2cpp's and the compilers' (the same programs);
@@ -398,7 +399,7 @@ Then on 2026-11-02 (branch rust-apk), with free games downloaded for it (itch.io
 | | a 6000.6.5 macOS build | both stop the same way in the shaders step (writing a Shader object: the Python's struct.error, pmu's "data: -1 out of range"): 6000.6's Metal entries are a gap of the Python's too |
 | Vulkan of 6000.6's typed layout (`--set 'shaders.from=["vulkan"]' --convert-only`, and `--builtin`) | two 6000.6 Linux builds (6000.6.2, 6000.6.5) | the same files: the games' own shaders (97 shaders, 526 programs; 85, 701) and their players' built-in resources (5 shaders, 14 programs each); pmu stopped with status 2 before |
 | a JSON converter plugin (`pmu_pair.py --plugin`: QualitySettings, AudioManager, Light, Camera and Material fields) | three corpus games (2018.4, 2020.3, 2022.3) | the same files (26 objects edited in the 2020.3 game); the 2022.3 game: both stop with the same message (a field its Materials do not have) |
-| `apk` (`tests/golden/apk_golden.py`, the musl build) | 71 made-up builds; four free games' APKs (2019.4 and 2022.3 Mono armv7, 2021.3 and 2022.3 IL2CPP), each as it is and laid out again from its own files as split APKs, an XAPK, an APKS, an App Bundle and an APK with its data in an OBB | 107 of 107 the same: exit status, stdout, stderr, every output file (base.apk merged or rebuilt, lib/, OBBs, android_package.json) |
+| `apk` (`tests/golden/apk_golden.py`, the musl build) | 71 made-up builds (79 since `--il2cpp --on-device` is ported: its dry run, its refusals before the build: 2017.3, 2017.4 before .16, 6000.3, an IL2CPP build with only armeabi-v7a, no assemblies; 79 of 79 the same); four free games' APKs (2019.4 and 2022.3 Mono armv7, 2021.3 and 2022.3 IL2CPP), each as it is and laid out again from its own files as split APKs, an XAPK, an APKS, an App Bundle and an APK with its data in an OBB | 107 of 107 the same: exit status, stdout, stderr, every output file (base.apk merged or rebuilt, lib/, OBBs, android_package.json) |
 
 ## Porter plugins without Python
 
@@ -428,14 +429,9 @@ in portmaster-cuphead and is built in).
 
 ## What is left, and why
 
-- The apk route's `player.il2cpp` (a Mono build compiled with IL2CPP on the handheld): `pmu apk
-  --il2cpp` stops with status 2 where the Python would start that build (its checks before it are
-  pmu's). The build itself is `il2cpp::build` (crates/il2cpp: `BuildOpts` with `data_version` and
-  `listed`, as apk.py calls il2cpp.build; `Error::Unsupported` where the Python raises
-  unity_version.Unsupported, which apk.py turns into a refusal); what is left is apk.py's own part
-  of it (il2cpp_stub, il2cpp_apk: the APK with IL2CPP's metadata) and the call.
-- `il2cpp` without `--on-device` (the Docker route of a porter's PC: tools/il2cpp/root.sh's
-  folders in a stock container): status 2. pmu is for the handheld; a PC runs the Python.
+- `il2cpp` and `apk --il2cpp` without `--on-device` (the Docker route of a porter's PC:
+  tools/il2cpp/root.sh's folders in a stock container): status 2. pmu is for the handheld; a PC
+  runs the Python.
 - Unity 2023.1 - 6000.2's mixed builds (crates/il2cpp's mix.rs) are compared on `il2cpp fetch` (the
   converter, the mixed folder, NDK r23b's API 23 libraries) but not on a whole build: no Mono game
   of those versions was on this machine.

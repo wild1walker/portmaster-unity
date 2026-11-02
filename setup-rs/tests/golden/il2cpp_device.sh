@@ -20,6 +20,9 @@
 #   tools/rs.sh <worktree> bash tests/golden/il2cpp_device.sh <data> <scratch> py1
 #   tools/rs.sh <worktree> bash tests/golden/il2cpp_device.sh <data> <scratch> rs1
 #
+# <data> apk:<file> runs `apk <file> <scratch>/out --target arm64 --il2cpp --on-device --home
+# <scratch>/home --keep-cpp --json [options]` instead (a Mono APK compiled for the arm64 IL2CPP
+# player: the apk route's player.il2cpp; the build's files are in out/.il2cpp).
 # <data> fetch:<version> runs `il2cpp fetch <version> --home <scratch>/home --on-device [options]`
 # instead (the toolchain only: Unity's parts, the NDK, the player, a mixed build's converter for
 # 2023.1+, the handheld's tools). KEEP=1 leaves home/ and out/ in place after the run (the next run removes them first). The
@@ -46,15 +49,23 @@ case $RUN in
   *) echo "run: py<n> or rs<n>" >&2; exit 2 ;;
 esac
 t0=$(date +%s)
+W=out/.work
 case $DATA in
   fetch:*) "${cmd[@]}" il2cpp fetch "${DATA#fetch:}" --home "$S/home" --on-device "$@" > "$R/stdout" 2> "$R/stderr" ;;
-  *) "${cmd[@]}" il2cpp "$DATA" "$S/out" --on-device --abi arm64-v8a --home "$S/home" --keep-cpp "$@" \
-       > "$R/stdout" 2> "$R/stderr" &
+  *)
+     if [ "${DATA#apk:}" != "$DATA" ]; then
+       W=out/.il2cpp/.work
+       "${cmd[@]}" apk "${DATA#apk:}" "$S/out" --target arm64 --il2cpp --on-device --home "$S/home" --keep-cpp --json "$@" \
+         > "$R/stdout" 2> "$R/stderr" &
+     else
+       "${cmd[@]}" il2cpp "$DATA" "$S/out" --on-device --abi arm64-v8a --home "$S/home" --keep-cpp "$@" \
+         > "$R/stdout" 2> "$R/stderr" &
+     fi
      pid=$!
      if [ -n "${KILL_AT:-}" ]; then
        # a power cut: every process of the build killed once cc.log has KILL_AT commands (all but
        # this script and its parents)
-       until [ "$(cat "$S/out/.work/cc.log" 2>/dev/null | wc -l)" -ge "$KILL_AT" ] || ! kill -0 $pid 2>/dev/null; do sleep 0.5; done
+       until [ "$(cat "$S/$W/cc.log" 2>/dev/null | wc -l)" -ge "$KILL_AT" ] || ! kill -0 $pid 2>/dev/null; do sleep 0.5; done
        keep=" $$ "; p=$$
        while [ "$p" -gt 1 ]; do p=$(awk '{print $4}' /proc/$p/stat); keep="$keep$p "; done
        for d in /proc/[0-9]*; do n=${d#/proc/}; case "$keep" in *" $n "*) ;; *) kill -9 "$n" 2>/dev/null ;; esac; done
@@ -69,8 +80,8 @@ echo $(( $(date +%s) - t0 )) > "$R/seconds"
     else echo "$(sha256sum < "$f" | cut -c1-64) $(stat -c %a "$f") $f"; fi
   done ) > "$R/manifest"
 # the records
-( cd "$S" && find out -maxdepth 1 -type f; find out/.work -maxdepth 1 -type f
-  find out/.work/cache -path '*/buildstate/*' \( -name '*.jsonl' -o -name '*.args' \) 2>/dev/null
+( cd "$S" && find out -maxdepth 1 -type f; find out/.il2cpp -maxdepth 1 -type f 2>/dev/null; find $W -maxdepth 1 -type f
+  find $W/cache -path '*/buildstate/*' \( -name '*.jsonl' -o -name '*.args' \) 2>/dev/null
   find home -name '.complete*' -o -name '.state.json' -o -path 'home/device-arm64/bin/*' \
     -o -name 'player.json' -o -name 'bee_backend' -o -path '*/deploy/il2cpp' -o -name 'ndk-clang.sh' 2>/dev/null
   find home -path '*/toolchains/llvm/prebuilt/linux-x86_64/bin/clang' 2>/dev/null ) | LC_ALL=C sort -u |

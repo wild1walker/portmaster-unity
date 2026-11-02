@@ -31,12 +31,13 @@ def objects_by_source(run):
     things: {object path under out/: 'out/.work/cache/<its source, under out/ or home/>.o'} from
     cc.log, so that runs whose generated C++ differs in a file (2020.x's metadata tables are not
     written the same each time) compare that file's object by its source."""
-    p = os.path.join(run, 'records', 'out', '.work', 'cc.log')
     out = {}
-    try:
-        text = open(p, encoding='utf-8', errors='replace').read()
-    except OSError:
-        return out
+    text = ''
+    for w in (('out', '.work'), ('out', '.il2cpp', '.work')):        # (il2cpp's, apk --il2cpp's)
+        try:
+            text += open(os.path.join(run, 'records', *w, 'cc.log'), encoding='utf-8', errors='replace').read()
+        except OSError:
+            pass
     for m in CC_OBJ.finditer(text):
         src, obj = m.group(1), m.group(2)
         i = obj.rfind('/out/')
@@ -78,6 +79,7 @@ def norm_text(name, text):
         for l in lines:
             for rx, rep in TIMING:
                 l = rx.sub(rep, l)
+            l = re.sub(r'"build_seconds": \d+', '"build_seconds": <n>', l)
             out.append(l)
         return out
     if name == 'cc.log':
@@ -158,6 +160,14 @@ def main(argv):
             continue
         ta = open(ra[name], encoding='utf-8', errors='replace').read()
         tb = open(rb[name], encoding='utf-8', errors='replace').read()
+        if name.endswith('android_package.json'):
+            ja, jb = json.loads(ta), json.loads(tb)
+            for j in (ja, jb):
+                if isinstance(j.get('il2cpp'), dict):
+                    j['il2cpp'].pop('build_seconds', None)
+            if ja != jb:
+                fails.append(f'  {name}: differs: {ja} {jb}')
+            continue
         if name.endswith('il2cpp.json'):
             ja, jb = norm_json(json.loads(ta)), norm_json(json.loads(tb))
             if ja != jb:

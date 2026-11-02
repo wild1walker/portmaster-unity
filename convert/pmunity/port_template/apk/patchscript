@@ -9,7 +9,7 @@
 #      build's armeabi-v7a one where the system has a 32-bit (armhf) userland (ua_host), else its
 #      arm64-v8a one (ua_host64); with player.il2cpp (PLAYER_IL2CPP=1), a Mono build (armeabi-v7a
 #      only) on a system without a 32-bit userland: its code compiled with Unity's IL2CPP here on the
-#      handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: Unity's IL2CPP
+#      handheld for Unity's arm64 IL2CPP player (`pm apk --il2cpp --on-device`: Unity's IL2CPP
 #      and player by range reads, compilers from Debian and .NET from Microsoft, pinned by checksum;
 #      one to a few hours, Wi-Fi; an interrupted build continues)
 #   2. installing: lib/ (that player's libraries), the APK and the OBBs under the names the player
@@ -53,7 +53,7 @@ IL2CPP_ARGS=(); need_il2cpp=0
 if [ "${PLAYER_IL2CPP:-0}" = 1 ]; then
   IL2CPP_ARGS=(--il2cpp --on-device --home "$W/il2cpp-home")
   case "$TARGETS" in arm64*) need_il2cpp=1;; esac      # (the 64-bit player first: the build is compiled)
-  # Python's TLS needs the system's CA certificates (Unity's servers); .NET without ICU
+  # the setup's tools need the system's CA certificates (Unity's servers, HTTPS); .NET without ICU
   if [ -z "$SSL_CERT_FILE" ]; then
     for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
       [ -f "$f" ] && { export SSL_CERT_FILE="$f"; break; }
@@ -62,9 +62,9 @@ if [ "${PLAYER_IL2CPP:-0}" = 1 ]; then
   export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 fi
 
-# ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs); a
-# port with player.il2cpp (its compile on the handheld is not in pmu yet) ships the setup's Python
-# instead (CPython + UnityPy, aarch64: setup/python.tar.gz and the converter)
+# ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs, with
+# player.il2cpp's compile on the handheld built in); a release made without it ships the setup's
+# Python instead (CPython + UnityPy, aarch64: setup/python.tar.gz and the converter)
 export TMPDIR="$W/tmp"
 mkdir -p "$TMPDIR"
 if [ -f "$S/pmu" ]; then

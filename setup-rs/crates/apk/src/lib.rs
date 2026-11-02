@@ -4,8 +4,10 @@
 //! the APK kept as the package code path (split asset packs merged into it, an App Bundle rebuilt
 //! as one APK), the OBBs named as the player looks for them, android_package.json written.
 //!
-//! `--il2cpp` where it compiles a Mono build for the arm64 IL2CPP player (`pmunity il2cpp`) is not
-//! here: that run stops with status 2, before anything is written, for the Python to do it.
+//! `--il2cpp --on-device` compiles a Mono build for the arm64 IL2CPP player with crates/il2cpp
+//! (il2cpp.rs); `--il2cpp` without `--on-device` (Docker, a porter's PC) stops with status 2, before
+//! anything is written, for the Python to do it.
+pub mod il2cpp;
 pub mod json;
 pub mod manifest;
 pub mod settings;
@@ -52,8 +54,11 @@ pub enum Fail {
     Refused(String),
     /// What the Python raises (its traceback; here the message): status 1.
     Error(String),
-    /// What is not ported (compiling a Mono build with IL2CPP): status 2, the Python does it.
+    /// What is not ported (compiling a Mono build with IL2CPP in Docker): status 2, the Python
+    /// does it.
     NotPorted(String),
+    /// SystemExit's message (the IL2CPP build's): status 1, the message alone.
+    Exit(String),
 }
 
 impl From<pkgzip::Error> for Fail {
@@ -92,6 +97,9 @@ pub struct Opts {
     pub dry_run: bool,
     /// --il2cpp given (a Mono build with only armeabi-v7a is then offered to a 64-bit target).
     pub il2cpp: bool,
+    /// its options (--home, --pkg, --jobs, --on-device, --toolchain, --link-xml, --strip,
+    /// --keep-cpp)
+    pub il2cpp_opts: il2cpp::Il2cppOpts,
 }
 
 // ------------------------------------------------------------------ Python's path helpers
@@ -943,14 +951,21 @@ fn run_in(
         have.clone()
     };
     let (pick, why) = choose_abi(&offered, &o.target, o.abi.as_deref())?;
-    if virt && pick == "arm64-v8a" {
+    let compile_il2cpp = virt && pick == "arm64-v8a";
+    if compile_il2cpp && !o.dry_run && !o.il2cpp_opts.on_device {
         return Err(Fail::NotPorted(
-            "--il2cpp: a Mono build compiled with Unity's IL2CPP for the arm64 player".into(),
+            "--il2cpp without --on-device: a Mono build compiled with Unity's IL2CPP in Docker"
+                .into(),
         ));
     }
+    let real = if compile_il2cpp {
+        "armeabi-v7a".to_string()
+    } else {
+        pick.clone()
+    };
     let mut lib_src: Vec<(&Apk, String)> = Vec::new();
     for a in std::iter::once(base).chain(configs.iter().copied()) {
-        for n in a.libs(&pick) {
+        for n in a.libs(&real) {
             lib_src.push((a, n));
         }
     }
@@ -971,12 +986,12 @@ fn run_in(
             libnames.join(", ")
         };
         return refused(format!(
-            "lib/{pick} has no {}: not a Unity Android build (libraries: {libs})",
+            "lib/{real} has no {}: not a Unity Android build (libraries: {libs})",
             missing.join(" or ")
         ));
     }
     let has_lib = |n: &str| libnames.iter().any(|x| x == n);
-    let backend = if has_lib("libil2cpp.so") {
+    let mut backend = if has_lib("libil2cpp.so") {
         "il2cpp"
     } else if ["libmonobdwgc-2.0.so", "libmono.so", "libmonosgen-2.0.so"]
         .iter()
@@ -985,10 +1000,23 @@ fn run_in(
         "mono"
     } else {
         return refused(format!(
-            "lib/{pick} has neither libil2cpp.so nor a Mono runtime (libmono*.so)"
+            "lib/{real} has neither libil2cpp.so nor a Mono runtime (libmono*.so)"
         ));
     };
-    log(&format!("ABI {why}; scripting backend {backend}"));
+    if compile_il2cpp && backend != "mono" {
+        return refused(
+            "an IL2CPP build with only armeabi-v7a: its code is compiled for 32-bit ARM, and the build has no \
+             assemblies to compile again; it needs a 32-bit (armhf) userland",
+        );
+    }
+    log(&format!(
+        "ABI {why}; scripting backend {backend}{}",
+        if compile_il2cpp {
+            "; --il2cpp: its code is compiled with IL2CPP for the arm64-v8a IL2CPP player"
+        } else {
+            ""
+        }
+    ));
 
     // OBBs
     let mut obb_plan: Vec<(&'static str, String, String)> = Vec::new(); // (kind, path, name)
@@ -1106,8 +1134,15 @@ fn run_in(
             uv::LAST.1
         ));
     }
-    if backend == "mono" && pick == "arm64-v8a" {
+    if backend == "mono" && pick == "arm64-v8a" && !compile_il2cpp {
         return refused("a Mono build with arm64-v8a libraries: Unity never shipped one; the APK looks modified");
+    }
+    if compile_il2cpp {
+        if let Some(why_not) = il2cpp::il2cpp_refusal(&ver) {
+            return refused(format!(
+                "--il2cpp: {why_not}; this build needs a 32-bit (armhf) userland"
+            ));
+        }
     }
     let ps = settings::read(dpath, dz, dn, log);
     let apis = ps.graphics_apis.clone().unwrap_or_default();
@@ -1155,7 +1190,7 @@ fn run_in(
             _ => log(&format!("IL2CPP metadata {}", note.unwrap_or("None"))),
         }
     }
-    let plugins: Vec<String> = libnames
+    let mut plugins: Vec<String> = libnames
         .iter()
         .filter(|x| {
             ![
@@ -1174,6 +1209,14 @@ fn run_in(
         .collect();
     if !plugins.is_empty() {
         log(&format!("native plugins: {}", plugins.join(", ")));
+    }
+    if !plugins.is_empty() && compile_il2cpp {
+        notes.push(format!(
+            "its native plugins are 32-bit ARM only ({}): the arm64 player cannot load them (calls into them fail, as \
+             on a phone without them)",
+            plugins.join(", ")
+        ));
+        plugins = Vec::new();
     }
     let mut vr: Vec<String> = plugins
         .iter()
@@ -1217,6 +1260,9 @@ fn run_in(
             .map(|(k, v)| (k.clone(), Json::opt_str(v.as_deref())))
             .collect(),
     );
+    if compile_il2cpp {
+        backend = "il2cpp";
+    }
     if o.dry_run {
         let abis: Vec<&str> = ABIS
             .iter()
@@ -1240,7 +1286,7 @@ fn run_in(
             total += getsize(p)?;
         }
         let size_mb = (total as f64 / 1048576.0 + 0.5) as i128;
-        return Ok(Json::Obj(vec![
+        let mut report: Vec<(String, Json)> = vec![
             ("package".into(), Json::str(&mf.package)),
             ("version_code".into(), Json::Int(code)),
             ("version_name".into(), Json::str(&mf.version_name)),
@@ -1252,6 +1298,11 @@ fn run_in(
             ("all_abis".into(), Json::strs(&have)),
             ("backend".into(), Json::str(backend)),
             ("unity_version".into(), Json::str(&ver.text)),
+        ];
+        if compile_il2cpp {
+            report.push(("il2cpp_from".into(), Json::str("mono")));
+        }
+        report.extend([
             (
                 "data_in".into(),
                 Json::str(match data_in {
@@ -1286,18 +1337,60 @@ fn run_in(
             ("notes".into(), Json::strs(&notes)),
             ("meta_data".into(), meta_json),
             ("size_mb".into(), Json::Int(size_mb)),
-        ]));
+        ]);
+        return Ok(Json::Obj(report));
     }
 
-    // write the layout
+    // --il2cpp: the long part first (a failed or interrupted build leaves the layout as it was)
     let data_packs: Vec<&Apk> = packs
         .iter()
         .copied()
         .filter(|a| a.names.iter().any(|x| x.starts_with("assets/")))
         .collect();
+    let mut il: Option<(androiddata::pyjson::Json, String)> = None;
+    if compile_il2cpp {
+        let mut zs: Vec<&Archive> = vec![&base.z];
+        zs.extend(data_packs.iter().map(|a| &a.z));
+        zs.extend(obb_zips.iter().map(|(z, _)| z));
+        let listed = ps.assemblies.as_ref().map(|l| {
+            l.iter()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .collect::<Vec<_>>()
+        });
+        il = Some(il2cpp::il2cpp_build(
+            &zs,
+            &ver,
+            out,
+            tmp,
+            &o.il2cpp_opts,
+            log,
+            listed,
+        )?);
+    }
+    // write the layout
     log(&format!("-> {out}"));
     let apk_out = py::join(out, "base.apk");
-    if !data_packs.is_empty() {
+    if compile_il2cpp {
+        let seen: BTreeSet<&String> = base.names.iter().collect();
+        let mut srcs: Vec<(&Archive, Vec<String>)> = vec![(&base.z, base.names.clone())];
+        for a in &data_packs {
+            srcs.push((
+                &a.z,
+                a.names
+                    .iter()
+                    .filter(|x| x.starts_with("assets/") && !seen.contains(x))
+                    .cloned()
+                    .collect(),
+            ));
+        }
+        il2cpp::il2cpp_apk(
+            &srcs,
+            &apk_out,
+            &py::join(out, il2cpp::IL2CPP_WORK),
+            &ver,
+            log,
+        )?;
+    } else if !data_packs.is_empty() {
         merge_apks(base, &data_packs, &apk_out, log)?;
         log(&format!(
             "  base.apk (merged with {} asset pack split(s), {:.1} MiB)",
@@ -1319,13 +1412,44 @@ fn run_in(
         }
     }
     makedirs(&libdir)?;
-    for (a, nm) in &lib_src {
-        extract(&a.z, nm, &py::join(&libdir, py::basename(nm)))?;
+    if let Some((info, pkg)) = &il {
+        // Unity's arm64 IL2CPP player of the build's version, with the build's code
+        let pl = py::join(pkg, il2cpp::IL2CPP_PLAYER_LIBS);
+        let mut names: Vec<String> = fs::read_dir(&pl)
+            .map_err(|e| Fail::Error(format!("{e}: {pl:?}")))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        let mut got = Vec::new();
+        for x in names {
+            if x.ends_with(".so") && x != "libil2cpp.so" {
+                copy_file(&py::join(&pl, &x), &py::join(&libdir, &x))?;
+                got.push(x);
+            }
+        }
+        copy_file(
+            &format!("{out}/{}/lib/arm64-v8a/libil2cpp.so", il2cpp::IL2CPP_WORK),
+            &py::join(&libdir, "libil2cpp.so"),
+        )?;
+        let bytes = info
+            .get("libil2cpp_bytes")
+            .and_then(androiddata::pyjson::Json::as_int)
+            .unwrap_or(0);
+        log(&format!(
+            "  lib/: {} (Unity {ver}'s arm64 IL2CPP player), libil2cpp.so ({:.1} MiB, the build's code)",
+            got.join(", "),
+            bytes as f64 / 1048576.0
+        ));
+    } else {
+        for (a, nm) in &lib_src {
+            extract(&a.z, nm, &py::join(&libdir, py::basename(nm)))?;
+        }
+        log(&format!(
+            "  lib/: {} libraries from lib/{pick}",
+            libnames.len()
+        ));
     }
-    log(&format!(
-        "  lib/: {} libraries from lib/{pick}",
-        libnames.len()
-    ));
     for e in fs::read_dir(out).map_err(|e| Fail::Error(format!("{e}: {out:?}")))? {
         let e = e?;
         let n = e.file_name().to_string_lossy().into_owned();
@@ -1344,7 +1468,10 @@ fn run_in(
         place(p, &py::join(out, name), log, inside(p, tmp))?;
         res.set(&format!("{kind}_obb"), Json::str(name));
     }
-    if backend == "mono" {
+    if compile_il2cpp {
+        // (an earlier Mono layout's)
+        let _ = fs::remove_dir_all(format!("{out}/assets/bin/Data/Managed/etc"));
+    } else if backend == "mono" {
         let etc: Vec<&String> = base
             .names
             .iter()
@@ -1375,6 +1502,14 @@ fn run_in(
     if let Some(v) = meta_ver.filter(|&v| v != 0) {
         res.set("il2cpp_metadata", Json::Int(v as i128));
     }
+    if let Some((info, _)) = &il {
+        res.set(
+            "il2cpp_metadata",
+            info.get("metadata_version")
+                .map_or(Json::Null, il2cpp::py_to_json),
+        );
+        res.set("il2cpp", il2cpp::info_json(info));
+    }
     if !plugins.is_empty() {
         res.set("plugins", Json::strs(&plugins));
     }
@@ -1386,6 +1521,10 @@ fn run_in(
     }
     let pj = py::join(out, "android_package.json");
     fs::write(&pj, json::dumps(&res)).map_err(|e| Fail::Error(format!("{e}: {pj:?}")))?;
+    if il.is_some() && !o.il2cpp_opts.keep_cpp {
+        // (in base.apk and lib/ now)
+        let _ = fs::remove_dir_all(py::join(out, il2cpp::IL2CPP_WORK));
+    }
     log(&format!(
         "  android_package.json; run: ua_host ({} build) {out}",
         if pick == "arm64-v8a" {
@@ -1395,6 +1534,14 @@ fn run_in(
         }
     ));
     Ok(res)
+}
+
+/// shutil.copyfile
+fn copy_file(a: &str, b: &str) -> Result<(), Fail> {
+    let mut r = File::open(a).map_err(|e| Fail::Error(format!("{e}: {a:?}")))?;
+    let mut w = File::create(b).map_err(|e| Fail::Error(format!("{e}: {b:?}")))?;
+    io::copy(&mut r, &mut w).map_err(|e| Fail::Error(format!("{e}: {b:?}")))?;
+    Ok(())
 }
 
 /// ^(main|patch)\.\d+\..+\.obb$ (an OBB an earlier layout placed).

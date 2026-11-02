@@ -36,6 +36,7 @@ version = "0.1.0"
 dependencies = [
  "androiddata",
  "crc32fast",
+ "il2cpp",
  "libc",
  "libz-sys",
  "pkgzip",

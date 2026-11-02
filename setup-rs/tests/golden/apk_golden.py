@@ -79,6 +79,20 @@ def madeup(d):
     cases += [('mono-arm64', [m], ['--target', 'arm64', '--json']), ('mono-armhf', [m], ['--target', 'armhf', '--json']),
               ('mono-il2cpp-armhf-first', [m], ['--target', 'armhf,arm64', '--il2cpp', '--json']),
               ('mono-dry', [m], ['--target', 'armhf', '--dry-run', '--json'])]
+    # --il2cpp on a Mono build with only armeabi-v7a: what is decided before the build (the build
+    # itself, on a real game: tests/golden/il2cpp_device.sh apk:<file>)
+    mi = apk(j('mono-il2cpp.apk'), mf(), abis=('armeabi-v7a',), backend='mono', version='2019.4.18f1',
+             extra={'assets/bin/Data/Managed/Assembly-CSharp.dll': b'MZ', 'lib/armeabi-v7a/libplugin.so': b'x'})
+    cases += [('mono-il2cpp-dry', [mi], ['--target', 'arm64', '--il2cpp', '--dry-run', '--json']),
+              ('mono-il2cpp-dry-text', [mi], ['--target', 'arm64', '--il2cpp', '--on-device', '--dry-run']),
+              ('mono-il2cpp-abi-v7', [mi], ['--target', 'arm64', '--abi', 'armeabi-v7a', '--il2cpp', '--json'])]
+    for v in ('2017.3.5f1', '2017.4.9f1', '6000.3.1f1'):
+        q = apk(j(f'mono-il2cpp-{v}.apk'), mf(), abis=('armeabi-v7a',), backend='mono', version=v)
+        cases.append((f'mono-il2cpp-{v}', [q], ['--target', 'arm64', '--il2cpp', '--on-device', '--json']))
+    v7 = apk(j('il2cpp-v7only.apk'), mf(), abis=('armeabi-v7a',))
+    cases.append(('il2cpp-v7only-il2cpp', [v7], ['--target', 'arm64', '--il2cpp', '--on-device']))
+    noasm = apk(j('mono-noasm.apk'), mf(), abis=('armeabi-v7a',), backend='mono', version='2019.4.18f1')
+    cases.append(('mono-il2cpp-noasm', [noasm], ['--target', 'arm64', '--il2cpp', '--on-device', '--home', j('il2cpp-home')]))
     for name, kw in (('x86', dict(abis=('x86',))), ('nolib', dict(abis=())), ('noscripting', dict(backend=None)),
                      ('old', dict(version='5.5.4f1')), ('nodata', dict(data=False)), ('nometa', dict(metadata=False)),
                      ('vr', dict(extra={'lib/arm64-v8a/libvrapi.so': b'x'})), ('new', dict(version='6000.7.1f1')),

@@ -2378,11 +2378,11 @@ PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan', 'metal')
 def pmu_covers(cfg):
     """Whether the setup's commands all run on pmu (setup-rs: one static aarch64 program instead of
     the setup's Python) with this port's options: (True, []), or (False, [what pmu does not do yet]):
-    a porter's Python converter plugins (pmu has some built in, PMU_PLUGINS, and runs JSON ones), a
-    Mono build compiled with IL2CPP on the handheld by the apk route (player.il2cpp). (Shaders from
-    OpenGL Core, Direct3D 11, Vulkan and Metal, the quality step, compute shaders, fused_post, the
-    apk route's install, and the il2cpp-arm64 route's `il2cpp --on-device` and `android-data
-    --il2cpp` run on pmu, docs/rust-setup.md.)"""
+    a porter's Python converter plugins (pmu has some built in, PMU_PLUGINS, and runs JSON ones).
+    (Shaders from OpenGL Core, Direct3D 11, Vulkan and Metal, the quality step, compute shaders,
+    fused_post, the apk route's install with its Mono build compiled with IL2CPP on the handheld
+    (player.il2cpp: `apk --il2cpp --on-device`), and the il2cpp-arm64 route's `il2cpp --on-device`
+    and `android-data --il2cpp` run on pmu, docs/rust-setup.md.)"""
     why = []
     conv = cfg.get('convert') or {}
     sh = conv.get('shaders') or {}
@@ -2395,8 +2395,6 @@ def pmu_covers(cfg):
            if not p.lower().endswith('.json') and os.path.splitext(os.path.basename(p))[0] not in PMU_PLUGINS]
     if own:
         why.append("the port's converter plugins (" + ', '.join(os.path.basename(p) for p in own) + ')')
-    if (cfg.get('port') or {}).get('route') == 'apk' and (cfg.get('player') or {}).get('il2cpp'):
-        why.append('player.il2cpp (il2cpp --on-device)')
     return not why, why
 
 

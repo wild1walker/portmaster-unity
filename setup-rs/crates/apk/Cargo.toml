@@ -8,6 +8,8 @@ description = "`apk`: a game's own Android build (APK, split APKs, XAPK, APKS, A
 [dependencies]
 pkgzip = { path = "../pkgzip" }
 androiddata = { path = "../androiddata" }
+# (--il2cpp --on-device: the Mono build compiled for the arm64 IL2CPP player)
+il2cpp = { path = "../il2cpp" }
 unityfs = { path = "../unityfs" }
 crc32fast = "1"
 libc = "0.2"

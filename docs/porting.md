@@ -320,7 +320,8 @@ which gets the opt-in patches `streaming_assets` and `data_path` ask for (`--str
 (android-data checks them against the build's `il2cpp.json`), and nothing of the code goes to
 android-data.
 
-The apk route's setup is shorter: the setup's Python; the players this system runs, in order (the
+The apk route's setup is shorter: the setup's tools (pmu, or the setup's Python in a release made
+without it); the players this system runs, in order (the
 APK's armeabi-v7a one where `/lib/ld-linux-armhf.so.3` exists and the port has `ua_host`, its
 arm64-v8a one where the port has `ua_host64`; `player.abi = "arm64-v8a"` puts that first); the
 packages in `gamedata/` (`game.data`, any depth, macOS's `._` files skipped) with the `.obb` files
