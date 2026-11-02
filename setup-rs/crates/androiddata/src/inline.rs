@@ -112,10 +112,8 @@ pub fn inline_bundle_with(
         .filter(|&i| b.header.nodes[i].flags & 4 != 0)
         .collect();
     if sfs.len() != 1 {
-        return Err(Stop::NotPorted(format!(
-            "{src}: a bundle with {} serialized files and streamed textures (UnityPy's in-memory inlining)",
-            sfs.len()
-        )));
+        drop(b);
+        return inline_bundle_files(db, src, dst);
     }
     let work = format!("{dst}.work");
     let _ = std::fs::remove_dir_all(&work);
@@ -188,4 +186,70 @@ pub fn inline_bundle_with(
     })();
     let _ = std::fs::remove_dir_all(&work);
     res
+}
+
+/// inline_bundle of a bundle with several serialized files (a scene bundle: the scene and its
+/// .sharedAssets) or none flagged: the Python's in-memory path (UnityPy.load, then
+/// inline_texture_streams over every file's objects, the .resS nodes none of them reads any more
+/// dropped, every file's platform Android, save(packer='lz4')), written as it writes it: every
+/// serialized file saved again, one texture's pixels in memory at a time, each file held in
+/// `<dst>.work` while the bundle is packed.
+pub fn inline_bundle_files(
+    db: Option<Arc<unityfs::ClassDb>>,
+    src: &str,
+    dst: &str,
+) -> Result<(usize, Vec<String>), Stop> {
+    let mut b = unityfs::data::BundleFiles::open(src, db)?;
+    let names: Vec<String> = b
+        .bundle
+        .header
+        .nodes
+        .iter()
+        .map(|n| n.name.clone())
+        .collect();
+    let mut plans = Vec::with_capacity(b.files.len());
+    let mut still: HashSet<String> = HashSet::new();
+    for (_, sf) in &b.files {
+        let (plan, s) = unityfs::inline::plan(sf)?;
+        still.extend(s);
+        plans.push(plan);
+    }
+    let done = plans.iter().map(HashSet::len).sum();
+    let dropped: Vec<String> = names
+        .iter()
+        .filter(|n| n.ends_with(".resS") && !still.contains(*n))
+        .cloned()
+        .collect();
+    for (_, sf) in b.files.iter_mut() {
+        sf.target_platform = ANDROID as i32;
+    }
+    let bundle = &b.bundle;
+    let read = |path: &str, off: u64, size: usize| -> unityfs::Result<Vec<u8>> {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let k = names
+            .iter()
+            .position(|n| n == name)
+            .ok_or_else(|| unityfs::Error::Value(format!("KeyError: '{name}'")))?;
+        Ok(bundle.node(k).read_clipped(off, size)?)
+    };
+    let work = format!("{dst}.work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(py::dirname(dst))?;
+    let tmp = format!("{dst}.tmp");
+    let drop_set: HashSet<String> = dropped.iter().cloned().collect();
+    let r = b.write_with(
+        Path::new(&tmp),
+        Some(Path::new(&work)),
+        &drop_set,
+        |k, sf, o| {
+            if !plans[k].contains(&o.path_id) {
+                return Ok(None);
+            }
+            unityfs::inline::inlined(sf, o.path_id, read).map(Some)
+        },
+    );
+    let _ = std::fs::remove_dir_all(&work);
+    r?;
+    std::fs::rename(&tmp, dst)?;
+    Ok((done, dropped))
 }
