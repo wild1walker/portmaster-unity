@@ -162,7 +162,7 @@ fn skip<T>(m: String) -> std::result::Result<T, Stop> {
 }
 
 /// convert.unity_of: (major, minor) of the data, from its version string, else from the layout.
-fn unity_of(t: &Value, version: &str) -> (u64, u64) {
+pub(crate) fn unity_of(t: &Value, version: &str) -> (u64, u64) {
     if !version.is_empty() {
         let mut it = version.split('.');
         if let (Some(a), Some(b)) = (it.next(), it.next()) {
@@ -216,7 +216,7 @@ fn unity_of(t: &Value, version: &str) -> (u64, u64) {
     (2018, 4)
 }
 
-fn truthy(v: Option<&Value>) -> bool {
+pub(crate) fn truthy(v: Option<&Value>) -> bool {
     match v {
         None => false,
         Some(Value::Struct(s)) => !s.fields.is_empty(),
@@ -455,14 +455,14 @@ pub fn apply(shaders: &mut HashMap<String, Value>, chain: &Chain, unity: &str) -
             else {
                 return skip(format!("{}: no parameter entry", labels.last().unwrap()));
             };
-            let own = bindings::gl_bindings(&e0_code, uv, 0)?;
+            let own = bindings::gl_bindings(&e0_code, uv, 0, None)?;
             if own.params_bytes() != *data {
                 return skip(format!(
                     "{}: its binding info is not as this writes it (layout not understood)",
                     labels.last().unwrap()
                 ));
             }
-            let info = bindings::gl_bindings(&fused, uv, 0)?;
+            let info = bindings::gl_bindings(&fused, uv, 0, None)?;
             (
                 Some(Slot::Params {
                     version: *version,
@@ -472,8 +472,10 @@ pub fn apply(shaders: &mut HashMap<String, Value>, chain: &Chain, unity: &str) -
             )
         } else {
             let own = bindings::entry_bindings(&e0, None)?;
-            let info = bindings::gl_bindings(&fused, uv, own.source_map)?;
-            if own.serialize() != bindings::gl_bindings(&e0_code, uv, own.source_map)?.serialize() {
+            let info = bindings::gl_bindings(&fused, uv, own.source_map, None)?;
+            if own.serialize()
+                != bindings::gl_bindings(&e0_code, uv, own.source_map, None)?.serialize()
+            {
                 return skip(format!(
                     "{}: its binding info is not as this writes it (layout not understood)",
                     labels.last().unwrap()

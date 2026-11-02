@@ -10,9 +10,11 @@
 //!
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
 //! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs), compute shaders
-//! (`compute`, on by default: compute.rs), `fused_post` (fusedpost.rs). Direct3D 11, Vulkan and
-//! Metal sources stop the step as not ported (the setup runs the Python for those).
+//! (`compute`, on by default: compute.rs), `fused_post` (fusedpost.rs), Direct3D 11 programs
+//! (`from: d3d11`, Windows builds: d3d11.rs with shaderx's dxbc and the setup's pmhlslcc). Vulkan
+//! and Metal sources stop the step as not ported (the setup runs the Python for those).
 use super::compute;
+use super::d3d11;
 use super::fusedpost;
 use super::grabfetch;
 use super::{field, field_mut, objects, Args};
@@ -469,6 +471,7 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     let mut results: Vec<convert::Report> = Vec::new();
     let mut gresults: Vec<grabfetch::GfResult> = Vec::new();
     let mut cresults: Vec<compute::ComputeResult> = Vec::new();
+    let mut translator: Option<shaderx::dxbc::Translator> = None;
     let mut changed_files = 0usize;
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
@@ -507,18 +510,37 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                 .iter()
                 .find(|x| platforms.contains(&source_platform(x)))
                 .unwrap_or(&s.sources[0]);
-            if src != "glcore" {
-                return Err(Error::NotPorted(format!("{rel}: shaders from {src}")));
-            }
-            let shader = shader_of(&t)?;
-            let out = convert::add_gles3(&shader, &opts, &mut tr)
-                .map_err(|e| Error::Value(e.to_string()))?;
-            let r = out.report;
-            let mut changed = false;
-            if let Some(edit) = &out.edit {
-                apply(&mut t, edit)?;
-                changed = true;
-            }
+            let (r, mut changed) = match src.as_str() {
+                "glcore" => {
+                    let shader = shader_of(&t)?;
+                    let out = convert::add_gles3(&shader, &opts, &mut tr)
+                        .map_err(|e| Error::Value(e.to_string()))?;
+                    let changed = out.edit.is_some();
+                    if let Some(edit) = &out.edit {
+                        apply(&mut t, edit)?;
+                    }
+                    (out.report, changed)
+                }
+                "d3d11" => {
+                    if translator.is_none() {
+                        translator =
+                            Some(shaderx::dxbc::Translator::new(None).map_err(Error::Value)?);
+                    }
+                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                    let mut r = d3d11::add_gles3_d3d11(
+                        &mut t,
+                        translator.as_mut().unwrap(),
+                        &s.precision,
+                        s.replace,
+                        s.optimize,
+                        &unity,
+                    )?;
+                    r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                    let changed = r.status == convert::Status::Converted || r.changed;
+                    (r, changed)
+                }
+                _ => return Err(Error::NotPorted(format!("{rel}: shaders from {src}"))),
+            };
             if let Some(always) = s.grab_fetch {
                 let names = match &s.grab_fetch_names {
                     None => None,
@@ -612,6 +634,12 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     if !chains.is_empty() {
         job.log(&fusedpost::summary(&chains, &presults));
+    }
+    if let Some(line) = shaderx::step::d3d11_summary(&results) {
+        job.log(&line);
+    }
+    if let Some(mut t) = translator {
+        t.close();
     }
     Ok(())
 }

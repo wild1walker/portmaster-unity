@@ -177,10 +177,16 @@ pub struct Report {
     pub glcore4x: bool,
     /// The shader's platforms after the step (step.py sets r.platforms from the tree).
     pub platforms: Vec<i64>,
+    /// The platform translated: glcore | d3d11.
+    pub source: &'static str,
+    /// D3D11: GPU instancing variants left out (not translatable).
+    pub dropped_instancing: usize,
+    /// D3D11: GPU sprite skinning variants left out (not translatable).
+    pub dropped_skinning: usize,
 }
 
 impl Report {
-    fn new(name: &str, glcore4x: bool) -> Report {
+    pub fn new(name: &str, glcore4x: bool) -> Report {
         Report {
             name: name.to_string(),
             status: Status::Unchanged,
@@ -197,6 +203,9 @@ impl Report {
             failed: Vec::new(),
             glcore4x,
             platforms: Vec::new(),
+            source: "glcore",
+            dropped_instancing: 0,
+            dropped_skinning: 0,
         }
     }
 }

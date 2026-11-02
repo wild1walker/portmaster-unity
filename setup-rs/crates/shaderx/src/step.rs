@@ -103,7 +103,10 @@ pub fn summary(results: &[Report], changed_files: usize, precision: &str) -> Vec
             "shaders: {es31} programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+"
         ));
     }
-    let gl4: Vec<&Report> = results.iter().filter(|r| r.glcore4x).collect();
+    let gl4: Vec<&Report> = results
+        .iter()
+        .filter(|r| r.source == "glcore" && r.glcore4x)
+        .collect();
     if !gl4.is_empty() {
         out.push(format!(
             "shaders: GLCore41/43 programs translated too: {} programs; {} SubShaders left out (no ES equivalent); {} shaders without programs (stripped) given an empty GLES3 blob",
@@ -111,12 +114,35 @@ pub fn summary(results: &[Report], changed_files: usize, precision: &str) -> Vec
             gl4.iter().map(|r| r.failed.len()).sum::<usize>(),
             gl4.iter().filter(|r| r.empty).count(),
         ));
-    } else if !results.is_empty() {
+    } else if results.iter().any(|r| r.source == "glcore") {
         out.push("shaders: GLCore41/43 programs not translated (glcore4x off)".into());
     }
-    let vr: usize = conv.iter().map(|r| r.dropped).sum();
+    let vr: usize = conv
+        .iter()
+        .filter(|r| r.source == "glcore")
+        .map(|r| r.dropped)
+        .sum();
     if vr > 0 {
         out.push(format!("shaders: {vr} VR-only OpenGL Core variants not translatable (left out, never used on a handheld)"));
     }
     out
+}
+
+/// The step's summary line for shaders translated from Direct3D 11 (None without any).
+pub fn d3d11_summary(results: &[Report]) -> Option<String> {
+    let d3d: Vec<&Report> = results.iter().filter(|r| r.source == "d3d11").collect();
+    if d3d.is_empty() {
+        return None;
+    }
+    let conv = |r: &&&Report| r.status == Status::Converted;
+    Some(format!(
+        "shaders: from Direct3D 11: {} of {} shaders ({} programs); {} SubShaders left out; {} VR-only variants, {} GPU instancing and {} GPU sprite skinning variants left out",
+        d3d.iter().filter(conv).count(),
+        d3d.len(),
+        d3d.iter().filter(conv).map(|r| r.programs).sum::<usize>(),
+        d3d.iter().map(|r| r.failed.len()).sum::<usize>(),
+        d3d.iter().map(|r| r.dropped).sum::<usize>(),
+        d3d.iter().map(|r| r.dropped_instancing).sum::<usize>(),
+        d3d.iter().map(|r| r.dropped_skinning).sum::<usize>(),
+    ))
 }

@@ -7,6 +7,7 @@
 use crate::blob::Entry;
 use crate::glsl;
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// A program this path cannot give binding info (dxbc.Unsupported).
@@ -73,6 +74,30 @@ pub struct Binding {
 }
 
 impl Binding {
+    /// A texture's dimension (Unity's TextureDimension: 2 2D, 3 3D, 4 cube, 5 2D array).
+    pub fn dim(&self) -> Option<i32> {
+        if self.kind != KIND_TEXTURE {
+            return None;
+        }
+        Some(if self.packed {
+            self.extra[1] >> 1
+        } else {
+            self.extra[0]
+        })
+    }
+
+    /// A texture's sampler index (-1: an inline sampler state).
+    pub fn sampler(&self) -> Option<i32> {
+        if self.kind != KIND_TEXTURE {
+            return None;
+        }
+        Some(if self.packed {
+            self.extra[0]
+        } else {
+            self.extra[1]
+        })
+    }
+
     /// The ints after the index, by kind (Binding.EXTRA).
     fn extra_count(kind: i32) -> Option<usize> {
         match kind {
@@ -473,8 +498,16 @@ enum Decl {
     Texture(String, i32, i32, bool),
 }
 
-fn gl_declarations(src: &str) -> R<Vec<Decl>> {
+fn gl_declarations(src: &str, arrays: Option<&HashMap<String, i32>>) -> R<Vec<Decl>> {
     let r = &*RX;
+    // (HLSLcc declares an array of one element as a plain variable; Unity lists it as an array of 1)
+    let param = |gltype: &str, name: &str, count: Option<&str>| -> R<Param> {
+        let mut p = gl_param(gltype, name, count)?;
+        if count.is_none() && arrays.and_then(|a| a.get(&p.name)) == Some(&1) {
+            p.array = 1;
+        }
+        Ok(p)
+    };
     let mut items: Vec<(usize, Decl)> = Vec::new();
     let mut spans = Vec::new();
     for m in r.block.captures_iter(src) {
@@ -489,7 +522,7 @@ fn gl_declarations(src: &str) -> R<Vec<Decl>> {
                     )));
                 }
             }
-            mem.push(gl_param(&mm[1], &mm[2], count)?);
+            mem.push(param(&mm[1], &mm[2], count)?);
         }
         let all = m.get(0).unwrap();
         let binding = m.get(1).map_or(0, |x| x.as_str().parse().unwrap_or(0));
@@ -501,7 +534,7 @@ fn gl_declarations(src: &str) -> R<Vec<Decl>> {
         if !m[1].contains("sampler") && !spans.iter().any(|&(a, b)| a <= s && s < b) {
             items.push((
                 s,
-                Decl::Loose(gl_param(&m[1], &m[2], m.get(3).map(|x| x.as_str()))?),
+                Decl::Loose(param(&m[1], &m[2], m.get(3).map(|x| x.as_str()))?),
             ));
         }
     }
@@ -541,7 +574,13 @@ fn gl_stages(code: &str) -> Vec<(String, String)> {
 
 /// The binding info Unity's GL compiler (2019.1+) gives a GL program (dxbc.gl_bindings, the
 /// layouts before 6000.6). unity: (major, minor).
-pub fn gl_bindings(code: &str, unity: (u64, u64), source_map: i32) -> R<Bindings> {
+/// arrays: {name: array size} of the uniforms where known.
+pub fn gl_bindings(
+    code: &str,
+    unity: (u64, u64),
+    source_map: i32,
+    arrays: Option<&HashMap<String, i32>>,
+) -> R<Bindings> {
     let stages = gl_stages(code);
     let empty = |name: &str, size: i32, params: Vec<Param>| ConstantBuffer {
         name: name.into(),
@@ -559,7 +598,7 @@ pub fn gl_bindings(code: &str, unity: (u64, u64), source_map: i32) -> R<Bindings
         let Some((_, src)) = stages.iter().find(|(s, _)| s == st) else {
             continue;
         };
-        let items = gl_declarations(src)?;
+        let items = gl_declarations(src, arrays)?;
         let mut loose: Vec<Param> = items
             .iter()
             .filter_map(|d| match d {
@@ -676,7 +715,7 @@ mod tests {
     #[test]
     fn round_trip_and_layout() {
         let code = "#ifdef VERTEX\n#version 300 es\nuniform \tvec4 hlslcc_mtx4x4unity_ObjectToWorld[4];\nuniform \tvec4 _MainTex_ST;\nin highp vec4 in_POSITION0;\nvoid main()\n{\n}\n#endif\n#ifdef FRAGMENT\n#version 300 es\nuniform \tfloat _Intensity;\nuniform \tvec3 _Tint;\nUNITY_LOCATION(0) uniform mediump sampler2D _MainTex;\nlayout(location = 0) out vec4 SV_Target0;\nvoid main()\n{\n}\n#endif\n";
-        let b = gl_bindings(code, (2021, 3), 0).unwrap();
+        let b = gl_bindings(code, (2021, 3), 0, None).unwrap();
         let names: Vec<&str> = b.cbuffers.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["", "$Globals", "$Globals"]);
         assert_eq!(b.cbuffers[1].size, 28); // (float at 0, vec3 at 16: 2020.1+ alignments)
@@ -686,7 +725,7 @@ mod tests {
         assert_eq!(b.bindings[0].extra, vec![0, 4]);
         let data = b.serialize();
         assert_eq!(Bindings::parse(&data, Some(201806140)).unwrap(), b);
-        let b22 = gl_bindings(code, (2022, 3), 0).unwrap();
+        let b22 = gl_bindings(code, (2022, 3), 0, None).unwrap();
         assert_eq!(b22.cbuffers.len(), 2);
         assert_eq!(b22.bindings.last().unwrap().name, "$Globals");
         assert!(Bindings::parse(&data[..data.len() - 1], Some(201806140)).is_err());

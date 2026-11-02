@@ -4,6 +4,7 @@
 pub mod animclips;
 pub mod audio;
 pub mod compute;
+pub mod d3d11;
 pub mod fusedpost;
 pub mod grabfetch;
 pub mod quality;

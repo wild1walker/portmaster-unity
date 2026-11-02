@@ -19,6 +19,7 @@
 pub mod bindings;
 pub mod blob;
 pub mod convert;
+pub mod dxbc;
 pub mod fusedpost;
 pub mod glsl;
 pub mod grabfetch;
