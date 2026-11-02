@@ -97,9 +97,9 @@ pub(super) fn variant_key(sp: &Value) -> VariantKey {
     (kws, sp.get("m_ShaderHardwareTier").and_then(Value::as_i64))
 }
 
-type KeySet = BTreeSet<(char, i64)>;
+pub(super) type KeySet = BTreeSet<(char, i64)>;
 
-fn keyset(sp: &Value) -> KeySet {
+pub(super) fn keyset(sp: &Value) -> KeySet {
     KEY_FIELDS
         .iter()
         .flat_map(|(f, tag)| ints(sp.get(f)).into_iter().map(move |i| (*tag, i)))
@@ -554,7 +554,10 @@ fn check_parsed_form(b: &Bindings, sp: &Value, names: &BTreeMap<i64, String>) ->
 }
 
 /// (keywords, local keywords or None) of a GL program made of two D3D11 entries (_entry_keywords).
-fn entry_keywords(ve: Option<&Entry>, pe: Option<&Entry>) -> (Vec<String>, Option<Vec<String>>) {
+pub(super) fn entry_keywords(
+    ve: Option<&Entry>,
+    pe: Option<&Entry>,
+) -> (Vec<String>, Option<Vec<String>>) {
     let merged = |a: &[String], b: &[String]| {
         let mut out = a.to_vec();
         out.extend(b.iter().filter(|k| !a.contains(k)).cloned());
@@ -763,17 +766,17 @@ pub(super) fn name_indices(p: &mut Value, needed: &[String]) -> Result<BTreeMap<
 }
 
 /// One planned GL program: its pass, tier, D3D11 vertex and pixel subprograms, translation.
-struct Todo {
-    si: usize,
-    pi: usize,
-    tier: usize,
-    vsp: Value,
-    vpi: Option<i64>,
-    psp: Value,
-    es: String,
-    info: Option<Bindings>,
-    typ: i64,
-    keys: KeySet,
+pub(super) struct Todo {
+    pub(super) si: usize,
+    pub(super) pi: usize,
+    pub(super) tier: usize,
+    pub(super) vsp: Value,
+    pub(super) vpi: Option<i64>,
+    pub(super) psp: Value,
+    pub(super) es: String,
+    pub(super) info: Option<Bindings>,
+    pub(super) typ: i64,
+    pub(super) keys: KeySet,
 }
 
 type Cached = std::result::Result<(String, Option<Bindings>, i64), String>;
@@ -1077,13 +1080,46 @@ pub fn add_gles3_d3d11(
         return Ok(r);
     }
 
+    store(
+        t,
+        &mut r,
+        &plan,
+        &mut entries,
+        &mut blobs,
+        &subs,
+        &no_instancing,
+        compact,
+        separate,
+        blob::PLATFORM_D3D11,
+    )?;
+    Ok(r)
+}
+
+/// The GLES3 programs and twins of a plan (add_gles3_d3d11 and metal.add_gles3_metal after
+/// planning): stored as Unity stores GL programs of the data's version, the shared parameters put
+/// back into the source platform's entries (2020.1+). platform: the source (Direct3D 11 or Metal).
+#[allow(clippy::too_many_arguments, clippy::map_entry)]
+pub(super) fn store(
+    t: &mut Value,
+    r: &mut Report,
+    plan: &[(usize, Vec<Todo>)],
+    entries: &mut [Option<Slot>],
+    blobs: &mut ShaderBlobs,
+    subs: &[Value],
+    no_instancing: &BTreeSet<(usize, usize)>,
+    compact: bool,
+    separate: bool,
+    platform: i64,
+) -> Result<()> {
+    let metal = platform == blob::PLATFORM_METAL;
     // (list, the twin, its parameter index)
     let mut twins: Vec<(ListAt, Value, Option<usize>)> = Vec::new();
     if !compact {
         let mut out: Vec<Option<Slot>> = Vec::with_capacity(entries.len());
-        for e in &entries {
+        for e in entries.iter() {
             out.push(match e {
                 None => None,
+                Some(_) if metal && !matches!(e, Some(Slot::Program(_))) => None,
                 Some(Slot::Program(e)) => Some(Slot::Program(Entry {
                     version: e.version,
                     gpu_type: blob::GPU_GLES3 as i32,
@@ -1098,17 +1134,13 @@ pub fn add_gles3_d3d11(
             });
         }
         let mut segs = if blobs.nested {
-            Some(
-                blobs
-                    .segments(blob::PLATFORM_D3D11)
-                    .map_err(|e| bad(e.to_string()))?,
-            )
+            Some(blobs.segments(platform).map_err(|e| bad(e.to_string()))?)
         } else {
             None
         };
         let mut vslot: HashMap<(i64, i64), usize> = HashMap::new();
         let mut used: BTreeSet<usize> = BTreeSet::new();
-        for (_, todo) in &plan {
+        for (_, todo) in plan {
             for td in todo {
                 let vi = int(&td.vsp, "m_BlobIndex")?;
                 let fi = int(&td.psp, "m_BlobIndex")?;
@@ -1127,9 +1159,10 @@ pub fn add_gles3_d3d11(
                     }
                     used.insert(slot);
                     vslot.insert((vi, fi), slot);
-                    let e = entry_of(&entries, vi)?.unwrap();
+                    let e = entry_of(entries, vi)?.unwrap();
                     let rest = match &td.info {
                         Some(i) => i.serialize(),
+                        None if metal => bindings::gl_rest(source_map(e)),
                         None => {
                             let sm = bindings::Bindings::parse(&e.rest, Some(e.version))
                                 .map_err(|u| bad(u.0))?
@@ -1137,7 +1170,7 @@ pub fn add_gles3_d3d11(
                             bindings::gl_rest(sm)
                         }
                     };
-                    let (kw, lkw) = entry_keywords(Some(e), entry_of(&entries, fi)?);
+                    let (kw, lkw) = entry_keywords(Some(e), entry_of(entries, fi)?);
                     out[slot] = Some(Slot::Program(Entry {
                         version: e.version,
                         gpu_type: td.typ as i32,
@@ -1196,20 +1229,18 @@ pub fn add_gles3_d3d11(
         let mut out: Vec<Option<Slot>> = Vec::new();
         let mut segs: Vec<i64> = Vec::new();
         let d3d_segs = if blobs.nested {
-            blobs
-                .segments(blob::PLATFORM_D3D11)
-                .map_err(|e| bad(e.to_string()))?
+            blobs.segments(platform).map_err(|e| bad(e.to_string()))?
         } else {
             vec![0; entries.len()]
         };
         let mut code_at: HashMap<(i64, Option<i64>, i64), usize> = HashMap::new();
         let mut param_at: HashMap<Vec<u8>, usize> = HashMap::new();
-        for (_, todo) in &plan {
+        for (_, todo) in plan {
             for td in todo {
                 let vi = int(&td.vsp, "m_BlobIndex")?;
                 let fi = int(&td.psp, "m_BlobIndex")?;
                 let key = (vi, td.vpi, fi);
-                let e = entry_of(&entries, vi)?.unwrap();
+                let e = entry_of(entries, vi)?.unwrap();
                 let info = td.info.as_ref().ok_or_else(|| bad("no GL binding info"))?;
                 if !code_at.contains_key(&key) {
                     let rest = if separate {
@@ -1218,7 +1249,7 @@ pub fn add_gles3_d3d11(
                         info.serialize()
                     };
                     code_at.insert(key, out.len());
-                    let (kw, lkw) = entry_keywords(Some(e), entry_of(&entries, fi)?);
+                    let (kw, lkw) = entry_keywords(Some(e), entry_of(entries, fi)?);
                     out.push(Some(Slot::Program(Entry {
                         version: e.version,
                         gpu_type: td.typ as i32,
@@ -1269,7 +1300,7 @@ pub fn add_gles3_d3d11(
                 ));
             }
         }
-        restore_common(t, &plan, &mut entries, &mut blobs, separate)?;
+        restore_common(t, plan, entries, blobs, separate, platform)?;
         let sc = blobs.stage_counts.is_some().then_some(1);
         blobs.set_entries(blob::PLATFORM_GLES3PLUS, &out, &segs, sc);
     }
@@ -1289,7 +1320,7 @@ pub fn add_gles3_d3d11(
         }
         r.twins += 1;
     }
-    for (_, todo) in &plan {
+    for (_, todo) in plan {
         for td in todo {
             let p = pass_mut(t, td.si, td.pi)?;
             add_platform(p, blob::PLATFORM_GLES3PLUS)?;
@@ -1315,7 +1346,7 @@ pub fn add_gles3_d3d11(
             format!("{} {}", r.why, left.join("; "))
         };
     }
-    Ok(r)
+    Ok(())
 }
 
 /// A twin's keyword index lists from a keyword set (_set_keywords).
@@ -1401,7 +1432,13 @@ fn restore_common(
     entries: &mut [Option<Slot>],
     blobs: &mut ShaderBlobs,
     separate: bool,
+    platform: i64,
 ) -> Result<()> {
+    let vs_types: &[i64] = if platform == blob::PLATFORM_METAL {
+        &[blob::GPU_METAL_VS]
+    } else {
+        &dxbc::VERTEX_TYPES
+    };
     let mut passes: Vec<(usize, usize)> = Vec::new();
     for (_, todo) in plan {
         for td in todo {
@@ -1430,7 +1467,7 @@ fn restore_common(
         let mut done: BTreeSet<i64> = BTreeSet::new();
         for (_, lst, pbi) in tier_lists(Some(&prog)) {
             for (j, sp) in lst.iter().enumerate() {
-                if !dxbc::VERTEX_TYPES.contains(&sp_type(sp)) {
+                if !vs_types.contains(&sp_type(sp)) {
                     continue;
                 }
                 let pi_ = pbi.as_ref().map(|p| p.get(j).copied().unwrap_or(0));
@@ -1487,13 +1524,20 @@ fn restore_common(
     }
     if changed {
         let segs = if blobs.nested {
-            blobs
-                .segments(blob::PLATFORM_D3D11)
-                .map_err(|e| bad(e.to_string()))?
+            blobs.segments(platform).map_err(|e| bad(e.to_string()))?
         } else {
             Vec::new()
         };
-        blobs.set_entries(blob::PLATFORM_D3D11, entries, &segs, None);
+        blobs.set_entries(platform, entries, &segs, None);
     }
     Ok(())
+}
+
+/// The source map of an entry's binding info (metal._source_map: its first 4 bytes, else 0).
+pub(super) fn source_map(e: &Entry) -> i32 {
+    if e.rest.len() >= 4 {
+        i32::from_le_bytes(e.rest[..4].try_into().unwrap())
+    } else {
+        0
+    }
 }

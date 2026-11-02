@@ -7,6 +7,7 @@ pub mod compute;
 pub mod d3d11;
 pub mod fusedpost;
 pub mod grabfetch;
+pub mod metal;
 pub mod quality;
 pub mod settings;
 pub mod shaders;

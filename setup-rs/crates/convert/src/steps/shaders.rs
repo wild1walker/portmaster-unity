@@ -12,12 +12,13 @@
 //! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs), compute shaders
 //! (`compute`, on by default: compute.rs), `fused_post` (fusedpost.rs), Direct3D 11 programs
 //! (`from: d3d11`, Windows builds: d3d11.rs with shaderx's dxbc and the setup's pmhlslcc), Vulkan
-//! programs (`from: vulkan`: vulkan.rs with shaderx's vulkan and the setup's pmspirvcross). Metal
-//! programs stop the step as not ported (the setup runs the Python for those).
+//! programs (`from: vulkan`: vulkan.rs with shaderx's vulkan and the setup's pmspirvcross), Metal
+//! programs (`from: metal`, macOS builds without OpenGL Core: metal.rs with shaderx's metal).
 use super::compute;
 use super::d3d11;
 use super::fusedpost;
 use super::grabfetch;
+use super::metal;
 use super::vulkan;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
@@ -559,7 +560,13 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                     let changed = r.status == convert::Status::Converted || r.changed;
                     (r, changed)
                 }
-                _ => return Err(Error::NotPorted(format!("{rel}: shaders from {src}"))),
+                _ => {
+                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                    let mut r = metal::add_gles3_metal(&mut t, &s.precision, s.replace, &unity)?;
+                    r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                    let changed = r.status == convert::Status::Converted || r.changed;
+                    (r, changed)
+                }
             };
             if let Some(always) = s.grab_fetch {
                 let names = match &s.grab_fetch_names {
@@ -648,6 +655,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     if !cresults.is_empty() {
         job.log(&compute::summary(&cresults));
+    }
+    if let Some(line) = metal::summary(&results) {
+        job.log(&line);
     }
     if let Some(line) = vulkan::summary(&results) {
         job.log(&line);

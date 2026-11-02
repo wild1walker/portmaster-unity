@@ -24,6 +24,7 @@ pub mod fusedpost;
 pub mod glsl;
 pub mod grabfetch;
 pub mod lz4;
+pub mod metal;
 pub mod py;
 pub mod spirv;
 pub mod step;

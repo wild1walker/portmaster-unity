@@ -27,7 +27,7 @@ const STAGE_FIELDS: [&str; 5] = [
 ];
 
 /// convert.subprogram_lists: every list of the shader with its parameter indices.
-fn subprogram_lists(t: &Value) -> Vec<(Vec<Value>, Option<Vec<i64>>)> {
+pub(super) fn subprogram_lists(t: &Value) -> Vec<(Vec<Value>, Option<Vec<i64>>)> {
     let mut out = Vec::new();
     for ss in t
         .path(&["m_ParsedForm", "m_SubShaders"])

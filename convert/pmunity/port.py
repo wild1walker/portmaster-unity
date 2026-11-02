@@ -2365,8 +2365,10 @@ def _component_pmunity(ctx, opts):
 # converter plugins pmu has built in (setup-rs/crates/convert/src/steps/mod.rs, plugin()): a port's
 # files.plugins entry of that file name runs on pmu (portmaster-cuphead's convert/animclips.py)
 PMU_PLUGINS = ('animclips',)
-# the shader sources pmu translates (Direct3D 11 with setup/pmhlslcc, Vulkan with
-# setup/pmspirvcross, as the Python)
+# the shader sources a release runs on pmu (Direct3D 11 with setup/pmhlslcc, Vulkan with
+# setup/pmspirvcross, as the Python). pmu translates Metal too, the same as the Python on the
+# players' built-in shaders and hand-written MSL; a Metal port keeps the Python until a macOS
+# game's own shaders have been compared (docs/rust-setup.md)
 PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan')
 
 

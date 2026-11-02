@@ -587,7 +587,7 @@ fn name_stage(m: &mut Module, plan: &Plan, stage: &str) -> R<Named> {
 
 // ---------------------------------------------------------------- SPIRV-Cross's GLSL -> Unity's GL form
 
-const UNIFORM_LOCATION_BLOCK: &str = "#define UNITY_SUPPORTS_UNIFORM_LOCATION 1\n#if UNITY_SUPPORTS_UNIFORM_LOCATION\n#define UNITY_LOCATION(x) layout(location = x)\n#define UNITY_BINDING(x) layout(binding = x, std140)\n#else\n#define UNITY_LOCATION(x)\n#define UNITY_BINDING(x) layout(std140)\n#endif\n";
+pub const UNIFORM_LOCATION_BLOCK: &str = "#define UNITY_SUPPORTS_UNIFORM_LOCATION 1\n#if UNITY_SUPPORTS_UNIFORM_LOCATION\n#define UNITY_LOCATION(x) layout(location = x)\n#define UNITY_BINDING(x) layout(binding = x, std140)\n#else\n#define UNITY_LOCATION(x)\n#define UNITY_BINDING(x) layout(std140)\n#endif\n";
 
 struct Patterns {
     flip_y: Regex,
