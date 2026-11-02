@@ -27,6 +27,9 @@
 //                       f1-f12, escape, enter, space, tab, backspace, delete, up, down, left, right,
 //                       shift, ctrl, alt, pageup, pagedown, home, end, back. Works with or without
 //                       pointer mode; mapped buttons no longer reach the game as pad buttons.
+//   UA_DPAD_SWAP=<button>   that button swaps the d-pad and the left stick (and back): what the one
+//                       did (keymap, cursor, the game's axes) the other does, so a d-pad-only device
+//                       can both play and move the cursor. The button is taken.
 // Pad button names: a b x y l1 r1 l2 r2 l3 r3 start select mode.
 //
 // The cursor is drawn on Unity's render thread right before eglSwapBuffers (frames.c's swap hook)
@@ -67,6 +70,7 @@ static struct {
 
 static struct { int pad_key; int dir; int key; int down; } keymap[MAX_MAP];   // dir: hat direction 1-4 (up, down, left, right) or 0
 static int nkeymap, kb_dev;
+static int swap_key, swapped;               // UA_DPAD_SWAP
 
 // state (UI thread)
 static double px, py;                       // cursor, view pixels
@@ -208,6 +212,13 @@ int pointer_init(int width, int height, int *next_id)
         if (nkeymap) { kb_dev = (*next_id)++; add_device(kb_dev, "Virtual Keyboard", UP_SOURCE_KEYBOARD);
                        fprintf(stderr, "[input] keymap: %d pad controls press keys (keyboard device %d)\n", nkeymap, kb_dev); }
     }
+    const char *sw = getenv("UA_DPAD_SWAP");
+    if (sw && *sw)
+    {
+        swap_key = pad_button(sw);
+        if (swap_key) fprintf(stderr, "[input] %s swaps the d-pad and the left stick\n", sw);
+        else fprintf(stderr, "[input] UA_DPAD_SWAP: unknown button %s\n", sw);
+    }
     const char *e = getenv("UA_POINTER");
     if (!e || !*e || !strcmp(e, "0")) return 0;
     P.events = !strcasecmp(e, "touch") ? EV_TOUCH : EV_MOUSE;
@@ -303,8 +314,20 @@ static void set_on(int on)
     if (on) { sent_x = sent_y = -1; t_moved = now_s(); send_move(); }
 }
 
+// UA_DPAD_SWAP: the d-pad and the left stick trade places; what either held is let go
+static void set_swapped(int on)
+{
+    swapped = on;
+    for (int i = 0; i < nkeymap; i++)
+        if (keymap[i].dir && keymap[i].down) { up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, UP_ACTION_UP, keymap[i].key, 0, 0); keymap[i].down = 0; }
+    memset(stick, 0, sizeof stick);
+    memset(hat, 0, sizeof hat);
+    fprintf(stderr, "[input] d-pad and left stick %s\n", on ? "swapped" : "back in place");
+}
+
 int pointer_key(int keycode, int down)
 {
+    if (swap_key && keycode == swap_key) { if (down) set_swapped(!swapped); return 1; }
     for (int i = 0; i < nkeymap; i++)
         if (keymap[i].pad_key == keycode)
         {
@@ -347,6 +370,7 @@ static void keymap_hat(float *v)
 void pointer_axes(int slot, float *v)
 {
     if (slot < 0 || slot >= MAX_SLOTS) return;
+    if (swapped) { float t = v[0]; v[0] = v[4]; v[4] = t; t = v[1]; v[1] = v[5]; v[5] = t; }
     keymap_hat(v);
     if (!P.events) return;
     stick[slot][0] = stick[slot][1] = hat[slot][0] = hat[slot][1] = scroll_y[slot] = 0;

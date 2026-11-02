@@ -253,11 +253,19 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
 `alt`, `pageup`, `pagedown`, `home`, `end`, `insert`, `minus`, `equals`, `comma`, `period`,
 `slash`, `grave`, `back` (Android's back key, which Unity reads as Escape).
 
+## Swapping the d-pad and the left stick
+
+`UA_DPAD_SWAP=<button>` (e.g. `y`): each press swaps the d-pad and the left stick, and the next
+swaps them back. Whatever one of them did (`UA_KEYMAP` directions, pointer mode's cursor, the
+game's own axes) the other does then, so on a d-pad-only device the d-pad can play the game and
+move the cursor in menus (Slope: arrow keys in play, the cursor in its touch-only menus). Keys held
+at the swap are let go. The button itself no longer reaches the game.
+
 ## Tests
 
 - `runtime/host/test/pointer_test.sh` (`ARCH=arm64` too): pointer.c against stand-ins for the
   runtime and a fake libGLESv2 window: what each scenario sends and takes (off, mouse, touch,
-  keymap, toggle; the start position sent again, once, after Unity's second frame, as a half-pixel
+  keymap, swap, toggle; the start position sent again, once, after Unity's second frame, as a half-pixel
   pair), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off.
 - `runtime/jni/build.sh`: libunity's view of a mouse MotionEvent (source, action, tool type,
   button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape.
