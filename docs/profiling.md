@@ -754,6 +754,12 @@ no `EGL_ANDROID_blob_cache`. Two launches of the same save, the first with the c
 | walking right, attacking and jumping (50 s of frames) | no program made | no program made |
 | the cache afterwards | 27 files, 3.5 MB (a `version` file and one per program) | the same 27 files |
 
+A cache from another driver, made by changing each binary's header (the 20 bytes after Mali's
+`MPB2` magic: its checksum and build hash) before a third launch: the driver refused all 26 binaries
+(link status 0), Unity compiled and linked each program from its source again (52 compiles 750 ms,
+26 links 5,247 ms, in the same load frames), read each new binary back for its cache (26
+`glGetProgramBinary`), and the game reached King's Pass as usual. A driver update therefore costs one slow launch, not a broken program.
+
 So the cache works under ua_host: a launch after the first loads every program in about 1 % of
 the time the first spent compiling and linking it, and all of that work falls inside loading
 frames, never in play. The game makes the programs of a scene while it loads it; the walk, with
