@@ -1221,6 +1221,11 @@ def cmd_pmu(a, games, local):
                 with open(cfgp, 'w') as f:
                     json.dump(cfg, f, indent=1)
                 pair.append('--builtin')
+                mac = os.path.join(G.data, '..', 'unity default resources')
+                if not os.path.isfile(os.path.join(G.data, 'Resources', 'unity default resources')) and os.path.isfile(mac):
+                    # (a macOS app's: beside the Data folder, outside the game's mount when that is the Data folder)
+                    mounts.append(f'{os.path.realpath(mac)}:/mnt/builtin-res:ro')
+                    pair += ['--builtin-res', '/mnt/builtin-res']
             for kv in a.set or ():
                 pair += ['--set', kv]
             if a.steps:
@@ -1240,6 +1245,8 @@ def cmd_pmu(a, games, local):
                 res = json.load(open(os.path.join(G.out, 'pair.json')))
             except (OSError, ValueError):
                 raise Fail(f'pmu_pair.py wrote no result (exit {rc}): {tail(G.log)}')
+            if res.get('skip'):
+                raise Skip(res['skip'])
             stages = res['stages']
             bad = [s for s in stages if not s['same']]
             if bad:

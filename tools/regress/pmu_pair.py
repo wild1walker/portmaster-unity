@@ -223,7 +223,10 @@ class Pair:
             # the desktop player's built-in resources as the data's one assets file, with the data's
             # globalgamemanagers: their Shaders and ComputeShaders carry GLCore and GLES3 programs
             # and kernels (Unity's own), which `shaders.replace` rebuilds from the GLCore ones
-            res = os.path.join(a.data, 'Resources', 'unity default resources')
+            # (a macOS app has it beside its Data folder, in Contents/Resources: --builtin-res)
+            res = a.builtin_res or next((r for r in (os.path.join(a.data, 'Resources', 'unity default resources'),
+                                                     os.path.join(a.data, '..', 'unity default resources'))
+                                         if os.path.isfile(r)), os.path.join(a.data, 'Resources', 'unity default resources'))
             if not os.path.isfile(res):
                 print(f'  no {res}', flush=True)
                 with open(a.result, 'w') as f:
@@ -292,6 +295,8 @@ def main(argv=None):
     ap.add_argument('--files', help='only these files of the data (relative paths, comma-separated)')
     ap.add_argument('--builtin', action='store_true',
                     help="the data: its globalgamemanagers and the player's Resources/unity default resources as builtin.assets")
+    ap.add_argument('--builtin-res', help="with --builtin: the player's unity default resources (default: the data's "
+                    "Resources/, else the folder above the data: a macOS app's Contents/Resources)")
     ap.add_argument('--keep', action='store_true')
     return Pair(ap.parse_args(argv)).main()
 

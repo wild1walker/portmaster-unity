@@ -70,6 +70,40 @@ The result is a table, printed and written to `<scratch>/results/<level>-<time>/
 step logs are in the results folder. `skip`: the game, a player or a tool is not on this machine,
 or the game is not in that level. The exit status is 1 when something failed.
 
+## pmu: the Python and setup-rs's pmu on each game
+
+`regress.py pmu` takes every android, shaders and box64 game of the list through the setup's
+commands twice, by the Python (`python -m pmunity`, the reference) and by pmu (setup-rs's static
+binary), and compares what they leave ([docs/rust-setup.md](../../docs/rust-setup.md): the two must
+write the same bytes). Each game runs `pmu_pair.py` in setup-rs's image (`ua-rust`, Docker: the
+reference Python at `/opt/py` and the musl pmu from the `pmu-target` volume, built first with
+`PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk cargo build --release --target
+aarch64-unknown-linux-musl -p pmu`), on two copies of the data at the same path, in the
+`pmu-scratch` volume. The stages are the android route's: `unpack` (a compressed build), `convert`
+with the convert config a port gets (`port new`'s steps, the check's suggestions, the list's
+`convert` table), then `android-data ... --consume-src --verify-bundles 2 --pack all` with Unity's
+player fetched by pmu into the volume. After each stage it compares the exit statuses, every
+file by size and SHA-256, an archive's entries, the journal as JSON; a stage runs only when the one
+before it gave the same result on both sides.
+
+```sh
+python3 tools/regress/regress.py pmu --pmu-work pmu-pair                    # every game, the port's config
+python3 tools/regress/regress.py pmu --convert-only --set quality.profile=handheld
+python3 tools/regress/regress.py pmu --builtin --set 'shaders.from=["d3d11"]'   # the players' built-in shaders
+python3 tools/regress/regress.py pmu --only '^unsung' --no-consume
+```
+
+Options: `--set`, `--steps` (passed to both converts), `--convert-only` (no android-data),
+`--no-consume` (android-data without `--consume-src`), `--builtin` (the desktop player's
+`Resources/unity default resources` as the data's one assets file, with its globalgamemanagers:
+every GLES3 program and compute kernel rebuilt, `shaders.replace`), `--pmhlslcc`, `--pmspirvcross`, `--asmpatch-bin` (built tools
+for linux-arm64, mounted into the container), `--max-mb` (bigger games are skipped: two copies and
+their archives go into the volume), `--pmu-bin`, `--pmu-scratch`, `--pmu-target`. Differences the
+rule allows are not failures: the journal's `audio.switch` order, a traceback against pmu's
+message, android-data's state file's source mtimes, and log lines (their timings taken out; a log
+that still differs is a note in the table). `pmu_pair.py` also runs by itself on any data folder
+(`--files` takes a subset of its serialized files, `--builtin` the player's resources).
+
 ## The list: games.toml
 
 One `[[game]]` per game and route, named by its corpus slug; the header of
