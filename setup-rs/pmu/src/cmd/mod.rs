@@ -4,6 +4,7 @@ use std::process::ExitCode;
 mod android_data;
 mod argp;
 mod convert;
+mod il2cpp;
 mod macpkg;
 mod patch_obb;
 mod player;
@@ -26,6 +27,7 @@ pub const NAMES: &[&str] = &[
     "unpack",
     "winbcl",
     "route",
+    "il2cpp",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -42,6 +44,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "unpack" => Some(unpack::run(args)),
         "winbcl" => Some(winbcl::run(args)),
         "route" => Some(route::run(args)),
+        "il2cpp" => Some(il2cpp::run(args)),
         _ => None,
     }
 }

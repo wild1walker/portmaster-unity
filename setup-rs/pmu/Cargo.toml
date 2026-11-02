@@ -13,4 +13,5 @@ path = "src/main.rs"
 androiddata = { path = "../crates/androiddata" }
 pkgzip = { path = "../crates/pkgzip" }
 convert = { path = "../crates/convert" }
+il2cpp = { path = "../crates/il2cpp" }
 unityfs = { path = "../crates/unityfs" }

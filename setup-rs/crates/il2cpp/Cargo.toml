@@ -1,0 +1,18 @@
+[package]
+name = "il2cpp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "`il2cpp --on-device`: a Mono game's code compiled with Unity's IL2CPP on the handheld (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py), as the setup's Python does it"
+
+[dependencies]
+pkgzip = { path = "../pkgzip" }
+androiddata = { path = "../androiddata" }
+unityfs = { path = "../unityfs" }
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+libc = "0.2"
+# (the pinned downloads' and the steps' digests: hashlib.sha256)
+sha2 = "0.10"
+# (Debian's packages: data.tar.xz, read as a stream)
+lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "optimization"] }
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
