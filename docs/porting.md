@@ -46,7 +46,8 @@ reads the game and prints:
 | native plugins, P/Invoke modules, services (Steamworks, GOG Galaxy, FMOD Studio, Wwise, ...) | `Plugins/`, assemblies |
 | file access: reads of StreamingAssets that reach System.IO (then `android_data.streaming_assets`), and of `dataPath`, `persistentDataPath`, the working directory | `asmpatch --survey`/`--list` (without asmpatch: assemblies that reference both the getter and System.IO, a hint) |
 | texture formats and sizes (main data) | the serialized files |
-| the routes that fit, the recommended one, and the port config values it suggests | all of the above |
+| StreamingAssets bundles: how many, the scene bundles (several serialized files), their shaders by the programs they have, texture formats and sizes. Warnings for what the converter will not handle: files that look like Unity bundles of another kind (UnityWeb, UnityRaw, a UnityFS header behind other bytes: a game's own offset or encryption), bundles UnityPy cannot open, shaders in bundles with no programs of the source the converter translates from (they draw magenta); a note for scene bundles (pmu converts them, the Python converter does not) and for bundles without a serialized file | UnityPy, a bundle at a time |
+| the routes that fit, the recommended one, and the port config values it suggests (the textures step when the BC/DXT textures of the main data and the bundles together would decode to more than 128 MB) | all of the above |
 
 An Android build (the `apk` route) is read with `pmunity apk`'s dry run instead: package,
 versionCode and versionName, Unity version, backend, the ARM ABIs it has (and so which systems run

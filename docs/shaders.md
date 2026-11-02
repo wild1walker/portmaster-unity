@@ -175,6 +175,47 @@ auto exposure, ambient occlusion, the 3D LUT), so its kernels convert but are no
 A Windows build's compute shaders (Direct3D 11 bytecode) are not translated yet.
 `"shaders": {"compute": false}` leaves compute shaders as they are.
 
+### The files the step reads; asset bundles and scene bundles
+
+The step reads the main data's serialized files (`globalgamemanagers`, `level<n>`, `*.assets`),
+`Resources/unity_builtin_extra`, and every UnityFS bundle under StreamingAssets whose file name
+`shaders.bundles` matches (a regular expression, default `.`: all of them; `false`: none). Most
+bundles hold one serialized file (`CAB-<hash>`, with its `.resS`). A **scene bundle** (a scene
+built into an AssetBundle) holds two: `BuildPlayer-<scene>` (the scene's objects) and
+`BuildPlayer-<scene>.sharedAssets` (what the scene uses that no other bundle has: its shaders,
+materials, textures), the scene's PPtrs into the second going through an external path written
+in lower case (`archive:/buildplayer-<scene>/buildplayer-<scene>.sharedassets`). Enter the Gungeon
+keeps its title (`foyer_001`, 8 shaders) and Breach (`foyer_002` and `foyer_003`, 1 each) so.
+
+pmu converts every serialized file of such a bundle, as it converts any other file (2026-11-02);
+the shaders, textures and JSON plugin edits steps do, and android-data inlines their textures
+([android-data.md](android-data.md#6-streamingassets-files-the-game-reads-saves)). The serialized
+files that changed are saved again, the others and the other nodes keep their bytes, and the
+bundle is packed as one with one serialized file is (chunked LZ4, the nodes in their order with
+their flags), so android-data's platform patch works on it in place. The Python converter (frozen)
+leaves such a bundle as it is ("expected one serialized file in the bundle, found 2"): a release
+that ships the Python (only for a porter's Python converter plugin) still does, and the player
+then logs "Desired shader compiler platform 9 is not available in shader blob" for each of its
+shaders and draws them magenta (Gungeon's title sky and the Breach before 2026-11-02).
+
+There is no Python reference for the bundle itself, so `setup-rs/tests/golden/scene_bundles.py`
+makes one: each serialized file taken out of the bundle as a plain `.assets` file and converted by
+the Python's step; pmu's bundle must hold those bytes. On Gungeon (the port's config) the 8
+serialized files of its 4 scene bundles (3 changed, 10 shaders) are the Python's byte for byte, and
+every other file of the converted data is the Python's (`tools/regress/pmu_pair.py`); on made-up
+data, the same (`tests/golden/convert_madeup.sh`'s `scenes`) and the same bytes as the one-file
+bundle with the same shader (`cargo test -p convert --test scenes`, which also covers a scene with
+shaders of its own, edits, and textures with a sprite in the scene that points into its shared
+assets).
+
+What the step leaves, it says: a bundle it cannot read (no serialized file in it, a node that is
+not one) and a file under StreamingAssets that looks like a Unity bundle of another kind (a
+UnityWeb or UnityRaw archive, a UnityFS header behind bytes of the game's own) are listed as
+`shaders: WARNING: ...` at the end of the step's summary (the textures step and JSON plugins'
+steps do the same), and `port check` lists them before a port is made
+([porting.md](porting.md#1-port-check)), with the shaders in bundles that have no programs the
+converter translates from.
+
 ## Unity versions
 
 The converter reads the data's Unity version from the data (`python -m pmunity version <data>`)

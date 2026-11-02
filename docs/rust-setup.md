@@ -197,6 +197,33 @@ Python's write raises (status 1); I/O and decoding errors name the file and the 
 `PMU_PROF=1` prints each step's wall time by stage on stderr; `PMU_TEXTURE_POOL_MB` sets (0: no)
 the memory the textures step's workers may hold.
 
+**Bundles with several serialized files** (scene bundles: `BuildPlayer-<scene>` and its
+`.sharedAssets`) are pmu's own (2026-11-02): the Python's Loaded opens one serialized file a
+bundle, so its shaders, textures and edits steps leave such a bundle as it is ("expected one
+serialized file in the bundle, found 2"), and Enter the Gungeon's title and Breach drew magenta.
+unityfs's `DataFile` opens every serialized file of a bundle when a step asks
+(`Options::all_serialized`): `sf` is one of them, `select(k)` makes the k-th `sf`, `file_of(id)`
+follows a PPtr's file id to another serialized file of the bundle (the external path's last part,
+without regard to case: Unity writes it in lower case), and writing saves the files that changed
+(the others and the other nodes keep their bytes; packed as a one-file bundle is). The shaders step
+converts each file's shaders and compute shaders (a fused_post chain may span them); the textures
+step each file's textures into a stream of its own, then the sprites and atlases of all of them,
+a PPtr into another file followed, and journals the scaled sizes under `<file>:<serialized file>`;
+a bundle whose files share a stream one of them would replace is left as it is. JSON plugins'
+edits reach every file. A bundle a step leaves (no serialized file, a node that is not one,
+files sharing a stream) and a file under StreamingAssets that looks like a Unity bundle of another
+kind are listed as `<step>: WARNING: ...` at the end of the step's summary. Without a Python
+reference for such a bundle, it is checked against the Python's conversion of its serialized files
+taken out of it as plain files (`tests/golden/scene_bundles.py`), and everything else stays the
+Python's byte for byte: `tests/golden/convert_madeup.sh` runs its cases without the made-up data's
+scene bundle and then `scenes` (pmu's bundle against that reference, every other file against the
+`cuphead` case's); on Enter the Gungeon (`tools/regress/pmu_pair.py`, the port's config) the 3
+scene bundles with shaders are the only files that differ from the Python's, and their 8
+serialized files are the reference's. `cargo test -p convert --test scenes` covers the steps on
+made-up scene bundles (the same bytes as the same shaders and textures elsewhere, a sprite in the
+scene following its texture in the shared assets, edits, the bundles left) and `cargo test -p
+unityfs` the opening, selecting, saving and inlining.
+
 `pmu journal-files <data>/.pmunity.json` prints the files the journal's steps have finished (0
 when there is none), as resume.txt's `journal_files` does with Python, for the setup's loop that
 reruns a conversion the kernel killed.
@@ -305,10 +332,11 @@ tests use small made-up data built in the test (no Unity or game files in the re
 
 `pmu android-data` makes the video shader as video.py does (Hidden/VideoDecodeAndroid from the
 data's Hidden/VideoDecode, the game's clips sniffed for BT.601 or BT.709; the GLSL is
-`crates/androiddata/src/video_decode_android.shader`, a copy of the Python's); `--il2cpp` and a
-bundle with several serialized files and streamed textures (`--inline-textures`) stop it with
-status 2. A serialized file too big for one archive with its textures inlined keeps its `.resS`,
-split into parts that fit one (`crates/androiddata/src/ress_split.rs`; the Python stops at
+`crates/androiddata/src/video_decode_android.shader`, a copy of the Python's); a bundle with
+several serialized files and streamed textures (`--inline-textures`: the Python's in-memory path)
+is inlined as the Python inlines it, one texture at a time (2026-11-02; before, status 2:
+`tests/golden/inline_scenes.sh` compares the two on made-up scene bundles). A serialized file too
+big for one archive with its textures inlined keeps its `.resS`, split into parts that fit one (`crates/androiddata/src/ress_split.rs`; the Python stops at
 packing there): [android-data.md](android-data.md), section 4. `cargo test -p androiddata` (with
 `PMU_TPK`) runs that on made-up 2021.3 data (`tests/ress_split.rs`): the parts, the rewritten
 streams, the archives within a lowered limit, every texture read back from them. The test-only
@@ -436,7 +464,13 @@ in portmaster-cuphead and is built in).
   converter, the mixed folder, NDK r23b's API 23 libraries) but not on a whole build: no Mono game
   of those versions was on this machine.
 - A porter's Python converter plugin (above): the release ships the Python; a JSON plugin or a
-  built-in step avoids it.
+  built-in step avoids it. Such a release's converter also leaves scene bundles as they are (the
+  Python opens one serialized file a bundle): `port check` says so for a game that has them.
+- The quality step still looks at no StreamingAssets bundle (scenes, lights and URP data there
+  keep the game's quality; it says so in its summary), scene bundles included.
+- `tests/golden/scene_bundles.py`'s reference needs serialized files that carry their Unity
+  version (taken out of the bundle, a file without one does not open as a plain file: the 6000.x
+  Addressables bundles of shaders.md); Gungeon's (2017.4) and the made-up ones do.
 - Metal entries of Unity 6000.6: the Python stops on them too (a 6000.6.5 macOS build: both
   stop in the shaders step, status 1), so there is nothing to compare yet.
 - The comparison itself: the corpus games of the regression list that are gone from this machine
