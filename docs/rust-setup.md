@@ -55,6 +55,7 @@ setup-rs/
   crates/<name>/      libraries, one owner each while the port is under way
   vendor/<name>/      C/C++ taken from the libraries the Python uses, with their licence files
   tests/golden/       golden-test scripts (run Python and pmu on the same data, compare)
+  fuzz/               fuzz targets (cargo-fuzz, a workspace of its own) and their made-up seeds
   tools/rs.sh         builds and tests in the arm64 Rust image
 ```
 
@@ -180,6 +181,80 @@ RS_ROOT=... setup-rs/tools/rs.sh <worktree> sh tests/golden/unityfs.sh "$PMU_TES
 
 A build folder in a Docker volume (`RS_MOUNTS="$RS_MOUNTS <volume>:/rt"`, `CARGO_TARGET_DIR=/rt`)
 builds far faster than one on a shared host folder.
+
+## Fuzzing
+
+What pmu reads comes from a download or an SD card: a damaged or hostile file must end in an
+error and the command's exit status, never a panic, a hang, the end of the stack or an
+allocation the file asks for. `setup-rs/fuzz/` (cargo-fuzz, libFuzzer; a workspace of its own,
+outside the setup's builds and tests) has a target for each parser of untrusted bytes:
+
+| target | reads |
+|---|---|
+| `zip` | the end record, central directory, local headers and data (stored, deflate, bzip2, LZMA); `zip-extract` |
+| `nsis` | an NSIS installer: first header, script header (LZMA, deflate, Unity 6's chunks), entries, strings, files |
+| `macpkg` | a .pkg: the xar header and TOC, each file's data, `macpkg` unpacking it |
+| `cpio` | odc and newc archives |
+| `pbzx` | pbzx, gzip, xar's zlib and bzip2, xz and .lzma chunks (the first byte picks one) |
+| `http` | an HTTP response (status, 1xx, headers, chunked or sized body) and a redirect's URL |
+| `bundle` | a UnityFS bundle: header, blocks info, blocks, nodes, unpacking, the bundle opened, its objects read and written back, inlined |
+| `bundle_tools` | `unpack`'s data.unity3d reader and android-data's platform patching in place |
+| `serialized` | a serialized file: header, metadata, type trees, every object read (the file's trees, else the class database's) and saved |
+| `typetree` | a type tree (blob or old format) and an object read and written with it, managed references included |
+| `texture`, `texture_encode` | a texture's fields and data decoded, scaled, prepared; small ones encoded to ASTC (search and guided) |
+| `glsl`, `grabfetch` | a program through the GLSL ES rewriting; grab_fetch's check and rewrite |
+| `shader_blob` | a Shader's blob fields: LZ4 blocks, entry tables, entries, written back |
+| `clrmeta` | a game's managed DLL as android-data reads its .NET metadata |
+| `journal` | `.pmunity.json` and the JSON pmu reads (convert's and android-data's), `journal-files`, a job resumed on it |
+| `args` | command lines: pmu's argparse rules (cmd/argp.rs), `convert`'s and `android-data`'s |
+
+The seeds are made up: `cargo run --example seeds <corpus>` (with `PMU_TPK`) writes them,
+archives, installers and streams built there and Unity files from the convert tests' made-up
+data. Corpora and crash files stay out of the repository (`fuzz/.gitignore`). In the image
+(Rust 1.88, stable: `RUSTC_BOOTSTRAP=1` for the sanitizer; cargo-fuzz 0.12.0, the last that
+builds with 1.88, `cargo install cargo-fuzz@0.12.0 --locked`), from `setup-rs/fuzz`:
+
+```bash
+export RUSTC_BOOTSTRAP=1 RUSTFLAGS=-Cdebuginfo=line-tables-only
+cargo fuzz build -a --strip-dead-code
+cargo fuzz run -a --strip-dead-code nsis <corpus>/nsis -- -max_total_time=600 -rss_limit_mb=1024 \
+  -malloc_limit_mb=512 -max_len=32768
+```
+
+`-a` keeps the overflow checks; `-malloc_limit_mb=512` makes any allocation a small input
+asks for past half the handhelds' memory a finding. The image has no llvm-symbolizer:
+`ASAN_OPTIONS=symbolize=0` and `addr2line -f -C -i -e <target> <offsets>` name the frames.
+
+What the targets found (each fixed with a regression test of made-up bytes):
+
+- Sizes and counts allocated before they were checked: unityfs's `read_vec` (a blocks info or
+  an object of up to 4 GB), the blocks and nodes counts, LZ4 sizes past what a block can make
+  (255 bytes a byte), LZMA blocks' room, unpack's and the platform patch's blocks; shaderx's
+  LZ4 size; texcodec's pixels for a texture whose fields say 2^20 x 2^20 (the data is checked
+  to hold the image first, as the whole decode checks it); `Bundle::unpack`'s 1 MB buffer a
+  node (4 MB in all now); the .NET reader's row counts and android-data's stream reads.
+- Integer overflow on a file's numbers: zip64 header offsets, NSIS's entry size, string table
+  and data length (Python's integers: negative where the Python's are), xar's data ends,
+  negative bundle node offsets, a node offset wrapping around, unpack's file ranges, a bundle's
+  size field, texture sizes, Shader blob offsets, slices of i64::MIN, a .NET section offset
+  near 4 GB and row counts of 2^32 - 1, a BC7 endpoint of 8 bits (`u8 >> 8`; the bytes are
+  Pillow's).
+- Panics on short or odd data: an NSIS solid header chunk cut short, a Shader platform with no
+  segments, an LZ4 match of offset 0 in the platform patch.
+- Recursion: type trees nested deeper than 256 (the old format's levels, a managed reference of
+  its own class) and JSON nested deeper than 500 (a damaged journal counts as damaged) are
+  errors; an object is read into at most a million values and 16 for each of its bytes (two
+  billion empty structs, a million elements of structs nested around nothing).
+- Decompression bombs and dictionaries: an LZMA dictionary a file asks for is allocated up to
+  256 MB (exact for any smaller output); an NSIS file or script header up to 1 GB (Unity 6's
+  chunks 2 MB each); a pbzx chunk up to 64 MB (Apple's are 16); a xar TOC up to 64 MB; a cpio
+  name up to 256 KB.
+- HTTP (by review, then its target): bodies past the request's range (and 64 KB) or 64 MB, lines
+  past 64 KB and more than 100 headers (http.client's limits) are errors, not allocations.
+
+None of this changes what a well-formed file gives (the bounds are far above what real data
+needs): a limit reached is an error with its message, the command's status 1 (pkgzip's, unityfs's,
+texcodec's and shaderx's errors as before; a damaged journal is status 5).
 
 ## Rules
 

@@ -1,0 +1,159 @@
+[package]
+name = "pmu-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT"
+description = "Fuzz targets (cargo-fuzz, libFuzzer) for the parsers pmu runs on untrusted bytes; seeds made up by examples/seeds.rs"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pkgzip = { path = "../crates/pkgzip" }
+unityfs = { path = "../crates/unityfs" }
+texcodec = { path = "../crates/texcodec" }
+shaderx = { path = "../crates/shaderx", features = ["tree"] }
+convert = { path = "../crates/convert" }
+androiddata = { path = "../crates/androiddata" }
+serde_json = "1"
+
+[dev-dependencies]   # (the seeds example: made-up archives and streams)
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+bzip2 = "0.6"
+crc32fast = "1"
+lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "encoder"] }
+
+# (a workspace of its own: the setup's builds and tests leave it out)
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "zip"
+path = "fuzz_targets/zip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nsis"
+path = "fuzz_targets/nsis.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "macpkg"
+path = "fuzz_targets/macpkg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpio"
+path = "fuzz_targets/cpio.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pbzx"
+path = "fuzz_targets/pbzx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http"
+path = "fuzz_targets/http.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bundle"
+path = "fuzz_targets/bundle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bundle_tools"
+path = "fuzz_targets/bundle_tools.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serialized"
+path = "fuzz_targets/serialized.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typetree"
+path = "fuzz_targets/typetree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "texture"
+path = "fuzz_targets/texture.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "texture_encode"
+path = "fuzz_targets/texture_encode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "glsl"
+path = "fuzz_targets/glsl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "grabfetch"
+path = "fuzz_targets/grabfetch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shader_blob"
+path = "fuzz_targets/shader_blob.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "clrmeta"
+path = "fuzz_targets/clrmeta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal"
+path = "fuzz_targets/journal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "args"
+path = "fuzz_targets/args.rs"
+test = false
+doc = false
+bench = false
