@@ -369,6 +369,13 @@ pub(super) fn with_common(
     let mut cbs = b.cbuffers.clone();
     let mut binds = b.bindings.clone();
     let mut used = BTreeSet::new();
+    // (6000.6: offsets m_OffsetInConstantBuffer, bindings Unity's Binding structs)
+    let typed = b.typed;
+    let off = if typed {
+        "m_OffsetInConstantBuffer"
+    } else {
+        "m_Index"
+    };
     let arr = |v: &Value, k: &str| {
         v.get(k)
             .and_then(Value::as_array)
@@ -394,7 +401,7 @@ pub(super) fn with_common(
                 cols: int(&v, "m_Dim")? as i32,
                 is_matrix: 0,
                 array: int(&v, "m_ArraySize")? as i32,
-                offset: int(&v, "m_Index")? as i32,
+                offset: int(&v, off)? as i32,
             });
         }
         for m in arr(&c, "m_MatrixParams") {
@@ -405,7 +412,7 @@ pub(super) fn with_common(
                 cols: 4,
                 is_matrix: 1,
                 array: int(&m, "m_ArraySize")? as i32,
-                offset: int(&m, "m_Index")? as i32,
+                offset: int(&m, off)? as i32,
             });
         }
         match (0..cbs.len()).find(|&i| cbs[i].name == name && !used.contains(&i)) {
@@ -427,6 +434,9 @@ pub(super) fn with_common(
             }
         }
     }
+    if typed {
+        return with_common_typed(b, common, names, cbs, binds);
+    }
     for x in arr(common, "m_ConstantBufferBindings") {
         binds.push(Binding {
             name: need_name(names, &x)?,
@@ -434,6 +444,7 @@ pub(super) fn with_common(
             index: int(&x, "m_Index")? as i32,
             extra: vec![0],
             packed: true,
+            enc: None,
         });
     }
     for x in arr(common, "m_TextureParams") {
@@ -450,6 +461,7 @@ pub(super) fn with_common(
                 (int(&x, "m_Dim")? as i32) << 1 | ms as i32,
             ],
             packed: true,
+            enc: None,
         });
     }
     for x in arr(common, "m_Samplers") {
@@ -459,6 +471,7 @@ pub(super) fn with_common(
             index: int(&x, "bindPoint")? as i32,
             extra: vec![int(&x, "sampler")? as i32],
             packed: true,
+            enc: None,
         });
     }
     Ok(Ok(Bindings {
@@ -466,6 +479,98 @@ pub(super) fn with_common(
         channels: b.channels,
         cbuffers: cbs,
         bindings: binds,
+        typed: false,
+    }))
+}
+
+/// 6000.6: (encoded data, slot) of a Binding struct of the parsed form, as the int32s the blob
+/// has (dxbc._typed_binding).
+fn typed_binding(v: Option<&Value>) -> Result<(i32, i32)> {
+    let v = v.ok_or_else(|| bad("KeyError: 'm_Binding'"))?;
+    let i32_of = |k: &str| -> Result<i32> {
+        let x = v
+            .get(k)
+            .and_then(Value::as_int)
+            .ok_or_else(|| bad(format!("KeyError: '{k}'")))?;
+        Ok((if x >= 1 << 31 { x - (1 << 32) } else { x }) as i32)
+    };
+    Ok((i32_of("m_EncodedData")?, i32_of("m_Slot")?))
+}
+
+/// with_common's 6000.6 part: the shared bindings as Unity's Binding structs.
+fn with_common_typed(
+    b: Bindings,
+    common: &Value,
+    names: &BTreeMap<i64, String>,
+    cbs: Vec<ConstantBuffer>,
+    mut binds: Vec<Binding>,
+) -> Result<std::result::Result<Bindings, String>> {
+    let arr = |k: &str| {
+        common
+            .get(k)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    for x in arr("m_ConstantBufferBindings") {
+        let (enc, slot) = typed_binding(x.get("m_Binding"))?;
+        let one = |k: &str| x.get(k).and_then(Value::as_int).unwrap_or(1) == 1;
+        if !one("m_ArraySize") || !one("m_ResourceType") {
+            return Ok(Err(format!(
+                "shared constant buffer binding {}: array or resource type",
+                shaderx::py::repr(&need_name(names, &x)?)
+            )));
+        }
+        binds.push(Binding {
+            name: need_name(names, &x)?,
+            kind: KIND_CBUFFER,
+            index: slot,
+            extra: vec![],
+            packed: true,
+            enc: Some(vec![enc]),
+        });
+    }
+    for x in arr("m_TextureParams") {
+        let (enc, slot) = typed_binding(x.get("m_Binding"))?;
+        let (senc, sslot) = typed_binding(x.get("m_SamplerBinding"))?;
+        let ms = x
+            .get("m_MultiSampled")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| bad("KeyError: 'm_MultiSampled'"))?;
+        binds.push(Binding {
+            name: need_name(names, &x)?,
+            kind: KIND_TEXTURE,
+            index: slot,
+            extra: vec![sslot, (int(&x, "m_Dim")? as i32) << 1 | ms as i32],
+            packed: true,
+            enc: Some(vec![enc, senc]),
+        });
+    }
+    for x in arr("m_Samplers") {
+        let (enc, slot) = typed_binding(x.get("m_Binding"))?;
+        binds.push(Binding {
+            name: String::new(),
+            kind: KIND_SAMPLER,
+            index: slot,
+            extra: vec![int(&x, "sampler")? as i32],
+            packed: true,
+            enc: Some(vec![enc]),
+        });
+    }
+    if binds
+        .iter()
+        .any(|x| x.enc.as_ref().is_some_and(|e| e.iter().any(|&v| v != 0)))
+    {
+        return Ok(Err(
+            "shared parameters with encoded binding data (6000.6): not understood".into(),
+        ));
+    }
+    Ok(Ok(Bindings {
+        source_map: b.source_map,
+        channels: b.channels,
+        cbuffers: cbs,
+        bindings: binds,
+        typed: true,
     }))
 }
 

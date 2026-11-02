@@ -2,8 +2,9 @@
 //! program (shaders/dxbc.py's Bindings, entry_bindings, gl_rest and gl_bindings; its docstring has
 //! the layouts): constant buffers with their members, textures, constant buffer bindings and inline
 //! samplers, read from an entry's bytes after its code (2021.2+: and its parameter entry) and
-//! written back byte for byte. Unity 6000.6's typed layout is not ported (the Vulkan path is the
-//! only one that asks for it).
+//! written back byte for byte; Unity 6000.6's typed layout (each binding an (encoded data, slot)
+//! pair, lists by kind) read where asked for (the Vulkan path: entry_bindings_typed) and written
+//! back in it.
 use crate::blob::Entry;
 use crate::glsl;
 use regex::Regex;
@@ -32,7 +33,17 @@ pub const TYPED_FROM: i32 = 202605290;
 
 pub const KIND_TEXTURE: i32 = 0;
 pub const KIND_CBUFFER: i32 = 1;
+pub const KIND_BUFFER: i32 = 2;
+pub const KIND_UAV: i32 = 3;
 pub const KIND_SAMPLER: i32 = 4;
+/// 6000.6's lists, in their order (Binding.TYPED_ORDER).
+pub const TYPED_ORDER: [i32; 5] = [
+    KIND_TEXTURE,
+    KIND_UAV,
+    KIND_CBUFFER,
+    KIND_BUFFER,
+    KIND_SAMPLER,
+];
 
 /// A constant buffer member.
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +82,11 @@ pub struct Binding {
     pub index: i32,
     pub extra: Vec<i32>,
     pub packed: bool,
+    /// 6000.6 (typed): the encoded data of the binding (a texture's: and of its sampler's; a
+    /// UAV's: and of the original binding); extra is then: texture [sampler slot, dimension << 1
+    /// | multisampled], UAV [original slot], buffer [2 ints], inline sampler [state], constant
+    /// buffer none.
+    pub enc: Option<Vec<i32>>,
 }
 
 impl Binding {
@@ -115,6 +131,8 @@ pub struct Bindings {
     pub channels: Vec<(i32, i32)>,
     pub cbuffers: Vec<ConstantBuffer>,
     pub bindings: Vec<Binding>,
+    /// In Unity 6000.6's layout (read so, written back so).
+    pub typed: bool,
 }
 
 fn pad4(n: usize) -> usize {
@@ -176,6 +194,96 @@ impl Reader<'_> {
         }
         Ok(out)
     }
+}
+
+impl Reader<'_> {
+    /// 6000.6: a constant buffer's (or struct's) vectors, then its matrices (dxbc._typed_members).
+    fn typed_members(&mut self) -> Result<Vec<Param>, String> {
+        let mut out = Vec::new();
+        for matrix in [false, true] {
+            for _ in 0..self.count(4096)? {
+                let name = self.string()?;
+                let (packed, array, offset) = (self.i32()?, self.i32()?, self.i32()?);
+                let (n, typ) = (packed & 0xffff, packed >> 16);
+                out.push(if matrix {
+                    Param {
+                        name,
+                        typ,
+                        rows: n,
+                        cols: 4,
+                        is_matrix: 1,
+                        array,
+                        offset,
+                    }
+                } else {
+                    Param {
+                        name,
+                        typ,
+                        rows: 1,
+                        cols: n,
+                        is_matrix: 0,
+                        array,
+                        offset,
+                    }
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// A Python tuple's repr of ints: (1,) or (1, 2).
+fn tuple_repr(v: &[i32]) -> String {
+    match v {
+        [x] => format!("({x},)"),
+        _ => format!(
+            "({})",
+            v.iter().map(i32::to_string).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+/// A Python list's repr of ints.
+fn list_repr(v: &[i32]) -> String {
+    format!(
+        "[{}]",
+        v.iter().map(i32::to_string).collect::<Vec<_>>().join(", ")
+    )
+}
+
+/// 6000.6: members as vectors then matrices (dxbc._typed_members_bytes).
+fn typed_members_bytes(out: &mut Vec<u8>, params: &[Param]) -> R<()> {
+    for matrix in [false, true] {
+        let ps: Vec<&Param> = params
+            .iter()
+            .filter(|p| (p.is_matrix != 0) == matrix)
+            .collect();
+        ints(out, &[ps.len() as i32]);
+        for p in ps {
+            if matrix && (p.cols != 4 || p.is_matrix != 1) {
+                return Err(Unsupported(format!(
+                    "matrix {} of {}x{}: not in the 6000.6 layout",
+                    p.name, p.rows, p.cols
+                )));
+            }
+            if !matrix && (p.rows != 1 || p.is_matrix != 0) {
+                return Err(Unsupported(format!(
+                    "vector {} of {} rows: not in the 6000.6 layout",
+                    p.name, p.rows
+                )));
+            }
+            let n = if matrix { p.rows } else { p.cols };
+            if !(0..=0xffff).contains(&n) {
+                return Err(Unsupported(format!(
+                    "parameter {}: size {n} not in the 6000.6 layout",
+                    p.name
+                )));
+            }
+            wstr(out, &p.name);
+            ints(out, &[n | p.typ.wrapping_shl(16), p.array, p.offset]);
+        }
+    }
+    Ok(())
 }
 
 fn wstr(out: &mut Vec<u8>, s: &str) {
@@ -265,6 +373,7 @@ impl Bindings {
                     index,
                     extra,
                     packed,
+                    enc: None,
                 });
             }
             Ok(Bindings {
@@ -272,6 +381,7 @@ impl Bindings {
                 channels,
                 cbuffers: cbs,
                 bindings: binds,
+                typed: false,
             })
         })()?;
         if r.p != data.len() || parsed.serialize() != data {
@@ -280,6 +390,195 @@ impl Bindings {
             ));
         }
         Ok(parsed)
+    }
+
+    /// Bindings.parse with typed=True on data of 6000.6's serializer (dxbc.Bindings._parse_typed).
+    pub fn parse_typed(data: &[u8]) -> R<Bindings> {
+        let mut r = Reader { d: data, p: 0 };
+        let parsed = (|| -> Result<Bindings, String> {
+            let source_map = r.i32()?;
+            let nch = r.count(64)?;
+            let mut channels = Vec::with_capacity(nch);
+            for _ in 0..nch {
+                channels.push((r.i32()?, r.i32()?));
+            }
+            let mut cbs = Vec::new();
+            for _ in 0..r.count(256)? {
+                let name = r.string()?;
+                let size = r.i32()?;
+                let params = r.typed_members()?;
+                let mut structs = Vec::new();
+                for _ in 0..r.count(64)? {
+                    let name = r.string()?;
+                    let (offset, array, size) = (r.i32()?, r.i32()?, r.i32()?);
+                    structs.push(StructParam {
+                        name,
+                        offset,
+                        array,
+                        size,
+                        params: r.typed_members()?,
+                    });
+                }
+                cbs.push(ConstantBuffer {
+                    name,
+                    size,
+                    params,
+                    structs,
+                });
+            }
+            let mut binds = Vec::new();
+            for kind in TYPED_ORDER {
+                for _ in 0..r.count(256)? {
+                    let name = if kind != KIND_SAMPLER {
+                        r.string()?
+                    } else {
+                        String::new()
+                    };
+                    let (enc, slot) = (r.i32()?, r.i32()?);
+                    let (extra, enc) = match kind {
+                        KIND_TEXTURE => {
+                            let (senc, sslot, dim) = (r.i32()?, r.i32()?, r.i32()?);
+                            (vec![sslot, dim], vec![enc, senc])
+                        }
+                        KIND_UAV => {
+                            let (oenc, oslot) = (r.i32()?, r.i32()?);
+                            (vec![oslot], vec![enc, oenc])
+                        }
+                        KIND_BUFFER => (vec![r.i32()?, r.i32()?], vec![enc]),
+                        KIND_SAMPLER => (vec![r.i32()?], vec![enc]),
+                        _ => (Vec::new(), vec![enc]),
+                    };
+                    binds.push(Binding {
+                        name,
+                        kind,
+                        index: slot,
+                        extra,
+                        packed: true,
+                        enc: Some(enc),
+                    });
+                }
+            }
+            Ok(Bindings {
+                source_map,
+                channels,
+                cbuffers: cbs,
+                bindings: binds,
+                typed: true,
+            })
+        })()
+        .map_err(|m| {
+            Unsupported(format!(
+                "binding info does not match the 6000.6 layout ({m})"
+            ))
+        })?;
+        if r.p != data.len() || parsed.try_serialize()? != data {
+            return Err(Unsupported(
+                "binding info does not match the 6000.6 layout (round trip)".into(),
+            ));
+        }
+        for x in &parsed.bindings {
+            if x.kind == KIND_BUFFER || x.kind == KIND_UAV {
+                return Err(Unsupported(format!(
+                    "binding {} of kind {} ({}): not supported",
+                    crate::py::repr(&x.name),
+                    x.kind,
+                    if x.kind == KIND_BUFFER {
+                        "buffer"
+                    } else {
+                        "UAV"
+                    }
+                )));
+            }
+            let enc = x.enc.as_deref().unwrap_or(&[]);
+            if enc.iter().any(|&v| v != 0) {
+                return Err(Unsupported(format!(
+                    "binding {} with encoded data {} (6000.6): not understood",
+                    crate::py::repr(&x.name),
+                    tuple_repr(enc)
+                )));
+            }
+        }
+        Ok(parsed)
+    }
+
+    /// 6000.6's constant buffers and bindings (dxbc.Bindings._params_bytes_typed).
+    fn params_bytes_typed(&self) -> R<Vec<u8>> {
+        let mut out = Vec::new();
+        ints(&mut out, &[self.cbuffers.len() as i32]);
+        for cb in &self.cbuffers {
+            wstr(&mut out, &cb.name);
+            ints(&mut out, &[cb.size]);
+            typed_members_bytes(&mut out, &cb.params)?;
+            ints(&mut out, &[cb.structs.len() as i32]);
+            for st in &cb.structs {
+                wstr(&mut out, &st.name);
+                ints(&mut out, &[st.offset, st.array, st.size]);
+                typed_members_bytes(&mut out, &st.params)?;
+            }
+        }
+        let mut other: Vec<i32> = self
+            .bindings
+            .iter()
+            .map(|b| b.kind)
+            .filter(|k| !TYPED_ORDER.contains(k))
+            .collect();
+        if !other.is_empty() {
+            other.sort();
+            other.dedup();
+            return Err(Unsupported(format!(
+                "binding kinds {} not in the 6000.6 layout",
+                list_repr(&other)
+            )));
+        }
+        for kind in TYPED_ORDER {
+            let bs: Vec<&Binding> = self.bindings.iter().filter(|b| b.kind == kind).collect();
+            ints(&mut out, &[bs.len() as i32]);
+            // (encoded data ints, extra ints)
+            let want = match kind {
+                KIND_TEXTURE => (2, 2),
+                KIND_UAV => (2, 1),
+                KIND_BUFFER => (1, 2),
+                KIND_SAMPLER => (1, 1),
+                _ => (1, 0),
+            };
+            for b in bs {
+                let enc = b.enc.clone().unwrap_or_else(|| vec![0; want.0]);
+                if enc.len() != want.0 || b.extra.len() != want.1 {
+                    return Err(Unsupported(format!(
+                        "binding {} (kind {kind}): {} not in the 6000.6 layout",
+                        crate::py::repr(&b.name),
+                        list_repr(&b.extra)
+                    )));
+                }
+                if kind != KIND_SAMPLER {
+                    wstr(&mut out, &b.name);
+                }
+                ints(&mut out, &[enc[0], b.index]);
+                if kind == KIND_TEXTURE || kind == KIND_UAV {
+                    ints(&mut out, &[enc[1], b.extra[0]]);
+                    ints(&mut out, &b.extra[1..]);
+                } else {
+                    ints(&mut out, &b.extra);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// params_bytes(), and in 6000.6's layout what does not fit it as the Python's Unsupported.
+    pub fn try_params_bytes(&self) -> R<Vec<u8>> {
+        if self.typed {
+            self.params_bytes_typed()
+        } else {
+            Ok(self.params_bytes())
+        }
+    }
+
+    /// serialize(), and in 6000.6's layout what does not fit it as the Python's Unsupported.
+    pub fn try_serialize(&self) -> R<Vec<u8>> {
+        let mut out = self.head();
+        out.extend(self.try_params_bytes()?);
+        Ok(out)
     }
 
     /// The source map and vertex inputs (2021.2+: all of the code entry's binding info).
@@ -292,8 +591,12 @@ impl Bindings {
         out
     }
 
-    /// Constant buffers and bindings (2021.2+: a parameter entry's data).
+    /// Constant buffers and bindings (2021.2+: a parameter entry's data). In 6000.6's layout:
+    /// try_params_bytes (this gives nothing for a typed one that does not fit it).
     pub fn params_bytes(&self) -> Vec<u8> {
+        if self.typed {
+            return self.params_bytes_typed().unwrap_or_default();
+        }
         let mut out = Vec::new();
         ints(&mut out, &[self.cbuffers.len() as i32]);
         for cb in &self.cbuffers {
@@ -337,6 +640,19 @@ pub fn entry_bindings(entry: &Entry, param: Option<&[u8]>) -> R<Bindings> {
         data.extend(p);
     }
     Bindings::parse(&data, Some(entry.version))
+}
+
+/// entry_bindings(entry, param, typed=True): an entry of 6000.6's serializer in its own layout,
+/// any other as entry_bindings reads it.
+pub fn entry_bindings_typed(entry: &Entry, param: Option<&[u8]>) -> R<Bindings> {
+    if entry.version < TYPED_FROM {
+        return entry_bindings(entry, param);
+    }
+    let mut data = entry.rest.clone();
+    if let Some(p) = param {
+        data.extend(p);
+    }
+    Bindings::parse_typed(&data)
 }
 
 /// The binding info of a GL entry up to Unity 2018 (dxbc.gl_rest).
@@ -572,14 +888,25 @@ fn gl_stages(code: &str) -> Vec<(String, String)> {
     out
 }
 
-/// The binding info Unity's GL compiler (2019.1+) gives a GL program (dxbc.gl_bindings, the
-/// layouts before 6000.6). unity: (major, minor).
-/// arrays: {name: array size} of the uniforms where known.
+/// The binding info Unity's GL compiler (2019.1+) gives a GL program (dxbc.gl_bindings). unity:
+/// (major, minor). arrays: {name: array size} of the uniforms where known.
 pub fn gl_bindings(
     code: &str,
     unity: (u64, u64),
     source_map: i32,
     arrays: Option<&HashMap<String, i32>>,
+) -> R<Bindings> {
+    gl_bindings_as(code, unity, source_map, arrays, false)
+}
+
+/// gl_bindings, typed: in 6000.6's layout (the same buffers and bindings, every binding's encoded
+/// data 0, the "$Globals" binding at slot -1, as Unity's 6000.6 GL programs have it).
+pub fn gl_bindings_as(
+    code: &str,
+    unity: (u64, u64),
+    source_map: i32,
+    arrays: Option<&HashMap<String, i32>>,
+    typed: bool,
 ) -> R<Bindings> {
     let stages = gl_stages(code);
     let empty = |name: &str, size: i32, params: Vec<Param>| ConstantBuffer {
@@ -653,8 +980,9 @@ pub fn gl_bindings(
                             name: name.clone(),
                             kind: KIND_CBUFFER,
                             index: binding,
-                            extra: vec![0],
+                            extra: if typed { vec![] } else { vec![0] },
                             packed: true,
+                            enc: typed.then(|| vec![0]),
                         },
                     ));
                     if unity < (2022, 1) {
@@ -674,6 +1002,7 @@ pub fn gl_bindings(
                             index: unit,
                             extra: vec![unit, dim << 1 | ms as i32],
                             packed: true,
+                            enc: typed.then(|| vec![0, 0]),
                         });
                     }
                 }
@@ -685,12 +1014,24 @@ pub fn gl_bindings(
         if let Some(mut m) = merged {
             m.params = vectors_then_matrices(m.params);
             cbs.push(m);
-            binds.push(Binding {
-                name: "$Globals".into(),
-                kind: KIND_CBUFFER,
-                index: 0,
-                extra: vec![0],
-                packed: true,
+            binds.push(if typed {
+                Binding {
+                    name: "$Globals".into(),
+                    kind: KIND_CBUFFER,
+                    index: -1,
+                    extra: vec![],
+                    packed: true,
+                    enc: Some(vec![0]),
+                }
+            } else {
+                Binding {
+                    name: "$Globals".into(),
+                    kind: KIND_CBUFFER,
+                    index: 0,
+                    extra: vec![0],
+                    packed: true,
+                    enc: None,
+                }
             });
         }
         for (cb, b) in blocks.into_iter().rev() {
@@ -705,12 +1046,127 @@ pub fn gl_bindings(
         channels: Vec::new(),
         cbuffers: cbs,
         bindings: binds,
+        typed,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn le(v: &[i32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    fn s(t: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        wstr(&mut out, t);
+        out
+    }
+
+    /// 6000.6's layout written by hand (dxbc.py's docstring): read, written back the same, and
+    /// its refusals (buffers, UAVs, encoded data, a damaged list).
+    #[test]
+    fn typed_layout() {
+        let mut d = le(&[25, 2, 0, 13, 4, 14, 2]);
+        d.extend(s(""));
+        d.extend(le(&[0, 0, 0, 0]));
+        d.extend(s("VGlobals1234"));
+        d.extend(le(&[80, 1]));
+        d.extend(s("_MainTex_ST"));
+        d.extend(le(&[4, 0, 64])); // a float4 (dimension 4, type 0)
+        d.extend(le(&[1]));
+        d.extend(s("unity_ObjectToWorld"));
+        d.extend(le(&[4, 0, 0])); // a 4-row matrix
+        d.extend(le(&[0])); // no structs
+        d.extend(le(&[1])); // textures
+        d.extend(s("_MainTex"));
+        d.extend(le(&[0, 0x08000001, 0, 0x08000000, 4]));
+        d.extend(le(&[0])); // UAVs
+        d.extend(le(&[1])); // constant buffer bindings
+        d.extend(s("VGlobals1234"));
+        d.extend(le(&[0, 0x04010001]));
+        d.extend(le(&[0])); // buffers
+        d.extend(le(&[1, 0, 3, 0x45])); // an inline sampler
+        let b = Bindings::parse_typed(&d).unwrap();
+        assert!(b.typed);
+        assert_eq!(b.try_serialize().unwrap(), d);
+        assert_eq!(b.serialize(), d);
+        let k: Vec<(&str, i32, i32, Vec<i32>)> = b
+            .bindings
+            .iter()
+            .map(|x| (x.name.as_str(), x.kind, x.index, x.extra.clone()))
+            .collect();
+        assert_eq!(
+            k,
+            vec![
+                ("_MainTex", 0, 0x08000001, vec![0x08000000, 4]),
+                ("VGlobals1234", 1, 0x04010001, vec![]),
+                ("", 4, 3, vec![0x45]),
+            ]
+        );
+        assert_eq!(b.bindings[0].sampler(), Some(0x08000000));
+        assert_eq!(b.bindings[0].dim(), Some(2));
+        let p = &b.cbuffers[1].params;
+        assert_eq!(
+            (p[0].cols, p[0].is_matrix, p[1].rows, p[1].cols),
+            (4, 0, 4, 4)
+        );
+        // the layout before 6000.6 does not read it
+        assert!(Bindings::parse(&d, Some(TYPED_FROM)).is_err());
+        // encoded data, a UAV, a cut list
+        let mut e = d.clone();
+        let at = d.len() - 28; // (the constant buffer binding's encoded data)
+        e[at..at + 4].copy_from_slice(&7i32.to_le_bytes());
+        assert!(Bindings::parse_typed(&e)
+            .unwrap_err()
+            .0
+            .contains("with encoded data (7,)"));
+        assert!(Bindings::parse_typed(&d[..d.len() - 2])
+            .unwrap_err()
+            .0
+            .starts_with("binding info does not match the 6000.6 layout"));
+        let mut u = b.clone();
+        u.bindings.push(Binding {
+            name: "_Out".into(),
+            kind: KIND_UAV,
+            index: 1,
+            extra: vec![1],
+            packed: true,
+            enc: Some(vec![0, 0]),
+        });
+        let ub = u.try_serialize().unwrap();
+        assert!(Bindings::parse_typed(&ub)
+            .unwrap_err()
+            .0
+            .contains("of kind 3 (UAV): not supported"));
+        // a member the layout cannot hold
+        let mut m = b.clone();
+        m.cbuffers[1].params[0].rows = 2;
+        assert!(m
+            .try_params_bytes()
+            .unwrap_err()
+            .0
+            .contains("vector _MainTex_ST of 2 rows"));
+    }
+
+    #[test]
+    fn gl_bindings_typed() {
+        let code = "#ifdef VERTEX\n#version 300 es\nuniform \tvec4 hlslcc_mtx4x4unity_ObjectToWorld[4];\nuniform \tvec4 _MainTex_ST;\nvoid main()\n{\n}\n#endif\n#ifdef FRAGMENT\n#version 300 es\nUNITY_LOCATION(0) uniform mediump sampler2D _MainTex;\nvoid main()\n{\n}\n#endif\n";
+        let b = gl_bindings_as(code, (6000, 6), 0, None, true).unwrap();
+        assert!(b.typed);
+        let k: Vec<(&str, i32, i32)> = b
+            .bindings
+            .iter()
+            .map(|x| (x.name.as_str(), x.kind, x.index))
+            .collect();
+        assert_eq!(k, vec![("_MainTex", 0, 0), ("$Globals", 1, -1)]);
+        let data = b.try_serialize().unwrap();
+        assert_eq!(Bindings::parse_typed(&data).unwrap(), b);
+        let untyped = gl_bindings(code, (6000, 6), 0, None).unwrap();
+        assert_eq!(untyped.bindings[1].index, 0);
+        assert!(!untyped.typed);
+    }
 
     #[test]
     fn round_trip_and_layout() {

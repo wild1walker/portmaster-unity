@@ -8,7 +8,7 @@ use super::d3d11::{
     INSTANCING_KEYWORDS, SKINNING_KEYWORDS, VR_KEYWORDS,
 };
 use super::fusedpost::{truthy, unity_of};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use shaderx::bindings::{self, Bindings};
 use shaderx::blob::{self, Entry, ShaderBlobs, Slot};
 use shaderx::convert::{Report, Status, STAGES};
@@ -150,12 +150,6 @@ pub fn add_gles3_vulkan(
         Some(Slot::Program(e)) => Some(e.version),
         _ => None,
     });
-    if serializer.is_some_and(|s| s >= bindings::TYPED_FROM) {
-        // (6000.6's typed binding info: read by the Python's Vulkan path only)
-        return Err(Error::NotPorted(
-            "shaders from Vulkan of Unity 6000.6 (typed binding info)".into(),
-        ));
-    }
     let mut line = unity_of(t, unity);
     if serializer.is_some() && line < dxbc::unity_line(serializer) {
         line = dxbc::unity_line(serializer);
@@ -176,7 +170,9 @@ pub fn add_gles3_vulkan(
     }
     let gl_info = line >= (2019, 1);
     let compact = line >= (2020, 1);
-    let separate = serializer == Some(bindings::SEPARATE_PARAMS_FROM)
+    // (parameters in entries of their own: 2021.2+, and 6000.6 in its own layout)
+    let separate = (serializer == Some(bindings::SEPARATE_PARAMS_FROM)
+        || serializer.is_some_and(|s| s >= bindings::TYPED_FROM))
         && subprogram_lists(t).iter().any(|(_, p)| p.is_some());
     let mut cache: HashMap<(i64, Option<i64>), Cached> = HashMap::new();
     let mut plan: Vec<(usize, Vec<Todo>)> = Vec::new();
@@ -245,7 +241,7 @@ pub fn add_gles3_vulkan(
                                     let b = if separate && pdata.is_none() {
                                         Err("no parameter entry".to_string())
                                     } else {
-                                        match bindings::entry_bindings(e, pdata.as_deref()) {
+                                        match bindings::entry_bindings_typed(e, pdata.as_deref()) {
                                             Err(u) => Err(u.0),
                                             Ok(b) => with_common(
                                                 b,
@@ -272,11 +268,12 @@ pub fn add_gles3_vulkan(
                                                     Err(u) => Err(u.msg),
                                                     Ok((es, typ)) => {
                                                         let info = if gl_info {
-                                                            bindings::gl_bindings(
+                                                            bindings::gl_bindings_as(
                                                                 &es,
                                                                 line,
                                                                 b.source_map,
                                                                 None,
+                                                                b.typed,
                                                             )
                                                             .map(Some)
                                                         } else {
@@ -398,7 +395,7 @@ pub fn add_gles3_vulkan(
                 let empty = matches!(&out[i], Some(Slot::Program(o)) if o.code.is_empty());
                 if empty {
                     let rest = match info {
-                        Some(info) => info.serialize(),
+                        Some(info) => info.try_serialize().map_err(|u| bad(u.0))?,
                         None => bindings::gl_rest(source_map(e)),
                     };
                     out[i] = Some(Slot::Program(Entry {
@@ -494,7 +491,7 @@ pub fn add_gles3_vulkan(
                         rest: if separate {
                             info.head()
                         } else {
-                            info.serialize()
+                            info.try_serialize().map_err(|u| bad(u.0))?
                         },
                         guessed: false,
                     })));
@@ -504,7 +501,7 @@ pub fn add_gles3_vulkan(
                 }
                 let mut gp = None;
                 if separate {
-                    let data = info.params_bytes();
+                    let data = info.try_params_bytes().map_err(|u| bad(u.0))?;
                     if !param_at.contains_key(&data) {
                         param_at.insert(data.clone(), out.len());
                         out.push(Some(Slot::Params {
@@ -634,7 +631,7 @@ fn restore_common(
                     Some(Slot::Params { data, .. }) => Some(data.clone()),
                     _ => None,
                 };
-                let Ok(b) = bindings::entry_bindings(&e, pdata.as_deref()) else {
+                let Ok(b) = bindings::entry_bindings_typed(&e, pdata.as_deref()) else {
                     continue;
                 };
                 let Ok(Ok(b)) = with_common(b, common.as_ref(), &names) else {
@@ -646,11 +643,11 @@ fn restore_common(
                     };
                     entries[pi_.unwrap() as usize] = Some(Slot::Params {
                         version,
-                        data: b.params_bytes(),
+                        data: b.try_params_bytes().map_err(|u| bad(u.0))?,
                     });
                 } else {
                     let mut ne = e.clone();
-                    ne.rest = b.serialize();
+                    ne.rest = b.try_serialize().map_err(|u| bad(u.0))?;
                     entries[at as usize] = Some(Slot::Program(ne));
                 }
                 changed = true;
