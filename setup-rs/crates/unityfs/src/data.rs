@@ -94,7 +94,7 @@ pub struct DataFile {
 }
 
 /// The node names UnityPy parses as serialized files (check_file_type, and not a stream by name).
-fn unitypy_serialized(b: &Bundle) -> Result<Vec<usize>> {
+pub fn unitypy_serialized(b: &Bundle) -> Result<Vec<usize>> {
     let mut out = Vec::new();
     for (i, n) in b.header.nodes.iter().enumerate() {
         if [".resS", ".resource", ".config", ".xml", ".dat"]

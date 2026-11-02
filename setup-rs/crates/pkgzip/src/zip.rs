@@ -163,6 +163,23 @@ fn end_record(f: &File, size: u64) -> Result<Option<EndRecord>> {
     Ok(Some(out))
 }
 
+/// zipfile.is_zipfile(path): an end record is there. What the Python raises past its OSError
+/// (a zip64 locator naming several disks) is an Err.
+pub fn is_zipfile(path: &str) -> Result<bool> {
+    let Ok(f) = File::open(path) else {
+        return Ok(false);
+    };
+    let Ok(m) = f.metadata() else {
+        return Ok(false);
+    };
+    match end_record(&f, m.len()) {
+        Ok(r) => Ok(r.is_some()),
+        Err(e) if e.to_string().contains("span multiple disks") => Err(e),
+        // (a zip64 record before the file's start: an OSError for is_zipfile)
+        Err(_) => Ok(false),
+    }
+}
+
 impl Archive {
     /// Reads the central directory (ZipFile(path, 'r')).
     pub fn open(path: &str) -> Result<Archive> {

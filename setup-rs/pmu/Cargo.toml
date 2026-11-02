@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 androiddata = { path = "../crates/androiddata" }
+apk = { path = "../crates/apk" }
 pkgzip = { path = "../crates/pkgzip" }
 convert = { path = "../crates/convert" }
 unityfs = { path = "../crates/unityfs" }
+libc = "0.2"

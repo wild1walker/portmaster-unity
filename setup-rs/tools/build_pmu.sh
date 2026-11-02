@@ -2,7 +2,7 @@
 # build_pmu.sh <out dir>: the setup's tools as a port's release ships them: <out>/pmu (static
 # aarch64 musl, Unity's class database from UnityPy embedded) and <out>/licenses/LICENSE.*.txt, the
 # licence texts of what is compiled into it (the crates from crates.io and Rust's standard library,
-# musl, lz4, UnityPy's class database, the vendored C/C++ of setup-rs/vendor). Built in the Rust
+# musl, lz4, zlib, UnityPy's class database, the vendored C/C++ of setup-rs/vendor). Built in the Rust
 # image (tools/rs.sh: ua-rust with GCC 10, setup-rs/docker/Dockerfile.gcc10, so the ASTC blocks are
 # the Python's) from a copy of setup-rs at a neutral path (the binary names its source files).
 # `pmunity port package` runs it (tools/port/out/pmu) for ports whose setup runs pmu.
@@ -24,6 +24,7 @@ RS_ROOT=${RS_ROOT:-$B} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash 
   cat /opt/pylibs/unitypy-*.dist-info/licenses/LICENSE > $O/unitypy.txt
   cat /usr/share/doc/musl/copyright > $O/musl.txt
   cat $(ls -d /opt/cargo/registry/src/*/lz4-sys-1.9.4 | head -1)/liblz4/lib/LICENSE > $O/lz4.txt
+  cat $(ls -d /opt/cargo/registry/src/*/libz-sys-1.1.31 | head -1)/src/zlib/LICENSE > $O/zlib.txt
   MIT=$(sed /\<year\>/d $(rustc --print sysroot)/share/doc/rust/licenses/MIT.txt)
   { echo "Rust standard library ($(rustc --version | cut -d" " -f2)): MIT or Apache-2.0, copyright the Rust project contributors"
     echo; echo "$MIT"
@@ -53,6 +54,7 @@ V="$PM/setup-rs/vendor"
   done; } > "$L/LICENSE.texture2ddecoder.txt"
 { echo "optimized-routines (Arm): sinf, cosf, sincosf, compiled into setup/pmu"; echo; cat "$V/optimized-routines/LICENSE"; } > "$L/LICENSE.optimized-routines.txt"
 { echo "lz4 1.9.4 (the crate lz4-sys), compiled into setup/pmu"; echo; cat "$B/lz4.txt"; } > "$L/LICENSE.lz4.txt"
+{ echo "zlib 1.3.2 (the crate libz-sys), compiled into setup/pmu"; echo; cat "$B/zlib.txt"; } > "$L/LICENSE.zlib.txt"
 { echo "UnityPy: its class id names and class database (resources/lzma.tpk), in setup/pmu"; echo; cat "$B/unitypy.txt"; } > "$L/LICENSE.unitypy.txt"
 { echo "musl libc, linked into setup/pmu"; echo; cat "$B/musl.txt"; } > "$L/LICENSE.musl.txt"
 { echo "The Rust crates (crates.io) and Rust's standard library compiled into setup/pmu"; echo; cat "$B/rust-crates.txt"; } > "$L/LICENSE.rust-crates.txt"

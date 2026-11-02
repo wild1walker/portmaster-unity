@@ -2,6 +2,7 @@
 use std::process::ExitCode;
 
 mod android_data;
+mod apk;
 mod argp;
 mod convert;
 mod macpkg;
@@ -26,6 +27,7 @@ pub const NAMES: &[&str] = &[
     "unpack",
     "winbcl",
     "route",
+    "apk",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -42,6 +44,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "unpack" => Some(unpack::run(args)),
         "winbcl" => Some(winbcl::run(args)),
         "route" => Some(route::run(args)),
+        "apk" => Some(apk::run(args)),
         _ => None,
     }
 }
