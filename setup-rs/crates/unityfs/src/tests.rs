@@ -1342,10 +1342,27 @@ fn damaged_values() {
     let e = value::read(&t, &i32::MAX.to_le_bytes(), false, None)
         .unwrap_err()
         .to_string();
-    assert!(e.contains("elements that take no bytes"), "{e}");
+    assert_eq!(e, "an object of more than 1048640 values in 4 bytes");
     let (v, n) = value::read(&t, &3i32.to_le_bytes(), false, None).unwrap();
     assert_eq!(
         (v.get("v").and_then(Value::as_array).map(Vec::len), n),
         (Some(3), 4)
     );
+    // (the fuzz targets') structs nested around nothing, 200 deep, in an array of a million:
+    // each element takes no bytes and is 200 values
+    let mut l = vec![
+        node(0, "B", "Base", -1, 0),
+        node(1, "vector", "v", -1, 0),
+        node(2, "Array", "Array", -1, 0),
+        node(3, "int", "size", 4, 0),
+    ];
+    l.extend((0..200).map(|i| node(3 + i, "S", "data", -1, 0)));
+    for (i, n) in l.iter_mut().enumerate() {
+        n.index = Some(i as i32);
+    }
+    let t = TypeTree::from_list(l).unwrap();
+    let e = value::read(&t, &1_000_000i32.to_le_bytes(), false, None)
+        .unwrap_err()
+        .to_string();
+    assert!(e.starts_with("an object of more than"), "{e}");
 }

@@ -210,15 +210,19 @@ struct Ctx<'a> {
     has_registry: bool,
     /// Nodes being read or written, one inside the other (a reference type's tree included).
     depth: usize,
+    /// Values read, and the most the object may have.
+    values: usize,
+    max_values: usize,
 }
 
 /// The deepest nesting read or written: Unity's own trees are a few dozen levels deep; a damaged
 /// file's (the old format's levels, references that name each other) would overflow the stack.
 pub const MAX_DEPTH: usize = 256;
 
-/// Array elements that take no bytes (empty structs) one array may have: their count comes
-/// from the data, and nothing else bounds what they cost.
-pub const MAX_EMPTY: usize = 1 << 20;
+/// Values one object may be read into: this many, and 16 for each byte of its data (Unity's
+/// objects have a few a byte). An array's count comes from the data, and elements of empty
+/// structs, or of structs nested around one byte, cost far more than their bytes.
+pub const MAX_VALUES: usize = 1 << 20;
 
 fn deeper(ctx: &mut Ctx) -> Result<()> {
     ctx.depth += 1;
@@ -243,6 +247,8 @@ pub fn read(
         refs,
         has_registry: false,
         depth: 0,
+        values: 0,
+        max_values: MAX_VALUES.saturating_add(data.len().saturating_mul(16)),
     };
     let v = read_value(tree, 0, &mut r, &mut ctx)?;
     Ok((v, r.pos))
@@ -303,6 +309,14 @@ fn read_len(r: &mut Reader) -> Result<usize> {
 
 fn read_value(t: &TypeTree, i: usize, r: &mut Reader, ctx: &mut Ctx) -> Result<Value> {
     deeper(ctx)?;
+    ctx.values += 1;
+    if ctx.values > ctx.max_values {
+        return Err(Error::Format(format!(
+            "an object of more than {} values in {} bytes",
+            ctx.max_values,
+            r.data.len()
+        )));
+    }
     let v = read_node(t, i, r, ctx);
     ctx.depth -= 1;
     v
@@ -414,11 +428,8 @@ fn read_array(t: &TypeTree, e: usize, n: usize, r: &mut Reader, ctx: &mut Ctx) -
             Value::Bytes(r.take(n)?.to_vec())
         } else if k == Kind::Pair {
             let mut a = Vec::with_capacity(n.min(1 << 20));
-            let mut empty = 0;
             for _ in 0..n {
-                let at = r.pos;
                 a.push(read_pair(t, e, r, ctx)?);
-                empty_element(r.pos == at, &mut empty, n)?;
             }
             Value::Array(a)
         } else {
@@ -437,26 +448,10 @@ fn read_array(t: &TypeTree, e: usize, n: usize, r: &mut Reader, ctx: &mut Ctx) -
         return Ok(v);
     }
     let mut a = Vec::with_capacity(n.min(1 << 16));
-    let mut empty = 0;
     for _ in 0..n {
-        let at = r.pos;
         a.push(read_value(t, e, r, ctx)?);
-        empty_element(r.pos == at, &mut empty, n)?;
     }
     Ok(Value::Array(a))
-}
-
-/// Counts an array's elements that took no bytes; more than MAX_EMPTY is an error.
-fn empty_element(none: bool, empty: &mut usize, n: usize) -> Result<()> {
-    if none {
-        *empty += 1;
-        if *empty > MAX_EMPTY {
-            return Err(Error::Format(format!(
-                "an array of {n} elements that take no bytes"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// The type tree of a ReferencedObject's data: by its "type" field's class, ns and asm in the
@@ -489,10 +484,13 @@ fn ref_type_tree(s: &Struct, refs: Option<&RefTypes>) -> Result<Option<Arc<TypeT
 /// A value written with a type tree (UnityPy's write_typetree): the object's new bytes.
 pub fn write(tree: &TypeTree, v: &Value, big: bool, refs: Option<&RefTypes>) -> Result<Vec<u8>> {
     let mut w = Writer::new(big);
+    // (a value written is one read, or made by the steps: no count kept)
     let mut ctx = Ctx {
         refs,
         has_registry: false,
         depth: 0,
+        values: 0,
+        max_values: usize::MAX,
     };
     write_value(tree, 0, v, &mut w, &mut ctx)?;
     Ok(w.buf)
