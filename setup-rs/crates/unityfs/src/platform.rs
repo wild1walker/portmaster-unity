@@ -62,14 +62,15 @@ fn be_i64(b: &[u8], p: usize) -> Result<i64> {
 }
 
 fn read_n(f: &mut File, n: usize) -> Result<Vec<u8>> {
-    let mut v = Vec::with_capacity(n);
+    // (n is read from the file: room for what is there, not for what it says)
+    let mut v = Vec::with_capacity(n.min(1 << 20));
     f.take(n as u64).read_to_end(&mut v)?;
     Ok(v)
 }
 
 fn lzma_block(comp: &[u8], usize: usize) -> Result<Vec<u8>> {
     // (LZMADecompressor.decompress(comp[5:], max_length=usize): up to usize bytes)
-    let mut out = Vec::with_capacity(usize);
+    let mut out = Vec::with_capacity(compress::lzma_capacity(comp.len(), usize));
     compress::lzma_decompress_to(&mut &comp[..], usize as u64, &mut out)?;
     Ok(out)
 }
@@ -97,7 +98,9 @@ impl MiniBundle {
         }
         let header_end = p as u64;
         let (ci, data_start) = if flags & 0x80 != 0 {
-            f.seek(SeekFrom::Start((size - ci_size as i64).max(0) as u64))?;
+            f.seek(SeekFrom::Start(
+                size.saturating_sub(ci_size as i64).max(0) as u64
+            ))?;
             (read_n(&mut f, ci_size as usize)?, p as u64)
         } else {
             f.seek(SeekFrom::Start(p as u64))?;
@@ -601,6 +604,10 @@ fn lz4_decode_trace(comp: &[u8]) -> Result<Option<(Vec<u8>, Vec<(usize, usize, u
         let start = out.len();
         if off > start {
             return Ok(None);
+        }
+        if off == 0 {
+            // (a match of the byte it writes: the Python's IndexError)
+            return Err(Error::Format("index out of range".into()));
         }
         let s0 = start - off;
         for j in 0..ml {

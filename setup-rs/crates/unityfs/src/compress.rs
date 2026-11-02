@@ -114,12 +114,23 @@ pub fn compress_lz4(data: &[u8]) -> Result<Vec<u8>> {
     lz4hc(data, HC_LEVEL)
 }
 
+/// LZ4 makes at most 255 bytes of each byte of a block: a bigger size is a corrupt one's.
+pub fn lz4_max_size(compressed: usize) -> usize {
+    compressed.saturating_mul(255).saturating_add(16)
+}
+
 /// lz4.block.decompress(data, uncompressed_size=usize): exactly usize bytes, else an error.
 pub fn lz4_decompress(data: &[u8], usize: usize) -> Result<Vec<u8>> {
-    let mut out = vec![0u8; usize];
     if usize > 0x7FFF_FFFF || data.len() > 0x7FFF_FFFF {
         return Err(Error::Unsupported("LZ4 block over 2 GB".into()));
     }
+    if usize > lz4_max_size(data.len()) {
+        return bad(format!(
+            "LZ4 block of {} bytes cannot hold {usize} bytes",
+            data.len()
+        ));
+    }
+    let mut out = vec![0u8; usize];
     // SAFETY: as in lz4hc; LZ4_decompress_safe never writes past the capacity given.
     let n = unsafe {
         lz4_sys::LZ4_decompress_safe(
@@ -156,9 +167,15 @@ pub fn lzma_decompress_to(
     })
 }
 
+/// What an LZMA block's output is given room for at first: its size, unless that is more than
+/// a damaged header could ask of the block (the rest is allocated only as it decompresses).
+pub fn lzma_capacity(compressed: usize, usize: usize) -> usize {
+    usize.min(compressed.saturating_mul(1024).max(1 << 20))
+}
+
 /// A Unity LZMA block decompressed whole.
 pub fn lzma_decompress(data: &[u8], usize: usize) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(usize);
+    let mut out = Vec::with_capacity(lzma_capacity(data.len(), usize));
     lzma_decompress_to(&mut &data[..], usize as u64, &mut out)?;
     if out.len() != usize {
         return bad(format!(

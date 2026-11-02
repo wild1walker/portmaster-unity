@@ -419,6 +419,11 @@ impl SerializedFile {
             )?);
         }
         let big_id_enabled = if (7..14).contains(&v) { r.i32()? } else { 0 };
+        // (before format 16 an object names its type by class id: the first type of that id)
+        let mut first_of: HashMap<i32, usize> = HashMap::new();
+        for (i, t) in types.iter().enumerate() {
+            first_of.entry(t.class_id).or_insert(i);
+        }
         let no = r.i32()?;
         let mut objects: Vec<ObjectInfo> = Vec::new();
         let mut index = HashMap::new();
@@ -441,7 +446,7 @@ impl SerializedFile {
             let type_id = r.i32()?;
             let (class_id, type_index) = if v < 16 {
                 let c = r.u16()? as i32;
-                (c, types.iter().position(|t| t.class_id == type_id))
+                (c, first_of.get(&type_id).copied())
             } else {
                 let t = types.get(type_id as usize).ok_or_else(|| {
                     Error::Format(format!("{name}: object type {type_id} out of range"))

@@ -15,8 +15,15 @@ pub trait Source: Send + Sync {
         self.len() == 0
     }
 
-    /// n bytes at off.
+    /// n bytes at off (a size read from a file is checked against the source before anything
+    /// is allocated for it).
     fn read_vec(&self, off: u64, n: usize) -> io::Result<Vec<u8>> {
+        if off.checked_add(n as u64).is_none_or(|e| e > self.len()) {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("read of {n} bytes at {off} past the end ({})", self.len()),
+            ));
+        }
         let mut v = vec![0u8; n];
         self.read_at(off, &mut v)?;
         Ok(v)
@@ -78,7 +85,7 @@ impl Source for FileSource {
     }
     fn read_at(&self, off: u64, buf: &mut [u8]) -> io::Result<()> {
         let n = buf.len() as u64;
-        if n >= Self::WINDOW as u64 / 4 {
+        if n >= Self::WINDOW as u64 / 4 || off.checked_add(Self::WINDOW as u64).is_none() {
             return self.f.read_exact_at(buf, off);
         }
         let mut w = self.win.lock().unwrap();
@@ -134,16 +141,19 @@ impl Source for SubSource {
         self.size
     }
     fn read_at(&self, off: u64, buf: &mut [u8]) -> io::Result<()> {
-        if off
-            .checked_add(buf.len() as u64)
-            .is_none_or(|e| e > self.size)
-        {
-            return Err(io::Error::new(
+        match self.offset.checked_add(off) {
+            Some(at)
+                if off
+                    .checked_add(buf.len() as u64)
+                    .is_some_and(|e| e <= self.size) =>
+            {
+                self.inner.read_at(at, buf)
+            }
+            _ => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "read past the end of the node",
-            ));
+            )),
         }
-        self.inner.read_at(self.offset + off, buf)
     }
 }
 

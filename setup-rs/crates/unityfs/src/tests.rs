@@ -1145,3 +1145,207 @@ fn referenced_objects() {
     u[16..19].copy_from_slice(b"Bar");
     assert!(value::read(&t, &u, false, Some(&refs)).is_err());
 }
+
+// ---- damaged and hostile files (the fuzz targets' findings, setup-rs/fuzz): errors, never a
+// panic, a huge allocation or the stack's end
+
+/// A format 6 bundle header (2017.4) with this blocks info (its flags' compression), the sizes
+/// as given, then `data`.
+fn bundle_with_info(info: &[u8], ci_size: u32, ui_size: u32, flags: u32, data: &[u8]) -> Vec<u8> {
+    let mut h = Writer::new(true);
+    h.cstr(b"UnityFS");
+    h.u32(6);
+    h.cstr(b"5.x.x");
+    h.cstr(b"2017.4.9f1");
+    h.i64((h.len() + 20 + info.len() + data.len()) as i64);
+    h.u32(ci_size);
+    h.u32(ui_size);
+    h.u32(flags);
+    h.bytes(info);
+    h.bytes(data);
+    h.buf
+}
+
+/// A stored blocks info: blocks (usize, csize, flags), then nodes (offset, size, flags, name).
+fn blocks_info(blocks: &[(u32, u32, u16)], nodes: &[(i64, i64, u32, &str)]) -> Vec<u8> {
+    let mut w = Writer::new(true);
+    w.bytes(&[0; 16]);
+    w.i32(blocks.len() as i32);
+    for b in blocks {
+        w.u32(b.0);
+        w.u32(b.1);
+        w.u16(b.2);
+    }
+    w.i32(nodes.len() as i32);
+    for n in nodes {
+        w.i64(n.0);
+        w.i64(n.1);
+        w.u32(n.2);
+        w.cstr(n.3.as_bytes());
+    }
+    w.buf
+}
+
+#[test]
+fn damaged_bundles() {
+    let open = |b: Vec<u8>| {
+        Bundle::from_source(mem(b))
+            .map(|_| ())
+            .unwrap_err()
+            .to_string()
+    };
+    // a blocks info size past the file: refused before anything is allocated for it
+    let info = blocks_info(&[], &[]);
+    let e = open(bundle_with_info(
+        &info,
+        u32::MAX,
+        info.len() as u32,
+        0x40,
+        b"",
+    ));
+    assert!(e.contains("past the end"), "{e}");
+    // an LZ4 blocks info that says it makes 2 GB of 10 bytes
+    let e = open(bundle_with_info(&[0x10; 10], 10, 0x7FFF_0000, 0x43, b""));
+    assert!(e.contains("cannot hold"), "{e}");
+    assert!(compress::lz4_decompress(&[0; 3], 1 << 30).is_err());
+    // two billion blocks in a few bytes: no room made for them
+    let mut info = vec![0u8; 16];
+    info.extend(i32::MAX.to_be_bytes());
+    let e = open(bundle_with_info(
+        &info,
+        info.len() as u32,
+        info.len() as u32,
+        0x40,
+        b"",
+    ));
+    assert!(e.contains("past the end"), "{e}");
+    // a node before the data, or of a negative size
+    for (off, size) in [(-8, 4), (0, -1), (i64::MIN, 0)] {
+        let info = blocks_info(&[(4, 4, 0)], &[(off, size, 4, "CAB-x")]);
+        let e = open(bundle_with_info(
+            &info,
+            info.len() as u32,
+            info.len() as u32,
+            0x40,
+            b"abcd",
+        ));
+        assert!(e.contains("node CAB-x at"), "{e}");
+    }
+    // a block that says it makes 2 GB: the read fails, nothing that size is allocated
+    let info = blocks_info(&[(0x7FFF_0000, 4, 2)], &[(0, 16, 4, "CAB-x")]);
+    let b = Bundle::from_source(mem(bundle_with_info(
+        &info,
+        info.len() as u32,
+        info.len() as u32,
+        0x40,
+        b"abcd",
+    )))
+    .unwrap();
+    assert!(crate::source::Source::read_vec(&*b.node(0), 0, 16).is_err());
+    // a source never allocates for a read past its end; a node's offset cannot wrap around
+    let m = MemSource(vec![0; 10]);
+    assert!(crate::source::Source::read_vec(&m, 4, 1 << 40).is_err());
+    assert!(crate::source::Source::read_vec(&m, u64::MAX, 2).is_err());
+    let sub = crate::source::SubSource {
+        inner: mem(vec![0; 10]),
+        offset: u64::MAX - 1,
+        size: 8,
+    };
+    assert!(crate::source::Source::read_vec(&sub, 4, 2).is_err());
+    // unpack's and the platform patch's readers: the same sizes, from a file
+    let d = temp("damaged");
+    let info = blocks_info(&[(4, 4, 0)], &[(-8, 4, 0, "a"), (i64::MAX, 2, 0, "b")]);
+    for (k, b) in [
+        bundle_with_info(&info, u32::MAX, info.len() as u32, 0x40, b"abcd"),
+        bundle_with_info(&[0x10; 10], 10, 0x7FFF_0000, 0x43, b""),
+        bundle_with_info(&info, info.len() as u32, info.len() as u32, 0x40, b"abcd"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let p = d.join(format!("b{k}"));
+        std::fs::write(&p, &b).unwrap();
+        if let Ok(a) = crate::unpack::Archive::open(&p) {
+            let out = d.join(format!("out{k}"));
+            std::fs::create_dir_all(&out).unwrap();
+            assert!(a.extract(&out, &mut |_| {}).is_err());
+        }
+        let _ = crate::platform::MiniBundle::open(&p);
+    }
+    // blocks info at the end of a file whose size field is i64::MIN
+    let mut b = bundle_with_info(&info, info.len() as u32, info.len() as u32, 0xC0, b"abcd");
+    b[29..37].copy_from_slice(&i64::MIN.to_be_bytes());
+    let p = d.join("min");
+    std::fs::write(&p, &b).unwrap();
+    assert!(crate::unpack::Archive::open(&p).is_err());
+    assert!(crate::platform::MiniBundle::open(&p).is_err());
+    let _ = std::fs::remove_dir_all(&d);
+    // the platform patch's LZ4 re-pointing on a match of offset 0 (the byte it writes)
+    assert!(crate::platform::lz4_repoint(&[0x10, b'a', 0, 0], &[b'a'; 5], 4).is_err());
+}
+
+#[test]
+fn damaged_values() {
+    // a tree 300 levels deep (the old format's levels are not bounded): an error, not the end of
+    // the stack
+    let mut l: Vec<Node> = (0..300).map(|i| node(i, "S", "f", -1, 0)).collect();
+    l.push(node(300, "int", "x", 4, 0));
+    for (i, n) in l.iter_mut().enumerate() {
+        n.index = Some(i as i32);
+    }
+    let deep = TypeTree::from_list(l).unwrap();
+    let e = value::read(&deep, &[0; 4], false, None)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("nested more than 256"), "{e}");
+    // a managed reference whose type is the class it is in, 300 times over
+    let mut l = vec![
+        node(0, "A", "Base", -1, 0),
+        node(1, "ReferencedObject", "obj", -1, 0),
+        node(2, "SInt64", "rid", 8, 0),
+        node(2, "ReferencedManagedType", "type", -1, 0),
+        node(3, "string", "class", -1, 0),
+        node(3, "string", "ns", -1, 0),
+        node(3, "string", "asm", -1, 0),
+        node(2, "ReferencedObjectData", "data", -1, 0),
+    ];
+    for (i, n) in l.iter_mut().enumerate() {
+        n.index = Some(i as i32);
+    }
+    let a = Arc::new(TypeTree::from_list(l).unwrap());
+    let refs = vec![(b"A".to_vec(), Vec::new(), Vec::new(), Some(a.clone()))];
+    let mut w = Writer::new(false);
+    for _ in 0..300 {
+        w.i64(1);
+        w.i32(1);
+        w.bytes(b"A");
+        w.align(4);
+        w.i32(0);
+        w.i32(0);
+    }
+    let e = value::read(&a, &w.buf, false, Some(&refs))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("nested more than 256"), "{e}");
+    // an array of two billion empty structs: an error, not 64 GB of values; a few are read
+    let mut l = vec![
+        node(0, "B", "Base", -1, 0),
+        node(1, "vector", "v", -1, 0),
+        node(2, "Array", "Array", -1, 0),
+        node(3, "int", "size", 4, 0),
+        node(3, "Empty", "data", -1, 0),
+    ];
+    for (i, n) in l.iter_mut().enumerate() {
+        n.index = Some(i as i32);
+    }
+    let t = TypeTree::from_list(l).unwrap();
+    let e = value::read(&t, &i32::MAX.to_le_bytes(), false, None)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("elements that take no bytes"), "{e}");
+    let (v, n) = value::read(&t, &3i32.to_le_bytes(), false, None).unwrap();
+    assert_eq!(
+        (v.get("v").and_then(Value::as_array).map(Vec::len), n),
+        (Some(3), 4)
+    );
+}
