@@ -371,6 +371,17 @@ def roomy_path(t):
     return d + os.pathsep + os.environ.get('PATH', '')
 
 
+def stub_pmu(t):
+    """A stand-in for setup-rs/tools/build_pmu.sh's output folder: pmu and licenses/LICENSE.*.txt."""
+    d = os.path.join(t, 'pmu-out')
+    os.makedirs(os.path.join(d, 'licenses'))
+    put(os.path.join(d, 'pmu'), '#!/bin/sh\nexit 2\n')
+    os.chmod(os.path.join(d, 'pmu'), 0o755)
+    put(os.path.join(d, 'licenses', 'LICENSE.musl.txt'), 'MIT musl')
+    put(os.path.join(d, 'licenses', 'LICENSE.rust-crates.txt'), 'MIT / Apache 2.0 crates')
+    return d
+
+
 def stub_tools(t):
     """A stand-in for the setup's Python (pmunity commands that log and make what the setup reads)
     packed as python.tar.gz, and for PortMaster's 7-Zip (unzip)."""
@@ -532,21 +543,27 @@ class NewAndSetupTest(unittest.TestCase):
                 ti = tarfile.TarInfo('python/lib/python3.12/LICENSE.txt')
                 ti.size = 3
                 tf.addfile(ti, io.BytesIO(b'PSF'))
+            # (pmu translates Vulkan programs with the release's pmspirvcross: the release has both)
+            self.assertTrue(P.wants('pmu', cfg) and not P.wants('pybundle', cfg))
+            pmu = stub_pmu(t)
             with self.assertRaises(SystemExit) as cm:   # (no licence beside the binary)
                 P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
-                          pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
+                          pmu=pmu, pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
             self.assertIn('pmspirvcross.LICENSE.txt', str(cm.exception))
             put(os.path.join(rt, 'sc', 'pmspirvcross.LICENSE.txt'), 'Apache 2.0 SPIRV-Cross, MIT SMOL-V')
             z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
-                          pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
+                          pmu=pmu, pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
             with zipfile.ZipFile(z) as zf:
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
                 self.assertEqual(zf.read('mygame/licenses/LICENSE.pmspirvcross-SPIRV-Cross-SMOL-V.txt'),
                                  b'Apache 2.0 SPIRV-Cross, MIT SMOL-V')
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.musl.txt'), b'MIT musl')
             self.assertEqual(modes['mygame/setup/pmspirvcross'], 0o755)
+            self.assertEqual(modes['mygame/setup/pmu'], 0o755)
+            self.assertNotIn('mygame/setup/python.tar.gz', modes)
             self.assertNotIn('mygame/setup/pmhlslcc', modes)
             with self.assertRaises(SystemExit) as cm:   # (the default place, not built)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
             self.assertIn('ARCH=arm64 tools/spirvcross/build.sh', str(cm.exception))
 
     def test_windows_port(self):
@@ -585,19 +602,26 @@ class NewAndSetupTest(unittest.TestCase):
                 ti = tarfile.TarInfo('python/lib/python3.12/LICENSE.txt')
                 ti.size = 3
                 tf.addfile(ti, io.BytesIO(b'PSF'))
+            # (pmu translates Direct3D 11 programs with the release's pmhlslcc: the release has both)
+            self.assertTrue(P.wants('pmu', cfg) and not P.wants('pybundle', cfg))
+            pmu = stub_pmu(t)
             with self.assertRaises(SystemExit) as cm:   # (no licence beside the binary)
                 P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
-                          pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
+                          pmu=pmu, pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
             self.assertIn('pmhlslcc.LICENSE.txt', str(cm.exception))
             put(os.path.join(rt, 'hl', 'pmhlslcc.LICENSE.txt'), 'MIT HLSLcc, BSD bstrlib')
             z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
-                          pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
+                          pmu=pmu, pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
             with zipfile.ZipFile(z) as zf:
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
                 self.assertEqual(zf.read('mygame/licenses/LICENSE.pmhlslcc-HLSLcc.txt'), b'MIT HLSLcc, BSD bstrlib')
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.musl.txt'), b'MIT musl')
             self.assertEqual(modes['mygame/setup/pmhlslcc'], 0o755)
+            self.assertEqual(modes['mygame/setup/pmu'], 0o755)
+            self.assertNotIn('mygame/setup/python.tar.gz', modes)
+            self.assertNotIn('mygame/setup/pmspirvcross', modes)
             with self.assertRaises(SystemExit) as cm:   # (the default place, not built)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
             self.assertIn('ARCH=arm64 tools/hlslcc/build.sh', str(cm.exception))
             # the setup: winbcl with the player after the fetch, PMHLSLCC for the conversion, its files
             # shipped with --managed-file
@@ -704,9 +728,16 @@ class NewAndSetupTest(unittest.TestCase):
                              ['2019.4', '6000.0'])
 
     def test_package(self):
+        """the release of a port whose setup needs the Python (here: a converter plugin of the porter's
+        own, which pmu cannot run): the setup's Python and the converter, no pmu (test_package_pmu: the
+        default port's release)"""
         with tempfile.TemporaryDirectory() as t:
+            put(os.path.join(t, 'mystep.py'), 'STEPS = {}\n')
             _, out = self.make(t, {'build': {'commands': ['echo tool > "$BUILD/tool" && chmod +x "$BUILD/tool"'],
-                                             'outputs': {'setup/files/tool': '{build}/tool'}}})
+                                             'outputs': {'setup/files/tool': '{build}/tool'}},
+                                   'files': {'plugins': ['mystep.py']}})
+            cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertEqual(P.pmu_covers(cfg), (False, ["the port's converter plugins (mystep.py)"]))
             rt = os.path.join(t, 'rt')
             for d in ('runtime/host/out', 'runtime/media/out/licenses'):
                 os.makedirs(os.path.join(rt, d))
@@ -757,6 +788,8 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertFalse(any('port_template' in n or '__pycache__' in n for n in names))
             self.assertNotIn('mygame/setup/asmpatch', names)        # (the port does not use it)
             self.assertNotIn('mygame/setup/pmhlslcc', names)        # (nor Direct3D 11 shaders)
+            self.assertNotIn('mygame/setup/pmu', names)             # (the Python instead)
+            self.assertIn('mygame/setup/files/mystep.py', names)
             self.assertEqual(modes['My Game.sh'], 0o644)
             self.assertEqual(modes['mygame/ua_host'], 0o755)
             self.assertEqual(modes['mygame/setup/patchscript'], 0o644)
@@ -765,6 +798,39 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(modes['mygame/setup/files/tool'], 0o755)          # (a build output)
             self.assertIn('MIT a', lic)
             self.assertNotIn('port.toml', ' '.join(names))
+
+    def test_package_pmu(self):
+        """the default port's release: its setup's commands all run on pmu (pmu_covers), so it ships
+        setup/pmu with the licences of what is compiled into it, and no Python or converter"""
+        with tempfile.TemporaryDirectory() as t:
+            _, out = self.make(t)
+            cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertEqual(P.pmu_covers(cfg), (True, []))
+            rt = os.path.join(t, 'rt')
+            for d in ('runtime/host/out', 'runtime/media/out/licenses'):
+                os.makedirs(os.path.join(rt, d))
+            put(os.path.join(rt, 'runtime/host/out/ua_host'), 'host')
+            put(os.path.join(rt, 'runtime/media/out/licenses/libvpx.copyright'), 'BSD')
+            with self.assertRaises(SystemExit) as cm:   # (a folder without pmu and licenses/)
+                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, no_build=True, pmu=os.path.join(t, 'none'))
+            self.assertIn('no pmu and licenses/', str(cm.exception))
+            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, no_build=True, pmu=stub_pmu(t))
+            with zipfile.ZipFile(z) as zf:
+                names = set(zf.namelist())
+                modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
+                self.assertEqual(zf.read('mygame/setup/pmu'), b'#!/bin/sh\nexit 2\n')
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.musl.txt'), b'MIT musl')
+                self.assertEqual(zf.read('mygame/licenses/LICENSE.rust-crates.txt'), b'MIT / Apache 2.0 crates')
+            self.assertEqual(modes['mygame/setup/pmu'], 0o755)
+            for n in ('My Game.sh', 'mygame/ua_host', 'mygame/setup/patchscript', 'mygame/licenses/LICENSE.libvpx.txt',
+                      'mygame/licenses/LICENSE.portmaster-unity.txt', 'mygame/licenses/LICENSE.libhybris.txt'):
+                self.assertIn(n, names)
+            for n in ('mygame/setup/python.tar.gz', 'mygame/setup/pmunity/__main__.py', 'mygame/setup/tools/il2cpp/ndk-clang.sh',
+                      'mygame/licenses/LICENSE.setup-python.txt', 'mygame/setup/pmhlslcc', 'mygame/setup/pmspirvcross',
+                      'mygame/setup/asmpatch'):
+                self.assertNotIn(n, names)
+            self.assertFalse([n for n in names if n.startswith('mygame/licenses/') and
+                              not re.match(r'mygame/licenses/LICENSE\.[^/]+\.txt$', n)])   # (one flat folder)
 
     def run_setup(self, t, out, env):
         """The generated launcher's setup part: patchscript with GAMEDIR etc., stand-in tools."""
