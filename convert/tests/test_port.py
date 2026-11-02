@@ -233,6 +233,24 @@ class CheckTest(unittest.TestCase):
             else:
                 self.assertIn('try the pad first', notes)
 
+    def test_dpad_stick_from_pad_bindings(self):
+        # asmpatch --survey's InControl bindings: movement only on the left stick -> UA_DPAD_STICK, with the
+        # d-pad's own bindings named for a UA_DPAD_SWAP button (or both, when every d-pad binding is a stick one)
+        own = ('    the left stick alone (no d-pad binding): A.Left, A.Right\n'
+               '  -> UA_DPAD_STICK=auto (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n'
+               '     the left stick; its own bindings A.GunUp, A.Drop need a UA_DPAD_SWAP=<button> that gives the d-pad back)\n')
+        both = ('    the left stick alone (no d-pad binding): A.Left\n'
+                '  -> UA_DPAD_STICK=auto,both (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n'
+                '     the left stick and still reports as the d-pad; every d-pad binding is also a left stick one)\n')
+        for text, want, swap in ((own, 'auto', True), (both, 'auto,both', False), ('  pad bindings (...):\n', None, False)):
+            rep = {'notes': [], 'code': {'incontrol': True, 'legacy': {}}, 'input_verdict': 'pad', 'asmpatch_survey': text}
+            P.suggest_config(rep)
+            self.assertEqual(rep['suggest']['runtime'].get('UA_DPAD_STICK'), want)
+            notes = ' '.join(rep['notes'])
+            self.assertEqual('UA_DPAD_SWAP' in notes, swap)
+            if swap:
+                self.assertIn("the d-pad's own bindings (A.GunUp, A.Drop)", notes)
+
     def test_windows_class_libraries(self):
         # a Windows Mono build of 2021.2+ ships unityjit-win32 class libraries: the check names winbcl
         exe = bytearray(b'MZ' + b'\0' * 0x3A + struct.pack('<I', 0x80) + b'\0' * 0x40)

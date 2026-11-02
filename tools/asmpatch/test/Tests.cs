@@ -33,6 +33,7 @@ static partial class TestMain
             NoAndroidConstant();
             InputSystemTests();
             InControlTests();
+            InControlBindingsTests();
             SurveyTests();
             StreamingAssets();
             PlayMakerTests();

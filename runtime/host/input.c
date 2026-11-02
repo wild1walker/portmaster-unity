@@ -132,8 +132,11 @@ static void pad_open(int index)
         d.fuzz[i] = 0.004f;
     }
     up_add_input_device(&d);
-    fprintf(stderr, "[input] pad %d: \"%s\" (SDL \"%s\", %04x:%04x) as Android device %d\n", index, names[slot],
-            SDL_GameControllerName(gc), d.vendor_id, d.product_id, p->id);
+    // a mapping without a left stick (a d-pad-only handheld): UA_DPAD_STICK=auto gives it one
+    int lstick = SDL_GameControllerHasAxis(gc, SDL_CONTROLLER_AXIS_LEFTX) && SDL_GameControllerHasAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
+    fprintf(stderr, "[input] pad %d: \"%s\" (SDL \"%s\", %04x:%04x) as Android device %d%s\n", index, names[slot],
+            SDL_GameControllerName(gc), d.vendor_id, d.product_id, p->id, lstick ? "" : ", no left stick in its mapping");
+    pointer_pad(slot, lstick);
 }
 
 static void pad_close(SDL_JoystickID jid)
@@ -501,8 +504,12 @@ void input_poll(void)
     for (int i = 0; i < MAX_PADS; i++) if (moved[i] && pads[i].gc) send_axes(&pads[i]);
     live_input();                       // (cheap: a stat of input.req every 0.25 s)
     if (next_press < nscript) script_run();
-    if (osk_tick())                             // the soft keyboard opened or closed: the game
-        for (int i = 0; i < MAX_PADS; i++)      // sees a centred pad while it is open
+    // the soft keyboard opened or closed (the game sees a centred pad while it is open), or the
+    // d-pad changed roles (UA_DPAD_SWAP): the pads' axes again
+    int again = osk_tick();
+    again |= pointer_axes_changed();
+    if (again)
+        for (int i = 0; i < MAX_PADS; i++)
             if (pads[i].gc || pads[i].virt) send_axes(&pads[i]);
     pointer_frames(frames_presented());
     pointer_tick();

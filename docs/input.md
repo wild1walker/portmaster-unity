@@ -253,20 +253,81 @@ as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`
 `alt`, `pageup`, `pagedown`, `home`, `end`, `insert`, `minus`, `equals`, `comma`, `period`,
 `slash`, `grave`, `back` (Android's back key, which Unity reads as Escape).
 
-## Swapping the d-pad and the left stick
+## Handhelds without sticks
+
+Many handhelds (the RG34XX-SP among them) have a d-pad and no analog sticks, and some games move
+only with the left stick: their pad bindings give the d-pad other jobs, or none.
+
+### The d-pad as the left stick: `UA_DPAD_STICK`
+
+`UA_DPAD_STICK=1` makes the d-pad drive the left stick's axes (`AXIS_X/Y`) from launch, no button
+needed. A diagonal is a stick pushed fully into it: 0.707 on each axis (length 1, as a real
+stick's), so games that clamp or normalise the stick's vector move at the same speed in every
+direction. A real left stick still works: its values reach the game while the d-pad is let go, the
+d-pad's direction wins while it is held.
+
+| value | what |
+|---|---|
+| `1` | every pad: the d-pad is the left stick and no longer reports as the d-pad (`AXIS_HAT_X/Y` stay 0, `UA_KEYMAP`'s d-pad directions and pointer mode's `dpad` see nothing) |
+| `auto` | the same, only for pads whose SDL mapping has no left stick (`SDL_GameControllerHasAxis`: PortMaster's mapping of a d-pad-only handheld binds no `leftx`/`lefty`); a pad with sticks is left alone, so one port setting serves handhelds with and without sticks. ua_host logs `pad <n> has no left stick: the d-pad drives it`. `UA_INPUT_SCRIPT`'s virtual pad counts as a pad with sticks |
+| `both` (`1,both`, `auto,both`) | the d-pad drives the left stick and still reports as the d-pad: for games whose menus navigate with the d-pad while play moves with the stick, when nothing in play is bound to the d-pad alone (every press would do both) |
+
+A game's d-pad still reaches menus that read the d-pad keys Android synthesises from unhandled
+joystick events (the fake UnityPlayer's `synthesize_dpad`, from the hat or else the left stick past
+half travel), with or without `both`.
+
+With `UA_DPAD_STICK` set, `UA_DPAD_SWAP=<button>` (below) turns it off and on instead of swapping:
+one press and the d-pad is the d-pad again (for the game's own d-pad bindings: switching weapons,
+quick items), the next and it drives the left stick again. Keys held at the switch are let go and
+the pads' axes are sent again. A port sets it in `port.toml`:
+
+```toml
+[runtime]
+UA_DPAD_STICK = "auto"
+UA_DPAD_SWAP = "select"     # optional: the button that gives the d-pad back
+```
+
+### Swapping the d-pad and the left stick: `UA_DPAD_SWAP`
 
 `UA_DPAD_SWAP=<button>` (e.g. `y`): each press swaps the d-pad and the left stick, and the next
 swaps them back. Whatever one of them did (`UA_KEYMAP` directions, pointer mode's cursor, the
 game's own axes) the other does then, so on a d-pad-only device the d-pad can play the game and
 move the cursor in menus (Slope: arrow keys in play, the cursor in its touch-only menus). Keys held
-at the swap are let go. The button itself no longer reaches the game.
+at the swap are let go and the pads' axes are sent again. The button itself no longer reaches the
+game.
+
+### The pad bindings survey
+
+`asmpatch --survey` reads a game's default pad bindings where they are in its code: InControl's
+`PlayerAction.AddDefaultBinding(InputControlType)` (and `AddDefaultBinding(new
+DeviceBindingSource(InputControlType))`), each call's action named by the field or property loaded
+before the constant (`GameActions.Left`) and the control by the game's own `InputControlType`
+enum (the numbers differ between InControl versions; InControl's examples compiled into a game are
+left out). It lists the actions bound to the left stick, to the d-pad, and those the left stick
+alone drives:
+
+```
+  pad bindings (InControl's default bindings, 47 in 33 actions):
+    left stick: GameActions.Left, GameActions.Right, GameActions.Up, GameActions.Down, GameActions.SelectLeft, ...
+    d-pad: GameActions.SelectLeft, ..., GameActions.GunUp, GameActions.DropGun, ...
+    the left stick alone (no d-pad binding): GameActions.Left, GameActions.Right, GameActions.Up, GameActions.Down
+  -> UA_DPAD_STICK=auto (... its own bindings GameActions.GunUp, GameActions.DropGun need a UA_DPAD_SWAP=<button> ...)
+```
+
+`pmunity port check` then suggests `UA_DPAD_STICK = "auto"` (or `"auto,both"` when every d-pad
+binding is also a left stick one) and names the d-pad's own bindings that want a `UA_DPAD_SWAP`
+button. Not read: Rewired's maps (they are in the game's data, not its code), the Input System's
+action assets, the legacy Input Manager's axes, and bindings a game makes at run time.
 
 ## Tests
 
 - `runtime/host/test/pointer_test.sh` (`ARCH=arm64` too): pointer.c against stand-ins for the
   runtime and a fake libGLESv2 window: what each scenario sends and takes (off, mouse, touch,
   keymap, swap, toggle; the start position sent again, once, after Unity's second frame, as a half-pixel
-  pair), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off.
+  pair), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off;
+  `UA_DPAD_STICK` (`dstick`: the d-pad as the stick, its diagonals of length 1, a real stick while
+  the d-pad is let go, the swap button giving the d-pad back and the axes sent again;
+  `dstickauto`: `auto,both` on a pad with sticks and one without).
 - `runtime/jni/build.sh`: libunity's view of a mouse MotionEvent (source, action, tool type,
   button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape.
 - `runtime/host/test/pointer_test.sh` also runs `test_osk` (osk.c against a stand-in field and the
@@ -284,7 +345,9 @@ at the swap are let go. The button itself no longer reaches the game.
   patch on a fake `Unity.InputSystem` (built with Cecil, no package code): the layouts it
   registers on every return, parsed and checked against the player's state format; already
   applied, an Android build of the package, missing methods.
-  The survey's pointer verdicts on fake games: a cursor of its own (Rewired's UI input module and
+  The survey's InControl pad bindings on a fake action set (a stick-only action, one bound through
+  a `DeviceBindingSource`, a d-pad-only one, InControl's example left out) and its `UA_DPAD_STICK`
+  suggestion. The survey's pointer verdicts on fake games: a cursor of its own (Rewired's UI input module and
   demos, an asset's examples, the game's own input module and a hit test at the mouse's position
   not counted), mouse look, and pointer-driven menus; `Mouse.current` dereferenced at once and
   through a local (no null check) against tested uses (a branch on it, `?.`, a local compared

@@ -29,7 +29,13 @@
 //                       pointer mode; mapped buttons no longer reach the game as pad buttons.
 //   UA_DPAD_SWAP=<button>   that button swaps the d-pad and the left stick (and back): what the one
 //                       did (keymap, cursor, the game's axes) the other does, so a d-pad-only device
-//                       can both play and move the cursor. The button is taken.
+//                       can both play and move the cursor. The button is taken. With UA_DPAD_STICK
+//                       it turns that mode off and on instead (the d-pad is the d-pad again).
+//   UA_DPAD_STICK=1|auto[,both]   for handhelds without sticks, from launch: the d-pad drives the
+//                       left stick's axes (a diagonal as a stick's: 0.707 on each axis), merged with a
+//                       real left stick (the d-pad's direction wins while it is held). 1: every pad;
+//                       auto: pads whose SDL mapping has no left stick (pointer_pad). The d-pad then
+//                       no longer reports as the d-pad; with both it reports as both (d-pad menus).
 // Pad button names: a b x y l1 r1 l2 r2 l3 r3 start select mode.
 //
 // The cursor is drawn on Unity's render thread right before eglSwapBuffers (frames.c's swap hook)
@@ -71,6 +77,10 @@ static struct {
 static struct { int pad_key; int dir; int key; int down; } keymap[MAX_MAP];   // dir: hat direction 1-4 (up, down, left, right) or 0
 static int nkeymap, kb_dev;
 static int swap_key, swapped;               // UA_DPAD_SWAP
+enum { DS_OFF, DS_ALWAYS, DS_AUTO };
+static int dstick, dstick_both, dstick_on = 1; // UA_DPAD_STICK; dstick_on: UA_DPAD_SWAP's toggle of it
+static unsigned char no_lstick[MAX_SLOTS];  // pads whose mapping has no left stick (UA_DPAD_STICK=auto)
+static int resend;                          // the pads' axes changed meaning: input.c sends them again
 
 // state (UI thread)
 static double px, py;                       // cursor, view pixels
@@ -212,11 +222,28 @@ int pointer_init(int width, int height, int *next_id)
         if (nkeymap) { kb_dev = (*next_id)++; add_device(kb_dev, "Virtual Keyboard", UP_SOURCE_KEYBOARD);
                        fprintf(stderr, "[input] keymap: %d pad controls press keys (keyboard device %d)\n", nkeymap, kb_dev); }
     }
+    const char *ds = getenv("UA_DPAD_STICK");
+    if (ds && *ds)
+    {
+        char b[64], *save;
+        snprintf(b, sizeof b, "%s", ds);
+        for (char *t = strtok_r(b, ", ", &save); t; t = strtok_r(NULL, ", ", &save))
+        {
+            if (!strcmp(t, "1") || !strcasecmp(t, "on")) dstick = DS_ALWAYS;
+            else if (!strcasecmp(t, "auto")) dstick = DS_AUTO;
+            else if (!strcasecmp(t, "both")) { dstick_both = 1; if (!dstick) dstick = DS_ALWAYS; }
+            else if (!strcmp(t, "0") || !strcasecmp(t, "off")) { dstick = DS_OFF; dstick_both = 0; break; }
+            else fprintf(stderr, "[input] UA_DPAD_STICK: %s: want 1, auto or both\n", t);
+        }
+        if (dstick)
+            fprintf(stderr, "[input] the d-pad drives the left stick (%s)%s\n", dstick == DS_AUTO ? "pads without one" : "every pad",
+                    dstick_both ? " and still reports as the d-pad" : "");
+    }
     const char *sw = getenv("UA_DPAD_SWAP");
     if (sw && *sw)
     {
         swap_key = pad_button(sw);
-        if (swap_key) fprintf(stderr, "[input] %s swaps the d-pad and the left stick\n", sw);
+        if (swap_key) fprintf(stderr, "[input] %s %s\n", sw, dstick ? "turns the d-pad's left stick off and on" : "swaps the d-pad and the left stick");
         else fprintf(stderr, "[input] UA_DPAD_SWAP: unknown button %s\n", sw);
     }
     const char *e = getenv("UA_POINTER");
@@ -314,20 +341,53 @@ static void set_on(int on)
     if (on) { sent_x = sent_y = -1; t_moved = now_s(); send_move(); }
 }
 
-// UA_DPAD_SWAP: the d-pad and the left stick trade places; what either held is let go
+// UA_DPAD_SWAP: the d-pad and the left stick trade places (with UA_DPAD_STICK: the d-pad drives the
+// left stick, or is the d-pad again); what either held is let go, and the pads' axes are sent again
 static void set_swapped(int on)
 {
-    swapped = on;
+    if (dstick) dstick_on = !on;
+    else swapped = on;
     for (int i = 0; i < nkeymap; i++)
         if (keymap[i].dir && keymap[i].down) { up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, UP_ACTION_UP, keymap[i].key, 0, 0); keymap[i].down = 0; }
     memset(stick, 0, sizeof stick);
     memset(hat, 0, sizeof hat);
-    fprintf(stderr, "[input] d-pad and left stick %s\n", on ? "swapped" : "back in place");
+    resend = 1;
+    if (dstick) fprintf(stderr, "[input] the d-pad %s\n", on ? "is the d-pad" : "drives the left stick again");
+    else fprintf(stderr, "[input] d-pad and left stick %s\n", on ? "swapped" : "back in place");
+}
+
+void pointer_pad(int slot, int has_left_stick)
+{
+    if (slot < 0 || slot >= MAX_SLOTS) return;
+    no_lstick[slot] = !has_left_stick;
+    if (dstick == DS_AUTO && !has_left_stick)
+        fprintf(stderr, "[input] pad %d has no left stick: the d-pad drives it (UA_DPAD_STICK=auto)\n", slot);
+}
+
+int pointer_axes_changed(void)
+{
+    int r = resend;
+    resend = 0;
+    return r;
+}
+
+// UA_DPAD_STICK: the d-pad's direction (v[4], v[5]: -1/0/1) becomes the left stick's (v[0], v[1]),
+// a diagonal at a full stick's 45 degrees; a real stick's values stand while the d-pad is let go
+static void dpad_stick(int slot, float *v)
+{
+    if (!dstick || !dstick_on || (dstick == DS_AUTO && !no_lstick[slot])) return;
+    int hx = (v[4] > 0.5f) - (v[4] < -0.5f), hy = (v[5] > 0.5f) - (v[5] < -0.5f);
+    if (hx || hy)
+    {
+        float s = hx && hy ? 0.70710678f : 1.f;
+        v[0] = hx * s; v[1] = hy * s;
+    }
+    if (!dstick_both) v[4] = v[5] = 0;
 }
 
 int pointer_key(int keycode, int down)
 {
-    if (swap_key && keycode == swap_key) { if (down) set_swapped(!swapped); return 1; }
+    if (swap_key && keycode == swap_key) { if (down) set_swapped(dstick ? dstick_on : !swapped); return 1; }
     for (int i = 0; i < nkeymap; i++)
         if (keymap[i].pad_key == keycode)
         {
@@ -371,6 +431,7 @@ void pointer_axes(int slot, float *v)
 {
     if (slot < 0 || slot >= MAX_SLOTS) return;
     if (swapped) { float t = v[0]; v[0] = v[4]; v[4] = t; t = v[1]; v[1] = v[5]; v[5] = t; }
+    dpad_stick(slot, v);
     keymap_hat(v);
     if (!P.events) return;
     stick[slot][0] = stick[slot][1] = hat[slot][0] = hat[slot][1] = scroll_y[slot] = 0;

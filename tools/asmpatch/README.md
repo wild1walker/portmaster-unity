@@ -141,7 +141,9 @@ Which input stacks the game's own assemblies use (not Unity's or the class libra
 (edition, compiled platform), InControl, the Input System package, the legacy `UnityEngine.Input`
 calls by kind (axes/buttons, keys, mouse, touch), `OnMouse*` messages, UI pointer handlers,
 whether code selects UI elements (pad/keyboard menu navigation), InControl's Android device
-profiles and the pad names they match (so a port can set `UA_PAD_NAME` to one), and text entry (`InputField`,
+profiles and the pad names they match (so a port can set `UA_PAD_NAME` to one), InControl's default
+pad bindings (the actions bound to the left stick, to the d-pad, and those only the left stick drives:
+then `-> UA_DPAD_STICK=auto` for handhelds without sticks, docs/input.md), and text entry (`InputField`,
 `TMP_InputField`, `TouchScreenKeyboard`: the soft keyboard, which ua_host's on-screen keyboard
 answers), pointer locks (`Cursor.lockState = Locked`) and UI hit tests of the game's own
 (`BaseRaycaster.Raycast`, `EventSystem.RaycastAll` outside an input module, in a method that does
