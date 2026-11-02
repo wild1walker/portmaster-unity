@@ -121,6 +121,16 @@ Mali's `mali-cmar-backe` at nice -10, both, `UA_THREAD_PRIORITY=1`, `UA_FAST_CLO
 `pmu` (no Python, 47 minutes, the Python's APK and OBB byte for byte): 49.4; with `resources.assets`'
 texture streams split into three `.resS` parts in the main OBB (portmaster-unity issue 7's fix): title,
 menus and King's Pass render, 52.7.
+Real play is heavier than the standing spot. A player's own session (2026-10-26, the 1 GB profile, a new
+game): King's Pass at 29 - 47 fps a second, mostly 30 - 35; the opening cinematic (a 1920x1080 VP8 video,
+decoded in software) stopped the game for ~20 s in all (1.6, 4.8 and 13.2 s frames); loads of 8 s (title)
+and 11 s (King's Pass); in fights frames of 0.1 - 0.9 s, several as the game's object pools instantiate an
+effect for the first time ("Slash Impact R", "Strike Nail R", "Run Effects"). 2026-11-01, the same
+profile with `UA_PROF=250` (both runs pay the profiler's ~15 % of a core): standing 49.2 fps; walking
+right, attacking and jumping 39.0 (UnityMain 19.9 ms on a CPU a frame against 17.7, waiting for a free
+core 2.7 ms against 0.9 with all four cores 80 - 84 % busy; FMOD's mixer 46 % of a core in both, the
+silent run included; the power allocator took the Mali down to 420 - 504 MHz, sometimes 240 - 336, at
+64 - 69 C, against 600 standing).
 
 
 ## Linux builds, one per Unity line (32-bit route)
