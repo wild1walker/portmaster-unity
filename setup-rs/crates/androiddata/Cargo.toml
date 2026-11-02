@@ -11,4 +11,6 @@ pkgzip = { path = "../pkgzip" }
 shaderx = { path = "../shaderx", features = ["tree"] }
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 crc32fast = "1"
+# (--il2cpp: the stamps libunity re-extracts IL2CPP's data by, from the metadata's sha256)
+sha2 = "0.10"
 libc = "0.2"

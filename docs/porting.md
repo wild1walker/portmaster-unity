@@ -311,8 +311,9 @@ continues where it stopped on the next launch. Free space: about three times the
 runs. Where the time goes on a handheld (textures and the card, mostly): [setup-speed.md](setup-speed.md). The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
 (the launcher checks for `/lib/ld-linux-armhf.so.3` first).
 
-The il2cpp-arm64 route's setup takes the same steps with step 3 replaced: `pmunity il2cpp
---on-device` compiles the game's code on the handheld (it also fetches the IL2CPP player), with
+The il2cpp-arm64 route's setup takes the same steps with step 3 replaced: `il2cpp --on-device`
+(on pmu, as the other steps; the Python's where the release ships it) compiles the game's code on
+the handheld (it also fetches the IL2CPP player), with
 the port's managed files, assembly patches (run on the game's original assemblies) and asmpatch,
 which gets the opt-in patches `streaming_assets` and `data_path` ask for (`--streaming-assets`,
 `--data-path`); step 5 packs with `--il2cpp` and the same `--streaming-assets` / `--data-path`

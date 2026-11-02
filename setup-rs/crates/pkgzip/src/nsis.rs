@@ -126,6 +126,11 @@ impl Source {
         Ok(r.body)
     }
 
+    /// The installer's path or URL.
+    pub fn src(&self) -> &str {
+        &self.src
+    }
+
     /// `n` bytes at `off` (fewer at the end of a local file; an empty file's block: none).
     pub fn read(&mut self, off: u64, n: u64) -> Result<Vec<u8>> {
         if n == 0 {
@@ -221,7 +226,7 @@ pub fn decompress(blk: &[u8], max: u64) -> Result<Vec<u8>> {
 }
 
 /// A file's block decompressed whole (at most MAX_FILE bytes).
-fn whole(blk: &[u8]) -> Result<Vec<u8>> {
+pub fn whole(blk: &[u8]) -> Result<Vec<u8>> {
     let out = decompress(blk, MAX_FILE + 1)?;
     if out.len() as u64 > MAX_FILE {
         return too_big("a block");
@@ -274,6 +279,13 @@ pub struct Nsis {
 }
 
 impl Nsis {
+    /// Where the files' blocks start (nsis.Nsis.data_base), whether the block words are 8 bytes
+    /// (Unity 6's chunked installers) and whether the data is one solid stream: what a caller
+    /// reading several blocks with one request (il2cpp.nsis_fetch) needs.
+    pub fn layout(&self) -> (u64, bool, bool) {
+        (self.data_base, self.chunked, self.solid)
+    }
+
     pub fn open(src: &str, log: Box<dyn FnMut(&str)>) -> Result<Nsis> {
         let mut s = Source::open(src, log)?;
         let mut head = s.read(0, 1 << 20)?;

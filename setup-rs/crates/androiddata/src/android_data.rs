@@ -146,6 +146,10 @@ pub struct Ctx {
     /// Hidden/VideoDecodeAndroid's path id in unity_builtin_extra (video.rs), and its conversion.
     pub video_shader_pid: Option<i64>,
     pub video_bt709: bool,
+    /// --il2cpp: the build's il2cpp.json, and Unity 2020.x's boot.config buildDate from its
+    /// metadata
+    pub il2cpp_info: Option<Json>,
+    pub il2cpp_build_date: Option<String>,
     pub db: Arc<ClassDb>,
     logf: Option<File>,
 }
@@ -502,7 +506,7 @@ fn scripting_runtime(src: &str, unity: &Version) -> Result<Option<String>, Stop>
 
 /// il2cpp.dotnet_level: 2 or 4 from the mscorlib the game ships, else from what Assembly-CSharp
 /// references; None where the Python raises Unsupported.
-fn dotnet_level(data: &str) -> Option<u8> {
+pub fn dotnet_level(data: &str) -> Option<u8> {
     use crate::clrmeta::{Assembly, ASSEMBLYREF};
     let gm = py::join(data, "Managed");
     if let Ok(a) = Assembly::open(py::join(&gm, "mscorlib.dll")) {
@@ -758,10 +762,37 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
         }
     }
     ctx.runtime = scripting_runtime(&src, &ctx.unity)?;
-    if ctx.args.il2cpp.is_some() {
-        return Err(Stop::NotPorted("--il2cpp".into()));
-    }
-    if ctx.args.mono64 {
+    if let Some(il) = ctx.args.il2cpp.clone() {
+        let ij = py::join(&il, "il2cpp.json");
+        if !is_file(&ij) {
+            return Err(uns(format!(
+                "--il2cpp {il}: no il2cpp.json (the output folder of `pmunity il2cpp`)"
+            )));
+        }
+        let b = fs::read(&ij).map_err(io_at(&ij))?;
+        let info = pyjson::loads_bytes(&b)
+            .map_err(|e| Stop::Fail(format!("json.decoder.JSONDecodeError: {e}")))?;
+        if let Some(why) = il2cpp_mismatch(&info, &ctx.unity, ctx.player_unity.as_ref())? {
+            return Err(uns(format!("--il2cpp {il}: {why}")));
+        }
+        let (why, warn) =
+            il2cpp_folder_patches(&info, &ctx.args.streaming_assets, ctx.args.data_path);
+        if let Some(why) = why {
+            return Err(uns(format!("--il2cpp {il}: {why}")));
+        }
+        ctx.warnings.extend(warn);
+        let field = |k: &str| {
+            info.get(k)
+                .map(Json::py_str)
+                .ok_or_else(|| Stop::Fail(format!("KeyError: '{k}'")))
+        };
+        ctx.runtime = Some(format!(
+            "IL2CPP ({}, metadata v{})",
+            field("abi")?,
+            field("metadata_version")?
+        ));
+        ctx.il2cpp_info = Some(info);
+    } else if ctx.args.mono64 {
         if !is_dir(&py::join(&pkg, "Variations/il2cpp/Managed")) {
             return Err(uns(format!(
                 "--mono64: {pkg} is no IL2CPP player package with its engine modules (Variations/il2cpp/Managed: `pmunity \
@@ -1032,7 +1063,174 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
             items.push(item(n.clone(), py::join(&gd, &n), "link"));
         }
     }
+    if ctx.args.il2cpp.is_some() {
+        items = il2cpp_items(ctx, items, &data)?;
+    }
     Ok(items)
+}
+
+// ------------------------------------------------------------------- --il2cpp
+
+/// il2cpp_items: the game's code is the libil2cpp.so `pmunity il2cpp` built: instead of
+/// Managed/*.dll and Mono's config the player gets what il2cpp wrote for it (Managed/Metadata,
+/// Resources, etc), and the stamp libunity copies it out again by (2020.x: boot.config's
+/// buildDate; 2021.x+: unity_app_guid), both from the metadata.
+fn il2cpp_items(ctx: &mut Ctx, items: Vec<Item>, data: &str) -> Result<Vec<Item>, Stop> {
+    let il = ctx.args.il2cpp.clone().unwrap();
+    let info = ctx.il2cpp_info.clone().unwrap();
+    let managed = format!("{data}/Managed/");
+    let mut items: Vec<Item> = items
+        .into_iter()
+        .filter(|it| !it.dst.starts_with(&managed))
+        .collect();
+    let strs = |k: &str| -> Result<Vec<String>, Stop> {
+        match info.get(k) {
+            Some(Json::List(l)) => Ok(l.iter().map(Json::py_str).collect()),
+            _ => Err(Stop::Fail(format!("KeyError: '{k}'"))),
+        }
+    };
+    for rel in strs("files")? {
+        items.push(item(
+            py::join(data, &paths::relpath(&rel, "Data")),
+            py::join(&il, &rel),
+            "link",
+        ));
+    }
+    ctx.managed_names = strs("assemblies")?.into_iter().collect();
+    let metadata = format!("{il}/Data/Managed/Metadata/global-metadata.dat");
+    if ctx.unity.major == 2020 {
+        let h = sha256_hex(&fs::read(&metadata).map_err(io_at(&metadata))?);
+        ctx.il2cpp_build_date = Some(build_date(&h));
+        for it in items.iter_mut() {
+            if py::basename(&it.dst) == "boot.config" {
+                it.act = "il2cppboot".into();
+            }
+        }
+    } else if ctx.unity.major >= 2021 {
+        items.push(item(
+            format!("{data}/unity_app_guid"),
+            metadata,
+            "il2cppguid",
+        ));
+    }
+    Ok(items)
+}
+
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
+}
+
+/// 6 * 10**17 + int(sha256 hex, 16) % 10**17
+fn build_date(hex: &str) -> String {
+    const M: u128 = 100_000_000_000_000_000;
+    let mut r: u128 = 0;
+    for c in hex.chars() {
+        r = (r * 16 + c.to_digit(16).unwrap_or(0) as u128) % M;
+    }
+    (6 * M + r).to_string()
+}
+
+/// il2cpp_app_guid: unity_app_guid for an IL2CPP build, a GUID (8-4-4-4-12) from its metadata.
+pub fn il2cpp_app_guid(metadata: &str) -> Result<String, Stop> {
+    let h = sha256_hex(&fs::read(metadata).map_err(io_at(metadata))?);
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    ))
+}
+
+/// il2cpp_mismatch: why a `pmunity il2cpp` output does not go with this data and player.
+fn il2cpp_mismatch(
+    info: &Json,
+    data_unity: &Version,
+    player: Option<&Version>,
+) -> Result<Option<String>, Stop> {
+    let unity = info
+        .get("unity")
+        .map(Json::py_str)
+        .ok_or_else(|| Stop::Fail("KeyError: 'unity'".into()))?;
+    let built_from = info
+        .get("data_unity")
+        .map(Json::py_str)
+        .unwrap_or_else(|| unity.clone());
+    if built_from != data_unity.to_string() {
+        return Ok(Some(format!(
+            "built from Unity {built_from} data, the data is {data_unity}"
+        )));
+    }
+    if let Some(p) = player {
+        if p.exact && p.to_string() != unity {
+            return Ok(Some(format!(
+                "built with Unity {unity}'s IL2CPP, the player package is {p}: use the IL2CPP player of {unity} (`pmunity \
+                 il2cpp` fetched it into <home>/<version>/player-<abi>)"
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// il2cpp_folder_patches: (error, [warnings]) for packing an IL2CPP build with
+/// --streaming-assets and --data-path (its compiled-in patches must read the folders put there).
+fn il2cpp_folder_patches(
+    info: &Json,
+    streaming_assets: &str,
+    data_path: bool,
+) -> (Option<String>, Vec<String>) {
+    let built = info
+        .get("streaming_assets")
+        .map(Json::py_str)
+        .unwrap_or_else(|| "obb".into());
+    let built_dp = info.get("data_path").is_some_and(Json::truthy);
+    let mut warn = Vec::new();
+    if built != streaming_assets {
+        if built == "obb" {
+            warn.push(format!(
+                "--streaming-assets {streaming_assets}: the IL2CPP build has no streaming-assets patch (its il2cpp.json: obb), \
+                 so the files are beside the APK but the game's code still reads the jar path (`pmunity il2cpp \
+                 --streaming-assets {streaming_assets} --asmpatch ...`)"
+            ));
+        } else {
+            let patch = ST::patch_of(&built).unwrap_or("");
+            let where_ = if built == "loose" {
+                "beside the APK only"
+            } else {
+                "beside the APK and in the archive"
+            };
+            return (
+                Some(format!(
+                    "built with --streaming-assets {built} (asmpatch's {patch} patch is compiled in: its reads look for \
+                     StreamingAssets {where_}), packed with --streaming-assets {streaming_assets}: use the same mode for both"
+                )),
+                Vec::new(),
+            );
+        }
+    }
+    if built_dp && !data_path {
+        return (
+            Some(format!(
+                "built with --data-path (asmpatch's data-path patch is compiled in): pack with --data-path too, which puts \
+                 {}/ beside the APK",
+                ST::FOLDER
+            )),
+            Vec::new(),
+        );
+    }
+    if data_path && !built_dp {
+        warn.push(format!(
+            "--data-path: the IL2CPP build has no data-path patch, so {}/ is beside the APK but the game's code still reads \
+             Application.dataPath (`pmunity il2cpp --data-path --asmpatch ...`)",
+            ST::FOLDER
+        ));
+    }
+    (None, warn)
 }
 
 // ------------------------------------------------------------------- the run
@@ -1055,6 +1253,9 @@ fn opts_key(ctx: &Ctx) -> Json {
     ];
     if !a.video_shader {
         k.push("no-video-shader".into());
+    }
+    if let Some(il) = &a.il2cpp {
+        k.push(format!("il2cpp={il}").into());
     }
     if a.mono64 {
         k.push("mono64".into());
@@ -1162,6 +1363,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     args.src = abspath(&args.src);
     args.pkg = Some(abspath(args.pkg.as_deref().unwrap()));
     args.out = abspath(&args.out);
+    if let Some(il) = &args.il2cpp {
+        args.il2cpp = Some(abspath(il));
+    }
     let real_out = realpath(&args.out);
     for ro in std::iter::once(args.src.clone()).chain(args.game_managed.clone()) {
         if real_out.starts_with(&realpath(&ro)) {
@@ -1211,6 +1415,8 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         compute_kernels: None,
         video_shader_pid: None,
         video_bt709: false,
+        il2cpp_info: None,
+        il2cpp_build_date: None,
         db,
         logf: None,
     };
@@ -1262,13 +1468,16 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         Some(c) => run_asmpatch(&mut ctx, &c)?,
         None => Vec::new(),
     };
-    if ctx.args.data_path && ctx.args.asmpatch.is_none() {
+    if ctx.args.data_path && ctx.args.asmpatch.is_none() && ctx.args.il2cpp.is_none() {
         ctx.log(
             "WARNING: --data-path without --asmpatch: Game_Data/ is beside the APK, but the game's code still reads \
              Application.dataPath (asmpatch data-path)",
         );
     }
-    if ctx.args.streaming_assets != "obb" && ctx.args.asmpatch.is_none() {
+    if ctx.args.streaming_assets != "obb"
+        && ctx.args.asmpatch.is_none()
+        && ctx.args.il2cpp.is_none()
+    {
         let m = format!(
             "WARNING: --streaming-assets {} without --asmpatch: the files are beside the APK, but the game's code still reads the \
              jar path (asmpatch {})",
@@ -1622,6 +1831,23 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                 })
                 .collect::<Result<_, _>>()?;
             let txt = mono_config_text(&read_text(src)?, &extra);
+            write_bytes(&dst, txt.as_bytes())?;
+            how = "written".into();
+        } else if act == "il2cppguid" {
+            write_bytes(&dst, il2cpp_app_guid(src)?.as_bytes())?;
+            how = "written".into();
+        } else if act == "il2cppboot" {
+            let b = fs::read(src).map_err(io_at(src))?;
+            let mut txt = String::from_utf8_lossy(&b)
+                .replace("\r\n", "\n")
+                .replace('\r', "\n");
+            if !txt.split('\n').any(|l| l.starts_with("buildDate=")) {
+                txt = format!(
+                    "{}\nbuildDate={}\n",
+                    txt.trim_end_matches('\n'),
+                    ctx.il2cpp_build_date.as_deref().unwrap_or("")
+                );
+            }
             write_bytes(&dst, txt.as_bytes())?;
             how = "written".into();
         } else {

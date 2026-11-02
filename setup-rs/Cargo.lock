@@ -25,6 +25,7 @@ dependencies = [
  "libc",
  "pkgzip",
  "regex",
+ "sha2 0.10.9",
  "shaderx",
  "unityfs",
 ]
@@ -273,6 +274,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "il2cpp"
+version = "0.1.0"
+dependencies = [
+ "androiddata",
+ "flate2",
+ "libc",
+ "lzma-rust2",
+ "pkgzip",
+ "regex",
+ "sha2 0.10.9",
+ "unityfs",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -432,6 +447,7 @@ dependencies = [
  "androiddata",
  "apk",
  "convert",
+ "il2cpp",
  "libc",
  "pkgzip",
  "unityfs",

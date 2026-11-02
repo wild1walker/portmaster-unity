@@ -189,6 +189,78 @@ fn tls_config() -> std::io::Result<Arc<rustls::ClientConfig>> {
     .map_err(io)
 }
 
+/// Whether the system has CA certificates where tls_config looks for them.
+pub fn have_ca() -> bool {
+    tls_config().is_ok()
+}
+
+/// A server's certificate taken as it is (the signatures of the handshake still checked).
+#[derive(Debug)]
+struct NoVerify(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for NoVerify {
+    fn verify_server_cert(
+        &self,
+        _end: &CertificateDer<'_>,
+        _inter: &[CertificateDer<'_>],
+        _name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// The configuration without a check of the server's certificate, once.
+fn insecure_config() -> std::io::Result<Arc<rustls::ClientConfig>> {
+    static CFG: std::sync::OnceLock<std::result::Result<Arc<rustls::ClientConfig>, String>> =
+        std::sync::OnceLock::new();
+    CFG.get_or_init(|| {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let cfg = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .map_err(|e| e.to_string())?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify(provider)))
+            .with_no_client_auth();
+        Ok(Arc::new(cfg))
+    })
+    .clone()
+    .map_err(io)
+}
+
 enum Stream {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
@@ -268,6 +340,9 @@ pub struct Client {
     conn: Option<(String, String, BufReader<Stream>)>,
     /// The biggest response body read; a longer one is an error.
     pub max_body: u64,
+    /// HTTPS without checking the server (ssl._create_unverified_context): for files checked
+    /// against a pinned sha256 on a system with no CA certificates at all (il2cpp's downloads).
+    pub insecure: bool,
 }
 
 impl Default for Client {
@@ -275,6 +350,7 @@ impl Default for Client {
         Client {
             conn: None,
             max_body: MAX_BODY,
+            insecure: false,
         }
     }
 }
@@ -407,7 +483,7 @@ impl Client {
         self.conn = None;
     }
 
-    fn connect(u: &Url) -> std::io::Result<BufReader<Stream>> {
+    fn connect(u: &Url, insecure: bool) -> std::io::Result<BufReader<Stream>> {
         let proxy = proxy_for(u);
         let s = match &proxy {
             Some(p) => tcp(&p.host, p.port)?,
@@ -434,8 +510,12 @@ impl Client {
             read_headers(&mut r)?;
         }
         let name = ServerName::try_from(u.host.clone()).map_err(|e| io(e.to_string()))?;
-        let c =
-            rustls::ClientConnection::new(tls_config()?, name).map_err(|e| io(e.to_string()))?;
+        let cfg = if insecure {
+            insecure_config()?
+        } else {
+            tls_config()?
+        };
+        let c = rustls::ClientConnection::new(cfg, name).map_err(|e| io(e.to_string()))?;
         Ok(BufReader::new(Stream::Tls(Box::new(
             rustls::StreamOwned::new(c, s),
         ))))
@@ -450,7 +530,11 @@ impl Client {
             .as_ref()
             .is_none_or(|(s, n, _)| (s, n) != (&key.0, &key.1))
         {
-            self.conn = Some((key.0.clone(), key.1.clone(), Self::connect(&u)?));
+            self.conn = Some((
+                key.0.clone(),
+                key.1.clone(),
+                Self::connect(&u, self.insecure)?,
+            ));
         }
         let proxied = u.scheme == "http" && proxy_for(&u).is_some();
         let r = self.request(&u, url, proxied, headers);

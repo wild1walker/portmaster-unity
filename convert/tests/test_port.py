@@ -494,8 +494,9 @@ class NewAndSetupTest(unittest.TestCase):
     def test_pmu_covers(self):
         """the setup ships pmu (no Python) for the default convert steps, the quality step, compute
         shaders, fused_post and shaders from Direct3D 11, Vulkan and Metal included, for plugins pmu
-        has built in (by file name) and JSON plugins, and for the apk route; not for the porter's own
-        Python plugins, android-data --il2cpp or the apk route's player.il2cpp"""
+        has built in (by file name) and JSON plugins, for the apk route and for the il2cpp-arm64 route
+        (il2cpp --on-device, android-data --il2cpp); not for the porter's own Python plugins or the
+        apk route's player.il2cpp"""
         base = {'convert': {'steps': list(P.DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
                 'player': {}, 'files': {'plugins': []}, 'android_data': {}}
         self.assertEqual(P.pmu_covers(base), (True, []))
@@ -512,18 +513,18 @@ class NewAndSetupTest(unittest.TestCase):
         self.assertTrue(P.wants('pmu', vk) and P.wants('pmspirvcross', vk))
         for over in ({'convert': {'shaders': {'from': ['metal']}}}, {'convert': {'shaders': {'from': ['glcore', 'metal']}}},
                      {'files': {'plugins': ['steps/tweaks.json', 'convert/animclips.py']}},
-                     {'port': {'route': 'apk'}, 'player': {'il2cpp': False}}):
+                     {'port': {'route': 'apk'}, 'player': {'il2cpp': False}},
+                     {'android_data': {'args': ['--il2cpp', 'x']}}):
             self.assertEqual(P.pmu_covers(P.merge(base, over)), (True, []), over)
         for over, why in (({'convert': {'shaders': {'from': ['glcore', 'gles']}}}, 'shaders from gles'),
                           ({'files': {'plugins': ['steps/mine.py', 'x.json']}}, "the port's converter plugins (mine.py)"),
-                          ({'android_data': {'args': ['--il2cpp', 'x']}}, 'android-data --il2cpp'),
                           ({'port': {'route': 'apk'}, 'player': {'il2cpp': True}}, 'player.il2cpp (il2cpp --on-device)')):
             ok, whys = P.pmu_covers(P.merge(base, over))
             self.assertFalse(ok)
             self.assertEqual(whys, [why])
             self.assertTrue(P.wants('pmunity', P.merge(base, over)))
         # the routes whose release can ship pmu instead of the Python
-        for route in ('android', 'mono-arm64', 'box64', 'apk'):
+        for route in ('android', 'mono-arm64', 'box64', 'apk', 'il2cpp-arm64'):
             r = json.load(open(os.path.join(os.path.dirname(P.__file__), 'port_template', route, 'route.json')))
             self.assertTrue({'pmu?', 'pmunity?', 'pybundle?'} <= set(r['package']), route)
 

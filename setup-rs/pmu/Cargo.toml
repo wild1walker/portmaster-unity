@@ -14,5 +14,6 @@ androiddata = { path = "../crates/androiddata" }
 apk = { path = "../crates/apk" }
 pkgzip = { path = "../crates/pkgzip" }
 convert = { path = "../crates/convert" }
+il2cpp = { path = "../crates/il2cpp" }
 unityfs = { path = "../crates/unityfs" }
 libc = "0.2"
