@@ -22,7 +22,8 @@ const BASE: u32 = 65536;
 /// The decompressed bytes of an LZ4 block (`size`: the expected length, as `uncompressed_size`).
 pub fn decompress(src: &[u8], size: usize) -> Result<Vec<u8>, String> {
     let bad = || "LZ4 block: corrupt input or insufficient space in the destination".to_string();
-    let mut out: Vec<u8> = Vec::with_capacity(size);
+    // (the size is the Shader's: room for no more than a block can make, 255 bytes a byte)
+    let mut out: Vec<u8> = Vec::with_capacity(size.min(src.len().saturating_mul(255)));
     let mut i = 0;
     loop {
         let token = *src.get(i).ok_or_else(bad)?;

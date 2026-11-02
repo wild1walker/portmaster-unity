@@ -338,7 +338,7 @@ pub fn parse_blob(
 ) -> Result<Vec<Option<Slot>>, BlobError> {
     let segs = data.segs();
     let mut out = Vec::new();
-    for (i, (off, length, seg)) in table(segs[0], nested)?.into_iter().enumerate() {
+    for (i, (off, length, seg)) in table(first(&segs)?, nested)?.into_iter().enumerate() {
         if length == 0 {
             out.push(None);
             continue;
@@ -376,12 +376,30 @@ pub fn parse_blob(
     Ok(out)
 }
 
-/// The segment of every entry of a segmented blob.
+/// The first segment, which holds the entry table (the Python's IndexError for none).
+fn first<S: AsRef<[u8]>>(segs: &[S]) -> Result<&[u8], BlobError> {
+    match segs.first() {
+        Some(s) => Ok(s.as_ref()),
+        None => err("shader blob: a platform without segments"),
+    }
+}
+
+/// The segment of every entry of a segmented blob. (An empty entry's segment is not read, but
+/// build_segments makes every segment up to the highest: no more than there are entries.)
 pub fn blob_segments(segs: &[Vec<u8>]) -> Result<Vec<i64>, BlobError> {
-    Ok(table(&segs[0], true)?
-        .into_iter()
-        .map(|(_, _, s)| s as i64)
-        .collect())
+    let t = table(first(segs)?, true)?;
+    let most = segs.len().max(t.len()) as i64;
+    let mut out = Vec::with_capacity(t.len());
+    for (i, (_, _, s)) in t.into_iter().enumerate() {
+        if !(0..=most).contains(&(s as i64)) {
+            return err(format!(
+                "shader blob: entry {i} in segment {s}, of {}",
+                segs.len()
+            ));
+        }
+        out.push(s as i64);
+    }
+    Ok(out)
 }
 
 /// Entries -> a decompressed platform blob of one block (entries 4-aligned, in order).
@@ -489,7 +507,7 @@ impl ShaderBlobs {
         let block = |o: i64, c: i64, d: i64| -> Result<Vec<u8>, BlobError> {
             let size = usize::try_from(d)
                 .map_err(|_| BlobError(format!("shader blob: decompressed length {d}")))?;
-            lz4::decompress(py::slice(raw, o, o + c), size).map_err(BlobError)
+            lz4::decompress(py::slice(raw, o, o.saturating_add(c)), size).map_err(BlobError)
         };
         for (i, &plat) in f.platforms.iter().enumerate() {
             let data = match (&f.offsets, &f.compressed_lengths, &f.decompressed_lengths) {
@@ -541,7 +559,7 @@ impl ShaderBlobs {
         match self.platforms.get(&platform) {
             Some(PlatformBlob::Segments(s)) if self.nested => blob_segments(s),
             Some(PlatformBlob::One(b)) => Ok(vec![0; table(b, false)?.len()]),
-            Some(PlatformBlob::Segments(s)) => Ok(vec![0; table(&s[0], false)?.len()]),
+            Some(PlatformBlob::Segments(s)) => Ok(vec![0; table(first(s)?, false)?.len()]),
             None => err(format!("shader blob: no platform {platform}")),
         }
     }
@@ -739,5 +757,48 @@ mod tests {
         let back = ShaderBlobs::read(&f).unwrap();
         assert_eq!(back.platforms[&9], PlatformBlob::One(one.clone()));
         assert_eq!(back.platforms[&15], PlatformBlob::One(one));
+    }
+
+    #[test]
+    fn damaged_blob_fields_are_errors() {
+        // (the fuzz target's findings: a Shader's lengths are the file's)
+        let fields = |o: Lengths, c: Lengths, d: Lengths| BlobFields {
+            platforms: vec![15],
+            offsets: o,
+            compressed_lengths: c,
+            decompressed_lengths: d,
+            compressed_blob: vec![0x10, b'a'],
+            stage_counts: None,
+        };
+        // an offset and a length whose sum overflows; a size of exabytes (no room made for it)
+        let f = fields(
+            Lengths::Flat(vec![i64::MAX]),
+            Lengths::Flat(vec![i64::MAX]),
+            Lengths::Flat(vec![1]),
+        );
+        assert!(ShaderBlobs::read(&f).is_err());
+        let f = fields(
+            Lengths::Flat(vec![0]),
+            Lengths::Flat(vec![2]),
+            Lengths::Flat(vec![1 << 60]),
+        );
+        assert!(ShaderBlobs::read(&f).is_err());
+        assert!(lz4::decompress(&[0x10, b'a'], usize::MAX / 2).is_err());
+        // a platform of no segments (2019.3+): its entries and segments are errors
+        let f = fields(
+            Lengths::Nested(vec![vec![]]),
+            Lengths::Nested(vec![vec![]]),
+            Lengths::Nested(vec![vec![]]),
+        );
+        let b = ShaderBlobs::read(&f).unwrap();
+        assert!(b.entries(15, &BTreeSet::new(), None).is_err());
+        assert!(b.segments(15).is_err());
+        // an empty entry in segment 2^31 - 1: build_segments would make that many
+        let mut seg0 = 1i32.to_le_bytes().to_vec();
+        for x in [0, 0, i32::MAX] {
+            seg0.extend(x.to_le_bytes());
+        }
+        let e = blob_segments(&[seg0]).unwrap_err().to_string();
+        assert!(e.contains("in segment 2147483647"), "{e}");
     }
 }

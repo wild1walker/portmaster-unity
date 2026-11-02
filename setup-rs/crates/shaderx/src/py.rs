@@ -100,7 +100,13 @@ pub fn repr(s: &str) -> String {
 /// `data[start:stop]` with Python's clamping and negative indices.
 pub fn slice(data: &[u8], start: i64, stop: i64) -> &[u8] {
     let n = data.len() as i64;
-    let fix = |i: i64| if i < 0 { (i + n).max(0) } else { i.min(n) };
+    let fix = |i: i64| {
+        if i < 0 {
+            i.saturating_add(n).max(0)
+        } else {
+            i.min(n)
+        }
+    };
     let (a, b) = (fix(start), fix(stop));
     if a >= b {
         &data[0..0]
