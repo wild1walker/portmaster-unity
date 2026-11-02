@@ -202,13 +202,28 @@ fn cuphead_steps_on_made_up_data() {
     };
     for rel in [
         "StreamingAssets/AssetBundles/tmpfont_ready",
-        "StreamingAssets/AssetBundles/tmpfont_scenes",
         "StreamingAssets/AssetBundles/atlas_other",
         "sharedassets0.assets",
     ] {
         assert!(same(rel), "{rel} changed");
     }
     assert!(!same("resources.assets"));
+    // the bundle of two serialized files (a scene bundle): both converted, each to the bytes
+    // the one-file bundle's serialized file of the same shader got
+    assert!(!same("StreamingAssets/AssetBundles/tmpfont_scenes"));
+    let node_bytes = |rel: &str| -> Vec<Vec<u8>> {
+        let b = unityfs::bundle::Bundle::open(data.join(rel)).unwrap();
+        (0..b.header.nodes.len())
+            .map(|i| {
+                b.node(i)
+                    .read_vec(0, b.header.nodes[i].size as usize)
+                    .unwrap()
+            })
+            .collect()
+    };
+    let main = node_bytes("StreamingAssets/AssetBundles/tmpfont_main");
+    let scenes = node_bytes("StreamingAssets/AssetBundles/tmpfont_scenes");
+    assert_eq!(scenes, [main[0].clone(), main[0].clone()]);
     // (the last file the shaders step saw was left as it is: as the Python, its work folder goes
     // and .pmunity-work stays, empty)
     assert!(!data.join(".pmunity-work/shaders").exists());

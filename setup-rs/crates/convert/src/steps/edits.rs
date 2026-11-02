@@ -11,7 +11,9 @@
 //! path's parts are field names, a decimal number indexes a list (0 / 1 a pair); the value's kind
 //! must be the field's (a bool, an integer, a number for a float, a string). Files that are not
 //! Unity files (UnityPy's check_file_type: streams, configs) are left out. An edited file is
-//! written again and journaled; the others are journaled as they are.
+//! written again and journaled; the others are journaled as they are. A bundle with several
+//! serialized files (a scene bundle) has the objects of each edited (pmu's own: the Python leaves
+//! such a bundle out); one the step cannot open is left out with a warning in its summary.
 use super::objects;
 use crate::error::{Error, Result};
 use crate::job::Job;
@@ -428,6 +430,8 @@ pub fn run(job: &mut Job, plugin: &str, step: &str, edits: &[Edit]) -> Result<()
         .filter(|rel| edits.iter().any(|e| fnmatch(rel, &e.file)))
         .collect();
     let mut total = 0;
+    // (bundles left out: the summary's warnings)
+    let mut left: Vec<(String, String)> = Vec::new();
     for rel in &files {
         if job.is_done(step, rel) {
             continue;
@@ -436,48 +440,57 @@ pub fn run(job: &mut Job, plugin: &str, step: &str, edits: &[Edit]) -> Result<()
             continue;
         }
         let mine: Vec<&Edit> = edits.iter().filter(|e| fnmatch(rel, &e.file)).collect();
-        let mut f = match job.open(&job.path_in(rel), Default::default()) {
+        let o = unityfs::Options {
+            all_serialized: true,
+            ..Default::default()
+        };
+        let mut f = match job.open(&job.path_in(rel), o) {
             Err(Error::Unity(unityfs::Error::Unsupported(m)))
                 if m.contains(": expected one serialized file in the bundle, found ") =>
             {
                 job.log(&format!(
-                    "{step}: {rel}: a bundle of several serialized files (scenes): left out"
+                    "{step}: {rel}: a bundle without a serialized file: left out"
                 ));
+                left.push((rel.clone(), m));
                 continue;
             }
             r => r?,
         };
         let mut n = 0;
-        for (pid, class) in objects(&f) {
-            let es: Vec<&&Edit> = mine.iter().filter(|e| e.class == class).collect();
-            if es.is_empty() {
-                continue;
-            }
-            let mut t = f.sf.read_typetree(pid)?;
-            let mut hit = false;
-            for e in es {
-                if let Some(glob) = &e.name {
-                    let nm = match t.get("m_Name") {
-                        Some(Value::Str(b)) => String::from_utf8_lossy(b).into_owned(),
-                        _ => continue,
-                    };
-                    if !fnmatch(&nm, glob) {
-                        continue;
-                    }
+        for k in 0..f.file_count() {
+            f.select(k)?;
+            let rel = &super::shaders::label(rel, &f);
+            for (pid, class) in objects(&f) {
+                let es: Vec<&&Edit> = mine.iter().filter(|e| e.class == class).collect();
+                if es.is_empty() {
+                    continue;
                 }
-                for (path, v) in &e.set {
-                    // (a float field's float32: a value past its range is the Python's OverflowError)
-                    set(&mut t, path, v).map_err(|why| {
+                let mut t = f.sf.read_typetree(pid)?;
+                let mut hit = false;
+                for e in es {
+                    if let Some(glob) = &e.name {
+                        let nm = match t.get("m_Name") {
+                            Some(Value::Str(b)) => String::from_utf8_lossy(b).into_owned(),
+                            _ => continue,
+                        };
+                        if !fnmatch(&nm, glob) {
+                            continue;
+                        }
+                    }
+                    for (path, v) in &e.set {
+                        // (a float field's float32: a value past its range is the Python's OverflowError)
+                        set(&mut t, path, v).map_err(|why| {
                         Error::Exit(format!(
                             "plugin {plugin}: step {step}: {rel}: {class} (path id {pid}): {path}: {why}"
                         ))
                     })?;
+                    }
+                    hit = true;
                 }
-                hit = true;
-            }
-            if hit {
-                f.sf.save_typetree(pid, &t)?;
-                n += 1;
+                if hit {
+                    f.sf.save_typetree(pid, &t)?;
+                    n += 1;
+                }
             }
         }
         if n > 0 {
@@ -492,6 +505,9 @@ pub fn run(job: &mut Job, plugin: &str, step: &str, edits: &[Edit]) -> Result<()
         "{step}: {} file(s), {total} object(s) edited",
         files.len()
     ));
+    for line in super::shaders::skipped_warnings(step, &left, &[]) {
+        job.log(&line);
+    }
     Ok(())
 }
 

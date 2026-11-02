@@ -3,10 +3,14 @@
 //!
 //! Files searched: the serialized files (globalgamemanagers, level<n>, *.assets),
 //! Resources/unity_builtin_extra, and the asset bundles under StreamingAssets whose names match
-//! `bundles` (a regular expression; a bundle is rewritten only when one of its shaders changes,
-//! one with several serialized files is left as it is). Each file is opened as the Python's
-//! Loaded opens it (a bundle of more than 64 MB unpacked into the step's work folder), its
-//! Shader trees read, given to shaderx, the changed ones saved and the file written in place.
+//! `bundles` (a regular expression; a bundle is rewritten only when one of its shaders changes).
+//! Each file is opened as the Python's Loaded opens it (a bundle of more than 64 MB unpacked into
+//! the step's work folder), its Shader trees read, given to shaderx, the changed ones saved and
+//! the file written in place. A bundle with several serialized files (a scene bundle: the scene
+//! and its .sharedAssets) has each one's shaders converted, the files that changed saved (pmu's
+//! own: the Python leaves such a bundle as it is). A bundle the step cannot read, and a file
+//! under StreamingAssets that looks like a Unity bundle of another kind, is left as it is with a
+//! warning at the end of the step's summary.
 //!
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
 //! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs), compute shaders
@@ -222,6 +226,95 @@ pub fn is_level(name: &str) -> bool {
     static RX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RX.get_or_init(|| regex::Regex::new(r"^level\d+\n?\z").unwrap())
         .is_match(name)
+}
+
+/// A file under StreamingAssets that looks like a Unity bundle the steps do not read: UnityPy's
+/// other archive signatures (UnityWeb, UnityRaw, UnityArchive), or a UnityFS header past the
+/// file's start (a bundle behind bytes of the game's own: an offset or encryption). None for a
+/// UnityFS bundle (read) and for anything else.
+pub fn odd_bundle(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(4096)
+        .read_to_end(&mut head)
+        .ok()?;
+    if head.starts_with(b"UnityFS\0") {
+        return None;
+    }
+    for (sig, what) in [
+        (
+            &b"UnityWeb\0"[..],
+            "a UnityWeb archive (Unity 5.x's web bundles)",
+        ),
+        (
+            b"UnityRaw\0",
+            "a UnityRaw archive (Unity 5.x's uncompressed bundles)",
+        ),
+        (b"UnityArchive\0", "a UnityArchive"),
+    ] {
+        if head.starts_with(sig) {
+            return Some(what);
+        }
+    }
+    head.windows(8)
+        .position(|w| w == b"UnityFS\0")
+        .map(|_| "a UnityFS bundle behind other bytes (the game's own offset or encryption)")
+}
+
+/// The files under StreamingAssets odd_bundle finds, with what they look like (sorted).
+pub fn odd_bundles(job: &Job) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for (rel, names) in job.walk("StreamingAssets") {
+        let dir = job.src.join(&rel);
+        for n in names {
+            if let Some(what) = odd_bundle(&dir.join(&n)) {
+                out.push((format!("{rel}/{n}"), what));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The summary's warnings for the files a step left as they are: (file, why); and the
+/// StreamingAssets files that look like bundles it does not read.
+pub fn skipped_warnings(
+    step: &str,
+    left: &[(String, String)],
+    odd: &[(String, &str)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if !left.is_empty() {
+        out.push(format!(
+            "{step}: WARNING: {} bundle(s) left as they are (not converted):",
+            left.len()
+        ));
+        for (rel, why) in left {
+            out.push(format!("{step}: WARNING:   {rel}: {why}"));
+        }
+    }
+    if !odd.is_empty() {
+        out.push(format!(
+            "{step}: WARNING: {} file(s) under StreamingAssets look like Unity bundles this converter does not read:",
+            odd.len()
+        ));
+        for (rel, what) in odd {
+            out.push(format!("{step}: WARNING:   {rel}: {what}"));
+        }
+    }
+    out
+}
+
+/// A name for a serialized file in the log: the file's own, or with the node's name when the
+/// file is a bundle of several.
+pub fn label(rel: &str, f: &unityfs::DataFile) -> String {
+    if f.file_count() > 1 {
+        format!("{rel} ({})", f.sf.name)
+    } else {
+        rel.to_string()
+    }
 }
 
 /// The files the step searches (step.shader_files), in its order.
@@ -494,6 +587,8 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     // after each file; made only when one is)
     let work = job.work_dir_lazy("shaders")?;
     let mut parent_left = false;
+    // (bundles left as they are: the summary's warnings)
+    let mut left: Vec<(String, String)> = Vec::new();
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
             continue;
@@ -501,12 +596,14 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
         let path = job.path_in(&rel);
         let o = unityfs::Options {
             spill_dir: Some(work.clone()),
+            all_serialized: true,
             ..Default::default()
         };
         let mut f = match job.open(&path, o) {
             Ok(f) => f,
             Err(Error::Unity(e)) if not_one(&path, &e) => {
                 job.log(&format!("shaders: {rel}: left as it is ({e})"));
+                left.push((rel.clone(), e.to_string()));
                 drop_spill(&work);
                 job.mark_unchanged("shaders", &rel)?;
                 // (the Python removes only its scratch folder here: .pmunity-work stays
@@ -521,133 +618,145 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
         };
         let mut n = 0usize;
         let mut each = || -> Result<()> {
-            let objs = objects(&f);
-            // the file's shaders a fused_post chain names: name -> tree (as the steps before left it)
+            // the file's shaders a fused_post chain names: name -> tree (as the steps before left
+            // it), and where it is (a bundle's serialized file, path id)
             let mut chain_trees: HashMap<String, Value> = HashMap::new();
-            let mut chain_pids: HashMap<String, i64> = HashMap::new();
-            for (pid, class) in &objs {
-                let pid = *pid;
-                if class != "Shader" {
-                    continue;
-                }
-                let mut t = f.sf.read_typetree(pid)?;
-                let platforms = ints(field(&t, "platforms")?, "platforms")?;
-                let src = s
-                    .sources
-                    .iter()
-                    .find(|x| platforms.contains(&source_platform(x)))
-                    .unwrap_or(&s.sources[0]);
-                let (r, mut changed) = match src.as_str() {
-                    "glcore" => {
-                        let shader = shader_of(&t)?;
-                        let out = convert::add_gles3(&shader, &opts, &mut tr)
-                            .map_err(|e| Error::Value(e.to_string()))?;
-                        let changed = out.edit.is_some();
-                        if let Some(edit) = &out.edit {
-                            apply(&mut t, edit)?;
+            let mut chain_pids: HashMap<String, (usize, i64)> = HashMap::new();
+            for k in 0..f.file_count() {
+                f.select(k)?;
+                let rel = &label(&rel, &f);
+                let objs = objects(&f);
+                for (pid, class) in &objs {
+                    let pid = *pid;
+                    if class != "Shader" {
+                        continue;
+                    }
+                    let mut t = f.sf.read_typetree(pid)?;
+                    let platforms = ints(field(&t, "platforms")?, "platforms")?;
+                    let src = s
+                        .sources
+                        .iter()
+                        .find(|x| platforms.contains(&source_platform(x)))
+                        .unwrap_or(&s.sources[0]);
+                    let (r, mut changed) = match src.as_str() {
+                        "glcore" => {
+                            let shader = shader_of(&t)?;
+                            let out = convert::add_gles3(&shader, &opts, &mut tr)
+                                .map_err(|e| Error::Value(e.to_string()))?;
+                            let changed = out.edit.is_some();
+                            if let Some(edit) = &out.edit {
+                                apply(&mut t, edit)?;
+                            }
+                            (out.report, changed)
                         }
-                        (out.report, changed)
-                    }
-                    "d3d11" => {
-                        if translator.is_none() {
-                            translator =
-                                Some(shaderx::dxbc::Translator::new(None).map_err(Error::Value)?);
+                        "d3d11" => {
+                            if translator.is_none() {
+                                translator = Some(
+                                    shaderx::dxbc::Translator::new(None).map_err(Error::Value)?,
+                                );
+                            }
+                            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                            let mut r = d3d11::add_gles3_d3d11(
+                                &mut t,
+                                translator.as_mut().unwrap(),
+                                &s.precision,
+                                s.replace,
+                                s.optimize,
+                                &unity,
+                            )?;
+                            r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                            let changed = r.status == convert::Status::Converted || r.changed;
+                            (r, changed)
                         }
-                        let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                        let mut r = d3d11::add_gles3_d3d11(
-                            &mut t,
-                            translator.as_mut().unwrap(),
-                            &s.precision,
-                            s.replace,
-                            s.optimize,
-                            &unity,
-                        )?;
-                        r.platforms = ints(field(&t, "platforms")?, "platforms")?;
-                        let changed = r.status == convert::Status::Converted || r.changed;
-                        (r, changed)
-                    }
-                    "vulkan" => {
-                        if vk_translator.is_none() {
-                            vk_translator =
-                                Some(shaderx::vulkan::Translator::new(None).map_err(Error::Value)?);
+                        "vulkan" => {
+                            if vk_translator.is_none() {
+                                vk_translator = Some(
+                                    shaderx::vulkan::Translator::new(None).map_err(Error::Value)?,
+                                );
+                            }
+                            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                            let mut r = vulkan::add_gles3_vulkan(
+                                &mut t,
+                                vk_translator.as_mut().unwrap(),
+                                &s.precision,
+                                s.replace,
+                                &unity,
+                            )?;
+                            r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                            let changed = r.status == convert::Status::Converted || r.changed;
+                            (r, changed)
                         }
-                        let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                        let mut r = vulkan::add_gles3_vulkan(
-                            &mut t,
-                            vk_translator.as_mut().unwrap(),
-                            &s.precision,
-                            s.replace,
-                            &unity,
-                        )?;
-                        r.platforms = ints(field(&t, "platforms")?, "platforms")?;
-                        let changed = r.status == convert::Status::Converted || r.changed;
-                        (r, changed)
-                    }
-                    _ => {
-                        let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                        let mut r =
-                            metal::add_gles3_metal(&mut t, &s.precision, s.replace, &unity)?;
-                        r.platforms = ints(field(&t, "platforms")?, "platforms")?;
-                        let changed = r.status == convert::Status::Converted || r.changed;
-                        (r, changed)
-                    }
-                };
-                if let Some(always) = s.grab_fetch {
-                    let names = match &s.grab_fetch_names {
-                        None => None,
-                        Some(Ok(rx)) => Some(rx),
-                        Some(Err(m)) => return Err(Error::Value(m.clone())),
+                        _ => {
+                            let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                            let mut r =
+                                metal::add_gles3_metal(&mut t, &s.precision, s.replace, &unity)?;
+                            r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                            let changed = r.status == convert::Status::Converted || r.changed;
+                            (r, changed)
+                        }
                     };
-                    let g = grabfetch::apply(&mut t, always, names)?;
-                    changed |= g.changed();
-                    if g.status != "unchanged" {
-                        job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
+                    if let Some(always) = s.grab_fetch {
+                        let names = match &s.grab_fetch_names {
+                            None => None,
+                            Some(Ok(rx)) => Some(rx),
+                            Some(Err(m)) => return Err(Error::Value(m.clone())),
+                        };
+                        let g = grabfetch::apply(&mut t, always, names)?;
+                        changed |= g.changed();
+                        if g.status != "unchanged" {
+                            job.log(&format!("shaders: {rel}: grab_fetch: {g}"));
+                        }
+                        gresults.push(g);
                     }
-                    gresults.push(g);
-                }
-                if changed {
-                    f.sf.save_typetree(pid, &t)?;
-                    n += 1;
-                }
-                if !fused_names.is_empty() {
-                    let name = String::from_utf8_lossy(&super::text(
-                        field(&t, "m_ParsedForm")?,
-                        "m_Name",
-                    )?)
-                    .into_owned();
-                    if fused_names.contains(&name) {
-                        chain_pids.insert(name.clone(), pid);
-                        chain_trees.insert(name, t.clone());
+                    if changed {
+                        f.sf.save_typetree(pid, &t)?;
+                        n += 1;
                     }
-                }
-                if r.status == convert::Status::Skipped || !r.failed.is_empty() {
-                    job.log(&format!("shaders: {rel}: {r}"));
-                }
-                if r.guessed_layout {
-                    job.log(&format!(
+                    if !fused_names.is_empty() {
+                        let name = String::from_utf8_lossy(&super::text(
+                            field(&t, "m_ParsedForm")?,
+                            "m_Name",
+                        )?)
+                        .into_owned();
+                        if fused_names.contains(&name) {
+                            chain_pids.insert(name.clone(), (k, pid));
+                            chain_trees.insert(name, t.clone());
+                        }
+                    }
+                    if r.status == convert::Status::Skipped || !r.failed.is_empty() {
+                        job.log(&format!("shaders: {rel}: {r}"));
+                    }
+                    if r.guessed_layout {
+                        job.log(&format!(
                         "shaders: {rel}: {}: program layout of an unverified Unity version (guessed, checked by round trip)",
                         r.name
                     ));
+                    }
+                    results.push(r);
                 }
-                results.push(r);
-            }
-            if s.compute {
-                let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
-                for (pid, class) in &objs {
-                    if class != "ComputeShader" {
-                        continue;
+                if s.compute {
+                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                    for (pid, class) in &objs {
+                        if class != "ComputeShader" {
+                            continue;
+                        }
+                        let mut t = f.sf.read_typetree(*pid)?;
+                        let r = compute::add_gles3(
+                            &mut t,
+                            &unity,
+                            &s.precision,
+                            s.replace,
+                            s.optimize,
+                        )?;
+                        if r.status == "converted" {
+                            f.sf.save_typetree(*pid, &t)?;
+                            n += 1;
+                        }
+                        if r.status == "skipped" || !r.failed.is_empty() {
+                            job.log(&format!("shaders: {rel}: compute shader {r}"));
+                        }
+                        cresults.push(r);
                     }
-                    let mut t = f.sf.read_typetree(*pid)?;
-                    let r =
-                        compute::add_gles3(&mut t, &unity, &s.precision, s.replace, s.optimize)?;
-                    if r.status == "converted" {
-                        f.sf.save_typetree(*pid, &t)?;
-                        n += 1;
-                    }
-                    if r.status == "skipped" || !r.failed.is_empty() {
-                        job.log(&format!("shaders: {rel}: compute shader {r}"));
-                    }
-                    cresults.push(r);
                 }
             }
             for chain in &chains {
@@ -656,11 +765,14 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                 if !chain_trees.contains_key(last) {
                     continue;
                 }
+                let (k, pid) = chain_pids[last];
+                f.select(k)?;
+                let rel = &label(&rel, &f);
                 let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
                 let fr = fusedpost::apply(&mut chain_trees, chain, &unity)?;
                 job.log(&format!("shaders: {rel}: fused_post: {fr}"));
                 if fr.changed() {
-                    f.sf.save_typetree(chain_pids[last], &chain_trees[last])?;
+                    f.sf.save_typetree(pid, &chain_trees[last])?;
                     n += 1;
                 }
                 presults.push(fr);
@@ -717,6 +829,14 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
         job.log(&fusedpost::summary(&chains, &presults));
     }
     if let Some(line) = shaderx::step::d3d11_summary(&results) {
+        job.log(&line);
+    }
+    let odd = if s.bundles.is_some() {
+        odd_bundles(job)
+    } else {
+        Vec::new()
+    };
+    for line in skipped_warnings("shaders", &left, &odd) {
         job.log(&line);
     }
     if let Some(mut t) = translator {

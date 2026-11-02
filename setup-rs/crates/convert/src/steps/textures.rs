@@ -10,6 +10,13 @@
 //! copied into the new stream, sprite atlases and sprites of scaled textures fixed
 //! (fix_references), then the file and its stream committed together and the sizes journaled
 //! (`scaled`). The codec is texcodec's (decoding, scaling, guided ASTC, the guide).
+//!
+//! A bundle with several serialized files (a scene bundle) has each one's textures converted in
+//! turn (each with its own new stream), then the sprites and atlases of all of them fixed, a
+//! PPtr into another of them followed through its external path; the scaled sizes are journaled
+//! under `<file>:<serialized file>` (pmu's own: the Python leaves such a bundle as it is). A
+//! bundle the step cannot read, and one whose serialized files share a stream it would replace,
+//! is left as it is with a warning at the end of the step's summary.
 use super::{field, field_mut, float, int, objects, opt, section, Args};
 use crate::error::{Error, Result};
 use crate::job::{drop_spill, text, Job};
@@ -496,7 +503,7 @@ impl StreamFile {
 }
 
 /// Totals for the log (stats).
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Stats {
     textures: u64,
     sprites: u64,
@@ -577,23 +584,29 @@ fn scale_own_sprite(sp: &mut Value, sx: f64, sy: f64) -> Result<()> {
     scale_render_data(field_mut(sp, "m_RD")?, sx, sy)
 }
 
-/// The texture a PPtr names in this file, when it is one of the scaled ones.
-fn scaled_ref<'a>(
-    r: &Value,
-    sizes: &'a BTreeMap<i64, [usize; 4]>,
-) -> Result<Option<&'a [usize; 4]>> {
-    if int(r, "m_FileID")? != 0 {
+/// The scaled textures (path id -> sizes) of the file a PPtr's m_FileID names, when it is one
+/// whose textures this step converted.
+type Scaled<'a> = dyn Fn(i64) -> Option<&'a BTreeMap<i64, [usize; 4]>> + 'a;
+
+/// The texture a PPtr names, when it is one of the scaled ones.
+fn scaled_ref(r: &Value, sizes: &Scaled) -> Result<Option<[usize; 4]>> {
+    let Some(m) = sizes(int(r, "m_FileID")? as i64) else {
         return Ok(None);
-    }
-    Ok(sizes.get(&(int(r, "m_PathID")? as i64)))
+    };
+    Ok(m.get(&(int(r, "m_PathID")? as i64)).copied())
+}
+
+/// The scaled textures of this file (m_FileID 0) alone.
+fn own<'a>(
+    sizes: &'a BTreeMap<i64, [usize; 4]>,
+) -> impl Fn(i64) -> Option<&'a BTreeMap<i64, [usize; 4]>> + 'a {
+    move |fid| (fid == 0).then_some(sizes)
 }
 
 /// Sprite atlases and sprites of one file that use its scaled textures (fix_references), saved.
-fn fix_references(
-    f: &mut unityfs::DataFile,
-    sizes: &BTreeMap<i64, [usize; 4]>,
-    stats: &mut Stats,
-) -> Result<()> {
+/// Whether one changed.
+fn fix_references(f: &mut unityfs::DataFile, sizes: &Scaled, stats: &mut Stats) -> Result<bool> {
+    let mut changed = false;
     for (pid, class) in objects(f) {
         if class == "SpriteAtlas" {
             let mut t = f.sf.read_typetree(pid)?;
@@ -621,21 +634,38 @@ fn fix_references(
             if n > 0 {
                 f.sf.save_typetree(pid, &t)?;
                 stats.atlas_entries += n;
+                changed = true;
             }
         }
     }
     for (pid, class) in objects(f) {
         if class == "Sprite" {
             let mut t = f.sf.read_typetree(pid)?;
-            let s = scaled_ref(field(field(&t, "m_RD")?, "texture")?, sizes)?.copied();
+            let s = scaled_ref(field(field(&t, "m_RD")?, "texture")?, sizes)?;
             if let Some(s) = s {
                 scale_own_sprite(&mut t, s[2] as f64 / s[0] as f64, s[3] as f64 / s[1] as f64)?;
                 f.sf.save_typetree(pid, &t)?;
                 stats.sprites += 1;
+                changed = true;
             }
         }
     }
-    Ok(())
+    Ok(changed)
+}
+
+/// The stream files (their names) a bundle's serialized file reads for its textures and the
+/// objects that stream along with them.
+fn streams_read(f: &unityfs::DataFile) -> Result<std::collections::HashSet<String>> {
+    let mut out = std::collections::HashSet::new();
+    for (pid, class) in objects(f) {
+        if class != "Texture2D" && !OTHER_STREAMED.contains(&class.as_str()) {
+            continue;
+        }
+        if let Some((_, _, path)) = stream_data(&f.sf.current_typetree(pid)?) {
+            out.insert(path.rsplit('/').next().unwrap_or(&path).to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// Reads a stream's bytes: a bundle's node, else the stream file beside the converted file (or
@@ -1069,6 +1099,7 @@ fn convert_file(
     streams: &mut Streams,
     stats: &mut Stats,
     stream_path: PathBuf,
+    fix_refs: bool,
 ) -> Result<FileResult> {
     let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
     let (vmaj, vmin) = {
@@ -1344,7 +1375,9 @@ fn convert_file(
         }
     }
     stats.textures += turns.converted;
-    fix_references(f, &turns.sizes, stats)?;
+    if fix_refs {
+        fix_references(f, &own(&turns.sizes), stats)?;
+    }
     let path = match &stream_name {
         Some(_) => Some(stream.close()?),
         None => None,
@@ -1429,10 +1462,15 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
         let s = opt(&c, k).to_str();
         regex::Regex::new(&s).map_err(|e| Error::Value(format!("textures.{k} {s:?}: {e}")))
     };
-    let mut files = texture_files(job, &rx("files")?);
-    if let Some(only) = &args.only {
-        let r =
-            regex::Regex::new(only).map_err(|e| Error::Value(format!("--only {only:?}: {e}")))?;
+    let files_rx = rx("files")?;
+    let mut files = texture_files(job, &files_rx);
+    let only = match &args.only {
+        Some(only) => Some(
+            regex::Regex::new(only).map_err(|e| Error::Value(format!("--only {only:?}: {e}")))?,
+        ),
+        None => None,
+    };
+    if let Some(r) = &only {
         files.retain(|f| r.is_match(f));
     }
     let spill_mb = opt(&c, "spill_mb").as_int().unwrap_or(0).max(0) as u64;
@@ -1446,6 +1484,8 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     let mut pool = pool(enc.as_ref(), threads);
     // (one scratch folder for the step, made when a file needs it, emptied after each file)
     let work = job.work_dir_lazy("textures")?;
+    // (bundles left as they are: the summary's warnings)
+    let mut skipped: Vec<(String, String)> = Vec::new();
     for (i, rel) in files.iter().enumerate() {
         if job.is_done("textures", rel) {
             continue;
@@ -1479,14 +1519,51 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             resource_dir: Some(res_dir.clone()),
             spill_dir: Some(work.join("nodes")),
             spill_mb,
+            all_serialized: true,
             ..Default::default()
         };
         let mut done = false;
         match job.open(&src, opts) {
             Err(Error::Unity(e)) if super::shaders::not_one(&src, &e) => {
                 job.log(&format!("textures: {rel}: left as it is ({e})"));
+                skipped.push((rel.clone(), e.to_string()));
             }
             Err(e) => return Err(left(&work, e, false)),
+            Ok(mut f) if f.file_count() > 1 => {
+                let r = convert_bundle_files(
+                    &mut f,
+                    rel,
+                    &c,
+                    enc.as_mut(),
+                    &mut pool,
+                    &mut stats,
+                    &work,
+                    &res_dir,
+                    job,
+                )?;
+                match r {
+                    Err(why) => {
+                        job.log(&format!("textures: {rel}: left as it is ({why})"));
+                        skipped.push((rel.clone(), why));
+                    }
+                    Ok(None) => {}
+                    Ok(Some(written)) => {
+                        let names = f.file_names();
+                        job.write_with(rel, |tmp| Ok(f.write_to(tmp, inline_streams)?))
+                            .map_err(|e| left(&work, e, false))?;
+                        drop(f);
+                        for (k, (sizes, order)) in written.into_iter().enumerate() {
+                            if !sizes.is_empty() {
+                                let map = scaled_json(&sizes, &order);
+                                if let Some(sc) = job.state.setdefault("scaled", Json::dict()) {
+                                    sc.set(&format!("{rel}:{}", names[k]), map);
+                                }
+                            }
+                        }
+                        done = true;
+                    }
+                }
+            }
             Ok(mut f) => {
                 let mut streams = Streams {
                     job,
@@ -1506,6 +1583,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     &mut streams,
                     &mut stats,
                     work.join("stream.new"),
+                    true,
                 )
                 .map_err(|e| left(&work, e, true))?;
                 drop(streams);
@@ -1542,20 +1620,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                             .map_err(|e| left(&work, e, false))?;
                     }
                     if !sizes.is_empty() {
-                        let map = Json::Dict(
-                            order
-                                .iter()
-                                .map(|pid| {
-                                    let s = sizes[pid];
-                                    (
-                                        pid.to_string(),
-                                        Json::List(
-                                            s.iter().map(|&x| Json::Int(x as i128)).collect(),
-                                        ),
-                                    )
-                                })
-                                .collect(),
-                        );
+                        let map = scaled_json(&sizes, &order);
                         if let Some(sc) = job.state.setdefault("scaled", Json::dict()) {
                             sc.set(rel, map);
                         }
@@ -1596,7 +1661,149 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     for line in enc.summary() {
         job.log(&line);
     }
+    let mut odd = super::shaders::odd_bundles(job);
+    odd.retain(|(r, _)| files_rx.is_match(r) && only.as_ref().is_none_or(|o| o.is_match(r)));
+    for line in super::shaders::skipped_warnings("textures", &skipped, &odd) {
+        job.log(&line);
+    }
     Ok(())
+}
+
+/// The journal's `scaled` entry of a file: path id -> [old w, old h, new w, new h], in the
+/// textures' order.
+fn scaled_json(sizes: &BTreeMap<i64, [usize; 4]>, order: &[i64]) -> Json {
+    Json::Dict(
+        order
+            .iter()
+            .map(|pid| {
+                let s = sizes[pid];
+                (
+                    pid.to_string(),
+                    Json::List(s.iter().map(|&x| Json::Int(x as i128)).collect()),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Each scaled-sizes map of a bundle's serialized files, with the textures' order.
+type Written = Vec<(BTreeMap<i64, [usize; 4]>, Vec<i64>)>;
+
+/// A bundle with several serialized files (a scene bundle): each one's textures converted in
+/// turn, each into a new stream of its own, then the sprites and atlases of every one fixed (a
+/// PPtr into another of them followed), the new streams set as the bundle's nodes. Ok(None): no
+/// texture converted, nothing changed; Err(why) inside: left as it is (serialized files sharing a
+/// stream one of them would replace).
+#[allow(clippy::too_many_arguments)]
+fn convert_bundle_files(
+    f: &mut unityfs::DataFile,
+    rel: &str,
+    c: &Json,
+    enc: &mut dyn Codec,
+    pool: &mut Option<Pool>,
+    stats: &mut Stats,
+    work: &Path,
+    res_dir: &Path,
+    job: &Job,
+) -> Result<std::result::Result<Option<Written>, String>> {
+    let n = f.file_count();
+    // (the totals as they were, should the bundle be left as it is)
+    let before = *stats;
+    let mut results = Vec::with_capacity(n);
+    for k in 0..n {
+        f.select(k)?;
+        let label = super::shaders::label(rel, f);
+        let mut streams = Streams {
+            job,
+            rel,
+            res_dir: res_dir.to_path_buf(),
+            handles: BTreeMap::new(),
+            ahead: Default::default(),
+            ahead_bytes: 0,
+            reader: None,
+        };
+        let r = convert_file(
+            f,
+            &label,
+            c,
+            enc,
+            pool,
+            &mut streams,
+            stats,
+            work.join(format!("stream{k}.new")),
+            false,
+        )
+        .map_err(|e| left(work, e, false))?;
+        results.push(r);
+    }
+    let sizes: Vec<BTreeMap<i64, [usize; 4]>> = results
+        .iter()
+        .map(|r| r.as_ref().map(|x| x.2.clone()).unwrap_or_default())
+        .collect();
+    let mut changed = results.iter().any(Option::is_some);
+    if sizes.iter().any(|m| !m.is_empty()) {
+        for k in 0..n {
+            f.select(k)?;
+            // (each of its PPtrs' files: itself, another serialized file of the bundle, or none)
+            let files: Vec<Option<usize>> = (0..=f.sf.externals.len() as i64)
+                .map(|fid| f.file_of(fid))
+                .collect();
+            let by = |fid: i64| -> Option<&BTreeMap<i64, [usize; 4]>> {
+                let j = (*files.get(usize::try_from(fid).ok()?)?)?;
+                Some(&sizes[j])
+            };
+            changed |= fix_references(f, &by, stats).map_err(|e| left(work, e, false))?;
+        }
+    }
+    if !changed {
+        return Ok(Ok(None));
+    }
+    // the new streams, each replacing the node its file's textures streamed from: no other file
+    // may read that node
+    let names = f.file_names();
+    let mut replaced: BTreeMap<String, usize> = BTreeMap::new();
+    for (k, r) in results.iter().enumerate() {
+        if let Some((Some(name), Some(_), _, _)) = r {
+            let node = name.rsplit('/').next().unwrap_or(name).to_string();
+            if let Some(j) = replaced.insert(node.clone(), k) {
+                *stats = before;
+                return Ok(Err(format!(
+                    "{} and {} both stream textures from {node}",
+                    names[j], names[k]
+                )));
+            }
+        }
+    }
+    if !replaced.is_empty() {
+        for k in 0..n {
+            f.select(k)?;
+            for node in streams_read(f)? {
+                if let Some(&j) = replaced.get(&node) {
+                    if j != k {
+                        *stats = before;
+                        return Ok(Err(format!(
+                            "{} streams from {node}, which the textures of {} replace",
+                            names[k], names[j]
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    let mut written = Vec::with_capacity(n);
+    for r in results {
+        match r {
+            Some((name, path, sizes, order)) => {
+                if let (Some(name), Some(p)) = (name, path) {
+                    let node = name.rsplit('/').next().unwrap_or(&name).to_string();
+                    f.set_bundle_res(&node, NodeData::File(p))?;
+                }
+                written.push((sizes, order));
+            }
+            None => written.push((BTreeMap::new(), Vec::new())),
+        }
+    }
+    Ok(Ok(Some(written)))
 }
 
 #[cfg(test)]
