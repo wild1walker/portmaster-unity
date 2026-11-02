@@ -2375,9 +2375,10 @@ PMU_SHADER_SOURCES = ('glcore', 'd3d11', 'vulkan')
 def pmu_covers(cfg):
     """Whether the setup's commands all run on pmu (setup-rs: one static aarch64 program instead of
     the setup's Python) with this port's options: (True, []), or (False, [what pmu does not do yet]):
-    shaders from Metal, converter plugins pmu has not built in (PMU_PLUGINS), android-data
-    --il2cpp. (The quality step, compute shaders, fused_post and shaders from Direct3D 11 and
-    Vulkan with the release's pmhlslcc and pmspirvcross run on pmu, docs/rust-setup.md.)"""
+    shaders from Metal, converter plugins pmu has not built in (PMU_PLUGINS). (The quality step,
+    compute shaders, fused_post and shaders from Direct3D 11 and Vulkan with the release's pmhlslcc
+    and pmspirvcross run on pmu, and the il2cpp-arm64 route's `il2cpp --on-device` and
+    `android-data --il2cpp`, docs/rust-setup.md.)"""
     why = []
     conv = cfg.get('convert') or {}
     sh = conv.get('shaders') or {}
@@ -2390,8 +2391,6 @@ def pmu_covers(cfg):
            if os.path.splitext(os.path.basename(p))[0] not in PMU_PLUGINS]
     if own:
         why.append("the port's converter plugins (" + ', '.join(os.path.basename(p) for p in own) + ')')
-    if '--il2cpp' in ((cfg.get('android_data') or {}).get('args') or ()):
-        why.append('android-data --il2cpp')
     return not why, why
 
 

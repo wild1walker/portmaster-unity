@@ -494,8 +494,8 @@ class NewAndSetupTest(unittest.TestCase):
     def test_pmu_covers(self):
         """the setup ships pmu (no Python) for the default convert steps, the quality step, compute
         shaders, fused_post and shaders from Direct3D 11 and Vulkan included, and for plugins pmu has
-        built in (by file name); not for shaders from Metal, the porter's own plugins or android-data
-        --il2cpp"""
+        built in (by file name), and for the il2cpp-arm64 route (il2cpp --on-device, android-data
+        --il2cpp); not for shaders from Metal or the porter's own plugins"""
         base = {'convert': {'steps': list(P.DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
                 'player': {}, 'files': {'plugins': []}, 'android_data': {}}
         self.assertEqual(P.pmu_covers(base), (True, []))
@@ -512,14 +512,14 @@ class NewAndSetupTest(unittest.TestCase):
         self.assertTrue(P.wants('pmu', vk) and P.wants('pmspirvcross', vk))
         for over, why in (({'convert': {'shaders': {'from': ['metal']}}}, 'shaders from metal'),
                           ({'convert': {'shaders': {'from': ['glcore', 'metal']}}}, 'shaders from metal'),
-                          ({'files': {'plugins': ['steps/mine.py']}}, "the port's converter plugins (mine.py)"),
-                          ({'android_data': {'args': ['--il2cpp', 'x']}}, 'android-data --il2cpp')):
+                          ({'files': {'plugins': ['steps/mine.py']}}, "the port's converter plugins (mine.py)")):
             ok, whys = P.pmu_covers(P.merge(base, over))
             self.assertFalse(ok)
             self.assertEqual(whys, [why])
             self.assertTrue(P.wants('pmunity', P.merge(base, over)))
         # the routes whose release can ship pmu instead of the Python
-        for route in ('android', 'mono-arm64', 'box64'):
+        self.assertEqual(P.pmu_covers(P.merge(base, {'android_data': {'args': ['--il2cpp', 'x']}})), (True, []))
+        for route in ('android', 'mono-arm64', 'box64', 'il2cpp-arm64'):
             r = json.load(open(os.path.join(os.path.dirname(P.__file__), 'port_template', route, 'route.json')))
             self.assertTrue({'pmu?', 'pmunity?', 'pybundle?'} <= set(r['package']), route)
 
