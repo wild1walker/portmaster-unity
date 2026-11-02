@@ -25,8 +25,10 @@ pub mod glsl;
 pub mod grabfetch;
 pub mod lz4;
 pub mod py;
+pub mod spirv;
 pub mod step;
 #[cfg(feature = "tree")]
 pub mod tree;
+pub mod vulkan;
 
 pub use convert::{add_gles3, Edit, Options, Outcome, Report, Shader, Status, Translations};

@@ -11,12 +11,14 @@
 //! Ported: the OpenGL Core source (`from: glcore`), `precision`, `replace`, `optimize`,
 //! `glcore4x`, `bundles`, `grab_fetch` and `grab_fetch_names` (grabfetch.rs), compute shaders
 //! (`compute`, on by default: compute.rs), `fused_post` (fusedpost.rs), Direct3D 11 programs
-//! (`from: d3d11`, Windows builds: d3d11.rs with shaderx's dxbc and the setup's pmhlslcc). Vulkan
-//! and Metal sources stop the step as not ported (the setup runs the Python for those).
+//! (`from: d3d11`, Windows builds: d3d11.rs with shaderx's dxbc and the setup's pmhlslcc), Vulkan
+//! programs (`from: vulkan`: vulkan.rs with shaderx's vulkan and the setup's pmspirvcross). Metal
+//! programs stop the step as not ported (the setup runs the Python for those).
 use super::compute;
 use super::d3d11;
 use super::fusedpost;
 use super::grabfetch;
+use super::vulkan;
 use super::{field, field_mut, objects, Args};
 use crate::error::{Error, Result};
 use crate::job::Job;
@@ -472,6 +474,7 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     let mut gresults: Vec<grabfetch::GfResult> = Vec::new();
     let mut cresults: Vec<compute::ComputeResult> = Vec::new();
     let mut translator: Option<shaderx::dxbc::Translator> = None;
+    let mut vk_translator: Option<shaderx::vulkan::Translator> = None;
     let mut changed_files = 0usize;
     for rel in shader_files(job, s.bundles.as_ref()) {
         if job.is_done("shaders", &rel) {
@@ -533,6 +536,23 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                         &s.precision,
                         s.replace,
                         s.optimize,
+                        &unity,
+                    )?;
+                    r.platforms = ints(field(&t, "platforms")?, "platforms")?;
+                    let changed = r.status == convert::Status::Converted || r.changed;
+                    (r, changed)
+                }
+                "vulkan" => {
+                    if vk_translator.is_none() {
+                        vk_translator =
+                            Some(shaderx::vulkan::Translator::new(None).map_err(Error::Value)?);
+                    }
+                    let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
+                    let mut r = vulkan::add_gles3_vulkan(
+                        &mut t,
+                        vk_translator.as_mut().unwrap(),
+                        &s.precision,
+                        s.replace,
                         &unity,
                     )?;
                     r.platforms = ints(field(&t, "platforms")?, "platforms")?;
@@ -629,6 +649,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     if !cresults.is_empty() {
         job.log(&compute::summary(&cresults));
     }
+    if let Some(line) = vulkan::summary(&results) {
+        job.log(&line);
+    }
     if let Some(always) = s.grab_fetch {
         job.log(&grabfetch::summary(&gresults, always));
     }
@@ -639,6 +662,9 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
         job.log(&line);
     }
     if let Some(mut t) = translator {
+        t.close();
+    }
+    if let Some(mut t) = vk_translator {
         t.close();
     }
     Ok(())

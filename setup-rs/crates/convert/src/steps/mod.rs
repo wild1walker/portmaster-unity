@@ -11,6 +11,7 @@ pub mod quality;
 pub mod settings;
 pub mod shaders;
 pub mod textures;
+pub mod vulkan;
 
 use crate::error::{Error, Result};
 use crate::job::Job;

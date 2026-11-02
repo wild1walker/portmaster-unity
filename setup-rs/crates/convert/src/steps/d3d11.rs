@@ -16,7 +16,7 @@ use shaderx::tree;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use unityfs::Value;
 
-const VR_KEYWORDS: [&str; 6] = [
+pub(super) const VR_KEYWORDS: [&str; 6] = [
     "STEREO_INSTANCING_ON",
     "STEREO_MULTIVIEW_ON",
     "UNITY_SINGLE_PASS_STEREO",
@@ -24,12 +24,12 @@ const VR_KEYWORDS: [&str; 6] = [
     "STEREO_INSTANCING_ENABLED",
     "STEREO_DOUBLEWIDE_TARGET",
 ];
-const INSTANCING_KEYWORDS: [&str; 3] = [
+pub(super) const INSTANCING_KEYWORDS: [&str; 3] = [
     "INSTANCING_ON",
     "PROCEDURAL_INSTANCING_ON",
     "DOTS_INSTANCING_ON",
 ];
-const SKINNING_KEYWORDS: [&str; 1] = ["SKINNED_SPRITE"];
+pub(super) const SKINNING_KEYWORDS: [&str; 1] = ["SKINNED_SPRITE"];
 const D3D_ONLY_LISTS: [&str; 8] = [
     "m_VectorParams",
     "m_MatrixParams",
@@ -53,11 +53,11 @@ const GLES_TYPES: [i64; 4] = [
     blob::GPU_GLES,
 ];
 
-fn bad(m: impl Into<String>) -> Error {
+pub(super) fn bad(m: impl Into<String>) -> Error {
     Error::Value(m.into())
 }
 
-fn ints(v: Option<&Value>) -> Vec<i64> {
+pub(super) fn ints(v: Option<&Value>) -> Vec<i64> {
     match v {
         Some(Value::Bytes(b)) => b.iter().map(|&x| x as i64).collect(),
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_i64).collect(),
@@ -65,26 +65,26 @@ fn ints(v: Option<&Value>) -> Vec<i64> {
     }
 }
 
-fn int(v: &Value, k: &str) -> Result<i64> {
+pub(super) fn int(v: &Value, k: &str) -> Result<i64> {
     v.get(k)
         .and_then(Value::as_i64)
         .ok_or_else(|| bad(format!("KeyError: '{k}'")))
 }
 
-fn is_list(v: Option<&Value>) -> bool {
+pub(super) fn is_list(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::Array(_) | Value::Bytes(_)))
 }
 
-fn sp_type(sp: &Value) -> i64 {
+pub(super) fn sp_type(sp: &Value) -> i64 {
     sp.get("m_GpuProgramType")
         .and_then(Value::as_i64)
         .unwrap_or(-1)
 }
 
 /// Keywords and hardware tier of a subprogram (_variant_key).
-type VariantKey = (Vec<Vec<i64>>, Option<i64>);
+pub(super) type VariantKey = (Vec<Vec<i64>>, Option<i64>);
 
-fn variant_key(sp: &Value) -> VariantKey {
+pub(super) fn variant_key(sp: &Value) -> VariantKey {
     let kws = KEY_FIELDS
         .iter()
         .filter(|(k, _)| sp.get(k).is_some())
@@ -108,16 +108,18 @@ fn keyset(sp: &Value) -> KeySet {
 
 /// Where a subprogram list is: (SubShader, pass, stage, tier: None for m_SubPrograms).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct ListAt {
-    si: usize,
-    pi: usize,
-    stage: &'static str,
-    tier: Option<usize>,
+pub(super) struct ListAt {
+    pub(super) si: usize,
+    pub(super) pi: usize,
+    pub(super) stage: &'static str,
+    pub(super) tier: Option<usize>,
 }
 
 /// A stage program's subprogram lists with their parameter indices (_tier_lists).
 #[allow(clippy::type_complexity)]
-fn tier_lists(prog: Option<&Value>) -> Vec<(Option<usize>, Vec<Value>, Option<Vec<i64>>)> {
+pub(super) fn tier_lists(
+    prog: Option<&Value>,
+) -> Vec<(Option<usize>, Vec<Value>, Option<Vec<i64>>)> {
     let Some(prog) = prog.filter(|p| truthy(Some(p))) else {
         return Vec::new();
     };
@@ -156,7 +158,10 @@ fn tier_lists(prog: Option<&Value>) -> Vec<(Option<usize>, Vec<Value>, Option<Ve
 }
 
 #[allow(clippy::type_complexity)]
-fn list_at(t: &mut Value, at: ListAt) -> Result<(&mut Vec<Value>, Option<&mut Vec<Value>>)> {
+pub(super) fn list_at(
+    t: &mut Value,
+    at: ListAt,
+) -> Result<(&mut Vec<Value>, Option<&mut Vec<Value>>)> {
     let p = t
         .path_mut(&["m_ParsedForm", "m_SubShaders"])
         .and_then(Value::as_array_mut)
@@ -199,7 +204,7 @@ fn list_at(t: &mut Value, at: ListAt) -> Result<(&mut Vec<Value>, Option<&mut Ve
     }
 }
 
-fn pass_mut(t: &mut Value, si: usize, pi: usize) -> Result<&mut Value> {
+pub(super) fn pass_mut(t: &mut Value, si: usize, pi: usize) -> Result<&mut Value> {
     t.path_mut(&["m_ParsedForm", "m_SubShaders"])
         .and_then(Value::as_array_mut)
         .and_then(|s| s.get_mut(si))
@@ -210,7 +215,7 @@ fn pass_mut(t: &mut Value, si: usize, pi: usize) -> Result<&mut Value> {
 }
 
 /// add_platform: a shader platform listed in a pass's m_Platforms (2020.1+), ascending.
-fn add_platform(p: &mut Value, platform: i64) -> Result<()> {
+pub(super) fn add_platform(p: &mut Value, platform: i64) -> Result<()> {
     if !is_list(p.get("m_Platforms")) {
         return Ok(());
     }
@@ -227,7 +232,7 @@ fn add_platform(p: &mut Value, platform: i64) -> Result<()> {
 }
 
 /// convert._strip_gles on the tree: the GLES3Plus blob and every GLES subprogram removed.
-fn strip_gles(t: &mut Value) -> Result<()> {
+pub(super) fn strip_gles(t: &mut Value) -> Result<()> {
     let mut blobs = tree::blobs(t).map_err(bad)?;
     blobs.remove(blob::PLATFORM_GLES3PLUS);
     let f = blobs.store().map_err(|e| bad(e.to_string()))?;
@@ -305,7 +310,7 @@ fn strip_gles(t: &mut Value) -> Result<()> {
 }
 
 /// {name index: name} of a pass (m_NameIndices).
-fn pass_names(p: &Value) -> BTreeMap<i64, String> {
+pub(super) fn pass_names(p: &Value) -> BTreeMap<i64, String> {
     let mut out = BTreeMap::new();
     for kv in p
         .get("m_NameIndices")
@@ -333,7 +338,7 @@ fn need_name(names: &BTreeMap<i64, String>, v: &Value) -> Result<String> {
 }
 
 /// The Bindings with a program's m_CommonParameters put back (dxbc.with_common).
-fn with_common(
+pub(super) fn with_common(
     b: Bindings,
     common: Option<&Value>,
     names: &BTreeMap<i64, String>,
@@ -566,7 +571,7 @@ fn entry_keywords(ve: Option<&Entry>, pe: Option<&Entry>) -> (Vec<String>, Optio
     (vk, vl)
 }
 
-fn entry_of(entries: &[Option<Slot>], i: i64) -> Result<Option<&Entry>> {
+pub(super) fn entry_of(entries: &[Option<Slot>], i: i64) -> Result<Option<&Entry>> {
     let e = usize::try_from(i)
         .ok()
         .and_then(|i| entries.get(i))
@@ -578,7 +583,7 @@ fn entry_of(entries: &[Option<Slot>], i: i64) -> Result<Option<&Entry>> {
 }
 
 /// The GLES3 subprogram of a D3D11 one (gl_twin).
-fn gl_twin(
+pub(super) fn gl_twin(
     sp: &Value,
     blob_index: usize,
     gl: Option<(&Bindings, &BTreeMap<String, i64>)>,
@@ -711,7 +716,7 @@ fn fill_parsed_form(t: &mut Value, b: &Bindings, names: &BTreeMap<String, i64>) 
 }
 
 /// The names a GL binding info uses (_gl_names).
-fn gl_names(info: &Bindings) -> Vec<String> {
+pub(super) fn gl_names(info: &Bindings) -> Vec<String> {
     let mut out = Vec::new();
     for cb in info.cbuffers.iter().filter(|c| !c.name.is_empty()) {
         out.push(cb.name.clone());
@@ -730,7 +735,7 @@ fn gl_names(info: &Bindings) -> Vec<String> {
 }
 
 /// The pass's {name: index}, with the names it lacks added after the last (_name_indices).
-fn name_indices(p: &mut Value, needed: &[String]) -> Result<BTreeMap<String, i64>> {
+pub(super) fn name_indices(p: &mut Value, needed: &[String]) -> Result<BTreeMap<String, i64>> {
     if p.get("m_NameIndices").is_none() {
         p.set("m_NameIndices", Value::Array(Vec::new()))?;
     }
@@ -1314,7 +1319,7 @@ pub fn add_gles3_d3d11(
 }
 
 /// A twin's keyword index lists from a keyword set (_set_keywords).
-fn set_keywords(t: &mut Value, keys: &KeySet) -> Result<()> {
+pub(super) fn set_keywords(t: &mut Value, keys: &KeySet) -> Result<()> {
     for (f, tag) in KEY_FIELDS {
         if t.get(f).is_some() {
             let v: Vec<Value> = keys

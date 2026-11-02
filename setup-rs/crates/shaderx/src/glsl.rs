@@ -815,6 +815,55 @@ pub fn program_to_es(
     Ok(out)
 }
 
+/// What GLSL ES lacks in a stage SPIRV-Cross wrote (vulkan._check_es: glsl's rules, ES 3.00's or
+/// GLSL 4.x's at 3.10; image load/store allowed at 3.10); `needs_es31` where an ES 3.00 stage uses
+/// what 3.10 has.
+pub fn vulkan_check(src: &str, stage: &str, es310: bool) -> Result<(), Unsupported> {
+    let r = &*RX;
+    let code = code_lines(&strip_comments(src));
+    let rules = if es310 {
+        &r.unsupported_4x
+    } else {
+        &r.unsupported
+    };
+    for rule in rules {
+        if let Some(c) = rule.re.captures(&code) {
+            let whole = py::strip(c.get(rule.group).unwrap().as_str()).to_string();
+            let g1 = c.get(1).map(|m| m.as_str());
+            let image = rule.what == "ES 3.2+ / desktop function"
+                && es310
+                && matches!(g1, Some("imageLoad") | Some("imageStore"));
+            if !image {
+                return Err(Unsupported::new(format!(
+                    "{stage}: {} {}",
+                    rule.what,
+                    py::repr(&whole)
+                )));
+            }
+        }
+    }
+    if src.contains("#extension GL_NV_shader_noperspective_interpolation") {
+        return Err(Unsupported::new(format!(
+            "{stage}: qualifier noperspective (GL_NV_shader_noperspective_interpolation)"
+        )));
+    }
+    if !es310 {
+        for rule in &r.es31 {
+            if let Some(c) = rule.re.captures(&code) {
+                return Err(Unsupported {
+                    needs_es31: true,
+                    msg: format!(
+                        "{stage}: {} {} (GLSL ES 3.10)",
+                        rule.what,
+                        py::repr(py::strip(c.get(rule.group).unwrap().as_str()))
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---- compute kernels (ComputeShader assets): glsl.kernel_to_es
 
 const DROP_EXTENSIONS_COMPUTE: [&str; 7] = [
