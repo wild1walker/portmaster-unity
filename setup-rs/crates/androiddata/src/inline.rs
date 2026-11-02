@@ -74,7 +74,9 @@ pub fn inline_serialized(ctx: &Ctx, src: &str, dst: &str, consume: bool) -> Resu
         let name = path.rsplit('/').next().unwrap_or(path);
         let mut fh = std::fs::File::open(py::join(&d, name))?;
         fh.seek(SeekFrom::Start(off))?;
-        let mut v = Vec::with_capacity(size);
+        // (the size is the texture's: room for what the stream has after off, no more)
+        let left = fh.metadata()?.len().saturating_sub(off);
+        let mut v = Vec::with_capacity(size.min(left as usize));
         fh.take(size as u64).read_to_end(&mut v)?;
         Ok(v)
     };

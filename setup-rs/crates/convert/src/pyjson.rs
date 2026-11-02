@@ -182,6 +182,7 @@ pub fn loads(text: &str) -> Result<Json, ParseError> {
     let mut p = Parser {
         s: text.as_bytes(),
         i: 0,
+        depth: 0,
     };
     p.ws();
     let v = p.value()?;
@@ -195,7 +196,13 @@ pub fn loads(text: &str) -> Result<Json, ParseError> {
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    /// Lists and dicts open (Python's json stops at its recursion limit; so does this, before
+    /// the stack ends).
+    depth: usize,
 }
+
+/// The deepest nesting read.
+pub const MAX_DEPTH: usize = 500;
 
 impl Parser<'_> {
     fn err(&self, what: &str) -> ParseError {
@@ -222,8 +229,15 @@ impl Parser<'_> {
             return Err(self.err("Expecting value"));
         };
         match c {
-            b'{' => self.dict(),
-            b'[' => self.list(),
+            b'{' | b'[' => {
+                if self.depth == MAX_DEPTH {
+                    return Err(self.err("maximum recursion depth exceeded"));
+                }
+                self.depth += 1;
+                let v = if c == b'{' { self.dict() } else { self.list() };
+                self.depth -= 1;
+                v
+            }
             b'"' => Ok(Json::Str(self.string()?)),
             _ if self.eat("null") => Ok(Json::Null),
             _ if self.eat("true") => Ok(Json::Bool(true)),
@@ -703,5 +717,20 @@ mod tests {
         let a = loads(r#"{"x": 1, "y": 2.0}"#).unwrap();
         let b = loads(r#"{"y": 2, "x": 1.0}"#).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error() {
+        // (a damaged journal of 100 000 brackets: an error, as Python's RecursionError, not the
+        // end of the stack; the journal counts as damaged)
+        let deep = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+        assert!(loads(&deep(MAX_DEPTH)).is_ok());
+        let e = loads(&deep(MAX_DEPTH + 1)).unwrap_err().to_string();
+        assert!(e.starts_with("maximum recursion depth exceeded"), "{e}");
+        assert!(loads(&"{\"a\": ".repeat(100_000)).is_err());
+        let d = std::env::temp_dir().join(format!("pmu-journal-deep-{}", std::process::id()));
+        std::fs::write(&d, deep(100_000)).unwrap();
+        assert_eq!(crate::job::journal_files(&d), 0);
+        let _ = std::fs::remove_file(&d);
     }
 }

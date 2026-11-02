@@ -316,7 +316,7 @@ fn dump(v: &Json, indent: Option<usize>, depth: usize, s: &mut String) {
 /// json.loads: Err(message) where Python raises JSONDecodeError (a ValueError).
 pub fn loads(text: &str) -> Result<Json, String> {
     let b = text.as_bytes();
-    let mut p = Parser { b, i: 0 };
+    let mut p = Parser { b, i: 0, depth: 0 };
     p.ws();
     let v = p.value()?;
     p.ws();
@@ -340,7 +340,13 @@ pub fn loads_bytes(b: &[u8]) -> Result<Json, String> {
 struct Parser<'a> {
     b: &'a [u8],
     i: usize,
+    /// Arrays and objects open (Python's json stops at its recursion limit; so does this,
+    /// before the stack ends).
+    depth: usize,
 }
+
+/// The deepest nesting read.
+pub const MAX_DEPTH: usize = 500;
 
 impl Parser<'_> {
     fn err(&self, what: &str) -> String {
@@ -364,8 +370,19 @@ impl Parser<'_> {
 
     fn value(&mut self) -> Result<Json, String> {
         match self.b.get(self.i) {
-            Some(b'{') => self.object(),
-            Some(b'[') => self.array(),
+            Some(&c @ (b'{' | b'[')) => {
+                if self.depth == MAX_DEPTH {
+                    return Err(self.err("maximum recursion depth exceeded"));
+                }
+                self.depth += 1;
+                let v = if c == b'{' {
+                    self.object()
+                } else {
+                    self.array()
+                };
+                self.depth -= 1;
+                v
+            }
             Some(b'"') => Ok(Json::Str(self.string()?)),
             Some(b'n') if self.b[self.i..].starts_with(b"null") => {
                 self.i += 4;
@@ -629,5 +646,11 @@ mod tests {
         assert!(loads("[1,]").is_err());
         assert!(loads("1 2").is_err());
         assert_eq!(loads(" 12 ").unwrap(), Json::Int(12));
+        // (100 000 brackets: an error, as Python's RecursionError, not the end of the stack)
+        let deep = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+        assert!(loads(&deep(MAX_DEPTH)).is_ok());
+        let e = loads(&deep(100_000)).unwrap_err();
+        assert!(e.starts_with("maximum recursion depth exceeded"), "{e}");
+        assert!(loads_bytes("{\"a\": ".repeat(100_000).as_bytes()).is_err());
     }
 }

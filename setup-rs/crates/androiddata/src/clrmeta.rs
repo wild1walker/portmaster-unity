@@ -439,7 +439,8 @@ impl Assembly {
     pub fn off(&self, rva: u32) -> Result<usize> {
         for &(vsize, va, rsize, raw) in &self.secs {
             if va <= rva && (rva as u64) < va as u64 + vsize.max(rsize) as u64 {
-                return Ok((rva - va + raw) as usize);
+                // (Python's integers: past 4 GB is past the file)
+                return Ok((rva - va) as usize + raw as usize);
             }
         }
         Err(Error::NotAssembly(format!(
@@ -565,7 +566,9 @@ impl Assembly {
         let Some((o, rs, css, n)) = self.tables.get(&t) else {
             return Ok(Vec::new());
         };
-        let mut out = Vec::with_capacity(*n as usize);
+        // (the row count is the file's: room for the rows its bytes can hold)
+        let fit = self.d.len().saturating_sub(*o) / (*rs).max(1);
+        let mut out = Vec::with_capacity((*n as usize).min(fit));
         for i in 0..*n as usize {
             let mut p = o + i * rs;
             let mut row = Vec::with_capacity(css.len());
@@ -606,8 +609,9 @@ impl Assembly {
         for r in self.rows(NESTEDCLASS)?.iter() {
             nested.insert(r[0], r[1]);
         }
-        let nf = self.count(FIELD) + 1;
-        let nm = self.count(METHODDEF) + 1;
+        // (a count of 2^32 - 1 rows: no file holds them, the end saturates)
+        let nf = self.count(FIELD).saturating_add(1);
+        let nm = self.count(METHODDEF).saturating_add(1);
         let mut out = Vec::with_capacity(td.len());
         for (i, r) in td.iter().enumerate() {
             let fe = td.get(i + 1).map_or(nf, |n| n[4]);
@@ -1166,5 +1170,26 @@ pub mod tests {
             Assembly::from_bytes("x", b"not a pe".to_vec()),
             Err(Error::NotAssembly(_))
         ));
+    }
+
+    #[test]
+    fn a_damaged_row_count_is_an_error() {
+        // (by review, for the clrmeta fuzz target) a table of 2^32 - 1 rows in a few bytes: the
+        // first row past the end is an error, no room made for the rest
+        let (s, o) = strings(&["<Module>"]);
+        let mut d = build(&[(MODULE, vec![vec![0, o[0], 0, 0, 0]])], &s, &[0]);
+        let at = 0x200 + 0x48 + 72 + 24; // (the tables stream's first row count)
+        assert_eq!(d[at..at + 4], 1u32.to_le_bytes());
+        d[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let a = Assembly::from_bytes("t.dll", d).unwrap();
+        assert!(a.rows(MODULE).is_err());
+        // (the fuzz target's) a section whose file offset is near 4 GB: rva - va + raw past
+        // u32 is past the file, not an overflow
+        let mut d = build(&[(MODULE, vec![vec![0, o[0], 0, 0, 0]])], &s, &[0]);
+        let sec = 0x80 + 24 + 224;
+        d[sec + 8..sec + 12].copy_from_slice(&0x10000u32.to_le_bytes());
+        d[sec + 12..sec + 16].copy_from_slice(&0u32.to_le_bytes());
+        d[sec + 20..sec + 24].copy_from_slice(&0xFFFF_FF00u32.to_le_bytes());
+        assert!(Assembly::from_bytes("t.dll", d).is_err());
     }
 }
