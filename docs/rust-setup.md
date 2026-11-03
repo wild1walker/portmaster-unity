@@ -219,7 +219,9 @@ Python's byte for byte: `tests/golden/convert_madeup.sh` runs its cases without 
 scene bundle and then `scenes` (pmu's bundle against that reference, every other file against the
 `cuphead` case's); on Enter the Gungeon (`tools/regress/pmu_pair.py`, the port's config) the 3
 scene bundles with shaders are the only files that differ from the Python's, and their 8
-serialized files are the reference's. `cargo test -p convert --test scenes` covers the steps on
+serialized files are the reference's; `regress.py pmu` on the six corpus games on this machine
+(none has a scene bundle): every converted file the Python's, as before. `cargo test -p convert
+--test scenes` covers the steps on
 made-up scene bundles (the same bytes as the same shaders and textures elsewhere, a sprite in the
 scene following its texture in the shared assets, edits, the bundles left) and `cargo test -p
 unityfs` the opening, selecting, saving and inlining.

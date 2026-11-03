@@ -196,7 +196,7 @@ their flags), so android-data's platform patch works on it in place. The Python 
 leaves such a bundle as it is ("expected one serialized file in the bundle, found 2"): a release
 that ships the Python (only for a porter's Python converter plugin) still does, and the player
 then logs "Desired shader compiler platform 9 is not available in shader blob" for each of its
-shaders and draws them magenta (Gungeon's title sky and the Breach before 2026-11-02).
+shaders and draws them magenta (before 2026-11-02, Gungeon's title sky and the Breach's dust motes).
 
 There is no Python reference for the bundle itself, so `setup-rs/tests/golden/scene_bundles.py`
 makes one: each serialized file taken out of the bundle as a plain `.assets` file and converted by
