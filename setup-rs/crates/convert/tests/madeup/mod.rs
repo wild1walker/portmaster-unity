@@ -1158,3 +1158,87 @@ pub const CUPHEAD_JSON: &str = r#"{
   "audio": {"compressed_min_s": 2.0}
 }
 "#;
+
+/// Scene bundles with streamed textures (android-data's inlining of a bundle of several
+/// serialized files, tests/golden/inline_scenes.sh): `tex_scene` (the shared assets' textures
+/// stream from their .resS, the scene's from its own, a stream nothing reads), `tex_shared` (the
+/// scene's texture streams from the shared assets' .resS too).
+pub fn scene_bundles(db: &ClassDb, dir: &Path) {
+    let o = |class_id, path_id, value| Obj {
+        class_id,
+        path_id,
+        value,
+    };
+    let res: Vec<u8> = (0..6000u32).map(|i| (i * 31 % 253) as u8).collect();
+    let res2: Vec<u8> = (0..900u32).map(|i| (i * 7 % 251) as u8).collect();
+    let shared_path = "archive:/BuildPlayer-s/BuildPlayer-s.sharedAssets.resS";
+    for (name, scene_stream) in [
+        ("tex_scene", "archive:/BuildPlayer-s/BuildPlayer-s.resS"),
+        ("tex_shared", shared_path),
+    ] {
+        let shared = serialized(
+            db,
+            &[
+                o(
+                    28,
+                    1,
+                    texture(db, "wall", (32, 32), 12, &[], Some((0, 1024, shared_path))),
+                ),
+                o(28, 2, texture(db, "inline", (4, 4), 4, &[7u8; 64], None)),
+                o(
+                    28,
+                    3,
+                    texture(
+                        db,
+                        "floor",
+                        (32, 16),
+                        10,
+                        &[],
+                        Some((2048, 256, shared_path)),
+                    ),
+                ),
+            ],
+            &["library/unity default resources"],
+            true,
+        );
+        let (off, size) = if scene_stream == shared_path {
+            (4096, 512)
+        } else {
+            (100, 512)
+        };
+        let scene = serialized(
+            db,
+            &[
+                o(141, 1, build_settings(db)),
+                o(
+                    28,
+                    9,
+                    texture(
+                        db,
+                        "sky",
+                        (32, 16),
+                        12,
+                        &[],
+                        Some((off, size, scene_stream)),
+                    ),
+                ),
+            ],
+            &["archive:/buildplayer-s/buildplayer-s.sharedassets"],
+            true,
+        );
+        write(
+            dir,
+            name,
+            &bundle(
+                &[
+                    ("BuildPlayer-s.sharedAssets", 4, shared),
+                    ("BuildPlayer-s", 4, scene),
+                    ("BuildPlayer-s.sharedAssets.resS", 0, res.clone()),
+                    ("BuildPlayer-s.resS", 0, res2.clone()),
+                    ("unread.resS", 0, vec![1u8; 300]),
+                ],
+                1 << 12,
+            ),
+        );
+    }
+}

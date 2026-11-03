@@ -754,6 +754,145 @@ def survey_data(data, deep=True):
     return r
 
 
+# a Shader's compiler platforms (Shader.platforms) by name; the converter's sources by platform
+_SHADER_PLATFORMS = {4: 'Direct3D 11', 5: 'GLES 2', 9: 'GLES 3', 14: 'Metal', 15: 'OpenGL Core', 18: 'Vulkan'}
+_SOURCE_PLATFORM = {'glcore': 15, 'd3d11': 4, 'vulkan': 18, 'metal': 14}
+_ODD_BUNDLES = ((b'UnityWeb\0', 'a UnityWeb archive (Unity 5.x web bundles)'),
+                (b'UnityRaw\0', 'a UnityRaw archive (Unity 5.x uncompressed bundles)'),
+                (b'UnityArchive\0', 'a UnityArchive'))
+
+
+def odd_bundle(path):
+    """What a file looks like when it is a Unity bundle the converter does not read (another
+    archive kind, or a UnityFS header past the file's start: the game's own offset or encryption);
+    None for a UnityFS bundle and for anything else (setup-rs convert's steps::shaders::odd_bundle)."""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(4096)
+    except OSError:
+        return None
+    if head.startswith(b'UnityFS\0'):
+        return None
+    for sig, what in _ODD_BUNDLES:
+        if head.startswith(sig):
+            return what
+    if b'UnityFS\0' in head:
+        return 'a UnityFS bundle behind other bytes (the game\'s own offset or encryption)'
+    return None
+
+
+def survey_streaming(data):
+    """The asset bundles under StreamingAssets (UnityPy, read only, a bundle at a time): how many,
+    those with several serialized files (scene bundles), their shaders by the programs they have,
+    texture formats and sizes, and the files the converter does not read (another bundle kind,
+    a header past the start, a bundle UnityPy cannot open, one without a serialized file)."""
+    r = {'bundles': 0, 'mb': 0.0, 'scene_bundles': [], 'shaders': {}, 'shader_bundles': {}, 'textures': {},
+         'decoded_mb': 0.0, 'odd': [], 'unread': [], 'no_serialized': []}
+    sa = os.path.join(data, 'StreamingAssets')
+    if not os.path.isdir(sa):
+        return r
+    try:
+        import UnityPy
+        from UnityPy.files import SerializedFile
+    except ImportError:
+        return r
+    for d, dirs, names in os.walk(sa):
+        dirs.sort()
+        for n in sorted(names):
+            p = os.path.join(d, n)
+            rel = os.path.relpath(p, data).replace(os.sep, '/')
+            what = odd_bundle(p)
+            if what:
+                r['odd'].append([rel, what])
+                continue
+            try:
+                with open(p, 'rb') as f:
+                    if f.read(8) != b'UnityFS\0':
+                        continue
+            except OSError:
+                continue
+            r['bundles'] += 1
+            r['mb'] += os.path.getsize(p) / 2**20
+            try:
+                env = UnityPy.load(p)
+                sfs = [k for k, f in env.file.files.items() if isinstance(f, SerializedFile)]
+            except Exception as ex:
+                r['unread'].append([rel, f'{type(ex).__name__}: {ex}'])
+                continue
+            if not sfs:
+                r['no_serialized'].append(rel)
+                continue
+            if len(sfs) > 1:
+                r['scene_bundles'].append(rel)
+            for o in env.objects:
+                tn = o.type.name
+                try:
+                    if tn == 'Shader':
+                        t = o.read_typetree()
+                        key = ', '.join(_SHADER_PLATFORMS.get(x, str(x)) for x in sorted(set(t.get('platforms') or [])))
+                        r['shaders'][key] = r['shaders'].get(key, 0) + 1
+                        r['shader_bundles'].setdefault(key, [])
+                        if rel not in r['shader_bundles'][key]:
+                            r['shader_bundles'][key].append(rel)
+                    elif tn == 'Texture2D':
+                        t = o.read(check_read=False)
+                        f = t.m_TextureFormat
+                        try:
+                            from UnityPy.enums import TextureFormat
+                            f = TextureFormat(int(f)).name
+                        except (ValueError, TypeError, ImportError):
+                            f = getattr(f, 'name', str(f))
+                        st = r['textures'].setdefault(f, [0, 0])
+                        st[0] += 1
+                        st[1] += int(getattr(t, 'm_CompleteImageSize', 0) or 0)
+                        if str(f).startswith(('DXT', 'BC')):
+                            w, h = int(getattr(t, 'm_Width', 0) or 0), int(getattr(t, 'm_Height', 0) or 0)
+                            mips = int(getattr(t, 'm_MipCount', 1) or 1)
+                            r['decoded_mb'] += w * h * 4 * (4 / 3 if mips > 1 else 1) / 2**20
+                except Exception:
+                    continue
+            env = None
+    r['mb'] = round(r['mb'], 1)
+    r['decoded_mb'] = round(r['decoded_mb'], 1)
+    return r
+
+
+def streaming_warnings(rep):
+    """The check's warnings and notes for what survey_streaming found."""
+    st = rep.get('streaming_survey') or {}
+    if not st.get('bundles') and not st.get('odd'):
+        return
+    w, notes = rep['warnings'], rep['notes']
+    few = lambda xs: ', '.join(xs[:4]) + (f' and {len(xs) - 4} more' if len(xs) > 4 else '')
+    if st.get('odd'):
+        w.append(f"{len(st['odd'])} file(s) under StreamingAssets look like Unity bundles the converter does not read "
+                 f"({few([f'{a}: {b}' for a, b in st['odd']])}): their shaders and textures stay as the desktop build "
+                 f"has them (shaders without GLES programs draw magenta or not at all); the game's own loader may "
+                 f"need a look (docs/porting.md, port check)")
+    if st.get('unread'):
+        w.append(f"{len(st['unread'])} StreamingAssets bundle(s) UnityPy cannot open ({few([a for a, _ in st['unread']])}): "
+                 f"the converter cannot either, they stay as they are")
+    if st.get('no_serialized'):
+        notes.append(f"{len(st['no_serialized'])} StreamingAssets bundle(s) without a serialized file "
+                     f"({few(st['no_serialized'])}): nothing in them to convert, left as they are")
+    src = rep.get('shader_source')
+    if st.get('shaders') and src:
+        want = _SHADER_PLATFORMS[_SOURCE_PLATFORM[src]]
+        missing = {k: v for k, v in st['shaders'].items()
+                   if want not in k.split(', ') and _SHADER_PLATFORMS[9] not in k.split(', ')}
+        if missing:
+            n = sum(missing.values())
+            bundles = sorted({b for k in missing for b in st['shader_bundles'].get(k, [])})
+            w.append(f"{n} shader(s) in StreamingAssets bundles have no {want} programs (only "
+                     f"{'; '.join(sorted(missing))}) and so none the converter translates from (shaders from {src}): "
+                     f"they draw magenta or not at all on the handheld ({few(bundles)})")
+    if st.get('scene_bundles'):
+        notes.append(f"{len(st['scene_bundles'])} scene bundle(s) under StreamingAssets (several serialized files each: "
+                     f"{few(st['scene_bundles'])}): pmu's convert converts each of their files (shaders, textures, "
+                     f"JSON plugin edits); the Python converter, which a release ships only for a Python converter "
+                     f"plugin of the port's, leaves them as they are (their shaders: desktop-only)")
+
+
 _INPUT_MODULES = {
     'UnityEngine.EventSystems.StandaloneInputModule': 'Unity UI, Input Manager (pad navigation and mouse)',
     'UnityEngine.InputSystem.UI.InputSystemUIInputModule': 'Unity UI, Input System package',
@@ -952,6 +1091,9 @@ def check(path, asmpatch=None, deep=True, log=None):
                           'are read after `pmunity unpack`')
     rep['data_survey'] = d
     rep['notes'] += d.get('notes', [])
+    if deep and not b['compressed']:
+        log('reading the StreamingAssets bundles')
+        rep['streaming_survey'] = survey_streaming(b['data'])
     rep['product'] = d.get('product')
     # shaders: OpenGL Core programs (macOS, Linux) or Direct3D 11 (Windows)
     apis = d.get('graphics_apis')
@@ -994,6 +1136,7 @@ def check(path, asmpatch=None, deep=True, log=None):
                 m = re.search(r'^verdict: (.*)$', text, re.M)
                 if m:
                     rep['input_verdict_text'] = m.group(1)
+    streaming_warnings(rep)
     # plugins
     rep['plugins'] = plugin_notes(_plugin_files(b))
     decide_routes(rep)
@@ -1194,18 +1337,26 @@ def suggest_config(rep):
                      ': each needs an ARM library or a stub')
     if s.get('services'):
         notes.append('services: ' + ', '.join(s['services']))
-    tex = d.get('textures') or {}
+    # textures: the main data's and the StreamingAssets bundles'
+    st = rep.get('streaming_survey') or {}
+    tex = {}
+    for src in (d.get('textures') or {}, st.get('textures') or {}):
+        for k, v in src.items():
+            t = tex.setdefault(k, [0, 0])
+            t[0] += v[0]
+            t[1] += v[1]
+    where = 'main data and StreamingAssets bundles' if st.get('textures') else 'main data'
     bc = sum(v[1] for k, v in tex.items() if k.startswith(('DXT', 'BC')))
     crunched = sum(v[0] for k, v in tex.items() if k.endswith('Crunched'))
     if bc > 64 << 20:
-        notes.append(f'{bc / 2**20:.0f} MB of BC/DXT textures (main data): the handheld GPU cannot sample them, '
+        notes.append(f'{bc / 2**20:.0f} MB of BC/DXT textures ({where}): the handheld GPU cannot sample them, '
                      f'so Unity decodes them to RGBA when loading (4-8x the memory). The textures step '
                      f'(convert.steps += "textures") re-encodes them as ASTC: less memory, slightly different '
                      f'pixels, a longer setup; off by default')
     if crunched:
         notes.append(f'{crunched} crunched textures: as ASTC (the textures step) they take their full size on the '
                      f'card (several times the crunched size)')
-    decoded = d.get('decoded_mb', 0)
+    decoded = d.get('decoded_mb', 0) + st.get('decoded_mb', 0)
     if decoded > 128:
         # seen on an RG34XX-SP (1 GB): 57 MB of crunched DXT grew to 830 MB resident in 12 s and the
         # handheld froze in swap; as ASTC the same game ran at 60 fps in 385 MB
@@ -1270,6 +1421,17 @@ def print_report(rep, out=sys.stdout):
         if tex:
             top = sorted(tex.items(), key=lambda kv: -kv[1][1])[:5]
             w('  textures (main data): ' + ', '.join(f'{k} {v[0]} ({v[1] / 2**20:.0f} MB)' for k, v in top))
+        st = rep.get('streaming_survey') or {}
+        if st.get('bundles') or st.get('odd'):
+            w(f"  StreamingAssets: {st['bundles']} bundles ({st['mb']:.0f} MB)"
+              + (f", {len(st['scene_bundles'])} of them scene bundles" if st.get('scene_bundles') else '')
+              + (f"; {len(st['odd'])} other Unity archives" if st.get('odd') else ''))
+            if st.get('shaders'):
+                w('    shaders: ' + '; '.join(f'{v} with {k or "no programs"}' for k, v in
+                                          sorted(st['shaders'].items(), key=lambda kv: -kv[1])))
+            if st.get('textures'):
+                top = sorted(st['textures'].items(), key=lambda kv: -kv[1][1])[:5]
+                w('    textures: ' + ', '.join(f'{k} {v[0]} ({v[1] / 2**20:.0f} MB)' for k, v in top))
     for o in rep.get('other_builds', []):
         w(f"  also: {o['build']} build ({o['backend']}) at {o['data']}")
     w()

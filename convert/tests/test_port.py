@@ -203,6 +203,46 @@ class CheckTest(unittest.TestCase):
             P.print_report(rep, out)
             self.assertIn('recommended route: android', out.getvalue())
 
+    def test_streaming_bundles(self):
+        """StreamingAssets: files that look like Unity bundles the converter does not read are a
+        warning, as are shaders in bundles without the source's programs; scene bundles a note."""
+        with tempfile.TemporaryDirectory() as t:
+            d = fake_game(t)
+            sa = os.path.join(d, 'StreamingAssets', 'b')
+            os.makedirs(sa)
+            put(os.path.join(sa, 'web'), b'UnityWeb\0' + b'\0' * 64)
+            put(os.path.join(sa, 'hidden'), b'\x5a' * 16 + b'UnityFS\0' + b'\0' * 64)
+            put(os.path.join(sa, 'text.txt'), b'not a bundle\n')
+            put(os.path.join(sa, 'broken'), b'UnityFS\0' + b'\0' * 64)
+            self.assertIsNone(P.odd_bundle(os.path.join(sa, 'text.txt')))
+            self.assertIsNone(P.odd_bundle(os.path.join(sa, 'broken')))
+            self.assertIn('UnityWeb', P.odd_bundle(os.path.join(sa, 'web')))
+            self.assertIn('behind other bytes', P.odd_bundle(os.path.join(sa, 'hidden')))
+            st = P.survey_streaming(d)
+            self.assertEqual(st['bundles'], 1)
+            self.assertEqual([a for a, _ in st['odd']], ['StreamingAssets/b/hidden', 'StreamingAssets/b/web'])
+            self.assertEqual([a for a, _ in st['unread']], ['StreamingAssets/b/broken'])
+            rep = P.check(t, asmpatch='/nonexistent-asmpatch')
+            self.assertEqual(rep['streaming_survey']['odd'], st['odd'])
+            self.assertTrue(any('look like Unity bundles the converter does not read' in w for w in rep['warnings']))
+            self.assertTrue(any('UnityPy cannot open' in w for w in rep['warnings']))
+            out = io.StringIO()
+            P.print_report(rep, out)
+            self.assertIn('StreamingAssets: 1 bundles', out.getvalue())
+        # what the survey of readable bundles leads to
+        rep = {'warnings': [], 'notes': [], 'shader_source': 'glcore',
+               'streaming_survey': {'bundles': 3, 'odd': [], 'unread': [], 'no_serialized': ['StreamingAssets/n'],
+                                    'scene_bundles': ['StreamingAssets/s'],
+                                    'shaders': {'OpenGL Core, Vulkan': 5, 'Direct3D 11': 2, 'GLES 3': 1},
+                                    'shader_bundles': {'OpenGL Core, Vulkan': ['StreamingAssets/s'],
+                                                       'Direct3D 11': ['StreamingAssets/d'], 'GLES 3': ['StreamingAssets/g']}}}
+        P.streaming_warnings(rep)
+        self.assertEqual(len(rep['warnings']), 1)
+        self.assertIn('2 shader(s) in StreamingAssets bundles have no OpenGL Core programs', rep['warnings'][0])
+        self.assertIn('StreamingAssets/d', rep['warnings'][0])
+        self.assertEqual(len(rep['notes']), 2)
+        self.assertIn('scene bundle', rep['notes'][1])
+
     def test_hdrp_no_android_player_route(self):
         # HDRP does not render on the Android player's GLES3 device: no route on it fits, the arm64 ones
         # neither (Suvalf, 6000.3 HDRP with Vulkan shaders only, got mono-arm64 recommended)

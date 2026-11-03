@@ -319,6 +319,11 @@ fn from_list_levels() {
 /// A format 17 serialized file built as Unity lays it out (objects in another order, 8-aligned,
 /// with a gap), with the test tree as its one type.
 fn serialized_bytes(names: &[(i64, &str)]) -> Vec<u8> {
+    serialized_bytes_ext(names, &["library/unity default resources"])
+}
+
+/// serialized_bytes with these external files.
+fn serialized_bytes_ext(names: &[(i64, &str)], externals: &[&str]) -> Vec<u8> {
     let t = test_tree();
     let c = CommonStrings::default();
     let mut data = Vec::new();
@@ -353,11 +358,13 @@ fn serialized_bytes(names: &[(i64, &str)]) -> Vec<u8> {
         m.i32(0);
     }
     m.i32(0); // script types
-    m.i32(1);
-    m.cstr(b"");
-    m.bytes(&[0x22; 16]);
-    m.i32(0);
-    m.cstr(b"library/unity default resources");
+    m.i32(externals.len() as i32);
+    for e in externals {
+        m.cstr(b"");
+        m.bytes(&[0x22; 16]);
+        m.i32(0);
+        m.cstr(e.as_bytes());
+    }
     m.cstr(b"");
     let data_offset = (20 + m.len()).div_ceil(16) * 16 + 16; // (Unity pads more than UnityPy)
     let mut f = Writer::new(true);
@@ -1035,6 +1042,207 @@ fn inline_streams() {
     h.sf = sf2;
     h.remove_node("CAB-t.resS").unwrap();
     assert_eq!(h.save().unwrap(), std::fs::read(&out).unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A scene bundle as Unity writes one: the scene's shared assets (textures streaming from their
+/// .resS), the scene (its objects pointing into the shared assets), the two streams.
+fn scene_bundle(res: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let shared = texture_file(&[
+        (
+            2,
+            "wall",
+            100,
+            50,
+            "archive:/BuildPlayer-a/BuildPlayer-a.sharedAssets.resS",
+        ),
+        (3, "inline", 0, 0, ""),
+        (
+            4,
+            "floor",
+            1000,
+            3000,
+            "archive:/BuildPlayer-a/BuildPlayer-a.sharedAssets.resS",
+        ),
+    ]);
+    let scene = serialized_bytes_ext(
+        &[(1, "camera"), (7, "light")],
+        &[
+            "archive:/buildplayer-a/buildplayer-a.sharedassets",
+            "library/unity default resources",
+        ],
+    );
+    let b = unity_bundle(
+        &[
+            ("BuildPlayer-a.sharedAssets", 4, shared.clone()),
+            ("BuildPlayer-a", 4, scene.clone()),
+            ("BuildPlayer-a.sharedAssets.resS", 0, res.to_vec()),
+            ("BuildPlayer-a.resS", 0, vec![9; 64]),
+        ],
+        0x1000,
+    );
+    (b, shared, scene)
+}
+
+#[test]
+fn scene_bundles() {
+    let res: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+    let (b, shared, scene) = scene_bundle(&res);
+    let dir = temp("scenes");
+    let path = dir.join("scene");
+    std::fs::write(&path, &b).unwrap();
+    // without all_serialized: the Python's Loaded refuses it, and so does DataFile
+    let e = DataFile::open(&path, &Options::default()).err().unwrap();
+    assert!(e
+        .to_string()
+        .contains("expected one serialized file in the bundle, found 2"));
+    let all = Options {
+        all_serialized: true,
+        ..Default::default()
+    };
+    let mut f = DataFile::open(&path, &all).unwrap();
+    assert_eq!(f.file_count(), 2);
+    assert_eq!(
+        f.file_names(),
+        ["BuildPlayer-a.sharedAssets", "BuildPlayer-a"]
+    );
+    assert_eq!(f.selected(), 0);
+    assert_eq!(f.cab_name.as_deref(), Some("BuildPlayer-a.sharedAssets"));
+    assert_eq!(f.path_ids("Texture2D"), vec![2, 3, 4]);
+    assert_eq!(
+        f.read_node(
+            "archive:/BuildPlayer-a/BuildPlayer-a.sharedAssets.resS",
+            1000,
+            4
+        )
+        .unwrap(),
+        res[1000..1004]
+    );
+    assert!(
+        f.stream("BuildPlayer-a").is_none(),
+        "a serialized file is no stream"
+    );
+    // the scene's PPtrs: 0 itself, 1 its shared assets (the lower-case path), 2 not in the bundle
+    f.select(1).unwrap();
+    assert_eq!((f.selected(), f.sf.name.as_str()), (1, "BuildPlayer-a"));
+    assert_eq!(f.cab_name.as_deref(), Some("BuildPlayer-a"));
+    assert_eq!(f.file_of(0), Some(1));
+    assert_eq!(f.file_of(1), Some(0));
+    assert_eq!(f.file_of(2), None);
+    assert_eq!(f.file_of(3), None);
+    assert!(f.select(2).is_err());
+
+    // nothing changed: every node packed as it is (no serialized file saved again)
+    let nodes = |sh: Vec<u8>, sc: Vec<u8>, keep: &[usize]| -> Vec<u8> {
+        let all = [
+            ("BuildPlayer-a.sharedAssets", 4, sh),
+            ("BuildPlayer-a", 4, sc),
+            ("BuildPlayer-a.sharedAssets.resS", 0, res.clone()),
+            ("BuildPlayer-a.resS", 0, vec![9; 64]),
+        ];
+        let pn: Vec<PackNode> = keep
+            .iter()
+            .map(|&k| PackNode {
+                name: all[k].0.into(),
+                flags: all[k].1,
+                src: mem(all[k].2.clone()),
+            })
+            .collect();
+        let h = PackHeader::of(&Bundle::from_source(mem(b.clone())).unwrap().header);
+        let mut c = std::io::Cursor::new(Vec::new());
+        bundle::pack(
+            &mut c,
+            &h,
+            &pn,
+            bundle::LZ4_DATA_FLAG,
+            bundle::LZ4_BLOCK_FLAG,
+            2,
+        )
+        .unwrap();
+        c.into_inner()
+    };
+    let same = nodes(shared.clone(), scene.clone(), &[0, 1, 2, 3]);
+    let out = dir.join("out");
+    f.write_to(&out, false).unwrap();
+    assert_eq!(std::fs::read(&out).unwrap(), same);
+    assert_eq!(f.save().unwrap(), same);
+
+    // an object of the scene changed: the scene saved, its shared assets as they were
+    let mut t = f.sf.read_typetree(7).unwrap();
+    t.set("m_Name", Value::str("lamp")).unwrap();
+    f.sf.save_typetree(7, &t).unwrap();
+    f.select(0).unwrap();
+    assert!(!f.sf.changed());
+    f.select(1).unwrap();
+    assert!(
+        f.sf.changed(),
+        "the change kept while the other was selected"
+    );
+    let scene2 = f.sf.save().unwrap();
+    let want = nodes(shared.clone(), scene2.clone(), &[0, 1, 2, 3]);
+    for spill in [false, true] {
+        let opts = Options {
+            spill_dir: spill.then(|| dir.join("spill")),
+            spill_mb: if spill { 0 } else { 64 },
+            all_serialized: true,
+            ..Default::default()
+        };
+        let mut g = DataFile::open(&path, &opts).unwrap();
+        g.select(1).unwrap();
+        g.sf.save_typetree(7, &t).unwrap();
+        g.select(0).unwrap();
+        let o = dir.join(format!("out{spill}"));
+        g.write_to(&o, false).unwrap();
+        assert_eq!(std::fs::read(&o).unwrap(), want, "spilled: {spill}");
+        assert!(!dir.join("spill/BuildPlayer-a.new").exists());
+    }
+    assert_eq!(f.save().unwrap(), want);
+    f.write_to(&out, false).unwrap();
+    let mut back = DataFile::open(&out, &all).unwrap();
+    back.select(1).unwrap();
+    assert_eq!(
+        back.sf
+            .read_typetree(7)
+            .unwrap()
+            .get("m_Name")
+            .unwrap()
+            .as_str(),
+        Some("lamp")
+    );
+
+    // inlined: the shared assets' streamed textures inline, both streams dropped (nothing reads
+    // them), the scene as it is (unchanged, nothing to inline)
+    let mut g = DataFile::open(&path, &all).unwrap();
+    g.select(1).unwrap();
+    let o = dir.join("inlined");
+    g.write_to(&o, true).unwrap();
+    let mut h = DataFile::open(&path, &all).unwrap();
+    let rd = |p: &str, off: u64, n: usize| g.read_node(p, off, n);
+    assert_eq!(
+        crate::inline::inline_texture_streams(&mut h.sf, rd)
+            .unwrap()
+            .0,
+        2
+    );
+    let shared_inl = h.sf.save().unwrap();
+    assert_eq!(
+        std::fs::read(&o).unwrap(),
+        nodes(shared_inl, scene.clone(), &[0, 1])
+    );
+    let i = DataFile::open(&o, &all).unwrap();
+    assert_eq!(
+        i.node_names(),
+        ["BuildPlayer-a.sharedAssets", "BuildPlayer-a"]
+    );
+    assert_eq!(
+        i.sf.read_typetree(4)
+            .unwrap()
+            .get("image data")
+            .unwrap()
+            .as_bytes()
+            .unwrap(),
+        &res[1000..4000]
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

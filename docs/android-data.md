@@ -324,6 +324,16 @@ folders. Bundles of 2022.3 (format 8) may start their blocks 16-aligned after th
 byte is written back as LZ4HC; a bundle the reader cannot patch in place is saved again by UnityPy
 (LZ4 chunks, same objects).
 
+**Scene bundles** (several serialized files: `BuildPlayer-<scene>` and its `.sharedAssets`,
+[shaders.md](shaders.md#the-files-the-step-reads-asset-bundles-and-scene-bundles)): each serialized
+file's platform is set, in place as for any bundle (every node flagged as a serialized file). The
+convert steps that came before converted each of them (pmu; the Python converter leaves them).
+With `--inline-textures` the textures of each are inlined and the `.resS` nodes none of them reads
+any more dropped: the Python does it in memory with UnityPy (it has no streamed path for several
+files); pmu (2026-11-02; before, status 2) writes the same bundle, one texture's pixels in memory
+at a time, each serialized file held in `<dst>.work` while the bundle is packed (checked against
+the Python on made-up scene bundles: `setup-rs/tests/golden/inline_scenes.sh`).
+
 **Addressables.** Its settings and catalog are text read by Addressables' providers. Release 1.21
 (Unity 2022.3) reads them with UnityWebRequest when the path has `://` and the runtime platform
 is Android, so the jar path works; a desktop build of older releases reads them with

@@ -114,6 +114,8 @@ pub struct SerializedFile {
     db: Option<Arc<ClassDb>>,
     common: Arc<CommonStrings>,
     refs: Option<Vec<RefType>>,
+    /// The target platform and Unity version the file was read with (changed()).
+    opened: (i32, Vec<u8>),
 }
 
 fn hash16(r: &mut Reader) -> Result<[u8; 16]> {
@@ -558,6 +560,7 @@ impl SerializedFile {
         Ok(SerializedFile {
             name: name.to_string(),
             header: h,
+            opened: (target_platform, unity_version.clone()),
             unity_version,
             version,
             target_platform,
@@ -717,6 +720,14 @@ impl SerializedFile {
         self.index.insert(path_id, self.objects.len());
         self.objects.push(o);
         Ok(())
+    }
+
+    /// Whether saving the file would change it: an object given new bytes (save_typetree,
+    /// set_raw, add_object), or the target platform or Unity version set to another.
+    pub fn changed(&self) -> bool {
+        self.objects.iter().any(|o| o.data.is_some())
+            || self.target_platform != self.opened.0
+            || self.unity_version != self.opened.1
     }
 
     /// Drops an object's saved bytes (it is written as the file has it again).
