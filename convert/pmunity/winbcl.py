@@ -1,7 +1,7 @@
 """`python -m pmunity.winbcl` (or `pmunity winbcl`): Unity's own class libraries a desktop build
 needs for the Android player, from Unity's Windows editor installer.
 
-    python -m pmunity.winbcl <Game>_Data <out dir> [--version V] [--installer FILE|URL]
+    python -m pmunity.winbcl <Game>_Data <out dir> [--version V] [--installer FILE|URL | --donor APK]
                              [--player PKG] [--no-facades] [--json FILE]
 
 Two cases, both read from the same installer:
@@ -30,19 +30,31 @@ requests (nsis.py): about 6 MB for case 1 (22 class libraries and the header), a
 2 (the header and netstandard.dll). A solid Unity 6 installer (6000.0.85, 6000.3.26, 6000.4+) is read by
 walking its 2 MiB chunks to the files: a few thousand small requests more. Nothing is read when
 neither case applies. `android-data --managed-file <out dir>/<name>` ships the files instead (the
-command prints the options; a port's setup does all of it: docs/porting.md).
+command prints the options).
+
+--donor APK reads them from a Mono donor of the same version instead (tools/donor: a small game of
+the port's own built with that Unity version; its assets/bin/Data/Managed/ has the class libraries
+of its Android build, `unityjit-linux`'s from 2021.2): nothing is downloaded, which is how a port's
+setup runs it (docs/porting.md). A donor carries the facades its engine modules reference (case 2:
+all of them, it runs with them), but only the class libraries its own build uses (case 1: mscorlib,
+System, System.Core and what they reference); the game's other class libraries stay its Windows
+ones and are named in the log and in the report's `not_in_donor`.
 """
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.parse
 import urllib.request
+import zipfile
 
 API = 'https://services.api.unity.com/unity/editor/release/v1/releases'
 WIN, LINUX = 'MonoBleedingEdge/lib/mono/unityjit-win32/', 'MonoBleedingEdge/lib/mono/unityjit-linux/'
 UNITYJIT = 'MonoBleedingEdge/lib/mono/unityjit/'   # (2018.1 - 2021.1: one profile for every platform)
 MARK = b'SetThreadErrorMode'                    # in the unityjit-win32 mscorlib (Interop+Kernel32)
+DONOR_MANAGED = 'assets/bin/Data/Managed/'      # an Android build's assemblies, in its APK
+CLASS_LIBRARY = re.compile(r'(mscorlib|netstandard|System(\.[^/]+)?|Mono\.[^/]+|Microsoft\.[^/]+)\.dll')
 
 
 def is_win32_profile(managed):
@@ -119,14 +131,46 @@ def missing(managed, player):
     return missing_references(pm, names)
 
 
+class Donor:
+    """A Mono donor APK as the source instead of the installer: its class libraries (Unity's names,
+    CLASS_LIBRARY) under the installer's path of every profile, so replacements() and facades() read
+    them as they read the installer's. Nothing is downloaded."""
+
+    class _Read:
+        fetched = 0
+
+    def __init__(self, apk):
+        self.z = zipfile.ZipFile(apk)
+        self.name = os.path.basename(apk)
+        self.s = self._Read()
+        self.libs = sorted(n[len(DONOR_MANAGED):] for n in self.z.namelist()
+                           if n.startswith(DONOR_MANAGED) and CLASS_LIBRARY.fullmatch(n[len(DONOR_MANAGED):]))
+
+    def index(self):
+        return {p + n: n for n in self.libs for p in (WIN, LINUX, UNITYJIT)}
+
+    def extract(self, n):
+        return self.z.read(DONOR_MANAGED + n)
+
+    def close(self):
+        self.z.close()
+
+
 def _index(ns):
-    """{installer path relative to the editor folder: block offset} of an nsis.Nsis."""
+    """{installer path relative to the editor folder: block offset} of an nsis.Nsis (a Donor's own)."""
+    if isinstance(ns, Donor):
+        return ns.index()
     return {_rel(path): off for path, off, _ in ns.files()}
 
 
 def _nsis(installer):
     from . import nsis
-    return installer if isinstance(installer, nsis.Nsis) else nsis.Nsis(installer)
+    return installer if hasattr(installer, 'extract') else nsis.Nsis(installer)
+
+
+def _read(ns):
+    """What a source read, for the log."""
+    return f'from {ns.name}' if isinstance(ns, Donor) else f'{ns.s.fetched / 1e6:.1f} MB read'
 
 
 def replacements(managed, installer, out, log=print, files=None):
@@ -157,7 +201,7 @@ def replacements(managed, installer, out, log=print, files=None):
             continue
         os.replace(dst + '.part', dst)
         out_list.append((n, dst))
-    log(f'winbcl: {len(out_list)} class libraries as unityjit-linux ({ns.s.fetched / 1e6:.1f} MB read): '
+    log(f'winbcl: {len(out_list)} class libraries as unityjit-linux ({_read(ns)}): '
         + ', '.join(n for n, _ in out_list))
     if own:
         ns.close()
@@ -191,11 +235,12 @@ def facades(refs, profile, installer, out, log=print, files=None):
     return got, other
 
 
-def supply(data, out, version=None, installer=None, player=None, with_facades=True, log=print):
+def supply(data, out, version=None, installer=None, player=None, with_facades=True, log=print, donor=None):
     """What the build in `data` needs of Unity's class libraries for the Android player (the
-    module's two cases), written to out. Returns a report: {'class_libraries', 'facades': names
-    written, 'not_unity': {assembly: [engine modules]} (only the developer has them), 'read_mb',
-    'installer'}."""
+    module's two cases), written to out, from the installer or (donor) a Mono donor APK. Returns a
+    report: {'class_libraries', 'facades': names written, 'not_unity': {assembly: [engine modules]}
+    (only the developer has them), 'read_mb', 'installer'; with a donor 'donor', and
+    'not_in_donor': the game's class libraries the donor does not carry (case 1)}."""
     from . import unity_version as UV
     managed = os.path.join(data, 'Managed')
     v = UV.Version(version) if version else UV.of_data(data)
@@ -215,22 +260,34 @@ def supply(data, out, version=None, installer=None, player=None, with_facades=Tr
             log('winbcl: nothing to do (the class libraries are not the unityjit-win32 ones'
                 + (', and the build has every assembly the engine modules reference)' if player else ')'))
         return rep
-    try:
-        src = installer or editor_installer(v.text)
-        rep['installer'] = src
-        log(f"winbcl: Unity {v}'s Windows editor installer: {src}")
-        ns = _nsis(src)
-    except (OSError, SystemExit) as ex:
-        if win:
-            raise
-        # (only facades wanted: the game may still run without them; android-data warns)
-        rep['error'] = str(ex)
-        log(f"winbcl: could not read the installer ({ex}): {', '.join(sorted(want))} left out")
-        return rep
+    if donor:
+        rep['donor'] = os.path.basename(donor)
+        log(f"winbcl: Unity {v}'s class libraries from the donor {rep['donor']} (nothing is downloaded)")
+        ns = Donor(donor)
+    else:
+        try:
+            src = installer or editor_installer(v.text)
+            rep['installer'] = src
+            log(f"winbcl: Unity {v}'s Windows editor installer: {src}")
+            ns = _nsis(src)
+        except (OSError, SystemExit) as ex:
+            if win:
+                raise
+            # (only facades wanted: the game may still run without them; android-data warns)
+            rep['error'] = str(ex)
+            log(f"winbcl: could not read the installer ({ex}): {', '.join(sorted(want))} left out")
+            return rep
     try:
         files = _index(ns)
         if win:
             rep['class_libraries'] = [n for n, _ in replacements(managed, ns, out, log, files)]
+            if donor:
+                lack = [n for n in sorted(os.listdir(managed))
+                        if CLASS_LIBRARY.fullmatch(n) and n not in ns.libs]
+                if lack:
+                    rep['not_in_donor'] = lack
+                    log(f"winbcl: not in the donor (its own build does not use them): the game's Windows "
+                        f"{', '.join(lack)} stay")
         if want:
             got, other = facades(want, profile, ns, out, log, files)
             rep['facades'] = [n for n, _ in got]
@@ -242,7 +299,8 @@ def supply(data, out, version=None, installer=None, player=None, with_facades=Tr
         rep['read_mb'] = round(ns.s.fetched / 1e6, 2)
     finally:
         ns.close()
-    log(f'winbcl: {rep["read_mb"]:.1f} MB read from the installer')
+    if not donor:
+        log(f'winbcl: {rep["read_mb"]:.1f} MB read from the installer')
     return rep
 
 
@@ -252,13 +310,14 @@ def main(argv=None):
     ap.add_argument('out', help='where the class libraries go')
     ap.add_argument('--version', help="the data's Unity version (default: read from the data)")
     ap.add_argument('--installer', help='a local copy (or another URL) of the Windows editor installer')
+    ap.add_argument('--donor', help='a Mono donor APK of the same version to read them from instead (no network)')
     ap.add_argument('--player', help="Unity's Android player (`pmunity player fetch` folder): also the assemblies its "
                                      "engine modules reference that the build lacks (facades such as netstandard.dll)")
     ap.add_argument('--no-facades', action='store_true', help='only the Windows class libraries (case 1)')
     ap.add_argument('--json', help='write the report (what was written, what is missing) here')
     a = ap.parse_args(argv)
     rep = supply(a.data, a.out, a.version, a.installer, a.player, not a.no_facades,
-                 log=lambda m: print(m, file=sys.stderr))
+                 log=lambda m: print(m, file=sys.stderr), donor=a.donor)
     if a.json:
         with open(a.json, 'w') as f:
             json.dump(rep, f, indent=1)

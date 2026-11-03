@@ -1,20 +1,25 @@
 # Porting a Unity game
 
-A PortMaster port of a Unity game made with this repository is a launcher and a setup: on the
-first launch the setup fetches Unity's Android player for the game's exact version, converts the
-player's own copy of the game on the handheld and packs it for the player; every launch after
-that runs it with `ua_host`. Nothing of the game or of Unity is in the port. `pmunity port` writes
-all of that from a short settings file, so a port needs no scripts of its own:
+A PortMaster port of a Unity game made with this repository is a launcher, a setup and one or two
+**donors**: small games of the port's own built with the game's exact Unity version, whose APKs
+carry Unity's Android player. On the first launch the setup unpacks the player from the donors,
+converts the player's own copy of the game on the handheld and packs it for the player; every
+launch after that runs it with `ua_host`. Nothing of the game is in the port, and of Unity only
+the donors. **The handheld never downloads anything: the porter builds the donors (section 5) and
+the release ships them.** `pmunity port` writes all of that from a short settings file, so a port
+needs no scripts of its own:
 
 ```sh
 cd convert
-python -m pmunity port check <game>                      # what the game is, what it needs, the route
+python -m pmunity port check <game>                      # what the game is, what it needs, the route, the donors
 python -m pmunity port new mygame --data <game>          # -> mygame/ with port.toml and the port
 $EDITOR mygame/port.toml                                 # title, pointer mode, keys, questions, ...
-python -m pmunity port new mygame --data <game>          # regenerate from the edited port.toml
-mygame/package.sh                                        # -> mygame/out/mygame.zip, the release
+python -m pmunity port new mygame --data <game>          # regenerate; names the donors to build
+../tools/donor/get-editor.sh <version> editors/<version> # (a Mac) the game's Unity editor + Android Build Support
+../tools/donor/build.sh editors/<version>/Unity.app MonoArmv7 donors   # each donor port new named (section 5)
+DONORS=donors mygame/package.sh                          # -> mygame/out/mygame.zip, the release (with the donors)
 PM_7ZZ=<PortMaster's 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip <game> work/mygame 300
-python -m pmunity port package mygame --submission       # + mygame/out/submission/mygame/ for PortMaster's repository
+python -m pmunity port package mygame --donors donors --submission   # + mygame/out/submission/mygame/ for PortMaster's repository
 ```
 
 `<game>` is the folder of a desktop build as you have it (the one with the executable and
@@ -35,7 +40,7 @@ patches and a helper assembly).
   survey of the game's code that finds its pad bindings (what a handheld without sticks needs:
   `UA_DPAD_STICK`, `UA_DPAD_SWAP`, the `[controls]` draft), InControl's pad names and the files it
   reads. Without it the check says what it left out, and the port lacks those. For the rehearsal
-  (section 6), PortMaster's own 7-Zip: `PortMaster/7zzs.aarch64` inside `PortMaster.zip` from
+  (section 7), PortMaster's own 7-Zip: `PortMaster/7zzs.aarch64` inside `PortMaster.zip` from
   [PortMaster-GUI's releases](https://github.com/PortsMaster/PortMaster-GUI/releases).
 - **The game as a folder:** GOG's Linux installer (`.sh`, a shell script with a zip appended) is
   never run: `7zz x -tzip <installer>.sh -o<dir>` (or `unzip -q <installer>.sh -d <dir>`, whose
@@ -50,7 +55,7 @@ patches and a helper assembly).
   output `out/`, game and Unity file types, the rig's screenshots); `package.sh` there builds the
   release, with `PMUNITY` pointing at a portmaster-unity checkout (default: one beside the
   repository). A port's own code (an assembly patch, a hook) goes in the repository too, with its
-  build in `[build]` (section 9).
+  build in `[build]` (section 10).
 - **The pad bindings:** a game's controls are in its input stack's defaults (Rewired's XML,
   InControl's or the Input System's actions in the assemblies); `port check`'s input survey says
   which stack. On a handheld without sticks a game that moves only with the left stick needs the
@@ -94,7 +99,7 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 |---|---|---|
 | `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, translated on the handheld by the release's `pmhlslcc`; a 2021.2+ Windows build's class libraries fetched by the setup, `pmunity winbcl`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
 | `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
-| `mono-arm64` | a Mono build of Unity 2017.4+ with the .NET 4.x runtime on a 64-bit userland: the game's own assemblies run by Unity's Mono (built for aarch64 Linux, shipped with the release) inside Unity's arm64 IL2CPP player, whose `libil2cpp.so` is a bridge to it; no IL2CPP compile, the desktop's runtime and class libraries. .NET 3.5 games run on the line's MonoBleedingEdge with Mono's 4.x class libraries built from the same sources (`tools/mono64/build-classlibs.sh`; Cuphead, [mono-arm64.md](mono-arm64.md#a-net-35-game-on-the-4x-class-libraries-cuphead)), not yet through `port new`. Offered by `port check`, not yet recommended over the other routes | templates in `convert/pmunity/port_template/mono-arm64/`, hook `mono64.py`: the android route's setup with the IL2CPP player and its engine modules (`player fetch --managed`) and `android-data --mono64`; the release's `setup/mono64/<line>/` (the package part `mono64`: `runtime/mono64/build.sh` and `tools/mono64/build-mono.sh <line>`, Docker; `--mono64-work`) goes into `lib/` ([mono-arm64.md](mono-arm64.md)) |
+| `mono-arm64` | a Mono build of Unity 2017.4+ with the .NET 4.x runtime on a 64-bit userland: the game's own assemblies run by Unity's Mono (built for aarch64 Linux, shipped with the release) inside Unity's arm64 IL2CPP player, whose `libil2cpp.so` is a bridge to it; no IL2CPP compile, the desktop's runtime and class libraries. .NET 3.5 games run on the line's MonoBleedingEdge with Mono's 4.x class libraries built from the same sources (`tools/mono64/build-classlibs.sh`; Cuphead, [mono-arm64.md](mono-arm64.md#a-net-35-game-on-the-4x-class-libraries-cuphead)), not yet through `port new`. Offered by `port check`, not yet recommended over the other routes | templates in `convert/pmunity/port_template/mono-arm64/`, hook `mono64.py`: the android route's setup with the IL2CPP player and its engine modules (`player donor --managed` from an IL2CPP and a Mono donor) and `android-data --mono64`; the release's `setup/mono64/<line>/` (the package part `mono64`: `runtime/mono64/build.sh` and `tools/mono64/build-mono.sh <line>`, Docker; `--mono64-work`) goes into `lib/` ([mono-arm64.md](mono-arm64.md)) |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
 | `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
@@ -105,14 +110,21 @@ ships `setup/pmhlslcc` (HLSLcc for aarch64, built in Docker by `ARCH=arm64 tools
 with HLSLcc's licence; the `pmhlslcc?` part of route.json), which the setup gives the converter
 (`PMHLSLCC`; docs/shaders.md, "Windows builds"). A Windows build of Unity 2021.2+ also needs the
 Unix class libraries, because its own are Windows-only: right after the player, the setup runs
-`pmunity winbcl`, which reads them from Unity's Windows editor installer of the game's version with
-range requests (about 6 MB, a minute over Wi-Fi; about 17 MB on the card; or from
-`UnitySetup64-<version>.exe` in `gamedata/`) for android-data's `--managed-file`. The same step
-gives any build the facades Unity's Android engine modules reference and the build lacks (a Unity 6
-build without `netstandard.dll`: about 1 MB read), and names, without faking them, the other
-assemblies they reference that are not Unity's own; when nothing is missing it reads nothing.
-`android_data.winbcl = "off"` leaves the step out. By hand: `python -m pmunity winbcl <Game>_Data
-<dir> [--player <pkg>]` prints the `--managed-file` options for `android-data`. The il2cpp-arm64
+`pmunity winbcl --donor <the port's Mono donor>`, which takes the `unityjit-linux` twins from the
+donor's own `assets/bin/Data/Managed/` for android-data's `--managed-file` (nothing downloaded). A
+donor carries only the class libraries its own build uses: a pong donor of 2017.4 has mscorlib,
+System, System.Core, System.Xml, System.Configuration, System.Security, Mono.Security and Mono.Posix;
+the game's others (System.Data, System.Xml.Linq, System.Net.Http, System.Runtime.Serialization, ...)
+stay its Windows ones, named in `patchlog.txt` (`not_in_donor` in `--json`): untested on the player
+where their code reaches Windows' kernel32. A donor that carries them would need code of its own
+that uses each (tools/donor's pong references only what Unity's engine does). The
+same step gives any build the facades Unity's Android engine modules reference and the build lacks
+(a Unity 6 build without `netstandard.dll`: the donor has them, it runs with the same modules), and
+names, without faking them, the other assemblies they reference that are not Unity's own; when
+nothing is missing it reads nothing. `android_data.winbcl = "off"` leaves the step out. By hand:
+`python -m pmunity winbcl <Game>_Data <dir> [--player <pkg>] --donor <donor.apk>` prints the
+`--managed-file` options for `android-data` (without `--donor` it reads Unity's Windows editor
+installer instead, on the porter's computer). The il2cpp-arm64
 route compiles with Unity's own class libraries and needs only `pmhlslcc` (shipped the same way;
 not tried with a Windows build yet).
 
@@ -144,6 +156,7 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
   "title": "what the route is",
   "files": {"@@TITLE@@.sh": "launcher.sh", "@@PORTDIR@@/setup/patchscript": "patchscript", "...": "..."},
   "package": ["ua_host", "pmunity", "pybundle", "asmpatch?"],
+  "donors": ["player", "mono/armeabi-v7a"],
   "defaults": {"player": {"backend": "il2cpp", "abi": "arm64-v8a"}}
 }
 ```
@@ -151,9 +164,9 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
 `files` maps each output path of the port folder to a template, looked up in the route's folder
 and then in `port_template/common/` (the READMEs, the gamedata note, the exit-hotkey `.ini` for gptokeyb2,
 `package.sh`). Templates are text with `@@NAME@@` values (`PORTDIR`, `TITLE`, `ZIP`, `LAUNCHER`,
-`SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`, `PLAYER_MB`
-and `DOWNLOAD_MB` (what the setup downloads from Unity), `DOWNLOAD_MORE` (a sentence on the class
-libraries a Windows 2021.2+ build gets, else empty), and for
+`SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`,
+`PLAYER_FROM` (where Unity's player comes from: the port's donors, no Wi-Fi; for il2cpp-arm64 what
+its setup downloads), and for
 PortMaster's README sections `THANKS`, `CONTROLS` (the controls table), `ROUTE_NEEDS` (what the
 route needs of the handheld), `BUILD_STEPS` (the build commands of the route's `package` parts);
 an unknown name is an error). Everything else a launcher or setup needs comes from files `port new`
@@ -163,7 +176,9 @@ route by `port new` itself. `package` names the parts the release zip gets (`ua_
 `ua_host64` for it beside a 32-bit `ua_host`; a `?` part only when the port uses it: `asmpatch?`
 when it runs asmpatch, `pmhlslcc?` when it translates Direct3D 11 shaders, `pmspirvcross?`
 when it translates Vulkan ones, `ua_host?` /
-`ua_host64?` for the ABIs in `player.abis`); `defaults` are
+`ua_host64?` for the ABIs in `player.abis`); `donors` the donors its setup reads (section 5):
+`"player"` for the port's `player.backend`/`player.abi`, or `"<backend>/<abi>"`, each for every
+Unity version of the port; `defaults` are
 port.toml values the route sets where port.toml says nothing; `config` lists the port.toml
 sections the route uses (port.toml and `setup.env` get only those; default all) and `config_doc`
 replaces their explanations; a part the packager does not know comes from a hook module (below).
@@ -188,14 +203,11 @@ checks the game and writes `<out>` (default `./<name>`):
 | `testing_thread.txt` | the post for PortMaster's Discord testing channel that goes with the test zip: how to install it, the game's link, the instructions, the controls, the firmware and screen checklist (not in the zip) |
 | `package.sh` | the release build (`port package`) |
 
-`--player PKG` (a folder from `pmunity player fetch <version> PKG`) puts the installer's URL and
-the checksums of `libmain.so` and `libunity.so` into the setup, which then checks what it fetches.
-
-A setup that needs no network gets the player from donors instead: small games of the port's own,
-built with the game's Unity version and a free Unity licence (`tools/donor/build.sh <editor>
-MonoArmv7|Il2cppArm64 <out>`: a one-scene game of pong, no engine stripping), shipped in the port; the setup
-runs `pmunity player donor <version> PKG --apk <donor.apk>` (an IL2CPP donor's player with `--managed`
-takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead's setups do this.
+`port new` writes the donors the route needs for each of `game.unity_versions` into `port.toml`
+(`player.donors`, as a comment: they follow the route and the versions), `setup/setup.env`
+(`DONORS`) and `port.build.json`, and prints them with the command that builds them (section 5).
+`--player PKG` (a folder from `pmunity player donor <version> PKG --apk <donor.apk>`) puts the
+checksums of its `libmain.so` and `libunity.so` into the setup, which then checks what it unpacks.
 
 ### port.toml
 
@@ -226,21 +238,22 @@ takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead
 | `game.genre`, `description` | the first of `port.genres`, `port.desc` | `gameinfo.xml`'s genre (a display name: `Platformer`, `RPG`) and description (the frontend has room for more than `port.desc`) |
 | `game.url` | the first store's `gameurl` | the game's page (the testing thread) |
 | `[controls]` | drafted from InControl's default pad bindings (the check's survey), else none; your own table replaces the draft | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
-| `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player package `pmunity player fetch` gets; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
+| `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player the setup unpacks from the port's donors; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
+| `player.donors` | the route's for each of `game.unity_versions` (section 5) | the donor APKs the release ships in `donor/`: `port new` names the route's (a comment in port.toml) and adds any listed here; `port package --donors DIR` copies them and stops when one is missing |
 | `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
 | `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
-| `player.url`, `player.sha256` | from `--player` | the installer (else looked up on the handheld through Unity's release API), checksums |
+| `player.sha256` | from `--player` | `{"libmain.so" = "<sha256>", ...}`: the setup checks the player it unpacks from the donors (an older port.toml's `player.url` is ignored: the handheld never downloads Unity's player) |
 | `convert` | `steps = ["shaders", "settings", "audio", "quality"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `quality.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld. `quality` is the handheld quality profile ([quality.md](quality.md)): a cheaper picture where the handheld has 1 GB of RAM, the game play the same; the `PICTURE` question (below) lets the player choose. `video` (pmu only): VP8 clips taller than `max_height` (720) halved until they are not and encoded again (`mode` auto: where MemTotal is at most `ram_mb`, 1024; `cq_level` 10, `cpu_used` 4), each into its old place in the resource file: a 1080p cinematic is more than an A53 decodes in time, 540p a quarter of it and the same on a 720x480 panel ([rust-setup.md](rust-setup.md#video)) |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, the Input System package or PlayMaker, else `off` | `auto`: tools/asmpatch runs on the game's assemblies with its default patches, the android ones and the exact optimizations (each changes only what it finds; the package then ships asmpatch); a list: only those patches; `["auto", "<patch>", ...]`: the default ones and those (opt-in ones such as the `reduce` patches) |
 | `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch); the il2cpp-arm64 route compiles the patch into the game's IL2CPP build (`pmunity il2cpp --streaming-assets`) and packs the same mode |
-| `android_data.winbcl` | `auto` | `auto`: after the player, the setup runs `pmunity winbcl`: a Windows 2021.2+ build gets the Unix class libraries of its version, any build the facades the player's engine modules reference that it lacks (e.g. `netstandard.dll`), both from Unity's Windows editor installer (range requests; nothing is read when nothing is missing); `off`: not run |
+| `android_data.winbcl` | `auto` | `auto`: after the player, the setup runs `pmunity winbcl --donor`: a Windows 2021.2+ build gets the Unix class libraries of its version that the Mono donor carries, any build the facades the player's engine modules reference that it lacks (e.g. `netstandard.dll`), both from the port's Mono donor (nothing downloaded; nothing is read when nothing is missing); `off`: not run |
 | `android_data.data_path` | false | true: the reads of `Application.dataPath` that reach System.IO get `Game_Data/` beside the APK, with the data folder's own files (asmpatch's data-path patch; docs/android-data.md, section 6); the check notes such reads |
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
 | `wwise.banks` | the check's: the game's Wwise soundbank folder (relative to the data folder) when its banks are of a version `pmu wwise` reads (128, Wwise 2017.2) | the setup converts those banks once into the port's `wwise/` folder (step 5 below), and the launcher points ua_host's own Wwise player at it (`UA_WWISE_DATA`): the game's sound without Wwise's engine ([wwise-player.md](wwise-player.md)); empty: no conversion, the game runs silent on ua_host's built-in Wwise |
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set: reductions of the picture that leave the game play as it is ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
-| `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 9), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
+| `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 10), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
 | `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
 
 Keep the game's look and play: options that change the picture or the game play stay off unless
@@ -331,13 +344,15 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    `.7z`, `.rar`, `.tar.*`, with PortMaster's 7-Zip), else macOS installers (`.pkg`, `pmunity
    macpkg`), else the port's `game` hook; a compressed build is unpacked (`pmunity unpack`); its
    Unity version must be one of `game.unity_versions`;
-3. Unity's Android player of that version: `pmunity player fetch` (about 10 MB of the installer
-   with HTTP range requests); from `UnitySetup-Android-Support-for-Editor-<version>.exe` when the
-   player put it in `gamedata/`; if Unity's servers cannot be read that way, the whole installer
-   with curl or wget; checksums when the port has them; then `pmunity winbcl` (unless
-   `android_data.winbcl = "off"`): the class libraries a Windows 2021.2+ build needs (about 6 MB)
-   and missing facades, from Unity's Windows editor installer (or `UnitySetup64-<version>.exe` in
-   `gamedata/`);
+3. Unity's Android player of that version, from the port's donors (`<port>/donor/`, section 5):
+   `pmunity player donor <version> <pkg> --apk donor/donor-<version>-<backend>-<armv7|arm64>.apk`
+   (mono-arm64: the IL2CPP donor's player with `--managed`, the engine modules from the Mono donor);
+   no donor of the game's version is a plain failure ("This port ships no donor of Unity X"), never a
+   download; checksums when the port has them; then `pmunity winbcl --donor` (unless
+   `android_data.winbcl = "off"`): the class libraries a Windows 2021.2+ build needs and missing
+   facades, from the Mono donor (section 2). Nothing on the handheld downloads anything, except the
+   il2cpp-arm64 route's IL2CPP compile and the apk route's `player.il2cpp` (Unity's IL2CPP tools and
+   static libraries, Debian's compilers, .NET: no donor carries them);
 4. `pmunity convert` with `setup/convert.json`, the plugins and the answers (a Windows build's
    Direct3D 11 shaders with `setup/pmhlslcc`, a Vulkan-only build's with `setup/pmspirvcross`);
 5. a Wwise game (`wwise.banks`): `pmu wwise <data>/<banks> <port>/wwise --wwise-lib <plugins>` turns its soundbanks
@@ -401,16 +416,61 @@ installed files, then `setup/` goes. Now that is convert's `video` step when the
 1 GB handhelds, [rust-setup.md](rust-setup.md#video)); the update logs to `patchlog.txt` like the
 setup, and a run that is interrupted runs again at the next launch.
 
-## 5. package
+## 5. Donors: build Unity's player for the port
+
+**Every port of the `android` and `mono-arm64` routes needs donors, and the porter builds them
+before `package`.** A donor is a small game of the port's own (a one-scene game of pong,
+`tools/donor/Assets`) built with exactly the game's Unity version; its APK carries that version's
+Android player, which the setup unpacks (`pmunity player donor`). The release ships the donors in
+`<name>/donor/` with `licenses/LICENSE.unity-donor.txt` (Made-with-Unity applications, under Unity's
+terms of service), so the handheld never downloads Unity's player: nothing else of Unity is shipped.
+
+| route | donors (for each of `game.unity_versions`) |
+|---|---|
+| `android` | `donor-<version>-mono-armv7.apk` (the player; and the class libraries of `winbcl`) |
+| `mono-arm64` | `donor-<version>-il2cpp-arm64.apk` (the player) and `donor-<version>-mono-armv7.apk` (its engine modules, the class libraries) |
+| `il2cpp-arm64`, `apk`, `box64` | none (il2cpp-arm64 downloads Unity's IL2CPP tools on the handheld: section 4) |
+
+`port check` prints the donors of the recommended route, `port new` the port's (and writes them to
+`player.donors`), and `port package` stops, naming each missing donor and the command that builds
+it. The steps, on a Mac:
+
+1. **The editor** of that version with Android Build Support, unpacked, not installed:
+   `tools/donor/get-editor.sh <version> <dir>` reads the version's changeset and downloads from
+   Unity's release API (`PKGS=<folder>`: installers already downloaded), and unpacks both with
+   `pkgutil --expand-full` (no administrator password, no Hub, no sign-in) into `<dir>/Unity.app`
+   and `<dir>/PlaybackEngines/AndroidPlayer`. An editor the Unity Hub installed works as well.
+2. **A licence:** the editor builds with Unity Personal's licence file,
+   `/Library/Application Support/Unity/Unity_lic.ulf`, made once by the Unity Hub or Unity's manual
+   activation. The tools never sign in.
+3. **The Android tools** `build.sh` points the editor at: `SDK=<an Android SDK>`, `JDK=<a JDK home>`,
+   and for an IL2CPP donor `NDK=<the NDK the editor asks for>` (2017.4: SDK tools r25.2.5,
+   build-tools 28.0.3, platforms;android-28, JDK 8, NDK r13b; newer editors name theirs in their
+   Android Build Support).
+4. **Each donor:** `tools/donor/build.sh <dir>/Unity.app MonoArmv7 <DONORS dir>` and, for
+   `mono-arm64`, `tools/donor/build.sh <dir>/Unity.app Il2cppArm64 <DONORS dir>`: it writes
+   `donor-<version>-mono-armv7.apk` / `donor-<version>-il2cpp-arm64.apk`, the names the setup reads.
+5. **Package** with them: `DONORS=<DONORS dir> <port>/package.sh`, or `port package --donors <dir>`.
+
+Donors are never committed (a port's repository holds no Unity files; `port new`'s `.gitignore`
+leaves out `*.apk`): keep the folder beside the port's repository and build the release from it.
+Known gaps: a donor carries only the class libraries its own build uses (section 2, Windows
+builds); `player donor` takes `assets/bin/Data/unity default resources`, so a 2023.2+ donor (whose
+APK keeps it under `Resources/`) and the Memory Advice models 2023.1's player reads have not been
+tried yet.
+
+## 6. package
 
 ```
-python -m pmunity port package <port folder> [--out DIR] [--runtime DIR] [--ua-host FILE]
+python -m pmunity port package <port folder> [--out DIR] [--donors DIR] [--runtime DIR] [--ua-host FILE]
                                [--media-licenses DIR] [--pmu DIR] [--pybundle FILE] [--asmpatch-bin FILE]
                                [--pmhlslcc-bin FILE] [--pmspirvcross-bin FILE] [--no-build]
 ```
 
-(or the port's `package.sh`) builds `<out>/<name>.zip` (default `<port>/out/`): the launcher and
-the port folder, `ua_host` (`runtime/host/out/`, built with `runtime/build.sh` when missing), the
+(or the port's `package.sh`, `DONORS=<dir>`) builds `<out>/<name>.zip` (default `<port>/out/`): the
+launcher and the port folder, the donors (`--donors DIR`, else `$DONORS`: each of `player.donors`
+into `<name>/donor/`, with `licenses/LICENSE.unity-donor.txt`; a missing one stops the build,
+section 5), `ua_host` (`runtime/host/out/`, built with `runtime/build.sh` when missing), the
 setup's tools: pmu where it runs the whole setup (`--pmu DIR` with `pmu` and `licenses/`, else
 `setup-rs/tools/build_pmu.sh tools/port/out/pmu` builds it in setup-rs's Rust image), else the
 converter (`convert/pmunity`) and the setup's Python (`--pybundle`, else
@@ -441,9 +501,9 @@ controls, the game's link), no screenshot or one that is not 4:3 and at least 64
 `gameinfo.xml` naming an image the port does not ship, an em dash or Markdown in the plain texts,
 `exp = true`, a launcher without PortMaster's standard first lines (or with `"$GPTOKEYB2"` quoted, a
 fixed `SDL_VIDEODRIVER`, no `pm_finish`), files over 90 MB. `--submission` also writes
-`<out>/submission/<name>/`, the port as PortMaster's repository holds it (section 11).
+`<out>/submission/<name>/`, the port as PortMaster's repository holds it (section 12).
 
-## 6. Rehearsal
+## 7. Rehearsal
 
 `tools/port/rehearse.sh <zip> <game folder or archive> <work dir> [emu seconds] [input script]`
 unpacks the release into `<work>/roms/ports` as PortMaster would, copies the game into its
@@ -494,7 +554,7 @@ as `tools/emu/emu.sh` passes them: `UA_*`, `GC_*`, `ANDROID_*`, `GALLIUM_*`, `LP
 reaches its title after some minutes in the rig (Enter the Gungeon: about 3), so a run of 300 - 600
 s is what shows the title music.
 
-## 7. On a device
+## 8. On a device
 
 The rehearsal does not cover what only a handheld has. Check, with the release zip unpacked into
 `ports/`:
@@ -502,8 +562,9 @@ The rehearsal does not cover what only a handheld has. Check, with the release z
 - the setup through PortMaster's real patcher: the progress screen, the questions, a failure
   message (rename the game's folder to see one), an interrupted setup (power off during the
   conversion) continuing on the next launch;
-- the download over the handheld's Wi-Fi (Python's TLS and the system's CA certificates; the
-  setup sets `SSL_CERT_FILE` when it finds a bundle);
+- the setup with the network off (it downloads nothing: the player comes from `donor/`); the
+  il2cpp-arm64 route's download over the handheld's Wi-Fi (the system's CA certificates: the setup
+  sets `SSL_CERT_FILE` when it finds a bundle);
 - the time and the peak memory of the setup on the device's CPU (the textures step is the slow
   part: ASTC encoding). A rehearsal container has the PC's memory, not the handheld's: a setup
   that passes there can still be killed by a 1 GB handheld's kernel. The textures step keeps to
@@ -521,7 +582,7 @@ The rehearsal does not cover what only a handheld has. Check, with the release z
   (`UA_FPS=5` in `log.txt`);
 - the display path (`UA_DISPLAY`: Mali fbdev or SDL; `[display]` in `log.txt`).
 
-## 8. By hand
+## 9. By hand
 
 The same steps without the setup, on a PC:
 
@@ -543,7 +604,7 @@ The same steps without the setup, on a PC:
    else a Python file (`--plugin steps.py` with `STEPS = {"name": function(job)}`). Check the shaders on the device:
    `python -m pmunity shaders-export <converted Data> glsl/`, then `runtime/host/out/shadercheck
    glsl` there (docs/shaders.md).
-3. **Package**: `python -m pmunity player fetch <version> <pkg>`, then
+3. **Package**: `python -m pmunity player donor <version> <pkg> --apk <donor.apk>` (section 5), then
    `python -m pmunity android-data --src <converted Data> --pkg <pkg> --out android --pack all
    [--asmpatch <asmpatch>] [--mono-etc <Game>.app/Contents/Mono/etc]` (docs/android-data.md).
 4. **Run**: on the handheld, in one folder: `ua_host`, `lib/` with the player's libraries
@@ -576,7 +637,7 @@ Typical first problems:
 | slow everywhere (a steady low frame rate) | `UA_PROF=500` + `touch prof.req` + `tools/analysis/profsum.py`; on a handheld, measured runs side by side: `tools/device/profbench.sh` (docs/profiling.md) |
 | a steady 30 fps (`UA_FPS=5`) | `[host] frame rate` in `log.txt`: 2021.1+ Android players render at a fixed 30 fps unless the game sets `targetFrameRate`; converted desktop data gets the desktop's vsync pacing (`UA_FRAME_RATE=desktop`, the default when `android_package.json` names Unity 2021.1+: repack data made before that); `UA_FRAME_RATE=30` caps a game too heavy for 60 (docs/runtime.md) |
 
-## 9. What may need a game's own code
+## 10. What may need a game's own code
 
 Desktop builds sometimes assume a desktop: a store client (GOG Galaxy, Steamworks) the game waits
 for, DLC found through the store, input set up for keyboards and desktop pads, a resolution or
@@ -621,7 +682,7 @@ With asmpatch on (`android_data.asmpatch`, or `streaming_assets` other than `obb
 change gets both: the port's patch runs first, on the original, and asmpatch then patches its output
 (tools/asmpatch/README.md). The il2cpp-arm64 route runs the same command before its IL2CPP build.
 
-## 10. Extending `pmunity port`
+## 11. Extending `pmunity port`
 
 Other parts of pmunity add to the check, the port and the release without editing `port.py`: a
 module `pmunity.<name>` with a name in `port.HOOK_MODULES` (`route`, `box64`, `il2cpp`, `apk`,
@@ -635,7 +696,7 @@ module `pmunity.<name>` with a name in `port.HOOK_MODULES` (`route`, `box64`, `i
 
 A new route is a template folder (section 2); `port new --route <name>` uses it.
 
-## 11. Submitting to PortMaster
+## 12. Submitting to PortMaster
 
 A port goes into PortMaster through a pull request to its ports repository, after a test zip has
 been tried in its Discord testing channel. What PortMaster asks for, and what `pmunity port` makes:
@@ -676,4 +737,4 @@ first-launch setup through PortMaster's patcher (`PATCHER_FILE`, `PATCHER_GAME`,
 `answers.env` (the game's options and the setup's answers), and for box64 the Westonpack block,
 box64's settings and the command written to `conf/run.sh`. Testing on the firmwares and screens
 of the testing thread's checklist is the testers' and the porter's work; the rehearsal
-(section 6) and `tools/device/test.sh` cover the setup and one handheld.
+(section 7) and `tools/device/test.sh` cover the setup and one handheld.

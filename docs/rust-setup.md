@@ -23,13 +23,13 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 |---|---|---|
 | `macpkg <root> <pkg>...` | macpkg.py | unpacks macOS installers (xar; Payload or GOG's Scripts/payload; gzip, bzip2, pbzx/xz, cpio odc/newc); exit 3 when one is incomplete |
 | `zip-extract <zip> <dir>` | (`python -m zipfile -e`) | the setup's own zips, unpacked by the launcher before the first setup |
-| `player donor <unity> <dir> --apk <apk>... [--backend il2cpp --abi arm64-v8a --managed]` | player.py | Unity's Android player out of the donor APKs |
+| `player donor <unity> <dir> --apk <apk>... [--backend il2cpp --abi arm64-v8a --managed]` | player.py | Unity's Android player out of the donor APKs (small games built with that Unity version, shipped in the release: docs/porting.md, section 5); what every port's setup runs, nothing downloaded |
 | `convert <data dir> --config <json> [--plugin <py>] [--steps a,b] [--set k=v]...` | job.py and the steps: shaders/, settings.py, textures.py (astc_guide.py), audio.py; the plugin animclips.py (portmaster-cuphead/convert) | in place, with the journal `.pmunity.json` (an interrupted run continues) |
 | `android-data --src --pkg --out --name --package ... --pack all` | android_data.py (streaming.py, plugins.py, retarget.py, typetrees.py, video.py, unity_version.py) | the APK and OBB(s) the player reads; exit 4 (NO_SPACE) when the card is too full |
 | `version <data>` | unity_version.py | the data's Unity version, "(supported)" or "(not supported)" |
 | `unpack <data> [--out DIR] [--remove]` | unpack.py | a compressed build's data.unity3d unpacked into its files (unityfs::unpack) |
-| `player fetch <version> <dir> [--backend --abi --installer FILE\|URL --symbols --symbols-only --managed]`, `player url <version>` | player.py, nsis.py | Unity's Android player from Unity's installer: its NSIS header and the files wanted read with HTTPS range requests (pkgzip's http.rs on rustls, the system's CA certificates: `$SSL_CERT_FILE`, `$SSL_CERT_DIR`, else the usual bundle files; `https_proxy`), or from a local copy; the installer's URL from Unity's release API |
-| `winbcl <data> <dir> [--version --installer --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll), read from Unity's Windows editor installer the same way |
+| `player fetch <version> <dir> [--backend --abi --installer FILE\|URL --symbols --symbols-only --managed]`, `player url <version>` | player.py, nsis.py | the porter's computer only (symbols, by-hand work; no setup runs it: the handheld never downloads Unity's player): Unity's Android player from Unity's installer: its NSIS header and the files wanted read with HTTPS range requests (pkgzip's http.rs on rustls, the system's CA certificates: `$SSL_CERT_FILE`, `$SSL_CERT_DIR`, else the usual bundle files; `https_proxy`), or from a local copy; the installer's URL from Unity's release API |
+| `winbcl <data> <dir> [--version --installer --donor APK --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll): in a setup from the port's Mono donor (`--donor`, nothing downloaded; what the donor does not carry is named, `not_in_donor`), on the porter's computer also from Unity's Windows editor installer the same way as `player fetch` |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 | `route <path> --env` | route.py | the box64 route's game.env: the first build under the path with a Linux x86-64 executable, its Unity version, backend and GL mode (the report, `--json` and `--launcher` stay with the Python: status 2) |
 | `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
@@ -53,7 +53,7 @@ audio, quality; compute shaders on), a Windows build's (`from: ["d3d11"]`, the r
 beside pmu), a Vulkan-only build's (`from: ["vulkan"]`, the release's pmspirvcross), `grab_fetch`
 a Metal-only macOS build's (`from: ["metal"]`), `grab_fetch`, `fused_post` and JSON converter
 plugins ([plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)) run on pmu.
-Hollow Knight's whole setup (player fetch, winbcl, convert with grab_fetch, android-data with the
+Hollow Knight's whole setup (the player, winbcl, convert with grab_fetch, android-data with the
 video shader and asmpatch) runs on pmu and gives the Python's APK and OBB, byte for byte. Metal
 was compared on four free macOS games of 2020.3 - 6000.3 (below) before `metal` went into
 `PMU_SHADER_SOURCES` (2026-11-02).
@@ -68,15 +68,15 @@ curl or wget for Unity's whole installer when range reads fail, and a port's own
 
 | setup | command (Python module) | on pmu |
 |---|---|---|
-| android (macOS, Linux and Windows builds) | `macpkg` (macpkg.py), `unpack <data> --remove`, `version`, `player fetch` / `player url`, `winbcl` | yes |
+| android (macOS, Linux and Windows builds) | `macpkg` (macpkg.py), `unpack <data> --remove`, `version`, `player donor`, `winbcl --donor` | yes |
 | | `convert <data> --config convert.json [--plugin P] [--set k=v]`: shaders from OpenGL Core, Direct3D 11 (Windows builds, with `setup/pmhlslcc`) or Vulkan (with `setup/pmspirvcross`), compute kernels, grab_fetch, fused_post; settings, audio, quality, textures; the plugin animclips | yes |
 | | the same with shaders from Metal (metal.py), Vulkan programs of Unity 6000.6's typed layout, or a JSON converter plugin (edits.py) | yes (2026-11-02) |
 | | the same with a porter's Python converter plugin | no: status 2, the release ships the Python |
 | | `android-data ... --consume-src --verify-bundles 2 --pack all` (with asmpatch, StreamingAssets modes, `--managed-file`) | yes |
-| mono-arm64 | the android route's commands, with `player fetch --managed` and `android-data --mono64` | yes (the template ran the Python before 2026-11-02; it now takes pmu when the release has it) |
+| mono-arm64 | the android route's commands, with `player donor --managed` (an IL2CPP and a Mono donor) and `android-data --mono64` | yes (the template ran the Python before 2026-11-02; it now takes pmu when the release has it) |
 | android, mono-arm64, il2cpp-arm64 (a Wwise game, `wwise.banks`) | `wwise <data>/<banks> <port>/wwise --wwise-lib <data>/Plugins` (crates/wwise): the soundbanks for ua_host's Wwise player, the Vorbis codebooks read from the game's Wwise library | yes (Rust only; without pmu in the release the step is skipped: the game stays silent) |
 | il2cpp-arm64 | `macpkg`, `unpack`, `version`, `convert` | yes (as the android route) |
-| | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build | yes (crates/il2cpp, 2026-11-02; the template ran the Python before) |
+| | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build: the one setup step that still downloads (no donor carries Unity's IL2CPP tools) | yes (crates/il2cpp, 2026-11-02; the template ran the Python before) |
 | | `android-data --il2cpp <dir> ... --consume-src --verify-bundles 2 --pack all` | yes |
 | apk | `apk <inputs> <dir> --target T --json` (apk.py) | yes (2026-11-02) |
 | | with `player.il2cpp`: `apk ... --il2cpp --on-device` (the IL2CPP build above, on a system without a 32-bit userland) | yes (crates/apk's il2cpp.rs on crates/il2cpp, 2026-11-02; the release shipped the Python before) |

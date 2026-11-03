@@ -16,7 +16,8 @@ IL2CPP API to the Mono API. This is our own implementation of it.
 ```
 tools/mono64/build-mono.sh <unity version> <work dir>          # Unity's Mono runtime for aarch64 Linux (once per line)
 runtime/mono64/build.sh                                        # the bridge -> runtime/mono64/out/arm64/libil2cpp_mono.so
-python -m pmunity player fetch <ver> work/player64 --backend il2cpp --abi arm64-v8a --managed
+python -m pmunity player donor <ver> work/player64 --backend il2cpp --abi arm64-v8a --managed \
+  --apk <donors>/donor-<ver>-il2cpp-arm64.apk --apk <donors>/donor-<ver>-mono-armv7.apk   # (porting.md, section 5)
 python -m pmunity convert <Game>_Data work/data --config game.json
 python -m pmunity android-data --src <data view> --pkg work/player64 --mono64 --out work/android --pack all
 ```
@@ -178,7 +179,8 @@ APK and OBB, the Managed folder above; the port's test hooks; 2026-10-26):
 `pmunity port check` lists the route for a .NET 4.x Mono build of 2017.4 or later (not yet as the
 recommended one); `pmunity port new <name> --data <game> --route mono-arm64` writes it. Its setup is
 the android route's, with three changes: the player is the arm64 IL2CPP one with its engine modules
-(`player fetch --backend il2cpp --abi arm64-v8a --managed`, about 15 MB read), the packing is
+(`player donor --backend il2cpp --abi arm64-v8a --managed` from the release's IL2CPP and Mono donors:
+nothing downloaded), the packing is
 `android-data --mono64`, and the install takes the IL2CPP player's `libmain.so`/`libunity.so` plus
 the release's `setup/mono64/<line>/` (the bridge as `libil2cpp.so`, `libmonobdwgc-2.0.so`,
 `libMonoPosixHelper.so`, from Unity 2021.2 `libmono-native.so`). Nothing is compiled on the handheld.

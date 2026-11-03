@@ -4,8 +4,7 @@
 
 This port does not include the game: you need @@GAME_WHAT@@. Copy it into
 `ports/@@PORTDIR@@/gamedata/`, then start @@TITLE@@ from the Ports menu. The first launch builds the
-game on the handheld from your copy (@@SETUP_TIME@@, once) and downloads Unity's Android player for
-it from Unity (about @@PLAYER_MB@@ MB, Wi-Fi).@@DOWNLOAD_MORE@@ @@ROUTE_NEEDS@@
+game on the handheld from your copy (@@SETUP_TIME@@, once). @@PLAYER_FROM@@ @@ROUTE_NEEDS@@
 
 The game runs on Unity's own Android player, through
 [portmaster-unity](https://github.com/wild1walker/portmaster-unity)'s `ua_host` (its @@ROUTE@@
@@ -28,5 +27,5 @@ cd portmaster-unity
 python3 -m pip install -r convert/requirements.txt
 cd convert
 python3 -m pmunity port new @@PORTDIR@@ --out <port folder>   # reads <port folder>/port.toml
-python3 -m pmunity port package <port folder>                  # -> <port folder>/out/@@ZIP@@
+DONORS=<donor folder> python3 -m pmunity port package <port folder>   # -> <port folder>/out/@@ZIP@@
 ```

@@ -34,7 +34,10 @@ public static class DonorBuild
         PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES2 });
         EditorUserBuildSettings.androidBuildSystem = AndroidBuildSystem.Internal;
         var r = BuildPipeline.BuildPlayer(new[] { "Assets/Donor.unity" }, apk, BuildTarget.Android, BuildOptions.None);
-        if (!string.IsNullOrEmpty(r)) { Debug.LogError(r); EditorApplication.Exit(1); }
+        // (with -nographics the scene's reflection probe cannot be baked: "RenderTexture.Create failed:
+        // cubemap not supported" counts as build errors, but the APK and its player are complete)
+        if (!System.IO.File.Exists(apk)) { Debug.LogError(r); EditorApplication.Exit(1); }
+        if (!string.IsNullOrEmpty(r)) Debug.LogWarning("build reported: " + r + " (the APK was written)");
     }
 
     public static void MonoArmv7() { Build(ScriptingImplementation.Mono2x, "ARMv7", "out/donor-" + Application.unityVersion + "-mono-armv7.apk"); }

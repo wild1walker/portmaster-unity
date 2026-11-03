@@ -18,10 +18,12 @@ same steps by hand.
   another). Its packages (Mono.Cecil, and for the handheld's build the .NET runtime pack and
   ILLink, about 200 MB) come from NuGet into `~/.nuget/packages` (`NUGET_PACKAGES=<dir>` puts them
   elsewhere).
-- **Unity's Android player for the game's exact Unity version.** `python -m pmunity player fetch
-  <version> <dir>` reads only the files it needs from Unity's installer (about 10 MB). Or install,
-  or just download, the Unity editor's "Android Build Support" for that version from Unity's
-  download archive and unpack it (`7z x UnitySetup-Android-Support-for-Editor-<version>.exe`). The
+- **Unity's Android player for the game's exact Unity version**, from a donor: a small game built
+  with that Unity version (`tools/donor/build.sh`; the editor from `tools/donor/get-editor.sh`:
+  [porting.md](porting.md#5-donors-build-unitys-player-for-the-port)), unpacked with `python -m
+  pmunity player donor <version> <dir> --apk <donor.apk>`. A port's setup does exactly this with the
+  donors its release ships: the handheld never downloads Unity's player. (On the computer, `python -m
+  pmunity player fetch <version> <dir>` also reads the files from Unity's installer, about 10 MB.) The
   folder with `Variations/` and `Data/` is the "player package" below. Unity's licence terms apply
   to it; it is never redistributed here.
 - **The game:** a build you own. A Mono desktop build of Unity 5.6 - 6000.6 for the main route
@@ -63,14 +65,14 @@ starts from scratch).
 pip install -r convert/requirements.txt
 cd convert
 python -m pmunity convert "<Game>.app/Contents/Resources/Data" work/data --config game.json
-python -m pmunity player fetch <version> work/player
+python -m pmunity player donor <version> work/player --apk <donors>/donor-<version>-mono-armv7.apk
 python -m pmunity android-data --src work/data --pkg work/player --out work/android --pack all
 ```
 
 Then copy to the handheld, into one folder: `ua_host`, the player's three libraries into `lib/`,
 and the contents of `work/android/zip/` (APK, OBB, `android_package.json`,
 `assets/bin/Data/Managed/etc`). Start it with `LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_host "$PWD"`
-(see `tools/device/run.sh` and [runtime.md](runtime.md)). [porting.md](porting.md#8-by-hand) has
+(see `tools/device/run.sh` and [runtime.md](runtime.md)). [porting.md](porting.md#9-by-hand) has
 the details of each step, and what a game may need beyond them (assembly patches, a helper DLL).
 
 ## Tests

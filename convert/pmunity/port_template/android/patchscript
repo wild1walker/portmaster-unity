@@ -4,11 +4,11 @@
 # player's own copy in ports/<port>/gamedata/:
 #   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
 #      Linux installer .sh: its zip is unpacked, the script never runs) put there
-#   2. Unity's Android player of the game's exact version, from Unity (about 10 MB: only the files
-#      the port needs, read with range requests), or from its installer put in gamedata/; then
+#   2. Unity's Android player of the game's exact version, from the port's donor (donor/: a small
+#      game of the port's own built with that Unity version, whose APK carries the player); then
 #      Unity's class libraries the build lacks for it (pmunity winbcl: a Windows build of 2021.2+
-#      has Windows-only ones, about 6 MB more; a facade such as netstandard.dll), from Unity's
-#      Windows editor installer the same way (nothing is read when the build needs none)
+#      has Windows-only ones; a facade such as netstandard.dll), from the same Mono donor (nothing
+#      is read when the build needs none). Nothing is downloaded: no Wi-Fi
 #   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps; a Windows
 #      build's Direct3D 11 shaders with setup/pmhlslcc)
 #   4. the APK + OBB the player reads (pmunity android-data; asmpatch when the port uses it)
@@ -35,12 +35,6 @@ room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB
 SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
 echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
-# the setup's tools need the system's CA certificates for Unity's servers (HTTPS)
-if [ -z "$SSL_CERT_FILE" ]; then
-  for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
-    [ -f "$f" ] && { export SSL_CERT_FILE="$f"; break; }
-  done
-fi
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
 # ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs); a
@@ -147,33 +141,22 @@ if [ ! -f "$W/.step_game" ]; then
 fi
 D=$(cat "$W/.data"); V=$(cat "$W/.version")
 
-# ---- 2. Unity's Android player of exactly that version
+# ---- 2. Unity's Android player of exactly that version, from the port's donor (donor/: small
+# games of the port's own built with that Unity version by portmaster-unity's tools/donor, whose
+# APKs carry the player). The setup never downloads Unity's player.
+DONOR_DIR="$GAMEDIR/donor"
+donor() {   # donor <backend> <abi>: the port's donor of Unity $V for that player, in DONOR
+  local a=$2; case "$a" in armeabi-v7a) a=armv7;; arm64-v8a) a=arm64;; esac
+  DONOR="$DONOR_DIR/donor-$V-$1-$a.apk"
+  [ -f "$DONOR" ] || fail "This port ships no donor of Unity $V ($1, $2): donor/$(basename "$DONOR") is missing, and the setup never downloads Unity's player."
+}
 P="$W/player"
 if [ ! -f "$W/.step_player" ]; then
   rm -rf "$P"
-  I=$(ls "$GD"/UnitySetup-Android-Support-for-Editor-"$V".exe 2>/dev/null | head -1)
-  src=()
-  if [ -n "$I" ]; then
-    step "Unity's Android player $V from $(basename "$I")"
-    src=(--installer "$I")
-  else
-    step "downloading Unity's Android player $V from Unity (about 10 MB, needs Wi-Fi)"
-    [ -n "$PLAYER_URL" ] && [ "$PLAYER_URL_VERSION" = "$V" ] && src=(--installer "$PLAYER_URL")
-  fi
-  if ! pm player fetch "$V" "$P" --backend "$PLAYER_BACKEND" --abi "$PLAYER_ABI" "${src[@]}"; then
-    [ -n "$I" ] && fail "Could not read Unity's player from $(basename "$I") (see patchlog.txt)."
-    # the whole installer instead (200-700 MB), with the system's own downloader
-    url=$PLAYER_URL; [ "$PLAYER_URL_VERSION" = "$V" ] || url=$(pm player url "$V" 2>/dev/null)
-    [ -n "$url" ] || fail "Could not reach Unity's servers: is Wi-Fi on? (Or put UnitySetup-Android-Support-for-Editor-$V.exe from Unity's download archive in ports/$PORT_NAME/gamedata.)"
-    step "downloading Unity's whole installer instead (a few hundred MB)"
-    I="$W/installer.exe"; rm -f "$I"
-    if command -v curl >/dev/null; then curl -fL --retry 3 -o "$I" "$url"; else wget -O "$I" "$url"; fi \
-      || fail "Downloading Unity's player failed: is Wi-Fi on? (Or put UnitySetup-Android-Support-for-Editor-$V.exe in ports/$PORT_NAME/gamedata.)"
-    rm -rf "$P"
-    pm player fetch "$V" "$P" --backend "$PLAYER_BACKEND" --abi "$PLAYER_ABI" --installer "$I" \
-      || fail "Could not read Unity's player (see patchlog.txt)."
-    rm -f "$I"
-  fi
+  donor "$PLAYER_BACKEND" "$PLAYER_ABI"
+  step "Unity's Android player $V, from the port's donor $(basename "$DONOR")"
+  pm player donor "$V" "$P" --backend "$PLAYER_BACKEND" --abi "$PLAYER_ABI" --apk "$DONOR" \
+    || fail "Could not unpack Unity's player from the port's donor (see patchlog.txt)."
   for kv in $PLAYER_SHA256; do
     f=${kv%%=*}; h=${kv#*=}
     got=$(sha256sum "$P/Variations/$PLAYER_BACKEND/Release/Libs/$PLAYER_ABI/$f" 2>/dev/null | cut -d' ' -f1)
@@ -184,16 +167,15 @@ fi
 
 # ---- 2b. Unity's own class libraries the build lacks for that player: a Windows build of 2021.2+
 # ships Windows-only ones (unityjit-win32: their Unix twins instead), and a build may lack a facade
-# Unity's Android engine modules reference (netstandard.dll); read from Unity's Windows editor
-# installer with range requests (about 6 MB for a Windows build), or from that installer in gamedata/
+# Unity's Android engine modules reference (netstandard.dll); from the port's Mono donor (its own
+# build's class libraries: what it does not carry is named in patchlog.txt), never downloaded
 if [ ! -f "$W/.step_bcl" ]; then
   rm -rf "$W/bcl"
   if [ "${WINBCL:-auto}" != off ]; then
-    step "Unity's class libraries for the player (downloaded from Unity only when the game needs them, Wi-Fi)"
-    I=$(ls "$GD"/UnitySetup64-"$V".exe 2>/dev/null | head -1)
-    src=(); [ -n "$I" ] && src=(--installer "$I")
-    pm winbcl "$D" "$W/bcl" --version "$V" --player "$P" "${src[@]}" >/dev/null \
-      || fail "Could not read Unity's class libraries from Unity's servers: is Wi-Fi on? Launch again to retry (see patchlog.txt)."
+    donor mono armeabi-v7a
+    step "Unity's class libraries for the player, from the port's donor (only those the game lacks)"
+    pm winbcl "$D" "$W/bcl" --version "$V" --player "$P" --donor "$DONOR" >/dev/null \
+      || fail "Could not read Unity's class libraries from the port's donor (see patchlog.txt)."
   fi
   touch "$W/.step_bcl"
 fi
@@ -314,7 +296,7 @@ case "$D" in "$W"/*) ;; *) [ -n "$top" ] && [ "$top" != "$(basename "$W")" ] && 
 rm -rf "$W" "$S"
 sync
 touch "$GAMEDIR/$READY"
-# archives and installers the setup unpacked (the game's, Unity's player installer) are not needed
+# archives and installers the setup unpacked (the game's; a Unity installer an older setup read) are not needed
 # any more: removed, as PortMaster ports' setups do, unless setup.txt says keep_installers=1
 keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
 for a in "$GD"/*; do

@@ -6,6 +6,7 @@
       "abi": "arm64-v8a"
     }
   },
+  "donors": ["player", "mono/armeabi-v7a"],
   "files": {
     "@@TITLE@@.sh": "launcher.sh",
     "@@PORTDIR@@/setup/patchscript": "patchscript",

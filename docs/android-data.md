@@ -166,7 +166,7 @@ built-ins and six free Linux games (one per line):
 
 - **Versions.** The data's Unity version is read from `globalgamemanagers` (or a bundle header);
   outside 5.6 - 6000.6 the run stops unless `--any-unity-version`. The player package's version
-  comes from its `player.json` (`pmunity player fetch`), its `ivy.xml` (5.x - 2018.x), the version
+  comes from its `player.json` (`pmunity player donor` or `player fetch`), its `ivy.xml` (5.x - 2018.x), the version
   string in its libunity, or, failing that, from its "unity default resources"
   (which gives only the line: the file is often from an earlier patch). Data and player of
   different lines are refused (main data has no type trees: the player reads its own layouts).

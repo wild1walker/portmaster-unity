@@ -3,7 +3,7 @@
     python -m pmunity port check <game> [--json] [--asmpatch CMD] [--no-scan]
     python -m pmunity port new <name> --data <game> [--config port.toml|.json] [--out DIR]
                                [--route R] [--title T] [--player PKG] [--force]
-    python -m pmunity port package <port dir> [--out DIR] [--pybundle FILE] [--runtime DIR]
+    python -m pmunity port package <port dir> [--out DIR] [--donors DIR] [--pybundle FILE] [--runtime DIR]
                                    [--ua-host FILE] [--asmpatch-bin FILE] [--pmhlslcc-bin FILE]
                                    [--pmspirvcross-bin FILE] [--mono64-work DIR] [--no-build]
                                    [--submission]
@@ -17,16 +17,18 @@
 not), what it needs on the handheld (input stacks, mouse-only menus, text input, video, native
 plugins, FMOD, store clients) and the route that fits: Unity's Android player (32-bit Mono, this
 repository's runtime), IL2CPP to arm64, Mono on the arm64 player (mono-arm64), the x86-64 player
-under box64, or why none does.
+under box64, or why none does, and the donors the port needs (Unity's player: small games built with
+the game's Unity version by tools/donor/build.sh, which the release ships; the handheld never
+downloads Unity's player).
 
 `new` writes the port's folder: the PortMaster launcher, the setup that runs on the handheld on
-the first launch (PortMaster's patcher: fetch Unity's player, convert the player's own copy of the
-game, pack it, install it), port.json, gameinfo.xml, READMEs, the testing thread's post, and the
+the first launch (PortMaster's patcher: Unity's player from the port's donors, convert the player's
+own copy of the game, pack it, install it), port.json, gameinfo.xml, READMEs, the testing thread's post, and the
 settings it was made with (port.toml, the porter's file; port.build.json, everything resolved).
-`package` turns that folder into the release zip: the runtime (ua_host), the converter, the setup's
-Python, asmpatch, pmhlslcc and pmspirvcross when the port uses them, the screenshot and cover, and every
-licence; it lists what a PortMaster submission still lacks, and --submission also lays the port
-out as PortMaster's repository wants it. `shot` saves a frame of a game ua_host runs (shot.req) as a PNG.
+`package` turns that folder into the release zip: the runtime (ua_host), the donors (from --donors or
+$DONORS), the converter, the setup's Python, asmpatch, pmhlslcc and pmspirvcross when the port uses them,
+the screenshot and cover, and every licence; it lists what a PortMaster submission still lacks, and
+--submission also lays the port out as PortMaster's repository wants it. `shot` saves a frame of a game ua_host runs (shot.req) as a PNG.
 docs/porting.md is the porter's guide; the templates are in port_template/<route>/ (route.json
 says what a route renders and ships).
 
@@ -65,8 +67,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, 'port_template')
 REPO = os.path.dirname(os.path.dirname(HERE))          # the portmaster-unity checkout
 HOOK_MODULES = ('route', 'box64', 'il2cpp', 'mono64', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows', 'streaming')
-PLAYER_MB = 10          # what the setup reads of Unity's Android support installer (`pmunity player fetch`)
-WINBCL_MB = 6           # ... and of its Windows editor installer for a Windows 2021.2+ build (`pmunity winbcl`)
+# the donors: small games of the port's own built with the game's Unity version (tools/donor/build.sh),
+# whose APKs carry Unity's Android player; the release ships them in <port>/donor/ and the setup takes the
+# player from them (`pmunity player donor`): the handheld never downloads Unity's player
+DONOR_ABI = {'armeabi-v7a': 'armv7', 'arm64-v8a': 'arm64'}
+DONOR_BUILD = {('mono', 'armeabi-v7a'): 'MonoArmv7', ('il2cpp', 'arm64-v8a'): 'Il2cppArm64'}
+DONOR_RX = re.compile(r'^donor-(\d{4}\.\d+\.\d+[abfpx]\d+)-(mono|il2cpp)-(armv7|arm64)\.apk$')
+DONOR_LICENSE = """donor/*.apk: small games built with Unity (Unity Personal) for this port: a game of pong (one
+scene, one script; portmaster-unity's tools/donor). Each carries Unity's Android player of its Unity
+version (the Unity runtime), which the setup uses to run the player's own copy of the game. The Unity
+runtime is Unity Technologies' software, distributed as part of these Made-with-Unity applications
+under Unity's terms of service: https://unity.com/legal/terms-of-service
+"""
 
 
 # =========================================================================== .NET metadata
@@ -1019,9 +1031,9 @@ def decide_routes(rep):
     if mono and b.get('build') == 'windows' and b.get('data'):
         from . import winbcl
         if winbcl.is_win32_profile(os.path.join(b['data'], 'Managed')):
-            needs.append(f"Windows-only class libraries (unityjit-win32, Unity 2021.2+): the setup fetches the Unix ones "
-                         f"from Unity's Windows editor installer (`pmunity winbcl`, about {WINBCL_MB} MB of range reads, "
-                         f"Wi-Fi; by hand: `python -m pmunity.winbcl <Data> <dir>` -> android-data `--managed-file`)")
+            needs.append("Windows-only class libraries (unityjit-win32, Unity 2021.2+): the setup takes the Unix ones "
+                         "from the port's Mono donor (`pmunity winbcl --donor`): those its own build carries (mscorlib, "
+                         "System, System.Core, ...); the game's others stay the Windows ones (named in patchlog.txt)")
     try:
         unity6 = bool(v) and UV.Version(str(v)).line >= (6000, 0)
     except ValueError:
@@ -1029,9 +1041,11 @@ def decide_routes(rep):
     if mono and unity6 and b.get('data') and not b.get('compressed') and \
             not os.path.isfile(os.path.join(b['data'], 'Managed', 'netstandard.dll')):
         needs.append("no netstandard.dll, which every Android engine module of Unity 6 references: the setup adds "
-                     "Unity's own facade of this version (`pmunity winbcl --player`, about 1 MB of range reads, Wi-Fi)")
+                     "Unity's own facade of this version from the port's Mono donor (`pmunity winbcl --donor`)")
     if b.get('compressed'):
         needs.append('a compressed build: the setup unpacks it first (pmunity unpack)')
+    if v:
+        needs.append(donor_need(v, 'mono', 'armeabi-v7a'))
     routes.append({'route': 'android', 'ok': not why, 'why': why, 'needs': needs})
     # IL2CPP to arm64 (64-bit only systems): the game's code compiled on the handheld in the setup
     why = [] if mono else ['needs a Mono build (an IL2CPP desktop build is compiled for its own system)']
@@ -1053,7 +1067,9 @@ def decide_routes(rep):
                    'why': why, 'needs': [] if why else [
                        "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp "
                        "--on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of "
-                       "memory, Wi-Fi for Unity's and Debian's files",
+                       "memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static "
+                       "libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup "
+                       "downloads)",
                        'tested to the title in the arm64 rig with Unity 2017.4 - 2022.3'] + (
                        ["Unity 2023.1+: its own il2cpp is a native program; Unity 2022.3's .NET il2cpp converts the "
                         "game's code for this version's libil2cpp and player (docs/il2cpp.md, \"Unity 2023.1+\"; "
@@ -1076,7 +1092,8 @@ def decide_routes(rep):
                    'why': why, 'needs': [] if why else [
                        "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux "
                        "(`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
-                       'tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0']})
+                       'tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0'] + (
+                       [donor_need(v, 'il2cpp', 'arm64-v8a'), donor_need(v, 'mono', 'armeabi-v7a')] if v else [])})
     # box64: the game's own x86-64 Linux player
     why = []
     if b.get('build') != 'linux':
@@ -1092,7 +1109,44 @@ def decide_routes(rep):
     rep['route'] = best['route'] if best else None
     if not best:
         rep['unsupported'] = '; '.join(w for r in rep['routes'] for w in r['why'][:1]) or 'no route fits'
+    # the donors the recommended route's release ships (Unity's player; tools/donor/build.sh makes them)
+    r = route_templates().get(rep['route']) if best else None   # (routes: the list above)
+    if r and v:
+        pl = dict(DEFAULTS['player'], **((r.get('defaults') or {}).get('player') or {}))
+        rep['donors'] = route_donors(r, [str(v)], pl['backend'], pl['abi'])
     return rep
+
+
+def donor_name(version, backend, abi):
+    """A donor's file name: donor-<version>-<backend>-<armv7|arm64>.apk (tools/donor/build.sh's)."""
+    return f'donor-{version}-{backend}-{DONOR_ABI.get(abi, abi)}.apk'
+
+
+def donor_need(version, backend, abi):
+    """A route's need: one donor, and how the porter makes it."""
+    how = DONOR_BUILD.get((backend, abi), '?')
+    return (f"the donor {donor_name(version, backend, abi)} (Unity's player, shipped in the release: "
+            f"`tools/donor/build.sh <Unity {version} editor> {how} <DONORS dir>`)")
+
+
+def route_donors(route, versions, backend, abi):
+    """The donor file names a route's setup reads (route.json "donors": "player" = the port's
+    player.backend/abi, or "<backend>/<abi>"), for each Unity version the port is made for."""
+    specs = []
+    for x in route.get('donors') or []:
+        ba = (backend, abi) if x == 'player' else tuple(x.split('/'))
+        if ba not in specs:
+            specs.append(ba)
+    return [donor_name(v, b, a) for v in versions for b, a in specs]
+
+
+def port_donors(cfg, route=None):
+    """The donors a port's release ships: its route's for each of game.unity_versions, and those
+    player.donors names besides."""
+    r = route if route is not None else (routes().get(cfg['port']['route']) or {})
+    pl = cfg['player']
+    need = route_donors(r, cfg['game'].get('unity_versions') or [], pl.get('backend', 'mono'), pl.get('abi', 'armeabi-v7a'))
+    return need + [n for n in pl.get('donors') or [] if n not in need]
 
 
 def check(path, asmpatch=None, deep=True, log=None):
@@ -1622,6 +1676,11 @@ def print_report(rep, out=sys.stdout):
     w()
     if rep.get('route'):
         w(f"recommended route: {rep['route']}")
+        if rep.get('donors'):
+            w(f"donors the port ships (Unity's player; the handheld never downloads it): {', '.join(rep['donors'])}")
+            w("  build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>")
+            w("  (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);")
+            w("  `port package` takes them from --donors DIR or $DONORS (docs/porting.md, \"Donors\")")
     else:
         w(f"unsupported: {rep.get('unsupported')}")
     for x in rep.get('warnings', []):
@@ -1654,7 +1713,7 @@ DEFAULTS = {
     'game': {'data': '*_Data', 'build': 'linux', 'unity_versions': [], 'what': '', 'size_mb': 0, 'setup_space_mb': 0,
              'developer': '', 'publisher': '', 'release_date': '', 'genre': '', 'url': '', 'description': ''},
     'controls': {},
-    'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'url': '', 'sha256': {}},
+    'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'sha256': {}, 'donors': []},
     'convert': {'steps': list(DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
                      'winbcl': 'auto', 'name': '', 'package': '', 'args': []},
@@ -1720,6 +1779,7 @@ def build_config(name, rep, user):
         cfg = merge(cfg, found)
         cfg = merge(cfg, rep.get('suggest') or {})
     cfg = merge(cfg, user or {})
+    cfg['player'].pop('url', None)          # (an older port.toml's: the setup never downloads Unity's player now)
     if (user or {}).get('controls'):                    # (the porter's table, not merged with the check's draft)
         cfg['controls'] = copy.deepcopy(user['controls'])
     if 'quality' not in (cfg['convert'].get('steps') or []):    # (the picture question asks for that step)
@@ -1803,6 +1863,9 @@ def validate(cfg):
     for v in cfg['game']['unity_versions']:
         if not re.match(r'^\d{4}\.\d+\.\d+[abfpx]\d+$', v):
             errs.append(f'game.unity_versions: {v!r} is not a Unity version')
+    for n in cfg['player'].get('donors') or []:
+        if not DONOR_RX.match(str(n)):
+            errs.append(f'player.donors: {n!r} is not a donor name (donor-<version>-mono|il2cpp-armv7|arm64.apk)')
     errs += validate_metadata(cfg)
     if errs:
         raise SystemExit('port config:\n  ' + '\n  '.join(errs))
@@ -1843,8 +1906,10 @@ CONFIG_DOC = {
     'controls': '# the game\'s controls for the README and the testing thread, as the handheld labels its buttons\n'
                 '# (most have A right, B bottom), one row each, in order: e.g. "D-Pad" = "Move", B = "Jump".\n'
                 '# PortMaster\'s exit hotkey (Select + Start) is added. Leave out buttons that do nothing',
-    'player': "# Unity's Android player: backend/abi; url = the installer (`pmunity player url <version>`; empty:\n"
-              "# looked up on the handheld); sha256 = {\"<file>\" = \"<hash>\"} checked after the fetch",
+    'player': "# Unity's Android player: backend/abi; sha256 = {\"<file>\" = \"<hash>\"} checked after the setup unpacks\n"
+              "# it from the port's donors; donors = the donor APKs the release ships in donor/ (written by `port new`\n"
+              "# from the route and game.unity_versions; names added here are shipped too). The handheld never\n"
+              "# downloads Unity's player: `port package --donors DIR` takes the donors from DIR (tools/donor)",
     'convert': '# pmunity convert\'s config (each step\'s DEFAULTS); "textures" re-encodes BC/DXT as ASTC\n'
                '# (less memory, a longer setup, slightly different pixels: off unless you add it)',
     'android_data': '# pmunity android-data: asmpatch = auto (run tools/asmpatch; it changes only what it\n'
@@ -1852,8 +1917,8 @@ CONFIG_DOC = {
                     '# ["patch", ...]; streaming_assets = obb |\n'
                     '# both | loose (code that reads StreamingAssets as files: also/only beside the APK,\n'
                     '# docs/android-data.md); data_path = true (files read or written at Application.dataPath);\n'
-                    '# winbcl = auto (the setup fetches Unity\'s class libraries a build lacks for the player: a\n'
-                    '# Windows 2021.2+ build\'s Unix ones, facades such as netstandard.dll) | off;\n'
+                    '# winbcl = auto (the setup takes Unity\'s class libraries a build lacks for the player from the\n'
+                    '# port\'s Mono donor: a Windows 2021.2+ build\'s Unix ones, facades such as netstandard.dll) | off;\n'
                     '# name = the APK\'s, package (keep it: it names the PlayerPrefs file); args = more options',
     'wwise': "# a Wwise game's soundbanks (banks: their folder, relative to the game's data folder), which the setup\n"
              "# converts once for ua_host's own Wwise player (pmu wwise; docs/wwise-player.md); empty: silent",
@@ -1909,6 +1974,12 @@ def dump_toml(cfg, route=None, drafted=()):
             if isinstance(v, dict) and sec in ('convert',) and v:
                 subs.append((k, v))
                 continue
+            if (sec, k) == ('player', 'donors'):    # (only the porter's own: port new adds the route's again)
+                pl = cfg['player']
+                made = route_donors(route, cfg['game'].get('unity_versions') or [], pl.get('backend'), pl.get('abi'))
+                if made:
+                    out.append(f"# donors port new ships for the route and game.unity_versions: {', '.join(made)}")
+                v = [n for n in v if n not in made]
             out.append(f'{_toml_key(k)} = {_toml_value(v)}')
         for k, v in subs:
             out.append(f'[{sec}.{_toml_key(k)}]')
@@ -1940,6 +2011,9 @@ def routes():
                 r['dir'] = os.path.join(TEMPLATES, n)
                 out[n] = r
     return out
+
+
+route_templates = routes
 
 
 TOKEN = re.compile(r'@@([A-Z0-9_]+)@@')
@@ -1985,8 +2059,8 @@ def setup_env(cfg, extra=(), sections=None):
              f'READY={q(p.get("ready_marker") or ".setup_done")}',
              f'UNITY_VERSIONS={q(" ".join(g["unity_versions"]))}',
              f'PLAYER_BACKEND={q(pl["backend"])}', f'PLAYER_ABI={q(pl["abi"])}',
-             f'PLAYER_URL={q(pl.get("url") or "")}',
-             f'PLAYER_URL_VERSION={q(g["unity_versions"][0] if g["unity_versions"] and pl.get("url") else "")}',
+             # (the donors the release ships in donor/: the setup takes Unity's player from them)
+             f'DONORS={q(" ".join(pl.get("donors") or []))}',
              'PLAYER_SHA256=' + q(' '.join(f'{k}={v}' for k, v in sorted((pl.get('sha256') or {}).items())))] + \
             (['PLAYER_IL2CPP=1'] if pl.get('il2cpp') else [])     # (apk route: a Mono build compiled for arm64)
     if sections is None or 'android_data' in sections:
@@ -2079,8 +2153,7 @@ def port_json(cfg):
             'title': p['title'], 'porter': list(p['porter']), 'desc': p['desc'] or f"{p['title']} on Unity's Android player.",
             'desc_md': p.get('desc_md') or None,
             'inst': p.get('inst') or f"Requires {g['what']}: put it in ports/{p['name']}/gamedata. The first launch builds "
-                    f"the game on the handheld ({p['setup_time']}; downloads Unity's Android player"
-                    f"{' and class libraries' if needs_winbcl(cfg) else ''} from Unity, about {download_mb(cfg)} MB, Wi-Fi).",
+                    f"the game on the handheld ({p['setup_time']}; Unity's Android player comes with the port, no Wi-Fi).",
             'inst_md': p.get('inst_md') or None,
             'genres': [x.casefold() for x in p['genres']], 'image': None, 'rtr': False, 'exp': bool(p.get('exp', False)),
             'runtime': [],
@@ -2225,8 +2298,9 @@ def thanks_sentence(cfg):
 
 
 def needs_winbcl(cfg):
-    """Whether the setup fetches Unity's Unix class libraries for the build (pmunity winbcl): a Windows
-    build of Unity 2021.2+ (or of versions not named) on the android route."""
+    """Whether the setup takes Unity's Unix class libraries for the build from the port's Mono donor
+    (pmunity winbcl --donor): a Windows build of Unity 2021.2+ (or of versions not named) on the
+    android route."""
     g = cfg['game']
     if g.get('build') != 'windows' or cfg['port']['route'] != 'android' or \
             cfg['android_data'].get('winbcl', 'auto') == 'off':
@@ -2235,16 +2309,18 @@ def needs_winbcl(cfg):
     return not vs or any(v.line >= (2021, 2) for v in vs)
 
 
-def download_mb(cfg):
-    return PLAYER_MB + (WINBCL_MB if needs_winbcl(cfg) else 0)
-
-
-def download_more(cfg):
-    """The READMEs' sentence on what the setup downloads besides the player (or nothing)."""
-    if not needs_winbcl(cfg):
-        return ''
-    return (f" A Windows build of Unity 2021.2+ comes with Windows-only class libraries: the setup also downloads "
-            f"the Unix ones of the game's version from Unity (about {WINBCL_MB} MB of its Windows editor installer).")
+def player_from(cfg, route):
+    """The READMEs' sentence on where Unity's player comes from: the port's donors (no download), or
+    for a route that has none (il2cpp-arm64) what its setup downloads."""
+    if route.get('donors'):
+        more = (" A Windows build of Unity 2021.2+ comes with Windows-only class libraries: the setup takes the "
+                "Unix ones from the same donors.") if needs_winbcl(cfg) else ''
+        return ("Unity's Android player comes with the port (`donor/`: small games built with Unity for it, whose "
+                "APKs carry the player); nothing is downloaded, no Wi-Fi." + more)
+    if cfg['port']['route'] == 'il2cpp-arm64':
+        return ("Wi-Fi on the first launch: the setup downloads Unity's IL2CPP tools and its arm64 player, and "
+                "Debian's compilers and .NET (about 160 MB), to compile the game's code on the handheld.")
+    return ''
 
 
 def route_needs(route, cfg=None):
@@ -2523,24 +2599,21 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         for k, v in vals.items():
             if k not in (user.get(sec) or {}):
                 cfg[sec][k] = v
-    if player:
-        pj = os.path.join(player, 'player.json')
-        if os.path.isfile(pj):
-            info = json.loads(_read(pj))
-            if info.get('installer', '').startswith('http') and not cfg['player']['url']:
-                cfg['player']['url'] = info['installer']
+    if player:                                  # (a `pmunity player donor` folder: its libraries' checksums)
         if not cfg['player']['sha256']:
             libs = os.path.join(player, 'Variations', cfg['player']['backend'], 'Release', 'Libs', cfg['player']['abi'])
             for n in ('libmain.so', 'libunity.so'):
                 if os.path.isfile(os.path.join(libs, n)):
                     cfg['player']['sha256'][n] = hashlib.sha256(_read(os.path.join(libs, n), 'rb')).hexdigest()
-    validate(cfg)
     rts = routes()
     r = rts.get(cfg['port']['route'])
     if r is None:
         have = ', '.join(rts) or 'none'
         raise SystemExit(f"route {cfg['port']['route']!r} has no templates (port_template/{cfg['port']['route']}/route.json; "
                          f"routes with templates: {have})")
+    # the donors the release ships (Unity's player for the route, each Unity version), and any port.toml adds
+    cfg['player']['donors'] = port_donors(cfg, r)
+    validate(cfg)
     os.makedirs(out, exist_ok=True)
     ctx = NewCtx(cfg, out, r)
     pn, pt = cfg['port']['name'], cfg['port']['title']
@@ -2551,7 +2624,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
               'SIZE_GB': max(1, ((int(cfg['game'].get('setup_space_mb') or 0) or 3 * int(cfg['game'].get('size_mb') or 0)) + 1023) // 1024),
               'PORTER': ', '.join(cfg['port']['porter']) or 'not named yet (port.toml: `port.porter`)',
               'READY': cfg['port'].get('ready_marker') or '.setup_done',
-              'PLAYER_MB': PLAYER_MB, 'DOWNLOAD_MB': download_mb(cfg), 'DOWNLOAD_MORE': download_more(cfg),
+              'PLAYER_FROM': player_from(cfg, r),
               # PortMaster's README sections (Notes, Controls, Compile)
               'THANKS': thanks_sentence(cfg), 'CONTROLS': controls_markdown(cfg),
               'ROUTE_NEEDS': route_needs(cfg['port']['route'], cfg), 'BUILD_STEPS': build_steps(cfg, r)}
@@ -2621,6 +2694,11 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     with open(old, 'w') as f:
         f.write('\n'.join(sorted(set(ctx.written))) + '\n')
     log(f"port {pn} ({cfg['port']['route']} route) -> {out}")
+    if cfg['player']['donors']:
+        log(f"donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): "
+            f"{', '.join(cfg['player']['donors'])}")
+    elif r.get('donors'):
+        log('no donors: game.unity_versions names no Unity version, so the release would ship no player for the setup')
     if rep:
         for w in rep.get('warnings', []):
             log(f'warning: {w}')
@@ -3051,6 +3129,7 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     shutil.copyfile(os.path.join(port_src, launcher), os.path.join(zipdir, launcher))
     os.chmod(os.path.join(zipdir, launcher), 0o644)   # (PortMaster's convention: .sh committed 644)
     ctx.add(os.path.join(port_src, name), '.')
+    add_donors(ctx, port_donors(cfg, route), opts.get('donors') or os.environ.get('DONORS'))
     for c in route.get('package', []):
         opt, c = c.endswith('?'), c.rstrip('?')     # ('?': only when the port uses it: wants())
         if c not in COMPONENTS:
@@ -3102,6 +3181,30 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
         for x in todo:
             log(f'  - {x}')
     return zpath
+
+
+def add_donors(ctx, names, src):
+    """The donors (Unity's player) into <port>/donor/, with their licence; stops when one is missing:
+    the setup never downloads Unity's player, so a release without its donors cannot set the game up."""
+    if not names:
+        return
+    how = '; '.join(f"{n}: tools/donor/build.sh <Unity {m.group(1)} editor> "
+                    f"{DONOR_BUILD.get((m.group(2), {'armv7': 'armeabi-v7a', 'arm64': 'arm64-v8a'}[m.group(3)]), '?')} <dir>"
+                    for n in names for m in [DONOR_RX.match(n)] if m)
+    if not src:
+        raise SystemExit(f"this port's setup takes Unity's player from donors, and no donor folder was given: "
+                         f"--donors DIR (or $DONORS) with {', '.join(names)} ({how}; docs/porting.md, \"Donors\")")
+    missing = [n for n in names if not os.path.isfile(os.path.join(src, n))]
+    if missing:
+        raise SystemExit(f"{src} has no {', '.join(missing)}: the release would ship no player for them "
+                         f"({how}; docs/porting.md, \"Donors\")")
+    bad = [n for n in names if not zipfile.is_zipfile(os.path.join(src, n))]
+    if bad:
+        raise SystemExit(f"{src}: {', '.join(bad)} is not an APK")
+    ctx.log(f"== donors: {', '.join(names)}")
+    for n in names:
+        ctx.add(os.path.join(src, n), f'donor/{n}', 0o644)
+    ctx.license('LICENSE.unity-donor.txt', text=DONOR_LICENSE)
 
 
 def write_submission(ctx, port_src, out, launcher, imgs):
@@ -3216,12 +3319,14 @@ def main(argv):
     n.add_argument('--out', help='where the port folder goes (default ./<name>)')
     n.add_argument('--route', help='a route other than the recommended one')
     n.add_argument('--title', help='the menu name (default: the game\'s product name)')
-    n.add_argument('--player', help="a player package fetched with `pmunity player fetch` (its URL and checksums go into the setup)")
+    n.add_argument('--player', help="a player package (`pmunity player donor <version> PKG --apk <donor>`): its libraries' "
+                                    "checksums go into the setup")
     n.add_argument('--asmpatch', help="asmpatch's command for the check's survey (as port check's)")
     n.add_argument('--force', action='store_true', help='write into a folder that is not a port made by port new')
     p = sub.add_parser('package', help="build a port folder's release zip")
     p.add_argument('port', help='the folder `port new` wrote')
     p.add_argument('--out', help='output folder (default <port>/out)')
+    p.add_argument('--donors', help="the folder with the port's donor APKs (default $DONORS; tools/donor/build.sh makes them)")
     p.add_argument('--runtime', help='a portmaster-unity checkout whose runtime and asmpatch are built (default: this one)')
     p.add_argument('--ua-host', help='the ua_host binary (default <runtime>/runtime/host/out/ua_host)')
     p.add_argument('--media-licenses', help="the video decoders' licences (default <runtime>/runtime/media/out/licenses)")
@@ -3256,7 +3361,7 @@ def main(argv):
         new(a.name, a.data, a.config, a.out, a.route, a.title, a.player, a.force, a.asmpatch)
         return 0
     if a.cmd == 'package':
-        package(a.port, a.out, a.runtime, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle, pmu=a.pmu,
+        package(a.port, a.out, a.runtime, donors=a.donors, ua_host=a.ua_host, media_licenses=a.media_licenses, pybundle=a.pybundle, pmu=a.pmu,
                 asmpatch_bin=a.asmpatch_bin, pmhlslcc_bin=a.pmhlslcc_bin, pmspirvcross_bin=a.pmspirvcross_bin,
                 mono64_work=a.mono64_work,
                 no_build=a.no_build, submission=a.submission)

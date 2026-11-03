@@ -1,9 +1,11 @@
-//! `pmu winbcl <Game>_Data <out dir> [--version V] [--installer FILE|URL] [--player PKG]
+//! `pmu winbcl <Game>_Data <out dir> [--version V] [--installer FILE|URL | --donor APK] [--player PKG]
 //! [--no-facades] [--json FILE]` (winbcl.py): Unity's own class libraries a desktop build needs
 //! for the Android player, from Unity's Windows editor installer (read with range requests,
-//! pkgzip's nsis.rs): a Windows build of 2021.2+ gets the unityjit-linux twins of its
-//! unityjit-win32 class libraries; with --player, the assemblies the player's engine modules
-//! reference that the build lacks (a facade such as netstandard.dll) when they are Unity's own.
+//! pkgzip's nsis.rs) or, with --donor, from a Mono donor APK of the same version (no network: a
+//! port's setup): a Windows build of 2021.2+ gets the unityjit-linux twins of its
+//! unityjit-win32 class libraries (a donor's: those its own build carries); with --player, the
+//! assemblies the player's engine modules reference that the build lacks (a facade such as
+//! netstandard.dll) when they are Unity's own.
 //! Nothing is read when neither applies. Prints the `--managed-file` options for android-data.
 use crate::clrmeta::Assembly;
 use crate::paths::listdir;
@@ -11,6 +13,7 @@ use crate::pyjson::{self, Json};
 use crate::uversion::{self as UV, Version};
 use pkgzip::nsis::Nsis;
 use pkgzip::py;
+use pkgzip::zip::Archive;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -21,6 +24,74 @@ pub const LINUX: &str = "MonoBleedingEdge/lib/mono/unityjit-linux/";
 /// 2018.1 - 2021.1: one profile for every platform
 pub const UNITYJIT: &str = "MonoBleedingEdge/lib/mono/unityjit/";
 const MARK: &[u8] = b"SetThreadErrorMode"; // in the unityjit-win32 mscorlib (Interop+Kernel32)
+/// an Android build's assemblies, in its APK
+const DONOR_MANAGED: &str = "assets/bin/Data/Managed/";
+
+/// Unity's class library names (winbcl.py's CLASS_LIBRARY): mscorlib, netstandard, System,
+/// System.*, Mono.*, Microsoft.* (.dll, no folder).
+pub fn is_class_library(n: &str) -> bool {
+    let Some(stem) = n.strip_suffix(".dll") else {
+        return false;
+    };
+    !n.contains('/')
+        && (["mscorlib", "netstandard", "System"].contains(&stem)
+            || ["System.", "Mono.", "Microsoft."]
+                .iter()
+                .any(|p| stem.len() > p.len() && stem.starts_with(p)))
+}
+
+/// Where the class libraries come from: Unity's installer, or a Mono donor APK (winbcl.py's
+/// Donor: its class libraries under the installer's path of every profile; nothing downloaded).
+enum Src {
+    Nsis(Nsis),
+    Donor {
+        z: Archive,
+        name: String,
+        libs: Vec<String>,
+    },
+}
+
+impl Src {
+    fn donor(apk: &str) -> Result<Src, Fail> {
+        let z = Archive::open(apk)?;
+        let mut libs: Vec<String> = z
+            .names()
+            .filter_map(|n| n.strip_prefix(DONOR_MANAGED))
+            .filter(|n| is_class_library(n))
+            .map(str::to_string)
+            .collect();
+        libs.sort();
+        Ok(Src::Donor {
+            z,
+            name: py::basename(apk).to_string(),
+            libs,
+        })
+    }
+
+    fn extract(&mut self, key: u64) -> Result<Vec<u8>, Fail> {
+        match self {
+            Src::Nsis(ns) => Ok(ns.extract(key)?),
+            Src::Donor { z, libs, .. } => {
+                Ok(z.read(&format!("{DONOR_MANAGED}{}", libs[key as usize]))?)
+            }
+        }
+    }
+
+    fn fetched(&self) -> u64 {
+        match self {
+            Src::Nsis(ns) => ns.s.fetched,
+            Src::Donor { .. } => 0,
+        }
+    }
+
+    /// What it read, for the log.
+    fn read(&self) -> String {
+        match self {
+            Src::Nsis(ns) => format!("{:.1} MB read", ns.s.fetched as f64 / 1e6),
+            Src::Donor { name, .. } => format!("from {name}"),
+        }
+    }
+}
 
 /// How the command stops: SystemExit's message (1), an exception (1), argument errors (2).
 #[derive(Debug)]
@@ -172,8 +243,21 @@ pub fn missing(managed: &str, player: &str) -> Vec<(String, Vec<String>)> {
 }
 
 /// {installer path relative to the editor folder: block offset} (the last of a path winning),
-/// in the installer's order.
-fn index(ns: &Nsis) -> Result<Vec<(String, u64)>, Fail> {
+/// in the installer's order; a donor's: its class libraries under every profile's path (keys: their
+/// place in its list).
+fn index(src: &Src) -> Result<Vec<(String, u64)>, Fail> {
+    let ns = match src {
+        Src::Nsis(ns) => ns,
+        Src::Donor { libs, .. } => {
+            let mut out = Vec::new();
+            for (i, n) in libs.iter().enumerate() {
+                for p in [WIN, LINUX, UNITYJIT] {
+                    out.push((format!("{p}{n}"), i as u64));
+                }
+            }
+            return Ok(out);
+        }
+    };
     let mut out: Vec<(String, u64)> = Vec::new();
     let mut at: BTreeMap<String, usize> = BTreeMap::new();
     for (path, off, _) in ns.files()? {
@@ -203,7 +287,7 @@ fn write_part(dst: &str, data: &[u8]) -> Result<(), Fail> {
 /// of another assembly version than Unity's is the game's own and is kept).
 fn replacements(
     managed: &str,
-    ns: &mut Nsis,
+    ns: &mut Src,
     out: &str,
     log: &mut dyn FnMut(&str),
     files: &[(String, u64)],
@@ -244,9 +328,9 @@ fn replacements(
         got.push(n);
     }
     log(&format!(
-        "winbcl: {} class libraries as unityjit-linux ({:.1} MB read): {}",
+        "winbcl: {} class libraries as unityjit-linux ({}): {}",
         got.len(),
-        ns.s.fetched as f64 / 1e6,
+        ns.read(),
         got.join(", ")
     ));
     Ok(got)
@@ -257,7 +341,7 @@ fn replacements(
 fn facades(
     refs: &[String],
     profile: &str,
-    ns: &mut Nsis,
+    ns: &mut Src,
     out: &str,
     log: &mut dyn FnMut(&str),
     files: &[(String, u64)],
@@ -318,6 +402,7 @@ pub fn supply(
     installer: Option<&str>,
     player: Option<&str>,
     with_facades: bool,
+    donor: Option<&str>,
     log: &mut dyn FnMut(&str),
 ) -> Result<(Json, Vec<String>), Fail> {
     let managed = py::join(data, "Managed");
@@ -369,39 +454,48 @@ pub fn supply(
         }
         return Ok((rep, Vec::new()));
     }
-    // (the installer's URL, then the installer: a failure of either leaves the facades out)
-    let mut said = None;
-    let opened = (|| -> Result<Nsis, Fail> {
-        let src = match installer.filter(|i| !i.is_empty()) {
-            Some(i) => i.to_string(),
-            None => editor_installer(&text)?,
-        };
-        said = Some(src.clone());
+    let mut ns = if let Some(d) = donor.filter(|d| !d.is_empty()) {
+        let name = py::basename(d).to_string();
+        rep.set("donor", Json::str(name.clone()));
         log(&format!(
-            "winbcl: Unity {text}'s Windows editor installer: {src}"
+            "winbcl: Unity {text}'s class libraries from the donor {name} (nothing is downloaded)"
         ));
-        Ok(Nsis::open_logged(&src)?)
-    })();
-    if let Some(src) = said {
-        rep.set("installer", Json::str(src));
-    }
-    let mut ns = match opened {
-        Ok(ns) => ns,
-        Err(e) => {
-            if win {
-                return Err(e);
-            }
-            let m = match &e {
-                Fail::Exit(m) | Fail::Error(m) => m.clone(),
+        Src::donor(d)?
+    } else {
+        // (the installer's URL, then the installer: a failure of either leaves the facades out)
+        let mut said = None;
+        let opened = (|| -> Result<Nsis, Fail> {
+            let src = match installer.filter(|i| !i.is_empty()) {
+                Some(i) => i.to_string(),
+                None => editor_installer(&text)?,
             };
-            rep.set("error", Json::str(m.clone()));
-            let mut names: Vec<&str> = want.iter().map(|x| x.0.as_str()).collect();
-            names.sort();
+            said = Some(src.clone());
             log(&format!(
-                "winbcl: could not read the installer ({m}): {} left out",
-                names.join(", ")
+                "winbcl: Unity {text}'s Windows editor installer: {src}"
             ));
-            return Ok((rep, Vec::new()));
+            Ok(Nsis::open_logged(&src)?)
+        })();
+        if let Some(src) = said {
+            rep.set("installer", Json::str(src));
+        }
+        match opened {
+            Ok(ns) => Src::Nsis(ns),
+            Err(e) => {
+                if win {
+                    return Err(e);
+                }
+                let m = match &e {
+                    Fail::Exit(m) | Fail::Error(m) => m.clone(),
+                };
+                rep.set("error", Json::str(m.clone()));
+                let mut names: Vec<&str> = want.iter().map(|x| x.0.as_str()).collect();
+                names.sort();
+                log(&format!(
+                    "winbcl: could not read the installer ({m}): {} left out",
+                    names.join(", ")
+                ));
+                return Ok((rep, Vec::new()));
+            }
         }
     };
     let files = index(&ns)?;
@@ -413,6 +507,23 @@ pub fn supply(
             Json::List(cl.iter().map(|n| Json::str(n.clone())).collect()),
         );
         written.extend(cl);
+        if let Src::Donor { libs, .. } = &ns {
+            let mut lack: Vec<String> = listdir(&managed)?
+                .into_iter()
+                .filter(|n| is_class_library(n) && !libs.contains(n))
+                .collect();
+            lack.sort();
+            if !lack.is_empty() {
+                log(&format!(
+                    "winbcl: not in the donor (its own build does not use them): the game's Windows {} stay",
+                    lack.join(", ")
+                ));
+                rep.set(
+                    "not_in_donor",
+                    Json::List(lack.into_iter().map(Json::str).collect()),
+                );
+            }
+        }
     }
     if !want.is_empty() {
         let refs: Vec<String> = want.iter().map(|x| x.0.clone()).collect();
@@ -446,9 +557,11 @@ pub fn supply(
         written.extend(got);
     }
     // round(fetched / 1e6, 2)
-    let mb = py_round2(ns.s.fetched as f64 / 1e6);
+    let mb = py_round2(ns.fetched() as f64 / 1e6);
     rep.set("read_mb", Json::Float(mb));
-    log(&format!("winbcl: {mb:.1} MB read from the installer"));
+    if let Src::Nsis(_) = ns {
+        log(&format!("winbcl: {mb:.1} MB read from the installer"));
+    }
     Ok((rep, written))
 }
 
@@ -478,6 +591,7 @@ pub fn main(
     player: Option<&str>,
     no_facades: bool,
     json: Option<&str>,
+    donor: Option<&str>,
 ) -> Result<(), Fail> {
     let (rep, written) = supply(
         data,
@@ -486,6 +600,7 @@ pub fn main(
         installer,
         player,
         !no_facades,
+        donor,
         &mut |m| eprintln!("{m}"),
     )?;
     if let Some(j) = json {
@@ -537,6 +652,7 @@ mod tests {
             None,
             Some(&d.join("player").to_string_lossy()),
             true,
+            None,
             &mut |m| said.push(m.to_string()),
         )
         .unwrap();
@@ -550,6 +666,98 @@ mod tests {
             r#"{"version": "6000.0.61f1", "class_libraries": [], "facades": [], "not_unity": {}, "read_mb": 0.0, "installer": null}"#
         );
         assert!(!d.join("bcl").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn class_library_names() {
+        for n in [
+            "mscorlib.dll",
+            "netstandard.dll",
+            "System.dll",
+            "System.Xml.Linq.dll",
+            "Mono.Security.dll",
+            "Microsoft.CSharp.dll",
+        ] {
+            assert!(is_class_library(n), "{n}");
+        }
+        for n in [
+            "Assembly-CSharp.dll",
+            "UnityEngine.dll",
+            "System.",
+            "Systems.dll",
+            "System..dll",
+            "Facades/System.dll",
+            "mscorlib.pdb",
+        ] {
+            assert!(!is_class_library(n), "{n}");
+        }
+    }
+
+    /// --donor: a Windows 2021.2+ build's class libraries from a Mono donor APK (what it carries;
+    /// the rest named), nothing downloaded.
+    #[test]
+    fn from_a_donor() {
+        use pkgzip::zipwrite::{write_zip, Src as Z};
+        let d = std::env::temp_dir().join(format!("pmu-winbcl-donor-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("Data/Managed")).unwrap();
+        let m = d.join("Data/Managed");
+        fs::write(
+            m.join("mscorlib.dll"),
+            b"MZ Interop+Kernel32 SetThreadErrorMode",
+        )
+        .unwrap();
+        fs::write(m.join("System.dll"), b"MZ win32 System").unwrap();
+        fs::write(m.join("System.Xml.Linq.dll"), b"MZ win32 Linq").unwrap();
+        fs::write(m.join("Assembly-CSharp.dll"), b"MZ game").unwrap();
+        let apk = d
+            .join("donor-2022.3.62f1-mono-armv7.apk")
+            .to_string_lossy()
+            .into_owned();
+        let e = |n: &str, b: &[u8]| (format!("{DONOR_MANAGED}{n}"), Z::Bytes(b.to_vec()));
+        write_zip(
+            &apk,
+            &[
+                e("mscorlib.dll", b"MZ linux mscorlib"),
+                e("System.dll", b"MZ linux System"),
+                e("Assembly-CSharp.dll", b"MZ pong"),
+                e("UnityEngine.CoreModule.dll", b"MZ engine"),
+            ],
+            &mut |_| {},
+            4,
+        )
+        .unwrap();
+        let mut said = Vec::new();
+        let out = d.join("bcl").to_string_lossy().into_owned();
+        let (rep, written) = supply(
+            &d.join("Data").to_string_lossy(),
+            &out,
+            Some("2022.3.62f1"),
+            None,
+            None,
+            true,
+            Some(&apk),
+            &mut |m| said.push(m.to_string()),
+        )
+        .unwrap();
+        assert_eq!(written, ["System.dll", "mscorlib.dll"]);
+        assert_eq!(
+            fs::read(py::join(&out, "mscorlib.dll")).unwrap(),
+            b"MZ linux mscorlib"
+        );
+        assert_eq!(
+            said,
+            [
+                "winbcl: Unity 2022.3.62f1's class libraries from the donor donor-2022.3.62f1-mono-armv7.apk (nothing is downloaded)",
+                "winbcl: 2 class libraries as unityjit-linux (from donor-2022.3.62f1-mono-armv7.apk): System.dll, mscorlib.dll",
+                "winbcl: not in the donor (its own build does not use them): the game's Windows System.Xml.Linq.dll stay",
+            ]
+        );
+        assert_eq!(
+            pyjson::dumps(&rep, None),
+            r#"{"version": "2022.3.62f1", "class_libraries": ["System.dll", "mscorlib.dll"], "facades": [], "not_unity": {}, "read_mb": 0.0, "installer": null, "donor": "donor-2022.3.62f1-mono-armv7.apk", "not_in_donor": ["System.Xml.Linq.dll"]}"#
+        );
         let _ = fs::remove_dir_all(&d);
     }
 }

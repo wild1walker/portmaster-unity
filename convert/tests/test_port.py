@@ -572,6 +572,16 @@ def stub_pmu(t):
     return d
 
 
+def fake_donors(d, out):
+    """Stand-ins for the donor APKs a port made by port new ships (port.build.json's player.donors),
+    in d; returns d."""
+    os.makedirs(d, exist_ok=True)
+    for n in json.load(open(os.path.join(out, 'port.build.json')))['config']['player']['donors']:
+        with zipfile.ZipFile(os.path.join(d, n), 'w') as z:
+            z.writestr('lib/armeabi-v7a/libunity.so', n)
+    return d
+
+
 def stub_tools(t):
     """A stand-in for the setup's Python (pmunity commands that log and make what the setup reads)
     packed as python.tar.gz, and for PortMaster's 7-Zip (unzip)."""
@@ -631,6 +641,7 @@ class NewAndSetupTest(unittest.TestCase):
         with open(cp, 'w') as f:
             json.dump(cfg, f)
         out = P.new('mygame', game, cp, os.path.join(t, 'port'), asmpatch='/nonexistent-asmpatch', log=lambda m: None)
+        fake_donors(os.path.join(t, 'donors'), out)
         return game, out
 
     def test_new_into_repo_clone(self):
@@ -770,11 +781,11 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertTrue(P.wants('pmu', cfg) and not P.wants('pybundle', cfg))
             pmu = stub_pmu(t)
             with self.assertRaises(SystemExit) as cm:   # (no licence beside the binary)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+                P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=lambda m: None, pybundle=pyb, no_build=True,
                           pmu=pmu, pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
             self.assertIn('pmspirvcross.LICENSE.txt', str(cm.exception))
             put(os.path.join(rt, 'sc', 'pmspirvcross.LICENSE.txt'), 'Apache 2.0 SPIRV-Cross, MIT SMOL-V')
-            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+            z = P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=lambda m: None, pybundle=pyb, no_build=True,
                           pmu=pmu, pmspirvcross_bin=os.path.join(rt, 'sc', 'pmspirvcross'))
             with zipfile.ZipFile(z) as zf:
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
@@ -786,7 +797,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertNotIn('mygame/setup/python.tar.gz', modes)
             self.assertNotIn('mygame/setup/pmhlslcc', modes)
             with self.assertRaises(SystemExit) as cm:   # (the default place, not built)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
+                P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
             self.assertIn('ARCH=arm64 tools/spirvcross/build.sh', str(cm.exception))
 
     def test_windows_port(self):
@@ -804,15 +815,17 @@ class NewAndSetupTest(unittest.TestCase):
             readme = P._read(os.path.join(out, 'README.md'))
             self.assertIn('ARCH=arm64 tools/hlslcc/build.sh', readme)
             self.assertIn('Windows-only class libraries', readme)
-            self.assertIn(f'about {P.WINBCL_MB} MB of its Windows editor installer', P._read(os.path.join(out, 'mygame', 'README.md')))
-            self.assertIn(f'(about\n{P.PLAYER_MB + P.WINBCL_MB} MB', P._read(os.path.join(out, 'mygame', 'gamedata', 'PUT_GAME_FILES_HERE.txt')))
+            self.assertIn('the setup takes the Unix ones from the same donors', P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertNotIn('Wi-Fi on', P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertIn("Unity's Android player comes with the port",
+                          P._read(os.path.join(out, 'mygame', 'gamedata', 'PUT_GAME_FILES_HERE.txt')))
             pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
-            self.assertIn(f'player and class libraries from Unity, about {P.PLAYER_MB + P.WINBCL_MB} MB', pj['attr']['inst'])
+            self.assertIn("Unity's Android player comes with the port, no Wi-Fi", pj['attr']['inst'])
             # before 2021.2 there is nothing to replace: the READMEs say the player only
             cfg19 = P.merge(cfg, {'game': {'unity_versions': ['2019.4.8f1']}})
             self.assertTrue(P.needs_pmhlslcc(cfg19))
             self.assertFalse(P.needs_winbcl(cfg19))
-            self.assertEqual(P.download_more(cfg19), '')
+            self.assertNotIn('Windows-only', P.player_from(cfg19, P.routes()['android']))
             # the release: pmhlslcc (aarch64) with HLSLcc's licence
             rt = os.path.join(t, 'rt')
             for d in ('runtime/host/out', 'runtime/media/out/licenses', 'hl'):
@@ -829,11 +842,11 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertTrue(P.wants('pmu', cfg) and not P.wants('pybundle', cfg))
             pmu = stub_pmu(t)
             with self.assertRaises(SystemExit) as cm:   # (no licence beside the binary)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+                P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=lambda m: None, pybundle=pyb, no_build=True,
                           pmu=pmu, pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
             self.assertIn('pmhlslcc.LICENSE.txt', str(cm.exception))
             put(os.path.join(rt, 'hl', 'pmhlslcc.LICENSE.txt'), 'MIT HLSLcc, BSD bstrlib')
-            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True,
+            z = P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=lambda m: None, pybundle=pyb, no_build=True,
                           pmu=pmu, pmhlslcc_bin=os.path.join(rt, 'hl', 'pmhlslcc'))
             with zipfile.ZipFile(z) as zf:
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
@@ -844,7 +857,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertNotIn('mygame/setup/python.tar.gz', modes)
             self.assertNotIn('mygame/setup/pmspirvcross', modes)
             with self.assertRaises(SystemExit) as cm:   # (the default place, not built)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
+                P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=lambda m: None, pybundle=pyb, no_build=True, pmu=pmu)
             self.assertIn('ARCH=arm64 tools/hlslcc/build.sh', str(cm.exception))
             # the setup: winbcl with the player after the fetch, PMHLSLCC for the conversion, its files
             # shipped with --managed-file
@@ -857,11 +870,11 @@ class NewAndSetupTest(unittest.TestCase):
             W, S = os.path.join(g, 'gamedata', '.setup'), os.path.join(g, 'setup')
             wb = next(l for l in log.splitlines() if l.startswith('pm winbcl '))
             self.assertEqual(wb, f"pm winbcl {g}/gamedata/My Game/My Game_Data {W}/bcl --version 2022.2.17f1 "
-                                 f"--player {W}/player")
+                                 f"--player {W}/player --donor {g}/donor/donor-2022.2.17f1-mono-armv7.apk")
             self.assertIn(f'env PMHLSLCC={S}/pmhlslcc', log)
             ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
             self.assertIn(f'--managed-file {W}/bcl/System.dll --managed-file {W}/bcl/netstandard.dll', ad)
-            self.assertLess(log.index('pm player fetch'), log.index('pm winbcl'))
+            self.assertLess(log.index('pm player donor'), log.index('pm winbcl'))
             self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
             # winbcl = "off": not run
             shutil.rmtree(g)
@@ -975,7 +988,7 @@ class NewAndSetupTest(unittest.TestCase):
                     tf.addfile(ti, io.BytesIO(data))
             P.write_png(os.path.join(out, 'screenshot.png'), 640, 480, bytes(640 * 480 * 3))   # (a stand-in capture)
             msgs = []
-            z = P.package(out, os.path.join(t, 'rel'), rt, log=msgs.append, pybundle=pyb, no_build=True, submission=True)
+            z = P.package(out, os.path.join(t, 'rel'), rt, donors=os.path.join(t, 'donors'), log=msgs.append, pybundle=pyb, no_build=True, submission=True)
             with zipfile.ZipFile(z) as zf:
                 names = set(zf.namelist())
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
@@ -1034,17 +1047,31 @@ class NewAndSetupTest(unittest.TestCase):
                 os.makedirs(os.path.join(rt, d))
             put(os.path.join(rt, 'runtime/host/out/ua_host'), 'host')
             put(os.path.join(rt, 'runtime/media/out/licenses/libvpx.copyright'), 'BSD')
+            # the donors: named by port new, required by package (no donor folder, or one without them)
+            self.assertEqual(cfg['player']['donors'], ['donor-2019.4.8f1-mono-armv7.apk'])
+            self.assertIn("DONORS=donor-2019.4.8f1-mono-armv7.apk", P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            self.assertNotIn('PLAYER_URL', P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            dn = os.path.join(t, 'donors')
+            pmu = stub_pmu(t)
+            for donors, says in ((None, 'no donor folder was given: --donors DIR (or $DONORS) with donor-2019.4.8f1-mono-armv7.apk'),
+                                 (os.path.join(t, 'none'), 'has no donor-2019.4.8f1-mono-armv7.apk')):
+                with self.assertRaises(SystemExit) as cm:
+                    P.package(out, os.path.join(t, 'rel'), rt, donors=donors, log=lambda m: None, no_build=True, pmu=pmu)
+                self.assertIn(says, str(cm.exception))
+                self.assertIn('tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7', str(cm.exception))
             with self.assertRaises(SystemExit) as cm:   # (a folder without pmu and licenses/)
-                P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, no_build=True, pmu=os.path.join(t, 'none'))
+                P.package(out, os.path.join(t, 'rel'), rt, donors=dn, log=lambda m: None, no_build=True, pmu=os.path.join(t, 'none'))
             self.assertIn('no pmu and licenses/', str(cm.exception))
-            z = P.package(out, os.path.join(t, 'rel'), rt, log=lambda m: None, no_build=True, pmu=stub_pmu(t))
+            z = P.package(out, os.path.join(t, 'rel'), rt, donors=dn, log=lambda m: None, no_build=True, pmu=pmu)
             with zipfile.ZipFile(z) as zf:
                 names = set(zf.namelist())
                 modes = {i.filename: i.external_attr >> 16 & 0o777 for i in zf.infolist()}
                 self.assertEqual(zf.read('mygame/setup/pmu'), b'#!/bin/sh\nexit 2\n')
                 self.assertEqual(zf.read('mygame/licenses/LICENSE.musl.txt'), b'MIT musl')
                 self.assertEqual(zf.read('mygame/licenses/LICENSE.rust-crates.txt'), b'MIT / Apache 2.0 crates')
+                self.assertIn(b"Made-with-Unity", zf.read('mygame/licenses/LICENSE.unity-donor.txt'))
             self.assertEqual(modes['mygame/setup/pmu'], 0o755)
+            self.assertEqual(modes['mygame/donor/donor-2019.4.8f1-mono-armv7.apk'], 0o644)
             for n in ('My Game.sh', 'mygame/ua_host', 'mygame/setup/patchscript', 'mygame/licenses/LICENSE.libvpx.txt',
                       'mygame/licenses/LICENSE.portmaster-unity.txt', 'mygame/licenses/LICENSE.libhybris.txt'):
                 self.assertIn(n, names)
@@ -1063,6 +1090,10 @@ class NewAndSetupTest(unittest.TestCase):
             shutil.copytree(os.path.join(out, 'mygame'), g)
         if os.path.isdir(os.path.join(g, 'setup')):
             shutil.copy(pyb, os.path.join(g, 'setup', 'python.tar.gz'))
+        if 'NO_DONORS' not in env:              # (the release's donor/: package copies them in)
+            os.makedirs(os.path.join(g, 'donor'), exist_ok=True)
+            for kind in ('mono-armv7', 'il2cpp-arm64'):
+                put(os.path.join(g, 'donor', f"donor-{env.get('STUB_VERSION', '2019.4.8f1')}-{kind}.apk"), 'apk')
         log = os.path.join(t, 'pm.log')
         # (not the caller's PMHLSLCC: the setup sets it only for a port that ships pmhlslcc)
         e = dict({k: v for k, v in os.environ.items() if k != 'PMHLSLCC'}, GAMEDIR=g, controlfolder=pm,
@@ -1071,6 +1102,22 @@ class NewAndSetupTest(unittest.TestCase):
         e.update(env)
         r = subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
         return g, r, (P._read(log) if os.path.exists(log) else '')
+
+    def test_setup_no_donor(self):
+        """a release without the donor of the game's version: the setup says so, and downloads nothing"""
+        with tempfile.TemporaryDirectory() as t:
+            game, out = self.make(t)
+            g = os.path.join(t, 'ports', 'mygame')
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            g, r, log = self.run_setup(t, out, {'NO_DONORS': '1'})
+            self.assertIn('PATCH_FAIL_MSG:This port ships no donor of Unity 2019.4.8f1 (mono, armeabi-v7a): '
+                          'donor/donor-2019.4.8f1-mono-armv7.apk is missing', r.stdout)
+            self.assertNotIn('pm player', log)
+            for p in ('android', 'mono-arm64'):
+                text = P._read(os.path.join(P.TEMPLATES, p, 'patchscript'))
+                for net in ('curl', 'wget', 'player fetch', 'player url', 'SSL_CERT_FILE', '--installer'):
+                    self.assertNotIn(net, text, (p, net))
 
     def test_setup_folder(self):
         with tempfile.TemporaryDirectory() as t:
@@ -1085,7 +1132,8 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertIn('PATCH_FAIL_MSG:Converting', r.stdout)
             g, r, log = self.run_setup(t, out, {'TEXTURE_QUALITY': 'medium'})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertEqual(log.count('pm player fetch 2019.4.8f1'), 1)
+            self.assertEqual(log.count('pm player donor 2019.4.8f1'), 1)
+            self.assertIn(f"--apk {g}/donor/donor-2019.4.8f1-mono-armv7.apk", log)
             self.assertIn('--set textures.quality=fast', log)            # (the first answer is kept)
             self.assertIn('--name MyGame --package com.pmunity.mygame', log)
             self.assertNotIn('--asmpatch', log)

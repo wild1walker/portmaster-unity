@@ -41,7 +41,7 @@ route (box64).
 | **Tested on** | Anbernic RG34XX-SP (Allwinner H700, Mali-G31, 1 GB RAM) with Knulli. |
 | **Your own copy of the game** | The version the port asks for, usually the Linux or macOS version. |
 | **Free space** | About three times the game's size while the first-launch setup runs. |
-| **Wi-Fi** | On the first launch: the setup fetches Unity's Android player for the game's Unity version from Unity (about 10 MB). |
+| **No Wi-Fi** | The setup downloads nothing: Unity's Android player for the game's Unity version comes with the port (its `donor/` folder: small games the porter built with that Unity version). |
 
 ### Install a port
 
@@ -55,7 +55,7 @@ your games). For a port named `mygame`:
 3. Start the game from the Ports menu. If it does not show up, refresh your game list or restart
    the handheld.
 4. **The first launch runs the setup.** PortMaster shows its progress, and may ask questions first
-   (for example a texture quality). The setup fetches Unity's player, converts the game for the
+   (for example a texture quality). The setup unpacks Unity's player from the port's donors, converts the game for the
    handheld and packs it. If it is interrupted (battery, power button), start the game again: it
    continues where it stopped. Its log is `ports/mygame/patchlog.txt`.
 5. When the setup is done, the game starts. The game's folder in `gamedata/` is used up by the
@@ -252,16 +252,28 @@ cd convert
    ```sh
    python -m pmunity port new mygame --data "<game folder>"
    ```
-3. **Package it.** This makes the release zip, `mygame/out/mygame.zip`: the launcher, the setup,
-   `ua_host`, the setup's tool (`pmu`: one static program, no Python on the handheld) and the
-   licences. No game files, nothing of Unity.
+3. **Build the donors.** The handheld never downloads Unity's player: the port ships it as one or
+   two donors, small games (a one-scene pong, `tools/donor/`) built with exactly the game's Unity
+   version, whose APKs carry the player. `port check` and `port new` print the donors the port
+   needs (e.g. `donor-2017.4.27f1-mono-armv7.apk`) and the command; `port package` stops when one is
+   missing. On a Mac, with a Unity Personal licence file in `/Library/Application Support/Unity`
+   (made once by the Unity Hub; the tools never sign in):
    ```sh
-   python -m pmunity port package mygame              # or: mygame/package.sh
+   ../tools/donor/get-editor.sh 2017.4.27f1 editors/2017.4.27f1   # that editor + Android Build Support, unpacked
+   SDK=<Android SDK> JDK=<JDK 8 home> ../tools/donor/build.sh editors/2017.4.27f1/Unity.app MonoArmv7 donors
+   ```
+   The `mono-arm64` route also needs `Il2cppArm64` (with `NDK=`). Details:
+   [docs/porting.md](docs/porting.md), section 5. Never commit donors.
+4. **Package it.** This makes the release zip, `mygame/out/mygame.zip`: the launcher, the setup,
+   `ua_host`, the setup's tool (`pmu`: one static program, no Python on the handheld), the donors
+   and the licences. No game files, and from Unity only the donors.
+   ```sh
+   python -m pmunity port package mygame --donors donors   # or: DONORS=donors mygame/package.sh
    ```
    It also lists what a PortMaster submission still needs (a screenshot, the controls, the
    game's developer, ...); `--submission` lays the port out for PortMaster's repository
-   ([docs/porting.md](docs/porting.md), section 11).
-4. **Test it.** First the rehearsal: it runs the port's first launch in a container that looks
+   ([docs/porting.md](docs/porting.md), section 12).
+5. **Test it.** First the rehearsal: it runs the port's first launch in a container that looks
    like a handheld, then the game in the emulator, and saves screenshots to `work/mygame/shots.png`
    and what it played to `work/mygame/sound.wav` (nothing plays aloud; the end of the output says
    how loud it was) (`PM_7ZZ` is PortMaster's own `7zzs.aarch64`, from its release). Then on a handheld: unzip the
@@ -271,7 +283,7 @@ cd convert
    ```sh
    PM_7ZZ=<path to 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip "<game folder>" work/mygame 300
    ```
-5. **Tell us how it went.** Open a
+6. **Tell us how it went.** Open a
    [Game porting report](https://github.com/wild1walker/portmaster-unity/issues/new/choose) with the
    output of `pmunity version` and `port check`, what worked and where it failed, your handheld and
    firmware, and `patchlog.txt` and `log.txt`. Remove personal folder names from the output if
@@ -281,7 +293,7 @@ cd convert
 GitHub repository is `port new`'s output: run `port new` into a fresh clone of it (`--out <repo>`)
 and commit; `package` builds into `out/`, which the `.gitignore` it writes leaves out
 ([docs/porting.md](docs/porting.md), "The port's own repository"). Publish only the
-port's zip: never the game, a converted game, or Unity's files.
+port's zip: never the game, a converted game, or Unity's files (the donors go only into that zip).
 
 ### Documentation
 

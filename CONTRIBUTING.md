@@ -31,7 +31,7 @@ needed for `tools/asmpatch`. See [docs/building.md](docs/building.md).
 | profiling tools | `python3 -m unittest discover -s tools/analysis` (and `-s tools/device/test`: flatshaders.py, deadfrags.py; `-s tools/re -p 'test_*.py'`: unityhooks.py's checks); `tools/device/test/profbench_test.sh` (the device bench against a fake handheld: ssh and the game are stand-ins) | synthetic profiles and bench snapshots |
 | asmpatch | `tools/asmpatch/build.sh test` | fake assemblies built with Mono.Cecil, and C# stand-ins (`test/fakes/`) for the optimizations and reductions |
 | box64 route | `tools/box64/test/launcher_test.sh`, `tools/box64/test/port_test.sh` | need a Linux build of a game you own |
-| a whole port | `tools/port/rehearse.sh` ([docs/porting.md](docs/porting.md#6-rehearsal)) | the first launch in a handheld-like container, then the game in the emulator |
+| a whole port | `tools/port/rehearse.sh` ([docs/porting.md](docs/porting.md#7-rehearsal)) | the first launch in a handheld-like container, then the game in the emulator |
 | the games (regression) | `tools/regress/regress.py fast` (convert, pack and checks), `regress.py rig` (the games in the emulator) | **before merging a branch that touches `convert/` or `runtime/`**: a list of games per Unity line and route, compared with the recorded baseline ([tools/regress/README.md](tools/regress/README.md)); needs your own game corpus |
 
 If your change touches what a game sees, say in the pull request how you checked it: unit tests,
