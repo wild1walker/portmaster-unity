@@ -441,5 +441,4 @@ mod tests {
         let result = CodebookLibrary::from_bytes(&data);
         assert!(result.is_err());
     }
-
 }
