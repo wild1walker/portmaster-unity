@@ -31,6 +31,25 @@ def as_driver_sees(src):
     return src
 
 
+class _AllFiles:
+    """Every serialized file of a bundle (UnityPy), with Loaded's objects() and close()."""
+
+    def __init__(self, path):
+        import UnityPy
+        from UnityPy.files import SerializedFile
+        self.env = UnityPy.load(path)
+        self.files = [f for f in self.env.file.files.values() if isinstance(f, SerializedFile)]
+
+    def objects(self, class_name):
+        for f in self.files:
+            for pid, o in f.objects.items():
+                if o.type.name == class_name:
+                    yield pid, o
+
+    def close(self):
+        self.env = None
+
+
 def export(job, out_dir, bundles=r'.'):
     os.makedirs(out_dir, exist_ok=True)
     seen = {}
@@ -39,7 +58,11 @@ def export(job, out_dir, bundles=r'.'):
         try:
             lf = Loaded(job.path_in(rel))
         except NotOneSerializedFile:
-            continue
+            # a bundle of several serialized files (a scene bundle, which pmu converts): each one's
+            lf = _AllFiles(job.path_in(rel))
+            if not lf.files:
+                job.log(f'shaders-export: {rel}: no serialized file: left out')
+                continue
         for pid, o in lf.objects('Shader'):
             t = o.read_typetree()
             if B.PLATFORM_GLES3PLUS not in t['platforms']:

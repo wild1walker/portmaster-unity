@@ -745,7 +745,9 @@ python -m pmunity shaders-export <converted data> glsl/       # every distinct p
 runtime/host/out/shadercheck glsl/                            # on the handheld: compile + link each
 ```
 
-`shaders-export` also writes each GLES3 compute kernel as `<nnnn>.comp`, which `shadercheck`
+`shaders-export` reads the files the shaders step does, a scene bundle's every serialized file
+too (2026-11-02; before, it left such a bundle out without a word). It also writes each GLES3
+compute kernel as `<nnnn>.comp`, which `shadercheck`
 compiles and links as a compute program (OpenGL ES 3.1+). `shadercheck` uses the device's own
 driver (a pbuffer, or the fbdev window on Mali). Run it in
 `tools/emu` to compile with Mesa too. For Cuphead: 1566 distinct programs; all compile and link on
