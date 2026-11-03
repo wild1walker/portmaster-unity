@@ -42,7 +42,13 @@ extern "C" {
         duration_ms: c_ulong,
         key: c_int,
     ) -> c_int;
-    fn ve_packet(e: *mut c_void, data: *mut *const u8, n: *mut usize, pts: *mut i64, key: *mut c_int) -> c_int;
+    fn ve_packet(
+        e: *mut c_void,
+        data: *mut *const u8,
+        n: *mut usize,
+        pts: *mut i64,
+        key: *mut c_int,
+    ) -> c_int;
     fn ve_error(e: *mut c_void) -> *const c_char;
     fn ve_free(e: *mut c_void);
 }
@@ -51,21 +57,68 @@ extern "C" {
 mod absent {
     //! no libvpx on this architecture (build.rs): every call fails
     use std::ffi::{c_char, c_int, c_ulong, c_void};
-    pub unsafe fn vd_new(_: c_int) -> *mut c_void { std::ptr::null_mut() }
-    pub unsafe fn vd_decode(_: *mut c_void, _: *const u8, _: usize) -> c_int { -1 }
+    pub unsafe fn vd_new(_: c_int) -> *mut c_void {
+        std::ptr::null_mut()
+    }
+    pub unsafe fn vd_decode(_: *mut c_void, _: *const u8, _: usize) -> c_int {
+        -1
+    }
     #[allow(clippy::too_many_arguments)]
-    pub unsafe fn vd_frame(_: *mut c_void, _: *mut *const u8, _: *mut c_int, _: *mut *const u8, _: *mut c_int,
-                           _: *mut *const u8, _: *mut c_int, _: *mut c_int, _: *mut c_int) -> c_int { 0 }
-    pub unsafe fn vd_error(_: *mut c_void) -> *const c_char { c"no libvpx in this build".as_ptr() }
+    pub unsafe fn vd_frame(
+        _: *mut c_void,
+        _: *mut *const u8,
+        _: *mut c_int,
+        _: *mut *const u8,
+        _: *mut c_int,
+        _: *mut *const u8,
+        _: *mut c_int,
+        _: *mut c_int,
+        _: *mut c_int,
+    ) -> c_int {
+        0
+    }
+    pub unsafe fn vd_error(_: *mut c_void) -> *const c_char {
+        c"no libvpx in this build".as_ptr()
+    }
     pub unsafe fn vd_free(_: *mut c_void) {}
-    pub unsafe fn ve_new(_: c_int, _: c_int, _: c_int, _: c_int, _: c_int, _: c_int, _: c_int) -> *mut c_void {
+    pub unsafe fn ve_new(
+        _: c_int,
+        _: c_int,
+        _: c_int,
+        _: c_int,
+        _: c_int,
+        _: c_int,
+        _: c_int,
+    ) -> *mut c_void {
         std::ptr::null_mut()
     }
     #[allow(clippy::too_many_arguments)]
-    pub unsafe fn ve_encode(_: *mut c_void, _: *const u8, _: c_int, _: *const u8, _: c_int, _: *const u8, _: c_int,
-                            _: i64, _: c_ulong, _: c_int) -> c_int { -1 }
-    pub unsafe fn ve_packet(_: *mut c_void, _: *mut *const u8, _: *mut usize, _: *mut i64, _: *mut c_int) -> c_int { 0 }
-    pub unsafe fn ve_error(_: *mut c_void) -> *const c_char { c"no libvpx in this build".as_ptr() }
+    pub unsafe fn ve_encode(
+        _: *mut c_void,
+        _: *const u8,
+        _: c_int,
+        _: *const u8,
+        _: c_int,
+        _: *const u8,
+        _: c_int,
+        _: i64,
+        _: c_ulong,
+        _: c_int,
+    ) -> c_int {
+        -1
+    }
+    pub unsafe fn ve_packet(
+        _: *mut c_void,
+        _: *mut *const u8,
+        _: *mut usize,
+        _: *mut i64,
+        _: *mut c_int,
+    ) -> c_int {
+        0
+    }
+    pub unsafe fn ve_error(_: *mut c_void) -> *const c_char {
+        c"no libvpx in this build".as_ptr()
+    }
     pub unsafe fn ve_free(_: *mut c_void) {}
 }
 #[cfg(no_vpx)]
@@ -89,7 +142,11 @@ impl Decoder {
     pub fn new(threads: usize) -> Result<Decoder, String> {
         let d = unsafe { vd_new(threads as c_int) };
         if d.is_null() {
-            return Err(if AVAILABLE { "VP8 decoder: init failed".into() } else { "VP8: no libvpx in this build".into() });
+            return Err(if AVAILABLE {
+                "VP8 decoder: init failed".into()
+            } else {
+                "VP8: no libvpx in this build".into()
+            });
         }
         Ok(Decoder(d))
     }
@@ -101,7 +158,11 @@ impl Decoder {
         }
         let (mut y, mut u, mut v) = (std::ptr::null(), std::ptr::null(), std::ptr::null());
         let (mut ys, mut us, mut vs, mut w, mut h) = (0, 0, 0, 0, 0);
-        let r = unsafe { vd_frame(self.0, &mut y, &mut ys, &mut u, &mut us, &mut v, &mut vs, &mut w, &mut h) };
+        let r = unsafe {
+            vd_frame(
+                self.0, &mut y, &mut ys, &mut u, &mut us, &mut v, &mut vs, &mut w, &mut h,
+            )
+        };
         if r < 0 {
             return Err("VP8 decode: not an 8-bit 4:2:0 picture".into());
         }
@@ -113,11 +174,19 @@ impl Decoder {
         let plane = |p: *const u8, stride: c_int, pw: usize, ph: usize| {
             let mut out = Vec::with_capacity(pw * ph);
             for r in 0..ph {
-                out.extend_from_slice(unsafe { std::slice::from_raw_parts(p.add(r * stride as usize), pw) });
+                out.extend_from_slice(unsafe {
+                    std::slice::from_raw_parts(p.add(r * stride as usize), pw)
+                });
             }
             out
         };
-        Ok(Some(Picture { w, h, y: plane(y, ys, w, h), u: plane(u, us, cw, ch), v: plane(v, vs, cw, ch) }))
+        Ok(Some(Picture {
+            w,
+            h,
+            y: plane(y, ys, w, h),
+            u: plane(u, us, cw, ch),
+            v: plane(v, vs, cw, ch),
+        }))
     }
 }
 
@@ -166,7 +235,11 @@ impl Encoder {
             )
         };
         if e.is_null() {
-            return Err(if AVAILABLE { "VP8 encoder: init failed".into() } else { "VP8: no libvpx in this build".into() });
+            return Err(if AVAILABLE {
+                "VP8 encoder: init failed".into()
+            } else {
+                "VP8: no libvpx in this build".into()
+            });
         }
         Ok(Encoder(e))
     }
@@ -178,12 +251,22 @@ impl Encoder {
             if unsafe { ve_packet(self.0, &mut p, &mut n, &mut pts, &mut key) } == 0 {
                 return out;
             }
-            out.push(Packet { data: unsafe { std::slice::from_raw_parts(p, n) }.to_vec(), pts_ms: pts, key: key != 0 });
+            out.push(Packet {
+                data: unsafe { std::slice::from_raw_parts(p, n) }.to_vec(),
+                pts_ms: pts,
+                key: key != 0,
+            });
         }
     }
 
     /// One picture in (time and duration in ms); the compressed frames that come out of it.
-    pub fn encode(&mut self, p: &Picture, pts_ms: i64, duration_ms: u64, key: bool) -> Result<Vec<Packet>, String> {
+    pub fn encode(
+        &mut self,
+        p: &Picture,
+        pts_ms: i64,
+        duration_ms: u64,
+        key: bool,
+    ) -> Result<Vec<Packet>, String> {
         let cw = p.w.div_ceil(2);
         let r = unsafe {
             ve_encode(
@@ -207,7 +290,20 @@ impl Encoder {
 
     /// The frames still inside the encoder.
     pub fn finish(&mut self) -> Result<Vec<Packet>, String> {
-        let r = unsafe { ve_encode(self.0, std::ptr::null(), 0, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0, 0) };
+        let r = unsafe {
+            ve_encode(
+                self.0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                0,
+            )
+        };
         if r != 0 {
             return Err(format!("VP8 encode: {}", msg(unsafe { ve_error(self.0) })));
         }

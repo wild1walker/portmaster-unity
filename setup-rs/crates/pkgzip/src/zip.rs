@@ -311,7 +311,9 @@ impl Archive {
             )));
         }
         if e.flag_bits & 0x08 != 0 {
-            return Err(Error::Fail(format!("{name}: an entry with a data descriptor")));
+            return Err(Error::Fail(format!(
+                "{name}: an entry with a data descriptor"
+            )));
         }
         let at = self.data_offset(e)?;
         let hdr = e.header_offset as u64;
@@ -323,7 +325,11 @@ impl Archive {
             if c.len() != 46 || !c.starts_with(b"PK\x01\x02") {
                 return Err(bad("Bad magic number for central directory"));
             }
-            let (n_len, x_len, k_len) = (u16_at(&c, 28) as u64, u16_at(&c, 30) as u64, u16_at(&c, 32) as u64);
+            let (n_len, x_len, k_len) = (
+                u16_at(&c, 28) as u64,
+                u16_at(&c, 30) as u64,
+                u16_at(&c, 32) as u64,
+            );
             let nm = read_at(&self.file, rec + 46, n_len as usize)?;
             if decode_name(&nm, u16_at(&c, 8))? == e.orig_name {
                 found = Some(rec);
@@ -333,7 +339,10 @@ impl Archive {
         }
         let rec = found.ok_or_else(|| bad(format!("{name}: no central directory record")))?;
         let crc = crc32fast::hash(data).to_le_bytes();
-        let w = std::fs::OpenOptions::new().write(true).open(path).map_err(io_at(path))?;
+        let w = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(io_at(path))?;
         w.write_all_at(data, at)?;
         w.write_all_at(&crc, hdr + 14)?;
         w.write_all_at(&crc, rec + 16)?;

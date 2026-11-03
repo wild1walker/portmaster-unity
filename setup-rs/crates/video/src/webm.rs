@@ -39,7 +39,12 @@ fn read_id(b: &[u8], pos: usize) -> Result<(u32, usize)> {
     if len > 4 || pos + len > b.len() {
         return Err(format!("webm: bad element id at {pos}"));
     }
-    Ok((b[pos..pos + len].iter().fold(0u32, |a, &x| (a << 8) | x as u32), len))
+    Ok((
+        b[pos..pos + len]
+            .iter()
+            .fold(0u32, |a, &x| (a << 8) | x as u32),
+        len,
+    ))
 }
 
 /// A size (None: unknown, all value bits set) and the length of it.
@@ -77,9 +82,10 @@ fn children(b: &[u8], start: usize, end: usize) -> Result<Vec<El>> {
         let (size, sl) = read_size(b, pos + il)?;
         let body_start = pos + il + sl;
         let body_end = match size {
-            Some(s) => body_start.checked_add(s as usize).filter(|&e| e <= end).ok_or_else(|| {
-                format!("webm: element {id:#x} at {pos} runs past its parent")
-            })?,
+            Some(s) => body_start
+                .checked_add(s as usize)
+                .filter(|&e| e <= end)
+                .ok_or_else(|| format!("webm: element {id:#x} at {pos} runs past its parent"))?,
             None if id == ID_CLUSTER => {
                 // up to the next element that cannot be in a cluster
                 let mut q = body_start;
@@ -95,7 +101,11 @@ fn children(b: &[u8], start: usize, end: usize) -> Result<Vec<El>> {
             }
             None => end,
         };
-        out.push(El { id, body: (body_start, body_end), all: (pos, body_end) });
+        out.push(El {
+            id,
+            body: (body_start, body_end),
+            all: (pos, body_end),
+        });
         pos = body_end;
     }
     Ok(out)
@@ -190,14 +200,23 @@ impl Track {
     pub fn size(&self) -> Option<(u64, u64)> {
         let v = &self.entries.iter().find(|e| e.0 == ID_VIDEO)?.1;
         let els = children(v, 0, v.len()).ok()?;
-        let get = |id| els.iter().find(|e| e.id == id).map(|e| uint(&v[e.body.0..e.body.1]));
+        let get = |id| {
+            els.iter()
+                .find(|e| e.id == id)
+                .map(|e| uint(&v[e.body.0..e.body.1]))
+        };
         Some((get(ID_PIXELWIDTH)?, get(ID_PIXELHEIGHT)?))
     }
 
     /// Sets the video picture size; a display size that was the picture's follows it.
     pub fn set_size(&mut self, w: u64, h: u64) -> Result<()> {
         let (ow, oh) = self.size().ok_or("webm: the track has no picture size")?;
-        let v = &mut self.entries.iter_mut().find(|e| e.0 == ID_VIDEO).ok_or("webm: no Video element")?.1;
+        let v = &mut self
+            .entries
+            .iter_mut()
+            .find(|e| e.0 == ID_VIDEO)
+            .ok_or("webm: no Video element")?
+            .1;
         let els = children(v, 0, v.len())?;
         let mut out = Vec::new();
         for e in els {
@@ -248,9 +267,18 @@ fn parse_block(b: &[u8]) -> Result<Block> {
     if len > 8 || b.len() < len + 3 {
         return Err("webm: bad block header".into());
     }
-    let track = b[1..len].iter().fold((first as u64) & (0xFF >> len) as u64, |a, &x| (a << 8) | x as u64);
+    let track = b[1..len]
+        .iter()
+        .fold((first as u64) & (0xFF >> len) as u64, |a, &x| {
+            (a << 8) | x as u64
+        });
     let rel = i16::from_be_bytes([b[len], b[len + 1]]);
-    Ok(Block { track, rel, flags: b[len + 2], payload: b[len + 3..].to_vec() })
+    Ok(Block {
+        track,
+        rel,
+        flags: b[len + 2],
+        payload: b[len + 3..].to_vec(),
+    })
 }
 
 fn block_bytes(k: &Block, flags: u8) -> Vec<u8> {
@@ -265,8 +293,14 @@ fn block_bytes(k: &Block, flags: u8) -> Vec<u8> {
 impl WebM {
     pub fn parse(b: &[u8]) -> Result<WebM> {
         let top = children(b, 0, b.len())?;
-        let header = top.iter().find(|e| e.id == ID_EBML).ok_or("webm: no EBML header")?;
-        let seg = top.iter().find(|e| e.id == ID_SEGMENT).ok_or("webm: no Segment")?;
+        let header = top
+            .iter()
+            .find(|e| e.id == ID_EBML)
+            .ok_or("webm: no EBML header")?;
+        let seg = top
+            .iter()
+            .find(|e| e.id == ID_SEGMENT)
+            .ok_or("webm: no Segment")?;
         let mut parts = Vec::new();
         let mut timecode_scale = 1_000_000;
         for e in children(b, seg.body.0, seg.body.1)? {
@@ -282,14 +316,26 @@ impl WebM {
                 }
                 ID_TRACKS => {
                     let mut tracks = Vec::new();
-                    for t in children(b, e.body.0, e.body.1)?.into_iter().filter(|t| t.id == ID_TRACKENTRY) {
-                        let mut tr = Track { number: 0, kind: 0, codec: String::new(), entries: Vec::new() };
+                    for t in children(b, e.body.0, e.body.1)?
+                        .into_iter()
+                        .filter(|t| t.id == ID_TRACKENTRY)
+                    {
+                        let mut tr = Track {
+                            number: 0,
+                            kind: 0,
+                            codec: String::new(),
+                            entries: Vec::new(),
+                        };
                         for c in children(b, t.body.0, t.body.1)? {
                             let body = &b[c.body.0..c.body.1];
                             match c.id {
                                 ID_TRACKNUMBER => tr.number = uint(body),
                                 ID_TRACKTYPE => tr.kind = uint(body),
-                                ID_CODECID => tr.codec = String::from_utf8_lossy(body).trim_end_matches('\0').to_string(),
+                                ID_CODECID => {
+                                    tr.codec = String::from_utf8_lossy(body)
+                                        .trim_end_matches('\0')
+                                        .to_string()
+                                }
                                 _ => {}
                             }
                             tr.entries.push((c.id, body.to_vec()));
@@ -299,7 +345,10 @@ impl WebM {
                     parts.push(Part::Tracks(tracks));
                 }
                 ID_CLUSTER => {
-                    let mut cl = Cluster { timecode: 0, items: Vec::new() };
+                    let mut cl = Cluster {
+                        timecode: 0,
+                        items: Vec::new(),
+                    };
                     for c in children(b, e.body.0, e.body.1)? {
                         let body = &b[c.body.0..c.body.1];
                         match c.id {
@@ -316,7 +365,10 @@ impl WebM {
                                         rest.extend_from_slice(&b[g.all.0..g.all.1]);
                                     }
                                 }
-                                cl.items.push(Item::Group(block.ok_or("webm: a BlockGroup without a Block")?, rest));
+                                cl.items.push(Item::Group(
+                                    block.ok_or("webm: a BlockGroup without a Block")?,
+                                    rest,
+                                ));
                             }
                             _ => cl.items.push(Item::Raw(b[c.all.0..c.all.1].to_vec())),
                         }
@@ -326,21 +378,31 @@ impl WebM {
                 _ => parts.push(Part::Raw(b[e.all.0..e.all.1].to_vec())),
             }
         }
-        Ok(WebM { header: b[header.all.0..header.all.1].to_vec(), parts, timecode_scale })
+        Ok(WebM {
+            header: b[header.all.0..header.all.1].to_vec(),
+            parts,
+            timecode_scale,
+        })
     }
 
     pub fn tracks(&self) -> Vec<&Track> {
-        self.parts.iter().flat_map(|p| match p {
-            Part::Tracks(t) => t.iter().collect(),
-            _ => Vec::new(),
-        }).collect()
+        self.parts
+            .iter()
+            .flat_map(|p| match p {
+                Part::Tracks(t) => t.iter().collect(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     pub fn tracks_mut(&mut self) -> Vec<&mut Track> {
-        self.parts.iter_mut().flat_map(|p| match p {
-            Part::Tracks(t) => t.iter_mut().collect(),
-            _ => Vec::new(),
-        }).collect()
+        self.parts
+            .iter_mut()
+            .flat_map(|p| match p {
+                Part::Tracks(t) => t.iter_mut().collect(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     pub fn write(&self) -> Vec<u8> {
@@ -359,7 +421,9 @@ impl WebM {
                     let mut body = element(ID_TIMECODE, &put_uint(c.timecode));
                     for it in &c.items {
                         match it {
-                            Item::Simple(k) => body.extend(element(ID_SIMPLEBLOCK, &block_bytes(k, k.flags))),
+                            Item::Simple(k) => {
+                                body.extend(element(ID_SIMPLEBLOCK, &block_bytes(k, k.flags)))
+                            }
                             Item::Group(k, rest) => {
                                 // a Block's flags byte keeps only lacing and invisible
                                 let mut g = element(ID_BLOCK, &block_bytes(k, k.flags & 0x0E));
@@ -394,12 +458,24 @@ mod tests {
         let mut b = Vec::new();
         put_size(&mut b, 127);
         assert_eq!(b, vec![0x40, 0x7F]);
-        for id in [ID_EBML, ID_SEGMENT, ID_TRACKENTRY, ID_PIXELWIDTH, ID_DISPLAYWIDTH, ID_TIMECODESCALE] {
+        for id in [
+            ID_EBML,
+            ID_SEGMENT,
+            ID_TRACKENTRY,
+            ID_PIXELWIDTH,
+            ID_DISPLAYWIDTH,
+            ID_TIMECODESCALE,
+        ] {
             let mut b = Vec::new();
             put_id(&mut b, id);
             assert_eq!(read_id(&b, 0).unwrap(), (id, b.len()));
         }
-        assert_eq!(read_size(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 0).unwrap().0, None);
+        assert_eq!(
+            read_size(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 0)
+                .unwrap()
+                .0,
+            None
+        );
     }
 
     /// A small file as libwebm lays one out: header, Segment with SeekHead, Void, Info, Tracks (a
@@ -444,7 +520,10 @@ mod tests {
         assert_eq!(w.timecode_scale, 1_000_000);
         let ts = w.tracks();
         assert_eq!(ts.len(), 2);
-        assert_eq!((ts[0].number, ts[0].kind, ts[0].codec.as_str()), (1, 1, "V_VP8"));
+        assert_eq!(
+            (ts[0].number, ts[0].kind, ts[0].codec.as_str()),
+            (1, 1, "V_VP8")
+        );
         assert_eq!(ts[0].size(), Some((64, 48)));
         assert_eq!(ts[1].codec, "A_VORBIS");
         w.tracks_mut()[0].set_size(32, 24).unwrap();
@@ -452,17 +531,45 @@ mod tests {
         let back = WebM::parse(&out).unwrap();
         assert_eq!(back.tracks()[0].size(), Some((32, 24)));
         // the display size followed the picture's, the audio track is the same
-        let v = &back.tracks()[0].entries.iter().find(|e| e.0 == ID_VIDEO).unwrap().1;
+        let v = &back.tracks()[0]
+            .entries
+            .iter()
+            .find(|e| e.0 == ID_VIDEO)
+            .unwrap()
+            .1;
         assert!(v.windows(4).any(|x| x == [0x54, 0xB0, 0x81, 32]));
         assert_eq!(back.tracks()[1].entries, w.tracks()[1].entries);
-        let Part::Cluster(c) = back.parts.iter().find(|p| matches!(p, Part::Cluster(_))).unwrap() else { panic!() };
+        let Part::Cluster(c) = back
+            .parts
+            .iter()
+            .find(|p| matches!(p, Part::Cluster(_)))
+            .unwrap()
+        else {
+            panic!()
+        };
         let blocks: Vec<&Block> = c.items.iter().filter_map(Item::block).collect();
         assert_eq!(blocks.len(), 3);
-        assert_eq!((blocks[0].track, blocks[0].rel, blocks[0].flags, blocks[0].payload.clone()), (1, 0, 0x80, vec![0xAA, 0xBB]));
-        assert_eq!((blocks[2].track, blocks[2].rel, blocks[2].payload.clone()), (1, 33, vec![0xCC]));
-        assert!(matches!(&c.items[2], Item::Group(_, rest) if rest == &element(ID_REFERENCEBLOCK, &[0xDF])));
+        assert_eq!(
+            (
+                blocks[0].track,
+                blocks[0].rel,
+                blocks[0].flags,
+                blocks[0].payload.clone()
+            ),
+            (1, 0, 0x80, vec![0xAA, 0xBB])
+        );
+        assert_eq!(
+            (blocks[2].track, blocks[2].rel, blocks[2].payload.clone()),
+            (1, 33, vec![0xCC])
+        );
+        assert!(
+            matches!(&c.items[2], Item::Group(_, rest) if rest == &element(ID_REFERENCEBLOCK, &[0xDF]))
+        );
         // no SeekHead, Void or Cues; written again, the same bytes
-        assert!(!back.parts.iter().any(|p| matches!(p, Part::Raw(r) if r.starts_with(&[0x11, 0x4D]))));
+        assert!(!back
+            .parts
+            .iter()
+            .any(|p| matches!(p, Part::Raw(r) if r.starts_with(&[0x11, 0x4D]))));
         assert_eq!(back.write(), out);
     }
 }

@@ -31,7 +31,9 @@ fn settings(base: Option<&Json>, sets: &[String]) -> Result<Json, String> {
         _ => Vec::new(),
     };
     for s in sets {
-        let (k, v) = s.split_once('=').ok_or_else(|| format!("--set {s}: KEY=VALUE"))?;
+        let (k, v) = s
+            .split_once('=')
+            .ok_or_else(|| format!("--set {s}: KEY=VALUE"))?;
         let k = k.strip_prefix("video.").unwrap_or(k);
         let v = match v.parse::<i128>() {
             Ok(n) => Json::Int(n),
@@ -40,7 +42,10 @@ fn settings(base: Option<&Json>, sets: &[String]) -> Result<Json, String> {
         d.retain(|(x, _)| x != k);
         d.push((k.to_string(), v));
     }
-    Ok(Json::Dict(vec![("steps".into(), Json::List(vec![Json::Str("video".into())])), ("video".into(), Json::Dict(d))]))
+    Ok(Json::Dict(vec![
+        ("steps".into(), Json::List(vec![Json::Str("video".into())])),
+        ("video".into(), Json::Dict(d)),
+    ]))
 }
 
 /// Whether a resource file holds a WebM clip (an EBML header with the "webm" doc type).
@@ -72,16 +77,20 @@ pub fn run(args: &[String]) -> ExitCode {
     }
     let Some(game) = game else { return fail(USAGE) };
     let base = match &config {
-        Some(p) => match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|t| {
-            convert::pyjson::loads(&t).map_err(|e| format!("{p}: {e:?}"))
-        }) {
+        Some(p) => match std::fs::read_to_string(p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| convert::pyjson::loads(&t).map_err(|e| format!("{p}: {e:?}")))
+        {
             Ok(j) => Some(j),
             Err(e) => return fail(e),
         },
         None => None,
     };
     if let Some(b) = &base {
-        let named = b.get("steps").and_then(Json::as_list).is_some_and(|l| l.iter().any(|s| s.as_str() == Some("video")));
+        let named = b
+            .get("steps")
+            .and_then(Json::as_list)
+            .is_some_and(|l| l.iter().any(|s| s.as_str() == Some("video")));
         if !named {
             println!("video: not one of this port's convert steps");
             return ExitCode::SUCCESS;
@@ -114,13 +123,22 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
         .collect();
     paths.sort();
     if paths.is_empty() {
-        return Err(format!("{}: no APK or OBB (a game set up for Unity's Android player?)", game.display()));
+        return Err(format!(
+            "{}: no APK or OBB (a game set up for Unity's Android player?)",
+            game.display()
+        ));
     }
     let mut zips = Vec::new();
     for p in &paths {
-        zips.push((p.to_string_lossy().into_owned(), Archive::open(&p.to_string_lossy()).map_err(|e| e.to_string())?));
+        zips.push((
+            p.to_string_lossy().into_owned(),
+            Archive::open(&p.to_string_lossy()).map_err(|e| e.to_string())?,
+        ));
     }
-    let holder = |name: &str| zips.iter().find(|(_, z)| z.get(&format!("{DATA}{name}")).is_some());
+    let holder = |name: &str| {
+        zips.iter()
+            .find(|(_, z)| z.get(&format!("{DATA}{name}")).is_some())
+    };
     let work = game.join(".pmunity-video");
     let (data, out) = (work.join("data"), work.join("out"));
     if !out.join(".ready").exists() {
@@ -130,7 +148,12 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
         let mut wanted = vec!["globalgamemanagers".to_string()];
         for (_, z) in &zips {
             for n in z.names() {
-                let Some(base) = n.strip_prefix(DATA).filter(|b| b.ends_with(".resource") && !b.contains('/')) else { continue };
+                let Some(base) = n
+                    .strip_prefix(DATA)
+                    .filter(|b| b.ends_with(".resource") && !b.contains('/'))
+                else {
+                    continue;
+                };
                 if has_webm(&z.read(n).map_err(|e| e.to_string())?) {
                     wanted.push(base.to_string());
                     wanted.push(format!("{}.assets", base.trim_end_matches(".resource")));
@@ -166,7 +189,9 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
     for n in &changed {
         let (_, z) = holder(n).ok_or_else(|| format!("{n}: in none of the game's archives"))?;
         let e = z.info(&format!("{DATA}{n}")).map_err(|e| e.to_string())?;
-        let len = std::fs::metadata(out.join(n)).map_err(|e| e.to_string())?.len();
+        let len = std::fs::metadata(out.join(n))
+            .map_err(|e| e.to_string())?
+            .len();
         if e.method != 0 || e.file_size != len || e.flag_bits & 0x08 != 0 {
             let _ = std::fs::remove_dir_all(&work);
             return Err(format!(
@@ -178,10 +203,14 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
     for n in &changed {
         let (path, z) = holder(n).ok_or_else(|| format!("{n}: in none of the game's archives"))?;
         let b = std::fs::read(out.join(n)).map_err(|e| e.to_string())?;
-        z.overwrite_stored(path, &format!("{DATA}{n}"), &b).map_err(|e| e.to_string())?;
+        z.overwrite_stored(path, &format!("{DATA}{n}"), &b)
+            .map_err(|e| e.to_string())?;
     }
     if !changed.is_empty() {
-        println!("video: {} files of the game's data written back in place", changed.len());
+        println!(
+            "video: {} files of the game's data written back in place",
+            changed.len()
+        );
     }
     let _ = std::fs::remove_dir_all(&work);
     Ok(())
@@ -195,7 +224,9 @@ mod tests {
     fn webm_found_anywhere() {
         let mut b = vec![0u8; 5000];
         assert!(!has_webm(&b));
-        b.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84]);
+        b.extend_from_slice(&[
+            0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84,
+        ]);
         b.extend_from_slice(b"webm");
         assert!(has_webm(&b));
     }
@@ -207,7 +238,10 @@ mod tests {
         assert_eq!(v.get("mode"), Some(&Json::Str("on".into())));
         assert_eq!(v.get("max_height"), Some(&Json::Int(540)));
         // the port's section, --set over it
-        let port = convert::pyjson::loads(r#"{"steps": ["video"], "video": {"mode": "off", "cq_level": 12}}"#).unwrap();
+        let port = convert::pyjson::loads(
+            r#"{"steps": ["video"], "video": {"mode": "off", "cq_level": 12}}"#,
+        )
+        .unwrap();
         let c = settings(Some(&port), &["mode=on".into()]).unwrap();
         let v = c.get("video").unwrap();
         assert_eq!(v.get("mode"), Some(&Json::Str("on".into())));

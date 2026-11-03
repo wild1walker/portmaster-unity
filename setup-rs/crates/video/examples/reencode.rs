@@ -27,12 +27,22 @@ fn main() {
         },
     };
     let t0 = Instant::now();
-    let (out, o) = video::reencode(&clip, &s).unwrap().expect("not taller than max_height");
+    let (out, o) = video::reencode(&clip, &s)
+        .unwrap()
+        .expect("not taller than max_height");
     let dt = t0.elapsed().as_secs_f64();
     std::fs::write(&a[4], &out).unwrap();
     println!(
         "{}x{} -> {}x{}, {} frames in {:.1} s ({:.1} ms a frame), {} -> {} bytes",
-        o.from.0, o.from.1, o.to.0, o.to.1, o.frames, dt, dt * 1000.0 / o.frames as f64, clip.len(), out.len()
+        o.from.0,
+        o.from.1,
+        o.to.0,
+        o.to.1,
+        o.frames,
+        dt,
+        dt * 1000.0 / o.frames as f64,
+        clip.len(),
+        out.len()
     );
     // the new clip decoded as a player would
     let w = video::webm::WebM::parse(&out).unwrap();
@@ -41,32 +51,73 @@ fn main() {
     let mut n = 0;
     for p in &w.parts {
         if let video::webm::Part::Cluster(c) = p {
-            for k in c.items.iter().filter_map(video::webm::Item::block).filter(|k| k.track == 1) {
+            for k in c
+                .items
+                .iter()
+                .filter_map(video::webm::Item::block)
+                .filter(|k| k.track == 1)
+            {
                 if dec.decode(&k.payload).unwrap().is_some() {
                     n += 1;
                 }
             }
         }
     }
-    println!("decoded again: {n} pictures, {:.2} ms a frame (4 threads)", t1.elapsed().as_secs_f64() * 1000.0 / n.max(1) as f64);
+    println!(
+        "decoded again: {n} pictures, {:.2} ms a frame (4 threads)",
+        t1.elapsed().as_secs_f64() * 1000.0 / n.max(1) as f64
+    );
     // quality: each new picture against the original's, halved the same way (luma PSNR); the
     // middle frame of both written as PGM (luma) beside the output
     let blocks = |w: &video::webm::WebM| -> Vec<Vec<u8>> {
-        w.parts.iter().filter_map(|p| match p { video::webm::Part::Cluster(c) => Some(c), _ => None })
-            .flat_map(|c| c.items.iter().filter_map(video::webm::Item::block).filter(|k| k.track == 1).map(|k| k.payload.clone()).collect::<Vec<_>>())
+        w.parts
+            .iter()
+            .filter_map(|p| match p {
+                video::webm::Part::Cluster(c) => Some(c),
+                _ => None,
+            })
+            .flat_map(|c| {
+                c.items
+                    .iter()
+                    .filter_map(video::webm::Item::block)
+                    .filter(|k| k.track == 1)
+                    .map(|k| k.payload.clone())
+                    .collect::<Vec<_>>()
+            })
             .collect()
     };
     let src = video::webm::WebM::parse(&clip).unwrap();
-    let (mut da, mut db) = (video::vpx::Decoder::new(1).unwrap(), video::vpx::Decoder::new(1).unwrap());
+    let (mut da, mut db) = (
+        video::vpx::Decoder::new(1).unwrap(),
+        video::vpx::Decoder::new(1).unwrap(),
+    );
     let (ba, bb) = (blocks(&src), blocks(&w));
     let (mut sum, mut worst, mut m) = (0.0f64, f64::MAX, 0usize);
     let mid = ba.len() / 2;
     for (i, (x, y)) in ba.iter().zip(bb.iter()).enumerate() {
-        let (Some(mut p), Some(q)) = (da.decode(x).unwrap(), db.decode(y).unwrap()) else { continue };
-        while p.h > q.h { p = video::scale::half(&p); }
-        let mse = p.y.iter().zip(&q.y).map(|(a, b)| { let d = *a as f64 - *b as f64; d * d }).sum::<f64>() / p.y.len() as f64;
-        let psnr = if mse == 0.0 { 99.0 } else { 10.0 * (255.0f64 * 255.0 / mse).log10() };
-        sum += psnr; worst = worst.min(psnr); m += 1;
+        let (Some(mut p), Some(q)) = (da.decode(x).unwrap(), db.decode(y).unwrap()) else {
+            continue;
+        };
+        while p.h > q.h {
+            p = video::scale::half(&p);
+        }
+        let mse =
+            p.y.iter()
+                .zip(&q.y)
+                .map(|(a, b)| {
+                    let d = *a as f64 - *b as f64;
+                    d * d
+                })
+                .sum::<f64>()
+                / p.y.len() as f64;
+        let psnr = if mse == 0.0 {
+            99.0
+        } else {
+            10.0 * (255.0f64 * 255.0 / mse).log10()
+        };
+        sum += psnr;
+        worst = worst.min(psnr);
+        m += 1;
         if i == mid {
             for (tag, pic) in [("src", &p), ("new", &q)] {
                 let mut pgm = format!("P5\n{} {}\n255\n", pic.w, pic.h).into_bytes();
@@ -75,5 +126,9 @@ fn main() {
             }
         }
     }
-    println!("luma PSNR against the halved original: {:.1} dB average, {:.1} dB worst, {m} frames", sum / m.max(1) as f64, worst);
+    println!(
+        "luma PSNR against the halved original: {:.1} dB average, {:.1} dB worst, {m} frames",
+        sum / m.max(1) as f64,
+        worst
+    );
 }

@@ -45,7 +45,13 @@ fn mode_of(c: &Json) -> Result<(bool, String)> {
         Some("auto") => {
             let mem = super::quality::mem_total_mb();
             let ram = int_opt(c, "ram_mb")?;
-            Ok((mem <= ram, format!("{mem} MB of RAM ({} {ram})", if mem <= ram { "at most" } else { "more than" })))
+            Ok((
+                mem <= ram,
+                format!(
+                    "{mem} MB of RAM ({} {ram})",
+                    if mem <= ram { "at most" } else { "more than" }
+                ),
+            ))
         }
         _ => Err(Error::Value(format!(
             "video.mode: {} (auto, on or off)",
@@ -64,7 +70,8 @@ struct Clip {
 }
 
 fn is_level(n: &str) -> bool {
-    n.strip_prefix("level").is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+    n.strip_prefix("level")
+        .is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Sets a number field to n in the type it has.
@@ -72,9 +79,17 @@ fn set_num(v: &mut Value, n: u64) -> Result<()> {
     *v = match v {
         Value::U64(_) => Value::U64(n),
         Value::I64(_) => Value::I64(n as i64),
-        Value::U32(_) => Value::U32(u32::try_from(n).map_err(|_| Error::Value(format!("{n}: out of range")))?),
-        Value::I32(_) => Value::I32(i32::try_from(n).map_err(|_| Error::Value(format!("{n}: out of range")))?),
-        other => return Err(Error::Value(format!("video: a number field holds {other:?}"))),
+        Value::U32(_) => {
+            Value::U32(u32::try_from(n).map_err(|_| Error::Value(format!("{n}: out of range")))?)
+        }
+        Value::I32(_) => {
+            Value::I32(i32::try_from(n).map_err(|_| Error::Value(format!("{n}: out of range")))?)
+        }
+        other => {
+            return Err(Error::Value(format!(
+                "video: a number field holds {other:?}"
+            )))
+        }
     };
     Ok(())
 }
@@ -92,7 +107,9 @@ pub fn run(job: &mut Job) -> Result<()> {
         return Ok(());
     }
     if !video::vpx::AVAILABLE {
-        return Err(Error::Value("video: this pmu has no VP8 encoder (libvpx is built into arm64 builds)".into()));
+        return Err(Error::Value(
+            "video: this pmu has no VP8 encoder (libvpx is built into arm64 builds)".into(),
+        ));
     }
     let threads = match int_opt(&c, "threads")? {
         n if n > 0 => n as usize,
@@ -131,7 +148,12 @@ pub fn run(job: &mut Job) -> Result<()> {
             if !job.path_in(&res).is_file() {
                 continue;
             }
-            by_res.entry(res).or_default().push(Clip { rel: rel.clone(), pid, offset: num("m_Offset"), size: num("m_Size") });
+            by_res.entry(res).or_default().push(Clip {
+                rel: rel.clone(),
+                pid,
+                offset: num("m_Offset"),
+                size: num("m_Size"),
+            });
         }
     }
     let (mut done_clips, mut kept, mut before, mut after) = (0usize, 0usize, 0u64, 0u64);
@@ -149,10 +171,13 @@ pub fn run(job: &mut Job) -> Result<()> {
         for c in &clips {
             let (a, b) = (c.offset as usize, (c.offset + c.size) as usize);
             if b > data.len() {
-                return Err(Error::Value(format!("video: {res}: a clip at {a} runs past the file's end")));
+                return Err(Error::Value(format!(
+                    "video: {res}: a clip at {a} runs past the file's end"
+                )));
             }
             let t0 = std::time::Instant::now();
-            let r = video::reencode(&data[a..b], &s).map_err(|e| Error::Value(format!("video: {res} @{a}: {e}")))?;
+            let r = video::reencode(&data[a..b], &s)
+                .map_err(|e| Error::Value(format!("video: {res} @{a}: {e}")))?;
             let Some((new, o)) = r else { continue };
             if new.len() as u64 > c.size {
                 job.log(&format!("video: {res} @{a}: the smaller picture's clip is not smaller ({} > {} bytes): kept", new.len(), c.size));
@@ -164,8 +189,14 @@ pub fn run(job: &mut Job) -> Result<()> {
             changed.insert((c.rel.clone(), c.pid), (new.len() as u64, o.to.0, o.to.1));
             job.log(&format!(
                 "video: {res} @{a}: {}x{} -> {}x{}, {} frames, {:.1} -> {:.1} MB in {:.0} s",
-                o.from.0, o.from.1, o.to.0, o.to.1, o.frames,
-                c.size as f64 / 1048576.0, new.len() as f64 / 1048576.0, t0.elapsed().as_secs_f64()
+                o.from.0,
+                o.from.1,
+                o.to.0,
+                o.to.1,
+                o.frames,
+                c.size as f64 / 1048576.0,
+                new.len() as f64 / 1048576.0,
+                t0.elapsed().as_secs_f64()
             ));
             done_clips += 1;
             before += c.size;
@@ -195,7 +226,10 @@ pub fn run(job: &mut Job) -> Result<()> {
                     continue;
                 }
                 let mut t = f.sf.read_typetree(*pid)?;
-                set_num(field_mut(field_mut(&mut t, "m_ExternalResources")?, "m_Size")?, *size)?;
+                set_num(
+                    field_mut(field_mut(&mut t, "m_ExternalResources")?, "m_Size")?,
+                    *size,
+                )?;
                 for (k, v) in [("Width", *w), ("Height", *h)] {
                     if let Some(x) = t.get_mut(k) {
                         set_num(x, v)?;
@@ -203,7 +237,9 @@ pub fn run(job: &mut Job) -> Result<()> {
                 }
                 f.sf.save_typetree(*pid, &t)?;
                 let (old, new) = (f.sf.original_bytes(*pid)?, f.sf.bytes(*pid)?);
-                let o = f.sf.object(*pid).ok_or_else(|| Error::Value(format!("video: {rel}: no object {pid}")))?;
+                let o =
+                    f.sf.object(*pid)
+                        .ok_or_else(|| Error::Value(format!("video: {rel}: no object {pid}")))?;
                 let at = o.byte_start as usize; // (the file's offset: the data offset included)
                 if new.len() == old.len() && file.get(at..at + old.len()) == Some(&old[..]) {
                     file[at..at + new.len()].copy_from_slice(&new);
@@ -228,8 +264,14 @@ pub fn run(job: &mut Job) -> Result<()> {
     if done_clips > 0 || kept > 0 {
         job.log(&format!(
             "video: {done_clips} clips at most {} pixels tall ({:.1} -> {:.1} MB){}",
-            s.max_height, before as f64 / 1048576.0, after as f64 / 1048576.0,
-            if kept > 0 { format!(", {kept} kept") } else { String::new() }
+            s.max_height,
+            before as f64 / 1048576.0,
+            after as f64 / 1048576.0,
+            if kept > 0 {
+                format!(", {kept} kept")
+            } else {
+                String::new()
+            }
         ));
     }
     Ok(())
@@ -252,7 +294,12 @@ mod tests {
 
     #[test]
     fn modes() {
-        let c = |m: &str| Json::Dict(vec![("mode".into(), Json::Str(m.into())), ("ram_mb".into(), Json::Int(1024))]);
+        let c = |m: &str| {
+            Json::Dict(vec![
+                ("mode".into(), Json::Str(m.into())),
+                ("ram_mb".into(), Json::Int(1024)),
+            ])
+        };
         assert!(mode_of(&c("on")).unwrap().0);
         assert!(!mode_of(&c("off")).unwrap().0);
         assert!(mode_of(&c("sometimes")).is_err());

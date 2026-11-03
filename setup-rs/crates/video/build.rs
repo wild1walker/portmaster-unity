@@ -15,7 +15,8 @@ fn main() {
         println!("cargo:rustc-cfg=no_vpx");
         return;
     }
-    let sources = std::fs::read_to_string(vpx.join("SOURCES.txt")).expect("vendor/libvpx/SOURCES.txt");
+    let sources =
+        std::fs::read_to_string(vpx.join("SOURCES.txt")).expect("vendor/libvpx/SOURCES.txt");
     let mut b = cc::Build::new();
     b.include(&vpx)
         .opt_level(3)

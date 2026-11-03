@@ -55,7 +55,9 @@ pub fn reencode(clip: &[u8], s: &Settings) -> Result<Option<(Vec<u8>, Outcome)>,
         .filter(|t| t.kind == 1 && t.codec == "V_VP8")
         .filter_map(|t| t.size().map(|sz| (t.number, sz)))
         .collect();
-    let [(track, (vw, vh))] = video[..] else { return Ok(None) };
+    let [(track, (vw, vh))] = video[..] else {
+        return Ok(None);
+    };
     let (tw, th) = target(vw, vh, s.max_height);
     if (tw, th) == (vw, vh) {
         return Ok(None);
@@ -105,10 +107,18 @@ pub fn reencode(clip: &[u8], s: &Settings) -> Result<Option<(Vec<u8>, Outcome)>,
             };
             let pk = e.encode(&pic, t, dur, key)?;
             if pk.len() != 1 {
-                return Err(format!("video: the encoder gave {} frames for one picture", pk.len()));
+                return Err(format!(
+                    "video: the encoder gave {} frames for one picture",
+                    pk.len()
+                ));
             }
             let p = &pk[0];
-            out.push(Some(webm::Block { track: 0, rel: 0, flags: if p.key { 0x80 } else { 0 }, payload: p.data.clone() }));
+            out.push(Some(webm::Block {
+                track: 0,
+                rel: 0,
+                flags: if p.key { 0x80 } else { 0 },
+                payload: p.data.clone(),
+            }));
         }
         if let Some(e) = &mut enc {
             if !e.finish()?.is_empty() {
@@ -138,7 +148,9 @@ pub fn reencode(clip: &[u8], s: &Settings) -> Result<Option<(Vec<u8>, Outcome)>,
         Ok(())
     })();
     drop(tx);
-    let encoded = encoder.join().map_err(|_| "video: the encoder thread panicked")??;
+    let encoded = encoder
+        .join()
+        .map_err(|_| "video: the encoder thread panicked")??;
     feed?;
     if encoded.len() != n {
         return Err(format!("video: {} of {n} frames encoded", encoded.len()));
@@ -170,7 +182,14 @@ pub fn reencode(clip: &[u8], s: &Settings) -> Result<Option<(Vec<u8>, Outcome)>,
             t.set_size(ow, oh)?;
         }
     }
-    Ok(Some((w.write(), Outcome { from: (vw, vh), to: (ow, oh), frames: n })))
+    Ok(Some((
+        w.write(),
+        Outcome {
+            from: (vw, vh),
+            to: (ow, oh),
+            frames: n,
+        },
+    )))
 }
 
 #[cfg(test)]

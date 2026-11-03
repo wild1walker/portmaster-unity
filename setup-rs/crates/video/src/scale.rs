@@ -40,7 +40,13 @@ mod tests {
     fn means_of_2x2_blocks_odd_edges_included() {
         // 3x3 luma: rows 1 2 3 / 4 5 6 / 7 8 9 -> 2x2: mean(1,2,4,5)=3, mean(3,3,6,6)=4.5->5,
         // mean(7,8,7,8)=7.5->8, mean(9,9,9,9)=9
-        let p = Picture { w: 3, h: 3, y: (1..=9).collect(), u: vec![10, 20, 30, 40], v: vec![0, 0, 0, 4] };
+        let p = Picture {
+            w: 3,
+            h: 3,
+            y: (1..=9).collect(),
+            u: vec![10, 20, 30, 40],
+            v: vec![0, 0, 0, 4],
+        };
         let q = half(&p);
         assert_eq!((q.w, q.h), (2, 2));
         assert_eq!(q.y, vec![3, 5, 8, 9]);
