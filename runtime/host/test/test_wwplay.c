@@ -234,6 +234,7 @@ int main(int argc, char **argv)
     mkdir(argv[1], 0755);
     write_bank(argv[1], argv[2]);
     setenv("UA_WWISE_STATS", "0", 1);
+    setenv("UA_WWISE_LIMITER", "0", 1);    // sample-exact checks; the limiter has its own below
     B = wwplay_open(&HOST, argv[1]);
     CHECK(B && B->mix && B->version == 2, "no backend");
     if (!B) return 1;
@@ -447,6 +448,26 @@ int main(int argc, char **argv)
     B->stop_all(0, 1);
     run(0.05f);
     CHECK(voices() == 0, "StopAll");
+
+    // the master limiter: five stereo voices (left 5 x 0.4) held to the ceiling, the gain smooth; one
+    // voice passes as it is, 64 frames later
+    B->term();
+    wwplay_close();
+    setenv("UA_WWISE_LIMITER", "1", 1);
+    setenv("UA_WWISE_VOICES", "16", 1);
+    B = wwplay_open(&HOST, argv[1]);
+    B->load_bank("Test", 0, NULL, 0, &bank);
+    post(102, 1, &on); run(0.3f);
+    CHECK(fabsf(mean(0, 0.01f, 0.24f) - 0.4f) < 0.002f && rms(0, 0, 63.0f / RATE) < 1e-6f && fabsf(out[2 * 64] - 0.4f) < 0.01f,
+          "limiter, one voice: %f, first frame %f", mean(0, 0.01f, 0.24f), out[2 * 64]);
+    for (int i = 0; i < 5; i++) post(102, 1, &on);
+    run(0.3f);
+    {
+        float peak = 0;
+        for (int i = 0; i < RATE * 3 / 10; i++) if (fabsf(out[2 * i]) > peak) peak = fabsf(out[2 * i]);
+        CHECK(peak <= 0.9801f && fabsf(mean(0, 0.05f, 0.2f) - 0.98f) < 0.01f && fabsf(mean(1, 0.05f, 0.2f) + 0.49f) < 0.01f,
+              "limiter: peak %f, level %f / %f", peak, mean(0, 0.05f, 0.2f), mean(1, 0.05f, 0.2f));
+    }
 
     // a render as the offline tool does: the sum must not be NaN
     int nan = 0;

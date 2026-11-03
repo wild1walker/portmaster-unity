@@ -23,8 +23,9 @@
 // The mixer: voices are decoded in blocks of 512 16-bit frames (IMA ADPCM by a table, PCM; Ogg
 // Vorbis by stb_vorbis), resampled to the output's rate by linear interpolation (pitch included) and
 // added with a gain ramp per block into 32-bit integer sums (mono sources four frames at a time with
-// NEON), which become the float stereo mix; UA_WWISE_VOICES (48) voices at most: a new voice past
-// that replaces the quietest (the oldest of equals), or is dropped if it is the quietest. The host
+// NEON), which become the float stereo mix, through a brick-wall peak limiter (UA_WWISE_LIMITER=0:
+// off); UA_WWISE_VOICES (48) voices at most: a new voice past that replaces the quietest (the
+// oldest of equals), or is dropped if it is the quietest. The host
 // calls mix() on its audio output's thread (the game's own OpenSL ES player: one device); the game's
 // calls are queued for it, so they never wait for a mix (only LoadBank takes the player's lock). UA_WWISE_STATS=<s> (60; 0 = off): a log line
 // with events, voices and the player's CPU every <s> seconds; UA_WWISE_CAPTURE=<file.wav>: the
@@ -1750,6 +1751,44 @@ static void stats_log(double now)
     g_vpeak = g_nv;
 }
 
+// The master's brick-wall peak limiter (Gungeon's master bus has one in Wwise; a flood of voices
+// would clip without it): the mix delayed by two blocks of 32 frames (1.3 ms at 48 kHz), each
+// block's gain the ceiling over its peak; while a block goes out the gain ramps to the smaller of
+// its own and the next block's, so no sample passes the ceiling and the gain never jumps; it
+// recovers with a 60 ms time constant. UA_WWISE_LIMITER=0 turns it off.
+#define LIM_N 32
+#define LIM_CEIL 0.98f
+static struct { float d[2][2 * LIM_N], need[2], peak, g, dg, rel; int i, w, on, rate; } g_lim = { .need = { 1, 1 }, .g = 1, .on = 1 };
+
+static void limiter(float *x, int frames)
+{
+    if (g_lim.rate != g_rate) { g_lim.rate = g_rate; g_lim.rel = 1 - expf(-(float)LIM_N / (0.06f * g_rate)); }
+    for (int k = 0; k < frames;) {
+        int n = LIM_N - g_lim.i < frames - k ? LIM_N - g_lim.i : frames - k;
+        float *d = &g_lim.d[g_lim.w][2 * g_lim.i], *o = x + 2 * k, g = g_lim.g, dg = g_lim.dg, pk = g_lim.peak;
+        for (int j = 0; j < 2 * n; j += 2) {
+            float l = o[j], r = o[j + 1], al = fabsf(l), ar = fabsf(r);
+            o[j] = d[j] * g;                    // what came in two blocks ago
+            o[j + 1] = d[j + 1] * g;
+            g += dg;
+            d[j] = l; d[j + 1] = r;
+            pk = al > pk ? al : pk;
+            pk = ar > pk ? ar : pk;
+        }
+        g_lim.g = g; g_lim.peak = pk;
+        k += n;
+        if ((g_lim.i += n) < LIM_N) continue;
+        // a block is in: the one going out next is the other slot's; ramp over it to the gain both need
+        g_lim.i = 0;
+        g_lim.need[g_lim.w] = pk > LIM_CEIL ? LIM_CEIL / pk : 1;
+        g_lim.peak = 0;
+        g_lim.w ^= 1;
+        float t = g_lim.need[0] < g_lim.need[1] ? g_lim.need[0] : g_lim.need[1], up = g + (1 - g) * g_lim.rel;
+        if (t > up) t = up;
+        g_lim.dg = (t - g) / LIM_N;
+    }
+}
+
 static void drain_locked(void);
 
 static void mix_locked(float *out, int frames)
@@ -1799,6 +1838,7 @@ static void mix_locked(float *out, int frames)
         out[2 * i] = st[2 * i] * k + m;
         out[2 * i + 1] = st[2 * i + 1] * k + m;
     }
+    if (g_lim.on) limiter(out, frames);
 }
 
 static void mix(float *buf, int frames, int rate, int channels)
@@ -2068,6 +2108,8 @@ void wwplay_close(void)
     memset(&g_st, 0, sizeof g_st); memset(&g_st_last, 0, sizeof g_st_last);
     g_clock = 0; g_serial = 0; g_vpeak = 0; g_suspended = 0; g_last_mix_wall = 0; g_rng = 0x9e3779b9u;
     g_qh = g_qt = 0;
+    memset(&g_lim, 0, sizeof g_lim);
+    g_lim.need[0] = g_lim.need[1] = g_lim.g = 1;
     pthread_mutex_unlock(&L);
 }
 
@@ -2089,6 +2131,8 @@ const ua_wwise_backend *wwplay_open(const ua_wwise_host *host, const char *dir)
     g_v = calloc(g_maxv, sizeof *g_v);
     e = getenv("UA_WWISE_STATS");
     g_stats_every = e && *e ? atof(e) : 60;
+    e = getenv("UA_WWISE_LIMITER");
+    g_lim.on = !(e && !strcmp(e, "0"));
     g_stats_wall = wall_now();
     e = getenv("UA_AUDIO_RATE");
     g_rate = e && atoi(e) >= 8000 && atoi(e) <= 192000 ? atoi(e) : 48000;

@@ -323,7 +323,12 @@ output hook directly. Nothing of Audiokinetic's code or data is in it.
   32-bit integer sums (mono sources, most of them, four frames at a time with NEON), which become the
   float stereo mix (mono sources centred at -3 dB a side); at most `UA_WWISE_VOICES` (48) play: a new
   voice past that replaces the quietest one (the oldest of equals), or is dropped if it is the
-  quietest itself. The game's calls
+  quietest itself. The master has a brick-wall peak limiter, as Gungeon's master bus has in Wwise:
+  the mix goes out 64 frames (1.3 ms) late, each 32-frame block's gain the ceiling (0.98) over its
+  peak, ramping during the block before so no sample passes the ceiling and the gain never jumps,
+  recovering with a 60 ms time constant (`UA_WWISE_LIMITER=0`: off). It costs about 1 ns a frame on
+  the Mac (by the earlier Mac-to-A53 ratio, about 0.1 % of an A53 core); the 60 events/s bench clipped 342,000 samples a minute
+  without it and none with it. The game's calls
   (PostEvent, StopAll, the game syncs, ...) do not wait for the mixer: they are queued and run at
   the start of its next block, as Wwise runs posted events at its next audio frame (only LoadBank
   takes the player's lock), so a mix in progress never holds up the game's thread. PostEvent answers
@@ -366,7 +371,7 @@ made-up bank written by the test (PCM, IMA ADPCM from its own encoder, a synthet
 stop / pause / resume, scopes and exceptions, bus and mixer volumes, states, RTPC curves (dB scaling,
 defaults), delayed actions, every container, the music (playlist order and loop, entry and exit
 cues, a state change at the exit cue and at once by a rule, clips looped and trimmed, a lone segment),
-`ExecuteActionOnEvent`, the voice cap; then `wwrender` renders a script of the same bank to a WAV.
+`ExecuteActionOnEvent`, the voice cap, the master limiter; then `wwrender` renders a script of the same bank to a WAV.
 
 ## HTTPS
 
