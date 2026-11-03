@@ -24,6 +24,7 @@
 #define _GNU_SOURCE
 #include "sles_min.h"
 #include "shim_internal.h"
+#include "android_shims.h"
 
 #include <SDL2/SDL.h>
 #include <math.h>
@@ -131,6 +132,8 @@ typedef struct obj {
             pid_t pipe_pid;
             pthread_t pipe_thread;
             volatile int pipe_run;
+            float *mixbuf;                // android_sles_set_mix's float buffer (output thread only)
+            int mixcap;
         } p;
     };
 } obj;
@@ -161,6 +164,101 @@ static void sdl_audio_release(void)
     pthread_mutex_lock(&g_sdl_lock);
     if (g_sdl_audio_users > 0 && --g_sdl_audio_users == 0) SDL_QuitSubSystem(SDL_INIT_AUDIO);
     pthread_mutex_unlock(&g_sdl_lock);
+}
+
+// ---- another sound mixed into the game's output (android_sles_set_mix) ----------------------
+// ua_host's Wwise player adds its mix into the buffers of the game's own player (FMOD's), so one
+// audio device carries both; with no player of the game's it gets an output of its own here
+// (the same SDL / pipe choice), handed over to the game's first player when one is realized.
+static android_sles_mix_fn g_mix_fn;
+static obj *g_mix_owner, *g_mix_own;
+static pthread_mutex_t g_mix_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void mix_in(obj *o, Uint8 *stream, int len)
+{
+    android_sles_mix_fn fn = __atomic_load_n(&g_mix_fn, __ATOMIC_ACQUIRE);
+    if (!fn || __atomic_load_n(&g_mix_owner, __ATOMIC_ACQUIRE) != o) return;
+    int ch = o->p.spec.channels, bits = SDL_AUDIO_BITSIZE(o->p.spec.format), frames = len / o->p.frame_bytes;
+    if (o->p.spec.format == AUDIO_F32LSB) { fn((float *)stream, frames, o->p.spec.freq, ch); return; }
+    int n = frames * ch;
+    if (n > o->p.mixcap) {
+        float *b = realloc(o->p.mixbuf, n * sizeof *b);
+        if (!b) return;
+        o->p.mixbuf = b; o->p.mixcap = n;
+    }
+    float *m = o->p.mixbuf;
+    memset(m, 0, n * sizeof *m);
+    fn(m, frames, o->p.spec.freq, ch);
+    if (o->p.spec.format == AUDIO_S16LSB) {
+        int16_t *s = (int16_t *)stream;
+        for (int i = 0; i < n; i++) { int v = s[i] + (int)lrintf(m[i] * 32767.0f); s[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+    } else if (o->p.spec.format == AUDIO_S32LSB) {
+        int32_t *s = (int32_t *)stream;
+        for (int i = 0; i < n; i++) { double v = s[i] + (double)m[i] * 2147483647.0; s[i] = v > 2147483647.0 ? 2147483647 : v < -2147483648.0 ? INT32_MIN : (int32_t)v; }
+    } else if (bits == 8) {
+        for (int i = 0; i < n; i++) { int v = stream[i] + (int)lrintf(m[i] * 127.0f); stream[i] = v > 255 ? 255 : v < 0 ? 0 : v; }
+    }
+}
+
+static SLresult player_realize(obj *o);
+static void Object_Destroy(SLObjectItf self);
+static obj *obj_new(enum kind k);
+
+static void mix_owner_realized(obj *o)
+{
+    pthread_mutex_lock(&g_mix_lock);
+    obj *own = NULL;
+    if (o != g_mix_own && (!g_mix_owner || g_mix_owner == g_mix_own)) {
+        own = g_mix_own;
+        g_mix_own = NULL;
+        __atomic_store_n(&g_mix_owner, o, __ATOMIC_RELEASE);
+        if (g_mix_fn) SHIM_TRACE("OpenSL: the added mix goes out with player %p", (void *)o);
+    }
+    pthread_mutex_unlock(&g_mix_lock);
+    if (own) Object_Destroy((SLObjectItf)&own->object);
+}
+
+static void mix_owner_destroyed(obj *o)
+{
+    pthread_mutex_lock(&g_mix_lock);
+    if (g_mix_owner == o) __atomic_store_n(&g_mix_owner, NULL, __ATOMIC_RELEASE);
+    if (g_mix_own == o) g_mix_own = NULL;
+    pthread_mutex_unlock(&g_mix_lock);
+}
+
+void android_sles_set_mix(android_sles_mix_fn fn, int rate)
+{
+    pthread_mutex_lock(&g_mix_lock);
+    __atomic_store_n(&g_mix_fn, fn, __ATOMIC_RELEASE);
+    int need = fn && !g_mix_owner;
+    pthread_mutex_unlock(&g_mix_lock);
+    if (!need) return;
+    // no player of the game's (its own sound off): an output for the mix alone, 16-bit stereo
+    obj *o = obj_new(K_PLAYER);
+    if (!o) return;
+    pthread_mutex_init(&o->p.lock, NULL);
+    o->p.is_bq = 1;
+    o->p.spec.freq = rate > 0 ? rate : 48000;
+    o->p.spec.format = AUDIO_S16LSB;
+    o->p.spec.channels = 2;
+    o->p.spec.samples = 512;
+    o->p.frame_bytes = 4;
+    o->p.pipe_fd = -1;
+    o->p.play_state = SL_PLAYSTATE_STOPPED;     // no queue: silence, and the mix added
+    o->p.gain = 1.0f;
+    pthread_mutex_lock(&g_mix_lock);
+    g_mix_own = o;
+    __atomic_store_n(&g_mix_owner, o, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&g_mix_lock);
+    if (player_realize(o) == SL_RESULT_SUCCESS) {
+        o->state = SL_OBJECT_STATE_REALIZED;
+        SHIM_WARN("OpenSL: no player of the game's: an output of its own for the added mix (%d Hz)", o->p.spec.freq);
+    } else {
+        mix_owner_destroyed(o);
+        pthread_mutex_destroy(&o->p.lock);
+        free(o);
+        SHIM_WARN("OpenSL: no output for the added mix");
+    }
 }
 
 // ---- audio player: SDL callback -------------------------------------------------------------
@@ -247,6 +345,7 @@ static void player_fill(obj *o, Uint8 *stream, int len)
     apply_gain(o, stream, off);
     pthread_mutex_unlock(&o->p.lock);
     if (off < len) memset(stream + off, o->p.spec.silence, len - off);
+    mix_in(o, stream, len);
     if (o->p.capture) fwrite(stream, 1, len, o->p.capture);
 }
 
@@ -495,6 +594,7 @@ static SLresult Object_Realize(SLObjectItf self, SLboolean async)
     if (o->kind == K_ENGINE) r = engine_realize(o);
     else if (o->kind == K_PLAYER) r = player_realize(o);
     if (r == SL_RESULT_SUCCESS) o->state = SL_OBJECT_STATE_REALIZED;
+    if (r == SL_RESULT_SUCCESS && o->kind == K_PLAYER) mix_owner_realized(o);
     if (async && o->obj_cb) o->obj_cb(self, o->obj_cb_ctx, SL_OBJECT_EVENT_ASYNC_TERMINATION, r, o->state, NULL);
     return r;
 }
@@ -563,6 +663,7 @@ static void Object_Destroy(SLObjectItf self)
     obj *o = OBJ(self);
     SHIM_TRACE("OpenSL: Destroy(%p kind %d)", (void *)o, o->kind);
     if (o->kind == K_PLAYER) {
+        mix_owner_destroyed(o);
         if (o->p.dev) {
             SDL_CloseAudioDevice(o->p.dev);   // waits for a running callback; we hold no lock
             o->p.dev = 0;
@@ -573,6 +674,7 @@ static void Object_Destroy(SLObjectItf self)
         if (o->p.underruns) SHIM_TRACE("OpenSL: player %p had %u underruns", (void *)o, o->p.underruns);
         pthread_mutex_destroy(&o->p.lock);
         free(o->p.queue);
+        free(o->p.mixbuf);
     } else if (o->kind == K_ENGINE && o->state == SL_OBJECT_STATE_REALIZED && o->e.sdl) {
         sdl_audio_release();
     }

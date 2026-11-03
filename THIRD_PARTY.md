@@ -5,6 +5,7 @@ Everything in this repository is MIT-licensed (LICENSE) except:
 | what | where | licence |
 |---|---|---|
 | [libhybris](https://github.com/libhybris/libhybris) (git submodule, pinned commit) | `runtime/thirdparty/libhybris` | Apache 2.0 (some files carry other permissive licences; see the files and the `LICENSE.*` files in the submodule). `runtime/loader/build.sh` compiles a few of its `hybris/common` sources, and `runtime/loader/hybris_compat.c` includes its `hooks.c`, into the loader. |
+| [stb_vorbis](https://github.com/nothings/stb) v1.22 (Sean Barrett and contributors), unchanged | `runtime/thirdparty/stb/stb_vorbis.c` | public domain (Unlicense) or MIT, the user's choice (the end of the file). Compiled into `ua_host` (`runtime/host/wwplay_vorbis.c`: the Wwise player's Ogg Vorbis decoder) and `wwrender` |
 | `jni.h` from the Android Open Source Project (libnativehelper), with every function-table slot marked `JNI_ABI` | `runtime/jni/include/jni.h` | Apache 2.0 (header in the file) |
 | The Mali-G31's hardware counter names and their block indices, from Arm's [libGPUCounters](https://github.com/ARM-software/libGPUCounters) counter database (the copy in Mesa's `src/panfrost/perf/database`) | `runtime/host/gpucnt.c` (name tables) | MIT, Copyright (c) 2019-2025 Arm Limited |
 | [fengari-web](https://github.com/fengari-lua/fengari-web) 0.1.4 (Lua in JavaScript, for the ports' patcher questions) | `tools/prepatch/src/vendor/fengari-web.js` | MIT (`tools/prepatch/src/vendor/LICENSE.fengari.txt`) |
