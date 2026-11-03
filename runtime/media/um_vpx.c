@@ -1,7 +1,10 @@
 // VP8 / VP9 decoding with libvpx (BSD-3-Clause, linked in statically when UM_HAVE_VPX).
 // One compressed frame in, at most one visible picture out (VP8 alt-ref frames show nothing,
-// a VP9 superframe shows one), with the input's time. libvpx's own threads: up to 4 (VP8 uses
-// them for streams with several token partitions, VP9 for tiles).
+// a VP9 superframe shows one), with the input's time. libvpx's own threads: VP9 up to 4 (for
+// tiles); VP8 one: its threads split the rows of a clip with several token partitions, but wait
+// for each other spinning on sched_yield, which on a 4-core handheld running the game took the
+// CPU from Unity's render and UI threads (Hollow Knight's re-encoded cinematics: ~12 pictures a
+// second with 4 threads, ~30 with one; a 960x540 frame decodes in ~8 ms on one A53 core).
 #include "um_internal.h"
 
 #include <stdlib.h>
@@ -27,7 +30,7 @@ static int vpx_init(vpxdec *v)
     v->inited = 0;
     vpx_codec_dec_cfg_t cfg = { 0 };
     int n = um_cpu_count();
-    cfg.threads = n > 4 ? 4 : n;
+    cfg.threads = v->vp9 ? (n > 4 ? 4 : n) : 1;
     const char *e = getenv("UM_VPX_THREADS");
     if (e && atoi(e) > 0) cfg.threads = atoi(e);
     vpx_codec_err_t r = vpx_codec_dec_init(&v->ctx, v->vp9 ? vpx_codec_vp9_dx() : vpx_codec_vp8_dx(), &cfg, 0);

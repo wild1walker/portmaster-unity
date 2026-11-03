@@ -3,6 +3,10 @@
 // "frame" in each UA_FRAME_RATE mode. Plain C: cc test/test_framerate.c -o /tmp/t && /tmp/t
 #include "../framerate.c"
 
+static int64_t video_latch_us;      // the media core's last latched picture, as the test sets it
+int64_t um_surface_last_latch_us(void) { return video_latch_us; }
+static int64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000; }
+
 #include <assert.h>
 
 static int unity_target = -1, unity_vsync = 1, registered;
@@ -29,6 +33,7 @@ static void start(const char *env, const char *mode, const char *add_sym, int il
     r_set_target = NULL; r_get_target = r_get_vsync = NULL;
     g_game = -1; g_game_known = 0; g_applied = -2; g_logged = 0;
     unity_target = -1; unity_vsync = 1; registered = 0;
+    video_latch_us = 0;
     if (env) setenv("UA_FRAME_RATE", env, 1); else unsetenv("UA_FRAME_RATE");
     framerate_init(mode, 59.6f);
     add_icall_fn add = (add_icall_fn)framerate_dlsym_hook(add_sym, (void *)fake_add);
@@ -82,6 +87,36 @@ int main(void)
     assert(unity_target == 45);
     game_set(60);
     assert(unity_target == 45 && game_get() == 60);
+
+    // a video on the screen (a picture latched in the last half second): the display's rate, so Unity
+    // 6000's one-picture-in-flight SurfaceTexture cycle can show a 30 fps clip at 30 (Hollow Knight's
+    // cinematics: vSyncCount 2); never lower than the game's own rate; a fixed rate stays fixed
+    start(NULL, "desktop", "mono_add_internal_call", 0);
+    unity_vsync = 2;
+    framerate_frame(NULL);
+    assert(unity_target == 30);
+    video_latch_us = now_us();
+    framerate_frame(NULL);
+    assert(unity_target == 60 && game_get() == -1);
+    video_latch_us = now_us() - 600000;             // the clip ended
+    framerate_frame(NULL);
+    assert(unity_target == 30);
+    unity_vsync = 0;
+    game_set(144);
+    video_latch_us = now_us();
+    framerate_frame(NULL);
+    assert(unity_target == 144);
+    setenv("UA_VIDEO_RATE", "game", 1);             // the game's rate, video or not
+    start(NULL, "desktop", "mono_add_internal_call", 0);
+    unity_vsync = 2;
+    video_latch_us = now_us();
+    framerate_frame(NULL);
+    assert(unity_target == 30);
+    unsetenv("UA_VIDEO_RATE");
+    start("45", "desktop", "mono_add_internal_call", 0);
+    video_latch_us = now_us();
+    framerate_frame(NULL);
+    assert(unity_target == 45);
 
     // other symbols pass through
     start(NULL, "desktop", "mono_add_internal_call", 0);

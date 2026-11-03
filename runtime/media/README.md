@@ -129,7 +129,7 @@ must not carry an H.264 decoder: H.264 clips then play only where the handheld h
 |---|---|
 | `UM_TRACE=1` | one line per decoded input (its time in the decoder, waiting for a free output buffer included), per frame, per output buffer the client dequeues and releases, per `updateTexImage` (latched picture, or nothing queued); each traced line starts with its time (`CLOCK_MONOTONIC` ms) |
 | `UM_VIDEO_BUFFERS=<n>` | a video decoder's output buffers (default 4, Android's usual; each holds a picture). More let a slow consumer still find the frame it asks for (the emulated rig needs ~24 at 2 fps) |
-| `UM_VPX_THREADS=<n>` | libvpx threads (default: CPUs, up to 4; VP8 uses them only for clips with several token partitions) |
+| `UM_VPX_THREADS=<n>` | libvpx threads (default: VP9 the CPUs, up to 4, for its tiles; VP8 one: its threads, used only for clips with several token partitions, wait for each other by spinning, which on a 4-core handheld running the game costs more than it gains) |
 | `UM_H264=openh264` | OpenH264 for every H.264 stream, B-frames included |
 | `UM_FFMPEG=0` / `=<path>` | no system libavcodec / that libavcodec |
 | `ANDROID_SHIM_LIBEGL`, `UM_LIBGLES` | the libEGL / libGLESv2 the surface code opens (the ones Unity uses; default `libEGL.so.1`, `libGLESv2.so.2`) |
@@ -183,11 +183,20 @@ k + 1, and the next buffer is dequeued in frame k + 2, the decoder waiting up to
 A clip therefore shows at most half the game's frame rate. Hollow Knight paces its cinematics at
 the clip's own rate (30 fps) and does not let the VideoPlayer skip frames (time from the DSP
 clock), so a picture late is a picture shown late: the video runs slower than its music.
-Measured in the game (muOS, 1.8 GHz, the 1 GB profile): Debian's plain-C libvpx 7.6 pictures a
-second, the NEON build 16.8 (the cycle's half of ~32 game fps). Giving the game the display's
-rate while a video plays (tried, not kept) showed 13.3: decoding, about 40 ms a 1080p frame in the
-game against 31 ms alone, then shares the CPUs and the memory bus with a 60 fps game. Real time
-for these clips needs a cheaper picture (a smaller encode), not a faster cycle.
+
+Measured in the game (muOS, 1.8 GHz, the 1 GB profile), pictures a second of the 30 fps prologue:
+
+| clip, decoder | the game's rate (30 fps) | the display's rate while a video plays (60) |
+|---|---|---|
+| 1920x1080, Debian's plain-C libvpx | 7.6 | |
+| 1920x1080, libvpx with NEON (~40 ms a frame in the game) | 16.8 | 13.3 (decoding then shares the CPUs with a 60 fps game) |
+| 960x540 (convert's `video` step), 4 decoder threads | 12.2 | 11.6 (the threads spin on `sched_yield`) |
+| 960x540, one decoder thread | | ~30 in steady play (latch to latch 32 - 39 ms in 388 of ~640 intervals); fewer only in the game's own loading frames |
+
+So ua_host gives desktop pacing at least the display's rate while a surface latched a picture in
+the last half second (`um_surface_last_latch_us`, `runtime/host/framerate.c`; `UA_VIDEO_RATE=game`
+keeps the game's), VP8 decodes on one thread by default, and 1 GB handhelds get their clips at
+most 720 lines tall from the setup (setup-rs `video`, [docs/rust-setup.md](../../docs/rust-setup.md#video)).
 
 ## Not done
 

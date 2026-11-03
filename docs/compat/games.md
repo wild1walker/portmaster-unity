@@ -158,7 +158,13 @@ core no longer keeps up to 25 MB of finished 1080p pictures through the game aft
 game's mixer never ran dry in these runs (the OpenSL shim now logs every underrun and can capture its
 output, `ANDROID_SLES_CAPTURE`); the gaps a stand-in for `pw-cat` heard came in bursts of 0.2 - 0.4 s
 where the whole handheld stalled, under memory pressure. The hits themselves are not yet measured with
-the capture (a King's Pass save is on the Knulli).
+the capture (a King's Pass save is on the Knulli). The cinematics then (muOS, the 1 GB profile): pmu's `video` step halves the game's
+14 clips over 720 lines to 960x540 (84.2 -> 43.9 MB, 578 s on the handheld; on an installed game in
+place with `pmu video`), and with ua_host's display rate while a video plays and VP8 decoded on one
+thread (four spun on `sched_yield` and showed ~12 pictures a second) the prologue shows its 30
+pictures a second in steady play (latch to latch 32 - 39 ms), fewer only in the game's own loading
+frames for King's Pass during the cinematic; memory at the clip 94 - 99 MB available instead of
+50 - 53 ([runtime/media/README.md](../../runtime/media/README.md#unity-6000-one-picture-in-flight)).
 portmaster-hollowknight's `[runtime_lowmem]` is now blur off, 600x400, gfx jobs legacy and 24 kHz.
 
 

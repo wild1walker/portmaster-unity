@@ -41,7 +41,13 @@ if [ "$1" = test ]; then
     -e SDL_AUDIODRIVER=disk -e SDL_DISKAUDIOFILE=/tmp/sles.raw -e ANDROID_WINDOW_SIZE=640x480 \
     -e ANDROID_SHIM_TRACE=${ANDROID_SHIM_TRACE:-0} -e ANDROID_SLES_CAPTURE=/tmp/cap.raw $IMG sh -c '
     timeout 300 ./test_shims ./libfakeegl.so || exit 1
-    if cmp -s /tmp/sles.raw /tmp/cap.raw; then echo "capture: ok ($(wc -c < /tmp/cap.raw) bytes, as SDL played them)"
+    # (an SDL may write a buffer of its own silence into its file, or leave the callback'"'"'s last
+    # one out at close: up to one buffer either way, the rest the same at the start or the end)
+    a=$(wc -c < /tmp/sles.raw); b=$(wc -c < /tmp/cap.raw)
+    if [ "$a" -le "$b" ]; then s=/tmp/sles.raw; l=/tmp/cap.raw; n=$a; else s=/tmp/cap.raw; l=/tmp/sles.raw; n=$b; fi
+    d=$((a > b ? a - b : b - a))
+    if [ "$d" -le 8192 ] && { cmp -s -n "$n" "$s" "$l" || tail -c "$n" "$l" | cmp -s - "$s"; }; then
+      echo "capture: ok ($b bytes, as SDL played them$([ "$d" = 0 ] || echo "; its file $a bytes"))"
     else echo "capture: FAILED"; ls -l /tmp/sles.raw /tmp/cap.raw; exit 1; fi'
   # Same again on SDL's dummy driver (buffer-queue logic and callback pacing only).
   docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=dummy -e ANDROID_WINDOW_SIZE=640x480 \

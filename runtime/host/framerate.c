@@ -12,6 +12,14 @@
 //                          (the desktop's "as fast as it can", which vsync caps here)
 //                 android  Unity's Android pacing, unchanged (nothing is wrapped)
 //                 <n>      n fps whatever the game asks for (a porter's cap for a heavy game)
+// While a video is on the screen (a SurfaceTexture latched a picture in the last half second), desktop
+// pacing gives at least the display's rate: Unity 6000's SurfaceTexture video path (a player that
+// finds no AImageReader, which the API level ua_host reports leaves out) keeps one picture in
+// flight: the one it releases in a game frame is latched by the render thread in the next, and it
+// releases the following one after that, so a clip shows at most half the game's frame rate.
+// Hollow Knight paces its cinematics at the clip's own rate (30 fps): 15 pictures a second, slow
+// motion against their music, where the desktop player shows all 30. UA_VIDEO_RATE=game keeps the
+// game's rate (a 1080p clip whose decoding is the limit plays slower with more game frames).
 // The default (ua_host.c): desktop for converted desktop data (any Unity version its
 // android_package.json names; games with vsync on are paced as before), android for imported
 // Android builds (pmunity apk) and packages that do not name their Unity version.
@@ -21,9 +29,11 @@
 // quality level change sets vSyncCount without a setter call.
 #include "framerate.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef void (*add_icall_fn)(const char *name, const void *fn);
 typedef void (*set_int_fn)(int);
@@ -38,12 +48,26 @@ static get_int_fn r_get_target, r_get_vsync;
 static int g_game = -1, g_game_known;   // what the game set (Unity's default -1 until read)
 static int g_applied = -2;              // what Unity was given (-2: nothing yet)
 static int g_logged;
+static int g_video_rate = 1;            // UA_VIDEO_RATE: the display's rate while a video shows
+
+int64_t um_surface_last_latch_us(void) __attribute__((weak));   // the media core (runtime/media)
+
+static int video_on_screen(void)
+{
+    int64_t t = g_video_rate && um_surface_last_latch_us ? um_surface_last_latch_us() : 0;
+    if (!t) return 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000 - t < 500000;
+}
 
 void framerate_init(const char *default_mode, float refresh_hz)
 {
     const char *e = getenv("UA_FRAME_RATE");
     const char *m = e && *e ? e : default_mode;
     if (refresh_hz > 0) g_hz = (int)(refresh_hz + 0.5f);
+    const char *v = getenv("UA_VIDEO_RATE");
+    g_video_rate = !(v && !strcmp(v, "game"));
     if (m && !strcmp(m, "desktop")) { g_mode = M_DESKTOP; g_mode_name = "desktop"; }
     else if (m && atoi(m) > 0) { g_mode = M_FIXED; g_fixed = atoi(m); g_mode_name = m; }
     else { g_mode = M_ANDROID; g_mode_name = "android"; }
@@ -54,8 +78,8 @@ static int effective(void)
 {
     if (g_mode == M_FIXED) return g_fixed;
     int vs = r_get_vsync ? r_get_vsync() : 1;
-    if (vs > 0) return (g_hz + vs / 2) / vs;
-    return g_game > 0 ? g_game : g_hz;
+    int e = vs > 0 ? (g_hz + vs / 2) / vs : g_game > 0 ? g_game : g_hz;
+    return e < g_hz && video_on_screen() ? g_hz : e;
 }
 
 static void apply(void)
@@ -67,8 +91,9 @@ static void apply(void)
     r_set_target(e);
     if (g_logged < 20) {
         g_logged++;
-        fprintf(stderr, "[host] frame rate %d fps (the game's targetFrameRate %d, vSyncCount %d; UA_FRAME_RATE=%s)\n",
-                e, g_game, r_get_vsync ? r_get_vsync() : -1, g_mode_name);
+        fprintf(stderr, "[host] frame rate %d fps (the game's targetFrameRate %d, vSyncCount %d; UA_FRAME_RATE=%s%s)\n",
+                e, g_game, r_get_vsync ? r_get_vsync() : -1, g_mode_name,
+                g_mode == M_DESKTOP && video_on_screen() ? ", a video on the screen" : "");
     }
     g_applied = e;
 }
