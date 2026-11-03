@@ -401,6 +401,11 @@ class ConfigTest(unittest.TestCase):
         cfg['android_data']['asmpatch'] = ['auto', 'hk-blur']
         P.validate(cfg)
         self.assertIn("ASMPATCH=auto,hk-blur", P.setup_env(cfg).replace("'", ''))
+        # a Wwise game's banks for ua_host's Wwise player (pmu wwise at setup)
+        self.assertIn("WWISE_BANKS=\n", P.setup_env(cfg).replace("'", ''))
+        cfg['wwise']['banks'] = 'StreamingAssets/Audio/GeneratedSoundBanks/Linux'
+        P.validate(cfg)
+        self.assertIn("WWISE_BANKS=StreamingAssets/Audio/GeneratedSoundBanks/Linux\n", P.setup_env(cfg).replace("'", ''))
         case = 'case "$ASMPATCH" in auto) ;; off) a="$a --only=";; auto,*) a="$a --with=${ASMPATCH#auto,}";; *) a="$a --only=$ASMPATCH";; esac'
         for route in ('android', 'il2cpp-arm64', 'mono-arm64'):
             with open(os.path.join(P.TEMPLATES, route, 'patchscript')) as f:

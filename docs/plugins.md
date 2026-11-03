@@ -212,7 +212,18 @@ BKHD header under `StreamingAssets/`, and `SoundbanksInfo.xml`'s `SoundbankVersi
 StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2))`. Wwise's effect plugins
 beside it (`libAkFlanger.so`, ...) are loaded by the engine itself, never by the game's code.
 
-**Sound, two ways.** Wwise's own engine for ARM: the `libAkSoundEngine.so` (and the effect plugins
+**Sound: ua_host's own Wwise player.** For banks of version 128 (Wwise 2017.2) the port's setup
+converts the game's soundbanks once, `pmu wwise <banks> <port>/wwise` (setup-rs's `crates/wwise`;
+`wwise.banks` in port.toml, which `port check` suggests): the events, actions, sounds, containers,
+music, buses, RTPC curves and states into a json, the media into a pak (Wwise Vorbis as standard
+Ogg Vorbis, with the codebooks read from the game's own `libAkSoundEngine` / `AkSoundEngine.dll` /
+`.bundle`, which `port check` looks for; IMA ADPCM as it is). The launcher sets `UA_WWISE_DATA` to that folder, and ua_host's
+built-in Wwise plays it ([wwise-player.md](wwise-player.md): the format and what step 1 plays).
+Other bank versions stay silent (`pmu wwise` exits 3 and the setup goes on). The box64 route runs
+the game's own x86 Wwise under box64, so it needs none of this (at a cost: about three quarters
+of a Cortex-A53 core for Enter the Gungeon's sound).
+
+**Sound, two other ways.** Wwise's own engine for ARM: the `libAkSoundEngine.so` (and the effect plugins
 the game's project uses) of Wwise's Android SDK of exactly the game's version (`armeabi-v7a`; an
 Audiokinetic account), in the port's `lib/` (`{"AkSoundEngine": {"use": "lib", "file":
 "libAkSoundEngine.so"}}` in the port's plugin map). Or a **sound backend** for the stub: a glibc

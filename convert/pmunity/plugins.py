@@ -639,11 +639,188 @@ def wwise_info(data):
     info['bank_versions'] = sorted(vers)
     lines = [WWISE_BANK_LINES.get(v) for v in info['bank_versions']]
     info['bank_lines'] = [ln or (f'2021.1 or later' if v > 140 else 'unknown') for ln, v in zip(lines, info['bank_versions'])]
+    # Wwise Vorbis's codebooks: pmu wwise reads them from this library at setup (none ship with the port)
+    info['codebooks'] = None
+    for rel, p in libs:
+        if os.path.isfile(p):
+            n = wwise_codebooks(p)
+            info['codebooks'] = (rel, n)
+            if n:
+                break
     return info
 
 
-def wwise_summary(w):
-    """One line on a game's Wwise and what the port does with it."""
+def _codebook_len(d, p):
+    """The size of a valid packed Vorbis codebook (Wwise's form, as ww2ogg reads it) at d[p:], or 0:
+    dimensions and entries set, codeword lengths that fill a Huffman tree exactly, bits / 8 + 1 bytes
+    (setup-rs/crates/wwise/src/codebooks.rs does the same)."""
+    n = len(d)
+    bp = p * 8
+
+    def get(k):
+        nonlocal bp
+        v = 0
+        for i in range(k):
+            if bp >> 3 >= n:
+                raise IndexError
+            v |= (d[bp >> 3] >> (bp & 7) & 1) << i
+            bp += 1
+        return v
+    try:
+        dims, entries = get(4), get(14)
+        if not dims or not entries:
+            return 0
+        full, kraft, used = 1 << 32, 0, 0
+        if get(1):
+            ln, cur = get(5) + 1, 0
+            while cur < entries:
+                k = get((entries - cur).bit_length())
+                cur += k
+                if k:
+                    if ln > 32:
+                        return 0
+                    kraft += k << (32 - ln)
+                    used += k
+                    if kraft > full:
+                        return 0
+                ln += 1
+            if cur > entries:
+                return 0
+        else:
+            cll, sparse = get(3), get(1)
+            if not cll or cll > 5:
+                return 0
+            for _ in range(entries):
+                if not sparse or get(1):
+                    kraft += 1 << (31 - get(cll))
+                    used += 1
+                    if kraft > full:
+                        return 0
+        if kraft != full and used != 1:
+            return 0
+        if get(1):
+            get(32), get(32)
+            vl = get(4) + 1
+            get(1)
+            q = entries >> ((entries.bit_length() - 1) * (dims - 1) // dims)
+            for _ in range(64):
+                a, a1 = q ** dims, (q + 1) ** dims
+                if a <= entries < a1:
+                    break
+                q += -1 if a > entries else 1
+            bp += q * vl
+            if (bp - 1) >> 3 >= n:
+                return 0
+    except IndexError:
+        return 0
+    return (bp - p * 8) // 8 + 1
+
+
+def _const_regions(d):
+    """(start, end) of a binary's read-only data (ELF .rodata, PE .rdata, Mach-O __TEXT,__const,
+    every slice of a fat file), or None to read it all."""
+    out = []
+    try:
+        if d[:4] == b'\x7fELF':
+            is64, e = d[4] == 2, '<' if d[5] == 1 else '>'
+            shoff, = struct.unpack_from(e + ('Q' if is64 else 'I'), d, 0x28 if is64 else 0x20)
+            shsz, shn, shstr = struct.unpack_from(e + 'HHH', d, 0x3A if is64 else 0x2E)
+            secs = []
+            for i in range(shn):
+                o = shoff + i * shsz
+                if is64:
+                    nm, _, _, _, off, size = struct.unpack_from(e + 'IIQQQQ', d, o)
+                else:
+                    nm, _, _, _, off, size = struct.unpack_from(e + 'IIIIII', d, o)
+                secs.append((nm, off, size))
+            so = secs[shstr][1]
+            for nm, off, size in secs:
+                if d[so + nm:d.index(b'\0', so + nm)] == b'.rodata':
+                    out.append((off, off + size))
+        elif d[:2] == b'MZ':
+            pe, = struct.unpack_from('<I', d, 0x3C)
+            nsec, = struct.unpack_from('<H', d, pe + 6)
+            opt, = struct.unpack_from('<H', d, pe + 20)
+            for i in range(nsec):
+                o = pe + 24 + opt + i * 40
+                size, off = struct.unpack_from('<II', d, o + 16)
+                if d[o:o + 8].rstrip(b'\0') == b'.rdata':
+                    out.append((off, off + size))
+        elif d[:4] in (b'\xca\xfe\xba\xbe', b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe'):
+            slices = [0]
+            if d[:4] == b'\xca\xfe\xba\xbe':
+                nf, = struct.unpack_from('>I', d, 4)
+                slices = [struct.unpack_from('>I', d, 8 + 20 * i + 8)[0] for i in range(nf)]
+            for base in slices:
+                is64 = d[base:base + 4] == b'\xcf\xfa\xed\xfe'
+                ncmds, = struct.unpack_from('<I', d, base + 16)
+                o = base + (32 if is64 else 28)
+                for _ in range(ncmds):
+                    cmd, size = struct.unpack_from('<II', d, o)
+                    if cmd in (0x19, 0x1):
+                        nsect, = struct.unpack_from('<I', d, o + (64 if is64 else 48))
+                        so = o + (72 if is64 else 56)
+                        for k in range(nsect):
+                            q = so + k * (80 if is64 else 68)
+                            sect, seg = d[q:q + 16].rstrip(b'\0'), d[q + 16:q + 32].rstrip(b'\0')
+                            if (seg, sect) == (b'__TEXT', b'__const'):
+                                ssz, = struct.unpack_from('<Q' if is64 else '<I', d, q + 40 if is64 else q + 36)
+                                soff, = struct.unpack_from('<I', d, q + 48 if is64 else q + 40)
+                                out.append((base + soff, base + soff + ssz))
+                    o += size
+    except (struct.error, ValueError, IndexError):
+        return None
+    return [r for r in out if 0 <= r[0] < r[1] <= len(d)] or None
+
+
+def wwise_codebooks(path, min_run=64):
+    """How many of Wwise's packed Vorbis codebooks the Wwise library at path holds (a run of at
+    least min_run back to back; the most found), as pmu wwise finds them; 0 without."""
+    try:
+        d = open(path, 'rb').read()
+    except OSError:
+        return 0
+    best = 0
+    for lo, hi in _const_regions(d) or [(0, len(d))]:
+        p = lo
+        while p < hi:
+            if _codebook_len(d, p):
+                q, k = p, 0
+                while True:
+                    m = _codebook_len(d, q)
+                    if not m:
+                        break
+                    q, k = q + m, k + 1
+                if k >= min_run:
+                    best = max(best, k)
+                    p = q
+                    continue
+            p += 1
+    return best
+
+
+# soundbank versions the setup's `pmu wwise` reads into ua_host's own Wwise player's data
+# (setup-rs/crates/wwise, docs/wwise-player.md)
+WWISE_PLAYER_VERSIONS = (128,)
+
+
+def wwise_player_banks(data, w):
+    """The folder of soundbanks (relative to the data folder) the port's setup converts for ua_host's
+    Wwise player, or None: banks all of a version the converter reads, the folder with Init.bnk (of
+    several, the build's platform's: Linux, Mac, Windows)."""
+    if not w or not w['bank_versions'] or not set(w['bank_versions']) <= set(WWISE_PLAYER_VERSIONS):
+        return None
+    folders = [f for f in w['bank_folders'] if os.path.isfile(os.path.join(data, f, 'Init.bnk'))] or w['bank_folders']
+    for plat in ('linux', 'mac', 'windows'):
+        for f in folders:
+            if os.path.basename(f).lower().startswith(plat):
+                return f.replace(os.sep, '/')
+    return folders[0].replace(os.sep, '/') if folders else None
+
+
+def wwise_summary(w, player=None):
+    """One line on a game's Wwise and what the port does with it (player: the bank folder the setup
+    converts for ua_host's Wwise player, wwise_player_banks)."""
     ver = w.get('version')
     banks = ', '.join(f'version {v} (Wwise {ln})' for v, ln in zip(w['bank_versions'], w['bank_lines']))
     what = f"Wwise {ver or (w['bank_lines'][0] if w['bank_lines'] else '(version not read)')}"
@@ -652,11 +829,23 @@ def wwise_summary(w):
         src.append(w['version_from'])
     if w['banks']:
         src.append(f"{w['banks']} soundbanks in {', '.join(w['bank_folders'])}" + (f': {banks}' if banks else ''))
-    return (f"{what} ({'; '.join(src)}): the port gives the game ua_host's built-in Wwise, a silent sound engine "
-            f"made of the integration's own entry points (every call succeeds, banks load, events end at once, "
-            f"the bank-loaded and end-of-event callbacks reach the game). Sound needs Wwise's sound engine for "
-            f"ARM of {ver or 'the same version'} in the port's lib/ (Wwise's Android SDK: libAkSoundEngine.so, "
-            f"an Audiokinetic account) or a sound backend (UA_WWISE_BACKEND, docs/plugins.md)")
+    base = (f"{what} ({'; '.join(src)}): the port gives the game ua_host's built-in Wwise, made of the "
+            f"integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event "
+            f"callbacks reach the game)")
+    cb = w.get('codebooks')
+    vorbis = (f"; its Vorbis sounds need the {cb[1]} codebooks in {cb[0]}, which pmu wwise reads at setup" if cb and cb[1]
+              else f"; no Vorbis codebooks found in {cb[0]}: its Vorbis sounds would stay silent (ADPCM and PCM ones play)"
+              if cb else "; no Wwise library found: its Vorbis sounds would stay silent (ADPCM and PCM ones play)")
+    if player:
+        return (base + f". Sound: the setup converts the banks in {player} once (pmu wwise: wwise.banks in "
+                f"port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, "
+                f"docs/wwise-player.md){vorbis}")
+    vs = ', '.join(str(v) for v in WWISE_PLAYER_VERSIONS)
+    return (base + f"; silent: ua_host's Wwise player reads soundbank version {vs} only"
+            + (f" (these are {', '.join(str(v) for v in w['bank_versions'])})" if w['bank_versions'] else '')
+            + f". Sound needs Wwise's sound engine for ARM of {ver or 'the same version'} in the port's lib/ "
+            f"(Wwise's Android SDK: libAkSoundEngine.so, an Audiokinetic account) or a sound backend "
+            f"(UA_WWISE_BACKEND, docs/plugins.md)")
 
 
 def port_check(rep):
@@ -669,7 +858,10 @@ def port_check(rep):
     w = wwise_info(data)
     if w:
         rep['wwise'] = w
-        rep['notes'].append(wwise_summary(w))
+        banks = wwise_player_banks(data, w)
+        rep['notes'].append(wwise_summary(w, banks))
+        if banks:
+            rep.setdefault('suggest', {})['wwise'] = {'banks': banks}
 
 
 # --------------------------------------------------------------------------- survey

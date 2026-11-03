@@ -231,6 +231,7 @@ takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead
 | `android_data.data_path` | false | true: the reads of `Application.dataPath` that reach System.IO get `Game_Data/` beside the APK, with the data folder's own files (asmpatch's data-path patch; docs/android-data.md, section 6); the check notes such reads |
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
+| `wwise.banks` | the check's: the game's Wwise soundbank folder (relative to the data folder) when its banks are of a version `pmu wwise` reads (128, Wwise 2017.2) | the setup converts those banks once into the port's `wwise/` folder (step 5 below), and the launcher points ua_host's own Wwise player at it (`UA_WWISE_DATA`): the game's sound without Wwise's engine ([wwise-player.md](wwise-player.md)); empty: no conversion, the game runs silent on ua_host's built-in Wwise |
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set: reductions of the picture that leave the game play as it is ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
 | `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 9), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
@@ -326,12 +327,19 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    `gamedata/`);
 4. `pmunity convert` with `setup/convert.json`, the plugins and the answers (a Windows build's
    Direct3D 11 shaders with `setup/pmhlslcc`, a Vulkan-only build's with `setup/pmspirvcross`);
-5. `pmunity android-data --consume-src --pack all`, with asmpatch, the class libraries of step 3,
+5. a Wwise game (`wwise.banks`): `pmu wwise <data>/<banks> <port>/wwise --wwise-lib <plugins>` turns its soundbanks
+   into the data of ua_host's Wwise player ([wwise-player.md](wwise-player.md): Ogg Vorbis and
+   ADPCM in a pak, the objects in a json; the Vorbis codebooks read from the game's own Wwise library; Enter the Gungeon's 177 MB in seconds, about 25 MB of
+   memory), needing about the banks' size free; banks it cannot read leave the game silent and the
+   setup goes on (the step runs only where the release ships pmu);
+6. `pmunity android-data --consume-src --pack all`, with asmpatch, the class libraries of step 3,
    the managed files and assembly patches, and `android_data.args`;
-6. installing: the player's libraries into `lib/` with only the Mono runtime the game needs (with
+7. installing: the player's libraries into `lib/` with only the Mono runtime the game needs (with
    both, libunity takes the .NET 4.x one and a .NET 3.5 game aborts), the APK, OBB and Mono's
-   config into the port folder; the game's copy in `gamedata/` (used up by step 5), the tools and
-   the work folder are removed; `.setup_done` marks it done.
+   config into the port folder; the game's copy in `gamedata/` (used up by step 6), the tools and
+   the work folder are removed; `.setup_done` marks it done. The launcher exports
+   `UA_WWISE_DATA=<port>/wwise` when that folder is there (an empty `UA_WWISE_DATA` in `port.env`
+   turns the player off).
 
 Each step leaves a marker in `gamedata/.setup/`: an interrupted setup (battery, power button)
 continues where it stopped on the next launch. Free space: about three times the game while it
@@ -343,7 +351,7 @@ The il2cpp-arm64 route's setup takes the same steps with step 3 replaced: `il2cp
 the handheld (it also fetches the IL2CPP player), with
 the port's managed files, assembly patches (run on the game's original assemblies) and asmpatch,
 which gets the opt-in patches `streaming_assets` and `data_path` ask for (`--streaming-assets`,
-`--data-path`); step 5 packs with `--il2cpp` and the same `--streaming-assets` / `--data-path`
+`--data-path`); step 6 packs with `--il2cpp` and the same `--streaming-assets` / `--data-path`
 (android-data checks them against the build's `il2cpp.json`), and nothing of the code goes to
 android-data.
 

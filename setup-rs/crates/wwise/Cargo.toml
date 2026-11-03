@@ -1,0 +1,12 @@
+[package]
+name = "wwise"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "`pmu wwise`: a game's Wwise soundbanks (bank version 128, Wwise 2017.2) read once at setup into the data of ua_host's Wwise player (docs/wwise-player.md)"
+
+[dependencies]   # (pure Rust: ww2ogg-rs vendored for the Vorbis rebuild, its codebooks read from the game's Wwise; lewton to check the output)
+serde_json = "1"
+ww2ogg = { path = "../../vendor/ww2ogg" }
+lewton = "0.10.2"
+sha2 = "0.10"   # (the codebook library's digest in the log)

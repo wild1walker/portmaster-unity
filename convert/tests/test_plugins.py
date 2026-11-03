@@ -160,6 +160,28 @@ class StubClasses(unittest.TestCase):
             self.assertEqual((w['banks'], w['bank_versions'], w['bank_lines']), (1, [128], ['2017.2']))
             self.assertIn('Wwise 2017.2.5 build 6619', P.wwise_summary(w))
             self.assertIsNone(P.wwise_info(os.path.join(t, 'Plugins')))
+            # version 128: the setup converts the banks for ua_host's Wwise player (pmu wwise); of
+            # several platforms' folders, the one with Init.bnk and the build's platform
+            other = os.path.join(t, 'StreamingAssets', 'Audio', 'GeneratedSoundBanks', 'Windows')
+            os.makedirs(other)
+            open(os.path.join(other, 'Init.bnk'), 'wb').write(b'BKHD' + struct.pack('<II', 32, 128) + b'\0' * 28)
+            w = P.wwise_info(t)
+            banks = P.wwise_player_banks(t, w)
+            self.assertEqual(banks, 'StreamingAssets/Audio/GeneratedSoundBanks/Linux')
+            self.assertIn('pmu wwise', P.wwise_summary(w, banks))
+            self.assertEqual(w['codebooks'], ('Plugins/x86_64/libAkSoundEngine.so', 0))
+            self.assertIn('no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so', P.wwise_summary(w, banks))
+            # Wwise's Vorbis codebooks in the library (made up: 70 of one dimension, two entries of
+            # length 1), as pmu wwise finds them; a run too short is none
+            open(os.path.join(t, 'Plugins', 'x86_64', 'libAkSoundEngine.so'), 'wb').write(lib + b'\x21\x00\x08\x00' * 70)
+            w = P.wwise_info(t)
+            self.assertEqual(w['codebooks'], ('Plugins/x86_64/libAkSoundEngine.so', 70))
+            self.assertIn('need the 70 codebooks in Plugins/x86_64/libAkSoundEngine.so', P.wwise_summary(w, banks))
+            self.assertEqual(P.wwise_codebooks(os.path.join(t, 'Plugins', 'x86_64', 'libAkSoundEngine.so'), min_run=71), 0)
+            open(os.path.join(other, 'Init.bnk'), 'wb').write(b'BKHD' + struct.pack('<II', 32, 134) + b'\0' * 28)
+            w = P.wwise_info(t)
+            self.assertIsNone(P.wwise_player_banks(t, w))
+            self.assertIn('reads soundbank version 128 only (these are 128, 134)', P.wwise_summary(w))
 
 
 def elf_with_functions(funcs, code):
