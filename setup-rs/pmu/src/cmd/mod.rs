@@ -13,6 +13,7 @@ mod route;
 mod unpack;
 mod version;
 mod winbcl;
+mod wwise;
 mod zip_extract;
 
 /// The commands this binary has, as the setup scripts name them.
@@ -30,6 +31,7 @@ pub const NAMES: &[&str] = &[
     "route",
     "apk",
     "il2cpp",
+    "wwise",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -48,6 +50,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "route" => Some(route::run(args)),
         "apk" => Some(apk::run(args)),
         "il2cpp" => Some(il2cpp::run(args)),
+        "wwise" => Some(wwise::run(args)),
         _ => None,
     }
 }

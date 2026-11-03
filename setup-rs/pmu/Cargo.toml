@@ -16,4 +16,5 @@ pkgzip = { path = "../crates/pkgzip" }
 convert = { path = "../crates/convert" }
 il2cpp = { path = "../crates/il2cpp" }
 unityfs = { path = "../crates/unityfs" }
+wwise = { path = "../crates/wwise" }
 libc = "0.2"

@@ -31,16 +31,43 @@ first: it has the buses and the game syncs' defaults that the other banks use.
 
 ## The pak: media
 
-- `vorbis`: a standard Ogg Vorbis stream (one logical stream, the three header packets, granule
-  positions set; the last page's granule is the WEM's sample count), rebuilt from Wwise's packets
-  without decoding (ww2ogg's method, its codebooks). Any Vorbis decoder plays it (stb_vorbis,
-  libvorbis, tremor).
+- `vorbis`: a standard Ogg Vorbis stream (one logical stream, the three header packets, then the
+  audio packets on pages of up to 4 KB with their granule positions; the last page's granule is the
+  WEM's sample count, so a decoder trims the end to it), rebuilt from Wwise's packets without
+  decoding (ww2ogg's method, with the codebooks of the game's own Wwise: below). Any Vorbis
+  decoder plays it (stb_vorbis, libvorbis, tremor).
 - `adpcm`: Wwise's IMA ADPCM, the WEM's `data` chunk as it is. Blocks of `block_align` bytes
   (36 x channels), each holding the channels one after another, 36 bytes a channel: s16 sample
   (little-endian), u8 step index (clamp to 0..88), u8 unused, 32 bytes of 4-bit codes, low nibble
   first. A channel's block is 64 samples: the header's sample, then 63 codes (the last code is
   unused). Standard IMA expansion. A last, short block holds fewer samples (`samples` says how many).
 - `pcm`: little-endian signed 16-bit, interleaved.
+
+### Vorbis codebooks: from the game's own Wwise
+
+A Wwise Vorbis WEM leaves the codebooks out of its setup header and names them by index in a
+library its engine carries. Nothing of Wwise's is in this repository or a port's release:
+`pmu wwise` reads the library from the copy of the game the player has, from its Wwise engine
+(`Plugins/x86_64/libAkSoundEngine.so`, `Plugins/x86/...`; `AkSoundEngine.dll` of a Windows build,
+`AkSoundEngine.bundle` of a macOS one): `--wwise-lib <the library or a folder>`, by default the
+`Plugins` folder nearest above the banks (the setup passes the game's).
+
+In the engine the codebooks are one block in its read-only data, back to back in Wwise's packed
+form (the form ww2ogg's codebook files have), with an array of pointers to them elsewhere (in
+Wwise 2017.2.5's Linux libraries: 598 codebooks, 71,991 bytes, at file offset 0x1f8a80 of the x86
+build and 0x1f9780 of the x86-64 one, in `.rodata`). `pmu wwise` finds the block by its
+structure in any binary: each codebook must read as a Vorbis codebook (dimensions and entries set,
+codeword lengths that fill a Huffman tree exactly, a value lookup that fits) and take exactly
+`bits / 8 + 1` bytes, the next one starting there; a run of at least 64 is a library (the codeword lengths' tree is what tells
+codebooks from other data: those libraries have no other run of 64, and none of 20 starts in the
+4 KB before the block). With more than one library, a media takes the first
+whose stream decodes. The log names each library found, with its SHA-256 in ww2ogg's layout
+(the codebooks, their u32 offsets, the table's offset): Wwise 2017.2.5's is
+`00a93eab267d281401b1efd54e888a2e183299b9e6c446c48d09f701a89d9d27`, the digest of ww2ogg's
+`packed_codebooks_aoTuV_603.bin` (aoTuV 6.03's codebooks; ww2ogg's other set, the older one, is
+not in that engine). Without a library, or one without codebooks, the Vorbis media are left out
+(one warning a bank: those sounds stay silent); ADPCM and PCM still convert. `port check` says
+whether it found the library and its codebooks.
 
 ## The json
 
@@ -89,7 +116,9 @@ and may have:
 | `bus` | none | the output bus id, set where the node overrides its parent's (else the parent's applies) |
 | `states` | none | `{"<state group>": {"<state>": {"vol": dB, "pitch": cents}}}`: added while that state is set |
 | `limit` | 0 | at most that many instances of this node play (0: no limit) |
+| `limit_newest` | false | at the limit a new instance does not play (else the oldest one stops) |
 | `pan` | none | `[left/right, front/rear]` 2D panning, -100..100 |
+| `prob` | 100 | the chance in percent that the node plays when it is picked |
 
 The gain of a playing sound is the sum of `vol` over the sound and every node above it (its `parent`
 chain, to the root: containers, actor-mixers, music nodes), its states and RTPCs, plus its output
@@ -99,8 +128,9 @@ Types and their own keys:
 
 ```
 sound:    {"media": "<media id>", "loop": 1, "delay_ms": 0}
-          loop: 1 plays once, 0 loops forever, n plays n times. media absent: the sound has none
-          (a plugin source, or media of another bank: "media_bank" names the bank id when known)
+          loop: 1 plays once, 0 loops forever, n plays n times. The media is in this bank's pak, or
+          (rarely) another loaded bank's. A source plugin (a tone, silence) has "plugin": its
+          Wwise plugin id, and no media: step 1 plays nothing for it
 random, sequence:
           {"children": ["<id>", ...],            the playlist, in its order
            "weights": [w, ...],                  random only, when the container uses weights (0..100)
@@ -129,7 +159,7 @@ track:    {"clips": [CLIP, ...], "subtracks": 1, "kind": "normal" | "random" | "
 A music switch picks a child with its decision tree, `args` long (`tree` a node id when `args` is
 empty). DECISION is `{"<value id>": DECISION or "<node id>", ...}`, one level an argument; the key
 `"0"` matches any value (Wwise's default path). Look up the current value of each argument; where
-it is not in a level, take `"0"`; no match: nothing plays.
+it is not in a level, take `"0"`; no match, or the node id `"0"`: nothing plays.
 
 A playlist plays ITEM, a tree:
 
@@ -170,7 +200,7 @@ RULE (transitions: step 1 uses the fades only):
  "target": "<node or bus id>", "bus": false,      the target is a bus
  "object": false,         true: only the game object the event was posted on (Wwise's _O actions)
  "except": ["<id>", ...], stop_all / pause_all / resume_all: these are not touched
- "group": "<id>", "value": "<id>",                set_state, set_switch (set_rtpc: group = the rtpc)
+ "group": "<id>", "value": "<id>",                set_state, set_switch (no target); set_rtpc: group = the rtpc
  "amount": 0.0, "meaning": "offset" | "absolute", set_bus_volume, set_volume (dB), set_rtpc
  "fade_ms": 0, "curve": 4, "delay_ms": 0,          the action's fade (curve: AkCurveInterpolation)
  "bank": "<bank id>"}                              play: the bank holding the target
@@ -205,6 +235,28 @@ game sets one (absent: none, id "0").
 
 ## Checks
 
-`pmu wwise --check` decodes every converted Vorbis stream (lewton) and compares its sample count
-with the WEM's, and checks every ADPCM media's size against its blocks; it also resolves every
-node an event reaches. Run on a game's banks, and with made-up banks in `cargo test -p wwise`.
+`pmu wwise --check` decodes every packet of every converted Vorbis stream (lewton) and checks the
+stream's length (its last granule) against the WEM's sample count and the decoded samples (Wwise's
+streams end with up to a long block past their length, which a decoder drops); checks every ADPCM
+and PCM media's size against its blocks; and resolves every node an event reaches (children,
+switch maps, decision trees, playlists, tracks' clips, media, buses), across the banks given. It
+exits 1 on a problem. `cargo test -p wwise` runs it on made-up banks (`tests/madeup.rs`: every
+object type, ADPCM, PCM and a streamed WEM, an object that does not read, another bank version).
+
+On Enter the Gungeon (Unity 2017.4, Wwise 2017.2.5, bank version 128: Init.bnk and SFX.bnk, 177 MB,
+2026-11-02; the codebooks read from its `Plugins/x86/libAkSoundEngine.so`, either library giving
+the same): all 1821 media (273 Vorbis, 1548 IMA ADPCM) converted, every Vorbis stream decodes
+(lewton) and stb_vorbis gives each exactly the WEM's sample count, every ADPCM media whole blocks;
+all 1196 events resolve (3242 nodes). Compared with wwiser's dump of the same banks: every event's
+actions and every node they reach (3218: types, parents, buses, volumes, pitch, children, switch
+maps, decision trees, playlists, segments, clips, media) and the 16 buses match. `pmu wwise` took
+3.9 s (0.5 s of it finding the codebooks) and 22 MB at most (arm64 container on an M3; `--check`
+20 s); the pak is 177.4 MB, the same bytes as with ww2ogg's own codebook file.
+
+## Not read (yet)
+
+Bank versions other than 128 (status 3: the port stays silent); RIFX (big-endian) banks; codecs
+other than Vorbis, IMA ADPCM and PCM (a media of another codec is left out with a warning); layer
+containers' crossfade curves; music stingers; clip automation; effects, attenuation, HDR, aux sends.
+State and switch groups have no values before the game sets them (`defaults.states` and
+`defaults.switches` stay empty: the Init bank keeps none).

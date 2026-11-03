@@ -1,0 +1,24 @@
+# ww2ogg-rs 0.1.0 (crates.io: ww2ogg, https://github.com/coconutbird/ww2ogg-rs): a Rust port of hcs64's
+# ww2ogg (Wwise RIFF Vorbis to Ogg Vorbis). Vendored because the crate's package carries no licence
+# file (LICENSE here: BSD-3-Clause, as the crate and ww2ogg say). Changed: the packed codebooks it
+# embedded (src/codebooks/*.bin, data from Wwise) and the two constructors that used them are taken
+# out; a library is given as bytes (CodebookLibrary::from_bytes: pmu reads it from the game's own Wwise
+# library). The manifest: no readme/repository keys, doctests off (the examples open files).
+[package]
+name = "ww2ogg"
+version = "0.1.0"
+edition = "2021"
+authors = ["ww2ogg-rs contributors"]
+description = "Convert Wwise RIFF/RIFX Vorbis audio files (.wem) to standard Ogg Vorbis format"
+license = "BSD-3-Clause"
+publish = false
+
+[lib]
+name = "ww2ogg"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+thiserror = "2"
+byteorder = "1.5"
+lewton = "0.10.2"
