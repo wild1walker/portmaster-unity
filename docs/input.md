@@ -309,20 +309,37 @@ game.
 DeviceBindingSource(InputControlType))`), each call's action named by the field or property loaded
 before the constant (`GameActions.Left`) and the control by the game's own `InputControlType`
 enum (the numbers differ between InControl versions; InControl's examples compiled into a game are
-left out). It lists the actions bound to the left stick, to the d-pad, and those the left stick
-alone drives:
+left out). It lists every binding by control, the actions bound to the left stick, to the d-pad and
+to the right stick, those the right stick alone drives (a handheld without one cannot do them:
+nothing stands in for an aim stick) and those the left stick alone drives, with a button for
+`UA_DPAD_SWAP`: one of `select l2 r2 l1 r1 y x b a` (in that order) the game binds nothing to,
+else the one whose actions other buttons of such a handheld also do, else the one with the
+fewest actions (the swap button no longer reaches the game):
 
 ```
   pad bindings (InControl's default bindings, 47 in 33 actions):
+    every binding, by control:
+      DPadUp: GameActions.SelectUp, GameActions.DropItem
+      ...
+      RightStickUp: GameActions.AimUp
+      Action1: GameActions.Interact
+      LeftBumper: GameActions.DodgeRoll
+      ...
     left stick: GameActions.Left, GameActions.Right, GameActions.Up, GameActions.Down, GameActions.SelectLeft, ...
     d-pad: GameActions.SelectLeft, ..., GameActions.GunUp, GameActions.DropGun, ...
+    right stick: GameActions.AimLeft, GameActions.AimRight, GameActions.AimUp, GameActions.AimDown
+    the right stick alone (no other binding): GameActions.AimLeft, GameActions.AimRight, GameActions.AimUp, GameActions.AimDown
+  -> a handheld without a right stick cannot do those (...)
     the left stick alone (no d-pad binding): GameActions.Left, GameActions.Right, GameActions.Up, GameActions.Down
   -> UA_DPAD_STICK=auto (... its own bindings GameActions.GunUp, GameActions.DropGun need a UA_DPAD_SWAP=<button> ...)
+  -> UA_DPAD_SWAP=l1 (L1: the game binds every button a handheld without sticks has; L1 only GameActions.DodgeRoll, which other buttons also do. ...)
 ```
 
 `pmunity port check` then suggests `UA_DPAD_STICK = "auto"` (or `"auto,both"` when every d-pad
-binding is also a left stick one) and names the d-pad's own bindings that want a `UA_DPAD_SWAP`
-button. Not read: Rewired's maps (they are in the game's data, not its code), the Input System's
+binding is also a left stick one) and the `UA_DPAD_SWAP` button when it costs the game nothing
+(else it names it and leaves the choice to the porter), notes the right-stick-only actions, and
+`port new` drafts `[controls]` from the bindings, as the handheld labels its buttons (the game's
+Action1, the bottom face button, is B on a Nintendo-layout handheld). button. Not read: Rewired's maps (they are in the game's data, not its code), the Input System's
 action assets, the legacy Input Manager's axes, and bindings a game makes at run time.
 
 ## Tests

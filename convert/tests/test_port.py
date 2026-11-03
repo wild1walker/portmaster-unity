@@ -291,6 +291,133 @@ class CheckTest(unittest.TestCase):
             if swap:
                 self.assertIn("the d-pad's own bindings (A.GunUp, A.Drop)", notes)
 
+    def test_pad_bindings_draft_and_swap(self):
+        # asmpatch --survey's every binding: the [controls] draft as the handheld labels its buttons, the
+        # swap button it names (suggested when nothing is lost), the right stick's actions noted
+        def survey(swap):
+            return ('  pad bindings (InControl\'s default bindings, 14 in 10 actions):\n'
+                    '    every binding, by control:\n'
+                    '      DPadUp: A.SelectUp, A.ItemUpAction\n      DPadDown: A.SelectDown\n'
+                    '      DPadLeft: A.SelectLeft, A.GunUpAction\n      DPadRight: A.SelectRight\n'
+                    '      LeftStickUp: A.Up\n      LeftStickDown: A.Down\n      LeftStickLeft: A.Left\n      LeftStickRight: A.Right\n'
+                    '      RightStickLeft: A.AimLeft\n      RightStickRight: A.AimRight\n'
+                    '      Action1: A.InteractAction\n      Action2: A.DodgeRollAction\n      LeftBumper: A.DodgeRollAction\n'
+                    '      Back: A.Pause\n      Start: A.Pause\n'
+                    '    left stick: A.Up, A.Down, A.Left, A.Right\n'
+                    '    the right stick alone (no other binding): A.AimLeft, A.AimRight\n'
+                    '  -> a handheld without a right stick cannot do those (no stand-in: ...)\n'
+                    '    the left stick alone (no d-pad binding): A.Up, A.Down, A.Left, A.Right\n'
+                    '  -> UA_DPAD_STICK=auto (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n'
+                    '     the left stick; its own bindings A.GunUpAction, A.ItemUpAction need a UA_DPAD_SWAP=<button> that gives the d-pad back)\n'
+                    + swap)
+        kept = ('  -> UA_DPAD_SWAP=l1 (L1: the game binds every button a handheld without sticks has; L1 only A.DodgeRollAction, '
+                'which other buttons also do.\n     The swap button no longer reaches the game: choose another if those matter more)\n')
+        lost = ('  -> UA_DPAD_SWAP=l2 (L2: the game binds every button a handheld without sticks has; L2 only A.Map, the fewest.\n'
+                '     The swap button no longer reaches the game: choose another if those matter more)\n')
+        rep = {'notes': [], 'code': {'incontrol': True, 'legacy': {}}, 'input_verdict': 'pad', 'asmpatch_survey': survey(kept)}
+        P.suggest_config(rep)
+        rt, ctl = rep['suggest']['runtime'], rep['suggest']['controls']
+        self.assertEqual((rt['UA_DPAD_STICK'], rt['UA_DPAD_SWAP']), ('auto', 'l1'))
+        self.assertEqual(list(ctl), ['Left Stick', 'Right Stick', 'D-Pad', 'B', 'A', 'L1', 'Select', 'Start'])
+        self.assertEqual(ctl['Left Stick'], 'Move')
+        self.assertEqual(ctl['Right Stick'], 'Aim (left, right); handhelds without a right stick cannot')
+        self.assertIn('L1 gives the d-pad back: Select, Item (up), Gun up (left)', ctl['D-Pad'])
+        self.assertEqual((ctl['B'], ctl['A'], ctl['Select'], ctl['Start']), ('Interact', 'Dodge roll', 'Pause', 'Pause'))
+        self.assertIn('the d-pad as the d-pad', ctl['L1'])
+        notes = ' '.join(rep['notes'])
+        self.assertIn('UA_DPAD_SWAP = "l1" (L1:', notes)
+        self.assertIn('Aim needs a right stick', notes)
+        rep = {'notes': [], 'code': {'incontrol': True, 'legacy': {}}, 'input_verdict': 'pad', 'asmpatch_survey': survey(lost)}
+        P.suggest_config(rep)
+        self.assertNotIn('UA_DPAD_SWAP', rep['suggest']['runtime'])
+        self.assertIn('not suggested, as it loses those', ' '.join(rep['notes']))
+        self.assertEqual(rep['suggest']['controls']['L2'] if 'L2' in rep['suggest']['controls'] else None, None)
+        # the porter's own [controls] replace the draft (not merged with it)
+        cfg = P.build_config('g', {'build': 'linux', 'data': '/x/G_Data', 'suggest': {'controls': ctl}},
+                             {'controls': {'D-Pad': 'Move'}})
+        self.assertEqual(cfg['controls'], {'D-Pad': 'Move'})
+        self.assertEqual(P.build_config('g', {'build': 'linux', 'data': '/x/G_Data', 'suggest': {'controls': ctl}},
+                                        {'controls': {}})['controls'], ctl)
+
+    def test_asmpatch_missing_or_built(self):
+        # no asmpatch and no .NET SDK: a warning naming both; a .NET SDK: build.sh runs ($DOTNET honoured)
+        old = (P.REPO, os.environ.pop('PMUNITY_ASMPATCH', None), os.environ.get('DOTNET'), os.environ.get('PATH'),
+               os.environ.get('HOME'))
+        try:
+            with tempfile.TemporaryDirectory() as t:
+                P.REPO = t
+                os.environ['PATH'], os.environ['HOME'] = '/usr/bin:/bin', t
+                os.environ.pop('DOTNET', None)
+                if shutil.which('dotnet'):
+                    self.skipTest('dotnet on /usr/bin')
+                cmd, why = P.ensure_asmpatch()
+                self.assertIsNone(cmd)
+                self.assertIn('no .NET 8 SDK was found ($DOTNET', why)
+                self.assertIn('UA_DPAD_STICK', why)
+                self.assertEqual(P.ensure_asmpatch('none'), (None, None))
+                dn = os.path.join(t, 'sdk', 'dotnet')
+                os.makedirs(os.path.dirname(dn))
+                with open(dn, 'w') as f:
+                    f.write('#!/bin/sh\nexit 1\n')
+                os.chmod(dn, 0o755)
+                os.environ['DOTNET'] = dn
+                self.assertEqual(P.find_dotnet(), dn)
+                b = os.path.join(t, 'tools', 'asmpatch', 'build.sh')
+                os.makedirs(os.path.dirname(b))
+                with open(b, 'w') as f:      # (a build that fails, then one that makes out/any/asmpatch.dll)
+                    f.write('#!/bin/sh\n[ -f "$(dirname "$0")/ok" ] || { echo "asmpatch: build failed ($DOTNET)"; exit 1; }\n'
+                            'mkdir -p "$(dirname "$0")/out/any"; : > "$(dirname "$0")/out/any/asmpatch.dll"\n')
+                os.chmod(b, 0o755)
+                cmd, why = P.ensure_asmpatch(log=lambda m: None)
+                self.assertIsNone(cmd)
+                self.assertIn(f'asmpatch did not build (tools/asmpatch/build.sh with {dn}: asmpatch: build failed ({dn})', why)
+                open(os.path.join(t, 'tools', 'asmpatch', 'ok'), 'w').close()
+                cmd, why = P.ensure_asmpatch(log=lambda m: None)
+                self.assertIsNone(why)
+                self.assertEqual(cmd, f"{shlex.quote(dn)} {shlex.quote(os.path.join(t, 'tools', 'asmpatch', 'out', 'any', 'asmpatch.dll'))}")
+        finally:
+            P.REPO = old[0]
+            for k, v in zip(('PMUNITY_ASMPATCH', 'DOTNET', 'PATH', 'HOME'), old[1:]):
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_suggest_gaps_and_toml_sections(self):
+        # port new on an earlier port.toml: what the check now suggests that it lacks or sets otherwise
+        sug = {'runtime': {'UA_PAD_NAME': 'Y', 'UA_DPAD_STICK': 'auto'}, 'android_data': {'streaming_assets': 'both', 'asmpatch': 'auto'},
+               'wwise': {'banks': 'StreamingAssets/Audio'}, 'convert': {'steps': ['shaders', 'textures']}, 'controls': {'B': 'Jump'}}
+        user = {'runtime': {'UA_PAD_NAME': 'X'}, 'android_data': {'streaming_assets': 'obb', 'asmpatch': ['auto', 'hk-blur']},
+                'convert': {'steps': ['shaders']}, 'controls': {}}
+        gaps = '\n'.join(P.suggest_gaps(user, sug))
+        for want in ('[runtime] UA_PAD_NAME = "X" in port.toml; the check suggests "Y"',
+                     '[runtime] UA_DPAD_STICK = "auto": used, not in port.toml',
+                     '[android_data] streaming_assets = "obb" in port.toml (the default); the check suggests "both"',
+                     '[wwise] banks = "StreamingAssets/Audio": used', '[convert] steps lacks ["textures"]',
+                     '[controls] is empty: the READMEs use the check\'s draft from the game\'s pad bindings: B = "Jump"'):
+            self.assertIn(want, gaps)
+        self.assertNotIn('asmpatch', gaps)                  # (the porter's own list)
+        self.assertEqual(P.suggest_gaps(dict(user, wwise={'banks': ''}), {'wwise': sug['wwise']}),
+                         ['[wwise] banks = "" in port.toml; the check suggests "StreamingAssets/Audio" (empty: the game runs silent)'])
+        # port.toml: [wwise] with banks only, the [controls] draft marked
+        cfg = P.build_config('g', None, {'game': {'unity_versions': ['2017.4.27f1']}, 'wwise': {'banks': 'StreamingAssets/Audio'},
+                                         'controls': {'B': 'Jump'}})
+        text = P.dump_toml(cfg, drafted=('controls',))
+        self.assertIn('[wwise]\nbanks = "StreamingAssets/Audio"', text)
+        self.assertIn(P.CONTROLS_DRAFT_DOC + '\n[controls]', text)
+        self.assertEqual(P.merge(P.DEFAULTS, tomllib.loads(text)), cfg)
+        self.assertNotIn('[wwise]', P.dump_toml(P.build_config('g', None, {'game': {'unity_versions': ['2017.4.27f1']}})))
+
+    def test_uncompressed_textures_warning(self):
+        rep = {'notes': [], 'warnings': [], 'streaming_survey': {'textures': {'RGBA32': [657, 869 << 20], 'DXT5': [57, 13 << 20]}}}
+        P.suggest_config(rep)
+        self.assertEqual(len(rep['warnings']), 1)
+        self.assertIn('869 MB of uncompressed textures (RGBA32 657; main data and StreamingAssets bundles)', rep['warnings'][0])
+        self.assertNotIn('textures', rep['suggest']['convert'].get('steps', []))   # (a warning, not a suggestion)
+        rep = {'notes': [], 'warnings': [], 'data_survey': {'textures': {'RGBA32': [10, 30 << 20]}}}
+        P.suggest_config(rep)
+        self.assertEqual(rep['warnings'], [])
+
     def test_windows_class_libraries(self):
         # a Windows Mono build of 2021.2+ ships unityjit-win32 class libraries: the check names winbcl
         exe = bytearray(b'MZ' + b'\0' * 0x3A + struct.pack('<I', 0x80) + b'\0' * 0x40)

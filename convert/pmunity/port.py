@@ -573,9 +573,18 @@ def input_verdict(s):
     return 'pad' if pad else 'none'
 
 
+def find_dotnet():
+    """The .NET SDK's dotnet: $DOTNET, else dotnet on PATH, else ~/.dotnet/dotnet (as tools/asmpatch/build.sh
+    looks for it), or None."""
+    for d in (os.environ.get('DOTNET'), shutil.which('dotnet'), os.path.expanduser('~/.dotnet/dotnet')):
+        if d and os.path.isfile(d) and os.access(d, os.X_OK):
+            return d
+    return None
+
+
 def find_asmpatch(explicit=None):
     """The asmpatch command for this machine: --asmpatch, $PMUNITY_ASMPATCH, a build in
-    tools/asmpatch/out, or None."""
+    tools/asmpatch/out (run with find_dotnet's dotnet), or None ("none": no survey)."""
     if explicit:
         return explicit
     if os.environ.get('PMUNITY_ASMPATCH'):
@@ -586,11 +595,45 @@ def find_asmpatch(explicit=None):
             os.access(os.path.join(out, 'linux-arm64', 'asmpatch'), os.X_OK):
         return shlex.quote(os.path.join(out, 'linux-arm64', 'asmpatch'))
     dll = os.path.join(out, 'any', 'asmpatch.dll')
-    if os.path.isfile(dll):
-        dotnet = shutil.which('dotnet') or os.path.expanduser('~/.dotnet/dotnet')
-        if os.access(dotnet, os.X_OK):
-            return f'{shlex.quote(dotnet)} {shlex.quote(dll)}'
+    dotnet = find_dotnet()
+    if os.path.isfile(dll) and dotnet:
+        return f'{shlex.quote(dotnet)} {shlex.quote(dll)}'
     return None
+
+
+# what the check misses without asmpatch's survey (the warning names it)
+ASMPATCH_MISSING = ("its input survey (the game's pad bindings: UA_DPAD_STICK and UA_DPAD_SWAP for handhelds without "
+                    "sticks, the [controls] draft; InControl's pad name; Mouse.current without a null check) and its "
+                    "file-access survey (StreamingAssets and dataPath reads)")
+
+
+def ensure_asmpatch(explicit=None, log=None):
+    """(asmpatch command or None, warning or None): find_asmpatch's, else tools/asmpatch/build.sh run
+    with the .NET 8 SDK when there is one (find_dotnet), else a warning that says what is missing."""
+    log = log or (lambda m: None)
+    cmd = find_asmpatch(explicit)
+    if cmd == 'none':
+        return None, None
+    if cmd:
+        return cmd, None
+    build = os.path.join(REPO, 'tools', 'asmpatch', 'build.sh')
+    dotnet = find_dotnet()
+    if not dotnet:
+        return None, (f"asmpatch is not built and no .NET 8 SDK was found ($DOTNET, dotnet on PATH, ~/.dotnet/dotnet): "
+                      f"this check left out {ASMPATCH_MISSING}. Install the .NET 8 SDK (docs/building.md), then run "
+                      f"tools/asmpatch/build.sh (or set DOTNET) and this check again; `port new` then says what to add "
+                      f"to port.toml")
+    log(f'building asmpatch for its survey (tools/asmpatch/build.sh with {dotnet})')
+    try:
+        r = subprocess.run([build], env=dict(os.environ, DOTNET=dotnet), capture_output=True, text=True, timeout=900)
+        tail = (r.stdout + r.stderr).strip().splitlines()[-3:]
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        tail = [str(ex)]
+    cmd = find_asmpatch(explicit)
+    if cmd:
+        return cmd, None
+    return None, (f"asmpatch did not build (tools/asmpatch/build.sh with {dotnet}: {' / '.join(tail) or 'no output'}): "
+                  f"this check left out {ASMPATCH_MISSING}. Fix the build (docs/building.md) and run this check again")
 
 
 def asmpatch_survey(cmd, managed):
@@ -1128,10 +1171,14 @@ def check(path, asmpatch=None, deep=True, log=None):
     rep['code'] = s
     if s is not None:
         rep['input_verdict'] = input_verdict(s)
-        cmd = find_asmpatch(asmpatch)
+        cmd, why = ensure_asmpatch(asmpatch, log)
+        if why:
+            rep['warnings'].append(why)
         if cmd:
             log('asmpatch --survey')
             text, would = asmpatch_survey(cmd, managed)
+            if not text:
+                rep['warnings'].append(f'asmpatch --survey failed ({cmd}): this check left out {ASMPATCH_MISSING}')
             if text:
                 rep['asmpatch_survey'] = text
                 rep['asmpatch_would'] = would
@@ -1259,6 +1306,85 @@ QUALITY_QUESTION = {'id': 'PICTURE', 'question': 'Picture: lighter on handhelds 
                     'default': 'auto', 'convert_set': 'quality.profile'}
 
 
+# InControl's controls as a handheld labels its buttons ([controls]): the face buttons by the Nintendo
+# layout most PortMaster handhelds have (A right, B bottom: the game's Action1 is the bottom one)
+_PAD_LABELS = {'Action1': 'B', 'Action2': 'A', 'Action3': 'Y', 'Action4': 'X', 'LeftBumper': 'L1', 'RightBumper': 'R1',
+               'LeftTrigger': 'L2', 'RightTrigger': 'R2', 'LeftStickButton': 'L3', 'RightStickButton': 'R3',
+               **{c: 'Select' for c in ('Back', 'Select', 'View', 'Share', 'Minus', 'Create')},
+               **{c: 'Start' for c in ('Start', 'Menu', 'Options', 'Pause', 'Plus')}}
+_SWAP_LABELS = {'a': 'B', 'b': 'A', 'x': 'Y', 'y': 'X', 'l1': 'L1', 'r1': 'R1', 'l2': 'L2', 'r2': 'R2', 'select': 'Select'}
+_DIRS = ('Up', 'Down', 'Left', 'Right')
+
+
+def pad_bindings(survey):
+    """{control: [action, ...]} from asmpatch --survey's "every binding, by control" list, in its order."""
+    m = re.search(r'^    every binding, by control:\n((?:      .*\n?)*)', survey or '', re.M)
+    out = {}
+    for line in (m.group(1).splitlines() if m else []):
+        c, _, acts = line.strip().partition(': ')
+        if c and acts:
+            out[c] = acts.split(', ')
+    return out
+
+
+def _action_words(action, strip_dir=False):
+    """GungeonActions.DodgeRollAction -> "Dodge roll" (strip_dir: a trailing Up/Down/Left/Right too)."""
+    n = action.rsplit('.', 1)[-1]
+    n = re.sub(r'Action$', '', n) or n
+    if strip_dir:
+        n = re.sub(r'(Up|Down|Left|Right)$', '', n)
+    w = re.findall(r'[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+', n)
+    return ' '.join([w[0]] + [x.lower() if not x.isupper() or len(x) == 1 else x for x in w[1:]]) if w else ''
+
+
+def _direction_row(binds, prefix):
+    """What a d-pad or stick does: an action in all four directions once (no direction: "Move"),
+    others with theirs, e.g. "Move, Select, Drop item (up)" (a name's direction is left out where it
+    is the control's: SelectUp on up, PunchoutDodgeLeft on left)."""
+    acts = {}
+    for d in _DIRS:
+        for a in binds.get(prefix + d, []):
+            base = _action_words(a, a.endswith(d) or a.endswith(d + 'Action')) or 'Move'
+            acts.setdefault(base, [])
+            if d.lower() not in acts[base]:
+                acts[base].append(d.lower())
+    return ', '.join(b if len(ds) == 4 else f"{b} ({', '.join(ds)})" for b, ds in acts.items())
+
+
+def controls_draft(binds, dpad_stick=False, swap=None):
+    """port.toml's [controls] drafted from the game's default pad bindings: the sticks and the d-pad,
+    then each button as the handheld labels it; with dpad_stick (UA_DPAD_STICK) the d-pad moves on
+    handhelds without sticks, and swap (UA_DPAD_SWAP) is the button that gives it back."""
+    rows = {}
+    left, right, dpad = _direction_row(binds, 'LeftStick'), _direction_row(binds, 'RightStick'), _direction_row(binds, 'DPad')
+    if left:
+        rows['Left Stick'] = left
+    if right:
+        rows['Right Stick'] = right + ('' if _right_elsewhere(binds) else '; handhelds without a right stick cannot')
+    if dpad_stick:
+        sl = _SWAP_LABELS.get(swap, '')
+        rows['D-Pad'] = ('the left stick on handhelds without sticks' +
+                         (f'; {sl} gives the d-pad back: {dpad}' if sl and dpad else f': {dpad}' if dpad else ''))
+    elif dpad:
+        rows['D-Pad'] = dpad
+    for c, acts in binds.items():               # (Back and Select are both Select: one row)
+        lab = _PAD_LABELS.get(c)
+        if lab:
+            had = [w for w in rows.get(lab, '').split(', ') if w]
+            rows[lab] = ', '.join(dict.fromkeys(had + [_action_words(a) for a in acts]))
+    if dpad_stick and swap in _SWAP_LABELS:
+        rows[_SWAP_LABELS[swap]] = ('the d-pad as the d-pad, again as the left stick (handhelds without sticks; '
+                                   'the game no longer gets this button)')
+    return rows
+
+
+def _right_elsewhere(binds):
+    """Whether every right-stick action has another binding."""
+    rs = {a for c, acts in binds.items() if c.startswith('RightStick') and c != 'RightStickButton' for a in acts}
+    other = {a for c, acts in binds.items() if not (c.startswith('RightStick') and c != 'RightStickButton') for a in acts}
+    return rs <= other
+
+
 def suggest_config(rep):
     """Port config values the check suggests (port new starts from them)."""
     s, d = rep.get('code') or {}, rep.get('data_survey') or {}
@@ -1281,17 +1407,42 @@ def suggest_config(rep):
         notes.append("InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names "
                      "the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown "
                      "controller (docs/input.md)")
-    # asmpatch --survey's pad bindings: actions only the left stick drives (InControl's default bindings)
-    ds = re.search(r'the left stick alone \(no d-pad binding\): (.*)\n\s*-> UA_DPAD_STICK=([\w,]+)', rep.get('asmpatch_survey') or '')
+    # asmpatch --survey's pad bindings (InControl's default bindings): actions only the left stick drives,
+    # the d-pad's own ones and a button that gives the d-pad back, actions only the right stick drives,
+    # and every binding for the [controls] draft
+    survey = rep.get('asmpatch_survey') or ''
+    binds = pad_bindings(survey)
+    ds = re.search(r'the left stick alone \(no d-pad binding\): (.*)\n\s*-> UA_DPAD_STICK=([\w,]+)', survey)
+    swap = None
     if ds:
         rt.setdefault('UA_DPAD_STICK', ds.group(2))
-        own = re.search(r'its own bindings (.*?) need a UA_DPAD_SWAP', rep['asmpatch_survey'], re.S)
+        own = re.search(r'its own bindings (.*?) need a UA_DPAD_SWAP', survey, re.S)
+        sw = re.search(r'-> UA_DPAD_SWAP=(\w+) \(([^)]*)\)', survey)
+        if own and sw:
+            why = ' '.join(sw.group(2).split())
+            # (a button the game binds nothing to, or whose actions other buttons also do: nothing is lost)
+            if 'binds nothing' in why or 'other buttons also do' in why:
+                swap = sw.group(1)
+                rt.setdefault('UA_DPAD_SWAP', swap)
         notes.append(f"pad bindings: {ds.group(1).strip()} only on the left stick, which a handheld without sticks "
                      f"lacks: UA_DPAD_STICK = \"{ds.group(2)}\" (the d-pad drives the left stick on pads without "
                      f"one; docs/input.md)" +
                      (f"; the d-pad's own bindings ({' '.join(own.group(1).split())}) then need "
-                      f"UA_DPAD_SWAP = \"<button>\", a button that gives the d-pad back" if own else
+                      f"UA_DPAD_SWAP = \"<button>\", a button that gives the d-pad back" +
+                      (f": UA_DPAD_SWAP = \"{sw.group(1)}\" ({why})" + ('' if swap else
+                       '; not suggested, as it loses those: choose the button yourself') if sw else '')
+                      if own else
                       "; the d-pad also still reports as the d-pad (every d-pad binding is also a left stick one)"))
+    rs = re.search(r'the right stick alone \(no other binding\): (.*)\n', survey)
+    if rs:
+        what = ', '.join(dict.fromkeys(_action_words(a, True) or 'it' for a in rs.group(1).split(', ')))
+        notes.append(f"pad bindings: {rs.group(1).strip()} only on the right stick: a handheld without one (the "
+                     f"RG34XX-SP and other d-pad-only ones) cannot do those ({what} needs a right stick; nothing in "
+                     f"the port stands in for it). Check the game's own options on such a handheld (aim assist, "
+                     f"aiming where it moves, another control scheme), or pointer mode where it aims at the mouse; "
+                     f"the [controls] draft says so")
+    if binds:
+        sug['controls'] = controls_draft(binds, dpad_stick=bool(ds), swap=swap)
     if s.get('playmaker'):
         notes.append(f"PlayMaker ({s['playmaker']}): asmpatch's optimizations playmaker-loopcount and "
                      f"playmaker-delayedevents (the same behaviour, less work every frame for every FSM: "
@@ -1366,6 +1517,17 @@ def suggest_config(rep):
                      f'so Unity decodes them to RGBA when loading (4-8x the memory). The textures step '
                      f'(convert.steps += "textures") re-encodes them as ASTC: less memory, slightly different '
                      f'pixels, a longer setup; off by default')
+    # uncompressed textures stay as they are in the GPU's memory (the handheld samples them, so nothing
+    # grows, but nothing shrinks either): seen in Gungeon's bundles, 657 RGBA32 textures of 869 MB
+    raw = {k: v for k, v in tex.items() if k in ('RGBA32', 'ARGB32', 'BGRA32', 'RGB24')}
+    raw_mb = sum(v[1] for v in raw.values()) / 2**20
+    if raw_mb > 256:
+        rep.setdefault('warnings', []).append(
+            f"{raw_mb:.0f} MB of uncompressed textures ({', '.join(f'{k} {v[0]}' for k, v in raw.items())}; {where}): "
+            f"on a handheld with 1 GB of RAM the game, the system and these share it, and the scenes that load "
+            f"many of them may not fit. The textures step (convert.steps += \"textures\"; docs/porting.md, "
+            f"\"Small handhelds (1 GB)\") re-encodes them as ASTC 4x4, a quarter of RGBA32's memory (slightly "
+            f"different pixels, a longer setup); try the port on a 1 GB handheld first, watching log.txt's memory")
     if crunched:
         notes.append(f'{crunched} crunched textures: as ASTC (the textures step) they take their full size on the '
                      f'card (several times the crunched size)')
@@ -1558,6 +1720,8 @@ def build_config(name, rep, user):
         cfg = merge(cfg, found)
         cfg = merge(cfg, rep.get('suggest') or {})
     cfg = merge(cfg, user or {})
+    if (user or {}).get('controls'):                    # (the porter's table, not merged with the check's draft)
+        cfg['controls'] = copy.deepcopy(user['controls'])
     if 'quality' not in (cfg['convert'].get('steps') or []):    # (the picture question asks for that step)
         cfg['questions'] = [q for q in cfg['questions'] if q != QUALITY_QUESTION]
     p, g, ad = cfg['port'], cfg['game'], cfg['android_data']
@@ -1691,6 +1855,8 @@ CONFIG_DOC = {
                     '# winbcl = auto (the setup fetches Unity\'s class libraries a build lacks for the player: a\n'
                     '# Windows 2021.2+ build\'s Unix ones, facades such as netstandard.dll) | off;\n'
                     '# name = the APK\'s, package (keep it: it names the PlayerPrefs file); args = more options',
+    'wwise': "# a Wwise game's soundbanks (banks: their folder, relative to the game's data folder), which the setup\n"
+             "# converts once for ua_host's own Wwise player (pmu wwise; docs/wwise-player.md); empty: silent",
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
                "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\",\n"
@@ -1717,17 +1883,26 @@ QUESTIONS_DOC = """# Questions PortMaster's patcher asks before the setup (each 
 """
 
 
-def dump_toml(cfg, route=None):
+CONTROLS_DRAFT_DOC = ("# (drafted by `port new` from the game's default pad bindings, asmpatch --survey: reword them\n"
+                      "# and check them on a handheld)")
+
+
+def dump_toml(cfg, route=None, drafted=()):
     """port.toml text for a resolved config, with the keys explained: the sections the route uses
-    (route.json "config"; default all), its own explanations (route.json "config_doc")."""
+    (route.json "config"; default all; [wwise] only with banks), its own explanations (route.json
+    "config_doc"); drafted: sections the check drafted (controls), which say so."""
     route = route or {}
     docs = dict(CONFIG_DOC, **(route.get('config_doc') or {}))
     out = ['# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).',
            '# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.', '']
-    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'runtime', 'runtime_lowmem',
-                                       'files', 'build'):
+    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'wwise', 'runtime',
+                                       'runtime_lowmem', 'files', 'build'):
         val = cfg.get(sec, {})
+        if sec == 'wwise' and not val.get('banks'):
+            continue
         out.append(docs[sec])
+        if sec in drafted and val:
+            out.append(CONTROLS_DRAFT_DOC)
         out.append(f'[{sec}]')
         subs = []
         for k, v in val.items():
@@ -2274,6 +2449,45 @@ class NewCtx:
         self.written.append(rel)
 
 
+def suggest_gaps(user, sug):
+    """What the check suggests that the porter's port.toml lacks or sets otherwise: a key it lacks is
+    used all the same (merged in; port.toml should say so), a value it has wins. For android_data,
+    only where port.toml has the default (what a first `port new` wrote before the check knew more)."""
+    out = []
+    tv = _toml_value
+    for k, v in (sug.get('runtime') or {}).items():
+        have = (user.get('runtime') or {}).get(k)
+        if have is None:
+            out.append(f'[runtime] {k} = {tv(v)}: used, not in port.toml (add it there)')
+        elif str(have) != str(v):
+            out.append(f'[runtime] {k} = {tv(have)} in port.toml; the check suggests {tv(v)}')
+    for k, v in (sug.get('android_data') or {}).items():
+        have = (user.get('android_data') or {}).get(k)
+        if have is None and v != DEFAULTS['android_data'].get(k):
+            out.append(f'[android_data] {k} = {tv(v)}: used, not in port.toml (add it there)')
+        elif have is not None and have == DEFAULTS['android_data'].get(k) and have != v:
+            out.append(f'[android_data] {k} = {tv(have)} in port.toml (the default); the check suggests {tv(v)}')
+    banks = (sug.get('wwise') or {}).get('banks')
+    if banks:
+        have = (user.get('wwise') or {}).get('banks')
+        if have is None:
+            out.append(f'[wwise] banks = {tv(banks)}: used (the setup converts them for ua_host\'s Wwise player), not in '
+                       f'port.toml (add it there)')
+        elif have != banks:
+            out.append(f'[wwise] banks = {tv(have)} in port.toml; the check suggests {tv(banks)}' +
+                       (' (empty: the game runs silent)' if not have else ''))
+    steps = (sug.get('convert') or {}).get('steps')
+    have = (user.get('convert') or {}).get('steps')
+    if steps and have is not None:
+        more = [x for x in steps if x not in have]
+        if more:
+            out.append(f'[convert] steps lacks {tv(more)}, which the check suggests')
+    if sug.get('controls') and not user.get('controls'):
+        out.append('[controls] is empty: the READMEs use the check\'s draft from the game\'s pad bindings: ' +
+                   '; '.join(f'{_toml_key(k)} = {tv(v)}' for k, v in sug['controls'].items()))
+    return out
+
+
 def new(name, data=None, config=None, out=None, route=None, title=None, player=None, force=False,
         asmpatch=None, log=print):
     """Writes a port's source folder; returns its path."""
@@ -2391,7 +2605,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     ctx.write('testing_thread.txt', testing_thread_txt(cfg, pj['attr'].get('inst') or ''))
     # what was made, and from what
     if not config:
-        ctx.write('port.toml', dump_toml(cfg, r))
+        ctx.write('port.toml', dump_toml(cfg, r, drafted=('controls',) if (rep or {}).get('suggest', {}).get('controls') else ()))
     build = {'made_by': 'pmunity port new', 'config': cfg, 'route': {k: v for k, v in r.items() if k != 'dir'},
              'files': sorted(set(ctx.written))}
     if rep:
@@ -2408,8 +2622,15 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         f.write('\n'.join(sorted(set(ctx.written))) + '\n')
     log(f"port {pn} ({cfg['port']['route']} route) -> {out}")
     if rep:
+        for w in rep.get('warnings', []):
+            log(f'warning: {w}')
         for n in rep.get('notes', []):
             log(f'- {n}')
+    gaps = suggest_gaps(user, (rep or {}).get('suggest') or {}) if config and rep else []
+    if gaps:
+        log(f'{os.path.basename(config)} and what this check suggests ({len(gaps)}; add them, or keep yours on purpose):')
+        for x in gaps:
+            log(f'  - {x}')
     todo = submission_warnings(cfg, out, pj)
     if todo:
         log(f'for a PortMaster submission ({len(todo)}; docs/porting.md, "Submitting to PortMaster"):')
@@ -2985,7 +3206,8 @@ def main(argv):
     c = sub.add_parser('check', help='what the game is, what it needs, which route fits')
     c.add_argument('game')
     c.add_argument('--json', action='store_true', help='the report as JSON')
-    c.add_argument('--asmpatch', help="asmpatch's command for its --survey (default: $PMUNITY_ASMPATCH or tools/asmpatch/out)")
+    c.add_argument('--asmpatch', help="asmpatch's command for its --survey (default: $PMUNITY_ASMPATCH, else tools/asmpatch/out, "
+                                      "built with the .NET 8 SDK when missing; \"none\": no survey)")
     c.add_argument('--no-scan', action='store_true', help='skip scenes, textures and video (only settings and code)')
     n = sub.add_parser('new', help='write a port folder')
     n.add_argument('name', help="the port's folder in ports/ (lowercase)")
@@ -2995,7 +3217,7 @@ def main(argv):
     n.add_argument('--route', help='a route other than the recommended one')
     n.add_argument('--title', help='the menu name (default: the game\'s product name)')
     n.add_argument('--player', help="a player package fetched with `pmunity player fetch` (its URL and checksums go into the setup)")
-    n.add_argument('--asmpatch', help="asmpatch's command for the check's survey")
+    n.add_argument('--asmpatch', help="asmpatch's command for the check's survey (as port check's)")
     n.add_argument('--force', action='store_true', help='write into a folder that is not a port made by port new')
     p = sub.add_parser('package', help="build a port folder's release zip")
     p.add_argument('port', help='the folder `port new` wrote')

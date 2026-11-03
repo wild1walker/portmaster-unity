@@ -260,33 +260,90 @@ static class Survey
         return ns.Contains("Example", StringComparison.OrdinalIgnoreCase) || ns.Contains("Demo", StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>What the bindings say for a handheld: the actions only the left stick drives (no
-    /// d-pad binding) cannot be played on one without sticks unless the d-pad drives the left
-    /// stick (ua_host's UA_DPAD_STICK); actions bound to the d-pad and not to the stick lose it then,
-    /// unless the d-pad still reports as the d-pad (both), which only suits a game whose d-pad
-    /// actions are also bound to the stick.</summary>
+    // InControl's controls in a handheld's order (the d-pad, the sticks, the face buttons, shoulders,
+    // triggers, stick clicks, select, start), with the button ua_host names each by (UA_DPAD_SWAP,
+    // UA_INPUT_SCRIPT: Android's key codes, by position as on an Xbox pad) and where it is
+    static readonly (string control, string button, string where)[] Controls =
+    {
+        ("DPadUp", null, null), ("DPadDown", null, null), ("DPadLeft", null, null), ("DPadRight", null, null),
+        ("LeftStickUp", null, null), ("LeftStickDown", null, null), ("LeftStickLeft", null, null), ("LeftStickRight", null, null),
+        ("RightStickUp", null, null), ("RightStickDown", null, null), ("RightStickLeft", null, null), ("RightStickRight", null, null),
+        ("Action1", "a", "the bottom face button"), ("Action2", "b", "the right face button"),
+        ("Action3", "x", "the left face button"), ("Action4", "y", "the top face button"),
+        ("LeftBumper", "l1", "L1"), ("RightBumper", "r1", "R1"), ("LeftTrigger", "l2", "L2"), ("RightTrigger", "r2", "R2"),
+        ("LeftStickButton", "l3", "L3"), ("RightStickButton", "r3", "R3"),
+        ("Back", "select", "Select"), ("Select", "select", "Select"), ("View", "select", "Select"), ("Share", "select", "Select"),
+        ("Minus", "select", "Select"), ("Create", "select", "Select"),
+        ("Start", "start", "Start"), ("Menu", "start", "Start"), ("Options", "start", "Start"), ("Pause", "start", "Start"), ("Plus", "start", "Start"),
+        ("Home", "mode", "Home"), ("System", "mode", "Home"), ("Guide", "mode", "Home"),
+    };
+    // the buttons a handheld without sticks has, in the order a d-pad swap button is picked from
+    // (Select and the triggers first; Start and the stick clicks never)
+    static readonly string[] SwapButtons = { "select", "l2", "r2", "l1", "r1", "y", "x", "b", "a" };
+
+    /// <summary>What the bindings say for a handheld: every binding by control (what port new drafts
+    /// port.toml's [controls] from); the actions only the left stick drives (no d-pad binding) cannot
+    /// be played on one without sticks unless the d-pad drives the left stick (ua_host's
+    /// UA_DPAD_STICK); actions bound to the d-pad and not to the stick lose it then, unless the d-pad
+    /// still reports as the d-pad (both), which only suits a game whose d-pad actions are also bound
+    /// to the stick, or a UA_DPAD_SWAP button gives the d-pad back: the first of SwapButtons the
+    /// game binds nothing to, else the one whose actions are fewest (and also bound elsewhere, where
+    /// that decides). Actions only the right stick drives (aiming, a camera) have no stand-in.</summary>
     static void PrintPadBindings(List<(string action, string control)> b)
     {
         if (b.Count == 0) return;
         static bool Stick(string c) => c.StartsWith("LeftStick") && c != "LeftStickButton";
+        static bool RStick(string c) => c.StartsWith("RightStick") && c != "RightStickButton";
         static bool Dpad(string c) => c.StartsWith("DPad");
+        static int Rank(string c) { var i = Array.FindIndex(Controls, x => x.control == c); return i < 0 ? Controls.Length : i; }
         var actions = b.GroupBy(x => x.action).ToDictionary(g => g.Key, g => g.Select(x => x.control).Distinct().ToList());
         var stick = actions.Where(a => a.Value.Any(Stick)).Select(a => a.Key).ToList();
         var dpad = actions.Where(a => a.Value.Any(Dpad)).Select(a => a.Key).ToList();
+        var rstick = actions.Where(a => a.Value.Any(RStick)).Select(a => a.Key).ToList();
         var stickOnly = stick.Where(a => !actions[a].Any(Dpad)).ToList();
         var dpadOnly = dpad.Where(a => !actions[a].Any(Stick)).ToList();
+        var rstickOnly = rstick.Where(a => actions[a].All(RStick)).ToList();
         static string L(List<string> l) => l.Count == 0 ? "none" : string.Join(", ", l.Take(10)) + (l.Count > 10 ? $", ... ({l.Count})" : "");
         Console.WriteLine($"  pad bindings (InControl's default bindings, {b.Count} in {actions.Count} actions):");
+        Console.WriteLine("    every binding, by control:");
+        foreach (var g in b.GroupBy(x => x.control).OrderBy(g => Rank(g.Key)).ThenBy(g => g.Key, StringComparer.Ordinal))
+            Console.WriteLine($"      {g.Key}: {string.Join(", ", g.Select(x => x.action).Distinct())}");
         Console.WriteLine($"    left stick: {L(stick)}");
         Console.WriteLine($"    d-pad: {L(dpad)}");
+        if (rstick.Count > 0) Console.WriteLine($"    right stick: {L(rstick)}");
+        if (rstickOnly.Count > 0)
+            Console.WriteLine($"    the right stick alone (no other binding): {string.Join(", ", rstickOnly)}\n" +
+                              "  -> a handheld without a right stick cannot do those (no stand-in: look for the game's own options, aim assist,\n" +
+                              "     aiming where it moves, a mouse; UA_POINTER with a game that aims at the mouse)");
         if (stickOnly.Count == 0) return;
         Console.WriteLine($"    the left stick alone (no d-pad binding): {L(stickOnly)}");
-        if (dpadOnly.Count > 0)
-            Console.WriteLine($"  -> UA_DPAD_STICK=auto (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n" +
-                              $"     the left stick; its own bindings {L(dpadOnly)} need a UA_DPAD_SWAP=<button> that gives the d-pad back)");
-        else
+        if (dpadOnly.Count == 0)
+        {
             Console.WriteLine("  -> UA_DPAD_STICK=auto,both (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n" +
                               "     the left stick and still reports as the d-pad; every d-pad binding is also a left stick one)");
+            return;
+        }
+        Console.WriteLine($"  -> UA_DPAD_STICK=auto (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n" +
+                          $"     the left stick; its own bindings {L(dpadOnly)} need a UA_DPAD_SWAP=<button> that gives the d-pad back)");
+        // the swap button: one the game binds nothing to, else the least used
+        var onButton = SwapButtons.ToDictionary(n => n, n => b.Where(x => Controls.Any(c => c.control == x.control && c.button == n))
+                                                                  .Select(x => x.action).Distinct().ToList());
+        string Where(string n) => Controls.First(c => c.button == n).where;
+        var free = SwapButtons.FirstOrDefault(n => onButton[n].Count == 0);
+        if (free != null)
+        {
+            Console.WriteLine($"  -> UA_DPAD_SWAP={free} ({Where(free)}: the game binds nothing to it; the swap button no longer reaches the game)");
+            return;
+        }
+        // every candidate is bound: the one whose actions another button of such a handheld also does
+        // (Start too; not the d-pad, the sticks, their clicks or a touchpad), else the one with the fewest
+        var handheld = SwapButtons.Append("start").ToHashSet();
+        string ButtonOf(string c) => Controls.FirstOrDefault(x => x.control == c).button;
+        bool Elsewhere(string n) => onButton[n].All(a => actions[a].Any(c => ButtonOf(c) is string o && o != n && handheld.Contains(o)));
+        var pick = SwapButtons.OrderBy(n => Elsewhere(n) ? 0 : 1).ThenBy(n => onButton[n].Count).ThenBy(n => Array.IndexOf(SwapButtons, n)).First();
+        Console.WriteLine($"  -> UA_DPAD_SWAP={pick} ({Where(pick)}: the game binds every button a handheld without sticks has; {Where(pick)} only " +
+                          $"{string.Join(", ", onButton[pick])}" + (Elsewhere(pick) ? ", which other buttons also do" : ", the fewest") +
+                          ".\n     The swap button no longer reaches the game: choose another if those matter more)");
     }
 
     static string Platform(MethodDefinition m)
