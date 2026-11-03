@@ -12,4 +12,5 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 PM=$(cd "${PMUNITY:-$HERE/../portmaster-unity}" && pwd)
 OUT=${1:-$HERE/out}; mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 cd "$PM/convert"
-exec "${PYTHON:-python3}" -m pmunity port package "$HERE" --out "$OUT" ${PYBUNDLE:+--pybundle "$PYBUNDLE"}
+exec "${PYTHON:-python3}" -m pmunity port package "$HERE" --out "$OUT" ${PYBUNDLE:+--pybundle "$PYBUNDLE"} \
+  ${PMU_DIR:+--pmu "$PMU_DIR"}

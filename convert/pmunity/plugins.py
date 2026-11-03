@@ -10,8 +10,8 @@ the files in Plugins/ and with known SDKs (FMOD, Steamworks, Discord, GOG Galaxy
 and says for each what the runtime does:
 
   stub    a built-in library (runtime/host) that answers as a PC without that service
-          (Steam not running, Discord not running, ...); for Wwise a silent sound engine made of the
-          game's own entry points (fn lines below)
+          (Steam not running, Discord not running, ...); for Wwise a sound engine made of the
+          game's own entry points (fn lines below), which ua_host's own player gives sound
   lib     an ARM build the porter or player supplies in the port's lib/ folder (FMOD: the exact
           FMOD Engine version is read from the game, see fmod_info)
   host    a library of the handheld's system (e.g. libsqlite3.so.0)
@@ -66,9 +66,10 @@ SDKS = [
     ('eos', r'eossdk-.*', 'Epic Online Services', 'stub', 'eos',
      'built-in stub: EOS_Initialize succeeds, EOS_Platform_Create gives no platform (no network service)'),
     ('wwise', r'aksoundengine', 'Audiokinetic Wwise', 'stub', 'wwise',
-     "built-in stub: a silent sound engine made of the game's own entry points (every call succeeds, the "
-     "bank-loaded and end-of-event callbacks reach the game); an ARM AkSoundEngine of the game's Wwise "
-     "version in lib/ plays the sound instead"),
+     "built-in stub made of the game's own entry points (every call succeeds, the bank-loaded and "
+     "end-of-event callbacks reach the game): ua_host's own Wwise player (wwplay) plays the banks the setup "
+     "converted into the port's wwise/ folder (pmu wwise, UA_WWISE_DATA), else it is silent; an ARM "
+     "AkSoundEngine of the game's Wwise version in lib/ plays the sound instead"),
     ('sqlite', r'(e_)?sqlite3?', 'SQLite', 'host', None,
      "the system's libsqlite3.so.0 (32-bit for the armv7 player), or an ARM build in lib/"),
     ('standalonefilebrowser', r'standalonefilebrowser', 'StandaloneFileBrowser (native file dialogs)', 'none', None,

@@ -13,7 +13,7 @@ ARCH=${ARCH:-armhf}
 case "$ARCH" in
 armhf)
   IMG=unity-android-loader-build; PLAT=
-  docker build -q -t $IMG "$DIR" >/dev/null
+  docker image inspect $IMG >/dev/null 2>&1 || docker build -q -t $IMG "$DIR" >/dev/null
   T=arm-linux-gnueabihf-
   CFLAGS="-O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -fPIC"
   # the synthetic libraries as armeabi-v7a code: Thumb-2, softfp, the global stack guard
