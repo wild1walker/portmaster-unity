@@ -173,6 +173,22 @@ per texture read per 720x480 layer), roughly 5-8 ms per 1080p frame, i.e. 15-25%
 30 fps while a video plays; the upload is a CPU copy of 3.1 MB in the driver. `umbench` on the
 handheld gives the decode number for real.
 
+## Unity 6000: one picture in flight
+
+A 6000.x player that finds no `AImageReader` (ua_host reports API level 19, below the 24 that
+gates it) takes its `SurfaceTexture` path, which keeps one picture in flight. Traced
+(`UM_TRACE=1`, Hollow Knight's prologue on an H700 handheld, 2026-11-02): Unity dequeues an output
+buffer and releases it to the surface in game frame k, the render thread latches it in frame
+k + 1, and the next buffer is dequeued in frame k + 2, the decoder waiting up to four frames ahead.
+A clip therefore shows at most half the game's frame rate. Hollow Knight paces its cinematics at
+the clip's own rate (30 fps) and does not let the VideoPlayer skip frames (time from the DSP
+clock), so a picture late is a picture shown late: the video runs slower than its music.
+Measured in the game (muOS, 1.8 GHz, the 1 GB profile): Debian's plain-C libvpx 7.6 pictures a
+second, the NEON build 16.8 (the cycle's half of ~32 game fps). Giving the game the display's
+rate while a video plays (tried, not kept) showed 13.3: decoding, about 40 ms a 1080p frame in the
+game against 31 ms alone, then shares the CPUs and the memory bus with a 60 fps game. Real time
+for these clips needs a cheaper picture (a smaller encode), not a faster cycle.
+
 ## Not done
 
 - `AImageReader` / `AHardwareBuffer` (2022.3's Vulkan video path), HDR and 10-bit pictures (VP9

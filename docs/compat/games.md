@@ -143,6 +143,22 @@ own lowest settings (Shader Quality 0, particles, dithering and noise off, throu
 540x360 56.4 and 54.4, at 480x320 57.2; **blur off + 24 kHz at 600x400: 56.4 (36 frames over 25 ms)**, the
 same at 540x360 54.2. The CPU each option saves goes to the Mali's clock under the shared power budget,
 so together they gain more than each alone; the render size and the game's own settings add nothing on top.
+2026-11-02, a player's play test of the port's release 2026.11.02 (Knulli, sound on through PipeWire's
+`pw-cat`): King's Pass at 45 - 51 fps a second with 100 - 250 ms frames every few seconds, an 854 ms frame at
+the first hit (the game's pool instantiates "Screen Flash"), the sound glitching on hits, the opening
+cinematics a slide show. Measured on the H700 since (muOS, over SSH, silent; that handheld has no swap,
+and Hollow Knight's opening and King's Pass leave it 38 - 67 MB available, enough to thrash): the
+cinematics are 1920x1080 VP8 with one token partition, and Debian's armhf libvpx, which the media core
+linked, is plain C: 140 ms a frame at 1.5 GHz. Built from the same source with NEON, 31 ms at 1.8 GHz
+alone and about 40 ms in the game; the prologue shows 16.8 pictures a second instead of 7.6, but still
+in slow motion against its music, since Unity 6000's SurfaceTexture path keeps one picture in flight
+and the game runs at the clip's 30 fps without skipping frames
+([runtime/media/README.md](../../runtime/media/README.md#unity-6000-one-picture-in-flight)). The media
+core no longer keeps up to 25 MB of finished 1080p pictures through the game after a cinematic. The
+game's mixer never ran dry in these runs (the OpenSL shim now logs every underrun and can capture its
+output, `ANDROID_SLES_CAPTURE`); the gaps a stand-in for `pw-cat` heard came in bursts of 0.2 - 0.4 s
+where the whole handheld stalled, under memory pressure. The hits themselves are not yet measured with
+the capture (a King's Pass save is on the Knulli).
 portmaster-hollowknight's `[runtime_lowmem]` is now blur off, 600x400, gfx jobs legacy and 24 kHz.
 
 
