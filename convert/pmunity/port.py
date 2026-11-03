@@ -616,7 +616,8 @@ _KNOWN_PLUGINS = [
     (r'_burst_generated', 'Burst: falls back to the managed code (slower, same results)'),
     (r'discord', 'Discord: not on the handheld (calls fail)'),
     (r'galaxy', 'GOG Galaxy: not on the handheld (the game must go on without it)'),
-    (r'AkSoundEngine|wwise', "Wwise: ua_host's built-in stub (silent); an ARM build of the game's Wwise version gives sound"),
+    (r'AkSoundEngine|wwise', "Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank "
+                             "version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound"),
     (r'^(lib)?(?-i:Ak[A-Z])\w+\.(so|dll|bundle)$', "a Wwise plugin (effects): loaded by Wwise's engine, not by the game's code"),
     (r'cri_ware|criware', 'CRIWARE: needs an ARM build'),
     (r'EOSSDK', 'Epic Online Services: not on the handheld'),
@@ -1495,6 +1496,7 @@ DEFAULTS = {
     'convert': {'steps': list(DEFAULT_STEPS), 'settings': {'graphics_apis': [11]}},
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
                      'winbcl': 'auto', 'name': '', 'package': '', 'args': []},
+    'wwise': {'banks': ''},
     'runtime': {},
     'runtime_lowmem': {},
     'questions': [],
@@ -1615,6 +1617,10 @@ def validate(cfg):
     a = cfg['android_data']['asmpatch']
     if not (a in ('auto', 'off') or isinstance(a, list) and all(VALUE_RX.match(x) for x in a) and 'auto' not in a[1:]):
         errs.append(f'android_data.asmpatch {a!r}: auto, off or a list of patch names (["auto", ...]: the default ones and those)')
+    b = (cfg.get('wwise') or {}).get('banks') or ''
+    if b and (not isinstance(b, str) or b.startswith('/') or '..' in b.split('/') or not re.fullmatch(r'[\w .+/-]+', b)):
+        errs.append(f"wwise.banks {b!r}: the soundbanks' folder, relative to the game's data folder "
+                    f"(e.g. StreamingAssets/Audio/GeneratedSoundBanks/Linux)")
     if cfg['player'].get('il2cpp') and (p['route'] != 'apk' or cfg['player'].get('backend') != 'mono'):
         errs.append('player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP '
                     'player where the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds')
@@ -1818,6 +1824,8 @@ def setup_env(cfg, extra=(), sections=None):
              'ANDROID_DATA_ARGS=(' + ' '.join(q(x) for x in ad.get('args', [])) + ')']
     if sections is None or 'convert' in sections:
         lines.append('CONVERT_PLUGINS=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('plugins', [])) + ')')
+        # a Wwise game's soundbanks (relative to the data folder), for ua_host's Wwise player (pmu wwise)
+        lines.append(f"WWISE_BANKS={q((cfg.get('wwise') or {}).get('banks') or '')}")
     if sections is None or 'android_data' in sections:
         lines += ['MANAGED_FILES=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('managed', [])) + ')',
                   'ASSEMBLY_PATCHES=(' + ' '.join(q(ap['name']) + ' ' + q(ap['command']) for ap in fl.get('assembly_patches', [])) + ')']

@@ -33,6 +33,7 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 | `route <path> --env` | route.py | the box64 route's game.env: the first build under the path with a Linux x86-64 executable, its Unity version, backend and GL mode (the report, `--json` and `--launcher` stay with the Python: status 2) |
 | `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
+| `wwise <banks> <out> [--check] [--wwise-lib PATH]` | (none: Rust only, 2026-11-02) | a Wwise game's soundbanks (bank version 128) into the data of ua_host's Wwise player ([wwise-player.md](wwise-player.md)): per bank `<Bank>.uaww.json` and `<Bank>.uaww.pak`, the media read and written one at a time (DATA is never held in memory); status 3 for another bank version |
 | `il2cpp <data> <out> --on-device ...`, `il2cpp fetch <version> [--on-device]` | il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py | the il2cpp-arm64 route's build on the handheld: Unity's IL2CPP and player by range reads, Debian's compilers and Microsoft's .NET (pinned by sha256), UnityLinker, il2cpp, the C++ build (Bee's graph from 2021.2), libil2cpp.so and Data/Managed (below, "`pmu il2cpp`"); the Docker route of a porter's PC (no `--on-device`) stays with the Python: status 2 |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
@@ -72,6 +73,7 @@ curl or wget for Unity's whole installer when range reads fail, and a port's own
 | | the same with a porter's Python converter plugin | no: status 2, the release ships the Python |
 | | `android-data ... --consume-src --verify-bundles 2 --pack all` (with asmpatch, StreamingAssets modes, `--managed-file`) | yes |
 | mono-arm64 | the android route's commands, with `player fetch --managed` and `android-data --mono64` | yes (the template ran the Python before 2026-11-02; it now takes pmu when the release has it) |
+| android, mono-arm64, il2cpp-arm64 (a Wwise game, `wwise.banks`) | `wwise <data>/<banks> <port>/wwise --wwise-lib <data>/Plugins` (crates/wwise): the soundbanks for ua_host's Wwise player, the Vorbis codebooks read from the game's Wwise library | yes (Rust only; without pmu in the release the step is skipped: the game stays silent) |
 | il2cpp-arm64 | `macpkg`, `unpack`, `version`, `convert` | yes (as the android route) |
 | | `il2cpp <data> <out> --on-device --abi arm64-v8a ...` (il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py): Unity's IL2CPP and player by range reads, Debian's compilers and .NET from Microsoft (pinned by checksum), then UnityLinker, il2cpp and the C++ build | yes (crates/il2cpp, 2026-11-02; the template ran the Python before) |
 | | `android-data --il2cpp <dir> ... --consume-src --verify-bundles 2 --pack all` | yes |
@@ -110,9 +112,16 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `convert` | `pmu convert` (on unityfs, shaderx, texcodec): __main__.py's convert path, job.py (the in-place run and its journal), the steps shaders (step.py's files and summary; on the Shader objects: Direct3D 11, Vulkan and Metal sources, compute shaders, grab_fetch, fused_post), settings, audio, quality (with monotree.rs), textures (textures.py's Unity-file layer), Cuphead's plugin step animclips and JSON plugins' field edits (edits.py) |
 | `androiddata` | `android-data` and `patch-obb pack` (android_data.py and what it uses on a setup's path: clrmeta.py, plugins.py, retarget.py, typetrees.py, streaming.py, unity_version.py), on `unityfs` and `pkgzip` |
 | `apk` | `apk` (apk.py): manifests (binary AXML, an App Bundle's protobuf XML), the ABI choice, OBBs, PlayerSettings on `unityfs`, zips read with `pkgzip` and written as zipfile writes them (deflate: zlib's own, `libz-sys`'s bundled copy) |
+| `wwise` | `pmu wwise` (no Python twin): soundbanks of version 128 (BKHD, DIDX, DATA located, HIRC read object by object, each to its exact size, STMG), Wwise Vorbis rebuilt as Ogg Vorbis with ww2ogg-rs (`vendor/ww2ogg`, BSD-3-Clause, without its built-in codebooks) and the codebooks found in the game's own Wwise library (`codebooks.rs`), its pages packed to 4 KB (`ogg.rs`), IMA ADPCM and PCM copied, the json of docs/wwise-player.md; `--check` decodes every Vorbis packet with lewton and resolves every event |
 | `il2cpp` | `il2cpp --on-device` and `il2cpp fetch` (il2cpp.py's toolchain and build, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py, il2cpp_device_lock.py), on `pkgzip` (range reads, NSIS), `androiddata` (.NET metadata, versions, JSON) and `unityfs` (MonoManager's assembly list) |
 
 Later (on top of `unityfs`): `android-data`, `patch-obb pack`.
+
+`crates/wwise`'s tests (`cargo test -p wwise`) run `pmu wwise`'s code on made-up banks written in
+the test (`tests/madeup.rs`: every object type, ADPCM, PCM and streamed media, an object that does
+not read, another bank version); on a game's banks, `pmu wwise <banks> <out> --check` decodes every
+Vorbis stream (lewton) and resolves every event (docs/wwise-player.md has Enter the Gungeon's
+numbers).
 
 ### `pmu convert`
 
