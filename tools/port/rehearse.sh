@@ -7,8 +7,11 @@
 # curl, PortMaster's 7-Zip, 1 GB of RAM, the network on) and a stand-in for PortMaster
 # (control.txt, utils/patcher.txt). The launcher runs the setup through the "patcher"; afterwards
 # ports/<name>/ is what the handheld would have. With [emu seconds] the installed game then runs
-# in the emulated armv7 rig (tools/emu: QEMU + Mesa llvmpipe) with the port's port.env, and four
-# screenshots go to <work>/shots.png.
+# in the emulated armv7 rig (tools/emu: QEMU + Mesa llvmpipe) with the port's port.env (and, as the
+# launcher does, UA_WWISE_DATA when the setup converted Wwise banks), four screenshots go to
+# <work>/shots.png and the sound to <work>/sound.wav (never played aloud: what the game's OpenSL ES
+# output played, the Wwise player's mix included, with its levels printed at the end). The results of
+# an earlier emulated run in <work> move to <work>/earlier/<n>/ first.
 #
 #   PM_7ZZ          PortMaster's 7zzs.aarch64 (from PortMaster's release zip; required)
 #   ANSWERS         answers to the port's questions, e.g. "TEXTURE_QUALITY=fast" (default: none,
@@ -20,6 +23,10 @@
 #                   into $HOME/python_3.11 in the container instead (mount and umount do nothing there)
 #   EMU_ENV         more variable prefixes for the emulated run (tools/emu/emu.sh), e.g. "UM_"
 #   EMU_ONLY=1      skip the setup: run what an earlier rehearsal in <work> installed
+#   REHEARSE_SOUND=0  no sound.wav (default 1: ANDROID_SLES_CAPTURE in the rig; about 11 MB a minute).
+#                   Other variables reach the rig as tools/emu/emu.sh says (UA_*, ANDROID_*, ..., EMU_ENV),
+#                   e.g. UA_WWISE_CAPTURE=/emu/wwise.wav (the Wwise player's mix alone, for the whole run
+#                   unless UA_WWISE_CAPTURE_SECS) lands in <work>/emuroot/
 #   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
 #                   is removed in the container first, so a launcher takes its 64-bit path
 #   REHEARSE_NAME   the setup container's name (to docker kill it)
@@ -57,7 +64,7 @@ read -r name launcher < <("$PY" -I -c "import json,sys; d=json.load(open(sys.arg
 P="$R/ports/$name"
 echo "port $name, launcher $launcher"
 case "$GAME" in
-  *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.pkg|*.exe) cp "$GAME" "$P/gamedata/";;
+  *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.pkg|*.exe|*.sh) cp "$GAME" "$P/gamedata/";;   # (.sh: GOG's Linux installer)
   *) cp -cR "$GAME" "$P/gamedata/" 2>/dev/null || cp -R "$GAME" "$P/gamedata/";;   # (-c: an APFS clone on a Mac, at once)
 esac
 
@@ -119,13 +126,24 @@ fi
 # build when it has both (the apk route)
 abi=$(sed -n 's/^ *"abi": *"\([^"]*\)".*/\1/p' "$P/android_package.json" 2>/dev/null | head -1)
 [ "$abi" = arm64-v8a ] && export EMU_ARCH=${EMU_ARCH:-arm64}
+# an earlier emulated run's results (EMU_ONLY reruns, a second rehearsal) are kept: <work>/earlier/<n>/
+E="$WORK/emuroot"
+if [ -f "$E/run.log" ]; then
+  n=1; while [ -e "$WORK/earlier/$n" ]; do n=$((n + 1)); done; mkdir -p "$WORK/earlier/$n"
+  for f in "$E"/run.log "$E"/shot-*.ppm "$E"/*.wav "$WORK/shots.png" "$WORK/sound.wav"; do if [ -f "$f" ]; then mv "$f" "$WORK/earlier/$n/"; fi; done
+  echo "the earlier run's log, shots and sound: $WORK/earlier/$n"
+fi
 H="$WORK/hostbin"; rm -rf "$H"; mkdir -p "$H"
 if [ "${EMU_ARCH:-${ARCH:-armhf}}" = arm64 ] && [ -f "$P/ua_host64" ]; then cp "$P/ua_host64" "$H/ua_host"; else cp "$P/ua_host" "$H/ua_host"; fi
 echo "== the installed game in the emulated rig (${EMU_ARCH:-${ARCH:-armhf}}${abi:+, $abi}), $SECS s ($(date +%T))"
-E="$WORK/emuroot"; rm -rf "$E"; mkdir -p "$E"; cp "$H/ua_host" "$E/"
+rm -rf "$E"; mkdir -p "$E"; cp "$H/ua_host" "$E/"
 (
   set +u
   . "$P/port.env"; [ -f "$P/answers.env" ] && . "$P/answers.env"
+  # as the launcher: ua_host's own Wwise player on the banks the setup converted (the port folder is /zip in the rig)
+  [ -d "$P/wwise" ] && export UA_WWISE_DATA="${UA_WWISE_DATA-/zip/wwise}"
+  [ -n "${UA_WWISE_CAPTURE:-}" ] && export UA_WWISE_CAPTURE_SECS="${UA_WWISE_CAPTURE_SECS:-$SECS}"
+  [ "${REHEARSE_SOUND:-1}" = 1 ] && export ANDROID_SLES_CAPTURE=/emu/sound.pcm
   cd "$PU" && UA_INPUT_SCRIPT="$INP" EMU_ROOT="$E" EMU_ZIP="$P" EMU_HOSTBIN="$H" tools/emu/emu.sh run.log "$SECS" release
 ) >/dev/null 2>&1 &
 prev=0
@@ -145,5 +163,41 @@ if ims:
         s.paste(im, ((i % 2) * w, (i // 2) * h))
     s.save(sys.argv[2])
 print(len(ims), 'shots', [im.getextrema()[0] for im in ims], '->', sys.argv[2])
+PY
+# the sound: the OpenSL ES output's raw PCM (its format in run.log) as WAV files, and how loud they are
+[ "${REHEARSE_SOUND:-1}" = 1 ] && "$PY" -I - "$E" "$WORK" <<'PY'
+import array, glob, math, operator, os, re, sys, wave
+e, work = sys.argv[1], sys.argv[2]
+log = open(os.path.join(e, 'run.log'), errors='replace').read()
+fmts = {m.group(1): (int(m.group(2)), int(m.group(3)), int(m.group(4), 16))
+        for m in re.finditer(r'output to /emu/(\S+) \((\d+) Hz, (\d+) ch, fmt 0x([0-9a-f]+)\)', log)}
+pcms = sorted(glob.glob(os.path.join(e, 'sound.pcm*')))
+if not pcms:
+    print('sound: none (the game opened no OpenSL ES output)')
+for p in pcms:
+    name = os.path.basename(p)
+    rate, ch, fmt = fmts.get(name, (48000, 2, 0x8010))
+    if fmt != 0x8010:                       # (SDL's AUDIO_S16LSB; others kept raw)
+        print(f'sound: {p}: format 0x{fmt:x}, {rate} Hz, {ch} ch, left raw'); continue
+    out = os.path.join(work, name.replace('sound.pcm', 'sound') + '.wav')
+    peak, sq, n, loud, secs = 0, 0.0, 0, 0, 0
+    with open(p, 'rb') as f, wave.open(out, 'wb') as w:
+        w.setnchannels(ch); w.setsampwidth(2); w.setframerate(rate)
+        while True:
+            b = f.read(rate * ch * 2)           # a second at a time
+            if len(b) < 2:
+                break
+            b = b[:len(b) // 2 * 2]
+            w.writeframes(b)
+            v = array.array('h', b)
+            if sys.byteorder == 'big':
+                v.byteswap()
+            m = max(map(abs, v))
+            peak = max(peak, m); sq += sum(map(operator.mul, v, v)); n += len(v); secs += 1
+            loud += m > 328                     # (above -40 dBFS)
+    os.remove(p)
+    db = lambda x: f'{20 * math.log10(x / 32768):.1f} dBFS' if x > 0 else 'silent'
+    print(f'sound: {out}: {n / ch / rate:.0f} s, peak {db(peak)}, RMS {db(math.sqrt(sq / n) if n else 0)}, '
+          f'sound in {loud} of {secs} seconds')
 PY
 grep -E 'UnityMain thread exits|\[crash\]|FORTIFY|abort message|^exit' "$E/run.log" | head -5 || true
