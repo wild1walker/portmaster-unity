@@ -4,7 +4,9 @@
 //   lib  <file>  an ARM build in lib/: an Android (bionic) library is loaded by the loader as
 //                usual; a Linux (glibc) one is mapped to the host library (so_map_library)
 //   host <lib>   a library of the handheld's system (e.g. libsqlite3.so.0)
-//   stub <id>    a built-in library answering as a PC without that service (plugstubs.c, steamstub.c)
+//   stub <id>    a built-in library answering as a PC without that service (plugstubs.c, steamstub.c),
+//                or Wwise's sound engine built from the game's own entry points (wwise.c: the map's
+//                fn and const lines)
 //   none         dlopen fails: DllNotFoundException, as on a PC without the library
 // from plugins.map (pmunity android-data writes it beside the APK). Glibc libraries found in lib/
 // are mapped even without a map line.
@@ -19,6 +21,7 @@
 // file system cannot open; the wrappers below give FMOD the file on disk (android-data puts the
 // banks beside the APK, in assets/).
 #include "plugins.h"
+#include "wwise.h"
 #ifndef UA_NO_STEAMSTUB
 #include "steamstub.h"
 #endif
@@ -150,6 +153,11 @@ typedef struct { char name[128], use[8], arg[256]; } map_ent;
 typedef struct { char module[128], entry[128], ret[8], args[160]; } sig_ent;
 static map_ent *g_map; static int g_nmap;
 static sig_ent *g_sig; static int g_nsig;
+// fn <module> <entry> <result> <args> / const <module> <name> <value>: a stub built from the game's
+// own entry points (wwise)
+static sig_ent *g_fn; static int g_nfn;
+typedef struct { char module[128], name[128]; long long value; } const_ent;
+static const_ent *g_const; static int g_nconst;
 
 // host-mapped libraries: DllImport base name (normalized) -> what dlopen gets
 typedef struct { char base[128], target[PATH_MAX]; } host_ent;
@@ -170,17 +178,25 @@ static void read_map(const char *path)
             snprintf(m->name, sizeof m->name, "%s", b);
             snprintf(m->use, sizeof m->use, "%s", c);
             snprintf(m->arg, sizeof m->arg, "%s", n >= 4 ? d : "");
-        } else if (n >= 5 && !strcmp(a, "sig")) {
-            g_sig = realloc(g_sig, (g_nsig + 1) * sizeof *g_sig);
-            sig_ent *s = &g_sig[g_nsig++];
+        } else if (n >= 5 && (!strcmp(a, "sig") || !strcmp(a, "fn"))) {
+            sig_ent **t = !strcmp(a, "sig") ? &g_sig : &g_fn;
+            int *cnt = !strcmp(a, "sig") ? &g_nsig : &g_nfn;
+            *t = realloc(*t, (*cnt + 1) * sizeof **t);
+            sig_ent *s = &(*t)[(*cnt)++];
             snprintf(s->module, sizeof s->module, "%s", b);
             snprintf(s->entry, sizeof s->entry, "%s", c);
             snprintf(s->ret, sizeof s->ret, "%s", d);
             snprintf(s->args, sizeof s->args, "%s", e);
+        } else if (n >= 4 && !strcmp(a, "const")) {
+            g_const = realloc(g_const, (g_nconst + 1) * sizeof *g_const);
+            const_ent *k = &g_const[g_nconst++];
+            snprintf(k->module, sizeof k->module, "%s", b);
+            snprintf(k->name, sizeof k->name, "%s", c);
+            k->value = strtoll(d, NULL, 0);
         }
     }
     fclose(f);
-    LOG("%s: %d libraries, %d float signatures\n", path, g_nmap, g_nsig);
+    LOG("%s: %d libraries, %d float signatures%s\n", path, g_nmap, g_nsig, g_nfn ? ", a stub's entry points" : "");
 }
 
 static void map_variants(const char *name, const char *target)
@@ -264,6 +280,23 @@ static int in_libdir(const char *name)
     return 0;
 }
 
+// Wwise (wwise.c): the stub's entry points are the game's, from the fn and const lines of that name
+static const so_shim *wwise_table(const char *module)
+{
+    ua_ak_fn *f = calloc(g_nfn + 1, sizeof *f);
+    ua_ak_const *k = calloc(g_nconst + 1, sizeof *k);
+    int nf = 0, nk = 0;
+    for (int i = 0; i < g_nfn; i++)
+        if (!strcmp(g_fn[i].module, module)) f[nf++] = (ua_ak_fn){ g_fn[i].entry, g_fn[i].ret, g_fn[i].args };
+    for (int i = 0; i < g_nconst; i++)
+        if (!strcmp(g_const[i].module, module)) k[nk++] = (ua_ak_const){ g_const[i].name, g_const[i].value };
+    const so_shim *t = nf ? wwise_stub_table(module, f, nf, k, nk) : NULL;
+    if (!nf) LOG("%s: no entry points for the wwise stub in the map (fn lines: android-data of this version writes them)\n", module);
+    free(f);
+    free(k);
+    return t;
+}
+
 static void apply_map(void)
 {
     for (int i = 0; i < g_nmap; i++) {
@@ -271,9 +304,9 @@ static void apply_map(void)
         char base[128];
         norm_name(m->name, base, sizeof base);
         if (!strcmp(m->use, "stub")) {
-            const so_shim *t = plugins_stub_table(m->arg);
-            if (!t) { LOG("%s: no built-in stub \"%s\"\n", m->name, m->arg); continue; }
             if (in_libdir(m->name)) { LOG("%s: an ARM build is in lib/: used instead of the %s stub\n", m->name, m->arg); continue; }
+            const so_shim *t = !strcmp(m->arg, "wwise") ? wwise_table(m->name) : plugins_stub_table(m->arg);
+            if (!t) { LOG("%s: no built-in stub \"%s\"\n", m->name, m->arg); continue; }
             char v[6][256];
             int n = plugins_name_variants(m->name, v, 6);
             for (int k = 0; k < n; k++) so_register_fake_lib(v[k], t);

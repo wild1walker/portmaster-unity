@@ -616,7 +616,8 @@ _KNOWN_PLUGINS = [
     (r'_burst_generated', 'Burst: falls back to the managed code (slower, same results)'),
     (r'discord', 'Discord: not on the handheld (calls fail)'),
     (r'galaxy', 'GOG Galaxy: not on the handheld (the game must go on without it)'),
-    (r'AkSoundEngine|wwise', 'Wwise: needs an ARM build of Wwise'),
+    (r'AkSoundEngine|wwise', "Wwise: ua_host's built-in stub (silent); an ARM build of the game's Wwise version gives sound"),
+    (r'^(lib)?(?-i:Ak[A-Z])\w+\.(so|dll|bundle)$', "a Wwise plugin (effects): loaded by Wwise's engine, not by the game's code"),
     (r'cri_ware|criware', 'CRIWARE: needs an ARM build'),
     (r'EOSSDK', 'Epic Online Services: not on the handheld'),
 ]

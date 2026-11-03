@@ -7,13 +7,13 @@ none of them loads on ARM. What a port can give each library the game's managed 
 
 | use | what the runtime does | for |
 |---|---|---|
-| `lib <file>` | an ARM build in the port's `lib/` (beside `libunity.so`): an Android (bionic) library is loaded by the loader like Unity's own; a Linux (glibc) one becomes a host library (`so_map_library`) | FMOD, Wwise, open-source plugins built for ARM |
+| `lib <file>` | an ARM build in the port's `lib/` (beside `libunity.so`): an Android (bionic) library is loaded by the loader like Unity's own; a Linux (glibc) one becomes a host library (`so_map_library`) | FMOD, Wwise (for sound), open-source plugins built for ARM |
 | `host <lib>` | a library of the handheld's system, e.g. `libsqlite3.so.0` | SQLite (Mono.Data.Sqlite), others on request |
-| `stub <id>` | a built-in library that answers as a PC on which that service's client is not running or not installed | Steamworks, CSteamworks, Discord Game SDK, Discord RPC, Epic Online Services |
+| `stub <id>` | a built-in library that answers as a PC on which that service's client is not running or not installed; for Wwise a silent sound engine made of the game's own entry points ([below](#wwise)) | Steamworks, CSteamworks, Discord Game SDK, Discord RPC, Epic Online Services, Wwise |
 | `none` | `dlopen` fails: `DllNotFoundException` at the first call, as on a PC without that library | everything else |
 
 Nothing here grants entitlements, fakes a sign-in or bypasses DRM: a stub's only answers are the
-failures a PC without the service gives.
+failures a PC without the service gives (Wwise's: a sound engine that plays nothing).
 
 ## The survey and the plugin map
 
@@ -34,7 +34,13 @@ map fmodstudio lib libfmodstudio.so
 map steam_api stub steam
 map GalaxyCSharpGlue none
 sig fmodstudio FMOD_Studio_VCA_SetVolume i i,f
+map AkSoundEngine stub wwise
+fn AkSoundEngine CSharp_LoadBank__SWIG_4 i z,p,p,i,r
+const AkSoundEngine AkCallbackType.AK_Bank 1073741824
 ```
+
+(`fn` and `const` lines: the entry points and constants of a stub made of the game's own entry
+points, [Wwise](#wwise).)
 
 A port changes any entry with `--plugin-map <json>` (port configs carry it as `"plugins"`):
 
@@ -140,7 +146,7 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | Epic Online Services | `EOSSDK-*` | stub `eos` | `EOS_Initialize` succeeds, `EOS_Platform_Create` gives no platform (NULL) |
 | GOG Galaxy | `GalaxyCSharpGlue`, `Galaxy64` | none | the SWIG glue's first call throws `DllNotFoundException` (GOG builds catch Galaxy failures; Cuphead's does) |
 | Discord Social SDK | `discord_partner_sdk` | none | no stub yet |
-| Wwise | `AkSoundEngine` | lib | supply Wwise's Android `libAkSoundEngine.so` of the same version; without it the integration logs an error and the game is silent |
+| Wwise | `AkSoundEngine` | stub `wwise` | a silent sound engine made of the game's own entry points: every call succeeds, banks load, events end at once, the bank-loaded and end-of-event callbacks reach the game ([Wwise](#wwise)); an ARM `libAkSoundEngine.so` of the game's version in `lib/` plays the sound instead |
 | SQLite | `sqlite3` | host `libsqlite3.so.0` | the system's library (32-bit for the armv7 player); missing: `DllNotFoundException` as before |
 | StandaloneFileBrowser | `StandaloneFileBrowser` | none | no file dialogs on a handheld |
 | Burst | (no DllImport: `lib_burst_generated`) | - | absent on ARM: Burst runs the managed versions of its jobs |
@@ -152,9 +158,99 @@ reads every one: `PMUNITY_GAMES=... python -m unittest tests.test_plugins`) and 
 of 68 free Linux Mono builds from itch.io's listings (their zip directories, read with range
 requests): Burst in 17 of them, Steamworks 11, Discord Game SDK 3, FMOD Studio with Resonance
 Audio 3, SQLite 1, StandaloneFileBrowser 1, CSteamworks 1, Unity's ScreenSelector 26. None ships GOG
-Galaxy, EOS or Wwise for Linux; Cuphead's macOS build P/Invokes GOG Galaxy and CSteamworks. Of 76
+Galaxy, EOS or Wwise for Linux; Cuphead's macOS build P/Invokes GOG Galaxy and CSteamworks. A
+GOG Linux build of a 2017.4 game ships Wwise 2017.2 (x86 and x86-64): with the built-in stub it
+loads past its loading screen in the emulated rig, silent. Of 76
 free Android builds, one ships FMOD's Android libraries (its `libfmod.so` needs only `liblog`,
 `libm`, `libdl`, `libc`, all provided) and one Wwise's.
+
+## Wwise
+
+Audiokinetic's Wwise reaches a Unity game through its C# integration, a SWIG wrapper whose class
+`AkSoundEnginePINVOKE` P/Invokes `AkSoundEngine` (about 1,000 entry points, `CSharp_*`, a different
+set in every Wwise version). A desktop build ships the engine as an x86 library
+(`Plugins/x86_64/libAkSoundEngine.so`, `AkSoundEngine.dll`, `AkSoundEngine.bundle`), so on the
+handheld every call would throw `DllNotFoundException` (the type initializers of the integration's
+classes with it: `TypeInitializationException`). That is not a silent game: the integration's
+`LateUpdate` throws and logs a stack trace every frame (some 130 MB of log an hour at 60 fps), the
+code that loads the first bank dies at its first call, and a game that waits for Wwise's callbacks
+(a bank loaded, an event's end) waits forever: a 2017.4 game stayed on its loading screen, waiting
+for a flag that only its bank-loaded callback sets.
+
+**What the port does: ua_host's built-in Wwise** (`stub wwise`, the default; runtime/host/wwise.c).
+android-data writes, beside the `map` line, one `fn` line per entry point of the game's integration
+(the result and argument classes read from its P/Invoke declarations: `b` bool, `i`/`u` signed and
+unsigned 32-bit, `l` 64-bit, `f`, `d`, `p` a pointer or SWIG object, `r` a ref/out pointer, `z` a
+string) and `const` lines with the game's `AKRESULT` and `AkCallbackType` values. ua_host makes each
+entry point a small trampoline that reads its arguments by that signature, as the armeabi-v7a
+player's Mono passes them (floats in core registers) or by AAPCS64, and answers:
+
+| calls | answer |
+|---|---|
+| `Init`, `Term`, `IsInitialized`; base paths, language | success; `IsInitialized` true between `Init` and `Term` |
+| `LoadBank` (by name, ID or memory), `UnloadBank`, `PrepareBank` | success and the bank's ID (the ID of its name without the extension, as in the bank's header); with a cookie (the asynchronous variants) the bank callback, delivered at the game's next poll |
+| `PostEvent` | a new playing ID; with a cookie and `AK_EndOfEvent` the end-of-event callback (the event ends at once: nothing plays); `CancelEventCallback*` drop callbacks not yet read |
+| `SetRTPCValue*`, `ResetRTPCValue`, `SetState`, `SetSwitch`, `GetRTPCValue`, `GetState`, `GetSwitch` | success; the values are kept, so a `Get` gives back what was set |
+| `GetIDFromString` | Wwise's ID of the name (32-bit FNV-1 of the lower-case name), as the game's own `AK.EVENTS` constants have it |
+| the callback queue (`AkCallbackSerializer_Lock`/`Unlock`, `AkSerializedCallbackHeader_*`, `Ak*CallbackInfo_*_get`) | the records the integration's `AkCallbackManager.PostCallbacks` reads every frame |
+| SWIG's objects: `new_<Class>`, `delete_<Class>`, `<Class>_<field>_get`/`_set`, `<Class>_SWIGUpcast` | objects of the stub's own whose fields keep what is set (strings are not given back: a getter gives NULL, which Mono reads as null) |
+| everything else | by its result: an `AKRESULT` (SWIG passes enums as a signed int) `AK_Success`, a bool false, an unsigned int, a pointer or a string 0 |
+
+So the game runs as with a sound engine that plays nothing: no exception, no log line per frame, the
+loading code goes on. ua_host logs one line for the table (`[wwise] AkSoundEngine: 1004 entry points
+...`), `Init` and the first bank loads; `UA_WWISE_TRACE=1` logs every call with its arguments.
+Callbacks reach integrations that read their queue through SWIG's accessors (Wwise 2017.1 and later:
+`AkSerializedCallbackHeader_pNext_get`); an older one, which reads the records itself, gets none (the
+table's log line says so). A real ARM `libAkSoundEngine.so` in `lib/` is used instead of the stub.
+
+**Finding the version.** `pmunity plugins` and `port check` read it from the desktop library's code
+(the constants `CSharp_GetMajorMinorVersion` / `CSharp_GetSubminorBuildVersion` return, in an x86 or
+x86-64 ELF build; else a version string in the library) and the soundbanks' format (each `.bnk`'s
+BKHD header under `StreamingAssets/`, and `SoundbanksInfo.xml`'s `SoundbankVersion`: 120 = 2016.2,
+125 = 2017.1, 128 = 2017.2, 132 = 2018.1, 134 = 2019.1, 135 = 2019.2, 140 = 2021.1), e.g. `Wwise
+2017.2.5 build 6619 (Plugins/x86/libAkSoundEngine.so (its code); 2 soundbanks in
+StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2))`. Wwise's effect plugins
+beside it (`libAkFlanger.so`, ...) are loaded by the engine itself, never by the game's code.
+
+**Sound, two ways.** Wwise's own engine for ARM: the `libAkSoundEngine.so` (and the effect plugins
+the game's project uses) of Wwise's Android SDK of exactly the game's version (`armeabi-v7a`; an
+Audiokinetic account), in the port's `lib/` (`{"AkSoundEngine": {"use": "lib", "file":
+"libAkSoundEngine.so"}}` in the port's plugin map). Or a **sound backend** for the stub: a glibc
+library for the handheld that plays the game's banks, given with `UA_WWISE_BACKEND=<path>`; the stub
+keeps doing the plumbing (the entry points, the integration's objects, the callback queue, the stored
+game syncs) and calls the backend for what makes sound.
+
+### The backend interface (runtime/host/wwise.h)
+
+A backend exports `const ua_wwise_backend *ua_wwise_backend_get(const ua_wwise_host *host)`, which
+the stub calls at its first call (NULL, or another `version`, keeps the stub silent). Every function
+pointer may be NULL.
+
+| `ua_wwise_backend` | called |
+|---|---|
+| `call(c, &ret)` | first, for every call: `c->api` (`PostEvent`), `c->entry` (`CSharp_PostEvent__SWIG_6`), the classes and the arguments; return 1 to answer it yourself |
+| `init(base_path, language)`, `term()`, `render()`, `suspend(on)` | `Init` (an `AKRESULT`), `Term`, `RenderAudio` (once a frame), `Suspend` / `WakeupFromSuspend` |
+| `load_bank(name, id, data, size, &bank_id)`, `unload_bank(id)` | a bank by file name (`host->file()` finds it on disk), by ID, or from the game's memory; the result goes to the game, or to its bank callback |
+| `post_event(event, game_object, playing_id, flags)` | an event: return 1 while it plays and call `host->event_done(playing_id)` when it ends (the stub then delivers the end-of-event callback the game asked for), 0 if it ended already |
+| `stop(playing_id)`, `stop_all(game_object, every)` | `StopPlayingID`, `StopAll` |
+| `set_rtpc(id, value, game_object, playing_id, every)`, `set_state(group, state)`, `set_switch(group, value, game_object)`, `post_trigger(id, game_object)` | the game syncs (names are already IDs) |
+| `game_object(id, name, registered)`, `set_position(id, position, front, top)` | game objects and their positions (from the game's `AkTransform`) |
+
+`ua_wwise_host` gives the backend `event_done(playing_id)`, `event_callback(playing_id, type, fields)`
+(a marker, a duration, a music beat: any callback the game asked for, by the game's `AkCallbackType`
+value, its info fields by name), `file(name)` (a bank or stream on disk: the base paths the game set,
+StreamingAssets beside the APK), `id(name)`, `constant(name, default)` (the game's enum values) and
+`log(...)`. Calls come on the game's threads; a backend that plays on its own thread calls the host's
+functions from there (they lock). The game's banks are in the OBB unless the port keeps them loose
+(`android_data.streaming_assets = "both"` puts StreamingAssets beside the APK).
+
+Tests: `runtime/host/test/plugins_test.sh` (`test_plugins wwise`, armhf and arm64): Wwise 2017.2's
+signatures as android-data writes them, called as Mono calls them (softfp on 32-bit ARM): the
+results, a bank loaded by name and with a callback, events, the callback queue as `PostCallbacks`
+reads it, a cancelled callback, game syncs given back, fields of SWIG objects, a 9-float call; with a
+test backend (`wwise_backend.c`): what it gets and an event it ends later. The map's lines:
+`convert/tests/test_plugins.py`, setup-rs's `plugins::tests::wwise_fn_lines` (and `map_of_a_game`
+with `PMU_PLUGINS_DATA`: pmu's plugins.map of a game, to compare with the Python's).
 
 ## HTTPS
 

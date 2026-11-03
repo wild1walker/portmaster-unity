@@ -1891,7 +1891,7 @@ def main(argv=None):
                        'scripting_runtime': args.runtime, 'warnings': args.warnings}
     report['skipped'] = args.skipped
     report['dropped_modules'] = args.dropped_modules
-    report['plugins'] = {k: v for k, v in args.plugins.items() if k not in ('sigs', 'map')}
+    report['plugins'] = {k: v for k, v in args.plugins.items() if k not in ('sigs', 'map', 'fns', 'consts')}
     report['plugins']['map'] = args.plugin_entries
     report['plugins']['float_signatures'] = len(args.plugins['sigs'])
     write_plugin_map(args, args.out, log)

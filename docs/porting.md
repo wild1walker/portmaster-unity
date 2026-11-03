@@ -100,8 +100,9 @@ is refused for the Android route all the same: HDRP does not run on OpenGL ES.
 
 Native plugins: `python -m pmunity plugins <Data>` lists the libraries the game's code P/Invokes
 and what the port gives each: built-in stubs answering as a PC without the service (Steam,
-Discord, EOS), or ARM libraries of the game's exact version that the porter supplies (FMOD, Wwise;
-[plugins.md](plugins.md)). android-data repeats it as warnings and writes `plugins.map` for the
+Discord, EOS), a silent sound engine made of the game's own entry points (Wwise: the check also
+reads its version from the desktop library and the soundbanks), or ARM libraries of the game's exact
+version that the porter supplies (FMOD, Wwise for sound; [plugins.md](plugins.md)). android-data repeats it as warnings and writes `plugins.map` for the
 runtime; a port config's `plugins` table changes the map.
 
 A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`:
