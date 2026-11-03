@@ -20,7 +20,8 @@
 // gap) is logged with how long it lasted, at the host's time since the first frame like its
 // [hitch] lines (the first 50, then every 100th). On the pipe output so is an empty pipe (our
 // writer was late, the game's mixer was not: the sound server likely played a gap); the writer
-// runs at the priority SDL gives its own audio thread. ANDROID_SLES_CAPTURE=<file> also writes
+// runs at the priority SDL gives its own audio thread and takes the buffers on the clock, as a
+// sound card does (not as fast as the pipe has room: see pipe_writer). ANDROID_SLES_CAPTURE=<file> also writes
 // what each player outputs (raw PCM in the player's format, gaps as silence) to <file>, a later
 // player to <file>.<n>: a silent device test can check the sound itself.
 #define _GNU_SOURCE
@@ -371,30 +372,44 @@ static void *pipe_writer(void *ud)
         SHIM_TRACE("OpenSL: pipe writer: nice %d refused (%s)", nice_v, strerror(errno));
     int len = 256 * o->p.frame_bytes;          // ~5 ms per write at 48 kHz
     Uint8 *buf = malloc(len);
-    int filled = 0;                            // the pipe has been full once (the start is not a gap)
-    double back = mono_now();
+    // Paced as a sound card takes it: a write's worth from the queue per its time on the clock (at
+    // most twice as fast while the pipe is below 3/4 full, to refill it). Taken as fast as the pipe
+    // has room, a writer back from a stall, or a client that reads in bursts, takes the game's whole
+    // queue in a moment: Unity's FMOD fills a buffer from what its mixer thread (awake every 10 ms)
+    // has mixed, and a buffer asked for before that goes out again with its old contents - a block
+    // played twice.
+    double dt = 256.0 / o->p.spec.freq, due = 0;
+    int filled = 0;                            // the pipe has been filled once (the start is not a gap)
     while (buf && o->p.pipe_run) {
-        player_fill(o, buf, len);
-        // the pipe empty: the client has taken all we gave it and waits on us, so the sound server
-        // has likely played a gap. Logged with how long the writer was away since its last write
-        // returned (long: it was kept from running; short: the client drained it at once)
-        int queued;
-        if (ioctl(o->p.pipe_fd, FIONREAD, &queued) == 0) {
-            double t = mono_now();
-            if (queued == 0 && filled && (++o->p.pipe_dry <= 50 || o->p.pipe_dry % 100 == 0)) {
-                double t0 = frames_t_start ? frames_t_start() : 0;
-                SHIM_WARN("OpenSL: pipe ran dry %u at %.1f s (the writer away %.1f ms)", o->p.pipe_dry,
-                          t0 > 0 ? t - t0 : 0.0, (t - back) * 1000);
-            }
-            if (queued >= len) filled = 1;
+        int queued = -1;
+        ioctl(o->p.pipe_fd, FIONREAD, &queued);
+        double now = mono_now();
+        if (due == 0) due = now;
+        // the pipe empty and we more than the one write we may owe past our time: the client has
+        // waited on us, so the sound server has likely played a gap
+        if (queued == 0 && filled && now - due > 2 * dt && (++o->p.pipe_dry <= 50 || o->p.pipe_dry % 100 == 0)) {
+            double t0 = frames_t_start ? frames_t_start() : 0;
+            SHIM_WARN("OpenSL: pipe ran dry %u at %.1f s (the writer %.1f ms late)", o->p.pipe_dry,
+                      t0 > 0 ? now - t0 : 0.0, (now - due) * 1000);
         }
-        for (int done = 0; done < len && o->p.pipe_run; ) {   // blocks while the pipe is full: pacing
+        if (queued >= len) filled = 1;
+        double gap = dt;                       // until the next write: the pipe below 3/4 full 3/4, below 1/4 1/2
+        if (queued >= 0 && queued < 4096 * 3 / 4) gap = queued < 4096 / 4 ? dt / 2 : dt * 3 / 4;
+        if (now < due) {
+            struct timespec ts = { (time_t)due, (long)((due - (time_t)due) * 1e9) };
+            while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {}
+        }
+        player_fill(o, buf, len);
+        for (int done = 0; done < len && o->p.pipe_run; ) {   // blocks while the pipe is full
             ssize_t k = write(o->p.pipe_fd, buf + done, len - done);
             if (k < 0 && errno == EINTR) continue;
             if (k <= 0) { SHIM_WARN("OpenSL: audio pipe closed (%s)", k < 0 ? strerror(errno) : "EOF"); o->p.pipe_run = 0; break; }
             done += k;
         }
-        back = mono_now();
+        // a write that waited on a full pipe, or a writer kept from running, owes at most one write
+        due += gap;
+        double after = mono_now();
+        if (due < after - dt) due = after - dt;
     }
     free(buf);
     return NULL;
