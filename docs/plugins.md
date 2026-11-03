@@ -146,7 +146,7 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | Epic Online Services | `EOSSDK-*` | stub `eos` | `EOS_Initialize` succeeds, `EOS_Platform_Create` gives no platform (NULL) |
 | GOG Galaxy | `GalaxyCSharpGlue`, `Galaxy64` | none | the SWIG glue's first call throws `DllNotFoundException` (GOG builds catch Galaxy failures; Cuphead's does) |
 | Discord Social SDK | `discord_partner_sdk` | none | no stub yet |
-| Wwise | `AkSoundEngine` | stub `wwise` | a silent sound engine made of the game's own entry points: every call succeeds, banks load, events end at once, the bank-loaded and end-of-event callbacks reach the game ([Wwise](#wwise)); an ARM `libAkSoundEngine.so` of the game's version in `lib/` plays the sound instead |
+| Wwise | `AkSoundEngine` | stub `wwise` | a sound engine made of the game's own entry points: every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game; ua_host's own player plays the banks the setup converted ([the player](#the-player-runtimehostwwplayc)), else it is silent ([Wwise](#wwise)); an ARM `libAkSoundEngine.so` of the game's version in `lib/` plays the sound instead |
 | SQLite | `sqlite3` | host `libsqlite3.so.0` | the system's library (32-bit for the armv7 player); missing: `DllNotFoundException` as before |
 | StandaloneFileBrowser | `StandaloneFileBrowser` | none | no file dialogs on a handheld |
 | Burst | (no DllImport: `lib_burst_generated`) | - | absent on ARM: Burst runs the managed versions of its jobs |

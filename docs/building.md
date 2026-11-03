@@ -11,8 +11,13 @@ same steps by hand.
   64-bit `ua_host` (`ARCH=arm64 runtime/build.sh`) runs the 64-bit routes on a 64-bit userland
   ([arm64.md](arm64.md), [apk.md](apk.md), [il2cpp.md](il2cpp.md)).
 - **To build:** Docker (the Dockerfiles hold Debian bookworm armhf cross toolchains and the arm64
-  build image), Python 3.10+ with `convert/requirements.txt`, 7-Zip (to unpack Unity's installer
-  by hand), the .NET SDK if a port patches a game's assemblies (`tools/asmpatch`).
+  build image), Python 3.11+ with `convert/requirements.txt`, 7-Zip (to unpack Unity's installer
+  by hand), and the .NET 8 SDK for asmpatch (`tools/asmpatch/build.sh`; `port check` runs it when
+  asmpatch is missing). The SDK is installed on the computer itself, not in Docker: Microsoft's
+  installer or `dotnet-install.sh --channel 8.0` (it goes to `~/.dotnet`; `DOTNET=<dir>/dotnet` names
+  another). Its packages (Mono.Cecil, and for the handheld's build the .NET runtime pack and
+  ILLink, about 200 MB) come from NuGet into `~/.nuget/packages` (`NUGET_PACKAGES=<dir>` puts them
+  elsewhere).
 - **Unity's Android player for the game's exact Unity version.** `python -m pmunity player fetch
   <version> <dir>` reads only the files it needs from Unity's installer (about 10 MB). Or install,
   or just download, the Unity editor's "Android Build Support" for that version from Unity's
@@ -36,6 +41,21 @@ runtime/build.sh                    # -> runtime/host/out/ua_host (+ device chec
 ```
 
 `OPENH264=0 runtime/build.sh` builds the video core without OpenH264 (runtime/media/README.md).
+
+**Offline, or without Docker Hub.** Each part builds its Docker image once (`docker build`, which
+pulls Debian or Ubuntu base images from Docker Hub) and uses it as it is afterwards: every build
+script checks for its image first (`docker image inspect`). With the images there
+(`unity-android-loader-build`, `ua-host-armhf`, `ua-jni-build`, `ua-android-shims`,
+`ua-media-*`, `ua-build-arm64`, `ua-emu-armhf`, `ua-port-rehearse`, `ua-rust`; `docker image ls`),
+nothing is pulled. To rebuild an image after its Dockerfile changed, remove it (`docker image rm
+<name>`).
+
+**pmu** (the setup's tool): `setup-rs/tools/build_pmu.sh <out>` (`port package` runs it) builds in
+the `ua-rust` image ([rust-setup.md](rust-setup.md#building-and-testing)) from a copy of setup-rs in
+`$TMPDIR` (default `/tmp`; removed afterwards). Its build output and the crate cache stay in two
+Docker volumes, shared by every checkout: `pmu-target` (`RS_TARGET_VOLUME`, a few GB) and
+`pmu-cargo` (`RS_CARGO_VOLUME`); `docker volume rm pmu-target` gives the space back (the next build
+starts from scratch).
 
 ## Converting and running a game by hand
 

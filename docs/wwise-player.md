@@ -25,7 +25,8 @@ clip automation, ducking curves. Readers ignore keys they do not know; a later f
 
 `<Bank>` is the bank file's name without `.bnk` (`Init`, `SFX`). On the handheld the files are in
 the port's `wwise/` folder on the card (outside the APK and OBB, so the pak can be mapped); the
-runtime finds them through `UA_WWISE_DATA` (default: `<port dir>/wwise`). The game's `LoadBank`
+runtime finds them through `UA_WWISE_DATA` (ua_host has no default: the port's launcher sets it to
+`<port dir>/wwise` when that folder is there, and so does the rehearsal's rig, `/zip/wwise`). The game's `LoadBank`
 names a bank as `SFX.bnk` or `SFX` (or by its ID: the json's `bank.id`). Wwise's `Init` bank comes
 first: it has the buses and the game syncs' defaults that the other banks use.
 

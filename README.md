@@ -84,8 +84,10 @@ Saves and settings are in `ports/mygame/data/`. The log of the last run is `port
 - **1 GB of RAM is tight** for games with many large textures; ports of such games convert their
   textures (`pmunity port check` tells the porter when).
 - **Online services** (Steam, Discord, Epic) answer as if they were not running. Games whose sound
-  uses FMOD or Wwise are silent unless the porter supplies ARM versions of those libraries (a Wwise
-  game runs silent on the runtime's built-in Wwise).
+  uses FMOD are silent unless the porter supplies FMOD's ARM library of the game's version. A Wwise
+  game's sound plays through ua_host's own Wwise player (wwplay) from banks the setup converts
+  (Wwise 2017.2's bank format so far; Enter the Gungeon's music and sounds in the emulated rig);
+  3D attenuation, panning and Wwise's effects are not in yet.
 - **Copying big files to the card while you play** makes games stutter.
 
 ### Getting help and reporting a bug
@@ -188,9 +190,10 @@ Most impact for the most games first:
    path for 2018.4 - 2021.3 has not run with a video yet, 2022.3's path is only unit-tested, a
    Unity 6 game's background video stalls, and the Vulkan path is missing.
 7. **Native plugins.** FMOD needs ARM libraries of the game's exact version, supplied by the porter
-   (FMOD needs an account to download). Wwise games run silent on the runtime's built-in Wwise;
-   their sound needs Wwise's ARM library of the game's version or a sound backend for the stub
-   (none yet). Other x86-only plugins fail; Burst code falls
+   (FMOD needs an account to download). Wwise games play through ua_host's own Wwise player
+   (wwplay) from the banks the setup converts: banks of Wwise 2017.2's format only so far, music
+   checked in the emulated rig (not on a handheld yet), no 3D attenuation, panning or effects.
+   Other x86-only plugins fail; Burst code falls
    back to its slower managed version. An old Steamworks.NET (through CSteamworks) calls entry
    points the Steam stub does not have (a 2017.2 game stops there).
 8. **Files the game reads itself.** StreamingAssets as loose files (`loose`) and `data_path` are
@@ -208,20 +211,20 @@ The plan behind these: [docs/roadmap.md](docs/roadmap.md). The detailed gap list
 
 ### Port a game in five steps
 
-You need a computer with Docker and Python 3.11 or newer (macOS or Linux; the commands below are
+You need a computer with Docker, Python 3.11 or newer (macOS or Linux; the commands below are
 for a shell; write `python3` where `python` is missing; with Homebrew's Python make a virtual
-environment first: `python3 -m venv .venv && . .venv/bin/activate`), and the game you own. Later,
-when needed:
-
-- the .NET 8 SDK, when `port check` says the port patches the game's assemblies (asmpatch:
-  PlayMaker, Rewired, StreamingAssets reads, ...): `package` builds asmpatch with it
-  ([docs/building.md](docs/building.md));
-- PortMaster's own 7-Zip for the rehearsal (step 4): `PortMaster/7zzs.aarch64` inside
-  `PortMaster.zip` from [PortMaster-GUI's releases](https://github.com/PortsMaster/PortMaster-GUI/releases).
+environment first: `python3 -m venv .venv && . .venv/bin/activate`) and the
+[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (`dotnet`, or `DOTNET=<its dotnet>`:
+`port check` builds asmpatch with it, whose survey of the game's code finds its pad bindings, the
+d-pad and stick settings a handheld needs and the files it reads; without it the check warns and
+leaves those out), PortMaster's own 7-Zip for the rehearsal (step 4: `PortMaster/7zzs.aarch64`
+inside `PortMaster.zip` from [PortMaster-GUI's releases](https://github.com/PortsMaster/PortMaster-GUI/releases)),
+and the game you own.
 
 `port check` and `port new` read the game as a folder. GOG's Linux installer (`.sh`) is a shell
-script with a zip appended: never run it; unpack it with `unzip -q <installer>.sh -d <dir>` (or
-`7zz x -tzip`), and the game is `<dir>/data/noarch/game`. GOG's macOS installer (`.pkg`):
+script with a zip appended: never run it; unpack it with `7zz x -tzip <installer>.sh -o<dir>` (or
+`unzip -q <installer>.sh -d <dir>`, which warns of "extra bytes at beginning" and exits with 1:
+harmless, but it stops a script under `set -e`), and the game is `<dir>/data/noarch/game`. GOG's macOS installer (`.pkg`):
 `python -m pmunity macpkg <dir> <installer>.pkg`. Keep the installer as it is for the handheld:
 the port's setup takes it.
 
@@ -232,6 +235,7 @@ git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity
 cd portmaster-unity
 pip install -r convert/requirements.txt
 runtime/build.sh                # builds ua_host in Docker (port package also does it when needed)
+tools/asmpatch/build.sh         # asmpatch, with the .NET 8 SDK (port check also builds it when missing)
 cd convert
 ```
 
@@ -259,7 +263,8 @@ cd convert
    ([docs/porting.md](docs/porting.md), section 11).
 4. **Test it.** First the rehearsal: it runs the port's first launch in a container that looks
    like a handheld, then the game in the emulator, and saves screenshots to `work/mygame/shots.png`
-   (`PM_7ZZ` is PortMaster's own `7zzs.aarch64`, from its release). Then on a handheld: unzip the
+   and what it played to `work/mygame/sound.wav` (nothing plays aloud; the end of the output says
+   how loud it was) (`PM_7ZZ` is PortMaster's own `7zzs.aarch64`, from its release). Then on a handheld: unzip the
    release into `ports/`, copy the game into `ports/mygame/gamedata/`, start it, and check the
    setup screen, the pad, sound, saves, the exit hotkey and the frame rate (`UA_FPS=5` writes it
    to `log.txt`). [docs/porting.md](docs/porting.md) has the full checklist.

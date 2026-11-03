@@ -29,13 +29,18 @@ patches and a helper assembly).
 ## Before you start
 
 - **The computer:** Docker, Python 3.11+ (`pip install -r convert/requirements.txt`; `port.toml`
-  is read with `tomllib`), `runtime/build.sh` once. The .NET 8 SDK when `port check` says the
-  port uses asmpatch (`package` builds it: docs/building.md). For the rehearsal (section 6),
-  PortMaster's own 7-Zip: `PortMaster/7zzs.aarch64` inside `PortMaster.zip` from
+  is read with `tomllib`), `runtime/build.sh` once, and the .NET 8 SDK on the computer itself (no
+  Docker image has it; `dotnet` on PATH, `~/.dotnet/dotnet`, or `DOTNET=<its dotnet>`):
+  `port check` builds asmpatch with it when it is missing (`tools/asmpatch/build.sh`), for the
+  survey of the game's code that finds its pad bindings (what a handheld without sticks needs:
+  `UA_DPAD_STICK`, `UA_DPAD_SWAP`, the `[controls]` draft), InControl's pad names and the files it
+  reads. Without it the check says what it left out, and the port lacks those. For the rehearsal
+  (section 6), PortMaster's own 7-Zip: `PortMaster/7zzs.aarch64` inside `PortMaster.zip` from
   [PortMaster-GUI's releases](https://github.com/PortsMaster/PortMaster-GUI/releases).
 - **The game as a folder:** GOG's Linux installer (`.sh`, a shell script with a zip appended) is
-  never run: `unzip -q <installer>.sh -d <dir>` (or `7zz x -tzip`), then the game is
-  `<dir>/data/noarch/game`. GOG's macOS `.pkg`: `python -m pmunity macpkg <dir> <installer>.pkg`
+  never run: `7zz x -tzip <installer>.sh -o<dir>` (or `unzip -q <installer>.sh -d <dir>`, whose
+  exit status 1, "extra bytes at beginning", is harmless but stops a `set -e` script), then the
+  game is `<dir>/data/noarch/game`. GOG's macOS `.pkg`: `python -m pmunity macpkg <dir> <installer>.pkg`
   (the app lands under `<dir>` at the package's install location). Steam: the game's folder (the Linux depot where there is one). Keep the installer itself for
   the handheld and the rehearsal: the setup takes it as it is.
 - **The port's own repository:** a GitHub repository per port holds `port new`'s output and
@@ -65,12 +70,12 @@ reads the game and prints:
 | scripting backend (Mono: `Managed/*.dll`; IL2CPP: `GameAssembly`, `il2cpp_data`), .NET 3.5 or 4.x runtime | the build's files |
 | platform build (Linux, macOS, Windows; the executable's architecture), compressed (`data.unity3d`) or not | the executable's header, the data folder |
 | graphics APIs, and so the shaders the converter can translate (OpenGL Core, Direct3D 11) | `BuildSettings` |
-| input stacks: Rewired (source or DLL edition), InControl, the Input System package, the legacy Input calls by kind, `OnMouse*` handlers, UI pointer handlers, code that selects UI elements; the UI input modules the scenes use; the verdict (pointer-driven menus or not) | the game's assemblies' metadata (read in Python: names only, no code is loaded), the scenes' scripts, and `asmpatch --survey` when asmpatch is built (`--asmpatch` or `$PMUNITY_ASMPATCH`, else `tools/asmpatch/out`) |
+| input stacks: Rewired (source or DLL edition), InControl, the Input System package, the legacy Input calls by kind, `OnMouse*` handlers, UI pointer handlers, code that selects UI elements; the UI input modules the scenes use; the verdict (pointer-driven menus or not); InControl's default pad bindings, every one by control (the `[controls]` draft), the actions only the left stick drives (`UA_DPAD_STICK`), the d-pad's own (a `UA_DPAD_SWAP` button: one the game binds nothing to, else one whose actions other buttons also do), those only the right stick drives (a handheld without one cannot do them) | the game's assemblies' metadata (read in Python: names only, no code is loaded), the scenes' scripts, and `asmpatch --survey` (`--asmpatch` or `$PMUNITY_ASMPATCH`, else `tools/asmpatch/out`, which the check builds with the .NET 8 SDK when it is missing; without either, a warning says what was left out; `--asmpatch none`: no survey) |
 | text input (InputField, TextMeshPro InputField, TouchScreenKeyboard, `Input.inputString`) | assemblies, scenes |
 | video (VideoPlayers, clips and their codecs; MovieTexture) | scenes, `.resource` headers |
 | native plugins, P/Invoke modules, services (Steamworks, GOG Galaxy, FMOD Studio, Wwise, ...) | `Plugins/`, assemblies |
 | file access: reads of StreamingAssets that reach System.IO (then `android_data.streaming_assets`), and of `dataPath`, `persistentDataPath`, the working directory | `asmpatch --survey`/`--list` (without asmpatch: assemblies that reference both the getter and System.IO, a hint) |
-| texture formats and sizes (main data) | the serialized files |
+| texture formats and sizes (main data); a warning above 256 MB of uncompressed ones (RGBA32, RGB24: what a 1 GB handheld must hold as they are; the textures step makes them ASTC) | the serialized files |
 | StreamingAssets bundles: how many, the scene bundles (several serialized files), their shaders by the programs they have, texture formats and sizes. Warnings for what the converter will not handle: files that look like Unity bundles of another kind (UnityWeb, UnityRaw, a UnityFS header behind other bytes: a game's own offset or encryption), bundles UnityPy cannot open, shaders in bundles with no programs of the source the converter translates from (they draw magenta); a note for scene bundles (pmu converts them, the Python converter does not) and for bundles without a serialized file | UnityPy, a bundle at a time |
 | the routes that fit, the recommended one, and the port config values it suggests (the textures step when the BC/DXT textures of the main data and the bundles together would decode to more than 128 MB) | all of the above |
 
@@ -126,8 +131,9 @@ is refused for the Android route all the same: HDRP does not run on OpenGL ES.
 
 Native plugins: `python -m pmunity plugins <Data>` lists the libraries the game's code P/Invokes
 and what the port gives each: built-in stubs answering as a PC without the service (Steam,
-Discord, EOS), a silent sound engine made of the game's own entry points (Wwise: the check also
-reads its version from the desktop library and the soundbanks), or ARM libraries of the game's exact
+Discord, EOS), a sound engine made of the game's own entry points (Wwise: ua_host's own player plays
+the banks the setup converted, `wwise.banks`; the check also reads the version from the desktop
+library and the soundbanks), or ARM libraries of the game's exact
 version that the porter supplies (FMOD, Wwise for sound; [plugins.md](plugins.md)). android-data repeats it as warnings and writes `plugins.map` for the
 runtime; a port config's `plugins` table changes the map.
 
@@ -174,7 +180,7 @@ checks the game and writes `<out>` (default `./<name>`):
 
 | file | what |
 |---|---|
-| `port.toml` | the port's settings (written once, with the values the check found; yours to edit). Run `port new` again to regenerate the rest from it (it is used when it is there, `--config` names another) |
+| `port.toml` | the port's settings (written once, with the values the check found; yours to edit). Run `port new` again to regenerate the rest from it (it is used when it is there, `--config` names another); it then lists what the check suggests that `port.toml` lacks or sets otherwise (e.g. `UA_DPAD_STICK` once asmpatch is built, `[wwise] banks`): a key it lacks is used all the same, a value it has wins |
 | `port.build.json` | the resolved settings, the route and the check's findings (what `package` reads) |
 | `<Title>.sh` | the launcher (PortMaster's standard first lines, then `$GPTOKEYB2`, `$ESUDO`, `pm_message`, `pm_platform_helper`, `pm_finish`, the log in `log.txt`; first launch: PortMaster's patcher runs the setup) |
 | `<name>/` | the folder installed as `ports/<name>/`: `setup/patchscript`, `setup/setup.env`, `setup/convert.json`, `setup/questions.lua` and `setup.txt` (with questions), `port.env`, `port.json`, `gameinfo.xml` (the frontend's game list entry), `README.md` (the player's), `gamedata/PUT_GAME_FILES_HERE.txt`, `<name>.ini` (gptokeyb2: the exit hotkey) |
@@ -219,7 +225,7 @@ takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead
 | `game.developer`, `publisher`, `release_date` | the developer from the game's PlayerSettings (company name), else none | `gameinfo.xml`; `release_date` as `YYYY-MM-DD` |
 | `game.genre`, `description` | the first of `port.genres`, `port.desc` | `gameinfo.xml`'s genre (a display name: `Platformer`, `RPG`) and description (the frontend has room for more than `port.desc`) |
 | `game.url` | the first store's `gameurl` | the game's page (the testing thread) |
-| `[controls]` | none | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
+| `[controls]` | drafted from InControl's default pad bindings (the check's survey), else none; your own table replaces the draft | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
 | `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player package `pmunity player fetch` gets; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
 | `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
 | `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
@@ -304,6 +310,13 @@ wins. The reductions so far are asmpatch's `reduce` patches (tools/asmpatch/READ
 on the RG34XX-SP, and what it costs the picture:
 [profiling.md](profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds).
 
+Textures are the other big share of a 1 GB handheld's memory. `port check` adds the textures step
+(`convert.steps`) when BC/DXT textures would decode to more than 128 MB (the GPU cannot sample
+them, so Unity unpacks them to RGBA), and warns above 256 MB of uncompressed ones (RGBA32, RGB24:
+Enter the Gungeon's bundles hold 869 MB): those stay as they are, and the textures step would make
+them ASTC 4x4, a quarter of RGBA32's memory, with slightly different pixels. Try such a port on a
+1 GB handheld first (`log.txt`'s memory lines) before adding the step for it.
+
 ## 4. The setup on the handheld
 
 `setup/patchscript`, run by PortMaster's patcher (log: `ports/<name>/patchlog.txt`; a failure is
@@ -336,7 +349,9 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    the managed files and assembly patches, and `android_data.args`;
 7. installing: the player's libraries into `lib/` with only the Mono runtime the game needs (with
    both, libunity takes the .NET 4.x one and a .NET 3.5 game aborts), the APK, OBB and Mono's
-   config into the port folder; the game's copy in `gamedata/` (used up by step 6), the tools and
+   config into the port folder (with a GOG build's `goggame-*.info`, the game's own file, beside
+   the APK: GOG builds read it at `Application.dataPath + "/../"`, which is that folder; it is
+   not part of the release); the game's copy in `gamedata/` (used up by step 6), the tools and
    the work folder are removed; `.setup_done` marks it done. The launcher exports
    `UA_WWISE_DATA=<port>/wwise` when that folder is there (an empty `UA_WWISE_DATA` in `port.env`
    turns the player off).
@@ -435,7 +450,9 @@ unpacks the release into `<work>/roms/ports` as PortMaster would, copies the gam
 `gamedata/` and starts the port's own launcher in an aarch64 container that looks like a handheld
 (busybox first on PATH, bash, curl, a 1 GB memory limit, the network on), with a stand-in for PortMaster
 (`control.txt`, `utils/patcher.txt`, PortMaster's own `7zzs.aarch64` from its release: `PM_7ZZ`).
-`ANSWERS="ID=value ..."` answers the port's questions. The container's `/proc/meminfo` shows
+`ANSWERS="ID=value ..."` answers the port's questions (a GOG `.sh` installer, a `.zip`, `.7z`,
+`.pkg` and the other archives are copied into `gamedata/` as they are, for the setup to unpack;
+a folder is copied as it is). The container's `/proc/meminfo` shows
 Docker's memory, not the 1 GB limit, so a setup that sizes itself from it (the `PICTURE` question's
 `auto`) takes the path of a bigger device: `ANSWERS="PICTURE=handheld"` rehearses the 1 GB one.
 After the setup the launcher also tries to start the game in the container and stops with
@@ -443,9 +460,14 @@ After the setup the launcher also tries to start the game in the container and s
 runs in the emulated armv7 rig (`tools/emu`, QEMU and Mesa's llvmpipe: slow, from about 20 fps on a
 loading screen to under 1 fps on a busy scene, but the same frames and game logic; the screen is
 `ANDROID_WINDOW_SIZE`, default 720x480, the RG34XX-SP's) with the port's `port.env` and `answers.env`, and four screenshots
-go to `<work>/shots.png`; `UA_INPUT_SCRIPT`-style input (`"60:ptr=0.5/0.5 70:a~1.5"`) drives it.
-`EMU_ONLY=1` reruns only the game. A run prints nothing until it ends; the game's log is
-`<work>/emuroot/run.log`. To stop one early, name the containers (`REHEARSE_NAME`, `EMU_NAME`)
+go to `<work>/shots.png`; `UA_INPUT_SCRIPT`-style input (`"60:ptr=0.5/0.5 70:a~1.5"`) drives it
+(buttons `a b x y l1 r1 l2 r2 start select` by position, as on an Xbox pad: `a` is the bottom one;
+`up down left right` the d-pad; `lup ldown lleft lright` the left stick; `~<s>` holds; `@<s>`
+repeats: [runtime.md](runtime.md)). The rig's virtual pad has sticks, so `UA_DPAD_STICK = "auto"`
+does not apply there: move with `lleft`/`lright`, or set `UA_DPAD_STICK=1` for the run to press
+the d-pad as a handheld without sticks would. `EMU_ONLY=1` reruns only the game; an earlier run's
+`run.log`, screenshots and sound move to `<work>/earlier/<n>/` first. A run prints nothing until it
+ends; the game's log is `<work>/emuroot/run.log`. To stop one early, name the containers (`REHEARSE_NAME`, `EMU_NAME`)
 and `docker kill` them: killing `rehearse.sh` or the `docker run` client leaves the container
 running to its timeout. An install of an arm64-v8a build (`android_package.json`'s
 `abi`: the il2cpp-arm64 route, the apk route on a 64-bit-only system, `REHEARSE_64ONLY=1`) runs in the arm64 rig
@@ -456,6 +478,21 @@ disk's free space).
 The rig decodes ASTC in software and keeps the result, so a
 game converted with the textures step may run out of the rig's memory where the handheld's GPU
 would not.
+
+**Sound.** Nothing plays aloud: the rig writes what the game's OpenSL ES output played (the game's
+own sound and, for a Wwise game, ua_host's Wwise player's mix in it) to `<work>/sound.wav` (48 kHz
+16-bit stereo, the whole run, about 11 MB a minute), and the rehearsal ends with its levels:
+`sound: <work>/sound.wav: 532 s, peak -2.1 dBFS, RMS -23.5 dBFS, sound in 465 of 533 seconds`
+(Enter the Gungeon, a 600 s run: its title music, then the Breach's; "none": the game opened no
+output). `REHEARSE_SOUND=0` turns it off. As the launcher does,
+the run sets `UA_WWISE_DATA` to the port's `wwise/` folder when the setup converted Wwise banks
+(an empty `UA_WWISE_DATA` in `port.env` keeps the player off), so a Wwise game's music and sounds
+are in the file; the Wwise player's own mix alone: `UA_WWISE_CAPTURE=/emu/wwise.wav` (for the whole
+run, unless `UA_WWISE_CAPTURE_SECS`), written to `<work>/emuroot/wwise.wav`. Variables reach the rig
+as `tools/emu/emu.sh` passes them: `UA_*`, `GC_*`, `ANDROID_*`, `GALLIUM_*`, `LP_*` and the prefixes in
+`EMU_ENV`; `/emu` in the rig is `<work>/emuroot/`, the port folder is `/zip` (read-only). A game
+reaches its title after some minutes in the rig (Enter the Gungeon: about 3), so a run of 300 - 600
+s is what shows the title music.
 
 ## 7. On a device
 

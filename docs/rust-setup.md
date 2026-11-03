@@ -356,7 +356,11 @@ The image `ua-rust` (arm64 Debian bookworm) has Rust 1.88 with the `aarch64-unkn
 target, and the reference Python: PortMaster's `python_3.11` at `/opt/py` with the setup's
 packages at `/opt/pylibs`. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
 live in Docker volumes (bind mounts of the host's disks are slow; a build's output is copied out
-with `docker cp` or a `cat` from the container when needed).
+with `docker cp` or a `cat` from the container when needed): `pmu-target` for the builds
+(`RS_TARGET_VOLUME`; a few GB, `/target/<worktree's name>` in it) and `pmu-cargo` for the crate
+cache (`RS_CARGO_VOLUME`), shared by every worktree; `RS_MEM` (1g; `build_pmu.sh` 3g) and
+`RS_JOBS` (2) size the container. `build_pmu.sh` copies setup-rs to `$TMPDIR` (default `/tmp`)
+first, so the binary names no checkout's folders.
 
 ```bash
 RS_ROOT=<the shared setup's folder> setup-rs/tools/rs.sh <worktree> cargo test
