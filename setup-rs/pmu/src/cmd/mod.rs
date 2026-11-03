@@ -12,6 +12,7 @@ mod player;
 mod route;
 mod unpack;
 mod version;
+mod video;
 mod winbcl;
 mod wwise;
 mod zip_extract;
@@ -32,6 +33,7 @@ pub const NAMES: &[&str] = &[
     "apk",
     "il2cpp",
     "wwise",
+    "video",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -51,6 +53,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "apk" => Some(apk::run(args)),
         "il2cpp" => Some(il2cpp::run(args)),
         "wwise" => Some(wwise::run(args)),
+        "video" => Some(video::run(args)),
         _ => None,
     }
 }

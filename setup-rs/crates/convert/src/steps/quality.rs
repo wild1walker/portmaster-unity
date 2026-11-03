@@ -1555,7 +1555,7 @@ fn edit(
 }
 
 /// The system's RAM in MB (textures.mem_total_mb: /proc/meminfo, else plenty).
-fn mem_total_mb() -> i128 {
+pub(super) fn mem_total_mb() -> i128 {
     if let Ok(t) = std::fs::read_to_string("/proc/meminfo") {
         for line in t.lines() {
             if let Some(rest) = line.strip_prefix("MemTotal:") {

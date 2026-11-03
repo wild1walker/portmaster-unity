@@ -297,6 +297,50 @@ impl Archive {
         })
     }
 
+    /// Overwrites a stored entry's data in place with as many new bytes (an installed game's APK
+    /// or OBB: no other entry moves) and its CRC-32 in the local header and the central
+    /// directory. A compressed entry, one of another length or one with a data descriptor is
+    /// refused. `path` is this archive's file, opened again for writing.
+    pub fn overwrite_stored(&self, path: &str, name: &str, data: &[u8]) -> Result<()> {
+        let e = self.info(name)?;
+        let n = data.len() as u64;
+        if e.method != 0 || e.compress_size != n || e.file_size != n {
+            return Err(Error::Fail(format!(
+                "{name}: not a stored entry of {n} bytes (method {}, {} bytes)",
+                e.method, e.file_size
+            )));
+        }
+        if e.flag_bits & 0x08 != 0 {
+            return Err(Error::Fail(format!("{name}: an entry with a data descriptor")));
+        }
+        let at = self.data_offset(e)?;
+        let hdr = e.header_offset as u64;
+        // its central directory record: the records in order from the directory's start
+        let mut rec = self.start_dir;
+        let mut found = None;
+        for _ in 0..self.entries.len() {
+            let c = read_at(&self.file, rec, 46)?;
+            if c.len() != 46 || !c.starts_with(b"PK\x01\x02") {
+                return Err(bad("Bad magic number for central directory"));
+            }
+            let (n_len, x_len, k_len) = (u16_at(&c, 28) as u64, u16_at(&c, 30) as u64, u16_at(&c, 32) as u64);
+            let nm = read_at(&self.file, rec + 46, n_len as usize)?;
+            if decode_name(&nm, u16_at(&c, 8))? == e.orig_name {
+                found = Some(rec);
+                break;
+            }
+            rec += 46 + n_len + x_len + k_len;
+        }
+        let rec = found.ok_or_else(|| bad(format!("{name}: no central directory record")))?;
+        let crc = crc32fast::hash(data).to_le_bytes();
+        let w = std::fs::OpenOptions::new().write(true).open(path).map_err(io_at(path))?;
+        w.write_all_at(data, at)?;
+        w.write_all_at(&crc, hdr + 14)?;
+        w.write_all_at(&crc, rec + 16)?;
+        w.sync_all()?;
+        Ok(())
+    }
+
     /// Where an entry's data begins (after its local header and that header's extra field).
     pub fn data_offset(&self, e: &Entry) -> Result<u64> {
         Ok(self.local(e)?.0)

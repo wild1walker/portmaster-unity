@@ -586,7 +586,7 @@ fn errors_and_statuses() {
     .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "unknown step nope; steps: shaders, textures, settings, audio, quality"
+        "unknown step nope; steps: shaders, textures, settings, audio, quality, video"
     );
     // a plugin pmu does not have
     let e = cli::run(&Cli {

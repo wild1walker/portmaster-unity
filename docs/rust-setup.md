@@ -35,6 +35,7 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
 | `wwise <banks> <out> [--check] [--wwise-lib PATH]` | (none: Rust only, 2026-11-02) | a Wwise game's soundbanks (bank version 128) into the data of ua_host's Wwise player ([wwise-player.md](wwise-player.md)): per bank `<Bank>.uaww.json` and `<Bank>.uaww.pak`, the media read and written one at a time (DATA is never held in memory); status 3 for another bank version |
 | `il2cpp <data> <out> --on-device ...`, `il2cpp fetch <version> [--on-device]` | il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py | the il2cpp-arm64 route's build on the handheld: Unity's IL2CPP and player by range reads, Debian's compilers and Microsoft's .NET (pinned by sha256), UnityLinker, il2cpp, the C++ build (Bee's graph from 2021.2), libil2cpp.so and Data/Managed (below, "`pmu il2cpp`"); the Docker route of a porter's PC (no `--on-device`) stays with the Python: status 2 |
+| `video <game dir> [--set KEY=VALUE]...` | (pmu's own, no Python) | convert's `video` step on a game set up before it existed, in place: the resource files of its APK and OBBs that hold WebM clips, with their asset files, taken out, the step run on them, and each changed file written back over its entry (stored, the same length: nothing else moves; every file checked before any is written, a stopped run writes them again); below, "`video`" |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
@@ -114,6 +115,7 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `apk` | `apk` (apk.py): manifests (binary AXML, an App Bundle's protobuf XML), the ABI choice, OBBs, PlayerSettings on `unityfs`, zips read with `pkgzip` and written as zipfile writes them (deflate: zlib's own, `libz-sys`'s bundled copy) |
 | `wwise` | `pmu wwise` (no Python twin): soundbanks of version 128 (BKHD, DIDX, DATA located, HIRC read object by object, each to its exact size, STMG), Wwise Vorbis rebuilt as Ogg Vorbis with ww2ogg-rs (`vendor/ww2ogg`, BSD-3-Clause, without its built-in codebooks) and the codebooks found in the game's own Wwise library (`codebooks.rs`), its pages packed to 4 KB (`ogg.rs`), IMA ADPCM and PCM copied, the json of docs/wwise-player.md; `--check` decodes every Vorbis packet with lewton and resolves every event |
 | `il2cpp` | `il2cpp --on-device` and `il2cpp fetch` (il2cpp.py's toolchain and build, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py, il2cpp_device_lock.py), on `pkgzip` (range reads, NSIS), `androiddata` (.NET metadata, versions, JSON) and `unityfs` (MonoManager's assembly list) |
+| `video` | the `video` step's work on one clip (pmu's own: there is no Python step): WebM read and written (EBML; SeekHead, Cues and Void left out), VP8 decoded and encoded by libvpx (vendor/libvpx: Debian 12's libvpx 1.12.0 source, the VP8 encoder and decoder configured for arm64 with NEON, compiled in by build.rs through csrc/vpx_capi.c; other architectures build without it), a 2x2 box downscale |
 
 Later (on top of `unityfs`): `android-data`, `patch-obb pack`.
 
@@ -254,6 +256,40 @@ options, errors), and compares statuses, output and trees (`PMU=<the musl build>
 a setup ships);
 `tests/golden/convert.sh <dir> [rs|rs-py|py-rs|both]` does it on Cuphead's data from
 `$PMU_TEST_DATA` with the setup's arguments, against `converted-fast`.
+
+### `video`
+
+pmu's own step (convert's `video`, crates/video; no Python counterpart): a game's VP8 clips
+(WebM, a Linux build's VideoClips) taller than `max_height` are halved until they are not (2x2
+means) and encoded again with libvpx: constant quality `cq_level` (10) under `max_kbps`, speed
+`cpu_used` (4), key frames where the clip had them, no look-ahead, four token partitions. Each new
+clip is smaller and goes where the old one was in its resource file, the rest of that place
+zeroed, so no other object of the file moves; the VideoClip gets its new `m_ExternalResources.m_Size`,
+`Width` and `Height`, spliced into its asset file in place (its numbers keep their width). `mode`:
+`auto` (default: where MemTotal is at most `ram_mb`, 1024), `on`, `off`. A resource file and its
+asset files are committed together and journalled together. Clips of other codecs and clips in
+bundles stay as they are.
+
+Why: Hollow Knight's cinematics are 1920x1080 VP8 at 25 - 30 fps. On an H700 (Cortex-A53) the
+media core's libvpx decodes such a frame in 31 ms alone and ~40 ms in the game, so with the player
+waiting for every picture they played in slow motion against their music. Halved (960x540) they
+are a quarter of the decoding and look the same on a 720x480 panel: the prologue's luma 56.6 dB
+on average against the original halved the same way (45.2 dB at the worst frame); with ua_host's
+display rate while a video plays (`UA_VIDEO_RATE`, [runtime.md](runtime.md)) the cinematic shows
+its 30 pictures a second apart from the game's own loading frames (muOS, 2026-11-02).
+
+On the handheld (muOS, H700, 2026-11-02): Hollow Knight's 14 clips over 720 lines (9,116 frames,
+84.2 MB) in 578 s, about 63 ms a frame, 43.9 MB after; its two 720p clips are left as they are.
+
+`pmu video <game dir> [--set KEY=VALUE]...` runs the step on a game set up before it existed: the
+resource files of its APK and OBBs (assets/bin/Data/*.resource) that hold WebM clips are taken out
+with their asset files and globalgamemanagers into `<game dir>/.pmunity-video`, the step runs on
+them, and each file it changed is written back over its APK or OBB entry (stored and of the same
+length: `pkgzip::zip::Archive::overwrite_stored`, its CRC-32 in the local header and the central
+directory). Every file is checked against its entry before any is written; the changed files wait
+marked ready until all are written back, so a run that is stopped writes them again. On the muOS
+test copy of Hollow Knight: 6 files written back after the step, the APK and OBB whole (`unzip -t`),
+a second run finds nothing to do (48 s of reading the resource files).
 
 ### `pmu il2cpp`
 

@@ -13,6 +13,7 @@ pub mod quality;
 pub mod settings;
 pub mod shaders;
 pub mod textures;
+pub mod video;
 pub mod vulkan;
 
 use crate::error::{Error, Result};
@@ -46,6 +47,11 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         (
             "quality".into(),
             Arc::new(|job: &mut Job, _: &Args| quality::run(job)),
+        ),
+        // pmu's own (no Python step): the clips made smaller on small handhelds
+        (
+            "video".into(),
+            Arc::new(|job: &mut Job, _: &Args| video::run(job)),
         ),
     ]
 }

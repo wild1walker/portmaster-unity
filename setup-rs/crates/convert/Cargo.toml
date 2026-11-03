@@ -11,6 +11,8 @@ shaderx = { path = "../shaderx", features = ["tree"] }
 # (the quality step: typetrees' fixed trees, clrmeta for monotree)
 androiddata = { path = "../androiddata" }
 texcodec = { path = "../texcodec" }
+# (the video step: WebM, VP8 with libvpx)
+video = { path = "../video" }
 serde_json = "1"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 # statvfs for the free-space check (need_space), without unsafe code here

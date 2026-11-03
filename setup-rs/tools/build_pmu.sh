@@ -54,6 +54,8 @@ V="$PM/setup-rs/vendor"
   done; } > "$L/LICENSE.texture2ddecoder.txt"
 { echo "optimized-routines (Arm): sinf, cosf, sincosf, compiled into setup/pmu"; echo; cat "$V/optimized-routines/LICENSE"; } > "$L/LICENSE.optimized-routines.txt"
 { echo "ww2ogg-rs (a Rust port of ww2ogg), compiled into setup/pmu"; echo; cat "$V/ww2ogg/LICENSE"; } > "$L/LICENSE.ww2ogg.txt"
+{ echo "libvpx 1.12.0 (Debian 12's source package; the VP8 encoder and decoder), compiled into setup/pmu"; echo
+  cat "$V/libvpx/LICENSE"; printf '\n\nPATENTS\n\n'; cat "$V/libvpx/PATENTS"; } > "$L/LICENSE.libvpx.txt"
 { echo "lz4 1.9.4 (the crate lz4-sys), compiled into setup/pmu"; echo; cat "$B/lz4.txt"; } > "$L/LICENSE.lz4.txt"
 { echo "zlib 1.3.2 (the crate libz-sys), compiled into setup/pmu"; echo; cat "$B/zlib.txt"; } > "$L/LICENSE.zlib.txt"
 { echo "UnityPy: its class id names and class database (resources/lzma.tpk), in setup/pmu"; echo; cat "$B/unitypy.txt"; } > "$L/LICENSE.unitypy.txt"
