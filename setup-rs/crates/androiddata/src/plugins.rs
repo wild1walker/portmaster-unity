@@ -353,7 +353,12 @@ fn abi_token(res: &mut Resolver, asm: &Arc<Assembly>, t: &SigType) -> C::Result<
 /// (ua_host's wwise.c reads it): v b i (signed int, an enum) u (unsigned) l (64-bit) f d, p (a
 /// pointer: IntPtr, HandleRef, an array, a class or delegate), r (a ref/out pointer), z (a string),
 /// a struct by value as abi_token writes it, ? unknown (plugins.py's stub_token).
-fn stub_token(res: &mut Resolver, asm: &Arc<Assembly>, t: &SigType, depth: u32) -> C::Result<String> {
+fn stub_token(
+    res: &mut Resolver,
+    asm: &Arc<Assembly>,
+    t: &SigType,
+    depth: u32,
+) -> C::Result<String> {
     let prim = |e: u8| -> Option<&'static str> {
         Some(match e {
             C::E_VOID => "v",
@@ -1258,7 +1263,9 @@ pub fn survey(data: &str) -> SurveyResult<Survey> {
         let Some(Some((ret, args))) = &p.stub_abi else {
             continue;
         };
-        let dup = fns.last().is_some_and(|f| f.0 == p.module && f.1 == p.entry);
+        let dup = fns
+            .last()
+            .is_some_and(|f| f.0 == p.module && f.1 == p.entry);
         if ret != "?" && !args.iter().any(|x| x == "?") && !dup {
             fns.push((p.module.clone(), p.entry.clone(), ret.clone(), args.clone()));
         }
@@ -1466,7 +1473,9 @@ pub fn map_text(rep: &Survey, pmap: &Json) -> Result<String, String> {
     let fns: Vec<&(String, String, String, Vec<String>)> = rep
         .fns
         .iter()
-        .filter(|f| stubbed.contains(f.0.as_str()) && !re().space.is_match(&format!("{}{}", f.0, f.1)))
+        .filter(|f| {
+            stubbed.contains(f.0.as_str()) && !re().space.is_match(&format!("{}{}", f.0, f.1))
+        })
         .collect();
     if !fns.is_empty() {
         lines.push(
@@ -1623,7 +1632,10 @@ mod tests {
     /// map, to compare with `python -m pmunity plugins <data> --map <file>` (skipped without them)
     #[test]
     fn map_of_a_game() {
-        let (Ok(data), Ok(out)) = (std::env::var("PMU_PLUGINS_DATA"), std::env::var("PMU_PLUGINS_OUT")) else {
+        let (Ok(data), Ok(out)) = (
+            std::env::var("PMU_PLUGINS_DATA"),
+            std::env::var("PMU_PLUGINS_OUT"),
+        ) else {
             return;
         };
         let rep = survey(&data).unwrap();
@@ -1645,11 +1657,27 @@ mod tests {
             fmod: None,
             sigs: vec![],
             fns: vec![
-                ("AkSoundEngine".into(), "CSharp_IsInitialized".into(), "b".into(), vec![]),
-                ("AkSoundEngine".into(), "CSharp_LoadBank__SWIG_4".into(), "i".into(),
-                 ["z", "p", "p", "i", "r"].iter().map(|s| s.to_string()).collect()),
+                (
+                    "AkSoundEngine".into(),
+                    "CSharp_IsInitialized".into(),
+                    "b".into(),
+                    vec![],
+                ),
+                (
+                    "AkSoundEngine".into(),
+                    "CSharp_LoadBank__SWIG_4".into(),
+                    "i".into(),
+                    ["z", "p", "p", "i", "r"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                ),
             ],
-            consts: vec![("AkSoundEngine".into(), "AKRESULT.AK_Success".into(), "1".into())],
+            consts: vec![(
+                "AkSoundEngine".into(),
+                "AKRESULT.AK_Success".into(),
+                "1".into(),
+            )],
             unreadable: vec![],
         };
         let m = merge_map(&rep, &Json::obj()).unwrap();
@@ -1659,7 +1687,10 @@ mod tests {
              the game's entry points (wwise.c)\nfn AkSoundEngine CSharp_IsInitialized b -\nfn AkSoundEngine \
              CSharp_LoadBank__SWIG_4 i z,p,p,i,r\nconst AkSoundEngine AKRESULT.AK_Success 1\n"
         ));
-        let lib = crate::pyjson::loads(r#"{"AkSoundEngine": {"use": "lib", "file": "libAkSoundEngine.so"}}"#).unwrap();
+        let lib = crate::pyjson::loads(
+            r#"{"AkSoundEngine": {"use": "lib", "file": "libAkSoundEngine.so"}}"#,
+        )
+        .unwrap();
         let t = map_text(&rep, &merge_map(&rep, &lib).unwrap()).unwrap();
         assert!(!t.contains("\nfn ") && !t.contains("\nconst "));
     }
