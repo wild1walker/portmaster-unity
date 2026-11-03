@@ -79,6 +79,11 @@ fn set_num(v: &mut Value, n: u64) -> Result<()> {
     Ok(())
 }
 
+/// Whether the step applies with this config on this system (its mode), and why.
+pub fn applies(cfg: &Json) -> Result<(bool, String)> {
+    mode_of(&section(cfg, "video", &defaults())?)
+}
+
 pub fn run(job: &mut Job) -> Result<()> {
     let c = section(&job.cfg, "video", &defaults())?;
     let (on, why) = mode_of(&c)?;

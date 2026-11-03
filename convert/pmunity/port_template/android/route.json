@@ -3,6 +3,7 @@
   "files": {
     "@@TITLE@@.sh": "launcher.sh",
     "@@PORTDIR@@/setup/patchscript": "patchscript",
+    "@@PORTDIR@@/setup/update": "update",
     "@@PORTDIR@@/README.md": "README.player.md",
     "@@PORTDIR@@/gamedata/PUT_GAME_FILES_HERE.txt": "gamedata.txt",
     "@@PORTDIR@@/@@PORTDIR@@.ini": "hotkey.ini",

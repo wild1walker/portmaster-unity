@@ -35,7 +35,7 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
 | `wwise <banks> <out> [--check] [--wwise-lib PATH]` | (none: Rust only, 2026-11-02) | a Wwise game's soundbanks (bank version 128) into the data of ua_host's Wwise player ([wwise-player.md](wwise-player.md)): per bank `<Bank>.uaww.json` and `<Bank>.uaww.pak`, the media read and written one at a time (DATA is never held in memory); status 3 for another bank version |
 | `il2cpp <data> <out> --on-device ...`, `il2cpp fetch <version> [--on-device]` | il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py | the il2cpp-arm64 route's build on the handheld: Unity's IL2CPP and player by range reads, Debian's compilers and Microsoft's .NET (pinned by sha256), UnityLinker, il2cpp, the C++ build (Bee's graph from 2021.2), libil2cpp.so and Data/Managed (below, "`pmu il2cpp`"); the Docker route of a porter's PC (no `--on-device`) stays with the Python: status 2 |
-| `video <game dir> [--set KEY=VALUE]...` | (pmu's own, no Python) | convert's `video` step on a game set up before it existed, in place: the resource files of its APK and OBBs that hold WebM clips, with their asset files, taken out, the step run on them, and each changed file written back over its entry (stored, the same length: nothing else moves; every file checked before any is written, a stopped run writes them again); below, "`video`" |
+| `video <game dir> [--config <convert.json>] [--set KEY=VALUE]...` | (pmu's own, no Python) | convert's `video` step on a game set up before it existed (the android template's `setup/update` runs it), in place: the resource files of its APK and OBBs that hold WebM clips, with their asset files, taken out, the step run on them, and each changed file written back over its entry (stored, the same length: nothing else moves; every file checked before any is written, a stopped run writes them again); below, "`video`" |
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
@@ -281,7 +281,9 @@ its 30 pictures a second apart from the game's own loading frames (muOS, 2026-11
 On the handheld (muOS, H700, 2026-11-02): Hollow Knight's 14 clips over 720 lines (9,116 frames,
 84.2 MB) in 578 s, about 63 ms a frame, 43.9 MB after; its two 720p clips are left as they are.
 
-`pmu video <game dir> [--set KEY=VALUE]...` runs the step on a game set up before it existed: the
+`pmu video <game dir> [--config <convert.json>] [--set KEY=VALUE]...` runs the step on a game set
+up before it existed (with the port's convert config: only when its steps name `video`, with its
+`video` settings; the mode is checked before anything is read): the
 resource files of its APK and OBBs (assets/bin/Data/*.resource) that hold WebM clips are taken out
 with their asset files and globalgamemanagers into `<game dir>/.pmunity-video`, the step runs on
 them, and each file it changed is written back over its APK or OBB entry (stored and of the same

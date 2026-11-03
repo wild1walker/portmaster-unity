@@ -1,0 +1,35 @@
+#!/bin/bash
+# What a newer setup does that a game set up by an earlier release has not had yet, done on its
+# installed files (made with `pmunity port new`, android route). The launcher runs this through
+# PortMaster's patcher when the game is set up and setup/update is there: a release brings the
+# setup folder again, and a setup removes it when it ends, so a game set up by this release never
+# runs it. Now:
+#   - the game's videos (convert's `video` step, when the port's setup/convert.json has it):
+#     `pmu video` makes the VP8 clips of the installed APK and OBB smaller in place on handhelds
+#     with 1 GB of RAM or less (nothing elsewhere, or for a game without such clips)
+# It can be interrupted: the next launch runs it again. Log: ports/<port>/patchlog.txt.
+# PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why it failed.
+S="${GAMEDIR:?}/setup"
+. "$S/setup.env"
+
+exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
+echo "=== $(date) $PORT_TITLE update ==="
+fail() { echo "PATCH_FAIL_MSG:$1"; echo "Update failed: $1"; echo "Patching process failed!"; exit 1; }
+step() { echo; echo "== $(date +%H:%M:%S) $*"; }
+if [ "$DEVICE_ARCH" != aarch64 ] || [ ! -f "$S/pmu" ]; then
+  echo "no setup tools for this system ($DEVICE_ARCH): nothing to update"
+  rm -rf "$S"
+  exit 0
+fi
+chmod +x "$S/pmu" 2>/dev/null
+"$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
+echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB"
+
+if [ -f "$S/convert.json" ] && grep -q '"video"' "$S/convert.json"; then
+  step "the game's videos (a few minutes on a 1 GB handheld)"
+  "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt)."
+fi
+
+rm -rf "$S"
+sync
+echo "update done"

@@ -53,6 +53,18 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
   fi
 fi
 
+# ---- a game set up by an earlier release: what this release's setup does that it has not had yet
+# (setup/update, once: the setup folder comes with each release and goes when it is done)
+if [ -f "$GAMEDIR/setup/update" ] && [ -f "$controlfolder/utils/patcher.txt" ]; then
+  export GAMEDIR DEVICE_ARCH controlfolder
+  chmod +x "$GAMEDIR/setup/update"
+  export PATCHER_FILE="$GAMEDIR/setup/update"
+  export PATCHER_GAME="@@TITLE@@"
+  export PATCHER_TIME="a few minutes, once"
+  unset PATCHER_QUESTIONS
+  source "$controlfolder/utils/patcher.txt"
+fi
+
 # the built-in pad reaches the game as an Android gamepad (ua_host: SDL GameController ->
 # KeyEvent and MotionEvent)
 export SDL_GAMECONTROLLERCONFIG="${SDL_GAMECONTROLLERCONFIG:-$sdl_controllerconfig}"

@@ -376,6 +376,16 @@ build's assemblies compiled for Unity's arm64 IL2CPP player of its version (one 
 about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continues from
 `<work>/apk/.il2cpp`), its output shown as it goes.
 
+### A game set up by an earlier release
+
+A release brings the port's `setup/` folder again, and a setup removes it when it ends. When the
+launcher finds the game set up and `setup/update` there (android route), it runs that once through
+PortMaster's patcher: what this release's setup does that an earlier one did not, done on the
+installed files, then `setup/` goes. Now that is convert's `video` step when the port's
+`convert.json` has it (`pmu video`: the installed APK's and OBB's VP8 clips made smaller in place on
+1 GB handhelds, [rust-setup.md](rust-setup.md#video)); the update logs to `patchlog.txt` like the
+setup, and a run that is interrupted runs again at the next launch.
+
 ## 5. package
 
 ```

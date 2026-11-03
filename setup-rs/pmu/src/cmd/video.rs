@@ -1,5 +1,7 @@
-//! `pmu video <game dir> [--set KEY=VALUE]...` (pmu's own): convert's `video` step on a game that
-//! is already set up, in place, for setups made before the step existed. The resource files of
+//! `pmu video <game dir> [--config <convert.json>] [--set KEY=VALUE]...` (pmu's own): convert's
+//! `video` step on a game that is already set up, in place, for setups made before the step
+//! existed. With the port's convert config the step runs only when its "steps" name it, with its
+//! "video" settings (--set over them). The resource files of
 //! the APK and OBBs (assets/bin/Data/*.resource) that hold WebM clips are taken out with their
 //! asset files and the game's globalgamemanagers into <game dir>/.pmunity-video, the step runs on
 //! them (its settings: `--set mode=on`, `max_height=540`, ...; mode auto by default: only where
@@ -14,16 +16,20 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const DATA: &str = "assets/bin/Data/";
-const USAGE: &str = "usage: pmu video <game dir> [--set KEY=VALUE]...";
+const USAGE: &str = "usage: pmu video <game dir> [--config <convert.json>] [--set KEY=VALUE]...";
 
 fn fail(m: impl std::fmt::Display) -> ExitCode {
     eprintln!("video: {m}");
     ExitCode::from(1)
 }
 
-/// The step's settings from KEY=VALUE pairs (a number where the value is one).
-fn settings(sets: &[String]) -> Result<Json, String> {
-    let mut d = Vec::new();
+/// The step's settings: the config's "video" section (or none), KEY=VALUE pairs over it (a number
+/// where the value is one).
+fn settings(base: Option<&Json>, sets: &[String]) -> Result<Json, String> {
+    let mut d = match base.and_then(|c| c.get("video")) {
+        Some(Json::Dict(d)) => d.clone(),
+        _ => Vec::new(),
+    };
     for s in sets {
         let (k, v) = s.split_once('=').ok_or_else(|| format!("--set {s}: KEY=VALUE"))?;
         let k = k.strip_prefix("video.").unwrap_or(k);
@@ -31,6 +37,7 @@ fn settings(sets: &[String]) -> Result<Json, String> {
             Ok(n) => Json::Int(n),
             Err(_) => Json::Str(v.to_string()),
         };
+        d.retain(|(x, _)| x != k);
         d.push((k.to_string(), v));
     }
     Ok(Json::Dict(vec![("steps".into(), Json::List(vec![Json::Str("video".into())])), ("video".into(), Json::Dict(d))]))
@@ -47,6 +54,7 @@ fn has_webm(b: &[u8]) -> bool {
 pub fn run(args: &[String]) -> ExitCode {
     let mut game = None;
     let mut sets = Vec::new();
+    let mut config = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -54,15 +62,43 @@ pub fn run(args: &[String]) -> ExitCode {
                 Some(v) => sets.push(v.clone()),
                 None => return fail(USAGE),
             },
+            "--config" => match it.next() {
+                Some(v) => config = Some(v.clone()),
+                None => return fail(USAGE),
+            },
             _ if game.is_none() && !a.starts_with('-') => game = Some(PathBuf::from(a)),
             _ => return fail(USAGE),
         }
     }
     let Some(game) = game else { return fail(USAGE) };
-    let cfg = match settings(&sets) {
+    let base = match &config {
+        Some(p) => match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|t| {
+            convert::pyjson::loads(&t).map_err(|e| format!("{p}: {e:?}"))
+        }) {
+            Ok(j) => Some(j),
+            Err(e) => return fail(e),
+        },
+        None => None,
+    };
+    if let Some(b) = &base {
+        let named = b.get("steps").and_then(Json::as_list).is_some_and(|l| l.iter().any(|s| s.as_str() == Some("video")));
+        if !named {
+            println!("video: not one of this port's convert steps");
+            return ExitCode::SUCCESS;
+        }
+    }
+    let cfg = match settings(base.as_ref(), &sets) {
         Ok(c) => c,
         Err(e) => return fail(e),
     };
+    match convert::steps::video::applies(&cfg) {
+        Ok((false, why)) => {
+            println!("video: clips kept as they are ({why})");
+            return ExitCode::SUCCESS;
+        }
+        Ok(_) => {}
+        Err(e) => return fail(e),
+    }
     match in_place(&game, cfg) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(e),
@@ -166,9 +202,15 @@ mod tests {
 
     #[test]
     fn set_values() {
-        let c = settings(&["mode=on".into(), "video.max_height=540".into()]).unwrap();
+        let c = settings(None, &["mode=on".into(), "video.max_height=540".into()]).unwrap();
         let v = c.get("video").unwrap();
         assert_eq!(v.get("mode"), Some(&Json::Str("on".into())));
         assert_eq!(v.get("max_height"), Some(&Json::Int(540)));
+        // the port's section, --set over it
+        let port = convert::pyjson::loads(r#"{"steps": ["video"], "video": {"mode": "off", "cq_level": 12}}"#).unwrap();
+        let c = settings(Some(&port), &["mode=on".into()]).unwrap();
+        let v = c.get("video").unwrap();
+        assert_eq!(v.get("mode"), Some(&Json::Str("on".into())));
+        assert_eq!(v.get("cq_level"), Some(&Json::Int(12)));
     }
 }

@@ -538,7 +538,7 @@ class NewAndSetupTest(unittest.TestCase):
             _, out = self.make(t)
             with open(os.path.join(out, '.port_files')) as f:
                 files = set(f.read().split('\n')) - {''}
-            for f in ('My Game.sh', 'mygame/setup/patchscript', 'mygame/setup/setup.env', 'mygame/setup/convert.json',
+            for f in ('My Game.sh', 'mygame/setup/patchscript', 'mygame/setup/update', 'mygame/setup/setup.env', 'mygame/setup/convert.json',
                       'mygame/setup/questions.lua', 'mygame/setup.txt', 'mygame/port.json', 'mygame/port.env',
                       'mygame/README.md', 'mygame/gamedata/PUT_GAME_FILES_HERE.txt', 'mygame/mygame.ini',
                       'mygame/gameinfo.xml', 'README.md', 'package.sh', 'port.build.json', 'testing_thread.txt'):
@@ -547,7 +547,7 @@ class NewAndSetupTest(unittest.TestCase):
                 text = open(os.path.join(out, f), errors='replace').read()
                 if f != 'port.build.json':          # (it records route.json)
                     self.assertNotIn('@@', text, f)
-                if f.endswith(('.sh', 'patchscript')):
+                if f.endswith(('.sh', 'patchscript', 'setup/update')):
                     subprocess.run(['bash', '-n', os.path.join(out, f)], check=True)
                     # (644: the launcher sets exec bits; package.sh, the porter's build, is not shipped)
                     self.assertEqual(os.access(os.path.join(out, f), os.X_OK), f == 'package.sh', f)
