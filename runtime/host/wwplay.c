@@ -25,8 +25,8 @@
 // added with a gain ramp per block into 32-bit integer sums (mono sources four frames at a time with
 // NEON), which become the float stereo mix; UA_WWISE_VOICES (48) voices at most: a new voice past
 // that replaces the quietest (the oldest of equals), or is dropped if it is the quietest. The host
-// calls mix() on its audio output's thread (the game's own OpenSL ES player: one device); one mutex
-// guards the state between it and the game's calls. UA_WWISE_STATS=<s> (60; 0 = off): a log line
+// calls mix() on its audio output's thread (the game's own OpenSL ES player: one device); the game's
+// calls are queued for it, so they never wait for a mix (only LoadBank takes the player's lock). UA_WWISE_STATS=<s> (60; 0 = off): a log line
 // with events, voices and the player's CPU every <s> seconds; UA_WWISE_CAPTURE=<file.wav>: the
 // player's own mix written to a file as well (UA_WWISE_CAPTURE_SECS, 120 s).
 #define _GNU_SOURCE
@@ -1750,11 +1750,14 @@ static void stats_log(double now)
     g_vpeak = g_nv;
 }
 
+static void drain_locked(void);
+
 static void mix_locked(float *out, int frames)
 {
     int32_t *mono = g_acc, *st = g_acc + frames;
     memset(out, 0, (size_t)frames * 2 * sizeof *out);
     if (g_suspended) return;
+    drain_locked();
     memset(g_acc, 0, (size_t)frames * 3 * sizeof *g_acc);
     for (int i = 0; i < MAXPEND; i++) {          // delayed actions that are due
         pend_t *p = &g_pend[i];
@@ -1830,22 +1833,131 @@ static void mix(float *buf, int frames, int rate, int channels)
 }
 
 // ---------------------------------------------------------------------------------------- backend
-#define CALL_BEGIN double c0_ = cpu_now(); pthread_mutex_lock(&L)
-#define CALL_END g_st.call_cpu_s += cpu_now() - c0_; pthread_mutex_unlock(&L); flush_done()
+// The game's calls do not wait for the mixer: they go into a queue that the mixer reads at the start
+// of its next block (as Wwise runs posted events at its next audio frame), so a mix in progress never
+// holds up the game's thread. Only LoadBank takes the player's lock. PostEvent answers at once: a
+// playing ID for an event the banks have (Wwise's answer too, also when it plays nothing: its end
+// comes through host->event_done), 0 for one they do not.
+enum { Q_POST, Q_STOP, Q_STOPALL, Q_RTPC, Q_STATE, Q_SWITCH, Q_UNREG, Q_EAOE, Q_TERM };
+typedef struct { uint8_t op; int32_t i; uint32_t a, b; uint64_t obj; float f; } cmd_t;
+#define QN 4096
+static cmd_t g_q[QN];
+static unsigned g_qh, g_qt;             // read and write counts
+static pthread_mutex_t Q = PTHREAD_MUTEX_INITIALIZER;
+
+static void do_post(uint32_t event, uint64_t obj, uint32_t playing)
+{
+    int ei = im_get(&g_emap, event);
+    if (ei < 0) { GROW(g_done, g_ndone, g_cdone); g_done[g_ndone++] = playing; return; }
+    play_t *p = NULL;
+    for (int i = 0; i < g_nplay && !p; i++) if (!g_play[i].used) p = &g_play[i];
+    if (!p) { GROW(g_play, g_nplay, g_cplay); p = &g_play[g_nplay++]; }
+    *p = (play_t){ 1, playing, event, obj, 1 };     // one ref while the actions run
+    event_t *e = &g_evs[ei];
+    for (int i = 0; i < e->n; i++) {
+        act_t *a = &g_acts[e->first + i];
+        if (a->delay_ms > 0 && a->type != A_PLAY) {
+            for (int k = 0; k < MAXPEND; k++)
+                if (!g_pend[k].used) {
+                    g_pend[k] = (pend_t){ 1, e->first + i, g_clock + ms2f(a->delay_ms), playing, obj };
+                    play_ref(playing, 1);
+                    break;
+                }
+            continue;
+        }
+        run_action(a, playing, obj, ms2f(a->delay_ms));
+    }
+    p = play_find(playing);
+    if (p && p->refs > 1) g_st.played++;
+    play_ref(playing, -1);                      // nothing started: it ends now
+}
+
+// ExecuteActionOnEvent: stop (0), pause (1) or resume (2) what an event plays
+static void do_eaoe(uint32_t ev, int action, uint64_t obj, float ms, uint32_t pid)
+{
+    for (int i = 0; i < g_maxv; i++) {
+        voice_t *v = &g_v[i];
+        if (!v->used) continue;
+        play_t *p = play_find(v->playing);
+        if (!p || p->event != ev || (obj != ~0ull && v->obj != obj) || (pid && v->playing != pid)) continue;
+        if (action == 0) voice_stop(v, ms);
+        else if (action == 1) v->paused = 1;
+        else if (action == 2) v->paused = 0;
+    }
+    if (action == 0)
+        for (int i = 0; i < MAXMUS; i++) {
+            mus_t *m = &g_mus[i];
+            play_t *p = m->used ? play_find(m->c.playing) : NULL;
+            if (p && p->event == ev && (obj == ~0ull || m->c.obj == obj) && (!pid || m->c.playing == pid)) m->ended = 1;
+        }
+}
+
+static void run_cmd(const cmd_t *c)
+{
+    switch (c->op) {
+    case Q_POST: __atomic_add_fetch(&g_st.posted, 1, __ATOMIC_RELAXED); do_post(c->a, c->obj, c->b); break;
+    case Q_STOP: stop_where(m_playing, 0, c->b, 0); break;
+    case Q_STOPALL: stop_where(c->i ? m_all : m_obj, c->obj, 0, 0); break;
+    case Q_RTPC: rtpc_set(c->a, c->f); break;
+    case Q_STATE: state_set(c->a, c->b); break;
+    case Q_SWITCH: switch_set(c->a, c->b, c->obj); break;
+    case Q_UNREG:                               // Wwise stops what an unregistered object plays
+        stop_where(m_obj, c->obj, 0, 0);
+        for (int i = 0; i < g_nswitches;) if (g_switches[i].obj == c->obj) g_switches[i] = g_switches[--g_nswitches]; else i++;
+        break;
+    case Q_EAOE: do_eaoe(c->a, c->i, c->obj, c->f, c->b); break;
+    case Q_TERM:
+        stop_where(m_all, 0, 0, 0);
+        for (int i = 0; i < g_maxv; i++) voice_free(&g_v[i]);
+        break;
+    }
+}
+
+static void drain_locked(void)              // the queued calls, in order (the player's lock held)
+{
+    cmd_t c[64];
+    for (;;) {
+        pthread_mutex_lock(&Q);
+        int n = 0;
+        while (g_qh != g_qt && n < 64) c[n++] = g_q[g_qh++ % QN];
+        pthread_mutex_unlock(&Q);
+        if (!n) return;
+        for (int i = 0; i < n; i++) run_cmd(&c[i]);
+    }
+}
+
+static void push(cmd_t c)
+{
+    pthread_mutex_lock(&Q);
+    while (g_qt - g_qh >= QN) {                 // full (no output reads the mix): run them here
+        pthread_mutex_unlock(&Q);
+        pthread_mutex_lock(&L);
+        drain_locked();
+        pthread_mutex_unlock(&L);
+        flush_done();
+        pthread_mutex_lock(&Q);
+    }
+    g_q[g_qt++ % QN] = c;
+    pthread_mutex_unlock(&Q);
+}
 
 static int b_init(const char *base, const char *lang) { (void)base; (void)lang; return UA_AK_SUCCESS; }
 
 static int b_load_bank(const char *name, uint32_t id, const void *data, uint32_t size, uint32_t *bank_id)
 {
     (void)data; (void)size;
-    CALL_BEGIN;
+    double c0 = cpu_now();
+    pthread_mutex_lock(&L);
+    drain_locked();                             // what came before, on the banks loaded before
     if (name) bank_load(name, bank_id);
     else if (id) {
         int known = 0;
         for (int i = 0; i < g_nbanks; i++) if (g_banks[i].id == id) known = 1;
         if (!known) logf_("bank %u (by ID or from memory): not known to the player", id);
     }
-    CALL_END;
+    g_st.call_cpu_s += cpu_now() - c0;
+    pthread_mutex_unlock(&L);
+    flush_done();
     return UA_AK_SUCCESS;
 }
 
@@ -1854,72 +1966,32 @@ static int b_unload_bank(uint32_t id) { (void)id; return UA_AK_SUCCESS; }   // t
 static int b_post_event(uint32_t event, uint64_t obj, uint32_t playing, uint32_t flags)
 {
     (void)flags;
-    CALL_BEGIN;
-    g_st.posted++;
-    int ei = im_get(&g_emap, event), on = 0;
-    if (ei >= 0) {
-        play_t *p = NULL;
-        for (int i = 0; i < g_nplay && !p; i++) if (!g_play[i].used) p = &g_play[i];
-        if (!p) { GROW(g_play, g_nplay, g_cplay); p = &g_play[g_nplay++]; }
-        *p = (play_t){ 1, playing, event, obj, 1 };     // one ref while the actions run
-        event_t *e = &g_evs[ei];
-        for (int i = 0; i < e->n; i++) {
-            act_t *a = &g_acts[e->first + i];
-            if (a->delay_ms > 0 && a->type != A_PLAY) {
-                for (int k = 0; k < MAXPEND; k++)
-                    if (!g_pend[k].used) {
-                        g_pend[k] = (pend_t){ 1, e->first + i, g_clock + ms2f(a->delay_ms), playing, obj };
-                        play_ref(playing, 1);
-                        break;
-                    }
-                continue;
-            }
-            run_action(a, playing, obj, ms2f(a->delay_ms));
-        }
-        p = play_find(playing);
-        on = p && p->refs > 1;
-        if (p) {
-            if (on) p->refs--;
-            else { p->used = 0; while (g_nplay && !g_play[g_nplay - 1].used) g_nplay--; }
-        }
-        if (on) g_st.played++;
+    if (im_get(&g_emap, event) < 0) {           // the banks load on this thread: no race with LoadBank
+        __atomic_add_fetch(&g_st.posted, 1, __ATOMIC_RELAXED);
+        return 0;
     }
-    CALL_END;
-    return on;
+    push((cmd_t){ Q_POST, 0, event, playing, obj, 0 });
+    return 1;
 }
 
-static void b_stop(uint32_t playing) { CALL_BEGIN; stop_where(m_playing, 0, playing, 0); CALL_END; }
-static void b_stop_all(uint64_t obj, int every) { CALL_BEGIN; stop_where(every ? m_all : m_obj, obj, 0, 0); CALL_END; }
-
+static void b_stop(uint32_t playing) { push((cmd_t){ Q_STOP, 0, 0, playing, 0, 0 }); }
+static void b_stop_all(uint64_t obj, int every) { push((cmd_t){ Q_STOPALL, every, 0, 0, obj, 0 }); }
 static void b_set_rtpc(uint32_t id, float value, uint64_t obj, uint32_t playing, int every)
 {
     (void)obj; (void)playing; (void)every;      // step 1: every value is global
-    CALL_BEGIN;
-    rtpc_set(id, value);
-    CALL_END;
+    push((cmd_t){ Q_RTPC, 0, id, 0, 0, value });
 }
-
-static void b_set_state(uint32_t group, uint32_t state) { CALL_BEGIN; state_set(group, state); CALL_END; }
-static void b_set_switch(uint32_t group, uint32_t value, uint64_t obj) { CALL_BEGIN; switch_set(group, value, obj); CALL_END; }
-
-static void b_game_object(uint64_t obj, const char *name, int registered)
-{
-    (void)name;
-    if (registered) return;
-    CALL_BEGIN;                                 // Wwise stops what an unregistered object plays
-    stop_where(m_obj, obj, 0, 0);
-    for (int i = 0; i < g_nswitches;) if (g_switches[i].obj == obj) g_switches[i] = g_switches[--g_nswitches]; else i++;
-    CALL_END;
-}
-
-static void b_suspend(int on) { pthread_mutex_lock(&L); g_suspended = on; pthread_mutex_unlock(&L); }
-
+static void b_set_state(uint32_t group, uint32_t state) { push((cmd_t){ Q_STATE, 0, group, state, 0, 0 }); }
+static void b_set_switch(uint32_t group, uint32_t value, uint64_t obj) { push((cmd_t){ Q_SWITCH, 0, group, value, obj, 0 }); }
+static void b_game_object(uint64_t obj, const char *name, int registered) { (void)name; if (!registered) push((cmd_t){ Q_UNREG, 0, 0, 0, obj, 0 }); }
+static void b_suspend(int on) { __atomic_store_n(&g_suspended, on, __ATOMIC_RELAXED); }
 static void b_term(void)
 {
-    CALL_BEGIN;
-    stop_where(m_all, 0, 0, 0);
-    for (int i = 0; i < g_maxv; i++) voice_free(&g_v[i]);
-    CALL_END;
+    push((cmd_t){ Q_TERM, 0, 0, 0, 0, 0 });
+    pthread_mutex_lock(&L);
+    drain_locked();
+    pthread_mutex_unlock(&L);
+    flush_done();
 }
 
 static void b_render(void)                      // once a frame, on the game's thread
@@ -1927,7 +1999,7 @@ static void b_render(void)                      // once a frame, on the game's t
     double now = wall_now();
     pthread_mutex_lock(&L);
     int stalled = g_last_mix_wall > 0 ? now - g_last_mix_wall > 0.5 : now - g_stats_wall > 1.0;
-    int busy = g_nv > 0 || g_nplay > 0;
+    int busy = g_nv > 0 || g_nplay > 0 || g_qh != g_qt;
     double since = g_last_mix_wall > 0 ? now - g_last_mix_wall : 0;
     pthread_mutex_unlock(&L);
     // no output reads the mix (none open, or it stopped): time goes on silently, so events end
@@ -1949,23 +2021,7 @@ static int b_call(const ua_ak_call *c, ua_ak_value *ret)
     uint64_t obj = c->nargs > 2 ? c->a[2].u : ~0ull;
     float ms = c->nargs > 3 ? (float)c->a[3].i : 0;
     uint32_t pid = c->nargs > 5 ? (uint32_t)c->a[5].u : 0;
-    CALL_BEGIN;
-    for (int i = 0; i < g_maxv; i++) {
-        voice_t *v = &g_v[i];
-        if (!v->used) continue;
-        play_t *p = play_find(v->playing);
-        if (!p || p->event != ev || (obj != ~0ull && v->obj != obj) || (pid && v->playing != pid)) continue;
-        if (action == 0) voice_stop(v, ms);
-        else if (action == 1) v->paused = 1;
-        else if (action == 2) v->paused = 0;
-    }
-    if (action == 0)
-        for (int i = 0; i < MAXMUS; i++) {
-            mus_t *m = &g_mus[i];
-            play_t *p = m->used ? play_find(m->c.playing) : NULL;
-            if (p && p->event == ev && (obj == ~0ull || m->c.obj == obj) && (!pid || m->c.playing == pid)) m->ended = 1;
-        }
-    CALL_END;
+    push((cmd_t){ Q_EAOE, action, ev, pid, obj, ms });
     ret->i = UA_AK_SUCCESS;
     return 1;
 }
@@ -2011,6 +2067,7 @@ void wwplay_close(void)
     if (g_cap.f) wwplay_wav_close(&g_cap);
     memset(&g_st, 0, sizeof g_st); memset(&g_st_last, 0, sizeof g_st_last);
     g_clock = 0; g_serial = 0; g_vpeak = 0; g_suspended = 0; g_last_mix_wall = 0; g_rng = 0x9e3779b9u;
+    g_qh = g_qt = 0;
     pthread_mutex_unlock(&L);
 }
 
@@ -2052,9 +2109,10 @@ const ua_wwise_backend *wwplay_backend_get(const ua_wwise_host *host)
     return d && *d ? wwplay_open(host, d) : NULL;
 }
 
-void wwplay_get_stats(wwplay_stats *s)
+void wwplay_get_stats(wwplay_stats *s)      // the queued calls run first
 {
     pthread_mutex_lock(&L);
+    drain_locked();
     *s = g_st;
     s->voices = g_nv;
     s->voices_peak = g_vpeak;

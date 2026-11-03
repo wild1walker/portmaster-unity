@@ -295,14 +295,14 @@ int main(int argc, char **argv)
     run(0.2f);
     CHECK(voices() == 1 && was_done(a) && !was_done(b), "limit: voices %d", voices());
     CHECK(fabsf(mean(0, 0.15f, 0.2f) - 0.5f * 0.7071f) < 0.01f, "looping level %f", mean(0, 0.15f, 0.2f));
-    post(107, 1, &on);
-    CHECK(on == 0, "a stop event plays");
+    p = post(107, 1, &on);
     run(0.1f);
-    CHECK(voices() == 0 && was_done(b) && rms(0, 0.02f, 0.1f) < 1e-4f, "stop: voices %d", voices());
+    CHECK(voices() == 0 && was_done(b) && was_done(p) && rms(0, 0.02f, 0.1f) < 1e-4f, "stop: voices %d", voices());
 
     // instance limit 1, the newest refused
     a = post(160, 1, &on); b = post(160, 1, &on);
-    CHECK(on == 0 && !was_done(a) && voices() == 1, "limit_newest: on %d voices %d", on, voices());
+    run(0.02f);
+    CHECK(was_done(b) && !was_done(a) && voices() == 1, "limit_newest: voices %d", voices());
     B->stop(a); run(0.05f);
     CHECK(voices() == 0 && was_done(a), "limit_newest stop");
 
@@ -370,9 +370,9 @@ int main(int argc, char **argv)
     // (0.3 - 0.5: 33's tail 0.1 and 34 0.2 overlap = 0.3; 0.7 - 0.8: 34's tail and 33 again)
     // state 802 at 1.2 s: taken at the current segment's exit (34 began at 1.0: exit at 1.4, where 33
     // would have come), so 35 (0.3) follows 34 (0.2) at 1.4
-    post(131, 1, &on);
-    CHECK(on == 0, "a state event plays");
+    p = post(131, 1, &on);
     run(0.6f);
+    CHECK(on == 1 && was_done(p), "a state event: %d, ended %d", on, was_done(p));
     float before = mean(0, 0.02f, 0.18f) / 0.7071f, after = mean(0, 0.32f, 0.55f) / 0.7071f;
     CHECK(fabsf(before - 0.2f) < 0.003f && fabsf(after - 0.3f) < 0.003f, "state change at exit: %f %f", before, after);
     // 803: a rule syncs to "immediate": at once

@@ -312,9 +312,13 @@ output hook directly. Nothing of Audiokinetic's code or data is in it.
   32-bit integer sums (mono sources, most of them, four frames at a time with NEON), which become the
   float stereo mix (mono sources centred at -3 dB a side); at most `UA_WWISE_VOICES` (48) play: a new
   voice past that replaces the quietest one (the oldest of equals), or is dropped if it is the
-  quietest itself. One mutex guards
-  the player between the game's calls and the output thread. When no output reads the mix for
-  0.5 s (none open), `RenderAudio` advances it silently, so events still end.
+  quietest itself. The game's calls
+  (PostEvent, StopAll, the game syncs, ...) do not wait for the mixer: they are queued and run at
+  the start of its next block, as Wwise runs posted events at its next audio frame (only LoadBank
+  takes the player's lock), so a mix in progress never holds up the game's thread. PostEvent answers
+  at once with a playing ID for every event the banks have (as Wwise does, also when it ends up
+  playing nothing: its end comes through the callback), 0 for an unknown one. When no output reads
+  the mix for 0.5 s (none open), `RenderAudio` advances it silently, so events still end.
 - **Not in step 1**: effects (inserts, aux sends), HDR, 3D positioning, attenuation and panning,
   LPF / HPF, transition segments and beat-synced transitions, crossfades between a continuous
   container's children, per-object sequence positions (they are global), RTPC values per game object
