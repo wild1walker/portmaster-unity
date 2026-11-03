@@ -196,6 +196,20 @@ multiplies with it: the URP camera renders at its scale of the window.
 | `UA_HITCH_TRACE=<ms>` | in frames longer than `<ms>`, sample `UA_HITCH_THREADS` (default `UnityMain`) every `UA_HITCH_EVERY` ms (20): pc, lr, return addresses as module+offset (runtime/host/hitches.c; `tools/analysis/sym.py` names libunity offsets, `tools/analysis/hitchsum.py` sums them up). `UA_PROF_EVERY=<ms>` logs such a sample of those threads every `<ms>` all the time (`hitchsum.py --prof`; heavy: `UA_PROF` replaces it) |
 | `UA_PROF=<hz>` | the sampling profiler, off by default: recordings of `UA_PROF_THREADS` (default `UnityMain,UnityGfxDeviceW`; `Job.Worker*` style prefixes, `@swap` the presenting thread) at `<hz>` samples a second, `UA_PROF_SECS` long (20), started by `touch <root>/prof.req` (a number in it: the length) or once `UA_PROF_START` s after the first frame; `UA_PROF_DEPTH` (32) return addresses a sample from `UA_PROF_SCAN` bytes of stack (16384). Each one is written to `<root>/prof-<n>.txt`: states (on a CPU, runnable, blocked in which call), pc, lr and callers (unwound through code with unwind tables, scanned above Mono's JIT frames), Mono's JIT methods by name, per-thread CPU time, frame times; `tools/analysis/profsum.py` sums it up by module, function and managed method (runtime/host/prof.c, [profiling.md](profiling.md)) |
 
+## What a desktop game sees
+
+Some answers of Unity's Android player differ from a desktop player's in ways desktop code does not
+expect; ua_host gives the desktop's (runtime/host/desktopenv.c; Mono players):
+
+| | the Android player | ua_host |
+|---|---|---|
+| `Environment.GetCommandLineArgs()`, `Environment.CommandLine` | libunity gives Mono no main arguments (none to `mono_unity_runtime_set_main_args` / `mono_runtime_set_main_args`), so the list is null and `CommandLine` throws `ArgumentNullException` (`String.Join` of null): a game that looks for its switches stops there (a 2017.4 game's options loader stopped half way) | a desktop player's shape: the program's path (`ua_host`'s), then Unity's own switches (`UA_UNITY_ARGS` and what the host adds to them) or the arguments libunity passes; logged as `[host] the game's command line: ...` |
+| `Screen.resolutions` | empty (Unity reads display modes only from Android 6's `Display.Mode`): code that indexes it throws (`ArgumentOutOfRangeException` from an options menu's resolution list) | when Unity's list is empty, one mode: the window's size (what `Screen.width`/`height` say) at the display's refresh rate, as a desktop with one mode; Unity's own list is passed through when it has one. Logged once as `[host] Screen.resolutions: ...` |
+
+IL2CPP players keep an empty argument list rather than none (`CommandLine` is "", nothing throws).
+Checked by `runtime/host/test/plugins_test.sh` (`test_desktopenv`: stand-ins for Mono's setter, its
+icall registration and arrays).
+
 ## Video
 
 Unity's VideoPlayer plays clips through `runtime/media` (details, call sequences and costs:
