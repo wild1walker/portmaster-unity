@@ -122,7 +122,8 @@ android_vsync_set_refresh_rate(display_hz);  // the vsync clock of both choreogr
 Environment variables: `ANDROID_LOG_LEVEL`, `ANDROID_ASSET_DIR`, `ANDROID_WINDOW_SIZE=WxH`,
 `ANDROID_FBDEV` (default /dev/fb0), `ANDROID_SHIM_LIBEGL` (real libEGL path, default libEGL.so.1
 then libEGL.so), `ANDROID_SLES_SAMPLES` (SDL buffer in frames, default 512), `ANDROID_SLES_DEVICE`
-(SDL output device name), `ANDROID_SHIM_TRACE=1` (trace shim calls), plus SDL's own
+(SDL output device name), `ANDROID_SLES_OUTPUT`, `ANDROID_SLES_PIPE_CMD`, `ANDROID_SLES_PIPE_NICE`,
+`ANDROID_SLES_CAPTURE` (docs/runtime.md), `ANDROID_SHIM_TRACE=1` (trace shim calls), plus SDL's own
 (`SDL_AUDIODRIVER`, ...).
 
 ## EGL and the window

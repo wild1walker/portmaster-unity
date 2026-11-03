@@ -18,8 +18,10 @@
 //
 // An underrun (the queue ran dry while playing: the game's mixer was late, the listener hears a
 // gap) is logged with how long it lasted, at the host's time since the first frame like its
-// [hitch] lines (the first 50, then every 100th). ANDROID_SLES_CAPTURE=<file> also writes what
-// each player outputs (raw PCM in the player's format, gaps as silence) to <file>, a later
+// [hitch] lines (the first 50, then every 100th). On the pipe output so is an empty pipe (our
+// writer was late, the game's mixer was not: the sound server likely played a gap); the writer
+// runs at the priority SDL gives its own audio thread. ANDROID_SLES_CAPTURE=<file> also writes
+// what each player outputs (raw PCM in the player's format, gaps as silence) to <file>, a later
 // player to <file>.<n>: a silent device test can check the sound itself.
 #define _GNU_SOURCE
 #include "sles_min.h"
@@ -36,6 +38,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -132,6 +137,7 @@ typedef struct obj {
             pid_t pipe_pid;
             pthread_t pipe_thread;
             volatile int pipe_run;
+            unsigned pipe_dry;            // writes that found the pipe empty (the client waited on us)
             float *mixbuf;                // android_sles_set_mix's float buffer (output thread only)
             int mixcap;
         } p;
@@ -355,16 +361,40 @@ static void player_sdl_callback(void *ud, Uint8 *stream, int len) { player_fill(
 static void *pipe_writer(void *ud)
 {
     obj *o = ud;
+    // the priority SDL gives its own audio thread on the sdl output (TIME_CRITICAL: nice -20 on
+    // Linux, which root may set), as an Android AudioTrack's thread runs above the game's: the pipe
+    // holds a few tens of ms, and a burst of the game's threads must not keep us from refilling it.
+    // ANDROID_SLES_PIPE_NICE=<n> sets another (0: the game's own; a measurement)
+    const char *nv = getenv("ANDROID_SLES_PIPE_NICE");
+    int nice_v = nv && *nv ? atoi(nv) : -20;
+    if (nice_v && setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice_v) != 0)
+        SHIM_TRACE("OpenSL: pipe writer: nice %d refused (%s)", nice_v, strerror(errno));
     int len = 256 * o->p.frame_bytes;          // ~5 ms per write at 48 kHz
     Uint8 *buf = malloc(len);
+    int filled = 0;                            // the pipe has been full once (the start is not a gap)
+    double back = mono_now();
     while (buf && o->p.pipe_run) {
         player_fill(o, buf, len);
+        // the pipe empty: the client has taken all we gave it and waits on us, so the sound server
+        // has likely played a gap. Logged with how long the writer was away since its last write
+        // returned (long: it was kept from running; short: the client drained it at once)
+        int queued;
+        if (ioctl(o->p.pipe_fd, FIONREAD, &queued) == 0) {
+            double t = mono_now();
+            if (queued == 0 && filled && (++o->p.pipe_dry <= 50 || o->p.pipe_dry % 100 == 0)) {
+                double t0 = frames_t_start ? frames_t_start() : 0;
+                SHIM_WARN("OpenSL: pipe ran dry %u at %.1f s (the writer away %.1f ms)", o->p.pipe_dry,
+                          t0 > 0 ? t - t0 : 0.0, (t - back) * 1000);
+            }
+            if (queued >= len) filled = 1;
+        }
         for (int done = 0; done < len && o->p.pipe_run; ) {   // blocks while the pipe is full: pacing
             ssize_t k = write(o->p.pipe_fd, buf + done, len - done);
             if (k < 0 && errno == EINTR) continue;
             if (k <= 0) { SHIM_WARN("OpenSL: audio pipe closed (%s)", k < 0 ? strerror(errno) : "EOF"); o->p.pipe_run = 0; break; }
             done += k;
         }
+        back = mono_now();
     }
     free(buf);
     return NULL;
@@ -672,6 +702,7 @@ static void Object_Destroy(SLObjectItf self)
         pipe_close(o);
         if (o->p.capture) fclose(o->p.capture);
         if (o->p.underruns) SHIM_TRACE("OpenSL: player %p had %u underruns", (void *)o, o->p.underruns);
+        if (o->p.pipe_dry) SHIM_TRACE("OpenSL: player %p: its pipe ran dry %u times", (void *)o, o->p.pipe_dry);
         pthread_mutex_destroy(&o->p.lock);
         free(o->p.queue);
         free(o->p.mixbuf);
