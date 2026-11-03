@@ -337,7 +337,8 @@ void main()
 
 class AsmpatchTest(unittest.TestCase):
     """--asmpatch: the command gets <Managed> <work dir>; what it writes is shipped like
-    --managed-file; its failure stops the run; an assembly a port also provides is an error."""
+    --managed-file; its failure stops the run; an assembly a port also gives is patched by the port
+    first, then by asmpatch."""
 
     FAKE = ('import os, sys\n'
             'managed, out = sys.argv[-2], sys.argv[-1]\n'
@@ -345,7 +346,11 @@ class AsmpatchTest(unittest.TestCase):
             'os.makedirs(out, exist_ok=True)\n'
             'mode = sys.argv[1]\n'
             'if mode == "fail": print("FAIL rewired-android: no constant"); sys.exit(1)\n'
-            'if mode == "patch":\n'
+            'if mode == "append":\n'
+            '    src = open(os.path.join(managed, "Assembly-CSharp.dll"), "rb").read()\n'
+            '    open(os.path.join(out, "Assembly-CSharp.dll"), "wb").write(src + b"+asm")\n'
+            '    print("ok   streaming-assets: Assembly-CSharp.dll")\n'
+            'elif mode == "patch":\n'
             '    open(os.path.join(out, "Assembly-CSharp.dll"), "wb").write(b"patched")\n'
             '    print("ok   rewired-android: Assembly-CSharp.dll: platform Linux -> Android (7)")\n'
             '    print("wrote Assembly-CSharp.dll")\n'
@@ -386,10 +391,36 @@ class AsmpatchTest(unittest.TestCase):
             self.run_it('fail')
         self.assertIn('no constant', str(cm.exception))
 
-    def test_clash_with_port_patch(self):
-        with self.assertRaises(SystemExit) as cm:
-            self.run_it('patch', assembly_patch=[('Assembly-CSharp.dll', 'codepatch {managed} {out}')])
-        self.assertIn('also provide', str(cm.exception))
+    def test_port_patch_then_asmpatch(self):
+        # the port's assembly patch runs on the game's original, asmpatch on its output: both are in the
+        # assembly shipped, and the patch command's own lines are logged
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, True)
+        port = os.path.join(td, 'portpatch.py')
+        with open(port, 'w') as f:
+            f.write('import os, sys\n'
+                    'src = open(os.path.join(sys.argv[1], "Assembly-CSharp.dll"), "rb").read()\n'
+                    'open(os.path.join(sys.argv[2], "Assembly-CSharp.dll"), "wb").write(src + b"+port")\n'
+                    'print("ok   wwise: 3 calls")\n')
+        args, notes, logged = self.run_it('append', assembly_patch=[('Assembly-CSharp.dll', f'"{sys.executable}" -I "{port}" {{managed}} {{out}}')])
+        self.assertEqual([os.path.basename(f) for f in args.managed_file], ['Assembly-CSharp.dll'])
+        with open(args.managed_file[0], 'rb') as f:
+            self.assertEqual(f.read(), b'orig+port+asm')
+        self.assertEqual(args.assembly_patch, [])
+        self.assertIn('assembly patch Assembly-CSharp.dll: ok   wwise: 3 calls', logged)
+        self.assertIn('assembly patch Assembly-CSharp.dll: ok   wwise: 3 calls', notes)
+        self.assertFalse(os.path.exists(os.path.join(args.out, '.asmpatch-in')))
+
+    def test_port_managed_file_then_asmpatch(self):
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, True)
+        mine = os.path.join(td, 'Assembly-CSharp.dll')
+        with open(mine, 'wb') as f:
+            f.write(b'mine')
+        args, notes, logged = self.run_it('append', managed_file=[mine])
+        self.assertEqual(len(args.managed_file), 1)
+        with open(args.managed_file[0], 'rb') as f:
+            self.assertEqual(f.read(), b'mine+asm')
 
 
 class PlanTest(unittest.TestCase):

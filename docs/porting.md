@@ -207,7 +207,7 @@ takes the UnityEngine assemblies from a Mono donor of the same version). Cuphead
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set: reductions of the picture that leave the game play as it is ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
-| `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`, `{setup}` = the setup folder), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
+| `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 9), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
 | `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
 
 Keep the game's look and play: options that change the picture or the game play stay off unless
@@ -491,11 +491,46 @@ Typical first problems:
 
 Desktop builds sometimes assume a desktop: a store client (GOG Galaxy, Steamworks) the game waits
 for, DLC found through the store, input set up for keyboards and desktop pads, a resolution or
-aspect that does not fit the screen. Generic fixes are in `tools/asmpatch` (`android_data.asmpatch`:
-e.g. Rewired on its Android platform); a game's own go in its port: patches to its assemblies
-(`files.assembly_patches`, run on the original assembly at packaging time) and a helper assembly
+aspect that does not fit the screen. Generic fixes are in the runtime (Wwise without its ARM library:
+[plugins.md](plugins.md#wwise); a d-pad for the left stick: [input.md](input.md#handhelds-without-sticks);
+the command line and `Screen.resolutions`: [runtime.md](runtime.md#what-a-desktop-game-sees)) and in
+`tools/asmpatch` (`android_data.asmpatch`: e.g. Rewired on its Android platform); a game's own go in
+its port: patches to its assemblies (`files.assembly_patches`) and a helper assembly
 (`files.managed`), as portmaster-cuphead does with Mono.Cecil. Changes that alter the picture or
 the game play belong behind an option, off by default.
+
+### A port's own assembly patch
+
+The setup runs it on the handheld, on the player's copy of the game: android-data's `--assembly-patch
+NAME COMMAND` (port.toml's `files.assembly_patches = [{name, command, files}]`) runs `COMMAND` with
+`{managed}` replaced by the game's original Managed folder and `{out}` by an empty folder, where it
+must write `NAME` (e.g. `Assembly-CSharp.dll`); a non-zero exit stops the setup with its output. Its
+output lines go to `patchlog.txt` (`assembly patch <NAME>: <line>`), and the lines that start with `ok`
+also into `android_data_report.json`. The command is a program for the handheld's aarch64 system,
+which has no .NET: a self-contained single file, built by `port package` from the port's sources:
+
+```toml
+[files]
+assembly_patches = [{name = "Assembly-CSharp.dll", command = "{setup}/files/mypatch {managed} {out}", files = []}]
+
+[build]
+commands = ["patch/build.sh"]                       # dotnet publish -r linux-arm64 --self-contained
+outputs = {"setup/files/mypatch" = "{build}/mypatch"}
+```
+
+`patch/build.sh` publishes a small Mono.Cecil program as tools/asmpatch/build.sh publishes asmpatch:
+`dotnet publish <proj> -c Release -r linux-arm64 --self-contained -p:PublishSingleFile=true
+-p:PublishTrimmed=true -p:InvariantGlobalization=true -p:DebugType=none -p:TrimmerRemoveSymbols=true`
+(and a check that the binary names no folder of the build machine). The program reads
+`{managed}/NAME` with a resolver on `{managed}`, changes what it must, writes `{out}/NAME`, prints an
+`ok   <what>: <how>` line per change, and exits non-zero (with a `FAIL` line) when what it patches is
+not there, so a game update that moved the code stops the setup instead of shipping a half-patched
+game. Patch what only this game needs; what any game of its kind needs belongs in the runtime or
+asmpatch.
+
+With asmpatch on (`android_data.asmpatch`, or `streaming_assets` other than `obb`), an assembly both
+change gets both: the port's patch runs first, on the original, and asmpatch then patches its output
+(tools/asmpatch/README.md). The il2cpp-arm64 route runs the same command before its IL2CPP build.
 
 ## 10. Extending `pmunity port`
 

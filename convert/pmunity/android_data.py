@@ -1513,22 +1513,63 @@ def check_source(args):
 
 def run_asmpatch(args, log):
     """--asmpatch: tools/asmpatch on the game's Managed folder writes the assemblies its patches
-    change into <out>/.asmpatch; they are shipped like --managed-file ones."""
+    change into <out>/.asmpatch; they are shipped like --managed-file ones. When it changes an
+    assembly the port also gives (--assembly-patch, --managed-file), the port's comes first: its patch
+    command runs on the game's original (as always), and asmpatch runs again on a copy of the Managed
+    folder with the port's assemblies in place, so the assembly shipped has both."""
     src = args.game_managed or os.path.join(args.src, 'Managed')
     work = os.path.join(args.out, '.asmpatch')
-    shutil.rmtree(work, ignore_errors=True)
-    r = subprocess.run(shlex.split(args.asmpatch) + [src, work], capture_output=True, text=True)
-    for line in r.stdout.splitlines():
-        log('asmpatch: ' + line)
-    if r.returncode != 0:
-        raise SystemExit(f'asmpatch failed (exit {r.returncode}):\n{r.stdout}{r.stderr}')
-    written = sorted(n for n in os.listdir(work) if n.endswith('.dll')) if os.path.isdir(work) else []
-    clash = [n for n in written if n in dict(args.assembly_patch) or n in {os.path.basename(f) for f in args.managed_file}]
+
+    def run(managed):
+        shutil.rmtree(work, ignore_errors=True)
+        r = subprocess.run(shlex.split(args.asmpatch) + [managed, work], capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            log('asmpatch: ' + line)
+        if r.returncode != 0:
+            raise SystemExit(f'asmpatch failed (exit {r.returncode}):\n{r.stdout}{r.stderr}')
+        return sorted(n for n in os.listdir(work) if n.endswith('.dll')) if os.path.isdir(work) else [], r.stdout
+
+    written, stdout = run(src)
+    patched = dict(args.assembly_patch)
+    given = {os.path.basename(f): f for f in args.managed_file}
+    clash = [n for n in written if n in patched or n in given]
+    port_notes = []
     if clash:
-        raise SystemExit(f'asmpatch changed {", ".join(clash)}, which --assembly-patch/--managed-file also provide: '
-                         f'run asmpatch on that assembly inside the patch command instead')
+        stage = os.path.join(args.out, '.asmpatch-in')
+        shutil.rmtree(stage, ignore_errors=True)
+        os.makedirs(stage)
+        for n in sorted(os.listdir(src)):
+            if n.endswith('.dll') and os.path.isfile(os.path.join(src, n)):
+                shutil.copyfile(os.path.join(src, n), os.path.join(stage, n))
+        for n in clash:
+            if n in given:
+                shutil.copyfile(given[n], os.path.join(stage, n))
+            else:
+                port_notes += [f'assembly patch {n}: {line}' for line in assembly_patch(args, n, os.path.join(stage, n), log)
+                               if line.startswith('ok')]
+            log(f'asmpatch: {n}: the port\'s own ({"--managed-file" if n in given else "--assembly-patch"}) patched again')
+        written, stdout = run(stage)
+        shutil.rmtree(stage, ignore_errors=True)
+        args.assembly_patch = [(n, c) for n, c in args.assembly_patch if n not in clash]
+        args.managed_file = [f for f in args.managed_file if os.path.basename(f) not in clash]
     args.managed_file += [os.path.join(work, n) for n in written]
-    return [line for line in r.stdout.splitlines() if line.startswith(('ok', 'done', 'FAIL'))]
+    return port_notes + [line for line in stdout.splitlines() if line.startswith(('ok', 'done', 'FAIL'))]
+
+
+def assembly_patch(args, name, dst, log):
+    """The --assembly-patch command for one assembly, run with {managed} (the game's original Managed
+    folder) and {out} (an empty folder): the assembly it writes goes to dst. Its output lines are
+    logged; returns them."""
+    with tempfile.TemporaryDirectory() as td:
+        cmd = [w.replace('{managed}', args.game_managed or os.path.join(args.src, 'Managed')).replace('{out}', td)
+               for w in shlex.split(dict(args.assembly_patch)[name])]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            log(f'assembly patch {name}: {line}')
+        if r.returncode != 0:
+            raise SystemExit(f'assembly patch for {name} failed:\n{r.stdout}{r.stderr}')
+        write_bytes(dst, open(os.path.join(td, name), 'rb').read())
+    return r.stdout.splitlines()
 
 
 def _cmd_key(cmd):
@@ -1772,14 +1813,8 @@ def main(argv=None):
             report['files'][dst_rel] = f'platform {old} -> {ANDROID}'
         elif act.startswith('patch:'):
             name = act.split(':')[1]
-            with tempfile.TemporaryDirectory() as td:
-                cmd = [w.replace('{managed}', args.game_managed).replace('{out}', td)
-                       for w in shlex.split(dict(args.assembly_patch)[name])]
-                r = subprocess.run(cmd, capture_output=True, text=True)
-                if r.returncode != 0:
-                    raise SystemExit(f'assembly patch for {name} failed:\n{r.stdout}{r.stderr}')
-                write_bytes(dst, open(os.path.join(td, name), 'rb').read())
-            report['notes'].append(f'{name}: ' + ', '.join(l[5:] for l in r.stdout.splitlines() if l.startswith('ok')))
+            lines = assembly_patch(args, name, dst, log)
+            report['notes'].append(f'{name}: ' + ', '.join(l[5:] for l in lines if l.startswith('ok')))
             how = 'patched'
         elif act == 'sfinline':
             n, still = inline_serialized(src, dst, args)

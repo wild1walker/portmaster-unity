@@ -116,7 +116,10 @@ python -m pmunity android-data --src <Game>_Data --pkg <player> --out work/andro
 `--managed-file`); its `ok`/`done`/`FAIL` lines go into the log and `android_data_report.json`.
 With .NET installed instead of the self-contained build: `--asmpatch "dotnet /path/to/asmpatch.dll"`.
 An assembly that asmpatch changes and that a port's own `--assembly-patch` or `--managed-file`
-also provides is an error: run asmpatch inside that patch command instead (on its output).
+also gives gets both: the port's patch command runs first, on the game's original (as always), and
+asmpatch runs again on a copy of the Managed folder with the port's assembly in place; the assembly
+shipped is asmpatch's output of the port's (the log says `<name>: the port's own ... patched again`).
+The il2cpp route (`pmunity il2cpp`) does the same.
 
 ### The path analysis
 
