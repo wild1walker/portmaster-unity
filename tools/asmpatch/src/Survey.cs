@@ -120,6 +120,7 @@ static class Survey
                 var first = android.SelectMany(a => a.names).FirstOrDefault();
                 if (first != null) Console.WriteLine($"  -> UA_PAD_NAME=\"{first}\" (or another name above) for a pad InControl maps as on Android");
             }
+            PrintPadBindings(InControlBindings(game));
         }
         bool isys = names.Contains("Unity.InputSystem");
         Console.WriteLine("Input System package: " + (isys ? $"Unity.InputSystem.dll, {inputSystemRefs.N} call sites in game code{inputSystemRefs.Examples()}" : "no"));
@@ -211,6 +212,81 @@ static class Survey
         static int Rank(string type) => type.Contains("XboxOne", StringComparison.OrdinalIgnoreCase) ? 0 : type.Contains("Xbox", StringComparison.OrdinalIgnoreCase) ? 1 :
                                         type.Contains("Generic", StringComparison.OrdinalIgnoreCase) ? 2 : 3;
         return found.OrderBy(f => Rank(f.Item1)).ThenBy(f => f.Item1, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>InControl's default pad bindings: each PlayerAction the game's code gives a pad
+    /// control (AddDefaultBinding(InputControlType), or AddDefaultBinding(new DeviceBindingSource(InputControlType))),
+    /// read from the IL as the action loaded right before the constant (a field or a property getter,
+    /// named by its action set: "GameActions.Left"; else the method's local) and the control's name
+    /// from the game's own InputControlType enum. InControl's examples and asset demos compiled into
+    /// the game (a namespace with "Example" or "Demo" in it) are left out. Not covered: bindings made
+    /// from data (a saved profile), or controls computed at run time.</summary>
+    public static List<(string action, string control)> InControlBindings(Game game)
+    {
+        var found = new List<(string, string)>();
+        foreach (var asm in game.GameAssemblies)
+            foreach (var t in Cecil.AllTypes(asm.MainModule))
+            {
+                if (LibraryCode(t) || ExampleCode(t)) continue;
+                foreach (var m in t.Methods.Where(m => m.HasBody))
+                    foreach (var ins in m.Body.Instructions)
+                    {
+                        if (ins.Operand is not MethodReference r || r.DeclaringType?.Namespace != "InControl") continue;
+                        bool direct = r.Name == "AddDefaultBinding" && (ins.OpCode.Code is Code.Call or Code.Callvirt) &&
+                                      r.Parameters.Count == 1 && r.Parameters[0].ParameterType.FullName == "InControl.InputControlType";
+                        bool source = ins.OpCode.Code == Code.Newobj && r.DeclaringType.Name == "DeviceBindingSource" &&
+                                      r.Parameters.Count == 1 && r.Parameters[0].ParameterType.FullName == "InControl.InputControlType" &&
+                                      ins.Next != null && ins.Next.Operand is MethodReference add && add.Name == "AddDefaultBinding";
+                        if (!direct && !source || ins.Previous == null || Cecil.ConstInt(ins.Previous) is not int v) continue;
+                        var e = Cecil.TryResolve(r.Parameters[0].ParameterType);
+                        var control = e != null ? Cecil.EnumName(e, v) : v.ToString();
+                        var a = ins.Previous.Previous;
+                        string action = a?.Operand switch
+                        {
+                            FieldReference f when a.OpCode.Code is Code.Ldfld or Code.Ldsfld => $"{f.DeclaringType.Name}.{f.Name}",
+                            MethodReference g when (a.OpCode.Code is Code.Call or Code.Callvirt) && g.Name.StartsWith("get_") => $"{g.DeclaringType.Name}.{g.Name.Substring(4)}",
+                            _ => $"{t.Name}.{m.Name} (a local)",
+                        };
+                        found.Add((action, control));
+                    }
+            }
+        return found;
+    }
+
+    static bool ExampleCode(TypeDefinition t)
+    {
+        while (t.DeclaringType != null) t = t.DeclaringType;
+        var ns = t.Namespace ?? "";
+        return ns.Contains("Example", StringComparison.OrdinalIgnoreCase) || ns.Contains("Demo", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>What the bindings say for a handheld: the actions only the left stick drives (no
+    /// d-pad binding) cannot be played on one without sticks unless the d-pad drives the left
+    /// stick (ua_host's UA_DPAD_STICK); actions bound to the d-pad and not to the stick lose it then,
+    /// unless the d-pad still reports as the d-pad (both), which only suits a game whose d-pad
+    /// actions are also bound to the stick.</summary>
+    static void PrintPadBindings(List<(string action, string control)> b)
+    {
+        if (b.Count == 0) return;
+        static bool Stick(string c) => c.StartsWith("LeftStick") && c != "LeftStickButton";
+        static bool Dpad(string c) => c.StartsWith("DPad");
+        var actions = b.GroupBy(x => x.action).ToDictionary(g => g.Key, g => g.Select(x => x.control).Distinct().ToList());
+        var stick = actions.Where(a => a.Value.Any(Stick)).Select(a => a.Key).ToList();
+        var dpad = actions.Where(a => a.Value.Any(Dpad)).Select(a => a.Key).ToList();
+        var stickOnly = stick.Where(a => !actions[a].Any(Dpad)).ToList();
+        var dpadOnly = dpad.Where(a => !actions[a].Any(Stick)).ToList();
+        static string L(List<string> l) => l.Count == 0 ? "none" : string.Join(", ", l.Take(10)) + (l.Count > 10 ? $", ... ({l.Count})" : "");
+        Console.WriteLine($"  pad bindings (InControl's default bindings, {b.Count} in {actions.Count} actions):");
+        Console.WriteLine($"    left stick: {L(stick)}");
+        Console.WriteLine($"    d-pad: {L(dpad)}");
+        if (stickOnly.Count == 0) return;
+        Console.WriteLine($"    the left stick alone (no d-pad binding): {L(stickOnly)}");
+        if (dpadOnly.Count > 0)
+            Console.WriteLine($"  -> UA_DPAD_STICK=auto (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n" +
+                              $"     the left stick; its own bindings {L(dpadOnly)} need a UA_DPAD_SWAP=<button> that gives the d-pad back)");
+        else
+            Console.WriteLine("  -> UA_DPAD_STICK=auto,both (a handheld without sticks cannot play those with its d-pad: the d-pad then drives\n" +
+                              "     the left stick and still reports as the d-pad; every d-pad binding is also a left stick one)");
     }
 
     static string Platform(MethodDefinition m)

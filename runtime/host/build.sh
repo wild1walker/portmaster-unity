@@ -23,7 +23,8 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni $NOSTEAM"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget quality glhooks hitches prof threads futex gltrace glopt glmemo gpuidle glpass glrename glrec glrec_fg msaafix display display_sdl fbdev $STEAM plugins plugstubs mono64 unityhooks; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget quality glhooks hitches prof threads futex gltrace glopt glmemo gpuidle glpass glrename glrec glrec_fg msaafix display display_sdl fbdev $STEAM plugins plugstubs wwise desktopenv mono64 unityhooks; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    gcc $F -c wwise_tramp.S -o $O/wwise_tramp.o; OBJS="$OBJS $O/wwise_tramp.o"
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
     # unwinders linked into the Android libraries find our modules through the loader'"'"'s
     # dl_iterate_phdr (docs/arm64.md): no flags for that. ioctl is exported (fbdev.c interposes the
@@ -81,10 +82,13 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
   rm -f out/steamstub.o; [ -z "$STEAM" ] || arm-linux-gnueabihf-gcc $F -c steamstub.c -o out/steamstub.o
   arm-linux-gnueabihf-gcc $F -c plugins.c -o out/plugins.o
   arm-linux-gnueabihf-gcc $F -c plugstubs.c -o out/plugstubs.o
+  arm-linux-gnueabihf-gcc $F -c wwise.c -o out/wwise.o
+  arm-linux-gnueabihf-gcc $F -c desktopenv.c -o out/desktopenv.o
+  arm-linux-gnueabihf-gcc $F -c wwise_tramp.S -o out/wwise_tramp.o
   arm-linux-gnueabihf-gcc $F -c mono64.c -o out/mono64.o
   arm-linux-gnueabihf-gcc $F -c unityhooks.c -o out/unityhooks.o
   arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/quality.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glmemo.o out/gpuidle.o out/glpass.o out/glrename.o out/glrec.o out/glrec_fg.o out/msaafix.o \
-    out/display.o out/display_sdl.o out/fbdev.o ${STEAM:+out/steamstub.o} out/plugins.o out/plugstubs.o out/mono64.o out/unityhooks.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
+    out/display.o out/display_sdl.o out/fbdev.o ${STEAM:+out/steamstub.o} out/plugins.o out/plugstubs.o out/wwise.o out/wwise_tramp.o out/desktopenv.o out/mono64.o out/unityhooks.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
   arm-linux-gnueabihf-gcc -O2 -Wall -rdynamic -o out/egltest egltest.c -lEGL -lGLESv2

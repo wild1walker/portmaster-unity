@@ -113,4 +113,89 @@ static partial class TestMain
         try { Survey.Run(g2); } finally { g2.Dispose(); Console.SetOut(old); }
         Check(w.ToString().Contains("UA_PAD_NAME=\"Microsoft X-Box 360 pad\""), "InControl: the survey suggests the Xbox 360 profile's name for UA_PAD_NAME");
     }
+
+    /// <summary>A game's InControl actions with default pad bindings: Left and Right on the left stick only
+    /// (Right through a DeviceBindingSource), SelectLeft on the stick and the d-pad, and (withDpadOnly) GunUp
+    /// on the d-pad only, the InputControlType enum numbered unlike InControl's.</summary>
+    static void FakeBindings(string dir, bool withDpadOnly)
+    {
+        var m = NewModule("Assembly-CSharp-firstpass");
+        var ict = Enum(m, "InControl", "InputControlType", ("None", 0), ("DPadLeft", 3), ("LeftStickLeft", 13), ("LeftStickRight", 14),
+                       ("DPadUp", 21), ("LeftStickButton", 22), ("Action1", 30));
+        var src = new TypeDefinition("InControl", "BindingSource", TypeAttributes.Public | TypeAttributes.Abstract, m.TypeSystem.Object);
+        m.Types.Add(src);
+        var dev = new TypeDefinition("InControl", "DeviceBindingSource", TypeAttributes.Public, src);
+        var devCtor = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, m.TypeSystem.Void);
+        devCtor.Parameters.Add(new ParameterDefinition(ict));
+        devCtor.Body.GetILProcessor().Emit(OpCodes.Ret);
+        dev.Methods.Add(devCtor);
+        m.Types.Add(dev);
+        var action = new TypeDefinition("InControl", "PlayerAction", TypeAttributes.Public, m.TypeSystem.Object);
+        MethodDefinition Add(TypeReference p)
+        {
+            var a = new MethodDefinition("AddDefaultBinding", MethodAttributes.Public | MethodAttributes.HideBySig, m.TypeSystem.Void);
+            a.Parameters.Add(new ParameterDefinition(p));
+            a.Body.GetILProcessor().Emit(OpCodes.Ret);
+            action.Methods.Add(a);
+            return a;
+        }
+        var addControl = Add(ict);
+        var addSource = Add(src);
+        m.Types.Add(action);
+        var set = new TypeDefinition("", "GameActions", TypeAttributes.Public, m.TypeSystem.Object);
+        var fields = new Dictionary<string, FieldDefinition>();
+        foreach (var n in new[] { "Left", "Right", "SelectLeft", "GunUp", "Fire" })
+            set.Fields.Add(fields[n] = new FieldDefinition(n, FieldAttributes.Public, action));
+        var c = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, m.TypeSystem.Void);
+        var il = c.Body.GetILProcessor();
+        void Bind(string f, int control) { il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, fields[f]); il.Emit(OpCodes.Ldc_I4_S, (sbyte)control); il.Emit(OpCodes.Callvirt, addControl); }
+        Bind("Left", 13);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, fields["Right"]); il.Emit(OpCodes.Ldc_I4_S, (sbyte)14);
+        il.Emit(OpCodes.Newobj, devCtor); il.Emit(OpCodes.Callvirt, addSource);
+        Bind("SelectLeft", 13); Bind("SelectLeft", 3);
+        if (withDpadOnly) Bind("GunUp", 21);
+        Bind("Fire", 30);
+        il.Emit(OpCodes.Ret);
+        set.Methods.Add(c);
+        m.Types.Add(set);
+        // InControl's own example, compiled into the game: left out of the survey
+        var ex = new TypeDefinition("BindingsExample", "PlayerActions", TypeAttributes.Public, m.TypeSystem.Object);
+        var exLeft = new FieldDefinition("Left", FieldAttributes.Public, action);
+        ex.Fields.Add(exLeft);
+        var ec = new MethodDefinition("CreateWithDefaultBindings", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, m.TypeSystem.Void);
+        var eil = ec.Body.GetILProcessor();
+        eil.Emit(OpCodes.Ldnull); eil.Emit(OpCodes.Ldfld, exLeft); eil.Emit(OpCodes.Ldc_I4_3); eil.Emit(OpCodes.Callvirt, addControl);
+        eil.Emit(OpCodes.Ret);
+        ex.Methods.Add(ec);
+        m.Types.Add(ex);
+        m.Write(Path.Combine(dir, "Assembly-CSharp-firstpass.dll"));
+    }
+
+    static void InControlBindingsTests()
+    {
+        foreach (var dpadOnly in new[] { true, false })
+        {
+            var d = Dir("incontrol-bindings-" + dpadOnly);
+            FakeBindings(d, dpadOnly);
+            var game = new Game(d);
+            try
+            {
+                var b = Survey.InControlBindings(game);
+                Check(b.Contains(("GameActions.Left", "LeftStickLeft")) && b.Contains(("GameActions.Right", "LeftStickRight")) &&
+                      b.Contains(("GameActions.SelectLeft", "DPadLeft")) && b.Contains(("GameActions.Fire", "Action1")) && b.Count == (dpadOnly ? 6 : 5),
+                      $"InControl bindings: actions and controls read by name (also through a DeviceBindingSource), d-pad-only action {dpadOnly}");
+            }
+            finally { game.Dispose(); }
+            var w = new StringWriter();
+            var old = Console.Out;
+            Console.SetOut(w);
+            var g2 = new Game(d);
+            try { Survey.Run(g2); } finally { g2.Dispose(); Console.SetOut(old); }
+            var o = w.ToString();
+            Check(o.Contains("the left stick alone (no d-pad binding): GameActions.Left, GameActions.Right"), "InControl bindings: the stick-only actions listed");
+            Check(dpadOnly ? o.Contains("-> UA_DPAD_STICK=auto (") && o.Contains("own bindings GameActions.GunUp need a UA_DPAD_SWAP")
+                           : o.Contains("-> UA_DPAD_STICK=auto,both ("),
+                  dpadOnly ? "InControl bindings: a d-pad-only action -> UA_DPAD_STICK=auto and UA_DPAD_SWAP" : "InControl bindings: no d-pad-only action -> UA_DPAD_STICK=auto,both");
+        }
+    }
 }

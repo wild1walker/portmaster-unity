@@ -1,6 +1,7 @@
 #!/bin/sh
 # plugins.c's unit test (test_plugins.c, plugins_softfp.c as the softfp "Mono side") with the FMOD
-# test double (fmod_double.c) built as an Android library and as a glibc library. Build the loader
+# test double (fmod_double.c) built as an Android library and as a glibc library; the Wwise stub
+# (wwise.c) with and without a test backend (wwise_backend.c); desktopenv.c's (test_desktopenv.c). Build the loader
 # first (../loader/build.sh, same ARCH). ARCH=armhf (default): built in ua-host-armhf, run in an
 # arm/v7 container; ARCH=arm64: built and run in ua-build-arm64.
 set -e
@@ -11,8 +12,10 @@ if [ "$ARCH" = arm64 ]; then
     set -e
     O=out/arm64/test/plugins; mkdir -p $O/glibc $O/android
     F="-O2 -g -Wall -Wno-format-truncation"
-    gcc $F -o $O/test_plugins test/test_plugins.c test/plugins_softfp.c plugins.c plugstubs.c steamstub.c \
+    gcc $F -o $O/test_plugins test/test_plugins.c test/plugins_softfp.c plugins.c plugstubs.c steamstub.c wwise.c wwise_tramp.S \
       ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
+    gcc $F -shared -fPIC -o $O/libwwise_backend.so test/wwise_backend.c
+    gcc $F -o $O/test_desktopenv test/test_desktopenv.c desktopenv.c ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
     gcc $F -shared -fPIC -o $O/glibc/libfmodstudio.so test/fmod_double.c
     # an NDK-style library: freestanding, bionic stack guard in tpidr_el0 + 0x28, DT_NEEDED libc.so
     gcc -O2 -g -fPIC -ffreestanding -DDOUBLE_ANDROID -mstack-protector-guard=sysreg -mstack-protector-guard-reg=tpidr_el0 \
@@ -24,7 +27,11 @@ if [ "$ARCH" = arm64 ]; then
     $O/test_plugins thunks
     $O/test_plugins paths $T/p
     $O/test_plugins lib $O/glibc $T/g
-    $O/test_plugins lib $O/android $T/a'
+    $O/test_plugins lib $O/android $T/a
+    mkdir -p $T/w $T/wb
+    $O/test_plugins wwise $T/w
+    $O/test_plugins wwise $T/wb $PWD/$O/libwwise_backend.so
+    $O/test_desktopenv'
   exit
 fi
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
@@ -34,10 +41,14 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
   F="-O2 -g -Wall -Wno-format-truncation -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
   # the Mono side: armeabi-v7a code passes floats in core registers
   $CC -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=softfp -ffreestanding -c test/plugins_softfp.c -o $O/plugins_softfp.o
-  arm-linux-gnueabihf-g++ $F -o $O/test_plugins -x c test/test_plugins.c -x c plugins.c -x c plugstubs.c -x c steamstub.c -x none \
+  arm-linux-gnueabihf-g++ $F -o $O/test_plugins -x c test/test_plugins.c -x c plugins.c -x c plugstubs.c -x c steamstub.c -x c wwise.c \
+    -x assembler-with-cpp wwise_tramp.S -x none \
     $O/plugins_softfp.o ../loader/out/libsoloader.a -Wl,--no-warn-mismatch -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
     -ldl -lpthread -lm
   $CC $F -shared -fPIC -o $O/glibc/libfmodstudio.so test/fmod_double.c
+  $CC $F -shared -fPIC -o $O/libwwise_backend.so test/wwise_backend.c
+  arm-linux-gnueabihf-g++ $F -o $O/test_desktopenv -x c test/test_desktopenv.c -x c desktopenv.c -x none ../loader/out/libsoloader.a \
+    -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -ldl -lpthread -lm
   # an NDK-style armeabi-v7a library: Thumb-2, softfp, freestanding, DT_NEEDED libc.so
   $CC -O2 -g -fPIC -ffreestanding -fno-stack-protector -march=armv7-a -mthumb -mfloat-abi=softfp -mfpu=vfpv3-d16 \
     -DDOUBLE_ANDROID -c test/fmod_double.c -o $O/fd_android.o
@@ -51,4 +62,8 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
   $O/test_plugins thunks
   $O/test_plugins paths $T/p
   $O/test_plugins lib $O/glibc $T/g
-  $O/test_plugins lib $O/android $T/a'
+  $O/test_plugins lib $O/android $T/a
+  mkdir -p $T/w $T/wb
+  $O/test_plugins wwise $T/w
+  $O/test_plugins wwise $T/wb $PWD/$O/libwwise_backend.so
+  $O/test_desktopenv'

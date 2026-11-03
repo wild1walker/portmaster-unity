@@ -1629,7 +1629,16 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                 .set(dst_rel, format!("platform {old} -> {ANDROID}").into());
         } else if let Some(rest) = act.strip_prefix("patch:") {
             let pname = rest.split(':').next().unwrap_or("").to_string();
-            let notes = assembly_patch(&ctx, &pname, &dst)?;
+            let lines = assembly_patch(&ctx, &pname, &dst)?;
+            for l in &lines {
+                ctx.log(&format!("assembly patch {pname}: {l}"));
+            }
+            let notes = lines
+                .iter()
+                .filter(|l| l.starts_with("ok"))
+                .map(|l| l.chars().skip(5).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(", ");
             if let Some(Json::List(l)) = report.get_mut("notes") {
                 l.push(Json::Str(format!("{pname}: {notes}")));
             }
@@ -2041,12 +2050,25 @@ pub fn list_repr(v: &[String]) -> String {
     )
 }
 
-/// The --assembly-patch command for one assembly, run with {managed} and {out}: the assembly it
-/// writes placed at dst. Returns the note ("ok" lines of its output).
-fn assembly_patch(ctx: &Ctx, name: &str, dst: &str) -> Result<String, Stop> {
-    let cmd = ctx
+/// The --assembly-patch command for one assembly, run with {managed} (the game's original Managed
+/// folder) and {out} (an empty folder): the assembly it writes placed at dst. Returns its output's
+/// lines (the caller logs them).
+fn assembly_patch(ctx: &Ctx, name: &str, dst: &str) -> Result<Vec<String>, Stop> {
+    let gm = ctx
         .args
-        .assembly_patch
+        .game_managed
+        .clone()
+        .unwrap_or_else(|| py::join(&ctx.args.src, "Managed"));
+    patch_command(&ctx.args.assembly_patch, &gm, name, dst)
+}
+
+fn patch_command(
+    patches: &[(String, String)],
+    managed: &str,
+    name: &str,
+    dst: &str,
+) -> Result<Vec<String>, Stop> {
+    let cmd = patches
         .iter()
         .rev()
         .find(|(x, _)| x == name)
@@ -2054,12 +2076,11 @@ fn assembly_patch(ctx: &Ctx, name: &str, dst: &str) -> Result<String, Stop> {
         .1
         .clone();
     let td = crate::paths::temp_dir()?;
-    let res = (|| -> Result<String, Stop> {
-        let gm = ctx.args.game_managed.clone().unwrap_or_default();
+    let res = (|| -> Result<Vec<String>, Stop> {
         let words: Vec<String> = paths::shlex_split(&cmd)
             .map_err(|e| Stop::Fail(format!("ValueError: {e}")))?
             .into_iter()
-            .map(|w| w.replace("{managed}", &gm).replace("{out}", &td))
+            .map(|w| w.replace("{managed}", managed).replace("{out}", &td))
             .collect();
         let r = std::process::Command::new(&words[0])
             .args(&words[1..])
@@ -2078,81 +2099,148 @@ fn assembly_patch(ctx: &Ctx, name: &str, dst: &str) -> Result<String, Stop> {
         write_bytes(dst, &data)?;
         Ok(crate::pack::splitlines(&stdout)
             .into_iter()
-            .filter(|l| l.starts_with("ok"))
-            .map(|l| l.chars().skip(5).collect::<String>())
-            .collect::<Vec<_>>()
-            .join(", "))
+            .map(str::to_string)
+            .collect())
     })();
     let _ = fs::remove_dir_all(&td);
     res
 }
 
 /// --asmpatch: tools/asmpatch on the game's Managed folder; the assemblies it changes are
-/// shipped like --managed-file ones. Returns its ok/done/FAIL lines.
+/// shipped like --managed-file ones. Returns its ok/done/FAIL lines (and the port's patch
+/// commands' ok lines). See asmpatch_chain.
 fn run_asmpatch(ctx: &mut Ctx, cmd: &str) -> Result<Vec<String>, Stop> {
     let src = ctx
         .args
         .game_managed
         .clone()
         .unwrap_or_else(|| py::join(&ctx.args.src, "Managed"));
-    let work = py::join(&ctx.args.out, ".asmpatch");
-    let _ = fs::remove_dir_all(&work);
-    let mut words = paths::shlex_split(cmd).map_err(|e| Stop::Fail(format!("ValueError: {e}")))?;
-    words.push(src);
-    words.push(work.clone());
-    let r = std::process::Command::new(&words[0])
-        .args(&words[1..])
-        .output()
-        .map_err(|e| Stop::Fail(format!("{e}: {}", py::str_repr(&words[0]))))?;
-    let stdout = String::from_utf8_lossy(&r.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&r.stderr).into_owned();
-    let lines = crate::pack::splitlines(&stdout);
-    for l in &lines {
-        ctx.log(&format!("asmpatch: {l}"));
+    let out = ctx.args.out.clone();
+    let mut patches = std::mem::take(&mut ctx.args.assembly_patch);
+    let mut files = std::mem::take(&mut ctx.args.managed_file);
+    let mut lines = Vec::new();
+    let r = asmpatch_chain(cmd, &src, &out, &mut patches, &mut files, &mut |l| {
+        lines.push(l.to_string())
+    });
+    ctx.args.assembly_patch = patches;
+    ctx.args.managed_file = files;
+    for l in lines {
+        ctx.log(&l);
     }
-    if !r.status.success() {
-        let code = r
-            .status
-            .code()
-            .map_or_else(|| "-1".to_string(), |c| c.to_string());
-        return Err(Stop::Exit(format!(
-            "asmpatch failed (exit {code}):\n{stdout}{stderr}"
-        )));
-    }
-    let written: Vec<String> = if is_dir(&work) {
-        listdir(&work)?
-            .into_iter()
-            .filter(|n| n.ends_with(".dll"))
-            .collect()
-    } else {
-        Vec::new()
+    r
+}
+
+/// asmpatch on `src` (the game's Managed folder) into <out>/.asmpatch; what it wrote joins
+/// `managed_file`. When it changes an assembly the port also gives (an --assembly-patch, a
+/// --managed-file), the port's comes first: its patch command runs on the game's original (as
+/// always), and asmpatch runs again on a copy of the Managed folder with the port's assemblies in
+/// place, so the assembly shipped has both (the port's entries for it are dropped).
+fn asmpatch_chain(
+    cmd: &str,
+    src: &str,
+    out: &str,
+    patches: &mut Vec<(String, String)>,
+    managed_file: &mut Vec<String>,
+    log: &mut dyn FnMut(&str),
+) -> Result<Vec<String>, Stop> {
+    let work = py::join(out, ".asmpatch");
+    let run = |managed: &str, log: &mut dyn FnMut(&str)| -> Result<(Vec<String>, String), Stop> {
+        let _ = fs::remove_dir_all(&work);
+        let mut words =
+            paths::shlex_split(cmd).map_err(|e| Stop::Fail(format!("ValueError: {e}")))?;
+        words.push(managed.to_string());
+        words.push(work.clone());
+        let r = std::process::Command::new(&words[0])
+            .args(&words[1..])
+            .output()
+            .map_err(|e| Stop::Fail(format!("{e}: {}", py::str_repr(&words[0]))))?;
+        let stdout = String::from_utf8_lossy(&r.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&r.stderr).into_owned();
+        for l in crate::pack::splitlines(&stdout) {
+            log(&format!("asmpatch: {l}"));
+        }
+        if !r.status.success() {
+            let code = r
+                .status
+                .code()
+                .map_or_else(|| "-1".to_string(), |c| c.to_string());
+            return Err(Stop::Exit(format!(
+                "asmpatch failed (exit {code}):\n{stdout}{stderr}"
+            )));
+        }
+        let written: Vec<String> = if is_dir(&work) {
+            let mut v: Vec<String> = listdir(&work)?
+                .into_iter()
+                .filter(|n| n.ends_with(".dll"))
+                .collect();
+            v.sort();
+            v
+        } else {
+            Vec::new()
+        };
+        Ok((written, stdout))
     };
-    let mf: BTreeSet<&str> = ctx
-        .args
-        .managed_file
+    let (mut written, mut stdout) = run(src, log)?;
+    let given: Vec<(String, String)> = managed_file
         .iter()
-        .map(|f| py::basename(f))
+        .map(|f| (py::basename(f).to_string(), f.clone()))
         .collect();
     let clash: Vec<String> = written
         .iter()
-        .filter(|n| ctx.args.assembly_patch.iter().any(|(x, _)| x == *n) || mf.contains(n.as_str()))
+        .filter(|n| patches.iter().any(|(x, _)| x == *n) || given.iter().any(|(b, _)| b == *n))
         .cloned()
         .collect();
+    let mut notes = Vec::new();
     if !clash.is_empty() {
-        return Err(Stop::Exit(format!(
-            "asmpatch changed {}, which --assembly-patch/--managed-file also provide: run asmpatch on that assembly inside \
-             the patch command instead",
-            clash.join(", ")
-        )));
+        let stage = py::join(out, ".asmpatch-in");
+        let _ = fs::remove_dir_all(&stage);
+        fs::create_dir_all(&stage).map_err(io_at(&stage))?;
+        let mut names = listdir(src)?;
+        names.sort();
+        for n in names {
+            let p = py::join(src, &n);
+            if n.ends_with(".dll") && Path::new(&p).is_file() {
+                let d = py::join(&stage, &n);
+                fs::copy(&p, &d).map_err(io_at(&d))?;
+            }
+        }
+        for n in &clash {
+            let d = py::join(&stage, n);
+            let mine = given.iter().find(|(b, _)| b == n).map(|x| x.1.clone());
+            if let Some(f) = &mine {
+                fs::copy(f, &d).map_err(io_at(&d))?;
+            } else {
+                for l in patch_command(patches, src, n, &d)? {
+                    log(&format!("assembly patch {n}: {l}"));
+                    if l.starts_with("ok") {
+                        notes.push(format!("assembly patch {n}: {l}"));
+                    }
+                }
+            }
+            log(&format!(
+                "asmpatch: {n}: the port's own ({}) patched again",
+                if mine.is_some() {
+                    "--managed-file"
+                } else {
+                    "--assembly-patch"
+                }
+            ));
+        }
+        (written, stdout) = run(&stage, log)?;
+        let _ = fs::remove_dir_all(&stage);
+        patches.retain(|(n, _)| !clash.contains(n));
+        managed_file.retain(|f| !clash.iter().any(|c| c == py::basename(f)));
     }
     for n in written {
-        ctx.args.managed_file.push(py::join(&work, &n));
+        managed_file.push(py::join(&work, &n));
     }
-    Ok(lines
-        .into_iter()
-        .filter(|l| l.starts_with("ok") || l.starts_with("done") || l.starts_with("FAIL"))
-        .map(str::to_string)
-        .collect())
+    notes.extend(
+        crate::pack::splitlines(&stdout)
+            .into_iter()
+            .filter(|l| l.starts_with("ok") || l.starts_with("done") || l.starts_with("FAIL"))
+            .map(str::to_string),
+    );
+    Ok(notes)
 }
 
 /// plugins.map beside the APK (and in the out folder).
@@ -2302,6 +2390,67 @@ mod tests {
              \t<dllmap dll=\"SDL2\" target=\"libSDL2-2.0.so.0\" os=\"!windows\"/>\n\
              \t<dllmap dll=\"libmono.so.0\" target=\"libmono.so\" os=\"!windows\"/>\n</configuration>\n"
         );
+    }
+
+    /// a port's assembly patch and asmpatch on one assembly: the port's first (on the original), then
+    /// asmpatch on its output; the patch command's lines logged (shell scripts stand in for both)
+    #[test]
+    fn asmpatch_after_the_ports_patch() {
+        let t = crate::paths::temp_dir().unwrap();
+        let src = py::join(&t, "Managed");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(py::join(&src, "Assembly-CSharp.dll"), b"orig").unwrap();
+        fs::write(py::join(&src, "Other.dll"), b"other").unwrap();
+        let asm = py::join(&t, "asmpatch.sh");
+        fs::write(&asm, "mkdir -p \"$2\"; { cat \"$1/Assembly-CSharp.dll\"; printf +asm; } > \"$2/Assembly-CSharp.dll\"\n\
+                         echo 'ok   streaming-assets: Assembly-CSharp.dll'\n").unwrap();
+        let port = py::join(&t, "port.sh");
+        fs::write(&port, "{ cat \"$1/Assembly-CSharp.dll\"; printf +port; } > \"$2/Assembly-CSharp.dll\"; echo 'ok   wwise: 3 calls'\n").unwrap();
+        let out = py::join(&t, "out");
+        fs::create_dir_all(&out).unwrap();
+        let mut patches = vec![(
+            "Assembly-CSharp.dll".to_string(),
+            format!("sh {port} {{managed}} {{out}}"),
+        )];
+        let mut files = Vec::new();
+        let mut log = Vec::new();
+        let notes = asmpatch_chain(
+            &format!("sh {asm}"),
+            &src,
+            &out,
+            &mut patches,
+            &mut files,
+            &mut |l| log.push(l.to_string()),
+        )
+        .unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(fs::read(&files[0]).unwrap(), b"orig+port+asm");
+        assert!(patches.is_empty());
+        assert!(log
+            .iter()
+            .any(|l| l == "assembly patch Assembly-CSharp.dll: ok   wwise: 3 calls"));
+        assert_eq!(
+            notes,
+            [
+                "assembly patch Assembly-CSharp.dll: ok   wwise: 3 calls",
+                "ok   streaming-assets: Assembly-CSharp.dll"
+            ]
+        );
+        assert!(!Path::new(&py::join(&out, ".asmpatch-in")).exists());
+        // no clash: as before
+        let mut files = Vec::new();
+        let mut patches = vec![];
+        asmpatch_chain(
+            &format!("sh {asm}"),
+            &src,
+            &out,
+            &mut patches,
+            &mut files,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(fs::read(&files[0]).unwrap(), b"orig+asm");
+        let _ = fs::remove_dir_all(&t);
     }
 
     #[test]

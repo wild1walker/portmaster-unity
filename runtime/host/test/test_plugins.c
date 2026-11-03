@@ -4,9 +4,15 @@
 //   test_plugins paths <tmp>         StreamingAssets paths -> files beside the APK
 //   test_plugins lib <libdir> <root> the FMOD test double in <libdir> through plugins.map, the loader
 //                                    and (32-bit ARM, glibc build) the thunks; stubs and refusals
+//   test_plugins wwise <root> [backend.so]   the Wwise stub (wwise.c) built from fn lines, called as
+//                                    Mono calls Wwise 2017.2's integration (softfp on 32-bit ARM):
+//                                    results, the callback queue, game syncs; with a backend, what
+//                                    it gets and an event it ends later
+#define _GNU_SOURCE
 #include "../plugins.h"
 #include "../../loader/so_loader.h"
 
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +28,7 @@ typedef struct { float x, y, z; } vec3;
 void sf_thunk_calls(void *const *fn, uint64_t *ret);
 int sf_fmod_calls(void *create, void *getvca, void *setvol, void *loadbank, void *bits, const char *bank, uint32_t *out);
 int sf_discord(void *create);
+int sf_wwise(void *(*sym)(const char *), uint64_t *o, uint64_t go, uint32_t rtpc, uint32_t event);
 
 // hard-float targets: each checks what it received
 static int ok[10];
@@ -162,6 +169,134 @@ static int test_lib(const char *libdir, const char *root)
     return 0;
 }
 
+// Wwise 2017.2's signatures of the calls sf_wwise makes (as android-data writes them)
+static const char *const WWISE_FNS =
+    "fn AkSoundEngine CSharp_IsInitialized b -\n"
+    "fn AkSoundEngine CSharp_new_AkInitSettings p -\n"
+    "fn AkSoundEngine CSharp_AkInitSettings_uDefaultPoolSize_set v p,u\n"
+    "fn AkSoundEngine CSharp_AkInitSettings_uDefaultPoolSize_get u p\n"
+    "fn AkSoundEngine CSharp_new_AkVector p -\n"
+    "fn AkSoundEngine CSharp_delete_AkVector v p\n"
+    "fn AkSoundEngine CSharp_AkVector_X_set v p,f\n"
+    "fn AkSoundEngine CSharp_AkVector_X_get f p\n"
+    "fn AkSoundEngine CSharp_Init i p,p,p,p,p,p,p,u\n"
+    "fn AkSoundEngine CSharp_Term v -\n"
+    "fn AkSoundEngine CSharp_SetBasePath i z\n"
+    "fn AkSoundEngine CSharp_AkCallbackSerializer_Init i p,u\n"
+    "fn AkSoundEngine CSharp_AkCallbackSerializer_Lock p -\n"
+    "fn AkSoundEngine CSharp_AkCallbackSerializer_Unlock v -\n"
+    "fn AkSoundEngine CSharp_AkSerializedCallbackHeader_pPackage_get p p\n"
+    "fn AkSoundEngine CSharp_AkSerializedCallbackHeader_pNext_get p p\n"
+    "fn AkSoundEngine CSharp_AkSerializedCallbackHeader_eType_get i p\n"
+    "fn AkSoundEngine CSharp_AkSerializedCallbackHeader_GetData p p\n"
+    "fn AkSoundEngine CSharp_AkBankCallbackInfo_bankID_get u p\n"
+    "fn AkSoundEngine CSharp_AkBankCallbackInfo_loadResult_get i p\n"
+    "fn AkSoundEngine CSharp_AkCallbackInfo_gameObjID_get l p\n"
+    "fn AkSoundEngine CSharp_AkEventCallbackInfo_playingID_get u p\n"
+    "fn AkSoundEngine CSharp_AkEventCallbackInfo_eventID_get u p\n"
+    "fn AkSoundEngine CSharp_AkEventCallbackInfo_SWIGUpcast p p\n"
+    "fn AkSoundEngine CSharp_LoadBank__SWIG_0 i z,i,r\n"
+    "fn AkSoundEngine CSharp_LoadBank__SWIG_4 i z,p,p,i,r\n"
+    "fn AkSoundEngine CSharp_PostEvent__SWIG_3 u u,l,u,p,p\n"
+    "fn AkSoundEngine CSharp_PostEvent__SWIG_11 u z,l\n"
+    "fn AkSoundEngine CSharp_CancelEventCallbackCookie v p\n"
+    "fn AkSoundEngine CSharp_SetRTPCValue__SWIG_0 i u,f,l,i,i,b\n"
+    "fn AkSoundEngine CSharp_GetRTPCValue__SWIG_0 i u,l,u,r,r\n"
+    "fn AkSoundEngine CSharp_SetState__SWIG_1 i z,z\n"
+    "fn AkSoundEngine CSharp_GetState__SWIG_1 i z,r\n"
+    "fn AkSoundEngine CSharp_GetIDFromString u z\n"
+    "fn AkSoundEngine CSharp_new_AkTransform p -\n"
+    "fn AkSoundEngine CSharp_delete_AkTransform v p\n"
+    "fn AkSoundEngine CSharp_AkTransform_Set__SWIG_1 v p,f,f,f,f,f,f,f,f,f\n"
+    "fn AkSoundEngine CSharp_SetObjectPosition i l,p\n"
+    "fn AkSoundEngine CSharp_RenderAudio__SWIG_1 i -\n"
+    "fn AkSoundEngine CSharp_GetBufferTick u -\n"
+    "fn AkSoundEngine CSharp_AkExternalSourceInfo_szFile_set v p,z\n"
+    "fn AkSoundEngine CSharp_AkExternalSourceInfo_szFile_get z p\n"
+    "const AkSoundEngine AKRESULT.AK_Success 1\n"
+    "const AkSoundEngine AkCallbackType.AK_EndOfEvent 1\n"
+    "const AkSoundEngine AkCallbackType.AK_Bank 1073741824\n";
+
+static void *g_wh;
+static void *wsym(const char *name)
+{
+    void *p = g_wh ? so_dlsym(g_wh, name) : NULL;
+    if (!p) { printf("FAIL: no entry point %s\n", name); exit(1); }
+    return p;
+}
+
+// Wwise's ID of a name (FNV-1 of the lower-case name), written out here as Wwise's documentation has it
+static uint32_t ak_id(const char *s)
+{
+    uint32_t h = 2166136261u;
+    for (; *s; s++) h = (h * 16777619u) ^ (uint32_t)(*s >= 'A' && *s <= 'Z' ? *s + 32 : *s);
+    return h;
+}
+
+static int test_wwise(const char *root, const char *backend)
+{
+    so_add_shims(bionic_compat_table());
+    char p[600];
+    snprintf(p, sizeof p, "%s/plugins.map", root);
+    FILE *f = fopen(p, "w");
+    fprintf(f, "map AkSoundEngine stub wwise\n%s", WWISE_FNS);
+    fclose(f);
+    if (backend) setenv("UA_WWISE_BACKEND", backend, 1);
+    plugins_init(root, root);
+    g_wh = so_dlopen("libAkSoundEngine.so", 0);
+    CHECK(g_wh != NULL && so_dlopen("AkSoundEngine", 0) != NULL, "the stub under the DllImport's names");
+    if (!g_wh) return 0;
+    uint64_t o[64], go = 0x1122334455667788ULL;
+    uint32_t rtpc = ak_id("Music_Volume"), event = ak_id("Play_Footstep");
+    memset(o, 0xee, sizeof o);
+    int n = sf_wwise(wsym, o, go, rtpc, event);
+    float fv;
+    CHECK(n == 36, "calls made: %d", n);
+    CHECK(o[0] == 0 && o[4] == 1 && o[35] == 0, "IsInitialized: before Init %llu, after %llu, after Term %llu",
+          (unsigned long long)o[0], (unsigned long long)o[4], (unsigned long long)o[35]);
+    CHECK(o[1] == 1234, "an object's uint field back: %llu", (unsigned long long)o[1]);
+    uint32_t b = (uint32_t)o[2]; memcpy(&fv, &b, 4);
+    CHECK(fv == 1.5f, "an object's float field back: %g", fv);
+    CHECK(o[3] == 1 && o[5] == 1 && o[6] == 1 && o[7] == 1 && o[9] == 1 && o[12] == 1 && o[13] == 1 && o[15] == 1,
+          "AKRESULT calls answer AK_Success");
+    CHECK(o[8] == ak_id("Init") && o[8] == 0x50c63a23u, "LoadBank's bank ID out: the ID of the name without its extension, as in the bank's header: %#llx", (unsigned long long)o[8]);
+    CHECK(o[10] != 0 && o[11] != 0 && o[10] != o[11], "playing IDs %llu %llu", (unsigned long long)o[10], (unsigned long long)o[11]);
+    b = (uint32_t)o[14]; memcpy(&fv, &b, 4);
+    CHECK(fv == 0.25f, "GetRTPCValue gives back the value set: %g", fv);
+    CHECK(o[16] == ak_id("Combat"), "GetState gives back the state set");
+    CHECK(o[17] == ak_id("Play_Music") && o[17] == ak_id("play_music"), "GetIDFromString: FNV-1 of the lower-case name");
+    CHECK(o[18] == 1 && o[19] == 0x1234 && o[20] == 0x40000000u, "the bank callback first: package %#llx, type %#llx",
+          (unsigned long long)o[19], (unsigned long long)o[20]);
+    CHECK(o[21] == ak_id("SFX") && o[22] == 1, "bank callback info: ID, result");
+    if (!backend) {
+        CHECK(o[23] == 0x99 && o[24] == 1, "then the end of the event: package %#llx, type %llu", (unsigned long long)o[23], (unsigned long long)o[24]);
+        CHECK(o[25] == go && o[26] == o[10] && o[27] == event, "end-of-event info: game object, playing ID, event ID");
+        CHECK(o[28] == 0 && o[29] == 0 && o[30] == 0, "nothing more queued (also not the cancelled one)");
+        CHECK(o[33] == 0, "an unsigned result: 0");
+    }
+    CHECK(o[31] == 1 && o[32] == 1, "SetObjectPosition, RenderAudio");
+    CHECK(o[34] == 0, "no string result back");
+    if (backend) {
+        // the backend plays events: no end of event until it says so
+        void *bh = dlopen(backend, RTLD_NOW | RTLD_NOLOAD);
+        char *bank = bh ? dlsym(bh, "wb_bank") : NULL;
+        float *rt = bh ? dlsym(bh, "wb_rtpc") : NULL, *pos = bh ? dlsym(bh, "wb_pos") : NULL;
+        void (*finish)(void) = bh ? (void (*)(void))dlsym(bh, "wb_finish") : NULL;
+        CHECK(bank && !strcmp(bank, "Init.bnk"), "the backend loaded the bank by name: %s", bank ? bank : "?");
+        CHECK(rt && *rt == 0.25f, "the backend got the RTPC");
+        CHECK(pos && pos[0] == 1 && pos[1] == 2 && pos[2] == 3, "the backend got the position");
+        CHECK(o[28] == 0 && o[33] == 42, "no end of event while it plays; the backend answered GetBufferTick: %llu", (unsigned long long)o[33]);
+        if (finish) finish();
+        void *(*lock)(void) = wsym("CSharp_AkCallbackSerializer_Lock");
+        void *(*type_of)(void *) = wsym("CSharp_AkSerializedCallbackHeader_eType_get");
+        void *(*pkg)(void *) = wsym("CSharp_AkSerializedCallbackHeader_pPackage_get");
+        void *h = lock();
+        CHECK(h && (uintptr_t)type_of(h) == 1 && (uintptr_t)pkg(h) == 0x99, "the end of event once the backend ended it");
+        ((void (*)(void))wsym("CSharp_AkCallbackSerializer_Unlock"))();
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -169,7 +304,8 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "thunks")) test_thunks();
     else if (!strcmp(mode, "paths") && argc > 2) test_paths(argv[2]);
     else if (!strcmp(mode, "lib") && argc > 3) test_lib(argv[2], argv[3]);
-    else { fprintf(stderr, "usage: test_plugins thunks | paths <tmp> | lib <libdir> <root>\n"); return 2; }
+    else if (!strcmp(mode, "wwise") && argc > 2) test_wwise(argv[2], argc > 3 ? argv[3] : NULL);
+    else { fprintf(stderr, "usage: test_plugins thunks | paths <tmp> | lib <libdir> <root> | wwise <root> [backend.so]\n"); return 2; }
     printf("%s: %s (%d failures)\n", mode, fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }

@@ -1161,7 +1161,7 @@ pub fn build(o: &BuildOpts) -> Result<Option<Json>> {
     if let Some(a) = &o.asmpatch {
         let mut cmd = vec![a.clone()];
         cmd.extend(with_patches.iter().map(|p| format!("--with={p}")));
-        let patched = run_asmpatch(&cmd.join(" "), &join(&data, "Managed"), &work)?;
+        let mut patched = run_asmpatch(&cmd.join(" "), &join(&data, "Managed"), &work)?;
         let mut clash: Vec<String> = patched
             .iter()
             .map(|f| util::basename(f).to_string())
@@ -1170,10 +1170,29 @@ pub fn build(o: &BuildOpts) -> Result<Option<Json>> {
         clash.sort();
         clash.dedup();
         if !clash.is_empty() {
-            return exit(format!(
-                "asmpatch changed {}, which --managed-file or --assembly-patch also gives: run asmpatch on that assembly when making it instead",
-                clash.join(", ")
-            ));
+            // the port's own assemblies (its patches' outputs, its managed files) patched again: asmpatch
+            // runs on a copy of the Managed folder with them in place, and its output replaces them
+            let stage = join(&work, "asmpatch-in");
+            util::rmtree(&stage);
+            util::makedirs(&stage)?;
+            let managed = join(&data, "Managed");
+            for n in util::listdir(&managed)? {
+                if n.ends_with(".dll") && util::isfile(&join(&managed, &n)) {
+                    std::fs::copy(join(&managed, &n), join(&stage, &n))?;
+                }
+            }
+            for f in &managed_files {
+                if clash.iter().any(|c| c == util::basename(f)) {
+                    std::fs::copy(f, join(&stage, util::basename(f)))?;
+                    log(&format!(
+                        "asmpatch: {}: the port's own patched again",
+                        util::basename(f)
+                    ));
+                }
+            }
+            patched = run_asmpatch(&cmd.join(" "), &stage, &work)?;
+            util::rmtree(&stage);
+            managed_files.retain(|f| !clash.iter().any(|c| c == util::basename(f)));
         }
         let names = sorted(
             patched

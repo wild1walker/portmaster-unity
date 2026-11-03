@@ -38,9 +38,10 @@ const SDKS: &[Sdk] = &[
 GOG builds usually catch it (offline mode)"),
     ("eos", r"eossdk-.*", "Epic Online Services", "stub", Some("eos"),
      "built-in stub: EOS_Initialize succeeds, EOS_Platform_Create gives no platform (no network service)"),
-    ("wwise", r"aksoundengine", "Audiokinetic Wwise", "lib", None,
-     "audio middleware: supply Wwise's Android (or Linux ARM) AkSoundEngine of the same version; \
-without it the integration logs an error and the game is silent"),
+    ("wwise", r"aksoundengine", "Audiokinetic Wwise", "stub", Some("wwise"),
+     "built-in stub: a silent sound engine made of the game's own entry points (every call succeeds, the \
+bank-loaded and end-of-event callbacks reach the game); an ARM AkSoundEngine of the game's Wwise \
+version in lib/ plays the sound instead"),
     ("sqlite", r"(e_)?sqlite3?", "SQLite", "host", None,
      "the system's libsqlite3.so.0 (32-bit for the armv7 player), or an ARM build in lib/"),
     ("standalonefilebrowser", r"standalonefilebrowser", "StandaloneFileBrowser (native file dialogs)", "none", None,
@@ -99,6 +100,8 @@ fn re() -> &'static Res {
              "an FMOD DSP plugin (Google Resonance Audio): needed only if the FMOD settings load it; supply its ARM build with FMOD's"),
             (Regex::new(r"(?i)(fmod|ak).*plugin|libfmod_.*|.*_fmod").unwrap(),
              "an FMOD/Wwise plugin: supply its ARM build if the game loads it"),
+            (Regex::new(r"(?i)^(lib)?(?-i:Ak[A-Z])\w+\.(so|dll|bundle)$").unwrap(),
+             "a Wwise plugin (an effect or codec Wwise's sound engine loads): not used by the built-in stub; with an ARM sound engine in lib/ supply its ARM build too"),
         ],
         norm: Regex::new(r"(?i)(\.so(\.\d+)*|\.dll|\.dylib|\.bundle)$").unwrap(),
         lib_file: Regex::new(r"(?i)(\.so(\.\d+)*|\.dll|\.dylib)$").unwrap(),
@@ -344,6 +347,85 @@ fn abi_token(res: &mut Resolver, asm: &Arc<Assembly>, t: &SigType) -> C::Result<
     } else {
         format!("s{words}")
     })
+}
+
+/// The class of a P/Invoke argument or result for a stub built from the game's entry points
+/// (ua_host's wwise.c reads it): v b i (signed int, an enum) u (unsigned) l (64-bit) f d, p (a
+/// pointer: IntPtr, HandleRef, an array, a class or delegate), r (a ref/out pointer), z (a string),
+/// a struct by value as abi_token writes it, ? unknown (plugins.py's stub_token).
+fn stub_token(
+    res: &mut Resolver,
+    asm: &Arc<Assembly>,
+    t: &SigType,
+    depth: u32,
+) -> C::Result<String> {
+    let prim = |e: u8| -> Option<&'static str> {
+        Some(match e {
+            C::E_VOID => "v",
+            C::E_BOOL => "b",
+            C::E_CHAR | C::E_U1 | C::E_U2 | C::E_U4 => "u",
+            C::E_I1 | C::E_I2 | C::E_I4 => "i",
+            C::E_I8 | C::E_U8 => "l",
+            C::E_R4 => "f",
+            C::E_R8 => "d",
+            C::E_STRING => "z",
+            C::E_I | C::E_U | C::E_OBJECT => "p",
+            _ => return None,
+        })
+    };
+    let valuetype = |n: &str| -> Option<&'static str> {
+        Some(match n {
+            "System.IntPtr" | "System.UIntPtr" | "System.Runtime.InteropServices.HandleRef" => "p",
+            "System.Boolean" => "b",
+            "System.Char" | "System.Byte" | "System.UInt16" | "System.UInt32" => "u",
+            "System.SByte" | "System.Int16" | "System.Int32" => "i",
+            "System.Int64" | "System.UInt64" => "l",
+            "System.Single" => "f",
+            "System.Double" => "d",
+            _ => return None,
+        })
+    };
+    Ok(match t {
+        SigType::Prim(e) => prim(*e).unwrap_or("?").into(),
+        SigType::ByRef(_) => "r".into(),
+        SigType::Ptr(_) | SigType::Class(..) | SigType::Array(_) | SigType::FnPtr => "p".into(),
+        SigType::ValueType(name, r) => {
+            if depth > 8 {
+                return Ok("?".into());
+            }
+            let mut full = name.clone();
+            if let Some((tab, row)) = *r {
+                let (found, fname) = res.find(asm, tab, row)?;
+                if let Some((a, row)) = found {
+                    full = a.types()?[row as usize - 1].full.clone();
+                    let (base, fields, _size, _flags) = a.typedef_layout(row)?;
+                    if base.as_deref() == Some("System.Enum") {
+                        let ft = fields.iter().find(|(n, ft)| n == "value__" && ft.is_some());
+                        return match ft {
+                            Some((_, Some(ft))) => stub_token(res, &a, ft, depth + 1),
+                            _ => Ok("i".into()),
+                        };
+                    }
+                } else if let Some(f) = fname {
+                    full = f;
+                }
+            }
+            match valuetype(&full) {
+                Some(v) => v.into(),
+                None => abi_token(res, asm, t)?,
+            }
+        }
+    })
+}
+
+/// stubs made of the game's entry points (fn lines), and the game's enums they read (const lines)
+const SIGNATURE_STUBS: &[&str] = &["wwise"];
+fn stub_enums(stub: &str) -> &'static [&'static str] {
+    if stub == "wwise" {
+        &["AKRESULT", "AkCallbackType"]
+    } else {
+        &[]
+    }
 }
 
 /// (result, [arguments]) classes.
@@ -894,6 +976,8 @@ struct Pin {
     typ: String,
     assembly: String,
     abi: Option<Abi>,
+    /// a module of a stub made of the game's entry points: its classes (stub_token)
+    stub_abi: Option<Option<Abi>>,
 }
 
 /// The plugin report of a desktop data folder.
@@ -903,6 +987,10 @@ pub struct Survey {
     pub files: Json,
     pub fmod: Option<Json>,
     pub sigs: Vec<(String, String, String, Vec<String>)>,
+    /// the entry points of the modules of a stub made of them (module, entry, result, args)
+    pub fns: Vec<(String, String, String, Vec<String>)>,
+    /// the game's constants such a stub reads (module, "AKRESULT.AK_Success", value)
+    pub consts: Vec<(String, String, String)>,
     pub unreadable: Vec<String>,
     /// the default plugin map {name: {use, ...}}
     pub map: Json,
@@ -952,12 +1040,27 @@ pub fn survey(data: &str) -> SurveyResult<Survey> {
                         }
                         None => None,
                     };
+                    let stub_abi = match sdk_of(&p.module).and_then(|s| s.4) {
+                        Some(st) if SIGNATURE_STUBS.contains(&st) => Some(match &p.sig {
+                            Some((ret, ps)) => {
+                                let r = stub_token(&mut res, &a, ret, 0)?;
+                                let mut v = Vec::new();
+                                for x in ps {
+                                    v.push(stub_token(&mut res, &a, x, 0)?);
+                                }
+                                Some((r, v))
+                            }
+                            None => None,
+                        }),
+                        _ => None,
+                    };
                     pins.push(Pin {
                         module: p.module,
                         entry: p.entry,
                         typ: p.typ,
                         assembly: n.clone(),
                         abi,
+                        stub_abi,
                     });
                 }
                 for (k, v) in a.field_constants()? {
@@ -1152,6 +1255,40 @@ pub fn survey(data: &str) -> SurveyResult<Survey> {
             }
         }
     }
+    // a stub made of the game's own entry points: every entry point's classes, and the game's constants
+    let mut fns: Vec<(String, String, String, Vec<String>)> = Vec::new();
+    let mut stubbed: Vec<&Pin> = pins.iter().filter(|p| p.stub_abi.is_some()).collect();
+    stubbed.sort_by(|a, b| (&a.module, &a.entry).cmp(&(&b.module, &b.entry)));
+    for p in &stubbed {
+        let Some(Some((ret, args))) = &p.stub_abi else {
+            continue;
+        };
+        let dup = fns
+            .last()
+            .is_some_and(|f| f.0 == p.module && f.1 == p.entry);
+        if ret != "?" && !args.iter().any(|x| x == "?") && !dup {
+            fns.push((p.module.clone(), p.entry.clone(), ret.clone(), args.clone()));
+        }
+    }
+    let mut stub_consts = Vec::new();
+    let mods_stubbed: BTreeSet<&str> = stubbed.iter().map(|p| p.module.as_str()).collect();
+    let mut keys: Vec<&(String, Const)> = consts.iter().collect();
+    keys.sort_by(|a, b| a.0.cmp(&b.0));
+    for name in mods_stubbed {
+        let enums = sdk_of(name).and_then(|s| s.4).map_or(&[][..], stub_enums);
+        for (k, v) in &keys {
+            let parts: Vec<&str> = k.split('.').collect();
+            if parts.len() < 2 || !enums.contains(&parts[parts.len() - 2]) {
+                continue;
+            }
+            let v = match v {
+                Const::Int(i) => i.to_string(),
+                Const::UInt(u) => u.to_string(),
+                _ => continue,
+            };
+            stub_consts.push((name.to_string(), parts[parts.len() - 2..].join("."), v));
+        }
+    }
     let fmod = fmod_info(&consts, &pins, &files);
     let map = default_map(&out);
     Ok(Survey {
@@ -1159,6 +1296,8 @@ pub fn survey(data: &str) -> SurveyResult<Survey> {
         files: Json::List(filerep),
         fmod,
         sigs,
+        fns,
+        consts: stub_consts,
         unreadable: bad,
         map,
     })
@@ -1250,6 +1389,7 @@ const STUBS: &[&str] = &[
     "discord_game_sdk",
     "discord-rpc",
     "eos",
+    "wwise",
 ];
 
 /// plugins.map for ua_host (runtime/host/plugins.c); Err (ValueError) for an unknown stub.
@@ -1315,6 +1455,46 @@ pub fn map_text(rep: &Survey, pmap: &Json) -> Result<String, String> {
             params.join(",")
         };
         lines.push(format!("sig {name} {entry} {ret} {ps}"));
+    }
+    let stubbed: BTreeSet<&str> = items
+        .iter()
+        .filter(|(n, e)| {
+            e.get("use").and_then(Json::as_str) == Some("stub") && {
+                let st = e
+                    .get("stub")
+                    .filter(|s| s.truthy())
+                    .and_then(Json::as_str)
+                    .or_else(|| sdk_of(n).and_then(|s| s.4));
+                st.is_some_and(|st| SIGNATURE_STUBS.contains(&st))
+            }
+        })
+        .map(|(n, _)| n.as_str())
+        .collect();
+    let fns: Vec<&(String, String, String, Vec<String>)> = rep
+        .fns
+        .iter()
+        .filter(|f| {
+            stubbed.contains(f.0.as_str()) && !re().space.is_match(&format!("{}{}", f.0, f.1))
+        })
+        .collect();
+    if !fns.is_empty() {
+        lines.push(
+            "#   fn <name> <entry> <result> <args>, const <name> <constant> <value>: a stub made of the game's entry points (wwise.c)"
+                .into(),
+        );
+        for (name, entry, ret, params) in fns {
+            let ps = if params.is_empty() {
+                "-".to_string()
+            } else {
+                params.join(",")
+            };
+            lines.push(format!("fn {name} {entry} {ret} {ps}"));
+        }
+        for (name, k, v) in &rep.consts {
+            if stubbed.contains(name.as_str()) && !re().space.is_match(k) {
+                lines.push(format!("const {name} {k} {v}"));
+            }
+        }
     }
     Ok(lines.join("\n") + "\n")
 }
@@ -1428,6 +1608,8 @@ mod tests {
                 "i".into(),
                 vec!["f".into(), "f".into()],
             )],
+            fns: vec![],
+            consts: vec![],
             unreadable: vec![],
         };
         let pm = crate::pyjson::loads(
@@ -1444,5 +1626,72 @@ mod tests {
             &crate::pyjson::loads(r#"{"a": {"use": "x"}}"#).unwrap()
         )
         .is_err());
+    }
+
+    /// PMU_PLUGINS_DATA=<a game's data folder> PMU_PLUGINS_OUT=<file>: its plugins.map with the default
+    /// map, to compare with `python -m pmunity plugins <data> --map <file>` (skipped without them)
+    #[test]
+    fn map_of_a_game() {
+        let (Ok(data), Ok(out)) = (
+            std::env::var("PMU_PLUGINS_DATA"),
+            std::env::var("PMU_PLUGINS_OUT"),
+        ) else {
+            return;
+        };
+        let rep = survey(&data).unwrap();
+        std::fs::write(out, map_text(&rep, &rep.map).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn wwise_fn_lines() {
+        // a stub made of the game's entry points: fn and const lines, only while it is the stub
+        let mut modules = Json::obj();
+        let mut e = Json::obj();
+        e.set("use", "stub".into());
+        e.set("stub", "wwise".into());
+        modules.set("AkSoundEngine", e);
+        let rep = Survey {
+            map: default_map(&modules),
+            modules,
+            files: Json::List(vec![]),
+            fmod: None,
+            sigs: vec![],
+            fns: vec![
+                (
+                    "AkSoundEngine".into(),
+                    "CSharp_IsInitialized".into(),
+                    "b".into(),
+                    vec![],
+                ),
+                (
+                    "AkSoundEngine".into(),
+                    "CSharp_LoadBank__SWIG_4".into(),
+                    "i".into(),
+                    ["z", "p", "p", "i", "r"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                ),
+            ],
+            consts: vec![(
+                "AkSoundEngine".into(),
+                "AKRESULT.AK_Success".into(),
+                "1".into(),
+            )],
+            unreadable: vec![],
+        };
+        let m = merge_map(&rep, &Json::obj()).unwrap();
+        let t = map_text(&rep, &m).unwrap();
+        assert!(t.ends_with(
+            "map AkSoundEngine stub wwise\n#   fn <name> <entry> <result> <args>, const <name> <constant> <value>: a stub made of \
+             the game's entry points (wwise.c)\nfn AkSoundEngine CSharp_IsInitialized b -\nfn AkSoundEngine \
+             CSharp_LoadBank__SWIG_4 i z,p,p,i,r\nconst AkSoundEngine AKRESULT.AK_Success 1\n"
+        ));
+        let lib = crate::pyjson::loads(
+            r#"{"AkSoundEngine": {"use": "lib", "file": "libAkSoundEngine.so"}}"#,
+        )
+        .unwrap();
+        let t = map_text(&rep, &merge_map(&rep, &lib).unwrap()).unwrap();
+        assert!(!t.contains("\nfn ") && !t.contains("\nconst "));
     }
 }

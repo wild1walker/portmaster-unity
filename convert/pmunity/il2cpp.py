@@ -1371,8 +1371,22 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, image=IMAG
         patched = run_asmpatch(asmpatch, os.path.join(data, 'Managed'), work)
         clash = sorted({os.path.basename(f) for f in patched} & given)
         if clash:
-            raise SystemExit(f'asmpatch changed {", ".join(clash)}, which --managed-file or --assembly-patch also '
-                             f'gives: run asmpatch on that assembly when making it instead')
+            # the port's own assemblies (its patches' outputs, its managed files) patched again: asmpatch
+            # runs on a copy of the Managed folder with them in place, and its output replaces them
+            stage = os.path.join(work, 'asmpatch-in')
+            shutil.rmtree(stage, ignore_errors=True)
+            os.makedirs(stage)
+            managed = os.path.join(data, 'Managed')
+            for n in sorted(os.listdir(managed)):
+                if n.endswith('.dll') and os.path.isfile(os.path.join(managed, n)):
+                    shutil.copyfile(os.path.join(managed, n), os.path.join(stage, n))
+            for f in managed_files:
+                if os.path.basename(f) in clash:
+                    shutil.copyfile(f, os.path.join(stage, os.path.basename(f)))
+                    log(f'asmpatch: {os.path.basename(f)}: the port\'s own patched again')
+            patched = run_asmpatch(asmpatch, stage, work)
+            shutil.rmtree(stage, ignore_errors=True)
+            managed_files = [f for f in managed_files if os.path.basename(f) not in clash]
         managed_files += patched
         patches['asmpatch'] = sorted(os.path.basename(f) for f in patched)
         patches['asmpatch_with'] = with_patches

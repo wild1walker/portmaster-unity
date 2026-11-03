@@ -616,7 +616,8 @@ _KNOWN_PLUGINS = [
     (r'_burst_generated', 'Burst: falls back to the managed code (slower, same results)'),
     (r'discord', 'Discord: not on the handheld (calls fail)'),
     (r'galaxy', 'GOG Galaxy: not on the handheld (the game must go on without it)'),
-    (r'AkSoundEngine|wwise', 'Wwise: needs an ARM build of Wwise'),
+    (r'AkSoundEngine|wwise', "Wwise: ua_host's built-in stub (silent); an ARM build of the game's Wwise version gives sound"),
+    (r'^(lib)?(?-i:Ak[A-Z])\w+\.(so|dll|bundle)$', "a Wwise plugin (effects): loaded by Wwise's engine, not by the game's code"),
     (r'cri_ware|criware', 'CRIWARE: needs an ARM build'),
     (r'EOSSDK', 'Epic Online Services: not on the handheld'),
 ]
@@ -1279,6 +1280,17 @@ def suggest_config(rep):
         notes.append("InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names "
                      "the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown "
                      "controller (docs/input.md)")
+    # asmpatch --survey's pad bindings: actions only the left stick drives (InControl's default bindings)
+    ds = re.search(r'the left stick alone \(no d-pad binding\): (.*)\n\s*-> UA_DPAD_STICK=([\w,]+)', rep.get('asmpatch_survey') or '')
+    if ds:
+        rt.setdefault('UA_DPAD_STICK', ds.group(2))
+        own = re.search(r'its own bindings (.*?) need a UA_DPAD_SWAP', rep['asmpatch_survey'], re.S)
+        notes.append(f"pad bindings: {ds.group(1).strip()} only on the left stick, which a handheld without sticks "
+                     f"lacks: UA_DPAD_STICK = \"{ds.group(2)}\" (the d-pad drives the left stick on pads without "
+                     f"one; docs/input.md)" +
+                     (f"; the d-pad's own bindings ({' '.join(own.group(1).split())}) then need "
+                      f"UA_DPAD_SWAP = \"<button>\", a button that gives the d-pad back" if own else
+                      "; the d-pad also still reports as the d-pad (every d-pad binding is also a left stick one)"))
     if s.get('playmaker'):
         notes.append(f"PlayMaker ({s['playmaker']}): asmpatch's optimizations playmaker-loopcount and "
                      f"playmaker-delayedevents (the same behaviour, less work every frame for every FSM: "
@@ -1675,7 +1687,8 @@ CONFIG_DOC = {
                     '# name = the APK\'s, package (keep it: it names the PlayerPrefs file); args = more options',
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
-               "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\"",
+               "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\",\n"
+               "# UA_DPAD_STICK = \"auto\" (the d-pad drives the left stick on handhelds without sticks)",
     'runtime_lowmem': "# more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there\n"
                       "# unless set already): reductions of the picture, never of the game play (docs/porting.md,\n"
                       "# \"Small handhelds\"), e.g. ASMPATCH_HK_BLUR = \"low\" with asmpatch's hk-blur",

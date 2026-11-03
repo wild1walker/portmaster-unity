@@ -242,6 +242,97 @@ static void keymap(void)
     CHECK(fake_calls == 0);
 }
 
+// UA_DPAD_SWAP: the d-pad steers (arrow keys) until select swaps it with the stick, which moves the cursor
+static void swap(void)
+{
+    setenv("UA_KEYMAP", "left:left,right:right", 1);
+    setenv("UA_POINTER", "mouse", 1);
+    setenv("UA_POINTER_MOVE", "lstick", 1);
+    setenv("UA_DPAD_SWAP", "select", 1);
+    int id = 1;
+    CHECK(pointer_init(640, 480, &id) == 1);
+    pointer_start();
+    axes(0, 0, -1, 0);                                  // d-pad left: the left arrow
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_DOWN);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 1) == 1);    // swapped while held: the key is let go
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_UP);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 0) == 1);
+    int nk = 0;
+    for (int i = 0; i < nev; i++) nk += evs[i].kind == 'k';
+    axes(0, 0, 1, 0);                                   // d-pad right now moves the cursor
+    CHECK(pad[4] == 0 && pad[0] == 0);
+    run_ticks(0.2);
+    axes(0, 0, 0, 0);
+    run_ticks(0.03);
+    struct ev *e = last('m');
+    CHECK(e && e->action == UP_ACTION_HOVER_MOVE && e->x > 320 + 50);
+    int nk2 = 0;
+    for (int i = 0; i < nev; i++) nk2 += evs[i].kind == 'k';
+    CHECK(nk2 == nk);                                   // no key for it
+    axes(1, 0, 0, 0);                                   // the stick now steers
+    CHECK(last('k')->a == 22 && last('k')->action == UP_ACTION_DOWN && pad[0] == 0);
+    axes(0, 0, 0, 0);
+    CHECK(last('k')->a == 22 && last('k')->action == UP_ACTION_UP);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 1) == 1);    // back
+    axes(0, 0, -1, 0);
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_DOWN);
+}
+
+// UA_DPAD_STICK=1 (with UA_DPAD_SWAP): the d-pad is the left stick from launch, diagonals at 45
+// degrees with a stick's length; a real stick still counts while the d-pad is let go; the swap
+// button gives the d-pad back (and the pads' axes are sent again)
+static int near(float a, float b) { return fabsf(a - b) < 1e-4f; }
+static void dstick(void)
+{
+    setenv("UA_DPAD_STICK", "1", 1);
+    setenv("UA_DPAD_SWAP", "select", 1);
+    int id = 1;
+    CHECK(pointer_init(640, 480, &id) == 0);
+    CHECK(id == 1 && ndev == 0);
+    CHECK(!pointer_axes_changed());
+    axes(0, 0, 1, 0);                                   // d-pad right: the stick right, no d-pad
+    CHECK(pad[0] == 1 && pad[1] == 0 && pad[4] == 0 && pad[5] == 0 && pad[2] == 0.3f);
+    axes(0, 0, -1, -1);                                 // up left: a stick's diagonal
+    CHECK(near(pad[0], -0.70710678f) && near(pad[1], -0.70710678f) && pad[4] == 0 && pad[5] == 0);
+    CHECK(near(pad[0] * pad[0] + pad[1] * pad[1], 1));
+    axes(0, 0, 1, 1);
+    CHECK(near(pad[0], 0.70710678f) && near(pad[1], 0.70710678f));
+    axes(0.4f, -0.2f, 0, 0);                            // the d-pad let go: a real stick's values
+    CHECK(pad[0] == 0.4f && pad[1] == -0.2f && pad[4] == 0 && pad[5] == 0);
+    axes(0.4f, 0, 0, 1);                                // the d-pad wins while held
+    CHECK(pad[0] == 0 && pad[1] == 1);
+    CHECK(nev == 0);
+    // the swap button: the d-pad is the d-pad again, then the stick again
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 1) == 1 && pointer_key(UP_KEYCODE_BUTTON_SELECT, 0) == 1);
+    CHECK(pointer_axes_changed() == 1 && pointer_axes_changed() == 0);
+    axes(0, 0, 1, 0);
+    CHECK(pad[0] == 0 && pad[4] == 1);
+    CHECK(pointer_key(UP_KEYCODE_BUTTON_SELECT, 1) == 1);
+    CHECK(pointer_axes_changed() == 1);
+    axes(0, 0, -1, 0);
+    CHECK(pad[0] == -1 && pad[4] == 0);
+    CHECK(nev == 0);
+}
+
+// UA_DPAD_STICK=auto,both: only a pad whose mapping has no left stick; its d-pad also stays the d-pad
+static void dstickauto(void)
+{
+    setenv("UA_DPAD_STICK", "auto,both", 1);
+    int id = 1;
+    CHECK(pointer_init(640, 480, &id) == 0);
+    pointer_pad(0, 1);                                  // a pad with sticks: nothing changes
+    pointer_pad(1, 0);                                  // the built-in d-pad-only pad
+    axes(0, 0, 1, 0);
+    CHECK(pad[0] == 0 && pad[4] == 1);
+    memset(pad, 0, sizeof pad); pad[4] = -1; pad[5] = 1;
+    pointer_axes(1, pad);
+    CHECK(near(pad[0], -0.70710678f) && near(pad[1], 0.70710678f) && pad[4] == -1 && pad[5] == 1);
+    memset(pad, 0, sizeof pad); pad[5] = -1;
+    pointer_axes(1, pad);
+    CHECK(pad[0] == 0 && pad[1] == -1 && pad[5] == -1);
+    CHECK(nev == 0);
+}
+
 static void toggle(void)
 {
     setenv("UA_POINTER", "mouse", 1);
@@ -276,9 +367,12 @@ int main(int argc, char **argv)
     else if (!strcmp(s, "mouse")) mouse();
     else if (!strcmp(s, "touch")) touch();
     else if (!strcmp(s, "keymap")) keymap();
+    else if (!strcmp(s, "swap")) swap();
+    else if (!strcmp(s, "dstick")) dstick();
+    else if (!strcmp(s, "dstickauto")) dstickauto();
     else if (!strcmp(s, "toggle")) toggle();
     else if (!strcmp(s, "es2")) es2();
-    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|toggle|es2\n"); return 2; }
+    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|swap|dstick|dstickauto|toggle|es2\n"); return 2; }
     printf("%s %s: %d failure(s)\n", failures ? "FAILED" : "PASSED", s, failures);
     return failures != 0;
 }

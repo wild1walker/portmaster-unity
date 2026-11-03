@@ -107,6 +107,86 @@ class ArgumentClasses(unittest.TestCase):
         self.assertFalse(P.needs_thunk(('i', ['i', 's2', 'l'])))
 
 
+class StubClasses(unittest.TestCase):
+    """stub_token: the classes of a stub's entry points (fn lines), signs and pointers apart."""
+    def test_tokens(self):
+        TD = C.TYPEDEF
+        asm = FakeAsm({1: ('System.Enum', [('value__', prim(C.E_I4))], None, 0),
+                       2: ('System.Enum', [('value__', prim(C.E_U4))], None, 0),
+                       3: ('System.ValueType', [('x', prim(C.E_R4)), ('y', prim(C.E_R4))], None, 0)})
+        res = FakeRes(asm)
+        asm.types = lambda: [{'full': 'AKRESULT'}, {'full': 'AkFlags'}, {'full': 'Vec2'}]
+        tok = lambda t: P.stub_token(res, asm, t)
+        for t, want in [(prim(C.E_VOID), 'v'), (prim(C.E_BOOL), 'b'), (prim(C.E_I4), 'i'), (prim(C.E_U4), 'u'),
+                        (prim(C.E_U1), 'u'), (prim(C.E_I8), 'l'), (prim(C.E_U8), 'l'), (prim(C.E_R4), 'f'),
+                        (prim(C.E_R8), 'd'), (prim(C.E_STRING), 'z'), (prim(C.E_I), 'p'), (('byref', prim(C.E_U4)), 'r'),
+                        (('array', prim(C.E_R4)), 'p'), (('class', 'AkCallbackManager/EventCallback', None), 'p'),
+                        (('valuetype', 'AKRESULT', (TD, 1)), 'i'), (('valuetype', 'AkFlags', (TD, 2)), 'u'),
+                        (('valuetype', 'System.Runtime.InteropServices.HandleRef', (C.TYPEREF, 'System.Runtime.InteropServices.HandleRef')), 'p'),
+                        (('valuetype', 'Vec2', (TD, 3)), 'F2')]:
+            self.assertEqual(tok(t), want, t)
+
+    def test_fn_lines(self):
+        # the stub's entry points and the game's constants, only while the module is that stub
+        rep = {'modules': {'AkSoundEngine': {'use': 'stub', 'stub': 'wwise', 'entries': 2, 'note': ''}}, 'files': [],
+               'fmod': None, 'sigs': [],
+               'fns': [('AkSoundEngine', 'CSharp_IsInitialized', 'b', []), ('AkSoundEngine', 'CSharp_LoadBank__SWIG_4', 'i', ['z', 'p', 'p', 'i', 'r'])],
+               'consts': [('AkSoundEngine', 'AKRESULT.AK_Success', 1)]}
+        rep['map'] = P.default_map(rep)
+        txt = P.map_text(rep, rep['map'])
+        self.assertTrue(txt.endswith('map AkSoundEngine stub wwise\n'
+                                     '#   fn <name> <entry> <result> <args>, const <name> <constant> <value>: a stub made of the '
+                                     'game\'s entry points (wwise.c)\n'
+                                     'fn AkSoundEngine CSharp_IsInitialized b -\nfn AkSoundEngine CSharp_LoadBank__SWIG_4 i z,p,p,i,r\n'
+                                     'const AkSoundEngine AKRESULT.AK_Success 1\n'), txt)
+        txt = P.map_text(rep, P.merge_map(rep, {'AkSoundEngine': {'use': 'lib', 'file': 'libAkSoundEngine.so'}}))
+        self.assertNotIn('\nfn ', txt)
+        self.assertNotIn('\nconst ', txt)
+
+    def test_wwise_version(self):
+        # the version a desktop libAkSoundEngine's code returns (x86-64: mov eax, imm32; ret, through a
+        # jmp) and the soundbanks' format
+        with tempfile.TemporaryDirectory() as t:
+            code = b'\xe9' + struct.pack('<i', 11) + b'\x90' * 11 + b'\xb8' + struct.pack('<I', 2017 << 16 | 2) + b'\xc3' + \
+                   b'\xb8' + struct.pack('<I', 5 << 16 | 6619) + b'\xc3'
+            lib = elf_with_functions({'CSharp_GetMajorMinorVersion': 0, 'CSharp_GetSubminorBuildVersion': 22}, code)
+            os.makedirs(os.path.join(t, 'Plugins', 'x86_64'))
+            open(os.path.join(t, 'Plugins', 'x86_64', 'libAkSoundEngine.so'), 'wb').write(lib)
+            banks = os.path.join(t, 'StreamingAssets', 'Audio', 'GeneratedSoundBanks', 'Linux')
+            os.makedirs(banks)
+            open(os.path.join(banks, 'Init.bnk'), 'wb').write(b'BKHD' + struct.pack('<II', 32, 128) + b'\0' * 28)
+            w = P.wwise_info(t)
+            self.assertEqual(w['version'], '2017.2.5 build 6619')
+            self.assertEqual((w['banks'], w['bank_versions'], w['bank_lines']), (1, [128], ['2017.2']))
+            self.assertIn('Wwise 2017.2.5 build 6619', P.wwise_summary(w))
+            self.assertIsNone(P.wwise_info(os.path.join(t, 'Plugins')))
+
+
+def elf_with_functions(funcs, code):
+    """An x86-64 ELF with a .text section holding code and a .dynsym/.dynstr naming funcs {name: offset in code}."""
+    strtab = b'\0'
+    names = {}
+    for n in funcs:
+        names[n] = len(strtab)
+        strtab += n.encode() + b'\0'
+    text_off, text_addr = 0x100, 0x1000
+    syms = b'\0' * 24 + b''.join(struct.pack('<IBBHQQ', names[n], 0x12, 0, 1, text_addr + o, 6) for n, o in funcs.items())
+    sym_off = text_off + len(code)
+    str_off = sym_off + len(syms)
+    sh_off = (str_off + len(strtab) + 7) & ~7
+    sh = lambda typ, addr, off, size, link, ent: struct.pack('<IIQQQQIIQQ', 0, typ, 0, addr, off, size, link, 0, 8, ent)
+    shs = sh(0, 0, 0, 0, 0, 0) + sh(1, text_addr, text_off, len(code), 0, 0) + sh(11, 0, sym_off, len(syms), 3, 24) + \
+        sh(3, 0, str_off, len(strtab), 0, 0)
+    eh = b'\x7fELF\x02\x01\x01' + b'\0' * 9 + struct.pack('<HHIQQQIHHHHHH', 3, 62, 1, 0, 0, sh_off, 0, 64, 56, 0, 64, 4, 0)
+    d = bytearray(sh_off + len(shs))
+    d[:len(eh)] = eh
+    d[text_off:text_off + len(code)] = code
+    d[sym_off:sym_off + len(syms)] = syms
+    d[str_off:str_off + len(strtab)] = strtab
+    d[sh_off:] = shs
+    return bytes(d)
+
+
 def report(modules, sigs=(), fmod=None):
     rep = {'modules': modules, 'files': [], 'fmod': fmod, 'sigs': list(sigs)}
     rep['map'] = P.default_map(rep)

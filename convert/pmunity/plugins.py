@@ -10,7 +10,8 @@ the files in Plugins/ and with known SDKs (FMOD, Steamworks, Discord, GOG Galaxy
 and says for each what the runtime does:
 
   stub    a built-in library (runtime/host) that answers as a PC without that service
-          (Steam not running, Discord not running, ...)
+          (Steam not running, Discord not running, ...); for Wwise a silent sound engine made of the
+          game's own entry points (fn lines below)
   lib     an ARM build the porter or player supplies in the port's lib/ folder (FMOD: the exact
           FMOD Engine version is read from the game, see fmod_info)
   host    a library of the handheld's system (e.g. libsqlite3.so.0)
@@ -20,7 +21,10 @@ and says for each what the runtime does:
 The runtime reads the result as `plugins.map` (written beside the APK by android-data): one `map`
 line per DllImport name and one `sig` line per entry point whose arguments include float or double
 values (on 32-bit ARM a glibc library expects them in VFP registers, Mono passes them in core
-registers: ua_host builds a converting thunk from the line). The port can override any entry with
+registers: ua_host builds a converting thunk from the line). A stub built from the game's own entry
+points (Wwise, whose C# integration P/Invokes a different set in every version) gets one `fn` line
+per entry point (its result and argument classes, stub_token) and `const` lines with the game's
+AKRESULT and AkCallbackType values. The port can override any entry with
 a JSON plugin map (--plugin-map; the "plugins" object of a port config):
 
   {"fmodstudio": {"use": "lib", "file": "libfmodstudio.so"},
@@ -61,9 +65,10 @@ SDKS = [
      'GOG builds usually catch it (offline mode)'),
     ('eos', r'eossdk-.*', 'Epic Online Services', 'stub', 'eos',
      'built-in stub: EOS_Initialize succeeds, EOS_Platform_Create gives no platform (no network service)'),
-    ('wwise', r'aksoundengine', 'Audiokinetic Wwise', 'lib', None,
-     "audio middleware: supply Wwise's Android (or Linux ARM) AkSoundEngine of the same version; "
-     'without it the integration logs an error and the game is silent'),
+    ('wwise', r'aksoundengine', 'Audiokinetic Wwise', 'stub', 'wwise',
+     "built-in stub: a silent sound engine made of the game's own entry points (every call succeeds, the "
+     "bank-loaded and end-of-event callbacks reach the game); an ARM AkSoundEngine of the game's Wwise "
+     "version in lib/ plays the sound instead"),
     ('sqlite', r'(e_)?sqlite3?', 'SQLite', 'host', None,
      "the system's libsqlite3.so.0 (32-bit for the armv7 player), or an ARM build in lib/"),
     ('standalonefilebrowser', r'standalonefilebrowser', 'StandaloneFileBrowser (native file dialogs)', 'none', None,
@@ -101,6 +106,8 @@ FILE_NOTES = [
     (r'resonanceaudio', 'an FMOD DSP plugin (Google Resonance Audio): needed only if the FMOD settings load it; '
                         'supply its ARM build with FMOD\'s'),
     (r'(fmod|ak).*plugin|libfmod_.*|.*_fmod', 'an FMOD/Wwise plugin: supply its ARM build if the game loads it'),
+    (r'^(lib)?(?-i:Ak[A-Z])\w+\.(so|dll|bundle)$', "a Wwise plugin (an effect or codec Wwise's sound engine loads): not used by the "
+                                             "built-in stub; with an ARM sound engine in lib/ supply its ARM build too"),
 ]
 
 ELF_MACHINE = {3: 'x86', 62: 'x86-64', 40: 'arm', 183: 'arm64'}
@@ -249,6 +256,48 @@ def abi_token(res, asm, t):
         size = (size + a - 1) // a * a + s
     words = (size + 3) // 4
     return f'S{(words + 1) // 2 * 2}' if align == 8 else f's{words}'
+
+
+# the classes of a stub's entry points (fn lines): the integer kinds by sign, pointers and strings apart
+STUB_PRIM = {C.E_VOID: 'v', C.E_BOOL: 'b', C.E_CHAR: 'u', C.E_I1: 'i', C.E_U1: 'u', C.E_I2: 'i', C.E_U2: 'u',
+             C.E_I4: 'i', C.E_U4: 'u', C.E_I8: 'l', C.E_U8: 'l', C.E_R4: 'f', C.E_R8: 'd', C.E_STRING: 'z',
+             C.E_I: 'p', C.E_U: 'p', C.E_OBJECT: 'p'}
+STUB_VALUETYPES = {'System.IntPtr': 'p', 'System.UIntPtr': 'p', 'System.Runtime.InteropServices.HandleRef': 'p',
+                   'System.Boolean': 'b', 'System.Char': 'u', 'System.SByte': 'i', 'System.Byte': 'u',
+                   'System.Int16': 'i', 'System.UInt16': 'u', 'System.Int32': 'i', 'System.UInt32': 'u',
+                   'System.Int64': 'l', 'System.UInt64': 'l', 'System.Single': 'f', 'System.Double': 'd'}
+
+
+def stub_token(res, asm, t, depth=0):
+    """The class of a P/Invoke argument or result for a stub built from the game's entry points
+    (ua_host's wwise.c reads it): v b i (signed int, an enum) u (unsigned) l (64-bit) f d, p (a
+    pointer: IntPtr, HandleRef, an array, a class or delegate), r (a ref/out pointer), z (a string),
+    a struct by value as abi_token writes it, ? unknown."""
+    k = t[0]
+    if k == 'prim':
+        return STUB_PRIM.get(t[1], '?')
+    if k == 'byref':
+        return 'r'
+    if k in ('ptr', 'class', 'array', 'fnptr'):
+        return 'p'
+    if k != 'valuetype' or depth > 8:
+        return '?'
+    full = t[1]
+    if t[2] is not None:
+        a, row = res.find(asm, *t[2])
+        if a is not None:
+            full = a.types()[row - 1]['full']
+            base, fields, size, flags = a.typedef_layout(row)
+            if base == 'System.Enum':
+                ft = next((ft for fname, ft in fields if fname == 'value__' and ft), None)
+                return stub_token(res, a, ft, depth + 1) if ft else 'i'
+        elif isinstance(row, str):
+            full = row
+    return STUB_VALUETYPES.get(full) or abi_token(res, asm, t)
+
+
+SIGNATURE_STUBS = ('wwise',)                   # stubs made of the game's entry points: fn lines
+STUB_CONSTS = {'wwise': ('AKRESULT', 'AkCallbackType')}     # and these enums of the game: const lines
 
 
 def needs_thunk(sig):
@@ -477,6 +526,152 @@ def fmod_info(constants, pinvokes, files):
     return info
 
 
+# --------------------------------------------------------------------------- Wwise
+
+# soundbank format version (a bank's BKHD chunk, SoundbanksInfo.xml's SoundbankVersion) -> Wwise release
+WWISE_BANK_LINES = {88: '2013', 112: '2014.1', 113: '2015.1', 118: '2016.1', 120: '2016.2', 125: '2017.1',
+                    128: '2017.2', 132: '2018.1', 134: '2019.1', 135: '2019.2', 140: '2021.1'}
+
+
+def _elf_dynsyms(d):
+    """{name: (file offset, ...)} of an ELF's dynamic symbols that are functions, via the section headers."""
+    out = {}
+    try:
+        is64, end = d[4] == 2, '<' if d[5] == 1 else '>'
+        shoff, = struct.unpack_from(end + ('Q' if is64 else 'I'), d, 0x28 if is64 else 0x20)
+        shsz, shn = struct.unpack_from(end + 'HH', d, 0x3A if is64 else 0x2E)
+        secs = []
+        for i in range(shn):
+            o = shoff + i * shsz
+            if is64:
+                _, typ, _, addr, off, size, link, _, _, entsz = struct.unpack_from(end + 'IIQQQQIIQQ', d, o)
+            else:
+                _, typ, _, addr, off, size, link, _, _, entsz = struct.unpack_from(end + 'IIIIIIIIII', d, o)
+            secs.append((typ, addr, off, size, link, entsz))
+        for typ, addr, off, size, link, entsz in secs:
+            if typ != 11 or not entsz:                       # SHT_DYNSYM
+                continue
+            stroff = secs[link][2]
+            for o in range(off, off + size, entsz):
+                if is64:
+                    name, info, _, shndx, value, _ = struct.unpack_from(end + 'IBBHQQ', d, o)
+                else:
+                    name, value, _, info, _, shndx = struct.unpack_from(end + 'IIIBBH', d, o)
+                if not shndx or info & 0xf != 2:             # STT_FUNC
+                    continue
+                n = d[stroff + name:d.index(b'\0', stroff + name)].decode('latin-1')
+                for t, a, so, sz, _, _ in secs:              # the address in the file
+                    if t == 1 and a <= value < a + sz:       # SHT_PROGBITS
+                        out[n] = so + value - a
+    except (struct.error, ValueError, IndexError):
+        pass
+    return out
+
+
+def _x86_constant(d, off, depth=0):
+    """The int an x86 function returns as a constant: mov eax, imm32; ret, after following a jmp, or
+    the first call (32-bit PIC code calls the function that does it)."""
+    if off is None or depth > 2 or off + 8 > len(d):
+        return None
+    if d[off] == 0xb8 and d[off + 5] == 0xc3:
+        return struct.unpack_from('<I', d, off + 1)[0]
+    for i in range(off, min(off + 24, len(d) - 5)):
+        if d[i] in (0xe9, 0xe8):                            # jmp / call rel32
+            target = i + 5 + struct.unpack_from('<i', d, i + 1)[0]
+            v = _x86_constant(d, target, depth + 1)
+            if v is not None or d[i] == 0xe9:
+                return v
+    return None
+
+
+def wwise_info(data):
+    """What Wwise a game uses: the version of its desktop libAkSoundEngine (the constants its
+    CSharp_GetMajorMinorVersion / CSharp_GetSubminorBuildVersion return, read from the x86 code of
+    an ELF build; or a version string), and the soundbank format of its banks (their BKHD chunk,
+    SoundbanksInfo.xml), which names the Wwise release that wrote them. None without Wwise."""
+    libs = [(rel, p) for rel, p in plugin_files(data) if re.match(r'(lib)?aksoundengine\b', os.path.basename(rel), re.I)]
+    banks = []
+    sa = os.path.join(data, 'StreamingAssets')
+    for r, ds, fs in os.walk(sa):
+        ds.sort()
+        banks += [os.path.join(r, n) for n in sorted(fs) if n.lower().endswith('.bnk')]
+    if not libs and not banks:
+        return None
+    info = {'libraries': [rel for rel, _ in libs], 'version': None, 'banks': len(banks), 'bank_versions': [],
+            'bank_folders': sorted({os.path.relpath(os.path.dirname(b), data) for b in banks})}
+    for rel, p in libs:
+        if os.path.isdir(p) or info['version']:
+            continue
+        try:
+            d = open(p, 'rb').read()
+        except OSError:
+            continue
+        m = re.search(rb'(?:Wwise|Ak)[^\0]{0,16}?v?(20[1-3]\d\.\d+\.\d+)(?:[^\0]{0,8}?[Bb]uild[ :]*(\d+))?', d)
+        if m:
+            info['version'] = m.group(1).decode() + (f' build {m.group(2).decode()}' if m.group(2) else '')
+            info['version_from'] = rel + ' (a string)'
+            continue
+        if d[:4] != b'\x7fELF' or d[18] not in (3, 62):     # x86, x86-64
+            continue
+        syms = _elf_dynsyms(d)
+        mm = _x86_constant(d, syms.get('CSharp_GetMajorMinorVersion'))
+        sb = _x86_constant(d, syms.get('CSharp_GetSubminorBuildVersion'))
+        if mm is not None and 2010 <= mm >> 16 <= 2040 and (mm & 0xffff) < 20:
+            info['version'] = f'{mm >> 16}.{mm & 0xffff}' + (f'.{sb >> 16} build {sb & 0xffff}' if sb is not None else '')
+            info['version_from'] = rel + ' (its code)'
+    vers = set()
+    for b in banks[:64]:
+        try:
+            with open(b, 'rb') as f:
+                h = f.read(12)
+        except OSError:
+            continue
+        if h[:4] == b'BKHD' and len(h) == 12:
+            vers.add(struct.unpack_from('<I', h, 8)[0])
+    for folder in info['bank_folders']:
+        x = os.path.join(data, folder, 'SoundbanksInfo.xml')
+        try:
+            m = re.search(rb'SoundbankVersion="(\d+)"', open(x, 'rb').read(4096))
+        except OSError:
+            m = None
+        if m:
+            vers.add(int(m.group(1)))
+    info['bank_versions'] = sorted(vers)
+    lines = [WWISE_BANK_LINES.get(v) for v in info['bank_versions']]
+    info['bank_lines'] = [ln or (f'2021.1 or later' if v > 140 else 'unknown') for ln, v in zip(lines, info['bank_versions'])]
+    return info
+
+
+def wwise_summary(w):
+    """One line on a game's Wwise and what the port does with it."""
+    ver = w.get('version')
+    banks = ', '.join(f'version {v} (Wwise {ln})' for v, ln in zip(w['bank_versions'], w['bank_lines']))
+    what = f"Wwise {ver or (w['bank_lines'][0] if w['bank_lines'] else '(version not read)')}"
+    src = []
+    if ver:
+        src.append(w['version_from'])
+    if w['banks']:
+        src.append(f"{w['banks']} soundbanks in {', '.join(w['bank_folders'])}" + (f': {banks}' if banks else ''))
+    return (f"{what} ({'; '.join(src)}): the port gives the game ua_host's built-in Wwise, a silent sound engine "
+            f"made of the integration's own entry points (every call succeeds, banks load, events end at once, "
+            f"the bank-loaded and end-of-event callbacks reach the game). Sound needs Wwise's sound engine for "
+            f"ARM of {ver or 'the same version'} in the port's lib/ (Wwise's Android SDK: libAkSoundEngine.so, "
+            f"an Audiokinetic account) or a sound backend (UA_WWISE_BACKEND, docs/plugins.md)")
+
+
+def port_check(rep):
+    """port check: Wwise's version and what the port does with it."""
+    data = rep.get('data')
+    if not data or not os.path.isdir(data) or rep.get('backend') not in ('mono', None):
+        return
+    if not any(re.fullmatch('(lib)?aksoundengine', norm(m), re.I) for m in (rep.get('code') or {}).get('pinvoke', {})):
+        return
+    w = wwise_info(data)
+    if w:
+        rep['wwise'] = w
+        rep['notes'].append(wwise_summary(w))
+
+
 # --------------------------------------------------------------------------- survey
 
 def survey(data):
@@ -498,6 +693,9 @@ def survey(data):
                     p['assembly'] = n
                     sig = p.pop('sig')
                     p['abi'] = (abi_token(res, a, sig[0]), [abi_token(res, a, x) for x in sig[1]]) if sig else None
+                    sdk = sdk_of(p['module'])
+                    if sdk and sdk[4] in SIGNATURE_STUBS:
+                        p['stub_abi'] = (stub_token(res, a, sig[0]), [stub_token(res, a, x) for x in sig[1]]) if sig else None
                     pins.append(p)
                 consts.update(a.field_constants())
             except (ValueError, IndexError, struct.error) as ex:
@@ -562,7 +760,20 @@ def survey(data):
         for entry, abi in sorted(mods[name]['entries'].items()):
             if abi and needs_thunk(abi) and '?' not in [abi[0]] + abi[1]:
                 sigs.append((name, entry, abi[0], abi[1]))
-    rep = {'modules': out, 'files': filerep, 'fmod': fmod_info(consts, pins, files), 'sigs': sigs}
+    # a stub made of the game's own entry points: every entry point's classes, and the game's constants
+    fns, stub_consts = [], []
+    for p in sorted((p for p in pins if 'stub_abi' in p), key=lambda p: (p['module'], p['entry'])):
+        abi = p['stub_abi']
+        if abi and '?' not in [abi[0]] + abi[1] and not any(f[:2] == (p['module'], p['entry']) for f in fns[-1:]):
+            fns.append((p['module'], p['entry'], abi[0], abi[1]))
+    for name in sorted({p['module'] for p in pins if 'stub_abi' in p}):
+        enums = STUB_CONSTS.get(sdk_of(name)[4], ())
+        for k in sorted(consts):
+            parts = k.split('.')
+            if len(parts) >= 2 and parts[-2] in enums and isinstance(consts[k], int) and not isinstance(consts[k], bool):
+                stub_consts.append((name, '.'.join(parts[-2:]), consts[k]))
+    rep = {'modules': out, 'files': filerep, 'fmod': fmod_info(consts, pins, files), 'sigs': sigs,
+           'fns': fns, 'consts': stub_consts}
     if bad:
         rep['unreadable_assemblies'] = bad
     rep['map'] = default_map(rep)
@@ -600,7 +811,7 @@ def merge_map(rep, port_map):
     return m
 
 
-STUBS = ('steam', 'csteamworks', 'discord_game_sdk', 'discord-rpc', 'eos')
+STUBS = ('steam', 'csteamworks', 'discord_game_sdk', 'discord-rpc', 'eos', 'wwise')
 
 
 def map_text(rep, pmap):
@@ -629,6 +840,17 @@ def map_text(rep, pmap):
         if re.search(r'\s', name + entry) or name not in libs:
             continue
         lines.append(f'sig {name} {entry} {ret} {",".join(params) or "-"}')
+    stubbed = {n for n, e in pmap.items() if e['use'] == 'stub' and
+               (e.get('stub') or (sdk_of(n) or [None] * 5)[4]) in SIGNATURE_STUBS}
+    fns = [f for f in rep.get('fns', []) if f[0] in stubbed and not re.search(r'\s', f[0] + f[1])]
+    if fns:
+        lines.append('#   fn <name> <entry> <result> <args>, const <name> <constant> <value>: a stub made of the game\'s '
+                     'entry points (wwise.c)')
+        for name, entry, ret, params in fns:
+            lines.append(f'fn {name} {entry} {ret} {",".join(params) or "-"}')
+        for name, k, v in rep.get('consts', []):
+            if name in stubbed and not re.search(r'\s', k):
+                lines.append(f'const {name} {k} {v}')
     return '\n'.join(lines) + '\n'
 
 
@@ -664,6 +886,10 @@ def main(argv=None):
     for f in rep['files']:
         if f.get('note'):
             print(f'{f["file"]} ({f.get("arch") or f["format"]}): {f["note"]}')
+    if any(e.get('sdk') == 'wwise' for e in rep['modules'].values()):
+        w = wwise_info(a.data)
+        if w:
+            print(wwise_summary(w))
     if a.json:
         json.dump(dict(rep, map=pmap), open(a.json, 'w'), indent=1, default=sorted)
     if a.map:

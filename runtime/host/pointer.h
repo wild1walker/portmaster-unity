@@ -9,6 +9,10 @@ void pointer_frames(unsigned long presented);   // UI thread, every poll: frames
 int  pointer_key(int keycode, int down);        // a pad button (Android keycode): 1 if taken (click, key, toggle)
 void pointer_axes(int slot, float *v);          // a pad's axes in input.c's order (lx ly rx ry hx hy lt rt):
                                                 // takes the cursor's controls (zeroed for the game)
+void pointer_pad(int slot, int has_left_stick); // a pad opened: whether its mapping has a left stick
+                                                // (UA_DPAD_STICK=auto)
+int  pointer_axes_changed(void);                // 1 once after the pads' axes changed meaning (a
+                                                // UA_DPAD_SWAP press): input.c sends them again
 void pointer_warp(double x, double y, int fraction);   // UA_INPUT_SCRIPT ptr=<x>/<y>
 void pointer_tick(void);                        // UI thread, every poll: moves the cursor, sends events
 void pointer_draw(void);                        // render thread, right before the swap

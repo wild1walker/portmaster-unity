@@ -23,7 +23,8 @@ API that answers as a PC without a running Steam client (Init fails, the game go
 Steam; runtime/host/steamstub.c; `STEAMSTUB=0 runtime/host/build.sh` builds a ua_host without it and
 without the old Steamworks.NET stub, for games that do not use Steamworks). The game's other native plugins follow `plugins.map`
 ([plugins.md](plugins.md)): ARM builds in `lib/`, the system's libraries, built-in stubs of
-platform SDKs (Discord, EOS, old Steamworks.NET), or refused. Android system properties come from the loader
+platform SDKs (Discord, EOS, old Steamworks.NET), a silent Wwise made of the game's own entry points
+(runtime/host/wwise.c, [plugins.md](plugins.md#wwise)), or refused. Android system properties come from the loader
 (`SO_PROP_<name, '.' as '_'>` overrides them; `swappy.disable=1` keeps Android Frame Pacing off).
 
 Run it with the 32-bit libraries first: `LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_host "$PWD"`
@@ -149,6 +150,8 @@ multiplies with it: the URP camera renders at its scale of the window.
 | `UA_POINTER_SPEED`, `UA_POINTER_START`, `UA_POINTER_TOGGLE` | full speed in screen heights/s (1.2); start position `<x>/<y>` (fractions, `0.5/0.5`); a button that turns pointer mode off and on |
 | `UA_POINTER_CURSOR=0`, `UA_POINTER_SIZE`, `UA_POINTER_HIDE`, `UA_POINTER_SHOTS=1` | no cursor drawn (the game draws its own); its scale; hide it after `<s>` idle; draw it into `shot.req` screenshots too (by default they show only the game) |
 | `UA_KEYMAP=<button>:<key>,...` | pad buttons (and `up/down/left/right`, the d-pad) that press keyboard keys instead, e.g. `start:escape,x:space` |
+| `UA_DPAD_STICK=1\|auto[,both]` | handhelds without sticks: the d-pad drives the left stick's axes from launch (a diagonal at 0.707 on each axis, a real stick still counts while the d-pad is let go); `auto`: only pads whose SDL mapping has no left stick; `both`: the d-pad still reports as the d-pad too. `pmunity port check` suggests it from the game's pad bindings; see [input.md](input.md#handhelds-without-sticks) |
+| `UA_DPAD_SWAP=<button>` | that button swaps the d-pad and the left stick, and back (keymap, cursor and the game's axes follow), so a d-pad-only device can play and move the cursor; with `UA_DPAD_STICK` it turns that mode off and on (the d-pad is the d-pad again); see [input.md](input.md) |
 | `UA_FPS` | frame stats every N s (avg/p99/worst, late >25 ms, hitch >50 ms, GC; on the fbdev path the time from the swap to the flip: Display above); `[hitch]` lines >100 ms |
 | `touch <root>/shot.req` | screenshot of the next frame -> `<root>/shot-<n>.ppm` |
 | `<root>/input.req` | live input: presses in `UA_INPUT_SCRIPT`'s syntax, times counted from when it is read (every 0.25 s; then deleted). Write it elsewhere and `mv` it into place. With `shot.req`, a test drives a game by what its screenshots show: `echo "0:b~2 6:down" > x && mv x <root>/input.req` |
@@ -185,12 +188,27 @@ multiplies with it: the URP camera renders at its scale of the window.
 | `UA_FUTEX_SPIN=<us>` | each `FUTEX_WAIT` the Android libraries make watches its word for up to `<us>` microseconds before it sleeps in the kernel, and a `FUTEX_WAKE` with no thread asleep in the kernel on that word makes no system call; Unity 2017.4's `sem_wait` (its job queue sleeps there, through bionic's semaphore: runtime/loader/hybris_compat.c) does the same. Exact by construction: a futex wait may always return early and every caller checks its word again, so only the moment a waiting thread gets its CPU back changes, never what any thread computes or draws; a wake is left out only when a count kept per word (two full barriers around the kernel wait, ordered against the waker's store) shows no kernel waiter. Off by default: on the RG34XX-SP (four cores already about 75 % busy) `UA_FUTEX_SPIN=50` cost Hollow Knight's King's Pass 2 % with the GPU's work left out (47.2 / 47.6 fps against 48.3 / 48.4) and doubled its frames over 25 ms, the watching workers taking CPU from the render thread and Mali's driver thread; see [profiling.md](profiling.md#the-job-systems-futex-traffic-ua_futex_spin-ua_futex_stats). runtime/host/futex.c, runtime/host/test/test_futex.c |
 | `UA_QUIT_CLEANUP=1` | run Unity's engine cleanup (nativeDone) at quit; by default the host pauses Unity (PlayerPrefs saved) and exits |
 | `UA_PLUGIN_MAP=<file>` | another plugins.map (default `<root>/plugins.map`; [plugins.md](plugins.md)) |
+| `UA_WWISE_BACKEND=<library.so>`, `UA_WWISE_TRACE=1` | Wwise games (the built-in stub, `stub wwise`): a sound backend that plays the game's banks through the stub (`ua_wwise_backend_get`, runtime/host/wwise.h; default none: silent); every call into the stub logged with its arguments ([plugins.md](plugins.md#wwise)) |
 | `UA_CA_BUNDLE=<pem>` (`SSL_CERT_FILE`, `SSL_CERT_DIR`) | the CA certificates libunity's TLS trusts (Unity 2018.4+; default: the system bundle, `/etc/ssl/certs/ca-certificates.crt` and the other usual places; [plugins.md](plugins.md#https)) |
 | `UA_HTTP=1` | Unity 2017.4 - 2018.4: UnityWebRequest/WWW make real requests through the system's libcurl (default: they fail at once, as without a network; [plugins.md](plugins.md#https)) |
 | `UA_AUDIO_RATE`, `UA_AUDIO_FRAMES` | output rate and buffer size AudioManager reports to FMOD (default 48000, 512; empty or out of range: the default). `UA_AUDIO_RATE=24000` is a 1 GB trade-off a port may set in `[runtime_lowmem]`: FMOD mixes and runs its effects at half the rate (duller highs, the same sounds at the same times), its mixer 48 -> 31 % of a core in Hollow Knight, which on a shared power budget leaves the Mali more clock (King's Pass walking and fighting with `ASMPATCH_HK_BLUR=off`: 48 -> 54 - 56 fps, [compat/games.md](compat/games.md)). `UA_AUDIO_FRAMES` is for measurements: with `UA_AUDIO_FRAMES=1024` Unity 6000.0's FMOD (Hollow Knight) leaves OpenSL ES for its AudioTrack output, which runs at 24 kHz (`FMODAudioDevice: rate 24000, block 512 frames x 4` in the log): not a longer buffer but half the sample rate ([profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)) |
 | `UM_TRACE`, `UM_VIDEO_BUFFERS`, `UM_VPX_THREADS`, `UM_H264`, `UM_FFMPEG` | video (Unity's VideoPlayer, `runtime/media`): per-buffer log, a video decoder's output queue (default 4), libvpx threads, OpenH264 for every H.264 stream, the system's libavcodec off / from a path (see Video below) |
 | `UA_HITCH_TRACE=<ms>` | in frames longer than `<ms>`, sample `UA_HITCH_THREADS` (default `UnityMain`) every `UA_HITCH_EVERY` ms (20): pc, lr, return addresses as module+offset (runtime/host/hitches.c; `tools/analysis/sym.py` names libunity offsets, `tools/analysis/hitchsum.py` sums them up). `UA_PROF_EVERY=<ms>` logs such a sample of those threads every `<ms>` all the time (`hitchsum.py --prof`; heavy: `UA_PROF` replaces it) |
 | `UA_PROF=<hz>` | the sampling profiler, off by default: recordings of `UA_PROF_THREADS` (default `UnityMain,UnityGfxDeviceW`; `Job.Worker*` style prefixes, `@swap` the presenting thread) at `<hz>` samples a second, `UA_PROF_SECS` long (20), started by `touch <root>/prof.req` (a number in it: the length) or once `UA_PROF_START` s after the first frame; `UA_PROF_DEPTH` (32) return addresses a sample from `UA_PROF_SCAN` bytes of stack (16384). Each one is written to `<root>/prof-<n>.txt`: states (on a CPU, runnable, blocked in which call), pc, lr and callers (unwound through code with unwind tables, scanned above Mono's JIT frames), Mono's JIT methods by name, per-thread CPU time, frame times; `tools/analysis/profsum.py` sums it up by module, function and managed method (runtime/host/prof.c, [profiling.md](profiling.md)) |
+
+## What a desktop game sees
+
+Some answers of Unity's Android player differ from a desktop player's in ways desktop code does not
+expect; ua_host gives the desktop's (runtime/host/desktopenv.c; Mono players):
+
+| | the Android player | ua_host |
+|---|---|---|
+| `Environment.GetCommandLineArgs()`, `Environment.CommandLine` | libunity gives Mono no main arguments (none to `mono_unity_runtime_set_main_args` / `mono_runtime_set_main_args`), so the list is null and `CommandLine` throws `ArgumentNullException` (`String.Join` of null): a game that looks for its switches stops there (a 2017.4 game's options loader stopped half way) | a desktop player's shape: the program's path (`ua_host`'s), then Unity's own switches (`UA_UNITY_ARGS` and what the host adds to them) or the arguments libunity passes; logged as `[host] the game's command line: ...` |
+| `Screen.resolutions` | empty (Unity reads display modes only from Android 6's `Display.Mode`): code that indexes it throws (`ArgumentOutOfRangeException` from an options menu's resolution list) | when Unity's list is empty, one mode: the window's size (what `Screen.width`/`height` say) at the display's refresh rate, as a desktop with one mode; Unity's own list is passed through when it has one. Logged once as `[host] Screen.resolutions: ...` |
+
+IL2CPP players keep an empty argument list rather than none (`CommandLine` is "", nothing throws).
+Checked by `runtime/host/test/plugins_test.sh` (`test_desktopenv`: stand-ins for Mono's setter, its
+icall registration and arrays).
 
 ## Video
 

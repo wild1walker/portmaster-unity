@@ -84,7 +84,8 @@ Saves and settings are in `ports/mygame/data/`. The log of the last run is `port
 - **1 GB of RAM is tight** for games with many large textures; ports of such games convert their
   textures (`pmunity port check` tells the porter when).
 - **Online services** (Steam, Discord, Epic) answer as if they were not running. Games whose sound
-  uses FMOD or Wwise are silent unless the porter supplies ARM versions of those libraries.
+  uses FMOD or Wwise are silent unless the porter supplies ARM versions of those libraries (a Wwise
+  game runs silent on the runtime's built-in Wwise).
 - **Copying big files to the card while you play** makes games stutter.
 
 ### Getting help and reporting a bug
@@ -186,8 +187,10 @@ Most impact for the most games first:
 6. **Video.** Intro videos (Unity's VideoPlayer) have played in a 2017.4.40 game. The same code
    path for 2018.4 - 2021.3 has not run with a video yet, 2022.3's path is only unit-tested, a
    Unity 6 game's background video stalls, and the Vulkan path is missing.
-7. **Native plugins.** FMOD and Wwise need ARM libraries of the game's exact version, supplied by
-   the porter (FMOD needs an account to download). Other x86-only plugins fail; Burst code falls
+7. **Native plugins.** FMOD needs ARM libraries of the game's exact version, supplied by the porter
+   (FMOD needs an account to download). Wwise games run silent on the runtime's built-in Wwise;
+   their sound needs Wwise's ARM library of the game's version or a sound backend for the stub
+   (none yet). Other x86-only plugins fail; Burst code falls
    back to its slower managed version. An old Steamworks.NET (through CSteamworks) calls entry
    points the Steam stub does not have (a 2017.2 game stops there).
 8. **Files the game reads itself.** StreamingAssets as loose files (`loose`) and `data_path` are
