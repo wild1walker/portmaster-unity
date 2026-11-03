@@ -216,9 +216,10 @@ beside it (`libAkFlanger.so`, ...) are loaded by the engine itself, never by the
 the game's project uses) of Wwise's Android SDK of exactly the game's version (`armeabi-v7a`; an
 Audiokinetic account), in the port's `lib/` (`{"AkSoundEngine": {"use": "lib", "file":
 "libAkSoundEngine.so"}}` in the port's plugin map). Or a **sound backend** for the stub: a glibc
-library for the handheld that plays the game's banks, given with `UA_WWISE_BACKEND=<path>`; the stub
-keeps doing the plumbing (the entry points, the integration's objects, the callback queue, the stored
-game syncs) and calls the backend for what makes sound.
+library for the handheld that plays the game's banks, given with `UA_WWISE_BACKEND=<path>`, or
+ua_host's own (below, `UA_WWISE_DATA`); the stub keeps doing the plumbing (the entry points, the
+integration's objects, the callback queue, the stored game syncs) and calls the backend for what
+makes sound.
 
 ### The backend interface (runtime/host/wwise.h)
 
@@ -235,6 +236,17 @@ pointer may be NULL.
 | `stop(playing_id)`, `stop_all(game_object, every)` | `StopPlayingID`, `StopAll` |
 | `set_rtpc(id, value, game_object, playing_id, every)`, `set_state(group, state)`, `set_switch(group, value, game_object)`, `post_trigger(id, game_object)` | the game syncs (names are already IDs) |
 | `game_object(id, name, registered)`, `set_position(id, position, front, top)` | game objects and their positions (from the game's `AkTransform`) |
+| `mix(buf, frames, rate, channels)` (version 2) | the sound: on the host's audio thread, add `frames` frames of `channels` interleaved floats at `rate` Hz into `buf` |
+
+`mix` is how a backend's sound reaches the speakers without a second audio device: when the backend
+has one (`version` 2; version 1 backends are still taken, without it), the stub hands it to the
+OpenSL ES emulation (`android_sles_set_mix`, runtime/android/opensles.c), which calls it on the
+output thread of the game's own player (FMOD's, the first one the game realizes) after the game's
+sound is in the buffer, at that player's rate and channels (48000 Hz or `UA_AUDIO_RATE`, stereo); the
+16-bit (or 32-bit) samples get the float mix added with clipping. A game with Unity's own audio off
+opens no player: the emulation then opens an output of its own for the mix (16-bit stereo at
+`UA_AUDIO_RATE`, the same SDL / pipe choice, `ANDROID_SLES_OUTPUT`) and hands it over to the game's
+first player if one comes. A program without the emulation (the unit tests) leaves `mix` uncalled.
 
 `ua_wwise_host` gives the backend `event_done(playing_id)`, `event_callback(playing_id, type, fields)`
 (a marker, a duration, a music beat: any callback the game asked for, by the game's `AkCallbackType`
@@ -251,6 +263,95 @@ reads it, a cancelled callback, game syncs given back, fields of SWIG objects, a
 test backend (`wwise_backend.c`): what it gets and an event it ends later. The map's lines:
 `convert/tests/test_plugins.py`, setup-rs's `plugins::tests::wwise_fn_lines` (and `map_of_a_game`
 with `PMU_PLUGINS_DATA`: pmu's plugins.map of a game, to compare with the Python's).
+
+### The player (runtime/host/wwplay.c)
+
+There is no Wwise for ARM Linux, and a game's own x86 Wwise under box64 costs most of a core of a
+4 x Cortex-A53 handheld (some 80 % of one at 60 events/s). So ua_host has a player of its own: pmu's
+setup converts the game's soundbanks once ([wwise-player.md](wwise-player.md): per bank a
+`<Bank>.uaww.json` with the hierarchy, events, buses, RTPC curves and game sync defaults, and a
+`<Bank>.uaww.pak` with the media as standard Ogg Vorbis, Wwise's IMA ADPCM blocks or 16-bit PCM), and
+the player, built into ua_host and selected by `UA_WWISE_DATA=<dir>` (no `UA_WWISE_BACKEND`), plays
+them. Built in rather than a separate library: nothing more to ship or find, and it uses the host's
+output hook directly. Nothing of Audiokinetic's code or data is in it.
+
+- **Banks**: `LoadBank("SFX.bnk")` reads `<dir>/SFX.uaww.json` and maps `SFX.uaww.pak` (the media are
+  read from the page cache, not copied); the game gets the bank's ID. A bank without data logs one
+  line and stays silent; banks stay loaded (`UnloadBank` succeeds, the data stays mapped).
+- **Events**: their actions in order, each after its delay: play, stop, pause and resume (what plays
+  under the target node, on the event's game object or on all), their `_all` forms with exceptions,
+  set state / switch / RTPC, set and reset bus and node volumes; others are skipped. `PostEvent`
+  returns a playing ID that ends (the end-of-event callback, through the host) when everything the
+  event started has ended; an event that starts nothing ends at once. `StopPlayingID`, `StopAll`,
+  unregistering a game object (which stops what it plays, as in Wwise) and `ExecuteActionOnEvent`
+  (stop, pause, resume) work on what the events play.
+- **Containers**: random (weights, avoid-repeat), sequence (in order), switch (a game object's switch
+  or a state; its default value), layer; step (one child a play) or continuous (all, `loop` times,
+  one after another, a delay transition kept). A sound plays its media once, n times or forever
+  (between the media's loop points when it has them), after its delay; at a node's playback limit
+  the oldest instance under it stops (or, with `limit_newest`, the new one does not play); a node's
+  play chance (`prob`) is drawn at each play.
+- **Volume and pitch**: a voice's dB and cents are the sums over its sound and every node above it
+  (containers, actor-mixers, music nodes), with their random ranges (new values each play), their
+  states and their RTPC curves, and its output bus's volume and every parent bus's (with their states
+  and RTPCs: the game's volume sliders). An RTPC the game has not set has the Init bank's default.
+  Changes take effect at the next mix block, with a gain ramp; a state change moves the gains over
+  its state group's fade time (the transition's own, else the group's).
+- **Music**: a music switch's decision tree, on its states and switches, picks a playlist or a
+  segment; a playlist plays its item tree (sequences and random groups, step or continuous, with their
+  loops and weights); a segment plays its tracks' clips at their places on its timeline (trimmed, a
+  clip longer than its media looping it; random, sequence and switch tracks pick a subtrack); the
+  next segment starts so that its entry cue meets the current one's exit cue, the current one's
+  post-exit playing on over it. When the switch's choice changes (a state or switch), the new
+  child's first segment follows at the current segment's exit cue, or at once when the transition
+  rule syncs immediately (or to a grid, bar or beat, which the player does not follow), with the
+  rule's fade-out and fade-in.
+- **The mixer**: voices decode in blocks of 512 16-bit frames (stb_vorbis for Ogg Vorbis, an IMA
+  decoder of its own for Wwise's block layout, one table lookup a sample, PCM), are resampled to the
+  output's rate with their pitch by linear interpolation and added, with a per-block gain ramp, into
+  32-bit integer sums (mono sources, most of them, four frames at a time with NEON), which become the
+  float stereo mix (mono sources centred at -3 dB a side); at most `UA_WWISE_VOICES` (48) play: a new
+  voice past that replaces the quietest one (the oldest of equals), or is dropped if it is the
+  quietest itself. One mutex guards
+  the player between the game's calls and the output thread. When no output reads the mix for
+  0.5 s (none open), `RenderAudio` advances it silently, so events still end.
+- **Not in step 1**: effects (inserts, aux sends), HDR, 3D positioning, attenuation and panning,
+  LPF / HPF, transition segments and beat-synced transitions, crossfades between a continuous
+  container's children, per-object sequence positions (they are global), RTPC values per game object
+  or playing ID (every value is global), switch groups driven by RTPCs, clip automation, ducking.
+
+**Its cost** (`wwrender --bench`, Gungeon's banks, 60 events/s on 128 game objects with the dungeon
+music and a state change every 20 s, CPU per second of audio, the RG34XX-SP's Cortex-A53 at
+schedutil, 2026-11-02): 64 voices 7.9 % of one core, 48 voices (the default) 5.3 %, 32 voices 3.7 %,
+48 voices at `UA_AUDIO_RATE=24000` 4.1 %; the music alone 1.2 % (stb_vorbis, stereo 44.1 kHz); the
+game's calls into the player 0.3 %. Ogg Vorbis voices cost the most (some 0.5 % each): at 30
+events/s the voices live longer and more of them are Vorbis, 6.5 % at 48 voices. The same mix
+through Wwise's own x86 engine under box64 took some 80 %. A 1 GB port can trade voices for CPU
+with `UA_WWISE_VOICES`.
+
+**Watching it.** Every `UA_WWISE_STATS` seconds (60; 0: off) one log line: `[wwise] player, last 60 s:
+3612 events (3401 played), 5210 voices started, 41 now (peak 48, 12 dropped at the cap of 48), 1
+music, mix 2.31 % of a core, calls 0.40 %, 60.0 s mixed at 48000 Hz` (the mix's own thread CPU time
+and the game's calls into the player, per second of wall time). `UA_WWISE_CAPTURE=<file.wav>`
+writes the player's own mix (without the game's other sound) to a 16-bit stereo WAV for
+`UA_WWISE_CAPTURE_SECS` (120) seconds: a check without speakers.
+
+**Offline.** `wwrender` (built with ua_host: `host/out/wwrender`, `host/out/arm64/wwrender`) plays
+banks without a game or a sound device, as fast as it can, into a WAV file: `wwrender -o out.wav
+<data dir> <script>` with lines `<seconds> post <event> [game object]`, `state <group> <value>`,
+`switch <group> <value> [obj]`, `rtpc <name> <value>`, `bank <name>`, `stop <obj>`, `stopall`, `end`
+(names hashed as Wwise does, or `#<id>`); `wwrender --bench [-s secs] [-e events/s] [-m music event]
+[-t state event,...] [-T secs] [-o out.wav] <data dir> <events.txt>` plays a mix like the earlier
+Wwise bench's (its event list: category, name, effects flag) on 128 game objects with the music and
+its state changes, and prints the player's CPU per second of audio.
+
+Tests: `runtime/host/test/wwplay_test.sh` (armhf in an arm/v7 container, arm64): `test_wwplay`, a
+made-up bank written by the test (PCM, IMA ADPCM from its own encoder, a synthetic Ogg Vorbis tone in
+`test/data`): lengths, levels and decoding of each codec, resampling, loops, delays, pitch, limits,
+stop / pause / resume, scopes and exceptions, bus and mixer volumes, states, RTPC curves (dB scaling,
+defaults), delayed actions, every container, the music (playlist order and loop, entry and exit
+cues, a state change at the exit cue and at once by a rule, clips looped and trimmed, a lone segment),
+`ExecuteActionOnEvent`, the voice cap; then `wwrender` renders a script of the same bank to a WAV.
 
 ## HTTPS
 

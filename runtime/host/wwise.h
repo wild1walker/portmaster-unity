@@ -7,12 +7,14 @@
 // A backend is a glibc shared library for the handheld (UA_WWISE_BACKEND=<path>) that exports
 //     const ua_wwise_backend *ua_wwise_backend_get(const ua_wwise_host *host);
 // It is asked once, at the first call into the stub; NULL (or a version it does not know) keeps the
-// silent stub. Every function pointer may be NULL (the stub then answers as without a backend).
+// silent stub. Without UA_WWISE_BACKEND, UA_WWISE_DATA=<dir> selects ua_host's own player
+// (wwplay.c: the banks as the setup's .uaww.json / .uaww.pak files in <dir>). Every function
+// pointer may be NULL (the stub then answers as without a backend).
 // Strings are UTF-8, valid only during the call. IDs are Wwise's (ua_wwise_host.id of a name).
 #pragma once
 #include <stdint.h>
 
-#define UA_WWISE_BACKEND_VERSION 1
+#define UA_WWISE_BACKEND_VERSION 2      // 1: without mix (still accepted)
 
 // AKRESULT values the stub and backends answer with (the game's own enum is read from its
 // assemblies where it has one; these have not changed since Wwise 2013)
@@ -78,9 +80,16 @@ typedef struct ua_wwise_backend {
     // game objects and listeners
     void (*game_object)(uint64_t game_object, const char *name, int registered);
     void (*set_position)(uint64_t game_object, const float position[3], const float front[3], const float top[3]);
+    // version 2: the sound. The host calls it on its audio output's thread (the game's own OpenSL ES
+    // player, so one device carries both) to add `frames` frames of `channels` interleaved floats
+    // at `rate` Hz into buf; rate and channels are the output's (48000 or UA_AUDIO_RATE, stereo)
+    void (*mix)(float *buf, int frames, int rate, int channels);
 } ua_wwise_backend;
 
 typedef const ua_wwise_backend *(*ua_wwise_backend_fn)(const ua_wwise_host *host);
+
+// ua_host's own backend (wwplay.c): NULL without UA_WWISE_DATA
+const ua_wwise_backend *wwplay_backend_get(const ua_wwise_host *host);
 
 // ---- for ua_host (plugins.c) --------------------------------------------------------------------
 #include "../loader/so_loader.h"

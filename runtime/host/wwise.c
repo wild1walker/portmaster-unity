@@ -22,11 +22,14 @@
 //     <Class>_SWIGUpcast is the object itself;
 //   - everything else by its result class: AKRESULT (a signed int: SWIG's enums) AK_Success,
 //     bool false, an unsigned int, a pointer or a string 0.
-// A sound backend (wwise.h) can plug into the same calls: UA_WWISE_BACKEND=<library.so>. Without
-// one the game is silent and its events end at once. UA_WWISE_TRACE=1 logs every call.
+// A sound backend (wwise.h) can plug into the same calls: UA_WWISE_BACKEND=<library.so>, or
+// ua_host's own player (wwplay.c) with UA_WWISE_DATA=<dir>. Without one the game is silent and its
+// events end at once. UA_WWISE_TRACE=1 logs every call.
 #define _GNU_SOURCE
 #include "wwise.h"
 #include "plugins.h"
+
+#pragma weak wwplay_backend_get     // ua_host links the player (wwplay.c); the stub's unit test does not
 
 #include <ctype.h>
 #include <dlfcn.h>
@@ -327,21 +330,35 @@ static const char *host_file(const char *name, char *buf, unsigned size)
 
 static const ua_wwise_host g_host = { UA_WWISE_BACKEND_VERSION, host_event_done, host_event_callback, host_file, ak_id, constant, host_log };
 
+// the audio output (runtime/android/opensles.c); weak: the unit tests link no shims
+extern void android_sles_set_mix(void (*fn)(float *, int, int, int), int rate) __attribute__((weak));
+
 static void backend_load(void)
 {
     if (g_backend_tried) return;
     g_backend_tried = 1;
     const char *p = getenv("UA_WWISE_BACKEND");
-    if (!p || !*p) { LOG("silent (no sound backend: UA_WWISE_BACKEND)\n"); return; }
-    void *h = dlopen(p, RTLD_NOW | RTLD_LOCAL);
-    ua_wwise_backend_fn get = h ? (ua_wwise_backend_fn)dlsym(h, "ua_wwise_backend_get") : NULL;
-    const ua_wwise_backend *b = get ? get(&g_host) : NULL;
-    if (!b || b->version != UA_WWISE_BACKEND_VERSION) {
-        LOG("backend %s: %s: silent\n", p, !h ? dlerror() : !get ? "no ua_wwise_backend_get()" : !b ? "declined" : "another interface version");
+    const ua_wwise_backend *b = NULL;
+    if (p && *p) {
+        void *h = dlopen(p, RTLD_NOW | RTLD_LOCAL);
+        ua_wwise_backend_fn get = h ? (ua_wwise_backend_fn)dlsym(h, "ua_wwise_backend_get") : NULL;
+        b = get ? get(&g_host) : NULL;
+        if (!b || b->version < 1 || b->version > UA_WWISE_BACKEND_VERSION) {
+            LOG("backend %s: %s: silent\n", p, !h ? dlerror() : !get ? "no ua_wwise_backend_get()" : !b ? "declined" : "another interface version");
+            return;
+        }
+    } else if (!wwplay_backend_get || !(b = wwplay_backend_get(&g_host))) {
+        LOG("silent (no sound backend: UA_WWISE_BACKEND, UA_WWISE_DATA)\n");
         return;
     }
     B = b;
-    LOG("backend %s (%s)\n", b->name ? b->name : "?", p);
+    LOG("backend %s (%s)\n", b->name ? b->name : "?", p && *p ? p : "built in");
+    if (b->version >= 2 && b->mix) {
+        const char *r = getenv("UA_AUDIO_RATE");
+        int rate = r && atoi(r) >= 8000 && atoi(r) <= 192000 ? atoi(r) : 48000;
+        if (android_sles_set_mix) android_sles_set_mix(b->mix, rate);
+        else LOG("no audio output in this program: the backend's mix is not played\n");
+    }
 }
 
 // --------------------------------------------------------------------------------------- entry points

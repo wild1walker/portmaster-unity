@@ -40,6 +40,15 @@ extern so_shim android_ndk_shims[];   // libandroid.so only
 extern so_shim android_sles_shims[];  // libOpenSLES.so only (SL_IID_* entries point at the variables)
 extern so_shim android_mediandk_shims[]; // libmediandk.so only (AMEDIAFORMAT_KEY_* entries: the variables)
 
+// Another sound mixed into the game's own audio output (ua_host's Wwise player, runtime/host/wwplay.c):
+// fn adds `frames` frames of `channels` interleaved floats at `rate` Hz into buf, on the output's
+// thread, after the game's sound is in it. The first player the game realizes carries it (one audio
+// device for both); with no player of the game's yet, an output of its own at `rate` Hz (16-bit
+// stereo, the same SDL / pipe choice as ANDROID_SLES_OUTPUT) carries it until one is realized.
+// NULL stops it.
+typedef void (*android_sles_mix_fn)(float *buf, int frames, int rate, int channels);
+void android_sles_set_mix(android_sles_mix_fn fn, int rate);
+
 // For the loader's dlopen routing: the table for an Android-only library ("liblog.so",
 // "/system/lib/libOpenSLES.so", "libmediandk.so", ...), or NULL when we have no shim for it
 // (libvulkan.so, OMX libs: let dlopen fail, Unity then disables that feature).
