@@ -157,6 +157,7 @@ um_surface *um_surface_new(unsigned tex)
     pthread_mutex_init(&s->mu, NULL);
     s->refs = 1;
     s->tex = tex;
+    um_frame_pool_use(1);
     return s;
 }
 
@@ -189,6 +190,7 @@ void um_surface_unref(um_surface *s)
     if (s->latched) um_log("surface %u: %llu frames shown, %d dropped", s->tex, (unsigned long long)s->latched, s->dropped);
     pthread_mutex_destroy(&s->mu);
     free(s);
+    um_frame_pool_use(-1);
 }
 
 void um_surface_set_listener(um_surface *s, void (*fn)(void *, um_surface *), void *user)
@@ -293,6 +295,9 @@ static int make_source(um_surface *s, int tw, int th)
     return -1;
 }
 
+static volatile int64_t g_last_latch_us;
+int64_t um_surface_last_latch_us(void) { return g_last_latch_us; }
+
 int um_surface_update(um_surface *s)
 {
     if (!s) return -1;
@@ -300,10 +305,11 @@ int um_surface_update(um_surface *s)
     um_frame *f = s->q;
     if (f) { s->q = f->next; if (!s->q) s->qtail = NULL; s->qn--; }
     pthread_mutex_unlock(&s->mu);
-    if (!f) return 0;
+    if (!f) { UM_TRACE("surface %u: update, nothing queued", s->tex); return 0; }
     s->w = f->width; s->h = f->height; s->pw = f->pw; s->ph = f->ph;
     s->ts_ns = f->pts_us * 1000;
     s->latched++;
+    g_last_latch_us = um_now_us();
     if (!gl_load()) { um_frame_put(f); return -1; }
     if (!gl.eglGetCurrentContext()) {
         static int warned;

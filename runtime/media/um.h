@@ -125,12 +125,15 @@ typedef struct um_frame {
 } um_frame;
 um_frame *um_frame_get(int width, int height);   /* pooled */
 void      um_frame_put(um_frame *f);
+int       um_frame_pool_count(void);             /* pictures kept for reuse (tests) */
 /* copy planes into a packed frame (odd sizes and padding: the last row / column repeated) */
 void      um_frame_fill(um_frame *f, const uint8_t *y, int ys, const uint8_t *u, int us,
                         const uint8_t *v, int vs);
 
 typedef struct um_surface um_surface;
 um_surface *um_surface_new(unsigned gl_texture);     /* SurfaceTexture(texName); refcount 1 */
+/* when any surface last latched a picture (CLOCK_MONOTONIC us; 0: never): a video is on the screen */
+int64_t     um_surface_last_latch_us(void);
 um_surface *um_surface_ref(um_surface *s);
 void        um_surface_unref(um_surface *s);
 /* frame available: called on the producing thread right after a frame is queued (the Java side

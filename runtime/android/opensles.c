@@ -15,6 +15,12 @@
 // PulseAudio, found through XDG_RUNTIME_DIR, and the system's aplay) - for 32-bit programs on a 64-bit system
 // whose sound server they cannot reach directly (PipeWire holding the card, no 32-bit client
 // plugins) or whose 32-bit alsa-lib cannot drive the kernel; auto (default) = sdl, else pipe.
+//
+// An underrun (the queue ran dry while playing: the game's mixer was late, the listener hears a
+// gap) is logged with how long it lasted, at the host's time since the first frame like its
+// [hitch] lines (the first 50, then every 100th). ANDROID_SLES_CAPTURE=<file> also writes what
+// each player outputs (raw PCM in the player's format, gaps as silence) to <file>, a later
+// player to <file>.<n>: a silent device test can check the sound itself.
 #define _GNU_SOURCE
 #include "sles_min.h"
 #include "shim_internal.h"
@@ -27,11 +33,14 @@
 #include <signal.h>
 #include <spawn.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
+double frames_t_start(void) __attribute__((weak));   // ua_host: the first frame's time (0 before)
 
 // ---- interface IDs (values from Android's OpenSLES_IID.cpp) --------------------------------
 #define IID(name, a, b, c, d, n0, n1, n2, n3, n4, n5) \
@@ -92,7 +101,7 @@ typedef struct obj {
     SLint32 priority;
     SLboolean preemptable;
     union {
-        struct { itf engine; } e;
+        struct { itf engine; int sdl; } e;   // sdl: holds SDL's audio subsystem
         struct { itf mix; } m;
         struct {
             itf play, bq, volume, config;
@@ -116,6 +125,8 @@ typedef struct obj {
             SLint32 stream_type, perf_mode;
             unsigned underruns;
             int starved;                  // queue ran dry while playing (HEADATEND sent)
+            double starved_at;            // when (CLOCK_MONOTONIC s)
+            FILE *capture;                // ANDROID_SLES_CAPTURE
             int pipe_fd;                  // pipe output (instead of dev): write end, -1 if none
             pid_t pipe_pid;
             pthread_t pipe_thread;
@@ -153,6 +164,20 @@ static void sdl_audio_release(void)
 }
 
 // ---- audio player: SDL callback -------------------------------------------------------------
+static double mono_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+
+// the end of an underrun (the next Enqueue), with the lock held
+static void underrun_end(obj *o)
+{
+    if (!o->p.starved) return;
+    o->p.starved = 0;
+    unsigned n = o->p.underruns;
+    if (n > 50 && n % 100) return;
+    double t = mono_now(), t0 = frames_t_start ? frames_t_start() : 0;
+    SHIM_WARN("OpenSL: underrun %u: %.1f ms of silence at %.1f s", n, (t - o->p.starved_at) * 1000,
+              t0 > 0 ? o->p.starved_at - t0 : 0.0);
+}
+
 static void apply_gain(obj *o, uint8_t *buf, int len)
 {
     float g = o->p.gain;
@@ -187,6 +212,7 @@ static void player_fill(obj *o, Uint8 *stream, int len)
         if (o->p.count == 0) {
             if (o->p.starved) break;
             o->p.starved = 1;
+            o->p.starved_at = mono_now();
             o->p.underruns++;
             if (o->p.play_cb && (o->p.play_mask & SL_PLAYEVENT_HEADATEND)) {
                 slPlayCallback cb = o->p.play_cb;
@@ -221,6 +247,7 @@ static void player_fill(obj *o, Uint8 *stream, int len)
     apply_gain(o, stream, off);
     pthread_mutex_unlock(&o->p.lock);
     if (off < len) memset(stream + off, o->p.spec.silence, len - off);
+    if (o->p.capture) fwrite(stream, 1, len, o->p.capture);
 }
 
 static void player_sdl_callback(void *ud, Uint8 *stream, int len) { player_fill((obj *)ud, stream, len); }
@@ -401,9 +428,23 @@ static void pipe_close(obj *o)
 }
 
 // ---- Object interface -----------------------------------------------------------------------
+static void capture_open(obj *o)
+{
+    static int players;
+    const char *path = getenv("ANDROID_SLES_CAPTURE");
+    if (!path || !*path) return;
+    char f[1024];
+    int n = players++;
+    if (n) snprintf(f, sizeof f, "%s.%d", path, n); else snprintf(f, sizeof f, "%s", path);
+    o->p.capture = fopen(f, "wb");
+    if (o->p.capture) SHIM_WARN("OpenSL: player %p output to %s (%d Hz, %d ch, fmt 0x%x)", (void *)o, f,
+                                o->p.spec.freq, o->p.spec.channels, o->p.spec.format);
+}
+
 static SLresult player_realize(obj *o)
 {
     if (!o->p.is_bq) return SL_RESULT_CONTENT_UNSUPPORTED;
+    capture_open(o);
     const char *mode = getenv("ANDROID_SLES_OUTPUT") ? getenv("ANDROID_SLES_OUTPUT") : "auto";
     o->p.pipe_fd = -1;
     if (!strcmp(mode, "pipe")) {
@@ -434,12 +475,24 @@ static SLresult player_realize(obj *o)
     return SL_RESULT_SUCCESS;
 }
 
+// SDL's audio for the players; without it (no driver this SDL can start, as a 32-bit SDL on some
+// 64-bit systems) the players can still use the pipe output, unless ANDROID_SLES_OUTPUT=sdl
+static SLresult engine_realize(obj *o)
+{
+    o->e.sdl = sdl_audio_acquire();
+    if (o->e.sdl) return SL_RESULT_SUCCESS;
+    const char *mode = getenv("ANDROID_SLES_OUTPUT") ? getenv("ANDROID_SLES_OUTPUT") : "auto";
+    if (!strcmp(mode, "sdl")) return SL_RESULT_RESOURCE_ERROR;
+    SHIM_WARN("OpenSL: no SDL audio: the players use the pipe output");
+    return SL_RESULT_SUCCESS;
+}
+
 static SLresult Object_Realize(SLObjectItf self, SLboolean async)
 {
     obj *o = OBJ(self);
     if (o->state != SL_OBJECT_STATE_UNREALIZED) return SL_RESULT_PRECONDITIONS_VIOLATED;
     SLresult r = SL_RESULT_SUCCESS;
-    if (o->kind == K_ENGINE) r = sdl_audio_acquire() ? SL_RESULT_SUCCESS : SL_RESULT_RESOURCE_ERROR;
+    if (o->kind == K_ENGINE) r = engine_realize(o);
     else if (o->kind == K_PLAYER) r = player_realize(o);
     if (r == SL_RESULT_SUCCESS) o->state = SL_OBJECT_STATE_REALIZED;
     if (async && o->obj_cb) o->obj_cb(self, o->obj_cb_ctx, SL_OBJECT_EVENT_ASYNC_TERMINATION, r, o->state, NULL);
@@ -516,10 +569,11 @@ static void Object_Destroy(SLObjectItf self)
             if (o->state == SL_OBJECT_STATE_REALIZED) sdl_audio_release();
         }
         pipe_close(o);
+        if (o->p.capture) fclose(o->p.capture);
         if (o->p.underruns) SHIM_TRACE("OpenSL: player %p had %u underruns", (void *)o, o->p.underruns);
         pthread_mutex_destroy(&o->p.lock);
         free(o->p.queue);
-    } else if (o->kind == K_ENGINE && o->state == SL_OBJECT_STATE_REALIZED) {
+    } else if (o->kind == K_ENGINE && o->state == SL_OBJECT_STATE_REALIZED && o->e.sdl) {
         sdl_audio_release();
     }
     free(o);
@@ -673,7 +727,7 @@ static SLresult BQ_Enqueue(SLBufferQueueItf self, const void *pBuffer, SLuint32 
     } else {
         o->p.queue[(o->p.front + o->p.count) % o->p.cap] = (struct qbuf){ pBuffer, size };
         o->p.count++;
-        o->p.starved = 0;
+        underrun_end(o);
     }
     pthread_mutex_unlock(&o->p.lock);
     return r;

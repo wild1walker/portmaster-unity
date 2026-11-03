@@ -96,7 +96,7 @@ pictures through EGLImage + shader with Mesa: every pixel equals the desktop for
 
 | codec | container | decoder | licence | linked |
 |---|---|---|---|---|
-| VP8, VP9 | WebM, Matroska | libvpx (`OMX.google.vp8.decoder`, `...vp9...`) | BSD-3-Clause | static (Debian's `libvpx-dev`) |
+| VP8, VP9 | WebM, Matroska | libvpx (`OMX.google.vp8.decoder`, `...vp9...`) | BSD-3-Clause | static (arm64: Debian's `libvpx-dev`; armhf: Debian's source package of it built for ARMv7 with NEON in the image, `docker/Dockerfile`: Debian's own armhf build is plain C) |
 | Vorbis | WebM, Matroska | libvorbis + libogg | BSD-3-Clause | static |
 | Opus | WebM, Matroska | libopus | BSD-3-Clause | static |
 | H.264 | MP4, MOV, Matroska | OpenH264 (`OMX.google.h264.decoder`) | BSD-2-Clause | static (Debian's `libopenh264-dev` on armhf; built from Debian's source package for arm64) |
@@ -127,7 +127,7 @@ must not carry an H.264 decoder: H.264 clips then play only where the handheld h
 
 | variable | effect |
 |---|---|
-| `UM_TRACE=1` | one line per decoded input (with its decode time), per frame and per latched picture |
+| `UM_TRACE=1` | one line per decoded input (its time in the decoder, waiting for a free output buffer included), per frame, per output buffer the client dequeues and releases, per `updateTexImage` (latched picture, or nothing queued); each traced line starts with its time (`CLOCK_MONOTONIC` ms) |
 | `UM_VIDEO_BUFFERS=<n>` | a video decoder's output buffers (default 4, Android's usual; each holds a picture). More let a slow consumer still find the frame it asks for (the emulated rig needs ~24 at 2 fps) |
 | `UM_VPX_THREADS=<n>` | libvpx threads (default: CPUs, up to 4; VP8 uses them only for clips with several token partitions) |
 | `UM_H264=openh264` | OpenH264 for every H.264 stream, B-frames included |
@@ -160,9 +160,13 @@ The host's log names the decoders at start: `[media] decoders: vp8 (libvpx-vp8),
 Measured with `umbench` on a 1920x1080 VP8 clip of 5.6 Mbit/s (a game's intro): 1.4-1.8 ms per
 frame natively on an Apple M-series core (arm64 build), 27-40 ms under QEMU (armhf, the emulated
 rig); decode threads do not help (one token partition). Vorbis: 37x real time under QEMU.
-For a Cortex-A53 at 1.5 GHz (H700) that is an estimated 15-30 ms per 1080p frame on one core
-(the M-series core is roughly 8-12x faster on this code; libvpx's NEON paths are used on both):
-real time at 30 fps on the decoding thread, which is not Unity's main thread. Per shown frame the
+
+On the handheld (H700, Cortex-A53; 2026-11-02, Hollow Knight's 1920x1080 30 fps VP8 prologue, 906
+frames, one token partition): Debian's armhf libvpx, plain C (`--target=generic-gnu
+--enable-small`: NEON is optional on armhf), took 140 ms a frame at 1.5 GHz (7.1 fps, Knulli) and
+122 ms at 1.8 GHz (muOS); built for ARMv7 with NEON (the image's `/opt/vpx`) 31.3 ms at 1.8 GHz
+(95th percentile 49 ms): 31.9 fps, 3.9x, just real time for a 30 fps clip on its own core
+(a 5 s 1080p clip at muOS's idle 288 MHz: 520 -> 99 ms, 5.3x). Per shown frame the
 render thread uploads 3.1 MB (1080p) and the GPU runs the blit (3 texture reads per pixel of the
 video's RenderTexture): on a Mali-G31, from the per-layer costs measured for Cuphead (about 0.3 ms
 per texture read per 720x480 layer), roughly 5-8 ms per 1080p frame, i.e. 15-25% of the GPU at
@@ -174,5 +178,5 @@ handheld gives the decode number for real.
 - `AImageReader` / `AHardwareBuffer` (2022.3's Vulkan video path), HDR and 10-bit pictures (VP9
   profile 2, 10-bit H.264 / HEVC go to libavcodec and are refused there: 8-bit 4:2:0 only).
 - Streams from the network; Matroska content encodings (compressed / encrypted tracks).
-- Measured on the handheld: decode cost, the upload, and that Mali's driver takes the GL_R8
-  EGLImage as an external texture (`GL_LUMINANCE` is tried next; both work on Mesa).
+- Measured on the handheld: the upload's cost (the decode is measured above; Mali's driver takes
+  the GL_R8 EGLImage as an external texture: Hollow Knight's cinematics show on the RG34XX-SP).

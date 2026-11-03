@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 void um_log(const char *fmt, ...)
 {
@@ -17,7 +18,12 @@ void um_log(const char *fmt, ...)
     if (n < 0) return;
     if (n > (int)sizeof b - 2) n = sizeof b - 2;
     b[n++] = '\n';
-    fputs("[media] ", stderr);
+    if (um_tracing()) {             /* traced runs: each line with its time (CLOCK_MONOTONIC ms) */
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        fprintf(stderr, "[media] %lld.%03ld ", (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000, ts.tv_nsec / 1000 % 1000);
+    } else
+        fputs("[media] ", stderr);
     fwrite(b, 1, n, stderr);
 }
 
@@ -196,7 +202,29 @@ char *um_format_to_string(const um_format *f)
 static pthread_mutex_t pool_mu = PTHREAD_MUTEX_INITIALIZER;
 static um_frame *pool;
 static int pool_n;
+static int pool_users;      /* video codecs and surfaces alive */
 #define POOL_MAX 8
+
+/* a video codec or surface made (+1) or freed (-1): when the last one goes, the pool's pictures
+   go too (a 1080p clip's are 3.1 MB each, up to POOL_MAX of them: kept, they would sit unused
+   through the game that follows a cinematic) */
+void um_frame_pool_use(int d)
+{
+    um_frame *drop = NULL;
+    pthread_mutex_lock(&pool_mu);
+    pool_users += d;
+    if (pool_users <= 0) { pool_users = 0; drop = pool; pool = NULL; pool_n = 0; }
+    pthread_mutex_unlock(&pool_mu);
+    while (drop) { um_frame *n = drop->next; free(drop->data); free(drop); drop = n; }
+}
+
+int um_frame_pool_count(void)
+{
+    pthread_mutex_lock(&pool_mu);
+    int n = pool_n;
+    pthread_mutex_unlock(&pool_mu);
+    return n;
+}
 
 um_frame *um_frame_get(int width, int height)
 {

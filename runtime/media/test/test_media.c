@@ -375,6 +375,9 @@ int main(void)
     test_webm(160, 90, 0);
     test_webm(71, 41, 1);
     test_vp9_opus();
+    /* every codec and surface of those tests is freed: no picture is kept for a video to come */
+    printf("-- frame pool after the clips: %d kept\n", um_frame_pool_count());
+    CHECK(um_frame_pool_count() == 0, "%d pictures kept", um_frame_pool_count());
 #ifdef UM_HAVE_H264
     test_mp4_h264();
     test_mp4_aac_silence();

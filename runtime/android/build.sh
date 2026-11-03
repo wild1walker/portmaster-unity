@@ -36,10 +36,13 @@ if [ "$1" = test ]; then
   # armhf: the test binary runs in the same image, which carries the armhf multiarch runtime
   # (libc6:armhf, libSDL2:armhf); Docker Desktop runs 32-bit ARM code with QEMU user emulation.
   # arm64: native.
+  # ANDROID_SLES_CAPTURE must hold exactly what SDL's disk driver was given.
   docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test \
     -e SDL_AUDIODRIVER=disk -e SDL_DISKAUDIOFILE=/tmp/sles.raw -e ANDROID_WINDOW_SIZE=640x480 \
-    -e ANDROID_SHIM_TRACE=${ANDROID_SHIM_TRACE:-0} \
-    $IMG timeout 300 ./test_shims ./libfakeegl.so
+    -e ANDROID_SHIM_TRACE=${ANDROID_SHIM_TRACE:-0} -e ANDROID_SLES_CAPTURE=/tmp/cap.raw $IMG sh -c '
+    timeout 300 ./test_shims ./libfakeegl.so || exit 1
+    if cmp -s /tmp/sles.raw /tmp/cap.raw; then echo "capture: ok ($(wc -c < /tmp/cap.raw) bytes, as SDL played them)"
+    else echo "capture: FAILED"; ls -l /tmp/sles.raw /tmp/cap.raw; exit 1; fi'
   # Same again on SDL's dummy driver (buffer-queue logic and callback pacing only).
   docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=dummy -e ANDROID_WINDOW_SIZE=640x480 \
     $IMG timeout 300 ./test_shims ./libfakeegl.so
@@ -53,5 +56,16 @@ if [ "$1" = test ]; then
       echo "pipe/aplay: ok ($(wc -c < /tmp/aplay.raw) bytes of PCM on the second device)"
     else
       echo "pipe/aplay: FAILED"; cat /tmp/aplay.args; exit 1
+    fi'
+  # No SDL audio at all (a 32-bit SDL without a driver it can start, as muOS's has no dummy): the
+  # engine still starts and the default output (auto) reaches the pipe client.
+  docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=nosuchdriver \
+    -e ANDROID_WINDOW_SIZE=640x480 -e PATH=/r/android/test/fakebin:/usr/bin:/bin $IMG sh -c '
+    unset XDG_RUNTIME_DIR; rm -f /tmp/aplay.args /tmp/aplay.raw
+    timeout 300 ./test_shims ./libfakeegl.so > /tmp/out.txt 2>&1 || { cat /tmp/out.txt; echo "no SDL audio: test_shims failed"; exit 1; }
+    if grep -q "no SDL audio: the players use the pipe output" /tmp/out.txt && [ -s /tmp/aplay.raw ]; then
+      echo "no SDL audio: ok ($(wc -c < /tmp/aplay.raw) bytes of PCM through the pipe)"
+    else
+      echo "no SDL audio: FAILED"; cat /tmp/out.txt; exit 1
     fi'
 fi

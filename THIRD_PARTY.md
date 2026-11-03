@@ -31,7 +31,7 @@ with a `ua_host` built this way.
 
 | what | version (armhf: Debian 12; arm64: Ubuntu 20.04) | licence | used for |
 |---|---|---|---|
-| [libvpx](https://chromium.googlesource.com/webm/libvpx) (`libvpx-dev`) | 1.12.0 / 1.8.2 | BSD-3-Clause (+ WebM project patent grant) | VP8 / VP9 decoding |
+| [libvpx](https://chromium.googlesource.com/webm/libvpx) (armhf: Debian 12's source package of `libvpx-dev`, built for ARMv7 with NEON in the image; arm64: `libvpx-dev`) | 1.12.0 / 1.8.2 | BSD-3-Clause (+ WebM project patent grant) | VP8 / VP9 decoding |
 | [libvorbis](https://xiph.org/vorbis/) + [libogg](https://xiph.org/ogg/) (`libvorbis-dev`, `libogg-dev`) | 1.3.7 + 1.3.5 / 1.3.6 + 1.3.4 | BSD-3-Clause | Vorbis decoding |
 | [libopus](https://opus-codec.org/) (`libopus-dev`) | 1.3.1 | BSD-3-Clause | Opus decoding |
 | [OpenH264](https://github.com/cisco/openh264) (armhf: `libopenh264-dev`; arm64: Debian 12's source package built in the image) | 2.3.1 | BSD-2-Clause | H.264 decoding. Built from source, it carries no MPEG LA patent licence (Cisco's own binaries do); whether that matters is the distributor's call |

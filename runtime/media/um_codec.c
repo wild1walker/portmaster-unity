@@ -117,6 +117,7 @@ static um_codec *create_entry(const um_dec_entry *ent)
     c->dec = d;
     c->video = ent->is_video;
     c->state = ST_CREATED;
+    if (c->video) um_frame_pool_use(1);
     return c;
 }
 
@@ -544,6 +545,7 @@ void um_codec_free(um_codec *c)
     um_format_free(c->cur_fmt);
     pthread_mutex_destroy(&c->mu);
     pthread_cond_destroy(&c->cv);
+    if (c->video) um_frame_pool_use(-1);
     free(c);
 }
 
@@ -630,6 +632,7 @@ int um_codec_dequeue_output(um_codec *c, um_buffer_info *info, int64_t timeout_u
                 o->state = OUT_CLIENT;
                 if (info) *info = o->info;
                 r = best;
+                UM_TRACE("codec %s: dequeued out %d pts %lld", c->ent->name, best, (long long)o->info.pts_us);
             }
             break;
         }
@@ -666,6 +669,7 @@ int um_codec_release_output(um_codec *c, int i, int render)
         return UM_ERR_INVALID;
     }
     um_frame *f = c->out[i].frame;
+    UM_TRACE("codec %s: release out %d pts %lld%s", c->ent->name, i, (long long)c->out[i].info.pts_us, render ? " render" : "");
     c->out[i].frame = NULL;
     c->out[i].state = OUT_FREE;
     um_surface *s = render && f && c->surface ? um_surface_ref(c->surface) : NULL;

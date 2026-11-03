@@ -120,6 +120,7 @@ static int cmp_float(const void *a, const void *b)
 
 static volatile unsigned long g_presented;
 unsigned long frames_presented(void) { return g_presented; }
+double frames_t_start(void) { return g_t_start; }
 
 static void on_swap(void *ctx)
 {
