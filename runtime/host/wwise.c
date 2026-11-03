@@ -315,11 +315,11 @@ static const char *host_file(const char *name, char *buf, unsigned size)
         const char *b = base[i];
         char tmp[PATH_MAX];
         if (!strncmp(b, "jar:", 4) || !strncmp(b, "file:", 5)) {             // inside the APK/OBB: beside it
-            snprintf(p, sizeof p, "%s%s%s", b, b[strlen(b) - 1] == '/' ? "" : "/", name);
+            snprintf(p, sizeof p, "%.4000s%s%.4000s", b, b[strlen(b) - 1] == '/' ? "" : "/", name);
             if (plugins_asset_path(p, tmp, sizeof tmp)) { snprintf(buf, size, "%s", tmp); return buf; }
             continue;
         }
-        snprintf(p, sizeof p, "%s%s%s", b, b[0] && b[strlen(b) - 1] == '/' ? "" : "/", name);
+        snprintf(p, sizeof p, "%.4000s%s%.4000s", b, b[0] && b[strlen(b) - 1] == '/' ? "" : "/", name);
         if (is_file(p)) { snprintf(buf, size, "%s", p); return buf; }
     }
     return NULL;

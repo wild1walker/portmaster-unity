@@ -133,7 +133,9 @@ static void pad_open(int index)
     }
     up_add_input_device(&d);
     // a mapping without a left stick (a d-pad-only handheld): UA_DPAD_STICK=auto gives it one
-    int lstick = SDL_GameControllerHasAxis(gc, SDL_CONTROLLER_AXIS_LEFTX) && SDL_GameControllerHasAxis(gc, SDL_CONTROLLER_AXIS_LEFTY);
+    // (SDL_GameControllerHasAxis is SDL 2.0.14+; a binding of the axis says the same in every SDL 2)
+    int lstick = SDL_GameControllerGetBindForAxis(gc, SDL_CONTROLLER_AXIS_LEFTX).bindType != SDL_CONTROLLER_BINDTYPE_NONE &&
+                 SDL_GameControllerGetBindForAxis(gc, SDL_CONTROLLER_AXIS_LEFTY).bindType != SDL_CONTROLLER_BINDTYPE_NONE;
     fprintf(stderr, "[input] pad %d: \"%s\" (SDL \"%s\", %04x:%04x) as Android device %d%s\n", index, names[slot],
             SDL_GameControllerName(gc), d.vendor_id, d.product_id, p->id, lstick ? "" : ", no left stick in its mapping");
     pointer_pad(slot, lstick);

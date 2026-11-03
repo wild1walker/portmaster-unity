@@ -269,7 +269,7 @@ d-pad's direction wins while it is held.
 | value | what |
 |---|---|
 | `1` | every pad: the d-pad is the left stick and no longer reports as the d-pad (`AXIS_HAT_X/Y` stay 0, `UA_KEYMAP`'s d-pad directions and pointer mode's `dpad` see nothing) |
-| `auto` | the same, only for pads whose SDL mapping has no left stick (`SDL_GameControllerHasAxis`: PortMaster's mapping of a d-pad-only handheld binds no `leftx`/`lefty`); a pad with sticks is left alone, so one port setting serves handhelds with and without sticks. ua_host logs `pad <n> has no left stick: the d-pad drives it`. `UA_INPUT_SCRIPT`'s virtual pad counts as a pad with sticks |
+| `auto` | the same, only for pads whose SDL mapping has no left stick (it binds no `leftx`/`lefty`); a pad with sticks is left alone, so one port setting serves handhelds with and without sticks. `log.txt` says which: `[input] pad 0: ... no left stick in its mapping` and `pad <n> has no left stick: the d-pad drives it` (a handheld whose mapping names sticks it does not have needs `1`). `UA_INPUT_SCRIPT`'s virtual pad counts as a pad with sticks |
 | `both` (`1,both`, `auto,both`) | the d-pad drives the left stick and still reports as the d-pad: for games whose menus navigate with the d-pad while play moves with the stick, when nothing in play is bound to the d-pad alone (every press would do both) |
 
 A game's d-pad still reaches menus that read the d-pad keys Android synthesises from unhandled
