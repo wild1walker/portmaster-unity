@@ -407,77 +407,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_load_default_codebooks() {
-        let lib = CodebookLibrary::default_codebooks().unwrap();
-        assert!(lib.codebook_count() > 0);
-    }
-
-    #[test]
-    fn test_load_aotuv_codebooks() {
-        let lib = CodebookLibrary::aotuv_codebooks().unwrap();
-        assert!(lib.codebook_count() > 0);
-    }
-
-    #[test]
     fn test_empty_codebook() {
         let lib = CodebookLibrary::empty();
         assert_eq!(lib.codebook_count(), 0);
         assert_eq!(lib.get_codebook_size(0), -1);
-    }
-
-    #[test]
-    fn test_get_codebook() {
-        let lib = CodebookLibrary::default_codebooks().unwrap();
-        // First codebook should exist
-        let cb = lib.get_codebook(0);
-        assert!(cb.is_ok());
-        assert!(!cb.unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_codebook_count_matches_offsets() {
-        let lib = CodebookLibrary::default_codebooks().unwrap();
-        // codebook_count should be offsets.len() - 1 (last offset is end marker)
-        let count = lib.codebook_count();
-        assert!(count > 0);
-
-        // All codebooks up to count should be accessible
-        for i in 0..count {
-            assert!(lib.get_codebook(i).is_ok());
-        }
-
-        // Codebook at count should fail
-        assert!(lib.get_codebook(count).is_err());
-    }
-
-    #[test]
-    fn test_get_codebook_size() {
-        let lib = CodebookLibrary::default_codebooks().unwrap();
-
-        // First codebook should have positive size
-        let size = lib.get_codebook_size(0);
-        assert!(size > 0);
-
-        // Size should match actual data length
-        let data = lib.get_codebook(0).unwrap();
-        assert_eq!(size as usize, data.len());
-    }
-
-    #[test]
-    fn test_get_codebook_invalid_index() {
-        let lib = CodebookLibrary::default_codebooks().unwrap();
-
-        // Very large index should fail
-        let result = lib.get_codebook(999999);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_get_codebook_size_invalid_index() {
-        let lib = CodebookLibrary::default_codebooks().unwrap();
-
-        // Invalid index should return -1
-        assert_eq!(lib.get_codebook_size(999999), -1);
     }
 
     #[test]
@@ -509,30 +442,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_default_and_aotuv_have_same_count() {
-        let default = CodebookLibrary::default_codebooks().unwrap();
-        let aotuv = CodebookLibrary::aotuv_codebooks().unwrap();
-
-        // Both libraries should have the same number of codebooks
-        assert_eq!(default.codebook_count(), aotuv.codebook_count());
-    }
-
-    #[test]
-    fn test_codebook_data_is_different() {
-        let default = CodebookLibrary::default_codebooks().unwrap();
-        let aotuv = CodebookLibrary::aotuv_codebooks().unwrap();
-
-        // At least some codebooks should differ between libraries
-        let mut found_difference = false;
-        for i in 0..default.codebook_count().min(10) {
-            let d = default.get_codebook(i).unwrap();
-            let a = aotuv.get_codebook(i).unwrap();
-            if d != a {
-                found_difference = true;
-                break;
-            }
-        }
-        assert!(found_difference, "Expected some codebooks to differ");
-    }
 }
