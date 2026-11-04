@@ -1580,9 +1580,14 @@ static so_handle *find_handle(int kind, const char *name)
     return NULL;
 }
 
+static const char *(*g_dlopen_rewrite)(const char *path, char *buf, size_t size);
+void so_set_dlopen_rewrite(const char *(*rewrite)(const char *, char *, size_t)) { g_dlopen_rewrite = rewrite; }
 void *so_dlopen(const char *filename, int flags)
 {
     if (!filename) return &g_global;
+    char rw[1024];
+    const char *served = g_dlopen_rewrite ? g_dlopen_rewrite(filename, rw, sizeof rw) : NULL;
+    if (served) filename = served;
     so_lock();
     libmap_defaults();
     const char *b = base_name(filename);
@@ -1613,7 +1618,7 @@ void *so_dlopen(const char *filename, int flags)
     }
     if (flags & B_RTLD_NOLOAD) { set_err("dlopen(%s): not loaded", filename); goto out; }
     char *p = search_android_lib(filename);
-    if (p && is_android_elf_file(p)) {
+    if (p && (served || is_android_elf_file(p))) {
         m = load_locked(p, NULL, 0);
         free(p);
         if (!m) goto out;

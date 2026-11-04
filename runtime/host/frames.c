@@ -1,7 +1,8 @@
 // Frame statistics and screenshots, from the EGL glue's hook right before each eglSwapBuffers
 // (on Unity's render thread, with Unity's context current):
 //   UA_FPS=<seconds>  log fps and frame times every <seconds> (0 = off; default 5): average, 99th
-//                     percentile and worst frame, frames over 25 ms (late: a missed vsync) and over
+//                     percentile and worst frame, frames over 25 ms (late: a missed vsync; UA_FPS_LATE_MS
+//                     sets that line, e.g. 33 for a 30 fps budget) and over
 //                     50 ms (hitch), Mono GC collections and heap, and on the fbdev path how long
 //                     frames took from their swap to their flip (fbdev.c); any frame over 100 ms is
 //                     also logged at once ("[hitch]", seconds since start) to line it up with game logs
@@ -188,7 +189,9 @@ static void on_swap(void *ctx)
         if (n < MAX_WIN) g_win[n] = (float)(dt * 1000);
         n++;
         if (dt > worst) worst = dt;
-        if (dt > 0.025) late++;
+        static double late_s = -1;               // UA_FPS_LATE_MS: the late line (default 25 ms)
+        if (late_s < 0) { const char *e = getenv("UA_FPS_LATE_MS"); late_s = e && atof(e) > 0 ? atof(e) / 1000 : 0.025; }
+        if (dt > late_s) late++;
         if (dt > 0.050) hitch++;
         if (dt > 0.100) fprintf(stderr, "[hitch] %.1f ms at %.1f s\n", dt * 1000, t - g_t_start);
     }

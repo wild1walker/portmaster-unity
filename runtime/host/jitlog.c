@@ -79,20 +79,45 @@ void jitlog_init(void)
     if ((e = getenv("UA_JIT_LOG_MS")) && atof(e) > 0) g_name_ms = atof(e);
 }
 
+// Mono's functions: the loaded runtime's (tests set their own)
+static void *(*g_sym)(const char *name);
+static void *runtime_sym(const char *name) { void *h = mono_runtime_lib(); return h ? so_dlsym(h, name) : NULL; }
+void jitlog_set_resolver(void *(*sym)(const char *name)) { g_sym = sym; }
+long long jitlog_compiles(void) { return atomic_load(&g_count); }
+
 static void install(void)
 {
     g_installed = 1;
-    void *h = mono_runtime_lib();
-    create_fn create = h ? (create_fn)so_dlsym(h, "mono_profiler_create") : NULL;
-    set_begin_fn sb = h ? (set_begin_fn)so_dlsym(h, "mono_profiler_set_jit_begin_callback") : NULL;
-    set_done_fn sd = h ? (set_done_fn)so_dlsym(h, "mono_profiler_set_jit_done_callback") : NULL;
+    void *(*sym)(const char *) = g_sym ? g_sym : runtime_sym;
+    create_fn create = (create_fn)sym("mono_profiler_create");
+    set_begin_fn sb = (set_begin_fn)sym("mono_profiler_set_jit_begin_callback");
+    set_done_fn sd = (set_done_fn)sym("mono_profiler_set_jit_done_callback");
+    // Unity 2017.x's old Mono (2.6): the single profiler of the legacy API (mono_profiler_install, the JIT
+    // compile events); its end callback's third argument is the result, unused here
+    void (*l_install)(void *, void *) = (void (*)(void *, void *))sym("mono_profiler_install");
+    void (*l_jit)(void *, void *) = (void (*)(void *, void *))sym("mono_profiler_install_jit_compile");
+    void (*l_events)(int) = (void (*)(int))sym("mono_profiler_set_events");
+    if ((!sb || !sd) && l_install && l_jit && l_events) {
+        static int prof_token;
+        m_full_name = (char *(*)(void *, int))sym("mono_method_full_name");
+        m_free = (void (*)(void *))sym("g_free");
+        m_get_class = (void *(*)(void *))sym("mono_method_get_class");
+        m_class_image = (void *(*)(void *))sym("mono_class_get_image");
+        m_image_name = (const char *(*)(void *))sym("mono_image_get_name");
+        m_token = (unsigned (*)(void *))sym("mono_method_get_token");
+        l_install(&prof_token, NULL);
+        l_jit((void *)on_begin, (void *)on_done);
+        l_events(1 << 4);                       // MONO_PROFILE_JIT_COMPILATION
+        fprintf(stderr, "[jit] compiles timed (UA_JIT_LOG, Mono's legacy profiler; named from %.0f ms)\n", g_name_ms);
+        return;
+    }
     if (!create || !sb || !sd) { fprintf(stderr, "[jit] no Mono profiler API: UA_JIT_LOG off\n"); g_on = 0; return; }
-    m_full_name = (char *(*)(void *, int))so_dlsym(h, "mono_method_full_name");
-    m_free = (void (*)(void *))so_dlsym(h, "mono_free");
-    m_get_class = (void *(*)(void *))so_dlsym(h, "mono_method_get_class");
-    m_class_image = (void *(*)(void *))so_dlsym(h, "mono_class_get_image");
-    m_image_name = (const char *(*)(void *))so_dlsym(h, "mono_image_get_name");
-    m_token = (unsigned (*)(void *))so_dlsym(h, "mono_method_get_token");
+    m_full_name = (char *(*)(void *, int))sym("mono_method_full_name");
+    m_free = (void (*)(void *))sym("mono_free");
+    m_get_class = (void *(*)(void *))sym("mono_method_get_class");
+    m_class_image = (void *(*)(void *))sym("mono_class_get_image");
+    m_image_name = (const char *(*)(void *))sym("mono_image_get_name");
+    m_token = (unsigned (*)(void *))sym("mono_method_get_token");
     void *handle = create(NULL);
     sb(handle, on_begin);
     sd(handle, on_done);

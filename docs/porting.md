@@ -128,7 +128,11 @@ game's heaviest scene:
    ASTC textures, and exact GPU savings ([shaders.md](shaders.md), [quality.md](quality.md)).
 5. **If the main thread limits,** the route is the lever. Compare the candidates on the handheld in
    the same scene with the same settings before building the port around one:
-   - `android`: the ARMv7 engine and Mono's 32-bit JIT; nothing to compile at setup.
+   - `android`: the ARMv7 engine and Mono's 32-bit JIT; nothing to compile at setup. With Mono's
+     ahead-of-time images made by the player's own libmono (runtime.md, `UA_MONO_AOT` and
+     `UA_MONO_MAIN`: Unity's runtime from the donor, GNU as/ld for ARM) the frame costs the same, and
+     what the JIT compiles at first use falls: Enter the Gungeon in the emulated rig, 9,948 compiles in
+     14.2 s of emulated time against 7,625 cheap ones (wrappers) in 1.6 s. Not yet a setup step.
    - `mono-arm64`: the arm64 engine and Mono's arm64 JIT; nothing to compile at setup.
    - `il2cpp-arm64` (or `apk` with `player.il2cpp`): the game's code compiled ahead of time;
      Hollow Knight's managed code took 3.4 ms a frame against 4.9 ms on Mono's arm64 JIT. Its setup

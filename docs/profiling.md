@@ -5,7 +5,8 @@ whole measured session:
 
 | question | tool |
 |---|---|
-| how fast, how steady | `UA_FPS=<s>` (on by default every 5 s): fps, average / p99 / worst frame, frames over 25 and 50 ms, Mono collections ([runtime.md](runtime.md)) |
+| how fast, how steady | `UA_FPS=<s>` (on by default every 5 s): fps, average / p99 / worst frame, frames over 25 (`UA_FPS_LATE_MS` moves that line, e.g. 33) and 50 ms, Mono collections ([runtime.md](runtime.md)) |
+| whether a long frame is Mono compiling, and how much compiling a run does | `UA_JIT_LOG=1\|2`: compiles per long frame, named slow compiles, totals (Unity 2017.x's Mono 2.6 through its legacy profiler API) ([runtime.md](runtime.md)); Mono's ahead-of-time images take most of it away: `UA_MONO_AOT` |
 | what one slow frame did | `UA_HITCH_TRACE=<ms>` + `tools/analysis/hitchsum.py`: samples inside frames longer than `<ms>` |
 | whether a long frame is the driver making shader programs, and whether Unity's program binary cache is used | `UA_GL_PROGLOG=1` + `tools/analysis/hitchsum.py --glprog`: [below](#shader-programs-compiles-links-and-unitys-binary-cache) |
 | where the steady frame goes | `UA_PROF=<hz>` + `tools/analysis/profsum.py`: a sampling profile of UnityMain and the render thread (below) |

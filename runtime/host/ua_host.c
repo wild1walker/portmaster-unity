@@ -19,6 +19,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "framerate.h"
 #include "gcbudget.h"
 #include "jitlog.h"
+#include "monoaot.h"
 #include "jitwarm.h"
 #include "quality.h"
 #include "desktopenv.h"
@@ -539,6 +540,7 @@ int main(int argc, char **argv)
     so_set_library_path(libdir);
     g_mono_trace = getenv("UA_MONO_TRACE") != NULL;
     so_set_dlsym_hook(dlsym_hook);
+    if (getenv("UA_MONO_AOT")) so_set_dlopen_rewrite(monoaot_rewrite);   // Mono's AOT images (monoaot.c)
     hitches_init();                            // UA_HITCH_TRACE
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
@@ -595,6 +597,13 @@ int main(int argc, char **argv)
     so_map_library("libmediandk.so", NULL);
     up_media_init();                            // the media core's decoders (../media)
     so_map_library("libvulkan.so", NULL);       // GLES only
+    if (getenv("UA_MONO_MAIN")) {               // the player's Mono as the mono program (monoaot.c)
+        void *h = so_dlopen("libmono.so", 0);
+        if (!h) fprintf(stderr, "[host] UA_MONO_MAIN: no %s/libmono.so (a Mono player's)\n", libdir);
+        int r = h ? monoaot_main(h, so_dlsym, getenv("UA_MONO_MAIN")) : 1;
+        fflush(NULL);
+        _exit(r);
+    }
 #ifndef UA_NO_STEAMSTUB
     steamstub_register(libdir);                 // Steamworks without a Steam client (steamstub.c)
 #endif

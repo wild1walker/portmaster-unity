@@ -155,6 +155,11 @@ void *so_dlsym(void *handle, const char *symbol);
 /* debugging: every symbol Android code gets through dlsym passes through hook(symbol, found),
  * which may return a wrapper instead */
 void so_set_dlsym_hook(void *(*hook)(const char *symbol, void *found));
+/* the host may serve a dlopen() path itself: rewrite(path, buf, size) returns the file to open instead,
+   or NULL (e.g. Mono's AOT images, which it looks for beside assemblies inside an OBB); a served file is
+   loaded as an Android library whatever its ELF says (an AOT image has no DT_NEEDED and the Android
+   player's soft-float ABI, which the host's armhf loader refuses) */
+void so_set_dlopen_rewrite(const char *(*rewrite)(const char *path, char *buf, size_t size));
 /* hook(m) for each Android module once it is relocated and protected, before its initializers run;
  * the loader's lock is held: the hook may read and patch the module (so_base, so_size, so_name), not
  * load or look up others */

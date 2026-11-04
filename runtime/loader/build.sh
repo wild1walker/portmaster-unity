@@ -67,6 +67,9 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
   $CC -shared -nostdlib -Wl,-soname,libc.so -o $D/libc.so -x c /dev/null
   $CC $A -c test/syn_dep.c -o $D/syn_dep.o
   $CC $S -Wl,-soname,libsyn_dep.so -o $D/libsyn_dep.so $D/syn_dep.o -L$D -lc
+  # no DT_NEEDED at all (as the AOT images of Mono): served by so_set_dlopen_rewrite
+  $CC $A -c test/syn_plain.c -o $D/syn_plain.o
+  $CC -shared -nostdlib -Wl,--hash-style=both -Wl,-soname,libplain.so -o $D/libplain.so $D/syn_plain.o
   $CC $A -c test/syn_lib.c -o $D/syn_lib.o
   # arm64: an unwinder of its own (libgcc_eh, hidden), as NDK libraries carry one
   UNW=

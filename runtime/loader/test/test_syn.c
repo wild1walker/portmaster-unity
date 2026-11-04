@@ -43,6 +43,16 @@ static const so_shim media_shims[] = {
 };
 
 static int fails;
+static const char *g_serve_dir;
+static const char *serve_rewrite(const char *path, char *buf, size_t size)
+{
+    const char *b = strrchr(path, '/');
+    if (!b || strncmp(path, "/virtual/", 9)) return NULL;
+    if (!strcmp(b, "/libsyn_dep.so.img")) snprintf(buf, size, "%s/libsyn_dep.so", g_serve_dir);
+    else if (!strcmp(b, "/Plain.dll.so")) snprintf(buf, size, "%s/libplain.so", g_serve_dir);
+    else return NULL;
+    return buf;
+}
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
 struct modinfo { const char *name; uintptr_t bias; const ElfW(Phdr) *ph; int phnum; };
@@ -369,6 +379,21 @@ int main(int argc, char **argv)
     waitpid(pid, &ws, 0);
     CHECK(WIFSIGNALED(ws) && WTERMSIG(ws) == SIGABRT, "stack overrun not caught (status %#x)", ws);
 
+    // so_set_dlopen_rewrite: a path the host serves from elsewhere (Mono's AOT images inside an OBB), loaded by
+    // so_loader whether or not it looks like an Android library; other paths untouched
+    {
+        so_set_dlopen_rewrite(serve_rewrite);
+        g_serve_dir = dir;
+        void *a = so_dlopen("/virtual/x.obb/assets/libsyn_dep.so.img", 0);
+        CHECK(a && so_dlsym(a, "dep_value") && *(int *)so_dlsym(a, "dep_value") == 42, "a served Android library");
+        void *p = so_dlopen("/virtual/x.obb/assets/Plain.dll.so", 0);
+        CHECK(p && so_dlsym(p, "plain_value") && *(int *)so_dlsym(p, "plain_value") == 77 &&
+              !strcmp(*(const char **)so_dlsym(p, "plain_name"), "plain"), "a served plain shared object: %s", p ? "symbols" : so_error());
+        CHECK(!so_dlopen("/virtual/x.obb/assets/Missing.dll.so", 0), "an image the host does not serve");
+        so_set_dlopen_rewrite(NULL);
+        CHECK(!so_dlopen("/virtual/x.obb/assets/Plain.dll.so", 0), "without the rewrite the virtual path is not found");
+    }
+
     // a truncated packed table: an error, not a crash
     snprintf(path, sizeof path, "%s/libsyn_x.so", dir);
     so_module *bad = so_load(path, NULL);
@@ -377,7 +402,7 @@ int main(int argc, char **argv)
 out:
     if (fails) printf("syn: %d FAILED\n", fails);
     else printf("syn: ok (%s: 5 relocation encodings alike, imports, init order, dl*, setjmp, signals, pthread, stat, "
-                "newer bionic symbols, SHA1, libmediandk routing, stack guard, thread id slot%s)\n",
+                "newer bionic symbols, SHA1, libmediandk routing, served paths, stack guard, thread id slot%s)\n",
                 sizeof(void *) == 8 ? "arm64" : "arm32", sizeof(void *) == 8 ? ", unwinding" : "");
     return fails != 0;
 }
