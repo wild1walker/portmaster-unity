@@ -306,6 +306,15 @@ As a port, the il2cpp-arm64 route's setup would build it on the handheld (`--on-
 C++ and 763 compiles, so hours on a Cortex-A53 (above, "Fitting a 1 GB, 4 x Cortex-A53 handheld");
 the setup on a 64-bit-only system is not written for Hollow Knight yet.
 
+**On the handheld** (2026-11-04, Knulli RG34XX-SP; rebuilt from the port's current data, half-size
+textures on 1 GB and asmpatch's `--with=hk-blur`, with `pmu il2cpp --on-device` in the arm64
+container: 20 min, 35 min of CPU, peak 869 MB; the 1 GB profile; every run from a cool handheld):
+Greenpath 35.4 fps against the 32-bit Mono build's 36.4, Soul Master's arena 41.8 against 41.6,
+King's Pass 51.7 against 50.6 - 51.0; the game's resident memory 768 - 806 MB against 623 - 680.
+Its heavy scenes wait on the render thread and the Mali driver, which native script code and 64-bit
+mode do not speed up, and a 1 GB handheld cannot spare the ~140 MB more: the 32-bit Mono port
+stays, with `UA_JIT_WARM` for its first-use compiling ([performance.md](performance.md#6-native-code-64-bit-and-il2cpp)).
+
 The other ways, measured (not taken):
 - **The macOS editor's il2cpp**: on macOS, `il2cpp/build/deploy` is a self-contained .NET (CoreCLR)
   deployment, with `Unity.IL2CPP.dll` (1.4 MB), `Unity.IL2CPP.DataModel.dll`, `il2cpp.pdb` and
