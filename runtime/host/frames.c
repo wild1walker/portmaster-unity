@@ -9,7 +9,9 @@
 //                     presented; checked once a second, the request file is removed). Pointer
 //                     mode's cursor is drawn after it (UA_POINTER_SHOTS=1: before), so shots show
 //                     the game's own picture; an open on-screen keyboard is in them (UA_OSK_SHOTS=0:
-//                     not)
+//                     not). The frame is read in the swap; the file is written by a thread of its
+//                     own ("[frames] screenshot <path>" once it is), so an SD card's slow write is
+//                     not a hitch of the game's
 #define _GNU_SOURCE
 #include "frames.h"
 #include "display.h"
@@ -36,6 +38,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +67,21 @@ static int g_width, g_height;
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
+typedef struct { char path[600]; size_t len; unsigned char data[]; } shot_file;
+static void *shot_write(void *arg)
+{
+    shot_file *sf = arg;
+    FILE *f = fopen(sf->path, "wb");
+    if (f)
+    {
+        fwrite(sf->data, 1, sf->len, f);
+        fclose(f);
+        fprintf(stderr, "[frames] screenshot %s\n", sf->path);
+    }
+    free(sf);
+    return NULL;
+}
+
 static void screenshot(void)
 {
     if (!gl_ReadPixels)
@@ -87,22 +105,25 @@ static void screenshot(void)
     gl_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     gl_PixelStorei(GL_PACK_ALIGNMENT, 4);
     unsigned char *px = malloc((size_t)w * h * 4);
-    if (px)
+    shot_file *sf = px ? malloc(sizeof *sf + 32 + (size_t)w * h * 3) : NULL;
+    if (sf)
     {
         gl_ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
-        char path[600];
-        snprintf(path, sizeof path, "%s/shot-%d.ppm", g_root, ++g_shots);
-        FILE *f = fopen(path, "wb");
-        if (f)
-        {
-            fprintf(f, "P6\n%d %d\n255\n", w, h);
-            for (int y = h - 1; y >= 0; y--)             // GL rows are bottom-up
-                for (int x = 0; x < w; x++) fwrite(px + ((size_t)y * w + x) * 4, 1, 3, f);
-            fclose(f);
-            fprintf(stderr, "[frames] screenshot %s\n", path);
-        }
-        free(px);
+        snprintf(sf->path, sizeof sf->path, "%s/shot-%d.ppm", g_root, ++g_shots);
+        int n = snprintf((char *)sf->data, 32, "P6\n%d %d\n255\n", w, h);
+        unsigned char *o = sf->data + n;
+        for (int y = h - 1; y >= 0; y--)                 // GL rows are bottom-up
+            for (int x = 0; x < w; x++, o += 3) memcpy(o, px + ((size_t)y * w + x) * 4, 3);
+        sf->len = (size_t)(o - sf->data);
+        // the file is written by a thread of its own: a slow SD card stalls it, not the game's frame
+        pthread_t t;
+        pthread_attr_t a;
+        pthread_attr_init(&a);
+        pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&t, &a, shot_write, sf) != 0) shot_write(sf);
+        pthread_attr_destroy(&a);
     }
+    free(px);
     gl_PixelStorei(GL_PACK_ALIGNMENT, align);
     gl_BindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
     gl_BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);

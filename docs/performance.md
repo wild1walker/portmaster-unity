@@ -92,9 +92,19 @@ pixels.
   Find the driver's share by GL entry point (`profsum.py --callers 'libmali.so:<function>'`) and
   count the calls a frame (`UA_GL_REC=census`) before writing a layer.
 - **Paid on the render thread:** Unity's dynamic geometry in persistently mapped buffers
-  (`UA_GL_PERSIST=1`; Unity maps, flushes and unmaps a pooled buffer for every sprite chunk, ~150 a
+  (`UA_GL_PERSIST=1`; Unity maps, flushes and unmaps a pooled buffer for every sprite chunk, ~320 a
   frame in Greenpath, `glMapBufferRange` alone ~6 % of the render thread): Greenpath 37.8 / 37.5 ->
-  39.2 / 39.2 fps, the worst second 29.7 / 26.7 -> 32.6 / 33.5, the same bytes drawn.
+  39.2 / 39.2 fps, then 40.2 - 40.6 once the layer stopped reading the clock at every map (a system
+  call for a 32-bit process on these kernels: keep per-call work in a GL layer free of system
+  calls); Knulli 36.6 / 36.5 -> 39.5 / 39.6. Those buffers as ranges of one (`UA_GL_ARENA=1`): ~+2 %
+  more (muOS ~41.2, Knulli 41.0). The same bytes drawn, both checked by fake-driver tests.
+- **The Mali driver works in the draw call.** `runtime/host/drawbench` on the device: a sprite draw
+  ~30 - 37 us, all its state calls together 2.5 - 2.9 us. So filtering state calls that change
+  nothing (`UA_GL_STATE=1`: 133 of ~2,300 a frame in Greenpath), prebuilt vertex array objects,
+  the fast clock (`UA_FAST_CLOCK=1`) and pinning the render thread to its own core
+  (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`: muOS no change, Knulli +1.5 - 2 %) did not pay or not
+  on both firmwares. What is left is the number of draws, ~200 in Greenpath, set by the game's
+  sprites alternating between two atlases in depth order.
 
 ## 6. Native code: 64-bit and IL2CPP
 

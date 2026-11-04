@@ -178,8 +178,8 @@ Soul Tyrant 47.4, City of Tears 42.4, Soul Master 41.6, Greenpath 36 - 38: Green
 render thread (~21 ms a frame, the Mali driver 40 % of it), not the GPU's pixels (480x320 the same).
 The 64-bit IL2CPP build of the same data: Greenpath 35.4, Soul Master 41.8, King's Pass 51.7, ~140 MB
 more memory: not taken ([il2cpp.md](../il2cpp.md)). The render thread's sprite chunks in
-persistently mapped buffers (`UA_GL_PERSIST`, on in the port): Greenpath 37.8 / 37.5 -> 39.2 / 39.2
-fps (muOS).
+persistently mapped buffers and then in one buffer (`UA_GL_PERSIST`, `UA_GL_ARENA`, both on in the
+port): Greenpath 37.5 - 37.8 -> ~41.2 fps on muOS, 36.5 - 36.6 -> 41.0 on Knulli.
 
 
 ## Linux builds, one per Unity line (32-bit route)
