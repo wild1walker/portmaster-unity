@@ -29,6 +29,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "futex.h"
 #include "gltrace.h"
 #include "glopt.h"
+#include "glpersist.h"
 #include "glpass.h"
 #include "glrename.h"
 #include "glrec.h"
@@ -370,19 +371,26 @@ static void *dlsym_hook(const char *sym, void *p)
     return p;
 }
 
-// what glopt.c's GL wrappers call: msaafix.c's wrapper of that function, else gltrace.c's, else
-// glhooks.c's (NULL: the driver's)
+// what glopt.c's GL wrappers call: glpersist.c's wrapper of that function, else after_glpersist's
 static const so_shim *g_msaa_shims, *g_hook_shims;
 static void *find_shim(const so_shim *t, const char *name)
 {
     for (; t && t->name; t++) if (!strcmp(t->name, name)) return t->fn;
     return NULL;
 }
-static void *after_glopt(const char *name)
+// what glpersist.c's GL wrappers call: msaafix.c's wrapper of that function, else gltrace.c's, else
+// glhooks.c's (NULL: the driver's)
+static void *after_glpersist(const char *name)
 {
     void *p = find_shim(g_msaa_shims, name);
     if (!p) p = gltrace_wrapper(name);
     return p ? p : find_shim(g_hook_shims, name);
+}
+static const so_shim *g_persist_shims;
+static void *after_glopt(const char *name)
+{
+    void *p = find_shim(g_persist_shims, name);
+    return p ? p : after_glpersist(name);
 }
 // what glpass.c's GL wrappers call: glopt.c's wrapper of that function, else after_glopt's
 static const so_shim *g_glopt_shims, *g_pass_shims;
@@ -519,11 +527,12 @@ int main(int argc, char **argv)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
     // on) -> glrec.c (UA_GL_REC: it calls glopt.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->
-    // glrename.c -> glpass.c -> glopt.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
+    // glrename.c -> glpass.c -> glopt.c -> glpersist.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
+    g_persist_shims = glpersist_table(after_glpersist);       // UA_GL_PERSIST
     g_glopt_shims = glopt_table(after_glopt);  // UA_GL_DSCLEAR
     g_pass_shims = glpass_table(after_glpass); // UA_GL_SAMECLEAR
     g_rename_shims = glrename_table(after_glrename);          // UA_GL_RENAME
@@ -537,6 +546,7 @@ int main(int argc, char **argv)
     so_add_shims(g_rename_shims);
     so_add_shims(g_pass_shims);
     so_add_shims(g_glopt_shims);
+    so_add_shims(g_persist_shims);
     so_add_shims(g_msaa_shims);
     so_add_shims(trace);
     if (msaa) {

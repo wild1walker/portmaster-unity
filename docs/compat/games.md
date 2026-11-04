@@ -177,7 +177,9 @@ Kingdom's Edge 52.1, the Watcher Knights 50.1, Dirtmouth 49.7, Crystal Peak 48.3
 Soul Tyrant 47.4, City of Tears 42.4, Soul Master 41.6, Greenpath 36 - 38: Greenpath is held by the
 render thread (~21 ms a frame, the Mali driver 40 % of it), not the GPU's pixels (480x320 the same).
 The 64-bit IL2CPP build of the same data: Greenpath 35.4, Soul Master 41.8, King's Pass 51.7, ~140 MB
-more memory: not taken ([il2cpp.md](../il2cpp.md)).
+more memory: not taken ([il2cpp.md](../il2cpp.md)). The render thread's sprite chunks in
+persistently mapped buffers (`UA_GL_PERSIST`, on in the port): Greenpath 37.8 / 37.5 -> 39.2 / 39.2
+fps (muOS).
 
 
 ## Linux builds, one per Unity line (32-bit route)

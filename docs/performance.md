@@ -89,6 +89,12 @@ pixels.
 - **CPU-bound means the render thread.** Greenpath: Unity's render thread ~21 ms of a 26 ms frame
   (the Mali driver 40 % of it, Unity's GLES device 33 %), the main thread ~17 ms and waiting, the
   four cores only ~65 % busy. No Vulkan driver on these firmwares (Knulli has only an ICD file).
+  Find the driver's share by GL entry point (`profsum.py --callers 'libmali.so:<function>'`) and
+  count the calls a frame (`UA_GL_REC=census`) before writing a layer.
+- **Paid on the render thread:** Unity's dynamic geometry in persistently mapped buffers
+  (`UA_GL_PERSIST=1`; Unity maps, flushes and unmaps a pooled buffer for every sprite chunk, ~150 a
+  frame in Greenpath, `glMapBufferRange` alone ~6 % of the render thread): Greenpath 37.8 / 37.5 ->
+  39.2 / 39.2 fps, the worst second 29.7 / 26.7 -> 32.6 / 33.5, the same bytes drawn.
 
 ## 6. Native code: 64-bit and IL2CPP
 
