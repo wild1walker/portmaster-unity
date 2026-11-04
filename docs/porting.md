@@ -330,6 +330,26 @@ Enter the Gungeon's bundles hold 869 MB): those stay as they are, and the textur
 them ASTC 4x4, a quarter of RGBA32's memory, with slightly different pixels. Try such a port on a
 1 GB handheld first (`log.txt`'s memory lines) before adding the step for it.
 
+The textures step can also halve the textures only where the handheld has 1 GB of RAM or less, as
+the video step does with the cinematics: `lowmem_scale` is the scale used where `MemTotal` is at most
+`ram_mb` (1024), `scale` elsewhere, and the setup log says which (`textures: 973 MB of RAM (at most
+1024): scale 0.5 (lowmem_scale)`). A game drawn at a small handheld's size from art made for 1080p
+keeps more than a texel for each pixel; text atlases (TextMeshPro's signed distance fields) belong in
+`sharp_names`, which keeps `scale_sharp`. Unlike the `runtime_lowmem` reductions it is decided at
+setup: a player who wants the full textures back unsets it and runs the setup again.
+
+```toml
+[convert.textures]
+lowmem_scale = 0.5
+sharp_names = "SDF|tmpro|Font Texture"
+```
+
+Hollow Knight (RG34XX-SP, King's Pass): the textures 2207 -> 552 MB in the package, the Mali
+driver's pages for the game ~300 -> ~142 MB, the game ~830 -> ~670 MB in all; the handheld kept
+~240 MB free instead of swapping at ~40 MB, the frame rate the same (51 fps).
+`tools/port/rehearse.sh`'s `REHEARSE_MEMINFO` gives the setup container a 1 GB handheld's
+`/proc/meminfo`, so a rehearsal takes these paths.
+
 ## 4. The setup on the handheld
 
 `setup/patchscript`, run by PortMaster's patcher (log: `ports/<name>/patchlog.txt`; a failure is

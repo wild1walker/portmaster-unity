@@ -364,6 +364,8 @@ fn defaults() -> Vec<(&'static str, Json)> {
     let l = |a: i128, b: i128| Json::List(vec![Json::Int(a), Json::Int(b)]);
     vec![
         ("scale", Json::Float(1.0)),
+        ("lowmem_scale", Json::Null),
+        ("ram_mb", Json::Int(1024)),
         ("block", l(4, 4)),
         ("quality", Json::Str("medium".into())),
         ("mode", Json::Str("guided".into())),
@@ -1449,15 +1451,44 @@ fn left(work: &Path, e: Error, stream: bool) -> Error {
     e
 }
 
+/// The step's settings: the config's over the defaults, and `lowmem_scale` (when set) as `scale`
+/// where the system has at most `ram_mb` of RAM (a 1 GB handheld), with the line saying so.
+fn settings(cfg: &Json) -> Result<(Json, Option<String>)> {
+    let mut c = section(cfg, "textures", &defaults())?;
+    let mut why = None;
+    if let Some(s) = c
+        .get("lowmem_scale")
+        .filter(|v| !matches!(v, Json::Null))
+        .cloned()
+    {
+        let ram = c
+            .get("ram_mb")
+            .and_then(Json::as_int)
+            .ok_or_else(|| Error::Value("textures.ram_mb: not an integer".into()))?;
+        let mem = super::quality::mem_total_mb();
+        if mem <= ram {
+            why = Some(format!(
+                "textures: {mem} MB of RAM (at most {ram}): scale {} (lowmem_scale)",
+                s.repr()
+            ));
+            c.set("scale", s);
+        }
+    }
+    Ok((c, why))
+}
+
 pub fn run(job: &mut Job, args: &Args) -> Result<()> {
-    let c = section(&job.cfg, "textures", &defaults())?;
+    let (c, why) = settings(&job.cfg)?;
+    if let Some(w) = why {
+        job.log(&w);
+    }
     let enc = codec(&c, job)?;
     run_with(job, args, enc)
 }
 
 /// The step with a given codec (texcodec's in a setup; tests give their own).
 pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<()> {
-    let c = section(&job.cfg, "textures", &defaults())?;
+    let c = settings(&job.cfg)?.0;
     let rx = |k: &str| {
         let s = opt(&c, k).to_str();
         regex::Regex::new(&s).map_err(|e| Error::Value(format!("textures.{k} {s:?}: {e}")))
@@ -1816,5 +1847,26 @@ mod tests {
         assert_eq!(stem(Path::new("/a/atlas_x")), Path::new("/a/atlas_x"));
         assert_eq!(stem(Path::new("/a.b/.hidden")), Path::new("/a.b/.hidden"));
         assert_eq!(stem(Path::new("/a/x.tar.gz")), Path::new("/a/x.tar"));
+    }
+
+    #[test]
+    fn lowmem_scale() {
+        let scale = |cfg: &str| {
+            let (c, why) = settings(&crate::pyjson::loads(cfg).unwrap()).unwrap();
+            (c.get("scale").unwrap().repr(), why.is_some())
+        };
+        // within ram_mb (every system has at most 2^40 MB): lowmem_scale; above it, or unset: scale
+        assert_eq!(
+            scale(r#"{"textures": {"lowmem_scale": 0.5, "ram_mb": 1099511627776}}"#),
+            ("0.5".into(), true)
+        );
+        assert_eq!(
+            scale(r#"{"textures": {"lowmem_scale": 0.5, "ram_mb": 0}}"#),
+            ("1.0".into(), false)
+        );
+        assert_eq!(
+            scale(r#"{"textures": {"scale": 0.75}}"#),
+            ("0.75".into(), false)
+        );
     }
 }
