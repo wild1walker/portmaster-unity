@@ -193,6 +193,12 @@ the port's 1 GB profile renders at 540x360 since (portmaster-hollowknight 0bbf59
 worker (`-job-worker-count 1`, port 6fc5fa9): Greenpath 45.6 (Knulli) / 45.9 (muOS), Soul Master
 51.9 - 52.8 / 51.9, the Colosseum 59.1, King's Pass 56.1 (Knulli); and the game's own Particle Effects
 Low and Dithering off by default on 1 GB (`UA_PREFS_DEFAULTS`, port 5fe4579): City of Tears 46.3 - 48.2.
+The survey with the whole 1 GB profile (both GL layers, 540x360, `UA_JIT_WARM`, one job worker, the game's
+Particle Effects Low and Dithering off; 2026-11-04, steady fps, one walk each, the same devices as the
+first survey): muOS Colosseum 61.9, Deepnest 61.3, Mantis Village 61.3, Kingdom's Edge 61.2, Dirtmouth
+57.1, Queen's Gardens 54.7; Knulli Soul Tyrant 57.9, the Watcher Knights 56.6, Crystal Peak 53.5, Soul
+Master 51.8, City of Tears 50.2, Greenpath 46.0 (the first survey: 53.6, 56.5, 54.1, 52.1, 50.5, 48.0;
+48.0, 50.1, 48.3, 42.7, 43.1, 36.5).
 
 
 ## Linux builds, one per Unity line (32-bit route)
