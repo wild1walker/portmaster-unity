@@ -279,7 +279,9 @@ cd convert
    how loud it was) (`PM_7ZZ` is PortMaster's own `7zzs.aarch64`, from its release). Then on a handheld: unzip the
    release into `ports/`, copy the game into `ports/mygame/gamedata/`, start it, and check the
    setup screen, the pad, sound, saves, the exit hotkey and the frame rate (`UA_FPS=5` writes it
-   to `log.txt`). [docs/porting.md](docs/porting.md) has the full checklist.
+   to `log.txt`). [docs/porting.md](docs/porting.md) has the full checklist. Below 60 fps, first
+   look for the game's community performance mods and fixes ([docs/porting.md](docs/porting.md),
+   "Community performance mods and fixes"), then profile ([docs/profiling.md](docs/profiling.md)).
    ```sh
    PM_7ZZ=<path to 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip "<game folder>" work/mygame 300
    ```

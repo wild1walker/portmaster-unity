@@ -702,6 +702,42 @@ With asmpatch on (`android_data.asmpatch`, or `streaming_assets` other than `obb
 change gets both: the port's patch runs first, on the original, and asmpatch then patches its output
 (tools/asmpatch/README.md). The il2cpp-arm64 route runs the same command before its IL2CPP build.
 
+### Community performance mods and fixes
+
+Before writing a game's speedups, look for what its players have already found. Players profile
+their games for years, and a performance mod's list of changes is a map of the game's hot spots,
+often with what each saves. Search, with the game's name:
+
+- GitHub (`<game> optimization`, `performance`, `fps`, `lag`, `stutter`, `memory leak`), the game's
+  Thunderstore community, Nexus Mods, ModWorkshop, its modding wiki and Discord's public pages;
+- PCGamingWiki's "Essential improvements" and Steam guides (config files, launch options);
+- speedrun.com resources (what runners turn off for steady frame times).
+
+Enter the Gungeon, for example: [GungeonGoVroom](https://github.com/pcrain/GungeonGoVroom) lists
+about thirty CPU and memory optimizations of the vanilla game (occlusion, light culling, goop
+updates, linear casts, the ammo display, beams), each marked by whether it keeps vanilla
+behaviour; [Gungeon Go Brrr](https://modworkshop.net/mod/30986) speeds up the Mod the Gungeon
+loader itself (mod loading, object creation with mods), not the vanilla game.
+
+Write each candidate into the port's testing notes: the link, its licence, what it changes and
+what it says it saves. Then:
+
+1. **Its licence decides how it may be used.** An open licence (MIT, BSD, Apache): its changes may
+   go into the port's own assembly patch, with the licence and the authors' credit in the port.
+   GPL: only in a separate GPL program (the patch), never mixed into code under another licence. No
+   licence (all rights reserved): never copy its code. Ask the author for a licence or permission (a
+   message the port's owner sends, never one sent for them), or write the port's own patch from the
+   game's code and your own profile, taking from the mod only its public description of what is slow.
+2. **Only what keeps the game play identical goes in by default.** A mod's bug fixes change the game
+   (GungeonGoVroom's Shuffle Fix changes which rooms spawn): an option at most, off by default.
+   Visual changes follow the 1 GB rules ([quality.md](quality.md)).
+3. **Measure each on the handheld,** as an A/B in one hold ([profiling.md](profiling.md)). A change
+   that saves a lot on a desktop CPU may save little on a Cortex-A53, or the reverse.
+4. **The port loads no mod loader** (BepInEx, Harmony, MelonLoader, Mod the Gungeon): the change
+   goes in as a Cecil patch run at setup on the player's own copy of the game (above), never as
+   shipped game assemblies.
+5. **Credit the authors** in the port's README, also when only their description was used.
+
 ## 11. Extending `pmunity port`
 
 Other parts of pmunity add to the check, the port and the release without editing `port.py`: a

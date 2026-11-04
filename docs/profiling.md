@@ -20,6 +20,9 @@ whole measured session:
 | whether the GPU ever waits for work inside the frames | `UA_GPU_IDLE=<s>` ([runtime.md](runtime.md); below, [the handheld around the game](#the-handheld-around-the-game-2026-10-23)) |
 | where a port's first-launch setup spends its time, memory and the card's I/O | `tools/device/setupstat.py` beside the setup + `tools/device/setupstat_report.py`, pmu's `PMU_PROF=1` (wall time per stage of each convert step), `tools/device/cardbench.py` (what the card's reads, writes and syncs cost): [rust-setup.md](rust-setup.md#on-the-handheld-time-memory-bad-conditions-2026-11-02) |
 
+Before profiling a game's own code, read what its players have already found:
+[porting.md](porting.md#community-performance-mods-and-fixes).
+
 ## UA_PROF: the sampling profiler
 
 `runtime/host/prof.c`, off unless `UA_PROF` is set:
