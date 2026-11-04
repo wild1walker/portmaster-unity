@@ -1,6 +1,7 @@
 // desktopenv.c's check (runtime/host/test/plugins_test.sh): the game's command line through a stand-in
 // for Mono's main-arguments setter, and Screen.resolutions through stand-ins for Mono's icall
-// registration and arrays (an empty answer becomes the window's mode; others pass through)
+// registration and arrays (an empty answer becomes the window's mode; others pass through), and the
+// same through stand-ins for IL2CPP's (the 64-bit player)
 #include "../desktopenv.h"
 
 #include <stdint.h>
@@ -48,6 +49,12 @@ static void *fake_sym(const char *n)
     for (unsigned i = 0; i < sizeof t / sizeof t[0]; i++) if (!strcmp(n, t[i].n)) return t[i].f;
     return NULL;
 }
+// IL2CPP's array functions: no domain argument, the length a function (uint32)
+static void *i_array_new(void *ec, uintptr_t n) { return f_array_new(NULL, ec, n); }
+static uint32_t i_array_length(void *a) { return (uint32_t)((array *)a)->len; }
+static int opened_core;
+static void *i_assembly_open(void *d, const char *n) { (void)d; return !strcmp(n, "UnityEngine.CoreModule.dll") ? (opened_core = 1, (void *)3) : NULL; }
+static void *i_assembly_get_image(void *as) { return as == (void *)3 ? (void *)2 : NULL; }
 static array *answer;
 static void *fake_get_resolutions(void) { return answer; }
 static void *other_icall(void) { return NULL; }
@@ -98,6 +105,31 @@ int main(void)
     a = get();
     memcpy(v, made.data, 12);
     CHECK(a == &made && made.k == &res12 && v[0] == 720 && v[2] == 60, "a null list: one mode too");
+    // IL2CPP: libunity looks its API up by name (the hook keeps it) and registers the icall with il2cpp_add_internal_call
+#define H(n, f) desktopenv_dlsym_hook(n, (void *)(f))
+    H("il2cpp_object_get_class", f_object_get_class); H("il2cpp_class_get_element_class", f_class_get_element_class);
+    H("il2cpp_domain_get", f_domain_get); H("il2cpp_array_new", i_array_new); H("il2cpp_array_length", i_array_length);
+    H("il2cpp_array_element_size", f_array_element_size); H("il2cpp_domain_assembly_open", i_assembly_open);
+    H("il2cpp_assembly_get_image", i_assembly_get_image); H("il2cpp_class_from_name", f_class_from_name);
+    H("il2cpp_array_class_get", f_array_class_get);
+    CHECK(H("il2cpp_array_new", i_array_new) == (void *)i_array_new, "IL2CPP's functions as they are");
+    void *iadd = H("il2cpp_add_internal_call", fake_add);
+    CHECK(iadd && iadd != (void *)fake_add, "il2cpp_add_internal_call wrapped");
+#undef H
+    added_fn = NULL;
+    ((void (*)(const char *, const void *))iadd)("UnityEngine.Application::get_isPlaying", (void *)other_icall);
+    CHECK(added_fn == (void *)other_icall, "IL2CPP: other icalls registered as they are");
+    ((void (*)(const char *, const void *))iadd)("UnityEngine.Screen::get_resolutions", (void *)fake_get_resolutions);
+    CHECK(added_fn && added_fn != (void *)fake_get_resolutions, "IL2CPP: get_resolutions wrapped");
+    get = (void *(*)(void))added_fn;
+    empty.k = &res12; answer = &empty; memset(made.data, 0, sizeof made.data);
+    a = get(); memcpy(v, made.data, 12);
+    CHECK(a == &made && made.k == &res12 && v[0] == 720 && v[1] == 480 && v[2] == 60, "IL2CPP: an empty list: one mode: %d x %d @ %d", v[0], v[1], v[2]);
+    answer = &one; before = made_count;
+    CHECK(get() == &one && made_count == before, "IL2CPP: Unity's own list as it is");
+    answer = NULL; memset(made.data, 0, sizeof made.data);
+    a = get(); memcpy(v, made.data, 12);
+    CHECK(a == &made && made.k == &res12 && v[0] == 720 && v[2] == 60 && opened_core, "IL2CPP: a null list: the class from UnityEngine.CoreModule");
     (void)elem_of;
     printf("desktopenv: %s (%d failures)\n", fails ? "FAILED" : "PASSED", fails);
     return fails != 0;

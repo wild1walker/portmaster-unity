@@ -10,6 +10,8 @@
 // UA_INPUT_SCRIPT="<sec>:<button>[~<hold sec>][+<button>...] ..." presses buttons at those times
 // after start (held 0.15 s, or <hold sec>; a,b,x,y,l1,r1,l2,r2,start,select,up,down,left,right),
 // "<sec>@<period>:..." repeats every <period> s; e.g. "30:a 36:a 70:right~60 75@10:x~9.9 80@1.5:a"
+// (UA_INPUT_CLOCK=frames:<fps>: the times count presented frames, <fps> a second, so an emulator's
+// run gets its presses at the same frames whatever its speed; input.req's too)
 // for unattended tests (the pad they press is the first real one, else a virtual pad registered at
 // the first press; UA_VIRTUAL_PAD=1 registers it at start, as a pad present at boot would be);
 // lup/ldown/lleft/lright: the left stick, kup..kright: DPAD keys,
@@ -194,7 +196,12 @@ static void send_axes(struct pad *p);
 static struct press { double at; int key; int hat_x, hat_y; int down; int stick; double period; float pos[2]; int frac; char text[24]; } script[MAX_PRESS];
 static int nscript, next_press;
 static double t_start;
-static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+static double g_frame_clock;      // UA_INPUT_CLOCK=frames:<fps>: script seconds are frames / <fps>
+static double now_s(void)
+{
+    if (g_frame_clock > 0) return frames_presented() / g_frame_clock;
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9;
+}
 static int script_key(const char *n, int *hx, int *hy, int *stick)
 {
     *stick = 0;
@@ -385,6 +392,11 @@ static void script_run(void)
 void input_started(void)
 {
     started = 1;
+    const char *c = getenv("UA_INPUT_CLOCK");
+    if (c && !strncmp(c, "frames:", 7) && atof(c + 7) > 0) {
+        g_frame_clock = atof(c + 7);
+        fprintf(stderr, "[input] script times count frames: %g a second (UA_INPUT_CLOCK)\n", g_frame_clock);
+    }
     t_start = now_s();
     if (getenv("UA_INPUT_SCRIPT")) script_parse(getenv("UA_INPUT_SCRIPT"));
     pointer_start();

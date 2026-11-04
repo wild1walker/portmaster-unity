@@ -18,7 +18,10 @@
 //                     mode would. Its icall is wrapped as libunity registers it
 //                     (mono_add_internal_call, as framerate.c does).
 // Mono players (the 32-bit route; libunity's mono_* imports). IL2CPP keeps an empty argument list
-// rather than none, so its CommandLine is "" and nothing throws.
+// rather than none, so its CommandLine is "" and nothing throws. Screen.resolutions also on the
+// 64-bit player (IL2CPP, or Unity's Mono behind the bridge of runtime/mono64): the same answer
+// through the il2cpp_* functions libunity looks up, its icall wrapped as il2cpp_add_internal_call
+// registers it (Enter the Gungeon's options code throws on an empty list there).
 #define _GNU_SOURCE
 #include "desktopenv.h"
 
@@ -172,6 +175,78 @@ static void w_mono_add(const char *name, const void *fn)
     r_mono_add(name, fn);
 }
 
+// IL2CPP's API (libunity looks every one up by name: the hook keeps what it finds); the arrays have
+// Mono's layout (header, bounds, max_length, the elements at four pointers)
+static add_icall_fn r_il2cpp_add;
+static void *(*r_il2_get_resolutions)(void);
+static void *(*i_object_get_class)(void *), *(*i_class_get_element_class)(void *), *(*i_domain_get)(void),
+    *(*i_array_new)(void *, uintptr_t), *(*i_domain_assembly_open)(void *, const char *),
+    *(*i_assembly_get_image)(void *), *(*i_class_from_name)(void *, const char *, const char *),
+    *(*i_array_class_get)(void *, uint32_t);
+static uint32_t (*i_array_length)(void *);
+static int (*i_array_element_size)(void *);
+
+static void *w_il2_get_resolutions(void)
+{
+    void *arr = r_il2_get_resolutions();
+    static int told;
+    if (!i_array_new || !i_array_length || !i_array_element_size || !i_object_get_class || !i_class_get_element_class) {
+        if (!told++) LOG("Screen.resolutions: IL2CPP's array functions not found: Unity's list as it is\n");
+        return arr;
+    }
+    if (arr && i_array_length(arr) > 0) {
+        if (!told++) LOG("Screen.resolutions: Unity's list (%u modes)\n", (unsigned)i_array_length(arr));
+        return arr;
+    }
+    if (g_width <= 0 || g_height <= 0) return arr;
+    void *ec = NULL, *ac = NULL;
+    if (arr) { ac = i_object_get_class(arr); ec = ac ? i_class_get_element_class(ac) : NULL; }
+    else if (i_domain_get && i_domain_assembly_open && i_assembly_get_image && i_class_from_name && i_array_class_get) {
+        static const char *const names[] = { "UnityEngine.CoreModule.dll", "UnityEngine.CoreModule", "UnityEngine.dll", "UnityEngine" };
+        for (unsigned i = 0; i < sizeof names / sizeof names[0] && !ec; i++) {
+            void *as = i_domain_assembly_open(i_domain_get(), names[i]);
+            void *im = as ? i_assembly_get_image(as) : NULL;
+            ec = im ? i_class_from_name(im, "UnityEngine", "Resolution") : NULL;
+        }
+        ac = ec ? i_array_class_get(ec, 1) : NULL;
+    }
+    if (!ec || !ac) return arr;
+    void *n = i_array_new(ec, 1);
+    int sz = i_array_element_size(ac);
+    if (!n || sz < 12) return arr;
+    int32_t v[4] = { g_width, g_height, g_hz, sz >= 16 ? 1 : 0 };
+    memcpy((char *)n + 4 * sizeof(void *), v, sz >= 16 ? 16 : 12);
+    static int logged;
+    if (!logged++) LOG("Screen.resolutions: none from Unity, the game gets %dx%d @ %d Hz (as a desktop with one mode)\n", g_width, g_height, g_hz);
+    return n;
+}
+
+static void w_il2cpp_add(const char *name, const void *fn)
+{
+    if (name && fn && !strcmp(name, "UnityEngine.Screen::get_resolutions")) {
+        r_il2_get_resolutions = (void *(*)(void))fn;
+        fn = (const void *)w_il2_get_resolutions;
+    }
+    r_il2cpp_add(name, fn);
+}
+
+static void *il2cpp_hook(const char *symbol, void *found)
+{
+    static const struct { const char *n; void **v; } api[] = {
+        { "il2cpp_object_get_class", (void **)&i_object_get_class }, { "il2cpp_class_get_element_class", (void **)&i_class_get_element_class },
+        { "il2cpp_domain_get", (void **)&i_domain_get }, { "il2cpp_array_new", (void **)&i_array_new },
+        { "il2cpp_domain_assembly_open", (void **)&i_domain_assembly_open }, { "il2cpp_assembly_get_image", (void **)&i_assembly_get_image },
+        { "il2cpp_class_from_name", (void **)&i_class_from_name }, { "il2cpp_array_class_get", (void **)&i_array_class_get },
+        { "il2cpp_array_length", (void **)&i_array_length }, { "il2cpp_array_element_size", (void **)&i_array_element_size } };
+    for (unsigned i = 0; i < sizeof api / sizeof api[0]; i++)
+        if (!strcmp(symbol, api[i].n)) { *api[i].v = found; return found; }
+    if (!strcmp(symbol, "il2cpp_add_internal_call") && found != (void *)w_il2cpp_add) {
+        r_il2cpp_add = (add_icall_fn)found;
+        return (void *)w_il2cpp_add;
+    }
+    return found;
+}
+
 // ---------------------------------------------------------------------------------- the hook
 
 static void *g_mono;                     // the Mono library's handle (the loader's)
@@ -181,6 +256,7 @@ void desktopenv_set_resolver(void *(*sym)(const char *)) { g_sym = sym; }
 
 void *desktopenv_dlsym_hook(const char *symbol, void *found)
 {
+    if (found && !strncmp(symbol, "il2cpp_", 7)) return il2cpp_hook(symbol, found);
     if (!found || strncmp(symbol, "mono_", 5)) return found;
     if (!g_mono && !g_sym) {
         Dl_info di;

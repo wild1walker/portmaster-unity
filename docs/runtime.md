@@ -207,7 +207,8 @@ multiplies with it: the URP camera renders at its scale of the window.
 ## What a desktop game sees
 
 Some answers of Unity's Android player differ from a desktop player's in ways desktop code does not
-expect; ua_host gives the desktop's (runtime/host/desktopenv.c; Mono players):
+expect; ua_host gives the desktop's (runtime/host/desktopenv.c; Mono players, and for `Screen.resolutions`
+the 64-bit player too: IL2CPP, or Unity's Mono behind the bridge of [mono-arm64.md](mono-arm64.md)):
 
 | | the Android player | ua_host |
 |---|---|---|
@@ -215,8 +216,11 @@ expect; ua_host gives the desktop's (runtime/host/desktopenv.c; Mono players):
 | `Screen.resolutions` | empty (Unity reads display modes only from Android 6's `Display.Mode`): code that indexes it throws (`ArgumentOutOfRangeException` from an options menu's resolution list) | when Unity's list is empty, one mode: the window's size (what `Screen.width`/`height` say) at the display's refresh rate, as a desktop with one mode; Unity's own list is passed through when it has one. Logged once as `[host] Screen.resolutions: ...` |
 
 IL2CPP players keep an empty argument list rather than none (`CommandLine` is "", nothing throws).
+On the 64-bit player the host wraps the icall as libunity registers it with `il2cpp_add_internal_call`
+and makes the array with the `il2cpp_*` functions libunity looks up (Enter the Gungeon's options code
+threw `IndexOutOfRangeException` from `GameOptions.GetRecommendedResolution` there without it).
 Checked by `runtime/host/test/plugins_test.sh` (`test_desktopenv`: stand-ins for Mono's setter, its
-icall registration and arrays).
+icall registration and arrays, and for IL2CPP's).
 
 ## Video
 

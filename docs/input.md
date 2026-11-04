@@ -17,7 +17,10 @@ sees (libraries that pick a layout by name, Rewired among them, know e.g.
 KeyEvents, as Android's own fallback does.
 
 `UA_INPUT_SCRIPT` presses buttons at given times for unattended tests (docs/runtime.md); without
-a real pad it registers a virtual one that looks the same.
+a real pad it registers a virtual one that looks the same. `UA_INPUT_CLOCK=frames:<fps>` counts its
+times (and `input.req`'s) in presented frames, `<fps>` a second, instead of seconds: an emulator's
+run, whatever its speed, then gets each press at the same frame (with the data's maximum timestep
+fixed, at the same moment of the game).
 
 ## What the game reads
 
