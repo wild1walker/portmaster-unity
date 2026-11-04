@@ -16,6 +16,10 @@
 //                        that word makes no system call. The callers' results are the same (a futex
 //                        wait may always return early: every caller checks its word again); only when
 //                        a waiting thread gets its CPU back changes. Off by default (a measurement)
+//   UA_FUTEX_SPIN_THREADS='<name> <prefix>* ...'   with UA_FUTEX_SPIN: only threads of these names
+//                        watch (e.g. UnityGfxDeviceW: the render thread, out of commands, waits for
+//                        the main thread's next ones); every other wait sleeps at once, still counted
+//                        as a kernel waiter, so the skipped wakes stay exact
 //
 // The wake is left out only when no thread waits in the kernel on that word. Each wait that is
 // about to sleep registers in a table (by address): it increments the word's count, issues a
@@ -36,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
@@ -189,12 +194,34 @@ static inline void maybe_log(uint64_t now)
     atomic_flag_clear(&g_log_busy);
 }
 
+static const char *g_spin_threads;          // UA_FUTEX_SPIN_THREADS (NULL: every thread watches)
+
+// whether this thread watches its word (UA_FUTEX_SPIN_THREADS): its name is read again every 256
+// waits until it matches (threads take their name after they start)
+static __thread int t_watch, t_waits;
+static int watches(void)
+{
+    if (!g_spin_threads || t_watch) return 1;
+    if (t_waits++ & 255) return 0;
+    char name[17] = "";
+    prctl(PR_GET_NAME, name, 0, 0, 0);
+    for (const char *p = g_spin_threads; *p;) {
+        while (*p == ' ') p++;
+        const char *e = p;
+        while (*e && *e != ' ') e++;
+        size_t n = (size_t)(e - p);
+        if (n && ((p[n - 1] == '*' && !strncmp(name, p, n - 1)) || (strlen(name) == n && !strncmp(name, p, n)))) return t_watch = 1;
+        p = e;
+    }
+    return 0;
+}
+
 // --- the wrapper
 static long futex_wait(long nr, int *addr, long op, long val, long a4, long a5, long a6)
 {
     struct tstat *s = g_stats_s ? me() : NULL;
     uint64_t t0 = s || g_spin_us ? ticks() : 0;
-    if (g_spin_us) {
+    if (g_spin_us && watches()) {
         // watch the word: a store by the waker ends it (the caller checks its word again either way)
         uint64_t end = t0 + g_spin_ticks;
         for (;;) {
@@ -313,6 +340,9 @@ const so_shim *futex_table(void)
     g_shims[0] = (so_shim){ "syscall", (void *)w_syscall };
     fprintf(stderr, "[futex] the Android libraries' futex calls go through futex.c:%s%s\n",
             g_stats_s ? " stats" : "", g_spin_us ? " user-space waits" : "");
-    if (g_spin_us) fprintf(stderr, "[futex] UA_FUTEX_SPIN: waits watch their word %d us before sleeping\n", g_spin_us);
+    const char *th = getenv("UA_FUTEX_SPIN_THREADS");
+    g_spin_threads = th && *th ? th : NULL;
+    if (g_spin_us) fprintf(stderr, "[futex] UA_FUTEX_SPIN: waits watch their word %d us before sleeping%s%s\n", g_spin_us,
+                           g_spin_threads ? ", on threads: " : "", g_spin_threads ? g_spin_threads : "");
     return g_shims;
 }
