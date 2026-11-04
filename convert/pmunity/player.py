@@ -145,7 +145,9 @@ def donor(version, out, apks, backend='mono', abi='armeabi-v7a', managed=False, 
     for apk in apks:
         with zipfile.ZipFile(apk) as z:
             names = z.namelist()
-            lib_abi = f'lib/{abi}/libunity.so' in names
+            # the player's libraries only from a donor of the backend: an IL2CPP player carries
+            # libil2cpp.so (a Mono and an IL2CPP donor of one ABI, ARMv7, both have libunity.so)
+            lib_abi = f'lib/{abi}/libunity.so' in names and (f'lib/{abi}/libil2cpp.so' in names) == (backend == 'il2cpp')
             if lib_abi:
                 v = z.read(f'lib/{abi}/libunity.so')
                 if version.encode() not in v:

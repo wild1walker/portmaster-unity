@@ -42,4 +42,6 @@ public static class DonorBuild
 
     public static void MonoArmv7() { Build(ScriptingImplementation.Mono2x, "ARMv7", "out/donor-" + Application.unityVersion + "-mono-armv7.apk"); }
     public static void Il2cppArm64() { Build(ScriptingImplementation.IL2CPP, "ARM64", "out/donor-" + Application.unityVersion + "-il2cpp-arm64.apk"); }
+    // the 32-bit IL2CPP player (for an IL2CPP build on a 32-bit userland: the game's heap keeps 32-bit references)
+    public static void Il2cppArmv7() { Build(ScriptingImplementation.IL2CPP, "ARMv7", "out/donor-" + Application.unityVersion + "-il2cpp-armv7.apk"); }
 }

@@ -69,7 +69,10 @@ pub fn donor(
         let z = Archive::open(apk)?;
         let names: Vec<&str> = z.names().collect();
         let libunity = format!("lib/{abi}/libunity.so");
-        let lib_abi = names.contains(&libunity.as_str());
+        // the player's libraries only from a donor of the backend: an IL2CPP player carries
+        // libil2cpp.so (a Mono and an IL2CPP donor of one ABI, ARMv7, both have libunity.so)
+        let il2cpp_apk = names.contains(&format!("lib/{abi}/libil2cpp.so").as_str());
+        let lib_abi = names.contains(&libunity.as_str()) && il2cpp_apk == (backend == "il2cpp");
         if lib_abi && !contains(&mut z.reader(z.info(&libunity)?)?, version.as_bytes())? {
             return Err(Error::Exit(format!(
                 "{apk}: its player is not Unity {version}"
@@ -544,6 +547,49 @@ mod tests {
             "the donors have no Variations/il2cpp/Release/Libs/arm64-v8a/libmain.so, \
              Variations/il2cpp/Release/Libs/arm64-v8a/libunity.so for il2cpp/arm64-v8a"
         );
+        // an IL2CPP ARMv7 player from an IL2CPP and a Mono donor of the same ABI: the IL2CPP
+        // donor's libraries, the Mono donor's engine modules
+        let il2 = vec![
+            (
+                "lib/armeabi-v7a/libunity.so".to_string(),
+                b(b"...Unity 2017.4.9f1... il2cpp"),
+            ),
+            ("lib/armeabi-v7a/libmain.so".to_string(), b(b"main-il2cpp")),
+            (
+                "lib/armeabi-v7a/libil2cpp.so".to_string(),
+                b(b"donor's own code"),
+            ),
+        ];
+        write_zip(&d("il2cpp.apk"), &il2, &mut |_| {}, 4).unwrap();
+        for apks in [
+            [d("il2cpp.apk"), d("mono.apk")],
+            [d("mono.apk"), d("il2cpp.apk")],
+        ] {
+            let _ = fs::remove_dir_all(dir.join("out4"));
+            donor(
+                "2017.4.9f1",
+                &d("out4"),
+                &apks,
+                "il2cpp",
+                "armeabi-v7a",
+                true,
+                &mut |_| {},
+            )
+            .unwrap();
+            let got = |p: &str| fs::read(dir.join("out4").join(p)).unwrap();
+            assert_eq!(
+                got("Variations/il2cpp/Release/Libs/armeabi-v7a/libunity.so"),
+                b"...Unity 2017.4.9f1... il2cpp"
+            );
+            assert_eq!(
+                got("Variations/il2cpp/Release/Libs/armeabi-v7a/libmain.so"),
+                b"main-il2cpp"
+            );
+            assert_eq!(got("Variations/il2cpp/Managed/UnityEngine.dll"), b"ue");
+            assert!(!dir
+                .join("out4/Variations/il2cpp/Release/Libs/armeabi-v7a/libil2cpp.so")
+                .exists());
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 }
