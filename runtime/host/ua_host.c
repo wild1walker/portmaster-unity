@@ -18,6 +18,8 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "frames.h"
 #include "framerate.h"
 #include "gcbudget.h"
+#include "jitlog.h"
+#include "jitwarm.h"
 #include "quality.h"
 #include "desktopenv.h"
 #include "glhooks.h"
@@ -427,7 +429,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); quality_frame(user); prof_main_frame(); }
+static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); quality_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
@@ -620,6 +622,8 @@ int main(int argc, char **argv)
     framerate_init(strcmp(pj_source, "apk") && atoi(pj_unity) > 0 ? "desktop" : "android", cfg.refresh_rate);
     desktopenv_init(cfg.command_line, cfg.width, cfg.height, (int)(cfg.refresh_rate + 0.5f));
     gcbudget_init();
+    jitlog_init();
+    jitwarm_init();
     quality_init(pj_quality);
     cfg.on_frame = on_frame;
     cfg.sdk_int = sdk_int;
