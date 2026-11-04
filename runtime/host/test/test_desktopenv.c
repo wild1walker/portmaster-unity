@@ -5,6 +5,7 @@
 #include "../desktopenv.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -66,7 +67,9 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     desktopenv_set_resolver(fake_sym);
+    unsetenv("TMPDIR"); unsetenv("TMP"); unsetenv("TEMP");
     desktopenv_init("-force-gfx-jobs legacy", 720, 480, 60);
+    CHECK(getenv("TMPDIR") && !strcmp(getenv("TMPDIR"), "/tmp"), "TMPDIR /tmp when none is set (IL2CPP's Path.GetTempPath)");
     void *w = desktopenv_dlsym_hook("mono_unity_runtime_set_main_args", (void *)fake_set_args);
     CHECK(w && w != (void *)fake_set_args, "the setter is wrapped");
     CHECK(got_argc == 3 && strstr(got[0], "test_desktopenv") && !strcmp(got[1], "-force-gfx-jobs") && !strcmp(got[2], "legacy"),

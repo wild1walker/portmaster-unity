@@ -17,6 +17,11 @@
 //                     refresh rate (the size Screen.width / height report), as a desktop with one
 //                     mode would. Its icall is wrapped as libunity registers it
 //                     (mono_add_internal_call, as framerate.c does).
+//   the temp folder  Path.GetTempPath(): Mono's is $TMPDIR, else /tmp; IL2CPP's (libil2cpp's
+//                     os/Posix/Path.cpp) $TMPDIR / $TMP / $TEMP, else Android's /data/local/tmp, which a
+//                     handheld does not have: Enter the Gungeon's saves (written through
+//                     Path.GetTempFileName) failed on its IL2CPP build. The host sets TMPDIR to /tmp when
+//                     none of the three is set, Mono's own answer, so both runtimes write where Mono does.
 // Mono players (the 32-bit route; libunity's mono_* imports). IL2CPP keeps an empty argument list
 // rather than none, so its CommandLine is "" and nothing throws. Screen.resolutions also on the
 // 64-bit player (IL2CPP, or Unity's Mono behind the bridge of runtime/mono64): the same answer
@@ -76,6 +81,8 @@ static void w_set_args(int argc, const char *argv[])
 
 void desktopenv_init(const char *unity_args, int width, int height, int refresh_hz)
 {
+    if (!getenv("TMPDIR") && !getenv("TMP") && !getenv("TEMP") && access("/tmp", W_OK) == 0)
+        setenv("TMPDIR", "/tmp", 0);
     static char exe[PATH_MAX];
     ssize_t l = readlink("/proc/self/exe", exe, sizeof exe - 1);
     exe[l > 0 ? l : 0] = 0;
