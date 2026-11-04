@@ -654,6 +654,7 @@ armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 | 2D pixel art, TextMeshPro | 2018.4.36f1 | arm64-v8a | 29.2 MiB | 24 | 28 min (NDK r16b, GNU libstdc++) | title menu, animated (~90 fps in the rig) |
 | 2D action, .NET 3.5 (".NET 2.0 Subset"), Rewired, VP8 intro videos | 2017.4.40f1 | arm64-v8a | 37.6 MiB | 24 | 45 min (NDK r13b; `legacyunity`) | intro videos play, then the title menu (~45 fps in the rig); with `--asmpatch` rewired-android the pad opens the main menu; sound since the loader raises small thread stacks (below) |
 | same | 2017.4.40f1 | armeabi-v7a | 29.6 MiB | 24 | 16 min (cached) | title menu (QEMU: ~2 fps), with sound |
+| 2D roguelike shooter, .NET 3.5 (".NET 2.0", `net20`), PlayMaker, Daikon Forge GUI, Wwise (ua_host's stand-in) | 2017.4.27f1 | arm64-v8a, armeabi-v7a | 55.8 MiB, 45.0 MiB | 24 | 6 min (NDK r13b; 602 MiB of C++, 787 compiles; on-device tools in an arm64 container) | the Keep's first floor in the rigs and on the RG34XX-SP (Knulli): ARMv7 40.5 - 41 fps against the Mono build's 35 - 37, the same memory; arm64 swaps on 1 GB (porting.md, "Choose the route for speed first"). Two fixes to the game's IL first (below) |
 | 2D platformer, URP, TextMeshPro, Newtonsoft.Json | 2021.3.16f1 | arm64-v8a | 53.2 MiB | 29 | 32 min (NDK r21d; Bee graph: 605 commands, 29 min of them while other containers held Docker's file sharing; about 1 min for the first 110 without them) | the first-launch name entry, then (with a name in PlayerPrefs) the main menu (~30 fps in the rig) |
 | 2D, menus from localization XML in StreamingAssets read with System.IO, Steamworks.NET, I18N plugins | 2018.3.2f1 | arm64-v8a | 34.5 MiB | 24 | 46 min (NDK r16b; UnityLinker 3 min, il2cpp 42, the machine's Docker file sharing busy) | title menu with its localized text: `--asmpatch ... --streaming-assets both`, the folder beside the APK (android-data `--streaming-assets both`), ~20 fps in the rig. Steamworks.NET's callbacks throw `NotSupportedException` ("IL2CPP does not support marshaling delegates that point to generic methods"); the Steam stub fails its init first anyway |
 | 2D strategy, URP, FMOD Studio, Steamworks, Burst, Input System | 2022.3.36f1 | arm64-v8a | 82.0 MiB | 31 | 20 min (NDK r23b; Bee graph: 780 commands in 12.5 min) | title menu, 60 fps in the rig; silent without an ARM FMOD (`DllNotFoundException: fmodstudio`, as on the Mono route), the Steam stub answers, Burst jobs run their managed code |
@@ -694,6 +695,14 @@ What the runs showed:
 - **Stack traces** (2017.4): with the SymbolMap written from the symbol table, Unity's logged
   stack traces name the same frames as the game's Mono build; without it they had extra frames
   named after neighbouring methods.
+- **A missing engine type, and invalid IL that Mono runs** (Enter the Gungeon, 2017.4.27f1): its code names
+  `UnityEngine.MovieTexture`, which the Android engine modules lack; UnityLinker's stub for
+  `WWW.GetMovieTexture` then fails to write ("Member 'UnityEngine.MovieTexture' is declared in another module
+  and needs to be imported"). And its obfuscator's string decryption calls `String::get_Length` on a
+  `StringBuilder`: Mono 2.6 reads the builder's length (the first field of both), il2cpp's C++ does not
+  compile (and Mono 4.x, the mono-arm64 route, would read a pointer). Built here with test-only patches (a
+  stub `MovieTexture` in the game's assembly, `StringBuilder::get_Length` in that call); a port needs them
+  as asmpatch patches.
 - **Rewired** (`--asmpatch "... --only=rewired-android"`): the patched Assembly-CSharp compiled in,
   Rewired takes the Android path (no libudev lookups) and the pad's A skips the intro videos and
   opens the main menu.
