@@ -1777,12 +1777,20 @@ matter (muOS, CPU at 1800 MHz):
 | the same buffers with persistent, coherent storage mapped once (`UA_GL_PERSIST`) | 36.2 | 29.4 |
 | one persistent buffer for all of it, each draw at its own offset | 33.5 | 28.7 |
 | that, the attribute pointers set once and `glDrawElementsBaseVertex` | 34.3 | 26.8 |
+| `persist`'s buffers with a vertex array object each, made once (a bind instead of the pointers) | 40.9 | 29.6 |
+| `persist` without the `glDrawElements` (every other call of a draw) | 2.9 | 2.5 |
+
+(The last two from a second session, where `persist` measured 40.1 / 31.2 and the arena 34.8 / 27.8.)
 
 A quarter of a draw's cost is the map, the flush and the unmap; `UA_GL_PERSIST` takes it (Greenpath
-37.8 / 37.5 -> 39.2 / 39.2 fps; [runtime.md](runtime.md)). Gathering the buffers into one would take
-another ~7 % (0.5 ms of a 200-draw frame) for a layer that has to move every binding, attribute
-pointer and index offset: not built. A texture bind and a program switch cost about as much again
-as the draw's geometry (7 - 10 us).
+37.8 / 37.5 -> 39.2 / 39.2 fps; [runtime.md](runtime.md)). The rest is the draw call itself: the
+Mali driver sets nothing up when the state is set (every state call of a draw together 2.5 - 2.9
+us) and does all of it in `glDrawElements` (30 - 37 us), so leaving out state calls that change
+nothing (`UA_GL_STATE`) or binding prebuilt vertex array objects gains nothing; what a draw reads
+does count: a texture bind and a program switch 7 - 10 us at the draw, each buffer object of its
+own ~2 us (the arena: `UA_GL_ARENA`, [runtime.md](runtime.md)). Fewer draws would be the next
+step, and Unity's are already batched as far as their order allows: Greenpath's alternate between
+two atlases with one program, sprite by sprite in depth order (`UA_GL_TRACE_DRAWS`).
 
 Thread placement in Greenpath (muOS, `UA_GL_PERSIST=1`, every run from 50 C): the render thread alone
 on core 3 and every other thread on cores 0 - 2 (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`) 40.1 /

@@ -15,6 +15,9 @@
 //             buffer bound for every draw (attribute pointers and the indices' offset move)
 //   basevtx   the arena with the attribute pointers set once a frame and glDrawElementsBaseVertex
 //             finding each chunk's vertices (the indices still at their own offset)
+//   pvao      persist's buffers, each pair with a vertex array object made once (its attribute
+//             pointers and index buffer): a draw binds the object instead of setting them
+//   nodraw    persist without the glDrawElements (what the draw call itself costs: the difference)
 //   nostate   (each of the above with a "-flat" twin: no texture binds or program switches)
 // Build: host/build.sh; on the device: ./drawbench [seconds per case] [draws a frame]
 #include <EGL/egl.h>
@@ -65,11 +68,11 @@ static GLuint program(const char *vs, const char *fs)
 }
 
 enum { QUADS = 16, VERTS = QUADS * 4, INDS = QUADS * 6, STRIDE = 24, VBYTES = VERTS * STRIDE, IBYTES = INDS * 2, RING = 3 };
-enum { UNITY, PERSIST, ARENA, BASEVTX };
-static const char *const names[] = { "unity", "persist", "arena", "basevtx" };
+enum { UNITY, PERSIST, PVAO, NODRAW, ARENA, BASEVTX };
+static const char *const names[] = { "unity", "persist", "pvao", "nodraw", "arena", "basevtx" };
 
 static int D = 200;
-static GLuint *vb, *ib;
+static GLuint *vb, *ib, *vaos, mainvao;
 static void **vmap, **imap;
 static GLuint arena; static char *amap; static size_t aframe;
 static GLuint prog[2], tex[8];
@@ -101,6 +104,7 @@ static void frame(int mode, int state, unsigned n)
 {
     int slot = (int)(n % RING) * D;
     size_t abase = (n % RING) * aframe;
+    glBindVertexArray(mainvao);
     if (mode >= ARENA) { glBindBuffer(GL_ARRAY_BUFFER, arena); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, arena); }
     if (mode == BASEVTX) attribs((GLintptr)abase);
     for (int k = 0; k < D; k++) {
@@ -121,11 +125,15 @@ static void frame(int mode, int state, unsigned n)
             glFlushMappedBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, IBYTES); glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
             attribs(0);
             glDrawElements(GL_TRIANGLES, INDS, GL_UNSIGNED_SHORT, 0);
-        } else if (mode == PERSIST) {
+        } else if (mode == PERSIST || mode == NODRAW) {
             glBindBuffer(GL_ARRAY_BUFFER, vb[b]);
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib[b]);
             fill(vmap[b], imap[b], k, n, 0);
             attribs(0);
+            if (mode == PERSIST) glDrawElements(GL_TRIANGLES, INDS, GL_UNSIGNED_SHORT, 0);
+        } else if (mode == PVAO) {
+            glBindVertexArray(vaos[b]);
+            fill(vmap[b], imap[b], k, n, 0);
             glDrawElements(GL_TRIANGLES, INDS, GL_UNSIGNED_SHORT, 0);
         } else {
             size_t voff = abase + (size_t)k * (VBYTES + IBYTES), ioff = voff + VBYTES;
@@ -190,17 +198,17 @@ int main(int argc, char **argv)
     glUseProgram(prog[0]);
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     for (int a = 0; a < 3; a++) glEnableVertexAttribArray(a);
-    GLuint vao; glGenVertexArrays(1, &vao); glBindVertexArray(vao);
+    glGenVertexArrays(1, &mainvao); glBindVertexArray(mainvao);
     for (int a = 0; a < 3; a++) glEnableVertexAttribArray(a);
 
     int nb = RING * D;
-    vb = calloc(nb, sizeof *vb); ib = calloc(nb, sizeof *ib); vmap = calloc(nb, sizeof *vmap); imap = calloc(nb, sizeof *imap);
+    vb = calloc(nb, sizeof *vb); ib = calloc(nb, sizeof *ib); vaos = calloc(nb, sizeof *vaos); vmap = calloc(nb, sizeof *vmap); imap = calloc(nb, sizeof *imap);
     aframe = (size_t)D * (VBYTES + IBYTES);
     for (int mode = UNITY; mode <= BASEVTX; mode++) {
         if (mode >= PERSIST && !BufferStorageEXT) continue;
         if (mode == BASEVTX && !DrawElementsBaseVertexOES) continue;
         // the buffers of this mode
-        if (mode == UNITY || mode == PERSIST) {
+        if (mode < ARENA) {
             glGenBuffers(nb, vb); glGenBuffers(nb, ib);
             for (int i = 0; i < nb; i++) {
                 glBindBuffer(GL_ARRAY_BUFFER, vb[i]); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib[i]);
@@ -213,6 +221,15 @@ int main(int argc, char **argv)
                     BufferStorageEXT(GL_ELEMENT_ARRAY_BUFFER, IBYTES, NULL, m); imap[i] = glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, IBYTES, f);
                     if (!vmap[i] || !imap[i]) { printf("persistent map failed\n"); return 1; }
                 }
+            }
+            if (mode == PVAO) {             // a vertex array per buffer pair, made once
+                glGenVertexArrays(nb, vaos);
+                for (int i = 0; i < nb; i++) {
+                    glBindVertexArray(vaos[i]);
+                    for (int a = 0; a < 3; a++) glEnableVertexAttribArray(a);
+                    glBindBuffer(GL_ARRAY_BUFFER, vb[i]); attribs(0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib[i]);
+                }
+                glBindVertexArray(mainvao);
             }
         } else if (!arena) {
             GLbitfield f = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT;
@@ -234,7 +251,8 @@ int main(int argc, char **argv)
             printf("%-8s%-6s %6.2f ms a frame, %5.1f us a draw%s\n", names[mode], state ? "" : "-flat", t * 1e3 / frames,
                    t * 1e6 / frames / D, e ? " (GL error)" : "");
         }
-        if (mode == UNITY || mode == PERSIST) { glBindBuffer(GL_ARRAY_BUFFER, 0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glDeleteBuffers(nb, vb); glDeleteBuffers(nb, ib); }
+        if (mode == PVAO) glDeleteVertexArrays(nb, vaos);
+        if (mode < ARENA) { glBindBuffer(GL_ARRAY_BUFFER, 0); glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); glDeleteBuffers(nb, vb); glDeleteBuffers(nb, ib); }
     }
     return 0;
 }
