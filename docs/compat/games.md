@@ -179,7 +179,15 @@ render thread (~21 ms a frame, the Mali driver 40 % of it), not the GPU's pixels
 The 64-bit IL2CPP build of the same data: Greenpath 35.4, Soul Master 41.8, King's Pass 51.7, ~140 MB
 more memory: not taken ([il2cpp.md](../il2cpp.md)). The render thread's sprite chunks in
 persistently mapped buffers and then in one buffer (`UA_GL_PERSIST`, `UA_GL_ARENA`, both on in the
-port): Greenpath 37.5 - 37.8 -> ~41.2 fps on muOS, 36.5 - 36.6 -> 41.0 on Knulli.
+port): Greenpath 37.5 - 37.8 -> ~41.2 fps on muOS, 36.5 - 36.6 -> 41.0 on Knulli. The survey again
+with both (2026-11-04, steady fps: the walk's seconds at 20 fps or more; one run each, the same
+devices as before): muOS Colosseum 53.6 -> 54.9, Deepnest 56.5 -> 56.5, Kingdom's Edge 52.1 -> 55.3,
+Queen's Gardens 48.0 -> 47.8, Mantis Village 54.1 -> 57.7, Dirtmouth 50.5 -> 54.1, City of Tears
+39.9 / 39.8 -> 40.8 / 41.0 (A B A B); Knulli Soul Master 42.7 -> 46.5, Soul Tyrant 48.0 -> 52.6,
+the Watcher Knights 50.1 -> 52.4, Crystal Peak 48.3 -> 48.2, City of Tears 43.1 -> 42.0 - 41.3. The
+scenes that did not move are GPU-bound (City: the GPU idle 0.1 - 0.3 ms of a 26 ms frame); at
+540x360 instead of 600x400 (softer, not taken yet): City 47.3, Crystal Peak 52.9, Queen's Gardens
+52.3 -> 54.0 (Knulli), Greenpath 43.6 (muOS) / 42.1 (Knulli, where the render thread holds it).
 
 
 ## Linux builds, one per Unity line (32-bit route)
