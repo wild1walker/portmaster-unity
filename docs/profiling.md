@@ -1335,7 +1335,9 @@ Third Eye's render thread, White Mirror's refresh rate).
 
 What to choose per port (a proposal; not a default, the user's call): where a game is GPU-bound and
 its framing is the same, `UA_RENDER_SIZE=600x400 UA_RENDER_RAM=1024` for the 1 GB handhelds (Hollow
-Knight: +16 - 18 %, nearly all there is before its main thread; The Third Eye 41, White Mirror 59),
+Knight: +16 - 18 %, nearly all there is before its main thread; The Third Eye 41, White Mirror 59;
+Hollow Knight moved to 540x360 on 2026-11-04 once its render thread was lighter: its GPU-bound rooms
++3 - 14 %, [compat/games.md](compat/games.md)),
 540x360 where the GPU still limits it there (Phasing Gun, Arthur's Nightmare, Chapéu: +31 - 67 %). URP's own render scale (a converter setting) is the alternative for URP games
 that keeps their Screen Space Overlay UI at the panel's size.
 

@@ -165,7 +165,8 @@ thread (four spun on `sched_yield` and showed ~12 pictures a second) the prologu
 pictures a second in steady play (latch to latch 32 - 39 ms), fewer only in the game's own loading
 frames for King's Pass during the cinematic; memory at the clip 94 - 99 MB available instead of
 50 - 53 ([runtime/media/README.md](../../runtime/media/README.md#unity-6000-one-picture-in-flight)).
-portmaster-hollowknight's `[runtime_lowmem]` is now blur off, 600x400, gfx jobs legacy and 24 kHz.
+portmaster-hollowknight's `[runtime_lowmem]` is now blur off, 600x400, gfx jobs legacy and 24 kHz
+(540x360 since 2026-11-04, below).
 2026-11-03/04 (Knulli and muOS, silent, the 1 GB profile, walks with attacks and jumps; the map of it
 all: [performance.md](../performance.md)): the hits' sound glitch was the pipe output replaying
 unrefilled buffers of FMOD's polled output (20 - 80 % of them a second), fixed by a paced writer
@@ -186,8 +187,9 @@ Queen's Gardens 48.0 -> 47.8, Mantis Village 54.1 -> 57.7, Dirtmouth 50.5 -> 54.
 39.9 / 39.8 -> 40.8 / 41.0 (A B A B); Knulli Soul Master 42.7 -> 46.5, Soul Tyrant 48.0 -> 52.6,
 the Watcher Knights 50.1 -> 52.4, Crystal Peak 48.3 -> 48.2, City of Tears 43.1 -> 42.0 - 41.3. The
 scenes that did not move are GPU-bound (City: the GPU idle 0.1 - 0.3 ms of a 26 ms frame); at
-540x360 instead of 600x400 (softer, not taken yet): City 47.3, Crystal Peak 52.9, Queen's Gardens
-52.3 -> 54.0 (Knulli), Greenpath 43.6 (muOS) / 42.1 (Knulli, where the render thread holds it).
+540x360 instead of 600x400 (softer): City 47.3, Crystal Peak 52.9, Queen's Gardens
+52.3 -> 54.0 (Knulli), Greenpath 43.6 (muOS) / 42.1 (Knulli, where the render thread holds it):
+the port's 1 GB profile renders at 540x360 since (portmaster-hollowknight 0bbf591).
 
 
 ## Linux builds, one per Unity line (32-bit route)
