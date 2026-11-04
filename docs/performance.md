@@ -105,6 +105,10 @@ pixels.
   (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`: muOS no change, Knulli +1.5 - 2 %) did not pay or not
   on both firmwares. What is left is the number of draws, ~200 in Greenpath, set by the game's
   sprites alternating between two atlases in depth order.
+- **Then measure the GPU again.** With both layers Greenpath's GPU is idle 0.7 ms of a 26 ms frame
+  (`UA_GPU_IDLE=5`, muOS): the render thread and the GPU now hold it at the same ~41 fps, the main
+  scene pass (180 sprite draws, 600x375) 18 - 20 ms of GPU time (`UA_GL_TRACE`). Past this a scene
+  needs both fewer draws and fewer pixels drawn.
 
 ## 6. Native code: 64-bit and IL2CPP
 
