@@ -140,16 +140,16 @@ game's heaviest scene:
    the same 400 frames, `UA_INPUT_CLOCK=frames:43` and the data's maximum timestep at 1/43 s), then the
    RG34XX-SP (Knulli, the game's Low lighting and shaders, 480x320 scaled by the display engine):
 
-   | route | rig, M instructions/frame | handheld, arrival room | memory on 1 GB |
-   |---|---|---|---|
-   | `android`: Mono ARMv7 | 7.93 | 35 - 37 fps | lowest available 86 - 92 MB |
-   | `mono-arm64` | 7.47 (-6 %) | not run | Mono's heap 352 MB against 248 (64-bit references) |
-   | IL2CPP arm64 | 5.69 (-28 %) | 0.2 - 3 fps: swapping | about 200 MB more than the handheld has |
-   | IL2CPP ARMv7 (the 32-bit IL2CPP player: `pmunity il2cpp --abi armeabi-v7a`, the `Il2cppArmv7` donor) | 5.97 (-25 %) | 40.5 - 41 fps | as Mono's |
+   | route | rig, M instructions/frame | handheld, arrival room | first fight | memory on 1 GB |
+   |---|---|---|---|---|
+   | `android`: Mono ARMv7 | 7.93 | 35 - 37 fps | 39.1 - 39.9 fps | lowest available 80 - 92 MB |
+   | `mono-arm64` | 7.47 (-6 %) | not run | not run | Mono's heap 352 MB against 248 (64-bit references) |
+   | IL2CPP arm64 | 5.69 (-28 %) | 0.2 - 3 fps: swapping | not run | about 200 MB more than the handheld has |
+   | IL2CPP ARMv7 (the 32-bit IL2CPP player: `pmunity il2cpp --abi armeabi-v7a`, the `Il2cppArmv7` donor) | 5.97 (-25 %) | 40.5 - 41 fps | 43.0 - 43.2 fps | as Mono's |
 
    Instruction counts stand for time across ARMv7 and arm64 code here only because the Cortex-A53 is
-   in order; the handheld confirmed the order of the routes, not the size of the gain (+12 % against
-   -25 % instructions). On a 1 GB handheld the 64-bit routes lose by memory before speed counts. The
+   in order; the handheld confirmed the order of the routes, not the size of the gain (+9 - 12 % against
+   -25 % instructions; the fight: a fixed floor seed and no damage, test-only). On a 1 GB handheld the 64-bit routes lose by memory before speed counts. The
    IL2CPP compile for this game: 602 MB of C++, 787 compiles, 6 CPU-minutes on an M-series Mac in a
    1 GB container, an estimated 35 - 50 minutes on the handheld (docs/il2cpp.md, "On the handheld").
 6. **Memory decides too.** A 1 GB handheld runs the game with the frontend in the background:
