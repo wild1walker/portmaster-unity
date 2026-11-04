@@ -62,6 +62,11 @@ export UA_FPS=${UA_FPS:-10}                     # a line of frame statistics eve
 # the game's options (port.env), and the setup's answers that apply when the game runs
 [ -f "$GAMEDIR/port.env" ] && source "$GAMEDIR/port.env"
 [ -f "$GAMEDIR/answers.env" ] && source "$GAMEDIR/answers.env"
+# handhelds without analog sticks whose pad mapping still names a left stick: where PortMaster says there are
+# none (device_info.txt: ANALOG_STICKS=0), auto means a pad without sticks
+if [ "${ANALOG_STICKS:-2}" = 0 ]; then
+  case "${UA_DPAD_STICK:-}" in auto|auto,both) export UA_DPAD_STICK=${UA_DPAD_STICK/auto/1} ;; esac
+fi
 # a Wwise game: ua_host's own Wwise player plays the banks the setup converted (set UA_WWISE_DATA= empty for none)
 [ -d "$GAMEDIR/wwise" ] && export UA_WWISE_DATA="${UA_WWISE_DATA-$GAMEDIR/wwise}"
 chmod +x "$GAMEDIR/ua_host"
