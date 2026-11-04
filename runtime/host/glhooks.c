@@ -28,6 +28,7 @@
 
 #include "../loader/so_loader.h"
 #include "glhooks.h"
+#include "glrec.h"
 
 typedef void (*shader_source_fn)(unsigned, int, const char *const *, const int *);
 typedef unsigned (*swap_interval_fn)(void *, int);
@@ -150,6 +151,7 @@ static void w_ProgramBinary(unsigned p, unsigned fmt, const void *b, int len)
 {
     double t = ms_now();
     r_ProgramBinary(p, fmt, b, len);
+    glrec_note_program_binary(p, b, len);
     int ok = -1;
     if (r_GetProgramiv) r_GetProgramiv(p, GL_LINK_STATUS, &ok);
     double e = ms_now();
@@ -161,6 +163,7 @@ static void w_GetProgramBinary(unsigned p, int size, int *len, unsigned *fmt, vo
 {
     double t = ms_now();
     r_GetProgramBinary(p, size, len, fmt, b);
+    glrec_note_get_program_binary(p, len ? *len : size, b);
     double e = ms_now();
     char n[32];
     fprintf(stderr, "[glprog] get-binary p%u %.2f ms at %.3f s %d bytes %s\n", p, e - t, since_first(e),

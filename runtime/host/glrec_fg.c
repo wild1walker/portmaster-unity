@@ -35,8 +35,12 @@
 // storage buffer binding could see the draws (side effects). Where the driver lets shaders read the
 // depth/stencil buffer (ARM_shader_framebuffer_fetch_depth_stencil), a draw whose program may do so
 // reads it: a program whose shaders' sources name gl_LastFragDepth/gl_LastFragStencil, or one this
-// did not see compiled from source (Unity's program binary cache is then turned off, as
-// UA_SHADER_DUMP does, so that it compiles every program from source).
+// did not see compiled from source. Unity's program binary cache stays on: when Unity reads a linked
+// program's binary back for its cache (glGetProgramBinary), the verdict its sources gave is kept with a
+// hash of that binary (data/cache/ua_glrec_fetch.txt), and a program Unity later loads from the cache
+// (glProgramBinary) with a binary of a known hash gets that verdict; any other loaded binary still
+// counts as reading the buffers. The same binary is the same program, so the graph decides as it did
+// for the compiled one.
 //   UA_GL_REC_OPT=dead,end,start,sink (default all) picks the changes; UA_GL_REC_VERBOSE=<n>[@<m>]
 //   logs the decisions of <n> held frames (after the first <m>).
 #include <dlfcn.h>
@@ -227,6 +231,74 @@ void fg_note_delete(GLuint prog)
     pthread_mutex_lock(&g_shlock);
     shprog_t *e = sp_find(g_pr, prog, 0);
     if (e) { e->nsh = 0; e->linked = 0; e->fetch = 0; }     // (the name may come back: its shaders start over)
+    pthread_mutex_unlock(&g_shlock);
+}
+// the verdicts of Unity's cached program binaries, by a 64-bit FNV-1a hash of the binary
+#define NBIN 4096
+static struct { unsigned long long h; unsigned char used, fetch; } g_bin[NBIN];
+static int g_bin_loaded;
+static char g_bin_path[512];
+static unsigned long long fnv64(const void *p, long n)
+{
+    const unsigned char *b = p; unsigned long long h = 1469598103934665603ull;
+    for (long i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ull; }
+    return h;
+}
+static int bin_find(unsigned long long h, int add)       // (g_shlock held) the slot, or -1
+{
+    unsigned i = (unsigned)(h % NBIN);
+    for (unsigned k = 0; k < NBIN; k++, i = (i + 1) % NBIN) {
+        if (g_bin[i].used && g_bin[i].h == h) return (int)i;
+        if (!g_bin[i].used) { if (!add) return -1; g_bin[i].used = 1; g_bin[i].h = h; return (int)i; }
+    }
+    return -1;
+}
+static void bin_load(void)                              // (g_shlock held)
+{
+    if (g_bin_loaded) return;
+    g_bin_loaded = 1;
+    FILE *f = g_bin_path[0] ? fopen(g_bin_path, "r") : NULL;
+    int n = 0;
+    if (f) {
+        unsigned long long h; int v;
+        while (fscanf(f, "%llx %d", &h, &v) == 2) { int i = bin_find(h, 1); if (i >= 0) { g_bin[i].fetch = (unsigned char)(v != 0); n++; } }
+        fclose(f);
+    }
+    fprintf(stderr, "[glrec] program verdicts: %s, %d known\n", g_bin_path[0] ? g_bin_path : "(no folder)", n);
+}
+void fg_set_cache_dir(const char *root)
+{
+    if (root && root[0]) snprintf(g_bin_path, sizeof g_bin_path, "%s/data/cache/ua_glrec_fetch.txt", root);
+}
+static int prog_dsfetch(GLuint prog);
+// Unity read a linked program's binary back for its cache: keep the verdict its sources gave
+void fg_note_binary_out(GLuint prog, const void *bin, long len)
+{
+    int f = prog_dsfetch(prog);
+    unsigned long long h = fnv64(bin, len);
+    pthread_mutex_lock(&g_shlock);
+    bin_load();
+    int i = bin_find(h, 0), add = i < 0;
+    if (add) i = bin_find(h, 1);
+    if (i >= 0) {
+        if (!add && g_bin[i].fetch != (unsigned char)f) f = 1;   // (never seen: the same binary, two verdicts)
+        g_bin[i].fetch = (unsigned char)f;
+        FILE *o = (add || f) && g_bin_path[0] ? fopen(g_bin_path, "a") : NULL;
+        if (o) { fprintf(o, "%016llx %d\n", h, f); fclose(o); }
+        else if (add && g_bin_path[0]) { static int warned; if (!warned++) perror("[glrec] program verdicts: cannot append"); }
+    }
+    pthread_mutex_unlock(&g_shlock);
+}
+// Unity loaded a program from its cache: the verdict kept for that binary, else "may read"
+void fg_note_binary(GLuint prog, const void *bin, long len)
+{
+    unsigned long long h = bin && len > 0 ? fnv64(bin, len) : 0;
+    pthread_mutex_lock(&g_shlock);
+    bin_load();
+    int i = h ? bin_find(h, 0) : -1;
+    int f = i < 0 ? 1 : g_bin[i].fetch;
+    shprog_t *e = sp_find(g_pr, prog, 1);
+    if (e) { e->fetch = (unsigned char)f; e->linked = 1; }
     pthread_mutex_unlock(&g_shlock);
 }
 static int prog_dsfetch(GLuint prog)

@@ -15,6 +15,7 @@
 #include "../jni/unityplayer.h"
 void up_media_init(void);                  /* ../jni/up_media.c */
 #include "input.h"
+#include "glrec_fg.h"
 #include "frames.h"
 #include "framerate.h"
 #include "gcbudget.h"
@@ -696,6 +697,7 @@ int main(int argc, char **argv)
     input_init(cfg.width, cfg.height);
     frames_init(root, cfg.width, cfg.height);
     input_set_root(root);
+    fg_set_cache_dir(root);                          // the frame recorder's program verdicts (glrec_fg.c)
     fprintf(stderr, "[host] starting Unity: apk %s, window %dx%d (%s), API %d\n", apk, cfg.width, cfg.height,
             display_backend(), cfg.sdk_int);
     if (up_start(&cfg) != 0) { fprintf(stderr, "[host] up_start failed\n"); return 1; }

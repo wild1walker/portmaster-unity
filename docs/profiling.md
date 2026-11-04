@@ -744,7 +744,8 @@ Unity's GLES backend keeps a program binary cache: a program it links is read ba
 time that source is wanted it is loaded with `glProgramBinary` instead of compiled. ua_host gives the player
 `data/cache/` as that path ([android-data.md](android-data.md)), so the cache lives next to the
 saves, and turns it off only for `UA_SHADER_DUMP` / `UA_SHADER_OVERRIDE` (a dumped or overridden
-source must be compiled) and `UA_GL_REC=2`.
+source must be compiled). Under `UA_GL_REC=2` it stays on: the frame graph keeps each cached binary's
+framebuffer-fetch verdict (`data/cache/ua_glrec_fetch.txt`), so it need not see the sources again.
 
 Hollow Knight on the RG34XX-SP (2026-11-02, the 32-bit game set up by `pmu`, the 1 GB options of
 its port; the walk-and-attack plan of [compat/games.md](compat/games.md), 40 s measured): the driver

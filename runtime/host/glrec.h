@@ -10,3 +10,6 @@ const so_shim *glrec_table(void *(*next)(const char *name));
 void glrec_swap(void);
 
 #endif
+// glhooks.c's program-log wrappers pass Unity's program binaries on (the frame graph's verdicts, glrec_fg.c)
+void glrec_note_program_binary(unsigned program, const void *binary, long length);
+void glrec_note_get_program_binary(unsigned program, long length, const void *binary);

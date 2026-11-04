@@ -462,13 +462,23 @@ static void glrec_shader_source(GLuint sh, GLsizei count, const GLchar *const *s
 }
 static void glrec_attach_shader(GLuint prog, GLuint sh) { if (g_mode == 3) fg_note_attach(prog, sh); }
 static void glrec_link_program(GLuint prog) { if (g_mode == 3) fg_note_link(prog, 0); }
-static void glrec_program_binary(GLuint prog) { if (g_mode == 3) fg_note_link(prog, 1); }
-static void glrec_delete_program(GLuint prog) { if (g_mode == 3) fg_note_delete(prog); }
-// (Unity's program binary cache: off where the frame graph needs every program's source)
-static void glrec_get_integerv(GLenum pname, GLint *data)
+static void glrec_program_binary(GLuint prog, const void *bin, GLsizei len) { if (g_mode == 3) fg_note_binary(prog, bin, len); }
+// (Unity passes no length pointer: the buffer it sized from GL_PROGRAM_BINARY_LENGTH is the binary)
+static void glrec_get_program_binary(GLuint prog, GLsizei size, GLsizei *len, const void *bin)
 {
-    if (g_mode == 3 && data && pname == GL_NUM_PROGRAM_BINARY_FORMATS && fg_sources_wanted()) *data = 0;
+    long n = len ? *len : size;
+    if (g_mode == 3 && bin && n > 0) fg_note_binary_out(prog, bin, n);
 }
+// the same two for glhooks.c's UA_GL_PROGLOG wrappers, which take these calls before this layer
+void glrec_note_program_binary(unsigned prog, const void *bin, long len) { glrec_program_binary(prog, bin, (GLsizei)len); }
+void glrec_note_get_program_binary(unsigned prog, long len, const void *bin)
+{
+    if (g_mode == 3 && bin && len > 0) fg_note_binary_out(prog, bin, len);
+}
+static void glrec_delete_program(GLuint prog) { if (g_mode == 3) fg_note_delete(prog); }
+// (Unity's program binary cache stays on: the frame graph keeps what it learnt from each program's
+// sources with the binary Unity reads back for its cache, glrec_fg.c)
+static void glrec_get_integerv(GLenum pname, GLint *data) { (void)pname; (void)data; }
 
 #define GLREC_PART 2
 #include "glrec_gen.h"

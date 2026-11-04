@@ -164,7 +164,10 @@ POST = {
     'glShaderSource': 'glrec_shader_source(shader, count, string, length)',
     'glAttachShader': 'glrec_attach_shader(program, shader)',
     'glLinkProgram': 'glrec_link_program(program)',
-    'glProgramBinary': 'glrec_program_binary(program)', 'glProgramBinaryOES': 'glrec_program_binary(program)',
+    'glProgramBinary': 'glrec_program_binary(program, binary, length)',
+    'glProgramBinaryOES': 'glrec_program_binary(program, binary, length)',
+    'glGetProgramBinary': 'glrec_get_program_binary(program, bufSize, length, binary)',
+    'glGetProgramBinaryOES': 'glrec_get_program_binary(program, bufSize, length, binary)',
     'glGetIntegerv': 'glrec_get_integerv(pname, data)',
     'glDeleteProgram': 'glrec_delete_program(program)',
 }

@@ -2580,8 +2580,8 @@ static void w_glGetObjectLabelEXT(GLenum type, GLuint object, GLsizei bufSize, G
 static void w_glGetObjectLabelKHR(GLenum identifier, GLuint name, GLsizei bufSize, GLsizei * length, GLchar * label) { glrec_submit_for(OP_glGetObjectLabelKHR); NX(glGetObjectLabelKHR)(identifier, name, bufSize, length, label); }
 static void w_glGetObjectPtrLabel(const void * ptr, GLsizei bufSize, GLsizei * length, GLchar * label) { glrec_submit_for(OP_glGetObjectPtrLabel); NX(glGetObjectPtrLabel)(ptr, bufSize, length, label); }
 static void w_glGetPointerv(GLenum pname, void ** params) { glrec_submit_for(OP_glGetPointerv); NX(glGetPointerv)(pname, params); }
-static void w_glGetProgramBinary(GLuint program, GLsizei bufSize, GLsizei * length, GLenum * binaryFormat, void * binary) { glrec_submit_for(OP_glGetProgramBinary); NX(glGetProgramBinary)(program, bufSize, length, binaryFormat, binary); }
-static void w_glGetProgramBinaryOES(GLuint program, GLsizei bufSize, GLsizei * length, GLenum * binaryFormat, void * binary) { glrec_submit_for(OP_glGetProgramBinaryOES); NX(glGetProgramBinaryOES)(program, bufSize, length, binaryFormat, binary); }
+static void w_glGetProgramBinary(GLuint program, GLsizei bufSize, GLsizei * length, GLenum * binaryFormat, void * binary) { glrec_submit_for(OP_glGetProgramBinary); NX(glGetProgramBinary)(program, bufSize, length, binaryFormat, binary); glrec_get_program_binary(program, bufSize, length, binary); }
+static void w_glGetProgramBinaryOES(GLuint program, GLsizei bufSize, GLsizei * length, GLenum * binaryFormat, void * binary) { glrec_submit_for(OP_glGetProgramBinaryOES); NX(glGetProgramBinaryOES)(program, bufSize, length, binaryFormat, binary); glrec_get_program_binary(program, bufSize, length, binary); }
 static void w_glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei * length, GLchar * infoLog) { glrec_submit_for(OP_glGetProgramInfoLog); NX(glGetProgramInfoLog)(program, bufSize, length, infoLog); }
 static void w_glGetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint * params) { glrec_submit_for(OP_glGetProgramInterfaceiv); NX(glGetProgramInterfaceiv)(program, programInterface, pname, params); }
 static void w_glGetProgramPipelineInfoLog(GLuint pipeline, GLsizei bufSize, GLsizei * length, GLchar * infoLog) { glrec_submit_for(OP_glGetProgramPipelineInfoLog); NX(glGetProgramPipelineInfoLog)(pipeline, bufSize, length, infoLog); }
@@ -2746,8 +2746,8 @@ static SO_ABI void w_glPrimitiveBoundingBox(GLfloat minX, GLfloat minY, GLfloat 
     uint64_t *rec_a = glrec_cmd(OP_glPrimitiveBoundingBox, 8);
     rec_a[0] = rec_fbits(minX); rec_a[1] = rec_fbits(minY); rec_a[2] = rec_fbits(minZ); rec_a[3] = rec_fbits(minW); rec_a[4] = rec_fbits(maxX); rec_a[5] = rec_fbits(maxY); rec_a[6] = rec_fbits(maxZ); rec_a[7] = rec_fbits(maxW);
 }
-static void w_glProgramBinary(GLuint program, GLenum binaryFormat, const void * binary, GLsizei length) { glrec_submit_for(OP_glProgramBinary); NX(glProgramBinary)(program, binaryFormat, binary, length); glrec_program_binary(program); }
-static void w_glProgramBinaryOES(GLuint program, GLenum binaryFormat, const void * binary, GLint length) { glrec_submit_for(OP_glProgramBinaryOES); NX(glProgramBinaryOES)(program, binaryFormat, binary, length); glrec_program_binary(program); }
+static void w_glProgramBinary(GLuint program, GLenum binaryFormat, const void * binary, GLsizei length) { glrec_submit_for(OP_glProgramBinary); NX(glProgramBinary)(program, binaryFormat, binary, length); glrec_program_binary(program, binary, length); }
+static void w_glProgramBinaryOES(GLuint program, GLenum binaryFormat, const void * binary, GLint length) { glrec_submit_for(OP_glProgramBinaryOES); NX(glProgramBinaryOES)(program, binaryFormat, binary, length); glrec_program_binary(program, binary, length); }
 static void w_glProgramParameteri(GLuint program, GLenum pname, GLint value) { glrec_submit_for(OP_glProgramParameteri); NX(glProgramParameteri)(program, pname, value); }
 static SO_ABI void w_glProgramUniform1f(GLuint program, GLint location, GLfloat v0)
 {

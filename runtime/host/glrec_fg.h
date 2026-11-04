@@ -24,6 +24,9 @@ void fg_context(void);                           // at the first frame (a contex
 void fg_note_shader(unsigned shader, int fetch);
 void fg_note_attach(unsigned program, unsigned shader);
 void fg_note_link(unsigned program, int binary);
+void fg_note_binary(unsigned program, const void *binary, long length);      // glProgramBinary
+void fg_note_binary_out(unsigned program, const void *binary, long length);  // glGetProgramBinary
+void fg_set_cache_dir(const char *root);         // the game folder: data/cache/ua_glrec_fetch.txt
 void fg_note_delete(unsigned program);
 int fg_sources_wanted(void);                     // nonzero: turn Unity's program binary cache off
 void fg_log(unsigned long frames, double fg_s);
