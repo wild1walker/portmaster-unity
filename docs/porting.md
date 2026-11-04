@@ -103,6 +103,46 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
 | `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
+
+### Choose the route for speed first
+
+The route sets how fast the game can ever run on a handheld: which engine build (ARMv7 or arm64)
+and which code runner (Mono's JIT or IL2CPP's compiled code) run every frame. Changing it late
+means redoing the port, so decide it before anything else, from measurements on a handheld in the
+game's heaviest scene:
+
+1. **Read what the game's players already know.** Community performance mods and fixes (section
+   10, "Community performance mods and fixes") name the hot spots before any profile.
+2. **Measure the heaviest scene, not the menu.** Fights, crowds, effects: the Breach of Enter the
+   Gungeon ran 59 fps and its first fight 38 with the same settings. Get there early: a save past
+   any tutorial (the porter's own, or a community save kept locally, never shipped), the game's
+   own quick start, `UA_INPUT_SCRIPT`.
+3. **Find what limits the frame** with the handheld's tools ([profiling.md](profiling.md)): `UA_FPS`,
+   `UA_GPU_IDLE` (does the GPU wait for work?), `UA_PROF` (the main thread's self time: engine,
+   managed code, Mono). Estimates from the emulated rig miss: Gungeon's GPU time was estimated at
+   19 ms and measured at 34.
+4. **If the GPU limits,** any route will do, and the picture is where the time goes: the game's own
+   quality options (gated on RAM, with an option to restore; Gungeon's Low lighting and shaders: 32 ->
+   59 fps), `UA_RENDER_SIZE` for a smaller picture scaled by the display engine at no cost (never the
+   game's own scale-to-fill, which can draw its effects at the panel's size: Gungeon 48 vs 59 fps),
+   ASTC textures, and exact GPU savings ([shaders.md](shaders.md), [quality.md](quality.md)).
+5. **If the main thread limits,** the route is the lever. Compare the candidates on the handheld in
+   the same scene with the same settings before building the port around one:
+   - `android`: the ARMv7 engine and Mono's 32-bit JIT; nothing to compile at setup.
+   - `mono-arm64`: the arm64 engine and Mono's arm64 JIT; nothing to compile at setup.
+   - `il2cpp-arm64` (or `apk` with `player.il2cpp`): the game's code compiled ahead of time;
+     Hollow Knight's managed code took 3.4 ms a frame against 4.9 ms on Mono's arm64 JIT. Its setup
+     compiles on the handheld for one to a few hours and needs about 1.6 GB free.
+   A route that needs a compile at setup must say so in the port's README and setup questions.
+6. **Memory decides too.** A 1 GB handheld runs the game with the frontend in the background:
+   measure the lowest available memory in the heaviest scene with it running, for each candidate.
+7. **The firmware sets the clocks.** Knulli runs the RG34XX-SP's CPU up to 1.5 GHz, muOS up to
+   1.8: measure on the firmwares players use, and never change governors or clocks for the port.
+
+Exact runtime switches (`UA_FUTEX_SPIN`, `UA_FAST_CLOCK`, `UA_GL_SAMECLEAR`) come after the route
+and gain only where a profile shows their cost (Gungeon: none of the three). Write the measurements
+into the port's testing notes, with the route chosen and why.
+
 Windows builds (Direct3D 11 shaders) take the `android` route as they come: players put the game's
 folder (`<Game>.exe` beside `<Game>_Data`) or the zip it came in into `gamedata/`, and `port new`
 sets the rest up from the check. The shaders: `convert.shaders.from = ["d3d11"]`, and the release

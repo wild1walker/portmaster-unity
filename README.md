@@ -241,7 +241,9 @@ cd convert
 
 1. **Check the game.** `port check` says what the game is (Unity version, Mono or IL2CPP, Linux,
    macOS or Windows, shaders, input, video, plugins, textures) and which route fits. Its exit
-   status is 0 when a route fits.
+   status is 0 when a route fits. Where more than one fits, choose for speed before anything else:
+   measure the game's heaviest scene on a handheld ([docs/porting.md](docs/porting.md), "Choose the
+   route for speed first").
    ```sh
    python -m pmunity version "<Game>_Data"          # Unity version, supported or not
    python -m pmunity port check "<game folder>"
