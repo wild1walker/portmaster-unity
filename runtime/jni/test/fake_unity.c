@@ -350,6 +350,9 @@ static void initJni(JNIEnv *env, jobject player, jobject context)
     R[R_PREFS_FLOAT_X100] = (int)(now * 100.0f + 0.5f);
     R[R_PREFS_STR_OK] = str_eq(env, (*env)->CallObjectMethod(env, sp,
         (*env)->GetMethodID(env, spc, "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"), ks, (jobject)0), "cup%20head");
+    /* a default the port gives (UA_PREFS_DEFAULTS, set by the test: particles=0) for a key the game never stored */
+    R[R_PREFS_DEFAULT] = (*env)->CallIntMethod(env, sp, (*env)->GetMethodID(env, spc, "getInt", "(Ljava/lang/String;I)I"),
+                                               (*env)->NewStringUTF(env, "particles"), (jint)7);
 
     /* FMOD inside libunity */
     jclass as = (*env)->FindClass(env, "android/media/AudioSystem");

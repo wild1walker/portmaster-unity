@@ -275,6 +275,7 @@ static const char *const java_side[][3] = {
 
 static int run_shape(int shape)
 {
+    setenv("UA_PREFS_DEFAULTS", "particles=0 bad =3", 1);   /* (a malformed entry is skipped) */
     printf("== Unity %s shape\n", shape_name[shape]);
     fake_unity_set_shape(shape);
     if (system("rm -rf /tmp/uptest && mkdir -p /tmp/uptest/lib && touch /tmp/uptest/lib/libil2cpp.so") != 0)
@@ -327,6 +328,7 @@ static int run_shape(int shape)
     CHECK(R(R_LOCALE_OK) == 1);
     CHECK(R(R_PREFS_FLOAT_X100) == 75);
     CHECK(R(R_PREFS_STR_OK) == 1);
+    CHECK(R(R_PREFS_DEFAULT) == 0);
     CHECK(R(R_AUDIO_RATE) == 48000);
     CHECK(R(R_CALLBACKS_OK) == 1);
     CHECK(R(R_SWAPPY_JAVA) == 1);

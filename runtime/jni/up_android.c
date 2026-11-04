@@ -249,6 +249,27 @@ static void prefs_load(prefs *p)
     free(line);
     fclose(f);
 }
+/* UA_PREFS_DEFAULTS='<key>=<int> ...': ints for Unity's PlayerPrefs (the "<package>.v2.playerprefs"
+ * file) that the game has not stored yet, there from the start as if it had: a port's defaults for
+ * the game's own options (Hollow Knight on 1 GB handhelds: VidParticles=0 VidDithering=0). A value
+ * the game stores itself (its options menu) is kept and wins at every later launch. */
+static void prefs_defaults(prefs *p)
+{
+    const char *d = getenv("UA_PREFS_DEFAULTS");
+    size_t n = strlen(p->name);
+    if (!d || !*d || n < 15 || strcmp(p->name + n - 15, ".v2.playerprefs")) return;
+    char *s = strdup(d), *save = NULL;
+    for (char *t = strtok_r(s, " ", &save); t; t = strtok_r(NULL, " ", &save)) {
+        char *eq = strchr(t, '=');
+        if (!eq || eq == t) continue;
+        *eq = 0;
+        if (pref_find(p, t)) { up_log("PlayerPrefs %s: the game's own value kept (UA_PREFS_DEFAULTS)", t); continue; }
+        pref_set(p, t, 'i')->i = strtoll(eq + 1, NULL, 10);
+        up_log("PlayerPrefs %s = %s by default (UA_PREFS_DEFAULTS)", t, eq + 1);
+    }
+    free(s);
+}
+
 static prefs *prefs_get(const char *name)
 {
     pthread_mutex_lock(&g_prefs_mu);
@@ -263,6 +284,7 @@ static prefs *prefs_get(const char *name)
         up_mkdirs(dir);
         if (asprintf(&p->path, "%s/%s.prefs", dir, name) < 0) abort();
         prefs_load(p);
+        prefs_defaults(p);
         p->next = g_prefs;
         g_prefs = p;
         up_log("SharedPreferences %s -> %s", name, p->path);
