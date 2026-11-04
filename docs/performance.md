@@ -119,6 +119,17 @@ pixels.
   needs both fewer draws and fewer pixels drawn. Rooms that were GPU-bound all along gain most from a
   smaller render size: Hollow Knight's 1 GB profile went from 600x400 to 540x360 (City of Tears 41.3
   -> 47.3 fps, Crystal Peak 48.2 -> 52.9, Greenpath 41.4 -> 43.6).
+- **Fewer job workers on four cores.** Unity starts three job workers on a 4-core A53; with the main
+  thread, the render thread, FMOD's mixer and Mali's submission thread they wait for a CPU and take
+  it from the two threads that hold the frame, and every job batch wakes one. `-job-worker-count 1`
+  (`UA_UNITY_ARGS`): the same jobs, the same results, Hollow Knight's Greenpath 42.1 / 42.2 -> 45.6
+  fps (Knulli), 44.2 / 43.7 -> 45.9 (muOS), Soul Master 48.9 -> 51.9 / 52.8 (Knulli), 50.7 -> 51.9
+  (muOS); the Colosseum, King's Pass and City of Tears as before (2 workers there: the same). It pays
+  where the CPU threads hold the frame; where the GPU does (King's Pass in 2026-10) it showed nothing,
+  which is why it was first passed over. The load times stay the same.
+- **The game's own options as a port's defaults.** `UA_PREFS_DEFAULTS` gives PlayerPrefs ints the game
+  has not stored yet (the player's choice in its menu wins from then on): Hollow Knight's Particle
+  Effects Low and Dithering off on 1 GB, City of Tears 45.1 -> 46.3 - 48.2 fps at 540x360.
 
 ## 6. Native code: 64-bit and IL2CPP
 

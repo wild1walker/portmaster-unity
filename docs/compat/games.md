@@ -189,7 +189,10 @@ the Watcher Knights 50.1 -> 52.4, Crystal Peak 48.3 -> 48.2, City of Tears 43.1 
 scenes that did not move are GPU-bound (City: the GPU idle 0.1 - 0.3 ms of a 26 ms frame); at
 540x360 instead of 600x400 (softer): City 47.3, Crystal Peak 52.9, Queen's Gardens
 52.3 -> 54.0 (Knulli), Greenpath 43.6 (muOS) / 42.1 (Knulli, where the render thread holds it):
-the port's 1 GB profile renders at 540x360 since (portmaster-hollowknight 0bbf591).
+the port's 1 GB profile renders at 540x360 since (portmaster-hollowknight 0bbf591). Then one job
+worker (`-job-worker-count 1`, port 6fc5fa9): Greenpath 45.6 (Knulli) / 45.9 (muOS), Soul Master
+51.9 - 52.8 / 51.9, the Colosseum 59.1, King's Pass 56.1 (Knulli); and the game's own Particle Effects
+Low and Dithering off by default on 1 GB (`UA_PREFS_DEFAULTS`, port 5fe4579): City of Tears 46.3 - 48.2.
 
 
 ## Linux builds, one per Unity line (32-bit route)
