@@ -146,10 +146,12 @@ game's heaviest scene:
    | `mono-arm64` | 7.47 (-6 %) | not run | not run | Mono's heap 352 MB against 248 (64-bit references) |
    | IL2CPP arm64 | 5.69 (-28 %) | 0.2 - 3 fps: swapping | not run | about 200 MB more than the handheld has |
    | IL2CPP ARMv7 (the 32-bit IL2CPP player: `pmunity il2cpp --abi armeabi-v7a`, the `Il2cppArmv7` donor) | 5.97 (-25 %) | 40.5 - 41 fps | 43.0 - 43.2 fps | as Mono's |
+   | the same two, the port's own exact patches in both (gungeonpatch, asmpatch's unity-object-null), `UA_FUTEX_SPIN=50 UA_GL_REC=2` | | | Mono 43.6 - 43.9, IL2CPP ARMv7 47.0 - 47.4 fps | IL2CPP 12 MB more free |
 
    Instruction counts stand for time across ARMv7 and arm64 code here only because the Cortex-A53 is
    in order; the handheld confirmed the order of the routes, not the size of the gain (+9 - 12 % against
-   -25 % instructions; the fight: a fixed floor seed and no damage, test-only). On a 1 GB handheld the 64-bit routes lose by memory before speed counts. The
+   -25 % instructions; the fight: a fixed floor seed and no damage, test-only), and IL2CPP keeps its lead
+   on top of the game patches that speed up Mono (+8 %). On a 1 GB handheld the 64-bit routes lose by memory before speed counts. The
    IL2CPP compile for this game: 602 MB of C++, 787 compiles, 6 CPU-minutes on an M-series Mac in a
    1 GB container, an estimated 35 - 50 minutes on the handheld (docs/il2cpp.md, "On the handheld").
 6. **Memory decides too.** A 1 GB handheld runs the game with the frontend in the background:
