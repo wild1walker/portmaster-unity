@@ -24,6 +24,7 @@
 #include "glrec.h"
 #include "gpuidle.h"
 #include "glmemo.h"
+#include "glstate.h"
 #include "msaafix.h"
 #include "osk.h"
 #include "pointer.h"
@@ -154,6 +155,7 @@ static void on_swap(void *ctx)
     glrename_frame();
     gpuidle_frame();                            // UA_GPU_IDLE: the frame's last fence
     glmemo_frame();
+    glstate_frame();                            // UA_GL_STATE: the frame's shadow forgotten
     msaafix_frame();
     fbdev_swap();                               // the fbdev path's flip times (fbdev.c)
     if (last > 0)

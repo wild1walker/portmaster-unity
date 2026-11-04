@@ -1755,3 +1755,36 @@ What did not pay, or was not done:
 | the frame graph's invalidates (depth/stencil at pass ends and starts, a dead colour at its end) | Hollow Knight 32.8 against 32.8, White Mirror 43.0 - 43.1 against 42.7 - 42.8: noise to +0.7 % (the clear-pass sinking is what gives White Mirror its +2.2 %) |
 | merging two passes on one framebuffer that have draws (Hollow Knight's two window passes: about 0.4 ms by passbench's costs) | not built: the moved pass needs the GL state of its original place (bindings, uniforms of shared programs, vertex arrays), and it is one game's pattern |
 | a default | none: off by default. Exact by construction (the fake driver's tests; pictures within the run-to-run floor), but of the seven games measured one gains (White Mirror +2.2 %), and a wrapper for every GL entry point is a large layer to put in front of every game: a candidate for a default only after the regression rig has run every game with it |
+
+## The render thread's draws (drawbench, 2026-11-04)
+
+Where a scene is held by Unity's render thread rather than the GPU (Hollow Knight's Greenpath on the
+RG34XX-SP: ~200 draws, ~4,000 GL calls a frame, the render thread ~21 ms of a 26 ms frame, the Mali
+driver 40 % of it), what a draw costs the thread is the frame rate. `UA_GL_REC=census` there, per
+frame: `glVertexAttribPointer` 700, `glBindBuffer` 480, `glBindTexture` 430, `glUniform4fv` 350,
+`glMapBufferRange`, `glFlushMappedBufferRange` and `glUnmapBuffer` 323 each, `glActiveTexture` 260,
+`glDrawElements` 198 (+ 11 `glDrawElementsBaseVertexOES`), `glUseProgram` 100, `glTexParameteri` 94.
+
+`runtime/host/drawbench` (`./drawbench [seconds] [draws]`, on the fbdev window as passbench; on muOS
+with `LD_LIBRARY_PATH=/lib32:/usr/lib32`) draws a frame of 200 sprite chunks (16 quads each, written
+that frame) the way Unity's DynamicVBO does and three other ways, a texture bind and every other draw
+a program switch as in the game ("flat": without them). The CPU's time, the GPU's work too small to
+matter (muOS, CPU at 1800 MHz):
+
+| geometry | us a draw | flat |
+|---|---|---|
+| Unity's: two pooled buffers a draw, each mapped (write, invalidate range, explicit flush, unsynchronized), written, flushed, unmapped | 48.8 | 38.6 |
+| the same buffers with persistent, coherent storage mapped once (`UA_GL_PERSIST`) | 36.2 | 29.4 |
+| one persistent buffer for all of it, each draw at its own offset | 33.5 | 28.7 |
+| that, the attribute pointers set once and `glDrawElementsBaseVertex` | 34.3 | 26.8 |
+
+A quarter of a draw's cost is the map, the flush and the unmap; `UA_GL_PERSIST` takes it (Greenpath
+37.8 / 37.5 -> 39.2 / 39.2 fps; [runtime.md](runtime.md)). Gathering the buffers into one would take
+another ~7 % (0.5 ms of a 200-draw frame) for a layer that has to move every binding, attribute
+pointer and index offset: not built. A texture bind and a program switch cost about as much again
+as the draw's geometry (7 - 10 us).
+
+Thread placement in Greenpath (muOS, `UA_GL_PERSIST=1`, every run from 50 C): the render thread alone
+on core 3 and every other thread on cores 0 - 2 (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`) 40.1 /
+40.3 fps and no hitch of 100 ms, against 39.0 (a screenshot's 1 s stall in it; ~39.7 without) with
+the threads free; the main thread on core 2 as well, 40.6 with three hitches.

@@ -145,6 +145,7 @@ static int check_ext(void)
 
 static void log_every(void)
 {
+    if (g_maps & 1023) return;                  // (the clock is a system call for a 32-bit process here)
     double t = now();
     if (t - g_last_log < 10) return;
     g_last_log = t;

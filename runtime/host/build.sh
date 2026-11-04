@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the host programs: ua_host (loader + android shims + fake JNI + media core), and the device
-# checks egltest / passbench / sdltest / audiocheck / shadercheck, gpucnt (GPU counters; static) and
+# checks egltest / passbench / drawbench / sdltest / audiocheck / shadercheck, gpucnt (GPU counters; static) and
 # wwrender (the Wwise player offline: docs/plugins.md, "The player"). Build ../loader, ../android, ../jni and ../media
 # first for the same ARCH (../build.sh does).
 #   ARCH=armhf (default): cross-compiled for the device's 32-bit userland in the ua-host-armhf image
@@ -24,7 +24,7 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni $NOSTEAM"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget jitlog jitwarm quality glhooks hitches prof threads futex gltrace glopt glpersist glmemo gpuidle glpass glrename glrec glrec_fg msaafix display display_sdl fbdev $STEAM plugins plugstubs wwise desktopenv mono64 unityhooks; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget jitlog jitwarm quality glhooks hitches prof threads futex gltrace glopt glpersist glstate glmemo gpuidle glpass glrename glrec glrec_fg msaafix display display_sdl fbdev $STEAM plugins plugstubs wwise desktopenv mono64 unityhooks; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     gcc $F -c wwise_tramp.S -o $O/wwise_tramp.o; OBJS="$OBJS $O/wwise_tramp.o"
     gcc $F -c wwplay.c -o $O/wwplay.o; gcc -O3 -ffast-math -g -w -c wwplay_vorbis.c -o $O/wwplay_vorbis.o; OBJS="$OBJS $O/wwplay.o $O/wwplay_vorbis.o"
     # No __gnu_Unwind_Find_exidx export: that is ARM EHABI. AArch64 unwinds with .eh_frame, and the
@@ -44,6 +44,7 @@ if [ "$ARCH" = arm64 ]; then
     fi
     gcc -O2 -Wall -rdynamic -o $O/egltest egltest.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/passbench passbench.c -lEGL -lGLESv2
+    gcc -O2 -Wall -o $O/drawbench drawbench.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/sdltest sdltest.c -lSDL2
     gcc -O2 -Wall -o $O/audiocheck audiocheck.c -lSDL2
     gcc -O2 -Wall -o $O/shadercheck shadercheck.c -lEGL -lGLESv2
@@ -75,6 +76,7 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
   arm-linux-gnueabihf-gcc $F -c gltrace.c -o out/gltrace.o
   arm-linux-gnueabihf-gcc $F -c glopt.c -o out/glopt.o
   arm-linux-gnueabihf-gcc $F -c glpersist.c -o out/glpersist.o
+  arm-linux-gnueabihf-gcc $F -c glstate.c -o out/glstate.o
   arm-linux-gnueabihf-gcc $F -c glmemo.c -o out/glmemo.o
   arm-linux-gnueabihf-gcc $F -c gpuidle.c -o out/gpuidle.o
   arm-linux-gnueabihf-gcc $F -c glpass.c -o out/glpass.o
@@ -97,12 +99,13 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
   arm-linux-gnueabihf-gcc -O3 -ffast-math -g -w -march=armv7-a -mfpu=neon -mfloat-abi=hard -funwind-tables -c wwplay_vorbis.c -o out/wwplay_vorbis.o
   arm-linux-gnueabihf-gcc $F -c mono64.c -o out/mono64.o
   arm-linux-gnueabihf-gcc $F -c unityhooks.c -o out/unityhooks.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/jitlog.o out/jitwarm.o out/quality.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glpersist.o out/glmemo.o out/gpuidle.o out/glpass.o out/glrename.o out/glrec.o out/glrec_fg.o out/msaafix.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/jitlog.o out/jitwarm.o out/quality.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glopt.o out/glpersist.o out/glstate.o out/glmemo.o out/gpuidle.o out/glpass.o out/glrename.o out/glrec.o out/glrec_fg.o out/msaafix.o \
     out/display.o out/display_sdl.o out/fbdev.o ${STEAM:+out/steamstub.o} out/plugins.o out/plugstubs.o out/wwise.o out/wwise_tramp.o out/wwplay.o out/wwplay_vorbis.o out/desktopenv.o out/mono64.o out/unityhooks.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
   arm-linux-gnueabihf-gcc -O2 -Wall -rdynamic -o out/egltest egltest.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/passbench passbench.c -lEGL -lGLESv2
+  arm-linux-gnueabihf-gcc -O2 -Wall -o out/drawbench drawbench.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/sdltest sdltest.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/audiocheck audiocheck.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/shadercheck shadercheck.c -lEGL -lGLESv2
