@@ -43,7 +43,7 @@ abstract class Patch
         new InputSystemAndroid(),
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
         // optimizations
-        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(),
+        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new UnityObjectNull(),
         // reductions
         new HollowKnightBlur(), new HollowKnightPost(),
     };
