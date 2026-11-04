@@ -605,8 +605,10 @@ def write_wrappers(tc, groups):
 # machine code of every function of the file until the end, although at -Os it outlines nothing
 # (only `minsize` functions): the object files are byte-identical without it, and the compiler's
 # peak on IL2CPP's largest generated file (Il2CppAttributes.cpp, 14 MB) falls from 725 to 270 MB.
+# ARMv7 the same (Enter the Gungeon's Il2CppAttributes.cpp, 16 MB: 1195 -> 538 MB, the object and 31
+# others sampled byte-identical).
 NO_OUTLINE_SH = r'''nool=; c=; a64=
-for a do case $a in -c) c=1 ;; aarch64*|--target=aarch64*) a64=1 ;; esac; done
+for a do case $a in -c) c=1 ;; aarch64*|--target=aarch64*|armv7*|--target=armv7*) a64=1 ;; esac; done
 [ -n "$c" ] && [ -n "$a64" ] && [ -z "$PMUNITY_IL2CPP_OUTLINER" ] && nool=-mno-outline
 '''
 

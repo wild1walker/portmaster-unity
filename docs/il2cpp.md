@@ -509,13 +509,15 @@ next to `setup/pmunity` (`pmunity port package` does); pmu has a copy built in
   With the scheduler: 2.5 min, every object and the library the same (the one object that differs
   in any two builds is libil2cpp's `Runtime.cpp`, which embeds `__DATE__ __TIME__`; with the first
   build's copy of it the library is byte-identical).
-- AArch64 compiles get `-mno-outline`: LLVM's machine outliner keeps the machine code of every
+- AArch64 and ARMv7 compiles get `-mno-outline`: LLVM's machine outliner keeps the machine code of every
   function of a file until the end, although at `-Os` it outlines nothing; without it the objects
   are byte-identical and `Il2CppAttributes.cpp`'s compiler peak (14.7 MB, 15,000 functions)
   falls from 725 MB to 270-320 MB (at 450 MB it was killed with the outliner, and compiled
   without it). The largest compile is then `Il2CppTypeDefinitions.cpp`, 330-370 MB (that game;
   a 2017.4 game with 17 MiB of attributes: `Il2CppAttributes.cpp` 597 MB resident, 508 MB of it
-  anonymous). A compiler killed by a signal a second time (or under `PMUNITY_IL2CPP_SCHED=0`) is
+  anonymous). ARMv7 the same: Enter the Gungeon's `Il2CppAttributes.cpp` (16 MB) peaked at 1195 MB with the
+  outliner and 538 MB without, its object and 31 others sampled from the build byte-identical. A
+  compiler killed by a signal a second time (or under `PMUNITY_IL2CPP_SCHED=0`) is
   noted in `.work/killed.log`; with more than one job the build then goes on once with one job at
   a time.
 - **Tried for speed, not done** (a 2017.4 game's 755 compiles, clang 14 in the arm64 container,

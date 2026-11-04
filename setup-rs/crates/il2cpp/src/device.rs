@@ -855,9 +855,9 @@ pub fn check(tc: &str, groups: &[String]) -> Result<()> {
 
 const WRAP: &str = "#!/bin/sh\n# pmunity il2cpp --on-device ({what}): run through the toolchain's own glibc loader\n";
 
-/// NO_OUTLINE_SH: -mno-outline for AArch64 compiles.
+/// NO_OUTLINE_SH: -mno-outline for AArch64 and ARMv7 compiles (identical objects, a third of the peak).
 pub const NO_OUTLINE_SH: &str = r#"nool=; c=; a64=
-for a do case $a in -c) c=1 ;; aarch64*|--target=aarch64*) a64=1 ;; esac; done
+for a do case $a in -c) c=1 ;; aarch64*|--target=aarch64*|armv7*|--target=armv7*) a64=1 ;; esac; done
 [ -n "$c" ] && [ -n "$a64" ] && [ -z "$PMUNITY_IL2CPP_OUTLINER" ] && nool=-mno-outline
 "#;
 
