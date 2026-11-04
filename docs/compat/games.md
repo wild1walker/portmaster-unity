@@ -166,6 +166,18 @@ pictures a second in steady play (latch to latch 32 - 39 ms), fewer only in the 
 frames for King's Pass during the cinematic; memory at the clip 94 - 99 MB available instead of
 50 - 53 ([runtime/media/README.md](../../runtime/media/README.md#unity-6000-one-picture-in-flight)).
 portmaster-hollowknight's `[runtime_lowmem]` is now blur off, 600x400, gfx jobs legacy and 24 kHz.
+2026-11-03/04 (Knulli and muOS, silent, the 1 GB profile, walks with attacks and jumps; the map of it
+all: [performance.md](../performance.md)): the hits' sound glitch was the pipe output replaying
+unrefilled buffers of FMOD's polled output (20 - 80 % of them a second), fixed by a paced writer
+(2d174c1: none replayed since); the game's memory 830 -> 670 MB with textures at half size on 1 GB
+(9bf02c0, port bbd5f3b), no more swapping; first-use compiling ahead at launch (`UA_JIT_WARM`,
+f02782b, port 155b9c9): King's Pass hitches over 100 ms 8 -> 4. Test saves starting in other areas
+(the save's respawn scene and marker): Deepnest 54.7 fps, Mantis Village 53.3, the Colosseum 52.6,
+Kingdom's Edge 52.1, the Watcher Knights 50.1, Dirtmouth 49.7, Crystal Peak 48.3, Queen's Gardens 48.0,
+Soul Tyrant 47.4, City of Tears 42.4, Soul Master 41.6, Greenpath 36 - 38: Greenpath is held by the
+render thread (~21 ms a frame, the Mali driver 40 % of it), not the GPU's pixels (480x320 the same).
+The 64-bit IL2CPP build of the same data: Greenpath 35.4, Soul Master 41.8, King's Pass 51.7, ~140 MB
+more memory: not taken ([il2cpp.md](../il2cpp.md)).
 
 
 ## Linux builds, one per Unity line (32-bit route)
