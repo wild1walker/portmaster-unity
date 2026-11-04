@@ -61,7 +61,15 @@ slow code.
   instances: Hollow Knight's death save 243 -> 129 ms).
 - **Garbage collection at scene loads.** Games that keep Unity's collector off (Hollow Knight's
   `GCManager`) collect at each load: Boehm marks the whole heap, ~1.4 s for 128 MB on the A53. It
-  lands on the black screen; `UA_GC_BUDGET` keeps a long scene's heap in check.
+  lands on the black screen; `UA_GC_BUDGET` keeps a long scene's heap in check. Unity's Mono is
+  built without Boehm's parallel marker (`GC_start_mark_threads` is a 4-byte stub): the other
+  cores cannot share it.
+- **Boss rooms that load a scene in play.** Hollow Knight's Soul Master arena (`UA_HITCH_TRACE`,
+  Knulli): the boss scene is loaded additively as the fight starts, and the game's own PlayMaker
+  action `RunGarbageCollector` collects then: 0.5 s, then 1.2 s (the collection: a frame with almost
+  no samples, `gc 1` in its `[fps]` line), then 0.9 s of `Object.Instantiate` cloning the boss's
+  serialized FSM data. Skipping the collection only moves a larger one elsewhere; none of the three
+  is the port's to make shorter exactly.
 
 ## 4. Sound
 
