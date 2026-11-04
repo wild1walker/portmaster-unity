@@ -7,6 +7,7 @@
 #include "sles_min.h"
 #include "shim_internal.h"
 
+#include <SDL2/SDL.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -937,6 +938,19 @@ static void wait_for(volatile int *v, int target, int ms)
     for (int i = 0; i < ms / 5 && *v < target; i++) usleep(5000);
 }
 
+// build.sh links with --wrap=SDL_InitSubSystem: TEST_SDL_NO_DUMMY=1 makes SDL's audio refuse
+// SDL_AUDIODRIVER=dummy as an SDL built without that driver does (muOS's 32-bit SDL)
+int __real_SDL_InitSubSystem(Uint32 flags);
+int __wrap_SDL_InitSubSystem(Uint32 flags)
+{
+    const char *d = getenv("SDL_AUDIODRIVER");
+    if ((flags & SDL_INIT_AUDIO) && getenv("TEST_SDL_NO_DUMMY") && d && !strcmp(d, "dummy"))
+        return SDL_SetError("Audio target 'dummy' not available");
+    return __real_SDL_InitSubSystem(flags);
+}
+
+static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+
 static void test_opensles(const char *rawpath)
 {
     const so_shim *t = android_shims_for_library("/system/lib/libOpenSLES.so");
@@ -1006,12 +1020,20 @@ static void test_opensles(const char *rawpath)
     SLBufferQueueState st;
     CHECK((*bq)->GetState(bq, &st) == SL_RESULT_SUCCESS && st.count == NBUF && st.index == 0);
 
+    double t_play = now_s();
     CHECK((*play)->SetPlayState(play, SL_PLAYSTATE_PLAYING) == SL_RESULT_SUCCESS);
     SLuint32 ps = 0;
     CHECK((*play)->GetPlayState(play, &ps) == SL_RESULT_SUCCESS && ps == SL_PLAYSTATE_PLAYING);
     CHECK((*bq)->RegisterCallback(bq, bq_callback, NULL) == SL_RESULT_PRECONDITIONS_VIOLATED);
     wait_for(&callbacks, TOTAL_BUFS, 20000);
     CHECK(callbacks >= TOTAL_BUFS);
+    // TEST_SLES_PACED=1 (an output with no device: ANDROID_SLES_OUTPUT=none): still taken on the
+    // clock, as a sound card would, not as fast as the callbacks refill the queue
+    double played = now_s() - t_play, due = (double)(TOTAL_BUFS - NBUF) * BUF_FRAMES / 48000;
+    if (getenv("TEST_SLES_PACED")) {
+        CHECK(played >= 0.9 * due);
+        fprintf(stderr, "opensles: %d buffers in %.0f ms (%.0f ms of sound past the queue)\n", TOTAL_BUFS, played * 1000, due * 1000);
+    }
     SLmillisecond pos = 0;
     CHECK((*play)->GetPosition(play, &pos) == SL_RESULT_SUCCESS && pos >= TOTAL_BUFS * BUF_FRAMES * 1000 / 48000 - 1);
     CHECK((*play)->SetPlayState(play, SL_PLAYSTATE_STOPPED) == SL_RESULT_SUCCESS);
@@ -1081,7 +1103,8 @@ int main(int argc, char **argv)
     test_host_display(fakeegl);
     test_mediandk();
     const char *drv = getenv("SDL_AUDIODRIVER");
-    if (drv && *drv) test_opensles(!strcmp(drv, "disk") ? getenv("SDL_DISKAUDIOFILE") : NULL);
+    // the output checked: SDL's disk file, else what ANDROID_SLES_CAPTURE recorded (no device: none)
+    if (drv && *drv) test_opensles(!strcmp(drv, "disk") ? getenv("SDL_DISKAUDIOFILE") : getenv("ANDROID_SLES_CAPTURE"));
     else fprintf(stderr, "opensles: skipped (set SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=... or =dummy)\n");
     fprintf(stderr, "%d checks, %d failures\n", checks, failures);
     return failures != 0;

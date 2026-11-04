@@ -28,7 +28,7 @@ docker run --rm $PLAT -v "$PWD/..":/r -w /r/android -e O=$O -e CROSS=$CROSS $IMG
   rm -f $O/libandroidshims.a
   ${CROSS}ar rcs $O/libandroidshims.a $O/obj/*.o
   $CC $CFLAGS -shared -o $O/test/libfakeegl.so test/fake_egl.c
-  $CC $CFLAGS -I. -o $O/test/test_shims test/test_shims.c $O/libandroidshims.a -lSDL2 -ldl -lpthread -lm
+  $CC $CFLAGS -I. -o $O/test/test_shims test/test_shims.c $O/libandroidshims.a -Wl,--wrap=SDL_InitSubSystem -lSDL2 -ldl -lpthread -lm
   file $O/libandroidshims.a $O/test/test_shims | sed "s|, BuildID[^,]*||"
   ${CROSS}objdump -T $O/test/test_shims | grep -o "GLIBC_[0-9.]*" | sort -uV | tail -1 | sed "s/^/max glibc symbol version: /"
 '
@@ -74,4 +74,24 @@ if [ "$1" = test ]; then
     else
       echo "no SDL audio: FAILED"; cat /tmp/out.txt; exit 1
     fi'
+  # Silence never reaches a speaker. A silent run asks for SDL's dummy driver; where SDL has none
+  # (muOS's 32-bit SDL; TEST_SDL_NO_DUMMY=1 makes this one refuse it) auto takes no output, never the
+  # pipe; ANDROID_SLES_OUTPUT=none (the device tools' silent runs) the same with a working SDL. Either
+  # way no client is spawned (test/fakebin/aplay would record its arguments), and the buffers still go
+  # on the clock, in order (ANDROID_SLES_CAPTURE: what the player took).
+  for v in TEST_SDL_NO_DUMMY=1 ANDROID_SLES_OUTPUT=none; do
+    docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=dummy -e $v -e TEST_SLES_PACED=1 \
+      -e ANDROID_SLES_CAPTURE=/tmp/cap.raw -e ANDROID_SHIM_TRACE=1 -e ANDROID_WINDOW_SIZE=640x480 -e PATH=/r/android/test/fakebin:/usr/bin:/bin \
+      -e V=$v $IMG sh -c '
+      unset XDG_RUNTIME_DIR; rm -f /tmp/aplay.args /tmp/cap.raw
+      timeout 300 ./test_shims ./libfakeegl.so > /tmp/out.txt 2>&1 || { cat /tmp/out.txt; echo "silent ($V): test_shims failed"; exit 1; }
+      case $V in TEST_SDL_NO_DUMMY=1) want="SDL_AUDIODRIVER=dummy was asked for (silence) and this SDL cannot start it";;
+                 *) want="ANDROID_SLES_OUTPUT=none: no output";; esac
+      if grep -q "$want" /tmp/out.txt && grep -q -- "-> no output (" /tmp/out.txt && ! grep -q -- "-> pipe\|-> SDL device" /tmp/out.txt &&
+         [ ! -e /tmp/aplay.args ]; then
+        echo "silent ($V): ok (no device, no pipe; $(grep -o "[0-9]* buffers in [0-9]* ms" /tmp/out.txt))"
+      else
+        echo "silent ($V): FAILED"; cat /tmp/out.txt; [ -e /tmp/aplay.args ] && cat /tmp/aplay.args; exit 1
+      fi'
+  done
 fi

@@ -122,7 +122,7 @@ android_vsync_set_refresh_rate(display_hz);  // the vsync clock of both choreogr
 Environment variables: `ANDROID_LOG_LEVEL`, `ANDROID_ASSET_DIR`, `ANDROID_WINDOW_SIZE=WxH`,
 `ANDROID_FBDEV` (default /dev/fb0), `ANDROID_SHIM_LIBEGL` (real libEGL path, default libEGL.so.1
 then libEGL.so), `ANDROID_SLES_SAMPLES` (SDL buffer in frames, default 512), `ANDROID_SLES_DEVICE`
-(SDL output device name), `ANDROID_SLES_OUTPUT`, `ANDROID_SLES_PIPE_CMD`, `ANDROID_SLES_PIPE_NICE`,
+(SDL output device name), `ANDROID_SLES_OUTPUT` (`auto`, `sdl`, `pipe`, `none`: see Audio), `ANDROID_SLES_PIPE_CMD`, `ANDROID_SLES_PIPE_NICE`,
 `ANDROID_SLES_CAPTURE` (docs/runtime.md), `ANDROID_SHIM_TRACE=1` (trace shim calls), plus SDL's own
 (`SDL_AUDIODRIVER`, ...).
 
@@ -265,6 +265,17 @@ Android's AudioTrack thread. `SetPlayState` never calls into SDL, so it cannot d
 running callback. STOPPED resets the position but keeps the queue, as Android does; `Clear`
 empties it. Volume and mute are applied in the callback. This covers FMOD's exact call sequence
 (checked against `FMOD::OutputOpenSL::init/updateOutput/start/stop/close` in libunity).
+
+Outputs (`ANDROID_SLES_OUTPUT`): `sdl`; `pipe` (raw PCM into `pw-cat`, `pacat` or `aplay`, for a
+32-bit SDL that cannot reach the sound server); `none`, no output at all: a thread takes each
+player's buffers on the clock, 256 frames per their time, as a sound card would, and drops them, so
+the buffer-queue callbacks (and ua_host's Wwise player, whose mix goes out with a player here) come
+at their usual pace with no device and no process; the default `auto` is SDL, else the pipe, except
+that when the run asked for SDL's dummy driver (`SDL_AUDIODRIVER=dummy`, a silent run) and this SDL
+cannot start it (muOS's 32-bit SDL has no dummy driver) it is `none`, never the pipe, which would
+reach the speaker (`OpenSL: SDL_AUDIODRIVER=dummy was asked for (silence) and this SDL cannot start
+it: no output ...`). tools/device's silent runs set `ANDROID_SLES_OUTPUT=none` as well as the dummy
+driver. The test (build.sh test) runs both cases with a stand-in `aplay` that must never start.
 
 ## ABI: softfp vs hardfp
 

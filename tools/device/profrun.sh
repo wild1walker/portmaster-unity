@@ -54,9 +54,10 @@ if [ "${UATEST_STOP_ES:-0}" = 1 ] && [ -x $ES ]; then
 else
   trap 'touch "$HERE/bench.done"' EXIT
 fi
-# silent, always: SDL's dummy audio driver, OpenSL ES to SDL (never the pipe to aplay)
-unset UA_AUDIO AUDIODEV
-export SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=sdl UA_FPS=${UA_FPS:-1}
+# silent, always: SDL's dummy audio driver, OpenSL ES's none output (the game's buffers taken on the
+# clock, no device, no process: never the pipe to aplay, also where SDL has no dummy driver)
+unset UA_AUDIO AUDIODEV ANDROID_SLES_PIPE_CMD
+export SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=none UA_FPS=${UA_FPS:-1}
 PM=${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster
 if [ -z "${SDL_GAMECONTROLLERCONFIG:-}" ] && [ -z "${SDL_GAMECONTROLLERCONFIG_FILE:-}" ]; then
   for f in "$PM"/*/gamecontrollerdb.txt; do [ -f "$f" ] && export SDL_GAMECONTROLLERCONFIG_FILE="$f" && break; done

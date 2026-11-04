@@ -151,7 +151,8 @@ saves in data/); only `<game folder>/bench/` is written: this checkout's ua_host
 `tools/device/profrun.sh`, and one folder per run. Each run, detached on the handheld:
 
 1. stops EmulationStation (`STOP_ES=0`: leave it), starts the game silent (SDL's dummy audio
-   driver, always; `UA_AUDIO` is dropped) with `UA_FPS=1`, and a memory watchdog as uatest.sh's;
+   driver and OpenSL ES's `none` output, always: no device and no pipe to `aplay`, also where SDL
+   has no dummy driver; `UA_AUDIO` and other audio settings are dropped) with `UA_FPS=1`, and a memory watchdog as uatest.sh's;
 2. follows `PLAN` to the point to measure: steps separated by `;`: `log:<regex>` (a new log line
    matches, after what the last step matched), `seen:<regex>` (the game logged such a line at any
    time), `steady:<n>` (n one-second windows in a row without a frame over 50 ms), `hitch:<ms>`

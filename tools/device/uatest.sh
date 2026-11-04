@@ -12,6 +12,9 @@
 # 100 MB, or 40 MB while at least 64 MB of swap are free (zram on most firmwares: the kernel moves
 # cold pages there, and a game runs with less available; Hollow Knight on the RG34XX-SP played on
 # at 58 MB with 95 MB in zram, where a 100 MB line stopped it). UA_AUDIO=1 plays sound; other UA_* settings pass through to the runtime.
+# Silent otherwise: SDL's dummy driver and ANDROID_SLES_OUTPUT=none (OpenSL ES takes the game's buffers on
+# the clock with no device and no process: an SDL without the dummy driver, as muOS's 32-bit one, cannot
+# fall back to the pipe to aplay and the speaker).
 R=$1; SECS=${2:-60}; shift 2
 cd "$R" || exit 1
 rm -f shot-*.ppm shot.req mem.log uatest.done
@@ -26,7 +29,7 @@ else
   trap 'touch uatest.done' EXIT
 fi
 export UA_FPS=${UA_FPS:-5}
-if [ "$UA_AUDIO" = 1 ]; then export SDL_AUDIODRIVER=alsa AUDIODEV=${AUDIODEV:-plughw:0,0}; else export SDL_AUDIODRIVER=dummy; fi
+if [ "$UA_AUDIO" = 1 ]; then export SDL_AUDIODRIVER=alsa AUDIODEV=${AUDIODEV:-plughw:0,0}; else export SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=none; fi
 # the pad's SDL GameController mapping: PortMaster's database for this firmware, when there is one
 PM=${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster
 if [ -z "$SDL_GAMECONTROLLERCONFIG" ] && [ -z "$SDL_GAMECONTROLLERCONFIG_FILE" ]; then

@@ -8,7 +8,8 @@
 # [VAR=value ...]" in shell quoting ('#' starts a comment): the runs go one after another, then a
 # table compares them (tools/analysis/benchsum.py).
 # Each run (tools/device/profrun.sh on the handheld, detached: a dropped connection does not end it):
-#   starts the game silent, follows PLAN to the point to measure (e.g. a save continued from the
+#   starts the game silent (SDL's dummy driver, ANDROID_SLES_OUTPUT=none; UA_AUDIO, SDL_AUDIODRIVER
+#   and ANDROID_SLES_OUTPUT / _PIPE_CMD settings are refused), follows PLAN to the point to measure (e.g. a save continued from the
 #   title screen: profrun.sh lists the steps), measures MEASURE seconds (frame rate every second,
 #   CPU and GPU clocks, per-thread and per-core CPU time, memory and swap traffic, temperatures;
 #   with UA_PROF=<hz> a profile: runtime/host/prof.c), stops the game and starts EmulationStation
@@ -91,7 +92,8 @@ for r in "${runs[@]}"; do
   envs=("${base[@]+"${base[@]}"}")
   for kv in "$@"; do
     [[ $kv == *=* ]] || { echo "$name: '$kv' is not VAR=value"; exit 1; }
-    [[ $kv == UA_AUDIO=* || $kv == SDL_AUDIODRIVER=* ]] && { echo "$name: runs are silent ($kv ignored)"; continue; }
+    [[ $kv == UA_AUDIO=* || $kv == SDL_AUDIODRIVER=* || $kv == ANDROID_SLES_OUTPUT=* || $kv == ANDROID_SLES_PIPE_CMD=* ]] &&
+      { echo "$name: runs are silent ($kv ignored)"; continue; }
     envs+=("$kv")
   done
   echo "== $name: ${*:-defaults}"

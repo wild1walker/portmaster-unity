@@ -1,14 +1,15 @@
 #!/bin/bash
 # Device test run of ua_host (copy next to ua_host): run.sh <log> [seconds] [release|dev]
-# Silent by default; UA_AUDIO=1 plays sound.
+# Silent by default (SDL's dummy driver and ANDROID_SLES_OUTPUT=none: no device, no pipe to aplay, even
+# where SDL has no dummy driver); UA_AUDIO=1 plays sound.
 # The Development player (devlib/) logs much more; release is lib/. Extra env passes through
 # (e.g. UA_MONO_TRACE=1 FJ_TRACE=1 UA_UNITY_ARGS=...).
 cd "$(dirname "$0")" || exit 1
 LOG=${1:-run.log}; SECS=${2:-40}; FLAVOR=${3:-release}
 ROOT=$PWD
 [ "$FLAVOR" = dev ] && export UA_LIBDIR=$ROOT/devlib
-# silent by default (SDL's dummy driver still consumes audio in real time); UA_AUDIO=1 for sound
-if [ "$UA_AUDIO" = 1 ]; then export SDL_AUDIODRIVER=alsa AUDIODEV=plughw:0,0; else export SDL_AUDIODRIVER=dummy; fi
+# silent by default (OpenSL ES's none output still takes the audio on the clock); UA_AUDIO=1 for sound
+if [ "$UA_AUDIO" = 1 ]; then export SDL_AUDIODRIVER=alsa AUDIODEV=plughw:0,0; else export SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=none; fi
 # the pad's SDL GameController mapping: PortMaster's database for this firmware (a PortMaster
 # launcher started from EmulationStation gets it through get_controls instead)
 PM=${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster

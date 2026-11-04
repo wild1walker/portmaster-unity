@@ -14,7 +14,10 @@
 // client (ANDROID_SLES_PIPE_CMD, else the first that works of pw-cat for PipeWire and pacat for
 // PulseAudio, found through XDG_RUNTIME_DIR, and the system's aplay) - for 32-bit programs on a 64-bit system
 // whose sound server they cannot reach directly (PipeWire holding the card, no 32-bit client
-// plugins) or whose 32-bit alsa-lib cannot drive the kernel; auto (default) = sdl, else pipe.
+// plugins) or whose 32-bit alsa-lib cannot drive the kernel; none = no output: each player's
+// buffers taken on the clock as a sound card would and dropped (no device, no process: silent
+// tests); auto (default) = sdl, else pipe - but none when SDL_AUDIODRIVER=dummy was asked for (a
+// silent run) and this SDL cannot start it (muOS's 32-bit SDL has no dummy): never the speaker.
 //
 // An underrun (the queue ran dry while playing: the game's mixer was late, the listener hears a
 // gap) is logged with how long it lasted, at the host's time since the first frame like its
@@ -136,8 +139,9 @@ typedef struct obj {
             FILE *capture;                // ANDROID_SLES_CAPTURE
             int pipe_fd;                  // pipe output (instead of dev): write end, -1 if none
             pid_t pipe_pid;
-            pthread_t pipe_thread;
+            pthread_t pipe_thread;        // the pipe's writer, or none's: the buffers on the clock
             volatile int pipe_run;
+            int writer;                   // pipe_thread runs
             unsigned pipe_dry;            // writes that found the pipe empty (the client waited on us)
             float *mixbuf;                // android_sles_set_mix's float buffer (output thread only)
             int mixcap;
@@ -359,17 +363,22 @@ static void player_fill(obj *o, Uint8 *stream, int len)
 static void player_sdl_callback(void *ud, Uint8 *stream, int len) { player_fill((obj *)ud, stream, len); }
 
 // ---- audio player: pipe output ---------------------------------------------------------------
-static void *pipe_writer(void *ud)
+// the priority SDL gives its own audio thread on the sdl output (TIME_CRITICAL: nice -20 on
+// Linux, which root may set), as an Android AudioTrack's thread runs above the game's: the pipe
+// holds a few tens of ms, and a burst of the game's threads must not keep us from refilling it.
+// ANDROID_SLES_PIPE_NICE=<n> sets another (0: the game's own; a measurement)
+static void writer_priority(void)
 {
-    obj *o = ud;
-    // the priority SDL gives its own audio thread on the sdl output (TIME_CRITICAL: nice -20 on
-    // Linux, which root may set), as an Android AudioTrack's thread runs above the game's: the pipe
-    // holds a few tens of ms, and a burst of the game's threads must not keep us from refilling it.
-    // ANDROID_SLES_PIPE_NICE=<n> sets another (0: the game's own; a measurement)
     const char *nv = getenv("ANDROID_SLES_PIPE_NICE");
     int nice_v = nv && *nv ? atoi(nv) : -20;
     if (nice_v && setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice_v) != 0)
-        SHIM_TRACE("OpenSL: pipe writer: nice %d refused (%s)", nice_v, strerror(errno));
+        SHIM_TRACE("OpenSL: output writer: nice %d refused (%s)", nice_v, strerror(errno));
+}
+
+static void *pipe_writer(void *ud)
+{
+    obj *o = ud;
+    writer_priority();
     int len = 256 * o->p.frame_bytes;          // ~5 ms per write at 48 kHz
     Uint8 *buf = malloc(len);
     // Paced as a sound card takes it: a write's worth from the queue per its time on the clock (at
@@ -413,6 +422,42 @@ static void *pipe_writer(void *ud)
     }
     free(buf);
     return NULL;
+}
+
+// ---- audio player: no output (ANDROID_SLES_OUTPUT=none) --------------------------------------
+// The player's buffers taken on the clock, a write's worth (256 frames) per its time, as a sound
+// card takes them, then dropped: the buffer-queue callbacks come at the pace they would with sound,
+// so the game's mixer (FMOD) and ua_host's Wwise player (its mix added here) do the same work, with
+// no device and no process. At the pipe writer's priority, as SDL's dummy driver's thread runs.
+static void *null_writer(void *ud)
+{
+    obj *o = ud;
+    writer_priority();
+    int len = 256 * o->p.frame_bytes;
+    Uint8 *buf = malloc(len);
+    double dt = 256.0 / o->p.spec.freq, due = mono_now() + dt;
+    while (buf && o->p.pipe_run) {
+        struct timespec ts = { (time_t)due, (long)((due - (time_t)due) * 1e9) };
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {}
+        if (!o->p.pipe_run) break;
+        player_fill(o, buf, len);
+        due += dt;
+        double after = mono_now();
+        if (due < after - dt) due = after - dt;   // a writer kept from running owes at most one write
+    }
+    free(buf);
+    return NULL;
+}
+
+static int null_open(obj *o)
+{
+    o->p.pipe_run = 1;
+    if (pthread_create(&o->p.pipe_thread, NULL, null_writer, o) != 0) { o->p.pipe_run = 0; return 0; }
+    o->p.writer = 1;
+    pthread_setname_np(o->p.pipe_thread, "SLESNone");
+    SHIM_WARN("OpenSL: player %p -> no output (%d Hz: the buffers taken on the clock, no device, no process)",
+              (void *)o, o->p.spec.freq);
+    return 1;
 }
 
 static int in_path(const char *prog)
@@ -556,19 +601,51 @@ static int pipe_open(obj *o)
         waitpid(o->p.pipe_pid, NULL, 0);
         return 0;
     }
+    o->p.writer = 1;
     pthread_setname_np(o->p.pipe_thread, "SLESPipe");
     SHIM_WARN("OpenSL: player %p -> pipe: %s", (void *)o, cmd);
     return 1;
 }
 
-static void pipe_close(obj *o)
+// the pipe's or none's writer stopped (and the pipe's client waited for)
+static void writer_close(obj *o)
 {
-    if (o->p.pipe_fd < 0) return;
+    if (!o->p.writer) return;
     o->p.pipe_run = 0;
-    close(o->p.pipe_fd);                       // EOF for the client; a blocked write returns EPIPE
+    if (o->p.pipe_fd >= 0) close(o->p.pipe_fd);   // EOF for the client; a blocked write returns EPIPE
     pthread_join(o->p.pipe_thread, NULL);
+    o->p.writer = 0;
+    if (o->p.pipe_fd < 0) return;
     o->p.pipe_fd = -1;
     waitpid(o->p.pipe_pid, NULL, 0);
+}
+
+// ANDROID_SLES_OUTPUT: auto (the default), sdl, pipe, none
+static const char *output_mode(void)
+{
+    const char *m = getenv("ANDROID_SLES_OUTPUT");
+    return m && *m ? m : "auto";
+}
+
+// SDL_AUDIODRIVER=dummy asked for: a silent run (the device tools' default), whatever this SDL can start
+static int dummy_asked(void)
+{
+    const char *d = getenv("SDL_AUDIODRIVER");
+    return d && !strcmp(d, "dummy");
+}
+
+// auto's output for a player SDL cannot give a device: the pipe, but no output at all when the run
+// asked for SDL's dummy driver (silence) and this SDL has none: the pipe would reach the speaker
+static int auto_fallback_open(obj *o)
+{
+    if (dummy_asked()) {
+        static int said;
+        if (!__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED))
+            SHIM_WARN("OpenSL: SDL_AUDIODRIVER=dummy was asked for (silence) and this SDL cannot start it: "
+                      "no output, as ANDROID_SLES_OUTPUT=none (never the pipe)");
+        return null_open(o);
+    }
+    return pipe_open(o);
 }
 
 // ---- Object interface -----------------------------------------------------------------------
@@ -589,15 +666,16 @@ static SLresult player_realize(obj *o)
 {
     if (!o->p.is_bq) return SL_RESULT_CONTENT_UNSUPPORTED;
     capture_open(o);
-    const char *mode = getenv("ANDROID_SLES_OUTPUT") ? getenv("ANDROID_SLES_OUTPUT") : "auto";
+    const char *mode = output_mode();
     o->p.pipe_fd = -1;
+    if (!strcmp(mode, "none")) return null_open(o) ? SL_RESULT_SUCCESS : SL_RESULT_RESOURCE_ERROR;
     if (!strcmp(mode, "pipe")) {
         if (pipe_open(o)) return SL_RESULT_SUCCESS;
         SHIM_WARN("OpenSL: no sound-server client for pipe output (ANDROID_SLES_PIPE_CMD, pw-cat, pacat)");
         return SL_RESULT_RESOURCE_ERROR;
     }
     if (!sdl_audio_acquire()) {
-        if (!strcmp(mode, "auto") && pipe_open(o)) return SL_RESULT_SUCCESS;
+        if (!strcmp(mode, "auto") && auto_fallback_open(o)) return SL_RESULT_SUCCESS;
         return SL_RESULT_RESOURCE_ERROR;
     }
     SDL_AudioSpec want = o->p.spec, have;
@@ -609,7 +687,7 @@ static SLresult player_realize(obj *o)
         SHIM_WARN("OpenSL: SDL_OpenAudioDevice(%d Hz, %d ch, fmt 0x%x) failed: %s",
                   want.freq, want.channels, want.format, SDL_GetError());
         sdl_audio_release();
-        if (!strcmp(mode, "auto") && pipe_open(o)) return SL_RESULT_SUCCESS;
+        if (!strcmp(mode, "auto") && auto_fallback_open(o)) return SL_RESULT_SUCCESS;
         return SL_RESULT_RESOURCE_ERROR;
     }
     o->p.spec.silence = have.silence;
@@ -620,14 +698,23 @@ static SLresult player_realize(obj *o)
 }
 
 // SDL's audio for the players; without it (no driver this SDL can start, as a 32-bit SDL on some
-// 64-bit systems) the players can still use the pipe output, unless ANDROID_SLES_OUTPUT=sdl
+// 64-bit systems) the players can still use the pipe output, unless ANDROID_SLES_OUTPUT=sdl, or
+// no output (none, or auto when the dummy driver was asked for). none never starts SDL's audio.
 static SLresult engine_realize(obj *o)
 {
+    const char *mode = output_mode();
+    if (!strcmp(mode, "none")) {
+        o->e.sdl = 0;
+        SHIM_WARN("OpenSL: ANDROID_SLES_OUTPUT=none: no output; the players take their buffers on the clock");
+        return SL_RESULT_SUCCESS;
+    }
     o->e.sdl = sdl_audio_acquire();
     if (o->e.sdl) return SL_RESULT_SUCCESS;
-    const char *mode = getenv("ANDROID_SLES_OUTPUT") ? getenv("ANDROID_SLES_OUTPUT") : "auto";
     if (!strcmp(mode, "sdl")) return SL_RESULT_RESOURCE_ERROR;
-    SHIM_WARN("OpenSL: no SDL audio: the players use the pipe output");
+    if (!strcmp(mode, "auto") && dummy_asked())
+        SHIM_WARN("OpenSL: no SDL audio (SDL_AUDIODRIVER=dummy asked for silence): the players use no output, never the pipe");
+    else
+        SHIM_WARN("OpenSL: no SDL audio: the players use the pipe output");
     return SL_RESULT_SUCCESS;
 }
 
@@ -714,7 +801,7 @@ static void Object_Destroy(SLObjectItf self)
             o->p.dev = 0;
             if (o->state == SL_OBJECT_STATE_REALIZED) sdl_audio_release();
         }
-        pipe_close(o);
+        writer_close(o);
         if (o->p.capture) fclose(o->p.capture);
         if (o->p.underruns) SHIM_TRACE("OpenSL: player %p had %u underruns", (void *)o, o->p.underruns);
         if (o->p.pipe_dry) SHIM_TRACE("OpenSL: player %p: its pipe ran dry %u times", (void *)o, o->p.pipe_dry);
@@ -1100,7 +1187,6 @@ static SLresult Engine_CreateAudioPlayer(SLEngineItf self, SLObjectItf *pPlayer,
     o->p.spec = spec;
     o->p.frame_bytes = SDL_AUDIO_BITSIZE(spec.format) / 8 * spec.channels;
     o->p.pipe_fd = -1;                         // no pipe output yet (0 would be stdin)
-    o->p.pipe_fd = -1;
     o->p.play_state = SL_PLAYSTATE_STOPPED;
     o->p.gain = 1.0f;
     o->p.stream_type = SL_ANDROID_STREAM_MEDIA;

@@ -36,7 +36,7 @@ cat > "$T/ua_host" <<'G'
 #!/bin/bash
 root=$1; i=0
 trap 'echo "[fake] stopped"; exit 0' TERM INT
-echo "[fake] started with UA_PROF=${UA_PROF:-} UA_FPS=${UA_FPS:-} SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-} UA_AUDIO=${UA_AUDIO:-unset} X_SETTING=${X_SETTING:-}"
+echo "[fake] started with UA_PROF=${UA_PROF:-} UA_FPS=${UA_FPS:-} SDL_AUDIODRIVER=${SDL_AUDIODRIVER:-} ANDROID_SLES_OUTPUT=${ANDROID_SLES_OUTPUT:-} UA_AUDIO=${UA_AUDIO:-unset} X_SETTING=${X_SETTING:-}"
 sleep 2; echo "title ready"           # (after the run's own lines, which quote the plan)
 while :; do
   sleep 0.5; i=$((i + 1))
@@ -61,7 +61,7 @@ chmod +x "$T/gc/gpucnt"
 cat > "$T/list.txt" <<'L'
 # two runs, the second with its own setting, the GPU counters and a sound request that must be dropped
 one
-two X_SETTING='a b' UA_AUDIO=1 GPUCNT=1
+two X_SETTING='a b' UA_AUDIO=1 ANDROID_SLES_OUTPUT=pipe GPUCNT=1
 L
 export PATH="$T/bin:$PATH" DEVICE=fake@handheld OUT="$T/out" HOST_BIN="$T/ua_host" PROF_SAMPLE="$T/prof.txt" GPUCNT_BIN="$T/gc/gpucnt"
 export PLAN='log:title ready; steady:2; press:0:b; hitch:1000; seen:title ready; steady:2; shot' MEASURE=3 UA_PROF=100 STEP_TIMEOUT=30
@@ -75,7 +75,7 @@ for n in one two; do
   grep -q '^\[bench\] measure start' "$T/out/$n/run.log" && grep -q '^\[bench\] measure end' "$T/out/$n/run.log" || fail "$n: no measurement"
   [ -f "$T/out/$n/prof-1.txt" ] || fail "$n: no profile"
   [ -f "$T/out/$n/snap-0.txt" ] && [ -f "$T/out/$n/freq.log" ] || fail "$n: no snapshots"
-  grep -q 'SDL_AUDIODRIVER=dummy' "$T/out/$n/run.log" && grep -q 'UA_AUDIO=unset' "$T/out/$n/run.log" || fail "$n: not silent"
+  grep -q 'SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=none ' "$T/out/$n/run.log" && grep -q 'UA_AUDIO=unset' "$T/out/$n/run.log" || fail "$n: not silent"
 done
 grep -q 'X_SETTING=a b' "$T/out/two/run.log" || fail "the run's own setting did not arrive"
 [ -f "$T/out/two/gpucnt.txt" ] && [ ! -f "$T/out/one/gpucnt.txt" ] || fail "GPUCNT=1: no gpucnt.txt in its run (or one in the other run)"
@@ -83,5 +83,6 @@ printf '%s\n' "$log" | grep -q 'GPU counters: GPU active 99.0%' || fail "benchsu
 printf '%s\n' "$log" | grep -q 'frames: 33.0 fps' || fail "benchsum did not read the frame rate"
 printf '%s\n' "$log" | grep -q 'M:Fake.Player:Update' || fail "benchsum did not sum the profile"
 printf '%s\n' "$log" | grep -q 'runs are silent' || fail "UA_AUDIO=1 was not refused"
+printf '%s\n' "$log" | grep -q 'runs are silent (ANDROID_SLES_OUTPUT=pipe ignored)' || fail "ANDROID_SLES_OUTPUT=pipe was not refused"
 printf '%s\n' "$log" | grep -q '^  two .*+0.0%' || fail "no comparison table"
 echo "profbench_test: ok"
