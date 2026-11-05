@@ -12,6 +12,13 @@
 //   UA_PROF_DEPTH=<n>        return addresses kept per sample (default 32, at most 128; 0: pc and lr)
 //   UA_PROF_SCAN=<bytes>     stack scanned for them (default 16384)
 //   touch <root>/prof.req    record now (looked for every second; a number in it is the length in s)
+//   UA_PROF_EVENT=<event>    sample on a CPU event instead of time: a sample each UA_PROF_EVENT_PERIOD
+//                            (default 10000) occurrences on the sampled thread, user code only, e.g.
+//                            l2d_cache_refill, l1d_cache_refill, l1d_tlb_refill, bus_access, mem_access,
+//                            cpu_cycles (the PMU's names, /sys/bus/event_source/devices/*/events, or
+//                            raw:0x<n>); the counter overflows into the same signal through perf_event_open
+//                            (the kernel's PMU, root). Only running threads are sampled (no S/D/Q);
+//                            UA_PROF's value then only sizes the buffers (samples a second at most)
 //
 // Each recording ends in <root>/prof-<n>.txt ("[prof] ..." in the log says so).
 //
@@ -90,7 +97,55 @@ typedef struct {
     uintptr_t *buf;                 // g_stride words a sample (HDR, then the frames)
     unsigned cap;
     _Atomic unsigned n;
+    int evfd;                       // UA_PROF_EVENT: the thread's counter (-1: none)
 } pthr;
+
+// ---- UA_PROF_EVENT: a CPU event's overflows as the samples ------------------------------------
+#include <linux/perf_event.h>
+#include <sys/ioctl.h>
+static int g_ev_type = -1;          // perf type of the PMU (-1: time sampling)
+static unsigned long long g_ev_config;
+static long g_ev_period = 10000;
+static char g_ev_name[64];
+static int ev_resolve(const char *e)  // the PMU's type and the event's code, from sysfs or raw:0x<n>
+{
+    char path[256], buf[128];
+    if (!strncmp(e, "raw:", 4)) { g_ev_type = PERF_TYPE_RAW; g_ev_config = strtoull(e + 4, NULL, 0); return 1; }
+    const char *pmus[] = { "armv8_pmuv3", "armv8_cortex_a53", "armv8_cortex_a55", "armv7_cortex_a7", "cpu" };
+    for (unsigned k = 0; k < sizeof pmus / sizeof *pmus; k++) {
+        snprintf(path, sizeof path, "/sys/bus/event_source/devices/%s/events/%s", pmus[k], e);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        unsigned long long c = 0;
+        if (!fgets(buf, sizeof buf, f) || sscanf(buf, "event=%llx", &c) != 1) { fclose(f); continue; }
+        fclose(f);
+        snprintf(path, sizeof path, "/sys/bus/event_source/devices/%s/type", pmus[k]);
+        f = fopen(path, "r");
+        int type = -1;
+        if (f) { if (fscanf(f, "%d", &type) != 1) type = -1; fclose(f); }
+        if (type < 0) continue;
+        g_ev_type = type; g_ev_config = c;
+        return 1;
+    }
+    return 0;
+}
+static int ev_open(pthr *t, int sig)  // the counter for one thread, its overflow sent to it as sig
+{
+    struct perf_event_attr a;
+    memset(&a, 0, sizeof a);
+    a.size = sizeof a; a.type = (unsigned)g_ev_type; a.config = g_ev_config;
+    a.sample_period = (unsigned long long)g_ev_period; a.disabled = 1; a.exclude_kernel = 1; a.exclude_hv = 1;
+    a.wakeup_events = 1;
+    int tid = atomic_load(&t->tid);
+    int fd = (int)syscall(SYS_perf_event_open, &a, tid, -1, -1, 0);
+    if (fd < 0) return -1;
+    struct f_owner_ex o = { F_OWNER_TID, tid };
+    if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_ASYNC) != 0 || fcntl(fd, F_SETSIG, sig) != 0 || fcntl(fd, F_SETOWN_EX, &o) != 0) { close(fd); return -1; }
+    t->evfd = fd;
+    ioctl(fd, PERF_EVENT_IOC_REFRESH, 1);
+    return fd;
+}
+
 
 static int g_hz, g_secs = 20, g_depth = 32, g_scan = 16384, g_stride;
 static double g_start_s = -1;
@@ -376,6 +431,7 @@ static void on_signal(int sig, siginfo_t *si, void *ctx)
         if (!atomic_load(&t->probe_sp)) atomic_store(&t->probe_sp, sp);
         if (atomic_load(&g_recording)) record(t, 'R', NO_SYSCALL, UC_PC(uc), UC_LR(uc), sp, uc);
         atomic_fetch_add(&t->got, 1);
+        if (t->evfd >= 0 && atomic_load(&g_recording)) ioctl(t->evfd, PERF_EVENT_IOC_REFRESH, 1);   // (the next overflow)
         break;
     }
     atomic_fetch_sub(&g_inflight, 1);
@@ -728,6 +784,7 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
             "armhf",
 #endif
             g_hz, secs, g_depth, g_scan, g_sig);
+    if (g_ev_type >= 0) fprintf(f, "event %s period %ld\n", g_ev_name, g_ev_period);
     // every address once, sorted: modules and methods come in runs
     size_t total = 0;
     for (int i = 0; i < nthr; i++) {
@@ -953,6 +1010,14 @@ static void record_for(double secs)
     fprintf(stderr, "[prof] recording %.0f s of %s at %d Hz (%zu KB)\n", secs, names, g_hz, bytes >> 10);
     g_rec_start = now_ns();
     atomic_store(&g_recording, 1);
+    if (g_ev_type >= 0)
+        for (int i = 0; i < n; i++) {
+            pthr *t = &g_thr[i];
+            t->evfd = -1;
+            if (!atomic_load(&t->tid) || t->dead) continue;
+            if (ev_open(t, g_sig) < 0) fprintf(stderr, "[prof] %s: no %s counter (%s)\n", t->name, g_ev_name, strerror(errno));
+            else fprintf(stderr, "[prof] %s: a sample every %ld %s\n", t->name, g_ev_period, g_ev_name);
+        }
     long long period = 1000000000ll / g_hz, next = g_rec_start, end = g_rec_start + (long long)(secs * 1e9), refresh = g_rec_start + 2000000000ll;
     int aborted = 0;
     while (now_ns() < end) {
@@ -962,7 +1027,8 @@ static void record_for(double secs)
         long long t = now_ns();
         if (t > next + period) next = t;                   // late: no burst of catch-up samples
         if (up_is_finishing()) { aborted = 1; break; }
-        for (int i = 0; i < n; i++) if (atomic_load(&g_thr[i].tid) && !g_thr[i].dead) tick(&g_thr[i]);
+        if (g_ev_type < 0)
+            for (int i = 0; i < n; i++) if (atomic_load(&g_thr[i].tid) && !g_thr[i].dead) tick(&g_thr[i]);
         if (t >= refresh) {                                // new code (JIT chunks, libraries)
             mapline *m2 = read_maps(&nmaps);
             if (m2) { build_table(m2, nmaps); free(maps); maps = m2; }
@@ -977,6 +1043,8 @@ static void record_for(double secs)
         if (atomic_load(&g_thr[i].tid) && atomic_load(&g_thr[i].sent) && !atomic_load(&g_thr[i].got))
             fprintf(stderr, "[prof] %s never took signal %d: its R and Q samples have no addresses (Q: its signals waited)\n", g_thr[i].name, g_sig);
     atomic_store(&g_recording, 0);
+    for (int i = 0; i < n; i++)
+        if (g_thr[i].evfd >= 0) { ioctl(g_thr[i].evfd, PERF_EVENT_IOC_DISABLE, 0); close(g_thr[i].evfd); g_thr[i].evfd = -1; }
     // signals still on their way, handlers still writing: the buffers stay until they are done
     for (int w = 0; w < 500 && (w < 10 || atomic_load(&g_inflight)); w++) { struct timespec ts = { 0, 2000000 }; nanosleep(&ts, NULL); }
     int busy = atomic_load(&g_inflight) != 0;
@@ -1062,7 +1130,13 @@ void prof_init(const char *root)
     snprintf(buf, sizeof buf, "%s", names);
     for (char *s = strtok(buf, ","); s && g_nnames < MAX_THREADS; s = strtok(NULL, ","))
         snprintf(g_names[g_nnames++], sizeof g_names[0], "%.16s", s);
-    for (int i = 0; i < MAX_THREADS; i++) g_thr[i].stat_fd = g_thr[i].sys_fd = -1;
+    for (int i = 0; i < MAX_THREADS; i++) { g_thr[i].stat_fd = g_thr[i].sys_fd = -1; g_thr[i].evfd = -1; }
+    const char *ev = getenv("UA_PROF_EVENT");
+    if (ev && *ev) {
+        snprintf(g_ev_name, sizeof g_ev_name, "%s", ev);
+        if (getenv("UA_PROF_EVENT_PERIOD") && atol(getenv("UA_PROF_EVENT_PERIOD")) > 0) g_ev_period = atol(getenv("UA_PROF_EVENT_PERIOD"));
+        if (!ev_resolve(ev)) fprintf(stderr, "[prof] UA_PROF_EVENT=%s: no such event in the kernel's PMU: time sampling\n", ev);
+    }
     atomic_store(&g_tab, &g_tabs[0]);
     g_sig = SIGRTMIN + 5;
     struct sigaction sa;
