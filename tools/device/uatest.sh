@@ -22,9 +22,21 @@ rm -f shot-*.ppm shot.req mem.log uatest.done
 # handheld (test.sh runs this detached, so a dropped connection cannot leave it stopped);
 # uatest.done marks the end either way
 ES=/etc/init.d/S31emulationstation
+# EmulationStation is started again with the environment the boot gives its services (a boot service's,
+# dbus-daemon's; else init's usual minimum), never this run's: every game ES launches inherits ES's
+# environment, and a run's UA_INPUT_SCRIPT, UA_* and SDL settings would reach the player's own games
+es_start() {
+  local p kv env=()
+  p=$(pidof dbus-daemon 2>/dev/null); p=${p%% *}
+  if [ -n "$p" ] && [ -r "/proc/$p/environ" ]; then
+    while IFS= read -r -d '' kv; do env+=("$kv"); done < "/proc/$p/environ"
+  fi
+  [ ${#env[@]} -gt 0 ] || env=(HOME=/ TERM=linux SHELL=/bin/sh PATH=/sbin:/usr/sbin:/bin:/usr/bin)
+  (cd / && exec env -i "${env[@]}" "$ES" start) >/dev/null 2>&1
+}
 if [ "${UATEST_STOP_ES:-0}" = 1 ] && [ -x $ES ]; then
   $ES stop >/dev/null 2>&1; sleep 2
-  trap '$ES start >/dev/null 2>&1; touch uatest.done' EXIT
+  trap 'es_start; touch uatest.done' EXIT
 else
   trap 'touch uatest.done' EXIT
 fi
