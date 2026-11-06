@@ -98,7 +98,8 @@ static void screenshot(void)
     }
     if (!gl_ReadPixels || !gl_GetIntegerv || !gl_BindFramebuffer || !gl_BindBuffer || !gl_PixelStorei)
     { fprintf(stderr, "[frames] screenshot: no GLES functions\n"); return; }
-    int w = g_width, h = g_height, rfb = 0, pbo = 0, align = 4;
+    int x0 = 0, y0 = 0, w = g_width, h = g_height, rfb = 0, pbo = 0, align = 4;
+    display_frame_rect(&x0, &y0, &w, &h);
     gl_GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
     gl_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
     gl_GetIntegerv(GL_PACK_ALIGNMENT, &align);
@@ -109,7 +110,7 @@ static void screenshot(void)
     shot_file *sf = px ? malloc(sizeof *sf + 32 + (size_t)w * h * 3) : NULL;
     if (sf)
     {
-        gl_ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        gl_ReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
         snprintf(sf->path, sizeof sf->path, "%s/shot-%d.ppm", g_root, ++g_shots);
         int n = snprintf((char *)sf->data, 32, "P6\n%d %d\n255\n", w, h);
         unsigned char *o = sf->data + n;
