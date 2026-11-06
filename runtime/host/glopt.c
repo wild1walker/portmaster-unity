@@ -28,6 +28,16 @@
 // Measured on the RG34XX-SP (Mali-G31): Hollow Knight 6000.0 (64-bit), King's Pass 30.6 -> 32.4 fps,
 // its main menu 36.1 -> 38.7 (its cameras leave their framebuffer 3 - 6 times a frame for grab
 // passes; docs/profiling.md).
+//
+// UA_GL_DSINVAL=1 (opt-in; needs UA_GL_DSCLEAR): the other half, the store. When the render thread
+// leaves a framebuffer after a pass whose depth/stencil renderbuffer still holds only its clear's
+// values, that buffer is invalidated first (glInvalidateFramebuffer), so the driver does not write
+// it back to memory; it is still followed as holding those values, and the next pass that uses it
+// clears it to them first (as above), as does a blit that reads it. A depth/stencil texture too,
+// unless a texture unit holds it then: the render thread's glBindTexture calls are followed, and a
+// texture of ours bound later (to be sampled) gets its values back first, through a framebuffer of
+// our own, and is never invalidated again. Hollow Knight: its scene pass ends with the camera's
+// depth/stencil texture untouched.
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -66,6 +76,9 @@ typedef unsigned char GLboolean;
 #define GL_RENDERBUFFER_HEIGHT 0x8D43
 #define GL_RENDERBUFFER_BINDING 0x8CA7
 #define GL_TEXTURE_BINDING_2D 0x8069
+#define GL_ACTIVE_TEXTURE 0x84E0
+#define GL_TEXTURE0 0x84C0
+#define GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS 0x8B4D
 #define GL_DEPTH_TEST 0x0B71
 #define GL_STENCIL_TEST 0x0B90
 #define GL_SCISSOR_TEST 0x0C11
@@ -90,6 +103,8 @@ static int g_on;
 static pthread_t g_thread;
 static int g_have_thread;
 static long g_restored, g_dropped;
+static int g_dsinval;                // UA_GL_DSINVAL=1: a clean renderbuffer is not stored at its pass's end
+static long g_invalidated;
 static int g_sameclear;              // UA_GL_SAMECLEAR=1 (opt-in): a clear of what the buffer holds is left out (glpass.c for colour)
 
 // ---- depth/stencil buffers: what they hold
@@ -97,6 +112,9 @@ static int g_sameclear;              // UA_GL_SAMECLEAR=1 (opt-in): a clear of w
 typedef struct {
     GLenum type; GLuint name;        // GL_TEXTURE / GL_RENDERBUFFER and its name (0: a free slot)
     int clean;                       // holds only its last whole clear's values
+    int gone;                        // (UA_GL_DSINVAL) invalidated by us since: cleared before it is used
+    int sampled;                     // (UA_GL_DSINVAL) a texture unit took it: never invalidated
+    unsigned char has_d, has_s;      // its components (as its framebuffer attached it)
     float depth; GLint stencil;
 } dsbuf;
 static dsbuf g_ds[MAX_DS];
@@ -221,6 +239,7 @@ static dsbuf *cur_ds(int add)
 }
 static void dirty(void) { dsbuf *b = cur_ds(0); if (b) b->clean = 0; }
 
+static void clear_values(dsbuf *b, GLbitfield m);
 // the pass's first command: a buffer holding its clear's values is cleared to them (not loaded)
 static void pass_start(GLbitfield unity_clears)
 {
@@ -230,7 +249,14 @@ static void pass_start(GLbitfield unity_clears)
     dsbuf *b = cur_ds(0);
     if (!b || !b->clean) return;
     GLbitfield m = (f->has_d ? GL_DEPTH_BUFFER_BIT : 0) | (f->has_s ? GL_STENCIL_BUFFER_BIT : 0);
-    if ((unity_clears & m) == m || q_IsEnabled(GL_RASTERIZER_DISCARD)) return;   // (the game clears it itself)
+    if ((unity_clears & m) == m || q_IsEnabled(GL_RASTERIZER_DISCARD)) { b->gone = 0; return; }   // (the game clears it itself)
+    clear_values(b, m);
+}
+
+// the bound draw framebuffer's depth/stencil buffer cleared to b's values (m: its components), the
+// game's state put back
+static void clear_values(dsbuf *b, GLbitfield m)
+{
     GLint sc = q_IsEnabled(GL_SCISSOR_TEST), dm = 0, sm = 0, sbm = 0, cs = 0;
     float cd = 1;
     q_GetIntegerv(GL_DEPTH_WRITEMASK, &dm);
@@ -247,11 +273,103 @@ static void pass_start(GLbitfield unity_clears)
     s_DepthMask((GLboolean)(dm != 0));
     s_StencilMaskSeparate(GL_FRONT, (GLuint)sm); s_StencilMaskSeparate(GL_BACK, (GLuint)sbm);
     if (sc) s_Enable(GL_SCISSOR_TEST);
+    b->gone = 0;
     g_restored++;
+}
+
+// UA_GL_DSINVAL: the render thread's 2D texture bindings, unit by unit (a texture of ours that a unit
+// holds is not invalidated; one bound later gets its values back first)
+#define MAX_UNITS 32
+static GLuint g_unit_tex[MAX_UNITS];
+static int g_nunits, g_unit, g_units_known;
+static GLuint g_own_fb;
+static void (*r_BindTexture)(GLenum, GLuint);
+static void (*r_ActiveTexture)(GLenum);
+static void (*q_GenFramebuffers)(GLsizei, GLuint *);
+static void units_read(void)
+{
+    GLint n = 0, active = 0;
+    q_GetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &n);
+    g_nunits = n < 1 ? 1 : n > MAX_UNITS ? MAX_UNITS : n;
+    q_GetIntegerv(GL_ACTIVE_TEXTURE, &active);
+    for (int i = 0; i < g_nunits; i++) {
+        GLint t = 0;
+        r_ActiveTexture(GL_TEXTURE0 + (GLenum)i);
+        q_GetIntegerv(GL_TEXTURE_BINDING_2D, &t);
+        g_unit_tex[i] = (GLuint)t;
+    }
+    r_ActiveTexture((GLenum)active);
+    g_unit = active - (GLint)GL_TEXTURE0;
+    g_units_known = 1;
+}
+// a texture we invalidated, about to be read: its values back, through our own framebuffer
+static void restore_tex(dsbuf *b)
+{
+    if (!g_own_fb) q_GenFramebuffers(1, &g_own_fb);
+    GLint dfb = 0;
+    q_GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    r_BindFramebuffer(GL_DRAW_FRAMEBUFFER, g_own_fb);
+    GLenum a = b->has_d && b->has_s ? GL_DEPTH_STENCIL_ATTACHMENT : b->has_d ? GL_DEPTH_ATTACHMENT : GL_STENCIL_ATTACHMENT;
+    r_FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, a, GL_TEXTURE_2D, b->name, 0);
+    clear_values(b, (b->has_d ? GL_DEPTH_BUFFER_BIT : 0) | (b->has_s ? GL_STENCIL_BUFFER_BIT : 0));
+    r_FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, a, GL_TEXTURE_2D, 0, 0);
+    r_BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)dfb);
+    b->gone = 0;
+}
+static void w_ActiveTexture(GLenum u) { r_ActiveTexture(u); if (mine()) g_unit = (int)u - (int)GL_TEXTURE0; }
+static void w_BindTexture(GLenum t, GLuint tex)
+{
+    if (mine() && t == GL_TEXTURE_2D && g_units_known) {
+        if (g_unit >= 0 && g_unit < g_nunits) g_unit_tex[g_unit] = tex;
+        dsbuf *b = tex ? ds_find(GL_TEXTURE, tex, 0) : NULL;
+        if (b && (b->gone || !b->sampled)) {
+            if (b->gone) restore_tex(b);
+            if (!b->sampled) { b->sampled = 1; fprintf(stderr, "[glopt] depth/stencil texture %u is sampled: always stored (UA_GL_DSINVAL)\n", tex); }
+        }
+    }
+    r_BindTexture(t, tex);
+}
+
+// UA_GL_DSINVAL: the pass on the framebuffer being left is over: its clean depth/stencil buffer is not stored
+static void pass_end(void)
+{
+    if (!g_pass_started) return;
+    fbinfo *f = info();
+    dsbuf *b = cur_ds(0);
+    if (!b || !b->clean || b->gone || b->sampled || q_IsEnabled(GL_RASTERIZER_DISCARD)) return;
+    if (b->type == GL_TEXTURE) {
+        if (!g_units_known) return;
+        for (int i = 0; i < g_nunits; i++) if (g_unit_tex[i] == b->name) return;   // (a unit holds it: it may be sampled)
+    }
+    b->has_d = f->has_d; b->has_s = f->has_s;
+    GLenum a[2];
+    GLsizei n = 0;
+    if (f->has_d) a[n++] = GL_DEPTH_ATTACHMENT;
+    if (f->has_s) a[n++] = GL_STENCIL_ATTACHMENT;
+    r_Invalidate(GL_DRAW_FRAMEBUFFER, n, a);
+    b->gone = 1;
+    g_invalidated++;
+}
+
+// a blit that reads the depth/stencil of a buffer we invalidated: its values put back first
+static void restore_read(void)
+{
+    GLint rfb = 0;
+    q_GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    if (rfb <= 0 || rfb >= MAX_FB) return;
+    GLuint saved = g_cur;
+    int started = g_pass_started;
+    r_BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)rfb);
+    g_cur = (GLuint)rfb;
+    dsbuf *b = cur_ds(0);
+    if (b && b->gone) { g_pass_started = 0; pass_start(0); }
+    r_BindFramebuffer(GL_DRAW_FRAMEBUFFER, saved);
+    g_cur = saved; g_pass_started = started;
 }
 
 static void w_BindFramebuffer(GLenum t, GLuint fb)
 {
+    if (g_dsinval && mine() && (t == GL_FRAMEBUFFER || t == GL_DRAW_FRAMEBUFFER) && fb != g_cur) pass_end();
     r_BindFramebuffer(t, fb);
     if (!mine() || (t != GL_FRAMEBUFFER && t != GL_DRAW_FRAMEBUFFER)) return;
     if (fb != g_cur) g_pass_started = 0;
@@ -385,6 +503,7 @@ static void w_Clear(GLbitfield m)
     int d_ok = !f->has_d || ((m & GL_DEPTH_BUFFER_BIT) && dm);
     int s_ok = !f->has_s || ((m & GL_STENCIL_BUFFER_BIT) && (sm & 0xff) == 0xff && (sbm & 0xff) == 0xff);
     b->clean = whole && d_ok && s_ok && !q_IsEnabled(GL_RASTERIZER_DISCARD);
+    b->gone = 0;
     if (b->clean) { q_GetFloatv(GL_DEPTH_CLEAR_VALUE, &b->depth); q_GetIntegerv(GL_STENCIL_CLEAR_VALUE, &b->stencil); }
 }
 static void cleared_buffer(GLenum buffer)
@@ -414,6 +533,7 @@ static void w_Discard(GLenum t, GLsizei n, const GLenum *a) { r_Discard(t, n, a)
 static void w_BlitFramebuffer(GLint a, GLint b, GLint c, GLint d, GLint e, GLint f, GLint g, GLint h, GLbitfield m, GLenum fl)
 {
     if (mine()) pass_start(0);
+    if (g_dsinval && mine() && (m & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) restore_read();
     r_BlitFramebuffer(a, b, c, d, e, f, g, h, m, fl);
     if (mine() && (m & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) dirty();
 }
@@ -484,10 +604,12 @@ void glopt_frame(void)
         q_GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb);
         g_cur = (GLuint)fb; g_pass_started = 1;
         g_thread = pthread_self(); g_have_thread = 1;
+        if (g_dsinval) units_read();
     }
     static long frames;
     if (++frames % 3600 == 0)
-        fprintf(stderr, "[glopt] %ld frames: %ld depth/stencil buffers cleared instead of loaded, %ld clears of them left out\n", frames, g_restored, g_dropped);
+        fprintf(stderr, "[glopt] %ld frames: %ld depth/stencil buffers cleared instead of loaded, %ld clears of them left out, "
+                        "%ld not stored (UA_GL_DSINVAL)\n", frames, g_restored, g_dropped, g_invalidated);
 }
 
 static so_shim g_shims[64];
@@ -522,7 +644,9 @@ const so_shim *glopt_table(void *(*next)(const char *name))
     memset(g_ds, 0, sizeof g_ds);
     memset(g_fb, 0, sizeof g_fb);
     g_ntex2d = 0;
-    g_on = 0; g_have_thread = 0; g_cur = 0; g_pass_started = 0; g_restored = 0; g_dropped = 0;
+    g_on = 0; g_have_thread = 0; g_cur = 0; g_pass_started = 0; g_restored = 0; g_dropped = 0; g_invalidated = 0; g_units_known = 0; g_own_fb = 0;
+    const char *di = getenv("UA_GL_DSINVAL");
+    g_dsinval = di && !strcmp(di, "1");
     const char *sc = getenv("UA_GL_SAMECLEAR");
     g_sameclear = sc && (!strcmp(sc, "1") || !strcmp(sc, "check"));
     const char *e = getenv("UA_GL_DSCLEAR");
@@ -539,6 +663,10 @@ const so_shim *glopt_table(void *(*next)(const char *name))
 #define REQ(f, n) do { *(void **)&r_##f = gl(next, n); if (r_##f) g_shims[k++] = (so_shim){ n, (void *)w_##f }; else ok = 0; } while (0)
 #define OPT(f, n) do { *(void **)&r_##f = gl(next, n); if (r_##f) g_shims[k++] = (so_shim){ n, (void *)w_##f }; } while (0)
     REQ(BindFramebuffer, "glBindFramebuffer"); REQ(Clear, "glClear"); REQ(BlitFramebuffer, "glBlitFramebuffer");
+    if (g_dsinval) {
+        *(void **)&q_GenFramebuffers = gl(NULL, "glGenFramebuffers");
+        REQ(BindTexture, "glBindTexture"); REQ(ActiveTexture, "glActiveTexture");
+    }
     REQ(Invalidate, "glInvalidateFramebuffer"); REQ(FramebufferTexture2D, "glFramebufferTexture2D");
     REQ(FramebufferRenderbuffer, "glFramebufferRenderbuffer"); REQ(DeleteFramebuffers, "glDeleteFramebuffers");
     REQ(DeleteTextures, "glDeleteTextures"); REQ(DeleteRenderbuffers, "glDeleteRenderbuffers"); REQ(TexImage2D, "glTexImage2D");
@@ -575,6 +703,7 @@ const so_shim *glopt_table(void *(*next)(const char *name))
         memset(g_shims, 0, sizeof g_shims);     // (a GLES 2 driver: nothing wrapped)
         return g_shims;
     }
+    if (g_dsinval && !q_GenFramebuffers) g_dsinval = 0;
     g_on = 1;
     return g_shims;
 }

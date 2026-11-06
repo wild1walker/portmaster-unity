@@ -18,6 +18,12 @@
 //   sameclear     the game clears depth and stencil again to the values they hold: left out, the
 //                 next draw's restoring clear made
 //   sameclear_off the same with UA_GL_SAMECLEAR=0: the game's clear made
+//   dsinval       UA_GL_DSINVAL=1, the renderbuffer of framebuffer 5: invalidated when the pass leaves it
+//                 (not stored), then cleared to its values when the next pass on it begins
+//   dsinval_tex   UA_GL_DSINVAL=1, framebuffer 3's depth/stencil texture, no texture unit holds it: invalidated
+//   dsinval_bound the same, but unit 2 holds the texture: not invalidated
+//   dsinval_sample invalidated, then bound to a unit (to be sampled): cleared to its values through a
+//                 framebuffer of ours first, and not invalidated when the next pass leaves it
 //   off           UA_GL_DSCLEAR=0: nothing wrapped
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +50,7 @@ typedef struct { int fb; unsigned mask; float depth; int stencil, scissor, depth
 extern fake_clear_t fake_clears[64];
 extern int fake_nclears, fake_draws, fake_scissor, fake_depth_mask, fake_stencil_mask, fake_stencil_back_mask, fake_box[4];
 extern float fake_clear_depth;
+extern int fake_ninval, fake_inval_fb, fake_inval_n, fake_inval_att, fake_draw_fb;
 extern int fake_clear_stencil;
 extern void glEnable(unsigned), glDisable(unsigned), glDepthMask(unsigned char), glStencilMask(unsigned), glStencilOp(unsigned, unsigned, unsigned);
 extern void glScissor(int, int, int, int), glClearDepthf(float), glClearStencil(int);
@@ -62,6 +69,7 @@ int main(int argc, char **argv)
     const char *mode = argc > 1 ? argv[1] : "restore";
     if (!strcmp(mode, "off")) setenv("UA_GL_DSCLEAR", "0", 1);
     setenv("UA_GL_SAMECLEAR", !strcmp(mode, "sameclear_off") ? "0" : "1", 1);
+    if (!strncmp(mode, "dsinval", 7)) setenv("UA_GL_DSINVAL", "1", 1);
     const so_shim *t = glopt_table(NULL);
     void (*Bind)(unsigned, unsigned) = fn(t, "glBindFramebuffer");
     void (*Clear)(unsigned) = fn(t, "glClear");
@@ -71,6 +79,10 @@ int main(int argc, char **argv)
     void (*Delete)(int, const unsigned *) = fn(t, "glDeleteTextures");
     void (SO_ABI *ClearBufferfi)(unsigned, int, float, int) = fn(t, "glClearBufferfi");   // (softfp on armhf, as the player calls it)
     void (*Blit)(int, int, int, int, int, int, int, int, unsigned, unsigned) = fn(t, "glBlitFramebuffer");
+    void (*BindTex)(unsigned, unsigned) = fn(t, "glBindTexture");
+    void (*Active)(unsigned) = fn(t, "glActiveTexture");
+    extern void glBindTexture(unsigned, unsigned), glActiveTexture(unsigned);
+    if (!strcmp(mode, "dsinval_bound")) { glActiveTexture(0x84C0 + 2); glBindTexture(GL_TEXTURE_2D, 20); glActiveTexture(0x84C0); }
     if (!strcmp(mode, "off")) {
         CHECK(!Bind && !Clear && !Draw);
         printf("test_glopt %s: %s\n", mode, failures ? "FAILED" : "ok");
@@ -80,7 +92,7 @@ int main(int argc, char **argv)
     if (!(Bind && Clear && Draw && Attach && Invalidate && Delete && ClearBufferfi && Blit)) return 1;
     if (strcmp(mode, "nothread")) glopt_frame();     // the first swap: this thread renders
 
-    int fb = !strcmp(mode, "renderbuffer") ? 5 : 3;
+    int fb = !strcmp(mode, "renderbuffer") || !strcmp(mode, "dsinval") ? 5 : 3;
     Bind(GL_FRAMEBUFFER, (unsigned)fb);
     if (fb == 3) Attach(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 20, 0);
     // the camera: clears with the scissor on, over the whole 64x32 buffer (or part of it)
@@ -99,6 +111,18 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "invalidate")) { static const unsigned a[1] = { GL_DEPTH_STENCIL_ATTACHMENT }; Invalidate(GL_FRAMEBUFFER, 1, a); }
     // a grab: another framebuffer, then back
     Bind(GL_FRAMEBUFFER, 4);
+    if (!strcmp(mode, "dsinval")) CHECK(fake_ninval == 1 && fake_inval_fb == 5 && fake_inval_n == 1 && fake_inval_att == GL_DEPTH_ATTACHMENT);
+    else if (!strcmp(mode, "dsinval_tex") || !strcmp(mode, "dsinval_sample")) CHECK(fake_ninval == 1 && fake_inval_fb == 3 && fake_inval_n == 2);
+    else CHECK(fake_ninval == (!strcmp(mode, "invalidate") ? 1 : 0));
+    if (!strcmp(mode, "dsinval_sample")) {
+        // the game samples the texture: its values put back first, through our own framebuffer
+        int n0 = fake_nclears;
+        CHECK(BindTex && Active);
+        Active(0x84C0 + 1); BindTex(GL_TEXTURE_2D, 20); Active(0x84C0);
+        CHECK(fake_nclears == n0 + 1 && fake_clears[n0].fb >= 100 && fake_clears[n0].depth == 1.0f && fake_clears[n0].stencil == 0);
+        CHECK(fake_draw_fb == 4);
+        fake_nclears = n0;          // (the restoring clear on return is counted below as for dsinval)
+    }
     Draw(4, 0, 3);
     if (!strcmp(mode, "delete")) { static const unsigned d[1] = { 20 }; Delete(1, d); }
     Bind(GL_FRAMEBUFFER, (unsigned)fb);
@@ -117,7 +141,8 @@ int main(int argc, char **argv)
     else Draw(4, 0, 6);
     int added = fake_nclears - before;
 
-    int restores = !strcmp(mode, "restore") || !strcmp(mode, "stencilkeep") || !strcmp(mode, "renderbuffer") || !strcmp(mode, "sameclear") ? 1 :
+    int restores = !strcmp(mode, "restore") || !strcmp(mode, "stencilkeep") || !strcmp(mode, "renderbuffer") || !strcmp(mode, "sameclear") ||
+                   !strncmp(mode, "dsinval", 7) ? 1 :
                    !strcmp(mode, "colourclear") ? 1 : 0;
     int game_clears = !strcmp(mode, "unityclear") || !strcmp(mode, "colourclear") || !strcmp(mode, "sameclear_off");
     CHECK(added == restores + game_clears);

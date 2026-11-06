@@ -22,7 +22,7 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -o $O/test_msaafix test/test_msaafix.c msaafix.c $O/msaa/libGLESv2.so.2 -ldl
   mkdir -p $O/trace
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/trace/libGLESv2.so.2 test/fake_trace_gl.c
-  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_gltrace test/test_gltrace.c gltrace.c $O/trace/libGLESv2.so.2 -ldl -lpthread
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_gltrace test/test_gltrace.c gltrace.c glfill.c $O/trace/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/opt
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/opt/libGLESv2.so.2 test/fake_opt_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glopt test/test_glopt.c glopt.c $O/opt/libGLESv2.so.2 -ldl -lpthread
@@ -52,7 +52,7 @@ if [ "$ARCH" = arm64 ]; then
     for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=\$O \$O/test_osk \$s; done
     for s in off on; do LD_LIBRARY_PATH=\$O/msaa \$O/test_msaafix \$s; done
     for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=\$O/trace \$O/test_gltrace \$s; done
-    for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread off; do LD_LIBRARY_PATH=\$O/opt \$O/test_glopt \$s; done
+    for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread dsinval dsinval_tex dsinval_bound dsinval_sample off; do LD_LIBRARY_PATH=\$O/opt \$O/test_glopt \$s; done
     for s in $PASS_TESTS; do LD_LIBRARY_PATH=\$O/pass \$O/test_glpass \$s; done
     for s in $RENAME_TESTS; do LD_LIBRARY_PATH=\$O/rename \$O/test_glrename \$s; done
     for s in $RECS; do LD_LIBRARY_PATH=\$O/rec \$O/test_glrec \$s; done
@@ -67,7 +67,7 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
    for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=out/test out/test/test_osk $s; done
    for s in off on; do LD_LIBRARY_PATH=out/test/msaa out/test/test_msaafix $s; done
    for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=out/test/trace out/test/test_gltrace $s; done
-   for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread off; do LD_LIBRARY_PATH=out/test/opt out/test/test_glopt $s; done
+   for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread dsinval dsinval_tex dsinval_bound dsinval_sample off; do LD_LIBRARY_PATH=out/test/opt out/test/test_glopt $s; done
    for s in '"$PASS_TESTS"'; do LD_LIBRARY_PATH=out/test/pass out/test/test_glpass $s; done
    for s in '"$RENAME_TESTS"'; do LD_LIBRARY_PATH=out/test/rename out/test/test_glrename $s; done
    for s in '"$RECS"'; do LD_LIBRARY_PATH=out/test/rec out/test/test_glrec $s; done

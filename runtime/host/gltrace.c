@@ -42,6 +42,7 @@
 #include <time.h>
 
 #include "gltrace.h"
+#include "glfill.h"
 
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_DRAW_FRAMEBUFFER 0x8CA9
@@ -77,6 +78,7 @@ static long g_draws, g_verts, g_programs, g_tex_bytes, g_buf_bytes;
 static GLuint g_cur_fb;
 static pthread_t g_thread;       // the thread that swaps (Unity's render thread): the traced one
 static int g_have_thread;
+static int g_fill;               // UA_GL_TRACE_FILL (glfill.c)
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
@@ -329,6 +331,7 @@ static uint64_t gltrace_fnv64(const char *s, size_t n)
 static void w_AttachShader(GLuint prog, GLuint sh)
 {
     r_AttachShader(prog, sh);
+    if (g_fill) glfill_attach(prog, sh);
     if (prog >= MAX_PROG || !g_vs_hash || !r_GetShaderiv || !r_GetShaderSource) return;
     GLint type = 0, len = 0;
     r_GetShaderiv(sh, GL_SHADER_TYPE, &type);
@@ -673,6 +676,8 @@ static void log_blit(const GLint r[8], GLbitfield m)
 // ---- wrappers (none of these take floats: no softfp thunk needed)
 // only the swapping thread's calls make the traced frame (another context's, e.g. an upload thread's, do not)
 #define ON (g_on && pthread_equal(pthread_self(), g_thread))
+// UA_GL_TRACE_FILL: the draw made once more first, counted (glfill.c)
+#define FILL(call) do { if (g_fill && ON && glfill_begin(g_cur_fb)) { call; glfill_end(); } } while (0)
 static void (*r_Viewport)(GLint, GLint, GLsizei, GLsizei);
 static void (*r_Clear)(GLbitfield);
 static void (*r_Invalidate)(GLenum, GLsizei, const GLenum *);
@@ -709,12 +714,14 @@ static void w_Viewport(GLint x, GLint y, GLsizei w, GLsizei h)
 }
 static void w_Clear(GLbitfield m)
 {
+    if (g_fill && ON && (m & GL_COLOR_BUFFER_BIT)) glfill_covered(g_cur_fb);
     r_Clear(m);
     if (ON) { pass_t *p = cur(); size_of(p); if (!p->draws) p->clear |= m; if (g_draws_max) log_clear(m); }
 }
 static void inval(GLenum t, GLsizei n, const GLenum *a)
 {
     if (!ON || t == GL_READ_FRAMEBUFFER) return;
+    if (g_fill && (att_bits(n, a) & GL_COLOR_BUFFER_BIT)) glfill_covered(g_cur_fb);
     pass_t *p = cur();
     if (p->draws || p->blits || p->copies) p->inval_end |= att_bits(n, a); else p->inval_start |= att_bits(n, a);
 }
@@ -769,52 +776,52 @@ static void draw(int which, long verts, long inst, int n, int indirect)
 static long sum(const GLsizei *c, GLsizei n) { long s = 0; for (GLsizei i = 0; c && i < n; i++) s += c[i]; return s; }
 
 static void (*r_DrawArrays)(GLenum, GLint, GLsizei);
-static void w_DrawArrays(GLenum m, GLint f, GLsizei c) { r_DrawArrays(m, f, c); draw(D_DrawArrays, c, 1, 1, 0); }
+static void w_DrawArrays(GLenum m, GLint f, GLsizei c) { FILL(r_DrawArrays(m, f, c)); r_DrawArrays(m, f, c); draw(D_DrawArrays, c, 1, 1, 0); }
 static void (*r_DrawElements)(GLenum, GLsizei, GLenum, const void *);
-static void w_DrawElements(GLenum m, GLsizei c, GLenum t, const void *i) { r_DrawElements(m, c, t, i); draw(D_DrawElements, c, 1, 1, 0); }
+static void w_DrawElements(GLenum m, GLsizei c, GLenum t, const void *i) { FILL(r_DrawElements(m, c, t, i)); r_DrawElements(m, c, t, i); draw(D_DrawElements, c, 1, 1, 0); }
 #define ARRAYS_INST(f) static void (*r_##f)(GLenum, GLint, GLsizei, GLsizei); \
-    static void w_##f(GLenum m, GLint a, GLsizei c, GLsizei n) { r_##f(m, a, c, n); draw(D_##f, c, n, 1, 0); }
+    static void w_##f(GLenum m, GLint a, GLsizei c, GLsizei n) { FILL(r_##f(m, a, c, n)); r_##f(m, a, c, n); draw(D_##f, c, n, 1, 0); }
 ARRAYS_INST(DrawArraysInstanced) ARRAYS_INST(DrawArraysInstancedEXT)
 #define ELEMENTS_INST(f) static void (*r_##f)(GLenum, GLsizei, GLenum, const void *, GLsizei); \
-    static void w_##f(GLenum m, GLsizei c, GLenum t, const void *i, GLsizei n) { r_##f(m, c, t, i, n); draw(D_##f, c, n, 1, 0); }
+    static void w_##f(GLenum m, GLsizei c, GLenum t, const void *i, GLsizei n) { FILL(r_##f(m, c, t, i, n)); r_##f(m, c, t, i, n); draw(D_##f, c, n, 1, 0); }
 ELEMENTS_INST(DrawElementsInstanced) ELEMENTS_INST(DrawElementsInstancedEXT)
 static void (*r_DrawRangeElements)(GLenum, GLuint, GLuint, GLsizei, GLenum, const void *);
 static void w_DrawRangeElements(GLenum m, GLuint s, GLuint e, GLsizei c, GLenum t, const void *i)
-{ r_DrawRangeElements(m, s, e, c, t, i); draw(D_DrawRangeElements, c, 1, 1, 0); }
+{ FILL(r_DrawRangeElements(m, s, e, c, t, i)); r_DrawRangeElements(m, s, e, c, t, i); draw(D_DrawRangeElements, c, 1, 1, 0); }
 #define ELEMENTS_BV(f) static void (*r_##f)(GLenum, GLsizei, GLenum, const void *, GLint); \
-    static void w_##f(GLenum m, GLsizei c, GLenum t, const void *i, GLint b) { r_##f(m, c, t, i, b); draw(D_##f, c, 1, 1, 0); }
+    static void w_##f(GLenum m, GLsizei c, GLenum t, const void *i, GLint b) { FILL(r_##f(m, c, t, i, b)); r_##f(m, c, t, i, b); draw(D_##f, c, 1, 1, 0); }
 ELEMENTS_BV(DrawElementsBaseVertex) ELEMENTS_BV(DrawElementsBaseVertexOES) ELEMENTS_BV(DrawElementsBaseVertexEXT)
 #define RANGE_BV(f) static void (*r_##f)(GLenum, GLuint, GLuint, GLsizei, GLenum, const void *, GLint); \
     static void w_##f(GLenum m, GLuint s, GLuint e, GLsizei c, GLenum t, const void *i, GLint b) \
-    { r_##f(m, s, e, c, t, i, b); draw(D_##f, c, 1, 1, 0); }
+    { FILL(r_##f(m, s, e, c, t, i, b)); r_##f(m, s, e, c, t, i, b); draw(D_##f, c, 1, 1, 0); }
 RANGE_BV(DrawRangeElementsBaseVertex) RANGE_BV(DrawRangeElementsBaseVertexOES) RANGE_BV(DrawRangeElementsBaseVertexEXT)
 #define INST_BV(f) static void (*r_##f)(GLenum, GLsizei, GLenum, const void *, GLsizei, GLint); \
-    static void w_##f(GLenum m, GLsizei c, GLenum t, const void *i, GLsizei n, GLint b) { r_##f(m, c, t, i, n, b); draw(D_##f, c, n, 1, 0); }
+    static void w_##f(GLenum m, GLsizei c, GLenum t, const void *i, GLsizei n, GLint b) { FILL(r_##f(m, c, t, i, n, b)); r_##f(m, c, t, i, n, b); draw(D_##f, c, n, 1, 0); }
 INST_BV(DrawElementsInstancedBaseVertex) INST_BV(DrawElementsInstancedBaseVertexOES) INST_BV(DrawElementsInstancedBaseVertexEXT)
 static void (*r_DrawArraysInstancedBaseInstanceEXT)(GLenum, GLint, GLsizei, GLsizei, GLuint);
 static void w_DrawArraysInstancedBaseInstanceEXT(GLenum m, GLint f, GLsizei c, GLsizei n, GLuint b)
-{ r_DrawArraysInstancedBaseInstanceEXT(m, f, c, n, b); draw(D_DrawArraysInstancedBaseInstanceEXT, c, n, 1, 0); }
+{ FILL(r_DrawArraysInstancedBaseInstanceEXT(m, f, c, n, b)); r_DrawArraysInstancedBaseInstanceEXT(m, f, c, n, b); draw(D_DrawArraysInstancedBaseInstanceEXT, c, n, 1, 0); }
 static void (*r_DrawElementsInstancedBaseInstanceEXT)(GLenum, GLsizei, GLenum, const void *, GLsizei, GLuint);
 static void w_DrawElementsInstancedBaseInstanceEXT(GLenum m, GLsizei c, GLenum t, const void *i, GLsizei n, GLuint b)
-{ r_DrawElementsInstancedBaseInstanceEXT(m, c, t, i, n, b); draw(D_DrawElementsInstancedBaseInstanceEXT, c, n, 1, 0); }
+{ FILL(r_DrawElementsInstancedBaseInstanceEXT(m, c, t, i, n, b)); r_DrawElementsInstancedBaseInstanceEXT(m, c, t, i, n, b); draw(D_DrawElementsInstancedBaseInstanceEXT, c, n, 1, 0); }
 static void (*r_DrawElementsInstancedBaseVertexBaseInstanceEXT)(GLenum, GLsizei, GLenum, const void *, GLsizei, GLint, GLuint);
 static void w_DrawElementsInstancedBaseVertexBaseInstanceEXT(GLenum m, GLsizei c, GLenum t, const void *i, GLsizei n, GLint v, GLuint b)
-{ r_DrawElementsInstancedBaseVertexBaseInstanceEXT(m, c, t, i, n, v, b); draw(D_DrawElementsInstancedBaseVertexBaseInstanceEXT, c, n, 1, 0); }
+{ FILL(r_DrawElementsInstancedBaseVertexBaseInstanceEXT(m, c, t, i, n, v, b)); r_DrawElementsInstancedBaseVertexBaseInstanceEXT(m, c, t, i, n, v, b); draw(D_DrawElementsInstancedBaseVertexBaseInstanceEXT, c, n, 1, 0); }
 static void (*r_MultiDrawArraysEXT)(GLenum, const GLint *, const GLsizei *, GLsizei);
 static void w_MultiDrawArraysEXT(GLenum m, const GLint *f, const GLsizei *c, GLsizei n)
-{ r_MultiDrawArraysEXT(m, f, c, n); draw(D_MultiDrawArraysEXT, sum(c, n), 1, n, 0); }
+{ FILL(r_MultiDrawArraysEXT(m, f, c, n)); r_MultiDrawArraysEXT(m, f, c, n); draw(D_MultiDrawArraysEXT, sum(c, n), 1, n, 0); }
 static void (*r_MultiDrawElementsEXT)(GLenum, const GLsizei *, GLenum, const void *const *, GLsizei);
 static void w_MultiDrawElementsEXT(GLenum m, const GLsizei *c, GLenum t, const void *const *i, GLsizei n)
-{ r_MultiDrawElementsEXT(m, c, t, i, n); draw(D_MultiDrawElementsEXT, sum(c, n), 1, n, 0); }
+{ FILL(r_MultiDrawElementsEXT(m, c, t, i, n)); r_MultiDrawElementsEXT(m, c, t, i, n); draw(D_MultiDrawElementsEXT, sum(c, n), 1, n, 0); }
 #define MULTI_BV(f) static void (*r_##f)(GLenum, const GLsizei *, GLenum, const void *const *, GLsizei, const GLint *); \
     static void w_##f(GLenum m, const GLsizei *c, GLenum t, const void *const *i, GLsizei n, const GLint *b) \
-    { r_##f(m, c, t, i, n, b); draw(D_##f, sum(c, n), 1, n, 0); }
+    { FILL(r_##f(m, c, t, i, n, b)); r_##f(m, c, t, i, n, b); draw(D_##f, sum(c, n), 1, n, 0); }
 MULTI_BV(MultiDrawElementsBaseVertexEXT) MULTI_BV(MultiDrawElementsBaseVertexOES)
 // (the vertex counts are in a buffer: 0 here)
 static void (*r_DrawArraysIndirect)(GLenum, const void *);
-static void w_DrawArraysIndirect(GLenum m, const void *p) { r_DrawArraysIndirect(m, p); draw(D_DrawArraysIndirect, 0, 1, 1, 1); }
+static void w_DrawArraysIndirect(GLenum m, const void *p) { FILL(r_DrawArraysIndirect(m, p)); r_DrawArraysIndirect(m, p); draw(D_DrawArraysIndirect, 0, 1, 1, 1); }
 static void (*r_DrawElementsIndirect)(GLenum, GLenum, const void *);
-static void w_DrawElementsIndirect(GLenum m, GLenum t, const void *p) { r_DrawElementsIndirect(m, t, p); draw(D_DrawElementsIndirect, 0, 1, 1, 1); }
+static void w_DrawElementsIndirect(GLenum m, GLenum t, const void *p) { FILL(r_DrawElementsIndirect(m, t, p)); r_DrawElementsIndirect(m, t, p); draw(D_DrawElementsIndirect, 0, 1, 1, 1); }
 
 static void w_BufferData(GLenum t, GLsizeiptr s, const void *d, GLenum u)
 { r_BufferData(t, s, d, u); if (ON && d) g_buf_bytes += s; if (ON) log_upload(d ? "BufferData" : "BufferData(null)", t, 0, (long)s, -1); }
@@ -844,6 +851,7 @@ static void w_CompressedTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsiz
 static void w_UseProgram(GLuint p) { r_UseProgram(p); if (ON) g_programs++; }
 static void w_BlitFramebuffer(GLint a, GLint b, GLint c, GLint d, GLint e, GLint f, GLint g, GLint h, GLbitfield m, GLenum fl)
 {
+    if (g_fill && ON && (m & GL_COLOR_BUFFER_BIT)) glfill_covered(g_cur_fb);
     r_BlitFramebuffer(a, b, c, d, e, f, g, h, m, fl);
     if (!ON) return;
     cur()->blits++;
@@ -914,6 +922,7 @@ void gltrace_frame(void)
     if (g_on) {                                  // the traced frame ends (before its swap)
         g_on = 0;
         q_end(); g_q_wanted = -1;
+        if (g_fill) glfill_frame_end(g_traced);
         int timed = 0;
         for (int i = 0; i < g_npass; i++) { if (g_q_lost) g_pass[i].timed = 0; timed |= g_pass[i].timed; }
         if (timed && g_gpu_mode != 3) { g_pending = 1; g_waited = 0; }
@@ -929,6 +938,7 @@ void gltrace_frame(void)
         g_on = 1; g_npass = 0; g_overflow = 0; g_draws = g_verts = g_programs = g_tex_bytes = g_buf_bytes = 0;
         g_events = 0; g_fb_described = 0; g_traced = g_frame + 1; g_q_lost = 0; g_disjoint = 0;
         memset(g_calls, 0, sizeof g_calls);
+        if (g_fill) { glfill_ready(); glfill_frame_start(); }
         // the pass the frame starts in (often the window, fb 0); its query begins with its first
         // command, after this swap
         g_pass[0] = (pass_t){ .fb = g_cur_fb }; g_npass = 1; g_q_wanted = 0;
@@ -994,6 +1004,7 @@ const so_shim *gltrace_table(void)
         W("glDispatchComputeIndirect", r_DispatchComputeIndirect, w_DispatchComputeIndirect);
         W("glReadPixels", r_ReadPixels, w_ReadPixels);
         r_GetIntegerv = real("glGetIntegerv");
+        if ((g_fill = glfill_init()) && g_draws_max <= 0) W("glAttachShader", r_AttachShader, w_AttachShader);
         if (g_gpu_mode > 0 && g_draws_max <= 0) {
             // GPU times: the queries are ours; the game's own time queries are watched for
             W("glBeginQueryEXT", r_BeginQueryEXT, w_BeginQueryEXT);

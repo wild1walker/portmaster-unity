@@ -50,6 +50,7 @@ int fake_box[4] = { 0, 0, 64, 32 };
 int fake_ops[6] = { GL_KEEP, GL_KEEP, GL_KEEP, GL_KEEP, GL_KEEP, GL_KEEP };
 float fake_clear_depth = 1; int fake_clear_stencil;
 int fake_draws;
+int fake_unit, fake_units[8], fake_genfb = 100;
 
 // every glClear: its mask and the state it ran with
 typedef struct { int fb; unsigned mask; float depth; int stencil, scissor, depth_mask, stencil_mask, stencil_back_mask; } fake_clear_t;
@@ -106,6 +107,8 @@ void glGetIntegerv(unsigned p, int *v)
     case GL_STENCIL_BACK_PASS_DEPTH_FAIL: *v = fake_ops[4]; break;
     case GL_STENCIL_BACK_PASS_DEPTH_PASS: *v = fake_ops[5]; break;
     case GL_STENCIL_CLEAR_VALUE: *v = fake_clear_stencil; break;
+    case 0x8B4D: *v = 8; break;                         // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+    case 0x84E0: *v = 0x84C0 + fake_unit; break;        // GL_ACTIVE_TEXTURE
     default: *v = 0;
     }
 }
@@ -119,7 +122,9 @@ void glGetFramebufferAttachmentParameteriv(unsigned t, unsigned a, unsigned p, i
     if (a == GL_DEPTH_ATTACHMENT && fb == 5) { type = GL_RENDERBUFFER; name = 30; }
     *v = p == GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE ? type : p == GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME ? name : 0;
 }
-void glBindTexture(unsigned t, unsigned tex) { (void)t; fake_tex2d = (int)tex; }
+void glBindTexture(unsigned t, unsigned tex) { (void)t; fake_tex2d = (int)tex; if (fake_unit < 8) fake_units[fake_unit] = (int)tex; }
+void glActiveTexture(unsigned u) { fake_unit = (int)u - 0x84C0; fake_tex2d = fake_unit < 8 ? fake_units[fake_unit] : 0; }
+void glGenFramebuffers(int n, unsigned *f) { for (int i = 0; i < n; i++) f[i] = (unsigned)fake_genfb++; }
 void glBindRenderbuffer(unsigned t, unsigned rb) { (void)t; fake_rb = (int)rb; }
 void glGetTexLevelParameteriv(unsigned t, int l, unsigned p, int *v)
 { (void)t; (void)l; *v = fake_tex2d == 20 ? (p == GL_TEXTURE_WIDTH ? 64 : p == GL_TEXTURE_HEIGHT ? 32 : 0) : 0; }
@@ -130,7 +135,10 @@ void glDrawArrays(unsigned m, int f, int c) { (void)m; (void)f; (void)c; fake_dr
 void glDrawElements(unsigned m, int c, unsigned t, const void *i) { (void)m; (void)c; (void)t; (void)i; fake_draws++; }
 void glBlitFramebuffer(int a, int b, int c, int d, int e, int f, int g, int h, unsigned m, unsigned fl)
 { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)m; (void)fl; }
-void glInvalidateFramebuffer(unsigned t, int n, const unsigned *a) { (void)t; (void)n; (void)a; }
+// every glInvalidateFramebuffer: the framebuffer and its first attachment
+int fake_ninval, fake_inval_fb, fake_inval_n, fake_inval_att;
+void glInvalidateFramebuffer(unsigned t, int n, const unsigned *a)
+{ (void)t; fake_ninval++; fake_inval_fb = fake_draw_fb; fake_inval_n = n; fake_inval_att = n > 0 ? (int)a[0] : 0; }
 void glFramebufferTexture2D(unsigned t, unsigned a, unsigned tt, unsigned tex, int l) { (void)t; (void)a; (void)tt; (void)tex; (void)l; }
 void glFramebufferRenderbuffer(unsigned t, unsigned a, unsigned rt, unsigned rb) { (void)t; (void)a; (void)rt; (void)rb; }
 void glDeleteFramebuffers(int n, const unsigned *f) { (void)n; (void)f; }
