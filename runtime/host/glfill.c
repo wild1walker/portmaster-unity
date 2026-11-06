@@ -187,7 +187,7 @@ static void drain(void) { for (int i = 0; gGetError && i < 16 && gGetError(); i+
 
 // ---- programs: the sources Unity gave (copied at glAttachShader), the counting copy
 #define MAX_PROG 65536
-typedef struct { GLint orig, mine; GLenum type; GLint size; } uni_t;
+typedef struct { GLint orig, mine; GLenum type; GLint size; char name[48]; float last[4]; } uni_t;
 typedef struct {
     char *vs, *fs;
     int state;                   // 0 not made yet, 1 made, -1 cannot be made
@@ -381,7 +381,9 @@ static int make(GLuint orig, prog_t *p)
             GLint lo = gGetUniformLocation(orig, el), lm = gGetUniformLocation(q, el);
             if (lo < 0 || lm < 0) continue;
             if (p->nu == cap) { cap = cap ? cap * 2 : 16; p->u = realloc(p->u, (size_t)cap * sizeof *p->u); }
-            p->u[p->nu++] = (uni_t){ lo, lm, t, 1 };
+            p->u[p->nu] = (uni_t){ lo, lm, t, 1, "", { 0, 0, 0, 0 } };
+            snprintf(p->u[p->nu].name, sizeof p->u[p->nu].name, "%.47s", el);
+            p->nu++;
         }
     }
     GLint nb = 0;
@@ -405,10 +407,10 @@ static void copy_uniforms(GLuint orig, prog_t *p)
         uni_t *u = &p->u[i];
         float f[16]; GLint iv[4]; GLuint uv[4];
         switch (u->type) {
-        case T_F: gGetUniformfv(orig, u->orig, f); gPU1fv(p->prog, u->mine, 1, f); break;
+        case T_F: gGetUniformfv(orig, u->orig, f); gPU1fv(p->prog, u->mine, 1, f); u->last[0] = f[0]; break;
         case T_V2: gGetUniformfv(orig, u->orig, f); gPU2fv(p->prog, u->mine, 1, f); break;
         case T_V3: gGetUniformfv(orig, u->orig, f); gPU3fv(p->prog, u->mine, 1, f); break;
-        case T_V4: gGetUniformfv(orig, u->orig, f); gPU4fv(p->prog, u->mine, 1, f); break;
+        case T_V4: gGetUniformfv(orig, u->orig, f); gPU4fv(p->prog, u->mine, 1, f); memcpy(u->last, f, sizeof u->last); break;
         case T_M2: gGetUniformfv(orig, u->orig, f); gPUM2(p->prog, u->mine, 1, 0, f); break;
         case T_M3: gGetUniformfv(orig, u->orig, f); gPUM3(p->prog, u->mine, 1, 0, f); break;
         case T_M4: gGetUniformfv(orig, u->orig, f); gPUM4(p->prog, u->mine, 1, 0, f); break;
@@ -731,6 +733,14 @@ void glfill_frame_end(long frame)
         fprintf(stderr, "[fill]   program %d fs %016llx: %ld draws, %ld fragments (%d.%d%%), discarded %d.%d%%, unchanged %d.%d%%, "
                         "opaque under blending %d.%d%%\n", best, (unsigned long long)fnv(p->fs), p->draws, p->frags, P(p->frags, frags),
                 P(p->discarded, p->frags), P(p->unchanged, p->frags), P(p->opaque, p->frags));
+        if (r < 3) {                 // the vec4 and float uniforms outside blocks at its last draw
+            char v[1200]; size_t o = 0; v[0] = 0;
+            for (int i = 0; i < p->nu && o + 80 < sizeof v; i++)
+                if ((p->u[i].type == T_V4 || p->u[i].type == T_F) && !strstr(p->u[i].name, "mtx"))
+                    o += (size_t)snprintf(v + o, sizeof v - o, " %s=(%g,%g,%g,%g)", p->u[i].name, p->u[i].last[0], p->u[i].last[1],
+                                          p->u[i].last[2], p->u[i].last[3]);
+            if (o) fprintf(stderr, "[fill]     uniforms:%s\n", v);
+        }
         p->frags = -p->frags;        // (listed)
     }
     for (int i = 0; i < MAX_PROG; i++) if (g_prog[i] && g_prog[i]->frags < 0) g_prog[i]->frags = -g_prog[i]->frags;

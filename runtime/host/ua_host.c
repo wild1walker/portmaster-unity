@@ -35,6 +35,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "glstate.h"
 #include "glarena.h"
 #include "glpass.h"
+#include "glspec.h"
 #include "glrename.h"
 #include "glrec.h"
 #include "gpuidle.h"
@@ -413,12 +414,20 @@ static void *after_glopt(const char *name)
     void *p = find_shim(g_state_shims, name);
     return p && strncmp(name, "egl", 3) ? p : after_glstate(name);
 }
-// what glpass.c's GL wrappers call: glopt.c's wrapper of that function, else after_glopt's
-static const so_shim *g_glopt_shims, *g_pass_shims;
-static void *after_glpass(const char *name)
+// what glspec.c's GL wrappers call: glopt.c's wrapper of that function, else after_glopt's
+static const so_shim *g_glopt_shims, *g_pass_shims, *g_spec_shims;
+static void *after_glspec(const char *name)
 {
     void *p = find_shim(g_glopt_shims, name);
     return p ? p : after_glopt(name);
+}
+// what glpass.c's GL wrappers call: glspec.c's wrapper of that function (its float-taking ones with the
+// host's calling convention), else after_glspec's
+static void *after_glpass(const char *name)
+{
+    void *p = glspec_hard(name);
+    if (!p) p = find_shim(g_spec_shims, name);
+    return p ? p : after_glspec(name);
 }
 // what glrename.c's GL wrappers call: glpass.c's wrapper, else after_glpass's
 static void *after_glrename(const char *name)
@@ -526,6 +535,7 @@ int main(int argc, char **argv)
     snprintf(cache, sizeof cache, "%s/cache", data);
     snprintf(ext, sizeof ext, "%s/external", data);
     mkdirs(files); mkdirs(cache); mkdirs(ext);
+    glspec_cache(cache);                        // UA_GL_SPEC turned on or off: Unity's program binaries made again
     signal(SIGINT, on_signal); signal(SIGTERM, on_signal);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -550,7 +560,7 @@ int main(int argc, char **argv)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
     // on) -> glrec.c (UA_GL_REC: it calls glopt.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->
-    // glrename.c -> glpass.c -> glopt.c -> glstate.c -> glarena.c -> glpersist.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
+    // glrename.c -> glpass.c -> glspec.c -> glopt.c -> glstate.c -> glarena.c -> glpersist.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
@@ -559,6 +569,7 @@ int main(int argc, char **argv)
     g_arena_shims = glarena_table(after_glarena);             // UA_GL_ARENA
     g_state_shims = glstate_table(after_glstate);             // UA_GL_STATE
     g_glopt_shims = glopt_table(after_glopt);  // UA_GL_DSCLEAR
+    g_spec_shims = glspec_table(after_glspec);                // UA_GL_SPEC
     g_pass_shims = glpass_table(after_glpass); // UA_GL_SAMECLEAR
     g_rename_shims = glrename_table(after_glrename);          // UA_GL_RENAME
     const so_shim *idle = g_idle_shims = gpuidle_table(after_gpuidle);   // UA_GPU_IDLE
@@ -570,6 +581,7 @@ int main(int argc, char **argv)
     so_add_shims(idle);
     so_add_shims(g_rename_shims);
     so_add_shims(g_pass_shims);
+    so_add_shims(g_spec_shims);
     so_add_shims(g_glopt_shims);
     so_add_shims(g_state_shims);
     so_add_shims(g_arena_shims);

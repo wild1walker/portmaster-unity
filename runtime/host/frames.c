@@ -23,6 +23,7 @@
 #include "gltrace.h"
 #include "glopt.h"
 #include "glpass.h"
+#include "glspec.h"
 #include "glrename.h"
 #include "glrec.h"
 #include "gpuidle.h"
@@ -175,6 +176,7 @@ static void on_swap(void *ctx)
     gltrace_frame();
     glopt_frame();
     glpass_frame();
+    glspec_frame();
     glrename_frame();
     gpuidle_frame();                            // UA_GPU_IDLE: the frame's last fence
     glmemo_frame();
