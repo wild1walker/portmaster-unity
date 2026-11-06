@@ -183,6 +183,15 @@ class StubClasses(unittest.TestCase):
             self.assertIsNone(P.wwise_player_banks(t, w))
             self.assertIn('reads soundbank version 128 only (these are 128, 134)', P.wwise_summary(w))
 
+    def test_wwise_codebooks_in_macos_bundle(self):
+        # a macOS build's library is a folder: the codebooks are in the binary inside it
+        with tempfile.TemporaryDirectory() as t:
+            macos = os.path.join(t, 'Plugins', 'AkSoundEngine.bundle', 'Contents', 'MacOS')
+            os.makedirs(macos)
+            open(os.path.join(macos, 'AkSoundEngine'), 'wb').write(b'\x21\x00\x08\x00' * 70)
+            w = P.wwise_info(t)
+            self.assertEqual(w['codebooks'], ('Plugins/AkSoundEngine.bundle', 70))
+
 
 def elf_with_functions(funcs, code):
     """An x86-64 ELF with a .text section holding code and a .dynsym/.dynstr naming funcs {name: offset in code}."""

@@ -643,6 +643,8 @@ def wwise_info(data):
     # Wwise Vorbis's codebooks: pmu wwise reads them from this library at setup (none ship with the port)
     info['codebooks'] = None
     for rel, p in libs:
+        if os.path.isdir(p):                    # a macOS bundle: its binary
+            p = os.path.join(p, 'Contents', 'MacOS', os.path.splitext(os.path.basename(p))[0])
         if os.path.isfile(p):
             n = wwise_codebooks(p)
             info['codebooks'] = (rel, n)
