@@ -13,7 +13,8 @@
 //                        Unity's command line unless UA_UNITY_ARGS already names a threading switch.
 //                        Other modes (native, split) need native command buffers GLES does not have
 //                        and are left as Unity sets them.
-//   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS)
+//   UA_GLES_POOL=1       Unity's pool of GLES buffers in lists that cost O(1) (unitypool.c)
+//   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS or UA_GLES_POOL)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmunity player
 // fetch <version> --symbols`); tools/re/unityhooks.py reads a player's libunity.so with its
@@ -38,15 +39,10 @@
 
 #include "unityhooks.h"
 
-enum { ISA_ARM = 'a', ISA_A64 = 'x' };
+#include "unitypool.h"
 
-struct row {
-    const char *unity;      // the player it was read from (for the log)
-    const char *func;       // the function (demangled name, for the log)
-    uint32_t off, size;     // in libunity.so (ELF address = file offset of the text here)
-    char isa;
-    uint64_t fnv;           // FNV-1a 64 of the function's size bytes
-};
+enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
+#define row uh_row
 
 // AdjustThreadingModeForAPI(GfxThreadingMode, GfxDeviceRenderer, GfxCreateDeviceFlags) -> GfxThreadingMode
 // Read in each: modes 0 Direct, 1 NonThreaded, 2 Threaded, 3 ClientWorkerJobs, 4 ClientWorkerNativeJobs,
@@ -116,7 +112,7 @@ static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
 }
 
 // the entry of fn becomes a jump to to; *orig gets a callable original. 0 on success
-static int hook(uintptr_t fn, char isa, void *to, void **orig)
+int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig)
 {
     size_t moved = isa == ISA_ARM ? 8 : 16;
     uintptr_t t = make_trampoline(fn, moved, isa);
@@ -135,14 +131,16 @@ static int hook(uintptr_t fn, char isa, void *to, void **orig)
 }
 
 // --- the row whose bytes the loaded library has
+int unityhooks_matches(const struct row *r, uintptr_t base, size_t size)
+{
+    if ((r->isa != ISA_A64) != (sizeof(void *) == 4)) return 0;
+    if ((size_t)r->off + r->size > size) return 0;
+    return fnv1a((const uint8_t *)(base + r->off), r->size) == r->fnv;
+}
 static const struct row *find_row(const struct row *rows, size_t n, uintptr_t base, size_t size)
 {
-    for (size_t i = 0; i < n; i++) {
-        const struct row *r = &rows[i];
-        if ((r->isa == ISA_ARM) != (sizeof(void *) == 4)) continue;
-        if ((size_t)r->off + r->size > size) continue;
-        if (fnv1a((const uint8_t *)(base + r->off), r->size) == r->fnv) return r;
-    }
+    for (size_t i = 0; i < n; i++)
+        if (unityhooks_matches(&rows[i], base, size)) return &rows[i];
     return NULL;
 }
 
@@ -180,17 +178,19 @@ int unityhooks_gfx_jobs(void)
 
 void unityhooks_on_load(so_module *m)
 {
-    const char *name = so_name(m);
-    if (!name || strcmp(name, "libunity.so") || !unityhooks_gfx_jobs()) return;
+    const char *name = so_name(m), *off = getenv("UA_UNITY_HOOKS");
+    if (!name || strcmp(name, "libunity.so") || (off && !strcmp(off, "0"))) return;
     uintptr_t base = so_base(m);
     size_t size = so_size(m);
+    unitypool_on_load(base, size);              // UA_GLES_POOL
+    if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {
         fprintf(stderr, "[unityhooks] UA_GFX_JOBS: this libunity.so is not one whose AdjustThreadingModeForAPI was read "
                         "(tools/re/unityhooks.py); graphics jobs stay as Unity sets them\n");
         return;
     }
-    if (hook(base + r->off, r->isa, (void *)adjust_hook, (void **)&g_adjust_orig) != 0) {
+    if (unityhooks_hook(base + r->off, r->isa, (void *)adjust_hook, (void **)&g_adjust_orig) != 0) {
         fprintf(stderr, "[unityhooks] %s: hook failed; graphics jobs stay as Unity sets them\n", r->func);
         return;
     }

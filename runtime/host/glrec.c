@@ -4,6 +4,10 @@
 //   UA_GL_REC=census   count the render thread's GL calls a frame by entry point; nothing is held.
 //                      Shows what a recorder has to hold, and which calls would end what it knows
 //                      (anything that returns a value or reads client memory submits first)
+//   UA_GL_REC=time     census, and the time each entry point takes (the layers below this one and the
+//                      driver: what the render thread spends in GL, call by call), read from the ARM
+//                      generic timer's counter (CNTVCT: about 0.1 us a call; clock_gettime where it
+//                      cannot be read)
 //   UA_GL_REC=1        record every frame and submit it unchanged at the swap (the cost of holding)
 //   UA_GL_REC=2        record, and submit the same frame with less tiler work where the whole
 //                      frame shows it changes no pixel (glrec_fg.c: the frame graph)
@@ -30,6 +34,9 @@
 // back. Submitting calls the next layer (glopt.c, msaafix.c, gltrace.c, the driver) in order.
 #include <dlfcn.h>
 #include <pthread.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,6 +118,52 @@ static inline float rec_bitsf(uint64_t v) { uint32_t u = (uint32_t)v; float f; m
 
 static inline void glrec_count(unsigned op) { if (mine()) g_calls[op]++; }
 static void glrec_submit_for(unsigned op);
+
+// ---- UA_GL_REC=time: ticks of the generic timer (or ns of CLOCK_MONOTONIC) in each entry point
+static int g_time;
+static double g_tick_ns;
+static unsigned long long g_ticks[MAXOP];
+static int g_counter;               // the counter can be read (probed)
+#if defined(__arm__)
+static inline uint64_t counter(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("isb\n\tmrrc p15, 1, %0, %1, c14" : "=r"(lo), "=r"(hi) :: "memory");
+    return (uint64_t)hi << 32 | lo;
+}
+static uint32_t counter_freq(void) { uint32_t f; __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(f)); return f; }
+#elif defined(__aarch64__)
+static inline uint64_t counter(void) { uint64_t v; __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
+static uint32_t counter_freq(void) { uint64_t f; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); return (uint32_t)f; }
+#else
+static inline uint64_t counter(void) { return 0; }
+static uint32_t counter_freq(void) { return 0; }
+#endif
+static inline uint64_t ticks(void)
+{
+    if (g_counter) return counter();
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+static sigjmp_buf g_probe_jb;
+static void probe_ill(int sig) { (void)sig; siglongjmp(g_probe_jb, 1); }
+static void time_init(void)
+{
+    struct sigaction sa, old;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = probe_ill;
+    sigaction(SIGILL, &sa, &old);
+    volatile uint32_t f = 0; volatile uint64_t a = 0, b = 0;   // (volatile: kept across the longjmp)
+    if (!sigsetjmp(g_probe_jb, 1)) { f = counter_freq(); a = counter(); usleep(1000); b = counter(); }
+    sigaction(SIGILL, &old, NULL);
+    g_counter = f > 0 && b > a;
+    g_tick_ns = g_counter ? 1e9 / f : 1.0;
+    fprintf(stderr, "[glrec] timing with %s\n", g_counter ? "the generic timer's counter" : "clock_gettime");
+}
+// (0 when not timing: the census only counts)
+static inline uint64_t glrec_t0(void) { return g_time && mine() ? ticks() : 0; }
+static inline void glrec_t1(unsigned op, uint64_t t0) { if (!mine()) return; g_calls[op]++; if (t0) g_ticks[op] += ticks() - t0; }
+static inline void glrec_tadd(unsigned op, uint64_t t0) { if (t0) g_ticks[op] += ticks() - t0; }
 
 // ---- the vertex array shadow (what a draw reads from client memory)
 static void (*d_GetIntegerv)(GLenum, GLint *);
@@ -357,12 +410,21 @@ static void *glrec_custom_glMapBufferRange(GLenum target, GLintptr off, GLsizeip
         }
     }
     glrec_submit_for(OP_glMapBufferRange);
-    return NX(glMapBufferRange)(target, off, len, access);
+    uint64_t t_ = glrec_t0();
+    void *p = NX(glMapBufferRange)(target, off, len, access);
+    glrec_tadd(OP_glMapBufferRange, t_);
+    return p;
 }
 static void glrec_custom_glFlushMappedBufferRange(GLenum target, GLintptr off, GLsizeiptr len)
 {
     map_t *m = glrec_recording() ? map_of(target) : NULL;
-    if (!m) { glrec_submit_for(OP_glFlushMappedBufferRange); NX(glFlushMappedBufferRange)(target, off, len); return; }
+    if (!m) {
+        glrec_submit_for(OP_glFlushMappedBufferRange);
+        uint64_t t_ = glrec_t0();
+        NX(glFlushMappedBufferRange)(target, off, len);
+        glrec_tadd(OP_glFlushMappedBufferRange, t_);
+        return;
+    }
     int ok = off >= 0 && len >= 0 && off + len <= m->len;
     uint64_t data = ok ? glrec_blob(m->shadow + off, (size_t)len) : 0;
     uint64_t *a = glrec_cmd(OP_glFlushMappedBufferRange, 5);
@@ -371,7 +433,13 @@ static void glrec_custom_glFlushMappedBufferRange(GLenum target, GLintptr off, G
 static GLboolean glrec_custom_glUnmapBuffer(GLenum target)
 {
     map_t *m = glrec_recording() ? map_of(target) : NULL;
-    if (!m) { glrec_submit_for(OP_glUnmapBuffer); return NX(glUnmapBuffer)(target); }
+    if (!m) {
+        glrec_submit_for(OP_glUnmapBuffer);
+        uint64_t t_ = glrec_t0();
+        GLboolean r = NX(glUnmapBuffer)(target);
+        glrec_tadd(OP_glUnmapBuffer, t_);
+        return r;
+    }
     uint64_t data = m->access & GL_MAP_FLUSH_EXPLICIT_BIT ? 0 : glrec_blob(m->shadow, (size_t)m->len);
     uint64_t *a = glrec_cmd(OP_glUnmapBuffer, 4);
     a[0] = target; a[1] = m->id; a[2] = data; a[3] = (uint64_t)m->len;
@@ -562,6 +630,25 @@ static void top(const unsigned long *counts, const char *what, int max)
         o += (size_t)snprintf(line + o, sizeof line - o, "%s%s %.1f", i ? ", " : "", glrec_name[c[i].op], (double)c[i].n / (double)g_frames);
     fprintf(stderr, "[glrec]   %s: %s\n", what, line);
 }
+// UA_GL_REC=time: the entry points by time a frame, with their calls and the time of one
+static void top_time(double frames)
+{
+    opcount c[MAXOP];
+    int k = 0;
+    double all = 0;
+    for (unsigned i = 0; i < OP_N; i++) if (g_ticks[i]) { c[k++] = (opcount){ i, (unsigned long)(g_ticks[i] >> 4) }; all += g_ticks[i]; }
+    if (!k) return;
+    qsort(c, (size_t)k, sizeof c[0], by_count);
+    char line[2400];
+    size_t o = 0;
+    for (int i = 0; i < k && i < 30 && o + 96 < sizeof line; i++) {
+        unsigned op = c[i].op;
+        o += (size_t)snprintf(line + o, sizeof line - o, "%s%s %.3f ms (%.1f x %.1f us)", i ? ", " : "", glrec_name[op],
+                              g_ticks[op] * g_tick_ns / 1e6 / frames, g_calls[op] / frames,
+                              g_calls[op] ? g_ticks[op] * g_tick_ns / 1e3 / g_calls[op] : 0.0);
+    }
+    fprintf(stderr, "[glrec]   time in GL: %.2f ms a frame: %s\n", all * g_tick_ns / 1e6 / frames, line);
+}
 static void log_stats(void)
 {
     if (!g_frames) return;
@@ -580,8 +667,9 @@ static void log_stats(void)
     g_maps_held = 0;
     top(g_submits, g_mode == 1 ? "would submit first" : "submitted first for", 16);
     if (g_mode == 1) top(g_calls, "calls a frame", 40);
+    if (g_time) top_time(f);
     if (g_mode == 3) fg_log(g_frames, g_fg_s);
-    memset(g_calls, 0, sizeof g_calls); memset(g_submits, 0, sizeof g_submits);
+    memset(g_calls, 0, sizeof g_calls); memset(g_submits, 0, sizeof g_submits); memset(g_ticks, 0, sizeof g_ticks);
     g_rec_calls = g_held_words = g_held_blob = g_frames = g_swap_submits = g_size_submits = 0;
     g_replay_s = g_fg_s = 0;
 }
@@ -613,8 +701,10 @@ const so_shim *glrec_table(void *(*next)(const char *name))
 {
     memset(g_table, 0, sizeof g_table);
     const char *e = getenv("UA_GL_REC");
-    g_mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "census") ? 1 : !strcmp(e, "1") ? 2 : !strcmp(e, "2") ? 3 : 0;
+    g_time = e && !strcmp(e, "time");
+    g_mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "census") || g_time ? 1 : !strcmp(e, "1") ? 2 : !strcmp(e, "2") ? 3 : 0;
     if (!g_mode) return g_table;
+    if (g_time) time_init();
     const char *l = getenv("UA_GL_REC_LOG");
     if (l && *l) g_log_every = atof(l);
     void *h = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);

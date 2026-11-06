@@ -12,7 +12,8 @@
 
 #include "../unityhooks.c"
 
-// the loader's accessors (unityhooks_on_load, not called here)
+// the loader's accessors and unitypool.c's entry (unityhooks_on_load, not called here)
+void unitypool_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 const char *so_name(so_module *m) { (void)m; return NULL; }
 uintptr_t so_base(so_module *m) { (void)m; return 0; }
 size_t so_size(so_module *m) { (void)m; return 0; }
@@ -60,7 +61,7 @@ int main(void)
     CHECK(find_row(&wrong_isa, 1, (uintptr_t)lib, 2 * pg) == NULL, "a row of the other instruction set was taken");
 
     // the hook: ClientWorkerJobs kept on renderer 11, every other result as the original's
-    CHECK(hook((uintptr_t)(lib + off), FAKE_ISA, (void *)adjust_hook, (void **)&g_adjust_orig) == 0, "hook failed");
+    CHECK(unityhooks_hook((uintptr_t)(lib + off), FAKE_ISA, (void *)adjust_hook, (void **)&g_adjust_orig) == 0, "hook failed");
     CHECK(f(3, 11, 0) == 3, "mode 3 on GLES: %d", f(3, 11, 0));
     CHECK(f(4, 11, 0) == 2, "mode 4 on GLES: %d", f(4, 11, 0));
     CHECK(f(6, 11, 0) == 2, "mode 6 on GLES: %d", f(6, 11, 0));

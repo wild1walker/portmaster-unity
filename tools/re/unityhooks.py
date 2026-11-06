@@ -21,8 +21,18 @@ import struct
 import sys
 
 HOOKS = [
-    # (mangled-name prefix, short name)
+    # (mangled-name prefix, short name[, 'call': a function the runtime only calls (any instruction set,
+    # nothing moved), whose hash ties the row to the code read])
     ('_Z25AdjustThreadingModeForAPI', 'AdjustThreadingModeForAPI'),
+    # unitypool.c (UA_GLES_POOL): Unity's GLES buffer pool
+    ('_ZN17BufferManagerGLES13AcquireBufferE', 'BufferManagerGLES::AcquireBuffer'),
+    ('_ZN17BufferManagerGLES13ReleaseBufferE', 'BufferManagerGLES::ReleaseBuffer'),
+    ('_ZN17BufferManagerGLES24UpdateLiveSetFromPendingE', 'BufferManagerGLES::UpdateLiveSetFromPending'),
+    ('_ZN17BufferManagerGLES16PruneFreeBuffersE', 'BufferManagerGLES::PruneFreeBuffers'),
+    ('_ZN17BufferManagerGLES5ClearE', 'BufferManagerGLES::Clear'),
+    ('_ZN17BufferManagerGLES13InvalidateAllE', 'BufferManagerGLES::InvalidateAll'),
+    ('_ZN17BufferManagerGLESD', 'BufferManagerGLES::~BufferManagerGLES'),
+    ('_Z15GetGraphicsCapsv', 'GetGraphicsCaps', 'call'),
 ]
 
 
@@ -182,11 +192,11 @@ def main(argv=None):
         raise SystemExit(f'the symbol file is not this library\'s: build id {bs} against {bl}')
     funcs = {}
     for name, val, size in sym.funcs():
-        for pre, short in HOOKS:
-            if name.startswith(pre):
-                funcs.setdefault(short, []).append((val, size, name))
+        for pre, short, *kind in HOOKS:
+            if name.startswith(pre) and (val, size) not in [(g[0], g[1]) for g in funcs.get(short, [])]:
+                funcs.setdefault(short, []).append((val, size, name))     # (D1/D2 and C1/C2: one function)
     ok = 0
-    for pre, short in HOOKS:
+    for pre, short, *kind in HOOKS:
         got = funcs.get(short, [])
         if len(got) != 1:
             print(f'// {short}: {len(got)} symbols ({", ".join(g[2] for g in got) or "none"}): no row', file=sys.stderr)
@@ -196,7 +206,8 @@ def main(argv=None):
             isa, addr = 'x', val
         else:
             isa, addr = ('t' if val & 1 else 'a'), val & ~1
-        if isa == 't':
+        call = kind == ['call']
+        if isa == 't' and not call:
             print(f'// {short}: a Thumb function: no row', file=sys.stderr)
             continue
         off, fl = lib.file_off(addr, size)
@@ -204,6 +215,11 @@ def main(argv=None):
             print(f'// {short}: +{addr:#x} is not in the library\'s code: no row', file=sys.stderr)
             continue
         code = lib.d[off:off + size]
+        if call:
+            print(f'    {{ "{a.unity}", "{short}", {addr:#x}, {size:#x}, '
+                  f'ISA_{ {"a": "ARM", "t": "THUMB", "x": "A64"}[isa] }, {fnv1a(code):#018x}ull }},')
+            ok += 1
+            continue
         moved = 8 if isa == 'a' else 16
         words = struct.unpack_from(f'<{moved // 4}I', code, 0)
         mov = arm_movable if isa == 'a' else a64_movable

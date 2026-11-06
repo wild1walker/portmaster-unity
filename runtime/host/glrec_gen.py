@@ -286,23 +286,34 @@ def main():
         c = classes[name]
         rv = 'return ' if ret != 'void' else ''
         if c == 'imm':
-            w('static %s%s w_%s(%s) { glrec_count(OP_%s); %sNX(%s)(%s); }\n' % (abi, ret, name, decl, name, rv, name, args))
+            if ret == 'void':
+                w('static %s%s w_%s(%s) { uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); }\n'
+                  % (abi, ret, name, decl, name, args, name))
+            else:
+                w('static %s%s w_%s(%s) { uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); glrec_t1(OP_%s, t_); return r_; }\n'
+                  % (abi, ret, name, decl, ret, name, args, name))
             continue
         if c == 'custom':
             w('static %s%s w_%s(%s) { %sglrec_custom_%s(%s); }\n' % (abi, ret, name, decl, rv, name, args))
             continue
         if c == 'flush' and name in POST:
             assert ret == 'void'
-            w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); NX(%s)(%s); %s; }\n' % (abi, ret, name, decl, name, name, args, POST[name]))
+            w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_tadd(OP_%s, t_); %s; }\n'
+              % (abi, ret, name, decl, name, name, args, name, POST[name]))
             continue
         if c == 'flush':
-            w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); %sNX(%s)(%s); }\n' % (abi, ret, name, decl, name, rv, name, args))
+            if ret == 'void':
+                w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_tadd(OP_%s, t_); }\n'
+                  % (abi, ret, name, decl, name, name, args, name))
+            else:
+                w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); '
+                  'glrec_tadd(OP_%s, t_); return r_; }\n' % (abi, ret, name, decl, name, ret, name, args, name))
             continue
         w('static %s%s w_%s(%s)\n{\n    int rec_ = glrec_recording();\n' % (abi, ret, name, decl))
         if name in HOOKS:
             # (the hook follows the call either way; nonzero while recording: submit and call through)
             w('    if (%s && rec_) { glrec_submit_for(OP_%s); rec_ = 0; }\n' % (HOOKS[name], name))
-        w('    if (!rec_) { glrec_count(OP_%s); NX(%s)(%s); return; }\n' % (name, name, args))
+        w('    if (!rec_) { uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); return; }\n' % (name, args, name))
         cp = COPY.get(name, {})
         sl = []
         for i, (t, n) in enumerate(ps):
