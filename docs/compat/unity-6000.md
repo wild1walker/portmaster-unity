@@ -106,6 +106,8 @@ each). The package keeps `unity default resources` in `Data/Resources/` (from 20
 ## What the tools need for this version
 - converter: format 23, the 6000.6 serializer, the default resources path, the PlayerSettings
   tree: done.
+- donors: `DonorBuild.cs` works with 2023.1+ editors, `player donor` reads the default resources
+  from `Resources/` and Mono 4.x without `libmono.so`: done.
 - runtime: natives on both player classes, the 2023.1+ UnityPlayer members and helpers, the UI
   ALooper (and fds added to it by other threads), mimalloc's thread id, video through the
   SurfaceTexture: done. Not done: the GameActivity variant (not needed: the Activity
