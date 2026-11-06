@@ -6,7 +6,7 @@
 //   arena   UA_GL_ARENA=1: every draw read what the game wrote, through the arena (buffers deleted or sized
 //           again also right after a draw that reads them: their ranges must wait for the GPU)
 //   small   UA_GL_ARENA_MB=1: the arena fills, the buffers that do not fit made by the driver: the same
-//   nosubdata  UA_GL_ARENA_SUBDATA=0: every glBufferSubData to the driver: the same
+//   nosubdata  UA_GL_ARENA_SUBDATA unset: every glBufferSubData to the driver: the same
 //   off     unset: no wrappers
 #include <stdint.h>
 #include <stdio.h>
@@ -80,7 +80,7 @@ int main(int argc, char **argv)
     const char *sc = argc > 1 ? argv[1] : "arena";
     if (strcmp(sc, "off")) setenv("UA_GL_ARENA", "1", 1);
     if (!strcmp(sc, "small")) setenv("UA_GL_ARENA_MB", "1", 1);
-    if (!strcmp(sc, "nosubdata")) setenv("UA_GL_ARENA_SUBDATA", "0", 1);
+    if (!strcmp(sc, "arena") || !strcmp(sc, "small")) setenv("UA_GL_ARENA_SUBDATA", "1", 1);
     g_t = glarena_table(NULL);
     if (!strcmp(sc, "off")) {
         if (g_t[0].name) { fprintf(stderr, "FAIL off: wrappers made\n"); return 1; }

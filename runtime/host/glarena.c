@@ -41,7 +41,7 @@
 // glBufferSubData into a buffer last used before that frame is a memcpy into the coherent mapping:
 // nothing queued can read it, and the commands made after it see it. Any other goes to the driver as
 // before. Once anything the layer does not follow reads a buffer (the "not moved" cases), every
-// glBufferSubData goes to the driver. UA_GL_ARENA_SUBDATA=0: all of them do.
+// glBufferSubData goes to the driver. UA_GL_ARENA_SUBDATA=1 turns this on (off by default).
 #include "glarena.h"
 
 #include <dlfcn.h>
@@ -80,7 +80,7 @@ typedef unsigned char GLboolean; typedef intptr_t GLintptr; typedef intptr_t GLs
 
 static so_shim g_shims[40];
 static int g_on, g_ok = -1, g_closed;       // g_ok: the extension (-1: not checked yet); g_closed: no new buffers
-static int g_copy = 1;                      // glBufferSubData by memcpy where the GPU is past the buffer (UA_GL_ARENA_SUBDATA)
+static int g_copy;                          // glBufferSubData by memcpy where the GPU is past the buffer (UA_GL_ARENA_SUBDATA=1)
 static long g_done;                         // the GPU is past every command made while g_frames < g_done (fences)
 static long g_subcopy, g_subdriver;
 static GLuint g_A;                          // the arena
@@ -598,7 +598,7 @@ const so_shim *glarena_table(void *(*next)(const char *name))
     const char *mb = getenv("UA_GL_ARENA_MB");
     g_size = (unsigned)(mb && atoi(mb) > 0 ? atoi(mb) : 8) << 20;
     const char *sd = getenv("UA_GL_ARENA_SUBDATA");
-    g_copy = !(sd && !strcmp(sd, "0"));
+    g_copy = sd && !strcmp(sd, "1");
 #define Q(f) *(void **)&q_##f = gl(NULL, "gl" #f)
     Q(BufferStorageEXT); Q(GenBuffers); Q(BindBuffer); Q(MapBufferRange); Q(GetString); Q(GetIntegerv); Q(Finish);
     Q(FenceSync); Q(ClientWaitSync); Q(DeleteSync);
