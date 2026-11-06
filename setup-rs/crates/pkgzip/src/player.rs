@@ -82,12 +82,19 @@ pub fn donor(
             let base = n.rsplit('/').next().unwrap_or(n);
             let rel = if lib_abi && (n == format!("lib/{abi}/libmain.so") || n == libunity) {
                 format!("Variations/{backend}/Release/Libs/{abi}/{base}")
-            } else if lib_abi && backend == "mono" && n.starts_with(&format!("lib/{abi}/libmono")) {
+            } else if lib_abi
+                && backend == "mono"
+                && (n.starts_with(&format!("lib/{abi}/libmono"))
+                    || n == format!("lib/{abi}/libMonoPosixHelper.so"))
+            {
                 format!("Variations/mono/Release/MonoLibs/{abi}/{base}")
             } else if engine_dll(n) && (backend == "mono" || managed) {
                 format!("Variations/{backend}/Managed/{base}")
             } else if n == "assets/bin/Data/unity default resources" {
                 "Data/unity default resources".to_string()
+            } else if n == "assets/bin/Data/Resources/unity default resources" {
+                // (2023.2+, Unity 6: the APK keeps it under Resources/)
+                "Data/Resources/unity default resources".to_string()
             } else {
                 continue;
             };
@@ -109,16 +116,21 @@ pub fn donor(
         }
     }
     let libs = format!("Variations/{backend}/Release/Libs/{abi}/");
-    let mut need = vec![
-        format!("{libs}libmain.so"),
-        format!("{libs}libunity.so"),
-        "Data/unity default resources".into(),
-    ];
+    let mut need = vec![format!("{libs}libmain.so"), format!("{libs}libunity.so")];
+    if !DEFAULT_RESOURCES.iter().any(|r| got.iter().any(|g| g == r)) {
+        need.push("Data/unity default resources".into());
+    }
     if backend == "mono" || managed {
         need.push(format!("Variations/{backend}/Managed/UnityEngine.dll"));
     }
-    if backend == "mono" {
-        need.push(format!("Variations/mono/Release/MonoLibs/{abi}/libmono.so"));
+    // (Mono 2.x's libmono.so, or only 4.x's libmonobdwgc-2.0.so: Unity 6 has no 2.x runtime)
+    let mono = format!("Variations/mono/Release/MonoLibs/{abi}/");
+    if backend == "mono"
+        && !["libmono.so", "libmonobdwgc-2.0.so"]
+            .iter()
+            .any(|m| got.contains(&format!("{mono}{m}")))
+    {
+        need.push(format!("{mono}libmono.so"));
     }
     let missing: Vec<&str> = need
         .iter()
@@ -590,6 +602,58 @@ mod tests {
                 .join("out4/Variations/il2cpp/Release/Libs/armeabi-v7a/libil2cpp.so")
                 .exists());
         }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unity6_mono_donor() {
+        // 2023.2+: the default resources under Resources/, and Mono 4.x alone (no libmono.so)
+        let dir = std::env::temp_dir().join(format!("pkgzip-player6-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let d = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let b = |s: &[u8]| Src::Bytes(s.to_vec());
+        let mono = vec![
+            (
+                "lib/armeabi-v7a/libunity.so".to_string(),
+                b(b"...Unity 6000.0.62f1..."),
+            ),
+            ("lib/armeabi-v7a/libmain.so".to_string(), b(b"main")),
+            ("lib/armeabi-v7a/libmonobdwgc-2.0.so".to_string(), b(b"m2")),
+            (
+                "lib/armeabi-v7a/libMonoPosixHelper.so".to_string(),
+                b(b"ph"),
+            ),
+            (
+                "assets/bin/Data/Managed/UnityEngine.dll".to_string(),
+                b(b"ue"),
+            ),
+            (
+                "assets/bin/Data/Resources/unity default resources".to_string(),
+                b(b"res"),
+            ),
+        ];
+        write_zip(&d("mono.apk"), &mono, &mut |_| {}, 4).unwrap();
+        donor(
+            "6000.0.62f1",
+            &d("out"),
+            &[d("mono.apk")],
+            "mono",
+            "armeabi-v7a",
+            false,
+            &mut |_| {},
+        )
+        .unwrap();
+        let got = |p: &str| fs::read(dir.join("out").join(p)).unwrap();
+        assert_eq!(got("Data/Resources/unity default resources"), b"res");
+        assert_eq!(
+            got("Variations/mono/Release/MonoLibs/armeabi-v7a/libmonobdwgc-2.0.so"),
+            b"m2"
+        );
+        assert_eq!(
+            got("Variations/mono/Release/MonoLibs/armeabi-v7a/libMonoPosixHelper.so"),
+            b"ph"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }

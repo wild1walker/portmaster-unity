@@ -29,11 +29,21 @@ public static class DonorBuild
             arch.SetValue(null, System.Enum.Parse(arch.PropertyType, abi), null);
         else
             PlayerSettings.Android.targetDevice = (AndroidTargetDevice)System.Enum.Parse(typeof(AndroidTargetDevice), abi);
-        PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel16;
         PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.Android, false);
+#if UNITY_2023_1_OR_NEWER
+        // (Unity 6: API level 23 at least, no GLES2, Gradle the only build system: their defaults)
+        PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
+#else
+        PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel16;
         PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3, UnityEngine.Rendering.GraphicsDeviceType.OpenGLES2 });
         EditorUserBuildSettings.androidBuildSystem = AndroidBuildSystem.Internal;
+#endif
+#if UNITY_2018_1_OR_NEWER
+        var r = BuildPipeline.BuildPlayer(new[] { "Assets/Donor.unity" }, apk, BuildTarget.Android, BuildOptions.None).summary.result.ToString();
+        if (r == "Succeeded") r = "";
+#else
         var r = BuildPipeline.BuildPlayer(new[] { "Assets/Donor.unity" }, apk, BuildTarget.Android, BuildOptions.None);
+#endif
         // (with -nographics the scene's reflection probe cannot be baked: "RenderTexture.Create failed:
         // cubemap not supported" counts as build errors, but the APK and its player are complete)
         if (!System.IO.File.Exists(apk)) { Debug.LogError(r); EditorApplication.Exit(1); }
