@@ -18,7 +18,9 @@ unsigned long fake_calls_bufferdata;           // the driver's glBufferData call
 
 // the GPU's queue: draws waiting to be read, with what they read from (as bound at the call)
 // (the storage as it was at the call: sizing a buffer again gives it new storage, the queued draws keep the old)
-typedef struct { const unsigned char *ebuf; uintptr_t eoff; int count, base; const unsigned char *vbuf[2]; uintptr_t voff[2]; int stride[2], bytes[2]; long frame; int id; } qdraw;
+typedef struct { const unsigned char *ebuf; uintptr_t eoff; int count, base; const unsigned char *vbuf[2]; uintptr_t voff[2]; int stride[2], bytes[2];
+                 const unsigned char *ubuf; uintptr_t uoff; int ubytes; long frame; int id; } qdraw;
+static struct { GLuint buf; uintptr_t off; int bytes; } U0;   // uniform buffer binding 0 (the draws read it whole)
 static qdraw *g_q; static int g_nq, g_capq;
 static long g_frame;                           // frames the CPU has finished
 uint32_t fake_result[200000]; int fake_done[200000];
@@ -35,6 +37,7 @@ static uint32_t hash_draw(const qdraw *d)
             for (int k = 0; k < d->bytes[a]; k++) h = (h ^ p[k]) * 16777619u;
         }
     }
+    for (int k = 0; k < d->ubytes; k++) h = (h ^ d->ubuf[d->uoff + k]) * 16777619u;
     return h;
 }
 static void gpu_until(long frame)              // the GPU reads every draw of frames up to this one
@@ -58,8 +61,12 @@ static GLuint *slot(GLenum t)
 }
 void glGenBuffers(GLsizei n, GLuint *b) { for (int i = 0; i < n; i++) b[i] = g_next++; }
 void glBindBuffer(GLenum t, GLuint b) { GLuint *s = slot(t); if (s) *s = b; }
-void glBindBufferBase(GLenum t, GLuint i, GLuint b) { (void)i; glBindBuffer(t, b); }
-void glBindBufferRange(GLenum t, GLuint i, GLuint b, GLintptr o, GLsizeiptr n) { (void)i; (void)o; (void)n; glBindBuffer(t, b); }
+void glBindBufferBase(GLenum t, GLuint i, GLuint b) { glBindBuffer(t, b); if (t == 0x8A11 && i == 0) { U0.buf = b; U0.off = 0; U0.bytes = (int)B[b].size; } }
+void glBindBufferRange(GLenum t, GLuint i, GLuint b, GLintptr o, GLsizeiptr n)
+{
+    glBindBuffer(t, b);
+    if (t == 0x8A11 && i == 0) { U0.buf = b; U0.off = (uintptr_t)o; U0.bytes = (int)n; }
+}
 static void storage(GLenum t, GLsizeiptr size, const void *data)
 {
     GLuint b = *slot(t);
@@ -68,7 +75,25 @@ static void storage(GLenum t, GLsizeiptr size, const void *data)
 }
 void glBufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usage) { (void)usage; fake_calls_bufferdata++; storage(t, size, data); }
 void glBufferStorageEXT(GLenum t, GLsizeiptr size, const void *data, GLbitfield f) { (void)f; storage(t, size, data); }
-void glBufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data) { memcpy(B[*slot(t)].data + o, data, (size_t)n); }
+// as a driver must: the queued draws reading this storage see what it held when they were made (here the GPU
+// reads them first: a stall), then the write
+static void reads_done(const unsigned char *st)
+{
+    int k = 0;
+    for (int i = 0; i < g_nq; i++) {
+        qdraw *d = &g_q[i];
+        if (d->ebuf == st || d->vbuf[0] == st || d->vbuf[1] == st || d->ubuf == st) { fake_result[d->id] = hash_draw(d); fake_done[d->id] = 1; }
+        else g_q[k++] = *d;
+    }
+    g_nq = k;
+}
+unsigned long fake_calls_subdata;               // the driver's glBufferSubData calls
+void glBufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data)
+{
+    fake_calls_subdata++;
+    reads_done(B[*slot(t)].data);
+    memcpy(B[*slot(t)].data + o, data, (size_t)n);
+}
 void *glMapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield a) { (void)n; (void)a; return B[*slot(t)].data + o; }
 void glFlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr n) { (void)t; (void)o; (void)n; }
 GLboolean glUnmapBuffer(GLenum t) { (void)t; return 1; }
@@ -106,12 +131,15 @@ static void queue(int count, const void *indices, int base)
     qdraw *d = &g_q[g_nq++];
     d->ebuf = B[g_elem[g_vao]].data; d->eoff = (uintptr_t)indices; d->count = count; d->base = base; d->frame = g_frame; d->id = g_id++;
     for (int a = 0; a < 2; a++) { d->vbuf[a] = B[A[g_vao][a].buf].data; d->voff[a] = A[g_vao][a].off; d->stride[a] = A[g_vao][a].stride; d->bytes[a] = A[g_vao][a].bytes; }
+    d->ubuf = U0.buf ? B[U0.buf].data : NULL; d->uoff = U0.off; d->ubytes = U0.buf ? U0.bytes : 0;
 }
 void glDrawElements(GLenum m, GLsizei n, GLenum t, const void *i) { (void)m; (void)t; queue(n, i, 0); }
 void glDrawElementsInstanced(GLenum m, GLsizei n, GLenum t, const void *i, GLsizei k) { (void)k; glDrawElements(m, n, t, i); }
 void glDrawRangeElements(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i) { (void)a; (void)b; glDrawElements(m, n, t, i); }
 void glDrawElementsBaseVertexOES(GLenum m, GLsizei n, GLenum t, const void *i, GLint v) { (void)m; (void)t; queue(n, i, v); }
 void glFinish(void) { fake_gpu_all(); }
+void glDrawArrays(GLenum m, GLint f, GLsizei n) { (void)m; (void)f; (void)n; }
+void glDrawArraysInstanced(GLenum m, GLint f, GLsizei n, GLsizei k) { (void)m; (void)f; (void)n; (void)k; }
 GLsync glFenceSync(GLenum c, GLbitfield f) { (void)c; (void)f; return (GLsync)(intptr_t)(g_frame + 1); }   // (after the frame now being made)
 GLenum glClientWaitSync(GLsync s, GLbitfield f, uint64_t timeout)
 {

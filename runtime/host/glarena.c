@@ -15,7 +15,9 @@
 //                                            vertex array's index buffer
 //   glMapBufferRange                         the arena's mapping + offset (flush and unmap: nothing,
 //                                            coherent); a map that is not unsynchronized waits
-//   glBufferSubData, glCopyBufferSubData     the offsets moved
+//   glBufferSubData                          a memcpy into the mapping when the GPU is past every draw
+//                                            and copy that used the buffer (below), else the offset moved
+//   glCopyBufferSubData                      the offsets moved
 //   glBufferData on such a buffer again      a new range (the old one freed as below; no room: the
 //                                            buffer leaves the arena for the driver's storage)
 //   glDeleteBuffers                          the range freed once the GPU is past the frame it was
@@ -28,6 +30,18 @@
 // buffer is made as before (glpersist.c's, the driver's). Logged: "[glarena] ..." at the start and
 // every 10 s (buffers in the arena, its use, the ranges waiting for the GPU).
 // UA_GL_ARENA_MB=<n>: the arena's size (default 8).
+//
+// glBufferSubData without the driver. Unity uploads each constant buffer a draw changes with
+// glBufferSubData (one ~100 - 400 byte update per draw in Hollow Knight); on the arena the Mali
+// driver has to order the write after the queued draws that read other ranges of the same buffer
+// object, at several us a call. The layer notes, for each of its buffers, the frame of the last
+// draw (or dispatch) that could read it (its element buffer, the vertex attributes pointing into it,
+// the uniform buffer bindings when the draw is made) and of the last buffer copy that read or wrote
+// it, and the last frame a fence shows the GPU is past (the fences made at the swaps); a
+// glBufferSubData into a buffer last used before that frame is a memcpy into the coherent mapping:
+// nothing queued can read it, and the commands made after it see it. Any other goes to the driver as
+// before. Once anything the layer does not follow reads a buffer (the "not moved" cases), every
+// glBufferSubData goes to the driver. UA_GL_ARENA_SUBDATA=0: all of them do.
 #include "glarena.h"
 
 #include <dlfcn.h>
@@ -66,6 +80,9 @@ typedef unsigned char GLboolean; typedef intptr_t GLintptr; typedef intptr_t GLs
 
 static so_shim g_shims[40];
 static int g_on, g_ok = -1, g_closed;       // g_ok: the extension (-1: not checked yet); g_closed: no new buffers
+static int g_copy = 1;                      // glBufferSubData by memcpy where the GPU is past the buffer (UA_GL_ARENA_SUBDATA)
+static long g_done;                         // the GPU is past every command made while g_frames < g_done (fences)
+static long g_subcopy, g_subdriver;
 static GLuint g_A;                          // the arena
 static char *g_ptr;
 static unsigned g_size;
@@ -75,7 +92,7 @@ static double g_last_log;
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
 // ---- the game's buffers in the arena: name -> range
-typedef struct { GLuint name; unsigned off, size, len; GLenum usage; } vbuf;   // len: as the game sized it
+typedef struct { GLuint name; unsigned off, size, len; GLenum usage; long used; } vbuf;   // len: as the game sized it; used: g_frames at the last draw or copy that could read or write it
 static vbuf *g_tab;
 static size_t g_cap, g_n;
 static vbuf *find(GLuint name)
@@ -172,6 +189,10 @@ static GLuint vb_array, vb_copyr, vb_copyw, vb_uniform;
 static GLuint g_vao;
 #define VAOS 64
 static struct { GLuint vao, elem; } g_velem[VAOS];   // a vertex array's index buffer, when one of these
+#define ATTRS 16
+static struct { GLuint vao, attr[ATTRS]; int used; } g_vattr[VAOS];   // a vertex array's attributes' buffers, when these
+#define UBOS 32
+static GLuint g_ubo[UBOS]; static unsigned g_nubo;  // the uniform buffer bindings to these buffers (0: another)
 static GLuint *elem_slot(GLuint vao, int make)
 {
     for (int i = 0; i < VAOS; i++) if (g_velem[i].vao == vao && (g_velem[i].elem || make)) return &g_velem[i].elem;
@@ -191,6 +212,25 @@ static GLuint *bound_slot(GLenum t)
     }
 }
 static vbuf *bound(GLenum t) { GLuint *s = bound_slot(t); return s && *s ? find(*s) : NULL; }
+static int *attr_used(GLuint vao, GLuint **attr, int make)
+{
+    for (int i = 0; i < VAOS; i++) if (g_vattr[i].used && g_vattr[i].vao == vao) { *attr = g_vattr[i].attr; return &g_vattr[i].used; }
+    if (!make) return NULL;
+    for (int i = 0; i < VAOS; i++)
+        if (!g_vattr[i].used) { g_vattr[i].vao = vao; g_vattr[i].used = 1; memset(g_vattr[i].attr, 0, sizeof g_vattr[i].attr); *attr = g_vattr[i].attr; return &g_vattr[i].used; }
+    g_copy = 0;                             // (more vertex arrays than followed: no more memcpy)
+    return NULL;
+}
+static inline void use(GLuint name) { vbuf *p = find(name); if (p) p->used = g_frames; }
+// a draw or dispatch: every buffer of these it could read is used in this frame
+static void draw_uses(void)
+{
+    if (!g_copy || g_ok <= 0) return;
+    GLuint *e = elem_slot(g_vao, 0), *attr;
+    if (e && *e) use(*e);
+    if (attr_used(g_vao, &attr, 0)) for (int a = 0; a < ATTRS; a++) if (attr[a]) use(attr[a]);
+    for (unsigned i = 0; i < g_nubo; i++) if (g_ubo[i]) use(g_ubo[i]);
+}
 
 // ---- the next layer's functions, and the driver's for the layer's own use
 static void (*r_BindBuffer)(GLenum, GLuint);
@@ -236,6 +276,7 @@ static void not_moved(const char *what)
     static int n;
     if (n++ < 10) fprintf(stderr, "[glarena] %s reads a buffer in the arena: not moved; no more buffers go into the arena\n", what);
     g_closed = 1;
+    g_copy = 0;                             // (a use the layer does not follow: every glBufferSubData to the driver)
 }
 
 // the arena, made at the first buffer the game sizes (a context is current then)
@@ -273,10 +314,15 @@ static void w_BindBuffer(GLenum t, GLuint name)
     if (p && !s) not_moved("a binding of this target");
     r_BindBuffer(t, p ? g_A : name);
 }
+static void ubo_bind(GLuint i, GLuint name, int arena)
+{
+    if (i < UBOS) { g_ubo[i] = arena ? name : 0; if (arena && i >= g_nubo) g_nubo = i + 1; }
+    else if (arena) g_copy = 0;             // (a binding past those followed)
+}
 static void w_BindBufferBase(GLenum t, GLuint i, GLuint name)
 {
     vbuf *p = g_ok > 0 ? find(name) : NULL;
-    if (t == GL_UNIFORM_BUFFER) vb_uniform = p ? name : 0;
+    if (t == GL_UNIFORM_BUFFER) { vb_uniform = p ? name : 0; ubo_bind(i, name, p != NULL); }
     if (!p) { r_BindBufferBase(t, i, name); return; }
     if (t != GL_UNIFORM_BUFFER) { not_moved("an indexed binding"); r_BindBufferBase(t, i, name); return; }
     r_BindBufferRange(t, i, g_A, p->off, p->len);
@@ -284,7 +330,7 @@ static void w_BindBufferBase(GLenum t, GLuint i, GLuint name)
 static void w_BindBufferRange(GLenum t, GLuint i, GLuint name, GLintptr o, GLsizeiptr n)
 {
     vbuf *p = g_ok > 0 ? find(name) : NULL;
-    if (t == GL_UNIFORM_BUFFER) vb_uniform = p ? name : 0;
+    if (t == GL_UNIFORM_BUFFER) { vb_uniform = p ? name : 0; ubo_bind(i, name, p != NULL); }
     if (!p) { r_BindBufferRange(t, i, name, o, n); return; }
     if (t != GL_UNIFORM_BUFFER) { not_moved("an indexed binding"); r_BindBufferRange(t, i, name, o, n); return; }
     r_BindBufferRange(t, i, g_A, (GLintptr)p->off + o, n);
@@ -298,7 +344,7 @@ static void w_BufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usa
         unsigned off;
         if (size > 0 && alloc((unsigned)size, &off)) {
             defer(p->off, p->size);
-            p->off = off; p->size = (unsigned)size; p->len = (unsigned)size; p->usage = usage;
+            p->off = off; p->size = (unsigned)size; p->len = (unsigned)size; p->usage = usage; p->used = 0;
             if (data) memcpy(g_ptr + off, data, (size_t)size);
             return;
         }
@@ -321,7 +367,7 @@ static void w_BufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usa
             if (alloc((unsigned)size, &off)) {
                 vbuf *v = add((GLuint)name);
                 if (v) {
-                    v->off = off; v->size = (unsigned)size; v->len = (unsigned)size; v->usage = usage;
+                    v->off = off; v->size = (unsigned)size; v->len = (unsigned)size; v->usage = usage; v->used = 0;
                     if (data) memcpy(g_ptr + off, data, (size_t)size);
                     GLuint *slot = t == GL_ELEMENT_ARRAY_BUFFER ? elem_slot(g_vao, 1) : s;
                     if (slot) *slot = (GLuint)name;
@@ -339,6 +385,12 @@ static void w_BufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usa
 static void w_BufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data)
 {
     vbuf *p = g_ok > 0 ? bound(t) : NULL;
+    if (p && g_copy && p->used < g_done && data && o >= 0 && n >= 0 && (unsigned long)o + (unsigned long)n <= p->len) {
+        memcpy(g_ptr + p->off + o, data, (size_t)n);  // (nothing queued reads it; coherent: later commands see it)
+        g_subcopy++;
+        return;
+    }
+    if (p) g_subdriver++;
     r_BufferSubData(t, p ? (GLintptr)p->off + o : o, n, data);
 }
 static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield access)
@@ -363,6 +415,8 @@ static GLboolean w_UnmapBuffer(GLenum t)
 static void w_CopyBufferSubData(GLenum rt, GLenum wt, GLintptr ro, GLintptr wo, GLsizeiptr n)
 {
     vbuf *r = g_ok > 0 ? bound(rt) : NULL, *w = g_ok > 0 ? bound(wt) : NULL;
+    if (r) r->used = g_frames;              // (the GPU reads one and writes the other later)
+    if (w) w->used = g_frames;
     r_CopyBufferSubData(rt, wt, r ? (GLintptr)r->off + ro : ro, w ? (GLintptr)w->off + wo : wo, n);
 }
 static void w_DeleteBuffers(GLsizei n, const GLuint *names)
@@ -375,6 +429,8 @@ static void w_DeleteBuffers(GLsizei n, const GLuint *names)
             static const GLenum ts[] = { GL_ARRAY_BUFFER, GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, GL_UNIFORM_BUFFER, GL_ELEMENT_ARRAY_BUFFER };
             for (int k = 0; k < 5; k++) { GLuint *s = bound_slot(ts[k]); if (s && *s == names[i]) { *s = 0; r_BindBuffer(ts[k], 0); } }
             for (int k = 0; k < VAOS; k++) if (g_velem[k].elem == names[i]) g_velem[k].elem = 0;   // (another vertex array's: the game binds again)
+            for (int k = 0; k < VAOS; k++) for (int a = 0; a < ATTRS; a++) if (g_vattr[k].attr[a] == names[i]) g_vattr[k].attr[a] = 0;
+            for (unsigned k = 0; k < g_nubo; k++) if (g_ubo[k] == names[i]) g_ubo[k] = 0;
             defer(p->off, p->size);
             drop(names[i]);
         }
@@ -399,22 +455,32 @@ static void w_GetIntegerv(GLenum pname, GLint *v)
     GLuint *s = t ? bound_slot(t) : NULL;
     if (s) *v = (GLint)*s;
 }
+static void attr_set(GLuint a, GLuint name)
+{
+    GLuint *attr;
+    if (a >= ATTRS) { if (name) g_copy = 0; return; }
+    if (attr_used(g_vao, &attr, name != 0)) attr[a] = name;
+}
 static void w_VertexAttribPointer(GLuint a, GLint size, GLenum type, GLboolean norm, GLsizei stride, const void *ptr)
 {
     vbuf *p = g_ok > 0 && vb_array ? find(vb_array) : NULL;
+    if (g_ok > 0) attr_set(a, p ? vb_array : 0);
     r_VertexAttribPointer(a, size, type, norm, stride, p ? (const char *)ptr + p->off : ptr);
 }
 static void w_VertexAttribIPointer(GLuint a, GLint size, GLenum type, GLsizei stride, const void *ptr)
 {
     vbuf *p = g_ok > 0 && vb_array ? find(vb_array) : NULL;
+    if (g_ok > 0) attr_set(a, p ? vb_array : 0);
     r_VertexAttribIPointer(a, size, type, stride, p ? (const char *)ptr + p->off : ptr);
 }
 static void w_BindVertexArray(GLuint v) { g_vao = v; r_BindVertexArray(v); }
 static void w_DeleteVertexArrays(GLsizei n, const GLuint *v)
 {
     for (GLsizei i = 0; i < n; i++) {
-        GLuint *s = elem_slot(v[i], 0);
+        GLuint *s = elem_slot(v[i], 0), *attr;
         if (s) *s = 0;
+        int *u = attr_used(v[i], &attr, 0);
+        if (u) *u = 0;
         if (v[i] == g_vao) g_vao = 0;
     }
     r_DeleteVertexArrays(n, v);
@@ -424,6 +490,7 @@ static void w_DeleteVertexArrays(GLsizei n, const GLuint *v)
 static const void *idx(const void *indices)
 {
     if (g_ok <= 0) return indices;
+    draw_uses();
     GLuint *s = elem_slot(g_vao, 0);
     vbuf *p = s && *s ? find(*s) : NULL;
     return p ? (const char *)indices + p->off : indices;
@@ -443,9 +510,18 @@ static void w_DrawElementsInstancedBaseVertex(GLenum m, GLsizei n, GLenum t, con
 static void w_DrawElementsInstancedBaseVertexOES(GLenum m, GLsizei n, GLenum t, const void *i, GLsizei k, GLint v)
 { r_DrawElementsInstancedBaseVertexOES(m, n, t, idx(i), k, v); }
 
+// the draws without indices and the dispatches: only what they use
+static void (*r_DrawArrays)(GLenum, GLint, GLsizei);
+static void (*r_DrawArraysInstanced)(GLenum, GLint, GLsizei, GLsizei);
+static void (*r_DispatchCompute)(GLuint, GLuint, GLuint);
+static void (*r_DispatchComputeIndirect)(GLintptr);
+static void w_DrawArrays(GLenum m, GLint f, GLsizei n) { draw_uses(); r_DrawArrays(m, f, n); }
+static void w_DrawArraysInstanced(GLenum m, GLint f, GLsizei n, GLsizei k) { draw_uses(); r_DrawArraysInstanced(m, f, n, k); }
+static void w_DispatchCompute(GLuint x, GLuint y, GLuint z) { draw_uses(); r_DispatchCompute(x, y, z); }
+static void w_DispatchComputeIndirect(GLintptr o) { draw_uses(); r_DispatchComputeIndirect(o); }
 // what the layer cannot move, when it reads one of these buffers
 static void (*r_DrawArraysIndirect)(GLenum, const void *);
-static void w_DrawArraysIndirect(GLenum m, const void *p) { GLint b = 0; if (g_ok > 0) { r_GetIntegerv(0x8F43, &b); if ((GLuint)b == g_A) not_moved("an indirect draw"); } r_DrawArraysIndirect(m, p); }
+static void w_DrawArraysIndirect(GLenum m, const void *p) { GLint b = 0; if (g_ok > 0) { draw_uses(); r_GetIntegerv(0x8F43, &b); if ((GLuint)b == g_A) not_moved("an indirect draw"); } r_DrawArraysIndirect(m, p); }
 static void (*r_DrawElementsIndirect)(GLenum, GLenum, const void *);
 static void w_DrawElementsIndirect(GLenum m, GLenum t, const void *p)
 {
@@ -457,6 +533,8 @@ static void w_DrawElementsIndirect(GLenum m, GLenum t, const void *p)
     r_DrawElementsIndirect(m, t, p);
 }
 
+void glarena_subdata_counts(long *copied, long *driver) { *copied = g_subcopy; *driver = g_subdriver; }
+
 void glarena_frame(void)
 {
     if (g_ok <= 0) return;
@@ -467,6 +545,7 @@ void glarena_frame(void)
         q_ClientWaitSync(g_fence[slot], 0, 1000000000ull);
         q_DeleteSync(g_fence[slot]);
         long f = g_fence_frame[slot];
+        if (f > g_done) g_done = f;
         for (size_t i = 0; i < g_npend;) if (g_pend[i].frame < f) { release(g_pend[i].off, g_pend[i].size); g_pend[i] = g_pend[--g_npend]; } else i++;
         g_fence[slot] = NULL;
     }
@@ -478,6 +557,7 @@ void glarena_frame(void)
         if (r != GL_ALREADY_SIGNALED && r != GL_CONDITION_SATISFIED) break;
         q_DeleteSync(g_fence[s]);
         long f = g_fence_frame[s];
+        if (f > g_done) g_done = f;
         for (size_t i = 0; i < g_npend;) if (g_pend[i].frame < f) { release(g_pend[i].off, g_pend[i].size); g_pend[i] = g_pend[--g_npend]; } else i++;
         g_fence[s] = NULL;
     }
@@ -489,8 +569,9 @@ void glarena_frame(void)
     g_last_log = t;
     unsigned pend = 0;
     for (size_t i = 0; i < g_npend; i++) pend += (g_pend[i].size + ALIGN - 1) & ~(ALIGN - 1);
-    fprintf(stderr, "[glarena] %zu buffers in the arena (%.1f of %u MB, %.1f MB waiting for the GPU), %ld made, %ld maps, %ld did not fit\n",
-            g_n, g_used / 1048576.0, g_size >> 20, pend / 1048576.0, g_in, g_moves, g_full);
+    fprintf(stderr, "[glarena] %zu buffers in the arena (%.1f of %u MB, %.1f MB waiting for the GPU), %ld made, %ld maps, %ld did not fit; "
+            "glBufferSubData: %ld copied, %ld to the driver\n",
+            g_n, g_used / 1048576.0, g_size >> 20, pend / 1048576.0, g_in, g_moves, g_full, g_subcopy, g_subdriver);
 }
 
 static void *gl(void *(*next)(const char *), const char *name)
@@ -516,6 +597,8 @@ const so_shim *glarena_table(void *(*next)(const char *name))
     if (!e || strcmp(e, "1")) return g_shims;
     const char *mb = getenv("UA_GL_ARENA_MB");
     g_size = (unsigned)(mb && atoi(mb) > 0 ? atoi(mb) : 8) << 20;
+    const char *sd = getenv("UA_GL_ARENA_SUBDATA");
+    g_copy = !(sd && !strcmp(sd, "0"));
 #define Q(f) *(void **)&q_##f = gl(NULL, "gl" #f)
     Q(BufferStorageEXT); Q(GenBuffers); Q(BindBuffer); Q(MapBufferRange); Q(GetString); Q(GetIntegerv); Q(Finish);
     Q(FenceSync); Q(ClientWaitSync); Q(DeleteSync);
@@ -530,6 +613,7 @@ const so_shim *glarena_table(void *(*next)(const char *name))
     O(DrawElementsBaseVertex); O(DrawElementsBaseVertexOES); O(DrawElementsBaseVertexEXT); O(DrawRangeElementsBaseVertex);
     O(DrawRangeElementsBaseVertexOES); O(DrawElementsInstancedBaseVertex); O(DrawElementsInstancedBaseVertexOES);
     O(DrawArraysIndirect); O(DrawElementsIndirect);
+    R(DrawArrays); R(DrawArraysInstanced); O(DispatchCompute); O(DispatchComputeIndirect);
 #undef R
 #undef O
     if (missing || !q_BufferStorageEXT || !q_GenBuffers || !q_BindBuffer || !q_MapBufferRange || !q_GetString || !q_GetIntegerv ||
