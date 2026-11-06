@@ -30,6 +30,8 @@
 #   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
 #                   is removed in the container first, so a launcher takes its 64-bit path
 #   REHEARSE_NAME   the setup container's name (to docker kill it)
+#   REHEARSE_NET=none  no network in the setup container: a port whose setup never downloads anything
+#                   (its donors carry Unity's player) shows that it needs no Wi-Fi
 #   REHEARSE_MEMINFO  a /proc/meminfo for the setup container (Docker shows the VM's RAM): e.g. one with
 #                   "MemTotal: 996352 kB", for the setup steps that decide by the handheld's RAM (video,
 #                   textures lowmem_scale)
@@ -114,7 +116,7 @@ for c in mount umount; do
 done
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
-docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
+docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
   ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \

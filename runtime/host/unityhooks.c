@@ -14,7 +14,8 @@
 //                        Other modes (native, split) need native command buffers GLES does not have
 //                        and are left as Unity sets them.
 //   UA_GLES_POOL=1       Unity's pool of GLES buffers in lists that cost O(1) (unitypool.c)
-//   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS or UA_GLES_POOL)
+//   UA_FAST_VERTS=1      dynamic batching's vertex transform without its per-vertex overhead (unityverts.c)
+//   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmunity player
 // fetch <version> --symbols`); tools/re/unityhooks.py reads a player's libunity.so with its
@@ -40,6 +41,7 @@
 #include "unityhooks.h"
 
 #include "unitypool.h"
+#include "unityverts.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -183,6 +185,7 @@ void unityhooks_on_load(so_module *m)
     uintptr_t base = so_base(m);
     size_t size = so_size(m);
     unitypool_on_load(base, size);              // UA_GLES_POOL
+    unityverts_on_load(base, size);             // UA_FAST_VERTS
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {

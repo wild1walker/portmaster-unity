@@ -33,6 +33,8 @@ HOOKS = [
     ('_ZN17BufferManagerGLES13InvalidateAllE', 'BufferManagerGLES::InvalidateAll'),
     ('_ZN17BufferManagerGLESD', 'BufferManagerGLES::~BufferManagerGLES'),
     ('_Z15GetGraphicsCapsv', 'GetGraphicsCaps', 'call'),
+    # unityverts.c (UA_FAST_VERTS): dynamic batching's vertex transform
+    ('_Z26TransformVerticesInnerLoopILb0ELb0ELb1EE', 'TransformVerticesInnerLoop<false, false, true>'),
 ]
 
 

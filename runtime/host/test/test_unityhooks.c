@@ -14,6 +14,7 @@
 
 // the loader's accessors and unitypool.c's entry (unityhooks_on_load, not called here)
 void unitypool_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unityverts_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 const char *so_name(so_module *m) { (void)m; return NULL; }
 uintptr_t so_base(so_module *m) { (void)m; return 0; }
 size_t so_size(so_module *m) { (void)m; return 0; }
