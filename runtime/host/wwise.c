@@ -788,6 +788,14 @@ static ua_ak_value h_get(const entry *e, ua_ak_value *a, const ua_ak_call *c)
     ak_obj *o = e->n == 0 ? &g_globals : otab_find(a[0].p);
     ua_ak_value *v = o ? obj_field(o, e->key, 0) : NULL;
     if (v) r = *v;
+    // an embedded struct of the settings objects (AkDeviceSettings.threadProperties, AkPlatformInitSettings.
+    // threadLEngine, ...): SWIG's getter gives its address, never NULL; a game may set its fields
+    // (dwAffinityMask), and a NULL makes the wrapper null and throws in the middle of Init
+    else if (o && o != &g_globals && e->ret == 'p' && strstr(e->api, "_thread")) {
+        ak_obj *sub = obj_new("AkThreadProperties");
+        obj_field(o, e->key, 1)->p = sub;
+        r.p = sub;
+    }
     pthread_mutex_unlock(&mu);
     return r;
 }
