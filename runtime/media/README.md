@@ -131,6 +131,7 @@ must not carry an H.264 decoder: H.264 clips then play only where the handheld h
 | `UM_VIDEO_BUFFERS=<n>` | a video decoder's output buffers (default 4, Android's usual; each holds a picture). More let a slow consumer still find the frame it asks for (the emulated rig needs ~24 at 2 fps) |
 | `UM_VPX_THREADS=<n>` | libvpx threads (default: VP9 the CPUs, up to 4, for its tiles; VP8 one: its threads, used only for clips with several token partitions, wait for each other by spinning, which on a 4-core handheld running the game costs more than it gains) |
 | `UM_H264=openh264` | OpenH264 for every H.264 stream, B-frames included |
+| `UM_H264=ffmpeg` | libavcodec for every H.264 stream when it is there (`UM_FFMPEG`): its threads and NEON code take 1080p that OpenH264's single thread cannot keep up with on four Cortex-A53s (a 1080p Constrained Baseline clip on an H700: 2.7x real time against 0.6x) |
 | `UM_FFMPEG=0` / `=<path>` | no system libavcodec / that libavcodec |
 | `ANDROID_SHIM_LIBEGL`, `UM_LIBGLES` | the libEGL / libGLESv2 the surface code opens (the ones Unity uses; default `libEGL.so.1`, `libGLESv2.so.2`) |
 
