@@ -43,6 +43,7 @@
 
 #include "gltrace.h"
 #include "glfill.h"
+#include "gltexdump.h"
 
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_DRAW_FRAMEBUFFER 0x8CA9
@@ -316,6 +317,8 @@ static void (*r_GetProgramiv)(GLuint, GLenum, GLint *);
 static void (*r_GetActiveUniform)(GLuint, GLuint, GLsizei, GLsizei *, GLint *, GLenum *, char *);
 static GLint (*r_GetUniformLocation)(GLuint, const char *);
 static void (*r_GetUniformiv)(GLuint, GLint, GLint *);
+static void (*r_GetUniformfv)(GLuint, GLint, float *);
+static void (*r_GetTexLevelParameteriv)(GLenum, GLint, GLenum, GLint *);
 
 // program -> its shaders' source hashes (as glhooks.c names the UA_SHADER_DUMP files)
 #define MAX_PROG 65536
@@ -438,10 +441,13 @@ static void after(char *out, size_t n)
                     vp[2], vp[3], format_of(&c, f, sizeof f), ds);
         }
     }
-    char a[64], b[64];
+    char a[64], b[64], x[72] = "";
     pixel(g_cur_fb, &c, vp[0] + vp[2] / 2, vp[1] + vp[3] / 2, a, sizeof a);
     pixel(g_cur_fb, &c, vp[0] + vp[2] / 4, vp[1] + vp[3] / 4, b, sizeof b);
-    snprintf(out, n, "-> %s %s", a, b);
+    static int probe = -1; static float px, py;          // UA_GL_TRACE_PIXEL=<fx>,<fy>: a third pixel, as fractions of the viewport
+    if (probe < 0) { const char *e = getenv("UA_GL_TRACE_PIXEL"); probe = e && sscanf(e, "%f,%f", &px, &py) == 2; }
+    if (probe) { char t[64]; pixel(g_cur_fb, &c, vp[0] + (int)(vp[2] * px), vp[1] + (int)(vp[3] * py), t, sizeof t); snprintf(x, sizeof x, " %s", t); }
+    snprintf(out, n, "-> %s %s%s", a, b, x);
 }
 
 static int sampler_type(GLenum t)
@@ -474,8 +480,36 @@ static void samplers(GLuint prog, char *out, size_t n)
         if (loc >= 0) r_GetUniformiv(prog, loc, &unit);
         if (unit >= 0 && unit < 32) { r_ActiveTexture(GL_TEXTURE0 + (GLenum)unit); r_GetIntegerv(binding, &tex); }
         o += (size_t)snprintf(out + o, n - o, " %s=%d:tex%d", name, unit, tex);
+        // the first time a 2D texture is seen: its size and internal format (GLES 3.1 glGetTexLevelParameteriv)
+        static unsigned char seen[8192];
+        if (r_GetTexLevelParameteriv && binding == GL_TEXTURE_BINDING_2D && tex > 0 && tex < 8192 * 8 && !(seen[tex >> 3] & (1 << (tex & 7)))) {
+            seen[tex >> 3] |= (unsigned char)(1 << (tex & 7));
+            GLint w = 0, h = 0, f = 0;
+            r_GetTexLevelParameteriv(0x0DE1, 0, 0x1000, &w); r_GetTexLevelParameteriv(0x0DE1, 0, 0x1001, &h);
+            r_GetTexLevelParameteriv(0x0DE1, 0, 0x1003, &f);   // (GL_TEXTURE_WIDTH, _HEIGHT, _INTERNAL_FORMAT)
+            fprintf(stderr, "[gl]   tex%d %dx%d format 0x%x\n", tex, w, h, f);
+            // UA_GL_TRACE_DUMPTEX=<id>,<id>... (UA_GL_TRACE_DUMPDIR=<dir>): those textures written as images (gltexdump.c)
+            const char *dl = getenv("UA_GL_TRACE_DUMPTEX"), *dd = getenv("UA_GL_TRACE_DUMPDIR");
+            if (dl && dd) {
+                char l[256], k[24]; snprintf(l, sizeof l, ",%s,", dl); snprintf(k, sizeof k, ",%d,", tex);
+                if (strstr(l, k)) { gltexdump((unsigned)tex, w, h, dd); r_ActiveTexture(GL_TEXTURE0 + (GLenum)unit); }
+            }
+        }
     }
     r_ActiveTexture((GLenum)active);
+    // UA_GL_TRACE_UNIFORMS=<name>,<name>...: those float uniforms' values (up to a vec4 each), where the program has them
+    static char names[512]; static int read_names;
+    if (!read_names) { const char *e = getenv("UA_GL_TRACE_UNIFORMS"); snprintf(names, sizeof names, "%s", e ? e : ""); read_names = 1; }
+    if (names[0] && r_GetUniformfv) {
+        char list[512]; snprintf(list, sizeof list, "%s", names);
+        for (char *t = strtok(list, ","); t && o + 64 < n; t = strtok(NULL, ",")) {
+            GLint loc = r_GetUniformLocation(prog, t);
+            if (loc < 0) continue;
+            float v[16] = { 0 };
+            r_GetUniformfv(prog, loc, v);
+            o += (size_t)snprintf(out + o, n - o, " %s=(%.3g,%.3g,%.3g,%.3g)", t, v[0], v[1], v[2], v[3]);
+        }
+    }
     drain_errors();
 }
 
@@ -1032,6 +1066,8 @@ const so_shim *gltrace_table(void)
             r_GetActiveUniform = real("glGetActiveUniform");
             r_GetUniformLocation = real("glGetUniformLocation");
             r_GetUniformiv = real("glGetUniformiv");
+            r_GetUniformfv = real("glGetUniformfv");
+            r_GetTexLevelParameteriv = real("glGetTexLevelParameteriv");
             r_IsEnabled = real("glIsEnabled");
             r_GetActiveAttrib = real("glGetActiveAttrib");
             r_GetAttribLocation = real("glGetAttribLocation");

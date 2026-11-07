@@ -22,7 +22,7 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -o $O/test_msaafix test/test_msaafix.c msaafix.c $O/msaa/libGLESv2.so.2 -ldl
   mkdir -p $O/trace
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/trace/libGLESv2.so.2 test/fake_trace_gl.c
-  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_gltrace test/test_gltrace.c gltrace.c glfill.c $O/trace/libGLESv2.so.2 -ldl -lpthread
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_gltrace test/test_gltrace.c gltrace.c glfill.c gltexdump.c $O/trace/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/opt
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/opt/libGLESv2.so.2 test/fake_opt_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glopt test/test_glopt.c glopt.c $O/opt/libGLESv2.so.2 -ldl -lpthread
