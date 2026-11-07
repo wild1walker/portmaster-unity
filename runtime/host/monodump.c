@@ -138,7 +138,17 @@ static void dump(void)
         char nm[96], rn[96] = "the screen"; name_of(c, nm, sizeof nm);
         int w = 0, h = 0;
         if (rt) { name_of(rt, rn, sizeof rn); geti(rt, "get_width", &w); geti(rt, "get_height", &h); }
-        fprintf(stderr, "[dump] camera %s depth %.1f culling mask 0x%08x clear %d into %s %dx%d\n", nm, depth, (unsigned)mask, clear, rn, w, h);
+        float bg[4] = { 0 }, rect[4] = { 0 };
+        getf(c, "get_backgroundColor", bg, 4); getf(c, "get_rect", rect, 4);
+        fprintf(stderr, "[dump] camera %s depth %.1f culling mask 0x%08x clear %d (%.2f, %.2f, %.2f, %.2f) rect (%.3f, %.3f, %.3f, %.3f) into %s %dx%d\n",
+                nm, depth, (unsigned)mask, clear, bg[0], bg[1], bg[2], bg[3], rect[0], rect[1], rect[2], rect[3], rn, w, h);
+        // UA_DUMP_CAM_OFF=<name>,...: a measurement (it may change the picture): those cameras turned off at each dump
+        const char *coff = getenv("UA_DUMP_CAM_OFF");
+        if (coff && *coff) {
+            char list[256], *sv = NULL; snprintf(list, sizeof list, "%s", coff);
+            for (char *t = strtok_r(list, ",", &sv); t; t = strtok_r(NULL, ",", &sv))
+                if (!strcmp(t, nm)) { unsigned char no = 0; void *a1[1] = { &no }; call(c, "set_enabled", a1, 1); fprintf(stderr, "[dump]   turned off (UA_DUMP_CAM_OFF)\n"); break; }
+        }
     }
     // the renderers
     MonoMethod *find = m_method_from_name(k_obj, "FindObjectsOfType", 1);

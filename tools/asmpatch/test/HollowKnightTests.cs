@@ -70,6 +70,55 @@ static partial class TestMain
         (st, outp) = Patch(none, Path.Combine(tmp, "hk-none-out"), with: new[] { "hk-blur" });
         Check(st == 0 && outp.Contains("n/a  hk-blur: no Hollow Knight"), "hk-blur: another game: not applicable");
         HollowKnightPostTests();
+        HollowKnightAspectTests();
+    }
+
+    // ---- hk-aspect ---------------------------------------------------------------------------
+    /// <summary>The stand-in's viewport fit (width, height, height multiplier, aspect used) for a screen
+    /// aspect, with ASMPATCH_HK_ASPECT set to env (a fresh load each time: the helper reads it once).</summary>
+    static (float w, float h, float mult, float used) Fit(string dir, string env, float aspect)
+    {
+        var old = Environment.GetEnvironmentVariable(HollowKnightAspect.Variable);
+        Environment.SetEnvironmentVariable(HollowKnightAspect.Variable, env);
+        var ctx = new AssemblyLoadContext("hka" + Guid.NewGuid(), isCollectible: true);
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var t = a.GetType("ForceCameraAspect", true);
+            t.GetField("ScreenAspect").SetValue(null, aspect);
+            var args = new object[] { 0f, 0f, 0f, 0f };
+            float used = (float)t.GetMethod("AutoScaleViewportShared").Invoke(null, args);
+            static float R(object x) => MathF.Round((float)x, 4);
+            return (R(args[1]), R(args[2]), R(args[3]), R(used));
+        }
+        finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightAspect.Variable, old); }
+    }
+
+    static void HollowKnightAspectTests()
+    {
+        var d = Dir("hka");
+        File.Copy(FakeHollowKnight, Path.Combine(d, "Assembly-CSharp.dll"));
+        var (st, outp) = Patch(d, Path.Combine(tmp, "hka-default"));
+        Check(st == 0 && outp.Contains("skip hk-aspect (opt-in: --with=hk-aspect)"), "hk-aspect: opt-in, not run by default");
+        var o = Path.Combine(tmp, "hka-out");
+        (st, outp) = Patch(d, o, with: new[] { "hk-aspect" });
+        Check(st == 0 && outp.Contains("ok   hk-aspect: Assembly-CSharp.dll: ForceCameraAspect.AutoScaleViewportShared") &&
+              File.Exists(Path.Combine(o, "Assembly-CSharp.dll")), "hk-aspect: applied when named");
+        if (!File.Exists(Path.Combine(o, "Assembly-CSharp.dll"))) return;
+        float a43 = 4f / 3f, a32 = 1.5f, a169 = 16f / 9f, a1610 = 1.6f, a219 = 2.3333333f;
+        var bars43 = (1f, 0.8333f, 1.1111f, 1.6f);
+        Check(Fit(d, "fill", a43) == bars43, "hk-aspect: the unpatched stand-in letterboxes 4:3 whatever the variable");
+        foreach (var v in new[] { null, "", "FILL", "fill ", "bars", "1" })
+            Check(Fit(o, v, a43) == bars43, $"hk-aspect: ASMPATCH_HK_ASPECT={v ?? "(unset)"}: the game as it is ({Fit(o, v, a43)})");
+        foreach (var (asp, want) in new[]
+                 {
+                     (a43, (1f, 1f, 1.3333f, 1.3333f)), (a32, (1f, 1f, 1.1852f, 1.5f)), (a1610, (1f, 1f, 1.1111f, 1.6f)),
+                     (a169, (1f, 1f, 1f, 1.7778f)), (a219, (1f, 1f, 1f, 2.3333f)), (0.8f, (1f, 0.8f, 1.7778f, 1f)),
+                 })
+            Check(Fit(o, "fill", asp) == want, $"hk-aspect: fill at {asp}: {Fit(o, "fill", asp)}");
+        Check(Fit(o, null, a169) == Fit(d, null, a169) && Fit(o, null, a1610) == Fit(d, null, a1610), "hk-aspect: unset: 16:9 and 16:10 as the game");
+        (st, outp) = Patch(o, Path.Combine(tmp, "hka-again"), with: new[] { "hk-aspect" });
+        Check(st == 0 && outp.Contains("done hk-aspect") && NoDlls(Path.Combine(tmp, "hka-again")), "hk-aspect: a second run finds it applied");
     }
 
     // ---- hk-post -----------------------------------------------------------------------------
