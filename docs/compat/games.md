@@ -200,6 +200,21 @@ first survey): muOS Colosseum 61.9, Deepnest 61.3, Mantis Village 61.3, Kingdom'
 57.1, Queen's Gardens 54.7; Knulli Soul Tyrant 57.9, the Watcher Knights 56.6, Crystal Peak 53.5, Soul
 Master 51.8, City of Tears 50.2, Greenpath 46.0 (the first survey: 53.6, 56.5, 54.1, 52.1, 50.5, 48.0;
 48.0, 50.1, 48.3, 42.7, 43.1, 36.5).
+2026-11-07 (Knulli, silent, the 1 GB profile, steady fps, screenshots checked in each run): the
+arena drawn with ranged draws (767e230, the slabs were the Mali driver's stale index ranges), the
+buffer pool, `UA_PRESENT_SYNC=end`, `UA_GL_MEMO=0` and the lit sprite twin (`UA_GL_SPEC`, 50 draws
+compared on the handheld, 0 differ) are the port's defaults (portmaster-hollowknight 8f8a113):
+Greenpath 52.1, City of Tears 55.8, Crystal Peak 56.9, Queen's Gardens 57.0, Deepnest 58.3,
+Dirtmouth 58.4 (without the twin: 51.6, 51.8, 54.8, 56.2, 58.3, 57.1). Boss fights from the Hall of
+Gods (the GG save's bench, a walk steered by `UA_DUMP_HERO` to each statue, the fight's seconds only;
+without the twin): False Knight 57.1, Vengefly King 57.1, Mantis Lords 54.7, Flukemarm 54.6, Nosk
+54.1, God Tamer 52.5, Oblobbles 52.4, Hive Knight 52.2, Crystal Guardian 50.3, Hornet 49.9, The
+Collector 49.8, Uumuu 49.4, Gruz Mother 49.3, Broken Vessel 47.8; Gruz Mother with the twin 54 - 56.
+The Godhome arenas are GPU-bound: about 26 fragments a pixel in the scene (god-ray beams, haze),
+the scene pass 19 ms of the Mali; thread priorities and cores changed nothing. The black band over
+the top of the Soul Master and Soul Tyrant arenas in the earlier spot saves is the arena's own mask
+over the lower room, which the fight fades when the floor breaks: those saves put the Knight in the
+lower room (`UA_DUMP_RENDERERS` found it), not the port.
 
 
 ## Linux builds, one per Unity line (32-bit route)
