@@ -94,7 +94,19 @@ void glBufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data)
     reads_done(B[*slot(t)].data);
     memcpy(B[*slot(t)].data + o, data, (size_t)n);
 }
-void *glMapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield a) { (void)n; (void)a; return B[*slot(t)].data + o; }
+// a map that invalidates a buffer of the game's (mutable storage) gets new storage, as the Mali driver
+// gives it: the queued draws keep reading the old (Unity's way of reusing a buffer without waiting)
+void *glMapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield a)
+{
+    (void)n;
+    GLuint b = *slot(t);
+    if ((a & 0x000C) && !(a & 0x0040) && B[b].size > 0) {
+        unsigned char *d = malloc((size_t)B[b].size);
+        memcpy(d, B[b].data, (size_t)B[b].size);    // (the old storage stays for the queued draws)
+        B[b].data = d;
+    }
+    return B[b].data + o;
+}
 void glFlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr n) { (void)t; (void)o; (void)n; }
 GLboolean glUnmapBuffer(GLenum t) { (void)t; return 1; }
 void glCopyBufferSubData(GLenum r, GLenum w, GLintptr ro, GLintptr wo, GLsizeiptr n) { memmove(B[*slot(w)].data + wo, B[*slot(r)].data + ro, (size_t)n); }

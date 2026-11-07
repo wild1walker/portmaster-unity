@@ -1,5 +1,11 @@
 // Unity's dynamic geometry without a map, flush and unmap through the driver for each chunk.
-// UA_GL_PERSIST=1 (off by default; a port turns it on).
+// UA_GL_PERSIST=1 (off by default). UNSAFE with Unity's GLES device, do not turn it on: Unity takes a
+// buffer back for the next chunk without waiting for the GPU and maps it unsynchronized with
+// GL_MAP_INVALIDATE_RANGE_BIT, relying on the driver to give an invalidated buffer the GPU still
+// reads new storage; persistent storage cannot be given anew under the same name, so the GPU drew
+// chunks with the next chunks' vertices (RG34XX-SP, 2026-11-06: sprites stretched into black slabs).
+// The "Unity keeps the GPU's reads apart with its own fences" below was wrong. glarena.c moves such a
+// buffer to a new range and is safe.
 //
 // Unity's GLES device writes its dynamic geometry (sprites, UI, dynamic batches) into buffers of a
 // pool: each chunk takes a buffer, maps all of it (glMapBufferRange: write, invalidate range,
@@ -137,7 +143,7 @@ static int check_ext(void)
     if (g_ok >= 0) return g_ok;
     const char *e = q_GetString ? (const char *)q_GetString(GL_EXTENSIONS) : NULL;
     g_ok = e && strstr(e, "GL_EXT_buffer_storage") && q_BufferStorageEXT ? 1 : 0;
-    fprintf(stderr, "[glpersist] %s\n", g_ok ? "dynamic buffers get persistent mapped storage (GL_EXT_buffer_storage; UA_GL_PERSIST)"
+    fprintf(stderr, "[glpersist] %s\n", g_ok ? "dynamic buffers get persistent mapped storage (GL_EXT_buffer_storage; UA_GL_PERSIST): UNSAFE with Unity, it can draw chunks with the next chunks' vertices (use UA_GL_ARENA)"
                                             : "the driver has no GL_EXT_buffer_storage: off");
     g_last_log = now();
     return g_ok;

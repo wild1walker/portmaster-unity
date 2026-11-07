@@ -105,7 +105,13 @@ pixels.
   39.2 / 39.2 fps, then 40.2 - 40.6 once the layer stopped reading the clock at every map (a system
   call for a 32-bit process on these kernels: keep per-call work in a GL layer free of system
   calls); Knulli 36.6 / 36.5 -> 39.5 / 39.6. Those buffers as ranges of one (`UA_GL_ARENA=1`): ~+2 %
-  more (muOS ~41.2, Knulli 41.0). The same bytes drawn, both checked by fake-driver tests.
+  more (muOS ~41.2, Knulli 41.0). **Withdrawn 2026-11-06:** both drew wrong pictures on the handheld
+  (sprites stretched into black slabs), which neither the emulated rig (its GPU never lags) nor the
+  fake-driver tests (their game waited for the GPU) could show: Unity reuses a buffer for the next
+  chunk at once and relies on the driver giving an invalidated buffer new storage. `UA_GL_ARENA` now
+  does that (test_glarena orphan); `UA_GL_PERSIST` cannot and is unsafe. Lesson: a fake driver must
+  model the real driver's behaviour, not only the API, and every layer that changes what the GPU reads
+  is checked on the handheld with screenshots before it goes into a port.
 - **The Mali driver works in the draw call.** `runtime/host/drawbench` on the device: a sprite draw
   ~30 - 37 us, all its state calls together 2.5 - 2.9 us. So filtering state calls that change
   nothing (`UA_GL_STATE=1`: 133 of ~2,300 a frame in Greenpath), prebuilt vertex array objects,

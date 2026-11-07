@@ -733,7 +733,7 @@ void glfill_frame_end(long frame)
         fprintf(stderr, "[fill]   program %d fs %016llx: %ld draws, %ld fragments (%d.%d%%), discarded %d.%d%%, unchanged %d.%d%%, "
                         "opaque under blending %d.%d%%\n", best, (unsigned long long)fnv(p->fs), p->draws, p->frags, P(p->frags, frags),
                 P(p->discarded, p->frags), P(p->unchanged, p->frags), P(p->opaque, p->frags));
-        if (r < 3) {                 // the vec4 and float uniforms outside blocks at its last draw
+        if (r < 3 || p->unchanged * 10 >= p->frags * 9) {   // the vec4 and float uniforms outside blocks at its last draw
             char v[1200]; size_t o = 0; v[0] = 0;
             for (int i = 0; i < p->nu && o + 80 < sizeof v; i++)
                 if ((p->u[i].type == T_V4 || p->u[i].type == T_F) && !strstr(p->u[i].name, "mtx"))

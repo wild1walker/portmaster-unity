@@ -179,8 +179,9 @@ Soul Tyrant 47.4, City of Tears 42.4, Soul Master 41.6, Greenpath 36 - 38: Green
 render thread (~21 ms a frame, the Mali driver 40 % of it), not the GPU's pixels (480x320 the same).
 The 64-bit IL2CPP build of the same data: Greenpath 35.4, Soul Master 41.8, King's Pass 51.7, ~140 MB
 more memory: not taken ([il2cpp.md](../il2cpp.md)). The render thread's sprite chunks in
-persistently mapped buffers and then in one buffer (`UA_GL_PERSIST`, `UA_GL_ARENA`, both on in the
-port): Greenpath 37.5 - 37.8 -> ~41.2 fps on muOS, 36.5 - 36.6 -> 41.0 on Knulli. The survey again
+persistently mapped buffers and then in one buffer (`UA_GL_PERSIST`, `UA_GL_ARENA`, on in the
+port 2026-11-04 - 2026-11-06, then off: they drew sprites as black slabs on the handheld, see
+[performance.md](../performance.md)): Greenpath 37.5 - 37.8 -> ~41.2 fps on muOS, 36.5 - 36.6 -> 41.0 on Knulli. The survey again
 with both (2026-11-04, steady fps: the walk's seconds at 20 fps or more; one run each, the same
 devices as before): muOS Colosseum 53.6 -> 54.9, Deepnest 56.5 -> 56.5, Kingdom's Edge 52.1 -> 55.3,
 Queen's Gardens 48.0 -> 47.8, Mantis Village 54.1 -> 57.7, Dirtmouth 50.5 -> 54.1, City of Tears

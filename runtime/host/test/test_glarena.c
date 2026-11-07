@@ -7,6 +7,10 @@
 //           again also right after a draw that reads them: their ranges must wait for the GPU)
 //   small   UA_GL_ARENA_MB=1: the arena fills, the buffers that do not fit made by the driver: the same
 //   nosubdata  UA_GL_ARENA_SUBDATA unset: every glBufferSubData to the driver: the same
+//   orphan  UA_GL_ARENA=1, the game as Unity: a buffer taken back for the next chunk without waiting for the
+//           GPU, written through an unsynchronized map that invalidates the range (the driver gives it new storage),
+//           the attribute pointers not made again when the buffer and offset are the ones the vertex array
+//           has: every draw read what the game wrote
 //   off     unset: no wrappers
 #include <stdint.h>
 #include <stdio.h>
@@ -34,6 +38,8 @@ static unsigned rnd(unsigned n) { g_seed = g_seed * 1103515245u + 12345u; return
 #define MAXG 4096
 typedef struct { GLuint name; int size; unsigned char *data; long used; int alive; } gbuf;
 static gbuf G[MAXG]; static int g_ng;
+static int g_orphan;                        // (the orphan scenario)
+static int g_cur_vao = 1;                   // (the vertex array the game has bound)
 static uint32_t expect[200000]; static int g_draws;
 
 static void (*BindBuffer)(GLenum, GLuint); static void (*BufferData)(GLenum, GLsizeiptr, const void *, GLenum);
@@ -53,9 +59,9 @@ static gbuf *take(GLenum target, int need, long frame)
 {
     for (int tries = 0; tries < 8 && g_ng; tries++) {
         gbuf *b = &G[rnd((unsigned)g_ng)];
-        if (b->alive && b->used <= frame - 3 && b->size >= need) return b;
+        if (b->alive && b->used <= frame - (g_orphan ? 0 : 3) && b->size >= need) return b;
     }
-    if (g_ng == MAXG) { for (int i = 0; i < g_ng; i++) if (G[i].alive && G[i].used <= frame - 3 && G[i].size >= need) return &G[i]; return NULL; }
+    if (g_ng == MAXG) { for (int i = 0; i < g_ng; i++) if (G[i].alive && G[i].used <= frame - (g_orphan ? 0 : 3) && G[i].size >= need) return &G[i]; return NULL; }
     gbuf *b = &G[g_ng++];
     GenBuffers(1, &b->name);
     b->size = need + (int)rnd(4096); b->data = calloc(1, (size_t)b->size); b->alive = 1; b->used = -100;
@@ -66,10 +72,12 @@ static gbuf *take(GLenum target, int need, long frame)
 static void write(GLenum target, gbuf *b, int off, const unsigned char *src, int n)
 {
     BindBuffer(target, b->name);
-    if (rnd(4)) {
-        unsigned char *m = MapBufferRange(target, 0, b->size, 0x36);
-        memcpy(m + off, src, (size_t)n);
-        FlushMappedBufferRange(target, off, n);
+    if (g_orphan || rnd(4)) {
+        // Unity's map: write, invalidate range, explicit flush, unsynchronized; GL leaves what an
+        // invalidated range held undefined, so the range mapped is the one written (Unity writes a whole chunk)
+        unsigned char *m = MapBufferRange(target, off, n, 0x36);
+        memcpy(m, src, (size_t)n);
+        FlushMappedBufferRange(target, 0, n);
         UnmapBuffer(target);
     } else BufferSubData(target, off, n, src);
     memcpy(b->data + off, src, (size_t)n);
@@ -79,6 +87,7 @@ int main(int argc, char **argv)
 {
     const char *sc = argc > 1 ? argv[1] : "arena";
     if (strcmp(sc, "off")) setenv("UA_GL_ARENA", "1", 1);
+    g_orphan = !strcmp(sc, "orphan");
     if (!strcmp(sc, "small")) setenv("UA_GL_ARENA_MB", "1", 1);
     if (!strcmp(sc, "arena") || !strcmp(sc, "small")) setenv("UA_GL_ARENA_SUBDATA", "1", 1);
     g_t = glarena_table(NULL);
@@ -95,13 +104,13 @@ int main(int argc, char **argv)
     extern void glGenBuffers(GLsizei, GLuint *);
     GenBuffers = glGenBuffers;              // (not wrapped: names are the driver's)
     BindVertexArray(1);
-    unsigned char vbytes[64 * 8], ibytes[96 * 2], ubytes[16384];   // (buffers sized again reach 8.5 KB)
+    unsigned char vbytes[(64 + 4) * 8], ibytes[96 * 2], ubytes[16384];   // (buffers sized again reach 8.5 KB)
     long deleted = 0, respec = 0, copies = 0, busy = 0;
     gbuf *last_ub = NULL; int last_ul = 0;
     for (long f = 0; f < 1500; f++) {
         int nd = 1 + (int)rnd(30);
         for (int d = 0; d < nd; d++) {
-            if (!rnd(40)) BindVertexArray(1 + rnd(2));
+            if (!rnd(40)) { g_cur_vao = 1 + (int)rnd(2); BindVertexArray((GLuint)g_cur_vao); }
             int nv = 4 + (int)rnd(60), ni = 3 * (1 + (int)rnd(32)), base = rnd(3) ? 0 : (int)rnd(4);
             int voff = (int)rnd(64) * 8, ioff = (int)rnd(64) * 2;
             gbuf *vb = take(0x8892, voff + (nv + base) * 8, f), *ib = take(0x8893, ioff + ni * 2, f);
@@ -113,8 +122,14 @@ int main(int argc, char **argv)
             BindBuffer(0x8892, vb->name);
             GLint chk = 0; GetIntegerv(0x8894, &chk);
             if ((GLuint)chk != vb->name) { fprintf(stderr, "FAIL %s: the array buffer binding reads %d, not %u\n", sc, chk, vb->name); return 1; }
-            VertexAttribPointer(0, 4, 0x1401, 0, 8, (const void *)(intptr_t)voff);
-            VertexAttribPointer(1, 4, 0x1401, 0, 8, (const void *)(intptr_t)(voff + 4));
+            // (Unity keeps the vertex array's pointers and makes them again only when they change)
+            static gbuf *last_vb[3]; static int last_voff[3];
+            int vao_now = g_cur_vao;
+            if (!g_orphan || last_vb[vao_now] != vb || last_voff[vao_now] != voff) {
+                VertexAttribPointer(0, 4, 0x1401, 0, 8, (const void *)(intptr_t)voff);
+                VertexAttribPointer(1, 4, 0x1401, 0, 8, (const void *)(intptr_t)(voff + 4));
+                last_vb[vao_now] = vb; last_voff[vao_now] = voff;
+            }
             BindBuffer(0x8893, ib->name);
             // a constant buffer, as Unity's: a free one from the pool, or (a third of them) the one the last draw
             // read, written again (GL orders it after that draw: the driver's write), uploaded with glBufferSubData
@@ -123,6 +138,8 @@ int main(int argc, char **argv)
             vb->used = ib->used = f;                        // (not the constant buffer: Unity's are other buffers)
             gbuf *ub = last_ub && last_ub->alive && last_ub != vb && last_ub != ib && rnd(3) == 0 && last_ub->size >= uo + ul
                        ? last_ub : take(0x8892, uo + ul, f);
+            for (int k = 0; g_orphan && ub && (ub == vb || ub == ib) && k < 8; k++) ub = take(0x8892, uo + ul, f);   // (another buffer, as Unity's)
+            if (ub == vb || ub == ib) continue;
             if (!ub) continue;
             if (ub == last_ub) busy++;
             int whole = !uo && rnd(2);                     // (bound whole: written whole, GL leaves the rest undefined)

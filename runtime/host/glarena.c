@@ -14,7 +14,9 @@
 //   glDrawElements and its Range, Instanced and BaseVertex forms   the indices + the offset of the
 //                                            vertex array's index buffer
 //   glMapBufferRange                         the arena's mapping + offset (flush and unmap: nothing,
-//                                            coherent); a map that is not unsynchronized waits
+//                                            coherent); a map that is not unsynchronized waits; one that
+//                                            invalidates a buffer the GPU may still read gets a new range
+//                                            (below)
 //   glBufferSubData                          a memcpy into the mapping when the GPU is past every draw
 //                                            and copy that used the buffer (below), else the offset moved
 //   glCopyBufferSubData                      the offsets moved
@@ -30,6 +32,16 @@
 // buffer is made as before (glpersist.c's, the driver's). Logged: "[glarena] ..." at the start and
 // every 10 s (buffers in the arena, its use, the ranges waiting for the GPU).
 // UA_GL_ARENA_MB=<n>: the arena's size (default 8).
+//
+// Unity maps each chunk unsynchronized with GL_MAP_INVALIDATE_RANGE_BIT over the whole buffer, and
+// takes a buffer back from its pool for the next chunks without waiting for the GPU to have drawn
+// the last ones: the driver gives an invalidated buffer that the GPU still reads new storage (it
+// "orphans" it). Here, too: such a map of a buffer last used (by a draw, a dispatch or a copy) in a
+// frame the GPU is not past moves the buffer to a new range of the arena (a partial invalidation
+// copies the rest of the old range over), the old range freed once the GPU is past this frame; the
+// vertex attributes that point into it, in every vertex array, are pointed at the new range. Without
+// that the GPU drew chunks with the next chunks' vertices (RG34XX-SP, 2026-11-06: sprites stretched
+// into black slabs). Logged as "moved by the game's invalidations".
 //
 // glBufferSubData without the driver. Unity uploads each constant buffer a draw changes with
 // glBufferSubData (one ~100 - 400 byte update per draw in Hollow Knight); on the arena the Mali
@@ -69,6 +81,8 @@ typedef unsigned char GLboolean; typedef intptr_t GLintptr; typedef intptr_t GLs
 #define GL_STREAM_DRAW 0x88E0
 #define GL_DYNAMIC_DRAW 0x88E8
 #define GL_MAP_WRITE_BIT 0x0002
+#define GL_MAP_INVALIDATE_RANGE_BIT 0x0004
+#define GL_MAP_INVALIDATE_BUFFER_BIT 0x0008
 #define GL_MAP_UNSYNCHRONIZED_BIT 0x0020
 #define GL_MAP_PERSISTENT_BIT_EXT 0x0040
 #define GL_MAP_COHERENT_BIT_EXT 0x0080
@@ -83,6 +97,8 @@ static int g_on, g_ok = -1, g_closed;       // g_ok: the extension (-1: not chec
 static int g_copy;                          // glBufferSubData by memcpy where the GPU is past the buffer (UA_GL_ARENA_SUBDATA=1)
 static long g_done;                         // the GPU is past every command made while g_frames < g_done (fences)
 static long g_subcopy, g_subdriver;
+static int g_track = 1;                     // every use of these buffers followed (0: one is not; every invalidating map moves)
+static long g_orphans, g_orphan_waits;
 static GLuint g_A;                          // the arena
 static char *g_ptr;
 static unsigned g_size;
@@ -191,6 +207,8 @@ static GLuint g_vao;
 static struct { GLuint vao, elem; } g_velem[VAOS];   // a vertex array's index buffer, when one of these
 #define ATTRS 16
 static struct { GLuint vao, attr[ATTRS]; int used; } g_vattr[VAOS];   // a vertex array's attributes' buffers, when these
+typedef struct { GLint size; GLenum type; GLboolean norm, integer; GLsizei stride; const void *ptr; } attrfmt;
+static attrfmt g_vfmt[VAOS][ATTRS];        // ... and how each points into it (the game's pointer: an offset into its buffer)
 #define UBOS 32
 static GLuint g_ubo[UBOS]; static unsigned g_nubo;  // the uniform buffer bindings to these buffers (0: another)
 static GLuint *elem_slot(GLuint vao, int make)
@@ -218,14 +236,14 @@ static int *attr_used(GLuint vao, GLuint **attr, int make)
     if (!make) return NULL;
     for (int i = 0; i < VAOS; i++)
         if (!g_vattr[i].used) { g_vattr[i].vao = vao; g_vattr[i].used = 1; memset(g_vattr[i].attr, 0, sizeof g_vattr[i].attr); *attr = g_vattr[i].attr; return &g_vattr[i].used; }
-    g_copy = 0;                             // (more vertex arrays than followed: no more memcpy)
+    g_copy = 0; g_track = 0;                // (more vertex arrays than followed: no more memcpy)
     return NULL;
 }
 static inline void use(GLuint name) { vbuf *p = find(name); if (p) p->used = g_frames; }
 // a draw or dispatch: every buffer of these it could read is used in this frame
 static void draw_uses(void)
 {
-    if (!g_copy || g_ok <= 0) return;
+    if (!g_track || g_ok <= 0) return;
     GLuint *e = elem_slot(g_vao, 0), *attr;
     if (e && *e) use(*e);
     if (attr_used(g_vao, &attr, 0)) for (int a = 0; a < ATTRS; a++) if (attr[a]) use(attr[a]);
@@ -276,7 +294,7 @@ static void not_moved(const char *what)
     static int n;
     if (n++ < 10) fprintf(stderr, "[glarena] %s reads a buffer in the arena: not moved; no more buffers go into the arena\n", what);
     g_closed = 1;
-    g_copy = 0;                             // (a use the layer does not follow: every glBufferSubData to the driver)
+    g_copy = 0; g_track = 0;                // (a use the layer does not follow: every glBufferSubData to the driver)
 }
 
 // the arena, made at the first buffer the game sizes (a context is current then)
@@ -393,12 +411,30 @@ static void w_BufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data
     if (p) g_subdriver++;
     r_BufferSubData(t, p ? (GLintptr)p->off + o : o, n, data);
 }
+static void repoint(GLuint name, vbuf *p);
 static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield access)
 {
     vbuf *p = g_ok > 0 ? bound(t) : NULL;
     if (!p) return r_MapBufferRange(t, o, n, access);
     if (o < 0 || n < 0 || (unsigned)(o + n) > p->len) return NULL;
     if (!(access & GL_MAP_UNSYNCHRONIZED_BIT)) q_Finish();   // the game asked the driver to wait for the GPU
+    else if ((access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)) && !(g_track && p->used < g_done)) {
+        // invalidated while the GPU may still read it: new storage, as the driver gives
+        unsigned off;
+        if (alloc(p->size, &off)) {
+            int whole = (access & GL_MAP_INVALIDATE_BUFFER_BIT) || (o == 0 && (unsigned)n >= p->len);
+            if (!whole) {                   // (what is not invalidated keeps its bytes)
+                if (o > 0) memcpy(g_ptr + off, g_ptr + p->off, (size_t)o);
+                if ((unsigned)(o + n) < p->len) memcpy(g_ptr + off + o + n, g_ptr + p->off + o + n, p->len - (unsigned)(o + n));
+            }
+            defer(p->off, p->size);
+            p->off = off;
+            p->used = 0;
+            GLuint *s = bound_slot(t);
+            if (s && *s) repoint(*s, p);
+            g_orphans++;
+        } else { q_Finish(); g_orphan_waits++; }   // (no room: wait for the GPU instead)
+    }
     g_moves++;
     return g_ptr + p->off + o;
 }
@@ -455,23 +491,49 @@ static void w_GetIntegerv(GLenum pname, GLint *v)
     GLuint *s = t ? bound_slot(t) : NULL;
     if (s) *v = (GLint)*s;
 }
-static void attr_set(GLuint a, GLuint name)
+static void attr_set(GLuint a, GLuint name, attrfmt f)
 {
     GLuint *attr;
-    if (a >= ATTRS) { if (name) g_copy = 0; return; }
-    if (attr_used(g_vao, &attr, name != 0)) attr[a] = name;
+    if (a >= ATTRS) { if (name) { g_copy = 0; g_track = 0; } return; }
+    if (attr_used(g_vao, &attr, name != 0)) {
+        attr[a] = name;
+        for (int i = 0; i < VAOS; i++) if (g_vattr[i].attr == attr) g_vfmt[i][a] = f;
+    }
 }
 static void w_VertexAttribPointer(GLuint a, GLint size, GLenum type, GLboolean norm, GLsizei stride, const void *ptr)
 {
     vbuf *p = g_ok > 0 && vb_array ? find(vb_array) : NULL;
-    if (g_ok > 0) attr_set(a, p ? vb_array : 0);
+    if (g_ok > 0) attr_set(a, p ? vb_array : 0, (attrfmt){ size, type, norm, 0, stride, ptr });
     r_VertexAttribPointer(a, size, type, norm, stride, p ? (const char *)ptr + p->off : ptr);
 }
 static void w_VertexAttribIPointer(GLuint a, GLint size, GLenum type, GLsizei stride, const void *ptr)
 {
     vbuf *p = g_ok > 0 && vb_array ? find(vb_array) : NULL;
-    if (g_ok > 0) attr_set(a, p ? vb_array : 0);
+    if (g_ok > 0) attr_set(a, p ? vb_array : 0, (attrfmt){ size, type, 0, 1, stride, ptr });
     r_VertexAttribIPointer(a, size, type, stride, p ? (const char *)ptr + p->off : ptr);
+}
+// a buffer moved to another range: the vertex attributes pointing into it, in every vertex array,
+// pointed at the new one (with the arena bound as the vertex buffer while they are; bindings put back)
+static void repoint(GLuint name, vbuf *p)
+{
+    GLuint cur = g_vao;
+    int array_bound = 0;
+    for (int i = 0; i < VAOS; i++) {
+        if (!g_vattr[i].used) continue;
+        for (int a = 0; a < ATTRS; a++) {
+            if (g_vattr[i].attr[a] != name) continue;
+            if (g_vattr[i].vao != cur) { cur = g_vattr[i].vao; r_BindVertexArray(cur); }
+            if (!array_bound) { r_BindBuffer(GL_ARRAY_BUFFER, g_A); array_bound = 1; }
+            attrfmt *f = &g_vfmt[i][a];
+            if (f->integer) r_VertexAttribIPointer((GLuint)a, f->size, f->type, f->stride, (const char *)f->ptr + p->off);
+            else r_VertexAttribPointer((GLuint)a, f->size, f->type, f->norm, f->stride, (const char *)f->ptr + p->off);
+        }
+    }
+    if (cur != g_vao) r_BindVertexArray(g_vao);
+    if (array_bound) {                      // (what the game has bound as its vertex buffer)
+        vbuf *b = vb_array ? find(vb_array) : NULL;
+        r_BindBuffer(GL_ARRAY_BUFFER, b ? g_A : vb_array);
+    }
 }
 static void w_BindVertexArray(GLuint v) { g_vao = v; r_BindVertexArray(v); }
 static void w_DeleteVertexArrays(GLsizei n, const GLuint *v)
@@ -569,9 +631,9 @@ void glarena_frame(void)
     g_last_log = t;
     unsigned pend = 0;
     for (size_t i = 0; i < g_npend; i++) pend += (g_pend[i].size + ALIGN - 1) & ~(ALIGN - 1);
-    fprintf(stderr, "[glarena] %zu buffers in the arena (%.1f of %u MB, %.1f MB waiting for the GPU), %ld made, %ld maps, %ld did not fit; "
-            "glBufferSubData: %ld copied, %ld to the driver\n",
-            g_n, g_used / 1048576.0, g_size >> 20, pend / 1048576.0, g_in, g_moves, g_full, g_subcopy, g_subdriver);
+    fprintf(stderr, "[glarena] %zu buffers in the arena (%.1f of %u MB, %.1f MB waiting for the GPU), %ld made, %ld maps (%ld moved by "
+            "the game's invalidations, %ld waited), %ld did not fit; glBufferSubData: %ld copied, %ld to the driver\n",
+            g_n, g_used / 1048576.0, g_size >> 20, pend / 1048576.0, g_in, g_moves, g_orphans, g_orphan_waits, g_full, g_subcopy, g_subdriver);
 }
 
 static void *gl(void *(*next)(const char *), const char *name)
