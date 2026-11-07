@@ -538,10 +538,13 @@ it. The steps, on a Mac:
 
 Donors are never committed (a port's repository holds no Unity files; `port new`'s `.gitignore`
 leaves out `*.apk`): keep the folder beside the port's repository and build the release from it.
+Donors can be built on Linux too, with the editor from Unity Hub: give `Editor/Unity` as
+`<editor>` to `build.sh` and use the Android SDK, NDK and OpenJDK that the Hub installs.
+`DonorBuild.cs` works with 2023.1+ editors (API level 23, no GLES2, Gradle) and `player donor`
+reads 2023.2+ donors (`unity default resources` is in `Resources/`, and there is only
+`libmonobdwgc-2.0.so`, no `libmono.so`).
 Known gaps: a donor carries only the class libraries its own build uses (section 2, Windows
-builds); `player donor` takes `assets/bin/Data/unity default resources`, so a 2023.2+ donor (whose
-APK keeps it under `Resources/`) and the Memory Advice models 2023.1's player reads have not been
-tried yet.
+builds); the Memory Advice models 2023.1's player reads have not been tried yet.
 
 ## 6. package
 

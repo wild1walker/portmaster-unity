@@ -3052,8 +3052,10 @@ def _component_mono64(ctx, opts):
             if os.path.isfile(os.path.join(out, n)):
                 ctx.add(os.path.join(out, n), os.path.join('setup', 'mono64', line, n), 0o755)
         src = os.path.join(work, 'src', branch)
-        ctx.license(f'LICENSE.mono-{line}.txt', text=_read(os.path.join(src, 'LICENSE')) + '\n\n' +
-                    _read(os.path.join(src, 'PATENTS.TXT')))
+        # (Mono 6's tree, Unity 2021.2+: "Microsoft Patent Promise.TXT" instead of PATENTS.TXT)
+        pat = next(p for p in (os.path.join(src, n) for n in ('PATENTS.TXT', 'Microsoft Patent Promise.TXT'))
+                   if os.path.isfile(p))
+        ctx.license(f'LICENSE.mono-{line}.txt', text=_read(os.path.join(src, 'LICENSE')) + '\n\n' + _read(pat))
         ctx.license(f'LICENSE.bdwgc-{line}.txt', os.path.join(src, 'external', 'bdwgc', 'README.QUICK'))
         cf = os.path.join(src, 'external', 'corefx', 'LICENSE.TXT')
         if os.path.isfile(os.path.join(out, 'libmono-native.so')) and os.path.isfile(cf):

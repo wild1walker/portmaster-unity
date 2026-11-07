@@ -156,13 +156,16 @@ def donor(version, out, apks, backend='mono', abi='armeabi-v7a', managed=False, 
                 rel = None
                 if lib_abi and n in (f'lib/{abi}/libmain.so', f'lib/{abi}/libunity.so'):
                     rel = f'Variations/{backend}/Release/Libs/{abi}/' + n.rsplit('/', 1)[1]
-                elif lib_abi and backend == 'mono' and n.startswith(f'lib/{abi}/libmono'):
+                elif lib_abi and backend == 'mono' and (n.startswith(f'lib/{abi}/libmono')
+                                                        or n == f'lib/{abi}/libMonoPosixHelper.so'):
                     rel = f'Variations/mono/Release/MonoLibs/{abi}/' + n.rsplit('/', 1)[1]
                 elif re.fullmatch(r'assets/bin/Data/Managed/UnityEngine(\.\w+Module)?\.dll', n) \
                         and (backend == 'mono' or managed):     # (the engine's; the class libraries are the game's)
                     rel = f'Variations/{backend}/Managed/' + n.rsplit('/', 1)[1]
                 elif n == 'assets/bin/Data/unity default resources':
                     rel = 'Data/unity default resources'
+                elif n == 'assets/bin/Data/Resources/unity default resources':   # (2023.2+, Unity 6)
+                    rel = 'Data/Resources/unity default resources'
                 if rel is None:
                     continue
                 dst = os.path.join(out, *rel.split('/'))
@@ -172,11 +175,15 @@ def donor(version, out, apks, backend='mono', abi='armeabi-v7a', managed=False, 
                 os.replace(dst + '.part', dst)
                 got.append(rel)
     libs = f'Variations/{backend}/Release/Libs/{abi}/'
-    need = [libs + 'libmain.so', libs + 'libunity.so', 'Data/unity default resources']
+    need = [libs + 'libmain.so', libs + 'libunity.so']
+    if not any(r in got for r in DEFAULT_RESOURCES):
+        need.append('Data/unity default resources')
     if backend == 'mono' or managed:
         need.append(f'Variations/{backend}/Managed/UnityEngine.dll')
-    if backend == 'mono':
-        need.append(f'Variations/mono/Release/MonoLibs/{abi}/libmono.so')
+    # (Mono 2.x's libmono.so, or only 4.x's libmonobdwgc-2.0.so: Unity 6 has no 2.x runtime)
+    mono = f'Variations/mono/Release/MonoLibs/{abi}/'
+    if backend == 'mono' and not any(mono + m in got for m in ('libmono.so', 'libmonobdwgc-2.0.so')):
+        need.append(mono + 'libmono.so')
     missing = [n for n in need if n not in got and not any(g.startswith(n) for g in got)]
     if missing:
         raise SystemExit(f'the donors have no {", ".join(missing)} for {backend}/{abi}')
