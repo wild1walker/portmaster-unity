@@ -2,7 +2,7 @@
 """Sum up a UA_PROF recording (runtime/host/prof.c writes <game folder>/prof-<n>.txt):
 
     profsum.py prof-1.txt [--syms DIR] [--lib FILE]... [--thread NAME] [--top N]
-                          [--frames] [--slow MS] [--callers TEXT] [--offsets]
+                          [--frames] [--slow MS] [--callers TEXT] [--within TEXT] [--offsets]
 
 Per sampled thread: how its time splits (on a CPU, waiting for one, blocked and in which call), and
 for the time on a CPU: by module (Unity's engine, Mono's runtime, managed code, libc, the GLES
@@ -20,6 +20,8 @@ over the recording and each core's use.
   --frames     UnityMain's time on a CPU per frame (from its frame times and samples)
   --slow MS    only samples in UnityMain frames longer than MS ms (the frames that miss a vsync)
   --callers T  the callers of functions whose name contains T, most frequent first
+  --within T   only samples with a function whose name contains T on the stack: what that function's
+               time is spent on (its callees in "self" and "on the stack"), with its share of each thread
   --offsets    keep offsets in managed method names (hot spots inside a method)
   --exact      only the callers that were unwound (not those found by scanning) for "on the
                stack", the managed method and --callers
@@ -286,6 +288,7 @@ def main(argv=None):
     ap.add_argument('--frames', action='store_true')
     ap.add_argument('--slow', type=float)
     ap.add_argument('--callers')
+    ap.add_argument('--within')
     ap.add_argument('--offsets', action='store_true')
     ap.add_argument('--exact', action='store_true')
     ap.add_argument('--areas', action='store_true')
@@ -332,8 +335,12 @@ def main(argv=None):
             n = s['count'] if slow_ids is None else slow_ids.get(ti, {}).get(sid, 0)
             if n:
                 stacks.append((n, s))
+        if a.within:
+            before = sum(n for n, _ in stacks)
+            stacks = [(n, s) for n, s in stacks if any(a.within in name(x)[1] for x in sample_frames(p, s, a.exact))]
         total = sum(n for n, _ in stacks)
-        print(f'\n== {th["name"]} (tid {th["tid"]}): {total} samples' + (f', {th["dropped"]} dropped (buffer full)' if th['dropped'] else ''))
+        print(f'\n== {th["name"]} (tid {th["tid"]}): {total} samples' + (f', {th["dropped"]} dropped (buffer full)' if th['dropped'] else '')
+              + (f' with {a.within} on the stack ({pct(total, before).strip()} of its {before})' if a.within else ''))
         if not total:
             continue
         c = cpu_by_tid.get(th['tid'])
