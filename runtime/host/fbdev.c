@@ -76,6 +76,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -99,10 +100,16 @@ static volatile int g_var_ok;
 static int g_fb_w, g_fb_h;
 static int g_rw, g_rh;
 static int g_gw, g_gh;                      // the render size for the GPU scaler (no Allwinner display engine)
+static int g_vh;                            // UA_ASPECT without a copy: the screen's height the driver is told (fbdev_bars_height)
 static volatile int g_cw, g_ch;
 static volatile int g_crop;
 
+#ifdef FBDEV_TEST
+static long (*g_test_fb)(int, unsigned long, void *);
+static long fb_ioctl(int fd, unsigned long req, void *arg) { return g_test_fb ? g_test_fb(fd, req, arg) : syscall(SYS_ioctl, fd, req, arg); }
+#else
 static long fb_ioctl(int fd, unsigned long req, void *arg) { return syscall(SYS_ioctl, fd, req, arg); }
+#endif
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
@@ -172,6 +179,28 @@ static void start_watcher(void)
 
 int fbdev_buffers(void) { return g_buffers; }
 
+// UA_ASPECT=<w>:<h> (fbdev.h) for a pw x ph panel: 1 and the largest even size of that aspect inside
+// it, 0 and the panel's own when the aspect is the panel's (within a pixel)
+int fbdev_fit_aspect(int pw, int ph, const char *aspect, int *w, int *h)
+{
+    int ax = 0, ay = 0;
+    *w = pw;
+    *h = ph;
+    if (!aspect || !*aspect) return 0;
+    if (sscanf(aspect, "%d:%d", &ax, &ay) != 2 || ax <= 0 || ay <= 0) {
+        fprintf(stderr, "[fbdev] UA_ASPECT=%s: <width>:<height>; the panel's aspect\n", aspect);
+        return 0;
+    }
+    int lw = pw, lh = (int)((double)pw * ay / ax + 0.5);
+    if (lh > ph) { lh = ph; lw = (int)((double)ph * ax / ay + 0.5); }
+    lw &= ~1;
+    lh &= ~1;
+    if (lw >= pw - 1 && lh >= ph - 1) return 0;
+    *w = lw;
+    *h = lh;
+    return 1;
+}
+
 // UA_RENDER_SIZE / UA_RENDER_SCALE (fbdev.h) for a pw x ph panel and mem_kb of memory: 1 and the size,
 // 0 for the panel's own. The size is m times the aspect's smallest whole step (720x480: 3x2), m
 // even where a step is odd, so both sides are even; a quarter of the panel at least.
@@ -218,10 +247,12 @@ int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, 
     return 1;
 }
 
+int fbdev_bars_height(void) { return g_vh; }
+
 int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph)
 {
     if (!g_gw) return 0;
-    *w = g_gw; *h = g_gh; *pw = g_fb_w; *ph = g_fb_h;
+    *w = g_gw; *h = g_gh; *pw = g_fb_w; *ph = g_vh ? g_vh : g_fb_h;
     return 1;
 }
 
@@ -278,13 +309,18 @@ void fbdev_setup(void)
     int fit = screens_in_memory(&v, &f);
     g_fb_w = v.xres;
     g_fb_h = v.yres;
-    if (fbdev_pick_render_size(v.xres, v.yres, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
-                               mem_total_kb(), &g_rw, &g_rh)) {
+    // UA_ASPECT: the picture keeps that aspect, with black bars; the GPU places it (the display
+    // engine's layer always fills the panel: sunxi's pans put its window back)
+    int lw, lh, letterbox = fbdev_fit_aspect(v.xres, v.yres, getenv("UA_ASPECT"), &lw, &lh);
+    int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
+                                        mem_total_kb(), &g_rw, &g_rh);
+    if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
+    if (picked) {
         // the display engine's scaler: Allwinner's (sunxi disp, /sys/class/disp) shows a cropped
         // framebuffer over the whole panel; other drivers (Rockchip's) would show it smaller or
         // shifted, so there the GPU scales (UA_RENDER_SCALER=display|gpu chooses)
         const char *sc = getenv("UA_RENDER_SCALER");
-        int de = sc && !strcmp(sc, "display") ? 1 : sc && !strcmp(sc, "gpu") ? 0 : access("/sys/class/disp", F_OK) == 0;
+        int de = letterbox ? 0 : sc && !strcmp(sc, "display") ? 1 : sc && !strcmp(sc, "gpu") ? 0 : access("/sys/class/disp", F_OK) == 0;
         if (de) {
             g_cw = g_rw;
             g_ch = g_rh;
@@ -296,7 +332,8 @@ void fbdev_setup(void)
             g_gh = g_rh;
             g_rw = g_rh = 0;
             fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the GPU scales the window to the panel "
-                    "(no Allwinner display engine)\n", g_gw, g_gh, 100.0 * g_gw * g_gh / ((double)v.xres * v.yres), v.xres, v.yres);
+                    "(%s)\n", g_gw, g_gh, 100.0 * g_gw * g_gh / ((double)v.xres * v.yres), v.xres, v.yres,
+                    letterbox ? "UA_ASPECT: black bars" : "no Allwinner display engine");
         }
     }
     // the refresh period from the mode's timings, when the driver gives them (else 60 Hz until the
@@ -305,12 +342,33 @@ void fbdev_setup(void)
     double p = v.pixclock ? v.pixclock * 1e-12 * ht * vt : 0;
     if (p > 1 / 250.0 && p < 1 / 20.0) g_period = p;
     if (want <= 0 && g_mode == FLIP_HOST && g_buffers < 4) want = fit >= 4 ? 4 : 3;
-    if (want > 0 && want != g_buffers) {
+    // UA_ASPECT with bars above and below: no copy. Unity draws into the bottom lines of its surface
+    // (GL's origin), so a surface of the bar above plus the picture has the picture where the panel
+    // wants it; the driver draws a smaller surface into the top of each buffer. And the driver is
+    // told that surface's height as the screen's (FBIOGET_VSCREENINFO is answered from g_var): its
+    // buffers lie that far apart, the next buffer's bar is the bar below, the real pans still show a
+    // whole panel, and more buffers fit in the memory than whole screens (720x720: 4 instead of 3).
+    int bar_below = 0;
+    if (letterbox && g_gw == (int)v.xres && g_gh < (int)v.yres && !(getenv("UA_ASPECT_COPY") && *getenv("UA_ASPECT_COPY"))) {
+        int h = g_gh + ((int)v.yres - g_gh) / 2;
+        bar_below = (int)v.yres - h;
+        int lines = f.line_length ? (int)(f.smem_len / f.line_length) : 0;
+        int nb = (lines - bar_below) / h;
+        if (nb > 4) nb = 4;
+        if (nb >= (want > 0 ? want : g_buffers) && nb >= 2) {
+            g_vh = h;
+            want = nb;
+            fprintf(stderr, "[fbdev] UA_ASPECT: buffers %d lines apart for the driver, %d of them, no copy of the frame\n", h, nb);
+        } else {
+            fprintf(stderr, "[fbdev] UA_ASPECT: the framebuffer's memory holds %d buffers %d lines apart: a copy of the frame\n", nb, h);
+        }
+    }
+    if (want > 0 && (want != g_buffers || g_vh)) {
         struct fb_var_screeninfo n = v, got;
-        n.yres_virtual = v.yres * want;
+        n.yres_virtual = g_vh ? (unsigned)(want * g_vh + bar_below) : v.yres * want;
         n.yoffset = 0;
         n.activate = FB_ACTIVATE_NOW;
-        if (want > fit) {
+        if (!g_vh && want > fit) {
             fprintf(stderr, "[fbdev] %d buffers: the framebuffer's memory holds %d screens\n", want, fit);
         } else {
             g_orig = v;
@@ -321,6 +379,7 @@ void fbdev_setup(void)
             if (fb_ioctl(fd, FBIOPUT_VSCREENINFO, &n) != 0 || fb_ioctl(fd, FBIOGET_VSCREENINFO, &got) != 0 || !got.yres) {
                 fprintf(stderr, "[fbdev] %d buffers: the driver refused the virtual size %ux%u (%s)\n", want,
                         n.xres_virtual, n.yres_virtual, strerror(errno));
+                g_vh = 0;
                 int crop = g_crop;
                 restore_now();
                 g_crop = crop;
@@ -328,6 +387,18 @@ void fbdev_setup(void)
             } else {
                 g_ours_vy = got.yres_virtual;
                 g_buffers = got.yres_virtual / got.yres;
+                if (g_vh && got.yres_virtual < (unsigned)(want * g_vh + bar_below)) {
+                    fprintf(stderr, "[fbdev] UA_ASPECT: the driver gave %u lines: a copy of the frame\n", got.yres_virtual);
+                    g_vh = 0;
+                } else if (g_vh && g_mode != FLIP_DRIVER) {
+                    g_buffers = want;           // (with the driver's own flips it reads the real geometry: whole screens apart)
+                }
+                if (g_vh) {                     // the bars: black from the start (those below the last buffer stay so)
+                    int wfd = open(g_path, O_RDWR | O_CLOEXEC);
+                    void *m = wfd >= 0 ? mmap(NULL, f.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, wfd, 0) : MAP_FAILED;
+                    if (m != MAP_FAILED) { memset(m, 0, f.smem_len); munmap(m, f.smem_len); }
+                    if (wfd >= 0) close(wfd);
+                }
             }
         }
     }
@@ -344,6 +415,7 @@ void fbdev_setup(void)
         int fd2 = open(g_path, O_RDONLY | O_CLOEXEC);
         struct stat st;
         if (fd2 >= 0 && fstat(fd2, &st) == 0 && fb_ioctl(fd2, FBIOGET_VSCREENINFO, &g_var) == 0) { g_rdev = st.st_rdev; g_var_ok = 1; }
+        if (g_vh && g_var_ok) { g_var.yres = g_vh; g_var.yres_virtual = g_vh * g_buffers; g_var.yoffset = 0; }
         if (fd2 >= 0) close(fd2);
     }
     const char *q = getenv("UA_FB_QUEUE");
@@ -563,6 +635,12 @@ __attribute__((constructor)) static void fbdev_resolve(void) { r_ioctl = (int (*
 // offsets stay: the driver's buffers are a screen apart whatever its window's size)
 static int pan(int fd, struct fb_var_screeninfo *v)
 {
+    if (g_vh) {                                 // UA_ASPECT: the driver's offset, but a whole panel shown
+        struct fb_var_screeninfo c = *v;
+        c.yres = g_fb_h;
+        c.yres_virtual = g_ours_vy;
+        return r_ioctl(fd, FBIOPAN_DISPLAY, &c);
+    }
     int cw = g_cw, ch = g_ch;
     if (cw <= 0 || ch <= 0 || ((unsigned)cw >= v->xres && (unsigned)ch >= v->yres)) return r_ioctl(fd, FBIOPAN_DISPLAY, v);
     struct fb_var_screeninfo c = *v;
@@ -678,6 +756,8 @@ int fbdev_driver_presents(int *w, int *h, int *pw, int *ph)
     pthread_mutex_unlock(&g_lock);
     int had = g_rw > 0;
     if (had) { g_gw = g_rw; g_gh = g_rh; g_rw = g_rh = 0; }
+    g_vh = 0;                                // (its presents do not go through our pans: the GPU places the frame)
+    g_var_ok = 0;
     g_cw = g_ch = 0;                         // no crop: the driver draws the whole screen
     if (g_crop) { int c = restore_now(); (void)c; }
     fprintf(stderr, "[fbdev] the EGL driver presents the whole screen itself (%s before)%s\n",
@@ -695,6 +775,7 @@ void fbdev_test_init(int mode, int buffers, int queue, double period, int (*pan)
     g_fb_w = 720;
     g_fb_h = 480;
     g_cw = g_ch = 0;
+    g_vh = 0;
     pthread_once(&g_cond_once, cond_init);
     pthread_mutex_lock(&g_lock);
     g_swaps = g_flips = 0;
@@ -715,5 +796,20 @@ void fbdev_test_init(int mode, int buffers, int queue, double period, int (*pan)
     g_last_flip = 0;
     g_period = period;
     r_ioctl = pan;
+}
+
+// After fbdev_test_init: UA_ASPECT's flips, the driver's buffers vh lines apart on a ph-line panel.
+void fbdev_test_bars(int vh, int ph, unsigned vy)
+{
+    g_vh = vh;
+    g_fb_h = ph;
+    g_ours_vy = vy;
+}
+
+// Before fbdev_setup: a fake framebuffer's FBIOGET_* and FBIOPUT_VSCREENINFO, and the state of the setup before.
+void fbdev_test_fb(long (*fb)(int, unsigned long, void *))
+{
+    g_test_fb = fb;
+    g_rw = g_rh = g_gw = g_gh = g_vh = g_cw = g_ch = g_crop = g_changed = g_var_ok = 0;
 }
 #endif

@@ -18,11 +18,17 @@ int fbdev_render_size(int *w, int *h);
 // UA_RENDER_SIZE / UA_RENDER_SCALE without Allwinner's display engine: 1, the render size and the
 // panel's (display.c's GPU scaler draws the frame over the panel), else 0
 int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph);
+// UA_ASPECT without a copy: the height of the surface (bar above + picture; the GPU only clears the bar), else 0.
+int fbdev_bars_height(void);
 // The EGL driver draws and presents the whole screen itself (PowerVR's native window 0): the
 // driver's flips from now on, no display-engine crop; 1 and the sizes when a render size is left
 // for the GPU scaler, else 0.
 int fbdev_driver_presents(int *w, int *h, int *pw, int *ph);
 int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, long mem_kb, int *w, int *h);
+// UA_ASPECT=<w>:<h> for a pw x ph panel: 1 and the largest even size of that aspect inside it (Unity
+// draws at that size, the GPU scaler places it with black bars), 0 and the panel's own size when the
+// panel has that aspect or the variable is unset.
+int fbdev_fit_aspect(int pw, int ph, const char *aspect, int *w, int *h);
 
 // Flips (fbdev.c interposes the driver's FBIOPAN_DISPLAY calls). fbdev_swap() is called right
 // before each eglSwapBuffers, fbdev_swap_done(<its result>) right after it (with host flips it waits

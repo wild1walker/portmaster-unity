@@ -2,7 +2,8 @@
 // ua-media-ffmpeg-* image that has Debian's FFmpeg): AAC in MP4 through the system's libavcodec
 // (um_ffmpeg.c), H.264 High profile with B-frames through OpenH264 and through libavcodec (the
 // two must give the same pictures: H.264 decoding is exact), interlaced H.264 (OpenH264 refuses
-// it at configure, the codec moves to libavcodec), and WebM / Matroska written by FFmpeg's muxer.
+// it at configure, the codec moves to libavcodec), a stream OpenH264 could take with UM_H264=ffmpeg,
+// and WebM / Matroska written by FFmpeg's muxer.
 #define _GNU_SOURCE
 #include "../um.h"
 
@@ -140,6 +141,23 @@ int main(int argc, char **argv)
     printf("   OpenH264 against libavcodec: worst picture %.1f dB\n", worst);
     CHECK(r2.frames == r.frames && r2.ordered && worst > 35, "OpenH264 with B-frames: close (%.1f dB)", worst);
     CHECK(r.first == 0 && r.last == 966666, "times %lld .. %lld", (long long)r.first, (long long)r.last);
+
+    printf("-- UM_H264=ffmpeg: a stream OpenH264 could take goes to libavcodec\n");
+    snprintf(p, sizeof p, "%s/baseline.mp4", d);
+    um_extractor *ex = um_extractor_new();
+    CHECK(um_extractor_set_path(ex, p) == UM_OK, "cannot open %s", p);
+    um_format *bf = um_extractor_track_format(ex, 0);
+    setenv("UM_H264", "ffmpeg", 1);
+    um_codec *bc = um_codec_create(um_format_get_string(bf, UM_KEY_MIME));
+    int bok = bc && um_codec_configure(bc, bf, NULL) == UM_OK;
+    CHECK(bok && !strcmp(um_codec_name(bc), "ffmpeg.h264.decoder"), "UM_H264=ffmpeg: %s", bok ? um_codec_name(bc) : "no decoder");
+    um_codec_free(bc);
+    um_format_free(bf);
+    um_extractor_free(ex);
+    run(p, 0, NULL, &r2);
+    unsetenv("UM_H264");
+    run(p, 0, "ffmpeg.h264.decoder", &r);
+    CHECK(r2.frames == 30 && r2.hash == r.hash, "UM_H264=ffmpeg: %d frames, the pictures of libavcodec", r2.frames);
 
     printf("-- interlaced H.264: OpenH264 refuses, libavcodec takes it\n");
     snprintf(p, sizeof p, "%s/interlaced.mp4", d);

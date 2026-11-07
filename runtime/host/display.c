@@ -17,7 +17,7 @@
 // ---- the GPU scaler (render thread, Unity's context current, before the swap) -------------------
 // Two glBlitFramebuffer: the rw x rh frame into a texture (the same size: also resolves a
 // multisampled surface), then the texture (linear) over the whole surface (a blit within one
-// framebuffer may not overlap). GLES 3.
+// framebuffer may not overlap), or with UA_ASPECT in the middle of it, black around it. GLES 3.
 #define GL_TEXTURE_2D 0x0DE1
 #define GL_RGBA8 0x8058
 #define GL_RGBA 0x1908
@@ -37,6 +37,10 @@
 #define GL_RASTERIZER_DISCARD 0x8C89
 #define GL_COLOR_WRITEMASK 0x0C23
 #define GL_COLOR_BUFFER_BIT 0x4000
+#define GL_COLOR_CLEAR_VALUE 0x0C22
+#define GL_DEPTH 0x1801
+#define GL_STENCIL 0x1802
+#define GL_SCISSOR_BOX 0x0C10
 static struct {
     void (*GetIntegerv)(unsigned, int *);
     void (*GetBooleanv)(unsigned, unsigned char *);
@@ -52,14 +56,34 @@ static struct {
     void (*FramebufferTexture2D)(unsigned, unsigned, unsigned, unsigned, int);
     unsigned (*CheckFramebufferStatus)(unsigned);
     void (*BlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned, unsigned);
+    void (*GetFloatv)(unsigned, float *);
+    void (*ClearColor)(float, float, float, float);
+    void (*Clear)(unsigned);
+    void (*InvalidateFramebuffer)(unsigned, int, const unsigned *);
+    void (*Scissor)(int, int, int, int);
 } G;
 static int g_srw, g_srh, g_sdw, g_sdh;          // set: display_gpu_scale
+static int g_sx, g_sy, g_sfw, g_sfh, g_sbars;   // where the frame goes on the surface; bars: black around it
+static int g_spanned;                           // UA_ASPECT placed by the pans: only the bars to clear
 static unsigned g_sfbo;
 static int g_sstate;                            // 0 not set up, 1 on, -1 failed (frames stay unscaled)
 
-void display_gpu_scale(int rw, int rh, int dw, int dh) { g_srw = rw; g_srh = rh; g_sdw = dw; g_sdh = dh; }
+void display_gpu_scale(int rw, int rh, int dw, int dh)
+{
+    g_srw = rw; g_srh = rh; g_sdw = dw; g_sdh = dh;
+    g_sx = g_sy = g_sbars = g_spanned = 0;
+    g_sfw = dw; g_sfh = dh;
+    const char *a = getenv("UA_ASPECT");
+    if (!a || !*a) return;
+    int fw = dw, fh = (int)((double)dw * rh / rw + 0.5);        // the frame's own aspect over the surface
+    if (fh > dh) { fh = dh; fw = (int)((double)dh * rw / rh + 0.5); }
+    if (fw >= dw - 1 && fh >= dh - 1) return;                   // the surface's aspect (within a pixel)
+    g_sfw = fw; g_sfh = fh;
+    g_sx = (dw - fw) / 2; g_sy = (dh - fh) / 2;
+    g_sbars = 1;
+}
 
-static int scale_setup(void)
+static int gl_load(void)
 {
     void *h = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
     if (!h) h = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
@@ -67,10 +91,17 @@ static int scale_setup(void)
 #define L(f) do { *(void **)&G.f = h ? dlsym(h, "gl" #f) : NULL; if (!G.f && gpa) *(void **)&G.f = gpa("gl" #f); } while (0)
     L(GetIntegerv); L(GetBooleanv); L(IsEnabled); L(Enable); L(Disable); L(ColorMask); L(GenTextures);
     L(BindTexture); L(TexImage2D); L(TexParameteri); L(GenFramebuffers); L(BindFramebuffer);
-    L(FramebufferTexture2D); L(CheckFramebufferStatus); L(BlitFramebuffer);
+    L(FramebufferTexture2D); L(CheckFramebufferStatus); L(BlitFramebuffer); L(GetFloatv); L(ClearColor); L(Clear);
+    L(InvalidateFramebuffer); L(Scissor);
 #undef L
     void **f = (void **)&G;
     for (unsigned i = 0; i < sizeof G / sizeof *f; i++) if (!f[i]) return 0;
+    return 1;
+}
+
+static int scale_setup(void)
+{
+    if (!gl_load()) return 0;
     int tex0 = 0, rfb = 0, dfb = 0;
     unsigned tex;
     G.GetIntegerv(GL_TEXTURE_BINDING_2D, &tex0);
@@ -91,14 +122,56 @@ static int scale_setup(void)
     return ok;
 }
 
+void display_frame_rect(int *x, int *y, int *w, int *h)
+{
+    if (g_sbars && g_sstate > 0) { *x = g_sx; *y = g_sy; *w = g_sfw; *h = g_sfh; }
+}
+
+// The surface's lines above Unity's frame, black: the bar above the picture. In the frame's own
+// pass (no pass of its own, nothing loaded).
+static void clear_bars(void)
+{
+    int dfb = 0, box[4];
+    float c[4];
+    unsigned char mask[4];
+    G.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    G.GetIntegerv(GL_SCISSOR_BOX, box);
+    G.GetFloatv(GL_COLOR_CLEAR_VALUE, c);
+    G.GetBooleanv(GL_COLOR_WRITEMASK, mask);
+    unsigned char sc = G.IsEnabled(GL_SCISSOR_TEST);
+    if (dfb) G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    if (!sc) G.Enable(GL_SCISSOR_TEST);
+    G.Scissor(0, g_srh, g_sdw, g_sdh - g_srh);
+    G.ColorMask(1, 1, 1, 1);
+    G.ClearColor(0, 0, 0, 1);
+    G.Clear(GL_COLOR_BUFFER_BIT);
+    G.ClearColor(c[0], c[1], c[2], c[3]);
+    G.ColorMask(mask[0], mask[1], mask[2], mask[3]);
+    G.Scissor(box[0], box[1], box[2], box[3]);
+    if (!sc) G.Disable(GL_SCISSOR_TEST);
+    if (dfb) G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (unsigned)dfb);
+}
+
+void display_gpu_spanned(void) { g_spanned = 1; g_sbars = 0; }
+
 void display_present_scaled(void)
 {
     if (!g_srw || g_sstate < 0) return;
+    if (g_spanned) {
+        if (!g_sstate) {
+            g_sstate = gl_load() ? 1 : -1;
+            fprintf(stderr, g_sstate > 0 ? "[display] render size %dx%d, at the bottom of a %dx%d surface: the middle of the panel\n"
+                                         : "[display] render size %dx%d in %dx%d: no GL for its bars\n", g_srw, g_srh, g_sdw, g_sdh);
+            if (g_sstate < 0) return;
+        }
+        clear_bars();
+        return;
+    }
     if (!g_sstate) {
         g_sstate = scale_setup() ? 1 : -1;
         fprintf(stderr, g_sstate > 0 ? "[display] render size %dx%d, scaled to %dx%d by the GPU\n"
                                      : "[display] render size %dx%d: no GLES 3 framebuffer copy, the frame stays in the corner of %dx%d\n",
-                g_srw, g_srh, g_sdw, g_sdh);
+                g_srw, g_srh, g_sfw, g_sfh);
         if (g_sstate < 0) return;
     }
     int rfb = 0, dfb = 0;
@@ -115,7 +188,17 @@ void display_present_scaled(void)
     G.BlitFramebuffer(0, 0, g_srw, g_srh, 0, 0, g_srw, g_srh, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     G.BindFramebuffer(GL_READ_FRAMEBUFFER, g_sfbo);
     G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    G.BlitFramebuffer(0, 0, g_srw, g_srh, 0, 0, g_sdw, g_sdh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    if (g_sbars) {                              // a new pass of the window: nothing of it loaded, bars black
+        static const unsigned ds[2] = { GL_DEPTH, GL_STENCIL };
+        float c[4];
+        G.InvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 2, ds);
+        G.GetFloatv(GL_COLOR_CLEAR_VALUE, c);
+        G.ClearColor(0, 0, 0, 1);
+        G.Clear(GL_COLOR_BUFFER_BIT);
+        G.ClearColor(c[0], c[1], c[2], c[3]);
+    }
+    G.BlitFramebuffer(0, 0, g_srw, g_srh, g_sx, g_sy, g_sx + g_sfw, g_sy + g_sfh, GL_COLOR_BUFFER_BIT,
+                      g_sfw == g_srw && g_sfh == g_srh ? GL_NEAREST : GL_LINEAR);
     G.BindFramebuffer(GL_READ_FRAMEBUFFER, (unsigned)rfb);
     G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (unsigned)dfb);
     G.ColorMask(mask[0], mask[1], mask[2], mask[3]);
@@ -204,6 +287,7 @@ static int use_fbdev(void)
         android_window_set_native(&panel);
         egl_glue_set_report_size(w, h);
         display_gpu_scale(w, h, pw, ph);
+        if (fbdev_bars_height()) display_gpu_spanned();
     }
     ANativeWindow *win = android_window_get();
     android_window_set_max_size(ANativeWindow_getWidth(win), ANativeWindow_getHeight(win));

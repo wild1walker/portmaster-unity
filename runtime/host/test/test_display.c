@@ -9,6 +9,8 @@
 //   TEST_EXPECT=sdl|fbdev   backend display_init() must pick (default sdl)
 //   TEST_SIZE=WxH           expected window size (default: not checked)
 //   TEST_FRAMES=<n>         frames drawn (default 120)
+//   TEST_RENDER=WxH         Unity's window when it is not the whole window (UA_ASPECT): on X11, the frame in the
+//                           middle of the presented window and black bars around it
 #define _GNU_SOURCE
 #include "../display.h"
 #include "../../android/android_shims.h"
@@ -85,6 +87,7 @@ static void on_swap(void *ctx)
     (void)ctx;
     g_hook_calls++;
     if (p_GetCurrentContext && p_GetCurrentContext() == g_ctx) g_hook_current++;
+    display_present_scaled();                    // as frames.c's hook: a render size up to the window
 }
 
 static int expect_pixel(void (*read)(int, int, int, int, unsigned, unsigned, void *), int x, int y, const unsigned char *rgb)
@@ -256,13 +259,30 @@ static void check_x11_window(SDL_Window *w)
     int ww = 0, wh = 0;
     SDL_GetWindowSize(w, &ww, &wh);
     sync(info.info.x11.display, False);
-    XImage *img = get_image(info.info.x11.display, info.info.x11.window, ww / 2, wh / 2, 1, 1, ~0UL, ZPixmap);
+    XImage *img = get_image(info.info.x11.display, info.info.x11.window, 0, 0, ww, wh, ~0UL, ZPixmap);
     CHECK(img != NULL);
     if (!img) return;
-    unsigned long p = XGetPixel(img, 0, 0);
+    unsigned long p = XGetPixel(img, ww / 2, wh / 2);
     unsigned char rgb[3] = { (unsigned char)(p >> 16), (unsigned char)(p >> 8), (unsigned char)p };
     fprintf(stderr, "test: X11 window center %d,%d,%d (last frame %d,%d,%d)\n", rgb[0], rgb[1], rgb[2], g_last[0], g_last[1], g_last[2]);
     CHECK(!memcmp(rgb, g_last, 3));
+    // UA_ASPECT: black around the frame, the frame right up to the bars
+    int rw, rh;
+    if (getenv("TEST_RENDER") && sscanf(getenv("TEST_RENDER"), "%dx%d", &rw, &rh) == 2) {
+        unsigned long frame = (unsigned long)g_last[0] << 16 | (unsigned long)g_last[1] << 8 | g_last[2];
+        int bx = (ww - rw) / 2, by = (wh - rh) / 2;
+        CHECK(bx > 1 || by > 1);
+#define PIXEL(x, y) (XGetPixel(img, (x), (y)) & 0xffffff)
+        if (by > 1) {
+            CHECK(PIXEL(ww / 2, by / 2) == 0 && PIXEL(ww / 2, wh - 1 - by / 2) == 0);
+            CHECK(PIXEL(ww / 2, by + 1) == frame && PIXEL(ww / 2, wh - by - 2) == frame);
+        }
+        if (bx > 1) {
+            CHECK(PIXEL(bx / 2, wh / 2) == 0 && PIXEL(ww - 1 - bx / 2, wh / 2) == 0);
+            CHECK(PIXEL(bx + 1, wh / 2) == frame && PIXEL(ww - bx - 2, wh / 2) == frame);
+        }
+#undef PIXEL
+    }
     XDestroyImage(img);
 }
 #endif
@@ -300,7 +320,9 @@ int main(void)
     int dw = 0, dh = 0;
     SDL_GL_GetDrawableSize(w, &dw, &dh);
     ANativeWindow *aw = android_window_get();
-    CHECK(ANativeWindow_getWidth(aw) == dw && ANativeWindow_getHeight(aw) == dh);
+    int uw = dw, uh = dh;                        // Unity's window
+    if (getenv("TEST_RENDER")) sscanf(getenv("TEST_RENDER"), "%dx%d", &uw, &uh);
+    CHECK(ANativeWindow_getWidth(aw) == uw && ANativeWindow_getHeight(aw) == uh);
     int ew, eh;
     if (getenv("TEST_SIZE") && sscanf(getenv("TEST_SIZE"), "%dx%d", &ew, &eh) == 2) CHECK(dw == ew && dh == eh);
     fprintf(stderr, "test: window %dx%d, %d Hz\n", dw, dh, display_refresh_rate());

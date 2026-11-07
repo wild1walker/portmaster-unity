@@ -213,6 +213,10 @@ static const char *const WWISE_FNS =
     "fn AkSoundEngine CSharp_GetBufferTick u -\n"
     "fn AkSoundEngine CSharp_AkExternalSourceInfo_szFile_set v p,z\n"
     "fn AkSoundEngine CSharp_AkExternalSourceInfo_szFile_get z p\n"
+    "fn AkSoundEngine CSharp_new_AkDeviceSettings p -\n"
+    "fn AkSoundEngine CSharp_AkDeviceSettings_threadProperties_get p p\n"
+    "fn AkSoundEngine CSharp_AkThreadProperties_dwAffinityMask_set v p,u\n"
+    "fn AkSoundEngine CSharp_AkThreadProperties_dwAffinityMask_get u p\n"
     "const AkSoundEngine AKRESULT.AK_Success 1\n"
     "const AkSoundEngine AkCallbackType.AK_EndOfEvent 1\n"
     "const AkSoundEngine AkCallbackType.AK_Bank 1073741824\n";
@@ -246,6 +250,20 @@ static int test_wwise(const char *root, const char *backend)
     g_wh = so_dlopen("libAkSoundEngine.so", 0);
     CHECK(g_wh != NULL && so_dlopen("AkSoundEngine", 0) != NULL, "the stub under the DllImport's names");
     if (!g_wh) return 0;
+    // an embedded struct's getter (SWIG gives its address): an object, the same one each time, with fields
+    void *ds = ((void *(*)(void))wsym("CSharp_new_AkDeviceSettings"))();
+    void *(*thread_get)(void *) = wsym("CSharp_AkDeviceSettings_threadProperties_get");
+    void *tp = ds ? thread_get(ds) : NULL;
+    CHECK(tp != NULL && thread_get(ds) == tp, "AkDeviceSettings.threadProperties: %p", tp);
+    ((void (*)(void *, uint32_t))wsym("CSharp_AkThreadProperties_dwAffinityMask_set"))(tp, 3);
+    CHECK(((uint32_t (*)(void *))wsym("CSharp_AkThreadProperties_dwAffinityMask_get"))(tp) == 3, "its field back");
+    // strings marshaled as UTF-16 ([MarshalAs(LPWStr)]) are the same names as C strings
+    uint32_t (*id_of)(const void *) = wsym("CSharp_GetIDFromString");
+    static const uint16_t wide[] = { 'P', 'l', 'a', 'y', '_', 'M', 'u', 's', 'i', 'c', 0 };
+    static const uint16_t wide_e[] = { 'C', 'a', 'f', 0xe9, 0 }, wide_one[] = { 'A', 0 };
+    CHECK(id_of(wide) == ak_id("Play_Music"), "a UTF-16 string: %#x", id_of(wide));
+    CHECK(id_of(wide_e) == id_of("Caf\xc3\xa9"), "a UTF-16 string beyond ASCII: UTF-8");
+    CHECK(id_of(wide_one) == ak_id("A") && id_of("A") == ak_id("A"), "one character");
     uint64_t o[64], go = 0x1122334455667788ULL;
     uint32_t rtpc = ak_id("Music_Volume"), event = ak_id("Play_Footstep");
     memset(o, 0xee, sizeof o);

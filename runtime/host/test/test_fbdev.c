@@ -12,11 +12,14 @@
 // refresh rate); a new window in the middle (fbdev_new_window) restarts at the buffer on the screen.
 // A window smaller than the 720x480 screen: from its first frame on, every pan carries its size (the
 // display engine's crop) at the same offsets; and the render sizes UA_RENDER_SIZE / UA_RENDER_SCALE
-// pick.
+// pick. UA_ASPECT: the sizes it picks; fbdev_setup against a fake framebuffer (the driver told a shorter
+// screen, more buffers in the memory, or a copy of the frame when that cannot be); and the flips with
+// such buffers, every pan showing a whole panel at the driver's offsets.
 // Built and run by fbdev_test.sh (armhf under QEMU, arm64).
 #define _GNU_SOURCE
 #include "../fbdev.h"
 
+#include <fcntl.h>
 #include <linux/fb.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -28,6 +31,8 @@
 #include <unistd.h>
 
 void fbdev_test_init(int mode, int buffers, int queue, double period, int (*pan)(int, unsigned long, ...));
+void fbdev_test_bars(int vh, int ph, unsigned vy);
+void fbdev_test_fb(long (*fb)(int, unsigned long, void *));
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -48,6 +53,9 @@ static int pending_flips[64], npending;  // buffers the driver panned to, not sh
 static int tears, overwrites, flips, out_of_order, last_flipped_frame;
 static int crop_w, crop_h;               // the size the pans should carry (the window's)
 static int pans_full, pans_cropped, pans_wrong;   // pans with the screen's size, the window's, another
+static int buf_lines = YRES, panel_h = YRES;      // the lines between the driver's buffers, the panel's
+static unsigned panel_vy;                // UA_ASPECT's flips: the virtual height every pan should carry
+static int pans_vy_wrong;
 static int frame_of_buffer[16];          // the frame last drawn into each buffer
 static double t0;
 
@@ -64,10 +72,11 @@ static int fake_pan(int fd, unsigned long req, ...)
     double next = ((long long)(t / PERIOD_US) + 1) * (double)PERIOD_US;
     sleep_us(next - t);
     pthread_mutex_lock(&m);
-    int b = v->yoffset / YRES;
-    if (v->xres == 720 && v->yres == YRES) pans_full++;
+    int b = v->yoffset / buf_lines;
+    if (v->xres == 720 && (int)v->yres == panel_h) pans_full++;
     if (crop_w && (int)v->xres == crop_w && (int)v->yres == crop_h) pans_cropped++;
-    else if (v->xres != 720 || v->yres != YRES) pans_wrong++;
+    else if (v->xres != 720 || (int)v->yres != panel_h) pans_wrong++;
+    if (panel_vy && v->yres_virtual != panel_vy) pans_vy_wrong++;
     on_screen = b;
     if (drawing == b) tears++;                         // the GPU is drawing into what is shown now
     for (int i = 0; i < npending; i++)
@@ -116,8 +125,8 @@ static void *gpu_main(void *arg)
         struct fb_var_screeninfo v;
         memset(&v, 0, sizeof v);
         v.xres = 720;
-        v.yres = YRES;
-        v.yoffset = b * YRES;
+        v.yres = buf_lines;
+        v.yoffset = b * buf_lines;
         pthread_mutex_lock(&m);
         for (int i = 0; i < npending; i++)           // (mailbox flips: a dropped frame's flip)
             if (pending_flips[i] == b) { memmove(pending_flips + i, pending_flips + i + 1, (npending - i - 1) * sizeof(int)); npending--; i--; }
@@ -135,11 +144,58 @@ static void *gpu_main(void *arg)
 
 static int start_w = 720, start_h = YRES, new_w = 720, new_h = YRES;   // the windows: at the start, at new_window_at
 
+// ---- a fake framebuffer for fbdev_setup: its geometry, its memory, the most lines it gives (0: any) ----
+static struct fb_var_screeninfo fb_var;
+static unsigned fb_mem, fb_cap;
+
+static long fake_fb(int fd, unsigned long req, void *arg)
+{
+    (void)fd;
+    if (req == FBIOGET_VSCREENINFO) { *(struct fb_var_screeninfo *)arg = fb_var; return 0; }
+    if (req == FBIOGET_FSCREENINFO) {
+        struct fb_fix_screeninfo *f = arg;
+        memset(f, 0, sizeof *f);
+        f->line_length = fb_var.xres * 4;
+        f->smem_len = fb_mem;
+        return 0;
+    }
+    if (req == FBIOPUT_VSCREENINFO) {
+        fb_var = *(struct fb_var_screeninfo *)arg;
+        if (fb_cap && fb_var.yres_virtual > fb_cap) fb_var.yres_virtual = fb_cap;
+        return 0;
+    }
+    return req == FBIOPAN_DISPLAY ? 0 : -1;
+}
+
+static void setup_fb(int pw, int ph, unsigned mem, unsigned cap, const char *aspect)
+{
+    memset(&fb_var, 0, sizeof fb_var);
+    fb_var.xres = fb_var.xres_virtual = pw;
+    fb_var.yres = ph;
+    fb_var.yres_virtual = ph * 2;
+    fb_mem = mem;
+    fb_cap = cap;
+    setenv("ANDROID_FBDEV", "/dev/zero", 1);        // (a character device that maps)
+    setenv("UA_ASPECT", aspect, 1);
+    fbdev_test_fb(fake_fb);
+    fbdev_setup();
+}
+
+// the sizes fbdev_gpu_render_size gives: 0 if it gives none
+static int gpu_size_is(int w, int h, int pw, int ph)
+{
+    int a = 0, b = 0, c = 0, d = 0;
+    if (!fbdev_gpu_render_size(&a, &b, &c, &d)) return !w;
+    if (a != w || b != h || c != pw || d != ph) fprintf(stderr, "  GPU render size %dx%d in %dx%d\n", a, b, c, d);
+    return a == w && b == h && c == pw && d == ph;
+}
+
 // one run; returns the frame rate
 static double run(const char *name, int mode, int buffers, int queue, int frames, int cpu_us_, int gpu_us_, int new_window_at)
 {
     B = buffers;
     fbdev_test_init(mode, buffers, queue, PERIOD_US / 1e6, fake_pan);
+    if (panel_vy) fbdev_test_bars(buf_lines, panel_h, panel_vy);
     pthread_mutex_lock(&m);
     memset(busy, 0, sizeof busy);
     memset(frame_of_buffer, 0, sizeof frame_of_buffer);
@@ -148,7 +204,7 @@ static double run(const char *name, int mode, int buffers, int queue, int frames
     next_idx = 1;
     npending = qh = qn = 0;
     tears = overwrites = flips = out_of_order = 0;
-    pans_full = pans_cropped = pans_wrong = 0;
+    pans_full = pans_cropped = pans_wrong = pans_vy_wrong = 0;
     last_flipped_frame = -1;
     stop = 0;
     gpu_us = gpu_us_;
@@ -265,6 +321,14 @@ int main(void)
     CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 150);
     CHECK(pans_wrong == 0 && pans_cropped == 60 && pans_full == 90);
     printf("  pans: %d with the screen's size, %d with the window's\n", pans_full, pans_cropped);
+    // UA_ASPECT without a copy: the driver's 4 buffers 562 lines apart on a 720-line panel; every pan
+    // shows a whole panel at the driver's offset, and the flips stay in turn
+    buf_lines = 562; panel_h = 720; panel_vy = 4 * 562 + 158;
+    start_w = new_w = 720; start_h = new_h = 562; crop_w = crop_h = 0;
+    run("host, 4 buffers 562 lines apart", 1, 4, 0, 150, US(300), US(600), -1);
+    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 150);
+    CHECK(pans_wrong == 0 && pans_vy_wrong == 0 && pans_full == 150 && pans_cropped == 0);
+    buf_lines = panel_h = YRES; panel_vy = 0;
     start_w = 720; start_h = YRES;
     // the render sizes (UA_RENDER_SIZE / UA_RENDER_SCALE / UA_RENDER_RAM)
     static const struct { int pw, ph; const char *size, *scale, *ram; long kb; int ok, w, h; } rs[] = {
@@ -298,6 +362,55 @@ int main(void)
             fprintf(stderr, "  render size %dx%d size %s scale %s ram %s: %d %dx%d\n", rs[i].pw, rs[i].ph, rs[i].size ? rs[i].size : "-",
                     rs[i].scale ? rs[i].scale : "-", rs[i].ram ? rs[i].ram : "-", ok, w, h);
     }
+    // the sizes UA_ASPECT picks
+    static const struct { int pw, ph; const char *aspect; int ok, w, h; } as[] = {
+        { 720, 720, "16:9", 1, 720, 404 },                           // 405: even
+        { 640, 480, "16:9", 1, 640, 360 },
+        { 1280, 720, "4:3", 1, 960, 720 },                           // bars at the sides
+        { 1280, 720, "16:9", 0, 1280, 720 },
+        { 854, 480, "16:9", 0, 854, 480 },                           // the panel's within a pixel
+        { 720, 720, NULL, 0, 720, 720 },
+        { 720, 720, "wide", 0, 720, 720 },
+        { 720, 720, "16:0", 0, 720, 720 },
+    };
+    for (size_t i = 0; i < sizeof as / sizeof as[0]; i++) {
+        int w = 0, h = 0;
+        int ok = fbdev_fit_aspect(as[i].pw, as[i].ph, as[i].aspect, &w, &h);
+        CHECK(ok == as[i].ok && w == as[i].w && h == as[i].h);
+        if (ok != as[i].ok || w != as[i].w || h != as[i].h)
+            fprintf(stderr, "  aspect %s on %dx%d: %d %dx%d\n", as[i].aspect ? as[i].aspect : "-", as[i].pw, as[i].ph, ok, w, h);
+    }
+    // fbdev_setup with UA_ASPECT. No copy: a bar above and the picture, 562 lines; 158 below the last buffer
+    setup_fb(720, 720, 8 << 20, 0, "16:9");
+    CHECK(fbdev_bars_height() == 562 && fbdev_buffers() == 4);
+    CHECK(fb_var.yres_virtual == 4 * 562 + 158);
+    CHECK(gpu_size_is(720, 404, 720, 562));
+    struct fb_var_screeninfo told;                   // the screen the EGL driver is told
+    int zfd = open("/dev/zero", O_RDONLY);
+    CHECK(ioctl(zfd, FBIOGET_VSCREENINFO, &told) == 0 && told.yres == 562 && told.yres_virtual == 4 * 562);
+    close(zfd);
+    // three screens of memory: three buffers
+    setup_fb(720, 720, 3 * 720 * 720 * 4, 0, "16:9");
+    CHECK(fbdev_bars_height() == 562 && fbdev_buffers() == 3 && gpu_size_is(720, 404, 720, 562));
+    // less memory, a driver that gives fewer lines: the GPU copies the frame into the middle of a panel-sized surface
+    setup_fb(720, 720, 2 * 720 * 720 * 4, 0, "16:9");
+    CHECK(fbdev_bars_height() == 0 && gpu_size_is(720, 404, 720, 720));
+    setup_fb(720, 720, 8 << 20, 1500, "16:9");
+    CHECK(fbdev_bars_height() == 0 && gpu_size_is(720, 404, 720, 720));
+    setenv("UA_ASPECT_COPY", "1", 1);
+    setup_fb(720, 720, 8 << 20, 0, "16:9");
+    CHECK(fbdev_bars_height() == 0 && gpu_size_is(720, 404, 720, 720));
+    unsetenv("UA_ASPECT_COPY");
+    setup_fb(1280, 720, 16 << 20, 0, "4:3");         // bars at the sides: a copy
+    CHECK(fbdev_bars_height() == 0 && gpu_size_is(960, 720, 1280, 720));
+    // the panel's aspect: nothing
+    setup_fb(1280, 720, 16 << 20, 0, "16:9");
+    CHECK(fbdev_bars_height() == 0 && gpu_size_is(0, 0, 0, 0));
+    // the driver's own flips read the real geometry: whole screens apart
+    setenv("UA_FB_FLIP", "driver", 1);
+    setup_fb(720, 720, 8 << 20, 0, "16:9");
+    CHECK(fbdev_bars_height() == 562 && fbdev_buffers() == 3 && fb_var.yres_virtual == 4 * 562 + 158);
+    unsetenv("UA_FB_FLIP");
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

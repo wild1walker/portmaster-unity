@@ -788,6 +788,14 @@ static ua_ak_value h_get(const entry *e, ua_ak_value *a, const ua_ak_call *c)
     ak_obj *o = e->n == 0 ? &g_globals : otab_find(a[0].p);
     ua_ak_value *v = o ? obj_field(o, e->key, 0) : NULL;
     if (v) r = *v;
+    // an embedded struct of the settings objects (AkDeviceSettings.threadProperties, AkPlatformInitSettings.
+    // threadLEngine, ...): SWIG's getter gives its address, never NULL; a game may set its fields
+    // (dwAffinityMask), and a NULL makes the wrapper null and throws in the middle of Init
+    else if (o && o != &g_globals && e->ret == 'p' && strstr(e->api, "_thread")) {
+        ak_obj *sub = obj_new("AkThreadProperties");
+        obj_field(o, e->key, 1)->p = sub;
+        r.p = sub;
+    }
     pthread_mutex_unlock(&mu);
     return r;
 }
@@ -813,8 +821,34 @@ static ua_ak_value h_default(const entry *e, ua_ak_value *a, const ua_ak_call *c
 
 // --------------------------------------------------------------------------------------- dispatch
 
+// A string argument as UTF-8. An integration may marshal its strings as UTF-16 ([MarshalAs(LPWStr)]:
+// a macOS build of Wwise 2017.2's): a first character and a NUL, then more of the same (a
+// one-character UTF-16 string reads the same as a C string). Everything below sees narrow strings.
+#define AK_WIDE_STRINGS 4
+#define AK_WIDE_BYTES 768
+static const char *ak_narrow(const char *z, char *buf)
+{
+    const unsigned char *u = (const unsigned char *)z;
+    if (!u[0] || u[1] || !u[2] || u[3]) return z;
+    int o = 0;
+    for (; (u[0] || u[1]) && o < AK_WIDE_BYTES - 4; u += 2) {
+        unsigned c = u[0] | (unsigned)u[1] << 8;
+        if (c < 0x80) buf[o++] = (char)c;
+        else if (c < 0x800) { buf[o++] = (char)(0xC0 | c >> 6); buf[o++] = (char)(0x80 | (c & 63)); }
+        else { buf[o++] = (char)(0xE0 | c >> 12); buf[o++] = (char)(0x80 | (c >> 6 & 63)); buf[o++] = (char)(0x80 | (c & 63)); }
+    }
+    buf[o] = 0;
+    return buf;
+}
+
 static ua_ak_value call(entry *e, ua_ak_value *a)
 {
+    char wide[AK_WIDE_STRINGS][AK_WIDE_BYTES];
+    for (int i = 0, k = 0; i < e->n && k < AK_WIDE_STRINGS; i++)
+        if (e->kind[i] == 'z' && a[i].z) {
+            const char *n = ak_narrow(a[i].z, wide[k]);
+            if (n != a[i].z) { a[i].z = n; k++; }
+        }
     ua_ak_call c = { e->name, e->api, e->ret, e->n, e->clsp, a };
     if (!g_backend_tried) { pthread_mutex_lock(&mu); backend_load(); pthread_mutex_unlock(&mu); }
     __atomic_add_fetch(&g_calls, 1, __ATOMIC_RELAXED);

@@ -34,4 +34,8 @@ void *display_sdl_window(void);             // the SDL_Window, NULL if none
 // of the dw x dh surface; display_present_scaled (render thread, before the swap) scales it up over
 // the whole surface. Nothing runs unless display_gpu_scale was called.
 void display_gpu_scale(int rw, int rh, int dw, int dh);
+// Where the picture is on the surface when UA_ASPECT placed it with black bars (screenshots); else unchanged.
+void display_frame_rect(int *x, int *y, int *w, int *h);
+// After display_gpu_scale: UA_ASPECT is placed by the surface itself (fbdev_bars_height): no copy, only the bar cleared.
+void display_gpu_spanned(void);
 void display_present_scaled(void);
