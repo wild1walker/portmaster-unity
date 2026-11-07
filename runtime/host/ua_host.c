@@ -468,7 +468,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); quality_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); }
+static void on_frame(void *user) { framerate_frame(user); gcbudget_frame(user); quality_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }

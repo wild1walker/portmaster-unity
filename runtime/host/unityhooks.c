@@ -15,6 +15,12 @@
 //                        and are left as Unity sets them.
 //   UA_GLES_POOL=1       Unity's pool of GLES buffers in lists that cost O(1) (unitypool.c)
 //   UA_FAST_VERTS=1      dynamic batching's vertex transform without its per-vertex overhead (unityverts.c)
+//   UA_PRESENT_SYNC=end  Unity's GraphicsDeviceSettings.waitForPresentSyncPoint = EndFrame, set once from
+//                        UnityMain after its first frame (=begin: BeginFrame; unset: as the game has it).
+//                        GfxDeviceClient waits for the render thread to have presented the last frame in
+//                        BeginFrame (0, the default) or in EndFrame (1): at the end the main thread runs
+//                        the frame's scripts, animation and culling while the render thread still plays
+//                        the last frame back. Unity's own setting (a script can set it); nothing is hooked.
 //   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmunity player
@@ -178,6 +184,44 @@ int unityhooks_gfx_jobs(void)
     return g_gfx_jobs;
 }
 
+// --- UA_PRESENT_SYNC
+// GraphicsDeviceSettings_Set_Custom_PropWaitForPresentSyncPoint(GfxDeviceWaitForPresentSyncPoint): stores the
+// value in GetGfxDevice() at 0x23a0; GfxDeviceClient::BeginFrame calls WaitForPendingPresent when it is 0,
+// EndFrame when it is 1 (both read in 6000.0.61f1 armeabi-v7a; their rows tie the setter to that code)
+static const struct row g_psync[] = {
+    { "6000.0.61f1 armeabi-v7a", "GraphicsDeviceSettings.waitForPresentSyncPoint (set)", 0x31ebd6, 0x10, ISA_THUMB, 0x973b56982359eb07ull },
+    { "6000.0.61f1 armeabi-v7a", "GfxDeviceClient::BeginFrame", 0x62f468, 0x70, ISA_THUMB, 0x0f58bedb8c26c3acull },
+    { "6000.0.61f1 armeabi-v7a", "GfxDeviceClient::EndFrame", 0x62f554, 0x6c, ISA_THUMB, 0xe6b3b700099f6c08ull },
+};
+static void (*g_psync_set)(int);
+static int g_psync_value = -1;
+
+static void present_sync_on_load(uintptr_t base, size_t size)
+{
+    const char *v = getenv("UA_PRESENT_SYNC");
+    if (!v || !*v) return;
+    int want = !strcmp(v, "end") ? 1 : !strcmp(v, "begin") ? 0 : -1;
+    if (want < 0) { fprintf(stderr, "[unityhooks] UA_PRESENT_SYNC=%s: only 'end' or 'begin'; left as the game has it\n", v); return; }
+    for (size_t i = 0; i + 3 <= sizeof g_psync / sizeof *g_psync; i += 3)
+        if (unityhooks_matches(&g_psync[i], base, size) && unityhooks_matches(&g_psync[i + 1], base, size) &&
+            unityhooks_matches(&g_psync[i + 2], base, size)) {
+            g_psync_set = (void (*)(int))(base + g_psync[i].off + (g_psync[i].isa == ISA_THUMB));
+            g_psync_value = want;
+            return;
+        }
+    fprintf(stderr, "[unityhooks] UA_PRESENT_SYNC: this libunity.so is not one whose present sync point was read "
+                    "(tools/re/unityhooks.py); left as the game has it\n");
+}
+
+void unityhooks_frame(void)
+{
+    static unsigned long frames;
+    if (!g_psync_set || ++frames != 2) return;       // (the device made, the game's own start-up settings applied)
+    g_psync_set(g_psync_value);
+    fprintf(stderr, "[unityhooks] UA_PRESENT_SYNC: the main thread waits for the last frame's present at the %s of its frame\n",
+            g_psync_value ? "end" : "beginning");
+}
+
 void unityhooks_on_load(so_module *m)
 {
     const char *name = so_name(m), *off = getenv("UA_UNITY_HOOKS");
@@ -186,6 +230,7 @@ void unityhooks_on_load(so_module *m)
     size_t size = so_size(m);
     unitypool_on_load(base, size);              // UA_GLES_POOL
     unityverts_on_load(base, size);             // UA_FAST_VERTS
+    present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {

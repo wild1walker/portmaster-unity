@@ -7,6 +7,8 @@
 void unityhooks_on_load(so_module *m);
 // 1 when UA_GFX_JOBS=legacy (and UA_UNITY_HOOKS is not 0)
 int unityhooks_gfx_jobs(void);
+// UnityMain, after each nativeRender: UA_PRESENT_SYNC's setting, once
+void unityhooks_frame(void);
 
 // For the other hook files (unitypool.c): a function as tools/re/unityhooks.py read it in one player
 #include <stddef.h>

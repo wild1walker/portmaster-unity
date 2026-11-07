@@ -35,6 +35,10 @@ HOOKS = [
     ('_Z15GetGraphicsCapsv', 'GetGraphicsCaps', 'call'),
     # unityverts.c (UA_FAST_VERTS): dynamic batching's vertex transform
     ('_Z26TransformVerticesInnerLoopILb0ELb0ELb1EE', 'TransformVerticesInnerLoop<false, false, true>'),
+    # unityhooks.c (UA_PRESENT_SYNC): where the main thread waits for the last frame's present
+    ('_Z61GraphicsDeviceSettings_Set_Custom_PropWaitForPresentSyncPoint', 'GraphicsDeviceSettings.waitForPresentSyncPoint (set)', 'call'),
+    ('_ZN15GfxDeviceClient10BeginFrameEv', 'GfxDeviceClient::BeginFrame', 'call'),
+    ('_ZN15GfxDeviceClient8EndFrameEv', 'GfxDeviceClient::EndFrame', 'call'),
 ]
 
 
