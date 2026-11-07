@@ -23,7 +23,7 @@ ED=${1:?usage: build.sh <editor> <MonoArmv7|Il2cppArm64|Il2cppArmv7> <out dir>};
 HERE=$(cd "$(dirname "$0")" && pwd)
 P=$(mktemp -d)/donor; mkdir -p "$P/Assets"; cp -R "$HERE/Assets/Editor" "$HERE/Assets/Scripts" "$P/Assets/"
 BIN="$ED/Contents/MacOS/Unity"; [ -x "$BIN" ] || BIN="$ED"
-if [ -n "${NDK:-}" ]; then defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"; fi
+if [ -n "${NDK:-}" ] && command -v defaults >/dev/null; then defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"; fi
 DONOR_SDK=${SDK:?set SDK} DONOR_JDK=${JDK:?set JDK} DONOR_NDK=${NDK:-} \
   "$BIN" -batchmode -nographics -quit -projectPath "$P" -executeMethod "DonorBuild.$WHAT" -logFile "$P/build.log" \
   || { tail -40 "$P/build.log"; exit 1; }
