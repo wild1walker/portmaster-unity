@@ -235,11 +235,14 @@ static void unfollowed(const char *what)
     if (!g_fixed) fprintf(stderr, "[glarena] %s: more than the layer follows; an invalidated buffer the GPU may still read waits for it\n", what);
     g_fixed = 1; g_copy = 0; g_track = 0;
 }
+// (the last vertex array looked up in each table: a game makes many calls with one bound)
+static int g_elast, g_alast;
 static GLuint *elem_slot(GLuint vao, int make)
 {
-    for (int i = 0; i < VAOS; i++) if (g_velem[i].vao == vao && (g_velem[i].elem || make)) return &g_velem[i].elem;
+    if (g_velem[g_elast].vao == vao && (g_velem[g_elast].elem || make)) return &g_velem[g_elast].elem;
+    for (int i = 0; i < VAOS; i++) if (g_velem[i].vao == vao && (g_velem[i].elem || make)) { g_elast = i; return &g_velem[i].elem; }
     if (!make) return NULL;
-    for (int i = 0; i < VAOS; i++) if (!g_velem[i].elem) { g_velem[i].vao = vao; return &g_velem[i].elem; }
+    for (int i = 0; i < VAOS; i++) if (!g_velem[i].elem) { g_velem[i].vao = vao; g_elast = i; return &g_velem[i].elem; }
     return NULL;
 }
 static GLuint *bound_slot(GLenum t)
@@ -256,10 +259,14 @@ static GLuint *bound_slot(GLenum t)
 static vbuf *bound(GLenum t) { GLuint *s = bound_slot(t); return s && *s ? find(*s) : NULL; }
 static int *attr_used(GLuint vao, GLuint **attr, int make)
 {
-    for (int i = 0; i < VAOS; i++) if (g_vattr[i].used && g_vattr[i].vao == vao) { *attr = g_vattr[i].attr; return &g_vattr[i].used; }
+    if (g_vattr[g_alast].used && g_vattr[g_alast].vao == vao) { *attr = g_vattr[g_alast].attr; return &g_vattr[g_alast].used; }
+    for (int i = 0; i < VAOS; i++) if (g_vattr[i].used && g_vattr[i].vao == vao) { g_alast = i; *attr = g_vattr[i].attr; return &g_vattr[i].used; }
     if (!make) return NULL;
     for (int i = 0; i < VAOS; i++)
-        if (!g_vattr[i].used) { g_vattr[i].vao = vao; g_vattr[i].used = 1; memset(g_vattr[i].attr, 0, sizeof g_vattr[i].attr); *attr = g_vattr[i].attr; return &g_vattr[i].used; }
+        if (!g_vattr[i].used) {
+            g_vattr[i].vao = vao; g_vattr[i].used = 1; memset(g_vattr[i].attr, 0, sizeof g_vattr[i].attr);
+            g_alast = i; *attr = g_vattr[i].attr; return &g_vattr[i].used;
+        }
     unfollowed("vertex arrays");
     return NULL;
 }
@@ -559,7 +566,7 @@ static void attr_set(GLuint a, GLuint name, attrfmt f)
     if (a >= ATTRS) { if (name) unfollowed("vertex attributes"); return; }
     if (attr_used(g_vao, &attr, name != 0)) {
         attr[a] = name;
-        for (int i = 0; i < VAOS; i++) if (g_vattr[i].attr == attr) g_vfmt[i][a] = f;
+        g_vfmt[g_alast][a] = f;              // (attr_used left g_alast at its entry)
     }
 }
 static void w_VertexAttribPointer(GLuint a, GLint size, GLenum type, GLboolean norm, GLsizei stride, const void *ptr)
@@ -654,9 +661,9 @@ static unsigned asize(GLenum type)
 static int last_vertex(GLuint *last)
 {
     if (g_vao >= VEN || !g_ven[g_vao]) return 0;
-    int k = -1;
-    for (int i = 0; i < VAOS; i++) if (g_vattr[i].used && g_vattr[i].vao == g_vao) { k = i; break; }
-    if (k < 0) return 0;
+    GLuint *attr0;
+    if (!attr_used(g_vao, &attr0, 0)) return 0;
+    int k = g_alast;
     unsigned en = g_ven[g_vao], best = 0xffffffffu;
     for (int a = 0; a < 32; a++) {
         if (!(en & (1u << a))) continue;
