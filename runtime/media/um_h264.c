@@ -112,6 +112,7 @@ static int h_configure(um_dec *d, const um_format *in, um_format *out)
        system has it */
     int32_t reo = 0;
     const char *force = getenv("UM_H264");             /* UM_H264=openh264: OpenH264 for every stream */
+    if (force && !strcmp(force, "ffmpeg") && um_ffmpeg_available()) return UM_ERR_UNSUPPORTED;  /* libavcodec for every stream */
     if (um_format_get_int32(in, "x-reordered", &reo) && reo && !(force && !strcmp(force, "openh264"))) {
         if (um_ffmpeg_available()) return UM_ERR_UNSUPPORTED;
         um_log("openh264: a stream with B-frames and no system libavcodec: pictures can differ slightly from the reference decoder's");

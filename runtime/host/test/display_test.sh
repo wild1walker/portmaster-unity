@@ -2,7 +2,8 @@
 # Tests the SDL display backend (host/display*.c + android/egl_glue.c) without a device: builds
 # test_display for aarch64 and runs it, natively on Apple Silicon / arm64 Linux, on Mesa llvmpipe:
 #   SDL 2.0.10 (ua-display-test: ua-build-arm64 + Xvfb + weston, Ubuntu 20.04)
-#     X11       Xvfb, fullscreen and windowed; the presented frame is read back from the window
+#     X11       Xvfb, fullscreen and windowed; the presented frame is read back from the window;
+#               UA_ASPECT's bars above and below, and at the sides
 #     Wayland   weston's headless backend, UA_DISPLAY=auto
 #     fallback  no usable SDL video driver: UA_DISPLAY=auto takes the fbdev path
 #   SDL 2.26 (ua-display-test-sway: Debian bookworm + sway + Xvfb)
@@ -39,6 +40,8 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w:ro -w /w -e SRC="$SRC" -e CF
   sleep 1
   run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl TEST_SIZE=1280x720
   run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 TEST_SIZE=640x360
+  run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x640 UA_ASPECT=16:9 TEST_SIZE=640x640 TEST_RENDER=640x360
+  run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 UA_ASPECT=1:1 TEST_SIZE=640x360 TEST_RENDER=360x360
 
   weston --backend=headless-backend.so --width=1280 --height=720 --socket=wayland-1 --idle-time=0 >/tmp/weston.log 2>&1 &
   sleep 2

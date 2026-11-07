@@ -9,6 +9,7 @@ TONES="-f lavfi -i sine=frequency=440:sample_rate=48000:duration=1 -f lavfi -i s
 PIC="-f lavfi -i testsrc2=size=160x96:rate=30:duration=1"
 $F $TONES -filter_complex "[0][1]amerge=inputs=2" -c:a aac -b:a 128k "$D/aac.mp4"
 $F $PIC -c:v libx264 -profile:v high -bf 2 -g 10 -pix_fmt yuv420p "$D/high.mp4"
+$F $PIC -c:v libx264 -profile:v baseline -pix_fmt yuv420p "$D/baseline.mp4"
 $F $PIC -c:v libx264 -flags +ildct+ilme -x264-params tff=1 -pix_fmt yuv420p "$D/interlaced.mp4"
 $F $PIC $TONES -filter_complex "[1][2]amerge=inputs=2[a]" -map 0 -map "[a]" -c:v libvpx -b:v 1M -c:a libvorbis "$D/ff.webm"
 $F $PIC $TONES -filter_complex "[1][2]amerge=inputs=2[a]" -map 0 -map "[a]" -c:v libx264 -c:a aac "$D/ff.mkv"

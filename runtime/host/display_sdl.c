@@ -317,8 +317,11 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
     fprintf(stderr, "[display] %s %dx%d%s, %d Hz, swap interval %d\n", windowed ? "window" : "fullscreen", dw, dh,
             t ? " (fallback config)" : "", hz, interval);
 
-    if (fbdev_pick_render_size(dw, dh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
-                               mem_total_kb(), &g_rw, &g_rh)) {
+    int lw, lh, letterbox = fbdev_fit_aspect(dw, dh, getenv("UA_ASPECT"), &lw, &lh);
+    int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
+                                        mem_total_kb(), &g_rw, &g_rh);
+    if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
+    if (picked) {
         if (tries[t].major < 3) {
             fprintf(stderr, "[display] UA_RENDER_SIZE / UA_RENDER_SCALE: a GLES 2 window, no scaled copy: %dx%d\n", dw, dh);
             g_rw = g_rh = 0;
