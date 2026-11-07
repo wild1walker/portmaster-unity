@@ -6,6 +6,8 @@
 //                           name and two parents, its bounds (centre, size), sorting layer and order, the
 //                           material, and a SpriteRenderer's colour and sprite, a MeshRenderer's first
 //                           vertex colour ("[dump] ..."). With UA_DUMP_RENDERERS_ALL=1 the hidden ones too.
+//   UA_DUMP_HERO=<period>[,<name>]  every <period> seconds the position of the GameObject <name> (Knight) and of the
+//                           main camera ("[dump] t <s> Knight (x, y) camera (x, y)"): where a scripted walk took the player
 // Everything is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
 // UnityMain after a frame, as a script of the game would; nothing is changed.
 #include <stdint.h>
@@ -35,6 +37,7 @@ static void (*m_free)(void *);
 static MonoClass *(*m_object_get_class)(MonoObject *);
 static const char *(*m_class_get_name)(MonoClass *);
 static MonoClass *(*m_class_get_parent)(MonoClass *);
+static MonoString *(*m_string_new)(MonoDomain *, const char *);
 
 static int load(void)
 {
@@ -46,6 +49,7 @@ static int load(void)
     L(m_type_get_object, "mono_type_get_object"); L(m_array_length, "mono_array_length"); L(m_array_addr, "mono_array_addr_with_size");
     L(m_unbox, "mono_object_unbox"); L(m_string_to_utf8, "mono_string_to_utf8"); L(m_free, "mono_free");
     L(m_object_get_class, "mono_object_get_class"); L(m_class_get_name, "mono_class_get_name"); L(m_class_get_parent, "mono_class_get_parent");
+    L(m_string_new, "mono_string_new");
 #undef L
     return 1;
 }
@@ -162,10 +166,42 @@ static void dump(void)
     fprintf(stderr, "[dump] %lu renderers, %lu logged\n", (unsigned long)n, (unsigned long)shown);
 }
 
+// the named GameObject's and the main camera's positions
+static void hero(const char *name)
+{
+    static int ok = -1;
+    static MonoMethod *find, *get_main;
+    if (ok < 0) {
+        ok = 0;
+        if (!load()) return;
+        MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+        MonoClass *k_go = core ? m_class_from_name(core, "UnityEngine", "GameObject") : NULL, *k_cam = core ? m_class_from_name(core, "UnityEngine", "Camera") : NULL;
+        find = k_go ? m_method_from_name(k_go, "Find", 1) : NULL;
+        get_main = k_cam ? m_method_from_name(k_cam, "get_main", 0) : NULL;
+        ok = find && get_main;
+        if (!ok) { fprintf(stderr, "[dump] GameObject.Find or Camera.main not found\n"); return; }
+    }
+    if (!ok) return;
+    MonoObject *exc = NULL;
+    void *args[1] = { m_string_new(m_domain_get(), name) };
+    MonoObject *go = m_invoke(find, NULL, args, &exc);
+    if (exc) go = NULL;
+    MonoObject *cam = m_invoke(get_main, NULL, NULL, &exc);
+    if (exc) cam = NULL;
+    float h[3] = { 0 }, c[3] = { 0 };
+    int fh = go && getf(call(go, "get_transform", NULL, 0), "get_position", h, 3);
+    int fc = cam && getf(call(cam, "get_transform", NULL, 0), "get_position", c, 3);
+    char a[48] = "-", b[48] = "-";
+    if (fh) snprintf(a, sizeof a, "(%.2f, %.2f)", h[0], h[1]);
+    if (fc) snprintf(b, sizeof b, "(%.2f, %.2f)", c[0], c[1]);
+    fprintf(stderr, "[dump] %s %s camera %s\n", name, a, b);
+}
+
 void monodump_frame(void)
 {
     static int state = -1, n, next;         // state -1: not read; 0: off or done; 1: waiting
-    static double at[16], t0;
+    static double at[16], t0, period, last;
+    static char name[64];
     if (state == 0) return;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     double now = ts.tv_sec + ts.tv_nsec / 1e9;
@@ -177,11 +213,22 @@ void monodump_frame(void)
             while (*p == ',' || *p == ' ') p++;
             if (*p && !(*p >= '0' && *p <= '9') && *p != '.') break;
         }
-        state = n ? 1 : 0; t0 = now;
+        const char *hv = getenv("UA_DUMP_HERO");
+        if (hv) {
+            char *p; period = strtod(hv, &p);
+            snprintf(name, sizeof name, "%s", *p == ',' ? p + 1 : "Knight");
+        }
+        state = n || period > 0 ? 1 : 0; t0 = now;
         return;
     }
-    if (now - t0 < at[next]) return;
-    fprintf(stderr, "[dump] at %.0f s\n", now - t0);
-    dump();
-    if (++next == n) state = 0;
+    if (period > 0 && now - last >= period) {
+        last = now;
+        fprintf(stderr, "[dump] t %.2f ", now - t0);
+        hero(name);
+    }
+    if (next < n && now - t0 >= at[next]) {
+        fprintf(stderr, "[dump] at %.0f s\n", now - t0);
+        dump();
+        if (++next == n && period <= 0) state = 0;
+    }
 }

@@ -157,7 +157,8 @@ saves in data/); only `<game folder>/bench/` is written: this checkout's ua_host
    matches, after what the last step matched), `seen:<regex>` (the game logged such a line at any
    time), `steady:<n>` (n one-second windows in a row without a frame over 50 ms), `hitch:<ms>`
    (a frame of at least `<ms>`: a scene load), `sleep:<s>`, `press:<presses>` (UA_INPUT_SCRIPT's
-   syntax, through `input.req`), `shot`;
+   syntax, through `input.req`), `shot`, `prof:<s>` (with `UA_PROF`: a recording of `<s>` seconds
+   starts there, e.g. inside a fight a scripted walk reaches, instead of at the measurement);
 3. measures for `MEASURE` seconds (30): the frame rate every second; raw copies of `/proc` and `/sys`
    counters at the start and the end (per-core and per-thread CPU time, memory and swap traffic,
    cpufreq `time_in_state`, devfreq `trans_stat` (the GPU's clock residency, and the memory

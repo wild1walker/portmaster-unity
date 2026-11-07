@@ -160,6 +160,7 @@ for step in "${steps[@]}"; do
     sleep:*) sleep "${step#sleep:}" ;;
     press:*) printf '%s' "${step#press:}" > input.req.tmp && mv input.req.tmp input.req; pos=$(lines) ;;
     shot) touch shot.req ;;
+    prof:*) echo "${step#prof:}" > prof.req.tmp && mv prof.req.tmp prof.req ;;
     cap) caps=$((${caps:-0} + 1)); CAP=/sys/class/disp/disp/attr/capture_dump
          if [ -w $CAP ]; then rm -f "$OUT/cap-$caps.bmp"; echo "$OUT/cap-$caps.bmp" > $CAP; else log "no display engine capture ($CAP)"; fi ;;
     *) fail "unknown plan step '$step'" ;;

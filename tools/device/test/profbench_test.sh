@@ -43,7 +43,7 @@ while :; do
   if [ -f "$root/input.req" ]; then echo "[fake] input $(cat "$root/input.req")"; rm -f "$root/input.req"; echo "[hitch] 1500.0 ms at $i s"; fi
   echo "[fps] 33.0 fps, frame 30.3 avg / 35.0 p99 / 36.0 worst ms, late 10 hitch 0, gc 0 heap 64 MB (16 frames, $((i * 16)) total, $i s) rss 700 MB"
   if [ -f "$root/prof.req" ]; then
-    s=$(cat "$root/prof.req"); rm -f "$root/prof.req"
+    s=$(cat "$root/prof.req"); rm -f "$root/prof.req"; echo "[fake] prof request $s"
     ( sleep "$s"; cp "$PROF_SAMPLE" "$root/prof-1.txt.tmp" && mv "$root/prof-1.txt.tmp" "$root/prof-1.txt"; echo "[prof] prof-1.txt: ${s} s" ) &
   fi
 done
@@ -59,15 +59,17 @@ echo "GPU active 99.0% of $2.00 s at 600 MHz; fragment queue 95.0%, non-fragment
 C
 chmod +x "$T/gc/gpucnt"
 cat > "$T/list.txt" <<'L'
-# two runs, the second with its own setting, the GPU counters and a sound request that must be dropped
+# three runs, the second with its own setting, the GPU counters and a sound request that must be dropped, the
+# third with its own plan that starts a recording (prof:1)
 one
 two X_SETTING='a b' UA_AUDIO=1 ANDROID_SLES_OUTPUT=pipe GPUCNT=1
+three PLAN='log:title ready; steady:2; press:0:b; hitch:1000; prof:1; sleep:2; shot'
 L
 export PATH="$T/bin:$PATH" DEVICE=fake@handheld OUT="$T/out" HOST_BIN="$T/ua_host" PROF_SAMPLE="$T/prof.txt" GPUCNT_BIN="$T/gc/gpucnt"
 export PLAN='log:title ready; steady:2; press:0:b; hitch:1000; seen:title ready; steady:2; shot' MEASURE=3 UA_PROF=100 STEP_TIMEOUT=30
 log=$("$PU/tools/device/profbench.sh" "$T/dev/game" --list "$T/list.txt" 2>&1)
 fail() { echo "profbench_test: FAILED: $*"; printf '%s\n' "$log" | tail -40; exit 1; }
-for n in one two; do
+for n in one two three; do
   [ "$(cat "$T/out/$n/result" 2>/dev/null)" = ok ] || fail "$n: result $(cat "$T/out/$n/result" 2>/dev/null)"
   grep -q '^\[fake\] input 0:b' "$T/out/$n/run.log" || fail "$n: the press did not arrive"
   [ "$(grep -n '^title ready' "$T/out/$n/run.log" | cut -d: -f1)" -lt "$(grep -n '^\[fake\] input' "$T/out/$n/run.log" | cut -d: -f1)" ] ||
@@ -78,6 +80,8 @@ for n in one two; do
   grep -q 'SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=none ' "$T/out/$n/run.log" && grep -q 'UA_AUDIO=unset' "$T/out/$n/run.log" || fail "$n: not silent"
 done
 grep -q 'X_SETTING=a b' "$T/out/two/run.log" || fail "the run's own setting did not arrive"
+[ "$(grep -n '^\[fake\] prof request 1$' "$T/out/three/run.log" | cut -d: -f1)" -lt "$(grep -n '^\[bench\] measure start' "$T/out/three/run.log" | cut -d: -f1)" ] 2>/dev/null ||
+  fail "the plan's prof:1 step did not start a recording before the measurement"
 [ -f "$T/out/two/gpucnt.txt" ] && [ ! -f "$T/out/one/gpucnt.txt" ] || fail "GPUCNT=1: no gpucnt.txt in its run (or one in the other run)"
 printf '%s\n' "$log" | grep -q 'GPU counters: GPU active 99.0%' || fail "benchsum did not print the GPU counters"
 printf '%s\n' "$log" | grep -q 'frames: 33.0 fps' || fail "benchsum did not read the frame rate"
