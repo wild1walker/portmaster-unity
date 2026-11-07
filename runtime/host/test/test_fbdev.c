@@ -285,10 +285,15 @@ int main(void)
             CHECK(tears == 0 && overwrites == 0 && out_of_order == 0);
         }
     // the automatic queue depth (UA_FB_QUEUE unset): fast frames go down to 1, slow ones keep 2
-    run("host auto, fast frames", 1, 4, 0, 200, US(300), US(600), -1);
-    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 200);
-    double qf = last_queue;
-    CHECK(qf < 1.7);                                 // (30 frames at 2 first; a jittery VM may see a refresh as missed)
+    // (30 frames at 2 first; a jittery VM or a busy host may see a refresh as missed, and each miss
+    // holds 2 again: up to three runs, as a queue that never goes down to 1 stays near 2 in all)
+    double qf = 9;
+    for (int tries = 0; tries < 3 && qf >= 1.7; tries++) {
+        run("host auto, fast frames", 1, 4, 0, 200, US(300), US(600), -1);
+        CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 200);
+        qf = last_queue;
+    }
+    CHECK(qf < 1.7);
     run("host auto, slow frames", 1, 4, 0, 120, US(300), US(5000), -1);
     CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 120);
     CHECK(last_queue > 1.9 && gpu_busy > 0.85);
