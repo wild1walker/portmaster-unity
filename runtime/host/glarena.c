@@ -39,9 +39,18 @@
 // "orphans" it). Here, too: such a map of a buffer last used (by a draw, a dispatch or a copy) in a
 // frame the GPU is not past moves the buffer to a new range of the arena (a partial invalidation
 // copies the rest of the old range over), the old range freed once the GPU is past this frame; the
-// vertex attributes that point into it, in every vertex array, are pointed at the new range. Without
-// that the GPU drew chunks with the next chunks' vertices (RG34XX-SP, 2026-11-06: sprites stretched
-// into black slabs). Logged as "moved by the game's invalidations".
+// vertex attributes that point into it, in every vertex array, and the uniform buffer bindings to it
+// are pointed at the new range (Unity sets them once and binds them again only when they change). A
+// buffer sized again (a new range) or leaving a full arena (the driver's storage) is pointed at the
+// same way. Logged as "moved by the game's invalidations", "sized again", "uniform bindings moved". More
+// vertex arrays, attributes or uniform bindings than the layer follows: logged, and buffers stay where
+// they are (an invalidating map waits for the GPU instead).
+//
+// Draws from an index buffer in the arena go out as glDrawRangeElements (below). The Mali driver reads a
+// draw's indices for the vertices it uses and keeps that range per index buffer, refreshed only by
+// writes through GL; the game's writes into the arena's mapping never reach it. Without the ranges the
+// RG34XX-SP drew Hollow Knight with stale ones (2026-11-06: sprites stretched into black slabs, HUD
+// masks missing; not the GPU's timing: waiting for the GPU before every write changed nothing).
 //
 // glBufferSubData without the driver. Unity uploads each constant buffer a draw changes with
 // glBufferSubData (one ~100 - 400 byte update per draw in Hollow Knight); on the arena the Mali
@@ -98,7 +107,16 @@ static int g_copy;                          // glBufferSubData by memcpy where t
 static long g_done;                         // the GPU is past every command made while g_frames < g_done (fences)
 static long g_subcopy, g_subdriver;
 static int g_track = 1;                     // every use of these buffers followed (0: one is not; every invalidating map moves)
-static long g_orphans, g_orphan_waits;
+static int g_fixed;                         // something points into these buffers that the layer cannot point elsewhere: buffers stay put
+static long g_orphans, g_orphan_waits, g_resized, g_rebound;
+static int g_shadow = 1;                    // glBufferSubData into a buffer the GPU may still read: a new range (UA_GL_ARENA_SHADOW=0: the driver's)
+static long g_subshadow;
+static int g_ib = 1;                        // UA_GL_ARENA_IB=0: index buffers stay the driver's
+static int g_range = 1;                     // draws from an index buffer here as glDrawRangeElements (below; UA_GL_ARENA_RANGE=0: not)
+static long g_ranged, g_unranged;
+static int g_sync;                          // UA_GL_ARENA_SYNC=1 (a check): a write into a buffer the GPU may still read waits for the GPU, nothing moves
+static long g_mapk[2][2][2];                // maps by [unsynchronized][invalidating][the GPU may still read the buffer]
+static struct { GLbitfield a; long n; } g_acc[8];   // the access bits the game maps with
 static GLuint g_A;                          // the arena
 static char *g_ptr;
 static unsigned g_size;
@@ -209,8 +227,14 @@ static struct { GLuint vao, elem; } g_velem[VAOS];   // a vertex array's index b
 static struct { GLuint vao, attr[ATTRS]; int used; } g_vattr[VAOS];   // a vertex array's attributes' buffers, when these
 typedef struct { GLint size; GLenum type; GLboolean norm, integer; GLsizei stride; const void *ptr; } attrfmt;
 static attrfmt g_vfmt[VAOS][ATTRS];        // ... and how each points into it (the game's pointer: an offset into its buffer)
-#define UBOS 32
+#define UBOS 96
 static GLuint g_ubo[UBOS]; static unsigned g_nubo;  // the uniform buffer bindings to these buffers (0: another)
+static GLintptr g_ubo_o[UBOS]; static GLsizeiptr g_ubo_n[UBOS];   // ... their ranges (n -1: the whole buffer)
+static void unfollowed(const char *what)
+{
+    if (!g_fixed) fprintf(stderr, "[glarena] %s: more than the layer follows; an invalidated buffer the GPU may still read waits for it\n", what);
+    g_fixed = 1; g_copy = 0; g_track = 0;
+}
 static GLuint *elem_slot(GLuint vao, int make)
 {
     for (int i = 0; i < VAOS; i++) if (g_velem[i].vao == vao && (g_velem[i].elem || make)) return &g_velem[i].elem;
@@ -236,7 +260,7 @@ static int *attr_used(GLuint vao, GLuint **attr, int make)
     if (!make) return NULL;
     for (int i = 0; i < VAOS; i++)
         if (!g_vattr[i].used) { g_vattr[i].vao = vao; g_vattr[i].used = 1; memset(g_vattr[i].attr, 0, sizeof g_vattr[i].attr); *attr = g_vattr[i].attr; return &g_vattr[i].used; }
-    g_copy = 0; g_track = 0;                // (more vertex arrays than followed: no more memcpy)
+    unfollowed("vertex arrays");
     return NULL;
 }
 static inline void use(GLuint name) { vbuf *p = find(name); if (p) p->used = g_frames; }
@@ -332,15 +356,15 @@ static void w_BindBuffer(GLenum t, GLuint name)
     if (p && !s) not_moved("a binding of this target");
     r_BindBuffer(t, p ? g_A : name);
 }
-static void ubo_bind(GLuint i, GLuint name, int arena)
+static void ubo_bind(GLuint i, GLuint name, int arena, GLintptr o, GLsizeiptr n)
 {
-    if (i < UBOS) { g_ubo[i] = arena ? name : 0; if (arena && i >= g_nubo) g_nubo = i + 1; }
-    else if (arena) g_copy = 0;             // (a binding past those followed)
+    if (i < UBOS) { g_ubo[i] = arena ? name : 0; g_ubo_o[i] = o; g_ubo_n[i] = n; if (arena && i >= g_nubo) g_nubo = i + 1; }
+    else if (arena) unfollowed("uniform buffer bindings");
 }
 static void w_BindBufferBase(GLenum t, GLuint i, GLuint name)
 {
     vbuf *p = g_ok > 0 ? find(name) : NULL;
-    if (t == GL_UNIFORM_BUFFER) { vb_uniform = p ? name : 0; ubo_bind(i, name, p != NULL); }
+    if (t == GL_UNIFORM_BUFFER) { vb_uniform = p ? name : 0; ubo_bind(i, name, p != NULL, 0, -1); }
     if (!p) { r_BindBufferBase(t, i, name); return; }
     if (t != GL_UNIFORM_BUFFER) { not_moved("an indexed binding"); r_BindBufferBase(t, i, name); return; }
     r_BindBufferRange(t, i, g_A, p->off, p->len);
@@ -348,22 +372,31 @@ static void w_BindBufferBase(GLenum t, GLuint i, GLuint name)
 static void w_BindBufferRange(GLenum t, GLuint i, GLuint name, GLintptr o, GLsizeiptr n)
 {
     vbuf *p = g_ok > 0 ? find(name) : NULL;
-    if (t == GL_UNIFORM_BUFFER) { vb_uniform = p ? name : 0; ubo_bind(i, name, p != NULL); }
+    if (t == GL_UNIFORM_BUFFER) { vb_uniform = p ? name : 0; ubo_bind(i, name, p != NULL, o, n); }
     if (!p) { r_BindBufferRange(t, i, name, o, n); return; }
     if (t != GL_UNIFORM_BUFFER) { not_moved("an indexed binding"); r_BindBufferRange(t, i, name, o, n); return; }
     r_BindBufferRange(t, i, g_A, (GLintptr)p->off + o, n);
 }
 
+static void repoint(GLuint name, GLuint buf, unsigned off, unsigned len);
 static void w_BufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usage)
 {
     GLuint *s = bound_slot(t);
     vbuf *p = s && *s ? find(*s) : NULL;
     if (p) {                                // one of these sized again: a new range, the old one freed after the GPU
         unsigned off;
+        g_resized++;
+        if (g_fixed && size > 0 && (unsigned)size <= p->size) {   // (it cannot move: in place, once the GPU is past it)
+            q_Finish();
+            p->len = (unsigned)size; p->usage = usage; p->used = 0;
+            if (data) memcpy(g_ptr + p->off, data, (size_t)size);
+            return;
+        }
         if (size > 0 && alloc((unsigned)size, &off)) {
             defer(p->off, p->size);
             p->off = off; p->size = (unsigned)size; p->len = (unsigned)size; p->usage = usage; p->used = 0;
             if (data) memcpy(g_ptr + off, data, (size_t)size);
+            repoint(*s, g_A, off, p->len);
             return;
         }
         // no room: the buffer leaves the arena and gets the driver's storage under its own name
@@ -374,9 +407,10 @@ static void w_BufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usa
         g_full++;
         r_BindBuffer(t, name);
         r_BufferData(t, size, data, usage);
+        repoint(name, name, 0, (unsigned)size);
         return;
     }
-    if (g_on && !g_closed && (t == GL_ARRAY_BUFFER || t == GL_ELEMENT_ARRAY_BUFFER) && size > 0 &&
+    if (g_on && !g_closed && (t == GL_ARRAY_BUFFER || (t == GL_ELEMENT_ARRAY_BUFFER && g_ib)) && size > 0 &&
         (usage == GL_DYNAMIC_DRAW || usage == GL_STREAM_DRAW) && open_arena(t)) {
         GLint name = 0;
         q_GetIntegerv(t == GL_ARRAY_BUFFER ? GL_ARRAY_BUFFER_BINDING : GL_ELEMENT_ARRAY_BUFFER_BINDING, &name);
@@ -403,25 +437,53 @@ static void w_BufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usa
 static void w_BufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data)
 {
     vbuf *p = g_ok > 0 ? bound(t) : NULL;
-    if (p && g_copy && p->used < g_done && data && o >= 0 && n >= 0 && (unsigned long)o + (unsigned long)n <= p->len) {
+    int fits = p && data && o >= 0 && n >= 0 && (unsigned long)o + (unsigned long)n <= p->len;
+    if (fits && g_sync) {
+        if (!(g_track && p->used < g_done) || p->used >= g_frames) q_Finish();
+        memcpy(g_ptr + p->off + o, data, (size_t)n);
+        g_subcopy++;
+        return;
+    }
+    if (fits && g_copy && p->used < g_done) {
         memcpy(g_ptr + p->off + o, data, (size_t)n);  // (nothing queued reads it; coherent: later commands see it)
         g_subcopy++;
+        return;
+    }
+    unsigned off;
+    if (fits && g_shadow && !(g_track && p->used < g_done) && !g_fixed && alloc(p->size, &off)) {
+        // the GPU may still read it: a new range with the old bytes and these, the old one kept for the queued
+        // draws (as the driver shadows a buffer in use; on the arena's persistent storage it would write in place)
+        memcpy(g_ptr + off, g_ptr + p->off, p->len);
+        memcpy(g_ptr + off + o, data, (size_t)n);
+        defer(p->off, p->size);
+        p->off = off;
+        p->used = 0;
+        GLuint *s = bound_slot(t);
+        if (s && *s) repoint(*s, g_A, off, p->len);
+        g_subshadow++;
         return;
     }
     if (p) g_subdriver++;
     r_BufferSubData(t, p ? (GLintptr)p->off + o : o, n, data);
 }
-static void repoint(GLuint name, vbuf *p);
 static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield access)
 {
     vbuf *p = g_ok > 0 ? bound(t) : NULL;
     if (!p) return r_MapBufferRange(t, o, n, access);
     if (o < 0 || n < 0 || (unsigned)(o + n) > p->len) return NULL;
+    int inval = (access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)) != 0, busy = !(g_track && p->used < g_done);
+    g_mapk[(access & GL_MAP_UNSYNCHRONIZED_BIT) != 0][inval][busy]++;
+    for (int k = 0; k < 8; k++) if (g_acc[k].a == access || !g_acc[k].n) { g_acc[k].a = access; g_acc[k].n++; break; }
+    if (g_sync) {
+        if (busy || p->used >= g_frames) { q_Finish(); g_orphan_waits++; }
+        g_moves++;
+        return g_ptr + p->off + o;
+    }
     if (!(access & GL_MAP_UNSYNCHRONIZED_BIT)) q_Finish();   // the game asked the driver to wait for the GPU
-    else if ((access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT)) && !(g_track && p->used < g_done)) {
+    else if (inval && busy) {
         // invalidated while the GPU may still read it: new storage, as the driver gives
         unsigned off;
-        if (alloc(p->size, &off)) {
+        if (!g_fixed && alloc(p->size, &off)) {
             int whole = (access & GL_MAP_INVALIDATE_BUFFER_BIT) || (o == 0 && (unsigned)n >= p->len);
             if (!whole) {                   // (what is not invalidated keeps its bytes)
                 if (o > 0) memcpy(g_ptr + off, g_ptr + p->off, (size_t)o);
@@ -431,9 +493,9 @@ static void *w_MapBufferRange(GLenum t, GLintptr o, GLsizeiptr n, GLbitfield acc
             p->off = off;
             p->used = 0;
             GLuint *s = bound_slot(t);
-            if (s && *s) repoint(*s, p);
+            if (s && *s) repoint(*s, g_A, off, p->len);
             g_orphans++;
-        } else { q_Finish(); g_orphan_waits++; }   // (no room: wait for the GPU instead)
+        } else { q_Finish(); g_orphan_waits++; }   // (no room, or it cannot move: wait for the GPU instead)
     }
     g_moves++;
     return g_ptr + p->off + o;
@@ -494,7 +556,7 @@ static void w_GetIntegerv(GLenum pname, GLint *v)
 static void attr_set(GLuint a, GLuint name, attrfmt f)
 {
     GLuint *attr;
-    if (a >= ATTRS) { if (name) { g_copy = 0; g_track = 0; } return; }
+    if (a >= ATTRS) { if (name) unfollowed("vertex attributes"); return; }
     if (attr_used(g_vao, &attr, name != 0)) {
         attr[a] = name;
         for (int i = 0; i < VAOS; i++) if (g_vattr[i].attr == attr) g_vfmt[i][a] = f;
@@ -512,30 +574,47 @@ static void w_VertexAttribIPointer(GLuint a, GLint size, GLenum type, GLsizei st
     if (g_ok > 0) attr_set(a, p ? vb_array : 0, (attrfmt){ size, type, 0, 1, stride, ptr });
     r_VertexAttribIPointer(a, size, type, stride, p ? (const char *)ptr + p->off : ptr);
 }
-// a buffer moved to another range: the vertex attributes pointing into it, in every vertex array,
-// pointed at the new one (with the arena bound as the vertex buffer while they are; bindings put back)
-static void repoint(GLuint name, vbuf *p)
+// a buffer moved to another range (buf g_A, at off) or out of the arena (buf its own name, at 0): the
+// vertex attributes pointing into it, in every vertex array, and the uniform buffer bindings to it
+// pointed at the new storage; the game's vertex array, vertex buffer and uniform buffer put back. (The
+// game sets these once and binds them again by name: what pointed at the old range would read the
+// next buffer put there.)
+static void repoint(GLuint name, GLuint buf, unsigned off, unsigned len)
 {
     GLuint cur = g_vao;
-    int array_bound = 0;
+    GLint prev = -1;
     for (int i = 0; i < VAOS; i++) {
         if (!g_vattr[i].used) continue;
         for (int a = 0; a < ATTRS; a++) {
             if (g_vattr[i].attr[a] != name) continue;
             if (g_vattr[i].vao != cur) { cur = g_vattr[i].vao; r_BindVertexArray(cur); }
-            if (!array_bound) { r_BindBuffer(GL_ARRAY_BUFFER, g_A); array_bound = 1; }
+            if (prev < 0) { r_GetIntegerv(GL_ARRAY_BUFFER_BINDING, &prev); r_BindBuffer(GL_ARRAY_BUFFER, buf); }
             attrfmt *f = &g_vfmt[i][a];
-            if (f->integer) r_VertexAttribIPointer((GLuint)a, f->size, f->type, f->stride, (const char *)f->ptr + p->off);
-            else r_VertexAttribPointer((GLuint)a, f->size, f->type, f->norm, f->stride, (const char *)f->ptr + p->off);
+            if (f->integer) r_VertexAttribIPointer((GLuint)a, f->size, f->type, f->stride, (const char *)f->ptr + off);
+            else r_VertexAttribPointer((GLuint)a, f->size, f->type, f->norm, f->stride, (const char *)f->ptr + off);
+            if (buf != g_A) g_vattr[i].attr[a] = 0;   // (not one of these any more)
         }
     }
     if (cur != g_vao) r_BindVertexArray(g_vao);
-    if (array_bound) {                      // (what the game has bound as its vertex buffer)
-        vbuf *b = vb_array ? find(vb_array) : NULL;
-        r_BindBuffer(GL_ARRAY_BUFFER, b ? g_A : vb_array);
+    if (prev >= 0) r_BindBuffer(GL_ARRAY_BUFFER, (GLuint)prev);
+    prev = -1;
+    for (unsigned k = 0; k < g_nubo; k++) {
+        if (g_ubo[k] != name) continue;
+        if (prev < 0) r_GetIntegerv(GL_UNIFORM_BUFFER_BINDING, &prev);
+        if (g_ubo_n[k] < 0 && buf != g_A) r_BindBufferBase(GL_UNIFORM_BUFFER, k, buf);
+        else r_BindBufferRange(GL_UNIFORM_BUFFER, k, buf, (GLintptr)off + g_ubo_o[k], g_ubo_n[k] < 0 ? (GLsizeiptr)len : g_ubo_n[k]);
+        if (buf != g_A) g_ubo[k] = 0;
+        g_rebound++;
     }
+    if (prev >= 0) r_BindBuffer(GL_UNIFORM_BUFFER, (GLuint)prev);
 }
 static void w_BindVertexArray(GLuint v) { g_vao = v; r_BindVertexArray(v); }
+// the attributes each vertex array has enabled (vertex arrays named past VEN: not followed, their draws not ranged)
+#define VEN 4096
+static unsigned g_ven[VEN];
+static void (*r_EnableVertexAttribArray)(GLuint), (*r_DisableVertexAttribArray)(GLuint);
+static void w_EnableVertexAttribArray(GLuint a) { if (g_vao < VEN && a < 32) g_ven[g_vao] |= 1u << a; r_EnableVertexAttribArray(a); }
+static void w_DisableVertexAttribArray(GLuint a) { if (g_vao < VEN && a < 32) g_ven[g_vao] &= ~(1u << a); r_DisableVertexAttribArray(a); }
 static void w_DeleteVertexArrays(GLsizei n, const GLuint *v)
 {
     for (GLsizei i = 0; i < n; i++) {
@@ -544,6 +623,7 @@ static void w_DeleteVertexArrays(GLsizei n, const GLuint *v)
         int *u = attr_used(v[i], &attr, 0);
         if (u) *u = 0;
         if (v[i] == g_vao) g_vao = 0;
+        if (v[i] < VEN) g_ven[v[i]] = 0;
     }
     r_DeleteVertexArrays(n, v);
 }
@@ -557,11 +637,82 @@ static const void *idx(const void *indices)
     vbuf *p = s && *s ? find(*s) : NULL;
     return p ? (const char *)indices + p->off : indices;
 }
-static void w_DrawElements(GLenum m, GLsizei n, GLenum t, const void *i) { r_DrawElements(m, n, t, idx(i)); }
+// A draw whose indices are in the arena as glDrawRangeElements, the range from 0 to the last vertex every
+// enabled attribute's buffer holds (UA_GL_ARENA_RANGE=0: as the game made it). The Mali driver reads a draw's indices for the vertices it
+// uses and keeps that per index buffer, refreshed when the buffer is changed through GL; the game's writes into
+// the arena's mapping do not reach it (the GPU drew with stale ranges: sprites stretched, HUD masks missing,
+// RG34XX-SP 2026-11-06), so the arena gives it the range instead. 0: an attribute not in the arena or not
+// followed (a plain draw then).
+static unsigned asize(GLenum type)
+{
+    switch (type) {
+    case 0x1400: case 0x1401: return 1;                    // (GL_BYTE, GL_UNSIGNED_BYTE)
+    case 0x1402: case 0x1403: case 0x140B: case 0x8D61: return 2;   // (SHORT, UNSIGNED_SHORT, HALF_FLOAT, HALF_FLOAT_OES)
+    default: return 4;
+    }
+}
+static int last_vertex(GLuint *last)
+{
+    if (g_vao >= VEN || !g_ven[g_vao]) return 0;
+    int k = -1;
+    for (int i = 0; i < VAOS; i++) if (g_vattr[i].used && g_vattr[i].vao == g_vao) { k = i; break; }
+    if (k < 0) return 0;
+    unsigned en = g_ven[g_vao], best = 0xffffffffu;
+    for (int a = 0; a < 32; a++) {
+        if (!(en & (1u << a))) continue;
+        if (a >= ATTRS || !g_vattr[k].attr[a]) return 0;
+        vbuf *p = find(g_vattr[k].attr[a]);
+        if (!p) return 0;
+        attrfmt *f = &g_vfmt[k][a];
+        unsigned elem = (unsigned)f->size * asize(f->type), stride = f->stride ? (unsigned)f->stride : elem, off = (unsigned)(uintptr_t)f->ptr;
+        if (f->type == 0x8368 || f->type == 0x8D9F) elem = 4;      // (packed 2_10_10_10)
+        if (!stride || off + elem > p->len) return 0;
+        unsigned m = (p->len - off - elem) / stride;
+        if (m < best) best = m;
+    }
+    if (best == 0xffffffffu) return 0;
+    *last = best;
+    return 1;
+}
+// the range of a draw from an index buffer in the arena: 0 to the last vertex the attributes hold, else (an
+// attribute not followed) the indices' own, read from the arena (j: the offset into it); 0: not one of these
+static int ranged(GLint base, GLsizei n, GLenum t, const void *j, GLuint *first, GLuint *last)
+{
+    GLuint *s = elem_slot(g_vao, 0);
+    if (!g_range || !s || !*s || !find(*s)) return 0;
+    *first = 0;
+    if (last_vertex(last) && base >= 0 && (GLuint)base <= *last) { *last -= (GLuint)base; g_ranged++; return 1; }
+    uintptr_t o = (uintptr_t)j;
+    unsigned sz = t == 0x1401 ? 1 : t == 0x1403 ? 2 : 4;
+    if (n <= 0 || o + (uintptr_t)n * sz > g_size) return 0;
+    GLuint lo = 0xffffffffu, hi = 0;
+    for (GLsizei k = 0; k < n; k++) {
+        const unsigned char *q = (const unsigned char *)g_ptr + o + (uintptr_t)k * sz;
+        GLuint v = sz == 1 ? q[0] : sz == 2 ? *(const unsigned short *)q : *(const GLuint *)q;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    *first = lo; *last = hi;
+    g_unranged++;
+    return 1;
+}
+static void w_DrawElements(GLenum m, GLsizei n, GLenum t, const void *i)
+{
+    const void *j = idx(i);
+    GLuint first, last;
+    if (ranged(0, n, t, j, &first, &last)) r_DrawRangeElements(m, first, last, n, t, j);
+    else r_DrawElements(m, n, t, j);
+}
 static void w_DrawElementsInstanced(GLenum m, GLsizei n, GLenum t, const void *i, GLsizei k) { r_DrawElementsInstanced(m, n, t, idx(i), k); }
 static void w_DrawRangeElements(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i) { r_DrawRangeElements(m, a, b, n, t, idx(i)); }
 static void w_DrawElementsBaseVertex(GLenum m, GLsizei n, GLenum t, const void *i, GLint v) { r_DrawElementsBaseVertex(m, n, t, idx(i), v); }
-static void w_DrawElementsBaseVertexOES(GLenum m, GLsizei n, GLenum t, const void *i, GLint v) { r_DrawElementsBaseVertexOES(m, n, t, idx(i), v); }
+static void w_DrawElementsBaseVertexOES(GLenum m, GLsizei n, GLenum t, const void *i, GLint v)
+{
+    const void *j = idx(i);
+    GLuint first, last;
+    if (r_DrawRangeElementsBaseVertexOES && ranged(v, n, t, j, &first, &last)) r_DrawRangeElementsBaseVertexOES(m, first, last, n, t, j, v);
+    else r_DrawElementsBaseVertexOES(m, n, t, j, v);
+}
 static void w_DrawElementsBaseVertexEXT(GLenum m, GLsizei n, GLenum t, const void *i, GLint v) { r_DrawElementsBaseVertexEXT(m, n, t, idx(i), v); }
 static void w_DrawRangeElementsBaseVertex(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i, GLint v)
 { r_DrawRangeElementsBaseVertex(m, a, b, n, t, idx(i), v); }
@@ -632,8 +783,15 @@ void glarena_frame(void)
     unsigned pend = 0;
     for (size_t i = 0; i < g_npend; i++) pend += (g_pend[i].size + ALIGN - 1) & ~(ALIGN - 1);
     fprintf(stderr, "[glarena] %zu buffers in the arena (%.1f of %u MB, %.1f MB waiting for the GPU), %ld made, %ld maps (%ld moved by "
-            "the game's invalidations, %ld waited), %ld did not fit; glBufferSubData: %ld copied, %ld to the driver\n",
-            g_n, g_used / 1048576.0, g_size >> 20, pend / 1048576.0, g_in, g_moves, g_orphans, g_orphan_waits, g_full, g_subcopy, g_subdriver);
+            "the game's invalidations, %ld waited), %ld sized again, %ld uniform bindings moved, %ld did not fit; glBufferSubData: %ld copied, "
+            "%ld to a new range, %ld to the driver\n", g_n, g_used / 1048576.0, g_size >> 20, pend / 1048576.0, g_in, g_moves, g_orphans, g_orphan_waits,
+            g_resized, g_rebound, g_full, g_subcopy, g_subshadow, g_subdriver);
+    fprintf(stderr, "[glarena] maps by kind (busy/idle): unsynchronized invalidating %ld/%ld, unsynchronized %ld/%ld, invalidating %ld/%ld, "
+            "other %ld/%ld; access", g_mapk[1][1][1], g_mapk[1][1][0], g_mapk[1][0][1], g_mapk[1][0][0], g_mapk[0][1][1], g_mapk[0][1][0],
+            g_mapk[0][0][1], g_mapk[0][0][0]);
+    for (int k = 0; k < 8 && g_acc[k].n; k++) fprintf(stderr, " 0x%x:%ld", g_acc[k].a, g_acc[k].n);
+    if (g_range) fprintf(stderr, "; draws ranged %ld, by their indices %ld", g_ranged, g_unranged);
+    fprintf(stderr, "\n");
 }
 
 static void *gl(void *(*next)(const char *), const char *name)
@@ -661,6 +819,14 @@ const so_shim *glarena_table(void *(*next)(const char *name))
     g_size = (unsigned)(mb && atoi(mb) > 0 ? atoi(mb) : 8) << 20;
     const char *sd = getenv("UA_GL_ARENA_SUBDATA");
     g_copy = sd && !strcmp(sd, "1");
+    const char *rg = getenv("UA_GL_ARENA_RANGE");
+    g_range = !(rg && !strcmp(rg, "0"));
+    const char *ib = getenv("UA_GL_ARENA_IB");
+    g_ib = !(ib && !strcmp(ib, "0"));
+    const char *sy = getenv("UA_GL_ARENA_SYNC");
+    g_sync = sy && !strcmp(sy, "1");
+    const char *sh = getenv("UA_GL_ARENA_SHADOW");
+    g_shadow = !(sh && !strcmp(sh, "0"));
 #define Q(f) *(void **)&q_##f = gl(NULL, "gl" #f)
     Q(BufferStorageEXT); Q(GenBuffers); Q(BindBuffer); Q(MapBufferRange); Q(GetString); Q(GetIntegerv); Q(Finish);
     Q(FenceSync); Q(ClientWaitSync); Q(DeleteSync);
@@ -671,7 +837,7 @@ const so_shim *glarena_table(void *(*next)(const char *name))
     R(BindBuffer); R(BindBufferBase); R(BindBufferRange); R(BufferData); R(BufferSubData); R(MapBufferRange);
     R(FlushMappedBufferRange); R(UnmapBuffer); R(CopyBufferSubData); R(DeleteBuffers); R(IsBuffer); R(GetBufferParameteriv);
     R(GetIntegerv); R(VertexAttribPointer); R(VertexAttribIPointer); R(BindVertexArray); R(DeleteVertexArrays); R(DrawElements);
-    R(DrawElementsInstanced); R(DrawRangeElements);
+    R(DrawElementsInstanced); R(DrawRangeElements); R(EnableVertexAttribArray); R(DisableVertexAttribArray);
     O(DrawElementsBaseVertex); O(DrawElementsBaseVertexOES); O(DrawElementsBaseVertexEXT); O(DrawRangeElementsBaseVertex);
     O(DrawRangeElementsBaseVertexOES); O(DrawElementsInstancedBaseVertex); O(DrawElementsInstancedBaseVertexOES);
     O(DrawArraysIndirect); O(DrawElementsIndirect);

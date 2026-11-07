@@ -7,10 +7,20 @@
 //           again also right after a draw that reads them: their ranges must wait for the GPU)
 //   small   UA_GL_ARENA_MB=1: the arena fills, the buffers that do not fit made by the driver: the same
 //   nosubdata  UA_GL_ARENA_SUBDATA unset: every glBufferSubData to the driver: the same
+//   shadow  arena with a driver that writes glBufferSubData into persistent storage in place: one into a buffer
+//           the GPU may still read gets a new range (arena and nosubdata: UA_GL_ARENA_SHADOW=0, the driver's): the same
 //   orphan  UA_GL_ARENA=1, the game as Unity: a buffer taken back for the next chunk without waiting for the
 //           GPU, written through an unsynchronized map that invalidates the range (the driver gives it new storage),
 //           the attribute pointers not made again when the buffer and offset are the ones the vertex array
 //           has: every draw read what the game wrote
+//   cached  orphan, and the constant buffers as Unity's too: written through such a map as often as with
+//           glBufferSubData, bound again only when the buffer or range changes; buffers sized again under the
+//           vertex arrays' kept pointers and uniform binding: the same
+//   cachedsmall  cached with UA_GL_ARENA_MB=1: buffers sized again leave a full arena under them: the same
+//   range   cached with UA_GL_ARENA_RANGE=1: every draw from an index buffer in the arena ranged, every index
+//           within its range (the attributes enabled; a third attribute, disabled, points into a small buffer)
+//   norange range with UA_GL_ARENA_RANGE=0: a draw reads vertices the driver's stale range left out (the fake
+//           models it; this passes when one does)
 //   off     unset: no wrappers
 #include <stdint.h>
 #include <stdio.h>
@@ -38,7 +48,9 @@ static unsigned rnd(unsigned n) { g_seed = g_seed * 1103515245u + 12345u; return
 #define MAXG 4096
 typedef struct { GLuint name; int size; unsigned char *data; long used; int alive; } gbuf;
 static gbuf G[MAXG]; static int g_ng;
-static int g_orphan;                        // (the orphan scenario)
+static int g_orphan;                        // (the orphan and cached scenarios)
+static int g_cache;                         // (the cached scenarios)
+static gbuf *bound_ub; static int bound_uo = -1, bound_ul, bound_whole;   // (the uniform buffer binding the game made)
 static int g_cur_vao = 1;                   // (the vertex array the game has bound)
 static uint32_t expect[200000]; static int g_draws;
 
@@ -50,6 +62,8 @@ static void (*GetIntegerv)(GLenum, GLint *); static void (*VertexAttribPointer)(
 static void (*BindVertexArray)(GLuint); static void (*DrawElements)(GLenum, GLsizei, GLenum, const void *);
 static void (*DrawElementsBaseVertexOES)(GLenum, GLsizei, GLenum, const void *, GLint);
 static void (*GenBuffers)(GLsizei, GLuint *);
+static void (*EnableVertexAttribArray)(GLuint), (*DisableVertexAttribArray)(GLuint);
+extern unsigned long fake_range_draws, fake_range_bad;
 static void (*BindBufferBase)(GLenum, GLuint, GLuint); static void (*BindBufferRange)(GLenum, GLuint, GLuint, GLintptr, GLsizeiptr);
 extern unsigned long fake_calls_subdata;
 void glarena_subdata_counts(long *copied, long *driver);
@@ -87,9 +101,13 @@ int main(int argc, char **argv)
 {
     const char *sc = argc > 1 ? argv[1] : "arena";
     if (strcmp(sc, "off")) setenv("UA_GL_ARENA", "1", 1);
-    g_orphan = !strcmp(sc, "orphan");
-    if (!strcmp(sc, "small")) setenv("UA_GL_ARENA_MB", "1", 1);
-    if (!strcmp(sc, "arena") || !strcmp(sc, "small")) setenv("UA_GL_ARENA_SUBDATA", "1", 1);
+    g_cache = !strncmp(sc, "cached", 6) || !strcmp(sc, "range") || !strcmp(sc, "norange");
+    if (!strcmp(sc, "norange")) setenv("UA_GL_ARENA_RANGE", "0", 1);   // (expected to fail: the driver's stale ranges)
+    g_orphan = !strcmp(sc, "orphan") || g_cache;
+    if (!strcmp(sc, "small") || !strcmp(sc, "cachedsmall")) setenv("UA_GL_ARENA_MB", "1", 1);
+    if (!strcmp(sc, "arena") || !strcmp(sc, "small") || !strcmp(sc, "shadow")) setenv("UA_GL_ARENA_SUBDATA", "1", 1);
+    if (!strcmp(sc, "arena") || !strcmp(sc, "nosubdata")) setenv("UA_GL_ARENA_SHADOW", "0", 1);
+    if (!strcmp(sc, "shadow")) setenv("FAKE_SUBDATA_INPLACE", "1", 1);
     g_t = glarena_table(NULL);
     if (!strcmp(sc, "off")) {
         if (g_t[0].name) { fprintf(stderr, "FAIL off: wrappers made\n"); return 1; }
@@ -103,6 +121,15 @@ int main(int argc, char **argv)
     BindBufferBase = fn("glBindBufferBase"); BindBufferRange = fn("glBindBufferRange");
     extern void glGenBuffers(GLsizei, GLuint *);
     GenBuffers = glGenBuffers;              // (not wrapped: names are the driver's)
+    EnableVertexAttribArray = fn("glEnableVertexAttribArray"); DisableVertexAttribArray = fn("glDisableVertexAttribArray");
+    for (GLuint v = 1; v <= 2; v++) {         // (attributes 0 and 1 enabled in both vertex arrays; 2 points into a small buffer, disabled)
+        BindVertexArray(v); EnableVertexAttribArray(0); EnableVertexAttribArray(1); EnableVertexAttribArray(2); DisableVertexAttribArray(2);
+        gbuf *small = take(0x8892, 16, -100);
+        BindBuffer(0x8892, small->name); VertexAttribPointer(2, 4, 0x1401, 0, 8, NULL);
+    }
+    // (vertex array 2's attribute 3 enabled, in a buffer of the driver's: its draws are ranged by their indices)
+    BindVertexArray(2); EnableVertexAttribArray(3);
+    { GLuint drv; GenBuffers(1, &drv); BindBuffer(0x8892, drv); BufferData(0x8892, 4096, NULL, 0x88E4); VertexAttribPointer(3, 4, 0x1401, 0, 8, NULL); }
     BindVertexArray(1);
     unsigned char vbytes[(64 + 4) * 8], ibytes[96 * 2], ubytes[16384];   // (buffers sized again reach 8.5 KB)
     long deleted = 0, respec = 0, copies = 0, busy = 0;
@@ -146,9 +173,21 @@ int main(int argc, char **argv)
             if (whole) ul = ub->size;
             for (int i = 0; i < ul; i++) ubytes[i] = (unsigned char)rnd(256);
             BindBuffer(0x8892, ub->name);
-            BufferSubData(0x8892, uo, ul, ubytes);
+            if (g_cache && rnd(2)) {
+                unsigned char *m = MapBufferRange(0x8892, uo, ul, 0x36);
+                memcpy(m, ubytes, (size_t)ul);
+                FlushMappedBufferRange(0x8892, 0, ul);
+                UnmapBuffer(0x8892);
+            } else BufferSubData(0x8892, uo, ul, ubytes);
             memcpy(ub->data + uo, ubytes, (size_t)ul);
-            if (whole) BindBufferBase(0x8A11, 0, ub->name); else BindBufferRange(0x8A11, 0, ub->name, uo, ul);
+            if (g_cache) {                                 // (the uniform buffer binding the game made: the one read back)
+                GLint u = -1; GetIntegerv(0x8A28, &u);
+                if ((GLuint)u != (bound_ub ? bound_ub->name : 0)) { fprintf(stderr, "FAIL %s: the uniform buffer binding reads %d\n", sc, u); return 1; }
+            }
+            if (!g_cache || bound_ub != ub || bound_uo != uo || bound_ul != ul || bound_whole != whole) {
+                if (whole) BindBufferBase(0x8A11, 0, ub->name); else BindBufferRange(0x8A11, 0, ub->name, uo, ul);
+                bound_ub = ub; bound_uo = uo; bound_ul = ul; bound_whole = whole;
+            }
             BindBuffer(0x8892, vb->name);                  // (the attribute pointers were made with it bound)
             if (base) DrawElementsBaseVertexOES(4, ni, 0x1403, (const void *)(intptr_t)ioff, base);
             else DrawElements(4, ni, 0x1403, (const void *)(intptr_t)ioff);
@@ -179,7 +218,7 @@ int main(int argc, char **argv)
             if (!g_ng) break;
             gbuf *b = &G[rnd((unsigned)g_ng)];
             if (!b->alive || b->used > f - (long)rnd(8)) continue;   // (also one drawn this frame: GL keeps its storage for the GPU)
-            if (rnd(3)) { DeleteBuffers(1, &b->name); b->alive = 0; deleted++; }
+            if (rnd(3)) { DeleteBuffers(1, &b->name); b->alive = 0; deleted++; if (b == bound_ub) bound_ub = NULL; }   // (unbound from where it was)
             else {
                 int n = 512 + (int)rnd(8192);
                 BindBuffer(0x8892, b->name); BufferData(0x8892, n, NULL, 0x88E8);
@@ -192,10 +231,12 @@ int main(int argc, char **argv)
     fake_gpu_all();
     for (int i = 0; i < g_draws; i++)
         if (!fake_done[i] || fake_result[i] != expect[i]) {
+            if (!strcmp(sc, "norange")) { printf("ok norange: without ranges draw %d read other bytes (the driver's stale ranges)\n", i); return 0; }
             fprintf(stderr, "FAIL %s: draw %d read other bytes than the game wrote (of %d)\n", sc, i, g_draws);
             return 1;
         }
-    if (!strcmp(sc, "small") && !fake_calls_bufferdata) { fprintf(stderr, "FAIL small: the arena never filled\n"); return 1; }
+    if (!strcmp(sc, "norange")) { fprintf(stderr, "FAIL norange: every draw read what the game wrote: the fake keeps no stale ranges\n"); return 1; }
+    if ((!strcmp(sc, "small") || !strcmp(sc, "cachedsmall")) && !fake_calls_bufferdata) { fprintf(stderr, "FAIL %s: the arena never filled\n", sc); return 1; }
     long sub_copied, sub_driver;
     glarena_subdata_counts(&sub_copied, &sub_driver);
     if (!strcmp(sc, "arena") && (sub_copied == 0 || sub_driver == 0)) {
@@ -203,6 +244,8 @@ int main(int argc, char **argv)
         return 1;
     }
     if (!strcmp(sc, "nosubdata") && sub_copied) { fprintf(stderr, "FAIL nosubdata: %ld copied\n", sub_copied); return 1; }
+    if (!strcmp(sc, "range") && (!fake_range_draws || fake_range_bad)) { fprintf(stderr, "FAIL range: %lu ranged draws, %lu with indices outside\n", fake_range_draws, fake_range_bad); return 1; }
+    if (!strcmp(sc, "shadow") && (!sub_copied || sub_driver)) { fprintf(stderr, "FAIL shadow: %ld copied, %ld to the driver\n", sub_copied, sub_driver); return 1; }
     printf("ok %s: %d draws read what the game wrote (%d buffers, %ld deleted, %ld sized again, %ld copies, %lu outside the arena; "
            "glBufferSubData %ld copied, %ld to the driver, %ld into a buffer the last draw read)\n",
            sc, g_draws, g_ng, deleted, respec, copies, fake_calls_bufferdata, sub_copied, sub_driver, busy);

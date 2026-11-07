@@ -11,7 +11,7 @@ typedef unsigned GLenum; typedef unsigned GLuint; typedef int GLint; typedef int
 typedef unsigned char GLboolean; typedef intptr_t GLintptr; typedef intptr_t GLsizeiptr; typedef void *GLsync;
 
 #define NB 65536
-static struct { unsigned char *data; long size; int dead; } B[NB];
+static struct { unsigned char *data; long size; int dead, immutable; } B[NB];
 static GLuint g_next = 1, g_array, g_copyr, g_copyw, g_uniform, g_vao, g_elem[8];
 static struct { GLuint buf; uintptr_t off; int stride, bytes; } A[8][4];
 unsigned long fake_calls_bufferdata;           // the driver's glBufferData calls (buffers outside the arena)
@@ -19,7 +19,7 @@ unsigned long fake_calls_bufferdata;           // the driver's glBufferData call
 // the GPU's queue: draws waiting to be read, with what they read from (as bound at the call)
 // (the storage as it was at the call: sizing a buffer again gives it new storage, the queued draws keep the old)
 typedef struct { const unsigned char *ebuf; uintptr_t eoff; int count, base; const unsigned char *vbuf[2]; uintptr_t voff[2]; int stride[2], bytes[2];
-                 const unsigned char *ubuf; uintptr_t uoff; int ubytes; long frame; int id; } qdraw;
+                 const unsigned char *ubuf; uintptr_t uoff; int ubytes; long frame; int id; int clamp; unsigned lo, hi; } qdraw;
 static struct { GLuint buf; uintptr_t off; int bytes; } U0;   // uniform buffer binding 0 (the draws read it whole)
 static qdraw *g_q; static int g_nq, g_capq;
 static long g_frame;                           // frames the CPU has finished
@@ -31,10 +31,10 @@ static uint32_t hash_draw(const qdraw *d)
     uint32_t h = 2166136261u;
     const unsigned short *ix = (const unsigned short *)(d->ebuf + d->eoff);
     for (int i = 0; i < d->count; i++) {
-        int v = ix[i] + d->base;
+        int v = ix[i] + d->base, out = d->clamp && (ix[i] < d->lo || ix[i] > d->hi);   // (a vertex the driver did not shade)
         for (int a = 0; a < 2; a++) {
             const unsigned char *p = d->vbuf[a] + d->voff[a] + (uintptr_t)v * (uintptr_t)d->stride[a];
-            for (int k = 0; k < d->bytes[a]; k++) h = (h ^ p[k]) * 16777619u;
+            for (int k = 0; k < d->bytes[a]; k++) h = (h ^ (out ? 0 : p[k])) * 16777619u;
         }
     }
     for (int k = 0; k < d->ubytes; k++) h = (h ^ d->ubuf[d->uoff + k]) * 16777619u;
@@ -74,7 +74,7 @@ static void storage(GLenum t, GLsizeiptr size, const void *data)
     if (data) memcpy(B[b].data, data, (size_t)size);
 }
 void glBufferData(GLenum t, GLsizeiptr size, const void *data, GLenum usage) { (void)usage; fake_calls_bufferdata++; storage(t, size, data); }
-void glBufferStorageEXT(GLenum t, GLsizeiptr size, const void *data, GLbitfield f) { (void)f; storage(t, size, data); }
+void glBufferStorageEXT(GLenum t, GLsizeiptr size, const void *data, GLbitfield f) { (void)f; storage(t, size, data); B[*slot(t)].immutable = 1; }
 // as a driver must: the queued draws reading this storage see what it held when they were made (here the GPU
 // reads them first: a stall), then the write
 static void reads_done(const unsigned char *st)
@@ -88,10 +88,14 @@ static void reads_done(const unsigned char *st)
     g_nq = k;
 }
 unsigned long fake_calls_subdata;               // the driver's glBufferSubData calls
+// FAKE_SUBDATA_INPLACE set: into persistent storage it writes in place, the queued draws read the new bytes
+// (what the Mali driver seems to do: it cannot shadow storage the CPU has mapped)
 void glBufferSubData(GLenum t, GLintptr o, GLsizeiptr n, const void *data)
 {
+    static int inplace = -1;
+    if (inplace < 0) inplace = getenv("FAKE_SUBDATA_INPLACE") != NULL;
     fake_calls_subdata++;
-    reads_done(B[*slot(t)].data);
+    if (!(inplace && B[*slot(t)].immutable)) reads_done(B[*slot(t)].data);
     memcpy(B[*slot(t)].data + o, data, (size_t)n);
 }
 // a map that invalidates a buffer of the game's (mutable storage) gets new storage, as the Mali driver
@@ -137,18 +141,47 @@ void glVertexAttribPointer(GLuint a, GLint size, GLenum type, GLboolean norm, GL
 void glVertexAttribIPointer(GLuint a, GLint size, GLenum type, GLsizei stride, const void *p) { glVertexAttribPointer(a, size, type, 0, stride, p); }
 void glBindVertexArray(GLuint v) { g_vao = v; }
 void glDeleteVertexArrays(GLsizei n, const GLuint *v) { for (int i = 0; i < n; i++) if (v[i] == g_vao) g_vao = 0; }
+// the Mali driver's index ranges: a plain draw from persistent storage takes the range it found the first time
+// for those indices (it is refreshed only by writes through GL, which the arena's mapping is not)
+static struct { const unsigned char *st; uintptr_t off; int count; unsigned lo, hi; } g_rc[4096];
+static int g_ranged_call;
 static void queue(int count, const void *indices, int base)
 {
     if (g_nq == g_capq) { g_capq = g_capq ? g_capq * 2 : 1024; g_q = realloc(g_q, (size_t)g_capq * sizeof *g_q); }
     qdraw *d = &g_q[g_nq++];
+    d->clamp = 0;
+    if (!g_ranged_call && B[g_elem[g_vao]].immutable) {
+        const unsigned char *st = B[g_elem[g_vao]].data;
+        uintptr_t off = (uintptr_t)indices;
+        unsigned h = (unsigned)((off >> 1) ^ ((uintptr_t)count * 2654435761u)) & 4095;
+        if (g_rc[h].st != st || g_rc[h].off != off || g_rc[h].count != count) {
+            const unsigned short *ix = (const unsigned short *)(st + off);
+            unsigned lo = 0xffff, hi = 0;
+            for (int k = 0; k < count; k++) { if (ix[k] < lo) lo = ix[k]; if (ix[k] > hi) hi = ix[k]; }
+            g_rc[h].st = st; g_rc[h].off = off; g_rc[h].count = count; g_rc[h].lo = lo; g_rc[h].hi = hi;
+        }
+        d->clamp = 1; d->lo = g_rc[h].lo; d->hi = g_rc[h].hi;
+    }
     d->ebuf = B[g_elem[g_vao]].data; d->eoff = (uintptr_t)indices; d->count = count; d->base = base; d->frame = g_frame; d->id = g_id++;
     for (int a = 0; a < 2; a++) { d->vbuf[a] = B[A[g_vao][a].buf].data; d->voff[a] = A[g_vao][a].off; d->stride[a] = A[g_vao][a].stride; d->bytes[a] = A[g_vao][a].bytes; }
     d->ubuf = U0.buf ? B[U0.buf].data : NULL; d->uoff = U0.off; d->ubytes = U0.buf ? U0.bytes : 0;
 }
 void glDrawElements(GLenum m, GLsizei n, GLenum t, const void *i) { (void)m; (void)t; queue(n, i, 0); }
 void glDrawElementsInstanced(GLenum m, GLsizei n, GLenum t, const void *i, GLsizei k) { (void)k; glDrawElements(m, n, t, i); }
-void glDrawRangeElements(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i) { (void)a; (void)b; glDrawElements(m, n, t, i); }
+// a ranged draw: every index (before the base vertex) must be within [a, b], as the Mali driver trusts it
+unsigned long fake_range_draws, fake_range_bad;
+static void range_check(GLuint a, GLuint b, GLsizei n, const void *i)
+{
+    const unsigned short *ix = (const unsigned short *)(B[g_elem[g_vao]].data + (uintptr_t)i);
+    fake_range_draws++;
+    for (int k = 0; k < n; k++) if (ix[k] < a || ix[k] > b) { fake_range_bad++; return; }
+}
+void glDrawRangeElements(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i) { range_check(a, b, n, i); g_ranged_call = 1; glDrawElements(m, n, t, i); g_ranged_call = 0; }
 void glDrawElementsBaseVertexOES(GLenum m, GLsizei n, GLenum t, const void *i, GLint v) { (void)m; (void)t; queue(n, i, v); }
+void glDrawRangeElementsBaseVertexOES(GLenum m, GLuint a, GLuint b, GLsizei n, GLenum t, const void *i, GLint v)
+{ range_check(a, b, n, i); g_ranged_call = 1; glDrawElementsBaseVertexOES(m, n, t, i, v); g_ranged_call = 0; }
+void glEnableVertexAttribArray(GLuint a) { (void)a; }
+void glDisableVertexAttribArray(GLuint a) { (void)a; }
 void glFinish(void) { fake_gpu_all(); }
 void glDrawArrays(GLenum m, GLint f, GLsizei n) { (void)m; (void)f; (void)n; }
 void glDrawArraysInstanced(GLenum m, GLint f, GLsizei n, GLsizei k) { (void)m; (void)f; (void)n; (void)k; }

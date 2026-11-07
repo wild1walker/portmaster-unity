@@ -107,11 +107,21 @@ pixels.
   calls); Knulli 36.6 / 36.5 -> 39.5 / 39.6. Those buffers as ranges of one (`UA_GL_ARENA=1`): ~+2 %
   more (muOS ~41.2, Knulli 41.0). **Withdrawn 2026-11-06:** both drew wrong pictures on the handheld
   (sprites stretched into black slabs), which neither the emulated rig (its GPU never lags) nor the
-  fake-driver tests (their game waited for the GPU) could show: Unity reuses a buffer for the next
-  chunk at once and relies on the driver giving an invalidated buffer new storage. `UA_GL_ARENA` now
-  does that (test_glarena orphan); `UA_GL_PERSIST` cannot and is unsafe. Lesson: a fake driver must
-  model the real driver's behaviour, not only the API, and every layer that changes what the GPU reads
-  is checked on the handheld with screenshots before it goes into a port.
+  fake-driver tests (their game waited for the GPU) could show. **Cause (2026-11-07, Knulli A/Bs with
+  screenshots):** not the GPU's timing (waiting for the GPU before every write changed nothing) but the
+  index buffers: the Mali driver reads a draw's indices for the vertices it uses and keeps that range
+  per index buffer, refreshed only when the buffer is written through GL; the game's writes into a
+  persistent mapping never reach it, so draws went out with stale ranges (stretched sprites, the same
+  HUD masks missing every frame). Index buffers kept with the driver (`UA_GL_ARENA_IB=0`): clean, but
+  40.8 fps = no gain: the arena's speed was the skipped index scan. The arena now draws them as
+  `glDrawRangeElements`, the range from 0 to the last vertex the enabled attributes' buffers hold
+  (`UA_GL_ARENA_RANGE`, on): clean, Greenpath (Knulli, defaults) 40.5 -> 45.9 fps. `UA_GL_PERSIST`
+  maps index buffers persistently too and stays unsafe. Lessons: a fake driver must model the real
+  driver's behaviour, not only the API (test_glarena's fake now keeps stale ranges; `norange` shows
+  them); the emulated rig never turns the arena on (no `[glarena]` line), so only the handheld can
+  check it; every layer that changes what the GPU reads is checked on the handheld with screenshots
+  before it goes into a port. The arena alone also draws the HUD right only with ranges: a broken
+  HUD is a quick tell.
 - **The Mali driver works in the draw call.** `runtime/host/drawbench` on the device: a sprite draw
   ~30 - 37 us, all its state calls together 2.5 - 2.9 us. So filtering state calls that change
   nothing (`UA_GL_STATE=1`: 133 of ~2,300 a frame in Greenpath), prebuilt vertex array objects,
