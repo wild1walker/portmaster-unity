@@ -1,5 +1,6 @@
 // Decoders of the system's FFmpeg (libavcodec, LGPL; loaded with dlopen when the handheld's
-// firmware has it, never shipped or linked): AAC and MP3 audio (macOS / Windows builds' clips),
+// firmware has it, or a port's own build through UM_FFMPEG=<path>; this runtime never ships or
+// links one): AAC and MP3 audio (macOS / Windows builds' clips),
 // and H.264 / HEVC video that OpenH264 does not take. libavcodec majors 58 - 61 (FFmpeg 4 - 7):
 // only functions and the leading fields of AVCodec, AVCodecParameters, AVPacket and AVFrame are
 // used, which are the same in all of them; sample rate and channels come from the stream's own

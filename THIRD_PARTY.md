@@ -64,7 +64,9 @@ fetched source tree, `<work>/src/<branch>/`):
 
 The system's [FFmpeg](https://ffmpeg.org/) `libavcodec` (LGPL 2.1+, or GPL depending on the
 firmware's build), opened with `dlopen` by `runtime/media/um_ffmpeg.c` when present: AAC, MP3,
-HEVC and some H.264. Nothing of FFmpeg is linked, compiled in or distributed.
+HEVC and some H.264. Nothing of FFmpeg is linked, compiled in or distributed. A port may ship its
+own LGPL build for firmwares without one (`UM_FFMPEG=<path>`): that is the port's file, under its
+licence, not part of this repository.
 
 The system's [libcurl](https://curl.se/) (curl licence, MIT-style), opened with `dlopen` by
 `runtime/jni/up_http.c` only when `UA_HTTP=1` (Unity 2017.4 - 2018.4 web requests). The system's CA

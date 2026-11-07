@@ -100,7 +100,7 @@ pictures through EGLImage + shader with Mesa: every pixel equals the desktop for
 | Vorbis | WebM, Matroska | libvorbis + libogg | BSD-3-Clause | static |
 | Opus | WebM, Matroska | libopus | BSD-3-Clause | static |
 | H.264 | MP4, MOV, Matroska | OpenH264 (`OMX.google.h264.decoder`) | BSD-2-Clause | static (Debian's `libopenh264-dev` on armhf; built from Debian's source package for arm64) |
-| H.264 with B-frames, interlaced, > 8 bit; HEVC; AAC; MP3 | MP4, MOV, Matroska | the system's libavcodec (`ffmpeg.*`) | LGPL (the firmware's) | `dlopen` when present, never shipped |
+| H.264 with B-frames, interlaced, > 8 bit; HEVC; AAC; MP3 | MP4, MOV, Matroska | the system's libavcodec (`ffmpeg.*`) | LGPL (the firmware's, or a port's own build) | `dlopen` when present, or `UM_FFMPEG=<path>`; never shipped by this repository |
 | AAC, MP3 without libavcodec | | silence of the right length | ours | |
 
 What each covers:
@@ -118,7 +118,9 @@ What each covers:
 
 Licences: `build.sh` copies the libraries' copyright files into `out/[arm64/]licenses/`; a
 `ua_host` that links the core ships them (`THIRD_PARTY.md`). OpenH264 built from source carries
-no MPEG LA patent licence (Cisco's own binaries do); FFmpeg is the system's. `OPENH264=0
+no MPEG LA patent licence (Cisco's own binaries do); FFmpeg is the system's, or a port's own LGPL
+build for firmwares without one, which the port ships with its licence (and its source, as the LGPL
+asks) and loads through `UM_FFMPEG=<path>`: nothing here builds or ships one. `OPENH264=0
 ./build.sh` (or `OPENH264=0 runtime/build.sh`) builds the core without OpenH264, for a release that
 must not carry an H.264 decoder: H.264 clips then play only where the handheld has libavcodec, and
 `out/licenses/` lists only what was linked.
@@ -132,7 +134,7 @@ must not carry an H.264 decoder: H.264 clips then play only where the handheld h
 | `UM_VPX_THREADS=<n>` | libvpx threads (default: VP9 the CPUs, up to 4, for its tiles; VP8 one: its threads, used only for clips with several token partitions, wait for each other by spinning, which on a 4-core handheld running the game costs more than it gains) |
 | `UM_H264=openh264` | OpenH264 for every H.264 stream, B-frames included |
 | `UM_H264=ffmpeg` | libavcodec for every H.264 stream when it is there (`UM_FFMPEG`): its threads and NEON code take 1080p that OpenH264's single thread cannot keep up with on four Cortex-A53s (a 1080p Constrained Baseline clip on an H700: 2.7x real time against 0.6x) |
-| `UM_FFMPEG=0` / `=<path>` | no system libavcodec / that libavcodec |
+| `UM_FFMPEG=0` / `=<path>` | no system libavcodec / that libavcodec (e.g. a port's own LGPL build, on a firmware that has none) |
 | `ANDROID_SHIM_LIBEGL`, `UM_LIBGLES` | the libEGL / libGLESv2 the surface code opens (the ones Unity uses; default `libEGL.so.1`, `libGLESv2.so.2`) |
 
 The host's log names the decoders at start: `[media] decoders: vp8 (libvpx-vp8), ...`.
