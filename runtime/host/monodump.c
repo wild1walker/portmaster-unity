@@ -10,11 +10,19 @@
 //                           main camera ("[dump] t <s> Knight (x, y) camera (x, y)"): where a scripted walk took the player
 // Everything is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
 // UnityMain after a frame, as a script of the game would; nothing is changed.
+//   UA_FLIPBOOK=<controller>,...|@<file>  a stand-in for Unity's Animator on sprite flip-books: the managed assembly
+//                           uaflipbook.dll (runtime/host/managed; UA_FLIPBOOK_DLL, default beside ua_host) loaded
+//                           into the game's domain once UnityEngine is up, UAFlipbook.Init(<controllers>, <mode>)
+//                           called on UnityMain. Animators of those controllers (one looping clip that only swaps
+//                           its own sprite) are shadowed, then turned off and their sprite set the same way before
+//                           every render (managed/UAFlipbook.cs). UA_FLIPBOOK_MODE=check: shadowed only, mismatches
+//                           counted ("[flipbook] ..." in the log every 10 s).
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "../loader/so_loader.h"
 #include "monodump.h"
@@ -38,6 +46,8 @@ static MonoClass *(*m_object_get_class)(MonoObject *);
 static const char *(*m_class_get_name)(MonoClass *);
 static MonoClass *(*m_class_get_parent)(MonoClass *);
 static MonoString *(*m_string_new)(MonoDomain *, const char *);
+static void *(*m_domain_assembly_open)(MonoDomain *, const char *);
+static MonoImage *(*m_assembly_get_image)(void *);
 
 static int load(void)
 {
@@ -49,7 +59,7 @@ static int load(void)
     L(m_type_get_object, "mono_type_get_object"); L(m_array_length, "mono_array_length"); L(m_array_addr, "mono_array_addr_with_size");
     L(m_unbox, "mono_object_unbox"); L(m_string_to_utf8, "mono_string_to_utf8"); L(m_free, "mono_free");
     L(m_object_get_class, "mono_object_get_class"); L(m_class_get_name, "mono_class_get_name"); L(m_class_get_parent, "mono_class_get_parent");
-    L(m_string_new, "mono_string_new");
+    L(m_string_new, "mono_string_new"); L(m_domain_assembly_open, "mono_domain_assembly_open"); L(m_assembly_get_image, "mono_assembly_get_image");
 #undef L
     return 1;
 }
@@ -117,6 +127,19 @@ static void dump(void)
         fprintf(stderr, "[dump] camera %s at (%.2f, %.2f, %.2f) %s %.2f aspect %.3f clip %.2f - %.2f sort mode %d\n", nm, pos[0], pos[1], pos[2],
                 ortho ? "orthographic size" : "fov", ortho ? size : fov, aspect, nearp, farp, sortmode);
     }
+    // every camera: enabled, depth (the order they render in), culling mask, clear flags, target texture
+    MonoMethod *all_cams = m_method_from_name(k_cam, "get_allCameras", 0);
+    MonoArray *cams = all_cams ? (MonoArray *)m_invoke(all_cams, NULL, NULL, &exc) : NULL;
+    for (uintptr_t i = 0, nc = cams ? m_array_length(cams) : 0; i < nc; i++) {
+        MonoObject *c = *(MonoObject **)m_array_addr(cams, sizeof(void *), i);
+        float depth = 0; int mask = 0, clear = 0;
+        getf(c, "get_depth", &depth, 1); geti(c, "get_cullingMask", &mask); geti(c, "get_clearFlags", &clear);
+        MonoObject *rt = call(c, "get_targetTexture", NULL, 0);
+        char nm[96], rn[96] = "the screen"; name_of(c, nm, sizeof nm);
+        int w = 0, h = 0;
+        if (rt) { name_of(rt, rn, sizeof rn); geti(rt, "get_width", &w); geti(rt, "get_height", &h); }
+        fprintf(stderr, "[dump] camera %s depth %.1f culling mask 0x%08x clear %d into %s %dx%d\n", nm, depth, (unsigned)mask, clear, rn, w, h);
+    }
     // the renderers
     MonoMethod *find = m_method_from_name(k_obj, "FindObjectsOfType", 1);
     if (!find) { fprintf(stderr, "[dump] Object.FindObjectsOfType(Type) not found\n"); return; }
@@ -164,6 +187,48 @@ static void dump(void)
                 cls, visible ? "" : "(hidden) ", "", nm, p1, p2, b[0], b[1], b[2], 2 * b[3], 2 * b[4], 2 * b[5], layer, order, mat, extra);
     }
     fprintf(stderr, "[dump] %lu renderers, %lu logged\n", (unsigned long)n, (unsigned long)shown);
+    // the Animators that run (active and enabled): their culling mode (0 always animate, 1 cull update transforms,
+    // 2 cull completely), controller, and whether one of the GameObject's renderers is visible
+    MonoImage *anim = m_image_loaded("UnityEngine.AnimationModule");
+    MonoClass *k_an = anim ? m_class_from_name(anim, "UnityEngine", "Animator") : NULL;
+    if (!k_an) return;
+    args[0] = m_type_get_object(dom, m_class_get_type(k_an));
+    all = (MonoArray *)m_invoke(find, NULL, args, &exc);
+    if (!all || exc) return;
+    void *ra[1] = { m_type_get_object(dom, m_class_get_type(k_ren)) };
+    unsigned counts[3] = { 0 }, running = 0;
+    n = m_array_length(all);
+    for (uintptr_t i = 0; i < n; i++) {
+        MonoObject *a = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
+        MonoObject *on = a ? call(a, "get_isActiveAndEnabled", NULL, 0) : NULL;
+        if (!on || !*(unsigned char *)m_unbox(on)) continue;
+        running++;
+        int mode = 0; geti(a, "get_cullingMode", &mode);
+        if (mode >= 0 && mode < 3) counts[mode]++;
+        MonoObject *go = call(a, "get_gameObject", NULL, 0), *tr = call(a, "get_transform", NULL, 0);
+        char nm[96], p1[64] = "", ctl[64];
+        name_of(go, nm, sizeof nm);
+        MonoObject *pa = call(tr, "get_parent", NULL, 0); if (pa) name_of(pa, p1, sizeof p1);
+        name_of(call(a, "get_runtimeAnimatorController", NULL, 0), ctl, sizeof ctl);
+        MonoObject *ren = call(go, "GetComponentInChildren", ra, 1);
+        MonoObject *vis = ren ? call(ren, "get_isVisible", NULL, 0) : NULL;
+        fprintf(stderr, "[dump] Animator %s < %s culling %d controller %s%s\n", nm, p1, mode, ctl,
+                !ren ? " (no renderer)" : vis && *(unsigned char *)m_unbox(vis) ? " visible" : " hidden");
+        // UA_DUMP_ANIM_OFF=<text>,<text>...: a measurement (it changes the picture): Animators whose controller's
+        // name contains one of them are turned off, to see what their updates cost
+        const char *off = getenv("UA_DUMP_ANIM_OFF");
+        if (off && *off) {
+            char list[256]; snprintf(list, sizeof list, "%s", off);
+            for (char *t = strtok(list, ","); t; t = strtok(NULL, ","))
+                if (strstr(ctl, t)) {
+                    unsigned char no = 0; void *a1[1] = { &no };
+                    call(a, "set_enabled", a1, 1);
+                    fprintf(stderr, "[dump]   turned off (UA_DUMP_ANIM_OFF)\n");
+                    break;
+                }
+        }
+    }
+    fprintf(stderr, "[dump] %lu Animators, %u running (culling 0: %u, 1: %u, 2: %u)\n", (unsigned long)n, running, counts[0], counts[1], counts[2]);
 }
 
 // the named GameObject's and the main camera's positions
@@ -197,8 +262,54 @@ static void hero(const char *name)
     fprintf(stderr, "[dump] %s %s camera %s\n", name, a, b);
 }
 
+// UA_FLIPBOOK: uaflipbook.dll loaded and UAFlipbook.Init called, once UnityEngine.CoreModule is loaded
+static void flipbook_frame(void)
+{
+    static int state = -1;                  // -1: not read; 0: off or done; 1: waiting for UnityEngine
+    static char dll[512];
+    if (state == 0) return;
+    const char *names = getenv("UA_FLIPBOOK");
+    if (state < 0) {
+        state = names && *names ? 1 : 0;
+        if (!state) return;
+        const char *d = getenv("UA_FLIPBOOK_DLL");
+        if (d && *d) snprintf(dll, sizeof dll, "%s", d);
+        else {
+            char exe[400]; ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+            exe[n > 0 ? n : 0] = 0;
+            char *slash = strrchr(exe, '/'); if (slash) *slash = 0;
+            snprintf(dll, sizeof dll, "%s/uaflipbook.dll", exe);
+        }
+    }
+    if (!load() || !m_image_loaded("UnityEngine.CoreModule") || !m_image_loaded("UnityEngine.AnimationModule")) return;
+    state = 0;
+    static char list[16384];
+    if (names[0] == '@') {                  // @<file>: the names in a file (commas or lines)
+        FILE *f = fopen(names + 1, "r");
+        size_t n = f ? fread(list, 1, sizeof list - 1, f) : 0;
+        if (f) fclose(f);
+        list[n] = 0;
+        for (char *c = list; *c; c++) if (*c == '\n' || *c == '\r') *c = ',';
+        if (!n) { fprintf(stderr, "[flipbook] %s: nothing to read: off\n", names + 1); return; }
+        names = list;
+    }
+    MonoDomain *dom = m_domain_get();
+    void *asm_ = m_domain_assembly_open(dom, dll);
+    MonoImage *img = asm_ ? m_assembly_get_image(asm_) : NULL;
+    MonoClass *k = img ? m_class_from_name(img, "", "UAFlipbook") : NULL;
+    MonoMethod *init = k ? m_method_from_name(k, "Init", 2) : NULL;
+    if (!init) { fprintf(stderr, "[flipbook] %s: no UAFlipbook.Init(string, int): off\n", dll); return; }
+    const char *m = getenv("UA_FLIPBOOK_MODE");
+    int mode = m && !strcmp(m, "check") ? 0 : 1;
+    void *args[2] = { m_string_new(dom, names), &mode };
+    MonoObject *exc = NULL;
+    m_invoke(init, NULL, args, &exc);
+    if (exc) fprintf(stderr, "[flipbook] UAFlipbook.Init threw: off\n");
+}
+
 void monodump_frame(void)
 {
+    flipbook_frame();
     static int state = -1, n, next;         // state -1: not read; 0: off or done; 1: waiting
     static double at[16], t0, period, last;
     static char name[64];

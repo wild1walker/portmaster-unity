@@ -2804,6 +2804,14 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
         ctx.log('building the runtime (runtime/build.sh, Docker)')
         subprocess.run([os.path.join(ctx.runtime, 'runtime', 'build.sh')], check=True)
     ctx.add(p, dst, 0o755)
+    # the flip-book stand-in ua_host loads with UA_FLIPBOOK (runtime/host/managed/build.sh), beside it
+    if dst == 'ua_host':
+        fb = os.path.join(os.path.dirname(p), 'uaflipbook.dll')
+        uses = any('UA_FLIPBOOK' in (ctx.cfg.get(k) or {}) for k in ('runtime', 'runtime_lowmem'))
+        if os.path.isfile(fb):
+            ctx.add(fb, 'uaflipbook.dll')
+        elif uses:
+            raise SystemExit(f'{fb}: the port sets UA_FLIPBOOK: build it (runtime/host/managed/build.sh <donor APK>)')
     hyb = os.path.join(ctx.runtime, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
     if not os.path.isfile(hyb):
         hyb = os.path.join(REPO, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
