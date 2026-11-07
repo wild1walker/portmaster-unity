@@ -215,6 +215,12 @@ the scene pass 19 ms of the Mali; thread priorities and cores changed nothing. T
 the top of the Soul Master and Soul Tyrant arenas in the earlier spot saves is the arena's own mask
 over the lower room, which the fight fades when the floor breaks: those saves put the Knight in the
 lower room (`UA_DUMP_RENDERERS` found it), not the port.
+Later on 2026-11-07: the lit sprite twin went into test release 2026.11.07, and the background
+flip-books (`UA_FLIPBOOK`: 125 controllers that only swap their own sprite, shown by a stand-in for
+Unity's Animator) into 2026.11.07.2 (Knulli, the release's own files, screenshots checked): Broken
+Vessel 47.5 - 48.8 -> 55.7, Gruz Mother 56.1, Hornet 56.1, City of Tears 57.3, Greenpath 52.6 - 53.3,
+Crystal Peak 56.6. Thread priorities, one core per thread, one to three job workers and `UA_GL_DSINVAL`
+gained nothing in the fights.
 
 
 ## Linux builds, one per Unity line (32-bit route)
