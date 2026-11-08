@@ -384,8 +384,6 @@ static void toggle(void)
     CHECK(pad[0] == 0 && pad[5] == 0);
 }
 
-// (pointer.c and osk.c bind glpresent.c's frame for "framebuffer 0"; no present thread here)
-unsigned glpresent_fb0(void) { return 0; }
 
 int main(int argc, char **argv)
 {
