@@ -1,4 +1,4 @@
-// playmaker-loopcount and playmaker-delayedevents on a stand-in PlayMaker.dll (test/fakes/PlayMaker,
+// playmaker-loopcount, playmaker-delayedevents and playmaker-idle on a stand-in PlayMaker.dll (test/fakes/PlayMaker,
 // built by build.sh test): patched, then the original and the patched copy are driven through the
 // same seeded sequences (fakes/PlayMaker/PlayMaker.cs, Driver.Run) and must show the same loop
 // counts, guard trips, delayed events, fired events and exceptions after every step; the patched
@@ -25,8 +25,14 @@ static partial class TestMain
         finally { ctx.Unload(); }
     }
 
-    static string Drive(string dir, int seed, int steps) => WithPlayMaker(dir, a =>
-        (string)a.GetType("HutongGames.PlayMaker.Driver", true).GetMethod("Run").Invoke(null, new object[] { seed, steps }));
+    static string Drive(string dir, int seed, int steps) => DriveCounting(dir, seed, steps).log;
+
+    /// <summary>Driver.Run, and how many FSM updates got as far as the execution stack (the work playmaker-idle skips).</summary>
+    static (string log, int pushes) DriveCounting(string dir, int seed, int steps) => WithPlayMaker(dir, a =>
+    {
+        var log = (string)a.GetType("HutongGames.PlayMaker.Driver", true).GetMethod("Run").Invoke(null, new object[] { seed, steps });
+        return (log, (int)a.GetType("HutongGames.PlayMaker.FsmExecutionStack", true).GetField("Pushes").GetValue(null));
+    });
 
     static void PlayMakerTests()
     {
@@ -34,19 +40,22 @@ static partial class TestMain
         var d = Dir("pm");
         File.Copy(FakePlayMaker, Path.Combine(d, "PlayMaker.dll"));
         var o = Path.Combine(tmp, "pm-out");
-        var (st, outp) = Patch(d, o);
+        var (st, outp) = Patch(d, o, with: new[] { "playmaker-idle" });   // opt-in
         Check(st == 0 && outp.Contains("ok   playmaker-loopcount: PlayMaker.dll: HutongGames.PlayMaker.Fsm.UpdateStateChanges") &&
               outp.Contains("ok   playmaker-delayedevents: PlayMaker.dll: HutongGames.PlayMaker.Fsm.UpdateDelayedEvents") &&
-              File.Exists(Path.Combine(o, "PlayMaker.dll")), "PlayMaker: both optimizations apply");
+              outp.Contains("ok   playmaker-idle: PlayMaker.dll: HutongGames.PlayMaker.Fsm.Update") &&
+              File.Exists(Path.Combine(o, "PlayMaker.dll")), "PlayMaker: the three optimizations apply");
         if (!File.Exists(Path.Combine(o, "PlayMaker.dll"))) return;
         Check(!Refs(Path.Combine(o, "PlayMaker.dll")).Except(Refs(Path.Combine(d, "PlayMaker.dll"))).Any(), "PlayMaker: no new assembly references");
 
         // the same behaviour, step by step
-        int same = 0, guards = 0, nulls = 0, fired = 0;
+        int same = 0, guards = 0, nulls = 0, fired = 0, pushA = 0, pushB = 0, finishes = 0, breaks = 0;
         string first = null;
         for (int seed = 1; seed <= 60; seed++)
         {
-            string a = Drive(d, seed, 400), b = Drive(o, seed, 400);
+            var (a, pa) = DriveCounting(d, seed, 400); var (b, pb) = DriveCounting(o, seed, 400);
+            pushA += pa; pushB += pb;
+            finishes += a.Split(".!").Length - 1 + a.Split(". ").Length - 1; breaks += a.Split("[error").Length - 1;
             if (a == b) same++;
             else if (first == null)
             {
@@ -58,6 +67,14 @@ static partial class TestMain
         }
         Check(same == 60, $"PlayMaker: 60 seeded runs of 400 steps, the patched copy sees what the original sees ({same} the same{(first != null ? "; first difference " + first : "")})");
         Check(guards > 0 && nulls > 0 && fired > 0, $"PlayMaker: the runs trip the loop guard ({guards}), update a missing list ({nulls}) and fire delayed events ({fired})");
+        Check(pushB < pushA * 3 / 4 && pushB > 0, $"playmaker-idle: the patched copy's idle FSMs skip their updates ({pushA} updates through the execution stack unpatched, {pushB} patched)");
+        // the patched copy with ASMPATCH_PLAYMAKER_IDLE=0: every update made (read once per load: each load is a context of its own)
+        Environment.SetEnvironmentVariable("ASMPATCH_PLAYMAKER_IDLE", "0");
+        var (offLog, offPushes) = DriveCounting(o, 7, 400);
+        Environment.SetEnvironmentVariable("ASMPATCH_PLAYMAKER_IDLE", null);
+        var (onLog, onPushes) = DriveCounting(d, 7, 400);
+        Check(offLog == onLog && offPushes == onPushes, $"playmaker-idle: ASMPATCH_PLAYMAKER_IDLE=0 turns the test off ({offPushes} updates through the stack, unpatched {onPushes})");
+        Check(finishes > 0 && breaks == 0, $"playmaker-idle: the runs finish states ({finishes}); no stack error ({breaks})");
         string Directed(string dir) => WithPlayMaker(dir, a => (string)a.GetType("HutongGames.PlayMaker.Driver", true).GetMethod("Directed").Invoke(null, null));
         string da = Directed(d), db = Directed(o);
         Check(da == db && da.Contains("2,"), $"PlayMaker: states counted through another FSM, then put into a reset FSM's array (an element, a new array), copied, shared: the same counts\n{da}---\n{db}");
@@ -98,7 +115,7 @@ static partial class TestMain
         Check(vo > 0 && vp == 0, $"playmaker-delayedevents: with nothing to update the work lists are not touched (version +{vo} unpatched, +{vp} patched)");
 
         // patched again: done, nothing written; --no-optimize leaves them out
-        (st, outp) = Patch(o, Path.Combine(tmp, "pm-again"));
+        (st, outp) = Patch(o, Path.Combine(tmp, "pm-again"), with: new[] { "playmaker-idle" });
         Check(st == 0 && outp.Contains("done playmaker-loopcount") && outp.Contains("done playmaker-delayedevents") && NoDlls(Path.Combine(tmp, "pm-again")),
               "PlayMaker: a second run finds both applied and writes nothing");
         (st, outp) = Patch(d, Path.Combine(tmp, "pm-noopt"), noOptimize: true);

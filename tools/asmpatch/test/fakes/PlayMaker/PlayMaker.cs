@@ -1,20 +1,66 @@
 // A stand-in for PlayMaker.dll (written for these tests; no PlayMaker code): the members the
 // playmaker-* patches look at, shaped as C# compilers emit PlayMaker's (the state array behind
 // Fsm.States, FsmState's loop count and its reset loop, the delayed events and their two work
-// lists), and Driver.Run, which drives three FSMs through a seeded random sequence (state changes,
+// lists, Fsm.Update with its owner check and execution stack, FsmState.OnUpdate and its finished
+// flag), and Driver.Run, which drives three FSMs through a seeded random sequence (state changes,
 // states of other FSMs, states put into other arrays, new arrays, copies, delayed events that add,
-// clear or change state while they are updated, a missing list) and returns everything the game
+// clear or change state while they are updated, a missing list, updates of FSMs whose states work,
+// finish and wait, owners destroyed, event targets, breakpoints) and returns everything the game
 // could see after each step.
 using System;
 using System.Collections.Generic;
 using System.Text;
 
+namespace UnityEngine
+{
+    // (Unity's: a destroyed object compares equal to null)
+    public class Object
+    {
+        public bool Dead;
+        public static bool operator ==(Object a, Object b) =>
+            ReferenceEquals(a, b) || (ReferenceEquals(a, null) ? b.Dead : ReferenceEquals(b, null) && a.Dead);
+        public static bool operator !=(Object a, Object b) => !(a == b);
+        public override bool Equals(object o) => base.Equals(o);
+        public override int GetHashCode() => base.GetHashCode();
+    }
+    public class MonoBehaviour : Object { }
+    public static class Debug
+    {
+        public static void LogError(object message) { HutongGames.PlayMaker.Driver.Log.Append("[error ").Append(message).Append(']'); }
+    }
+}
+
 namespace HutongGames.PlayMaker
 {
+    public static class FsmTime
+    {
+        public static bool FirstUpdate;
+        public static void RealtimeBugFix() { FirstUpdate = true; }
+    }
+
+    public static class FsmExecutionStack
+    {
+        private static readonly Stack<Fsm> stack = new Stack<Fsm>(256);
+        public static int Pushes;                       // (how much work was done: not what the game sees)
+        public static int StackCount => stack.Count;
+        public static int MaxStackCount { get; private set; }
+        public static void PushFsm(Fsm fsm)
+        {
+            Pushes++;
+            stack.Push(fsm);
+            if (stack.Count > MaxStackCount) MaxStackCount = stack.Count;
+        }
+        public static void PopFsm() { stack.Pop(); }
+        public static void Reset() { stack.Clear(); MaxStackCount = 0; Pushes = 0; }
+    }
+
     public class FsmState
     {
         private Fsm fsm;
+        private bool finished;
         public readonly string Name;
+        public int Work, StateTime;
+        public bool Done => finished;
 
         public int loopCount { get; private set; }
         public int maxLoopCount { get; private set; }
@@ -28,7 +74,27 @@ namespace HutongGames.PlayMaker
         {
             loopCount++;
             if (loopCount > maxLoopCount) maxLoopCount = loopCount;
+            finished = false;
+            Work = Name.Length % 3;
             Driver.Log.Append(Name).Append('+');
+        }
+
+        public void OnUpdate()
+        {
+            if (finished) return;
+            StateTime++;
+            if (Work > 0) Work--;
+            CheckAllActionsFinished();
+        }
+
+        private void CheckAllActionsFinished()
+        {
+            if (!finished && Work == 0)
+            {
+                finished = true;
+                Driver.Log.Append(Name).Append('.');
+                fsm.Finished(this);
+            }
         }
 
         public void ResetLoopCount()
@@ -64,10 +130,18 @@ namespace HutongGames.PlayMaker
         private List<DelayedEvent> delayedEvents = new List<DelayedEvent>();
         private readonly List<DelayedEvent> updateEvents = new List<DelayedEvent>();
         private readonly List<DelayedEvent> removeEvents = new List<DelayedEvent>();
+        private UnityEngine.MonoBehaviour owner = new UnityEngine.MonoBehaviour();
+        private bool activeStateEntered;
+        private FsmState activeState;
         public readonly string Name;
         public int MaxLoopCount = 4;
         public bool Disabled;
-        public FsmState ActiveState;
+        public FsmState ActiveState { get { return activeState; } private set { activeState = value; } }
+        public bool Entered => activeStateEntered;
+        public static bool HitBreakpoint { get; set; }
+        public bool IsSwitchingState => switchToState != null;
+        public void KillOwner() { owner.Dead = true; }
+        public void NewOwner() { owner = new UnityEngine.MonoBehaviour(); }
 
         public Fsm(string name, int n)
         {
@@ -108,9 +182,44 @@ namespace HutongGames.PlayMaker
             state.OnEnter();
         }
 
+        public void Continue()
+        {
+            activeStateEntered = true;
+            Driver.Log.Append(Name).Append('>');
+        }
+
+        public void Update()
+        {
+            FsmTime.RealtimeBugFix();
+            if (owner == null) return;
+            int stackCount = FsmExecutionStack.StackCount;
+            if (HitBreakpoint) return;
+            FsmExecutionStack.PushFsm(this);
+            if (!activeStateEntered) Continue();
+            UpdateDelayedEvents();
+            if (ActiveState != null) UpdateState(ActiveState);
+            FsmExecutionStack.PopFsm();
+            int stackCount2 = FsmExecutionStack.StackCount;
+            // (as PlayMaker's compiler emits "Stack error: " + n: the int boxed, Concat(object, object))
+            if (stackCount2 != stackCount) UnityEngine.Debug.LogError(string.Concat("Stack error: ", (object)(stackCount2 - stackCount)));
+        }
+
+        private void UpdateState(FsmState state)
+        {
+            state.Fsm = this;
+            state.OnUpdate();
+            UpdateStateChanges();
+        }
+
+        // what FINISHED does: half the states go on to another state
+        internal void Finished(FsmState state)
+        {
+            if (state.Name.Length % 2 == 0) SetState(states[(state.Name.Length + 1) % states.Length]);
+        }
+
         public void UpdateStateChanges()
         {
-            while (switchToState != null) SwitchState(switchToState);
+            while (IsSwitchingState && !HitBreakpoint) SwitchState(switchToState);
             for (int i = 0; i < States.Length; i++) States[i].ResetLoopCount();
             EventTarget = null;
         }
@@ -199,6 +308,8 @@ namespace HutongGames.PlayMaker
         {
             All.Clear();
             Log.Clear();
+            FsmExecutionStack.Reset();
+            Fsm.HitBreakpoint = false;
             Random rnd = new Random(seed);
             List<Fsm> fsms = new List<Fsm> { new Fsm("a", 3), new Fsm("b", 5), new Fsm("c", 1) };
             string[] names = { "e", "add", "clear", "go", "goo" };
@@ -206,7 +317,7 @@ namespace HutongGames.PlayMaker
             for (int step = 0; step < steps; step++)
             {
                 Fsm f = fsms[rnd.Next(fsms.Count)], g = fsms[rnd.Next(fsms.Count)];
-                int op = rnd.Next(13);
+                int op = rnd.Next(30);
                 try
                 {
                     switch (op)
@@ -222,13 +333,23 @@ namespace HutongGames.PlayMaker
                         case 9: case 10: f.UpdateDelayedEvents(); break;
                         case 11: f.SwitchState(f.States[0]); f.SwitchState(f.States[0]); break;
                         case 12: if (rnd.Next(25) == 0) f.DropDelayedEvents(); else f.UpdateDelayedEvents(); break;
+                        case 13: case 14: case 15: case 16: f.Update(); break;
+                        case 17: foreach (Fsm x in fsms) x.Update(); break;
+                        case 18: f.EventTarget = rnd.Next(2) == 0 ? (object)("t" + step) : null; break;
+                        case 19: if (rnd.Next(10) == 0) f.KillOwner(); else if (rnd.Next(4) == 0) f.NewOwner(); else f.Update(); break;
+                        case 20: Fsm.HitBreakpoint = rnd.Next(8) == 0; break;
+                        default: foreach (Fsm x in fsms) x.Update(); break;      // (a game's frames: most FSMs idle)
                     }
                 }
                 catch (Exception e) { sb.Append('<').Append(e.GetType().Name).Append('>'); }
-                foreach (FsmState s in All) sb.Append(s.loopCount).Append(',');
+                foreach (FsmState s in All) sb.Append(s.loopCount).Append(s.Done ? '.' : ':').Append(s.Work).Append('/').Append(s.StateTime).Append(',');
+                // (not FsmExecutionStack.MaxStackCount, a debug statistic: with the stack left deeper by an exception
+                //  inside an update, a skipped idle update can leave its high-water mark one lower)
+                sb.Append(FsmTime.FirstUpdate ? 'T' : 'f').Append(FsmExecutionStack.StackCount).Append(' ');
                 foreach (Fsm x in fsms)
                 {
-                    sb.Append(x.Disabled ? 'D' : '-');
+                    sb.Append(x.Disabled ? 'D' : '-').Append(x.Entered ? 'E' : 'e').Append(x.ActiveState != null ? x.ActiveState.Name : "~")
+                      .Append(x.EventTarget != null ? "@" + x.EventTarget : "").Append(' ');
                     if (x.DelayedEvents != null)
                         foreach (DelayedEvent d in x.DelayedEvents) sb.Append(d.Name).Append(':').Append(d.Frames).Append(' ');
                     sb.Append('|');
