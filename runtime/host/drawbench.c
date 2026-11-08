@@ -19,7 +19,7 @@
 //             pointers and index buffer): a draw binds the object instead of setting them
 //   nodraw    persist without the glDrawElements (what the draw call itself costs: the difference)
 //   nostate   (each of the above with a "-flat" twin: no texture binds or program switches)
-// Build: host/build.sh; on the device: ./drawbench [seconds per case] [draws a frame]
+// Build: host/build.sh; on the device: ./drawbench [seconds per case] [draws a frame] [quads a draw]
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 #include <fcntl.h>
@@ -67,7 +67,8 @@ static GLuint program(const char *vs, const char *fs)
     return p;
 }
 
-enum { QUADS = 16, VERTS = QUADS * 4, INDS = QUADS * 6, STRIDE = 24, VBYTES = VERTS * STRIDE, IBYTES = INDS * 2, RING = 3 };
+enum { STRIDE = 24, RING = 3 };
+static int QUADS = 16, VERTS, INDS, VBYTES, IBYTES;             // (a draw's geometry: argv[3] quads)
 enum { UNITY, PERSIST, PVAO, NODRAW, ARENA, BASEVTX };
 static const char *const names[] = { "unity", "persist", "pvao", "nodraw", "arena", "basevtx" };
 
@@ -153,6 +154,8 @@ int main(int argc, char **argv)
 {
     double secs = argc > 1 ? atof(argv[1]) : 3.0;
     if (argc > 2) D = atoi(argv[2]);
+    if (argc > 3 && atoi(argv[3]) > 0 && atoi(argv[3]) <= 4096) QUADS = atoi(argv[3]);
+    VERTS = QUADS * 4; INDS = QUADS * 6; VBYTES = VERTS * STRIDE; IBYTES = INDS * 2;
     struct fb_var_screeninfo vi = {0};
     int fd = open("/dev/fb0", O_RDWR);
     if (fd < 0 || ioctl(fd, FBIOGET_VSCREENINFO, &vi) != 0) { perror("fb0"); return 1; }

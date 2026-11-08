@@ -1798,6 +1798,26 @@ own ~2 us (the arena: `UA_GL_ARENA`, [runtime.md](runtime.md)). Fewer draws woul
 step, and Unity's are already batched as far as their order allows: Greenpath's alternate between
 two atlases with one program, sprite by sprite in depth order (`UA_GL_TRACE_DRAWS`).
 
+What a draw costs grows with what it draws: the same 3,200 quads a frame on the Knulli's Mali-G31
+(`./drawbench 2 <draws> <quads a draw>`, `persist`): 200 draws of 16 quads 8.99 ms a frame (44.9 us a
+draw), 50 of 64 5.95 ms (119 us), 25 of 128 4.76 ms (190 us): about 24 us a draw and 1.1 us a quad.
+So putting draws together saves the fixed part only, ~20 us for each draw that is no longer made.
+
+Draws merged in the held frame (`UA_GL_MERGE`, 2026-11-08): Greenpath's runs of one program's sprites
+(their textures and transforms differing) made as one draw each, through twin programs that read the
+per-draw values from arrays and the texture from up to four samplers; checked byte for byte against the
+game's own draws (muOS 3,531 runs, Knulli 7,763, G350 177: 0 pixels differ). Draws 163 -> 104 a frame
+(muOS), 238 -> 138 (G350), and still slower: Knulli 48.2 / 48.2 fps against 51.2 / 50.8 with the
+recorder alone and 52.5 / 52.2 as released (the render thread's submission 9.5 -> 12.3 ms a frame, the
+scan 2.0 of it); G350 29.2 / 28.9 against 30.5 / 30.0 (its GL thread 29 -> 32.5 ms, the scan 3.2). The
+~80 draws left out are worth ~1.8 ms a frame on the H700 by the measure above, and each merged run
+costs about as much again (the twin's program bound and unbound, its uniforms, the geometry's pointers
+set and set back, the textures of three more units). On the way: rewriting the game's own programs
+instead of twins cost every draw (Mali copies a program's whole default uniform block at each draw:
+muOS 53.7 -> 49.2 fps with nothing merged), and a one-byte vertex attribute is converted by Mali's
+driver on the CPU at every draw (12 % of the G350's GL thread until the selector became a float).
+Option, off.
+
 Thread placement in Greenpath (muOS, `UA_GL_PERSIST=1`, every run from 50 C): the render thread alone
 on core 3 and every other thread on cores 0 - 2 (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`) 40.1 /
 40.3 fps and no hitch of 100 ms, against 39.0 (a screenshot's 1 s stall in it; ~39.7 without) with
