@@ -13,7 +13,7 @@
 //                           (x, y) once ("[dump] Knight placed ..."): a test save
 //                           whose respawn point is not where a scene is entered (Soul Master's lower room) entered
 //                           from its door instead
-//   UA_DUMP_OFF=<assembly>:<class>,...  a measurement that changes the picture: every 5 s once the Knight exists, the
+//   UA_DUMP_OFF=<assembly>:<class>[@<GameObject>],...  a measurement that changes the picture: every 5 s once the Knight exists, the
 //                           components of those classes (e.g. Assembly-CSharp-firstpass:UnityStandardAssets.ImageEffects.
 //                           BloomOptimized) turned off ("[dump] off ...")
 // Everything else is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
@@ -405,7 +405,9 @@ static void comps_off(void)
         char *colon = strchr(t, ':');
         if (!colon) continue;
         *colon = 0;
-        char *cls = colon + 1, *dot = strrchr(cls, '.'), ns[256] = "";
+        char *cls = colon + 1, *at = strchr(cls, '@'), *go = NULL;
+        if (at) { *at = 0; go = at + 1; }                 // <class>@<GameObject name>: only those components
+        char *dot = strrchr(cls, '.'), ns[256] = "";
         if (dot) { snprintf(ns, sizeof ns, "%.*s", (int)(dot - cls), cls); cls = dot + 1; }
         MonoImage *img = m_image_loaded(t);
         MonoClass *k = img ? m_class_from_name(img, ns, cls) : NULL;
@@ -418,6 +420,13 @@ static void comps_off(void)
             MonoObject *c = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
             MonoObject *en = c ? call(c, "get_enabled", NULL, 0) : NULL;
             if (!en || !*(unsigned char *)m_unbox(en)) continue;
+            if (go) {
+                MonoObject *g = call(c, "get_gameObject", NULL, 0), *nm = g ? call(g, "get_name", NULL, 0) : NULL;
+                char *u = nm ? m_string_to_utf8((MonoString *)nm) : NULL;
+                int same = u && !strcmp(u, go);
+                if (u) m_free(u);
+                if (!same) continue;
+            }
             unsigned char no = 0; void *a1[1] = { &no };
             call(c, "set_enabled", a1, 1);
             off++;
