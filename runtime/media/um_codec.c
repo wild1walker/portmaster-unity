@@ -51,6 +51,10 @@ typedef struct {
 } outbuf;
 
 static const um_dec_entry decoders[] = {
+    /* the handheld's hardware decoder through libpmhwdec, when the port ships it and the device has
+       one; a stream it does not take goes on to the software decoders below */
+    { UM_MIME_AVC, "pmhwdec.h264.decoder", um_pmhw_create, 1 },
+    { UM_MIME_HEVC, "pmhwdec.hevc.decoder", um_pmhw_create, 1 },
     { UM_MIME_VP8, "OMX.google.vp8.decoder", um_vpx_create, 1 },
     { UM_MIME_VP9, "OMX.google.vp9.decoder", um_vpx_create, 1 },
     { UM_MIME_AVC, "OMX.google.h264.decoder", um_h264_create, 1 },
@@ -203,8 +207,15 @@ static um_format *format_change(um_codec *c, um_format *nf)
     return um_format_copy(nf);
 }
 
-static int emit_video(void *cp, const uint8_t *y, int ys, const uint8_t *u, int us, const uint8_t *v, int vs,
-                      int width, int height, int64_t pts)
+/* one picture: I420 planes, or NV12 when v is NULL (u = the interleaved UV plane) */
+static void fill(um_frame *f, const uint8_t *y, int ys, const uint8_t *u, int us, const uint8_t *v, int vs)
+{
+    if (v) um_frame_fill(f, y, ys, u, us, v, vs);
+    else um_frame_fill_nv12(f, y, ys, u, us);
+}
+
+static int emit_picture(void *cp, const uint8_t *y, int ys, const uint8_t *u, int us, const uint8_t *v, int vs,
+                        int width, int height, int64_t pts)
 {
     um_codec *c = cp;
     um_frame *f = um_frame_get(width, height);
@@ -213,7 +224,7 @@ static int emit_video(void *cp, const uint8_t *y, int ys, const uint8_t *u, int 
     pthread_mutex_lock(&c->mu);
     int to_surface = c->surface != NULL;
     pthread_mutex_unlock(&c->mu);
-    if (to_surface) um_frame_fill(f, y, ys, u, us, v, vs);
+    if (to_surface) fill(f, y, ys, u, us, v, vs);
     pthread_mutex_lock(&c->mu);
     int32_t ow = -1, oh = -1;
     um_format *announce = NULL;
@@ -248,7 +259,7 @@ static int emit_video(void *cp, const uint8_t *y, int ys, const uint8_t *u, int 
         }
         uint8_t *keep = f->data;
         f->data = o->data;
-        um_frame_fill(f, y, ys, u, us, v, vs);
+        fill(f, y, ys, u, us, v, vs);
         f->data = keep;
         um_frame_put(f);
         f = NULL;
@@ -263,6 +274,18 @@ static int emit_video(void *cp, const uint8_t *y, int ys, const uint8_t *u, int 
     pthread_mutex_unlock(&c->mu);
     UM_TRACE("codec %s: frame %lld", c->ent->name, (long long)pts);
     return 0;
+}
+
+static int emit_video(void *cp, const uint8_t *y, int ys, const uint8_t *u, int us, const uint8_t *v, int vs,
+                      int width, int height, int64_t pts)
+{
+    return emit_picture(cp, y, ys, u, us, v, vs, width, height, pts);
+}
+
+static int emit_video_nv12(void *cp, const uint8_t *y, int ys, const uint8_t *uv, int uvs, int width, int height,
+                           int64_t pts)
+{
+    return emit_picture(cp, y, ys, uv, uvs, NULL, 0, width, height, pts);
 }
 
 static int emit_audio(void *cp, const int16_t *pcm, int frames, int channels, int rate, int64_t pts_in)
@@ -438,6 +461,7 @@ int um_codec_configure(um_codec *c, const um_format *f, um_surface *surface)
     }
     c->buffers_changed = 0;
     c->emit.video = emit_video;
+    c->emit.video_nv12 = emit_video_nv12;
     c->emit.audio = emit_audio;
     c->emit.codec = c;
     c->state = ST_CONFIGURED;
