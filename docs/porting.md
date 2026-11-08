@@ -166,6 +166,21 @@ game's heaviest scene:
 7. **The firmware sets the clocks.** Knulli runs the RG34XX-SP's CPU up to 1.5 GHz, muOS up to
    1.8: measure on the firmwares players use, and never change governors or clocks for the port.
 
+For a Unity 2017.4 Mono game (32-bit, the `android` route), what Enter the Gungeon's port showed is worth
+turning on or looking for (profiling.md has the numbers):
+- nothing to turn on for Mono's runtime: ua_host's `UA_MONO_INVOKE` and `UA_MONO_TLS` apply by themselves
+  where libmono is the checked 2017.4 armeabi-v7a build (`[mono] invoke cache: on` in the log), +1 - 1.5
+  fps in a fight of ~1,200 script callbacks a frame;
+- `UA_FUTEX_SPIN=50` in the port's `[runtime]` (exact, +0.5 fps there);
+- the frame recorder `UA_GL_REC=2` only where there is swap (it costs 20 - 30 MB; the port's
+  post_install hook checks `SwapTotal`); the GL thread (`UA_GL_REC=thread`) did not pay on the H700;
+- asmpatch's `unity-object-null` (Unity's null tests inline), and a look at the game's UI: a UI library
+  that rebuilds its whole mesh on any change (dfGUI, NGUI) can be rebuilding it every frame because a
+  control, often a hidden one, moves by float noise (Gungeon: 2 ms a frame; the port's `df-render-skip`);
+  a test build that prints a stack at the UI's invalidation finds the cause in one run;
+- the game's own quality options on 1 GB handhelds (Gungeon's Low lighting and shaders), gated on RAM
+  with a setup question to restore them.
+
 Four of ua_host's layers are on in every launcher the templates make (port.env or the environment wins;
 an empty value turns one off): `UA_JIT_WARM=1`, `UA_GL_ARENA=1`, `UA_GLES_POOL=1` and
 `UA_PRESENT_SYNC=end` (runtime.md): each leaves the picture and the play as they are, paid in Hollow

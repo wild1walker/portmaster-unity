@@ -714,6 +714,36 @@ recorder (`UA_GL_REC=2`, whose frame graph sinks this game's clear-only passes),
 against 71 - 77 MB, frames over 50 ms 8 / 7 against 6 / 5). The render thread is not what holds this
 game; its port keeps the recorder where there is swap (Knulli) and neither elsewhere.
 
+### A UI drawn again every frame for nothing (dfGUI in Enter the Gungeon, 2026-11-08)
+
+The same fight, per method (a test build timing every Update/LateUpdate with Stopwatch, instrumented, so
+the sums run high): the camera chain (`Pixelator.OnRenderImage`) 4.3 ms a frame, the game's physics 2.4,
+the HUD's manager 2.3 (its `Render` 2.1, on 93 % of the frames), the 247 HUD controls' Update and LateUpdate
+1.5, 351 sprite animators 0.9, the player 1.2. The HUD changes far less often than that: a test build that
+prints a stack at every 40th `dfControl.Invalidate`, then one that prints every moved control's name and
+position (`OnPositionChanged`), showed what marks it dirty every frame: two controls moving by less than
+1e-5 of a unit and back, about twice a frame each: the lines of a hidden credits panel (the panel's layout
+writes a position its position round trip reads back one float bit off, and the change re-runs the layout)
+and the ammo meter's bottom cap (set by the game's code, then by its own layout). Every frame the whole HUD
+was rebuilt to the same mesh.
+
+The port's patch `df-render-skip` (portmaster-gungeon, `patch/Program.cs`) counts a move as a move: when a
+manager's only reasons to draw are moves and every control it drew last time has the same
+`localToWorldMatrix` (16 floats, exactly) and the manager the same transform, the drawing is left out;
+what the drawing makes is the drawn controls' cached render data at their transforms, and that data only
+changes through an invalidation that is not a move. A check build of the patch draws anyway where it would
+not and compares a hash of what the mesh got (vertices, UVs, colours, triangles, submeshes, materials):
+muOS, the whole route: 393 drawings, 5,100 left out, all 5,100 the same. The fight, A B and B A:
+
+| | Knulli fight fps | muOS fight fps | whole route |
+|---|---|---|---|
+| the port's patches, `UA_MONO_INVOKE`/`UA_MONO_TLS` | 47.04, 46.63 | 46.27, 46.04 | Knulli 49.3, 49.2; muOS 47.6, 47.0 |
+| + `df-render-skip` and `df-upload-count` | 49.39, 49.86 | 49.26, 48.70 | Knulli 52.0, 52.0; muOS 50.9, 50.1 |
+
+About +2.4 - 3.2 fps (the main thread about 1.3 ms a frame shorter); the lowest available memory as before.
+A UI library that rebuilds its whole mesh on any change (dfGUI, NGUI) is worth this check in any game: a
+control that keeps moving by float noise, often a hidden one, costs the full rebuild every frame.
+
 ### Legacy graphics jobs on OpenGL ES (`UA_GFX_JOBS`)
 
 `AdjustThreadingModeForAPI(mode, renderer, flags)` (6000.0 and later) maps every graphics-jobs mode
