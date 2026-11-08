@@ -325,6 +325,13 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 10), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
 | `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
 
+Name a question's choices so they make sense together. A choice between a better and a cheaper
+version of something is **High** and **Low** (in brackets what each costs or gives: "High (as on
+PC)", "Low (shorter setup)"), never a tier without its pair (Medium and Low with no High) or two
+words that do not answer each other (Fast and Sharper). A third choice that picks by the handheld
+is "By this handheld". The values stay whatever the setup passes on (`medium`, `fast`); only the
+labels are what the player reads. The recommended choice, if there is one, comes first and says so.
+
 Keep the game's look and play: options that change the picture or the game play stay off unless
 a player asks for them (a question with the vanilla choice as its default). One exception, for
 handhelds with 1 GB of RAM: the `quality` step's handheld profile ([quality.md](quality.md)) makes
@@ -335,8 +342,8 @@ picture on bigger devices. `port new` adds the question that lets the player cho
 ```toml
 [[questions]]
 id = "PICTURE"
-question = "Picture: lighter on handhelds with 1 GB of RAM (faster, the same game), or always as on PC?"
-options = [["auto", "By this handheld (recommended)"], ["handheld", "Lighter (faster)"], ["full", "As on PC"]]
+question = "Picture quality: Low on handhelds with 1 GB of RAM (faster, the same game), or always High (as on PC)?"
+options = [["auto", "By this handheld (recommended)"], ["handheld", "Low (faster)"], ["full", "High (as on PC)"]]
 default = "auto"
 convert_set = "quality.profile"
 ```
@@ -355,8 +362,8 @@ sprites of one batch overlap, or with Mali's 16-bit fetched colour, the blend di
 ```toml
 [[questions]]
 id = "BLEND_FETCH"
-question = "Blend-mode effects (light, glow): exactly as on PC, or faster with slightly different blending?"
-options = [["false", "As on PC"], ["always", "Faster (slightly different blending)"]]
+question = "Blend-mode effects (light, glow): High (exactly as on PC), or Low (faster, slightly different blending)?"
+options = [["false", "High (as on PC)"], ["always", "Low (faster, slightly different blending)"]]
 default = "false"
 convert_set = "shaders.grab_fetch"
 ```

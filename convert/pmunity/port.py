@@ -1353,10 +1353,10 @@ def check_android(rep, inputs, log=None):
 DEFAULT_STEPS = ('shaders', 'settings', 'audio', 'quality')
 # the handheld quality profile (quality.py, docs/quality.md): the setup takes it by the handheld's RAM
 # (a cheaper picture on 1 GB devices, the game's own elsewhere); the player can choose either
-QUALITY_QUESTION = {'id': 'PICTURE', 'question': 'Picture: lighter on handhelds with 1 GB of RAM (faster, the same game), '
-                                                 'or always as on PC?',
-                    'options': [['auto', 'By this handheld (recommended)'], ['handheld', 'Lighter (faster)'],
-                                ['full', 'As on PC']],
+QUALITY_QUESTION = {'id': 'PICTURE', 'question': 'Picture quality: Low on handhelds with 1 GB of RAM (faster, the same '
+                                                 'game), or always High (as on PC)?',
+                    'options': [['auto', 'By this handheld (recommended)'], ['handheld', 'Low (faster)'],
+                                ['full', 'High (as on PC)']],
                     'default': 'auto', 'convert_set': 'quality.profile'}
 
 
@@ -1940,8 +1940,8 @@ CONFIG_DOC = {
 QUESTIONS_DOC = """# Questions PortMaster's patcher asks before the setup (each answer is kept for later runs), e.g.:
 # [[questions]]
 # id = "TEXTURE_QUALITY"
-# question = "Texture quality? Medium is what this port is tested with."
-# options = [["medium", "Medium (recommended)"], ["fast", "Fast (shorter setup)"]]
+# question = "Texture quality? High is what this port is tested with."
+# options = [["medium", "High (recommended)"], ["fast", "Low (shorter setup)"]]
 # default = "medium"
 # convert_set = "textures.quality"        # the answer -> pmunity convert --set textures.quality=<answer>
 # # env = "UA_POINTER"                    # or: the answer -> the game's environment
