@@ -129,6 +129,8 @@ int       um_frame_pool_count(void);             /* pictures kept for reuse (tes
 /* copy planes into a packed frame (odd sizes and padding: the last row / column repeated) */
 void      um_frame_fill(um_frame *f, const uint8_t *y, int ys, const uint8_t *u, int us,
                         const uint8_t *v, int vs);
+/* the same from NV12 (one interleaved UV plane), as hardware decoders give it */
+void      um_frame_fill_nv12(um_frame *f, const uint8_t *y, int ys, const uint8_t *uv, int uvs);
 
 typedef struct um_surface um_surface;
 um_surface *um_surface_new(unsigned gl_texture);     /* SurfaceTexture(texName); refcount 1 */

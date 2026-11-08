@@ -284,3 +284,23 @@ void um_frame_fill(um_frame *f, const uint8_t *y, int ys, const uint8_t *u, int 
         d += pw;
     }
 }
+
+void um_frame_fill_nv12(um_frame *f, const uint8_t *y, int ys, const uint8_t *uv, int uvs)
+{
+    int w = f->width, h = f->height, pw = f->pw, ph = f->ph, cw = pw / 2, ch = ph / 2;
+    int sw = (w + 1) / 2, sh = (h + 1) / 2;
+    uint8_t *d = f->data;
+    for (int r = 0; r < ph; r++) {
+        const uint8_t *s = y + (size_t)(r < h ? r : h - 1) * ys;
+        memcpy(d, s, w);
+        if (pw > w) memset(d + w, d[w - 1], pw - w);
+        d += pw;
+    }
+    for (int r = 0; r < ch; r++) {
+        const uint8_t *s = uv + (size_t)(r < sh ? r : sh - 1) * uvs;
+        uint8_t *u = d, *v = d + cw;
+        for (int x = 0; x < sw; x++) { u[x] = s[2 * x]; v[x] = s[2 * x + 1]; }
+        if (cw > sw) { memset(u + sw, u[sw - 1], cw - sw); memset(v + sw, v[sw - 1], cw - sw); }
+        d += pw;
+    }
+}

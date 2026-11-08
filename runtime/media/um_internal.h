@@ -64,6 +64,9 @@ typedef struct {
                  int width, int height, int64_t pts_us);
     /* audio: interleaved 16-bit PCM */
     int (*audio)(void *codec, const int16_t *pcm, int frames, int channels, int rate, int64_t pts_us);
+    /* video as NV12 (Y + interleaved UV), from hardware decoders */
+    int (*video_nv12)(void *codec, const uint8_t *y, int ys, const uint8_t *uv, int uvs, int width, int height,
+                      int64_t pts_us);
     void *codec;
 } um_emit;
 
@@ -90,6 +93,7 @@ um_dec *um_vorbis_create(const char *mime);
 um_dec *um_opus_create(const char *mime);
 um_dec *um_h264_create(const char *mime);
 um_dec *um_ffmpeg_create(const char *mime);
+um_dec *um_pmhw_create(const char *mime);            /* libpmhwdec.so.1 when the port ships it (um_pmhw.c) */
 um_dec *um_silent_create(const char *mime);          /* AAC / MP3 without a decoder: silence */
 int     um_ffmpeg_available(void);
 
