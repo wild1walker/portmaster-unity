@@ -8,20 +8,20 @@
 // 30 - 70 us whatever it draws (docs/profiling.md, "The render thread's draws"); a held frame
 // (glrec.c) shows which neighbours could be one.
 //
-// The shaders. While this is on, the source Unity compiles is rewritten (GLSL ES 3.00 and later):
-//   vertex   an attribute `ua_v` at location 15, 0 (its default) for every draw Unity makes; in a
-//            merged draw 1 + the draw's index in the batch + 16 x its texture. Each use of a
-//            renderer uniform (UA_GL_MERGE_UNIFORMS: the object's matrices, its sprite colour and
-//            flip) becomes `(ua_m ? ua_pd_<name>[draw] : <name>)`: the value
+// The shaders. The game's programs stay as the game compiles them. Each gets a twin, linked from
+// rewritten sources (GLSL ES 3.00 and later), that only merged draws use:
+//   vertex   an attribute `ua_v` at location 15: 1 + the draw's index in the batch + 16 x its
+//            texture. Each use of a renderer uniform (UA_GL_MERGE_UNIFORMS: the object's matrices,
+//            its sprite colour and flip) becomes `(ua_m ? ua_pd_<name>[draw] : <name>)`: the value
 //            itself, selected, never computed; the batch's values are in the arrays. A flat int
 //            `ua_sel` carries the texture to the fragment shader.
 //   fragment with a `uniform sampler2D _MainTex` used only as `texture(_MainTex, uv)`: three more
 //            samplers (`layout(binding = 31, 30, 29)`) and `texture(_MainTex, uv)` read through a
 //            function that samples the one ua_sel names. ua_sel is the same for the three vertices of
-//            each triangle and so for every fragment of a quad: implicit derivatives as before. Unity
-//            gives every sampler it finds a unit, these three too: a merged draw sets them back first.
-// Every draw Unity makes reads ua_v = 0: the uniforms and _MainTex, the program's own path. A program
-// whose rewritten shaders do not link is linked again from the game's own sources.
+//            each triangle and so for every fragment of a quad: implicit derivatives as before.
+// The game's draws never see the twins (a program the twin does not link for is not merged); before a
+// merged draw the twin gets the game's uniforms the game changed since the last one (the replay
+// follows the game's uniform calls and reads them back from the game's program).
 //
 // The draws. In each held frame a scan follows the state its calls set (and asks the driver what the
 // frame did not set: the state at its start) and finds runs of draws with nothing between them but
@@ -36,14 +36,16 @@
 //
 //   UA_GL_MERGE=1              on (needs UA_GL_REC=1, thread or auto recording; off by default)
 //   UA_GL_MERGE_MAX=<n>        draws in a run, 2 - 8 (default 8)
+//   UA_GL_MERGE_RUNS=0         a measurement: the twins made, the frames replayed as they are (no scan)
+//   UA_GL_MERGE_REWRITE=vs|fs  a measurement: only these shaders rewritten (default both)
 //   UA_GL_MERGE_UNIFORMS=<names>  the renderer uniforms (default below)
 //   UA_GL_MERGE_VERBOSE=<n>[@<m>]  <n> frames' runs and what ended each (after the first <m>), logged
 //   UA_GL_MERGE=check          as 1, and in every UA_GL_MERGE_CHECK_EVERY'th (30) frame each run that writes no
 //                              depth or stencil is made twice from the same picture: merged, and as the game's
-//                              own draws with programs linked from the game's own sources; the two compared
-//                              byte for byte ("[glmerge] check: ..."), the game's kept
-// Unity's program binary cache is off while this is on (glhooks.c): it would hand back programs whose
-// sources this has not seen.
+//                              own draws with the game's program; the two compared byte for byte
+//                              ("[glmerge] check: ..."), the game's kept
+// Unity's program binary cache is off while this is on (glrec.c): a program it loads from its cache has no
+// sources here, so no twin.
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <stddef.h>
@@ -66,7 +68,7 @@
 #define NTEX 4                      // _MainTex and three more
 static const int g_xunit[NTEX] = { -1, 31, 30, 29 };
 
-static int g_on, g_max = MAXRUN, g_verbose, g_verbose_skip, g_check, g_check_every = 30, g_sample_all;
+static int g_on, g_max = MAXRUN, g_verbose, g_verbose_skip, g_check, g_check_every = 30, g_sample_all, g_runs_off, g_rw_vs = 1, g_rw_fs = 1;
 static const char *g_names_default =
     "hlslcc_mtx4x4unity_ObjectToWorld,hlslcc_mtx4x4unity_WorldToObject,_RendererColor,_Flip";
 static char g_names[1024];
@@ -92,6 +94,8 @@ int glmerge_init(void)
     if (!g_on) return 0;
     g_check = !strcmp(e, "check");
     g_sample_all = (e = getenv("UA_GL_MERGE_SAMPLE")) && !strcmp(e, "all");
+    g_runs_off = (e = getenv("UA_GL_MERGE_RUNS")) && !strcmp(e, "0");
+    if ((e = getenv("UA_GL_MERGE_REWRITE")) && *e) { g_rw_vs = strstr(e, "vs") != NULL; g_rw_fs = strstr(e, "fs") != NULL; }
     if ((e = getenv("UA_GL_MERGE_CHECK_EVERY")) && atoi(e) > 0) g_check_every = atoi(e);
     if ((e = getenv("UA_GL_MERGE_MAX")) && atoi(e) >= 2 && atoi(e) <= MAXRUN) g_max = atoi(e);
     if ((e = getenv("UA_GL_MERGE_VERBOSE"))) { g_verbose = atoi(e); const char *at = strchr(e, '@'); if (at) g_verbose_skip = atoi(at + 1); }
@@ -186,7 +190,7 @@ static int find_udecl(const char *s, const char *name, udecl *d)
         d->comps = !strcmp(ty, "float") ? 1 : !strcmp(ty, "vec2") ? 2 : !strcmp(ty, "vec3") ? 3 : !strcmp(ty, "vec4") ? 4 : 0;
         if (!d->comps) return 0;
         const char *br = strchr(line, '[');
-        if (br) { if (sscanf(br, "[%d]", &n) != 1 || n <= 0 || n > 8 || d->comps != 4) return 0; }
+        if (br) { if (sscanf(br, "[%d]", &n) != 1 || n <= 0 || n > 4 || d->comps != 4) return 0; }
         d->n = n; d->at = ls; d->end = le + 1;
         return 1;
     }
@@ -319,35 +323,23 @@ static char *rewrite_fs(const char *src)
 }
 
 // ======================================================================= shaders and programs
-// each shader's own source as the game gave it (to link again from; what a fragment shader reads)
-typedef struct { GLuint sh; unsigned char used, vs, rewritten; char *orig; } shd_t;
-#define NSHD 1024
-static shd_t g_shd[NSHD];
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-static shd_t *shd(GLuint s, int add)
-{
-    unsigned i = (s * 2654435761u) % NSHD;
-    for (unsigned k = 0; k < NSHD; k++, i = (i + 1) % NSHD) {
-        if (g_shd[i].used && g_shd[i].sh == s) return &g_shd[i];
-        if (!g_shd[i].used) {
-            if (!add) return NULL;
-            g_shd[i] = (shd_t){ .sh = s, .used = 1 };
-            return &g_shd[i];
-        }
-    }
-    return NULL;
-}
-
-#define PD_MAX 16
+#define PD_MAX 8
+#define PD_LOCS 256                         // (uniform locations the scan follows by number)
 typedef struct {
     GLuint name; unsigned char used, ok, ntex;
-    GLint loc_main;                        // _MainTex
+    GLuint twin;                           // the program from the rewritten sources, for merged draws only
+    GLint loc_main;                        // the game's program's _MainTex
     int nsmp; struct { GLint loc; int unit, tgt; } smp[16];    // its samplers (units: their uniforms' values; target slot)
-    int npd; struct { GLint loc[8]; GLint arr; int n, comps, fs; char name[160]; } pd[PD_MAX];   // renderer uniforms
+    int npd; struct { GLint loc[4]; GLint arr; int n, comps, fs; char name[160]; } pd[PD_MAX];   // renderer uniforms: the game's
+                                           // program's locations, the twin's array
     GLuint vs, fs;                         // attached (the last of each kind)
-    GLuint ref;                            // (UA_GL_MERGE=check: the program linked from the game's own sources)
-    GLint xloc[NTEX], xcur[NTEX];          // the extra samplers' locations and units (Unity gives every sampler it finds a unit)
     unsigned uver;                         // (the scan: bumped by each change of a uniform that is not a renderer one)
+    unsigned char pdmap[PD_LOCS];          // a location -> 1 + (renderer uniform << 3 | element), 0 for any other
+    float pdval[PD_MAX][4][4];             // their values: every uniform call of the render thread passes the scan,
+    unsigned char pdknown[PD_MAX][4];      // the rest asked once (a link resets them)
+    float (*uval)[4]; unsigned char *uknown;   // every other uniform's value by location, the same way
+    GLint *tloc; GLenum *utype;            // each location's twin location and type (to copy it there)
+    uint32_t dirty[PD_LOCS / 32];          // set by the game since the twin last had them (the replay's view)
 } prog_t;
 #define NPRG 1024
 static prog_t g_prg[NPRG];
@@ -365,7 +357,24 @@ static prog_t *prg(GLuint p, int add)
     return NULL;
 }
 
-// glShaderSource: the rewritten source to compile instead (malloc'd), or NULL for the game's own
+// glShaderSource: the game's source compiled as it is; the rewritten one kept for the program's twin
+typedef struct { GLuint sh; unsigned char used, vs; char *orig, *rw; } shd_t;
+#define NSHD 1024
+static shd_t g_shd[NSHD];
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static shd_t *shd(GLuint s, int add)
+{
+    unsigned i = (s * 2654435761u) % NSHD;
+    for (unsigned k = 0; k < NSHD; k++, i = (i + 1) % NSHD) {
+        if (g_shd[i].used && g_shd[i].sh == s) return &g_shd[i];
+        if (!g_shd[i].used) {
+            if (!add) return NULL;
+            g_shd[i] = (shd_t){ .sh = s, .used = 1 };
+            return &g_shd[i];
+        }
+    }
+    return NULL;
+}
 char *glmerge_source(GLuint sh, GLsizei count, const GLchar *const *str, const GLint *len)
 {
     if (!g_on || !str || !g_next) return NULL;
@@ -381,15 +390,15 @@ char *glmerge_source(GLuint sh, GLsizei count, const GLchar *const *str, const G
     *o = 0;
     GLint type = 0;
     N(glGetShaderiv)(sh, GL_SHADER_TYPE, &type);
-    char *r = type == GL_VERTEX_SHADER ? rewrite_vs(src) : type == GL_FRAGMENT_SHADER ? rewrite_fs(src) : NULL;
+    char *r = type == GL_VERTEX_SHADER ? (g_rw_vs ? rewrite_vs(src) : NULL) : type == GL_FRAGMENT_SHADER ? (g_rw_fs ? rewrite_fs(src) : NULL) : NULL;
     pthread_mutex_lock(&g_lock);
     shd_t *s = shd(sh, 1);
-    if (s) { free(s->orig); s->vs = type == GL_VERTEX_SHADER; s->rewritten = r != NULL; s->orig = src; }
-    else free(src);
+    if (s) { free(s->orig); free(s->rw); s->vs = type == GL_VERTEX_SHADER; s->orig = src; s->rw = r; }
+    else { free(src); free(r); }
     pthread_mutex_unlock(&g_lock);
     if (type == GL_VERTEX_SHADER) { if (r) g_rewritten_vs++; else g_skipped_vs++; }
     else if (type == GL_FRAGMENT_SHADER) { if (r) g_rewritten_fs++; else g_skipped_fs++; }
-    return r;
+    return NULL;
 }
 void glmerge_attach(GLuint prog, GLuint sh)
 {
@@ -421,69 +430,6 @@ static int sampler_type(GLenum t)
            t == GL_UNSIGNED_INT_SAMPLER_CUBE || t == GL_UNSIGNED_INT_SAMPLER_2D_ARRAY || t == GL_SAMPLER_EXTERNAL_OES ||
            t == GL_SAMPLER_2D_MULTISAMPLE || t == GL_SAMPLER_BUFFER;
 }
-// what a linked program offers the scan: ua_v at its location, the extra samplers, the renderer uniforms
-static void introspect(prog_t *p)
-{
-    GLuint g = p->name;
-    p->ok = 0; p->ntex = 1; p->nsmp = 0; p->npd = 0; p->loc_main = -1;
-    for (int t = 0; t < NTEX; t++) { p->xloc[t] = -1; p->xcur[t] = -1; }
-    GLint ok = 0;
-    N(glGetProgramiv)(g, GL_LINK_STATUS, &ok);
-    if (!ok || N(glGetAttribLocation)(g, "ua_v") != SEL_LOC) return;
-    GLint nu = 0;
-    N(glGetProgramiv)(g, GL_ACTIVE_UNIFORMS, &nu);
-    shd_t *fs = p->fs ? shd(p->fs, 0) : NULL;
-    for (GLint u = 0; u < nu; u++) {
-        char name[160]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
-        N(glGetActiveUniform)(g, (GLuint)u, sizeof name - 8, &len, &size, &type, name);
-        if (len > 3 && !strcmp(name + len - 3, "[0]")) name[len - 3] = 0;
-        if (sampler_type(type)) {
-            if (!strncmp(name, "ua_t", 4)) {
-                if (name[4] >= '1' && name[4] <= '3' && name[4] - '0' + 1 > p->ntex) p->ntex = (unsigned char)(name[4] - '0' + 1);
-                if (name[4] >= '1' && name[4] <= '3') {
-                    int t = name[4] - '0';
-                    p->xloc[t] = N(glGetUniformLocation)(g, name); p->xcur[t] = -1;
-                    if (p->xloc[t] >= 0) N(glGetUniformiv)(g, p->xloc[t], &p->xcur[t]);
-                }
-                continue;
-            }
-            int slot = sampler_slot(type);
-            if (size != 1 || p->nsmp >= 16 || slot < 0) return;   // (sampler arrays, external and buffer textures: not followed)
-            GLint loc = N(glGetUniformLocation)(g, name), unit = 0;
-            if (loc < 0) continue;
-            N(glGetUniformiv)(g, loc, &unit);
-            if (!strcmp(name, "_MainTex") && slot == 0) p->loc_main = loc;
-            p->smp[p->nsmp].loc = loc; p->smp[p->nsmp].unit = unit; p->smp[p->nsmp].tgt = slot; p->nsmp++;
-            continue;
-        }
-        if (strncmp(name, "ua_pd_", 6) || p->npd >= PD_MAX) continue;
-        const char *orig = name + 6;
-        int per = size / MAXRUN;
-        int comps = type == GL_FLOAT ? 1 : type == GL_FLOAT_VEC2 ? 2 : type == GL_FLOAT_VEC3 ? 3 : type == GL_FLOAT_VEC4 ? 4 : 0;
-        if (!comps || per < 1 || per > 8 || size != per * MAXRUN) return;
-        typeof(p->pd[0]) *d = &p->pd[p->npd];
-        memset(d, 0, sizeof *d);
-        d->n = per; d->comps = comps;
-        snprintf(d->name, sizeof d->name, "%s", orig);
-        d->arr = N(glGetUniformLocation)(g, name);
-        int all = d->arr >= 0;
-        for (int k = 0; k < per && all; k++) {
-            char el[200];
-            if (per > 1) snprintf(el, sizeof el, "%s[%d]", orig, k); else snprintf(el, sizeof el, "%s", orig);
-            d->loc[k] = N(glGetUniformLocation)(g, el);
-            all = d->loc[k] >= 0;
-        }
-        if (!all) return;
-        // a renderer uniform the fragment shader reads too: must be the same for the whole run
-        d->fs = !fs || !fs->orig || word(fs->orig, orig) != NULL;
-        p->npd++;
-    }
-    if (p->ntex > 1 && p->loc_main < 0) p->ntex = 1;
-    p->ok = 1;
-    g_progs_ok++;
-}
-
-// UA_GL_MERGE=check: the program as the game's own sources make it, its attributes where the game's are
 static GLuint compile_one(GLenum type, const char *src)
 {
     GLuint sh = N(glCreateShader)(type);
@@ -495,56 +441,124 @@ static GLuint compile_one(GLenum type, const char *src)
     if (!ok) { N(glDeleteShader)(sh); return 0; }
     return sh;
 }
-static void make_ref(prog_t *p)
+// the twin: the rewritten vertex shader with the rewritten fragment shader (else the game's), the
+// game's attribute locations
+static GLuint link_twin(GLuint game, const char *vsrc, const char *fsrc)
 {
-    shd_t *v = p->vs ? shd(p->vs, 0) : NULL, *f = p->fs ? shd(p->fs, 0) : NULL;
-    if (!v || !f || !v->orig || !f->orig) return;
-    GLuint vs = compile_one(GL_VERTEX_SHADER, v->orig), fs = compile_one(GL_FRAGMENT_SHADER, f->orig);
-    if (!vs || !fs) { if (vs) N(glDeleteShader)(vs); if (fs) N(glDeleteShader)(fs); return; }
+    GLuint vs = compile_one(GL_VERTEX_SHADER, vsrc), fs = compile_one(GL_FRAGMENT_SHADER, fsrc);
+    if (!vs || !fs) { if (vs) N(glDeleteShader)(vs); if (fs) N(glDeleteShader)(fs); return 0; }
     GLuint r = N(glCreateProgram)();
     N(glAttachShader)(r, vs); N(glAttachShader)(r, fs);
     GLint na = 0;
-    N(glGetProgramiv)(p->name, GL_ACTIVE_ATTRIBUTES, &na);
+    N(glGetProgramiv)(game, GL_ACTIVE_ATTRIBUTES, &na);
     for (GLint i = 0; i < na; i++) {
         char name[128]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
-        N(glGetActiveAttrib)(p->name, (GLuint)i, sizeof name, &len, &size, &type, name);
-        GLint loc = N(glGetAttribLocation)(p->name, name);
-        if (loc >= 0 && strcmp(name, "ua_v")) N(glBindAttribLocation)(r, (GLuint)loc, name);
+        N(glGetActiveAttrib)(game, (GLuint)i, sizeof name, &len, &size, &type, name);
+        GLint loc = N(glGetAttribLocation)(game, name);
+        if (loc >= 0) N(glBindAttribLocation)(r, (GLuint)loc, name);
     }
     N(glLinkProgram)(r);
     GLint ok = 0;
     N(glGetProgramiv)(r, GL_LINK_STATUS, &ok);
     N(glDetachShader)(r, vs); N(glDetachShader)(r, fs); N(glDeleteShader)(vs); N(glDeleteShader)(fs);
-    if (!ok) { N(glDeleteProgram)(r); return; }
-    p->ref = r;
+    if (!ok || N(glGetAttribLocation)(r, "ua_v") != SEL_LOC) { N(glDeleteProgram)(r); return 0; }
+    return r;
+}
+// what the scan and the merged draws need: the game's samplers and renderer uniforms, the twin's arrays,
+// and where each of the game's uniforms is in the twin
+static void introspect(prog_t *p)
+{
+    GLuint g = p->name, t = p->twin;
+    p->ok = 0; p->ntex = 1; p->nsmp = 0; p->npd = 0; p->loc_main = -1;
+    memset(p->pdmap, 0, sizeof p->pdmap); memset(p->pdknown, 0, sizeof p->pdknown);
+    if (!p->uval) { p->uval = malloc(sizeof *p->uval * PD_LOCS); p->uknown = malloc(PD_LOCS); p->tloc = malloc(sizeof(GLint) * PD_LOCS); p->utype = malloc(sizeof(GLenum) * PD_LOCS); }
+    if (!p->uval || !p->uknown || !p->tloc || !p->utype) return;
+    memset(p->uknown, 0, PD_LOCS);
+    for (int i = 0; i < PD_LOCS; i++) { p->tloc[i] = -1; p->utype[i] = 0; }
+    memset(p->dirty, 0xff, sizeof p->dirty);
+    if (!t) return;
+    GLint nb = 0;
+    N(glGetProgramiv)(g, GL_ACTIVE_UNIFORM_BLOCKS, &nb);
+    if (nb) return;                                               // (uniform blocks: their bindings are not copied)
+    shd_t *fs = p->fs ? shd(p->fs, 0) : NULL;
+    // the twin's extra samplers and renderer arrays
+    GLint nu = 0;
+    N(glGetProgramiv)(t, GL_ACTIVE_UNIFORMS, &nu);
+    for (GLint u = 0; u < nu; u++) {
+        char name[160]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
+        N(glGetActiveUniform)(t, (GLuint)u, sizeof name - 8, &len, &size, &type, name);
+        if (len > 3 && !strcmp(name + len - 3, "[0]")) name[len - 3] = 0;
+        if (!strncmp(name, "ua_t", 4) && sampler_type(type)) {
+            if (name[4] >= '1' && name[4] <= '3' && name[4] - '0' + 1 > p->ntex) p->ntex = (unsigned char)(name[4] - '0' + 1);
+            continue;
+        }
+        if (strncmp(name, "ua_pd_", 6) || p->npd >= PD_MAX) continue;
+        const char *orig = name + 6;
+        int per = size / MAXRUN;
+        int comps = type == GL_FLOAT ? 1 : type == GL_FLOAT_VEC2 ? 2 : type == GL_FLOAT_VEC3 ? 3 : type == GL_FLOAT_VEC4 ? 4 : 0;
+        if (!comps || per < 1 || per > 4 || size != per * MAXRUN) return;
+        typeof(p->pd[0]) *d = &p->pd[p->npd];
+        memset(d, 0, sizeof *d);
+        d->n = per; d->comps = comps;
+        snprintf(d->name, sizeof d->name, "%s", orig);
+        d->arr = N(glGetUniformLocation)(t, name);
+        int all = d->arr >= 0;
+        for (int k = 0; k < per && all; k++) {
+            char el[200];
+            if (per > 1) snprintf(el, sizeof el, "%s[%d]", orig, k); else snprintf(el, sizeof el, "%s", orig);
+            d->loc[k] = N(glGetUniformLocation)(g, el);           // (the game's program's)
+            all = d->loc[k] >= 0 && d->loc[k] < PD_LOCS;
+        }
+        if (!all) continue;                                       // (one the game's program does not use)
+        for (int k = 0; k < per; k++) p->pdmap[d->loc[k]] = (unsigned char)(1 + (p->npd << 3 | k));
+        // a renderer uniform the fragment shader reads too: must be the same for the whole run
+        d->fs = !fs || !fs->orig || word(fs->orig, orig) != NULL;
+        p->npd++;
+    }
+    // the game's uniforms: samplers, and where each is in the twin
+    N(glGetProgramiv)(g, GL_ACTIVE_UNIFORMS, &nu);
+    for (GLint u = 0; u < nu; u++) {
+        char name[160]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
+        N(glGetActiveUniform)(g, (GLuint)u, sizeof name - 8, &len, &size, &type, name);
+        if (len > 3 && !strcmp(name + len - 3, "[0]")) name[len - 3] = 0;
+        for (GLint e = 0; e < size; e++) {
+            char el[180];
+            if (size > 1) snprintf(el, sizeof el, "%s[%d]", name, e); else snprintf(el, sizeof el, "%s", name);
+            GLint loc = N(glGetUniformLocation)(g, el);
+            if (loc < 0) continue;
+            if (loc >= PD_LOCS) return;                           // (a location the tables do not reach)
+            p->tloc[loc] = N(glGetUniformLocation)(t, el); p->utype[loc] = type;
+            if (sampler_type(type)) {
+                int slot = sampler_slot(type);
+                if (size != 1 || p->nsmp >= 16 || slot < 0) return;   // (sampler arrays, external and buffer textures: not followed)
+                GLint unit = 0;
+                N(glGetUniformiv)(g, loc, &unit);
+                if (!strcmp(name, "_MainTex") && slot == 0) p->loc_main = loc;
+                p->smp[p->nsmp].loc = loc; p->smp[p->nsmp].unit = unit; p->smp[p->nsmp].tgt = slot; p->nsmp++;
+            }
+        }
+    }
+    if (p->ntex > 1 && p->loc_main < 0) p->ntex = 1;
+    p->ok = 1;
+    g_progs_ok++;
 }
 
-// after glLinkProgram (the render thread, with the context): linked again from the game's sources if
-// the rewritten ones do not link; then what the scan needs to know
+// after glLinkProgram (the render thread, with the context): the game's program as the game linked it, and its twin
 void glmerge_linked(GLuint prog)
 {
     if (!g_on || !g_next) return;
     pthread_mutex_lock(&g_lock);
     prog_t *p = prg(prog, 1);
     if (!p) { pthread_mutex_unlock(&g_lock); return; }
+    if (p->twin) { N(glDeleteProgram)(p->twin); p->twin = 0; }
     GLint ok = 0;
     N(glGetProgramiv)(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        int again = 0;
-        GLuint sh[2] = { p->vs, p->fs };
-        for (int i = 0; i < 2; i++) {
-            shd_t *s = sh[i] ? shd(sh[i], 0) : NULL;
-            if (!s || !s->rewritten || !s->orig) continue;
-            const GLchar *str[1] = { s->orig };
-            N(glShaderSource)(sh[i], 1, str, NULL);
-            N(glCompileShader)(sh[i]);
-            s->rewritten = 0;
-            again = 1;
-        }
-        if (again) { N(glLinkProgram)(prog); g_relinks++; }
+    shd_t *v = p->vs ? shd(p->vs, 0) : NULL, *f = p->fs ? shd(p->fs, 0) : NULL;
+    if (ok && v && v->rw && f && f->orig) {
+        p->twin = f->rw ? link_twin(prog, v->rw, f->rw) : 0;
+        if (!p->twin) { if (f->rw) g_relinks++; p->twin = link_twin(prog, v->rw, f->orig); }   // (the fragment shader as the game's)
     }
     introspect(p);
-    if (g_check && p->ok && !p->ref) make_ref(p);
     pthread_mutex_unlock(&g_lock);
 }
 void glmerge_binary(GLuint prog)
@@ -552,7 +566,7 @@ void glmerge_binary(GLuint prog)
     if (!g_on || !g_next) return;
     pthread_mutex_lock(&g_lock);
     prog_t *p = prg(prog, 1);
-    if (p) introspect(p);
+    if (p) { if (p->twin) { N(glDeleteProgram)(p->twin); p->twin = 0; } introspect(p); }   // (no sources: no twin)
     pthread_mutex_unlock(&g_lock);
 }
 void glmerge_deleted(GLuint prog)
@@ -560,16 +574,14 @@ void glmerge_deleted(GLuint prog)
     if (!g_on) return;
     pthread_mutex_lock(&g_lock);
     prog_t *p = prg(prog, 0);
-    if (p) p->ok = 0;
+    if (p) { p->ok = 0; if (p->twin && g_next) { N(glDeleteProgram)(p->twin); p->twin = 0; } }
     pthread_mutex_unlock(&g_lock);
 }
 // a sampler uniform set (glUniform1i on the bound program): the unit the scan reads
 static void prog_sampler_set(prog_t *p, GLint loc, GLsizei count, const GLint *v)
 {
-    for (GLsizei c = 0; c < count; c++) {
+    for (GLsizei c = 0; c < count; c++)
         for (int i = 0; i < p->nsmp; i++) if (p->smp[i].loc == loc + c) p->smp[i].unit = v[c];
-        for (int t = 1; t < NTEX; t++) if (p->xloc[t] >= 0 && p->xloc[t] == loc + c) p->xcur[t] = v[c];
-    }
 }
 
 // ======================================================================= the scan's state
@@ -760,53 +772,47 @@ static const unsigned char *wr_find(GLuint buf, size_t off, size_t len)
 typedef struct { uint32_t id; GLuint buf; size_t off, len; } mapr_t;
 static mapr_t g_maps[16]; static int g_nmaps;
 
-// ---- uniform values as the frame set them (the program's at its start: asked)
-typedef struct { GLuint prog; GLint loc; unsigned gen; unsigned char known; float v[4]; } uval_t;
-#define NUV 2048
-static uval_t g_uv[NUV]; static int g_nuv;
-static unsigned g_ugen = 1;                // (an entry of another frame's generation is free)
-static uval_t *uv(GLuint prog, GLint loc, int add)
+// ---- uniforms: the renderer ones' values (in the program's entry); any other change bumps the program's version
+static prog_t *g_lastp;                    // (the last program a uniform call named)
+static prog_t *prg_fast(GLuint prog)
 {
-    unsigned i = ((prog * 2654435761u) ^ ((unsigned)loc * 40503u)) % NUV;
-    for (unsigned k = 0; k < NUV; k++, i = (i + 1) % NUV) {
-        if (g_uv[i].gen == g_ugen && g_uv[i].prog == prog && g_uv[i].loc == loc) return &g_uv[i];
-        if (g_uv[i].gen != g_ugen) {
-            if (!add || g_nuv > NUV * 3 / 4) return NULL;
-            g_uv[i] = (uval_t){ .prog = prog, .loc = loc, .gen = g_ugen };
-            g_nuv++;
-            return &g_uv[i];
-        }
-    }
-    return NULL;
+    if (g_lastp && g_lastp->used && g_lastp->name == prog) return g_lastp;
+    prog_t *p = prg(prog, 0);
+    if (p) g_lastp = p;
+    return p;
 }
-static int pd_slot(prog_t *p, GLint loc, int *pi, int *k)
-{
-    for (int i = 0; i < p->npd; i++) for (int j = 0; j < p->pd[i].n; j++) if (p->pd[i].loc[j] == loc) { *pi = i; *k = j; return 1; }
-    return 0;
-}
-// a uniform call (float values): its values noted; a change of anything but a renderer uniform bumps g_uver
 static void uni_set(GLuint prog, GLint loc, GLsizei count, int comps, const float *v)
 {
     if (!prog || loc < 0) return;
-    prog_t *p = prg(prog, 0);
+    prog_t *p = prg_fast(prog);
     if (!p || !p->ok) return;
+    int bumped = 0;
     for (GLsizei c = 0; c < count; c++) {
-        int pi, k;
-        int rend = pd_slot(p, loc + c, &pi, &k) && !p->pd[pi].fs;
-        uval_t *u = uv(prog, loc + c, 1);
-        const float *x = v + c * comps;
-        if (!u) { if (!rend) p->uver++; continue; }
-        if (!rend && (!u->known || memcmp(u->v, x, (size_t)comps * 4))) p->uver++;
-        memset(u->v, 0, sizeof u->v);
-        memcpy(u->v, x, (size_t)comps * 4); u->known = 1;
+        GLint l = loc + c;
+        unsigned m = l < PD_LOCS ? p->pdmap[l] : 0;
+        if (!m) {
+            // (the same value again changes nothing; one the scan has not seen is asked once)
+            if (bumped) continue;
+            if (l >= PD_LOCS || !p->uval || !p->uknown) { p->uver++; bumped = 1; continue; }
+            float x[4] = { 0, 0, 0, 0 };
+            memcpy(x, v + c * comps, (size_t)comps * 4);
+            if (!p->uknown[l]) { N(glGetUniformfv)(prog, l, p->uval[l]); for (int q = comps; q < 4; q++) p->uval[l][q] = 0; p->uknown[l] = 1; g_q_uni++; }
+            if (memcmp(p->uval[l], x, 16)) { p->uver++; bumped = 1; }
+            memcpy(p->uval[l], x, 16);
+            continue;
+        }
+        int i = (int)(m - 1) >> 3, k = (int)(m - 1) & 7;
+        float x[4] = { 0, 0, 0, 0 };
+        memcpy(x, v + c * comps, (size_t)comps * 4);
+        // (one the fragment shader reads too must stay the same over a run: a change is a change of version)
+        if (p->pd[i].fs && (!p->pdknown[i][k] || memcmp(p->pdval[i][k], x, 16)) && !bumped) { p->uver++; bumped = 1; }
+        memcpy(p->pdval[i][k], x, 16); p->pdknown[i][k] = 1;
     }
 }
-static const float *uni_get(GLuint prog, GLint loc)
+static const float *pd_get(prog_t *p, int i, int k)
 {
-    uval_t *u = uv(prog, loc, 1);
-    if (!u) return NULL;
-    if (!u->known) { N(glGetUniformfv)(prog, loc, u->v); u->known = 1; g_q_uni++; }
-    return u->v;
+    if (!p->pdknown[i][k]) { N(glGetUniformfv)(p->name, p->pd[i].loc[k], p->pdval[i][k]); p->pdknown[i][k] = 1; g_q_uni++; }
+    return p->pdval[i][k];
 }
 
 // ======================================================================= runs
@@ -823,10 +829,10 @@ typedef struct {
     unsigned uver; int active;             // its program's uniform version; the active texture unit
     size_t ipos;                           // (in a run) its first index in the run's indices
     GLuint array_after;                    // GL_ARRAY_BUFFER as the draw left it
-    float pdv[PD_MAX][8][4];               // its renderer uniforms
+    float pdv[PD_MAX][4][4];               // its renderer uniforms
 } cand_t;
 static cand_t *g_c; static size_t g_nc, g_capc;
-typedef struct { size_t first, n; size_t voff, soff, ioff, nidx; GLuint tex[NTEX]; int ntex; float *pd; } run_t;
+typedef struct { size_t first, n; size_t voff, soff, ioff, nidx, nverts; GLuint tex[NTEX]; int ntex; float *pd; } run_t;
 static run_t *g_run; static size_t g_nrun, g_caprun;
 static unsigned char *g_up; static size_t g_nup, g_capup;   // the frame's merged geometry (one upload)
 static GLuint g_mb;                        // the host's buffer for it
@@ -848,7 +854,7 @@ static size_t up_put(const void *d, size_t n, size_t align)
     unsigned char *q = grow(g_up, &g_capup, at + n, 1);
     if (!q) return (size_t)-1;
     g_up = q;
-    if (d) memcpy(g_up + at, d, n); else memset(g_up + at, 0, n);
+    if (d) memcpy(g_up + at, d, n);              // (else the caller fills it)
     g_nup = at + n;
     return at;
 }
@@ -894,7 +900,11 @@ static int candidate(unsigned op, const uint64_t *a, const fg_frame *f, cand_t *
     } else c->idx = f->ptr(ix);
     if (!c->idx) return 0;
     unsigned mn = ~0u, mx = 0;
-    for (GLsizei i = 0; i < count; i++) { unsigned x = iread(c->idx, type, (size_t)i); if (x < mn) mn = x; if (x > mx) mx = x; }
+    if (type == GL_UNSIGNED_SHORT && !((uintptr_t)c->idx & 1)) {          // (Unity's: 16-bit, aligned)
+        const uint16_t *q = c->idx;
+        for (GLsizei i = 0; i < count; i++) { unsigned x = q[i]; mn = x < mn ? x : mn; mx = x > mx ? x : mx; }
+    } else
+        for (GLsizei i = 0; i < count; i++) { unsigned x = iread(c->idx, type, (size_t)i); if (x < mn) mn = x; if (x > mx) mx = x; }
     if (basev < 0 && (unsigned)(-basev) > mn) return 0;
     mn += (unsigned)basev; mx += (unsigned)basev;
     if (mx - mn >= 65535) return 0;
@@ -934,9 +944,7 @@ static int candidate(unsigned op, const uint64_t *a, const fg_frame *f, cand_t *
     // the renderer uniforms' values
     for (int i = 0; i < c->p->npd; i++)
         for (int k = 0; k < c->p->pd[i].n; k++) {
-            const float *x = uni_get(c->prog, c->p->pd[i].loc[k]);
-            if (!x) return 0;
-            memcpy(c->pdv[i][k], x, 16);
+            memcpy(c->pdv[i][k], pd_get(c->p, i, k), 16);
         }
     c->array_after = cur_array();
     return 1;
@@ -980,7 +988,7 @@ static void run_close(int why)
     // the geometry: each draw's vertices in order, its indices moved to them; ua_v a byte a vertex
     size_t nv = 0, ni = 0;
     for (size_t k = 0; k < g_rn; k++) { cand_t *c = &g_c[g_rfirst + k]; nv += c->vmax - c->vmin + 1; ni += (size_t)c->icount; }
-    size_t vo = up_put(NULL, nv * (size_t)last->stride, 16), so = up_put(NULL, nv, 4), io = up_put(NULL, ni * 2, 4);
+    size_t vo = up_put(NULL, nv * (size_t)last->stride, 16), so = up_put(NULL, nv * 4, 4), io = up_put(NULL, ni * 2, 4);
     if (vo == (size_t)-1 || so == (size_t)-1 || io == (size_t)-1) { g_rn = 0; return; }
     size_t pos = 0, ip = 0;
     for (size_t k = 0; k < g_rn; k++) {
@@ -989,19 +997,23 @@ static void run_close(int why)
         memcpy(g_up + vo + pos * (size_t)c->stride, c->vdata, n * (size_t)c->stride);
         int sel = 0;
         for (int t = 0; t < R->ntex; t++) if (R->tex[t] == c->tmain) sel = t;
-        memset(g_up + so + pos, 1 + (int)k + 16 * sel, n);
+        float sv = (float)(1 + (int)k + 16 * sel);
+        for (size_t q = 0; q < n; q++) memcpy(g_up + so + 4 * (pos + q), &sv, 4);
         GLint basev = 0;
         const uint64_t *a = f_cmd_args(c->at);
         unsigned op = f_cmd_op(c->at);
         if (op == OP_glDrawElementsBaseVertex || op == OP_glDrawElementsBaseVertexOES || op == OP_glDrawElementsBaseVertexEXT) basev = I(4);
-        for (GLsizei i = 0; i < c->icount; i++) {
-            uint16_t x = (uint16_t)(iread(c->idx, c->itype, (size_t)i) + (unsigned)basev - c->vmin + pos);
-            memcpy(g_up + io + 2 * (ip + (size_t)i), &x, 2);
-        }
+        unsigned shift = (unsigned)basev - c->vmin + (unsigned)pos;
+        uint16_t *out = (uint16_t *)(void *)(g_up + io) + ip;                 // (io is 4-aligned)
+        if (c->itype == GL_UNSIGNED_SHORT && !((uintptr_t)c->idx & 1)) {
+            const uint16_t *q = c->idx;
+            for (GLsizei i = 0; i < c->icount; i++) out[i] = (uint16_t)(q[i] + shift);
+        } else
+            for (GLsizei i = 0; i < c->icount; i++) out[i] = (uint16_t)(iread(c->idx, c->itype, (size_t)i) + shift);
         c->ipos = ip;
         pos += n; ip += (size_t)c->icount;
     }
-    R->voff = vo; R->soff = so; R->ioff = io; R->nidx = ni;
+    R->voff = vo; R->soff = so; R->ioff = io; R->nidx = ni; R->nverts = nv;
     // the renderer uniforms: draw k's at [k]
     prog_t *p = last->p;
     size_t tot = 0;
@@ -1241,7 +1253,6 @@ static void walk(size_t at, unsigned op, const uint64_t *a, const fg_frame *f)
 static GLint g_cw_start;                   // GL_COPY_WRITE_BUFFER at the frame's start (the upload's target)
 static GLuint g_xtex[NTEX], g_xsmp[NTEX];  // what the host bound on its units (29 - 31)
 static int g_xknown, g_xact_dirty;
-static unsigned long g_xfixed;             // extra samplers' units set back (Unity had given them others)
 
 static void point_merged(const run_t *R, const cand_t *L)
 {
@@ -1255,25 +1266,47 @@ static void point_merged(const run_t *R, const cand_t *L)
     }
     N(glBindBuffer)(GL_ELEMENT_ARRAY_BUFFER, g_mb);
 }
+// the game's uniforms the twin does not have yet (the replay's view: what the game set since the last copy)
+static unsigned long g_synced;
+static void sync_twin(prog_t *p)
+{
+    for (int w = 0; w < PD_LOCS / 32; w++) {
+        uint32_t m = p->dirty[w];
+        if (!m) continue;
+        p->dirty[w] = 0;
+        for (; m; m &= m - 1) {
+            int loc = w * 32 + __builtin_ctz(m);
+            GLint tl = p->tloc[loc];
+            if (tl < 0 || p->pdmap[loc]) continue;        // (none in the twin; a renderer uniform: the arrays)
+            float f[16]; GLint iv[4];
+            g_synced++;
+            switch (p->utype[loc]) {
+            case GL_FLOAT: N(glGetUniformfv)(p->name, loc, f); N(glUniform1fv)(tl, 1, f); break;
+            case GL_FLOAT_VEC2: N(glGetUniformfv)(p->name, loc, f); N(glUniform2fv)(tl, 1, f); break;
+            case GL_FLOAT_VEC3: N(glGetUniformfv)(p->name, loc, f); N(glUniform3fv)(tl, 1, f); break;
+            case GL_FLOAT_VEC4: N(glGetUniformfv)(p->name, loc, f); N(glUniform4fv)(tl, 1, f); break;
+            case GL_FLOAT_MAT2: N(glGetUniformfv)(p->name, loc, f); N(glUniformMatrix2fv)(tl, 1, GL_FALSE, f); break;
+            case GL_FLOAT_MAT3: N(glGetUniformfv)(p->name, loc, f); N(glUniformMatrix3fv)(tl, 1, GL_FALSE, f); break;
+            case GL_FLOAT_MAT4: N(glGetUniformfv)(p->name, loc, f); N(glUniformMatrix4fv)(tl, 1, GL_FALSE, f); break;
+            case GL_INT: case GL_BOOL: N(glGetUniformiv)(p->name, loc, iv); N(glUniform1iv)(tl, 1, iv); break;
+            case GL_INT_VEC2: case GL_BOOL_VEC2: N(glGetUniformiv)(p->name, loc, iv); N(glUniform2iv)(tl, 1, iv); break;
+            case GL_INT_VEC3: case GL_BOOL_VEC3: N(glGetUniformiv)(p->name, loc, iv); N(glUniform3iv)(tl, 1, iv); break;
+            case GL_INT_VEC4: case GL_BOOL_VEC4: N(glGetUniformiv)(p->name, loc, iv); N(glUniform4iv)(tl, 1, iv); break;
+            default: if (sampler_type(p->utype[loc])) { N(glGetUniformiv)(p->name, loc, iv); N(glUniform1iv)(tl, 1, iv); } break;
+            }
+        }
+    }
+}
 static void emit(const run_t *R)
 {
     const cand_t *L = &g_c[R->first + R->n - 1];
-    const prog_t *p = L->p;
-    N(glBindBuffer)(GL_ARRAY_BUFFER, g_mb);
-    for (int i = 0; i < NATTR; i++) {
-        if (!(L->amask >> i & 1)) continue;
-        const attr_t *t = &L->at_[i];
-        const void *o = (const void *)(uintptr_t)(R->voff + (t->off - L->base));
-        if (t->integer) N(glVertexAttribIPointer)((GLuint)i, t->size, t->type, t->stride, o);
-        else N(glVertexAttribPointer)((GLuint)i, t->size, t->type, t->norm, t->stride, o);
-    }
+    prog_t *p = L->p;
+    N(glUseProgram)(p->twin);
+    sync_twin(p);
+    point_merged(R, L);
     N(glEnableVertexAttribArray)(SEL_LOC);
-    N(glVertexAttribPointer)(SEL_LOC, 1, GL_UNSIGNED_BYTE, GL_FALSE, 1, (const void *)(uintptr_t)R->soff);
-    N(glBindBuffer)(GL_ELEMENT_ARRAY_BUFFER, g_mb);
+    N(glVertexAttribPointer)(SEL_LOC, 1, GL_FLOAT, GL_FALSE, 4, (const void *)(uintptr_t)R->soff);
     if (R->ntex > 1) {
-        prog_t *pw = (prog_t *)p;
-        for (int t = 1; t < R->ntex; t++)
-            if (pw->xloc[t] >= 0 && pw->xcur[t] != g_xunit[t]) { N(glUniform1i)(pw->xloc[t], g_xunit[t]); pw->xcur[t] = g_xunit[t]; g_xfixed++; }
         for (int t = 1; t < R->ntex; t++) {
             if (g_xknown & 1 << t && g_xtex[t] == R->tex[t] && g_xsmp[t] == L->smain) continue;
             N(glActiveTexture)(GL_TEXTURE0 + (GLenum)g_xunit[t]);
@@ -1295,7 +1328,8 @@ static void emit(const run_t *R)
         else N(glUniform1fv)(p->pd[i].arr, cnt, v);
         o += (size_t)n * MAXRUN * (size_t)cps;
     }
-    N(glDrawElements)(GL_TRIANGLES, (GLsizei)R->nidx, GL_UNSIGNED_SHORT, (const void *)(uintptr_t)R->ioff);
+    N(glDrawRangeElements)(GL_TRIANGLES, 0, (GLuint)(R->nverts - 1), (GLsizei)R->nidx, GL_UNSIGNED_SHORT, (const void *)(uintptr_t)R->ioff);
+    N(glUseProgram)(p->name);
 }
 // the last draw's state again
 static void emit_restore(const run_t *R)
@@ -1342,44 +1376,11 @@ static void ck_blit(GLuint from, GLuint to, const GLint *src, const GLint *dst)
     N(glBindFramebuffer)(GL_READ_FRAMEBUFFER, from); N(glBindFramebuffer)(GL_DRAW_FRAMEBUFFER, to);
     N(glBlitFramebuffer)(src[0], src[1], src[0] + src[2], src[1] + src[3], dst[0], dst[1], dst[0] + dst[2], dst[1] + dst[3], GL_COLOR_BUFFER_BIT, GL_NEAREST);
 }
-// every uniform of the reference program from the game's program
-static void ck_copy_uniforms(GLuint from, GLuint to)
-{
-    GLint nu = 0;
-    N(glGetProgramiv)(to, GL_ACTIVE_UNIFORMS, &nu);
-    for (GLint u = 0; u < nu; u++) {
-        char name[160]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
-        N(glGetActiveUniform)(to, (GLuint)u, sizeof name - 8, &len, &size, &type, name);
-        if (len > 3 && !strcmp(name + len - 3, "[0]")) name[len - 3] = 0;
-        for (GLint e = 0; e < size; e++) {
-            char el[180];
-            if (size > 1) snprintf(el, sizeof el, "%s[%d]", name, e); else snprintf(el, sizeof el, "%s", name);
-            GLint lt = N(glGetUniformLocation)(to, el), lf = N(glGetUniformLocation)(from, el);
-            if (lt < 0 || lf < 0) continue;
-            float f[16]; GLint iv[4];
-            switch (type) {
-            case GL_FLOAT: N(glGetUniformfv)(from, lf, f); N(glUniform1fv)(lt, 1, f); break;
-            case GL_FLOAT_VEC2: N(glGetUniformfv)(from, lf, f); N(glUniform2fv)(lt, 1, f); break;
-            case GL_FLOAT_VEC3: N(glGetUniformfv)(from, lf, f); N(glUniform3fv)(lt, 1, f); break;
-            case GL_FLOAT_VEC4: N(glGetUniformfv)(from, lf, f); N(glUniform4fv)(lt, 1, f); break;
-            case GL_FLOAT_MAT2: N(glGetUniformfv)(from, lf, f); N(glUniformMatrix2fv)(lt, 1, GL_FALSE, f); break;
-            case GL_FLOAT_MAT3: N(glGetUniformfv)(from, lf, f); N(glUniformMatrix3fv)(lt, 1, GL_FALSE, f); break;
-            case GL_FLOAT_MAT4: N(glGetUniformfv)(from, lf, f); N(glUniformMatrix4fv)(lt, 1, GL_FALSE, f); break;
-            case GL_INT: case GL_BOOL: N(glGetUniformiv)(from, lf, iv); N(glUniform1iv)(lt, 1, iv); break;
-            case GL_INT_VEC2: case GL_BOOL_VEC2: N(glGetUniformiv)(from, lf, iv); N(glUniform2iv)(lt, 1, iv); break;
-            case GL_INT_VEC3: case GL_BOOL_VEC3: N(glGetUniformiv)(from, lf, iv); N(glUniform3iv)(lt, 1, iv); break;
-            case GL_INT_VEC4: case GL_BOOL_VEC4: N(glGetUniformiv)(from, lf, iv); N(glUniform4iv)(lt, 1, iv); break;
-            default: if (sampler_type(type)) { N(glGetUniformiv)(from, lf, iv); N(glUniform1iv)(lt, 1, iv); } break;
-            }
-        }
-    }
-}
 // a run checked, or 0 (it is then made as without the check)
 static int emit_checked(const run_t *R)
 {
     const cand_t *L = &g_c[R->first + R->n - 1];
     prog_t *p = L->p;
-    if (!p->ref) { g_ck_skip++; return 0; }
     GLint dfb = 0, rfb = 0, vp[4], samples = 0, rb = 0, sm = 0, dw = 0;
     N(glGetIntegerv)(GL_DRAW_FRAMEBUFFER_BINDING, &dfb); N(glGetIntegerv)(GL_READ_FRAMEBUFFER_BINDING, &rfb);
     N(glGetIntegerv)(GL_VIEWPORT, vp); N(glGetIntegerv)(GL_SAMPLES, &samples);
@@ -1405,11 +1406,10 @@ static int emit_checked(const run_t *R)
     ck_blit(g_ckfb[0], (GLuint)dfb, z, vp);                          // the picture before again
     N(glBindFramebuffer)(GL_DRAW_FRAMEBUFFER, (GLuint)dfb); N(glBindFramebuffer)(GL_READ_FRAMEBUFFER, (GLuint)rfb);
     if (sc) N(glEnable)(GL_SCISSOR_TEST);
-    // the game's draws, one by one, with the program of its own sources (from the run's geometry: the same bytes)
+    // the game's draws, one by one, with its own program (from the run's geometry: the same bytes); the
+    // renderer uniforms each draw's, the last one's left as the game set them
     N(glDisableVertexAttribArray)(SEL_LOC);
     point_merged(R, L);
-    N(glUseProgram)(p->ref);
-    ck_copy_uniforms(p->name, p->ref);
     int umain = -1;
     for (int i = 0; i < p->nsmp; i++) if (p->smp[i].loc == p->loc_main) umain = p->smp[i].unit;
     for (size_t k = 0; k < R->n; k++) {
@@ -1418,8 +1418,7 @@ static int emit_checked(const run_t *R)
             for (int e = 0; e < p->pd[i].n; e++) {
                 char el[120];
                 if (p->pd[i].n > 1) snprintf(el, sizeof el, "%s[%d]", p->pd[i].name, e); else snprintf(el, sizeof el, "%s", p->pd[i].name);
-                GLint l = N(glGetUniformLocation)(p->ref, el);
-                if (l < 0) continue;
+                GLint l = p->pd[i].loc[e];
                 int cps = p->pd[i].comps;
                 if (cps == 4) N(glUniform4fv)(l, 1, c->pdv[i][e]); else if (cps == 3) N(glUniform3fv)(l, 1, c->pdv[i][e]);
                 else if (cps == 2) N(glUniform2fv)(l, 1, c->pdv[i][e]); else N(glUniform1fv)(l, 1, c->pdv[i][e]);
@@ -1429,7 +1428,6 @@ static int emit_checked(const run_t *R)
     }
     if (umain >= 0) N(glBindTexture)(GL_TEXTURE_2D, L->tmain);
     N(glActiveTexture)(GL_TEXTURE0 + (GLenum)L->active);
-    N(glUseProgram)(p->name);
     if (sc) N(glDisable)(GL_SCISSOR_TEST);
     ck_blit((GLuint)dfb, g_ckfb[2], vp, z);
     // compared
@@ -1462,8 +1460,8 @@ static int emit_checked(const run_t *R)
             GLint act = 0; N(glGetIntegerv)(GL_ACTIVE_TEXTURE, &act);
             for (int t = 1; t < R->ntex; t++) {
                 char nm[8]; snprintf(nm, sizeof nm, "ua_t%d", t);
-                GLint loc = N(glGetUniformLocation)(p->name, nm), unit = -1, b = -1, sb = -1, cur = 0;
-                if (loc >= 0) N(glGetUniformiv)(p->name, loc, &unit);
+                GLint loc = N(glGetUniformLocation)(p->twin, nm), unit = -1, b = -1, sb = -1, cur = 0;
+                if (loc >= 0) N(glGetUniformiv)(p->twin, loc, &unit);
                 N(glGetIntegerv)(GL_CURRENT_PROGRAM, &cur);
                 N(glActiveTexture)(GL_TEXTURE0 + (GLenum)g_xunit[t]); N(glGetIntegerv)(GL_TEXTURE_BINDING_2D, &b); N(glGetIntegerv)(GL_SAMPLER_BINDING, &sb);
                 N(glActiveTexture)((GLenum)act);
@@ -1479,17 +1477,51 @@ static int emit_checked(const run_t *R)
     return 1;
 }
 
+// each op's kind for the replay's uniform following: 1 glUniform*, 2 glUniform*v / Matrix (count a[1]),
+// 3 glProgramUniform*, 4 glProgramUniform*v (count a[2]), 5 glUseProgram
+static unsigned char g_ukind[OP_N];
+static int g_ukind_made;
+static void ukind_make(void)
+{
+    for (unsigned op = 0; op < OP_N; op++) {
+        const char *n = glrec_name[op];
+        size_t l = strlen(n);
+        int v = l > 0 && n[l - 1] == 'v';
+        if (!strncmp(n, "glUniformBlockBinding", 21)) continue;
+        if (!strncmp(n, "glProgramUniform", 16)) g_ukind[op] = v ? 4 : 3;
+        else if (!strncmp(n, "glUniform", 9)) g_ukind[op] = v ? 2 : 1;
+    }
+    g_ukind[OP_glUseProgram] = 5;
+    g_ukind_made = 1;
+}
+static void dirty_mark(GLuint prog, GLint loc, GLsizei count)
+{
+    if (!prog || loc < 0) return;
+    prog_t *p = prg_fast(prog);
+    if (!p || !p->ok) return;
+    for (GLsizei c = 0; c < count && loc + c < PD_LOCS; c++) p->dirty[(loc + c) >> 5] |= 1u << ((loc + c) & 31);
+}
+
 static void frame_reset(void)
 {
     st_reset();
-    g_nwr = 0; g_nmaps = 0; g_nuv = 0; g_poison_w = 0;
-    if (++g_ugen == 0) { memset(g_uv, 0, sizeof g_uv); g_ugen = 1; }
+    g_nwr = 0; g_nmaps = 0; g_poison_w = 0;
     if (++g_wgen == 0) { memset(g_wh, 0, sizeof g_wh); g_wgen = 1; }
     g_nc = 0; g_nrun = 0; g_nup = 0; g_nskip = 0; g_rn = 0; g_poison = 0;
 }
 
 void glmerge_submit(fg_frame *f)
 {
+    if (g_runs_off) {
+        for (size_t i = 0; i < f->ncmd;) {
+            uint64_t h = f->cmd[i];
+            unsigned n = (unsigned)(h >> 32);
+            f->call((unsigned)(h & 0xffffffffu), f->cmd + i + 1);
+            i += n + 1;
+        }
+        g_frames++;
+        return;
+    }
     double t0 = 0;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); t0 = ts.tv_sec + ts.tv_nsec / 1e9;
     pthread_mutex_lock(&g_lock);                 // (the render thread's links change the programs' entries)
@@ -1523,10 +1555,22 @@ void glmerge_submit(fg_frame *f)
         N(glBufferData)(GL_COPY_WRITE_BUFFER, (GLsizeiptr)g_nup, g_up, GL_STREAM_DRAW);
         N(glBindBuffer)(GL_COPY_WRITE_BUFFER, (GLuint)g_cw_start);
     }
+    if (!g_ukind_made) ukind_make();
+    GLint rp = 0;
+    N(glGetIntegerv)(GL_CURRENT_PROGRAM, &rp);                    // (the frame's start's: nothing replayed yet)
+    GLuint rprog = (GLuint)rp;
     size_t si = 0, ri = 0;
     for (size_t i = 0; i < f->ncmd;) {
         uint64_t h = f->cmd[i];
         unsigned op = (unsigned)(h & 0xffffffffu), n = (unsigned)(h >> 32);
+        const uint64_t *a = f->cmd + i + 1;
+        switch (g_ukind[op]) {
+        case 1: dirty_mark(rprog, I(0), 1); break;
+        case 2: dirty_mark(rprog, I(0), I(1)); break;
+        case 3: dirty_mark(U(0), I(1), 1); break;
+        case 4: dirty_mark(U(0), I(1), I(2)); break;
+        case 5: rprog = U(0); break;
+        }
         if (si < g_nskip && g_skip[si] == i) si++;
         else if (ri < g_nrun && g_c[g_run[ri].first + g_run[ri].n - 1].at == i) {
             if (!(g_check && g_frames % (unsigned long)g_check_every == 0 && emit_checked(&g_run[ri]))) { emit(&g_run[ri]); emit_restore(&g_run[ri]); }
@@ -1560,7 +1604,7 @@ void glmerge_log(void)
                     "shaders %lu + %lu rewritten, %lu programs merge, %lu linked again\n",
             g_frames, g_draws / fr, made / fr, g_runs / fr, g_runs ? (double)g_merged_draws / g_runs : 0, g_scan_s * 1000 / fr,
             g_rewritten_vs, g_rewritten_fs, g_progs_ok, g_relinks);
-    if (g_xfixed) { fprintf(stderr, "[glmerge]   the extra samplers' units set back %lu times\n", g_xfixed); g_xfixed = 0; }
+    if (g_synced) { fprintf(stderr, "[glmerge]   the game's uniforms copied to twins: %.1f a frame\n", g_synced / fr); g_synced = 0; }
     fprintf(stderr, "[glmerge]   runs ended by:");
     for (int i = 0; i < 12; i++) if (g_end[i]) fprintf(stderr, " %s %.1f;", g_end_name[i], g_end[i] / fr);
     fprintf(stderr, "%s\n", g_sel_set ? " (the game set ua_v's attribute: merging off)" : "");
