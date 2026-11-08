@@ -14,6 +14,7 @@
 //                     own ("[frames] screenshot <path>" once it is), so an SD card's slow write is
 //                     not a hitch of the game's
 #define _GNU_SOURCE
+#include "glpresent.h"
 #include "frames.h"
 #include "display.h"
 #include "fbdev.h"
@@ -104,7 +105,7 @@ static void screenshot(void)
     gl_GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
     gl_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
     gl_GetIntegerv(GL_PACK_ALIGNMENT, &align);
-    gl_BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    gl_BindFramebuffer(GL_READ_FRAMEBUFFER, glpresent_fb0());
     gl_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     gl_PixelStorei(GL_PACK_ALIGNMENT, 4);
     unsigned char *px = malloc((size_t)w * h * 4);

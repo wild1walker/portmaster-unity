@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "display.h"
 #include "fbdev.h"
+#include "glpresent.h"
 #include "../android/android_shims.h"
 #include "../android/egl_glue.h"
 
@@ -156,7 +157,7 @@ void display_gpu_spanned(void) { g_spanned = 1; g_sbars = 0; }
 
 void display_present_scaled(void)
 {
-    if (!g_srw || g_sstate < 0) return;
+    if (!g_srw || g_sstate < 0 || glpresent_active()) return;   // (UA_PRESENT_THREAD: the present thread scales)
     if (g_spanned) {
         if (!g_sstate) {
             g_sstate = gl_load() ? 1 : -1;

@@ -25,7 +25,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       libsdl2-dev libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri sway xvfb && rm -rf /var/lib/apt/lists/* && \
     useradd -m u
 EOF
-SRC="host/test/test_display.c host/display.c host/display_sdl.c host/fbdev.c android/egl_glue.c android/native_window.c android/log_shim.c"
+SRC="host/test/test_display.c host/display.c host/display_sdl.c host/glpresent.c host/fbdev.c android/egl_glue.c android/native_window.c android/log_shim.c"
 CFLAGS="-O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter"
 
 echo "##### SDL 2.0.10 (Ubuntu 20.04)"
@@ -42,6 +42,9 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w:ro -w /w -e SRC="$SRC" -e CF
   run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 TEST_SIZE=640x360
   run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x640 UA_ASPECT=16:9 TEST_SIZE=640x640 TEST_RENDER=640x360
   run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 UA_ASPECT=1:1 TEST_SIZE=640x360 TEST_RENDER=360x360
+  Xvfb :97 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb97.log 2>&1 &   # (an X server of its own: :99 has dropped out after a few runs)
+  sleep 1
+  run DISPLAY=:97 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_RENDER_SIZE=640x360 UA_PRESENT_THREAD=1 TEST_SIZE=1280x720 TEST_PRESENT=1
 
   weston --backend=headless-backend.so --width=1280 --height=720 --socket=wayland-1 --idle-time=0 >/tmp/weston.log 2>&1 &
   sleep 2
@@ -68,5 +71,6 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w:ro -w /w -e SRC="$SRC" -e CF
   Xvfb :98 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
   sleep 1
   run DISPLAY=:98 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl TEST_SIZE=1280x720
+  run DISPLAY=:98 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_RENDER_SIZE=640x360 UA_PRESENT_THREAD=1 TEST_SIZE=1280x720 TEST_PRESENT=1
   run SDL_VIDEODRIVER=offscreen UA_DISPLAY=sdl UA_DISPLAY_WINDOW=800x600 TEST_SIZE=800x600'
 echo "display tests passed"

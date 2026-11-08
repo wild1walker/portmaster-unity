@@ -30,10 +30,14 @@
 //   UA_RENDER_SIZE / UA_RENDER_SCALE  (as on the fbdev path, fbdev_pick_render_size) Unity is told
 //                           the smaller size; display.c's GPU scaler draws it over the whole window.
 //                           GLES 3 only; unset (the default), nothing of it runs
+//   UA_PRESENT_THREAD=1     (with a render size, no UA_ASPECT) Unity's contexts current without a surface,
+//                           its frames scaled over the window and swapped by a present thread
+//                           (glpresent.c): the render thread no longer waits for the GPU at its swap
 // SDL's own variables apply (SDL_VIDEODRIVER=wayland|kmsdrm|x11|offscreen, SDL_VIDEO_EGL_DRIVER).
 #define _GNU_SOURCE
 #include "display.h"
 #include "fbdev.h"
+#include "glpresent.h"
 
 #include <SDL2/SDL.h>
 #include <stdint.h>
@@ -58,6 +62,7 @@ typedef unsigned int EGLBoolean;
 #define EGL_RENDERABLE_TYPE 0x3040
 #define EGL_VENDOR 0x3053
 #define EGL_VERSION 0x3054
+#define EGL_EXTENSIONS 0x3055
 #define EGL_HEIGHT 0x3056
 #define EGL_WIDTH 0x3057
 #define EGL_DRAW 0x3059
@@ -77,12 +82,17 @@ static struct {
     EGLBoolean (*GetConfigAttrib)(EGLDisplay, EGLConfig, EGLint, EGLint *);
     const char *(*QueryString)(EGLDisplay, EGLint);
     EGLint (*GetError)(void);
+    EGLBoolean (*MakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
+    EGLContext (*CreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
 } E;
 
 static SDL_Window *g_win;
 static SDL_GLContext g_ctx;
 static volatile int g_quit;
 static int g_rw, g_rh;                         // the render size (0: the window's)
+static int g_pt;                               // UA_PRESENT_THREAD on (glpresent.c)
+static EGLDisplay g_dpy;
+static EGLConfig g_cfg;
 
 static long mem_total_kb(void)
 {
@@ -98,12 +108,18 @@ static long mem_total_kb(void)
 static int sdl_make_current(void *user, void *ctx)
 {
     (void)user;
+    if (g_pt) {                                 // the window is the present thread's: Unity's context without a surface
+        if (!E.MakeCurrent(g_dpy, NULL, NULL, ctx)) return -1;
+        glpresent_made_current(ctx);
+        return 0;
+    }
     return SDL_GL_MakeCurrent(g_win, (SDL_GLContext)ctx);   // NULL: release (SDL then forgets the window)
 }
 
 static int sdl_swap(void *user)
 {
     (void)user;
+    if (g_pt) return glpresent_swap();
     if (SDL_GL_GetCurrentWindow() != g_win) return -1;      // not made current through SDL here
     SDL_GL_SwapWindow(g_win);
     return 0;
@@ -114,6 +130,7 @@ static int sdl_swap_interval(void *user, int interval)
     (void)user;
     const char *e = getenv("UA_SWAP_INTERVAL");
     if (e && *e) interval = atoi(e);
+    if (g_pt) { glpresent_swap_interval(interval); return 0; }
     int r = SDL_GL_SetSwapInterval(interval);
     if (r != 0) fprintf(stderr, "[display] swap interval %d: %s\n", interval, SDL_GetError());
     return r;
@@ -134,6 +151,22 @@ static int SDLCALL on_event(void *user, SDL_Event *e)
 
 int display_sdl_quit_requested(void) { return g_quit; }
 
+// ---- the present thread's window (glpresent.c)
+static void *pt_create_context(void *user, void *share)
+{
+    (void)user;
+    static const EGLint attrs[] = { 0x3098 /* EGL_CONTEXT_CLIENT_VERSION */, 3, EGL_NONE };
+    return E.CreateContext(g_dpy, g_cfg, share, attrs);
+}
+static int pt_make_current(void *user, void *ctx) { (void)user; return SDL_GL_MakeCurrent(g_win, (SDL_GLContext)ctx); }
+static void pt_swap(void *user) { (void)user; SDL_GL_SwapWindow(g_win); }
+static void pt_swap_interval(void *user, int interval)
+{
+    (void)user;
+    if (SDL_GL_SetSwapInterval(interval) != 0) fprintf(stderr, "[display] swap interval %d: %s\n", interval, SDL_GetError());
+}
+static const glpresent_window g_ptw = { pt_create_context, pt_make_current, pt_swap, pt_swap_interval, NULL };
+
 void *display_sdl_window(void) { return g_win; }
 
 // ---- setup (main thread) -------------------------------------------------------------------------
@@ -141,10 +174,10 @@ static int load_egl(void)
 {
 #define L(f) *(void **)&E.f = egl_glue_real("egl" #f)
     L(GetCurrentDisplay); L(GetCurrentSurface); L(GetCurrentContext); L(QuerySurface); L(ChooseConfig);
-    L(GetConfigAttrib); L(QueryString); L(GetError);
+    L(GetConfigAttrib); L(QueryString); L(GetError); L(MakeCurrent); L(CreateContext);
 #undef L
     return E.GetCurrentDisplay && E.GetCurrentSurface && E.GetCurrentContext && E.QuerySurface && E.ChooseConfig &&
-           E.GetConfigAttrib && E.QueryString && E.GetError;
+           E.GetConfigAttrib && E.QueryString && E.GetError && E.MakeCurrent && E.CreateContext;
 }
 
 // Let the window system settle the window's size (Wayland's first configure, X11's map).
@@ -329,6 +362,14 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
             fprintf(stderr, "[display] render size %dx%d (%d %% of %dx%d's pixels): the GPU scales it to the window\n",
                     g_rw, g_rh, (int)(100.0 * g_rw * g_rh / ((double)dw * dh) + 0.5), dw, dh);
             display_gpu_scale(g_rw, g_rh, dw, dh);
+            const char *asp = getenv("UA_ASPECT");
+            if (glpresent_wanted() && !(asp && *asp)) {
+                const char *ex = E.QueryString(dpy, EGL_EXTENSIONS);
+                if (ex && strstr(ex, "EGL_KHR_surfaceless_context")) {
+                    g_pt = 1; g_dpy = dpy; g_cfg = cfg;
+                    glpresent_start(g_rw, g_rh, dw, dh, &g_ptw);
+                } else fprintf(stderr, "[display] UA_PRESENT_THREAD: no EGL_KHR_surfaceless_context: off\n");
+            }
         }
     }
 

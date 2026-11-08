@@ -32,6 +32,7 @@
 // put back: framebuffer bindings, scissor test and box, colour mask, clear colour, rasterizer
 // discard, and for an upload the active unit's 2D texture, the unpack buffer and unpack
 // alignment/row length/skips. No shader, buffer or vertex state of Unity's is used.
+#include "glpresent.h"
 #include "osk.h"
 #include "osk_font.h"
 #include "../jni/unityplayer.h"
@@ -755,7 +756,7 @@ void osk_draw(void)
     gl.GetFloatv(GL_COLOR_CLEAR_VALUE, cc);
     gl.GetBooleanv(GL_COLOR_WRITEMASK, mask);
     unsigned char sc = gl.IsEnabled(GL_SCISSOR_TEST), rd = gl_es2 ? 0 : gl.IsEnabled(GL_RASTERIZER_DISCARD);
-    if (dfb) gl.BindFramebuffer(dtarget, 0);
+    if (dfb != (int)glpresent_fb0()) gl.BindFramebuffer(dtarget, glpresent_fb0());
     if (rd) gl.Disable(GL_RASTERIZER_DISCARD);
     gl.ColorMask(1, 1, 1, 1);
     if (gl_blit < 0) {                                    /* first time: which way, what encoding */

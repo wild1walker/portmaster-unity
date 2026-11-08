@@ -9,10 +9,13 @@
 //   TEST_EXPECT=sdl|fbdev   backend display_init() must pick (default sdl)
 //   TEST_SIZE=WxH           expected window size (default: not checked)
 //   TEST_FRAMES=<n>         frames drawn (default 120)
+//   TEST_PRESENT=1          UA_PRESENT_THREAD is on (glpresent.c): Unity's context without a surface, its frames
+//                           shown by the present thread (checked as the others, and that it showed them)
 //   TEST_RENDER=WxH         Unity's window when it is not the whole window (UA_ASPECT): on X11, the frame in the
 //                           middle of the presented window and black bars around it
 #define _GNU_SOURCE
 #include "../display.h"
+#include "../glpresent.h"
 #include "../../android/android_shims.h"
 #include "../../android/egl_glue.h"
 
@@ -306,7 +309,10 @@ int main(void)
     unsetenv("UA_EGL_PBUFFER");
     if (fbdev) setenv("ANDROID_FBDEV", fbdev, 1); else unsetenv("ANDROID_FBDEV");
 
+    int present = getenv("TEST_PRESENT") != NULL;
+    if (present) CHECK(glpresent_table(NULL)[0].name != NULL);      // (ua_host's GL chain makes the table at its start)
     CHECK(display_init("test_display") == 0);
+    CHECK(glpresent_active() == present);
     fprintf(stderr, "test: backend %s (expected %s)\n", display_backend(), expect);
     CHECK(!strcmp(display_backend(), expect));
     if (strcmp(display_backend(), "sdl")) {
@@ -322,6 +328,7 @@ int main(void)
     ANativeWindow *aw = android_window_get();
     int uw = dw, uh = dh;                        // Unity's window
     if (getenv("TEST_RENDER")) sscanf(getenv("TEST_RENDER"), "%dx%d", &uw, &uh);
+    else if (getenv("UA_RENDER_SIZE")) sscanf(getenv("UA_RENDER_SIZE"), "%dx%d", &uw, &uh);   // (scaled over the whole window)
     CHECK(ANativeWindow_getWidth(aw) == uw && ANativeWindow_getHeight(aw) == uh);
     int ew, eh;
     if (getenv("TEST_SIZE") && sscanf(getenv("TEST_SIZE"), "%dx%d", &ew, &eh) == 2) CHECK(dw == ew && dh == eh);
@@ -342,6 +349,11 @@ int main(void)
     if (!g_done) { fprintf(stderr, "render thread stuck\n"); return 1; }
     pthread_join(t, NULL);
     CHECK(g_hook_calls == g_frames + 1 && g_hook_current == g_hook_calls);
+    if (present) {                              // the present thread shows each frame after Unity's swap returned
+        for (int k = 0; k < 300 && glpresent_frames() < g_frames + 1; k++) SDL_Delay(10);
+        fprintf(stderr, "test: the present thread showed %ld frames\n", glpresent_frames());
+        CHECK(glpresent_frames() == g_frames + 1);
+    }
 #if defined(SDL_VIDEO_DRIVER_X11)
     check_x11_window(w);
 #endif

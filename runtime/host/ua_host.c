@@ -34,6 +34,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "glpersist.h"
 #include "glstate.h"
 #include "glarena.h"
+#include "glpresent.h"
 #include "glpass.h"
 #include "glspec.h"
 #include "glrename.h"
@@ -386,11 +387,18 @@ static void *find_shim(const so_shim *t, const char *name)
 }
 // what glpersist.c's GL wrappers call: msaafix.c's wrapper of that function, else gltrace.c's, else
 // glhooks.c's (NULL: the driver's)
-static void *after_glpersist(const char *name)
+static void *below_glpresent(const char *name)
 {
     void *p = find_shim(g_msaa_shims, name);
     if (!p) p = gltrace_wrapper(name);
     return p ? p : find_shim(g_hook_shims, name);
+}
+// (glpresent.c's wrappers, UA_PRESENT_THREAD, sit right above msaafix.c's)
+static const so_shim *g_present_shims;
+static void *after_glpersist(const char *name)
+{
+    void *p = find_shim(g_present_shims, name);
+    return p ? p : below_glpresent(name);
 }
 static const so_shim *g_persist_shims, *g_state_shims;
 // what glstate.c's GL wrappers call: glarena.c's wrapper, else glpersist.c's, else after_glpersist's; its
@@ -561,11 +569,13 @@ int main(int argc, char **argv)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
     // on) -> glrec.c (UA_GL_REC: it calls glopt.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->
-    // glrename.c -> glpass.c -> glspec.c -> glopt.c -> glstate.c -> glarena.c -> glpersist.c -> msaafix.c -> gltrace.c -> glhooks.c -> the driver
+    // glrename.c -> glpass.c -> glspec.c -> glopt.c -> glstate.c -> glarena.c -> glpersist.c -> glpresent.c -> msaafix.c -> gltrace.c ->
+    // glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
     g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
+    g_present_shims = glpresent_table(below_glpresent);       // UA_PRESENT_THREAD
     g_persist_shims = glpersist_table(after_glpersist);       // UA_GL_PERSIST
     g_arena_shims = glarena_table(after_glarena);             // UA_GL_ARENA
     g_state_shims = glstate_table(after_glstate);             // UA_GL_STATE
@@ -587,6 +597,7 @@ int main(int argc, char **argv)
     so_add_shims(g_state_shims);
     so_add_shims(g_arena_shims);
     so_add_shims(g_persist_shims);
+    so_add_shims(g_present_shims);
     so_add_shims(g_msaa_shims);
     so_add_shims(trace);
     if (msaa) {

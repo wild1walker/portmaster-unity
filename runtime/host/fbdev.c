@@ -689,13 +689,55 @@ static void flip_start(void)
     else { fprintf(stderr, "[fbdev] no flip thread: the driver's flips\n"); g_mode = FLIP_DRIVER; }
 }
 
-// The libc's ioctl for everything but the driver's FBIOPAN_DISPLAY on the fbdev path.
+// UA_IOCTL_STATS=1: every ioctl counted and timed per request number, the 12 costliest printed every
+// 10 s ("[ioctl] ..."): what a GPU driver asks of its kernel side (Mali's kbase ioctls from the render
+// thread). Off by default: one getenv at the first call.
+enum { IOS_N = 128 };
+static struct { unsigned long req; long n; double t; } g_ios[IOS_N];
+static int g_ios_on = -1;
+static double g_ios_last;
+static pthread_mutex_t g_ios_lock = PTHREAD_MUTEX_INITIALIZER;
+static int ioctl_call(int fd, unsigned long req, void *arg);
+static void ios_print(double t)
+{
+    int idx[IOS_N], k = 0;
+    for (int i = 0; i < IOS_N; i++) if (g_ios[i].n) idx[k++] = i;
+    for (int i = 1; i < k; i++)             // by time, most first
+        for (int j = i; j > 0 && g_ios[idx[j]].t > g_ios[idx[j - 1]].t; j--) { int x = idx[j]; idx[j] = idx[j - 1]; idx[j - 1] = x; }
+    double span = t - g_ios_last;
+    fprintf(stderr, "[ioctl] %.1f s:", span);
+    for (int i = 0; i < k && i < 12; i++) {
+        unsigned long r = g_ios[idx[i]].req;
+        fprintf(stderr, " %#lx (type %#lx nr %lu size %lu) %ld calls %.2f ms/s;", r, (r >> 8) & 0xff, r & 0xff, (r >> 16) & 0x3fff,
+                g_ios[idx[i]].n, g_ios[idx[i]].t * 1000 / span);
+    }
+    fprintf(stderr, "\n");
+    memset(g_ios, 0, sizeof g_ios);
+    g_ios_last = t;
+}
 int ioctl(int fd, unsigned long req, ...)
 {
     va_list ap;
     va_start(ap, req);
     void *arg = va_arg(ap, void *);
     va_end(ap);
+    if (g_ios_on < 0) { const char *e = getenv("UA_IOCTL_STATS"); g_ios_on = e && *e && strcmp(e, "0") != 0; g_ios_last = now(); }
+    if (!g_ios_on) return ioctl_call(fd, req, arg);
+    double t0 = now();
+    int rc = ioctl_call(fd, req, arg);
+    double t1 = now();
+    pthread_mutex_lock(&g_ios_lock);
+    unsigned h = (unsigned)(req ^ (req >> 7)) % IOS_N;
+    for (int i = 0; i < IOS_N; i++, h = (h + 1) % IOS_N)
+        if (g_ios[h].n == 0 || g_ios[h].req == req) { g_ios[h].req = req; g_ios[h].n++; g_ios[h].t += t1 - t0; break; }
+    if (t1 - g_ios_last >= 10) ios_print(t1);
+    pthread_mutex_unlock(&g_ios_lock);
+    return rc;
+}
+
+// The libc's ioctl for everything but the driver's FBIOPAN_DISPLAY on the fbdev path.
+static int ioctl_call(int fd, unsigned long req, void *arg)
+{
     if (!r_ioctl) return (int)syscall(SYS_ioctl, fd, req, arg);
     if (req == FBIOGET_VSCREENINFO && g_var_ok && arg && g_mode != FLIP_DRIVER) {
         struct stat st;

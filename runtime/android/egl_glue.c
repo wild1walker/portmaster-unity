@@ -388,6 +388,7 @@ static int g_host_set;
 static char g_host_token;
 #define HOST_SURFACE ((EGLSurface)&g_host_token)
 static __thread EGLSurface t_host_real;   // the host's real surface as this thread has it current
+static __thread int t_host_made;          // a context made current with the host surface here (through make_current)
 static EGLSurface g_host_real;            // the latest one any thread saw (atomic)
 
 // Attributes Unity set on its surface handle (eglSurfaceAttrib: EGL_SWAP_BEHAVIOR, ...), set again on
@@ -524,12 +525,14 @@ static EGLBoolean host_eglMakeCurrent(EGLDisplay d, EGLSurface draw, EGLSurface 
     if (!host_dpy(d)) return real.MakeCurrent(d, draw, read, ctx);
     if (ctx && draw == HOST_SURFACE && read == HOST_SURFACE) {
         if (g_host.make_current(g_host.user, ctx) != 0) return EGL_FALSE;
+        t_host_made = 1;
         host_track_current();
         return EGL_TRUE;
     }
     // a release or other surfaces: the host first forgets what it made current on this thread
     g_host.make_current(g_host.user, NULL);
     t_host_real = NULL;
+    t_host_made = 0;
     if (draw == HOST_SURFACE) draw = host_real_surface();
     if (read == HOST_SURFACE) read = host_real_surface();
     return real.MakeCurrent(d, draw, read, ctx);
@@ -540,6 +543,8 @@ static EGLSurface host_eglGetCurrentSurface(EGLint which)
 {
     if (!ensure() || !real.GetCurrentSurface) return NULL;
     EGLSurface s = real.GetCurrentSurface(which);
+    // (a host that keeps Unity's context without a surface, its window on a thread of its own: the host surface all the same)
+    if (g_host_set && t_host_made && !s) return HOST_SURFACE;
     return g_host_set && s && s == t_host_real ? HOST_SURFACE : s;
 }
 

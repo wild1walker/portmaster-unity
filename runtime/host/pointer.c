@@ -43,6 +43,7 @@
 // states the clears use (scissor, clear colour, colour mask, draw framebuffer, rasterizer
 // discard) are put back. GLES 2 contexts (a game set to GLES2): the one framebuffer binding, no
 // rasterizer discard, so no enum is used that the context would reject.
+#include "glpresent.h"
 #include "pointer.h"
 #include "../jni/unityplayer.h"
 
@@ -596,7 +597,7 @@ void pointer_draw(void)
     gl.GetBooleanv(GL_COLOR_WRITEMASK, mask);
     unsigned char sc = gl.IsEnabled(GL_SCISSOR_TEST), rd = gl_es2 ? 0 : gl.IsEnabled(GL_RASTERIZER_DISCARD);
     unsigned target = gl_es2 ? GL_FRAMEBUFFER : GL_DRAW_FRAMEBUFFER;
-    if (fb) gl.BindFramebuffer(target, 0);
+    if (fb != (int)glpresent_fb0()) gl.BindFramebuffer(target, glpresent_fb0());
     if (!sc) gl.Enable(GL_SCISSOR_TEST);
     if (rd) gl.Disable(GL_RASTERIZER_DISCARD);
     gl.ColorMask(1, 1, 1, 1);
