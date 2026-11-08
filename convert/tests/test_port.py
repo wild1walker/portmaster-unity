@@ -524,6 +524,28 @@ class ConfigTest(unittest.TestCase):
                                      capture_output=True, text=True, check=True).stdout.strip()
                 self.assertEqual(out, want, (kb, pre))
         self.assertNotIn('MemTotal', P.port_env(P.build_config('g', None, {'game': {'unity_versions': ['2020.3.1f1']}})))
+        # runtime_low: on every handheld unless UA_PICTURE is high or full (the setup's answers.env, or
+        # the environment); runtime_lowmem on 1 GB with either picture
+        cfg2 = P.build_config('g', None, {'game': {'unity_versions': ['2020.3.1f1']},
+                                          'runtime_low': {'ASMPATCH_HK_BLUR': 'off', 'UA_RENDER_PIXELS': '560000'},
+                                          'runtime_lowmem': {'UA_X': 'a b'}})
+        P.validate(cfg2)
+        self.assertEqual(P.merge(P.DEFAULTS, tomllib.loads(P.dump_toml(cfg2))), cfg2)
+        with tempfile.TemporaryDirectory() as t:
+            for kb, pre, answers, want in ((973 * 1024, '', None, 'off|560000|a b'), (3900 * 1024, '', None, 'off|560000|'),
+                                           (3900 * 1024, '', 'high', '||'), (973 * 1024, '', 'high', '||a b'),
+                                           (973 * 1024, 'UA_PICTURE=full; ', None, '||a b'), (973 * 1024, '', 'low', 'off|560000|a b'),
+                                           (973 * 1024, 'ASMPATCH_HK_BLUR=low; ', None, 'low|560000|a b')):
+                put(os.path.join(t, 'meminfo'), f'MemTotal:     {kb} kB\nMemFree: 1 kB\n')
+                put(os.path.join(t, 'port.env'), P.port_env(cfg2).replace('/proc/meminfo', os.path.join(t, 'meminfo')))
+                if answers:
+                    put(os.path.join(t, 'answers.env'), f"export UA_PICTURE='{answers}'\n")
+                elif os.path.exists(os.path.join(t, 'answers.env')):
+                    os.remove(os.path.join(t, 'answers.env'))
+                out = subprocess.run(['bash', '-c', f'GAMEDIR={t}; {pre}. {t}/port.env; echo "$ASMPATCH_HK_BLUR|$UA_RENDER_PIXELS|$UA_X"'],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+                self.assertEqual(out, want, (kb, pre, answers))
+        self.assertNotIn('UA_PICTURE', P.port_env(P.build_config('g', None, {'game': {'unity_versions': ['2020.3.1f1']}})))
         # asmpatch = ["auto", <opt-in>]: the default patches and those; "auto" only first
         cfg['android_data']['asmpatch'] = ['auto', 'hk-blur']
         P.validate(cfg)

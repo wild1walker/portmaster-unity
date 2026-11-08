@@ -947,8 +947,9 @@ What did not pay, or is not exact:
 
 ### Hollow Knight's blur and particles on 1 GB handhelds
 
-Not vanilla: the options here change the picture (never the game play), for handhelds with 1 GB of
-RAM where a port may give some of it up (porting.md, "Small handhelds"). The background blur is the
+Not vanilla: the options here change the picture (never the game play). They were measured for
+handhelds with 1 GB of RAM and are now the port's Low picture on every handheld (porting.md, "The Low
+picture at launch"). The background blur is the
 largest single piece of the GPU frame above (the background camera, its 4-pass blur and the copy
 back: 7.7 ms of 29). The game itself has two lighter settings in Options, Video: **Shader Quality**
 (`ShaderQuality` in its PlayerPrefs; Medium, the default, blurs in two pass groups of two passes,

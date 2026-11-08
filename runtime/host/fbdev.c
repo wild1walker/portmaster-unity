@@ -63,6 +63,9 @@
 //                     it. Off by default (the picture is softer: a visual setting).
 //   UA_RENDER_RAM=<MB> only on a device with at most that much memory (MemTotal), e.g. 1024: a
 //                     port's default for 1 GB handhelds that leaves bigger ones at the panel's size
+//   UA_RENDER_PIXELS=<n>  at most about n pixels, on every device (also where UA_RENDER_RAM leaves
+//                     the panel's size): a port's default for big screens, e.g. 560000 (a
+//                     1920x1152 panel: 960x576; 720x480: the panel's size)
 #define _GNU_SOURCE
 #include "fbdev.h"
 
@@ -201,29 +204,46 @@ int fbdev_fit_aspect(int pw, int ph, const char *aspect, int *w, int *h)
     return 1;
 }
 
-// UA_RENDER_SIZE / UA_RENDER_SCALE (fbdev.h) for a pw x ph panel and mem_kb of memory: 1 and the size,
-// 0 for the panel's own. The size is m times the aspect's smallest whole step (720x480: 3x2), m
-// even where a step is odd, so both sides are even; a quarter of the panel at least.
-int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, long mem_kb, int *w, int *h)
+// the square root, without libm (the tests link none)
+static double root(double x)
+{
+    double r = x > 1 ? x : 1;
+    for (int i = 0; i < 60; i++) r = (r + x / r) / 2;
+    return r;
+}
+
+// UA_RENDER_SIZE / UA_RENDER_SCALE / UA_RENDER_PIXELS (fbdev.h) for a pw x ph panel and mem_kb of
+// memory: 1 and the size, 0 for the panel's own. The size is m times the aspect's smallest whole step
+// (720x480: 3x2), m even where a step is odd, so both sides are even; a quarter of the panel at least.
+int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, const char *pixels,
+                           long mem_kb, int *w, int *h)
 {
     if (pw <= 0 || ph <= 0) return 0;
-    double s = 0;
-    int sw = 0, sh = 0;
+    double s = 1;
+    int sw = 0, sh = 0, by_size = 0;
     if (size && *size) {
         if (sscanf(size, "%dx%d", &sw, &sh) != 2 || sw <= 0 || sh <= 0) {
             fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: <width>x<height>; the panel's size\n", size);
             return 0;
         }
         s = (double)sw / pw < (double)sh / ph ? (double)sw / pw : (double)sh / ph;
+        by_size = 1;
     } else if (scale && *scale) {
         s = atof(scale);
         if (s <= 0) { fprintf(stderr, "[fbdev] UA_RENDER_SCALE=%s: a number up to 1; the panel's size\n", scale); return 0; }
-    } else {
-        return 0;
     }
-    if (ram && *ram && atol(ram) > 0 && mem_kb > 0 && mem_kb > atol(ram) * 1024L) {
-        fprintf(stderr, "[fbdev] render size: the device has %ld MB, more than UA_RENDER_RAM=%s: the panel's size\n", mem_kb >> 10, ram);
-        return 0;
+    long n = pixels && *pixels ? atol(pixels) : 0;
+    if (pixels && *pixels && n <= 0)
+        fprintf(stderr, "[fbdev] UA_RENDER_PIXELS=%s: a number of pixels; not applied\n", pixels);
+    if (s < 1 && ram && *ram && atol(ram) > 0 && mem_kb > 0 && mem_kb > atol(ram) * 1024L) {
+        fprintf(stderr, "[fbdev] render size: the device has %ld MB, more than UA_RENDER_RAM=%s: %s\n", mem_kb >> 10, ram,
+                n > 0 ? "UA_RENDER_PIXELS only" : "the panel's size");
+        s = 1;
+        by_size = 0;
+    }
+    if (n > 0 && (double)pw * ph * s * s > (double)n) {
+        s = root((double)n / ((double)pw * ph));
+        by_size = 0;
     }
     if (s >= 1) return 0;
     if (s < 0.25) s = 0.25;
@@ -242,7 +262,7 @@ int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, 
         *w = m * ux;
         *h = m * uy;
     }
-    if (size && *size && (*w != sw || *h != sh))
+    if (by_size && (*w != sw || *h != sh))
         fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: %dx%d (the panel's aspect, even)\n", size, *w, *h);
     return 1;
 }
@@ -313,7 +333,7 @@ void fbdev_setup(void)
     // engine's layer always fills the panel: sunxi's pans put its window back)
     int lw, lh, letterbox = fbdev_fit_aspect(v.xres, v.yres, getenv("UA_ASPECT"), &lw, &lh);
     int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
-                                        mem_total_kb(), &g_rw, &g_rh);
+                                        getenv("UA_RENDER_PIXELS"), mem_total_kb(), &g_rw, &g_rh);
     if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
     if (picked) {
         // the display engine's scaler: Allwinner's (sunxi disp, /sys/class/disp) shows a cropped

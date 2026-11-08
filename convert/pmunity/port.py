@@ -1719,6 +1719,7 @@ DEFAULTS = {
                      'winbcl': 'auto', 'name': '', 'package': '', 'args': []},
     'wwise': {'banks': ''},
     'runtime': {},
+    'runtime_low': {},
     'runtime_lowmem': {},
     'questions': [],
     'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': []},
@@ -1824,7 +1825,7 @@ def validate(cfg):
         errs.append(f"port.name {p['name']!r}: lowercase letters, digits, '.', '_', '-' (it is the folder in ports/)")
     if not p['title'] or '/' in p['title'] or p['title'].startswith('.'):
         errs.append(f"port.title {p['title']!r}: the launcher is '<title>.sh'")
-    for sec in ('runtime', 'runtime_lowmem'):
+    for sec in ('runtime', 'runtime_low', 'runtime_lowmem'):
         for k in cfg.get(sec) or {}:
             if not ENV_RX.match(k):
                 errs.append(f'{sec}.{k}: not an environment variable name')
@@ -1926,9 +1927,13 @@ CONFIG_DOC = {
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
                "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\",\n"
                "# UA_DPAD_STICK = \"auto\" (the d-pad drives the left stick on handhelds without sticks)",
+    'runtime_low': "# the Low picture: more of the environment on every handheld unless the player chose High\n"
+                   "# (UA_PICTURE = high or full: a question with env = \"UA_PICTURE\", or port.env): reductions of\n"
+                   "# the picture, never of the game play (docs/porting.md, \"The Low picture at launch\"), e.g.\n"
+                   "# ASMPATCH_HK_BLUR = \"off\", UA_RENDER_PIXELS = \"560000\", UA_PREFS_DEFAULTS (the game's own options)",
     'runtime_lowmem': "# more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there\n"
-                      "# unless set already): reductions of the picture, never of the game play (docs/porting.md,\n"
-                      "# \"Small handhelds\"), e.g. ASMPATCH_HK_BLUR = \"low\" with asmpatch's hk-blur",
+                      "# unless set already), with either picture: what spares memory or the CPU and leaves the\n"
+                      "# picture as it is (docs/porting.md, \"Small handhelds\"), e.g. UA_UNITY_ARGS = \"-job-worker-count 1\"",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
              '# they make put into the port folder (outputs = {"setup/files/x" = "build/x"}), and their licences\n'
              '# (licenses = {"LICENSE.x.txt" = "path"})',
@@ -1961,7 +1966,7 @@ def dump_toml(cfg, route=None, drafted=()):
     out = ['# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).',
            '# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.', '']
     for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'wwise', 'runtime',
-                                       'runtime_lowmem', 'files', 'build'):
+                                       'runtime_low', 'runtime_lowmem', 'files', 'build'):
         val = cfg.get(sec, {})
         if sec == 'wwise' and not val.get('banks'):
             continue
@@ -2096,10 +2101,19 @@ def port_env(cfg):
              '# sourced by the launcher. Edit to taste; a variable already set in the environment wins.']
     for k, v in cfg['runtime'].items():
         lines.append(f'[ -n "${{{k}+x}}" ] || export {k}={q(v)}')
+    pic = cfg.get('runtime_low') or {}
+    if pic:
+        lines += ['# the setup\'s answers (answers.env) first, so that they win over the defaults below',
+                  '[ -f "${GAMEDIR:-.}/answers.env" ] && . "${GAMEDIR:-.}/answers.env"',
+                  '# the Low picture on every handheld, the same game; UA_PICTURE=high (the setup\'s High, or set',
+                  '# here) keeps the picture as on PC (set a variable above, or in the environment, and that wins)',
+                  'case "${UA_PICTURE:-low}" in high|full) ;; *)']
+        lines += [f'  [ -n "${{{k}+x}}" ] || export {k}={q(v)}' for k, v in pic.items()]
+        lines.append(';; esac')
     low = cfg.get('runtime_lowmem') or {}
     if low:
-        lines += ['# handhelds with 1 GB of RAM or less: a smaller picture, the same game (set a variable above, or',
-                  '# in the environment, e.g. to "" or "full", and that wins)',
+        lines += ['# handhelds with 1 GB of RAM or less, either picture (set a variable above, or in the',
+                  '# environment, e.g. to "", and that wins)',
                   "mem_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null)",
                   'if [ "${mem_mb:-0}" -gt 0 ] && [ "${mem_mb:-0}" -le 1024 ]; then']
         lines += [f'  [ -n "${{{k}+x}}" ] || export {k}={q(v)}' for k, v in low.items()]
@@ -2807,7 +2821,7 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
     # the flip-book stand-in ua_host loads with UA_FLIPBOOK (runtime/host/managed/build.sh), beside it
     if dst == 'ua_host':
         fb = os.path.join(os.path.dirname(p), 'uaflipbook.dll')
-        uses = any('UA_FLIPBOOK' in (ctx.cfg.get(k) or {}) for k in ('runtime', 'runtime_lowmem'))
+        uses = any('UA_FLIPBOOK' in (ctx.cfg.get(k) or {}) for k in ('runtime', 'runtime_low', 'runtime_lowmem'))
         if os.path.isfile(fb):
             ctx.add(fb, 'uaflipbook.dll')
         elif uses:

@@ -27,7 +27,7 @@
 //   UA_DISPLAY_SRGB=1       sRGB window surface (linear color space games; egl_glue warns when
 //                           Unity asks for one and this is off)
 //   UA_SWAP_INTERVAL=<n>    initial (and forced) swap interval; default 1, EGL's own default
-//   UA_RENDER_SIZE / UA_RENDER_SCALE  (as on the fbdev path, fbdev_pick_render_size) Unity is told
+//   UA_RENDER_SIZE / UA_RENDER_SCALE / UA_RENDER_PIXELS  (as on the fbdev path, fbdev_pick_render_size) Unity is told
 //                           the smaller size; display.c's GPU scaler draws it over the whole window.
 //                           GLES 3 only; unset (the default), nothing of it runs
 //   UA_PRESENT_THREAD=1     (with a render size, no UA_ASPECT) Unity's contexts current without a surface,
@@ -353,7 +353,7 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
 
     int lw, lh, letterbox = fbdev_fit_aspect(dw, dh, getenv("UA_ASPECT"), &lw, &lh);
     int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
-                                        mem_total_kb(), &g_rw, &g_rh);
+                                        getenv("UA_RENDER_PIXELS"), mem_total_kb(), &g_rw, &g_rh);
     if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
     if (picked) {
         if (tries[t].major < 3) {

@@ -24,7 +24,8 @@ int fbdev_bars_height(void);
 // driver's flips from now on, no display-engine crop; 1 and the sizes when a render size is left
 // for the GPU scaler, else 0.
 int fbdev_driver_presents(int *w, int *h, int *pw, int *ph);
-int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, long mem_kb, int *w, int *h);
+int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, const char *ram, const char *pixels,
+                           long mem_kb, int *w, int *h);
 // UA_ASPECT=<w>:<h> for a pw x ph panel: 1 and the largest even size of that aspect inside it (Unity
 // draws at that size, the GPU scaler places it with black bars), 0 and the panel's own size when the
 // panel has that aspect or the variable is unset.

@@ -336,7 +336,7 @@ int main(void)
     buf_lines = panel_h = YRES; panel_vy = 0;
     start_w = 720; start_h = YRES;
     // the render sizes (UA_RENDER_SIZE / UA_RENDER_SCALE / UA_RENDER_RAM)
-    static const struct { int pw, ph; const char *size, *scale, *ram; long kb; int ok, w, h; } rs[] = {
+    static const struct { int pw, ph; const char *size, *scale, *ram; long kb; int ok, w, h; const char *px; } rs[] = {
         { 720, 480, NULL, "0.75", NULL, 0, 1, 540, 360 },
         { 720, 480, NULL, "0.8333", NULL, 0, 1, 600, 400 },
         { 720, 480, NULL, "0.9167", NULL, 0, 1, 660, 440 },
@@ -358,14 +358,27 @@ int main(void)
         { 1280, 720, NULL, "0.75", NULL, 0, 1, 960, 540 },
         { 1920, 1152, NULL, "0.5", NULL, 0, 1, 960, 576 },
         { 854, 480, NULL, "0.75", NULL, 0, 1, 640, 360 },           // no whole aspect step: the nearest even sizes
+        // UA_RENDER_PIXELS: at most about that many pixels, on every device
+        { 1920, 1152, NULL, NULL, NULL, 0, 1, 960, 576, "560000" },
+        { 1920, 1080, NULL, NULL, NULL, 0, 1, 992, 558, "560000" },
+        { 720, 480, NULL, NULL, NULL, 0, 0, 0, 0, "560000" },        // fewer already: the panel's size
+        { 720, 480, NULL, "0.75", NULL, 0, 1, 540, 360, "560000" },   // the scale's smaller size
+        { 1920, 1152, NULL, "0.75", NULL, 0, 1, 960, 576, "560000" }, // the cap's smaller size
+        { 720, 480, "540x360", NULL, "1024", 996352, 1, 540, 360, "560000" },        // a 1 GB device: the size
+        { 640, 480, "540x360", NULL, "1024", 996352, 1, 480, 360, "560000" },
+        { 1920, 1152, "540x360", NULL, "1024", 4 * 1048576L, 1, 960, 576, "560000" }, // 4 GB: the cap only
+        { 720, 480, "540x360", NULL, "1024", 4 * 1048576L, 0, 0, 0, "560000" },       // 4 GB, small panel: its size
+        { 1920, 1152, NULL, NULL, NULL, 0, 0, 0, 0, "lots" },          // not a number: not applied
+        { 1920, 1152, NULL, NULL, NULL, 0, 1, 480, 288, "1000" },      // a quarter of the panel at least
     };
     for (size_t i = 0; i < sizeof rs / sizeof rs[0]; i++) {
         int w = 0, h = 0;
-        int ok = fbdev_pick_render_size(rs[i].pw, rs[i].ph, rs[i].size, rs[i].scale, rs[i].ram, rs[i].kb, &w, &h);
+        int ok = fbdev_pick_render_size(rs[i].pw, rs[i].ph, rs[i].size, rs[i].scale, rs[i].ram, rs[i].px, rs[i].kb, &w, &h);
         CHECK(ok == rs[i].ok && (!ok || (w == rs[i].w && h == rs[i].h)));
         if (ok != rs[i].ok || (ok && (w != rs[i].w || h != rs[i].h)))
-            fprintf(stderr, "  render size %dx%d size %s scale %s ram %s: %d %dx%d\n", rs[i].pw, rs[i].ph, rs[i].size ? rs[i].size : "-",
-                    rs[i].scale ? rs[i].scale : "-", rs[i].ram ? rs[i].ram : "-", ok, w, h);
+            fprintf(stderr, "  render size %dx%d size %s scale %s ram %s pixels %s: %d %dx%d\n", rs[i].pw, rs[i].ph,
+                    rs[i].size ? rs[i].size : "-", rs[i].scale ? rs[i].scale : "-", rs[i].ram ? rs[i].ram : "-",
+                    rs[i].px ? rs[i].px : "-", ok, w, h);
     }
     // the sizes UA_ASPECT picks
     static const struct { int pw, ph; const char *aspect; int ok, w, h; } as[] = {
