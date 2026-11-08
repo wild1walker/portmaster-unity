@@ -4,6 +4,9 @@
 # PortMaster's patcher when the game is set up and setup/update is there: a release brings the
 # setup folder again, and a setup removes it when it ends, so a game set up by this release never
 # runs it. Now:
+#   - the game's code patches (asmpatch as the setup runs it, when the setup has it): `pmu
+#     apk-asmpatch` runs asmpatch on the installed APK's assemblies; the patches they have already
+#     say "done", a newer release's go in (after the APK's end: nothing there is overwritten)
 #   - the game's videos (convert's `video` step, when the port's setup/convert.json has it):
 #     `pmu video` makes the VP8 clips of the installed APK and OBB smaller in place on handhelds
 #     with 1 GB of RAM or less (nothing elsewhere, or for a game without such clips)
@@ -25,11 +28,29 @@ chmod +x "$S/pmu" 2>/dev/null
 "$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
 echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB"
 
+SA=${STREAMING_ASSETS:-obb}
+if { [ "${ASMPATCH:-off}" != off ] || [ "$SA" != obb ] || [ "${DATA_PATH:-0}" = 1 ]; } && [ -f "$S/asmpatch" ] \
+   && [ -f "$GAMEDIR/$APK_NAME.apk" ]; then
+  step "the game's code patches"
+  f=$(df -Pm "$GAMEDIR" | awk 'NR==2{print $4}')
+  [ -z "$f" ] || [ "$f" -gt 300 ] || fail "Patching the game's code needs about 300 MB free on the card ($f MB free)."
+  chmod +x "$S/asmpatch"
+  a="'$S/asmpatch'"
+  # (as the setup ran it: the streaming-assets and data-path patches android-data adds too)
+  case "${ASMPATCH:-off}" in auto) ;; off) a="$a --only=";; auto,*) a="$a --with=${ASMPATCH#auto,}";; *) a="$a --only=$ASMPATCH";; esac
+  case "$SA" in both) a="$a --with=streaming-assets";; loose) a="$a --with=streaming-assets-all";; esac
+  [ "${DATA_PATH:-0}" = 1 ] && a="$a --with=data-path"
+  "$S/pmu" apk-asmpatch "$GAMEDIR/$APK_NAME.apk" "$GAMEDIR/.asmpatch-update" "$a" \
+    || fail "Could not patch the game's code (see patchlog.txt)."
+fi
+
 if [ -f "$S/convert.json" ] && grep -q '"video"' "$S/convert.json"; then
   step "the game's videos (a few minutes on a 1 GB handheld)"
   "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt)."
 fi
 
-rm -rf "$S"
+# (bash keeps this script open: on a FUSE card, Knulli's, setup/ stays behind empty until it ends;
+# the launcher looks for setup/update)
+rm -rf "$S" 2>/dev/null
 sync
 echo "update done"

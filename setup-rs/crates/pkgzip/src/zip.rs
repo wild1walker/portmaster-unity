@@ -350,6 +350,106 @@ impl Archive {
         Ok(())
     }
 
+    /// New data for entries (name, bytes) of an installed game's APK, without a byte that is there
+    /// overwritten: each goes after the archive's end as a stored entry (its data 4-byte aligned
+    /// as apk.py aligns it), then the central directory again with those records pointing at
+    /// them, then the end record. The old data, directory and end record stay as dead bytes
+    /// (readers take the last end record). Before anything is written `<path>.put` holds the
+    /// archive's length: an interrupted put leaves it and recover_put cuts the archive back to
+    /// it. Refused: a name not in the archive, a zip64 one, one that would pass 2 GiB (zip's
+    /// offsets; the 32-bit player's reads). `path` is this archive's file.
+    pub fn put_stored(&self, path: &str, puts: &[(&str, &[u8])]) -> Result<()> {
+        let size = self.file.metadata()?.len();
+        let Some((sig, size_cd, offset_cd, loc)) = end_record(&self.file, size)? else {
+            return Err(bad("File is not a zip file"));
+        };
+        if &sig != b"PK\x05\x06" {
+            return Err(Error::Fail(format!("{path}: a zip64 archive")));
+        }
+        // (from the end record as it is now: an earlier put moved the directory)
+        let Some(start_dir) = loc.checked_sub(size_cd) else {
+            return Err(bad("Bad offset for central directory"));
+        };
+        let Some(concat) = start_dir.checked_sub(offset_cd) else {
+            return Err(bad("Bad offset for central directory"));
+        };
+        let mut cd = read_at(&self.file, start_dir, size_cd as usize)?;
+        let tail = read_at(&self.file, loc, (size - loc) as usize)?;
+        // the directory's records: where each starts, by name (the last one where a name repeats)
+        let mut recs = HashMap::new();
+        let mut p = 0usize;
+        while p + 46 <= cd.len() && cd[p..].starts_with(b"PK\x01\x02") {
+            let (n_len, x_len, k_len) = (
+                u16_at(&cd, p + 28) as usize,
+                u16_at(&cd, p + 30) as usize,
+                u16_at(&cd, p + 32) as usize,
+            );
+            let nm = decode_name(&cd[p + 46..p + 46 + n_len], u16_at(&cd, p + 8))?;
+            recs.insert(nm.split('\0').next().unwrap_or("").to_string(), p);
+            p += 46 + n_len + x_len + k_len;
+        }
+        let mut blob = Vec::new();
+        for (name, data) in puts {
+            let &r = recs
+                .get(*name)
+                .ok_or_else(|| Error::Fail(format!("{name}: not in {path}")))?;
+            if [20, 24, 42].iter().any(|&i| u32_at(&cd, r + i) == 0xFFFF_FFFF) {
+                return Err(Error::Fail(format!("{name}: a zip64 entry")));
+            }
+            let at = size + blob.len() as u64;
+            let n_len = u16_at(&cd, r + 28) as usize;
+            let name_b = cd[r + 46..r + 46 + n_len].to_vec();
+            let pad = (4 - (at + 30 + n_len as u64 + 4) % 4) % 4;
+            let mut extra = vec![0x35, 0xD9, pad as u8, 0];
+            extra.resize(4 + pad as usize, 0);
+            let flags = u16_at(&cd, r + 8) & !0x08;
+            let crc = crc32fast::hash(data);
+            let n = (data.len() as u32).to_le_bytes();
+            blob.extend(b"PK\x03\x04");
+            blob.extend(&cd[r + 6..r + 8]);
+            blob.extend(flags.to_le_bytes());
+            blob.extend(STORED.to_le_bytes());
+            blob.extend(&cd[r + 12..r + 16]);
+            blob.extend(crc.to_le_bytes());
+            blob.extend(n);
+            blob.extend(n);
+            blob.extend((n_len as u16).to_le_bytes());
+            blob.extend((extra.len() as u16).to_le_bytes());
+            blob.extend(&name_b);
+            blob.extend(&extra);
+            blob.extend(*data);
+            cd[r + 8..r + 10].copy_from_slice(&flags.to_le_bytes());
+            cd[r + 10..r + 12].copy_from_slice(&STORED.to_le_bytes());
+            cd[r + 16..r + 20].copy_from_slice(&crc.to_le_bytes());
+            cd[r + 20..r + 24].copy_from_slice(&n);
+            cd[r + 24..r + 28].copy_from_slice(&n);
+            cd[r + 42..r + 46].copy_from_slice(&((at - concat) as u32).to_le_bytes());
+        }
+        let new_cd = size + blob.len() as u64;
+        let end = new_cd + cd.len() as u64 + tail.len() as u64;
+        if end > (1 << 31) - 1 {
+            return Err(Error::Fail(format!(
+                "{path}: would pass 2 GiB ({end} bytes) with the new data"
+            )));
+        }
+        let mut tail = tail;
+        tail[16..20].copy_from_slice(&((new_cd - concat) as u32).to_le_bytes());
+        let journal = format!("{path}.put");
+        let mut j = File::create(&journal).map_err(io_at(&journal))?;
+        j.write_all(size.to_string().as_bytes())?;
+        j.sync_all()?;
+        let w = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .map_err(io_at(path))?;
+        w.write_all_at(&blob, size)?;
+        w.write_all_at(&cd, new_cd)?;
+        w.write_all_at(&tail, new_cd + cd.len() as u64)?;
+        w.sync_all()?;
+        std::fs::remove_file(&journal).map_err(io_at(&journal))?;
+        Ok(())
+    }
+
     /// Where an entry's data begins (after its local header and that header's extra field).
     pub fn data_offset(&self, e: &Entry) -> Result<u64> {
         Ok(self.local(e)?.0)
@@ -685,6 +785,32 @@ pub fn copy_entry(r: &mut EntryReader, w: &mut dyn Write) -> Result<u64> {
         w.write_all(&buf[..n])?;
         total += n as u64;
     }
+}
+
+/// An archive a put_stored was interrupted in (`<path>.put` there) cut back to the length the
+/// journal holds (put_stored only adds bytes past it), the journal removed. Whether it was.
+pub fn recover_put(path: &str) -> Result<bool> {
+    let journal = format!("{path}.put");
+    let Ok(s) = std::fs::read_to_string(&journal) else {
+        return Ok(false);
+    };
+    let len: u64 = s
+        .trim()
+        .parse()
+        .map_err(|_| Error::Fail(format!("{journal}: no length in it")))?;
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(io_at(path))?;
+    if f.metadata()?.len() < len {
+        return Err(Error::Fail(format!(
+            "{path}: shorter than the {len} bytes {journal} names"
+        )));
+    }
+    f.set_len(len)?;
+    f.sync_all()?;
+    std::fs::remove_file(&journal).map_err(io_at(&journal))?;
+    Ok(true)
 }
 
 /// `python -m zipfile -e <zip> <dir>` (ZipFile.extractall): every name in the directory's order

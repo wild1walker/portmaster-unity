@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 mod android_data;
 mod apk;
+mod apk_asmpatch;
 mod argp;
 mod convert;
 mod il2cpp;
@@ -34,6 +35,7 @@ pub const NAMES: &[&str] = &[
     "il2cpp",
     "wwise",
     "video",
+    "apk-asmpatch",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -54,6 +56,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "il2cpp" => Some(il2cpp::run(args)),
         "wwise" => Some(wwise::run(args)),
         "video" => Some(video::run(args)),
+        "apk-asmpatch" => Some(apk_asmpatch::run(args)),
         _ => None,
     }
 }

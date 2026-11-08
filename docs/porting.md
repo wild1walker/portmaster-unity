@@ -495,7 +495,10 @@ about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continue
 A release brings the port's `setup/` folder again, and a setup removes it when it ends. When the
 launcher finds the game set up and `setup/update` there (android route), it runs that once through
 PortMaster's patcher: what this release's setup does that an earlier one did not, done on the
-installed files, then `setup/` goes. Now that is convert's `video` step when the port's
+installed files, then `setup/` goes. Now that is asmpatch with `setup.env`'s `ASMPATCH` on the
+installed APK's assemblies (`pmu apk-asmpatch`: the patches the game has already say "done", a
+newer release's go in; the changed assemblies are written after the APK's end, nothing there is
+overwritten, [rust-setup.md](rust-setup.md)), and convert's `video` step when the port's
 `convert.json` has it (`pmu video`: the installed APK's and OBB's VP8 clips made smaller in place on
 1 GB handhelds, [rust-setup.md](rust-setup.md#video)); the update logs to `patchlog.txt` like the
 setup, and a run that is interrupted runs again at the next launch.

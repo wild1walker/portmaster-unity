@@ -235,6 +235,13 @@ left out there: exact vertex ranges and base-vertex draws (no change), vsync off
 (+11 % without the present thread, nothing with it), incremental GC (Knulli: -1.5 fps, the pauses as
 large). The Knulli also gets 18 rest poses in flipbooks.txt (grass and the like: Greenpath 52.6 - 52.9
 -> 54.3 - 54.6) and `hk-aspect` (3:2: the same fps, Greenpath 52.6, Dirtmouth 58.3).
+Test release 2026.11.08 (the present thread, the fill, the rest poses; its own files, screenshots
+checked): Knulli with the picture filling the screen, steady fps, Colosseum 59.5, Mantis Village 59.5,
+Dirtmouth 59.5, Kingdom's Edge 57.8, Deepnest 57.4, City of Tears 57.3, Crystal Peak 56.0, Queen's
+Gardens 54.8, Greenpath 54.3; Hall of Gods fights Vengefly King 58.7, Nosk 57.2, Flukemarm 56.6,
+Oblobbles 56.5, Mantis Lords 56.1, Hive Knight 55.7, Gruz Mother 54.8, The Collector 54.0, Uumuu
+54.0, Broken Vessel 52.9, Crystal Guardian 52.1 (showing more of the room costs the GPU-heavy fights
+1 - 3 fps against the bars); G350 Hall of Gods fights Gruz Mother 35.4, Mantis Lords 32.8.
 
 
 ## Linux builds, one per Unity line (32-bit route)
