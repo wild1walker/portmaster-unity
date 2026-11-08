@@ -15,6 +15,7 @@
 //                        and are left as Unity sets them.
 //   UA_GLES_POOL=1       Unity's pool of GLES buffers in lists that cost O(1) (unitypool.c)
 //   UA_FAST_VERTS=1      dynamic batching's vertex transform without its per-vertex overhead (unityverts.c)
+//   UA_INV_MEMO=1        the 4x4 matrix inverse's last results kept per thread (unitymath.c)
 //   UA_PRESENT_SYNC=end  Unity's GraphicsDeviceSettings.waitForPresentSyncPoint = EndFrame, set once from
 //                        UnityMain after its first frame (=begin: BeginFrame; unset: as the game has it).
 //                        GfxDeviceClient waits for the render thread to have presented the last frame in
@@ -48,6 +49,7 @@
 
 #include "unitypool.h"
 #include "unityverts.h"
+#include "unitymath.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -230,6 +232,7 @@ void unityhooks_on_load(so_module *m)
     size_t size = so_size(m);
     unitypool_on_load(base, size);              // UA_GLES_POOL
     unityverts_on_load(base, size);             // UA_FAST_VERTS
+    unitymath_on_load(base, size);              // UA_INV_MEMO
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);

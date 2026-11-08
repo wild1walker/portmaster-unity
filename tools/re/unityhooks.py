@@ -33,6 +33,8 @@ HOOKS = [
     ('_ZN17BufferManagerGLES13InvalidateAllE', 'BufferManagerGLES::InvalidateAll'),
     ('_ZN17BufferManagerGLESD', 'BufferManagerGLES::~BufferManagerGLES'),
     ('_Z15GetGraphicsCapsv', 'GetGraphicsCaps', 'call'),
+    # unitymath.c (UA_INV_MEMO): the 4x4 inverse, its last results kept
+    ('_Z20InvertMatrix4x4_FullPKfPf', 'InvertMatrix4x4_Full'),
     # unityverts.c (UA_FAST_VERTS): dynamic batching's vertex transform
     ('_Z26TransformVerticesInnerLoopILb0ELb0ELb1EE', 'TransformVerticesInnerLoop<false, false, true>'),
     # unityhooks.c (UA_PRESENT_SYNC): where the main thread waits for the last frame's present
