@@ -55,7 +55,10 @@ patches and a helper assembly).
   output `out/`, game and Unity file types, the rig's screenshots); `package.sh` there builds the
   release, with `PMUNITY` pointing at a portmaster-unity checkout (default: one beside the
   repository). A port's own code (an assembly patch, a hook) goes in the repository too, with its
-  build in `[build]` (section 10).
+  build in `[build]` (section 10). Issue forms help players report what a fix needs:
+  [Hollow Knight's](https://github.com/wild1walker/portmaster-hollowknight/tree/main/.github/ISSUE_TEMPLATE)
+  (a problem, performance, a feature; the handheld, firmware, release, the setup's answers in the
+  labels the setup showed, the log) are a starting point to copy and rename.
 - **The pad bindings:** a game's controls are in its input stack's defaults (Rewired's XML,
   InControl's or the Input System's actions in the assemblies); `port check`'s input survey says
   which stack. On a handheld without sticks a game that moves only with the left stick needs the
@@ -306,7 +309,7 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `game.developer`, `publisher`, `release_date` | the developer from the game's PlayerSettings (company name), else none | `gameinfo.xml`; `release_date` as `YYYY-MM-DD` |
 | `game.genre`, `description` | the first of `port.genres`, `port.desc` | `gameinfo.xml`'s genre (a display name: `Platformer`, `RPG`) and description (the frontend has room for more than `port.desc`) |
 | `game.url` | the first store's `gameurl` | the game's page (the testing thread) |
-| `[controls]` | drafted from InControl's default pad bindings (the check's survey), else none; your own table replaces the draft | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
+| `[controls]` | drafted from InControl's default pad bindings (the check's survey), else none; your own table replaces the draft | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. The buttons always work by position (the bottom one jumps and confirms); only the prompts may show the handheld's letters ([input.md](input.md#buttons-by-position): never name the pad as a Nintendo one). Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
 | `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player the setup unpacks from the port's donors; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
 | `player.donors` | the route's for each of `game.unity_versions` (section 5) | the donor APKs the release ships in `donor/`: `port new` names the route's (a comment in port.toml) and adds any listed here; `port package --donors DIR` copies them and stops when one is missing |
 | `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
@@ -425,6 +428,32 @@ driver's pages for the game ~300 -> ~142 MB, the game ~830 -> ~670 MB in all; th
 ~240 MB free instead of swapping at ~40 MB, the frame rate the same (51 fps).
 `tools/port/rehearse.sh`'s `REHEARSE_MEMINFO` gives the setup container a 1 GB handheld's
 `/proc/meminfo`, so a rehearsal takes these paths.
+
+### Videos
+
+`port check` lists the game's clips and their codecs; what the port does with them depends on the
+codec (the whole table: [runtime/media/README.md](../runtime/media/README.md)). Decoding a video
+costs only while it plays: game play frames decode nothing.
+
+- **VP8** (WebM, what Unity's desktop builds usually carry; Hollow Knight's 14 cinematics): `ua_host`
+  decodes it in software, and four Cortex-A53s cannot keep up with 1080p. The `video` step
+  re-encodes the clips at half size on 1 GB handhelds (`[convert.video]`,
+  [rust-setup.md](rust-setup.md#video)); Hollow Knight's then play at their own 30 pictures a second
+  on the RG34XX-SP instead of in slow motion.
+- **H.264 and HEVC** (MP4, MOV): ship Knifethrower's
+  [libpmhwdec](https://github.com/Knifethrower/pmhwdec) with the port and `ua_host` takes the
+  pictures from the handheld's video decoder: the Allwinner H616 / H618 / H700 / A133 engine on
+  vendor kernels (Knulli, muOS), Rockchip MPP (ArkOS, dArkOS, AmberELEC), V4L2 on mainline (ROCKNIX).
+  Put a build for `ua_host`'s architecture in the port folder (armhf for the android route, arm64
+  for the arm64 routes) and point `UM_PMHW=$GAMEDIR/<path>` at it in `port.env` (the launcher's
+  library path holds only the system's folders). Where its start-up self-test fails, or a stream is
+  one the decoder refuses, the software decoders play it as before. Measured by its author with
+  GRIS's 1080p intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42
+  -> 48 fps; on an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. ArkOS and dArkOS keep
+  the Rockchip decoder's device nodes root-only while ports run as `ark`: the launcher has to make
+  them readable (`$ESUDO chgrp video` and `chmod 660`). The library is LGPL-2.1-or-later: the port
+  ships its licence and says where its source is; this repository never ships it.
+- **VP9, Opus, others**: the table in runtime/media/README.md says which decoder takes each.
 
 ## 4. The setup on the handheld
 

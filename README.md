@@ -344,4 +344,6 @@ code here is this project's own). The converter reads and writes Unity files wit
 translates Direct3D shaders with Unity's open-source
 [HLSLcc](https://github.com/Unity-Technologies/HLSLcc). The box64 route uses
 [box64](https://github.com/ptitSeb/box64) and gl4es. Assembly patches use
-[Mono.Cecil](https://github.com/jbevain/cecil).
+[Mono.Cecil](https://github.com/jbevain/cecil). Hardware video decoding is Knifethrower's work: his
+[libpmhwdec](https://github.com/Knifethrower/pmhwdec), which a port ships, and the runtime's support
+for it (his pull request #10).
