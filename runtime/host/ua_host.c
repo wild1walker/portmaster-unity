@@ -20,6 +20,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "framerate.h"
 #include "gcbudget.h"
 #include "uinav.h"
+#include "monoinvoke.h"
 #include "jitlog.h"
 #include "monoaot.h"
 #include "jitwarm.h"
@@ -368,6 +369,7 @@ static void *dlsym_hook(const char *sym, void *p)
     p = gcbudget_dlsym_hook(sym, p);           // UA_GC_BUDGET (gcbudget.c)
     p = quality_dlsym_hook(sym, p);            // the quality profile's caps (quality.c)
     p = desktopenv_dlsym_hook(sym, p);         // the command line, Screen.resolutions (desktopenv.c)
+    p = monoinvoke_dlsym_hook(sym, p);         // UA_MONO_INVOKE: the runtime invoke's cache (monoinvoke.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }

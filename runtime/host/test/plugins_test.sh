@@ -2,7 +2,7 @@
 # plugins.c's unit test (test_plugins.c, plugins_softfp.c as the softfp "Mono side") with the FMOD
 # test double (fmod_double.c) built as an Android library and as a glibc library; the Wwise stub
 # (wwise.c) with and without a test backend (wwise_backend.c); desktopenv.c's (test_desktopenv.c); monoaot.c's
-# (test_monoaot.c); jitlog.c's (test_jitlog.c). Build the loader
+# (test_monoaot.c); jitlog.c's (test_jitlog.c); monoinvoke.c's (test_monoinvoke.c). Build the loader
 # first (../loader/build.sh, same ARCH). ARCH=armhf (default): built in ua-host-armhf, run in an
 # arm/v7 container; ARCH=arm64: built and run in ua-build-arm64.
 set -e
@@ -19,6 +19,7 @@ if [ "$ARCH" = arm64 ]; then
     gcc $F -o $O/test_desktopenv test/test_desktopenv.c desktopenv.c ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
     gcc $F -o $O/test_monoaot test/test_monoaot.c monoaot.c
     gcc $F -o $O/test_jitlog test/test_jitlog.c jitlog.c -lpthread
+    gcc $F -o $O/test_monoinvoke test/test_monoinvoke.c monoinvoke.c -lpthread
     gcc $F -shared -fPIC -o $O/glibc/libfmodstudio.so test/fmod_double.c
     # an NDK-style library: freestanding, bionic stack guard in tpidr_el0 + 0x28, DT_NEEDED libc.so
     gcc -O2 -g -fPIC -ffreestanding -DDOUBLE_ANDROID -mstack-protector-guard=sysreg -mstack-protector-guard-reg=tpidr_el0 \
@@ -37,7 +38,8 @@ if [ "$ARCH" = arm64 ]; then
     $O/test_desktopenv
     $O/test_monoaot $T
     $O/test_jitlog none
-    $O/test_jitlog legacy'
+    $O/test_jitlog legacy
+    $O/test_monoinvoke'
   exit
 fi
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
@@ -57,6 +59,8 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
     -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -ldl -lpthread -lm
   $CC $F -o $O/test_monoaot test/test_monoaot.c monoaot.c
   $CC $F -o $O/test_jitlog test/test_jitlog.c jitlog.c -lpthread -latomic
+  arm-linux-gnueabihf-g++ $F -o $O/test_monoinvoke -x c test/test_monoinvoke.c -x c monoinvoke.c -x none ../loader/out/libsoloader.a \
+    -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -ldl -lpthread -lm
   # an NDK-style armeabi-v7a library: Thumb-2, softfp, freestanding, DT_NEEDED libc.so
   $CC -O2 -g -fPIC -ffreestanding -fno-stack-protector -march=armv7-a -mthumb -mfloat-abi=softfp -mfpu=vfpv3-d16 \
     -DDOUBLE_ANDROID -c test/fmod_double.c -o $O/fd_android.o
@@ -77,4 +81,5 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
   $O/test_desktopenv
   $O/test_monoaot $T
   $O/test_jitlog none
-  $O/test_jitlog legacy'
+  $O/test_jitlog legacy
+  $O/test_monoinvoke'
