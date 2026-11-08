@@ -163,8 +163,13 @@ game's heaviest scene:
 7. **The firmware sets the clocks.** Knulli runs the RG34XX-SP's CPU up to 1.5 GHz, muOS up to
    1.8: measure on the firmwares players use, and never change governors or clocks for the port.
 
-Exact runtime switches (`UA_FUTEX_SPIN`, `UA_FAST_CLOCK`, `UA_GL_SAMECLEAR`) come after the route
-and gain only where a profile shows their cost (Gungeon: none of the three). Write the measurements
+Four of ua_host's layers are on in every launcher the templates make (port.env or the environment wins;
+an empty value turns one off): `UA_JIT_WARM=1`, `UA_GL_ARENA=1`, `UA_GLES_POOL=1` and
+`UA_PRESENT_SYNC=end` (runtime.md): each leaves the picture and the play as they are, paid in Hollow
+Knight on the RG34XX-SP and the G350, and the emulated rig's corpus (Unity 2017.4 - 2022.3) runs with
+all four. Exact runtime switches (`UA_FUTEX_SPIN`, `UA_FAST_CLOCK`, `UA_GL_SAMECLEAR`, `UA_FAST_VERTS`,
+`UA_GL_MERGE`) come after the route and gain only where a profile shows their cost (Gungeon: none of
+the first three; Hollow Knight: none of the last two). Write the measurements
 into the port's testing notes, with the route chosen and why.
 
 Windows builds (Direct3D 11 shaders) take the `android` route as they come: players put the game's

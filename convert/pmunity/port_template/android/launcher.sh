@@ -75,6 +75,14 @@ export UA_FPS=${UA_FPS:-10}                     # a line of frame statistics eve
 # the game's options (port.env), and the setup's answers that apply when the game runs
 [ -f "$GAMEDIR/port.env" ] && source "$GAMEDIR/port.env"
 [ -f "$GAMEDIR/answers.env" ] && source "$GAMEDIR/answers.env"
+# ua_host's layers that leave the picture and the play as they are (docs/runtime.md; port.env or the
+# environment wins, an empty value turns one off): the methods a run compiled, compiled at the next launch
+# over the title and the first load; dynamic geometry in ranges of one buffer; Unity's GLES buffer pool in
+# O(1) lists (its own player versions); the main thread waiting for the last present at its frame's end
+[ -n "${UA_JIT_WARM+x}" ] || export UA_JIT_WARM=1
+[ -n "${UA_GL_ARENA+x}" ] || export UA_GL_ARENA=1
+[ -n "${UA_GLES_POOL+x}" ] || export UA_GLES_POOL=1
+[ -n "${UA_PRESENT_SYNC+x}" ] || export UA_PRESENT_SYNC=end
 # handhelds without analog sticks whose pad mapping still names a left stick: where PortMaster says there are
 # none (device_info.txt: ANALOG_STICKS=0), auto means a pad without sticks
 if [ "${ANALOG_STICKS:-2}" = 0 ]; then
