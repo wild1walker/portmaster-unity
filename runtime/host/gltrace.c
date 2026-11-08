@@ -556,6 +556,43 @@ static void samplers(GLuint prog, char *out, size_t n)
             o += (size_t)snprintf(out + o, n - o, " %s=(%.3g,%.3g,%.3g,%.3g)", t, v[0], v[1], v[2], v[3]);
         }
     }
+    // UA_GL_TRACE_UHASH=1: a hash of every other uniform's value (each element of an array): whether two draws
+    // of one program could be one draw (UA_GL_TRACE_UHASH_SKIP=<text>,...: uniforms whose names contain one
+    // of these left out of it, e.g. ObjectToWorld: what else differs between draws)
+    static int uhash = -1;
+    static char skip[256];
+    if (uhash < 0) {
+        const char *e = getenv("UA_GL_TRACE_UHASH"), *k = getenv("UA_GL_TRACE_UHASH_SKIP");
+        uhash = e && *e == '1';
+        snprintf(skip, sizeof skip, "%s", k ? k : "");
+    }
+    if (uhash && r_GetUniformfv && o + 24 < n) {
+        uint32_t h = 2166136261u;
+        for (GLint i = 0; i < nu && i < 256; i++) {
+            char name[80]; GLsizei len = 0; GLint size = 0; GLenum type = 0;
+            r_GetActiveUniform(prog, (GLuint)i, 64, &len, &size, &type, name);
+            if (sampler_type(type) || len <= 0) continue;
+            char *br = strchr(name, '[');
+            if (br) *br = 0;
+            int skipped = 0;
+            if (skip[0]) {
+                char l[256]; snprintf(l, sizeof l, "%s", skip);
+                for (char *t = strtok(l, ","); t && !skipped; t = strtok(NULL, ",")) skipped = strstr(name, t) != NULL;
+            }
+            if (skipped) continue;
+            for (GLint k = 0; k < size && k < 64; k++) {
+                char el[96];
+                if (size > 1 || br) snprintf(el, sizeof el, "%s[%d]", name, k); else snprintf(el, sizeof el, "%s", name);
+                GLint loc = r_GetUniformLocation(prog, el);
+                if (loc < 0) continue;
+                float v[16] = { 0 };
+                r_GetUniformfv(prog, loc, v);
+                const unsigned char *b = (const unsigned char *)v;
+                for (size_t q = 0; q < sizeof v; q++) { h ^= b[q]; h *= 16777619u; }
+            }
+        }
+        o += (size_t)snprintf(out + o, n - o, " uhash=%08x", h);
+    }
     drain_errors();
 }
 
