@@ -683,6 +683,37 @@ is the measuring tool. (In the game as it ships the GPU sets the rate, King's Pa
 so a main-thread change would not show there either. The 2017.4 `sem_wait` path passes the loader's
 tests but has not been benched in a 2017.4 game.)
 
+### Mono's runtime invoke and thread-local reads (Unity 2017.4, `UA_MONO_INVOKE`, `UA_MONO_TLS`)
+
+Enter the Gungeon's first fight on the RG34XX-SP (the Keep's first enemy room; a fixed floor seed and no
+damage to the player, both test-only assembly patches; a scripted route; the mean of the 5 s `[fps]`
+windows 44 - 78 s after the route starts; the port's patches and settings: `UA_FUTEX_SPIN=50` and the
+templates' four; Knulli with the frame recorder `UA_GL_REC=2`, muOS without it, since without swap it does
+not fit; each pair run A B and B A from a cool handheld, 2026-11-08). The main thread is the limit there:
+about 22.5 ms on a CPU a frame, waiting on memory (DRAM about 196 ns on both firmwares, so muOS's 1.8 GHz
+against Knulli's 1.5 gains little). libunity calls each of the ~1,200 Update/LateUpdate/coroutine steps a
+frame through `mono_runtime_invoke`, which takes the domain lock and a hash lookup each time (1.0 ms of the
+frame), and every icall wrapper reads its thread's LMF through an unoptimised `mono_get_lmf_addr` and
+libhybris's `pthread_getspecific` hook (with `mono_domain_get` and `mono_native_tls_get_value`, about
+0.6 ms):
+
+| | Knulli fight fps | muOS fight fps | frames over 33 ms (Knulli / muOS) |
+|---|---|---|---|
+| neither | 44.44, 44.39 | 45.23, 44.74 | 8, 9 / 6, 12 |
+| `UA_MONO_INVOKE` and `UA_MONO_TLS` | 45.96, 45.56 | 45.91, 45.84 | 7, 2 / 9, 12 |
+
++1.2 - 1.5 fps on Knulli, +0.7 - 1.1 on muOS, the whole route +1.1 - 1.7; the lowest available memory
+the same (54 - 58 MB Knulli, 68 - 77 MB muOS); the same four exception lines in every log. The invoke
+cache alone gave +0.8 (one order). Both are on by default where libmono matches the checked 2017.4
+armeabi-v7a build.
+
+The GL thread (`UA_GL_REC=thread`, the render thread's GL calls made on a thread of the host's) in the
+same fight, the port's settings otherwise: Knulli 43.51 / 43.33 fps against 44.30 / 44.03 with the frame
+recorder (`UA_GL_REC=2`, whose frame graph sinks this game's clear-only passes), lowest available memory
+71 - 72 against 52 - 57 MB; muOS 44.20 / 44.44 against 43.94 / 43.93 with neither (memory 61 - 70
+against 71 - 77 MB, frames over 50 ms 8 / 7 against 6 / 5). The render thread is not what holds this
+game; its port keeps the recorder where there is swap (Knulli) and neither elsewhere.
+
 ### Legacy graphics jobs on OpenGL ES (`UA_GFX_JOBS`)
 
 `AdjustThreadingModeForAPI(mode, renderer, flags)` (6000.0 and later) maps every graphics-jobs mode
