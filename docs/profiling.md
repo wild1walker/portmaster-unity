@@ -744,6 +744,29 @@ About +2.4 - 3.2 fps (the main thread about 1.3 ms a frame shorter); the lowest 
 A UI library that rebuilds its whole mesh on any change (dfGUI, NGUI) is worth this check in any game: a
 control that keeps moving by float noise, often a hidden one, costs the full rebuild every frame.
 
+### The game's own options in the same fight (Enter the Gungeon, 2026-11-08)
+
+A test build timing every call in the camera chain found the realtime reflection map (`Pixelator.RenderOptionalMaps`)
+at 1.05 ms a frame of the main thread: a whole camera pass of the reflected layer, drawn every frame whether a
+reflective floor is on screen or not. The game's Options menu turns Realtime Reflections off whenever Shader
+Quality goes to Low, and its reset to defaults on a machine with at most 1536 MB of RAM picks Low lighting, Low
+shaders, Low debris and reflections off; the port's setup had written only Low lighting and shaders. Measured
+from the port's settings with the HUD patch, A B and B A, the room's content checked on screenshots:
+
+| options file | Knulli fight fps | muOS fight fps |
+|---|---|---|
+| Low lighting and shaders (the setup's) | 49.57, 49.77 | 48.29, 48.71 |
+| + Realtime Reflections off | 53.14, 53.23 | 53.00, 52.39 |
+| + Low debris (no shell casings, at most 50 debris pieces, no wall chips from enemy shots) | 54.89 (one order; 53.04 without) | 55.04, 54.57 (52.36, 53.27 without) |
+
+Very Low debris measured 58 fps on both, but it is not the same fight: Very Low also leaves out wall and
+surface decorations while the floor is built, which draws the floor's random numbers differently, and the
+fixed seed then gave another room content (its screenshots show other decorations and no enemies on screen).
+Futex spin 200 us against 50 (`UA_FUTEX_SPIN`, Knulli): 50.04 against 49.70 fps, within the spread. The
+game's own physics loops visit all ~855 registered bodies three times a frame, ~600 of them inactive (pooled
+projectiles); a fourth loop (trigger exits) touches every body anyway, so skipping inactive ones in the other
+three was left unbuilt (estimated under 0.2 ms).
+
 ### Legacy graphics jobs on OpenGL ES (`UA_GFX_JOBS`)
 
 `AdjustThreadingModeForAPI(mode, renderer, flags)` (6000.0 and later) maps every graphics-jobs mode
