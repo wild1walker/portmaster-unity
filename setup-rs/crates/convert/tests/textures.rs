@@ -316,3 +316,109 @@ fn textures_layer(workers: bool) {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `readable`: keep leaves readable textures as they are (and a file of only those unwritten);
+/// release clears their m_IsReadable and keeps their pixels (streamed and inline, the file written
+/// though nothing was converted); convert clears it and gives them to the codec as the others;
+/// `readable_keep` leaves the textures it names readable and as they are either way.
+#[test]
+fn textures_readable_modes() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    for mode in ["keep", "release", "convert"] {
+        let dir = temp(&format!("readable-{mode}"));
+        let data = dir.join("Data");
+        std::fs::create_dir_all(&data).unwrap();
+        let stream: Vec<u8> = (0..1024u32).map(|i| (i * 13) as u8).collect();
+        let mut t1 = madeup::texture(
+            &db,
+            "atlas",
+            (16, 16),
+            4,
+            &[],
+            Some((0, 1024, "sharedassets0.assets.resS")),
+        );
+        t1.set("m_IsReadable", Value::Bool(true)).unwrap();
+        let mut t2 = madeup::texture(&db, "small", (8, 8), 4, &[7u8; 256], None);
+        t2.set("m_IsReadable", Value::Bool(true)).unwrap();
+        let o = |path_id, value| Obj {
+            class_id: 28,
+            path_id,
+            value,
+        };
+        let mut t3 = madeup::texture(&db, "scripted_src", (8, 8), 4, &[3u8; 256], None);
+        t3.set("m_IsReadable", Value::Bool(true)).unwrap();
+        let file = madeup::serialized(&db, &[o(1, t1), o(2, t2), o(3, t3)], &[], true);
+        std::fs::write(data.join("sharedassets0.assets"), &file).unwrap();
+        std::fs::write(data.join("sharedassets0.assets.resS"), &stream).unwrap();
+        std::fs::write(
+            data.join("globalgamemanagers"),
+            madeup::serialized(
+                &db,
+                &[Obj {
+                    class_id: 141,
+                    path_id: 1,
+                    value: madeup::build_settings(&db),
+                }],
+                &[],
+                false,
+            ),
+        )
+        .unwrap();
+        let cfg = pyjson::loads(&format!(
+            r#"{{"version": 1, "textures": {{"inline": true, "readable": "{mode}", "readable_keep": "^scripted_", "files": "^[^/]*\\.assets$"}}}}"#
+        ))
+        .unwrap();
+        let mut job = Job::new(&data, &data, cfg).unwrap();
+        let fake = Fake {
+            seen: Vec::new(),
+            workers: false,
+        };
+        textures::run_with(&mut job, &Args::default(), Box::new(fake)).unwrap();
+        let opts = Options {
+            db: Some(db.clone()),
+            ..Default::default()
+        };
+        let f = DataFile::open(data.join("sharedassets0.assets"), &opts).unwrap();
+        let res = std::fs::read(data.join("sharedassets0.assets.resS")).unwrap();
+        let (a, s) = (
+            f.sf.read_typetree(1).unwrap(),
+            f.sf.read_typetree(2).unwrap(),
+        );
+        let kept = f.sf.read_typetree(3).unwrap();
+        let readable = |t: &Value| t.get("m_IsReadable").unwrap().as_bool().unwrap();
+        let format = |t: &Value| t.get("m_TextureFormat").unwrap().as_int().unwrap();
+        assert!(kept.get("m_IsReadable").unwrap().as_bool().unwrap());
+        assert_eq!(kept.get("m_TextureFormat").unwrap().as_int(), Some(4));
+        assert_eq!(
+            kept.get("image data").unwrap().as_bytes().unwrap(),
+            &[3u8; 256][..]
+        );
+        match mode {
+            "keep" => {
+                assert!(readable(&a) && readable(&s));
+                assert_eq!(
+                    std::fs::read(data.join("sharedassets0.assets")).unwrap(),
+                    file
+                );
+                assert_eq!(res, stream);
+            }
+            "release" => {
+                assert!(!readable(&a) && !readable(&s));
+                assert_eq!((format(&a), format(&s)), (4, 4));
+                assert_eq!(res, stream);
+                assert_eq!(
+                    s.get("image data").unwrap().as_bytes().unwrap(),
+                    &[7u8; 256][..]
+                );
+            }
+            _ => {
+                assert!(!readable(&a) && !readable(&s));
+                assert_eq!((format(&a), format(&s)), (54, 54));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

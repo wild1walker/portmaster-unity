@@ -389,7 +389,34 @@ fn defaults() -> Vec<(&'static str, Json)> {
         ("guide", Json::Str(String::new())),
         ("inline_streams", Json::Bool(false)),
         ("spill_mb", Json::Int(64)),
+        ("readable", Json::Str("keep".into())),
+        ("readable_keep", Json::Str(String::new())),
     ]
+}
+
+/// What the step does with textures marked readable (m_IsReadable: Unity keeps a copy of their
+/// pixels in system memory beside the GPU's, for scripts that read or write them): keep = as
+/// they are, never converted (the default); release = the flag cleared, the pixels as they are
+/// (the same picture, the copy gone); convert = the flag cleared and converted as the others.
+/// release and convert are for a port that has checked no script reads or writes those pixels
+/// (GetPixel(s), GetRawTextureData, SetPixel(s), Apply, Resize, EncodeTo*, PackTextures on them);
+/// `readable_keep` (a regular expression on texture names) keeps those a script does use readable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Readable {
+    Keep,
+    Release,
+    Convert,
+}
+
+fn readable_mode(c: &Json) -> Result<Readable> {
+    match opt(c, "readable").as_str().unwrap_or("keep") {
+        "keep" => Ok(Readable::Keep),
+        "release" => Ok(Readable::Release),
+        "convert" => Ok(Readable::Convert),
+        o => Err(Error::Value(format!(
+            "textures.readable: {o:?} (keep, release or convert)"
+        ))),
+    }
 }
 
 /// Classes besides Texture2D whose data can be in a .resS stream (m_StreamData).
@@ -508,6 +535,8 @@ impl StreamFile {
 #[derive(Clone, Copy, Default)]
 struct Stats {
     textures: u64,
+    /// readable textures whose flag `readable` cleared
+    released: u64,
     sprites: u64,
     atlas_entries: u64,
     bytes_in: u64,
@@ -872,6 +901,11 @@ enum Turn {
         t: Value,
         blob: Vec<u8>,
     },
+    /// (a texture kept as it is but for its m_IsReadable, its pixels in the object: `readable`)
+    Flag {
+        pid: i64,
+        t: Value,
+    },
     Conv {
         pid: i64,
         t: Value,
@@ -925,6 +959,8 @@ struct Turns<'a> {
     sizes: BTreeMap<i64, [usize; 4]>,
     order: Vec<i64>,
     converted: u64,
+    /// textures whose m_IsReadable the `readable` setting cleared (the file is written for them too)
+    released: u64,
 }
 
 impl Turns<'_> {
@@ -937,6 +973,9 @@ impl Turns<'_> {
             Turn::Keep { pid, mut t, blob } => {
                 let at = self.stream.add(&blob)?;
                 set_stream(&mut t, at, None)?;
+                f.sf.save_typetree(pid, &t)?;
+            }
+            Turn::Flag { pid, t } => {
                 f.sf.save_typetree(pid, &t)?;
             }
             Turn::Conv {
@@ -1110,6 +1149,14 @@ fn convert_file(
     };
     let platform = f.sf.target_platform;
     let inline = opt(c, "inline").truthy();
+    let readable = readable_mode(c)?;
+    let readable_keep = match opt(c, "readable_keep").as_str().unwrap_or("") {
+        "" => None,
+        k => Some(
+            regex::Regex::new(k)
+                .map_err(|e| Error::Value(format!("textures.readable_keep {k:?}: {e}")))?,
+        ),
+    };
     let mut stream_name: Option<String> = None;
     let mut turns = Turns {
         rel,
@@ -1120,6 +1167,7 @@ fn convert_file(
         sizes: BTreeMap::new(),
         order: Vec::new(),
         converted: 0,
+        released: 0,
     };
     let textures = f.path_ids("Texture2D");
     let (budget, nworkers) = pool.as_ref().map_or((0, 0), |p| (p.budget, p.codecs.len()));
@@ -1168,7 +1216,7 @@ fn convert_file(
             // that finishing a turn before it met is the first, as is)
             let mut turn_failed = false;
             let step = (|| -> Result<Option<Turn>> {
-                let t = match next.pop_front() {
+                let mut t = match next.pop_front() {
                     Some(t) => t?,
                     None => f.sf.read_typetree(pid)?,
                 };
@@ -1206,7 +1254,7 @@ fn convert_file(
                 {
                     return Ok(None);
                 }
-                let tex = Tex {
+                let mut tex = Tex {
                     name: super::text(&t, "m_Name")?,
                     width: int(&t, "m_Width")? as usize,
                     height: int(&t, "m_Height")? as usize,
@@ -1226,6 +1274,21 @@ fn convert_file(
                         .unwrap_or_default(),
                     version: [vmaj, vmin],
                 };
+                // `readable`: release / convert clear the flag (Unity then keeps no copy of the
+                // pixels in system memory once they are on the GPU); convert lets the texture be
+                // converted as the others are
+                let released = tex.is_readable
+                    && readable != Readable::Keep
+                    && !readable_keep
+                        .as_ref()
+                        .is_some_and(|rx| rx.is_match(&String::from_utf8_lossy(&tex.name)));
+                if released {
+                    t.set("m_IsReadable", Value::Bool(false))?;
+                    turns.released += 1;
+                    if readable == Readable::Convert {
+                        tex.is_readable = false;
+                    }
+                }
                 let Some(ch) = enc.choose(&tex) else {
                     return Ok(match &sd {
                         Some((off, size, path)) => Some(Turn::Keep {
@@ -1233,6 +1296,7 @@ fn convert_file(
                             blob: streams.read(f, path, *off, *size)?,
                             t,
                         }),
+                        None if released => Some(Turn::Flag { pid, t }),
                         None => None,
                     });
                 };
@@ -1355,7 +1419,8 @@ fn convert_file(
         turns.drain(f, stats)
     });
     r?;
-    if turns.converted == 0 {
+    stats.released += turns.released;
+    if turns.converted == 0 && turns.released == 0 {
         return Ok(None);
     }
     let mut stream = turns.stream;
@@ -1684,6 +1749,13 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
         stats.atlas_entries,
         stats.sprites
     ));
+    if stats.released > 0 {
+        job.log(&format!(
+            "textures: {} readable textures no longer readable (readable = {}): no copy of their pixels in system memory",
+            stats.released,
+            opt(&c, "readable").as_str().unwrap_or("keep")
+        ));
+    }
     if let Some(p) = pool.as_mut() {
         for w in p.codecs.iter_mut() {
             enc.absorb(w.as_mut());
