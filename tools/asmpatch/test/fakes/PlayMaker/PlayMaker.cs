@@ -159,6 +159,18 @@ namespace HutongGames.PlayMaker
 
         public FsmState[] States { get { return states; } set { states = value; } }
         public object EventTarget { get; set; }
+
+        // (playmaker-loadlock's: the load of an FSM's actions and events, as Fsm.InitData does it)
+        public readonly ActionData Data = new ActionData();
+        public object[][] Loaded;
+        public FsmEvent StartEvent;
+        public void InitData()
+        {
+            StartEvent = FsmEvent.GetFsmEvent(Name.Substring(0, 1) + ":start");
+            var loaded = new object[states.Length][];
+            for (int i = 0; i < states.Length; i++) loaded[i] = Data.LoadActions(states[i]);
+            Loaded = loaded;
+        }
         public List<DelayedEvent> DelayedEvents { get { return delayedEvents; } }
 
         public void SetState(FsmState state) { switchToState = state; }
@@ -267,6 +279,86 @@ namespace HutongGames.PlayMaker
         }
     }
 
+    // (playmaker-loadlock's targets, shaped as PlayMaker's: lookups and a work list shared by every FSM,
+    // no lock; Unity's loading thread and the main thread both load FSMs)
+    public class FsmEvent
+    {
+        private static List<FsmEvent> eventList = new List<FsmEvent>();
+        public readonly string Name;
+        public FsmEvent(string name) { Name = name; }
+        public static FsmEvent FindEvent(string name)
+        {
+            foreach (FsmEvent e in eventList) if (e.Name == name) return e;
+            return null;
+        }
+        public static FsmEvent GetFsmEvent(string name)
+        {
+            FsmEvent e = FindEvent(name);
+            if (e == null) { e = new FsmEvent(name); eventList.Add(e); }
+            return e;
+        }
+        public static FsmEvent GetFsmEvent(FsmEvent e) => e == null ? null : GetFsmEvent(e.Name);
+        public static int Count => eventList.Count;
+    }
+
+    public class LoadA { public int a; public float b; }
+    public class LoadB { public string c; }
+    public class LoadC { public int a; public FsmState s; public LoadB t; }
+
+    public class ActionData
+    {
+        private static readonly Dictionary<string, Type> ActionTypeLookup = new Dictionary<string, Type>();
+        public static readonly Dictionary<Type, System.Reflection.FieldInfo[]> ActionFieldsLookup = new Dictionary<Type, System.Reflection.FieldInfo[]>();
+        public static readonly Dictionary<Type, int> ActionHashCodeLookup = new Dictionary<Type, int>();
+        private static readonly List<int> UsedIndices = new List<int>();
+        public readonly List<string> actionNames = new List<string> { "HutongGames.PlayMaker.LoadA", "HutongGames.PlayMaker.LoadB", "HutongGames.PlayMaker.LoadC", "Missing" };
+
+        public static Type GetActionType(string name)
+        {
+            if (ActionTypeLookup.TryGetValue(name, out Type t)) return t;
+            t = typeof(ActionData).Assembly.GetType(name);
+            if (t == null) return null;
+            ActionTypeLookup[name] = t;
+            return t;
+        }
+        public static System.Reflection.FieldInfo[] GetFields(Type t)
+        {
+            if (ActionFieldsLookup.TryGetValue(t, out System.Reflection.FieldInfo[] f)) return f;
+            f = t.GetFields();
+            ActionFieldsLookup[t] = f;
+            return f;
+        }
+        private static int GetActionTypeHashCode(Type t)
+        {
+            if (ActionHashCodeLookup.TryGetValue(t, out int h)) return h;
+            string s = "";
+            foreach (System.Reflection.FieldInfo f in GetFields(t)) s += f.FieldType + "|";
+            h = 0;
+            foreach (char c in s) h = h * 31 + c;
+            ActionHashCodeLookup[t] = h;
+            return h;
+        }
+        public object[] LoadActions(FsmState state)
+        {
+            UsedIndices.Clear();
+            var list = new List<object>();
+            for (int i = 0; i < actionNames.Count; i++)
+            {
+                object a = CreateAction(state, i);
+                if (a != null) list.Add(a);
+            }
+            if (UsedIndices.Count != list.Count) throw new InvalidOperationException("the shared work list changed under the load");
+            return list.ToArray();
+        }
+        public object CreateAction(FsmState state, int i)
+        {
+            Type t = GetActionType(actionNames[i]);
+            if (t == null) return null;
+            UsedIndices.Add(GetActionTypeHashCode(t));
+            return Activator.CreateInstance(t);
+        }
+    }
+
     public static class Driver
     {
         public static readonly List<FsmState> All = new List<FsmState>();
@@ -359,5 +451,18 @@ namespace HutongGames.PlayMaker
             }
             return sb.ToString();
         }
+    }
+}
+
+// (Unity's component of PlayMaker: Unity calls OnAfterDeserialize on its loading thread)
+public class PlayMakerFSM : UnityEngine.MonoBehaviour
+{
+    public static bool NotMainThread;
+    public HutongGames.PlayMaker.Fsm fsm;
+    public void OnAfterDeserialize()
+    {
+        NotMainThread = true;
+        fsm.InitData();
+        NotMainThread = false;
     }
 }

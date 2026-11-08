@@ -24,8 +24,9 @@ sealed class Result
 /// for small handhelds (README.md, "Reductions"): never the game play, always opt-in. Screen: the
 /// picture fitted to a handheld's screen (README.md, "Screens"): never the game play, always opt-in.
 /// Prompts: the game's button pictures show the letters printed on the handheld, the buttons where
-/// they are (README.md, "Prompts"): never the game play, always opt-in.</summary>
-enum Kind { Android, Optimize, Reduce, Screen, Prompts }
+/// they are (README.md, "Prompts"): never the game play, always opt-in. Fix: a fault of the game's own
+/// (a race between its threads) made impossible, every result as before (README.md, "Fixes"): opt-in.</summary>
+enum Kind { Android, Optimize, Reduce, Screen, Prompts, Fix }
 
 abstract class Patch
 {
@@ -53,6 +54,8 @@ abstract class Patch
         new HollowKnightAspect(),
         // prompts
         new HollowKnightPadLetters(),
+        // fixes
+        new PlayMakerLoadLock(),
     };
 }
 

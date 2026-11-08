@@ -37,6 +37,7 @@ static partial class TestMain
             SurveyTests();
             StreamingAssets();
             PlayMakerTests();
+            PlayMakerLoadLockTests();
             HollowKnightTests();
             Cli();
         }

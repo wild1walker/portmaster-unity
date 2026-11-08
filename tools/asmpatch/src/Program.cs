@@ -40,7 +40,8 @@ static class Program
                                                    (Kind.Optimize, "optimize: the same behaviour with less work"),
                                                    (Kind.Reduce, "reduce: a smaller picture for small handhelds, never other game play (opt-in)"),
                                                    (Kind.Screen, "screen: the picture fitted to a handheld's screen, never other game play (opt-in)"),
-                                                   (Kind.Prompts, "prompts: the button pictures show the handheld's letters, the buttons where they are (opt-in)") })
+                                                   (Kind.Prompts, "prompts: the button pictures show the handheld's letters, the buttons where they are (opt-in)"),
+                                                   (Kind.Fix, "fix: a race of the game's own threads made impossible, every result as before (opt-in)") })
             {
                 Console.WriteLine(title);
                 foreach (var p in Patch.All.Where(p => p.Kind == kind))
