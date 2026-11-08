@@ -70,7 +70,7 @@ glGetGraphicsResetStatus glGetGraphicsResetStatusEXT glGetGraphicsResetStatusKHR
 # driver's stream behind everything recorded before it; with UA_GL_REC=thread a fence is held too, the
 # game given a stand-in until the GL thread has made it); deleting buffers (held with UA_GL_REC=thread)
 CUSTOM = set('''glMapBufferRange glFlushMappedBufferRange glUnmapBuffer glFenceSync glClientWaitSync glDeleteSync
-glGetSynciv glIsSync glWaitSync glDeleteBuffers'''.split())
+glGetSynciv glIsSync glWaitSync glDeleteBuffers glShaderSource'''.split())
 
 # pointer arguments whose memory is copied when the call is recorded: {function: {param: C size}}
 COPY = {}
@@ -162,7 +162,6 @@ for _n in ('glDeleteBuffers', 'glDeleteVertexArrays', 'glDeleteVertexArraysOES')
 # calls glrec.c follows after they ran (any thread): which programs' shaders read the depth/stencil
 # buffer through framebuffer fetch, and Unity's program binary cache
 POST = {
-    'glShaderSource': 'glrec_shader_source(shader, count, string, length)',
     'glAttachShader': 'glrec_attach_shader(program, shader)',
     'glLinkProgram': 'glrec_link_program(program)',
     'glProgramBinary': 'glrec_program_binary(program, binary, length)',

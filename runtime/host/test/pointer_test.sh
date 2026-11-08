@@ -34,7 +34,7 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrename test/test_glrename.c glrename.c $O/rename/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/rec
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/rec/libGLESv2.so.2 test/fake_rec_gl.c
-  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c $O/rec/libGLESv2.so.2 -ldl -lpthread
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c glmerge.c $O/rec/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/memo
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/memo/libGLESv2.so.2 test/fake_memo_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glmemo test/test_glmemo.c glmemo.c $O/memo/libGLESv2.so.2 -ldl -lpthread

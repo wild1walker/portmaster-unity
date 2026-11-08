@@ -57,6 +57,7 @@
 #include "glopt.h"
 #include "glpresent.h"
 #include "glspec.h"
+#include "glmerge.h"
 #include "../android/egl_glue.h"
 #define GLREC_PART 1
 #include "glrec_gen.h"
@@ -556,9 +557,21 @@ static void glrec_shader_source(GLuint sh, GLsizei count, const GLchar *const *s
     }
     fg_note_shader(sh, fetch);
 }
-static void glrec_attach_shader(GLuint prog, GLuint sh) { if (g_mode == 3) fg_note_attach(prog, sh); }
-static void glrec_link_program(GLuint prog) { if (g_mode == 3) fg_note_link(prog, 0); }
-static void glrec_program_binary(GLuint prog, const void *bin, GLsizei len) { if (g_mode == 3) fg_note_binary(prog, bin, len); }
+// glShaderSource: UA_GL_MERGE's rewritten source compiled instead of the game's (glmerge.c)
+static void glrec_custom_glShaderSource(GLuint sh, GLsizei count, const GLchar *const *str, const GLint *len)
+{
+    glrec_submit_for(OP_glShaderSource);
+    char *r = glmerge_on() ? glmerge_source(sh, count, str, len) : NULL;
+    uint64_t t_ = glrec_t0();
+    if (r) { const GLchar *one[1] = { r }; NX(glShaderSource)(sh, 1, one, NULL); free(r); }
+    else NX(glShaderSource)(sh, count, str, len);
+    glrec_tadd(OP_glShaderSource, t_);
+    glrec_shader_source(sh, count, str, len);
+}
+static void glrec_replay_glShaderSource(const uint64_t *a) { (void)a; }      // (never held)
+static void glrec_attach_shader(GLuint prog, GLuint sh) { if (g_mode == 3) fg_note_attach(prog, sh); glmerge_attach(prog, sh); }
+static void glrec_link_program(GLuint prog) { if (g_mode == 3) fg_note_link(prog, 0); glmerge_linked(prog); }
+static void glrec_program_binary(GLuint prog, const void *bin, GLsizei len) { if (g_mode == 3) fg_note_binary(prog, bin, len); glmerge_binary(prog); }
 // (Unity passes no length pointer: the buffer it sized from GL_PROGRAM_BINARY_LENGTH is the binary)
 static void glrec_get_program_binary(GLuint prog, GLsizei size, GLsizei *len, const void *bin)
 {
@@ -571,10 +584,11 @@ void glrec_note_get_program_binary(unsigned prog, long len, const void *bin)
 {
     if (g_mode == 3 && bin && len > 0) fg_note_binary_out(prog, bin, len);
 }
-static void glrec_delete_program(GLuint prog) { if (g_mode == 3) fg_note_delete(prog); }
+static void glrec_delete_program(GLuint prog) { if (g_mode == 3) fg_note_delete(prog); glmerge_deleted(prog); }
 // (Unity's program binary cache stays on: the frame graph keeps what it learnt from each program's
 // sources with the binary Unity reads back for its cache, glrec_fg.c)
-static void glrec_get_integerv(GLenum pname, GLint *data) { (void)pname; (void)data; }
+// (UA_GL_MERGE: Unity's program binary cache off, every program compiled from the source it rewrote)
+static void glrec_get_integerv(GLenum pname, GLint *data) { if (glmerge_on() && pname == GL_NUM_PROGRAM_BINARY_FORMATS && data) *data = 0; }
 
 // ---- UA_GL_REC=thread: the held frames replayed, and Unity's swaps made, on a thread of their own
 // Unity's render thread records each frame as with UA_GL_REC=1. At the swap, Unity's context and the
@@ -609,6 +623,7 @@ static double g_t_wait_s, g_t_glt_s;     // the render thread waiting for the GL
 static unsigned long g_t_returns, g_t_jobs;
 static EGLBoolean (*e_MakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
 static void replay_buf(const uint64_t *cmd, size_t from, size_t to);
+static void glrec_call(unsigned op, const uint64_t *a);
 // UA_GL_REC_DEBUG=<n>: the first <n> steps of the hand-overs logged
 static int g_tdebug = -1;
 #define TDBG(...) do { if (g_tdebug < 0) { const char *e_ = getenv("UA_GL_REC_DEBUG"); g_tdebug = e_ ? atoi(e_) : 0; } \
@@ -686,7 +701,10 @@ static void *glt_main(void *u)
                 g_tglt_ctx = 1;
             }
             g_rblob = g_jblob;
-            replay_buf(g_jcmd, 0, g_jncmd);
+            if (glmerge_on()) {
+                fg_frame mf = { .cmd = g_jcmd, .ncmd = g_jncmd, .at_swap = g_jswap != NULL, .call = glrec_call, .ptr = glrec_ptr, .next = glrec_next };
+                glmerge_submit(&mf);
+            } else replay_buf(g_jcmd, 0, g_jncmd);
             g_jncmd = 0; g_jnblob = 0;
             TDBG("glt: replayed (%.2f ms)", (now() - t0) * 1000);
             if (g_jswap) g_jswap(g_jsd, g_jss);
@@ -960,6 +978,9 @@ static void submit(int at_swap)
         fg_frame f = { .cmd = g_cmd, .ncmd = g_ncmd, .at_swap = at_swap, .call = glrec_call, .ptr = glrec_ptr, .next = glrec_next };
         fg_submit(&f);
         g_fg_s += f.analysis_s;
+    } else if (glmerge_on()) {
+        fg_frame f = { .cmd = g_cmd, .ncmd = g_ncmd, .at_swap = at_swap, .call = glrec_call, .ptr = glrec_ptr, .next = glrec_next };
+        glmerge_submit(&f);
     } else replay(0, g_ncmd);
     g_ncmd = 0; g_nblob = 0;
     if (at_swap) g_swap_submits++;
@@ -1089,6 +1110,7 @@ static void log_stats(void)
     else top(g_direct, "made at once (not held)", 16);
     if (g_time) top_time(f);
     if (g_mode == 3) fg_log(g_frames, g_fg_s);
+    glmerge_log();
     if (g_tstarted)
         fprintf(stderr, "[glrec] thread: the GL thread replaying and swapping %.2f ms a frame; the render thread waiting for it "
                 "%.2f ms a frame; %.2f jobs and %.2f context returns a frame%s\n", g_t_glt_s * 1000 / f, g_t_wait_s * 1000 / f,
@@ -1167,6 +1189,10 @@ const so_shim *glrec_table(void *(*next)(const char *name))
         egl_glue_set_swap_offload(glrec_swap_offload);
     }
     if (g_mode == 3 && fg_init() != 0) g_mode = 2;
+    if (glmerge_init()) {
+        if (g_mode == 2 || g_mode == 4) glmerge_set_next(glrec_next);
+        else fprintf(stderr, "[glmerge] UA_GL_MERGE needs UA_GL_REC=1, thread or auto: off\n");
+    }
     fprintf(stderr, "[glrec] UA_GL_REC=%s: %d entry points wrapped\n", e, k);
     return g_table;
 }
