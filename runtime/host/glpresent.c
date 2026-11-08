@@ -1,5 +1,5 @@
-// UA_PRESENT_THREAD=1: on the SDL display with a render size (display_sdl.c), Unity's frames shown by a
-// present thread of the host's, so that Unity's render thread never waits for the GPU at its swap.
+// UA_PRESENT_THREAD=1: on the SDL display with a render size (display_sdl.c; SDL's KMSDRM and X11 drivers), Unity's frames
+// shown by a present thread of the host's, so that Unity's render thread never waits for the GPU at its swap.
 //
 // Mali's GBM driver (BattleXP G350 / R36S class, RK3326, r13p0 on a 4.4 kernel, SDL's KMSDRM) waits in
 // eglSwapBuffers until the GPU has finished the frame (the display has no fences of the GPU's to wait

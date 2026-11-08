@@ -35,16 +35,15 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w:ro -w /w -e SRC="$SRC" -e CF
   export LIBGL_ALWAYS_SOFTWARE=1 XDG_RUNTIME_DIR=/tmp/xdg
   mkdir -p -m 700 $XDG_RUNTIME_DIR
   run() { echo "== $*"; env "$@" timeout 180 /tmp/test_display; }
+  # each X11 run with an X server of its own (one Xvfb shared by several runs dropped out after two to four)
+  d=90
+  xrun() { d=$((d + 1)); Xvfb :$d -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb$d.log 2>&1 & sleep 1; run DISPLAY=:$d SDL_VIDEODRIVER=x11 "$@"; }
 
-  Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
-  sleep 1
-  run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl TEST_SIZE=1280x720
-  run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 TEST_SIZE=640x360
-  run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x640 UA_ASPECT=16:9 TEST_SIZE=640x640 TEST_RENDER=640x360
-  run DISPLAY=:99 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 UA_ASPECT=1:1 TEST_SIZE=640x360 TEST_RENDER=360x360
-  Xvfb :97 -screen 0 1280x720x24 -nolisten tcp >/tmp/xvfb97.log 2>&1 &   # (an X server of its own: :99 has dropped out after a few runs)
-  sleep 1
-  run DISPLAY=:97 SDL_VIDEODRIVER=x11 UA_DISPLAY=sdl UA_RENDER_SIZE=640x360 UA_PRESENT_THREAD=1 TEST_SIZE=1280x720 TEST_PRESENT=1
+  xrun UA_DISPLAY=sdl TEST_SIZE=1280x720
+  xrun UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 TEST_SIZE=640x360
+  xrun UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x640 UA_ASPECT=16:9 TEST_SIZE=640x640 TEST_RENDER=640x360
+  xrun UA_DISPLAY=sdl UA_DISPLAY_WINDOW=640x360 UA_ASPECT=1:1 TEST_SIZE=640x360 TEST_RENDER=360x360
+  xrun UA_DISPLAY=sdl UA_RENDER_SIZE=640x360 UA_PRESENT_THREAD=1 TEST_SIZE=1280x720 TEST_PRESENT=1
 
   weston --backend=headless-backend.so --width=1280 --height=720 --socket=wayland-1 --idle-time=0 >/tmp/weston.log 2>&1 &
   sleep 2

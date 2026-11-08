@@ -44,6 +44,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 typedef void *EGLDisplay, *EGLConfig, *EGLSurface, *EGLContext;
 typedef int32_t EGLint;
@@ -363,7 +364,11 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
                     g_rw, g_rh, (int)(100.0 * g_rw * g_rh / ((double)dw * dh) + 0.5), dw, dh);
             display_gpu_scale(g_rw, g_rh, dw, dh);
             const char *asp = getenv("UA_ASPECT");
-            if (glpresent_wanted() && !(asp && *asp)) {
+            // (KMSDRM, where it was measured, and X11, where display_test.sh checks it; not yet Wayland)
+            int pt_driver = driver && (!strcasecmp(driver, "KMSDRM") || !strcasecmp(driver, "x11"));
+            if (glpresent_wanted() && !(asp && *asp) && !pt_driver)
+                fprintf(stderr, "[display] UA_PRESENT_THREAD: not on SDL's %s driver: off\n", driver ? driver : "?");
+            if (glpresent_wanted() && !(asp && *asp) && pt_driver) {
                 const char *ex = E.QueryString(dpy, EGL_EXTENSIONS);
                 if (ex && strstr(ex, "EGL_KHR_surfaceless_context")) {
                     g_pt = 1; g_dpy = dpy; g_cfg = cfg;
