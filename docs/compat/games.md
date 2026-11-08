@@ -242,6 +242,16 @@ Gardens 54.8, Greenpath 54.3; Hall of Gods fights Vengefly King 58.7, Nosk 57.2,
 Oblobbles 56.5, Mantis Lords 56.1, Hive Knight 55.7, Gruz Mother 54.8, The Collector 54.0, Uumuu
 54.0, Broken Vessel 52.9, Crystal Guardian 52.1 (showing more of the room costs the GPU-heavy fights
 1 - 3 fps against the bars); G350 Hall of Gods fights Gruz Mother 35.4, Mantis Lords 32.8.
+2026-11-08 night, the G350 with ua_host's GL thread (`UA_GL_REC=auto`: the render thread records each
+frame, a thread of the host's makes the driver calls and the swap; portmaster-hollowknight f51ce92),
+against the present thread alone above: Greenpath 25.1 -> 29.8 - 33.1, Colosseum 38.7 -> 43.4,
+Crystal Peak 36.4 -> 39.7, City of Tears 32.4 -> 35.3, Queen's Gardens 35.4 -> 38.2, Mantis Village
+43.1 -> 45.1, Kingdom's Edge 41.7 -> 42.9, Deepnest 41.7 -> 41.4, King's Pass 38.1 -> 36.7, Dirtmouth
+within its runs' spread (41 - 45 either way this time); Hall of Gods Mantis Lords 36.3. Greenpath's
+GL thread is 27 - 29 ms of its frame there. Measured and left out the same night (exact, no gain that
+could be told apart): asmpatch's playmaker-idle (Knulli Greenpath 52.3 both ways), the arena's
+sub-data copies (muOS, G350), skipping binds of what is bound (G350), `UA_FAST_VERTS` (Knulli +0.3, G350
+none), and `UA_GL_MERGE` (draws 238 -> 138 a frame, slower: profiling.md).
 
 
 ## Linux builds, one per Unity line (32-bit route)
