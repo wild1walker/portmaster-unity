@@ -257,6 +257,12 @@ within their runs' spread), both opt-in.
 Test release 2026.11.08.2 (the GL thread on RK3326 handhelds, and the setup's update applying the
 fill in place to a game set up by an earlier release; its own files): G350 Greenpath 32.4, Dirtmouth
 41.4; Knulli Greenpath 52.5, City of Tears 53.3, Queen's Gardens 54.3.
+2026-11-08, the buttons by position (`UA_PAD_NAME` an Xbox pad's, asmpatch's `hk-pad-letters`), checked on
+the RG34XX-SP in Dirtmouth through the setup's one-time update (the release candidate's own asmpatch
+under `pmu apk-asmpatch`): the bottom button confirmed through the title, the save and the menus and
+jumped (the Knight from 11.4 to 17.0 and down), right walked; Options, Controller showed the Switch Pro
+Controller with B jump, Y attack, A focus / cast, X Dream Nail, and Remap Controller B, Y, A, X, ZR, ZL,
+L, R; `UA_PAD_LETTERS=xbox` the game's Xbox 360 picture, the same positions.
 
 
 ## Linux builds, one per Unity line (32-bit route)
