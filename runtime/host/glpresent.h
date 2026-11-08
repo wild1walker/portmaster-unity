@@ -23,4 +23,5 @@ long glpresent_frames(void);
 // What the host's own drawing and reading at the swap (screenshots, the on-screen keyboard, the cursor)
 // binds for "framebuffer 0" on this thread: the frame Unity just drew (0 when off).
 unsigned glpresent_fb0(void);
+void glpresent_shot(const char *path);          // the next frame the window shows written there (PPM)
 #endif

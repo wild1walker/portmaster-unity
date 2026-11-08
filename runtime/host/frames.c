@@ -114,6 +114,11 @@ static void screenshot(void)
     {
         gl_ReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
         snprintf(sf->path, sizeof sf->path, "%s/shot-%d.ppm", g_root, ++g_shots);
+        if (glpresent_active()) {               // (and what the screen shows, after the present thread's scaling)
+            char wp[sizeof sf->path + 8];
+            snprintf(wp, sizeof wp, "%s/wshot-%d.ppm", g_root, g_shots);
+            glpresent_shot(wp);
+        }
         int n = snprintf((char *)sf->data, 32, "P6\n%d %d\n255\n", w, h);
         unsigned char *o = sf->data + n;
         for (int y = h - 1; y >= 0; y--)                 // GL rows are bottom-up

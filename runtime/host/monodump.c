@@ -8,7 +8,15 @@
 //                           vertex colour ("[dump] ..."). With UA_DUMP_RENDERERS_ALL=1 the hidden ones too.
 //   UA_DUMP_HERO=<period>[,<name>]  every <period> seconds the position of the GameObject <name> (Knight) and of the
 //                           main camera ("[dump] t <s> Knight (x, y) camera (x, y)"): where a scripted walk took the player
-// Everything is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
+//   UA_HERO_PLACE=<x>,<y>[,<s>]  a test aid that changes the game: <s> seconds (default 3) after the Knight first
+//                           stands in the scene (not the load's waiting place far below it), its transform is put at
+//                           (x, y) once ("[dump] Knight placed ..."): a test save
+//                           whose respawn point is not where a scene is entered (Soul Master's lower room) entered
+//                           from its door instead
+//   UA_DUMP_OFF=<assembly>:<class>,...  a measurement that changes the picture: every 5 s once the Knight exists, the
+//                           components of those classes (e.g. Assembly-CSharp-firstpass:UnityStandardAssets.ImageEffects.
+//                           BloomOptimized) turned off ("[dump] off ...")
+// Everything else is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
 // UnityMain after a frame, as a script of the game would; nothing is changed.
 //   UA_FLIPBOOK=<controller>,...|@<file>  a stand-in for Unity's Animator on sprite flip-books: the managed assembly
 //                           uaflipbook.dll (runtime/host/managed; UA_FLIPBOOK_DLL, default beside ua_host) loaded
@@ -181,7 +189,11 @@ static void dump(void)
             float c[4] = { 0 }; char sp[96];
             getf(r, "get_color", c, 4);
             name_of(call(r, "get_sprite", NULL, 0), sp, sizeof sp);
-            snprintf(extra, sizeof extra, " colour (%.2f, %.2f, %.2f, %.2f) sprite %s", c[0], c[1], c[2], c[3], sp);
+            // the material's own _Color too (Material.color): PlayMaker faders tint the material, not the renderer
+            float mc[4] = { -1, -1, -1, -1 };
+            getf(call(r, "get_sharedMaterial", NULL, 0), "get_color", mc, 4);
+            snprintf(extra, sizeof extra, " colour (%.2f, %.2f, %.2f, %.2f) material colour (%.2f, %.2f, %.2f, %.2f) sprite %s",
+                     c[0], c[1], c[2], c[3], mc[0], mc[1], mc[2], mc[3], sp);
         } else if (!strcmp(cls, "MeshRenderer") && mf_type) {
             void *a1[1] = { mf_type };
             MonoObject *mf = call(go, "GetComponent", a1, 1);
@@ -317,9 +329,108 @@ static void flipbook_frame(void)
     if (exc) fprintf(stderr, "[flipbook] UAFlipbook.Init threw: off\n");
 }
 
+// UA_HERO_PLACE: once, the Knight's transform at (x, y) a few seconds after it first exists
+static void hero_place(void)
+{
+    static int state = -1;                  // -1 not read, 0 off or done, 1 waiting for the Knight
+    static double x, y, delay = 3, seen;
+    static MonoMethod *find;
+    if (!state) return;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (state < 0) {
+        const char *e = getenv("UA_HERO_PLACE");
+        char *p;
+        state = 0;
+        if (!e || !*e) return;
+        x = strtod(e, &p); if (*p != ',') return;
+        y = strtod(p + 1, &p); if (*p == ',') delay = strtod(p + 1, NULL);
+        state = 1;
+        return;
+    }
+    if (!find) {
+        if (!load()) return;
+        MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+        MonoClass *k_go = core ? m_class_from_name(core, "UnityEngine", "GameObject") : NULL;
+        find = k_go ? m_method_from_name(k_go, "Find", 1) : NULL;
+        if (!find) return;
+    }
+    MonoObject *exc = NULL;
+    void *args[1] = { m_string_new(m_domain_get(), "Knight") };
+    MonoObject *go = m_invoke(find, NULL, args, &exc);
+    if (exc || !go) { seen = 0; return; }
+    // (during a load the Knight waits far below the scene, y -2000, and the game puts it at the respawn point
+    // after: placed only once it has stood in the scene for the delay)
+    MonoObject *t = call(go, "get_transform", NULL, 0);
+    float v[3] = { 0 };
+    if (!t || !getf(t, "get_position", v, 3) || v[1] < -500) { seen = 0; return; }
+    if (!seen) { seen = now; return; }
+    if (now - seen < delay) return;
+    float to[3] = { (float)x, (float)y, v[2] };
+    void *a1[1] = { to };
+    call(t, "set_position", a1, 1);
+    fprintf(stderr, "[dump] Knight placed at (%.2f, %.2f), was (%.2f, %.2f) (UA_HERO_PLACE)\n", to[0], to[1], v[0], v[1]);
+    state = 0;
+}
+
+// UA_DUMP_OFF: components of the named classes turned off, every 5 s while the Knight exists
+static void comps_off(void)
+{
+    static int state = -1;
+    static double last;
+    static char spec[512];
+    if (!state) return;
+    if (state < 0) {
+        const char *e = getenv("UA_DUMP_OFF");
+        state = e && *e ? 1 : 0;
+        if (state) snprintf(spec, sizeof spec, "%s", e);
+        return;
+    }
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    static double every = 5;
+    if (now - last < every) return;
+    last = now;
+    if (!load()) return;
+    MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+    MonoClass *k_go = core ? m_class_from_name(core, "UnityEngine", "GameObject") : NULL, *k_obj = core ? m_class_from_name(core, "UnityEngine", "Object") : NULL;
+    MonoMethod *gfind = k_go ? m_method_from_name(k_go, "Find", 1) : NULL, *find = k_obj ? m_method_from_name(k_obj, "FindObjectsOfType", 1) : NULL;
+    if (!gfind || !find) return;
+    MonoObject *exc = NULL;
+    void *ka[1] = { m_string_new(m_domain_get(), "Knight") };
+    if (!m_invoke(gfind, NULL, ka, &exc) || exc) return;
+    char list[512], *sv = NULL;
+    snprintf(list, sizeof list, "%s", spec);
+    for (char *t = strtok_r(list, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) {
+        char *colon = strchr(t, ':');
+        if (!colon) continue;
+        *colon = 0;
+        char *cls = colon + 1, *dot = strrchr(cls, '.'), ns[256] = "";
+        if (dot) { snprintf(ns, sizeof ns, "%.*s", (int)(dot - cls), cls); cls = dot + 1; }
+        MonoImage *img = m_image_loaded(t);
+        MonoClass *k = img ? m_class_from_name(img, ns, cls) : NULL;
+        if (!k) { fprintf(stderr, "[dump] off: no class %s:%s.%s\n", t, ns, cls); continue; }
+        void *args[1] = { m_type_get_object(m_domain_get(), m_class_get_type(k)) };
+        MonoArray *all = (MonoArray *)m_invoke(find, NULL, args, &exc);
+        if (!all || exc) continue;
+        uintptr_t n = m_array_length(all), off = 0;
+        for (uintptr_t i = 0; i < n; i++) {
+            MonoObject *c = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
+            MonoObject *en = c ? call(c, "get_enabled", NULL, 0) : NULL;
+            if (!en || !*(unsigned char *)m_unbox(en)) continue;
+            unsigned char no = 0; void *a1[1] = { &no };
+            call(c, "set_enabled", a1, 1);
+            off++;
+        }
+        if (off) { fprintf(stderr, "[dump] off: %lu %s (of %lu)\n", (unsigned long)off, cls, (unsigned long)n); every = 60; }   // (the search is a hitch: rarely once found)
+    }
+}
+
 void monodump_frame(void)
 {
     flipbook_frame();
+    hero_place();
+    comps_off();
     static int state = -1, n, next;         // state -1: not read; 0: off or done; 1: waiting
     static double at[16], t0, period, last;
     static char name[64];

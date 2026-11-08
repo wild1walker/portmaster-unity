@@ -85,7 +85,9 @@ static struct {                                 // the driver's, on the present 
     void (*InvalidateFramebuffer)(GLenum, GLsizei, const GLenum *);
     GLsync (*FenceSync)(GLenum, GLbitfield);
     void (*WaitSync)(GLsync, GLbitfield, GLuint64), (*DeleteSync)(GLsync), (*Flush)(void);
+    void (*ReadPixels)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *);
 } D;
+static char g_shot[512];                        // a screenshot of the window asked for (glpresent_shot)
 
 // ---- Unity's framebuffer 0: three frames per context of Unity's (framebuffers are not shared)
 #define SLOTS 3
@@ -199,6 +201,37 @@ static void *g_pctx;
 static long g_frames;
 static int g_interval = -1, g_interval_set = -2;
 
+// what the window shows (the frame as scaled), next to the bench's screenshot of Unity's frame
+static void window_shot(GLuint read_fbo)
+{
+    char path[512];
+    pthread_mutex_lock(&g_lock);
+    snprintf(path, sizeof path, "%s", g_shot);
+    g_shot[0] = 0;
+    pthread_mutex_unlock(&g_lock);
+    unsigned char *px = malloc((size_t)g_dw * g_dh * 4);
+    FILE *f = px ? fopen(path, "wb") : NULL;
+    if (f) {
+        D.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        D.ReadPixels(0, 0, g_dw, g_dh, 0x1908 /* GL_RGBA */, 0x1401 /* GL_UNSIGNED_BYTE */, px);
+        D.BindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+        fprintf(f, "P6\n%d %d\n255\n", g_dw, g_dh);
+        for (int y = g_dh - 1; y >= 0; y--)
+            for (int x = 0; x < g_dw; x++) fwrite(px + ((size_t)y * g_dw + x) * 4, 1, 3, f);
+        fclose(f);
+        fprintf(stderr, "[present] window shot %s\n", path);
+    }
+    free(px);
+}
+
+void glpresent_shot(const char *path)
+{
+    if (!g_running) return;
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_shot, sizeof g_shot, "%s", path);
+    pthread_mutex_unlock(&g_lock);
+}
+
 static void *present_main(void *arg)
 {
     (void)arg;
@@ -229,6 +262,7 @@ static void *present_main(void *arg)
         D.BindFramebuffer(GL_READ_FRAMEBUFFER, fbo[s]);
         D.InvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 3, all);    // (the whole window is drawn: nothing of it loaded)
         D.BlitFramebuffer(0, 0, g_rw, g_rh, 0, 0, g_dw, g_dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        if (g_shot[0] && D.ReadPixels) window_shot(fbo[s]);
         GLsync rd = D.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         D.Flush();
         pthread_mutex_lock(&g_lock);
@@ -331,7 +365,7 @@ const so_shim *glpresent_table(void *(*next)(const char *name))
 #undef N
 #define L(f) *(void **)&D.f = gl_driver("gl" #f)
     L(BindFramebuffer); L(GenFramebuffers); L(FramebufferTexture2D); L(BlitFramebuffer); L(InvalidateFramebuffer);
-    L(FenceSync); L(WaitSync); L(DeleteSync); L(Flush);
+    L(FenceSync); L(WaitSync); L(DeleteSync); L(Flush); L(ReadPixels);
 #undef L
     if (!r_BindFramebuffer || !r_GetIntegerv || !r_GetFramebufferAttachmentParameteriv || !r_InvalidateFramebuffer || !r_DrawBuffers ||
         !r_ReadBuffer || !r_GenTextures || !r_BindTexture || !r_TexStorage2D || !r_TexParameteri || !r_GenRenderbuffers ||
