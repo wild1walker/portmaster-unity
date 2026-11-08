@@ -40,24 +40,23 @@ void fake_pmhw_setup(uint8_t (*y)(int, int, int), uint8_t (*u)(int, int, int), u
 typedef struct PmhwDecoder {
     int w, h;
     int64_t q[4];                         /* queued pictures' pts */
-    int qn, out, seen_sps, eos, bounced;
+    int qn, out, seen_sps, eos, bounced, vp8;
 } PmhwDecoder;
 
 static const char *mode(void) { const char *m = getenv("FAKE_PMHW"); return m ? m : ""; }
 
 int pmhw_query(int codec, PmhwCaps *caps)
 {
-    if (!strcmp(mode(), "nohw") || codec > 1) return -1;
+    if (!strcmp(mode(), "nohw") || (codec > 1 && codec != 3)) return -1;
     caps->max_width = 4096; caps->max_height = 2304; caps->max_bit_depth = 8; caps->backend = "fake";
     return 0;
 }
 
 PmhwDecoder *pmhw_open(int codec, int width, int height)
 {
-    (void)codec;
     if (width <= 0 || height <= 0) return NULL;
     PmhwDecoder *d = calloc(1, sizeof *d);
-    if (d) { d->w = width; d->h = height; }
+    if (d) { d->w = width; d->h = height; d->vp8 = codec == 3; }
     return d;
 }
 
@@ -79,6 +78,7 @@ int pmhw_send(PmhwDecoder *d, const uint8_t *data, int size, int64_t pts)
     if (!data || !size) { d->eos = 1; return 0; }
     int sps, slice;
     scan(data, size, &sps, &slice);
+    if (d->vp8) slice = 1;                          /* no start codes: one frame per unit */
     if (sps) d->seen_sps = 1;
     if (sps && !strcmp(mode(), "refuse")) { fake_pmhw_stats.refused++; return -2; }
     if (!slice) return 0;

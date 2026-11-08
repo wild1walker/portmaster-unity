@@ -29,7 +29,7 @@ builds it after `jni/` (the Java-side test links `libfakejni.a`).
 | `um_audio.c` | Vorbis (libvorbis), Opus (libopus), silence for AAC / MP3 without a decoder |
 | `um_h264.c` | H.264: OpenH264 |
 | `um_ffmpeg.c` | the system's libavcodec 58-61 through `dlopen` (AAC, MP3, HEVC, H.264 with B-frames) |
-| `um_pmhw.c` | the handheld's hardware decoder through [libpmhwdec](https://github.com/Knifethrower/pmhwdec), `dlopen`ed when a port ships it (H.264, HEVC); steps aside for the software decoders |
+| `um_pmhw.c` | the handheld's hardware decoder through [libpmhwdec](https://github.com/Knifethrower/pmhwdec), `dlopen`ed when a port ships it (H.264, HEVC, VP8); steps aside for the software decoders |
 | `um_surface.c` | SurfaceTexture: the frame queue, `updateTexImage` (upload into an EGLImage behind the external texture), `getTransformMatrix` |
 | `um_stubs.c`, `um_compat.c` | builds without a backend; libvorbis' finite-math names on Ubuntu 20.04 |
 | `umbench.c` | device check: what decoding a clip costs (`umbench <file> [offset size]`) |
@@ -102,7 +102,7 @@ pictures through EGLImage + shader with Mesa: every pixel equals the desktop for
 | Opus | WebM, Matroska | libopus | BSD-3-Clause | static |
 | H.264 | MP4, MOV, Matroska | OpenH264 (`OMX.google.h264.decoder`) | BSD-2-Clause | static (Debian's `libopenh264-dev` on armhf; built from Debian's source package for arm64) |
 | H.264 with B-frames, interlaced, > 8 bit; HEVC; AAC; MP3 | MP4, MOV, Matroska | the system's libavcodec (`ffmpeg.*`) | LGPL (the firmware's, or a port's own build) | `dlopen` when present, or `UM_FFMPEG=<path>`; never shipped by this repository |
-| H.264, HEVC on the handheld's hardware decoder (Allwinner video engine, Rockchip MPP, V4L2) | MP4, MOV, Matroska | [libpmhwdec](https://github.com/Knifethrower/pmhwdec) (`pmhwdec.*`), tried before the software decoders | LGPL-2.1-or-later (a port's own copy) | `dlopen` from the library path or `UM_PMHW=<path>`; never shipped by this repository |
+| H.264, HEVC, VP8 on the handheld's hardware decoder (Allwinner video engine, Rockchip MPP, V4L2) | MP4, MOV, Matroska | [libpmhwdec](https://github.com/Knifethrower/pmhwdec) (`pmhwdec.*`), tried before the software decoders | LGPL-2.1-or-later (a port's own copy) | `dlopen` from the library path or `UM_PMHW=<path>`; never shipped by this repository |
 | AAC, MP3 without libavcodec | | silence of the right length | ours | |
 
 What each covers:
@@ -117,7 +117,7 @@ What each covers:
   firmwares usually have libavcodec.
 - Clips a game ships untranscoded play when their codec is in the table (VP9 / Opus WebM, HEVC with
   libavcodec, ...).
-- **Hardware decoding**: a port that ships libpmhwdec gets H.264 and HEVC pictures from the
+- **Hardware decoding**: a port that ships libpmhwdec gets H.264, HEVC and VP8 pictures from the
   handheld's video decoder where it has one that libpmhwdec's start-up self-test passes; anywhere
   else, and for streams the decoder refuses at configure (10-bit on an 8-bit decoder, ...), the
   software decoders above take them as before. If the library gives up in the middle of a stream,
