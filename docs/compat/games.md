@@ -251,7 +251,12 @@ within its runs' spread (41 - 45 either way this time); Hall of Gods Mantis Lord
 GL thread is 27 - 29 ms of its frame there. Measured and left out the same night (exact, no gain that
 could be told apart): asmpatch's playmaker-idle (Knulli Greenpath 52.3 both ways), the arena's
 sub-data copies (muOS, G350), skipping binds of what is bound (G350), `UA_FAST_VERTS` (Knulli +0.3, G350
-none), and `UA_GL_MERGE` (draws 238 -> 138 a frame, slower: profiling.md).
+none), and `UA_GL_MERGE` (draws 238 -> 138 a frame, slower: profiling.md); later `UA_INV_MEMO` and
+asmpatch's `hk-camerafade` (the fade texture's uploads 2.8 -> 0.3 a frame; Knulli, muOS and G350
+within their runs' spread), both opt-in.
+Test release 2026.11.08.2 (the GL thread on RK3326 handhelds, and the setup's update applying the
+fill in place to a game set up by an earlier release; its own files): G350 Greenpath 32.4, Dirtmouth
+41.4; Knulli Greenpath 52.5, City of Tears 53.3, Queen's Gardens 54.3.
 
 
 ## Linux builds, one per Unity line (32-bit route)
