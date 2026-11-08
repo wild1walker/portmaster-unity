@@ -22,8 +22,10 @@ sealed class Result
 /// Optimize: the game's code does the same, with less work (README.md, "Optimizations"): a
 /// default-on one must leave every value the game can observe as it was. Reduce: a smaller picture
 /// for small handhelds (README.md, "Reductions"): never the game play, always opt-in. Screen: the
-/// picture fitted to a handheld's screen (README.md, "Screens"): never the game play, always opt-in.</summary>
-enum Kind { Android, Optimize, Reduce, Screen }
+/// picture fitted to a handheld's screen (README.md, "Screens"): never the game play, always opt-in.
+/// Prompts: the game's button pictures show the letters printed on the handheld, the buttons where
+/// they are (README.md, "Prompts"): never the game play, always opt-in.</summary>
+enum Kind { Android, Optimize, Reduce, Screen, Prompts }
 
 abstract class Patch
 {
@@ -49,6 +51,8 @@ abstract class Patch
         new HollowKnightBlur(), new HollowKnightPost(),
         // screens
         new HollowKnightAspect(),
+        // prompts
+        new HollowKnightPadLetters(),
     };
 }
 

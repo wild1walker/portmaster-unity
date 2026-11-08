@@ -117,6 +117,16 @@ Opt-in (`--with=<patch>`), and the game is as it was until an environment variab
 |---|---|
 | `hk-aspect` | Hollow Knight fits its view in `ForceCameraAspect.AutoScaleViewportShared`: the screen's aspect clamped to 1.6 - 2.39 (16:10 to 21:9), so a narrower screen is letterboxed to 16:10, and from 16:9 down to 16:10 the camera shows more above and below (field of view and HUD camera grown by 16:9 / aspect, the same width, the HUD moved to the new top). `ASMPATCH_HK_ASPECT=fill`: the clamp starts at 1:1, so 3:2 (720x480) and 4:3 (640x480) screens get that same rule instead of bars: the width of 16:9, more above and below (3:2 +18.5 %, 4:3 +33 %); where a room ends, the game's own scene borders (its black edge pieces, already moved in for screens under 16:9) show, as at 16:10. In-game videos fill the height and are cut at the sides, as the game does at 16:10. Anything else, or unset: the game as it is. Read once, at the first fit. The camera's position, its limits, timing, physics, collision and FSMs are the game's. Tested on a stand-in (`test/fakes/HollowKnight/Aspect.cs`): unset and other values the game's letterbox, fill at 4:3, 3:2, 16:10, 16:9, 21:9 and 0.8. |
 
+## Prompts
+
+The game's button pictures show the letters printed on the handheld, the buttons where they are (by
+position, as on an Xbox pad: [docs/input.md](../../docs/input.md#buttons-by-position)), never other
+game play. Opt-in (`--with=<patch>`); `UA_PAD_LETTERS=xbox` at run time keeps the game's Xbox letters.
+
+| patch | what |
+|---|---|
+| `hk-pad-letters` | On Unity's Android player Hollow Knight's `InputHandler.SetActiveGamepadType` knows no platform ("Unsupported platform for InputHander Android") and takes every pad for an Xbox 360 pad: the buttons work by position (the bottom one is InControl's Action1: jump and confirm) and its prompts show Xbox letters, A at the bottom, where handhelds print B. (A Switch pad's name does not do: InControl's Input System device swaps the face buttons by letter for a name with "switch" in it, and the right button jumped.) The patch has the game's two pictures of the pad, the glyphs (`UIButtonSkins.GetButtonSkinFor(InputControlType)`) and the controller drawn in the controller settings (`ControllerDetect.LookForActiveController`), take the Switch Pro Controller's while the pad is that Xbox 360 pad: Action1 B, Action2 A, Action3 Y, Action4 X, + and -. `UA_PAD_LETTERS=xbox`: the game as it is; read once. The bindings, the menus' confirm and back, the controller settings saved per pad type and everything else that reads the pad type are the game's. Tested on stand-ins (`test/fakes/HollowKnight/PadLetters.cs`): every value, the Xbox letters with `xbox`, every other pad type as the game with either. |
+
 ## With pmunity android-data
 
 ```sh

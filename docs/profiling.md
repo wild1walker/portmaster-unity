@@ -183,12 +183,12 @@ measurement (what the frame costs when it is not paced), not a setting.
 
 On the RG34XX-SP the game ran King's Pass at 32 - 34 fps (2026-10-22; 33 - 37 with the host's flips:
 [what limits it](#what-limits-kings-pass-32-bit-2026-10-23)). The saved game continues from the title
-screen with Start Game and the save slot (Switch layout: `b` confirms); the title and the save load
+screen with Start Game and the save slot (`a`, the bottom button, confirms: the buttons by position, input.md); the title and the save load
 are frames of several seconds, and memory is tight while the save loads (`UA_MEM_MIN=20`):
 
 ```sh
-export DEVICE=root@<handheld> UA_PAD_NAME='Nintendo Switch Pro Controller' UA_MEM_MIN=20 MEASURE=25
-export PLAN='log:find GameCameras; hitch:2500; steady:3; sleep:2; press:0:b; sleep:6; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5; shot'
+export DEVICE=root@<handheld> UA_PAD_NAME='Xbox Wireless Controller' UA_MEM_MIN=20 MEASURE=25
+export PLAN='log:find GameCameras; hitch:2500; steady:3; sleep:2; press:0:a; sleep:6; press:0:a; sleep:6; press:0:a; hitch:2000; steady:5; shot'
 tools/device/profbench.sh /userdata/uatest/hollowknight --list hk-session.txt
 ```
 
@@ -819,8 +819,8 @@ Reaching it from a cold start takes the menu's own load, then Start Game and the
 load took 30 s), so the bench's memory watchdog line is lowered:
 
 ```sh
-export DEVICE=adb ARCH=arm64 UA_PAD_NAME='Nintendo Switch Pro Controller' UA_MEM_MIN=20 MEASURE=25
-export PLAN='log:find GameCameras; hitch:2500; steady:3; sleep:2; press:0:b; sleep:6; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5; shot'
+export DEVICE=adb ARCH=arm64 UA_PAD_NAME='Xbox Wireless Controller' UA_MEM_MIN=20 MEASURE=25
+export PLAN='log:find GameCameras; hitch:2500; steady:3; sleep:2; press:0:a; sleep:6; press:0:a; sleep:6; press:0:a; hitch:2000; steady:5; shot'
 tools/device/profbench.sh /userdata/uatest/hk64 trace UA_GL_TRACE=4 UA_GL_TRACE_START=90 MEASURE=40
 ```
 

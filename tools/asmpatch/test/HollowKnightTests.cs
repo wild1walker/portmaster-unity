@@ -72,6 +72,61 @@ static partial class TestMain
         HollowKnightPostTests();
         HollowKnightAspectTests();
         HollowKnightFadeTests();
+        HollowKnightPadLettersTests();
+    }
+
+    // ---- hk-pad-letters ----------------------------------------------------------------------
+    /// <summary>The stand-in's glyphs for Action1-4, Start and Select, then the controller picture, for a
+    /// pad type, with UA_PAD_LETTERS set to env (a fresh load each time: the helper reads it once).</summary>
+    static string Letters(string dir, string env, int padType)
+    {
+        var old = Environment.GetEnvironmentVariable(HollowKnightPadLetters.Variable);
+        Environment.SetEnvironmentVariable(HollowKnightPadLetters.Variable, env);
+        var ctx = new AssemblyLoadContext("hkl" + Guid.NewGuid(), isCollectible: true);
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var pad = System.Enum.ToObject(a.GetType("GlobalEnums.GamepadType", true), padType);
+            var controls = a.GetType("InControl.InputControlType", true);
+            var skinsT = a.GetType("UIButtonSkins", true);
+            var skins = Activator.CreateInstance(skinsT);
+            var ih = skinsT.GetField("ih").GetValue(skins);
+            ih.GetType().GetField("activeGamepadType").SetValue(ih, pad);
+            var glyphs = new List<string>();
+            foreach (var c in new[] { "Action1", "Action2", "Action3", "Action4", "Start", "Select" })
+                glyphs.Add((string)skinsT.GetMethod("GetButtonSkinFor").Invoke(skins, new[] { System.Enum.Parse(controls, c) }));
+            var detectT = a.GetType("ControllerDetect", true);
+            var detect = Activator.CreateInstance(detectT);
+            var dih = detectT.GetField("ih").GetValue(detect);
+            dih.GetType().GetField("activeGamepadType").SetValue(dih, pad);
+            detectT.GetMethod("LookForActiveController").Invoke(detect, null);
+            return string.Join(",", glyphs) + " / " + detectT.GetField("Shown").GetValue(detect);
+        }
+        finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightPadLetters.Variable, old); }
+    }
+
+    static void HollowKnightPadLettersTests()
+    {
+        var d = Dir("hkl");
+        File.Copy(FakeHollowKnight, Path.Combine(d, "Assembly-CSharp.dll"));
+        var (st, outp) = Patch(d, Path.Combine(tmp, "hkl-default"));
+        Check(st == 0 && outp.Contains("skip hk-pad-letters (opt-in: --with=hk-pad-letters)"), "hk-pad-letters: opt-in, not run by default");
+        var o = Path.Combine(tmp, "hkl-out");
+        (st, outp) = Patch(d, o, with: new[] { "hk-pad-letters" });
+        Check(st == 0 && outp.Contains("ok   hk-pad-letters: Assembly-CSharp.dll: UIButtonSkins.GetButtonSkinFor") &&
+              File.Exists(Path.Combine(o, "Assembly-CSharp.dll")), "hk-pad-letters: applied when named");
+        if (!File.Exists(Path.Combine(o, "Assembly-CSharp.dll"))) return;
+        const int none = 0, xboxOne = 2, xbox360 = 3, ps4 = 4, switchPro = 10, ps5 = 11, steamDeck = 13;
+        const string xbox = "a,b,x,y,start,select / XBOX_360", nintendo = "switchHidB,switchHidA,switchHidY,switchHidX,switchHidPlus,switchHidMinus / SWITCH_PRO_CONTROLLER";
+        Check(Letters(d, null, xbox360) == xbox, $"hk-pad-letters: the unpatched stand-in shows the Xbox letters ({Letters(d, null, xbox360)})");
+        foreach (var v in new[] { null, "", "nintendo", "XBOX", "xbox ", "1" })
+            Check(Letters(o, v, xbox360) == nintendo, $"hk-pad-letters: UA_PAD_LETTERS={v ?? "(unset)"}: the Nintendo letters ({Letters(o, v, xbox360)})");
+        Check(Letters(o, "xbox", xbox360) == xbox, $"hk-pad-letters: xbox: the game as it is ({Letters(o, "xbox", xbox360)})");
+        foreach (var v in new[] { null, "xbox" })
+            foreach (var t in new[] { none, xboxOne, ps4, switchPro, ps5, steamDeck })
+                Check(Letters(o, v, t) == Letters(d, v, t), $"hk-pad-letters: {v ?? "(unset)"}, pad type {t}: as the game ({Letters(o, v, t)})");
+        (st, outp) = Patch(o, Path.Combine(tmp, "hkl-again"), with: new[] { "hk-pad-letters" });
+        Check(st == 0 && outp.Contains("done hk-pad-letters") && NoDlls(Path.Combine(tmp, "hkl-again")), "hk-pad-letters: a second run finds it applied");
     }
 
     // ---- hk-aspect ---------------------------------------------------------------------------

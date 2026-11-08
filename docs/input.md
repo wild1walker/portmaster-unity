@@ -22,6 +22,26 @@ times (and `input.req`'s) in presented frames, `<fps>` a second, instead of seco
 run, whatever its speed, then gets each press at the same frame (with the data's maximum timestep
 fixed, at the same moment of the game).
 
+### Buttons by position
+
+The face buttons always work by position, as on an Xbox pad: `a` is the bottom one (jump and confirm
+in most games), `b` the right, `x` the left, `y` the top. That is how SDL's GameController mapping
+names them and how the Android player sends them. Handhelds print the Nintendo layout's letters on
+them (Anbernic, Miyoo, Powkiddy, TrimUI, the R36S family: B at the bottom, A on the right), so a game's
+Xbox prompts name the wrong letter for each button. Fix the letters, never the positions:
+
+- Never set `UA_PAD_NAME` to a Nintendo pad's name to get Nintendo prompts. Input libraries swap a
+  Nintendo pad's face buttons by letter: Hollow Knight's InControl (its Input System device, for any
+  name with "switch" in it) made the bottom button its Action2 and the right one Action1, so the
+  right button jumped and confirmed. ua_host logs a warning for such a name (`[input] UA_PAD_NAME
+  "..." names a Nintendo pad`). Name an Xbox pad (`Xbox Wireless Controller`, or the name `port
+  check` suggests).
+- Show the handheld's letters with the game's own button pictures: a patch that picks the game's
+  Nintendo glyphs while the buttons stay where they are (asmpatch's `hk-pad-letters` for Hollow
+  Knight; Cuphead's own `pad-prompts-android`). Such a patch reads `UA_PAD_LETTERS`: unset, or
+  anything but `xbox`, the Nintendo layout's letters; `xbox` the game's Xbox letters, for handhelds
+  printed like an Xbox pad.
+
 ## What the game reads
 
 `tools/asmpatch` (`asmpatch --survey <Game>_Data/Managed`) lists the input stacks in the game's
