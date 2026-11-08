@@ -253,8 +253,8 @@ static void dump(void)
     fprintf(stderr, "[dump] %lu Animators, %u running (culling 0: %u, 1: %u, 2: %u)\n", (unsigned long)n, running, counts[0], counts[1], counts[2]);
 }
 
-// the named GameObject's and the main camera's positions
-static void hero(const char *name)
+// the named GameObject's and the main camera's positions, one write (another thread's [hitch] line must not land inside it)
+static void hero(const char *name, double t)
 {
     static int ok = -1;
     static MonoMethod *find, *get_main;
@@ -281,7 +281,7 @@ static void hero(const char *name)
     char a[48] = "-", b[48] = "-";
     if (fh) snprintf(a, sizeof a, "(%.2f, %.2f)", h[0], h[1]);
     if (fc) snprintf(b, sizeof b, "(%.2f, %.2f)", c[0], c[1]);
-    fprintf(stderr, "[dump] %s %s camera %s\n", name, a, b);
+    fprintf(stderr, "[dump] t %.2f %s %s camera %s\n", t, name, a, b);
 }
 
 // UA_FLIPBOOK: uaflipbook.dll loaded and UAFlipbook.Init called, once UnityEngine.CoreModule is loaded
@@ -464,8 +464,7 @@ void monodump_frame(void)
     }
     if (period > 0 && now - last >= period) {
         last = now;
-        fprintf(stderr, "[dump] t %.2f ", now - t0);
-        hero(name);
+        hero(name, now - t0);
     }
     if (next < n && now - t0 >= at[next]) {
         fprintf(stderr, "[dump] at %.0f s\n", now - t0);
