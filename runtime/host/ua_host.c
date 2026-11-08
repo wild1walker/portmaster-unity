@@ -361,6 +361,8 @@ static void mono_options(void *some_mono_fn)
     argv[argc] = NULL;
     if (argc && parse) { fprintf(stderr, "[host] mono options: %s\n", o); parse(argc, argv); }
 }
+// the loader's load hook: UA_GFX_JOBS and the like inside libunity (unityhooks.c); UA_MONO_TLS in libmono (monoinvoke.c)
+static void on_load(so_module *m) { unityhooks_on_load(m); monoinvoke_on_load(m); }
 static int g_mono_trace;
 static void *dlsym_hook(const char *sym, void *p)
 {
@@ -571,7 +573,7 @@ int main(int argc, char **argv)
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
-    so_set_load_hook(unityhooks_on_load);      // UA_GFX_JOBS: functions inside libunity, by symbol (unityhooks.c)
+    so_set_load_hook(on_load);                 // libunity (unityhooks.c), libmono (monoinvoke.c)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
     // on) -> glrec.c (UA_GL_REC: it calls glspec.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->

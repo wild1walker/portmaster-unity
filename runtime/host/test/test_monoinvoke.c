@@ -18,6 +18,12 @@
 static int failures;
 #define CHECK(c, ...) do { if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
+#if defined(__arm__)
+// monoinvoke.c's UA_MONO_TLS patches with unityhooks.c, not linked here (its load hook is not exercised)
+int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig);
+int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig) { (void)fn; (void)isa; (void)to; (void)orig; return -1; }
+#endif
+
 // ---- the double's Mono ----
 struct method { unsigned char head[20], bits[4]; uint16_t flags; uint32_t token; const char *name; void *vtable; int dyn, throws; };   // bits at 20, as in Mono
 struct domain { int pad; int mutex; char rest[0xdc - 8]; char *jit_info; };

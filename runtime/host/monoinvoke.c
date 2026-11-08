@@ -183,6 +183,89 @@ static void install(const void *in_mono)
 static void install(const void *in_mono) { (void)in_mono; }
 #endif
 
+// ---------------------------------------------------------------------------------- UA_MONO_TLS
+// Mono's thread-local reads: every managed-to-native call of the JIT's code (the icall wrappers' LMF) goes
+// through mono_get_lmf_addr, and the runtime through mono_domain_get; both read their slot with
+// mono_native_tls_get_value: pthread_getspecific(keys[id]) through libmono's import, which the loader binds to
+// libhybris's hook (bionic's key 0 is never a created key: NULL, else glibc's pthread_getspecific). Unity 2017.4's
+// libmono is built without optimisation, so the three are each a frame of loads and stores around one call:
+// about 0.6 ms of the fight's frame on the RG34XX-SP with the hook. The replacements compute the same value
+// with the same glibc call: keys[id] read each time, 0 gives NULL; mono_get_lmf_addr returns &jit_tls->lmf
+// (+8) when the thread has its JIT data and otherwise calls the original (it attaches the thread). Patched in
+// at load, before any of libmono's code runs, only into a libmono whose three functions match the checked
+// build byte for byte, and only while the import is the loader's hook and libhybris logs nothing per call.
+#if defined(__arm__)
+#include "unityhooks.h"
+static const uint32_t *g_keys, *g_jit_tls_id, *g_domain_tls_id;
+static void *(*g_lmf_orig)(void);
+
+static void *tls_get(uint32_t id)
+{
+    uint32_t k = g_keys[id];
+    return k ? pthread_getspecific((pthread_key_t)k) : NULL;
+}
+static void *fast_get_lmf_addr(void)
+{
+    char *jit_tls = tls_get(*g_jit_tls_id);
+    return jit_tls ? jit_tls + 8 : g_lmf_orig();
+}
+static void *fast_domain_get(void) { return tls_get(*g_domain_tls_id); }
+
+struct tls_build {
+    const char *name;
+    uint32_t tls_get, tls_get_end, lmf, lmf_end, dom, dom_end;   // the three functions (with their literal pools)
+    uint32_t keys, got_jit_tls_id, domain_tls_id, got_getspecific;
+    uint32_t fnv_tls_get, fnv_lmf, fnv_dom;
+};
+static const struct tls_build g_tls_builds[] = {
+    { "Unity 2017.4 armeabi-v7a", 0x28c1f4, 0x28c234, 0x1a69c, 0x1a760, 0x16f830, 0x16f85c,
+      0x39f394, 0x3997f4, 0x39a49c, 0x399e9c, 0x6a744fa1, 0x8fc04136, 0xe42766e6 },
+};
+
+static void tls_on_load(uintptr_t base, size_t size)
+{
+    const char *e = getenv("UA_MONO_TLS");
+    if (e && !strcmp(e, "0")) { fprintf(stderr, "[mono] fast thread-local reads: off (UA_MONO_TLS=0)\n"); return; }
+    const struct tls_build *b = NULL;
+    for (size_t i = 0; i < sizeof g_tls_builds / sizeof *g_tls_builds && !b; i++) {
+        const struct tls_build *t = &g_tls_builds[i];
+        if (t->dom_end > size || t->tls_get_end > size || t->lmf_end > size) continue;
+        if (fnv((const unsigned char *)base + t->tls_get, t->tls_get_end - t->tls_get) == t->fnv_tls_get &&
+            fnv((const unsigned char *)base + t->lmf, t->lmf_end - t->lmf) == t->fnv_lmf &&
+            fnv((const unsigned char *)base + t->dom, t->dom_end - t->dom) == t->fnv_dom) b = t;
+    }
+    if (!b) { fprintf(stderr, "[mono] fast thread-local reads: off (a libmono build it has not been checked against)\n"); return; }
+    const char *lv = getenv("HYBRIS_LOGGING_LEVEL");
+    void *hook = so_shim_lookup("pthread_getspecific");
+    if (lv && *lv) { fprintf(stderr, "[mono] fast thread-local reads: off (HYBRIS_LOGGING_LEVEL: the hook logs)\n"); return; }
+    if (!hook || *(void **)(base + b->got_getspecific) != hook) {
+        fprintf(stderr, "[mono] fast thread-local reads: off (libmono's pthread_getspecific is not the loader's hook)\n");
+        return;
+    }
+    g_keys = (const uint32_t *)(base + b->keys);
+    g_jit_tls_id = *(const uint32_t **)(base + b->got_jit_tls_id);
+    g_domain_tls_id = (const uint32_t *)(base + b->domain_tls_id);
+    void *o1 = NULL, *o2 = NULL;
+    if (unityhooks_hook(base + b->lmf, 'a', (void *)fast_get_lmf_addr, (void **)&g_lmf_orig) != 0 ||
+        unityhooks_hook(base + b->tls_get, 'a', (void *)tls_get, &o1) != 0 ||
+        unityhooks_hook(base + b->dom, 'a', (void *)fast_domain_get, &o2) != 0) {
+        fprintf(stderr, "[mono] fast thread-local reads: FAILED to patch libmono\n");
+        return;
+    }
+    fprintf(stderr, "[mono] fast thread-local reads: on (%s libmono; UA_MONO_TLS=0 turns them off)\n", b->name);
+}
+#endif
+
+void monoinvoke_on_load(so_module *m)
+{
+#if defined(__arm__)
+    const char *name = so_name(m);
+    if (name && !strcmp(name, "libmono.so")) tls_on_load(so_base(m), so_size(m));
+#else
+    (void)m;
+#endif
+}
+
 static void *(*r_jit_init_version)(const char *, const char *);
 static void *w_jit_init_version(const char *file, const char *version)
 {
