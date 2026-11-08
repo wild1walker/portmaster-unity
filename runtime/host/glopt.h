@@ -7,5 +7,6 @@
 // name, NULL: the real GL function).
 const so_shim *glopt_table(void *(*next)(const char *name));
 void glopt_frame(void);             // from the swap hook, every frame
+void glopt_rethread(void);          // Unity's context now on the calling thread (UA_GL_REC=thread)
 void *glopt_hard(const char *name); // a float-taking wrapper with the host's calling convention (NULL: none)
 #endif

@@ -195,6 +195,8 @@ static void (*s_ClearDepthf)(float);
 static void (*s_ClearStencil)(GLint);
 
 static int mine(void) { return g_have_thread && pthread_equal(pthread_self(), g_thread); }
+// Unity's context moved to the calling thread (glrec.c's UA_GL_REC=thread)
+void glopt_rethread(void) { if (g_have_thread) g_thread = pthread_self(); }
 
 // the bound draw framebuffer's depth/stencil buffer
 static fbinfo *info(void)

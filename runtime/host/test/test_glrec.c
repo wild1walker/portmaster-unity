@@ -33,6 +33,16 @@
 #include <string.h>
 #include <GLES3/gl32.h>
 #include "../glrec.h"
+#include "../glpresent.h"
+#include "../../android/egl_glue.h"
+
+// (glrec.c's UA_GL_REC=thread hands Unity's context over through these; not tested here)
+void glopt_rethread(void) {}
+void glspec_rethread(void) {}
+void glpresent_tstate_take(glpresent_tstate *s) { (void)s; }
+void glpresent_tstate_give(const glpresent_tstate *s) { (void)s; }
+int glpresent_active(void) { return 0; }
+void egl_glue_set_swap_offload(int (*offload)(egl_glue_swap_fn, void *, void *)) { (void)offload; }
 
 extern char fake_log[16384];
 static int failures;

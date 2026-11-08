@@ -339,6 +339,9 @@ static void modes(const char *m)
     CHECK(fake_calls == 0 && unity_state_kept());
 }
 
+// (pointer.c and osk.c bind glpresent.c's frame for "framebuffer 0"; no present thread here)
+unsigned glpresent_fb0(void) { return 0; }
+
 int main(int argc, char **argv)
 {
     const char *s = argc > 1 ? argv[1] : "";

@@ -62,14 +62,15 @@ glBufferStorageEXT'''.split())
 IMMEDIATE = set('''glGenTextures glGenBuffers glGenFramebuffers glGenRenderbuffers glGenVertexArrays
 glGenVertexArraysOES glGenSamplers glGenQueries glGenQueriesEXT glGenTransformFeedbacks
 glGenProgramPipelines glCreateShader glCreateProgram glGetString glGetStringi glGetShaderPrecisionFormat
-glGetGraphicsResetStatus glGetGraphicsResetStatusEXT glGetGraphicsResetStatusKHR
-glClientWaitSync glDeleteSync glGetSynciv glIsSync'''.split())
-# (a fence is made by glFenceSync, which submits what is held first: every fence the game waits on
-#  or deletes is already in the driver's stream, behind everything recorded before it)
+glGetGraphicsResetStatus glGetGraphicsResetStatusEXT glGetGraphicsResetStatusKHR'''.split())
 
 # hand-written in glrec.c (glrec_custom_<name>, and its replay glrec_replay_<name>): buffer maps,
-# Unity's way of writing dynamic geometry (a map, writes, a flush of the range, an unmap per draw)
-CUSTOM = set('''glMapBufferRange glFlushMappedBufferRange glUnmapBuffer'''.split())
+# Unity's way of writing dynamic geometry (a map, writes, a flush of the range, an unmap per draw);
+# fences (glFenceSync submits what is held first, so every fence the game waits on or deletes is in the
+# driver's stream behind everything recorded before it; with UA_GL_REC=thread a fence is held too, the
+# game given a stand-in until the GL thread has made it); deleting buffers (held with UA_GL_REC=thread)
+CUSTOM = set('''glMapBufferRange glFlushMappedBufferRange glUnmapBuffer glFenceSync glClientWaitSync glDeleteSync
+glGetSynciv glIsSync glWaitSync glDeleteBuffers'''.split())
 
 # pointer arguments whose memory is copied when the call is recorded: {function: {param: C size}}
 COPY = {}
@@ -286,12 +287,13 @@ def main():
         c = classes[name]
         rv = 'return ' if ret != 'void' else ''
         if c == 'imm':
+            # (glrec_imm: UA_GL_REC=thread's context for the call)
             if ret == 'void':
-                w('static %s%s w_%s(%s) { uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); }\n'
-                  % (abi, ret, name, decl, name, args, name))
+                w('static %s%s w_%s(%s) { glrec_imm(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); }\n'
+                  % (abi, ret, name, decl, name, name, args, name))
             else:
-                w('static %s%s w_%s(%s) { uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); glrec_t1(OP_%s, t_); return r_; }\n'
-                  % (abi, ret, name, decl, ret, name, args, name))
+                w('static %s%s w_%s(%s) { glrec_imm(OP_%s); uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); glrec_t1(OP_%s, t_); return r_; }\n'
+                  % (abi, ret, name, decl, name, ret, name, args, name))
             continue
         if c == 'custom':
             w('static %s%s w_%s(%s) { %sglrec_custom_%s(%s); }\n' % (abi, ret, name, decl, rv, name, args))

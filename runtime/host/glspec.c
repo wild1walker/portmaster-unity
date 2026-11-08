@@ -302,6 +302,8 @@ static void make_twin(GLuint prog)
 }
 
 static int mine(void) { return !g_have_thread || pthread_equal(pthread_self(), g_thread); }
+// Unity's context moved to the calling thread (glrec.c's UA_GL_REC=thread)
+void glspec_rethread(void) { if (g_have_thread) g_thread = pthread_self(); }
 
 // ---- wrappers: sources, links, binaries
 static void w_ShaderSource(GLuint sh, GLsizei n, const char *const *str, const GLint *len)

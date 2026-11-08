@@ -19,6 +19,12 @@ void *egl_glue_real(const char *name);
 
 // Called on Unity's render thread right before each real eglSwapBuffers (NULL to remove).
 void egl_glue_set_swap_hook(void (*hook)(void *ctx), void *ctx);
+// Takes Unity's whole swap (the hooks and the real swap: swap(dpy, surface)) to another thread:
+// nonzero when it did (Unity is told the swap went through), 0 to have it made here as before
+// (NULL to remove). glrec.c's UA_GL_REC=thread.
+// (EGLBoolean (*)(EGLDisplay, EGLSurface): this header is included where EGL's is not)
+typedef unsigned (*egl_glue_swap_fn)(void *dpy, void *surface);
+void egl_glue_set_swap_offload(int (*offload)(egl_glue_swap_fn swap, void *dpy, void *surface));
 // Called on Unity's render thread right after each real eglSwapBuffers returned, with its result
 // (NULL to remove).
 void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx);

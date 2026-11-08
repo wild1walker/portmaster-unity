@@ -445,11 +445,14 @@ static void *after_glrename(const char *name)
     void *p = find_shim(g_pass_shims, name);
     return p ? p : after_glpass(name);
 }
-// what glrec.c's wrappers call: glopt.c's wrapper of that name and the layers under it, in their
-// order (glopt.c's float-taking ones with the host's calling convention), else NULL (the driver's)
+// what glrec.c's wrappers call: glspec.c's wrapper of that name, else glopt.c's, and the layers under
+// them, in their order (their float-taking ones with the host's calling convention), else NULL (the driver's)
 static void *after_glrec(const char *name)
 {
-    void *h = glopt_hard(name);
+    void *h = glspec_hard(name);
+    if (h) return h;
+    if ((h = find_shim(g_spec_shims, name))) return h;
+    h = glopt_hard(name);
     if (h) return h;
     void *p = find_shim(g_glopt_shims, name);
     if (!p) p = after_glopt(name);
@@ -568,7 +571,7 @@ int main(int argc, char **argv)
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
     so_set_load_hook(unityhooks_on_load);      // UA_GFX_JOBS: functions inside libunity, by symbol (unityhooks.c)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
-    // on) -> glrec.c (UA_GL_REC: it calls glopt.c's layer
+    // on) -> glrec.c (UA_GL_REC: it calls glspec.c's layer
     // next, so gpuidle.c, glrename.c and glpass.c are left out while it is on) -> gpuidle.c ->
     // glrename.c -> glpass.c -> glspec.c -> glopt.c -> glstate.c -> glarena.c -> glpersist.c -> glpresent.c -> msaafix.c -> gltrace.c ->
     // glhooks.c -> the driver

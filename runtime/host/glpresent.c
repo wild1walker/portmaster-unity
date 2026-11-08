@@ -100,6 +100,8 @@ static __thread int t_draw0, t_read0;           // Unity has "framebuffer 0" bou
 
 static int is_ours(const ring *r, GLuint fb) { for (int i = 0; i < SLOTS; i++) if (r->fbo[i] == fb) return 1; return 0; }
 static int target_is0(GLenum t) { return t == GL_READ_FRAMEBUFFER ? t_read0 : t_draw0; }
+void glpresent_tstate_take(glpresent_tstate *s) { s->ring = t_ring; s->draw0 = t_draw0; s->read0 = t_read0; }
+void glpresent_tstate_give(const glpresent_tstate *s) { t_ring = (ring *)s->ring; t_draw0 = s->draw0; t_read0 = s->read0; }
 static GLenum att0(GLenum a)                    // a default framebuffer's buffer as our framebuffer's attachment
 {
     switch (a) {

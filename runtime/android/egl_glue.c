@@ -138,6 +138,9 @@ void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx)
     g_swap_done_hook = hook;
 }
 
+static int (*g_swap_offload)(egl_glue_swap_fn, void *, void *);
+void egl_glue_set_swap_offload(int (*offload)(egl_glue_swap_fn, void *, void *)) { g_swap_offload = offload; }
+
 static EGLBoolean swap_done(EGLBoolean r)
 {
     void (*hook)(void *, int) = g_swap_done_hook;
@@ -310,12 +313,18 @@ static EGLContext shim_eglCreateContext(EGLDisplay dpy, EGLConfig cfg, EGLContex
     return c;
 }
 
-static EGLBoolean shim_eglSwapBuffers(EGLDisplay dpy, EGLSurface s)
+static EGLBoolean shim_swap(EGLDisplay dpy, EGLSurface s)
 {
-    if (!ensure() || !real.SwapBuffers) return EGL_FALSE;
     void (*hook)(void *) = g_swap_hook;
     if (hook) hook(g_swap_ctx);
     return swap_done(real.SwapBuffers(dpy, s));
+}
+static EGLBoolean shim_eglSwapBuffers(EGLDisplay dpy, EGLSurface s)
+{
+    if (!ensure() || !real.SwapBuffers) return EGL_FALSE;
+    int (*off)(egl_glue_swap_fn, void *, void *) = g_swap_offload;
+    if (off && off((egl_glue_swap_fn)shim_swap, dpy, s)) return EGL_TRUE;
+    return shim_swap(dpy, s);
 }
 
 static eglproc shim_eglGetProcAddress(const char *name);
@@ -561,9 +570,16 @@ static EGLBoolean host_eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, 
     return real.QuerySurface(d, s, attr, value);
 }
 
+static EGLBoolean host_swap(EGLDisplay d, EGLSurface s);
 static EGLBoolean host_eglSwapBuffers(EGLDisplay d, EGLSurface s)
 {
     if (!ensure() || !real.SwapBuffers) return EGL_FALSE;
+    int (*off)(egl_glue_swap_fn, void *, void *) = g_swap_offload;
+    if (off && off((egl_glue_swap_fn)host_swap, d, s)) return EGL_TRUE;
+    return host_swap(d, s);
+}
+static EGLBoolean host_swap(EGLDisplay d, EGLSurface s)
+{
     void (*hook)(void *) = g_swap_hook;
     if (hook) hook(g_swap_ctx);
     if (host_dpy(d) && s == HOST_SURFACE) {

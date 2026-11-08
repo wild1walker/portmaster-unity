@@ -23,5 +23,10 @@ long glpresent_frames(void);
 // What the host's own drawing and reading at the swap (screenshots, the on-screen keyboard, the cursor)
 // binds for "framebuffer 0" on this thread: the frame Unity just drew (0 when off).
 unsigned glpresent_fb0(void);
+// Unity's context moved to another thread (glrec.c's UA_GL_REC=thread): what this thread knew of it,
+// taken before it lets the context go and given to the thread that makes it current next.
+typedef struct { void *ring; int draw0, read0; } glpresent_tstate;
+void glpresent_tstate_take(glpresent_tstate *s);
+void glpresent_tstate_give(const glpresent_tstate *s);
 void glpresent_shot(const char *path);          // the next frame the window shows written there (PPM)
 #endif

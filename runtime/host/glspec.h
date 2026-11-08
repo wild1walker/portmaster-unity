@@ -9,5 +9,6 @@ const so_shim *glspec_table(void *(*next)(const char *name));
 // <cache_dir>/UnityShaderCache emptied, so its program binaries are all of one kind
 void glspec_cache(const char *cache_dir);
 void glspec_frame(void);                // from the swap hook, every frame
+void glspec_rethread(void);             // Unity's context now on the calling thread (UA_GL_REC=thread)
 void *glspec_hard(const char *name);    // its float-taking wrappers with the host's calling convention
 #endif
