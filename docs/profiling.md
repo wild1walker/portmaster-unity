@@ -1825,6 +1825,22 @@ Greenpath 51.9 / 52.0 fps against 51.8 / 52.3, City 51.6 (steady; 50.8 with a st
 and the render thread are both near the frame's length there, so what one of them saves the other
 still waits for. All three stay options, off.
 
+What holds Greenpath at 52 on the RG34XX-SP (Knulli, the release's settings, 2026-11-08): all three
+at once. The GPU, counted over 40 s of the walk (`gpucnt sample`): active 92 % of its cycles at 554
+MHz on average (the governor at its 600 MHz thermal cap most of the walk, 696 now and then), 9.9
+million cycles a frame, 97 % of them fragment work (768,000 warps a frame: about 17 layers of the
+540x338 picture); during the loading screens it idles at 240 MHz, so a sample that takes them in reads
+far lower. The main thread: on a CPU 88 % of the time, 1.5 ms a frame waiting for the previous frame
+to be presented; the render thread's GL calls 9.4 - 9.7 ms a frame (`UA_GL_REC=time`) on top of
+Unity's own work there. Under half the pixels (`UA_RENDER_SIZE=360x240`, a
+measurement) gives 52.0 -> 55.8 fps, not 60: with the GPU's work more than halved, the threads hold
+the frame at ~56. So no one change of one of the three shows much; 60 there needs about 15 % off the
+GPU's work and about 10 % off each thread together. The frame (`UA_GL_TRACE`): 12 passes, the
+darkness cutout camera's (cleared, usually nothing drawn; the scene's darkness sprites read it), two
+on the window (the bars at the start, the picture at the end), the scene, five bloom passes at
+135x84, two post passes, the HUD over the post result; `glBindFramebuffer` 144 us of the render
+thread each (1.7 ms a frame: the driver submits the pass before at the bind).
+
 Thread placement in Greenpath (muOS, `UA_GL_PERSIST=1`, every run from 50 C): the render thread alone
 on core 3 and every other thread on cores 0 - 2 (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`) 40.1 /
 40.3 fps and no hitch of 100 ms, against 39.0 (a screenshot's 1 s stall in it; ~39.7 without) with
