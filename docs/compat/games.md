@@ -221,6 +221,18 @@ Unity's Animator) into 2026.11.07.2 (Knulli, the release's own files, screenshot
 Vessel 47.5 - 48.8 -> 55.7, Gruz Mother 56.1, Hornet 56.1, City of Tears 57.3, Greenpath 52.6 - 53.3,
 Crystal Peak 56.6. Thread priorities, one core per thread, one to three job workers and `UA_GL_DSINVAL`
 gained nothing in the fights.
+2026-11-08, the BattleXP G350 (dArkOS, RK3326: Cortex-A35 cores throttled to 1.0 - 1.5 GHz at ~80 C,
+Mali-G31 at 400 MHz, r13p0 through SDL's KMSDRM; 640x480, the 1 GB profile rendering 480x360, the
+picture filling the 4:3 screen with asmpatch's `hk-aspect`; average fps of a walk with attacks, the
+bench's "steady" figure never settles there): the release 17.5 in Greenpath, where the render thread
+waited in every swap for the GPU to finish the frame. With ua_host's present thread
+(`UA_PRESENT_THREAD`, portmaster-hollowknight c384e92): Dirtmouth 50.1, Mantis Village 43.1,
+Deepnest 41.7, Kingdom's Edge 41.7, the Colosseum 38.7, King's Pass 38.1, Crystal Peak 36.4, Queen's
+Gardens 35.4, City of Tears 32.4, Soul Master 28.0, Greenpath 25.1 (screenshots checked). Measured and
+left out there: exact vertex ranges and base-vertex draws (no change), vsync off (none), 0 job workers
+(+11 % without the present thread, nothing with it), incremental GC (Knulli: -1.5 fps, the pauses as
+large). The Knulli also gets 18 rest poses in flipbooks.txt (grass and the like: Greenpath 52.6 - 52.9
+-> 54.3 - 54.6) and `hk-aspect` (3:2: the same fps, Greenpath 52.6, Dirtmouth 58.3).
 
 
 ## Linux builds, one per Unity line (32-bit route)
