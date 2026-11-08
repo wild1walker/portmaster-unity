@@ -262,7 +262,8 @@ the RG34XX-SP in Dirtmouth through the setup's one-time update (the release cand
 under `pmu apk-asmpatch`): the bottom button confirmed through the title, the save and the menus and
 jumped (the Knight from 11.4 to 17.0 and down), right walked; Options, Controller showed the Switch Pro
 Controller with B jump, Y attack, A focus / cast, X Dream Nail, and Remap Controller B, Y, A, X, ZR, ZL,
-L, R; `UA_PAD_LETTERS=xbox` the game's Xbox 360 picture, the same positions.
+L, R; `UA_PAD_LETTERS=xbox` the game's Xbox 360 picture, the same positions. Test release 2026.11.08.3
+(2026.11.08.2's files with that fix and the new READMEs).
 
 
 ## Linux builds, one per Unity line (32-bit route)
