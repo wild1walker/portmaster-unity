@@ -228,7 +228,9 @@ bench's "steady" figure never settles there): the release 17.5 in Greenpath, whe
 waited in every swap for the GPU to finish the frame. With ua_host's present thread
 (`UA_PRESENT_THREAD`, portmaster-hollowknight c384e92): Dirtmouth 50.1, Mantis Village 43.1,
 Deepnest 41.7, Kingdom's Edge 41.7, the Colosseum 38.7, King's Pass 38.1, Crystal Peak 36.4, Queen's
-Gardens 35.4, City of Tears 32.4, Soul Master 28.0, Greenpath 25.1 (screenshots checked). Measured and
+Gardens 35.4, City of Tears 32.4, Greenpath 25.1 (screenshots checked; boss fights to be measured from the
+Hall of Gods: the Soul Master and Soul Tyrant spot saves start in the arena's lower room, behind the
+scene's own mask, so their numbers are not the fights'). Measured and
 left out there: exact vertex ranges and base-vertex draws (no change), vsync off (none), 0 job workers
 (+11 % without the present thread, nothing with it), incremental GC (Knulli: -1.5 fps, the pauses as
 large). The Knulli also gets 18 rest poses in flipbooks.txt (grass and the like: Greenpath 52.6 - 52.9
