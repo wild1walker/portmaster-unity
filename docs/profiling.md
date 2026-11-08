@@ -1818,6 +1818,13 @@ muOS 53.7 -> 49.2 fps with nothing merged), and a one-byte vertex attribute is c
 driver on the CPU at every draw (12 % of the G350's GL thread until the selector became a float).
 Option, off.
 
+The exact small items together (2026-11-08): `UA_FAST_VERTS=1`, `UA_INV_MEMO=1` and asmpatch's
+`playmaker-idle` at once against none of them, on the release settings otherwise (Knulli, A B A B):
+Greenpath 51.9 / 52.0 fps against 51.8 / 52.3, City 51.6 (steady; 50.8 with a stall) / 52.1 against
+51.9 / 52.0. Each alone was within noise and so are the three stacked: about 0.1 fps. The main thread
+and the render thread are both near the frame's length there, so what one of them saves the other
+still waits for. All three stay options, off.
+
 Thread placement in Greenpath (muOS, `UA_GL_PERSIST=1`, every run from 50 C): the render thread alone
 on core 3 and every other thread on cores 0 - 2 (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`) 40.1 /
 40.3 fps and no hitch of 100 ms, against 39.0 (a screenshot's 1 s stall in it; ~39.7 without) with
