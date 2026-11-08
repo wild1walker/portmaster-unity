@@ -28,6 +28,7 @@ int up_inject_mouse(int dev, int action, int buttons, float x, float y, float vs
 { (void)hs; if (nev < MAXEV) evs[nev++] = (struct ev){ 'm', dev, action, buttons, 0, x, y, vs }; return 1; }
 int up_inject_touch(int action, int n, const int *ids, const float *x, const float *y)
 { (void)ids; if (nev < MAXEV) evs[nev++] = (struct ev){ 't', 0, action, n, 0, x[0], y[0], 0 }; return 1; }
+unsigned glpresent_fb0(void) { return 0; }             // glpresent.c: no present thread, the window's framebuffer
 
 /* fake_gles.c */
 extern unsigned char fake_fb0[480][640][4];
@@ -333,6 +334,29 @@ static void dstickauto(void)
     CHECK(nev == 0);
 }
 
+// UA_KEYMAP on the left stick too: d-pad and stick press the same arrow keys, one key event per change
+static void keymapstick(void)
+{
+    setenv("UA_KEYMAP", "left:left,right:right,lleft:left,lright:right", 1);
+    int id = 1;
+    CHECK(pointer_init(640, 480, &id) == 0);
+    axes(-0.3f, 0.2f, 0, 0);                            // under half way: nothing, the stick is taken anyway
+    CHECK(last('k') == NULL && pad[0] == 0 && pad[1] == 0);
+    axes(-0.8f, 0, 0, 0);                               // stick left: the left arrow
+    CHECK(last('k')->a == 21 && last('k')->action == UP_ACTION_DOWN);
+    int n0 = nev;
+    axes(-0.9f, 0, -1, 0);                              // the d-pad joins: no second press
+    CHECK(nev == n0);
+    axes(0, 0, -1, 0);                                  // the stick lets go, the d-pad still holds it
+    CHECK(nev == n0);
+    axes(-0.8f, 0, 0, 0);                               // it changes hands in one event: still no event
+    CHECK(nev == n0);
+    axes(0, 0, 0, 0);                                   // the last one lets go: up
+    CHECK(nev == n0 + 1 && last('k')->a == 21 && last('k')->action == UP_ACTION_UP);
+    axes(0.8f, 0, 0, 0);
+    CHECK(last('k')->a == 22 && last('k')->action == UP_ACTION_DOWN);
+}
+
 static void toggle(void)
 {
     setenv("UA_POINTER", "mouse", 1);
@@ -367,12 +391,13 @@ int main(int argc, char **argv)
     else if (!strcmp(s, "mouse")) mouse();
     else if (!strcmp(s, "touch")) touch();
     else if (!strcmp(s, "keymap")) keymap();
+    else if (!strcmp(s, "keymapstick")) keymapstick();
     else if (!strcmp(s, "swap")) swap();
     else if (!strcmp(s, "dstick")) dstick();
     else if (!strcmp(s, "dstickauto")) dstickauto();
     else if (!strcmp(s, "toggle")) toggle();
     else if (!strcmp(s, "es2")) es2();
-    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|swap|dstick|dstickauto|toggle|es2\n"); return 2; }
+    else { fprintf(stderr, "usage: test_pointer off|mouse|touch|keymap|keymapstick|swap|dstick|dstickauto|toggle|es2\n"); return 2; }
     printf("%s %s: %d failure(s)\n", failures ? "FAILED" : "PASSED", s, failures);
     return failures != 0;
 }

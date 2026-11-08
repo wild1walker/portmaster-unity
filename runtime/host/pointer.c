@@ -22,8 +22,10 @@
 //   UA_POINTER_SIZE=<n>   cursor scale (default: screen height / 400, at least 1).
 //   UA_POINTER_SHOTS=1    the cursor is in <root>/shot.req screenshots too (default: not, so
 //                       frame comparisons see the game's own picture).
-//   UA_KEYMAP=<button>:<key>,...   pad buttons (and up/down/left/right: the d-pad) that press
-//                       keyboard keys instead, e.g. start:escape,x:space,select:tab; keys: a-z, 0-9,
+//   UA_KEYMAP=<button>:<key>,...   pad buttons (and up/down/left/right: the d-pad; lup/ldown/lleft/
+//                       lright: the left stick past half way) that press keyboard keys instead, e.g.
+//                       start:escape,x:space,select:tab; a key held by two controls is let go with
+//                       the last; keys: a-z, 0-9,
 //                       f1-f12, escape, enter, space, tab, backspace, delete, up, down, left, right,
 //                       shift, ctrl, alt, pageup, pagedown, home, end, back. Works with or without
 //                       pointer mode; mapped buttons no longer reach the game as pad buttons.
@@ -75,7 +77,7 @@ static struct {
     int nbuttons;
 } P;
 
-static struct { int pad_key; int dir; int key; int down; } keymap[MAX_MAP];   // dir: hat direction 1-4 (up, down, left, right) or 0
+static struct { int pad_key; int dir; int key; int down; } keymap[MAX_MAP];   // dir: 1-4 the d-pad (up, down, left, right), 5-8 the left stick, or 0
 static int nkeymap, kb_dev;
 static int swap_key, swapped;               // UA_DPAD_SWAP
 enum { DS_OFF, DS_ALWAYS, DS_AUTO };
@@ -126,8 +128,8 @@ static int key_code(const char *n)
 
 static int hat_dir(const char *n)
 {
-    static const char *d[] = { "up", "down", "left", "right" };
-    for (int i = 0; i < 4; i++) if (!strcasecmp(n, d[i])) return i + 1;
+    static const char *d[] = { "up", "down", "left", "right", "lup", "ldown", "lleft", "lright" };
+    for (int i = 0; i < 8; i++) if (!strcasecmp(n, d[i])) return i + 1;
     return 0;
 }
 
@@ -342,14 +344,23 @@ static void set_on(int on)
     if (on) { sent_x = sent_y = -1; t_moved = now_s(); send_move(); }
 }
 
+// a mapped key goes down with the first control that holds it and up with the last
+static void key_set(int i, int down)
+{
+    if (down == keymap[i].down) return;
+    int others = 0;
+    for (int j = 0; j < nkeymap; j++) others |= j != i && keymap[j].key == keymap[i].key && keymap[j].down;
+    keymap[i].down = down;
+    if (!others) up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, down ? UP_ACTION_DOWN : UP_ACTION_UP, keymap[i].key, 0, 0);
+}
+
 // UA_DPAD_SWAP: the d-pad and the left stick trade places (with UA_DPAD_STICK: the d-pad drives the
 // left stick, or is the d-pad again); what either held is let go, and the pads' axes are sent again
 static void set_swapped(int on)
 {
     if (dstick) dstick_on = !on;
     else swapped = on;
-    for (int i = 0; i < nkeymap; i++)
-        if (keymap[i].dir && keymap[i].down) { up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, UP_ACTION_UP, keymap[i].key, 0, 0); keymap[i].down = 0; }
+    for (int i = 0; i < nkeymap; i++) if (keymap[i].dir) key_set(i, 0);
     memset(stick, 0, sizeof stick);
     memset(hat, 0, sizeof hat);
     resend = 1;
@@ -390,12 +401,7 @@ int pointer_key(int keycode, int down)
 {
     if (swap_key && keycode == swap_key) { if (down) set_swapped(dstick ? dstick_on : !swapped); return 1; }
     for (int i = 0; i < nkeymap; i++)
-        if (keymap[i].pad_key == keycode)
-        {
-            if (down != keymap[i].down) up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, down ? UP_ACTION_DOWN : UP_ACTION_UP, keymap[i].key, 0, 0);
-            keymap[i].down = down;
-            return 1;
-        }
+        if (keymap[i].pad_key == keycode) { key_set(i, down); return 1; }
     if (!P.events) return 0;
     if (P.toggle_key && keycode == P.toggle_key) { if (down) set_on(!P.on); return 1; }
     if (!P.on) return 0;
@@ -412,20 +418,23 @@ int pointer_key(int keycode, int down)
     return 0;
 }
 
-// hat directions of the keymap: v[4], v[5] (-1/0/1) -> key presses; those axes are then taken
+// directions of the keymap: the d-pad (v[4], v[5]: -1/0/1) and the left stick (v[0], v[1]) past half
+// way -> key presses; the axes a direction is mapped on are then taken
 static void keymap_hat(float *v)
 {
-    int any = 0;
+    int hat_used = 0, stick_used = 0, want[MAX_MAP];
     for (int i = 0; i < nkeymap; i++)
     {
-        if (!keymap[i].dir) continue;
-        any = 1;
         int d = keymap[i].dir;
-        int down = d == 1 ? v[5] < -0.5f : d == 2 ? v[5] > 0.5f : d == 3 ? v[4] < -0.5f : v[4] > 0.5f;
-        if (down != keymap[i].down) up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, down ? UP_ACTION_DOWN : UP_ACTION_UP, keymap[i].key, 0, 0);
-        keymap[i].down = down;
+        if (!d) continue;
+        const float *a = d > 4 ? v : v + 4;
+        if (d > 4) { stick_used = 1; d -= 4; } else hat_used = 1;
+        want[i] = d == 1 ? a[1] < -0.5f : d == 2 ? a[1] > 0.5f : d == 3 ? a[0] < -0.5f : a[0] > 0.5f;
     }
-    if (any) v[4] = v[5] = 0;
+    for (int pass = 1; pass >= 0; pass--)          // presses first: a key that changes hands stays down
+        for (int i = 0; i < nkeymap; i++) if (keymap[i].dir && want[i] == pass) key_set(i, pass);
+    if (hat_used) v[4] = v[5] = 0;
+    if (stick_used) v[0] = v[1] = 0;
 }
 
 void pointer_axes(int slot, float *v)

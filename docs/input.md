@@ -37,6 +37,7 @@ own assemblies. On the Android player:
 | InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (below) | `UA_PAD_NAME` that one of its Android profiles knows (`asmpatch --survey` lists them), e.g. `Microsoft X-Box 360 pad` |
 | Input System package (`Unity.InputSystem.dll`) | the engine's Android backend reports keyboards, mice and touchscreens in the package's common formats (they work as they are) and pads as Android game controllers, for which the package has layouts only in Android builds: a desktop build's copy has its own platform's (Linux: SDL) | `asmpatch` `inputsystem-android` (below): the pad is a `Gamepad`. The player setting "Active Input Handling" decides whether the legacy stack runs too |
 | soft keyboard (`TouchScreenKeyboard`, UI `InputField` / `TMP_InputField` on Android) | Unity opens its input dialog (`UnityPlayer.showSoftInput`) | nothing: ua_host's on-screen keyboard (below) |
+| Unity UI (uGUI) menus made for touch | the `EventSystem` moves and submits with the Input Manager's axes (arrows, the left stick, Submit, Cancel), but only from a selected button, and a touch game never selects one | `UA_UI_NAV=1` (below), IL2CPP players |
 
 ## The Input System package: `inputsystem-android`
 
@@ -255,12 +256,31 @@ for pad navigation; a game that hides the system cursor and draws its own also w
 ## Keys from the pad
 
 `UA_KEYMAP=<button>:<key>,...` (e.g. `start:escape,x:space,select:tab,up:up,down:down`) turns pad
-buttons, and the d-pad's directions, into keyboard KeyEvents from a registered `Virtual Keyboard`
+buttons, the d-pad's directions (`up`, `down`, `left`, `right`) and the left stick's (`lup`, `ldown`,
+`lleft`, `lright`: past half way) into keyboard KeyEvents from a registered `Virtual Keyboard`
 (`SOURCE_KEYBOARD`), for games that read `Input.GetKey`. Mapped controls no longer reach the game
-as the pad's. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`f12`, `escape`,
+as the pad's. Two controls may press the same key (`left:left,lleft:left`): it goes down with the
+first and up with the last, and a key that passes from one to the other in one event stays down. Works with or without pointer mode. Keys: `a`-`z`, `0`-`9`, `f1`-`f12`, `escape`,
 `enter`, `space`, `tab`, `backspace`, `delete`, `up`, `down`, `left`, `right`, `shift`, `ctrl`,
 `alt`, `pageup`, `pagedown`, `home`, `end`, `insert`, `minus`, `equals`, `comma`, `period`,
 `slash`, `grave`, `back` (Android's back key, which Unity reads as Escape).
+
+## Menus made for touch
+
+Unity UI (uGUI) already moves between buttons and presses them from the Input Manager's default
+axes (Horizontal and Vertical: the arrow keys and the left stick; Submit: Enter or the pad's A;
+Cancel: Escape or B), but only from a selected button. A game made for touch never selects one,
+so the pad does nothing in its menus. `UA_UI_NAV=1` (runtime/host/uinav.c): whenever nothing is
+selected, or the selected object is no longer active (its panel was hidden), ua_host selects the
+topmost interactable button on screen (then the leftmost), and the game's own `EventSystem` does
+the rest, with its own highlight. A tap (pointer mode) still selects what it taps. It runs on
+UnityMain after each frame, at most every 0.1 s, through the API libil2cpp exports
+(`il2cpp_runtime_invoke` on `EventSystem.current`, `currentSelectedGameObject`,
+`SetSelectedGameObject`, `Selectable.allSelectablesArray`, `IsInteractable`): IL2CPP players only.
+The log names each selection (`[ui] selected "PlayButton"`). Slope (2022.3, IL2CPP): it selects
+Play on the main menu, the Sound toggle on the settings screen and Play Again on the game-over
+screen; the d-pad and the left stick press the arrow keys (`UA_KEYMAP`), which the game also
+steers with.
 
 ## Handhelds without sticks
 
@@ -349,7 +369,7 @@ action assets, the legacy Input Manager's axes, and bindings a game makes at run
 
 - `runtime/host/test/pointer_test.sh` (`ARCH=arm64` too): pointer.c against stand-ins for the
   runtime and a fake libGLESv2 window: what each scenario sends and takes (off, mouse, touch,
-  keymap, swap, toggle; the start position sent again, once, after Unity's second frame, as a half-pixel
+  keymap, keymapstick, swap, toggle; the start position sent again, once, after Unity's second frame, as a half-pixel
   pair), the cursor's pixels, Unity's GL state kept, nothing at all with the switches off;
   `UA_DPAD_STICK` (`dstick`: the d-pad as the stick, its diagonals of length 1, a real stick while
   the d-pad is let go, the swap button giving the d-pad back and the axes sent again;
