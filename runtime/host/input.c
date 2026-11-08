@@ -154,10 +154,35 @@ static void pad_close(SDL_JoystickID jid)
     pointer_axes((int)(p - pads), none);       // its share of the cursor's movement
 }
 
+// A Nintendo pad's name in UA_PAD_NAME moves the buttons: the pads here send by position (a, the
+// bottom face button, as on an Xbox pad), and input libraries that see a Nintendo pad swap its face
+// buttons by letter (Hollow Knight's InControl: the right button jumped and confirmed). The letters a
+// handheld prints come from the game's own button pictures instead (docs/input.md).
+static void pad_name_check(void)
+{
+    const char *n = getenv("UA_PAD_NAME");
+    if (!n) return;
+    char low[128];
+    size_t k = 0;
+    for (; n[k] && k < sizeof low - 1; k++) low[k] = (char)(n[k] >= 'A' && n[k] <= 'Z' ? n[k] - 'A' + 'a' : n[k]);
+    low[k] = 0;
+    static const char *const nintendo[] = { "nintendo", "switch", "joy-con", "joycon", "pro controller" };
+    for (size_t i = 0; i < sizeof nintendo / sizeof nintendo[0]; i++)
+        if (strstr(low, nintendo[i]))
+        {
+            fprintf(stderr, "[input] UA_PAD_NAME \"%s\" names a Nintendo pad: input libraries swap its face buttons by "
+                    "letter, so they no longer work by position (the bottom one jumps and confirms). Name an Xbox pad "
+                    "(\"Xbox Wireless Controller\") and show the handheld's letters with the game's button pictures "
+                    "(docs/input.md, \"Buttons by position\")\n", n);
+            return;
+        }
+}
+
 int input_init(int width, int height)
 {
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0)
     { fprintf(stderr, "[input] SDL: %s\n", SDL_GetError()); return -1; }
+    pad_name_check();
     SDL_GameControllerEventState(SDL_ENABLE);
     int n = SDL_NumJoysticks(), pads_found = 0;
     for (int i = 0; i < n; i++)
