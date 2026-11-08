@@ -71,6 +71,7 @@ static partial class TestMain
         Check(st == 0 && outp.Contains("n/a  hk-blur: no Hollow Knight"), "hk-blur: another game: not applicable");
         HollowKnightPostTests();
         HollowKnightAspectTests();
+        HollowKnightFadeTests();
     }
 
     // ---- hk-aspect ---------------------------------------------------------------------------
@@ -252,5 +253,65 @@ static partial class TestMain
         Check(st == 0 && outp.Contains("n/a  hk-post: no Hollow Knight"), "hk-post: without the effects' assembly: not applicable");
         (st, outp) = Patch(d, Path.Combine(tmp, "hkp-both"), with: new[] { "hk-blur", "hk-post" });
         Check(st == 0 && outp.Contains("ok   hk-blur") && outp.Contains("ok   hk-post"), "hk-post: with hk-blur in one run");
+    }
+
+    /// <summary>CameraFadeDriver.Run on the Assembly-CSharp in dir (the firstpass stand-in beside it), and
+    /// how many times the texture was uploaded.</summary>
+    static (string log, int applies) DriveFade(string dir, int seed, int steps) =>
+        RunFade(dir, a => (string)a.GetType("CameraFadeDriver", true).GetMethod("Run").Invoke(null, new object[] { seed, steps }));
+
+    static (string log, int applies) RunFade(string dir, Func<Assembly, string> f)
+    {
+        var ctx = new AssemblyLoadContext("hkf" + Guid.NewGuid(), isCollectible: true);
+        ctx.Resolving += (c, n) => n.Name == "Assembly-CSharp-firstpass" ? c.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, n.Name + ".dll")))) : null;
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var tex = ctx.LoadFromAssemblyName(new AssemblyName("Assembly-CSharp-firstpass")).GetType("UnityEngine.Texture2D", true);
+            tex.GetField("Applies").SetValue(null, 0);
+            var log = f(a);
+            return (log, (int)tex.GetField("Applies").GetValue(null));
+        }
+        finally { ctx.Unload(); }
+    }
+
+    static void HollowKnightFadeTests()
+    {
+        if (!File.Exists(FakeHollowKnightFirstpass)) { Check(false, $"Hollow Knight firstpass stand-in at {FakeHollowKnightFirstpass} (build.sh test builds it)"); return; }
+        var d = Dir("hkf");
+        File.Copy(FakeHollowKnight, Path.Combine(d, "Assembly-CSharp.dll"));
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(d, "Assembly-CSharp-firstpass.dll"));
+        var (st, outp) = Patch(d, Path.Combine(tmp, "hkf-default"));
+        Check(st == 0 && outp.Contains("skip hk-camerafade (opt-in: --with=hk-camerafade)") && NoDlls(Path.Combine(tmp, "hkf-default")),
+              "hk-camerafade: opt-in, not run by default");
+        var o = Path.Combine(tmp, "hkf-out");
+        (st, outp) = Patch(d, o, with: new[] { "hk-camerafade" });
+        Check(st == 0 && outp.Contains("ok   hk-camerafade: Assembly-CSharp.dll: CameraFade.SetScreenOverlayColor") && File.Exists(Path.Combine(o, "Assembly-CSharp.dll")),
+              "hk-camerafade: applied when named");
+        if (!File.Exists(Path.Combine(o, "Assembly-CSharp.dll"))) return;
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(o, "Assembly-CSharp-firstpass.dll"), true);
+        int same = 0, a0 = 0, a1 = 0, labels = 0, threw = 0;
+        string first = null;
+        for (int seed = 1; seed <= 80; seed++)
+        {
+            var (la, pa) = DriveFade(d, seed, 600); var (lb, pb) = DriveFade(o, seed, 600);
+            a0 += pa; a1 += pb; labels += la.Split("label ").Length - 1; threw += la.Split(" threw ").Length - 1;
+            if (la == lb) same++;
+            else if (first == null)
+            {
+                var x = la.Split('\n'); var y = lb.Split('\n');
+                int k = 0; while (k < x.Length && k < y.Length && x[k] == y[k]) k++;
+                first = $"seed {seed}: {(k < x.Length ? x[k] : "")} / {(k < y.Length ? y[k] : "")}";
+            }
+        }
+        Check(same == 80, $"hk-camerafade: every field, pixel (CPU and GPU), label and exception the same after each step ({same} of 80 runs{(first == null ? "" : "; " + first)})");
+        Check(labels > 1000 && threw > 0, $"hk-camerafade: the runs draw the fade ({labels} labels) and hit the exception before Awake ({threw})");
+        Check(a1 < a0, $"hk-camerafade: uploads in the seeded runs {a0} -> {a1}");
+        string Idle(Assembly a) => (string)a.GetType("CameraFadeDriver", true).GetMethod("Idle").Invoke(null, new object[] { 1000 });
+        var (ia, ua) = RunFade(d, Idle); var (ib, ub) = RunFade(o, Idle);
+        Check(ia == ib && ua == 1000 && ub == 1, $"hk-camerafade: a fade nothing started, 1,000 events: the same state ({ia}), uploads {ua} -> {ub}");
+        var again = Path.Combine(tmp, "hkf-again");
+        (st, outp) = Patch(o, again, only: new[] { "hk-camerafade" });
+        Check(st == 0 && outp.Contains("done hk-camerafade") && NoDlls(again), "hk-camerafade: a second run finds it applied");
     }
 }
