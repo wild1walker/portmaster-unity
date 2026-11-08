@@ -414,6 +414,50 @@ static void pixel(GLuint fb, const colour_t *c, int x, int y, char *s, size_t n)
     if (pbo && r_BindBuffer) r_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pbo);
 }
 
+// UA_GL_TRACE_BOUNDS=1: the rectangle of the viewport's pixels a call changed (the whole RGBA8 viewport
+// read back after each call and compared with the last read of that framebuffer): which draws of a pass
+// touch the same pixels, so which could be drawn in another order (a measurement; slow)
+static unsigned char *g_bb_prev, *g_bb_cur;
+static GLuint g_bb_fb = ~0u;
+static GLint g_bb_vp[4];
+static void bounds(GLuint fb, const colour_t *c, const GLint vp[4], char *out, size_t n)
+{
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("UA_GL_TRACE_BOUNDS"); on = e && *e == '1'; }
+    out[0] = 0;
+    if (!on || c->ms || c->none || c->type != GL_UNSIGNED_BYTE || vp[2] <= 0 || vp[3] <= 0) return;
+    size_t sz = (size_t)vp[2] * (size_t)vp[3] * 4;
+    unsigned char *cur = realloc(g_bb_cur, sz);
+    if (!cur) return;
+    g_bb_cur = cur;
+    GLint rfb = 0, pbo = 0;
+    r_GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    r_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+    if ((GLuint)rfb != fb) r_BindFramebuffer(GL_READ_FRAMEBUFFER, fb);
+    if (pbo && r_BindBuffer) r_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    drain_errors();
+    r_ReadPixels(vp[0], vp[1], vp[2], vp[3], GL_RGBA, GL_UNSIGNED_BYTE, cur);
+    drain_errors();
+    if ((GLuint)rfb != fb) r_BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)rfb);
+    if (pbo && r_BindBuffer) r_BindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pbo);
+    if (g_bb_prev && g_bb_fb == fb && !memcmp(g_bb_vp, vp, sizeof g_bb_vp)) {
+        int x0 = vp[2], y0 = vp[3], x1 = -1, y1 = -1;
+        const uint32_t *a = (const uint32_t *)g_bb_prev, *b = (const uint32_t *)cur;
+        for (int y = 0; y < vp[3]; y++)
+            for (int x = 0; x < vp[2]; x++)
+                if (a[(size_t)y * vp[2] + x] != b[(size_t)y * vp[2] + x]) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+        if (x1 < 0) snprintf(out, n, " bbox none");
+        else snprintf(out, n, " bbox %d,%d,%d,%d", x0, y0, x1, y1);
+    } else snprintf(out, n, " bbox ?");
+    unsigned char *t = g_bb_prev; g_bb_prev = cur; g_bb_cur = t;
+    g_bb_fb = fb; memcpy(g_bb_vp, vp, sizeof g_bb_vp);
+}
+
 // the pass's colour buffer, once per pass; then the pixels after a call
 static void after(char *out, size_t n)
 {
@@ -447,7 +491,9 @@ static void after(char *out, size_t n)
     static int probe = -1; static float px, py;          // UA_GL_TRACE_PIXEL=<fx>,<fy>: a third pixel, as fractions of the viewport
     if (probe < 0) { const char *e = getenv("UA_GL_TRACE_PIXEL"); probe = e && sscanf(e, "%f,%f", &px, &py) == 2; }
     if (probe) { char t[64]; pixel(g_cur_fb, &c, vp[0] + (int)(vp[2] * px), vp[1] + (int)(vp[3] * py), t, sizeof t); snprintf(x, sizeof x, " %s", t); }
-    snprintf(out, n, "-> %s %s%s", a, b, x);
+    char bb[64];
+    bounds(g_cur_fb, &c, vp, bb, sizeof bb);
+    snprintf(out, n, "-> %s %s%s%s", a, b, x, bb);
 }
 
 static int sampler_type(GLenum t)
