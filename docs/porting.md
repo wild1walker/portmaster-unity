@@ -604,7 +604,11 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   (a file of that size in `/dev/shm`, removed after). Hollow Knight, release settings, so measured
   (2026-11-09): Greenpath at least 84 MB available, City of Tears down to 34 MB at 148 s (the bench's
   40 MB floor stopped it), with libunity's code pages already evicted (19 -> 5 MB resident); without the
-  hold the same scenes kept 202 MB. Testers saw 839 of 892 MB used on an RGB10. A 1 GB dArkOS port needs that much more headroom than the stopped-ES numbers show.
+  hold the same scenes kept 202 MB. Testers saw 839 of 892 MB used on an RGB10. A 1 GB dArkOS port needs that much more headroom than the stopped-ES numbers show. Hollow Knight's
+  fix (2026-11-09): textures at 0.375 instead of 0.5 on 1 GB handhelds (`textures.lowmem_scale`; about a
+  texel for each pixel of its 540x360 picture, the same picture side by side) and 16 MiB of a scene's
+  sound decoded instead of 36 (`audio.lowmem_pcm_budget_mb`): City of Tears on muOS 663 -> 597 MB, the
+  lowest available 266 -> 332 MB, 56.0 -> 56.3 fps. The G350 with 126 MB held had hung in that scene.
 
 ### Videos
 
@@ -938,7 +942,9 @@ The same steps without the setup, on a PC:
    clips are decoded once at load, as on the desktop, and only the largest long clips of a scene
    over the budget play compressed (FMOD then decodes them on the CPU while they play, which
    takes the GPU's clock in a warm handheld: [profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)).
-   A port with memory to spare raises it (the step's log names the scene that holds the most).
+   A port with memory to spare raises it (the step's log names the scene that holds the most);
+   `audio.lowmem_pcm_budget_mb` is the budget on handhelds with at most `audio.ram_mb` (1024) of RAM, as
+   `textures.lowmem_scale` is the scale there (Hollow Knight: 36 MiB, 16 on 1 GB handhelds).
 2. **Convert**: `python -m pmunity convert <Data> [<out>] --config game.json` with a config like
    the `convert` table above (`{"steps": ["shaders", "settings", "audio"], "settings":
    {"graphics_apis": [11]}}`); a game's own steps go in a plugin: field edits in a JSON file

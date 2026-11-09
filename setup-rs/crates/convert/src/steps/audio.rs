@@ -3,7 +3,9 @@
 //! CompressedInMemory only to keep a scene's PCM within `pcm_budget_mb`: the scene's own clips
 //! before the resident ones (the first `resident_scenes` scenes count as loaded everywhere), the
 //! largest first; clips no scene uses keep the length rule (`compressed_min_s`). Without a
-//! budget (None), every clip of the length rule is switched.
+//! budget (None), every clip of the length rule is switched. `lowmem_pcm_budget_mb` (when set) is the
+//! budget where the system has at most `ram_mb` of RAM (a 1 GB handheld), as the textures step's
+//! `lowmem_scale`.
 //!
 //! The decision needs every file's clips, so it is made once, before any file is written, and
 //! kept in the journal (`audio`: the settings, the clips to switch by file, the summary): a
@@ -24,6 +26,8 @@ fn defaults() -> Vec<(&'static str, Json)> {
         ("pcm_budget_mb", Json::Int(16)),
         ("compressed_min_s", Json::Float(2.0)),
         ("resident_scenes", Json::Int(2)),
+        ("lowmem_pcm_budget_mb", Json::Null),
+        ("ram_mb", Json::Int(1024)),
     ]
 }
 
@@ -195,7 +199,25 @@ fn mib(clips: &HashMap<Key, Clip>, keys: &[&Key]) -> f64 {
 }
 
 pub fn run(job: &mut Job) -> Result<()> {
-    let c = section(&job.cfg, "audio", &defaults())?;
+    let mut c = section(&job.cfg, "audio", &defaults())?;
+    if let Some(b) = c
+        .get("lowmem_pcm_budget_mb")
+        .filter(|v| !matches!(v, Json::Null))
+        .cloned()
+    {
+        let ram = c
+            .get("ram_mb")
+            .and_then(Json::as_int)
+            .ok_or_else(|| Error::Value("audio.ram_mb: not an integer".into()))?;
+        let mem = super::quality::mem_total_mb();
+        if mem <= ram {
+            job.log(&format!(
+                "audio: {mem} MB of RAM (at most {ram}): budget {} MiB a scene (lowmem_pcm_budget_mb)",
+                b.repr()
+            ));
+            c.set("pcm_budget_mb", b);
+        }
+    }
     let cfg = Json::Dict(
         defaults()
             .iter()
