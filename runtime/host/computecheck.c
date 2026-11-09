@@ -4,6 +4,7 @@
 //
 //   computecheck <a.comp> <b.comp> [-g X,Y,Z] [-w WORDS] [-u MAX] [-s SEED] [-r RUNS]
 //   computecheck -x <a.comp> -g X,Y,Z s<binding>=<file>... u<binding>=<file>...
+//   computecheck -l                    the driver's compute and storage buffer limits
 //
 // -x runs one kernel on given inputs: each storage (s) or uniform (u) block's buffer is the
 // file's bytes, and every storage buffer is written back to <file>.out after the dispatch (the
@@ -164,8 +165,44 @@ static int run_files(int argc, char **argv)
     return 0;
 }
 
+// -l: the driver's limits a translated kernel (or a vertex stage reading storage buffers) meets
+static int limits(void)
+{
+    if (!egl_up()) return 2;
+    printf("GL_RENDERER %s | GL_VERSION %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    static const struct { GLenum e; const char *n; } L[] = {
+        { GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, "MAX_COMPUTE_SHADER_STORAGE_BLOCKS" },
+        { GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, "MAX_SHADER_STORAGE_BUFFER_BINDINGS" },
+        { GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, "MAX_VERTEX_SHADER_STORAGE_BLOCKS" },
+        { GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, "MAX_FRAGMENT_SHADER_STORAGE_BLOCKS" },
+        { GL_MAX_COMPUTE_UNIFORM_BLOCKS, "MAX_COMPUTE_UNIFORM_BLOCKS" },
+        { GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, "MAX_COMPUTE_SHARED_MEMORY_SIZE" },
+        { GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, "MAX_COMPUTE_WORK_GROUP_INVOCATIONS" },
+        { GL_MAX_COMPUTE_IMAGE_UNIFORMS, "MAX_COMPUTE_IMAGE_UNIFORMS" },
+        { GL_MAX_COMPUTE_ATOMIC_COUNTERS, "MAX_COMPUTE_ATOMIC_COUNTERS" },
+        { GL_MAX_SHADER_STORAGE_BLOCK_SIZE, "MAX_SHADER_STORAGE_BLOCK_SIZE" },
+        { GL_MAX_VERTEX_UNIFORM_VECTORS, "MAX_VERTEX_UNIFORM_VECTORS" },
+        { GL_MAX_FRAGMENT_UNIFORM_VECTORS, "MAX_FRAGMENT_UNIFORM_VECTORS" },
+        { GL_MAX_UNIFORM_BLOCK_SIZE, "MAX_UNIFORM_BLOCK_SIZE" },
+        { GL_MAX_VERTEX_UNIFORM_BLOCKS, "MAX_VERTEX_UNIFORM_BLOCKS" },
+        { GL_MAX_FRAGMENT_UNIFORM_BLOCKS, "MAX_FRAGMENT_UNIFORM_BLOCKS" },
+        { GL_MAX_UNIFORM_BUFFER_BINDINGS, "MAX_UNIFORM_BUFFER_BINDINGS" },
+        { GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS, "MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS" },
+        { GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, "UNIFORM_BUFFER_OFFSET_ALIGNMENT" },
+    };
+    for (size_t i = 0; i < sizeof L / sizeof L[0]; i++) {
+        GLint v = -1; glGetIntegerv(L[i].e, &v);
+        printf("%s %d\n", L[i].n, v);
+    }
+    GLint sz[3] = { 0 };
+    for (int k = 0; k < 3; k++) glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, k, &sz[k]);
+    printf("MAX_COMPUTE_WORK_GROUP_SIZE %d,%d,%d\n", sz[0], sz[1], sz[2]);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && !strcmp(argv[1], "-l")) return limits();
     if (argc >= 3 && !strcmp(argv[1], "-x")) return run_files(argc, argv);
     if (argc < 3) {
         fprintf(stderr, "usage: computecheck <a.comp> <b.comp> [-g X,Y,Z] [-w WORDS] [-u MAX] [-s SEED] [-r RUNS]\n");

@@ -228,6 +228,13 @@ rounding (worst 6e-7 relative), in all three of the fish kernel's movement modes
 reads the other fish while they are written (the game's own race: any GPU's order changes it),
 so it is compared with the fish further apart than they look.
 
+**On the handheld** (RG34XX-SP's Mali-G31, r20p0): the driver links work groups of at most 128
+invocations, and 16 of Dave the Diver's kernels ask for more (256: the fish; 512; 1024: the boids)
+and do not compile there ("'local_size_x' qualifier value exceeds the maximum supported size").
+Not solved yet: such a kernel without shared memory or barriers could run each of 128 threads over
+several of the game's (the dispatch the game makes covers the same threads), but whether Unity's
+GLES player checks the recorded group size against the device first needs a running player.
+
 ```sh
 runtime/host/out/arm64/computecheck <ours.comp> <unity.comp>                  # the same random inputs, outputs compared
 runtime/host/out/arm64/computecheck -x <k.comp> -g 1,1,1 s0=<file> u1=<file>   # given inputs, <file>.out after
@@ -1060,6 +1067,31 @@ programs of the same game have plain arrays of 16 (URP's light limit for mobile 
 glcore route's (The Third Eye's) keep their 32 in a uniform block, which that limit does not count.
 Those variants cannot run on a Mali (the title menu benched does not use them) until the Metal
 route keeps such a constant buffer as a uniform block.
+
+**Fixed (pmu, 2026-11-09), not with a uniform block:** the Mali-G31 (driver r20p0) allows a uniform
+block 16 KB (`GL_MAX_UNIFORM_BLOCK_SIZE` 16384, the ES 3.0 minimum), and URP's AdditionalLights
+buffer for 256 lights is 24 KB in std140. What fits is the count Unity's own Android build compiles
+for: in a Metal-route program with a stage over the Mali's 1,024 uniform vectors (`uniform_vectors`,
+counted as the Mali counts: the driver's numbers for the same programs), shaderx's metal
+(`urp_mobile_lights`) declares URP 17's light arrays for 32 lights (`MAX_VISIBLE_LIGHT_COUNT_MOBILE`)
+instead of 256: the six `_AdditionalLights*` arrays, `_AdditionalShadowParams`, the cookies' UV rects
+and light types (256 -> 32), `_AdditionalLightsWorldToShadow` and `_AdditionalLightsWorldToLights`
+(HLSLcc's float4 rows, 1024 -> 128), `_AdditionalLightsCookieEnableBits` (8 -> 1). Exact on the
+Android player: URP's C# there (`UniversalRenderPipeline.maxVisibleAdditionalLights` on OpenGL ES 3:
+16 when the minimum OpenGL ES version is 3.0, else 32; `AdditionalLightsShadowCasterPass` sizes the
+shadow slices by it) uploads and indexes no more, so no element past 32 is read (URP's source,
+Unity-Technologies/Graphics 6000.0/staging: Input.hlsl, Shadows.hlsl, LightCookieInput.hlsl,
+UniversalRenderPipeline.cs). Dave the Diver (6000.0.52f1, Shader Graph and Spine sprites, URP Lit):
+6,893 of its 12,024 distinct programs were over the limit (the Mali refused 3,844 of the first
+8,000 to link: "uniform components (4,156 - 9,978) is greater than ... (4,096)"); those 6,893 change
+and none is over it after, and the other 5,131 are the same bytes as before. On the handheld all 12,024 now link (before: 3,844 of the first 8,000 did not); the only failures left are 17 kernels over its work group size (below).
+
+**The handheld's limits** (`runtime/host/computecheck -l` on the RG34XX-SP, Mali-G31, r20p0): 1,024
+uniform vectors per vertex or fragment stage; uniform blocks 16 KB, 12 a stage; storage buffers 35
+per compute or fragment stage and **none in a vertex stage** (VFX Graph's outputs read their
+particles from storage buffers in the vertex stage: they cannot draw on it with OpenGL ES); compute
+work groups of at most **128 invocations** (128 x 128 x 128), 32 KB of shared memory; 8 images and
+8 atomic counters a compute stage.
 
 ## Vertex outputs no fragment stage reads (`dead_varyings`, pmu, opt-in)
 

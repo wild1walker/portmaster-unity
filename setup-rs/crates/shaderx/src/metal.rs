@@ -2584,6 +2584,71 @@ static SAMPLER_LINE: LazyLock<Regex> =
 static HEAD: LazyLock<Regex> = LazyLock::new(|| re(r"\A(#version[^\n]*\n(?:precision[^\n]*\n)*)"));
 static LAST_WORD: LazyLock<Regex> = LazyLock::new(|| re(r"(\w+);\n?\z"));
 
+/// The uniform vectors a stage may use on the handhelds' Mali-G31 / G52 (GL_MAX_VERTEX_UNIFORM_VECTORS
+/// and GL_MAX_FRAGMENT_UNIFORM_VECTORS: 1024; a program over it does not link).
+pub const MAX_UNIFORM_VECTORS: u32 = 1024;
+
+static UNIFORM_DECL: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?m)^(?:UNITY_LOCATION\(\d+\) )?uniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+(\w+)(?:\[(\d+)\])?\s*;")
+});
+
+/// The uniform vectors a stage's plain uniforms take, as the Mali counts them: a row per scalar or
+/// vector, a column's per matrix, each array element its own (samplers none).
+pub fn uniform_vectors(src: &str) -> u32 {
+    UNIFORM_DECL
+        .captures_iter(src)
+        .filter(|c| !c[1].contains("sampler"))
+        .map(|c| {
+            let rows = match c[1].strip_prefix("mat") {
+                Some(m) => m[..1].parse().unwrap_or(4),
+                None => 1,
+            };
+            rows * c.get(3).map_or(1, |n| n.as_str().parse().unwrap_or(1))
+        })
+        .sum()
+}
+
+/// URP 17's light arrays (Input.hlsl, Shadows.hlsl, LightCookieInput.hlsl: sized
+/// MAX_VISIBLE_LIGHTS), as a macOS build has them (MAX_VISIBLE_LIGHT_COUNT_DESKTOP, 256 lights;
+/// matrices as HLSLcc's float4 rows) and with MAX_VISIBLE_LIGHT_COUNT_MOBILE (32), the count an
+/// Android build compiles them for: (name, desktop size, mobile size).
+const URP_LIGHT_ARRAYS: [(&str, u32, u32); 12] = [
+    ("_AdditionalLightsPosition", 256, 32),
+    ("_AdditionalLightsColor", 256, 32),
+    ("_AdditionalLightsAttenuation", 256, 32),
+    ("_AdditionalLightsSpotDir", 256, 32),
+    ("_AdditionalLightsOcclusionProbes", 256, 32),
+    ("_AdditionalLightsLayerMasks", 256, 32),
+    ("_AdditionalShadowParams", 256, 32),
+    ("hlslcc_mtx4x4_AdditionalLightsWorldToShadow", 1024, 128),
+    ("hlslcc_mtx4x4_AdditionalLightsWorldToLights", 1024, 128),
+    ("_AdditionalLightsCookieAtlasUVRects", 256, 32),
+    ("_AdditionalLightsLightTypes", 256, 32),
+    ("_AdditionalLightsCookieEnableBits", 8, 1),
+];
+
+/// A stage's URP light arrays declared for 32 lights instead of 256 (pmu, 2026-11-09), in a program
+/// over the Mali's uniform vectors (a macOS build's URP programs with per-pixel or per-vertex
+/// additional lights: 4 - 10 times them, which no Mali links). Exact on Unity's Android player:
+/// URP's C# there uploads and indexes 16 or 32 lights (UniversalRenderPipeline.maxVisibleAdditionalLights
+/// on OpenGL ES 3, the same count for its shadow slices: AdditionalLightsShadowCasterPass), so no
+/// element past 32 is ever read. -> (text, arrays changed)
+fn urp_mobile_lights(src: &str) -> (String, usize) {
+    let mut n = 0;
+    let s = UNIFORM_DECL.replace_all(src, |c: &regex::Captures| {
+        let whole = c[0].to_string();
+        let Some(&(_, desk, mobile)) = URP_LIGHT_ARRAYS.iter().find(|a| a.0 == &c[2]) else {
+            return whole;
+        };
+        if c.get(3).map(|x| x.as_str()) != Some(&desk.to_string()) {
+            return whole;
+        }
+        n += 1;
+        whole.replacen(&format!("[{desk}]"), &format!("[{mobile}]"), 1)
+    });
+    (s.into_owned(), n)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn program(
     v: &Stage,
@@ -2603,6 +2668,15 @@ fn program(
     texts[0].1 = vs;
     if flips > 0 {
         notes.push(format!("VERTEX uv-origin {flips}"));
+    }
+    if texts.iter().any(|(_, t)| uniform_vectors(t) > MAX_UNIFORM_VECTORS) {
+        for (st, t) in texts.iter_mut() {
+            let (s, n) = urp_mobile_lights(t);
+            *t = s;
+            if n > 0 {
+                notes.push(format!("{st} urp-mobile-lights {n}"));
+            }
+        }
     }
     if unity >= (2019, 1) {
         let mut units: BTreeMap<String, usize> = BTreeMap::new();

@@ -179,3 +179,57 @@ fn metal_kernel() {
         got => panic!("{got:?}"),
     }
 }
+
+/// URP's light arrays in a program over the Mali's 1024 uniform vectors are declared for 32 lights
+/// (pmu's own): the golden `test_metal` fragment stage with URP's AdditionalLights constant buffer
+/// (a macOS build's 256 lights) read in its body. With one array it stays under the limit and keeps
+/// its 256.
+#[test]
+fn metal_urp_mobile_lights() {
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("metal_golden.json")).unwrap();
+    let row = rows.iter().find(|r| r["name"] == "test_metal").unwrap();
+    let fs = row["fs"].as_str().unwrap();
+    let with = |arrays: &[&str]| {
+        let decl: String = arrays
+            .iter()
+            .map(|a| format!("    float4 {a}[256];\n"))
+            .collect();
+        let read: String = arrays
+            .iter()
+            .map(|a| format!(" + AdditionalLights.{a}[u_xlati1 & 0xf]"))
+            .collect();
+        fs.replace(
+            "struct Mtl_FragmentIn",
+            &format!("struct AdditionalLights_Type\n{{\n{decl}}};\n\nstruct Mtl_FragmentIn"),
+        )
+        .replace(
+            "    constant FGlobals_Type& FGlobals [[ buffer(0) ]],\n",
+            "    constant FGlobals_Type& FGlobals [[ buffer(0) ]],\n    constant AdditionalLights_Type& AdditionalLights [[ buffer(1) ]],\n",
+        )
+        .replace(
+            "output.SV_Target0 = fma(u_xlat0, input.COLOR0, ImmCB_0[u_xlati1 & 1]);",
+            &format!("output.SV_Target0 = fma(u_xlat0, input.COLOR0, ImmCB_0[u_xlati1 & 1]){read};"),
+        )
+    };
+    let four = [
+        "_AdditionalLightsPosition",
+        "_AdditionalLightsColor",
+        "_AdditionalLightsAttenuation",
+        "_AdditionalLightsSpotDir",
+    ];
+    let src = with(&four);
+    assert!(src.contains("AdditionalLights._AdditionalLightsSpotDir[u_xlati1 & 0xf]"));
+    let mut notes = Vec::new();
+    let (text, _) = translate_program(row["vs"].as_str().unwrap(), &src, "highp", (0, 0), &mut notes)
+        .unwrap_or_else(|f| panic!("{f:?}"));
+    for a in four {
+        assert!(text.contains(&format!("uniform vec4 {a}[32];")), "{a}: {text}");
+    }
+    assert!(notes.contains(&"FRAGMENT urp-mobile-lights 4".to_string()), "{notes:?}");
+    let mut notes = Vec::new();
+    let (text, _) = translate_program(row["vs"].as_str().unwrap(), &with(&four[..1]), "highp", (0, 0), &mut notes)
+        .unwrap();
+    assert!(text.contains("uniform vec4 _AdditionalLightsPosition[256];"));
+    assert!(notes.is_empty(), "{notes:?}");
+}
