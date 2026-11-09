@@ -178,8 +178,9 @@ turning on or looking for (profiling.md has the numbers):
   that rebuilds its whole mesh on any change (dfGUI, NGUI) can be rebuilding it every frame because a
   control, often a hidden one, moves by float noise (Gungeon: 2 ms a frame; the port's `df-render-skip`);
   a test build that prints a stack at the UI's invalidation finds the cause in one run;
-- the game's own quality options on 1 GB handhelds (Gungeon's Low lighting and shaders), gated on RAM
-  with a setup question to restore them.
+- the game's own lowest graphics options on every handheld, with no setup question
+  ([below](#the-games-own-options-lowest-and-the-games-rules-kept); Gungeon's realtime reflections
+  alone were a whole extra camera pass a frame).
 
 Four of ua_host's layers are on in every launcher the templates make (port.env or the environment wins;
 an empty value turns one off): `UA_JIT_WARM=1`, `UA_GL_ARENA=1`, `UA_GLES_POOL=1` and
@@ -330,7 +331,7 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
 | `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
 | `player.sha256` | from `--player` | `{"libmain.so" = "<sha256>", ...}`: the setup checks the player it unpacks from the donors (an older port.toml's `player.url` is ignored: the handheld never downloads Unity's player) |
-| `convert` | `steps = ["shaders", "settings", "audio", "quality"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `quality.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld. `quality` is the handheld quality profile ([quality.md](quality.md)): a cheaper picture where the handheld has 1 GB of RAM, the game play the same; the `PICTURE` question (below) lets the player choose. `video` (pmu only): VP8 clips taller than `max_height` (720) halved until they are not and encoded again (`mode` auto: where MemTotal is at most `ram_mb`, 1024; `cq_level` 10, `cpu_used` 4), each into its old place in the resource file: a 1080p cinematic is more than an A53 decodes in time, 540p a quarter of it and the same on a 720x480 panel ([rust-setup.md](rust-setup.md#video)) |
+| `convert` | `steps = ["shaders", "settings", "audio", "quality"]`, `settings.graphics_apis = [11]` | `pmunity convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `quality.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld. `quality` is the handheld quality profile ([quality.md](quality.md)): a cheaper picture on every handheld, the game play the same, with no setup question (`quality.ram_mb` limits it to handhelds with at most that much RAM, for a port measured to keep its frame rate with the game's own picture on bigger ones). `video` (pmu only): VP8 clips taller than `max_height` (720) halved until they are not and encoded again (`mode` auto: where MemTotal is at most `ram_mb`, 1024; `cq_level` 10, `cpu_used` 4), each into its old place in the resource file: a 1080p cinematic is more than an A53 decodes in time, 540p a quarter of it and the same on a 720x480 panel ([rust-setup.md](rust-setup.md#video)) |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, the Input System package or PlayMaker, else `off` | `auto`: tools/asmpatch runs on the game's assemblies with its default patches, the android ones and the exact optimizations (each changes only what it finds; the package then ships asmpatch); a list: only those patches; `["auto", "<patch>", ...]`: the default ones and those (opt-in ones such as the `reduce` patches) |
 | `android_data.streaming_assets` | `obb`; the check suggests `both` (`loose` above 256 MB) when reads of StreamingAssets reach System.IO | `obb`: StreamingAssets in the OBB, read by Unity's APIs; `both`: also beside the APK as `Game_Data/StreamingAssets/`, and asmpatch's streaming-assets patch gives the reads that reach System.IO that folder; `loose`: only there, every read gets it (docs/android-data.md, section 6). Not `obb` ships asmpatch (with `asmpatch = "off"` it runs only that patch); the il2cpp-arm64 route compiles the patch into the game's IL2CPP build (`pmunity il2cpp --streaming-assets`) and packs the same mode |
 | `android_data.winbcl` | `auto` | `auto`: after the player, the setup runs `pmunity winbcl --donor`: a Windows 2021.2+ build gets the Unix class libraries of its version that the Mono donor carries, any build the facades the player's engine modules reference that it lacks (e.g. `netstandard.dll`), both from the port's Mono donor (nothing downloaded; nothing is read when nothing is missing); `off`: not run |
@@ -351,32 +352,21 @@ words that do not answer each other (Fast and Sharper). A third choice that pick
 is "By this handheld". The values stay whatever the setup passes on (`medium`, `fast`); only the
 labels are what the player reads. The recommended choice, if there is one, comes first and says so.
 
-Keep the game's look and play: options that change the picture or the game play stay off unless
-a player asks for them (a question with the vanilla choice as its default). One exception, for
-handhelds with 1 GB of RAM: the `quality` step's handheld profile ([quality.md](quality.md)) makes
-the picture cheaper there by default (shadow maps, MSAA, SSAO, per-pixel lights, a few post
-effects; never the game play, never anything that would disappear), and keeps the game's own
-picture on bigger devices. `port new` adds the question that lets the player choose:
+The converter's half of the Low picture is the `quality` step's handheld profile
+([quality.md](quality.md)): on every handheld, with no question (shadow maps, MSAA, SSAO, per-pixel
+lights, a few post effects; never the game play, never anything that would disappear). A porter who
+measured that a bigger handheld keeps its frame rate with the game's own picture can set
+`quality.ram_mb` in `[convert]`; the setup offers the player no PC picture
+([The Low picture at launch](#the-low-picture-at-launch-runtime_low)).
 
-```toml
-[[questions]]
-id = "PICTURE"
-question = "Picture quality: Low on handhelds with 1 GB of RAM (faster, the same game), or always High (as on PC)?"
-options = [["auto", "By this handheld (recommended)"], ["handheld", "Low (faster)"], ["full", "High (as on PC)"]]
-default = "auto"
-convert_set = "quality.profile"
-```
-
-(a port.toml with questions of its own keeps only those: add this one to them; without the
-`quality` step in `convert.steps` it is left out). The answer applies when the setup converts the
-data; changing it later means running the setup again. The `textures` step
-(ASTC instead of BC/DXT: less memory, slightly different pixels, a much longer setup on the
-handheld) is such an option; the check says when a game has enough BC/DXT textures for it to
-matter. The shaders step's `grab_fetch` is another: blend-mode sprites (an unnamed `GrabPass`
-sampled at the sprite's own pixels) read the framebuffer instead of a copy of the picture made for
-each of them, which a tiler pays for (Hollow Knight's King's Pass: three copies a frame); where
-sprites of one batch overlap, or with Mali's 16-bit fetched colour, the blend differs slightly
-([shaders.md](shaders.md#blend-modes-without-grabpass-copies-grab_fetch-opt-in)). As a question:
+A conversion the setup makes can still be a question (High and Low), since it is built once at
+setup: the `textures` step (ASTC instead of BC/DXT: less memory, slightly different pixels, a much
+longer setup on the handheld) is such an option; the check says when a game has enough BC/DXT
+textures for it to matter. The shaders step's `grab_fetch` is another: blend-mode sprites (an
+unnamed `GrabPass` sampled at the sprite's own pixels) read the framebuffer instead of a copy of the
+picture made for each of them, which a tiler pays for (Hollow Knight's King's Pass: three copies a
+frame); where sprites of one batch overlap, or with Mali's 16-bit fetched colour, the blend differs
+slightly ([shaders.md](shaders.md#blend-modes-without-grabpass-copies-grab_fetch-opt-in)). As a question:
 
 ```toml
 [[questions]]
@@ -393,6 +383,40 @@ compile and Unity 6000.0 uses the original shader (older players: not tried). `t
 choice to Unity's own check, which in 6000.0 knows only EXT's extension: on Mali's drivers it changes
 nothing. Or set it in `[convert.shaders]` (`grab_fetch = "always"`) for every install. The answer
 applies when the setup converts the data; changing it later means running the setup again.
+
+### The game's own options: lowest, and the game's rules kept
+
+Every port's setup or launcher writes the game's own lowest graphics and performance options (its
+options file, a PlayerPrefs key through `UA_PREFS_DEFAULTS`, its config: wherever the game keeps
+them; a file only when the player has none yet), with no setup question: the player can change them
+afterwards in the game's own menus, and a hand edit (`UA_PICTURE=high` in `port.env`, or the
+game's options file) is the only way the port itself offers back. The rules for choosing them:
+
+- only graphics and performance options: never game play, controls, difficulty or accessibility
+  options (aim assist, bindings, text speed, screen shake, subtitles and the like);
+- a lower option may change how many random numbers the game draws (fewer effects spawned), so the
+  same seed rolls differently afterwards; that is allowed. An option that changes what the game does
+  (an object that stops bullets left out, a body removed, a timer, a rule) is not: stop one level
+  above it, and say why in the port;
+- read the game's code for each option before adopting it (what it switches, what it spawns or
+  leaves out, whether it draws random numbers), and probe what it removes on a real floor or level
+  where that depends on the game's data;
+- raise a default above the lowest only after measuring the frame rate on the handhelds, and say so
+  in the port's notes.
+
+The worked example, Enter the Gungeon (`hooks/options.sh` in its port; profiling.md has the
+numbers): its options are Lighting (High, Low), Shaders (High, Medium, Low, Very Low), Realtime
+Reflections (on, off) and Debris (High, Medium, Low, Very Low). The port writes Lighting Low, Shaders
+Very Low, Reflections off and Debris Low. Debris stops at Low: Low only spawns no shell casings and no
+wall chips from enemy shots (fewer random rolls) and keeps at most 50 debris pieces lying around,
+while Very Low also leaves out the objects the game puts on tables when it builds a floor, some of
+which (book piles) stop bullets, and its cap of 0 removes the pushable debris bodies (a stool, a
+knife) at once: a change of the game's rules. The game's own Options menu agrees with the rest: its
+reset to defaults on a machine with at most 1536 MB of RAM picks Low lighting, Low shaders, Low debris
+and reflections off, and it turns reflections off whenever shaders go to Low.
+
+`port check` could list the quality options it finds in a game's code (a proposal, not built: the
+options class's enum fields and a settings menu's strings); until then the porter reads them.
 
 ### The Low picture at launch (`runtime_low`)
 
@@ -688,8 +712,9 @@ unpacks the release into `<work>/roms/ports` as PortMaster would, copies the gam
 `ANSWERS="ID=value ..."` answers the port's questions (a GOG `.sh` installer, a `.zip`, `.7z`,
 `.pkg` and the other archives are copied into `gamedata/` as they are, for the setup to unpack;
 a folder is copied as it is). The container's `/proc/meminfo` shows
-Docker's memory, not the 1 GB limit, so a setup that sizes itself from it (the `PICTURE` question's
-`auto`) takes the path of a bigger device: `ANSWERS="PICTURE=handheld"` rehearses the 1 GB one.
+Docker's memory, not the 1 GB limit, so a setup that sizes itself from it (`textures` or `video`
+`auto`, a `quality.ram_mb`) takes the path of a bigger device: answer such a port's own questions
+for the 1 GB one (`ANSWERS="TEXTURES=astc"`).
 After the setup the launcher also tries to start the game in the container and stops with
 `libSDL2-2.0.so.0` missing (exit 127): expected there, the game runs in the rig next. With `[emu seconds]` the installed game then
 runs in the emulated armv7 rig (`tools/emu`, QEMU and Mesa's llvmpipe: slow, from about 20 fps on a

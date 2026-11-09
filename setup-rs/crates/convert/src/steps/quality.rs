@@ -19,7 +19,7 @@ fn defaults() -> Vec<(&'static str, Json)> {
     let s = |x: &str| Json::Str(x.into());
     vec![
         ("profile", s("auto")),
-        ("ram_mb", Json::Int(1536)),
+        ("ram_mb", Json::Null),
         ("pixel_lights", Json::Int(1)),
         ("shadow_resolution", Json::Int(1)),
         ("hard_shadows", Json::Bool(true)),
@@ -1596,8 +1596,11 @@ fn profile_of(c: &Json) -> Result<(bool, String)> {
             p.repr()
         )));
     }
+    let ram = c.get("ram_mb").cloned().unwrap_or(Json::Null);
+    if ram == Json::Null {
+        return Ok((true, "quality.profile = auto (every handheld)".into()));
+    }
     let mem = mem_total_mb();
-    let ram = c.get("ram_mb").cloned().unwrap_or(Json::Int(1536));
     let le = match Num::of_json(&ram) {
         Some(r) => !Num::I(mem).gt(r),
         None => {
@@ -1729,5 +1732,18 @@ mod tests {
             "pixel_lights=1,msaa=0,anisotropic=1"
         );
         assert_eq!(merge_caps("", "").unwrap(), "");
+    }
+
+    #[test]
+    fn auto_is_the_handheld_profile_unless_a_port_gates_it() {
+        let o = |kv: Vec<(&str, Json)>| Json::Dict(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+        // auto with no ram_mb (the default): the handheld profile on every machine
+        assert!(profile_of(&o(vec![("profile", Json::Str("auto".into())), ("ram_mb", Json::Null)])).unwrap().0);
+        assert!(profile_of(&o(vec![("profile", Json::Str("auto".into()))])).unwrap().0);
+        // a port's own gate: at most that much RAM (no system has more than 2^40 MB, none 0)
+        assert!(profile_of(&o(vec![("profile", Json::Str("auto".into())), ("ram_mb", Json::Int(1 << 40))])).unwrap().0);
+        assert!(!profile_of(&o(vec![("profile", Json::Str("auto".into())), ("ram_mb", Json::Int(0))])).unwrap().0);
+        assert!(!profile_of(&o(vec![("profile", Json::Str("full".into()))])).unwrap().0);
+        assert!(profile_of(&o(vec![("profile", Json::Str("handheld".into()))])).unwrap().0);
     }
 }

@@ -12,10 +12,12 @@ lights and lights with shadows or a cookie stay per pixel), anything the game's 
 animations drive (post effects then stay as they are), and shader variants: a setting is changed
 only where the variant it needs is in the data, so Unity never falls back to another one.
 
-  profile          'auto' (the default): 'handheld' where the machine running the conversion has at
-                   most `ram_mb` MB of RAM (a port's setup runs on the handheld), else 'full';
-                   'handheld'; 'full' (nothing changed)
-  ram_mb           1536: MemTotal of a 1 GB handheld is 900 - 1000 MB, of a 2 GB one about 1900
+  profile          'auto' (the default): 'handheld' on every machine (the ports' rule: the lowest
+                   picture by default, a setup question restores the game's own), or only where it
+                   has at most `ram_mb` MB of RAM when a port sets `ram_mb` (after measuring that a
+                   bigger handheld keeps its frame rate with the game's own); 'handheld'; 'full'
+                   (nothing changed)
+  ram_mb           None: MemTotal of a 1 GB handheld is 900 - 1000 MB, of a 2 GB one about 1900
 
 Built-in render pipeline (QualitySettings, every level; the scenes' lights; shaders):
   pixel_lights     1: per-pixel lights (forward rendering) at most; the others are lit per vertex
@@ -59,7 +61,7 @@ from . import monotree as MT
 from . import typetrees
 from .unity_io import Loaded, collect
 
-DEFAULTS = {'profile': 'auto', 'ram_mb': 1536,
+DEFAULTS = {'profile': 'auto', 'ram_mb': None,
             'pixel_lights': 1, 'shadow_resolution': 1, 'hard_shadows': True, 'shadow_cascades': 2, 'msaa': 0,
             'anisotropic': 1, 'soft_particles': False, 'standard_lod150': True, 'hdr_format': False,
             'urp_shadow_resolution': 2048, 'urp_soft_shadows': 'low', 'ssao': True,
@@ -88,12 +90,15 @@ def profile_of(c, mem_mb=None):
         return 'handheld', 'quality.profile = handheld'
     if p != 'auto':
         raise ValueError(f'quality.profile: {p!r} (auto, handheld or full)')
+    ram = c.get('ram_mb')
+    if ram is None:
+        return 'handheld', 'quality.profile = auto (every handheld)'
     if mem_mb is None:
         from .textures import mem_total_mb
         mem_mb = mem_total_mb()
-    if mem_mb <= c.get('ram_mb', 1536):
-        return 'handheld', f'{mem_mb} MB of RAM (at most {c.get("ram_mb", 1536)})'
-    return 'full', f'{mem_mb} MB of RAM (more than {c.get("ram_mb", 1536)})'
+    if mem_mb <= ram:
+        return 'handheld', f'{mem_mb} MB of RAM (at most {ram})'
+    return 'full', f'{mem_mb} MB of RAM (more than {ram})'
 
 
 def _bundles(job):

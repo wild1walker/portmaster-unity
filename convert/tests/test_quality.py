@@ -31,8 +31,10 @@ def ssao_variants(occlusion, passes=('SSAO_Bilateral_HorizontalBlur', 'SSAO_Gaus
 class Profile(unittest.TestCase):
     def test_auto_by_ram(self):
         self.assertEqual(Q.profile_of({'profile': 'auto'}, 973)[0], 'handheld')         # RG34XX-SP
-        self.assertEqual(Q.profile_of({'profile': 'auto'}, 1536)[0], 'handheld')
-        self.assertEqual(Q.profile_of({'profile': 'auto'}, 1900)[0], 'full')            # a 2 GB handheld
+        self.assertEqual(Q.profile_of({'profile': 'auto'}, 1900)[0], 'handheld')        # every handheld
+        self.assertEqual(Q.profile_of({'profile': 'auto', 'ram_mb': None}, 8000)[0], 'handheld')
+        self.assertEqual(Q.profile_of({'profile': 'auto', 'ram_mb': 1536}, 1536)[0], 'handheld')
+        self.assertEqual(Q.profile_of({'profile': 'auto', 'ram_mb': 1536}, 1900)[0], 'full')   # a port's own gate
         self.assertEqual(Q.profile_of({'profile': 'auto', 'ram_mb': 4096}, 3800)[0], 'handheld')
         self.assertEqual(Q.profile_of({'profile': 'handheld'}, 8000)[0], 'handheld')
         self.assertEqual(Q.profile_of({'profile': 'full'}, 500)[0], 'full')

@@ -4,16 +4,17 @@ A desktop build keeps the quality its PC players chose: most often the Ultra or 
 QualitySettings, a URP asset made for a desktop GPU (4096x4096 shadow atlases, 4x MSAA, SSAO at
 full resolution with a three-pass blur), the Standard shader's desktop SubShader. An Android build
 of the same project would have started from Unity's Android defaults (the Medium level: one pixel
-light, hard shadows, no MSAA) and a mobile URP asset. On a handheld with 1 GB of RAM (the RG34XX-SP:
-a single-core Mali-G31, every game below 60 fps GPU-bound) the converter's `quality` step makes the
-picture cheaper by default, the way such a build would, and leaves the game play as it is. On
-bigger devices it changes nothing, and a port's setup question gives the player either choice.
+light, hard shadows, no MSAA) and a mobile URP asset. On a handheld (the RG34XX-SP: a single-core
+Mali-G31, every game below 60 fps GPU-bound) the converter's `quality` step makes the picture cheaper
+by default, the way such a build would, and leaves the game play as it is. Since 2026-11-08 that is
+the profile on every handheld, not only those with 1 GB of RAM, and no setup question offers the PC
+picture (the ports' rule: [porting.md](porting.md#the-games-own-options-lowest-and-the-games-rules-kept)).
 
     python -m pmunity convert <data> --config game.json        # with "steps": [..., "quality"]
     "quality": {"profile": "auto"}                             # auto (default) | handheld | full
 
-The rule it follows (the user's, 2026-10-24): on 1 GB devices the sacrifices may be visual, never
-game play. So it never changes timing, physics, scripts or what the player is told, and nothing the
+The rule it follows (the user's, 2026-10-24, the lowest picture on every handheld since 2026-11-08):
+the sacrifices may be visual, never game play. So it never changes timing, physics, scripts or what the player is told, and nothing the
 player needs to see may disappear:
 
 - no LOD bias or maximum LOD level (a LODGroup's last, culled transition would come earlier), no
@@ -48,8 +49,9 @@ player needs to see may disappear:
 Each item can be switched off in the config (`quality.<item>`; `null` or `false`): `pixel_lights`,
 `shadow_resolution`, `hard_shadows`, `shadow_cascades`, `msaa`, `anisotropic`, `soft_particles`,
 `standard_lod150`, `urp_shadow_resolution`, `urp_soft_shadows`, `ssao`, `post` (a list of component
-names); `ram_mb` (1536) is the `auto` threshold (MemTotal of a 1 GB handheld is 900 - 1000 MB, of a
-2 GB one about 1900). The step logs each change, and each thing it found and left alone, with why
+names); `ram_mb` (unset) makes `auto` the handheld profile only where MemTotal is at most that many
+MB (a 1 GB handheld has 900 - 1000 MB, a 2 GB one about 1900): for a port whose game was measured to
+keep its frame rate with its own picture on bigger handhelds. The step logs each change, and each thing it found and left alone, with why
 (`quality: kept: ...`).
 
 ### The Standard shader's LOD-150 SubShader
@@ -100,9 +102,10 @@ A game reads back its levels' values as the profile left them, and the values it
 
 ## In a port
 
-`port new` puts the step into `convert.steps` with `profile = "auto"` and adds a `PICTURE` question
-([porting.md](porting.md#porttoml)): by this handheld (the default), lighter, or as on PC. The
-answer applies when the setup converts the data; changing it means running the setup again.
+`port new` puts the step into `convert.steps` with `profile = "auto"`: the handheld profile on every
+handheld. It asks no question (until 2026-11-08 a `PICTURE` question offered the PC picture; a port
+that still has one in its `port.toml` should drop it). A porter who measured that bigger handhelds keep
+their frame rate with the game's own picture sets `quality.ram_mb`.
 
 ## Measured on the handheld
 

@@ -47,8 +47,11 @@ the emulator (`tools/emu`), or a handheld (model and firmware).
   check `git status` before you commit.
 - **No game names from test runs** in the repository: describe results by Unity version and build
   type ("a 2021.3 URP game"), as [docs/compat/README.md](docs/compat/README.md) does.
-- **Keep the game's look and play.** Defaults must not change the picture or the game play. A
-  change that does is an option, off by default.
+- **Keep the game's play, and its look unless a port asks.** The tools' defaults must not change the
+  picture or the game play; a change that does is an option, off by default. A port's setup is the
+  one place where the picture is lower: the game's own lowest graphics options and the converter's
+  handheld profile, with no setup question to undo them
+  ([porting.md](docs/porting.md#the-games-own-options-lowest-and-the-games-rules-kept)); never the game play.
 - **Licence:** everything here is MIT (see [LICENSE](LICENSE)). By contributing you agree that your
   contribution is MIT licensed too. Third-party code needs a licence that allows this, and an
   entry in [THIRD_PARTY.md](THIRD_PARTY.md).

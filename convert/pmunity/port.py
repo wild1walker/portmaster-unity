@@ -1351,13 +1351,9 @@ def check_android(rep, inputs, log=None):
 
 
 DEFAULT_STEPS = ('shaders', 'settings', 'audio', 'quality')
-# the handheld quality profile (quality.py, docs/quality.md): the setup takes it by the handheld's RAM
-# (a cheaper picture on 1 GB devices, the game's own elsewhere); the player can choose either
-QUALITY_QUESTION = {'id': 'PICTURE', 'question': 'Picture quality: Low on handhelds with 1 GB of RAM (faster, the same '
-                                                 'game), or always High (as on PC)?',
-                    'options': [['auto', 'By this handheld (recommended)'], ['handheld', 'Low (faster)'],
-                                ['full', 'High (as on PC)']],
-                    'default': 'auto', 'convert_set': 'quality.profile'}
+# the handheld quality profile (quality.py, docs/quality.md) applies on every handheld with no question: no setup
+# question offers the PC picture (porting.md, "The Low picture at launch"); a port.toml's old PICTURE question
+# (convert_set = quality.profile, as port new once wrote it) is dropped when the port is made again
 
 
 # InControl's controls as a handheld labels its buttons ([controls]): the face buttons by the Nintendo
@@ -1502,8 +1498,6 @@ def suggest_config(rep):
                      f"playmaker-delayedevents (the same behaviour, less work every frame for every FSM: "
                      f"tools/asmpatch/README.md, \"Optimizations\")")
     ad['asmpatch'] = 'auto' if s.get('rewired') or s.get('input_system') or s.get('playmaker') else 'off'
-    if rep.get('build') != 'android':
-        sug['questions'] = [copy.deepcopy(QUALITY_QUESTION)]
     verdict = rep.get('input_verdict')
     # asmpatch --survey: the Input System's Mouse.current used with no null check (null on a handheld
     # unless pointer mode presents a mouse)
@@ -1783,8 +1777,8 @@ def build_config(name, rep, user):
     cfg['player'].pop('url', None)          # (an older port.toml's: the setup never downloads Unity's player now)
     if (user or {}).get('controls'):                    # (the porter's table, not merged with the check's draft)
         cfg['controls'] = copy.deepcopy(user['controls'])
-    if 'quality' not in (cfg['convert'].get('steps') or []):    # (the picture question asks for that step)
-        cfg['questions'] = [q for q in cfg['questions'] if q != QUALITY_QUESTION]
+    cfg['questions'] = [q for q in cfg['questions']                 # (no setup question offers the PC picture)
+                        if not (q.get('id') == 'PICTURE' and q.get('convert_set') == 'quality.profile')]
     p, g, ad = cfg['port'], cfg['game'], cfg['android_data']
     p['name'] = p.get('name') or name
     p['title'] = p['title'] or title_case(name)
