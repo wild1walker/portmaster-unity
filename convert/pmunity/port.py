@@ -971,6 +971,13 @@ ROUTE_TEXT = {
     'apk': "the game's own Android build (`pmunity apk`)",
 }
 
+# what the player's README says to copy into gamedata/, by game.build: what the setup unpacks or finds
+GAME_FORMS = {
+    'linux': "its folder, the archive it came in, or GOG's Linux installer `.sh`",
+    'macos': "the `.app`, the archive it came in, or GOG's macOS installer `.pkg`",
+    'windows': "its folder, or the archive it came in",
+}
+
 
 def _hook_modules():
     names = list(HOOK_MODULES) + [m for m in os.environ.get('PMUNITY_PORT_HOOKS', '').split(',') if m]
@@ -2625,6 +2632,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     pn, pt = cfg['port']['name'], cfg['port']['title']
     values = {'PORTDIR': pn, 'TITLE': pt, 'ZIP': f'{pn}.zip', 'LAUNCHER': f'{pt}.sh',
               'SETUP_TIME': cfg['port']['setup_time'], 'GAME_WHAT': cfg['game']['what'],
+              'GAME_FORMS': GAME_FORMS.get(cfg['game']['build'], GAME_FORMS['linux']),
               'ROUTE': cfg['port']['route'], 'ROUTE_TEXT': ROUTE_TEXT.get(cfg['port']['route'], cfg['port']['route']),
               'UNITY_VERSIONS': ', '.join(cfg['game']['unity_versions']) or 'any the converter supports',
               'SIZE_GB': max(1, ((int(cfg['game'].get('setup_space_mb') or 0) or 3 * int(cfg['game'].get('size_mb') or 0)) + 1023) // 1024),

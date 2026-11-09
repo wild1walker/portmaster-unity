@@ -58,6 +58,7 @@ extern unsigned fake_hidden;
 extern const char *fake_version;
 extern void glUseProgram(unsigned), glUniform4f(int, float, float, float, float), glUniform1i(int, int);
 extern void glActiveTexture(unsigned), glBindTexture(unsigned, unsigned), glBindBuffer(unsigned, unsigned);
+extern void glGetTexParameteriv(unsigned, unsigned, int *);
 extern void glEnableVertexAttribArray(unsigned), glVertexAttribPointer(unsigned, int, unsigned, unsigned char, int, const void *);
 
 static int failures;
@@ -283,6 +284,25 @@ int main(int argc, char **argv)
     } else if (!strcmp(mode, "es2")) {
         frames(n);
         CHECK(fake_draws == n);
+    } else if (!strcmp(mode, "external")) {
+        // a video's GL_TEXTURE_EXTERNAL_OES: a mipmap filter goes in as GL_LINEAR, anisotropy is left out (the fake
+        // keeps one value per texture, whatever the parameter); a 2D texture keeps its mipmap filter
+        int v = 0;
+        glBindTexture(0x8D65, 9);
+        TexParameteri(0x8D65, 0x2801, 0x2703);                 // GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR
+        glGetTexParameteriv(0x8D65, 0x2801, &v);
+        CHECK(v == 0x2601);
+        TexParameteri(0x8D65, 0x84FE, 4);                      // GL_TEXTURE_MAX_ANISOTROPY_EXT
+        glGetTexParameteriv(0x8D65, 0x84FE, &v);
+        CHECK(v == 0x2601);
+        glBindTexture(GL_TEXTURE_2D, 10);
+        TexParameteri(GL_TEXTURE_2D, 0x2801, 0x2703);
+        glGetTexParameteriv(GL_TEXTURE_2D, 0x2801, &v);
+        CHECK(v == 0x2703);
+        fflush(stderr);
+        const char *log = read_log(logpath);
+        CHECK(strstr(log, "0x2801): 0x2703 -> 0x2601") != NULL);
+        CHECK(strstr(log, "0x84fe, 0x4) left out") != NULL);
     } else {
         printf("unknown scenario %s\n", mode);
         return 2;

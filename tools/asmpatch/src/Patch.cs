@@ -46,6 +46,7 @@ abstract class Patch
         new RewiredAndroid(),
         new InputSystemAndroid(),
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
+        new GenericUnion(),
         // optimizations
         new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new UnityObjectNull(), new HollowKnightFade(),
         // reductions

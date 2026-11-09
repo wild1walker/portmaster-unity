@@ -78,6 +78,9 @@ struct um_dec {
     int  (*decode)(um_dec *d, const uint8_t *data, size_t size, int64_t pts_us, uint32_t flags, um_emit *emit);
     void (*flush)(um_dec *d);
     void (*destroy)(um_dec *d);
+    /* optional: the client keeps releasing this decoder's pictures unshown because they come too late
+       (um_codec.c counts them); a backend that can trade picture quality for speed does so (once) */
+    void (*behind)(um_dec *d);
 };
 
 typedef struct {
