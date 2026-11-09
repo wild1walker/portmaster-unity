@@ -726,11 +726,21 @@ it. The steps, on a Mac:
    activation. The tools never sign in.
 3. **The Android tools** `build.sh` points the editor at: `SDK=<an Android SDK>`, `JDK=<a JDK home>`,
    and for an IL2CPP donor `NDK=<the NDK the editor asks for>` (2017.4: SDK tools r25.2.5,
-   build-tools 28.0.3, platforms;android-28, JDK 8, NDK r13b; newer editors name theirs in their
-   Android Build Support).
+   build-tools 28.0.3, platforms;android-28, JDK 8, NDK r13b; newer editors list theirs as the
+   Android module's sub-modules in Unity's release API, e.g. 2021.3.27f1: SDK tools 26.1.1,
+   platform-tools 30.0.4, build-tools 30.0.2, platforms android-29 and android-30, OpenJDK 8u172
+   (x86-64, also for the Apple-silicon editor), NDK r21d). 2021.3 and Unity 6 want the NDK for a
+   Mono donor too ("Android NDK not found").
 4. **Each donor:** `tools/donor/build.sh <dir>/Unity.app MonoArmv7 <DONORS dir>` and, for
    `mono-arm64`, `tools/donor/build.sh <dir>/Unity.app Il2cppArm64 <DONORS dir>`: it writes
    `donor-<version>-mono-armv7.apk` / `donor-<version>-il2cpp-arm64.apk`, the names the setup reads.
+   **adb:** once the build gives the editor the SDK, Unity scans for devices and kills every
+   running adb whose file is not `<SDK>/platform-tools/adb` ("terminated due to being run from
+   another SDK"; 2021.3, Unity 6), then starts its own server, so every handheld on adb drops its
+   connection mid-run. `build.sh` therefore stops while such an adb runs: build when nobody uses
+   adb, or give `SDK` the SDK the running server comes from (`ADB_KILL_OK=1` builds anyway).
+   An editor's first launch after `get-editor.sh` can sit for minutes with no CPU and no log while
+   macOS verifies the unpacked bundle: let it run (killing and relaunching it starts the check again).
 5. **Package** with them: `DONORS=<DONORS dir> <port>/package.sh`, or `port package --donors <dir>`.
 
 Donors are never committed (a port's repository holds no Unity files; `port new`'s `.gitignore`
