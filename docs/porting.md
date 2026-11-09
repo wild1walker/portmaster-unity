@@ -572,16 +572,20 @@ costs only while it plays: game play frames decode nothing.
   `tools/pmhwdec/build.sh <out>` builds it with this repository's images: the library for `ua_host`'s
   architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhw-cedard`, the
   Allwinner decoder the library starts from its own folder (aarch64 for both: those handhelds run
-  64-bit kernels); Rockchip MPP is the library's own `rkmpp/build_mpp.sh`. Put them in one folder of
-  the port and point `UM_PMHW=$GAMEDIR/<path>/libpmhwdec.so.1` at the library in `port.env` (the
+  64-bit kernels). Ship them with the port's `[build]` (Hollow Knight's port.toml: the script as a
+  command, the two files as outputs in `pmhw/`, the three licences) and set `UM_PMHW =
+  "pmhw/libpmhwdec.so.1"` in `[runtime]`: a path in the port folder, `ua_host`'s working folder
+  (`port.env` quotes values, so `$GAMEDIR` would not expand there; the
   launcher's library path holds only the system's folders). The log says what it chose
   (`[media] decoders: ... vp8 (pmhwdec)`, `[media] pmhwdec: VP8 1920x1080 on cedar`). Where its
   start-up self-test fails, or a stream is one the decoder refuses, the software decoders play it as
-  before. Measured by its author with GRIS's 1080p H.264 intro: on a TrimUI Smart Pro (A133P) 21.1 ->
-  23.8 pictures a second and the game 42 -> 48 fps; on an RG Cube XX (H700) the CPU during the intro
-  83 -> 56 %. ArkOS and dArkOS keep the Rockchip decoder's device nodes root-only while ports run as
-  `ark`: the launcher has to make them readable (`$ESUDO chgrp video` and `chmod 660`). The library
-  is LGPL-2.1-or-later and `pmhw-cedard` GPL-2.0-or-later: the port ships their licences and says
+  before. A port adds nothing beyond the library for any handheld: no Rockchip MPP library, no
+  permission change for the decoder's device files (the user's rule, 2026-11-08: no hoops, software
+  where the hardware needs them). The launcher only makes `pmhw-cedard` executable, as it does
+  `ua_host`. On a G350 with dArkOS (RK3326: the decoder root-only, no MPP library) it reports no
+  hardware in 32 ms and libvpx plays the clips. Measured by its author with GRIS's 1080p H.264
+  intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42 -> 48 fps; on
+  an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhw-cedard` GPL-2.0-or-later: the port ships their licences and says
   where their source is; this repository never ships them.
 - **VP9, Opus, others**: the table in runtime/media/README.md says which decoder takes each.
 

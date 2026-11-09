@@ -91,6 +91,7 @@ fi
 # a Wwise game: ua_host's own Wwise player plays the banks the setup converted (set UA_WWISE_DATA= empty for none)
 [ -d "$GAMEDIR/wwise" ] && export UA_WWISE_DATA="${UA_WWISE_DATA-$GAMEDIR/wwise}"
 chmod +x "$GAMEDIR/ua_host"
+[ -f "$GAMEDIR/pmhw/pmhw-cedard" ] && chmod +x "$GAMEDIR/pmhw/pmhw-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
 
 $GPTOKEYB2 "ua_host" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/ua_host"

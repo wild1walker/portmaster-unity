@@ -95,6 +95,7 @@ if [ "${ANALOG_STICKS:-2}" = 0 ]; then
   case "${UA_DPAD_STICK:-}" in auto|auto,both) export UA_DPAD_STICK=${UA_DPAD_STICK/auto/1} ;; esac
 fi
 chmod +x "$GAMEDIR/$UA_HOST"
+[ -f "$GAMEDIR/pmhw/pmhw-cedard" ] && chmod +x "$GAMEDIR/pmhw/pmhw-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
 
 $GPTOKEYB2 "$UA_HOST" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/$UA_HOST"

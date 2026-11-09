@@ -1929,8 +1929,8 @@ CONFIG_DOC = {
                       "# unless set already), with either picture: what spares memory or the CPU and leaves the\n"
                       "# picture as it is (docs/porting.md, \"Small handhelds\"), e.g. UA_UNITY_ARGS = \"-job-worker-count 1\"",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
-             '# they make put into the port folder (outputs = {"setup/files/x" = "build/x"}), and their licences\n'
-             '# (licenses = {"LICENSE.x.txt" = "path"})',
+             '# they make put into the port folder (outputs = {"setup/files/x" = "{build}/x"}), and their licences\n'
+             '# (licenses = {"LICENSE.x.txt" = "path" or "{build}/path"})',
     'files': '# the porter\'s own files (paths relative to this file), copied into setup/: converter plugins\n'
              '# (--plugin), managed = assemblies shipped into the game (--managed-file), assembly_patches =\n'
              '# [{name, command, files}] ({setup} = the setup folder), hooks = {game|pre_convert|post_convert|\n'
@@ -3160,7 +3160,7 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
             raise SystemExit(f'build.outputs: {sp} was not made')
         ctx.add(sp, dst, 0o755 if os.access(sp, os.X_OK) else None)
     for n, src in (bld.get('licenses') or {}).items():
-        ctx.license(n, os.path.join(port_src, src))
+        ctx.license(n, os.path.join(port_src, src.replace('{build}', os.path.join(out, 'build'))))
     _call_hooks('port_package', ctx)
     ctx.license('LICENSE.portmaster-unity.txt', text=_read(os.path.join(REPO, 'LICENSE')) + '\n\n' +
                 _read(os.path.join(REPO, 'THIRD_PARTY.md')))
