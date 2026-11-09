@@ -5,6 +5,8 @@ out/
 __pycache__/
 *.egg-info/
 convert/native/*/build/
+# downloaded sources (runtime/macho/cxx/build-cxx.sh's LLVM tarball)
+/.cache/
 *.pyc
 # conversion output and inputs that must never be committed: game data, Unity's player
 android-out/
