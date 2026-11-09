@@ -2043,9 +2043,21 @@ them (`UA_PROF=200` over the entry, `profsum.py --slow 50`: 20 frames) UnityMain
 the time, 46 % of that in Mono's runtime: the JIT compiling the enemies' code at its first use
 (`BehaviorSpeculator.Update`, `UpdateBehaviors`, `get_LocalDeltaTime`, dfGUI's `get_IsVisible`); the
 other 34 % it waits for the render thread, which links 3 GPU programs there (317 ms; `UA_GL_PROGLOG`).
-Every launch also links about 150 programs before the first frame (10 s of the time to the title),
-with or without the GL thread, though Unity's binary cache holds 258 and loads about 150 from it: why
-it links the others again each launch is open. Loads
+Every launch also linked about 150 programs before the first frame (10 s of the time to the title),
+with or without the GL thread, though Unity's binary cache held 258. Why (2026-11-09): `inotify` on
+`data/cache/UnityShaderCache` during a launch and the binaries' hashes in `UA_GL_PROGLOG` show Unity 2017.4
+reading every cache file but calling `glProgramBinary` for only about half; for the others it compiles and
+links the sources again and writes the same bytes back (97 files kept, 29 loaded and still rewritten, 103
+never loaded: Unity's own choice before the driver sees them; the 32-bit `readdir` lists the folder whole).
+ua_host's `UA_GL_PROGCACHE=1` (runtime.md) caches below it, keyed by the sources, types, attribute
+bindings and the driver: links per launch 129 -> 63 -> 15 -> 11 over the first launches (each new program
+once), then 0 in a whole fight run (165 from the host's cache, 0.3 s); the launch to the Keep about 13 s
+shorter. The same on the RG34XX-SP with muOS (Mali r20p0): 253 links, then 3, then 0. The room entry's
+hitches stayed (3 links of 317 ms had been in them; the JIT is the rest): `UA_JIT_WARM=2`, the warm-up of
+the methods a run compiled, now on Mono 2.6 too (runtime.md), took them from 16 to 6 - 7 frames over 50
+ms (p99 79 - 86 -> 48 - 50 ms, two pairs), 693 methods compiled ahead in 1.7 s over the title and the first
+load (1,305 in 2.1 s on muOS). Mono's invoke cache and fast thread-local reads (`UA_MONO_INVOKE`,
+`UA_MONO_TLS`, on by default): fight 36.5 fps without, 40.4 with. Loads
 are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
 loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
 behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'

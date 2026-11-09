@@ -277,7 +277,10 @@ thread: 640x360), with the GL thread (`UA_GL_REC=auto`). The Keep's first fight 
 same room and enemies as on the Knulli): 29.8 fps with the present thread, 31.1 with the GL thread too (Low
 lighting and shaders), 39.1 / 40.1 with the port's lowest settings and its HUD patch (portmaster-gungeon 27aebd7
 set up on the handheld: 1122 s); the main thread is the
-limit (98.6 % on a CPU, the GPU at 400 MHz). One job worker gained nothing. Details:
+limit (98.6 % on a CPU, the GPU at 400 MHz). One job worker gained nothing. 2026-11-09: ua_host's
+`UA_GL_PROGCACHE` (Unity re-linked about 150 programs a launch) and the JIT warm-up on Mono 2.6 (`UA_JIT_WARM=2`):
+the first room's entry 16 -> 6 frames over 50 ms, the launch to the Keep about 13 s shorter; `UA_MONO_INVOKE`/`TLS`
+36.5 -> 40.4 fps in the fight. Details:
 [profiling.md](../profiling.md#enter-the-gungeon-on-the-battlexp-g350-rk3326-2026-11-08).
 
 

@@ -544,6 +544,11 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
 - **The setup:** it runs in about 20 minutes (Enter the Gungeon: 1157 s with EmulationStation running,
   the tools' peak 331 MB, at least 424 MB available; the textures step's ASTC encoding is half of it,
   and the SoC reaches 80 C there, the CPU at 1.2 GHz).
+- **Programs and the JIT at first use** (Unity 2017.4): `UA_GL_PROGCACHE = "1"` (Unity's own program
+  binary cache links about half its programs again at every launch: 10 s of Enter the Gungeon's launch)
+  and, once the game's static field initializers are checked (runtime.md, `UA_JIT_WARM`),
+  `UA_JIT_WARM = "2"` (the methods a run compiled, compiled ahead at the next launch: a room's first
+  entry 16 -> 6 frames over 50 ms on the G350).
 - **Slow loads expose races:** the A35s make a game's loading thread and its main thread overlap far
   more than on a PC. Enter the Gungeon hung at its first load in 3 of 5 launches until asmpatch's
   `playmaker-loadlock` (any game with PlayMaker: add it to `asmpatch`); look for UnityMain at 100 % with
