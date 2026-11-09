@@ -816,6 +816,67 @@ muOS gains more (+2.5 fps) than the Knulli (+0.5 - 0.6). In any game with dfGUI 
 Unity 4 era) count the bodies with `Resources.FindObjectsOfTypeAll(typeof(Rigidbody))`: hidden ones never show in
 `FindObjectsOfType` or in the hierarchy.
 
+### How to bench a game's heaviest scenes (Enter the Gungeon, 2026-11-09)
+
+Every fight number above is the Keep's first room: the first floor, a handful of enemies. A game's heaviest
+scenes are later floors and bosses, which a scripted walk from the title cannot reach in a repeatable way. The
+bench for them is a test build (never shipped) that goes there by the game's own means and puts the player at the
+door; the port, its settings and the game's rules are those the player gets.
+
+- **The build.** The setup's own APK (a `tools/port/rehearse.sh` run of the current port: the setup's asmpatch and
+  assembly patches, the textures as it converts them) with two test patches on its Assembly-CSharp: the floor seed
+  fixed and the player taking no damage (so a fight lasts the measurement), and a small helper written in C#,
+  compiled against the game's own assemblies and copied in with Mono.Cecil (type, fields, method bodies; its
+  references to the game's types bound to the copy's definitions), called from two places in the game's code.
+  Writing the helper in C# instead of emitting IL keeps it readable and lets it use the game's API as the game does.
+- **Getting there.** Gungeon's title has Quick Start; the helper replaces the first floor it asks for with the
+  bench's (`GameManager.InjectedLevelName`, or `LoadCustomFlowForDebug` for a Boss Rush floor: the High Dragun's is
+  one load away), then, 180 frames after the floor shows, puts the player on the floor just inside the chosen room's
+  first door (the boss room, or the normal room with the most enemies: the asleep ones it holds and the waves it has
+  left, read from the room's own lists, since the room's prototype is let go once the floor is built). The input
+  script first walks the player on in, so the room starts as in play: enemies wake, doors seal, a boss's intro runs
+  (a warp into the middle of the High Dragun's room never crossed its trigger zone, and the fight never began).
+- **The measurement.** Fire held, reload every 2 s, the stick round a small square; the [fps] windows after the
+  warp, the first 20 s left out (the walk in, a boss's intro: the Dragun's lasts about 15 s), then 35 s; A B and B A
+  as for every other number here; every run from 50 C. A setting with state across launches is reset between runs
+  (`UA_JIT_WARM=2`'s list names methods by token: a list from a run of another assembly crashed the next one).
+- **The data.** A test folder converted by an older setup is not the port: with Gungeon's readable textures left
+  uncompressed (before the setup converted them) Bullet Hell ran out of memory on muOS (47 MB available at the
+  floor's load); with the current setup's OBB the lowest was 228 MB.
+
+The four scenes, the port's settings (spin 400, the program cache, the JIT warm-up, the present thread; frame
+recorder on the Knulli), fps over the 35 s, p99 and frames over 50 ms:
+
+| scene | Knulli (1.5 GHz) | muOS (1.8 GHz) |
+|---|---|---|
+| the Keep's boss at the fixed seed (Gatling Gull) | 49.9, 42.9 ms, 12 | |
+| the Forge's busiest room (Forge_Joe_Cool_Room_011) | 40.7, 39.2 ms, 3 | |
+| the High Dragun (Boss Rush, the Forge) | 47.3, 65.6 ms, 35 | 48.6, 65.6 ms, 35 |
+| Bullet Hell's busiest room (Hell_Hath_No_Joery_007, 7 enemies and waves) | 24.2 (profiled run) | 24.8, 26.0 |
+
+Bullet Hell's room is the worst by far: UnityMain at 39 ms a frame on muOS, and 2.2 ms of it in one internal call,
+`Array.GetLength`, from the goop managers. Each `DeadlyDeadlyGoopManager` walks the chunk flags of the whole floor
+every frame (one chunk per 5 x 5 cells: about 4,500 on Bullet Hell's floor) with two `GetLength` calls a chunk in
+its loop conditions and index sums; on Mono 2.6 each is a wrapper that saves the frame for the runtime around
+libmono's bounds lookup. Two exact patches of the port (portmaster-gungeon `patch/Program.cs`): `goop-dims`, every
+`GetLength` in the manager through a two-entry cache of rank-2 arrays and their lengths keyed by the array object
+(an array's lengths never change); `goop-scan`, the walk left out while no chunk flag can be set (a field of the
+manager turns true wherever a flag can turn true and whenever the walk meets a set flag; the walk starts by
+turning it false; with no flag set the walk changes nothing). muOS, Bullet Hell's room, A B and B A:
+
+| | muOS fps | frames over 50 ms |
+|---|---|---|
+| the port | 24.83, 26.00 | 67, 40 |
+| + `goop-dims` | 32.77, 30.50; 32.63, 31.29 | 3, 7; 9, 9 |
+| + `goop-scan` | 35.20, 33.90 | 5, 3 |
+
+(each pair one A B and one B A against the row above). The Knulli, the port against both: 22.94 -> 34.07 fps,
+frames over 50 ms 128 -> 5; B A 34.06 against 23.43, 7 against 103.
+
+Log lines cost little here: the game logs "Negative ActorPathCount!" about 25 times a second in that room, about
+0.02 ms a frame of UnityMain. Next in the same profile: the game's own physics (`PhysicsEngine.LateUpdate` 1.7 -
+1.9 ms of its own time, the body sort 0.65 ms) and PoolManager's despawns (`List.Contains` over Unity objects).
+
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
 muOS had 3 - 8 frames over 50 ms in the fight where the Knulli had none. A 40 s profile of the frames
