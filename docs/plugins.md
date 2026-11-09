@@ -331,7 +331,12 @@ output hook directly. Nothing of Audiokinetic's code or data is in it.
   without it and none with it. The game's calls
   (PostEvent, StopAll, the game syncs, ...) do not wait for the mixer: they are queued and run at
   the start of its next block, as Wwise runs posted events at its next audio frame (only LoadBank
-  takes the player's lock), so a mix in progress never holds up the game's thread. PostEvent answers
+  takes the player's lock; RenderAudio only tries it, since a mix in progress means an output reads
+  the mix and there is nothing for it to do), so a mix in progress never holds up the game's thread.
+  (Until 2026-11-08 RenderAudio waited for the lock: Enter the Gungeon on muOS without swap had 4 - 7
+  frames over 50 ms in its first fight waiting for mixes that read bank pages back from the card;
+  none since. test_wwplay checks it: RenderAudio during a 40 ms mix returns at once, and an event
+  posted then still plays.) PostEvent answers
   at once with a playing ID for every event the banks have (as Wwise does, also when it ends up
   playing nothing: its end comes through the callback), 0 for an unknown one. When no output reads
   the mix for 0.5 s (none open), `RenderAudio` advances it silently, so events still end.

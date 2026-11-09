@@ -2037,7 +2037,11 @@ static void b_term(void)
 static void b_render(void)                      // once a frame, on the game's thread
 {
     double now = wall_now();
-    pthread_mutex_lock(&L);
+    // The output's thread holds the player's lock for a whole mix (the voices' decoding: a bank page read back
+    // from the card, a few new streams), and the game's thread used to wait for it here: frames of 50 - 100 ms on
+    // a handheld without swap. A held lock means a mix is under way, so the output reads the mix and nothing is
+    // stalled: there is nothing to do this frame (the check runs again the next).
+    if (pthread_mutex_trylock(&L)) return;
     int stalled = g_last_mix_wall > 0 ? now - g_last_mix_wall > 0.5 : now - g_stats_wall > 1.0;
     int busy = g_nv > 0 || g_nplay > 0 || g_qh != g_qt;
     double since = g_last_mix_wall > 0 ? now - g_last_mix_wall : 0;
@@ -2048,7 +2052,7 @@ static void b_render(void)                      // once a frame, on the game's t
         float *tmp = malloc((size_t)frames * 2 * sizeof *tmp);
         if (tmp) { memset(tmp, 0, (size_t)frames * 2 * sizeof *tmp); mix(tmp, frames, g_rate, 2); free(tmp); }
     }
-    if (g_stats_every > 0 && now - g_stats_wall >= g_stats_every) { pthread_mutex_lock(&L); stats_log(now); pthread_mutex_unlock(&L); }
+    if (g_stats_every > 0 && now - g_stats_wall >= g_stats_every && !pthread_mutex_trylock(&L)) { stats_log(now); pthread_mutex_unlock(&L); }
 }
 
 // ExecuteActionOnEvent(event, action, [game object, [transition ms, [curve, [playing ID]]]]):

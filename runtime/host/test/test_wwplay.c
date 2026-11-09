@@ -5,6 +5,8 @@
 #include "../wwplay.h"
 
 #include <math.h>
+#include <pthread.h>
+#include <time.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -226,6 +228,15 @@ static float mean(int ch, float t0, float t1)
 static float last_nonzero(int ch) { int n = 4 * RATE; while (n > 0 && fabsf(out[2 * (n - 1) + ch]) < 1e-4f) n--; return (float)n / RATE; }
 static int voices(void) { wwplay_stats s; wwplay_get_stats(&s); return s.voices; }
 static uint32_t pid = 1000;
+static double now_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+static float big[RATE * 4 * 2];
+static double mix_t0, mix_t1;
+static void *long_mix(void *a)      // the output's thread in one long mix (4 s of audio at once)
+{
+    (void)a;
+    mix_t0 = now_s(); B->mix(big, RATE * 4, RATE, 2); mix_t1 = now_s();
+    return NULL;
+}
 static uint32_t post(uint32_t ev, uint64_t obj, int *on) { pid++; *on = B->post_event(ev, obj, pid, 0); return pid; }
 
 int main(int argc, char **argv)
@@ -467,6 +478,39 @@ int main(int argc, char **argv)
         for (int i = 0; i < RATE * 3 / 10; i++) if (fabsf(out[2 * i]) > peak) peak = fabsf(out[2 * i]);
         CHECK(peak <= 0.9801f && fabsf(mean(0, 0.05f, 0.2f) - 0.98f) < 0.01f && fabsf(mean(1, 0.05f, 0.2f) + 0.49f) < 0.01f,
               "limiter: peak %f, level %f / %f", peak, mean(0, 0.05f, 0.2f), mean(1, 0.05f, 0.2f));
+    }
+
+    // RenderAudio (once a frame, on the game's thread) while the output's thread is inside a mix: it
+    // returns at once (it used to wait for the whole mix), and an event the game posts meanwhile is
+    // queued as always and plays from the next block on, from its first frame
+    {
+        for (int i = 0; i < 4; i++) post(102, 1, &on);
+        pthread_t t;
+        pthread_create(&t, NULL, long_mix, NULL);
+        while (mix_t0 == 0) { struct timespec ts = { 0, 100000 }; nanosleep(&ts, NULL); }
+        double r0 = now_s(); B->render(); double r1 = now_s();
+        uint32_t q = post(100, 1, &on);
+        pthread_join(t, NULL);
+        double during = r0 < mix_t1 ? r1 - r0 : -1, mixing = mix_t1 - mix_t0;
+        // the tone (1 kHz) in the rest of that mix or in the blocks after it: the largest AC level of a
+        // 20 ms window (the other voices are steady levels)
+        run(0.3f);
+        float ac = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            const float *b = pass ? out : big; int n = pass ? RATE * 3 / 10 : RATE * 4, w = RATE / 50;
+            for (int a = 0; a + w <= n; a += w) {
+                double m = 0, v = 0;
+                for (int i = a; i < a + w; i++) m += b[2 * i];
+                m /= w;
+                for (int i = a; i < a + w; i++) v += (b[2 * i] - m) * (b[2 * i] - m);
+                if (sqrt(v / w) > ac) ac = (float)sqrt(v / w);
+            }
+        }
+        CHECK(on == 1 && ac > 0.1f && was_done(q), "event posted during a mix: AC level %f, done %d", ac, was_done(q));
+        if (during >= 0 && mixing > 0.01)
+            CHECK(during < mixing / 4, "RenderAudio waited for the mix: %.1f ms of a %.1f ms mix", during * 1e3, mixing * 1e3);
+        else
+            printf("  (RenderAudio %.2f ms, the mix %.2f ms: the mix ended first, the wait not tested)\n", (r1 - r0) * 1e3, mixing * 1e3);
     }
 
     // a render as the offline tool does: the sum must not be NaN

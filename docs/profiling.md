@@ -767,6 +767,19 @@ game's own physics loops visit all ~855 registered bodies three times a frame, ~
 projectiles); a fourth loop (trigger exits) touches every body anyway, so skipping inactive ones in the other
 three was left unbuilt (estimated under 0.2 ms).
 
+### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
+
+muOS had 3 - 8 frames over 50 ms in the fight where the Knulli had none. A 40 s profile of the frames
+over 50 ms (`UA_PROF=200`, `--slow 50`): UnityMain blocked most of them, 69 % of its blocked samples
+in a futex inside the Wwise player's `RenderAudio` (the integration calls it once a frame), which
+took the player's lock while the output's thread held it for a whole mix (decoding the voices; on
+muOS without swap a bank page read back from the card), the rest page faults. RenderAudio now only
+tries the lock (a mix in progress means an output reads the mix: there is nothing for it to do), and
+nothing the game posts goes through it (events are queued for the next block either way). muOS fight,
+A B and B A: frames over 50 ms 0 / 0 against 7 / 6, over 33 ms 2 / 3 against 12 / 10, p99 27.3 / 27.0
+against 36.6 / 35.9 ms, 49.2 / 49.1 against 48.4 / 48.9 fps; the room entry 9 - 10 frames over 50 ms
+against 22 - 23; the same sound (346 / 352 events, 292 / 298 voices over the route).
+
 ### Legacy graphics jobs on OpenGL ES (`UA_GFX_JOBS`)
 
 `AdjustThreadingModeForAPI(mode, renderer, flags)` (6000.0 and later) maps every graphics-jobs mode
