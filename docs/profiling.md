@@ -707,6 +707,16 @@ the same (54 - 58 MB Knulli, 68 - 77 MB muOS); the same four exception lines in 
 cache alone gave +0.8 (one order). Both are on by default where libmono matches the checked 2017.4
 armeabi-v7a build.
 
+With all of the port's patches and that host (A B order only; the bosses' attack patterns vary from run to
+run), fps, p99, frames over 50 ms: the Keep's boss Knulli 48.1 (47.3 ms, 16), muOS 45.6 (47.5 ms, 12); the
+Forge's room Knulli 46.2 (32.4 ms, 1), muOS 45.9 (31.8 ms, 1); the High Dragun Knulli 47.0 (65.6 ms, 39), muOS
+53.2 (56.6 ms, 30); Bullet Hell's room Knulli 33.7 - 35.0, muOS 34.5 - 34.7. Where Bullet Hell's room spends
+UnityMain's ~29 ms (muOS, every Update/LateUpdate and the camera chain's calls timed, instrumented so high):
+the game's physics (`PhysicsEngine.LateUpdate`) 5.9 ms with its body sort 1.3, the camera chain 5.4 (the core
+sprites' `Camera.Render` 3.3, the background's 0.7, the unoccluded layer's 0.4, the occlusion map 0.3, the
+lighting buffer 0.2, blits under 0.1 each), the HUD 1.5 (two managers), 309 sprite animators 1.2, the player 1.8,
+the enemies' AI 1.0 + 0.7, the HUD's 246 controls 1.3, pit particles 0.8. No garbage collection in the fight.
+
 Later (2026-11-09) `UA_MONO_TLS` keeps the thread's JIT data and domain in ua_host's own thread-local
 variables as well, filled through libmono's `pthread_setspecific` (so no call per icall wrapper at all). At
 the port's shipped settings with all its patches, A B and B A: the first fight Knulli 59.29 / 59.34 -> 59.43 /
