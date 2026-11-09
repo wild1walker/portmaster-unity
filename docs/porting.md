@@ -114,6 +114,38 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
 
+### Both builds in one release: 32-bit where it can, 64-bit where it must
+
+A Mono game whose 32-bit build is the one to run (Hollow Knight: as fast as IL2CPP on the RG34XX-SP, less
+memory, nothing compiled at setup) still needs a 64-bit build for firmwares without a 32-bit userland
+(TrimUI's, and muOS on them), or PortMaster hides the port there: `armhf` in port.json's `reqs` is a
+device capability PortMaster checks (`device_info.txt` adds it only where the system has the 32-bit
+loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries both, the way Cuphead's does:
+
+- **Two setups.** `setup/patchscript` is the android route's; `setup/patchscript64` is the mono-arm64
+  template's patchscript (`port new --route mono-arm64` into a scratch folder) with its own work folder
+  (`gamedata/.setup64`), its install in `arm64/`, its own ready file (`.setup_done64`), and after
+  `setup.env` the 64-bit player (`PLAYER_BACKEND=il2cpp PLAYER_ABI=arm64-v8a`, the hashes of Unity's
+  arm64 `libmain.so` and `libunity.so`). The conversion and its questions are the same.
+- **The launcher picks** as Cuphead's does: 32-bit where `/lib/ld-linux-armhf.so.3` is there, else
+  64-bit; `HK_ROUTE=64` at the top of port.env forces it; a built game or a setup under way keeps its
+  route (muOS's 32-bit libraries flipped between launches for Cuphead). The 64-bit build runs
+  `./ua_host64 <port>/arm64` from the port folder, so port.env's relative paths, `flipbooks.txt` and
+  `uaflipbook.dll` beside the binary serve both, with `UM_PMHWDEC=pmhwdec64/libpmhwdec.so.1` and SDL's
+  own audio driver. The 32-bit build's `setup/update` is not run on the 64-bit one.
+- **The release adds** the IL2CPP arm64 donor (`player.donors`; `tools/donor/build.sh <editor>
+  Il2cppArm64`), `ua_host64`, Unity's Mono of the game's line with the bridge in `setup/mono64/<line>/`
+  and libpmhwdec's arm64 build in `pmhwdec64/`, through `[build]` (Hollow Knight's `build64.sh`): 36.4 ->
+  59.5 MB zipped. No Rockchip MPP for the 64-bit build: the vendor-kernel Rockchip firmwares (dArkOS,
+  ArkOS) have 32-bit libraries, and Knifethrower's MPP patch scripts need a newer Python than the arm64
+  build image has.
+- **Rehearse** the 64-bit path with `REHEARSE_64ONLY=1 REHEARSE_DONE=.setup_done64 REHEARSE_NET=none`
+  and a 1 GB `REHEARSE_MEMINFO`: Hollow Knight's whole setup from GOG's game folder in 14 minutes in the
+  arm64 container (2.3 GB installed; the container has no 64-bit SDL, so the game itself runs on a
+  handheld). On an RG34XX-SP with muOS, Greenpath walking and fighting: 45.6 fps against the 32-bit
+  build's 50.0 before the arm64 player's present-sync point was added (`UA_PRESENT_SYNC`,
+  runtime/host/unityhooks.c); `UA_GLES_POOL` has no arm64 row yet (its struct layout differs).
+
 ### Choose the route for speed first
 
 The route sets how fast the game can ever run on a handheld: which engine build (ARMv7 or arm64)
@@ -565,6 +597,15 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   G350's pad has two sticks.
 - **Measure the average fps** of a walk or fight (the bench's `steady` step never settles here), with
   the SoC cool at the start (`devlock.py cool`): the CPU throttles from 1.5 to 1.0-1.2 GHz near 80 C.
+- **EmulationStation stays in memory** while a port runs on dArkOS (it is the process that launched it):
+  64 - 126 MB resident on the G350 (895 MB, no swap), more after browsing. PortMaster's dArkOS module does
+  not stop it, and a launcher cannot (stopping its service stops the port too). A test over SSH stops ES
+  for the display, so it overstates free memory by that much: hold ES's size in RAM for the run instead
+  (a file of that size in `/dev/shm`, removed after). Hollow Knight, release settings, so measured
+  (2026-11-09): Greenpath at least 84 MB available, City of Tears down to 34 MB at 148 s (the bench's
+  40 MB floor stopped it), with libunity's code pages already evicted (19 -> 5 MB resident); without the
+  hold the same scenes kept 202 MB. Testers saw 839 of 892 MB used on an RGB10 and a crash on an R36S
+  with dArkOS-RE. A 1 GB dArkOS port needs that much more headroom than the stopped-ES numbers show.
 
 ### Videos
 
