@@ -21,7 +21,9 @@
 #         6000.0: r27c, in <editor>/PlaybackEngines/AndroidPlayer/NDK)
 # 6000.0.61f1 (2026-11-06): its MonoArmv7 donor's player (`pmu player donor`) is the one Unity's
 # installer gives, file for file (75 files, same SHA-256). 2021.3.27f1 (2026-11-09, the
-# Apple-silicon editor): 70 files; libunity.so and libmain.so are the installer's.
+# Apple-silicon editor): 70 files; libunity.so and libmain.so are the installer's. Its Il2cppArmv7
+# donor (6 minutes with NDK r21d): `player donor --backend il2cpp --abi armeabi-v7a` gives
+# libunity.so and libmain.so, both the installer's.
 # A newly unpacked editor's first launch can sit for minutes with no CPU and no log while macOS
 # verifies the bundle (`log show`: "ASP: Security policy would not allow process", a
 # CoreServicesUIAgent progress window): wait, do not kill and relaunch it.

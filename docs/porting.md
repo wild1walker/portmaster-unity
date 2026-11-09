@@ -46,7 +46,14 @@ patches and a helper assembly).
   never run: `7zz x -tzip <installer>.sh -o<dir>` (or `unzip -q <installer>.sh -d <dir>`, whose
   exit status 1, "extra bytes at beginning", is harmless but stops a `set -e` script), then the
   game is `<dir>/data/noarch/game`. GOG's macOS `.pkg`: `python -m pmunity macpkg <dir> <installer>.pkg`
-  (the app lands under `<dir>` at the package's install location). Steam: the game's folder (the Linux depot where there is one). Keep the installer itself for
+  (the app lands under `<dir>` at the package's install location). Steam: the game's folder (the Linux depot where there is one).
+  A Windows-only Steam game on a Mac: type `download_depot <app> <depot>` for each of its Windows
+  depots in Steam's console (`steam://open/console`; the depot ids are in SteamDB or in the app's
+  `depots` section of Steam's `appcache/appinfo.vdf`); the console prints the folder when a depot
+  is done. Only someone at the Mac can do this: the console has no command-line or file input, and
+  a platform override (`userdata/<id>/config/compat.vdf`) changes nothing on macOS, because every
+  compatibility tool Steam lists targets Linux (Bomb Rush Cyberfunk, 2026-11-09: Steam "installed"
+  it with no depots). Keep the installer itself for
   the handheld and the rehearsal: the setup takes it as it is.
 - **The port's own repository:** a GitHub repository per port holds `port new`'s output and
   nothing of the game. Clone it (a new one holds a LICENSE and a README: `port new` writes into
