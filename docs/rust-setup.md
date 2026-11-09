@@ -197,7 +197,7 @@ the translator with the Python on 17 hand-written cases (`tests/metal_golden.jso
 games, `regress.py pmu` (below: four macOS builds of 2020.3 - 6000.3, the same files). pmu's own
 (2026-11-09): Unity 6's `if (has_vrr_api) { ... }` blocks, which metal.py stops at, are skipped
 when they do not translate (they never run); `metal_unity6_vrr` checks that the golden program
-comes out byte for byte with such a block in it ([shaders.md](shaders.md#macos-builds-metal-programs-msl)).
+comes out byte for byte with such a block in it ([shaders.md](shaders.md#macos-builds-metal-programs-msl)). Also pmu's own: GLES3 compute variants from Metal kernels (`translate_kernel`, `steps/compute.rs`'s `add_gles3_metal`; `metal_kernel`: a hand-written kernel's GLSL, which links on Mesa; [shaders.md](shaders.md#metal-kernels-macos-builds-pmu-2026-11-09)).
 
 Player builds keep no type trees in their files: pmu reads them with UnityPy's class database
 (lzma.tpk), embedded when the binary is built with `PMU_TPK=<lzma.tpk>`, else from `$PMU_TPK` at

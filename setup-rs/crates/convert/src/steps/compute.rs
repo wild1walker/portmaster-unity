@@ -55,6 +55,8 @@ pub struct ComputeResult {
     pub variants: usize,
     pub failed: Vec<(String, String)>,
     pub notes: Vec<String>,
+    /// the GLES3 variant made from the Metal one (add_gles3_metal)
+    pub from_metal: bool,
 }
 
 impl std::fmt::Display for ComputeResult {
@@ -602,7 +604,7 @@ pub fn add_gles3(
 /// The step's summary line of the compute shaders (step.run's).
 pub fn summary(results: &[ComputeResult]) -> String {
     let cc: Vec<&ComputeResult> = results.iter().filter(|r| r.status == "converted").collect();
-    format!(
+    let line = format!(
         "shaders: {} of {} compute shaders given GLES3 kernels ({} kernels, {} kernel variants, GLSL ES 3.10: used where \
          the device has OpenGL ES 3.1+); {} kernels left out; {} without OpenGL Core kernels",
         cc.len(),
@@ -614,7 +616,287 @@ pub fn summary(results: &[ComputeResult]) -> String {
             .iter()
             .filter(|r| r.why.starts_with("no OpenGL Core"))
             .count()
-    )
+    );
+    let metal = cc.iter().filter(|r| r.from_metal).count();
+    if metal == 0 {
+        return line;
+    }
+    format!("{line}; {metal} from Metal kernels")
+}
+
+pub const RENDERER_METAL: i128 = 16;
+
+/// An int field set to x, kept the integer type it has.
+fn set_int(v: &mut Value, name: &str, x: i64) -> Result<()> {
+    let nv = match v.get(name) {
+        Some(Value::I32(_)) => Value::I32(x as i32),
+        Some(Value::U32(_)) => Value::U32(x as u32),
+        Some(Value::I16(_)) => Value::I16(x as i16),
+        Some(Value::U16(_)) => Value::U16(x as u16),
+        Some(Value::U64(_)) => Value::U64(x as u64),
+        _ => Value::I64(x),
+    };
+    v.set(name, nv)?;
+    Ok(())
+}
+
+fn str_of(v: &Value, name: &str) -> String {
+    v.get(name)
+        .and_then(Value::as_bytes)
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default()
+}
+
+/// A constant buffer's name in a GLES3 variant: HLSLcc's GL `$Globals` for Metal's `Globals`.
+fn gl_cb_name(n: &str) -> String {
+    if n == "Globals" {
+        "$Globals".into()
+    } else {
+        n.into()
+    }
+}
+
+/// One Metal kernel variant (kv, edited in place) made a GLES3 one: its code translated
+/// (shaderx's metal::translate_kernel) and its records as Unity's GLES3 variants have them. The
+/// Metal records must name what the MSL declares, at the indices it gives them, and the constant
+/// buffer layouts (cbs: the variant's constantBuffers) the offsets Metal gives the members: else
+/// Err(why), the kernel left out.
+fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Result<(), String>> {
+    let code = code_bytes(kv)?;
+    // (the code ends with a NUL, as Unity's GL kernels do)
+    let msl = match shaderx::metal::msl_of(&code) {
+        Ok(m) => m.trim_end_matches('\0').to_string(),
+        Err(f) => return Ok(Err(format!("{f:?}"))),
+    };
+    let mut group = [0i64; 3];
+    if let Some(Value::Array(g)) = kv.get("threadGroupSize") {
+        for (i, x) in g.iter().take(3).enumerate() {
+            group[i] = x.as_int().unwrap_or(0) as i64;
+        }
+    }
+    let uavs: Vec<String> = kv
+        .get("outBuffers")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|r| str_of(r, "name")).collect())
+        .unwrap_or_default();
+    let (text, iface) = match shaderx::metal::translate_kernel(&msl, group, &uavs) {
+        Ok(t) => t,
+        Err(shaderx::metal::Fault::Uns(m) | shaderx::metal::Fault::Es31(m)) => return Ok(Err(m)),
+        Err(shaderx::metal::Fault::Crash(m)) => return Ok(Err(m)),
+    };
+    for list in ["textures", "builtinSamplers"] {
+        if kv.get(list).and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
+            return Ok(Err(format!("{list} recorded for a kernel that declares none")));
+        }
+    }
+    // the records against the MSL: the same names at the same Metal indices
+    let recs = |kv: &Value, list: &str| -> Vec<(String, i128)> {
+        kv.get(list)
+            .and_then(Value::as_array)
+            .map(|a| {
+                let mut v: Vec<(String, i128)> = a
+                    .iter()
+                    .map(|r| (str_of(r, "name"), r.get("bindPoint").and_then(Value::as_int).unwrap_or(-1)))
+                    .collect();
+                v.sort();
+                v
+            })
+            .unwrap_or_default()
+    };
+    let msl_side = |v: Vec<(String, u32)>| -> Vec<(String, i128)> {
+        let mut v: Vec<(String, i128)> = v.into_iter().map(|(n, m)| (n, m as i128)).collect();
+        v.sort();
+        v
+    };
+    let checks = [
+        ("cbs", msl_side(iface.cbs.iter().map(|c| (c.0.clone(), c.1)).collect())),
+        ("inBuffers", msl_side(iface.ins.iter().map(|c| (c.0.clone(), c.1)).collect())),
+        ("outBuffers", msl_side(iface.outs.iter().map(|c| (c.0.clone(), c.1)).collect())),
+    ];
+    for (list, want) in &checks {
+        if recs(kv, list) != *want {
+            return Ok(Err(format!(
+                "the {list} records ({:?}) are not what the MSL declares ({want:?})",
+                recs(kv, list)
+            )));
+        }
+    }
+    // the layouts the records pick (cbVariantIndices) against the members' Metal offsets
+    let idx: Vec<i128> = kv
+        .get("cbVariantIndices")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|x| x.as_int().unwrap_or(-1)).collect())
+        .unwrap_or_default();
+    let cb_recs: Vec<String> = kv
+        .get("cbs")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|r| str_of(r, "name")).collect())
+        .unwrap_or_default();
+    if idx.len() != cb_recs.len() {
+        return Ok(Err("cbVariantIndices do not match the cbs records".into()));
+    }
+    for (j, name) in cb_recs.iter().enumerate() {
+        let Some(lay) = usize::try_from(idx[j]).ok().and_then(|i| cbs.get(i)) else {
+            return Ok(Err(format!("constant buffer {name}: no layout {}", idx[j])));
+        };
+        let (_, _, _, offs) = iface.cbs.iter().find(|c| c.0 == *name).unwrap();
+        for p in lay.get("params").and_then(Value::as_array).into_iter().flatten() {
+            let pn = str_of(p, "name");
+            let po = p.get("offset").and_then(Value::as_int).unwrap_or(-1);
+            // (a matrix is HLSLcc's float4 array hlslcc_mtx4x4<name>)
+            let member = |n: &str| {
+                n == pn
+                    || n.strip_prefix("hlslcc_mtx")
+                        .and_then(|r| r.get(3..))
+                        .is_some_and(|r| r == pn)
+            };
+            match offs.iter().find(|(n, _)| member(n)) {
+                Some((_, o)) if *o as i128 == po => {}
+                _ => {
+                    return Ok(Err(format!(
+                        "constant buffer {name}: {pn} recorded at {po}, not where the MSL has it"
+                    )))
+                }
+            }
+        }
+    }
+    // the GLES3 records: each in its list's binding order, bindPoint the block's binding or the
+    // buffer's place in its list (Unity's GLES3 variants of 6000.0's built-in kernels)
+    let rewrite = |kv: &mut Value, list: &str, order: &[(String, u32)]| -> Result<()> {
+        let Some(Value::Array(a)) = kv.get_mut(list) else {
+            return Ok(());
+        };
+        let mut old = std::mem::take(a);
+        let mut new = Vec::with_capacity(old.len());
+        for (name, bp) in order {
+            let Some(i) = old.iter().position(|r| str_of(r, "name") == *name) else {
+                continue;
+            };
+            let mut r = old.remove(i);
+            r.set("name", Value::Str(gl_cb_name(name).into_bytes()))?;
+            set_int(&mut r, "bindPoint", *bp as i64)?;
+            new.push(r);
+        }
+        *a = new;
+        Ok(())
+    };
+    // cbVariantIndices follow their cbs records into the new order
+    let order_cb: Vec<(String, u32)> = iface.cbs.iter().map(|c| (c.0.clone(), c.2)).collect();
+    if let Some(Value::Array(ix)) = kv.get_mut("cbVariantIndices") {
+        let old = std::mem::take(ix);
+        for (name, _) in &order_cb {
+            let j = cb_recs.iter().position(|n| n == name).unwrap();
+            ix.push(old[j].clone());
+        }
+    }
+    rewrite(kv, "cbs", &order_cb)?;
+    rewrite(kv, "inBuffers", &iface.ins.iter().map(|c| (c.0.clone(), c.2)).collect::<Vec<_>>())?;
+    rewrite(kv, "outBuffers", &iface.outs.iter().map(|c| (c.0.clone(), c.2)).collect::<Vec<_>>())?;
+    let mut bytes = text.into_bytes();
+    bytes.push(0);
+    set_code(kv, bytes)?;
+    Ok(Ok(()))
+}
+
+/// Adds a GLES3 variant made from the Metal one to a ComputeShader of a macOS build (no OpenGL
+/// Core kernels; shaders.from has "metal"), in place: renderer 11 and the GLES level, every
+/// kernel variant translated (metal_kernel_variant), the constant buffer layouts with
+/// `Globals` named `$Globals` and their sizes rounded up to 16 (a uniform block's size), as
+/// Unity's own GLES3 variants of the same kernels have them. A kernel that does not translate is
+/// left out (its FindKernel fails, as every kernel's did before).
+pub fn add_gles3_metal(tree: &mut Value, unity: &str) -> Result<ComputeResult> {
+    let mut r = ComputeResult {
+        name: tree
+            .get("m_Name")
+            .and_then(Value::as_bytes)
+            .map_or("?".into(), |b| String::from_utf8_lossy(b).into_owned()),
+        status: "unchanged",
+        from_metal: true,
+        ..Default::default()
+    };
+    let variants = tree
+        .get_mut("variants")
+        .ok_or_else(|| Error::Value("KeyError: 'variants'".into()))?
+        .as_array_mut()
+        .ok_or_else(|| Error::Value("variants: not a list".into()))?;
+    let renderers = variants
+        .iter()
+        .map(|v| int_of(v, "targetRenderer"))
+        .collect::<Result<Vec<_>>>()?;
+    if renderers.contains(&RENDERER_GLES3) {
+        r.why = "already has GLES3 kernels".into();
+        r.from_metal = false;
+        return Ok(r);
+    }
+    let Some(mi) = best_variant(variants, RENDERER_METAL)? else {
+        r.why = "no OpenGL Core or Metal kernels".into();
+        r.from_metal = false;
+        return Ok(r);
+    };
+    let mut es = variants[mi].clone();
+    set_int(&mut es, "targetRenderer", RENDERER_GLES3 as i64)?;
+    set_int(&mut es, "targetLevel", gles_level(unity))?;
+    let cbs: Vec<Value> = es
+        .get("constantBuffers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(Value::Array(list)) = es.get_mut("constantBuffers") {
+        for cb in list.iter_mut() {
+            let n = str_of(cb, "name");
+            cb.set("name", Value::Str(gl_cb_name(&n).into_bytes()))?;
+            let size = cb.get("byteSize").and_then(Value::as_int).unwrap_or(0) as i64;
+            set_int(cb, "byteSize", (size + 15) / 16 * 16)?;
+        }
+    }
+    let mut kept = Vec::new();
+    for mut k in kernels_of(&es)?.clone() {
+        let name = kernel_name(&k);
+        let mut why = None;
+        let mut n = 0;
+        for kv in kernel_variants_mut(&mut k)? {
+            if let Err(w) = metal_kernel_variant(kv, &cbs)? {
+                why = Some(w);
+                break;
+            }
+            n += 1;
+        }
+        match why {
+            Some(w) => r.failed.push((name, w)),
+            None => {
+                r.variants += n;
+                kept.push(k);
+            }
+        }
+    }
+    if kept.is_empty() {
+        r.status = if r.failed.is_empty() { "unchanged" } else { "skipped" };
+        r.why = if r.failed.is_empty() {
+            "no Metal kernels".into()
+        } else {
+            format!("no Metal kernel translates: {}", failed_list(&r.failed))
+        };
+        return Ok(r);
+    }
+    r.kernels = kept.len();
+    es.set("kernels", Value::Array(kept))?;
+    let at = renderers
+        .iter()
+        .position(|&x| x > RENDERER_GLES3)
+        .unwrap_or(variants.len());
+    variants.insert(at, es);
+    r.status = "converted";
+    r.why = if r.failed.is_empty() {
+        "(from Metal)".into()
+    } else {
+        format!(
+            "(from Metal) {} of {} kernels left out: {}",
+            r.failed.len(),
+            r.failed.len() + r.kernels,
+            failed_list(&r.failed)
+        )
+    };
+    Ok(r)
 }
 
 #[cfg(test)]

@@ -175,6 +175,65 @@ auto exposure, ambient occlusion, the 3D LUT), so its kernels convert but are no
 A Windows build's compute shaders (Direct3D 11 bytecode) are not translated yet.
 `"shaders": {"compute": false}` leaves compute shaders as they are.
 
+#### Metal kernels (macOS builds; pmu, 2026-11-09)
+
+A macOS build of Unity 2020.3+ has no OpenGL Core kernels, only Metal's (renderer 16). With
+`shaders.from` holding `metal`, pmu's shaders step (`steps/compute.rs`, `add_gles3_metal`) gives
+such a ComputeShader a GLES3 variant made from the Metal one, each kernel variant's MSL translated
+by shaderx's `metal::translate_kernel` (HLSLcc wrote the MSL; the graphics stages' reader with a
+kernel entry):
+
+- storage buffers: HLSLcc's structured buffers (`device X_Type *` with `uint value[N]`) and raw
+  ones (`device uint *`) as std430 blocks of the same layout (`<name>_buf[]`), `readonly` where the
+  MSL has `const device`; constant buffers as std140 uniform blocks (`$Globals`: `CGlobals`) with
+  each member at the offset Metal gives it, which is where Unity writes it (the records' offsets
+  are Metal's in all 308 of Dave the Diver's): a `float3` takes 16 bytes in MSL and 12 in std140,
+  so a member after one gets padding floats (24 of the 308 buffers; the fish flocking kernel's
+  among them); arrays of `float4`/`float3` and `float4x4`/`float3x3` matrices (HLSLcc's
+  `hlslcc_mtx4x4<name>` arrays) have the same stride in both; anything else is refused;
+- the thread ids (`thread_position_in_grid` ... `gl_GlobalInvocationID` ...), threadgroup memory
+  as `shared` variables, `threadgroup_barrier` as `memoryBarrierShared(); barrier();` (`mem_device`:
+  `memoryBarrierBuffer()`), the atomics on a buffer's or threadgroup memory's words
+  (`atomic_fetch_add/and/or/xor/min/max`, `atomic_exchange`, `atomic_compare_exchange_weak`:
+  `atomicCompSwap` gives the expected value the old one, as Metal does; a signed min or max on an
+  unsigned word has no GLSL form and is refused), immediate constant buffers, HLSLcc's
+  `bitFieldExtractU` helper as `pm_bitFieldExtractU` (its operations, its edge cases), the thread
+  group size from the kernel's record (`threadGroupSize`);
+- the records as Unity's own GLES3 variants of the same version have them, learned from the
+  built-in kernels the 6000.0.52f1 macOS player (Metal) and Android player (GLES3) both carry:
+  uniform blocks bound from 0 in Metal's order; storage buffers the writable ones (the records'
+  `outBuffers`, the HLSL's read-write buffers: HLSLcc writes `const device` for one a kernel only
+  reads) from 0, then the read-only ones; each record's `bindPoint` its place in its list, the
+  lists in binding order, `cbVariantIndices` following their `cbs`; constant buffer layouts with
+  `Globals` named `$Globals` and their sizes rounded up to 16; the code GLSL text and a NUL. Before
+  a kernel is rewritten, its Metal records must name what the MSL declares at the same indices,
+  and the layouts its records pick the offsets the MSL has: else it is left out with the reason.
+- left out (the run names each): kernels with textures (an image's format is not in the MSL;
+  Unity's GLES records for textures in kernels were not seen yet) and append / consume buffers
+  (their counters: no GLES reference yet).
+
+**Checked.** Unity's built-in compute shaders of 6000.0.52f1 (Internal-Skinning, -BlendShape,
+-VT-TranslationTableReplace: 50 kernel variants) made from the macOS player's Metal kernels have
+the records of the Android player's GLES3 ones, field for field (the constant buffer layouts also
+list members Unity's GLES compile dropped as unused: harmless, at their offsets), and the same
+GLSL bindings; `runtime/host/computecheck` runs each translated kernel and Unity's own on the same
+random inputs on Mesa: the 20 that fit Mesa's 8 storage buffers write the same words, all of them
+(the 30 batched ones exceed it, Unity's too). Dave the Diver (6000.0.52f1): 109 of 121 compute
+shaders get GLES3 kernels (224 kernels, 251 variants: VFX Graph's simulations, the flocking
+kernels, Obi's solver); left out: Obi's contact and query kernels (append buffers), its SDF
+baker and a probe volume debug view (textures). 176 link on Mesa, 48 exceed its 8 storage
+buffers (Obi, 9 - 20). Against the original Metal kernels on the Mac's GPU (`tools/metalrun`, fast
+math off) on the same inputs: the three flocking kernels write the same words or within float
+rounding (worst 6e-7 relative), in all three of the fish kernel's movement modes. That kernel
+reads the other fish while they are written (the game's own race: any GPU's order changes it),
+so it is compared with the fish further apart than they look.
+
+```sh
+runtime/host/out/arm64/computecheck <ours.comp> <unity.comp>                  # the same random inputs, outputs compared
+runtime/host/out/arm64/computecheck -x <k.comp> -g 1,1,1 s0=<file> u1=<file>   # given inputs, <file>.out after
+tools/metalrun/metalrun <k.metal> 256,1,1 1,1,1 0=<file> 2=<file>             # the Metal kernel, on the Mac
+```
+
 ### The files the step reads; asset bundles and scene bundles
 
 The step reads the main data's serialized files (`globalgamemanagers`, `level<n>`, `*.assets`),
@@ -730,7 +789,7 @@ ES 3.2):
 | 2019.1.15f1 (Metal + OpenGL Core) | 41 (3) | 208 | UIElements' SubShader with a structured buffer (its fallback kept) | 223 of 223 as the same pass's GLCore program | 194 / 194 |
 | 2022.3.62f3 (URP, Metal only) | 92 (4) of 93 | 1250 (8) | URP's HDR debug view (a writable texture) | 610 of 1369 as Unity's own GLES3 programs of the game's Android build (shader, pass, keywords) | 991 / 991 |
 | 6000.2.6f2 (Metal only; Addressables) | 113 (2) of 114 | 320 | VR blit | - | 209 / 209 |
-| 6000.0.52f1 (URP, Shader Graph, VFX Graph; Addressables: 3,967 bundles, 140 scene bundles; pmu, 2026-11-09) | 529 of 558 (before the `has_vrr_api` blocks were skipped: 436) | 30791 (10) | VFX Graph outputs (23: structured buffers), Stylized Water 2's tessellation shaders (2), URP's HDR debug view (2), VR blit, CoreCopy (its framebuffer fetch input, `rp_input_remap`); 121 compute shaders (Metal kernels are not translated) | the 5284 distinct programs pmu wrote before the fix: the same bytes | 12024 / 12024 |
+| 6000.0.52f1 (URP, Shader Graph, VFX Graph; Addressables: 3,967 bundles, 140 scene bundles; pmu, 2026-11-09) | 529 of 558 (before the `has_vrr_api` blocks were skipped: 436) | 30791 (10) | VFX Graph outputs (23: structured buffers), Stylized Water 2's tessellation shaders (2), URP's HDR debug view (2), VR blit, CoreCopy (its framebuffer fetch input, `rp_input_remap`); compute: 109 of 121 compute shaders from their Metal kernels ([above](#metal-kernels-macos-builds-pmu-2026-11-09)) | the 5284 distinct programs pmu wrote before the fix: the same bytes | 12024 / 12024 |
 
 Against Unity's own GLES3 programs of the same game (its Android build), the differences are what
 the HLSL decided by platform: Metal-only uniforms (foveated rendering keywords and its distortion

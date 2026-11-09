@@ -741,13 +741,22 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                             continue;
                         }
                         let mut t = f.sf.read_typetree(*pid)?;
-                        let r = compute::add_gles3(
+                        let mut r = compute::add_gles3(
                             &mut t,
                             &unity,
                             &s.precision,
                             s.replace,
                             s.optimize,
                         )?;
+                        // a macOS build's kernels: Metal only (pmu's own, 2026-11-09)
+                        if r.why.starts_with("no OpenGL Core")
+                            && s.sources.iter().any(|x| x == "metal")
+                        {
+                            let rm = compute::add_gles3_metal(&mut t, &unity)?;
+                            if rm.from_metal {
+                                r = rm;
+                            }
+                        }
                         if r.status == "converted" {
                             f.sf.save_typetree(*pid, &t)?;
                             n += 1;
