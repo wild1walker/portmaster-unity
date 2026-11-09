@@ -39,7 +39,6 @@ fi
 # ports run as a user, and the port's libpmhwdec (pmhwdec/) needs them for the videos. They are opened to
 # the video group for the game and put back exactly as they were when it ends (Knifethrower's fix;
 # PortMaster's Moonlight opens the same nodes). Nothing changes where they are usable already.
-[ -d "$GAMEDIR/pmhwdec" ] && rm -rf "$GAMEDIR/pmhw"   # the folder's name in releases before 2026-11-09
 pmhwdec_nodes=()
 if [ -d "$GAMEDIR/pmhwdec" ]; then
   for n in /dev/vpu_service /dev/hevc_service; do

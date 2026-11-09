@@ -185,7 +185,7 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "hw") || !strcmp(mode, "path") || !strcmp(mode, "h264env") || vp8) {
         CHECK(exact_n == frames, "every picture exactly the pattern (%d of %d)", exact_n, frames);
         CHECK(vp8 || (st && st->sps_before_first_slice), "the parameter sets went ahead of the first slice");
-        CHECK(st && st->again > 0, "PMHW_AGAIN was waited out (%d times)", st ? st->again : 0);
+        CHECK(st && st->again > 0, "PMHWDEC_AGAIN was waited out (%d times)", st ? st->again : 0);
         CHECK(st && st->held_max == 1, "each picture handed back before the next (%d out at once)", st ? st->held_max : -1);
     } else if (!strcmp(mode, "midway")) {
         int first10 = 1;

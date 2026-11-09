@@ -143,7 +143,7 @@ must not carry an H.264 decoder: H.264 clips then play only where the handheld h
 | `UM_H264=openh264` | OpenH264 for every H.264 stream the hardware decoder (`UM_PMHWDEC`) does not take, B-frames included |
 | `UM_H264=ffmpeg` | libavcodec for every H.264 stream the hardware decoder does not take, when it is there (`UM_FFMPEG`): its threads and NEON code take 1080p that OpenH264's single thread cannot keep up with on four Cortex-A53s (a 1080p Constrained Baseline clip on an H700: 2.7x real time against 0.6x) |
 | `UM_FFMPEG=0` / `=<path>` | no system libavcodec / that libavcodec (e.g. a port's own LGPL build, on a firmware that has none) |
-| `UM_PMHWDEC=0` / `=<path>` | no hardware decoding / that libpmhwdec (a port's own copy; otherwise `libpmhwdec.so.1` from the library path). `UM_H264` chooses only among the software decoders behind it. `UM_PMHW`, its name before 2026-11-09, is still read |
+| `UM_PMHWDEC=0` / `=<path>` | no hardware decoding / that libpmhwdec (a port's own copy; otherwise `libpmhwdec.so.1` from the library path). `UM_H264` chooses only among the software decoders behind it. |
 | `ANDROID_SHIM_LIBEGL`, `UM_LIBGLES` | the libEGL / libGLESv2 the surface code opens (the ones Unity uses; default `libEGL.so.1`, `libGLESv2.so.2`) |
 
 The host's log names the decoders at start: `[media] decoders: vp8 (libvpx-vp8), ...`.

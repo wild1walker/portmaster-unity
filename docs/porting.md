@@ -590,9 +590,7 @@ costs only while it plays: game play frames decode nothing.
   Allwinner decoder the library starts from its own folder (aarch64 for both: those handhelds run
   64-bit kernels). Ship them with the port's `[build]` (Hollow Knight's port.toml: the script as a
   command, the two files as outputs in `pmhwdec/`, the three licences) and set `UM_PMHWDEC =
-  "pmhwdec/libpmhwdec.so.1"` in `[runtime]` (the folder and the variable are named after the library, pmhwdec, as
-  Knifethrower asked; releases before 2026-11-09 had `pmhw/` and `UM_PMHW`, which ua_host still reads and
-  the launcher templates remove where `pmhwdec/` is there): a path in the port folder, `ua_host`'s working folder
+  "pmhwdec/libpmhwdec.so.1"` in `[runtime]`: a path in the port folder, `ua_host`'s working folder
   (`port.env` quotes values, so `$GAMEDIR` would not expand there; the
   launcher's library path holds only the system's folders). The log says what it chose
   (`[media] decoders: ... vp8 (pmhwdec)`, `[media] pmhwdec: VP8 1920x1080 on cedar`). Where its

@@ -1,8 +1,8 @@
 #!/bin/bash
 # build.sh <out dir> [commit]: Knifethrower's libpmhwdec (https://github.com/Knifethrower/pmhwdec,
 # LGPL-2.1-or-later) for a port to ship: ua_host takes video pictures from the handheld's decoder
-# through it (H.264, HEVC; VP8 from commit 27e1bf1; commit 332413f, the default here,
-# names its programs pmhwdec-cedard and pmhwdec-test). Built with this repository's
+# through it (H.264, HEVC; VP8 from commit 27e1bf1; commit 858cb05, the default here,
+# names everything pmhwdec). Built with this repository's
 # images (no clang or Debian sysroot needed): <out>/armhf/libpmhwdec.so.1 for the android route's
 # 32-bit ua_host (ua-host-armhf), <out>/arm64/libpmhwdec.so.1 for the arm64 routes (ua-build-arm64),
 # and <out>/aarch64/pmhwdec-cedard, the Allwinner decoder (GPL-2.0-or-later, a separate program the
@@ -16,7 +16,7 @@
 # launcher opens the decoder's nodes (docs/porting.md). MPP_ARM64=1 builds <out>/arm64's too (slow:
 # emulated). The sources are cloned into <out>/src; the port ships their licences.
 set -euo pipefail
-OUT=$(mkdir -p "$1" && cd "$1" && pwd); REV=${2:-332413f}
+OUT=$(mkdir -p "$1" && cd "$1" && pwd); REV=${2:-858cb05}
 SRC=$OUT/src
 [ -d "$SRC/pmhwdec/.git" ] || git clone -q https://github.com/Knifethrower/pmhwdec "$SRC/pmhwdec"
 git -C "$SRC/pmhwdec" fetch -q origin && git -C "$SRC/pmhwdec" checkout -q "$REV"
@@ -49,7 +49,7 @@ C="-DENABLE_H264D=ON -DENABLE_H265D=ON -DENABLE_VP8D=ON -DMPP_HW_LIST=VDPU2,VDPU
 for c in AVSD AVS2D H263D MPEG2D MPEG4D VP9D JPEGD AV1D H264E H265E JPEGE VP8E; do C="$C -DENABLE_$c=OFF"; done
 API=$(grep -oE "SYM\([a-z_0-9]+, *\"[a-z_0-9]+\"\)" $H/src/rkmpp.c | grep -oE "\"[a-z_0-9]+\"" | tr -d "\"" | sort -u)
 { echo "{ global:"; echo "$API" | sed "s/$/;/"; echo "local: *; };"; } > /o/mpp-api-$A.map
-S="-ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables -DPMHW_NO_DBG_LOG"
+S="-ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables -DPMHWDEC_NO_DBG_LOG"
 cmake -S $M -B /o/mpp-build-$A -G Ninja -DCMAKE_TOOLCHAIN_FILE=/o/mpp-$A.cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=OFF \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON $C -DCMAKE_C_FLAGS_RELEASE="-Os -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-Os -DNDEBUG" \
   -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed -lm -Wl,-z,defs -Wl,--gc-sections -Wl,--version-script=/o/mpp-api-$A.map" \
