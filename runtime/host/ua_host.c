@@ -79,6 +79,7 @@ static char libdir[512];
 static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32], pj_unity[32];
 static char pj_scripting[16];                  // "mono": a Mono game on the IL2CPP player (mono64.c)
 static char pj_quality[256];                   // the quality step's caps, "msaa=0,pixel_lights=1,..." (quality.c)
+static int pj_compute_group;                   // the largest work group of the converter's split kernels (glhooks.c)
 static int pj_version_code, pj_min_sdk, pj_target_sdk, pj_gc_slice;
 static char pj_meta[4096];                      // "key=value;key=value"
 
@@ -161,6 +162,7 @@ static void read_package_json(const char *root)
     json_str(js, "scripting", pj_scripting, sizeof pj_scripting);
     pj_gc_slice = json_int(js, "gc_time_slice_ms");
     json_str(js, "quality", pj_quality, sizeof pj_quality);
+    pj_compute_group = json_int(js, "compute_group");
 }
 
 // Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
@@ -581,7 +583,8 @@ int main(int argc, char **argv)
     // glrename.c -> glpass.c -> glspec.c -> glopt.c -> glstate.c -> glarena.c -> glpersist.c -> glpresent.c -> msaafix.c -> gltrace.c ->
     // glhooks.c -> the driver
     const so_shim *trace = gltrace_table();    // UA_GL_TRACE
-    g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_SWAP_INTERVAL
+    glhooks_set_compute_group(pj_compute_group);   // UA_COMPUTE_GROUP
+    g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_COMPUTE_GROUP, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
     g_present_shims = glpresent_table(below_glpresent);       // UA_PRESENT_THREAD

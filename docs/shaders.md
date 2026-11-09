@@ -228,18 +228,81 @@ rounding (worst 6e-7 relative), in all three of the fish kernel's movement modes
 reads the other fish while they are written (the game's own race: any GPU's order changes it),
 so it is compared with the fish further apart than they look.
 
-**On the handheld** (RG34XX-SP's Mali-G31, r20p0): the driver links work groups of at most 128
-invocations, and 16 of Dave the Diver's kernels ask for more (256: the fish; 512; 1024: the boids)
-and do not compile there ("'local_size_x' qualifier value exceeds the maximum supported size").
-Not solved yet: such a kernel without shared memory or barriers could run each of 128 threads over
-several of the game's (the dispatch the game makes covers the same threads), but whether Unity's
-GLES player checks the recorded group size against the device first needs a running player.
+**On the handheld** (RG34XX-SP's Mali-G31, r20p0): the driver runs work groups of at most 128
+invocations, the least a GLES 3.1 driver may allow, and 17 of Dave the Diver's kernels ask for more
+(256: the fish; 512; 1024: the boids): "'local_size_x' qualifier value exceeds the maximum
+supported size". 9 of them run after the work-group split (next section); the other 8 share memory.
 
 ```sh
 runtime/host/out/arm64/computecheck <ours.comp> <unity.comp>                  # the same random inputs, outputs compared
 runtime/host/out/arm64/computecheck -x <k.comp> -g 1,1,1 s0=<file> u1=<file>   # given inputs, <file>.out after
 tools/metalrun/metalrun <k.metal> 256,1,1 1,1,1 0=<file> 2=<file>             # the Metal kernel, on the Mac
 ```
+
+#### Work groups over 128 invocations (`split_work_group`, pmu, 2026-11-09)
+
+GLES 3.1 only promises 128 invocations in a work group (`GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`;
+the RG34XX-SP's Mali-G31 allows no more), while desktop kernels ask for up to 1,024. A GLES3
+kernel the step writes (from OpenGL Core or from Metal) whose `local_size` is over 128 and whose
+invocations share nothing (no `shared` memory, no `barrier()`) is rewritten to run in work groups
+of 128 (`shaderx::glsl::split_work_group`, from `steps/compute.rs`): `main` becomes `pm_main`,
+which reads the built-ins of the invocation it stands for (`gl_LocalInvocationID` becomes
+`pm_LocalInvocationID`; `gl_LocalInvocationIndex`, `gl_GlobalInvocationID` and `gl_WorkGroupSize`
+are made from it and the original size; `gl_WorkGroupID` and `gl_NumWorkGroups` are unchanged), and
+a new `main` runs it for k of the original group's invocations in turn (k: the fewest that divide
+the size into groups of at most 128). Every original invocation still runs once, in its work group,
+with its IDs. Invocations of a group that share nothing may run in any order (GLSL ES 3.10 gives
+them no order and no forward-progress guarantee), so running them one after another is one of the
+orders the original allows: the same results for every kernel without a race. A kernel with shared
+memory or barriers is kept as it is (its invocations must run side by side; it runs where the driver
+allows its group). The run's summary counts the split variants ("N kernel variants run in work
+groups of 128") and names the kernels kept.
+
+What Unity's GLES player does with a kernel's group size (6000.0.61f1 on the RG34XX-SP, a probe
+loading Dave the Diver's converted VerletCompute from its bundle, 2026-11-09): it checks the
+kernel's **recorded** `threadGroupSize` against the driver's limits before it compiles anything
+("Compute shader (VerletCompute): Kernel (0) size exceeds device limits", then "Kernel at index (0)
+is invalid": `IsSupported` false, whatever the GLSL says); and once the program is linked,
+`GetKernelThreadGroupSizes` gives the **program's** size (`glGetProgramiv`'s
+`GL_COMPUTE_WORK_GROUP_SIZE`: 128 for the split kernel), not the record's. A kernel whose GLSL does
+not compile is only reported invalid. Unity compiles compute programs from source at every launch
+(its program binary cache keeps none). Games size their dispatches either with
+`GetKernelThreadGroupSizes` or with the size written in their C# (the boids' 1,024), so both must see
+the kernel's own size for the dispatch to cover the same invocations. So the record keeps the
+game's size, the split kernel carries it in a line after its layout (`// pm_work_group 256 1 1`,
+`glsl::SPLIT_MARK`), and ua_host answers for the converted data (`runtime/host/glhooks.c`): the
+driver's work group limits (`GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`, `_SIZE`) raised to the largest
+group the step split, which the conversion's journal keeps (`compute_group`) and android-data
+writes into `android_package.json`; and a split kernel's `GL_COMPUTE_WORK_GROUP_SIZE` read from its
+marker line. Data without split kernels has no `compute_group`, and ua_host then answers nothing
+(`UA_COMPUTE_GROUP` overrides; 0: off). A game that reads `SystemInfo.maxComputeWorkGroupSize` sees
+the raised limit; a kernel it then picks that cannot be split (shared memory) fails to compile and
+is reported invalid, as the record check made it before.
+
+Dave the Diver: 11 variants of 9 kernels split (the boids 1,024 -> 128 x 8; the fish and
+VerletCompute 256 -> 128 x 2; VFX Graph's SDF bake 512 -> 128 x 4; Obi's bounds 256 and bucket
+scan 512); the other 24,264 files of the export are the same bytes as before. 8 kept: VFX
+Graph's bitonic sort and SDF scan (VFX Graph cannot draw with OpenGL ES on this GPU anyway: no
+storage buffers in vertex shaders) and Obi's `Reduce` and `ScanInBucketExclusive`. On Mesa
+(llvmpipe runs 1,024 invocations a group), each kernel before and after the split, the same
+inputs, every storage word compared (`computecheck`): 7 write the same words on random inputs (3
+seeds; 3 and 4 work groups). VerletCompute differs on random inputs because its threads then write
+each other's nodes (each thread moves its rope's range of nodes and their parents: random ranges
+and parent indices overlap, a race in the input); with each rope owning its nodes and parents, as
+in the game, the same bytes (70,904 written). Obi's `RuntimeSimplexBounds` declares 9 storage
+buffers (Mesa allows 8). On the handheld's Mali (`shadercheck`, one kernel at a time): the 9 split
+kernels compile and link (Obi's 9 buffers too: it allows 35); the 8 kept fail as before.
+With Unity's own player on the handheld (6000.0.61f1's Mono player from the donor build, under
+ua_host; the donor's script replaced by a probe that loads a ComputeShader from a bundle, reports
+`IsSupported` and `GetKernelThreadGroupSizes`, and runs it on given buffers; the bundle marked for
+Android as android-data does): VerletCompute from Dave the Diver's converted bundle, on the rope
+inputs above. Unsplit: invalid (size over the limits). Split without ua_host's answers: invalid
+(the record). Split, the limits raised: valid, but sized 128,1,1 (the program). Split, with both
+answers: valid, `GetKernelThreadGroupSizes` 256,1,1, and its buffers those of the original kernel
+on Mesa: the roots the same bytes, the nodes 27,166 of 33,792 words the same and the rest within
+4e-4 relative (Mali's and llvmpipe's `sqrt` / `inversesqrt` round differently; the split kernel is
+the same bytes as the original on Mesa). The 15 Obi solvers in Dave the Diver's bundles store
+backend 1 (`m_Backend`; Obi 7 compiles both its Burst and Compute backends in).
 
 ### The files the step reads; asset bundles and scene bundles
 
@@ -1084,7 +1147,7 @@ Unity-Technologies/Graphics 6000.0/staging: Input.hlsl, Shadows.hlsl, LightCooki
 UniversalRenderPipeline.cs). Dave the Diver (6000.0.52f1, Shader Graph and Spine sprites, URP Lit):
 6,893 of its 12,024 distinct programs were over the limit (the Mali refused 3,844 of the first
 8,000 to link: "uniform components (4,156 - 9,978) is greater than ... (4,096)"); those 6,893 change
-and none is over it after, and the other 5,131 are the same bytes as before. On the handheld all 12,024 now link (before: 3,844 of the first 8,000 did not); the only failures left are 17 kernels over its work group size (below).
+and none is over it after, and the other 5,131 are the same bytes as before. On the handheld all 12,024 now link (before: 3,844 of the first 8,000 did not); the only failures left were 17 kernels over its work group size (the work-group split above runs 9 of them).
 
 **The handheld's limits** (`runtime/host/computecheck -l` on the RG34XX-SP, Mali-G31, r20p0): 1,024
 uniform vectors per vertex or fragment stage; uniform blocks 16 KB, 12 a stage; storage buffers 35

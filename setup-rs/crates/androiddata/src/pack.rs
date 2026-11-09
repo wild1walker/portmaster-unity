@@ -3,7 +3,8 @@
 //! for the overflow), the space for both checked before either is written (exit 4, NO_SPACE),
 //! android_package.json and the files beside the archives.
 use crate::android_data::{
-    clone, gc_time_slice, min_sdk, quality_caps, write_plugin_map, Ctx, Stop, NO_SPACE,
+    clone, compute_group, gc_time_slice, min_sdk, quality_caps, write_plugin_map, Ctx, Stop,
+    NO_SPACE,
 };
 use crate::paths;
 use crate::plugins::Survey;
@@ -624,6 +625,13 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
     if sdk != 0 {
         res.set("min_sdk", sdk.into());
         ctx.log(&format!("pack: min_sdk {sdk} (ua_host reports Android API {sdk}: OpenGL ES 3.1+, compute shaders)"));
+    }
+    let group = compute_group(&ctx.args.src);
+    if group > 0 {
+        res.set("compute_group", group.into());
+        ctx.log(&format!(
+            "pack: compute work groups of up to {group} invocations (ua_host reports them as the driver's limits; the converted kernels run them in groups of 128)"
+        ));
     }
     let caps = quality_caps(&ctx.args.src);
     if !caps.is_empty() {

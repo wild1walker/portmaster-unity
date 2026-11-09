@@ -437,11 +437,14 @@ struct KBuf {
 }
 
 /// A translated kernel's resources, for the GLES3 variant's records (translate_kernel).
+/// A constant buffer's members: (name, offset).
+pub type Members = Vec<(String, u32)>;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KernelIface {
     /// constant buffers in Metal's order: name, Metal index, the uniform block's binding, its
     /// members' (name, offset) as Metal lays them out (Unity writes the values there)
-    pub cbs: Vec<(String, u32, u32, Vec<(String, u32)>)>,
+    pub cbs: Vec<(String, u32, u32, Members)>,
     /// read-only storage buffers in Metal's order: name, Metal index, place among them (the
     /// binding: outs.len() + place)
     pub ins: Vec<(String, u32, u32)>,
@@ -1747,7 +1750,11 @@ fn kernel_call(name: &str, args: &[E]) -> R<Option<E>> {
         return uns(format!("MSL: {name}'s arguments"));
     }
     if (f == "atomicMin" || f == "atomicMax") && atomic.base != word.base {
-        return uns(format!("MSL: {name} on {} as {}", word.glsl(), atomic.glsl()));
+        return uns(format!(
+            "MSL: {name} on {} as {}",
+            word.glsl(),
+            atomic.glsl()
+        ));
     }
     let mut v = convert(v, &word)?;
     if name == "atomic_fetch_sub_explicit" {
@@ -2314,7 +2321,10 @@ fn declare_kernel(st: &mut Stage, params: &[(Vec<String>, Vec<String>)]) -> R<()
         };
         if let (Some((g, gt)), Some(t)) = (builtin, parse_type(first)) {
             if t.kind != "vec" || t.n > gt.n {
-                return uns(format!("MSL: kernel parameter {} [[ {a} ]]", ptoks.join(" ")));
+                return uns(format!(
+                    "MSL: kernel parameter {} [[ {a} ]]",
+                    ptoks.join(" ")
+                ));
             }
             let mut x = e(g, gt);
             if x.t.n > t.n {
@@ -2323,7 +2333,10 @@ fn declare_kernel(st: &mut Stage, params: &[(Vec<String>, Vec<String>)]) -> R<()
             st.globals.insert(name, (convert(&x, &t)?.s, t));
             continue;
         }
-        return uns(format!("MSL: kernel parameter {} [[ {a} ]]", ptoks.join(" ")));
+        return uns(format!(
+            "MSL: kernel parameter {} [[ {a} ]]",
+            ptoks.join(" ")
+        ));
     }
     Ok(())
 }
@@ -2332,17 +2345,89 @@ fn declare_kernel(st: &mut Stage, params: &[(Vec<String>, Vec<String>)]) -> R<()
 fn glsl_reserved(n: &str) -> bool {
     n.starts_with("gl_")
         || [
-            "attribute", "const", "uniform", "varying", "buffer", "shared", "coherent", "volatile",
-            "restrict", "readonly", "writeonly", "atomic_uint", "layout", "centroid", "flat",
-            "smooth", "noperspective", "patch", "sample", "break", "continue", "do", "for",
-            "while", "switch", "case", "default", "if", "else", "subroutine", "in", "out",
-            "inout", "float", "int", "uint", "void", "bool", "true", "false", "invariant",
-            "precise", "discard", "return", "lowp", "mediump", "highp", "precision", "struct",
-            "common", "partition", "active", "asm", "class", "union", "enum", "typedef",
-            "template", "this", "resource", "goto", "inline", "noinline", "public", "static",
-            "extern", "external", "interface", "long", "short", "double", "half", "fixed",
-            "unsigned", "superp", "input", "output", "filter", "sizeof", "cast", "namespace",
-            "using", "main",
+            "attribute",
+            "const",
+            "uniform",
+            "varying",
+            "buffer",
+            "shared",
+            "coherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+            "atomic_uint",
+            "layout",
+            "centroid",
+            "flat",
+            "smooth",
+            "noperspective",
+            "patch",
+            "sample",
+            "break",
+            "continue",
+            "do",
+            "for",
+            "while",
+            "switch",
+            "case",
+            "default",
+            "if",
+            "else",
+            "subroutine",
+            "in",
+            "out",
+            "inout",
+            "float",
+            "int",
+            "uint",
+            "void",
+            "bool",
+            "true",
+            "false",
+            "invariant",
+            "precise",
+            "discard",
+            "return",
+            "lowp",
+            "mediump",
+            "highp",
+            "precision",
+            "struct",
+            "common",
+            "partition",
+            "active",
+            "asm",
+            "class",
+            "union",
+            "enum",
+            "typedef",
+            "template",
+            "this",
+            "resource",
+            "goto",
+            "inline",
+            "noinline",
+            "public",
+            "static",
+            "extern",
+            "external",
+            "interface",
+            "long",
+            "short",
+            "double",
+            "half",
+            "fixed",
+            "unsigned",
+            "superp",
+            "input",
+            "output",
+            "filter",
+            "sizeof",
+            "cast",
+            "namespace",
+            "using",
+            "main",
         ]
         .contains(&n)
 }
@@ -2352,12 +2437,17 @@ fn glsl_reserved(n: &str) -> bool {
 /// and 12 in std140, so a member after one gets padding floats before it. Arrays of float4 /
 /// float3 and float4x4 / float3x3 matrices have the same stride in both; other arrays, bools
 /// and 2-row matrices are refused. -> (the block's member lines, each member's (name, offset))
-fn std140_members(sname: &str, mems: &[(String, T, Vec<String>)]) -> R<(Vec<String>, Vec<(String, u32)>)> {
+fn std140_members(sname: &str, mems: &[(String, T, Vec<String>)]) -> R<(Vec<String>, Members)> {
     let align = |x: u32, a: u32| x.div_ceil(a) * a;
     let (mut lines, mut offs) = (Vec::new(), Vec::new());
     let (mut moff, mut soff, mut pads) = (0u32, 0u32, 0);
     for (mn, mt, _) in mems {
-        let bad = || uns(format!("MSL: constant buffer {sname}: {mn} of {}", mt.glsl()));
+        let bad = || {
+            uns(format!(
+                "MSL: constant buffer {sname}: {mn} of {}",
+                mt.glsl()
+            ))
+        };
         // (Metal size, alignment; std140 size, alignment; the GLSL array suffix)
         let (msz, mal, ssz, sal, arr) = match mt.kind {
             "vec" if mt.base != "bool" => match mt.n {
@@ -2507,11 +2597,7 @@ fn extract_helper(t: &str) -> String {
 /// One kernel variant's MSL (`kernel void computeMain(...)`, HLSLcc's) -> its GLSL ES 3.10
 /// compute shader with the thread group size Unity records for it, and its resources. uavs: the
 /// storage buffers the kernel's records list as writable (outBuffers).
-pub fn translate_kernel(
-    msl: &str,
-    group: [i64; 3],
-    uavs: &[String],
-) -> R<(String, KernelIface)> {
+pub fn translate_kernel(msl: &str, group: [i64; 3], uavs: &[String]) -> R<(String, KernelIface)> {
     let (st, body) = translate_stage(msl, true)?;
     if st.stage != Some("COMPUTE") {
         return uns("MSL: not a kernel");
@@ -2589,7 +2675,9 @@ static LAST_WORD: LazyLock<Regex> = LazyLock::new(|| re(r"(\w+);\n?\z"));
 pub const MAX_UNIFORM_VECTORS: u32 = 1024;
 
 static UNIFORM_DECL: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"(?m)^(?:UNITY_LOCATION\(\d+\) )?uniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+(\w+)(?:\[(\d+)\])?\s*;")
+    re(
+        r"(?m)^(?:UNITY_LOCATION\(\d+\) )?uniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+(\w+)(?:\[(\d+)\])?\s*;",
+    )
 });
 
 /// The uniform vectors a stage's plain uniforms take, as the Mali counts them: a row per scalar or
@@ -2669,7 +2757,10 @@ fn program(
     if flips > 0 {
         notes.push(format!("VERTEX uv-origin {flips}"));
     }
-    if texts.iter().any(|(_, t)| uniform_vectors(t) > MAX_UNIFORM_VECTORS) {
+    if texts
+        .iter()
+        .any(|(_, t)| uniform_vectors(t) > MAX_UNIFORM_VECTORS)
+    {
         for (st, t) in texts.iter_mut() {
             let (s, n) = urp_mobile_lights(t);
             *t = s;

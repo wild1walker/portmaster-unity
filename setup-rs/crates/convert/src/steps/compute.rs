@@ -57,6 +57,14 @@ pub struct ComputeResult {
     pub notes: Vec<String>,
     /// the GLES3 variant made from the Metal one (add_gles3_metal)
     pub from_metal: bool,
+    /// kernel variants whose work group was split to GLES 3.1's minimum (split_group)
+    pub split: usize,
+    /// the most invocations a split kernel's work group has (its record's threadGroupSize): what
+    /// the device must be said to allow for Unity to run it (JOURNAL_GROUP)
+    pub split_max: u64,
+    /// kernels over that minimum that cannot be split, and why (kept: they run where the driver
+    /// allows their work group)
+    pub unsplit: Vec<(String, String)>,
 }
 
 impl std::fmt::Display for ComputeResult {
@@ -413,8 +421,9 @@ fn translate_kernel(
     vkk: Option<&Value>,
     precision: &str,
     optimize: Optimize,
-    notes: &mut Vec<String>,
+    r: &mut ComputeResult,
 ) -> Result<std::result::Result<Vec<Vec<u8>>, String>> {
+    let name = kernel_name(k);
     let kws = variant_keywords(k)?;
     let mut done = Vec::new();
     for (vi, kv) in kernel_variants(k)?.into_iter().enumerate() {
@@ -433,9 +442,9 @@ fn translate_kernel(
                 vi,
             )?)
         };
-        match glsl::kernel_to_es(text, precision, formats.as_ref(), optimize, notes) {
+        match glsl::kernel_to_es(text, precision, formats.as_ref(), optimize, &mut r.notes) {
             Ok(s) => {
-                let mut out = s.into_bytes();
+                let mut out = split_group(s, &name, r).into_bytes();
                 if code.last() == Some(&0) {
                     out.push(0);
                 }
@@ -445,6 +454,37 @@ fn translate_kernel(
         }
     }
     Ok(Ok(done))
+}
+
+/// The conversion's journal key with the most invocations of a work group the step split (the
+/// largest over every run): android-data writes it into android_package.json as "compute_group",
+/// and ua_host then reports that many as the driver's limits (GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS
+/// and _SIZE), since Unity refuses a kernel whose recorded group is over them ("Kernel size exceeds
+/// device limits") before it compiles it, and the record must stay: the game sizes its dispatches by
+/// it.
+pub const JOURNAL_GROUP: &str = "compute_group";
+
+/// A GLES3 kernel whose work group has more invocations than every GLES 3.1 driver runs
+/// (glsl::ES31_MIN_INVOCATIONS: the RG34XX-SP's Mali-G31 refuses the shader), rewritten to run in
+/// work groups of that size (glsl::split_work_group; the record's threadGroupSize, which the
+/// game's dispatches are sized by, stays). One that cannot be split is kept as it is, noted.
+fn split_group(text: String, name: &str, r: &mut ComputeResult) -> String {
+    let (r_split, unsplit) = (&mut r.split, &mut r.unsplit);
+    match glsl::split_work_group(&text, glsl::ES31_MIN_INVOCATIONS) {
+        Ok(None) => text,
+        Ok(Some((t, size, k))) => {
+            *r_split += 1;
+            let total = size.iter().map(|&n| n as u64).product::<u64>() * k as u64;
+            r.split_max = r.split_max.max(total);
+            t
+        }
+        Err(why) => {
+            if !unsplit.iter().any(|(n, _)| n == name) {
+                unsplit.push((name.to_string(), why));
+            }
+            text
+        }
+    }
 }
 
 fn failed_list(failed: &[(String, String)]) -> String {
@@ -529,7 +569,7 @@ pub fn add_gles3(
             .iter()
             .find(|(x, _)| *x == name)
             .and_then(|(_, l)| l.get(nth));
-        match translate_kernel(&k, vkk, precision, optimize, &mut r.notes)? {
+        match translate_kernel(&k, vkk, precision, optimize, &mut r)? {
             Err(why) => {
                 r.failed.push((name, why));
                 continue;
@@ -617,11 +657,35 @@ pub fn summary(results: &[ComputeResult]) -> String {
             .filter(|r| r.why.starts_with("no OpenGL Core"))
             .count()
     );
+    let mut line = line;
     let metal = cc.iter().filter(|r| r.from_metal).count();
-    if metal == 0 {
-        return line;
+    if metal > 0 {
+        line += &format!("; {metal} from Metal kernels");
     }
-    format!("{line}; {metal} from Metal kernels")
+    let split: usize = cc.iter().map(|r| r.split).sum();
+    if split > 0 {
+        line += &format!(
+            "; {split} kernel variants run in work groups of {} (GLES 3.1's minimum)",
+            glsl::ES31_MIN_INVOCATIONS
+        );
+    }
+    let unsplit: Vec<String> = cc
+        .iter()
+        .flat_map(|r| {
+            r.unsplit
+                .iter()
+                .map(move |(k, _)| format!("{}/{k}", r.name))
+        })
+        .collect();
+    if !unsplit.is_empty() {
+        line += &format!(
+            "; {} kernels need more than {} invocations side by side (shared memory): {}",
+            unsplit.len(),
+            glsl::ES31_MIN_INVOCATIONS,
+            unsplit.join(", ")
+        );
+    }
+    line
 }
 
 pub const RENDERER_METAL: i128 = 16;
@@ -661,7 +725,12 @@ fn gl_cb_name(n: &str) -> String {
 /// Metal records must name what the MSL declares, at the indices it gives them, and the constant
 /// buffer layouts (cbs: the variant's constantBuffers) the offsets Metal gives the members: else
 /// Err(why), the kernel left out.
-fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Result<(), String>> {
+fn metal_kernel_variant(
+    kv: &mut Value,
+    cbs: &[Value],
+    name: &str,
+    r: &mut ComputeResult,
+) -> Result<std::result::Result<(), String>> {
     let code = code_bytes(kv)?;
     // (the code ends with a NUL, as Unity's GL kernels do)
     let msl = match shaderx::metal::msl_of(&code) {
@@ -685,8 +754,14 @@ fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Re
         Err(shaderx::metal::Fault::Crash(m)) => return Ok(Err(m)),
     };
     for list in ["textures", "builtinSamplers"] {
-        if kv.get(list).and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
-            return Ok(Err(format!("{list} recorded for a kernel that declares none")));
+        if kv
+            .get(list)
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
+        {
+            return Ok(Err(format!(
+                "{list} recorded for a kernel that declares none"
+            )));
         }
     }
     // the records against the MSL: the same names at the same Metal indices
@@ -696,7 +771,12 @@ fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Re
             .map(|a| {
                 let mut v: Vec<(String, i128)> = a
                     .iter()
-                    .map(|r| (str_of(r, "name"), r.get("bindPoint").and_then(Value::as_int).unwrap_or(-1)))
+                    .map(|r| {
+                        (
+                            str_of(r, "name"),
+                            r.get("bindPoint").and_then(Value::as_int).unwrap_or(-1),
+                        )
+                    })
                     .collect();
                 v.sort();
                 v
@@ -709,9 +789,18 @@ fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Re
         v
     };
     let checks = [
-        ("cbs", msl_side(iface.cbs.iter().map(|c| (c.0.clone(), c.1)).collect())),
-        ("inBuffers", msl_side(iface.ins.iter().map(|c| (c.0.clone(), c.1)).collect())),
-        ("outBuffers", msl_side(iface.outs.iter().map(|c| (c.0.clone(), c.1)).collect())),
+        (
+            "cbs",
+            msl_side(iface.cbs.iter().map(|c| (c.0.clone(), c.1)).collect()),
+        ),
+        (
+            "inBuffers",
+            msl_side(iface.ins.iter().map(|c| (c.0.clone(), c.1)).collect()),
+        ),
+        (
+            "outBuffers",
+            msl_side(iface.outs.iter().map(|c| (c.0.clone(), c.1)).collect()),
+        ),
     ];
     for (list, want) in &checks {
         if recs(kv, list) != *want {
@@ -740,7 +829,12 @@ fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Re
             return Ok(Err(format!("constant buffer {name}: no layout {}", idx[j])));
         };
         let (_, _, _, offs) = iface.cbs.iter().find(|c| c.0 == *name).unwrap();
-        for p in lay.get("params").and_then(Value::as_array).into_iter().flatten() {
+        for p in lay
+            .get("params")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let pn = str_of(p, "name");
             let po = p.get("offset").and_then(Value::as_int).unwrap_or(-1);
             // (a matrix is HLSLcc's float4 array hlslcc_mtx4x4<name>)
@@ -790,9 +884,25 @@ fn metal_kernel_variant(kv: &mut Value, cbs: &[Value]) -> Result<std::result::Re
         }
     }
     rewrite(kv, "cbs", &order_cb)?;
-    rewrite(kv, "inBuffers", &iface.ins.iter().map(|c| (c.0.clone(), c.2)).collect::<Vec<_>>())?;
-    rewrite(kv, "outBuffers", &iface.outs.iter().map(|c| (c.0.clone(), c.2)).collect::<Vec<_>>())?;
-    let mut bytes = text.into_bytes();
+    rewrite(
+        kv,
+        "inBuffers",
+        &iface
+            .ins
+            .iter()
+            .map(|c| (c.0.clone(), c.2))
+            .collect::<Vec<_>>(),
+    )?;
+    rewrite(
+        kv,
+        "outBuffers",
+        &iface
+            .outs
+            .iter()
+            .map(|c| (c.0.clone(), c.2))
+            .collect::<Vec<_>>(),
+    )?;
+    let mut bytes = split_group(text, name, r).into_bytes();
     bytes.push(0);
     set_code(kv, bytes)?;
     Ok(Ok(()))
@@ -855,7 +965,7 @@ pub fn add_gles3_metal(tree: &mut Value, unity: &str) -> Result<ComputeResult> {
         let mut why = None;
         let mut n = 0;
         for kv in kernel_variants_mut(&mut k)? {
-            if let Err(w) = metal_kernel_variant(kv, &cbs)? {
+            if let Err(w) = metal_kernel_variant(kv, &cbs, &name, &mut r)? {
                 why = Some(w);
                 break;
             }
@@ -870,7 +980,11 @@ pub fn add_gles3_metal(tree: &mut Value, unity: &str) -> Result<ComputeResult> {
         }
     }
     if kept.is_empty() {
-        r.status = if r.failed.is_empty() { "unchanged" } else { "skipped" };
+        r.status = if r.failed.is_empty() {
+            "unchanged"
+        } else {
+            "skipped"
+        };
         r.why = if r.failed.is_empty() {
             "no Metal kernels".into()
         } else {

@@ -2324,6 +2324,22 @@ pub fn min_sdk(ctx: &mut Ctx) -> Result<i64, Stop> {
         })
 }
 
+/// The most invocations of a work group the shaders step split to GLES 3.1's minimum (the
+/// conversion's journal "compute_group"; 0 if none): ua_host reports that many as the driver's
+/// limits, so Unity runs those kernels (their records keep the game's group sizes).
+pub fn compute_group(src: &str) -> i64 {
+    let Ok(b) = fs::read(py::join(src, ".pmunity.json")) else {
+        return 0;
+    };
+    let Ok(j) = pyjson::loads_bytes(&b) else {
+        return 0;
+    };
+    j.get("compute_group")
+        .and_then(|v| v.as_int())
+        .filter(|&n| (1..=1024).contains(&n))
+        .map_or(0, |n| n as i64)
+}
+
 /// The quality step's caps recorded in the conversion's journal ('' if none).
 pub fn quality_caps(src: &str) -> String {
     let Ok(b) = fs::read(py::join(src, ".pmunity.json")) else {

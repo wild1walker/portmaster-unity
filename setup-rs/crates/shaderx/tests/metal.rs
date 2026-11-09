@@ -83,9 +83,14 @@ fragment Mtl_FragmentOut xlatMtlMain(
         .replace(old_block, vrr_block)
         .replace("fragment Mtl_FragmentOut xlatMtlMain(\n", vrr_struct);
     let mut notes = Vec::new();
-    let (text, typ) =
-        translate_program(row["vs"].as_str().unwrap(), &fs6, "highp", (0, 0), &mut notes)
-            .unwrap_or_else(|f| panic!("{f:?}"));
+    let (text, typ) = translate_program(
+        row["vs"].as_str().unwrap(),
+        &fs6,
+        "highp",
+        (0, 0),
+        &mut notes,
+    )
+    .unwrap_or_else(|f| panic!("{f:?}"));
     assert_eq!(text, row["text"].as_str().unwrap());
     assert_eq!(typ, row["type"].as_i64().unwrap());
     assert!(notes.is_empty(), "{notes:?}");
@@ -113,7 +118,12 @@ fn metal_kernel() {
             s("Globals"),
             1,
             0,
-            vec![(s("count"), 0), (s("target"), 16), (s("radius"), 32), (s("colors"), 48)]
+            vec![
+                (s("count"), 0),
+                (s("target"), 16),
+                (s("radius"), 32),
+                (s("colors"), 48)
+            ]
         )]
     );
     assert_eq!(iface.ins, vec![(s("items"), 2, 0), (s("raw"), 3, 1)]);
@@ -138,7 +148,9 @@ fn metal_kernel() {
         );
     let (text3, _) = shaderx::metal::translate_kernel(&with_extract, [64, 1, 1], &[]).unwrap();
     assert!(text3.contains("uint pm_bitFieldExtractU(uint width, uint offset, uint src)\n{"));
-    assert!(text3.contains("u_xlatu2 = pm_bitFieldExtractU(0x8u, 0x10u, raw_buf[int(gl_GlobalInvocationID.x)])"));
+    assert!(text3.contains(
+        "u_xlatu2 = pm_bitFieldExtractU(0x8u, 0x10u, raw_buf[int(gl_GlobalInvocationID.x)])"
+    ));
     // what is not translated says why
     let refuse = |from: &str, to: &str, why: &str| {
         let msl = msl.replace(from, to);
@@ -221,15 +233,33 @@ fn metal_urp_mobile_lights() {
     let src = with(&four);
     assert!(src.contains("AdditionalLights._AdditionalLightsSpotDir[u_xlati1 & 0xf]"));
     let mut notes = Vec::new();
-    let (text, _) = translate_program(row["vs"].as_str().unwrap(), &src, "highp", (0, 0), &mut notes)
-        .unwrap_or_else(|f| panic!("{f:?}"));
+    let (text, _) = translate_program(
+        row["vs"].as_str().unwrap(),
+        &src,
+        "highp",
+        (0, 0),
+        &mut notes,
+    )
+    .unwrap_or_else(|f| panic!("{f:?}"));
     for a in four {
-        assert!(text.contains(&format!("uniform vec4 {a}[32];")), "{a}: {text}");
+        assert!(
+            text.contains(&format!("uniform vec4 {a}[32];")),
+            "{a}: {text}"
+        );
     }
-    assert!(notes.contains(&"FRAGMENT urp-mobile-lights 4".to_string()), "{notes:?}");
+    assert!(
+        notes.contains(&"FRAGMENT urp-mobile-lights 4".to_string()),
+        "{notes:?}"
+    );
     let mut notes = Vec::new();
-    let (text, _) = translate_program(row["vs"].as_str().unwrap(), &with(&four[..1]), "highp", (0, 0), &mut notes)
-        .unwrap();
+    let (text, _) = translate_program(
+        row["vs"].as_str().unwrap(),
+        &with(&four[..1]),
+        "highp",
+        (0, 0),
+        &mut notes,
+    )
+    .unwrap();
     assert!(text.contains("uniform vec4 _AdditionalLightsPosition[256];"));
     assert!(notes.is_empty(), "{notes:?}");
 }

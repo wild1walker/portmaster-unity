@@ -8,6 +8,17 @@
 //   Both turn off Unity's program binary cache (data/cache/UnityShaderCache: cached programs are
 //   never compiled from source, and an overridden program must not be cached under the original's
 //   key): GL_NUM_PROGRAM_BINARY_FORMATS reads 0.
+//   UA_COMPUTE_GROUP=<n>      the compute work group limits the driver reports, raised to n
+//                             invocations (GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS; _SIZE x and y n, z
+//                             at most 64): android_package.json's "compute_group", written for data
+//                             whose kernels the converter split to run in groups of 128 (GLES 3.1's
+//                             least; docs/shaders.md, "Work groups over 128 invocations"). Unity
+//                             checks a kernel's recorded group size against these limits before it
+//                             compiles it ("Kernel size exceeds device limits"); the record stays the
+//                             game's, which its dispatches are sized by. And glGetProgramiv's
+//                             GL_COMPUTE_WORK_GROUP_SIZE, which Unity reads after linking a kernel
+//                             (GetKernelThreadGroupSizes), gives a split kernel's own size, the one
+//                             its marker line names ("// pm_work_group x y z"). 0: the driver's
 //   UA_SWAP_INTERVAL=<n>      eglSwapInterval value used whatever Unity asks for (0: no vsync, so
 //                             frame times show the real CPU/GPU cost instead of vsync steps)
 //   UA_GL_PROGLOG=1           logs how long each shader compile, program link and program binary
@@ -43,10 +54,13 @@
 typedef void (*shader_source_fn)(unsigned, int, const char *const *, const int *);
 typedef unsigned (*swap_interval_fn)(void *, int);
 typedef void (*get_integerv_fn)(unsigned, int *);
+typedef void (*get_integeri_v_fn)(unsigned, unsigned, int *);
 
 static shader_source_fn r_ShaderSource;
 static swap_interval_fn r_SwapInterval;
 static get_integerv_fn r_GetIntegerv;
+static get_integeri_v_fn r_GetIntegeri_v;
+static int g_compute_group;                  // UA_COMPUTE_GROUP / android_package.json's compute_group
 static const char *g_dump, *g_override;
 static int g_proglog;
 
@@ -453,10 +467,89 @@ static void proglog_first_frame(void)
     fprintf(stderr, "; EGL_ANDROID_blob_cache %s\n", ext ? (strstr(ext, "EGL_ANDROID_blob_cache") ? "yes" : "no") : "?");
 }
 
+#define GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS 0x90EB
+#define GL_MAX_COMPUTE_WORK_GROUP_SIZE 0x91BF
+
+// the limit reported for a query (slot: invocations, size x, y, z), the driver's when higher;
+// logged once per query
+static int compute_limit(int slot, int driver, int n)
+{
+    static const char *what[4] = { "invocations", "size x", "size y", "size z" };
+    static int said[4];
+    if (n <= driver) return driver;
+    if (!said[slot]) {
+        said[slot] = 1;
+        fprintf(stderr, "[gl] compute work group %s: %d reported (the driver's: %d; the converted kernels run in groups of 128)\n", what[slot], n, driver);
+    }
+    return n;
+}
+
 static void w_GetIntegerv(unsigned pname, int *data)
 {
     r_GetIntegerv(pname, data);
-    if (pname == GL_NUM_PROGRAM_BINARY_FORMATS && data) *data = 0;
+    if (!data) return;
+    if (pname == GL_NUM_PROGRAM_BINARY_FORMATS && (g_dump || g_override)) *data = 0;
+    else if (pname == GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS && g_compute_group > 0)
+        *data = compute_limit(0, *data, g_compute_group);
+}
+
+static void w_GetIntegeri_v(unsigned pname, unsigned i, int *data)
+{
+    r_GetIntegeri_v(pname, i, data);
+    if (data && pname == GL_MAX_COMPUTE_WORK_GROUP_SIZE && i < 3 && g_compute_group > 0)
+        *data = compute_limit(1 + (int)i, *data, i < 2 || g_compute_group < 64 ? g_compute_group : 64);
+}
+
+// glGetProgramiv: a split kernel's work group size is the one its marker line names (the converter's
+// "// pm_work_group x y z", shaderx glsl::SPLIT_MARK), read from the program's compute shader:
+// Unity takes a kernel's thread group size from the linked program, and the game sizes its
+// dispatches by it (GetKernelThreadGroupSizes)
+#define GL_COMPUTE_WORK_GROUP_SIZE 0x8267
+#define GL_SHADER_SOURCE_LENGTH_ 0x8B88
+typedef void (*cg_programiv_fn)(unsigned, unsigned, int *);
+typedef void (*cg_attached_fn)(unsigned, int, int *, unsigned *);
+typedef void (*cg_shader_source_fn)(unsigned, int, int *, char *);
+static cg_programiv_fn r_cg_GetProgramiv, r_cg_GetShaderiv;
+static cg_attached_fn r_cg_GetAttachedShaders;
+static cg_shader_source_fn r_cg_GetShaderSource;
+
+static void w_GetProgramiv(unsigned p, unsigned pname, int *v)
+{
+    r_cg_GetProgramiv(p, pname, v);
+    if (pname != GL_COMPUTE_WORK_GROUP_SIZE || !v) return;
+    unsigned sh[4];
+    int n = 0;
+    r_cg_GetAttachedShaders(p, 4, &n, sh);
+    for (int i = 0; i < n && i < 4; i++) {
+        int len = 0;
+        r_cg_GetShaderiv(sh[i], GL_SHADER_SOURCE_LENGTH_, &len);
+        if (len <= 0 || len > (16 << 20)) continue;
+        char *src = malloc((size_t)len);
+        if (!src) continue;
+        r_cg_GetShaderSource(sh[i], len, NULL, src);
+        src[len - 1] = 0;
+        static const char mark[] = "\n// pm_work_group ";
+        const char *m = strstr(src, mark);
+        unsigned x, y, z;
+        if (m && sscanf(m + sizeof mark - 1, "%u %u %u", &x, &y, &z) == 3 && x && y && z && (uint64_t)x * y * z <= 1024) {
+            static int said;
+            if (!said) {
+                said = 1;
+                fprintf(stderr, "[gl] compute program %u: work group %ux%ux%u reported (its kernel's own; it runs in groups of %dx%dx%d)\n",
+                        p, x, y, z, v[0], v[1], v[2]);
+            }
+            v[0] = (int)x; v[1] = (int)y; v[2] = (int)z;
+        }
+        free(src);
+        break;
+    }
+}
+
+void glhooks_set_compute_group(int n)
+{
+    const char *e = getenv("UA_COMPUTE_GROUP");
+    if (e && *e) n = atoi(e);
+    g_compute_group = n > 1024 ? 1024 : n;
 }
 
 static unsigned w_SwapInterval(void *dpy, int n)
@@ -492,7 +585,7 @@ void glhooks_first_frame(void)
     fprintf(stderr, "[gl] swap interval %d: %s\n", atoi(e), ok ? "set" : "failed");
 }
 
-static so_shim g_shims[24];
+static so_shim g_shims[32];
 
 const so_shim *glhooks_table(void)
 {
@@ -504,9 +597,22 @@ const so_shim *glhooks_table(void)
     if (g_dump || g_override) {
         r_ShaderSource = (shader_source_fn)gl_real("libGLESv2.so.2", "libGLESv2.so", "glShaderSource");
         if (r_ShaderSource) g_shims[k++] = (so_shim){ "glShaderSource", (void *)w_ShaderSource };
+        if (g_dump) mkdir(g_dump, 0755);
+    }
+    if (g_dump || g_override || g_compute_group > 0) {
         r_GetIntegerv = (get_integerv_fn)gl_real("libGLESv2.so.2", "libGLESv2.so", "glGetIntegerv");
         if (r_GetIntegerv) g_shims[k++] = (so_shim){ "glGetIntegerv", (void *)w_GetIntegerv };
-        if (g_dump) mkdir(g_dump, 0755);
+    }
+    if (g_compute_group > 0) {
+        const char *L2 = "libGLESv2.so.2", *A2 = "libGLESv2.so";
+        r_GetIntegeri_v = (get_integeri_v_fn)gl_real(L2, A2, "glGetIntegeri_v");
+        if (r_GetIntegeri_v) g_shims[k++] = (so_shim){ "glGetIntegeri_v", (void *)w_GetIntegeri_v };
+        r_cg_GetProgramiv = (cg_programiv_fn)gl_real(L2, A2, "glGetProgramiv");
+        r_cg_GetShaderiv = (cg_programiv_fn)gl_real(L2, A2, "glGetShaderiv");
+        r_cg_GetAttachedShaders = (cg_attached_fn)gl_real(L2, A2, "glGetAttachedShaders");
+        r_cg_GetShaderSource = (cg_shader_source_fn)gl_real(L2, A2, "glGetShaderSource");
+        if (r_cg_GetProgramiv && r_cg_GetShaderiv && r_cg_GetAttachedShaders && r_cg_GetShaderSource)
+            g_shims[k++] = (so_shim){ "glGetProgramiv", (void *)w_GetProgramiv };
     }
     g_proglog = getenv("UA_GL_PROGLOG") && atoi(getenv("UA_GL_PROGLOG")) > 0;
     g_progcache = getenv("UA_GL_PROGCACHE") && atoi(getenv("UA_GL_PROGCACHE")) > 0;

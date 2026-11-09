@@ -824,6 +824,18 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     if !cresults.is_empty() {
         job.log(&compute::summary(&cresults));
+        let most = cresults.iter().map(|r| r.split_max).max().unwrap_or(0);
+        let old = job
+            .state
+            .get(compute::JOURNAL_GROUP)
+            .and_then(Json::as_int)
+            .unwrap_or(0)
+            .max(0) as u64;
+        if most > old {
+            job.state
+                .set(compute::JOURNAL_GROUP, Json::Int(most as i128));
+            job.save_state()?;
+        }
     }
     if let Some(line) = metal::summary(&results) {
         job.log(&line);
