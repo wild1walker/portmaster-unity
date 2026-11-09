@@ -759,6 +759,15 @@ from the port's settings with the HUD patch, A B and B A, the room's content che
 | + Realtime Reflections off | 53.14, 53.23 | 53.00, 52.39 |
 | + Low debris (no shell casings, at most 50 debris pieces, no wall chips from enemy shots) | 54.89 (one order; 53.04 without) | 55.04, 54.57 (52.36, 53.27 without) |
 
+The ports' rule since 2026-11-08 is the game's lowest options with no setup question
+([porting.md](porting.md#the-games-own-options-lowest-and-the-games-rules-kept)): Gungeon's port
+writes Lighting Low, Shaders Very Low (the Options menu's lowest: one combined post pass instead of
+the separate vignette, fade and G-buffer passes, and the camera snapped to the pixel grid), Realtime
+Reflections off and Debris Low. Against Low lighting and shaders alone, the same fight (its room
+checked on screenshots), A B and B A: Knulli 49.87 / 49.47 -> 58.03 / 58.53 fps; muOS, with the
+Wwise fix below, 49.54 / 49.36 -> 59.44 / 59.40, frames over 33 ms 1 / 0, none over 50 ms, the room
+entry 52 -> 61 fps.
+
 Very Low debris measured 58 fps on both, but it is not the same fight: Very Low also leaves out wall and
 surface decorations while the floor is built, which draws the floor's random numbers differently, and the
 fixed seed then gave another room content (its screenshots show other decorations and no enemies on screen).
