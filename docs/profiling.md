@@ -1998,7 +1998,14 @@ What it took, in order:
   main 717884e; the setup 1122 s, the tools' peak 335 MB): **fight 40.13 / 39.11 fps, room entry
   38.88 / 39.72, p99 33 - 35 ms in the fight, lowest MemAvailable 107 - 109 MB**.
 
-Hitches left (the same runs): the room entry has 12 - 13 frames over 50 ms (p99 75 - 100 ms). Loads
+Hitches left (the same runs): the room entry has 12 - 18 frames over 50 ms (p99 80 - 118 ms). In
+them (`UA_PROF=200` over the entry, `profsum.py --slow 50`: 20 frames) UnityMain is on a CPU 66 % of
+the time, 46 % of that in Mono's runtime: the JIT compiling the enemies' code at its first use
+(`BehaviorSpeculator.Update`, `UpdateBehaviors`, `get_LocalDeltaTime`, dfGUI's `get_IsVisible`); the
+other 34 % it waits for the render thread, which links 3 GPU programs there (317 ms; `UA_GL_PROGLOG`).
+Every launch also links about 150 programs before the first frame (10 s of the time to the title),
+with or without the GL thread, though Unity's binary cache holds 258 and loads about 150 from it: why
+it links the others again each launch is open. Loads
 are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
 loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
 behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'
