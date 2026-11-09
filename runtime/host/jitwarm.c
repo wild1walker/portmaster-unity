@@ -10,6 +10,11 @@
 //                   game changed) is left out; generic instances are not listed (a token names their
 //                   definition). Logged: "[jitwarm] <n> listed", "[jitwarm] <n> compiled ahead in
 //                   <ms> ms (<n> already compiled, <n> not found)".
+// Unity 2017.x's old Mono (2.6) has no jit-done callback of the new profiler API: there the methods are listed
+// through its legacy profiler (mono_profiler_install_jit_compile, as UA_JIT_LOG reads them; Mono 2.6 has one
+// profiler, so with UA_JIT_LOG on as well nothing new is listed). There it takes UA_JIT_WARM=2: the launchers'
+// default 1 predates it, and a port turns it on once it has checked its game's static field initializers
+// (below).
 // What the game does is the same: the methods it would compile, compiled earlier on the same thread.
 // One thing moves with them: Mono runs the static field initializers of a class without its own
 // static constructor (beforefieldinit) when it compiles a method that uses its static fields, so
@@ -96,6 +101,8 @@ static int generic_instance(const char *name)
     return lt && lt != m;
 }
 
+static void on_begin(void *prof, void *method) { (void)prof; (void)method; }   // (Mono 2.6's legacy API calls both)
+
 static void on_done(void *prof, void *method, void *jinfo)
 {
     (void)prof; (void)jinfo;
@@ -117,7 +124,7 @@ static void on_done(void *prof, void *method, void *jinfo)
 void jitwarm_init(void)
 {
     const char *e = getenv("UA_JIT_WARM");
-    g_on = e && *e && *e != '0';
+    g_on = e && *e && *e != '0' ? (atoi(e) >= 2 ? 2 : 1) : 0;
     if ((e = getenv("UA_JIT_WARM_MS")) && atof(e) >= 0) g_budget = atof(e) / 1000;
 }
 
@@ -164,16 +171,38 @@ static void install(void)
         m_get_method = (void *(*)(void *, unsigned, void *))so_dlsym(h, "mono_get_method");
         m_compile = (void *(*)(void *))so_dlsym(h, "mono_compile_method");
     }
-    if (!create || !sd || !m_full_name || !m_get_class || !m_class_image || !m_image_name || !m_image_loaded ||
+    // Unity 2017.x's Mono 2.6: the legacy profiler's JIT events (its end callback's third argument is
+    // the result, which on_done does not read)
+    void (*l_install)(void *, void *) = h ? (void (*)(void *, void *))so_dlsym(h, "mono_profiler_install") : NULL;
+    void (*l_jit)(void *, void *) = h ? (void (*)(void *, void *))so_dlsym(h, "mono_profiler_install_jit_compile") : NULL;
+    void (*l_events)(int) = h ? (void (*)(int))so_dlsym(h, "mono_profiler_set_events") : NULL;
+    int legacy = (!create || !sd) && l_install && l_jit && l_events;
+    if (legacy && g_on < 2) {
+        fprintf(stderr, "[jitwarm] Mono 2.6: off (UA_JIT_WARM=2 turns it on once a port has checked its static field initializers)\n");
+        g_on = 0;
+        return;
+    }
+    if (legacy && !m_free && h) m_free = (void (*)(void *))so_dlsym(h, "g_free");
+    if ((!legacy && (!create || !sd)) || !m_full_name || !m_get_class || !m_class_image || !m_image_name || !m_image_loaded ||
         !m_token || !m_get_method || !m_compile) {
         fprintf(stderr, "[jitwarm] not a Mono player (or its API is missing): off\n");
         g_on = 0;
         return;
     }
     read_list();
-    g_out = fopen(LIST, "a");
-    if (!g_out) fprintf(stderr, "[jitwarm] cannot write %s: nothing new is listed\n", LIST);
-    sd(create(NULL), on_done);
+    const char *jl = getenv("UA_JIT_LOG");
+    if (legacy && jl && *jl && *jl != '0')
+        fprintf(stderr, "[jitwarm] UA_JIT_LOG holds Mono 2.6's one profiler: compiled ahead, nothing new listed\n");
+    else {
+        g_out = fopen(LIST, "a");
+        if (!g_out) fprintf(stderr, "[jitwarm] cannot write %s: nothing new is listed\n", LIST);
+        if (legacy) {
+            static int prof_token;
+            l_install(&prof_token, NULL);
+            l_jit((void *)on_begin, (void *)on_done);
+            l_events(1 << 4);                   // MONO_PROFILE_JIT_COMPILATION
+        } else sd(create(NULL), on_done);
+    }
     fprintf(stderr, "[jitwarm] %zu listed (%s), compiled ahead from frame 60 at most %.1f ms a frame\n", g_list_n, LIST,
             g_budget * 1000);
 }
