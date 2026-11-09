@@ -56,7 +56,7 @@ pmhwdec_restore() {
   done
   pmhwdec_nodes=()
 }
-trap pmhwdec_restore EXIT
+trap 'pmhwdec_restore; pm_message_end' EXIT   # funcs.txt set pm_message_end as the EXIT trap: a second trap replaces it
 
 # ---- first launch: build the game from your copy (PortMaster's patcher shows the progress)
 if [ ! -f "$GAMEDIR/@@READY@@" ]; then
