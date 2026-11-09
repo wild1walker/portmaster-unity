@@ -28,6 +28,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 static struct monoinvoke_env E;
 static int g_on;                                     // the fast path's switch (atomic)
@@ -194,32 +196,84 @@ static void install(const void *in_mono) { (void)in_mono; }
 // (+8) when the thread has its JIT data and otherwise calls the original (it attaches the thread). Patched in
 // at load, before any of libmono's code runs, only into a libmono whose three functions match the checked
 // build byte for byte, and only while the import is the loader's hook and libhybris logs nothing per call.
+// The thread's JIT data and domain are then also kept in ua_host's own thread-local variables (two instructions
+// to read, no call): libmono's pthread_setspecific import goes through tls_set, which stores what libmono sets
+// for those two keys on the calling thread before it returns, so the variable and the slot hold the same value
+// whenever libmono reads them; a variable not set yet reads the slot once.
 #if defined(__arm__)
 #include "unityhooks.h"
 static const uint32_t *g_keys, *g_jit_tls_id, *g_domain_tls_id;
 static void *(*g_lmf_orig)(void);
+static int (*g_setspecific)(pthread_key_t, const void *);
+static __thread char *t_jit_tls;               // the slot's value once known (NULL: read the slot)
+static __thread void *t_domain;
+static __thread int t_domain_known;
 
 static void *tls_get(uint32_t id)
 {
     uint32_t k = g_keys[id];
     return k ? pthread_getspecific((pthread_key_t)k) : NULL;
 }
+// libmono's pthread_setspecific: the loader's hook, then the thread's copy of the two slots
+static int tls_set(pthread_key_t k, const void *v)
+{
+    int r = g_setspecific(k, v);
+    if (r == 0 && k) {
+        if (k == (pthread_key_t)g_keys[*g_jit_tls_id]) t_jit_tls = (char *)v;
+        if (k == (pthread_key_t)g_keys[*g_domain_tls_id]) { t_domain = (void *)v; t_domain_known = 1; }
+    }
+    return r;
+}
 static void *fast_get_lmf_addr(void)
 {
-    char *jit_tls = tls_get(*g_jit_tls_id);
-    return jit_tls ? jit_tls + 8 : g_lmf_orig();
+    char *jit_tls = t_jit_tls;
+    if (__builtin_expect(jit_tls != NULL, 1)) return jit_tls + 8;
+    jit_tls = tls_get(*g_jit_tls_id);
+    if (!jit_tls) return g_lmf_orig();
+    t_jit_tls = jit_tls;
+    return jit_tls + 8;
 }
-static void *fast_domain_get(void) { return tls_get(*g_domain_tls_id); }
+static void *fast_domain_get(void)
+{
+    if (__builtin_expect(t_domain_known, 1)) return t_domain;
+    void *d = tls_get(*g_domain_tls_id);
+    t_domain = d;
+    t_domain_known = 1;
+    return d;
+}
+// a GOT slot of a loaded library rewritten, whatever its page's protection
+static int got_write(void **slot, void *v)
+{
+    long pg = sysconf(_SC_PAGESIZE);
+    uintptr_t a = (uintptr_t)slot & ~(uintptr_t)(pg - 1);
+    int prot = -1;
+    FILE *f = fopen("/proc/self/maps", "r");
+    char line[512];
+    while (f && fgets(line, sizeof line, f)) {
+        unsigned long lo, hi;
+        char perms[8];
+        if (sscanf(line, "%lx-%lx %7s", &lo, &hi, perms) == 3 && a >= lo && a < hi) {
+            prot = (perms[0] == 'r' ? PROT_READ : 0) | (perms[1] == 'w' ? PROT_WRITE : 0) | (perms[2] == 'x' ? PROT_EXEC : 0);
+            break;
+        }
+    }
+    if (f) fclose(f);
+    if (prot < 0) return -1;
+    if (!(prot & PROT_WRITE) && mprotect((void *)a, pg, prot | PROT_WRITE) != 0) return -1;
+    __atomic_store_n(slot, v, __ATOMIC_RELEASE);
+    if (!(prot & PROT_WRITE)) mprotect((void *)a, pg, prot);
+    return 0;
+}
 
 struct tls_build {
     const char *name;
     uint32_t tls_get, tls_get_end, lmf, lmf_end, dom, dom_end;   // the three functions (with their literal pools)
-    uint32_t keys, got_jit_tls_id, domain_tls_id, got_getspecific;
+    uint32_t keys, got_jit_tls_id, domain_tls_id, got_getspecific, got_setspecific;
     uint32_t fnv_tls_get, fnv_lmf, fnv_dom;
 };
 static const struct tls_build g_tls_builds[] = {
     { "Unity 2017.4 armeabi-v7a", 0x28c1f4, 0x28c234, 0x1a69c, 0x1a760, 0x16f830, 0x16f85c,
-      0x39f394, 0x3997f4, 0x39a49c, 0x399e9c, 0x6a744fa1, 0x8fc04136, 0xe42766e6 },
+      0x39f394, 0x3997f4, 0x39a49c, 0x399e9c, 0x399e64, 0x6a744fa1, 0x8fc04136, 0xe42766e6 },
 };
 
 static void tls_on_load(uintptr_t base, size_t size)
@@ -242,10 +296,21 @@ static void tls_on_load(uintptr_t base, size_t size)
         fprintf(stderr, "[mono] fast thread-local reads: off (libmono's pthread_getspecific is not the loader's hook)\n");
         return;
     }
+    void *sethook = so_shim_lookup("pthread_setspecific");
+    if (!sethook || *(void **)(base + b->got_setspecific) != sethook) {
+        fprintf(stderr, "[mono] fast thread-local reads: off (libmono's pthread_setspecific is not the loader's hook)\n");
+        return;
+    }
+    g_setspecific = (int (*)(pthread_key_t, const void *))sethook;
     g_keys = (const uint32_t *)(base + b->keys);
     g_jit_tls_id = *(const uint32_t **)(base + b->got_jit_tls_id);
     g_domain_tls_id = (const uint32_t *)(base + b->domain_tls_id);
     void *o1 = NULL, *o2 = NULL;
+    // the setter first: the readers' copies are only right once every store of libmono goes through tls_set
+    if (got_write((void **)(base + b->got_setspecific), (void *)tls_set) != 0) {
+        fprintf(stderr, "[mono] fast thread-local reads: off (libmono's pthread_setspecific slot could not be written)\n");
+        return;
+    }
     if (unityhooks_hook(base + b->lmf, 'a', (void *)fast_get_lmf_addr, (void **)&g_lmf_orig) != 0 ||
         unityhooks_hook(base + b->tls_get, 'a', (void *)tls_get, &o1) != 0 ||
         unityhooks_hook(base + b->dom, 'a', (void *)fast_domain_get, &o2) != 0) {

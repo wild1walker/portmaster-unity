@@ -707,6 +707,14 @@ the same (54 - 58 MB Knulli, 68 - 77 MB muOS); the same four exception lines in 
 cache alone gave +0.8 (one order). Both are on by default where libmono matches the checked 2017.4
 armeabi-v7a build.
 
+Later (2026-11-09) `UA_MONO_TLS` keeps the thread's JIT data and domain in ua_host's own thread-local
+variables as well, filled through libmono's `pthread_setspecific` (so no call per icall wrapper at all). At
+the port's shipped settings with all its patches, A B and B A: the first fight Knulli 59.29 / 59.34 -> 59.43 /
+59.44 fps, muOS 62.90 / 62.86 -> 64.01 / 63.27; Bullet Hell's busiest room (heavy-fight bench) Knulli 34.80 /
+33.71 -> 34.81 / 34.99. Two things that did not pay there: Mono's `abcrem` and `sched` optimizations set
+before the JIT starts (`mono_set_defaults`): Bullet Hell 35.96 -> 33.83 fps; and a sort walk over only the
+bodies registered since the last one (Gungeon's `SortRigidbodies`): 34.71 / 34.71 against 34.71 / 34.54.
+
 The GL thread (`UA_GL_REC=thread`, the render thread's GL calls made on a thread of the host's) in the
 same fight, the port's settings otherwise: Knulli 43.51 / 43.33 fps against 44.30 / 44.03 with the frame
 recorder (`UA_GL_REC=2`, whose frame graph sinks this game's clear-only passes), lowest available memory
