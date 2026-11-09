@@ -375,6 +375,16 @@ int main(void)
         { 720, 480, "600x400", NULL, "", 996352, 1, 600, 400, "" },
         // ... without emptying them, a 4 GB device keeps the port's cap
         { 1920, 1152, "1280x768", NULL, "1024", 4 * 1048576L, 1, 960, 576, "560000" },
+        // one size for each panel shape: the first of the panel's shape, else the first, fitted
+        { 720, 720, "540x360", NULL, NULL, 0, 1, 360, 360 },                          // one size: fitted
+        { 720, 720, "540x360 440x440", NULL, NULL, 0, 1, 440, 440 },
+        { 720, 480, "540x360 440x440", NULL, NULL, 0, 1, 540, 360 },
+        { 640, 480, "540x360 440x440", NULL, NULL, 0, 1, 480, 360 },                  // no 4:3 size: the first
+        { 640, 480, "540x360 440x440 512x384", NULL, NULL, 0, 1, 512, 384 },
+        { 720, 720, " 540x360,  440x440 ", NULL, "1024", 996352, 1, 440, 440, "560000" },
+        { 720, 720, "540x360 440x440", NULL, "1024", 2 * 1048576L, 0, 0, 0, "560000" }, // 2 GB: the cap only, above the panel
+        { 720, 480, "540x360 44x", NULL, NULL, 0, 0, 0, 0 },                          // a bad size: the panel's
+        { 720, 480, " ", NULL, NULL, 0, 0, 0, 0 },
     };
     for (size_t i = 0; i < sizeof rs / sizeof rs[0]; i++) {
         int w = 0, h = 0;
