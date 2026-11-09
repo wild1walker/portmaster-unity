@@ -2062,7 +2062,23 @@ ms (p99 79 - 86 -> 48 - 50 ms, two pairs), 693 methods compiled ahead in 1.7 s o
 load (1,305 in 2.1 s on muOS). Mono's invoke cache and fast thread-local reads (`UA_MONO_INVOKE`,
 `UA_MONO_TLS`, on by default): fight 36.5 fps without, 40.4 with. All of it in the port (portmaster-gungeon
 c0da303, with the port's df-no-body patch; the second launch after the install): **fight 42.3 fps, room entry
-42.8 (7 frames over 50 ms, p99 44 ms), lowest MemAvailable 198 MB**. Loads
+42.8 (7 frames over 50 ms, p99 44 ms), lowest MemAvailable 198 MB**.
+
+The same port on all three handhelds (portmaster-gungeon c0da303 set up by a rehearsal of its zip, each in a
+folder of its own; the Keep's first fight, fixed seed, no damage; the room entry is the 25 s from the corridor
+to the first enemies; the first launch fills the host's program cache and the JIT warm-up's list):
+
+| handheld | room entry, frames over 50 ms: first launch -> later launches | room entry p99 | fight | fight p99 |
+|---|---|---|---|---|
+| RG34XX-SP, Knulli | 11 -> 1, 1 | 48 -> 29, 28 ms | 59.4 fps | 21 ms |
+| RG34XX-SP, muOS | 10 -> 3, 2 | 38 -> 28, 25 ms | 62.0 fps | 22 ms |
+| BattleXP G350, dArkOS | 15 -> 7, 10, 8 | 86 -> 44, 42, 46 ms | 42.3, 42.1 fps | 31, 30 ms |
+
+What is left on the G350: two frames of about 200 - 230 ms at the corridor's and the enemy room's doors in
+every run, in which UnityMain waits for the render thread, the render thread for ua_host's GL thread, and the
+GL thread in a futex of the Mali driver (the driver waiting on the GPU or its memory), then a few frames of
+50 - 100 ms. `UA_FAST_CLOCK` cannot read the timer's counter on this kernel (no gain, 41.4 against 42.1 fps).
+Loads
 are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
 loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
 behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'
