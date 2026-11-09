@@ -370,6 +370,11 @@ int main(void)
         { 720, 480, "540x360", NULL, "1024", 4 * 1048576L, 0, 0, 0, "560000" },       // 4 GB, small panel: its size
         { 1920, 1152, NULL, NULL, NULL, 0, 0, 0, 0, "lots" },          // not a number: not applied
         { 1920, 1152, NULL, NULL, NULL, 0, 1, 480, 288, "1000" },      // a quarter of the panel at least
+        // a player's own size in port.env (with UA_RENDER_RAM= and UA_RENDER_PIXELS= emptied): on every device
+        { 1920, 1152, "1280x768", NULL, "", 4 * 1048576L, 1, 1280, 768, "" },
+        { 720, 480, "600x400", NULL, "", 996352, 1, 600, 400, "" },
+        // ... without emptying them, a 4 GB device keeps the port's cap
+        { 1920, 1152, "1280x768", NULL, "1024", 4 * 1048576L, 1, 960, 576, "560000" },
     };
     for (size_t i = 0; i < sizeof rs / sizeof rs[0]; i++) {
         int w = 0, h = 0;

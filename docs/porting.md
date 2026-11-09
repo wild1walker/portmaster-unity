@@ -445,7 +445,9 @@ UA_PREFS_DEFAULTS = "ShaderQuality=0 VidParticles=0 VidDithering=0 VidNoise=0"  
 `port.env` sets the `runtime_low` variables unless already set; a value set above them in
 `port.env` or in the environment wins (`ASMPATCH_HK_BLUR=full`), and `UA_PICTURE=high` there skips
 them all. That is for someone who edits `port.env` by hand; the setup and the README's first steps
-never offer it. The game's own options go in through `UA_PREFS_DEFAULTS` (docs/runtime.md): they
+never offer it. The resolution is such an edit too: `export UA_RENDER_SIZE=1280x768 UA_RENDER_RAM=
+UA_RENDER_PIXELS=` at the top of `port.env` draws at that size on any device (the panel's shape kept);
+the port's README shows the line. The game's own options go in through `UA_PREFS_DEFAULTS` (docs/runtime.md): they
 are the game's defaults until the player changes them in its menus, and what the game stores from
 then on is the player's. The render size is the largest single lever on a GPU-bound game;
 `UA_RENDER_PIXELS` keeps a big screen from costing many times a small one's GPU time
