@@ -768,6 +768,17 @@ checked on screenshots), A B and B A: Knulli 49.87 / 49.47 -> 58.03 / 58.53 fps;
 Wwise fix below, 49.54 / 49.36 -> 59.44 / 59.40, frames over 33 ms 1 / 0, none over 50 ms, the room
 entry 52 -> 61 fps.
 
+At the lowest options, what was measured next (Knulli unless said; A B and B A where two numbers):
+`UA_FUTEX_SPIN=400` against 50 (the job system's waits watch their word longer, so more wakes go
+without a system call; the main thread had ~0.7 ms a frame in futex calls) 58.57 / 58.59 -> 59.07 /
+59.07 fps with `UA_FAST_CLOCK=1` in both and 58.41 -> 58.70 without, muOS 59.71 / 60.03 -> 60.64 /
+60.16, 1000 us no better than 400 (58.94 / 58.87): the port sets 400 on the H700 only. No gain to
+tell apart: `UA_FAST_CLOCK=1` (58.43 -> 58.99, 58.66 -> 58.49), the GL thread against the frame
+recorder (57.97 against 58.74), and two more HUD patches (a hidden control's sub-1e-4 moves left out,
+which stops the pause menu's credits panel laying its lines out every frame; dfGUI's font walk left
+out when no font is dirty): 58.63 / 58.27 against 58.41 / 58.33. The main thread is then about
+16.9 ms of the Knulli's frame (Unity's scripts 7 ms, the two camera passes ~3.5, PhysX's step 0.86).
+
 Very Low debris measured 58 fps on both, but it is not the same fight: Very Low also leaves out wall and
 surface decorations while the floor is built, which draws the floor's random numbers differently, and the
 fixed seed then gave another room content (its screenshots show other decorations and no enemies on screen).
