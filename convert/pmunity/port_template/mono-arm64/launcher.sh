@@ -40,7 +40,6 @@ fi
 # ports run as a user, and the port's libpmhwdec (pmhwdec/) needs them for the videos. They are opened to
 # the video group for the game and put back exactly as they were when it ends (Knifethrower's fix;
 # PortMaster's Moonlight opens the same nodes). Nothing changes where they are usable already.
-[ -d "$GAMEDIR/pmhwdec" ] && rm -rf "$GAMEDIR/pmhw"   # the folder's name in releases before 2026-11-09
 pmhwdec_nodes=()
 if [ -d "$GAMEDIR/pmhwdec" ]; then
   for n in /dev/vpu_service /dev/hevc_service; do
@@ -102,7 +101,7 @@ fi
 # a Wwise game: ua_host's own Wwise player plays the banks the setup converted (set UA_WWISE_DATA= empty for none)
 [ -d "$GAMEDIR/wwise" ] && export UA_WWISE_DATA="${UA_WWISE_DATA-$GAMEDIR/wwise}"
 chmod +x "$GAMEDIR/ua_host"
-[ -f "$GAMEDIR/pmhwdec/pmhw-cedard" ] && chmod +x "$GAMEDIR/pmhwdec/pmhw-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
+[ -f "$GAMEDIR/pmhwdec/pmhwdec-cedard" ] && chmod +x "$GAMEDIR/pmhwdec/pmhwdec-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
 
 $GPTOKEYB2 "ua_host" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/ua_host"

@@ -93,7 +93,7 @@ um_dec *um_vorbis_create(const char *mime);
 um_dec *um_opus_create(const char *mime);
 um_dec *um_h264_create(const char *mime);
 um_dec *um_ffmpeg_create(const char *mime);
-um_dec *um_pmhw_create(const char *mime);            /* libpmhwdec.so.1 when the port ships it (um_pmhw.c) */
+um_dec *um_pmhwdec_create(const char *mime);            /* libpmhwdec.so.1 when the port ships it (um_pmhwdec.c) */
 um_dec *um_silent_create(const char *mime);          /* AAC / MP3 without a decoder: silence */
 int     um_ffmpeg_available(void);
 

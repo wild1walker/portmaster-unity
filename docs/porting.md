@@ -627,13 +627,11 @@ costs only while it plays: game play frames decode nothing.
   pictures from the handheld's video decoder: the Allwinner H616 / H618 / H700 / A133 engine on
   vendor kernels (Knulli, muOS), Rockchip MPP (ArkOS, dArkOS, AmberELEC), V4L2 on mainline (ROCKNIX).
   `tools/pmhwdec/build.sh <out>` builds it with this repository's images: the library for `ua_host`'s
-  architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhw-cedard`, the
+  architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhwdec-cedard`, the
   Allwinner decoder the library starts from its own folder (aarch64 for both: those handhelds run
   64-bit kernels). Ship them with the port's `[build]` (Hollow Knight's port.toml: the script as a
   command, the two files as outputs in `pmhwdec/`, the three licences) and set `UM_PMHWDEC =
-  "pmhwdec/libpmhwdec.so.1"` in `[runtime]` (the folder and the variable are named after the library, pmhwdec, as
-  Knifethrower asked; releases before 2026-11-09 had `pmhw/` and `UM_PMHW`, which ua_host still reads and
-  the launcher templates remove where `pmhwdec/` is there): a path in the port folder, `ua_host`'s working folder
+  "pmhwdec/libpmhwdec.so.1"` in `[runtime]`: a path in the port folder, `ua_host`'s working folder
   (`port.env` quotes values, so `$GAMEDIR` would not expand there; the
   launcher's library path holds only the system's folders). The log says what it chose
   (`[media] decoders: ... vp8 (pmhwdec)`, `[media] pmhwdec: VP8 1920x1080 on cedar`). Where its
@@ -648,13 +646,13 @@ costs only while it plays: game play frames decode nothing.
   agreed on 2026-11-08, on condition that everything is returned as it was found). G350 (dArkOS,
   RK3326), as `ark`: the self-test passes for H.264, HEVC and VP8 on `rkmpp`, Hollow Knight's intro
   plays on it in the game with the game at 60 fps, and the nodes are `crw------- root root` again
-  after. Without the nodes or MPP it reports no hardware in milliseconds and libvpx plays the clips. Ship `pmhw-test` too (`pmhwdec/pmhw-test`, the same
+  after. Without the nodes or MPP it reports no hardware in milliseconds and libvpx plays the clips. Ship `pmhwdec-test` too (`pmhwdec/pmhwdec-test`, the same
   build): the setup asks it whether VP8 plays on this handheld's video engine and, where it does,
   leaves the `video` step's clips at full size (`--set video.mode=off`; the update script skips
   `pmu video` the same way): the hardware plays them in time, which is what the smaller clips are
   for, and the setup is about ten minutes shorter on an RG34XX-SP (Knifethrower's idea). Measured by its author with GRIS's 1080p H.264
   intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42 -> 48 fps; on
-  an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhw-cedard` GPL-2.0-or-later: the port ships their licences and says
+  an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhwdec-cedard` GPL-2.0-or-later: the port ships their licences and says
   where their source is; this repository never ships them.
 - **VP9, Opus, others**: the table in runtime/media/README.md says which decoder takes each.
 

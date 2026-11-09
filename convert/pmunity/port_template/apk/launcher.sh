@@ -39,7 +39,6 @@ fi
 # ports run as a user, and the port's libpmhwdec (pmhwdec/) needs them for the videos. They are opened to
 # the video group for the game and put back exactly as they were when it ends (Knifethrower's fix;
 # PortMaster's Moonlight opens the same nodes). Nothing changes where they are usable already.
-[ -d "$GAMEDIR/pmhwdec" ] && rm -rf "$GAMEDIR/pmhw"   # the folder's name in releases before 2026-11-09
 pmhwdec_nodes=()
 if [ -d "$GAMEDIR/pmhwdec" ]; then
   for n in /dev/vpu_service /dev/hevc_service; do
@@ -118,7 +117,7 @@ if [ "${ANALOG_STICKS:-2}" = 0 ]; then
   case "${UA_DPAD_STICK:-}" in auto|auto,both) export UA_DPAD_STICK=${UA_DPAD_STICK/auto/1} ;; esac
 fi
 chmod +x "$GAMEDIR/$UA_HOST"
-[ -f "$GAMEDIR/pmhwdec/pmhw-cedard" ] && chmod +x "$GAMEDIR/pmhwdec/pmhw-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
+[ -f "$GAMEDIR/pmhwdec/pmhwdec-cedard" ] && chmod +x "$GAMEDIR/pmhwdec/pmhwdec-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
 
 $GPTOKEYB2 "$UA_HOST" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/$UA_HOST"
