@@ -709,7 +709,11 @@ expressions have) and writes HLSLcc's GL form of it:
 - function constants at their defaults (no base vertex, no variable rasterization rate: Unity's
   `#if __METAL_VERSION__ >= 230` blocks and the code behind `has_vrr_api` are left out, the
   identity render target remap), immediate constant buffers as `const` arrays; from 2019.1 the
-  samplers' units in Unity's macro, as the other paths.
+  samplers' units in Unity's macro, as the other paths. Unity 6 writes the variable rate code as
+  a plain `if (has_vrr_api) { ... }` block with Metal's own types in it
+  (`rasterization_rate_map_decoder`, in the motion vector passes of URP's and Shader Graph's
+  shaders): a block behind a false constant that does not translate is skipped whole (pmu,
+  2026-11-09; metal.py stops at it, "unknown name", and the SubShader got no GLES3 programs).
 
 Unity's Metal compile has Metal's platform choices as Direct3D's (`UNITY_REVERSED_Z`,
 `UNITY_UV_STARTS_AT_TOP`); Metal's clip space has y up, as GL's. The full-screen passes' texture
@@ -726,6 +730,7 @@ ES 3.2):
 | 2019.1.15f1 (Metal + OpenGL Core) | 41 (3) | 208 | UIElements' SubShader with a structured buffer (its fallback kept) | 223 of 223 as the same pass's GLCore program | 194 / 194 |
 | 2022.3.62f3 (URP, Metal only) | 92 (4) of 93 | 1250 (8) | URP's HDR debug view (a writable texture) | 610 of 1369 as Unity's own GLES3 programs of the game's Android build (shader, pass, keywords) | 991 / 991 |
 | 6000.2.6f2 (Metal only; Addressables) | 113 (2) of 114 | 320 | VR blit | - | 209 / 209 |
+| 6000.0.52f1 (URP, Shader Graph, VFX Graph; Addressables: 3,967 bundles, 140 scene bundles; pmu, 2026-11-09) | 529 of 558 (before the `has_vrr_api` blocks were skipped: 436) | 30791 (10) | VFX Graph outputs (23: structured buffers), Stylized Water 2's tessellation shaders (2), URP's HDR debug view (2), VR blit, CoreCopy (its framebuffer fetch input, `rp_input_remap`); 121 compute shaders (Metal kernels are not translated) | the 5284 distinct programs pmu wrote before the fix: the same bytes | 12024 / 12024 |
 
 Against Unity's own GLES3 programs of the same game (its Android build), the differences are what
 the HLSL decided by platform: Metal-only uniforms (foveated rendering keywords and its distortion

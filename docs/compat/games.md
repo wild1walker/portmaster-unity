@@ -458,7 +458,7 @@ Metal-only build is translated from its Metal programs (`shaders.from = ["metal"
 
 | game | Unity, build | result | notes (last checked) |
 |---|---|---|---|
-| Dave the Diver (Steam, macOS v1.0.6.768) | 6000.0.52f1, IL2CPP, URP, Addressables, Burst, Input System, Steam, EOS | not run yet | every binary universal; GameAssembly's arm64 slice: 342 imports (libSystem 236, libc++ 95, CoreFoundation 11), 530 instructions beyond ARMv8.0 (489 LSE, 13 `ldapr`, 6 `eor3`, 22 `crc32`), all within a branch of a block before the image (macho-route.md; 2026-11-08) |
+| Dave the Diver (Steam, macOS v1.0.6.768) | 6000.0.52f1, IL2CPP, URP, Addressables, Burst, Input System, Steam, EOS | not run yet | every binary universal; GameAssembly's arm64 slice: 342 imports (libSystem 236, libc++ 95, CoreFoundation 11), 530 instructions beyond ARMv8.0 (489 LSE, 13 `ldapr`, 6 `eor3`, 22 `crc32`), all within a branch of a block before the image (macho-route.md; 2026-11-08). Data (2026-11-09): 4.7 GB, one scene, everything else in 3,967 Addressables bundles (2.6.0, JSON catalog, 15 bundles with a CRC); `pmu convert` (Metal): 529 of 558 shaders, 30,791 programs, the 12,024 distinct ones link on Mesa (shaders.md); left out VFX Graph's outputs and 121 compute shaders; textures 5.4 GB RGBA32 + 1 GB BC7 (about 4.3 GB as RGBA on a GPU without BC): the textures step is a must on 1 GB handhelds |
 
 ## Checked only (no route through the Android players)
 

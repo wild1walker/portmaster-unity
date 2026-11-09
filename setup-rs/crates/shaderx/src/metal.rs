@@ -402,7 +402,7 @@ impl Scope {
 }
 
 /// One stage being translated (metal.Stage).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Stage {
     stage: Option<&'static str>,
     uniforms: Vec<String>,
@@ -892,8 +892,21 @@ impl Parser<'_> {
                 let c = self.expr(sc, 0)?;
                 self.expect(")")?;
                 if c.s == "false" && (self.peek(0) != Some("{") || !self.has_else()) {
+                    // a block that never runs, translated into a sink (its reads still declared,
+                    // as the Python does); one that does not translate is skipped whole: Unity 6
+                    // writes its variable rasterization rate code as `if (has_vrr_api) { ... }`
+                    // with Metal's own types in it (rasterization_rate_map_decoder), where 2022.3
+                    // had it in `#if __METAL_VERSION__` blocks
+                    let (i0, st0) = (self.i, self.st.clone());
                     let mut sink = Vec::new();
-                    return self.body(sc, &mut sink, ind);
+                    return match self.body(sc, &mut sink, ind) {
+                        Err(Fault::Uns(_)) if self.t[i0] == "{" => {
+                            self.i = i0;
+                            *self.st = st0;
+                            skip_braces(self)
+                        }
+                        r => r,
+                    };
                 }
                 out.push(format!("{pad}if({}){{", bool_of(&c)?.s));
                 self.body(sc, out, ind)?;

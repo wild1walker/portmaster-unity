@@ -194,7 +194,10 @@ program; the convert crate's `steps/metal.rs` pairs the vertex and fragment subp
 2017.4 players' built-in resources). `cargo test -p shaderx --test metal` compares
 the translator with the Python on 17 hand-written cases (`tests/metal_golden.json`, written by
 `tests/golden/metal_golden.py` from convert/tests/test_metal.py's MSL and variants of it); on
-games, `regress.py pmu` (below: four macOS builds of 2020.3 - 6000.3, the same files).
+games, `regress.py pmu` (below: four macOS builds of 2020.3 - 6000.3, the same files). pmu's own
+(2026-11-09): Unity 6's `if (has_vrr_api) { ... }` blocks, which metal.py stops at, are skipped
+when they do not translate (they never run); `metal_unity6_vrr` checks that the golden program
+comes out byte for byte with such a block in it ([shaders.md](shaders.md#macos-builds-metal-programs-msl)).
 
 Player builds keep no type trees in their files: pmu reads them with UnityPy's class database
 (lzma.tpk), embedded when the binary is built with `PMU_TPK=<lzma.tpk>`, else from `$PMU_TPK` at
