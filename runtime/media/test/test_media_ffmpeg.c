@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static int fails, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -90,6 +92,94 @@ static void run(const char *path, int track, const char *codec_name, res *r)
     um_codec_free(c);
     um_format_free(f);
     um_extractor_free(ex);
+}
+
+/* a video whose client keeps releasing its pictures unshown (too late to show): the first 0.5 s after
+   configure does not count, then 3 in each of 3 windows of 1 s in a row (um_codec.c) tell the decoder it
+   falls behind. Returns the pictures released. */
+static int late_run(const char *path, int track)
+{
+    um_extractor *ex = um_extractor_new();
+    if (um_extractor_set_path(ex, path) != UM_OK) { um_extractor_free(ex); return 0; }
+    um_format *f = um_extractor_track_format(ex, track);
+    um_surface *s = um_surface_new(1);
+    um_codec *c = um_codec_create_by_name("ffmpeg.h264.decoder");
+    int dropped = 0;
+    if (c && um_codec_configure(c, f, s) == UM_OK && um_codec_start(c) == UM_OK) {
+        um_extractor_select(ex, track, 1);
+        usleep(600000);
+        int in_eos = 0, eos = 0;
+        for (int spins = 0; spins < 20000 && !eos; spins++) {
+            if (!in_eos) {
+                int i = um_codec_dequeue_input(c, 1000);
+                if (i >= 0) {
+                    size_t cap;
+                    uint8_t *b = um_codec_input_buffer(c, i, &cap);
+                    ssize_t n = um_extractor_read(ex, b, cap);
+                    if (n < 0) { um_codec_queue_input(c, i, 0, 0, 0, UM_BUFFER_FLAG_END_OF_STREAM); in_eos = 1; }
+                    else { um_codec_queue_input(c, i, 0, (int)n, um_extractor_sample_time(ex), 0); um_extractor_advance(ex); }
+                }
+            }
+            um_buffer_info bi;
+            int o = um_codec_dequeue_output(c, &bi, 2000);
+            if (o < 0) continue;
+            if (bi.flags & UM_BUFFER_FLAG_END_OF_STREAM) eos = 1;
+            um_codec_release_output(c, o, 0);
+            if (!eos && ++dropped % 3 == 0 && dropped < 9) usleep(1050000);    /* the next window */
+        }
+    }
+    um_codec_free(c);
+    um_surface_unref(s);
+    um_format_free(f);
+    um_extractor_free(ex);
+    return dropped;
+}
+
+/* Unity's way of falling behind: a few pictures released unshown, then a seek ahead (flush), twice. In a child process
+   (the run's later videos would all decode without deblocking): the next video of the child must decode other pictures
+   than the deblocked reference. Returns the child's exit status: 0 = they differ. */
+static int catchup_run(const char *path, int track, uint32_t ref_hash)
+{
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid > 0) { int st = 0; waitpid(pid, &st, 0); return WIFEXITED(st) ? WEXITSTATUS(st) : -1; }
+    um_extractor *ex = um_extractor_new();
+    if (um_extractor_set_path(ex, path) != UM_OK) _exit(3);
+    um_format *f = um_extractor_track_format(ex, track);
+    um_surface *s = um_surface_new(1);
+    um_codec *c = um_codec_create_by_name("ffmpeg.h264.decoder");
+    if (!c || um_codec_configure(c, f, s) != UM_OK || um_codec_start(c) != UM_OK) _exit(4);
+    um_extractor_select(ex, track, 1);
+    int unshown = 0, catchups = 0, in_eos = 0, eos = 0;
+    for (int spins = 0; spins < 20000 && !eos; spins++) {
+        if (!in_eos) {
+            int i = um_codec_dequeue_input(c, 1000);
+            if (i >= 0) {
+                size_t cap;
+                uint8_t *b = um_codec_input_buffer(c, i, &cap);
+                ssize_t n = um_extractor_read(ex, b, cap);
+                if (n < 0) { um_codec_queue_input(c, i, 0, 0, 0, UM_BUFFER_FLAG_END_OF_STREAM); in_eos = 1; }
+                else { um_codec_queue_input(c, i, 0, (int)n, um_extractor_sample_time(ex), 0); um_extractor_advance(ex); }
+            }
+        }
+        um_buffer_info bi;
+        int o = um_codec_dequeue_output(c, &bi, 2000);
+        if (o < 0) continue;
+        if (bi.flags & UM_BUFFER_FLAG_END_OF_STREAM) eos = 1;
+        um_codec_release_output(c, o, 0);
+        if (!eos && ++unshown == 3 && catchups < 2) {          /* behind: seek "ahead" (here: to the start) */
+            um_codec_flush(c);
+            um_extractor_seek(ex, 0, 0);
+            in_eos = 0; unshown = 0; catchups++;
+        }
+    }
+    um_codec_free(c);
+    um_surface_unref(s);
+    um_format_free(f);
+    um_extractor_free(ex);
+    res r2;
+    run(path, track, "ffmpeg.h264.decoder", &r2);
+    _exit(catchups == 2 && r2.frames == 30 && r2.hash != ref_hash ? 0 : 1);
 }
 
 static double freq(const int16_t *s, long frames, int ch, int chs, int rate)
@@ -177,6 +267,18 @@ int main(int argc, char **argv)
     run(p, 1, NULL, &r);
     CHECK(r.rate == 48000 && labs(r.pcm - 48000) < 4096, "ff.mkv AAC: %ld frames", r.pcm);
     free(r.s);
+
+    /* last: from here on this process's videos decode without deblocking */
+    printf("-- UM_FFMPEG_SKIP_LOOP_FILTER=auto: pictures released unshown, then the next video\n");
+    snprintf(p, sizeof p, "%s/high.mp4", d);
+    run(p, 0, "ffmpeg.h264.decoder", &r);           /* deblocked: the reference */
+    int cu = catchup_run(p, 0, r.hash);
+    CHECK(cu == 0, "the client seeks ahead twice after unshown pictures: the next video decodes without deblocking (child %d)", cu);
+    int late = late_run(p, 0);
+    run(p, 0, "ffmpeg.h264.decoder", &r2);
+    CHECK(late >= 9 && r2.frames == r.frames && r2.hash != r.hash,
+          "a video fell behind (%d pictures unshown): the next decodes without deblocking (%d frames, %s pictures)",
+          late, r2.frames, r2.hash != r.hash ? "other" : "THE SAME");
 
     printf("%s: %d failure(s) in %d checks\n", fails ? "FAILED" : "PASSED", fails, checks);
     return fails != 0;
