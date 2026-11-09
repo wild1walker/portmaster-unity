@@ -2057,7 +2057,9 @@ hitches stayed (3 links of 317 ms had been in them; the JIT is the rest): `UA_JI
 the methods a run compiled, now on Mono 2.6 too (runtime.md), took them from 16 to 6 - 7 frames over 50
 ms (p99 79 - 86 -> 48 - 50 ms, two pairs), 693 methods compiled ahead in 1.7 s over the title and the first
 load (1,305 in 2.1 s on muOS). Mono's invoke cache and fast thread-local reads (`UA_MONO_INVOKE`,
-`UA_MONO_TLS`, on by default): fight 36.5 fps without, 40.4 with. Loads
+`UA_MONO_TLS`, on by default): fight 36.5 fps without, 40.4 with. All of it in the port (portmaster-gungeon
+c0da303, with the port's df-no-body patch; the second launch after the install): **fight 42.3 fps, room entry
+42.8 (7 frames over 50 ms, p99 44 ms), lowest MemAvailable 198 MB**. Loads
 are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
 loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
 behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'
