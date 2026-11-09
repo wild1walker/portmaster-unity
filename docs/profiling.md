@@ -787,6 +787,35 @@ game's own physics loops visit all ~855 registered bodies three times a frame, ~
 projectiles); a fourth loop (trigger exits) touches every body anyway, so skipping inactive ones in the other
 three was left unbuilt (estimated under 0.2 ms).
 
+### A UI library's hidden physics bodies (dfGUI in Enter the Gungeon, 2026-11-09)
+
+At the lowest options the Knulli's main thread still spent 0.86 ms a frame in PhysX's step, in a game whose own
+physics is managed code (`SpeculativeRigidbody`). A test build counting Unity's bodies every 600 physics steps
+found none with `Object.FindObjectsOfType` and 2,100 with `Resources.FindObjectsOfTypeAll`, which also sees hidden
+objects: every one kinematic, every one on a dfGUI control, 2,097 - 2,100 of them asleep. `dfControl.OnPositionChanged`
+gives a control a hidden Rigidbody (`HideAndDontSave`, kinematic, no gravity, `detectCollisions` off) the first time
+it moves after its setup, Unity 4's advice for colliders that move; PhysX 3 (Unity 5 and later) moves a static
+collider without a rebuild, and Unity's step visits every body at every fixed step (50 a second here: its body
+loop, the sleep checks, kinematic targets, islands).
+
+The port's patch `df-no-body` (portmaster-gungeon, `patch/Program.cs`) leaves the body out; the control's
+BoxCollider stays a static collider. Nothing reads those bodies: with detection off they never collide or trigger;
+the game's data holds no other Rigidbody, joint or character controller than nine foyer panels saved with this same
+body (they keep theirs); dfGUI's hit test is `Collider.Raycast` on each control's own collider, whose pose follows
+its transform either way, and dfGUI takes its layer out of every camera's mouse events; iTween's physics moves, the
+one code that acts differently on an object with a Rigidbody, are reached only through PlayMaker actions, and none of
+the game's 159 FSMs uses one. The rig (the patch and the build without it side by side): body positions identical
+over 683 frames. The fight, A B and B A:
+
+| | Knulli fight fps | muOS fight fps |
+|---|---|---|
+| the port at its lowest options, spin 400 | 58.94, 58.59 | 59.77, 59.67 |
+| + `df-no-body` | 59.44, 59.20 | 62.40, 62.17 |
+
+muOS gains more (+2.5 fps) than the Knulli (+0.5 - 0.6). In any game with dfGUI (or another UI library of the
+Unity 4 era) count the bodies with `Resources.FindObjectsOfTypeAll(typeof(Rigidbody))`: hidden ones never show in
+`FindObjectsOfType` or in the hierarchy.
+
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
 muOS had 3 - 8 frames over 50 ms in the fight where the Knulli had none. A 40 s profile of the frames
