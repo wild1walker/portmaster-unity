@@ -553,6 +553,7 @@ int main(int argc, char **argv)
     snprintf(ext, sizeof ext, "%s/external", data);
     mkdirs(files); mkdirs(cache); mkdirs(ext);
     glspec_cache(cache);                        // UA_GL_SPEC turned on or off: Unity's program binaries made again
+    glhooks_set_cache_dir(cache);               // UA_GL_PROGCACHE: data/cache/ua_progcache
     signal(SIGINT, on_signal); signal(SIGTERM, on_signal);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -747,6 +748,7 @@ int main(int argc, char **argv)
     sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
     up_quit();      // also when the game asked to quit (Application.Quit: nativeRender returned false)
     up_wait();
+    glhooks_progcache_report("at the end");
     fprintf(stderr, "[host] Unity stopped\n");
     // Unity has saved and shut down; the libraries' exit handlers (Mono's thread cleanup, static
     // destructors) have nothing left to do but can block on threads that are gone
