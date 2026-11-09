@@ -849,8 +849,8 @@ recorder on the Knulli), fps over the 35 s, p99 and frames over 50 ms:
 
 | scene | Knulli (1.5 GHz) | muOS (1.8 GHz) |
 |---|---|---|
-| the Keep's boss at the fixed seed (Gatling Gull) | 49.9, 42.9 ms, 12 | |
-| the Forge's busiest room (Forge_Joe_Cool_Room_011) | 40.7, 39.2 ms, 3 | |
+| the Keep's boss at the fixed seed (Gatling Gull) | 49.9, 42.9 ms, 12 | 47.7, 44.8 ms, 13 |
+| the Forge's busiest room (Forge_Joe_Cool_Room_011) | 40.7, 39.2 ms, 3 | 41.6, 34.8 ms, 1 |
 | the High Dragun (Boss Rush, the Forge) | 47.3, 65.6 ms, 35 | 48.6, 65.6 ms, 35 |
 | Bullet Hell's busiest room (Hell_Hath_No_Joery_007, 7 enemies and waves) | 24.2 (profiled run) | 24.8, 26.0 |
 
@@ -873,9 +873,23 @@ turning it false; with no flag set the walk changes nothing). muOS, Bullet Hell'
 (each pair one A B and one B A against the row above). The Knulli, the port against both: 22.94 -> 34.07 fps,
 frames over 50 ms 128 -> 5; B A 34.06 against 23.43, 7 against 103.
 
-Log lines cost little here: the game logs "Negative ActorPathCount!" about 25 times a second in that room, about
-0.02 ms a frame of UnityMain. Next in the same profile: the game's own physics (`PhysicsEngine.LateUpdate` 1.7 -
-1.9 ms of its own time, the body sort 0.65 ms) and PoolManager's despawns (`List.Contains` over Unity objects).
+Then the lists. `List<T>.Contains`, `IndexOf` and `Remove` compare through `EqualityComparer<T>.Default`, which
+for a `UnityEngine.Object` type calls `Object.Equals(object)` per element (a cast, Unity's `==` on the argument,
+then `CompareBaseObjects`, whose answer for two non-null references is `ReferenceEquals`), and Mono's
+`Array.IndexOf` adds two bound lookups (internal calls) per call. PoolManager's despawns walk the spawned and
+despawned lists of every prefab pool for each bullet: about 1 ms a frame of that room. For a non-null argument
+every element's answer is reference equality, so the port's `unity-list-ref` sends the game's 270 such calls to a
+helper per type that scans references (the list's own method for a null argument; only for types that neither
+override `Equals` nor implement `IEquatable`, nor have a subtype that does). With the goop patches, A B and B A:
+muOS 33.00 / 31.81 -> 34.51 / 34.06 fps, Knulli 33.00 / 31.29 -> 33.81 / 32.53; the rig's game state the same over
+1,270 frames of the Keep's route (all three patches against the build before them). The same holds in any Unity
+2017.4 game on Mono, so it is a candidate for asmpatch.
+
+The other scenes at the port's settings before these patches (fps, p99, frames over 50 ms): muOS the Keep's boss
+47.7, 44.8 ms, 13; the Forge's room 41.6, 34.8 ms, 1. Log lines cost little: the game logs "Negative
+ActorPathCount!" about 25 times a second in Bullet Hell's room, about 0.02 ms a frame of UnityMain. Next in the
+same profile: the game's own physics (`PhysicsEngine.LateUpdate` about 2 ms of its own time with ~1,000 bullets,
+the body sort 0.6 ms: `List.Sort` with a delegate whenever a body registers) and the camera chain (3.4 ms).
 
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
