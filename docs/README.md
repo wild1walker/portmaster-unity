@@ -25,6 +25,7 @@ the five-step quick start. This page lists every document and the repository's l
 | [apk.md](apk.md) | games owned as Android builds (`pmunity apk`) |
 | [arm64.md](arm64.md) | the 64-bit ARM loader |
 | [box64-route.md](box64-route.md) | the game's own Linux x86-64 build under box64 |
+| [macho-route.md](macho-route.md) | a macOS IL2CPP build's arm64 GameAssembly on ARM Linux: the Mach-O loader, macOS calls, instruction rewrites (in progress) |
 | [design.md](design.md) | the design and the interfaces between the parts |
 
 Component notes: [runtime/android](../runtime/android/README.md),

@@ -454,6 +454,12 @@ Metal-only build is translated from its Metal programs (`shaders.from = ["metal"
 | [Chapéu de Papel](https://carambo.itch.io/paper-hat) | 2022.3.62f3 (URP), Metal only, Mono .NET 4.x, Input System | title menu, its backgrounds cycling (2004, 1987, 1954) as in its own Android build's run, the right way up | the 32-bit route with `shaders.from = ["metal"]` (the check's suggestion, with asmpatch and `streaming_assets = "both"`): 92 of 93 shaders, 1250 programs translated from Metal (URP's HDR debug view left out), the full-screen passes' coordinates given GL's origin (869 stages); its APK takes the `apk` route (above) (2026-10-22) |
 | [Rhythm Quest (Demo)](https://ddrkirbyisq.itch.io/rhythm-quest) | 6000.2.6f2, Metal only; Localization, Addressables, Input System, InControl, Steam, Discord | - | its Metal programs translated in memory (`--from metal`): 113 of 114 shaders, 320 programs, 209 / 209 distinct link on Mesa; its Addressables bundles carry no Unity version in their headers, which stopped the shaders step (now given the data's). Not run; its Linux build is IL2CPP (`box64` route, not run) (2026-10-22) |
 
+## Mach-O route (macOS IL2CPP builds' arm64 code)
+
+| game | Unity, build | result | notes (last checked) |
+|---|---|---|---|
+| Dave the Diver (Steam, macOS v1.0.6.768) | 6000.0.52f1, IL2CPP, URP, Addressables, Burst, Input System, Steam, EOS | not run yet | every binary universal; GameAssembly's arm64 slice: 342 imports (libSystem 236, libc++ 95, CoreFoundation 11), 530 instructions beyond ARMv8.0 (489 LSE, 13 `ldapr`, 6 `eor3`, 22 `crc32`), all within a branch of a block before the image (macho-route.md; 2026-11-08) |
+
 ## Checked only (no route through the Android players)
 
 | game | Unity, build | what `port check` says (last checked) |
