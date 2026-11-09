@@ -1927,9 +1927,9 @@ CONFIG_DOC = {
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
                "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\",\n"
                "# UA_DPAD_STICK = \"auto\" (the d-pad drives the left stick on handhelds without sticks)",
-    'runtime_low': "# the Low picture: more of the environment on every handheld unless the player chose High\n"
-                   "# (UA_PICTURE = high or full: a question with env = \"UA_PICTURE\", or port.env): reductions of\n"
-                   "# the picture, never of the game play (docs/porting.md, \"The Low picture at launch\"), e.g.\n"
+    'runtime_low': "# the Low picture: more of the environment on every handheld (no setup question offers another;\n"
+                   "# UA_PICTURE=high set by hand at the top of port.env skips it): reductions of the picture,\n"
+                   "# never of the game play (docs/porting.md, \"The Low picture at launch\"), e.g.\n"
                    "# ASMPATCH_HK_BLUR = \"off\", UA_RENDER_PIXELS = \"560000\", UA_PREFS_DEFAULTS (the game's own options)",
     'runtime_lowmem': "# more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there\n"
                       "# unless set already), with either picture: what spares memory or the CPU and leaves the\n"
@@ -2103,10 +2103,8 @@ def port_env(cfg):
         lines.append(f'[ -n "${{{k}+x}}" ] || export {k}={q(v)}')
     pic = cfg.get('runtime_low') or {}
     if pic:
-        lines += ['# the setup\'s answers (answers.env) first, so that they win over the defaults below',
-                  '[ -f "${GAMEDIR:-.}/answers.env" ] && . "${GAMEDIR:-.}/answers.env"',
-                  '# the Low picture on every handheld, the same game; UA_PICTURE=high (the setup\'s High, or set',
-                  '# here) keeps the picture as on PC (set a variable above, or in the environment, and that wins)',
+        lines += ['# the Low picture on every handheld, the same game; UA_PICTURE=high set above keeps the picture',
+                  '# as on PC (set a variable above, or in the environment, and that wins)',
                   'case "${UA_PICTURE:-low}" in high|full) ;; *)']
         lines += [f'  [ -n "${{{k}+x}}" ] || export {k}={q(v)}' for k, v in pic.items()]
         lines.append(';; esac')

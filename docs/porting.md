@@ -338,7 +338,7 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
 | `wwise.banks` | the check's: the game's Wwise soundbank folder (relative to the data folder) when its banks are of a version `pmu wwise` reads (128, Wwise 2017.2) | the setup converts those banks once into the port's `wwise/` folder (step 5 below), and the launcher points ua_host's own Wwise player at it (`UA_WWISE_DATA`): the game's sound without Wwise's engine ([wwise-player.md](wwise-player.md)); empty: no conversion, the game runs silent on ua_host's built-in Wwise |
-| `runtime_low` | none | the Low picture: more of the environment, set on every handheld unless the player chose High (`UA_PICTURE` high or full: a question with `env = "UA_PICTURE"`, or `port.env`) and unless already set: the game's own options at their lowest and reductions of the picture that leave the game play as it is ([below](#the-low-picture-at-launch-runtime_low)) |
+| `runtime_low` | none | the Low picture: more of the environment, set on every handheld unless already set (no setup question offers another picture; `UA_PICTURE=high` set by hand in `port.env` skips it): the game's own options at their lowest and reductions of the picture that leave the game play as it is ([below](#the-low-picture-at-launch-runtime_low)) |
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set, with either picture: what spares memory or the CPU there ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
 | `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 10), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
@@ -396,14 +396,15 @@ applies when the setup converts the data; changing it later means running the se
 
 ### The Low picture at launch (`runtime_low`)
 
-A port starts with the Low picture on every handheld, whatever its size: the game's own graphics
+A port has one picture, the Low one, on every handheld whatever its size: the game's own graphics
 options at their lowest and the reductions below, never anything of the game play (timing,
 physics, collisions, scripts and everything that tells the player something, such as an attack's
-warning, a hitbox or a pickup, stay). A question of the setup gives the player High, the picture as
-on PC. Hollow Knight's showed why it cannot be only for 1 GB handhelds: an RG552 (4 GB, a 1920x1152
-screen) got none of the reductions and drew King's Pass at about 11 fps. The reductions are set at
-launch, not built in by the setup, so the player can switch later by editing `port.env`
-(`UA_PICTURE=high` at its top):
+warning, a hitbox or a pickup, stay). The setup offers no other picture: players who picked a
+heavier one would get the port's worst frame rates and report them as the port's. (The setup's
+High / Low questions are only for what the setup builds, such as the texture conversion.) Hollow
+Knight showed why it cannot be only for 1 GB handhelds: an RG552 (4 GB, a 1920x1152 screen) got
+none of the reductions and drew King's Pass at about 11 fps. The reductions are set at launch, not
+built in by the setup:
 
 ```toml
 [android_data]
@@ -415,22 +416,15 @@ UA_RENDER_SIZE = "540x360"         # Unity draws at 540x360 on 1 GB handhelds (U
 UA_RENDER_RAM = "1024"
 UA_RENDER_PIXELS = "560000"        # ... and at most about 960x576 on the rest (half a 1080p screen)
 UA_PREFS_DEFAULTS = "ShaderQuality=0 VidParticles=0 VidDithering=0 VidNoise=0"   # its own options, lowest
-
-[[questions]]
-id = "PICTURE"
-question = "Picture quality? Low is faster: ... High is the picture as on PC. The game plays the same."
-options = [["low", "Low (recommended, faster)"], ["high", "High (as on PC)"]]
-default = "low"
-env = "UA_PICTURE"
 ```
 
-`port.env` reads the setup's answers (`answers.env`) first and sets the `runtime_low` variables
-unless `UA_PICTURE` is `high` (or `full`); a value set above them in `port.env` or in the
-environment wins (`ASMPATCH_HK_BLUR=full`). An install whose setup asked no such question gets Low.
-The game's own options go in through `UA_PREFS_DEFAULTS` (docs/runtime.md): they are the game's
-defaults until the player changes them in its menus, and what the game stores from then on is the
-player's (High does not take it back). The render size is the largest single lever on a GPU-bound
-game; `UA_RENDER_PIXELS` keeps a big screen from costing many times a small one's GPU time
+`port.env` sets the `runtime_low` variables unless already set; a value set above them in
+`port.env` or in the environment wins (`ASMPATCH_HK_BLUR=full`), and `UA_PICTURE=high` there skips
+them all. That is for someone who edits `port.env` by hand; the setup and the README's first steps
+never offer it. The game's own options go in through `UA_PREFS_DEFAULTS` (docs/runtime.md): they
+are the game's defaults until the player changes them in its menus, and what the game stores from
+then on is the player's. The render size is the largest single lever on a GPU-bound game;
+`UA_RENDER_PIXELS` keeps a big screen from costing many times a small one's GPU time
 (docs/runtime.md). What each of Hollow Knight's reductions gains on the RG34XX-SP, and what it costs
 the picture: [profiling.md](profiling.md#hollow-knights-blur-and-particles-on-1-gb-handhelds).
 
