@@ -53,7 +53,7 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_progcache test/test_progcache.c glhooks.c $O/pc/libGLESv2.so.2 -ldl -lpthread'
 PCS='hit order attribs refused tf off'
 RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach upload sink side opt'
-MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec'
+MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec external'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
     for s in off mouse touch keymap keymapstick swap dstick dstickauto toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done

@@ -1105,7 +1105,14 @@ TEXW(CopyTexImage2D, (GLenum t, GLint l, GLenum f, GLint x, GLint y, GLsizei w, 
 TEXW(CopyTexSubImage2D, (GLenum t, GLint l, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h), (t, l, xo, yo, x, y, w, h), t)
 TEXW(CopyTexSubImage3D, (GLenum t, GLint l, GLint xo, GLint yo, GLint zo, GLint x, GLint y, GLsizei w, GLsizei h),
      (t, l, xo, yo, zo, x, y, w, h), t)
-TEXW(GenerateMipmap, (GLenum t), (t), t)
+static void ext_note(GLenum p, GLint from, GLint to);
+static void (*r_GenerateMipmap)(GLenum);
+static void w_GenerateMipmap(GLenum t)
+{
+    if (t == GL_TEXTURE_EXTERNAL_OES) { ext_note(0, 0, -2); return; }     // (below: what an external texture takes)
+    bound_written(t);
+    r_GenerateMipmap(t);
+}
 static void (*r_EGLImageTargetTexture2DOES)(GLenum, void *);
 static void w_EGLImageTargetTexture2DOES(GLenum t, void *img) { bound_volatile(t); r_EGLImageTargetTexture2DOES(t, img); }
 static void (*r_TexBufferEXT)(GLenum, GLenum, GLuint);
@@ -1114,11 +1121,68 @@ static void (*r_TexBufferOES)(GLenum, GLenum, GLuint);
 static void w_TexBufferOES(GLenum t, GLenum f, GLuint b) { bound_volatile(t); r_TexBufferOES(t, f, b); }
 static void (*r_TexBuffer)(GLenum, GLenum, GLuint);
 static void w_TexBuffer(GLenum t, GLenum f, GLuint b) { bound_volatile(t); r_TexBuffer(t, f, b); }
+// A video's GL_TEXTURE_EXTERNAL_OES (OES_EGL_image_external) takes only NEAREST / LINEAR filters and CLAMP_TO_EDGE, and
+// no mipmaps. Unity's Android player sets its usual sampling on it too: the Mali takes that, the PowerVR GE8320 (TrimUI
+// Smart Pro) answers GL_INVALID_ENUM, which Unity then logs as "OPENGL NATIVE PLUG-IN ERROR" after its video's render
+// event. A filter or wrap becomes the nearest value the texture takes; another parameter, or a mipmap request, is left
+// out (nothing of them applies to an external texture); each kind once in the log.
+#ifndef GL_NEAREST
+#define GL_NEAREST 0x2600
+#define GL_LINEAR 0x2601
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#define GL_NEAREST_MIPMAP_LINEAR 0x2702
+#endif
+#ifndef GL_TEXTURE_MIN_FILTER
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_TEXTURE_WRAP_S 0x2802
+#define GL_TEXTURE_WRAP_T 0x2803
+#endif
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+static void ext_note(GLenum p, GLint from, GLint to)
+{
+    static struct { GLenum p; GLint v; } seen[16];
+    static int n;
+    for (int i = 0; i < n; i++) if (seen[i].p == p && seen[i].v == from) return;
+    if (n < 16) { seen[n].p = p; seen[n].v = from; n++; }
+    if (to == -2) fprintf(stderr, "[glmemo] glGenerateMipmap(GL_TEXTURE_EXTERNAL_OES) left out (an external texture has no mipmaps)\n");
+    else if (to == -1) fprintf(stderr, "[glmemo] glTexParameter(GL_TEXTURE_EXTERNAL_OES, 0x%x, 0x%x) left out (external textures take filters and wrap only)\n", p, from);
+    else fprintf(stderr, "[glmemo] glTexParameter(GL_TEXTURE_EXTERNAL_OES, 0x%x): 0x%x -> 0x%x (what an external texture takes)\n", p, from, to);
+}
+/* 1: make the call with *v (perhaps changed); 0: leave it out */
+static int ext_fix(GLenum t, GLenum p, GLint *v)
+{
+    if (t != GL_TEXTURE_EXTERNAL_OES) return 1;
+    GLint o = *v;
+    switch (p) {
+    case GL_TEXTURE_MIN_FILTER:
+        if (o == GL_NEAREST || o == GL_LINEAR) return 1;
+        *v = o == GL_NEAREST_MIPMAP_NEAREST || o == GL_NEAREST_MIPMAP_LINEAR ? GL_NEAREST : GL_LINEAR;
+        break;
+    case GL_TEXTURE_MAG_FILTER:
+        if (o == GL_NEAREST || o == GL_LINEAR) return 1;
+        *v = GL_LINEAR;
+        break;
+    case GL_TEXTURE_WRAP_S: case GL_TEXTURE_WRAP_T:
+        if (o == GL_CLAMP_TO_EDGE) return 1;
+        *v = GL_CLAMP_TO_EDGE;
+        break;
+    default:
+        ext_note(p, o, -1);
+        return 0;
+    }
+    ext_note(p, o, *v);
+    return 1;
+}
+
 // parameters: a change of value is a write (Unity sets the same values again)
 static int pcount(GLenum p) { return p == GL_TEXTURE_BORDER_COLOR ? 4 : 1; }
 static void (*r_TexParameteri)(GLenum, GLenum, GLint);
 static void w_TexParameteri(GLenum t, GLenum p, GLint v)
 {
+    if (!ext_fix(t, p, &v)) return;
     GLint cur[4] = { 0 };
     if (g_on) { q_GetTexParameteriv(t, p, cur); if (cur[0] != v) bound_param(t); }
     r_TexParameteri(t, p, v);
@@ -1126,6 +1190,8 @@ static void w_TexParameteri(GLenum t, GLenum p, GLint v)
 static void (*r_TexParameteriv)(GLenum, GLenum, const GLint *);
 static void w_TexParameteriv(GLenum t, GLenum p, const GLint *v)
 {
+    GLint x[4] = { 0 };
+    if (t == GL_TEXTURE_EXTERNAL_OES && v) { x[0] = v[0]; if (!ext_fix(t, p, x)) return; v = x; }
     GLint cur[4] = { 0 };
     if (g_on) { q_GetTexParameteriv(t, p, cur); if (!v || memcmp(cur, v, (size_t)pcount(p) * sizeof *v)) bound_param(t); }
     r_TexParameteriv(t, p, v);
@@ -1133,6 +1199,8 @@ static void w_TexParameteriv(GLenum t, GLenum p, const GLint *v)
 static void (*r_TexParameterfv)(GLenum, GLenum, const float *);
 static void w_TexParameterfv(GLenum t, GLenum p, const float *v)
 {
+    float xf[4] = { 0 };
+    if (t == GL_TEXTURE_EXTERNAL_OES && v) { GLint x = (GLint)v[0]; if (!ext_fix(t, p, &x)) return; xf[0] = (float)x; v = xf; }
     float cur[4] = { 0 };
     if (g_on) { q_GetTexParameterfv(t, p, cur); if (!v || memcmp(cur, v, (size_t)pcount(p) * sizeof *v)) bound_param(t); }
     r_TexParameterfv(t, p, v);
@@ -1141,6 +1209,7 @@ static void (*r_TexParameterf)(GLenum, GLenum, float);
 static void (SO_ABI *n_TexParameterf)(GLenum, GLenum, float);
 static SO_ABI void w_TexParameterf(GLenum t, GLenum p, float v)
 {
+    if (t == GL_TEXTURE_EXTERNAL_OES) { GLint x = (GLint)v; if (!ext_fix(t, p, &x)) return; v = (float)x; }
     float cur[4] = { 0 };
     if (g_on) { q_GetTexParameterfv(t, p, cur); if (cur[0] != v) bound_param(t); }
     if (n_TexParameterf) n_TexParameterf(t, p, v); else r_TexParameterf(t, p, v);
