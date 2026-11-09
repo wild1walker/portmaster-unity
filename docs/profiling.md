@@ -2166,3 +2166,15 @@ are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 a
 loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
 behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'
 peak 331 MB, at least 424 MB available).
+
+Memory in the heavy fights (gungeon-main's benches, 2026-11-09: the Forge's busiest room, fixed seed, no damage,
+EmulationStation stopped): Mono's heap grows to 264 MB over the Forge's load, in 26 steps, with 21 full
+collections of up to 0.97 s (world-stopped marking, `GC_PRINT_STATS=1` in the game's environment; all inside
+the loads, none in the fight). Capped at 180 MB (`GC_MAXIMUM_HEAP_SIZE`) the load ends in an
+OutOfMemoryException: the live data passes ~176 MB there, so at most ~88 MB of the heap is slack. The rest of
+the game's ~750 MB: Unity's own allocations (anonymous memory 500 MB with the heap), the Mali driver's 213 MB
+(194 MB of it textures, the ASTC atlases: `mem_profile` of the game's context in the driver's debugfs), files
+~35 MB. `UA_GC_GROW=250` (runtime.md; a collection whenever the heap grows during a load with under 250 MB
+available): heap 264 -> 224 MB, lowest MemAvailable 82 -> 140 MB, the fight's fps the same (22.4), about 2.7 s
+more collection in the floor's load. With 110 MB held by another process (EmulationStation's size in its menu)
+the load still runs short (35 MB at the watchdog).
