@@ -82,14 +82,14 @@ for id in $QUESTIONS; do
 done
 mv -f "$W/answers.env.new" "$W/answers.env"
 
-# ---- the videos: where the port ships libpmhwdec (pmhw/) and it decodes VP8 on this handheld's
+# ---- the videos: where the port ships libpmhwdec (pmhwdec/) and it decodes VP8 on this handheld's
 # video engine (its test program says so in milliseconds; it steps aside where the engine needs
 # anything the port does not do), the convert's video step leaves the clips at full size: the
 # hardware plays them in time, which is what the step's smaller clips are for
 hw_vp8() {
-  local t="$GAMEDIR/pmhw/pmhw-test" r
+  local t="$GAMEDIR/pmhwdec/pmhw-test" r
   [ -f "$t" ] || return 1
-  chmod +x "$t" "$GAMEDIR/pmhw/pmhw-cedard" 2>/dev/null
+  chmod +x "$t" "$GAMEDIR/pmhwdec/pmhw-cedard" 2>/dev/null
   r=$("$t" -q 2>/dev/null | sed -n 's/^VP8: //p')
   case "$r" in ""|"no hardware"*) echo "VP8: no hardware decoder here (the software decoder plays the videos)"; return 1;; esac
   echo "VP8 on this handheld's video engine: $r"

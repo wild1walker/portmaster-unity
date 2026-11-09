@@ -7,7 +7,7 @@
 # and <out>/aarch64/pmhw-cedard, the Allwinner decoder (GPL-2.0-or-later, a separate program the
 # library starts next to itself; the H616 / H700 / A133 handhelds run 64-bit kernels, so the 64-bit one
 # for both), and pmhw-test, which the setup asks whether VP8 plays on the video engine (the clips then
-# stay at full size). Ship the library's folder with pmhw-cedard beside it and point UM_PMHW at the library in
+# stay at full size). Ship the library's folder with pmhw-cedard beside it and point UM_PMHWDEC at the library in
 # port.env (docs/porting.md, "Videos"). <out>/armhf/librockchip_mpp.so is Rockchip MPP (Apache-2.0,
 # LICENSE.mpp.txt beside it), trimmed as the library's rkmpp/build_mpp.sh does (its source patches,
 # H.264 / HEVC / VP8 decoders only), with gcc in ua-host-armhf instead of clang and a sysroot: ship it

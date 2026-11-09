@@ -589,8 +589,10 @@ costs only while it plays: game play frames decode nothing.
   architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhw-cedard`, the
   Allwinner decoder the library starts from its own folder (aarch64 for both: those handhelds run
   64-bit kernels). Ship them with the port's `[build]` (Hollow Knight's port.toml: the script as a
-  command, the two files as outputs in `pmhw/`, the three licences) and set `UM_PMHW =
-  "pmhw/libpmhwdec.so.1"` in `[runtime]`: a path in the port folder, `ua_host`'s working folder
+  command, the two files as outputs in `pmhwdec/`, the three licences) and set `UM_PMHWDEC =
+  "pmhwdec/libpmhwdec.so.1"` in `[runtime]` (the folder and the variable are named after the library, pmhwdec, as
+  Knifethrower asked; releases before 2026-11-09 had `pmhw/` and `UM_PMHW`, which ua_host still reads and
+  the launcher templates remove where `pmhwdec/` is there): a path in the port folder, `ua_host`'s working folder
   (`port.env` quotes values, so `$GAMEDIR` would not expand there; the
   launcher's library path holds only the system's folders). The log says what it chose
   (`[media] decoders: ... vp8 (pmhwdec)`, `[media] pmhwdec: VP8 1920x1080 on cedar`). Where its
@@ -600,12 +602,12 @@ costs only while it plays: game play frames decode nothing.
   `armhf/librockchip_mpp.so` with `LICENSE.mpp.txt`, trimmed as his `rkmpp/build_mpp.sh` does), and
   the decoder's nodes, root-only there while ports run as `ark`: the launcher templates open
   `/dev/vpu_service` and `/dev/hevc_service` to the video group (`$ESUDO chgrp video`, `chmod 660`)
-  only where the port ships `pmhw/` and they are not usable already, and put back the owner, group
+  only where the port ships `pmhwdec/` and they are not usable already, and put back the owner, group
   and mode they found when the launcher ends (PortMaster's Moonlight opens the same nodes; the user
   agreed on 2026-11-08, on condition that everything is returned as it was found). G350 (dArkOS,
   RK3326), as `ark`: the self-test passes for H.264, HEVC and VP8 on `rkmpp`, Hollow Knight's intro
   plays on it in the game with the game at 60 fps, and the nodes are `crw------- root root` again
-  after. Without the nodes or MPP it reports no hardware in milliseconds and libvpx plays the clips. Ship `pmhw-test` too (`pmhw/pmhw-test`, the same
+  after. Without the nodes or MPP it reports no hardware in milliseconds and libvpx plays the clips. Ship `pmhw-test` too (`pmhwdec/pmhw-test`, the same
   build): the setup asks it whether VP8 plays on this handheld's video engine and, where it does,
   leaves the `video` step's clips at full size (`--set video.mode=off`; the update script skips
   `pmu video` the same way): the hardware plays them in time, which is what the smaller clips are

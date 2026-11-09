@@ -5,8 +5,8 @@
 //   test_pmhw none     no libpmhwdec on the library path: OpenH264, as before
 //   test_pmhw hw       FAKE_PMHW unset: pmhwdec decodes it all
 //   test_pmhw nohw     FAKE_PMHW=nohw: the library has no decoder for the device: OpenH264
-//   test_pmhw off      UM_PMHW=0: OpenH264 although the library is there
-//   test_pmhw path     no library path, UM_PMHW=<the library>: pmhwdec decodes it all
+//   test_pmhw off      UM_PMHWDEC=0: OpenH264 although the library is there
+//   test_pmhw path     no library path, UM_PMHWDEC=<the library>: pmhwdec decodes it all
 //   test_pmhw h264env  UM_H264=ffmpeg (a software choice): pmhwdec still decodes it all
 //   test_pmhw refuse   FAKE_PMHW=refuse: refused at configure: OpenH264
 //   test_pmhw midway   FAKE_PMHW=midway: pmhwdec, then OpenH264 from the 11th picture (an IDR)
@@ -52,7 +52,7 @@ int main(int argc, char **argv)
     const char *mode = argc > 1 ? argv[1] : "hw";
     printf("-- pmhwdec path: %s\n", mode);
     fake_stats_t *st = NULL;
-    const char *path = getenv("UM_PMHW");
+    const char *path = getenv("UM_PMHWDEC");
     void *fake = dlopen(path && *path && strcmp(path, "0") ? path : "libpmhwdec.so.1", RTLD_NOW);
     if (fake) {
         void (*setup)(void *, void *, void *) = (void (*)(void *, void *, void *))dlsym(fake, "fake_pmhw_setup");

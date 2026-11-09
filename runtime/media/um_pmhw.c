@@ -1,6 +1,6 @@
 // Hardware video decoding (H.264, HEVC, VP8) through libpmhwdec (LGPL-2.1-or-later,
 // https://github.com/Knifethrower/pmhwdec), loaded with dlopen
-// from the library path or a port's own copy through UM_PMHW=<path>: never linked or shipped here. libpmhwdec
+// from the library path or a port's own copy through UM_PMHWDEC=<path>: never linked or shipped here. libpmhwdec
 // picks the handheld's decoder at run time (Allwinner's video engine, Rockchip MPP, V4L2 stateless
 // or stateful) and checks it with its own start-up self-test. Without the library, on a device
 // without a decoder, or for a stream it does not take (found from the parameter sets at
@@ -12,7 +12,7 @@
 // buffers) are sent ahead and again after a flush. VP8: the frames as the container holds them. Pictures come out as NV12 in presentation
 // order with the time of the access unit they were coded in; 10-bit HEVC as its top 8 bits.
 //
-// UM_PMHW=0: never used. UM_H264=openh264 / ffmpeg chooses among the software decoders only (the
+// UM_PMHWDEC=0: never used. UM_H264=openh264 / ffmpeg chooses among the software decoders only (the
 // one that takes over when this one steps aside). libpmhwdec's own PMHWDEC_LOG=1 /
 // PMHWDEC_BACKEND=... apply.
 #define _GNU_SOURCE
@@ -59,7 +59,8 @@ static pthread_once_t lib_once = PTHREAD_ONCE_INIT;
 
 static void lib_load(void)
 {
-    const char *e = getenv("UM_PMHW");
+    const char *e = getenv("UM_PMHWDEC");
+    if (!e) e = getenv("UM_PMHW");             // its name in ports made before 2026-11-09
     if (e && !strcmp(e, "0")) return;
     void *h = dlopen(e && *e ? e : "libpmhwdec.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!h) { if (e && *e) um_log("pmhwdec: %s: %s", e, dlerror()); return; }

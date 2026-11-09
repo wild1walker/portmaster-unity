@@ -102,7 +102,7 @@ pictures through EGLImage + shader with Mesa: every pixel equals the desktop for
 | Opus | WebM, Matroska | libopus | BSD-3-Clause | static |
 | H.264 | MP4, MOV, Matroska | OpenH264 (`OMX.google.h264.decoder`) | BSD-2-Clause | static (Debian's `libopenh264-dev` on armhf; built from Debian's source package for arm64) |
 | H.264 with B-frames, interlaced, > 8 bit; HEVC; AAC; MP3 | MP4, MOV, Matroska | the system's libavcodec (`ffmpeg.*`) | LGPL (the firmware's, or a port's own build) | `dlopen` when present, or `UM_FFMPEG=<path>`; never shipped by this repository |
-| H.264, HEVC, VP8 on the handheld's hardware decoder (Allwinner video engine, Rockchip MPP, V4L2) | MP4, MOV, Matroska | [libpmhwdec](https://github.com/Knifethrower/pmhwdec) (`pmhwdec.*`), tried before the software decoders | LGPL-2.1-or-later (a port's own copy) | `dlopen` from the library path or `UM_PMHW=<path>`; never shipped by this repository |
+| H.264, HEVC, VP8 on the handheld's hardware decoder (Allwinner video engine, Rockchip MPP, V4L2) | MP4, MOV, Matroska | [libpmhwdec](https://github.com/Knifethrower/pmhwdec) (`pmhwdec.*`), tried before the software decoders | LGPL-2.1-or-later (a port's own copy) | `dlopen` from the library path or `UM_PMHWDEC=<path>`; never shipped by this repository |
 | AAC, MP3 without libavcodec | | silence of the right length | ours | |
 
 What each covers:
@@ -140,10 +140,10 @@ must not carry an H.264 decoder: H.264 clips then play only where the handheld h
 | `UM_TRACE=1` | one line per decoded input (its time in the decoder, waiting for a free output buffer included), per frame, per output buffer the client dequeues and releases, per `updateTexImage` (latched picture, or nothing queued); each traced line starts with its time (`CLOCK_MONOTONIC` ms) |
 | `UM_VIDEO_BUFFERS=<n>` | a video decoder's output buffers (default 4, Android's usual; each holds a picture). More let a slow consumer still find the frame it asks for (the emulated rig needs ~24 at 2 fps) |
 | `UM_VPX_THREADS=<n>` | libvpx threads (default: VP9 the CPUs, up to 4, for its tiles; VP8 one: its threads, used only for clips with several token partitions, wait for each other by spinning, which on a 4-core handheld running the game costs more than it gains) |
-| `UM_H264=openh264` | OpenH264 for every H.264 stream the hardware decoder (`UM_PMHW`) does not take, B-frames included |
+| `UM_H264=openh264` | OpenH264 for every H.264 stream the hardware decoder (`UM_PMHWDEC`) does not take, B-frames included |
 | `UM_H264=ffmpeg` | libavcodec for every H.264 stream the hardware decoder does not take, when it is there (`UM_FFMPEG`): its threads and NEON code take 1080p that OpenH264's single thread cannot keep up with on four Cortex-A53s (a 1080p Constrained Baseline clip on an H700: 2.7x real time against 0.6x) |
 | `UM_FFMPEG=0` / `=<path>` | no system libavcodec / that libavcodec (e.g. a port's own LGPL build, on a firmware that has none) |
-| `UM_PMHW=0` / `=<path>` | no hardware decoding / that libpmhwdec (a port's own copy; otherwise `libpmhwdec.so.1` from the library path). `UM_H264` chooses only among the software decoders behind it |
+| `UM_PMHWDEC=0` / `=<path>` | no hardware decoding / that libpmhwdec (a port's own copy; otherwise `libpmhwdec.so.1` from the library path). `UM_H264` chooses only among the software decoders behind it. `UM_PMHW`, its name before 2026-11-09, is still read |
 | `ANDROID_SHIM_LIBEGL`, `UM_LIBGLES` | the libEGL / libGLESv2 the surface code opens (the ones Unity uses; default `libEGL.so.1`, `libGLESv2.so.2`) |
 
 The host's log names the decoders at start: `[media] decoders: vp8 (libvpx-vp8), ...`.
