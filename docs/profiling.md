@@ -717,6 +717,26 @@ sprites' `Camera.Render` 3.3, the background's 0.7, the unoccluded layer's 0.4, 
 lighting buffer 0.2, blits under 0.1 each), the HUD 1.5 (two managers), 309 sprite animators 1.2, the player 1.8,
 the enemies' AI 1.0 + 0.7, the HUD's 246 controls 1.3, pit particles 0.8. No garbage collection in the fight.
 
+The game's physics there, timed loop by loop (`PhysicsEngine.LateUpdate`, muOS): 3.9 ms a frame, of it the first
+walk over the bodies 0.95 ms, the movement walk 1.77, the ghost-exception walk 0.27; 1,838 bodies registered,
+about 205 active and enabled, about 26 moving. The port's `physics-skip` keeps one bit per list position, set
+exactly when the body there is active and enabled (Register, Deregister, the sort and the body's
+OnEnable/OnDisable keep it), and three of the walks step from one set bit to the next; their own tests stay,
+so a body is processed exactly when it was before and in the same order. Its check build tests every step
+against the bodies themselves: Bullet Hell on both handhelds and the Keep's boss, 15.9 million steps over
+100 million skipped positions, 0 wrong. (A frame-by-frame rig comparison does not settle a change like this
+on a busy floor: two runs of the same build in the emulator part within ~100 frames there, the floor's
+asynchronous loads finishing at frames that follow the emulator's speed, even with a fixed game time.)
+Then `half-rate`, a change too small to see: the minimap's camera renders every other frame while the map is
+the corner minimap (its texture keeps the last one; every frame while the map is open), and the pit
+particles are checked against the floor every other frame. A B and B A, Bullet Hell's room:
+
+| | Knulli fps | muOS fps |
+|---|---|---|
+| the port | 34.01, 34.97 | 35.60, 35.27 |
+| + `physics-skip` | 36.14, 36.09 | 36.26, 36.41 |
+| + `half-rate` | 36.20, 35.83 (against 35.57, 35.40) | 38.87, 36.99 (against 36.31, 36.56) |
+
 Later (2026-11-09) `UA_MONO_TLS` keeps the thread's JIT data and domain in ua_host's own thread-local
 variables as well, filled through libmono's `pthread_setspecific` (so no call per icall wrapper at all). At
 the port's shipped settings with all its patches, A B and B A: the first fight Knulli 59.29 / 59.34 -> 59.43 /
