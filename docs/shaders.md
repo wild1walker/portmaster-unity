@@ -301,8 +301,9 @@ inputs above. Unsplit: invalid (size over the limits). Split without ua_host's a
 answers: valid, `GetKernelThreadGroupSizes` 256,1,1, and its buffers those of the original kernel
 on Mesa: the roots the same bytes, the nodes 27,166 of 33,792 words the same and the rest within
 4e-4 relative (Mali's and llvmpipe's `sqrt` / `inversesqrt` round differently; the split kernel is
-the same bytes as the original on Mesa). The 15 Obi solvers in Dave the Diver's bundles store
-backend 1 (`m_Backend`; Obi 7 compiles both its Burst and Compute backends in).
+the same bytes as the original on Mesa). The 15 Obi solvers in Dave the Diver's bundles use
+Burst (`m_Backend` 1; Obi 7's `BackendType` is Compute 0, Burst 1 in the game's IL2CPP metadata):
+Obi's kernels, the two kept among them, are not run there.
 
 ### The files the step reads; asset bundles and scene bundles
 

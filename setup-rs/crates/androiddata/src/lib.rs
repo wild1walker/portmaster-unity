@@ -8,6 +8,7 @@ pub mod args;
 pub mod clock;
 pub mod clrmeta;
 pub mod ggm;
+pub mod il2cppmeta;
 pub mod inline;
 pub mod pack;
 pub mod patch_obb;

@@ -270,9 +270,11 @@ fn builtin_nodes(level: i32, name: &str, typ: &str, fields: &[BField]) -> Vec<No
 /// An assembly with its {full type name: TypeDef row} index.
 type AsmIndex = (Rc<Assembly>, Rc<HashMap<String, u32>>);
 
-/// Trees of MonoBehaviour classes from the assemblies of a Managed folder (monotree.Generator).
+/// Trees of MonoBehaviour classes from the assemblies of a Managed folder (monotree.Generator), or
+/// of an IL2CPP build's metadata made into assemblies (androiddata's il2cppmeta).
 pub struct Generator {
     managed: PathBuf,
+    il2cpp: Option<androiddata::il2cppmeta::Il2Cpp>,
     unity: (u64, u64),
     asm: HashMap<String, Option<AsmIndex>>,
     attrs: HashMap<String, Rc<HashMap<u32, BTreeSet<String>>>>,
@@ -284,11 +286,31 @@ impl Generator {
     pub fn new(managed: &Path, unity: Option<(u64, u64)>) -> Generator {
         Generator {
             managed: managed.to_path_buf(),
+            il2cpp: None,
             unity: unity.unwrap_or((2022, 3)),
             asm: HashMap::new(),
             attrs: HashMap::new(),
             gparams: HashMap::new(),
             cache: HashMap::new(),
+        }
+    }
+
+    /// The generator of a game's data folder: its Managed assemblies, else (an IL2CPP build) its
+    /// metadata's, else none; with why an IL2CPP build's metadata cannot be read.
+    pub fn of_data(data: &Path, unity: Option<(u64, u64)>) -> (Generator, Option<String>) {
+        let mut g = Generator::new(&data.join("Managed"), unity);
+        if data.join("Managed").is_dir() {
+            return (g, None);
+        }
+        let Some((meta, bin)) = androiddata::il2cppmeta::files_of(data) else {
+            return (g, None);
+        };
+        match androiddata::il2cppmeta::Il2Cpp::open(&meta, &bin) {
+            Ok(il) => {
+                g.il2cpp = Some(il);
+                (g, None)
+            }
+            Err(why) => (g, Some(format!("IL2CPP types not read: {why}"))),
         }
     }
 
@@ -298,21 +320,21 @@ impl Generator {
             return a.clone();
         }
         let p = self.managed.join(format!("{name}.dll"));
+        let made = match &mut self.il2cpp {
+            Some(il) => il.assembly(name).ok().flatten(),
+            None => p.is_file().then(|| Assembly::open(&p).ok()).flatten(),
+        };
         // ({t['full']: i + 1 for ...}: the last row of a name wins)
-        let a = p
-            .is_file()
-            .then(|| Assembly::open(&p).ok())
-            .flatten()
-            .and_then(|a| {
-                let idx: HashMap<String, u32> = a
-                    .types()
-                    .ok()?
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| (t.full.clone(), i as u32 + 1))
-                    .collect();
-                Some((Rc::new(a), Rc::new(idx)))
-            });
+        let a = made.and_then(|a| {
+            let idx: HashMap<String, u32> = a
+                .types()
+                .ok()?
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (t.full.clone(), i as u32 + 1))
+                .collect();
+            Some((Rc::new(a), Rc::new(idx)))
+        });
         self.asm.insert(name.to_string(), a.clone());
         a
     }
