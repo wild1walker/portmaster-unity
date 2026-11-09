@@ -10,6 +10,8 @@
 //   test_pmhw h264env  UM_H264=ffmpeg (a software choice): pmhwdec still decodes it all
 //   test_pmhw refuse   FAKE_PMHW=refuse: refused at configure: OpenH264
 //   test_pmhw midway   FAKE_PMHW=midway: pmhwdec, then OpenH264 from the 11th picture (an IDR)
+//   test_pmhw vp8      a VP8 stream: pmhwdec decodes it all
+//   test_pmhw vp8nohw  FAKE_PMHW=nohw, a VP8 stream: libvpx takes it
 #define _GNU_SOURCE
 #include "../um.h"
 #include "clips.h"
@@ -61,6 +63,12 @@ int main(int argc, char **argv)
 
     /* 30 frames, an IDR every 10, Annex B units (the SPS / PPS apart, as csd-0 / csd-1) */
     int w = 160, h = 96, frames = 30;
+    int vp8 = !strncmp(mode, "vp8", 3);
+    buf au[64] = { 0 }, sps = { 0 }, pps = { 0 };
+    if (vp8) {                                      /* the stand-in library only counts the units */
+        static const uint8_t unit[16] = { 0x10 };
+        for (int f = 0; f < frames; f++) put(&au[f], unit, sizeof unit);
+    } else {
     ISVCEncoder *enc = NULL;
     WelsCreateSVCEncoder(&enc);
     SEncParamBase ep;
@@ -72,7 +80,6 @@ int main(int argc, char **argv)
     (*enc)->SetOption(enc, ENCODER_OPTION_IDR_INTERVAL, &idr);
     (*enc)->SetOption(enc, ENCODER_OPTION_DATAFORMAT, &vf);
     uint8_t *Y = malloc(w * h), *U = malloc(w * h / 4), *V = malloc(w * h / 4);
-    buf au[64] = { 0 }, sps = { 0 }, pps = { 0 };
     for (int f = 0; f < frames; f++) {
         for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) Y[y * w + x] = pix_y(x, y, f);
         for (int y = 0; y < h / 2; y++) for (int x = 0; x < w / 2; x++) { U[y * w / 2 + x] = pix_u(x, y, f); V[y * w / 2 + x] = pix_v(x, y, f); }
@@ -103,20 +110,31 @@ int main(int argc, char **argv)
     (*enc)->Uninitialize(enc);
     WelsDestroySVCEncoder(enc);
     CHECK(sps.n && pps.n && au[frames - 1].n, "stream encoded");
+    }
 
     um_format *fmt = um_format_new();
-    um_format_set_string(fmt, UM_KEY_MIME, UM_MIME_AVC);
+    const char *mime = vp8 ? UM_MIME_VP8 : UM_MIME_AVC;
+    um_format_set_string(fmt, UM_KEY_MIME, mime);
     um_format_set_int32(fmt, UM_KEY_WIDTH, w);
     um_format_set_int32(fmt, UM_KEY_HEIGHT, h);
-    um_format_set_buffer(fmt, "csd-0", sps.p, sps.n);
-    um_format_set_buffer(fmt, "csd-1", pps.p, pps.n);
-    um_codec *c = um_codec_create(UM_MIME_AVC);
+    if (!vp8) {
+        um_format_set_buffer(fmt, "csd-0", sps.p, sps.n);
+        um_format_set_buffer(fmt, "csd-1", pps.p, pps.n);
+    }
+    um_codec *c = um_codec_create(mime);
     CHECK(c != NULL, "a decoder");
     if (!c) return 1;
     CHECK(um_codec_configure(c, fmt, NULL) == UM_OK && um_codec_start(c) == UM_OK, "configure/start");
     const char *name = um_codec_name(c);
-    int hw = !strcmp(mode, "hw") || !strcmp(mode, "path") || !strcmp(mode, "h264env") || !strcmp(mode, "midway");
-    CHECK(!strcmp(name, hw ? "pmhwdec.h264.decoder" : "OMX.google.h264.decoder"), "decoder %s", name);
+    int hw = !strcmp(mode, "hw") || !strcmp(mode, "path") || !strcmp(mode, "h264env") || !strcmp(mode, "midway") || !strcmp(mode, "vp8");
+    const char *want = !strcmp(mode, "vp8nohw") ? "OMX.google.vp8.decoder" : vp8 ? "pmhwdec.vp8.decoder" :
+                       hw ? "pmhwdec.h264.decoder" : "OMX.google.h264.decoder";
+    CHECK(!strcmp(name, want), "decoder %s", name);
+    if (!strcmp(mode, "vp8nohw")) {                 /* the units are not real VP8: the decoder's name is the test */
+        CHECK(st && st->sends == 0, "the library was not used");
+        printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "PASSED", checks, fails);
+        return fails != 0;
+    }
 
     int got = 0, eos = 0, in_eos = 0, next = 0, stride = 0, fmts = 0, exact_n = 0, ordered = 1;
     double qmin = 99;
@@ -164,9 +182,9 @@ int main(int argc, char **argv)
     }
     CHECK(got == frames && eos && ordered, "%d of %d pictures, eos %d, in order %d", got, frames, eos, ordered);
     CHECK(fmts >= 1 && stride == w, "output format (stride %d)", stride);
-    if (!strcmp(mode, "hw") || !strcmp(mode, "path") || !strcmp(mode, "h264env")) {
+    if (!strcmp(mode, "hw") || !strcmp(mode, "path") || !strcmp(mode, "h264env") || vp8) {
         CHECK(exact_n == frames, "every picture exactly the pattern (%d of %d)", exact_n, frames);
-        CHECK(st && st->sps_before_first_slice, "the parameter sets went ahead of the first slice");
+        CHECK(vp8 || (st && st->sps_before_first_slice), "the parameter sets went ahead of the first slice");
         CHECK(st && st->again > 0, "PMHW_AGAIN was waited out (%d times)", st ? st->again : 0);
         CHECK(st && st->held_max == 1, "each picture handed back before the next (%d out at once)", st ? st->held_max : -1);
     } else if (!strcmp(mode, "midway")) {

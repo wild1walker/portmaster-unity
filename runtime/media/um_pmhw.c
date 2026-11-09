@@ -1,4 +1,4 @@
-// Hardware video decoding (H.264, HEVC) through libpmhwdec (LGPL-2.1-or-later,
+// Hardware video decoding (H.264, HEVC, VP8) through libpmhwdec (LGPL-2.1-or-later,
 // https://github.com/Knifethrower/pmhwdec), loaded with dlopen
 // from the library path or a port's own copy through UM_PMHW=<path>: never linked or shipped here. libpmhwdec
 // picks the handheld's decoder at run time (Allwinner's video engine, Rockchip MPP, V4L2 stateless
@@ -9,7 +9,7 @@
 // a software decoder takes over from that access unit.
 //
 // Input: Annex B access units, as for OpenH264; the parameter sets (csd-0 / csd-1, codec config
-// buffers) are sent ahead and again after a flush. Pictures come out as NV12 in presentation
+// buffers) are sent ahead and again after a flush. VP8: the frames as the container holds them. Pictures come out as NV12 in presentation
 // order with the time of the access unit they were coded in; 10-bit HEVC as its top 8 bits.
 //
 // UM_PMHW=0: never used. UM_H264=openh264 / ffmpeg chooses among the software decoders only (the
@@ -25,7 +25,7 @@
 #include <unistd.h>
 
 /* ---- from pmhwdec.h (MIT), API version 1 --------------------------------------------------------- */
-enum { PMHW_CODEC_H264 = 0, PMHW_CODEC_HEVC = 1 };
+enum { PMHW_CODEC_H264 = 0, PMHW_CODEC_HEVC = 1, PMHW_CODEC_VP8 = 3 };
 enum { PMHW_OK = 0, PMHW_AGAIN = 1, PMHW_ERROR = -1, PMHW_UNSUPPORTED = -2 };
 typedef struct { int max_width, max_height, max_bit_depth; const char *backend; } PmhwCaps;
 typedef struct {
@@ -96,6 +96,7 @@ static int codec_of(const char *mime)
 {
     if (mime && !strcasecmp(mime, UM_MIME_AVC)) return PMHW_CODEC_H264;
     if (mime && !strcasecmp(mime, UM_MIME_HEVC)) return PMHW_CODEC_HEVC;
+    if (mime && !strcasecmp(mime, UM_MIME_VP8)) return PMHW_CODEC_VP8;
     return -1;
 }
 
@@ -147,7 +148,8 @@ static int to_software(pmhw *p, um_emit *em)
     drain(p, em);
     lib.close(p->dec);
     p->dec = NULL;
-    um_dec *(*cands[])(const char *) = { p->codec == PMHW_CODEC_H264 ? um_h264_create : NULL, um_ffmpeg_create };
+    um_dec *(*cands[])(const char *) = { p->codec == PMHW_CODEC_H264 ? um_h264_create : p->codec == PMHW_CODEC_VP8 ? um_vpx_create : NULL,
+                                         um_ffmpeg_create };
     for (size_t i = 0; i < sizeof cands / sizeof cands[0] && !p->sw; i++) {
         um_dec *d = cands[i] ? cands[i](p->mime) : NULL;
         if (!d) continue;
@@ -187,7 +189,8 @@ static int p_configure(um_dec *d, const um_format *in, um_format *out)
     }
     um_format_free(p->fmt);
     p->fmt = um_format_copy(in);
-    um_log("pmhwdec: %s %dx%d on %s", p->codec == PMHW_CODEC_H264 ? "H.264" : "HEVC", w, h, lib.backend(p->dec));
+    um_log("pmhwdec: %s %dx%d on %s", p->codec == PMHW_CODEC_H264 ? "H.264" : p->codec == PMHW_CODEC_VP8 ? "VP8" : "HEVC", w, h,
+           lib.backend(p->dec));
     return UM_OK;
 }
 
@@ -255,7 +258,7 @@ um_dec *um_pmhw_create(const char *mime)
     if (!lib.ok || codec < 0 || lib.query(codec, &caps) != 0) return NULL;
     pmhw *p = calloc(1, sizeof *p);
     if (!p) return NULL;
-    p->mime = codec == PMHW_CODEC_H264 ? UM_MIME_AVC : UM_MIME_HEVC;
+    p->mime = codec == PMHW_CODEC_H264 ? UM_MIME_AVC : codec == PMHW_CODEC_VP8 ? UM_MIME_VP8 : UM_MIME_HEVC;
     p->codec = codec;
     p->base.name = "pmhwdec";
     p->base.configure = p_configure;
