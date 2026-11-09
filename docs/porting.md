@@ -604,8 +604,7 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   (a file of that size in `/dev/shm`, removed after). Hollow Knight, release settings, so measured
   (2026-11-09): Greenpath at least 84 MB available, City of Tears down to 34 MB at 148 s (the bench's
   40 MB floor stopped it), with libunity's code pages already evicted (19 -> 5 MB resident); without the
-  hold the same scenes kept 202 MB. Testers saw 839 of 892 MB used on an RGB10 and a crash on an R36S
-  with dArkOS-RE. A 1 GB dArkOS port needs that much more headroom than the stopped-ES numbers show.
+  hold the same scenes kept 202 MB. Testers saw 839 of 892 MB used on an RGB10. A 1 GB dArkOS port needs that much more headroom than the stopped-ES numbers show.
 
 ### Videos
 
