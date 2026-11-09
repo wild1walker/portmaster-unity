@@ -583,7 +583,11 @@ costs only while it plays: game play frames decode nothing.
   permission change for the decoder's device files (the user's rule, 2026-11-08: no hoops, software
   where the hardware needs them). The launcher only makes `pmhw-cedard` executable, as it does
   `ua_host`. On a G350 with dArkOS (RK3326: the decoder root-only, no MPP library) it reports no
-  hardware in 32 ms and libvpx plays the clips. Measured by its author with GRIS's 1080p H.264
+  hardware in 32 ms and libvpx plays the clips. Ship `pmhw-test` too (`pmhw/pmhw-test`, the same
+  build): the setup asks it whether VP8 plays on this handheld's video engine and, where it does,
+  leaves the `video` step's clips at full size (`--set video.mode=off`; the update script skips
+  `pmu video` the same way): the hardware plays them in time, which is what the smaller clips are
+  for, and the setup is about ten minutes shorter on an RG34XX-SP (Knifethrower's idea). Measured by its author with GRIS's 1080p H.264
   intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42 -> 48 fps; on
   an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhw-cedard` GPL-2.0-or-later: the port ships their licences and says
   where their source is; this repository never ships them.

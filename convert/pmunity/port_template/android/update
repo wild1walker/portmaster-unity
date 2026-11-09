@@ -9,7 +9,8 @@
 #     say "done", a newer release's go in (after the APK's end: nothing there is overwritten)
 #   - the game's videos (convert's `video` step, when the port's setup/convert.json has it):
 #     `pmu video` makes the VP8 clips of the installed APK and OBB smaller in place on handhelds
-#     with 1 GB of RAM or less (nothing elsewhere, or for a game without such clips)
+#     with 1 GB of RAM or less (nothing elsewhere, for a game without such clips, or where the
+#     port's libpmhwdec decodes VP8 on the handheld's video engine)
 # It can be interrupted: the next launch runs it again. Log: ports/<port>/patchlog.txt.
 # PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why it failed.
 S="${GAMEDIR:?}/setup"
@@ -46,7 +47,14 @@ fi
 
 if [ -f "$S/convert.json" ] && grep -q '"video"' "$S/convert.json"; then
   step "the game's videos (a few minutes on a 1 GB handheld)"
-  "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt)."
+  # (where the port's libpmhwdec decodes VP8 on this handheld's video engine they are left as they
+  # are: the hardware plays them in time; pmhw-test says so in milliseconds)
+  t="$GAMEDIR/pmhw/pmhw-test"; r=
+  if [ -f "$t" ]; then chmod +x "$t" "$GAMEDIR/pmhw/pmhw-cedard" 2>/dev/null; r=$("$t" -q 2>/dev/null | sed -n 's/^VP8: //p'); fi
+  case "$r" in
+    ""|"no hardware"*) "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt).";;
+    *) echo "VP8 on this handheld's video engine ($r): the videos are left as they are";;
+  esac
 fi
 
 # (bash keeps this script open: on a FUSE card, Knulli's, setup/ stays behind empty until it ends;

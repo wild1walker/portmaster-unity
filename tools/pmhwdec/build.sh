@@ -6,7 +6,8 @@
 # 32-bit ua_host (ua-host-armhf), <out>/arm64/libpmhwdec.so.1 for the arm64 routes (ua-build-arm64),
 # and <out>/aarch64/pmhw-cedard, the Allwinner decoder (GPL-2.0-or-later, a separate program the
 # library starts next to itself; the H616 / H700 / A133 handhelds run 64-bit kernels, so the 64-bit one
-# for both). Ship the library's folder with pmhw-cedard beside it and point UM_PMHW at the library in
+# for both), and pmhw-test, which the setup asks whether VP8 plays on the video engine (the clips then
+# stay at full size). Ship the library's folder with pmhw-cedard beside it and point UM_PMHW at the library in
 # port.env (docs/porting.md, "Videos"); Rockchip MPP is a separate build (the library's
 # rkmpp/build_mpp.sh). The sources are cloned into <out>/src; the port ships their licences.
 set -euo pipefail
