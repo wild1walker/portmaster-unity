@@ -91,7 +91,7 @@ typedef struct {
     um_format *fmt;             /* the input format, for a software decoder taking over */
     um_dec *sw;                 /* that decoder, after libpmhwdec gave up on the stream */
     int errors;
-} pmhw;
+} pmhwdec;
 
 static int codec_of(const char *mime)
 {
@@ -101,7 +101,7 @@ static int codec_of(const char *mime)
     return -1;
 }
 
-static void add_csd(pmhw *p, const uint8_t *data, size_t n)
+static void add_csd(pmhwdec *p, const uint8_t *data, size_t n)
 {
     if (!n || (p->csdn >= n && memmem(p->csd, p->csdn, data, n))) return;   /* already there */
     uint8_t *c = realloc(p->csd, p->csdn + n);
@@ -112,7 +112,7 @@ static void add_csd(pmhw *p, const uint8_t *data, size_t n)
 }
 
 /* every picture ready: to the codec, then back to libpmhwdec; the count */
-static int drain(pmhw *p, um_emit *em)
+static int drain(pmhwdec *p, um_emit *em)
 {
     PmhwPicture pic;
     int n = 0;
@@ -130,7 +130,7 @@ static int drain(pmhw *p, um_emit *em)
 
 /* one unit (NULL / 0: end of stream); PMHW_AGAIN (every picture buffer taken) is waited out by
    handing pictures on */
-static int send_unit(pmhw *p, const uint8_t *data, size_t size, int64_t pts, um_emit *em)
+static int send_unit(pmhwdec *p, const uint8_t *data, size_t size, int64_t pts, um_emit *em)
 {
     for (int tries = 0;; tries++) {
         int r = lib.send(p->dec, data, (int)size, pts);
@@ -143,7 +143,7 @@ static int send_unit(pmhw *p, const uint8_t *data, size_t size, int64_t pts, um_
 }
 
 /* libpmhwdec gave up on this stream: the first software decoder of its type that takes it */
-static int to_software(pmhw *p, um_emit *em)
+static int to_software(pmhwdec *p, um_emit *em)
 {
     send_unit(p, NULL, 0, 0, em);                    /* the pictures still in its reorder queue */
     drain(p, em);
@@ -167,7 +167,7 @@ static int to_software(pmhw *p, um_emit *em)
 
 static int p_configure(um_dec *d, const um_format *in, um_format *out)
 {
-    pmhw *p = (pmhw *)d;
+    pmhwdec *p = (pmhwdec *)d;
     (void)out;
     PmhwCaps caps;
     if (lib.query(p->codec, &caps) != 0) { um_log("pmhwdec: no hardware decoder for %s here", p->mime); return UM_ERR_UNSUPPORTED; }
@@ -197,7 +197,7 @@ static int p_configure(um_dec *d, const um_format *in, um_format *out)
 
 static int p_decode(um_dec *d, const uint8_t *data, size_t size, int64_t pts, uint32_t flags, um_emit *em)
 {
-    pmhw *p = (pmhw *)d;
+    pmhwdec *p = (pmhwdec *)d;
     if (p->sw) return p->sw->decode(p->sw, data, size, pts, flags, em);
     if (!p->dec) return UM_ERR_STATE;
     int r = PMHW_OK;
@@ -234,7 +234,7 @@ static int p_decode(um_dec *d, const uint8_t *data, size_t size, int64_t pts, ui
 
 static void p_flush(um_dec *d)
 {
-    pmhw *p = (pmhw *)d;
+    pmhwdec *p = (pmhwdec *)d;
     if (p->sw) { p->sw->flush(p->sw); return; }
     if (p->dec) lib.flush(p->dec);
     p->csd_pending = 1;
@@ -242,7 +242,7 @@ static void p_flush(um_dec *d)
 
 static void p_destroy(um_dec *d)
 {
-    pmhw *p = (pmhw *)d;
+    pmhwdec *p = (pmhwdec *)d;
     if (p->dec) lib.close(p->dec);
     if (p->sw) p->sw->destroy(p->sw);
     um_format_free(p->fmt);
@@ -251,13 +251,13 @@ static void p_destroy(um_dec *d)
     free(p);
 }
 
-um_dec *um_pmhw_create(const char *mime)
+um_dec *um_pmhwdec_create(const char *mime)
 {
     pthread_once(&lib_once, lib_load);
     int codec = codec_of(mime);
     PmhwCaps caps;
     if (!lib.ok || codec < 0 || lib.query(codec, &caps) != 0) return NULL;
-    pmhw *p = calloc(1, sizeof *p);
+    pmhwdec *p = calloc(1, sizeof *p);
     if (!p) return NULL;
     p->mime = codec == PMHW_CODEC_H264 ? UM_MIME_AVC : codec == PMHW_CODEC_VP8 ? UM_MIME_VP8 : UM_MIME_HEVC;
     p->codec = codec;

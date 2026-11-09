@@ -83,9 +83,9 @@ mv -f "$W/answers.env.new" "$W/answers.env"
 # anything the port does not do), the convert's video step leaves the clips at full size: the
 # hardware plays them in time, which is what the step's smaller clips are for
 hw_vp8() {
-  local t="$GAMEDIR/pmhwdec/pmhw-test" r
+  local t="$GAMEDIR/pmhwdec/pmhwdec-test" r
   [ -f "$t" ] || return 1
-  chmod +x "$t" "$GAMEDIR/pmhwdec/pmhw-cedard" 2>/dev/null
+  chmod +x "$t" "$GAMEDIR/pmhwdec/pmhwdec-cedard" 2>/dev/null
   r=$("$t" -q 2>/dev/null | sed -n 's/^VP8: //p')
   case "$r" in ""|"no hardware"*) echo "VP8: no hardware decoder here (the software decoder plays the videos)"; return 1;; esac
   echo "VP8 on this handheld's video engine: $r"

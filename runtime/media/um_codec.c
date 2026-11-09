@@ -53,9 +53,9 @@ typedef struct {
 static const um_dec_entry decoders[] = {
     /* the handheld's hardware decoder through libpmhwdec, when the port ships it and the device has
        one; a stream it does not take goes on to the software decoders below */
-    { UM_MIME_AVC, "pmhwdec.h264.decoder", um_pmhw_create, 1 },
-    { UM_MIME_HEVC, "pmhwdec.hevc.decoder", um_pmhw_create, 1 },
-    { UM_MIME_VP8, "pmhwdec.vp8.decoder", um_pmhw_create, 1 },
+    { UM_MIME_AVC, "pmhwdec.h264.decoder", um_pmhwdec_create, 1 },
+    { UM_MIME_HEVC, "pmhwdec.hevc.decoder", um_pmhwdec_create, 1 },
+    { UM_MIME_VP8, "pmhwdec.vp8.decoder", um_pmhwdec_create, 1 },
     { UM_MIME_VP8, "OMX.google.vp8.decoder", um_vpx_create, 1 },
     { UM_MIME_VP9, "OMX.google.vp9.decoder", um_vpx_create, 1 },
     { UM_MIME_AVC, "OMX.google.h264.decoder", um_h264_create, 1 },

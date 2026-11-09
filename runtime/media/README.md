@@ -29,7 +29,7 @@ builds it after `jni/` (the Java-side test links `libfakejni.a`).
 | `um_audio.c` | Vorbis (libvorbis), Opus (libopus), silence for AAC / MP3 without a decoder |
 | `um_h264.c` | H.264: OpenH264 |
 | `um_ffmpeg.c` | the system's libavcodec 58-61 through `dlopen` (AAC, MP3, HEVC, H.264 with B-frames) |
-| `um_pmhw.c` | the handheld's hardware decoder through [libpmhwdec](https://github.com/Knifethrower/pmhwdec), `dlopen`ed when a port ships it (H.264, HEVC, VP8); steps aside for the software decoders |
+| `um_pmhwdec.c` | the handheld's hardware decoder through [libpmhwdec](https://github.com/Knifethrower/pmhwdec), `dlopen`ed when a port ships it (H.264, HEVC, VP8); steps aside for the software decoders |
 | `um_surface.c` | SurfaceTexture: the frame queue, `updateTexImage` (upload into an EGLImage behind the external texture), `getTransformMatrix` |
 | `um_stubs.c`, `um_compat.c` | builds without a backend; libvorbis' finite-math names on Ubuntu 20.04 |
 | `umbench.c` | device check: what decoding a clip costs (`umbench <file> [offset size]`) |

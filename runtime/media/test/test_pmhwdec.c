@@ -1,17 +1,17 @@
-// The hardware decoder path (um_pmhw.c) against a stand-in libpmhwdec.so.1 (fake_pmhwdec.c): which
+// The hardware decoder path (um_pmhwdec.c) against a stand-in libpmhwdec.so.1 (fake_pmhwdec.c): which
 // decoder takes an H.264 stream, the pictures it hands on (NV12 with a crop, exactly), the
 // no-free-buffer retry, and the way back to OpenH264 when the library refuses the stream at
 // configure or gives up in the middle. One mode per run (build.sh runs them all):
-//   test_pmhw none     no libpmhwdec on the library path: OpenH264, as before
-//   test_pmhw hw       FAKE_PMHW unset: pmhwdec decodes it all
-//   test_pmhw nohw     FAKE_PMHW=nohw: the library has no decoder for the device: OpenH264
-//   test_pmhw off      UM_PMHWDEC=0: OpenH264 although the library is there
-//   test_pmhw path     no library path, UM_PMHWDEC=<the library>: pmhwdec decodes it all
-//   test_pmhw h264env  UM_H264=ffmpeg (a software choice): pmhwdec still decodes it all
-//   test_pmhw refuse   FAKE_PMHW=refuse: refused at configure: OpenH264
-//   test_pmhw midway   FAKE_PMHW=midway: pmhwdec, then OpenH264 from the 11th picture (an IDR)
-//   test_pmhw vp8      a VP8 stream: pmhwdec decodes it all
-//   test_pmhw vp8nohw  FAKE_PMHW=nohw, a VP8 stream: libvpx takes it
+//   test_pmhwdec none     no libpmhwdec on the library path: OpenH264, as before
+//   test_pmhwdec hw       FAKE_PMHWDEC unset: pmhwdec decodes it all
+//   test_pmhwdec nohw     FAKE_PMHWDEC=nohw: the library has no decoder for the device: OpenH264
+//   test_pmhwdec off      UM_PMHWDEC=0: OpenH264 although the library is there
+//   test_pmhwdec path     no library path, UM_PMHWDEC=<the library>: pmhwdec decodes it all
+//   test_pmhwdec h264env  UM_H264=ffmpeg (a software choice): pmhwdec still decodes it all
+//   test_pmhwdec refuse   FAKE_PMHWDEC=refuse: refused at configure: OpenH264
+//   test_pmhwdec midway   FAKE_PMHWDEC=midway: pmhwdec, then OpenH264 from the 11th picture (an IDR)
+//   test_pmhwdec vp8      a VP8 stream: pmhwdec decodes it all
+//   test_pmhwdec vp8nohw  FAKE_PMHWDEC=nohw, a VP8 stream: libvpx takes it
 #define _GNU_SOURCE
 #include "../um.h"
 #include "clips.h"
@@ -55,8 +55,8 @@ int main(int argc, char **argv)
     const char *path = getenv("UM_PMHWDEC");
     void *fake = dlopen(path && *path && strcmp(path, "0") ? path : "libpmhwdec.so.1", RTLD_NOW);
     if (fake) {
-        void (*setup)(void *, void *, void *) = (void (*)(void *, void *, void *))dlsym(fake, "fake_pmhw_setup");
-        st = dlsym(fake, "fake_pmhw_stats");
+        void (*setup)(void *, void *, void *) = (void (*)(void *, void *, void *))dlsym(fake, "fake_pmhwdec_setup");
+        st = dlsym(fake, "fake_pmhwdec_stats");
         if (setup) setup((void *)pix_y, (void *)pix_u, (void *)pix_v);
     }
     CHECK(!strcmp(mode, "none") ? !fake : fake && st, "libpmhwdec.so.1 %s", fake ? "found" : "missing");
