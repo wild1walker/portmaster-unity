@@ -1991,9 +1991,12 @@ What it took, in order:
   31.01 against 31.40 fps, no gain.
 - **The port's lowest settings and the HUD patch** (portmaster-gungeon ba683b7: the HUD drawn again
   only when it can have changed; the settings Low lighting, Very Low shaders, reflections off, Low
-  debris; the same room and enemies as before): **fight 37.44 / 37.93 fps, room entry 35.98 / 36.26,
-  p99 37 ms in the fight, lowest MemAvailable 107 - 111 MB**. Very Low debris (a first try) changes
-  the floor's generation: the same room with other enemies (38.3 - 38.6).
+  debris; the same room and enemies as before): fight 37.44 / 37.93 fps, room entry 35.98 / 36.26 (a
+  rehearsed install, ua_host of 2026-11-08 noon). Very Low debris (a first try) changes the floor's
+  generation: the same room with other enemies (38.3 - 38.6).
+- **The release candidate set up on the handheld** (portmaster-gungeon 27aebd7, ua_host and pmu of
+  main 717884e; the setup 1122 s, the tools' peak 335 MB): **fight 40.13 / 39.11 fps, room entry
+  38.88 / 39.72, p99 33 - 35 ms in the fight, lowest MemAvailable 107 - 109 MB**.
 
 Hitches left (the same runs): the room entry has 12 - 13 frames over 50 ms (p99 75 - 100 ms). Loads
 are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
