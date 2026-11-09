@@ -471,23 +471,32 @@ codec (the whole table: [runtime/media/README.md](../runtime/media/README.md)). 
 costs only while it plays: game play frames decode nothing.
 
 - **VP8** (WebM, what Unity's desktop builds usually carry; Hollow Knight's 14 cinematics): `ua_host`
-  decodes it in software, and four Cortex-A53s cannot keep up with 1080p. The `video` step
-  re-encodes the clips at half size on 1 GB handhelds (`[convert.video]`,
+  decodes it on the handheld's video decoder where the port ships libpmhwdec (below; VP8 from its
+  commit 27e1bf1), else in software with libvpx. Hollow Knight's 1080p intro on the RG34XX-SP
+  (2026-11-08): both play it in real time, the game at 59.5 fps, but on the hardware the four cores
+  are 54 % busy instead of 73 %, the lowest second 33 fps instead of 20 and the worst frame 185 ms
+  instead of 243. Where libvpx cannot keep up (an RG552 played that 30 s clip in about 45 s), the
+  `video` step re-encodes the clips at half size on 1 GB handhelds (`[convert.video]`,
   [rust-setup.md](rust-setup.md#video)); Hollow Knight's then play at their own 30 pictures a second
   on the RG34XX-SP instead of in slow motion.
-- **H.264 and HEVC** (MP4, MOV): ship Knifethrower's
+- **H.264, HEVC and VP8 on the hardware**: ship Knifethrower's
   [libpmhwdec](https://github.com/Knifethrower/pmhwdec) with the port and `ua_host` takes the
   pictures from the handheld's video decoder: the Allwinner H616 / H618 / H700 / A133 engine on
   vendor kernels (Knulli, muOS), Rockchip MPP (ArkOS, dArkOS, AmberELEC), V4L2 on mainline (ROCKNIX).
-  Put a build for `ua_host`'s architecture in the port folder (armhf for the android route, arm64
-  for the arm64 routes) and point `UM_PMHW=$GAMEDIR/<path>` at it in `port.env` (the launcher's
-  library path holds only the system's folders). Where its start-up self-test fails, or a stream is
-  one the decoder refuses, the software decoders play it as before. Measured by its author with
-  GRIS's 1080p intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42
-  -> 48 fps; on an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. ArkOS and dArkOS keep
-  the Rockchip decoder's device nodes root-only while ports run as `ark`: the launcher has to make
-  them readable (`$ESUDO chgrp video` and `chmod 660`). The library is LGPL-2.1-or-later: the port
-  ships its licence and says where its source is; this repository never ships it.
+  `tools/pmhwdec/build.sh <out>` builds it with this repository's images: the library for `ua_host`'s
+  architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhw-cedard`, the
+  Allwinner decoder the library starts from its own folder (aarch64 for both: those handhelds run
+  64-bit kernels); Rockchip MPP is the library's own `rkmpp/build_mpp.sh`. Put them in one folder of
+  the port and point `UM_PMHW=$GAMEDIR/<path>/libpmhwdec.so.1` at the library in `port.env` (the
+  launcher's library path holds only the system's folders). The log says what it chose
+  (`[media] decoders: ... vp8 (pmhwdec)`, `[media] pmhwdec: VP8 1920x1080 on cedar`). Where its
+  start-up self-test fails, or a stream is one the decoder refuses, the software decoders play it as
+  before. Measured by its author with GRIS's 1080p H.264 intro: on a TrimUI Smart Pro (A133P) 21.1 ->
+  23.8 pictures a second and the game 42 -> 48 fps; on an RG Cube XX (H700) the CPU during the intro
+  83 -> 56 %. ArkOS and dArkOS keep the Rockchip decoder's device nodes root-only while ports run as
+  `ark`: the launcher has to make them readable (`$ESUDO chgrp video` and `chmod 660`). The library
+  is LGPL-2.1-or-later and `pmhw-cedard` GPL-2.0-or-later: the port ships their licences and says
+  where their source is; this repository never ships them.
 - **VP9, Opus, others**: the table in runtime/media/README.md says which decoder takes each.
 
 ## 4. The setup on the handheld
