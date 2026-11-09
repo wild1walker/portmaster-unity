@@ -490,6 +490,66 @@ driver's pages for the game ~300 -> ~142 MB, the game ~830 -> ~670 MB in all; th
 `tools/port/rehearse.sh`'s `REHEARSE_MEMINFO` gives the setup container a 1 GB handheld's
 `/proc/meminfo`, so a rehearsal takes these paths.
 
+Readable textures cost twice: Unity keeps a copy of a texture marked readable (`m_IsReadable`, Read/Write
+in the editor) in system memory beside the GPU's, and the textures step leaves such textures as they are
+(scripts may read their pixels). Many games mark big atlases readable without ever reading them. When
+none of the game's scripts reads or writes a texture's pixels, `readable = "release"` clears the flag at
+setup and keeps the pixels as they are (the same picture, no copy in system memory); `"convert"` also
+converts them as the others. `readable_keep` (a regular expression on texture names) leaves the ones a
+script does use readable. Check first: every call of `Texture2D.GetPixel(s)`, `GetPixels32`,
+`GetPixelBilinear`, `GetRawTextureData`, `SetPixel(s)`, `Apply`, `Resize`, `Compress`, `LoadImage`,
+`EncodeTo*`, `PackTextures`, `Cursor.SetCursor` in the game's assemblies, and where its texture comes
+from: one the game makes (`new Texture2D`) is fine, one loaded from the data (a serialized field, a
+bundle) goes into `readable_keep`; a texture used wrongly throws `UnityException: Texture '<name>' is not
+readable` in log.txt.
+
+```toml
+[convert.textures]
+readable = "release"
+readable_keep = "^occlusion_layer_source$"   # Enter the Gungeon: OcclusionLayer resizes and fills it
+```
+
+Enter the Gungeon: 157 readable textures (180 MB of RGBA32), one written by the game; on the BattleXP
+G350 (895 MB) the Keep's load had 43 MB available and was stopped by the memory watchdog, with release
+about 110 MB.
+
+### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
+
+The R36S class is PortMaster's most common handheld and the slowest these tools aim at: four Cortex-A35
+at up to 1.5 GHz (slower per clock than the H700's A53s), a Mali-G31 through libmali's GBM driver
+(SDL's KMSDRM, not fbdev), 640x480, 1 GB of which the kernel reports about 895 MB, and no swap. What a
+port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and Enter the Gungeon:
+
+- **The present thread and the GL thread:** `UA_PRESENT_THREAD = "1"` in `[runtime]` (libmali's GBM
+  driver waits in each swap for the GPU, so the render thread and the GPU took turns: Hollow Knight's
+  Greenpath 17.5 -> 25.1 fps) and `UA_GL_REC = "auto"` (the driver calls on a thread of their own
+  wherever the present thread runs: 25 -> 30-33; Enter the Gungeon's fight 29.8 -> 31.1). Both do
+  nothing on the fbdev handhelds, so a port can set them everywhere; `UA_GL_REC=2` (the frame
+  recorder) is for handhelds with swap.
+- **Filling the screen:** there is no display-engine scaler (sunxi's, which the H700 handhelds use for
+  free). `UA_RENDER_SIZE` still works: on the SDL path the present thread scales Unity's smaller window
+  to the panel in one linear blit (without it, two GPU blits before each swap). A 16:9 game shown at
+  480x360 fills the 640x480 panel's width (640x360); a game whose own scaling mode draws its effects at
+  the output size (Enter the Gungeon's Uniform Scaling) costs far more.
+- **Memory:** about 700 MB available with EmulationStation running, about 800 with it stopped. dArkOS's
+  EmulationStation stays resident (about 100 MB) while it runs a port (`es_systems.cfg`: `sudo perfmax
+  %GOVERNOR% %ROM%; nice -n -19 %ROM%; sudo perfnorm`), so a game that needs more than ~650 MB at its
+  peak is stopped by the kernel there. The test harnesses stop EmulationStation (`sudo systemctl stop
+  emulationstation`); give the game's loads a margin of 100 MB in those tests. Readable textures
+  (above) and the textures step are the big levers.
+- **The setup:** it runs in about 20 minutes (Enter the Gungeon: 1157 s with EmulationStation running,
+  the tools' peak 331 MB, at least 424 MB available; the textures step's ASTC encoding is half of it,
+  and the SoC reaches 80 C there, the CPU at 1.2 GHz).
+- **Slow loads expose races:** the A35s make a game's loading thread and its main thread overlap far
+  more than on a PC. Enter the Gungeon hung at its first load in 3 of 5 launches until asmpatch's
+  `playmaker-loadlock` (any game with PlayMaker: add it to `asmpatch`); look for UnityMain at 100 % with
+  no frames (`UA_PROF` with `UA_PROF_START`) when a launch stalls.
+- **PortMaster:** dArkOS ships it as `/opt/system/Tools/Install.PortMaster.sh` (an offline installer the
+  player runs once); `control.txt` gives `DISPLAY_WIDTH`/`HEIGHT` 640x480 and the pad's mapping. The
+  G350's pad has two sticks.
+- **Measure the average fps** of a walk or fight (the bench's `steady` step never settles here), with
+  the SoC cool at the start (`devlock.py cool`): the CPU throttles from 1.5 to 1.0-1.2 GHz near 80 C.
+
 ### Videos
 
 `port check` lists the game's clips and their codecs; what the port does with them depends on the

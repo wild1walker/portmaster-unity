@@ -7,13 +7,14 @@ target in the game's own assemblies and rewrites the game's own IL there with
 [Mono.Cecil](https://github.com/jbevain/cecil): nothing is shipped into the game, nothing is
 replaced by outside code, and a patch that does not find exactly what it expects changes nothing.
 
-The patches come in three kinds, each with its own rule (`--list` groups them):
+The patches come in these kinds, each with its own rule (`--list` groups them):
 
 | kind | what it may change | selected |
 |---|---|---|
 | android ([Patches](#patches)) | what the game does on the Android player, to what its own Android build does | by default where it applies; the opt-in ones by name |
 | optimize ([Optimizations](#optimizations)) | how much work the game's code does, never what it does: a default-on one leaves every value the game can observe as it was, shown for the code it patches | by default where it applies (`--no-optimize` leaves them out); the not exact ones only by name |
 | reduce ([Reductions](#reductions)) | the picture, for small handhelds: never the game play (timing, physics, collisions, scripts) | only by name (`--with`), and then chosen at run time by an environment variable |
+| fix ([Fixes](#fixes)) | nothing the game does: a race between its threads made impossible, every result as when they take turns | only by name (`--with`) |
 
 ```sh
 asmpatch [--only=a,b] [--skip=a,b] [--with=c] [--no-optimize] <Managed in> <out dir>   # patch: writes only changed assemblies
@@ -126,6 +127,15 @@ game play. Opt-in (`--with=<patch>`); `UA_PAD_LETTERS=xbox` at run time keeps th
 | patch | what |
 |---|---|
 | `hk-pad-letters` | On Unity's Android player Hollow Knight's `InputHandler.SetActiveGamepadType` knows no platform ("Unsupported platform for InputHander Android") and takes every pad for an Xbox 360 pad: the buttons work by position (the bottom one is InControl's Action1: jump and confirm) and its prompts show Xbox letters, A at the bottom, where handhelds print B. (A Switch pad's name does not do: InControl's Input System device swaps the face buttons by letter for a name with "switch" in it, and the right button jumped.) The patch has the game's two pictures of the pad, the glyphs (`UIButtonSkins.GetButtonSkinFor(InputControlType)`) and the controller drawn in the controller settings (`ControllerDetect.LookForActiveController`), take the Switch Pro Controller's while the pad is that Xbox 360 pad: Action1 B, Action2 A, Action3 Y, Action4 X, + and -. `UA_PAD_LETTERS=xbox`: the game as it is; read once. The bindings, the menus' confirm and back, the controller settings saved per pad type and everything else that reads the pad type are the game's. Tested on stand-ins (`test/fakes/HollowKnight/PadLetters.cs`): every value, the Xbox letters with `xbox`, every other pad type as the game with either. |
+
+## Fixes
+
+A fault of the game's own (a race between its threads) made impossible, every result as before.
+Opt-in (`--with=<patch>`): a port names it where the fault shows.
+
+| patch | what |
+|---|---|
+| `playmaker-loadlock` | PlayMaker (`PlayMaker.dll`) loads an FSM's actions in `Fsm.InitData`; Unity calls `PlayMakerFSM.OnAfterDeserialize`, and PlayMaker's runs `InitData` there, on its loading thread while a scene or bundle loads in the background, and the main thread runs the same `InitData` from `PlayMakerFSM.Awake` for the objects it makes meanwhile. Both use `ActionData`'s static lookups (`Dictionary<string, Type>`, `<Type, FieldInfo[]>`, `<Type, int>`) and work lists and `FsmEvent`'s event list, which have no lock: two inserts at once can leave a dictionary's bucket chain in a loop, and every later lookup spins. Enter the Gungeon on a BattleXP G350 (RK3326, Cortex-A35) hung that way at its first load in 3 of 5 launches (UnityMain at 100 % in `Dictionary.TryGetValue` under `ActionData.GetActionTypeHashCode`, no frame for minutes); a faster CPU makes the overlap rarer. The patch puts `OnAfterDeserialize`, `Fsm.InitData`, `ActionData.LoadActions`, `CreateAction`, `GetActionType`, `GetFields`, `GetActionTypeHashCode`, `FsmEvent.GetFsmEvent` and `FindEvent` under one re-entrant lock (a `Monitor` on an object of its own helper type, `<asmpatch>PlayMakerLock`): each keeps its name, signature and attributes (callers, overrides and the interface slot are untouched) and calls its body, moved to a private twin, between `Monitor.Enter` and `Monitor.Exit`. What each call returns and changes is what it does when the two threads take turns; only the waiting is new. n/a for a PlayMaker without `OnAfterDeserialize` running `InitData` or without those `ActionData` lookups. Tested on the stand-in (`test/fakes/PlayMaker`): the same FSMs loaded, the wrapped methods wait while another thread holds the lock, and two threads loading FSMs at once never fail (the original: 332 failures in 200 rounds). The G350: 6 of 6 launches got through. |
 
 ## With pmunity android-data
 

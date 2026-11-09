@@ -1943,3 +1943,51 @@ Thread placement in Greenpath (muOS, `UA_GL_PERSIST=1`, every run from 50 C): th
 on core 3 and every other thread on cores 0 - 2 (`UA_AFFINITY='UnityGfxDeviceW:3 *:0-2'`) 40.1 /
 40.3 fps and no hitch of 100 ms, against 39.0 (a screenshot's 1 s stall in it; ~39.7 without) with
 the threads free; the main thread on core 2 as well, 40.6 with three hitches.
+
+## Enter the Gungeon on the BattleXP G350 (RK3326, 2026-11-08)
+
+The min-spec handheld: dArkOS, four Cortex-A35 at 1.5 GHz, a Mali-G31 at 400 MHz (devfreq 400 / 480 /
+520; it never left 400 in a fight), libmali r13p0 through SDL's KMSDRM, 640x480, 895 MB, no swap. The
+fight is the Knulli's: the Keep's first enemy room, the floor seed fixed and the player taking no
+damage (test-only, never shipped), the route through `input.req` after the Keep's music event, average
+fps of the [fps] windows of the fight (route + 44 - 78 s) and the room entry before it (+19 - 44 s),
+EmulationStation stopped, every run from 50 C.
+
+What it took, in order:
+
+- **A hang at the first load** (3 of 5 launches as installed: no frame for 60 - 300 s, RSS flat at
+  ~500 MB). `UA_PROF` with `UA_PROF_START` caught UnityMain at 100 % in `Dictionary.TryGetValue` under
+  PlayMaker's `ActionData.GetActionTypeHashCode` while Unity's loading thread ran
+  `PlayMakerFSM.OnAfterDeserialize`: two threads had loaded FSMs into PlayMaker's unlocked static
+  lookups at once. asmpatch's `playmaker-loadlock` (tools/asmpatch/README.md, "Fixes"): 6 of 6.
+- **Memory at the Keep's load:** MemAvailable 43 MB at 120 s and falling (RSS 781 MB), the memory
+  watchdog's stop. `/proc/<pid>/smaps` (tools/device/memprof.py) showed ~490 MB anonymous (Mono's heap
+  grows 64 -> 216 MB over the load; `GC_FREE_SPACE_DIVISOR` changes nothing in Unity 2017.4's Boehm)
+  and ~270 MB outside smaps (the GBM driver's buffers: VmRSS minus smaps). The game's 157 readable
+  textures (180 MB of RGBA32, the textures step leaves readable ones as they are) were held twice:
+  pmu's `textures.readable = "release"` (porting.md, "Small handhelds") kept the pixels and cleared the
+  flag, all but `occlusion_layer_source`, which the game resizes and fills (released by mistake it
+  threw 4,000 `UnityException`s a fight and cost the occlusion). Lowest MemAvailable over a whole run
+  since: 95 - 117 MB.
+- **The fill:** the port's old fill on handhelds without sunxi's scaler was the game's Uniform Scaling
+  (post effects at the panel's size). Now `UA_RENDER_SIZE=480x360` everywhere: the present thread
+  scales it to 640x480 in one blit; the 16:9 picture fills the width (640x360).
+- **The present thread and the GL thread** (release-time QUALITY Low/Low, before the HUD patch): fight
+  29.77 fps with `UA_PRESENT_THREAD=1`, 31.07 with `UA_GL_REC=auto` too (room entry 29.96 -> 30.64,
+  about 15 MB more memory).
+- **What holds it then:** UnityMain on a CPU 98.6 % of a 20 s profile (33 ms frames), the render
+  thread 22 %, `ua_glthread` 39 %, `ua_present` 4 %; the GPU stays at 400 MHz. UnityMain: libunity
+  46 %, managed 29 %, libc 12 %, Mono 8 %; `Camera.Render` 17 % inclusive; about 5 % in futex wakes of
+  the job workers (ua_host's futex from libunity+0x1db848). One job worker (`-job-worker-count 1`):
+  31.01 against 31.40 fps, no gain.
+- **The port's lowest settings and the HUD patch** (portmaster-gungeon ba683b7: the HUD drawn again
+  only when it can have changed; the settings Low lighting, Very Low shaders, reflections off, Low
+  debris; the same room and enemies as before): **fight 37.44 / 37.93 fps, room entry 35.98 / 36.26,
+  p99 37 ms in the fight, lowest MemAvailable 107 - 111 MB**. Very Low debris (a first try) changes
+  the floor's generation: the same room with other enemies (38.3 - 38.6).
+
+Hitches left (the same runs): the room entry has 12 - 13 frames over 50 ms (p99 75 - 100 ms). Loads
+are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
+loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
+behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'
+peak 331 MB, at least 424 MB available).
