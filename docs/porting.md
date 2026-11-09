@@ -510,8 +510,11 @@ readable_keep = "^occlusion_layer_source$"   # Enter the Gungeon: OcclusionLayer
 ```
 
 Enter the Gungeon: 157 readable textures (180 MB of RGBA32), one written by the game; on the BattleXP
-G350 (895 MB) the Keep's load had 43 MB available and was stopped by the memory watchdog, with release
-about 110 MB.
+G350 (895 MB) the Keep's load had 43 MB available and was stopped by the memory watchdog, about 105 MB
+with release and 182 MB with convert (ASTC 4x4 like the game's other textures: the HUD's pixels the same
+by eye, the same frame rate). With 110 MB held by another process, as EmulationStation holds on
+dArkOS while a port runs, release reached the watchdog's 50 MB and convert kept 75 MB; the port uses
+convert.
 
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
 
@@ -535,8 +538,9 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   EmulationStation stays resident (about 100 MB) while it runs a port (`es_systems.cfg`: `sudo perfmax
   %GOVERNOR% %ROM%; nice -n -19 %ROM%; sudo perfnorm`), so a game that needs more than ~650 MB at its
   peak is stopped by the kernel there. The test harnesses stop EmulationStation (`sudo systemctl stop
-  emulationstation`); give the game's loads a margin of 100 MB in those tests. Readable textures
-  (above) and the textures step are the big levers.
+  emulationstation`); give the game's loads a margin of 100 MB in those tests, or hold that much in
+  another process during the run (a stand-in for EmulationStation). Readable textures (above) and the
+  textures step are the big levers.
 - **The setup:** it runs in about 20 minutes (Enter the Gungeon: 1157 s with EmulationStation running,
   the tools' peak 331 MB, at least 424 MB available; the textures step's ASTC encoding is half of it,
   and the SoC reaches 80 C there, the CPU at 1.2 GHz).

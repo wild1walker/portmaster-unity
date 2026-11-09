@@ -270,8 +270,9 @@ Enter the Gungeon on the BattleXP G350 (dArkOS, RK3326, 895 MB, no swap; 2026-11
 EmulationStation running: 1157 s, the tools' peak 331 MB, at least 424 MB available. As installed, 3 of 5
 launches hung at the first load (PlayMaker's FSMs loaded on Unity's loading thread and the main thread at
 once: asmpatch's `playmaker-loadlock`, 6 of 6 since) and the Keep's load ran out of memory (43 MB available,
-the memory watchdog's stop: pmu's `textures.readable = "release"`, 157 readable atlases no longer held twice,
-about 110 MB available since). The picture fills the width (480x360 scaled to 640x480 by ua_host's present
+the memory watchdog's stop: pmu's `textures.readable`, 156 readable atlases no longer held twice: about
+105 MB available with release, 182 MB with convert, the port's choice since aaab07a; 75 MB with 110 MB held
+by a stand-in for EmulationStation, which stays resident on dArkOS while a port runs). The picture fills the width (480x360 scaled to 640x480 by ua_host's present
 thread: 640x360), with the GL thread (`UA_GL_REC=auto`). The Keep's first fight (fixed seed, no damage, the
 same room and enemies as on the Knulli): 29.8 fps with the present thread, 31.1 with the GL thread too (Low
 lighting and shaders), 39.1 / 40.1 with the port's lowest settings and its HUD patch (portmaster-gungeon 27aebd7
