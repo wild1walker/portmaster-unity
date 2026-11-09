@@ -142,9 +142,9 @@ loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries b
 - **Rehearse** the 64-bit path with `REHEARSE_64ONLY=1 REHEARSE_DONE=.setup_done64 REHEARSE_NET=none`
   and a 1 GB `REHEARSE_MEMINFO`: Hollow Knight's whole setup from GOG's game folder in 14 minutes in the
   arm64 container (2.3 GB installed; the container has no 64-bit SDL, so the game itself runs on a
-  handheld). On an RG34XX-SP with muOS, Greenpath walking and fighting: 45.6 fps against the 32-bit
-  build's 50.0 before the arm64 player's present-sync point was added (`UA_PRESENT_SYNC`,
-  runtime/host/unityhooks.c); `UA_GLES_POOL` has no arm64 row yet (its struct layout differs).
+  handheld). On an RG34XX-SP with muOS, Greenpath walking and fighting: 45.6 fps, then 49.7 with the arm64
+  player's present-sync point (`UA_PRESENT_SYNC`, runtime/host/unityhooks.c), against the 32-bit build's
+  50.0; at least 189 MB available. `UA_GLES_POOL` has no arm64 row yet (its struct layout differs).
 
 ### Choose the route for speed first
 
