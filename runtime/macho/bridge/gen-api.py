@@ -7,6 +7,8 @@
 # in, the header never is.
 #   API(name)                     nothing to extend
 #   API(name, U8(i) S8(i) U16(i) S16(i) ...)   argument i (0-based, all integer registers)
+#   APIH(name, H(i) ... U8(i) ...)             as API; argument i is a class or a method, which
+#                                              can be one the bridge stands in for (bridge.c)
 # The script refuses what a forwarder cannot pass along: more than 8 arguments, a floating or
 # by-value composite argument (none in 2017.4 - 6000.2).
 import re, sys
@@ -25,6 +27,7 @@ WIDE = {'int', 'int32_t', 'uint32_t', 'unsigned int', 'int64_t', 'uint64_t', 'si
 
 def kind(param):
     p = re.sub(r'\[\s*\]$', '*', param.strip())
+    if re.fullmatch(r'(const\s+)?(Il2CppClass|MethodInfo)\s*\*\s*\w*', p): return 'H'
     if '(' in p or '*' in p or '&' in p: return None                    # a pointer (to a function too)
     words = [w for w in p.replace('const', ' ').split()]
     if not words: return None
@@ -55,4 +58,5 @@ for path in sys.argv[1:]:                   # several releases' headers: every n
     if rows.get(name, ext) != ext: raise SystemExit('gen-api.py: %s differs between the headers' % name)
     rows[name] = ext
 for name in sorted(rows):
-    print('API(%s%s)' % (name, ', ' + ' '.join(rows[name]) if rows[name] else ''))
+    marks = sorted(rows[name], key=lambda m: m[0] != 'H')
+    print('%s(%s%s)' % ('APIH' if marks and marks[0][0] == 'H' else 'API', name, ', ' + ' '.join(marks) if marks else ''))

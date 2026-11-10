@@ -59,6 +59,7 @@
 #include "glspec.h"
 #include "glmerge.h"
 #include "../android/egl_glue.h"
+#include "../loader/so_loader.h"
 #define GLREC_PART 1
 #include "glrec_gen.h"
 #undef GLREC_PART
@@ -174,7 +175,7 @@ static void time_init(void)
     struct sigaction sa, old;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = probe_ill;
-    sigaction(SIGILL, &sa, &old);
+    so_sigaction(SIGILL, &sa, &old);
     volatile uint32_t f = 0; volatile uint64_t a = 0, b = 0;   // (volatile: kept across the longjmp)
     if (!sigsetjmp(g_probe_jb, 1)) { f = counter_freq(); a = counter(); usleep(1000); b = counter(); }
     sigaction(SIGILL, &old, NULL);

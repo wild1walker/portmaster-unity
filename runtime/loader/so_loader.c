@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <link.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1006,6 +1007,9 @@ void so_thread_slots(void)
     if (!tp[1]) tp[1] = (uintptr_t)tp;
 }
 
+static void (*_Atomic thread_start_hook)(void);
+void so_set_thread_start_hook(void (*hook)(void)) { atomic_store(&thread_start_hook, hook); }
+
 struct thread_start { void *(*fn)(void *); void *arg; };
 
 static void *thread_start(void *p)
@@ -1013,6 +1017,8 @@ static void *thread_start(void *p)
     struct thread_start s = *(struct thread_start *)p;
     free(p);
     so_thread_slots();
+    void (*hook)(void) = atomic_load(&thread_start_hook);
+    if (hook) hook();
     return s.fn(s.arg);
 }
 

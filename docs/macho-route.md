@@ -1,7 +1,9 @@
 # The Mach-O route: a macOS IL2CPP build's arm64 code on ARM Linux
 
-Status: in progress (first game: Dave the Diver, 2026-11-08). Nothing of it runs yet; this page
-records what the build holds and what the route has to answer.
+Status: in progress (first game: Dave the Diver, 2026-11-08). A macOS IL2CPP build of the
+project's own test game runs under the Android player in the emulator rig (2026-11-09, below);
+no handheld run and no commercial game yet. The setup side (`pmu android-data`) does not have
+the route yet: the test's data was put together by hand.
 
 ## Why
 
@@ -173,5 +175,109 @@ forced, in the container on the Mac:
 GameAssembly needs only libSystem, libc++ and CoreFoundation, so il2cpp starts without the
 engine: the managed side can be tested apart from the player.
 
-Next: the bridge library that stands in for `libil2cpp.so` under Unity's arm64 Android player
-(the il2cpp_* forwarders, extending narrow arguments), then a handheld with a 64-bit userland.
+## Under the Android player (2026-11-09)
+
+The bridge (`runtime/macho/bridge`, built by its `build.sh` into `libil2cpp_macho.so`) is a host
+(glibc) library that the port's lib folder holds as `libil2cpp.so`, beside the game's
+`GameAssembly.dylib` and the two libc++ dylibs. `android_package.json` says
+`"scripting": "macho"` (or `UA_SCRIPTING=macho`); the host (`runtime/host/macho64.c`) then loads
+the bridge before the player, hands it the loader's `dlopen` (the game's plugins are Android
+libraries), and maps it as the player's `libil2cpp.so`. arm64 only.
+
+What the bridge does between the two sides:
+
+- **The il2cpp API** (`bridge.S`, `il2cpp_api.inc`): one forwarder per `il2cpp_*` function the
+  player may call, 247 names over Unity 2017.4 to 6000.0. `gen-api.py` derives the table from
+  the `il2cpp-api-functions.h` of the editors at hand (the header itself is Unity's and is never
+  checked in): a name, and which arguments are narrower than 32 bits (the forwarder extends
+  them, as a macOS caller would) or are a class or a method (below). A name the game's image
+  does not export stops with that name when called, not before.
+- **Internal calls** (`bridge.c`): the player registers its engine functions by name; the image
+  asks for one at its first use. Each is registered as a stub, and at its first call the
+  method's signature is read from the image: if the result is narrower than 32 bits (the image
+  expects it extended; AAPCS64 leaves the upper bits undefined) or arguments go on the stack
+  (the image packs them at their natural alignment, the player reads 8-byte slots), the stub
+  becomes a thunk that lays them out again; else the player's function is called directly.
+  `UA_MACHO_LOG=1` logs each thunk made.
+- **Threads and signals**: every thread gets an alternate signal stack before it runs the
+  image's code (the loader's thread start hook, and the first il2cpp call of a thread made
+  elsewhere), and every handler the runtime or the player installs gets `SA_ONSTACK`
+  (`so_signal_handlers_onstack`): the image's leaf functions keep data below `sp`. The signal the
+  collector stops threads with stays out of every mask Android code sets.
+- **Unwinding**: the bridge's libunwind walks the Android libraries' ELF tables through the
+  loader's `so_dl_iterate_phdr` and the image's compact unwind info.
+
+### What only the Android engine modules have
+
+Unity's engine modules (`UnityEngine.*.dll`) differ by platform, and the Android player looks up
+and calls a few managed methods that only its own modules have. A macOS build's metadata does
+not have them, and managed stripping may have removed the whole class. First case met, Unity
+6000.0.52f1: the nested class `UnityEngine.AudioSettings/Mobile` with
+`InvokeIsStopAudioOutputOnMuteEnabled` and `InvokeOnMuteStateChanged`. The player prints
+"Unable to find method ..." for it at start, keeps a null method, and crashes three frames later
+in `il2cpp_method_get_param_count(NULL)`.
+
+How the player looks one up: `il2cpp_class_from_name(image, namespace, name)` (a nested class
+misses there), then a walk of `il2cpp_class_get_nested_types(outer)` comparing names; the
+method by a walk of `il2cpp_class_get_methods` (not `il2cpp_class_get_method_from_name`), up the
+parents. Thousands of `il2cpp_class_from_name` misses at start are normal: the player asks for
+every native type's class, in several namespaces.
+
+The bridge answers such a class or method itself (`bridge.c`, "what only the Android engine
+modules have"), **as the macOS module behaves**, so the game sees what it would on a Mac. For
+the two above: the macOS module's `Mobile.stopAudioOutputOnMute` is the constant false, and
+nothing in it ever raises `OnMuteStateChanged`; so the first answers false and the second does
+nothing. The mechanism:
+
+- the stand-in classes and methods are records in one page of the bridge
+  (`ua_standin_space`); the player gets pointers into it, at the end of the image's own
+  nested-type and method walks;
+- every forwarder that takes a class or a method checks for a pointer into that page (three
+  instructions) and then calls the bridge's own answer for that function instead of the image,
+  which never sees such a pointer. The answers are the facts of the Android module's
+  declaration (name, flags, parent, parameters, ...) and `il2cpp_runtime_invoke`;
+- a function with no answer (fields, attributes, reflection objects, ...) stops with its name:
+  nothing is guessed.
+
+To read a module's declarations, the editor's own Mono has a disassembler:
+`MonoBleedingEdge/bin/mono MonoBleedingEdge/lib/mono/4.5/ikdasm.exe <dll>`, on the Android
+module (`PlaybackEngines/AndroidPlayer/Variations/il2cpp/Managed`) and the macOS one
+(`PlaybackEngines/MacStandaloneSupport/Variations/il2cpp/Managed`). Its output is Unity's code:
+it is read, not kept.
+
+What decides the set for a game is what the Android player requires
+(`[RequiredByNativeCode]` members of the Android modules) against what the game's own
+`global-metadata.dat` holds, not a diff of the two platforms' modules: stripping differs per
+game. The setup has to report every required member the game lacks and the bridge has no
+record for (to do, with the `--macho` mode of `pmu android-data`).
+
+Also open: 13 internal calls the image may ask for that the Android player does not register
+(`UnityEngine.Screen::GetMainWindowDisplayInfo_Injected` among them; none was called by the
+test game), and 6 il2cpp functions the Mac image does not export (none was called).
+
+### The data, by hand for now
+
+A macOS build keeps `Contents/Resources/Data` (the Data folder), with
+`il2cpp_data/{Metadata,Resources}`, and `Contents/Frameworks/GameAssembly.dylib`. The Android
+IL2CPP player reads the metadata from `assets/bin/Data/Managed/{Metadata,Resources,etc}`. The
+conversion is the Android route's with `"steps": ["shaders", "settings"]`,
+`"shaders": {"from": ["metal"]}` (a Mac build made for Apple silicon carries Metal programs
+only) and `"settings": {"graphics_apis": [11]}`. Three things in `pmu android-data` stand in the
+way of a Mac IL2CPP source today and were worked around for the test: it requires
+`Managed/*.dll`; it reads the player's version from an editor `AndroidPlayer` folder's
+`modules.asset` ("2018.3.0a1") instead of the player itself; and a source named `Data` gives an
+empty game name.
+
+### The first run
+
+The test game (`runtime/macho/test/game`: the project's Pong, built for macOS arm64 with IL2CPP
+by `build.sh`, never run on the Mac) under Unity 6000.0.52f1's arm64 Android player in the
+emulator rig (`EMU_ARCH=arm64 UA_SCRIPTING=macho tools/emu/emu.sh`): the picture is right
+(paddles, ball, the score's text), the score counts, 3 556 frames at the rig's 60 fps in 36 s,
+RSS 216 MB. 241 of the 247 il2cpp functions passed on, 6 the image does not export; 19
+internal calls needed a thunk (bool results; `Texture2D::Internal_CreateImpl_Injected` and
+`FontEngine::TryAddGlyphToTexture_Internal_Injected` with two stack arguments each).
+
+Next: natively raised managed exceptions and callbacks into the image under the player (a test
+component), the `--macho` mode of `pmu android-data` with the required-members report, then a
+handheld with a 64-bit userland.

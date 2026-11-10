@@ -143,10 +143,41 @@ struct bionic_sigaction { int flags; void *handler; bionic_sigset_t mask; void *
 struct bionic_sigaction { void *handler; bionic_sigset_t mask; int flags; void *restorer; };
 #endif
 
+/* What a host route may ask of the signals (so_loader.h). */
+static int keep_unblocked_sig;      /* never in a mask Android code sets */
+static int handlers_onstack;        /* every handler on the thread's alternate stack */
+
+void so_signal_keep_unblocked(int sig) { keep_unblocked_sig = sig; }
+
+int so_sigaction(int sig, const struct sigaction *act, struct sigaction *old)
+{
+    struct sigaction a;
+    if (act && handlers_onstack && act->sa_handler != SIG_DFL && act->sa_handler != SIG_IGN) {
+        a = *act;
+        a.sa_flags |= SA_ONSTACK;
+        act = &a;
+    }
+    return sigaction(sig, act, old);
+}
+
+void so_signal_handlers_onstack(void)
+{
+    handlers_onstack = 1;
+    /* the handlers already there (glibc refuses the two signals it keeps: skipped) */
+    for (int sig = 1; sig <= SIGRTMAX; sig++) {
+        struct sigaction a;
+        if (sigaction(sig, NULL, &a) != 0 || a.sa_handler == SIG_DFL || a.sa_handler == SIG_IGN) continue;
+        if (a.sa_flags & SA_ONSTACK) continue;
+        a.sa_flags |= SA_ONSTACK;
+        sigaction(sig, &a, NULL);
+    }
+}
+
 static void mask_in(sigset_t *g, const bionic_sigset_t *b)
 {
     sigemptyset(g);
     if (b) for (unsigned i = 0; i < BSIG_BITS; i++) if (*b & (1ul << i)) sigaddset(g, i + 1);
+    if (keep_unblocked_sig) sigdelset(g, keep_unblocked_sig);
 }
 static void mask_out(bionic_sigset_t *b, const sigset_t *g)
 {
@@ -173,6 +204,7 @@ static int bionic_sigaction(int sig, const struct bionic_sigaction *act, struct 
         ga.sa_handler = (sighandler_t)act->handler;   /* same slot as sa_sigaction */
         mask_in(&ga.sa_mask, &act->mask);
         ga.sa_flags = act->flags & ~0x04000000;       /* SA_RESTORER: glibc adds its own */
+        if (handlers_onstack && ga.sa_handler != SIG_DFL && ga.sa_handler != SIG_IGN) ga.sa_flags |= SA_ONSTACK;
     }
     int r = sigaction(sig, act ? &ga : NULL, old ? &go : NULL);
     if (r == 0 && old)

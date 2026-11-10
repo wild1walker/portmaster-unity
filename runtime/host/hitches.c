@@ -336,7 +336,7 @@ static void install_sampler(void)
     sa.sa_sigaction = on_sample;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    sigaction(g_sig, &sa, NULL);
+    so_sigaction(g_sig, &sa, NULL);
 }
 
 void hitches_frame(void)
@@ -353,8 +353,8 @@ void hitches_init(void)
         da.sa_handler = on_dump;
         da.sa_flags = SA_RESTART;
         sigemptyset(&da.sa_mask);
-        sigaction(SIGUSR2, &da, NULL);
-        sigaction(SIGRTMIN + 7, &da, NULL);     // the one Mono 4.x leaves alone (above)
+        so_sigaction(SIGUSR2, &da, NULL);
+        so_sigaction(SIGRTMIN + 7, &da, NULL);     // the one Mono 4.x leaves alone (above)
         pthread_t dt;
         pthread_create(&dt, NULL, dumper, NULL);
     }

@@ -52,6 +52,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #endif
 #include "plugins.h"
 #include "mono64.h"
+#include "macho64.h"
 #include "unityhooks.h"
 #include "monodump.h"
 
@@ -77,7 +78,7 @@ static char libdir[512];
 // "target_sdk" and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData), and
 // "unity_version"
 static char pj_package[256], pj_build_id[128], pj_apk[256], pj_version_name[128], pj_source[32], pj_unity[32];
-static char pj_scripting[16];                  // "mono": a Mono game on the IL2CPP player (mono64.c)
+static char pj_scripting[16];                  // "mono": a Mono game on the IL2CPP player (mono64.c); "macho": a macOS IL2CPP game's code (macho64.c)
 static char pj_quality[256];                   // the quality step's caps, "msaa=0,pixel_lights=1,..." (quality.c)
 static int pj_compute_group;                   // the largest work group of the converter's split kernels (glhooks.c)
 static int pj_version_code, pj_min_sdk, pj_target_sdk, pj_gc_slice;
@@ -561,7 +562,7 @@ int main(int argc, char **argv)
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = on_crash;
     sa.sa_flags = SA_SIGINFO;
-    sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL); sigaction(SIGILL, &sa, NULL); sigaction(SIGFPE, &sa, NULL);
+    so_sigaction(SIGSEGV, &sa, NULL); so_sigaction(SIGBUS, &sa, NULL); so_sigaction(SIGILL, &sa, NULL); so_sigaction(SIGFPE, &sa, NULL);
 
     // Build.VERSION.SDK_INT (and ro.build.version.sdk, the libandroid functions present, AConfiguration)
     const int sdk_int = reported_sdk();
@@ -646,6 +647,7 @@ int main(int argc, char **argv)
 #endif
     plugins_init(root, libdir);                 // the port's plugins.map: ARM builds, stubs (plugins.c)
     if (mono64_init(libdir, pj_scripting, pj_unity, pj_gc_slice) < 0) return 1;   // libil2cpp.so -> Mono (mono64.c)
+    if (macho64_init(libdir, pj_scripting) < 0) return 1;                         // libil2cpp.so -> GameAssembly.dylib (macho64.c)
 
     char path[600];
     snprintf(path, sizeof path, "%s/libmain.so", libdir);
@@ -748,7 +750,7 @@ int main(int argc, char **argv)
         usleep(4000);
     }
     // Unity installed its own crash handler after ours: ours first again for the shutdown (see on_crash)
-    sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+    so_sigaction(SIGSEGV, &sa, NULL); so_sigaction(SIGBUS, &sa, NULL);
     up_quit();      // also when the game asked to quit (Application.Quit: nativeRender returned false)
     up_wait();
     glhooks_progcache_report("at the end");

@@ -114,6 +114,22 @@ void so_set_library_path(const char *dirs);
 
 /* bionic's thread id slot for the calling thread (see THREAD ID SLOT above); idempotent */
 void so_thread_slots(void);
+/* hook() on every thread made through pthread_create from then on (the host's, the Android
+ * libraries' and the shared libraries'), before its start routine */
+void so_set_thread_start_hook(void (*hook)(void));
+
+/* Signals, for a route whose code has other needs of them than Android's (the Mach-O route:
+ * macOS code keeps data below the stack pointer, which a handler on the same stack would
+ * write over, and stops threads for its collector with a signal):
+ *   so_signal_keep_unblocked(sig)   sig stays out of every mask Android code sets
+ *   so_signal_handlers_onstack()    the handlers there now and every one Android code installs
+ *                                   later get SA_ONSTACK: on a thread with an alternate stack
+ *                                   they run there
+ *   so_sigaction                    sigaction for the host's own handlers, under the same rule */
+struct sigaction;
+void so_signal_keep_unblocked(int sig);
+void so_signal_handlers_onstack(void);
+int  so_sigaction(int sig, const struct sigaction *act, struct sigaction *old);
 
 /* Map an Android library name (basename, e.g. "libGLESv2.so") to a host library
  * (e.g. "libGLESv2.so.2", or an absolute path). host == NULL: dlopen fails for it, also for an
@@ -165,6 +181,9 @@ void so_set_dlopen_rewrite(const char *(*rewrite)(const char *path, char *buf, s
  * load or look up others */
 void so_set_load_hook(void (*hook)(so_module *m));
 int   so_dlclose(void *handle);
+/* dl_iterate_phdr for unwinders: the Android modules, then the host's own */
+struct dl_phdr_info;
+int   so_dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *data);
 char *so_dlerror(void);
 
 /* hybris_compat.c: bionic -> glibc compatibility (libhybris's hooks plus the remaining bionic

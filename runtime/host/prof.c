@@ -1144,7 +1144,7 @@ void prof_init(const char *root)
     sa.sa_sigaction = on_signal;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    sigaction(g_sig, &sa, NULL);
+    so_sigaction(g_sig, &sa, NULL);
     pthread_t th;
     pthread_create(&th, NULL, sampler, NULL);
     fprintf(stderr, "[prof] on: %s at %d Hz, %d s per recording (touch %s/prof.req%s), depth %d\n", names, g_hz, g_secs, g_root,
