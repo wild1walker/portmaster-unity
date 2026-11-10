@@ -126,8 +126,6 @@ static char *darwin_setlocale(int category, const char *name)
 // struct lconv *localeconv_l(locale_t): two of the int_* bytes sit in the other order there,
 // and "not known" is CHAR_MAX of a signed char, 127: char is unsigned here.
 _Static_assert(DARWIN_SIZEOF_LCONV == 96 && sizeof(struct lconv) == 96, "lconv");
-static __thread struct { unsigned char lc[DARWIN_SIZEOF_LCONV]; char grouping[32], mon_grouping[32]; } conv
-    __attribute__((tls_model("initial-exec")));
 
 static char d_char(char c) { return (unsigned char)c == UCHAR_MAX ? 127 : c; }
 
@@ -143,9 +141,10 @@ static void *darwin_localeconv_l(void *loc)
 {
     locale_t old = uselocale(HOST(loc));
     struct lconv *l = localeconv();
-    unsigned char *o = conv.lc;
-    char *grouping = d_grouping(l->grouping, conv.grouping, sizeof conv.grouping);
-    char *mon_grouping = d_grouping(l->mon_grouping, conv.mon_grouping, sizeof conv.mon_grouping);
+    struct darwin_thread_bufs *b = darwin_thread_bufs();
+    unsigned char *o = b->lconv;
+    char *grouping = d_grouping(l->grouping, b->grouping, sizeof b->grouping);
+    char *mon_grouping = d_grouping(l->mon_grouping, b->mon_grouping, sizeof b->mon_grouping);
 #define STR(f)  PUT(o, DARWIN_LCONV_##f, l->f)
 #define CHR(f)  o[DARWIN_LCONV_##f] = (unsigned char)d_char(l->f)
     STR(decimal_point); STR(thousands_sep); STR(int_curr_symbol); STR(currency_symbol);

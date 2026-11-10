@@ -19,7 +19,6 @@
 
 #define TLV_IMAGES 32
 __attribute__((visibility("hidden"))) __thread void *ua_tlv_slots[TLV_IMAGES];
-static __thread void *raw[TLV_IMAGES];              // what free takes
 static struct darwin_image *owner[TLV_IMAGES];
 static int nowner;
 
@@ -28,6 +27,10 @@ static __thread struct at_exit *at_exit;
 
 static pthread_key_t gone_key;
 static pthread_once_t gone_once = PTHREAD_ONCE_INIT;
+
+// A thread's block starts where the image's own does within tlv_align: so far into what
+// posix_memalign gave (and free takes).
+static size_t block_bias(const struct darwin_image *im) { return (uintptr_t)im->tlv_start & (im->tlv_align - 1); }
 
 void darwin_tlv_thread_exit(void)
 {
@@ -45,8 +48,7 @@ static void thread_gone(void *v)
     (void)v;
     darwin_tlv_thread_exit();
     for (int i = 0; i < TLV_IMAGES; i++) {
-        free(raw[i]);
-        raw[i] = NULL;
+        if (ua_tlv_slots[i]) free((uint8_t *)ua_tlv_slots[i] - block_bias(owner[i]));
         ua_tlv_slots[i] = NULL;
     }
 }
@@ -69,12 +71,11 @@ __attribute__((visibility("hidden"))) void *ua_tlv_slow(uintptr_t *desc)
     uintptr_t key = desc[1];
     if (key >= (uintptr_t)nowner) { fprintf(stderr, "[darwin] a thread-local descriptor at %p names no image (key %lu)\n", (void *)desc, (unsigned long)key); abort(); }
     struct darwin_image *im = owner[key];
-    size_t bias = (uintptr_t)im->tlv_start & (im->tlv_align - 1);
+    size_t bias = block_bias(im);
     void *mem = NULL;
     if (posix_memalign(&mem, im->tlv_align, bias + im->tlv_size + 1) != 0) { fprintf(stderr, "[darwin] no memory for a thread's variables (%zu bytes)\n", im->tlv_size); abort(); }
     uint8_t *block = (uint8_t *)mem + bias;
     memcpy(block, im->tlv_start, im->tlv_size);
-    raw[key] = mem;
     ua_tlv_slots[key] = block;
     arm();
     // the image's thread-local initializers, once the variables can be reached

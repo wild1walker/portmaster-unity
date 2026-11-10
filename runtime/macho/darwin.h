@@ -102,6 +102,19 @@ uint32_t darwin_thread_port(void);
 unsigned darwin_thread_stops(void);
 int   darwin_thread_stop_signal(void);
 
+// What a thread keeps between calls (dlerror's text, strerror's, localeconv's): one heap block
+// per thread, made at its first use and freed at its end. Not thread-local variables: as a
+// library the host dlopens (bridge/), the runtime's thread-local block must fit the little
+// static TLS glibc keeps spare, so only what a signal handler or the thunks read is in it.
+struct darwin_thread_bufs {
+    char dl_error[512];
+    int  dl_failed;
+    char strerror[256];
+    unsigned char lconv[DARWIN_SIZEOF_LCONV];
+    char grouping[32], mon_grouping[32];
+};
+struct darwin_thread_bufs *darwin_thread_bufs(void);
+
 // Page size: macOS on arm64 has 16 KiB pages and code built for it may count on that; mmap's
 // shim hands out memory aligned so.
 size_t   darwin_page_size(void);

@@ -161,6 +161,27 @@ static int gone(int tid)
     return syscall(SYS_tgkill, getpid(), tid, 0) != 0 && errno == ESRCH;
 }
 
+// ---- a thread's buffers ------------------------------------------------------------------------
+static pthread_key_t  bufs_key;
+static pthread_once_t bufs_once = PTHREAD_ONCE_INIT;
+
+static void bufs_init(void)
+{
+    if (pthread_key_create(&bufs_key, free) != 0) { fprintf(stderr, "[darwin] no thread key for a thread's buffers\n"); abort(); }
+}
+
+// A destructor of the thread that runs after this key's (an image's thread-local one calling
+// strerror, say) gets a new block: glibc goes round the keys again and frees that one too.
+struct darwin_thread_bufs *darwin_thread_bufs(void)
+{
+    pthread_once(&bufs_once, bufs_init);
+    struct darwin_thread_bufs *b = pthread_getspecific(bufs_key);
+    if (b) return b;
+    b = calloc(1, sizeof *b);
+    if (!b || pthread_setspecific(bufs_key, b) != 0) { fprintf(stderr, "[darwin] no memory for a thread's buffers\n"); abort(); }
+    return b;
+}
+
 void darwin_thread_enter(void)
 {
     if (self) return;

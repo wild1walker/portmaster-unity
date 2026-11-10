@@ -75,9 +75,9 @@ int darwin_strerror_r(int e, char *buf, size_t len)
 // char *strerror(int): the text stays the thread's until its next call.
 static char *darwin_strerror(int e)
 {
-    static __thread char text[256];
-    darwin_strerror_r(e, text, sizeof text);
-    return text;
+    struct darwin_thread_bufs *b = darwin_thread_bufs();
+    darwin_strerror_r(e, b->strerror, sizeof b->strerror);
+    return b->strerror;
 }
 
 const struct darwin_sym darwin_syms_errno[] = {

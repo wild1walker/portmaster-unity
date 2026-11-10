@@ -222,13 +222,12 @@ static void darwin_dyld_stub_binder(void)
 static char main_handle;
 struct host_handle { uint32_t magic; void *h; };
 #define HOST_MAGIC 0x686f7374u
-static __thread char dl_error[512];
-static __thread int dl_failed;
 
 static void dl_fail(const char *fmt, const char *a)
 {
-    snprintf(dl_error, sizeof dl_error, fmt, a);
-    dl_failed = 1;
+    struct darwin_thread_bufs *b = darwin_thread_bufs();
+    snprintf(b->dl_error, sizeof b->dl_error, fmt, a);
+    b->dl_failed = 1;
 }
 
 static const char *base_name(const char *p)
@@ -291,9 +290,10 @@ static long darwin_dlclose(void *handle)
 
 static const char *darwin_dlerror(void)
 {
-    if (!dl_failed) return NULL;
-    dl_failed = 0;
-    return dl_error;
+    struct darwin_thread_bufs *b = darwin_thread_bufs();
+    if (!b->dl_failed) return NULL;
+    b->dl_failed = 0;
+    return b->dl_error;
 }
 
 // Dl_info is four pointers on both sides. For an image's address: its path, its header, the
