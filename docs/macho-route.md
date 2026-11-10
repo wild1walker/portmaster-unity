@@ -982,7 +982,9 @@ step skipped. What each run showed, in order, since each is a lesson for the nex
   answers `SteamAPI_Init` honestly, Steam is not running, so the flag stays false and the
   game waits for good, at 60 fps with a black screen. That is the game's own rule, and **the
   route stops there for this build**: the port does not answer for Steam, so nothing is
-  changed to get past it. A build
+  changed to get past it (docs/plugins.md, "Store checks"; Valve's `steam_appid.txt` does
+  not help: only Valve's library reads it, and its `SteamAPI_Init` still needs the client). A
+  build
   of the game that does not ask for Steam would go on from here; which one, if any, is the
   owner's choice (the Android release of 2026-09 would run on the Android routes without any
   of this document, with whatever checks of its own it has).

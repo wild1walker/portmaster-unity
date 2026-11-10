@@ -153,6 +153,31 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | Unity's Linux launcher | (`ScreenSelector.so`) | - | the desktop player's own dialog; never used |
 | Windows / macOS system libraries | `kernel32`, `user32`, `/System/Library/...` | - | fail as on a Linux PC |
 
+### Store checks: what the stubs may answer
+
+The stubs answer as a PC on which the store's client is not running, and nothing more: no
+stub reports a successful init, a logged-in user, an owned app or DLC, or a ticket. Whether a
+game then goes on is the game's own behaviour, and a game that stops there is a stop for the
+port, never something to patch (a game's `SteamAPI_Init` / `RestartAppIfNecessary` /
+ownership calls, SteamStub, a licence check: none of them is removed or faked).
+
+- **`steam_appid.txt`** is read by Valve's library only (`libsteam_api`: "Either launch the
+  game from Steam, or put the file steam_appid.txt containing the correct appID in your game
+  folder."). With it a game started directly is not relaunched through Steam, which is what
+  the stub's `RestartAppIfNecessary` = false already gives; `SteamAPI_Init` still needs the
+  running, logged-in Steam client. So the file helps a game that carries on when Steam does
+  not start, and never a game that waits for Steam: Dave the Diver's macOS build waits after
+  its logo video for `SteamManager.Initialized` (docs/macho-route.md), and neither its code
+  nor its metadata reads the file (2026-11-10).
+- **Google Play.** An Android release's purchases (the game itself where it is unlocked in
+  the game, DLC) come from Google Play Billing, which the handhelds do not have; its Java side
+  may only answer "billing unavailable", never a purchase. What can work honestly: a game that
+  keeps its own record of purchases (its save or prefs) and accepts it offline, carried over
+  unchanged from the owner's phone with the files Play installed there (APK splits, asset
+  packs). A record bound to the phone or signed by Play is a stop. Which case a game is shows in
+  its code before anyone buys DLC for a port.
+- **GOG builds** have no ownership check; their Galaxy calls fail as above and the game goes on.
+
 Survey: the ten corpus games (free itch.io Linux Mono builds, 2017.4 - 2022.3; `pmunity plugins`
 reads every one: `PMUNITY_GAMES=... python -m unittest tests.test_plugins`) and the Plugins folders
 of 68 free Linux Mono builds from itch.io's listings (their zip directories, read with range
