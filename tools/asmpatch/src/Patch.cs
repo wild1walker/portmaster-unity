@@ -49,6 +49,7 @@ abstract class Patch
         new GenericUnion(),
         // optimizations
         new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new PlayMakerTypeLookup(), new UnityObjectNull(), new HollowKnightFade(),
+        new InlineHot(check: true), new InlineHot(check: false),   // (inline-check first: inline then finds it done)
         // reductions
         new HollowKnightBlur(), new HollowKnightPost(), new HollowKnightUnload(),
         // screens

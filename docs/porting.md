@@ -232,6 +232,14 @@ turning on or looking for (profiling.md has the numbers):
   that rebuilds its whole mesh on any change (dfGUI, NGUI) can be rebuilding it every frame because a
   control, often a hidden one, moves by float noise (Gungeon: 2 ms a frame; the port's `df-render-skip`);
   a test build that prints a stack at the UI's invalidation finds the cause in one run;
+- asmpatch's `inline` with a list of the game's hottest callers from a profile (`UA_PROF`, profsum.py's
+  managed methods): `List<T>[i]`, Unity's null tests, Mathf and Vector leaves that Mono 2.6's JIT keeps as
+  calls are copied into them, exactly (Gungeon: +2.6 % in its busiest fight). The list goes to
+  `setup/files/inline.txt` through the port's `[files]` (an assembly patch's `files`), the patch into
+  `android_data.asmpatch`; check a new list with `inline-check` on the handheld first
+  ([tools/asmpatch/README.md](../tools/asmpatch/README.md#optimizations)). Native translations of hot methods, the
+  .NET 4.x runtime and an optimised libmono were measured and do not pay
+  ([profiling.md](profiling.md#managed-code-on-unity-2017xs-mono-26-inlining-mono-5-and-native-code-enter-the-gungeon-2026-11-09));
 - the game's own lowest graphics options on every handheld, with no setup question
   ([below](#the-games-own-options-lowest-and-the-games-rules-kept); Gungeon's realtime reflections
   alone were a whole extra camera pass a frame).

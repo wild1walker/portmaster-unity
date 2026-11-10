@@ -1,11 +1,13 @@
 // asmpatch: generic patches for a Unity game's managed assemblies, for Unity's Android player
 // (portmaster-unity). Rewrites the game's own IL; nothing is added from elsewhere.
 //
-//   asmpatch [--only=a,b] [--skip=a,b] [--with=c] [--no-optimize] <Managed in> <out dir>
+//   asmpatch [--only=a,b] [--skip=a,b] [--with=c] [--no-optimize] [--inline-list=f] <Managed in> <out dir>
 //       scans every assembly of <Managed in>, runs each patch that applies and writes only the
 //       assemblies it changed into <out dir> (the originals are not touched); opt-in patches run
 //       only when named by --only or --with; --no-optimize leaves out the optimizations (patches
-//       of kind Optimize, README.md "Optimizations") that are not named
+//       of kind Optimize, README.md "Optimizations") that are not named; --inline-list: the inline
+//       patches' list of hot callers and callees (default: $ASMPATCH_INLINE_LIST, else files/inline.txt
+//       beside asmpatch)
 //   asmpatch --list [<Managed in>]      the patches; with a folder, what each would change there
 //   asmpatch --survey <Managed in>      the game's input stacks and what they need
 //
@@ -22,15 +24,16 @@ static class Program
     {
         bool list = argv.Contains("--list"), survey = argv.Contains("--survey"), noOptimize = argv.Contains("--no-optimize");
         string[] only = Opt(argv, "--only="), skip = Opt(argv, "--skip=") ?? Array.Empty<string>(), with = Opt(argv, "--with=") ?? Array.Empty<string>();
+        InlineHot.ListPath = argv.LastOrDefault(a => a.StartsWith("--inline-list="))?.Substring("--inline-list=".Length);
         var bad = argv.Where(a => a.StartsWith("-") && a != "--list" && a != "--survey" && a != "--no-optimize" &&
-                                  !a.StartsWith("--only=") && !a.StartsWith("--skip=") && !a.StartsWith("--with=")).ToList();
+                                  !a.StartsWith("--only=") && !a.StartsWith("--skip=") && !a.StartsWith("--with=") && !a.StartsWith("--inline-list=")).ToList();
         var args = argv.Where(a => !a.StartsWith("-")).ToArray();
         var unknown = (only ?? Array.Empty<string>()).Concat(skip).Concat(with).Where(n => Patch.All.All(p => p.Name != n)).ToList();
         if (bad.Count > 0 || unknown.Count > 0 || (survey ? args.Length != 1 : list ? args.Length > 1 : args.Length != 2))
         {
             foreach (var b in bad) Console.Error.WriteLine($"asmpatch: unknown option {b}");
             foreach (var u in unknown) Console.Error.WriteLine($"asmpatch: no patch named {u}");
-            Console.Error.WriteLine("usage: asmpatch [--only=a,b] [--skip=a,b] [--with=c] [--no-optimize] <Managed in> <out dir>\n" +
+            Console.Error.WriteLine("usage: asmpatch [--only=a,b] [--skip=a,b] [--with=c] [--no-optimize] [--inline-list=f] <Managed in> <out dir>\n" +
                                    "       asmpatch --list [<Managed in>]\n       asmpatch --survey <Managed in>");
             return 2;
         }

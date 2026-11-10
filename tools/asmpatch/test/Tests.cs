@@ -40,6 +40,7 @@ static partial class TestMain
             PlayMakerLoadLockTests();
             HollowKnightTests();
             UnionTests();
+            InlineTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }

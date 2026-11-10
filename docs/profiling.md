@@ -772,6 +772,67 @@ recorder (`UA_GL_REC=2`, whose frame graph sinks this game's clear-only passes),
 against 71 - 77 MB, frames over 50 ms 8 / 7 against 6 / 5). The render thread is not what holds this
 game; its port keeps the recorder where there is swap (Knulli) and neither elsewhere.
 
+### Managed code on Unity 2017.x's Mono 2.6: inlining, Mono 5 and native code (Enter the Gungeon, 2026-11-09)
+
+Bullet Hell's busiest room on the RG34XX-SP (Knulli, the port's settings, the heavy-fight bench) at ~33 fps
+(`UA_PROF=200`, 20 s): UnityMain is on a CPU 99 % of the time and splits into JIT-compiled methods 41 %, libunity
+35 %, ua_host 5 % (three quarters of it the job-wait spin), Mono's trampolines 4 %, libc 4 %, Mono's managed
+wrappers 3 % and **libmono's own C code 2.8 %** (`mono_profiler_get_events` 0.3, `mono_runtime_invoke` 0.2,
+`mono_runtime_class_init_full` 0.2, the rest thin; no garbage collection in the fight). Unity's 2017.4 ARMv7
+libmono is built without optimisation, but a -O2 build of the same runtime would save at most ~1.9 % of the
+frame: not built.
+
+**What Mono 2.6's JIT inlines** (its own log, `MONO_VERBOSE_METHOD=<method name>` in the emulated rig:
+`INLINE START/END/ABORTED` lines, and the code it emitted as words for `objdump`): leaf methods only, of at
+most 20 bytes of IL (`MONO_INLINELIMIT`), without a `throw`, with no call inside that is not inlined too and
+with few branches. So in PhysicsEngine.LateUpdate it inlines 48 different callees (getters, setters,
+`List<T>.Count`, the Vector2/IntVector2 constructors) and keeps as calls `List<T>[i]` (36 bytes, it throws),
+`UnityEngine.Object`'s `if (obj)` and `==` (21 and 61 bytes, branches), `Mathf.Abs`/`Clamp`/`Max`/`Sign`/
+`RoundToInt` (they call `Math.*`), `Nullable.Value`, `Transform.position` and `Vector2.zero`.
+`MONO_INLINELIMIT=40` adds only more leaves (61 inlined, the method 19.1 -> 20.6 KB; the float rounding at
+arguments and results stays as without it) and measured nothing: 34.33 / 34.01 against 34.07 / 35.34 fps.
+In the fight those small callees hold about 9 % of UnityMain's samples (`List.get_Item` 2.4, `op_Implicit`
+2.1, `op_Equality`/`op_Inequality` 1.3, Mathf/Vector leaves ~1.5).
+
+**asmpatch's `inline`** ([tools/asmpatch/README.md](../tools/asmpatch/README.md#optimizations)) copies them
+into the port's listed hot callers (Gungeon: 388 calls in 23 methods, PhysicsEngine.LateUpdate's 129 first).
+Exactness, in three steps: the stand-ins of `build.sh test`; a probe of the rounding at call boundaries run on
+Mono 2.6 itself in the rig (60 copied calls with float arguments and results, branches, `List.get_Item` in
+and out of range, a struct's `this`: the same bits as the calls); and `inline-check` on the handheld, which runs
+every copied call's original next to it for a whole bench (84 million comparisons, no mismatch). The first
+check build did find a fault: a small callee's `ldloca.s` / `br.s` copied as they were overflow in a large caller
+(more than 255 locals, longer branches) and read the wrong local; copied bodies use the long forms. The rig, on
+the same game states (Keep route, fixed time step; 67 distinct states identical through frame 541): UnityMain 1 - 3 % fewer instructions. The handheld:
+
+| | runs (fps) | mean |
+|---|---|---|
+| Bullet Hell busiest, the port's build | 35.00, 34.29, 34.07, 35.34 | 34.68 |
+| the same with `inline` | 35.29, 35.76, 35.70 | 35.58 (+2.6 %) |
+| the Forge's busiest room | not yet comparable: the bench picked another room in each arm (Forge_Joe_Cool_Room_011, 47.1 fps stock; Forge_Joe_Hot_Fire_002, 41.1 inlined), which depends on timing (a profiled stock run picked Hot_Fire_002 too); to be run with `UA_BENCH_WARP=room:Forge_Joe_Hot_Fire_002` | |
+
+**The .NET 4.x runtime instead** (Unity 2017.4's own MonoBleedingEdge, Mono 5.0, `libmonobdwgc-2.0.so`, the
+same libunity): it runs the game (4.x class libraries in `Managed/`, which select nothing but themselves: the
+player loads whichever Mono library `lib/` holds), its float32 arithmetic is Mono 2.6's (Unity's build leaves
+the `float32` optimisation off, `0x161129ff`; `-O=float32` or `-O=all` would change results), but its class
+libraries change the game: `System.Random`'s sequence for a seed (the dungeon generator's `BraveRandom`, loot),
+`String.GetHashCode` (a mirrored room seeds `UnityEngine.Random` with its name's hash), the order of equal keys
+in sorts (`PhysicsEngine.SortRigidbodies`) and `Hashtable` order. With the first three made Mono 2.6's again, 47
+of 47 distinct game states matched through the Keep's generation, and UnityMain's instructions a frame were
+the same as Mono 2.6's (+0.5 % in the Keep, +1.5 % fighting). No speed: not pursued.
+
+**Native code for the hot methods** (an IL-to-C translation of a per-game list): hand translations of
+PhysicsEngine.LateUpdate's per-body walk and the sprite animator's update, with Mono 2.6's semantics (32-bit
+object layouts, null and bounds checks, float64 evaluation rounded at float32 stores, `rem`'s zero check),
+compiled with gcc -O2 for ARMv7: 2.4x and 2.0x fewer instructions than Mono 2.6's code on the same inputs (2.8x
+with the A53's hardware divide; Mono 2.6 calls a helper for every `/` and `%`). The handheld would see far less:
+the main thread waits on memory (DRAM ~195 ns; the misses fall in the engine 54 %, managed code 36 %), and this
+game's IL2CPP build, which is exactly a native translation of all of its code, ran 25 % fewer instructions in
+the rig but only **+9 % fps** in the same fight (43.2 against 39.9). The generated C would also come from the
+game's code, so it could not be shipped: it would be translated and compiled at setup, which needs a C compiler
+on the handheld (clang for armhf: 60 - 100 MB). Not pursued: script time on a 1 GB handheld is memory traffic
+over many objects, and what lowers it is touching fewer of them (Gungeon's physics-active and sort patches),
+plus the small exact codegen wins above.
+
 ### A UI drawn again every frame for nothing (dfGUI in Enter the Gungeon, 2026-11-08)
 
 The same fight, per method (a test build timing every Update/LateUpdate with Stopwatch, instrumented, so
