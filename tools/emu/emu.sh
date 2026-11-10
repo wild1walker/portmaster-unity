@@ -13,6 +13,8 @@
 # EMU_NET=1        give the game network access (default: none, so a game's analytics and other
 #                  requests never leave the Mac; a run that tests networking turns it on)
 # EMU_NAME=<name>  the container's name (to docker kill it)
+# EMU_MEM=<size>   the container's memory limit, swap included (e.g. 3g): a game that outgrows it
+#                  is killed alone, as on a handheld, and not whatever else Docker runs
 # Environment passed into the container: UA_*, GC_*, ANDROID_*, GALLIUM_*, LP_*, and the prefixes
 # in EMU_ENV (space-separated, e.g. EMU_ENV="CUPHEAD_" for a port's own switches).
 # Display: a pbuffer the size of ANDROID_WINDOW_SIZE (UA_EGL_PBUFFER=1, the default). The SDL
@@ -34,5 +36,6 @@ case "${EMU_ARCH:-${ARCH:-armhf}}" in
 esac
 net=(--network none); [ "${EMU_NET:-0}" = 1 ] && net=()
 name=(); [ -n "$EMU_NAME" ] && name=(--name "$EMU_NAME")
-docker run --rm --platform $plat "${name[@]}" "${net[@]}" "${envs[@]}" "${zip2[@]}" -v "$E":/emu -v "$Z":/zip:ro -v "${EMU_HOSTBIN:-$hostbin}":/hostbin:ro \
+mem=(); [ -n "$EMU_MEM" ] && mem=(--memory "$EMU_MEM" --memory-swap "$EMU_MEM")
+docker run --rm --platform $plat "${name[@]}" "${net[@]}" "${mem[@]}" "${envs[@]}" "${zip2[@]}" -v "$E":/emu -v "$Z":/zip:ro -v "${EMU_HOSTBIN:-$hostbin}":/hostbin:ro \
   -v "$here/tools/emu":/emubin:ro $img sh /emubin/run_emu.sh "/emu/${1:-emu.log}" "${2:-600}" "${3:-release}"

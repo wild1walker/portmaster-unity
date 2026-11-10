@@ -62,3 +62,9 @@ player under box64, at roughly half the frame rate.
 - Ideas came from earlier work (all code here is our own): the PS Vita so_loader ports
   (`so_util.c`), FalsoJNI (fake JNI for Vita ports), PortMaster's gmloader (GameMaker's Android
   runner on Linux), and libhybris (whose bionic hooks the loader compiles in).
+- Related and not used: Bogodroid (binarycounter's, and forks of it for newer Unity versions;
+  GPL-3.0, so none of its code can come into this MIT project). By its README it runs an
+  Android app's native libraries on ARM Linux the same way (a loader, a JNI stand-in, thunks
+  onto SDL and EGL), for Android builds of a game: it has no answer for a desktop build's code
+  (docs/macho-route.md) and no VideoPlayer. Its probe game, one OK/FAIL line per platform
+  feature plus a report of what the loader lacked, is the idea of our checks game too.

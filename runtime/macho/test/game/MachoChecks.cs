@@ -11,6 +11,10 @@ using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
 
+#if !ENABLE_INPUT_SYSTEM
+#error the checks need the Input System package's backend (Active Input Handling: both; build.sh sets it)
+#endif
+
 // The Mach-O route's checks under the player (docs/macho-route.md): what has to be right
 // between the game's code, compiled for macOS, and the Android player's. Each check logs
 // "[checks] ok <name>" or "[checks] FAIL <name>", then one line with the counts; the test
@@ -431,6 +435,20 @@ public class MachoChecks : MonoBehaviour
                    d.workArea.height == d.height && d.name == "Built-in Display";
         });
 
+        // Application.streamingAssetsPath: a folder on a desktop, which a game reads and lists
+        // with System.IO. The Android player's own answer is the inside of its package; the
+        // bridge gives the folder the port has beside it.
+        Check("StreamingAssets is a folder", () => {
+            string dir = Path.Combine(Application.streamingAssetsPath, "checks");
+            bool there = Directory.Exists(dir);
+            string[] files = there ? Directory.GetFiles(dir) : new string[0];
+            Array.Sort(files, StringComparer.Ordinal);
+            bool right = files.Length == 2 && Path.GetFileName(files[0]) == "three.bin" && Path.GetFileName(files[1]) == "words.txt" &&
+                         new FileInfo(files[0]).Length == 3 && File.ReadAllText(files[1]) == "a folder of files\n";
+            if (!right) Debug.Log("[checks] StreamingAssets: " + Application.streamingAssetsPath + (there ? ", " + files.Length + " files" : ", no folder"));
+            return right;
+        });
+
         // Burst's library: opened by the player, its jobs run on the player's threads, what
         // they call of the player (memory, the next range of a parallel job) answered as the
         // game's own calls are.
@@ -486,6 +504,51 @@ public class MachoChecks : MonoBehaviour
         var delay = AfterDelay(id => after = id);
         while (!delay.IsCompleted) yield return null;
         Check("task continuation on the main thread", () => after == main && !delay.IsFaulted);
+
+        // The Input System package's pads: a macOS build's copy has no layout for the pads the
+        // Android player reports, and the runtime registers them (docs/macho-route.md, "The
+        // Input System's pads"). A test presses a virtual pad (UA_VIRTUAL_PAD=1), or the
+        // handheld's own is there.
+        var pad = UnityEngine.InputSystem.Gamepad.current;
+        Check("Input System: the pad is a Gamepad", () => {
+            if (pad == null) {
+                var devices = new StringBuilder();
+                foreach (var d in UnityEngine.InputSystem.InputSystem.devices) devices.Append(' ').Append(d.layout);
+                foreach (var d in UnityEngine.InputSystem.InputSystem.GetUnsupportedDevices())
+                    devices.Append(" (without a layout: ").Append(d.interfaceName).Append('/').Append(d.deviceClass).Append(')');
+                Debug.Log("[checks] Input System: no Gamepad; the devices:" + devices);
+                return false;
+            }
+            Debug.Log("[checks] Input System: the pad's layout is " + pad.layout + " (" + pad.description.interfaceName + "/" + pad.description.deviceClass + ")");
+            return pad.description.interfaceName == "Android" && pad.layout.StartsWith("Android");
+        });
+        // With scripted presses (UA_INPUT_SCRIPT: the bottom face button, the left stick to the
+        // right and the d-pad up, again and again): each is seen pressed and let go, and no
+        // other control moves, which a layout with a wrong offset would show.
+        if (pad != null && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("UA_INPUT_SCRIPT"))) {
+            bool south = false, right = false, up = false, rest = false, others = false;
+            string padLast = "", padSeen = "";
+            int changes = 0;
+            for (float end = Time.realtimeSinceStartup + 12f; Time.realtimeSinceStartup < end && !(south && right && up && rest); ) {
+                Vector2 stick = pad.leftStick.ReadValue(), dpad = pad.dpad.ReadValue();
+                bool s = pad.buttonSouth.isPressed, r = stick.x > 0.9f && Mathf.Abs(stick.y) < 0.1f, u = dpad == Vector2.up;
+                if (south && right && up && !s && stick == Vector2.zero && dpad == Vector2.zero) rest = true;
+                south |= s; right |= r; up |= u;
+                // what the pad showed, each time it changed: the failure's own account
+                string padNow = (s ? "bottom button down" : "bottom button up") + ", stick " + stick.ToString("R") + ", d-pad " + dpad.ToString("R");
+                if (padNow != padLast && changes++ < 8) padSeen += "\n[checks]   " + Time.realtimeSinceStartup.ToString("0.00") + " s: " + padNow;
+                padLast = padNow;
+                others |= pad.buttonEast.isPressed || pad.buttonWest.isPressed || pad.buttonNorth.isPressed || pad.leftShoulder.isPressed ||
+                          pad.rightShoulder.isPressed || pad.startButton.isPressed || pad.selectButton.isPressed ||
+                          pad.leftStickButton.isPressed || pad.rightStickButton.isPressed || pad.leftTrigger.ReadValue() != 0f ||
+                          pad.rightTrigger.ReadValue() != 0f || pad.rightStick.ReadValue() != Vector2.zero || stick.x < 0f || dpad.y < 0f || dpad.x != 0f;
+                yield return null;
+            }
+            if (!(south && right && up && rest) || others)
+                Debug.Log("[checks] Input System: seen pressed: the bottom button " + south + ", the stick to the right " + right + ", the d-pad up " + up
+                    + "; all let go again " + rest + "; another control moved " + others + padSeen);
+            Check("Input System: the pad's controls", () => south && right && up && rest && !others);
+        } else if (pad != null) Debug.Log("[checks] Input System: no scripted presses (UA_INPUT_SCRIPT), the pad's controls are not checked");
 
         Destroy(go);
         yield return null;

@@ -25,6 +25,12 @@ public static class MacBuild
             plugin.SetPlatformData(BuildTarget.StandaloneOSX, "CPU", "ARM64");
             plugin.SaveAndReimport();
         }
+        // (the Input System package's backend beside the legacy one, which the game of pong
+        // reads: build.sh wrote the setting before the editor started, as the scripts' defines
+        // follow it)
+        var settings = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/ProjectSettings.asset")[0]);
+        var handler = settings.FindProperty("activeInputHandler");
+        if (handler == null || handler.intValue != 2) { Debug.LogError("Active Input Handling is not \"both\""); EditorApplication.Exit(1); return; }
         PlayerSettings.companyName = "portmaster-unity";
         PlayerSettings.productName = "Pong";
         var mac = UnityEditor.Build.NamedBuildTarget.Standalone;

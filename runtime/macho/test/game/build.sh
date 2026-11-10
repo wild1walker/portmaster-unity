@@ -5,9 +5,10 @@
 # Contents/Frameworks/GameAssembly.dylib and Contents/Resources/Data/il2cpp_data from it, and
 # Contents/PlugIns has the game's native plugins (checks_plugin.c: a library, a bundle, and a
 # stand-in of the name Steamworks' library has) and the library Burst compiled the checks' jobs
-# into, and <out dir>/build.log is the editor's log. The game is only
-# built here, never run on the Mac. The project is made in a temporary folder inside <out dir>
-# (gigabytes with the packages) and removed when the script ends. The third argument is the
+# into, and <out dir>/build.log is the editor's log. Its Data folder has StreamingAssets/checks
+# (two files the checks read as files). The game is only built here, never run on the Mac. The
+# project is made in a temporary folder inside <out dir> (gigabytes with the packages) and
+# removed when the script ends. The third argument is the
 # oldest macOS the game and its plugins ask for (left out: 11.0, the editor's own; with 12.0 or
 # later the linker writes chained fixups, the form a newer game has), and the last lines say
 # which form of fixups each binary came out with.
@@ -17,17 +18,24 @@ ED=${1:?usage: build.sh <editor> <out dir> [oldest macOS]}; OUT=${2:?}; MIN=${3:
 HERE=$(cd "$(dirname "$0")" && pwd); DONOR=$HERE/../../../../tools/donor
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 T=$(mktemp -d "$OUT/project.XXXXXX"); trap 'rm -rf "$T"' EXIT
-P=$T/game; mkdir -p "$P/Assets/Editor" "$P/Packages"
+P=$T/game; mkdir -p "$P/Assets/Editor" "$P/Packages" "$P/ProjectSettings"
 cp -R "$DONOR/Assets/Scripts" "$P/Assets/"; cp "$HERE/MachoChecks.cs" "$P/Assets/Scripts/"; cp "$HERE/MacBuild.cs" "$P/Assets/Editor/"
-# The packages a new project has (the editor's own list) and Burst, at the version the editor
-# carries: all of them are inside the editor, nothing is fetched.
+# The packages a new project has (the editor's own list), Burst and the Input System, at the
+# versions the editor names. The Input System is the one package the editor does not carry: it
+# fetches it from Unity's registry on the first build (and keeps it in its cache).
 python3 -I - "$ED/Contents/Resources/PackageManager/Editor/manifest.json" > "$P/Packages/manifest.json" <<'EOF'
 import json, sys
 packages = json.load(open(sys.argv[1]))["packages"]
-deps = {name: p["version"] for name, p in packages.items() if p.get("isDefault") or name == "com.unity.burst"}
-if "com.unity.burst" not in deps: sys.exit("the editor carries no com.unity.burst")
+deps = {name: p["version"] for name, p in packages.items() if p.get("isDefault") or name in ("com.unity.burst", "com.unity.inputsystem")}
+for name in ("com.unity.burst", "com.unity.inputsystem"):
+    if name not in deps: sys.exit("the editor names no " + name)
 json.dump({"dependencies": dict(sorted(deps.items()))}, sys.stdout, indent=2)
 EOF
+# Active Input Handling "both": the package's backend for the pad checks, the legacy one for the
+# game of pong (the rest of the settings stay the editor's defaults; MacBuild.cs checks it took)
+printf '%%YAML 1.1\n%%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  activeInputHandler: 2\n' > "$P/ProjectSettings/ProjectSettings.asset"
+# StreamingAssets, which a desktop game reads as the folder it is
+SA="$P/Assets/StreamingAssets/checks"; mkdir -p "$SA"; printf 'a folder of files\n' > "$SA/words.txt"; printf '\1\2\3' > "$SA/three.bin"
 # the plugins as a game ships them: a library file, and bundle folders (MacBuild.cs sets them
 # up for the macOS player only, so the editor never loads them)
 PL="$P/Assets/Plugins"; mkdir -p "$PL"

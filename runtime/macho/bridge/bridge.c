@@ -9,11 +9,13 @@
 #include "../cxx/ua_unwind.h"
 
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -96,6 +98,8 @@ static struct {
     int (*init)(const char *);
     void *(*string_new)(const char *);
     void (*gc_wbarrier_set_field)(void *, void **, void *);
+    void *(*runtime_invoke)(const MethodInfo *, void *, void **, void **);
+    Il2CppClass *(*method_get_class)(const MethodInfo *);
 } il;
 
 // ---- internal calls --------------------------------------------------------------------
@@ -170,7 +174,7 @@ static void add_internal_call(const char *name, void *fn)
 }
 
 // IL2CPP's type codes (ECMA-335's element types)
-enum { T_BOOLEAN = 2, T_CHAR, T_I1, T_U1, T_I2, T_U2, T_I4, T_U4, T_I8, T_U8, T_R4, T_R8, T_VALUETYPE = 0x11, T_GENERICINST = 0x15,
+enum { T_BOOLEAN = 2, T_CHAR, T_I1, T_U1, T_I2, T_U2, T_I4, T_U4, T_I8, T_U8, T_R4, T_R8, T_STRING = 0x0e, T_VALUETYPE = 0x11, T_GENERICINST = 0x15,
        T_TYPEDBYREF = 0x16 };
 
 // How a value travels: in an integer register (or 8 bytes of stack on the player's side, its
@@ -813,6 +817,298 @@ static const struct { const char *name; void *fn; } own_icalls[] = {
     { "UnityEngine.Screen::GetMainWindowDisplayInfo_Injected", (void *)own_main_window_display_info },
 };
 
+// ---- internal calls the Android player answers as no desktop player does ---------------------
+// UnityEngine.Application::get_streamingAssetsPath_Injected(out ManagedSpanWrapper), which is
+// Application.streamingAssetsPath. On a desktop it is a folder, and a macOS game's code reads
+// it as one (System.IO, a native library's path argument). The Android player says
+// "jar:file://<dir>/<archive>!/assets", the inside of its package. Where the port has the
+// folder beside that archive (<dir>/Game_Data/StreamingAssets: pmu android-data --macho puts
+// the files there and not in the archive), the folder is the answer, as on the desktop;
+// anything else is the player's own answer. The text is the bindings' own kind: UTF-16 in
+// memory of the player's BindingsAllocator, which the game's code frees with it.
+struct span { void *begin; int32_t length; };
+
+static void (*player_streaming_assets)(struct span *);
+static uint16_t *assets_folder;                 // the folder, once known to be there
+static int assets_folder_len;
+static pthread_once_t assets_once = PTHREAD_ONCE_INIT;
+
+// UTF-16 to UTF-8 (a lone surrogate becomes U+FFFD); the length, or -1 if it does not fit.
+static int utf16_to_utf8(const uint16_t *s, int n, char *out, size_t size)
+{
+    size_t o = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t c = s[i];
+        if (c >= 0xd800 && c < 0xdc00 && i + 1 < n && s[i + 1] >= 0xdc00 && s[i + 1] < 0xe000)
+            c = 0x10000 + ((c - 0xd800) << 10) + (s[++i] - 0xdc00);
+        else if (c >= 0xd800 && c < 0xe000) c = 0xfffd;
+        if (o + 5 > size) return -1;
+        if (c < 0x80) out[o++] = (char)c;
+        else if (c < 0x800) { out[o++] = (char)(0xc0 | c >> 6); out[o++] = (char)(0x80 | (c & 0x3f)); }
+        else if (c < 0x10000) { out[o++] = (char)(0xe0 | c >> 12); out[o++] = (char)(0x80 | (c >> 6 & 0x3f)); out[o++] = (char)(0x80 | (c & 0x3f)); }
+        else { out[o++] = (char)(0xf0 | c >> 18); out[o++] = (char)(0x80 | (c >> 12 & 0x3f)); out[o++] = (char)(0x80 | (c >> 6 & 0x3f)); out[o++] = (char)(0x80 | (c & 0x3f)); }
+    }
+    out[o] = 0;
+    return (int)o;
+}
+
+static void assets_folder_find(void)
+{
+    static const char jar[] = "jar:file://", folder[] = "/Game_Data/StreamingAssets";
+    enum { JAR = sizeof jar - 1, FOLDER = sizeof folder - 1 };
+    void (*release)(void *) = (void (*)(void *))player_icall("UnityEngine.Bindings.BindingsAllocator::Free");
+    if (!release || !player_icall("UnityEngine.Bindings.BindingsAllocator::Malloc"))
+        DIE("the player has no UnityEngine.Bindings.BindingsAllocator::Malloc and ::Free to answer Application.streamingAssetsPath with\n");
+    char wrapper[] = "UnityEngine.Bindings.ManagedSpanWrapper";
+    Il2CppClass *k = find_class(wrapper);
+    uint32_t align;
+    int size = k ? il.class_value_size(k, &align) : -1;
+    if (size != (int)sizeof(struct span) && size != (int)(sizeof(void *) + sizeof(int32_t)))    // with its tail's padding or without
+        DIE("UnityEngine.Bindings.ManagedSpanWrapper is not the pointer and length the bridge's answer is written for (%d bytes here)\n", size);
+    struct span own = { 0 };
+    player_streaming_assets(&own);
+    const uint16_t *p = own.begin;
+    int n = own.length, bang = -1, slash = -1;
+    int is_jar = p && n > JAR;
+    for (int i = 0; is_jar && i < JAR; i++) if (p[i] != (uint16_t)jar[i]) is_jar = 0;
+    for (int i = JAR; is_jar && i < n; i++) if (p[i] == '!') bang = i;
+    for (int i = JAR; i < bang; i++) if (p[i] == '/') slash = i;
+    if (slash >= JAR) {                         // <dir> is p[JAR..slash)
+        int dir = slash - JAR;
+        uint16_t *w = malloc((size_t)(dir + FOLDER) * sizeof *w);
+        char path[4096] = "";
+        struct stat st;
+        if (!w) DIE("no memory for the StreamingAssets folder's name\n");
+        memcpy(w, p + JAR, (size_t)dir * sizeof *w);
+        for (int i = 0; i < FOLDER; i++) w[dir + i] = (uint16_t)folder[i];
+        if (utf16_to_utf8(w, dir + FOLDER, path, sizeof path) > 0 && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            assets_folder = w;
+            assets_folder_len = dir + FOLDER;
+            if (getenv("UA_MACHO_LOG")) LOG("Application.streamingAssetsPath: the folder %s\n", path);
+        } else {
+            free(w);
+            if (getenv("UA_MACHO_LOG")) LOG("Application.streamingAssetsPath: no folder %s, the player's own answer stays\n", path);
+        }
+    }
+    if (own.begin) release(own.begin);
+}
+
+static void with_streaming_assets_path(struct span *out)
+{
+    static void *(*take)(int32_t);
+    pthread_once(&assets_once, assets_folder_find);
+    if (!assets_folder) { player_streaming_assets(out); return; }
+    if (!take) take = (void *(*)(int32_t))player_icall("UnityEngine.Bindings.BindingsAllocator::Malloc");
+    size_t bytes = (size_t)assets_folder_len * sizeof *assets_folder;
+    out->begin = take((int32_t)bytes);
+    if (!out->begin) DIE("the player's BindingsAllocator gave no memory for Application.streamingAssetsPath\n");
+    memcpy(out->begin, assets_folder, bytes);
+    out->length = assets_folder_len;
+}
+
+static const struct { const char *name; void *fn; void *player; } with_icalls[] = {
+    { "UnityEngine.Application::get_streamingAssetsPath_Injected", (void *)with_streaming_assets_path, &player_streaming_assets },
+};
+
+// ---- the Input System package's pads --------------------------------------------------------
+// The Android player's input backend reports a pad as interface "Android", device class
+// "AndroidGameController", with state format 'AGC ': the pressed Android key codes as bits
+// from byte 0, the MotionEvent axes as 48 floats from byte 28 (docs/input.md). The package
+// (com.unity.inputsystem) compiles its layouts for that into Android builds only, so to a
+// macOS build's code the pad would be a device it has no layout for: no Gamepad. The bridge
+// registers layouts with the package's own public InputSystem.RegisterLayout(json, name,
+// matches), right after the player's first call of a method of the InputSystem class (its
+// RuntimeInitializeOnLoad methods: the package has set itself up when one returns; a pad it
+// has met before then gets the layout on registration). They are the layouts asmpatch's
+// inputsystem-android puts into a Mono build (tools/asmpatch): written from the state format,
+// extending the package's Gamepad, so the pad is a Gamepad with the usual controls.
+#define PAD_LAYOUT "AndroidGamepadForPlayer"
+#define PAD_XBOX_LAYOUT "AndroidXboxGamepadForPlayer"
+#define PAD_DEVICE "\"interface\":\"Android\",\"deviceClass\":\"AndroidGameController\""
+enum { KEYCODE_BUTTON_A = 96, KEYCODE_BUTTON_B = 97, KEYCODE_BUTTON_X = 99, KEYCODE_BUTTON_Y = 100, KEYCODE_BUTTON_L1 = 102,
+       KEYCODE_BUTTON_R1 = 103, KEYCODE_BUTTON_THUMBL = 106, KEYCODE_BUTTON_THUMBR = 107, KEYCODE_BUTTON_START = 108,
+       KEYCODE_BUTTON_SELECT = 109 };                                   // android.view.KeyEvent
+enum { AXIS_X = 0, AXIS_Y = 1, AXIS_Z = 11, AXIS_RZ = 14, AXIS_HAT_X = 15, AXIS_HAT_Y = 16, AXIS_GAS = 22, AXIS_BRAKE = 23 };   // MotionEvent
+#define AGC_AXIS(a) (7 * 4 + 4 * (a))                                   // 7 words of key bits, then the axes
+
+static struct {
+    Il2CppClass *klass;                         // UnityEngine.InputSystem.InputSystem, where the game has the package
+    void **invoke_slot;                         // il2cpp_runtime_invoke's: with_runtime_invoke until the layouts are registered
+} pads;
+
+struct text { char at[3072]; size_t n; };
+__attribute__((format(printf, 2, 3))) static void text_add(struct text *t, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(t->at + t->n, sizeof t->at - t->n, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= sizeof t->at - t->n) DIE("the pad layout does not fit its text\n");
+    t->n += (size_t)n;
+}
+
+// A stick from two axes: Android's y points down, the package's up.
+static void text_add_stick(struct text *t, const char *name, int x, int y)
+{
+    text_add(t, "{\"name\":\"%s\",\"offset\":%d,\"format\":\"VEC2\",\"sizeInBits\":%d},", name, AGC_AXIS(x), 32 * (y - x + 1));
+    text_add(t, "{\"name\":\"%s/x\",\"offset\":0,\"format\":\"FLT\",\"sizeInBits\":32},", name);
+    text_add(t, "{\"name\":\"%s/y\",\"offset\":%d,\"format\":\"FLT\",\"sizeInBits\":32,\"parameters\":\"invert\"},", name, 4 * (y - x));
+    text_add(t, "{\"name\":\"%s/up\",\"parameters\":\"clamp=2,clampMin=-1,clampMax=0,invert\"},", name);
+    text_add(t, "{\"name\":\"%s/down\",\"parameters\":\"clamp=2,clampMin=0,clampMax=1\"},", name);
+}
+
+static void pad_layout(struct text *t)
+{
+    static const struct { const char *name; int key; } buttons[] = {
+        { "buttonSouth", KEYCODE_BUTTON_A }, { "buttonEast", KEYCODE_BUTTON_B }, { "buttonWest", KEYCODE_BUTTON_X },
+        { "buttonNorth", KEYCODE_BUTTON_Y }, { "leftShoulder", KEYCODE_BUTTON_L1 }, { "rightShoulder", KEYCODE_BUTTON_R1 },
+        { "leftStickPress", KEYCODE_BUTTON_THUMBL }, { "rightStickPress", KEYCODE_BUTTON_THUMBR },
+        { "start", KEYCODE_BUTTON_START }, { "select", KEYCODE_BUTTON_SELECT },
+    };
+    static const struct { const char *name; int axis; } triggers[] = { { "leftTrigger", AXIS_BRAKE }, { "rightTrigger", AXIS_GAS } };
+    // the d-pad from the hat axes, each -1, 0 or 1
+    static const struct { const char *name; int axis; const char *range; } dpad[] = {
+        { "right", AXIS_HAT_X, "clampMin=0,clampMax=1" }, { "left", AXIS_HAT_X, "clampMin=-1,clampMax=0,invert" },
+        { "down", AXIS_HAT_Y, "clampMin=0,clampMax=1" }, { "up", AXIS_HAT_Y, "clampMin=-1,clampMax=0,invert" },
+    };
+    t->n = 0;
+    text_add(t, "{\"name\":\"" PAD_LAYOUT "\",\"extend\":\"Gamepad\",\"format\":\"AGC \",\"displayName\":\"Android Gamepad\","
+                "\"device\":{" PAD_DEVICE "},\"controls\":[");
+    for (size_t i = 0; i < sizeof buttons / sizeof buttons[0]; i++)
+        text_add(t, "{\"name\":\"%s\",\"offset\":0,\"bit\":%d,\"format\":\"BIT\",\"sizeInBits\":1},", buttons[i].name, buttons[i].key);
+    for (size_t i = 0; i < sizeof triggers / sizeof triggers[0]; i++)
+        text_add(t, "{\"name\":\"%s\",\"offset\":%d,\"format\":\"FLT\",\"sizeInBits\":32,\"parameters\":\"clamp=1,clampMin=0,clampMax=1\"},",
+                 triggers[i].name, AGC_AXIS(triggers[i].axis));
+    text_add_stick(t, "leftStick", AXIS_X, AXIS_Y);
+    text_add_stick(t, "rightStick", AXIS_Z, AXIS_RZ);
+    text_add(t, "{\"name\":\"dpad\",\"offset\":%d,\"format\":\"VEC2\",\"sizeInBits\":64}", AGC_AXIS(AXIS_HAT_X));
+    for (size_t i = 0; i < sizeof dpad / sizeof dpad[0]; i++)
+        text_add(t, ",{\"name\":\"dpad/%s\",\"offset\":%d,\"bit\":0,\"format\":\"FLT\",\"sizeInBits\":32,\"parameters\":\"clamp=3,clampConstant=0,%s\"}",
+                 dpad[i].name, 4 * (dpad[i].axis - AXIS_HAT_X), dpad[i].range);
+    text_add(t, "]}");
+}
+
+// A pad with Microsoft's USB vendor id (0x045E) is an XInputController, as the package's
+// Android support makes it.
+static const char pad_xbox_layout[] =
+    "{\"name\":\"" PAD_XBOX_LAYOUT "\",\"extend\":\"" PAD_LAYOUT "\","
+    "\"type\":\"UnityEngine.InputSystem.XInput.XInputController, Unity.InputSystem\",\"displayName\":\"Xbox Controller\","
+    "\"device\":{" PAD_DEVICE ",\"capabilities\":[{\"path\":\"vendorId\",\"value\":\"1118\"}]}}";
+
+// InputSystem.RegisterLayout(string json, string name = null, InputDeviceMatcher? matches = null)
+static const MethodInfo *pads_register_method(void)
+{
+    void *iter = NULL;
+    const MethodInfo *m;
+    while ((m = il.class_get_methods(pads.klass, &iter))) {
+        if (strcmp(il.method_get_name(m), "RegisterLayout") != 0 || il.method_is_instance(m) || il.method_get_param_count(m) != 3) continue;
+        const Il2CppType *matches = il.method_get_param(m, 2);
+        uint32_t align;
+        if (il.type_get_type(il.method_get_param(m, 0)) != T_STRING || il.type_get_type(il.method_get_param(m, 1)) != T_STRING ||
+            il.type_get_type(matches) != T_GENERICINST || il.type_is_byref(matches)) continue;
+        Il2CppClass *k = il.class_from_type(matches);
+        if (!strcmp(il.class_get_name(k), "Nullable`1") && il.class_value_size(k, &align) <= 32) return m;
+    }
+    return NULL;
+}
+
+static int pads_register_one(const MethodInfo *reg, const char *name, const char *json)
+{
+    uint64_t none[4] = { 0 };                   // an InputDeviceMatcher? with no value: the layout's text names its devices
+    void *args[3] = { il.string_new(json), NULL, none }, *exc = NULL;
+    il.runtime_invoke(reg, NULL, args, &exc);
+    if (exc) LOG("the Input System package did not take the pad layout %s (%s thrown): a pad stays a device it has no layout for\n",
+                 name, il.class_get_name(*(Il2CppClass **)exc));
+    return exc ? -1 : 0;
+}
+
+static void pads_register(void)
+{
+    __atomic_store_n(pads.invoke_slot, (void *)il.runtime_invoke, __ATOMIC_RELEASE);
+    const MethodInfo *reg = pads_register_method();
+    if (!reg) {
+        LOG("the game's Input System package has no InputSystem.RegisterLayout(string, string, InputDeviceMatcher?) "
+            "(stripped from the build): a pad stays a device it has no layout for\n");
+        return;
+    }
+    static struct text json;
+    pad_layout(&json);
+    if (pads_register_one(reg, PAD_LAYOUT, json.at) != 0) return;
+    int xbox = il.class_from_name(il.class_get_image(pads.klass), "UnityEngine.InputSystem.XInput", "XInputController") != NULL;
+    if (xbox && pads_register_one(reg, PAD_XBOX_LAYOUT, pad_xbox_layout) != 0) return;
+    if (getenv("UA_MACHO_LOG")) LOG("Input System: %s registered for the player's pads\n", xbox ? PAD_LAYOUT ", " PAD_XBOX_LAYOUT : PAD_LAYOUT);
+}
+
+// UA_MACHO_INVOKES=<text>: the managed methods the player calls (il2cpp_runtime_invoke) whose
+// "Class::Method" has the text, each logged at its first call ("::" names them all): what the
+// engine told the game, when a game waits for an event (a video's end, a loaded scene).
+// UA_MACHO_METHODS=<text>: of each class with the text in its name that the player calls a
+// method of, where the code of its methods and of its nested types' methods (a coroutine's
+// MoveNext, a lambda) is in GameAssembly.dylib, as the address a disassembler shows there.
+static struct { void *(*real)(const MethodInfo *, void *, void **, void **); const char *text, *methods; } invokes;
+
+static void log_methods(Il2CppClass *k, int depth)
+{
+    void *it = NULL;
+    for (const MethodInfo *m; (m = il.class_get_methods(k, &it));) {
+        uintptr_t code = *(const uintptr_t *)m;         // MethodInfo starts with the method's code
+        if (code) LOG("method %s::%s at 0x%lx\n", il.class_get_name(k), il.method_get_name(m), (unsigned long)(code - ga->m->slide));
+        else LOG("method %s::%s has no code\n", il.class_get_name(k), il.method_get_name(m));
+    }
+    it = NULL;
+    for (Il2CppClass *n; depth < 4 && (n = il.class_get_nested_types(k, &it));) log_methods(n, depth + 1);
+}
+
+static void *traced_runtime_invoke(const MethodInfo *m, void *obj, void **params, void **exc)
+{
+    enum { N = 8192 };
+    static const MethodInfo *seen[N];
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    size_t i = ((uintptr_t)m >> 4) % N, n = 0;
+    int first = 0;
+    pthread_mutex_lock(&lock);
+    for (; n < N && seen[i] && seen[i] != m; n++) i = (i + 1) % N;
+    if (n < N && !seen[i]) { seen[i] = m; first = 1; }
+    pthread_mutex_unlock(&lock);
+    if (first) {
+        char name[256];
+        snprintf(name, sizeof name, "%s::%s", il.class_get_name(il.method_get_class(m)), il.method_get_name(m));
+        if (invokes.text && strstr(name, invokes.text)) LOG("invoke %s\n", name);
+        if (invokes.methods) {
+            enum { K = 64 };
+            static Il2CppClass *listed[K];
+            static int n_listed;
+            Il2CppClass *k = il.method_get_class(m);
+            int j = 0, list = 0;
+            pthread_mutex_lock(&lock);
+            while (j < n_listed && listed[j] != k) j++;
+            if (j == n_listed && n_listed < K && strstr(il.class_get_name(k), invokes.methods)) { listed[n_listed++] = k; list = 1; }
+            pthread_mutex_unlock(&lock);
+            if (list) log_methods(k, 0);
+        }
+    }
+    return invokes.real(m, obj, params, exc);
+}
+
+static void *with_runtime_invoke(const MethodInfo *m, void *obj, void **params, void **exc)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    void *r = il.runtime_invoke(m, obj, params, exc);
+    if (il.method_get_class(m) == pads.klass && !(exc && *exc)) pthread_once(&once, pads_register);
+    return r;
+}
+
+// After il2cpp_init: where the game has the package without its Android support, the player's
+// calls of managed methods pass through with_runtime_invoke until the layouts are registered.
+static void pads_watch(void)
+{
+    char name[] = "UnityEngine.InputSystem.InputSystem", android[] = "UnityEngine.InputSystem.Android.AndroidGamepad";
+    Il2CppClass *k = find_class(name);
+    if (!k || strcmp(il.image_get_name(il.class_get_image(k)), "Unity.InputSystem.dll") != 0 || find_class(android) || !pads.invoke_slot) return;
+    pads.klass = k;
+    __atomic_store_n(pads.invoke_slot, (void *)with_runtime_invoke, __ATOMIC_RELEASE);
+}
+
 // il2cpp_init, as the player calls it: it has registered its internal calls by then.
 static int with_init(const char *domain)
 {
@@ -821,7 +1117,15 @@ static int with_init(const char *domain)
         add_internal_call(own_icalls[i].name, own_icalls[i].fn);
         if (getenv("UA_MACHO_LOG")) LOG("%s: not among the player's %ld internal calls, answered by the bridge\n", own_icalls[i].name, n_icalls - 1);
     }
-    return il.init(domain);
+    for (size_t i = 0; i < sizeof with_icalls / sizeof with_icalls[0]; i++) {
+        void *fn = player_icall(with_icalls[i].name);
+        if (!fn) continue;                      // (a player without it: the image's call fails as it would there)
+        *(void **)with_icalls[i].player = fn;
+        add_internal_call(with_icalls[i].name, with_icalls[i].fn);     // the last one registered is the one found
+    }
+    int ok = il.init(domain);
+    if (ok) pads_watch();
+    return ok;
 }
 
 // ---- dlopen: a plugin that is no Mach-O file among the libraries (dyld.c loads those) is
@@ -881,6 +1185,7 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
         if (p) { *r->slot = p; filled++; } else missing++;
         if (p && !strcmp(r->name, "il2cpp_add_internal_call")) *r->slot = (void *)add_internal_call;
         if (p && !strcmp(r->name, "il2cpp_init")) *r->slot = (void *)with_init;
+        if (p && !strcmp(r->name, "il2cpp_runtime_invoke")) pads.invoke_slot = r->slot;
         for (size_t i = 0; p && i < sizeof standin_withs / sizeof standin_withs[0]; i++)
             if (!strcmp(r->name, standin_withs[i].name)) *r->slot = standin_withs[i].fn;
         for (size_t i = 0; r->alt && i < sizeof standin_alts / sizeof standin_alts[0]; i++)
@@ -894,8 +1199,17 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
     IL(class_value_size); IL(class_get_fields); IL(field_get_flags); IL(field_get_type); IL(get_corlib);
     IL(class_get_namespace); IL(class_get_declaring_type); IL(class_get_type); IL(value_box);
     IL(class_get_method_from_name); IL(class_get_image); IL(class_get_assemblyname); IL(image_get_name);
-    IL(init); IL(string_new); IL(gc_wbarrier_set_field);
+    IL(init); IL(string_new); IL(gc_wbarrier_set_field); IL(runtime_invoke); IL(method_get_class);
 #undef IL
+    invokes.text = getenv("UA_MACHO_INVOKES");
+    invokes.methods = getenv("UA_MACHO_METHODS");
+    if (invokes.text && !*invokes.text) invokes.text = NULL;
+    if (invokes.methods && !*invokes.methods) invokes.methods = NULL;
+    if ((invokes.text || invokes.methods) && pads.invoke_slot) {
+        invokes.real = il.runtime_invoke;
+        il.runtime_invoke = traced_runtime_invoke;
+        *pads.invoke_slot = (void *)traced_runtime_invoke;
+    }
     LOG("GameAssembly.dylib loaded: %d of the il2cpp functions passed on, %d it does not export\n", filled, missing);
     return 0;
 }

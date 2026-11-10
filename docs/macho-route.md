@@ -657,6 +657,61 @@ the player's own calls, never made up:
   call, and a mismatch stops with the two sizes, as another Unity version may lay it out
   differently).
 
+### StreamingAssets (2026-11-10)
+
+On Android `Application.streamingAssetsPath` is a path into an archive
+(`jar:file://<dir>/<archive>!/assets`), and a game written for Android reads it with
+`UnityWebRequest`. A macOS build's code was written for a folder: `File.ReadAllText`,
+`Directory.GetFiles`, a database library handed the path. The Mono route gives such reads the
+folder by patching the game's assemblies ([android-data.md](android-data.md),
+`--streaming-assets`); here the game's code is compiled and stays as it is, so the bridge
+answers the property instead: `UnityEngine.Application::get_streamingAssetsPath_Injected` is
+an internal call the player has, the bridge registers its own function again under the same
+name (`with_icalls` in `bridge.c`, the table for calls the Android player answers as no
+desktop player does) and keeps the player's. Its answer is `<dir>/Game_Data/StreamingAssets`,
+with `<dir>` the archive's folder taken from the player's own answer, when that folder
+exists; the player's answer otherwise (`UA_MACHO_LOG=1` prints which). Every reader of the
+property gets the folder, the engine's own among them (`UnityWebRequest` with a plain path,
+`AssetBundle.LoadFromFile`, video), as on a desktop.
+
+So `pmu android-data --macho` puts StreamingAssets in that folder by default (`loose`), not in
+the archive. `--streaming-assets obb` is taken with a warning (the game's code then gets the
+jar path and has to read it as an Android game would), and `both` is refused: with the folder
+there nothing reads the archive's copy.
+
+### The Input System's pads (2026-11-10)
+
+The Android player reports a pad to the Input System package as interface `Android`, device
+class `AndroidGameController`, state format `'AGC '` ([input.md](input.md), "The Input System
+package"). The package has layouts for that only in its Android builds; in a macOS build's
+copy the pad is a device without a layout: no `Gamepad.current`, no gamepad bindings, no UI
+navigation. The Mono route adds the layouts by patching the package's assembly. Here the
+bridge registers the same layouts (written from the player's state format; no package code is
+used) through the package's own public `InputSystem.RegisterLayout(string json, string name,
+InputDeviceMatcher? matches)`, called with `il2cpp_runtime_invoke`:
+
+- after `il2cpp_init`, if the image has `UnityEngine.InputSystem.InputSystem` in
+  `Unity.InputSystem.dll` and no `UnityEngine.InputSystem.Android.AndroidGamepad`, the bridge
+  stands in for `il2cpp_runtime_invoke`;
+- the package initializes itself in methods the player invokes at start-up
+  (`RuntimeInitializeOnLoadMethod`s of `InputSystem`). After the first of them returns
+  without an exception the bridge registers the layouts, once, and gives
+  `il2cpp_runtime_invoke` back to the image: no cost per call after that. Registering before
+  the package's own initialization would run its static constructor from inside the bridge,
+  ahead of the order the game was built for;
+- the layouts match by interface and device class, and the package applies a newly
+  registered layout to a device it already knows without one, so the order of "pad
+  reported" and "layout registered" does not matter;
+- a pad with Microsoft's USB vendor id gets the layout of type `XInputController` where the
+  build has that class (a macOS build has it: its Xbox pads derive from it).
+
+A value type goes to an il2cpp invoker as a pointer to its bytes; the `Nullable` matcher is
+32 zero bytes, "no value". A build whose stripping removed that `RegisterLayout` overload
+cannot be given layouts this way: the setup says so (`macho::pads`, from the metadata's
+names: "own" for a build with the Android layouts, "bridge", or "none" with a warning; the
+report's `input_system_pads`), and the bridge logs it at start-up, as it logs an exception
+the package throws for a layout.
+
 ### The data: `pmu android-data --macho <Game>.app`
 
 A macOS build keeps `Contents/Resources/Data` (the Data folder), with
@@ -793,7 +848,16 @@ failed`:
   runtime's, and a per-interface function is not found ("Plugins the game opens" above);
 - an internal call only the desktop players have: `Screen.mainWindowDisplayInfo` gives the
   size and rate of `Screen.currentResolution`, a work area of the whole display and the
-  display's name ("Internal calls only the desktop players have" above).
+  display's name ("Internal calls only the desktop players have" above);
+- StreamingAssets as a folder: the build has a file there, and the check reads it with
+  `File.ReadAllText` at `Application.streamingAssetsPath` and finds it with
+  `Directory.GetFiles` ("StreamingAssets" above);
+- the Input System's pads (the build has the package): `Gamepad.current` is a pad of interface
+  `Android` with one of the bridge's layouts, and, when the run has scripted presses
+  (`UA_VIRTUAL_PAD=1 UA_INPUT_SCRIPT="4@1:a~0.5+lright~0.5+up~0.5"`), the bottom button, the
+  left stick to the right and the d-pad up are each seen pressed, all are seen let go again,
+  and no other control moves, which a layout with a wrong offset would show. A failure logs
+  what the pad showed each time it changed.
 
 IL2CPP under the Android player asks `dlopen` for a `DllImport`'s name as written, then with
 `.so`, `.dll`, `.dylib`, `.bundle` behind it, then the same four with `lib` in front; the
@@ -812,7 +876,15 @@ among them), which adds four members the player requires and the macOS build doe
 `m_Ptr`); the player did not ask for them in this game. With the Steam check there are 25,
 and all pass with the game built for macOS 12, its `GameAssembly.dylib` and test plugins in
 chained fixups (2 of 2 runs); with the display check 26, and all pass in that form too (3 of
-3 runs). The plugin, Burst, Steam and display checks have not run on a handheld yet.
+3 runs); with the StreamingAssets check 27, which pass in 6 of 7 runs (the seventh ran out of
+its 45 s while the build machine was under other load: slow, not hung); with the Input System
+package and its two pad checks 29, which pass in 3 of 3 runs with a virtual pad and scripted
+presses, after the runtime gave every injected input event its own millisecond
+(docs/input.md, "Event times": events that shared one reached the package in reverse order,
+and a button and a stick changing in the same poll left the game's pad in a stale state).
+Without `UA_VIRTUAL_PAD=1` the rig has no pad and the first pad check fails as it should (27
+of 28). The
+plugin, Burst, Steam, display, StreamingAssets and pad checks have not run on a handheld yet.
 The handheld is the BattleXP
 G350 (RK3326: four Cortex-A35, 1 GB; dArkOS, 64-bit userland). There the Mac build's game runs
 under the Android player at a steady 60 fps (frames of 16.6 ms on average, 18 to 20 ms the 99th
@@ -872,9 +944,74 @@ episode can signal every thread ahead (not built: measure first).
 Open, known and not yet met: a thread stopped while it holds one of the shim layer's own
 locks (the wait buckets of `__ulock_wait`, the first-use lock of pthread objects, stdio's)
 would hold up the collector if it needs the same one before resuming; `Application.platform`
-answers Android to the game; `streamingAssetsPath` is the path into the APK, as on Android.
+answers Android to the game.
 
-Next: Dave itself, its data through `pmu android-data --macho`, then in the emulator and on
-the handheld, with the stops measured again (it has more managed threads). Its plugins and
-the internal calls the Android player lacks have their answers (the tables above). Still to
-make: a control build of the checks for Android itself.
+## Dave the Diver under the player (2026-11-10)
+
+In the emulator rig only (arm64, Mesa's software GL, `EMU_MEM=3500m`), with the setup's textures
+step skipped. What each run showed, in order, since each is a lesson for the next game:
+
+- **The data.** `pmu convert` took 657 s: 529 of 558 shaders converted (30 791 programs), 29
+  SubShaders left out (VFX Graph's among them), 109 of 121 compute shaders; the quality step
+  cannot read the URP assets of an IL2CPP build yet (their fields need the script's layout,
+  which such a build has only in its metadata). `pmu android-data --macho` placed 4 005 files in
+  2 396 s the first time and in 120 to 205 s once only a few change; StreamingAssets (3 985
+  files, the Addressables bundles) stays a folder beside the APK.
+- **The code.** The 351 MiB arm64 `GameAssembly` ran under the Android player on the first
+  try: its 342 imports (libSystem 236, libc++ 95, CoreFoundation 11) all had their answers.
+- **Run 1: the game's own file check.** `ValidateBundleFile Failed (1000)`, then the game's
+  message box text `ResourcesLoadError_Steam`, and it quit itself: it compares each bundle
+  file's size with `m_BundleSize` in the Addressables catalog. Converted bundles have other
+  sizes, so the setup now writes the converted sizes into the catalog, as it already does for
+  the CRCs (docs/android-data.md). This is an integrity check of data the setup itself
+  converts, nothing about ownership.
+- **Runs 2 and 3.** Past the check: a steady 60 fps, about 700 MB resident, the first frame
+  125 to 140 s after the start in the rig. The first video clip could not be opened: the
+  Android VideoPlayer reads a clip in a bundle through the file and an offset, which needs the
+  bundle uncompressed. The setup stores bundles with video clips uncompressed (6 here).
+- **Run 4: the first picture**, the studio's logo.
+- **Runs 5 to 8.** The logo video was decoded and drew black: Unity 6000.0 leaves
+  `_AlphaParam` 0 for the decode blit, and our decode shader took its alpha from it
+  (docs/android-data.md, the video bullets; `runtime/media`'s GL test now runs with 0).
+- **Run 9: the logo video shows**, in colour, for its 3.1 s.
+- **Runs 10 and 11: nothing after the video, and why.** The player did tell the game the clip
+  had ended (`UA_MACHO_INVOKES=::` lists `VideoPlayer::InvokeLoopPointReachedCallback_Internal`,
+  then the logo script's coroutine and a `CustomYieldInstruction`). The coroutine's first
+  statement is a wait for Steam: `yield return new WaitUntil(() => SteamManager.Initialized)`,
+  where `Initialized` is Steamworks.NET's flag that `SteamAPI_Init` succeeded. The runtime
+  answers `SteamAPI_Init` honestly, Steam is not running, so the flag stays false and the
+  game waits for good, at 60 fps with a black screen. That is the game's own rule, and **the
+  route stops there for this build**: the port does not answer for Steam, so nothing is
+  changed to get past it. A build
+  of the game that does not ask for Steam would go on from here; which one, if any, is the
+  owner's choice (the Android release of 2026-09 would run on the Android routes without any
+  of this document, with whatever checks of its own it has).
+
+A setup lesson from the runs: the incremental state of `android-data` did not notice that data
+embedded in `pmu` had changed (the decode shader), so a re-pack reported every file unchanged.
+`STATE_VERSION` in `android_data.rs` has to go up with every change of what a step writes.
+
+### Finding what a game waits for
+
+Two switches of the bridge, for a game that runs but does not go on:
+
+- `UA_MACHO_INVOKES=<text>` logs the managed methods the player calls (`il2cpp_runtime_invoke`)
+  whose `Class::Method` contains the text, each at its first call (`::` lists them all): the
+  events the engine gave the game (`Awake`, `Start`, a coroutine's `get_Current`, the
+  VideoPlayer's and SceneManager's callbacks). The last lines name the script that waits.
+- `UA_MACHO_METHODS=<text>` logs, for each class with the text in its name that the player
+  calls a method of, where the code of its methods and of its nested types' methods (a
+  coroutine's `MoveNext`, its lambdas) is in `GameAssembly.dylib`, as the addresses
+  `llvm-objdump -d --start-address=` takes.
+
+Where a build's `GameAssembly.dylib` has its symbol names, as this game's has (`nm` shows
+them), a disassembly of a coroutine's `MoveNext` names what it calls, and the predicate of a
+`WaitUntil` is a function of a few instructions. Read for what the game waits for; nothing of
+it is kept, and what it shows is never a reason to change the game's code.
+
+Next: the route itself is ready for a macOS IL2CPP game that runs without its store's client
+(the checks, the plugins, Burst, chained fixups, StreamingAssets, the pads, video). Still to
+do for any such game: the checks from the plugins on run on a handheld, a control build of the
+checks for Android itself, the URP quality step for IL2CPP builds, VFX Graph's shaders, and a
+check in the test game for a video clip in a bundle on a far-plane VideoPlayer with its end
+event (it would have caught both video faults above).
