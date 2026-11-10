@@ -6,6 +6,13 @@
 // used, which are the same in all of them; sample rate and channels come from the stream's own
 // configuration (AudioSpecificConfig) or the "ar" / "ac" options.
 // UM_FFMPEG=0 keeps it off; UM_FFMPEG=<path> loads that libavcodec.
+// UM_FFMPEG_SKIP_LOOP_FILTER (video): the deblocking filter libavcodec skips, as its skip_loop_filter
+// option: none, nonref, bidir, nonintra, nonkey, all; auto (the default): none until the client keeps
+// releasing pictures unshown because they come too late (um_codec.c: um_dec.behind), then all, from the
+// next packet on, and from the start of every later video of the run. 1080p H.264 on a TrimUI Smart
+// Pro under a game: 10.8 pictures a second shown and the player seeking ahead every ~2 s (its audio
+// decoder made again each time); without deblocking 21.6 and no seeks (the filter is a large share of
+// H.264's decoding time on in-order ARM cores; its blocks hardly show at handheld sizes).
 #define _GNU_SOURCE
 #include "um_internal.h"
 
@@ -103,7 +110,43 @@ typedef struct {
     int16_t *pcm;
     size_t pcmn;
     int warned;
+    int skip_lf;                /* video: the skip_loop_filter level set now (AVDISCARD_*) */
+    volatile int behind;        /* video: 1 = the client said it falls behind (any thread), 2 = acted on (decode thread) */
 } ffdec;
+
+#define AVDISCARD_ALL 48
+static volatile int g_fell_behind;          /* a video of this run fell behind: later ones start without deblocking */
+
+/* UM_FFMPEG_SKIP_LOOP_FILTER: an AVDISCARD level, or -1 for auto */
+static int skip_lf_mode(void)
+{
+    static int mode = -2;
+    if (mode != -2) return mode;
+    const char *e = getenv("UM_FFMPEG_SKIP_LOOP_FILTER");
+    static const struct { const char *n; int v; } names[] = {
+        { "auto", -1 }, { "none", 0 }, { "default", 0 }, { "nonref", 8 }, { "bidir", 16 }, { "nonintra", 24 },
+        { "nonkey", 32 }, { "all", AVDISCARD_ALL },
+    };
+    mode = -1;
+    if (e && *e) {
+        int found = 0;
+        for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+            if (!strcmp(e, names[i].n)) { mode = names[i].v; found = 1; }
+        if (!found) um_log("ffmpeg: UM_FFMPEG_SKIP_LOOP_FILTER=%s not known (auto, none, nonref, bidir, nonintra, nonkey, all): auto", e);
+    }
+    return mode;
+}
+
+static void set_skip_lf(ffdec *f, int level)
+{
+    if (ff.opt_set_int && ff.opt_set_int(f->ctx, "skip_loop_filter", level, 0) >= 0) f->skip_lf = level;
+}
+
+static void f_behind(um_dec *d)
+{
+    ffdec *f = (ffdec *)d;
+    if (f->video && skip_lf_mode() == -1 && f->skip_lf < AVDISCARD_ALL && !f->behind) f->behind = 1;
+}
 
 static const char *ff_name(const char *mime)
 {
@@ -150,6 +193,15 @@ static int f_configure(um_dec *d, const um_format *in, um_format *out)
     ff.parameters_free(&par);
     if (r < 0) return UM_ERR_UNKNOWN;
     if (f->video && ff.opt_set_int) { int t = um_cpu_count(); ff.opt_set_int(f->ctx, "threads", t > 4 ? 4 : t, 0); }
+    f->skip_lf = 0;
+    if (f->video) {
+        int m = skip_lf_mode();
+        if (m > 0) set_skip_lf(f, m);
+        else if (m == -1 && g_fell_behind) {
+            set_skip_lf(f, AVDISCARD_ALL);
+            um_log("ffmpeg: %s starts without its loop filter (a video before fell behind; UM_FFMPEG_SKIP_LOOP_FILTER=auto)", f->codec->name);
+        }
+    }
     if (ff.open2(f->ctx, f->codec, NULL) < 0) { um_log("ffmpeg: cannot open the %s decoder", f->codec->name); return UM_ERR_UNSUPPORTED; }
     int32_t v;
     f->rate = um_format_get_int32(in, UM_KEY_SAMPLE_RATE, &v) ? v : 0;
@@ -235,6 +287,13 @@ static int f_decode(um_dec *d, const uint8_t *data, size_t size, int64_t pts, ui
 {
     ffdec *f = (ffdec *)d;
     if (!f->ctx || (flags & UM_BUFFER_FLAG_CODEC_CONFIG)) return UM_OK;
+    if (f->behind == 1) {               /* (here, on the decode thread: libavcodec's frame threads take it from the next packet) */
+        f->behind = 2;
+        set_skip_lf(f, AVDISCARD_ALL);
+        g_fell_behind = 1;
+        um_log("ffmpeg: %s falls behind: its loop filter (deblocking) is skipped from here on (UM_FFMPEG_SKIP_LOOP_FILTER=auto)%s",
+               f->codec->name, f->skip_lf == AVDISCARD_ALL ? "" : "; setting it failed");
+    }
     if (size) {
         f->pkt->data = (uint8_t *)data;
         f->pkt->size = (int)size;
@@ -290,6 +349,7 @@ um_dec *um_ffmpeg_create(const char *mime)
     f->base.decode = f_decode;
     f->base.flush = f_flush;
     f->base.destroy = f_destroy;
+    f->base.behind = f_behind;
     return &f->base;
 }
 #endif

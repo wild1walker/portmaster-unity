@@ -436,6 +436,40 @@ impl Assembly {
         Ok(a)
     }
 
+    /// An assembly made in memory, not read from a file: its tables' rows (each column's value
+    /// as a file would hold it, in ECMA-335's column order) and its #Strings and #Blob heaps
+    /// (offset 0 of each the empty entry). Every reader works on it as on a file's (il2cppmeta
+    /// makes them from an IL2CPP build's metadata).
+    pub fn synthetic(
+        path: &str,
+        tables: Vec<(u8, Vec<Vec<u32>>)>,
+        strings: Vec<u8>,
+        blob: Vec<u8>,
+    ) -> Assembly {
+        let mut d = strings;
+        let ns = d.len();
+        d.extend(blob);
+        let mut streams = HashMap::new();
+        streams.insert("#Strings".to_string(), (0, ns));
+        streams.insert("#Blob".to_string(), (ns, d.len() - ns));
+        let mut nrows = BTreeMap::new();
+        let mut cache = HashMap::new();
+        for (t, rows) in tables {
+            nrows.insert(t, rows.len() as u32);
+            cache.insert(t, std::sync::Arc::new(rows));
+        }
+        Assembly {
+            path: path.to_string(),
+            d,
+            secs: Vec::new(),
+            streams,
+            nrows,
+            tables: HashMap::new(),
+            rows_cache: std::sync::Mutex::new(cache),
+            types_cache: OnceLock::new(),
+        }
+    }
+
     pub fn off(&self, rva: u32) -> Result<usize> {
         for &(vsize, va, rsize, raw) in &self.secs {
             if va <= rva && (rva as u64) < va as u64 + vsize.max(rsize) as u64 {
@@ -1114,6 +1148,36 @@ pub mod tests {
             h.push(0);
         }
         (h, offs)
+    }
+
+    #[test]
+    fn synthetic_assembly() {
+        // strings: 1 Ns, 4 Outer, 10 Inner, 16 f; blob 1: a field signature (int)
+        let (strings, o) = strings(&["Ns", "Outer", "Inner", "f"]);
+        let blob = vec![0, 2, 0x06, E_I4];
+        let a = Assembly::synthetic(
+            "x",
+            vec![
+                (
+                    TYPEDEF,
+                    vec![vec![1, o[1], o[0], 0, 1, 1], vec![2, o[2], 0, 0, 1, 1]],
+                ),
+                (FIELD, vec![vec![6, o[3], 1]]),
+                (NESTEDCLASS, vec![vec![2, 1]]),
+            ],
+            strings,
+            blob,
+        );
+        let t = a.types().unwrap();
+        assert_eq!((t[0].full.as_str(), t[0].fields), ("Ns.Outer", (1, 1)));
+        assert_eq!(
+            (t[1].full.as_str(), t[1].fields),
+            ("Ns.Outer/Inner", (1, 2))
+        );
+        assert_eq!(a.count(FIELD), 1);
+        assert_eq!(a.string(a.rows(FIELD).unwrap()[0][1]).unwrap(), "f");
+        assert_eq!(a.blob(1).unwrap(), vec![0x06, E_I4]);
+        assert!(a.rows(TYPEREF).unwrap().is_empty());
     }
 
     #[test]

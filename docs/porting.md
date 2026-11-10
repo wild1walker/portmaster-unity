@@ -46,7 +46,14 @@ patches and a helper assembly).
   never run: `7zz x -tzip <installer>.sh -o<dir>` (or `unzip -q <installer>.sh -d <dir>`, whose
   exit status 1, "extra bytes at beginning", is harmless but stops a `set -e` script), then the
   game is `<dir>/data/noarch/game`. GOG's macOS `.pkg`: `python -m pmunity macpkg <dir> <installer>.pkg`
-  (the app lands under `<dir>` at the package's install location). Steam: the game's folder (the Linux depot where there is one). Keep the installer itself for
+  (the app lands under `<dir>` at the package's install location). Steam: the game's folder (the Linux depot where there is one).
+  A Windows-only Steam game on a Mac: type `download_depot <app> <depot>` for each of its Windows
+  depots in Steam's console (`steam://open/console`; the depot ids are in SteamDB or in the app's
+  `depots` section of Steam's `appcache/appinfo.vdf`); the console prints the folder when a depot
+  is done. Only someone at the Mac can do this: the console has no command-line or file input, and
+  a platform override (`userdata/<id>/config/compat.vdf`) changes nothing on macOS, because every
+  compatibility tool Steam lists targets Linux (Bomb Rush Cyberfunk, 2026-11-09: Steam "installed"
+  it with no depots). Keep the installer itself for
   the handheld and the rehearsal: the setup takes it as it is.
 - **The port's own repository:** a GitHub repository per port holds `port new`'s output and
   nothing of the game. Clone it (a new one holds a LICENSE and a README: `port new` writes into
@@ -106,6 +113,38 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
 | `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
+
+### Both builds in one release: 32-bit where it can, 64-bit where it must
+
+A Mono game whose 32-bit build is the one to run (Hollow Knight: as fast as IL2CPP on the RG34XX-SP, less
+memory, nothing compiled at setup) still needs a 64-bit build for firmwares without a 32-bit userland
+(TrimUI's, and muOS on them), or PortMaster hides the port there: `armhf` in port.json's `reqs` is a
+device capability PortMaster checks (`device_info.txt` adds it only where the system has the 32-bit
+loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries both, the way Cuphead's does:
+
+- **Two setups.** `setup/patchscript` is the android route's; `setup/patchscript64` is the mono-arm64
+  template's patchscript (`port new --route mono-arm64` into a scratch folder) with its own work folder
+  (`gamedata/.setup64`), its install in `arm64/`, its own ready file (`.setup_done64`), and after
+  `setup.env` the 64-bit player (`PLAYER_BACKEND=il2cpp PLAYER_ABI=arm64-v8a`, the hashes of Unity's
+  arm64 `libmain.so` and `libunity.so`). The conversion and its questions are the same.
+- **The launcher picks** as Cuphead's does: 32-bit where `/lib/ld-linux-armhf.so.3` is there, else
+  64-bit; `HK_ROUTE=64` at the top of port.env forces it; a built game or a setup under way keeps its
+  route (muOS's 32-bit libraries flipped between launches for Cuphead). The 64-bit build runs
+  `./ua_host64 <port>/arm64` from the port folder, so port.env's relative paths, `flipbooks.txt` and
+  `uaflipbook.dll` beside the binary serve both, with `UM_PMHWDEC=pmhwdec64/libpmhwdec.so.1` and SDL's
+  own audio driver. The 32-bit build's `setup/update` is not run on the 64-bit one.
+- **The release adds** the IL2CPP arm64 donor (`player.donors`; `tools/donor/build.sh <editor>
+  Il2cppArm64`), `ua_host64`, Unity's Mono of the game's line with the bridge in `setup/mono64/<line>/`
+  and libpmhwdec's arm64 build in `pmhwdec64/`, through `[build]` (Hollow Knight's `build64.sh`): 36.4 ->
+  59.5 MB zipped. No Rockchip MPP for the 64-bit build: the vendor-kernel Rockchip firmwares (dArkOS,
+  ArkOS) have 32-bit libraries, and Knifethrower's MPP patch scripts need a newer Python than the arm64
+  build image has.
+- **Rehearse** the 64-bit path with `REHEARSE_64ONLY=1 REHEARSE_DONE=.setup_done64 REHEARSE_NET=none`
+  and a 1 GB `REHEARSE_MEMINFO`: Hollow Knight's whole setup from GOG's game folder in 14 minutes in the
+  arm64 container (2.3 GB installed; the container has no 64-bit SDL, so the game itself runs on a
+  handheld). On an RG34XX-SP with muOS, Greenpath walking and fighting: 45.6 fps, then 49.7 with the arm64
+  player's present-sync point (`UA_PRESENT_SYNC`, runtime/host/unityhooks.c), against the 32-bit build's
+  50.0; at least 189 MB available. `UA_GLES_POOL` has no arm64 row yet (its struct layout differs).
 
 ### Choose the route for speed first
 
@@ -540,7 +579,9 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   peak is stopped by the kernel there. The test harnesses stop EmulationStation (`sudo systemctl stop
   emulationstation`); give the game's loads a margin of 100 MB in those tests, or hold that much in
   another process during the run (a stand-in for EmulationStation). Readable textures (above) and the
-  textures step are the big levers.
+  textures step are the big levers. Unity 2017.x and older (Mono 2.6): `UA_GC_GROW = "250"` (runtime.md)
+  collects when Mono's heap grows in a load with under 250 MB available (Enter the Gungeon's Forge: heap
+  264 -> 224 MB, lowest available 82 -> 140 MB).
 - **The setup:** it runs in about 20 minutes (Enter the Gungeon: 1157 s with EmulationStation running,
   the tools' peak 331 MB, at least 424 MB available; the textures step's ASTC encoding is half of it,
   and the SoC reaches 80 C there, the CPU at 1.2 GHz).
@@ -558,6 +599,33 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   G350's pad has two sticks.
 - **Measure the average fps** of a walk or fight (the bench's `steady` step never settles here), with
   the SoC cool at the start (`devlock.py cool`): the CPU throttles from 1.5 to 1.0-1.2 GHz near 80 C.
+- **Bench at the clocks a player gets:** EmulationStation launches every port through dArkOS's own
+  `sudo perfmax %GOVERNOR% %ROM%` and `sudo perfnorm` after it (`es_systems.cfg`; ES-fcamod fills
+  `%GOVERNOR%` with its `GlobalPerformanceGovernor` setting, `performance` unless the player changed it):
+  CPU, GPU and memory controller on their performance governors (1.5 GHz, 520 MHz, DDR 786 MHz). From a
+  shell the device stays on its idle governors, where the memory controller never left 528 MHz and the
+  GPU 400 MHz in a fight; Enter the Gungeon's heavy fights ran 5 - 30 % slower there (the Keep's boss
+  27.7 -> 36.1 fps, the High Dragun 32.7 -> 34.5, the Forge's busiest room 23.7 -> 27.4, Bullet Hell's
+  22.9 -> 25.9: idle governors -> perfmax, EmulationStation stopped). A test harness should run the same two
+  commands around the game, as ES does: with no terminal (ES's stdin is `/dev/null`). From a terminal
+  (`ssh -t`, `script`) both scripts take their non-RK3326 branch and perfnorm leaves the GPU on
+  `performance`. A port itself never touches clocks.
+- **Memory hogs in tests take the device down:** a process standing in for EmulationStation's memory must
+  give it back before the game's own watchdog stops the game (the harness's `hog.py` exits under 60 MB
+  available; the watchdog stops the game under 50), and never in tmpfs (`/dev/shm` is not freed when the
+  test ends): a G350 that runs out of memory with no swap needs its power button.
+- **EmulationStation stays in memory** while a port runs on dArkOS (it is the process that launched it):
+  64 - 126 MB resident on the G350 (895 MB, no swap), more after browsing. PortMaster's dArkOS module does
+  not stop it, and a launcher cannot (stopping its service stops the port too). A test over SSH stops ES
+  for the display, so it overstates free memory by that much: hold ES's size in RAM for the run instead
+  (a file of that size in `/dev/shm`, removed after). Hollow Knight, release settings, so measured
+  (2026-11-09): Greenpath at least 84 MB available, City of Tears down to 34 MB at 148 s (the bench's
+  40 MB floor stopped it), with libunity's code pages already evicted (19 -> 5 MB resident); without the
+  hold the same scenes kept 202 MB. Testers saw 839 of 892 MB used on an RGB10. A 1 GB dArkOS port needs that much more headroom than the stopped-ES numbers show. Hollow Knight's
+  fix (2026-11-09): textures at 0.375 instead of 0.5 on 1 GB handhelds (`textures.lowmem_scale`; about a
+  texel for each pixel of its 540x360 picture, the same picture side by side) and 16 MiB of a scene's
+  sound decoded instead of 36 (`audio.lowmem_pcm_budget_mb`): City of Tears on muOS 663 -> 597 MB, the
+  lowest available 266 -> 332 MB, 56.0 -> 56.3 fps. The G350 with 126 MB held had hung in that scene.
 
 ### Videos
 
@@ -579,11 +647,11 @@ costs only while it plays: game play frames decode nothing.
   pictures from the handheld's video decoder: the Allwinner H616 / H618 / H700 / A133 engine on
   vendor kernels (Knulli, muOS), Rockchip MPP (ArkOS, dArkOS, AmberELEC), V4L2 on mainline (ROCKNIX).
   `tools/pmhwdec/build.sh <out>` builds it with this repository's images: the library for `ua_host`'s
-  architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhw-cedard`, the
+  architecture (armhf for the android route, arm64 for the arm64 routes) and `pmhwdec-cedard`, the
   Allwinner decoder the library starts from its own folder (aarch64 for both: those handhelds run
   64-bit kernels). Ship them with the port's `[build]` (Hollow Knight's port.toml: the script as a
-  command, the two files as outputs in `pmhw/`, the three licences) and set `UM_PMHW =
-  "pmhw/libpmhwdec.so.1"` in `[runtime]`: a path in the port folder, `ua_host`'s working folder
+  command, the two files as outputs in `pmhwdec/`, the three licences) and set `UM_PMHWDEC =
+  "pmhwdec/libpmhwdec.so.1"` in `[runtime]`: a path in the port folder, `ua_host`'s working folder
   (`port.env` quotes values, so `$GAMEDIR` would not expand there; the
   launcher's library path holds only the system's folders). The log says what it chose
   (`[media] decoders: ... vp8 (pmhwdec)`, `[media] pmhwdec: VP8 1920x1080 on cedar`). Where its
@@ -593,18 +661,18 @@ costs only while it plays: game play frames decode nothing.
   `armhf/librockchip_mpp.so` with `LICENSE.mpp.txt`, trimmed as his `rkmpp/build_mpp.sh` does), and
   the decoder's nodes, root-only there while ports run as `ark`: the launcher templates open
   `/dev/vpu_service` and `/dev/hevc_service` to the video group (`$ESUDO chgrp video`, `chmod 660`)
-  only where the port ships `pmhw/` and they are not usable already, and put back the owner, group
+  only where the port ships `pmhwdec/` and they are not usable already, and put back the owner, group
   and mode they found when the launcher ends (PortMaster's Moonlight opens the same nodes; the user
   agreed on 2026-11-08, on condition that everything is returned as it was found). G350 (dArkOS,
   RK3326), as `ark`: the self-test passes for H.264, HEVC and VP8 on `rkmpp`, Hollow Knight's intro
   plays on it in the game with the game at 60 fps, and the nodes are `crw------- root root` again
-  after. Without the nodes or MPP it reports no hardware in milliseconds and libvpx plays the clips. Ship `pmhw-test` too (`pmhw/pmhw-test`, the same
+  after. Without the nodes or MPP it reports no hardware in milliseconds and libvpx plays the clips. Ship `pmhwdec-test` too (`pmhwdec/pmhwdec-test`, the same
   build): the setup asks it whether VP8 plays on this handheld's video engine and, where it does,
   leaves the `video` step's clips at full size (`--set video.mode=off`; the update script skips
   `pmu video` the same way): the hardware plays them in time, which is what the smaller clips are
   for, and the setup is about ten minutes shorter on an RG34XX-SP (Knifethrower's idea). Measured by its author with GRIS's 1080p H.264
   intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42 -> 48 fps; on
-  an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhw-cedard` GPL-2.0-or-later: the port ships their licences and says
+  an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhwdec-cedard` GPL-2.0-or-later: the port ships their licences and says
   where their source is; this repository never ships them.
 - **VP9, Opus, others**: the table in runtime/media/README.md says which decoder takes each.
 
@@ -726,11 +794,21 @@ it. The steps, on a Mac:
    activation. The tools never sign in.
 3. **The Android tools** `build.sh` points the editor at: `SDK=<an Android SDK>`, `JDK=<a JDK home>`,
    and for an IL2CPP donor `NDK=<the NDK the editor asks for>` (2017.4: SDK tools r25.2.5,
-   build-tools 28.0.3, platforms;android-28, JDK 8, NDK r13b; newer editors name theirs in their
-   Android Build Support).
+   build-tools 28.0.3, platforms;android-28, JDK 8, NDK r13b; newer editors list theirs as the
+   Android module's sub-modules in Unity's release API, e.g. 2021.3.27f1: SDK tools 26.1.1,
+   platform-tools 30.0.4, build-tools 30.0.2, platforms android-29 and android-30, OpenJDK 8u172
+   (x86-64, also for the Apple-silicon editor), NDK r21d). 2021.3 and Unity 6 want the NDK for a
+   Mono donor too ("Android NDK not found").
 4. **Each donor:** `tools/donor/build.sh <dir>/Unity.app MonoArmv7 <DONORS dir>` and, for
    `mono-arm64`, `tools/donor/build.sh <dir>/Unity.app Il2cppArm64 <DONORS dir>`: it writes
    `donor-<version>-mono-armv7.apk` / `donor-<version>-il2cpp-arm64.apk`, the names the setup reads.
+   **adb:** once the build gives the editor the SDK, Unity scans for devices and kills every
+   running adb whose file is not `<SDK>/platform-tools/adb` ("terminated due to being run from
+   another SDK"; 2021.3, Unity 6), then starts its own server, so every handheld on adb drops its
+   connection mid-run. `build.sh` therefore stops while such an adb runs: build when nobody uses
+   adb, or give `SDK` the SDK the running server comes from (`ADB_KILL_OK=1` builds anyway).
+   An editor's first launch after `get-editor.sh` can sit for minutes with no CPU and no log while
+   macOS verifies the unpacked bundle: let it run (killing and relaunching it starts the check again).
 5. **Package** with them: `DONORS=<DONORS dir> <port>/package.sh`, or `port package --donors <dir>`.
 
 Donors are never committed (a port's repository holds no Unity files; `port new`'s `.gitignore`
@@ -881,7 +959,9 @@ The same steps without the setup, on a PC:
    clips are decoded once at load, as on the desktop, and only the largest long clips of a scene
    over the budget play compressed (FMOD then decodes them on the CPU while they play, which
    takes the GPU's clock in a warm handheld: [profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)).
-   A port with memory to spare raises it (the step's log names the scene that holds the most).
+   A port with memory to spare raises it (the step's log names the scene that holds the most);
+   `audio.lowmem_pcm_budget_mb` is the budget on handhelds with at most `audio.ram_mb` (1024) of RAM, as
+   `textures.lowmem_scale` is the scale there (Hollow Knight: 36 MiB, 16 on 1 GB handhelds).
 2. **Convert**: `python -m pmunity convert <Data> [<out>] --config game.json` with a config like
    the `convert` table above (`{"steps": ["shaders", "settings", "audio"], "settings":
    {"graphics_apis": [11]}}`); a game's own steps go in a plugin: field edits in a JSON file

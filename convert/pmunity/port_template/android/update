@@ -48,9 +48,9 @@ fi
 if [ -f "$S/convert.json" ] && grep -q '"video"' "$S/convert.json"; then
   step "the game's videos (a few minutes on a 1 GB handheld)"
   # (where the port's libpmhwdec decodes VP8 on this handheld's video engine they are left as they
-  # are: the hardware plays them in time; pmhw-test says so in milliseconds)
-  t="$GAMEDIR/pmhw/pmhw-test"; r=
-  if [ -f "$t" ]; then chmod +x "$t" "$GAMEDIR/pmhw/pmhw-cedard" 2>/dev/null; r=$("$t" -q 2>/dev/null | sed -n 's/^VP8: //p'); fi
+  # are: the hardware plays them in time; pmhwdec-test says so in milliseconds)
+  t="$GAMEDIR/pmhwdec/pmhwdec-test"; r=
+  if [ -f "$t" ]; then chmod +x "$t" "$GAMEDIR/pmhwdec/pmhwdec-cedard" 2>/dev/null; r=$("$t" -q 2>/dev/null | sed -n 's/^VP8: //p'); fi
   case "$r" in
     ""|"no hardware"*) "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt).";;
     *) echo "VP8 on this handheld's video engine ($r): the videos are left as they are";;

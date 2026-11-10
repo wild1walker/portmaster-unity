@@ -270,9 +270,11 @@ fn builtin_nodes(level: i32, name: &str, typ: &str, fields: &[BField]) -> Vec<No
 /// An assembly with its {full type name: TypeDef row} index.
 type AsmIndex = (Rc<Assembly>, Rc<HashMap<String, u32>>);
 
-/// Trees of MonoBehaviour classes from the assemblies of a Managed folder (monotree.Generator).
+/// Trees of MonoBehaviour classes from the assemblies of a Managed folder (monotree.Generator), or
+/// of an IL2CPP build's metadata made into assemblies (androiddata's il2cppmeta).
 pub struct Generator {
     managed: PathBuf,
+    il2cpp: Option<androiddata::il2cppmeta::Il2Cpp>,
     unity: (u64, u64),
     asm: HashMap<String, Option<AsmIndex>>,
     attrs: HashMap<String, Rc<HashMap<u32, BTreeSet<String>>>>,
@@ -284,11 +286,31 @@ impl Generator {
     pub fn new(managed: &Path, unity: Option<(u64, u64)>) -> Generator {
         Generator {
             managed: managed.to_path_buf(),
+            il2cpp: None,
             unity: unity.unwrap_or((2022, 3)),
             asm: HashMap::new(),
             attrs: HashMap::new(),
             gparams: HashMap::new(),
             cache: HashMap::new(),
+        }
+    }
+
+    /// The generator of a game's data folder: its Managed assemblies, else (an IL2CPP build) its
+    /// metadata's, else none; with why an IL2CPP build's metadata cannot be read.
+    pub fn of_data(data: &Path, unity: Option<(u64, u64)>) -> (Generator, Option<String>) {
+        let mut g = Generator::new(&data.join("Managed"), unity);
+        if data.join("Managed").is_dir() {
+            return (g, None);
+        }
+        let Some((meta, bin)) = androiddata::il2cppmeta::files_of(data) else {
+            return (g, None);
+        };
+        match androiddata::il2cppmeta::Il2Cpp::open(&meta, &bin) {
+            Ok(il) => {
+                g.il2cpp = Some(il);
+                (g, None)
+            }
+            Err(why) => (g, Some(format!("IL2CPP types not read: {why}"))),
         }
     }
 
@@ -298,21 +320,21 @@ impl Generator {
             return a.clone();
         }
         let p = self.managed.join(format!("{name}.dll"));
+        let made = match &mut self.il2cpp {
+            Some(il) => il.assembly(name).ok().flatten(),
+            None => p.is_file().then(|| Assembly::open(&p).ok()).flatten(),
+        };
         // ({t['full']: i + 1 for ...}: the last row of a name wins)
-        let a = p
-            .is_file()
-            .then(|| Assembly::open(&p).ok())
-            .flatten()
-            .and_then(|a| {
-                let idx: HashMap<String, u32> = a
-                    .types()
-                    .ok()?
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| (t.full.clone(), i as u32 + 1))
-                    .collect();
-                Some((Rc::new(a), Rc::new(idx)))
-            });
+        let a = made.and_then(|a| {
+            let idx: HashMap<String, u32> = a
+                .types()
+                .ok()?
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (t.full.clone(), i as u32 + 1))
+                .collect();
+            Some((Rc::new(a), Rc::new(idx)))
+        });
         self.asm.insert(name.to_string(), a.clone());
         a
     }
@@ -831,5 +853,70 @@ pub fn read(
             "{}: the tree does not read the object exactly ({e})",
             script.1
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(n: &[Node]) -> Vec<(i32, String, String, i32, Option<i32>)> {
+        n.iter()
+            .map(|x| {
+                (
+                    x.level,
+                    x.type_name.to_string(),
+                    x.name.to_string(),
+                    x.byte_size,
+                    x.meta_flag,
+                )
+            })
+            .collect()
+    }
+
+    /// An opt-in check of the IL2CPP types against the assemblies they were made from:
+    /// PMU_MONOTREE_CROSS=<Managed dir>:<global-metadata.dat>:<binary>[:<assembly>] builds every
+    /// class of the assembly from both and compares the trees node by node.
+    #[test]
+    fn il2cpp_trees_match_assemblies() {
+        let Ok(spec) = std::env::var("PMU_MONOTREE_CROSS") else {
+            return;
+        };
+        let p: Vec<&str> = spec.split(':').collect();
+        let asm = p.get(3).copied().unwrap_or("Assembly-CSharp");
+        let managed = Path::new(p[0]);
+        let mut mono = Generator::new(managed, Some((6000, 0)));
+        let mut il = Generator::new(Path::new("/nonexistent"), Some((6000, 0)));
+        il.il2cpp =
+            Some(androiddata::il2cppmeta::Il2Cpp::open(Path::new(p[1]), Path::new(p[2])).unwrap());
+        let a = Assembly::open(managed.join(format!("{asm}.dll"))).unwrap();
+        let (mut same, mut nodes, mut errs_both) = (0, 0usize, 0);
+        let mut bad = Vec::new();
+        for t in a.types().unwrap() {
+            if t.full.starts_with('<') {
+                continue;
+            }
+            match (mono.class_nodes(asm, &t.full), il.class_nodes(asm, &t.full)) {
+                (Ok(x), Ok(y)) if key(&x) == key(&y) => {
+                    same += 1;
+                    nodes += x.len();
+                }
+                (Err(_), Err(_)) => errs_both += 1,
+                (x, y) => bad.push(format!(
+                    "{}: {:?} / {:?}",
+                    t.full,
+                    x.map(|n| key(&n).into_iter().take(6).collect::<Vec<_>>()),
+                    y.map(|n| key(&n).into_iter().take(6).collect::<Vec<_>>())
+                )),
+            }
+        }
+        eprintln!(
+            "{asm}: {same} classes the same ({nodes} nodes), {errs_both} refused by both, {} different",
+            bad.len()
+        );
+        for b in bad.iter().take(10) {
+            eprintln!("  {b}");
+        }
+        assert!(bad.is_empty());
     }
 }

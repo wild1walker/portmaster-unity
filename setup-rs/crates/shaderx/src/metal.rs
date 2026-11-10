@@ -402,7 +402,7 @@ impl Scope {
 }
 
 /// One stage being translated (metal.Stage).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Stage {
     stage: Option<&'static str>,
     uniforms: Vec<String>,
@@ -410,6 +410,8 @@ struct Stage {
     outs: Vec<String>,
     consts: Vec<String>,
     helpers: BTreeSet<String>,
+    // the types pm_bitFieldExtractU is used with (kernels)
+    extract: BTreeSet<String>,
     structs: BTreeMap<String, Vec<(String, T, Vec<String>)>>,
     cbuffers: BTreeMap<String, String>,
     textures: BTreeMap<String, (&'static str, String)>,
@@ -417,6 +419,37 @@ struct Stage {
     io: BTreeMap<(String, String), (String, T)>,
     fconst: BTreeMap<String, String>,
     needs_es31: Option<&'static str>,
+    // a compute kernel's (translate_kernel): threadgroup memory as GLSL `shared` declarations,
+    // storage buffers, constant buffers
+    shared: Vec<String>,
+    kbufs: Vec<KBuf>,
+    kcbs: Vec<(String, u32, String)>,
+}
+
+/// A kernel's storage buffer, `[const] device <elem> *<name> [[ buffer(<metal>) ]]`: elem a
+/// struct of uint words (HLSLcc's structured buffers) or uint (a raw buffer).
+#[derive(Clone, Debug)]
+struct KBuf {
+    name: String,
+    metal: u32,
+    readonly: bool,
+    elem: String,
+}
+
+/// A translated kernel's resources, for the GLES3 variant's records (translate_kernel).
+/// A constant buffer's members: (name, offset).
+pub type Members = Vec<(String, u32)>;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KernelIface {
+    /// constant buffers in Metal's order: name, Metal index, the uniform block's binding, its
+    /// members' (name, offset) as Metal lays them out (Unity writes the values there)
+    pub cbs: Vec<(String, u32, u32, Members)>,
+    /// read-only storage buffers in Metal's order: name, Metal index, place among them (the
+    /// binding: outs.len() + place)
+    pub ins: Vec<(String, u32, u32)>,
+    /// writable storage buffers in Metal's order: name, Metal index, binding
+    pub outs: Vec<(String, u32, u32)>,
 }
 
 struct Parser<'a> {
@@ -490,6 +523,19 @@ impl Parser<'_> {
     }
 
     fn unary(&mut self, sc: &mut Scope) -> R<E> {
+        if self.st.stage == Some("COMPUTE") && self.peek(0) == Some("&") {
+            // an atomic's address (reinterpret_cast<device atomic_int *>(&x)), a compare
+            // exchange's expected value (&compare_value)
+            self.next()?;
+            let a = self.unary(sc)?;
+            return Ok(e(
+                a.s,
+                T {
+                    elem: Some(Box::new(a.t)),
+                    ..T::new("addr")
+                },
+            ));
+        }
         if matches!(self.peek(0), Some("-") | Some("!") | Some("~") | Some("+")) {
             let op = self.next()?;
             let a = self.unary(sc)?;
@@ -623,6 +669,42 @@ impl Parser<'_> {
         if let Some(c) = tok.strip_prefix("component::") {
             if let Some(k) = "xyzw".find(c).filter(|_| c.len() == 1) {
                 return Ok(e(format!("component:{k}"), T::new("opt")));
+            }
+        }
+        if self.st.stage == Some("COMPUTE") {
+            if tok == "reinterpret_cast" {
+                // reinterpret_cast<device atomic_int *>(&buffer[i].value[j]): the word as an atomic
+                self.expect("<")?;
+                let mut ty = Vec::new();
+                while self.peek(0) != Some(">") {
+                    ty.push(self.next()?);
+                }
+                self.expect(">")?;
+                self.expect("(")?;
+                let a = self.expr(sc, 0)?;
+                self.expect(")")?;
+                let base = if ty.iter().any(|t| t == "atomic_int") {
+                    "int"
+                } else if ty.iter().any(|t| t == "atomic_uint") {
+                    "uint"
+                } else {
+                    return uns(format!("MSL: reinterpret_cast<{}>", ty.join(" ")));
+                };
+                let target = match (a.t.kind, a.t.elem) {
+                    ("addr", Some(t)) if *t == uint() || *t == int() => t,
+                    _ => return uns("MSL: an atomic that is not a 32-bit word"),
+                };
+                return Ok(e(
+                    a.s,
+                    T {
+                        base,
+                        elem: Some(target),
+                        ..T::new("atomic")
+                    },
+                ));
+            }
+            if tok.starts_with("memory_order::") || tok.starts_with("mem_flags::") {
+                return Ok(e(tok, T::new("opt")));
             }
         }
         if tok == "as_type" {
@@ -892,8 +974,21 @@ impl Parser<'_> {
                 let c = self.expr(sc, 0)?;
                 self.expect(")")?;
                 if c.s == "false" && (self.peek(0) != Some("{") || !self.has_else()) {
+                    // a block that never runs, translated into a sink (its reads still declared,
+                    // as the Python does); one that does not translate is skipped whole: Unity 6
+                    // writes its variable rasterization rate code as `if (has_vrr_api) { ... }`
+                    // with Metal's own types in it (rasterization_rate_map_decoder), where 2022.3
+                    // had it in `#if __METAL_VERSION__` blocks
+                    let (i0, st0) = (self.i, self.st.clone());
                     let mut sink = Vec::new();
-                    return self.body(sc, &mut sink, ind);
+                    return match self.body(sc, &mut sink, ind) {
+                        Err(Fault::Uns(_)) if self.t[i0] == "{" => {
+                            self.i = i0;
+                            *self.st = st0;
+                            skip_braces(self)
+                        }
+                        r => r,
+                    };
                 }
                 out.push(format!("{pad}if({}){{", bool_of(&c)?.s));
                 self.body(sc, out, ind)?;
@@ -1034,8 +1129,12 @@ impl Parser<'_> {
         while matches!(
             self.peek(0),
             Some("const") | Some("thread") | Some("constant")
-        ) {
+        ) || self.st.stage == Some("COMPUTE") && self.peek(0) == Some("threadgroup")
+        {
             quals.push(self.next()?);
+        }
+        if quals.iter().any(|q| q == "threadgroup") {
+            return self.shared_decl(sc);
         }
         let tok = self.peek(0).map(String::from);
         if let Some(tk) = &tok {
@@ -1088,6 +1187,30 @@ impl Parser<'_> {
         }
         let a = self.assign_expr(sc)?;
         out.push(pad + &a);
+        Ok(())
+    }
+
+    /// A kernel's threadgroup memory (`threadgroup TGSM0_Type TGSM0[256];`, in the entry's body):
+    /// a GLSL `shared` variable, declared before main.
+    fn shared_decl(&mut self, sc: &mut Scope) -> R<()> {
+        let ty = self.next()?;
+        let et = match parse_type(&ty) {
+            Some(t) => t,
+            None if self.st.structs.contains_key(&ty) => T::named("struct", &ty),
+            None => return uns(format!("MSL: threadgroup {ty}")),
+        };
+        let name = self.next()?;
+        let (t, arr) = if self.accept("[") {
+            let n = py_int0(&self.next()?)?;
+            self.expect("]")?;
+            (T::array(et.clone(), n), format!("[{n}]"))
+        } else {
+            (et.clone(), String::new())
+        };
+        self.st
+            .shared
+            .push(format!("shared {} {name}{arr};", et.glsl()));
+        sc.set(&name, (name.clone(), t));
         Ok(())
     }
 
@@ -1387,6 +1510,24 @@ fn call(st: &mut Stage, name: &str, args: Vec<E>) -> R<E> {
         .replace("metal::", "")
         .replace("precise::", "")
         .replace("fast::", "");
+    if st.stage == Some("COMPUTE") {
+        if name == "bitFieldExtractU" {
+            let (w, o, s) = three(&args)?;
+            let t = unify(&unify(&w.t, &o.t), &s.t);
+            if t.kind != "vec" || t.base != "uint" {
+                return uns(format!("MSL: bitFieldExtractU of {}", t.glsl()));
+            }
+            st.extract.insert(t.glsl());
+            let parts = [w, o, s]
+                .iter()
+                .map(|x| convert(x, &t).map(|x| x.s))
+                .collect::<R<Vec<_>>>()?;
+            return Ok(e(format!("pm_bitFieldExtractU({})", parts.join(", ")), t));
+        }
+        if let Some(x) = kernel_call(&name, &args)? {
+            return Ok(x);
+        }
+    }
     if name == "fma" {
         let (a, b, c) = three(&args)?;
         let t = unify(&unify(&a.t, &b.t), &c.t);
@@ -1541,6 +1682,88 @@ fn call(st: &mut Stage, name: &str, args: Vec<E>) -> R<E> {
     uns(format!("MSL: function {name}"))
 }
 
+/// A kernel's atomics and barriers as GLSL ES 3.10's; None: not one of them. An atomic is a
+/// 32-bit word of a storage buffer or of threadgroup memory (its type is the word's, uint for
+/// HLSLcc's buffers); Metal's atomic_int on it gives an int, made from the word's bits (add, and,
+/// or, xor, exchange and compare exchange do the same to the bits either way; a signed min or
+/// max on an unsigned word has no GLSL form and is refused).
+fn kernel_call(name: &str, args: &[E]) -> R<Option<E>> {
+    if name == "threadgroup_barrier" {
+        let [flags] = args else {
+            return uns("MSL: threadgroup_barrier's arguments");
+        };
+        let s = match flags.s.as_str() {
+            "mem_flags::mem_threadgroup" => "memoryBarrierShared(); barrier()",
+            "mem_flags::mem_device" => "memoryBarrierBuffer(); barrier()",
+            "mem_flags::mem_none" => "barrier()",
+            f => return uns(format!("MSL: threadgroup_barrier({f})")),
+        };
+        return Ok(Some(e(s, T::new("void"))));
+    }
+    let f = match name {
+        "atomic_fetch_add_explicit" | "atomic_fetch_sub_explicit" => "atomicAdd",
+        "atomic_fetch_and_explicit" => "atomicAnd",
+        "atomic_fetch_or_explicit" => "atomicOr",
+        "atomic_fetch_xor_explicit" => "atomicXor",
+        "atomic_fetch_min_explicit" => "atomicMin",
+        "atomic_fetch_max_explicit" => "atomicMax",
+        "atomic_exchange_explicit" => "atomicExchange",
+        "atomic_compare_exchange_weak_explicit" | "atomic_compare_exchange_strong_explicit" => {
+            "atomicCompSwap"
+        }
+        _ => return Ok(None),
+    };
+    let Some(x) = args.first().filter(|a| a.t.kind == "atomic") else {
+        return uns(format!("MSL: {name} of a value that is not an atomic"));
+    };
+    let word = (**x.t.elem.as_ref().unwrap()).clone();
+    let atomic = vec(x.t.base, 1);
+    if f == "atomicCompSwap" {
+        // (object, &expected, desired, order, order): expected is given the word's old value,
+        // which is what atomicCompSwap returns, whether it swapped or not (a weak exchange may
+        // fail where a strong one does not; HLSLcc loops until it sees its value)
+        let [_, cv, desired, o1, o2] = args else {
+            return uns(format!("MSL: {name}'s arguments"));
+        };
+        if cv.t.kind != "addr" || o1.t.kind != "opt" || o2.t.kind != "opt" {
+            return uns(format!("MSL: {name}'s arguments"));
+        }
+        let ct = (**cv.t.elem.as_ref().unwrap()).clone();
+        let old = e(
+            format!(
+                "atomicCompSwap({}, {}, {})",
+                x.s,
+                convert(&e(cv.s.clone(), ct.clone()), &word)?.s,
+                convert(desired, &word)?.s
+            ),
+            word,
+        );
+        return Ok(Some(e(
+            format!("{} = {}", cv.s, convert(&old, &ct)?.s),
+            T::new("void"),
+        )));
+    }
+    let [_, v, order] = args else {
+        return uns(format!("MSL: {name}'s arguments"));
+    };
+    if order.t.kind != "opt" {
+        return uns(format!("MSL: {name}'s arguments"));
+    }
+    if (f == "atomicMin" || f == "atomicMax") && atomic.base != word.base {
+        return uns(format!(
+            "MSL: {name} on {} as {}",
+            word.glsl(),
+            atomic.glsl()
+        ));
+    }
+    let mut v = convert(v, &word)?;
+    if name == "atomic_fetch_sub_explicit" {
+        v = e(format!("{}(0) - {}", word.glsl(), v.wrap(19)), word.clone());
+    }
+    let old = e(format!("{f}({}, {})", x.s, v.s), word);
+    Ok(Some(convert(&old, &atomic)?))
+}
+
 fn member(st: &Stage, obj: &E, name: &str) -> R<E> {
     let t = &obj.t;
     if t.kind == "struct" {
@@ -1634,8 +1857,9 @@ static GLOBAL_RES: LazyLock<(Regex, Regex, Regex, Regex)> = LazyLock::new(|| {
     )
 });
 
-/// One stage's MSL -> (Stage with its GLSL parts, body lines) (metal.translate_stage).
-fn translate_stage(src: &str) -> R<(Stage, Vec<String>)> {
+/// One stage's MSL -> (Stage with its GLSL parts, body lines) (metal.translate_stage); a
+/// compute kernel only when kernel is true (translate_kernel).
+fn translate_stage(src: &str, kernel: bool) -> R<(Stage, Vec<String>)> {
     let toks = tokenize(&preprocess(src))?;
     let mut st = Stage::default();
     let mut body: Option<Vec<String>> = None;
@@ -1687,6 +1911,17 @@ fn translate_stage(src: &str) -> R<(Stage, Vec<String>)> {
                 while p.next()? != "{" {}
                 p.i -= 1;
                 skip_braces(&mut p)?;
+                p.accept(";");
+            }
+            "uint" if kernel && p.peek(1) == Some("bitFieldExtractU") => {
+                // HLSLcc's helper (its declaration, then its definition): calls get
+                // pm_bitFieldExtractU, the same in GLSL (call)
+                while !matches!(p.peek(0), Some(";") | Some("{")) {
+                    p.next()?;
+                }
+                if p.peek(0) == Some("{") {
+                    skip_braces(&mut p)?;
+                }
                 p.accept(";");
             }
             "constant" | "constexpr" => {
@@ -1763,29 +1998,25 @@ fn translate_stage(src: &str) -> R<(Stage, Vec<String>)> {
                 });
                 let ret = p.next()?;
                 p.expect("xlatMtlMain")?;
-                p.expect("(")?;
-                let mut params = Vec::new();
-                while !p.accept(")") {
-                    let mut ptoks = Vec::new();
-                    let mut depth = 0i64;
-                    loop {
-                        let tk = p.peek(0).map(String::from);
-                        match tk.as_deref() {
-                            Some("[[") => break,
-                            Some("<") => depth += 1,
-                            Some(">") => depth -= 1,
-                            _ => {}
-                        }
-                        if matches!(tk.as_deref(), Some(",") | Some(")")) && depth == 0 {
-                            break;
-                        }
-                        ptoks.push(p.next()?);
-                    }
-                    let at = attrs(&mut p)?;
-                    params.push((ptoks, at));
-                    p.accept(",");
-                }
+                let params = entry_params(&mut p)?;
                 declare(p.st, &ret, &params)?;
+                let mut out = Vec::new();
+                p.expect("{")?;
+                let mut sc = Scope {
+                    vars: vec![p.st.globals.clone(), BTreeMap::new()],
+                };
+                while !p.accept("}") {
+                    p.statement(&mut sc, &mut out, 1)?;
+                }
+                body = Some(out);
+            }
+            "kernel" if kernel => {
+                p.next()?;
+                p.st.stage = Some("COMPUTE");
+                p.expect("void")?;
+                p.next()?;
+                let params = entry_params(&mut p)?;
+                declare_kernel(p.st, &params)?;
                 let mut out = Vec::new();
                 p.expect("{")?;
                 let mut sc = Scope {
@@ -1803,6 +2034,33 @@ fn translate_stage(src: &str) -> R<(Stage, Vec<String>)> {
         return uns("MSL: no entry point");
     };
     Ok((st, body))
+}
+
+/// An entry point's parameters, from its '(' to its ')': each one's tokens and attributes.
+fn entry_params(p: &mut Parser) -> R<Vec<(Vec<String>, Vec<String>)>> {
+    p.expect("(")?;
+    let mut params = Vec::new();
+    while !p.accept(")") {
+        let mut ptoks = Vec::new();
+        let mut depth = 0i64;
+        loop {
+            let tk = p.peek(0).map(String::from);
+            match tk.as_deref() {
+                Some("[[") => break,
+                Some("<") => depth += 1,
+                Some(">") => depth -= 1,
+                _ => {}
+            }
+            if matches!(tk.as_deref(), Some(",") | Some(")")) && depth == 0 {
+                break;
+            }
+            ptoks.push(p.next()?);
+        }
+        let at = attrs(p)?;
+        params.push((ptoks, at));
+        p.accept(",");
+    }
+    Ok(params)
 }
 
 static COLOR: LazyLock<(Regex, Regex, Regex)> = LazyLock::new(|| {
@@ -1984,6 +2242,369 @@ fn declare(st: &mut Stage, ret: &str, params: &[(Vec<String>, Vec<String>)]) -> 
     Ok(())
 }
 
+static BUFFER_ATTR: LazyLock<Regex> = LazyLock::new(|| re(r"\Abuffer\((\d+)\)"));
+
+/// A kernel's parameters: constant buffers, storage buffers (structured: a struct of uint words;
+/// raw: uint), the thread position builtins. Textures and append / consume counters are not
+/// translated (an image's format is not in the MSL; Unity's GLES records for counters were not
+/// seen yet).
+fn declare_kernel(st: &mut Stage, params: &[(Vec<String>, Vec<String>)]) -> R<()> {
+    for (ptoks, at) in params {
+        let a = at.join(",");
+        let Some(name) = ptoks.last().cloned() else {
+            return crash("IndexError: list index out of range");
+        };
+        let metal = BUFFER_ATTR
+            .captures(&a)
+            .and_then(|c| c[1].parse::<u32>().ok());
+        let first = ptoks[0].as_str();
+        if glsl_reserved(&name) {
+            return uns(format!("MSL: kernel parameter {name}: a GLSL word"));
+        }
+        if first == "constant" && ptoks.len() >= 2 && ptoks[ptoks.len() - 2] == "&" {
+            let sname = ptoks[1].clone();
+            let Some(metal) = metal else {
+                return uns(format!("MSL: constant buffer {name} [[ {a} ]]"));
+            };
+            if !st.structs.contains_key(&sname) {
+                return crash(format!("KeyError: {sname}"));
+            }
+            st.cbuffers.insert(name.clone(), sname.clone());
+            st.globals
+                .insert(name.clone(), (name.clone(), T::named("struct", &sname)));
+            st.kcbs.push((name, metal, sname));
+            continue;
+        }
+        if let Some(d) = ptoks.iter().position(|x| x == "device") {
+            let readonly = first == "const";
+            let ty = ptoks.get(d + 1).cloned().unwrap_or_default();
+            if ty.starts_with("atomic_") {
+                return uns(format!("MSL: counter {name} (an append or consume buffer)"));
+            }
+            let Some(metal) = metal else {
+                return uns(format!("MSL: storage buffer {name} [[ {a} ]]"));
+            };
+            if ptoks.get(d + 2).map(String::as_str) != Some("*") || d + 4 != ptoks.len() {
+                return uns(format!("MSL: storage buffer {}", ptoks.join(" ")));
+            }
+            let et = if ty == "uint" {
+                uint()
+            } else {
+                match st.structs.get(&ty).map(Vec::as_slice) {
+                    Some([(mn, mt, _)])
+                        if mn == "value"
+                            && mt.kind == "array"
+                            && **mt.elem.as_ref().unwrap() == uint() =>
+                    {
+                        T::named("struct", &ty)
+                    }
+                    _ => return uns(format!("MSL: storage buffer {name} of {ty}")),
+                }
+            };
+            st.globals
+                .insert(name.clone(), (format!("{name}_buf"), T::array(et, 0)));
+            st.kbufs.push(KBuf {
+                name,
+                metal,
+                readonly,
+                elem: ty,
+            });
+            continue;
+        }
+        let builtin = match a.as_str() {
+            "thread_position_in_grid" => Some(("gl_GlobalInvocationID", vec("uint", 3))),
+            "thread_position_in_threadgroup" => Some(("gl_LocalInvocationID", vec("uint", 3))),
+            "threadgroup_position_in_grid" => Some(("gl_WorkGroupID", vec("uint", 3))),
+            "threadgroups_per_grid" => Some(("gl_NumWorkGroups", vec("uint", 3))),
+            "thread_index_in_threadgroup" => Some(("gl_LocalInvocationIndex", uint())),
+            _ => None,
+        };
+        if let (Some((g, gt)), Some(t)) = (builtin, parse_type(first)) {
+            if t.kind != "vec" || t.n > gt.n {
+                return uns(format!(
+                    "MSL: kernel parameter {} [[ {a} ]]",
+                    ptoks.join(" ")
+                ));
+            }
+            let mut x = e(g, gt);
+            if x.t.n > t.n {
+                x = e(format!("{g}.{}", &"xyz"[..t.n as usize]), vec("uint", t.n));
+            }
+            st.globals.insert(name, (convert(&x, &t)?.s, t));
+            continue;
+        }
+        return uns(format!(
+            "MSL: kernel parameter {} [[ {a} ]]",
+            ptoks.join(" ")
+        ));
+    }
+    Ok(())
+}
+
+/// GLSL ES words a buffer's block cannot be named after.
+fn glsl_reserved(n: &str) -> bool {
+    n.starts_with("gl_")
+        || [
+            "attribute",
+            "const",
+            "uniform",
+            "varying",
+            "buffer",
+            "shared",
+            "coherent",
+            "volatile",
+            "restrict",
+            "readonly",
+            "writeonly",
+            "atomic_uint",
+            "layout",
+            "centroid",
+            "flat",
+            "smooth",
+            "noperspective",
+            "patch",
+            "sample",
+            "break",
+            "continue",
+            "do",
+            "for",
+            "while",
+            "switch",
+            "case",
+            "default",
+            "if",
+            "else",
+            "subroutine",
+            "in",
+            "out",
+            "inout",
+            "float",
+            "int",
+            "uint",
+            "void",
+            "bool",
+            "true",
+            "false",
+            "invariant",
+            "precise",
+            "discard",
+            "return",
+            "lowp",
+            "mediump",
+            "highp",
+            "precision",
+            "struct",
+            "common",
+            "partition",
+            "active",
+            "asm",
+            "class",
+            "union",
+            "enum",
+            "typedef",
+            "template",
+            "this",
+            "resource",
+            "goto",
+            "inline",
+            "noinline",
+            "public",
+            "static",
+            "extern",
+            "external",
+            "interface",
+            "long",
+            "short",
+            "double",
+            "half",
+            "fixed",
+            "unsigned",
+            "superp",
+            "input",
+            "output",
+            "filter",
+            "sizeof",
+            "cast",
+            "namespace",
+            "using",
+            "main",
+        ]
+        .contains(&n)
+}
+
+/// A constant buffer's members as a std140 block's, each at the offset Metal gives it (Unity
+/// writes the values there: the records' offsets are Metal's): a float3 takes 16 bytes in MSL
+/// and 12 in std140, so a member after one gets padding floats before it. Arrays of float4 /
+/// float3 and float4x4 / float3x3 matrices have the same stride in both; other arrays, bools
+/// and 2-row matrices are refused. -> (the block's member lines, each member's (name, offset))
+fn std140_members(sname: &str, mems: &[(String, T, Vec<String>)]) -> R<(Vec<String>, Members)> {
+    let align = |x: u32, a: u32| x.div_ceil(a) * a;
+    let (mut lines, mut offs) = (Vec::new(), Vec::new());
+    let (mut moff, mut soff, mut pads) = (0u32, 0u32, 0);
+    for (mn, mt, _) in mems {
+        let bad = || {
+            uns(format!(
+                "MSL: constant buffer {sname}: {mn} of {}",
+                mt.glsl()
+            ))
+        };
+        // (Metal size, alignment; std140 size, alignment; the GLSL array suffix)
+        let (msz, mal, ssz, sal, arr) = match mt.kind {
+            "vec" if mt.base != "bool" => match mt.n {
+                1 => (4, 4, 4, 4, String::new()),
+                2 => (8, 8, 8, 8, String::new()),
+                3 => (16, 16, 12, 16, String::new()),
+                _ => (16, 16, 16, 16, String::new()),
+            },
+            "mat" if mt.rows >= 3 => (16 * mt.n, 16, 16 * mt.n, 16, String::new()),
+            "array" => {
+                let el = mt.elem.as_ref().unwrap();
+                if el.kind != "vec" || el.base == "bool" || el.n < 3 {
+                    return bad();
+                }
+                let n = mt.length as u32;
+                (16 * n, 16, 16 * n, 16, format!("[{n}]"))
+            }
+            _ => return bad(),
+        };
+        moff = align(moff, mal);
+        while align(soff, sal) < moff {
+            lines.push(format!("\tfloat pm_pad{pads};"));
+            pads += 1;
+            soff += 4;
+        }
+        if align(soff, sal) != moff {
+            return bad();
+        }
+        lines.push(format!("\t{} {mn}{arr};", mt.glsl()));
+        offs.push((mn.clone(), moff));
+        soff = moff + ssz;
+        moff += msz;
+    }
+    Ok((lines, offs))
+}
+
+/// GLSL ES 3.10 of a translated kernel, its resources bound as Unity binds a GLES3 variant's:
+/// uniform blocks numbered from 0 in Metal's order (`Globals` as the block `CGlobals`); storage
+/// buffers the writable ones first, from 0, then the read-only ones, each kind in Metal's order.
+/// Writable: named in uavs (the HLSL's read-write buffers, which Unity records as outBuffers;
+/// HLSLcc declares one a kernel only reads `const device`), or written here.
+fn emit_kernel(
+    st: &Stage,
+    body: &[String],
+    group: [i64; 3],
+    uavs: &[String],
+) -> R<(String, KernelIface)> {
+    let mut iface = KernelIface::default();
+    let mut out = vec![format!(
+        "#version 310 es\n\n#define HLSLCC_ENABLE_UNIFORM_BUFFERS 1\n#if HLSLCC_ENABLE_UNIFORM_BUFFERS\n#define UNITY_UNIFORM\n#else\n#define UNITY_UNIFORM uniform\n#endif\n{}",
+        vulkan::UNIFORM_LOCATION_BLOCK.trim_end_matches('\n')
+    )];
+    let mut cbs = st.kcbs.clone();
+    cbs.sort_by_key(|c| c.1);
+    for (b, (name, metal, sname)) in cbs.iter().enumerate() {
+        let (lines, offs) = std140_members(sname, &st.structs[sname])?;
+        let block = if name == "Globals" { "CGlobals" } else { name };
+        out.push(format!(
+            "UNITY_BINDING({b}) uniform {block} {{\n{}\n}};",
+            lines.join("\n")
+        ));
+        iface.cbs.push((name.clone(), *metal, b as u32, offs));
+    }
+    let is_in = |k: &KBuf| k.readonly && !uavs.contains(&k.name);
+    let mut bufs = st.kbufs.clone();
+    bufs.sort_by_key(|k| (is_in(k), k.metal));
+    let nout = bufs.iter().filter(|k| !is_in(k)).count() as u32;
+    let mut declared = BTreeSet::new();
+    let mut struct_decl = |ty: &str, out: &mut Vec<String>| {
+        if declared.insert(ty.to_string()) {
+            let mems: Vec<String> = st.structs[ty]
+                .iter()
+                .map(|(mn, mt, _)| {
+                    let arr = if mt.kind == "array" {
+                        format!("[{}]", mt.length)
+                    } else {
+                        String::new()
+                    };
+                    format!("\t{} {mn}{arr};", mt.glsl())
+                })
+                .collect();
+            out.push(format!("struct {ty} {{\n{}\n}};", mems.join("\n")));
+        }
+    };
+    for (i, k) in bufs.iter().enumerate() {
+        let binding = i as u32;
+        if k.elem != "uint" {
+            struct_decl(&k.elem, &mut out);
+        }
+        let ro = if k.readonly { "readonly " } else { "" };
+        out.push(format!(
+            "layout(std430, binding = {binding}) {ro}buffer {} {{\n\t{} {}_buf[];\n}};",
+            k.name, k.elem, k.name
+        ));
+        if is_in(k) {
+            iface.ins.push((k.name.clone(), k.metal, binding - nout));
+        } else {
+            iface.outs.push((k.name.clone(), k.metal, binding));
+        }
+    }
+    for s in &st.shared {
+        let ty = s.split_whitespace().nth(1).unwrap_or("");
+        if st.structs.contains_key(ty) {
+            struct_decl(ty, &mut out);
+        }
+        out.push(s.clone());
+    }
+    // immediate constant buffers (`constant float4 ImmCB_0[4] = {...}`) as const arrays
+    out.extend(st.consts.iter().cloned());
+    for t in &st.helpers {
+        out.push(
+            HELPERS
+                .replace("{t}", t)
+                .replace("{{", "{")
+                .replace("}}", "}")
+                .trim_end_matches('\n')
+                .to_string(),
+        );
+    }
+    for t in &st.extract {
+        out.push(extract_helper(t));
+    }
+    let [x, y, z] = group;
+    if [x, y, z].iter().any(|&v| v < 1) {
+        return uns(format!("MSL: thread group size {x}x{y}x{z}"));
+    }
+    out.push(format!(
+        "layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;"
+    ));
+    out.push("void main()\n{".into());
+    out.extend(body.iter().cloned());
+    out.push("}".into());
+    Ok((out.join("\n") + "\n", iface))
+}
+
+/// HLSLcc's bitFieldExtractU (MSL, its helper) for a uint type t: the same operations in GLSL.
+fn extract_helper(t: &str) -> String {
+    if t == "uint" {
+        return "uint pm_bitFieldExtractU(uint width, uint offset, uint src)\n{\n    bool isWidthZero = width == 0u;\n    bool needsClamp = width + offset < 32u;\n    uint clampVersion = src << (32u - (width + offset));\n    clampVersion = clampVersion >> (32u - width);\n    uint simpleVersion = src >> offset;\n    uint res = needsClamp ? clampVersion : simpleVersion;\n    return isWidthZero ? 0u : res;\n}".into();
+    }
+    let b = t.replacen('u', "b", 1);
+    format!(
+        "{t} pm_bitFieldExtractU({t} width, {t} offset, {t} src)\n{{\n    {b} isWidthZero = equal(width, {t}(0u));\n    {b} needsClamp = lessThan(width + offset, {t}(32u));\n    {t} clampVersion = src << ({t}(32u) - (width + offset));\n    clampVersion = clampVersion >> ({t}(32u) - width);\n    {t} simpleVersion = src >> offset;\n    {t} res = mix(simpleVersion, clampVersion, needsClamp);\n    return mix(res, {t}(0u), isWidthZero);\n}}"
+    )
+}
+
+/// One kernel variant's MSL (`kernel void computeMain(...)`, HLSLcc's) -> its GLSL ES 3.10
+/// compute shader with the thread group size Unity records for it, and its resources. uavs: the
+/// storage buffers the kernel's records list as writable (outBuffers).
+pub fn translate_kernel(msl: &str, group: [i64; 3], uavs: &[String]) -> R<(String, KernelIface)> {
+    let (st, body) = translate_stage(msl, true)?;
+    if st.stage != Some("COMPUTE") {
+        return uns("MSL: not a kernel");
+    }
+    emit_kernel(&st, &body, group, uavs)
+}
+
 const HELPERS: &str = "{t} pm_bitFieldInsert({t} width, {t} offset, {t} src2, {t} src3)\n{\n    {t} bitmask = ((({t}(1u) << width) - {t}(1u)) << offset);\n    return ((src2 << offset) & bitmask) | (src3 & ~bitmask);\n}\n";
 
 static UNIFORM_NAME: LazyLock<Regex> = LazyLock::new(|| re(r"(\w+)(?:\[\d+\])?;\n?\z"));
@@ -2049,6 +2670,73 @@ static SAMPLER_LINE: LazyLock<Regex> =
 static HEAD: LazyLock<Regex> = LazyLock::new(|| re(r"\A(#version[^\n]*\n(?:precision[^\n]*\n)*)"));
 static LAST_WORD: LazyLock<Regex> = LazyLock::new(|| re(r"(\w+);\n?\z"));
 
+/// The uniform vectors a stage may use on the handhelds' Mali-G31 / G52 (GL_MAX_VERTEX_UNIFORM_VECTORS
+/// and GL_MAX_FRAGMENT_UNIFORM_VECTORS: 1024; a program over it does not link).
+pub const MAX_UNIFORM_VECTORS: u32 = 1024;
+
+static UNIFORM_DECL: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?m)^(?:UNITY_LOCATION\(\d+\) )?uniform\s+(?:(?:highp|mediump|lowp)\s+)?(\w+)\s+(\w+)(?:\[(\d+)\])?\s*;",
+    )
+});
+
+/// The uniform vectors a stage's plain uniforms take, as the Mali counts them: a row per scalar or
+/// vector, a column's per matrix, each array element its own (samplers none).
+pub fn uniform_vectors(src: &str) -> u32 {
+    UNIFORM_DECL
+        .captures_iter(src)
+        .filter(|c| !c[1].contains("sampler"))
+        .map(|c| {
+            let rows = match c[1].strip_prefix("mat") {
+                Some(m) => m[..1].parse().unwrap_or(4),
+                None => 1,
+            };
+            rows * c.get(3).map_or(1, |n| n.as_str().parse().unwrap_or(1))
+        })
+        .sum()
+}
+
+/// URP 17's light arrays (Input.hlsl, Shadows.hlsl, LightCookieInput.hlsl: sized
+/// MAX_VISIBLE_LIGHTS), as a macOS build has them (MAX_VISIBLE_LIGHT_COUNT_DESKTOP, 256 lights;
+/// matrices as HLSLcc's float4 rows) and with MAX_VISIBLE_LIGHT_COUNT_MOBILE (32), the count an
+/// Android build compiles them for: (name, desktop size, mobile size).
+const URP_LIGHT_ARRAYS: [(&str, u32, u32); 12] = [
+    ("_AdditionalLightsPosition", 256, 32),
+    ("_AdditionalLightsColor", 256, 32),
+    ("_AdditionalLightsAttenuation", 256, 32),
+    ("_AdditionalLightsSpotDir", 256, 32),
+    ("_AdditionalLightsOcclusionProbes", 256, 32),
+    ("_AdditionalLightsLayerMasks", 256, 32),
+    ("_AdditionalShadowParams", 256, 32),
+    ("hlslcc_mtx4x4_AdditionalLightsWorldToShadow", 1024, 128),
+    ("hlslcc_mtx4x4_AdditionalLightsWorldToLights", 1024, 128),
+    ("_AdditionalLightsCookieAtlasUVRects", 256, 32),
+    ("_AdditionalLightsLightTypes", 256, 32),
+    ("_AdditionalLightsCookieEnableBits", 8, 1),
+];
+
+/// A stage's URP light arrays declared for 32 lights instead of 256 (pmu, 2026-11-09), in a program
+/// over the Mali's uniform vectors (a macOS build's URP programs with per-pixel or per-vertex
+/// additional lights: 4 - 10 times them, which no Mali links). Exact on Unity's Android player:
+/// URP's C# there uploads and indexes 16 or 32 lights (UniversalRenderPipeline.maxVisibleAdditionalLights
+/// on OpenGL ES 3, the same count for its shadow slices: AdditionalLightsShadowCasterPass), so no
+/// element past 32 is ever read. -> (text, arrays changed)
+fn urp_mobile_lights(src: &str) -> (String, usize) {
+    let mut n = 0;
+    let s = UNIFORM_DECL.replace_all(src, |c: &regex::Captures| {
+        let whole = c[0].to_string();
+        let Some(&(_, desk, mobile)) = URP_LIGHT_ARRAYS.iter().find(|a| a.0 == &c[2]) else {
+            return whole;
+        };
+        if c.get(3).map(|x| x.as_str()) != Some(&desk.to_string()) {
+            return whole;
+        }
+        n += 1;
+        whole.replacen(&format!("[{desk}]"), &format!("[{mobile}]"), 1)
+    });
+    (s.into_owned(), n)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn program(
     v: &Stage,
@@ -2068,6 +2756,18 @@ fn program(
     texts[0].1 = vs;
     if flips > 0 {
         notes.push(format!("VERTEX uv-origin {flips}"));
+    }
+    if texts
+        .iter()
+        .any(|(_, t)| uniform_vectors(t) > MAX_UNIFORM_VECTORS)
+    {
+        for (st, t) in texts.iter_mut() {
+            let (s, n) = urp_mobile_lights(t);
+            *t = s;
+            if n > 0 {
+                notes.push(format!("{st} urp-mobile-lights {n}"));
+            }
+        }
     }
     if unity >= (2019, 1) {
         let mut units: BTreeMap<String, usize> = BTreeMap::new();
@@ -2113,8 +2813,8 @@ pub fn translate_program(
     unity: (u64, u64),
     notes: &mut Vec<String>,
 ) -> R<(String, i64)> {
-    let (mut v, vb) = translate_stage(vs_src)?;
-    let (f, fb) = translate_stage(fs_src)?;
+    let (mut v, vb) = translate_stage(vs_src, false)?;
+    let (f, fb) = translate_stage(fs_src, false)?;
     if v.stage != Some("VERTEX") || f.stage != Some("FRAGMENT") {
         return uns("MSL: expected a vertex and a fragment stage");
     }

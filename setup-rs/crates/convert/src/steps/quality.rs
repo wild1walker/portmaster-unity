@@ -1022,6 +1022,18 @@ fn decide(job: &Job, s: &mut Scan, c: &Json, plan: &mut Plan) -> Edits {
     if s.srp && !s.mbs.is_empty() {
         let post = cfg_strs(c, "post");
         s.post_ok = c.get("post").is_some_and(Json::truthy);
+        // (an IL2CPP build's code is native: whether it drives volumes cannot be read from its
+        // metadata, a plain call to Volume or a component leaves no trace there; it keeps them)
+        if s.post_ok
+            && !job.src.join("Managed").is_dir()
+            && androiddata::il2cppmeta::files_of(&job.src).is_some()
+        {
+            s.post_ok = false;
+            plan.kept.push(
+                "post effects: an IL2CPP build (its code is native: whether it drives volumes cannot be read)"
+                    .into(),
+            );
+        }
         if s.post_ok {
             let drive = drives_volumes(&job.src.join("Managed"), &s.script_classes);
             if !drive.is_empty() {
@@ -1510,7 +1522,11 @@ fn edit(
                     continue;
                 }
                 let g = gen.get_or_insert_with(|| {
-                    monotree::Generator::new(&job.src.join("Managed"), s.unity)
+                    let (g, why) = monotree::Generator::of_data(&job.src, s.unity);
+                    if let Some(why) = why {
+                        plan.kept.push(why);
+                    }
+                    g
                 });
                 let (mut tree, node): (Value, TypeTree) =
                     match monotree::read(&f.sf, pid, g, (&asm, &full)) {

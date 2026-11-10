@@ -725,6 +725,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertNotIn('tools/asmpatch/build.sh', readme)           # (the port does not use it)
             self.assertNotIn('\u2014', readme)
             self.assertIn('| Select + Start | Quit |', P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertIn("or GOG's Linux installer `.sh`", P._read(os.path.join(out, 'mygame', 'README.md')))
             gi = P._read(os.path.join(out, 'mygame', 'gameinfo.xml'))
             self.assertIn('<path>./My Game.sh</path>', gi)
             self.assertIn('<image>./mygame/screenshot.png</image>', gi)
@@ -835,6 +836,8 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertIn('Windows-only class libraries', readme)
             self.assertIn('the setup takes the Unix ones from the same donors', P._read(os.path.join(out, 'mygame', 'README.md')))
             self.assertNotIn('Wi-Fi on', P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertIn('Copy the game (its folder, or the archive it came in)', P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertNotIn("GOG's Linux installer", P._read(os.path.join(out, 'mygame', 'README.md')))
             self.assertIn("Unity's Android player comes with the port",
                           P._read(os.path.join(out, 'mygame', 'gamedata', 'PUT_GAME_FILES_HERE.txt')))
             pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))

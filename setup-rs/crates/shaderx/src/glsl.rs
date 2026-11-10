@@ -1222,6 +1222,159 @@ pub fn kernel_to_es(
     Ok(out)
 }
 
+/// The line a split kernel carries after its layout, with the size of the work group it stands for
+/// ("// pm_work_group 256 1 1"): Unity takes a kernel's group size from the linked program
+/// (GL_COMPUTE_WORK_GROUP_SIZE), and ua_host answers that query with this size (glhooks.c), so
+/// `GetKernelThreadGroupSizes` gives the game the size its dispatches are made for.
+pub const SPLIT_MARK: &str = "// pm_work_group ";
+
+/// The invocations a GLES 3.1 driver must run in one work group (GL_MAX_COMPUTE_WORK_GROUP_
+/// INVOCATIONS' minimum; the RG34XX-SP's Mali-G31 r20p0 allows no more).
+pub const ES31_MIN_INVOCATIONS: u32 = 128;
+
+static SPLIT: LazyLock<[Regex; 4]> = LazyLock::new(|| {
+    [
+        re(
+            r"layout\s*\(\s*local_size_x\s*=\s*(\d+)\s*,\s*local_size_y\s*=\s*(\d+)\s*,\s*local_size_z\s*=\s*(\d+)\s*\)\s*in\s*;",
+        ),
+        re(r"\bvoid\s+main\s*\(\s*\)"),
+        re(r"\b(shared|barrier|groupMemoryBarrier|memoryBarrierShared)\b"),
+        re(
+            r"\b(gl_LocalInvocationIndex|gl_LocalInvocationID|gl_GlobalInvocationID|gl_WorkGroupSize)\b",
+        ),
+    ]
+});
+
+/// A kernel whose work group has more than `max` invocations, run as work groups of at most
+/// `max` (ES31_MIN_INVOCATIONS: what every GLES 3.1 driver runs): each invocation runs the
+/// kernel's main for k of the original group's invocations in turn, as `pm_main` with the
+/// built-ins of the invocation it stands for (gl_LocalInvocationID, gl_LocalInvocationIndex,
+/// gl_GlobalInvocationID, gl_WorkGroupSize; gl_WorkGroupID and gl_NumWorkGroups are the same).
+/// The dispatch is unchanged: the same work groups, the same invocations in each, run one after
+/// another instead of side by side, which is one of the orders the original allows: invocations of
+/// a group that share nothing (no shared memory, no barrier) may run in any order. Ok(None): the
+/// group fits; Ok(Some((text, new size, k))); Err(why) for a kernel that shares memory or
+/// synchronises its group (the invocations must run side by side) or a text this does not know.
+pub fn split_work_group(src: &str, max: u32) -> Result<Option<(String, [u32; 3], u32)>, String> {
+    let [layout, main, sync, builtin] = &*SPLIT;
+    let lay: Vec<_> = layout.captures_iter(src).collect();
+    let [m] = &lay[..] else {
+        return Err(format!("{} local_size layouts", lay.len()));
+    };
+    let mut size = [0u32; 3];
+    for (i, s) in size.iter_mut().enumerate() {
+        *s = m[i + 1]
+            .parse()
+            .map_err(|_| format!("local size {:?}", &m[i + 1]))?;
+    }
+    let total = size.iter().map(|&n| n as u64).product::<u64>();
+    if total == 0 {
+        return Err("a work group of 0 invocations".into());
+    }
+    if total <= max as u64 {
+        return Ok(None);
+    }
+    let code = code_lines(&strip_comments(src));
+    if let Some(w) = sync.find(&code) {
+        return Err(format!(
+            "a work group of {total} invocations that uses {:?} (they run side by side)",
+            w.as_str()
+        ));
+    }
+    if code.contains("pm_main") || code.contains("pm_LocalInvocationID") {
+        return Err("pm_main or pm_LocalInvocationID is already declared".into());
+    }
+    let mains: Vec<_> = main.find_iter(src).collect();
+    let [mm] = &mains[..] else {
+        return Err(format!("{} main functions", mains.len()));
+    };
+    // the fewest invocations run in turn: (kx, ky, kz) dividing the size, the new group within max
+    let divisors = |n: u32| (1..=n).filter(move |d| n % d == 0);
+    let mut best: Option<([u32; 3], u64)> = None;
+    for kx in divisors(size[0]) {
+        for ky in divisors(size[1]) {
+            for kz in divisors(size[2]) {
+                let k = [kx, ky, kz];
+                let n = (0..3).map(|i| (size[i] / k[i]) as u64).product::<u64>();
+                let turns = kx as u64 * ky as u64 * kz as u64;
+                if n <= max as u64 && best.is_none_or(|(_, t)| turns < t) {
+                    best = Some((k, turns));
+                }
+            }
+        }
+    }
+    let (k, turns) = best.expect("1x1x1 invocations fit any max");
+    let new = [size[0] / k[0], size[1] / k[1], size[2] / k[2]];
+    let [x, y, z] = size;
+    let (lay0, lay1) = (m.get(0).unwrap().start(), m.get(0).unwrap().end());
+    if mm.start() < lay1 {
+        return Err("main comes before the local_size layout".into());
+    }
+    let mut out = String::with_capacity(src.len() + 512);
+    out.push_str(&src[..lay0]);
+    out.push_str(&format!(
+        "layout(local_size_x = {}, local_size_y = {}, local_size_z = {}) in;\n{SPLIT_MARK}{x} {y} {z}\nuvec3 pm_LocalInvocationID;",
+        new[0], new[1], new[2]
+    ));
+    // (main is renamed; what follows the layout reads the built-ins of the invocation it runs for)
+    let rest = format!(
+        "{}void pm_main(){}",
+        &src[lay1..mm.start()],
+        &src[mm.end()..]
+    );
+    out.push_str(&builtin.replace_all(&rest, |c: &Captures| match &c[1] {
+        "gl_LocalInvocationID" => "pm_LocalInvocationID".to_string(),
+        "gl_LocalInvocationIndex" => format!(
+            "(pm_LocalInvocationID.z * {}u + pm_LocalInvocationID.y * {x}u + pm_LocalInvocationID.x)",
+            x * y
+        ),
+        "gl_GlobalInvocationID" => {
+            format!("(gl_WorkGroupID * uvec3({x}u, {y}u, {z}u) + pm_LocalInvocationID)")
+        }
+        _ => format!("uvec3({x}u, {y}u, {z}u)"),
+    }));
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("void main()\n{\n");
+    let names = ["pm_x", "pm_y", "pm_z"];
+    let mut depth = 1;
+    for i in (0..3).rev() {
+        if k[i] > 1 {
+            out.push_str(&format!(
+                "{:w$}for (uint {n} = 0u; {n} < {}u; {n}++) {{\n",
+                "",
+                k[i],
+                w = depth * 4,
+                n = names[i]
+            ));
+            depth += 1;
+        }
+    }
+    let part = |i: usize| {
+        if k[i] > 1 {
+            format!("{} * {}u", names[i], new[i])
+        } else {
+            "0u".to_string()
+        }
+    };
+    out.push_str(&format!(
+        "{:w$}pm_LocalInvocationID = gl_LocalInvocationID + uvec3({}, {}, {});\n{:w$}pm_main();\n",
+        "",
+        part(0),
+        part(1),
+        part(2),
+        "",
+        w = depth * 4
+    ));
+    while depth > 1 {
+        depth -= 1;
+        out.push_str(&format!("{:w$}}}\n", "", w = depth * 4));
+    }
+    out.push_str("}\n");
+    Ok(Some((out, new, turns as u32)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1435,5 +1588,64 @@ mod tests {
         let dv = program_to_es(&gl, "highp", on, &mut notes, Es::Es300).unwrap();
         assert_eq!(notes, vec!["VERTEX dead-varyings 2".to_string()]);
         assert_eq!(dv, dead_varyings(&plain).0);
+    }
+
+    const KERNEL: &str = "#version 310 es\nlayout(std430, binding = 0) buffer b {\n\tuint b_buf[];\n};\nlayout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;\nvoid main()\n{\n    if (gl_GlobalInvocationID.x >= 1000u) { return; }\n    b_buf[gl_GlobalInvocationID.x] = gl_LocalInvocationIndex + gl_WorkGroupSize.x;\n    return;\n}\n";
+
+    #[test]
+    fn split_work_group_1024() {
+        let (out, size, k) = split_work_group(KERNEL, ES31_MIN_INVOCATIONS)
+            .unwrap()
+            .unwrap();
+        assert_eq!((size, k), ([128, 1, 1], 8));
+        assert_eq!(out, "#version 310 es\nlayout(std430, binding = 0) buffer b {\n\tuint b_buf[];\n};\nlayout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;\n// pm_work_group 1024 1 1\nuvec3 pm_LocalInvocationID;\nvoid pm_main()\n{\n    if ((gl_WorkGroupID * uvec3(1024u, 1u, 1u) + pm_LocalInvocationID).x >= 1000u) { return; }\n    b_buf[(gl_WorkGroupID * uvec3(1024u, 1u, 1u) + pm_LocalInvocationID).x] = (pm_LocalInvocationID.z * 1024u + pm_LocalInvocationID.y * 1024u + pm_LocalInvocationID.x) + uvec3(1024u, 1u, 1u).x;\n    return;\n}\nvoid main()\n{\n    for (uint pm_x = 0u; pm_x < 8u; pm_x++) {\n        pm_LocalInvocationID = gl_LocalInvocationID + uvec3(pm_x * 128u, 0u, 0u);\n        pm_main();\n    }\n}\n");
+    }
+
+    #[test]
+    fn split_work_group_cases() {
+        // fits: unchanged
+        let small = KERNEL.replace("local_size_x = 1024", "local_size_x = 128");
+        assert_eq!(split_work_group(&small, 128), Ok(None));
+        // 16 x 16: the fewest turns (2), the first dimension that gives them
+        let sq = KERNEL.replace(
+            "local_size_x = 1024, local_size_y = 1",
+            "local_size_x = 16, local_size_y = 16",
+        );
+        let (out, size, k) = split_work_group(&sq, 128).unwrap().unwrap();
+        assert_eq!((size, k), ([16, 8, 1], 2));
+        assert!(out.contains("    for (uint pm_y = 0u; pm_y < 2u; pm_y++) {\n        pm_LocalInvocationID = gl_LocalInvocationID + uvec3(0u, pm_y * 8u, 0u);\n"));
+        assert!(out.contains("(pm_LocalInvocationID.z * 256u + pm_LocalInvocationID.y * 16u + pm_LocalInvocationID.x)"));
+        assert!(out.contains("in;\n// pm_work_group 16 16 1\nuvec3 pm_LocalInvocationID;"));
+        // 4 x 4 x 64 = 1024: 8 turns over two dimensions
+        let cube = KERNEL.replace(
+            "local_size_x = 1024, local_size_y = 1, local_size_z = 1",
+            "local_size_x = 4, local_size_y = 4, local_size_z = 64",
+        );
+        let (out, size, k) = split_work_group(&cube, 128).unwrap().unwrap();
+        assert_eq!((size[0] * size[1] * size[2], k), (128, 8));
+        assert!(
+            out.ends_with("pm_main();\n        }\n    }\n}\n")
+                || out.ends_with("pm_main();\n    }\n}\n")
+        );
+        // a prime size: one invocation per group, each running all of them
+        let p = KERNEL.replace("local_size_x = 1024", "local_size_x = 257");
+        assert_eq!(split_work_group(&p, 128).unwrap().unwrap().1, [1, 1, 1]);
+        // shared memory or a barrier: the invocations must run side by side
+        let sh = KERNEL.replace("void main()", "shared uint s[1024];\nvoid main()");
+        assert!(split_work_group(&sh, 128)
+            .unwrap_err()
+            .contains("\"shared\""));
+        let ba = KERNEL.replace("    return;\n}", "    barrier();\n    return;\n}");
+        assert!(split_work_group(&ba, 128)
+            .unwrap_err()
+            .contains("\"barrier\""));
+        // (in a comment: not code)
+        let cm = KERNEL.replace("void main()", "// shared barrier()\nvoid main()");
+        assert!(split_work_group(&cm, 128).unwrap().is_some());
+        assert!(split_work_group(
+            &KERNEL.replace("void main()", "void pm_main();\nvoid main()"),
+            128
+        )
+        .is_err());
     }
 }

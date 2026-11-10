@@ -67,7 +67,8 @@ static char *slurp(const char *path)
     return s;
 }
 
-static char g_names[10000][160];
+#define MAX_PROGRAMS 100000                        // <nnnn> numbers (a Unity 6 game exports 12,000+)
+static char g_names[MAX_PROGRAMS][160];
 static int g_binary;                               // -b: report program binary sizes
 static const char *g_bindir;                       // -B <dir>: and write the binaries there
 static const char *g_outdir;                       // -w <dir>: each program's picture (32-bit floats)
@@ -80,7 +81,7 @@ static void load_index(const char *dir)
     for (char *line = strtok(s, "\n"); line; line = strtok(NULL, "\n")) {
         int n = atoi(line);
         char *t = strchr(line, '\t');
-        if (n >= 0 && n < 10000 && t) {
+        if (n >= 0 && n < MAX_PROGRAMS && t) {
             snprintf(g_names[n], sizeof g_names[n], "%s", t + 1);
             for (char *c = g_names[n]; *c; c++) if (*c == '\t') *c = ' ';
         }
@@ -449,10 +450,10 @@ int main(int argc, char **argv)
     load_index(dir);
     if (!egl_up(64, 64)) return 1;
     if (!timing) {
-        int first = npos > 0 ? pos[0] : 0, count = npos > 1 ? pos[1] : 10000;
+        int first = npos > 0 ? pos[0] : 0, count = npos > 1 ? pos[1] : MAX_PROGRAMS;
         int ok = 0, bad = 0, cok = 0, cbad = 0;
         double t0 = now();
-        for (int n = first; n < first + count && n < 10000; n++) {
+        for (int n = first; n < first + count && n < MAX_PROGRAMS; n++) {
             char p[1024], q[1024];
             snprintf(p, sizeof p, "%s/%04d.vert", dir, n);
             snprintf(q, sizeof q, "%s/%04d.comp", dir, n);

@@ -43,7 +43,8 @@ measurements and tools behind each line are in [profiling.md](profiling.md), [ru
   art keeps more than a texel a pixel. Hollow Knight: 830 -> 670 MB, GPU pages 300 -> 142 MB, no more
   swapping, the same frame rate, the picture the same to the eye. Rehearse it with
   `REHEARSE_MEMINFO` (a 1 GB `/proc/meminfo` for the setup container).
-- **Sound in memory**: the audio step's `pcm_budget_mb` decides how much a scene holds decoded.
+- **Sound in memory**: the audio step's `pcm_budget_mb` decides how much a scene holds decoded;
+  `lowmem_pcm_budget_mb` takes its place on 1 GB handhelds (`ram_mb`), as `lowmem_scale` does for textures.
 
 ## 3. Hitches
 

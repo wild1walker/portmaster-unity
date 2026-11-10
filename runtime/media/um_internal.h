@@ -78,6 +78,9 @@ struct um_dec {
     int  (*decode)(um_dec *d, const uint8_t *data, size_t size, int64_t pts_us, uint32_t flags, um_emit *emit);
     void (*flush)(um_dec *d);
     void (*destroy)(um_dec *d);
+    /* optional: the client keeps releasing this decoder's pictures unshown because they come too late
+       (um_codec.c counts them); a backend that can trade picture quality for speed does so (once) */
+    void (*behind)(um_dec *d);
 };
 
 typedef struct {
@@ -93,7 +96,7 @@ um_dec *um_vorbis_create(const char *mime);
 um_dec *um_opus_create(const char *mime);
 um_dec *um_h264_create(const char *mime);
 um_dec *um_ffmpeg_create(const char *mime);
-um_dec *um_pmhw_create(const char *mime);            /* libpmhwdec.so.1 when the port ships it (um_pmhw.c) */
+um_dec *um_pmhwdec_create(const char *mime);            /* libpmhwdec.so.1 when the port ships it (um_pmhwdec.c) */
 um_dec *um_silent_create(const char *mime);          /* AAC / MP3 without a decoder: silence */
 int     um_ffmpeg_available(void);
 

@@ -36,26 +36,26 @@ if [ "$(uname -m)" != aarch64 ]; then
 fi
 
 # Rockchip handhelds on vendor kernels (dArkOS, ArkOS): the video decoder's nodes are root-only while
-# ports run as a user, and the port's libpmhwdec (pmhw/) needs them for the videos. They are opened to
+# ports run as a user, and the port's libpmhwdec (pmhwdec/) needs them for the videos. They are opened to
 # the video group for the game and put back exactly as they were when it ends (Knifethrower's fix;
 # PortMaster's Moonlight opens the same nodes). Nothing changes where they are usable already.
-pmhw_nodes=()
-if [ -d "$GAMEDIR/pmhw" ]; then
+pmhwdec_nodes=()
+if [ -d "$GAMEDIR/pmhwdec" ]; then
   for n in /dev/vpu_service /dev/hevc_service; do
     { [ -e "$n" ] && ! { [ -r "$n" ] && [ -w "$n" ]; }; } || continue
     o=$(stat -c '%u:%g:%a' "$n") || continue
-    $ESUDO chgrp video "$n" && $ESUDO chmod 660 "$n" && pmhw_nodes+=("$n:$o") && echo "$n: opened to the video group (was $o)"
+    $ESUDO chgrp video "$n" && $ESUDO chmod 660 "$n" && pmhwdec_nodes+=("$n:$o") && echo "$n: opened to the video group (was $o)"
   done
 fi
-pmhw_restore() {
+pmhwdec_restore() {
   local e n o
-  for e in "${pmhw_nodes[@]}"; do
+  for e in "${pmhwdec_nodes[@]}"; do
     n=${e%%:*}; o=${e#*:}
     $ESUDO chown "${o%:*}" "$n"; $ESUDO chmod "${o##*:}" "$n"; echo "$n: put back ($o)"
   done
-  pmhw_nodes=()
+  pmhwdec_nodes=()
 }
-trap pmhw_restore EXIT
+trap 'pmhwdec_restore; pm_message_end' EXIT   # funcs.txt set pm_message_end as the EXIT trap: a second trap replaces it
 
 # ---- first launch: install the game from your copy (PortMaster's patcher shows the progress)
 if [ ! -f "$GAMEDIR/@@READY@@" ]; then
@@ -117,7 +117,7 @@ if [ "${ANALOG_STICKS:-2}" = 0 ]; then
   case "${UA_DPAD_STICK:-}" in auto|auto,both) export UA_DPAD_STICK=${UA_DPAD_STICK/auto/1} ;; esac
 fi
 chmod +x "$GAMEDIR/$UA_HOST"
-[ -f "$GAMEDIR/pmhw/pmhw-cedard" ] && chmod +x "$GAMEDIR/pmhw/pmhw-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
+[ -f "$GAMEDIR/pmhwdec/pmhwdec-cedard" ] && chmod +x "$GAMEDIR/pmhwdec/pmhwdec-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
 
 $GPTOKEYB2 "$UA_HOST" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/$UA_HOST"

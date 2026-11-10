@@ -60,7 +60,9 @@
 //                     and height, DisplayMetrics, the View, pointer mode and screenshots all have
 //                     it): at the panel's aspect, even, a quarter of the panel's size at least; a
 //                     size of another aspect is made the largest one of the panel's aspect within
-//                     it. Off by default (the picture is softer: a visual setting).
+//                     it. A list, "540x360 440x440", gives each panel shape its own: the first size
+//                     of the panel's shape, else the first. Off by default (the picture is softer: a
+//                     visual setting).
 //   UA_RENDER_RAM=<MB> only on a device with at most that much memory (MemTotal), e.g. 1024: a
 //                     port's default for 1 GB handhelds that leaves bigger ones at the panel's size
 //   UA_RENDER_PIXELS=<n>  at most about n pixels, on every device (also where UA_RENDER_RAM leaves
@@ -222,10 +224,24 @@ int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, 
     double s = 1;
     int sw = 0, sh = 0, by_size = 0;
     if (size && *size) {
-        if (sscanf(size, "%dx%d", &sw, &sh) != 2 || sw <= 0 || sh <= 0) {
-            fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: <width>x<height>; the panel's size\n", size);
-            return 0;
+        // "<w>x<h> <w>x<h> ...": the first size of the panel's shape (within 1 %), else the first,
+        // fitted into the panel at its aspect (540x360 on a 720x720 panel is 360x360: "540x360 440x440")
+        int fw = 0, fh = 0, n = 0;
+        for (const char *p = size; *p; ) {
+            int a, b, len = 0;
+            while (*p == ' ' || *p == ',') p++;
+            if (!*p) break;
+            if (sscanf(p, "%dx%d%n", &a, &b, &len) != 2 || a <= 0 || b <= 0 || (p[len] && p[len] != ' ' && p[len] != ',')) {
+                fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: <width>x<height>, one for each panel shape; the panel's size\n", size);
+                return 0;
+            }
+            if (!n++) { fw = a; fh = b; }
+            double d = (double)a * ph - (double)b * pw;
+            if (!sw && (d < 0 ? -d : d) <= 0.01 * (double)b * pw) { sw = a; sh = b; }
+            p += len;
         }
+        if (!n) { fprintf(stderr, "[fbdev] UA_RENDER_SIZE=%s: <width>x<height>; the panel's size\n", size); return 0; }
+        if (!sw) { sw = fw; sh = fh; }
         s = (double)sw / pw < (double)sh / ph ? (double)sw / pw : (double)sh / ph;
         by_size = 1;
     } else if (scale && *scale) {

@@ -189,11 +189,15 @@ int unityhooks_gfx_jobs(void)
 // --- UA_PRESENT_SYNC
 // GraphicsDeviceSettings_Set_Custom_PropWaitForPresentSyncPoint(GfxDeviceWaitForPresentSyncPoint): stores the
 // value in GetGfxDevice() at 0x23a0; GfxDeviceClient::BeginFrame calls WaitForPendingPresent when it is 0,
-// EndFrame when it is 1 (both read in 6000.0.61f1 armeabi-v7a; their rows tie the setter to that code)
+// EndFrame when it is 1 (both read in 6000.0.61f1 armeabi-v7a; their rows tie the setter to that code). The
+// arm64-v8a IL2CPP player of 6000.0.61f1 the same at 0x25d8 (read 2026-11-09, Hollow Knight's 64-bit build)
 static const struct row g_psync[] = {
     { "6000.0.61f1 armeabi-v7a", "GraphicsDeviceSettings.waitForPresentSyncPoint (set)", 0x31ebd6, 0x10, ISA_THUMB, 0x973b56982359eb07ull },
     { "6000.0.61f1 armeabi-v7a", "GfxDeviceClient::BeginFrame", 0x62f468, 0x70, ISA_THUMB, 0x0f58bedb8c26c3acull },
     { "6000.0.61f1 armeabi-v7a", "GfxDeviceClient::EndFrame", 0x62f554, 0x6c, ISA_THUMB, 0xe6b3b700099f6c08ull },
+    { "6000.0.61f1 arm64-v8a", "GraphicsDeviceSettings.waitForPresentSyncPoint (set)", 0x6a9398, 0x18, ISA_A64, 0x466b859985ec5841ull },
+    { "6000.0.61f1 arm64-v8a", "GfxDeviceClient::BeginFrame", 0xab6408, 0xac, ISA_A64, 0x463888fc7b8a3132ull },
+    { "6000.0.61f1 arm64-v8a", "GfxDeviceClient::EndFrame", 0xab6564, 0x9c, ISA_A64, 0x14176be35341ce5full },
 };
 static void (*g_psync_set)(int);
 static int g_psync_value = -1;

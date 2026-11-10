@@ -707,6 +707,50 @@ the same (54 - 58 MB Knulli, 68 - 77 MB muOS); the same four exception lines in 
 cache alone gave +0.8 (one order). Both are on by default where libmono matches the checked 2017.4
 armeabi-v7a build.
 
+With all of the port's patches and that host (A B order only; the bosses' attack patterns vary from run to
+run), fps, p99, frames over 50 ms: the Keep's boss Knulli 48.1 (47.3 ms, 16), muOS 45.6 (47.5 ms, 12); the
+Forge's room Knulli 46.2 (32.4 ms, 1), muOS 45.9 (31.8 ms, 1); the High Dragun Knulli 47.0 (65.6 ms, 39), muOS
+53.2 (56.6 ms, 30); Bullet Hell's room Knulli 33.7 - 35.0, muOS 34.5 - 34.7. Where Bullet Hell's room spends
+UnityMain's ~29 ms (muOS, every Update/LateUpdate and the camera chain's calls timed, instrumented so high):
+the game's physics (`PhysicsEngine.LateUpdate`) 5.9 ms with its body sort 1.3, the camera chain 5.4 (the core
+sprites' `Camera.Render` 3.3, the background's 0.7, the unoccluded layer's 0.4, the occlusion map 0.3, the
+lighting buffer 0.2, blits under 0.1 each), the HUD 1.5 (two managers), 309 sprite animators 1.2, the player 1.8,
+the enemies' AI 1.0 + 0.7, the HUD's 246 controls 1.3, pit particles 0.8. No garbage collection in the fight.
+
+The game's physics there, timed loop by loop (`PhysicsEngine.LateUpdate`, muOS): 3.9 ms a frame, of it the first
+walk over the bodies 0.95 ms, the movement walk 1.77, the ghost-exception walk 0.27; 1,838 bodies registered,
+about 205 active and enabled, about 26 moving. The port's `physics-skip` keeps one bit per list position, set
+exactly when the body there is active and enabled (Register, Deregister, the sort and the body's
+OnEnable/OnDisable keep it), and three of the walks step from one set bit to the next; their own tests stay,
+so a body is processed exactly when it was before and in the same order. Its check build tests every step
+against the bodies themselves: Bullet Hell on both handhelds and the Keep's boss, 15.9 million steps over
+100 million skipped positions, 0 wrong. (A frame-by-frame rig comparison does not settle a change like this
+on a busy floor: two runs of the same build in the emulator part within ~100 frames there, the floor's
+asynchronous loads finishing at frames that follow the emulator's speed, even with a fixed game time.)
+Then `half-rate`, a change too small to see: the minimap's camera renders every other frame while the map is
+the corner minimap (its texture keeps the last one; every frame while the map is open), and the pit
+particles are checked against the floor every other frame. A B and B A, Bullet Hell's room:
+
+| | Knulli fps | muOS fps |
+|---|---|---|
+| the port | 34.01, 34.97 | 35.60, 35.27 |
+| + `physics-skip` | 36.14, 36.09 | 36.26, 36.41 |
+| + `half-rate` | 36.20, 35.83 (against 35.57, 35.40) | 38.87, 36.99 (against 36.31, 36.56) |
+
+Then `hud-half` (2026-11-10), a change too small to see: dfGUI's managers draw a dirty HUD on even frames only
+(a change made on an odd frame shows one frame later; the dirty flag waits for the next even frame, so nothing is
+lost; nothing in the game reads the HUD's mesh). The Knulli, Bullet Hell's room, A B and B A: 37.00 -> 40.44 fps
+and 35.91 -> 39.81, frames over 33 ms 122 -> 78 and 166 -> 76; muOS 37.00 -> 38.03 and 38.26 -> 38.53. Screenshots of
+both builds at the same moment of the route show the same HUD.
+
+Later (2026-11-09) `UA_MONO_TLS` keeps the thread's JIT data and domain in ua_host's own thread-local
+variables as well, filled through libmono's `pthread_setspecific` (so no call per icall wrapper at all). At
+the port's shipped settings with all its patches, A B and B A: the first fight Knulli 59.29 / 59.34 -> 59.43 /
+59.44 fps, muOS 62.90 / 62.86 -> 64.01 / 63.27; Bullet Hell's busiest room (heavy-fight bench) Knulli 34.80 /
+33.71 -> 34.81 / 34.99. Two things that did not pay there: Mono's `abcrem` and `sched` optimizations set
+before the JIT starts (`mono_set_defaults`): Bullet Hell 35.96 -> 33.83 fps; and a sort walk over only the
+bodies registered since the last one (Gungeon's `SortRigidbodies`): 34.71 / 34.71 against 34.71 / 34.54.
+
 The GL thread (`UA_GL_REC=thread`, the render thread's GL calls made on a thread of the host's) in the
 same fight, the port's settings otherwise: Knulli 43.51 / 43.33 fps against 44.30 / 44.03 with the frame
 recorder (`UA_GL_REC=2`, whose frame graph sinks this game's clear-only passes), lowest available memory
@@ -816,6 +860,108 @@ muOS gains more (+2.5 fps) than the Knulli (+0.5 - 0.6). In any game with dfGUI 
 Unity 4 era) count the bodies with `Resources.FindObjectsOfTypeAll(typeof(Rigidbody))`: hidden ones never show in
 `FindObjectsOfType` or in the hierarchy.
 
+### How to bench a game's heaviest scenes (Enter the Gungeon, 2026-11-09)
+
+Every fight number above is the Keep's first room: the first floor, a handful of enemies. A game's heaviest
+scenes are later floors and bosses, which a scripted walk from the title cannot reach in a repeatable way. The
+bench for them is a test build (never shipped) that goes there by the game's own means and puts the player at the
+door; the port, its settings and the game's rules are those the player gets.
+
+- **The build.** The setup's own APK (a `tools/port/rehearse.sh` run of the current port: the setup's asmpatch and
+  assembly patches, the textures as it converts them) with two test patches on its Assembly-CSharp: the floor seed
+  fixed and the player taking no damage (so a fight lasts the measurement), and a small helper written in C#,
+  compiled against the game's own assemblies and copied in with Mono.Cecil (type, fields, method bodies; its
+  references to the game's types bound to the copy's definitions), called from two places in the game's code.
+  Writing the helper in C# instead of emitting IL keeps it readable and lets it use the game's API as the game does.
+- **Getting there.** Gungeon's title has Quick Start; the helper replaces the first floor it asks for with the
+  bench's (`GameManager.InjectedLevelName`, or `LoadCustomFlowForDebug` for a Boss Rush floor: the High Dragun's is
+  one load away), then, 180 frames after the floor shows, puts the player on the floor just inside the chosen room's
+  first door (the boss room, or the normal room with the most enemies: the asleep ones it holds and the waves it has
+  left, read from the room's own lists, since the room's prototype is let go once the floor is built). The input
+  script first walks the player on in, so the room starts as in play: enemies wake, doors seal, a boss's intro runs
+  (a warp into the middle of the High Dragun's room never crossed its trigger zone, and the fight never began).
+- **The measurement.** Fire held, reload every 2 s, the stick round a small square; the [fps] windows after the
+  warp, the first 20 s left out (the walk in, a boss's intro: the Dragun's lasts about 15 s), then 35 s; A B and B A
+  as for every other number here; every run from 50 C. A setting with state across launches is reset between runs
+  (`UA_JIT_WARM=2`'s list names methods by token: a list from a run of another assembly crashed the next one).
+- **The data.** A test folder converted by an older setup is not the port: with Gungeon's readable textures left
+  uncompressed (before the setup converted them) Bullet Hell ran out of memory on muOS (47 MB available at the
+  floor's load); with the current setup's OBB the lowest was 228 MB.
+
+The four scenes, the port's settings (spin 400, the program cache, the JIT warm-up, the present thread; frame
+recorder on the Knulli), fps over the 35 s, p99 and frames over 50 ms:
+
+| scene | Knulli (1.5 GHz) | muOS (1.8 GHz) |
+|---|---|---|
+| the Keep's boss at the fixed seed (Gatling Gull) | 49.9, 42.9 ms, 12 | 47.7, 44.8 ms, 13 |
+| the Forge's busiest room (Forge_Joe_Cool_Room_011) | 40.7, 39.2 ms, 3 | 41.6, 34.8 ms, 1 |
+| the High Dragun (Boss Rush, the Forge) | 47.3, 65.6 ms, 35 | 48.6, 65.6 ms, 35 |
+| Bullet Hell's busiest room (Hell_Hath_No_Joery_007, 7 enemies and waves) | 24.2 (profiled run) | 24.8, 26.0 |
+
+Bullet Hell's room is the worst by far: UnityMain at 39 ms a frame on muOS, and 2.2 ms of it in one internal call,
+`Array.GetLength`, from the goop managers. Each `DeadlyDeadlyGoopManager` walks the chunk flags of the whole floor
+every frame (one chunk per 5 x 5 cells: about 4,500 on Bullet Hell's floor) with two `GetLength` calls a chunk in
+its loop conditions and index sums; on Mono 2.6 each is a wrapper that saves the frame for the runtime around
+libmono's bounds lookup. Two exact patches of the port (portmaster-gungeon `patch/Program.cs`): `goop-dims`, every
+`GetLength` in the manager through a two-entry cache of rank-2 arrays and their lengths keyed by the array object
+(an array's lengths never change); `goop-scan`, the walk left out while no chunk flag can be set (a field of the
+manager turns true wherever a flag can turn true and whenever the walk meets a set flag; the walk starts by
+turning it false; with no flag set the walk changes nothing). muOS, Bullet Hell's room, A B and B A:
+
+| | muOS fps | frames over 50 ms |
+|---|---|---|
+| the port | 24.83, 26.00 | 67, 40 |
+| + `goop-dims` | 32.77, 30.50; 32.63, 31.29 | 3, 7; 9, 9 |
+| + `goop-scan` | 35.20, 33.90 | 5, 3 |
+
+(each pair one A B and one B A against the row above). The Knulli, the port against both: 22.94 -> 34.07 fps,
+frames over 50 ms 128 -> 5; B A 34.06 against 23.43, 7 against 103.
+
+Then the lists. `List<T>.Contains`, `IndexOf` and `Remove` compare through `EqualityComparer<T>.Default`, which
+for a `UnityEngine.Object` type calls `Object.Equals(object)` per element (a cast, Unity's `==` on the argument,
+then `CompareBaseObjects`, whose answer for two non-null references is `ReferenceEquals`), and Mono's
+`Array.IndexOf` adds two bound lookups (internal calls) per call. PoolManager's despawns walk the spawned and
+despawned lists of every prefab pool for each bullet: about 1 ms a frame of that room. For a non-null argument
+every element's answer is reference equality, so the port's `unity-list-ref` sends the game's 270 such calls to a
+helper per type that scans references (the list's own method for a null argument; only for types that neither
+override `Equals` nor implement `IEquatable`, nor have a subtype that does). With the goop patches, A B and B A:
+muOS 33.00 / 31.81 -> 34.51 / 34.06 fps, Knulli 33.00 / 31.29 -> 33.81 / 32.53; the rig's game state the same over
+1,270 frames of the Keep's route (all three patches against the build before them). The same holds in any Unity
+2017.4 game on Mono, so it is a candidate for asmpatch.
+
+The other scenes at the port's settings before these patches (fps, p99, frames over 50 ms): muOS the Keep's boss
+47.7, 44.8 ms, 13; the Forge's room 41.6, 34.8 ms, 1. Log lines cost little: the game logs "Negative
+ActorPathCount!" about 25 times a second in Bullet Hell's room, about 0.02 ms a frame of UnityMain. Next in the
+same profile: the game's own physics (`PhysicsEngine.LateUpdate` about 2 ms of its own time with ~1,000 bullets,
+the body sort 0.6 ms: `List.Sort` with a delegate whenever a body registers) and the camera chain (3.4 ms).
+
+### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
+
+Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split
+by the sample's own symbol (UA_PROF with the 2017.4.27 libunity symbols; a libc, ua_host or Mono sample counted under
+its exact libunity caller), ms a frame of a ~29 ms frame: the draw loop on the main thread (`ForwardShaderRenderLoop`,
+`SetShadersMainThread`, `PrepareValueParameters`, ShaderLab sub-program matching, `GfxDeviceClient`) 3.5; the
+Update/LateUpdate/coroutine dispatch 2.3; engine calls from scripts 2.0; transforms 1.5; the main thread waiting on
+its culling and render-queue jobs 1.4; the render queue (`PrepareMeshRenderNodes`, `ExtractMeshBuffers`, dynamic
+batching) 0.8; allocators 0.7; PhysX's step 0.4; culling 0.4. The other three heavy scenes split the same way.
+
+The GL side of the same frames (`UA_GL_REC=census`, then `UA_GL_REC=2 UA_GL_REC_VERBOSE=2@3500` for the frame
+graph's passes): about 2,600 GL calls a frame, 162 `glDrawElements` and 128 `glUseProgram` (the program changes on
+most draws: sprites of different shaders and atlases interleave in depth order), 68 dynamic-buffer maps (Unity's
+dynamic batches), 302 `glUniform4fv`. Eleven passes: the minimap's camera (12 draws, every other frame with the
+port's `half-rate`), a clear-only pass of the main camera's source texture (the frame graph sinks it), one blit of
+that cleared texture to the window (the last pass covers the window again; the graph cannot prove a draw's
+coverage, so it stays: GPU time only), the scene's two cameras into the low-resolution target (116 draws), the
+lighting buffer (4 draws), the vignette and fade composite (1), the final target (one blit and the HUD's 8 draws),
+the blit to the window. So the main thread spends about 20 us of Unity 2017's loop per draw (SetPass with a program
+change, the per-object constants, dynamic batching's vertex copies), and the 3.5 ms is the ~145 draws the picture
+needs: drawing in another order to change programs less would change how overlapping transparent sprites mix.
+
+Two cuts that look exact and are not provable: the unoccluded layer's camera (`Pixelator`'s last `Camera.Render`)
+draws nothing in these fights, but its CPU cost (~0.3 - 0.4 ms) could only be left out if the layer were known to
+be empty beforehand, and objects arrive on that layer from the game's data (prefabs) as well as from code; and
+renderers that draw nothing (alpha 0, empty meshes) can only be found per draw.
+
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
 muOS had 3 - 8 frames over 50 ms in the fight where the Knulli had none. A 40 s profile of the frames
@@ -873,6 +1019,7 @@ an option, off.
 | `UA_FUTEX_SPIN=50`: workers watch their futex word 50 us before sleeping, wakes with nobody asleep skipped (the libc `syscall` import; exact) | 47.2 / 47.6 fps against 48.3 / 48.4 with the GPU's work left out (-2 %), frames over 25 ms doubled: the watching takes CPU from the render thread and Mali's thread (above). Option, off |
 | `InvertMatrix4x4_Full` (self time ~1 % of UnityMain; called per camera from `Camera::ExtractCameraRenderingParams`, image-effect blits, `ScreenPointToRay`) replaced by a NEON inverse, or memoized (it reads only its 16 input floats and writes only its output, no globals or calls) | a rewritten 4x4 inverse reassociates the arithmetic, so it is not bit-identical and cannot be a default (the exactness rule forbids it); a last-inputs memo would be exact but the function is small next to the wake traffic |
 | `ShaderVariantAnalytics::...::SumUpVariants*` (editor telemetry summed per draw inside `ShaderLab::Pass::ApplyPass`, ~0.4 % of UnityMain and of the render thread) | computes an internal analytics counter the game never reads; could be no-op'd, but the saving is below the run-to-run noise |
+| Holding a repeated engine getter's answer in a local (`transform.position`, `.transform`, `.sharedMaterial` read twice from the same receiver with nothing between that could change it; Enter the Gungeon, 2026-11-10) | a Cecil scan of the game's assembly (a parameterless `UnityEngine` getter called twice on the same `this.field`, local or argument, with no call, no store to the receiver and no branch target between) finds 166 pairs, nearly all in Start, teleports and menus; the ones in per-frame code (the guns' aim and sprite flip, the player's input, the camera's offset, the occlusion update, the sprite Z-depth upkeep) are a few dozen calls a frame, under ~0.05 ms. The engine calls the game's frame spends are one call per object inside its logic, not repeats. A general pass could still do it, but per game it does not pay |
 | hooking `GfxDeviceGLES` to drop redundant GL state or uniform re-uploads on the render thread | the render thread's time is spent blocked inside Mali's driver (the grab copies and the first draw after a framebuffer change), not in redundant state Unity sends; the driver's buffer handling, not Unity's call count, is the cost ([GPU, pass by pass](#gpu-pass-by-pass)) |
 
 ## Shader programs: compiles, links and Unity's binary cache
@@ -2062,8 +2209,57 @@ ms (p99 79 - 86 -> 48 - 50 ms, two pairs), 693 methods compiled ahead in 1.7 s o
 load (1,305 in 2.1 s on muOS). Mono's invoke cache and fast thread-local reads (`UA_MONO_INVOKE`,
 `UA_MONO_TLS`, on by default): fight 36.5 fps without, 40.4 with. All of it in the port (portmaster-gungeon
 c0da303, with the port's df-no-body patch; the second launch after the install): **fight 42.3 fps, room entry
-42.8 (7 frames over 50 ms, p99 44 ms), lowest MemAvailable 198 MB**. Loads
+42.8 (7 frames over 50 ms, p99 44 ms), lowest MemAvailable 198 MB**.
+
+The same port on all three handhelds (portmaster-gungeon c0da303 set up by a rehearsal of its zip, each in a
+folder of its own; the Keep's first fight, fixed seed, no damage; the room entry is the 25 s from the corridor
+to the first enemies; the first launch fills the host's program cache and the JIT warm-up's list):
+
+| handheld | room entry, frames over 50 ms: first launch -> later launches | room entry p99 | fight | fight p99 |
+|---|---|---|---|---|
+| RG34XX-SP, Knulli | 11 -> 1, 1 | 48 -> 29, 28 ms | 59.4 fps | 21 ms |
+| RG34XX-SP, muOS | 10 -> 3, 2 | 38 -> 28, 25 ms | 62.0 fps | 22 ms |
+| BattleXP G350, dArkOS | 15 -> 7, 10, 8 | 86 -> 44, 42, 46 ms | 42.3, 42.1 fps | 31, 30 ms |
+
+What is left on the G350: two frames of about 200 - 230 ms at the corridor's and the enemy room's doors in
+every run, in which UnityMain waits for the render thread, the render thread for ua_host's GL thread, and the
+GL thread in a futex of the Mali driver (the driver waiting on the GPU or its memory), then a few frames of
+50 - 100 ms. `UA_FAST_CLOCK` cannot read the timer's counter on this kernel (no gain, 41.4 against 42.1 fps).
+Loads
 are long on the A35s: from the launch to the title about 65 s (frames of 9, 34 and 9 s: Unity's asset
 loading under PickupObjectDatabase, CPU-bound), Quick Start to the Keep about 45 s (frames up to 10 s
 behind the game's loading screen). The setup on the handheld: 1157 s with EmulationStation running (tools'
 peak 331 MB, at least 424 MB available).
+
+Memory in the heavy fights (gungeon-main's benches, 2026-11-09: the Forge's busiest room, fixed seed, no damage,
+EmulationStation stopped): Mono's heap grows to 264 MB over the Forge's load, in 26 steps, with 21 full
+collections of up to 0.97 s (world-stopped marking, `GC_PRINT_STATS=1` in the game's environment; all inside
+the loads, none in the fight). Capped at 180 MB (`GC_MAXIMUM_HEAP_SIZE`) the load ends in an
+OutOfMemoryException: the live data passes ~176 MB there, so at most ~88 MB of the heap is slack. The rest of
+the game's ~750 MB: Unity's own allocations (anonymous memory 500 MB with the heap), the Mali driver's 213 MB
+(194 MB of it textures, the ASTC atlases: `mem_profile` of the game's context in the driver's debugfs), files
+~35 MB. `UA_GC_GROW=250` (runtime.md; a collection whenever the heap grows during a load with under 250 MB
+available): heap 264 -> 224 MB, lowest MemAvailable 82 -> 140 MB, the fight's fps the same (22.4), about 2.7 s
+more collection in the floor's load. With 110 MB held by another process (EmulationStation's size in its menu)
+the load still runs short (35 MB at the watchdog).
+
+The heavy fights at the clocks a player gets (2026-11-10; portmaster-gungeon 31a5263 with gungeon-main's
+physics-skip, half-rate and hud-half, `UA_GC_GROW=250`, EmulationStation stopped; the benches' rooms named,
+`UA_BENCH_WARP=room:<name>`, as the busiest pick changed between runs): dArkOS's EmulationStation launches a
+port through `sudo perfmax performance` (CPU, GPU and memory controller on their performance governors) and
+`sudo perfnorm` after it, which the harness now does the same way (porting.md, RK3326):
+
+| bench | idle governors: fps, p99, frames over 50 ms | perfmax: fps, p99, frames over 50 ms | lowest MemAvailable |
+|---|---|---|---|
+| the Keep's boss (Gatling Gull) | 27.7, 110 ms, 119 | 36.1, 61 ms, 22 | 235 MB |
+| Boss Rush's High Dragun | 32.7, 96 ms, 63 | 34.5, 102 ms, 55 | 208 MB |
+| the Forge, Forge_Joe_Hot_Fire_002 | 23.7, 68 ms, 119 | 27.4, 57 ms, 37 | 144 MB |
+| Bullet Hell, Hell_Hath_No_Joery_007 | 22.9, 86 ms, 177 | 25.9, 62 ms, 67 | 177 MB |
+
+With 110 MB held by another process (EmulationStation's size in its menu; it gives its memory back under
+60 MB available): Bullet Hell fits (lowest 69 MB, fight 27.7 fps); the Forge's load reached 58 MB, where the
+stand-in gave its memory back (fight 28.3 fps). A census of the Forge's fight
+(`UA_DUMP_TEXTURES`, runtime.md): 632 textures, ~168 MB: the ASTC atlases 106 MB, and ten 960x1080 RGBA
+render textures of 40 MB that the Ammonomicon's page renderers hold for the whole run while the book is shut
+(`AmmonomiconController.PrecacheAllData`); the CJK font atlases are not loaded in an English game; 4,173
+meshes, 457k vertices, all readable.

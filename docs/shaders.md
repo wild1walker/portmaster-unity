@@ -175,6 +175,136 @@ auto exposure, ambient occlusion, the 3D LUT), so its kernels convert but are no
 A Windows build's compute shaders (Direct3D 11 bytecode) are not translated yet.
 `"shaders": {"compute": false}` leaves compute shaders as they are.
 
+#### Metal kernels (macOS builds; pmu, 2026-11-09)
+
+A macOS build of Unity 2020.3+ has no OpenGL Core kernels, only Metal's (renderer 16). With
+`shaders.from` holding `metal`, pmu's shaders step (`steps/compute.rs`, `add_gles3_metal`) gives
+such a ComputeShader a GLES3 variant made from the Metal one, each kernel variant's MSL translated
+by shaderx's `metal::translate_kernel` (HLSLcc wrote the MSL; the graphics stages' reader with a
+kernel entry):
+
+- storage buffers: HLSLcc's structured buffers (`device X_Type *` with `uint value[N]`) and raw
+  ones (`device uint *`) as std430 blocks of the same layout (`<name>_buf[]`), `readonly` where the
+  MSL has `const device`; constant buffers as std140 uniform blocks (`$Globals`: `CGlobals`) with
+  each member at the offset Metal gives it, which is where Unity writes it (the records' offsets
+  are Metal's in all 308 of Dave the Diver's): a `float3` takes 16 bytes in MSL and 12 in std140,
+  so a member after one gets padding floats (24 of the 308 buffers; the fish flocking kernel's
+  among them); arrays of `float4`/`float3` and `float4x4`/`float3x3` matrices (HLSLcc's
+  `hlslcc_mtx4x4<name>` arrays) have the same stride in both; anything else is refused;
+- the thread ids (`thread_position_in_grid` ... `gl_GlobalInvocationID` ...), threadgroup memory
+  as `shared` variables, `threadgroup_barrier` as `memoryBarrierShared(); barrier();` (`mem_device`:
+  `memoryBarrierBuffer()`), the atomics on a buffer's or threadgroup memory's words
+  (`atomic_fetch_add/and/or/xor/min/max`, `atomic_exchange`, `atomic_compare_exchange_weak`:
+  `atomicCompSwap` gives the expected value the old one, as Metal does; a signed min or max on an
+  unsigned word has no GLSL form and is refused), immediate constant buffers, HLSLcc's
+  `bitFieldExtractU` helper as `pm_bitFieldExtractU` (its operations, its edge cases), the thread
+  group size from the kernel's record (`threadGroupSize`);
+- the records as Unity's own GLES3 variants of the same version have them, learned from the
+  built-in kernels the 6000.0.52f1 macOS player (Metal) and Android player (GLES3) both carry:
+  uniform blocks bound from 0 in Metal's order; storage buffers the writable ones (the records'
+  `outBuffers`, the HLSL's read-write buffers: HLSLcc writes `const device` for one a kernel only
+  reads) from 0, then the read-only ones; each record's `bindPoint` its place in its list, the
+  lists in binding order, `cbVariantIndices` following their `cbs`; constant buffer layouts with
+  `Globals` named `$Globals` and their sizes rounded up to 16; the code GLSL text and a NUL. Before
+  a kernel is rewritten, its Metal records must name what the MSL declares at the same indices,
+  and the layouts its records pick the offsets the MSL has: else it is left out with the reason.
+- left out (the run names each): kernels with textures (an image's format is not in the MSL;
+  Unity's GLES records for textures in kernels were not seen yet) and append / consume buffers
+  (their counters: no GLES reference yet).
+
+**Checked.** Unity's built-in compute shaders of 6000.0.52f1 (Internal-Skinning, -BlendShape,
+-VT-TranslationTableReplace: 50 kernel variants) made from the macOS player's Metal kernels have
+the records of the Android player's GLES3 ones, field for field (the constant buffer layouts also
+list members Unity's GLES compile dropped as unused: harmless, at their offsets), and the same
+GLSL bindings; `runtime/host/computecheck` runs each translated kernel and Unity's own on the same
+random inputs on Mesa: the 20 that fit Mesa's 8 storage buffers write the same words, all of them
+(the 30 batched ones exceed it, Unity's too). Dave the Diver (6000.0.52f1): 109 of 121 compute
+shaders get GLES3 kernels (224 kernels, 251 variants: VFX Graph's simulations, the flocking
+kernels, Obi's solver); left out: Obi's contact and query kernels (append buffers), its SDF
+baker and a probe volume debug view (textures). 176 link on Mesa, 48 exceed its 8 storage
+buffers (Obi, 9 - 20). Against the original Metal kernels on the Mac's GPU (`tools/metalrun`, fast
+math off) on the same inputs: the three flocking kernels write the same words or within float
+rounding (worst 6e-7 relative), in all three of the fish kernel's movement modes. That kernel
+reads the other fish while they are written (the game's own race: any GPU's order changes it),
+so it is compared with the fish further apart than they look.
+
+**On the handheld** (RG34XX-SP's Mali-G31, r20p0): the driver runs work groups of at most 128
+invocations, the least a GLES 3.1 driver may allow, and 17 of Dave the Diver's kernels ask for more
+(256: the fish; 512; 1024: the boids): "'local_size_x' qualifier value exceeds the maximum
+supported size". 9 of them run after the work-group split (next section); the other 8 share memory.
+
+```sh
+runtime/host/out/arm64/computecheck <ours.comp> <unity.comp>                  # the same random inputs, outputs compared
+runtime/host/out/arm64/computecheck -x <k.comp> -g 1,1,1 s0=<file> u1=<file>   # given inputs, <file>.out after
+tools/metalrun/metalrun <k.metal> 256,1,1 1,1,1 0=<file> 2=<file>             # the Metal kernel, on the Mac
+```
+
+#### Work groups over 128 invocations (`split_work_group`, pmu, 2026-11-09)
+
+GLES 3.1 only promises 128 invocations in a work group (`GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`;
+the RG34XX-SP's Mali-G31 allows no more), while desktop kernels ask for up to 1,024. A GLES3
+kernel the step writes (from OpenGL Core or from Metal) whose `local_size` is over 128 and whose
+invocations share nothing (no `shared` memory, no `barrier()`) is rewritten to run in work groups
+of 128 (`shaderx::glsl::split_work_group`, from `steps/compute.rs`): `main` becomes `pm_main`,
+which reads the built-ins of the invocation it stands for (`gl_LocalInvocationID` becomes
+`pm_LocalInvocationID`; `gl_LocalInvocationIndex`, `gl_GlobalInvocationID` and `gl_WorkGroupSize`
+are made from it and the original size; `gl_WorkGroupID` and `gl_NumWorkGroups` are unchanged), and
+a new `main` runs it for k of the original group's invocations in turn (k: the fewest that divide
+the size into groups of at most 128). Every original invocation still runs once, in its work group,
+with its IDs. Invocations of a group that share nothing may run in any order (GLSL ES 3.10 gives
+them no order and no forward-progress guarantee), so running them one after another is one of the
+orders the original allows: the same results for every kernel without a race. A kernel with shared
+memory or barriers is kept as it is (its invocations must run side by side; it runs where the driver
+allows its group). The run's summary counts the split variants ("N kernel variants run in work
+groups of 128") and names the kernels kept.
+
+What Unity's GLES player does with a kernel's group size (6000.0.61f1 on the RG34XX-SP, a probe
+loading Dave the Diver's converted VerletCompute from its bundle, 2026-11-09): it checks the
+kernel's **recorded** `threadGroupSize` against the driver's limits before it compiles anything
+("Compute shader (VerletCompute): Kernel (0) size exceeds device limits", then "Kernel at index (0)
+is invalid": `IsSupported` false, whatever the GLSL says); and once the program is linked,
+`GetKernelThreadGroupSizes` gives the **program's** size (`glGetProgramiv`'s
+`GL_COMPUTE_WORK_GROUP_SIZE`: 128 for the split kernel), not the record's. A kernel whose GLSL does
+not compile is only reported invalid. Unity compiles compute programs from source at every launch
+(its program binary cache keeps none). Games size their dispatches either with
+`GetKernelThreadGroupSizes` or with the size written in their C# (the boids' 1,024), so both must see
+the kernel's own size for the dispatch to cover the same invocations. So the record keeps the
+game's size, the split kernel carries it in a line after its layout (`// pm_work_group 256 1 1`,
+`glsl::SPLIT_MARK`), and ua_host answers for the converted data (`runtime/host/glhooks.c`): the
+driver's work group limits (`GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`, `_SIZE`) raised to the largest
+group the step split, which the conversion's journal keeps (`compute_group`) and android-data
+writes into `android_package.json`; and a split kernel's `GL_COMPUTE_WORK_GROUP_SIZE` read from its
+marker line. Data without split kernels has no `compute_group`, and ua_host then answers nothing
+(`UA_COMPUTE_GROUP` overrides; 0: off). A game that reads `SystemInfo.maxComputeWorkGroupSize` sees
+the raised limit; a kernel it then picks that cannot be split (shared memory) fails to compile and
+is reported invalid, as the record check made it before.
+
+Dave the Diver: 11 variants of 9 kernels split (the boids 1,024 -> 128 x 8; the fish and
+VerletCompute 256 -> 128 x 2; VFX Graph's SDF bake 512 -> 128 x 4; Obi's bounds 256 and bucket
+scan 512); the other 24,264 files of the export are the same bytes as before. 8 kept: VFX
+Graph's bitonic sort and SDF scan (VFX Graph cannot draw with OpenGL ES on this GPU anyway: no
+storage buffers in vertex shaders) and Obi's `Reduce` and `ScanInBucketExclusive`. On Mesa
+(llvmpipe runs 1,024 invocations a group), each kernel before and after the split, the same
+inputs, every storage word compared (`computecheck`): 7 write the same words on random inputs (3
+seeds; 3 and 4 work groups). VerletCompute differs on random inputs because its threads then write
+each other's nodes (each thread moves its rope's range of nodes and their parents: random ranges
+and parent indices overlap, a race in the input); with each rope owning its nodes and parents, as
+in the game, the same bytes (70,904 written). Obi's `RuntimeSimplexBounds` declares 9 storage
+buffers (Mesa allows 8). On the handheld's Mali (`shadercheck`, one kernel at a time): the 9 split
+kernels compile and link (Obi's 9 buffers too: it allows 35); the 8 kept fail as before.
+With Unity's own player on the handheld (6000.0.61f1's Mono player from the donor build, under
+ua_host; the donor's script replaced by a probe that loads a ComputeShader from a bundle, reports
+`IsSupported` and `GetKernelThreadGroupSizes`, and runs it on given buffers; the bundle marked for
+Android as android-data does): VerletCompute from Dave the Diver's converted bundle, on the rope
+inputs above. Unsplit: invalid (size over the limits). Split without ua_host's answers: invalid
+(the record). Split, the limits raised: valid, but sized 128,1,1 (the program). Split, with both
+answers: valid, `GetKernelThreadGroupSizes` 256,1,1, and its buffers those of the original kernel
+on Mesa: the roots the same bytes, the nodes 27,166 of 33,792 words the same and the rest within
+4e-4 relative (Mali's and llvmpipe's `sqrt` / `inversesqrt` round differently; the split kernel is
+the same bytes as the original on Mesa). The 15 Obi solvers in Dave the Diver's bundles use
+Burst (`m_Backend` 1; Obi 7's `BackendType` is Compute 0, Burst 1 in the game's IL2CPP metadata):
+Obi's kernels, the two kept among them, are not run there.
+
 ### The files the step reads; asset bundles and scene bundles
 
 The step reads the main data's serialized files (`globalgamemanagers`, `level<n>`, `*.assets`),
@@ -709,7 +839,11 @@ expressions have) and writes HLSLcc's GL form of it:
 - function constants at their defaults (no base vertex, no variable rasterization rate: Unity's
   `#if __METAL_VERSION__ >= 230` blocks and the code behind `has_vrr_api` are left out, the
   identity render target remap), immediate constant buffers as `const` arrays; from 2019.1 the
-  samplers' units in Unity's macro, as the other paths.
+  samplers' units in Unity's macro, as the other paths. Unity 6 writes the variable rate code as
+  a plain `if (has_vrr_api) { ... }` block with Metal's own types in it
+  (`rasterization_rate_map_decoder`, in the motion vector passes of URP's and Shader Graph's
+  shaders): a block behind a false constant that does not translate is skipped whole (pmu,
+  2026-11-09; metal.py stops at it, "unknown name", and the SubShader got no GLES3 programs).
 
 Unity's Metal compile has Metal's platform choices as Direct3D's (`UNITY_REVERSED_Z`,
 `UNITY_UV_STARTS_AT_TOP`); Metal's clip space has y up, as GL's. The full-screen passes' texture
@@ -726,6 +860,7 @@ ES 3.2):
 | 2019.1.15f1 (Metal + OpenGL Core) | 41 (3) | 208 | UIElements' SubShader with a structured buffer (its fallback kept) | 223 of 223 as the same pass's GLCore program | 194 / 194 |
 | 2022.3.62f3 (URP, Metal only) | 92 (4) of 93 | 1250 (8) | URP's HDR debug view (a writable texture) | 610 of 1369 as Unity's own GLES3 programs of the game's Android build (shader, pass, keywords) | 991 / 991 |
 | 6000.2.6f2 (Metal only; Addressables) | 113 (2) of 114 | 320 | VR blit | - | 209 / 209 |
+| 6000.0.52f1 (URP, Shader Graph, VFX Graph; Addressables: 3,967 bundles, 140 scene bundles; pmu, 2026-11-09) | 529 of 558 (before the `has_vrr_api` blocks were skipped: 436) | 30791 (10) | VFX Graph outputs (23: structured buffers), Stylized Water 2's tessellation shaders (2), URP's HDR debug view (2), VR blit, CoreCopy (its framebuffer fetch input, `rp_input_remap`); compute: 109 of 121 compute shaders from their Metal kernels ([above](#metal-kernels-macos-builds-pmu-2026-11-09)) | the 5284 distinct programs pmu wrote before the fix: the same bytes | 12024 / 12024 |
 
 Against Unity's own GLES3 programs of the same game (its Android build), the differences are what
 the HLSL decided by platform: Metal-only uniforms (foveated rendering keywords and its distortion
@@ -996,6 +1131,31 @@ programs of the same game have plain arrays of 16 (URP's light limit for mobile 
 glcore route's (The Third Eye's) keep their 32 in a uniform block, which that limit does not count.
 Those variants cannot run on a Mali (the title menu benched does not use them) until the Metal
 route keeps such a constant buffer as a uniform block.
+
+**Fixed (pmu, 2026-11-09), not with a uniform block:** the Mali-G31 (driver r20p0) allows a uniform
+block 16 KB (`GL_MAX_UNIFORM_BLOCK_SIZE` 16384, the ES 3.0 minimum), and URP's AdditionalLights
+buffer for 256 lights is 24 KB in std140. What fits is the count Unity's own Android build compiles
+for: in a Metal-route program with a stage over the Mali's 1,024 uniform vectors (`uniform_vectors`,
+counted as the Mali counts: the driver's numbers for the same programs), shaderx's metal
+(`urp_mobile_lights`) declares URP 17's light arrays for 32 lights (`MAX_VISIBLE_LIGHT_COUNT_MOBILE`)
+instead of 256: the six `_AdditionalLights*` arrays, `_AdditionalShadowParams`, the cookies' UV rects
+and light types (256 -> 32), `_AdditionalLightsWorldToShadow` and `_AdditionalLightsWorldToLights`
+(HLSLcc's float4 rows, 1024 -> 128), `_AdditionalLightsCookieEnableBits` (8 -> 1). Exact on the
+Android player: URP's C# there (`UniversalRenderPipeline.maxVisibleAdditionalLights` on OpenGL ES 3:
+16 when the minimum OpenGL ES version is 3.0, else 32; `AdditionalLightsShadowCasterPass` sizes the
+shadow slices by it) uploads and indexes no more, so no element past 32 is read (URP's source,
+Unity-Technologies/Graphics 6000.0/staging: Input.hlsl, Shadows.hlsl, LightCookieInput.hlsl,
+UniversalRenderPipeline.cs). Dave the Diver (6000.0.52f1, Shader Graph and Spine sprites, URP Lit):
+6,893 of its 12,024 distinct programs were over the limit (the Mali refused 3,844 of the first
+8,000 to link: "uniform components (4,156 - 9,978) is greater than ... (4,096)"); those 6,893 change
+and none is over it after, and the other 5,131 are the same bytes as before. On the handheld all 12,024 now link (before: 3,844 of the first 8,000 did not); the only failures left were 17 kernels over its work group size (the work-group split above runs 9 of them).
+
+**The handheld's limits** (`runtime/host/computecheck -l` on the RG34XX-SP, Mali-G31, r20p0): 1,024
+uniform vectors per vertex or fragment stage; uniform blocks 16 KB, 12 a stage; storage buffers 35
+per compute or fragment stage and **none in a vertex stage** (VFX Graph's outputs read their
+particles from storage buffers in the vertex stage: they cannot draw on it with OpenGL ES); compute
+work groups of at most **128 invocations** (128 x 128 x 128), 32 KB of shared memory; 8 images and
+8 atomic counters a compute stage.
 
 ## Vertex outputs no fragment stage reads (`dead_varyings`, pmu, opt-in)
 

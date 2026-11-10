@@ -1,0 +1,67 @@
+#version 310 es
+
+#define HLSLCC_ENABLE_UNIFORM_BUFFERS 1
+#if HLSLCC_ENABLE_UNIFORM_BUFFERS
+#define UNITY_UNIFORM
+#else
+#define UNITY_UNIFORM uniform
+#endif
+#define UNITY_SUPPORTS_UNIFORM_LOCATION 1
+#if UNITY_SUPPORTS_UNIFORM_LOCATION
+#define UNITY_LOCATION(x) layout(location = x)
+#define UNITY_BINDING(x) layout(binding = x, std140)
+#else
+#define UNITY_LOCATION(x)
+#define UNITY_BINDING(x) layout(std140)
+#endif
+UNITY_BINDING(0) uniform CGlobals {
+	uint count;
+	vec3 target;
+	float pm_pad0;
+	float radius;
+	vec4 colors[2];
+};
+struct counts_Type {
+	uint value[1];
+};
+layout(std430, binding = 0) buffer counts {
+	counts_Type counts_buf[];
+};
+struct items_Type {
+	uint value[4];
+};
+layout(std430, binding = 1) readonly buffer items {
+	items_Type items_buf[];
+};
+layout(std430, binding = 2) readonly buffer raw {
+	uint raw_buf[];
+};
+struct TGSM0_Type {
+	uint value[1];
+};
+shared TGSM0_Type TGSM0[64];
+const vec4 ImmCB_0[2] = vec4[2](vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0));
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+void main()
+{
+    float u_xlat0;
+    int u_xlati1;
+    uint u_xlatu2;
+    TGSM0[int(gl_LocalInvocationID.x)].value[0 >> 2] = items_buf[int(gl_GlobalInvocationID.x)].value[(0 >> 2) + 0];
+    memoryBarrierShared(); barrier();
+    u_xlat0 = uintBitsToFloat(items_buf[int(gl_GlobalInvocationID.x)].value[(4 >> 2) + 0]) * radius + target.y;
+    u_xlati1 = int(atomicAdd(counts_buf[0].value[0 >> 2], uint(1)));
+    u_xlat0 = u_xlat0 + ImmCB_0[u_xlati1 & 1].y;
+    u_xlatu2 = raw_buf[int(gl_GlobalInvocationID.x)] + TGSM0[0].value[0 >> 2] + uint(u_xlati1);
+    while(true){
+        {
+            uint compare_value = u_xlatu2;
+            compare_value = atomicCompSwap(counts_buf[1].value[0 >> 2], compare_value, floatBitsToUint(u_xlat0));
+            u_xlatu2 = compare_value;
+        }
+        if(u_xlatu2 == 0x0u){
+            break;
+        }
+    }
+    return;
+}

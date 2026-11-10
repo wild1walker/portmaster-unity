@@ -741,13 +741,22 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
                             continue;
                         }
                         let mut t = f.sf.read_typetree(*pid)?;
-                        let r = compute::add_gles3(
+                        let mut r = compute::add_gles3(
                             &mut t,
                             &unity,
                             &s.precision,
                             s.replace,
                             s.optimize,
                         )?;
+                        // a macOS build's kernels: Metal only (pmu's own, 2026-11-09)
+                        if r.why.starts_with("no OpenGL Core")
+                            && s.sources.iter().any(|x| x == "metal")
+                        {
+                            let rm = compute::add_gles3_metal(&mut t, &unity)?;
+                            if rm.from_metal {
+                                r = rm;
+                            }
+                        }
                         if r.status == "converted" {
                             f.sf.save_typetree(*pid, &t)?;
                             n += 1;
@@ -815,6 +824,18 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     if !cresults.is_empty() {
         job.log(&compute::summary(&cresults));
+        let most = cresults.iter().map(|r| r.split_max).max().unwrap_or(0);
+        let old = job
+            .state
+            .get(compute::JOURNAL_GROUP)
+            .and_then(Json::as_int)
+            .unwrap_or(0)
+            .max(0) as u64;
+        if most > old {
+            job.state
+                .set(compute::JOURNAL_GROUP, Json::Int(most as i128));
+            job.save_state()?;
+        }
     }
     if let Some(line) = metal::summary(&results) {
         job.log(&line);

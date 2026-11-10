@@ -53,9 +53,9 @@ typedef struct {
 static const um_dec_entry decoders[] = {
     /* the handheld's hardware decoder through libpmhwdec, when the port ships it and the device has
        one; a stream it does not take goes on to the software decoders below */
-    { UM_MIME_AVC, "pmhwdec.h264.decoder", um_pmhw_create, 1 },
-    { UM_MIME_HEVC, "pmhwdec.hevc.decoder", um_pmhw_create, 1 },
-    { UM_MIME_VP8, "pmhwdec.vp8.decoder", um_pmhw_create, 1 },
+    { UM_MIME_AVC, "pmhwdec.h264.decoder", um_pmhwdec_create, 1 },
+    { UM_MIME_HEVC, "pmhwdec.hevc.decoder", um_pmhwdec_create, 1 },
+    { UM_MIME_VP8, "pmhwdec.vp8.decoder", um_pmhwdec_create, 1 },
     { UM_MIME_VP8, "OMX.google.vp8.decoder", um_vpx_create, 1 },
     { UM_MIME_VP9, "OMX.google.vp9.decoder", um_vpx_create, 1 },
     { UM_MIME_AVC, "OMX.google.h264.decoder", um_h264_create, 1 },
@@ -91,7 +91,38 @@ struct um_codec {
     int64_t cur_pts;                           /* of the input being decoded */
     int64_t audio_frames_done;                 /* PCM frames emitted for the current input */
     um_emit emit;
+    /* video pictures the client releases unshown (render=false: too late to show), counted in windows;
+       a few bad windows close together tell the decoder it falls behind (um_dec.behind) */
+    int64_t late_quiet_until, late_win_t0, late_last_bad;
+    int late_n, late_bad_wins, late_told;
+    int64_t late_times[8];                     /* the last unshown pictures' times */
+    int late_ti;
+    int64_t catchup_last;                      /* a flush right after unshown pictures: the client seeks ahead to catch up */
+    int catchups;
 };
+
+#define LATE_WINDOW_US  1000000    /* one window */
+#define LATE_PER_WINDOW 3          /* unshown pictures that make a window bad */
+#define LATE_WINDOWS    3          /* bad windows in a row (each within LATE_GAP_US of the last) before the decoder is told:
+                                      a decoder that cannot keep up drops in every window, a hitch only in one */
+#define LATE_GAP_US     1500000
+#define LATE_QUIET_US   500000     /* after configure and flush (a seek drops pictures before its target) */
+/* the other sign (Unity's video player): it drops late pictures, then seeks ahead and starts its audio over; a flush with
+   CATCHUP_DROPS unshown pictures in the CATCHUP_RECENT_US before it is such a catch-up, CATCHUPS of them each within
+   CATCHUP_GAP_US of the last tell the decoder (a game's own seek has no late pictures before it, a hitch makes one) */
+#define CATCHUP_RECENT_US 1500000
+#define CATCHUP_DROPS     3
+#define CATCHUPS          2
+#define CATCHUP_GAP_US    4000000
+
+/* (the codec's lock held) the decoder is told, once, that its pictures come too late */
+static void tell_behind(um_codec *c, const char *why)
+{
+    c->late_told = 1;
+    um_log("codec %s: its pictures keep coming too late (%s)%s", c->ent->name, why,
+           c->dec->behind ? "" : "; this decoder cannot go faster");
+    if (c->dec->behind) c->dec->behind(c->dec);
+}
 
 static int64_t deadline_us(int64_t timeout_us) { return timeout_us < 0 ? -1 : um_now_us() + timeout_us; }
 
@@ -416,6 +447,8 @@ int um_codec_configure(um_codec *c, const um_format *f, um_surface *surface)
             c->ent = e;
         } else d->destroy(d);
     }
+    c->late_quiet_until = um_now_us() + LATE_QUIET_US;
+    c->late_n = 0;
     if (r != UM_OK) {
         um_format_free(out);
         pthread_mutex_unlock(&c->mu);
@@ -524,8 +557,20 @@ int um_codec_flush(um_codec *c)
     pthread_mutex_lock(&c->mu);
     if (c->state != ST_RUNNING && c->state != ST_EOS) { pthread_mutex_unlock(&c->mu); return UM_ERR_STATE; }
     drain_locked(c);
+    if (c->video && c->surface && !c->late_told) {
+        int64_t now = um_now_us();
+        int n = 0;
+        for (int k = 0; k < 8; k++) if (c->late_times[k] && now - c->late_times[k] <= CATCHUP_RECENT_US) n++;
+        if (n >= CATCHUP_DROPS) {
+            c->catchups = c->catchups && now - c->catchup_last <= CATCHUP_GAP_US ? c->catchups + 1 : 1;
+            c->catchup_last = now;
+            if (c->catchups >= CATCHUPS) tell_behind(c, "the client seeks ahead to catch up again and again");
+        }
+    }
     c->dec->flush(c->dec);
     c->state = ST_RUNNING;
+    c->late_quiet_until = um_now_us() + LATE_QUIET_US;
+    c->late_n = 0;
     pthread_cond_broadcast(&c->cv);
     pthread_mutex_unlock(&c->mu);
     UM_TRACE("codec %s: flush", c->ent->name);
@@ -695,6 +740,18 @@ int um_codec_release_output(um_codec *c, int i, int render)
     }
     um_frame *f = c->out[i].frame;
     UM_TRACE("codec %s: release out %d pts %lld%s", c->ent->name, i, (long long)c->out[i].info.pts_us, render ? " render" : "");
+    if (!render && f && c->video && c->surface && !c->late_told) {
+        int64_t now = um_now_us();
+        c->late_times[c->late_ti++ & 7] = now;
+        if (now >= c->late_quiet_until) {
+            if (now - c->late_win_t0 > LATE_WINDOW_US) { c->late_win_t0 = now; c->late_n = 0; }
+            if (++c->late_n == LATE_PER_WINDOW) {
+                if (now - c->late_last_bad > LATE_GAP_US) c->late_bad_wins = 0;
+                c->late_last_bad = now;
+                if (++c->late_bad_wins >= LATE_WINDOWS) tell_behind(c, "3+ unshown in each of 3 windows of 1 s in a row");
+            }
+        }
+    }
     c->out[i].frame = NULL;
     c->out[i].state = OUT_FREE;
     um_surface *s = render && f && c->surface ? um_surface_ref(c->surface) : NULL;

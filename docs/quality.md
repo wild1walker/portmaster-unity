@@ -42,7 +42,7 @@ player needs to see may disappear:
 | built-in | the Standard shaders' LOD-150 SubShader first (below) | Shader (`Standard`, `Standard (Specular setup)`, `Standard (Roughness setup)`, `Autodesk Interactive`) | forward rendering (no deferred tier or camera); that SubShader has GLES3 programs for its forward, forward-add and shadow passes |
 | URP | MSAA off (`m_MSAA` 1), shadow atlases at most 2048 (main and additional lights), soft shadow quality Low (URP 14+) | UniversalRenderPipelineAsset (every one in the data) | soft shadow quality: where it is a uniform, or `_SHADOWS_SOFT_LOW` variants exist |
 | URP | SSAO downsampled, its blur Kawase (one pass), the fewest samples a compiled variant has (URP 14+; URP 10 - 12: at most 4) | the SSAO renderer feature's settings | the Kawase pass, and for the sample count every keyword set the current one is compiled with |
-| URP | chromatic aberration, lens distortion and motion blur off (film grain stays: one fetch in the uber pass, and it dithers dark gradients that band without it) | volume profiles' components | the game's code and animations do not drive volumes |
+| URP | chromatic aberration, lens distortion and motion blur off (film grain stays: one fetch in the uber pass, and it dithers dark gradients that band without it) | volume profiles' components | the game's code and animations do not drive volumes; not for an IL2CPP build (its code is native: whether it drives volumes cannot be read) |
 | opt-in | HDR targets R11G11B10 instead of FP16 (`hdr_format`) | GraphicsSettings tiers | an image effect that keeps data in the alpha channel breaks |
 | opt-in | URP render scale (`render_scale`, e.g. 0.75) | UniversalRenderPipelineAsset | |
 
@@ -87,6 +87,42 @@ not a dependency) reads them too the values are the same, but for what that pack
 MonoBehaviour base reads `m_Script` from the wrong offset, and it reads a `List<string>` as one
 string (URP 17's `SerializedDictionary` keys, a dialogue box's lines, FMOD's platform properties,
 an options stepper's options).
+
+### IL2CPP builds: type trees from the build's metadata
+
+An IL2CPP build has no `Managed/` assemblies: its classes are in
+`il2cpp_data/Metadata/global-metadata.dat` (names, type definitions, fields, nested types, generic
+parameters, custom attribute data), and the types its fields have are a table in the game's binary
+(`GameAssembly`). androiddata's `il2cppmeta` reads both and makes each image an assembly in memory
+(clrmeta's synthetic assemblies: TypeDef, Field with its signature, NestedClass, GenericParam,
+TypeRef / AssemblyRef / TypeSpec, the fields' custom attributes as CustomAttribute rows), and monotree
+builds its trees from those as from a Mono build's files, by the same rules and with the same check
+(a tree is used only when it reads its object's bytes exactly). Layouts as Il2CppDumper (MIT) reads
+them; [il2cpp_dumper](https://github.com/rodroidmods/il2cpp-dumper-rs) (Rust) was looked at and not
+used (its licence reads GPL-3.0 and MIT in two places). Read: metadata version 31 (Unity 2022.3 -
+6000.0); a 64-bit Mach-O (macOS GameAssembly.dylib: a universal file's arm64 slice, else x86_64;
+classic dyld info) or a 64-bit little-endian ELF (Linux GameAssembly.so, Android's libil2cpp.so;
+aarch64 or x86_64; its RELATIVE relocations are the pointers it holds). The metadata registration
+is the `g_MetadataRegistration` symbol where the binary keeps it, else found in its data segments
+(Il2CppDumper's search: the words that count the field offset tables and the type sizes, both the
+metadata's type count), and it must name as many of those as the metadata has types. Not read yet:
+other metadata versions, PE (`GameAssembly.dll`), 32-bit binaries, packed relocations, chained
+fixups: the step then keeps those objects ("IL2CPP types not read: ..."). The post effects stay in
+an IL2CPP build (table above).
+
+Checked against the assemblies an IL2CPP build was made from (convert's opt-in test
+`il2cpp_trees_match_assemblies`, `PMU_MONOTREE_CROSS=<Managed>:<metadata>:<binary>[:<assembly>]`):
+Hollow Knight's own IL2CPP build (Unity 6000.0.61f1's player, metadata 31, a stripped arm64
+libil2cpp.so) against its linked assemblies: every class's tree the same, node for node:
+Assembly-CSharp 3,381 classes (167,720 nodes; 34 refused by both), Assembly-CSharp-firstpass 83,
+UnityEngine.UI 200, PlayMaker 145.
+
+Dave the Diver (6000.0.52f1, IL2CPP, URP 17; 2026-11-09): its 8 URP assets and 3 volume components
+in `globalgamemanagers.assets` were "not read" before; now all read exactly: 2x MSAA off in the two
+assets that had it (JDLCRenderPipelineAsset, UniversalRP-HighQuality), soft shadow quality to Low in
+all 8 (High or Medium before); its default profile's motion blur, chromatic aberration and lens
+distortion stay (IL2CPP). Its URP runtime image as an assembly: 560 types, 3,591 fields. None of its
+3,967 bundles holds a URP asset's type tree (one holds a renderer data's).
 
 ## At run time: ua_host keeps the caps
 
