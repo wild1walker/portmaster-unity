@@ -14,7 +14,7 @@
 //! fields' custom attributes (CustomAttribute rows naming each attribute's type through a
 //! MemberRef `.ctor`). No methods, no IL.
 use crate::clrmeta::Assembly;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
@@ -37,6 +37,7 @@ const S_METHODS: usize = 5;
 const S_FIELDS: usize = 11;
 const S_GPARAMS: usize = 12;
 const S_GCONTAINERS: usize = 14;
+const S_NESTED: usize = 15;
 const S_TYPEDEFS: usize = 19;
 const S_IMAGES: usize = 20;
 const S_ATTRDATA: usize = 24;
@@ -140,6 +141,9 @@ struct ImageRec {
 }
 
 /// global-metadata.dat (version 31).
+/// One image's types: full name ("Ns.Outer/Inner") to (method names, field names).
+pub type Members = HashMap<String, (HashSet<String>, HashSet<String>)>;
+
 pub struct Metadata {
     b: Vec<u8>,
     sec: [(usize, usize); NSECTIONS],
@@ -211,6 +215,11 @@ impl Metadata {
         Ok(m)
     }
 
+    /// The images' names ("Assembly-CSharp.dll"), in the metadata's order.
+    pub fn image_names(&self) -> Vec<String> {
+        self.images.iter().map(|i| i.name.clone()).collect()
+    }
+
     pub fn string(&self, i: u32) -> R<String> {
         let (o, n) = self.sec[S_STRING];
         let s = o + i as usize;
@@ -254,6 +263,65 @@ impl Metadata {
             i32_at(&self.b, o + 4)?,
             u32_at(&self.b, o + 8)?,
         ))
+    }
+
+    /// Every image's types with the names of their methods and fields, by image name.
+    pub fn members(&self) -> R<HashMap<String, Members>> {
+        let n = self.typedef_count();
+        let (to, (no, nn)) = (self.sec[S_TYPEDEFS].0, self.sec[S_NESTED]);
+        let (mo, mn) = self.sec[S_METHODS];
+        let mut outer: Vec<Option<usize>> = vec![None; n];
+        for i in 0..n {
+            let o = to + i * TYPEDEF_SIZE;
+            let (start, count) = (i32_at(&self.b, o + 48)?, u16_at(&self.b, o + 72)? as usize);
+            for k in 0..count {
+                let at = usize::try_from(start).map_err(|_| format!("type definition {i}: no nested types"))? + k;
+                if (at + 1) * 4 > nn {
+                    return Err(format!("type definition {i}: nested types past the table"));
+                }
+                let inner = u32_at(&self.b, no + at * 4)? as usize;
+                if inner >= n || inner == i {
+                    return Err(format!("type definition {i}: nested type {inner}"));
+                }
+                outer[inner] = Some(i);
+            }
+        }
+        let mut out = HashMap::with_capacity(self.images.len());
+        for im in &self.images {
+            let mut types = Members::with_capacity(im.type_count as usize);
+            for i in im.type_start as usize..(im.type_start + im.type_count) as usize {
+                let td = self.typedef(i)?;
+                let (mut full, mut top) = (self.string(td.name)?, i);
+                for depth in 0.. {
+                    let Some(p) = outer[top] else { break };
+                    if depth == 64 {
+                        return Err(format!("type definition {i}: nested without end"));
+                    }
+                    full = format!("{}/{full}", self.string(self.typedef(p)?.name)?);
+                    top = p;
+                }
+                let ns = self.string(self.typedef(top)?.ns)?;
+                if !ns.is_empty() {
+                    full = format!("{ns}.{full}");
+                }
+                let o = to + i * TYPEDEF_SIZE;
+                let (start, count) = (i32_at(&self.b, o + 36)?, u16_at(&self.b, o + 64)? as usize);
+                let entry = types.entry(full).or_default();
+                for k in 0..count {
+                    let at = usize::try_from(start).map_err(|_| format!("type definition {i}: no methods"))? + k;
+                    if (at + 1) * METHOD_SIZE > mn {
+                        return Err(format!("type definition {i}: methods past the table"));
+                    }
+                    entry.0.insert(self.string(u32_at(&self.b, mo + at * METHOD_SIZE)?)?);
+                }
+                for k in 0..td.field_count as usize {
+                    let at = usize::try_from(td.field_start).map_err(|_| format!("type definition {i}: no fields"))? + k;
+                    entry.1.insert(self.string(self.field(at)?.0)?);
+                }
+            }
+            out.insert(im.name.clone(), types);
+        }
+        Ok(out)
     }
 
     /// The type definition a method belongs to.

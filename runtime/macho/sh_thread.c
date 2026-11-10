@@ -107,6 +107,7 @@ static struct dthread *threads;
 // The list, and one thread_suspend, thread_resume or thread_get_state at a time.
 static pthread_mutex_t reg_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t  stop_once = PTHREAD_ONCE_INIT;
+static int             stops_said;          // UA_MACHO_STOPS, below
 static __thread struct dthread *self __attribute__((tls_model("initial-exec")));
 
 // A thread_suspend's signal: the thread says it is stopped and sleeps until the last
@@ -146,6 +147,8 @@ static void stop_init(void)
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
     sigfillset(&sa.sa_mask);
     if (sigaction(STOP_SIGNAL, &sa, NULL) != 0) { fprintf(stderr, "[darwin] no signal to stop threads with: %s\n", strerror(errno)); abort(); }
+    const char *e = getenv("UA_MACHO_STOPS");
+    stops_said = e && *e && *e != '0';
 }
 
 int darwin_thread_stop_signal(void) { return STOP_SIGNAL; }
@@ -277,14 +280,69 @@ static uint32_t darwin_pthread_mach_thread_np(pthread_t th)
     return port;
 }
 
+// UA_MACHO_STOPS=1: what the stops cost (a collector stops every thread for each of its
+// steps), said every 5 s in which there were any. Stopping is the time a thread_suspend took
+// to have the thread stand; stopped is the time from the first thread held to the last let go.
+static struct {                             // reg_lock held
+    unsigned held;                          // the suspends in force
+    int64_t  began, last;
+    uint64_t times, suspends;
+    int64_t  stopping, stopping_max, stopped, stopped_max;
+} stops;
+
+static void stops_held(int64_t t0)
+{
+    int64_t now = now_ns(CLOCK_MONOTONIC);
+    if (stops.held++ == 0) stops.began = t0;
+    if (!stops.last) stops.last = t0;       // the first 5 s are from the first stop
+    stops.suspends++;
+    stops.stopping += now - t0;
+    if (now - t0 > stops.stopping_max) stops.stopping_max = now - t0;
+}
+
+static void stops_let_go(void)
+{
+    if (--stops.held) return;
+    int64_t d = now_ns(CLOCK_MONOTONIC) - stops.began;
+    stops.times++;
+    stops.stopped += d;
+    if (d > stops.stopped_max) stops.stopped_max = d;
+}
+
+// after reg_lock is given back, and with no thread held: one of them may stand in stdio
+static void stops_say(void)
+{
+    if (!stops_said) return;
+    pthread_mutex_lock(&reg_lock);
+    int64_t now = now_ns(CLOCK_MONOTONIC);
+    if (stops.held || !stops.times || now - stops.last < 5000000000) {
+        pthread_mutex_unlock(&reg_lock);
+        return;
+    }
+    uint64_t times = stops.times, suspends = stops.suspends;
+    int64_t stopping = stops.stopping, stopping_max = stops.stopping_max, stopped = stops.stopped, stopped_max = stops.stopped_max;
+    double span = (double)(now - stops.last) / 1e9;
+    stops.times = stops.suspends = 0;
+    stops.stopping = stops.stopping_max = stops.stopped = stops.stopped_max = 0;
+    stops.last = now;
+    pthread_mutex_unlock(&reg_lock);
+    darwin_log("stops in %.1f s: %llu, stopped %.1f ms in all, %.0f us each, %.0f us the longest; %llu thread_suspend of %.0f us each, %.0f us the longest",
+               span, (unsigned long long)times, (double)stopped / 1e6, (double)stopped / 1e3 / (double)times, (double)stopped_max / 1e3,
+               (unsigned long long)suspends, suspends ? (double)stopping / 1e3 / (double)suspends : 0, (double)stopping_max / 1e3);
+}
+
 // reg_lock held. The thread's own suspend is left to the caller.
 static long suspend_locked(struct dthread *t)
 {
+    int64_t t0 = stops_said ? now_ns(CLOCK_MONOTONIC) : 0;
     uint32_t w = atomic_load(&t->word);
     do {
         if (COUNT(w) == 0xffffu) return DARWIN_KERN_FAILURE;
     } while (!atomic_compare_exchange_weak(&t->word, &w, w + 1));
-    if (t == self) return DARWIN_KERN_SUCCESS;
+    if (t == self) {
+        if (stops_said) stops_held(t0);
+        return DARWIN_KERN_SUCCESS;
+    }
     int tid = atomic_load(&t->tid);
     // a thread still inside the handler after its last resume stays there: no signal
     if (COUNT(w) == 0 && !(w & STOPPED) && syscall(SYS_tgkill, getpid(), tid, STOP_SIGNAL) != 0) {
@@ -294,13 +352,16 @@ static long suspend_locked(struct dthread *t)
     int said = 0;
     for (;;) {
         w = atomic_load(&t->word);
-        if (w & STOPPED) return DARWIN_KERN_SUCCESS;
+        if (w & STOPPED) {
+            if (stops_said) stops_held(t0);
+            return DARWIN_KERN_SUCCESS;
+        }
         if (futex_wait_until(&t->word, w, now_ns(CLOCK_MONOTONIC) + 5000000000) == 0) continue;
         if (gone(tid)) {                    // ended with the signal on its way
             atomic_fetch_sub(&t->word, 1);
             return DARWIN_KERN_INVALID_ARGUMENT;
         }
-        if (!said) darwin_log("thread %d has not stopped for thread_suspend in 5 s (signal %d blocked?): still waiting\n", tid, STOP_SIGNAL);
+        if (!said) darwin_log("thread %d has not stopped for thread_suspend in 5 s (signal %d blocked?): still waiting", tid, STOP_SIGNAL);
         said = 1;
     }
 }
@@ -312,6 +373,7 @@ static long resume_locked(struct dthread *t)
         if (COUNT(w) == 0) return DARWIN_KERN_FAILURE;
     } while (!atomic_compare_exchange_weak(&t->word, &w, w - 1));
     if (COUNT(w) == 1) futex(&t->word, FUTEX_WAKE_PRIVATE, INT_MAX, NULL);
+    if (stops_said) stops_let_go();
     return DARWIN_KERN_SUCCESS;
 }
 
@@ -336,6 +398,7 @@ static long darwin_thread_resume(uint32_t port)
     struct dthread *t = by_port(port);
     long r = t ? resume_locked(t) : DARWIN_KERN_INVALID_ARGUMENT;
     pthread_mutex_unlock(&reg_lock);
+    stops_say();
     errno = saved;
     return r;
 }

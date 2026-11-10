@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <locale.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
@@ -96,21 +97,34 @@ static size_t darwin_strftime_l(char *s, size_t n, const char *fmt, const struct
 }
 
 // The sleeps. A thread_suspend stops a thread by a signal here, and a sleep that signal broke
-// off goes on for what was left of it, as one on macOS sleeps through a suspension; a signal
-// of the image's own ends it with EINTR as there.
+// off goes on to its end, as one on macOS sleeps through a suspension. The time the thread
+// stood is time slept there, so the sleep is one to a point on the monotonic clock, not one
+// for the time that was left when the signal came (a thread stopped often would sleep far
+// longer than it asked). A signal of the image's own ends it with EINTR as there.
 static long darwin_nanosleep(const struct timespec *want, struct timespec *rem)
 {
-    struct timespec t, left;
+    struct timespec end, now;
     if (!want) { errno = EFAULT; return -1; }
-    t = *want;
+    if (want->tv_sec < 0 || want->tv_nsec < 0 || want->tv_nsec >= 1000000000) { errno = EINVAL; return -1; }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    const time_t most = (time_t)(INT64_MAX / 1000000000);       // (a sleep past that never ends anyway)
+    end.tv_sec = want->tv_sec < most - end.tv_sec ? end.tv_sec + want->tv_sec : most;
+    end.tv_nsec += want->tv_nsec;
+    if (end.tv_nsec >= 1000000000) { end.tv_nsec -= 1000000000; end.tv_sec++; }
     for (;;) {
         unsigned stops = darwin_thread_stops();
-        if (nanosleep(&t, &left) == 0) return 0;
-        if (errno != EINTR || stops == darwin_thread_stops()) {
-            if (errno == EINTR && rem) *rem = left;
-            return -1;
+        int e = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &end, NULL);
+        if (e == 0) return 0;
+        if (e == EINTR && stops != darwin_thread_stops()) continue;
+        if (e == EINTR && rem) {
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            rem->tv_sec = end.tv_sec - now.tv_sec;
+            rem->tv_nsec = end.tv_nsec - now.tv_nsec;
+            if (rem->tv_nsec < 0) { rem->tv_nsec += 1000000000; rem->tv_sec--; }
+            if (rem->tv_sec < 0) rem->tv_sec = rem->tv_nsec = 0;
         }
-        t = left;
+        errno = e;
+        return -1;
     }
 }
 

@@ -349,6 +349,28 @@ static void *sleeper(void *arg)
     return NULL;
 }
 
+// waits on a socket nothing comes to, with a timeout of 200 ms
+static void *receiver(void *arg)
+{
+    struct sleeper *s = arg;
+    int fd[2];
+    char c;
+    struct timeval tv = { 0, 200 * 1000 };
+    s->port = pthread_mach_thread_np(pthread_self());
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != 0 || setsockopt(fd[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0) {
+        s->ret = -2;
+        atomic_store(&s->ready, 1);
+        return NULL;
+    }
+    uint64_t t0 = now_ms();
+    atomic_store(&s->ready, 1);
+    s->ret = recv(fd[0], &c, 1, 0) < 0 ? errno : 0;
+    s->took = (long)(now_ms() - t0);
+    close(fd[0]);
+    close(fd[1]);
+    return NULL;
+}
+
 static atomic_int churn_stop;
 static void *churn(void *arg)
 {
@@ -480,6 +502,19 @@ static void test_threads(void)
     pthread_join(t[0], NULL);
     SHOW("sleeper returned %d\n", sl.ret);
     CHECK("sleeper slept its time", sl.took >= 199 && sl.took < 2000);
+    CHECK("the time it stood counts as slept", sl.took < 236);
+
+    // one waiting on a socket with a timeout, the same: the timeout ends the wait, in its time
+    static struct sleeper rc;
+    pthread_create(&t[0], NULL, receiver, &rc);
+    while (!atomic_load(&rc.ready)) sched_yield();
+    nap(40);
+    CHECK("suspend receiver", thread_suspend(rc.port) == KERN_SUCCESS);
+    nap(40);
+    CHECK("resume receiver", thread_resume(rc.port) == KERN_SUCCESS);
+    pthread_join(t[0], NULL);
+    CHECK("receiver timed out", rc.ret == EAGAIN);
+    CHECK("receiver waited its time", rc.took >= 199 && rc.took < 236);
 
     // threads in malloc and in locks, stopped again and again while this one allocates
     long counts[3] = { 0, 0, 0 };

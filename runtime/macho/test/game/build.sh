@@ -9,7 +9,7 @@ export TZ=UTC
 ED=${1:?usage: build.sh <editor> <out dir>}; OUT=${2:?}
 HERE=$(cd "$(dirname "$0")" && pwd); DONOR=$HERE/../../../../tools/donor
 P=$(mktemp -d)/game; mkdir -p "$P/Assets/Editor"
-cp -R "$DONOR/Assets/Scripts" "$P/Assets/"; cp "$HERE/MacBuild.cs" "$P/Assets/Editor/"
+cp -R "$DONOR/Assets/Scripts" "$P/Assets/"; cp "$HERE/MachoChecks.cs" "$P/Assets/Scripts/"; cp "$HERE/MacBuild.cs" "$P/Assets/Editor/"
 BIN="$ED/Contents/MacOS/Unity"; [ -x "$BIN" ] || BIN="$ED"
 "$BIN" -batchmode -nographics -quit -projectPath "$P" -executeMethod MacBuild.Il2cppArm64 -logFile "$P/build.log" \
   || { tail -60 "$P/build.log"; exit 1; }

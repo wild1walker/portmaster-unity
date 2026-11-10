@@ -3,6 +3,8 @@
 //! files, state, report and exit statuses as the Python.
 use crate::args::Args;
 use crate::ggm;
+use crate::il2cppmeta;
+use crate::macho;
 use crate::paths::{self, abspath, listdir, realpath};
 use crate::plugins::{self, Survey};
 use crate::pyjson::{self, Json};
@@ -150,6 +152,12 @@ pub struct Ctx {
     /// metadata
     pub il2cpp_info: Option<Json>,
     pub il2cpp_build_date: Option<String>,
+    /// --macho: the macOS build, and its il2cpp_data files as the player's Managed/ ones
+    /// (path under Data, source)
+    pub macho: Option<macho::Build>,
+    pub macho_files: Vec<(String, String)>,
+    /// --macho: what the player asks the game's code for by name (required.rs), for the report
+    pub macho_required: Option<Json>,
     pub db: Arc<ClassDb>,
     logf: Option<File>,
 }
@@ -594,15 +602,8 @@ pub fn player_version(pkg: &str) -> Option<Version> {
         let lib = format!("{pkg}/Variations/{backend}/Release/Libs/{abi}/libunity.so");
         if is_file(&lib) {
             let d = fs::read(&lib).unwrap_or_default();
-            let found = versions_nul(&d);
-            if !found.is_empty() {
-                // max(set(found), key=found.count): the most common, the first in the set's order on ties
-                let mut uniq: Vec<&String> =
-                    found.iter().collect::<BTreeSet<_>>().into_iter().collect();
-                uniq.sort_by_key(|v| std::cmp::Reverse(found.iter().filter(|x| *x == *v).count()));
-                if let Ok(v) = Version::parse(uniq[0]) {
-                    return Some(v);
-                }
+            if let Some(v) = lib_version(&d).and_then(|v| Version::parse(&v).ok()) {
+                return Some(v);
             }
         }
     }
@@ -614,6 +615,33 @@ pub fn player_version(pkg: &str) -> Option<Version> {
         }
     }
     None
+}
+
+/// libunity.so's Unity version: the most common of the version strings in it, the first in
+/// sorted order on ties (max(set(found), key=found.count)), unless one of those tied has the
+/// build's stamp after it somewhere ("6000.0.52f1_9e4086222921", "6000.0.52f1 (9e40..."): Unity
+/// 6's library names its own version once, as often as the "2018.3.0a1" and "5.0.0a1" its code
+/// compares versions with.
+fn lib_version(d: &[u8]) -> Option<String> {
+    let found = versions_nul(d);
+    let mut uniq: Vec<&String> = found.iter().collect::<BTreeSet<_>>().into_iter().collect();
+    let count = |v: &String| found.iter().filter(|x| *x == v).count();
+    uniq.sort_by_key(|v| std::cmp::Reverse(count(v)));
+    let top = count(uniq.first()?);
+    let stamped = |v: &String| {
+        [format!("{v}_"), format!("{v} (")].iter().any(|pre| {
+            d.windows(pre.len() + 6).any(|w| {
+                w.starts_with(pre.as_bytes()) && w[pre.len()..].iter().all(u8::is_ascii_hexdigit)
+            })
+        })
+    };
+    let tied: Vec<&String> = uniq.iter().copied().filter(|v| count(v) == top).collect();
+    if tied.len() > 1 {
+        if let Some(v) = tied.iter().find(|v| stamped(v)) {
+            return Some((*v).clone());
+        }
+    }
+    Some(uniq[0].clone())
 }
 
 /// re.findall(VERSION_RE + b'\x00') over a binary.
@@ -690,12 +718,17 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
     }
     let v = UV::of_data(&src).map_err(|e| uns(e.0))?;
     ctx.unity = UV::check(v, ctx.args.any_unity_version).map_err(|e| uns(e.0))?;
+    let mac = match ctx.args.macho.clone() {
+        Some(app) => Some(macho::find(&app).map_err(uns)?),
+        None => None,
+    };
     let gm = py::join(&src, "Managed");
-    if !is_dir(&gm)
-        || !listdir(&gm)
-            .unwrap_or_default()
-            .iter()
-            .any(|n| n.ends_with(".dll"))
+    if mac.is_none()
+        && (!is_dir(&gm)
+            || !listdir(&gm)
+                .unwrap_or_default()
+                .iter()
+                .any(|n| n.ends_with(".dll")))
     {
         let il2cpp: Vec<&str> = [
             "il2cpp_data",
@@ -703,12 +736,19 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
             "../GameAssembly.so",
             "../GameAssembly.dll",
             "../GameAssembly.dylib",
+            "../../Frameworks/GameAssembly.dylib",
         ]
         .into_iter()
         .filter(|n| exists(&py::join(&src, n)))
         .collect();
         let why = if il2cpp.is_empty() {
             String::new()
+        } else if il2cpp.contains(&"../../Frameworks/GameAssembly.dylib") {
+            format!(
+                ": an IL2CPP build ({}), which the Mono Android player cannot run (a macOS build's arm64 code runs on \
+                 the IL2CPP player: --macho <Game>.app, docs/macho-route.md)",
+                il2cpp.join(", ")
+            )
         } else {
             format!(
                 ": an IL2CPP build ({}), which the Mono Android player cannot run",
@@ -762,7 +802,9 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
         }
     }
     ctx.runtime = scripting_runtime(&src, &ctx.unity)?;
-    if let Some(il) = ctx.args.il2cpp.clone() {
+    if let Some(b) = mac {
+        macho_source(ctx, b)?;
+    } else if let Some(il) = ctx.args.il2cpp.clone() {
         let ij = py::join(&il, "il2cpp.json");
         if !is_file(&ij) {
             return Err(uns(format!(
@@ -825,6 +867,93 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
         None => Vec::new(),
     };
     ctx.plugins = Some(survey);
+    Ok(())
+}
+
+/// --macho's part of check_source: the build goes with this data and this player, and what
+/// --il2cpp's paths read of an il2cpp.json is stated for it.
+fn macho_source(ctx: &mut Ctx, b: macho::Build) -> Result<(), Stop> {
+    let uns = |m: String| Stop::Exit(m);
+    let (src, pkg) = (ctx.args.src.clone(), ctx.args.pkg.clone().unwrap());
+    let u = ctx.unity.clone();
+    // (--src may be a converted copy of the app's data: of the same build)
+    let built = UV::of_data(&b.data).map_err(|e| uns(e.0))?;
+    if built.to_string() != u.to_string() {
+        return Err(uns(format!(
+            "--macho: {} is a Unity {built} build, the data in {src} is Unity {u}: not this build's data",
+            b.data
+        )));
+    }
+    // The game's code calls the player's functions by name and reads its objects by layout:
+    // only the player it was compiled against has them all as the code expects.
+    match &ctx.player_unity {
+        Some(p) if p.exact && p.to_string() == u.to_string() => {}
+        Some(p) if p.exact => {
+            return Err(uns(format!(
+                "--macho: the build is Unity {u}, the player package Unity {p}: its compiled code needs the IL2CPP Android \
+                 player of exactly {u} (`pmunity player fetch {u} --backend il2cpp --abi arm64-v8a`)"
+            )))
+        }
+        _ => {
+            return Err(uns(format!(
+                "--macho: {pkg}: the player package does not state its exact Unity version (the build's compiled code \
+                 needs the IL2CPP Android player of exactly {u})"
+            )))
+        }
+    }
+    if !is_dir(&py::join(&pkg, "Variations/il2cpp/Managed")) {
+        return Err(uns(format!(
+            "--macho: {pkg} is no IL2CPP player package with its engine modules (Variations/il2cpp/Managed: `pmunity \
+             player fetch {u} --backend il2cpp --abi arm64-v8a`)"
+        )));
+    }
+    let meta = il2cppmeta::Metadata::open(Path::new(&b.metadata));
+    let mut assemblies = match &meta {
+        Ok(m) => m.image_names(),
+        Err(_) => Vec::new(),
+    };
+    // What the player's own code asks the game's for by name, against what the build has.
+    let modules = py::join(&pkg, "Variations/il2cpp/Managed");
+    match meta.as_ref().map_err(|e| e.to_string()).and_then(|m| crate::required::census(&modules, m)) {
+        Ok(c) => {
+            let labels = |l: &[crate::required::Member]| Json::List(l.iter().map(|m| m.label().as_str().into()).collect());
+            let mut j = Json::obj();
+            j.set("modules", (c.modules as i64).into());
+            j.set("required", (c.required as i64).into());
+            j.set("stood_in", labels(&c.stood_in));
+            j.set("absent", labels(&c.absent));
+            ctx.macho_required = Some(j);
+        }
+        Err(e) => ctx.warnings.push(format!(
+            "--macho: what the Android player asks the game's code for by name was not compared with the build ({e})"
+        )),
+    }
+    if assemblies.is_empty() {
+        // (metadata of a version il2cppmeta does not read: the build's own list)
+        let sj = py::join(&b.data, "ScriptingAssemblies.json");
+        if let Ok(j) = fs::read(&sj).map_err(|e| e.to_string()).and_then(|t| pyjson::loads_bytes(&t)) {
+            assemblies = ggm::json_names(&j);
+        }
+    }
+    if assemblies.is_empty() {
+        return Err(uns(format!(
+            "--macho: {}: metadata version {} and no ScriptingAssemblies.json: the build's assemblies are not known",
+            b.metadata, b.metadata_version
+        )));
+    }
+    if (u.major, u.minor) != (6000, 0) {
+        ctx.warnings.push(format!(
+            "--macho: a Unity {u} build: the route is tested with Unity 6000.0 builds only (docs/macho-route.md)"
+        ));
+    }
+    ctx.runtime = Some(format!(
+        "IL2CPP of the macOS build ({}, metadata v{}): its GameAssembly.dylib on the IL2CPP player",
+        macho::ABI,
+        b.metadata_version
+    ));
+    ctx.macho_files = macho::managed_files(&b);
+    ctx.il2cpp_info = Some(macho::info(&b, &u.to_string(), assemblies, &ctx.macho_files));
+    ctx.macho = Some(b);
     Ok(())
 }
 
@@ -921,7 +1050,7 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
             items.push(item(d, s, &a));
         }
     }
-    for (n, path) in memory_advice(&pkg, ctx.args.il2cpp.is_some() || ctx.args.mono64) {
+    for (n, path) in memory_advice(&pkg, ctx.args.compiled() || ctx.args.mono64) {
         items.push(item(format!("{name}/assets/{n}"), path, "link"));
         ctx.loose_assets.push(n);
     }
@@ -945,7 +1074,7 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
         bex,
         act,
     ));
-    let backend = if ctx.args.il2cpp.is_some() || ctx.args.mono64 {
+    let backend = if ctx.args.compiled() || ctx.args.mono64 {
         "il2cpp"
     } else {
         "mono"
@@ -985,10 +1114,15 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
         }
     }
     let gmanaged = py::join(&src, "Managed");
-    let mut all: BTreeSet<String> = listdir(&gmanaged)
-        .map_err(io_at(&gmanaged))?
-        .into_iter()
-        .collect();
+    // (--macho: the build has no assemblies; il2cpp_items drops Managed/ for its own files)
+    let mut all: BTreeSet<String> = if ctx.macho.is_some() {
+        BTreeSet::new()
+    } else {
+        listdir(&gmanaged)
+            .map_err(io_at(&gmanaged))?
+            .into_iter()
+            .collect()
+    };
     all.extend(overrides.iter().map(|(k, _)| k.clone()));
     for n in all {
         if !n.ends_with(".dll") {
@@ -1013,7 +1147,12 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
         names.insert(n);
     }
     ctx.managed_names = names.clone();
-    for (r, users) in missing_references(&amanaged, &names) {
+    let refs = if ctx.macho.is_some() {
+        Vec::new()
+    } else {
+        missing_references(&amanaged, &names)
+    };
+    for (r, users) in refs {
         let more = if users.len() > 3 { "..." } else { "" };
         ctx.warnings.push(format!(
             "{r}.dll: the Android engine modules reference it ({}{more}) and the game's Managed folder has none: their types \
@@ -1063,7 +1202,7 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
             items.push(item(n.clone(), py::join(&gd, &n), "link"));
         }
     }
-    if ctx.args.il2cpp.is_some() {
+    if ctx.args.compiled() {
         items = il2cpp_items(ctx, items, &data)?;
     }
     Ok(items)
@@ -1075,8 +1214,11 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
 /// Managed/*.dll and Mono's config the player gets what il2cpp wrote for it (Managed/Metadata,
 /// Resources, etc), and the stamp libunity copies it out again by (2020.x: boot.config's
 /// buildDate; 2021.x+: unity_app_guid), both from the metadata.
+///
+/// --macho: the same of the macOS build, whose il2cpp_data/ holds those files, and the code
+/// itself, GameAssembly.dylib's arm64 part, in lib/arm64-v8a of the output for the port's lib
+/// folder (the runtime's bridge, the player's libil2cpp.so there, loads it).
 fn il2cpp_items(ctx: &mut Ctx, items: Vec<Item>, data: &str) -> Result<Vec<Item>, Stop> {
-    let il = ctx.args.il2cpp.clone().unwrap();
     let info = ctx.il2cpp_info.clone().unwrap();
     let managed = format!("{data}/Managed/");
     let mut items: Vec<Item> = items
@@ -1089,15 +1231,24 @@ fn il2cpp_items(ctx: &mut Ctx, items: Vec<Item>, data: &str) -> Result<Vec<Item>
             _ => Err(Stop::Fail(format!("KeyError: '{k}'"))),
         }
     };
-    for rel in strs("files")? {
-        items.push(item(
-            py::join(data, &paths::relpath(&rel, "Data")),
-            py::join(&il, &rel),
-            "link",
-        ));
-    }
+    let metadata = if let Some(b) = &ctx.macho {
+        for (rel, s) in &ctx.macho_files {
+            items.push(item(py::join(data, rel), s.clone(), "link"));
+        }
+        items.push(item(macho::LIB.into(), b.binary.clone(), "machoslice"));
+        b.metadata.clone()
+    } else {
+        let il = ctx.args.il2cpp.clone().unwrap();
+        for rel in strs("files")? {
+            items.push(item(
+                py::join(data, &paths::relpath(&rel, "Data")),
+                py::join(&il, &rel),
+                "link",
+            ));
+        }
+        format!("{il}/Data/Managed/Metadata/global-metadata.dat")
+    };
     ctx.managed_names = strs("assemblies")?.into_iter().collect();
-    let metadata = format!("{il}/Data/Managed/Metadata/global-metadata.dat");
     if ctx.unity.major == 2020 {
         let h = sha256_hex(&fs::read(&metadata).map_err(io_at(&metadata))?);
         ctx.il2cpp_build_date = Some(build_date(&h));
@@ -1260,6 +1411,9 @@ fn opts_key(ctx: &Ctx) -> Json {
     if a.mono64 {
         k.push("mono64".into());
     }
+    if let Some(m) = &a.macho {
+        k.push(format!("macho={m}").into());
+    }
     if a.swappy != "keep" && ctx.unity.line() >= ggm::SWAPPY_FROM {
         k.push(format!("swappy={}", a.swappy).into());
     }
@@ -1322,6 +1476,37 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             )));
         }
     }
+    if let Some(app) = args.macho.clone() {
+        let mut given = Vec::new();
+        for (on, flag) in [
+            (args.il2cpp.is_some(), "--il2cpp"),
+            (args.mono64, "--mono64"),
+            (args.asmpatch.is_some(), "--asmpatch"),
+            (!args.managed_file.is_empty(), "--managed-file"),
+            (!args.assembly_patch.is_empty(), "--assembly-patch"),
+            (args.game_managed.is_some(), "--game-managed"),
+            (args.mono_etc.is_some(), "--mono-etc"),
+            (!args.dllmap.is_empty(), "--dllmap"),
+            (args.data_path, "--data-path"),
+            (args.streaming_assets != "obb", "--streaming-assets"),
+        ] {
+            if on {
+                given.push(flag);
+            }
+        }
+        if !given.is_empty() {
+            return Err(Stop::Exit(format!(
+                "{} with --macho: the game's code is the macOS build's own, compiled, and runs unchanged: there are no \
+                 assemblies to patch or to run on Mono, and its file reads are not redirected",
+                given.join(", ")
+            )));
+        }
+        args.macho = Some(abspath(&app));
+        if args.name.is_none() {
+            // (the app's name, wherever --src's copy of its data is)
+            args.name = macho::app_name(&macho::data_of(&abspath(&app)));
+        }
+    }
     let name = match &args.name {
         Some(n) => n.clone(),
         None => {
@@ -1344,6 +1529,11 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                 .collect::<String>()
         )
     });
+    if args.macho.is_some() && name.is_empty() {
+        return Err(Stop::Exit(
+            "--macho: no name for the game from the app's or the data folder's: give --name".into(),
+        ));
+    }
     let beside = args
         .beside
         .clone()
@@ -1367,7 +1557,10 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         args.il2cpp = Some(abspath(il));
     }
     let real_out = realpath(&args.out);
-    for ro in std::iter::once(args.src.clone()).chain(args.game_managed.clone()) {
+    for ro in std::iter::once(args.src.clone())
+        .chain(args.game_managed.clone())
+        .chain(args.macho.clone())
+    {
         if real_out.starts_with(&realpath(&ro)) {
             return Err(Stop::Exit(format!("refusing to write inside {ro}")));
         }
@@ -1417,6 +1610,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         video_bt709: false,
         il2cpp_info: None,
         il2cpp_build_date: None,
+        macho: None,
+        macho_files: Vec::new(),
+        macho_required: None,
         db,
         logf: None,
     };
@@ -1442,6 +1638,33 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     ctx.log(&line);
     for w in ctx.warnings.clone() {
         ctx.log(&format!("WARNING: {w}"));
+    }
+    // Not a warning: a build's own stripping leaves members out too (those of a module the game
+    // does not use, which the macOS player does not ask for either), and what the player was
+    // built without is not known from the build.
+    if let Some(j) = ctx.macho_required.clone() {
+        let n = |k: &str| match j.get(k) {
+            Some(Json::List(l)) => l.len() as i128,
+            Some(Json::Int(i)) => *i,
+            _ => 0,
+        };
+        let mut line = format!(
+            "the player's {} members required of the game's code, in the {} engine modules the build has: {} are not in \
+             the macOS build, {} of them with a stand-in in the runtime",
+            n("required"),
+            n("modules"),
+            n("stood_in") + n("absent"),
+            n("stood_in")
+        );
+        if let Some(Json::List(l)) = j.get("absent") {
+            if !l.is_empty() {
+                line.push_str(&format!(
+                    "; without one (the player stops with the member's name if it asks for it, docs/macho-route.md): {}",
+                    l.iter().map(Json::py_str).collect::<Vec<_>>().join("; ")
+                ));
+            }
+        }
+        ctx.log(&line);
     }
     let statep = py::join(&out, ".android_data_state.json");
     let mut state = Json::obj();
@@ -1845,6 +2068,16 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         } else if act == "il2cppguid" {
             write_bytes(&dst, il2cpp_app_guid(src)?.as_bytes())?;
             how = "written".into();
+        } else if act == "machoslice" {
+            let n = macho::write_slice(src, &dst).map_err(Stop::Exit)?;
+            let cut = ctx.macho.as_ref().is_some_and(|b| b.universal);
+            ctx.log(&format!(
+                "  {dst_rel}: the game's arm64 code as the macOS build has it ({:.1} MiB{}): for the port's lib folder, \
+                 beside the runtime's bridge (the player's libil2cpp.so)",
+                n as f64 / (1u64 << 20) as f64,
+                if cut { ", the universal file's arm64 part" } else { "" }
+            ));
+            how = "written".into();
         } else if act == "il2cppboot" {
             let b = fs::read(src).map_err(io_at(src))?;
             let mut txt = String::from_utf8_lossy(&b)
@@ -1993,6 +2226,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     unity.set("scripting_runtime", ctx.runtime.clone().into());
     unity.set("warnings", ctx.warnings.clone().into());
     report.set("unity", unity);
+    if let Some(j) = ctx.macho_required.clone() {
+        report.set("player_required", j);
+    }
     report.set("skipped", ctx.skipped.clone().into());
     report.set("dropped_modules", ctx.dropped_modules.clone().into());
     let survey = ctx.plugins.take().unwrap();
@@ -2389,6 +2625,34 @@ pub fn gc_time_slice(src: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// libunity.so's version: the most common string; on a tie the one the build's stamp follows
+    /// (an editor's Android player has three versions once each), else the first in sorted order
+    #[test]
+    fn lib_versions() {
+        let lib = |parts: &[&str]| -> Vec<u8> {
+            let mut b = vec![0u8; 16];
+            for p in parts {
+                b.extend(p.as_bytes());
+                b.push(0);
+                b.extend([1u8; 7]);
+            }
+            b
+        };
+        let v = |parts: &[&str]| lib_version(&lib(parts));
+        assert_eq!(v(&["2019.4.40f1", "5.0.0a1", "2019.4.40f1"]).as_deref(), Some("2019.4.40f1"));
+        assert_eq!(
+            v(&["5.0.0a1", "6000.0.52f1", "2018.3.0a1", "6000.0.52f1_9e4086222921"]).as_deref(),
+            Some("6000.0.52f1")
+        );
+        assert_eq!(
+            v(&["2018.3.0a1", "2022.3.62f1", "Unity 2022.3.62f1 (4af31df58517)"]).as_deref(),
+            Some("2022.3.62f1")
+        );
+        // (no stamp anywhere: as before)
+        assert_eq!(v(&["6000.0.52f1", "2018.3.0a1"]).as_deref(), Some("2018.3.0a1"));
+        assert_eq!(v(&["no version"]), None);
+    }
 
     #[test]
     fn mono_config() {

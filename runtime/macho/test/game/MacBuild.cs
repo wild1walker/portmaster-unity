@@ -4,7 +4,8 @@ using UnityEngine;
 
 // The route's test game: the donor's game of pong (tools/donor/Assets/Scripts) built as a macOS
 // arm64 IL2CPP player, whose GameAssembly.dylib and global-metadata.dat the bridge runs under
-// the Android player of the same Unity version (build.sh runs this).
+// the Android player of the same Unity version (build.sh runs this), with the route's checks
+// (MachoChecks.cs) beside the game.
 public static class MacBuild
 {
     public static void Il2cppArm64()
@@ -12,6 +13,7 @@ public static class MacBuild
         System.IO.Directory.CreateDirectory("out");
         var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
         new GameObject("Pong").AddComponent<Pong>();
+        new GameObject("Checks").AddComponent<MachoChecks>();     // MachoChecks.cs: its lines in the player's log
         EditorSceneManager.SaveScene(scene, "Assets/Donor.unity");
         PlayerSettings.companyName = "portmaster-unity";
         PlayerSettings.productName = "Pong";

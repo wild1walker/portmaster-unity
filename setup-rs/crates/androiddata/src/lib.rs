@@ -10,6 +10,8 @@ pub mod clrmeta;
 pub mod ggm;
 pub mod il2cppmeta;
 pub mod inline;
+pub mod macho;
+pub mod required;
 pub mod pack;
 pub mod patch_obb;
 pub mod paths;

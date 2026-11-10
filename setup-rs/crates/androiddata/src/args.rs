@@ -130,6 +130,7 @@ const OPTS: &[Opt] = &[
     o("--beside", "beside", Kind::Append, "GLOB"),
     o("--mono64", "mono64", Kind::True, ""),
     o("--il2cpp", "il2cpp", Kind::Value, "DIR"),
+    o("--macho", "macho", Kind::Value, "APP"),
     o("--force", "force", Kind::True, ""),
     o("--consume-src", "consume_src", Kind::True, ""),
     o(
@@ -186,6 +187,8 @@ pub struct Args {
     pub beside: Option<Vec<String>>,
     pub mono64: bool,
     pub il2cpp: Option<String>,
+    /// --macho: the macOS IL2CPP build (<Game>.app) whose arm64 code runs as it is (macho.rs)
+    pub macho: Option<String>,
     pub force: bool,
     pub consume_src: bool,
     pub verify_bundles: i64,
@@ -216,11 +219,19 @@ pub const USAGE: &str =
                              [--streaming-assets {obb,both,loose}]
                              [--min-gles {auto,keep,3.0,3.1,3.2}] [--min-sdk API]
                              [--realtime-gi {neon,as-is}] [--data-path]
-                             [--beside GLOB] [--mono64] [--il2cpp DIR] [--force]
-                             [--consume-src] [--verify-bundles VERIFY_BUNDLES]
-                             [--no-verify] [--pack {none,apk,obb,all}]
-                             [--package PACKAGE] [--version-code VERSION_CODE]
-                             [--zip-dir ZIP_DIR]";
+                             [--beside GLOB] [--mono64] [--il2cpp DIR]
+                             [--macho APP] [--force] [--consume-src]
+                             [--verify-bundles VERIFY_BUNDLES] [--no-verify]
+                             [--pack {none,apk,obb,all}] [--package PACKAGE]
+                             [--version-code VERSION_CODE] [--zip-dir ZIP_DIR]";
+
+impl Args {
+    /// The game's code is compiled (--il2cpp: `pmunity il2cpp`'s libil2cpp.so; --macho: the
+    /// macOS build's own): no assemblies in Managed/, the IL2CPP player.
+    pub fn compiled(&self) -> bool {
+        self.il2cpp.is_some() || self.macho.is_some()
+    }
+}
 
 /// A command line error: argparse's usage and message, exit 2 (Err), or the help (Ok(None)).
 pub fn parse(argv: &[String]) -> Result<Option<Args>, String> {
@@ -404,6 +415,7 @@ pub fn parse(argv: &[String]) -> Result<Option<Args>, String> {
         beside: vals.contains_key("beside").then(|| list("beside")),
         mono64: flag("mono64"),
         il2cpp: last("il2cpp"),
+        macho: last("macho"),
         force: flag("force"),
         consume_src: flag("consume_src"),
         verify_bundles: int("verify_bundles", 6),

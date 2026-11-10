@@ -470,7 +470,7 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
     res.set("package", ctx.package.as_str().into());
     res.set("version_code", ctx.args.version_code.into());
     res.set("unity_version", ctx.unity.to_string().into());
-    if ctx.args.il2cpp.is_some() {
+    if ctx.args.compiled() {
         // (the IL2CPP build's ABI, as `pmunity apk` writes it: what picks the 64-bit ua_host)
         let abi = ctx
             .il2cpp_info
@@ -479,6 +479,10 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
             .cloned()
             .unwrap_or(Json::Null);
         res.set("abi", abi);
+        if ctx.args.macho.is_some() {
+            // (the runtime's Mach-O bridge is this player's libil2cpp.so: docs/macho-route.md)
+            res.set("scripting", "macho".into());
+        }
     } else if ctx.args.mono64 {
         res.set("abi", "arm64-v8a".into());
         res.set("scripting", "mono".into());
@@ -502,7 +506,7 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
     let patch_obb = py::join(&zdir, &format!("patch.{code}.{}.obb", ctx.package));
     let limit = ctx.zip_limit;
     let mut pack_what = ctx.args.pack.clone();
-    if (ctx.args.il2cpp.is_some() || ctx.args.mono64) && pack_what == "all" {
+    if (ctx.args.compiled() || ctx.args.mono64) && pack_what == "all" {
         let mut total = 0;
         for (_, s) in apk_entries.iter().chain(obb_entries.iter()) {
             total += size_of(s)?;

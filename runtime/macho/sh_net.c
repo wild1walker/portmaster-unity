@@ -21,17 +21,52 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define PUT(p, off, v) memcpy((unsigned char *)(p) + (off), &(v), sizeof(v))
 #define GET(p, off, v) memcpy(&(v), (const unsigned char *)(p) + (off), sizeof(v))
 
 // A call a thread_suspend's signal broke off is made again (darwin_thread_stops): a socket
-// with a timeout is not restarted by the kernel. The timeout then counts from the start again.
-#define AGAIN(r, call) do { \
+// with a timeout (SO_RCVTIMEO, SO_SNDTIMEO) is not restarted by the kernel. The timeout is one
+// from the call's start still: the socket is waited for (poll) for what is left of it before
+// the call is made again, and the call ends with EAGAIN when it ran out, as on its own. (A
+// call made again counts its timeout anew in the kernel: only when another thread took what
+// the poll saw does it wait past the time, and a stop in that wait brings it back here.)
+static int64_t mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+// which: SO_RCVTIMEO or SO_SNDTIMEO, the timeout of the call that started at t0.
+// 1: make the call again; 0: it is over, with errno
+static int stopped_wait(int fd, int which, int64_t t0)
+{
+    struct timeval tv = { 0, 0 };
+    socklen_t n = sizeof tv;
+    if (getsockopt(fd, SOL_SOCKET, which, &tv, &n) != 0 || (tv.tv_sec == 0 && tv.tv_usec == 0)) return 1;
+    int64_t end = t0 + (int64_t)tv.tv_sec * 1000000000 + (int64_t)tv.tv_usec * 1000;
+    for (;;) {
+        int64_t left = end - mono_ns();
+        if (left <= 0) { errno = EAGAIN; return 0; }
+        left = (left + 999999) / 1000000;
+        struct pollfd p = { fd, which == SO_RCVTIMEO ? POLLIN : POLLOUT, 0 };
+        unsigned stops = darwin_thread_stops();
+        int r = poll(&p, 1, left > INT32_MAX ? INT32_MAX : (int)left);
+        if (r > 0) return 1;
+        if (r == 0) { errno = EAGAIN; return 0; }
+        if (errno != EINTR) return 1;                           // the call says what is wrong
+        if (stops == darwin_thread_stops()) return 0;           // a signal of the image's own: EINTR
+    }
+}
+
+#define AGAIN(r, fd, which, call) do { \
+        int64_t ua_t0_ = mono_ns(); \
         unsigned ua_stops_; \
         do { ua_stops_ = darwin_thread_stops(); (r) = (call); } \
-        while ((r) < 0 && errno == EINTR && ua_stops_ != darwin_thread_stops()); \
+        while ((r) < 0 && errno == EINTR && ua_stops_ != darwin_thread_stops() && stopped_wait(fd, which, ua_t0_)); \
     } while (0)
 
 // ---- addresses ---------------------------------------------------------------------------------
@@ -158,6 +193,16 @@ static long darwin_socket(int domain, int type, int protocol)
     return fd;
 }
 
+static long darwin_socketpair(int domain, int type, int protocol, int *fds)
+{
+    int family = family_host(domain);
+    if (family < 0) { errno = EAFNOSUPPORT; return -1; }
+    if (socketpair(family, type, protocol, fds) != 0) return -1;
+    mark_set(fds[0], 0);
+    mark_set(fds[1], 0);
+    return 0;
+}
+
 static long darwin_bind(int fd, const unsigned char *addr, uint32_t len)
 {
     struct sockaddr_storage h;
@@ -194,7 +239,7 @@ static long darwin_accept(int fd, unsigned char *addr, uint32_t *len)
     struct sockaddr_storage h;
     socklen_t hlen = sizeof h;
     int r;
-    AGAIN(r, accept(fd, addr ? (struct sockaddr *)&h : NULL, addr ? &hlen : NULL));
+    AGAIN(r, fd, SO_RCVTIMEO, accept(fd, addr ? (struct sockaddr *)&h : NULL, addr ? &hlen : NULL));
     if (r < 0) return -1;
     mark_set(r, 0);
     if (addr) sa_darwin((struct sockaddr *)&h, hlen, addr, len);
@@ -225,7 +270,7 @@ static ssize_t darwin_send(int fd, const void *buf, size_t n, int flags)
     if (h < 0) return bad_flags("send");
     if (marked(fd)) h |= MSG_NOSIGNAL;
     ssize_t r;
-    AGAIN(r, send(fd, buf, n, h));
+    AGAIN(r, fd, SO_SNDTIMEO, send(fd, buf, n, h));
     return r;
 }
 
@@ -236,9 +281,14 @@ static ssize_t darwin_recvfrom(int fd, void *buf, size_t n, int flags, unsigned 
     struct sockaddr_storage h;
     socklen_t hlen = sizeof h;
     ssize_t r;
-    AGAIN(r, recvfrom(fd, buf, n, hf, addr ? (struct sockaddr *)&h : NULL, addr ? (hlen = sizeof h, &hlen) : NULL));
+    AGAIN(r, fd, SO_RCVTIMEO, recvfrom(fd, buf, n, hf, addr ? (struct sockaddr *)&h : NULL, addr ? (hlen = sizeof h, &hlen) : NULL));
     if (r >= 0 && addr) sa_darwin((struct sockaddr *)&h, hlen, addr, len);
     return r;
+}
+
+static ssize_t darwin_recv(int fd, void *buf, size_t n, int flags)
+{
+    return darwin_recvfrom(fd, buf, n, flags, NULL, NULL);
 }
 
 // ---- sendmsg, recvmsg --------------------------------------------------------------------------
@@ -327,7 +377,7 @@ static ssize_t darwin_sendmsg(int fd, const unsigned char *msg, int flags)
     }
     if (marked(fd)) hf |= MSG_NOSIGNAL;
     ssize_t r;
-    AGAIN(r, sendmsg(fd, &h, hf));
+    AGAIN(r, fd, SO_SNDTIMEO, sendmsg(fd, &h, hf));
     int e = errno;
     free(control);
     errno = e;
@@ -354,7 +404,7 @@ static ssize_t darwin_recvmsg(int fd, unsigned char *msg, int flags)
         if (!control) { errno = ENOMEM; return -1; }
     }
     ssize_t r;
-    AGAIN(r, recvmsg(fd, &h, hf));
+    AGAIN(r, fd, SO_RCVTIMEO, recvmsg(fd, &h, hf));
     if (r < 0) { int e = errno; free(control); errno = e; return -1; }
 
     int out_flags = flags_darwin(h.msg_flags);
@@ -749,8 +799,8 @@ static long darwin_getifaddrs(unsigned char **out)
 }
 
 const struct darwin_sym darwin_syms_net[] = {
-    SHIM(socket), SHIM(bind), SHIM(connect), SHIM(accept), SHIM(getsockname), SHIM(getpeername),
-    SHIM(send), SHIM(recvfrom), SHIM(sendmsg), SHIM(recvmsg), SHIM(setsockopt), SHIM(getsockopt),
+    SHIM(socket), SHIM(socketpair), SHIM(bind), SHIM(connect), SHIM(accept), SHIM(getsockname), SHIM(getpeername),
+    SHIM(send), SHIM(recv), SHIM(recvfrom), SHIM(sendmsg), SHIM(recvmsg), SHIM(setsockopt), SHIM(getsockopt),
     SHIM(getaddrinfo), SHIM(freeaddrinfo), SHIM(getnameinfo), SHIM(inet_ntop), SHIM(inet_pton),
     SHIM(getifaddrs), SHIM(freeifaddrs),
     SAME(listen), SAME(shutdown), SAME(if_nametoindex),

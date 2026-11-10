@@ -44,6 +44,24 @@ disassembly with every feature on leaves no undecodable word, so the code sectio
 (`LC_DATA_IN_CODE` is there with 0 entries); the 284 `udf` words are the lazy-binding immediates
 of `__stub_helper`, never executed since lazy pointers are bound at load.
 
+### Its plugins (2026-11-10)
+
+`Contents/PlugIns` of the build, each file universal; what the arm64 slices need (`nm -um`,
+the loader's probe and its instruction scan, `test/shims.sh cover` for the names):
+
+| plugin | links | for the route |
+|---|---|---|
+| `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve (not yet loaded under the route); 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows |
+| `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | 22 libSystem names have no shim yet: `getcontext`/`makecontext`/`swapcontext`, Mach semaphores (`semaphore_create`/`_wait`/`_signal`/`_destroy`), `fegetenv`/`fesetenv`, `pthread_threadid_np`, `pthread_attr_setstacksize`, `shmdt`, `__assert_rtn`, `__udivti3`, and plain C ones (`atof`, `ldexp`, `log2`, `rand`, `srand`, `strncat`, `strspn`, `strtok`); 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables |
+| `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions |
+| `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
+| `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API); the runtime's own answer stands in: Steam is not running |
+
+What the game's code calls is in the code itself: IL2CPP compiles each `DllImport` to a lookup
+with the library's and the function's name as C strings, so `strings` over the arm64 image
+lists them (`lib_coacd` with `CoACD_run`, `CoACD_freeMeshArray`, `CoACD_setLogLevel`;
+`steam_api`). A plugin in the folder that no string names is not loaded by the game's code.
+
 ## What has to be answered
 
 The rewrite (`a64fix.c`): `ldapr` becomes `ldar` in place (stronger ordering, same value). Each
@@ -121,7 +139,12 @@ it.
 - stop-the-world (`thread_suspend`, `thread_get_state`, `thread_resume`): a real-time signal,
   a suspend count per thread, the registers saved at the stop, handlers on an alternate stack
   with every signal masked. A blocking call interrupted by a stop is retried, not failed with
-  `EINTR`;
+  `EINTR`, and a call with a time limit keeps its deadline: the time a thread stood stopped is
+  time it waited or slept (condition waits, `__ulock_wait`, semaphores, `select`, `poll`,
+  `nanosleep`, `usleep`, `sleep`, and socket calls under `SO_RCVTIMEO`/`SO_SNDTIMEO`, which the
+  shim finishes with a `poll` for what is left of the timeout). On macOS a suspended thread's
+  wait simply goes on in the kernel; here the stop is a signal, and every such call has to put
+  that back;
 - pthread's static initializers are a signature word that glibc would read as a held lock: the
   first use builds the real object behind it, once, under a lock.
 
@@ -152,8 +175,9 @@ Not answered yet, each refused or reported by name: `LC_DYLD_CHAINED_FIXUPS` and
    every rewrite forced (`UA_A64FIX=all`);
 3. the two outputs must be the same, byte for byte.
 
-The C test (180 lines of output) covers formatting, files, directories, time, sysctl, threads
-(mutexes, conditions, keys, 200 stop-the-world rounds over running and sleeping threads),
+The C test (185 lines of output) covers formatting, files, directories, time, sysctl, threads
+(mutexes, conditions, keys, 200 stop-the-world rounds over running and sleeping threads, a
+sleep and a socket read with a timeout that are stopped half way and still end on time),
 locale and sockets. The C++ test (42 lines) covers exceptions through 12 frames, `dynamic_cast`,
 streams, locales, containers, `std::thread`, `thread_local`, futures. Both match; the C++ test
 matched in 100 of 100 repeated runs.
@@ -246,27 +270,65 @@ module (`PlaybackEngines/AndroidPlayer/Variations/il2cpp/Managed`) and the macOS
 it is read, not kept.
 
 What decides the set for a game is what the Android player requires
-(`[RequiredByNativeCode]` members of the Android modules) against what the game's own
-`global-metadata.dat` holds, not a diff of the two platforms' modules: stripping differs per
-game. The setup has to report every required member the game lacks and the bridge has no
-record for (to do, with the `--macho` mode of `pmu android-data`).
+(`[RequiredByNativeCode]` members of the Android modules, those not marked optional) against
+what the game's own `global-metadata.dat` holds, not a diff of the two platforms' modules:
+stripping differs per game. `pmu android-data --macho` makes that comparison
+(`setup-rs/crates/androiddata/src/required.rs`), for the engine modules the build has an image
+of, and puts it in the log and in the report (`player_required`: the modules compared, the
+members required, those the bridge stands in for, those absent with no stand-in). A unit test
+holds the tool's list of stand-ins to the bridge's.
+
+The absent list is **what to look at when the player stops, not a verdict**. The test game
+(707 required members in 36 modules): 6 are not in its build; 2 are the `Mobile` pair above;
+the other 4 are `m_Ptr` and `m_IsWrapper` of `UnityEngine.UIElements.VisualManager` and
+`VisualNodeClassNameStore`. The macOS UIElements module marks those four fields exactly as the
+Android one does: the build's own stripping took them, because the game uses nothing of that
+module and the macOS player then never asks. The Android player does not ask either, and the
+game runs. A build does not say whether a member went with the platform or with stripping, so
+the tool lists both and the player's own message ("Unable to find ...", then a stop with the
+name in the bridge) decides.
 
 Also open: 13 internal calls the image may ask for that the Android player does not register
 (`UnityEngine.Screen::GetMainWindowDisplayInfo_Injected` among them; none was called by the
 test game), and 6 il2cpp functions the Mac image does not export (none was called).
 
-### The data, by hand for now
+### The data: `pmu android-data --macho <Game>.app`
 
 A macOS build keeps `Contents/Resources/Data` (the Data folder), with
 `il2cpp_data/{Metadata,Resources}`, and `Contents/Frameworks/GameAssembly.dylib`. The Android
 IL2CPP player reads the metadata from `assets/bin/Data/Managed/{Metadata,Resources,etc}`. The
 conversion is the Android route's with `"steps": ["shaders", "settings"]`,
 `"shaders": {"from": ["metal"]}` (a Mac build made for Apple silicon carries Metal programs
-only) and `"settings": {"graphics_apis": [11]}`. Three things in `pmu android-data` stand in the
-way of a Mac IL2CPP source today and were worked around for the test: it requires
-`Managed/*.dll`; it reads the player's version from an editor `AndroidPlayer` folder's
-`modules.asset` ("2018.3.0a1") instead of the player itself; and a source named `Data` gives an
-empty game name.
+only) and `"settings": {"graphics_apis": [11]}`, and then
+
+    pmu android-data --src <converted Data> --pkg <AndroidPlayer> --macho <Game>.app --out <out> --pack all
+
+What `--macho` (`macho.rs`) does that the Mono and `--il2cpp` modes do not:
+
+- finds the build's code and metadata, and refuses with the reason where the route cannot run
+  it: no arm64 code in the binary (an Intel-only build; arm64e), metadata that is not plain
+  IL2CPP metadata (an encrypted or packed build, which this route leaves alone), data or a
+  player package of another Unity version than the build (compiled code goes with one exact
+  version). A build that is not Unity 6000.0 gets a warning: nothing else is tested;
+- writes the binary's arm64 part to `lib/arm64-v8a/GameAssembly.dylib` (a universal binary's
+  slice, or the file as it is; nothing in it is changed);
+- lays `il2cpp_data`'s `Metadata`, `Resources` and `etc` out under `Managed/`, where the
+  Android player reads them, and takes the game's name from the `.app`;
+- reads the list of assemblies from the build's metadata (the images in it; the build's
+  `ScriptingAssemblies.json` where the metadata's version is one the tool does not read)
+  instead of `Managed/*.dll`. The build's own `ScriptingAssemblies.json` may name an assembly the metadata
+  has no image of (an editor package the build left no code of; the test game has
+  `Unity.Multiplayer.Center.Common.dll`): with `--macho` both are the build's own and it runs
+  so on macOS, so that is logged ("as built"), not refused;
+- compares what the player requires by name with the build (above);
+- writes `"scripting": "macho"` into `android_package.json`.
+
+Two findings on the way. The player's version is read from the player itself: the version
+string followed by the build stamp. An editor's `AndroidPlayer` folder also holds the string
+"2018.3.0a1" (a serialization floor in `modules.asset` and in the library), which is not it.
+And `pmu convert` works on the Data folder in place, so a setup converts a copy of the
+`.app`'s Data folder (or the `.app` itself, when the player's copy may be used up) and hands
+`--macho` the `.app` for the code and metadata.
 
 ### The first run
 
@@ -278,6 +340,90 @@ RSS 216 MB. 241 of the 247 il2cpp functions passed on, 6 the image does not expo
 internal calls needed a thunk (bool results; `Texture2D::Internal_CreateImpl_Injected` and
 `FontEngine::TryAddGlyphToTexture_Internal_Injected` with two stack arguments each).
 
-Next: natively raised managed exceptions and callbacks into the image under the player (a test
-component), the `--macho` mode of `pmu android-data` with the required-members report, then a
-handheld with a 64-bit userland.
+### The checks under the player (2026-11-10)
+
+The test build carries one more component, `test/game/MachoChecks.cs`, which runs after the
+game's first frames and logs `[checks] ok <name>` or `[checks] FAIL <name>` for what has to be
+right between the game's code and the Android player's, then `[checks] done: N passed, M
+failed`:
+
+- results narrower than 32 bits and arguments past the eighth (`Graphics.CopyTexture`'s region
+  form has twelve), floats, doubles, structs, strings and arrays through the player's functions;
+- an exception the player raises inside one of its functions and the game catches (200 times
+  each: `GameObject.FindWithTag` with an unknown tag, `Input.GetKey` with an unknown key name,
+  `Transform.GetChild` out of range): it unwinds through the player's ELF frames, the bridge's
+  thunk where the call was laid out again, and into the image's compact unwind info;
+- an exception of the game's that reaches the player (a `SendMessage` handler throws): logged
+  by the player, which goes on;
+- the class library on this system (formatting, culture, time, the environment), files in the
+  game's folder, PlayerPrefs;
+- threads of the game's, and collections while four of them allocate and verify what they hold
+  (below);
+- the player's scheduling of the game's code: coroutines, a task's continuation back on the
+  main thread, a destroyed object comparing equal to null.
+
+Result (2026-11-10): all 16 pass, in the emulator (10 of 10 runs) and on a handheld, the BattleXP
+G350 (RK3326: four Cortex-A35, 1 GB; dArkOS, 64-bit userland). There the Mac build's game runs
+under the Android player at a steady 60 fps (frames of 16.6 ms on average, 18 to 20 ms the 99th
+percentile), the picture right, 160 MB resident at the start and 192 MB once settled (after
+about 80 s), 640 MB of the device's memory still available. One or two frames in five seconds
+come late there (30 to 50 ms); that is the device and the test set-up, not the route: Unity's
+own Android IL2CPP build of the same game (the arm64 donor, ELF all the way) shows the same on
+the same device, 0 to 2 late frames in five seconds with the worst at 31 to 50 ms. (Run the
+donor with `UA_FRAME_RATE=desktop` for such a comparison: as an imported APK it keeps Android's
+rule, 30 fps for a game that sets no rate.)
+
+What a check may expect is what a **release player** does, and that is less than the editor:
+`Input.GetButton` with a name that is not set up, and `CompareTag` with an undefined tag, raise
+in the editor and in development players only. The release players (the macOS one and the
+Android one alike) have no such message in them: `GetButton` does not raise, and `CompareTag`
+logs an error. `Input.GetKey` with an unknown name is an `ArgumentException` in both. When a
+check fails, look for the message's text in both players' binaries before looking for a fault
+in the route.
+
+And a check about time has to name its clock. `WaitForSeconds` counts `Time.time`, which the
+Android player moves by the display's frame times (a whole number of refresh periods each
+frame), not by the real clock: in the frames after a long one, 0.2000 s of game time passed in
+0.1833 s of real time in the emulator, and 0.2500 s in 0.2173 s on the G350. The check that
+held the wait to `realtimeSinceStartup` failed once in ten emulator runs; it holds the wait to
+`Time.time` now and logs both clocks.
+
+### Collections and stopped threads
+
+Unity's collector (Boehm) takes one lock for every allocation and every collection: an unfair
+spin lock that yields twelve times and then sleeps with a backoff of up to about 16 ms
+(`GC_lock`). On macOS it stops the world thread by thread (`thread_suspend`, then
+`thread_get_state`), which the shim layer answers with a signal per thread. Two things
+followed, both found by a check that asked for collections in a loop while four threads
+allocated flat out, and took anything from a fraction of a second to many seconds:
+
+- the collector's own behaviour, the same code as on a Mac: under back-to-back collections the
+  thread that just collected takes the lock again almost at once, and a thread in the backoff
+  can wait a long time. A check must not time that: it now gives each thread a set amount of
+  verified work, and passes when the work is intact and the collections happened;
+- a defect of the shim that made it far worse: a sleep interrupted by a stop was started
+  again for what was left of it, so with thousands of stops a second a thread in the backoff
+  barely moved. A suspended thread's sleep runs on in macOS's kernel; `nanosleep`, `usleep` and
+  `sleep` now sleep to a deadline, as every other timed wait of the layer does (the shim
+  section above), and the native comparison covers it.
+
+`UA_MACHO_STOPS=1` logs the stops every five seconds: how many, the time the world stood, and
+the `thread_suspend` calls with their longest. Measured with the test game: while the
+collections check runs (16 to 21 threads to stop, over 500 collections asked for in 2.5 s on
+the handheld), a stop takes 0.4 to 0.7 ms in the emulator and 2.7 ms on the G350 (4.6 ms the
+longest, 22 us per `thread_suspend`). In play the G350 has about two stops a second of 0.3 to
+0.5 ms each (2 ms the longest), three to five threads to stop: nothing its frame times show.
+The stop is sequential (one signal and one acknowledgement per thread, as the Mach calls ask),
+where the collector's Linux build signals all threads and then waits for them all. If a game
+with more managed threads shows the stops in its frame times, the first `thread_suspend` of an
+episode can signal every thread ahead (not built: measure first).
+
+Open, known and not yet met: a thread stopped while it holds one of the shim layer's own
+locks (the wait buckets of `__ulock_wait`, the first-use lock of pthread objects, stdio's)
+would hold up the collector if it needs the same one before resuming; `Application.platform`
+answers Android to the game; `streamingAssetsPath` is the path into the APK, as on Android.
+
+Next, Dave's own needs: its plugins (the table above: Burst's library through the loader, 22
+shims for `lib_coacd`, the Steam answer on the Mach-O side), answers for the internal calls the
+Android player lacks, a control build of the checks for Android itself; then Dave in the
+emulator and on the handheld, with the stops measured again (it has more managed threads).

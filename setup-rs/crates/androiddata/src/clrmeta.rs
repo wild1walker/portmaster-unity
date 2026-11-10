@@ -692,6 +692,11 @@ impl Assembly {
         self.owner(true, row)
     }
 
+    /// The type a field row belongs to.
+    pub fn type_of_field(&self, row: u32) -> Result<Option<&TypeInfo>> {
+        self.owner(false, row)
+    }
+
     /// The type whose member list (methods or fields) holds row.
     fn owner(&self, methods: bool, row: u32) -> Result<Option<&TypeInfo>> {
         let ts = self.types()?;

@@ -167,7 +167,7 @@ pub fn verify(ctx: &mut Ctx, items: &[Item]) -> Result<Json, Stop> {
     }
     let mdir = py::join(&data, "Managed");
     for (what, names) in lists {
-        let il2cpp = ctx.args.il2cpp.is_some();
+        let il2cpp = ctx.args.compiled();
         let compiled = ctx.managed_names.clone();
         let have = |a: &str| {
             if il2cpp {
@@ -178,12 +178,18 @@ pub fn verify(ctx: &mut Ctx, items: &[Item]) -> Result<Json, Stop> {
         };
         let (game, engine) = ggm::split_assemblies(&names, Some(&ctx.unity));
         let miss: Vec<String> = game.iter().filter(|a| !have(a)).cloned().collect();
-        if !miss.is_empty() {
+        // --macho: the list and the metadata are the build's own, and the game runs with both
+        // on macOS: a name without an image in the metadata is an assembly the build left no
+        // code of.
+        let as_built = ctx.args.macho.is_some();
+        if !miss.is_empty() && !as_built {
             bad.push(("Managed".into(), format!("missing {}", list_repr(&miss))));
         }
         let skip: Vec<String> = engine.iter().filter(|a| !have(a)).cloned().collect();
         let tail = if miss.is_empty() {
             ", all present".to_string()
+        } else if as_built {
+            format!(", without an image in the build's metadata (as built): {}", list_repr(&miss))
         } else {
             format!(", MISSING {}", list_repr(&miss))
         };

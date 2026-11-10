@@ -6,6 +6,10 @@ reads) and the Android player package. For Cuphead a run takes about 15 s; big f
 (APFS clonefile, else hard links), so the tree costs about 0.4 GB of real disk (48 rewritten
 bundles, explained below). The output is in `--out` (default `android-out/`).
 
+`--macho <Game>.app` is the mode for a macOS IL2CPP build whose arm64 code runs as it is (no
+`libil2cpp.so` is built): what it takes from the app, what it refuses and what it reports is in
+[macho-route.md](macho-route.md), "The data".
+
 Sections 1-3 come from libunity.so 2017.4.9f1 armeabi-v7a (sha256 `b7d24200…b604315e`),
 disassembled with the symbols in libunity.sym.so (`tools/re/arm.py`); section 4 is what changes
 for the other Unity versions (5.6 - 6000.6).
