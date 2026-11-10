@@ -16,7 +16,7 @@ public static class MacBuild
         new GameObject("Checks").AddComponent<MachoChecks>();     // MachoChecks.cs: its lines in the player's log
         EditorSceneManager.SaveScene(scene, "Assets/Donor.unity");
         // the game's native plugins (build.sh put them there): for the macOS player's arm64 half only
-        foreach (var path in new[] { "Assets/Plugins/lib_checks.dylib", "Assets/Plugins/checks_bundle.bundle" }) {
+        foreach (var path in new[] { "Assets/Plugins/lib_checks.dylib", "Assets/Plugins/checks_bundle.bundle", "Assets/Plugins/steam_api.bundle" }) {
             var plugin = AssetImporter.GetAtPath(path) as PluginImporter;
             if (plugin == null) { Debug.LogError("no plugin importer for " + path); EditorApplication.Exit(1); return; }
             plugin.SetCompatibleWithAnyPlatform(false);
@@ -32,6 +32,15 @@ public static class MacBuild
         PlayerSettings.SetApiCompatibilityLevel(mac, ApiCompatibilityLevel.NET_Unity_4_8);
         PlayerSettings.SetManagedStrippingLevel(mac, ManagedStrippingLevel.Disabled);
         PlayerSettings.stripEngineCode = false;
+        // (the oldest macOS the game asks for, build.sh's third argument: from 12.0 on the linker
+        // leaves GameAssembly's pointers as chained fixups, docs/macho-route.md. The setting
+        // reaches Info.plist only: this editor's link of GameAssembly asks for 11.0 whatever
+        // it says, so the linker is told as well)
+        var min = System.Environment.GetEnvironmentVariable("PONG_MACOS_MIN");
+        if (!string.IsNullOrEmpty(min)) {
+            PlayerSettings.macOS.targetOSVersion = min;
+            PlayerSettings.SetAdditionalIl2CppArgs("--linker-flags=-mmacosx-version-min=" + min);
+        }
         // (arm64 only: UnityEditor.OSXStandalone.UserBuildSettings.architecture, in the Mac module's assembly)
         var ubs = System.Type.GetType("UnityEditor.OSXStandalone.UserBuildSettings, UnityEditor.OSXStandalone.Extensions");
         var arch = ubs == null ? null : ubs.GetProperty("architecture");

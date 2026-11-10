@@ -2,15 +2,32 @@
 // MachoChecks.cs calls them through DllImport): lib_checks.dylib, a plain file as a game ships
 // a library, and with -DPC_BUNDLE checks_bundle.bundle, a bundle folder as Xcode makes one.
 // Under the route both are Mach-O files in the port's lib folder that the game's code opens by
-// name (docs/macho-route.md, "Plugins the game opens").
+// name (docs/macho-route.md, "Plugins the game opens"). With -DPC_STEAM it is steam_api.bundle:
+// a file of the name Steamworks' library has in a macOS build, which the setup does not copy
+// (the runtime's own answer stands in for that SDK: Steam is not running).
 #include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <string.h>
 
-#ifdef PC_BUNDLE
+#if defined(PC_BUNDLE)
 
 int pb_value(void) { return 21; }
+
+#elif defined(PC_STEAM)
+
+// The game's own stand-in of that name, with the few functions the checks call and answers no
+// port may give: a check that sees one of them ran this file.
+bool SteamAPI_Init(void) { return true; }
+bool SteamAPI_IsSteamRunning(void) { return true; }
+bool SteamAPI_RestartAppIfNecessary(unsigned app) { return app != 0; }
+int SteamInternal_SteamAPI_Init(const char *versions, char *message)
+{
+    (void)versions;
+    if (message) strcpy(message, "the stand-in file");
+    return 0;
+}
+bool SteamAPI_ISteamUser_BLoggedOn(void *self) { (void)self; return true; }
 
 #else
 

@@ -159,6 +159,8 @@ pub struct Ctx {
     pub macho_files: Vec<(String, String)>,
     /// --macho: what the player asks the game's code for by name (required.rs), for the report
     pub macho_required: Option<Json>,
+    /// --macho: the internal calls the build's code names, against the player's (icalls.rs)
+    pub macho_icalls: Option<Json>,
     /// --macho: the build's native plugins (Contents/PlugIns), each with what becomes of it
     pub macho_plugins: Vec<macho_plugins::Plugin>,
     pub db: Arc<ClassDb>,
@@ -945,6 +947,21 @@ fn macho_source(ctx: &mut Ctx, b: macho::Build) -> Result<(), Stop> {
             "--macho: what the Android player asks the game's code for by name was not compared with the build ({e})"
         )),
     }
+    // And the other way: the player's functions the game's code asks for by name.
+    let libunity = py::join(&pkg, "Variations/il2cpp/Release/Libs/arm64-v8a/libunity.so");
+    match meta.as_ref().map_err(|e| e.to_string()).and_then(|m| crate::icalls::census(&b.binary, b.slice, &libunity, m)) {
+        Ok(c) => {
+            let names = |l: &[String]| Json::List(l.iter().map(|n| n.as_str().into()).collect());
+            let mut j = Json::obj();
+            j.set("asked", (c.asked as i64).into());
+            j.set("answered", names(&c.answered));
+            j.set("absent", names(&c.absent));
+            ctx.macho_icalls = Some(j);
+        }
+        Err(e) => ctx.warnings.push(format!(
+            "--macho: the internal calls the game's code names were not compared with the Android player's ({e})"
+        )),
+    }
     if assemblies.is_empty() {
         // (metadata of a version il2cppmeta does not read: the build's own list)
         let sj = py::join(&b.data, "ScriptingAssemblies.json");
@@ -1635,6 +1652,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         macho: None,
         macho_files: Vec::new(),
         macho_required: None,
+        macho_icalls: None,
         macho_plugins: Vec::new(),
         db,
         logf: None,
@@ -1686,6 +1704,31 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                     l.iter().map(Json::py_str).collect::<Vec<_>>().join("; ")
                 ));
             }
+        }
+        ctx.log(&line);
+    }
+    // Not a warning either: the build does not say whether the game ever makes such a call.
+    if let Some(j) = ctx.macho_icalls.clone() {
+        let list = |k: &str| match j.get(k) {
+            Some(Json::List(l)) => l.iter().map(Json::py_str).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        let (answered, absent) = (list("answered"), list("absent"));
+        let mut line = format!(
+            "the game's code names {} internal calls of the player: the Android player has no function for {}, {} of them \
+             answered by the runtime",
+            match j.get("asked") {
+                Some(Json::Int(i)) => *i,
+                _ => 0,
+            },
+            answered.len() + absent.len(),
+            answered.len()
+        );
+        if !absent.is_empty() {
+            line.push_str(&format!(
+                "; without an answer (a MissingMethodException in the game where it makes the call, docs/macho-route.md): {}",
+                absent.join("; ")
+            ));
         }
         ctx.log(&line);
     }
@@ -2264,6 +2307,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     report.set("unity", unity);
     if let Some(j) = ctx.macho_required.clone() {
         report.set("player_required", j);
+    }
+    if let Some(j) = ctx.macho_icalls.clone() {
+        report.set("player_internal_calls", j);
     }
     if ctx.macho.is_some() {
         report.set("macho_plugins", macho_plugins::report(&ctx.macho_plugins));

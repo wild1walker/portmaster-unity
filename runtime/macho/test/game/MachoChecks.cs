@@ -42,6 +42,12 @@ public class MachoChecks : MonoBehaviour
     [DllImport("lib_checks", EntryPoint = "pc_no_such_function")] static extern int pc_missing();
     [DllImport("checks_bundle")] static extern int pb_value();
     [DllImport("lib_checks_not_there")] static extern int pn_value();
+    // Steamworks' flat API, declared as Steamworks.NET declares it
+    [DllImport("steam_api", EntryPoint = "SteamAPI_Init")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SteamInit();
+    [DllImport("steam_api", EntryPoint = "SteamAPI_IsSteamRunning")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SteamRunning();
+    [DllImport("steam_api", EntryPoint = "SteamAPI_RestartAppIfNecessary")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SteamRestart(uint app);
+    [DllImport("steam_api", EntryPoint = "SteamInternal_SteamAPI_Init")] static extern int SteamInitInternal(byte[] versions, byte[] message);
+    [DllImport("steam_api", EntryPoint = "SteamAPI_ISteamUser_BLoggedOn")] [return: MarshalAs(UnmanagedType.I1)] static extern bool SteamLoggedOn(IntPtr self);
 
     // What Burst compiled: in the build's own library (lib_burst_generated), which not the
     // game's code but the player opens, at the first job. A build runs a job as the game's
@@ -400,6 +406,30 @@ public class MachoChecks : MonoBehaviour
             Throws<DllNotFoundException>("pn_value", () => pn_value(), "lib_checks_not_there") &&
             Throws<EntryPointNotFoundException>("pc_missing", () => pc_missing(), "pc_no_such_function") &&
             pc_add(1, 1) == 2);
+        // A build with Steamworks' library: the game's file of that name is not run, the
+        // answer is the runtime's, as on a PC where Steam is not running. A function past a
+        // failed start is not there.
+        Check("Steam is not running", () => {
+            var message = new byte[1024];
+            int result = SteamInitInternal(Encoding.UTF8.GetBytes("SteamUser023\0\0"), message);
+            string said = Encoding.UTF8.GetString(message, 0, Array.IndexOf(message, (byte)0));
+            if (result != 2 || said != "Steam is not running") Debug.Log("[checks] Steam: start gave " + result + ", \"" + said + "\"");
+            return !SteamRestart(480) && !SteamInit() && !SteamRunning() && result == 2 && said == "Steam is not running" &&
+                   Throws<EntryPointNotFoundException>("SteamLoggedOn", () => SteamLoggedOn(IntPtr.Zero), "SteamAPI_ISteamUser_BLoggedOn");
+        });
+
+        // Screen.mainWindowDisplayInfo: an internal call the desktop players have and the
+        // Android player lacks. The bridge answers it with the one display a handheld has,
+        // from the player's own Screen.currentResolution.
+        Check("main window's display", () => {
+            DisplayInfo d = Screen.mainWindowDisplayInfo;
+            Resolution r = Screen.currentResolution;
+            bool same = d.width == r.width && d.height == r.height && d.refreshRate.numerator == r.refreshRateRatio.numerator &&
+                        d.refreshRate.denominator == r.refreshRateRatio.denominator;
+            if (!same || d.width <= 0) Debug.Log("[checks] display: " + d.width + "x" + d.height + " \"" + d.name + "\", resolution " + r.width + "x" + r.height);
+            return same && d.width > 0 && d.height > 0 && d.workArea.x == 0 && d.workArea.y == 0 && d.workArea.width == d.width &&
+                   d.workArea.height == d.height && d.name == "Built-in Display";
+        });
 
         // Burst's library: opened by the player, its jobs run on the player's threads, what
         // they call of the player (memory, the next range of a parallel job) answered as the

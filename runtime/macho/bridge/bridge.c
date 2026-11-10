@@ -93,6 +93,9 @@ static struct {
     void *(*class_get_image)(Il2CppClass *);
     const char *(*class_get_assemblyname)(Il2CppClass *);
     const char *(*image_get_name)(void *);
+    int (*init)(const char *);
+    void *(*string_new)(const char *);
+    void (*gc_wbarrier_set_field)(void *, void **, void *);
 } il;
 
 // ---- internal calls --------------------------------------------------------------------
@@ -751,6 +754,76 @@ static const struct { const char *name; void *fn; } standin_withs[] = {
     { "il2cpp_class_get_method_from_name", (void *)with_class_get_method_from_name },
 };
 
+// ---- internal calls only the desktop players have ------------------------------------------
+// A macOS game's code may ask for an internal call the Android player does not register, and
+// gets MissingMethodException there. Where a handheld has a plain answer the bridge gives it,
+// from the player's own calls: registered when the runtime starts, for each name the player
+// left out (own_icalls; docs/macho-route.md lists what the image may ask for beyond these).
+static void *player_icall(const char *name)
+{
+    void *fn = NULL;
+    pthread_mutex_lock(&icall_lock);
+    for (struct icall_block *b = blocks; b && !fn; b = b->next)
+        for (int i = b->used - 1; i >= 0 && !fn; i--) if (!strcmp(b->names[i], name)) fn = b->recs[i].target;
+    pthread_mutex_unlock(&icall_lock);
+    return fn;
+}
+
+static void value_size_is(const char *type, size_t size)
+{
+    char name[128];
+    snprintf(name, sizeof name, "%s", type);
+    Il2CppClass *k = find_class(name);
+    uint32_t align;
+    if (!k || (size_t)il.class_value_size(k, &align) != size)
+        DIE("%s is not the %zu bytes the bridge's answer is written for (%d here)\n", type, size, k ? (int)il.class_value_size(k, &align) : -1);
+}
+
+// UnityEngine.Screen::GetMainWindowDisplayInfo_Injected(out DisplayInfo), which is
+// Screen.mainWindowDisplayInfo: the display the game's window is on. A handheld has the one:
+// its size and rate are what the player's Screen.currentResolution says, all of it the
+// window's to use.
+struct refresh_rate { uint32_t numerator, denominator; };
+struct resolution { int32_t width, height; struct refresh_rate rate; };
+struct display_info { uint64_t handle; int32_t width, height; struct refresh_rate rate; int32_t work_x, work_y, work_width, work_height; void *name; };
+
+static void own_main_window_display_info(struct display_info *out)
+{
+    static void (*current)(struct resolution *);
+    if (!current) {
+        value_size_is("UnityEngine.DisplayInfo", sizeof *out);
+        value_size_is("UnityEngine.Resolution", sizeof(struct resolution));
+        void *fn = player_icall("UnityEngine.Screen::get_currentResolution_Injected");
+        if (!fn) DIE("the player has no UnityEngine.Screen::get_currentResolution_Injected to answer Screen.mainWindowDisplayInfo from\n");
+        current = (void (*)(struct resolution *))fn;
+    }
+    struct resolution now = { 0 };
+    current(&now);
+    out->handle = 1;
+    out->width = now.width;
+    out->height = now.height;
+    out->rate = now.rate;
+    out->work_x = out->work_y = 0;
+    out->work_width = now.width;
+    out->work_height = now.height;
+    il.gc_wbarrier_set_field(NULL, &out->name, il.string_new("Built-in Display"));
+}
+
+static const struct { const char *name; void *fn; } own_icalls[] = {
+    { "UnityEngine.Screen::GetMainWindowDisplayInfo_Injected", (void *)own_main_window_display_info },
+};
+
+// il2cpp_init, as the player calls it: it has registered its internal calls by then.
+static int with_init(const char *domain)
+{
+    for (size_t i = 0; i < sizeof own_icalls / sizeof own_icalls[0]; i++) {
+        if (player_icall(own_icalls[i].name)) continue;
+        add_internal_call(own_icalls[i].name, own_icalls[i].fn);
+        if (getenv("UA_MACHO_LOG")) LOG("%s: not among the player's %ld internal calls, answered by the bridge\n", own_icalls[i].name, n_icalls - 1);
+    }
+    return il.init(domain);
+}
+
 // ---- dlopen: a plugin that is no Mach-O file among the libraries (dyld.c loads those) is
 // the port's Android or ARM Linux build
 static void *plugin_open(const char *path, int darwin_mode)
@@ -807,6 +880,7 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
         void *p = macho_export(ga->m, sym);
         if (p) { *r->slot = p; filled++; } else missing++;
         if (p && !strcmp(r->name, "il2cpp_add_internal_call")) *r->slot = (void *)add_internal_call;
+        if (p && !strcmp(r->name, "il2cpp_init")) *r->slot = (void *)with_init;
         for (size_t i = 0; p && i < sizeof standin_withs / sizeof standin_withs[0]; i++)
             if (!strcmp(r->name, standin_withs[i].name)) *r->slot = standin_withs[i].fn;
         for (size_t i = 0; r->alt && i < sizeof standin_alts / sizeof standin_alts[0]; i++)
@@ -820,6 +894,7 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
     IL(class_value_size); IL(class_get_fields); IL(field_get_flags); IL(field_get_type); IL(get_corlib);
     IL(class_get_namespace); IL(class_get_declaring_type); IL(class_get_type); IL(value_box);
     IL(class_get_method_from_name); IL(class_get_image); IL(class_get_assemblyname); IL(image_get_name);
+    IL(init); IL(string_new); IL(gc_wbarrier_set_field);
 #undef IL
     LOG("GameAssembly.dylib loaded: %d of the il2cpp functions passed on, %d it does not export\n", filled, missing);
     return 0;

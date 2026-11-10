@@ -269,6 +269,18 @@ impl Metadata {
 
     /// Every image's types with the names of their methods and fields, by image name.
     pub fn members(&self) -> R<HashMap<String, Members>> {
+        self.members_and_calls().map(|(m, _)| m)
+    }
+
+    /// The methods marked as internal calls (no body: the runtime finds the player's function
+    /// by name), each as "Ns.Outer/Inner::Method".
+    pub fn internal_calls(&self) -> R<HashSet<String>> {
+        self.members_and_calls().map(|(_, c)| c)
+    }
+
+    fn members_and_calls(&self) -> R<(HashMap<String, Members>, HashSet<String>)> {
+        const INTERNAL_CALL: u16 = 0x1000;
+        let mut calls = HashSet::new();
         let n = self.typedef_count();
         let (to, (no, nn)) = (self.sec[S_TYPEDEFS].0, self.sec[S_NESTED]);
         let (mo, mn) = self.sec[S_METHODS];
@@ -308,13 +320,17 @@ impl Metadata {
                 }
                 let o = to + i * TYPEDEF_SIZE;
                 let (start, count) = (i32_at(&self.b, o + 36)?, u16_at(&self.b, o + 64)? as usize);
-                let entry = types.entry(full).or_default();
+                let entry = types.entry(full.clone()).or_default();
                 for k in 0..count {
                     let at = usize::try_from(start).map_err(|_| format!("type definition {i}: no methods"))? + k;
                     if (at + 1) * METHOD_SIZE > mn {
                         return Err(format!("type definition {i}: methods past the table"));
                     }
-                    entry.0.insert(self.string(u32_at(&self.b, mo + at * METHOD_SIZE)?)?);
+                    let name = self.string(u32_at(&self.b, mo + at * METHOD_SIZE)?)?;
+                    if u16_at(&self.b, mo + at * METHOD_SIZE + 30)? & INTERNAL_CALL != 0 {
+                        calls.insert(format!("{full}::{name}"));
+                    }
+                    entry.0.insert(name);
                 }
                 for k in 0..td.field_count as usize {
                     let at = usize::try_from(td.field_start).map_err(|_| format!("type definition {i}: no fields"))? + k;
@@ -323,7 +339,7 @@ impl Metadata {
             }
             out.insert(im.name.clone(), types);
         }
-        Ok(out)
+        Ok((out, calls))
     }
 
     /// The type definition a method belongs to.

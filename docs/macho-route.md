@@ -55,7 +55,7 @@ the loader's probe and its instruction scan, `test/shims.sh cover` for the names
 | `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables. **Runs through the loader** in the arm64 Linux container with every rewrite forced: opened by the name the game's code has (`dlopen("lib_coacd")`), `CoACD_run` cuts an L-shaped test solid into 2 or 3 convex hulls whose volumes add up to the solid's (four runs: its preprocessing on, off and left to it, two seeds), `CoACD_freeMeshArray` frees them |
 | `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions. The one file of the five built for macOS 15 only, so with chained fixups in place of the bind streams: the loader reads those too (in the container it maps the file and finds 5 rebases, 4 binds and 2 exports, the counts `xcrun dyld_info` gives), so what keeps it out is the Objective-C names alone |
 | `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
-| `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API); the runtime's own answer stands in: Steam is not running |
+| `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API, started the old way: `SteamAPI_Init`, `SteamAPI_RestartAppIfNecessary`, `SteamAPI_IsSteamRunning`); the runtime's own answer stands in: Steam is not running. Every one of the names that is not a per-interface function is in that answer; the per-interface ones (`SteamAPI_ISteamUser_...`) are absent on purpose, as there is no interface to call them on without a client. Checked from Mach-O code with the test game ("Plugins the game opens" below) |
 
 What the setup makes of the five (`pmu android-data --macho`, "The data" below; the same
 survey without writing anything: `cargo run -p androiddata --example macho_plugins --
@@ -235,9 +235,21 @@ has it in the file. Tested on a made-up image in each form (a table across a pag
 page without fixups, a bind inside a chain, a chain that runs out of its page, the refusals)
 and on what the linker makes: `test/meta_reg.c`, a registration with 4,096 types, linked by
 `test/build-mac.sh` in the three forms, with its symbols and stripped (`cargo test -p
-androiddata macho_linker_output`, which skips where the files were not built). Not yet run
-on a real game built that way: none of the builds at hand has the new form in its
-GameAssembly.
+androiddata macho_linker_output`, which skips where the files were not built).
+
+**On a real game build** (2026-11-10): the test game built for macOS 12 has the new form in
+its `GameAssembly.dylib`; the setup read its type table, the loader loaded it, and every
+check passed under the player in the emulator ("The checks under the player" below). Getting
+Unity 6000.0.52f1 to make such a build takes more than its setting: the player setting's
+oldest macOS version (`PlayerSettings.macOS.targetOSVersion`) reaches `Info.plist` only, and
+il2cpp links `GameAssembly.dylib` for macOS 11.0 whatever it says (opcode streams, `minos
+11.0`). The linker flag has to be handed to il2cpp itself:
+`PlayerSettings.SetAdditionalIl2CppArgs("--linker-flags=-mmacosx-version-min=12.0")`, which
+`test/game/build.sh` does when given an oldest macOS version as its third argument (it also
+prints which form each Mach-O file of the build came out in). In that build Unity's own
+prebuilt files (Burst's library, the purchasing plugin) stay in opcode streams; the game's
+code and the plugins built with the same flag are chained. A game from a newer editor, or
+one whose studio set the flag, arrives this way.
 
 ### What a plugin's own libraries asked for (2026-11-10)
 
@@ -344,6 +356,24 @@ loads a plugin that is a Mach-O file the way dyld would, at that moment:
 - **what is not Mach-O** goes to the host's loader as before (an Android library a port adds,
   the runtime's Steam answer); a file that is Mach-O and fails is the answer, with its
   message in `dlerror`, never a fall through to another library of the same name.
+
+**Steam, from Mach-O code.** The setup does not copy a build's `steam_api.bundle` (Valve's
+library needs a running client and is not the port's to ship); the plugin map names the
+runtime's own answer for `steam_api` instead (`runtime/host/steamstub.c`, the one the Mono
+and Android routes use). So the game's `dlopen("steam_api")` finds no Mach-O file, goes to
+the host, and gets that answer: `SteamAPI_Init`, `SteamAPI_InitSafe`,
+`SteamAPI_RestartAppIfNecessary` and `SteamAPI_IsSteamRunning` say no,
+`SteamInternal_SteamAPI_Init` returns its "no client" code with the text "Steam is not
+running", and a per-interface function is not there (`EntryPointNotFoundException`, as with a
+Steamworks library too old for the wrapper). That is an honest answer, the one a game gets on
+a machine where Steam is not running; what the game does with it is the game's own decision
+and is not touched. The answer is ELF code called from Mach-O code, which is sound here
+because no function of it takes more than eight arguments or a variable list: within eight
+register arguments the two conventions agree (they differ on the stack and for variadic
+calls only). The test game checks all of it: its build carries a `steam_api.bundle` of its
+own making whose functions give answers no port may give (init succeeds, Steam runs), so a
+pass shows the file was left out and the runtime answered (`[plugins] steam_api: built-in
+stub steam`, `[darwin] dlopen(steam_api, 0x5): no Mach-O file, the host is asked`).
 
 `UA_MACHO_LOG=1` prints each `dlopen` with what answered it.
 
@@ -582,9 +612,50 @@ game runs. A build does not say whether a member went with the platform or with 
 the tool lists both and the player's own message ("Unable to find ...", then a stop with the
 name in the bridge) decides.
 
-Also open: 13 internal calls the image may ask for that the Android player does not register
-(`UnityEngine.Screen::GetMainWindowDisplayInfo_Injected` among them; none was called by the
-test game), and 6 il2cpp functions the Mac image does not export (none was called).
+Also open: 6 il2cpp functions the Mac image does not export (none was called).
+
+### Internal calls only the desktop players have (2026-11-10)
+
+The other direction of the same gap: the game's code calls the engine through internal calls
+it looks up by name (`UnityEngine.Screen::get_width()`), and a macOS build's code may name
+one the Android player never registers. il2cpp then raises `MissingMethodException` at the
+call, so nothing stops, but the game's code did not expect it.
+
+**What a build may ask for** is read at setup (`icalls.rs`, part of `pmu android-data
+--macho`). IL2CPP keeps each internal call's name as a C string in the image, the Android
+player keeps the names it registers as C strings in `libunity.so`, and the metadata says
+which methods are internal calls at all (the implementation flag, bit 0x1000, at byte 30 of
+a method's record). So: the strings of the image that look like a call
+(`Ns.Type::Method(Params)`) and whose `Ns.Type::Method` is an internal call by the metadata,
+less the names found in the player. The class library's own internal calls are not in the
+count (il2cpp answers them itself, not by name). The setup log says how many there are, which
+the runtime answers and which stay without an answer, and the report keeps the three lists
+(`player_internal_calls`). If more than half look absent the two files are not of the same
+Unity and the tool says that instead.
+
+Dave's code names 4,940 internal calls of the player. The Android player has no function for
+13: `UnityEngine.Screen::GetMainWindowDisplayInfo_Injected` (answered, below), seven of
+`UnityEngine.SocialPlatforms.GameCenter.GameCenterPlatform` and five `Dispose` calls of
+`UnityEngine.Windows.WebCam` (`PhotoCapture`, `PhotoCaptureFrame`, `VideoCapture`). The
+twelve stay without an answer: Game Center is Apple's service and the WebCam types are
+Windows's, a game on Steam for macOS has no use for either, and an object whose `Dispose`
+is missing can never have been made. The test game's build names 587 and lacks the same
+thirteen, as the modules came along with Unity's default packages.
+
+**What the runtime answers** is a table in the bridge (`own_icalls` in `bridge.c`; a test of
+the setup tool holds its list to that table). The bridge stands in for `il2cpp_init`, and
+before the real one runs it registers its own function for each name of the table the
+player has not registered (the player has registered its own by then: 9,639 of them in
+6000.0.52f1; `UA_MACHO_LOG=1` prints each name the bridge took on). An answer is built from
+the player's own calls, never made up:
+
+- `Screen.mainWindowDisplayInfo` (the display the game's window is on; desktop games read
+  it for their resolution lists and when they move the window): the one display a handheld
+  has, with the size and refresh rate of the player's own `Screen.currentResolution`, the
+  whole of it as the work area, and the name "Built-in Display". The struct's layout is the
+  module's (`DisplayInfo`: 48 bytes; checked against the image's own classes at the first
+  call, and a mismatch stops with the two sizes, as another Unity version may lay it out
+  differently).
 
 ### The data: `pmu android-data --macho <Game>.app`
 
@@ -716,7 +787,13 @@ failed`:
   player's worker threads, and a compiled function pointer the game's code calls itself
   (int, long, float, double and a reference). Each sets a flag that a `[BurstDiscard]`
   function clears, a function Burst leaves out of its code, so a check fails with "it ran as
-  the game's ordinary code" when the library was not used, not only when a result is wrong.
+  the game's ordinary code" when the library was not used, not only when a result is wrong;
+- Steam: the build carries a `steam_api.bundle` of the test's own making that says Steam
+  runs; the check passes when every start-up function says it does not, the message is the
+  runtime's, and a per-interface function is not found ("Plugins the game opens" above);
+- an internal call only the desktop players have: `Screen.mainWindowDisplayInfo` gives the
+  size and rate of `Screen.currentResolution`, a work area of the whole display and the
+  display's name ("Internal calls only the desktop players have" above).
 
 IL2CPP under the Android player asks `dlopen` for a `DllImport`'s name as written, then with
 `.so`, `.dll`, `.dylib`, `.bundle` behind it, then the same four with `lib` in front; the
@@ -732,8 +809,10 @@ copied Burst's library and the two test plugins and left out Unity's purchasing 
 needs StoreKit and Objective-C). That build has Unity's default packages in it (UI Toolkit
 among them), which adds four members the player requires and the macOS build does not have
 (`UnityEngine.UIElements.VisualManager` and `VisualNodeClassNameStore`: `m_IsWrapper`,
-`m_Ptr`); the player did not ask for them in this game. The plugin and Burst checks have not
-run on a handheld yet.
+`m_Ptr`); the player did not ask for them in this game. With the Steam check there are 25,
+and all pass with the game built for macOS 12, its `GameAssembly.dylib` and test plugins in
+chained fixups (2 of 2 runs); with the display check 26, and all pass in that form too (3 of
+3 runs). The plugin, Burst, Steam and display checks have not run on a handheld yet.
 The handheld is the BattleXP
 G350 (RK3326: four Cortex-A35, 1 GB; dArkOS, 64-bit userland). There the Mac build's game runs
 under the Android player at a steady 60 fps (frames of 16.6 ms on average, 18 to 20 ms the 99th
@@ -795,7 +874,7 @@ locks (the wait buckets of `__ulock_wait`, the first-use lock of pthread objects
 would hold up the collector if it needs the same one before resuming; `Application.platform`
 answers Android to the game; `streamingAssetsPath` is the path into the APK, as on Android.
 
-Next, Dave's own needs: its plugins (the table above: the Steam answer on the Mach-O side;
-`lib_coacd` and Burst's library are done), answers for the internal calls the
-Android player lacks, a control build of the checks for Android itself; then Dave in the
-emulator and on the handheld, with the stops measured again (it has more managed threads).
+Next: Dave itself, its data through `pmu android-data --macho`, then in the emulator and on
+the handheld, with the stops measured again (it has more managed threads). Its plugins and
+the internal calls the Android player lacks have their answers (the tables above). Still to
+make: a control build of the checks for Android itself.
