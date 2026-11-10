@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 /// (id, DllImport name pattern, title, default use, stub id, note)
-type Sdk = (
+pub(crate) type Sdk = (
     &'static str,
     &'static str,
     &'static str,
@@ -57,7 +57,7 @@ AkSoundEngine of the game's Wwise version in lib/ plays the sound instead"),
      "Rewired's Linux path: on the Android player see tools/asmpatch rewired-android"),
 ];
 
-fn host_default(sdk: &str) -> Option<&'static str> {
+pub(crate) fn host_default(sdk: &str) -> Option<&'static str> {
     (sdk == "sqlite").then_some("libsqlite3.so.0")
 }
 
@@ -124,7 +124,7 @@ pub fn norm(name: &str) -> String {
     n
 }
 
-fn sdk_of(name: &str) -> Option<&'static Sdk> {
+pub(crate) fn sdk_of(name: &str) -> Option<&'static Sdk> {
     let n = norm(name).to_lowercase();
     SDKS.iter()
         .zip(&re().sdks)

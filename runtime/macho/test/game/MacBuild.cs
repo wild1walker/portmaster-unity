@@ -15,6 +15,16 @@ public static class MacBuild
         new GameObject("Pong").AddComponent<Pong>();
         new GameObject("Checks").AddComponent<MachoChecks>();     // MachoChecks.cs: its lines in the player's log
         EditorSceneManager.SaveScene(scene, "Assets/Donor.unity");
+        // the game's native plugins (build.sh put them there): for the macOS player's arm64 half only
+        foreach (var path in new[] { "Assets/Plugins/lib_checks.dylib", "Assets/Plugins/checks_bundle.bundle" }) {
+            var plugin = AssetImporter.GetAtPath(path) as PluginImporter;
+            if (plugin == null) { Debug.LogError("no plugin importer for " + path); EditorApplication.Exit(1); return; }
+            plugin.SetCompatibleWithAnyPlatform(false);
+            plugin.SetCompatibleWithEditor(false);
+            plugin.SetCompatibleWithPlatform(BuildTarget.StandaloneOSX, true);
+            plugin.SetPlatformData(BuildTarget.StandaloneOSX, "CPU", "ARM64");
+            plugin.SaveAndReimport();
+        }
         PlayerSettings.companyName = "portmaster-unity";
         PlayerSettings.productName = "Pong";
         var mac = UnityEditor.Build.NamedBuildTarget.Standalone;
@@ -28,7 +38,10 @@ public static class MacBuild
         if (arch == null) { Debug.LogError("no OSXStandalone.UserBuildSettings.architecture"); EditorApplication.Exit(1); return; }
         arch.SetValue(null, System.Enum.Parse(arch.PropertyType, "ARM64"), null);
         var report = BuildPipeline.BuildPlayer(new[] { "Assets/Donor.unity" }, "out/Pong.app", BuildTarget.StandaloneOSX, BuildOptions.None);
-        if (!System.IO.File.Exists("out/Pong.app/Contents/Frameworks/GameAssembly.dylib")) {
+        // (a plugin set up for one CPU lands in Contents/PlugIns/ARM64, one for both in Contents/PlugIns)
+        if (!System.IO.File.Exists("out/Pong.app/Contents/Frameworks/GameAssembly.dylib") ||
+            !System.IO.Directory.Exists("out/Pong.app/Contents/PlugIns") ||
+            System.IO.Directory.GetFiles("out/Pong.app/Contents/PlugIns", "lib_checks.dylib", System.IO.SearchOption.AllDirectories).Length == 0) {
             Debug.LogError("build: " + report.summary.result + ", " + report.summary.totalErrors + " errors");
             EditorApplication.Exit(1);
         }

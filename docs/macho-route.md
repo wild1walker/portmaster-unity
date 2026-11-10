@@ -53,9 +53,16 @@ the loader's probe and its instruction scan, `test/shims.sh cover` for the names
 |---|---|---|
 | `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve; 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows. The engine opens this one, not the game's code (see "Plugins the game opens" below); not yet loaded under the route |
 | `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables. **Runs through the loader** in the arm64 Linux container with every rewrite forced: opened by the name the game's code has (`dlopen("lib_coacd")`), `CoACD_run` cuts an L-shaped test solid into 2 or 3 convex hulls whose volumes add up to the solid's (four runs: its preprocessing on, off and left to it, two seeds), `CoACD_freeMeshArray` frees them |
-| `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions |
+| `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions. The one file of the five built for macOS 15 only, so with chained fixups in place of the bind streams |
 | `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
 | `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API); the runtime's own answer stands in: Steam is not running |
+
+What the setup makes of the five (`pmu android-data --macho`, "The data" below; the same
+survey without writing anything: `cargo run -p androiddata --example macho_plugins --
+<Game>.app --names`): `lib_coacd.dylib` and `lib_burst_generated.bundle` are copied as arm64
+code to the lib folder, `steam_api.bundle` and `libEOSSDK-Mac-Shipping.dylib` are answered by
+the runtime's own stubs through the plugin map (Steam: not running; EOS: no platform), and
+`MicrophoneUtility_macos.dylib` is left out with the reason in the log.
 
 What the game's code calls is in the code itself: IL2CPP compiles each `DllImport` to a lookup
 with the library's and the function's name as C strings, so `strings` over the arm64 image
@@ -487,7 +494,43 @@ What `--macho` (`macho.rs`) does that the Mono and `--il2cpp` modes do not:
   `Unity.Multiplayer.Center.Common.dll`): with `--macho` both are the build's own and it runs
   so on macOS, so that is logged ("as built"), not refused;
 - compares what the player requires by name with the build (above);
+- surveys the build's native plugins and copies the ones the loader runs (below);
 - writes `"scripting": "macho"` into `android_package.json`.
+
+**The build's plugins** (`macho_plugins.rs`). Unity puts a macOS build's native plugins under
+`Contents/PlugIns`: one that is set for a single CPU in `PlugIns/ARM64/` or `PlugIns/x86_64/`,
+one for any CPU (a universal file, as all of Dave's) in `PlugIns/` itself; a bundle is a folder
+`X.bundle/Contents/{MacOS/<code>, Info.plist}` whose code file `CFBundleExecutable` names. The
+survey walks those folders (not `.dSYM`, not through links), takes each plugin once (of two
+copies the one with arm64 code), reads it the way the loader does (the arm64 part, the load
+commands, both bind streams with every opcode), and gives each one of three verdicts, one log
+line each:
+
+- **copied**: `lib/arm64-v8a/<name>` gets the plugin's arm64 code under the plugin's own name
+  (`lib_x.dylib`; for a bundle the folder's name, `x.bundle`, as a plain file), unchanged.
+  That is where the game's `dlopen` finds it ("Plugins the game opens" above). The condition:
+  a library or bundle with arm64 code, not encrypted, with bind streams, and every name it
+  asks a library for has an answer: among the runtime's shims, in the route's libc++, or in
+  another plugin of the build that is itself copied (decided as a fixpoint, so a plugin that
+  needs one that is left out is left out too);
+- **answered by the runtime**: a plugin that is a known SDK with a built-in answer (Steamworks,
+  EOS, ...; `plugins.rs`'s table) is not copied; its import name gets the entry in
+  `plugins.map`, and the game's `dlopen` of it goes to the host's side as before. An SDK
+  whose answer is a library the port brings (FMOD, Wwise) gets that entry only when the
+  build's own file cannot be run; where it can, the build's own file is the better one;
+- **left out**, with the reason: no arm64 code, an encrypted file (left alone), a framework,
+  a file that is no library, chained fixups (a file built for macOS 12 or later only, which
+  the loader does not read yet), a name of the route's own files, or names without an answer
+  (how many, of which library, the first six). The game then gets `DllNotFoundException` at
+  its first call into it, as it would for a plugin missing on macOS; that is logged as a
+  warning at setup, and games often never call a plugin they ship (Dave's code names
+  neither the microphone library nor EOS).
+
+Which names the runtime answers is a list in the tool (`macho_shims.txt`, 506 names), and a
+test of the crate reads the `darwin_syms_*` tables out of `runtime/macho/*.c` and fails when
+the two differ: a shim added to the runtime without the list, or the other way round, does not
+get past `cargo test`. The survey is also in the conversion's report (`macho_plugins`: file,
+import name, libraries, verdict, reason).
 
 Two findings on the way. The player's version is read from the player itself: the version
 string followed by the build stamp. An editor's `AndroidPlayer` folder also holds the string
@@ -528,7 +571,27 @@ failed`:
 - the player's scheduling of the game's code: coroutines, a task's continuation back on the
   main thread, a destroyed object comparing equal to null.
 
-Result (2026-11-10): all 16 pass, in the emulator (10 of 10 runs) and on a handheld, the BattleXP
+- the game's own native plugins (`test/game/checks_plugin.c`, built by `build.sh` as
+  `lib_checks.dylib` and as a bundle, `checks_bundle.bundle`, and set up for the macOS player
+  only, so the editor never loads them): P/Invoke with 23 arguments of which 7 go on the
+  stack in sizes of 1, 2, 4 and 8 bytes, a `bool` each way, a struct returned in registers and
+  one through memory, strings and arrays both ways, `errno` through `SetLastError`, the
+  plugin's initializer run once and a thread-local of its own, a function of the game's called
+  back by the plugin (on the calling thread, and from a thread the plugin started itself
+  while collections run), a plugin in a bundle, and the two refusals a game may rely on:
+  `DllNotFoundException` for a plugin that is not there and `EntryPointNotFoundException` for
+  a function it does not have.
+
+IL2CPP under the Android player asks `dlopen` for a `DllImport`'s name as written, then with
+`.so`, `.dll`, `.dylib`, `.bundle` behind it, then the same four with `lib` in front; the
+first is the image's own import and reaches the shim, which finds `lib_checks.dylib` for
+`lib_checks` and `checks_bundle.bundle` for `checks_bundle` at the first try.
+
+Result (2026-11-10): the 16 checks without the plugins pass in the emulator (10 of 10 runs) and
+on the handheld below; all 21 pass in the emulator (3 of 3 runs with the plugins put in the
+lib folder by hand, and 3 of 3 with a tree made by `pmu android-data --macho` alone, whose two
+plugin files are byte for byte the hand-placed ones). The 21 have not run on a handheld yet.
+The handheld is the BattleXP
 G350 (RK3326: four Cortex-A35, 1 GB; dArkOS, 64-bit userland). There the Mac build's game runs
 under the Android player at a steady 60 fps (frames of 16.6 ms on average, 18 to 20 ms the 99th
 percentile), the picture right, 160 MB resident at the start and 192 MB once settled (after

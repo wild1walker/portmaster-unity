@@ -5,6 +5,7 @@ use crate::args::Args;
 use crate::ggm;
 use crate::il2cppmeta;
 use crate::macho;
+use crate::macho_plugins;
 use crate::paths::{self, abspath, listdir, realpath};
 use crate::plugins::{self, Survey};
 use crate::pyjson::{self, Json};
@@ -158,6 +159,8 @@ pub struct Ctx {
     pub macho_files: Vec<(String, String)>,
     /// --macho: what the player asks the game's code for by name (required.rs), for the report
     pub macho_required: Option<Json>,
+    /// --macho: the build's native plugins (Contents/PlugIns), each with what becomes of it
+    pub macho_plugins: Vec<macho_plugins::Plugin>,
     pub db: Arc<ClassDb>,
     logf: Option<File>,
 }
@@ -848,7 +851,21 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
                 .map_or("None".to_string(), str::to_string)
         ));
     }
-    let survey = plugins::survey(&src).map_err(Stop::Fail)?;
+    let mut survey = plugins::survey(&src).map_err(Stop::Fail)?;
+    // --macho: the build's own plugins: those the runtime answers itself go into the map (a
+    // port's map still says otherwise), those its loader cannot run are warnings
+    if let Some(b) = &ctx.macho {
+        let found = macho_plugins::survey(&b.data);
+        for (name, e) in macho_plugins::map_entries(&found) {
+            survey.map.set(&name, e);
+        }
+        for (left_out, line) in macho_plugins::lines(&found) {
+            if left_out {
+                ctx.warnings.push(format!("plugin {line}"));
+            }
+        }
+        ctx.macho_plugins = found;
+    }
     let port_map = match &ctx.args.plugin_map {
         Some(pm) => {
             let b = fs::read(pm).map_err(|e| uns(format!("plugins: {e}")))?;
@@ -1236,6 +1253,11 @@ fn il2cpp_items(ctx: &mut Ctx, items: Vec<Item>, data: &str) -> Result<Vec<Item>
             items.push(item(py::join(data, rel), s.clone(), "link"));
         }
         items.push(item(macho::LIB.into(), b.binary.clone(), "machoslice"));
+        for p in &ctx.macho_plugins {
+            if p.verdict == macho_plugins::Verdict::Copy {
+                items.push(item(p.dst(), p.binary.clone(), "machoplugin"));
+            }
+        }
         b.metadata.clone()
     } else {
         let il = ctx.args.il2cpp.clone().unwrap();
@@ -1613,6 +1635,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         macho: None,
         macho_files: Vec::new(),
         macho_required: None,
+        macho_plugins: Vec::new(),
         db,
         logf: None,
     };
@@ -1665,6 +1688,11 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             }
         }
         ctx.log(&line);
+    }
+    for (left_out, line) in macho_plugins::lines(&ctx.macho_plugins) {
+        if !left_out {
+            ctx.log(&format!("plugin {line}"));
+        }
     }
     let statep = py::join(&out, ".android_data_state.json");
     let mut state = Json::obj();
@@ -2078,6 +2106,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                 if cut { ", the universal file's arm64 part" } else { "" }
             ));
             how = "written".into();
+        } else if act == "machoplugin" {
+            let n = macho::write_slice(src, &dst).map_err(Stop::Exit)?;
+            ctx.log(&format!(
+                "  {dst_rel}: a plugin's arm64 code as the macOS build has it ({:.1} KiB): for the port's lib folder, where the game's \
+                 code opens it by name",
+                n as f64 / 1024.0
+            ));
+            how = "written".into();
         } else if act == "il2cppboot" {
             let b = fs::read(src).map_err(io_at(src))?;
             let mut txt = String::from_utf8_lossy(&b)
@@ -2228,6 +2264,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     report.set("unity", unity);
     if let Some(j) = ctx.macho_required.clone() {
         report.set("player_required", j);
+    }
+    if ctx.macho.is_some() {
+        report.set("macho_plugins", macho_plugins::report(&ctx.macho_plugins));
     }
     report.set("skipped", ctx.skipped.clone().into());
     report.set("dropped_modules", ctx.dropped_modules.clone().into());

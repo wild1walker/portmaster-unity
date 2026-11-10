@@ -2,6 +2,8 @@ using System;
 using System.Collections;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -14,6 +16,48 @@ public class MachoChecks : MonoBehaviour
 {
     int passed, failed, exceptionsLogged;
     const string OnPurpose = "checks: thrown on purpose";
+
+    // The game's own native plugins (checks_plugin.c), as a macOS build names them.
+    [DllImport("lib_checks")] static extern int pc_inits();
+    [DllImport("lib_checks")] static extern int pc_add(int a, int b);
+    [DllImport("lib_checks")] [return: MarshalAs(UnmanagedType.U1)] static extern bool pc_not([MarshalAs(UnmanagedType.U1)] bool v);
+    [DllImport("lib_checks")] static extern int pc_calls();
+    [DllImport("lib_checks")] static extern double pc_mixed(int i1, int i2, int i3, int i4, int i5, int i6, int i7, int i8,
+        double d1, double d2, double d3, double d4, double d5, double d6, double d7, double d8,
+        sbyte c, float f, short s, double d, int i, byte u, long l);
+    [DllImport("lib_checks")] static extern int pc_reverse(byte[] text, byte[] result, int size);
+    [StructLayout(LayoutKind.Sequential)] struct PcVec { public float x, y, z; }
+    [StructLayout(LayoutKind.Sequential)] struct PcBig { public long a, b, c; public double d; }
+    [DllImport("lib_checks")] static extern PcVec pc_scale(PcVec v, float k);
+    [DllImport("lib_checks")] static extern PcBig pc_big(int n);
+    [DllImport("lib_checks")] static extern void pc_sum(int[] values, int count, out long sum);
+    [DllImport("lib_checks", SetLastError = true)] static extern int pc_fail(int e);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int PcCallback(int value, IntPtr user);
+    [DllImport("lib_checks")] static extern int pc_each(int count, PcCallback cb, IntPtr user);
+    [DllImport("lib_checks")] static extern int pc_thread_start(int count, PcCallback cb, IntPtr user);
+    [DllImport("lib_checks")] static extern int pc_thread_join();
+    [DllImport("lib_checks", EntryPoint = "pc_no_such_function")] static extern int pc_missing();
+    [DllImport("checks_bundle")] static extern int pb_value();
+    [DllImport("lib_checks_not_there")] static extern int pn_value();
+
+    static int called, callbackThread, callbackWrong;
+    static byte[][] callbackKeep = new byte[16][];
+
+    // What the plugin calls: makes objects (a collection may stop the plugin's thread here)
+    // and says which thread it ran on.
+    [AOT.MonoPInvokeCallback(typeof(PcCallback))]
+    static int OnPlugin(int value, IntPtr user)
+    {
+        callbackThread = Thread.CurrentThread.ManagedThreadId;
+        var b = new byte[64 + value % 16];
+        for (int i = 0; i < b.Length; i++) b[i] = (byte)(value + i);
+        var old = callbackKeep[value % 16];
+        if (old != null && value >= 16)
+            for (int i = 0; i < old.Length; i++) if (old[i] != (byte)(value - 16 + i)) { callbackWrong++; break; }
+        callbackKeep[value % 16] = b;
+        Interlocked.Increment(ref called);
+        return value * 2 + (int)user;
+    }
 
     void Check(string name, Func<bool> check)
     {
@@ -248,6 +292,57 @@ public class MachoChecks : MonoBehaviour
             for (int i = 0; i < 64; i++) for (int k = 0; k < 1000; k++) if (keep[i][k] != (byte)(i + k)) return false;
             return wrong == 0 && asked > 0 && GC.CollectionCount(0) >= before + asked;
         });
+
+        // A plugin of the game's own: opened by the name the code has at the first call, its
+        // functions called as macOS's convention lays the arguments out.
+        Check("plugin calls", () => {
+            double mixed = pc_mixed(1, 2, 3, 4, 5, 6, 7, 8, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, -3, 0.25f, -7, 1.75, 9, 200, -5L);
+            double want = 1 + 4 + 9 + 16 + 25 + 36 + 49 + 64 + (0.5 + 3 + 7.5 + 14 + 22.5 + 33 + 45.5 + 60) +
+                          100.0 * -3 + 1000.0 * 0.25 + 10000.0 * -7 + 100000.0 * 1.75 + 1000000.0 * 9 + 10000000.0 * 200 + 100000000.0 * -5;
+            var text = Encoding.UTF8.GetBytes("pöng ✓\0");
+            var turned = new byte[text.Length];
+            int n = pc_reverse(text, turned, turned.Length);
+            bool reversed = n == text.Length - 1;
+            for (int i = 0; reversed && i < n; i++) reversed = turned[i] == text[n - 1 - i];
+            var v = pc_scale(new PcVec { x = 1.5f, y = -2f, z = 0.25f }, 4f);
+            var big = pc_big(12);
+            pc_sum(new[] { 1, -2, 3, 1000000 }, 4, out long sum);
+            int first = pc_calls(), second = pc_calls(), other = Task.Run(() => pc_calls()).Result;
+            int failed = pc_fail(35), error = Marshal.GetLastWin32Error();
+            if (mixed != want) Debug.Log("[checks] plugin calls: pc_mixed gave " + mixed.ToString("R", CultureInfo.InvariantCulture) + ", expected " + want.ToString("R", CultureInfo.InvariantCulture));
+            return pc_inits() == 1 && pc_add(40, 2) == 42 && pc_add(int.MaxValue, 1) == int.MinValue && pc_not(false) && !pc_not(true) &&
+                   mixed == want && reversed && pc_reverse(text, turned, 3) == -1 &&
+                   v.x == 6f && v.y == -8f && v.z == 1f && big.a == 12 && big.b == 24 && big.c == 36 && big.d == 3.0 && sum == 1000002 &&
+                   second == first + 1 && other == 1 && failed == -1 && error == 35;
+        });
+        // The plugin calls a function of the game's, on the thread that called it.
+        PcCallback onPlugin = OnPlugin;
+        Check("plugin calls back", () => {
+            called = 0;
+            int got = pc_each(1000, onPlugin, (IntPtr)3);
+            return got == 999 * 1000 + 3 * 1000 && called == 1000 && callbackThread == Thread.CurrentThread.ManagedThreadId && callbackWrong == 0;
+        });
+        // The same from a thread the plugin starts, which the runtime meets at its first call,
+        // while this thread asks for collections: the plugin's thread is stopped in the game's
+        // code and in its own.
+        Check("plugin thread calls back", () => {
+            const int Calls = 20000;
+            called = 0; callbackThread = 0; callbackWrong = 0;
+            int before = GC.CollectionCount(0), asked = 0;
+            if (pc_thread_start(Calls, onPlugin, (IntPtr)1) != 0) return false;
+            while (Volatile.Read(ref called) < Calls && asked < 100000) { GC.Collect(); asked++; Thread.Sleep(1); }
+            int got = pc_thread_join();
+            Debug.Log("[checks] plugin thread: " + called + " calls, " + asked + " collections asked for and " + (GC.CollectionCount(0) - before) + " in all");
+            return got == (Calls - 1) * Calls + Calls && called == Calls && callbackWrong == 0 &&
+                   callbackThread != 0 && callbackThread != Thread.CurrentThread.ManagedThreadId;
+        });
+        GC.KeepAlive(onPlugin);
+        Check("plugin in a bundle", () => pb_value() == 21);
+        // What is not there is said as on macOS: by the two exceptions a game may catch.
+        Check("missing plugin and function", () =>
+            Throws<DllNotFoundException>("pn_value", () => pn_value(), "lib_checks_not_there") &&
+            Throws<EntryPointNotFoundException>("pc_missing", () => pc_missing(), "pc_no_such_function") &&
+            pc_add(1, 1) == 2);
 
         // The player's own scheduling of the game's code: coroutines, and a task's continuation
         // back on the main thread.
