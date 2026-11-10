@@ -331,16 +331,22 @@ impl Metadata {
     }
 }
 
-/// The binary's Il2CppType table: a 64-bit Mach-O slice (a universal file's arm64 one, else
-/// x86_64) read in place.
+/// The binary's Il2CppType table, read in place: a 64-bit Mach-O (a universal file's arm64 slice,
+/// else x86_64; classic dyld info: its pointers are the addresses they point to) or a 64-bit ELF
+/// shared library (aarch64, x86_64; its RELATIVE relocations: the pointers the loader writes).
 pub struct Types {
     f: File,
     base: u64,
-    segs: Vec<(u64, u64, u64)>,
+    /// (address, file offset, file size) of each loaded segment, and whether it holds data
+    segs: Vec<(u64, u64, u64, bool)>,
+    /// (address, value) of the pointers the loader writes, sorted (an ELF's RELATIVE relocations)
+    relocs: Vec<(u64, u64)>,
     types: u64,
     count: usize,
     cache: HashMap<u64, (u64, u32)>,
 }
+
+const MAX_COUNT: i64 = 50_000_000;
 
 impl Types {
     fn read(&self, off: u64, n: usize) -> R<Vec<u8>> {
@@ -352,7 +358,7 @@ impl Types {
     }
 
     fn file_off(&self, va: u64) -> R<u64> {
-        for &(vmaddr, fileoff, filesize) in &self.segs {
+        for &(vmaddr, fileoff, filesize, _) in &self.segs {
             if vmaddr <= va && va < vmaddr + filesize {
                 return Ok(va - vmaddr + fileoff);
             }
@@ -360,7 +366,11 @@ impl Types {
         Err(format!("binary: address {va:#x} outside its segments"))
     }
 
+    /// A pointer-sized word at an address, as the loaded image has it.
     fn u64_va(&self, va: u64) -> R<u64> {
+        if let Ok(i) = self.relocs.binary_search_by_key(&va, |r| r.0) {
+            return Ok(self.relocs[i].1);
+        }
         let b = self.read(self.file_off(va)?, 8)?;
         Ok(u64::from_le_bytes(b.try_into().unwrap()))
     }
@@ -370,11 +380,9 @@ impl Types {
         if let Some(&t) = self.cache.get(&va) {
             return Ok(t);
         }
-        let b = self.read(self.file_off(va)?, 12)?;
-        let t = (
-            u64::from_le_bytes(b[..8].try_into().unwrap()),
-            u32::from_le_bytes(b[8..12].try_into().unwrap()),
-        );
+        let data = self.u64_va(va)?;
+        let b = self.read(self.file_off(va + 8)?, 4)?;
+        let t = (data, u32::from_le_bytes(b.try_into().unwrap()));
         self.cache.insert(va, t);
         Ok(t)
     }
@@ -388,6 +396,63 @@ impl Types {
         self.u64_va(self.types + 8 * i as u64)
     }
 
+    /// Whether `reg` holds a metadata registration of `typedefs` types: its 16 words (counts and
+    /// pointers in turn), field offsets and type sizes one per type definition, the type table in
+    /// a data segment.
+    fn registration(&self, reg: u64, typedefs: usize) -> Option<(usize, u64)> {
+        let mut q = [0i64; 16];
+        for (k, w) in q.iter_mut().enumerate() {
+            *w = self.u64_va(reg + 8 * k as u64).ok()? as i64;
+        }
+        let counts_ok = [0, 2, 4, 6, 8, 10, 12]
+            .iter()
+            .all(|&k| (0..MAX_COUNT).contains(&q[k]));
+        if !counts_ok || q[10] as usize != typedefs || q[12] as usize != typedefs || q[6] <= 0 {
+            return None;
+        }
+        let types = q[7] as u64;
+        let in_data = |va: u64| {
+            self.segs
+                .iter()
+                .any(|&(a, _, n, d)| d && a <= va && va < a + n)
+        };
+        (in_data(types) && in_data(types + 8 * (q[6] as u64 - 1))).then_some((q[6] as usize, types))
+    }
+
+    /// The metadata registration found in the data segments: the word that counts the field
+    /// offset tables and, two words on, the one that counts the type sizes, both the metadata's
+    /// type count (Il2CppDumper's search), the registration ten words before.
+    fn find_registration(&self, typedefs: usize) -> Option<(u64, usize, u64)> {
+        let want = (typedefs as u64).to_le_bytes();
+        for &(va, off, size, data) in &self.segs {
+            if !data {
+                continue;
+            }
+            const CHUNK: u64 = 1 << 20;
+            let mut pos = 0u64;
+            while pos < size {
+                let n = CHUNK.min(size - pos);
+                let Ok(b) = self.read(off + pos, (n + 16).min(size - pos) as usize) else {
+                    break;
+                };
+                let mut k = 0usize;
+                while k + 24 <= b.len() && (k as u64) < n {
+                    if b[k..k + 8] == want && b[k + 16..k + 24] == want {
+                        let at = va + pos + k as u64;
+                        if let Some(reg) = at.checked_sub(80) {
+                            if let Some((count, types)) = self.registration(reg, typedefs) {
+                                return Some((reg, count, types));
+                            }
+                        }
+                    }
+                    k += 8;
+                }
+                pos += n;
+            }
+        }
+        None
+    }
+
     pub fn open(path: &Path, typedefs: usize) -> R<Types> {
         let f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let rd = |o: u64, n: usize| -> R<Vec<u8>> {
@@ -396,66 +461,106 @@ impl Types {
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             Ok(b)
         };
-        let head = rd(0, 8)?;
-        let magic_be = u32::from_be_bytes(head[..4].try_into().unwrap());
-        let mut base = 0u64;
-        if magic_be == 0xCAFE_BABE {
-            let n = u32::from_be_bytes(head[4..8].try_into().unwrap()) as u64;
-            let mut pick = None;
-            for i in 0..n.min(16) {
-                let e = rd(8 + 20 * i, 20)?;
-                let cpu = u32::from_be_bytes(e[..4].try_into().unwrap());
-                let off = u32::from_be_bytes(e[8..12].try_into().unwrap()) as u64;
-                // (arm64 first, else x86_64)
-                if cpu == 0x0100_000C || (cpu == 0x0100_0007 && pick.is_none()) {
-                    pick = Some(off);
-                }
+        let head = rd(0, 64)?;
+        let (base, segs, relocs, symbol) = if &head[..4] == b"\x7fELF" {
+            let (segs, relocs) = elf(&rd, &head)?;
+            (0, segs, relocs, None)
+        } else if &head[..2] == b"MZ" {
+            return Err("binary: a Windows DLL (PE is not read yet)".into());
+        } else {
+            let (base, segs, symbol) = macho(&rd, &head)?;
+            (base, segs, Vec::new(), symbol)
+        };
+        let mut t = Types {
+            f,
+            base,
+            segs,
+            relocs,
+            types: 0,
+            count: 0,
+            cache: HashMap::new(),
+        };
+        let found = match symbol {
+            Some(reg) => t.registration(reg, typedefs).map(|(c, ty)| (reg, c, ty)),
+            None => t.find_registration(typedefs),
+        };
+        let (_, count, types) = found.ok_or_else(|| {
+            format!(
+                "binary: no metadata registration of {typedefs} types (another build's metadata?)"
+            )
+        })?;
+        t.count = count;
+        t.types = types;
+        Ok(t)
+    }
+}
+
+type Seg = (u64, u64, u64, bool);
+/// (address, value) of the pointers a loader writes.
+type Relocs = Vec<(u64, u64)>;
+
+/// A 64-bit Mach-O's slice offset, its segments and its g_MetadataRegistration symbol (if kept).
+fn macho(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, head: &[u8]) -> R<(u64, Vec<Seg>, Option<u64>)> {
+    let magic_be = u32::from_be_bytes(head[..4].try_into().unwrap());
+    let mut base = 0u64;
+    if magic_be == 0xCAFE_BABE {
+        let n = u32::from_be_bytes(head[4..8].try_into().unwrap()) as u64;
+        let mut pick = None;
+        for i in 0..n.min(16) {
+            let e = rd(8 + 20 * i, 20)?;
+            let cpu = u32::from_be_bytes(e[..4].try_into().unwrap());
+            let off = u32::from_be_bytes(e[8..12].try_into().unwrap()) as u64;
+            // (arm64 first, else x86_64)
+            if cpu == 0x0100_000C || (cpu == 0x0100_0007 && pick.is_none()) {
+                pick = Some(off);
             }
-            base = pick.ok_or("binary: a universal file without a 64-bit slice")?;
         }
-        let h = rd(base, 32)?;
-        if u32::from_le_bytes(h[..4].try_into().unwrap()) != 0xFEED_FACF {
-            return Err("binary: not a 64-bit Mach-O (ELF and PE are not read yet)".into());
-        }
-        let ncmds = u32::from_le_bytes(h[16..20].try_into().unwrap());
-        let sizeofcmds = u32::from_le_bytes(h[20..24].try_into().unwrap()) as usize;
-        let cmds = rd(base + 32, sizeofcmds)?;
-        let (mut segs, mut symtab, mut p) = (Vec::new(), None, 0usize);
-        let mut dyld_info = false;
-        for _ in 0..ncmds {
-            let cmd = u32_at(&cmds, p)?;
-            let size = u32_at(&cmds, p + 4)? as usize;
-            match cmd {
-                0x19 => {
-                    let q = |k: usize| {
-                        u64::from_le_bytes(cmds[p + 24 + 8 * k..p + 32 + 8 * k].try_into().unwrap())
-                    };
-                    segs.push((q(0), q(2), q(3)));
-                }
-                0x2 => {
-                    symtab = Some((
-                        u32_at(&cmds, p + 8)?,
-                        u32_at(&cmds, p + 12)?,
-                        u32_at(&cmds, p + 16)?,
-                    ))
-                }
-                0x8000_0022 | 0x22 => dyld_info = true,
-                0x8000_0034 => return Err("binary: chained fixups (pointers not read yet)".into()),
-                _ => {}
+        base = pick.ok_or("binary: a universal file without a 64-bit slice")?;
+    }
+    let h = rd(base, 32)?;
+    if u32::from_le_bytes(h[..4].try_into().unwrap()) != 0xFEED_FACF {
+        return Err("binary: not a 64-bit Mach-O or ELF".into());
+    }
+    let ncmds = u32::from_le_bytes(h[16..20].try_into().unwrap());
+    let sizeofcmds = u32::from_le_bytes(h[20..24].try_into().unwrap()) as usize;
+    let cmds = rd(base + 32, sizeofcmds)?;
+    let (mut segs, mut symtab, mut p) = (Vec::new(), None, 0usize);
+    let mut dyld_info = false;
+    for _ in 0..ncmds {
+        let cmd = u32_at(&cmds, p)?;
+        let size = u32_at(&cmds, p + 4)? as usize;
+        match cmd {
+            0x19 => {
+                let q = |k: usize| {
+                    u64::from_le_bytes(cmds[p + 24 + 8 * k..p + 32 + 8 * k].try_into().unwrap())
+                };
+                let name = &cmds[p + 8..p + 24];
+                let data = name.starts_with(b"__DATA");
+                segs.push((q(0), q(2), q(3), data));
             }
-            if size == 0 {
-                break;
+            0x2 => {
+                symtab = Some((
+                    u32_at(&cmds, p + 8)?,
+                    u32_at(&cmds, p + 12)?,
+                    u32_at(&cmds, p + 16)?,
+                ))
             }
-            p += size;
+            0x8000_0022 | 0x22 => dyld_info = true,
+            0x8000_0034 => return Err("binary: chained fixups (pointers not read yet)".into()),
+            _ => {}
         }
-        if !dyld_info {
-            return Err("binary: no dyld info (pointers not read yet)".into());
+        if size == 0 {
+            break;
         }
-        let (symoff, nsyms, stroff) = symtab.ok_or("binary: no symbol table")?;
+        p += size;
+    }
+    if !dyld_info {
+        return Err("binary: no dyld info (pointers not read yet)".into());
+    }
+    let mut reg = None;
+    if let Some((symoff, nsyms, stroff)) = symtab {
         let syms = rd(base + symoff as u64, 16 * nsyms as usize)?;
-        let mut reg = None;
         let want = b"_g_MetadataRegistration\0";
-        let mut name = vec![0u8; want.len()];
         for i in 0..nsyms as usize {
             let e = &syms[16 * i..16 * i + 16];
             let ty = e[4];
@@ -464,37 +569,76 @@ impl Types {
                 continue;
             }
             let strx = u32::from_le_bytes(e[..4].try_into().unwrap()) as u64;
-            if f.read_exact_at(&mut name, base + stroff as u64 + strx)
-                .is_ok()
-                && name == want
-            {
+            if rd(base + stroff as u64 + strx, want.len()).is_ok_and(|n| n == want) {
                 reg = Some(u64::from_le_bytes(e[8..16].try_into().unwrap()));
                 break;
             }
         }
-        let reg = reg.ok_or("binary: no g_MetadataRegistration symbol")?;
-        let mut t = Types {
-            f,
-            base,
-            segs,
-            types: 0,
-            count: 0,
-            cache: HashMap::new(),
-        };
-        let r = t.read(t.file_off(reg)?, 16 * 8)?;
-        let q = |k: usize| i64::from_le_bytes(r[8 * k..8 * k + 8].try_into().unwrap());
-        // (typesCount, types; fieldOffsetsCount and typeDefinitionsSizesCount: one per type definition)
-        if q(10) as usize != typedefs || q(12) as usize != typedefs || q(6) <= 0 {
-            return Err(format!(
-                "binary: its metadata registration ({} field offsets, {} type sizes) is not the metadata's ({typedefs} types)",
-                q(10),
-                q(12)
-            ));
-        }
-        t.count = q(6) as usize;
-        t.types = q(7) as u64;
-        Ok(t)
     }
+    Ok((base, segs, reg))
+}
+
+/// A 64-bit little-endian ELF's loaded segments and its RELATIVE relocations (address, value),
+/// sorted. Packed relocations (Android's, RELR) are refused: their pointers would be read wrong.
+fn elf(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, h: &[u8]) -> R<(Vec<Seg>, Relocs)> {
+    if h[4] != 2 || h[5] != 1 {
+        return Err("binary: a 32-bit or big-endian ELF (not read yet)".into());
+    }
+    let u16_ = |o: usize| u16::from_le_bytes([h[o], h[o + 1]]);
+    let u64_ = |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
+    let relative = match u16_(0x12) {
+        0xB7 => 1027, // R_AARCH64_RELATIVE
+        0x3E => 8,    // R_X86_64_RELATIVE
+        m => return Err(format!("binary: an ELF for machine {m:#x} (not read yet)")),
+    };
+    let (phoff, phentsize, phnum) = (u64_(h, 0x20), u16_(0x36) as usize, u16_(0x38) as usize);
+    let ph = rd(phoff, phentsize * phnum)?;
+    let (mut segs, mut dynamic) = (Vec::new(), None);
+    for i in 0..phnum {
+        let e = &ph[i * phentsize..(i + 1) * phentsize];
+        let ty = u32::from_le_bytes(e[..4].try_into().unwrap());
+        let flags = u32::from_le_bytes(e[4..8].try_into().unwrap());
+        let (off, va, filesz) = (u64_(e, 8), u64_(e, 16), u64_(e, 32));
+        match ty {
+            1 => segs.push((va, off, filesz, flags & 1 == 0)), // PT_LOAD; data: not executable
+            2 => dynamic = Some((off, filesz)),                // PT_DYNAMIC
+            _ => {}
+        }
+    }
+    let (doff, dsize) = dynamic.ok_or("binary: an ELF without a dynamic section")?;
+    let d = rd(doff, dsize as usize)?;
+    let (mut rela, mut relasz, mut relaent) = (None, 0u64, 24u64);
+    for k in 0..d.len() / 16 {
+        let (tag, val) = (u64_(&d, 16 * k) as i64, u64_(&d, 16 * k + 8));
+        match tag {
+            0 => break,
+            7 => rela = Some(val),
+            8 => relasz = val,
+            9 => relaent = val,
+            0x24 | 0x6000_000F | 0x6000_0011 | 0x6FFF_E000 => {
+                return Err("binary: packed relocations (not read yet)".into())
+            }
+            _ => {}
+        }
+    }
+    let mut relocs = Vec::new();
+    if let Some(va) = rela {
+        let off = segs
+            .iter()
+            .find(|&&(a, _, n, _)| a <= va && va < a + n)
+            .map(|&(a, o, _, _)| va - a + o)
+            .ok_or("binary: the relocations outside the segments")?;
+        let r = rd(off, relasz as usize)?;
+        let ent = relaent.max(24) as usize;
+        for k in 0..r.len() / ent {
+            let e = &r[k * ent..k * ent + 24];
+            if u64_(e, 8) & 0xFFFF_FFFF == relative {
+                relocs.push((u64_(e, 0), u64_(e, 16)));
+            }
+        }
+    }
+    relocs.sort_unstable();
+    Ok((segs, relocs))
 }
 
 /// An IL2CPP build's metadata and the binary with its type table, from its data folder (`<Game>_Data`,

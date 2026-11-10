@@ -855,3 +855,68 @@ pub fn read(
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(n: &[Node]) -> Vec<(i32, String, String, i32, Option<i32>)> {
+        n.iter()
+            .map(|x| {
+                (
+                    x.level,
+                    x.type_name.to_string(),
+                    x.name.to_string(),
+                    x.byte_size,
+                    x.meta_flag,
+                )
+            })
+            .collect()
+    }
+
+    /// An opt-in check of the IL2CPP types against the assemblies they were made from:
+    /// PMU_MONOTREE_CROSS=<Managed dir>:<global-metadata.dat>:<binary>[:<assembly>] builds every
+    /// class of the assembly from both and compares the trees node by node.
+    #[test]
+    fn il2cpp_trees_match_assemblies() {
+        let Ok(spec) = std::env::var("PMU_MONOTREE_CROSS") else {
+            return;
+        };
+        let p: Vec<&str> = spec.split(':').collect();
+        let asm = p.get(3).copied().unwrap_or("Assembly-CSharp");
+        let managed = Path::new(p[0]);
+        let mut mono = Generator::new(managed, Some((6000, 0)));
+        let mut il = Generator::new(Path::new("/nonexistent"), Some((6000, 0)));
+        il.il2cpp =
+            Some(androiddata::il2cppmeta::Il2Cpp::open(Path::new(p[1]), Path::new(p[2])).unwrap());
+        let a = Assembly::open(managed.join(format!("{asm}.dll"))).unwrap();
+        let (mut same, mut nodes, mut errs_both) = (0, 0usize, 0);
+        let mut bad = Vec::new();
+        for t in a.types().unwrap() {
+            if t.full.starts_with('<') {
+                continue;
+            }
+            match (mono.class_nodes(asm, &t.full), il.class_nodes(asm, &t.full)) {
+                (Ok(x), Ok(y)) if key(&x) == key(&y) => {
+                    same += 1;
+                    nodes += x.len();
+                }
+                (Err(_), Err(_)) => errs_both += 1,
+                (x, y) => bad.push(format!(
+                    "{}: {:?} / {:?}",
+                    t.full,
+                    x.map(|n| key(&n).into_iter().take(6).collect::<Vec<_>>()),
+                    y.map(|n| key(&n).into_iter().take(6).collect::<Vec<_>>())
+                )),
+            }
+        }
+        eprintln!(
+            "{asm}: {same} classes the same ({nodes} nodes), {errs_both} refused by both, {} different",
+            bad.len()
+        );
+        for b in bad.iter().take(10) {
+            eprintln!("  {b}");
+        }
+        assert!(bad.is_empty());
+    }
+}

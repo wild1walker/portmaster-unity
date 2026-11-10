@@ -100,11 +100,22 @@ builds its trees from those as from a Mono build's files, by the same rules and 
 (a tree is used only when it reads its object's bytes exactly). Layouts as Il2CppDumper (MIT) reads
 them; [il2cpp_dumper](https://github.com/rodroidmods/il2cpp-dumper-rs) (Rust) was looked at and not
 used (its licence reads GPL-3.0 and MIT in two places). Read: metadata version 31 (Unity 2022.3 -
-6000.0) and a macOS build's GameAssembly.dylib (a universal file's arm64 slice, else x86_64; its
-`g_MetadataRegistration` symbol, classic dyld info); the registration must name as many field offset
-and type size tables as the metadata has types. Not read yet: other versions, ELF (`GameAssembly.so`,
-Android's `libil2cpp.so`) and PE (`GameAssembly.dll`) binaries, chained fixups: the step then keeps
-those objects ("IL2CPP types not read: ..."). The post effects stay in an IL2CPP build (table above).
+6000.0); a 64-bit Mach-O (macOS GameAssembly.dylib: a universal file's arm64 slice, else x86_64;
+classic dyld info) or a 64-bit little-endian ELF (Linux GameAssembly.so, Android's libil2cpp.so;
+aarch64 or x86_64; its RELATIVE relocations are the pointers it holds). The metadata registration
+is the `g_MetadataRegistration` symbol where the binary keeps it, else found in its data segments
+(Il2CppDumper's search: the words that count the field offset tables and the type sizes, both the
+metadata's type count), and it must name as many of those as the metadata has types. Not read yet:
+other metadata versions, PE (`GameAssembly.dll`), 32-bit binaries, packed relocations, chained
+fixups: the step then keeps those objects ("IL2CPP types not read: ..."). The post effects stay in
+an IL2CPP build (table above).
+
+Checked against the assemblies an IL2CPP build was made from (convert's opt-in test
+`il2cpp_trees_match_assemblies`, `PMU_MONOTREE_CROSS=<Managed>:<metadata>:<binary>[:<assembly>]`):
+Hollow Knight's own IL2CPP build (Unity 6000.0.61f1's player, metadata 31, a stripped arm64
+libil2cpp.so) against its linked assemblies: every class's tree the same, node for node:
+Assembly-CSharp 3,381 classes (167,720 nodes; 34 refused by both), Assembly-CSharp-firstpass 83,
+UnityEngine.UI 200, PlayMaker 145.
 
 Dave the Diver (6000.0.52f1, IL2CPP, URP 17; 2026-11-09): its 8 URP assets and 3 volume components
 in `globalgamemanagers.assets` were "not read" before; now all read exactly: 2x MSAA off in the two
