@@ -12,3 +12,8 @@
     C(EBADARCH) C(ESHLIBVERS) C(EBADMACHO) C(ECANCELED) C(EIDRM) C(ENOMSG) C(EILSEQ) C(ENOATTR) C(EBADMSG)
     C(EMULTIHOP) C(ENODATA) C(ENOLINK) C(ENOSR) C(ENOSTR) C(EPROTO) C(ETIME) C(EOPNOTSUPP) C(ENOPOLICY)
     C(ENOTRECOVERABLE) C(EOWNERDEAD) C(EQFULL) C(ELAST)
+
+H("strerror's texts, by number: all the running libc knows (it may know more than the SDK's ELAST)")
+printf("#define DARWIN_ERRTEXTS { \\\n");
+{ char text[256]; for (int e = 0; strerror_r(e, text, sizeof text) == 0; e++) printf("    \"%s\", \\\n", text); }
+printf("}\n");

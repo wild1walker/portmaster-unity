@@ -112,6 +112,118 @@
 #define DARWIN_EQFULL                       106
 #define DARWIN_ELAST                        106
 
+// strerror's texts, by number: all the running libc knows (it may know more than the SDK's ELAST)
+#define DARWIN_ERRTEXTS { \
+    "Undefined error: 0", \
+    "Operation not permitted", \
+    "No such file or directory", \
+    "No such process", \
+    "Interrupted system call", \
+    "Input/output error", \
+    "Device not configured", \
+    "Argument list too long", \
+    "Exec format error", \
+    "Bad file descriptor", \
+    "No child processes", \
+    "Resource deadlock avoided", \
+    "Cannot allocate memory", \
+    "Permission denied", \
+    "Bad address", \
+    "Block device required", \
+    "Resource busy", \
+    "File exists", \
+    "Cross-device link", \
+    "Operation not supported by device", \
+    "Not a directory", \
+    "Is a directory", \
+    "Invalid argument", \
+    "Too many open files in system", \
+    "Too many open files", \
+    "Inappropriate ioctl for device", \
+    "Text file busy", \
+    "File too large", \
+    "No space left on device", \
+    "Illegal seek", \
+    "Read-only file system", \
+    "Too many links", \
+    "Broken pipe", \
+    "Numerical argument out of domain", \
+    "Result too large", \
+    "Resource temporarily unavailable", \
+    "Operation now in progress", \
+    "Operation already in progress", \
+    "Socket operation on non-socket", \
+    "Destination address required", \
+    "Message too long", \
+    "Protocol wrong type for socket", \
+    "Protocol not available", \
+    "Protocol not supported", \
+    "Socket type not supported", \
+    "Operation not supported", \
+    "Protocol family not supported", \
+    "Address family not supported by protocol family", \
+    "Address already in use", \
+    "Can't assign requested address", \
+    "Network is down", \
+    "Network is unreachable", \
+    "Network dropped connection on reset", \
+    "Software caused connection abort", \
+    "Connection reset by peer", \
+    "No buffer space available", \
+    "Socket is already connected", \
+    "Socket is not connected", \
+    "Can't send after socket shutdown", \
+    "Too many references: can't splice", \
+    "Operation timed out", \
+    "Connection refused", \
+    "Too many levels of symbolic links", \
+    "File name too long", \
+    "Host is down", \
+    "No route to host", \
+    "Directory not empty", \
+    "Too many processes", \
+    "Too many users", \
+    "Disc quota exceeded", \
+    "Stale NFS file handle", \
+    "Too many levels of remote in path", \
+    "RPC struct is bad", \
+    "RPC version wrong", \
+    "RPC prog. not avail", \
+    "Program version wrong", \
+    "Bad procedure for program", \
+    "No locks available", \
+    "Function not implemented", \
+    "Inappropriate file type or format", \
+    "Authentication error", \
+    "Need authenticator", \
+    "Device power is off", \
+    "Device error", \
+    "Value too large to be stored in data type", \
+    "Bad executable (or shared library)", \
+    "Bad CPU type in executable", \
+    "Shared library version mismatch", \
+    "Malformed Mach-o file", \
+    "Operation canceled", \
+    "Identifier removed", \
+    "No message of desired type", \
+    "Illegal byte sequence", \
+    "Attribute not found", \
+    "Bad message", \
+    "EMULTIHOP (Reserved)", \
+    "No message available on STREAM", \
+    "ENOLINK (Reserved)", \
+    "No STREAM resources", \
+    "Not a STREAM", \
+    "Protocol error", \
+    "STREAM ioctl timeout", \
+    "Operation not supported on socket", \
+    "Policy not found", \
+    "State not recoverable", \
+    "Previous owner died", \
+    "Interface output queue is full", \
+    "Capabilities insufficient", \
+}
+
 // open, fcntl, ioctl, mmap
 #define DARWIN_O_ACCMODE                    0x3
 #define DARWIN_O_NONBLOCK                   0x4
@@ -131,6 +243,10 @@
 #define DARWIN_O_DSYNC                      0x400000
 #define DARWIN_O_CLOEXEC                    0x1000000
 #define DARWIN_O_NOFOLLOW_ANY               0x20000000
+#define DARWIN_O_RDONLY                     0
+#define DARWIN_O_WRONLY                     1
+#define DARWIN_O_RDWR                       2
+#define DARWIN_MAXPATHLEN                   1024
 #define DARWIN_F_DUPFD                      0
 #define DARWIN_F_GETFD                      1
 #define DARWIN_F_SETFD                      2
@@ -158,6 +274,16 @@
 #define DARWIN_FLOCK_l_pid                 16
 #define DARWIN_FLOCK_l_type                20
 #define DARWIN_FLOCK_l_whence              22
+#define DARWIN_SIZEOF_FSTORE                32
+#define DARWIN_FSTORE_fst_flags            0
+#define DARWIN_FSTORE_fst_posmode          4
+#define DARWIN_FSTORE_fst_offset           8
+#define DARWIN_FSTORE_fst_length           16
+#define DARWIN_FSTORE_fst_bytesalloc       24
+#define DARWIN_F_PEOFPOSMODE                3
+#define DARWIN_F_VOLPOSMODE                 4
+#define DARWIN_F_ALLOCATECONTIG             0x2
+#define DARWIN_F_ALLOCATEALL                0x4
 #define DARWIN_FIONREAD                     0x4004667f
 #define DARWIN_FIONBIO                      0x8004667e
 #define DARWIN_FIOCLEX                      0x20006601
@@ -195,6 +321,8 @@
 #define DARWIN_SEEK_SET                     0
 #define DARWIN_SEEK_CUR                     1
 #define DARWIN_SEEK_END                     2
+#define DARWIN_SEEK_HOLE                    3
+#define DARWIN_SEEK_DATA                    4
 #define DARWIN_AT_FDCWD                     0xfffffffffffffffe
 #define DARWIN_LOCK_SH                      1
 #define DARWIN_LOCK_EX                      2
@@ -255,6 +383,7 @@
 #define DARWIN_POLLERR                      0x8
 #define DARWIN_POLLHUP                      0x10
 #define DARWIN_POLLNVAL                     0x20
+#define DARWIN_SIZEOF_NFDS_T                4
 #define DARWIN_SIZEOF_POLLFD                8
 #define DARWIN_SIZEOF_FD_SET                128
 #define DARWIN_FD_SETSIZE                   1024
@@ -268,6 +397,67 @@
 #define DARWIN_SIZEOF_TCFLAG_T              8
 #define DARWIN_TERMIOS_c_cc                32
 #define DARWIN_NCCS                         20
+
+// the *at calls, statvfs, utimensat, copyfile
+#define DARWIN_AT_EACCESS                   0x10
+#define DARWIN_AT_SYMLINK_NOFOLLOW          0x20
+#define DARWIN_AT_SYMLINK_FOLLOW            0x40
+#define DARWIN_AT_REMOVEDIR                 0x80
+#define DARWIN_SIZEOF_STATVFS               64
+#define DARWIN_STATVFS_f_bsize             0
+#define DARWIN_STATVFS_f_frsize            8
+#define DARWIN_STATVFS_f_blocks            16
+#define DARWIN_STATVFS_f_bfree             20
+#define DARWIN_STATVFS_f_bavail            24
+#define DARWIN_STATVFS_f_files             28
+#define DARWIN_STATVFS_f_ffree             32
+#define DARWIN_STATVFS_f_favail            36
+#define DARWIN_STATVFS_f_fsid              40
+#define DARWIN_STATVFS_f_flag              48
+#define DARWIN_STATVFS_f_namemax           56
+#define DARWIN_SIZEOF_FSBLKCNT_T            4
+#define DARWIN_SIZEOF_FSFILCNT_T            4
+#define DARWIN_ST_RDONLY                    0x1
+#define DARWIN_ST_NOSUID                    0x2
+#define DARWIN_UTIME_NOW                    0xffffffffffffffff
+#define DARWIN_UTIME_OMIT                   0xfffffffffffffffe
+#define DARWIN_COPYFILE_ACL                 0x1
+#define DARWIN_COPYFILE_STAT                0x2
+#define DARWIN_COPYFILE_XATTR               0x4
+#define DARWIN_COPYFILE_DATA                0x8
+#define DARWIN_COPYFILE_SECURITY            0x3
+#define DARWIN_COPYFILE_METADATA            0x7
+#define DARWIN_COPYFILE_ALL                 0xf
+#define DARWIN_COPYFILE_EXCL                0x20000
+#define DARWIN_COPYFILE_NOFOLLOW_SRC        0x40000
+#define DARWIN_COPYFILE_NOFOLLOW_DST        0x80000
+#define DARWIN_COPYFILE_UNLINK              0x200000
+
+// stdio: FILE as the header's macros read it
+#define DARWIN_SIZEOF_FILE                  152
+#define DARWIN_FILE__p                     0
+#define DARWIN_FILE__r                     8
+#define DARWIN_FILE__w                     12
+#define DARWIN_FILE__flags                 16
+#define DARWIN_FILE__file                  18
+#define DARWIN_FILE__bf                    24
+#define DARWIN_FILE__lbfsize               40
+#define DARWIN_FILE__cookie                48
+#define DARWIN___SLBF                       0x1
+#define DARWIN___SNBF                       0x2
+#define DARWIN___SRD                        0x4
+#define DARWIN___SWR                        0x8
+#define DARWIN___SRW                        0x10
+#define DARWIN___SEOF                       0x20
+#define DARWIN___SERR                       0x40
+#define DARWIN_LOG_EMERG                    0
+#define DARWIN_LOG_ALERT                    1
+#define DARWIN_LOG_CRIT                     2
+#define DARWIN_LOG_ERR                      3
+#define DARWIN_LOG_WARNING                  4
+#define DARWIN_LOG_NOTICE                   5
+#define DARWIN_LOG_INFO                     6
+#define DARWIN_LOG_DEBUG                    7
 
 // sockets
 #define DARWIN_AF_UNSPEC                    0
@@ -585,6 +775,48 @@
 #define DARWIN_SIZEOF_CFRANGE               16
 #define DARWIN_SIZEOF_CFINDEX               8
 
+// xlocale, struct lconv
+#define DARWIN_LC_GLOBAL_LOCALE             0xffffffffffffffff
+#define DARWIN_LC_C_LOCALE                  0x0
+#define DARWIN_LCONV_decimal_point         0
+#define DARWIN_LCONV_thousands_sep         8
+#define DARWIN_LCONV_grouping              16
+#define DARWIN_LCONV_int_curr_symbol       24
+#define DARWIN_LCONV_currency_symbol       32
+#define DARWIN_LCONV_mon_decimal_point     40
+#define DARWIN_LCONV_mon_thousands_sep     48
+#define DARWIN_LCONV_mon_grouping          56
+#define DARWIN_LCONV_positive_sign         64
+#define DARWIN_LCONV_negative_sign         72
+#define DARWIN_LCONV_int_frac_digits       80
+#define DARWIN_LCONV_frac_digits           81
+#define DARWIN_LCONV_p_cs_precedes         82
+#define DARWIN_LCONV_p_sep_by_space        83
+#define DARWIN_LCONV_n_cs_precedes         84
+#define DARWIN_LCONV_n_sep_by_space        85
+#define DARWIN_LCONV_p_sign_posn           86
+#define DARWIN_LCONV_n_sign_posn           87
+#define DARWIN_LCONV_int_p_cs_precedes     88
+#define DARWIN_LCONV_int_n_cs_precedes     89
+#define DARWIN_LCONV_int_p_sep_by_space    90
+#define DARWIN_LCONV_int_n_sep_by_space    91
+#define DARWIN_LCONV_int_p_sign_posn       92
+#define DARWIN_LCONV_int_n_sign_posn       93
+#define DARWIN_SIZEOF_MBSTATE_T             128
+#define DARWIN_SIZEOF_WCHAR_T               4
+#define DARWIN_SIZEOF_WINT_T                4
+#define DARWIN_SIZEOF_LONG_DOUBLE           8
+#define DARWIN_SIZEOF_TIMEZONE              8
+#define DARWIN_SIZEOF_CLOCK_T               8
+#define DARWIN_CLOCKS_PER_SEC               1000000
+#define DARWIN_SIZEOF_DIV_T                 8
+#define DARWIN_SIZEOF_FPOS_T                8
+#define DARWIN_EOF                          -1
+#define DARWIN_BUFSIZ                       1024
+#define DARWIN__IOFBF                       0
+#define DARWIN__IOLBF                       1
+#define DARWIN__IONBF                       2
+
 // signals
 #define DARWIN_SIGHUP                       1
 #define DARWIN_SIGINT                       2
@@ -703,5 +935,77 @@
 #define DARWIN_SIZEOF_MACH_PORT_T           4
 #define DARWIN_DISPATCH_TIME_NOW            0x0
 #define DARWIN_DISPATCH_TIME_FOREVER        0xffffffffffffffff
+
+// signal codes, the context a handler is given
+#define DARWIN_ILL_NOOP                     0
+#define DARWIN_ILL_ILLOPC                   1
+#define DARWIN_ILL_ILLTRP                   2
+#define DARWIN_ILL_PRVOPC                   3
+#define DARWIN_ILL_ILLOPN                   4
+#define DARWIN_ILL_ILLADR                   5
+#define DARWIN_ILL_PRVREG                   6
+#define DARWIN_ILL_COPROC                   7
+#define DARWIN_ILL_BADSTK                   8
+#define DARWIN_FPE_NOOP                     0
+#define DARWIN_FPE_FLTDIV                   1
+#define DARWIN_FPE_FLTOVF                   2
+#define DARWIN_FPE_FLTUND                   3
+#define DARWIN_FPE_FLTRES                   4
+#define DARWIN_FPE_FLTINV                   5
+#define DARWIN_FPE_FLTSUB                   6
+#define DARWIN_FPE_INTDIV                   7
+#define DARWIN_FPE_INTOVF                   8
+#define DARWIN_SEGV_NOOP                    0
+#define DARWIN_SEGV_MAPERR                  1
+#define DARWIN_SEGV_ACCERR                  2
+#define DARWIN_BUS_NOOP                     0
+#define DARWIN_BUS_ADRALN                   1
+#define DARWIN_BUS_ADRERR                   2
+#define DARWIN_BUS_OBJERR                   3
+#define DARWIN_TRAP_BRKPT                   1
+#define DARWIN_TRAP_TRACE                   2
+#define DARWIN_CLD_EXITED                   1
+#define DARWIN_CLD_KILLED                   2
+#define DARWIN_CLD_DUMPED                   3
+#define DARWIN_CLD_TRAPPED                  4
+#define DARWIN_CLD_STOPPED                  5
+#define DARWIN_CLD_CONTINUED                6
+#define DARWIN_SI_USER                      0x10001
+#define DARWIN_SI_QUEUE                     0x10002
+#define DARWIN_SI_TIMER                     0x10003
+#define DARWIN_SI_ASYNCIO                   0x10004
+#define DARWIN_SI_MESGQ                     0x10005
+#define DARWIN_SIGINFO_T_si_pid            12
+#define DARWIN_SIGINFO_T_si_uid            16
+#define DARWIN_SIGINFO_T_si_status         20
+#define DARWIN_SIGINFO_T_si_value          32
+#define DARWIN_SIGINFO_T_si_band           40
+#define DARWIN_SIG_DFL                      0x0
+#define DARWIN_SIG_IGN                      0x1
+#define DARWIN_SIG_HOLD                     0x5
+#define DARWIN_SIG_ERR                      0xffffffffffffffff
+#define DARWIN_SIZEOF_UCONTEXT              56
+#define DARWIN_UCONTEXT_uc_onstack         0
+#define DARWIN_UCONTEXT_uc_sigmask         4
+#define DARWIN_UCONTEXT_uc_stack           8
+#define DARWIN_UCONTEXT_uc_link            32
+#define DARWIN_UCONTEXT_uc_mcsize          40
+#define DARWIN_UCONTEXT_uc_mcontext        48
+#define DARWIN_SIZEOF_MCONTEXT64            816
+#define DARWIN_MCONTEXT64___es             0
+#define DARWIN_MCONTEXT64___ss             16
+#define DARWIN_MCONTEXT64___ns             288
+#define DARWIN_SIZEOF_ARM_EXCEPTION_STATE64 16
+#define DARWIN_ARM_EXCEPTION_STATE64___far 0
+#define DARWIN_ARM_EXCEPTION_STATE64___esr 8
+#define DARWIN_ARM_EXCEPTION_STATE64___exception 12
+#define DARWIN_SIZEOF_ARM_NEON_STATE64      528
+#define DARWIN_ARM_NEON_STATE64___v        0
+#define DARWIN_ARM_NEON_STATE64___fpsr     512
+#define DARWIN_ARM_NEON_STATE64___fpcr     516
+#define DARWIN_SS_ONSTACK                   1
+#define DARWIN_SS_DISABLE                   4
+#define DARWIN_MINSIGSTKSZ                  32768
+#define DARWIN_SIGSTKSZ                     131072
 
 #endif

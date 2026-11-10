@@ -3,6 +3,7 @@
 // carries a hand-copied constant. Built and run on a Mac: gen.sh.
 #include <CoreFoundation/CoreFoundation.h>
 #include <arpa/inet.h>
+#include <copyfile.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -24,19 +25,24 @@
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/sysctl.h>
+#include <sys/syslog.h>
 #include <sys/time.h>
 #include <sys/un.h>
 #include <sys/utsname.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
 #include <xlocale.h>
 #include <runetype.h>
 

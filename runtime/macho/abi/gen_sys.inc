@@ -31,3 +31,16 @@
     H("CoreFoundation")
     X(kCFStringEncodingUTF8) X(kCFStringEncodingASCII) X(kCFStringEncodingMacRoman) X(kCFStringEncodingUTF16)
     X(kCFStringEncodingUTF16LE) X(kCFStringEncodingUTF32) SZ(CFRange, CFRANGE) SZ(CFIndex, CFINDEX)
+
+    H("xlocale, struct lconv")
+    XN(LC_GLOBAL_LOCALE, (unsigned long)LC_GLOBAL_LOCALE) XN(LC_C_LOCALE, (unsigned long)LC_C_LOCALE)
+#define LC(f) OFF(struct lconv, LCONV, f)
+    LC(decimal_point) LC(thousands_sep) LC(grouping) LC(int_curr_symbol) LC(currency_symbol) LC(mon_decimal_point)
+    LC(mon_thousands_sep) LC(mon_grouping) LC(positive_sign) LC(negative_sign) LC(int_frac_digits) LC(frac_digits)
+    LC(p_cs_precedes) LC(p_sep_by_space) LC(n_cs_precedes) LC(n_sep_by_space) LC(p_sign_posn) LC(n_sign_posn)
+    LC(int_p_cs_precedes) LC(int_n_cs_precedes) LC(int_p_sep_by_space) LC(int_n_sep_by_space) LC(int_p_sign_posn)
+    LC(int_n_sign_posn)
+#undef LC
+    SZ(mbstate_t, MBSTATE_T) SZ(wchar_t, WCHAR_T) SZ(wint_t, WINT_T) SZ(long double, LONG_DOUBLE)
+    SZ(struct timezone, TIMEZONE) SZ(clock_t, CLOCK_T) C(CLOCKS_PER_SEC) SZ(div_t, DIV_T)
+    SZ(fpos_t, FPOS_T) C(EOF) C(BUFSIZ) C(_IOFBF) C(_IOLBF) C(_IONBF)

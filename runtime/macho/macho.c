@@ -1,7 +1,8 @@
 // macho.c - see macho.h. What is read: thin or universal files' arm64 slice, MH_DYLIB and
 // MH_BUNDLE, LC_SEGMENT_64, LC_SYMTAB, LC_DYLD_INFO(_ONLY). What is refused with a message, so a
-// build made another way never half-loads: chained fixups, thread-local variables, initializer
-// offsets, text relocations, encrypted segments.
+// build made another way never half-loads: chained fixups, initializer offsets, text
+// relocations, encrypted segments, exports that name a resolver function. Thread-local
+// variables' sections are kept as the file has them: tlv.c gives each thread its copy.
 #define _GNU_SOURCE
 #include "macho.h"
 
@@ -144,7 +145,9 @@ static int bind(struct macho_image *m, const uint8_t *p, size_t n, int kind, con
         if (type != 1) return fail(err, errlen, "bind type %u for %s (text relocations are not read)", type, name); \
         if (name != last) { \
             const char *lib = kind == BIND_WEAK ? "" : ordinal >= 1 && ordinal <= nlibs ? libs[ordinal - 1] : ""; \
-            last_addr = resolve(name, lib, ctx); last = name; \
+            last_addr = kind != BIND_WEAK && ordinal == 0 ? macho_export(m, name) : NULL;   /* the image's own */ \
+            if (!last_addr) last_addr = resolve(name, lib, ctx); \
+            last = name; \
             if (!last_addr && kind != BIND_WEAK) { \
                 if (flags & 1) m->nbound++; \
                 else { m->nmissing++; if (m->nmissing <= 40) fprintf(stderr, "[macho] %s: no %s (%s)\n", m->path, name, lib); } \
@@ -232,6 +235,7 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
     m = calloc(1, sizeof *m);
     if (!m) { fail(err, errlen, "out of memory"); goto out; }
     snprintf(m->path, sizeof m->path, "%s", path);
+    m->flags = le32(h + 24);
 
     // first pass: the segments' span, what the image needs
     struct { uint64_t vmaddr, vmsize, fileoff, filesize; uint32_t initprot; const uint8_t *cmd; } sg[16];
@@ -268,7 +272,9 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
                 copy16(x->name, sc); copy16(x->seg, sc + 16);
                 x->addr = (uint8_t *)(uintptr_t)le64(sc + 32);      // vmaddr for now
                 x->size = le64(sc + 40);
+                x->align = le32(sc + 52);
                 x->flags = fl;
+                if (x->align > 30) { fail(err, errlen, "%s: section %s aligned to 2^%u", path, x->name, x->align); goto bad; }
                 if (le64(sc + 32) < sg[k].vmaddr || le64(sc + 32) + x->size > sg[k].vmaddr + sg[k].vmsize) { fail(err, errlen, "%s: section %s outside its segment", path, x->name); goto bad; }
             }
             break;
@@ -383,13 +389,18 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
         if (!(p = LINKEDIT(off, size))) { fail(err, errlen, "%s: rebases outside __LINKEDIT", path); goto bad; }
         if (rebase(m, p, size, err, errlen) != 0) goto bad;
     }
-    static const int kinds[3] = { BIND_NORMAL, BIND_LAZY, BIND_WEAK };
-    static const int at[3] = { 16, 32, 24 };
-    for (int i = 0; i < 3; i++) {
+    static const int kinds[2] = { BIND_NORMAL, BIND_LAZY };
+    static const int at[2] = { 16, 32 };
+    for (int i = 0; i < 2; i++) {
         off = le32(dyld_info + at[i]); size = le32(dyld_info + at[i] + 4);
         if (!size) continue;
         if (!(p = LINKEDIT(off, size))) { fail(err, errlen, "%s: binds outside __LINKEDIT", path); goto bad; }
         if (bind(m, p, size, kinds[i], libs, nlibs, resolve, ctx, err, errlen) != 0) goto bad;
+    }
+    off = le32(dyld_info + 24); size = le32(dyld_info + 28);
+    if (size) {
+        if (!(m->weak = LINKEDIT(off, size))) { fail(err, errlen, "%s: weak binds outside __LINKEDIT", path); goto bad; }
+        m->weak_size = size;
     }
 #undef LINKEDIT
     if (m->nmissing) { fail(err, errlen, "%s: %d imports have no answer", path, m->nmissing); goto bad; }
@@ -404,6 +415,12 @@ out:
     free(cmds);
     close(fd);
     return NULL;
+}
+
+int macho_bind_weak(struct macho_image *m, macho_resolve_fn resolve, void *ctx, char *err, size_t errlen)
+{
+    if (!m->weak_size) return 0;
+    return bind(m, m->weak, m->weak_size, BIND_WEAK, NULL, 0, resolve, ctx, err, errlen);
 }
 
 int macho_protect(struct macho_image *m)
@@ -432,6 +449,11 @@ void macho_run_initializers(struct macho_image *m, int argc, char **argv, char *
 
 void *macho_export(const struct macho_image *m, const char *name)
 {
+    return macho_export_flags(m, name, NULL);
+}
+
+void *macho_export_flags(const struct macho_image *m, const char *name, unsigned *xflags)
+{
     const uint8_t *start = m->exports, *end = start + m->exports_size, *p = start;
     const char *s = name;
     int bad = 0;
@@ -445,6 +467,11 @@ void *macho_export(const struct macho_image *m, const char *name)
             if (bad || (flags & 0x08)) return NULL;          // a re-export: another image's
             uint64_t a = uleb(&p, end, &bad);
             if (bad || (flags & 0x03) == 0x02 || a >= m->vmsize) return NULL;    // an absolute value: no address
+            if (flags & 0x10) {                              // a stub and the function that picks its target
+                fprintf(stderr, "[macho] %s: %s is exported through a resolver function, which is not read\n", m->path, name);
+                return NULL;
+            }
+            if (xflags) *xflags = (unsigned)flags;
             return m->header + a;
         }
         p += term;
@@ -480,7 +507,7 @@ static void walk_exports(const struct macho_image *m, const uint8_t *p, char *na
         const uint8_t *q = p;
         uint64_t flags = uleb(&q, end, &bad);
         uint64_t a = uleb(&q, end, &bad);
-        if (!bad && !(flags & 0x08) && (flags & 0x03) != 0x02 && a < m->vmsize) cb(name, m->header + a, ctx);
+        if (!bad && !(flags & 0x18) && (flags & 0x03) != 0x02 && a < m->vmsize) cb(name, m->header + a, ctx);
     }
     p += term;
     if (p >= end) return;

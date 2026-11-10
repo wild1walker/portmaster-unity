@@ -13,6 +13,7 @@ struct macho_section {
     uint8_t *addr;
     uint64_t size;
     uint32_t flags;
+    uint32_t align;              // log2 of the alignment the section asks for
 };
 
 struct macho_segment {
@@ -32,6 +33,7 @@ struct macho_image {
     uint8_t  *island;            // island_bytes of rwx memory right before the image (NULL: none)
     size_t    island_bytes;
     uint8_t  *header;            // the mach_header_64 in memory
+    uint32_t  flags;             // the header's (MACHO_WEAK_DEFINES, MACHO_BINDS_TO_WEAK, ...)
     struct macho_segment seg[16];
     int       nseg;
     struct macho_section sect[64];
@@ -40,6 +42,8 @@ struct macho_image {
     uint64_t  linkedit_fileoff;
     const uint8_t *exports;      // the export trie
     uint32_t  exports_size;
+    const uint8_t *weak;         // the weak-bind stream (macho_bind_weak)
+    uint32_t  weak_size;
     const uint8_t *symtab;       // nlist_64 entries
     uint32_t  nsyms;
     const char *strtab;
@@ -58,13 +62,25 @@ typedef void *(*macho_resolve_fn)(const char *name, const char *lib, void *ctx);
 
 // Loads path's arm64 slice (a universal or a thin file). island: bytes of writable, executable
 // memory to leave right before the image, within a branch's reach of its code. NULL with a
-// message in err when the file is not one this loader reads completely.
+// message in err when the file is not one this loader reads completely. The image's own binds
+// are made (each import from the dylib it names); the names several images may define and all
+// must agree on are left for macho_bind_weak.
 struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn resolve, void *ctx,
                                char *err, size_t errlen);
+// The coalesced names (C++ inline functions and typeinfo, operator new and delete), once every
+// image that is to run together is loaded and before macho_protect: each use the image lists is
+// bound to resolve(name, "", ctx), the one definition all the images share; NULL leaves the
+// image with its own. 0, or -1 with a message.
+#define MACHO_WEAK_DEFINES   0x8000u       // header flags: the image defines such names,
+#define MACHO_BINDS_TO_WEAK  0x10000u      // uses them
+int   macho_bind_weak(struct macho_image *m, macho_resolve_fn resolve, void *ctx, char *err, size_t errlen);
 // Segment protections as the image asks (after the code was patched); 0 or -1 with errno.
 int   macho_protect(struct macho_image *m);
 void  macho_run_initializers(struct macho_image *m, int argc, char **argv, char **envp);
 void *macho_export(const struct macho_image *m, const char *name);    // "_il2cpp_init"
+// The same, with the export's flags: MACHO_EXPORT_WEAK is a definition another image's may replace.
+#define MACHO_EXPORT_WEAK 0x04u
+void *macho_export_flags(const struct macho_image *m, const char *name, unsigned *flags);
 void *macho_symbol(const struct macho_image *m, const char *name);    // LC_SYMTAB: locals too
 const struct macho_section *macho_section(const struct macho_image *m, const char *seg, const char *sect);
 int   macho_contains(const struct macho_image *m, const void *p);
