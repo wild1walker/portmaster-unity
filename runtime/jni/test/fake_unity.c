@@ -610,6 +610,10 @@ static jboolean inject_event(JNIEnv *env, jobject ev)
     jclass ie = (*env)->FindClass(env, "android/view/InputEvent");
     jint src = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, ie, "getSource", "()I"));
     jint dev;
+    static jlong last_time;
+    jlong time = (*env)->CallLongMethod(env, ev, (*env)->GetMethodID(env, ie, "getEventTime", "()J"));
+    if (R[R_EVENTS]++ && time <= last_time) R[R_EVENT_TIME_BAD]++;
+    last_time = time;
     if ((*env)->IsInstanceOf(env, ev, kc)) {
         R[R_KEY_CODE] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, kc, "getKeyCode", "()I"));
         R[R_KEY_ACTION] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, kc, "getAction", "()I"));

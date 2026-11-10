@@ -42,6 +42,28 @@ Xbox prompts name the wrong letter for each button. Fix the letters, never the p
   anything but `xbox`, the Nintendo layout's letters; `xbox` the game's Xbox letters, for handhelds
   printed like an Xbox pad.
 
+### Event times
+
+Every input event the runtime hands the player carries its own millisecond (`getEventTime`):
+one handed over in the millisecond of the one before is given the next (`up_event_ms`,
+runtime/jni/unityplayer.c). A pad's button and its axes are separate Android events (a KeyEvent
+and a MotionEvent), and a poll in which both change hands both over within microseconds.
+
+What was seen with events of one time (the Input System package 1.14 under the 6000.0 player, the
+Mach-O route's test game, a script pressing the bottom button and pushing the left stick in the
+same poll and letting both go in the same poll half a second later): each pad event reaches the
+package as the pad's whole state at the moment it was handed over, and of events with the same
+time the later ones are taken first. The game's pad was then left in the state of the first of
+them: the button down with the stick at 0 for the whole press, and after the release the button
+up with the stick still at 1, until the pad's next event. In a game that is a direction that
+stays held after the d-pad is let go, whenever a button changed in the same poll. Each control
+alone was right, and so were the same two changes a quarter of a second apart; the same events a
+millisecond apart are taken in order.
+
+The times therefore run ahead of the clock by the length of a burst, a few milliseconds at most.
+Past 16 ms ahead (more than a thousand events a second for that long) events share a millisecond
+again, as they can on Android, rather than the times leaving the clock behind.
+
 ## What the game reads
 
 `tools/asmpatch` (`asmpatch --survey <Game>_Data/Managed`) lists the input stacks in the game's
@@ -85,6 +107,10 @@ and device class, so the package versions 1.0-1.8 take them the same way (the pa
 changes nothing, if `PerformDefaultPluginInitialization` or `RegisterLayout(string, string,
 InputDeviceMatcher?)` is missing). Not covered: pads without `SOURCE_GAMEPAD` (Android
 joysticks) and sensors, which ua_host does not present.
+
+A macOS IL2CPP build on the Mach-O route has no assembly to patch: there the runtime's bridge
+registers the same two layouts through the same `RegisterLayout`, at run time
+([macho-route.md](macho-route.md), "The Input System's pads").
 
 ```sh
 python -m pmunity android-data ... --asmpatch "/path/to/asmpatch --only=inputsystem-android"
@@ -395,7 +421,12 @@ action assets, the legacy Input Manager's axes, and bindings a game makes at run
   the d-pad is let go, the swap button giving the d-pad back and the axes sent again;
   `dstickauto`: `auto,both` on a pad with sticks and one without).
 - `runtime/jni/build.sh`: libunity's view of a mouse MotionEvent (source, action, tool type,
-  button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape.
+  button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape;
+  the times of a burst of pad events (a button and the axes, six times over): each after the one
+  before's.
+- The Mach-O route's test game (docs/macho-route.md, "The Input System's pads") with
+  `UA_INPUT_SCRIPT="4@1:a~0.5+lright~0.5+up~0.5"`: the button, the stick and the d-pad seen
+  going down together and all let go again.
 - `runtime/host/test/pointer_test.sh` also runs `test_osk` (osk.c against a stand-in field and the
   fake GL): nothing taken or drawn while no keyboard is open; typing with the pad (focus moves,
   every button, shift and caps, the symbols page, Enter, repeats, buttons held from before);

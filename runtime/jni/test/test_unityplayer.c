@@ -387,6 +387,12 @@ static int run_shape(int shape)
     CHECK(up_inject_axes(5, 0, 2, axes, vals) == 1);
     CHECK(R(R_AXIS_X_X1000) == -500 && R(R_AXIS_HAT_X1000) == 1000 && R(R_MOTION_SRC) == UP_SOURCE_JOYSTICK);
     CHECK(R(R_INJECT_EXTRA) == (shape >= SHAPE_2022_3 ? 1000 : 0));
+    /* a button and the axes changing in one poll: each event's time is after the one before's */
+    for (int i = 0; i < 6; i++) {
+        up_inject_key(5, UP_SOURCE_GAMEPAD, i & 1 ? UP_ACTION_UP : UP_ACTION_DOWN, UP_KEYCODE_BUTTON_A, 0, 0);
+        up_inject_axes(5, 0, 2, axes, vals);
+    }
+    CHECK(R(R_EVENTS) == 15 && R(R_EVENT_TIME_BAD) == 0);
     /* a mouse (host pointer mode): hover, press, wheel */
     struct up_input_device mouse = { .id = 9, .name = "Test Mouse", .descriptor = "test-mouse", .sources = UP_SOURCE_MOUSE,
                                      .naxes = 2, .axis = { UP_AXIS_X, UP_AXIS_Y }, .max = { 639, 479 } };

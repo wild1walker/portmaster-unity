@@ -48,6 +48,7 @@ void     looper_loop(up_looper *l);            /* until quit */
 
 int64_t  up_now_ms(void);                      /* SystemClock.uptimeMillis */
 int64_t  up_now_ns(void);
+int64_t  up_event_ms(void);                    /* an injected event's time: no two in one millisecond */
 int      up_on_main_thread(void);
 
 /* UnityPlayer state used by the framework handlers */

@@ -72,6 +72,30 @@ int64_t up_now_ns(void)
 }
 int64_t up_now_ms(void) { return up_now_ns() / 1000000; }
 
+/* The time an injected input event carries (getEventTime, in uptimeMillis). No two events share
+ * a millisecond: one handed over in the millisecond of the one before is given the next.
+ * Seen with the Input System package under the 6000.0 player: a pad's event reaches the package
+ * as the pad's whole state at the moment it was handed over, and of events with one time the
+ * later ones are taken first. A button and a stick that change in one poll then leave the
+ * game's pad in the state of the first of them, the other changes lost until the pad's next
+ * event: a d-pad let go in the poll a button goes down stays held. A millisecond apart, the same
+ * events are taken in order (docs/input.md, "Event times").
+ * The times run ahead of the clock by the length of a burst. Past EVENT_LEAD_MS (more than a
+ * thousand events a second for that long) events share a millisecond again, as they can on
+ * Android, rather than the times leaving the clock behind. */
+#define EVENT_LEAD_MS 16
+int64_t up_event_ms(void)
+{
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    static int64_t last;
+    pthread_mutex_lock(&mu);
+    int64_t t = up_now_ms();
+    if (t <= last) t = last < t + EVENT_LEAD_MS ? last + 1 : last;
+    last = t;
+    pthread_mutex_unlock(&mu);
+    return t;
+}
+
 int up_on_main_thread(void) { return g_main_started && pthread_equal(pthread_self(), g_main_thread); }
 
 void looper_init(up_looper *l, const char *name)
@@ -871,7 +895,7 @@ static int inject_key_flags(int device_id, int source, int action, int keycode, 
     k->meta = meta;
     k->device = device_id;
     k->source = source ? source : UP_SOURCE_GAMEPAD;
-    k->time_ms = up_now_ms();
+    k->time_ms = up_event_ms();
     if (keycode >= 0 && keycode < 512) {
         if (action == UP_ACTION_DOWN && !repeat) g_key_down_ms[keycode] = k->time_ms;
         k->down_ms = g_key_down_ms[keycode] ? g_key_down_ms[keycode] : k->time_ms;
@@ -892,7 +916,7 @@ static up_motion_ev *motion_new(int action, int source, int device)
     m->action = action;
     m->source = source;
     m->device = device;
-    m->time_ms = up_now_ms();
+    m->time_ms = up_event_ms();
     if ((action & 0xff) == UP_ACTION_DOWN) g_motion_down_ms = m->time_ms;
     m->down_ms = g_motion_down_ms ? g_motion_down_ms : m->time_ms;
     return m;
