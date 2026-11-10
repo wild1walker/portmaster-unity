@@ -737,6 +737,12 @@ particles are checked against the floor every other frame. A B and B A, Bullet H
 | + `physics-skip` | 36.14, 36.09 | 36.26, 36.41 |
 | + `half-rate` | 36.20, 35.83 (against 35.57, 35.40) | 38.87, 36.99 (against 36.31, 36.56) |
 
+Then `hud-half` (2026-11-10), a change too small to see: dfGUI's managers draw a dirty HUD on even frames only
+(a change made on an odd frame shows one frame later; the dirty flag waits for the next even frame, so nothing is
+lost; nothing in the game reads the HUD's mesh). The Knulli, Bullet Hell's room, A B and B A: 37.00 -> 40.44 fps
+and 35.91 -> 39.81, frames over 33 ms 122 -> 78 and 166 -> 76 (muOS was not reachable for its pair). Screenshots of
+both builds at the same moment of the route show the same HUD.
+
 Later (2026-11-09) `UA_MONO_TLS` keeps the thread's JIT data and domain in ua_host's own thread-local
 variables as well, filled through libmono's `pthread_setspecific` (so no call per icall wrapper at all). At
 the port's shipped settings with all its patches, A B and B A: the first fight Knulli 59.29 / 59.34 -> 59.43 /
