@@ -2242,3 +2242,24 @@ the game's ~750 MB: Unity's own allocations (anonymous memory 500 MB with the he
 available): heap 264 -> 224 MB, lowest MemAvailable 82 -> 140 MB, the fight's fps the same (22.4), about 2.7 s
 more collection in the floor's load. With 110 MB held by another process (EmulationStation's size in its menu)
 the load still runs short (35 MB at the watchdog).
+
+The heavy fights at the clocks a player gets (2026-11-10; portmaster-gungeon 31a5263 with gungeon-main's
+physics-skip, half-rate and hud-half, `UA_GC_GROW=250`, EmulationStation stopped; the benches' rooms named,
+`UA_BENCH_WARP=room:<name>`, as the busiest pick changed between runs): dArkOS's EmulationStation launches a
+port through `sudo perfmax performance` (CPU, GPU and memory controller on their performance governors) and
+`sudo perfnorm` after it, which the harness now does the same way (porting.md, RK3326):
+
+| bench | idle governors: fps, p99, frames over 50 ms | perfmax: fps, p99, frames over 50 ms | lowest MemAvailable |
+|---|---|---|---|
+| the Keep's boss (Gatling Gull) | 27.7, 110 ms, 119 | 36.1, 61 ms, 22 | 235 MB |
+| Boss Rush's High Dragun | 32.7, 96 ms, 63 | 34.5, 102 ms, 55 | 208 MB |
+| the Forge, Forge_Joe_Hot_Fire_002 | 23.7, 68 ms, 119 | 27.4, 57 ms, 37 | 144 MB |
+| Bullet Hell, Hell_Hath_No_Joery_007 | 22.9, 86 ms, 177 | 25.9, 62 ms, 67 | 177 MB |
+
+With 110 MB held by another process (EmulationStation's size in its menu; it gives its memory back under
+60 MB available): Bullet Hell fits (lowest 69 MB, fight 27.7 fps); the Forge's load reached 58 MB, where the
+stand-in gave its memory back (fight 28.3 fps). A census of the Forge's fight
+(`UA_DUMP_TEXTURES`, runtime.md): 632 textures, ~168 MB: the ASTC atlases 106 MB, and ten 960x1080 RGBA
+render textures of 40 MB that the Ammonomicon's page renderers hold for the whole run while the book is shut
+(`AmmonomiconController.PrecacheAllData`); the CJK font atlases are not loaded in an English game; 4,173
+meshes, 457k vertices, all readable.

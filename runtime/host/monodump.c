@@ -16,6 +16,11 @@
 //   UA_DUMP_OFF=<assembly>:<class>[@<GameObject>],...  a measurement that changes the picture: every 5 s once the Knight exists, the
 //                           components of those classes (e.g. Assembly-CSharp-firstpass:UnityStandardAssets.ImageEffects.
 //                           BloomOptimized) turned off ("[dump] off ...")
+//   UA_DUMP_TEXTURES=<s>[,<s>...]  <s> seconds after the first frame (up to 16 times), UnityMain logs every texture Unity
+//                           holds (Resources.FindObjectsOfTypeAll(Texture)): class, size, format (Texture2D's
+//                           TextureFormat, RenderTexture's RenderTextureFormat), mip levels and name ("[dump] texture
+//                           ..."), then their count, and the meshes (count, vertices, how many readable, those of
+//                           1000 vertices or more by name): what a scene's memory is (a memory census)
 // Everything else is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
 // UnityMain after a frame, as a script of the game would; nothing is changed.
 //   UA_FLIPBOOK=<controller>,...|@<file>  a stand-in for Unity's Animator on sprite flip-books: the managed assembly
@@ -46,6 +51,8 @@ static MonoObject *(*m_invoke)(MonoMethod *, void *, void **, MonoObject **);
 static MonoType *(*m_class_get_type)(MonoClass *);
 static MonoObject *(*m_type_get_object)(MonoDomain *, MonoType *);
 static uintptr_t (*m_array_length)(MonoArray *);
+// Mono 2.6: struct MonoArray { MonoObject obj (vtable, synchronisation); MonoArrayBounds *bounds; uint32 max_length; ... }
+static uintptr_t array_length(MonoArray *a) { return m_array_length ? m_array_length(a) : (uintptr_t)*(uint32_t *)((char *)a + 3 * sizeof(void *)); }
 static char *(*m_array_addr)(MonoArray *, int, uintptr_t);
 static void *(*m_unbox)(MonoObject *);
 static char *(*m_string_to_utf8)(MonoString *);
@@ -64,7 +71,9 @@ static int load(void)
 #define L(v, n) if (!(*(void **)&v = so_dlsym(h, n))) { fprintf(stderr, "[dump] %s missing\n", n); return 0; }
     L(m_domain_get, "mono_domain_get"); L(m_image_loaded, "mono_image_loaded"); L(m_class_from_name, "mono_class_from_name");
     L(m_method_from_name, "mono_class_get_method_from_name"); L(m_invoke, "mono_runtime_invoke"); L(m_class_get_type, "mono_class_get_type");
-    L(m_type_get_object, "mono_type_get_object"); L(m_array_length, "mono_array_length"); L(m_array_addr, "mono_array_addr_with_size");
+    L(m_type_get_object, "mono_type_get_object"); L(m_array_addr, "mono_array_addr_with_size");
+    // Mono 2.6 (Unity 2017.x) has mono_array_length only as a macro: its MonoArray's max_length, read below
+    *(void **)&m_array_length = so_dlsym(h, "mono_array_length");
     L(m_unbox, "mono_object_unbox"); L(m_string_to_utf8, "mono_string_to_utf8"); L(m_free, "mono_free");
     L(m_object_get_class, "mono_object_get_class"); L(m_class_get_name, "mono_class_get_name"); L(m_class_get_parent, "mono_class_get_parent");
     L(m_string_new, "mono_string_new"); L(m_domain_assembly_open, "mono_domain_assembly_open"); L(m_assembly_get_image, "mono_assembly_get_image");
@@ -138,7 +147,7 @@ static void dump(void)
     // every camera: enabled, depth (the order they render in), culling mask, clear flags, target texture
     MonoMethod *all_cams = m_method_from_name(k_cam, "get_allCameras", 0);
     MonoArray *cams = all_cams ? (MonoArray *)m_invoke(all_cams, NULL, NULL, &exc) : NULL;
-    for (uintptr_t i = 0, nc = cams ? m_array_length(cams) : 0; i < nc; i++) {
+    for (uintptr_t i = 0, nc = cams ? array_length(cams) : 0; i < nc; i++) {
         MonoObject *c = *(MonoObject **)m_array_addr(cams, sizeof(void *), i);
         float depth = 0; int mask = 0, clear = 0;
         getf(c, "get_depth", &depth, 1); geti(c, "get_cullingMask", &mask); geti(c, "get_clearFlags", &clear);
@@ -165,7 +174,7 @@ static void dump(void)
     MonoArray *all = (MonoArray *)m_invoke(find, NULL, args, &exc);
     if (!all || exc) { fprintf(stderr, "[dump] FindObjectsOfType failed\n"); return; }
     int everything = getenv("UA_DUMP_RENDERERS_ALL") && atoi(getenv("UA_DUMP_RENDERERS_ALL")) > 0;
-    uintptr_t n = m_array_length(all), shown = 0;
+    uintptr_t n = array_length(all), shown = 0;
     MonoObject *mf_type = k_mf ? m_type_get_object(dom, m_class_get_type(k_mf)) : NULL;
     for (uintptr_t i = 0; i < n; i++) {
         MonoObject *r = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
@@ -200,7 +209,7 @@ static void dump(void)
             MonoObject *mesh = mf ? call(mf, "get_sharedMesh", NULL, 0) : NULL;
             MonoArray *cols = mesh ? (MonoArray *)call(mesh, "get_colors32", NULL, 0) : NULL;
             char mn[96]; name_of(mesh, mn, sizeof mn);
-            if (cols && m_array_length(cols) > 0) {
+            if (cols && array_length(cols) > 0) {
                 unsigned char *c = (unsigned char *)m_array_addr(cols, 4, 0);
                 snprintf(extra, sizeof extra, " mesh %s vertex colour (%d, %d, %d, %d)", mn, c[0], c[1], c[2], c[3]);
             } else snprintf(extra, sizeof extra, " mesh %s", mn);
@@ -219,7 +228,7 @@ static void dump(void)
     if (!all || exc) return;
     void *ra[1] = { m_type_get_object(dom, m_class_get_type(k_ren)) };
     unsigned counts[3] = { 0 }, running = 0;
-    n = m_array_length(all);
+    n = array_length(all);
     for (uintptr_t i = 0; i < n; i++) {
         MonoObject *a = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
         MonoObject *on = a ? call(a, "get_isActiveAndEnabled", NULL, 0) : NULL;
@@ -254,6 +263,60 @@ static void dump(void)
 }
 
 // the named GameObject's and the main camera's positions, one write (another thread's [hitch] line must not land inside it)
+static void textures(void)
+{
+    if (!load()) return;
+    MonoDomain *dom = m_domain_get();
+    MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+    if (!core) core = m_image_loaded("UnityEngine");
+    MonoClass *k_res = core ? m_class_from_name(core, "UnityEngine", "Resources") : NULL;
+    MonoClass *k_tex = core ? m_class_from_name(core, "UnityEngine", "Texture") : NULL;
+    MonoMethod *all = k_res ? m_method_from_name(k_res, "FindObjectsOfTypeAll", 1) : NULL;
+    if (!k_tex || !all) { fprintf(stderr, "[dump] Resources.FindObjectsOfTypeAll(Type) or Texture not found\n"); return; }
+    void *args[1] = { m_type_get_object(dom, m_class_get_type(k_tex)) };
+    MonoObject *exc = NULL;
+    MonoArray *arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
+    if (!arr || exc) { fprintf(stderr, "[dump] FindObjectsOfTypeAll failed\n"); return; }
+    uintptr_t n = array_length(arr);
+    for (uintptr_t i = 0; i < n; i++) {
+        MonoObject *t = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+        if (!t) continue;
+        const char *cls = m_class_get_name(m_object_get_class(t));
+        int w = 0, h = 0, fmt = -1, mips = 1;
+        char nm[96];
+        geti(t, "get_width", &w); geti(t, "get_height", &h);
+        geti(t, "get_format", &fmt);                  // Texture2D: TextureFormat; RenderTexture: RenderTextureFormat
+        geti(t, "get_mipmapCount", &mips);
+        name_of(t, nm, sizeof nm);
+        fprintf(stderr, "[dump] texture %s %dx%d fmt %d mips %d %s\n", cls, w, h, fmt, mips, nm[0] ? nm : "-");
+    }
+    fprintf(stderr, "[dump] textures: %lu\n", (unsigned long)n);
+    // and the meshes: how many, their vertices, how many keep a copy readable by scripts
+    MonoClass *k_mesh = m_class_from_name(core, "UnityEngine", "Mesh");
+    if (!k_mesh) return;
+    args[0] = m_type_get_object(dom, m_class_get_type(k_mesh));
+    exc = NULL;
+    arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
+    if (!arr || exc) return;
+    n = array_length(arr);
+    long long verts = 0, big = 0; int readable = 0;
+    for (uintptr_t i = 0; i < n; i++) {
+        MonoObject *m = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+        int v = 0, r = 0;
+        if (!m || !geti(m, "get_vertexCount", &v)) continue;
+        verts += v;
+        MonoObject *rd = call(m, "get_isReadable", NULL, 0);
+        if (rd && *(unsigned char *)m_unbox(rd)) r = 1;
+        readable += r;
+        if (v >= 1000) {
+            char nm[96]; name_of(m, nm, sizeof nm);
+            fprintf(stderr, "[dump] mesh %d vertices%s %s\n", v, r ? " readable" : "", nm[0] ? nm : "-");
+            big += v;
+        }
+    }
+    fprintf(stderr, "[dump] meshes: %lu, %lld vertices (%lld in meshes of 1000 or more), %d readable\n", (unsigned long)n, verts, big, readable);
+}
+
 static void hero(const char *name, double t)
 {
     static int ok = -1;
@@ -415,7 +478,7 @@ static void comps_off(void)
         void *args[1] = { m_type_get_object(m_domain_get(), m_class_get_type(k)) };
         MonoArray *all = (MonoArray *)m_invoke(find, NULL, args, &exc);
         if (!all || exc) continue;
-        uintptr_t n = m_array_length(all), off = 0;
+        uintptr_t n = array_length(all), off = 0;
         for (uintptr_t i = 0; i < n; i++) {
             MonoObject *c = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
             MonoObject *en = c ? call(c, "get_enabled", NULL, 0) : NULL;
@@ -440,8 +503,8 @@ void monodump_frame(void)
     flipbook_frame();
     hero_place();
     comps_off();
-    static int state = -1, n, next;         // state -1: not read; 0: off or done; 1: waiting
-    static double at[16], t0, period, last;
+    static int state = -1, n, next, tn, tnext;   // state -1: not read; 0: off or done; 1: waiting
+    static double at[16], tat[16], t0, period, last;
     static char name[64];
     if (state == 0) return;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -454,12 +517,19 @@ void monodump_frame(void)
             while (*p == ',' || *p == ' ') p++;
             if (*p && !(*p >= '0' && *p <= '9') && *p != '.') break;
         }
+        const char *te = getenv("UA_DUMP_TEXTURES");
+        for (char *p = (char *)te; p && *p && tn < 16; ) {
+            double s = strtod(p, &p);
+            if (s > 0) tat[tn++] = s;
+            while (*p == ',' || *p == ' ') p++;
+            if (*p && !(*p >= '0' && *p <= '9') && *p != '.') break;
+        }
         const char *hv = getenv("UA_DUMP_HERO");
         if (hv) {
             char *p; period = strtod(hv, &p);
             snprintf(name, sizeof name, "%s", *p == ',' ? p + 1 : "Knight");
         }
-        state = n || period > 0 ? 1 : 0; t0 = now;
+        state = n || tn || period > 0 ? 1 : 0; t0 = now;
         return;
     }
     if (period > 0 && now - last >= period) {
@@ -469,6 +539,12 @@ void monodump_frame(void)
     if (next < n && now - t0 >= at[next]) {
         fprintf(stderr, "[dump] at %.0f s\n", now - t0);
         dump();
-        if (++next == n && period <= 0) state = 0;
+        next++;
     }
+    if (tnext < tn && now - t0 >= tat[tnext]) {
+        fprintf(stderr, "[dump] textures at %.0f s\n", now - t0);
+        textures();
+        tnext++;
+    }
+    if (next == n && tnext == tn && period <= 0) state = 0;
 }

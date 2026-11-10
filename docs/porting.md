@@ -579,7 +579,9 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   peak is stopped by the kernel there. The test harnesses stop EmulationStation (`sudo systemctl stop
   emulationstation`); give the game's loads a margin of 100 MB in those tests, or hold that much in
   another process during the run (a stand-in for EmulationStation). Readable textures (above) and the
-  textures step are the big levers.
+  textures step are the big levers. Unity 2017.x and older (Mono 2.6): `UA_GC_GROW = "250"` (runtime.md)
+  collects when Mono's heap grows in a load with under 250 MB available (Enter the Gungeon's Forge: heap
+  264 -> 224 MB, lowest available 82 -> 140 MB).
 - **The setup:** it runs in about 20 minutes (Enter the Gungeon: 1157 s with EmulationStation running,
   the tools' peak 331 MB, at least 424 MB available; the textures step's ASTC encoding is half of it,
   and the SoC reaches 80 C there, the CPU at 1.2 GHz).
@@ -597,6 +599,21 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   G350's pad has two sticks.
 - **Measure the average fps** of a walk or fight (the bench's `steady` step never settles here), with
   the SoC cool at the start (`devlock.py cool`): the CPU throttles from 1.5 to 1.0-1.2 GHz near 80 C.
+- **Bench at the clocks a player gets:** EmulationStation launches every port through dArkOS's own
+  `sudo perfmax %GOVERNOR% %ROM%` and `sudo perfnorm` after it (`es_systems.cfg`; ES-fcamod fills
+  `%GOVERNOR%` with its `GlobalPerformanceGovernor` setting, `performance` unless the player changed it):
+  CPU, GPU and memory controller on their performance governors (1.5 GHz, 520 MHz, DDR 786 MHz). From a
+  shell the device stays on its idle governors, where the memory controller never left 528 MHz and the
+  GPU 400 MHz in a fight; Enter the Gungeon's heavy fights ran 5 - 30 % slower there (the Keep's boss
+  27.7 -> 36.1 fps, the High Dragun 32.7 -> 34.5, the Forge's busiest room 23.7 -> 27.4, Bullet Hell's
+  22.9 -> 25.9: idle governors -> perfmax, EmulationStation stopped). A test harness should run the same two
+  commands around the game, as ES does: with no terminal (ES's stdin is `/dev/null`). From a terminal
+  (`ssh -t`, `script`) both scripts take their non-RK3326 branch and perfnorm leaves the GPU on
+  `performance`. A port itself never touches clocks.
+- **Memory hogs in tests take the device down:** a process standing in for EmulationStation's memory must
+  give it back before the game's own watchdog stops the game (the harness's `hog.py` exits under 60 MB
+  available; the watchdog stops the game under 50), and never in tmpfs (`/dev/shm` is not freed when the
+  test ends): a G350 that runs out of memory with no swap needs its power button.
 - **EmulationStation stays in memory** while a port runs on dArkOS (it is the process that launched it):
   64 - 126 MB resident on the G350 (895 MB, no swap), more after browsing. PortMaster's dArkOS module does
   not stop it, and a launcher cannot (stopping its service stops the port too). A test over SSH stops ES
