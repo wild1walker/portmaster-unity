@@ -740,7 +740,7 @@ particles are checked against the floor every other frame. A B and B A, Bullet H
 Then `hud-half` (2026-11-10), a change too small to see: dfGUI's managers draw a dirty HUD on even frames only
 (a change made on an odd frame shows one frame later; the dirty flag waits for the next even frame, so nothing is
 lost; nothing in the game reads the HUD's mesh). The Knulli, Bullet Hell's room, A B and B A: 37.00 -> 40.44 fps
-and 35.91 -> 39.81, frames over 33 ms 122 -> 78 and 166 -> 76 (muOS was not reachable for its pair). Screenshots of
+and 35.91 -> 39.81, frames over 33 ms 122 -> 78 and 166 -> 76; muOS 37.00 -> 38.03 and 38.26 -> 38.53. Screenshots of
 both builds at the same moment of the route show the same HUD.
 
 Later (2026-11-09) `UA_MONO_TLS` keeps the thread's JIT data and domain in ua_host's own thread-local
