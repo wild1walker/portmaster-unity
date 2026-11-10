@@ -19,6 +19,21 @@ pub const CHUNK: usize = 0x20000;
 /// UnityPy's save(packer='lz4') and bigbundle.pack: blocks info at the end, directory, LZ4.
 pub const LZ4_DATA_FLAG: u32 = 194;
 pub const LZ4_BLOCK_FLAG: u32 = 2;
+/// A stored bundle's block flag: no compression, "streamed" (0x40), as Unity's own uncompressed
+/// bundles have it (BuildAssetBundleOptions.UncompressedAssetBundle).
+pub const STORED_BLOCK_FLAG: u32 = 0x40;
+/// The most a stored block holds when the data does not fit one block (the sizes are 32 bits).
+pub const STORED_BLOCK_MAX: u64 = 1 << 30;
+
+/// A stored bundle's header flags for an engine: the nodes with the blocks info (0x40), the
+/// blocks info not compressed and before the data, padded as that engine pads it (0x200).
+pub fn stored_data_flag(engine: &str) -> u32 {
+    if old_flags(engine) {
+        0x40
+    } else {
+        0x240
+    }
+}
 /// Blocks a lazy reader decompresses as reads reach them (bigbundle.LAZY_MAX_BLOCK); a bundle
 /// with bigger ones (one LZMA block) is unpacked into files instead.
 pub const LAZY_MAX_BLOCK: u32 = 4 << 20;
@@ -300,10 +315,17 @@ impl Source for Blocks {
                 i += 1;
                 continue;
             }
-            let b = self.block(i)?;
             let lo = (pos - u) as usize;
             let n = (buf.len() - done).min(usize as usize - lo);
-            buf[done..done + n].copy_from_slice(&b[lo..lo + n]);
+            let (_, _, fp, csize, flags) = self.table[i];
+            if flags as u32 & 0x3F == compress::NONE && csize == usize {
+                // a stored block is read where it is, whatever its size (a stored bundle is
+                // one block of all its data)
+                self.file.read_at(fp + lo as u64, &mut buf[done..done + n])?;
+            } else {
+                let b = self.block(i)?;
+                buf[done..done + n].copy_from_slice(&b[lo..lo + n]);
+            }
             done += n;
             i += 1;
         }
@@ -362,12 +384,25 @@ impl Bundle {
         self.header.nodes.iter().position(|n| n.name == name)
     }
 
-    /// Whether every block can be read lazily (bigbundle's lazy rule: blocks up to 4 MB).
+    /// Whether every block can be read lazily (bigbundle's lazy rule: blocks up to 4 MB; a
+    /// stored block of any size, which is read where it is).
     pub fn lazy_ok(&self) -> bool {
-        self.header
-            .blocks
-            .iter()
-            .all(|b| b.usize <= LAZY_MAX_BLOCK && (b.flags & 0x3F) <= 3)
+        self.header.blocks.iter().all(|b| {
+            (b.flags as u32 & 0x3F == compress::NONE && b.csize == b.usize)
+                || (b.usize <= LAZY_MAX_BLOCK && (b.flags & 0x3F) <= 3)
+        })
+    }
+
+    /// Whether the bundle is stored: no block compressed, the blocks info neither (what a
+    /// reader that hands a node's bytes to something else as a range of the file needs:
+    /// Unity's Android video player).
+    pub fn is_stored(&self) -> bool {
+        self.header.flags & 0x3F == compress::NONE
+            && self
+                .header
+                .blocks
+                .iter()
+                .all(|b| b.flags as u32 & 0x3F == compress::NONE && b.csize == b.usize)
     }
 
     /// Every node written to a file in `dir` (bigbundle.unpack without lazy): the blocks
@@ -548,6 +583,9 @@ fn chunks<'a>(nodes: &'a [PackNode], size: usize) -> impl Iterator<Item = Result
 /// LZ4_DATA_FLAG, LZ4_BLOCK_FLAG: bigbundle.pack's layout). LZ4 chunks are compressed on
 /// `threads` threads (the same bytes). With blocks info at the end (0x80) the blocks are written
 /// as they are compressed, else they are held until the blocks info is written before them.
+/// Stored blocks (block_flag without a compression) are known before the data: one block of
+/// everything, or blocks of STORED_BLOCK_MAX when that is more than a block's 32-bit size holds;
+/// the data is then copied behind the blocks info, never held.
 pub fn pack<W: Write + Seek>(
     out: &mut W,
     h: &PackHeader,
@@ -584,6 +622,24 @@ pub fn pack<W: Write + Seek>(
     let at_end = data_flag & 0x80 != 0;
     let switch = block_flag & 0x3F;
     let mut blocks: Vec<(u32, u32, u32)> = Vec::new();
+    let stored = switch == compress::NONE;
+    if stored {
+        let total: u64 = nodes.iter().map(|n| n.src.len()).sum();
+        let cap = if total <= u32::MAX as u64 {
+            total
+        } else {
+            STORED_BLOCK_MAX
+        };
+        let mut left = total;
+        while left > 0 {
+            let k = left.min(cap);
+            blocks.push((k as u32, k as u32, block_flag));
+            left -= k;
+        }
+        if blocks.is_empty() {
+            blocks.push((0, 0, block_flag));
+        }
+    }
     // the blocks, to `out` (at the end) or to memory
     let mut held: Vec<u8> = Vec::new();
     out.write_all(&head.buf)?;
@@ -603,14 +659,13 @@ pub fn pack<W: Write + Seek>(
             Ok(())
         };
         match switch {
-            compress::NONE => {
-                // one block of everything (chunk_based_compress)
-                let total: u64 = nodes.iter().map(|n| n.src.len()).sum();
+            compress::NONE if at_end => {
                 for c in chunks(nodes, 1 << 20) {
                     emit(&c?)?;
                 }
-                blocks.push((total as u32, total as u32, block_flag));
             }
+            // (copied behind the blocks info, below)
+            compress::NONE => {}
             compress::LZ4 | compress::LZ4HC => {
                 compress::compress_chunks(
                     chunks(nodes, CHUNK),
@@ -668,7 +723,13 @@ pub fn pack<W: Write + Seek>(
             let pad = (16 - pos % 16) % 16;
             out.write_all(&vec![0u8; pad as usize])?;
         }
-        out.write_all(&held)?;
+        if stored {
+            for c in chunks(nodes, 1 << 20) {
+                out.write_all(&c?)?;
+            }
+        } else {
+            out.write_all(&held)?;
+        }
     }
     let end = out.stream_position()?;
     let total = end - base;

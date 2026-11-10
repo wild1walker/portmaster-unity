@@ -196,8 +196,19 @@ impl MiniBundle {
         let mut out = Vec::new();
         while n > 0 {
             let i = self.block_of(uoff)?;
-            let (_, plain) = self.read_block(f, i)?;
             let s = (uoff - self.block_pos[i].1) as usize;
+            let [usz, csz, bfl] = self.blocks[i];
+            if bfl & 0x3F == 0 && csz == usz {
+                // a stored block: only the bytes asked for (a stored bundle is one block of
+                // all its data)
+                let k = n.min(usz as usize - s);
+                f.seek(SeekFrom::Start(self.block_pos[i].0 + s as u64))?;
+                out.extend_from_slice(&read_n(f, k)?);
+                n -= k;
+                uoff += k as u64;
+                continue;
+            }
+            let (_, plain) = self.read_block(f, i)?;
             let take = &plain[s.min(plain.len())..(s + n).min(plain.len())];
             out.extend_from_slice(take);
             n -= take.len();
@@ -271,9 +282,14 @@ pub fn patch_bundle_platform(
             }
             let u = *off as u64 + poff as u64 + k as u64;
             let i = b.block_of(u)?;
-            let (raw, plain) = b.read_block(&mut f, i)?;
             let rel = (u - b.block_pos[i].1) as usize;
             let c = b.blocks[i][2] & 0x3F;
+            // (a stored block is patched where it is, without reading it)
+            let (raw, plain) = if c == 0 {
+                (Vec::new(), Vec::new())
+            } else {
+                b.read_block(&mut f, i)?
+            };
             let pos;
             if c == 0 {
                 pos = rel;

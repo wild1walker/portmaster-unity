@@ -55,7 +55,6 @@ void main()
 precision highp float;
 precision highp int;
 const bool UM_BT709 = false;
-uniform 	float _AlphaParam;
 uniform highp samplerExternalOES _MainTex;
 in  vec2 vs_TEXCOORD0;
 layout(location = 0) out vec4 SV_Target0;
@@ -89,7 +88,10 @@ vec3 rgb(vec3 s)
 void main()
 {
     SV_Target0.xyz = rgb(yuv(vs_TEXCOORD0.xy));
-    SV_Target0.w = _AlphaParam;
+    // opaque, as the external texture of such a clip is on Android. Not _AlphaParam: the player
+    // applies the VideoPlayer's alpha where it draws the video, and its 6000.0 leaves that
+    // uniform 0 for this pass, which made a far-plane video draw nothing.
+    SV_Target0.w = 1.0;
     return;
 }
 #endif

@@ -126,7 +126,7 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
 - Fonts are embedded in the game; there is no /system/fonts fallback.
 - **Video (`pmunity/video.py`).** Unity's Android VideoPlayer draws frames with
   `Hidden/VideoDecodeAndroid` (`ScriptMapper::FindShader`, passes `RGBAExternal_To_RGBA` and
-  `RGBASplitExternal_To_RGBA`, matched ignoring case; the same in 2017.4 - 2022.3). An Android
+  `RGBASplitExternal_To_RGBA`, matched ignoring case; the same in 2017.4 - 6000.0). An Android
   build's `unity_builtin_extra` has it; a desktop build's has only `Hidden/VideoDecode`, and its
   ScriptMapper lists the Android name with a null pointer. When the data has `Hidden/VideoDecode`,
   android-data adds our own `Hidden/VideoDecodeAndroid` to `unity_builtin_extra` (a free path id,
@@ -134,14 +134,49 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
   - the Shader object is the data's `Hidden/VideoDecode` with the name, two passes (made from its
     `FLIP_RGBA_TO_RGBA` and `FLIP_RGBASPLIT_TO_RGBA`: vertex inputs, `_MainTex`, `_MainTex_ST`,
     `_AlphaParam`, render state), one GLES3 program each and no other platform, so its layout is
-    that Unity version's;
+    that Unity version's. A pass's name is stored as that version stores names: in upper case, or
+    (6000.0) as the shader's source writes it, which the template's own pass names show;
   - the programs are `pmunity/video_decode_android.shader` (GLSL ES 3.00, `samplerExternalOES`),
     written for the runtime's SurfaceTexture (`runtime/media/README.md`): Y, U and V read from the
     packed picture and converted as Unity's desktop players convert the same clips; the converter
     picks the conversion from the game's clips (their `.resource` headers: VP8/VP9 → Unity's
     BT.601 software conversion, H.264/HEVC → BT.709 as Unity's NV12 pass), logged as
     `video: clips {...}: BT.601 conversion`;
+  - the pass for clips without an alpha half writes alpha 1, as the external texture of such a
+    clip has on Android, and does not read `_AlphaParam`. The player's 2017.4 - 2022.3 set that
+    uniform to 1 for the blit; its 6000.0 leaves it 0 and applies the VideoPlayer's alpha only
+    where it draws the video (`Hidden/VideoComposite`: source alpha blend). With the uniform as
+    the alpha, a far-plane or near-plane VideoPlayer under 6000.0 decoded every frame into a
+    texture of alpha 0 and drew nothing: Dave the Diver's logo clip played to its end on a black
+    screen (found with `UA_GL_TRACE_UNIFORMS=_AlphaParam` and `UA_GL_TRACE_DUMPTEX`: the decode
+    blit's uniform 0, the video texture's colour right and its alpha plane all 0).
+    `runtime/media`'s `test_surface_gl` draws with the uniform at 0 and wants alpha 255;
   - `--no-video-shader` leaves it out (then no frame shows).
+- **Video clips in asset bundles.** Unity's Android VideoPlayer does not read a clip through the
+  engine's files: it hands the system's extractor a range of a file on disk (a descriptor, an
+  offset and a length). A clip in a plain `.resource` file has that; a clip in a compressed
+  bundle does not, and the player then says `AndroidVideoMedia::OpenExtractor could not translate
+  archive:/CAB-.../CAB-....resource to local file. Make sure file exists, is on disk (not in
+  memory) and not compressed.` and shows nothing (the game goes on: Dave the Diver's first clip,
+  a VP8 WebM in an LZ4 Addressables bundle, left a blank picture at 60 fps). An Android build
+  of such a game has these bundles uncompressed; a desktop build has them LZ4 like the others.
+  android-data therefore writes every placed bundle that has a `.resource` node and a
+  `VideoClip` object (class 329) in one of its serialized files again *stored*, after its other
+  steps (platform, inlined textures): one block of all the data with flags `0x40` (no
+  compression, "streamed"; blocks of 1 GiB when the data is more than a block's 32-bit size
+  holds), the blocks info not compressed and before the data (header flags `0x40`, `0x240` for
+  the engines that pad it), the nodes' bytes as they were. The bundle's CRC is over its
+  uncompressed data and does not change; an Addressables catalog's `m_BundleSize` follows the
+  new file size like any other. Logged per bundle (`N video clips: stored without compression
+  ... (A -> B bytes)`) and listed in the report's `video_bundles`. A bundle that is stored
+  already is not touched; one whose data cannot be read in place (big LZMA blocks) is unpacked
+  into `<bundle>.work` for the step. The tools read a stored block where it is (the bundle
+  reader, the CRC, the in-place platform patch), never the block whole: a stored bundle is one
+  block of all its data. Two things this does not do: the YCbCr conversion above is picked from
+  the clips of the data folder's own files, not from clips in bundles (none there: BT.601, right
+  for VP8 / VP9 clips); and the codecs are the runtime's (`runtime/media/README.md`).
+  (`unityfs::data::store_bundle_of_class`, `video::store_clip_bundle`; unit test
+  `stored_bundles`.)
 
 ## 3. Managed assemblies
 
@@ -352,6 +387,19 @@ it was not built with the right version or build target" and had no locales; now
 screen leads to its title menu (emulated rig). Binary catalogs (`catalog.bin`, Addressables 2.x)
 are not handled yet.
 
+The same options hold the bundle's file size (`m_BundleSize`), and a converted bundle has
+another one of those too: its shaders, its platform tag, its recompressed blocks. Addressables
+itself uses the size for download progress only, but a game may compare it: Dave the Diver
+checks every bundle file against the catalog's size before its first scene and reports damaged
+files ("ValidateBundleFile Failed") when one differs. So each size follows the file android-data
+placed, for every bundle of the build's own folder (an id of
+`{UnityEngine.AddressableAssets.Addressables.RuntimePath}/...`, which the catalog's own folder
+answers; a remote or absolute id is left alone, as is a record whose ids do not agree on one
+file). The log has the count ("N bundle sizes (m_BundleSize) follow the placed files"). In that
+game 83 of 3,967 sizes differed after `pmu convert` and 3,445 after android-data; a catalog
+checked against the files afterwards has to show none, and that check, not the count, is the
+test (`catalog_follow` in `streaming.rs`).
+
 **StreamingAssets as files: `--streaming-assets obb|both|loose`.**
 
 | mode | the files | asmpatch (opt-in patch, added to `--asmpatch`) | for |
@@ -378,6 +426,10 @@ without `--data-path`) is refused; folders made for a build without the patch ge
 as above. `--asmpatch`, `--managed-file` and `--assembly-patch` are refused with `--il2cpp`: they go
 to `pmunity il2cpp`. With IL2CPP the data is one APK (no OBB) when it fits, so `both` keeps the
 files in the APK and beside it.
+
+With `--macho` the default is `loose` and no patch is involved: the runtime's bridge answers
+`Application.streamingAssetsPath` with the folder for every reader ([macho-route.md](macho-route.md),
+"StreamingAssets"). `obb` is taken with a warning, `both` is refused.
 
 In the emulated rig: a 2018.3 game whose menus take their text from localization XML files that it
 lists and opens in StreamingAssets (`DirectoryInfo.GetFiles`, `File.Exists`, `FileStream`) showed

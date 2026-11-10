@@ -6,7 +6,7 @@ use crate::bundle::{self, Bundle, PackHeader, PackNode};
 use crate::compress;
 use crate::data::{DataFile, NodeData, Options};
 use crate::serialized::SerializedFile;
-use crate::source::{MemSource, SharedSource};
+use crate::source::{MemSource, SharedSource, Source};
 use crate::tpk::ClassDb;
 use crate::typetree::{CommonStrings, Kind, Node, TypeTree, ALIGN};
 use crate::value::{self, Value};
@@ -324,6 +324,11 @@ fn serialized_bytes(names: &[(i64, &str)]) -> Vec<u8> {
 
 /// serialized_bytes with these external files.
 fn serialized_bytes_ext(names: &[(i64, &str)], externals: &[&str]) -> Vec<u8> {
+    serialized_bytes_class(names, externals, 1)
+}
+
+/// serialized_bytes_ext with its objects of this class id.
+fn serialized_bytes_class(names: &[(i64, &str)], externals: &[&str], class_id: i32) -> Vec<u8> {
     let t = test_tree();
     let c = CommonStrings::default();
     let mut data = Vec::new();
@@ -341,7 +346,7 @@ fn serialized_bytes_ext(names: &[(i64, &str)], externals: &[&str]) -> Vec<u8> {
     m.i32(2);
     m.u8(1);
     m.i32(1);
-    m.i32(1); // class id
+    m.i32(class_id);
     m.u8(0);
     m.i16(-1);
     m.bytes(&[0x11; 16]);
@@ -1243,6 +1248,100 @@ fn scene_bundles() {
             .unwrap(),
         &res[1000..4000]
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle with a class's objects is written again stored, another is left as it is.
+#[test]
+fn stored_bundles() {
+    const CLIP: i32 = 329;
+    let dir = temp("stored");
+    let clip: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let nodes = vec![
+        (
+            "CAB-1",
+            4,
+            serialized_bytes_class(&[(1, "intro"), (2, "outro")], &[], CLIP),
+        ),
+        ("CAB-1.resource", 0, clip.clone()),
+    ];
+    let path = dir.join("video.bundle");
+    std::fs::write(&path, unity_bundle(&nodes, 0x20000)).unwrap();
+    let before = Bundle::open(&path).unwrap();
+    assert!(!before.is_stored());
+    let crc = |p: &std::path::Path| -> Vec<u8> {
+        let b = Bundle::open(p).unwrap();
+        b.data.read_vec(0, b.data.len() as usize).unwrap()
+    };
+    let data = crc(&path);
+    drop(before);
+    let work = dir.join("work");
+    assert_eq!(
+        crate::data::store_bundle_of_class(&path, None, CLIP, &work).unwrap(),
+        Some(2)
+    );
+    assert!(!work.exists() && !dir.join("video.bundle.tmp").exists());
+    let b = Bundle::open(&path).unwrap();
+    assert!(b.is_stored() && b.lazy_ok());
+    // one block of everything, not compressed, the blocks info neither and before the data
+    assert_eq!(b.header.flags, 0x40);
+    assert_eq!(b.header.blocks.len(), 1);
+    assert_eq!(
+        (b.header.blocks[0].usize, b.header.blocks[0].csize, b.header.blocks[0].flags),
+        (data.len() as u32, data.len() as u32, 0x40)
+    );
+    assert_eq!(
+        b.header.nodes.iter().map(|n| (n.name.as_str(), n.flags)).collect::<Vec<_>>(),
+        [("CAB-1", 4), ("CAB-1.resource", 0)]
+    );
+    // the data as it was (its CRC with it), the clip a range of the file
+    assert_eq!(crc(&path), data);
+    let file = std::fs::read(&path).unwrap();
+    let at = b.header.data_start as usize + b.header.nodes[1].offset as usize;
+    assert_eq!(&file[at..at + clip.len()], &clip[..]);
+    assert_eq!(b.node(1).read_vec(100_000, 16).unwrap(), &clip[100_000..100_016]);
+    // the platform is still patched in place, without the block read
+    let m = crate::platform::MiniBundle::open(&path).unwrap();
+    let mut f = std::fs::File::open(&path).unwrap();
+    assert_eq!(m.read_plain(&mut f, 8, 4).unwrap(), &data[8..12]);
+    drop(b);
+    assert_eq!(
+        crate::data::store_bundle_of_class(&path, None, CLIP, &work).unwrap(),
+        None,
+        "stored already"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), file);
+    // a 6000 engine's flags: the blocks info padded
+    assert_eq!(bundle::stored_data_flag("6000.0.52f1"), 0x240);
+    assert_eq!(bundle::stored_data_flag("2019.4.40f1"), 0x40);
+    // no object of the class: not touched
+    let other = dir.join("other.bundle");
+    let bytes = unity_bundle(
+        &[
+            ("CAB-2", 4, serialized_bytes(&[(1, "sound")])),
+            ("CAB-2.resource", 0, vec![3; 5000]),
+        ],
+        0x20000,
+    );
+    std::fs::write(&other, &bytes).unwrap();
+    assert_eq!(
+        crate::data::store_bundle_of_class(&other, None, CLIP, &work).unwrap(),
+        None
+    );
+    assert_eq!(std::fs::read(&other).unwrap(), bytes);
+    // stored data of more than one block's size is written as several blocks (the rule, on a
+    // small scale: pack's blocks follow the sizes)
+    let mut c = std::io::Cursor::new(Vec::new());
+    let ph = PackHeader::of(&Bundle::open(&other).unwrap().header);
+    let pn = vec![PackNode {
+        name: "n".into(),
+        flags: 0,
+        src: mem(vec![9; 1000]),
+    }];
+    bundle::pack(&mut c, &ph, &pn, 0x40, bundle::STORED_BLOCK_FLAG, 1).unwrap();
+    let b = Bundle::from_source(mem(c.into_inner())).unwrap();
+    assert_eq!(b.header.blocks.len(), 1);
+    assert_eq!(b.node(0).read_vec(0, 1000).unwrap(), vec![9; 1000]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -191,9 +191,16 @@ pub fn build(template: &Value, bt709: bool) -> Result<Value, Stop> {
             return Err(value_err(format!("{TEMPLATE} has no pass {old}")));
         };
         let mut p = p.clone();
-        field_mut(&mut p, "m_State")?.set("m_Name", Value::str(&new.to_uppercase()))?;
+        // the name as that Unity version stores a pass's: in upper case, or (6000.0) as the
+        // shader's source has it, which the pass it is made from shows
+        let stored = if pass_name(&p).chars().any(char::is_lowercase) {
+            new.to_string()
+        } else {
+            new.to_uppercase()
+        };
+        field_mut(&mut p, "m_State")?.set("m_Name", Value::str(&stored))?;
         if matches!(p.get("m_Name"), Some(Value::Str(b)) if !b.is_empty()) {
-            p.set("m_Name", Value::str(&new.to_uppercase()))?;
+            p.set("m_Name", Value::str(&stored))?;
         }
         let mut code_entries = std::collections::BTreeSet::new();
         for st in STAGES {
@@ -468,6 +475,34 @@ pub fn has_template(path: &str) -> bool {
 
 // ---------------------------------------------------------------- the game's clips
 
+/// VideoClip's class id.
+const VIDEO_CLIP: i32 = 329;
+
+/// A placed bundle that holds a VideoClip and its bytes (a .resource node), written again stored
+/// (unityfs::data::store_bundle_of_class): Unity's Android VideoPlayer hands the clip to the
+/// system's extractor as a range of the bundle's file, which a compressed bundle does not have
+/// ("AndroidVideoMedia::OpenExtractor could not translate archive:/... to local file. Make sure
+/// file exists, is on disk (not in memory) and not compressed."; an Android build of such a
+/// game has these bundles uncompressed, a desktop build has them LZ4 like the others). Returns
+/// (clips, bytes before, bytes now) when it was written.
+pub fn store_clip_bundle(
+    db: Option<std::sync::Arc<unityfs::ClassDb>>,
+    dst: &str,
+) -> Result<Option<(usize, u64, u64)>, Stop> {
+    let b = unityfs::platform::MiniBundle::open(Path::new(dst))?;
+    if !b.nodes.iter().any(|n| n.3.ends_with(".resource")) {
+        return Ok(None);
+    }
+    let before = std::fs::metadata(dst)?.len();
+    let work = format!("{dst}.work");
+    let Some(clips) =
+        unityfs::data::store_bundle_of_class(Path::new(dst), db, VIDEO_CLIP, Path::new(&work))?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((clips, before, std::fs::metadata(dst)?.len())))
+}
+
 fn contains(h: &[u8], tag: &[u8]) -> bool {
     h.windows(tag.len()).any(|w| w == tag)
 }
@@ -705,7 +740,7 @@ mod tests {
                             Value::Array(vec![
                                 pass("COPY", 4, 5),
                                 pass("FLIP_RGBASPLIT_TO_RGBA", 2, 3),
-                                pass("flip_rgba_to_rgba", 0, 1),
+                                pass("FLIP_RGBA_TO_RGBA", 0, 1),
                             ]),
                         )])]),
                     ),
@@ -767,6 +802,35 @@ mod tests {
             }
             _ => panic!("entry 2"),
         }
+        // Unity 6000.0 stores a pass's name as the source has it: so are the new passes'
+        let mut t6 = t.clone();
+        for (p, name) in t6
+            .path_mut(&["m_ParsedForm", "m_SubShaders"])
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .get_mut("m_Passes")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .zip(["Copy", "Flip_RGBASplit_To_RGBA", "Flip_RGBA_To_RGBA"])
+        {
+            p.get_mut("m_State")
+                .unwrap()
+                .set("m_Name", Value::str(name))
+                .unwrap();
+        }
+        let v6 = build(&t6, false).unwrap();
+        let names: Vec<String> = v6.path(&["m_ParsedForm", "m_SubShaders"]).unwrap().as_array().unwrap()[0]
+            .get("m_Passes")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(pass_name)
+            .collect();
+        assert_eq!(names, ["RGBAExternal_To_RGBA", "RGBASplitExternal_To_RGBA"]);
         // a template without the passes: the Python's ValueError
         let mut t2 = t.clone();
         t2.path_mut(&["m_ParsedForm", "m_SubShaders"])

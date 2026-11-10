@@ -24,7 +24,7 @@ use unityfs::ClassDb;
 
 pub const ANDROID: u32 = 13;
 pub const NO_SPACE: u8 = 4;
-const STATE_VERSION: i128 = 10;
+const STATE_VERSION: i128 = 12;
 const DATA_JSON: &[&str] = &["ScriptingAssemblies.json", "RuntimeInitializeOnLoads.json"];
 const GLES31_SDK: i64 = 22;
 pub const OBB_GUID_FROM: (u32, u32) = (2021, 1);
@@ -161,6 +161,8 @@ pub struct Ctx {
     pub macho_required: Option<Json>,
     /// --macho: the internal calls the build's code names, against the player's (icalls.rs)
     pub macho_icalls: Option<Json>,
+    /// --macho: the build's Input System package, as the bridge's pad layouts meet it (macho::Pads)
+    pub macho_pads: Option<macho::Pads>,
     /// --macho: the build's native plugins (Contents/PlugIns), each with what becomes of it
     pub macho_plugins: Vec<macho_plugins::Plugin>,
     pub db: Arc<ClassDb>,
@@ -962,6 +964,18 @@ fn macho_source(ctx: &mut Ctx, b: macho::Build) -> Result<(), Stop> {
             "--macho: the internal calls the game's code names were not compared with the Android player's ({e})"
         )),
     }
+    // The Input System package's pads (docs/macho-route.md, "The Input System's pads").
+    if let Ok(have) = meta.as_ref().map_err(|e| e.to_string()).and_then(|m| m.members()) {
+        ctx.macho_pads = have.get(macho::INPUT_SYSTEM).map(macho::pads);
+    }
+    if ctx.macho_pads == Some(macho::Pads::None) {
+        ctx.warnings.push(
+            "--macho: the build's Input System package has no InputSystem.RegisterLayout (stripped from the build), with \
+             which the runtime gives the player's pads a layout: to the game a pad is a device without one, no Gamepad \
+             (docs/macho-route.md)"
+                .into(),
+        );
+    }
     if assemblies.is_empty() {
         // (metadata of a version il2cppmeta does not read: the build's own list)
         let sj = py::join(&b.data, "ScriptingAssemblies.json");
@@ -986,7 +1000,13 @@ fn macho_source(ctx: &mut Ctx, b: macho::Build) -> Result<(), Stop> {
         b.metadata_version
     ));
     ctx.macho_files = macho::managed_files(&b);
-    ctx.il2cpp_info = Some(macho::info(&b, &u.to_string(), assemblies, &ctx.macho_files));
+    ctx.il2cpp_info = Some(macho::info(
+        &b,
+        &u.to_string(),
+        assemblies,
+        &ctx.macho_files,
+        &ctx.args.streaming_assets,
+    ));
     ctx.macho = Some(b);
     Ok(())
 }
@@ -1527,7 +1547,6 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             (args.mono_etc.is_some(), "--mono-etc"),
             (!args.dllmap.is_empty(), "--dllmap"),
             (args.data_path, "--data-path"),
-            (args.streaming_assets != "obb", "--streaming-assets"),
         ] {
             if on {
                 given.push(flag);
@@ -1536,9 +1555,22 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         if !given.is_empty() {
             return Err(Stop::Exit(format!(
                 "{} with --macho: the game's code is the macOS build's own, compiled, and runs unchanged: there are no \
-                 assemblies to patch or to run on Mono, and its file reads are not redirected",
+                 assemblies to patch or to run on Mono, and Application.dataPath is the player's own answer",
                 given.join(", ")
             )));
+        }
+        // A macOS game's code reads StreamingAssets as the folder a desktop has: the files go
+        // beside the APK only, and the runtime's bridge answers Application.streamingAssetsPath
+        // with that folder (docs/macho-route.md, "StreamingAssets").
+        if !args.streaming_assets_given {
+            args.streaming_assets = "loose".into();
+        } else if args.streaming_assets == "both" {
+            return Err(Stop::Exit(
+                "--streaming-assets both with --macho: where the folder is, the bridge answers every read of \
+                 Application.streamingAssetsPath with it, so the archive's copy would never be read: loose (what --macho \
+                 takes when the option is left out) or obb"
+                    .into(),
+            ));
         }
         args.macho = Some(abspath(&app));
         if args.name.is_none() {
@@ -1653,6 +1685,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         macho_files: Vec::new(),
         macho_required: None,
         macho_icalls: None,
+        macho_pads: None,
         macho_plugins: Vec::new(),
         db,
         logf: None,
@@ -1732,6 +1765,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         }
         ctx.log(&line);
     }
+    match ctx.macho_pads {
+        Some(macho::Pads::Bridge) => ctx.log(
+            "the Input System package: the runtime registers layouts for the player's pads with the package's own \
+             InputSystem.RegisterLayout (a macOS build has none for an Android game controller): a pad is a Gamepad",
+        ),
+        Some(macho::Pads::Own) => ctx.log("the Input System package: the build has the package's own Android pad layouts"),
+        _ => {}
+    }
     for (left_out, line) in macho_plugins::lines(&ctx.macho_plugins) {
         if !left_out {
             ctx.log(&format!("plugin {line}"));
@@ -1768,7 +1809,21 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
              Application.dataPath (asmpatch data-path)",
         );
     }
-    if ctx.args.streaming_assets != "obb"
+    if ctx.args.macho.is_some() {
+        let m = if ctx.args.streaming_assets == "obb" {
+            "WARNING: --streaming-assets obb with --macho: the game's code gets the Android player's jar path for \
+             Application.streamingAssetsPath, which only code written for Android can read (loose gives it the folder a \
+             macOS build has)"
+                .to_string()
+        } else {
+            format!(
+                "StreamingAssets: a folder beside the APK ({}), as the macOS build has one: the bridge answers \
+                 Application.streamingAssetsPath with it",
+                ST::SA_DIR
+            )
+        };
+        ctx.log(&m);
+    } else if ctx.args.streaming_assets != "obb"
         && ctx.args.asmpatch.is_none()
         && ctx.args.il2cpp.is_none()
     {
@@ -1781,7 +1836,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         ctx.log(&m);
     }
     let items = plan(&mut ctx)?;
-    let crc = items.iter().any(|i| i.act == "aacatalog");
+    let crc = items
+        .iter()
+        .any(|i| i.act == "aacatalog" && ST::catalog_wants_crcs(&i.src));
     // source CRC -> patched CRC of every bundle placed (a dict: insertion order, last value)
     let mut crcs: Vec<(u32, u32)> = Vec::new();
     let put_crc =
@@ -2174,6 +2231,21 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         } else {
             return Err(Stop::Fail(format!("ValueError: {act}")));
         }
+        if act == "bundle" {
+            if let Some((clips, before, now)) =
+                video::store_clip_bundle(Some(ctx.db.clone()), &dst)?
+            {
+                let note = format!(
+                    "{clips} video clip{}: stored without compression, as the Android player's video needs it ({before} -> {now} bytes)",
+                    if clips == 1 { "" } else { "s" }
+                );
+                ctx.log(&format!("  {dst_rel}: {note}"));
+                if report.get("video_bundles").is_none() {
+                    report.set("video_bundles", Json::obj());
+                }
+                report.get_mut("video_bundles").unwrap().set(dst_rel, note.into());
+            }
+        }
         bump(&mut stats, &how);
         newstate.set(dst_rel, key);
         // (the Python writes the state after each file it consumes; here at most every 2 s: a
@@ -2201,17 +2273,31 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     for it in &items {
         if it.act == "aacatalog" {
             let data = fs::read(&it.src).map_err(io_at(&it.src))?;
-            let (data, n, n_paths) = ST::fix_catalog(&it.src, &data, &crcs).map_err(Stop::Fail)?;
+            // a bundle of this build: {RuntimePath}/<file>, the catalog's own folder
+            let aa = py::join(&out, py::dirname(&it.dst));
+            let size_of = |id: &str| {
+                let rel = id.strip_prefix(ST::RUNTIME_PATH)?.strip_prefix('/')?;
+                fs::metadata(py::join(&aa, rel)).ok().map(|m| m.len())
+            };
+            let (data, n, n_sizes, n_paths) =
+                ST::fix_catalog(&it.src, &data, &crcs, &size_of).map_err(Stop::Fail)?;
             write_bytes(&py::join(&out, &it.dst), &data)?;
             report.get_mut("files").unwrap().set(
                 &it.dst,
-                format!("Addressables catalog: {n} bundle CRCs updated, {n_paths} Windows paths")
-                    .into(),
+                format!(
+                    "Addressables catalog: {n} bundle CRCs updated, {n_sizes} bundle sizes updated, {n_paths} Windows paths"
+                )
+                .into(),
             );
-            let more = if n_paths > 0 {
-                format!("; {n_paths} bundle paths with backslashes (a Windows build) now with /")
+            let more = if n_sizes > 0 {
+                format!("; {n_sizes} bundle sizes (m_BundleSize) follow the placed files")
             } else {
                 String::new()
+            };
+            let more = if n_paths > 0 {
+                format!("{more}; {n_paths} bundle paths with backslashes (a Windows build) now with /")
+            } else {
+                more
             };
             ctx.log(&format!(
                 "  {}: {n} bundle CRCs follow the patched bundles{more}",
@@ -2310,6 +2396,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
     }
     if let Some(j) = ctx.macho_icalls.clone() {
         report.set("player_internal_calls", j);
+    }
+    if let Some(p) = ctx.macho_pads {
+        report.set("input_system_pads", p.key().into());
     }
     if ctx.macho.is_some() {
         report.set("macho_plugins", macho_plugins::report(&ctx.macho_plugins));

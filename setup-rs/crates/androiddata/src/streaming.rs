@@ -1,14 +1,17 @@
 //! StreamingAssets on Unity's Android player (streaming.py): bundle CRCs and Addressables
-//! catalogs that follow the patched bundles, the folder beside the APK (--streaming-assets
+//! catalogs that follow the patched bundles (their CRCs and file sizes), the folder beside the APK (--streaming-assets
 //! both|loose), the data folder's own files (--data-path), and a bundle saved again whole when
 //! its platform cannot be patched in place.
 use crate::pyjson::{self, Json};
 use regex::bytes::Regex;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 pub const FOLDER: &str = "Game_Data";
 pub const SA_DIR: &str = "Game_Data/StreamingAssets";
+/// Addressables' placeholder for the build's own aa folder in a catalog's internal ids.
+pub const RUNTIME_PATH: &str = "{UnityEngine.AddressableAssets.Addressables.RuntimePath}";
 
 /// asmpatch's opt-in patch for a mode.
 pub fn patch_of(mode: &str) -> Option<&'static str> {
@@ -25,7 +28,21 @@ pub fn bundle_crc(path: &Path) -> unityfs::Result<u32> {
     let mut f = std::fs::File::open(path)?;
     let mut h = crc32fast::Hasher::new();
     for i in 0..b.blocks.len() {
-        h.update(&b.read_block(&mut f, i)?.1);
+        let [usz, csz, bfl] = b.blocks[i];
+        if bfl & 0x3F != 0 || csz != usz {
+            h.update(&b.read_block(&mut f, i)?.1);
+            continue;
+        }
+        // a stored block, in pieces: a stored bundle is one block of all its data
+        f.seek(SeekFrom::Start(b.block_pos[i].0))?;
+        let mut buf = vec![0u8; (1usize << 20).min(usz as usize)];
+        let mut left = usz as usize;
+        while left > 0 {
+            let k = left.min(buf.len());
+            f.read_exact(&mut buf[..k])?;
+            h.update(&buf[..k]);
+            left -= k;
+        }
     }
     Ok(h.finalize())
 }
@@ -97,7 +114,16 @@ pub fn catalog_needs_fix(path: &str) -> bool {
         return false;
     };
     let binary = path.ends_with(".bin");
-    binary || catalog_fix_paths(&data, binary).1 > 0 || catalog_has_crcs(&data)
+    let (crcs, sizes) = catalog_has(&data);
+    binary || catalog_fix_paths(&data, binary).1 > 0 || crcs || sizes
+}
+
+/// Whether a catalog holds bundle CRCs to follow (then the bundles' CRCs are worth computing).
+pub fn catalog_wants_crcs(path: &str) -> bool {
+    let Ok(data) = std::fs::read(path) else {
+        return false;
+    };
+    path.ends_with(".bin") || catalog_has(&data).0
 }
 
 /// (data, n): a binary catalog with each bundle CRC (old -> new) replaced where its 4 bytes occur
@@ -116,20 +142,24 @@ pub fn catalog_bin_crcs(data: &[u8], crcs: &[(u32, u32)]) -> (Vec<u8>, usize) {
     (out, n)
 }
 
-/// (data, CRCs replaced, paths made '/'): a catalog as the Android player's Addressables reads it.
+/// (data, CRCs replaced, bundle sizes replaced, paths made '/'): a catalog as the Android
+/// player's Addressables reads it, describing the bundles as they are placed. size_of gives the
+/// placed file's size for a bundle's internal id (None: not a file of this build, left alone).
 pub fn fix_catalog(
     path: &str,
     data: &[u8],
     crcs: &[(u32, u32)],
-) -> Result<(Vec<u8>, usize, usize), String> {
+    size_of: &dyn Fn(&str) -> Option<u64>,
+) -> Result<(Vec<u8>, usize, usize, usize), String> {
     let binary = path.ends_with(".bin");
     let (data, n_paths) = catalog_fix_paths(data, binary);
-    let (data, n) = if binary {
-        catalog_bin_crcs(&data, crcs)
+    let (data, n, n_sizes) = if binary {
+        let (d, n) = catalog_bin_crcs(&data, crcs);
+        (d, n, 0)
     } else {
-        catalog_crcs(&data, crcs)?
+        catalog_follow(&data, crcs, size_of)?
     };
-    Ok((data, n, n_paths))
+    Ok((data, n, n_sizes, n_paths))
 }
 
 // base64 as binascii (b64decode without validation: other characters skipped)
@@ -204,6 +234,36 @@ fn le_i32(b: &[u8], o: i64) -> Result<i32, String> {
         .ok_or_else(|| "unpack_from requires a buffer of at least 4 bytes".into())
 }
 
+/// The internal id an entry names (m_InternalIds, with "<n>#" for m_InternalIdPrefixes[n]).
+fn internal_id(c: &Json, index: i32) -> Option<String> {
+    let id = c.get("m_InternalIds")?.as_list()?.get(usize::try_from(index).ok()?)?.as_str()?;
+    let prefix = id.split_once('#').and_then(|(n, rest)| {
+        let n: usize = n.parse().ok()?;
+        let pre = c.get("m_InternalIdPrefixes")?.as_list()?.get(n)?.as_str()?;
+        Some(format!("{pre}{rest}"))
+    });
+    Some(prefix.unwrap_or_else(|| id.to_string()))
+}
+
+/// The internal ids of the entries whose data is the record at each offset.
+fn record_ids(c: &Json, entries: &[u8]) -> Result<std::collections::BTreeMap<i64, Vec<String>>, String> {
+    let n = le_i32(entries, 0)?;
+    let mut ids: std::collections::BTreeMap<i64, Vec<String>> = Default::default();
+    for k in 0..n.max(0) as i64 {
+        let off = le_i32(entries, 4 + 28 * k + 16)? as i64;
+        if off < 0 {
+            continue;
+        }
+        if let Some(id) = internal_id(c, le_i32(entries, 4 + 28 * k)?) {
+            let v = ids.entry(off).or_default();
+            if !v.contains(&id) {
+                v.push(id);
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// A catalog's JsonObject records its entries point at, highest offset first:
 /// (entries, extra, [(record offset, json offset, json size, json text)]).
 #[allow(clippy::type_complexity)]
@@ -261,36 +321,67 @@ fn crc_re() -> &'static regex::Regex {
     R.get_or_init(|| regex::Regex::new(r#""m_Crc":(\d+)"#).unwrap())
 }
 
-fn catalog_has_crcs(data: &[u8]) -> bool {
+fn size_re() -> &'static regex::Regex {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| regex::Regex::new(r#""m_BundleSize":(\d+)"#).unwrap())
+}
+
+/// (a record has a non-zero bundle CRC, a record has a bundle size) of a catalog.json.
+fn catalog_has(data: &[u8]) -> (bool, bool) {
     let Ok(c) = pyjson::loads_bytes(data) else {
-        return false;
+        return (false, false);
     };
     let Ok((_, _, recs)) = records(&c) else {
-        return false;
+        return (false, false);
     };
-    recs.iter().any(|(_, _, _, js)| {
+    let crcs = recs.iter().any(|(_, _, _, js)| {
         crc_re()
             .captures_iter(js)
             .any(|m| !matches!(m[1].parse::<u128>(), Ok(0)))
-    })
+    });
+    (crcs, recs.iter().any(|(_, _, _, js)| size_re().is_match(js)))
 }
 
-/// A catalog.json with every bundle CRC in crcs (old -> new) replaced: (bytes, replacements).
-pub fn catalog_crcs(text: &[u8], crcs: &[(u32, u32)]) -> Result<(Vec<u8>, usize), String> {
+/// A catalog.json with every bundle CRC in crcs (old -> new) replaced, and every bundle size
+/// (m_BundleSize) made the size of the bundle's placed file, where size_of knows the file of the
+/// record's internal id: (bytes, CRCs replaced, sizes replaced).
+pub fn catalog_follow(
+    text: &[u8],
+    crcs: &[(u32, u32)],
+    size_of: &dyn Fn(&str) -> Option<u64>,
+) -> Result<(Vec<u8>, usize, usize), String> {
     let c = pyjson::loads_bytes(text)?;
     let (mut entries, mut extra, recs) = records(&c)?;
+    let ids = record_ids(&c, &entries)?;
     let n = le_i32(&entries, 0)?;
     let lookup = |v: u128| {
         crcs.iter()
             .find(|(o, _)| *o as u128 == v)
             .map(|(_, n)| *n as u128)
     };
-    let mut done = 0;
+    let (mut done, mut sized) = (0, 0);
     for (off, p, size, js) in recs {
         let new = crc_re().replace_all(&js, |m: &regex::Captures| {
             let v: u128 = m[1].parse().unwrap_or(0);
             format!("\"m_Crc\":{}", lookup(v).unwrap_or(v))
         });
+        // the file's size: one all the record's ids agree on (a record is one bundle's)
+        let mut sizes = ids.get(&off).into_iter().flatten().map(|id| size_of(id));
+        let file = match sizes.next() {
+            Some(first) if sizes.all(|s| s == first) => first,
+            _ => None,
+        };
+        let new = match file {
+            Some(file) => size_re()
+                .replace_all(&new, |m: &regex::Captures| {
+                    if m[1].parse::<u64>().ok() != Some(file) {
+                        sized += 1;
+                    }
+                    format!("\"m_BundleSize\":{file}")
+                })
+                .into_owned(),
+            None => new.into_owned(),
+        };
         if new == js {
             continue;
         }
@@ -314,8 +405,8 @@ pub fn catalog_crcs(text: &[u8], crcs: &[(u32, u32)]) -> Result<(Vec<u8>, usize)
             }
         }
     }
-    if done == 0 {
-        return Ok((text.to_vec(), 0));
+    if done == 0 && sized == 0 {
+        return Ok((text.to_vec(), 0, 0));
     }
     let mut out = text.to_vec();
     for (key, val) in [
@@ -332,7 +423,7 @@ pub fn catalog_crcs(text: &[u8], crcs: &[(u32, u32)]) -> Result<(Vec<u8>, usize)
         let new = format!("\"{key}\":\"{}\"", b64encode(val));
         out = replace_bytes(&out, old.as_bytes(), new.as_bytes());
     }
-    Ok((out, done))
+    Ok((out, done, sized))
 }
 
 /// --data-path: the data folder's own sub-folders (not Unity's) under Game_Data/.
@@ -428,26 +519,51 @@ mod tests {
         extra.extend(&u);
         let mut entries = 1i32.to_le_bytes().to_vec();
         let mut e = [0u8; 28];
+        e[0..4].copy_from_slice(&1i32.to_le_bytes()); // its internal id: m_InternalIds[1]
         e[16..20].copy_from_slice(&0i32.to_le_bytes());
         entries.extend(e);
         format!(
-            "{{\"m_X\":1,\"m_ExtraDataString\":\"{}\",\"m_EntryDataString\":\"{}\"}}",
+            "{{\"m_X\":1,\"m_InternalIds\":[\"x\",\"0#/a.bundle\"],\"m_InternalIdPrefixes\":[\"{{RT}}\"],\"m_ExtraDataString\":\"{}\",\"m_EntryDataString\":\"{}\"}}",
             b64encode(&extra),
             b64encode(&entries)
         )
         .into_bytes()
     }
 
+    fn no_size(_: &str) -> Option<u64> {
+        None
+    }
+
     #[test]
     fn catalog_crcs_follow() {
         let c = catalog(r#"{"m_Crc":123,"m_Hash":"x"}"#);
-        assert!(catalog_has_crcs(&c));
-        let (out, n) = catalog_crcs(&c, &[(123, 4567890)]).unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(catalog_has(&c), (true, false));
+        let (out, n, sized) = catalog_follow(&c, &[(123, 4567890)], &no_size).unwrap();
+        assert_eq!((n, sized), (1, 0));
         assert_eq!(out, catalog(r#"{"m_Crc":4567890,"m_Hash":"x"}"#));
-        let (same, n) = catalog_crcs(&c, &[(9, 10)]).unwrap();
-        assert_eq!((same, n), (c.clone(), 0));
-        assert!(!catalog_has_crcs(&catalog(r#"{"m_Crc":0}"#)));
+        let (same, n, sized) = catalog_follow(&c, &[(9, 10)], &no_size).unwrap();
+        assert_eq!((same, n, sized), (c.clone(), 0, 0));
+        assert_eq!(catalog_has(&catalog(r#"{"m_Crc":0}"#)), (false, false));
+    }
+
+    #[test]
+    fn catalog_sizes_follow() {
+        let c = catalog(r#"{"m_Crc":0,"m_BundleSize":100,"m_Hash":"x"}"#);
+        assert_eq!(catalog_has(&c), (false, true));
+        // the record's bundle is the entry's internal id, its prefix put back
+        let size = |id: &str| (id == "{RT}/a.bundle").then_some(12345u64);
+        let (out, n, sized) = catalog_follow(&c, &[], &size).unwrap();
+        assert_eq!((n, sized), (0, 1));
+        assert_eq!(out, catalog(r#"{"m_Crc":0,"m_BundleSize":12345,"m_Hash":"x"}"#));
+        // a size that is the file's already, and a bundle that is no file here: as written
+        let same = |id: &str| (id == "{RT}/a.bundle").then_some(100u64);
+        assert_eq!(catalog_follow(&c, &[], &same).unwrap(), (c.clone(), 0, 0));
+        assert_eq!(catalog_follow(&c, &[], &no_size).unwrap(), (c.clone(), 0, 0));
+        // both at once
+        let c = catalog(r#"{"m_Crc":7,"m_BundleSize":100}"#);
+        let (out, n, sized) = catalog_follow(&c, &[(7, 8)], &size).unwrap();
+        assert_eq!((n, sized), (1, 1));
+        assert_eq!(out, catalog(r#"{"m_Crc":8,"m_BundleSize":12345}"#));
     }
 
     #[test]

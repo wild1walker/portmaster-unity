@@ -129,6 +129,79 @@ pub fn unitypy_serialized(b: &Bundle) -> Result<Vec<usize>> {
     Ok(out)
 }
 
+/// A bundle with objects of a class in its serialized files written again stored (no block
+/// compressed: bundle::STORED_BLOCK_FLAG, the header's flags bundle::stored_data_flag), every
+/// node's bytes as they are. Returns how many such objects it has when it was written; None
+/// when it has none or is stored already, and the file is then not touched. `work`: a folder
+/// of its own for the nodes of a bundle that cannot be read in place (big LZMA blocks), made
+/// and removed here.
+pub fn store_bundle_of_class(
+    path: &Path,
+    db: Option<Arc<ClassDb>>,
+    class_id: i32,
+    work: &Path,
+) -> Result<Option<usize>> {
+    let b = Bundle::open(path)?;
+    if b.is_stored() {
+        return Ok(None);
+    }
+    let _ = std::fs::remove_dir_all(work);
+    let res = (|| -> Result<Option<usize>> {
+        let srcs: Vec<SharedSource> = if b.lazy_ok() {
+            (0..b.header.nodes.len()).map(|i| b.node(i)).collect()
+        } else {
+            b.unpack(work)?
+                .iter()
+                .map(|p| Ok(Arc::new(FileSource::open(p)?) as SharedSource))
+                .collect::<Result<_>>()?
+        };
+        let mut found = 0usize;
+        for (i, n) in b.header.nodes.iter().enumerate() {
+            if [".resS", ".resource"].iter().any(|e| n.name.ends_with(e)) {
+                continue;
+            }
+            let first = srcs[i].read_clipped(0, 48)?;
+            if !looks_serialized(&first, srcs[i].len()) {
+                continue;
+            }
+            let sf = SerializedFile::open(
+                &n.name,
+                srcs[i].clone(),
+                db.clone(),
+                Some(&b.header.engine),
+            )?;
+            found += sf.objects_of(class_id).count();
+        }
+        if found == 0 {
+            return Ok(None);
+        }
+        let nodes: Vec<PackNode> = b
+            .header
+            .nodes
+            .iter()
+            .zip(&srcs)
+            .map(|(n, s)| PackNode {
+                name: n.name.clone(),
+                flags: n.flags,
+                src: s.clone(),
+            })
+            .collect();
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        crate::bundle::pack_file(
+            Path::new(&tmp),
+            &PackHeader::of(&b.header),
+            &nodes,
+            crate::bundle::stored_data_flag(&b.header.engine),
+            crate::bundle::STORED_BLOCK_FLAG,
+        )?;
+        std::fs::rename(&tmp, path)?;
+        Ok(Some(found))
+    })();
+    let _ = std::fs::remove_dir_all(work);
+    res
+}
+
 impl DataFile {
     /// Opens a plain serialized file or a bundle (Loaded.__init__).
     pub fn open(path: impl AsRef<Path>, opts: &Options) -> Result<Self> {

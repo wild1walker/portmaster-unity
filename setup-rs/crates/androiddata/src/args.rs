@@ -180,6 +180,8 @@ pub struct Args {
     pub plugin_map: Option<String>,
     pub loose_assets: Option<Vec<String>>,
     pub streaming_assets: String,
+    /// --streaming-assets was given (with --macho the mode it leaves out is not obb)
+    pub streaming_assets_given: bool,
     pub min_gles: String,
     pub min_sdk: String,
     pub realtime_gi: String,
@@ -408,6 +410,7 @@ pub fn parse(argv: &[String]) -> Result<Option<Args>, String> {
             .contains_key("loose_assets")
             .then(|| list("loose_assets")),
         streaming_assets: s("streaming_assets", "obb"),
+        streaming_assets_given: vals.contains_key("streaming_assets"),
         min_gles: s("min_gles", "auto"),
         min_sdk: s("min_sdk", "auto"),
         realtime_gi: s("realtime_gi", "neon"),

@@ -4,7 +4,7 @@
 //! metadata are, the code's arm64 part written out for the port's lib folder, and the files the
 //! player keeps under Managed/ (Metadata, Resources, etc), which a macOS build has in
 //! il2cpp_data/. Nothing of the code is changed.
-use crate::il2cppmeta;
+use crate::il2cppmeta::{self, Members};
 use crate::paths;
 use crate::pyjson::Json;
 use std::fs::File;
@@ -198,7 +198,49 @@ pub fn managed_files(build: &Build) -> Vec<(String, String)> {
 
 /// What `pmunity il2cpp` states of its build in il2cpp.json, for this one: android-data's
 /// --il2cpp paths (the package file's abi, the verify step's assemblies) read it.
-pub fn info(build: &Build, unity: &str, assemblies: Vec<String>, files: &[(String, String)]) -> Json {
+/// The Input System package's image in a build.
+pub const INPUT_SYSTEM: &str = "Unity.InputSystem.dll";
+
+/// How the player's pads (Android game controllers to the package) get a layout in the build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pads {
+    /// the package's own Android support is in the build
+    Own,
+    /// the bridge registers layouts with the package's InputSystem.RegisterLayout
+    Bridge,
+    /// the build has no InputSystem.RegisterLayout: nothing gives the pads a layout
+    None,
+}
+
+impl Pads {
+    pub fn key(self) -> &'static str {
+        match self {
+            Pads::Own => "own",
+            Pads::Bridge => "bridge",
+            Pads::None => "none",
+        }
+    }
+}
+
+/// From the package's types in the build's metadata. (By name: whether the overload that takes
+/// a layout's text is among the RegisterLayout methods, the bridge sees and says at run time.)
+pub fn pads(types: &Members) -> Pads {
+    if types.keys().any(|t| t.starts_with("UnityEngine.InputSystem.Android.")) {
+        Pads::Own
+    } else if types.get("UnityEngine.InputSystem.InputSystem").is_some_and(|(methods, _)| methods.contains("RegisterLayout")) {
+        Pads::Bridge
+    } else {
+        Pads::None
+    }
+}
+
+pub fn info(
+    build: &Build,
+    unity: &str,
+    assemblies: Vec<String>,
+    files: &[(String, String)],
+    streaming_assets: &str,
+) -> Json {
     let mut j = Json::obj();
     j.set("unity", unity.into());
     j.set("abi", ABI.into());
@@ -211,7 +253,7 @@ pub fn info(build: &Build, unity: &str, assemblies: Vec<String>, files: &[(Strin
         "assemblies",
         Json::List(assemblies.iter().map(|a| a.as_str().into()).collect()),
     );
-    j.set("streaming_assets", "obb".into());
+    j.set("streaming_assets", streaming_assets.into());
     j.set("data_path", false.into());
     j
 }
@@ -278,6 +320,24 @@ mod tests {
     }
 
     /// --macho's value: the app, its Contents folder or its data folder; the game's name is the app's
+    #[test]
+    fn input_system_pads() {
+        let types = |names: &[(&str, &[&str])]| -> Members {
+            names
+                .iter()
+                .map(|(t, m)| (t.to_string(), (m.iter().map(|s| s.to_string()).collect(), Default::default())))
+                .collect()
+        };
+        let system = "UnityEngine.InputSystem.InputSystem";
+        assert_eq!(pads(&types(&[(system, &["RegisterLayout", "Update"])])), Pads::Bridge);
+        assert_eq!(pads(&types(&[(system, &["Update"])])), Pads::None);
+        assert_eq!(pads(&types(&[])), Pads::None);
+        assert_eq!(
+            pads(&types(&[(system, &["Update"]), ("UnityEngine.InputSystem.Android.AndroidGamepad", &[])])),
+            Pads::Own
+        );
+    }
+
     #[test]
     fn app_paths() {
         let t = std::env::temp_dir().join(format!("pmu-macho-{}-app", std::process::id()));

@@ -61,7 +61,8 @@ by the host, which is what makes these players take the Java path):
    to 16 ms for it) calls `updateTexImage` once and `getTransformMatrix` (it uses m[0], m[5] as
    the uv scale and m[12], m[13] as the offset), then blits the texture with
    `Hidden/VideoDecodeAndroid` pass `RGBAExternal_To_RGBA` (`RGBASplitExternal_To_RGBA` for split
-   alpha), `_AlphaParam` 1, point filtering and clamp on the texture. The blit is skipped when the
+   alpha), `_AlphaParam` 1 (6000.0: left 0, so the shader may not use it: the pass writes alpha 1),
+   point filtering and clamp on the texture. The blit is skipped when the
    latched frame is more than 5 frames behind the clock; a decoder that falls far behind gets a
    seek (`SetFramePosition`: seekTo + flush + decode to the frame, about half a second allowed).
 6. Audio: decoders without a surface, 16-bit PCM from the output buffers (`WriteValuesToRingBuffer

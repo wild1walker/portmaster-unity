@@ -132,8 +132,10 @@ static uint8_t *draw(GLuint pr, GLuint ext, um_surface *s, int w, int h)
     glUniform4fv(glGetUniformLocation(pr, "hlslcc_mtx4x4unity_ObjectToWorld"), 4, ident);
     glUniform4fv(glGetUniformLocation(pr, "hlslcc_mtx4x4unity_MatrixVP"), 4, ident);
     glUniform4f(glGetUniformLocation(pr, "_MainTex_ST"), 1, 1, 0, 0);
+    // 0, as Unity 6000.0 leaves it for this blit (2017.4 - 2022.3 set 1): the alpha the passes
+    // write may not depend on it
     GLint ap = glGetUniformLocation(pr, "_AlphaParam");
-    if (ap >= 0) glUniform1f(ap, 1.0f);
+    if (ap >= 0) glUniform1f(ap, 0.0f);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, ext);
     glUniform1i(glGetUniformLocation(pr, "_MainTex"), 0);
