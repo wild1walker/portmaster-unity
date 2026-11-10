@@ -2,7 +2,8 @@
 //   machorun [--cover NAMES] IMAGE.dylib... [-- ARG...]
 // The images are loaded in the order given (libc++abi and libc++ before what uses them),
 // linked, their initializers run; the last one's test_main(argc, argv) is called and its
-// return value is this program's. --cover NAMES: every import name in the file (nm's
+// return value is this program's. What the test dlopens by name is looked for beside the
+// last image. --cover NAMES: every import name in the file (nm's
 // "_name" at the start of a line) must have an answer.
 #define _GNU_SOURCE
 #include "../darwin.h"
@@ -49,6 +50,11 @@ int main(int argc, char **argv)
     char **targv = i < argc ? argv + i : argv + argc - 1;      // "--" or the image stands for argv[0]
     int targc = (int)(argv + argc - targv);
     darwin_dyld_set_args(targc, targv, environ);
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%s", last->m->path);
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = 0; else strcpy(dir, ".");
+    darwin_dyld_set_plugin_dir(dir);
     if (darwin_dyld_link(err, sizeof err) != 0) { fprintf(stderr, "machorun: %s\n", err); return 2; }
     darwin_dyld_run_initializers();
     long (*test_main)(long, char **) = (long (*)(long, char **))macho_export(last->m, "_test_main");

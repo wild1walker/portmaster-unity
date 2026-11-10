@@ -194,21 +194,27 @@ static int bind(struct macho_image *m, const uint8_t *p, size_t n, int kind, con
 
 static void copy16(char *dst, const uint8_t *src) { memcpy(dst, src, 16); dst[16] = 0; }
 
-struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn resolve, void *ctx,
-                               char *err, size_t errlen)
+// A file's arm64 slice (the whole of a thin file): where it lies, its header's flags, its load
+// commands. The file stays open.
+struct slice {
+    int      fd;
+    uint64_t off, size;
+    uint32_t flags, ncmds, sizeofcmds;
+    uint8_t *cmds;
+};
+
+static int open_slice(const char *path, struct slice *s, char *err, size_t errlen)
 {
-    struct macho_image *m = NULL;
-    uint8_t *cmds = NULL, *reserve = MAP_FAILED;
-    size_t reserve_len = 0;
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { fail(err, errlen, "%s: %s", path, strerror(errno)); return NULL; }
+    memset(s, 0, sizeof *s);
+    s->fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (s->fd < 0) return fail(err, errlen, "%s: %s", path, strerror(errno));
     struct stat st;
     uint8_t h[4096];
-    ssize_t got = pread(fd, h, sizeof h, 0);
-    if (fstat(fd, &st) != 0 || got < 32) { fail(err, errlen, "%s: not a Mach-O file", path); goto out; }
+    ssize_t got = pread(s->fd, h, sizeof h, 0);
+    if (fstat(s->fd, &st) != 0 || got < 32) { fail(err, errlen, "%s: not a Mach-O file", path); goto bad; }
 
     // the arm64 slice of a universal file
-    uint64_t slice = 0, slice_size = (uint64_t)st.st_size;
+    s->size = (uint64_t)st.st_size;
     uint32_t magic = be32(h);
     if (magic == FAT_MAGIC || magic == FAT_MAGIC_64) {
         uint32_t n = be32(h + 4), rec = magic == FAT_MAGIC ? 20 : 32;
@@ -216,26 +222,82 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
         for (uint32_t i = 0; i < n && 8 + (uint64_t)(i + 1) * rec <= (uint64_t)got; i++) {
             const uint8_t *a = h + 8 + i * rec;
             if (be32(a) != CPU_TYPE_ARM64) continue;
-            slice = magic == FAT_MAGIC ? be32(a + 8) : be64(a + 8);
-            slice_size = magic == FAT_MAGIC ? be32(a + 12) : be64(a + 16);
+            s->off = magic == FAT_MAGIC ? be32(a + 8) : be64(a + 8);
+            s->size = magic == FAT_MAGIC ? be32(a + 12) : be64(a + 16);
             found = 1;
             break;
         }
-        if (!found) { fail(err, errlen, "%s: no arm64 slice (an Intel-only build)", path); goto out; }
-        if (slice + slice_size > (uint64_t)st.st_size || pread(fd, h, 32, (off_t)slice) != 32) {
-            fail(err, errlen, "%s: the arm64 slice is cut", path); goto out;
+        if (!found) { fail(err, errlen, "%s: no arm64 slice (an Intel-only build)", path); goto bad; }
+        if (s->off + s->size > (uint64_t)st.st_size || pread(s->fd, h, 32, (off_t)s->off) != 32) {
+            fail(err, errlen, "%s: the arm64 slice is cut", path); goto bad;
         }
     }
-    if (le32(h) != MH_MAGIC_64 || le32(h + 4) != CPU_TYPE_ARM64) { fail(err, errlen, "%s: not arm64 Mach-O", path); goto out; }
-    uint32_t filetype = le32(h + 12), ncmds = le32(h + 16), sizeofcmds = le32(h + 20);
-    if (filetype != MH_DYLIB && filetype != MH_BUNDLE) { fail(err, errlen, "%s: file type %u (a dylib or a bundle is read)", path, filetype); goto out; }
-    if (sizeofcmds > (64u << 20) || 32 + (uint64_t)sizeofcmds > slice_size) { fail(err, errlen, "%s: load commands of %u bytes", path, sizeofcmds); goto out; }
-    cmds = malloc(sizeofcmds ? sizeofcmds : 1);
-    if (!cmds || pread(fd, cmds, sizeofcmds, (off_t)slice + 32) != (ssize_t)sizeofcmds) { fail(err, errlen, "%s: load commands cut", path); goto out; }
+    if (le32(h) != MH_MAGIC_64 || le32(h + 4) != CPU_TYPE_ARM64) { fail(err, errlen, "%s: not arm64 Mach-O", path); goto bad; }
+    uint32_t filetype = le32(h + 12);
+    s->ncmds = le32(h + 16);
+    s->sizeofcmds = le32(h + 20);
+    s->flags = le32(h + 24);
+    if (filetype != MH_DYLIB && filetype != MH_BUNDLE) { fail(err, errlen, "%s: file type %u (a dylib or a bundle is read)", path, filetype); goto bad; }
+    if (s->sizeofcmds > (64u << 20) || 32 + (uint64_t)s->sizeofcmds > s->size) { fail(err, errlen, "%s: load commands of %u bytes", path, s->sizeofcmds); goto bad; }
+    s->cmds = malloc(s->sizeofcmds ? s->sizeofcmds : 1);
+    if (!s->cmds || pread(s->fd, s->cmds, s->sizeofcmds, (off_t)s->off + 32) != (ssize_t)s->sizeofcmds) { fail(err, errlen, "%s: load commands cut", path); goto bad; }
+    return 0;
+bad:
+    free(s->cmds);
+    close(s->fd);
+    return -1;
+}
+
+int macho_probe(const char *path)
+{
+    uint8_t h[4];
+    struct stat st;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    int is = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && pread(fd, h, 4, 0) == 4 &&
+             (le32(h) == MH_MAGIC_64 || be32(h) == FAT_MAGIC || be32(h) == FAT_MAGIC_64);
+    close(fd);
+    return is;
+}
+
+int macho_needed(const char *path, void (*cb)(const char *name, int weak, void *ctx), void *ctx, char *err, size_t errlen)
+{
+    struct slice sl;
+    if (open_slice(path, &sl, err, errlen) != 0) return -1;
+    int r = 0;
+    const uint8_t *c = sl.cmds, *end = sl.cmds + sl.sizeofcmds;
+    for (uint32_t i = 0; i < sl.ncmds; i++) {
+        if ((size_t)(end - c) < 8) { r = fail(err, errlen, "%s: load command %u cut", path, i); break; }
+        uint32_t cmd = le32(c), size = le32(c + 4);
+        if (size < 8 || size > (size_t)(end - c)) { r = fail(err, errlen, "%s: load command %u of %u bytes", path, i, size); break; }
+        if (cmd == LC_LOAD_DYLIB || cmd == LC_LOAD_WEAK_DYLIB || cmd == LC_REEXPORT_DYLIB || cmd == LC_LOAD_UPWARD_DYLIB) {
+            uint32_t o = size >= 12 ? le32(c + 8) : size;
+            if (o >= size || !memchr(c + o, 0, size - o)) { r = fail(err, errlen, "%s: dylib command", path); break; }
+            cb((const char *)c + o, cmd == LC_LOAD_WEAK_DYLIB, ctx);
+        }
+        c += size;
+    }
+    free(sl.cmds);
+    close(sl.fd);
+    return r;
+}
+
+struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn resolve, void *ctx,
+                               char *err, size_t errlen)
+{
+    struct macho_image *m = NULL;
+    uint8_t *reserve = MAP_FAILED;
+    size_t reserve_len = 0;
+    struct slice sl;
+    if (open_slice(path, &sl, err, errlen) != 0) return NULL;
+    int fd = sl.fd;
+    uint8_t *cmds = sl.cmds;
+    uint64_t slice = sl.off, slice_size = sl.size;
+    uint32_t ncmds = sl.ncmds, sizeofcmds = sl.sizeofcmds;
     m = calloc(1, sizeof *m);
     if (!m) { fail(err, errlen, "out of memory"); goto out; }
     snprintf(m->path, sizeof m->path, "%s", path);
-    m->flags = le32(h + 24);
+    m->flags = sl.flags;
 
     // first pass: the segments' span, what the image needs
     struct { uint64_t vmaddr, vmsize, fileoff, filesize; uint32_t initprot; const uint8_t *cmd; } sg[16];
@@ -404,6 +466,8 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
     }
 #undef LINKEDIT
     if (m->nmissing) { fail(err, errlen, "%s: %d imports have no answer", path, m->nmissing); goto bad; }
+    m->map = reserve;
+    m->map_len = reserve_len;
     free(cmds);
     close(fd);
     return m;
@@ -415,6 +479,13 @@ out:
     free(cmds);
     close(fd);
     return NULL;
+}
+
+void macho_unload(struct macho_image *m)
+{
+    munmap(m->map, m->map_len);
+    free(m->sorted);
+    free(m);
 }
 
 int macho_bind_weak(struct macho_image *m, macho_resolve_fn resolve, void *ctx, char *err, size_t errlen)

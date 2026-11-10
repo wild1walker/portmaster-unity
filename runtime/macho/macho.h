@@ -32,6 +32,8 @@ struct macho_image {
     intptr_t  slide;             // base - vmaddr
     uint8_t  *island;            // island_bytes of rwx memory right before the image (NULL: none)
     size_t    island_bytes;
+    uint8_t  *map;               // all that was mapped for it: the island and the image
+    size_t    map_len;
     uint8_t  *header;            // the mach_header_64 in memory
     uint32_t  flags;             // the header's (MACHO_WEAK_DEFINES, MACHO_BINDS_TO_WEAK, ...)
     struct macho_segment seg[16];
@@ -67,6 +69,17 @@ typedef void *(*macho_resolve_fn)(const char *name, const char *lib, void *ctx);
 // must agree on are left for macho_bind_weak.
 struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn resolve, void *ctx,
                                char *err, size_t errlen);
+// Gives an image's memory back. Only for one that never ran: no thread may be in its code or
+// hold an address inside it.
+void  macho_unload(struct macho_image *m);
+// 1 when path is a regular file that starts as a Mach-O or a universal file does (whether
+// macho_load reads it is another matter), else 0.
+int   macho_probe(const char *path);
+// The dylibs the file's arm64 slice names, before anything is mapped: cb(name, weak, ctx) with
+// the name as the load command spells it ("@rpath/libfoo.dylib", "/usr/lib/libSystem.B.dylib");
+// weak: the image runs without it. 0, or -1 with a message for a file macho_load would not read.
+int   macho_needed(const char *path, void (*cb)(const char *name, int weak, void *ctx), void *ctx,
+                   char *err, size_t errlen);
 // The coalesced names (C++ inline functions and typeinfo, operator new and delete), once every
 // image that is to run together is loaded and before macho_protect: each use the image lists is
 // bound to resolve(name, "", ctx), the one definition all the images share; NULL leaves the

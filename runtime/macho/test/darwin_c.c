@@ -1111,11 +1111,69 @@ static void test_threads_more(void)
     signal(SIGUSR1, SIG_DFL);
 }
 
+// What the compiler cannot see through: the calls below are made, with their fortified
+// entries where the destination's size is known.
+__attribute__((noinline)) static char *hide(char *s) { __asm__(""); return s; }
+__attribute__((noinline)) static size_t hide_n(size_t n) { __asm__(""); return n; }
+
+static void test_strings(void)
+{
+    char buf[32], pat[20];
+    char *heap = hide(malloc(32));
+    size_t r = strlcpy(buf, hide("copied"), sizeof buf);
+    r += strlcat(buf, hide(" and more"), sizeof buf);
+    SHOW("strlcpy/strlcat '%s' %zu\n", buf, r);
+    SHOW("strlcat short %zu '%s'\n", strlcat(buf, hide(" that does not fit in here at all"), hide_n(20)), buf);
+    SHOW("strlcat full %zu %zu\n", strlcat(buf, hide("x"), hide_n(4)), strlcpy(heap, hide("heap copy"), hide_n(5)));
+    strcpy(buf, hide("one"));
+    strcat(buf, hide(" two"));
+    char *end = stpcpy(hide(buf) + strlen(buf), hide(" three"));
+    strncat(buf, hide(" fourfive"), hide_n(5));
+    SHOW("strcat/stpcpy '%s' %d %s\n", buf, (int)(end - buf), heap);
+    memset(buf, '#', sizeof buf);
+    end = stpncpy(buf, hide("ab"), hide_n(5));
+    SHOW("stpncpy %d %d%d%d '%c'\n", (int)(end - buf), buf[2], buf[3], buf[4], buf[5]);
+    end = memccpy(buf, hide("stop:here"), ':', hide_n(9));
+    SHOW("memccpy %d %d\n", (int)(end - buf), memccpy(buf, hide("none"), ':', hide_n(4)) == NULL);
+    memcpy(buf, hide("0123456789"), hide_n(11));
+    memmove(buf + 2, buf, hide_n(8));
+    SHOW("memcpy/memmove '%s'\n", buf);
+    memset_pattern4(pat, "abcd", hide_n(10));
+    memset_pattern8(pat + 10, "12345678", hide_n(9));
+    pat[19] = 0;
+    SHOW("memset_pattern '%s'\n", pat);
+    const char *hay = hide("The Quick brown fox");
+    SHOW("strcase %d %d %d '%s'\n", strcasecmp(hide("HeLLo"), "hello"), strncasecmp(hide("ABCx"), "abcy", 3) == 0,
+         strcasecmp(hide("a"), "B") < 0, strcasestr(hay, hide("quick")));
+    SHOW("strnstr %d %d %d\n", strnstr(hay, hide("brown"), 15) != NULL, strnstr(hay, hide("brown"), 14) != NULL, strnstr(hay, "", 0) == hay);
+    SHOW("strnlen %zu %zu, strpbrk '%s', strcspn %zu, memmem %d\n", strnlen(hay, 5), strnlen(hay, 99), strpbrk(hay, hide("kq")),
+         strcspn(hay, hide(" ")), (int)((char *)memmem(hay, 19, hide("fox"), 3) - hay));
+    char *dup = strndup(hay, hide_n(9)), list[] = "a,b,,c", *rest = hide(list), *tok, *save;
+    SHOW("strndup '%s' index '%s' rindex '%s'\n", dup, index(hay, 'Q'), rindex(hay, 'o'));
+    free(dup);
+    while ((tok = strsep(&rest, ","))) SHOW("[%s]", tok);
+    char words[] = " one  two three ";
+    for (tok = strtok_r(hide(words), " ", &save); tok; tok = strtok_r(NULL, " ", &save)) SHOW("<%s>", tok);
+    SHOW("\n");
+    wchar_t w[16], high[2] = { (wchar_t)0x80000001, 0 };
+    wcscpy(w, L"wide");
+    wcscat(w, L" one");
+    wcsncpy(w + 8, L"!?", 3);
+    SHOW("wcs %zu %d %d %d %d %d %d %d\n", wcslen(w), wcscmp(w, L"wide one!?"), wcsncmp(w, L"wide two", 5), wcscmp(high, L"a") < 0,
+         wcscmp(L"b", L"e"), wcsncmp(L"wide two", w, 7), (int)(wcschr(w, L'o') - w), (int)(wcsrchr(w, L'e') - w));
+    wmemset(w, L'z', 3);
+    wmemmove(w + 1, w, 3);
+    wchar_t *found = wcsstr(w, L"one");
+    SHOW("wmem %d %d %d\n", w[3] == L'z', found ? (int)(found - w) : -1, wmemcmp(wmemcpy(w + 10, w, 2), L"zz", 2));
+    free(heap);
+}
+
 long test_main(long argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOFBF, 0);
     SHOW("args %ld\n", argc);
     test_format();
+    test_strings();
     test_files();
     test_system();
     test_threads();

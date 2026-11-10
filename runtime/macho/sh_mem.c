@@ -4,15 +4,24 @@
 #include "darwin.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wchar.h>
 
 // glibc's fortified entries: (dst, ..., n, the bytes dst has), abort on overflow like macOS's
+extern void *__memcpy_chk(void *, const void *, size_t, size_t);
 extern void *__memmove_chk(void *, const void *, size_t, size_t);
 extern void *__memset_chk(void *, int, size_t, size_t);
+extern char *__strcpy_chk(char *, const char *, size_t);
+extern char *__stpcpy_chk(char *, const char *, size_t);
+extern char *__strncpy_chk(char *, const char *, size_t, size_t);
+extern char *__stpncpy_chk(char *, const char *, size_t, size_t);
+extern char *__strcat_chk(char *, const char *, size_t);
+extern char *__strncat_chk(char *, const char *, size_t, size_t);
 
 size_t darwin_page_size(void)
 {
@@ -70,12 +79,15 @@ static void *darwin_mmap(void *addr, size_t len, int prot, int flags, int fd, of
     return p;
 }
 
-static void darwin_memset_pattern16(void *b, const void *pattern, size_t len)
+static void pattern(void *b, const void *pattern, size_t len, size_t unit)
 {
     uint8_t *d = b;
-    while (len >= 16) { memcpy(d, pattern, 16); d += 16; len -= 16; }
+    while (len >= unit) { memcpy(d, pattern, unit); d += unit; len -= unit; }
     memcpy(d, pattern, len);
 }
+static void darwin_memset_pattern4(void *b, const void *p, size_t len) { pattern(b, p, len, 4); }
+static void darwin_memset_pattern8(void *b, const void *p, size_t len) { pattern(b, p, len, 8); }
+static void darwin_memset_pattern16(void *b, const void *p, size_t len) { pattern(b, p, len, 16); }
 
 static size_t darwin_strlcpy(char *dst, const char *src, size_t size)
 {
@@ -88,8 +100,61 @@ static size_t darwin_strlcpy(char *dst, const char *src, size_t size)
     return n;
 }
 
-// wchar_t is signed on macOS and unsigned on arm64 Linux: the order of two values differs
-// when one is past 0x7fffffff.
+static size_t darwin_strlcat(char *dst, const char *src, size_t size)
+{
+    size_t have = strnlen(dst, size), n = strlen(src);
+    if (have == size) return size + n;          // no end within size: nothing is written
+    size_t c = n < size - have - 1 ? n : size - have - 1;
+    memcpy(dst + have, src, c);
+    dst[have + c] = 0;
+    return have + n;
+}
+
+// little within the first len bytes of big, which ends at its 0
+static char *darwin_strnstr(const char *big, const char *little, size_t len)
+{
+    size_t n = strlen(little);
+    if (!n) return (char *)big;
+    for (; len >= n && *big; big++, len--)
+        if (*big == *little && !strncmp(big, little, n)) return (char *)big;
+    return NULL;
+}
+
+// The fortified entries glibc has not: (dst, ..., n, the bytes dst has).
+static void overflow(const char *what)
+{
+    fprintf(stderr, "[darwin] %s: more bytes than its destination has\n", what);
+    abort();
+}
+static size_t darwin___strlcpy_chk(char *dst, const char *src, size_t n, size_t have)
+{
+    if (n > have) overflow("strlcpy");
+    return darwin_strlcpy(dst, src, n);
+}
+static size_t darwin___strlcat_chk(char *dst, const char *src, size_t n, size_t have)
+{
+    if (n > have) overflow("strlcat");
+    return darwin_strlcat(dst, src, n);
+}
+static void *darwin___memccpy_chk(void *dst, const void *src, int c, size_t n, size_t have)
+{
+    if (n > have) overflow("memccpy");
+    return memccpy(dst, src, c, n);
+}
+
+// macOS's wcscmp and wcsncmp answer how far apart the first two different values are, as an
+// int (glibc: -1 or 1); its wmemcmp orders them as the signed values wchar_t has there, and
+// on arm64 Linux wchar_t is unsigned.
+static long darwin_wcscmp(const uint32_t *a, const uint32_t *b)
+{
+    for (; *a == *b; a++, b++) if (!*a) return 0;
+    return (int32_t)(*a - *b);
+}
+static long darwin_wcsncmp(const uint32_t *a, const uint32_t *b, size_t n)
+{
+    for (; n && *a == *b; a++, b++, n--) if (!*a) return 0;
+    return n ? (int32_t)(*a - *b) : 0;
+}
 static long darwin_wmemcmp(const int32_t *a, const int32_t *b, size_t n)
 {
     for (size_t i = 0; i < n; i++) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
@@ -99,11 +164,17 @@ static long darwin_wmemcmp(const int32_t *a, const int32_t *b, size_t n)
 const struct darwin_sym darwin_syms_mem[] = {
     SAME(malloc), SAME(calloc), SAME(realloc), SAME(free), SAME(aligned_alloc), SHIM(posix_memalign),
     SHIM(mmap), SAME(munmap), SAME(mprotect), SHIM(getpagesize),
-    SAME(bzero), SAME(memchr), SAME(memcmp), SAME(memcpy), SAME(memmove), SAME(memset),
-    SHIM(memset_pattern16), SAME(__memmove_chk), SAME(__memset_chk),
+    SAME(bzero), SAME(memchr), SAME(memcmp), SAME(memcpy), SAME(memmove), SAME(memset), SAME(memccpy), SAME(memmem),
+    SHIM(memset_pattern4), SHIM(memset_pattern8), SHIM(memset_pattern16),
+    SAME(__memcpy_chk), SAME(__memmove_chk), SAME(__memset_chk), SHIM(__memccpy_chk),
+    SAME(__strcpy_chk), SAME(__stpcpy_chk), SAME(__strncpy_chk), SAME(__stpncpy_chk), SAME(__strcat_chk), SAME(__strncat_chk),
+    SHIM(__strlcpy_chk), SHIM(__strlcat_chk),
     SAME(strchr), SAME(strcmp), SAME(strcpy), SAME(strdup), SHIM(strlcpy), SAME(strlen), SAME(strncmp),
     SAME(strncat), SAME(strncpy), SAME(strrchr), SAME(strspn), SAME(strstr), SAME(strtok),
-    SAME(wcslen), SAME(wmemchr), SHIM(wmemcmp),
+    SAME(strcat), SHIM(strlcat), SAME(stpcpy), SAME(stpncpy), SAME(strnlen), SAME(strndup), SAME(strpbrk), SAME(strcspn),
+    SAME(strsep), SAME(strtok_r), SAME(strcasecmp), SAME(strncasecmp), SAME(strcasestr), SHIM(strnstr), SAME(index), SAME(rindex),
+    SAME(wcslen), SAME(wmemchr), SHIM(wmemcmp), SHIM(wcscmp), SHIM(wcsncmp),
+    SAME(wcscpy), SAME(wcsncpy), SAME(wcscat), SAME(wcschr), SAME(wcsrchr), SAME(wcsstr), SAME(wmemcpy), SAME(wmemmove), SAME(wmemset),
     SAME(bsearch), SAME(qsort),
     { NULL, NULL }
 };

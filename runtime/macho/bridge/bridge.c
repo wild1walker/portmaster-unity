@@ -638,10 +638,12 @@ static const struct { const char *name; void *fn; } standin_withs[] = {
     { "il2cpp_class_get_method_from_name", (void *)with_class_get_method_from_name },
 };
 
-// ---- dlopen: the game's plugins are the port's Android or ARM Linux builds ---------------
+// ---- dlopen: a plugin that is no Mach-O file among the libraries (dyld.c loads those) is
+// the port's Android or ARM Linux build
 static void *plugin_open(const char *path, int darwin_mode)
 {
-    int flags = (darwin_mode & 2 ? 2 : 1) | (darwin_mode & 8 ? 0x100 : 0);      // RTLD_NOW/LAZY, GLOBAL as bionic has them
+    // RTLD_NOW/LAZY, NOLOAD, GLOBAL as bionic has them
+    int flags = (darwin_mode & 2 ? 2 : 1) | (darwin_mode & 0x10 ? 4 : 0) | (darwin_mode & 8 ? 0x100 : 0);
     void *h = host.dlopen(path, flags);
     if (h) return h;
     // "Plugins/name.bundle", "name.dylib" or "name": libname.so
@@ -678,6 +680,7 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
     darwin_dyld_set_args(1, argv, environ);
     if (darwin_dyld_link(err, sizeof err) != 0) { LOG("%s\n", err); return -1; }
     ua_unwind_iterate_phdr = host.iterate_phdr;
+    darwin_dyld_set_plugin_dir(host.libdir);
     darwin_dyld_set_dlopen(&plugin_host);
     if (host.keep_unblocked) host.keep_unblocked(darwin_thread_stop_signal());
     darwin_dyld_run_initializers();

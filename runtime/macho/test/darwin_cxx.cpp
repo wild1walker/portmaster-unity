@@ -25,6 +25,7 @@
 #include <typeinfo>
 #include <unordered_map>
 #include <vector>
+#include <dlfcn.h>
 #include <unistd.h>
 
 static int failed;
@@ -277,6 +278,57 @@ struct Global {
 static Global global;
 static std::vector<int> global_v = {1, 2, 3};
 
+// A plugin opened while the program runs (dl_cxx.cpp, beside this image): exceptions out of
+// it and through it, the unwinder having learned of its frames only then.
+struct PlugError : std::exception {
+    int code;
+    explicit PlugError(int c) : code(c) {}
+    const char *what() const noexcept override { return "PlugError"; }
+};
+
+static int thrower_for_plugin(int v)
+{
+    if (v > 0) throw MyError("through the plugin", v);
+    return -v;
+}
+
+static void test_plugin()
+{
+    Dl_info me;
+    std::string path = dladdr((void *)&thrower_for_plugin, &me) && me.dli_fname ? me.dli_fname : "";
+    size_t slash = path.rfind('/');
+    path = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dl_cxx.dylib";
+    void *plug = dlopen(path.c_str(), RTLD_NOW);
+    check("plugin: dlopen", plug != nullptr);
+    if (!plug) { std::cout << "     " << dlerror() << "\n"; return; }
+    auto cxx_throw = (void (*)(int))dlsym(plug, "cxx_throw");
+    auto cxx_call = (int (*)(int (*)(int), int, int))dlsym(plug, "cxx_call");
+    auto cxx_destroyed = (int (*)())dlsym(plug, "cxx_destroyed");
+    auto cxx_words = (const char *(*)())dlsym(plug, "cxx_words");
+    auto cxx_mine = (const char *(*)(const char *))dlsym(plug, "cxx_mine");
+    check("plugin: its names", cxx_throw && cxx_call && cxx_destroyed && cxx_words && cxx_mine);
+    if (!cxx_throw || !cxx_call || !cxx_destroyed || !cxx_words || !cxx_mine) return;
+    std::cout << "plugin statics: " << cxx_words() << "\n";
+    for (int kind = 0; kind < 4; kind++) {
+        try { cxx_throw(kind); std::cout << "plugin: no exception\n"; }
+        catch (const PlugError &e) { std::cout << "plugin threw PlugError " << e.code << ' ' << e.what() << "\n"; }
+        catch (const std::runtime_error &e) { std::cout << "plugin threw runtime_error " << e.what() << "\n"; }
+        catch (int v) { std::cout << "plugin threw int " << v << "\n"; }
+        catch (const std::string &s) { std::cout << "plugin threw string " << s << "\n"; }
+        catch (...) { std::cout << "plugin threw something else\n"; }
+    }
+    std::cout << "plugin destroyed " << cxx_destroyed() << "\n";
+    std::cout << "plugin returns " << cxx_call(thrower_for_plugin, -3, 0) << "\n";
+    for (int again = 0; again < 2; again++) {
+        try { cxx_call(thrower_for_plugin, 5 + again, again); std::cout << "plugin: no exception\n"; }
+        catch (const MyError &e) { std::cout << "through the plugin: MyError " << e.code << ' ' << e.what() << "\n"; }
+    }
+    std::cout << "plugin destroyed " << cxx_destroyed() << "\n";
+    std::string other;
+    std::thread([&] { other = cxx_mine("-b"); }).join();
+    std::cout << "plugin thread-locals: " << cxx_mine("-a") << ' ' << other << ' ' << cxx_mine("!") << "\n";
+}
+
 extern "C" long test_main(long argc, char **argv)
 {
     std::cout << "statics " << global.s << ' ' << global_v.size() << "\n";
@@ -284,6 +336,7 @@ extern "C" long test_main(long argc, char **argv)
     test_streams();
     test_containers();
     test_threads();
+    test_plugin();
     std::cout << "failed " << failed << std::endl;
     return failed;
 }

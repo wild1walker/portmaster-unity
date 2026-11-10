@@ -1,0 +1,12 @@
+ok   dl_plug
+ok   dl_plug.dylib
+ok   libdl_plug.so
+ok   @rpath/dl_plug.dylib
+ok   /data/app/x/lib/arm64/libdl_plug.so
+ok   dl_bundle
+ok   dl_bundle.bundle
+ok   Plugins/dl_bundle.bundle
+ok   libdl_bundle.so
+ok   a name no file has
+ok   opened once
+failed 0

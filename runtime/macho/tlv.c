@@ -20,7 +20,7 @@
 #define TLV_IMAGES 32
 __attribute__((visibility("hidden"))) __thread void *ua_tlv_slots[TLV_IMAGES];
 static struct darwin_image *owner[TLV_IMAGES];
-static int nowner;
+static _Atomic int nowner;      // grows while threads run (a plugin opened late)
 
 struct at_exit { void (*fn)(void *); void *arg; struct at_exit *next; };
 static __thread struct at_exit *at_exit;
@@ -127,6 +127,12 @@ int darwin_tlv_setup(struct darwin_image *im, char *err, size_t errlen)
     owner[nowner] = im;
     im->tlv_slot = nowner++;
     return 0;
+}
+
+void darwin_tlv_drop(struct darwin_image *im)
+{
+    if (im->tlv_slot >= 0 && im->tlv_slot == nowner - 1) owner[--nowner] = NULL;
+    im->tlv_slot = -1;
 }
 
 // void _tlv_atexit(void (*fn)(void *), void *arg): fn(arg) when the calling thread ends, the

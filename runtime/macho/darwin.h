@@ -47,12 +47,13 @@ void darwin_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 // A call that has no answer here was made: said once per name.
 void darwin_unanswered(const char *name, const char *what);
 
-// dyld: the loaded images, in load order. They are brought up as a set, as a launch does:
+// dyld: the loaded images, in load order. Those of the launch are brought up as a set:
 // darwin_dyld_load for each (the libraries before what uses them), darwin_dyld_link once, then
-// darwin_dyld_run_initializers.
+// darwin_dyld_run_initializers. A later one comes when the images' code dlopens it.
 struct darwin_image {
     struct macho_image *m;
-    int      linked, inited;
+    int      inited;
+    int      local;                         // opened RTLD_LOCAL: its names are its handle's only
     int      tlv_slot;                      // -1: no thread-local variables
     uint8_t *tlv_start;                     // their initial contents in the image
     size_t   tlv_size, tlv_align;
@@ -65,7 +66,8 @@ struct darwin_image *darwin_dyld_load(const char *path, char *err, size_t errlen
 // For every image loaded since the last call: the coalesced names bound to one definition for
 // all (the first image, in load order, that defines the name for good; else the first that
 // defines it at all), the instructions an older core lacks rewritten (UA_A64FIX), protections,
-// thread-locals, unwind info. 0, or -1 with a message.
+// thread-locals, unwind info. 0, or -1 with a message: the images loaded since the last call
+// are then gone.
 int   darwin_dyld_link(char *err, size_t errlen);
 void  darwin_dyld_run_initializers(void);   // of the linked images that have not run theirs, in load order
 int   darwin_dyld_count(void);
@@ -75,8 +77,14 @@ void  darwin_dyld_set_args(int argc, char **argv, char **envp);
 void  darwin_dyld_set_executable(const char *path);     // _NSGetExecutablePath's answer (default: this process's)
 // An export by its Mach-O name ("_il2cpp_init") in every image, in load order.
 void *darwin_dyld_symbol(const char *name);
-// dlopen for what is not a loaded image (a game's plugin): the host's answer, a handle dlsym
-// and dlclose are then given back through sym and close. Unset: such a dlopen fails, said once.
+// Where a dlopen looks for a plugin that is a Mach-O file, by the name the game's code gives
+// ("name", "name.dylib", "name.bundle", "libname.so", any path to one of them): such a file is
+// loaded with the dylibs it needs (from beside it), linked and its initializers run, or the
+// dlopen fails with the reason. Unset: only a path that is itself a Mach-O file.
+void  darwin_dyld_set_plugin_dir(const char *dir);
+// dlopen for what is neither a loaded image nor a Mach-O file (a plugin the port has as an
+// Android or ARM Linux build): the host's answer, a handle dlsym and dlclose are then given
+// back through sym and close. Unset: such a dlopen fails, said once.
 struct darwin_dlopen_host {
     void *(*open)(const char *path, int darwin_mode);
     void *(*sym)(void *handle, const char *name);
@@ -88,6 +96,7 @@ void  darwin_dyld_set_dlopen(const struct darwin_dlopen_host *h);
 // every register but x0, x16 and x17.
 void  ua_tlv_get_addr(void);
 int   darwin_tlv_setup(struct darwin_image *im, char *err, size_t errlen);
+void  darwin_tlv_drop(struct darwin_image *im);     // undoes the setup of the last image set up, none of whose code ran
 void  darwin_tlv_thread_exit(void);         // the calling thread's _tlv_atexit list, last first
 
 // Threads: every thread that runs image code has an alternate signal stack (macOS leaves the

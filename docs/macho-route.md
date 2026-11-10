@@ -51,8 +51,8 @@ the loader's probe and its instruction scan, `test/shims.sh cover` for the names
 
 | plugin | links | for the route |
 |---|---|---|
-| `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve (not yet loaded under the route); 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows |
-| `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; not yet loaded under the route; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables |
+| `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve; 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows. The engine opens this one, not the game's code (see "Plugins the game opens" below); not yet loaded under the route |
+| `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables. **Runs through the loader** in the arm64 Linux container with every rewrite forced: opened by the name the game's code has (`dlopen("lib_coacd")`), `CoACD_run` cuts an L-shaped test solid into 2 or 3 convex hulls whose volumes add up to the solid's (four runs: its preprocessing on, off and left to it, two seeds), `CoACD_freeMeshArray` frees them |
 | `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions |
 | `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
 | `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API); the runtime's own answer stands in: Steam is not running |
@@ -61,6 +61,14 @@ What the game's code calls is in the code itself: IL2CPP compiles each `DllImpor
 with the library's and the function's name as C strings, so `strings` over the arm64 image
 lists them (`lib_coacd` with `CoACD_run`, `CoACD_freeMeshArray`, `CoACD_setLogLevel`;
 `steam_api`). A plugin in the folder that no string names is not loaded by the game's code.
+
+The declaration a C# wrapper has is not always the one the plugin was built with, and on arm64
+macOS that matters past the eighth argument: stack arguments are packed to their own size, not
+to 8 bytes. `CoACD_run` as shipped reads two `bool`s one byte apart and an `unsigned` after
+them (`[x29,#0x10]`, `#0x11`, `#0x14`); the open source header of a later version has more
+arguments. A test caller has to be written against the disassembly of the shipped file, and
+the game's own call is right by construction (IL2CPP compiled it for this convention, and both
+ends are Mach-O code).
 
 ## What has to be answered
 
@@ -120,12 +128,12 @@ engine's ELF tables, and catches through engine frames work (icalls raise manage
 
 The other native libraries: lib_burst_generated through the same loader (Burst falls back to the
 IL2CPP code without it), steam_api answered by the runtime's stub, EOS and the microphone
-utility by stubs that fail as without the service, lib_coacd through the loader if the game calls
-it.
+utility by stubs that fail as without the service, lib_coacd through the loader when the game
+calls it (see "Plugins the game opens" below).
 
 ## The shim layer (`runtime/macho/sh_*.c`, `dyld.c`, `tlv.c`)
 
-465 libSystem, CoreFoundation and dyld names are answered. The rules every shim keeps:
+506 libSystem, CoreFoundation and dyld names are answered. The rules every shim keeps:
 
 - the image's side is Darwin's: errno numbers, flag bits and struct layouts are converted at the
   shim, from one generated header. `abi/gen.c` is compiled on a Mac against the SDK and prints
@@ -229,30 +237,115 @@ it is the same function; the tables carry both names. The SDK has five more such
 (`getgroups`, `popen`, `pselect`, `reallocarray`, `reallocarrayf`) with no shim under either
 name yet.
 
+### Plugins the game opens (`dyld.c`, 2026-11-10)
+
+IL2CPP resolves a `DllImport` at the first call: `dlopen` with the library's name, then `dlsym`.
+In a macOS build that `dlopen` is the image's import, so it arrives at the shim, and the shim
+loads a plugin that is a Mach-O file the way dyld would, at that moment:
+
+- **which file**: the path as given if it is a Mach-O file; else, in the plugin folder (the
+  port's lib folder under the bridge), the base name as given, then with `.dylib` and
+  `.bundle` in place of its extension (`.dylib`, `.bundle`, `.so`), with `lib` put in front,
+  and with a leading `lib` taken off. A name macOS code would use (`lib_x`, `x.bundle`,
+  `@rpath/x.dylib`) and the name the Android player would use (`libx.so`, a path into an APK's
+  lib folder) both find `x.dylib`. An image that is already loaded answers first, by its path,
+  its install name or its file name, so two spellings give one handle, as on macOS;
+- **its own libraries** (`LC_LOAD_DYLIB` and its kin): `/usr/lib/` and `/System/` names are the
+  system's, answered by the shims (or by an image of that name: the route's own libc++); the
+  rest are looked for among the loaded images, then beside the file that needs them, then in
+  the plugin folder, and loaded first, to a depth of 8. One that is not found is named in the
+  error only if a symbol then stays unbound; one that is found and does not load fails the
+  whole `dlopen`;
+- **all or nothing**: the files are mapped and bound, the instruction rewrite, the thread-local
+  set-up and the page protections done, and only then do the images become visible to other
+  threads (image count, `dladdr`, unwinding, symbol lookup), followed by the add-image
+  callbacks and the initializers, dependencies first. If any step fails, everything this
+  `dlopen` mapped is unmapped again and no initializer has run. macOS does the same: its test
+  plugin with a missing symbol takes the dylib it brought along away with it;
+- **strict binding**: an import with no answer fails the load and is printed by name. macOS
+  with `RTLD_LAZY` would load such a plugin and crash at the call; a refusal with the name is
+  the better report, and a failed file is remembered, so the message comes once and a game
+  that retries every frame does not map the file every frame;
+- **modes**: `RTLD_NOLOAD` only looks; `RTLD_LOCAL` keeps the image's exports out of flat
+  lookups (`dlsym(RTLD_DEFAULT)`, other images' flat binds) until some later `dlopen` of it
+  without `RTLD_LOCAL`, which macOS also treats as a promotion; `dlclose` returns 0 and unloads
+  nothing (a plugin's thread-locals and C++ statics outlive most reasons to unload);
+- **threads**: one recursive lock around loading (an initializer may call `dlopen` itself, and
+  a second thread asking for the same plugin waits and gets the same handle after the
+  initializers have run once); readers (`_dyld_image_count`, `dladdr`, the unwinder) take no
+  lock and see only finished images;
+- **what is not Mach-O** goes to the host's loader as before (an Android library a port adds,
+  the runtime's Steam answer); a file that is Mach-O and fails is the answer, with its
+  message in `dlerror`, never a fall through to another library of the same name.
+
+`UA_MACHO_LOG=1` prints each `dlopen` with what answered it.
+
+Burst's library is the exception among a game's plugins: the engine opens it, not the game's
+code. The Android player has the strings (`LoadBurstLibrary`, `lib_burst_%d_%d`,
+`burst.initialize`) and calls the loader's `dlopen` and `dlsym` itself, so the Mach-O bundle
+has to be offered on that side (open).
+
+### The string family, and how narrow the cover still is
+
+The shims were written for what IL2CPP's image and the first plugin import, and a first own
+test plugin showed how little that is: it needed `__strlcat_chk`, and of 50 everyday string
+names 44 had no answer. Added with tests: `memccpy`, `memmem`, `memset_pattern4/8/16`, the
+fortified forms a build at `-O2` imports instead of the plain ones (`__memcpy_chk`,
+`__strcpy_chk`, `__stpcpy_chk`, `__strncpy_chk`, `__stpncpy_chk`, `__strcat_chk`,
+`__strncat_chk`, `__strlcpy_chk`, `__strlcat_chk`, `__memccpy_chk`; an overflow ends the
+process as on macOS), `strlcat`, `stpcpy`, `stpncpy`, `strnlen`, `strndup`, `strpbrk`,
+`strcspn`, `strsep`, `strtok_r`, `strcasecmp`, `strncasecmp`, `strcasestr`, `strnstr`,
+`index`, `rindex`, and the wide ones (`wcscmp`, `wcsncmp`, `wcscpy`, `wcsncpy`, `wcscat`,
+`wcschr`, `wcsrchr`, `wcsstr`, `wmemcpy`, `wmemmove`, `wmemset`).
+
+- **`wcscmp`, `wcsncmp`** return the difference of the first two characters that differ
+  (`wcsncmp(L"wide two", L"wide one", 7)` is 5), computed without sign: a character above
+  `0x7fffffff` compares as greater. glibc returns -1, 0 or 1, and its `wchar_t` is unsigned on
+  arm64 where macOS's is signed.
+- Still without an answer, known: `strcoll` and `strxfrm` (they belong to the locale shims),
+  `strsignal` (the signal numbers differ). A game with plugins of its own will ask for more
+  of libSystem than this; `test/shims.sh cover` over a plugin's import list says what, before
+  anything is run.
+
 ## How it is tested
 
 `sh runtime/macho/test/shims-test.sh`, on an Apple-silicon Mac with Xcode's tools and Docker:
 
-1. `test/build-mac.sh` builds `darwin_c.c` with `darwin_ctx.c`, and `darwin_cxx.cpp`, as macOS
-   arm64 dylibs (the flags a game's image would have, plus `-mcpu=generic`) and as native
-   programs, and runs the native programs: their output is the expectation;
+1. `test/build-mac.sh` builds `darwin_c.c` with `darwin_ctx.c`, `darwin_cxx.cpp` and
+   `darwin_dl.c` with its plugins as macOS arm64 dylibs (the flags a game's image would have,
+   plus `-mcpu=generic`) and as native programs, and runs the native programs: their output is
+   the expectation;
 2. the same dylibs run through the loader (`test/machorun.c`) in an arm64 Linux container, with
    every rewrite forced (`UA_A64FIX=all`);
 3. the two outputs must be the same, byte for byte.
 
-The C test (324 lines of output) covers formatting, files, directories, time, sysctl, threads
+The C test (339 lines of output) covers formatting, files, directories, time, sysctl, threads
 (mutexes, conditions, keys, 200 stop-the-world rounds over running and sleeping threads, a
 sleep and a socket read with a timeout that are stopped half way and still end on time),
 locale, sockets, signal masks, Mach semaphores (the error numbers, a wait a handler
 interrupts, a wait a destroy ends), contexts (a switch there and back, eleven arguments, a
-chain of links, the fields macOS fills), the floating point environment, `rand`'s row and
-libm's `errno`. The context tests are a file of their own (`darwin_ctx.c`) because
+chain of links, the fields macOS fills), the floating point environment, `rand`'s row,
+libm's `errno` and the string family. The context tests are a file of their own (`darwin_ctx.c`) because
 `<ucontext.h>` wants `_XOPEN_SOURCE`, and that macro changes the names the rest of the test
 would import (see the `$DARWIN_EXTSN` names above): one file is built as a game's code is,
-the other with the macro, and both sets of names are exercised. The C++ test (42 lines) covers
+the other with the macro, and both sets of names are exercised. The C++ test (55 lines) covers
 exceptions through 12 frames, `dynamic_cast`, streams, locales, containers, `std::thread`,
-`thread_local`, futures. Both match; the C test matched in 20 of 20 repeated runs, the C++
-test in 100 of 100.
+`thread_local`, futures, and a C++ plugin opened late: exceptions thrown in it and caught
+outside, thrown outside and passing through its frames, its static objects and its
+`thread_local`. Both match; the C test matched in 20 of 20 repeated runs, the C++ test in 100
+of 100 (and in 15 of 15 with the plugin part).
+
+The `dlopen` test (`darwin_dl.c`, plugins from `dl_plug.c`, 40 lines) runs natively against
+dyld and then through the loader: a plugin with a dylib of its own and an initializer that
+opens a third file, the order of initializers, `RTLD_NOLOAD` before and after, the image count
+and the add-image callbacks, a second spelling of the path, `dladdr` into the plugin, its
+thread-locals on two threads, a `.bundle`, `RTLD_LOCAL` and its promotion, a missing file
+(`dlerror` once, then NULL), a plugin with a missing symbol opened twice, the same with a
+dylib of its own (which must be gone afterwards, its initializer never run), two threads
+opening one plugin whose initializer sleeps, `dlopen(NULL)`, `dlclose`. 40 of 40 repeated
+runs match. A second run of the same file (`-- probe`, expectation checked in as
+`darwin_dl.probe`) asks for the plugins by the names a game's code may have, which macOS
+itself would only find through the bundle's own search paths.
 
 ## il2cpp starts (2026-11-09)
 
@@ -277,8 +370,9 @@ The bridge (`runtime/macho/bridge`, built by its `build.sh` into `libil2cpp_mach
 (glibc) library that the port's lib folder holds as `libil2cpp.so`, beside the game's
 `GameAssembly.dylib` and the two libc++ dylibs. `android_package.json` says
 `"scripting": "macho"` (or `UA_SCRIPTING=macho`); the host (`runtime/host/macho64.c`) then loads
-the bridge before the player, hands it the loader's `dlopen` (the game's plugins are Android
-libraries), and maps it as the player's `libil2cpp.so`. arm64 only.
+the bridge before the player, hands it the loader's `dlopen` (for what a `dlopen` of the game's
+code names that is not a Mach-O file; a Mach-O plugin in the lib folder is loaded by the shim,
+see "Plugins the game opens"), and maps it as the player's `libil2cpp.so`. arm64 only.
 
 What the bridge does between the two sides:
 
@@ -495,7 +589,7 @@ locks (the wait buckets of `__ulock_wait`, the first-use lock of pthread objects
 would hold up the collector if it needs the same one before resuming; `Application.platform`
 answers Android to the game; `streamingAssetsPath` is the path into the APK, as on Android.
 
-Next, Dave's own needs: its plugins (the table above: Burst's library through the loader, 22
-shims for `lib_coacd`, the Steam answer on the Mach-O side), answers for the internal calls the
+Next, Dave's own needs: its plugins (the table above: Burst's library offered to the engine,
+the Steam answer on the Mach-O side; `lib_coacd` is done), answers for the internal calls the
 Android player lacks, a control build of the checks for Android itself; then Dave in the
 emulator and on the handheld, with the stops measured again (it has more managed threads).
