@@ -29,19 +29,37 @@ are never touched (the build's steam_api is answered by the runtime's stub: Stea
 | binaries | every one universal (x86_64 + arm64): the executable, UnityPlayer.dylib, GameAssembly.dylib (741 MB, the arm64 slice 351 MiB), lib_burst_generated.bundle, libsteam_api, libEOSSDK, MicrophoneUtility, lib_coacd |
 | GameAssembly arm64 | `__TEXT` 143.5 MiB: `__text` 10.0 MiB (libil2cpp, Boehm GC, zlib, ...) and an `il2cpp` section of 116.9 MiB (the generated code), `__gcc_except_tab` 2.5 MiB, `__unwind_info` 1.7 MiB, `__eh_frame` 72 bytes; `__DATA_CONST` 7.3 MiB, `__DATA` 9.4 MiB with bss; `LC_DYLD_INFO_ONLY` (opcode rebases and binds, lazy stubs through `__stub_helper`); no thread-local variables; the symbol table kept (function names) |
 | imports | 342: libSystem 236, libc++ 95, CoreFoundation 11 (`CFLocale*`, `CFString*`: the current locale only); Foundation and Security linked, nothing used |
-| beyond ARMv8.0 | of 33.2 M instruction words: 489 LSE atomics (297 `ld<op>`/`swp`, 192 `cas`), 13 `ldapr` (RCPC), 6 `eor3` (SHA3, in `BigInteger.GetHashCode`'s vector code), 22 `crc32` (optional in ARMv8.0: zlib) |
+| beyond ARMv8.0 | of 33.2 M instruction words: 489 LSE atomics (297 `ld<op>`/`swp`, 192 `cas`), 13 `ldapr` (RCPC), 13 `udot` (dot product), 6 `eor3` (SHA3, in `BigInteger.GetHashCode`'s vector code), 22 `crc32` (optional in ARMv8.0: zlib) |
 | reach | the code ends 126.8 MiB from the image start: a block of up to 1.2 MiB placed right before the image is within a `B`'s ±128 MiB of every site |
 
-Counted with a scan of the two code sections for the encodings of each ARMv8.1 - 8.5 extension
-(LSE, RCPC, RCPC2, dot product, SHA3, SHA512, FP16, FRINTTS, FJCVTZS, FlagM, RDM, FHM) and the
-optional ARMv8.0 ones (CRC32, AES/PMULL, SHA1/2); each kind checked against the disassembly.
+Counted by the loader's own scan (`runtime/macho/a64fix.c`: the encodings of each ARMv8.1 - 8.5
+extension and of ARMv8.0's optional ones) and checked against a second decoder: the whole image
+disassembled as for a Cortex-A53 (`llvm-objdump -d --mcpu=cortex-a53`), every word it cannot
+decode listed, and the two lists compared. They must be identical, and are: 521 addresses. The
+first scan had missed the 13 `udot` (its mask covered `sdot` only): a hand-written list of
+encodings is only trusted once a full decoder agrees with it over the whole image. The same
+disassembly with every feature on leaves no undecodable word, so the code sections hold no data
+(`LC_DATA_IN_CODE` is there with 0 entries); the 284 `udf` words are the lazy-binding immediates
+of `__stub_helper`, never executed since lazy pointers are bound at load.
 
 ## What has to be answered
 
-The rewrite: `ldapr` becomes `ldar` in place (stronger ordering, same value). Each LSE atomic
-and `eor3` becomes a `B` to its own routine in the block before the image: an `ldaxr`/`stlxr`
-loop (scratch registers saved past the red zone, NZCV kept) and a `B` back. `crc32` stays if the
-handheld has it (`crc32` in /proc/cpuinfo's Features), else the same.
+The rewrite (`a64fix.c`): `ldapr` becomes `ldar` in place (stronger ordering, same value). Each
+LSE atomic, `eor3` and `sdot`/`udot` becomes a `B` to its own routine in the block before the
+image and a `B` back: an `ldaxr`/`stlxr` loop for the atomics (`cas` and the min/max forms
+included, sub-word sizes extended as the instruction does), two `eor`, or widening multiplies
+and pairwise adds. A routine keeps every register it does not define and NZCV, and saves its
+scratch registers 176 bytes below `sp`: past the 128-byte red zone. `crc32` stays if the handheld
+has it (`crc32` in /proc/cpuinfo's Features). What the CPU lacks is read from `AT_HWCAP`; a kind
+with no rewrite (`casp`, FP16, ...) refuses the image by name rather than run into a trap.
+
+Verified by `runtime/macho/test/run.sh` on a CPU that has the instructions: each form runs once
+as itself and once rewritten from the same registers, flags, vectors, stack and memory, and
+everything is compared after (1.26 M cases over the register patterns that matter: the zero
+register, `sp` as the base, operands that alias, the routine's own scratch registers), then four
+threads count through rewritten `ldadd` and `cas`. The test is itself tested: 17 deliberately
+wrong routines (a flag not restored, a frame inside the red zone, a missing sign extension, ...)
+were each reported. On Dave's image: 521 sites rewritten, none refused, 24.0 KiB of routines.
 
 Apple's arm64 convention against AAPCS64:
 
