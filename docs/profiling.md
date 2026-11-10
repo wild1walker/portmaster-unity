@@ -935,6 +935,33 @@ ActorPathCount!" about 25 times a second in Bullet Hell's room, about 0.02 ms a 
 same profile: the game's own physics (`PhysicsEngine.LateUpdate` about 2 ms of its own time with ~1,000 bullets,
 the body sort 0.6 ms: `List.Sort` with a delegate whenever a body registers) and the camera chain (3.4 ms).
 
+### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
+
+Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split
+by the sample's own symbol (UA_PROF with the 2017.4.27 libunity symbols; a libc, ua_host or Mono sample counted under
+its exact libunity caller), ms a frame of a ~29 ms frame: the draw loop on the main thread (`ForwardShaderRenderLoop`,
+`SetShadersMainThread`, `PrepareValueParameters`, ShaderLab sub-program matching, `GfxDeviceClient`) 3.5; the
+Update/LateUpdate/coroutine dispatch 2.3; engine calls from scripts 2.0; transforms 1.5; the main thread waiting on
+its culling and render-queue jobs 1.4; the render queue (`PrepareMeshRenderNodes`, `ExtractMeshBuffers`, dynamic
+batching) 0.8; allocators 0.7; PhysX's step 0.4; culling 0.4. The other three heavy scenes split the same way.
+
+The GL side of the same frames (`UA_GL_REC=census`, then `UA_GL_REC=2 UA_GL_REC_VERBOSE=2@3500` for the frame
+graph's passes): about 2,600 GL calls a frame, 162 `glDrawElements` and 128 `glUseProgram` (the program changes on
+most draws: sprites of different shaders and atlases interleave in depth order), 68 dynamic-buffer maps (Unity's
+dynamic batches), 302 `glUniform4fv`. Eleven passes: the minimap's camera (12 draws, every other frame with the
+port's `half-rate`), a clear-only pass of the main camera's source texture (the frame graph sinks it), one blit of
+that cleared texture to the window (the last pass covers the window again; the graph cannot prove a draw's
+coverage, so it stays: GPU time only), the scene's two cameras into the low-resolution target (116 draws), the
+lighting buffer (4 draws), the vignette and fade composite (1), the final target (one blit and the HUD's 8 draws),
+the blit to the window. So the main thread spends about 20 us of Unity 2017's loop per draw (SetPass with a program
+change, the per-object constants, dynamic batching's vertex copies), and the 3.5 ms is the ~145 draws the picture
+needs: drawing in another order to change programs less would change how overlapping transparent sprites mix.
+
+Two cuts that look exact and are not provable: the unoccluded layer's camera (`Pixelator`'s last `Camera.Render`)
+draws nothing in these fights, but its CPU cost (~0.3 - 0.4 ms) could only be left out if the layer were known to
+be empty beforehand, and objects arrive on that layer from the game's data (prefabs) as well as from code; and
+renderers that draw nothing (alpha 0, empty meshes) can only be found per draw.
+
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
 muOS had 3 - 8 frames over 50 ms in the fight where the Knulli had none. A 40 s profile of the frames
