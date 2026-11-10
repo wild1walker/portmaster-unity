@@ -87,13 +87,91 @@ Boehm GC as built for macOS stops the world with Mach calls (`mach_thread_self`,
 saved at the stop, and finds its roots with dyld calls (`_dyld_image_count`,
 `_dyld_get_image_header`, `getsectiondata`), answered with the image's own sections.
 
-C++: the libc++ symbols (`std::__1`, iostreams, locale, strings, exceptions) from an LLVM libc++
-built for Linux; managed exceptions are C++ throws, so the unwinder reads the image's compact
-unwind info (`__unwind_info`) and its LSDAs (`__gcc_except_tab`, the same format as on Linux) as
-well as the engine's ELF tables, and catches through engine frames work (icalls raise managed
-exceptions).
+C++: the libc++ symbols (`std::__1`, iostreams, locale, strings, exceptions) from LLVM's libc++
+and libc++abi built as macOS arm64 dylibs (`runtime/macho/cxx/build-cxx-macho.sh`) and mapped by
+the same loader beside the game's image. The image's inline code was compiled against that
+library's layouts (`mbstate_t`, ctype masks, `std::string`, pthread types), so nothing of it is
+imitated on the Linux side, and its own libSystem imports go to the same shims. Two build flags
+matter: `-mcpu=generic` (`-march=armv8-a` leaves the CPU at apple-m1, LSE included) and
+`-Wl,-no_fixup_chains` (rebases and binds as `LC_DYLD_INFO` streams, the form the loader reads).
+Managed exceptions are C++ throws, so the unwinder reads the image's compact unwind info
+(`__unwind_info`) and its LSDAs (`__gcc_except_tab`, the same format as on Linux) as well as the
+engine's ELF tables, and catches through engine frames work (icalls raise managed exceptions).
 
 The other native libraries: lib_burst_generated through the same loader (Burst falls back to the
 IL2CPP code without it), steam_api answered by the runtime's stub, EOS and the microphone
 utility by stubs that fail as without the service, lib_coacd through the loader if the game calls
 it.
+
+## The shim layer (`runtime/macho/sh_*.c`, `dyld.c`, `tlv.c`)
+
+432 libSystem, CoreFoundation and dyld names are answered. The rules every shim keeps:
+
+- the image's side is Darwin's: errno numbers, flag bits and struct layouts are converted at the
+  shim, from one generated header. `abi/gen.c` is compiled on a Mac against the SDK and prints
+  `darwin_abi.h` (numbers, layouts, the error texts); nothing is typed in by hand;
+- a shim returns `long` (a macOS caller reads the whole register), and takes a variadic's
+  arguments from the stack (`darwin_va.h`);
+- a call with no answer says so once, by name (`darwin_unanswered`), and fails the way macOS
+  documents; it never pretends;
+- thread-local variables (`__thread_vars`, the libc++ `thread_local`s): descriptors are bound
+  to a thunk that keeps every register but x0, as the macOS convention promises the caller;
+- stop-the-world (`thread_suspend`, `thread_get_state`, `thread_resume`): a real-time signal,
+  a suspend count per thread, the registers saved at the stop, handlers on an alternate stack
+  with every signal masked. A blocking call interrupted by a stop is retried, not failed with
+  `EINTR`;
+- pthread's static initializers are a signature word that glibc would read as a held lock: the
+  first use builds the real object behind it, once, under a lock.
+
+What differed from glibc in ways only the comparison below found:
+
+- `strerror`'s texts ("Operation timed out", not "Connection timed out"): the generated table
+  holds every text the Mac's libc knows (one more than the SDK's `ELAST`);
+- `MB_CUR_MAX` is 4 for UTF-8 on macOS, 6 on glibc 2.31;
+- `__maskrune`'s low byte carries a digit's value (`digittoint`);
+- `printf("%p", NULL)` prints `0x0`; `long double` is `double`; `%D %O %U` are longs;
+- `SO_NOSIGPIPE` has no Linux twin: the socket is marked and `send` adds `MSG_NOSIGNAL`
+  (a plain `write` to such a socket still raises `SIGPIPE`: open);
+- libc++abi asks `dlopen` for `/usr/lib/libstdc++.6.dylib` at the first throw and goes on
+  without it.
+
+Not answered yet, each refused or reported by name: `LC_DYLD_CHAINED_FIXUPS` and
+`LC_DYLD_EXPORTS_TRIE` images, `S_INIT_FUNC_OFFSETS`, resolver exports, the `SIOCGIFCONF` and
+`SIOCGIFFLAGS` ioctls.
+
+## How it is tested
+
+`sh runtime/macho/test/shims-test.sh`, on an Apple-silicon Mac with Xcode's tools and Docker:
+
+1. `test/build-mac.sh` builds `darwin_c.c` and `darwin_cxx.cpp` as macOS arm64 dylibs (the
+   flags a game's image would have, plus `-mcpu=generic`) and as native programs, and runs the
+   native programs: their output is the expectation;
+2. the same dylibs run through the loader (`test/machorun.c`) in an arm64 Linux container, with
+   every rewrite forced (`UA_A64FIX=all`);
+3. the two outputs must be the same, byte for byte.
+
+The C test (180 lines of output) covers formatting, files, directories, time, sysctl, threads
+(mutexes, conditions, keys, 200 stop-the-world rounds over running and sleeping threads),
+locale and sockets. The C++ test (42 lines) covers exceptions through 12 frames, `dynamic_cast`,
+streams, locales, containers, `std::thread`, `thread_local`, futures. Both match; the C++ test
+matched in 100 of 100 repeated runs.
+
+## il2cpp starts (2026-11-09)
+
+`test/il2cpprun.c` loads libc++abi, libc++ and a game's GameAssembly, runs the initializers,
+then calls the il2cpp API the way a player does. With Dave's image and metadata, every rewrite
+forced, in the container on the Mac:
+
+- loaded and linked in 2.2 s (a bind-mounted file; most of it is reading), `il2cpp_init`
+  returns 1 in 2.0 s;
+- `Int32.Parse`, a `Parse` that throws (a managed `FormatException`, caught through
+  `il2cpp_runtime_invoke`), `String.Concat`, `Double.Parse`, `Environment.TickCount` and
+  `ProcessorCount` all answer correctly;
+- 400 000 string allocations with 20 forced collections leave the heap where it started
+  (the Boehm stop-the-world over the Mach calls works).
+
+GameAssembly needs only libSystem, libc++ and CoreFoundation, so il2cpp starts without the
+engine: the managed side can be tested apart from the player.
+
+Next: the bridge library that stands in for `libil2cpp.so` under Unity's arm64 Android player
+(the il2cpp_* forwarders, extending narrow arguments), then a handheld with a 64-bit userland.

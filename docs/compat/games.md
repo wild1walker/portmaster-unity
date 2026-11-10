@@ -458,7 +458,7 @@ Metal-only build is translated from its Metal programs (`shaders.from = ["metal"
 
 | game | Unity, build | result | notes (last checked) |
 |---|---|---|---|
-| Dave the Diver (Steam, macOS v1.0.6.768) | 6000.0.52f1, IL2CPP, URP, Addressables, Burst, Input System, Steam, EOS | not run yet | every binary universal; GameAssembly's arm64 slice: 342 imports (libSystem 236, libc++ 95, CoreFoundation 11), 530 instructions beyond ARMv8.0 (489 LSE, 13 `ldapr`, 6 `eor3`, 22 `crc32`), all within a branch of a block before the image (macho-route.md; 2026-11-08) |
+| Dave the Diver (Steam, macOS v1.0.6.768) | 6000.0.52f1, IL2CPP, URP, Addressables, Burst, Input System, Steam, EOS | il2cpp starts and runs managed calls in an arm64 Linux container (2026-11-09); no player yet | every binary universal; GameAssembly's arm64 slice: 342 imports (libSystem 236, libc++ 95, CoreFoundation 11), 530 instructions beyond ARMv8.0 (489 LSE, 13 `ldapr`, 6 `eor3`, 22 `crc32`), all within a branch of a block before the image (macho-route.md; 2026-11-08) |
 
 ## Checked only (no route through the Android players)
 
