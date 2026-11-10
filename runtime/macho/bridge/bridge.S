@@ -157,6 +157,17 @@ ua_icall_lazy:
     .cfi_endproc
     .size ua_icall_lazy, . - ua_icall_lazy
 
+// The stub the player gets for a library's burst.initialize(answer) comes here: bridge.c's
+// ua_burst_init(answer, the record), whose target is the library's own function.
+    .globl ua_burst_init_entry
+    .hidden ua_burst_init_entry
+    .type ua_burst_init_entry, %function
+    .balign 16
+ua_burst_init_entry:
+    mov x1, x17
+    b ua_burst_init
+    .size ua_burst_init_entry, . - ua_burst_init_entry
+
 // ua_icall_thunk: calls the record's target with the stack arguments laid out as AAPCS64 has
 // them, and extends a narrow result. The layout (bridge.c, struct icall_layout):
 //   u8 result (0 as it is, 1 u8, 2 s8, 3 u16, 4 s16), u8 0, u16 bytes of stack for the callee

@@ -330,7 +330,12 @@ host is asked (UnsatisfiedLinkError; `UnityPlayer.loadLibrary` answers false). l
 `loadLibrary` on every plugin it looks up (`FindPluginExecutable`: `findLibrary` + `System.load`,
 else `loadLibrary(name)`, else the name without "lib"), with names like `libmono.so`, `libc.so.6`
 or a full path (2021.3+: `<lib dir>/libmono-native.so` and the same without `.so`); those fail as
-on a phone, and Unity's Mono then loads the file itself. (`libmono-native.so`, Mono's System.Native,
+on a phone, and Unity's Mono then loads the file itself. A plugin the player uses itself (the
+library Burst compiled, `_burst_generated`) is used only from a path `findLibrary` answered: a
+result equal to the name counts as absent, even when `loadLibrary` succeeded. So `findLibrary`
+also answers `<native_lib_dir>/lib<name>.so` when no such file exists and the host's
+`has_library` callback says it loads a library for that path all the same (the Mach-O route:
+docs/macho-route.md, "Burst's library"). (`libmono-native.so`, Mono's System.Native,
 must be in the library folder for a 2021.3+ .NET 4.x game, as in an Android build: without it
 `Interop.Sys` throws DllNotFoundException, which breaks `Guid.NewGuid`, file APIs, JSON libraries.)
 

@@ -204,6 +204,10 @@ static int il2cpp_paths(JNIEnv *env)
     jobject p = (*env)->CallObjectMethod(env, cl, (*env)->GetMethodID(env, clc, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;"),
                                          (*env)->NewStringUTF(env, "il2cpp"));
     int ok = str_eq(env, p, "/tmp/uptest/lib/libil2cpp.so");
+    /* a library with no file that the host has all the same, and one nobody has */
+    jmethodID find = (*env)->GetMethodID(env, clc, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;");
+    ok &= str_eq(env, (*env)->CallObjectMethod(env, cl, find, (*env)->NewStringUTF(env, "hosted")), "/tmp/uptest/lib/libhosted.so");
+    ok &= !(*env)->CallObjectMethod(env, cl, find, (*env)->NewStringUTF(env, "missing"));
     jobject files = call_obj(env, g_context, "getFilesDir", "()Ljava/io/File;");
     jclass fc = (*env)->FindClass(env, "java/io/File");
     jobject d = (*env)->NewObject(env, fc, (*env)->GetMethodID(env, fc, "<init>", "(Ljava/io/File;Ljava/lang/String;)V"),

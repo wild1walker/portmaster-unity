@@ -6,6 +6,9 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
 using UnityEngine;
 
 // The Mach-O route's checks under the player (docs/macho-route.md): what has to be right
@@ -39,6 +42,60 @@ public class MachoChecks : MonoBehaviour
     [DllImport("lib_checks", EntryPoint = "pc_no_such_function")] static extern int pc_missing();
     [DllImport("checks_bundle")] static extern int pb_value();
     [DllImport("lib_checks_not_there")] static extern int pn_value();
+
+    // What Burst compiled: in the build's own library (lib_burst_generated), which not the
+    // game's code but the player opens, at the first job. A build runs a job as the game's
+    // ordinary code when that library is not to be had, with the same results: NotBurst is
+    // left out of Burst's code alone, so the flag says which of the two ran.
+    [BurstDiscard] static void NotBurst(ref int inBurst) { inBurst = 0; }
+
+    [BurstCompile]
+    struct SquaresJob : IJob
+    {
+        [ReadOnly] public NativeArray<int> values;
+        public NativeArray<long> result;            // the sum of the squares; 1 if Burst's code ran
+        public void Execute()
+        {
+            var squares = new NativeArray<long>(values.Length, Allocator.Temp);     // memory asked of the player
+            for (int i = 0; i < values.Length; i++) squares[i] = (long)values[i] * values[i];
+            long sum = 0;
+            for (int i = 0; i < squares.Length; i++) sum += squares[i];
+            squares.Dispose();
+            int inBurst = 1;
+            NotBurst(ref inBurst);
+            result[0] = sum;
+            result[1] = inBurst;
+        }
+    }
+
+    // Run by the player's job threads, each asking the player for its next range of items.
+    [BurstCompile]
+    struct RootsJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<float> values;
+        [WriteOnly] public NativeArray<float> roots;        // -1 where the game's ordinary code ran
+        public void Execute(int i)
+        {
+            int inBurst = 1;
+            NotBurst(ref inBurst);
+            roots[i] = inBurst == 1 ? (float)Math.Sqrt(values[i]) : -1f;
+        }
+    }
+
+    // A function of Burst's that the game's code asks for by itself and calls through a pointer.
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate double BurstMix(int a, long b, float c, double d, ref int inBurst);
+
+    [BurstCompile]
+    static class BurstCode
+    {
+        [BurstCompile] [AOT.MonoPInvokeCallback(typeof(BurstMix))]
+        public static double Mix(int a, long b, float c, double d, ref int inBurst)
+        {
+            inBurst = 1;
+            NotBurst(ref inBurst);
+            return a + 2.0 * b + 4.0 * c + 8.0 * d;
+        }
+    }
 
     static int called, callbackThread, callbackWrong;
     static byte[][] callbackKeep = new byte[16][];
@@ -343,6 +400,39 @@ public class MachoChecks : MonoBehaviour
             Throws<DllNotFoundException>("pn_value", () => pn_value(), "lib_checks_not_there") &&
             Throws<EntryPointNotFoundException>("pc_missing", () => pc_missing(), "pc_no_such_function") &&
             pc_add(1, 1) == 2);
+
+        // Burst's library: opened by the player, its jobs run on the player's threads, what
+        // they call of the player (memory, the next range of a parallel job) answered as the
+        // game's own calls are.
+        Check("Burst job", () => {
+            var values = new NativeArray<int>(1000, Allocator.TempJob);
+            var result = new NativeArray<long>(2, Allocator.TempJob);
+            long want = 0;
+            for (int i = 0; i < values.Length; i++) { values[i] = i - 300; want += (long)(i - 300) * (i - 300); }
+            new SquaresJob { values = values, result = result }.Schedule().Complete();
+            long sum = result[0], inBurst = result[1];
+            values.Dispose(); result.Dispose();
+            if (inBurst != 1) Debug.Log("[checks] Burst job: it ran as the game's ordinary code, Burst's library was not used");
+            return sum == want && inBurst == 1;
+        });
+        Check("Burst parallel job", () => {
+            const int Items = 200000;
+            var values = new NativeArray<float>(Items, Allocator.TempJob);
+            var roots = new NativeArray<float>(Items, Allocator.TempJob);
+            for (int i = 0; i < Items; i++) values[i] = i;
+            new RootsJob { values = values, roots = roots }.Schedule(Items, 64).Complete();
+            int wrong = 0, ordinary = 0;
+            for (int i = 0; i < Items; i++) { if (roots[i] < 0f) ordinary++; else if (roots[i] != (float)Math.Sqrt(i)) wrong++; }
+            values.Dispose(); roots.Dispose();
+            if (wrong + ordinary != 0) Debug.Log("[checks] Burst parallel job: " + wrong + " wrong results, " + ordinary + " items run as the game's ordinary code");
+            return wrong == 0 && ordinary == 0;
+        });
+        Check("Burst function pointer", () => {
+            var mix = BurstCompiler.CompileFunctionPointer<BurstMix>(BurstCode.Mix);
+            int inBurst = 0;
+            double got = mix.Invoke(3, -5000000000L, 0.5f, 0.125, ref inBurst);
+            return got == 3 + 2.0 * -5000000000L + 4.0 * 0.5f + 8.0 * 0.125 && inBurst == 1;
+        });
 
         // The player's own scheduling of the game's code: coroutines, and a task's continuation
         // back on the main thread.

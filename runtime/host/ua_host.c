@@ -247,6 +247,10 @@ static int load_library(void *user, const char *name)
     return 1;
 }
 
+// ClassLoader.findLibrary for a path with no file: a library of another format that the loader's
+// host opens for it (the Mach-O route's plugins).
+static int has_library(void *user, const char *path) { (void)user; return so_foreign_has(path); }
+
 // crash report: signal, fault address and the module + offset (+ nearest symbol) of pc, lr and
 // of return-address-looking words on the stack (Mono installs its own handler later for managed
 // code and calls this one for faults outside it)
@@ -732,6 +736,7 @@ int main(int argc, char **argv)
     cfg.native_window = win;
     msaafix_set_size(cfg.width, cfg.height);
     cfg.on_load_library = load_library;
+    cfg.has_library = has_library;
     cfg.on_quit = on_quit;
     input_init(cfg.width, cfg.height);
     frames_init(root, cfg.width, cfg.height);

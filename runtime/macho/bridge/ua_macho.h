@@ -22,6 +22,12 @@ struct ua_macho_host {
     // one that first runs the game's code through a callback and not through an il2cpp_* call
     void  (*thread_start_hook)(void (*hook)(void));
     const char *libdir;         // GameAssembly.dylib, libc++.1.dylib and libc++abi.1.dylib are there
+    // the player's own dlopen of a name that is no Android library asks open(filename), and its
+    // dlsym on what that returned asks sym(lib, symbol): a Mach-O plugin the engine opens itself.
+    // has(filename): whether open would find one, nothing loaded (the player asks Java where a
+    // library is before it opens it)
+    void  (*foreign_libs)(int (*has)(const char *filename), void *(*open)(const char *filename),
+                          void *(*sym)(void *lib, const char *symbol));
 };
 typedef int (*ua_macho_setup_fn)(const struct ua_macho_host *host);
 

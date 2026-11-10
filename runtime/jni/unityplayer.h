@@ -82,6 +82,11 @@ struct up_config {
                                                        System.load: an absolute path (IL2CPP players
                                                        load libil2cpp.so so); return 1 if loaded
                                                        (and JNI_OnLoad called), else 0 */
+    int  (*has_library)(void *user, const char *path);     /* ClassLoader.findLibrary, when no file
+                                                       <native_lib_dir>/lib<name>.so is there:
+                                                       1 if the host loads a library for that
+                                                       path all the same (one of another format,
+                                                       under another file name), else 0 */
     void (*on_open_url)(void *user, const char *url);      /* startActivity(ACTION_VIEW) */
     /* FMOD Java output (org.fmod.FMODAudioDevice / AudioTrack replacement): interleaved
      * 16-bit stereo PCM; should block like AudioTrack.write. NULL: the device thread just

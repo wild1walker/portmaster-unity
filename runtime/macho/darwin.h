@@ -91,6 +91,14 @@ struct darwin_dlopen_host {
     int   (*close)(void *handle);
 };
 void  darwin_dyld_set_dlopen(const struct darwin_dlopen_host *h);
+// The same two steps for code that is not an image's, as the player's own dlopen and dlsym of a
+// plugin: the image the path stands for by the rule above (loaded, linked and started if it
+// was not; NULL if no Mach-O file does or it cannot be had), and a function of it by its C
+// name, as dlsym on the image's handle finds it.
+// darwin_dyld_has: whether a Mach-O file stands for the path, nothing loaded.
+int   darwin_dyld_has(const char *path);
+struct darwin_image *darwin_dyld_open(const char *path);
+void *darwin_dyld_image_symbol(struct darwin_image *im, const char *name);
 
 // Thread-local variables (tlv.c). The images' descriptors call ua_tlv_get_addr, which keeps
 // every register but x0, x16 and x17.

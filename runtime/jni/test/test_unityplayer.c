@@ -40,6 +40,9 @@ static int on_load_library(void *u, const char *name)
     return 0;
 }
 
+/* findLibrary("hosted"): no such file, the host says it has a library for the path */
+static int has_library(void *u, const char *path) { return !strcmp(path, "/tmp/uptest/lib/libhosted.so"); }
+
 /* a STORE zip as the converter writes an OBB: assets first, the GUID file at the root */
 static void put16(FILE *f, unsigned v) { fputc(v & 0xff, f); fputc(v >> 8 & 0xff, f); }
 static void put32(FILE *f, unsigned long v) { put16(f, v & 0xffff); put16(f, v >> 16 & 0xffff); }
@@ -300,6 +303,7 @@ static int run_shape(int shape)
     cfg.on_audio = on_audio;
     cfg.on_quit = on_quit;
     cfg.on_load_library = on_load_library;
+    cfg.has_library = has_library;
 
     struct up_input_device pad = { .id = 5, .name = "Test Pad", .descriptor = "pad-5",
                                    .sources = UP_SOURCE_GAMEPAD | UP_SOURCE_JOYSTICK, .naxes = 4,

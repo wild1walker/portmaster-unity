@@ -99,7 +99,7 @@
 
 /* ------------------------------------------------------------------------ */
 
-enum { H_MODULE = 1, H_HOST, H_FAKE, H_GLOBAL };
+enum { H_MODULE = 1, H_HOST, H_FAKE, H_GLOBAL, H_FOREIGN };
 #define HANDLE_MAGIC 0x534f484eu /* "SOHN" */
 
 typedef struct so_handle {
@@ -108,7 +108,7 @@ typedef struct so_handle {
     int refs;
     char *name;              /* android name (basename) */
     so_module *mod;          /* H_MODULE */
-    void *host;              /* H_HOST: glibc handle */
+    void *host;              /* H_HOST: glibc handle; H_FOREIGN: the host's own library */
     const so_shim *table;    /* H_FAKE: may be NULL */
     struct so_handle *next;
 } so_handle;
@@ -1586,6 +1586,10 @@ static so_handle *find_handle(int kind, const char *name)
     return NULL;
 }
 
+static const struct so_foreign_libs *g_foreign;
+void so_set_foreign_libs(const struct so_foreign_libs *f) { g_foreign = f; }
+int so_foreign_has(const char *filename) { return g_foreign && g_foreign->has(filename); }
+
 static const char *(*g_dlopen_rewrite)(const char *path, char *buf, size_t size);
 void so_set_dlopen_rewrite(const char *(*rewrite)(const char *, char *, size_t)) { g_dlopen_rewrite = rewrite; }
 void *so_dlopen(const char *filename, int flags)
@@ -1622,6 +1626,8 @@ void *so_dlopen(const char *filename, int flags)
         h->host = hh;
         goto out;
     }
+    h = find_handle(H_FOREIGN, b);
+    if (h) { h->refs++; goto out; }
     if (flags & B_RTLD_NOLOAD) { set_err("dlopen(%s): not loaded", filename); goto out; }
     char *p = search_android_lib(filename);
     if (p && (served || is_android_elf_file(p))) {
@@ -1635,6 +1641,18 @@ void *so_dlopen(const char *filename, int flags)
         return h;
     }
     free(p);
+    if (g_foreign) {
+        /* without the lock: the library's initializers run in there and may open libraries */
+        so_unlock();
+        void *lib = g_foreign->open(filename);
+        so_lock();
+        if (lib) {
+            h = find_handle(H_FOREIGN, b);            /* another thread opened it meanwhile */
+            if (h) h->refs++;
+            else { h = new_handle(H_FOREIGN, b); h->host = lib; }
+            goto out;
+        }
+    }
     if (g_host_fallback < 0) g_host_fallback = getenv("SO_DLOPEN_HOST_FALLBACK") != NULL;
     if (g_host_fallback) {
         void *hh = host_open(filename, (flags & B_RTLD_GLOBAL) != 0);
@@ -1678,6 +1696,8 @@ void *so_dlsym(void *handle, const char *symbol)
             p = dlsym(h->host, symbol);
             p = p ? so_softfp_wrap(symbol, p) : so_softfp_static(symbol);
         }
+    } else if (h->kind == H_FOREIGN) {
+        p = g_foreign->sym(h->host, symbol);
     } else if (h->kind == H_FAKE) {
         int found = 0;
         if (h->table) p = table_lookup(h->table, symbol, &found);

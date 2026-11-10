@@ -144,19 +144,26 @@ static struct icall_block *block_new(void)
     return b;
 }
 
+// A stub and its record (icall_lock is held); the name is kept as the pointer it is.
+static void *stub_new(const char *name, void *handler, void *target)
+{
+    struct icall_block *b = blocks;
+    if (!b || b->used == BLOCK_STUBS) b = block_new();
+    int i = b->used++;
+    b->names[i] = name;
+    b->recs[i].target = target;
+    b->recs[i].handler = handler;
+    return &b->code[i * 4];
+}
+
 // il2cpp_add_internal_call, as the player calls it
 static void add_internal_call(const char *name, void *fn)
 {
     pthread_mutex_lock(&icall_lock);
-    struct icall_block *b = blocks;
-    if (!b || b->used == BLOCK_STUBS) b = block_new();
-    int i = b->used++;
-    b->names[i] = name;                     // the player's own constant (the image keeps it too)
-    b->recs[i].target = fn;
-    b->recs[i].handler = (void *)ua_icall_lazy;
+    void *stub = stub_new(name, (void *)ua_icall_lazy, fn);     // the player's own constant (the image keeps it too)
     n_icalls++;
     pthread_mutex_unlock(&icall_lock);
-    il.add_internal_call(name, &b->code[i * 4]);
+    il.add_internal_call(name, stub);
 }
 
 // IL2CPP's type codes (ECMA-335's element types)
@@ -304,28 +311,22 @@ static Il2CppClass *find_class(char *full)
     return k;
 }
 
-// The first call of an internal call (from ua_icall_lazy, on the calling thread, every
-// argument register saved): sets the record's handler.
-HIDDEN void ua_icall_classify(struct icall_rec *rec)
+// Sets the handler of an internal call's record from the method's signature in the image's
+// metadata (icall_lock is held, the record not yet decided): 0, or -1 with what stands against
+// it in why.
+static int classify(struct icall_rec *rec, const char *name, char *why, size_t n)
 {
-    const char *name = NULL;
-    pthread_mutex_lock(&icall_lock);
-    for (struct icall_block *b = blocks; b; b = b->next)
-        if (rec >= b->recs && rec < b->recs + BLOCK_STUBS) name = b->names[rec - b->recs];
-    if (!name) DIE("an internal call's stub with no record\n");
-    if (rec->handler != (void *)ua_icall_lazy) { pthread_mutex_unlock(&icall_lock); return; }
-
     char buf[512];
-    if (strlen(name) >= sizeof buf) DIE("internal call %s: the name is too long\n", name);
+    if (strlen(name) >= sizeof buf) { snprintf(why, n, "the name is too long"); return -1; }
     strcpy(buf, name);
     char *method = strstr(buf, "::");
-    if (!method) DIE("internal call %s: not Class::Method\n", name);
+    if (!method) { snprintf(why, n, "the name is not Class::Method"); return -1; }
     *method = 0;
     method += 2;
     char *paren = strchr(method, '(');
     if (paren) *paren = 0;
     Il2CppClass *k = find_class(buf);
-    if (!k) DIE("internal call %s: the game's code calls it, its metadata has no such class\n", name);
+    if (!k) { snprintf(why, n, "the game's metadata has no such class"); return -1; }
 
     struct icall_layout *layout = NULL;
     int found = 0;
@@ -337,20 +338,132 @@ HIDDEN void ua_icall_classify(struct icall_rec *rec)
         il.method_get_flags(m, &iflags);
         if (!(iflags & 0x1000)) continue;                   // not an internal call: a managed overload
         struct icall_layout *l = NULL;
-        char why[128];
-        if (method_layout(m, &l, why, sizeof why) != 0) DIE("internal call %s: %s, which the bridge does not carry\n", name, why);
-        if (found && !same_layout(l, layout))
-            DIE("internal call %s: overloads that are passed differently share the name\n", name);
+        char what[128];
+        if (method_layout(m, &l, what, sizeof what) != 0) {
+            snprintf(why, n, "%s, which the bridge does not carry", what);
+            free(layout);
+            return -1;
+        }
+        if (found && !same_layout(l, layout)) {
+            snprintf(why, n, "overloads that are passed differently share the name");
+            free(l); free(layout);
+            return -1;
+        }
         if (found) free(l); else layout = l;
         found++;
     }
-    if (!found) DIE("internal call %s: the game's code calls it, its metadata has no such method\n", name);
+    if (!found) { snprintf(why, n, "the game's metadata has no such method"); return -1; }
     rec->layout = layout;
     if (layout) n_thunked++; else n_plain++;
     if (layout && getenv("UA_MACHO_LOG"))
         LOG("internal call %s: result kind %d, %d stack arguments laid out again\n", name, layout->result, layout->n);
     __atomic_store_n(&rec->handler, layout ? (void *)ua_icall_thunk : rec->target, __ATOMIC_SEQ_CST);
+    return 0;
+}
+
+// The first call of an internal call (from ua_icall_lazy, on the calling thread, every
+// argument register saved): sets the record's handler.
+HIDDEN void ua_icall_classify(struct icall_rec *rec)
+{
+    const char *name = NULL;
+    char why[200];
+    pthread_mutex_lock(&icall_lock);
+    for (struct icall_block *b = blocks; b; b = b->next)
+        if (rec >= b->recs && rec < b->recs + BLOCK_STUBS) name = b->names[rec - b->recs];
+    if (!name) DIE("an internal call's stub with no record\n");
+    if (rec->handler == (void *)ua_icall_lazy && classify(rec, name, why, sizeof why) != 0)
+        DIE("internal call %s, which the game's code calls: %s\n", name, why);
     pthread_mutex_unlock(&icall_lock);
+}
+
+// ---- Burst's library ---------------------------------------------------------------------
+// The jobs Burst compiled are in a library of the build's own (lib_burst_generated.bundle on
+// macOS) that not the game's code but the player opens: by name at the first use, as a plugin.
+// It then looks the jobs' functions up by name and calls them with pointers and 32-bit
+// numbers in registers, which both conventions pass alike. Before that it calls the library's
+// burst.initialize with a function of its own that answers a name with a pointer, for every
+// function the library's code calls outside itself: an internal call's name with the player's
+// function, which the library would call as macOS code calls. So the player gets a stub for
+// burst.initialize, and the library a function of ours that answers an internal call's name
+// with the stub the game's code gets for it, its signature read at once (the first call may
+// come on a job's thread, which the game's runtime has never seen).
+HIDDEN void ua_burst_init_entry(void);
+static void *(*burst_engine)(const char *name);
+static struct { struct darwin_image *im; void *init, *stub; } burst_libs[16];
+static int n_burst_libs;
+static long burst_stubbed, burst_plain;
+
+static void *burst_resolve(const char *name)
+{
+    void *p = burst_engine(name);
+    if (!p) return NULL;                    // the player said so in its log
+    if (!strncmp(name, "#dllimport:", 11)) {
+        // a plugin's function, which the player opened and found: a Mach-O plugin's is called as
+        // it expects; an Android library's or a stand-in's only as far as the two sides agree
+        if (!darwin_dyld_image_at(p))
+            LOG("Burst's code calls %s, no Mach-O plugin's function: it is called as macOS code calls, which differs for arguments on the stack\n", name + 11);
+        burst_plain++;
+        return p;
+    }
+    void *stub = NULL;
+    int found = 0;
+    char why[200];
+    pthread_mutex_lock(&icall_lock);
+    for (struct icall_block *b = blocks; b && !found; b = b->next)         // the last one registered first
+        for (int i = b->used - 1; i >= 0 && !found; i--) {
+            if (b->recs[i].target != p || strcmp(b->names[i], name) != 0) continue;
+            found = 1;
+            if (b->recs[i].handler == (void *)ua_icall_lazy && classify(&b->recs[i], name, why, sizeof why) != 0)
+                LOG("Burst's code calls the internal call %s, and %s: the player's function is called as it is\n", name, why);
+            else stub = &b->code[i * 4];
+        }
+    pthread_mutex_unlock(&icall_lock);
+    // no internal call of that name: what the player gives Burst alone (burst_abort), pointers only
+    if (stub) burst_stubbed++; else burst_plain++;
+    return stub ? stub : p;
+}
+
+// The player's call of a library's burst.initialize (bridge.S: ua_burst_init_entry, from the
+// stub foreign_sym gave it), rec->target the library's own.
+HIDDEN void ua_burst_init(void *(*engine)(const char *name), struct icall_rec *rec)
+{
+    if (!ua_thread_in) ua_macho_thread_first();
+    burst_engine = engine;                  // one function of the player's, whichever the library
+    long stubbed = burst_stubbed, plain = burst_plain;
+    ((void (*)(void *(*)(const char *)))rec->target)(burst_resolve);
+    if (!getenv("UA_MACHO_LOG")) return;
+    const char *path = "?";
+    for (int i = 0; i < n_burst_libs; i++) if (burst_libs[i].init == rec->target) path = burst_libs[i].im->m->path;
+    LOG("Burst's library %s started: %ld of the functions it calls outside itself are internal calls, given the stubs the game's code gets; %ld are passed as the player answered\n",
+        path, burst_stubbed - stubbed, burst_plain - plain);
+}
+
+// ---- a Mach-O plugin the player opens itself (the host's loader asks: ua_macho.h) --------
+static int foreign_has(const char *filename) { return darwin_dyld_has(filename); }
+
+static void *foreign_open(const char *filename)
+{
+    if (!ua_thread_in) ua_macho_thread_first();         // the image's initializers run here
+    return darwin_dyld_open(filename);
+}
+
+static void *foreign_sym(void *lib, const char *name)
+{
+    struct darwin_image *im = lib;
+    void *p = darwin_dyld_image_symbol(im, name);
+    if (!p || strcmp(name, "burst.initialize") != 0) return p;
+    void *stub = NULL;
+    pthread_mutex_lock(&icall_lock);
+    for (int i = 0; i < n_burst_libs && !stub; i++) if (burst_libs[i].init == p) stub = burst_libs[i].stub;
+    if (!stub) {
+        if (n_burst_libs == (int)(sizeof burst_libs / sizeof burst_libs[0])) DIE("more of Burst's libraries than the bridge keeps (%d)\n", n_burst_libs);
+        stub = stub_new("burst.initialize", (void *)ua_burst_init_entry, p);
+        burst_libs[n_burst_libs].im = im;
+        burst_libs[n_burst_libs].init = p;
+        burst_libs[n_burst_libs++].stub = stub;
+    }
+    pthread_mutex_unlock(&icall_lock);
+    return stub;
 }
 
 // ---- what only the Android engine modules have -------------------------------------------
@@ -667,7 +780,8 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
     static char path[3][600];
     static char *argv[2];
     char err[512];
-    if (!h || h->size < sizeof host || !h->dlopen || !h->dlsym || !h->iterate_phdr || !h->thread_start_hook || !h->libdir) return -1;
+    if (!h || h->size < sizeof host || !h->dlopen || !h->dlsym || !h->iterate_phdr || !h->thread_start_hook || !h->libdir ||
+        !h->foreign_libs) return -1;
     host = *h;
     ua_macho_thread_first();
     host.thread_start_hook(ua_macho_thread_first);
@@ -682,6 +796,7 @@ __attribute__((visibility("default"))) int ua_macho_setup(const struct ua_macho_
     ua_unwind_iterate_phdr = host.iterate_phdr;
     darwin_dyld_set_plugin_dir(host.libdir);
     darwin_dyld_set_dlopen(&plugin_host);
+    host.foreign_libs(foreign_has, foreign_open, foreign_sym);
     if (host.keep_unblocked) host.keep_unblocked(darwin_thread_stop_signal());
     darwin_dyld_run_initializers();
 

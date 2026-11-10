@@ -709,12 +709,14 @@ H(ze_getName) { const char *n = fj_data(self); return fj_l(n ? fj_string(n) : NU
 /* ClassLoader / System / Runtime / Thread */
 /* BaseDexClassLoader.findLibrary: the path of lib<name>.so in nativeLibraryDir, or null when the
  * app does not ship it (Unity probes optional libraries this way, e.g. the .NET 4.x Mono runtime
- * libmonobdwgc-2.0.so before the legacy libmono.so) */
+ * libmonobdwgc-2.0.so before the legacy libmono.so). With no such file the host may still have a
+ * library for the path (cfg.has_library): libunity loads a plugin of its own, as the library Burst
+ * compiled, only from the path this answers. */
 H(cl_findLibrary)
 {
     char p[1024];
     snprintf(p, sizeof p, "%s/lib%s.so", UPC.native_lib_dir, jstr(a[0]));
-    if (access(p, R_OK) != 0) return fj_l(NULL);
+    if (access(p, R_OK) != 0 && !(UPC.has_library && UPC.has_library(UPC.user, p))) return fj_l(NULL);
     return fj_l(fj_string(p));
 }
 H(cl_loadClass)

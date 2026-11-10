@@ -3,7 +3,9 @@
 // the bridge (../macho/bridge: the Mach-O loader, the Darwin shims and a forwarder per il2cpp_*
 // function) as its libil2cpp.so, as it loads the Mono route's (mono64.c): a host (glibc) library
 // in the player's lib folder under IL2CPP's name, beside GameAssembly.dylib and the libc++ built
-// as Mach-O. The game's plugins are Android libraries: the bridge opens them with the loader.
+// as Mach-O. The game's plugins are Mach-O files there too, which the bridge loads, also when it
+// is the player that opens one (foreign_libs: Burst's library); what is no Mach-O file is an
+// Android library or a stand-in of the runtime's, opened with the loader.
 //   UA_SCRIPTING=macho  the bridge whatever android_package.json says ("scripting": "macho" there)
 // arm64 only: a macOS game has no 32-bit ARM code.
 #include "macho64.h"
@@ -15,6 +17,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#if defined(__aarch64__)
+static struct so_foreign_libs foreign;
+
+static void foreign_libs(int (*has)(const char *filename), void *(*open)(const char *filename),
+                         void *(*sym)(void *lib, const char *symbol))
+{
+    foreign.has = has;
+    foreign.open = open;
+    foreign.sym = sym;
+    so_set_foreign_libs(&foreign);
+}
+#endif
 
 int macho64_init(const char *libdir, const char *scripting)
 {
@@ -47,6 +62,7 @@ int macho64_init(const char *libdir, const char *scripting)
     host.keep_unblocked = so_signal_keep_unblocked;
     host.thread_start_hook = so_set_thread_start_hook;
     host.libdir = libdir;
+    host.foreign_libs = foreign_libs;
     if (setup(&host) != 0) { fprintf(stderr, "[host] %s: the game's code did not load\n", bridge); return -1; }
     // macOS code keeps data below the stack pointer: no handler may run on its stack
     so_signal_handlers_onstack();

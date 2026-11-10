@@ -51,7 +51,7 @@ the loader's probe and its instruction scan, `test/shims.sh cover` for the names
 
 | plugin | links | for the route |
 |---|---|---|
-| `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve; 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows. The engine opens this one, not the game's code (see "Plugins the game opens" below); not yet loaded under the route |
+| `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve; 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows. The engine opens this one, not the game's code (see "Burst's library" below). In the Linux container its arm64 part loads through the loader with every rewrite forced and `burst.initialize` runs to its end: 1,178 names asked of the engine (internal calls and `burst_abort`, no `#dllimport:`), the static set-up done (104 calls of the engine's memory functions, 109 others), 360 job functions found by their names. Not yet run under the player with the game |
 | `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables. **Runs through the loader** in the arm64 Linux container with every rewrite forced: opened by the name the game's code has (`dlopen("lib_coacd")`), `CoACD_run` cuts an L-shaped test solid into 2 or 3 convex hulls whose volumes add up to the solid's (four runs: its preprocessing on, off and left to it, two seeds), `CoACD_freeMeshArray` frees them |
 | `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions. The one file of the five built for macOS 15 only, so with chained fixups in place of the bind streams |
 | `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
@@ -133,8 +133,8 @@ Managed exceptions are C++ throws, so the unwinder reads the image's compact unw
 (`__unwind_info`) and its LSDAs (`__gcc_except_tab`, the same format as on Linux) as well as the
 engine's ELF tables, and catches through engine frames work (icalls raise managed exceptions).
 
-The other native libraries: lib_burst_generated through the same loader (Burst falls back to the
-IL2CPP code without it), steam_api answered by the runtime's stub, EOS and the microphone
+The other native libraries: lib_burst_generated through the same loader, offered to the engine
+("Burst's library" below; without it the jobs run as the IL2CPP code), steam_api answered by the runtime's stub, EOS and the microphone
 utility by stubs that fail as without the service, lib_coacd through the loader when the game
 calls it (see "Plugins the game opens" below).
 
@@ -287,10 +287,60 @@ loads a plugin that is a Mach-O file the way dyld would, at that moment:
 
 `UA_MACHO_LOG=1` prints each `dlopen` with what answered it.
 
-Burst's library is the exception among a game's plugins: the engine opens it, not the game's
-code. The Android player has the strings (`LoadBurstLibrary`, `lib_burst_%d_%d`,
-`burst.initialize`) and calls the loader's `dlopen` and `dlsym` itself, so the Mach-O bundle
-has to be offered on that side (open).
+### Burst's library (2026-11-10)
+
+Burst's library (`lib_burst_generated.bundle`, directly under `Contents/PlugIns`) is the
+exception among a game's plugins: the engine opens it, not the game's code, and the engine is
+the Android player, whose `dlopen` is the host loader's. What the player does, read from
+6000.0.52f1's arm64 library:
+
+- at its first Burst job it asks for the library `_burst_generated` (Android's name, without
+  `lib`), then `lib_burst_0_0`, `lib_burst_0_1`, ... until one is absent;
+- each name goes through `FindPluginExecutable`: Java's `ClassLoader.findLibrary(name)`, and
+  when that answers a path, `System.load(path)`; when it answers null, `UnityPlayer.loadLibrary(name)`,
+  and the result stays the bare name. **A result that is empty or equal to the name counts as
+  "no such library"**, whatever `loadLibrary` did: the library can be loaded and still go
+  unused, with no message. The jobs then run as the game's IL2CPP code, correct and slower;
+- with a path, the player `dlopen`s it, looks up `burst.initialize` and calls it with one
+  argument, a function that answers a name with a pointer: every internal call the engine has
+  registered (it keeps a map of them for Burst, filled from the same registration il2cpp gets),
+  `burst_abort`, `burst_get_dispatch_info`, and `#dllimport:<library>|<function>` for a
+  `DllImport` of Burst code. The library asks for all of its names there and then, runs its
+  static set-up, and returns; job functions are looked up later with `dlsym`, by hash names.
+
+Three pieces make that work for a Mach-O library:
+
+- **the host loader takes foreign libraries** (`so_set_foreign_libs`, `so_loader.h`): three
+  functions of the host's, `has(path)`, `open(path)`, `sym(lib, name)`. A `dlopen` that finds
+  no ELF file asks `open`; the handle is the loader's own (one per file name, so a path and a
+  bare name give the same one), `dlsym` on it asks `sym`, and it stays loaded. The bridge
+  gives the three (`ua_macho_host.foreign_libs`), answered by the shim layer's plugin search
+  and loader, the same as for the game's own `dlopen`: `/x/lib_burst_generated.so` finds
+  `lib_burst_generated.bundle` in the plugin folder;
+- **`findLibrary` answers for such a library**: the Java layer's `has_library` callback
+  (`unityplayer.h`) is asked when no file `lib<name>.so` is there, and the host passes the
+  question to `has`. Without it the player took the first branch above to its dead end: 21 of
+  the test game's 24 checks passed and the three Burst ones reported that their code had run
+  as ordinary code;
+- **`burst.initialize` is wrapped**: `dlsym` of that name gives the player a stub of the
+  bridge's, which calls the library's own function with the bridge's resolver in place of
+  the player's. The resolver asks the player's, and when the pointer that comes back is an
+  internal call the bridge has a stub for (same target, same name), it answers with that stub:
+  Burst's code was compiled for macOS, so it calls an internal call the way the game's code
+  does, and gets the same treatment (arguments on the stack laid out again, narrow results
+  extended; a call the classification cannot place is logged and passed as the player
+  answered). Names with no record (`burst_abort`, a `#dllimport:`) pass as the player answered.
+
+`UA_MACHO_LOG=1` prints one line per Burst library when it has started: how many of its names
+got stubs and how many passed through. The test game's (three jobs): 3 and 6.
+
+The limits, as they stand. The engine calls a job's entry function with the Linux convention
+and the function expects the macOS one; for pointers and integers in registers, which is what
+job entries take, the two are the same. A `#dllimport:` from Burst code into a library that
+is not Mach-O is called as is, right only up to eight arguments of full width. And a native
+plugin that the engine calls into for rendering or audio (`UnityPluginLoad` and its
+interfaces) is a different thing, not covered: its interfaces are C++ tables of the macOS
+player.
 
 ### The string family, and how narrow the cover still is
 
@@ -539,6 +589,14 @@ And `pmu convert` works on the Data folder in place, so a setup converts a copy 
 `.app`'s Data folder (or the `.app` itself, when the player's copy may be used up) and hands
 `--macho` the `.app` for the code and metadata.
 
+A third, from running the tool in a container on a Mac: the free space the pack step sees for
+a folder mounted from an external drive is the Mac's **internal** disk's (Docker Desktop's
+file sharing answers `statfs` so), and the step refuses with "keeping 1 GiB spare" while the
+drive has hundreds free. What had filled the internal disk was the test game's build script:
+a Unity project per build in the system's temporary folder, 0.8 GB each and 2.8 GB with the
+packages, never removed. `test/game/build.sh` makes its project inside the output folder now
+and removes it when it ends.
+
 ### The first run
 
 The test game (`runtime/macho/test/game`: the project's Pong, built for macOS arm64 with IL2CPP
@@ -580,7 +638,13 @@ failed`:
   back by the plugin (on the calling thread, and from a thread the plugin started itself
   while collections run), a plugin in a bundle, and the two refusals a game may rely on:
   `DllNotFoundException` for a plugin that is not there and `EntryPointNotFoundException` for
-  a function it does not have.
+  a function it does not have;
+- Burst (the build has the Burst package, and `MacBuild.cs` fails the build if no
+  `lib_burst_generated.bundle` comes out): a job, a parallel job over 200,000 items on the
+  player's worker threads, and a compiled function pointer the game's code calls itself
+  (int, long, float, double and a reference). Each sets a flag that a `[BurstDiscard]`
+  function clears, a function Burst leaves out of its code, so a check fails with "it ran as
+  the game's ordinary code" when the library was not used, not only when a result is wrong.
 
 IL2CPP under the Android player asks `dlopen` for a `DllImport`'s name as written, then with
 `.so`, `.dll`, `.dylib`, `.bundle` behind it, then the same four with `lib` in front; the
@@ -588,9 +652,16 @@ first is the image's own import and reaches the shim, which finds `lib_checks.dy
 `lib_checks` and `checks_bundle.bundle` for `checks_bundle` at the first try.
 
 Result (2026-11-10): the 16 checks without the plugins pass in the emulator (10 of 10 runs) and
-on the handheld below; all 21 pass in the emulator (3 of 3 runs with the plugins put in the
-lib folder by hand, and 3 of 3 with a tree made by `pmu android-data --macho` alone, whose two
-plugin files are byte for byte the hand-placed ones). The 21 have not run on a handheld yet.
+on the handheld below; the 21 without Burst pass in the emulator (3 of 3 runs with the plugins
+put in the lib folder by hand, and 3 of 3 with a tree made by `pmu android-data --macho`
+alone, whose two plugin files are byte for byte the hand-placed ones); all 24 pass in the
+emulator with the Burst build (6 of 6 runs, a tree made by `pmu android-data --macho`, which
+copied Burst's library and the two test plugins and left out Unity's purchasing plugin, which
+needs StoreKit and Objective-C). That build has Unity's default packages in it (UI Toolkit
+among them), which adds four members the player requires and the macOS build does not have
+(`UnityEngine.UIElements.VisualManager` and `VisualNodeClassNameStore`: `m_IsWrapper`,
+`m_Ptr`); the player did not ask for them in this game. The plugin and Burst checks have not
+run on a handheld yet.
 The handheld is the BattleXP
 G350 (RK3326: four Cortex-A35, 1 GB; dArkOS, 64-bit userland). There the Mac build's game runs
 under the Android player at a steady 60 fps (frames of 16.6 ms on average, 18 to 20 ms the 99th
@@ -652,7 +723,7 @@ locks (the wait buckets of `__ulock_wait`, the first-use lock of pthread objects
 would hold up the collector if it needs the same one before resuming; `Application.platform`
 answers Android to the game; `streamingAssetsPath` is the path into the APK, as on Android.
 
-Next, Dave's own needs: its plugins (the table above: Burst's library offered to the engine,
-the Steam answer on the Mach-O side; `lib_coacd` is done), answers for the internal calls the
+Next, Dave's own needs: its plugins (the table above: the Steam answer on the Mach-O side;
+`lib_coacd` and Burst's library are done), answers for the internal calls the
 Android player lacks, a control build of the checks for Android itself; then Dave in the
 emulator and on the handheld, with the stops measured again (it has more managed threads).

@@ -38,10 +38,12 @@ public static class MacBuild
         if (arch == null) { Debug.LogError("no OSXStandalone.UserBuildSettings.architecture"); EditorApplication.Exit(1); return; }
         arch.SetValue(null, System.Enum.Parse(arch.PropertyType, "ARM64"), null);
         var report = BuildPipeline.BuildPlayer(new[] { "Assets/Donor.unity" }, "out/Pong.app", BuildTarget.StandaloneOSX, BuildOptions.None);
-        // (a plugin set up for one CPU lands in Contents/PlugIns/ARM64, one for both in Contents/PlugIns)
+        // (a plugin set up for one CPU lands in Contents/PlugIns/ARM64, one for both in Contents/PlugIns;
+        // Burst's library, the checks' jobs compiled, is put there as a plugin of the build's own)
         if (!System.IO.File.Exists("out/Pong.app/Contents/Frameworks/GameAssembly.dylib") ||
             !System.IO.Directory.Exists("out/Pong.app/Contents/PlugIns") ||
-            System.IO.Directory.GetFiles("out/Pong.app/Contents/PlugIns", "lib_checks.dylib", System.IO.SearchOption.AllDirectories).Length == 0) {
+            System.IO.Directory.GetFiles("out/Pong.app/Contents/PlugIns", "lib_checks.dylib", System.IO.SearchOption.AllDirectories).Length == 0 ||
+            System.IO.Directory.GetFileSystemEntries("out/Pong.app/Contents/PlugIns", "lib_burst_generated.bundle", System.IO.SearchOption.AllDirectories).Length == 0) {
             Debug.LogError("build: " + report.summary.result + ", " + report.summary.totalErrors + " errors");
             EditorApplication.Exit(1);
         }

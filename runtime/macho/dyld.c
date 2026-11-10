@@ -423,24 +423,35 @@ static struct darwin_image *open_plugin(const char *file, int mode, char *err, s
     return im;
 }
 
-static void *darwin_dlopen(const char *path, int mode)
+// The image a dlopen's path stands for, loaded now if it has to be (the lock is held). NULL
+// with *why set: a Mach-O file stands for the path and is not to be had (err holds the text or
+// *why points at a constant); NULL without: no Mach-O file does.
+static struct darwin_image *image_for(const char *path, int mode, const char **why, char *err, size_t errlen)
 {
-    if (!path) return &main_handle;
-    char file[1024], err[600];
-    const char *why = NULL;                 // a Mach-O file stands for the path and is not to be had
-    pthread_mutex_lock(&lock);
+    char file[1024];
     struct darwin_image *im = NULL;
+    *why = NULL;
     for (int i = 0; i < nloaded && !im; i++) if (!strcmp(images[i].m->path, path)) im = &images[i];
     if (!im) im = loaded_as(base_name(path));
     if (!im && find_plugin(path, file, sizeof file)) {
         for (int i = 0; i < nloaded && !im; i++) if (!strcmp(images[i].m->path, file)) im = &images[i];
-        if (!im && (mode & DARWIN_RTLD_NOLOAD)) why = "not loaded";
-        else if (!im && !(why = refused_before(file)) && !(im = open_plugin(file, mode, err, sizeof err))) {
+        if (!im && (mode & DARWIN_RTLD_NOLOAD)) *why = "not loaded";
+        else if (!im && !(*why = refused_before(file)) && !(im = open_plugin(file, mode, err, errlen))) {
             refuse(file, err);
-            why = err;
+            *why = err;
         }
     }
     if (im && !(mode & DARWIN_RTLD_LOCAL)) im->local = 0;
+    return im;
+}
+
+static void *darwin_dlopen(const char *path, int mode)
+{
+    if (!path) return &main_handle;
+    char err[600];
+    const char *why;
+    pthread_mutex_lock(&lock);
+    struct darwin_image *im = image_for(path, mode, &why, err, sizeof err);
     if (tracing()) fprintf(stderr, "[darwin] dlopen(%s, 0x%x): %s%s\n", path, mode, im ? "the image " : why ? "refused: " : "no Mach-O file, the host is asked", im ? im->m->path : why ? why : "");
     if (why) dl_fail("dlopen(%s): %s", path, why);
     pthread_mutex_unlock(&lock);
@@ -480,6 +491,36 @@ static void *darwin_dlsym(void *handle, const char *name)
         p = g_host->sym(((struct host_handle *)handle)->h, name);
     }
     if (!p) dl_fail("dlsym(%s): symbol not found", name);
+    return p;
+}
+
+// The two for code that is not an image's (the player opening a plugin itself): no host is
+// asked, and a refusal was said by refuse().
+int darwin_dyld_has(const char *path)
+{
+    char file[1024];
+    return find_plugin(path, file, sizeof file);
+}
+
+struct darwin_image *darwin_dyld_open(const char *path)
+{
+    char err[600];
+    const char *why;
+    pthread_mutex_lock(&lock);
+    struct darwin_image *im = image_for(path, DARWIN_RTLD_NOW | DARWIN_RTLD_LOCAL, &why, err, sizeof err);
+    if (tracing()) fprintf(stderr, "[darwin] the host opens %s: %s%s\n", path, im ? "the image " : why ? "refused: " : "no Mach-O file", im ? im->m->path : why ? why : "");
+    pthread_mutex_unlock(&lock);
+    return im;
+}
+
+void *darwin_dyld_image_symbol(struct darwin_image *im, const char *name)
+{
+    char mangled[512];
+    if (!is_image(im) || (size_t)snprintf(mangled, sizeof mangled, "_%s", name) >= sizeof mangled) return NULL;
+    pthread_mutex_lock(&lock);
+    void *p = macho_export(im->m, mangled);
+    if (!p) p = find_export(mangled, 0);
+    pthread_mutex_unlock(&lock);
     return p;
 }
 

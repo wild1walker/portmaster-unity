@@ -237,6 +237,43 @@ static void test_mediandk(const char *dir)
     CHECK(h && so_dlsym(h, "AMediaExtractor_new") == (void *)shim_add, "dlopen(libmediandk.so) with a registered table");
 }
 
+/* libraries of another format that the host loads (so_set_foreign_libs): asked last, one handle
+   per library, and their symbols come from the host */
+static int foreign_opens;
+static char foreign_asked[512];
+static int foreign_has(const char *filename) { return strstr(filename, "syn_foreign") != NULL; }
+static void *foreign_open(const char *filename)
+{
+    foreign_opens++;
+    snprintf(foreign_asked, sizeof foreign_asked, "%s", filename);
+    return foreign_has(filename) ? (void *)0xf00 : NULL;
+}
+static void *foreign_sym(void *lib, const char *symbol)
+{
+    return lib == (void *)0xf00 && !strcmp(symbol, "foreign.entry") ? (void *)shim_add : NULL;
+}
+
+static void test_foreign(const char *dir)
+{
+    static const struct so_foreign_libs libs = { foreign_has, foreign_open, foreign_sym };
+    char path[512];
+    snprintf(path, sizeof path, "%s/libsyn_foreign.so", dir);
+    CHECK(!so_dlopen(path, 0) && !so_foreign_has(path), "dlopen of a file that is not there, no host to ask");
+    so_set_foreign_libs(&libs);
+    CHECK(so_foreign_has(path) && !so_foreign_has("libsyn_nowhere.so") && !foreign_opens, "so_foreign_has: %d opened", foreign_opens);
+    void *h = so_dlopen(path, 0);
+    CHECK(h && foreign_opens == 1 && !strcmp(foreign_asked, path), "a foreign library: %p, %d asked, \"%s\"", h, foreign_opens, foreign_asked);
+    CHECK(h && so_dlsym(h, "foreign.entry") == (void *)shim_add && !so_dlsym(h, "nothing"), "a foreign library's symbols");
+    CHECK(so_dlopen(path, 0) == h && so_dlopen("libsyn_foreign.so", 0) == h && foreign_opens == 1,
+          "a foreign library opened again: %d asked", foreign_opens);
+    CHECK(h && !so_dlclose(h) && so_dlsym(h, "foreign.entry") == (void *)shim_add, "a foreign library stays after dlclose");
+    snprintf(path, sizeof path, "%s/libsyn_nowhere.so", dir);
+    CHECK(!so_dlopen(path, 0) && foreign_opens == 2 && so_dlerror(), "a library neither side has: %d asked", foreign_opens);
+    void *m = so_dlopen("libmediandk.so", 0);               /* what the loader has itself is not asked for */
+    CHECK(m && foreign_opens == 2 && so_dlsym(m, "AMediaExtractor_new") == (void *)shim_add, "the loader's own libraries first: %d asked", foreign_opens);
+    so_set_foreign_libs(NULL);
+}
+
 #if defined(__aarch64__)
 static unsigned long (*tls_guard)(void);
 static int (*protected_fn)(int);
@@ -320,6 +357,7 @@ int main(int argc, char **argv)
     CHECK(r == 0, "stat: %d", r);
     test_newer(m[0]);
     test_mediandk(dir);
+    test_foreign(dir);
 
 #if defined(__aarch64__)
     tls_guard = (unsigned long (*)(void))sym(m[0], "syn_tls_guard");
@@ -402,7 +440,7 @@ int main(int argc, char **argv)
 out:
     if (fails) printf("syn: %d FAILED\n", fails);
     else printf("syn: ok (%s: 5 relocation encodings alike, imports, init order, dl*, setjmp, signals, pthread, stat, "
-                "newer bionic symbols, SHA1, libmediandk routing, served paths, stack guard, thread id slot%s)\n",
+                "newer bionic symbols, SHA1, libmediandk routing, foreign libraries, served paths, stack guard, thread id slot%s)\n",
                 sizeof(void *) == 8 ? "arm64" : "arm32", sizeof(void *) == 8 ? ", unwinding" : "");
     return fails != 0;
 }

@@ -176,6 +176,20 @@ void so_set_dlsym_hook(void *(*hook)(const char *symbol, void *found));
    loaded as an Android library whatever its ELF says (an AOT image has no DT_NEEDED and the Android
    player's soft-float ABI, which the host's armhf loader refuses) */
 void so_set_dlopen_rewrite(const char *(*rewrite)(const char *path, char *buf, size_t size));
+/* libraries of another format that the host loads itself (the Mach-O route's plugins): when
+ * Android code dlopens a name that is no Android library, open(filename) is asked for it with the
+ * path as given, the loader's lock not held, and returns the host's own token for the library or
+ * NULL; dlsym on the handle then goes to sym(lib, symbol). Such a library is never closed.
+ * has(filename) says, without loading anything, whether open would find a library for the path:
+ * so_foreign_has asks it (0 with no host set), for a host that must answer where a library is
+ * before it is opened (Android's ClassLoader.findLibrary). */
+struct so_foreign_libs {
+    int   (*has)(const char *filename);
+    void *(*open)(const char *filename);
+    void *(*sym)(void *lib, const char *symbol);
+};
+void so_set_foreign_libs(const struct so_foreign_libs *f);
+int  so_foreign_has(const char *filename);
 /* hook(m) for each Android module once it is relocated and protected, before its initializers run;
  * the loader's lock is held: the hook may read and patch the module (so_base, so_size, so_name), not
  * load or look up others */
