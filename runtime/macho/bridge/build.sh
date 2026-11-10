@@ -10,7 +10,7 @@ docker image inspect ua-llvm-arm64 >/dev/null 2>&1 ||
   { echo "no ua-llvm-arm64 image: docker build --platform linux/arm64 -t ua-llvm-arm64 runtime/docker/llvm-arm64" >&2; exit 1; }
 docker run --rm --pull=never --platform linux/arm64 -v "$PWD":/w -w /w ua-llvm-arm64 sh -c '
   set -e
-  SRC="macho.c a64fix.c dyld.c tlv.c tlv_thunk.S sh_asm.S sh_table.c sh_errno.c sh_mem.c sh_misc.c sh_signal.c
+  SRC="macho.c a64fix.c dyld.c tlv.c tlv_thunk.S sh_asm.S sh_table.c sh_errno.c sh_mem.c sh_misc.c sh_signal.c sh_context.c
        sh_stdio.c sh_file.c sh_time.c sh_thread.c sh_locale.c sh_net.c sh_cf.c bridge/bridge.c bridge/bridge.S"
   clang-19 -O2 -g -Wall -Wextra -Wno-unused-parameter -fPIC -fvisibility=hidden -pthread -shared \
     -Wl,-soname,libil2cpp.so -Wl,-z,now -Wl,-z,defs -Wl,--exclude-libs,ALL \

@@ -786,7 +786,7 @@ const struct darwin_sym darwin_syms_file[] = {
     SHIM(readlinkat),
     SHIM(realpath), NAMED("_realpath$DARWIN_EXTSN", darwin_realpath), SHIM(getcwd), SHIM(lseek),
     SHIM(utimensat), SHIM(futimens), SHIM(utimes), SHIM(lutimes), SHIM(futimes),
-    SHIM(select), SHIM(poll),
+    SHIM(select), NAMED("_select$DARWIN_EXTSN", darwin_select), SHIM(poll),
     SHIM(copyfile_state_alloc), SHIM(copyfile_state_free), SHIM(fcopyfile),
     // a descriptor and plain numbers: glibc's own (off_t and ssize_t are 64 bits on both; flock's
     // operations and iovec are the same)

@@ -11,6 +11,9 @@
     SZ(struct utsname, UTSNAME) OFF(struct utsname, UTSNAME, nodename) OFF(struct utsname, UTSNAME, release)
     OFF(struct utsname, UTSNAME, version) OFF(struct utsname, UTSNAME, machine)
 
+    H("stdlib, fenv")
+    C(RAND_MAX) C(NCARGS) SZ(fenv_t, FENV_T) OFF(fenv_t, FENV_T, __fpsr) OFF(fenv_t, FENV_T, __fpcr)
+
     H("time, locale, ctype")
     C(CLOCK_REALTIME) C(CLOCK_MONOTONIC) C(CLOCK_MONOTONIC_RAW) C(CLOCK_MONOTONIC_RAW_APPROX) C(CLOCK_UPTIME_RAW)
     C(CLOCK_UPTIME_RAW_APPROX) C(CLOCK_PROCESS_CPUTIME_ID) C(CLOCK_THREAD_CPUTIME_ID)

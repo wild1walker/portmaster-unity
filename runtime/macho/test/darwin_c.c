@@ -11,10 +11,12 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <fenv.h>
 #include <ifaddrs.h>
 #include <locale.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <mach/semaphore.h>
 #include <math.h>
 #include <net/if.h>
 #include <netdb.h>
@@ -31,7 +33,9 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/select.h>
+#include <sys/shm.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -41,6 +45,10 @@
 #include <unistd.h>
 #include <wchar.h>
 #include <xlocale.h>
+
+// darwin_ctx.c: what needs _XOPEN_SOURCE, which this file is built without, as most code is
+int  test_contexts(void);               // the checks that failed
+long ctx_link_in_handler(void);         // the uc_link getcontext gives; -1: it failed
 
 static int failed;
 #define CHECK(name, cond) do { int ok_ = !!(cond); failed += !ok_; fprintf(stdout, "%s %s\n", ok_ ? "ok  " : "FAIL", name); } while (0)
@@ -795,6 +803,314 @@ static void test_net(void)
     freeifaddrs(ifs);
 }
 
+// ---- numbers: rand, conversions, 128-bit division, the floating point environment --------------
+
+static void test_numbers(void)
+{
+    srand(1);
+    int r1 = rand(), r2 = rand(), r3 = rand();
+    SHOW("rand after srand(1): %d %d %d\n", r1, r2, r3);
+    srand(1);
+    CHECK("srand starts the same row again", rand() == r1 && rand() == r2 && rand() == r3);
+    static const unsigned seeds[] = { 0, 2, 123459876, 0x7fffffff, 0x80000000u, 0xffffffffu };
+    for (size_t i = 0; i < sizeof seeds / sizeof *seeds; i++) {
+        unsigned cell = seeds[i];
+        srand(seeds[i]);
+        int a = rand(), b = rand();
+        int c = rand_r(&cell);
+        SHOW("seed %u: rand %d %d rand_r %d cell %u\n", seeds[i], a, b, c, cell);
+    }
+    SHOW("RAND_MAX %d\n", RAND_MAX);
+
+    static const char *volatile texts[] = { "3.25", "  -1e3x", "0x1p4", "nan", "-inf", "", "abc", "1e400", ".5e1 2" };
+    for (size_t i = 0; i < sizeof texts / sizeof *texts; i++) SHOW("atof '%s' %g\n", texts[i], atof(texts[i]));
+
+    volatile double x = 0.75, big = 1.0, neg = -1.0, ten = 10.0, zero = 0.0;
+    volatile int e4 = 4, e5000 = 5000, em1074 = -1074, em2000 = -2000;
+    SHOW("ldexp %g %g %g %g %g\n", ldexp(x, e4), ldexp(big, em1074), ldexp(big, e5000), ldexp(neg, em2000), ldexp(zero, e5000));
+    volatile double eight = 8.0, half = 0.5;
+    SHOW("log2 %g %g %g %.12g %g\n", log2(eight), log2(big), log2(half), log2(ten), log2(zero));
+    // what a call out of its domain or its range leaves in errno
+    volatile double thousand = 1000.0, four00 = 400.0;
+    errno = 0; (void)ldexp(big, e5000); SHOW("errno after ldexp overflow %d\n", errno);
+    errno = 0; (void)log2(neg);         SHOW("errno after log2(-1) %d\n", errno);
+    errno = 0; (void)log(neg);          SHOW("errno after log(-1) %d\n", errno);
+    errno = 0; (void)log(zero);         SHOW("errno after log(0) %d\n", errno);
+    errno = 0; (void)pow(ten, four00);  SHOW("errno after pow overflow %d\n", errno);
+    errno = 0; (void)acos(ten);         SHOW("errno after acos(10) %d\n", errno);
+    errno = 0; (void)exp(thousand);     SHOW("errno after exp overflow %d\n", errno);
+    errno = 0; (void)sinh(thousand);    SHOW("errno after sinh overflow %d\n", errno);
+    errno = 0; (void)fmod(big, zero);   SHOW("errno after fmod(1, 0) %d\n", errno);
+    errno = 0; (void)hypot(ldexp(big, 1023), ldexp(big, 1023)); SHOW("errno after hypot overflow %d\n", errno);
+    volatile float tenf = 10.0f, negf = -1.0f;
+    errno = 0; (void)powf(tenf, 60.0f); SHOW("errno after powf overflow %d\n", errno);
+    errno = 0; (void)logf(negf);        SHOW("errno after logf(-1) %d\n", errno);
+    errno = 7; (void)sin(ten);          SHOW("errno a good call leaves %d\n", errno);
+    errno = 0;
+
+    volatile unsigned __int128 n = ((unsigned __int128)0x123456789abcdef0ull << 64) | 0xfedcba9876543210ull;
+    volatile unsigned __int128 d1 = 0x1000000007ull, d2 = ((unsigned __int128)3 << 64) | 5, d3 = 1;
+    unsigned __int128 q1 = n / d1, q2 = n / d2, q3 = n / d3, q4 = d1 / n;
+    SHOW("128-bit quotients %llx%016llx %llx %d %d\n", (unsigned long long)(q1 >> 64), (unsigned long long)q1,
+         (unsigned long long)q2, q3 == n, q4 == 0);
+
+    fenv_t env, up, now;
+    CHECK("fegetenv", fegetenv(&env) == 0);
+    SHOW("fenv_t %d bytes, rounding %d\n", (int)sizeof env, (int)(env.__fpcr >> 22 & 3));
+    up = env;
+    up.__fpsr = 0;
+    up.__fpcr = (env.__fpcr & ~(3ull << 22)) | (1ull << 22);       // towards +infinity
+    CHECK("fesetenv", fesetenv(&up) == 0);
+    volatile double one = 1.0, three = 3.0;
+    double third_up = one / three;
+    fegetenv(&now);
+    SHOW("rounded up %.17g inexact %d rounding %d\n", third_up, (int)(now.__fpsr >> 4 & 1), (int)(now.__fpcr >> 22 & 3));
+    up.__fpcr = env.__fpcr;
+    fesetenv(&up);
+    double third = one / three;
+    fegetenv(&now);
+    SHOW("to nearest %.17g inexact %d\n", third, (int)(now.__fpsr >> 4 & 1));
+    up.__fpcr = (env.__fpcr & ~(3ull << 22)) | (3ull << 22);       // towards zero
+    up.__fpsr = 1;                                                  // "invalid" raised
+    fesetenv(&up);
+    fesetenv(FE_DFL_ENV);
+    fegetenv(&now);
+    SHOW("default environment fpcr %llx fpsr %llx\n", (unsigned long long)now.__fpcr, (unsigned long long)now.__fpsr);
+    fesetenv(&env);
+
+    char cat[32] = "ab";
+    const char *volatile tail = "cdefgh";
+    volatile size_t three_chars = 3, many = 20, none = 0;
+    char *(*volatile cat_fn)(char *, const char *, size_t) = strncat;      // the function, not the checked builtin
+    cat_fn(cat, tail, three_chars);
+    cat_fn(cat, tail + 6, many);
+    cat_fn(cat, tail + 4, many);
+    cat_fn(cat, tail, none);
+    SHOW("strncat '%s' %d\n", cat, (int)strlen(cat));
+    const char *volatile span = "aabbcz", *volatile set = "ab", *volatile empty = "";
+    SHOW("strspn %d %d %d %d\n", (int)strspn(span, set), (int)strspn(empty, set), (int)strspn(span, empty), (int)strspn(set, span));
+    char words[] = " one, two,,three ";
+    char *volatile wp = words;
+    for (char *w = strtok(wp, " ,"); w; w = strtok(NULL, " ,")) SHOW("strtok '%s'\n", w);
+    char only[] = ",,";
+    wp = only;
+    SHOW("strtok of separators alone %d\n", strtok(wp, ",") == NULL);
+
+    errno = 0;
+    int sr = shmdt((void *)(uintptr_t)(16384 * 3));
+    SHOW("shmdt of no segment %d errno %d\n", sr, errno);
+}
+
+// ---- threads: stack sizes, thread ids, Mach semaphores, signal masks ---------------------------
+
+static void *deep(void *arg)
+{
+    size_t n = (size_t)arg;
+    volatile char *room = __builtin_alloca(n);
+    long sum = 0;
+    for (size_t i = 0; i < n; i += 1024) { room[i] = (char)(i >> 10); sum += room[i]; }
+    return (void *)sum;
+}
+
+struct idcell { _Atomic int ready, leave; uint64_t id; };
+
+static void *id_teller(void *arg)
+{
+    struct idcell *c = arg;
+    pthread_threadid_np(NULL, &c->id);
+    atomic_store(&c->ready, 1);
+    while (!atomic_load(&c->leave)) nap(1);
+    return NULL;
+}
+
+static semaphore_t msem;
+struct mwait { _Atomic int done; kern_return_t kr; int aborted; int once; long rounds; };
+
+static void *msem_waiter(void *arg)
+{
+    struct mwait *w = arg;
+    long rounds = w->rounds ? w->rounds : 1;
+    for (long i = 0; i < rounds; i++) {
+        do {
+            w->kr = semaphore_wait(msem);
+            if (w->kr == KERN_ABORTED) w->aborted++;
+        } while (w->kr == KERN_ABORTED && !w->once);
+        if (w->kr != KERN_SUCCESS) break;
+    }
+    atomic_store(&w->done, 1);
+    return NULL;
+}
+
+static void *msem_signaler(void *arg)
+{
+    long bad = 0;
+    for (long i = 0; i < (long)arg; i++) bad += semaphore_signal(msem) != KERN_SUCCESS;
+    return (void *)bad;
+}
+
+static _Atomic int usr1_ran;
+static _Atomic long usr1_link = -1;
+static void on_usr1(int sig)
+{
+    atomic_store(&usr1_link, ctx_link_in_handler());
+    atomic_fetch_add(&usr1_ran, 1);
+}
+
+static void wait_with_handler(const char *what, int flags)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_usr1;
+    sa.sa_flags = flags;
+    sigaction(SIGUSR1, &sa, NULL);
+    atomic_store(&usr1_ran, 0);
+    struct mwait w = { .once = 1 };
+    pthread_t t;
+    pthread_create(&t, NULL, msem_waiter, &w);
+    nap(30);
+    int kr = pthread_kill(t, SIGUSR1);
+    nap(30);
+    int returned = atomic_load(&w.done);
+    if (!returned) semaphore_signal(msem);
+    pthread_join(t, NULL);
+    SHOW("a wait and a handler %s: pthread_kill %d, handler ran %d, wait returned %d with %d\n", what, kr,
+         atomic_load(&usr1_ran), returned, w.kr);
+}
+
+static void test_threads_more(void)
+{
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    static const size_t sizes[] = { 0, 4096, 8192, 16383, 16384, 16385, 20480, 32768, 65536, 100000, 524288, 1 << 20 };
+    for (size_t i = 0; i < sizeof sizes / sizeof *sizes; i++)
+        SHOW("setstacksize %d: %d\n", (int)sizes[i], pthread_attr_setstacksize(&attr, sizes[i]));
+    pthread_t t[6];
+    void *ret = NULL;
+    pthread_attr_setstacksize(&attr, 524288);
+    CHECK("a thread on 512 K", pthread_create(&t[0], &attr, deep, (void *)(size_t)400000) == 0 && pthread_join(t[0], &ret) == 0);
+    SHOW("it used 400000 bytes of them: %ld\n", (long)ret);
+    pthread_attr_setstacksize(&attr, 65536);
+    CHECK("a thread on 64 K", pthread_create(&t[0], &attr, deep, (void *)(size_t)40000) == 0 && pthread_join(t[0], &ret) == 0);
+    SHOW("it used 40000 bytes of them: %ld\n", (long)ret);
+    pthread_attr_destroy(&attr);
+
+    uint64_t id1 = 0, id2 = 0, other = 0;
+    int a = pthread_threadid_np(NULL, &id1), b = pthread_threadid_np(pthread_self(), &id2);
+    SHOW("threadid of this thread %d %d\n", a, b);
+    CHECK("one id by both ways", id1 != 0 && id1 == id2);
+    SHOW("threadid into no cell %d\n", pthread_threadid_np(NULL, NULL));
+    static struct idcell cell;
+    pthread_create(&t[0], NULL, id_teller, &cell);
+    while (!atomic_load(&cell.ready)) sched_yield();
+    SHOW("threadid of another thread %d\n", pthread_threadid_np(t[0], &other));
+    CHECK("it is the id that thread reads", other == cell.id && other != id1 && other != 0);
+    atomic_store(&cell.leave, 1);
+    pthread_join(t[0], NULL);
+
+    // Mach semaphores
+    mach_port_t task = mach_task_self();
+    kern_return_t kr = semaphore_create(task, &msem, SYNC_POLICY_FIFO, 2);
+    SHOW("semaphore_create %d\n", kr);
+    CHECK("it has a name", msem != MACH_PORT_NULL);
+    SHOW("two waits on a count of 2: %d %d\n", semaphore_wait(msem), semaphore_wait(msem));
+    struct mwait w1 = { 0 };
+    pthread_create(&t[0], NULL, msem_waiter, &w1);
+    nap(30);
+    CHECK("the third waits", !atomic_load(&w1.done));
+    SHOW("semaphore_signal %d\n", semaphore_signal(msem));
+    pthread_join(t[0], NULL);
+    SHOW("the waiter got %d\n", w1.kr);
+    for (int i = 0; i < 3; i++) semaphore_signal(msem);
+    uint64_t t0 = now_ms();
+    SHOW("signals without a waiter count: %d %d %d\n", semaphore_wait(msem), semaphore_wait(msem), semaphore_wait(msem));
+    CHECK("and none of the waits waited", now_ms() - t0 < 500);
+
+    static struct mwait many[4];
+    for (int i = 0; i < 4; i++) { many[i].rounds = 1000; pthread_create(&t[i], NULL, msem_waiter, &many[i]); }
+    pthread_create(&t[4], NULL, msem_signaler, (void *)2000L);
+    pthread_create(&t[5], NULL, msem_signaler, (void *)2000L);
+    long bad = 0;
+    for (int i = 0; i < 6; i++) { pthread_join(t[i], &ret); if (i >= 4) bad += (long)ret; }
+    CHECK("4000 signals, 4000 waits", bad == 0 && many[0].kr == 0 && many[1].kr == 0 && many[2].kr == 0 && many[3].kr == 0);
+    struct mwait w2 = { 0 };
+    pthread_create(&t[0], NULL, msem_waiter, &w2);
+    nap(30);
+    CHECK("and none left over", !atomic_load(&w2.done));
+    semaphore_signal(msem);
+    pthread_join(t[0], NULL);
+
+    // a signal's handler runs on a thread that waits
+    wait_with_handler("(no SA_RESTART)", 0);
+    wait_with_handler("(SA_RESTART)", SA_RESTART);
+    SHOW("getcontext in the handler: uc_link %ld\n", atomic_load(&usr1_link));
+
+    // a semaphore destroyed under a waiter, and names that are none
+    struct mwait w3 = { 0 };
+    pthread_create(&t[0], NULL, msem_waiter, &w3);
+    nap(30);
+    SHOW("semaphore_destroy %d\n", semaphore_destroy(task, msem));
+    pthread_join(t[0], NULL);
+    SHOW("its waiter got %d\n", w3.kr);
+    SHOW("on the destroyed name: signal %d wait %d\n", semaphore_signal(msem), semaphore_wait(msem));
+    SHOW("destroyed again %x\n", semaphore_destroy(task, msem));
+    SHOW("on name 0: signal %d wait %d destroy %x\n", semaphore_signal(MACH_PORT_NULL), semaphore_wait(MACH_PORT_NULL),
+         semaphore_destroy(task, MACH_PORT_NULL));
+    mach_port_t me = mach_thread_self();
+    SHOW("on a thread's port: signal %d wait %d\n", semaphore_signal(me), semaphore_wait(me));
+    mach_port_deallocate(task, me);
+    static const int policies[] = { 1, 2, 3, 7, 8, 99, -1 };
+    for (size_t i = 0; i < sizeof policies / sizeof *policies; i++) {
+        semaphore_t s = 0x5a5a;
+        kr = semaphore_create(task, &s, policies[i], 0);
+        SHOW("policy %d: %d, name written %d\n", policies[i], kr, s != 0x5a5a);
+        if (kr == KERN_SUCCESS) semaphore_destroy(task, s);
+    }
+    semaphore_t s = 0x5a5a;
+    kr = semaphore_create(task, &s, SYNC_POLICY_FIFO, -1);
+    SHOW("a count of -1: %d, name written %d\n", kr, s != 0x5a5a);
+    s = 0x5a5a;
+    kr = semaphore_create(MACH_PORT_NULL, &s, SYNC_POLICY_FIFO, 0);
+    SHOW("task 0: %x, name written %d\n", kr, s != 0x5a5a);
+    semaphore_t two[2];
+    CHECK("two semaphores", semaphore_create(task, &two[0], SYNC_POLICY_FIFO, 0) == 0 && semaphore_create(task, &two[1], SYNC_POLICY_FIFO, 1) == 0 &&
+          two[0] != two[1]);
+    SHOW("each its own count: %d\n", semaphore_wait(two[1]));
+    semaphore_destroy(task, two[0]);
+    semaphore_destroy(task, two[1]);
+
+    // signal masks, and a signal to a thread
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_usr1;
+    sigaction(SIGUSR1, &sa, NULL);
+    atomic_store(&usr1_ran, 0);
+    sigset_t usr1 = sigmask(SIGUSR1), old = 0x5a5a, cur = 0x5a5a;
+    SHOW("pthread_sigmask block %d old %x\n", pthread_sigmask(SIG_BLOCK, &usr1, &old), old);
+    SHOW("pthread_kill self %d\n", pthread_kill(pthread_self(), SIGUSR1));
+    nap(5);
+    CHECK("a blocked signal waits", atomic_load(&usr1_ran) == 0);
+    pthread_sigmask(SIG_BLOCK, NULL, &cur);
+    SHOW("mask now %x\n", cur);
+    SHOW("pthread_sigmask unblock %d\n", pthread_sigmask(SIG_UNBLOCK, &usr1, NULL));
+    CHECK("and is delivered when let through", atomic_load(&usr1_ran) == 1);
+    sigset_t odd = sigmask(SIGUSR2) | sigmask(SIGEMT) | sigmask(SIGINFO) | sigmask(SIGKILL) | sigmask(SIGSTOP);
+    errno = 0;
+    SHOW("sigprocmask set %d\n", sigprocmask(SIG_SETMASK, &odd, &old));
+    sigprocmask(SIG_SETMASK, &old, &cur);
+    SHOW("mask it held %x, the one before %x\n", cur, old);
+    sigset_t all = ~(sigset_t)0;
+    sigprocmask(SIG_SETMASK, &all, &old);
+    sigprocmask(SIG_SETMASK, &old, &cur);
+    SHOW("with every bit asked for %x\n", cur);
+    errno = 0;
+    int r = sigprocmask(99, &usr1, NULL);
+    SHOW("sigprocmask how 99: %d errno %d\n", r, errno);
+    SHOW("pthread_sigmask how 99: %d\n", pthread_sigmask(99, &usr1, NULL));
+    SHOW("how 99 without a set: %d\n", pthread_sigmask(99, NULL, &cur));
+    SHOW("pthread_kill signal 0: %d, signal 99: %d\n", pthread_kill(pthread_self(), 0), pthread_kill(pthread_self(), 99));
+    signal(SIGUSR1, SIG_DFL);
+}
+
 long test_main(long argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOFBF, 0);
@@ -803,6 +1119,9 @@ long test_main(long argc, char **argv)
     test_files();
     test_system();
     test_threads();
+    test_threads_more();
+    test_numbers();
+    failed += test_contexts();
     test_locale();
     test_net();
     SHOW("failed %d\n", failed);

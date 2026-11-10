@@ -373,6 +373,9 @@ static long darwin___swbuf(int c, void *file) { return darwin_putc_unlocked(c, f
 
 const struct darwin_sym darwin_syms_stdio[] = {
     NAMED("___stdinp", &cell_stdin), NAMED("___stdoutp", &cell_stdout), NAMED("___stderrp", &cell_stderr),
+    // with _XOPEN_SOURCE and _DARWIN_C_SOURCE both defined, these two are imported under a
+    // second name; on arm64 it is the same function
+    NAMED("_fopen$DARWIN_EXTSN", darwin_fopen), NAMED("_fdopen$DARWIN_EXTSN", darwin_fdopen),
     SHIM(fopen), SHIM(fdopen), SHIM(freopen), SHIM(tmpfile), SHIM(fclose), SHIM(fflush), SHIM(fileno),
     SHIM(feof), SHIM(ferror), SHIM(clearerr), SHIM(flockfile), SHIM(funlockfile), SHIM(ftrylockfile),
     SHIM(setbuf), SHIM(setvbuf),

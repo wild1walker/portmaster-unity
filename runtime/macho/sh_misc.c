@@ -1,6 +1,7 @@
 // sh_misc.c - the process as the images ask about it: the unwinder's entry points, exit and
-// atexit, the stack guard, compiler helpers, math, number parsing, limits, sysconf, sysctl,
-// uname, random numbers, the terminal that is not there, backtrace.
+// atexit, assert, the stack guard, compiler helpers, math and the floating point environment,
+// number parsing, limits, sysconf, sysctl, uname, random numbers, the terminal that is not
+// there, backtrace.
 #define _GNU_SOURCE
 #include "darwin.h"
 #include "darwin_va.h"
@@ -18,6 +19,7 @@
 #include <string.h>
 #include <sys/random.h>
 #include <sys/resource.h>
+#include <sys/shm.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <time.h>
@@ -63,7 +65,92 @@ static long darwin___darwin_check_fd_set_overflow(int fd, const void *set, int u
     return 0;
 }
 
+// void __assert_rtn(const char *func, const char *file, int line, const char *expr): what a
+// failed assert() calls. macOS's three texts (func -1: the old __eprintf's; NULL: no function
+// is known), then abort.
+static void darwin___assert_rtn(const char *func, const char *file, int line, const char *expr)
+{
+    if (func == (const char *)-1L) fprintf(stderr, "%s:%d: failed assertion `%s'\n", file, line, expr);
+    else if (!func) fprintf(stderr, "Assertion failed: (%s), file %s, line %d.\n", expr, file, line);
+    else fprintf(stderr, "Assertion failed: (%s), function %s, file %s, line %d.\n", expr, func, file, line);
+    abort();
+}
+
 static __int128 darwin___divti3(__int128 a, __int128 b) { return a / b; }
+static unsigned __int128 darwin___udivti3(unsigned __int128 a, unsigned __int128 b) { return a / b; }
+
+// libm: macOS's functions leave errno as it is, whatever they are given; glibc's store EDOM
+// and ERANGE. The cell glibc writes is folded into the images' own (sh_errno.c), so it is put
+// back around each call.
+#define MATH1(name, T) static T darwin_m_##name(T x) { int e = errno; T r = name(x); errno = e; return r; }
+#define MATH2(name, T) static T darwin_m_##name(T x, T y) { int e = errno; T r = name(x, y); errno = e; return r; }
+#define MATHN(name, T) static T darwin_m_##name(T x, int n) { int e = errno; T r = name(x, n); errno = e; return r; }
+#define MATH(n) { "_" #n, (void *)darwin_m_##n }       // its row in the table (darwin_log is taken)
+MATH1(acos, double) MATH1(asin, double) MATH1(atan, double) MATH1(cos, double) MATH1(cosh, double)
+MATH1(exp, double) MATH1(log, double) MATH1(log10, double) MATH1(log2, double) MATH1(sin, double)
+MATH1(sinh, double) MATH1(tan, double) MATH1(tanh, double)
+MATH1(acosf, float) MATH1(asinf, float) MATH1(atanf, float) MATH1(cosf, float) MATH1(exp2f, float)
+MATH1(expf, float) MATH1(exp10f, float) MATH1(log10f, float) MATH1(logf, float) MATH1(sinf, float)
+MATH1(tanf, float)
+MATH2(atan2, double) MATH2(fmod, double) MATH2(hypot, double) MATH2(pow, double)
+MATH2(atan2f, float) MATH2(fmodf, float) MATH2(powf, float)
+MATHN(ldexp, double) MATHN(ldexpf, float)
+
+// fenv_t there: the status register, then the control register, 64 bits each. The registers
+// are the thread's own, as they are on macOS.
+_Static_assert(DARWIN_SIZEOF_FENV_T == 16 && DARWIN_FENV_T___fpsr == 0 && DARWIN_FENV_T___fpcr == 8, "fenv_t");
+static const uint64_t fe_dfl_env[2];            // _FE_DFL_ENV: no flag raised, to nearest, no trap
+
+static long darwin_fegetenv(uint64_t *env)
+{
+    uint64_t fpsr, fpcr;
+    __asm__("mrs %0, fpsr" : "=r"(fpsr));
+    __asm__("mrs %0, fpcr" : "=r"(fpcr));
+    env[0] = fpsr;
+    env[1] = fpcr;
+    return 0;
+}
+
+static long darwin_fesetenv(const uint64_t *env)
+{
+    uint64_t fpsr = env[0], fpcr = env[1];
+    __asm__ volatile("msr fpcr, %0" : : "r"(fpcr));
+    __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+    return 0;
+}
+
+// rand, srand, rand_r: macOS's own row of numbers (code that seeds it counts on the row), the
+// minimal standard generator, x = 16807 x mod (2^31 - 1), worked out by Schrage's division;
+// a seed of 0 stands for 123459876. One state for the process, changed without a lock, as there.
+static unsigned long rand_state = 1;
+
+static long rand_step(unsigned long *ctx)
+{
+    if (*ctx == 0) *ctx = 123459876;
+    long hi = (long)(*ctx / 127773), lo = (long)(*ctx % 127773);
+    long x = 16807 * lo - 2836 * hi;
+    if (x < 0) x += 0x7fffffff;
+    *ctx = (unsigned long)x;
+    return (long)((unsigned long)x % ((unsigned long)DARWIN_RAND_MAX + 1));
+}
+
+static long darwin_rand(void)
+{
+    unsigned long s = __atomic_load_n(&rand_state, __ATOMIC_RELAXED);
+    long r = rand_step(&s);
+    __atomic_store_n(&rand_state, s, __ATOMIC_RELAXED);
+    return r;
+}
+
+static void darwin_srand(unsigned seed) { __atomic_store_n(&rand_state, (unsigned long)seed, __ATOMIC_RELAXED); }
+
+static long darwin_rand_r(unsigned *cell)
+{
+    unsigned long s = *cell;
+    long r = rand_step(&s);
+    *cell = (unsigned)s;
+    return r;
+}
 
 // __sincos_stret, __sincosf_stret: both results in d0, d1 (s0, s1), which is how AAPCS64
 // returns a struct of two doubles (floats) as well.
@@ -116,6 +203,17 @@ static long darwin_getrlimit(int resource, uint64_t *out)
     out[0] = rlim_darwin(l.rlim_cur);
     out[1] = rlim_darwin(l.rlim_max);
     return 0;
+}
+
+// RLIMIT_STACK's soft limit as getrlimit's shim gives it: what getcontext calls the size of
+// the stack (sh_context.c).
+uint64_t darwin_stack_limit(void)
+{
+    struct rlimit l;
+    int e = errno;
+    uint64_t v = getrlimit(RLIMIT_STACK, &l) == 0 ? rlim_darwin(l.rlim_cur) : 0;
+    errno = e;
+    return v;
 }
 
 // int getrusage(int, struct rusage *): the same layout (macOS's 4-byte tv_usec sits where the
@@ -440,8 +538,10 @@ const struct darwin_sym darwin_syms_misc[] = {
     NAMED("___stack_chk_guard", &stack_guard),
     NAMED("___stack_chk_fail", __stack_chk_fail),
     NAMED("___darwin_check_fd_set_overflow", darwin___darwin_check_fd_set_overflow),
+    NAMED("___assert_rtn", darwin___assert_rtn),
     NAMED("___divti3", darwin___divti3),
-    NAMED("___exp10f", exp10f),
+    NAMED("___udivti3", darwin___udivti3),
+    NAMED("___exp10f", darwin_m_exp10f),
     NAMED("___sincos_stret", darwin___sincos_stret),
     NAMED("___sincosf_stret", darwin___sincosf_stret),
     // glibc's _setjmp fills 180 bytes of macOS's 192-byte jmp_buf, x19-x28 and x29 as they are
@@ -449,12 +549,15 @@ const struct darwin_sym darwin_syms_misc[] = {
     NAMED("__setjmp", _setjmp),
     SAME(abort), SHIM(atexit), SHIM(exit),
     SAME(getenv), SAME(setenv), SAME(unsetenv), SAME(getpid), SAME(getegid), SAME(geteuid), SAME(gethostname),
-    SAME(atoi), SAME(atol), SAME(div),
+    SAME(atof), SAME(atoi), SAME(atol), SAME(div),
     SAME(strtod), SAME(strtof), SAME(strtol), SHIM(strtold), SAME(strtoll), SAME(strtoul), SAME(strtoull),
-    SAME(acos), SAME(acosf), SAME(asin), SAME(asinf), SAME(atan), SAME(atan2), SAME(atan2f), SAME(atanf),
-    SAME(cos), SAME(cosf), SAME(cosh), SAME(exp), SAME(exp2f), SAME(expf), SAME(fmod), SAME(fmodf),
-    SAME(hypot), SAME(ldexpf), SAME(log), SAME(log10), SAME(log10f), SAME(logf), SAME(modf), SAME(pow),
-    SAME(powf), SAME(sin), SAME(sinf), SAME(sinh), SAME(tan), SAME(tanf), SAME(tanh),
+    MATH(acos), MATH(acosf), MATH(asin), MATH(asinf), MATH(atan), MATH(atan2), MATH(atan2f), MATH(atanf),
+    MATH(cos), MATH(cosf), MATH(cosh), MATH(exp), MATH(exp2f), MATH(expf), MATH(fmod), MATH(fmodf),
+    MATH(hypot), MATH(ldexp), MATH(ldexpf), MATH(log), MATH(log10), MATH(log10f), MATH(log2), MATH(logf),
+    SAME(modf), MATH(pow), MATH(powf), MATH(sin), MATH(sinf), MATH(sinh), MATH(tan), MATH(tanf), MATH(tanh),
+    SHIM(fegetenv), SHIM(fesetenv), NAMED("__FE_DFL_ENV", fe_dfl_env),
+    SHIM(rand), SHIM(srand), SHIM(rand_r),
+    SAME(shmdt),
     SHIM(getrlimit), SHIM(getrusage), SHIM(proc_name), SHIM(sysconf), SHIM(sysctl), SHIM(uname),
     NAMED("_syslog$DARWIN_EXTSN", darwin_syslog),
     SHIM(arc4random), SHIM(arc4random_buf),

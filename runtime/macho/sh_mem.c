@@ -102,7 +102,7 @@ const struct darwin_sym darwin_syms_mem[] = {
     SAME(bzero), SAME(memchr), SAME(memcmp), SAME(memcpy), SAME(memmove), SAME(memset),
     SHIM(memset_pattern16), SAME(__memmove_chk), SAME(__memset_chk),
     SAME(strchr), SAME(strcmp), SAME(strcpy), SAME(strdup), SHIM(strlcpy), SAME(strlen), SAME(strncmp),
-    SAME(strncpy), SAME(strrchr), SAME(strstr),
+    SAME(strncat), SAME(strncpy), SAME(strrchr), SAME(strspn), SAME(strstr), SAME(strtok),
     SAME(wcslen), SAME(wmemchr), SHIM(wmemcmp),
     SAME(bsearch), SAME(qsort),
     { NULL, NULL }

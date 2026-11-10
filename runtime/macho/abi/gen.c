@@ -8,12 +8,15 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <fenv.h>
 #include <ifaddrs.h>
 #include <langinfo.h>
 #include <locale.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <mach/semaphore.h>
+#include <mach/sync_policy.h>
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <netdb.h>
@@ -25,6 +28,7 @@
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -46,13 +50,7 @@
 #include <xlocale.h>
 #include <runetype.h>
 
-#define C(name) printf("#define DARWIN_%-28s %lld\n", #name, (long long)(name));
-#define X(name) printf("#define DARWIN_%-28s 0x%llx\n", #name, (unsigned long long)(name));
-#define XN(tag, v) printf("#define DARWIN_%-28s 0x%llx\n", #tag, (unsigned long long)(v));
-#define SZ(type, tag) printf("#define DARWIN_SIZEOF_%-21s %zu\n", #tag, sizeof(type));
-#define OFF(type, tag, field) printf("#define DARWIN_%s_%-*s %zu\n", #tag, (int)(27 - sizeof #tag), #field, offsetof(type, field));
-#define SIG(tag, init_type, init) { init_type v = init; printf("#define DARWIN_%-28s 0x%lx\n", #tag, *(long *)&v); }
-#define H(text) printf("\n// %s\n", text);
+#include "gen.h"
 
 int main(void)
 {
@@ -63,6 +61,7 @@ int main(void)
 #include "gen_net.inc"
 #include "gen_sys.inc"
 #include "gen_thread.inc"
+    gen_xopen();
     printf("\n#endif\n");
     return 0;
 }

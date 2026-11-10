@@ -9,7 +9,7 @@ out=${1:?usage: build-mac.sh OUT}
 mkdir -p "$out"
 flags="-arch arm64 -mmacosx-version-min=11.0 -mcpu=generic -O1 -g0 -Wall -Wno-format"
 xcrun clang $flags -dynamiclib -Wl,-no_fixup_chains -install_name @rpath/darwin_c.dylib \
-    -framework CoreFoundation -o "$out/darwin_c.dylib" "$here/darwin_c.c"
+    -framework CoreFoundation -o "$out/darwin_c.dylib" "$here/darwin_c.c" "$here/darwin_ctx.c"
 xcrun clang $flags -o "$out/darwin_c.native" "$here/native_main.c" "$out/darwin_c.dylib" -Wl,-rpath,@loader_path
 xcrun clang++ $flags -std=c++20 -dynamiclib -Wl,-no_fixup_chains -install_name @rpath/darwin_cxx.dylib \
     -o "$out/darwin_cxx.dylib" "$here/darwin_cxx.cpp"

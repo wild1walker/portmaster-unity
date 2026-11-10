@@ -27,7 +27,7 @@ struct darwin_sym { const char *name; void *addr; };
 extern const struct darwin_sym darwin_syms_errno[], darwin_syms_mem[], darwin_syms_stdio[],
     darwin_syms_file[], darwin_syms_thread[], darwin_syms_time[], darwin_syms_locale[],
     darwin_syms_misc[], darwin_syms_net[], darwin_syms_dyld[], darwin_syms_cf[], darwin_syms_tlv[],
-    darwin_syms_signal[];
+    darwin_syms_signal[], darwin_syms_context[];
 // A libSystem or CoreFoundation import's answer ("_open"); NULL: none.
 void *darwin_lookup(const char *name);
 int   darwin_shim_count(void);
@@ -101,6 +101,19 @@ uint32_t darwin_thread_port(void);
 // stay unblocked in every thread that runs the image's code.
 unsigned darwin_thread_stops(void);
 int   darwin_thread_stop_signal(void);
+
+// Signals (sh_signal.c). The calling thread's mask as macOS's sigset_t: the host's, and beside
+// it the bits Linux has no signal for, which a thread hands to the threads it creates.
+uint32_t darwin_sigmask(void);
+void     darwin_set_sigmask(uint32_t mask);
+uint32_t darwin_signal_nosig(void);
+void     darwin_signal_set_nosig(uint32_t bits);
+// The number of the signal whose handler of the image is running (0: none), and how many such
+// handlers the calling thread has run: a wait macOS ends when one ran compares it around itself.
+int      darwin_signal_in_handler(void);
+unsigned darwin_signal_handled(void);
+// RLIMIT_STACK's soft limit, as the image reads it
+uint64_t darwin_stack_limit(void);
 
 // What a thread keeps between calls (dlerror's text, strerror's, localeconv's): one heap block
 // per thread, made at its first use and freed at its end. Not thread-local variables: as a

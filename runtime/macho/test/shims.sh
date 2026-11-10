@@ -11,7 +11,7 @@ CC=${CC:-clang-19}
 W="-O2 -g -Wall -Wextra -Wno-unused-parameter -ftls-model=initial-exec"
 OUT=${OUT:-/tmp/ua-macho-test}
 mkdir -p "$OUT"
-SRC="macho.c a64fix.c dyld.c tlv.c tlv_thunk.S sh_asm.S sh_table.c sh_errno.c sh_mem.c sh_misc.c sh_signal.c
+SRC="macho.c a64fix.c dyld.c tlv.c tlv_thunk.S sh_asm.S sh_table.c sh_errno.c sh_mem.c sh_misc.c sh_signal.c sh_context.c
      sh_stdio.c sh_file.c sh_time.c sh_thread.c sh_locale.c sh_net.c sh_cf.c"
 # -rdynamic: libunwind finds this program's own frames; the images' frames come through dyld.c
 for prog in machorun il2cpprun; do

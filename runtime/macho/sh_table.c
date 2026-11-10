@@ -11,7 +11,7 @@
 static const struct darwin_sym *const areas[] = {
     darwin_syms_errno, darwin_syms_mem, darwin_syms_stdio, darwin_syms_file, darwin_syms_thread,
     darwin_syms_time, darwin_syms_locale, darwin_syms_misc, darwin_syms_net, darwin_syms_dyld,
-    darwin_syms_cf, darwin_syms_tlv, darwin_syms_signal,
+    darwin_syms_cf, darwin_syms_tlv, darwin_syms_signal, darwin_syms_context,
 };
 static struct darwin_sym *all;
 static int nall;

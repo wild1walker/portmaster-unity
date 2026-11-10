@@ -10,6 +10,9 @@
 // A signal's action that was the host's own (a crash reporter's) is shown to the image as one
 // handler address, darwin_signal_chain: calling it from the image's handler passes the signal
 // on to the host's, and handing it back to sigaction puts the host's action back as it was.
+//
+// The signal mask (sigprocmask, pthread_sigmask) is the host's, bit by bit; the bits of the
+// signals Linux has none for are kept beside it, so a mask reads back as it was set.
 #define _GNU_SOURCE
 #include "darwin.h"
 
@@ -54,6 +57,11 @@ static int sig_darwin(int h)
 }
 
 // sigset_t there: one bit per signal in 32
+#define BIT(d)  (1u << ((d) - 1))
+#define CANT    (BIT(DARWIN_SIGKILL) | BIT(DARWIN_SIGSTOP))     // never in a mask
+// SIGEMT, SIGINFO, and the 32nd bit, which no signal has and a mask keeps there all the same
+#define NOSIG   (BIT(DARWIN_SIGEMT) | BIT(DARWIN_SIGINFO) | BIT(32))
+
 static void mask_host(uint32_t d, sigset_t *h)
 {
     sigemptyset(h);
@@ -123,6 +131,18 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 // The signal the thread's bridge is delivering, as Linux gave it: darwin_signal_chain's arguments.
 struct delivery { int sig; siginfo_t *si; void *uc; };
 static __thread struct delivery delivering __attribute__((tls_model("initial-exec")));
+// The thread's mask bits the host's mask has no place for, and how many handlers of the image
+// the thread has run. Read and written in handlers: no record to make first.
+static __thread uint32_t nosig __attribute__((tls_model("initial-exec")));
+static __thread unsigned handled __attribute__((tls_model("initial-exec")));
+// The signal whose handler of the image is running, 0 when none is: one cell for the process,
+// set when a handler is called and cleared when it returns, as macOS's own (__in_sigtramp) is.
+static _Atomic int in_handler;
+
+int darwin_signal_in_handler(void) { return atomic_load(&in_handler); }
+unsigned darwin_signal_handled(void) { return handled; }
+uint32_t darwin_signal_nosig(void) { return nosig; }
+void darwin_signal_set_nosig(uint32_t bits) { nosig = bits & NOSIG; }
 
 #define PUT(buf, off, v) memcpy((unsigned char *)(buf) + (off), &(v), sizeof(v))
 #define GET(buf, off, v) memcpy(&(v), (const unsigned char *)(buf) + (off), sizeof(v))
@@ -152,8 +172,15 @@ static void bridge(int sig, siginfo_t *si, void *ctx)
     delivering.sig = sig;
     delivering.si = si;
     delivering.uc = ctx;
+    // the mask the handler runs under: the host's part of it is the kernel's doing
+    uint32_t nosig_outer = nosig;
+    nosig |= act[d].mask & NOSIG;
+    handled++;
+    atomic_store(&in_handler, d);
     if (!(flags & DARWIN_SA_SIGINFO)) {
         ((void (*)(int))h)(d);
+        atomic_store(&in_handler, 0);
+        nosig = nosig_outer;
     } else {
         ucontext_t *uc = ctx;
         mcontext_t *m = &uc->uc_mcontext;
@@ -200,7 +227,7 @@ static void bridge(int sig, siginfo_t *si, void *ctx)
         }
 
         i32 = (uc->uc_stack.ss_flags & SS_ONSTACK) != 0; PUT(duc, DARWIN_UCONTEXT_uc_onstack, i32);
-        u32 = mask_darwin(&uc->uc_sigmask); PUT(duc, DARWIN_UCONTEXT_uc_sigmask, u32);
+        u32 = mask_darwin(&uc->uc_sigmask) | nosig_outer; PUT(duc, DARWIN_UCONTEXT_uc_sigmask, u32);
         unsigned char *st = duc + DARWIN_UCONTEXT_uc_stack;
         u64 = (uint64_t)(uintptr_t)uc->uc_stack.ss_sp; PUT(st, DARWIN_STACK_T_ss_sp, u64);
         u64 = uc->uc_stack.ss_size; PUT(st, DARWIN_STACK_T_ss_size, u64);
@@ -210,6 +237,7 @@ static void bridge(int sig, siginfo_t *si, void *ctx)
         u64 = (uint64_t)(uintptr_t)mc; PUT(duc, DARWIN_UCONTEXT_uc_mcontext, u64);
 
         ((void (*)(int, void *, void *))h)(d, dsi, duc);
+        atomic_store(&in_handler, 0);
 
         // what the handler left in its context is what the thread resumes with
         memcpy(m->regs, ss + DARWIN_ARM_THREAD_STATE64___x, 29 * 8);
@@ -231,6 +259,7 @@ static void bridge(int sig, siginfo_t *si, void *ctx)
             if (u32 & (1u << (s - 1))) sigaddset(&uc->uc_sigmask, hs);
             else sigdelset(&uc->uc_sigmask, hs);
         }
+        nosig = u32 & NOSIG;
     }
     delivering = outer;
     errno = e;
@@ -327,7 +356,77 @@ static void *darwin_signal(int d, void *handler)
     return (void *)was;
 }
 
+// The calling thread's mask. how: macOS's SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK, looked at only
+// when there is a set, as there. 0, or macOS's error number with nothing changed or written.
+static int mask_change(int how, const uint32_t *set, uint32_t *old)
+{
+    sigset_t cur;
+    pthread_sigmask(SIG_SETMASK, NULL, &cur);
+    uint32_t was = mask_darwin(&cur) | nosig;
+    if (set) {
+        uint32_t m = *set & ~CANT, now;
+        if (how == DARWIN_SIG_BLOCK) now = was | m;
+        else if (how == DARWIN_SIG_UNBLOCK) now = was & ~m;
+        else if (how == DARWIN_SIG_SETMASK) now = m;
+        else return DARWIN_EINVAL;
+        // the host's own signals (the one that stops a thread, the profiler's) stay as they are
+        for (int s = 1; s < NSIG_DARWIN; s++) {
+            int hs = sig_host(s);
+            if (hs <= 0 || hs == SIGKILL || hs == SIGSTOP) continue;
+            if (now & BIT(s)) sigaddset(&cur, hs);
+            else sigdelset(&cur, hs);
+        }
+        nosig = now & NOSIG;                // before a signal let through here runs its handler
+        pthread_sigmask(SIG_SETMASK, &cur, NULL);
+    }
+    if (old) *old = was;
+    return 0;
+}
+
+uint32_t darwin_sigmask(void)
+{
+    uint32_t m = 0;
+    mask_change(0, NULL, &m);
+    return m;
+}
+
+void darwin_set_sigmask(uint32_t mask) { mask_change(DARWIN_SIG_SETMASK, &mask, NULL); }
+
+// int pthread_sigmask(int, const sigset_t *, sigset_t *): the error is the return value
+static long darwin_pthread_sigmask(int how, const uint32_t *set, uint32_t *old)
+{
+    int e = errno;
+    int r = mask_change(how, set, old);
+    errno = e;
+    return r;
+}
+
+// int sigprocmask(int, const sigset_t *, sigset_t *): the calling thread's mask there too
+static long darwin_sigprocmask(int how, const uint32_t *set, uint32_t *old)
+{
+    int e = errno;
+    int r = mask_change(how, set, old);
+    errno = e;
+    if (r == 0) return 0;
+    errno = darwin_errno_host(r);
+    return -1;
+}
+
+// int pthread_kill(pthread_t, int)
+static long darwin_pthread_kill(pthread_t th, int d)
+{
+    if (d == 0) return DARWIN_ERR(pthread_kill(th, 0));
+    int hs = d > 0 && d < NSIG_DARWIN ? sig_host(d) : -1;
+    if (hs < 0) return DARWIN_EINVAL;
+    if (hs == 0) {
+        darwin_unanswered(d == DARWIN_SIGEMT ? "pthread_kill(SIGEMT)" : "pthread_kill(SIGINFO)",
+                          "Linux has no such signal: none is sent");
+        return 0;
+    }
+    return DARWIN_ERR(pthread_kill(th, hs));
+}
+
 const struct darwin_sym darwin_syms_signal[] = {
-    SHIM(sigaction), SHIM(signal),
+    SHIM(sigaction), SHIM(signal), SHIM(sigprocmask), SHIM(pthread_sigmask), SHIM(pthread_kill),
     { NULL, NULL }
 };

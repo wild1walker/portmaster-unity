@@ -1,5 +1,5 @@
 // sh_thread.c - threads: pthread's objects as macOS lays them out, the Mach thread calls a
-// collector stops the world with, dispatch semaphores, the __ulock waits.
+// collector stops the world with, Mach and dispatch semaphores, the __ulock waits.
 //
 // What a thread_suspend may interrupt decides how this file is written. macOS stops a thread
 // from outside, wherever it is; here a signal does, so a thread can be stopped inside a shim.
@@ -449,6 +449,183 @@ static long darwin_thread_get_state(uint32_t port, int flavor, unsigned char *st
     return r;
 }
 
+// ---- Mach: semaphores -------------------------------------------------------------------------
+
+// semaphore_t is a port name. Here it names a slot of a table that is never freed, with the
+// slot's generation in it: a name is told from one that is no semaphore (any more) without
+// touching memory that may be gone, and a destroyed semaphore's name stays dead when its slot
+// holds another. The count is the futex word the waiters sleep on. macOS wakes the waiters in
+// the order the policy names (FIFO, LIFO); here the kernel picks, whatever the policy.
+#define MSEM_SLOTS 65536
+#define MSEM_DEAD  0x80000000u              // in the word: destroyed, its waiters leave
+#define MSEM_MAX   0x7fffffffu
+
+struct msem {
+    _Atomic uint32_t word;                  // the count | MSEM_DEAD
+    _Atomic uint32_t name;                  // 0: no semaphore
+    _Atomic uint32_t users;                 // the calls that are inside it
+    uint32_t         gen;                   // reg_lock held, as for next
+    int32_t          next;                  // in the queue of the destroyed ones
+};
+static struct msem msems[MSEM_SLOTS];
+static int32_t     msem_made, msem_first = -1, msem_last = -1;      // reg_lock held
+
+// The slot of a name, held until the users count is given back; NULL: no semaphore.
+static struct msem *msem_pin(uint32_t name)
+{
+    if (!(name & 0x80000000u)) return NULL;
+    struct msem *s = &msems[name & 0xffff];
+    atomic_fetch_add(&s->users, 1);
+    if (atomic_load(&s->name) == name) return s;
+    atomic_fetch_sub(&s->users, 1);
+    return NULL;
+}
+
+// What macOS says of a name that is no semaphore: a port of another kind, or none at all.
+static long msem_no(uint32_t name)
+{
+    int port = name == task_self;
+    if (!port && name) {
+        int saved = errno;
+        pthread_mutex_lock(&reg_lock);
+        struct dthread *t = by_port(name);
+        port = t && !gone((int)name);
+        pthread_mutex_unlock(&reg_lock);
+        errno = saved;
+    }
+    return port ? DARWIN_KERN_INVALID_CAPABILITY : DARWIN_KERN_INVALID_NAME;
+}
+
+// kern_return_t semaphore_create(task_t, semaphore_t *, int policy, int value)
+static long darwin_semaphore_create(uint32_t task, uint32_t *out, int policy, int value)
+{
+    if (task != task_self) {
+        if (task) darwin_unanswered("semaphore_create", "for a task that is not this one");
+        return DARWIN_MACH_SEND_INVALID_DEST;
+    }
+    if ((policy & ~DARWIN_SYNC_POLICY_LIFO) || value < 0) return DARWIN_KERN_INVALID_ARGUMENT;
+    int saved = errno;
+    pthread_mutex_lock(&reg_lock);
+    // a slot that never held one while there are any, then the one destroyed longest ago: its
+    // generations last longest that way. One a late call is still inside waits its turn.
+    struct msem *s = NULL;
+    if (msem_made < MSEM_SLOTS) {
+        s = &msems[msem_made++];
+    } else {
+        for (int32_t prev = -1, r = msem_first; r >= 0; prev = r, r = msems[r].next) {
+            if (atomic_load(&msems[r].users)) continue;
+            if (prev < 0) msem_first = msems[r].next;
+            else msems[prev].next = msems[r].next;
+            if (msem_last == r) msem_last = prev;
+            s = &msems[r];
+            break;
+        }
+    }
+    uint32_t name = 0;
+    if (s) {
+        s->gen = s->gen % 0x7fff + 1;       // 1 to 0x7fff: no name is a small number, as a thread's port is
+        name = 0x80000000u | s->gen << 16 | (uint32_t)(s - msems);
+        atomic_store(&s->word, (uint32_t)value);
+        atomic_store(&s->name, name);
+    }
+    pthread_mutex_unlock(&reg_lock);
+    errno = saved;
+    if (!s) return DARWIN_KERN_RESOURCE_SHORTAGE;
+    *out = name;
+    return DARWIN_KERN_SUCCESS;
+}
+
+// kern_return_t semaphore_destroy(task_t, semaphore_t): its waiters return KERN_TERMINATED
+static long darwin_semaphore_destroy(uint32_t task, uint32_t name)
+{
+    if (task != task_self) {
+        if (task) darwin_unanswered("semaphore_destroy", "for a task that is not this one");
+        return DARWIN_MACH_SEND_INVALID_DEST;
+    }
+    if (!name) return DARWIN_KERN_INVALID_ARGUMENT;
+    int saved = errno;
+    long r = DARWIN_MACH_SEND_INVALID_RIGHT;        // no port of that name
+    pthread_mutex_lock(&reg_lock);
+    struct msem *s = (name & 0x80000000u) ? &msems[name & 0xffff] : NULL;
+    if (s && atomic_load(&s->name) == name) {
+        atomic_store(&s->name, 0);
+        atomic_fetch_or(&s->word, MSEM_DEAD);
+        futex(&s->word, FUTEX_WAKE_PRIVATE, INT_MAX, NULL);
+        s->next = -1;
+        if (msem_last < 0) msem_first = (int32_t)(s - msems);
+        else msems[msem_last].next = (int32_t)(s - msems);
+        msem_last = (int32_t)(s - msems);
+        r = DARWIN_KERN_SUCCESS;
+    } else if (name == task_self || (by_port(name) && !gone((int)name))) {
+        r = DARWIN_KERN_INVALID_ARGUMENT;           // a port that is no semaphore
+    }
+    pthread_mutex_unlock(&reg_lock);
+    errno = saved;
+    return r;
+}
+
+// kern_return_t semaphore_signal(semaphore_t)
+static long darwin_semaphore_signal(uint32_t name)
+{
+    struct msem *s = msem_pin(name);
+    if (!s) return msem_no(name);
+    long r = DARWIN_KERN_SUCCESS;
+    uint32_t w = atomic_load(&s->word);
+    for (;;) {
+        if (w & MSEM_DEAD) { r = DARWIN_KERN_INVALID_NAME; break; }
+        if (w == MSEM_MAX) {
+            darwin_unanswered("semaphore_signal", "a count past 2^31: not counted");
+            r = DARWIN_KERN_FAILURE;
+            break;
+        }
+        if (!atomic_compare_exchange_weak(&s->word, &w, w + 1)) continue;
+        // A waiter is inside before it reads the count, and the count is raised before this
+        // reads who is inside: one of the two sees the other.
+        if (atomic_load(&s->users) > 1) {
+            int saved = errno;
+            futex(&s->word, FUTEX_WAKE_PRIVATE, 1, NULL);
+            errno = saved;
+        }
+        break;
+    }
+    atomic_fetch_sub(&s->users, 1);
+    return r;
+}
+
+// kern_return_t semaphore_wait(semaphore_t). KERN_ABORTED when a handler of the image ran on
+// the thread meanwhile, whatever its SA_RESTART says, as there. The wait has an end the kernel
+// is given, which is what keeps Linux from starting it again by itself after a handler; a
+// thread_suspend's stop and the host's own handlers end nothing.
+static long darwin_semaphore_wait(uint32_t name)
+{
+    static const struct timespec hour = { 3600, 0 };
+    struct msem *s = msem_pin(name);
+    if (!s) return msem_no(name);
+    int saved = errno;
+    long r;
+    uint32_t w = atomic_load(&s->word);
+    for (;;) {
+        if (w & MSEM_DEAD) { r = DARWIN_KERN_TERMINATED; break; }
+        if (w > 0) {
+            if (atomic_compare_exchange_weak(&s->word, &w, w - 1)) { r = DARWIN_KERN_SUCCESS; break; }
+            continue;
+        }
+        unsigned handled = darwin_signal_handled();
+        if (futex(&s->word, FUTEX_WAIT_PRIVATE, 0, &hour) != 0) {
+            if (errno == EINTR) {
+                if (darwin_signal_handled() != handled) { r = DARWIN_KERN_ABORTED; break; }
+            } else if (errno != EAGAIN && errno != ETIMEDOUT) {
+                fprintf(stderr, "[darwin] futex wait: %s\n", strerror(errno));
+                abort();
+            }
+        }
+        w = atomic_load(&s->word);
+    }
+    atomic_fetch_sub(&s->users, 1);
+    errno = saved;
+    return r;
+}
+
 // ---- pthread ------------------------------------------------------------------------------
 
 // A mutex: macOS's signature word, then glibc's mutex in the opaque bytes. The default static
@@ -627,13 +804,15 @@ static long darwin_pthread_key_create(unsigned long *key, void (*gone_fn)(void *
     return DARWIN_ERR(r);
 }
 
-struct start { void *(*fn)(void *); void *arg; _Atomic uint32_t ready; };
+struct start { void *(*fn)(void *); void *arg; _Atomic uint32_t ready; uint32_t nosig; };
 
 static void *thread_start(void *v)
 {
     struct start *s = v;
     void *(*fn)(void *) = s->fn;
     void *arg = s->arg;
+    // the creating thread's signal mask is this one's: the kernel's doing, but for these bits
+    darwin_signal_set_nosig(s->nosig);
     darwin_thread_enter();
     tokens_post(&s->ready);                 // s was the creating thread's
     return fn(arg);
@@ -643,7 +822,7 @@ static void *thread_start(void *v)
 // first instruction.
 static long darwin_pthread_create(pthread_t *out, const pthread_attr_t *attr, void *(*fn)(void *), void *arg)
 {
-    struct start s = { fn, arg, 0 };
+    struct start s = { fn, arg, 0, darwin_signal_nosig() };
     int r = pthread_create(out, attr, thread_start, &s);
     if (r != 0) return DARWIN_ERR(r);
     int saved = errno;
@@ -692,6 +871,48 @@ static void *darwin_pthread_get_stackaddr_np(pthread_t th)
     pthread_attr_destroy(&a);
     errno = saved;
     return (char *)addr + size;
+}
+
+// int pthread_attr_setstacksize(pthread_attr_t *, size_t). macOS takes a multiple of its page,
+// and rounds a multiple of 4096 up to one. The thread gets more than it asked for: glibc puts
+// the thread's own block and every thread-local on the stack it is given, and a shim's frames
+// (a printf's, the host's below it) are on it too, where macOS's own would be smaller.
+#define STACK_MARGIN (64u << 10)
+#define STACK_FLOOR  (512u << 10)
+static long darwin_pthread_attr_setstacksize(pthread_attr_t *attr, size_t size)
+{
+    size_t page = darwin_page_size();
+    if (size % 4096 == 0 && size % page != 0) size += page - size % page;      // past the top: 0
+    if (size < DARWIN_PTHREAD_STACK_MIN || size % page != 0) return DARWIN_EINVAL;
+    size_t host = size > SIZE_MAX - STACK_MARGIN ? size : size + STACK_MARGIN;
+    if (host < STACK_FLOOR) host = STACK_FLOOR;
+    return DARWIN_ERR(pthread_attr_setstacksize(attr, host));
+}
+
+// int pthread_threadid_np(pthread_t, uint64_t *): a number for the thread in the whole system;
+// no thread: the calling one. Here the thread's Linux number, which its Mach port is too.
+static long darwin_pthread_threadid_np(pthread_t th, uint64_t *id)
+{
+    if (!id) return DARWIN_EINVAL;
+    if (!th || pthread_equal(th, pthread_self())) {
+        struct dthread *t = self;
+        *id = t ? (uint64_t)atomic_load(&t->tid) : (uint64_t)syscall(SYS_gettid);
+        return 0;
+    }
+    int saved = errno, tid = 0;
+    pthread_mutex_lock(&reg_lock);
+    for (struct dthread *e = threads; e; e = e->next) {
+        int et = atomic_load(&e->tid);
+        if (et && pthread_equal(e->thread, th) && !gone(et)) { tid = et; break; }
+    }
+    pthread_mutex_unlock(&reg_lock);
+    errno = saved;
+    if (!tid) {
+        darwin_unanswered("pthread_threadid_np", "a thread that has run no code of the images");
+        return DARWIN_ESRCH;
+    }
+    *id = (uint64_t)tid;
+    return 0;
 }
 
 // ---- dispatch: semaphores, as libdispatch counts them -----------------------------------------
@@ -901,13 +1122,14 @@ static long darwin___ulock_wake(uint32_t op, void *addr, uint64_t wake_value)
 const struct darwin_sym darwin_syms_thread[] = {
     SHIM(pthread_create), SHIM(pthread_join), SHIM(pthread_detach), SHIM(pthread_key_create),
     SHIM(pthread_setcancelstate), SHIM(pthread_setname_np), SHIM(pthread_get_stackaddr_np),
-    SHIM(pthread_mach_thread_np),
+    SHIM(pthread_mach_thread_np), SHIM(pthread_attr_setstacksize), SHIM(pthread_threadid_np),
     SHIM(pthread_mutex_init), SHIM(pthread_mutex_destroy), SHIM(pthread_mutex_lock), SHIM(pthread_mutex_trylock),
     SHIM(pthread_mutex_unlock), SHIM(pthread_mutexattr_settype),
     SHIM(pthread_cond_init), SHIM(pthread_cond_destroy), SHIM(pthread_cond_wait), SHIM(pthread_cond_timedwait),
     SHIM(pthread_cond_signal), SHIM(pthread_cond_broadcast),
     SHIM(mach_thread_self), SHIM(mach_port_deallocate), SHIM(thread_suspend), SHIM(thread_resume),
     SHIM(thread_get_state),
+    SHIM(semaphore_create), SHIM(semaphore_destroy), SHIM(semaphore_signal), SHIM(semaphore_wait),
     SHIM(dispatch_semaphore_create), SHIM(dispatch_semaphore_signal), SHIM(dispatch_semaphore_wait),
     SHIM(dispatch_time), SHIM(dispatch_release),
     SHIM(__ulock_wait), SHIM(__ulock_wake),

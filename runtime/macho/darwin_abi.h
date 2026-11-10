@@ -701,6 +701,13 @@
 #define DARWIN_UTSNAME_version             768
 #define DARWIN_UTSNAME_machine             1024
 
+// stdlib, fenv
+#define DARWIN_RAND_MAX                     2147483647
+#define DARWIN_NCARGS                       1048576
+#define DARWIN_SIZEOF_FENV_T                16
+#define DARWIN_FENV_T___fpsr               0
+#define DARWIN_FENV_T___fpcr               8
+
 // time, locale, ctype
 #define DARWIN_CLOCK_REALTIME               0
 #define DARWIN_CLOCK_MONOTONIC              6
@@ -922,6 +929,16 @@
 #define DARWIN_KERN_SUCCESS                 0
 #define DARWIN_KERN_INVALID_ARGUMENT        4
 #define DARWIN_KERN_FAILURE                 5
+#define DARWIN_KERN_ABORTED                 14
+#define DARWIN_KERN_INVALID_NAME            15
+#define DARWIN_KERN_TERMINATED              37
+#define DARWIN_KERN_RESOURCE_SHORTAGE       6
+#define DARWIN_KERN_INVALID_CAPABILITY      20
+#define DARWIN_MACH_SEND_INVALID_DEST       0x10000003
+#define DARWIN_MACH_SEND_INVALID_RIGHT      0x1000000a
+#define DARWIN_SYNC_POLICY_FIFO             0
+#define DARWIN_SYNC_POLICY_LIFO             2
+#define DARWIN_SIZEOF_SEMAPHORE_T           4
 #define DARWIN_ARM_THREAD_STATE64           6
 #define DARWIN_ARM_THREAD_STATE64_COUNT     68
 #define DARWIN_SIZEOF_ARM_THREAD_STATE64    272
@@ -1007,5 +1024,9 @@
 #define DARWIN_SS_DISABLE                   4
 #define DARWIN_MINSIGSTKSZ                  32768
 #define DARWIN_SIGSTKSZ                     131072
+
+// ucontext_t for getcontext, makecontext, swapcontext (_XOPEN_SOURCE)
+#define DARWIN_SIZEOF_UCONTEXT_X            880
+#define DARWIN_UCONTEXT_X___mcontext_data  64
 
 #endif

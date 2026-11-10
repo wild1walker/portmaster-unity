@@ -52,7 +52,7 @@ the loader's probe and its instruction scan, `test/shims.sh cover` for the names
 | plugin | links | for the route |
 |---|---|---|
 | `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve (not yet loaded under the route); 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows |
-| `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | 22 libSystem names have no shim yet: `getcontext`/`makecontext`/`swapcontext`, Mach semaphores (`semaphore_create`/`_wait`/`_signal`/`_destroy`), `fegetenv`/`fesetenv`, `pthread_threadid_np`, `pthread_attr_setstacksize`, `shmdt`, `__assert_rtn`, `__udivti3`, and plain C ones (`atof`, `ldexp`, `log2`, `rand`, `srand`, `strncat`, `strspn`, `strtok`); 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables |
+| `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; not yet loaded under the route; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables |
 | `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions |
 | `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
 | `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API); the runtime's own answer stands in: Steam is not running |
@@ -125,7 +125,7 @@ it.
 
 ## The shim layer (`runtime/macho/sh_*.c`, `dyld.c`, `tlv.c`)
 
-432 libSystem, CoreFoundation and dyld names are answered. The rules every shim keeps:
+465 libSystem, CoreFoundation and dyld names are answered. The rules every shim keeps:
 
 - the image's side is Darwin's: errno numbers, flag bits and struct layouts are converted at the
   shim, from one generated header. `abi/gen.c` is compiled on a Mac against the SDK and prints
@@ -164,23 +164,95 @@ Not answered yet, each refused or reported by name: `LC_DYLD_CHAINED_FIXUPS` and
 `LC_DYLD_EXPORTS_TRIE` images, `S_INIT_FUNC_OFFSETS`, resolver exports, the `SIOCGIFCONF` and
 `SIOCGIFFLAGS` ioctls.
 
+### What a plugin's own libraries asked for (2026-11-10)
+
+A plugin brings its own libraries with it (a task scheduler, a logger, a volume library), and
+they reach deeper into libSystem than IL2CPP does. The 22 names the first such plugin lacked,
+each measured on macOS first (the test prints what macOS answers; the shim has to print the
+same):
+
+- **`getcontext`, `setcontext`, `makecontext`, `swapcontext`** (`sh_context.c`, the register
+  part in `sh_asm.S`): macOS's 880-byte `ucontext_t` with its mcontext inside, filled the way
+  its libc fills one, oddities included, since code that reads a context reads these:
+  `uc_stack` is the sp at the call and `RLIMIT_STACK`'s soft limit, not the thread's stack;
+  `uc_link` after `getcontext` is the number of the signal whose handler is running (0 outside
+  one; macOS keeps one cell for the whole process, cleared when a handler returns);
+  `swapcontext` sets the top bit of `uc_onstack` in the context it saves and keeps that
+  context's `uc_link`; d8 to d15 go to the upper halves of their v slots; `makecontext`'s
+  arguments are ints, 4 bytes each, at the new stack's top; a context whose function has
+  returned has `uc_mcsize` 0 and `setcontext` refuses it with `EINVAL`; a function that returns
+  with no `uc_link` ends the process with status 0. The offsets come from the generated header
+  and are pinned against the assembly's numbers by `_Static_assert`.
+  Open: the slot arm64e keeps its flags in is not written; `backtrace` on a `makecontext`
+  stack gives 0 frames.
+- **Mach semaphores** (`semaphore_create`, `_wait`, `_signal`, `_destroy`, in `sh_thread.c`): a
+  futex word per semaphore and port names of macOS's shape, never handed out twice in a row (a
+  destroyed slot waits in a queue behind every fresh one, and carries a generation). The error
+  numbers are macOS's and differ by what the wrong name is: a destroyed or never made name is
+  `KERN_INVALID_NAME` to `semaphore_wait` and `MACH_SEND_INVALID_RIGHT` to
+  `semaphore_destroy`, the task's own port or a thread's is `KERN_INVALID_CAPABILITY`, a wait
+  on a semaphore destroyed under it ends with `KERN_TERMINATED`. A wait a signal handler
+  interrupts returns `KERN_ABORTED` on macOS whatever `SA_RESTART` says; Linux restarts a futex
+  wait that has no timeout by itself, so the wait is given a timeout of an hour and looped,
+  and tells a handler of the image's from the runtime's own stop signal by a per-thread count
+  of handlers run. Open: with `SYNC_POLICY_LIFO` the newest waiter is not woken first.
+- **signal masks** (`sigprocmask`, `pthread_sigmask`, `pthread_kill`): macOS has signals Linux
+  has not (`SIGEMT`, `SIGINFO`) and a 32-bit mask whose 32nd bit is no signal at all, yet a
+  mask that is set and read back keeps all three bits (and never `SIGKILL` or `SIGSTOP`).
+  Those bits are kept beside the host's mask, per thread, handed to a new thread at its
+  start and saved and put back around a handler like the rest of the mask. The host's
+  real-time signals (the stop signal among them) are never touched by an image's mask.
+  `pthread_sigmask` returns the error number, `sigprocmask` sets `errno`; `how` is only
+  checked when a set is given. `pthread_kill` of `SIGEMT` or `SIGINFO` is said by name and
+  not sent.
+- **`pthread_attr_setstacksize`**: macOS wants a multiple of 4096 of at least 16 K (`EINVAL`
+  otherwise) and rounds up to its 16 K page. The host's thread gets that size plus a 64 K
+  margin, and never less than 512 K: the shims and glibc run on the same stack, and a stack
+  that is enough for macOS's libc is not sure to be enough for them.
+  `pthread_attr_getstacksize` has no shim yet (it would have to give back the size asked for).
+- **`pthread_threadid_np`**: the kernel's thread id, for the caller or for another thread the
+  shims started; `EINVAL` without a place to put it.
+- **libm keeps `errno`**: macOS's math functions never store `EDOM` or `ERANGE`; glibc's do,
+  into the cell the images read. Every libm name an image can import goes through a wrapper
+  that puts `errno` back (33 of them, `ldexp` and `log2` new).
+- **`fegetenv`, `fesetenv`, `_FE_DFL_ENV`**: macOS's `fenv_t` is the status register, then the
+  control register, 64 bits each; glibc's is the other order in 32-bit halves.
+- **`rand`, `srand`, `rand_r`**: macOS's own row of numbers (x = 16807 x mod 2^31 - 1, a seed
+  of 0 standing for 123459876), not glibc's: code that seeds the generator counts on the row.
+- **`__assert_rtn`** (macOS's three message forms, then `abort`), **`__udivti3`**, and the
+  plain C ones glibc answers the same way (`atof`, `strncat`, `strspn`, `strtok`, `shmdt`).
+
+One more thing only a build with other feature macros shows: with `_XOPEN_SOURCE` and
+`_DARWIN_C_SOURCE` both defined, the SDK's headers make the compiler import `fopen`, `fdopen`,
+`select`, `realpath` and `syslog` under a second name (`_fopen$DARWIN_EXTSN`, ...). On arm64
+it is the same function; the tables carry both names. The SDK has five more such names
+(`getgroups`, `popen`, `pselect`, `reallocarray`, `reallocarrayf`) with no shim under either
+name yet.
+
 ## How it is tested
 
 `sh runtime/macho/test/shims-test.sh`, on an Apple-silicon Mac with Xcode's tools and Docker:
 
-1. `test/build-mac.sh` builds `darwin_c.c` and `darwin_cxx.cpp` as macOS arm64 dylibs (the
-   flags a game's image would have, plus `-mcpu=generic`) and as native programs, and runs the
-   native programs: their output is the expectation;
+1. `test/build-mac.sh` builds `darwin_c.c` with `darwin_ctx.c`, and `darwin_cxx.cpp`, as macOS
+   arm64 dylibs (the flags a game's image would have, plus `-mcpu=generic`) and as native
+   programs, and runs the native programs: their output is the expectation;
 2. the same dylibs run through the loader (`test/machorun.c`) in an arm64 Linux container, with
    every rewrite forced (`UA_A64FIX=all`);
 3. the two outputs must be the same, byte for byte.
 
-The C test (185 lines of output) covers formatting, files, directories, time, sysctl, threads
+The C test (324 lines of output) covers formatting, files, directories, time, sysctl, threads
 (mutexes, conditions, keys, 200 stop-the-world rounds over running and sleeping threads, a
 sleep and a socket read with a timeout that are stopped half way and still end on time),
-locale and sockets. The C++ test (42 lines) covers exceptions through 12 frames, `dynamic_cast`,
-streams, locales, containers, `std::thread`, `thread_local`, futures. Both match; the C++ test
-matched in 100 of 100 repeated runs.
+locale, sockets, signal masks, Mach semaphores (the error numbers, a wait a handler
+interrupts, a wait a destroy ends), contexts (a switch there and back, eleven arguments, a
+chain of links, the fields macOS fills), the floating point environment, `rand`'s row and
+libm's `errno`. The context tests are a file of their own (`darwin_ctx.c`) because
+`<ucontext.h>` wants `_XOPEN_SOURCE`, and that macro changes the names the rest of the test
+would import (see the `$DARWIN_EXTSN` names above): one file is built as a game's code is,
+the other with the macro, and both sets of names are exercised. The C++ test (42 lines) covers
+exceptions through 12 frames, `dynamic_cast`, streams, locales, containers, `std::thread`,
+`thread_local`, futures. Both match; the C test matched in 20 of 20 repeated runs, the C++
+test in 100 of 100.
 
 ## il2cpp starts (2026-11-09)
 
