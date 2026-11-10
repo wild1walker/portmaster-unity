@@ -24,6 +24,7 @@
 #define LC_SEGMENT_64 0x19u
 #define LC_SYMTAB 0x2u
 #define LC_LOAD_DYLIB 0xcu
+#define LC_ID_DYLIB 0xdu
 #define LC_LOAD_WEAK_DYLIB 0x80000018u
 #define LC_REEXPORT_DYLIB 0x8000001fu
 #define LC_LOAD_UPWARD_DYLIB 0x80000023u
@@ -261,7 +262,6 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
             for (uint32_t s = 0; s < nsects; s++) {
                 const uint8_t *sc = c + 72 + s * 80;
                 uint32_t fl = le32(sc + 64), ty = fl & 0xff;
-                if (ty >= S_THREAD_LOCAL_REGULAR && ty <= S_THREAD_LOCAL_INIT_FUNCTION_POINTERS) { fail(err, errlen, "%s: thread-local variables are not read", path); goto bad; }
                 if (ty == S_INIT_FUNC_OFFSETS) { fail(err, errlen, "%s: initializer offsets are not read", path); goto bad; }
                 if (m->nsect == 64) { fail(err, errlen, "%s: more than 64 sections", path); goto bad; }
                 struct macho_section *x = &m->sect[m->nsect++];
@@ -276,6 +276,13 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
         case LC_SYMTAB: if (size >= 24) symtab = c; break;
         case LC_DATA_IN_CODE: if (size >= 16) dice = c; break;
         case LC_DYLD_INFO: case LC_DYLD_INFO_ONLY: if (size >= 48) dyld_info = c; break;
+        case LC_ID_DYLIB: {
+            uint32_t o = le32(c + 8);
+            if (o >= size || !memchr(c + o, 0, size - o)) { fail(err, errlen, "%s: dylib id command", path); goto bad; }
+            const char *nm = (const char *)c + o, *sl = strrchr(nm, '/');
+            snprintf(m->install_name, sizeof m->install_name, "%s", sl ? sl + 1 : nm);
+            break;
+        }
         case LC_LOAD_DYLIB: case LC_LOAD_WEAK_DYLIB: case LC_REEXPORT_DYLIB: case LC_LOAD_UPWARD_DYLIB: {
             uint32_t o = le32(c + 8);
             if (o >= size || !memchr(c + o, 0, size - o) || nlibs == 64) { fail(err, errlen, "%s: dylib command", path); goto bad; }
@@ -437,7 +444,7 @@ void *macho_export(const struct macho_image *m, const char *name)
             uint64_t flags = uleb(&p, end, &bad);
             if (bad || (flags & 0x08)) return NULL;          // a re-export: another image's
             uint64_t a = uleb(&p, end, &bad);
-            if (bad || a >= m->vmsize) return NULL;
+            if (bad || (flags & 0x03) == 0x02 || a >= m->vmsize) return NULL;    // an absolute value: no address
             return m->header + a;
         }
         p += term;
@@ -473,7 +480,7 @@ static void walk_exports(const struct macho_image *m, const uint8_t *p, char *na
         const uint8_t *q = p;
         uint64_t flags = uleb(&q, end, &bad);
         uint64_t a = uleb(&q, end, &bad);
-        if (!bad && !(flags & 0x08) && a < m->vmsize) cb(name, m->header + a, ctx);
+        if (!bad && !(flags & 0x08) && (flags & 0x03) != 0x02 && a < m->vmsize) cb(name, m->header + a, ctx);
     }
     p += term;
     if (p >= end) return;

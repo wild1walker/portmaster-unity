@@ -17,3 +17,10 @@ $CC $W -o "$OUT/load_probe" test/load_probe.c macho.c
 $CC $W -o "$OUT/a64fix_image" test/a64fix_image.c a64fix.c macho.c
 "$OUT/load_probe" "$1"
 "$OUT/a64fix_image" fix "$1"
+# The libc++ built as Mach-O (cxx/build-cxx-macho.sh, on a Mac) holds nothing an ARMv8.0 core lacks.
+for d in cxx/out/macos-arm64/libc++abi.1.dylib cxx/out/macos-arm64/libc++.1.dylib; do
+  [ -f "$d" ] || continue
+  n=$("$OUT/a64fix_image" list "$d" 2>/dev/null | wc -l)
+  [ "$n" -eq 0 ] || { echo "$d: $n instructions beyond ARMv8.0" >&2; exit 1; }
+  echo "$d: ARMv8.0 code only"
+done

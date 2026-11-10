@@ -24,6 +24,7 @@ struct macho_segment {
 
 struct macho_image {
     char      path[1024];
+    char      install_name[256]; // LC_ID_DYLIB's last component ("libc++.1.dylib"; "" for a bundle)
     uint8_t  *base;              // where the image's lowest vmaddr is mapped
     uint64_t  vmaddr;            // that lowest vmaddr (0 for a dylib)
     uint64_t  vmsize;
