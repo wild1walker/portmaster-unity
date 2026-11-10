@@ -71,4 +71,65 @@ extern int dl_no_such_variable;
 int dep2_value(void);
 int *bad2_ptr = &dl_no_such_variable;
 int bad2_value(void) { return *bad2_ptr + dep2_value(); }
+
+#elif defined(DL_FIXDEP)        // dl_fixdep.dylib: what dl_fix points into
+int fix_table[6000];
+int fix_twice(int v) { return 2 * v; }
+__attribute__((constructor)) static void init(void) { for (int i = 0; i < 6000; i++) fix_table[i] = 3 * i + 1; }
+
+#elif defined(DL_FIX)           // dl_fix.dylib: the pointers a linker leaves for the loader to set
+extern int fix_table[6000];
+int fix_twice(int v);
+extern int fix_absent __attribute__((weak_import));     // nothing defines it: its address is 0
+static int own[4096];
+static int own_twice(int v) { return 2 * v; }
+#define A1(i) &own[i],
+#define B1(i) &fix_table[5 * (i)],
+#define X4(X, i) X(i) X((i) + 1) X((i) + 2) X((i) + 3)
+#define X16(X, i) X4(X, i) X4(X, (i) + 4) X4(X, (i) + 8) X4(X, (i) + 12)
+#define X64(X, i) X16(X, i) X16(X, (i) + 16) X16(X, (i) + 32) X16(X, (i) + 48)
+#define X256(X, i) X64(X, i) X64(X, (i) + 64) X64(X, (i) + 128) X64(X, (i) + 192)
+#define X1024(X, i) X256(X, i) X256(X, (i) + 256) X256(X, (i) + 512) X256(X, (i) + 768)
+// Pages full of pointers to the image's own data, pages with none, then pointers into another
+// image at every distance from its symbol, small and large. (None is static: a pointer the
+// compiler can see all uses of is one it need not leave to the loader.)
+struct {
+    int *mine[4096];
+    char none[50000];
+    int *theirs[1024];
+    char odd[3];
+    int *last;
+} big = { { X1024(A1, 0) X1024(A1, 1024) X1024(A1, 2048) X1024(A1, 3072) }, { 1 }, { X1024(B1, 0) }, { 2 }, &own[4095] };
+int *const near = &fix_table[3];
+int *far = &fix_table[5999];
+int *before = fix_table - 2;
+int *absent = &fix_absent;
+int (*const theirs_fn)(int) = fix_twice;
+int (*mine_fn)(int) = own_twice;
+const char *const texts[] = { "one", "two", "three" };
+__thread int *tls_ptr = &own[9];
+__attribute__((constructor)) static void init(void) { for (int i = 0; i < 4096; i++) own[i] = i ^ 0x155; }
+
+int fix_mine(void)
+{
+    int s = 0;
+    for (int i = 0; i < 4096; i++) s += big.mine[i] == &own[i] ? *big.mine[i] : -100000;
+    return s + (big.last == &own[4095]) + big.none[0] + big.none[49999] + big.odd[0];
+}
+
+int fix_theirs(void)
+{
+    int s = 0;
+    for (int i = 0; i < 1024; i++) s += big.theirs[i] == &fix_table[5 * i] ? *big.theirs[i] : -100000;
+    return s;
+}
+
+// One bit for each of the single pointers that is right.
+int fix_rest(void)
+{
+    return (near == &fix_table[3] && *near == 10) | (far == &fix_table[5999] && *far == 17998) << 1 |
+           (before + 2 == fix_table) << 2 | (absent == NULL) << 3 | (theirs_fn(4) == 8) << 4 |
+           (mine_fn(5) == 10) << 5 | (!strcmp(texts[0], "one") && !strcmp(texts[2], "three")) << 6 |
+           (tls_ptr == &own[9] && *tls_ptr == (9 ^ 0x155)) << 7;
+}
 #endif

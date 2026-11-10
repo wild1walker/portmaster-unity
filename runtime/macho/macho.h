@@ -1,7 +1,8 @@
 // macho.h - a loader for 64-bit ARM Mach-O images (a macOS build's dylibs and bundles) on Linux:
 // the arm64 slice's segments mapped from the file, rebased and bound (the opcode streams of
-// LC_DYLD_INFO: lazy pointers are bound at load, so dyld_stub_binder is never entered), exports
-// and symbols looked up, initializers run. docs/macho-route.md.
+// LC_DYLD_INFO: lazy pointers are bound at load, so dyld_stub_binder is never entered; or the
+// chained fixups of a build for macOS 12 and later), exports and symbols looked up,
+// initializers run. docs/macho-route.md.
 #ifndef UA_MACHO_H
 #define UA_MACHO_H
 
@@ -46,6 +47,8 @@ struct macho_image {
     uint32_t  exports_size;
     const uint8_t *weak;         // the weak-bind stream (macho_bind_weak)
     uint32_t  weak_size;
+    struct macho_weak_use *weak_uses;   // the same of an image with chained fixups: each use of
+    uint32_t  nweak_uses;               // a coalesced name
     const uint8_t *symtab;       // nlist_64 entries
     uint32_t  nsyms;
     const char *strtab;
@@ -66,7 +69,9 @@ typedef void *(*macho_resolve_fn)(const char *name, const char *lib, void *ctx);
 // memory to leave right before the image, within a branch's reach of its code. NULL with a
 // message in err when the file is not one this loader reads completely. The image's own binds
 // are made (each import from the dylib it names); the names several images may define and all
-// must agree on are left for macho_bind_weak.
+// must agree on are left for macho_bind_weak (an image with chained fixups has such a name
+// bound to its own definition or to what resolve(name, "", ctx) gives until then, and one with
+// neither stays 0: macho_bind_weak is what reports it).
 struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn resolve, void *ctx,
                                char *err, size_t errlen);
 // Gives an image's memory back. Only for one that never ran: no thread may be in its code or
@@ -83,7 +88,8 @@ int   macho_needed(const char *path, void (*cb)(const char *name, int weak, void
 // The coalesced names (C++ inline functions and typeinfo, operator new and delete), once every
 // image that is to run together is loaded and before macho_protect: each use the image lists is
 // bound to resolve(name, "", ctx), the one definition all the images share; NULL leaves the
-// image with its own. 0, or -1 with a message.
+// image with its own. 0, or -1 with a message (a stream this loader does not read; a name
+// that has no definition anywhere and is not optional).
 #define MACHO_WEAK_DEFINES   0x8000u       // header flags: the image defines such names,
 #define MACHO_BINDS_TO_WEAK  0x10000u      // uses them
 int   macho_bind_weak(struct macho_image *m, macho_resolve_fn resolve, void *ctx, char *err, size_t errlen);

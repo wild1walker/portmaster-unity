@@ -1,7 +1,9 @@
 // macho.c - see macho.h. What is read: thin or universal files' arm64 slice, MH_DYLIB and
-// MH_BUNDLE, LC_SEGMENT_64, LC_SYMTAB, LC_DYLD_INFO(_ONLY). What is refused with a message, so a
-// build made another way never half-loads: chained fixups, initializer offsets, text
-// relocations, encrypted segments, exports that name a resolver function. Thread-local
+// MH_BUNDLE, LC_SEGMENT_64, LC_SYMTAB, LC_DYLD_INFO(_ONLY) or LC_DYLD_CHAINED_FIXUPS with
+// LC_DYLD_EXPORTS_TRIE (the plain 64-bit pointer formats), initializers as pointers and as
+// offsets. What is refused with a message, so a build made another way never half-loads:
+// arm64e's signed pointers, text relocations, encrypted segments, exports that name a
+// resolver function. Thread-local
 // variables' sections are kept as the file has them: tlv.c gives each thread its copy.
 #define _GNU_SOURCE
 #include "macho.h"
@@ -52,6 +54,7 @@ static int fail(char *err, size_t n, const char *fmt, ...)
 
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static uint64_t be64(const uint8_t *p) { return (uint64_t)be32(p) << 32 | be32(p + 4); }
+static uint16_t le16(const uint8_t *p) { uint16_t v; memcpy(&v, p, 2); return v; }
 static uint32_t le32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint64_t le64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
 
@@ -192,6 +195,146 @@ static int bind(struct macho_image *m, const uint8_t *p, size_t n, int kind, con
     return bad ? fail(err, errlen, "a bind stream is cut") : 0;
 }
 
+// ---- chained fixups: what the linker writes for macOS 12 and later ------------------------
+// Every pointer the image wants set is a link of a chain that runs through the data itself:
+// the table gives each page's first link, a link says how far the next one is (in steps of 4
+// bytes) and what it is, a rebase with its target or a bind with an index into the import
+// table. One import is one name, however many links use it.
+
+struct macho_weak_use {
+    uint8_t    *at;
+    const char *name;            // in __LINKEDIT
+    uint64_t    addend;
+    uint8_t     unbound;         // no definition was found at load (the pointer is 0)
+    uint8_t     optional;        // a weak import: 0 is an answer
+};
+
+struct chain_import {
+    void       *addr;
+    const char *name;
+    uint64_t    addend;
+    uint8_t     coalesced, optional;
+};
+
+#define CHAIN_PTR_64 2u              // a rebase's target is the address the file was linked for
+#define CHAIN_PTR_64_OFFSET 6u       // ... the offset from the header
+
+static int chained(struct macho_image *m, const uint8_t *b, size_t n, const char **libs, int nlibs,
+                   macho_resolve_fn resolve, void *ctx, char *err, size_t errlen)
+{
+    if (n < 28) return fail(err, errlen, "%s: chained fixups: the header is cut", m->path);
+    uint32_t starts = le32(b + 4), imports = le32(b + 8), symbols = le32(b + 12), count = le32(b + 16), format = le32(b + 20);
+    if (le32(b) != 0) return fail(err, errlen, "%s: chained fixups of version %u", m->path, le32(b));
+    if (le32(b + 24) != 0) return fail(err, errlen, "%s: chained fixups: compressed import names", m->path);
+    size_t each = format == 1 ? 4 : format == 2 ? 8 : format == 3 ? 16 : 0;
+    if (!each) return fail(err, errlen, "%s: chained fixups: import format %u", m->path, format);
+    if (imports > n || (uint64_t)count * each > n - imports || symbols > n || starts > n || n - starts < 4)
+        return fail(err, errlen, "%s: chained fixups: a table outside the data", m->path);
+    if (count > 0xffffff) return fail(err, errlen, "%s: chained fixups: %u imports", m->path, count);
+    struct chain_import *imp = calloc(count ? count : 1, sizeof *imp);
+    if (!imp) return fail(err, errlen, "out of memory");
+    int r = -1;
+    uint32_t uses = 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        const uint8_t *e = b + imports + (size_t)i * each;
+        int64_t ordinal;
+        uint64_t name_off;
+        struct chain_import *x = &imp[i];
+        if (format == 3) {
+            uint64_t v = le64(e);
+            ordinal = v & 0xffff; x->optional = v >> 16 & 1; name_off = v >> 32; x->addend = le64(e + 8);
+            if (ordinal > 0xfff0) ordinal -= 0x10000;           // the top values are the special ones, -1 to -3
+        } else {
+            uint32_t v = le32(e);
+            ordinal = v & 0xff; x->optional = v >> 8 & 1; name_off = v >> 9;
+            if (ordinal > 0xf0) ordinal -= 0x100;
+            if (format == 2) x->addend = (uint64_t)(int64_t)(int32_t)le32(e + 4);
+        }
+        if (name_off >= n - symbols || !memchr(b + symbols + name_off, 0, n - symbols - name_off)) {
+            fail(err, errlen, "%s: chained fixups: the name of import %u", m->path, i); goto out;
+        }
+        x->name = (const char *)b + symbols + name_off;
+        const char *lib = "";
+        if (ordinal >= 1 && ordinal <= nlibs) lib = libs[ordinal - 1];
+        else if (ordinal == -3) x->coalesced = 1;
+        else if (ordinal > 0 || ordinal < -3) { fail(err, errlen, "%s: %s is asked of library %lld of %d", m->path, x->name, (long long)ordinal, nlibs); goto out; }
+        if (ordinal == 0 || ordinal == -3) x->addr = macho_export(m, x->name);      // the image's own
+        if (!x->addr) x->addr = resolve(x->name, lib, ctx);
+        if (x->addr || x->optional) m->nbound++;
+        else if (!x->coalesced) {            // a coalesced name's definition may be in an image that loads after this one
+            m->nmissing++;
+            if (m->nmissing <= 40) fprintf(stderr, "[macho] %s: no %s (%s)\n", m->path, x->name, lib);
+        }
+    }
+
+    const uint8_t *st = b + starts;
+    size_t room = n - starts;
+    uint32_t nseg = le32(st);
+    if ((uint64_t)nseg * 4 > room - 4) { fail(err, errlen, "%s: chained fixups: %u segments", m->path, nseg); goto out; }
+    // two passes over the chains: how many uses of coalesced names there are, then the fixups
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1 && uses) {
+            m->weak_uses = calloc(uses, sizeof *m->weak_uses);
+            if (!m->weak_uses) { fail(err, errlen, "out of memory"); goto out; }
+        }
+        for (uint32_t k = 0; k < nseg; k++) {
+            uint32_t o = le32(st + 4 + 4 * (size_t)k);
+            if (!o) continue;                                   // a segment with nothing to fix
+            if (o > room || room - o < 22) { fail(err, errlen, "%s: chained fixups: segment %u's table", m->path, k); goto out; }
+            const uint8_t *s = st + o;
+            uint32_t size = le32(s);
+            unsigned page_size = le16(s + 4), pf = le16(s + 6), pages = le16(s + 20);
+            uint64_t seg_off = le64(s + 8);
+            if (size < 22 || size > room - o || 22 + (uint64_t)pages * 2 > size || !page_size) { fail(err, errlen, "%s: chained fixups: segment %u's table", m->path, k); goto out; }
+            if (pf != CHAIN_PTR_64 && pf != CHAIN_PTR_64_OFFSET) {
+                fail(err, errlen, "%s: chained fixups in pointer format %u (the plain 64-bit ones, 2 and 6, are read; arm64e's signed pointers are not)", m->path, pf); goto out;
+            }
+            struct macho_segment *sg = NULL;
+            for (int j = 0; j < m->nseg; j++)
+                if (m->seg[j].vmsize && m->seg[j].addr != m->linkedit && m->seg[j].addr == m->header + seg_off) sg = &m->seg[j];
+            if (!sg) { fail(err, errlen, "%s: chained fixups: no segment at offset 0x%llx", m->path, (unsigned long long)seg_off); goto out; }
+            for (unsigned p = 0; p < pages; p++) {
+                unsigned first = le16(s + 22 + 2 * (size_t)p);
+                if (first == 0xffff) continue;                  // a page with nothing to fix
+                if (first & 0x8000) { fail(err, errlen, "%s: chained fixups: several chains in a page of %s (a 32-bit form)", m->path, sg->name); goto out; }
+                uint64_t off = (uint64_t)p * page_size + first;
+                for (;;) {
+                    if (off > sg->vmsize || sg->vmsize - off < 8) { fail(err, errlen, "%s: chained fixups: a chain leaves %s at 0x%llx", m->path, sg->name, (unsigned long long)off); goto out; }
+                    uint8_t *at = sg->addr + off;
+                    uint64_t raw = le64(at), v;
+                    unsigned next = raw >> 51 & 0xfff;
+                    if (raw >> 63) {
+                        uint32_t ord = raw & 0xffffff;
+                        if (ord >= count) { fail(err, errlen, "%s: chained fixups: import %u of %u in %s", m->path, ord, count, sg->name); goto out; }
+                        const struct chain_import *x = &imp[ord];
+                        uint64_t addend = x->addend + (raw >> 24 & 0xff);
+                        v = x->addr ? (uint64_t)(uintptr_t)x->addr + addend : 0;
+                        if (x->coalesced) {
+                            if (pass == 1) {
+                                struct macho_weak_use *u = &m->weak_uses[m->nweak_uses++];
+                                u->at = at; u->name = x->name; u->addend = addend;
+                                u->unbound = !x->addr; u->optional = x->optional;
+                            } else uses++;
+                        }
+                    } else {
+                        uint64_t target = raw & 0xfffffffffULL, high8 = raw >> 36 & 0xff;
+                        v = (pf == CHAIN_PTR_64_OFFSET ? (uint64_t)(uintptr_t)m->header + target : target + (uint64_t)m->slide) | high8 << 56;
+                        if (pass == 1) m->nrebased++;
+                    }
+                    if (pass == 1) memcpy(at, &v, 8);
+                    if (!next) break;
+                    off += (uint64_t)next * 4;
+                }
+            }
+        }
+    }
+    r = 0;
+out:
+    free(imp);
+    return r;
+}
+
 static void copy16(char *dst, const uint8_t *src) { memcpy(dst, src, 16); dst[16] = 0; }
 
 // A file's arm64 slice (the whole of a thin file): where it lies, its header's flags, its load
@@ -303,7 +446,7 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
     struct { uint64_t vmaddr, vmsize, fileoff, filesize; uint32_t initprot; const uint8_t *cmd; } sg[16];
     const char *libs[64];
     int nlibs = 0;
-    const uint8_t *dyld_info = NULL, *symtab = NULL, *dice = NULL;
+    const uint8_t *dyld_info = NULL, *symtab = NULL, *dice = NULL, *fixups = NULL, *trie = NULL;
     uint64_t lo = UINT64_MAX, hi = 0;
     const uint8_t *c = cmds;
     for (uint32_t i = 0; i < ncmds; i++) {
@@ -327,8 +470,7 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
             if (72 + (uint64_t)nsects * 80 > size) { fail(err, errlen, "%s: sections of %s", path, m->seg[k].name); goto bad; }
             for (uint32_t s = 0; s < nsects; s++) {
                 const uint8_t *sc = c + 72 + s * 80;
-                uint32_t fl = le32(sc + 64), ty = fl & 0xff;
-                if (ty == S_INIT_FUNC_OFFSETS) { fail(err, errlen, "%s: initializer offsets are not read", path); goto bad; }
+                uint32_t fl = le32(sc + 64);
                 if (m->nsect == 64) { fail(err, errlen, "%s: more than 64 sections", path); goto bad; }
                 struct macho_section *x = &m->sect[m->nsect++];
                 copy16(x->name, sc); copy16(x->seg, sc + 16);
@@ -358,15 +500,17 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
             libs[nlibs++] = sl ? sl + 1 : nm;
             break;
         }
-        case LC_DYLD_CHAINED_FIXUPS: case LC_DYLD_EXPORTS_TRIE:
-            fail(err, errlen, "%s: chained fixups are not read (a build for macOS 12 or later only)", path); goto bad;
+        case LC_DYLD_CHAINED_FIXUPS: if (size >= 16) fixups = c; break;
+        case LC_DYLD_EXPORTS_TRIE: if (size >= 16) trie = c; break;
         case LC_ENCRYPTION_INFO_64:
             if (size >= 20 && le32(c + 16)) { fail(err, errlen, "%s: encrypted", path); goto bad; }
             break;
         }
         c += size;
     }
-    if (!m->nseg || lo == UINT64_MAX || !dyld_info) { fail(err, errlen, "%s: no segments or no dyld info", path); goto bad; }
+    if (!m->nseg || lo == UINT64_MAX || !dyld_info == !fixups) {
+        fail(err, errlen, "%s: %s", path, dyld_info && fixups ? "dyld info and chained fixups both" : "no segments, or neither dyld info nor chained fixups"); goto bad;
+    }
 
     // the image's address range, the island before it
     long page = sysconf(_SC_PAGESIZE);
@@ -441,6 +585,18 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
     }
     const uint8_t *p;
     uint32_t off, size;
+    if (fixups) {
+        if (trie && (size = le32(trie + 12)) != 0) {
+            if (!(m->exports = LINKEDIT(le32(trie + 8), size))) { fail(err, errlen, "%s: exports outside __LINKEDIT", path); goto bad; }
+            m->exports_size = size;
+        }
+        off = le32(fixups + 8); size = le32(fixups + 12);
+        if (size) {
+            if (!(p = LINKEDIT(off, size))) { fail(err, errlen, "%s: chained fixups outside __LINKEDIT", path); goto bad; }
+            if (chained(m, p, size, libs, nlibs, resolve, ctx, err, errlen) != 0) goto bad;
+        }
+        goto bound;
+    }
     off = le32(dyld_info + 40); size = le32(dyld_info + 44);
     if (size) {
         if (!(m->exports = LINKEDIT(off, size))) { fail(err, errlen, "%s: exports outside __LINKEDIT", path); goto bad; }
@@ -464,6 +620,7 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
         if (!(m->weak = LINKEDIT(off, size))) { fail(err, errlen, "%s: weak binds outside __LINKEDIT", path); goto bad; }
         m->weak_size = size;
     }
+bound:
 #undef LINKEDIT
     if (m->nmissing) { fail(err, errlen, "%s: %d imports have no answer", path, m->nmissing); goto bad; }
     m->map = reserve;
@@ -473,6 +630,7 @@ struct macho_image *macho_load(const char *path, size_t island, macho_resolve_fn
     return m;
 bad:
     if (reserve != MAP_FAILED) munmap(reserve, reserve_len);
+    free(m->weak_uses);
     free(m);
     m = NULL;
 out:
@@ -485,13 +643,22 @@ void macho_unload(struct macho_image *m)
 {
     munmap(m->map, m->map_len);
     free(m->sorted);
+    free(m->weak_uses);
     free(m);
 }
 
 int macho_bind_weak(struct macho_image *m, macho_resolve_fn resolve, void *ctx, char *err, size_t errlen)
 {
-    if (!m->weak_size) return 0;
-    return bind(m, m->weak, m->weak_size, BIND_WEAK, NULL, 0, resolve, ctx, err, errlen);
+    if (m->weak_size && bind(m, m->weak, m->weak_size, BIND_WEAK, NULL, 0, resolve, ctx, err, errlen) != 0) return -1;
+    int missing = 0;
+    const char *first = "";
+    for (uint32_t i = 0; i < m->nweak_uses; i++) {
+        const struct macho_weak_use *u = &m->weak_uses[i];
+        void *p = resolve(u->name, "", ctx);
+        if (p) { uint64_t v = (uint64_t)(uintptr_t)p + u->addend; memcpy(u->at, &v, 8); }
+        else if (u->unbound && !u->optional && !missing++) first = u->name;
+    }
+    return missing ? fail(err, errlen, "%s: %d uses of names with no definition in any image (%s)", m->path, missing, first) : 0;
 }
 
 int macho_protect(struct macho_image *m)
@@ -512,9 +679,14 @@ void macho_run_initializers(struct macho_image *m, int argc, char **argv, char *
     typedef void (*init_fn)(int, char **, char **, char **, void *);
     static char *apple[] = { NULL };
     for (int i = 0; i < m->nsect; i++) {
-        if ((m->sect[i].flags & 0xff) != S_MOD_INIT_FUNC_POINTERS) continue;
-        init_fn *f = (init_fn *)m->sect[i].addr;
-        for (uint64_t k = 0; k < m->sect[i].size / 8; k++) f[k](argc, argv, envp, apple, NULL);
+        unsigned type = m->sect[i].flags & 0xff;
+        if (type == S_MOD_INIT_FUNC_POINTERS) {
+            init_fn *f = (init_fn *)m->sect[i].addr;
+            for (uint64_t k = 0; k < m->sect[i].size / 8; k++) f[k](argc, argv, envp, apple, NULL);
+        } else if (type == S_INIT_FUNC_OFFSETS) {       // the same as offsets from the header (macOS 12 and later)
+            for (uint64_t k = 0; k < m->sect[i].size / 4; k++)
+                ((init_fn)(m->header + le32(m->sect[i].addr + 4 * k)))(argc, argv, envp, apple, NULL);
+        }
     }
 }
 

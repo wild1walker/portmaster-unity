@@ -4,7 +4,8 @@
 //! the plugin's own name, where the game's dlopen finds them; which are an SDK the runtime
 //! answers itself (the plugin map: Steam, Epic Online Services, ...); and which are left out,
 //! with the reason. A plugin is read the way the loader reads it: its load commands and the
-//! names its bind streams ask for, each against the libraries beside it and the list of names
+//! names its bind streams ask for (in a build for macOS 12 or later: the imports of its chained
+//! fixups), each against the libraries beside it and the list of names
 //! the runtime answers (macho_shims.txt, the runtime's tables: a test keeps the two in step).
 //! Nothing of a plugin is changed.
 use crate::macho::{self, ABI};
@@ -28,7 +29,6 @@ const LC_REEXPORT_DYLIB: u32 = 0x8000_001F;
 const LC_LOAD_UPWARD_DYLIB: u32 = 0x8000_0023;
 const LC_DYLD_INFO: u32 = 0x22;
 const LC_DYLD_INFO_ONLY: u32 = 0x8000_0022;
-const LC_DYLD_EXPORTS_TRIE: u32 = 0x8000_0033;
 const LC_DYLD_CHAINED_FIXUPS: u32 = 0x8000_0034;
 const LC_ENCRYPTION_INFO_64: u32 = 0x2C;
 /// (the load commands and one bind stream of a plugin: far above any real one)
@@ -71,7 +71,6 @@ pub struct Facts {
     /// the dylibs it names, in the order its imports number them
     pub dylibs: Vec<String>,
     pub imports: Vec<Import>,
-    pub chained: bool,
     pub encrypted: bool,
 }
 
@@ -158,6 +157,80 @@ fn binds(b: &[u8], lazy: bool, out: &mut BTreeSet<Import>) -> Result<(), String>
     Ok(())
 }
 
+/// The names an image's chained fixups ask for (the loader's walk, macho.c's chained: every
+/// import of the table, and what it refuses is refused here). nlibs: how many dylibs it names.
+fn chained(b: &[u8], nlibs: usize, out: &mut BTreeSet<Import>) -> Result<(), String> {
+    let cut = || "its chained fixups are cut".to_string();
+    let at = |o: usize| le32(b, o).map(|v| v as usize).ok_or_else(cut);
+    let (version, starts, imports, symbols, count, format) =
+        (at(0)?, at(4)?, at(8)?, at(12)?, at(16)?, at(20)?);
+    if version != 0 {
+        return Err(format!("chained fixups of version {version}"));
+    }
+    if at(24)? != 0 {
+        return Err("chained fixups with compressed import names".into());
+    }
+    let each = match format {
+        1 => 4,
+        2 => 8,
+        3 => 16,
+        f => return Err(format!("chained fixups: import format {f}")),
+    };
+    for i in 0..count {
+        let e = imports
+            .checked_add(i.checked_mul(each).ok_or_else(cut)?)
+            .and_then(|o| b.get(o..o.checked_add(each)?))
+            .ok_or_else(cut)?;
+        // (the top values of the library's number are the special ones, -1 to -3)
+        let (lib, weak, name) = if format == 3 {
+            let v = u64::from_le_bytes(e[..8].try_into().unwrap());
+            let lib = (v & 0xffff) as i64;
+            (
+                if lib > 0xfff0 { lib - 0x1_0000 } else { lib },
+                v >> 16 & 1 != 0,
+                (v >> 32) as usize,
+            )
+        } else {
+            let v = u32::from_le_bytes(e[..4].try_into().unwrap());
+            let lib = i64::from(v & 0xff);
+            (
+                if lib > 0xf0 { lib - 0x100 } else { lib },
+                v >> 8 & 1 != 0,
+                (v >> 9) as usize,
+            )
+        };
+        let name = symbols
+            .checked_add(name)
+            .and_then(|o| cstr(b.get(o..)?))
+            .ok_or_else(cut)?;
+        if lib < -3 || lib > nlibs as i64 {
+            return Err(format!("{name} is asked of library {lib} of {nlibs}"));
+        }
+        out.insert(Import {
+            name: name.to_string(),
+            lib,
+            weak,
+        });
+    }
+    // each segment's table: the form its pointers are in
+    for k in 0..at(starts)? {
+        let o = at(starts + 4 + 4 * k)?;
+        if o == 0 {
+            continue;
+        }
+        let form = b
+            .get(starts + o + 6..starts + o + 8)
+            .map(|f| u16::from_le_bytes([f[0], f[1]]))
+            .ok_or_else(cut)?;
+        if form != 2 && form != 6 {
+            return Err(format!(
+                "chained fixups in pointer format {form} (the plain 64-bit ones, 2 and 6, are read; arm64e's signed pointers are not)"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A plugin's facts from its arm64 code, or why it has none this route runs (macho::arm64_slice's words).
 pub fn facts(path: &str) -> Result<Facts, String> {
     let (off, size, _) = macho::arm64_slice(path)?;
@@ -189,6 +262,7 @@ pub fn facts(path: &str) -> Result<Facts, String> {
     }
     let cmds = part(32, len, "its load commands")?;
     let mut streams: Vec<(u64, u64, bool)> = Vec::new();
+    let (mut info, mut fixups) = (false, None);
     let mut c = 0usize;
     for i in 0..ncmds {
         let bad = || format!("{path}: load command {i} cut");
@@ -212,8 +286,12 @@ pub fn facts(path: &str) -> Result<Facts, String> {
                 let at = |o: usize| le32(body, o).map(u64::from).ok_or_else(bad);
                 streams.push((at(16)?, at(20)?, false));
                 streams.push((at(32)?, at(36)?, true));
+                info = true;
             }
-            LC_DYLD_CHAINED_FIXUPS | LC_DYLD_EXPORTS_TRIE => facts.chained = true,
+            LC_DYLD_CHAINED_FIXUPS => {
+                let at = |o: usize| le32(body, o).map(u64::from).ok_or_else(bad);
+                fixups = Some((at(8)?, at(12)?));
+            }
             LC_ENCRYPTION_INFO_64 => facts.encrypted |= le32(body, 16).ok_or_else(bad)? != 0,
             _ => {}
         }
@@ -229,6 +307,21 @@ pub fn facts(path: &str) -> Result<Facts, String> {
         }
         binds(&part(at, n, "a bind stream")?, lazy, &mut names)
             .map_err(|e| format!("{path}: {e}"))?;
+    }
+    // (the loader wants the one or the other, as every linker writes an image)
+    match fixups {
+        Some(_) if info => return Err(format!("{path}: dyld info and chained fixups both")),
+        None if !info => return Err(format!("{path}: neither dyld info nor chained fixups")),
+        Some((_, n)) if n > MAX_STREAM => {
+            return Err(format!("{path}: chained fixups of {n} bytes"))
+        }
+        Some((at, n)) if n > 0 => chained(
+            &part(at, n, "its chained fixups")?,
+            facts.dylibs.len(),
+            &mut names,
+        )
+        .map_err(|e| format!("{path}: {e}"))?,
+        _ => {}
     }
     facts.imports = names.into_iter().collect();
     Ok(facts)
@@ -489,9 +582,6 @@ pub fn survey(data: &str) -> Vec<Plugin> {
                 Verdict::Out(format!("no library (Mach-O file type {})", f.filetype))
             }
             (_, Ok(f)) if f.encrypted => Verdict::Out("encrypted code: left alone".into()),
-            (_, Ok(f)) if f.chained => Verdict::Out(
-                "built for macOS 12 or later only (chained fixups), which the runtime's loader does not read".into(),
-            ),
             _ if OWN_FILES.contains(&name.as_str()) => {
                 Verdict::Out("the lib folder has the route's own file of that name".into())
             }
@@ -645,13 +735,15 @@ mod tests {
     use super::*;
 
     /// A Mach-O file as the loader reads one: the dylibs it names, the names it binds
-    /// ((name, dylib number, weak): the first half in the bind stream, the rest in the lazy one).
+    /// ((name, dylib number, weak): the first half in the bind stream, the rest in the lazy one;
+    /// with chained = (import format, pointer format), all of them as the imports of chained
+    /// fixups in those forms).
     struct Image<'a> {
         filetype: u32,
         id: Option<&'a str>,
         dylibs: &'a [&'a str],
         imports: &'a [(&'a str, i64, bool)],
-        chained: bool,
+        chained: Option<(u32, u16)>,
         cryptid: u32,
     }
 
@@ -662,7 +754,7 @@ mod tests {
                 id: None,
                 dylibs: &[],
                 imports: &[],
-                chained: false,
+                chained: None,
                 cryptid: 0,
             }
         }
@@ -720,6 +812,53 @@ mod tests {
         b
     }
 
+    /// Chained fixups with these imports: the header, the segments' tables (one segment with
+    /// nothing to fix, one with a page that has none), the import table, the names.
+    fn fixups(imports: &[(&str, i64, bool)], import_format: u32, pointer_format: u16) -> Vec<u8> {
+        let (mut names, mut table) = (vec![0u8], Vec::new());
+        for (name, lib, weak) in imports {
+            let at = names.len() as u64;
+            names.extend(name.as_bytes());
+            names.push(0);
+            if import_format == 3 {
+                table.extend(((*lib as u64 & 0xffff) | u64::from(*weak) << 16 | at << 32).to_le_bytes());
+                table.extend(0u64.to_le_bytes());
+            } else {
+                table.extend(((*lib as u32 & 0xff) | u32::from(*weak) << 8 | (at as u32) << 9).to_le_bytes());
+                if import_format == 2 {
+                    table.extend(0u32.to_le_bytes());
+                }
+            }
+        }
+        let mut starts = Vec::new();
+        for v in [2u32, 0, 12, 24] {
+            starts.extend(v.to_le_bytes());
+        }
+        starts.extend(0x4000u16.to_le_bytes());
+        starts.extend(pointer_format.to_le_bytes());
+        starts.extend(0x4000u64.to_le_bytes());
+        starts.extend(0u32.to_le_bytes());
+        starts.extend(1u16.to_le_bytes());
+        starts.extend(0xffffu16.to_le_bytes());
+        let imports_at = 28 + starts.len();
+        let mut b = Vec::new();
+        for v in [
+            0,
+            28,
+            imports_at,
+            imports_at + table.len(),
+            imports.len(),
+            import_format as usize,
+            0,
+        ] {
+            b.extend((v as u32).to_le_bytes());
+        }
+        b.extend(starts);
+        b.extend(table);
+        b.extend(names);
+        b
+    }
+
     fn image(im: &Image) -> Vec<u8> {
         let mut cmds: Vec<Vec<u8>> = Vec::new();
         let dylib = |cmd: u32, name: &str| {
@@ -747,19 +886,15 @@ mod tests {
             ));
         }
         let half = im.imports.len() / 2;
-        let (bind, lazy) = (
-            stream(&im.imports[..half], false),
-            stream(&im.imports[half..], true),
-        );
+        let (bind, lazy) = match im.chained {
+            Some((imports, pointers)) => (fixups(im.imports, imports, pointers), Vec::new()),
+            None => (
+                stream(&im.imports[..half], false),
+                stream(&im.imports[half..], true),
+            ),
+        };
         let info_at = cmds.len();
-        cmds.push(vec![0u8; 48]);
-        if im.chained {
-            let mut c = Vec::new();
-            c.extend(LC_DYLD_CHAINED_FIXUPS.to_le_bytes());
-            c.extend(16u32.to_le_bytes());
-            c.extend([0u8; 8]);
-            cmds.push(c);
-        }
+        cmds.push(vec![0u8; if im.chained.is_some() { 16 } else { 48 }]);
         if im.cryptid != 0 {
             let mut c = Vec::new();
             c.extend(LC_ENCRYPTION_INFO_64.to_le_bytes());
@@ -772,15 +907,22 @@ mod tests {
         let len: usize = cmds.iter().map(Vec::len).sum();
         let (bind_at, lazy_at) = (32 + len, 32 + len + bind.len());
         let mut info = Vec::new();
-        info.extend(LC_DYLD_INFO_ONLY.to_le_bytes());
-        info.extend(48u32.to_le_bytes());
-        info.extend([0u8; 8]);
-        info.extend((bind_at as u32).to_le_bytes());
-        info.extend((bind.len() as u32).to_le_bytes());
-        info.extend([0u8; 8]);
-        info.extend((lazy_at as u32).to_le_bytes());
-        info.extend((lazy.len() as u32).to_le_bytes());
-        info.extend([0u8; 8]);
+        if im.chained.is_some() {
+            info.extend(LC_DYLD_CHAINED_FIXUPS.to_le_bytes());
+            info.extend(16u32.to_le_bytes());
+            info.extend((bind_at as u32).to_le_bytes());
+            info.extend((bind.len() as u32).to_le_bytes());
+        } else {
+            info.extend(LC_DYLD_INFO_ONLY.to_le_bytes());
+            info.extend(48u32.to_le_bytes());
+            info.extend([0u8; 8]);
+            info.extend((bind_at as u32).to_le_bytes());
+            info.extend((bind.len() as u32).to_le_bytes());
+            info.extend([0u8; 8]);
+            info.extend((lazy_at as u32).to_le_bytes());
+            info.extend((lazy.len() as u32).to_le_bytes());
+            info.extend([0u8; 8]);
+        }
         cmds[info_at] = info;
         let mut b = Vec::new();
         b.extend(MH_MAGIC_64.to_le_bytes());
@@ -910,7 +1052,59 @@ mod tests {
             .collect();
         want.sort();
         assert_eq!(f.imports, want);
-        assert!(!f.chained && !f.encrypted);
+        assert!(!f.encrypted);
+        // the same asked through chained fixups, in each form of its import table and pointers
+        for (form, pointers) in [(1, 6), (2, 6), (3, 6), (1, 2)] {
+            app.put(
+                "PlugIns/libx.dylib",
+                &image(&Image {
+                    id: Some("@rpath/libx.1.dylib"),
+                    dylibs: &dylibs,
+                    imports: &imports,
+                    chained: Some((form, pointers)),
+                    ..Default::default()
+                }),
+            );
+            let f = facts(&format!("{}/Game.app/Contents/PlugIns/libx.dylib", app.0)).unwrap();
+            assert_eq!((f.imports, f.dylibs.len()), (want.clone(), 20), "form {form}");
+        }
+        // what the loader refuses: arm64e's pointers, a library number no dylib has, a cut table
+        let refused = |im: &Image, cut: usize| {
+            let mut b = image(im);
+            b.truncate(b.len() - cut);
+            app.put("PlugIns/libx.dylib", &b);
+            facts(&format!("{}/Game.app/Contents/PlugIns/libx.dylib", app.0)).unwrap_err()
+        };
+        let e = refused(
+            &Image {
+                dylibs: &dylibs,
+                imports: &imports,
+                chained: Some((1, 1)),
+                ..Default::default()
+            },
+            0,
+        );
+        assert!(e.contains("pointer format 1"), "{e}");
+        let e = refused(
+            &Image {
+                dylibs: &dylibs[..2],
+                imports: &imports,
+                chained: Some((1, 6)),
+                ..Default::default()
+            },
+            0,
+        );
+        assert!(e.contains("_far is asked of library 20 of 2"), "{e}");
+        let e = refused(
+            &Image {
+                dylibs: &dylibs,
+                imports: &imports,
+                chained: Some((2, 6)),
+                ..Default::default()
+            },
+            40,
+        );
+        assert!(e.contains("past the end"), "{e}");
         // a cut stream is said, not half-read
         let mut b = BTreeSet::new();
         assert!(binds(&[0x11, 0x40, b'_', b'a'], false, &mut b)
@@ -1016,12 +1210,24 @@ mod tests {
                 ..Default::default()
             }),
         );
-        // Intel only, a newer build, an encrypted one, an executable, the route's own name, a framework
+        // Intel only, builds for macOS 12 or later (chained fixups: one loadable, one for arm64e),
+        // an encrypted one, an executable, the route's own name, a framework
         app.put("PlugIns/libold.dylib", &intel());
         app.put(
             "PlugIns/libnew.dylib",
             &image(&Image {
-                chained: true,
+                dylibs: sys,
+                imports: &[("_strlen", 1, false), ("__Znwm", -3, false)],
+                chained: Some((1, 6)),
+                ..Default::default()
+            }),
+        );
+        app.put(
+            "PlugIns/libsigned.dylib",
+            &image(&Image {
+                dylibs: sys,
+                imports: &[("_strlen", 1, false)],
+                chained: Some((1, 1)),
                 ..Default::default()
             }),
         );
@@ -1085,6 +1291,7 @@ mod tests {
                 "libnew.dylib",
                 "libold.dylib",
                 "libshut.dylib",
+                "libsigned.dylib",
                 "libsqlite3.dylib",
                 "libunity.so",
                 "libvoice.dylib",
@@ -1102,6 +1309,7 @@ mod tests {
             [
                 "lib_checks.dylib",
                 "lib_mesh.dylib",
+                "libnew.dylib",
                 "libsqlite3.dylib",
                 "tool.bundle"
             ]
@@ -1140,7 +1348,7 @@ mod tests {
             "{}",
             out("libold.dylib")
         );
-        assert!(out("libnew.dylib").contains("chained fixups"));
+        assert!(out("libsigned.dylib").contains("arm64e's signed pointers"));
         assert!(out("libshut.dylib").contains("encrypted"));
         assert!(out("helper").contains("no library (Mach-O file type 2)"));
         assert!(out("libunity.so").contains("the route's own file"));

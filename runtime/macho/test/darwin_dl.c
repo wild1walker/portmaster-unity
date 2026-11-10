@@ -135,6 +135,10 @@ long test_main(long argc, char **argv)
     void *dep2 = dlopen(at("dl_dep2.dylib"), RTLD_NOW);
     printf("the dylib alone: %d, initialized %d\n", call(dep2, "dep2_value"), dep2 && dlsym(dep2, "dep2_inits") ? *(int *)dlsym(dep2, "dep2_inits") : -1);
 
+    void *fix = dlopen(at("dl_fix.dylib"), RTLD_NOW);
+    printf("pointers the loader sets: its own %d, another image's %d, the rest %#x\n",
+           call(fix, "fix_mine"), call(fix, "fix_theirs"), call(fix, "fix_rest"));
+
     CHECK("not loaded yet: RTLD_NOLOAD", dlopen(at("dl_late.dylib"), RTLD_NOLOAD) == NULL);
     void *late = dlopen(at("dl_late.dylib"), RTLD_LAZY);
     CHECK("then loaded", late != NULL && dlopen(at("dl_late.dylib"), RTLD_NOLOAD) == late);

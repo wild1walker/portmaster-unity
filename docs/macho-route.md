@@ -53,7 +53,7 @@ the loader's probe and its instruction scan, `test/shims.sh cover` for the names
 |---|---|---|
 | `lib_burst_generated.bundle` (1.7 MB) | nothing: no library, no undefined symbol; 1,463 exports | nothing to resolve; 620 instructions beyond ARMv8.0 (LSE atomics), all of kinds the rewrite knows. The engine opens this one, not the game's code (see "Burst's library" below). In the Linux container its arm64 part loads through the loader with every rewrite forced and `burst.initialize` runs to its end: 1,178 names asked of the engine (internal calls and `burst_abort`, no `#dllimport:`), the static set-up done (104 calls of the engine's memory functions, 109 others), 360 job functions found by their names. Not yet run under the player with the game |
 | `lib_coacd.dylib` (6.6 MB, collision decomposition) | libc++ (206 names, every one in the route's libc++) and libSystem (103 names) | every name is answered (`test/shims.sh cover`: 103 names, 0 without an answer); the 22 that had no shim are written, see "What a plugin's own libraries asked for" below; 4,073 instructions beyond ARMv8.0 (LSE, `ldapr`); thread-local variables. **Runs through the loader** in the arm64 Linux container with every rewrite forced: opened by the name the game's code has (`dlopen("lib_coacd")`), `CoACD_run` cuts an L-shaped test solid into 2 or 3 convex hulls whose volumes add up to the solid's (four runs: its preprocessing on, off and left to it, two seeds), `CoACD_freeMeshArray` frees them |
-| `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions. The one file of the five built for macOS 15 only, so with chained fixups in place of the bind streams |
+| `MicrophoneUtility_macos.dylib` | Foundation, AVFoundation, the Objective-C runtime | not loadable (no Objective-C here), and not needed: the game's code names none of its functions. The one file of the five built for macOS 15 only, so with chained fixups in place of the bind streams: the loader reads those too (in the container it maps the file and finds 5 rebases, 4 binds and 2 exports, the counts `xcrun dyld_info` gives), so what keeps it out is the Objective-C names alone |
 | `libEOSSDK-Mac-Shipping.dylib` (47 MB) | Cocoa, Carbon, IOKit, Security, CoreAudio, CFNetwork, ... | not loadable, and not needed: the game's code names no `EOS_` function |
 | `steam_api.bundle` | | the game's code names 939 Steamworks functions (Steamworks.NET's flat API); the runtime's own answer stands in: Steam is not running |
 
@@ -128,7 +128,8 @@ the same loader beside the game's image. The image's inline code was compiled ag
 library's layouts (`mbstate_t`, ctype masks, `std::string`, pthread types), so nothing of it is
 imitated on the Linux side, and its own libSystem imports go to the same shims. Two build flags
 matter: `-mcpu=generic` (`-march=armv8-a` leaves the CPU at apple-m1, LSE included) and
-`-Wl,-no_fixup_chains` (rebases and binds as `LC_DYLD_INFO` streams, the form the loader reads).
+`-Wl,-no_fixup_chains` (rebases and binds as `LC_DYLD_INFO` streams; the loader reads chained
+fixups as well, see "Chained fixups" below, and the streams stay the form these two are built in).
 Managed exceptions are C++ throws, so the unwinder reads the image's compact unwind info
 (`__unwind_info`) and its LSDAs (`__gcc_except_tab`, the same format as on Linux) as well as the
 engine's ELF tables, and catches through engine frames work (icalls raise managed exceptions).
@@ -175,9 +176,50 @@ What differed from glibc in ways only the comparison below found:
 - libc++abi asks `dlopen` for `/usr/lib/libstdc++.6.dylib` at the first throw and goes on
   without it.
 
-Not answered yet, each refused or reported by name: `LC_DYLD_CHAINED_FIXUPS` and
-`LC_DYLD_EXPORTS_TRIE` images, `S_INIT_FUNC_OFFSETS`, resolver exports, the `SIOCGIFCONF` and
-`SIOCGIFFLAGS` ioctls.
+Not answered yet, each refused or reported by name: arm64e images (signed pointers), resolver
+exports, the `SIOCGIFCONF` and `SIOCGIFFLAGS` ioctls.
+
+### Chained fixups (`macho.c`, 2026-11-10)
+
+A Mach-O file says in one of two forms which of its words the loader must set. Up to a
+deployment target of macOS 11 the linker writes opcode streams (`LC_DYLD_INFO_ONLY`: rebase,
+bind, weak bind, lazy bind, and an export trie). From macOS 12 on it writes chained fixups
+(`LC_DYLD_CHAINED_FIXUPS`, with the export trie in `LC_DYLD_EXPORTS_TRIE` and the
+initializers as 32-bit offsets in a `__init_offsets` section, `S_INIT_FUNC_OFFSETS`): each
+word to set holds its own fixup and the distance to the next one, page by page. A game takes
+whichever its developer's minimum macOS version gives, plugin by plugin: of Dave's files only
+the microphone library has the new form; a newer game may have it throughout. The loader
+reads both, and refuses a file with both or neither.
+
+What it reads of the new form:
+
+- the import table in its three layouts (1: 32 bits, library ordinal 8, weak 1, name offset
+  23; 2: the same and a 32-bit addend, which the linker uses when an addend is negative or
+  above 255; 3: 64 bits with a 64-bit addend), names uncompressed only;
+- library ordinals as dyld does: 0 the image itself, 1..n its libraries, and only the top
+  values special (8-bit: above 0xf0; 16-bit: above 0xfff0): -1 the main executable, -2 a flat
+  search of every image, -3 a coalesced (weak) name. A plain sign extension of the byte would
+  turn the 128th to 240th library into an error;
+- the two plain 64-bit pointer layouts, stride 4 bytes: `DYLD_CHAINED_PTR_64` (2: a rebase
+  holds the linked address) and `DYLD_CHAINED_PTR_64_OFFSET` (6: it holds the offset from the
+  image's start); a rebase is target 36 bits, top byte 8, next 12, a bind is ordinal 24,
+  addend 8, next 12, the top bit telling the two apart. Any other layout (arm64e's signed
+  pointers, 32-bit, kernel caches) is refused by its number;
+- each import is resolved once, then the chains are walked twice: the first pass checks every
+  link stays inside its segment's file data and counts, the second writes. An image with a
+  name that has no answer is therefore refused before one of its words is changed, the same
+  as with the streams;
+- a use of a coalesced name is noted the way the weak bind stream's entries are, so C++
+  inline variables and `operator new` still end up as one across the images.
+
+What this Mac's linker (ld-1167.5) does, which decides how the tests are built: a target of
+12.0 gives chained fixups with pointer layout 6; a target of 11.0 with `-Wl,-fixup_chains`
+gives them with layout 2; `-Wl,-no_fixup_chains` gives the streams at any target;
+`-undefined dynamic_lookup` silently falls back to the streams whatever the target, while
+`-Wl,-U,_name` (one name allowed to be missing) keeps the chains and binds that name flat.
+
+Not exercised by any compiler output here: import layout 3 and a non-zero top byte (both
+written from the format's definition, with a unit test on the setup's side for layout 3).
 
 ### What a plugin's own libraries asked for (2026-11-10)
 
@@ -371,10 +413,14 @@ process as on macOS), `strlcat`, `stpcpy`, `stpncpy`, `strnlen`, `strndup`, `str
 1. `test/build-mac.sh` builds `darwin_c.c` with `darwin_ctx.c`, `darwin_cxx.cpp` and
    `darwin_dl.c` with its plugins as macOS arm64 dylibs (the flags a game's image would have,
    plus `-mcpu=generic`) and as native programs, and runs the native programs: their output is
-   the expectation;
+   the expectation. It builds everything three times, once per form of fixups a game can
+   have: opcode streams (`test/out`), chained fixups as a target of macOS 12 makes them
+   (`test/out/chained`), and chained fixups as a target of macOS 11 that asks for them makes
+   them (`test/out/chained11`, the other pointer layout); it checks with `otool -l` that each
+   file came out in the form meant, because the linker changes form on its own for some flags;
 2. the same dylibs run through the loader (`test/machorun.c`) in an arm64 Linux container, with
    every rewrite forced (`UA_A64FIX=all`);
-3. the two outputs must be the same, byte for byte.
+3. the two outputs must be the same, byte for byte, in each of the three forms.
 
 The C test (339 lines of output) covers formatting, files, directories, time, sysctl, threads
 (mutexes, conditions, keys, 200 stop-the-world rounds over running and sleeping threads, a
@@ -392,15 +438,22 @@ outside, thrown outside and passing through its frames, its static objects and i
 `thread_local`. Both match; the C test matched in 20 of 20 repeated runs, the C++ test in 100
 of 100 (and in 15 of 15 with the plugin part).
 
-The `dlopen` test (`darwin_dl.c`, plugins from `dl_plug.c`, 40 lines) runs natively against
+The `dlopen` test (`darwin_dl.c`, plugins from `dl_plug.c`, 41 lines) runs natively against
 dyld and then through the loader: a plugin with a dylib of its own and an initializer that
 opens a third file, the order of initializers, `RTLD_NOLOAD` before and after, the image count
 and the add-image callbacks, a second spelling of the path, `dladdr` into the plugin, its
 thread-locals on two threads, a `.bundle`, `RTLD_LOCAL` and its promotion, a missing file
 (`dlerror` once, then NULL), a plugin with a missing symbol opened twice, the same with a
 dylib of its own (which must be gone afterwards, its initializer never run), two threads
-opening one plugin whose initializer sleeps, `dlopen(NULL)`, `dlclose`. 40 of 40 repeated
-runs match. A second run of the same file (`-- probe`, expectation checked in as
+opening one plugin whose initializer sleeps, `dlopen(NULL)`, `dlclose`, and a plugin
+(`dl_fix`) made of pointers the loader has to set: 4,096 to its own data spread over pages
+with 50,000 bytes holding none between them and the next, 1,024 into another image's table,
+one before that table's start (a negative addend), one far into it, one to a name that is
+allowed to be missing (must be NULL), function pointers, strings, and a thread-local's first
+value; it sums what they point to (8386564, 7857664, every single pointer right), on macOS
+and through the loader, in all three forms. None of them is `static`: a pointer whose every
+use the compiler sees is folded away and never reaches the loader. Before that last plugin
+was added the test matched in 40 of 40 repeated runs. A second run of the same file (`-- probe`, expectation checked in as
 `darwin_dl.probe`) asks for the plugins by the names a game's code may have, which macOS
 itself would only find through the bundle's own search paths.
 
@@ -553,13 +606,14 @@ one for any CPU (a universal file, as all of Dave's) in `PlugIns/` itself; a bun
 `X.bundle/Contents/{MacOS/<code>, Info.plist}` whose code file `CFBundleExecutable` names. The
 survey walks those folders (not `.dSYM`, not through links), takes each plugin once (of two
 copies the one with arm64 code), reads it the way the loader does (the arm64 part, the load
-commands, both bind streams with every opcode), and gives each one of three verdicts, one log
-line each:
+commands, both bind streams with every opcode or the chained fixups' import table), and gives
+each one of three verdicts, one log line each:
 
 - **copied**: `lib/arm64-v8a/<name>` gets the plugin's arm64 code under the plugin's own name
   (`lib_x.dylib`; for a bundle the folder's name, `x.bundle`, as a plain file), unchanged.
   That is where the game's `dlopen` finds it ("Plugins the game opens" above). The condition:
-  a library or bundle with arm64 code, not encrypted, with bind streams, and every name it
+  a library or bundle with arm64 code, not encrypted, with its fixups in a form the loader
+  reads (the streams, or chained fixups in a plain 64-bit pointer layout), and every name it
   asks a library for has an answer: among the runtime's shims, in the route's libc++, or in
   another plugin of the build that is itself copied (decided as a fixpoint, so a plugin that
   needs one that is left out is left out too);
@@ -569,8 +623,8 @@ line each:
   whose answer is a library the port brings (FMOD, Wwise) gets that entry only when the
   build's own file cannot be run; where it can, the build's own file is the better one;
 - **left out**, with the reason: no arm64 code, an encrypted file (left alone), a framework,
-  a file that is no library, chained fixups (a file built for macOS 12 or later only, which
-  the loader does not read yet), a name of the route's own files, or names without an answer
+  a file that is no library, fixups the loader refuses (arm64e's signed pointers, both forms
+  at once, neither), a name of the route's own files, or names without an answer
   (how many, of which library, the first six). The game then gets `DllNotFoundException` at
   its first call into it, as it would for a plugin missing on macOS; that is logged as a
   warning at setup, and games often never call a plugin they ship (Dave's code names
