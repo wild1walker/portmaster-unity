@@ -5,8 +5,9 @@
 //! definitions, fields, nested types, generic parameters, custom attribute data) and the binary
 //! that holds the type table the fields' types index (a macOS build's GameAssembly.dylib: its
 //! `g_MetadataRegistration` symbol). Layouts as Il2CppDumper (MIT) reads them. Metadata version 31
-//! (Unity 2022.3 - 6000.0) and Mach-O binaries with symbols and classic dyld info only: anything
-//! else is refused, with the reason.
+//! (Unity 2022.3 - 6000.0); a Mach-O binary's pointers in either form a linker writes them
+//! (classic dyld info, or the chained fixups of a build for macOS 12 or later, in the plain 64-bit
+//! layouts): anything else is refused, with the reason.
 //!
 //! Each image becomes an assembly whose tables hold what a compiler would have written for the
 //! parts that matter to serialization: TypeDef (flags, names, base type), Field (flags, signature),
@@ -14,6 +15,7 @@
 //! fields' custom attributes (CustomAttribute rows naming each attribute's type through a
 //! MemberRef `.ctor`). No methods, no IL.
 use crate::clrmeta::Assembly;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::os::unix::fs::FileExt;
@@ -399,9 +401,73 @@ impl Metadata {
     }
 }
 
+/// The pointers of a Mach-O with chained fixups (LC_DYLD_CHAINED_FIXUPS): such a word holds, in
+/// the file, where it points in a packed form and the distance to the next such word of its page,
+/// so which words are pointers is known only by walking a page's chain from its first one. Pages
+/// are walked when first asked for.
+struct Chains {
+    /// the address the image is linked at
+    image: u64,
+    /// per segment with chains: (address, page size, pointer layout, each page's first fixup)
+    segs: Vec<(u64, u64, u16, Vec<u16>)>,
+    /// page address -> (offset in the page, the address the word gets), sorted
+    pages: RefCell<HashMap<u64, Vec<(u64, u64)>>>,
+}
+
+/// (no fixup in this page)
+const NO_CHAIN: u16 = 0xFFFF;
+
+impl Chains {
+    /// The page a word is in, if its segment has chains and the page a first fixup:
+    /// (the page's address, its size, its first fixup, the pointer layout).
+    fn page_of(&self, va: u64) -> Option<(u64, u64, u16, u16)> {
+        for (addr, size, layout, starts) in &self.segs {
+            if va < *addr {
+                continue;
+            }
+            let i = (va - addr) / size;
+            if let Some(&start) = starts.get(usize::try_from(i).ok()?) {
+                return (start != NO_CHAIN).then_some((addr + i * size, *size, start, *layout));
+            }
+        }
+        None
+    }
+
+    /// The fixups of a page from its bytes (the page and, where the file has them, the four
+    /// bytes after: a pointer may start in the page's last four): a rebase gets the address it
+    /// points to, a bind (a name of another image, which no address here stands for) zero, as
+    /// the file of the other form has it.
+    fn walk(&self, page: &[u8], size: u64, start: u16, layout: u16) -> R<Vec<(u64, u64)>> {
+        let (mut out, mut off) = (Vec::new(), start as u64);
+        loop {
+            let raw = usize::try_from(off)
+                .ok()
+                .filter(|_| off < size)
+                .and_then(|o| page.get(o..o + 8))
+                .map(|w| u64::from_le_bytes(w.try_into().unwrap()))
+                .ok_or_else(|| format!("binary: a fixup chain leaves its page at {off:#x}"))?;
+            let value = if raw >> 63 != 0 {
+                0
+            } else {
+                let (target, high8) = (raw & 0xF_FFFF_FFFF, (raw >> 36) & 0xFF);
+                // (layout 6: an offset from the image's start; layout 2: the linked address)
+                let to = if layout == 6 { self.image.wrapping_add(target) } else { target };
+                to | high8 << 56
+            };
+            out.push((off, value));
+            let next = (raw >> 51) & 0xFFF;
+            if next == 0 {
+                return Ok(out);
+            }
+            off += 4 * next;
+        }
+    }
+}
+
 /// The binary's Il2CppType table, read in place: a 64-bit Mach-O (a universal file's arm64 slice,
-/// else x86_64; classic dyld info: its pointers are the addresses they point to) or a 64-bit ELF
-/// shared library (aarch64, x86_64; its RELATIVE relocations: the pointers the loader writes).
+/// else x86_64; with classic dyld info its pointers are the addresses they point to, with chained
+/// fixups they are read through their chains) or a 64-bit ELF shared library (aarch64, x86_64;
+/// its RELATIVE relocations: the pointers the loader writes).
 pub struct Types {
     f: File,
     base: u64,
@@ -409,6 +475,8 @@ pub struct Types {
     segs: Vec<(u64, u64, u64, bool)>,
     /// (address, value) of the pointers the loader writes, sorted (an ELF's RELATIVE relocations)
     relocs: Vec<(u64, u64)>,
+    /// a Mach-O's chained fixups, if it has that form
+    chains: Option<Chains>,
     types: u64,
     count: usize,
     cache: HashMap<u64, (u64, u32)>,
@@ -438,6 +506,27 @@ impl Types {
     fn u64_va(&self, va: u64) -> R<u64> {
         if let Ok(i) = self.relocs.binary_search_by_key(&va, |r| r.0) {
             return Ok(self.relocs[i].1);
+        }
+        if let Some((page, size, start, layout)) =
+            self.chains.as_ref().and_then(|c| c.page_of(va))
+        {
+            let c = self.chains.as_ref().unwrap();
+            if !c.pages.borrow().contains_key(&page) {
+                let have = self
+                    .segs
+                    .iter()
+                    .find(|s| s.0 <= page && page < s.0 + s.2)
+                    .map(|s| s.0 + s.2 - page)
+                    .ok_or_else(|| format!("binary: fixups at {page:#x}, outside the file"))?;
+                let bytes = self.read(self.file_off(page)?, (size + 4).min(have) as usize)?;
+                let fixups = c.walk(&bytes, size, start, layout)?;
+                c.pages.borrow_mut().insert(page, fixups);
+            }
+            let pages = c.pages.borrow();
+            let fixups = &pages[&page];
+            if let Ok(i) = fixups.binary_search_by_key(&(va - page), |f| f.0) {
+                return Ok(fixups[i].1);
+            }
         }
         let b = self.read(self.file_off(va)?, 8)?;
         Ok(u64::from_le_bytes(b.try_into().unwrap()))
@@ -530,20 +619,21 @@ impl Types {
             Ok(b)
         };
         let head = rd(0, 64)?;
-        let (base, segs, relocs, symbol) = if &head[..4] == b"\x7fELF" {
+        let (base, segs, relocs, chains, symbol) = if &head[..4] == b"\x7fELF" {
             let (segs, relocs) = elf(&rd, &head)?;
-            (0, segs, relocs, None)
+            (0, segs, relocs, None, None)
         } else if &head[..2] == b"MZ" {
             return Err("binary: a Windows DLL (PE is not read yet)".into());
         } else {
-            let (base, segs, symbol) = macho(&rd, &head)?;
-            (base, segs, Vec::new(), symbol)
+            let (base, segs, chains, symbol) = macho(&rd, &head)?;
+            (base, segs, Vec::new(), chains, symbol)
         };
         let mut t = Types {
             f,
             base,
             segs,
             relocs,
+            chains,
             types: 0,
             count: 0,
             cache: HashMap::new(),
@@ -567,8 +657,64 @@ type Seg = (u64, u64, u64, bool);
 /// (address, value) of the pointers a loader writes.
 type Relocs = Vec<(u64, u64)>;
 
-/// A 64-bit Mach-O's slice offset, its segments and its g_MetadataRegistration symbol (if kept).
-fn macho(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, head: &[u8]) -> R<(u64, Vec<Seg>, Option<u64>)> {
+/// A Mach-O's chained fixups from the data of its LC_DYLD_CHAINED_FIXUPS command: which pages of
+/// which segments have chains. The imports are not read: a bind is no address of this image.
+fn chains(b: &[u8], segs: &[Seg]) -> R<Chains> {
+    let bad = |what: &str| format!("binary: chained fixups: {what}");
+    // (the segment the file starts with holds the header: the image's address)
+    let image = segs
+        .iter()
+        .find(|s| s.1 == 0 && s.2 > 0)
+        .map(|s| s.0)
+        .ok_or_else(|| bad("no segment at the file's start"))?;
+    let u32_at = |o: usize| u32_at(b, o).map_err(|_| bad("cut short"));
+    let u16_at = |o: usize| u16_at(b, o).map_err(|_| bad("cut short"));
+    if u32_at(0)? != 0 {
+        return Err(bad(&format!("version {}", u32_at(0)?)));
+    }
+    let starts = u32_at(4)? as usize;
+    let count = u32_at(starts)? as usize;
+    let mut out = Vec::new();
+    for i in 0..count {
+        let o = u32_at(starts + 4 + 4 * i)? as usize;
+        if o == 0 {
+            continue;
+        }
+        let s = starts + o;
+        let (size, layout) = (u16_at(s + 4)? as u64, u16_at(s + 6)?);
+        if layout != 2 && layout != 6 {
+            return Err(bad(&format!(
+                "pointer format {layout} (the plain 64-bit ones, 2 and 6, are read; arm64e's signed pointers are not)"
+            )));
+        }
+        if !size.is_power_of_two() || size < 0x1000 {
+            return Err(bad(&format!("pages of {size:#x} bytes")));
+        }
+        let offset = u64::from(u32_at(s + 8)?) | u64::from(u32_at(s + 12)?) << 32;
+        let pages = u16_at(s + 20)? as usize;
+        let mut first = Vec::with_capacity(pages);
+        for k in 0..pages {
+            let start = u16_at(s + 22 + 2 * k)?;
+            if start != NO_CHAIN && u64::from(start) >= size {
+                return Err(bad(&format!("a page's first fixup at {start:#x}")));
+            }
+            first.push(start);
+        }
+        out.push((image.wrapping_add(offset), size, layout, first));
+    }
+    Ok(Chains {
+        image,
+        segs: out,
+        pages: RefCell::new(HashMap::new()),
+    })
+}
+
+/// A 64-bit Mach-O's slice offset, its segments, its chained fixups (if it has that form) and its
+/// g_MetadataRegistration symbol (if kept).
+fn macho(
+    rd: &dyn Fn(u64, usize) -> R<Vec<u8>>,
+    head: &[u8],
+) -> R<(u64, Vec<Seg>, Option<Chains>, Option<u64>)> {
     let magic_be = u32::from_be_bytes(head[..4].try_into().unwrap());
     let mut base = 0u64;
     if magic_be == 0xCAFE_BABE {
@@ -593,7 +739,7 @@ fn macho(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, head: &[u8]) -> R<(u64, Vec<Seg>
     let sizeofcmds = u32::from_le_bytes(h[20..24].try_into().unwrap()) as usize;
     let cmds = rd(base + 32, sizeofcmds)?;
     let (mut segs, mut symtab, mut p) = (Vec::new(), None, 0usize);
-    let mut dyld_info = false;
+    let (mut dyld_info, mut fixups) = (false, None);
     for _ in 0..ncmds {
         let cmd = u32_at(&cmds, p)?;
         let size = u32_at(&cmds, p + 4)? as usize;
@@ -614,7 +760,7 @@ fn macho(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, head: &[u8]) -> R<(u64, Vec<Seg>
                 ))
             }
             0x8000_0022 | 0x22 => dyld_info = true,
-            0x8000_0034 => return Err("binary: chained fixups (pointers not read yet)".into()),
+            0x8000_0034 => fixups = Some((u32_at(&cmds, p + 8)?, u32_at(&cmds, p + 12)?)),
             _ => {}
         }
         if size == 0 {
@@ -622,9 +768,15 @@ fn macho(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, head: &[u8]) -> R<(u64, Vec<Seg>
         }
         p += size;
     }
-    if !dyld_info {
-        return Err("binary: no dyld info (pointers not read yet)".into());
-    }
+    // (the loader's rule, runtime/macho/macho.c: one form of fixups, not both, not neither)
+    let chains = match (dyld_info, fixups) {
+        (true, None) => None,
+        (false, Some((off, size))) => {
+            Some(chains(&rd(base + off as u64, size as usize)?, &segs)?)
+        }
+        (true, Some(_)) => return Err("binary: dyld info and chained fixups both".into()),
+        (false, None) => return Err("binary: neither dyld info nor chained fixups".into()),
+    };
     let mut reg = None;
     if let Some((symoff, nsyms, stroff)) = symtab {
         let syms = rd(base + symoff as u64, 16 * nsyms as usize)?;
@@ -643,7 +795,7 @@ fn macho(rd: &dyn Fn(u64, usize) -> R<Vec<u8>>, head: &[u8]) -> R<(u64, Vec<Seg>
             }
         }
     }
-    Ok((base, segs, reg))
+    Ok((base, segs, chains, reg))
 }
 
 /// A 64-bit little-endian ELF's loaded segments and its RELATIVE relocations (address, value),
@@ -1080,6 +1232,230 @@ mod tests {
             ecma_u32(&mut v, x);
         }
         assert_eq!(v, [0x7F, 0x80, 0x80, 0xBF, 0xFF, 0xC0, 0, 0x40, 0]);
+    }
+
+    /// A Mach-O as a linker lays one out, with a metadata registration of `TYPEDEFS` type
+    /// definitions and a table of six types, in one of the forms its pointers can have: None for
+    /// dyld info (the words hold the addresses), else chained fixups in a pointer layout. The
+    /// table lies across a page's end, a page has no pointer at all, one page's chain ends at
+    /// the page's last word, and one word is a bind.
+    const IMAGE: u64 = 0x1_8000_0000;
+    const DATA: u64 = IMAGE + 0x4000;
+    const TYPEDEFS: usize = 0x4010; // (a count that, as an offset, would be an address of the image)
+    const TABLE: u64 = DATA + 0x3FE8;
+    const STRUCTS: u64 = DATA + 0x5000;
+    const BIND: u64 = DATA + 0x4100;
+    const PLAIN: u64 = DATA + 0x8010;
+
+    fn image(form: Option<u16>, tweak: &dyn Fn(&mut Vec<u8>)) -> Vec<u8> {
+        let mut data = vec![0u8; 0xC000];
+        let mut pointers: Vec<(u64, u64)> = Vec::new();
+        let put = |d: &mut Vec<u8>, va: u64, v: u64| {
+            let o = (va - DATA) as usize;
+            d[o..o + 8].copy_from_slice(&v.to_le_bytes());
+        };
+        // the registration: counts and pointers in turn
+        let reg = DATA + 0x100;
+        put(&mut data, reg + 8 * 6, 6);
+        pointers.push((reg + 8 * 7, TABLE));
+        put(&mut data, reg + 8 * 10, TYPEDEFS as u64);
+        pointers.push((reg + 8 * 11, DATA + 0x200));
+        put(&mut data, reg + 8 * 12, TYPEDEFS as u64);
+        pointers.push((reg + 8 * 13, DATA + 0x300));
+        // the table, and the types: the even ones name a type definition, the odd ones point
+        // to the type before
+        for i in 0..6u64 {
+            pointers.push((TABLE + 8 * i, STRUCTS + 16 * i));
+            if i % 2 == 0 {
+                put(&mut data, STRUCTS + 16 * i, 0x1000 + i);
+            } else {
+                pointers.push((STRUCTS + 16 * i, STRUCTS + 16 * (i - 1)));
+            }
+            put(&mut data, STRUCTS + 16 * i + 8, 0x0012_0000 + i);
+        }
+        put(&mut data, PLAIN, TYPEDEFS as u64);
+        pointers.sort_unstable();
+
+        let mut link = Vec::new();
+        if let Some(layout) = form {
+            // each page's chain: target, the distance to the next in 4-byte steps
+            let mut starts = [NO_CHAIN; 3];
+            let mut words: Vec<(u64, u64)> = pointers
+                .iter()
+                .map(|&(at, to)| (at, if layout == 6 { to - IMAGE } else { to }))
+                .collect();
+            words.push((BIND, 1 << 63 | 5));
+            words.sort_unstable();
+            for (k, &(at, word)) in words.iter().enumerate() {
+                let (page, off) = ((at - DATA) / 0x4000, (at - DATA) % 0x4000);
+                if starts[page as usize] == NO_CHAIN {
+                    starts[page as usize] = off as u16;
+                }
+                let next = words
+                    .get(k + 1)
+                    .filter(|n| (n.0 - DATA) / 0x4000 == page)
+                    .map_or(0, |n| (n.0 - at) / 4);
+                put(&mut data, at, word | next << 51);
+            }
+            // the header, the segments' offsets (only __DATA has chains), __DATA's starts
+            for v in [0u32, 32, 0, 0, 1, 1, 0, 0, 3, 0, 16, 0] {
+                link.extend(v.to_le_bytes());
+            }
+            link.extend(28u32.to_le_bytes());
+            link.extend(0x4000u16.to_le_bytes());
+            link.extend(layout.to_le_bytes());
+            link.extend(0x4000u64.to_le_bytes());
+            link.extend(0u32.to_le_bytes());
+            link.extend(3u16.to_le_bytes());
+            for s in starts {
+                link.extend(s.to_le_bytes());
+            }
+        } else {
+            for &(at, to) in &pointers {
+                put(&mut data, at, to);
+            }
+            link.extend([0u8; 16]);
+        }
+
+        let mut cmds = Vec::new();
+        let seg = |c: &mut Vec<u8>, name: &str, va: u64, off: u64, size: u64| {
+            c.extend(0x19u32.to_le_bytes());
+            c.extend(72u32.to_le_bytes());
+            let mut n = [0u8; 16];
+            n[..name.len()].copy_from_slice(name.as_bytes());
+            c.extend(n);
+            for v in [va, size, off, size] {
+                c.extend(v.to_le_bytes());
+            }
+            c.extend([0u8; 16]);
+        };
+        seg(&mut cmds, "__TEXT", IMAGE, 0, 0x4000);
+        seg(&mut cmds, "__DATA", DATA, 0x4000, 0xC000);
+        seg(&mut cmds, "__LINKEDIT", IMAGE + 0x10000, 0x10000, link.len() as u64);
+        let mut ncmds = 3u32;
+        if form.is_some() {
+            cmds.extend(0x8000_0034u32.to_le_bytes());
+            cmds.extend(16u32.to_le_bytes());
+            cmds.extend(0x10000u32.to_le_bytes());
+            cmds.extend((link.len() as u32).to_le_bytes());
+        } else {
+            cmds.extend(0x8000_0022u32.to_le_bytes());
+            cmds.extend(48u32.to_le_bytes());
+            cmds.extend([0u8; 40]);
+        }
+        ncmds += 1;
+        let mut b = Vec::new();
+        for v in [0xFEED_FACFu32, 0x0100_000C, 0, 6, ncmds, cmds.len() as u32, 0, 0] {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend(&cmds);
+        b.resize(0x4000, 0);
+        b.extend(&data);
+        b.extend(&link);
+        tweak(&mut b);
+        b
+    }
+
+    fn open(name: &str, b: &[u8]) -> R<Types> {
+        let p = std::env::temp_dir().join(format!("pmu-il2cpp-{}-{name}", std::process::id()));
+        std::fs::write(&p, b).unwrap();
+        let t = Types::open(&p, TYPEDEFS);
+        std::fs::remove_file(&p).unwrap();
+        t
+    }
+
+    /// The type table is read the same whichever form the binary's pointers have.
+    #[test]
+    fn macho_pointer_forms() {
+        for form in [None, Some(6), Some(2)] {
+            let mut t = open(&format!("form-{form:?}"), &image(form, &|_| {}))
+                .unwrap_or_else(|e| panic!("{form:?}: {e}"));
+            assert_eq!((t.count, t.types), (6, TABLE), "{form:?}");
+            for i in 0..6u64 {
+                let at = t.addr(i as i32).unwrap();
+                assert_eq!(at, STRUCTS + 16 * i, "{form:?}: type {i}");
+                let data = if i % 2 == 0 {
+                    0x1000 + i
+                } else {
+                    STRUCTS + 16 * (i - 1)
+                };
+                assert_eq!(t.at(at).unwrap(), (data, 0x0012_0000 + i as u32), "{form:?}: type {i}");
+            }
+            // a plain number in a page without fixups, and a word bound to another image
+            assert_eq!(t.u64_va(PLAIN), Ok(TYPEDEFS as u64), "{form:?}");
+            assert_eq!(t.u64_va(BIND), Ok(0), "{form:?}");
+            assert!(t.addr(6).is_err());
+        }
+    }
+
+    /// What is not read is refused, with the reason.
+    #[test]
+    fn macho_pointer_forms_refused() {
+        let err = |name: &str, b: &[u8]| open(name, b).err().unwrap_or_else(|| panic!("{name}: read"));
+        // arm64e's signed pointers
+        let e = err("signed", &image(Some(1), &|_| {}));
+        assert!(e.contains("pointer format 1"), "{e}");
+        // both forms (the fixups command turned into a second dyld info), neither
+        let both = image(Some(6), &|b| {
+            let at = 32 + 3 * 72;
+            b[at..at + 4].copy_from_slice(&0x8000_0034u32.to_le_bytes());
+            b[16..20].copy_from_slice(&5u32.to_le_bytes());
+            let n = u32::from_le_bytes(b[20..24].try_into().unwrap()) + 48;
+            b[20..24].copy_from_slice(&n.to_le_bytes());
+            let mut c = Vec::new();
+            c.extend(0x8000_0022u32.to_le_bytes());
+            c.extend(48u32.to_le_bytes());
+            c.extend([0u8; 40]);
+            b.splice(at + 16..at + 16, c);
+            b.truncate(b.len() - 48);
+        });
+        let e = err("both", &both);
+        assert!(e.contains("both"), "{e}");
+        let neither = image(None, &|b| b[32 + 3 * 72..32 + 3 * 72 + 4].copy_from_slice(&0x1Bu32.to_le_bytes()));
+        let e = err("neither", &neither);
+        assert!(e.contains("neither"), "{e}");
+        // a chain that walks out of its page (the last link of the table's second page made
+        // the longest there is): reported when a word of that page is asked for
+        let lost = image(Some(6), &|b| {
+            let at = 0x4000 + (STRUCTS + 16 * 5 - DATA) as usize + 7;
+            b[at] |= 0x7F;
+            b[at - 1] |= 0xF8;
+        });
+        let e = open("lost", &lost).unwrap().addr(3).unwrap_err();
+        assert!(e.contains("leaves its page"), "{e}");
+        // fixups whose command gives them fewer bytes than their tables take
+        let cut = image(Some(6), &|b| {
+            b[32 + 3 * 72 + 12..32 + 3 * 72 + 16].copy_from_slice(&40u32.to_le_bytes())
+        });
+        let e = err("cut", &cut);
+        assert!(e.contains("chained fixups: cut short"), "{e}");
+    }
+
+    /// The same on what a linker makes: runtime/macho/test/meta_reg.c as that folder's
+    /// build-mac.sh links it on a Mac (opcode streams, chained fixups of both layouts, each
+    /// with its symbols and stripped of them). Skipped where those files have not been built.
+    #[test]
+    fn macho_linker_output() {
+        let out = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/macho/test/out");
+        for form in ["", "chained/", "chained11/"] {
+            for name in ["meta_reg.dylib", "meta_reg_stripped.dylib"] {
+                let p = format!("{out}/{form}{name}");
+                if !Path::new(&p).is_file() {
+                    eprintln!("macho_linker_output: no {p}, skipped");
+                    continue;
+                }
+                let mut t = Types::open(Path::new(&p), 1234).unwrap_or_else(|e| panic!("{p}: {e}"));
+                assert_eq!(t.chains.is_some(), !form.is_empty(), "{p}");
+                assert_eq!(t.count, 4096, "{p}");
+                let mut before = 0;
+                for i in 0..4096u64 {
+                    let at = t.addr(i as i32).unwrap();
+                    let data = if i % 2 == 0 { 0x1000 + i } else { before };
+                    assert_eq!(t.at(at).unwrap(), (data, 0x12_0000 + i as u32), "{p}: type {i}");
+                    before = at;
+                }
+            }
+        }
     }
 
     /// An opt-in check on a real build: PMU_IL2CPP_TEST=<global-metadata.dat>:<GameAssembly>[:<image>:<type>]

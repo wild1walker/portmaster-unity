@@ -221,6 +221,24 @@ gives them with layout 2; `-Wl,-no_fixup_chains` gives the streams at any target
 Not exercised by any compiler output here: import layout 3 and a non-zero top byte (both
 written from the format's definition, with a unit test on the setup's side for layout 3).
 
+The setup reads a game's binary too, before anything runs: the type table of
+`GameAssembly.dylib`, for the MonoBehaviour type trees (`il2cppmeta.rs`, quality.md). With
+the streams a pointer in the file is the address it points to. With chained fixups the word
+holds the packed target and the distance to the next fixup, and nothing in the word says
+whether it is a fixup at all: a small count and the last rebase of a page look alike (in
+layout 6 the target is an offset from the image's start, so `0x4010` can be either). So the
+reader takes a word as a pointer only if its page's chain reaches it: it walks a page's chain
+from the page's first fixup the first time a word of that page is asked for, and keeps the
+result (the pages the type table touches, not the millions of fixups of the whole binary: a
+setup on a 1 GB handheld does not hold them all). A bind reads as zero, as the other form
+has it in the file. Tested on a made-up image in each form (a table across a page's end, a
+page without fixups, a bind inside a chain, a chain that runs out of its page, the refusals)
+and on what the linker makes: `test/meta_reg.c`, a registration with 4,096 types, linked by
+`test/build-mac.sh` in the three forms, with its symbols and stripped (`cargo test -p
+androiddata macho_linker_output`, which skips where the files were not built). Not yet run
+on a real game built that way: none of the builds at hand has the new form in its
+GameAssembly.
+
 ### What a plugin's own libraries asked for (2026-11-10)
 
 A plugin brings its own libraries with it (a task scheduler, a logger, a volume library), and

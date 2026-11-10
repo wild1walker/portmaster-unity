@@ -101,13 +101,14 @@ builds its trees from those as from a Mono build's files, by the same rules and 
 them; [il2cpp_dumper](https://github.com/rodroidmods/il2cpp-dumper-rs) (Rust) was looked at and not
 used (its licence reads GPL-3.0 and MIT in two places). Read: metadata version 31 (Unity 2022.3 -
 6000.0); a 64-bit Mach-O (macOS GameAssembly.dylib: a universal file's arm64 slice, else x86_64;
-classic dyld info) or a 64-bit little-endian ELF (Linux GameAssembly.so, Android's libil2cpp.so;
+its pointers as classic dyld info leaves them, or through the chained fixups of a build for
+macOS 12 or later, see macho-route.md, "Chained fixups") or a 64-bit little-endian ELF (Linux GameAssembly.so, Android's libil2cpp.so;
 aarch64 or x86_64; its RELATIVE relocations are the pointers it holds). The metadata registration
 is the `g_MetadataRegistration` symbol where the binary keeps it, else found in its data segments
 (Il2CppDumper's search: the words that count the field offset tables and the type sizes, both the
 metadata's type count), and it must name as many of those as the metadata has types. Not read yet:
-other metadata versions, PE (`GameAssembly.dll`), 32-bit binaries, packed relocations, chained
-fixups: the step then keeps those objects ("IL2CPP types not read: ..."). The post effects stay in
+other metadata versions, PE (`GameAssembly.dll`), 32-bit binaries, packed relocations, arm64e's
+signed pointers: the step then keeps those objects ("IL2CPP types not read: ..."). The post effects stay in
 an IL2CPP build (table above).
 
 Checked against the assemblies an IL2CPP build was made from (convert's opt-in test

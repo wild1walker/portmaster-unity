@@ -47,6 +47,10 @@ build() {   # OUT MIN-VERSION [the linker flag that picks the fixups' form]
     xcrun clang $flags -dynamiclib $fix -install_name @rpath/darwin_dl.dylib \
         -o "$out/darwin_dl.dylib" "$here/darwin_dl.c"
     xcrun clang $flags -o "$out/darwin_dl.native" "$here/native_main.c" "$out/darwin_dl.dylib" -Wl,-rpath,@loader_path
+    # what the setup reads of a game's binary (meta_reg.c), with its symbols and without
+    xcrun clang $flags -dynamiclib $fix -install_name @rpath/meta_reg.dylib \
+        -o "$out/meta_reg.dylib" "$here/meta_reg.c"
+    xcrun strip -x -o "$out/meta_reg_stripped.dylib" "$out/meta_reg.dylib"
     "$out/darwin_dl.native" > "$out/darwin_dl.expect" || echo "darwin_dl: failures natively (see $out/darwin_dl.expect)"
     "$out/darwin_cxx.native" > "$out/darwin_cxx.expect" || echo "darwin_cxx: failures natively (see $out/darwin_cxx.expect)"
     "$out/darwin_c.native" > "$out/darwin_c.expect" || echo "darwin_c: failures natively (see $out/darwin_c.expect)"
