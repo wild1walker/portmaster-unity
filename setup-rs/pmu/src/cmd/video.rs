@@ -7,11 +7,14 @@
 //! them (its settings: `--set mode=on`, `max_height=540`, ...; mode auto by default: only where
 //! MemTotal is at most ram_mb), and each file it changed is written back over its entry: stored
 //! and of the same length, so nothing else in the APK or OBB moves (Archive::overwrite_stored).
+//! An entry is looked through, taken out and written back a piece at a time: a game's resource
+//! files (its music too) can be hundreds of MB, and the handheld has 1 GB.
 //! The changed files wait in the work folder, marked ready, until all are written back: a run
 //! that is stopped writes them again the next time. Exit 0 when done or nothing needed doing;
 //! "video: ..." lines on stdout.
 use convert::pyjson::Json;
 use pkgzip::zip::Archive;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -48,12 +51,51 @@ fn settings(base: Option<&Json>, sets: &[String]) -> Result<Json, String> {
     ]))
 }
 
-/// Whether a resource file holds a WebM clip (an EBML header with the "webm" doc type).
-fn has_webm(b: &[u8]) -> bool {
+/// How far after an EBML header's first byte its doc type is looked for.
+const LOOK: usize = 64;
+
+/// Whether the bytes hold a WebM clip (an EBML header with the "webm" doc type) that begins
+/// before `upto`.
+fn webm_before(b: &[u8], upto: usize) -> bool {
     let magic = [0x1A, 0x45, 0xDF, 0xA3];
-    b.windows(4)
-        .enumerate()
-        .any(|(i, w)| w == magic && b[i..(i + 64).min(b.len())].windows(4).any(|t| t == b"webm"))
+    b.windows(4).take(upto).enumerate().any(|(i, w)| {
+        w == magic
+            && b[i..(i + LOOK).min(b.len())]
+                .windows(4)
+                .any(|t| t == b"webm")
+    })
+}
+
+/// Whether a resource file holds a WebM clip, read a piece at a time (never whole in memory): a
+/// header is looked at once the LOOK bytes from it are here, or the file's end.
+fn has_webm(r: &mut dyn Read) -> std::io::Result<bool> {
+    let mut piece = vec![0u8; 1 << 20];
+    let mut b: Vec<u8> = Vec::with_capacity(piece.len() + LOOK);
+    loop {
+        let got = match r.read(&mut piece) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        b.extend_from_slice(&piece[..got]);
+        let upto = if got == 0 {
+            b.len()
+        } else {
+            b.len().saturating_sub(LOOK - 1)
+        };
+        if webm_before(&b, upto) {
+            return Ok(true);
+        }
+        if got == 0 {
+            return Ok(false);
+        }
+        b.drain(..upto);
+    }
+}
+
+/// pkgzip's error text of a read's error (a bad CRC keeps its own).
+fn zip_err(e: std::io::Error) -> String {
+    pkgzip::Error::from(e).to_string()
 }
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -154,7 +196,9 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
                 else {
                     continue;
                 };
-                if has_webm(&z.read(n).map_err(|e| e.to_string())?) {
+                let e = z.info(n).map_err(|e| e.to_string())?;
+                let mut r = z.reader(e).map_err(|e| e.to_string())?;
+                if has_webm(&mut r).map_err(zip_err)? {
                     wanted.push(base.to_string());
                     wanted.push(format!("{}.assets", base.trim_end_matches(".resource")));
                 }
@@ -167,8 +211,10 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
         }
         for n in &wanted {
             let (_, z) = holder(n).ok_or_else(|| format!("{n}: in none of the game's archives"))?;
-            let b = z.read(&format!("{DATA}{n}")).map_err(|e| e.to_string())?;
-            std::fs::write(data.join(n), b).map_err(|e| e.to_string())?;
+            let e = z.info(&format!("{DATA}{n}")).map_err(|e| e.to_string())?;
+            let mut r = z.reader(e).map_err(|e| e.to_string())?;
+            let mut f = std::fs::File::create(data.join(n)).map_err(|e| e.to_string())?;
+            pkgzip::zip::copy_entry(&mut r, &mut f).map_err(|e| e.to_string())?;
         }
         let mut job = convert::Job::new(&data, &out, cfg).map_err(|e| e.to_string())?;
         let r = convert::steps::video::run(&mut job);
@@ -202,8 +248,10 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
     }
     for n in &changed {
         let (path, z) = holder(n).ok_or_else(|| format!("{n}: in none of the game's archives"))?;
-        let b = std::fs::read(out.join(n)).map_err(|e| e.to_string())?;
-        z.overwrite_stored(path, &format!("{DATA}{n}"), &b)
+        let p = out.join(n);
+        let len = std::fs::metadata(&p).map_err(|e| e.to_string())?.len();
+        let mut f = std::fs::File::open(&p).map_err(|e| e.to_string())?;
+        z.overwrite_stored_from(path, &format!("{DATA}{n}"), &mut f, len)
             .map_err(|e| e.to_string())?;
     }
     if !changed.is_empty() {
@@ -220,15 +268,61 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// A reader that gives its bytes `1` at a time (an entry read in pieces).
+    struct Drip<'a>(&'a [u8], usize);
+
+    impl Read for Drip<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.1.min(out.len()).min(self.0.len());
+            out[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+
+    /// has_webm on the bytes read whole and in pieces of several sizes: one answer.
+    fn scan(b: &[u8]) -> bool {
+        let whole = webm_before(b, b.len());
+        for step in [1, 3, 63, 64, 65, 1000, 1 << 20] {
+            assert_eq!(has_webm(&mut Drip(b, step)).unwrap(), whole, "step {step}");
+        }
+        whole
+    }
+
+    const HEAD: [u8; 12] = [
+        0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84,
+    ];
+
     #[test]
     fn webm_found_anywhere() {
         let mut b = vec![0u8; 5000];
-        assert!(!has_webm(&b));
-        b.extend_from_slice(&[
-            0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01, 0x42, 0x82, 0x84,
-        ]);
+        assert!(!scan(&b));
+        assert!(!scan(&[]));
+        b.extend_from_slice(&HEAD);
         b.extend_from_slice(b"webm");
-        assert!(has_webm(&b));
+        assert!(scan(&b));
+    }
+
+    /// The header and its doc type on two sides of a piece's end, wherever that end falls; the
+    /// doc type at the last place it counts (60 bytes after the header's first) and one past it.
+    #[test]
+    fn webm_across_pieces() {
+        for lead in [0, 1, 61, 62, 63, 64, 65, 127, 128, 1000] {
+            for gap in [0, 8, 56, 57] {
+                let mut b = vec![0u8; lead];
+                b.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3]);
+                b.extend(std::iter::repeat(0x20).take(gap));
+                b.extend_from_slice(b"webm");
+                b.extend(std::iter::repeat(0).take(200));
+                assert_eq!(scan(&b), gap <= 56, "lead {lead} gap {gap}");
+                // (the file ends right after the doc type)
+                b.truncate(lead + 4 + gap + 4);
+                assert_eq!(scan(&b), gap <= 56, "lead {lead} gap {gap}, at the end");
+            }
+        }
+        // a header cut off by the file's end, and a doc type with no header before it
+        assert!(!scan(&[0x1A, 0x45, 0xDF]));
+        assert!(!scan(b"....webm...."));
     }
 
     #[test]

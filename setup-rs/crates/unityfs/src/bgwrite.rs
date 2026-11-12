@@ -75,6 +75,26 @@ fn gone() -> io::Error {
     io::Error::other("the writer thread stopped")
 }
 
+/// The file's bytes and size on the card: before a rename puts it in the place of the only other
+/// copy, or before the file it was made from is removed (a power cut after that keeps one whole).
+pub fn sync_file(path: impl AsRef<std::path::Path>) -> io::Result<()> {
+    let p = path.as_ref();
+    File::options()
+        .read(true)
+        .write(true)
+        .open(p)
+        .or_else(|_| File::open(p))?
+        .sync_all()
+}
+
+/// A folder's entries (a file renamed into it) on the card; a file system that cannot sync a
+/// folder: as it is.
+pub fn sync_dir(dir: impl AsRef<std::path::Path>) {
+    if let Ok(d) = File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
 impl BgWriter {
     /// Writes to `f` from its current position (a file just made: 0).
     pub fn new(f: File) -> io::Result<BgWriter> {
@@ -201,6 +221,25 @@ mod tests {
         let mut got = Vec::new();
         File::open(&p).unwrap().read_to_end(&mut got).unwrap();
         assert_eq!(got, want);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn syncs_a_file_and_a_folder() {
+        let dir = std::env::temp_dir().join(format!("unityfs-bgsync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("a.bin");
+        std::fs::write(&p, b"abc").unwrap();
+        sync_file(&p).unwrap();
+        // (a file that cannot be opened for writing is synced through a read-only handle)
+        let mut m = std::fs::metadata(&p).unwrap().permissions();
+        m.set_readonly(true);
+        std::fs::set_permissions(&p, m).unwrap();
+        sync_file(&p).unwrap();
+        sync_dir(&dir);
+        sync_dir(dir.join("none"));
+        assert!(sync_file(dir.join("none")).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), b"abc");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

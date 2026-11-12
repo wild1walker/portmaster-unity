@@ -302,8 +302,22 @@ impl Archive {
     /// directory. A compressed entry, one of another length or one with a data descriptor is
     /// refused. `path` is this archive's file, opened again for writing.
     pub fn overwrite_stored(&self, path: &str, name: &str, data: &[u8]) -> Result<()> {
+        self.overwrite_stored_from(path, name, &mut &data[..], data.len() as u64)
+    }
+
+    /// overwrite_stored with the new bytes read from `src`, `n` of them, a piece at a time (a
+    /// resource file of hundreds of MB on a 1 GB handheld is never whole in memory). The same
+    /// bytes reach the archive in the same order: the data, then its CRC-32 twice. A source
+    /// that ends before `n` bytes is an error, the entry then part new: the caller writes it
+    /// again.
+    pub fn overwrite_stored_from(
+        &self,
+        path: &str,
+        name: &str,
+        src: &mut dyn Read,
+        n: u64,
+    ) -> Result<()> {
         let e = self.info(name)?;
-        let n = data.len() as u64;
         if e.method != 0 || e.compress_size != n || e.file_size != n {
             return Err(Error::Fail(format!(
                 "{name}: not a stored entry of {n} bytes (method {}, {} bytes)",
@@ -338,12 +352,30 @@ impl Archive {
             rec += 46 + n_len + x_len + k_len;
         }
         let rec = found.ok_or_else(|| bad(format!("{name}: no central directory record")))?;
-        let crc = crc32fast::hash(data).to_le_bytes();
         let w = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
             .map_err(io_at(path))?;
-        w.write_all_at(data, at)?;
+        let mut crc = crc32fast::Hasher::new();
+        let mut buf = vec![0u8; (n.min(1 << 20) as usize).max(1)];
+        let mut done = 0u64;
+        while done < n {
+            let want = (n - done).min(buf.len() as u64) as usize;
+            let got = match src.read(&mut buf[..want]) {
+                Ok(0) => {
+                    return Err(Error::Fail(format!(
+                        "{name}: the new data ends after {done} of {n} bytes"
+                    )))
+                }
+                Ok(k) => k,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            };
+            w.write_all_at(&buf[..got], at + done)?;
+            crc.update(&buf[..got]);
+            done += got as u64;
+        }
+        let crc = crc.finalize().to_le_bytes();
         w.write_all_at(&crc, hdr + 14)?;
         w.write_all_at(&crc, rec + 16)?;
         w.sync_all()?;

@@ -54,7 +54,7 @@ pub fn pack(bundles: &str, game: &str, log: &mut dyn FnMut(&str)) -> Result<Stri
         }
         let dst = py::join(&stage, &n);
         if crate::inline::has_ress_node(&src)? {
-            crate::inline::inline_bundle_with(db.clone(), &src, &dst)?;
+            crate::inline::inline_bundle_with(db.clone(), &src, &dst, false)?;
         } else {
             copyfile(&src, &dst)?;
             match unityfs::platform::patch_bundle_platform(Path::new(&dst), ANDROID) {

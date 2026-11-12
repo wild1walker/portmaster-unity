@@ -9,7 +9,7 @@ fn main() {
         std::process::exit(2);
     }
     let db = unityfs::ClassDb::default_db().ok().map(std::sync::Arc::new);
-    match androiddata::inline::inline_bundle_with(db, &a[0], &a[1]) {
+    match androiddata::inline::inline_bundle_with(db, &a[0], &a[1], false) {
         Ok((n, dropped)) => {
             let d: Vec<String> = dropped.iter().map(|x| format!("'{x}'")).collect();
             println!("({n}, [{}])", d.join(", "));

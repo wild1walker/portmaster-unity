@@ -402,6 +402,9 @@ pub fn repack_bundle(
     let tmp = crate::paths::with_suffix(path, ".tmp");
     b.write_to(&tmp, None)?;
     drop(b);
+    // (the bundle is replaced, and with --consume-src it is the game's only copy: the new one
+    // on the card first)
+    unityfs::bgwrite::sync_file(&tmp)?;
     std::fs::rename(&tmp, path)?;
     Ok(res)
 }

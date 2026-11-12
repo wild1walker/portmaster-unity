@@ -271,6 +271,27 @@ pub fn write_bytes(dst: &str, data: &[u8]) -> Result<(), Stop> {
     Ok(())
 }
 
+/// The file's bytes on the card (--consume-src: before the file it was made from goes, or
+/// before the game's only copy, changed in place, gets its name in the output). A rerun takes
+/// "its source gone, its copy there" as placed, so the copy has to be whole by then.
+pub(crate) fn sync_file(path: &str) -> Result<(), Stop> {
+    unityfs::bgwrite::sync_file(path).map_err(io_at(path))
+}
+
+/// All that was written to the folder's file system on the card (syncfs; where there is none,
+/// sync).
+fn sync_fs(dir: &str) {
+    #[cfg(target_os = "linux")]
+    if let Ok(d) = File::open(dir) {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::syncfs(d.as_raw_fd()) } == 0 {
+            return;
+        }
+    }
+    let _ = dir;
+    unsafe { libc::sync() };
+}
+
 fn consumable(ctx: &Ctx, src: &str, act: &str) -> bool {
     if !ctx.args.consume_src || !matches!(act, "link" | "sfpatch" | "bundle" | "sfinline") {
         return false;
@@ -279,10 +300,23 @@ fn consumable(ctx: &Ctx, src: &str, act: &str) -> bool {
     !(rel.starts_with("..") || rel.starts_with("Managed/") || rel.starts_with("Mono/"))
 }
 
-fn save_state(path: &str, state: &Json) -> Result<(), Stop> {
+/// The state, through <path>.tmp. With `durable` (--consume-src: a handheld's card), the files it
+/// says are placed are on the card before it says so, and the state before it has its name: a
+/// rerun after a power cut trusts it (a file listed with its source's size and time is left as
+/// it is).
+fn save_state(path: &str, state: &Json, durable: bool) -> Result<(), Stop> {
     let tmp = format!("{path}.tmp");
+    if durable {
+        sync_fs(py::dirname(path));
+    }
     fs::write(&tmp, pyjson::dumps(state, Some(0))).map_err(io_at(&tmp))?;
+    if durable {
+        sync_file(&tmp)?;
+    }
     fs::rename(&tmp, path).map_err(io_at(path))?;
+    if durable {
+        unityfs::bgwrite::sync_dir(py::dirname(path));
+    }
     Ok(())
 }
 
@@ -1611,6 +1645,8 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             )?;
             report.get_mut("files").unwrap().set(dst_rel, note.into());
             if mv_ {
+                // (changed in place: on the card before it has its name in the output)
+                sync_file(src)?;
                 h = mv(src, &dst)?.into();
             }
             how = h;
@@ -1618,6 +1654,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             let old;
             if mv_ {
                 old = unityfs::platform::patch_sf_platform(Path::new(src), ANDROID)?;
+                if old != ANDROID {
+                    sync_file(src)?;
+                }
                 how = mv(src, &dst)?.into();
             } else {
                 how = clone(src, &dst, false)?.into();
@@ -1667,6 +1706,9 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                     }
                     report.get_mut("files").unwrap().set(dst_rel, note.into());
                     if mv_ {
+                        // (dst was synced before it got its name; its folder's entry too
+                        // before the file it was made from goes)
+                        unityfs::bgwrite::sync_dir(py::dirname(&dst));
                         fs::remove_file(src).map_err(io_at(src))?;
                         let res = format!("{src}.resS");
                         if exists(&res) && !still.contains(&format!("{}.resS", py::basename(src))) {
@@ -1739,7 +1781,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             }
         } else if act == "bundle" && ctx.args.inline_textures && crate::inline::has_ress_node(src)?
         {
-            let (n, dropped) = crate::inline::inline_bundle(&ctx, src, &dst)?;
+            let (n, dropped) = crate::inline::inline_bundle(&ctx, src, &dst, mv_)?;
             let list = format!(
                 "[{}]",
                 dropped
@@ -1754,6 +1796,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             );
             how = "inlined".into();
             if mv_ {
+                unityfs::bgwrite::sync_dir(py::dirname(&dst));
                 fs::remove_file(src).map_err(io_at(src))?;
             }
         } else if act == "bundle" {
@@ -1781,6 +1824,14 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
                     Err(e) => return Err(e.into()),
                 };
             if mv_ {
+                // (changed in place, unless every file in it was Android's already: on the
+                // card before it has its name in the output)
+                let already = |r: &Json| {
+                    r.as_list().and_then(|l| l.get(2)).and_then(Json::as_str) == Some("already")
+                };
+                if !res.iter().all(already) {
+                    sync_file(src)?;
+                }
                 h = mv(src, &dst)?.into();
             }
             how = h;
@@ -1867,8 +1918,11 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         // (the Python writes the state after each file it consumes; here at most every 2 s: a
         // consumed file is told by its source gone and its copy there, as --consume-src's
         // rerun finds it, so a run killed in between places the same files)
-        if (mv_ && saved.elapsed() >= std::time::Duration::from_secs(2)) || (k + 1) % 50 == 0 {
-            save_state(&statep, &merged(&state, &newstate))?;
+        // (with --consume-src each write of the state syncs the card first, see save_state: the
+        // one every 50 files waits for the 2 s too)
+        let due = saved.elapsed() >= std::time::Duration::from_secs(2);
+        if (mv_ && due) || ((k + 1) % 50 == 0 && (due || !consume)) {
+            save_state(&statep, &merged(&state, &newstate), consume)?;
             saved = std::time::Instant::now();
         }
         if let Some(c0) = crc0 {
@@ -1943,7 +1997,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
             }
         }
     }
-    save_state(&statep, &newstate)?;
+    save_state(&statep, &newstate, consume)?;
     let stats_repr = format!(
         "{{{}}}",
         stats

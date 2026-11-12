@@ -413,6 +413,8 @@ pub fn rewrite_bundle_block(
         o.write_all(&head)?;
         o.flush()?;
     }
+    // (the bundle is replaced: the new one on the card first, a power cut keeps one of the two)
+    crate::bgwrite::sync_file(&tmp)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
 }

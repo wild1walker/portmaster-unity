@@ -368,6 +368,9 @@ pub fn retarget_metadata(
         std::io::copy(&mut fi, &mut fo)?;
         fo.flush()?;
     }
+    // (the file is replaced, and with --consume-src it is the game's only copy: the new one on
+    // the card first)
+    unityfs::bgwrite::sync_file(&tmp)?;
     std::fs::rename(&tmp, path)?;
     Ok(shift)
 }
@@ -425,6 +428,7 @@ pub fn retarget_file(
     let tmp = crate::paths::with_suffix(path, ".retarget");
     full.write_to(&tmp, false)?;
     drop(full);
+    unityfs::bgwrite::sync_file(&tmp)?;
     std::fs::rename(&tmp, path)?;
     Ok(format!(
         "platform -> {platform}, version {src} -> {dst}; {}",

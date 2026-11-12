@@ -19,13 +19,20 @@ pub fn has_ress_node(src: &str) -> Result<bool, Stop> {
     Ok(b.nodes.iter().any(|n| n.3.ends_with(".resS")))
 }
 
+/// `sf` written to `out` with the planned textures' pixels inline. With `sync`, on the card when
+/// this returns (the file it is made from goes next: --consume-src), most of it on the way.
 fn save_inlined(
     sf: &SerializedFile,
     plan: &HashSet<i64>,
     read: &ReadStream<'_>,
     out: &Path,
+    sync: bool,
 ) -> Result<(), Stop> {
     let mut w = unityfs::bgwrite::BgWriter::create(out).map_err(crate::android_data::io_at(out))?;
+    if sync {
+        w.sync_every(16 << 20)
+            .map_err(crate::android_data::io_at(out))?;
+    }
     let r = sf.save_to(&mut w, |sf, o| {
         if !plan.contains(&o.path_id) {
             return Ok(None);
@@ -38,6 +45,9 @@ fn save_inlined(
         r => r?,
     }
     w.finish().map_err(crate::android_data::io_at(out))?;
+    if sync {
+        unityfs::bgwrite::sync_file(out).map_err(crate::android_data::io_at(out))?;
+    }
     Ok(())
 }
 
@@ -52,7 +62,8 @@ pub enum Placed {
 
 /// A serialized file with a <name>.resS beside it: textures inlined, target platform Android,
 /// retargeted to the player's version; or, when it would then pass one archive (ctx.split), its
-/// .resS kept and split into parts that fit one (with `consume`, src and its .resS used up).
+/// .resS kept and split into parts that fit one (with `consume`, src and its .resS used up: the
+/// caller removes them, so dst is on the card before it has its name).
 pub fn inline_serialized(ctx: &Ctx, src: &str, dst: &str, consume: bool) -> Result<Placed, Stop> {
     let mut f = unityfs::DataFile::open(src, &ctx.opts())?;
     let d = py::dirname(src).to_string();
@@ -88,7 +99,7 @@ pub fn inline_serialized(ctx: &Ctx, src: &str, dst: &str, consume: bool) -> Resu
     ctx.retarget_sf(&mut f.sf)?;
     std::fs::create_dir_all(py::dirname(dst))?;
     let tmp = format!("{dst}.tmp");
-    save_inlined(&f.sf, &plan, &read, Path::new(&tmp))?;
+    save_inlined(&f.sf, &plan, &read, Path::new(&tmp), consume)?;
     drop(f);
     std::fs::rename(&tmp, dst)?;
     Ok(Placed::Inlined(plan.len(), still))
@@ -96,9 +107,15 @@ pub fn inline_serialized(ctx: &Ctx, src: &str, dst: &str, consume: bool) -> Resu
 
 /// A bundle with .resS nodes: textures inlined, the .resS nodes nothing reads any more dropped,
 /// the serialized file's platform Android, written as chunked LZ4 (bigbundle.pack). Returns
-/// (textures inlined, the nodes dropped).
-pub fn inline_bundle(ctx: &Ctx, src: &str, dst: &str) -> Result<(usize, Vec<String>), Stop> {
-    inline_bundle_with(Some(ctx.db.clone()), src, dst)
+/// (textures inlined, the nodes dropped). With `sync`, dst is on the card before it has its name
+/// (the caller removes src next: --consume-src).
+pub fn inline_bundle(
+    ctx: &Ctx,
+    src: &str,
+    dst: &str,
+    sync: bool,
+) -> Result<(usize, Vec<String>), Stop> {
+    inline_bundle_with(Some(ctx.db.clone()), src, dst, sync)
 }
 
 /// inline_bundle with a class database (or none: bundles carry their type trees).
@@ -106,6 +123,7 @@ pub fn inline_bundle_with(
     db: Option<Arc<unityfs::ClassDb>>,
     src: &str,
     dst: &str,
+    sync: bool,
 ) -> Result<(usize, Vec<String>), Stop> {
     let b = Bundle::open(src)?;
     let sfs: Vec<usize> = (0..b.header.nodes.len())
@@ -113,7 +131,7 @@ pub fn inline_bundle_with(
         .collect();
     if sfs.len() != 1 {
         drop(b);
-        return inline_bundle_files(db, src, dst);
+        return inline_bundle_files(db, src, dst, sync);
     }
     let work = format!("{dst}.work");
     let _ = std::fs::remove_dir_all(&work);
@@ -148,7 +166,7 @@ pub fn inline_bundle_with(
         sf.target_platform = ANDROID as i32;
         std::fs::create_dir_all(&work)?;
         let cab = Path::new(&work).join("cab.new");
-        save_inlined(&sf, &plan, &read, &cab)?;
+        save_inlined(&sf, &plan, &read, &cab, false)?;
         drop(sf);
         let dropped: Vec<String> = names
             .iter()
@@ -181,6 +199,9 @@ pub fn inline_bundle_with(
             bundle::LZ4_DATA_FLAG,
             bundle::LZ4_BLOCK_FLAG,
         )?;
+        if sync {
+            unityfs::bgwrite::sync_file(&tmp).map_err(crate::android_data::io_at(&tmp))?;
+        }
         std::fs::rename(&tmp, dst)?;
         Ok((plan.len(), dropped))
     })();
@@ -198,6 +219,7 @@ pub fn inline_bundle_files(
     db: Option<Arc<unityfs::ClassDb>>,
     src: &str,
     dst: &str,
+    sync: bool,
 ) -> Result<(usize, Vec<String>), Stop> {
     let mut b = unityfs::data::BundleFiles::open(src, db)?;
     let names: Vec<String> = b
@@ -250,6 +272,9 @@ pub fn inline_bundle_files(
     );
     let _ = std::fs::remove_dir_all(&work);
     r?;
+    if sync {
+        unityfs::bgwrite::sync_file(&tmp).map_err(crate::android_data::io_at(&tmp))?;
+    }
     std::fs::rename(&tmp, dst)?;
     Ok((done, dropped))
 }

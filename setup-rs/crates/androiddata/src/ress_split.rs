@@ -178,8 +178,9 @@ pub struct Split {
     pub unread: u64,
 }
 
-/// bytes [from, to) of src copied to dst (through dst.tmp).
-fn copy_range(src: &str, from: u64, to: u64, dst: &str) -> Result<(), Stop> {
+/// bytes [from, to) of src copied to dst (through dst.tmp; with `sync`, on the card before it
+/// has its name: src is about to be cut short).
+fn copy_range(src: &str, from: u64, to: u64, dst: &str, sync: bool) -> Result<(), Stop> {
     let mut i =
         fs::File::open(src).map_err(|e| Stop::Fail(format!("{e}: {}", py::str_repr(src))))?;
     i.seek(SeekFrom::Start(from))?;
@@ -196,6 +197,9 @@ fn copy_range(src: &str, from: u64, to: u64, dst: &str) -> Result<(), Stop> {
         )));
     }
     o.flush()?;
+    if sync {
+        o.get_ref().sync_all()?;
+    }
     drop(o);
     fs::rename(&tmp, dst)?;
     Ok(())
@@ -205,7 +209,9 @@ fn copy_range(src: &str, from: u64, to: u64, dst: &str) -> Result<(), Stop> {
 /// .resS kept and split into parts of at most `cap` bytes beside it, every stream in a later
 /// part rewritten to it; the target platform Android, `prepare` (the retarget) applied before
 /// it is saved. With `consume`, src is removed and its .resS becomes part 0 (moved, cut short),
-/// else part 0 is a copy (or, one part, a hard link).
+/// else part 0 is a copy (or, one part, a hard link). What `consume` removes or cuts goes once
+/// the files written from it are on the card (synced, their folder too): a power cut before
+/// that leaves src and its .resS whole.
 pub fn split_serialized(
     sf: &mut SerializedFile,
     mut refs: Vec<StreamRef>,
@@ -271,7 +277,7 @@ pub fn split_serialized(
         let end = cuts.get(k + 1).copied().unwrap_or(len);
         parts.push((names[k].clone(), end - cuts[k]));
         if k > 0 {
-            copy_range(&res, cuts[k], end, &py::join(&dd, &names[k]))?;
+            copy_range(&res, cuts[k], end, &py::join(&dd, &names[k]), consume)?;
         }
     }
     let tmp = format!("{dst}.tmp");
@@ -283,22 +289,26 @@ pub fn split_serialized(
             None => Ok(None),
         })?;
         w.flush()?;
+        if consume {
+            w.get_ref().sync_all()?;
+        }
     }
     fs::rename(&tmp, dst)?;
     let first = py::join(&dd, &own);
     if consume {
+        unityfs::bgwrite::sync_dir(&dd);
         fs::remove_file(src)?;
         crate::android_data::mv(&res, &first)?;
         if cuts.len() > 1 {
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&first)?
-                .set_len(cuts[1])?;
+            let f = fs::OpenOptions::new().write(true).open(&first)?;
+            f.set_len(cuts[1])?;
+            f.sync_all()?;
         }
+        unityfs::bgwrite::sync_dir(&dd);
     } else if cuts.len() == 1 {
         crate::android_data::clone(&res, &first, true)?;
     } else {
-        copy_range(&res, 0, cuts[1], &first)?;
+        copy_range(&res, 0, cuts[1], &first, false)?;
     }
     Ok(Split {
         parts,
