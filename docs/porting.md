@@ -873,6 +873,10 @@ it. The steps, on a Mac:
    adb, or give `SDK` the SDK the running server comes from (`ADB_KILL_OK=1` builds anyway).
    An editor's first launch after `get-editor.sh` can sit for minutes with no CPU and no log while
    macOS verifies the unpacked bundle: let it run (killing and relaunching it starts the check again).
+   The editor's project is a temporary folder (`$TMPDIR`; 0.8 - 1.4 GB with its Library and build
+   files), removed when the build ends and kept when the editor fails (`build.sh` prints its path;
+   its `build.log` is the whole log). Before 2026-11-12 it was never removed: look for
+   `$TMPDIR/tmp.*/donor` folders an older `build.sh` left.
 5. **Package** with them: `DONORS=<DONORS dir> <port>/package.sh`, or `port package --donors <dir>`.
 
 Donors are never committed (a port's repository holds no Unity files; `port new`'s `.gitignore`

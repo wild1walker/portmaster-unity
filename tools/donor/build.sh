@@ -47,10 +47,14 @@ for pid in $(pgrep -x adb || true); do
   echo "Build when nobody uses adb, or with SDK=<the SDK of $f>; ADB_KILL_OK=1 builds anyway." >&2
   exit 2
 done
-P=$(mktemp -d)/donor; mkdir -p "$P/Assets"; cp -R "$HERE/Assets/Editor" "$HERE/Assets/Scripts" "$P/Assets/"
+# the editor's project in a temporary folder ($TMPDIR: on macOS the system disk; with its Library and
+# the build's files 0.8 - 1.4 GB in the builds measured): removed at the end, kept when the editor
+# fails (its path is printed; the whole build.log is in it)
+P=$(mktemp -d)/donor; trap 'rm -rf "$(dirname "$P")"' EXIT
+mkdir -p "$P/Assets"; cp -R "$HERE/Assets/Editor" "$HERE/Assets/Scripts" "$P/Assets/"
 BIN="$ED/Contents/MacOS/Unity"; [ -x "$BIN" ] || BIN="$ED"
 if [ -n "${NDK:-}" ] && command -v defaults >/dev/null; then defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"; fi
 DONOR_SDK=${SDK:?set SDK} DONOR_JDK=${JDK:?set JDK} DONOR_NDK=${NDK:-} \
   "$BIN" -batchmode -nographics -quit -projectPath "$P" -executeMethod "DonorBuild.$WHAT" -logFile "$P/build.log" \
-  || { tail -40 "$P/build.log"; exit 1; }
+  || { tail -40 "$P/build.log"; trap - EXIT; echo "the editor's project, with its whole build.log: $P" >&2; exit 1; }
 mkdir -p "$OUT"; cp "$P"/out/*.apk "$OUT/"; ls -la "$OUT"
