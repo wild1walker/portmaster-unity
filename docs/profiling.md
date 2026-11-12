@@ -1147,6 +1147,12 @@ deeper one (everything behind z 3) needs a plane the port invents, and takes mor
 On the RG34XX-SP (Knulli, the release's 1 GB settings, Greenpath's bench walk, A B A B, 2026-11-12):
 `off` 53.1 / 53.1 fps walking (54.0 / 53.6 steady), `off,hide` 55.9 / 55.8 (55.4 / 56.4): +5 %, the
 same in both pairs; memory the same (the objects stay loaded).
+On the G350 (dArkOS, the same settings, the walk in two holds, the second in reverse order; the
+handheld at about 78 C and its clock down to 1140 - 1240 MHz in every run): `off` 32.8 / 31.8 fps
+walking (33.7 / 32.3 steady), `off,hide` 35.3 / 35.0 (35.6 / 35.4): +8 to +10 %, at a slightly lower
+clock. In the same holds the textures in 6x6 blocks against 4x4 (porting.md, Small handhelds):
+33.3 / 32.0 fps with 4x4, the same within the clock's spread, and 32 MB more memory free (254 ->
+288 MB at the lowest; the G350 has no swap). A long way from 60: the room's other work stays.
 
 For the handheld: `UA_DUMP_OFF_Z=-100,3` and `ASMPATCH_HK_BLUR=off,hide` against the release's
 settings in one hold, each run from a cool start (the clock's fall decides as much as the work:
