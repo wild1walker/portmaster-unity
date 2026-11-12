@@ -48,7 +48,7 @@ abstract class Patch
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
         new GenericUnion(),
         // optimizations
-        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new UnityObjectNull(), new HollowKnightFade(),
+        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new PlayMakerTypeLookup(), new UnityObjectNull(), new HollowKnightFade(),
         // reductions
         new HollowKnightBlur(), new HollowKnightPost(),
         // screens
