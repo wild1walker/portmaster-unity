@@ -516,6 +516,50 @@ static void load_block(const job *J, int x, int y, uint8_t *px)
 
 enum { OTHER, ONE_COLOUR, FIT, SEED, LINE, NEAR };
 
+/* The line residual of n texels (any footprint): the squared distances of the texels from their
+ * principal axis, as fit_block works it out for 16 (kept apart so the 4x4 path stays as it was) */
+static float line_residual(const uint8_t *px, int n, int nc)
+{
+    float mean[4] = {0}, M[4][4] = {{0}};
+    for (int i = 0; i < n; i++)
+        for (int c = 0; c < nc; c++) mean[c] += px[4 * i + c];
+    for (int c = 0; c < nc; c++) mean[c] *= 1.0f / n;
+    for (int i = 0; i < n; i++) {
+        float d[4];
+        for (int c = 0; c < nc; c++) d[c] = px[4 * i + c] - mean[c];
+        for (int r = 0; r < nc; r++)
+            for (int c = r; c < nc; c++) M[r][c] += d[r] * d[c];
+    }
+    float trace = 0;
+    for (int r = 0; r < nc; r++) {
+        trace += M[r][r];
+        for (int c = 0; c < r; c++) M[r][c] = M[c][r];
+    }
+    float ax[4] = {0};
+    int top = 0;
+    for (int c = 1; c < nc; c++) if (M[c][c] > M[top][top]) top = c;
+    for (int c = 0; c < nc; c++) ax[c] = M[top][c];
+    for (int it = 0; it < 8; it++) {
+        float nx[4] = {0}, len = 0;
+        for (int r = 0; r < nc; r++) {
+            for (int c = 0; c < nc; c++) nx[r] += M[r][c] * ax[c];
+            len += nx[r] * nx[r];
+        }
+        if (len < 1e-12f) break;
+        float inv = 1.0f / sqrtf(len);
+        for (int r = 0; r < nc; r++) ax[r] = nx[r] * inv;
+    }
+    float len = 0, lambda = 0;
+    for (int c = 0; c < nc; c++) len += ax[c] * ax[c];
+    if (len < 1e-12f) { ax[0] = 1; for (int c = 1; c < nc; c++) ax[c] = 0; }
+    else { float inv = 1.0f / sqrtf(len); for (int c = 0; c < nc; c++) ax[c] *= inv; }
+    for (int r = 0; r < nc; r++)
+        for (int c = 0; c < nc; c++) lambda += ax[r] * M[r][c] * ax[c];
+    float resid = trace - lambda;
+    return resid < 0 ? 0 : resid;
+}
+
+
 static void *work(void *arg)
 {
     job *J = arg;
@@ -529,7 +573,15 @@ static void *work(void *arg)
             int same = 1, opaque = 1;
             for (int i = 1; i < n && same; i++) same = p32[i] == p32[0];
             if (same) { void_extent(J->out + 16 * b, px); J->cls[b] = 1; continue; }
-            if (J->bw != 4 || J->bh != 4 || (J->max_err < 0 && J->line < 0 && J->near < 0)) { J->cls[b] = OTHER; continue; }
+            if (J->max_err < 0 && J->line < 0 && J->near < 0) { J->cls[b] = OTHER; continue; }
+            if (J->bw != 4 || J->bh != 4) {
+                /* other footprints: no fitted blocks (pack_block writes 4x4 grids), only the tiers by the
+                 * line residual, its bounds (given for 16 texels) scaled to the block's texel count */
+                for (int i = 0; i < n; i++) opaque &= px[4 * i + 3] == 255;
+                float resid = line_residual(px, n, opaque ? 3 : 4), k = n / 16.0f;
+                J->cls[b] = resid <= J->line * k ? LINE : resid <= J->near * k ? NEAR : OTHER;
+                continue;
+            }
             for (int i = 0; i < 16; i++) opaque &= px[4 * i + 3] == 255;
             cand best;
             best.err = 1 << 30;

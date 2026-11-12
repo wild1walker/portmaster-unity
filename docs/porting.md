@@ -536,9 +536,11 @@ driver's pages for the game ~300 -> ~142 MB, the game ~830 -> ~670 MB in all; th
 1 GB handheld (the setup log names both: `textures: 973 MB of RAM (at most 1024): scale 0.375
 (lowmem_scale), block [6, 6] (lowmem_block)`). A 6x6 block is 3.56 bits a texel against 4x4's 8,
 so the textures' memory and the GPU's texture reads fall by more than half; the price is a little
-detail, and the setup's encoder takes its fast paths only for 4x4 blocks (more of the 6x6 blocks
-are searched: Hollow Knight's texture step 189 s -> 304 s on four cores of a Mac, about two more
-minutes of a handheld's setup). Text atlases stay at `sharp_block` (4x4). 8x8 (2 bits a texel) is
+detail and a longer texture step: the setup's encoder fits blocks directly only for 4x4 (other
+footprints go to astc-encoder, tiered by how far a block's texels are from one line, the bounds
+scaled to its texel count): Hollow Knight's texture step 189 s with 4x4, 226 s with 6x6 on four
+cores of a Mac (304 s before the tiers; over 284 of its textures the tiers cost 0.02 dB).
+Text atlases stay at `sharp_block` (4x4). 8x8 (2 bits a texel) is
 visibly blocky in Hollow Knight; testers on Discord found 6x6 good enough, and side by side on the
 handheld the two are hard to tell apart.
 

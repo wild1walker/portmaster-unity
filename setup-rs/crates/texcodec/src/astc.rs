@@ -521,6 +521,33 @@ mod tests {
     }
 
     #[test]
+    fn other_footprints_take_the_tiers_by_line_residual() {
+        // 6x6 blocks are never fitted (fit_block packs 4x4 grids), but a smooth ramp (texels on
+        // one line) takes the one-partition tier and noise the full search; a flat block stays a
+        // void-extent block
+        let ramp: Vec<u8> = (0..12 * 6u32)
+            .flat_map(|i| {
+                let v = (i % 12 * 20) as u8;
+                [v, v / 2, 255 - v, 255]
+            })
+            .collect();
+        let mut x = 12345u32;
+        let noise: Vec<u8> = (0..12 * 6 * 4)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                (x >> 16) as u8
+            })
+            .collect();
+        let flat = [10u8, 20, 30, 255].repeat(12 * 6);
+        let mut e = Encoder::new(settings(true), None).unwrap();
+        for img in [&ramp, &noise, &flat] {
+            assert_eq!(e.encode_rows(img, 12, 6, (6, 6), None, None).unwrap().len(), 2 * 16);
+        }
+        // one colour, fitted, DXT seed, one partition, two partitions, searched
+        assert_eq!(e.counts, [2, 0, 0, 2, 0, 2]);
+    }
+
+    #[test]
     fn gather_repeats_edges_and_pads_with_the_first_block() {
         // a 5 x 5 image: block 1 (x 1) has one column, repeated
         let img: Vec<u8> = (0..25u8).flat_map(|i| [i, 0, 0, 255]).collect();
