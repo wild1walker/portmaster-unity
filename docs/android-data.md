@@ -90,8 +90,9 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
     because the GLES3 programs are converted GLCore ones;
   - MonoManager no longer lists `UnityEngine.Cluster{Input,Renderer}Module.dll` (standalone-only,
     absent on Android, unused).
-  - PlayerSettings is left as is: m_MTRendering on, androidBlitType 0 = Always. Use `--mt-rendering`
-    and `--blit never` to try others.
+  - PlayerSettings: `m_MTRendering` is left as it is (`--mt-rendering keep|on|off`), and
+    `androidBlitType` is set to 1 = Never (`--blit never`, the default; `always` 0, `auto` 2, `keep`
+    leaves the game's).
   - `PlayerSettings.playerMinOpenGLESVersion` (2020.2+), the OpenGL ES version the game requires
     (GfxDeviceLevelGL: 2 = ES 3.0, 3 = ES 3.1, 5 = ES 3.2): an Android build has 2 unless "Require
     ES3.1 / ES3.2" is ticked, a desktop build 0; it becomes 2 (`--min-gles 3.0|3.1|3.2|keep`).
