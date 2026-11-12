@@ -30,6 +30,10 @@
 #   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
 #                   is removed in the container first, so a launcher takes its 64-bit path
 #   REHEARSE_NAME   the setup container's name (to docker kill it)
+#   REHEARSE_OVER   an update rehearsed: the work dir of an earlier rehearsal (of an older release), whose
+#                   installed roms/ is copied and the zip unpacked over it as PortMaster updates a port
+#                   (nothing removed first; <game> is not used: pass -). The launcher then runs what it
+#                   runs on an updated install (a setup/update step, or the game at once)
 #   REHEARSE_NET=none  no network in the setup container: a port whose setup never downloads anything
 #                   (its donors carry Unity's player) shows that it needs no Wi-Fi
 #   REHEARSE_MEMINFO  a /proc/meminfo for the setup container (Docker shows the VM's RAM): e.g. one with
@@ -53,8 +57,13 @@ if [ "${EMU_ONLY:-}" = 1 ]; then
   pj=$(ls "$R"/ports/*/port.json | head -1)
   name=$(basename "$(dirname "$pj")"); P="$R/ports/$name"
 else
+if [ -n "${REHEARSE_OVER:-}" ]; then
+  [ -d "$REHEARSE_OVER/roms/ports" ] || { echo "REHEARSE_OVER: no $REHEARSE_OVER/roms/ports"; exit 1; }
+  [ "$(cd "$REHEARSE_OVER" && pwd)" != "$WORK" ] || { echo "REHEARSE_OVER: the earlier rehearsal's work dir, not this one's"; exit 1; }
+fi
 rm -rf "$R"; mkdir -p "$R/ports"
-# the release zip, unpacked as PortMaster does (file modes kept)
+[ -z "${REHEARSE_OVER:-}" ] || cp -cR "$REHEARSE_OVER/roms/." "$R/" 2>/dev/null || cp -R "$REHEARSE_OVER/roms/." "$R/"
+# the release zip, unpacked as PortMaster does (file modes kept; over an earlier install with REHEARSE_OVER)
 "$PY" -I - "$ZIP" "$R/ports" <<'PY'
 import os, sys, zipfile
 with zipfile.ZipFile(sys.argv[1]) as z:
@@ -68,7 +77,9 @@ pj=$(ls "$R"/ports/*/port.json | head -1)
 read -r name launcher < <("$PY" -I -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['items'][1], d['items'][0])" "$pj")
 P="$R/ports/$name"
 echo "port $name, launcher $launcher"
+[ -n "${REHEARSE_OVER:-}" ] && { m=$(head -1 "$P/${REHEARSE_DONE:-.setup_done}" 2>/dev/null | cut -c1-120 || true); echo "over the install of $REHEARSE_OVER (its marker: ${m:-empty})"; GAME=; }
 case "$GAME" in
+  "") ;;
   *.zip|*.7z|*.rar|*.tar|*.tar.gz|*.tgz|*.tar.xz|*.pkg|*.exe|*.sh) cp "$GAME" "$P/gamedata/";;   # (.sh: GOG's Linux installer)
   *) cp -cR "$GAME" "$P/gamedata/" 2>/dev/null || cp -R "$GAME" "$P/gamedata/";;   # (-c: an APFS clone on a Mac, at once)
 esac
@@ -84,6 +95,7 @@ CFW_NAME=Rehearsal; DEVICE_NAME=container; DEVICE_ARCH=aarch64; DISPLAY_WIDTH=72
 ESUDO=""; GPTOKEYB="true"; GPTOKEYB2="true"; sdl_controllerconfig=""
 get_controls() { :; }
 pm_message() { echo "[pm_message] $*"; }
+pm_message_end() { :; }
 pm_finish() { :; }
 pm_platform_helper() { :; }
 TXT
@@ -124,6 +136,7 @@ docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"}
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
 [ -f "$P/${REHEARSE_DONE:-.setup_done}" ] || { echo "setup did not finish"; tail -20 "$WORK/launch1.log"; exit 1; }
+[ -z "${REHEARSE_OVER:-}" ] || echo "after the update: $(head -1 "$P/${REHEARSE_DONE:-.setup_done}" | cut -c1-120); setup folder: $(ls "$P/setup" 2>/dev/null | wc -l | tr -d ' ') entries"
 echo "installed: $(du -sm "$P" | cut -f1) MB; lib: $(ls "$P/lib" | tr '\n' ' ')"
 fi
 [ "$SECS" -gt 0 ] || exit 0

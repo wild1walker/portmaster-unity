@@ -906,6 +906,13 @@ unpacks the release into `<work>/roms/ports` as PortMaster would, copies the gam
 `gamedata/` and starts the port's own launcher in an aarch64 container that looks like a handheld
 (busybox first on PATH, bash, curl, a 1 GB memory limit, the network on), with a stand-in for PortMaster
 (`control.txt`, `utils/patcher.txt`, PortMaster's own `7zzs.aarch64` from its release: `PM_7ZZ`).
+`REHEARSE_OVER=<an earlier rehearsal's work dir>` rehearses an update instead: that install's `roms/` is
+copied and the zip unpacked over it, as PortMaster updates a port (nothing removed first; pass `-` for the
+game), and the launcher runs what it runs on an updated install: its `setup/update` step, a marker
+it reads, files a newer launcher expects from an older setup. Rehearse it for every release that changes
+the setup: Hollow Knight's `hk-render-size` patch reaches an installed game only through
+`setup/update`, and the launcher turns the matching host switch on only when the setup's marker
+names the patch (half a minute in the container, against the setup's 20 minutes there).
 `ANSWERS="ID=value ..."` answers the port's questions (a GOG `.sh` installer, a `.zip`, `.7z`,
 `.pkg` and the other archives are copied into `gamedata/` as they are, for the setup to unpack;
 a folder is copied as it is). The container's `/proc/meminfo` shows
