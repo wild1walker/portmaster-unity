@@ -365,6 +365,7 @@ fn defaults() -> Vec<(&'static str, Json)> {
     vec![
         ("scale", Json::Float(1.0)),
         ("lowmem_scale", Json::Null),
+        ("lowmem_block", Json::Null),
         ("ram_mb", Json::Int(1024)),
         ("block", l(4, 4)),
         ("quality", Json::Str("medium".into())),
@@ -1516,30 +1517,36 @@ fn left(work: &Path, e: Error, stream: bool) -> Error {
     e
 }
 
-/// The step's settings: the config's over the defaults, and `lowmem_scale` (when set) as `scale`
-/// where the system has at most `ram_mb` of RAM (a 1 GB handheld), with the line saying so.
+/// The step's settings: the config's over the defaults, and `lowmem_scale` / `lowmem_block` (when
+/// set) as `scale` / `block` where the system has at most `ram_mb` of RAM (a 1 GB handheld), with
+/// the line saying so.
 fn settings(cfg: &Json) -> Result<(Json, Option<String>)> {
     let mut c = section(cfg, "textures", &defaults())?;
-    let mut why = None;
-    if let Some(s) = c
-        .get("lowmem_scale")
-        .filter(|v| !matches!(v, Json::Null))
-        .cloned()
-    {
-        let ram = c
-            .get("ram_mb")
-            .and_then(Json::as_int)
-            .ok_or_else(|| Error::Value("textures.ram_mb: not an integer".into()))?;
-        let mem = super::quality::mem_total_mb();
-        if mem <= ram {
-            why = Some(format!(
-                "textures: {mem} MB of RAM (at most {ram}): scale {} (lowmem_scale)",
-                s.repr()
-            ));
-            c.set("scale", s);
-        }
+    let set = |k: &str| c.get(k).filter(|v| !matches!(v, Json::Null)).cloned();
+    let lowmem: Vec<(&str, Json)> = [("scale", set("lowmem_scale")), ("block", set("lowmem_block"))]
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v?)))
+        .collect();
+    if lowmem.is_empty() {
+        return Ok((c, None));
     }
-    Ok((c, why))
+    let ram = c
+        .get("ram_mb")
+        .and_then(Json::as_int)
+        .ok_or_else(|| Error::Value("textures.ram_mb: not an integer".into()))?;
+    let mem = super::quality::mem_total_mb();
+    if mem > ram {
+        return Ok((c, None));
+    }
+    let what: Vec<String> = lowmem
+        .iter()
+        .map(|(k, v)| format!("{k} {} (lowmem_{k})", v.repr()))
+        .collect();
+    let why = format!("textures: {mem} MB of RAM (at most {ram}): {}", what.join(", "));
+    for (k, v) in lowmem {
+        c.set(k, v);
+    }
+    Ok((c, Some(why)))
 }
 
 pub fn run(job: &mut Job, args: &Args) -> Result<()> {
@@ -1940,5 +1947,29 @@ mod tests {
             scale(r#"{"textures": {"scale": 0.75}}"#),
             ("0.75".into(), false)
         );
+    }
+
+    #[test]
+    fn lowmem_block() {
+        let got = |cfg: &str| {
+            let (c, why) = settings(&crate::pyjson::loads(cfg).unwrap()).unwrap();
+            let k = |k: &str| c.get(k).unwrap().repr();
+            (k("scale"), k("block"), k("sharp_block"), why)
+        };
+        // within ram_mb: both, and the line names both; the text atlases' sharp_block stays
+        let (scale, block, sharp, why) = got(
+            r#"{"textures": {"lowmem_scale": 0.375, "lowmem_block": [6, 6], "ram_mb": 1099511627776}}"#,
+        );
+        assert_eq!((scale.as_str(), block.as_str(), sharp.as_str()), ("0.375", "[6, 6]", "[4, 4]"));
+        let why = why.unwrap();
+        assert!(why.ends_with("scale 0.375 (lowmem_scale), block [6, 6] (lowmem_block)"), "{why}");
+        // the block alone
+        let (scale, block, _, why) =
+            got(r#"{"textures": {"lowmem_block": [6, 6], "ram_mb": 1099511627776}}"#);
+        assert_eq!((scale.as_str(), block.as_str()), ("1.0", "[6, 6]"));
+        assert!(why.unwrap().ends_with(": block [6, 6] (lowmem_block)"));
+        // above ram_mb: the config's block
+        let (_, block, _, why) = got(r#"{"textures": {"lowmem_block": [6, 6], "ram_mb": 0}}"#);
+        assert_eq!((block.as_str(), why), ("[4, 4]", None));
     }
 }

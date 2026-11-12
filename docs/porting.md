@@ -532,6 +532,30 @@ driver's pages for the game ~300 -> ~142 MB, the game ~830 -> ~670 MB in all; th
 `tools/port/rehearse.sh`'s `REHEARSE_MEMINFO` gives the setup container a 1 GB handheld's
 `/proc/meminfo`, so a rehearsal takes these paths.
 
+`lowmem_block` does the same for the ASTC block footprint: `block` elsewhere, `lowmem_block` on a
+1 GB handheld (the setup log names both: `textures: 973 MB of RAM (at most 1024): scale 0.375
+(lowmem_scale), block [6, 6] (lowmem_block)`). A 6x6 block is 3.56 bits a texel against 4x4's 8,
+so the textures' memory and the GPU's texture reads fall by more than half; the price is a little
+detail, and the setup's encoder takes its fast paths only for 4x4 blocks (more of the 6x6 blocks
+are searched: Hollow Knight's texture step 189 s -> 304 s on four cores of a Mac, about two more
+minutes of a handheld's setup). Text atlases stay at `sharp_block` (4x4). 8x8 (2 bits a texel) is
+visibly blocky in Hollow Knight; testers on Discord found 6x6 good enough, and side by side on the
+handheld the two are hard to tell apart.
+
+```toml
+[convert.textures]
+lowmem_scale = 0.375
+lowmem_block = [6, 6]
+sharp_names = "SDF|tmpro|Font Texture"
+```
+
+Hollow Knight on the RG34XX-SP (Knulli, release settings, 2026-11-12), 4x4 against 6x6 at 0.375:
+the textures 311 -> 138 MB in the package; Greenpath 52.3 / 52.4 -> 52.8 / 53.0 fps walking
+(steady 53.6 -> 53.5), the game 585 -> 558 MB, Mali's pages 130 -> 114 MB; City of Tears 54.2 ->
+53.9 fps walking (51.7 -> 51.3 steady: the same within the runs' spread), the game 623 -> 588 MB,
+Mali's pages 132 -> 110 MB, the lowest MemAvailable 277 -> 318 MB. The frame rate does not move:
+on the H700 these scenes are limited by the CPU threads, not by texture reads.
+
 Readable textures cost twice: Unity keeps a copy of a texture marked readable (`m_IsReadable`, Read/Write
 in the editor) in system memory beside the GPU's, and the textures step leaves such textures as they are
 (scripts may read their pixels). Many games mark big atlases readable without ever reading them. When

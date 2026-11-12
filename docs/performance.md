@@ -42,7 +42,9 @@ measurements and tools behind each line are in [profiling.md](profiling.md), [ru
   `sharp_names`; [porting.md](porting.md#small-handhelds-1-gb)): a game drawn at 600x400 from 1080p
   art keeps more than a texel a pixel. Hollow Knight: 830 -> 670 MB, GPU pages 300 -> 142 MB, no more
   swapping, the same frame rate, the picture the same to the eye. Rehearse it with
-  `REHEARSE_MEMINFO` (a 1 GB `/proc/meminfo` for the setup container).
+  `REHEARSE_MEMINFO` (a 1 GB `/proc/meminfo` for the setup container). `lowmem_block = [6, 6]`
+  also packs those textures in 6x6 ASTC blocks (less than half the memory of 4x4; Hollow Knight in
+  City of Tears: the game 623 -> 588 MB, the same frame rate; 8x8 is visibly blocky).
 - **Sound in memory**: the audio step's `pcm_budget_mb` decides how much a scene holds decoded;
   `lowmem_pcm_budget_mb` takes its place on 1 GB handhelds (`ram_mb`), as `lowmem_scale` does for textures.
 

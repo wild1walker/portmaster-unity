@@ -65,7 +65,7 @@ pub struct Settings {
 /// textures.py DEFAULTS.
 pub fn defaults() -> Value {
     serde_json::json!({
-        "scale": 1.0, "lowmem_scale": null, "ram_mb": 1024, "block": [4, 4], "quality": "medium", "mode": "guided", "guided_max_err": 64,
+        "scale": 1.0, "lowmem_scale": null, "lowmem_block": null, "ram_mb": 1024, "block": [4, 4], "quality": "medium", "mode": "guided", "guided_max_err": 64,
         "guided_line": 128, "guided_near": 1024, "sharp_names": "", "scale_sharp": 1.0,
         "sharp_block": [4, 4], "keep_max": 64, "min_side": 16, "min_convert": 4, "mips": "keep",
         "inline": true, "files": ".", "threads": 0, "pipeline": "auto", "prepare_split": true,
