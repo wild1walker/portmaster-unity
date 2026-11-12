@@ -21,6 +21,13 @@
 //                           TextureFormat, RenderTexture's RenderTextureFormat), mip levels and name ("[dump] texture
 //                           ..."), then their count, and the meshes (count, vertices, how many readable, those of
 //                           1000 vertices or more by name): what a scene's memory is (a memory census)
+//   UA_DUMP_INPUT=<name>[,<name>...]  what the game's scripts read from Unity's input (the Input Manager's, "legacy"),
+//                           asked after every frame on UnityMain and logged when it crosses half travel:
+//                           Input.GetAxisRaw(<name>), or with key:<name> Input.GetKey(<name>) (up to 8, e.g.
+//                           "joystick 1 analog 4,key:joystick 1 button 0"; "[dump] input <s> f<frames shown>: "<name>"
+//                           <old> -> <new>", the clock of UA_INPUT_LOG's lines: how long after the host sent a
+//                           press the game could read it, and whether every one arrived). A name Unity refuses
+//                           is dropped with a line. It makes a managed string per name and frame: a test aid.
 // Everything else is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
 // UnityMain after a frame, as a script of the game would; nothing is changed.
 //   UA_FLIPBOOK=<controller>,...|@<file>  a stand-in for Unity's Animator on sprite flip-books: the managed assembly
@@ -40,6 +47,7 @@
 #include "../loader/so_loader.h"
 #include "monodump.h"
 
+#include "frames.h"
 #include "hitches.h"
 
 typedef void MonoObject, MonoClass, MonoMethod, MonoImage, MonoDomain, MonoType, MonoArray, MonoString;
@@ -498,11 +506,66 @@ static void comps_off(void)
     }
 }
 
+// UA_DUMP_INPUT: what a script reads from UnityEngine.Input, logged when it crosses half travel
+static int half(float v) { return v >= 0.5f ? 1 : v <= -0.5f ? -1 : 0; }
+static void input_probe(void)
+{
+    enum { MAXN = 8 };
+    static int state = -1, n;               // -1 not read, 0 off, 1 on
+    static char names[MAXN][64];
+    static float last[MAXN];
+    static MonoMethod *axis, *key;
+    if (!state) return;
+    if (state < 0) {
+        for (const char *p = getenv("UA_DUMP_INPUT"); p && *p && n < MAXN; ) {
+            size_t l = strcspn(p, ",");
+            if (l && l < sizeof names[0]) { memcpy(names[n], p, l); names[n++][l] = 0; }
+            p += l; if (*p) p++;
+        }
+        state = n > 0;
+        return;
+    }
+    if (!axis) {
+        if (!load()) return;
+        // (Unity 2019.1 and later: its own module; before: UnityEngine.CoreModule, UnityEngine.dll before 2017.2)
+        MonoImage *img = m_image_loaded("UnityEngine.InputLegacyModule");
+        if (!img) img = m_image_loaded("UnityEngine.CoreModule");
+        MonoClass *k = img ? m_class_from_name(img, "UnityEngine", "Input") : NULL;
+        if (!k && (img = m_image_loaded("UnityEngine"))) k = m_class_from_name(img, "UnityEngine", "Input");
+        if (!k) return;                     // not loaded yet
+        // (GetKey has a KeyCode and a string form; GetKeyString is what the string one calls: Input's own
+        // before Unity 6, UnityEngine.Internal.InputUnsafeUtility's from it)
+        axis = m_method_from_name(k, "GetAxisRaw", 1);
+        key = m_method_from_name(k, "GetKeyString", 1);
+        if (!key && img && (k = m_class_from_name(img, "UnityEngine.Internal", "InputUnsafeUtility"))) key = m_method_from_name(k, "GetKeyString", 1);
+        if (!axis || !key) { fprintf(stderr, "[dump] input: UnityEngine.Input without GetAxisRaw or GetKeyString: off (UA_DUMP_INPUT)\n"); state = 0; return; }
+    }
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    MonoDomain *dom = m_domain_get();
+    for (int i = 0; i < n; i++) {
+        if (!names[i][0]) continue;
+        int is_key = !strncmp(names[i], "key:", 4);
+        void *args[1] = { m_string_new(dom, names[i] + (is_key ? 4 : 0)) };
+        MonoObject *exc = NULL, *r = m_invoke(is_key ? key : axis, NULL, args, &exc);
+        if (exc || !r) {
+            fprintf(stderr, "[dump] input: Unity knows no %s \"%s\": dropped (UA_DUMP_INPUT)\n", is_key ? "key" : "axis", names[i] + (is_key ? 4 : 0));
+            names[i][0] = 0;
+            continue;
+        }
+        float v = is_key ? (float)(*(unsigned char *)m_unbox(r) != 0) : *(float *)m_unbox(r);
+        if (half(v) == half(last[i])) continue;
+        fprintf(stderr, "[dump] input %.3f f%lu: \"%s\" %g -> %g\n", now - frames_t_start(), frames_presented(), names[i], last[i], v);
+        last[i] = v;
+    }
+}
+
 void monodump_frame(void)
 {
     flipbook_frame();
     hero_place();
     comps_off();
+    input_probe();
     static int state = -1, n, next, tn, tnext;   // state -1: not read; 0: off or done; 1: waiting
     static double at[16], tat[16], t0, period, last;
     static char name[64];

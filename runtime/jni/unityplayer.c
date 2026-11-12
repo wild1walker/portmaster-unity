@@ -939,8 +939,15 @@ int up_inject_axes(int device_id, int source, int n, const int *axes, const floa
     jobject ev = fj_new_by_name("android/view/MotionEvent", m, free);
     int r = inject(ev);
     fj_pop_frame();
-    static int logged;
-    if (!logged++) up_log("joystick MotionEvent handled by Unity: %d", r);
+    /* Unity's answer, and each time it changes (a few times): 0 = Unity did not take the event */
+    static int logged, last;
+    if (logged < 8 && (!logged || r != last))
+    {
+        if (!logged) up_log("joystick MotionEvent handled by Unity: %d", r);
+        else up_log("joystick MotionEvent handled by Unity: %d (was %d)", r, last);
+        logged++;
+    }
+    last = r;
     if (!r && (copy.source & 0x10)) synthesize_dpad(&copy);   /* SOURCE_CLASS_JOYSTICK */
     return r;
 }

@@ -14,7 +14,9 @@ THUMBL/THUMBR/START/SELECT/MODE` and joystick MotionEvents with `AXIS_X/Y` (left
 An InputDevice with those motion ranges is registered for it; `UA_PAD_NAME` sets the name Unity
 sees (libraries that pick a layout by name, Rewired among them, know e.g.
 `Xbox Wireless Controller`). A joystick MotionEvent the game does not handle becomes DPAD
-KeyEvents, as Android's own fallback does.
+KeyEvents, as Android's own fallback does (Unity's legacy input always handles it; the log names
+the answer once, and again if it changes). A control that sticks or is missed:
+[below](#a-control-that-sticks-is-missed-or-comes-late).
 
 `UA_INPUT_SCRIPT` presses buttons at given times for unattended tests (docs/runtime.md); without
 a real pad it registers a virtual one that looks the same. `UA_INPUT_CLOCK=frames:<fps>` counts its
@@ -384,6 +386,91 @@ binding is also a left stick one) and the `UA_DPAD_SWAP` button when it costs th
 `port new` drafts `[controls]` from the bindings, as the handheld labels its buttons (the game's
 Action1, the bottom face button, is B on a Nintendo-layout handheld). button. Not read: Rewired's maps (they are in the game's data, not its code), the Input System's
 action assets, the legacy Input Manager's axes, and bindings a game makes at run time.
+
+## A control that sticks, is missed or comes late
+
+Reported for Hollow Knight on several handhelds (a direction that goes on after the d-pad is let
+go, a jump without its direction, "some input delay", worse in rooms that run slower). What is
+known of the path, and how to see where an event went:
+
+**The path.** The kernel's evdev pad -> SDL in `ua_host`'s main thread (Android's UI thread: it
+runs Unity's jobs for that thread, then polls SDL, every 4 ms) -> Unity's input queue
+(`nativeInjectEvent`) -> read by the game at the start of its next frame -> that frame through
+Unity's render thread, the frame recorder's GL thread and the present thread to the screen. So a
+press shows one to three frames after the game read it, and the delay grows with the frame time
+(estimated, not measured: 40-60 ms at 50 fps, 70-120 ms at 33 fps, before the panel's own).
+
+**Unity does not lose an event it was given** (libunity 6000.0.61f1 armv7, legacy input, read in
+its disassembly): a joystick MotionEvent is always queued and answered 1; at the next frame every
+axis of that pad is set from the event, with no filter; a pad's DPAD KeyEvents set the hat axes.
+ua_host therefore sends each change once and repeats nothing. Two things follow from "every axis
+is set from the event": an axis pressed and let go between two frames is never seen by a script
+(keys have `GetKeyDown`, axes have no such latch; InControl reads keys with `GetKey`, the state,
+so the same holds for its buttons), and a frame that takes long (a `[hitch]` line) holds the
+controls where they were for as long as it lasts: the game's `FixedUpdate` steps of that frame all
+run with the input read at its start. Both are the game's, on any platform, and both show more
+the slower the frames are.
+
+**SDL and the keyboard focus.** SDL drops a pad's presses and its stick or hat moves away from
+the centre (releases and centring pass) while it has a window without the keyboard focus, unless
+`SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS` is set. ua_host sets it: the pad is the game's
+whatever SDL thinks of the focus. (KMSDRM gives its window the focus when it makes it, so this is
+a guard, not a known cause.) The log says when the window loses or gets the focus, and at the
+start when no window has it.
+
+**gptokeyb2 beside the game.** PortMaster launchers start it for the exit hotkey, so it reads the
+same pad. In its source (PortsMaster/gptokeyb2, 2026-10): with a `[controls]` section in the
+port's ini, even an empty one, it adds neither its hotkey layer nor the Start + d-pad down text
+entry, maps no button (nothing is typed on its uinput keyboard), and grabs the pad for itself
+(`EVIOCGRAB`) only where a config says `exclusive = true`. Each evdev reader has its own queue, so
+its reading takes nothing from SDL's. A port's ini should therefore keep the empty `[controls]`
+section, and never set `exclusive`.
+
+**Seeing it.** In `port.env` (or the environment):
+
+```sh
+export UA_INPUT_LOG=1     # every pad button as SDL gave it, the key sent, Unity's answer; the axes sent
+                          # whenever a stick, a trigger or the d-pad crosses half travel
+```
+
+```
+[input] 41.203 f2051: dpleft down: d-pad
+[input] 41.204 f2051: pad 0 axes: left 0.00 0.00 right 0.00 0.00 d-pad -1 0 triggers 0.00 0.00 -> 1
+[input] 41.310 f2056: a down: key 96 -> 1
+[input] 41.498 f2065: dpleft up: d-pad
+[input] 41.499 f2065: pad 0 axes: left 0.00 0.00 right 0.00 0.00 d-pad 0 0 triggers 0.00 0.00 -> 1
+```
+
+`<seconds> f<frames shown>`: the seconds are the `[hitch]` lines' (from the first frame). `-> 1`
+is Unity's answer (1: taken). A press the player made that has no line never reached SDL (the
+pad, its driver, another program holding it); a line with `not sent to the game` was taken by the
+on-screen keyboard or pointer mode; lines in order with `-> 1` and a game that still did not
+follow mean the game read them late or not at all, which the second switch shows from the
+game's side (Mono games):
+
+```sh
+export UA_DUMP_INPUT='joystick 1 analog 4,key:joystick 1 button 0'
+```
+
+Each frame it asks `UnityEngine.Input` what a script would get, `Input.GetAxisRaw(<name>)` or,
+with `key:`, `Input.GetKey(<name>)`, for up to 8 names, and logs each crossing of half travel
+(`[dump] input 41.221 f2052: "joystick 1 analog 4" 0 -> -1`), after the frame that read it: a
+send's line is followed by the probe's one or two frames later (Hollow Knight in the emulator,
+scripted d-pad and B: every send answered so, none missing). The names are the game's own:
+InControl reads `joystick <n> analog <m>` and `joystick <n> button <m>` (its Xbox Android
+profile: analogs 4 and 5 are the d-pad, button 0 is A); another game's are in its Input Manager.
+A name Unity does not know is dropped with a line. It makes a string per name and frame: a test
+aid, not for a release.
+
+Always logged, a few times each, without either switch: `the UI thread was away <n> ms` (more
+than 50 ms between two polls once frames are shown: pad events waited that long before Unity got
+them), an event from a joystick that is not an open pad, a pad that went away, the window's
+focus changes, and Unity's answer to joystick MotionEvents whenever it changes.
+
+The scripted and virtual pads (`UA_INPUT_SCRIPT`, `input.req`) enter after SDL, and benches start
+`ua_host` without the launcher: a bench can show what Unity and the game do with an event, never
+what the pad, SDL or gptokeyb2 did before. For those, the log of a player's own run is the
+evidence.
 
 ## Tests
 

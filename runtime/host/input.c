@@ -23,6 +23,12 @@
 // A hardware keyboard (SDL key events: an SDL window) types into an open soft keyboard; with
 // UA_KEYBOARD=1 its keys also reach the game as an Android keyboard (KeyEvents from a
 // "Hardware Keyboard" device) while none is open.
+// UA_INPUT_LOG=1: for a control that sticks, is missed or comes late: every pad button as SDL gave it
+// with the key sent and Unity's answer, and the axes sent whenever a stick, trigger or the d-pad
+// crosses half travel ("[input] <s> f<frames shown> ..."; the seconds are the [hitch] lines'). Always
+// logged, a few times: the UI thread away for more than 50 ms once frames are shown (pad events wait
+// for it), an event from a joystick that is not an open pad, a pad that went away, the window losing
+// or getting the keyboard focus.
 #include "input.h"
 #include "frames.h"
 #include "osk.h"
@@ -55,6 +61,22 @@ static int started;
 static int kb_dev;              // UA_KEYBOARD=1: the hardware keyboard's Android device
 
 static struct pad *scripted_pad(void);
+
+static int logging(void)
+{
+    static int v = -1;
+    if (v < 0) v = getenv("UA_INPUT_LOG") && !strcmp(getenv("UA_INPUT_LOG"), "1");
+    return v;
+}
+static double mono_s(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+// "<s> f<frames shown>": the [hitch] lines' clock (seconds from the first frame) and the frames shown so far
+static const char *stamp(void)
+{
+    static char b[48];
+    double t0 = frames_t_start();
+    snprintf(b, sizeof b, "%.3f f%lu", t0 > 0 ? mono_s() - t0 : 0, frames_presented());
+    return b;
+}
 
 // a pad button: the on-screen keyboard first, then pointer mode / UA_KEYMAP; 1 if taken
 static int take_key(int keycode, int down) { return osk_key(keycode, down) || pointer_key(keycode, down); }
@@ -105,7 +127,7 @@ static void pad_open(int index)
 {
     struct pad *p = NULL;
     for (int i = 0; i < MAX_PADS && !p; i++) if (!pads[i].gc && !pads[i].virt) p = &pads[i];
-    if (!p) return;
+    if (!p) { fprintf(stderr, "[input] pad %d: not opened, %d pads are open already\n", index, MAX_PADS); return; }
     SDL_GameController *gc = SDL_GameControllerOpen(index);
     if (!gc) { fprintf(stderr, "[input] pad %d: %s\n", index, SDL_GetError()); return; }
     SDL_Joystick *js = SDL_GameControllerGetJoystick(gc);
@@ -147,6 +169,7 @@ static void pad_close(SDL_JoystickID jid)
 {
     struct pad *p = pad_of(jid);
     if (!p) return;
+    fprintf(stderr, "[input] %s: pad \"%s\" (Android device %d) went away\n", stamp(), SDL_GameControllerName(p->gc), p->id);
     up_remove_input_device(p->id);
     SDL_GameControllerClose(p->gc);
     p->gc = NULL;
@@ -180,6 +203,9 @@ static void pad_name_check(void)
 
 int input_init(int width, int height)
 {
+    // SDL drops a pad's presses (not its releases) while it has a window without the keyboard focus:
+    // the pad is the game's whatever SDL thinks of the focus
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0)
     { fprintf(stderr, "[input] SDL: %s\n", SDL_GetError()); return -1; }
     pad_name_check();
@@ -402,7 +428,10 @@ static void script_run(void)
         if (p->key)
         {
             if (!take_key(p->key, p->down))
-                up_inject_key(sp->id, UP_SOURCE_GAMEPAD, p->down ? UP_ACTION_DOWN : UP_ACTION_UP, p->key, 0, 0);
+            {
+                int r = up_inject_key(sp->id, UP_SOURCE_GAMEPAD, p->down ? UP_ACTION_DOWN : UP_ACTION_UP, p->key, 0, 0);
+                if (logging()) fprintf(stderr, "[input] %s: script %s: key %d -> %d\n", stamp(), p->down ? "down" : "up", p->key, r);
+            }
         }
         else
         {
@@ -425,8 +454,12 @@ void input_started(void)
     t_start = now_s();
     if (getenv("UA_INPUT_SCRIPT")) script_parse(getenv("UA_INPUT_SCRIPT"));
     pointer_start();
+    const char *vd = SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetCurrentVideoDriver() : NULL;
+    if (vd && strcmp(vd, "dummy") && strcmp(vd, "offscreen") && !SDL_GetKeyboardFocus())
+        fprintf(stderr, "[input] no SDL window has the keyboard focus (pad presses pass all the same)\n");
 }
 
+static int half(float v) { return v >= 0.5f ? 1 : v <= -0.5f ? -1 : 0; }
 static void send_axes(struct pad *p)
 {
     float v[8] = { 0 };
@@ -450,12 +483,17 @@ static void send_axes(struct pad *p)
     osk_axes((int)(p - pads), v);               // the on-screen keyboard takes the pad while open
     pointer_axes((int)(p - pads), v);           // pointer mode / UA_KEYMAP take their controls
     if (!memcmp(v, p->axes, sizeof v)) return;
+    int crossed = 0;                            // UA_INPUT_LOG: a control past half travel, or back
+    for (int i = 0; i < 8 && !crossed; i++) crossed = half(v[i]) != half(p->axes[i]);
     memcpy(p->axes, v, sizeof v);
     int ax[10]; float val[10];
     for (int i = 0; i < 8; i++) { ax[i] = pad_axes[i]; val[i] = v[i]; }
     ax[8] = UP_AXIS_BRAKE; val[8] = v[6];
     ax[9] = UP_AXIS_GAS;   val[9] = v[7];
-    up_inject_axes(p->id, UP_SOURCE_JOYSTICK, 10, ax, val);
+    int r = up_inject_axes(p->id, UP_SOURCE_JOYSTICK, 10, ax, val);
+    if (crossed && logging())
+        fprintf(stderr, "[input] %s: pad %d axes: left %.2f %.2f right %.2f %.2f d-pad %g %g triggers %.2f %.2f -> %d\n", stamp(),
+                (int)(p - pads), v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], r);
     // pads with analog triggers also report L2/R2 as keys past half travel
     int l2 = v[6] > 0.5f, r2 = v[7] > 0.5f;
     if (l2 != p->l2) up_inject_key(p->id, UP_SOURCE_GAMEPAD, l2 ? UP_ACTION_DOWN : UP_ACTION_UP, UP_KEYCODE_BUTTON_L2, 0, 0);
@@ -507,10 +545,31 @@ static void hw_key(const SDL_KeyboardEvent *k)
         up_inject_key(kb_dev, UP_SOURCE_KEYBOARD, down ? UP_ACTION_DOWN : UP_ACTION_UP, code, k->repeat, android_meta(k->keysym.mod));
 }
 
+// an event from a joystick that is not one of the open pads (it never reaches the game)
+static void stranger(SDL_JoystickID jid)
+{
+    static int lines;
+    if (lines < 5 || logging())
+    {
+        lines++;
+        fprintf(stderr, "[input] %s: an event from joystick instance %d, not an open pad: dropped\n", stamp(), (int)jid);
+    }
+}
+
 void input_poll(void)
 {
     SDL_Event e;
     int moved[MAX_PADS] = {0};
+    // pad events wait for this thread (Android's UI thread: Unity's jobs for it, then the pads, every 4 ms)
+    static double polled;
+    static int away_lines;
+    double t_poll = mono_s();
+    if (started && polled > 0 && t_poll - polled > 0.050 && frames_presented() && (logging() || away_lines < 20))
+    {
+        away_lines++;
+        fprintf(stderr, "[input] %s: the UI thread was away %.0f ms, pad events waited for it\n", stamp(), (t_poll - polled) * 1000);
+    }
+    polled = t_poll;
     while (SDL_PollEvent(&e))
     {
         struct pad *p;
@@ -519,17 +578,39 @@ void input_poll(void)
         case SDL_CONTROLLERDEVICEREMOVED: pad_close(e.cdevice.which); break;
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP:
-            if (!started || !(p = pad_of(e.cbutton.which))) break;
-            if (keycode(e.cbutton.button))
+        {
+            int down = e.type == SDL_CONTROLLERBUTTONDOWN, key = keycode(e.cbutton.button), r = -1;
+            p = pad_of(e.cbutton.which);
+            if (!p) stranger(e.cbutton.which);
+            if (started && p)
             {
-                int down = e.type == SDL_CONTROLLERBUTTONDOWN;
-                if (!take_key(keycode(e.cbutton.button), down))
-                    up_inject_key(p->id, UP_SOURCE_GAMEPAD, down ? UP_ACTION_DOWN : UP_ACTION_UP, keycode(e.cbutton.button), 0, 0);
+                if (!key) moved[p - pads] = 1;        // d-pad -> hat axes
+                else if (!take_key(key, down))
+                    r = up_inject_key(p->id, UP_SOURCE_GAMEPAD, down ? UP_ACTION_DOWN : UP_ACTION_UP, key, 0, 0);
             }
-            else moved[p - pads] = 1;     // d-pad -> hat axes
+            if (logging())
+            {
+                char to[48] = "d-pad";
+                if (key) snprintf(to, sizeof to, r < 0 ? "key %d, not sent to the game" : "key %d -> %d", key, r);
+                fprintf(stderr, "[input] %s: %s %s: %s%s%s\n", stamp(), SDL_GameControllerGetStringForButton(e.cbutton.button),
+                        down ? "down" : "up", to, p ? "" : " (not an open pad)", started ? "" : " (the game has not started)");
+            }
             break;
+        }
         case SDL_CONTROLLERAXISMOTION:
-            if (started && (p = pad_of(e.caxis.which))) moved[p - pads] = 1;
+            p = pad_of(e.caxis.which);
+            if (!p) stranger(e.caxis.which);
+            if (started && p) moved[p - pads] = 1;
+            break;
+        case SDL_WINDOWEVENT:
+            // (without the hint in input_init, SDL holds a pad's presses back while its window is without it)
+            if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST || e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+            {
+                static int lines;
+                if (logging() || lines++ < 10)
+                    fprintf(stderr, "[input] %s: the window %s the keyboard focus\n", stamp(),
+                            e.window.event == SDL_WINDOWEVENT_FOCUS_LOST ? "lost" : "has");
+            }
             break;
         case SDL_TEXTINPUT:
             if (started && osk_typing()) osk_hw_text(e.text.text);
