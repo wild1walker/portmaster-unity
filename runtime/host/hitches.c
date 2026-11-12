@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -122,6 +123,23 @@ static uintptr_t mapping_end(uintptr_t v)
     }
     fclose(f);
     return end;
+}
+
+// copies up to n bytes from src a page at a time through process_vm_readv on this process, which fails on a page
+// that is gone instead of faulting (a plain memcpy of a stack a /proc/self/maps line had just shown crashed the game:
+// SIGSEGV one page in, armhf 2026-11-12); the bytes before such a page
+static size_t copy_mapped(void *dst, uintptr_t src, size_t n)
+{
+    size_t got = 0;
+    while (got < n) {
+        uintptr_t a = src + got;
+        size_t k = 4096 - (a & 4095);
+        if (k > n - got) k = n - got;
+        struct iovec l = { (char *)dst + got, k }, r = { (void *)a, k };
+        if (process_vm_readv(getpid(), &l, 1, &r, 1, 0) != (ssize_t)k) break;
+        got += k;
+    }
+    return got;
 }
 
 static const map_ent *find_map(uintptr_t v)
@@ -245,7 +263,7 @@ static void sample(pid_t tid, double ms, int prof)
     // of the mapping that holds sp
     uintptr_t end = mapping_end(sp);
     long got = end > sp ? (long)(end - sp < sizeof stack ? end - sp : sizeof stack) : 0;
-    if (got > 0) memcpy(stack, (const void *)sp, (size_t)got);
+    if (got > 0) got = (long)copy_mapped(stack, sp, (size_t)got);
     atomic_store(&g_state, 2);           // the thread goes on
     mono_enter();
     int len = prof == 2 ? snprintf(line, sizeof line, "[dump] %d %s pc ", tid, name) : prof ? snprintf(line, sizeof line, "[prof] %s pc ", name)
