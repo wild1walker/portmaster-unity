@@ -1933,8 +1933,8 @@ CONFIG_DOC = {
                    "# never of the game play (docs/porting.md, \"The Low picture at launch\"), e.g.\n"
                    "# ASMPATCH_HK_BLUR = \"off\", UA_RENDER_PIXELS = \"560000\", UA_PREFS_DEFAULTS (the game's own options)",
     'runtime_lowmem': "# more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there\n"
-                      "# unless set already), with either picture: what spares memory or the CPU and leaves the\n"
-                      "# picture as it is (docs/porting.md, \"Small handhelds\"), e.g. UA_UNITY_ARGS = \"-job-worker-count 1\"",
+                      "# unless set already), with either picture: what spares memory at a price a bigger handheld\n"
+                      "# need not pay; speedups go in [runtime], for every handheld (docs/porting.md, \"Small handhelds\")",
     'build': '# commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files\n'
              '# they make put into the port folder (outputs = {"setup/files/x" = "{build}/x"}), and their licences\n'
              '# (licenses = {"LICENSE.x.txt" = "path" or "{build}/path"})',
