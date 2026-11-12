@@ -32,6 +32,10 @@ hook() {                                # the port's own step at a fixed point (
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
 room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB>: that much free (or unknown)
+# a full card (or one pulled out) must stop the setup: a progress file that was not written would
+# let the next launch take a half-done step for a finished one
+nowrite() { fail "Could not write $1 to the card: is the card full? Free some space on it, then launch again."; }
+mark() { sync; touch "$W/.step_$1" || nowrite "the setup's progress"; }   # mark <step>: what it wrote is on the card, then its marker
 [ "$DEVICE_ARCH" = aarch64 ] || fail "The setup needs a 64-bit (aarch64) system for its tools (this one: $DEVICE_ARCH)."
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
 echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
@@ -90,18 +94,19 @@ apk_field() { sed -n "s/^ \"$1\": \"\(.*\)\",\{0,1\}\$/\1/p" "$W/apk.json" | hea
 
 # ---- answers to the port's questions: kept from the first run, else PortMaster's patcher (<ID> in
 # the environment), else setup.txt (<id>=<value>, older PortMaster), else the default
-: > "$W/answers.env.new"
+: > "$W/answers.env.new" || nowrite "the setup's answers"
 for id in $QUESTIONS; do
-  eval "opts=\$Q_${id}_OPTIONS def=\$Q_${id}_DEFAULT qenv=\$Q_${id}_ENV"
+  # (the question's lines of setup.env, Q_<ID>_OPTIONS and so on, read by name)
+  q="Q_${id}_OPTIONS"; opts=${!q}; q="Q_${id}_DEFAULT"; def=${!q}; q="Q_${id}_ENV"; qenv=${!q}
   v=$(cat "$W/answers/$id" 2>/dev/null)
   [ -n "$v" ] || v=${!id}
   [ -n "$v" ] || v=$(sed -n "s/^[[:space:]]*$(lower "$id")[[:space:]]*=[[:space:]]*\([A-Za-z0-9._:+-]*\).*/\1/p" "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
   case " $opts " in *" $v "*) ;; *) v=$def;; esac
-  mkdir -p "$W/answers"; echo "$v" > "$W/answers/$id"
+  { mkdir -p "$W/answers" && echo "$v" > "$W/answers/$id"; } || nowrite "the setup's answers"
   echo "$id: $v"
-  [ -n "$qenv" ] && echo "export $qenv='$v'" >> "$W/answers.env.new"
+  if [ -n "$qenv" ]; then echo "export $qenv='$v'" >> "$W/answers.env.new" || nowrite "the setup's answers"; fi
 done
-mv -f "$W/answers.env.new" "$W/answers.env"
+mv -f "$W/answers.env.new" "$W/answers.env" || nowrite "the setup's answers"
 
 # ---- 1. the build: the packages in gamedata/ (game.data's globs, any depth) with the .obb files
 # there; without a package there, the one installed before (the setup again, e.g. for another
@@ -163,8 +168,8 @@ if [ ! -f "$W/.step_import" ]; then
       fail "This port is made for $PORT_TITLE built with Unity $UNITY_VERSIONS; your copy was built with Unity $APK_UNITY_VERSION (another version of the game?).";;
     esac
   fi
-  printf '%s\n' "${INPUTS[@]}" > "$W/.inputs"
-  touch "$W/.step_import"
+  printf '%s\n' "${INPUTS[@]}" > "$W/.inputs" || nowrite "the setup's progress"
+  mark import
 fi
 
 # ---- 2. into place: the player's libraries, the APK and its OBBs, android_package.json (renames:
@@ -174,7 +179,7 @@ step "installing"
 if [ ! -f "$W/.step_cleared" ]; then        # (an earlier install's files: the new ones are in $A)
   rm -rf "$GAMEDIR/lib" "$GAMEDIR/assets" "$GAMEDIR/android_package.json"
   rm -f "$GAMEDIR"/main.*.obb "$GAMEDIR"/patch.*.obb
-  touch "$W/.step_cleared"
+  mark cleared
 fi
 for d in lib assets; do
   [ -d "$A/$d" ] || continue
@@ -187,7 +192,7 @@ for f in "$A"/*.apk "$A"/*.obb "$A"/android_package.json; do
 done
 [ -f "$GAMEDIR/lib/libunity.so" ] && [ -f "$GAMEDIR/base.apk" ] && [ -f "$GAMEDIR/android_package.json" ] \
   || fail "The installed game is incomplete (see patchlog.txt): delete ports/$PORT_NAME/gamedata/.setup and launch again."
-cp "$W/answers.env" "$GAMEDIR/answers.env"
+cp "$W/answers.env" "$GAMEDIR/answers.env" || nowrite "the game's settings"
 hook post_install
 # the player's copy in gamedata/ (installed: linked or copied) is not needed to play: removed, as
 # PortMaster ports' setups do with installers, unless setup.txt says keep_installers=1
@@ -199,8 +204,13 @@ while IFS= read -r f; do
   echo "removing ${f#$GD/}: installed, not needed to play (keep_installers=1 in setup.txt keeps it)"
   rm -f "$f"
 done < "$W/.inputs"
-rm -rf "$W" "$S"
+# the game is marked set up, on the card, before the tools, the work folder and the donors go: a
+# power cut in between leaves a game that starts (the launcher removes what is left), never one
+# without the tools to finish it
+sync
+touch "$GAMEDIR/$READY" || nowrite "the setup's last mark"
+sync
+rm -rf "$W" "$S" "$GAMEDIR/donor"         # (donor/: donors a port names for its own setup steps)
 find "$GD" -mindepth 1 -depth -type d 2>/dev/null | while IFS= read -r d; do rmdir "$d" 2>/dev/null; done
 sync
-touch "$GAMEDIR/$READY"
 step "setup finished: the game's $(sed -n 's/^ *"abi": *"\([^"]*\)".*/\1/p' "$GAMEDIR/android_package.json" | head -1) player, $(du -sm "$GAMEDIR" | cut -f1) MB."

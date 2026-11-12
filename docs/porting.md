@@ -382,7 +382,7 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set, with either picture: what spares memory or the CPU there ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
 | `files.plugins`, `files.managed`, `files.assembly_patches`, `files.hooks`, `files.extra` | none | the porter's own files (paths relative to port.toml), copied into the port: converter plugins (`--plugin`: a JSON file of field edits, which the setup's pmu runs, or a Python file: [plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)), assemblies shipped into the game (`--managed-file`), `{name, command, files}` assembly patches (`--assembly-patch`: a command run on the handheld, `{setup}` = the setup folder, `{managed}` = the game's original Managed folder, `{out}` = where it writes `<name>`; section 10), shell hooks sourced by the setup at `game`, `pre_convert`, `post_convert`, `post_pack`, `post_install` (a `game` hook sets `D`, the data folder), extra files for the port folder |
-| `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`), and licences for `licenses/` |
+| `build.commands`, `build.outputs`, `build.licenses` | none | for a port with its own compiled code: shell commands `port package` runs in the port folder first (with `PMUNITY`, `PORT_SRC` and `BUILD`, a scratch folder, in the environment), the files they make put into the port folder (`{"setup/files/codepatch" = "{build}/codepatch"}`; one that is a program, an ELF file or a `#!` script, is packed executable, whatever its mode in the build folder), and licences for `licenses/` |
 
 Name a question's choices so they make sense together. A choice between a better and a cheaper
 version of something is **High** and **Low** (in brackets what each costs or gives: "High (as on
@@ -689,7 +689,9 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
 2. the game: the data folder in `gamedata/` (any depth), else one from an archive there (`.zip`,
    `.7z`, `.rar`, `.tar.*`, with PortMaster's 7-Zip), else macOS installers (`.pkg`, `pmunity
    macpkg`), else the port's `game` hook; a compressed build is unpacked (`pmunity unpack`); its
-   Unity version must be one of `game.unity_versions`;
+   Unity version must be one of `game.unity_versions`; an archive that does not unpack whole (a
+   damaged `.tar.gz` too: both halves of the unpacking pipe are checked) stops the setup with
+   "Could not unpack <name> (see patchlog.txt)", 7-Zip's own error in the log;
 3. Unity's Android player of that version, from the port's donors (`<port>/donor/`, section 5):
    `pmunity player donor <version> <pkg> --apk donor/donor-<version>-<backend>-<armv7|arm64>.apk`
    (mono-arm64: the IL2CPP donor's player with `--managed`, the engine modules from the Mono donor);
@@ -707,18 +709,31 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    memory), needing about the banks' size free; banks it cannot read leave the game silent and the
    setup goes on (the step runs only where the release ships pmu);
 6. `pmunity android-data --consume-src --pack all`, with asmpatch, the class libraries of step 3,
-   the managed files and assembly patches, and `android_data.args`;
+   the managed files and assembly patches, and `android_data.args` (pmu syncs a file's new copy to
+   the card before the file it was made from goes: docs/rust-setup.md, "the power cut");
 7. installing: the player's libraries into `lib/` with only the Mono runtime the game needs (with
    both, libunity takes the .NET 4.x one and a .NET 3.5 game aborts), the APK, OBB and Mono's
    config into the port folder (with a GOG build's `goggame-*.info`, the game's own file, beside
    the APK: GOG builds read it at `Application.dataPath + "/../"`, which is that folder; it is
-   not part of the release); the game's copy in `gamedata/` (used up by step 6), the tools and
-   the work folder are removed; `.setup_done` marks it done. The launcher exports
+   not part of the release). The end, in this order: the game's copy in `gamedata/` (used up by
+   step 6) is removed, `sync`, `.setup_done` marks the game set up, `sync`, and only then the
+   tools (`setup/`), the work folder (`gamedata/.setup/`) and the donors (`donor/`) go: a setup
+   cut off there leaves a game that starts, never one that is neither set up nor able to set
+   itself up, and the launcher removes what was left. The launcher exports
    `UA_WWISE_DATA=<port>/wwise` when that folder is there (an empty `UA_WWISE_DATA` in `port.env`
    turns the player off).
 
-Each step leaves a marker in `gamedata/.setup/`: an interrupted setup (battery, power button)
-continues where it stopped on the next launch. Free space: about three times the game while it
+Each step leaves a marker in `gamedata/.setup/` (`mark <step>`: a `sync`, then the marker, so a
+marker on the card means the step's files are there too): an interrupted setup (battery, power
+button) continues where it stopped on the next launch. Every write of the setup's own state (the
+markers, the answers, the notes of where the game is, `answers.env`, box64's `game.env`) is
+checked: one that fails stops the setup with "Could not write ... to the card: is the card
+full?", and notes that read back empty, or name a folder that is gone, send the setup back to
+finding the game. A launcher that finds the game not set up and no `setup/patchscript` (the
+folder copied without it, or deleted) says so: "Install the port again (unzip it over your ports
+folder)". To set a game up again: unzip the release over the port (a launch of a set-up game has
+removed `setup/` and `donor/`), delete `.setup_done`, put the game in `gamedata/`, launch.
+Free space: about three times the game while it
 runs. Where the time goes on a handheld (textures and the card, mostly): [setup-speed.md](setup-speed.md). The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
 (the launcher checks for `/lib/ld-linux-armhf.so.3` first).
 
@@ -754,10 +769,15 @@ about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continue
 
 ### A game set up by an earlier release
 
-A release brings the port's `setup/` folder again, and a setup removes it when it ends. When the
+A release brings the port's `setup/` folder (and `donor/`) again, and a setup removes them when it
+ends. On every route the launcher of a set-up game removes `setup/`, `donor/` and
+`gamedata/.setup/` when it finds them (logged: "removed setup: the setup's, not needed to play"):
+a newer release unzipped over an installed game starts the game, and never asks for the setup
+again. When the
 launcher finds the game set up and `setup/update` there (android route), it runs that once through
-PortMaster's patcher: what this release's setup does that an earlier one did not, done on the
-installed files, then `setup/` goes. Now that is asmpatch with `setup.env`'s `ASMPATCH` on the
+PortMaster's patcher first: what this release's setup does that an earlier one did not, done on the
+installed files, then `setup/`, the work folder and `donor/` go (the launcher leaves them alone
+while `setup/update` is there: an update that did not finish runs again). Now that is asmpatch with `setup.env`'s `ASMPATCH` on the
 installed APK's assemblies (`pmu apk-asmpatch`: the patches the game has already say "done", a
 newer release's go in; the changed assemblies are written after the APK's end, nothing there is
 overwritten, [rust-setup.md](rust-setup.md)), and convert's `video` step when the port's
@@ -773,6 +793,8 @@ before `package`.** A donor is a small game of the port's own (a one-scene game 
 Android player, which the setup unpacks (`pmunity player donor`). The release ships the donors in
 `<name>/donor/` with `licenses/LICENSE.unity-donor.txt` (Made-with-Unity applications, under Unity's
 terms of service), so the handheld never downloads Unity's player: nothing else of Unity is shipped.
+Only the setup reads `donor/` (nothing at run time), so the setup removes it from the handheld when
+it ends (13 - 23 MB a donor); a later setup needs the release unzipped again.
 
 | route | donors (for each of `game.unity_versions`) |
 |---|---|
@@ -848,7 +870,16 @@ decoders' licences (`runtime/media/out/licenses`), pmu's (what is compiled into 
 Python's and its packages' licences,
 for asmpatch the .NET runtime's licence and third-party notices and Mono.Cecil's, for pmhlslcc
 HLSLcc's (MIT, with bstrlib's BSD), and for pmspirvcross SPIRV-Cross's (Apache 2.0) and SMOL-V's (MIT). `--runtime` points at another checkout whose runtime and
-asmpatch are built. Zip entries keep their Unix modes and get a fixed date. The il2cpp-arm64 route
+asmpatch are built. Zip entries are deflated at level 9 and get a fixed date; an entry's Unix mode
+goes by rule, never by the file's mode in the folder (on exFAT, where a port on a USB drive lives,
+every file is executable): 755 for the programs the packaging names (`ua_host`, `pmu`, asmpatch,
+pmhlslcc, pmspirvcross, ...), for ELF files and for a `build.outputs` file that is a program (an
+ELF file or a `#!` script); 644 for the rest, the scripts too (the launcher and the setup set the
+bits of what they run; PortMaster wants `.sh` files 644). macOS's `._<name>` and `.DS_Store`
+files are left out of the zip and of the submission folder, so the same port gives the same zip
+from any filesystem. `uaflipbook.dll` goes beside `ua_host` only when the port's settings name
+`UA_FLIPBOOK` (`runtime`, `runtime_low`, `runtime_lowmem` or a question's `env`); `package` stops
+when such a port's DLL is not built. The il2cpp-arm64 route
 ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build.sh`) as
 `ua_host`; the apk route ships `ua_host` for an APK's armeabi-v7a player and that 64-bit one as
 `ua_host64` for its arm64-v8a player (`player.abis`), each with its build's decoder licences (the

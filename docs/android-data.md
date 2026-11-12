@@ -76,7 +76,8 @@ layout differs from glibc armhf (st_size etc.), so stat/fstat/lstat need convert
     sharing the existing 1.9 GB of bundles through path mapping, since exFAT has no symlinks.
 - **Type trees:** main data has none (bundles have them). The Android player therefore reads with its own
   layouts. I compared the field names in the `Transfer<GenerateTypeTreeTransfer>` functions of all 63
-  classes in the data with UnityPy's 2017.4 release trees (`tools/cmp_layout.py`).
+  classes in the data with UnityPy's 2017.4 release trees (a one-off comparison during the first
+  port: its script was never added to this repository).
   - All match except `PlayerSettings`: the Android player has no `mobileMTRenderingBaked` bool after
     `m_MTRendering`. Both are followed by Align, so the offsets come out the same.
   - The other reported differences are fields that sit in helper functions (Transform children,

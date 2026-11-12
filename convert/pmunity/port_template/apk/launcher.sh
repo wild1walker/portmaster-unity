@@ -69,7 +69,11 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     source "$controlfolder/utils/patcher.txt"
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
-    pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
+    if [ -f "$GAMEDIR/setup/patchscript" ]; then
+      pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
+    else    # (no setup to run: the port's folder without its setup/, e.g. deleted, or copied without it)
+      pm_message "@@TITLE@@ is not set up and its setup files are missing. Install the port again (unzip it over your ports folder), put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata if it is not there any more, and launch again."
+    fi
     sleep 8
     pm_finish
     exit 1
@@ -92,6 +96,12 @@ else
   fi
 fi
 echo "the game's $ABI player, $UA_HOST"
+
+# ---- the game is set up: what a setup cut off right after it marked the game set up left behind,
+# and the setup files a release unzipped over the set-up game brings again, are not needed to play
+for d in setup donor gamedata/.setup; do
+  [ -d "$GAMEDIR/$d" ] && rm -rf "${GAMEDIR:?}/$d" && echo "removed $d: the setup's, not needed to play"
+done
 
 # the built-in pad reaches the game as an Android gamepad (ua_host: SDL GameController ->
 # KeyEvent and MotionEvent)

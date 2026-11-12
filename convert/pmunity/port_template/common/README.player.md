@@ -35,6 +35,7 @@ Saves and settings: `ports/@@PORTDIR@@/data/`. PortMaster's exit hotkey quits. T
 
 ## Licences
 
-The port's code is MIT (`licenses/`). The setup tools are removed when the setup is done; their
-licences are in `licenses/` too. Unity is a trademark of Unity Technologies; this port is not
-affiliated with Unity Technologies or the game's makers.
+The port's code is MIT (`licenses/`). The setup's tools and files are removed when the setup is
+done (to set the game up again, install the port again first); their licences are in `licenses/`
+too. Unity is a trademark of Unity Technologies; this port is not affiliated with Unity
+Technologies or the game's makers.

@@ -38,7 +38,11 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     source "$controlfolder/utils/patcher.txt"
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
-    pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
+    if [ -f "$GAMEDIR/setup/patchscript" ]; then
+      pm_message "@@TITLE@@ is not set up yet: put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata and launch again (ports/@@PORTDIR@@/README.md; log: ports/@@PORTDIR@@/patchlog.txt)."
+    else    # (no setup to run: the port's folder without its setup/, e.g. deleted, or copied without it)
+      pm_message "@@TITLE@@ is not set up and its setup files are missing. Install the port again (unzip it over your ports folder), put @@GAME_WHAT@@ in ports/@@PORTDIR@@/gamedata if it is not there any more, and launch again."
+    fi
     sleep 8
     pm_finish
     exit 1
@@ -46,10 +50,24 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
 fi
 
 # the game the setup found (game.env: GAME_DIR under gamedata/, EXE, DATA, GL_MODE), the options
-source "$GAMEDIR/game.env"
+EXE=; GAME_DIR=
+[ -f "$GAMEDIR/game.env" ] && source "$GAMEDIR/game.env"
 [ -f "$GAMEDIR/port.env" ] && source "$GAMEDIR/port.env"
 GD="$GAMEDIR/gamedata/$GAME_DIR"
+if [ -z "$EXE" ] || [ ! -f "$GD/$EXE" ]; then
+  # (game.env did not reach the card whole, or the game's folder was moved or deleted)
+  pm_message "@@TITLE@@'s files are not where the setup left them (ports/@@PORTDIR@@/gamedata). To set it up again: install the port again, put @@GAME_WHAT@@ in gamedata, delete ports/@@PORTDIR@@/@@READY@@ and launch."
+  sleep 8
+  pm_finish
+  exit 1
+fi
 chmod +x "$GAMEDIR/box64/box64" "$GD/$EXE"
+
+# ---- the game is set up: what a setup cut off right after it marked the game set up left behind,
+# and the setup files a release unzipped over the set-up game brings again, are not needed to play
+for d in setup donor gamedata/.setup; do
+  [ -d "$GAMEDIR/$d" ] && rm -rf "${GAMEDIR:?}/$d" && echo "removed $d: the setup's, not needed to play"
+done
 
 # GL: gles  = Unity's OpenGL ES mode (-force-gles) through glxes on the firmware's GLES driver (the
 #             setup added GLES 3 shaders to the data)

@@ -24,6 +24,10 @@ hook() {                                # the port's own step at a fixed point (
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
 room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }
+# a full card (or one pulled out) must stop the setup: a progress file that was not written would
+# let the next launch take a half-done step for a finished one
+nowrite() { fail "Could not write $1 to the card: is the card full? Free some space on it, then launch again."; }
+mark() { sync; touch "$W/.step_$1" || nowrite "the setup's progress"; }   # mark <step>: what it wrote is on the card, then its marker
 [ "$DEVICE_ARCH" = aarch64 ] || fail "box64 needs a 64-bit (aarch64) system (this one: $DEVICE_ARCH)."
 SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
@@ -50,8 +54,25 @@ else
 fi
 
 # ---- 1. the game: a Linux x86-64 build in gamedata/ (an archive is unpacked there first)
+route_env() {   # the game `pm route` finds in gamedata/, as game.env's lines (none: no game.env)
+  local e
+  if e=$(pm route "$GD" --env 2>/dev/null); then
+    printf '%s\n' "$e" > "$W/game.env" || nowrite "the setup's progress"
+  else
+    rm -f "$W/game.env"; return 1
+  fi
+}
+# (a later launch: the game as step 1 noted it in game.env. Notes the card did not keep, or a game
+# that is gone, start again from the game)
+if [ -f "$W/.step_game" ]; then
+  EXE=; GAME_DIR=; . "$W/game.env" 2>/dev/null
+  if [ -z "$EXE" ] || [ ! -f "$GD/$GAME_DIR/$EXE" ]; then
+    echo "the setup's notes of the game are incomplete (or the game's folder is gone): starting again from the game"
+    rm -f "$W"/.step_* "$W/game.env"; EXE=
+  fi
+fi
 if [ ! -f "$W/.step_game" ]; then
-  if ! pm route "$GD" --env > "$W/game.env" 2>/dev/null; then
+  if ! route_env; then
     need=$((GAME_SIZE_MB * 2 + 200))
     for a in "$GD"/*; do
       [ -f "$a" ] || continue
@@ -66,9 +87,11 @@ if [ ! -f "$W/.step_game" ]; then
       case "$(lower "$a")" in
         *.tar|*.zip|*.7z|*.rar) "$SEVENZ" x -y -o"$GD" "$a" >/dev/null ;;
         *.sh) "$SEVENZ" x -tzip -y -o"$GD" "$a" >/dev/null ;;        # the zip after the installer's script
-        *) "$SEVENZ" x -so "$a" 2>/dev/null | "$SEVENZ" x -si -ttar -y -o"$GD" >/dev/null ;;
+        # (the decompressor's failure counts, and what it says goes to patchlog.txt: an archive with
+        # damaged data unpacks to a whole tar)
+        *) ( set -o pipefail; "$SEVENZ" x -so "$a" | "$SEVENZ" x -si -ttar -y -o"$GD" >/dev/null ) ;;
       esac || fail "Could not unpack $(basename "$a") (see patchlog.txt)."
-      pm route "$GD" --env > "$W/game.env" 2>/dev/null && break
+      route_env && break
     done
   fi
   hook game                               # (a port's own way to find or unpack the game)
@@ -80,7 +103,7 @@ if [ ! -f "$W/.step_game" ]; then
       echo "note: this port was made for Unity $UNITY_VERSIONS; your copy is Unity $UNITY (another version of the game?)";;
     esac
   fi
-  touch "$W/.step_game"
+  mark game
 fi
 . "$W/game.env"
 
@@ -93,16 +116,20 @@ if [ "$GL_MODE" = gles ] && [ ! -f "$W/.step_convert" ]; then
     || { [ $? = 2 ] && [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python."
          fail "Converting the game's shaders failed (see patchlog.txt). Launch again to continue."; }
   hook post_convert
-  touch "$W/.step_convert"
+  mark convert
 fi
 
 # ---- 3. for the launcher
-cp "$W/game.env" "$GAMEDIR/game.env"
+cp "$W/game.env" "$GAMEDIR/game.env" || nowrite "the game's settings"
 chmod +x "$GD/$GAME_DIR/$EXE"
 hook post_install
-rm -rf "$W" "$S"
+# the game is marked set up, on the card, before the tools, the work folder and the donors go: a
+# power cut in between leaves a game that starts (the launcher removes what is left), never one
+# without the tools to finish it
 sync
-touch "$GAMEDIR/$READY"
+touch "$GAMEDIR/$READY" || nowrite "the setup's last mark"
+sync
+rm -rf "$W" "$S" "$GAMEDIR/donor"         # (donor/: donors a port names for its own setup steps)
 # archives and installers the setup unpacked (the game's, Unity's player installer) are not needed
 # any more: removed, as PortMaster ports' setups do, unless setup.txt says keep_installers=1
 keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)

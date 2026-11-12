@@ -2030,6 +2030,12 @@ def _read(path, mode='r'):
         return f.read()
 
 
+def _mac_junk(name):
+    """macOS's own files, never a port's: Finder's .DS_Store, and the AppleDouble `._<name>` files it
+    keeps beside the files of a folder on exFAT or FAT (a port on a USB drive or an SD card)."""
+    return name == '.DS_Store' or name.startswith('._')
+
+
 def render(text, values, where='template'):
     def sub(m):
         k = m.group(1)
@@ -2589,7 +2595,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         log(f'using {own_toml}')
     # (a fresh clone of the port's own repository holds only these: port new writes into it)
     repo_files = {'.git', '.github', '.gitignore', '.gitattributes', 'LICENSE', 'LICENSE.md', 'LICENSE.txt', 'README.md'}
-    if (os.path.exists(out) and set(os.listdir(out)) - repo_files
+    if (os.path.exists(out) and {n for n in os.listdir(out) if not _mac_junk(n)} - repo_files
             and not os.path.isfile(os.path.join(out, 'port.build.json')) and not force):
         raise SystemExit(f'{out} exists and is not a port made by `port new` (--force to write into it)')
     rep = None
@@ -2741,20 +2747,28 @@ class PackCtx:
         self.name = cfg['port']['name']
         self.port_dir = os.path.join(zipdir, self.name)
         self.licenses = os.path.join(self.port_dir, 'licenses')
+        self.modes = {}                         # {path in the zip: mode}: the files add() was given a mode for
 
     def add(self, src, rel, mode=None):
-        """Copy src (a file or folder) to <port folder>/rel."""
+        """Copy src (a file or folder) to <port folder>/rel. mode (a file's): its Unix mode in the
+        release, 0o755 for a program the port runs; without one packed_mode() decides."""
         dst = os.path.join(self.port_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.DS_Store'))
+            shutil.copytree(src, dst, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.DS_Store', '._*'))
         else:
             shutil.copyfile(src, dst)
+            key = os.path.relpath(dst, self.zipdir).replace(os.sep, '/')
+            self.modes.pop(key, None)
             if mode is not None:
-                os.chmod(dst, mode)
+                os.chmod(dst, mode)             # (nothing on exFAT: the zip takes self.modes)
+                self.modes[key] = mode
         return dst
 
     def license(self, name, path=None, text=None):
+        if _mac_junk(name):                     # (a licence folder listed on exFAT)
+            return
         os.makedirs(self.licenses, exist_ok=True)
         dst = os.path.join(self.licenses, name)
         if path:
@@ -2808,6 +2822,14 @@ def needs_asmpatch(cfg):
     return ad.get('asmpatch', 'off') != 'off' or ad.get('streaming_assets', 'obb') != 'obb' or bool(ad.get('data_path'))
 
 
+def uses_flipbook(cfg):
+    """Whether the port's settings name UA_FLIPBOOK (docs/runtime.md): in [runtime], [runtime_low] or
+    [runtime_lowmem] (an empty value too: the player may turn it on in port.env), or as the variable
+    a setup question sets."""
+    return any('UA_FLIPBOOK' in (cfg.get(k) or {}) for k in ('runtime', 'runtime_low', 'runtime_lowmem')) \
+        or any(x.get('env') == 'UA_FLIPBOOK' for x in cfg.get('questions') or ())
+
+
 def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
     """ua_host (armhf, runtime/host/out) as <port>/<dst>, with the licences of what it links
     (LICENSE.<part><suffix>.txt)."""
@@ -2818,14 +2840,13 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
         ctx.log('building the runtime (runtime/build.sh, Docker)')
         subprocess.run([os.path.join(ctx.runtime, 'runtime', 'build.sh')], check=True)
     ctx.add(p, dst, 0o755)
-    # the flip-book stand-in ua_host loads with UA_FLIPBOOK (runtime/host/managed/build.sh), beside it
-    if dst == 'ua_host':
+    # the flip-book stand-in ua_host loads with UA_FLIPBOOK (runtime/host/managed/build.sh), beside it:
+    # for a port whose settings name UA_FLIPBOOK ([runtime*], or a setup question's env), no other
+    if dst == 'ua_host' and uses_flipbook(ctx.cfg):
         fb = os.path.join(os.path.dirname(p), 'uaflipbook.dll')
-        uses = any('UA_FLIPBOOK' in (ctx.cfg.get(k) or {}) for k in ('runtime', 'runtime_low', 'runtime_lowmem'))
-        if os.path.isfile(fb):
-            ctx.add(fb, 'uaflipbook.dll')
-        elif uses:
+        if not os.path.isfile(fb):
             raise SystemExit(f'{fb}: the port sets UA_FLIPBOOK: build it (runtime/host/managed/build.sh <donor APK>)')
+        ctx.add(fb, 'uaflipbook.dll')
     hyb = os.path.join(ctx.runtime, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
     if not os.path.isfile(hyb):
         hyb = os.path.join(REPO, 'runtime', 'thirdparty', 'libhybris', 'LICENSE.Apache2')
@@ -2834,7 +2855,7 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
         if opts.get('ua_host') else os.path.join(ctx.runtime, 'runtime', 'media', 'out', 'licenses')
     ml = opts.get('media_licenses') or ml
     ext = ('.copyright', '.LICENSE')            # (Debian's copyright files; OpenH264's own LICENSE)
-    lic = sorted(n for n in os.listdir(ml) if n.endswith(ext)) if os.path.isdir(ml) else []
+    lic = sorted(n for n in os.listdir(ml) if n.endswith(ext) and not _mac_junk(n)) if os.path.isdir(ml) else []
     if not lic:
         raise SystemExit(f'no decoder licences in {ml} (ua_host links the video decoders: build the runtime, '
                          f'or --media-licenses DIR)')
@@ -2870,7 +2891,7 @@ def _component_pmunity(ctx, opts):
     for r, ds, fs in os.walk(src):
         ds[:] = sorted(d for d in ds if d not in ('__pycache__', 'port_template'))
         for n in fs:
-            if n.endswith(('.py', '.shader')):
+            if n.endswith(('.py', '.shader')) and not _mac_junk(n):
                 rel = os.path.relpath(os.path.join(r, n), os.path.dirname(src))
                 ctx.add(os.path.join(r, n), os.path.join('setup', rel))
     # `pmunity il2cpp --on-device` puts this NDK stand-in into the NDK folder (il2cpp.TOOLS)
@@ -3105,25 +3126,48 @@ def wants(part, cfg):
             'ua_host64': not abis or 'arm64-v8a' in abis or bool(cfg['player'].get('il2cpp'))}.get(part, True)
 
 
-def _write_zip(zpath, root, items):
-    """A zip of root/<items> with Unix modes and fixed timestamps (the same inputs, the same zip)."""
+def is_program(head):
+    """Whether a file is a program, by its first bytes: an ELF file or a `#!` script."""
+    return head[:4] == b'\x7fELF' or head[:2] == b'#!'
+
+
+def packed_mode(data):
+    """The Unix mode of a packed file the packaging names no mode for: 0o755 for an ELF file, else
+    0o644, scripts too (the launcher and the setup set the bits of the scripts they run; PortMaster
+    wants a port's .sh files 644). By what the file is, never by its mode in the folder: on exFAT
+    and FAT every file is executable and chmod changes nothing."""
+    return 0o755 if data[:4] == b'\x7fELF' else 0o644
+
+
+def _write_zip(zpath, root, items, modes=None):
+    """A zip of root/<items> with Unix modes and fixed timestamps: the same inputs, the same zip,
+    whatever filesystem the folders are on. modes: {path in the zip: mode} for the files that have
+    one of their own (PackCtx.modes, the launcher); the others: packed_mode(). The files of root
+    take the same modes, where the filesystem keeps modes (the submission folder is copied from
+    them). macOS's own files (.DS_Store, ._*) are left out."""
+    modes = modes or {}
     tmp = zpath + '.tmp'
     with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for item in items:
             top = os.path.join(root, item)
             paths = [top] if os.path.isfile(top) else []
             for r, ds, fs in os.walk(top):
-                ds.sort()
-                paths += [os.path.join(r, n) for n in sorted(fs)]
+                ds[:] = sorted(d for d in ds if not _mac_junk(d))
+                paths += [os.path.join(r, n) for n in sorted(fs) if not _mac_junk(n)]
             for p in paths:
                 rel = os.path.relpath(p, root).replace(os.sep, '/')
+                data = _read(p, 'rb')
+                mode = modes.get(rel) or packed_mode(data)
+                try:
+                    os.chmod(p, mode)
+                except OSError:
+                    pass
                 zi = zipfile.ZipInfo(rel, date_time=(2020, 1, 1, 0, 0, 0))
-                mode = 0o755 if os.access(p, os.X_OK) else 0o644
                 zi.external_attr = (0o100000 | mode) << 16
                 zi.create_system = 3
                 zi.compress_type = zipfile.ZIP_DEFLATED
-                with open(p, 'rb') as f:
-                    z.writestr(zi, f.read())
+                # (the level on each entry: the ZipFile's own is not used for an entry given as a ZipInfo)
+                z.writestr(zi, data, compresslevel=9)
     os.replace(tmp, zpath)
 
 
@@ -3166,7 +3210,8 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
         sp = os.path.join(port_src, src.replace('{build}', os.path.join(out, 'build')))
         if not os.path.exists(sp):
             raise SystemExit(f'build.outputs: {sp} was not made')
-        ctx.add(sp, dst, 0o755 if os.access(sp, os.X_OK) else None)
+        # (a program of the porter's build, an ELF file or a `#!` script, is packed executable)
+        ctx.add(sp, dst, 0o755 if os.path.isfile(sp) and is_program(_read(sp, 'rb')[:4]) else None)
     for n, src in (bld.get('licenses') or {}).items():
         ctx.license(n, os.path.join(port_src, src.replace('{build}', os.path.join(out, 'build'))))
     _call_hooks('port_package', ctx)
@@ -3182,7 +3227,7 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
         if v:
             ctx.add(v[0], v[1], 0o644)
     zpath = os.path.join(out, f'{name}.zip')
-    _write_zip(zpath, zipdir, [launcher, name])
+    _write_zip(zpath, zipdir, [launcher, name], dict(ctx.modes, **{launcher: 0o644}))
     log(f'built {zpath} ({os.path.getsize(zpath) / 2**20:.1f} MB): unzip it into the handheld\'s ports folder')
     # the testing thread's post goes beside the zip, not into it
     tt = os.path.join(port_src, 'testing_thread.txt')
@@ -3197,7 +3242,7 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     if not os.path.isfile(gi):
         todo.append('no gameinfo.xml in the port folder: run `port new` again')
     big = [(os.path.relpath(os.path.join(r_, n), zipdir), os.path.getsize(os.path.join(r_, n)))
-           for r_, _, fs in os.walk(zipdir) for n in fs]
+           for r_, _, fs in os.walk(zipdir) for n in fs if not _mac_junk(n)]
     todo += [f'{n} is {s / 2**20:.0f} MB: PortMaster\'s repository keeps files over {BIG_FILE_MB} MB in pieces '
              f'(its tools/build_data.py)' for n, s in sorted(big) if s > BIG_FILE_MB << 20]
     for n, s in sorted(big):
@@ -3283,7 +3328,8 @@ def write_submission(ctx, port_src, out, launcher, imgs):
     shutil.rmtree(sub, ignore_errors=True)
     top = {'port.json', 'gameinfo.xml'} | {v[1] for v in imgs.values() if v}
     shutil.copytree(ctx.port_dir, os.path.join(sub, name),
-                    ignore=lambda d, names: [n for n in names if os.path.abspath(d) == os.path.abspath(ctx.port_dir) and n in top])
+                    ignore=lambda d, names: [n for n in names if _mac_junk(n) or
+                                             os.path.abspath(d) == os.path.abspath(ctx.port_dir) and n in top])
     for n in ('port.json', 'gameinfo.xml'):
         if os.path.isfile(os.path.join(ctx.port_dir, n)):
             shutil.copyfile(os.path.join(ctx.port_dir, n), os.path.join(sub, n))

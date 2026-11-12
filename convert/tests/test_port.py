@@ -16,6 +16,7 @@ import time
 import tomllib
 import unittest
 import zipfile
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -600,21 +601,99 @@ def fake_donors(d, out):
     return d
 
 
+def as_on_exfat(*tops):
+    """Makes folders what macOS makes of them on exFAT or FAT (a USB drive, an SD card): an AppleDouble
+    `._<name>` beside every file, a .DS_Store in every folder, every file executable."""
+    for top in tops:
+        for r, ds, fs in os.walk(top):
+            for n in fs:
+                put(os.path.join(r, '._' + n), b'\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \xff\xfe' + bytes(4000))
+                os.chmod(os.path.join(r, n), 0o777)
+            put(os.path.join(r, '.DS_Store'), b'\x00\x00\x00\x01Bud1\xff' + bytes(100))
+
+
+def deflated(data, level):
+    """The size of data as a zip entry deflated at that level."""
+    c = zlib.compressobj(level, zlib.DEFLATED, -15)
+    return len(c.compress(data) + c.flush())
+
+
+def sync_spy(t, path=None):
+    """PATH with a `sync` first that notes in $STUB_LOG what is on the card at that moment ("ready":
+    the game is marked set up; "setup", "work", "donor": the setup's tools, its work folder, the
+    donors; "game": the player's copy in gamedata/), and stops the setup dead at the state
+    $STUB_CUT names (a power cut)."""
+    d = os.path.join(t, 'spy')
+    os.makedirs(d, exist_ok=True)
+    put(os.path.join(d, 'sync'), r'''#!/bin/sh
+s=
+[ -f "$GAMEDIR/.setup_done" ] && s="$s ready"
+[ -d "$GAMEDIR/setup" ] && s="$s setup"
+[ -d "$GAMEDIR/gamedata/.setup" ] && s="$s work"
+[ -d "$GAMEDIR/donor" ] && s="$s donor"
+[ -d "$GAMEDIR/gamedata/My Game" ] && s="$s game"
+echo "sync:$s" >> "$STUB_LOG"
+if [ -n "$STUB_CUT" ] && [ "$s" = " $STUB_CUT" ]; then kill -9 $PPID; fi
+exit 0
+''')
+    os.chmod(os.path.join(d, 'sync'), 0o755)
+    return d + os.pathsep + (path or os.environ.get('PATH', ''))
+
+
+def syncs(log):
+    """What the sync spy noted, in order."""
+    return [l[5:].strip() for l in log.splitlines() if l.startswith('sync:')]
+
+
+def fake_portmaster(t):
+    """A stand-in for PortMaster where a launcher looks for it ($XDG_DATA_HOME/PortMaster): control.txt
+    with a handheld's values and PortMaster's functions (what pm_message shows goes to $STUB_LOG, no
+    waits) and no patcher, and a `uname` that says aarch64. Returns the launcher's environment; the
+    ports folder is <t>/ports."""
+    x = os.path.join(t, 'xdg')
+    for d in ('PortMaster', 'bin'):
+        os.makedirs(os.path.join(x, d), exist_ok=True)
+    put(os.path.join(x, 'PortMaster', 'control.txt'), f'''directory={shlex.quote(os.path.realpath(t).lstrip('/'))}
+CFW_NAME=test; DEVICE_NAME=test; DEVICE_ARCH=aarch64; DISPLAY_WIDTH=640; DISPLAY_HEIGHT=480; ANALOG_STICKS=2
+ESUDO=; GPTOKEYB2=true; sdl_controllerconfig=
+get_controls() {{ :; }}
+pm_message() {{ echo "message: $*" >> "$STUB_LOG"; }}
+pm_finish() {{ :; }}
+pm_message_end() {{ :; }}
+pm_platform_helper() {{ :; }}
+sleep() {{ :; }}
+''')
+    put(os.path.join(x, 'bin', 'uname'), '#!/bin/sh\necho aarch64\n')
+    os.chmod(os.path.join(x, 'bin', 'uname'), 0o755)
+    log = os.path.join(t, 'pm.log')
+    return dict(os.environ, XDG_DATA_HOME=x, STUB_LOG=log,
+                PATH=os.path.join(x, 'bin') + os.pathsep + os.environ.get('PATH', ''))
+
+
 def stub_tools(t):
     """A stand-in for the setup's Python (pmunity commands that log and make what the setup reads)
-    packed as python.tar.gz, and for PortMaster's 7-Zip (unzip)."""
+    packed as python.tar.gz, and for PortMaster's 7-Zip (unzip; gunzip and tar for a .tar.gz)."""
     py = os.path.join(t, 'stub', 'python', 'bin', 'python3.12')
     os.makedirs(os.path.dirname(py), exist_ok=True)
     with open(py, 'w') as f:
         f.write(r'''#!/bin/bash
-if [ "$1" = -c ]; then case "$2" in *scripting_runtime*) echo "$STUB_RUNTIME";; esac; exit 0; fi
+if [ "$1" = -c ]; then exit 0; fi       # (the setup's check that its Python has UnityPy)
 shift 2; echo "pm $*" >> "$STUB_LOG"
 [ "$1" = "$STUB_FAIL" ] && exit 1
 case "$1" in
   version) echo "$STUB_VERSION (supported)";;
-  player) d=$4; L=$d/Variations/mono/Release; mkdir -p "$L/Libs/armeabi-v7a" "$L/MonoLibs/armeabi-v7a"
-          for f in libmain.so libunity.so; do echo x > "$L/Libs/armeabi-v7a/$f"; done
-          for f in libmono.so libmonobdwgc-2.0.so libMonoPosixHelper.so; do echo x > "$L/MonoLibs/armeabi-v7a/$f"; done;;
+  player) d=$4; b=mono; abi=armeabi-v7a; a=("$@")
+          for ((i = 0; i < $#; i++)); do case "${a[i]}" in --backend) b=${a[i+1]};; --abi) abi=${a[i+1]};; esac; done
+          L=$d/Variations/$b/Release; mkdir -p "$L/Libs/$abi"
+          for f in libmain.so libunity.so; do echo x > "$L/Libs/$abi/$f"; done
+          if [ "$b" = mono ]; then
+            mkdir -p "$L/MonoLibs/$abi"
+            for f in libmono.so libmonobdwgc-2.0.so libMonoPosixHelper.so; do echo x > "$L/MonoLibs/$abi/$f"; done
+          else echo x > "$L/Libs/$abi/libil2cpp.so"; fi;;
+  macpkg) out=$2; shift 2; for f in "$@"; do echo "pkg <${f##*/}>" >> "$STUB_LOG"; done
+          mkdir -p "$out/My Game.app/Contents/Resources/Data"; touch "$out/My Game.app/Contents/Resources/Data/globalgamemanagers";;
+  route) [ -f "$2/My Game/My Game.x86_64" ] || exit 1
+         printf "GAME_DIR='My Game'\nEXE='My Game.x86_64'\nDATA='My Game_Data'\nUNITY=%s\nBACKEND=mono\nGL_MODE=%s\n" "$STUB_VERSION" "${STUB_GL:-gles}";;
   unpack) rm "$2/data.unity3d"; touch "$2/globalgamemanagers";;
   winbcl) if [ -n "$STUB_WINBCL" ]; then mkdir -p "$3"; for n in $STUB_WINBCL; do echo x > "$3/$n"; done; fi;;
   convert) if [ -n "$PMHLSLCC" ]; then echo "env PMHLSLCC=$PMHLSLCC" >> "$STUB_LOG"; fi;;
@@ -623,16 +702,32 @@ case "$1" in
           echo x > "$out/lib/arm64-v8a/libil2cpp.so"; for f in libmain.so libunity.so; do echo x > "$L/$f"; done;;
   android-data) while [ $# -gt 0 ]; do case "$1" in --out) out=$2;; --name) name=$2;; --src) src=$2;; esac; shift; done
           mkdir -p "$out/zip/assets/bin/Data/Managed/etc"; echo apk > "$out/zip/$name.apk"
-          echo '{}' > "$out/android_data_report.json"; rm -rf "$src"/*;;
+          # (the report as android-data writes it, json.dump(indent=1): the setup reads the scripting
+          # runtime in its "unity" section)
+          @PY@ -I -c 'import json, os, sys
+json.dump({"stats": {}, "unity": {"data": os.environ["STUB_VERSION"], "player": None,
+                                 "scripting_runtime": os.environ["STUB_RUNTIME"], "warnings": []},
+           "skipped": []}, open(sys.argv[1], "w"), indent=1)' "$out/android_data_report.json"
+          rm -rf "$src"/*;;
 esac
-''')
+'''.replace('@PY@', shlex.quote(sys.executable)))
     os.chmod(py, 0o755)
     with tarfile.open(os.path.join(t, 'python.tar.gz'), 'w:gz') as tf:
         tf.add(os.path.join(t, 'stub', 'python'), 'python')
     sz = os.path.join(t, 'pm', '7zzs.aarch64')
     os.makedirs(os.path.dirname(sz), exist_ok=True)
     with open(sz, 'w') as f:
-        f.write('#!/bin/bash\n# 7zz x -y -o<dir> <archive>\necho "7zz $*" >> "$STUB_LOG"; o=${3#-o}; unzip -q -o "$4" -d "$o"\n')
+        f.write(r'''#!/bin/bash
+# 7zz as the setups call it: x -y -o<dir> <archive> (a zip); x -so <archive> (a .tar.gz's tar to
+# stdout: with 7-Zip's words and status when the archive's checksum says its data is damaged);
+# x -si -ttar -y -o<dir> (that tar, from stdin)
+echo "7zz $*" >> "$STUB_LOG"
+case "$2" in
+  -so) gunzip -c "$3" 2>/dev/null || { echo "ERROR: CRC Failed : $(basename "$3" .gz)" >&2; exit 2; };;
+  -si) o=${5#-o}; tar -xf - -C "$o";;
+  *) o=${3#-o}; unzip -q -o "$4" -d "$o";;
+esac
+''')
     os.chmod(sz, 0o755)
     return os.path.join(t, 'python.tar.gz'), os.path.dirname(sz)
 
@@ -672,6 +767,7 @@ class NewAndSetupTest(unittest.TestCase):
             for f in ('LICENSE', 'README.md', '.git/HEAD'):
                 os.makedirs(os.path.dirname(os.path.join(repo, f)), exist_ok=True)
                 put(os.path.join(repo, f), b'x')
+            as_on_exfat(repo)                   # (macOS's own files beside them are not "other files")
             cp = os.path.join(t, 'cfg.json')
             out = P.new('mygame', game, cp, repo, asmpatch='/nonexistent-asmpatch', log=lambda m: None)
             gi = os.path.join(out, '.gitignore')
@@ -990,8 +1086,9 @@ class NewAndSetupTest(unittest.TestCase):
         default port's release)"""
         with tempfile.TemporaryDirectory() as t:
             put(os.path.join(t, 'mystep.py'), 'STEPS = {}\n')
-            _, out = self.make(t, {'build': {'commands': ['echo tool > "$BUILD/tool" && chmod +x "$BUILD/tool"'],
-                                             'outputs': {'setup/files/tool': '{build}/tool'}},
+            _, out = self.make(t, {'build': {'commands': ['printf "#!/bin/sh\\n" > "$BUILD/tool"',
+                                                          'echo data > "$BUILD/table" && chmod +x "$BUILD/table"'],
+                                             'outputs': {'setup/files/tool': '{build}/tool', 'setup/files/table': '{build}/table'}},
                                    'files': {'plugins': ['mystep.py']}})
             cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
             self.assertEqual(P.pmu_covers(cfg), (False, ["the port's converter plugins (mystep.py)"]))
@@ -1047,12 +1144,16 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertNotIn('mygame/setup/pmhlslcc', names)        # (nor Direct3D 11 shaders)
             self.assertNotIn('mygame/setup/pmu', names)             # (the Python instead)
             self.assertIn('mygame/setup/files/mystep.py', names)
+            # modes by rule, never the folder's (test_package_zip): the programs the packaging names 755,
+            # scripts 644 (the launcher and the setup set the bits of what they run)
             self.assertEqual(modes['My Game.sh'], 0o644)
             self.assertEqual(modes['mygame/ua_host'], 0o755)
             self.assertEqual(modes['mygame/setup/patchscript'], 0o644)
+            self.assertEqual(modes['mygame/setup/tools/il2cpp/ndk-clang.sh'], 0o755)   # (named by the packaging)
             self.assertFalse([n for n in names if n.startswith('mygame/licenses/') and
                               not re.match(r'mygame/licenses/LICENSE\.[^/]+\.txt$', n)])   # (one flat folder)
-            self.assertEqual(modes['mygame/setup/files/tool'], 0o755)          # (a build output)
+            self.assertEqual(modes['mygame/setup/files/tool'], 0o755)          # (a build output that is a program: a script)
+            self.assertEqual(modes['mygame/setup/files/table'], 0o644)         # (data, though executable in the build folder)
             self.assertIn('MIT a', lic)
             self.assertNotIn('port.toml', ' '.join(names))
 
@@ -1102,6 +1203,82 @@ class NewAndSetupTest(unittest.TestCase):
                 self.assertNotIn(n, names)
             self.assertFalse([n for n in names if n.startswith('mygame/licenses/') and
                               not re.match(r'mygame/licenses/LICENSE\.[^/]+\.txt$', n)])   # (one flat folder)
+
+    def release_parts(self, t):
+        """Stand-ins for what a default port's release takes besides the port: the runtime's folder
+        (ua_host with the flip-book stand-in beside it, the decoders' licences), pmu's; returns
+        (the runtime folder, package()'s options)."""
+        rt = os.path.join(t, 'rt')
+        for d in ('runtime/host/out', 'runtime/media/out/licenses'):
+            os.makedirs(os.path.join(rt, d))
+        put(os.path.join(rt, 'runtime/host/out/ua_host'), 'host')
+        put(os.path.join(rt, 'runtime/host/out/uaflipbook.dll'), 'MZ flip-book')
+        put(os.path.join(rt, 'runtime/media/out/licenses/libvpx.copyright'), 'BSD')
+        return rt, dict(donors=os.path.join(t, 'donors'), log=lambda m: None, no_build=True, pmu=stub_pmu(t))
+
+    def test_package_flipbook(self):
+        """ua_host's flip-book stand-in (uaflipbook.dll, built beside ua_host) goes into the release of
+        a port whose settings name UA_FLIPBOOK, and into no other; such a port's release stops without it"""
+        with tempfile.TemporaryDirectory() as t:
+            rt, kw = self.release_parts(t)
+            _, out = self.make(t)
+            with zipfile.ZipFile(P.package(out, os.path.join(t, 'rel'), rt, **kw)) as zf:
+                self.assertNotIn('mygame/uaflipbook.dll', zf.namelist())
+            _, out = self.make(t, {'runtime_lowmem': {'UA_FLIPBOOK': '@flipbooks.txt'}})
+            with zipfile.ZipFile(P.package(out, os.path.join(t, 'rel'), rt, **kw)) as zf:
+                self.assertEqual(zf.read('mygame/uaflipbook.dll'), b'MZ flip-book')
+            os.unlink(os.path.join(rt, 'runtime/host/out/uaflipbook.dll'))
+            with self.assertRaises(SystemExit) as cm:
+                P.package(out, os.path.join(t, 'rel'), rt, **kw)
+            self.assertIn('the port sets UA_FLIPBOOK: build it (runtime/host/managed/build.sh <donor APK>)', str(cm.exception))
+        self.assertTrue(P.uses_flipbook({'runtime': {'UA_FLIPBOOK': ''}}))      # (off, for the player to turn on)
+        self.assertTrue(P.uses_flipbook({'questions': [{'id': 'BOOKS', 'env': 'UA_FLIPBOOK'}]}))
+        self.assertFalse(P.uses_flipbook({'runtime': {'UA_POINTER_CURSOR': '0'}, 'runtime_low': {},
+                                          'questions': [{'id': 'CURSOR', 'env': 'UA_POINTER_CURSOR'}]}))
+
+    def test_package_zip(self):
+        """the release zip: every entry deflated at level 9, with a fixed time, in a fixed order; a file
+        executable by rule (a program the packaging names, an ELF file; scripts not: the launcher and
+        the setup set the bits of what they run, and PortMaster wants .sh files 644), never by its
+        mode in the folder; and the same zip, byte for byte, from folders as macOS shows them on exFAT
+        (a `._<name>` beside every file, a .DS_Store in every folder, every file executable): none of
+        macOS's files in the zip or in the submission folder, whose files take the zip's modes"""
+        with tempfile.TemporaryDirectory() as t:
+            rt, kw = self.release_parts(t)
+            _, out = self.make(t, {'runtime': {'UA_FLIPBOOK': '@flipbooks.txt'}})
+            text = P._read(P.__file__, 'rb')                # (a text that level 9 packs smaller than the default level)
+            for n, data in (('libthing.so', b'\x7fELF' + bytes(60)), ('table.bin', bytes(64)), ('notes.txt', text)):
+                put(os.path.join(out, 'mygame', n), data)       # (the porter's own files in the port folder)
+            z = P.package(out, os.path.join(t, 'rel'), rt, **kw)
+            with zipfile.ZipFile(z) as zf:
+                infos = zf.infolist()
+                for i in infos:
+                    self.assertEqual(i.compress_type, zipfile.ZIP_DEFLATED, i.filename)
+                    self.assertEqual(i.compress_size, deflated(zf.read(i), 9), i.filename)
+                    self.assertEqual((i.date_time, i.create_system), ((2020, 1, 1, 0, 0, 0), 3), i.filename)
+            self.assertLess(deflated(text, 9), deflated(text, 6))
+            names = [i.filename for i in infos]
+            self.assertEqual(names[0], 'My Game.sh')
+            # (a folder's files, then its folders, each by name)
+            self.assertEqual(names[1:], sorted(names[1:], key=lambda n: (n.split('/')[:-1], n)))
+            modes = {i.filename: i.external_attr >> 16 & 0o777 for i in infos}
+            want = {'My Game.sh': 0o644, 'mygame/ua_host': 0o755, 'mygame/setup/pmu': 0o755,
+                    'mygame/setup/patchscript': 0o644, 'mygame/setup/update': 0o644,
+                    'mygame/libthing.so': 0o755, 'mygame/table.bin': 0o644, 'mygame/notes.txt': 0o644,
+                    'mygame/port.json': 0o644, 'mygame/uaflipbook.dll': 0o644,
+                    'mygame/donor/donor-2019.4.8f1-mono-armv7.apk': 0o644, 'mygame/licenses/LICENSE.musl.txt': 0o644}
+            self.assertEqual({n: modes[n] for n in want}, want)
+            as_on_exfat(out, rt, kw['donors'], kw['pmu'])
+            z2 = P.package(out, os.path.join(t, 'rel2'), rt, submission=True, **kw)
+            self.assertTrue(P._read(z, 'rb') == P._read(z2, 'rb'), 'another zip from the same port on exFAT')
+            sub = os.path.join(t, 'rel2', 'submission', 'mygame')
+            junk = [os.path.join(r, n) for r, ds, fs in os.walk(os.path.dirname(sub))
+                    for n in ds + fs if n == '.DS_Store' or n.startswith('._')]
+            self.assertEqual(junk, [])
+            # (PortMaster's layout: port.json beside the launcher, the rest in the port folder)
+            for n, mode in want.items():
+                f = os.path.join(sub, 'port.json' if n == 'mygame/port.json' else n)
+                self.assertEqual(os.stat(f).st_mode & 0o111 != 0, mode == 0o755, f)
 
     def run_setup(self, t, out, env):
         """The generated launcher's setup part: patchscript with GAMEDIR etc., stand-in tools."""
@@ -1232,6 +1409,268 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
             self.assertTrue(il.endswith(f"--streaming-assets obb --asmpatch '{os.path.join(g, 'setup', 'asmpatch')}'"), il)
+
+    def installed(self, t, cfg_extra=None, game_folder=True):
+        """A port made by port new, unzipped as <t>/ports/mygame, the player's copy of the game (its
+        folder) in gamedata/; returns (the game, the port's folder made by port new, ports/mygame)."""
+        game, out = self.make(t, cfg_extra)
+        g = os.path.join(t, 'ports', 'mygame')
+        shutil.copytree(os.path.join(out, 'mygame'), g)
+        if game_folder:
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+        if (cfg_extra or {}).get('port', {}).get('route') == 'mono-arm64':   # (the release's Mono runtime of the Unity line)
+            os.makedirs(os.path.join(g, 'setup', 'mono64', '2019.4'))
+            for n in ('libmonobdwgc-2.0.so', 'libil2cpp.so'):
+                put(os.path.join(g, 'setup', 'mono64', '2019.4', n), 'elf')
+        return game, out, g
+
+    def run_launcher(self, t, out, env=None):
+        """The port's launcher as port new made it, on the stand-in PortMaster (fake_portmaster), the
+        port in <t>/ports/mygame; returns (the result, what PortMaster showed and the stand-ins noted)."""
+        if any(os.path.isdir(d) for d in ('/opt/system/Tools/PortMaster', '/opt/tools/PortMaster')):
+            self.skipTest('a real PortMaster here: the launcher takes it')
+        e = fake_portmaster(t)
+        e.update(env or {})
+        if os.path.exists(e['STUB_LOG']):
+            os.unlink(e['STUB_LOG'])
+        r = subprocess.run(['bash', os.path.join(out, 'My Game.sh')], env=e, capture_output=True, text=True)
+        return r, (P._read(e['STUB_LOG']) if os.path.exists(e['STUB_LOG']) else '')
+
+    def test_setup_end_order(self):
+        """the end of a setup: the used-up copy of the game goes, the card is synced, the game is marked
+        set up, the card is synced, and only then the setup's tools, its work folder and the donors go
+        (the sync spy notes what is on the card at each sync). A power cut right after the mark: the
+        game is whole, and the launcher starts it and removes what the setup left"""
+        for route in ('android', 'mono-arm64', 'il2cpp-arm64'):
+            with self.subTest(route=route), tempfile.TemporaryDirectory() as t:
+                _, out, g = self.installed(t, {'port': {'route': route}})
+                g, r, log = self.run_setup(t, out, {'PATH': sync_spy(t, roomy_path(t))})
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                seen = syncs(log)
+                i = seen.index('ready setup work donor')
+                self.assertEqual(seen[i - 1], 'setup work donor', seen)      # (before the mark: the copy gone, synced)
+                self.assertEqual(seen[-1], 'ready', seen)
+                self.assertFalse([x for x in seen if 'setup' not in x.split() and x != 'ready'], seen)
+                self.assertEqual(os.listdir(os.path.join(g, 'gamedata')), ['PUT_GAME_FILES_HERE.txt'])
+                for d in ('setup', 'donor'):
+                    self.assertFalse(os.path.exists(os.path.join(g, d)), d)
+            with self.subTest(route=route, cut=True), tempfile.TemporaryDirectory() as t:
+                _, out, g = self.installed(t, {'port': {'route': route}})
+                g, r, log = self.run_setup(t, out, {'PATH': sync_spy(t, roomy_path(t)), 'STUB_CUT': 'ready setup work donor'})
+                self.assertNotEqual(r.returncode, 0)
+                self.assertNotIn('setup finished', P._read(os.path.join(g, 'patchlog.txt')))
+                for f in ('.setup_done', 'MyGame.apk', 'lib/libunity.so', 'answers.env', 'setup/patchscript'):
+                    self.assertTrue(os.path.isfile(os.path.join(g, f)), f)
+                self.assertTrue(os.path.isdir(os.path.join(g, 'gamedata', '.setup')))
+                if route == 'android':          # (its launcher wants a 32-bit userland: not run here)
+                    continue
+                put(os.path.join(g, 'ua_host'), '#!/bin/sh\necho "ua_host $1" >> "$STUB_LOG"\n')
+                r, log = self.run_launcher(t, out)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn('ua_host ' + os.path.realpath(g), log)
+                self.assertNotIn('message:', log)
+                for d in ('setup', 'donor', 'gamedata/.setup'):
+                    self.assertFalse(os.path.exists(os.path.join(g, d)), d)
+                    self.assertIn(f"removed {d}: the setup's, not needed to play", P._read(os.path.join(g, 'log.txt')))
+                self.assertEqual(os.listdir(os.path.join(g, 'gamedata')), ['PUT_GAME_FILES_HERE.txt'])
+
+    def test_setup_progress_files(self):
+        """the setup's progress files: one the card does not take stops the setup with the reason in
+        plain words (a full card) and nothing is marked done; notes that came back empty, or a game
+        folder that went before it was packed, redo the step; the game is not marked set up when the
+        mark cannot be written, and the tools stay to finish it"""
+        with tempfile.TemporaryDirectory() as t:
+            _, out, g = self.installed(t)
+            W = os.path.join(g, 'gamedata', '.setup')
+            full = ' to the card: is the card full? Free some space on it, then launch again.'
+            # the note of the game's data folder cannot be written
+            os.makedirs(os.path.join(W, '.data'))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertIn("PATCH_FAIL_MSG:Could not write the setup's progress" + full, r.stdout)
+            self.assertFalse(os.path.exists(os.path.join(W, '.step_game')))
+            self.assertNotIn('pm player', log)
+            os.rmdir(os.path.join(W, '.data'))
+            # a step's marker cannot be written (a link to nowhere stands in for the full card)
+            os.symlink(os.path.join(t, 'nowhere', 'x'), os.path.join(W, '.step_player'))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertIn("PATCH_FAIL_MSG:Could not write the setup's progress" + full, r.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(W, '.step_game')))
+            self.assertIn('pm player', log)
+            self.assertNotIn('pm winbcl', log)                          # (the next step did not start)
+            os.unlink(os.path.join(W, '.step_player'))
+            # the answers cannot be written
+            os.makedirs(os.path.join(W, 'answers.env.new'))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertIn("PATCH_FAIL_MSG:Could not write the setup's answers" + full, r.stdout)
+            os.rmdir(os.path.join(W, 'answers.env.new'))
+            # the note of the data folder came back empty (a power cut): step 1 again
+            put(os.path.join(W, '.data'), '')
+            n = log.count('pm version')
+            g, r, log = self.run_setup(t, out, {'STUB_FAIL': 'convert'})
+            self.assertIn("the setup's notes of the game are incomplete (or the game's folder is gone): starting again", r.stdout)
+            self.assertEqual(log.count('pm version'), n + 1)
+            self.assertIn('PATCH_FAIL_MSG:Converting', r.stdout)
+            self.assertEqual(P._read(os.path.join(W, '.data')).strip(), os.path.join(g, 'gamedata', 'My Game', 'My Game_Data'))
+            # the game's folder went before it was packed: the player is asked for the game again
+            os.rename(os.path.join(g, 'gamedata', 'My Game'), os.path.join(t, 'away'))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertIn('starting again from the game', r.stdout)
+            self.assertIn('PATCH_FAIL_MSG:Put ', r.stdout)
+            os.rename(os.path.join(t, 'away'), os.path.join(g, 'gamedata', 'My Game'))
+            # the last mark cannot be written: the game is not marked set up, the tools stay; the next
+            # launch (the copy of the game is gone by then: its files are packed) finishes
+            os.symlink(os.path.join(t, 'nowhere', 'x'), os.path.join(g, '.setup_done'))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertIn("PATCH_FAIL_MSG:Could not write the setup's last mark" + full, r.stdout)
+            self.assertTrue(os.path.isfile(os.path.join(g, 'setup', 'patchscript')))
+            self.assertTrue(os.path.isfile(os.path.join(W, '.step_package')))
+            self.assertFalse(os.path.exists(os.path.join(g, 'gamedata', 'My Game')))
+            os.unlink(os.path.join(g, '.setup_done'))
+            n = log.count('pm android-data')
+            g, r, log = self.run_setup(t, out, {})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertNotIn('starting again from the game', r.stdout.split('=== ')[-1])
+            self.assertEqual(log.count('pm android-data'), n)            # (nothing is packed twice)
+            self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
+            self.assertFalse(os.path.exists(os.path.join(g, 'setup')))
+        for route in ('android', 'mono-arm64', 'il2cpp-arm64', 'apk', 'box64'):   # (the same helpers on every route)
+            text = P._read(os.path.join(P.TEMPLATES, route, 'patchscript'))
+            self.assertIn('nowrite() { fail "Could not write $1 to the card: is the card full?', text, route)
+            self.assertIn('mark() { sync; touch "$W/.step_$1" || nowrite', text, route)
+            self.assertNotIn('touch "$W/.step_', text.replace('mark() { sync; touch "$W/.step_$1"', ''), route)
+            self.assertNotIn('eval ', text, route)
+            # the mark, then the cleanup: never the other way round
+            self.assertLess(text.index('touch "$GAMEDIR/$READY" || nowrite'), text.index('rm -rf "$W" "$S"'), route)
+
+    def test_setup_pkg_names(self):
+        """macOS installers (.pkg) in gamedata/: all of them go to macpkg in one call, the largest
+        first, a name with spaces as one argument"""
+        with tempfile.TemporaryDirectory() as t:
+            _, out, g = self.installed(t, game_folder=False)
+            for n, size in (('My Game Part 2.pkg', 10), ('My Game.pkg', 5000), ('extras.pkg', 300)):
+                put(os.path.join(g, 'gamedata', n), b'x' * size)
+            g, r, log = self.run_setup(t, out, {})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(log.count('pm macpkg'), 1)
+            self.assertEqual([l for l in log.splitlines() if l.startswith('pkg <')],
+                             ['pkg <My Game.pkg>', 'pkg <extras.pkg>', 'pkg <My Game Part 2.pkg>'])
+            self.assertEqual(os.listdir(os.path.join(g, 'gamedata')), ['PUT_GAME_FILES_HERE.txt'])
+            self.assertIn('removing My Game Part 2.pkg: not needed to play', P._read(os.path.join(g, 'patchlog.txt')))
+
+    def test_setup_tar_gz(self):
+        """the game as a .tar.gz: unpacked through 7-Zip's pipe (decompress | untar). An archive whose
+        checksum says its data is damaged still gives a whole tar that unpacks: the decompressor's
+        status stops the setup, with its words in patchlog.txt"""
+        with tempfile.TemporaryDirectory() as t:
+            game, out, g = self.installed(t, game_folder=False)
+            a = os.path.join(g, 'gamedata', 'my game.tar.gz')
+            with tarfile.open(a, 'w:gz') as tf:
+                tf.add(game, 'My Game')
+            good = P._read(a, 'rb')
+            bad = bytearray(good)
+            bad[-8] ^= 0xff                                 # (the data's CRC-32, in the gzip trailer)
+            put(a, bytes(bad))
+            g, r, log = self.run_setup(t, out, {})
+            self.assertIn('PATCH_FAIL_MSG:Could not unpack my game.tar.gz (see patchlog.txt).', r.stdout)
+            self.assertIn('ERROR: CRC Failed : my game.tar', P._read(os.path.join(g, 'patchlog.txt')))
+            self.assertTrue(os.path.isfile(os.path.join(g, 'gamedata', '.setup', 'unpacked', 'My Game', 'My Game_Data',
+                                                        'globalgamemanagers')))      # (the untar part had nothing to say)
+            self.assertNotIn('pm version', log)
+            put(a, good)
+            g, r, log = self.run_setup(t, out, {})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn(f'7zz x -so {a}', log)
+            self.assertIn('7zz x -si -ttar -y -o', log)
+            self.assertFalse(os.path.isfile(a))
+            self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
+        for route in ('android', 'mono-arm64', 'il2cpp-arm64', 'box64'):
+            text = P._read(os.path.join(P.TEMPLATES, route, 'patchscript'))
+            self.assertIn('( set -o pipefail; "$SEVENZ" x -so "$a" | "$SEVENZ" x -si -ttar -y -o', text, route)
+            self.assertNotIn('x -so "$a" 2>/dev/null', text, route)
+
+    def test_setup_box64(self):
+        """the box64 setup: the game `route` finds, the GLES shaders, game.env for the launcher; the
+        game is marked set up before the setup's files go; notes of the game that came back empty
+        redo the step. The launcher of a set-up game whose game.env or game folder is gone says so"""
+        with tempfile.TemporaryDirectory() as t:
+            _, out, g = self.installed(t, {'port': {'route': 'box64'}})
+            W = os.path.join(g, 'gamedata', '.setup')
+            env = {'PATH': sync_spy(t)}
+            g, r, log = self.run_setup(t, out, dict(env, STUB_FAIL='convert'))
+            self.assertIn("PATCH_FAIL_MSG:Converting the game's shaders failed", r.stdout)
+            self.assertIn("EXE='My Game.x86_64'", P._read(os.path.join(W, 'game.env')))
+            put(os.path.join(W, 'game.env'), '')                        # (the card did not keep it)
+            g, r, log = self.run_setup(t, out, env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn('starting again from the game', r.stdout)
+            self.assertEqual(log.count('pm route'), 2)
+            self.assertIn("GAME_DIR='My Game'", P._read(os.path.join(g, 'game.env')))
+            seen = syncs(log)
+            i = seen.index('ready setup work donor game')
+            self.assertEqual(seen[i - 1], 'setup work donor game', seen)
+            self.assertEqual(seen[-1], 'ready game', seen)
+            self.assertFalse([x for x in seen if 'setup' not in x.split() and x != 'ready game'], seen)
+            self.assertTrue(os.path.isfile(os.path.join(g, 'gamedata', 'My Game', 'My Game.x86_64')))   # (the game stays: box64 runs it)
+            for d in ('setup', 'donor', 'gamedata/.setup'):
+                self.assertFalse(os.path.exists(os.path.join(g, d)), d)
+            # the launcher: game.env gone, then the game's folder gone
+            os.rename(os.path.join(g, 'game.env'), os.path.join(t, 'game.env'))
+            r, log = self.run_launcher(t, out)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("message: My Game's files are not where the setup left them (ports/mygame/gamedata). "
+                          "To set it up again: install the port again, put ", log)
+            os.rename(os.path.join(t, 'game.env'), os.path.join(g, 'game.env'))
+            shutil.rmtree(os.path.join(g, 'gamedata', 'My Game'))
+            r, log = self.run_launcher(t, out)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("message: My Game's files are not where the setup left them", log)
+
+    def test_launcher_not_set_up(self):
+        """a launch of a game that is not set up (here PortMaster has no patcher: no setup runs): with
+        the setup's files the player is asked for the game, without them (setup/ deleted, or the folder
+        copied without it) to install the port again. A set-up game with the setup's files of a
+        release unzipped over it, or of a setup cut off after its mark: they are removed, the game starts"""
+        for route in ('mono-arm64', 'il2cpp-arm64', 'box64'):
+            with self.subTest(route=route), tempfile.TemporaryDirectory() as t:
+                _, out, g = self.installed(t, {'port': {'route': route}})
+                r, log = self.run_launcher(t, out)
+                self.assertEqual(r.returncode, 1)
+                self.assertIn('message: My Game is not set up yet: put ', log)
+                self.assertNotIn('Install the port again', log)
+                shutil.rmtree(os.path.join(g, 'setup'))
+                r, log = self.run_launcher(t, out)
+                self.assertEqual(r.returncode, 1)
+                self.assertIn('message: My Game is not set up and its setup files are missing. Install the port again '
+                              '(unzip it over your ports folder), put ', log)
+                self.assertTrue(os.path.isdir(os.path.join(g, 'gamedata', 'My Game')))      # (nothing of the player's is touched)
+                if route == 'box64':            # (its launcher goes on to box64 and Westonpack: test_setup_box64)
+                    continue
+                put(os.path.join(g, '.setup_done'), '')
+                for d in ('setup', 'donor', 'gamedata/.setup/player'):
+                    os.makedirs(os.path.join(g, d))
+                put(os.path.join(g, 'setup', 'patchscript'), 'exit 1\n')
+                put(os.path.join(g, 'ua_host'), '#!/bin/sh\necho "ua_host $1" >> "$STUB_LOG"\n')
+                r, log = self.run_launcher(t, out)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn('ua_host ' + os.path.realpath(g), log)
+                self.assertNotIn('message:', log)
+                for d in ('setup', 'donor', 'gamedata/.setup'):
+                    self.assertFalse(os.path.exists(os.path.join(g, d)), d)
+                self.assertTrue(os.path.isdir(os.path.join(g, 'gamedata', 'My Game')))
+        # every route's launcher: both messages, and the leftovers of a set-up game removed (the android
+        # one after its update, which needs setup/ until it has run)
+        for route in ('android', 'apk', 'box64', 'il2cpp-arm64', 'mono-arm64'):
+            text = P._read(os.path.join(P.TEMPLATES, route, 'launcher.sh'))
+            self.assertIn('is not set up and its setup files are missing. Install the port again (unzip it over your ports folder)',
+                          text, route)
+            self.assertIn('if [ -f "$GAMEDIR/setup/patchscript" ]; then\n      pm_message "@@TITLE@@ is not set up yet', text, route)
+            self.assertIn('for d in setup donor gamedata/.setup; do\n', text, route)
+            self.assertIn('rm -rf "${GAMEDIR:?}/$d"', text, route)
+            self.assertLess(text.index('pm_message "@@TITLE@@ is not set up yet'), text.index('for d in setup donor gamedata/.setup'), route)
+        text = P._read(os.path.join(P.TEMPLATES, 'android', 'launcher.sh'))
+        self.assertIn('if [ ! -f "$GAMEDIR/setup/update" ]; then\n  for d in setup donor gamedata/.setup; do', text)
+        text = P._read(os.path.join(P.TEMPLATES, 'android', 'update'))
+        self.assertEqual(text.count('rm -rf "$S" "$GAMEDIR/gamedata/.setup" "$GAMEDIR/donor"'), 2)   # (both of its ends)
 
 
 @unittest.skipUnless(shutil.which('bash'), 'needs bash')
@@ -1406,8 +1845,15 @@ class ApkRouteTest(unittest.TestCase):
             os.makedirs(os.path.join(g, 'gamedata', 'more'))
             put(os.path.join(g, 'gamedata', '._game.apk'), 'AppleDouble')           # (macOS's, on exFAT: ignored)
             shutil.move(os.path.join(g, 'gamedata', 'game.main.obb'), os.path.join(g, 'gamedata', 'more'))
-            r = self.run_setup(g)
+            log = os.path.join(t, 'pm.log')
+            r = self.run_setup(g, {'PATH': sync_spy(t), 'STUB_LOG': log})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            # the game is marked set up, the card synced before and after, before the setup's files go
+            seen = syncs(P._read(log))
+            i = seen.index('ready setup work')
+            self.assertEqual(seen[i - 1], 'setup work', seen)
+            self.assertEqual(seen[-1], 'ready', seen)
+            self.assertFalse([x for x in seen if 'setup' not in x.split() and x != 'ready'], seen)
             self.assertIn('the players this system runs, in this order: arm64', r.stdout)
             self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
             self.assertEqual(P._read(os.path.join(g, 'lib', 'libunity.so'), 'rb'), b'\x7fELFarm64-v8a')

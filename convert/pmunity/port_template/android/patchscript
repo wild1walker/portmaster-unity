@@ -31,6 +31,10 @@ hook() {                                # the port's own step at a fixed point (
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
 room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB>: that much free (or unknown)
+# a full card (or one pulled out) must stop the setup: a progress file that was not written would
+# let the next launch take a half-done step for a finished one
+nowrite() { fail "Could not write $1 to the card: is the card full? Free some space on it, then launch again."; }
+mark() { sync; touch "$W/.step_$1" || nowrite "the setup's progress"; }   # mark <step>: what it wrote is on the card, then its marker
 [ "$DEVICE_ARCH" = aarch64 ] || fail "The setup needs a 64-bit (aarch64) system for its tools (this one: $DEVICE_ARCH)."
 SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
@@ -60,19 +64,20 @@ fi
 
 # ---- answers to the port's questions: kept from the first run, else PortMaster's patcher (<ID> in
 # the environment), else setup.txt (<id>=<value>, older PortMaster), else the default
-CONVERT_SET=(); : > "$W/answers.env.new"
+CONVERT_SET=(); : > "$W/answers.env.new" || nowrite "the setup's answers"
 for id in $QUESTIONS; do
-  eval "opts=\$Q_${id}_OPTIONS def=\$Q_${id}_DEFAULT qset=\$Q_${id}_SET qenv=\$Q_${id}_ENV"
+  # (the question's lines of setup.env, Q_<ID>_OPTIONS and so on, read by name)
+  q="Q_${id}_OPTIONS"; opts=${!q}; q="Q_${id}_DEFAULT"; def=${!q}; q="Q_${id}_SET"; qset=${!q}; q="Q_${id}_ENV"; qenv=${!q}
   v=$(cat "$W/answers/$id" 2>/dev/null)
   [ -n "$v" ] || v=${!id}
   [ -n "$v" ] || v=$(sed -n "s/^[[:space:]]*$(lower "$id")[[:space:]]*=[[:space:]]*\([A-Za-z0-9._:+-]*\).*/\1/p" "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
   case " $opts " in *" $v "*) ;; *) v=$def;; esac
-  mkdir -p "$W/answers"; echo "$v" > "$W/answers/$id"
+  { mkdir -p "$W/answers" && echo "$v" > "$W/answers/$id"; } || nowrite "the setup's answers"
   echo "$id: $v"
   [ -n "$qset" ] && CONVERT_SET+=(--set "$qset=$v")
-  [ -n "$qenv" ] && echo "export $qenv='$v'" >> "$W/answers.env.new"
+  if [ -n "$qenv" ]; then echo "export $qenv='$v'" >> "$W/answers.env.new" || nowrite "the setup's answers"; fi
 done
-mv -f "$W/answers.env.new" "$W/answers.env"
+mv -f "$W/answers.env.new" "$W/answers.env" || nowrite "the setup's answers"
 
 # ---- the videos: where the port ships libpmhwdec (pmhwdec/) and it decodes VP8 on this handheld's
 # video engine (its test program says so in milliseconds; it steps aside where the engine needs
@@ -103,6 +108,15 @@ find_any() {    # the port's data folder, else any Unity data folder
   [ -n "$d" ] || d=$(find_data "$1" 'Data')
   echo "$d"
 }
+# (a later launch: where the game's data is and its Unity version, as step 1 noted them. Notes the
+# card did not keep, or a data folder that is gone before it was packed, start again from the game)
+if [ -f "$W/.step_game" ]; then
+  D=$(cat "$W/.data" 2>/dev/null); V=$(cat "$W/.version" 2>/dev/null)
+  if [ -z "$D" ] || [ -z "$V" ] || { [ ! -d "$D" ] && [ ! -f "$W/.step_package" ]; }; then
+    echo "the setup's notes of the game are incomplete (or the game's folder is gone): starting again from the game"
+    rm -f "$W"/.step_*; rm -rf "$W/android"
+  fi
+fi
 if [ ! -f "$W/.step_game" ]; then
   D=$(find_any "$GD")
   if [ -z "$D" ]; then
@@ -121,7 +135,9 @@ if [ ! -f "$W/.step_game" ]; then
       case "$(lower "$a")" in
         *.tar|*.zip|*.7z|*.rar) "$SEVENZ" x -y -o"$W/unpacked" "$a" >/dev/null ;;
         *.sh) "$SEVENZ" x -tzip -y -o"$W/unpacked" "$a" >/dev/null ;;        # the zip after the installer's script
-        *) "$SEVENZ" x -so "$a" 2>/dev/null | "$SEVENZ" x -si -ttar -y -o"$W/unpacked" >/dev/null ;;
+        # (the decompressor's failure counts, and what it says goes to patchlog.txt: an archive with
+        # damaged data unpacks to a whole tar)
+        *) ( set -o pipefail; "$SEVENZ" x -so "$a" | "$SEVENZ" x -si -ttar -y -o"$W/unpacked" >/dev/null ) ;;
       esac || fail "Could not unpack $(basename "$a") (see patchlog.txt)."
       D=$(find_any "$W/unpacked")
       [ -n "$D" ] && break
@@ -133,8 +149,8 @@ if [ ! -f "$W/.step_game" ]; then
     room "$need" || fail "Unpacking the installers needs about $need MB free on the card ($(free_mb) MB free)."
     step "unpacking the macOS installers"
     rm -rf "$W/pkgroot"
-    # shellcheck disable=SC2046
-    pm macpkg "$W/pkgroot" $(ls -S "$GD"/*.pkg) || fail "Could not unpack the installers (see patchlog.txt)."
+    pkgs=(); while IFS= read -r f; do pkgs+=("$f"); done < <(ls -S "$GD"/*.pkg)   # (the largest first; a name may have spaces)
+    pm macpkg "$W/pkgroot" "${pkgs[@]}" || fail "Could not unpack the installers (see patchlog.txt)."
     D=$(find_any "$W/pkgroot")
   fi
   hook game                               # (a port's own way to find or unpack the game: sets D)
@@ -153,10 +169,9 @@ if [ ! -f "$W/.step_game" ]; then
       fail "This port is made for $PORT_TITLE built with Unity $UNITY_VERSIONS; your copy was built with Unity $V (another version of the game?).";;
     esac
   fi
-  echo "$D" > "$W/.data"; echo "$V" > "$W/.version"
-  touch "$W/.step_game"
+  { echo "$D" > "$W/.data" && echo "$V" > "$W/.version"; } || nowrite "the setup's progress"
+  mark game
 fi
-D=$(cat "$W/.data"); V=$(cat "$W/.version")
 
 # ---- 2. Unity's Android player of exactly that version, from the port's donor (donor/: small
 # games of the port's own built with that Unity version by portmaster-unity's tools/donor, whose
@@ -179,7 +194,7 @@ if [ ! -f "$W/.step_player" ]; then
     got=$(sha256sum "$P/Variations/$PLAYER_BACKEND/Release/Libs/$PLAYER_ABI/$f" 2>/dev/null | cut -d' ' -f1)
     [ "$got" = "$h" ] || fail "Unity's player file $f is not the one this port was made with (checksum)."
   done
-  touch "$W/.step_player"
+  mark player
 fi
 
 # ---- 2b. Unity's own class libraries the build lacks for that player: a Windows build of 2021.2+
@@ -194,7 +209,7 @@ if [ ! -f "$W/.step_bcl" ]; then
     pm winbcl "$D" "$W/bcl" --version "$V" --player "$P" --donor "$DONOR" >/dev/null \
       || fail "Could not read Unity's class libraries from the port's donor (see patchlog.txt)."
   fi
-  touch "$W/.step_bcl"
+  mark bcl
 fi
 
 # ---- 3. the conversion
@@ -213,7 +228,7 @@ if [ ! -f "$W/.step_convert" ]; then
     || { [ $? = 2 ] && [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python."
          fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."; }
   hook post_convert
-  touch "$W/.step_convert"
+  mark convert
 fi
 
 # ---- 3b. a Wwise game's soundbanks for ua_host's own Wwise player (pmu wwise; docs/wwise-player.md in
@@ -240,7 +255,7 @@ if [ -n "$WWISE_BANKS" ] && [ ! -f "$W/.step_wwise" ]; then
   else
     echo "no sound banks in ${B#$GAMEDIR/} (or no setup/pmu): the game runs without sound."
   fi
-  touch "$W/.step_wwise"
+  mark wwise
 fi
 
 # ---- 4. what Unity's Android player reads: APK + OBB (the data's files are moved into them)
@@ -271,7 +286,7 @@ if [ ! -f "$W/.step_package" ]; then
   pm android-data "${args[@]}" "${ANDROID_DATA_ARGS[@]}" \
     || fail "Packing the game failed (see patchlog.txt). Launch again to continue."
   hook post_pack
-  touch "$W/.step_package"
+  mark package
 fi
 
 # ---- 5. into place: the player (only the Mono runtime the game needs: with both, libunity takes
@@ -305,14 +320,19 @@ for f in "$Z"/*; do
   [ -e "$f" ] || continue
   mv -f "$f" "$GAMEDIR/" || fail "Could not install $(basename "$f")."
 done
-cp "$W/answers.env" "$GAMEDIR/answers.env"
+cp "$W/answers.env" "$GAMEDIR/answers.env" || nowrite "the game's settings"
 hook post_install
-# the copy of the game the setup used up (its files went into the APK and OBB), and the tools
+# the copy of the game the setup used up (its files went into the APK and OBB)
 top=${D#$GD/}; top=${top%%/*}
 case "$D" in "$W"/*) ;; *) [ -n "$top" ] && [ "$top" != "$(basename "$W")" ] && rm -rf "${GD:?}/$top";; esac
-rm -rf "$W" "$S"
+# the game is marked set up, on the card, before the tools, the work folder and the donors go: a
+# power cut in between leaves a game that starts (the launcher removes what is left), never one
+# without the tools to finish it
 sync
-touch "$GAMEDIR/$READY"
+rm -f "$S/update"                         # (for games an earlier release set up: not this one)
+touch "$GAMEDIR/$READY" || nowrite "the setup's last mark"
+sync
+rm -rf "$W" "$S" "$DONOR_DIR"
 # archives and installers the setup unpacked (the game's; a Unity installer an older setup read) are not needed
 # any more: removed, as PortMaster ports' setups do, unless setup.txt says keep_installers=1
 keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)

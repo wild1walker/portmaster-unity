@@ -22,7 +22,7 @@ fail() { echo "PATCH_FAIL_MSG:$1"; echo "Update failed: $1"; echo "Patching proc
 step() { echo; echo "== $(date +%H:%M:%S) $*"; }
 if [ "$DEVICE_ARCH" != aarch64 ] || [ ! -f "$S/pmu" ]; then
   echo "no setup tools for this system ($DEVICE_ARCH): nothing to update"
-  rm -rf "$S"
+  rm -rf "$S" "$GAMEDIR/gamedata/.setup" "$GAMEDIR/donor"
   exit 0
 fi
 chmod +x "$S/pmu" 2>/dev/null
@@ -57,8 +57,10 @@ if [ -f "$S/convert.json" ] && grep -q '"video"' "$S/convert.json"; then
   esac
 fi
 
+# the setup folder goes, with what else the release brought for a setup (its donors) and a work
+# folder an earlier setup left: the game is set up, none of it is needed to play
 # (bash keeps this script open: on a FUSE card, Knulli's, setup/ stays behind empty until it ends;
 # the launcher looks for setup/update)
-rm -rf "$S" 2>/dev/null
+rm -rf "$S" "$GAMEDIR/gamedata/.setup" "$GAMEDIR/donor" 2>/dev/null
 sync
 echo "update done"
