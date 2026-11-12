@@ -16,6 +16,13 @@
 //   UA_DUMP_OFF=<assembly>:<class>[@<GameObject>],...  a measurement that changes the picture: every 5 s once the Knight exists, the
 //                           components of those classes (e.g. Assembly-CSharp-firstpass:UnityStandardAssets.ImageEffects.
 //                           BloomOptimized) turned off ("[dump] off ...")
+//   UA_DUMP_OFF_Z=<near>,<far>[,go]  a measurement that changes the picture: what a room's scenery costs. Every 5 s once
+//                           the Knight exists (every 60 s once some were found), the renderers of the loaded
+//                           scenes' own objects (not the game's lasting ones: the Knight, the HUD, the cameras' rig)
+//                           on layers only the main camera draws, whose transform lies outside the depths
+//                           <near> .. <far> (world z; Hollow Knight plays at z 0, nearer to the camera is
+//                           negative), are turned off, with ",go" their GameObjects made inactive (their
+//                           scripts, Animators and particle systems stop too) ("[dump] off z: ...")
 //   UA_DUMP_TEXTURES=<s>[,<s>...]  <s> seconds after the first frame (up to 16 times), UnityMain logs every texture Unity
 //                           holds (Resources.FindObjectsOfTypeAll(Texture)): class, size, format (Texture2D's
 //                           TextureFormat, RenderTexture's RenderTextureFormat), mip levels and name ("[dump] texture
@@ -506,6 +513,80 @@ static void comps_off(void)
     }
 }
 
+// UA_DUMP_OFF_Z: the scenery outside a band of depths turned off, every 5 s while the Knight exists
+static void scenery_off(void)
+{
+    static int state = -1, whole;
+    static double last, every = 5;
+    static float zn, zf;
+    if (!state) return;
+    if (state < 0) {
+        const char *e = getenv("UA_DUMP_OFF_Z");
+        char *p;
+        state = 0;
+        if (!e || !*e) return;
+        zn = strtof(e, &p);
+        if (*p != ',') { fprintf(stderr, "[dump] off z: UA_DUMP_OFF_Z=<near>,<far>[,go]\n"); return; }
+        zf = strtof(p + 1, &p);
+        whole = !strcmp(p, ",go");
+        state = 1;
+        return;
+    }
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (now - last < every) return;
+    last = now;
+    if (!load()) return;
+    MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+    MonoClass *k_go = core ? m_class_from_name(core, "UnityEngine", "GameObject") : NULL, *k_obj = core ? m_class_from_name(core, "UnityEngine", "Object") : NULL;
+    MonoClass *k_cam = core ? m_class_from_name(core, "UnityEngine", "Camera") : NULL, *k_ren = core ? m_class_from_name(core, "UnityEngine", "Renderer") : NULL;
+    MonoClass *k_scene = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "Scene") : NULL;
+    MonoMethod *gfind = k_go ? m_method_from_name(k_go, "Find", 1) : NULL, *find = k_obj ? m_method_from_name(k_obj, "FindObjectsOfType", 1) : NULL;
+    MonoMethod *get_main = k_cam ? m_method_from_name(k_cam, "get_main", 0) : NULL, *all_cams = k_cam ? m_method_from_name(k_cam, "get_allCameras", 0) : NULL;
+    MonoMethod *scene_name = k_scene ? m_method_from_name(k_scene, "get_name", 0) : NULL;
+    if (!gfind || !find || !get_main || !all_cams || !k_ren || !scene_name) { fprintf(stderr, "[dump] off z: UnityEngine classes not found\n"); state = 0; return; }
+    MonoObject *exc = NULL;
+    void *ka[1] = { m_string_new(m_domain_get(), "Knight") };
+    if (!m_invoke(gfind, NULL, ka, &exc) || exc) return;
+    // the layers only the main camera draws (not the HUD's, not an effect camera's)
+    MonoObject *cam = m_invoke(get_main, NULL, NULL, &exc);
+    if (!cam || exc) return;
+    int only = 0; geti(cam, "get_cullingMask", &only);
+    MonoArray *cams = (MonoArray *)m_invoke(all_cams, NULL, NULL, &exc);
+    for (uintptr_t i = 0, nc = cams && !exc ? array_length(cams) : 0; i < nc; i++) {
+        MonoObject *c = *(MonoObject **)m_array_addr(cams, sizeof(void *), i);
+        int mask = 0;
+        if (c != cam && geti(c, "get_cullingMask", &mask)) only &= ~mask;
+    }
+    void *args[1] = { m_type_get_object(m_domain_get(), m_class_get_type(k_ren)) };
+    MonoArray *all = (MonoArray *)m_invoke(find, NULL, args, &exc);
+    if (!all || exc) return;
+    uintptr_t n = array_length(all), off = 0, scenery = 0;
+    for (uintptr_t i = 0; i < n; i++) {
+        MonoObject *r = *(MonoObject **)m_array_addr(all, sizeof(void *), i);
+        MonoObject *en = r ? call(r, "get_enabled", NULL, 0) : NULL;
+        if (!en || !*(unsigned char *)m_unbox(en)) continue;
+        MonoObject *go = call(r, "get_gameObject", NULL, 0);
+        int layer = -1;
+        if (!go || !geti(go, "get_layer", &layer) || layer < 0 || !((unsigned)only >> layer & 1)) continue;
+        MonoObject *sc = call(go, "get_scene", NULL, 0);          // (a boxed Scene: its name through the value itself)
+        MonoObject *sn = sc ? m_invoke(scene_name, m_unbox(sc), NULL, &exc) : NULL;
+        char scn[64]; str(exc ? NULL : sn, scn, sizeof scn); exc = NULL;
+        if (!sn || !strcmp(scn, "DontDestroyOnLoad")) continue;
+        scenery++;
+        float pos[3] = { 0 };
+        if (!getf(call(r, "get_transform", NULL, 0), "get_position", pos, 3) || (pos[2] >= zn && pos[2] <= zf)) continue;
+        unsigned char no = 0; void *a1[1] = { &no };
+        if (whole) call(go, "SetActive", a1, 1); else call(r, "set_enabled", a1, 1);
+        off++;
+    }
+    if (off) {
+        fprintf(stderr, "[dump] off z: %lu of the scenes' %lu renderers outside z %.2f .. %.2f %s (layers 0x%08x; %lu renderers in all)\n",
+                (unsigned long)off, (unsigned long)scenery, zn, zf, whole ? "made inactive" : "turned off", (unsigned)only, (unsigned long)n);
+        every = 60;
+    }
+}
+
 // UA_DUMP_INPUT: what a script reads from UnityEngine.Input, logged when it crosses half travel
 static int half(float v) { return v >= 0.5f ? 1 : v <= -0.5f ? -1 : 0; }
 static void input_probe(void)
@@ -565,6 +646,7 @@ void monodump_frame(void)
     flipbook_frame();
     hero_place();
     comps_off();
+    scenery_off();
     input_probe();
     static int state = -1, n, next, tn, tnext;   // state -1: not read; 0: off or done; 1: waiting
     static double at[16], tat[16], t0, period, last;

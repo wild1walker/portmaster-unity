@@ -112,7 +112,10 @@ python3 tools/analysis/profsum.py prof-1.txt --syms <Unity player>/Variations/mo
 (`pmunity player fetch <version> --symbols` downloads Unity's symbol files; `--lib runtime/host/out/ua_host`
 names ua_host's own functions: the build strips ua_host, as ports ship it, and keeps the file as
 linked beside it as `ua_host.debug`, which the tools read when it is there. The recording itself
-names what `dladdr` knows, the exported symbols, which a stripped file keeps.) For each sampled thread:
+names what `dladdr` knows, the exported symbols, which a stripped file keeps. A tool that finds one of
+ua_host's own functions by name in the running program, as an emulator plugin counting the
+instructions between two calls of `on_swap` does, has to run `ua_host.debug` in its place: it is the
+same program, and the stripped one no longer has that name.) For each sampled thread:
 
 - **schedstat** and **state**: the share of the recording on a CPU, waiting for one (a thread that
   waits a lot for a CPU competes with other threads or processes: the bench's "other processes"),
@@ -1020,6 +1023,88 @@ a sprite batch, which could draw a single sprite with its own matrix instead of 
 vertices), the 64-bit build, the URP path (Phasing Gun, 6000.6), a long play. Until then it stays
 an option, off.
 
+### What a room's scenery costs (Hollow Knight's Greenpath on the G350, 2026-11-12)
+
+The G350 (RK3326: four Cortex-A35, Mali-G31) walks Greenpath at 33.7 fps warm (the clock between
+1008 and 1512 MHz at 76 - 80 C) and at 41.7 from a cool start, with the release's settings. A 40 s
+`UA_PROF=100` recording of five threads, read by each thread's own CPU time (`user` + `kernel` in
+its schedstat line; the `R` state's share also counts the time a thread waits for a core, and here
+that is a lot: the threads are runnable for 3.7 cores' worth and run for 3.07):
+
+| thread | CPU time of the 40 s | a frame | what it does |
+|---|---|---|---|
+| UnityMain | 34.5 s (86 %) | 25.6 ms | by area below |
+| Job.Worker_0 (a 1 GB handheld has one worker) | 22.1 s (55 %) | 16.4 ms | 61 % `ForwardRenderLoopJob` (the sorting, `BatchRenderer::ApplyShaderPass` 22 %, sprite batching, the writes to the render thread's command stream), 20 % futex calls |
+| UnityGfxDeviceW (Unity's render thread) | 24.1 s (60 %) | 17.9 ms | libunity 60 % (`GfxDeviceWorker::RunCommand`, `TransformVerticesInnerLoop`, the GLES state appliers), libc 28 %, ua_host 13 % |
+| ua_glthread (ua_host's GL thread) | 26.7 s (67 %) | 19.8 ms | Mali's driver 66 %, libc 21 % (copies), ua_host 14 %; 1.9 s of it in the kernel |
+| FMOD's mixer | 15.5 s (39 %) | (per second, not per frame) | Vorbis decoding 47 % |
+
+With Mali's own threads and the kernel the four cores are full: every thread waits for a core part
+of the time, so a frame is as long as the work, not as long as its slowest thread.
+
+UnityMain's 25.6 ms by area (`profsum.py --areas`, ms a frame of the 29.6 ms frame):
+
+| area | ms | area | ms |
+|---|---|---|---|
+| render: cameras (sorting, batching, draw calls) | 5.14 | particles | 0.96 |
+| scripts: Update | 3.95 | scripts: coroutines, Invoke | 0.76 |
+| not attributed (the unwind stopped) | 2.83 | scripts: OnGUI | 0.70 |
+| animation | 2.25 | audio (FMOD update) | 0.65 |
+| physics: 2D step | 1.93 | transforms, renderer bounds | 0.64 |
+| other player loop | 1.68 | render: other | 0.60 |
+| render: image effects | 1.36 | scripts: FixedUpdate | 0.54 |
+| wait: job threads | 1.33 | wait: the previous frame presented | 0.40 |
+| render: culling | 1.32 | scripts: LateUpdate | 0.39 |
+| render: offscreen cameras | 1.19 | UI canvases | 0.32 |
+
+(Across those areas: the job system 6.35 ms, of which UnityMain running the render loop's jobs
+itself beside its one worker; managed code 3.30; Mono's runtime 2.56; futex calls 1.77.) Drawing is
+9.6 ms of UnityMain (the five `render:` rows), about 12 ms of the worker, and all of the render
+thread and of the GL thread: about 60 of the frame's 80 ms of CPU time outside the mixer. What
+UnityMain does besides drawing is about 16 ms a frame warm, about 13 ms at the cool clock.
+
+So 60 fps there needs two things at once: UnityMain under 16.7 ms a frame, which at the warm clock
+its work besides drawing alone fills, and the four threads' sum under about 55 ms (four cores for
+16.7 ms, less the mixer's 6.5 ms and Mali's threads and the kernel), against 80 ms now. No exact
+hook gives that (the rows of [What did not pay](#what-did-not-pay-or-is-not-exact) are each within
+a few percent). The only lever of that size is drawing less: fewer renderers, i.e. a picture the
+game's own lowest options do not offer, which is the port owner's decision and not a default.
+
+`UA_DUMP_OFF_Z=<near>,<far>[,go]` (runtime.md) measures it: the scene's own renderers outside a
+band of world depth are turned off, nothing else changes (the game's objects, scripts and
+colliders stay; with `,go` the objects are made inactive, to see what their scripts, Animators and
+particle systems add). Hollow Knight plays at z 0; Greenpath's bench room has 833 renderers of
+its own on the layers only the main camera draws: 226 nearer than z -1 (the black foreground
+shapes, which also hide secret rooms: gameplay), 418 in the play plane's band -1 .. 3, 189 behind
+z 3 (the background: the waterfalls, the far foliage, the backdrop), 92 of them behind z 10.
+
+In the instruction-counting rig (qemu-arm with the per-thread plugin, Mesa's llvmpipe, 600x400,
+the walk's bench stop, frames from 420 to 720 s; million instructions a frame; three job workers,
+Unity's default there, where the G350 runs one):
+
+| run | renderers off | UnityMain (median) | render thread | job workers (sum) | llvmpipe's threads |
+|---|---|---|---|---|---|
+| as it is | 0 | 7.7 | 24.2 | 5.0 | 1839 |
+| `-100,3`: the background | 189 | 7.3 | 14.0 | 4.1 | 1018 |
+| `-100,3,go`: the same, objects inactive | 189 | 7.3 | 13.6 | 3.7 | 999 |
+| `-1,10`: the foreground and the far background | 318 | 7.5 | 14.8 | 3.7 | 1046 |
+| `-1,3`: everything but the play plane | 415 | (not marked) | 12.5 | 3.6 | 1022 |
+
+The background alone is nearly the whole of it: Unity's render thread -42 % (in the rig that
+thread also runs Mesa's vertex stage and binning, so part of that is the software renderer's, not
+Unity's), the workers -18 %, the fill -45 % (llvmpipe's threads: the pixels, which on the handheld
+are the GPU's), UnityMain -5 %. Making the objects inactive adds almost nothing: the background is
+still art, not scripts. Taking the foreground too adds little, and it is the part a port could not
+take. What the rig cannot say is what this is in frames a second on the handheld: its instruction
+counts understate work that waits for memory on the A35, its three workers keep the render loop's
+jobs off UnityMain (on the G350 UnityMain runs a good part of them), and a traced frame there lasts
+2 to 4 s, so time-driven work (the mixer, coroutines on timers) is overweighted. The switch's own
+search is a hitch (about 250 million instructions, some 30 frames' worth of UnityMain, every 60 s):
+a port that shipped such a cut would do it once, when a scene has loaded.
+
+For the handheld: `UA_DUMP_OFF_Z=-100,3` against the release's settings in one hold, each run from
+a cool start (the clock's fall decides as much as the work: 41.7 against 33.7 fps).
+
 ### What did not pay, or is not exact
 
 | change (how it would hook) | result |
@@ -1027,7 +1112,7 @@ an option, off.
 | Unity's jobs on the main thread (`UA_UNITY_ARGS='-job-worker-count 0'`; Hollow Knight, release 2026.11.09.3 settings, Greenpath walk, 2026-11-09) | RG34XX-SP 51.9 -> 42.3 fps (one worker stays: 1); G350 33.3 -> 33.0 (its limit is the GL thread) |
 | Mono's JIT with SSA, bounds-check removal and instruction scheduling (`UA_MONO_OPTIONS=-O=ssa,abcrem,sched`; same runs) | RG34XX-SP 51.2 against 51.9 / 51.2 (no change); G350 33.2 against 33.3 |
 | The G350's GL thread in the kernel (`UA_IOCTL_STATS=1`, Greenpath, 2026-11-09): what Mali's `ioctl`s cost | job submits (`0x40108002`) 41 - 44 ms a second (~95 us each, ~14 a frame), memory syncs (`0x4020800f`) 24 - 26 ms (~1 us each, ~73 a frame), memory queries (`0xc0108006`) 7 - 8 ms: 7.5 % of the thread. The rest of its 27 - 29 ms a frame is the driver's own work in user space (draws ~70 us each against ~22 us on the H700): no `ioctl` to save |
-| The G350's four cores in Hollow Knight's Greenpath, warm (`UA_PROF=100` on UnityMain, the render thread, the GL thread, the job worker and FMOD's mixer; release settings, 33.7 fps, 2026-11-12): where 60 fps would have to come from | 3.7 of the 4 cores are busy: UnityMain is runnable 94 % of the time, Unity's render thread 83 %, the GL thread 80 %, the one job worker 81 %, FMOD's mixer 34 %. UnityMain by module: libunity 65 %, the game's scripts 12 %, libc 12 %, Mono 9 %; 6.4 % is libc `syscall`, all of it futex calls: waking the worker for each batch of jobs (`ujob_lane_t::set_steal_hint_and_wake`), waiting for the present and for job groups. The mixer: 47 % Vorbis decoding (FMOD's Tremor: the music's layers and the area's loops), 18 % the AudioMixer's faders, 10 % its SFX reverb, 6 % a flange; the decoding (16 % of a core) does not shrink with the output rate (`UA_AUDIO_RATE` 24000 -> 16000: no gain). The same walk from a cool start, the clock at its highest, gives 41.7 fps: 60 would need about 40 % of every thread's work gone, which no hook of this kind gives |
+| The G350's four cores in Hollow Knight's Greenpath, warm (`UA_PROF=100` on UnityMain, the render thread, the GL thread, the job worker and FMOD's mixer; release settings, 33.7 fps, 2026-11-12): where 60 fps would have to come from | the four cores are full: UnityMain is runnable 94 % of the time, Unity's render thread 83 %, the GL thread 80 %, the one job worker 81 %, FMOD's mixer 34 % (3.7 cores' worth; their own CPU time is 3.07 cores, the rest of that is waiting for a core: [what a room's scenery costs](#what-a-rooms-scenery-costs-hollow-knights-greenpath-on-the-g350-2026-11-12) has the frame by thread and area). UnityMain by module: libunity 65 %, the game's scripts 12 %, libc 12 %, Mono 9 %; 6.4 % is libc `syscall`, all of it futex calls: waking the worker for each batch of jobs (`ujob_lane_t::set_steal_hint_and_wake`), waiting for the present and for job groups. The mixer: 47 % Vorbis decoding (FMOD's Tremor: the music's layers and the area's loops), 18 % the AudioMixer's faders, 10 % its SFX reverb, 6 % a flange; the decoding (16 % of a core) does not shrink with the output rate (`UA_AUDIO_RATE` 24000 -> 16000: no gain). The same walk from a cool start, the clock at its highest, gives 41.7 fps: 60 would need about 40 % of every thread's work gone, which no hook of this kind gives |
 | `UA_FUTEX_SPIN=50`: workers watch their futex word 50 us before sleeping, wakes with nobody asleep skipped (the libc `syscall` import; exact) | 47.2 / 47.6 fps against 48.3 / 48.4 with the GPU's work left out (-2 %), frames over 25 ms doubled: the watching takes CPU from the render thread and Mali's thread (above). Option, off |
 | `InvertMatrix4x4_Full` (self time ~1 % of UnityMain; called per camera from `Camera::ExtractCameraRenderingParams`, image-effect blits, `ScreenPointToRay`) replaced by a NEON inverse, or memoized (it reads only its 16 input floats and writes only its output, no globals or calls) | a rewritten 4x4 inverse reassociates the arithmetic, so it is not bit-identical and cannot be a default (the exactness rule forbids it); a last-inputs memo would be exact but the function is small next to the wake traffic |
 | `ShaderVariantAnalytics::...::SumUpVariants*` (editor telemetry summed per draw inside `ShaderLab::Pass::ApplyPass`, ~0.4 % of UnityMain and of the render thread) | computes an internal analytics counter the game never reads; could be no-op'd, but the saving is below the run-to-run noise |

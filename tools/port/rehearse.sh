@@ -137,7 +137,9 @@ echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup l
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
 [ -f "$P/${REHEARSE_DONE:-.setup_done}" ] || { echo "setup did not finish"; tail -20 "$WORK/launch1.log"; exit 1; }
 [ -z "${REHEARSE_OVER:-}" ] || echo "after the update: $(head -1 "$P/${REHEARSE_DONE:-.setup_done}" | cut -c1-120); setup folder: $(ls "$P/setup" 2>/dev/null | wc -l | tr -d ' ') entries"
-echo "installed: $(du -sm "$P" | cut -f1) MB; lib: $(ls "$P/lib" | tr '\n' ' ')"
+# (the player's libraries: in the port's folder, or one level down where a port keeps a second build there)
+lib=$(ls -d "$P/lib" "$P"/*/lib 2>/dev/null | head -1 || true)
+echo "installed: $(du -sm "$P" | cut -f1) MB; ${lib#$P/}: $(ls "${lib:-$P/lib}" 2>/dev/null | tr '\n' ' ')"
 fi
 [ "$SECS" -gt 0 ] || exit 0
 
