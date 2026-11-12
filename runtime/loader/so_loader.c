@@ -1028,6 +1028,36 @@ int pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(*fn)(void *
     s->fn = fn;
     s->arg = arg;
     int r = real(th, attr, thread_start, s);
+    if (r == EAGAIN || r == ENOMEM) {
+        /* glibc gives a thread the stack size of ulimit -s (often 8 MB; Android: 1 MB): in a 32-bit process the
+         * address space for another one can run out, and a caller that does not check (Unity 2017.4's
+         * PlatformThread::Create) then waits for a thread that never started (a video clip switch froze the game,
+         * 1 GB RK3326 handheld, 2026-11-12). Once more with Android's 1 MB; logged either way. */
+        size_t size = 0, guard = 0;
+        int detach = PTHREAD_CREATE_JOINABLE;
+        if (attr) { pthread_attr_getstacksize(attr, &size); pthread_attr_getguardsize(attr, &guard); pthread_attr_getdetachstate(attr, &detach); }
+        else { pthread_attr_t d; if (!pthread_getattr_default_np(&d)) { pthread_attr_getstacksize(&d, &size); pthread_attr_destroy(&d); } }
+        long vm = 0;
+        FILE *f = fopen("/proc/self/status", "r");
+        char line[128];
+        while (f && fgets(line, sizeof line, f)) if (!strncmp(line, "VmSize:", 7)) vm = atol(line + 7) / 1024;
+        if (f) fclose(f);
+        int r2 = r;
+        if (size > (1u << 20)) {
+            pthread_attr_t a;
+            pthread_attr_init(&a);
+            pthread_attr_setstacksize(&a, 1u << 20);
+            if (guard) pthread_attr_setguardsize(&a, guard);
+            pthread_attr_setdetachstate(&a, detach);
+            r2 = real(th, &a, thread_start, s);
+            pthread_attr_destroy(&a);
+        }
+        fprintf(stderr, "[loader] pthread_create: %s with a %zu KB stack (address space %ld MB)%s\n", strerror(r),
+                size / 1024, vm, size > (1u << 20) ? (r2 ? ": with 1 MB too" : ": with 1 MB it starts") : "");
+        r = r2;
+    } else if (r) {
+        fprintf(stderr, "[loader] pthread_create: %s\n", strerror(r));
+    }
     if (r) free(s);
     return r;
 }
