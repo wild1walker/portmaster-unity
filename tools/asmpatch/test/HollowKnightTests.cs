@@ -38,6 +38,47 @@ static partial class TestMain
         finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightBlur.Variable, old); }
     }
 
+    /// <summary>The scene camera's far clip plane (the stand-in's camera is at z -38, clipEpsilon 0.5,
+    /// far 1000 at first) after the rig's start, after a frame with a blur plane at z 7, after a
+    /// frame without one and after the rig's stop with the plane back; then whether the rig made its
+    /// background camera, and that camera's near clip plane with the blur plane (0 without a camera).</summary>
+    static (float start, float plane, float none, float stop, bool background, float near) Clip(string dir, string blur)
+    {
+        var old = Environment.GetEnvironmentVariable(HollowKnightBlur.Variable);
+        Environment.SetEnvironmentVariable(HollowKnightBlur.Variable, blur);
+        var ctx = new AssemblyLoadContext("hkc" + Guid.NewGuid(), isCollectible: true);
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var lbbT = a.GetType("LightBlurredBackground", true);
+            var lbb = Activator.CreateInstance(lbbT);
+            var planeT = a.GetType("BlurPlane", true);
+            var plane = Activator.CreateInstance(planeT);
+            planeT.GetField("Z").SetValue(plane, 7f);
+            var closest = planeT.GetField("Closest");
+            float Far()
+            {
+                var cam = lbbT.GetProperty("SceneCamera").GetValue(lbb);
+                return (float)cam.GetType().GetProperty("farClipPlane").GetValue(cam);
+            }
+            lbbT.GetMethod("Start").Invoke(lbb, new object[] { 1.6f });
+            float start = Far();
+            closest.SetValue(null, plane);
+            lbbT.GetMethod("Frame").Invoke(lbb, null);
+            float withPlane = Far();
+            var bg = lbbT.GetProperty("BackgroundCamera").GetValue(lbb);
+            float near = bg == null ? 0 : (float)bg.GetType().GetProperty("nearClipPlane").GetValue(bg);
+            closest.SetValue(null, null);
+            lbbT.GetMethod("Frame").Invoke(lbb, null);
+            float none = Far();
+            closest.SetValue(null, plane);
+            lbbT.GetMethod("Frame").Invoke(lbb, null);
+            lbbT.GetMethod("Stop").Invoke(lbb, null);
+            return (start, withPlane, none, Far(), bg != null, near);
+        }
+        finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightBlur.Variable, old); }
+    }
+
     static void HollowKnightTests()
     {
         if (!File.Exists(FakeHollowKnight)) { Check(false, $"Hollow Knight stand-in at {FakeHollowKnight} (build.sh test builds it)"); return; }
@@ -61,8 +102,40 @@ static partial class TestMain
                      ("off", (576, 360, 4, 2, true, false)),
                  })
             Check(StartRig(o, v) == want, $"hk-blur: {v}: {StartRig(o, v)}");
+        // the clip planes: the game stops the scene camera at the closest blur plane (7 + 38 + 0.5) and starts
+        // its background camera there; "off" has no background camera and the scene camera sees it all;
+        // "off,hide" has no background camera and the scene camera stops at the plane as in the game
+        var game = (1000f, 45.5f, 1000f, 1000f, true, 45.5f);
+        var sharp = (1000f, 1000f, 1000f, 1000f, false, 0f);
+        Check(Clip(d, "off,hide") == game, $"hk-blur: the unpatched stand-in's clip planes: {Clip(d, "off,hide")}");
+        foreach (var v in new[] { null, "low", "half,low", "hide", "hide,low", "hidden,off" })
+            Check(Clip(o, v) == (v == "hidden,off" ? sharp : game), $"hk-blur: {v ?? "(unset)"}: the clip planes: {Clip(o, v)}");
+        foreach (var v in new[] { "off", "off,low" })
+            Check(Clip(o, v) == sharp, $"hk-blur: {v}: the scene camera sees the whole background: {Clip(o, v)}");
+        foreach (var v in new[] { "off,hide", "hide,off", "half,hide,off" })
+            Check(Clip(o, v) == (1000f, 45.5f, 1000f, 1000f, false, 0f), $"hk-blur: {v}: the scene camera stops at the blur plane: {Clip(o, v)}");
+        Check(StartRig(o, "off,hide") == (576, 360, 4, 2, true, false), $"hk-blur: off,hide: {StartRig(o, "off,hide")}");
         (st, outp) = Patch(o, Path.Combine(tmp, "hk-again"), with: new[] { "hk-blur" });
         Check(st == 0 && outp.Contains("done hk-blur") && NoDlls(Path.Combine(tmp, "hk-again")), "hk-blur: a second run finds it applied");
+        // an assembly patched before the "hide" word (the first stage only) gets the second stage
+        var before = Path.Combine(tmp, "hk-before");
+        HollowKnightBlur.OnlyBase = true;
+        try { (st, outp) = Patch(d, before, with: new[] { "hk-blur" }); }
+        finally { HollowKnightBlur.OnlyBase = false; }
+        Check(st == 0 && outp.Contains("(low, half, off)") && !outp.Contains("off,hide") && File.Exists(Path.Combine(before, "Assembly-CSharp.dll")),
+              "hk-blur: the first stage alone (as before the hide word)");
+        if (!File.Exists(Path.Combine(before, "Assembly-CSharp.dll"))) return;
+        Check(Clip(before, "off,hide") == sharp && StartRig(before, "half,low") == (288, 180, 2, 2, false, true),
+              $"hk-blur: the first stage alone: off,hide is off: {Clip(before, "off,hide")}");
+        var up = Path.Combine(tmp, "hk-upgraded");
+        (st, outp) = Patch(before, up, with: new[] { "hk-blur" });
+        Check(st == 0 && outp.Contains("ok   hk-blur: Assembly-CSharp.dll: LightBlurredBackground's scene camera") && !outp.Contains("(low, half, off)") &&
+              File.Exists(Path.Combine(up, "Assembly-CSharp.dll")), "hk-blur: a run on the first stage adds the second");
+        if (!File.Exists(Path.Combine(up, "Assembly-CSharp.dll"))) return;
+        foreach (var v in new[] { null, "off", "off,hide", "half,low" })
+            Check(Clip(up, v) == Clip(o, v) && StartRig(up, v) == StartRig(o, v), $"hk-blur: {v ?? "(unset)"}: the upgraded assembly as the one patched at once");
+        (st, outp) = Patch(up, Path.Combine(tmp, "hk-upgraded-again"), with: new[] { "hk-blur" });
+        Check(st == 0 && outp.Contains("done hk-blur") && NoDlls(Path.Combine(tmp, "hk-upgraded-again")), "hk-blur: the upgraded assembly: a second run finds it applied");
         var none = Dir("hk-none");
         var plain = NewModule("Assembly-CSharp");
         plain.Types.Add(new Mono.Cecil.TypeDefinition("", "Game", Mono.Cecil.TypeAttributes.Public, plain.TypeSystem.Object));

@@ -1102,8 +1102,51 @@ jobs off UnityMain (on the G350 UnityMain runs a good part of them), and a trace
 search is a hitch (about 250 million instructions, some 30 frames' worth of UnityMain, every 60 s):
 a port that shipped such a cut would do it once, when a scene has loaded.
 
-For the handheld: `UA_DUMP_OFF_Z=-100,3` against the release's settings in one hold, each run from
-a cool start (the clock's fall decides as much as the work: 41.7 against 33.7 fps).
+The same with one job worker (`-job-worker-count 1`, as a 1 GB handheld runs), with a traced frame
+(`UA_GL_TRACE`) for the draw calls; every frame has 12 passes (the main scene's pass into 720x450,
+five bloom passes at 180x112, the darkness and HUD passes):
+
+| run | renderers off | UnityMain (median) | render thread | the worker | llvmpipe's threads | a frame's draws | vertices | program switches |
+|---|---|---|---|---|---|---|---|---|
+| as it is | 0 | 9.4 | 21.8 | 4.0 | 1807 | 162 | 17730 | 88 |
+| `-100,10`: the far background | 92 | 9.3 | 16.0 | 3.2 | 1115 | 121 | 13180 | 66 |
+| `-100,3`: the background | 189 | 8.9 | 13.7 | 3.1 | 1038 | 113 | 10020 | 62 |
+| `-1,3`: everything but the play plane | 415 | 8.8 | 11.8 | 2.7 | 944 | 101 | 8375 | 56 |
+
+With one worker UnityMain runs more of the render loop itself (9.4 against 7.7), and the background
+is still only 5 % of it; it is 37 % of the render thread, 22 % of the worker, 30 % of the draw calls
+and 43 % of the vertices. The 92 renderers behind z 10 are 41 of the 49 draws: mostly large particle
+systems and fog sheets (`UA_DUMP_RENDERERS`: `Fungus_Steam` at z 11.9, 59 x 54 units; `far BG` at
+z 12.8; `green_fog` sprites at z 13.6, 82 units wide), each a draw of its own with blending, which
+is also why the fill falls by 38 % with them alone. Applied to the G350's measured thread times
+(render thread and GL thread by the render thread's share, the worker by its own, UnityMain by its
+own), the background not drawn would take the frame's thread time from about 91 ms to about 75 ms
+and UnityMain from 25.6 to about 23.5 ms: somewhere between +5 % and +25 % in frames a second, the
+mid-30s to the low 40s warm. Not 60.
+
+The form of this cut that a port can ship is the hk-blur word `hide`
+([tools/asmpatch](../tools/asmpatch/README.md)): `ASMPATCH_HK_BLUR=off,hide` stops the scene camera
+at the room's closest blur plane, as the game's own `UpdateCameraClipPlanes` does while its blur is
+on, and draws nothing behind it (the camera's clear colour shows there). No object is searched for
+or switched off, so there is no hitch and nothing a script could miss. The same room, one worker,
+on an install updated to the patch's second stage:
+
+| run | scene camera's planes | UnityMain (median) | render thread | the worker | llvmpipe's threads | a frame's draws | vertices | program switches |
+|---|---|---|---|---|---|---|---|---|
+| `off` | 10 - 1000 | 9.5 | 22.1 | 4.0 | 1832 | 162 | 17650 | 87 |
+| `off,hide` | 10 - 54.9 | 9.2 | 18.3 | 3.5 | 1307 | 131 | 15700 | 69 |
+
+That is 31 draws (19 %), 17 % of the render thread, 12 % of the worker, 29 % of the fill and 3 % of
+UnityMain: about half of what the `-100,3` switch takes, because the game puts this room's blur
+plane far back (the camera is at z -38.1, so the plane is near z 16.8) and much of what reads as
+background (the fog sheets and steam between z 3 and z 14) is in front of it and still drawn. What
+goes is the painted far wall, its waterfalls and the far hanging vines: the fog and the light
+shafts then stand before black. A cut at the blur plane is the one the game defines itself; a
+deeper one (everything behind z 3) needs a plane the port invents, and takes more of the picture.
+
+For the handheld: `UA_DUMP_OFF_Z=-100,3` and `ASMPATCH_HK_BLUR=off,hide` against the release's
+settings in one hold, each run from a cool start (the clock's fall decides as much as the work:
+41.7 against 33.7 fps).
 
 ### What did not pay, or is not exact
 
@@ -1273,7 +1316,9 @@ tools/asmpatch/README.md "Reductions") gives the blur's choices at run time,
 `ASMPATCH_HK_BLUR=low|half|half,low|off`: the game's own two-pass blur, the background camera and
 blur at half resolution (288x180), both, or no background camera and no blur, the blur planes
 hidden and the background drawn sharp by the scene's camera (NoBlur's look, without deactivating
-GameObjects by name: `LightBlurredBackground` does nothing and `BlurPlane` hides its renderer).
+GameObjects by name: `LightBlurredBackground` does nothing and `BlurPlane` hides its renderer). A later
+word, `off,hide`, also stops the scene's camera at the blur plane ([what a room's scenery
+costs](#what-a-rooms-scenery-costs-hollow-knights-greenpath-on-the-g350-2026-11-12)).
 
 **Measured** (King's Pass in game, the 64-bit build on its Mono route with the patched assemblies,
 `UA_MONO64_MANAGED`, PlayMaker's optimizations in every run; each run from a cool handheld,
