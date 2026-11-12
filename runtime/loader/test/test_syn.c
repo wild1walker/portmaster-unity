@@ -106,6 +106,9 @@ static void *sym(so_module *m, const char *n)
     return p;
 }
 
+static int (*g_join_deadlock)(void);
+static void join_child(int k) { (void)k; alarm(5); _exit(g_join_deadlock()); }
+
 /* a child process runs syn_fortify_fail(k): its stderr and how it ended */
 static int run_child(void (*fn)(int), int k, char *out, size_t n)
 {
@@ -313,6 +316,13 @@ int main(int argc, char **argv)
     CHECK(r == 0, "signals: %d", r);
     r = thread_test();
     CHECK(r == 0, "pthread objects: %d", r);
+    {   /* a mutex holder that joins a thread waiting for that mutex: no deadlock (in a child: one would hang) */
+        g_join_deadlock = (int (*)(void))sym(m[0], "syn_join_deadlock");
+        char out[512] = "";
+        int ws = g_join_deadlock ? run_child(join_child, 0, out, sizeof out) : -1;
+        CHECK(WIFEXITED(ws) && WEXITSTATUS(ws) == 0 && strstr(out, "goes on without the lock"),
+              "join under a held lock: status %#x (SIGALRM: still deadlocked), \"%s\"", ws, out);
+    }
     snprintf(path, sizeof path, "%s/libsyn_0.so", dir);
     struct stat st;
     stat(path, &st);
