@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- A stand-in for Hollow Knight's Assembly-CSharp for the hk-blur, hk-post, hk-aspect, hk-camerafade and hk-pad-letters tests: the classes
+  <!-- A stand-in for Hollow Knight's Assembly-CSharp for the hk-blur, hk-post, hk-aspect, hk-render-size, hk-camerafade and hk-pad-letters tests: the classes
        those patches look at, written here (no game code). Built by ../../../build.sh test into
        out/test/fakes/hk/, after Assembly-CSharp-firstpass.csproj (the engine types and the two
        Standard Assets effects, which Brightness.cs uses). -->
@@ -18,6 +18,7 @@
     <Compile Include="Aspect.cs" />
     <Compile Include="Fade.cs" />
     <Compile Include="PadLetters.cs" />
+    <Compile Include="RenderSize.cs" />
     <Reference Include="Assembly-CSharp-firstpass">
       <HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/hk/Assembly-CSharp-firstpass.dll</HintPath>
     </Reference>

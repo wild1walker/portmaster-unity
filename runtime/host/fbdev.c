@@ -351,6 +351,18 @@ void fbdev_setup(void)
     int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
                                         getenv("UA_RENDER_PIXELS"), mem_total_kb(), &g_rw, &g_rh);
     if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
+    // UA_RENDER_SIZE_VAR (as in display_sdl.c): the game draws its world at the render size by itself
+    // and reads the size from that variable; Unity keeps the panel's size (UA_ASPECT's), no scaler
+    const char *var = getenv("UA_RENDER_SIZE_VAR");
+    if (picked && var && *var && (g_rw < lw || g_rh < lh)) {
+        char size[32];
+        snprintf(size, sizeof size, "%dx%d", g_rw, g_rh);
+        setenv(var, size, 1);
+        fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the game's own, told in %s; Unity keeps %dx%d\n",
+                g_rw, g_rh, 100.0 * g_rw * g_rh / ((double)v.xres * v.yres), v.xres, v.yres, var, lw, lh);
+        if (letterbox) { g_rw = lw; g_rh = lh; }
+        else { g_rw = g_rh = 0; picked = 0; }
+    }
     if (picked) {
         // the display engine's scaler: Allwinner's (sunxi disp, /sys/class/disp) shows a cropped
         // framebuffer over the whole panel; other drivers (Rockchip's) would show it smaller or

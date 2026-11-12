@@ -71,6 +71,7 @@ static partial class TestMain
         Check(st == 0 && outp.Contains("n/a  hk-blur: no Hollow Knight"), "hk-blur: another game: not applicable");
         HollowKnightPostTests();
         HollowKnightAspectTests();
+        HollowKnightRenderSizeTests();
         HollowKnightFadeTests();
         HollowKnightPadLettersTests();
     }
@@ -175,6 +176,84 @@ static partial class TestMain
         Check(Fit(o, null, a169) == Fit(d, null, a169) && Fit(o, null, a1610) == Fit(d, null, a1610), "hk-aspect: unset: 16:9 and 16:10 as the game");
         (st, outp) = Patch(o, Path.Combine(tmp, "hka-again"), with: new[] { "hk-aspect" });
         Check(st == 0 && outp.Contains("done hk-aspect") && NoDlls(Path.Combine(tmp, "hka-again")), "hk-aspect: a second run finds it applied");
+    }
+
+    // ---- hk-render-size ----------------------------------------------------------------------
+    /// <summary>The stand-in's CameraRenderScaled.Resolution with ASMPATCH_HK_RENDER_SIZE set to env (a
+    /// fresh load each time: the class reads it when first used), and after Clear().</summary>
+    static ((int w, int h) size, (int w, int h) cleared, int sources) RenderSize(string dir, string env)
+    {
+        var old = Environment.GetEnvironmentVariable(HollowKnightRenderSize.Variable);
+        Environment.SetEnvironmentVariable(HollowKnightRenderSize.Variable, env);
+        var ctx = new AssemblyLoadContext("hkr" + Guid.NewGuid(), isCollectible: true);
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var t = a.GetType("CameraRenderScaled", true);
+            (int, int) Size()
+            {
+                var v = t.GetField("Resolution").GetValue(null);
+                return ((int)v.GetType().GetProperty("Width").GetValue(v), (int)v.GetType().GetProperty("Height").GetValue(v));
+            }
+            var size = Size();
+            int sources = (int)t.GetProperty("Sources").GetValue(null);
+            t.GetMethod("Clear").Invoke(null, null);
+            return (size, Size(), sources);
+        }
+        finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightRenderSize.Variable, old); }
+    }
+
+    /// <summary>The stand-in's ForceFullResolution after a change to its menu scene and to another one,
+    /// with ASMPATCH_HK_RENDER_SIZE set to env (a fresh load each time).</summary>
+    static (bool menu, bool game) FullSize(string dir, string env)
+    {
+        var old = Environment.GetEnvironmentVariable(HollowKnightRenderSize.Variable);
+        Environment.SetEnvironmentVariable(HollowKnightRenderSize.Variable, env);
+        var ctx = new AssemblyLoadContext("hkf" + Guid.NewGuid(), isCollectible: true);
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var t = a.GetType("CameraRenderScaled", true);
+            var o = Activator.CreateInstance(t);
+            bool After(string scene)
+            {
+                t.GetMethod("OnActiveSceneChanged").Invoke(o, new object[] { "", scene });
+                return (bool)t.GetProperty("ForceFullResolution").GetValue(o);
+            }
+            return (After("Menu"), After("Town"));
+        }
+        finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightRenderSize.Variable, old); }
+    }
+
+    static void HollowKnightRenderSizeTests()
+    {
+        var d = Dir("hkr");
+        File.Copy(FakeHollowKnight, Path.Combine(d, "Assembly-CSharp.dll"));
+        var (st, outp) = Patch(d, Path.Combine(tmp, "hkr-default"));
+        Check(st == 0 && outp.Contains("skip hk-render-size (opt-in: --with=hk-render-size)"), "hk-render-size: opt-in, not run by default");
+        var o = Path.Combine(tmp, "hkr-out");
+        (st, outp) = Patch(d, o, with: new[] { "hk-render-size" });
+        Check(st == 0 && outp.Contains("ok   hk-render-size: Assembly-CSharp.dll: CameraRenderScaled.Resolution") &&
+              File.Exists(Path.Combine(o, "Assembly-CSharp.dll")), "hk-render-size: applied when named");
+        if (!File.Exists(Path.Combine(o, "Assembly-CSharp.dll"))) return;
+        var none = ((0, 0), (0, 0), 0);
+        Check(RenderSize(d, "540x360") == none, "hk-render-size: the unpatched stand-in ignores the variable");
+        foreach (var v in new[] { null, "", "x", "540", "540x", "x360", "0x360", "540x0", "-540x360", "540x-360", "540x360x2", "540X360", "wide", "5e2x360" })
+            Check(RenderSize(o, v) == none, $"hk-render-size: ASMPATCH_HK_RENDER_SIZE={v ?? "(unset)"}: the game as it is ({RenderSize(o, v)})");
+        foreach (var (v, want) in new[] { ("540x360", (540, 360)), ("480x480", (480, 480)), ("480x360", (480, 360)), ("1x1", (1, 1)) })
+            Check(RenderSize(o, v) == (want, (0, 0), 0), $"hk-render-size: {v}: {RenderSize(o, v)}");
+        // a menu scene's world: at the screen's size as the game has it, at the size when one is set
+        Check(FullSize(d, "540x360") == (true, false), "hk-render-size: the unpatched stand-in draws its menu scene at the screen's size");
+        foreach (var v in new[] { null, "", "540x0", "wide" })
+            Check(FullSize(o, v) == (true, false), $"hk-render-size: ASMPATCH_HK_RENDER_SIZE={v ?? "(unset)"}: the menu scene at the screen's size ({FullSize(o, v)})");
+        foreach (var v in new[] { "540x360", "480x360" })
+            Check(FullSize(o, v) == (false, false), $"hk-render-size: {v}: the menu scene's world at that size too ({FullSize(o, v)})");
+        (st, outp) = Patch(o, Path.Combine(tmp, "hkr-again"), with: new[] { "hk-render-size" });
+        Check(st == 0 && outp.Contains("done hk-render-size") && NoDlls(Path.Combine(tmp, "hkr-again")), "hk-render-size: a second run finds it applied");
+        (st, outp) = Patch(d, Path.Combine(tmp, "hkr-both"), with: new[] { "hk-aspect", "hk-render-size" });
+        Check(st == 0 && outp.Contains("ok   hk-aspect") && outp.Contains("ok   hk-render-size") &&
+              RenderSize(Path.Combine(tmp, "hkr-both"), "480x360") == ((480, 360), (0, 0), 0) && Fit(Path.Combine(tmp, "hkr-both"), "fill", 1.5f).used == 1.5f,
+              "hk-render-size: with hk-aspect in one run");
     }
 
     // ---- hk-post -----------------------------------------------------------------------------

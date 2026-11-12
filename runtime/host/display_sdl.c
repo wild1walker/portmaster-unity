@@ -30,6 +30,10 @@
 //   UA_RENDER_SIZE / UA_RENDER_SCALE / UA_RENDER_PIXELS  (as on the fbdev path, fbdev_pick_render_size) Unity is told
 //                           the smaller size; display.c's GPU scaler draws it over the whole window.
 //                           GLES 3 only; unset (the default), nothing of it runs
+//   UA_RENDER_SIZE_VAR=<name>  the picked render size goes to the game instead, as <w>x<h> in the
+//                           environment variable <name>: Unity keeps the window's size (UA_ASPECT's), nothing
+//                           is scaled here (a game that draws its world smaller and its text at the window's
+//                           size by itself: Hollow Knight with asmpatch's hk-render-size)
 //   UA_PRESENT_THREAD=1     (with a render size, no UA_ASPECT) Unity's contexts current without a surface,
 //                           its frames scaled over the window and swapped by a present thread
 //                           (glpresent.c): the render thread no longer waits for the GPU at its swap
@@ -355,6 +359,19 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
     int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
                                         getenv("UA_RENDER_PIXELS"), mem_total_kb(), &g_rw, &g_rh);
     if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
+    // UA_RENDER_SIZE_VAR: the game draws its world at the render size by itself (it reads the size
+    // from that variable) and the rest at the window's: Unity keeps the window's size (UA_ASPECT's)
+    int pw = 0, ph = 0;                          // the size of the frames a present thread would show (0: none)
+    const char *var = getenv("UA_RENDER_SIZE_VAR");
+    if (picked && var && *var && (g_rw < lw || g_rh < lh)) {
+        char size[32];
+        snprintf(size, sizeof size, "%dx%d", g_rw, g_rh);
+        setenv(var, size, 1);
+        fprintf(stderr, "[display] render size %dx%d (%d %% of %dx%d's pixels): the game's own, told in %s; Unity keeps %dx%d\n",
+                g_rw, g_rh, (int)(100.0 * g_rw * g_rh / ((double)dw * dh) + 0.5), dw, dh, var, lw, lh);
+        if (letterbox) { g_rw = lw; g_rh = lh; }
+        else { g_rw = g_rh = 0; picked = 0; pw = dw; ph = dh; }
+    }
     if (picked) {
         if (tries[t].major < 3) {
             fprintf(stderr, "[display] UA_RENDER_SIZE / UA_RENDER_SCALE: a GLES 2 window, no scaled copy: %dx%d\n", dw, dh);
@@ -363,18 +380,21 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
             fprintf(stderr, "[display] render size %dx%d (%d %% of %dx%d's pixels): the GPU scales it to the window\n",
                     g_rw, g_rh, (int)(100.0 * g_rw * g_rh / ((double)dw * dh) + 0.5), dw, dh);
             display_gpu_scale(g_rw, g_rh, dw, dh);
-            const char *asp = getenv("UA_ASPECT");
-            // (KMSDRM, where it was measured, and X11, where display_test.sh checks it; not yet Wayland)
-            int pt_driver = driver && (!strcasecmp(driver, "KMSDRM") || !strcasecmp(driver, "x11"));
-            if (glpresent_wanted() && !(asp && *asp) && !pt_driver)
-                fprintf(stderr, "[display] UA_PRESENT_THREAD: not on SDL's %s driver: off\n", driver ? driver : "?");
-            if (glpresent_wanted() && !(asp && *asp) && pt_driver) {
-                const char *ex = E.QueryString(dpy, EGL_EXTENSIONS);
-                if (ex && strstr(ex, "EGL_KHR_surfaceless_context")) {
-                    g_pt = 1; g_dpy = dpy; g_cfg = cfg;
-                    glpresent_start(g_rw, g_rh, dw, dh, &g_ptw);
-                } else fprintf(stderr, "[display] UA_PRESENT_THREAD: no EGL_KHR_surfaceless_context: off\n");
-            }
+            pw = g_rw; ph = g_rh;
+        }
+    }
+    if (pw && tries[t].major >= 3 && glpresent_wanted()) {
+        const char *asp = getenv("UA_ASPECT");
+        // (KMSDRM, where it was measured, and X11, where display_test.sh checks it; not yet Wayland)
+        int pt_driver = driver && (!strcasecmp(driver, "KMSDRM") || !strcasecmp(driver, "x11"));
+        if (!(asp && *asp) && !pt_driver)
+            fprintf(stderr, "[display] UA_PRESENT_THREAD: not on SDL's %s driver: off\n", driver ? driver : "?");
+        if (!(asp && *asp) && pt_driver) {
+            const char *ex = E.QueryString(dpy, EGL_EXTENSIONS);
+            if (ex && strstr(ex, "EGL_KHR_surfaceless_context")) {
+                g_pt = 1; g_dpy = dpy; g_cfg = cfg;
+                glpresent_start(pw, ph, dw, dh, &g_ptw);
+            } else fprintf(stderr, "[display] UA_PRESENT_THREAD: no EGL_KHR_surfaceless_context: off\n");
         }
     }
 

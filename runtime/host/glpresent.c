@@ -284,7 +284,8 @@ int glpresent_wanted(void) { return g_want; }
 void glpresent_start(int rw, int rh, int dw, int dh, const glpresent_window *w)
 {
     g_rw = rw; g_rh = rh; g_dw = dw; g_dh = dh; g_win = w;
-    fprintf(stderr, "[present] UA_PRESENT_THREAD: Unity's %dx%d frames shown by a present thread, scaled to %dx%d\n", rw, rh, dw, dh);
+    if (rw == dw && rh == dh) fprintf(stderr, "[present] UA_PRESENT_THREAD: Unity's %dx%d frames shown by a present thread\n", rw, rh);
+    else fprintf(stderr, "[present] UA_PRESENT_THREAD: Unity's %dx%d frames shown by a present thread, scaled to %dx%d\n", rw, rh, dw, dh);
 }
 
 int glpresent_active(void) { return g_win != NULL; }
