@@ -13,8 +13,9 @@ player reads, on the handheld itself, the first time the game starts.
   [Cuphead](https://github.com/wild1walker/portmaster-cuphead). See [For players](#for-players).
 
 **No files from Unity or from any game are in this repository, and none may ever be added.**
-Players bring their own copy of the game; Unity's Android player is fetched from Unity on the
-player's own handheld or computer. The tools convert them there.
+Players bring their own copy of the game; Unity's Android player comes with each port, inside
+small games the porter built with the game's Unity version (donors), so the handheld downloads
+nothing. The tools convert the game there.
 
 The first finished port is Cuphead (Unity 2017.4, Mono) on an Anbernic RG34XX-SP with Knulli: most
 of the game runs at 55 to 60 frames per second, against roughly half that with the earlier x86
@@ -111,7 +112,7 @@ Each column is one kind of game build and the way it runs on the handheld (a *ro
 | **A** | Mono build for Linux or macOS | Unity's 32-bit ARM Android player, on the handheld's 32-bit userland; the game's data is converted on the handheld | `pmunity port new` (route `android`) |
 | **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES on the handheld, and a 2021.2+ build's class libraries are swapped for Unity's Unix ones | `pmunity port new` (route `android`; the release ships HLSLcc for the setup: `ARCH=arm64 tools/hlslcc/build.sh`) |
 | **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmunity port new --route il2cpp-arm64`; by hand: `pmunity il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
-| **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmunity apk`, by hand ([docs/apk.md](docs/apk.md)) |
+| **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmunity port new --route apk`; by hand: `pmunity apk` ([docs/apk.md](docs/apk.md)) |
 | **E** | Linux x86-64 build, Mono or IL2CPP | the game's own Linux player, translated by box64; about half the frame rate of A | `pmunity port new --route box64` ([docs/box64-route.md](docs/box64-route.md)) |
 
 What has run, by Unity version (the version numbers in the cells are the builds that were tried):
@@ -165,12 +166,15 @@ Most impact for the most games first:
    title screens on a handheld. Controls, sound, saves, memory over a long session and frame rates
    in play are still to be checked, game by game. One 2022.3 game shows its title at 30 fps, and
    why is not known yet.
-2. **Handhelds without 32-bit libraries** (ROCKNIX and other 64-bit-only firmwares). Column C runs
-   2018.4 - 2020.3 games on a handheld, but only as a porter's manual build: IL2CPP has to run on a
-   computer, not on the handheld, `port new` has no template for it, and `port check` does not
-   offer it yet. Unity 2021 - 2022, sound with 2017.4's 64-bit player, 2017.4 .NET 4.x games,
-   native plugins, Burst and the Input System package are not done or not tested on this route
-   (2017.4 .NET 3.5 games reach their titles in the emulator).
+2. **Handhelds without 32-bit libraries** (ROCKNIX and other 64-bit-only firmwares). `port check`
+   offers two 64-bit routes and `port new` makes ports for both: `mono-arm64` (the game's own
+   assemblies on Unity's Mono built for aarch64, shipped with the port: nothing is compiled or
+   downloaded on the handheld; Hollow Knight's 64-bit build, [docs/mono-arm64.md](docs/mono-arm64.md))
+   and `il2cpp-arm64` (column C: the game's code compiled with IL2CPP, which on the handheld takes
+   hours and Wi-Fi for Unity's tools). Column C runs 2018.4 - 2020.3 games on a handheld; Unity
+   2021 - 2022, sound with 2017.4's 64-bit player, 2017.4 .NET 4.x games, native plugins, Burst and
+   the Input System package are not done or not tested on it (2017.4 .NET 3.5 games reach their
+   titles in the emulator).
 3. **Windows-only games on a handheld.** Six reached their first screens in the emulator, and
    ports of three (2021.3, 2022.2, 2022.3) were set up in a handheld-like container with HLSLcc
    and the class library swap done there; none has run on a handheld yet. No Windows game of 2017.3 - 2017.4 has been tried (only Unity's own
@@ -182,10 +186,10 @@ Most impact for the most games first:
    Unity 6 games yet, 32-bit x86 games need box64's experimental 32-bit mode (not in the launcher
    yet), and precompiling a game's code (Mono AOT) against first-use hitches is not part of the
    tools.
-5. **Ports from Android builds.** `pmunity apk` works by hand, but `port check` and `port new` do
-   not make ports from APKs yet. No 2017.4 - 2019.4 IL2CPP 64-bit build has been tried. The games'
-   own Java parts (Google Play services, ads, billing) do not run; most games carry on without
-   them. Touch-only games need pointer mode.
+5. **Ports from Android builds.** `port check` and `port new` take an APK (the `apk` route: its
+   setup lays the build out as it is, `pmunity apk`). No 2017.4 - 2019.4 IL2CPP 64-bit build has
+   been tried. The games' own Java parts (Google Play services, ads, billing) do not run; most
+   games carry on without them. Touch-only games need pointer mode.
 6. **Video.** Intro videos (Unity's VideoPlayer) have played in a 2017.4.40 game. The same code
    path for 2018.4 - 2021.3 has not run with a video yet, 2022.3's path is only unit-tested, a
    Unity 6 game's background video stalls, and the Vulkan path is missing.
