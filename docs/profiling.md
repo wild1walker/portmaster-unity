@@ -110,7 +110,9 @@ python3 tools/analysis/profsum.py prof-1.txt --syms <Unity player>/Variations/mo
 ```
 
 (`pmunity player fetch <version> --symbols` downloads Unity's symbol files; `--lib runtime/host/out/ua_host`
-names ua_host's own functions.) For each sampled thread:
+names ua_host's own functions: the build strips ua_host, as ports ship it, and keeps the file as
+linked beside it as `ua_host.debug`, which the tools read when it is there. The recording itself
+names what `dladdr` knows, the exported symbols, which a stripped file keeps.) For each sampled thread:
 
 - **schedstat** and **state**: the share of the recording on a CPU, waiting for one (a thread that
   waits a lot for a CPU competes with other threads or processes: the bench's "other processes"),

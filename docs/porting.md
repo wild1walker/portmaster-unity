@@ -1119,6 +1119,15 @@ been tried in its Discord testing channel. What PortMaster asks for, and what `p
 `<name>/`, and the README as `<name>/<name>.md`). Copy that folder to `ports/<name>/` in a checkout
 of the repository; files over 90 MB are split into pieces there by the repository's own tools.
 
+`package` ends with what is left to do for a submission. One of its lines is about debug info: a
+binary in the zip with more than 1 MB of `.debug_*` sections (PortMaster's port check reports the
+same as `bin.debug`: "Binaries ship with debug info; strip would save ..."). The runtime's builds
+strip what a port ships (`ua_host`: 7.9 -> 2.3 MB for armhf, 10.2 -> 3.1 MB for arm64;
+`libil2cpp_mono.so`) and keep the file as linked beside it as `<file>.debug` for the analysis tools,
+so the line means an `out/` folder built before that (run `runtime/build.sh` again) or a binary
+the port added itself (strip it). Nothing at run time needs the debug info: ua_host names
+functions in its logs and profiles from the exported symbols.
+
 The screenshot is a frame of the game as the port runs it, never a made, scaled or cropped
 picture. On a handheld, start the game with `tools/device/test.sh` and take it with
 `DEVICE=root@<handheld> REMOTE=<the folder> tools/device/drive.sh "" 0 screenshot.png`; for a game

@@ -1718,6 +1718,43 @@ class PortMasterMetadataTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 P.shot(os.path.join(t, 'c.ppm'), os.path.join(t, 'c.png'))
 
+    def test_elf_debug_bytes(self):
+        # (what package warns about: a binary shipped with its debug info; ua_host's build strips it)
+        def elf(bits, sections):
+            names = b'\0' + b''.join(n.encode() + b'\0' for n, _ in sections) + b'.shstrtab\0'
+            hdr = 64 if bits == 64 else 52
+            body, at, heads, pos = b'', {}, [], 1
+            for n, size in sections:
+                at[n] = (pos, hdr + len(body), size)
+                body += bytes(size)
+                pos += len(n) + 1
+            at['.shstrtab'] = (pos, hdr + len(body), len(names))
+            body += names
+            for n in [None] + [n for n, _ in sections] + ['.shstrtab']:
+                name, off, size = at[n] if n else (0, 0, 0)
+                heads.append(struct.pack('<IIQQQQIIQQ', name, 1, 0, 0, off, size, 0, 0, 1, 0) if bits == 64 else
+                             struct.pack('<IIIIIIIIII', name, 1, 0, 0, off, size, 0, 0, 1, 0))
+            ident = b'\x7fELF' + bytes([2 if bits == 64 else 1, 1, 1]) + bytes(9)
+            num = len(heads)
+            if bits == 64:
+                h = ident + struct.pack('<HHIQQQIHHHHHH', 2, 183, 1, 0, 0, hdr + len(body), 0, 64, 0, 0, 64, num, num - 1)
+            else:
+                h = ident + struct.pack('<HHIIIIIHHHHHH', 2, 40, 1, 0, 0, hdr + len(body), 0, 52, 0, 0, 40, num, num - 1)
+            return h + body + b''.join(heads)
+        with tempfile.TemporaryDirectory() as t:
+            for bits in (32, 64):
+                a = os.path.join(t, f'with{bits}')
+                put(a, elf(bits, [('.text', 100), ('.debug_info', 3000), ('.symtab', 64), ('.debug_line', 500)]))
+                self.assertEqual(P.elf_debug_bytes(a), 3500)
+                b = os.path.join(t, f'stripped{bits}')
+                put(b, elf(bits, [('.text', 100), ('.dynsym', 64)]))
+                self.assertEqual(P.elf_debug_bytes(b), 0)
+            put(os.path.join(t, 'text'), b'#!/bin/sh\necho\n')
+            put(os.path.join(t, 'cut'), elf(32, [('.debug_info', 3000)])[:60])
+            self.assertEqual(P.elf_debug_bytes(os.path.join(t, 'text')), 0)
+            self.assertEqual(P.elf_debug_bytes(os.path.join(t, 'cut')), 0)
+            self.assertEqual(P.elf_debug_bytes(os.path.join(t, 'missing')), 0)
+
 
 class DecodedTexturesTest(unittest.TestCase):
     def test_textures_step_suggested_when_bc_decodes_large(self):

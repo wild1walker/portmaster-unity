@@ -3,6 +3,7 @@
 # the ua-build-arm64 image -> out/arm64/libil2cpp_mono.so. It binds Mono's functions at run time
 # (dlsym), so it needs no Mono headers and serves every Unity line's Mono; the runtime itself,
 # libmonobdwgc-2.0.so, is built from Unity's Mono sources (tools/mono64/build-mono.sh).
+# Stripped, as a port ships it (libil2cpp_mono.so.debug: the file as linked).
 #   test: also builds and runs test/test_il2cpp_mono (the bridge against a stand-in Mono)
 set -e
 cd "$(dirname "$0")"
@@ -12,6 +13,7 @@ docker run --rm --platform linux/arm64 -v "$PWD":/w -w /w ua-build-arm64 sh -c '
   set -e
   gcc -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation -fPIC -fvisibility=hidden -shared -Wl,-soname,libil2cpp.so \
     -o out/arm64/libil2cpp_mono.so il2cpp_mono.c -ldl -lpthread
+  cp out/arm64/libil2cpp_mono.so out/arm64/libil2cpp_mono.so.debug; strip out/arm64/libil2cpp_mono.so
   n=$(nm -D --defined-only out/arm64/libil2cpp_mono.so | grep -c " il2cpp_")
   echo "out/arm64/libil2cpp_mono.so: $n il2cpp_* functions"
   if [ "'"$1"'" = test ]; then

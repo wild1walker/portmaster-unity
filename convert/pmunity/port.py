@@ -3200,11 +3200,54 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
            for r_, _, fs in os.walk(zipdir) for n in fs]
     todo += [f'{n} is {s / 2**20:.0f} MB: PortMaster\'s repository keeps files over {BIG_FILE_MB} MB in pieces '
              f'(its tools/build_data.py)' for n, s in sorted(big) if s > BIG_FILE_MB << 20]
+    for n, s in sorted(big):
+        d = elf_debug_bytes(os.path.join(zipdir, n)) if s > 1 << 20 else 0
+        if d > 1 << 20:
+            todo.append(f'{n} ships with debug info ({d / 2**20:.1f} MB of {s / 2**20:.1f} MB): rebuild the '
+                        f'runtime (runtime/build.sh strips ua_host; an out/ folder built before that does not) '
+                        f'or strip the file')
     if todo:
         log(f'for a PortMaster submission ({len(todo)}; docs/porting.md, "Submitting to PortMaster"):')
         for x in todo:
             log(f'  - {x}')
     return zpath
+
+
+def elf_debug_bytes(path):
+    """The bytes of an ELF file's debug sections (.debug_*, what `strip --strip-debug` drops), 0 for
+    a stripped file or one that is no ELF file. Read only."""
+    try:
+        with open(path, 'rb') as f:
+            h = f.read(64)
+            if h[:4] != b'\x7fELF' or len(h) < 52 or h[5] != 1:    # little-endian files only
+                return 0
+            if h[4] == 2:
+                shoff, = struct.unpack_from('<Q', h, 0x28)
+                entsize, num, strndx = struct.unpack_from('<HHH', h, 0x3A)
+                fmt, name_at, size_at = '<I', 0, 0x20
+            else:
+                shoff, = struct.unpack_from('<I', h, 0x20)
+                entsize, num, strndx = struct.unpack_from('<HHH', h, 0x2E)
+                fmt, name_at, size_at = '<I', 0, 0x14
+            if not shoff or not num or strndx >= num or entsize < (64 if h[4] == 2 else 40) or num > 4096:
+                return 0
+            f.seek(shoff)
+            sh = f.read(entsize * num)
+            if len(sh) < entsize * num:
+                return 0
+            wide = '<Q' if h[4] == 2 else '<I'
+            size = lambda i: struct.unpack_from(wide, sh, i * entsize + size_at)[0]
+            off, = struct.unpack_from(wide, sh, strndx * entsize + (0x18 if h[4] == 2 else 0x10))
+            f.seek(off)
+            names = f.read(min(size(strndx), 1 << 20))
+            total = 0
+            for i in range(num):
+                n, = struct.unpack_from(fmt, sh, i * entsize + name_at)
+                if names[n:n + 7] == b'.debug_':
+                    total += size(i)
+            return total
+    except (OSError, struct.error):
+        return 0
 
 
 def add_donors(ctx, names, src):

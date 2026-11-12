@@ -1,7 +1,8 @@
 """Function names for module+offset addresses, from ELF files with symbols: Unity's symbol files
 (Variations/<backend>/Release/Symbols/<abi>/libunity.sym.so, libmonobdwgc-2.0.sym.so, libmain.sym.so,
-as `pmunity player fetch --symbols` downloads them), an unstripped ua_host, or any library copied
-from a handheld (its exported names only, when it is stripped).
+as `pmunity player fetch --symbols` downloads them), ua_host (runtime/host/out/ua_host: stripped, its
+names from ua_host.debug beside it), or any library copied from a handheld (its exported names only,
+when it is stripped).
 
     names = ElfNames(dirs=['.../Symbols/armeabi-v7a'], files=['runtime/host/out/ua_host'])
     names('libunity.so', 0x4a1c2)  ->  'PlayerLoop'  (None when unknown)
@@ -50,7 +51,10 @@ def _build(path, out):
 
 
 def load(path):
-    """[(address, size, name)] of an ELF file's functions, sorted (cached)"""
+    """[(address, size, name)] of an ELF file's functions, sorted (cached). A stripped file with the
+    file as linked beside it (<path>.debug: runtime/host/build.sh's ua_host.debug) is read from that."""
+    if os.path.isfile(path + '.debug'):
+        path += '.debug'
     st = os.stat(path)
     key = hashlib.sha1(f'{os.path.abspath(path)}:{st.st_size}:{int(st.st_mtime)}'.encode()).hexdigest()[:10]
     cache = os.path.join(HERE, f'syms_{os.path.basename(path)}_{key}.txt')

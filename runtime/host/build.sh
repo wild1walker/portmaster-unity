@@ -10,6 +10,10 @@
 #     until then its objects are still compiled, so the sources are checked.
 #   STEAMSTUB=0: ua_host without the Steamworks stand-ins (steamstub.c, plugstubs.c's CSteamworks
 #     table), for ports of games that do not use Steamworks
+# ua_host is stripped (a port ships it: its debug info was two thirds of the file); the file as linked
+# stays beside it as ua_host.debug, which tools/analysis reads for the names of its functions
+# (profsum.py --lib). What runs on the handheld names functions by the exported symbols only
+# (so_dladdr), which stripping keeps.
 set -e
 cd "$(dirname "$0")"
 ARCH=${ARCH:-armhf}
@@ -37,6 +41,7 @@ if [ "$ARCH" = arm64 ]; then
     if [ -f $LOADER ]; then
       g++ -o $O/ua_host $OBJS $LOADER ../android/out/arm64/libandroidshims.a ../jni/out/arm64/libfakejni.a \
         ../media/out/arm64/libuamedia.a -Wl,--dynamic-list=exports.list -lSDL2 -lz -ldl -lpthread -lm -lrt
+      cp $O/ua_host $O/ua_host.debug; strip $O/ua_host
       file $O/ua_host | sed "s|, BuildID[^,]*||"
     else
       rm -f $O/ua_host
@@ -117,6 +122,7 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
     out/display.o out/display_sdl.o out/fbdev.o ${STEAM:+out/steamstub.o} out/plugins.o out/plugstubs.o out/wwise.o out/wwise_tramp.o out/wwplay.o out/wwplay_vorbis.o out/desktopenv.o out/mono64.o out/unityhooks.o out/unitypool.o out/unityverts.o out/unitymath.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
+  cp out/ua_host out/ua_host.debug; arm-linux-gnueabihf-strip out/ua_host
   arm-linux-gnueabihf-gcc -O2 -Wall -rdynamic -o out/egltest egltest.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/passbench passbench.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/drawbench drawbench.c -lEGL -lGLESv2
