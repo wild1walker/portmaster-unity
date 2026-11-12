@@ -181,6 +181,15 @@ of a few percent need repeats. Settings that change how the game looks or plays 
 candidates for a default ([CONTRIBUTING.md](../CONTRIBUTING.md)); a run without vsync is a
 measurement (what the frame costs when it is not paced), not a setting.
 
+A run that stops at a plan step (`hitch:` or `log:` timed out) while the frame rate log shows a
+steady 60 fps is a game waiting for the player, not a slow or broken build: look at what the test
+copy's own data asks first. Hollow Knight shows its language choice until its PlayerPrefs hold
+`GameLangSet` (`StartManager.Start`); a test copy whose `data/shared_prefs/*.prefs` was replaced by
+a file without that key sits in `Pre_Menu_Intro` at 60 fps, logs "Couldn't find a UIManager" and
+never the menu's lines, whatever ua_host or settings the run has (2026-11-12, G350: two holds of
+runs lost to it, first blamed on the stripped ua_host). Keep a known-good copy of the prefs beside
+the test copy and check the key before a run (`grep -c GameLangSet data/shared_prefs/*.prefs`).
+
 ## Worked example: Hollow Knight, King's Pass (Unity 6000.0, Mono)
 
 On the RG34XX-SP the game ran King's Pass at 32 - 34 fps (2026-10-22; 33 - 37 with the host's flips:
