@@ -34,6 +34,7 @@
 // waiting for the GPU, deleted).
 #include "unitypool.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,9 +44,9 @@
 // what one player's pool code reads, by hand from the rows below
 struct layout {
     const char *unity;
-    unsigned db_size, db_owner, db_usage, db_drawn;   // DataBufferGLES: size, its GfxBuffer, usage, frame last drawn in
+    unsigned db_size, db_owner, db_usage, db_drawn;   // DataBufferGLES: size (a size_t), its GfxBuffer, usage, frame last drawn in
     unsigned m_frame, m_done;                         // BufferManagerGLES: the frame, the last one the GPU finished
-    unsigned caps_min;                                // GraphicsCaps: the smallest buffer most usages get
+    unsigned caps_min;                                // GraphicsCaps: the smallest buffer most usages get (a size_t)
     uint32_t exact;                                   // the usages reused only at their exact size (bits)
     unsigned usages;
     uint32_t k_size, k_cap, k_age;                    // PruneFreeBuffers' floats (bits): min(size * k_size, k_cap) + age >= k_age
@@ -55,6 +56,11 @@ static const struct layout g_layouts[] = {
     // limit max(caps[0x470], 3 * size / 2). ReleaseBuffer and UpdateLiveSetFromPending: pending while
     // drawn <= frame && done < drawn. PruneFreeBuffers: 11 usages, 1/6000, 50, 59.
     { "6000.0.61f1 armeabi-v7a", 0x8, 0xc, 0x10, 0x24, 0x0, 0xa4, 0x470, 0x112, 11, 0x392ec33e, 0x42480000, 0x426c0000 },
+    // The arm64-v8a player (the IL2CPP variant, which Hollow Knight's 64-bit build runs): the same code with
+    // 64-bit sizes: AcquireBuffer(size_t size, usage, GfxBuffer *, bool clear) compares x registers, key
+    // max(caps[0x4f0], size), limit max(caps[0x4f0], 3 * size / 2); the free maps' keys are size_t; the
+    // prune converts the 64-bit size to float. Frames stay 32-bit.
+    { "6000.0.61f1 arm64-v8a", 0x10, 0x18, 0x20, 0x34, 0x0, 0x148, 0x4f0, 0x112, 11, 0x392ec33e, 0x42480000, 0x426c0000 },
 };
 enum { F_ACQUIRE, F_RELEASE, F_LIVE, F_PRUNE, F_CLEAR, F_INVALIDATE, F_DTOR, F_CAPS, F_N };
 static const char *const g_func[F_N] = {
@@ -72,14 +78,23 @@ static const struct uh_row g_rows[] = {
     { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::InvalidateAll", 0xb26670, 0x114, 'a', 0xa68615524fed3633ull },
     { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::~BufferManagerGLES", 0xb25ca4, 0xec, 'a', 0xfdaf38fb8faf3ebbull },
     { "6000.0.61f1 armeabi-v7a", "GetGraphicsCaps", 0x4a48b8, 0xc, 't', 0xb47c84086130b794ull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::AcquireBuffer", 0x109df1c, 0x1dc, 'x', 0x959f53acc1d92af4ull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::ReleaseBuffer", 0x109d6f8, 0x11c, 'x', 0x0736dfacaa7b4cafull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::UpdateLiveSetFromPending", 0x109e280, 0x140, 'x', 0x01f87a95288332d3ull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::PruneFreeBuffers", 0x109e3c0, 0x1d4, 'x', 0x7d412efc480ae207ull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::Clear", 0x109ddb0, 0x16c, 'x', 0xf46761f950bd6fb5ull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::InvalidateAll", 0x109e670, 0x114, 'x', 0x67992aa798dfc301ull },
+    { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::~BufferManagerGLES", 0x109dccc, 0xe4, 'x', 0x230d20fba2fc28d9ull },
+    { "6000.0.61f1 arm64-v8a", "GetGraphicsCaps", 0x8b9024, 0xc, 'x', 0xc8cb2699c769895cull },
 };
 
 static const struct layout *L;
 #define U32(p, off) (*(uint32_t *)((char *)(p) + (off)))
+#define SZ(p, off) (*(size_t *)((char *)(p) + (off)))
 #define PTR(p, off) (*(void **)((char *)(p) + (off)))
 
 // Unity's functions (the originals, through unityhooks' trampolines)
-static void *(*o_acquire)(void *m, unsigned size, unsigned usage, void *gfx, int clear);
+static void *(*o_acquire)(void *m, size_t size, unsigned usage, void *gfx, bool clear);
 static void (*o_release)(void *m, void *db);
 static void (*o_live)(void *m), (*o_prune)(void *m), (*o_clear)(void *m), (*o_invalidate)(void *m);
 static void *(*o_dtor)(void *m);
@@ -106,11 +121,11 @@ static node *node_new(void *db)
 static void node_put(node *n) { n->next = g_spare; g_spare = n; }
 
 // ---- the free buffers: per usage, the sizes that have some (sorted), each with its buffers oldest first
-typedef struct { uint32_t size; node *head, *tail; } bucket;
+typedef struct { size_t size; node *head, *tail; } bucket;
 typedef struct { bucket *b; unsigned n, cap; } sizes;
 static sizes g_free[16];
 
-static unsigned lower(const sizes *s, uint32_t key)
+static unsigned lower(const sizes *s, size_t key)
 {
     unsigned lo = 0, hi = s->n;
     while (lo < hi) { unsigned mid = (lo + hi) / 2; if (s->b[mid].size < key) lo = mid + 1; else hi = mid; }
@@ -121,7 +136,7 @@ static int free_put(void *db)
     unsigned u = U32(db, L->db_usage);
     if (u >= L->usages) return 0;
     sizes *s = &g_free[u];
-    uint32_t size = U32(db, L->db_size);
+    size_t size = SZ(db, L->db_size);
     unsigned i = lower(s, size);
     if (i == s->n || s->b[i].size != size) {
         if (s->n == s->cap) {
@@ -146,7 +161,7 @@ static int free_put(void *db)
     return 1;
 }
 // the oldest free buffer of the smallest size >= key, when that size is <= limit
-static void *free_take(unsigned u, uint32_t key, uint32_t limit)
+static void *free_take(unsigned u, size_t key, size_t limit)
 {
     sizes *s = &g_free[u];
     unsigned i = lower(s, key);
@@ -229,12 +244,12 @@ static int mine(void *m)
 }
 
 // ---- the hooks
-static void *h_acquire(void *m, unsigned size, unsigned usage, void *gfx, int clear)
+static void *h_acquire(void *m, size_t size, unsigned usage, void *gfx, bool clear)
 {
     if (!mine(m) || usage >= L->usages) return o_acquire(m, size, usage, gfx, clear);
-    uint32_t min = U32(o_caps(), L->caps_min), half = (3 * size) >> 1;
+    size_t min = SZ(o_caps(), L->caps_min), half = (3 * size) >> 1;
     int exact = usage < 32 && (L->exact >> usage) & 1;
-    uint32_t key = exact || min <= size ? size : min, limit = exact ? size : min < half ? half : min;
+    size_t key = exact || min <= size ? size : min, limit = exact ? size : min < half ? half : min;
     g_taken++;
     void *db = free_take(usage, key, limit);
     if (!db) { g_new++; return o_acquire(m, size, usage, gfx, clear); }
@@ -284,7 +299,7 @@ static void h_prune(void *m)
                 while (*pp) {
                     node *n = *pp;
                     void *db = n->db;
-                    float score = (float)U32(db, L->db_size) * ks;
+                    float score = (float)SZ(db, L->db_size) * ks;
                     if (!(score < kc)) score = kc;
                     score += (float)(uint32_t)(frame - U32(db, L->db_drawn));
                     if (score >= ka && !pending(db, frame, done)) {

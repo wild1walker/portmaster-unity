@@ -10,7 +10,10 @@ It checks what the runtime's hook relies on, and prints no row where a check fai
   - the symbol file belongs to this library (the same GNU build id, when the library has one; else
     the function's bytes must at least be in the library's text);
   - the bytes the jump replaces (8 in ARM state, 16 in A64) are instructions that can run anywhere
-    else: no pc-relative operand, no branch, no literal load;
+    else: in ARM state no pc-relative operand, no branch, no literal load; in A64 no literal load, no
+    indirect branch, no write of x16 or x17 (the trampoline's jumps use x16), and a direct branch
+    only to outside those bytes (the runtime rewrites direct branches, adr and adrp for their new
+    place);
   - nothing in the function branches into those bytes after the first instruction.
 The function's meaning (its arguments, the enum values the hook compares) is read by hand for each
 version before a row is added; the hash then ties the row to exactly that code. Thumb functions are
@@ -144,21 +147,36 @@ def arm_movable(w):
     return 15 not in regs
 
 
+def a64_target(w, pc):
+    """the target of an A64 direct branch at pc, else None"""
+    if (w & 0x7c000000) == 0x14000000:          # b / bl
+        imm = w & 0x3ffffff
+        return pc + 4 * (imm - (1 << 26) if imm & 0x2000000 else imm)
+    if (w & 0xff000010) == 0x54000000 or (w & 0x7e000000) == 0x34000000:    # b.cond, cbz / cbnz
+        imm = (w >> 5) & 0x7ffff
+        return pc + 4 * (imm - (1 << 19) if imm & 0x40000 else imm)
+    if (w & 0x7e000000) == 0x36000000:          # tbz / tbnz
+        imm = (w >> 5) & 0x3fff
+        return pc + 4 * (imm - (1 << 14) if imm & 0x2000 else imm)
+    return None
+
+
 def a64_movable(w):
-    """an A64 instruction that computes the same wherever it runs"""
-    if (w & 0x1f000000) == 0x10000000:
-        return False                            # adr / adrp
+    """an A64 instruction the trampoline can run: one that computes the same wherever it runs, or a direct
+    branch, adr or adrp, which the runtime rewrites for its new place. Never a literal load or an indirect
+    branch, and none that may write x16 or x17 (any register field a write can be in counts as one)"""
     if (w & 0x3b000000) == 0x18000000:
         return False                            # ldr (literal), ldrsw, prfm literal
-    if (w & 0x7c000000) == 0x14000000:
-        return False                            # b / bl
-    if (w & 0x7e000000) == 0x34000000 or (w & 0x7e000000) == 0x36000000:
-        return False                            # cbz / cbnz / tbz / tbnz
-    if (w & 0xff000010) == 0x54000000:
-        return False                            # b.cond
     if (w & 0xfe000000) == 0xd6000000:
         return False                            # br / blr / ret
-    return True
+    if (w & 0x7c000000) == 0x14000000:
+        return True                             # b / bl (no register field)
+    regs = [w & 31]
+    if (w & 0x0a000000) == 0x08000000:          # loads and stores: the base (writeback), a pair's second register
+        regs.append((w >> 5) & 31)
+        if (w & 0x3a000000) == 0x28000000:
+            regs.append((w >> 10) & 31)
+    return not any(r in (16, 17) for r in regs)
 
 
 def branches_into(code, start, isa, lo, hi):
@@ -174,15 +192,7 @@ def branches_into(code, start, isa, lo, hi):
                 imm = imm - (1 << 24) if imm & 0x800000 else imm
                 t = pc + 8 + imm * 4
         else:
-            if (w & 0x7c000000) == 0x14000000:
-                imm = w & 0x3ffffff
-                t = pc + 4 * (imm - (1 << 26) if imm & 0x2000000 else imm)
-            elif (w & 0xff000010) == 0x54000000 or (w & 0x7e000000) == 0x34000000:
-                imm = (w >> 5) & 0x7ffff
-                t = pc + 4 * (imm - (1 << 19) if imm & 0x40000 else imm)
-            elif (w & 0x7e000000) == 0x36000000:
-                imm = (w >> 5) & 0x3fff
-                t = pc + 4 * (imm - (1 << 14) if imm & 0x2000 else imm)
+            t = a64_target(w, pc)
         if t is not None and lo <= t < hi:
             hits.append(pc)
     return hits
@@ -235,7 +245,9 @@ def main(argv=None):
         if bad:
             print(f'// {short}: instruction {bad[0]} of the entry cannot be moved: no row', file=sys.stderr)
             continue
-        into = branches_into(code, addr, isa, addr + 4, addr + moved)
+        # (a branch among the moved instructions to the first one would reach the jump to the hook)
+        into = branches_into(code, addr, isa, addr + 4, addr + moved) or \
+            branches_into(code[:moved], addr, isa, addr, addr + 4)
         if into:
             print(f'// {short}: branches into the entry from {", ".join(hex(x) for x in into)}: no row', file=sys.stderr)
             continue

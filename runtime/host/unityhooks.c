@@ -34,9 +34,13 @@
 // alone; the log says so. No Unity code is kept here: offsets and hashes only.
 //
 // How it hooks. The function's first instructions (8 bytes in ARM state, 16 in A64; the tool checks
-// that they use no pc-relative operand and that nothing in the function branches into them) are
-// copied to a trampoline that continues at the next instruction; the entry becomes a jump to the
-// wrapper here, which calls the original through the trampoline and adjusts only its result.
+// that they can run elsewhere and that nothing in the function branches into them) are copied to a
+// trampoline that continues at the next instruction; the entry becomes a jump to the wrapper here,
+// which calls the original through the trampoline and adjusts only its result. In ARM state the moved
+// instructions use no pc-relative operand. In A64 one that does is rewritten for its new place: a
+// direct branch (b, bl, b.cond, cbz, cbnz, tbz, tbnz) goes through a veneer behind the trampoline to
+// its old target, adr and adrp become a load of the address they computed. The trampoline's jumps
+// use x16, which no moved instruction writes (the tool checks it).
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
@@ -90,6 +94,56 @@ static int patch_bytes(uintptr_t at, const void *code, size_t n)
     return 0;
 }
 
+// A64: the target of a direct branch at pc
+static int a64_branch(uint32_t w, uint64_t pc, uint64_t *target)
+{
+    int64_t words;
+    if ((w & 0x7c000000u) == 0x14000000u) words = (int32_t)(w << 6) >> 6;                           // b, bl
+    else if ((w & 0xff000010u) == 0x54000000u || (w & 0x7e000000u) == 0x34000000u)
+        words = (int32_t)(w << 8) >> 13;                                                              // b.cond, cbz, cbnz
+    else if ((w & 0x7e000000u) == 0x36000000u) words = (int32_t)(w << 13) >> 18;                    // tbz, tbnz
+    else return 0;
+    *target = pc + (uint64_t)(words * 4);
+    return 1;
+}
+
+// A64: the n instructions at fn written to t for running there, then the jump to fn + 4 * n, then what the
+// rewritten ones need: `ldr x16, #8; br x16; <target>` for each branch, the address for each adr and adrp.
+// Returns the words written (at most A64_TRAMPOLINE), 0 for an entry that cannot be moved: a literal load,
+// a branch to another of the moved instructions
+enum { A64_MOVED = 4, A64_TRAMPOLINE = A64_MOVED + 4 + 4 * A64_MOVED };
+static size_t a64_trampoline(uint32_t *t, uint64_t fn, size_t n)
+{
+    size_t tail = n + 4;
+    for (size_t i = 0; i < n; i++) {
+        uint64_t pc = fn + 4 * i, target;
+        uint32_t w;
+        memcpy(&w, (void *)(uintptr_t)pc, 4);
+        if ((w & 0x3b000000u) == 0x18000000u) return 0;
+        uint32_t d = (uint32_t)(tail - i);                           // words from this instruction to its veneer
+        if (a64_branch(w, pc, &target)) {
+            if (target >= fn && target < fn + 4 * n) return 0;
+            if ((w & 0x7c000000u) == 0x14000000u) w = (w & 0xfc000000u) | d;
+            else if ((w & 0x7e000000u) == 0x36000000u) w = (w & 0xfff8001fu) | d << 5;
+            else w = (w & 0xff00001fu) | d << 5;
+            t[tail] = 0x58000050u; t[tail + 1] = 0xd61f0200u;        // ldr x16, #8; br x16
+            memcpy(&t[tail + 2], &target, 8);
+            tail += 4;
+        } else if ((w & 0x1f000000u) == 0x10000000u) {               // adr, adrp -> ldr xN, <its value>
+            int64_t imm = (int64_t)((int32_t)(w << 8) >> 13) * 4 + ((w >> 29) & 3);
+            uint64_t v = w >> 31 ? (pc & ~(uint64_t)0xfff) + (uint64_t)(imm * 4096) : pc + (uint64_t)imm;
+            w = 0x58000000u | d << 5 | (w & 31);
+            memcpy(&t[tail], &v, 8);
+            tail += 2;
+        }
+        t[i] = w;
+    }
+    uint64_t back = fn + 4 * n;
+    t[n] = 0x58000050u; t[n + 1] = 0xd61f0200u;
+    memcpy(&t[n + 2], &back, 8);
+    return tail;
+}
+
 // a trampoline: the moved instructions, then a jump to fn + moved; returns its address or 0
 static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
 {
@@ -100,22 +154,19 @@ static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
         pool = mmap(NULL, pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (pool == MAP_FAILED) { pool = NULL; return 0; }
     }
-    size_t need = moved + 16;
+    size_t need = isa == ISA_ARM ? moved + 8 : 4 * A64_TRAMPOLINE;
     if (used + need > (size_t)pg) return 0;
     uint8_t *t = pool + used;
     mprotect(pool, pg, PROT_READ | PROT_WRITE);
-    memcpy(t, (void *)fn, moved);
-    uintptr_t back = fn + moved;
     if (isa == ISA_ARM) {
-        uint32_t j[2] = { 0xe51ff004u /* ldr pc, [pc, #-4] */, (uint32_t)back };
+        uint32_t j[2] = { 0xe51ff004u /* ldr pc, [pc, #-4] */, (uint32_t)(fn + moved) };
+        memcpy(t, (void *)fn, moved);
         memcpy(t + moved, j, 8);
     } else {
-        uint32_t j[4] = { 0x58000050u /* ldr x16, #8 */, 0xd61f0200u /* br x16 */, 0, 0 };
-        uint64_t b = back;
-        memcpy(&j[2], &b, 8);
-        memcpy(t + moved, j, 16);
+        need = 4 * a64_trampoline((uint32_t *)t, fn, moved / 4);
     }
     mprotect(pool, pg, PROT_READ | PROT_EXEC);
+    if (!need) return 0;
     __builtin___clear_cache((char *)t, (char *)(t + need));
     used += (need + 15) & ~(size_t)15;
     return (uintptr_t)t;
@@ -124,7 +175,7 @@ static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
 // the entry of fn becomes a jump to to; *orig gets a callable original. 0 on success
 int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig)
 {
-    size_t moved = isa == ISA_ARM ? 8 : 16;
+    size_t moved = isa == ISA_ARM ? 8 : 4 * A64_MOVED;
     uintptr_t t = make_trampoline(fn, moved, isa);
     if (!t) return -1;
     if (isa == ISA_ARM) {

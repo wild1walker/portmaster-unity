@@ -20,36 +20,41 @@ int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig) { (void)fn; (
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-// ---- the model: DataBufferGLES (40 bytes; size 0x8, owner 0xc, usage 0x10, drawn 0x24) and the manager
-// (frame 0x0, done 0xa4), with ids of our own after the fields Unity's code reads
-typedef struct { uint8_t f[40]; int id, where; } dbuf;     // where: 0 in use, 1 model free, 2 model pending, 3 deleted
+// ---- the model: DataBufferGLES and the manager with their fields where the layout of this pointer width
+// has them (the 32-bit player: size 0x8, owner 0xc, usage 0x10, drawn 0x24; frame 0x0, done 0xa4; the
+// 64-bit one: 0x10, 0x18, 0x20, 0x34; 0x0, 0x148), with ids of our own after the fields Unity's code reads
+typedef struct { _Alignas(16) uint8_t f[0x40]; int id, where; } dbuf;   // where: 0 in use, 1 model free, 2 model pending, 3 deleted
 enum { USED, MFREE, MPEND, GONE };
-static uint8_t g_mgr[0xb0];
-static uint8_t g_caps[0x480];
-#define FRAME U32(g_mgr, 0x0)
-#define DONE U32(g_mgr, 0xa4)
+static _Alignas(16) uint8_t g_mgr[0x150];
+static _Alignas(16) uint8_t g_caps[0x500];
+#define FRAME U32(g_mgr, L->m_frame)
+#define DONE U32(g_mgr, L->m_done)
+#define USAGE(d) U32((d)->f, L->db_usage)
+#define OWNER(d) PTR((d)->f, L->db_owner)
+#define DRAWN(d) U32((d)->f, L->db_drawn)
+#define CAPS_MIN SZ(g_caps, L->caps_min)
 #define MAXB 20000
 static dbuf *g_all[MAXB]; static int g_nall;
 static dbuf *m_free[11][MAXB]; static int m_nfree[11];     // sorted by size, oldest first among equals
 static dbuf *m_pend[MAXB]; static int m_npend;
 static long m_made, m_clears, m_deleted;
 
-static uint32_t SIZE(dbuf *d) { return U32(d->f, 0x8); }
+static size_t SIZE(dbuf *d) { return SZ(d->f, L->db_size); }
 static void m_insert(dbuf *d)
 {
-    unsigned u = U32(d->f, 0x10);
+    unsigned u = USAGE(d);
     int i = m_nfree[u];
     while (i > 0 && SIZE(m_free[u][i - 1]) > SIZE(d)) i--;  // after the equal ones (Unity's insert goes right on equal)
     memmove(&m_free[u][i + 1], &m_free[u][i], (m_nfree[u] - i) * sizeof(dbuf *));
     m_free[u][i] = d; m_nfree[u]++; d->where = MFREE;
 }
-static void *m_acquire(void *m, unsigned size, unsigned usage, void *gfx, int clear)
+static void *m_acquire(void *m, size_t size, unsigned usage, void *gfx, bool clear)
 {
     (void)m;
-    uint32_t min = U32(g_caps, 0x470);
+    size_t min = CAPS_MIN;
     int exact = usage <= 8 && (0x112 >> usage) & 1;
-    uint32_t key = exact ? size : (min <= size ? size : min);
-    uint32_t limit = exact ? size : (min < (3 * size) >> 1 ? (3 * size) >> 1 : min);
+    size_t key = exact ? size : (min <= size ? size : min);
+    size_t limit = exact ? size : (min < (3 * size) >> 1 ? (3 * size) >> 1 : min);
     for (int i = 0; i < m_nfree[usage]; i++)
         if (SIZE(m_free[usage][i]) >= key) {
             dbuf *d = m_free[usage][i];
@@ -57,23 +62,23 @@ static void *m_acquire(void *m, unsigned size, unsigned usage, void *gfx, int cl
             memmove(&m_free[usage][i], &m_free[usage][i + 1], (m_nfree[usage] - i - 1) * sizeof(dbuf *));
             m_nfree[usage]--;
             if (clear) m_clears++;
-            PTR(d->f, 0xc) = gfx; d->where = USED;
+            OWNER(d) = gfx; d->where = USED;
             return d;
         }
     assert(g_nall < MAXB);
     dbuf *d = calloc(1, sizeof *d);
-    U32(d->f, 0x8) = key; U32(d->f, 0x10) = usage; PTR(d->f, 0xc) = gfx;
-    U32(d->f, 0x24) = 0xffffffffu;                      // (never drawn)
+    SZ(d->f, L->db_size) = key; USAGE(d) = usage; OWNER(d) = gfx;
+    DRAWN(d) = 0xffffffffu;                             // (never drawn)
     d->id = g_nall; d->where = USED; g_all[g_nall++] = d; m_made++;
     return d;
 }
-static int m_pending(dbuf *d) { uint32_t r = U32(d->f, 0x24); return r <= FRAME && DONE < r; }
+static int m_pending(dbuf *d) { uint32_t r = DRAWN(d); return r <= FRAME && DONE < r; }
 static void m_release(void *m, void *p)
 {
     (void)m;
     dbuf *d = p;
     CHECK(d->where == USED, "buffer %d handed to Unity's pool from %d", d->id, d->where);
-    PTR(d->f, 0xc) = NULL;
+    OWNER(d) = NULL;
     if (m_pending(d)) { m_pend[m_npend++] = d; d->where = MPEND; } else m_insert(d);
 }
 static void m_live(void *m)
@@ -86,7 +91,7 @@ static int prune_says(dbuf *d)
 {
     float s = (float)SIZE(d) * bits(0x392ec33e);
     if (!(s < 50.0f)) s = 50.0f;
-    s += (float)(uint32_t)(FRAME - U32(d->f, 0x24));
+    s += (float)(uint32_t)(FRAME - DRAWN(d));
     return s >= 59.0f && !m_pending(d);
 }
 static void m_prune(void *m)
@@ -120,7 +125,7 @@ static void check_lists(const char *when)
             node *last = NULL;
             for (node *x = g_free[u].b[i].head; x; x = x->next) {
                 dbuf *d = x->db; g_here[d->id]++; last = x;
-                CHECK(SIZE(d) == g_free[u].b[i].size && U32(d->f, 0x10) == u, "%s: buffer %d under another size or usage", when, d->id);
+                CHECK(SIZE(d) == g_free[u].b[i].size && USAGE(d) == u, "%s: buffer %d under another size or usage", when, d->id);
             }
             CHECK(last == g_free[u].b[i].tail, "%s: a size's tail is not its last buffer", when);
         }
@@ -153,7 +158,7 @@ static want pick(void)
 }
 
 // one game of frames on the given functions; returns the buffers made
-static long play(void *(*acq)(void *, unsigned, unsigned, void *, int), void (*rel)(void *, void *),
+static long play(void *(*acq)(void *, size_t, unsigned, void *, bool), void (*rel)(void *, void *),
                  void (*live)(void *), void (*prune)(void *), void (*clear)(void *), void (*inval)(void *),
                  int frames, int hooked)
 {
@@ -173,14 +178,14 @@ static long play(void *(*acq)(void *, unsigned, unsigned, void *, int), void (*r
             CHECK(d->where == USED, "frame %d: buffer %d taken from Unity's pool state %d", f, d->id, d->where);
             for (int j = 0; j < nheld; j++) CHECK(held[j] != d, "frame %d: buffer %d taken twice", f, d->id);
             CHECK(!m_pending(d), "frame %d: buffer %d taken while the GPU may read it", f, d->id);
-            uint32_t min = U32(g_caps, 0x470);
+            size_t min = CAPS_MIN, size = w.size;
             int exact = w.usage <= 8 && (0x112 >> w.usage) & 1;
-            uint32_t key = exact ? w.size : (min <= w.size ? w.size : min);
-            uint32_t lim = exact ? w.size : (min < (3 * w.size) >> 1 ? (3 * w.size) >> 1 : min);
-            CHECK(SIZE(d) >= key && SIZE(d) <= lim, "frame %d: size %u for %u (usage %u)", f, SIZE(d), w.size, w.usage);
-            CHECK(U32(d->f, 0x10) == w.usage, "frame %d: usage %u for %u", f, U32(d->f, 0x10), w.usage);
-            CHECK(PTR(d->f, 0xc) == (void *)(uintptr_t)(0x1000 + i), "frame %d: owner not set", f);
-            if (rnd() % 10) U32(d->f, 0x24) = FRAME;           // drawn this frame (some never drawn)
+            size_t key = exact ? size : (min <= size ? size : min);
+            size_t lim = exact ? size : (min < (3 * size) >> 1 ? (3 * size) >> 1 : min);
+            CHECK(SIZE(d) >= key && SIZE(d) <= lim, "frame %d: size %zu for %u (usage %u)", f, SIZE(d), w.size, w.usage);
+            CHECK(USAGE(d) == w.usage, "frame %d: usage %u for %u", f, USAGE(d), w.usage);
+            CHECK(OWNER(d) == (void *)(uintptr_t)(0x1000 + i), "frame %d: owner not set", f);
+            if (rnd() % 10) DRAWN(d) = FRAME;                  // drawn this frame (some never drawn)
             held[nheld++] = d;
         }
         // AdvanceFrame: the GPU two frames behind (sometimes three), the frame on, the pending ones, a prune
@@ -219,9 +224,9 @@ static void reset(void)
 
 int main(void)
 {
-    if (sizeof(void *) != 4) { printf("unitypool: the layouts read are 32-bit ARM players'; skipped\n"); return 0; }
-    L = &g_layouts[0];
-    U32(g_caps, 0x470) = 1024;
+    L = &g_layouts[sizeof(void *) == 4 ? 0 : 1];        // the layout whose field sizes this build reads
+    CHECK((strstr(L->unity, "arm64") != NULL) == (sizeof(void *) == 8), "layout %s on %zu-byte pointers", L->unity, sizeof(void *));
+    CAPS_MIN = 1024;
     o_acquire = m_acquire; o_release = m_release; o_live = m_live; o_prune = m_prune;
     o_clear = m_clear; o_invalidate = m_clear; o_dtor = NULL; o_caps = m_caps;
 
@@ -241,7 +246,7 @@ int main(void)
     reset(); g_m = NULL;
     for (int i = 0; i < 300; i++) {                     // drawn 100 .. 1 frames before the prune's frame
         dbuf *d = m_acquire(g_mgr, 64u * (1 + i % 50), 7, NULL, 0);
-        U32(d->f, 0x24) = 600u + (uint32_t)i / 3;
+        DRAWN(d) = 600u + (uint32_t)i / 3;
         h_release(g_mgr, d);
     }
     FRAME = 700; DONE = 699;
@@ -257,6 +262,6 @@ int main(void)
     check_lists("prune");
 
     if (fails) { printf("%d failures\n", fails); return 1; }
-    printf("unitypool: ok\n");
+    printf("unitypool: ok (the layout of libunity %s)\n", L->unity);
     return 0;
 }
