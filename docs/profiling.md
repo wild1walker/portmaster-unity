@@ -1144,6 +1144,10 @@ goes is the painted far wall, its waterfalls and the far hanging vines: the fog 
 shafts then stand before black. A cut at the blur plane is the one the game defines itself; a
 deeper one (everything behind z 3) needs a plane the port invents, and takes more of the picture.
 
+On the RG34XX-SP (Knulli, the release's 1 GB settings, Greenpath's bench walk, A B A B, 2026-11-12):
+`off` 53.1 / 53.1 fps walking (54.0 / 53.6 steady), `off,hide` 55.9 / 55.8 (55.4 / 56.4): +5 %, the
+same in both pairs; memory the same (the objects stay loaded).
+
 For the handheld: `UA_DUMP_OFF_Z=-100,3` and `ASMPATCH_HK_BLUR=off,hide` against the release's
 settings in one hold, each run from a cool start (the clock's fall decides as much as the work:
 41.7 against 33.7 fps).
