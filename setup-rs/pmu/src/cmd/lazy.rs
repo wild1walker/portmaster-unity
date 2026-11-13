@@ -162,17 +162,22 @@ fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
         let mut total = 0;
         for (name, i) in &files {
             let p = take_out(&zips[*i].1, name, &one)?;
-            let len = std::fs::metadata(&p).map_err(|e| e.to_string())?.len();
             if let Ok(mut f) = unityfs::DataFile::open(&p, &opts) {
                 let n = lazy::edit(&mut f, name, &drop).map_err(|e| format!("{name}: {e}"))?;
                 if n > 0 {
-                    let q = out.join(name);
-                    f.write_to(&q, false).map_err(|e| format!("{name}: {e}"))?;
-                    let nl = std::fs::metadata(&q).map_err(|e| e.to_string())?.len();
-                    if nl != len {
-                        let _ = std::fs::remove_dir_all(&work);
-                        return Err(format!("{name}: {nl} bytes after the edit, {len} before: the game is left as it was"));
+                    // the file's own bytes with each edited object's new bytes in its place (the edit keeps every
+                    // object's length): the file is not written again by unityfs, whose layout can differ by padding
+                    let mut bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+                    for o in f.sf.objects.iter().filter(|o| o.data.is_some()) {
+                        let nb = o.data.as_ref().unwrap();
+                        let (at, sz) = (o.byte_start as usize, o.byte_size as usize);
+                        if nb.len() != sz || at + sz > bytes.len() {
+                            let _ = std::fs::remove_dir_all(&work);
+                            return Err(format!("{name}: object {} is {} bytes after the edit, {sz} before: the game is left as it was", o.path_id, nb.len()));
+                        }
+                        bytes[at..at + sz].copy_from_slice(nb);
                     }
+                    std::fs::write(out.join(name), &bytes).map_err(|e| e.to_string())?;
                     total += n;
                 }
             }

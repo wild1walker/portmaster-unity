@@ -329,6 +329,15 @@ written over their entries as `pmu video` writes its clips (stored, the same len
 all again. The work folder holds at most the changed files and one file being read: Hollow Knight's 499 changed
 serialized files are 233 MB (the update step asks for 500 MB free).
 
+An edited file is the original's bytes with each edited object's new bytes spliced in at its own offset, not
+unityfs's `write_to`: the writer lays a file out again (its own padding and alignment), and on Hollow Knight's
+sharedassets104 that came to 35552 bytes for an original of 35545, so a same-length entry overwrite would have
+refused the install. The edit keeps every object's length, so the splice keeps the file's; an object whose length
+changed stops the run with the game left as it was. Checked on a full copy of Hollow Knight's data (386 MB, 504
+serialized files): the 499 changed entries byte-identical to the step's reference output, `unzip -t` clean, the
+other entries untouched, a second run changes nothing (0 entries found to replace). On a BattleXP G350 (dArkOS) the installed
+1.9 GB APK took 1 min 58 s (a second run 52 s, nothing to change), every changed byte the reference's.
+
 ### `pmu il2cpp`
 
 `pmu il2cpp <data> <out> --on-device [--abi --home --pkg --jobs --keep-cpp --strip --unity
