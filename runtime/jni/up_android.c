@@ -634,6 +634,47 @@ static int apk_read_asset(const char *apk, const char *name, char **out, size_t 
     return zip_entry(apk, want, out, outlen);
 }
 
+/* UA_BOOT_CONFIG='<key>=<value> ...' (separated by spaces or ';'): boot.config as Unity reads it at launch gets these
+ * lines, a key the data has replaced, as if the data had them: Unity's settings it reads before the command line
+ * (the memorysetup-* sizes of its allocators: MemoryManager reads them before the command line is parsed, so
+ * -memorysetup-... in UA_UNITY_ARGS comes too late). The APK is not changed. */
+static void boot_config_merge(stream *s)
+{
+    const char *e = getenv("UA_BOOT_CONFIG");
+    if (!e || !*e) return;
+    char *spec = strdup(e);
+    size_t cap = s->len + strlen(e) + 64;
+    char *out = malloc(cap);
+    if (!spec || !out) { free(spec); free(out); return; }
+    size_t n = 0;
+    /* the data's lines, but those whose key the override names */
+    for (const char *l = s->buf, *end = s->buf + s->len; l < end; ) {
+        const char *nl = memchr(l, '\n', end - l);
+        size_t ll = nl ? (size_t)(nl - l) : (size_t)(end - l);
+        const char *eq = memchr(l, '=', ll);
+        int keep = 1;
+        if (eq) {
+            size_t kl = eq - l;
+            for (const char *t = spec; *t; ) {
+                while (*t == ' ' || *t == ';' || *t == '\t' || *t == '\n') t++;
+                size_t tl = strcspn(t, " ;\t\n");
+                if (tl > kl && t[kl] == '=' && !memcmp(t, l, kl)) keep = 0;
+                t += tl;
+            }
+        }
+        if (keep) { memcpy(out + n, l, ll); n += ll; out[n++] = '\n'; }
+        l += ll + (nl ? 1 : 0);
+    }
+    for (char *t = strtok(spec, " ;\t\n"); t; t = strtok(NULL, " ;\t\n")) {
+        if (!strchr(t, '=') || n + strlen(t) + 2 > cap) continue;
+        n += (size_t)sprintf(out + n, "%s\n", t);
+        up_log("boot.config: %s (UA_BOOT_CONFIG)", t);
+    }
+    out[n] = 0;
+    free(spec); free(s->buf);
+    s->buf = out; s->len = n;
+}
+
 H(asset_open)
 {
     const char *name = jstr(a[0]);
@@ -657,7 +698,10 @@ H(asset_open)
         }
     }
     else if (UPC.apk_path && apk_read_asset(UPC.apk_path, name, &s->buf, &s->len) == 0)
+    {
+        if (!strcmp(name, "bin/Data/boot.config")) boot_config_merge(s);
         return fj_l(fj_new_by_name("java/io/InputStream", s, stream_free));
+    }
     free(s);
     up_log("AssetManager.open(%s): not found in %s", name, dir ? dir : UPC.apk_path ? UPC.apk_path : "(no APK)");
     fj_throw(env, "java/io/FileNotFoundException", name);

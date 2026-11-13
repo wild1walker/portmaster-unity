@@ -54,6 +54,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "mono64.h"
 #include "unityhooks.h"
 #include "monodump.h"
+#include "memledger.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -576,6 +577,7 @@ int main(int argc, char **argv)
     prof_init(root);                           // UA_PROF
     threads_init();                            // UA_AFFINITY, UA_NICE
     so_add_shims(futex_table());               // UA_FUTEX_STATS, UA_FUTEX_SPIN: Baselib's futex calls
+    so_add_shims(memledger_table());           // UA_MEM_LEDGER: who mapped what (the census reports it)
     so_set_load_hook(on_load);                 // libunity (unityhooks.c), libmono (monoinvoke.c)
     // GL wrappers, each calling the next: the player -> glmemo.c (off while UA_GL_REC or UA_GL_RENAME is
     // on) -> glrec.c (UA_GL_REC: it calls glspec.c's layer

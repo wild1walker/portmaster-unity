@@ -25,9 +25,16 @@
 //                           scripts, Animators and particle systems stop too) ("[dump] off z: ...")
 //   UA_DUMP_TEXTURES=<s>[,<s>...]  <s> seconds after the first frame (up to 16 times), UnityMain logs every texture Unity
 //                           holds (Resources.FindObjectsOfTypeAll(Texture)): class, size, format (Texture2D's
-//                           TextureFormat, RenderTexture's RenderTextureFormat), mip levels and name ("[dump] texture
-//                           ..."), then their count, and the meshes (count, vertices, how many readable, those of
-//                           1000 vertices or more by name): what a scene's memory is (a memory census)
+//                           TextureFormat, RenderTexture's RenderTextureFormat), mip levels, the bytes its format and
+//                           size take in the GPU's memory, readable or not, and name ("[dump] texture ..."), then the
+//                           totals, the meshes (count, vertices, vertex and index bytes, how many readable, those of
+//                           1000 vertices or more by name), the loaded AudioClips by load type, every object Unity
+//                           holds counted by class, and Unity's own totals (the Profiler's allocated and reserved
+//                           memory where a release player answers them, the texture manager's count, the async
+//                           upload buffer): what a scene's memory is (a memory census)
+//   UA_DUMP_MEMORY=<s>[,<s>...]  the same census without a line per texture, mesh or clip; with the word req among the
+//                           times, last (UA_DUMP_MEMORY=req, UA_DUMP_TEXTURES=60,req), also whenever a file census.req appears in
+//                           the game's folder (looked for every 30 frames; removed): a bench's plan step asks for one
 //   UA_DUMP_INPUT=<name>[,<name>...]  what the game's scripts read from Unity's input (the Input Manager's, "legacy"),
 //                           asked after every frame on UnityMain and logged when it crosses half travel:
 //                           Input.GetAxisRaw(<name>), or with key:<name> Input.GetKey(<name>) (up to 8, e.g.
@@ -35,6 +42,12 @@
 //                           <old> -> <new>", the clock of UA_INPUT_LOG's lines: how long after the host sent a
 //                           press the game could read it, and whether every one arrived). A name Unity refuses
 //                           is dropped with a line. It makes a managed string per name and frame: a test aid.
+//   UA_UNLOAD_ASSETS=<name>[|<name>...]  (a memory setting) those loaded Textures and Fonts given back with
+//                           Resources.UnloadAsset after the first frames and after each new active scene; Unity loads
+//                           them again from disk if anything uses them (unload_assets below)
+//   UA_ASYNC_UPLOAD=<MB>[,transient]  (a memory setting, not a dump) Unity's async upload ring buffer: its size
+//                           (QualitySettings.asyncUploadBufferSize) and, with "transient", given back when idle
+//                           (asyncUploadPersistentBuffer false), set once after the first frame through Unity's setters
 // Everything else is read through public UnityEngine properties (Object.FindObjectsOfType and getters), on
 // UnityMain after a frame, as a script of the game would; nothing is changed.
 //   UA_FLIPBOOK=<controller>,...|@<file>  a stand-in for Unity's Animator on sprite flip-books: the managed assembly
@@ -53,6 +66,7 @@
 
 #include "../loader/so_loader.h"
 #include "monodump.h"
+#include "memledger.h"
 
 #include "frames.h"
 #include "hitches.h"
@@ -278,7 +292,63 @@ static void dump(void)
 }
 
 // the named GameObject's and the main camera's positions, one write (another thread's [hitch] line must not land inside it)
-static void textures(void)
+// a texture level's bytes in the GPU's memory: Unity's TextureFormat (Texture2D) numbers; -1 for one not known here
+static long long tex_level_bytes(int fmt, int w, int h)
+{
+    int bw = 1, bh = 1, bb;                 // block width, height (texels), bytes
+    switch (fmt) {
+    case 1: case 63: case 75: bb = 1; break;                                         // Alpha8, R8, R8_SIGNED
+    case 2: case 7: case 9: case 13: case 15: case 21: case 62: case 76: case 79: bb = 2; break;
+    case 3: case 77: bb = 3; break;                                                  // RGB24
+    case 4: case 5: case 14: case 16: case 18: case 22: case 72: case 78: case 80: bb = 4; break;   // RGBA32, ARGB32, BGRA32, ...
+    case 73: case 81: bb = 6; break;
+    case 17: case 19: case 74: case 82: bb = 8; break;                               // RGBAHalf, RGFloat, RGBA64
+    case 20: bb = 16; break;                                                          // RGBAFloat
+    case 10: case 26: case 28: case 34: case 41: case 42: case 45: case 46: case 64: bw = bh = 4; bb = 8; break;   // DXT1, BC4, ETC, ETC2 RGB, EAC R
+    case 12: case 24: case 25: case 27: case 29: case 43: case 44: case 47: case 65: bw = bh = 4; bb = 16; break;  // DXT5, BC6H, BC7, BC5, EAC RG, ETC2 RGBA8
+    case 48: case 54: case 66: bw = bh = 4; bb = 16; break;                          // ASTC 4x4 (LDR, the old RGBA name, HDR)
+    case 49: case 55: case 67: bw = bh = 5; bb = 16; break;
+    case 50: case 56: case 68: bw = bh = 6; bb = 16; break;
+    case 51: case 57: case 69: bw = bh = 8; bb = 16; break;
+    case 52: case 58: case 70: bw = bh = 10; bb = 16; break;
+    case 53: case 59: case 71: bw = bh = 12; bb = 16; break;
+    default: return -1;
+    }
+    return (long long)((w + bw - 1) / bw) * ((h + bh - 1) / bh) * bb;
+}
+// a RenderTexture's bytes a texel: Unity's RenderTextureFormat numbers
+static int rt_texel_bytes(int fmt)
+{
+    switch (fmt) {
+    case 16: return 1;                                                               // R8
+    case 4: case 5: case 6: case 15: case 25: case 28: return 2;                     // RGB565, ARGB4444, ARGB1555, RHalf, RG16, R16
+    case 2: case 9: case 10: case 12: case 18: case 24: case 26: return 8;           // ARGBHalf, DefaultHDR, ARGB64, RGFloat, RGInt, RGBAUShort
+    case 11: case 17: return 16;                                                     // ARGBFloat, ARGBInt
+    default: return 4;                                                               // ARGB32, Depth, Shadowmap, Default, BGRA32, RGHalf, ...
+    }
+}
+static long long call_i64(MonoClass *k, const char *name)   // a static method or getter of no arguments that returns a long / ulong
+{
+    MonoMethod *m = k ? m_method_from_name(k, name, 0) : NULL;
+    MonoObject *exc = NULL, *r = m ? m_invoke(m, NULL, NULL, &exc) : NULL;
+    long long v = -1;
+    if (r && !exc) memcpy(&v, m_unbox(r), sizeof v);
+    return v;
+}
+static int call_i32(MonoClass *k, const char *name)        // ... an int, uint or bool (a bool's other bytes are 0)
+{
+    MonoMethod *m = k ? m_method_from_name(k, name, 0) : NULL;
+    MonoObject *exc = NULL, *r = m ? m_invoke(m, NULL, NULL, &exc) : NULL;
+    if (!r || exc) return -1;
+    const char *cn = m_class_get_name(m_object_get_class(r));
+    if (!strcmp(cn, "Boolean")) return *(unsigned char *)m_unbox(r);
+    int v; memcpy(&v, m_unbox(r), sizeof v);
+    return v;
+}
+#define MB(x) ((double)(x) / (1 << 20))
+
+// UA_DUMP_TEXTURES / UA_DUMP_MEMORY: what Unity holds, as a script can read it. list: every texture by name too
+static void census(int list)
 {
     if (!load()) return;
     MonoDomain *dom = m_domain_get();
@@ -286,50 +356,186 @@ static void textures(void)
     if (!core) core = m_image_loaded("UnityEngine");
     MonoClass *k_res = core ? m_class_from_name(core, "UnityEngine", "Resources") : NULL;
     MonoClass *k_tex = core ? m_class_from_name(core, "UnityEngine", "Texture") : NULL;
+    MonoClass *k_obj = core ? m_class_from_name(core, "UnityEngine", "Object") : NULL;
     MonoMethod *all = k_res ? m_method_from_name(k_res, "FindObjectsOfTypeAll", 1) : NULL;
     if (!k_tex || !all) { fprintf(stderr, "[dump] Resources.FindObjectsOfTypeAll(Type) or Texture not found\n"); return; }
+    // Unity's own totals (the Profiler's, where a release player answers them), the texture manager's, the upload buffer
+    MonoClass *k_prof = m_class_from_name(core, "UnityEngine.Profiling", "Profiler");
+    MonoClass *k_q = m_class_from_name(core, "UnityEngine", "QualitySettings");
+    int prof_ok = call_i32(k_prof, "get_supported");
+    fprintf(stderr, "[dump] unity memory: allocated %.1f MB, reserved %.1f MB (unused %.1f), mono heap %.1f MB (used %.1f), temp allocator %.1f MB, "
+            "graphics driver %.1f MB, profiler supported %d\n",
+            MB(call_i64(k_prof, "GetTotalAllocatedMemoryLong")), MB(call_i64(k_prof, "GetTotalReservedMemoryLong")),
+            MB(call_i64(k_prof, "GetTotalUnusedReservedMemoryLong")), MB(call_i64(k_prof, "GetMonoHeapSizeLong")),
+            MB(call_i64(k_prof, "GetMonoUsedSizeLong")), MB((unsigned)call_i32(k_prof, "GetTempAllocatorSize")),
+            MB(call_i64(k_prof, "GetAllocatedMemoryForGraphicsDriver")), prof_ok);
+    fprintf(stderr, "[dump] texture memory (Unity's count): current %.1f MB, total %.1f MB, non-streaming %.1f MB, desired %.1f MB; "
+            "async upload buffer %d MB, persistent %d, time slice %d ms; mipmap limit %d\n",
+            MB(call_i64(k_tex, "get_currentTextureMemory")), MB(call_i64(k_tex, "get_totalTextureMemory")),
+            MB(call_i64(k_tex, "get_nonStreamingTextureMemory")), MB(call_i64(k_tex, "get_desiredTextureMemory")),
+            call_i32(k_q, "get_asyncUploadBufferSize"), call_i32(k_q, "get_asyncUploadPersistentBuffer"),
+            call_i32(k_q, "get_asyncUploadTimeSlice"), call_i32(k_q, "get_globalTextureMipmapLimit"));
+    MonoMethod *rtsize = k_prof && prof_ok > 0 ? m_method_from_name(k_prof, "GetRuntimeMemorySizeLong", 1) : NULL;
+
+    // the textures: estimated bytes in the GPU's memory, and the CPU copies of readable ones
     void *args[1] = { m_type_get_object(dom, m_class_get_type(k_tex)) };
     MonoObject *exc = NULL;
     MonoArray *arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
     if (!arr || exc) { fprintf(stderr, "[dump] FindObjectsOfTypeAll failed\n"); return; }
     uintptr_t n = array_length(arr);
+    long long t2d = 0, t2d_read = 0, rt = 0, other = 0, unknown = 0; int n2d = 0, nread = 0, nrt = 0, nrt_live = 0, nother = 0;
     for (uintptr_t i = 0; i < n; i++) {
         MonoObject *t = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
         if (!t) continue;
         const char *cls = m_class_get_name(m_object_get_class(t));
-        int w = 0, h = 0, fmt = -1, mips = 1;
+        int w = 0, h = 0, fmt = -1, mips = 1, readable = 0;
         char nm[96];
         geti(t, "get_width", &w); geti(t, "get_height", &h);
         geti(t, "get_format", &fmt);                  // Texture2D: TextureFormat; RenderTexture: RenderTextureFormat
         geti(t, "get_mipmapCount", &mips);
-        name_of(t, nm, sizeof nm);
-        fprintf(stderr, "[dump] texture %s %dx%d fmt %d mips %d %s\n", cls, w, h, fmt, mips, nm[0] ? nm : "-");
-    }
-    fprintf(stderr, "[dump] textures: %lu\n", (unsigned long)n);
-    // and the meshes: how many, their vertices, how many keep a copy readable by scripts
-    MonoClass *k_mesh = m_class_from_name(core, "UnityEngine", "Mesh");
-    if (!k_mesh) return;
-    args[0] = m_type_get_object(dom, m_class_get_type(k_mesh));
-    exc = NULL;
-    arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
-    if (!arr || exc) return;
-    n = array_length(arr);
-    long long verts = 0, big = 0; int readable = 0;
-    for (uintptr_t i = 0; i < n; i++) {
-        MonoObject *m = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
-        int v = 0, r = 0;
-        if (!m || !geti(m, "get_vertexCount", &v)) continue;
-        verts += v;
-        MonoObject *rd = call(m, "get_isReadable", NULL, 0);
-        if (rd && *(unsigned char *)m_unbox(rd)) r = 1;
-        readable += r;
-        if (v >= 1000) {
-            char nm[96]; name_of(m, nm, sizeof nm);
-            fprintf(stderr, "[dump] mesh %d vertices%s %s\n", v, r ? " readable" : "", nm[0] ? nm : "-");
-            big += v;
+        MonoObject *rd = call(t, "get_isReadable", NULL, 0);
+        if (rd) readable = *(unsigned char *)m_unbox(rd);
+        long long bytes = 0;
+        char extra[96] = "";
+        if (!strcmp(cls, "RenderTexture")) {
+            int depth = 0, aa = 1, mip = 0, created = 0;
+            geti(t, "get_depth", &depth); geti(t, "get_antiAliasing", &aa);
+            MonoObject *o = call(t, "get_useMipMap", NULL, 0); if (o) mip = *(unsigned char *)m_unbox(o);
+            o = call(t, "IsCreated", NULL, 0); if (o) created = *(unsigned char *)m_unbox(o);
+            bytes = (long long)w * h * (rt_texel_bytes(fmt) + (depth ? (depth > 16 ? 4 : 2) : 0)) * (aa > 1 ? aa : 1);
+            if (mip) bytes = bytes * 4 / 3;
+            if (!created) bytes = 0;
+            nrt++; nrt_live += created; rt += bytes;
+            snprintf(extra, sizeof extra, " depth %d msaa %d%s%s", depth, aa, mip ? " mips" : "", created ? "" : " (not created)");
+        } else {
+            int layers = 1;
+            if (!strcmp(cls, "Cubemap")) layers = 6;
+            else if (!strcmp(cls, "Texture2DArray") || !strcmp(cls, "Texture3D")) geti(t, "get_depth", &layers);
+            int lw = w, lh = h;
+            for (int l = 0; l < (mips > 0 ? mips : 1); l++) {
+                long long b = tex_level_bytes(fmt, lw, lh);
+                if (b < 0) { bytes = -1; break; }
+                bytes += b * layers;
+                lw = lw > 1 ? lw / 2 : 1; lh = lh > 1 ? lh / 2 : 1;
+            }
+            if (bytes < 0) { unknown++; bytes = 0; }
+            if (!strcmp(cls, "Texture2D")) { n2d++; t2d += bytes; if (readable) { nread++; t2d_read += bytes; } }
+            else { nother++; other += bytes; }
+        }
+        if (list) {
+            name_of(t, nm, sizeof nm);
+            long long rsz = -1;
+            if (rtsize) { void *a1[1] = { t }; MonoObject *e2 = NULL, *r = m_invoke(rtsize, NULL, a1, &e2); if (r && !e2) memcpy(&rsz, m_unbox(r), sizeof rsz); }
+            char rs[48] = "";
+            if (rsz >= 0) snprintf(rs, sizeof rs, " (Unity: %.2f MB)", MB(rsz));
+            fprintf(stderr, "[dump] texture %s %dx%d fmt %d mips %d %.2f MB%s%s%s %s\n", cls, w, h, fmt, mips, MB(bytes), rs,
+                    readable ? " readable" : "", extra, nm[0] ? nm : "-");
         }
     }
-    fprintf(stderr, "[dump] meshes: %lu, %lld vertices (%lld in meshes of 1000 or more), %d readable\n", (unsigned long)n, verts, big, readable);
+    fprintf(stderr, "[dump] textures: %lu; Texture2D %d, %.1f MB (readable %d, %.1f MB more in the CPU's memory); RenderTexture %d (%d created), %.1f MB; "
+            "others %d, %.1f MB; %lld of formats not counted\n",
+            (unsigned long)n, n2d, MB(t2d), nread, MB(t2d_read), nrt, nrt_live, MB(rt), nother, MB(other), unknown);
+    // the meshes: vertex and index bytes (the GPU's), the CPU copies of readable ones
+    MonoClass *k_mesh = m_class_from_name(core, "UnityEngine", "Mesh");
+    if (k_mesh) {
+        args[0] = m_type_get_object(dom, m_class_get_type(k_mesh));
+        exc = NULL;
+        arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
+        n = arr && !exc ? array_length(arr) : 0;
+        long long verts = 0, big = 0, mbytes = 0, rbytes = 0; int readable = 0;
+        for (uintptr_t i = 0; i < n; i++) {
+            MonoObject *m = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+            int v = 0, r = 0, streams = 0, subs = 0, ifmt = 0;
+            if (!m || !geti(m, "get_vertexCount", &v)) continue;
+            verts += v;
+            MonoObject *rd = call(m, "get_isReadable", NULL, 0);
+            if (rd && *(unsigned char *)m_unbox(rd)) r = 1;
+            readable += r;
+            geti(m, "get_vertexBufferCount", &streams); geti(m, "get_subMeshCount", &subs); geti(m, "get_indexFormat", &ifmt);
+            long long b = 0;
+            for (int s = 0; s < streams && s < 8; s++) {
+                int st = 0; void *a1[1] = { &s };
+                MonoObject *o = call(m, "GetVertexBufferStride", a1, 1);
+                if (o) memcpy(&st, m_unbox(o), sizeof st);
+                b += (long long)st * v;
+            }
+            for (int s = 0; s < subs && s < 256; s++) {
+                unsigned ic = 0; void *a1[1] = { &s };
+                MonoObject *o = call(m, "GetIndexCount", a1, 1);
+                if (o) memcpy(&ic, m_unbox(o), sizeof ic);
+                b += (long long)ic * (ifmt ? 4 : 2);
+            }
+            mbytes += b; if (r) rbytes += b;
+            if (v >= 1000 && list) {
+                char nm[96]; name_of(m, nm, sizeof nm);
+                fprintf(stderr, "[dump] mesh %d vertices %.2f MB%s %s\n", v, MB(b), r ? " readable" : "", nm[0] ? nm : "-");
+            }
+            if (v >= 1000) big += v;
+        }
+        fprintf(stderr, "[dump] meshes: %lu, %lld vertices (%lld in meshes of 1000 or more), %.1f MB of vertices and indices; %d readable, %.1f MB of them\n",
+                (unsigned long)n, verts, big, MB(mbytes), readable, MB(rbytes));
+    }
+    // the sounds: how each AudioClip is loaded; decompressed on load = 16-bit PCM in FMOD's memory
+    MonoImage *audio = m_image_loaded("UnityEngine.AudioModule");
+    MonoClass *k_clip = audio ? m_class_from_name(audio, "UnityEngine", "AudioClip") : NULL;
+    if (k_clip) {
+        args[0] = m_type_get_object(dom, m_class_get_type(k_clip));
+        exc = NULL;
+        arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
+        n = arr && !exc ? array_length(arr) : 0;
+        int cnt[3] = { 0 }, loaded[3] = { 0 };
+        long long pcm = 0, secs[3] = { 0 };
+        for (uintptr_t i = 0; i < n; i++) {
+            MonoObject *c = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+            int lt = -1, st = 0, samples = 0, ch = 0, fq = 0;
+            if (!c || !geti(c, "get_loadType", &lt) || lt < 0 || lt > 2) continue;
+            geti(c, "get_loadState", &st); geti(c, "get_samples", &samples); geti(c, "get_channels", &ch); geti(c, "get_frequency", &fq);
+            cnt[lt]++;
+            if (st == 2) { loaded[lt]++; if (fq > 0) secs[lt] += samples / fq; if (lt == 0) pcm += (long long)samples * ch * 2; }
+            if (list && st == 2) {
+                char nm[96]; name_of(c, nm, sizeof nm);
+                fprintf(stderr, "[dump] clip %s load type %d %d Hz %d ch %.1f s%s\n", nm, lt, fq, ch, fq > 0 ? (double)samples / fq : 0.0,
+                        lt == 0 ? "" : lt == 1 ? " (compressed in memory)" : " (streamed)");
+            }
+        }
+        fprintf(stderr, "[dump] sounds: %lu clips; decompressed on load %d (%d loaded, %lld s, %.1f MB of PCM), compressed in memory %d (%d loaded, %lld s), "
+                "streamed %d (%d loaded, %lld s)\n", (unsigned long)n, cnt[0], loaded[0], secs[0], MB(pcm), cnt[1], loaded[1], secs[1],
+                cnt[2], loaded[2], secs[2]);
+    }
+    // every object Unity holds, by class (with GetRuntimeMemorySizeLong's bytes where the player answers it)
+    if (k_obj) {
+        args[0] = m_type_get_object(dom, m_class_get_type(k_obj));
+        exc = NULL;
+        arr = (MonoArray *)m_invoke(all, NULL, args, &exc);
+        n = arr && !exc ? array_length(arr) : 0;
+        enum { NK = 1024 };
+        static MonoClass *ks[NK]; static int kc[NK]; static long long kb[NK];
+        int nk = 0;
+        memset(kc, 0, sizeof kc); memset(kb, 0, sizeof kb);
+        for (uintptr_t i = 0; i < n; i++) {
+            MonoObject *o = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+            if (!o) continue;
+            MonoClass *k = m_object_get_class(o);
+            int j = 0;
+            while (j < nk && ks[j] != k) j++;
+            if (j == nk) { if (nk == NK) continue; ks[nk++] = k; }
+            kc[j]++;
+            if (rtsize) { void *a1[1] = { o }; MonoObject *e2 = NULL, *r = m_invoke(rtsize, NULL, a1, &e2); long long b = 0; if (r && !e2) memcpy(&b, m_unbox(r), sizeof b); kb[j] += b; }
+        }
+        // the 40 biggest classes by count (by bytes where known)
+        char line[4096]; int len = snprintf(line, sizeof line, "[dump] objects: %lu of %d classes:", (unsigned long)n, nk);
+        for (int shown = 0; shown < 40; shown++) {
+            int best = -1;
+            for (int j = 0; j < nk; j++) if (kc[j] > 0 && (best < 0 || (rtsize ? kb[j] > kb[best] : kc[j] > kc[best]))) best = j;
+            if (best < 0) break;
+            if (len < (int)sizeof line - 80)
+                len += rtsize ? snprintf(line + len, sizeof line - len, " %s %d (%.1f MB)", m_class_get_name(ks[best]), kc[best], MB(kb[best]))
+                              : snprintf(line + len, sizeof line - len, " %s %d", m_class_get_name(ks[best]), kc[best]);
+            kc[best] = -kc[best];
+        }
+        fprintf(stderr, "%s\n", line);
+    }
+    memledger_report();                     // who mapped what (UA_MEM_LEDGER), glibc's malloc arenas
 }
 
 static void hero(const char *name, double t)
@@ -641,14 +847,156 @@ static void input_probe(void)
     }
 }
 
+// UA_ASYNC_UPLOAD=<MB>[,transient] | transient: Unity's ring buffer for asynchronous texture and mesh uploads
+// (QualitySettings.asyncUploadBufferSize, MB; asyncUploadPersistentBuffer): its size, and with "transient" the buffer
+// given back when no upload is pending instead of kept for the game's life. Set once from UnityMain after the first
+// frame, through Unity's own setters; the uploads are the same, a bigger load may take more frames. A memory setting.
+static void async_upload(void)
+{
+    static int done;
+    if (done) return;
+    done = 1;
+    const char *e = getenv("UA_ASYNC_UPLOAD");
+    if (!e || !*e || !load()) return;
+    MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+    MonoClass *k_q = core ? m_class_from_name(core, "UnityEngine", "QualitySettings") : NULL;
+    if (!k_q) { fprintf(stderr, "[dump] UA_ASYNC_UPLOAD: QualitySettings not found\n"); return; }
+    int was_mb = call_i32(k_q, "get_asyncUploadBufferSize"), was_p = call_i32(k_q, "get_asyncUploadPersistentBuffer");
+    int mb = atoi(e);
+    MonoObject *exc = NULL;
+    if (mb > 0) {
+        MonoMethod *m = m_method_from_name(k_q, "set_asyncUploadBufferSize", 1);
+        void *a1[1] = { &mb };
+        if (m) m_invoke(m, NULL, a1, &exc);
+    }
+    if (strstr(e, "transient")) {
+        MonoMethod *m = m_method_from_name(k_q, "set_asyncUploadPersistentBuffer", 1);
+        unsigned char no = 0; void *a1[1] = { &no };
+        if (m) m_invoke(m, NULL, a1, &exc);
+    }
+    fprintf(stderr, "[dump] UA_ASYNC_UPLOAD: async upload buffer %d MB%s -> %d MB%s\n", was_mb, was_p > 0 ? " (persistent)" : "",
+            call_i32(k_q, "get_asyncUploadBufferSize"), call_i32(k_q, "get_asyncUploadPersistentBuffer") > 0 ? " (persistent)" : " (transient)");
+}
+
+// UA_UNLOAD_ASSETS=<name>[|<name>...]: loaded Textures and Fonts of those names (exact) given back with Unity's
+// Resources.UnloadAsset after the first frames and again after every change of the active scene (a scene's own references
+// can load them again): their memory (a texture's GPU copy, a font's file data) is freed and Unity loads them from disk
+// again if anything uses them later (its documented behaviour for an asset unloaded this way), so a game that needs them
+// draws the same, after a load. One found loaded again after it was given back is in use and kept from then on (at most
+// one reload for a game that shows it, never one at every scene change). After three scene changes in a row where
+// none of them was loaded again the checks stop. For assets a game keeps loaded but shows only in some cases (another language's font
+// atlases). Logged: "[dump] unloaded <class> <name> (<w>x<h>)". UA_UNLOAD_ASSETS_AT=<s> the first pass's time (default 8).
+static char g_unloaded[2048] = "|";     // the names given back so far
+static void note_unloaded(const char *nm)
+{
+    size_t l = strlen(g_unloaded);
+    if (l + strlen(nm) + 2 < sizeof g_unloaded) snprintf(g_unloaded + l, sizeof g_unloaded - l, "%s|", nm);
+}
+static int unloaded_before(const char *nm)
+{
+    char key[132]; snprintf(key, sizeof key, "|%s|", nm);
+    return strstr(g_unloaded, key) != NULL;
+}
+static void unload_assets(void)
+{
+    static int state = -1, frames, pending, quiet;
+    static double t0, first = 8, due;
+    static MonoMethod *unload, *find_all, *get_active, *scene_handle;
+    static MonoObject *types[2];
+    static int last_handle = -12345;
+    static char names[2048];
+    if (!state) return;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (state < 0) {
+        const char *e = getenv("UA_UNLOAD_ASSETS");
+        state = 0;
+        if (!e || !*e || !load()) return;
+        snprintf(names, sizeof names, "|%s|", e);
+        const char *at = getenv("UA_UNLOAD_ASSETS_AT");
+        if (at && atof(at) > 0) first = atof(at);
+        MonoImage *core = m_image_loaded("UnityEngine.CoreModule"), *text = m_image_loaded("UnityEngine.TextRenderingModule");
+        MonoClass *k_res = core ? m_class_from_name(core, "UnityEngine", "Resources") : NULL;
+        MonoClass *k_tex = core ? m_class_from_name(core, "UnityEngine", "Texture") : NULL;
+        MonoClass *k_font = text ? m_class_from_name(text, "UnityEngine", "Font") : NULL;
+        MonoClass *k_sm = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "SceneManager") : NULL;
+        MonoClass *k_scene = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "Scene") : NULL;
+        unload = k_res ? m_method_from_name(k_res, "UnloadAsset", 1) : NULL;
+        find_all = k_res ? m_method_from_name(k_res, "FindObjectsOfTypeAll", 1) : NULL;
+        get_active = k_sm ? m_method_from_name(k_sm, "GetActiveScene", 0) : NULL;
+        scene_handle = k_scene ? m_method_from_name(k_scene, "get_handle", 0) : NULL;
+        if (!unload || !find_all || !k_tex) { fprintf(stderr, "[dump] UA_UNLOAD_ASSETS: Resources.UnloadAsset or FindObjectsOfTypeAll not found: off\n"); return; }
+        MonoDomain *dom = m_domain_get();
+        types[0] = m_type_get_object(dom, m_class_get_type(k_tex));
+        types[1] = k_font ? m_type_get_object(dom, m_class_get_type(k_font)) : NULL;
+        t0 = now; due = now + first; pending = 1; state = 1;
+        return;
+    }
+    // the active scene, every 60 frames: a new one, a pass 2 s later
+    if (get_active && scene_handle && ++frames % 60 == 0) {
+        MonoObject *exc = NULL, *sc = m_invoke(get_active, NULL, NULL, &exc);
+        if (sc && !exc) {
+            MonoObject *h = m_invoke(scene_handle, m_unbox(sc), NULL, &exc);
+            int hv = h && !exc ? *(int *)m_unbox(h) : 0;
+            if (hv != last_handle) { last_handle = hv; if (now - t0 > first) { pending = 1; due = now + 2; } }
+        }
+    }
+    if (!pending || now < due) return;
+    pending = 0;
+    int n_un = 0, n_kept = 0;
+    for (int t = 0; t < 2; t++) {
+        if (!types[t]) continue;
+        void *args[1] = { types[t] };
+        MonoObject *exc = NULL;
+        MonoArray *arr = (MonoArray *)m_invoke(find_all, NULL, args, &exc);
+        if (!arr || exc) continue;
+        for (uintptr_t i = 0, n = array_length(arr); i < n; i++) {
+            MonoObject *o = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+            char nm[128], key[132];
+            if (!o) continue;
+            name_of(o, nm, sizeof nm);
+            snprintf(key, sizeof key, "|%s|", nm);
+            char *at = nm[0] ? strstr(names, key) : NULL;
+            if (!at) continue;
+            // an asset that is loaded again after it was given back is in use (its language is the game's, or a scene
+            // shows it): kept from now on, its name taken out of the list
+            if (unloaded_before(nm)) {
+                memmove(at + 1, at + strlen(key), strlen(at + strlen(key)) + 1);
+                n_kept++;
+                fprintf(stderr, "[dump] %s loaded again after it was given back: in use, kept\n", nm);
+                continue;
+            }
+            int w = 0, h = 0;
+            geti(o, "get_width", &w); geti(o, "get_height", &h);
+            const char *cls = m_class_get_name(m_object_get_class(o));
+            void *a1[1] = { o };
+            exc = NULL;
+            m_invoke(unload, NULL, a1, &exc);
+            if (exc) fprintf(stderr, "[dump] UA_UNLOAD_ASSETS: unloading %s %s threw\n", cls, nm);
+            else { n_un++; note_unloaded(nm); fprintf(stderr, "[dump] unloaded %s %s (%dx%d) at %.0f s\n", cls, nm, w, h, now - t0); }
+        }
+    }
+    // passes that find none of them (after the first that gave some back) stop the checks: each walks every texture
+    // and font Unity holds, a few ms on the main thread 2 s after every room change
+    if (!n_un && !n_kept) {
+        fprintf(stderr, "[dump] UA_UNLOAD_ASSETS: none of them loaded at %.0f s\n", now - t0);
+        if (g_unloaded[1] && ++quiet >= 3) {
+            fprintf(stderr, "[dump] UA_UNLOAD_ASSETS: none came back after 3 scene changes: no more checks\n");
+            state = 0;
+        }
+    } else quiet = 0;
+}
+
 void monodump_frame(void)
 {
+    async_upload();
+    unload_assets();
     flipbook_frame();
     hero_place();
     comps_off();
     scenery_off();
     input_probe();
-    static int state = -1, n, next, tn, tnext;   // state -1: not read; 0: off or done; 1: waiting
+    static int state = -1, n, next, tn, tnext, tlist, treq, treq_n;   // state -1: not read; 0: off or done; 1: waiting
     static double at[16], tat[16], t0, period, last;
     static char name[64];
     if (state == 0) return;
@@ -663,6 +1011,8 @@ void monodump_frame(void)
             if (*p && !(*p >= '0' && *p <= '9') && *p != '.') break;
         }
         const char *te = getenv("UA_DUMP_TEXTURES");
+        if (te && *te) tlist = 1; else te = getenv("UA_DUMP_MEMORY");   // (the totals only)
+        if (te && strstr(te, "req")) treq = 1;
         for (char *p = (char *)te; p && *p && tn < 16; ) {
             double s = strtod(p, &p);
             if (s > 0) tat[tn++] = s;
@@ -674,7 +1024,7 @@ void monodump_frame(void)
             char *p; period = strtod(hv, &p);
             snprintf(name, sizeof name, "%s", *p == ',' ? p + 1 : "Knight");
         }
-        state = n || tn || period > 0 ? 1 : 0; t0 = now;
+        state = n || tn || period > 0 || treq ? 1 : 0; t0 = now;
         return;
     }
     if (period > 0 && now - last >= period) {
@@ -687,9 +1037,15 @@ void monodump_frame(void)
         next++;
     }
     if (tnext < tn && now - t0 >= tat[tnext]) {
-        fprintf(stderr, "[dump] textures at %.0f s\n", now - t0);
-        textures();
+        fprintf(stderr, "[dump] %s at %.0f s\n", tlist ? "textures" : "memory", now - t0);
+        census(tlist);
         tnext++;
     }
-    if (next == n && tnext == tn && period <= 0) state = 0;
+    // UA_DUMP_MEMORY=req: a census whenever census.req appears in the game's folder (a bench's plan step), the file removed
+    if (treq && ++treq_n % 30 == 0 && access("census.req", F_OK) == 0) {
+        unlink("census.req");
+        fprintf(stderr, "[dump] %s at %.0f s (census.req)\n", tlist ? "textures" : "memory", now - t0);
+        census(tlist);
+    }
+    if (next == n && tnext == tn && period <= 0 && !treq) state = 0;
 }
