@@ -318,6 +318,59 @@ static void *worker(void *arg)
     return 0;
 }
 
+/* a thread that holds a mutex joins a thread that then waits for that mutex (Unity 2017.4's video player
+   when it switches clips): the waiting thread goes on without the lock, sees the stop flag and ends */
+int usleep(unsigned);
+static struct __attribute__((aligned(8))) { int pad; int32_t m[MUTEX_WORDS]; } J;
+static volatile int j_stop;
+static void *j_thread(void *a)
+{
+    (void)a;
+    usleep(100000);                                        // the joiner holds the lock and joins by now
+    pthread_mutex_lock(J.m);
+    int stop = j_stop;
+    pthread_mutex_unlock(J.m);
+    return (void *)(intptr_t)(stop ? 1 : 2);
+}
+int syn_join_deadlock(void)
+{
+    long t;
+    void *r = 0;
+    pthread_mutex_lock(J.m);                               // a static initializer: the lazily made mutex
+    if (pthread_create(&t, 0, j_thread, 0)) return 1;
+    j_stop = 1;
+    pthread_join(t, &r);
+    pthread_mutex_unlock(J.m);
+    if ((intptr_t)r != 1) return 2;
+    if (pthread_mutex_lock(J.m) || pthread_mutex_unlock(J.m)) return 3;   // still a working mutex
+    return 0;
+}
+
+/* a lost wakeup, as in Unity 2017.4's thread start: the creator checks a flag under the mutex, the new thread sets it
+   and signals without the mutex before the creator waits; the wait must still end (a spurious wakeup) */
+static struct __attribute__((aligned(8))) { int pad; int32_t m[MUTEX_WORDS]; int32_t c[COND_WORDS]; } LW;
+static volatile int lw_flag;
+static void *lw_thread(void *a)
+{
+    (void)a;
+    usleep(10000);
+    lw_flag = 1;
+    pthread_cond_signal(LW.c);                             // nobody waits yet: the signal is lost
+    return 0;
+}
+int syn_lost_wakeup(void)
+{
+    long t;
+    pthread_mutex_lock(LW.m);
+    if (pthread_create(&t, 0, lw_thread, 0)) return 1;
+    int seen = lw_flag;                                    // 0: the thread has not started yet
+    usleep(100000);                                        // it sets the flag and signals now
+    while (!seen) { pthread_cond_wait(LW.c, LW.m); seen = lw_flag; }
+    pthread_mutex_unlock(LW.m);
+    pthread_join(t, 0);
+    return 0;
+}
+
 int syn_thread_test(void)
 {
     if (((uintptr_t)S.mutex & 7) != 4) return 1;         // the layout this test is about

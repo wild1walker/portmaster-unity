@@ -106,6 +106,27 @@ static void *sym(so_module *m, const char *n)
     return p;
 }
 
+static int (*g_join_deadlock)(void), (*g_lost_wakeup)(void);
+static void join_child(int k) { (void)k; alarm(5); _exit(g_join_deadlock()); }
+static void wakeup_child(int k) { (void)k; alarm(5); _exit(g_lost_wakeup()); }
+
+/* a default thread stack too big to map (as an 8 MB one when a 32-bit process has no room left): the loader's
+   pthread_create starts the thread with 1 MB (exit 0: it ran) */
+static volatile int stack_ran;
+static void *stack_thread(void *a) { (void)a; stack_ran = 1; return 0; }
+static void stack_child(int k)
+{
+    (void)k;
+    alarm(5);
+    pthread_attr_t d;
+    pthread_attr_init(&d);
+    if (pthread_attr_setstacksize(&d, ((size_t)-1 - (512u << 20)) & ~(size_t)0xffff) || pthread_setattr_default_np(&d)) _exit(9);
+    pthread_t t;
+    if (pthread_create(&t, NULL, stack_thread, NULL)) _exit(10);
+    pthread_join(t, NULL);
+    _exit(stack_ran ? 0 : 11);
+}
+
 /* a child process runs syn_fortify_fail(k): its stderr and how it ended */
 static int run_child(void (*fn)(int), int k, char *out, size_t n)
 {
@@ -313,6 +334,25 @@ int main(int argc, char **argv)
     CHECK(r == 0, "signals: %d", r);
     r = thread_test();
     CHECK(r == 0, "pthread objects: %d", r);
+    {   /* a mutex holder that joins a thread waiting for that mutex: no deadlock (in a child: one would hang) */
+        g_join_deadlock = (int (*)(void))sym(m[0], "syn_join_deadlock");
+        char out[512] = "";
+        int ws = g_join_deadlock ? run_child(join_child, 0, out, sizeof out) : -1;
+        CHECK(WIFEXITED(ws) && WEXITSTATUS(ws) == 0 && strstr(out, "goes on without the lock"),
+              "join under a held lock: status %#x (SIGALRM: still deadlocked), \"%s\"", ws, out);
+    }
+    {   /* a signal sent before the wait began (lost): the wait still ends (in a child: one would hang) */
+        g_lost_wakeup = (int (*)(void))sym(m[0], "syn_lost_wakeup");
+        char out[512] = "";
+        int ws = g_lost_wakeup ? run_child(wakeup_child, 0, out, sizeof out) : -1;
+        CHECK(WIFEXITED(ws) && WEXITSTATUS(ws) == 0, "lost wakeup: status %#x (SIGALRM: the wait never ended)", ws);
+    }
+    {   /* no room for the default thread stack: the thread starts with 1 MB */
+        char out[1024] = "";
+        int ws = run_child(stack_child, 0, out, sizeof out);
+        CHECK(WIFEXITED(ws) && WEXITSTATUS(ws) == 0 && strstr(out, "with 1 MB it starts"),
+              "thread stacks: status %#x (exit 10: not started), \"%.200s\"", ws, out);
+    }
     snprintf(path, sizeof path, "%s/libsyn_0.so", dir);
     struct stat st;
     stat(path, &st);
