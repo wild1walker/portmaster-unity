@@ -1,6 +1,8 @@
 //! A compressed build's data.unity3d unpacked (unpack.py): the UnityFS archive's files written
 //! next to it (or to another folder), one block at a time (memory: one block), each file to
-//! `<name>.tmp` first and then renamed. Blocks stored, LZ4 or LZMA compressed; formats 6 - 8.
+//! `<name>.tmp` first, synced, and then renamed; the folders synced before the archive is removed
+//! (a handheld that loses power part way finds every file whole, or the archive still there to
+//! unpack again). Blocks stored, LZ4 or LZMA compressed; formats 6 - 8.
 use crate::compress;
 use crate::error::{Error, Result};
 use std::fs::File;
@@ -157,9 +159,13 @@ impl Archive {
             }
             upos += usz as u64;
         }
+        // each file's data on the card before its name: a power cut never leaves a short file
+        // under the name a later run takes for an unpacked one
         for (_, _, _, fo) in &mut outs {
             fo.flush()?;
+            fo.sync_all()?;
         }
+        let mut dirs: Vec<PathBuf> = Vec::new();
         for (a, b, dst, fo) in outs {
             drop(fo);
             let t = tmp(&dst);
@@ -171,8 +177,17 @@ impl Archive {
                 )));
             }
             std::fs::rename(&t, &dst)?;
+            if let Some(d) = dst.parent() {
+                if !dirs.iter().any(|x| x == d) {
+                    dirs.push(d.to_path_buf());
+                }
+            }
             let rel = dst.strip_prefix(&root).unwrap_or(&dst);
             log(&format!("unpack: {} ({} bytes)", rel.display(), b - a));
+        }
+        // the renames on the card before the caller removes the archive
+        for d in &dirs {
+            crate::bgwrite::sync_dir(d);
         }
         Ok(names)
     }

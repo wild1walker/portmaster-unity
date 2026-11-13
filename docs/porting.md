@@ -732,7 +732,8 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    `.7z`, `.rar`, `.tar.*`, with PortMaster's 7-Zip), else macOS installers (`.pkg`, `pmunity
    macpkg`), else the port's `game` hook; a compressed build is unpacked (`pmunity unpack`, whenever
    `data.unity3d` is still there: also beside files an unpack that was cut off left, as the player
-   would read the archive first); its
+   would read the archive first; pmu syncs each file under a `.tmp` name before its rename, and the
+   folder before the archive goes); its
    Unity version must be one of `game.unity_versions`; an archive that does not unpack whole (a
    damaged `.tar.gz` too: both halves of the unpacking pipe are checked) stops the setup with
    "Could not unpack <name> (see patchlog.txt)", 7-Zip's own error in the log;

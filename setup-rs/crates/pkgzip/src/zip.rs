@@ -470,6 +470,9 @@ impl Archive {
         let mut j = File::create(&journal).map_err(io_at(&journal))?;
         j.write_all(size.to_string().as_bytes())?;
         j.sync_all()?;
+        // (the journal's name on the card too, before the archive grows: a power cut after this
+        // finds it, and recover_put cuts the archive back)
+        sync_dir_of(&journal);
         let w = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
@@ -816,6 +819,18 @@ pub fn copy_entry(r: &mut EntryReader, w: &mut dyn Write) -> Result<u64> {
         }
         w.write_all(&buf[..n])?;
         total += n as u64;
+    }
+}
+
+/// The folder holding `path` synced (its entries: a file just made there); a file system that
+/// cannot sync a folder: as it is.
+fn sync_dir_of(path: &str) {
+    let dir = match std::path::Path::new(path).parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => std::path::Path::new("."),
+    };
+    if let Ok(d) = File::open(dir) {
+        let _ = d.sync_all();
     }
 }
 
