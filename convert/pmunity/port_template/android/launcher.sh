@@ -14,6 +14,7 @@ else
 fi
 
 source $controlfolder/control.txt
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
 # @@TITLE@@ on Unity's own Android player, run natively on the handheld's 32-bit userland by

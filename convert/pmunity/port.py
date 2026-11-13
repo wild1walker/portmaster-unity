@@ -2214,6 +2214,19 @@ ROUTE_NEEDS = {
     'apk': "a 64-bit (aarch64) handheld with OpenGL ES 3, and a 32-bit (armhf) userland beside its 64-bit system (e.g. "
            "Knulli) for a game whose APK has only its 32-bit player",
 }
+# the player's README (common/README.player.md: the android, mono-arm64 and il2cpp-arm64 routes): the
+# player the game runs on, and the handheld it needs
+PLAYER_ON = {
+    'android': "Unity's own Android player, run natively on the handheld's 32-bit userland",
+    'mono-arm64': "Unity's 64-bit (arm64) Android player, its own code on Unity's Mono for 64-bit ARM, run natively",
+    'il2cpp-arm64': "Unity's 64-bit (arm64) IL2CPP Android player, its code compiled with IL2CPP, run natively",
+}
+HANDHELD_NEEDS = {
+    'android': "A handheld with a 32-bit (armhf) userland and GLES 3 (e.g. Knulli on Allwinner H700 devices),\n"
+               "  and a 64-bit (aarch64) system for the setup's tools.",
+    'mono-arm64': "A 64-bit (aarch64) handheld with GLES 3 (no 32-bit userland needed).",
+    'il2cpp-arm64': "A 64-bit (aarch64) handheld with GLES 3 (no 32-bit userland needed).",
+}
 ROUTE_SETUP = {
     'il2cpp-arm64': "The first launch also compiles the game's code with Unity's IL2CPP on the handheld: one to a few "
                     "hours, about 1.6 GB free, Wi-Fi for Unity's and Debian's files.",
@@ -2235,7 +2248,11 @@ BUILD_STEPS = {
     'box64': 'tools/box64/build.sh                                        # box64, gl4es, glxes (Docker)',
     'mono64': 'runtime/mono64/build.sh; tools/mono64/build-mono.sh <line> tools/mono64/work  # the Mono bridge and Unity\'s Mono, aarch64 (Docker)',
 }
-# PortMaster's standard first lines of a launcher (after "#!/bin/bash" and the PORTMASTER line)
+# PortMaster's standard first lines of a launcher (after "#!/bin/bash" and the PORTMASTER line), as
+# PortMaster's script templates have them: the firmware's mod_<CFW_NAME>.txt (in PortMaster's folder)
+# sets what that firmware needs, e.g. its own pm_platform_helper (muOS's names the game's process in
+# its foreground_process file, ROCKNIX's makes the game's window full screen under sway) and
+# environment (ROCKNIX: LIBGL_DRIVERS_PATH with its 32-bit Mesa drivers)
 STANDARD_HEADER = '''XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 
 if [ -d "/opt/system/Tools/PortMaster/" ]; then
@@ -2249,6 +2266,7 @@ else
 fi
 
 source $controlfolder/control.txt
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 '''
 
@@ -2451,7 +2469,7 @@ def launcher_warnings(text):
         body = body[1:]
     if lines[0] != '#!/bin/bash' or not '\n'.join(body).startswith('\n' + STANDARD_HEADER):
         w.append("the launcher does not start with PortMaster's standard lines (#!/bin/bash, the PORTMASTER line, "
-                 'then the controlfolder block, source control.txt, get_controls)')
+                 'then the controlfolder block, source control.txt, the firmware\'s mod_${CFW_NAME}.txt, get_controls)')
     if re.search(r'"\$\{?GPTOKEYB2?\}?"', text):
         w.append('"$GPTOKEYB2" is quoted: it is a command line with arguments, use it unquoted')
     if re.search(r'^\s*(export\s+)?SDL_VIDEODRIVER=', text, re.M):
@@ -2647,7 +2665,9 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
               'PLAYER_FROM': player_from(cfg, r),
               # PortMaster's README sections (Notes, Controls, Compile)
               'THANKS': thanks_sentence(cfg), 'CONTROLS': controls_markdown(cfg),
-              'ROUTE_NEEDS': route_needs(cfg['port']['route'], cfg), 'BUILD_STEPS': build_steps(cfg, r)}
+              'ROUTE_NEEDS': route_needs(cfg['port']['route'], cfg), 'BUILD_STEPS': build_steps(cfg, r),
+              'PLAYER_ON': PLAYER_ON.get(cfg['port']['route'], PLAYER_ON['android']),
+              'HANDHELD_NEEDS': HANDHELD_NEEDS.get(cfg['port']['route'], HANDHELD_NEEDS['android'])}
     # the files a route renders: route.json "files": {output path: template name}; output paths
     # may use @@TOKENS@@; mode 755 for scripts
     for dst, spec in r['files'].items():
@@ -2748,6 +2768,7 @@ class PackCtx:
         self.port_dir = os.path.join(zipdir, self.name)
         self.licenses = os.path.join(self.port_dir, 'licenses')
         self.modes = {}                         # {path in the zip: mode}: the files add() was given a mode for
+        self.stale = []                         # builds older than their sources (stale_build), said at the end
 
     def add(self, src, rel, mode=None):
         """Copy src (a file or folder) to <port folder>/rel. mode (a file's): its Unix mode in the
@@ -2776,6 +2797,44 @@ class PackCtx:
         else:
             with open(dst, 'w') as f:
                 f.write(text)
+
+
+# what each build `package` takes from a checkout is made from (paths in the checkout): a build that
+# is older than one of these files was made before the checkout changed (a pull), and the release
+# would ship it as it was (stale_build)
+BUILD_SOURCES = {
+    'pmu': ('setup-rs/Cargo.toml', 'setup-rs/Cargo.lock', 'setup-rs/pmu', 'setup-rs/crates', 'setup-rs/vendor'),
+    'ua_host': ('runtime/build.sh', 'runtime/host', 'runtime/jni', 'runtime/loader', 'runtime/android',
+                'runtime/media', 'runtime/thirdparty'),
+    'asmpatch': ('tools/asmpatch/build.sh', 'tools/asmpatch/src'),
+    'mono64': ('runtime/mono64',),
+}
+SOURCES_SKIP = {'out', 'test', 'tests', 'target', 'docker', '__pycache__'}
+
+
+def newer_sources(built, root, sources):
+    """The files of `sources` (paths under root, files or folders) changed after the file `built`
+    was made, the newest first, relative to root."""
+    t = os.path.getmtime(built)
+    hits = []
+    for rel in sources:
+        top = os.path.join(root, rel)
+        files = [top] if os.path.isfile(top) else []
+        for r, ds, fs in os.walk(top):
+            ds[:] = [d for d in ds if d not in SOURCES_SKIP and not d.startswith('.')]
+            files += [os.path.join(r, n) for n in fs if not _mac_junk(n) and not n.startswith('.')]
+        hits += [(m, f) for f in files for m in [os.path.getmtime(f)] if m > t]
+    return [os.path.relpath(f, root) for _, f in sorted(hits, reverse=True)]
+
+
+def stale_build(ctx, what, built, root, rebuild):
+    """Notes in ctx.stale a build of the checkout (`built`, under root) older than a file it is made
+    from (BUILD_SOURCES[what]): `package` says so at its end, with the command that makes it again."""
+    newer = newer_sources(built, root, BUILD_SOURCES[what])
+    if newer:
+        more = f' and {len(newer) - 1} more' if len(newer) > 1 else ''
+        ctx.stale.append(f'{os.path.relpath(built, root)} is older than {newer[0]}{more}: the release has it as '
+                         f'it was built; build it again ({rebuild}) and package again')
 
 
 CECIL_LICENSE = """Mono.Cecil 0.11.6 (in asmpatch)
@@ -2839,6 +2898,8 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
             raise SystemExit(f'{p}: build the runtime first (runtime/build.sh)')
         ctx.log('building the runtime (runtime/build.sh, Docker)')
         subprocess.run([os.path.join(ctx.runtime, 'runtime', 'build.sh')], check=True)
+    if not opts.get('ua_host') or opts.get('ua_host_default'):
+        stale_build(ctx, 'ua_host', p, ctx.runtime, ('ARCH=arm64 ' if os.sep + 'arm64' + os.sep in p else '') + 'runtime/build.sh')
     ctx.add(p, dst, 0o755)
     # the flip-book stand-in ua_host loads with UA_FLIPBOOK (runtime/host/managed/build.sh), beside it:
     # for a port whose settings name UA_FLIPBOOK ([runtime*], or a setup question's env), no other
@@ -2872,6 +2933,7 @@ def _component_ua_host_arm64(ctx, opts, dst='ua_host', suffix=''):
     """The 64-bit ua_host (runtime/host/out/arm64), for the il2cpp-arm64 route."""
     rt = os.path.join(ctx.runtime, 'runtime')
     o = dict(opts, ua_host=opts.get('ua_host_arm64') or os.path.join(rt, 'host', 'out', 'arm64', 'ua_host'),
+             ua_host_default=not opts.get('ua_host_arm64'),
              media_licenses=opts.get('media_licenses_arm64') or (opts.get('media_licenses') if not suffix else None)
              or os.path.join(rt, 'media', 'out', 'arm64', 'licenses'))
     if not os.path.isfile(o['ua_host']) and not opts.get('no_build'):
@@ -2970,6 +3032,8 @@ def _component_pmu(ctx, opts):
             subprocess.run([os.path.join(REPO, 'setup-rs', 'tools', 'build_pmu.sh'), d], check=True)
     if not os.path.isfile(os.path.join(d, 'pmu')) or not os.path.isdir(os.path.join(d, 'licenses')):
         raise SystemExit(f'{d}: no pmu and licenses/ (setup-rs/tools/build_pmu.sh {d})')
+    if not (opts.get('pmu') or os.environ.get('PMU_DIR')):
+        stale_build(ctx, 'pmu', os.path.join(d, 'pmu'), REPO, f'setup-rs/tools/build_pmu.sh {os.path.relpath(d, REPO)}')
     ctx.add(os.path.join(d, 'pmu'), os.path.join('setup', 'pmu'), 0o755)
     for n in sorted(os.listdir(os.path.join(d, 'licenses'))):
         ctx.license(n, os.path.join(d, 'licenses', n))
@@ -2997,6 +3061,8 @@ def _component_asmpatch(ctx, opts):
             raise SystemExit(f'{p}: build asmpatch first (tools/asmpatch/build.sh)')
         ctx.log('building asmpatch (tools/asmpatch/build.sh, .NET 8 SDK)')
         subprocess.run([os.path.join(ctx.runtime, 'tools', 'asmpatch', 'build.sh')], check=True)
+    if not opts.get('asmpatch_bin'):
+        stale_build(ctx, 'asmpatch', p, ctx.runtime, 'tools/asmpatch/build.sh')
     ctx.add(p, os.path.join('setup', 'asmpatch'), 0o755)
     nuget = os.environ.get('NUGET_PACKAGES') or os.path.expanduser('~/.nuget/packages')
     rt = os.path.join(nuget, 'microsoft.netcore.app.runtime.linux-arm64')
@@ -3081,6 +3147,8 @@ def _component_mono64(ctx, opts):
             raise SystemExit(f'{bridge}: build the Mono bridge first (runtime/mono64/build.sh)')
         ctx.log('building the Mono bridge (runtime/mono64/build.sh, Docker)')
         subprocess.run([os.path.join(rt, 'runtime', 'mono64', 'build.sh')], check=True)
+    if not opts.get('mono64_bridge'):
+        stale_build(ctx, 'mono64', bridge, rt, 'runtime/mono64/build.sh')
     work = opts.get('mono64_work') or os.environ.get('PMUNITY_MONO64_WORK') or os.path.join(rt, 'tools', 'mono64', 'work')
     for line in lines:
         branch = f'unity-{line}-mbe'
@@ -3229,6 +3297,8 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     zpath = os.path.join(out, f'{name}.zip')
     _write_zip(zpath, zipdir, [launcher, name], dict(ctx.modes, **{launcher: 0o644}))
     log(f'built {zpath} ({os.path.getsize(zpath) / 2**20:.1f} MB): unzip it into the handheld\'s ports folder')
+    for x in ctx.stale:
+        log(f'warning: {x}')
     # the testing thread's post goes beside the zip, not into it
     tt = os.path.join(port_src, 'testing_thread.txt')
     if os.path.isfile(tt):

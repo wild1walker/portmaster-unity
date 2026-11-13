@@ -679,8 +679,9 @@ def stub_tools(t):
         f.write(r'''#!/bin/bash
 if [ "$1" = -c ]; then exit 0; fi       # (the setup's check that its Python has UnityPy)
 shift 2; echo "pm $*" >> "$STUB_LOG"
-[ "$1" = "$STUB_FAIL" ] && exit 1
+[ "$1" = "$STUB_FAIL" ] && exit "${STUB_STATUS:-1}"
 case "$1" in
+  journal-files) n=0; [ -f "$2" ] && n=$(wc -l < "$2"); echo $((n));;   # (as pmu's: the files done)
   version) echo "$STUB_VERSION (supported)";;
   player) d=$4; b=mono; abi=armeabi-v7a; a=("$@")
           for ((i = 0; i < $#; i++)); do case "${a[i]}" in --backend) b=${a[i+1]};; --abi) abi=${a[i+1]};; esac; done
@@ -696,7 +697,13 @@ case "$1" in
          printf "GAME_DIR='My Game'\nEXE='My Game.x86_64'\nDATA='My Game_Data'\nUNITY=%s\nBACKEND=mono\nGL_MODE=%s\n" "$STUB_VERSION" "${STUB_GL:-gles}";;
   unpack) rm "$2/data.unity3d"; touch "$2/globalgamemanagers";;
   winbcl) if [ -n "$STUB_WINBCL" ]; then mkdir -p "$3"; for n in $STUB_WINBCL; do echo x > "$3/$n"; done; fi;;
-  convert) if [ -n "$PMHLSLCC" ]; then echo "env PMHLSLCC=$PMHLSLCC" >> "$STUB_LOG"; fi;;
+  convert) if [ -n "$PMHLSLCC" ]; then echo "env PMHLSLCC=$PMHLSLCC" >> "$STUB_LOG"; fi
+           # (STUB_KILLS runs stopped as the kernel stops one that is out of memory, each after a file
+           # it journaled; with STUB_KILL_STUCK before any)
+           k=$(cat "$STUB_LOG.kills" 2>/dev/null || echo 0)
+           if [ "$k" -lt "${STUB_KILLS:-0}" ]; then
+             echo $((k + 1)) > "$STUB_LOG.kills"; [ -n "$STUB_KILL_STUCK" ] || echo done >> "$2/.pmunity.json"; kill -9 $$
+           fi;;
   il2cpp) out=$3; while [ $# -gt 0 ]; do case "$1" in --pkg) pkg=$2;; esac; shift; done
           L=$pkg/Variations/il2cpp/Release/Libs/arm64-v8a; mkdir -p "$out/lib/arm64-v8a" "$L"
           echo x > "$out/lib/arm64-v8a/libil2cpp.so"; for f in libmain.so libunity.so; do echo x > "$L/$f"; done;;
@@ -822,6 +829,10 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertNotIn('\u2014', readme)
             self.assertIn('| Select + Start | Quit |', P._read(os.path.join(out, 'mygame', 'README.md')))
             self.assertIn("or GOG's Linux installer `.sh`", P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertIn("runs on Unity's own Android player, run natively on the handheld's 32-bit userland by\n",
+                          P._read(os.path.join(out, 'mygame', 'README.md')))
+            self.assertIn('- A handheld with a 32-bit (armhf) userland and GLES 3 (e.g. Knulli on Allwinner H700 devices),\n'
+                          "  and a 64-bit (aarch64) system for the setup's tools.", P._read(os.path.join(out, 'mygame', 'README.md')))
             gi = P._read(os.path.join(out, 'mygame', 'gameinfo.xml'))
             self.assertIn('<path>./My Game.sh</path>', gi)
             self.assertIn('<image>./mygame/screenshot.png</image>', gi)
@@ -1076,6 +1087,11 @@ class NewAndSetupTest(unittest.TestCase):
             pj = json.load(open(os.path.join(out, 'mygame', 'port.json')))
             self.assertNotIn('armhf', pj['attr']['reqs'])
             self.assertIn("Unity's Mono", pj['attr']['desc'])
+            # the player's README: the 64-bit player, and no 32-bit userland asked for
+            readme = P._read(os.path.join(out, 'mygame', 'README.md'))
+            self.assertIn("runs on Unity's 64-bit (arm64) Android player", readme)
+            self.assertIn('no 32-bit userland needed', readme)
+            self.assertNotIn('a 32-bit (armhf) userland and GLES 3', readme)
             self.assertIn('mono64', json.load(open(os.path.join(P.TEMPLATES, 'mono-arm64', 'route.json')))['package'])
             self.assertEqual(P.mono64_lines({'game': {'unity_versions': ['2019.4.8f1', '2019.4.40f1', '6000.0.61f1']}}),
                              ['2019.4', '6000.0'])
@@ -1343,6 +1359,52 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(os.listdir(os.path.join(g, 'gamedata')), ['PUT_GAME_FILES_HERE.txt'])
             self.assertFalse(os.path.exists(os.path.join(g, 'setup')))
             self.assertIn('setup finished', P._read(os.path.join(g, 'patchlog.txt')))
+
+    def test_setup_compressed_build(self):
+        """a compressed build's data.unity3d is unpacked whenever it is still there: also when an unpack
+        that was stopped left some of its files (globalgamemanagers) beside it, as the player would
+        read the archive first"""
+        for left in (False, True):
+            with tempfile.TemporaryDirectory() as t:
+                game, out = self.make(t)
+                g = os.path.join(t, 'ports', 'mygame')
+                shutil.copytree(os.path.join(out, 'mygame'), g)
+                shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+                data = os.path.join(g, 'gamedata', 'My Game', 'My Game_Data')
+                put(os.path.join(data, 'data.unity3d'), 'UnityFS')
+                if not left:
+                    os.remove(os.path.join(data, 'globalgamemanagers'))
+                for p in ('android', 'mono-arm64', 'il2cpp-arm64'):
+                    self.assertIn('\n  if [ -f "$D/data.unity3d" ]; then\n',
+                                  P._read(os.path.join(P.TEMPLATES, p, 'patchscript')), p)
+                g, r, log = self.run_setup(t, out, {})
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(log.count(f'pm unpack {data} --remove'), 1, (left, log))
+
+    def test_setup_convert_stopped(self):
+        """convert stopped by the kernel (out of memory on a 1 GB handheld: status 137) runs again by
+        itself while its journal grows, and stops the setup when a run gets no further; a card too
+        full (status 3) and a damaged journal (5) say what to do; a card too full to pack (4) too"""
+        cases = [({'STUB_KILLS': '2'}, 0, None, 3),
+                 ({'STUB_KILLS': '1', 'STUB_KILL_STUCK': '1'}, 1, "PATCH_FAIL_MSG:Converting the game's files failed", 1),
+                 ({'STUB_FAIL': 'convert', 'STUB_STATUS': '3'}, 1, 'PATCH_FAIL_MSG:The card is too full to convert the game', 1),
+                 ({'STUB_FAIL': 'convert', 'STUB_STATUS': '5'}, 1,
+                  'PATCH_FAIL_MSG:The handheld restarted while the conversion wrote its journal', 1),
+                 ({'STUB_FAIL': 'android-data', 'STUB_STATUS': '4'}, 1, 'PATCH_FAIL_MSG:The card is too full to pack the game', 1)]
+        for env, code, msg, runs in cases:
+            with tempfile.TemporaryDirectory() as t:
+                game, out = self.make(t)
+                g = os.path.join(t, 'ports', 'mygame')
+                shutil.copytree(os.path.join(out, 'mygame'), g)
+                shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+                g, r, log = self.run_setup(t, out, env)
+                self.assertEqual(r.returncode, code, (env, r.stdout + r.stderr))
+                self.assertEqual(log.count('pm convert '), runs, (env, log))
+                if msg:
+                    self.assertIn(msg, r.stdout, env)
+                self.assertEqual(r.stdout.count('it starts again where it stopped'), 2 if code == 0 else 0, env)
+        for p in ('android', 'mono-arm64', 'il2cpp-arm64', 'box64'):
+            self.assertIn('pm_convert "$', P._read(os.path.join(P.TEMPLATES, p, 'patchscript')), p)
 
     def test_setup_archive_and_checks(self):
         with tempfile.TemporaryDirectory() as t:
@@ -1991,6 +2053,34 @@ class RoutesTest(unittest.TestCase):
             P.render('@@NOPE@@', {})
 
 
+class StaleBuildTest(unittest.TestCase):
+    """package's note of a build in the checkout older than its sources (a pull after it was built):
+    the release would ship it as it was"""
+
+    def test_stale_build(self):
+        class Ctx:
+            stale = []
+        with tempfile.TemporaryDirectory() as t:
+            built = os.path.join(t, 'tools', 'port', 'out', 'pmu', 'pmu')
+            src = os.path.join(t, 'setup-rs', 'crates', 'a', 'src', 'lib.rs')
+            lock = os.path.join(t, 'setup-rs', 'Cargo.lock')
+            skipped = [os.path.join(t, 'setup-rs', 'crates', 'a', d, 'x.rs') for d in ('out', 'tests', '.git')]
+            for f in [built, src, lock] + skipped:
+                os.makedirs(os.path.dirname(f), exist_ok=True)
+                put(f, 'x')
+            for f, when in [(built, 2000), (src, 1000), (lock, 1000)] + [(f, 3000) for f in skipped]:
+                os.utime(f, (when, when))
+            P.stale_build(Ctx, 'pmu', built, t, 'setup-rs/tools/build_pmu.sh tools/port/out/pmu')
+            self.assertEqual(Ctx.stale, [])                 # (built after its sources; outputs and tests do not count)
+            os.utime(src, (2500, 2500))
+            os.utime(lock, (2600, 2600))
+            self.assertEqual(P.newer_sources(built, t, P.BUILD_SOURCES['pmu']),
+                             [os.path.join('setup-rs', 'Cargo.lock'), os.path.join('setup-rs', 'crates', 'a', 'src', 'lib.rs')])
+            P.stale_build(Ctx, 'pmu', built, t, 'setup-rs/tools/build_pmu.sh tools/port/out/pmu')
+            self.assertEqual(len(Ctx.stale), 1)
+            for part in ('tools/port/out/pmu/pmu is older than setup-rs/Cargo.lock and 1 more',
+                         'setup-rs/tools/build_pmu.sh tools/port/out/pmu'):
+                self.assertIn(part, Ctx.stale[0].replace(os.sep, '/'))
 
 
 class PortMasterMetadataTest(unittest.TestCase):
@@ -2127,6 +2217,12 @@ class PortMasterMetadataTest(unittest.TestCase):
         w = '\n'.join(P.launcher_warnings(bad))
         for part in ('standard lines', 'quoted', 'SDL_VIDEODRIVER', 'pm_finish'):
             self.assertIn(part, w)
+        # the firmware's mod file is one of the standard lines (PortMaster's script templates; muOS's and
+        # ROCKNIX's pm_platform_helper come from it)
+        good = P._read(P.template_path(P.routes()['android'], 'launcher.sh'))
+        mod = '[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"\n'
+        self.assertIn('\nsource $controlfolder/control.txt\n' + mod + 'get_controls\n', good)
+        self.assertIn('mod_${CFW_NAME}.txt', '\n'.join(P.launcher_warnings(good.replace(mod, ''))))
 
     def test_toml_round_trip(self):
         cfg = self.cfg(port={'store': [{'name': 'GOG', 'gameurl': 'https://example.com', 'developerurl': ''}]},

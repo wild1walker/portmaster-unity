@@ -327,7 +327,7 @@ checks the game and writes `<out>` (default `./<name>`):
 |---|---|
 | `port.toml` | the port's settings (written once, with the values the check found; yours to edit). Run `port new` again to regenerate the rest from it (it is used when it is there, `--config` names another); it then lists what the check suggests that `port.toml` lacks or sets otherwise (e.g. `UA_DPAD_STICK` once asmpatch is built, `[wwise] banks`): a key it lacks is used all the same, a value it has wins |
 | `port.build.json` | the resolved settings, the route and the check's findings (what `package` reads) |
-| `<Title>.sh` | the launcher (PortMaster's standard first lines, then `$GPTOKEYB2`, `$ESUDO`, `pm_message`, `pm_platform_helper`, `pm_finish`, the log in `log.txt`; first launch: PortMaster's patcher runs the setup) |
+| `<Title>.sh` | the launcher (PortMaster's standard first lines: the `controlfolder` block, `control.txt`, the firmware's `mod_${CFW_NAME}.txt` and `get_controls`; then `$GPTOKEYB2`, `$ESUDO`, `pm_message`, `pm_platform_helper`, `pm_finish`, the log in `log.txt`; first launch: PortMaster's patcher runs the setup). The mod file is the firmware's own part: its `pm_platform_helper` (muOS's names the game's process in its `foreground_process` file, ROCKNIX's makes the window full screen under sway) and its environment (ROCKNIX: its 32-bit Mesa drivers in `LIBGL_DRIVERS_PATH`); a launcher without it gets only funcs.txt's plain `pm_platform_helper` |
 | `<name>/` | the folder installed as `ports/<name>/`: `setup/patchscript`, `setup/setup.env`, `setup/convert.json`, `setup/questions.lua` and `setup.txt` (with questions), `port.env`, `port.json`, `gameinfo.xml` (the frontend's game list entry), `README.md` (the player's), `gamedata/PUT_GAME_FILES_HERE.txt`, `<name>.ini` (gptokeyb2: the exit hotkey) |
 | `README.md` | the port's README in PortMaster's layout: `## Notes` (a thank-you to the game's makers, what to put where, what the route needs), `## Controls` (the `[controls]` table), `## Compile` (the commands that build the release from a portmaster-unity checkout) |
 | `testing_thread.txt` | the post for PortMaster's Discord testing channel that goes with the test zip: how to install it, the game's link, the instructions, the controls, the firmware and screen checklist (not in the zip) |
@@ -730,7 +730,9 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    (`python.tar.gz`: CPython with UnityPy and the image libraries, aarch64), and the setup unpacks it;
 2. the game: the data folder in `gamedata/` (any depth), else one from an archive there (`.zip`,
    `.7z`, `.rar`, `.tar.*`, with PortMaster's 7-Zip), else macOS installers (`.pkg`, `pmunity
-   macpkg`), else the port's `game` hook; a compressed build is unpacked (`pmunity unpack`); its
+   macpkg`), else the port's `game` hook; a compressed build is unpacked (`pmunity unpack`, whenever
+   `data.unity3d` is still there: also beside files an unpack that was cut off left, as the player
+   would read the archive first); its
    Unity version must be one of `game.unity_versions`; an archive that does not unpack whole (a
    damaged `.tar.gz` too: both halves of the unpacking pipe are checked) stops the setup with
    "Could not unpack <name> (see patchlog.txt)", 7-Zip's own error in the log;
@@ -771,7 +773,12 @@ button) continues where it stopped on the next launch. Every write of the setup'
 markers, the answers, the notes of where the game is, `answers.env`, box64's `game.env`) is
 checked: one that fails stops the setup with "Could not write ... to the card: is the card
 full?", and notes that read back empty, or name a folder that is gone, send the setup back to
-finding the game. A launcher that finds the game not set up and no `setup/patchscript` (the
+finding the game. A conversion the kernel stops (out of memory on a 1 GB handheld: status 137)
+runs again by itself as long as each run gets further (its journal, `<data>/.pmunity.json`, counted
+by `pmu journal-files`: the files done; with the setup's Python there is no count and no second
+run), and stops the setup when one gets no further. A card too full to convert or to pack (convert's
+status 3, android-data's 4) stops it with "The card is too full to convert / pack the game", and a
+journal damaged by a restart (status 5) with how to start again from the game's files. A launcher that finds the game not set up and no `setup/patchscript` (the
 folder copied without it, or deleted) says so: "Install the port again (unzip it over your ports
 folder)". To set a game up again: unzip the release over the port (a launch of a set-up game has
 removed `setup/` and `donor/`), delete `.setup_done`, put the game in `gamedata/`, launch.
@@ -933,13 +940,18 @@ ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build
 
 The zip also gets the screenshot and the cover (`port.screenshot`, `port.cover`) as
 `<name>/screenshot.png` and `<name>/cover.png`, where PortMaster's own release zips have them, and
-`testing_thread.txt` goes beside the zip in `<out>/`. Then `package` lists what a PortMaster
+`testing_thread.txt` goes beside the zip in `<out>/`. A build `package` takes from the checkout
+(`setup/pmu` from `tools/port/out/pmu`, `ua_host`, asmpatch, the Mono bridge) that is older than
+a file it is made from (a pull after it was built) gets a `warning:` line after the zip's: the
+release has it as it was built, so build it again (the line names the command) and package
+again. Then `package` lists what a PortMaster
 submission still lacks or reviewers would ask about (none of it stops the build): port.toml fields
 still empty (porter, description, genres, developer, publisher, release date, the thank-you, the
 controls, the game's link), no screenshot or one that is not 4:3 and at least 640x480, no cover, a
 `gameinfo.xml` naming an image the port does not ship, an em dash or Markdown in the plain texts,
-`exp = true`, a launcher without PortMaster's standard first lines (or with `"$GPTOKEYB2"` quoted, a
-fixed `SDL_VIDEODRIVER`, no `pm_finish`), files over 90 MB. `--submission` also writes
+`exp = true`, a launcher without PortMaster's standard first lines (the firmware's
+`mod_${CFW_NAME}.txt` among them; or with `"$GPTOKEYB2"` quoted, a fixed `SDL_VIDEODRIVER`, no
+`pm_finish`), files over 90 MB. `--submission` also writes
 `<out>/submission/<name>/`, the port as PortMaster's repository holds it (section 12).
 
 ## 7. Rehearsal

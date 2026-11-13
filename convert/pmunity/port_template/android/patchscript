@@ -62,6 +62,28 @@ else
   pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
 fi
 
+# convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
+# each run gets further: its journal (<data>/.pmunity.json) names the files done and a new run goes
+# on after them (pmu journal-files counts them; with the setup's Python: 0, no second run)
+pm_convert() {   # pm_convert <data folder> <convert's other arguments>
+  local j="$1/.pmunity.json" n rc
+  while :; do
+    n=$(pm journal-files "$j" 2>/dev/null || echo 0)
+    pm convert "$@"; rc=$?
+    [ "$rc" = 137 ] && [ "$(pm journal-files "$j" 2>/dev/null || echo 0)" -gt "$n" ] || return "$rc"
+    dmesg 2>/dev/null | grep -a -i -E 'out of memory|killed process' | tail -n 2   # (the kernel's reason, where it can be read)
+    echo "The conversion was stopped by the system (out of memory?): it starts again where it stopped."
+  done
+}
+convert_failed() {   # convert_failed <convert's status>: the reason, said so the player can act on it
+  case "$1" in
+    2) [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python.";;
+    3) fail "The card is too full to convert the game (patchlog.txt says how much it needs): free some space on it, then launch again.";;
+    5) fail "The handheld restarted while the conversion wrote its journal, and the setup lost its place: delete ports/$PORT_NAME/gamedata, put $GAME_WHAT in a new gamedata folder and launch again.";;
+  esac
+  fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."
+}
+
 # ---- answers to the port's questions: kept from the first run, else PortMaster's patcher (<ID> in
 # the environment), else setup.txt (<id>=<value>, older PortMaster), else the default
 CONVERT_SET=(); : > "$W/answers.env.new" || nowrite "the setup's answers"
@@ -156,7 +178,9 @@ if [ ! -f "$W/.step_game" ]; then
   hook game                               # (a port's own way to find or unpack the game: sets D)
   [ -n "$D" ] || fail "Put $GAME_WHAT in ports/$PORT_NAME/gamedata, then launch again."
   echo "the game's data: ${D#$GAMEDIR/}"
-  if [ ! -f "$D/globalgamemanagers" ] && [ -f "$D/data.unity3d" ]; then
+  # (whenever the archive is still there: the unpack removes it at its end, and a setup stopped part way
+  # through leaves some of its files beside it; the player would read the archive first)
+  if [ -f "$D/data.unity3d" ]; then
     step "unpacking the game's data.unity3d"
     pm unpack "$D" --remove || fail "Could not unpack the game's data.unity3d (see patchlog.txt)."
   fi
@@ -224,9 +248,7 @@ if [ ! -f "$W/.step_convert" ]; then
   if [ -f "$S/pmhlslcc" ]; then chmod +x "$S/pmhlslcc"; export PMHLSLCC="$S/pmhlslcc"; fi
   # a Vulkan-only build's shaders: SPIRV-Cross (the release's pmspirvcross, aarch64)
   if [ -f "$S/pmspirvcross" ]; then chmod +x "$S/pmspirvcross"; export PMSPIRVCROSS="$S/pmspirvcross"; fi
-  pm convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" \
-    || { [ $? = 2 ] && [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python."
-         fail "Converting the game's files failed (see patchlog.txt). Launch again to continue."; }
+  pm_convert "$D" --config "$W/convert.json" "${plugins[@]}" "${CONVERT_SET[@]}" || convert_failed $?
   hook post_convert
   mark convert
 fi
@@ -283,8 +305,10 @@ if [ ! -f "$W/.step_package" ]; then
       args+=(--assembly-patch "${ASSEMBLY_PATCHES[i]}" "${ASSEMBLY_PATCHES[i+1]//\{setup\}/$S}")
     done
   fi
-  pm android-data "${args[@]}" "${ANDROID_DATA_ARGS[@]}" \
-    || fail "Packing the game failed (see patchlog.txt). Launch again to continue."
+  pm android-data "${args[@]}" "${ANDROID_DATA_ARGS[@]}"; st=$?
+  # (4: the card too full for the APK and OBB, android-data says how much more they need)
+  [ "$st" = 4 ] && fail "The card is too full to pack the game (patchlog.txt says how much more it needs): free some space on it, then launch again."
+  [ "$st" = 0 ] || fail "Packing the game failed (see patchlog.txt). Launch again to continue."
   hook post_pack
   mark package
 fi

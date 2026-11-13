@@ -14,6 +14,7 @@ else
 fi
 
 source $controlfolder/control.txt
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
 # @@TITLE@@: the game's own Linux x86-64 build, unmodified, under box64 (portmaster-unity's

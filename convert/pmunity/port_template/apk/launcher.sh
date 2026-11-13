@@ -14,6 +14,7 @@ else
 fi
 
 source $controlfolder/control.txt
+[ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
 # @@TITLE@@'s own Android build, run natively by portmaster-unity's ua_host: its 32-bit

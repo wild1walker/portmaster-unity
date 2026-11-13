@@ -53,6 +53,28 @@ else
   pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
 fi
 
+# convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
+# each run gets further: its journal (<data>/.pmunity.json) names the files done and a new run goes
+# on after them (pmu journal-files counts them; with the setup's Python: 0, no second run)
+pm_convert() {   # pm_convert <data folder> <convert's other arguments>
+  local j="$1/.pmunity.json" n rc
+  while :; do
+    n=$(pm journal-files "$j" 2>/dev/null || echo 0)
+    pm convert "$@"; rc=$?
+    [ "$rc" = 137 ] && [ "$(pm journal-files "$j" 2>/dev/null || echo 0)" -gt "$n" ] || return "$rc"
+    dmesg 2>/dev/null | grep -a -i -E 'out of memory|killed process' | tail -n 2   # (the kernel's reason, where it can be read)
+    echo "The conversion was stopped by the system (out of memory?): it starts again where it stopped."
+  done
+}
+convert_failed() {   # convert_failed <convert's status>: the reason, said so the player can act on it
+  case "$1" in
+    2) [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python.";;
+    3) fail "The card is too full to convert the game (patchlog.txt says how much it needs): free some space on it, then launch again.";;
+    5) fail "The handheld restarted while the conversion wrote its journal, and the setup lost its place: delete ports/$PORT_NAME/gamedata, put $GAME_WHAT in a new gamedata folder and launch again.";;
+  esac
+  fail "Converting the game's shaders failed (see patchlog.txt). Launch again to continue."
+}
+
 # ---- 1. the game: a Linux x86-64 build in gamedata/ (an archive is unpacked there first)
 route_env() {   # the game `pm route` finds in gamedata/, as game.env's lines (none: no game.env)
   local e
@@ -112,9 +134,7 @@ if [ "$GL_MODE" = gles ] && [ ! -f "$W/.step_convert" ]; then
   hook pre_convert
   room 300 || fail "Converting the game's shaders needs about 300 MB free on the card ($(free_mb) MB free)."
   step "adding OpenGL ES shaders (if this is interrupted, the next launch continues where it stopped)"
-  pm convert "$GD/$GAME_DIR/$DATA" --config "$S/gles.json" \
-    || { [ $? = 2 ] && [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python."
-         fail "Converting the game's shaders failed (see patchlog.txt). Launch again to continue."; }
+  pm_convert "$GD/$GAME_DIR/$DATA" --config "$S/gles.json" || convert_failed $?
   hook post_convert
   mark convert
 fi

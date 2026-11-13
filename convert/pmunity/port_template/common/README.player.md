@@ -1,6 +1,6 @@
 # @@TITLE@@ on PortMaster
 
-@@TITLE@@ runs on Unity's own Android player, run natively on the handheld's 32-bit userland by
+@@TITLE@@ runs on @@PLAYER_ON@@ by
 [portmaster-unity](https://github.com/wild1walker/portmaster-unity)'s `ua_host`. No game files come
 with this port: you provide your own copy, and the first launch builds the game from it on the
 handheld.
@@ -11,8 +11,7 @@ handheld.
   for @@UNITY_VERSIONS@@).
 - @@PLAYER_FROM@@
 - About @@SIZE_GB@@ GB free on the card during the setup.
-- A handheld with a 32-bit (armhf) userland and GLES 3 (e.g. Knulli on Allwinner H700 devices),
-  and a 64-bit (aarch64) system for the setup's tools.
+- @@HANDHELD_NEEDS@@
 
 ## Setting it up
 
