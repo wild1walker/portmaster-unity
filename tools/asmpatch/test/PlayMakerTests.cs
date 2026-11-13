@@ -67,6 +67,27 @@ static partial class TestMain
         }
         Check(same == 60, $"PlayMaker: 60 seeded runs of 400 steps, the patched copy sees what the original sees ({same} the same{(first != null ? "; first difference " + first : "")})");
         Check(guards > 0 && nulls > 0 && fired > 0, $"PlayMaker: the runs trip the loop guard ({guards}), update a missing list ({nulls}) and fire delayed events ({fired})");
+
+        // playmaker-typelookup: the same type for every kind of name, and a direct lookup where that is all it needs
+        Check(outp.Contains("ok   playmaker-typelookup: PlayMaker.dll: HutongGames.PlayMaker.ReflectionUtils.GetGlobalType"),
+              "PlayMaker: playmaker-typelookup applies");
+        const string names = "FakeAnimator|FsmThing|SetThing|Inner|Dup|FakeAnimator2|NoSuchType|Outer+Inner|UnityEngine.FakeAnimator|List`1|Fsm||Driver";
+        string Lookups(string dir) => WithPlayMaker(dir, a =>
+            (string)a.GetType("HutongGames.PlayMaker.ReflectionUtils", true).GetMethod("Lookup").Invoke(null, new object[] { names }));
+        string la0 = Lookups(d), lb0 = Lookups(o);
+        Check(la0 == lb0, $"PlayMaker: GetGlobalType finds the same types patched ({la0.Replace('\n', ' ')} / {lb0.Replace('\n', ' ')})");
+        Check(la0.Contains("FakeAnimator=UnityEngine.FakeAnimator in PlayMaker") && la0.Contains("Inner=UnityEngine.Outer+Inner in PlayMaker") &&
+              la0.Contains("SetThing=HutongGames.PlayMaker.Actions.SetThing") && la0.Contains("FakeAnimator2=null") && la0.Contains("NoSuchType=null"),
+              $"PlayMaker: the stand-in's names resolve as PlayMaker resolves them ({la0.Replace('\n', ' ')})");
+        var sizes = WithPlayMaker(o, a =>
+        {
+            var h = a.GetType("<asmpatch>PlayMakerTypes", true).GetMethod("Types", BindingFlags.Static | BindingFlags.NonPublic);
+            int Size(string n) => ((Type[])h.Invoke(null, new object[] { a, n })).Length;
+            return (plain: Size("FakeAnimator"), none: Size("NoSuchType"), nested: Size("Inner"), twice: Size("Dup"), parsed: Size("Outer+Inner"),
+                    all: a.GetTypes().Length);
+        });
+        Check(sizes.plain == 1 && sizes.none == 0 && sizes.nested == sizes.all && sizes.twice == sizes.all && sizes.parsed == sizes.all,
+              $"PlayMaker: a plain name gets the one type a direct lookup finds, nested/twice/parsed names the whole list ({sizes})");
         Check(pushB < pushA * 3 / 4 && pushB > 0, $"playmaker-idle: the patched copy's idle FSMs skip their updates ({pushA} updates through the execution stack unpatched, {pushB} patched)");
         // the patched copy with ASMPATCH_PLAYMAKER_IDLE=0: every update made (read once per load: each load is a context of its own)
         Environment.SetEnvironmentVariable("ASMPATCH_PLAYMAKER_IDLE", "0");
