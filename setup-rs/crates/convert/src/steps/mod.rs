@@ -8,6 +8,7 @@ pub mod d3d11;
 pub mod edits;
 pub mod fusedpost;
 pub mod grabfetch;
+pub mod lazy;
 pub mod metal;
 pub mod quality;
 pub mod settings;
@@ -52,6 +53,11 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         (
             "video".into(),
             Arc::new(|job: &mut Job, _: &Args| video::run(job)),
+        ),
+        // pmu's own: assets left out of the scenes' preload lists (loaded when used)
+        (
+            lazy::STEP.into(),
+            Arc::new(|job: &mut Job, _: &Args| lazy::run(job)),
         ),
     ]
 }

@@ -300,6 +300,35 @@ hundreds of MB. On the muOS
 test copy of Hollow Knight: 6 files written back after the step, the APK and OBB whole (`unzip -t`),
 a second run finds nothing to do (48 s of reading the resource files).
 
+### `lazy`
+
+pmu's own step (convert's `lazy`, no Python counterpart): the objects named in `names` (`"<m_Name>|<m_Name>..."`,
+exact; Texture2D, Font and TextAsset objects are looked up by the name at the start of their bytes, without reading
+them whole) are left out of every scene's PreloadData and of the ResourceManager's dependency lists
+(globalgamemanagers). Each entry for one of them is replaced by a copy of an entry its list's owner loads anyway (the
+scene's first other entry; a resource's own PPtr for its dependencies), so no list, object or file changes length;
+a list with nothing else in it loses the entries. A file is journalled when its lists are done. A name the data
+does not have is logged.
+
+Why: a scene's PreloadData lists everything its objects reach, and Unity loads what it lists with every scene,
+also what was given back since. Hollow Knight keeps every language's TextMeshPro atlases (uncompressed Alpha8,
+4096x4096 for the two Chinese ones) and the CJK font files (32 MB of TTF data) in its first scene's shared assets,
+reached from every text object: about 87 MB in every language and loaded again with every room. Out of the lists,
+Unity loads such an asset when something uses it (a reference dereferenced), and ua_host's `UA_UNLOAD_ASSETS`
+(runtime.md) gives back what the first scenes loaded ([profiling.md](profiling.md#where-a-games-memory-goes-on-a-1-gb-handheld-hollow-knight-2026-11-12)).
+`cargo test -p convert --test lazy` (with `PMU_TPK`): made-up files, the lists' entries replaced, the files' sizes
+the same, a second run without changes.
+
+`pmu lazy <game dir> [--config <convert.json>] [--set lazy.names=...]` runs the step on a game set up before it
+existed (a port's setup/update, once: Hollow Knight's notes `convert=lazy` in its setup mark after it), in place:
+with the port's convert config only when its steps name `lazy`. The serialized files of the APK and OBBs
+(`assets/bin/Data/*.assets`, `globalgamemanagers`) are taken out one at a time into `<game dir>/.pmunity-lazy`
+twice (the named objects found, then each file edited), each changed file kept there; marked ready, they are
+written over their entries as `pmu video` writes its clips (stored, the same length, the CRC-32 in both headers;
+`Archive::overwrite_stored_from`), so a run stopped before the mark starts again and one stopped after writes them
+all again. The work folder holds at most the changed files and one file being read: Hollow Knight's 499 changed
+serialized files are 233 MB (the update step asks for 500 MB free).
+
 ### `pmu il2cpp`
 
 `pmu il2cpp <data> <out> --on-device [--abi --home --pkg --jobs --keep-cpp --strip --unity

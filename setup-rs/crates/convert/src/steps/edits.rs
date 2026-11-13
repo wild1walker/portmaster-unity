@@ -298,7 +298,7 @@ pub fn data_files(root: &std::path::Path) -> Vec<String> {
 
 /// Whether UnityPy takes a file for a serialized file or a bundle (check_file_type): a bundle's
 /// signature, or a serialized file's header.
-fn unity_file(path: &std::path::Path) -> Result<bool> {
+pub(crate) fn unity_file(path: &std::path::Path) -> Result<bool> {
     use std::io::Read;
     let mut first = Vec::new();
     let mut f = std::fs::File::open(path)?;

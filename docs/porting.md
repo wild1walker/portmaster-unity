@@ -597,6 +597,37 @@ by eye, the same frame rate). With 110 MB held by another process, as EmulationS
 dArkOS while a port runs, release reached the watchdog's 50 MB and convert kept 75 MB; the port uses
 convert.
 
+Text for every language, loaded in every language: a game may keep the fonts of all its languages
+referenced from its text objects (a component that swaps the font by language, a fallback list), and Unity
+then loads every one of them with the first scene and again with each scene that has text. Hollow Knight's
+first scene's shared assets hold the TextMeshPro atlases of every language, uncompressed (Alpha8; 4096x4096
+for both Chinese ones, 2048x2048 for Japanese, Korean and the bold Chinese and Japanese, 55.5 MB with the
+Russian ones), and the CJK font files (32 MB): about 87 MB of a 1 GB handheld for text an English player never
+sees. The textures step
+leaves them as they are (`sharp_names`: text atlases keep their size, and Alpha8 is already a byte a texel).
+The census (`UA_DUMP_TEXTURES`, runtime.md) finds them among a scene's biggest textures, and the G350's Mali
+driver among its biggest allocations ([profiling.md](profiling.md#where-a-games-memory-goes-on-a-1-gb-handheld-hollow-knight-2026-11-12)).
+Two parts keep them out of memory with the same picture
+in every language: the setup's `lazy` step leaves them out of every scene's preload list (Unity loads an
+asset that is not listed when something uses it), and `UA_UNLOAD_ASSETS` (the same names, runtime.md) gives
+back what the first scenes loaded; a game in Chinese loads its atlas again at once and keeps it (one load at
+the title). Hollow Knight's City of Tears on the RG34XX-SP: the game 593 -> 480 MB, the Mali driver's pages
+109 -> 52 MB, the lowest MemAvailable 308 -> 421 MB; on the G350 617 -> 492 MB and 231 -> 353 MB
+([profiling.md](profiling.md#where-a-games-memory-goes-on-a-1-gb-handheld-hollow-knight-2026-11-12)). The unload
+alone is undone by the next room's preload, and the lists alone save nothing (the first scene still loads them):
+set both, and only for a game whose setup ran the step (Hollow Knight's setup notes `convert=lazy` in its mark and
+the launcher reads it). A game set up before gets the step in place from the port's update step (`pmu lazy`,
+[rust-setup.md](rust-setup.md#lazy)).
+
+```toml
+[convert]
+steps = ["shaders", "settings", "audio", "textures", "video", "lazy"]
+[convert.lazy]
+names = "chinese_body Atlas|chinese_trad_body Atlas|...|NotoSerifCJKsc-Regular|NotoSerifTC-Medium"
+[runtime]
+UA_UNLOAD_ASSETS = "chinese_body Atlas|chinese_trad_body Atlas|...|NotoSerifCJKsc-Regular|NotoSerifTC-Medium"
+```
+
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
 
 The R36S class is PortMaster's most common handheld and the slowest these tools aim at: four Cortex-A35

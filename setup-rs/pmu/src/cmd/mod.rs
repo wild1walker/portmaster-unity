@@ -7,6 +7,7 @@ mod apk_asmpatch;
 mod argp;
 mod convert;
 mod il2cpp;
+mod lazy;
 mod macpkg;
 mod patch_obb;
 mod player;
@@ -36,6 +37,7 @@ pub const NAMES: &[&str] = &[
     "wwise",
     "video",
     "apk-asmpatch",
+    "lazy",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -57,6 +59,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "wwise" => Some(wwise::run(args)),
         "video" => Some(video::run(args)),
         "apk-asmpatch" => Some(apk_asmpatch::run(args)),
+        "lazy" => Some(lazy::run(args)),
         _ => None,
     }
 }

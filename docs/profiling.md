@@ -2417,3 +2417,74 @@ stand-in gave its memory back (fight 28.3 fps). A census of the Forge's fight
 render textures of 40 MB that the Ammonomicon's page renderers hold for the whole run while the book is shut
 (`AmmonomiconController.PrecacheAllData`); the CJK font atlases are not loaded in an English game; 4,173
 meshes, 457k vertices, all readable.
+
+## Where a game's memory goes on a 1 GB handheld (Hollow Knight, 2026-11-12)
+
+Hollow Knight with release 2026.11.12's settings (textures at 0.375 in ASTC 6x6, 16 MiB of a scene's sound decoded),
+City of Tears after the bench's walk (the city spot save, right 25 s and left 25 s with attacks and jumps),
+EmulationStation stopped.
+
+**How to look.**
+
+- **The kernel's view.** `VmRSS` (`/proc/<pid>/status`) is the process's pages in `/proc/<pid>/smaps` plus the
+  Mali driver's pages for it (kbase charges them to the process; smaps does not list them): RG34XX-SP 593 = 481 +
+  109 MB, G350 617 = 499 + 119 MB. In smaps the libraries' code (libunity 19 MB, libmali 12 - 17, Mono 6) is clean
+  file pages the kernel can drop and read back (on the G350 near the floor it does: hitches); the rest is anonymous.
+- **Who mapped it.** `UA_MEM_LEDGER=1` (runtime.md) notes every mmap of the game's Android libraries and reports,
+  with the census, what each holds resident (mincore), and glibc's malloc arenas: libunity 239 MB resident (Unity's
+  allocators), libmonobdwgc 119 MB (Mono's heap), malloc 78 MB in use with 2.5 MB free in its arenas (nothing to
+  gain from malloc's settings), the JIT's code 4 MB. `UA_MEM_LEDGER=2` also follows the libraries' malloc calls.
+- **Unity's view.** The census (`UA_DUMP_TEXTURES=req` or `UA_DUMP_MEMORY=req` with the bench's `census` plan step):
+  a release player answers the Profiler's totals: Unity allocated 196 MB of 291 MB reserved (the rest are pages its
+  allocators keep: about 45 MB of them resident), Mono's heap 112 MB (88 used); textures 79.1 MB by Unity's own
+  count (the census's per-texture estimate gives the same), render textures 3.8 MB (six at 540x360), readable
+  textures' CPU copies 1.5 MB, meshes 0.3 MB, decoded sound 13 MB.
+- **The GPU driver's view.** `/sys/kernel/debug/mali0/gpu_memory`: each context's pages. The G350's kbase (libmali
+  r13p0) also has `ctx/<pid>_<n>/mem_profile`, what the userspace driver says each page is for, by channel and size:
+  Texture 96 - 99 MB of 118 - 122, Buffer 9 (8 MB of it the port's GL arena, 4.5 used), driver heaps and frame
+  memory about 14. The RG34XX-SP's kbase (ukv11.17) has none. Both keep each context's freed pages in a pool (up to
+  16384 pages, 64 MB, then the device's) that neither VmRSS nor MemAvailable counts: a driver setting, not the port's.
+- **Unity's allocator statistics** (`-log-memory-performance-stats`) print at a clean quit, which the player does
+  not reach under ua_host (`UA_QUIT_CLEANUP=1` stops at "Timeout while trying to pause the Unity Engine").
+- **Read smaps only at the end.** Reading a big process's smaps holds its memory map: a 5.6 s stall on the G350 in
+  the middle of a walk.
+
+**What the textures are.** Two allocations of 17.8 MB and five of 4.46 MB stand out in the G350's profile; the
+census names them: TextMeshPro atlases of the languages not played, uncompressed (Alpha8, a byte a texel):
+`chinese_body Atlas` and `chinese_trad_body Atlas` (4096x4096), `chinese_body_bold`, `japanese_title`,
+`japanese_body`, `korean_body`, `japanese_body_bold` (2048x2048), the Russian ones (2048x1024 and smaller):
+55.5 MB of the 79 MB of textures in City of Tears; the room's own art is about 20 MB. The first scene's shared
+assets also hold the CJK font files as Font objects with their data (NotoSerifCJKsc-Regular 22.5 MB,
+NotoSerifTC-Medium 9.5 MB: the 32 MB fully resident anonymous mapping of both handhelds' smaps). Hollow Knight's
+`ChangeFontByLanguage` components (676 in City of Tears) hold every language's font, so every scene with text
+reaches them, every scene's PreloadData lists them (Unity loads them again with each scene, also after they were
+given back), and the textures step leaves them as they are (`sharp_names`; Alpha8 is a byte a texel already).
+
+**The cut.** The setup's `lazy` step (rust-setup.md) leaves them out of every PreloadData and the ResourceManager's
+dependency lists, and `UA_UNLOAD_ASSETS` (runtime.md) gives back what the start loaded (10 - 14 s after the first frame:
+the atlases and both fonts; 27 - 39 s: `japanese_body_bold` that the menu loaded); after the next scenes none came
+back. A game that shows one (its language's) loads it again at once and keeps it. City of Tears after the walk,
+census runs (the room's loads took as long as before: the G350's title 10.3 / 9.9 s, the save 7.4 / 7.3 s):
+
+| | RG34XX-SP, release's data | lazy + unload | G350, release's data | lazy + unload |
+|---|---|---|---|---|
+| game, VmRSS | 593 MB | 480 MB | 617 MB | 492 MB |
+| Mali driver's pages | 109 MB | 52 MB | 119 MB | 60 MB |
+| CPU side, smaps | 481 MB | 426 MB | 499 MB | 433 MB |
+| lowest MemAvailable | 308 MB | 421 MB | 231 MB | 353 MB |
+| Unity allocated (reserved) | 196 (291) MB | 153 (255) MB | 196 (291) MB | 153 (257) MB |
+| textures, Unity's count (G350: Mali's Texture channel) | 79.1 MB | 20.9 MB | 98.6 MB | 33.9 MB |
+
+(Mono's heap differed between runs by up to 16 MB resident: about 100 - 110 MB is the change.)
+
+The G350 with `UA_MEM_LEDGER=2`: of glibc's 91 MB (in use and mmapped chunks), Mono's runtime holds 41 MB
+(270,000 blocks: metadata and JIT records), libunity 12 MB, the host's libraries (the Mali driver's userspace
+part, SDL, ua_host) the rest, about 38 MB.
+
+**What is left.** Unity keeps about 40 MB of freed pages resident in its allocator blocks (allocated 153 MB,
+libunity's mappings 195 MB resident): smaller `memorysetup-*` blocks through `UA_BOOT_CONFIG` may give some back
+(not measured yet). City of Tears' two 312 s music layers are compressed in memory (about 12 MB) while a third
+streams: streaming them would save that, at the risk of the layers drifting apart (the game keeps them in step),
+an audible change: not done. The async upload buffer is 4 MB and persistent (`UA_ASYNC_UPLOAD=transient`, not
+measured). The Mali driver's own heaps and frame memory (about 18 MB on the G350) and its context pools are the
+driver's. Mono's heap (96 - 112 MB) and its runtime's 41 MB of malloc are Mono's side, not looked at here.
