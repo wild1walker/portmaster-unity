@@ -56,8 +56,8 @@ slow code.
 - **Mono's compiler is most of the first-time hitches.** `UA_JIT_LOG=1` times it: Hollow Knight's
   first slash, first hit and first death compiled 50-240 ms of methods in 100-320 ms frames, 12-18 s
   in a session. `UA_JIT_WARM=1` lists what was compiled and compiles it ahead at the next launch over
-  the title and loads (4 ms a frame): King's Pass hitches over 100 ms 8 -> 4. A port turns it on after
-  checking that the game's static field initializers read nothing else ([runtime.md](runtime.md)).
+  the title and loads (4 ms a frame): King's Pass hitches over 100 ms 8 -> 4. It never runs a static
+  constructor itself: a method waits until the game has run its classes' ([runtime.md](runtime.md)).
 - **Pooled objects made mid-fight** (Hollow Knight's "Object Pool ... has run out", ~100-200 ms
   each) and **a game's own saves** (compiling, reflection, encryption: ~0.5 s at the first death)
   are the next ones; `UA_JIT_WARM` takes most of their compiling (what is left is generic
