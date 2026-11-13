@@ -663,6 +663,9 @@ pm_message_end() {{ :; }}
 pm_platform_helper() {{ :; }}
 sleep() {{ :; }}
 ''')
+    # the firmware's mod file (PortMaster's mod_<CFW_NAME>.txt) with its own pm_platform_helper, as
+    # muOS's and ROCKNIX's have: the launcher sources it after control.txt
+    put(os.path.join(x, 'PortMaster', 'mod_test.txt'), 'pm_platform_helper() { echo "mod helper: ${1##*/}" >> "$STUB_LOG"; }\n')
     put(os.path.join(x, 'bin', 'uname'), '#!/bin/sh\necho aarch64\n')
     os.chmod(os.path.join(x, 'bin', 'uname'), 0o755)
     log = os.path.join(t, 'pm.log')
@@ -1530,6 +1533,7 @@ class NewAndSetupTest(unittest.TestCase):
                 r, log = self.run_launcher(t, out)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn('ua_host ' + os.path.realpath(g), log)
+                self.assertIn('mod helper: ua_host', log)        # (the firmware's mod file, sourced)
                 self.assertNotIn('message:', log)
                 for d in ('setup', 'donor', 'gamedata/.setup'):
                     self.assertFalse(os.path.exists(os.path.join(g, d)), d)
@@ -1715,6 +1719,7 @@ class NewAndSetupTest(unittest.TestCase):
                 r, log = self.run_launcher(t, out)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn('ua_host ' + os.path.realpath(g), log)
+                self.assertIn('mod helper: ua_host', log)        # (the firmware's mod file, sourced)
                 self.assertNotIn('message:', log)
                 for d in ('setup', 'donor', 'gamedata/.setup'):
                     self.assertFalse(os.path.exists(os.path.join(g, d)), d)
