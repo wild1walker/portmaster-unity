@@ -618,6 +618,16 @@ alone is undone by the next room's preload, and the lists alone save nothing (th
 set both, and only for a game whose setup ran the step (Hollow Knight's setup notes `convert=lazy` in its mark and
 the launcher reads it). A game set up before gets the step in place from the port's update step (`pmu lazy`,
 [rust-setup.md](rust-setup.md#lazy)).
+How it was checked before it went on by default (screenshots of the same screens side by side, A the release's
+data, B both parts): English, Chinese, Traditional Chinese, Japanese, Korean and Russian saved as the game's
+language, each launched straight into it; the title, profile list, inventory, pause and options text the same
+(mean difference under 1/255; where it was larger, the two runs had caught the screen at different moments).
+Each language's atlas came back once at the title and stayed; the long frames matched. In English, a room
+change and a death with its respawn (the shade in the next room) brought nothing back and the slowest frame was
+the same load in A and B (3.34 s, 3.37 s). Inputs on the G350 are sometimes lost: its walk and menu shots are
+not to be trusted, so the language and death checks are best done on a handheld that keeps them (the RG34XX-SP).
+On a test copy whose prefs had lost `GameLangSet` a scripted run waited at the title in A and B alike (the game
+is likely asking for a language, as at its first launch): check the prefs before blaming a change.
 
 ```toml
 [convert]
