@@ -133,6 +133,18 @@ loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries b
   `./ua_host64 <port>/arm64` from the port folder, so port.env's relative paths, `flipbooks.txt` and
   `uaflipbook.dll` beside the binary serve both, with `UM_PMHWDEC=pmhwdec64/libpmhwdec.so.1` and SDL's
   own audio driver. The 32-bit build's `setup/update` is not run on the 64-bit one.
+- **The 32-bit libraries' glibc.** port.json's `min_glibc` is the 64-bit system's (Hollow Knight: 2.30,
+  `ua_host64` and Unity's arm64 Mono; PortMaster's pmcheck reads the aarch64 binaries) and says nothing of
+  the 32-bit userland, which `ua_host` (built on Debian bookworm armhf) needs at glibc 2.35. Hollow Knight's
+  launcher reads it from `/lib/ld-linux-armhf.so.3 --version` (`... stable release version 2.40.`, busybox
+  `sed` too) and takes the 64-bit build where it is older; a version it can not read counts as new enough.
+  A 32-bit build set up before that check, on such a system, gets a message naming `HK_ROUTE=64` instead
+  of a game that closes.
+- **Which build, in order:** `HK_ROUTE` in port.env (with or without `export`), then a finished build's
+  mark (`.setup_done`, then `.setup_done64`), only then a setup under way (`gamedata/.setup`, `.setup64`),
+  then the libraries. With the work folders first, a stopped 32-bit setup's folder took a finished 64-bit
+  build back to the 32-bit setup once a release's new port.env dropped the `HK_ROUTE` line (a review of
+  the launcher, 2026-11-14). Once a build is ready, both work folders go.
 - **The release adds** the IL2CPP arm64 donor (`player.donors`; `tools/donor/build.sh <editor>
   Il2cppArm64`), `ua_host64`, Unity's Mono of the game's line with the bridge in `setup/mono64/<line>/`
   and libpmhwdec's arm64 build in `pmhwdec64/`, through `[build]` (Hollow Knight's `build64.sh`): 36.4 ->

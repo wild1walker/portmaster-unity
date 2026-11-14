@@ -333,7 +333,7 @@ done
 cp "$W/answers.env" "$GAMEDIR/answers.env" || nowrite "the game's settings"
 hook post_install
 # the copy of the game the setup used up (its files went into the APK and OBB)
-top=${D#$GD/}; top=${top%%/*}
+top=${D#"$GD"/}; top=${top%%/*}
 case "$D" in "$W"/*) ;; *) [ -n "$top" ] && [ "$top" != "$(basename "$W")" ] && rm -rf "${GD:?}/$top";; esac
 # the game is marked set up, on the card, before the tools, the work folder and the donors go: a
 # power cut in between leaves a game that starts (the launcher removes what is left), never one

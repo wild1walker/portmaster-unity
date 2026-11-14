@@ -319,7 +319,7 @@ step "installing"
 Z="$W/android/zip"
 # (the report's "unity" section names the scripting runtime: json.dump's one key a line)
 rt=$(sed -n 's/^  "scripting_runtime": "\(.*\)",\{0,1\}$/\1/p' "$W/android/android_data_report.json" 2>/dev/null | head -1)
-case "$rt" in *bdwgc*) other=libmono.so;; *) other=libmonobdwgc-2.0.so;; esac
+case "$rt" in "") other=;; *bdwgc*) other=libmono.so;; *) other=libmonobdwgc-2.0.so;; esac   # (no report: both, libunity picks)
 mkdir -p "$GAMEDIR/lib"
 rm -f "$GAMEDIR/lib/"*.so
 for f in "$P/Variations/$PLAYER_BACKEND/Release/Libs/$PLAYER_ABI/"*.so "$P/Variations/$PLAYER_BACKEND/Release/MonoLibs/$PLAYER_ABI/"*.so; do
@@ -347,7 +347,7 @@ done
 cp "$W/answers.env" "$GAMEDIR/answers.env" || nowrite "the game's settings"
 hook post_install
 # the copy of the game the setup used up (its files went into the APK and OBB)
-top=${D#$GD/}; top=${top%%/*}
+top=${D#"$GD"/}; top=${top%%/*}
 case "$D" in "$W"/*) ;; *) [ -n "$top" ] && [ "$top" != "$(basename "$W")" ] && rm -rf "${GD:?}/$top";; esac
 # the game is marked set up, on the card, before the tools, the work folder and the donors go: a
 # power cut in between leaves a game that starts (the launcher removes what is left), never one
