@@ -2058,6 +2058,24 @@ class RoutesTest(unittest.TestCase):
             P.render('@@NOPE@@', {})
 
 
+class SetupHelpersTest(unittest.TestCase):
+    """the setups' own small functions, run alone"""
+
+    def test_room(self):
+        # room <MB>: the card's free space against a need; an empty or unreadable figure (df's "-") is
+        # unknown, which lets the setup go on, without an error in patchlog.txt
+        for p in ('android', 'apk', 'box64', 'il2cpp-arm64', 'mono-arm64'):
+            text = P._read(os.path.join(P.TEMPLATES, p, 'patchscript'))
+            line = next(x for x in text.splitlines() if x.startswith('room() '))
+            for free, need, ok in (('100', 50, True), ('100', 150, False), ('', 150, True), ('-', 150, True)):
+                r = subprocess.run(['bash', '-c', f'free_mb() {{ echo {shlex.quote(free)}; }}\n{line}\nroom {need}'],
+                                   capture_output=True, text=True)
+                self.assertEqual(r.returncode == 0, ok, (p, free, need, r.stderr))
+                self.assertEqual(r.stderr, '', (p, free, need))
+        box = P._read(os.path.join(P.TEMPLATES, 'box64', 'patchscript'))
+        self.assertIn('need=$((GAME_SIZE_MB * 2 + 200)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB', box)
+
+
 class StaleBuildTest(unittest.TestCase):
     """package's note of a build in the checkout older than its sources (a pull after it was built):
     the release would ship it as it was"""

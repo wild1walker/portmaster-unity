@@ -31,7 +31,7 @@ hook() {                                # the port's own step at a fixed point (
 }
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
-room() { local f; f=$(free_mb); [ -z "$f" ] || [ "$f" -gt "$1" ]; }   # room <MB>: that much free (or unknown)
+room() { local f; f=$(free_mb); case "$f" in ""|*[!0-9]*) return 0;; esac; [ "$f" -gt "$1" ]; }   # room <MB>: that much free (or unknown)
 # a full card (or one pulled out) must stop the setup: a progress file that was not written would
 # let the next launch take a half-done step for a finished one
 nowrite() { fail "Could not write $1 to the card: is the card full? Free some space on it, then launch again."; }
