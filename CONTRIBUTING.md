@@ -12,7 +12,7 @@ Thanks for helping! The most useful contributions, in order:
 ```sh
 git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity
 cd portmaster-unity
-pip install -r convert/requirements.txt     # Python 3.10+
+pip install -r convert/requirements.txt     # Python 3.11+ (port.toml is read with tomllib)
 ```
 
 Docker builds the runtime (`runtime/build.sh`) and runs the native tests. The .NET 8 SDK is
@@ -23,6 +23,7 @@ needed for `tools/asmpatch`. See [docs/building.md](docs/building.md).
 | What | Command | Notes |
 |---|---|---|
 | converter (Python) | `cd convert && python3 -m unittest discover -s tests` | synthetic data only, no Unity or game files needed. Tests that read real files are skipped unless you point their variables at your own copies (`PMUNITY_GAMES`, `PMUNITY_GLCORE_CORPUS`, `PMUNITY_D3D11_CORPUS`, `PMUNITY_APK`, ...: see each test's header) |
+| the setup's tools (Rust: `pmu`, setup-rs) | `RS_ROOT=<a folder> setup-rs/tools/rs.sh . cargo test --locked` | in Docker, in the `ua-rust` image (its recipe: `setup-rs/docker/`, [docs/rust-setup.md](docs/rust-setup.md#building-and-testing)); its unit tests use made-up data (a test that reads a game skips without `PMU_TEST_DATA`); the golden tests (`setup-rs/tests/golden/`) run on your own copies |
 | loader | `runtime/loader/build.sh test` (and `ARCH=arm64 runtime/loader/build.sh test`) | synthetic Android libraries, in Docker |
 | Android shims | `runtime/android/build.sh test` | in Docker, no GPU |
 | fake JNI and UnityPlayer | `TESTS=1 runtime/build.sh` (or `runtime/jni/build.sh`) | armhf under QEMU; some QEMU builds crash on their threads: the test binaries also run on a handheld |

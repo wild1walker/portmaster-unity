@@ -401,12 +401,18 @@ a handheld yet (the builds are an hour or more on a Cortex-A53).
 
 The image `ua-rust` (arm64 Debian bookworm) has Rust 1.88 with the `aarch64-unknown-linux-musl`
 target, and the reference Python: PortMaster's `python_3.11` at `/opt/py` with the setup's
-packages at `/opt/pylibs`. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
+packages at `/opt/pylibs`. Its recipe is `setup-rs/docker/Dockerfile`, then `Dockerfile.gcc10` on
+top of it (the commands and the three files it takes, which are not in the repository, are in
+its first lines). A release's pmu embeds one file of that image, UnityPy's class database
+(`/opt/pylibs/UnityPy/resources/lzma.tpk`), so the same image gives the same binary. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
 live in Docker volumes (bind mounts of the host's disks are slow; a build's output is copied out
 with `docker cp` or a `cat` from the container when needed): `pmu-target` for the builds
 (`RS_TARGET_VOLUME`; a few GB, `/target/<worktree's name>` in it) and `pmu-cargo` for the crate
 cache (`RS_CARGO_VOLUME`), shared by every worktree; `RS_MEM` (1g; `build_pmu.sh` 3g) and
-`RS_JOBS` (2) size the container. `build_pmu.sh` copies setup-rs to `$TMPDIR` (default `/tmp`)
+`RS_JOBS` (2) size the container. Docker keeps its volumes in its disk image on the computer's
+own disk, which grows with every worktree's build (a few GB each) and does not shrink by itself:
+where that disk is short, `RS_TARGET_VOLUME` can be an absolute folder on another disk (Docker
+mounts it instead of the volume; slower, and builds stay whole, as incremental ones are off). `build_pmu.sh` copies setup-rs to `$TMPDIR` (default `/tmp`)
 first, so the binary names no checkout's folders.
 
 ```bash

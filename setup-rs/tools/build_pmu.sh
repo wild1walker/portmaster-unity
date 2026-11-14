@@ -4,7 +4,8 @@
 # licence texts of what is compiled into it (the crates from crates.io and Rust's standard library,
 # musl, lz4, zlib, UnityPy's class database, the vendored C/C++ and Rust of setup-rs/vendor). Built in the Rust
 # image (tools/rs.sh: ua-rust with GCC 10, setup-rs/docker/Dockerfile.gcc10, so the ASTC blocks are
-# the Python's) from a copy of setup-rs at a neutral path (the binary names its source files).
+# the Python's) from a copy of setup-rs at a neutral path (the binary names its source files), with
+# the crates Cargo.lock pins (--locked: a lock file out of step with Cargo.toml stops the build).
 # `pmunity port package` runs it (tools/port/out/pmu) for ports whose setup runs pmu.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -19,7 +20,7 @@ RS_ROOT=${RS_ROOT:-$B} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash 
   export CARGO_TARGET_DIR=/target/pmu-release PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk
   T=aarch64-unknown-linux-musl; O=/tmp/out; mkdir -p $O /build; cp -a . /build/setup-rs; cd /build/setup-rs
   command -v "${TC_CXX:-none}" >/dev/null || { echo "ua-rust has no GCC 10 (TC_CXX; setup-rs/docker/Dockerfile.gcc10): the ASTC blocks would not all match" >&2; exit 1; }
-  cargo build -q --release --target $T -p pmu >&2
+  cargo build -q --locked --release --target $T -p pmu >&2
   cp $CARGO_TARGET_DIR/$T/release/pmu $O/
   cat /opt/pylibs/unitypy-*.dist-info/licenses/LICENSE > $O/unitypy.txt
   cat /usr/share/doc/musl/copyright > $O/musl.txt
@@ -28,7 +29,7 @@ RS_ROOT=${RS_ROOT:-$B} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash 
   MIT=$(sed /\<year\>/d $(rustc --print sysroot)/share/doc/rust/licenses/MIT.txt)
   { echo "Rust standard library ($(rustc --version | cut -d" " -f2)): MIT or Apache-2.0, copyright the Rust project contributors"
     echo; echo "$MIT"
-    cargo tree -q -p pmu --target $T -e normal,no-proc-macro --prefix none --no-dedupe --format "{p}|{l}" | grep -v "(/" | sort -u |
+    cargo tree -q --locked -p pmu --target $T -e normal,no-proc-macro --prefix none --no-dedupe --format "{p}|{l}" | grep -v "(/" | sort -u |
     while IFS="|" read -r p l; do
       n=${p% v*}; v=${p##* v}; d=$(ls -d /opt/cargo/registry/src/*/$n-$v | head -1)
       printf "\n\n%s %s (%s)\n\n" "$n" "$v" "$l"
