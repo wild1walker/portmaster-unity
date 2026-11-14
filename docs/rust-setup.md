@@ -293,7 +293,9 @@ with their asset files and globalgamemanagers into `<game dir>/.pmunity-video`, 
 them, and each file it changed is written back over its APK or OBB entry (stored and of the same
 length: `pkgzip::zip::Archive::overwrite_stored`, its CRC-32 in the local header and the central
 directory). Every file is checked against its entry before any is written; the changed files wait
-marked ready until all are written back, so a run that is stopped writes them again. An entry is
+marked ready until all are written back, so a run that is stopped writes them again (the mark is
+synced to the card, with its folder, before the first entry is written: a run after a power cut
+never takes the clips again from an APK or OBB that is part written). An entry is
 looked through, taken out and written back a piece at a time (`Archive::reader`, `copy_entry`,
 `overwrite_stored_from`), never whole in memory: a game's resource files, its music too, can be
 hundreds of MB. On the muOS

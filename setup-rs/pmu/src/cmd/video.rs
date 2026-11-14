@@ -221,7 +221,13 @@ fn in_place(game: &Path, cfg: Json) -> Result<(), String> {
         job.flush().map_err(|e| e.to_string())?;
         r.map_err(|e| e.to_string())?;
         drop(job);
-        std::fs::write(out.join(".ready"), b"").map_err(|e| e.to_string())?;
+        // marked ready on the card before any entry is written back (the step's files are there
+        // already: the job syncs each before its rename): a run stopped from here on writes them
+        // again, and never takes the clips from archives that are part rewritten
+        let ready = out.join(".ready");
+        std::fs::write(&ready, b"").map_err(|e| e.to_string())?;
+        unityfs::bgwrite::sync_file(&ready).map_err(|e| e.to_string())?;
+        unityfs::bgwrite::sync_dir(&out);
     }
     // the changed files back over their entries
     let mut changed: Vec<String> = std::fs::read_dir(&out)
