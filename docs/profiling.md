@@ -1183,7 +1183,10 @@ change, more where an area begins: a session that explores without dying runs th
 at every room change (a limit above what is available) the textures stayed at 313 - 341, materials ~260, clips
 263 - 316, the game 548 - 597 MB on the G350 and 574 MB on the Knulli, and each room change took about 1 s longer
 (a room every 16.0 -> 17.0 s on the G350, 15.0 -> 16.0 on the Knulli; loads over 300 ms 957 -> 1,713 and 703 -> 1,170 ms median). With a limit,
-it unloads only when the memory is short. (Since 2026-11-13 the port also gives back the other languages' text,
+it unloads only when the memory is short: Hollow Knight's port sets 150 MB on every handheld (2026-11-14). The same tour on the
+Knulli with it: 5 of 54 room changes unloaded (at 144 - 149 MB available; those loads 1.1 - 3.9 s of long frames
+against a median of 0.73 s), MemAvailable stayed at 143 - 155 MB (93 without), the game ~600 MB instead of 630, the frame
+rate minute by minute the same; a City of Tears walk with ~330 MB free never unloaded. (Since 2026-11-13 the port also gives back the other languages' text,
 `UA_UNLOAD_ASSETS`: another 113 MB in City of Tears.)
 
 **Unity's incremental collector** (`MONO_GC_PARAMS=incremental=<n>`, what `boot.config`'s `gc-max-time-slice=<n>` starts
