@@ -2072,6 +2072,14 @@ class SetupHelpersTest(unittest.TestCase):
                                    capture_output=True, text=True)
                 self.assertEqual(r.returncode == 0, ok, (p, free, need, r.stderr))
                 self.assertEqual(r.stderr, '', (p, free, need))
+        # the update's checks the same way: an unreadable figure lets it go on
+        upd = P._read(os.path.join(P.TEMPLATES, 'android', 'update'))
+        line = next(x for x in upd.splitlines() if '-gt 300' in x).strip()
+        for free, ok in (('100', False), ('400', True), ('', True), ('-', True)):
+            r = subprocess.run(['bash', '-c', f'fail() {{ exit 1; }}; f={shlex.quote(free)}\n{line}'],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode == 0, ok, (free, r.stderr))
+            self.assertEqual(r.stderr, '', free)
         box = P._read(os.path.join(P.TEMPLATES, 'box64', 'patchscript'))
         self.assertIn('need=$((GAME_SIZE_MB * 2 + 200)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB', box)
 

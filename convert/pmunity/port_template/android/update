@@ -34,7 +34,7 @@ if { [ "${ASMPATCH:-off}" != off ] || [ "$SA" != obb ] || [ "${DATA_PATH:-0}" = 
    && [ -f "$GAMEDIR/$APK_NAME.apk" ]; then
   step "the game's code patches"
   f=$(df -Pm "$GAMEDIR" | awk 'NR==2{print $4}')
-  [ -z "$f" ] || [ "$f" -gt 300 ] || fail "Patching the game's code needs about 300 MB free on the card ($f MB free)."
+  case "$f" in ""|*[!0-9]*) ;; *) [ "$f" -gt 300 ] || fail "Patching the game's code needs about 300 MB free on the card ($f MB free).";; esac
   chmod +x "$S/asmpatch"
   a="'$S/asmpatch'"
   # (as the setup ran it: the streaming-assets and data-path patches android-data adds too)
