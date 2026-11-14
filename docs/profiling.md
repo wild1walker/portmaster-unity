@@ -1158,6 +1158,50 @@ For the handheld: `UA_DUMP_OFF_Z=-100,3` and `ASMPATCH_HK_BLUR=off,hide` against
 settings in one hold, each run from a cool start (the clock's fall decides as much as the work:
 41.7 against 33.7 fps).
 
+### A long session's memory (Hollow Knight, 2026-11-12)
+
+A tester's RG34XX-SP (Knulli) got laggy after 15 - 20 minutes of play. Long runs with the release's settings, silent,
+`UA_FPS=10` (a line every 10 s: fps, Mono's heap, the resident size), profrun's `mem.log` (MemAvailable, swap, rss every
+2 s) and `freq.log` (clocks, temperatures), EmulationStation's resident size held by a stand-in process during the run
+(a player's launch keeps ES in memory: 154 MB on the Knulli, 67 - 126 on the G350).
+
+**One room, 27 minutes** (Crossroads, walking, attacking and jumping): the RG34XX-SP held 59.6 fps throughout, the game
+at 565 MB from minute 4 on, no swap; the G350 fell from 49.8 to 46 fps as it warmed (CPU 1294 -> 1032 MHz at 81 C), the
+game at 580 MB. Nothing grows in one room. Hollow Knight keeps Unity's collector off while it plays (its `GCManager`
+collects only past clamp(0.121 x RAM, 384, 1024) MB of heap and at every scene load), so `UA_GC_BUDGET`'s collections
+come every 6.5 - 8 minutes in one room: 467 - 494 ms frozen on the RG34XX-SP, 610 - 672 on the G350.
+
+**Rooms** (a test aid sent the game from room to room as its doors do, `GameManager.BeginSceneTransition`, 12 s in each:
+King's Pass, Dirtmouth, 30 rooms of the Crossroads, 14 of Greenpath; the Knight standing, no deaths): what each room
+loads stays. The game unloads unused assets at a room change only after a death, a dream gate or a boss sequence, or
+when Unity's own memory passes 2.1 - 2.5 GB, which a 1 GB handheld never reaches. Over the 46 rooms (RG34XX-SP / G350):
+the textures Unity holds 375 -> 726 (97 -> 141 M texels), materials 259 -> 2,228, sound clips 277 -> 589
+(1,166 -> 3,532 s), Unity's own memory 168 -> 224 MB, the game 531 -> 630 MB / 550 -> 641 MB, MemAvailable down by
+122 / 124 MB (to 93 MB on the Knulli: still no swapping, file pages refaulted 75 MB over the run). About 2 - 3 MB a room
+change, more where an area begins: a session that explores without dying runs the memory down. asmpatch's
+`hk-unload` (`ASMPATCH_HK_UNLOAD=<MB>`, tools/asmpatch/README.md) unloads at a room change while MemAvailable is under that:
+at every room change (a limit above what is available) the textures stayed at 313 - 341, materials ~260, clips
+263 - 316, the game 548 - 597 MB on the G350 and 574 MB on the Knulli, and each room change took about 1 s longer
+(a room every 16.0 -> 17.0 s on the G350, 15.0 -> 16.0 on the Knulli; loads over 300 ms 957 -> 1,713 and 703 -> 1,170 ms median). With a limit,
+it unloads only when the memory is short. (Since 2026-11-13 the port also gives back the other languages' text,
+`UA_UNLOAD_ASSETS`: another 113 MB in City of Tears.)
+
+**Unity's incremental collector** (`MONO_GC_PARAMS=incremental=<n>`, what `boot.config`'s `gc-max-time-slice=<n>` starts
+Mono with; runtime.md), RG34XX-SP, City of Tears, release settings of 2026-11-13, each run from a cool start:
+
+| | the game's collector off (as released) | incremental, 3 ms |
+|---|---|---|
+| 17 minutes in one room | 56.6 fps; three collections, 465 - 475 ms each; longest frames 509 / 494 / 489 ms; 15 frames over 33 ms | 55.2 fps; collections every ~2.5 min ending in 52 - 64 ms stops; no frame over 68 ms; 24 over 33 ms |
+| Mono's heap, peak | 128 MB | 96 MB |
+| the game, peak | 558 MB | 531 MB |
+| lowest MemAvailable | 363 MB | 397 MB |
+| 150 s runs (A B, B A, then 1 ms against the game's) | 56.7, 57.1, 57.6 fps | 55.0, 55.0; 1 ms 55.9 |
+| a scene load (the first, the save's) | 6.1, 4.7 s | 6.8, 5.4 s |
+
+The memory and the freezes go, about 3 % of the frame rate and 0.7 s of each load come instead, whatever the slice (the
+write barriers in every compiled method). G350, one room 17 minutes: 63 - 87 ms stops instead of 610 - 672, heap 96 MB
+instead of 128, 45.3 against 47.5 fps. Not a default for Hollow Knight while the frame rate is the limit.
+
 ### What did not pay, or is not exact
 
 | change (how it would hook) | result |

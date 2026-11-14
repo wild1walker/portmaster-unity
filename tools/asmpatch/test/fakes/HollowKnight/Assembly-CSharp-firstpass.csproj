@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- A stand-in for Hollow Knight's Assembly-CSharp-firstpass for the hk-post and hk-camerafade tests: the engine
-       types and the two Standard Assets effects the patch looks at, written here (no game code).
+  <!-- A stand-in for Hollow Knight's Assembly-CSharp-firstpass for the hk-post, hk-camerafade and hk-unload tests: the engine
+       types (and Debug.Log) and the two Standard Assets effects the patch looks at, written here (no game code).
        Built by ../../../build.sh test into out/test/fakes/hk/, before Assembly-CSharp.csproj, which
        references it. -->
   <PropertyGroup>
@@ -15,5 +15,6 @@
   <ItemGroup>
     <Compile Include="Post.cs" />
     <Compile Include="FadeEngine.cs" />
+    <Compile Include="Debug.cs" />
   </ItemGroup>
 </Project>

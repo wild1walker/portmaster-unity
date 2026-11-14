@@ -50,7 +50,7 @@ abstract class Patch
         // optimizations
         new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new UnityObjectNull(), new HollowKnightFade(),
         // reductions
-        new HollowKnightBlur(), new HollowKnightPost(),
+        new HollowKnightBlur(), new HollowKnightPost(), new HollowKnightUnload(),
         // screens
         new HollowKnightAspect(), new HollowKnightRenderSize(),
         // prompts

@@ -147,6 +147,7 @@ static partial class TestMain
         HollowKnightRenderSizeTests();
         HollowKnightFadeTests();
         HollowKnightPadLettersTests();
+        HollowKnightUnloadTests();
     }
 
     // ---- hk-pad-letters ----------------------------------------------------------------------
@@ -521,4 +522,90 @@ static partial class TestMain
         (st, outp) = Patch(o, again, only: new[] { "hk-camerafade" });
         Check(st == 0 && outp.Contains("done hk-camerafade") && NoDlls(again), "hk-camerafade: a second run finds it applied");
     }
+
+    // ---- hk-unload ---------------------------------------------------------------------------
+    /// <summary>The stand-in's GameManager.IsUnloadAssetsRequired with ASMPATCH_HK_UNLOAD set to env, Unity's memory
+    /// at mem and a change of zone or not (a fresh load each time: the helper reads the variable once), and
+    /// how many lines the game logged.</summary>
+    static (bool unload, int logged) Unload(string dir, string env, long mem, bool zone)
+    {
+        var old = Environment.GetEnvironmentVariable(HollowKnightUnload.Variable);
+        Environment.SetEnvironmentVariable(HollowKnightUnload.Variable, env);
+        var ctx = new AssemblyLoadContext("hku" + Guid.NewGuid(), isCollectible: true);
+        ctx.Resolving += (c, n) => n.Name == "Assembly-CSharp-firstpass" ? c.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, n.Name + ".dll")))) : null;
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var t = a.GetType("GameManager", true);
+            t.GetField("MemoryUsage").SetValue(null, mem);
+            t.GetField("ZoneChange").SetValue(null, zone);
+            bool r = (bool)t.GetMethod("IsUnloadAssetsRequired").Invoke(Activator.CreateInstance(t), new object[] { "Crossroads_01", "Crossroads_02" });
+            var dbg = ctx.LoadFromAssemblyName(new AssemblyName("Assembly-CSharp-firstpass")).GetType("UnityEngine.Debug", true);
+            return (r, (int)dbg.GetField("Count").GetValue(null));
+        }
+        finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightUnload.Variable, old); }
+    }
+
+    /// <summary>The patched stand-in's helper: Parse(meminfo text) and Below(kB, MB).</summary>
+    static (long parsed, bool below) UnloadHelper(string dir, string meminfo, long kb, int mb)
+    {
+        var ctx = new AssemblyLoadContext("hkh" + Guid.NewGuid(), isCollectible: true);
+        ctx.Resolving += (c, n) => n.Name == "Assembly-CSharp-firstpass" ? c.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, n.Name + ".dll")))) : null;
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var h = a.GetType(HollowKnightUnload.HelperType, true);
+            const System.Reflection.BindingFlags any = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public;
+            long p = (long)h.GetMethod("Parse", any).Invoke(null, new object[] { meminfo });
+            bool b = (bool)h.GetMethod("Below", any).Invoke(null, new object[] { kb, mb });
+            return (p, b);
+        }
+        finally { ctx.Unload(); }
+    }
+
+    static void HollowKnightUnloadTests()
+    {
+        if (!File.Exists(FakeHollowKnightFirstpass)) { Check(false, $"Hollow Knight firstpass stand-in at {FakeHollowKnightFirstpass} (build.sh test builds it)"); return; }
+        var d = Dir("hku");
+        File.Copy(FakeHollowKnight, Path.Combine(d, "Assembly-CSharp.dll"));
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(d, "Assembly-CSharp-firstpass.dll"));
+        var (st, outp) = Patch(d, Path.Combine(tmp, "hku-default"));
+        Check(st == 0 && outp.Contains("skip hk-unload (opt-in: --with=hk-unload)"), "hk-unload: opt-in, not run by default");
+        var o = Path.Combine(tmp, "hku-out");
+        (st, outp) = Patch(d, o, with: new[] { "hk-unload" });
+        Check(st == 0 && outp.Contains("ok   hk-unload: Assembly-CSharp.dll: GameManager.IsUnloadAssetsRequired") &&
+              File.Exists(Path.Combine(o, "Assembly-CSharp.dll")), "hk-unload: applied when named");
+        if (!File.Exists(Path.Combine(o, "Assembly-CSharp.dll"))) return;
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(o, "Assembly-CSharp-firstpass.dll"), true);
+        // the game's own limits, patched or not, with the variable unset or not a number of MB
+        foreach (var dir in new[] { d, o })
+            foreach (var v in new[] { null, "", "0", "-5", "lots", "2.5" })
+            {
+                Check(Unload(dir, v, 0, false) == (false, 0) && Unload(dir, v, 0, true) == (false, 0), $"hk-unload: {(dir == d ? "unpatched" : "patched")}, ASMPATCH_HK_UNLOAD={v ?? "(unset)"}: no unload at low memory use");
+                Check(Unload(dir, v, 2700000000, false) == (true, 1) && Unload(dir, v, 2300000000, true) == (true, 1) && Unload(dir, v, 2300000000, false) == (false, 0),
+                      $"hk-unload: {(dir == d ? "unpatched" : "patched")}, ASMPATCH_HK_UNLOAD={v ?? "(unset)"}: the game's 2.5 / 2.1 GB limits");
+            }
+        // set: the system's available memory decides first; this machine's /proc/meminfo (none on a Mac: the game's own answer)
+        long avail = -1;
+        try { avail = (long)(UnloadHelper(o, File.ReadAllText("/proc/meminfo"), 0, 1).parsed); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        bool low = avail >= 0;           // an available amount under 1,000,000 MB: always, where there is one
+        Check(Unload(o, "1000000", 0, false) == (low, low ? 1 : 0), $"hk-unload: ASMPATCH_HK_UNLOAD=1000000: {(low ? "unloads (a line logged)" : "no /proc/meminfo here: the game's own answer")}");
+        Check(Unload(o, "1", 0, false) == (avail >= 0 && avail < 1024, avail >= 0 && avail < 1024 ? 1 : 0), "hk-unload: ASMPATCH_HK_UNLOAD=1: the game's own answer above 1 MB available");
+        // the helper's parsing and comparison
+        foreach (var (text, want) in new[] {
+                     ("MemTotal:         995512 kB\nMemFree:           45580 kB\nMemAvailable:     345678 kB\nBuffers:            4 kB\n", 345678L),
+                     ("MemAvailable:12 kB", 12L), ("MemAvailable:   0 kB\n", 0L), ("MemTotal: 995512 kB\n", -1L), ("MemAvailable:   kB", -1L), ("", -1L), (null, -1L) })
+            Check(UnloadHelper(o, text, 0, 1).parsed == want, $"hk-unload: Parse({(text == null ? "null" : text.Replace("\n", "|"))}) = {want} ({UnloadHelper(o, text, 0, 1).parsed})");
+        foreach (var (kb, mb, want) in new[] { (100L * 1024 - 1, 100, true), (100L * 1024, 100, false), (0L, 1, true), (-1L, 100, false), (5000000L, 4000, false) })
+            Check(UnloadHelper(o, "", kb, mb).below == want, $"hk-unload: Below({kb} kB, {mb} MB) = {want}");
+        (st, outp) = Patch(o, Path.Combine(tmp, "hku-again"), with: new[] { "hk-unload" });
+        Check(st == 0 && outp.Contains("done hk-unload") && NoDlls(Path.Combine(tmp, "hku-again")), "hk-unload: a second run finds it applied");
+        var none = Dir("hku-none");
+        var plain = NewModule("Assembly-CSharp");
+        plain.Types.Add(new Mono.Cecil.TypeDefinition("", "GameManager", Mono.Cecil.TypeAttributes.Public, plain.TypeSystem.Object));
+        plain.Write(Path.Combine(none, "Assembly-CSharp.dll"));
+        (st, outp) = Patch(none, Path.Combine(tmp, "hku-none-out"), with: new[] { "hk-unload" });
+        Check(st == 0 && outp.Contains("n/a  hk-unload: no Hollow Knight"), "hk-unload: a GameManager without IsUnloadAssetsRequired: not applicable");
+    }
 }
+
