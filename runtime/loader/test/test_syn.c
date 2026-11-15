@@ -258,6 +258,28 @@ static void test_mediandk(const char *dir)
     CHECK(h && so_dlsym(h, "AMediaExtractor_new") == (void *)shim_add, "dlopen(libmediandk.so) with a registered table");
 }
 
+/* ICU: Android's system library stood in for by the handheld's (AArch64), where it has one */
+static void test_icu(void)
+{
+#if defined(__aarch64__)
+    if (system("ls /usr/lib/aarch64-linux-gnu/libicuuc.so.* >/dev/null 2>&1 || ls /usr/lib/libicuuc.so.* >/dev/null 2>&1") != 0) {
+        printf("  (no ICU on this machine: the ICU check skipped)\n");
+        return;
+    }
+    void *h = so_dlopen("libicuuc.so", 0);
+    char name[64] = "";
+    int (*ver)(void *) = NULL;
+    for (int v = 90; h && v >= 50 && !ver; v--) {         /* as .NET's probe: u_getVersion_<major> */
+        snprintf(name, sizeof name, "u_getVersion_%d", v);
+        ver = (int (*)(void *))so_dlsym(h, name);
+    }
+    unsigned char vb[4] = { 0 };
+    if (ver) ver(vb);
+    CHECK(h && ver && vb[0] >= 50, "dlopen(libicuuc.so) -> the host's ICU: %p, %s, version %d", h, name, vb[0]);
+    CHECK(so_dlopen("libicui18n.so", 0) != NULL, "dlopen(libicui18n.so)");
+#endif
+}
+
 #if defined(__aarch64__)
 static unsigned long (*tls_guard)(void);
 static int (*protected_fn)(int);
@@ -360,6 +382,7 @@ int main(int argc, char **argv)
     CHECK(r == 0, "stat: %d", r);
     test_newer(m[0]);
     test_mediandk(dir);
+    test_icu();
 
 #if defined(__aarch64__)
     tls_guard = (unsigned long (*)(void))sym(m[0], "syn_tls_guard");

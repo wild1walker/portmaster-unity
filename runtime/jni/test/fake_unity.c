@@ -872,6 +872,7 @@ jint fake_libunity_onload(JavaVM *vm, void *reserved)
 {
     JNIEnv *env;
     if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) return -1;
+    if (!g_vm) g_vm = vm;                   /* loaded without libmain (Unity 7: the Java side loads libunity) */
     R[R_ONLOAD]++;
     register_shape(env, "com/unity3d/player/UnityPlayer", up_natives, sizeof up_natives / sizeof up_natives[0]);
     register_shape(env, "com/unity3d/player/UnityPlayerForActivityOrService", aos_natives, sizeof aos_natives / sizeof aos_natives[0]);

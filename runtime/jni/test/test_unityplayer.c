@@ -15,6 +15,8 @@ int fake_unity_get(int i);
 void fake_unity_set_shape(int shape);
 jobject fake_unity_proxy(void);
 jint FJ_ABI fake_libmain_onload(JavaVM *vm, void *reserved);
+jint FJ_ABI fake_libunity_onload(JavaVM *vm, void *reserved);
+static int no_libmain;     /* the newest shape once more without libmain: libunity's JNI_OnLoad called directly (Unity 7) */
 void fake_unity_soft_input(int op, int arg);
 const char *fake_unity_si_seq(void);
 const char *fake_unity_si_str(void);
@@ -276,7 +278,7 @@ static const char *const java_side[][3] = {
 static int run_shape(int shape)
 {
     setenv("UA_PREFS_DEFAULTS", "particles=0 bad =3", 1);   /* (a malformed entry is skipped) */
-    printf("== Unity %s shape\n", shape_name[shape]);
+    printf("== Unity %s shape%s\n", shape_name[shape], no_libmain ? " without libmain" : "");
     fake_unity_set_shape(shape);
     if (system("rm -rf /tmp/uptest && mkdir -p /tmp/uptest/lib && touch /tmp/uptest/lib/libil2cpp.so") != 0)
         printf("  (could not reset /tmp/uptest)\n");
@@ -295,7 +297,8 @@ static int run_shape(int shape)
     cfg.sdk_int = 23;
     cfg.meta_data = meta;
     cfg.native_window = (void *)0x1234;
-    cfg.libmain_onload = fake_libmain_onload;
+    cfg.libmain_onload = no_libmain ? NULL : fake_libmain_onload;
+    cfg.libunity_onload = fake_libunity_onload;
     cfg.on_frame = on_frame;
     cfg.on_audio = on_audio;
     cfg.on_quit = on_quit;
@@ -461,6 +464,49 @@ static int run_shape(int shape)
     return fails ? 1 : 0;
 }
 
+/* the battery from a made-up /sys/class/power_supply */
+static void put(const char *path, const char *v)
+{
+    FILE *f = fopen(path, "w");
+    if (f) { fputs(v, f); fclose(f); }
+}
+static void test_battery(void)
+{
+    printf("== battery\n");
+    const char *r = "/tmp/uptest-power";
+    if (system("rm -rf /tmp/uptest-power && mkdir -p /tmp/uptest-power/axp-battery /tmp/uptest-power/axp-usb "
+               "/tmp/uptest-power/ac") != 0) { fails++; return; }
+    struct up_battery b;
+    up_battery_read("/tmp/uptest-power-none", &b);           /* no such folder (a PC): full, as before */
+    CHECK(b.present == 1 && b.level == 100 && b.status == 5 && b.plugged == 0 && b.health == 2);
+    up_battery_read(r, &b);                                  /* only empty supplies: still full */
+    CHECK(b.level == 100 && b.status == 5);
+    put("/tmp/uptest-power/axp-battery/type", "Battery\n");
+    put("/tmp/uptest-power/axp-battery/capacity", "37\n");
+    put("/tmp/uptest-power/axp-battery/status", "Discharging\n");
+    put("/tmp/uptest-power/axp-battery/health", "Good\n");
+    put("/tmp/uptest-power/axp-battery/temp", "312\n");
+    put("/tmp/uptest-power/axp-battery/voltage_now", "3815000\n");
+    put("/tmp/uptest-power/axp-usb/type", "USB\n");
+    put("/tmp/uptest-power/axp-usb/online", "0\n");
+    put("/tmp/uptest-power/ac/type", "Mains\n");
+    put("/tmp/uptest-power/ac/online", "0\n");
+    up_battery_read(r, &b);
+    CHECK(b.present == 1 && b.level == 37 && b.status == 3 && b.plugged == 0 && b.health == 2);
+    CHECK(b.temperature == 312 && b.voltage_mv == 3815);
+    put("/tmp/uptest-power/axp-battery/status", "Charging");
+    put("/tmp/uptest-power/axp-usb/online", "1");
+    up_battery_read(r, &b);
+    CHECK(b.status == 2 && b.plugged == 2);                  /* USB */
+    put("/tmp/uptest-power/ac/online", "1");
+    up_battery_read(r, &b);
+    CHECK(b.plugged == 1);                                   /* AC wins over USB */
+    put("/tmp/uptest-power/axp-battery/capacity", "140");
+    put("/tmp/uptest-power/axp-battery/status", "Full");
+    up_battery_read(r, &b);
+    CHECK(b.level == 100 && b.status == 5);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1) {
@@ -471,16 +517,19 @@ int main(int argc, char **argv)
         return r;
     }
     int failed = 0;
-    for (int s = 0; s < SHAPE_N; s++) {
+    test_battery();
+    if (fails) { printf("  FAIL battery\n"); failed++; fails = 0; }
+    for (int i = 0; i <= SHAPE_N; i++) {
+        int s = i < SHAPE_N ? i : SHAPE_N - 1;
         fflush(stdout);
         pid_t p = fork();
-        if (p == 0) { int r = run_shape(s); fflush(stdout); _exit(r); }
+        if (p == 0) { no_libmain = i == SHAPE_N; int r = run_shape(s); fflush(stdout); _exit(r); }
         int st = 0;
         if (p < 0 || waitpid(p, &st, 0) != p || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-            printf("  FAIL Unity %s shape (status 0x%x)\n", shape_name[s], st);
+            printf("  FAIL Unity %s shape%s (status 0x%x)\n", shape_name[s], i == SHAPE_N ? " without libmain" : "", st);
             failed++;
         }
     }
-    printf("%s: %d failure(s) in %d Unity version shapes\n", failed ? "FAILED" : "PASSED", failed, SHAPE_N);
+    printf("%s: %d failure(s) in %d Unity version shapes (and the newest without libmain)\n", failed ? "FAILED" : "PASSED", failed, SHAPE_N);
     return failed ? 1 : 0;
 }

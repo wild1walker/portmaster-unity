@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 #include "up_internal.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <zlib.h>
@@ -400,19 +401,76 @@ H(ctx_getSystemService)
     return fj_l(r);
 }
 H(ctx_checkPermission)   { if (fj_tracing()) up_log("permission %s granted", jstr(a[0])); return fj_i(0); }
+/* The handheld's battery from <root> (/sys/class/power_supply): the first supply of type Battery,
+ * and whether a Mains or USB supply is online. Without a battery (a PC) it stays full and present,
+ * as before. Values as BatteryManager's extras: status 2 charging, 3 discharging, 4 not charging,
+ * 5 full, 1 unknown; plugged 1 AC, 2 USB; health 2 good; temperature in tenths of a degree; mV. */
+static int sys_line(const char *dir, const char *name, char *buf, size_t n)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int ok = fgets(buf, (int)n, f) != NULL;
+    fclose(f);
+    if (ok) buf[strcspn(buf, "\r\n")] = 0;
+    return ok && buf[0];
+}
+void up_battery_read(const char *root, struct up_battery *b)
+{
+    *b = (struct up_battery){ .present = 1, .level = 100, .status = 5, .plugged = 0, .health = 2,
+                              .temperature = 250, .voltage_mv = 4200 };
+    DIR *d = opendir(root);
+    if (!d) return;
+    int found = 0, plugged = 0;
+    struct dirent64 *e;                /* 32-bit: readdir fails (EOVERFLOW) on 64-bit inode numbers */
+    char dir[512], v[64];
+    while ((e = readdir64(d))) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(dir, sizeof dir, "%s/%s", root, e->d_name);
+        if (!sys_line(dir, "type", v, sizeof v)) continue;
+        if (!strcmp(v, "Mains") || !strcmp(v, "USB")) {
+            char on[16];
+            if (sys_line(dir, "online", on, sizeof on) && atoi(on) > 0 && plugged != 1)
+                plugged = !strcmp(v, "Mains") ? 1 : 2;
+            continue;
+        }
+        if (strcmp(v, "Battery") || found) continue;
+        if (sys_line(dir, "present", v, sizeof v) && !atoi(v)) continue;
+        found = 1;
+        if (sys_line(dir, "capacity", v, sizeof v)) { int c = atoi(v); b->level = c < 0 ? 0 : c > 100 ? 100 : c; }
+        b->status = 1;
+        if (sys_line(dir, "status", v, sizeof v))
+            b->status = !strcmp(v, "Charging") ? 2 : !strcmp(v, "Discharging") ? 3 : !strcmp(v, "Not charging") ? 4
+                      : !strcmp(v, "Full") ? 5 : 1;
+        if (sys_line(dir, "health", v, sizeof v))
+            b->health = !strcmp(v, "Good") ? 2 : !strcmp(v, "Overheat") ? 3 : !strcmp(v, "Dead") ? 4
+                      : !strcmp(v, "Over voltage") ? 5 : !strcmp(v, "Cold") ? 7 : 1;
+        if (sys_line(dir, "temp", v, sizeof v)) b->temperature = atoi(v);          /* tenths of a degree */
+        if (sys_line(dir, "voltage_now", v, sizeof v)) b->voltage_mv = (int)(atol(v) / 1000);   /* uV */
+    }
+    closedir(d);
+    if (found) b->plugged = plugged;
+}
 H(ctx_registerReceiver)
 {
-    /* the only receiver Unity registers is ACTION_BATTERY_CHANGED: return the sticky intent */
+    /* the only receiver Unity registers is ACTION_BATTERY_CHANGED, with no receiver, for the sticky
+       intent: libunity asks again when the game reads SystemInfo.batteryLevel/batteryStatus */
+    struct up_battery b;
+    up_battery_read("/sys/class/power_supply", &b);
     jobject i = intent_new("android.intent.action.BATTERY_CHANGED");
     jobject ex = intent_extras(i);
-    bundle_put(ex, "level", "100");
-    bundle_put(ex, "scale", "100");
-    bundle_put(ex, "status", "5");       /* BATTERY_STATUS_FULL */
-    bundle_put(ex, "plugged", "0");
-    bundle_put(ex, "health", "2");
-    bundle_put(ex, "present", "true");
-    bundle_put(ex, "temperature", "250");
-    bundle_put(ex, "voltage", "4200");
+    char t[32];
+#define PUT(k, x) do { snprintf(t, sizeof t, "%d", (int)(x)); bundle_put(ex, k, t); } while (0)
+    PUT("level", b.level);
+    PUT("scale", 100);
+    PUT("status", b.status);
+    PUT("plugged", b.plugged);
+    PUT("health", b.health);
+    PUT("temperature", b.temperature);
+    PUT("voltage", b.voltage_mv);
+#undef PUT
+    bundle_put(ex, "present", b.present ? "true" : "false");
     return fj_l(i);
 }
 H(ctx_startActivity)

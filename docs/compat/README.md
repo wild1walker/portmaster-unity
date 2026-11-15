@@ -265,6 +265,15 @@ Not covered: 5.0 - 5.5 (5.0 - 5.4: another Shader layout; 5.5 unchecked), 6000.7
 25), the GameActivity variant (a Gradle-built `libgame.so`; every package has the Activity one,
 which the runtime plays), Vulkan (the converter keeps GLES3 only).
 
+Ready for Unity 7 (7000.x, in alpha; no player of it run here yet), from what another loader found
+running one (Bogodroid's notes): its Android player has no `libmain.so` (the Java side loads
+`libunity.so` itself), so ua_host then loads `libunity.so` and calls its `JNI_OnLoad` directly
+(`runtime/jni`'s test runs the newest shape that way too); and .NET's globalization code in it dlopens
+Android's ICU (`libicuuc.so`, `libicui18n.so`, probing `u_getVersion_<n>`), which the loader serves from
+the handheld's own ICU on AArch64 (the newest `libicuuc.so.<n>` of `/usr/lib/aarch64-linux-gnu`,
+`/usr/lib`...: Knulli has 73, dArkOS 76; `runtime/loader/test`). Not on 32-bit: ICU passes dates as
+doubles, which a softfp caller cannot hand to an armhf library unconverted.
+
 ### Players run (emulated rig)
 
 | player | game | result |

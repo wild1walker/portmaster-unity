@@ -249,8 +249,8 @@ static void scan_libdir(void)
 {
     DIR *dir = opendir(g_libdir);
     if (!dir) return;
-    struct dirent *e;
-    while ((e = readdir(dir))) {
+    struct dirent64 *e;
+    while ((e = readdir64(dir))) {
         if (!strstr(e->d_name, ".so")) continue;
         char p[PATH_MAX + 260];
         snprintf(p, sizeof p, "%s/%s", g_libdir, e->d_name);

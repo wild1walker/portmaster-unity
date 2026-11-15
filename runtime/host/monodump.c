@@ -57,6 +57,13 @@
 //                           its own sprite) are shadowed, then turned off and their sprite set the same way before
 //                           every render (managed/UAFlipbook.cs). UA_FLIPBOOK_MODE=check: shadowed only, mismatches
 //                           counted ("[flipbook] ..." in the log every 10 s).
+//   UA_PROBE=<s>            a test aid: <s> seconds after the first frame, uaprobe.dll (runtime/host/managed: build.sh probe;
+//                           UA_PROBE_DLL, default beside ua_host) loaded into the game's domain and UAProbe.Run called on
+//                           UnityMain with what the handheld knows (its UTC offset, time zone, cores, battery): one line a
+//                           check of what a phone gives a game (time zone, culture, encodings, files, PlayerPrefs, threads,
+//                           sockets, crypto, gzip, SystemInfo, screen, controllers, packages) "[probe] ok|FAIL <check>: ...",
+//                           then "[probe] done: <n> ok, <m> failed (<names>)". It writes only its own files and one
+//                           PlayerPrefs key, removed again (managed/UAProbe.cs). Mono games only.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +72,7 @@
 #include <unistd.h>
 
 #include "../loader/so_loader.h"
+#include "../jni/unityplayer.h"
 #include "monodump.h"
 #include "memledger.h"
 
@@ -613,6 +621,63 @@ static void flipbook_frame(void)
     if (exc) fprintf(stderr, "[flipbook] UAFlipbook.Init threw: off\n");
 }
 
+// UA_PROBE: uaprobe.dll's checks, once, <s> seconds after the first frame (the facts the handheld gives it: below)
+static void probe_frame(void)
+{
+    static int state = -1;                  // -1: not read; 0: off or done; 1: waiting
+    static double at;
+    static char dll[512];
+    if (state == 0) return;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (state < 0) {
+        const char *e = getenv("UA_PROBE");
+        double s = e && *e ? strtod(e, NULL) : 0;
+        state = s > 0 ? 1 : 0;
+        if (!state) return;
+        at = now + s;
+        const char *d = getenv("UA_PROBE_DLL");
+        if (d && *d) snprintf(dll, sizeof dll, "%s", d);
+        else {
+            char exe[400]; ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+            exe[n > 0 ? n : 0] = 0;
+            char *slash = strrchr(exe, '/'); if (slash) *slash = 0;
+            snprintf(dll, sizeof dll, "%s/uaprobe.dll", exe);
+        }
+    }
+    if (now < at || !load() || (!m_image_loaded("UnityEngine.CoreModule") && !m_image_loaded("UnityEngine"))) return;
+    state = 0;
+    // what the handheld knows, for the checks that compare: its local time's offset from UTC (minutes), the zone's
+    // name (TZ, /etc/timezone or the /etc/localtime link), the cores online, the battery's level
+    char facts[512], tz[128] = "";
+    time_t t = time(NULL);
+    struct tm lt;
+    localtime_r(&t, &lt);
+    const char *tzv = getenv("TZ");
+    if (tzv && *tzv) snprintf(tz, sizeof tz, "%s", tzv[0] == ':' ? tzv + 1 : tzv);
+    FILE *f = tz[0] ? NULL : fopen("/etc/timezone", "r");
+    if (f) { if (fgets(tz, sizeof tz, f)) tz[strcspn(tz, "\r\n")] = 0; fclose(f); }
+    if (!tz[0]) {
+        char l[256]; ssize_t n = readlink("/etc/localtime", l, sizeof l - 1);
+        if (n > 0) { l[n] = 0; const char *z = strstr(l, "zoneinfo/"); snprintf(tz, sizeof tz, "%s", z ? z + 9 : l); }
+    }
+    struct up_battery b;
+    up_battery_read("/sys/class/power_supply", &b);
+    snprintf(facts, sizeof facts, "utc_offset=%ld;tz=%s;cores=%ld;battery=%d", (long)lt.tm_gmtoff / 60, tz,
+             sysconf(_SC_NPROCESSORS_ONLN), b.level);
+    MonoDomain *dom = m_domain_get();
+    void *asm_ = m_domain_assembly_open(dom, dll);
+    MonoImage *img = asm_ ? m_assembly_get_image(asm_) : NULL;
+    MonoClass *k = img ? m_class_from_name(img, "", "UAProbe") : NULL;
+    MonoMethod *run = k ? m_method_from_name(k, "Run", 1) : NULL;
+    if (!run) { fprintf(stderr, "[probe] %s: no UAProbe.Run(string): off\n", dll); return; }
+    fprintf(stderr, "[probe] %s, handheld: %s\n", dll, facts);
+    void *args[1] = { m_string_new(dom, facts) };
+    MonoObject *exc = NULL;
+    m_invoke(run, NULL, args, &exc);
+    if (exc) fprintf(stderr, "[probe] UAProbe.Run threw\n");
+}
+
 // UA_HERO_PLACE: once, the Knight's transform at (x, y) a few seconds after it first exists
 static void hero_place(void)
 {
@@ -992,6 +1057,7 @@ void monodump_frame(void)
     async_upload();
     unload_assets();
     flipbook_frame();
+    probe_frame();
     hero_place();
     comps_off();
     scenery_off();

@@ -202,8 +202,10 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
 - PlayerPrefs (SharedPreferences) persist in `<data_dir>/shared_prefs/<name>.prefs` (one
   `type\tkey\tvalue` per line, %-escaped) and are saved on commit/apply.
 - `Intent.getStringExtra("unity")` returns `cfg.command_line`. `ApplicationInfo.metaData` comes from
-  `cfg.meta_data` ("key=value"). The battery intent reports full; there is no network
+  `cfg.meta_data` ("key=value"). The battery intent reports the handheld's battery (`/sys/class/power_supply`: the first `Battery`
+  supply, plugged in when a `Mains` or `USB` supply is online), full where there is none; there is no network
   (`getActiveNetworkInfo` returns null), all permissions are granted and `SDK_INT` defaults to 22.
+
 
 ## Tests (`./build.sh` in an arm/v7 container, `ARCH=arm64 ./build.sh` natively in ua-build-arm64)
 - `test/test_fakejni.c` + `test/android_side.c`: on ARM android_side is compiled **`-mfloat-abi=softfp

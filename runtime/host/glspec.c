@@ -613,9 +613,9 @@ static void remove_tree(const char *path)
 {
     DIR *d = opendir(path);
     if (!d) { unlink(path); return; }
-    struct dirent *e;
+    struct dirent64 *e;
     char p[1024];
-    while ((e = readdir(d))) {
+    while ((e = readdir64(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         snprintf(p, sizeof p, "%s/%s", path, e->d_name);
         struct stat st;

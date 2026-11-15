@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- UAProbe.cs only: .NET 3.5 (mscorlib 2.0, which Unity 2017.x's Mono has and newer Monos take), no Unity
+       reference (reflection), reference assemblies from NuGet: no game or Unity file needed to build it -->
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <AssemblyName>uaprobe</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="UAProbe.cs" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

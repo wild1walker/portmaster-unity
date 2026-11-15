@@ -151,8 +151,8 @@ static int add_dir(const char *dir)
     DIR *d = opendir(dir);
     if (!d) return 0;
     int k = 0;
-    struct dirent *e;
-    while ((e = readdir(d)) && g_ncerts < MAX_CERTS) {
+    struct dirent64 *e;
+    while ((e = readdir64(d)) && g_ncerts < MAX_CERTS) {
         if (e->d_name[0] == '.') continue;
         char p[1100];
         snprintf(p, sizeof p, "%s/%s", dir, e->d_name);

@@ -65,13 +65,13 @@ static uint32_t post(const char *ev, uint64_t obj) { uint32_t p = ++g_pid; if (!
 static void load_all(const char *dir)
 {
     DIR *d = opendir(dir);
-    struct dirent *e;
+    struct dirent64 *e;
     uint32_t id;
     int init = 0;
-    while (d && (e = readdir(d))) if (!strcasecmp(e->d_name, "Init.uaww.json")) init = 1;
+    while (d && (e = readdir64(d))) if (!strcasecmp(e->d_name, "Init.uaww.json")) init = 1;
     if (init) B->load_bank("Init.bnk", 0, NULL, 0, &id);         // the buses first, as a game does
     if (d) rewinddir(d);
-    while (d && (e = readdir(d))) {
+    while (d && (e = readdir64(d))) {
         size_t n = strlen(e->d_name);
         if (n > 10 && !strcmp(e->d_name + n - 10, ".uaww.json") && strcasecmp(e->d_name, "Init.uaww.json")) {
             char name[256];

@@ -206,9 +206,9 @@ static int only_apk(const char *root, char *out, size_t n)
 {
     DIR *d = opendir(root);
     if (!d) return 0;
-    struct dirent *e;
+    struct dirent64 *e;
     int found = 0;
-    while ((e = readdir(d))) {
+    while ((e = readdir64(d))) {
         size_t l = strlen(e->d_name);
         if (l > 4 && !strcmp(e->d_name + l - 4, ".apk")) { if (!found++) snprintf(out, n, "%s/%s", root, e->d_name); }
     }
@@ -649,8 +649,15 @@ int main(int argc, char **argv)
     plugins_init(root, libdir);                 // the port's plugins.map: ARM builds, stubs (plugins.c)
     if (mono64_init(libdir, pj_scripting, pj_unity, pj_gc_slice) < 0) return 1;   // libil2cpp.so -> Mono (mono64.c)
 
+    // libmain.so (its JNI_OnLoad, then NativeLoader.load loads libunity); Unity 7 has none: its Java side loads
+    // libunity.so itself, and libunity's JNI_OnLoad is called directly (cfg.libunity_onload)
     char path[600];
     snprintf(path, sizeof path, "%s/libmain.so", libdir);
+    int have_main = access(path, F_OK) == 0;
+    if (!have_main) {
+        fprintf(stderr, "[host] no libmain.so: libunity.so loaded directly (Unity 7)\n");
+        snprintf(path, sizeof path, "%s/libunity.so", libdir);
+    }
     so_module *m = so_load(path, NULL);
     if (!m) { fprintf(stderr, "[host] %s: %s\n", path, so_error()); return 1; }
     so_run_init(m);
@@ -728,7 +735,8 @@ int main(int argc, char **argv)
     if (cfg.audio_sample_rate < 8000 || cfg.audio_sample_rate > 192000) cfg.audio_sample_rate = 48000;
     cfg.audio_frames_per_buffer = getenv("UA_AUDIO_FRAMES") ? atoi(getenv("UA_AUDIO_FRAMES")) : 0;
     if (cfg.audio_frames_per_buffer < 64 || cfg.audio_frames_per_buffer > 16384) cfg.audio_frames_per_buffer = 512;
-    cfg.libmain_onload = (up_onload_fn)so_sym(m, "JNI_OnLoad");
+    if (have_main) cfg.libmain_onload = (up_onload_fn)so_sym(m, "JNI_OnLoad");
+    else cfg.libunity_onload = (up_onload_fn)so_sym(m, "JNI_OnLoad");
     cfg.native_window = win;
     msaafix_set_size(cfg.width, cfg.height);
     cfg.on_load_library = load_library;

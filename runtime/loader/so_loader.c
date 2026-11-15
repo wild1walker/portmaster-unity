@@ -8,6 +8,7 @@
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <link.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -1612,6 +1613,37 @@ static so_handle *find_handle(int kind, const char *name)
 
 static const char *(*g_dlopen_rewrite)(const char *path, char *buf, size_t size);
 void so_set_dlopen_rewrite(const char *(*rewrite)(const char *, char *, size_t)) { g_dlopen_rewrite = rewrite; }
+/* ICU: Android has it as a system library (libicuuc.so, libicui18n.so), which .NET's globalization code in newer
+ * IL2CPP players dlopens and probes for its versioned symbols (u_getVersion_NN); the handheld's own ICU stands in
+ * for it, the newest of the usual folders. AArch64 only: ICU passes dates as doubles, which a 32-bit Android
+ * (softfp) caller cannot hand to a glibc armhf library unconverted. */
+static int host_icu(const char *b, char *out, size_t n)
+{
+#if defined(__aarch64__)
+    const char *lib = !strncmp(b, "libicuuc", 8) ? "libicuuc" : !strncmp(b, "libicui18n", 10) ? "libicui18n" : NULL;
+    if (!lib) return 0;
+    static const char *dirs[] = { "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib" };
+    for (size_t d = 0; d < sizeof dirs / sizeof dirs[0]; d++) {
+        char pat[256];
+        snprintf(pat, sizeof pat, "%s/%s.so.*", dirs[d], lib);
+        glob_t g;
+        if (glob(pat, 0, NULL, &g) != 0) continue;
+        int best = -1, bestv = -1;          /* the highest major version (libicuuc.so.76, not .so.76.1's minor) */
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            const char *v = strstr(g.gl_pathv[i], ".so.") + 4;
+            if (strchr(v, '.')) continue;
+            if (atoi(v) > bestv) { bestv = atoi(v); best = (int)i; }
+        }
+        if (best >= 0) snprintf(out, n, "%s", g.gl_pathv[best]);
+        globfree(&g);
+        if (best >= 0) return 1;
+    }
+#else
+    (void)b; (void)out; (void)n;
+#endif
+    return 0;
+}
+
 void *so_dlopen(const char *filename, int flags)
 {
     if (!filename) return &g_global;
@@ -1659,6 +1691,17 @@ void *so_dlopen(const char *filename, int flags)
         return h;
     }
     free(p);
+    char icu[300];
+    if (host_icu(b, icu, sizeof icu)) {
+        void *hh = host_open(icu, (flags & B_RTLD_GLOBAL) != 0);
+        if (hh) {
+            libmap_set(b, icu);
+            h = new_handle(H_HOST, b);
+            h->host = hh;
+            fprintf(stderr, "[so] %s: the handheld's %s\n", b, icu);
+            goto out;
+        }
+    }
     if (g_host_fallback < 0) g_host_fallback = getenv("SO_DLOPEN_HOST_FALLBACK") != NULL;
     if (g_host_fallback) {
         void *hh = host_open(filename, (flags & B_RTLD_GLOBAL) != 0);

@@ -20,6 +20,7 @@ for p in /zip/*.apk; do
   if [ -e "/zip2/$f" ]; then ln -sfn "/zip2/$f" "$f"; else ln -sfn "$p" "$f"; fi
 done
 cp /hostbin/ua_host ./ua_host
+cp /hostbin/*.dll . 2>/dev/null || true       # the managed helpers ua_host loads from beside itself (uaprobe, uaflipbook)
 LOG=${1:-emu.log}; SECS=${2:-600}; FLAVOR=${3:-release}
 [ "$FLAVOR" = dev ] && export UA_LIBDIR=/emu/devlib
 export UA_EGL_PBUFFER=${UA_EGL_PBUFFER:-1} ANDROID_WINDOW_SIZE=${ANDROID_WINDOW_SIZE:-720x480} EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1

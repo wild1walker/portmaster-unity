@@ -92,6 +92,11 @@ struct up_config {
 
 /* Run Unity's Java startup sequence (see README "Startup sequence"). Returns 0 on success.
  * After it returns, UnityMain is running and (with a surface) rendering. */
+/* the battery as Intent.ACTION_BATTERY_CHANGED's extras, read from root (/sys/class/power_supply): the first supply of
+ * type Battery (full and present where there is none), plugged 1 (Mains online) or 2 (USB online) */
+struct up_battery { int present, level, status, plugged, health, temperature, voltage_mv; };
+void up_battery_read(const char *root, struct up_battery *b);
+
 int  up_start(const struct up_config *cfg);
 void up_poll(void);                    /* UI thread: run queued runOnUiThread/Handler jobs */
 void up_pause(void);                   /* Activity.onPause  -> nativePause on UnityMain   */
