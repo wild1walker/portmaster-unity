@@ -94,6 +94,12 @@ sides), so `JNI_ABI`/`FJ_ABI` are empty and every JNI table function is plain C.
   methods and fields get placeholder ids, and calling them returns 0/null. Each such name is logged
   **once, always** (`UNKNOWN ...`, `UNIMPLEMENTED call ...`). `fj_class_absent(name)` or
   `FJ_STRICT=1` makes `FindClass` return NULL with NoClassDefFoundError instead.
+- `ReflectionHelper.getMethodID/getFieldID` (what C#'s `AndroidJavaObject`/`AndroidJavaClass` use) find
+  members as Unity's Java does: by name and compatible types, the best fit (`fj_method_compatible`,
+  `fj_field_compatible`): C# asks for an `AndroidJavaObject` result as `Ljava/lang/Object;`, so
+  `GetStatic<AndroidJavaObject>("currentActivity")` gets the Activity field and
+  `Call<AndroidJavaObject>("getApplicationContext")` the method that returns a Context (both were
+  placeholders answering null before). Plain JNI `GetMethodID`/`GetFieldID` stay exact, as on a JVM.
 - **RegisterNatives** is recorded per class. `fj_native(cls, name, sig)` returns the fnPtr,
   `fj_native_sig(cls, name)` the signature it was registered with (natives changed signature
   across Unity versions). `fj_call_native(cls, name, sig, self, ...)` calls it with the Android

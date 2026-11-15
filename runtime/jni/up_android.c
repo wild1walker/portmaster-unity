@@ -1187,14 +1187,14 @@ H(rh_getMethodID)
 {
     JNIEnv *e = fj_env();
     const char *n = jstr(a[1]), *s = jstr(a[2]);
-    jmethodID m = a[3].z ? (*e)->GetStaticMethodID(e, a[0].l, n, s) : (*e)->GetMethodID(e, a[0].l, n, s);
+    jmethodID m = fj_method_compatible(a[0].l, n, s, a[3].z);    /* as Unity's Java: compatible types */
     return fj_l((*e)->ToReflectedMethod(e, a[0].l, m, a[3].z));
 }
 H(rh_getFieldID)
 {
     JNIEnv *e = fj_env();
     const char *n = jstr(a[1]), *s = jstr(a[2]);
-    jfieldID f = a[3].z ? (*e)->GetStaticFieldID(e, a[0].l, n, s) : (*e)->GetFieldID(e, a[0].l, n, s);
+    jfieldID f = fj_field_compatible(a[0].l, n, s, a[3].z);       /* currentActivity asked as Object */
     return fj_l((*e)->ToReflectedField(e, a[0].l, f, a[3].z));
 }
 H(rh_getCtorID)

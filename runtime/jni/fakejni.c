@@ -1816,6 +1816,110 @@ static jfieldID get_field(jclass cls, const char *name, const char *sig, int is_
     return (jfieldID)f;
 }
 
+/* ---- ReflectionHelper's lookups: the member Unity's Java side picks (fakejni.h) ----------------------
+ * Unity's ReflectionHelper.getMethodID/getFieldID find members by name and compatible types, not by the
+ * exact signature: C# asks for an AndroidJavaObject result as "Ljava/lang/Object;", so
+ * GetStatic<AndroidJavaObject>("currentActivity") must find the Activity field. A member's type fits a
+ * requested one when they are the same (best), when either is java.lang.Object, or when one is a subclass
+ * of the other in the direction Java allows (an argument of a subclass of the parameter's type; a result
+ * of a subclass of the type asked for). Primitives must be the same. The best fit wins. */
+static const char *sig_type(const char *p, char *out, size_t n)
+{
+    const char *s = p;
+    while (*p == '[') p++;
+    if (*p == 'L') { p = strchr(p, ';'); if (!p) return NULL; p++; }
+    else if (*p && *p != ')') p++;
+    else return NULL;
+    snprintf(out, n, "%.*s", (int)(p - s), s);
+    return p;
+}
+static int type_is_sub(const char *sub, const char *sup)
+{
+    if (sub[0] != 'L' || sup[0] != 'L') return 0;
+    char a[256], b[256];
+    snprintf(a, sizeof a, "%.*s", (int)strlen(sub) - 2, sub + 1);
+    snprintf(b, sizeof b, "%.*s", (int)strlen(sup) - 2, sup + 1);
+    fj_class *c = class_lookup_raw(a), *t = class_lookup_raw(b);
+    return c && t && class_is_sub(c, t, 0);
+}
+/* 2 the same, 1 compatible, 0 not; param: the member's type m takes a value of the requested type r */
+static int type_fit(const char *m, const char *r, int param)
+{
+    if (!strcmp(m, r)) return 2;
+    int mo = m[0] == 'L' || m[0] == '[', ro = r[0] == 'L' || r[0] == '[';
+    if (!mo || !ro) return 0;
+    if (!strcmp(r, "Ljava/lang/Object;") || !strcmp(m, "Ljava/lang/Object;")) return 1;
+    return (param ? type_is_sub(r, m) : type_is_sub(m, r)) ? 1 : 0;
+}
+/* the fit of a method signature to a requested one (each parameter and the result), -1 when it does not */
+static int sig_fit(const char *msig, const char *rsig)
+{
+    if (*msig != '(' || *rsig != '(') return -1;
+    const char *p = msig + 1, *q = rsig + 1;
+    int score = 0;
+    char a[256], b[256];
+    while (*p != ')' && *q != ')') {
+        if (!(p = sig_type(p, a, sizeof a)) || !(q = sig_type(q, b, sizeof b))) return -1;
+        int f = type_fit(a, b, 1);
+        if (!f) return -1;
+        score += f;
+    }
+    if (*p != ')' || *q != ')') return -1;
+    p++; q++;
+    if (!strcmp(p, q)) return score + 2;
+    if (!strcmp(p, "V") || !strcmp(q, "V")) return -1;
+    int f = type_fit(p, q, 0);
+    return f ? score + f : -1;
+}
+static void best_method(fj_class *c, const char *name, const char *sig, int is_static, fj_method **best, int *bs, int depth)
+{
+    if (!c || depth > 64) return;
+    for (fj_method *m = c->methods; m; m = m->next) {
+        if (m->placeholder || m->is_static != is_static || strcmp(m->name, name)) continue;
+        int s = sig_fit(m->sig, sig);
+        if (s > *bs) { *bs = s; *best = m; }
+    }
+    best_method(c->super, name, sig, is_static, best, bs, depth + 1);
+    for (fj_iface *i = c->ifaces; i; i = i->next) best_method(i->cls, name, sig, is_static, best, bs, depth + 1);
+}
+jmethodID fj_method_compatible(jclass cls, const char *name, const char *sig, int is_static)
+{
+    fj_class *c = CL(cls);
+    if (!c || !name || !sig) return NULL;
+    fj_method *best = NULL;
+    int bs = -1;
+    LOCK();
+    if (!strcmp(name, "<init>")) {                     /* constructors are not inherited */
+        for (fj_method *m = c->methods; m; m = m->next)
+            if (!m->placeholder && !strcmp(m->name, name)) { int s = sig_fit(m->sig, sig); if (s > bs) { bs = s; best = m; } }
+    } else best_method(c, name, sig, is_static, &best, &bs, 0);
+    UNLOCK();
+    if (best && strcmp(best->sig, sig)) TRACE("ReflectionHelper: %s.%s%s -> %s", c->name, name, sig, best->sig);
+    return best ? (jmethodID)best : get_method(cls, name, sig, is_static, "ReflectionHelper.getMethodID");
+}
+static void best_field(fj_class *c, const char *name, const char *sig, int is_static, fj_field **best, int *bs, int depth)
+{
+    if (!c || depth > 64) return;
+    for (fj_field *f = c->fields; f; f = f->next) {
+        if (f->placeholder || f->is_static != is_static || strcmp(f->name, name)) continue;
+        int s = type_fit(f->sig, sig, 0);
+        if (s > *bs) { *bs = s; *best = f; }
+    }
+    best_field(c->super, name, sig, is_static, best, bs, depth + 1);
+    for (fj_iface *i = c->ifaces; i; i = i->next) best_field(i->cls, name, sig, is_static, best, bs, depth + 1);
+}
+jfieldID fj_field_compatible(jclass cls, const char *name, const char *sig, int is_static)
+{
+    fj_class *c = CL(cls);
+    if (!c || !name || !sig) return NULL;
+    fj_field *best = NULL;
+    int bs = 0;
+    LOCK();
+    best_field(c, name, sig, is_static, &best, &bs, 0);
+    UNLOCK();
+    return best ? (jfieldID)best : get_field(cls, name, sig, is_static, "ReflectionHelper.getFieldID");
+}
+
 static jfieldID FJ_ABI j_GetFieldID(JNIEnv *env, jclass cls, const char *name, const char *sig)
 { ENV_UNUSED; return get_field(cls, name, sig, 0, "GetFieldID"); }
 static jfieldID FJ_ABI j_GetStaticFieldID(JNIEnv *env, jclass cls, const char *name, const char *sig)
@@ -2444,6 +2548,13 @@ static jvalue m_thr_getStackTrace(JNIEnv *e, jobject self, const jvalue *a, void
 
 static jvalue m_meth_getName(JNIEnv *e, jobject self, const jvalue *a, void *ud)
 { (void)e; (void)a; (void)ud; fj_method *m = M((jmethodID)fj_data(self)); return fj_l(fj_string(m ? m->name : "")); }
+/* the class a reflected member is declared in (Unity's C# asks a Field for it after getFieldID) */
+static jvalue m_meth_getDeclaringClass(JNIEnv *e, jobject self, const jvalue *a, void *ud)
+{ (void)e; (void)a; (void)ud; fj_method *m = M((jmethodID)fj_data(self)); return fj_l(m ? (jobject)&m->cls->obj : NULL); }
+static jvalue m_field_getDeclaringClass(JNIEnv *e, jobject self, const jvalue *a, void *ud)
+{ (void)e; (void)a; (void)ud; fj_field *f = fj_data(self); return fj_l(f && f->magic == FJ_MAGIC_F ? (jobject)&f->cls->obj : NULL); }
+static jvalue m_field_getName(JNIEnv *e, jobject self, const jvalue *a, void *ud)
+{ (void)e; (void)a; (void)ud; fj_field *f = fj_data(self); return fj_l(fj_string(f && f->magic == FJ_MAGIC_F ? f->name : "")); }
 
 /* boxing */
 #define BOX(cls, T, sig, getter, fld)                                                          \
@@ -2640,7 +2751,10 @@ static void define_builtins(void)
 
     C_Method = (fj_class *)fj_class_define("java/lang/reflect/Method", NULL);
     FJ_METHOD("java/lang/reflect/Method", "getName", "()Ljava/lang/String;", m_meth_getName);
+    FJ_METHOD("java/lang/reflect/Method", "getDeclaringClass", "()Ljava/lang/Class;", m_meth_getDeclaringClass);
     C_Field = (fj_class *)fj_class_define("java/lang/reflect/Field", NULL);
+    FJ_METHOD("java/lang/reflect/Field", "getDeclaringClass", "()Ljava/lang/Class;", m_field_getDeclaringClass);
+    FJ_METHOD("java/lang/reflect/Field", "getName", "()Ljava/lang/String;", m_field_getName);
     fj_class_define("java/nio/Buffer", NULL);
     C_ByteBuffer = (fj_class *)fj_class_define("java/nio/ByteBuffer", "java/nio/Buffer");
     fj_class_define("java/nio/DirectByteBuffer", "java/nio/ByteBuffer");

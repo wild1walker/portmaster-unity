@@ -118,6 +118,10 @@ void     fj_throw(JNIEnv *env, const char *cls, const char *msg);
 /* 1 if `cls` (its superclasses or interfaces) has method name+sig with a C handler or a
  * registered native (sig NULL: any signature). Placeholders and bare declarations count as 0. */
 int      fj_method_defined(const char *cls, const char *name, const char *sig);
+/* Unity's ReflectionHelper lookups: by name and compatible types (java.lang.Object either way, subclasses
+ * as Java allows), the best fit; a placeholder as GetMethodID/GetFieldID when none fits */
+jmethodID fj_method_compatible(jclass cls, const char *name, const char *sig, int is_static);
+jfieldID  fj_field_compatible(jclass cls, const char *name, const char *sig, int is_static);
 /* JNI signature of a java.lang.reflect.Method / Constructor / Field object made by
  * ToReflectedMethod/ToReflectedField ("(I)V", "Ljava/lang/String;"), NULL for anything else. */
 const char *fj_reflected_sig(jobject member);

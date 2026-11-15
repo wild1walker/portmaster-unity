@@ -450,6 +450,23 @@ static void test_services(void)
     jobject ex = bld ? (*e)->CallObjectMethod(e, bld, (*e)->GetMethodID(e, nb, "getExtras", "()Landroid/os/Bundle;")) : NULL;
     if (ex) (*e)->CallVoidMethod(e, ex, (*e)->GetMethodID(e, bu, "putInt", "(Ljava/lang/String;I)V"), (*e)->NewStringUTF(e, "id"), 7);
     CHECK(ex && (*e)->CallIntMethod(e, ex, (*e)->GetMethodID(e, bu, "getInt", "(Ljava/lang/String;)I"), (*e)->NewStringUTF(e, "id")) == 7);
+    /* ReflectionHelper (C#'s AndroidJavaObject/Class): members by name and compatible types, as Unity's Java
+       finds them: GetStatic<AndroidJavaObject>("currentActivity") asks for "Ljava/lang/Object;" */
+    jclass rh = (*e)->FindClass(e, "com/unity3d/player/ReflectionHelper"), upc = (*e)->FindClass(e, "com/unity3d/player/UnityPlayer"),
+           fc = (*e)->FindClass(e, "java/lang/reflect/Field"), act = (*e)->FindClass(e, "android/app/Activity");
+    jobject fld = (*e)->CallStaticObjectMethod(e, rh, (*e)->GetStaticMethodID(e, rh, "getFieldID",
+                  "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/reflect/Field;"), upc,
+                  (*e)->NewStringUTF(e, "currentActivity"), (*e)->NewStringUTF(e, "Ljava/lang/Object;"), (jboolean)1);
+    jfieldID cf = fld ? (*e)->FromReflectedField(e, fld) : NULL;
+    CHECK(cf && (*e)->GetStaticObjectField(e, upc, cf) != NULL);
+    CHECK(fld && (*e)->IsSameObject(e, (*e)->CallObjectMethod(e, fld, (*e)->GetMethodID(e, fc, "getDeclaringClass", "()Ljava/lang/Class;")), upc));
+    jobject gm = (*e)->CallStaticObjectMethod(e, rh, (*e)->GetStaticMethodID(e, rh, "getMethodID",
+                 "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/reflect/Method;"), act,
+                 (*e)->NewStringUTF(e, "getApplicationContext"), (*e)->NewStringUTF(e, "()Ljava/lang/Object;"), (jboolean)0);
+    jmethodID gmid = gm ? (*e)->FromReflectedMethod(e, gm) : NULL;
+    jobject actobj = cf ? (*e)->GetStaticObjectField(e, upc, cf) : NULL;
+    CHECK(gmid && actobj && (*e)->CallObjectMethod(e, actobj, gmid) != NULL);  /* Call<AndroidJavaObject>("getApplicationContext") */
+
     /* Play Games v2: the sign-in task fails; an OnFailureListener hears the exception */
     fj_class_define("test/FailureListener", NULL);
     fj_method_define("test/FailureListener", "onFailure", "(Ljava/lang/Exception;)V", 0, t_on_failure, NULL);
