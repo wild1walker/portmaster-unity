@@ -107,6 +107,60 @@
    }
   ]
  },
+ "btw-apk": {
+  "apk": {
+   "facts": {
+    "abi": "arm64-v8a",
+    "backend": "il2cpp",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 33,
+    "unity_version": "2023.2.9f1"
+   },
+   "tree": {
+    "files": 7,
+    "mb": 115,
+    "total": "c353ef95143688a3b8127b81c42f1914d7135822ec3ec020ca2d3c7c0dd5298f",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 154,
+      "members": "14da1940de042a14"
+     }
+    }
+   }
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 59,
+   "frames": 8956
+  },
+  "shots": [
+   {
+    "colours": 41,
+    "content": true,
+    "dark": 0.979,
+    "t": 60,
+    "top": 0.979
+   },
+   {
+    "colours": 41,
+    "content": true,
+    "dark": 0.979,
+    "t": 150,
+    "top": 0.979
+   },
+   {
+    "colours": 41,
+    "content": true,
+    "dark": 0.979,
+    "t": 280,
+    "top": 0.979
+   }
+  ]
+ },
  "buggish": {
   "check": {
    "backend": "mono",
@@ -837,6 +891,168 @@
     "dark": 0.05,
     "t": 580,
     "top": 0.073
+   }
+  ]
+ },
+ "dfu-apk-il2cpp32": {
+  "apk": {
+   "facts": {
+    "abi": "armeabi-v7a",
+    "backend": "il2cpp",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 36,
+    "unity_version": "2022.3.62f3"
+   },
+   "tree": {
+    "files": 6,
+    "mb": 133,
+    "total": "22ab6bff89958412c7748c0ca42cdd6292d495eded9c617d10b08d0f744e83f7",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 800,
+      "members": "a196936052e3b54d"
+     }
+    }
+   }
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 36,
+   "frames": 78
+  },
+  "shots": [
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 60,
+    "top": 0.859
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 150,
+    "top": 0.859
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 280,
+    "top": 0.859
+   }
+  ]
+ },
+ "dfu-apk-il2cpp64": {
+  "apk": {
+   "facts": {
+    "abi": "arm64-v8a",
+    "backend": "il2cpp",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 36,
+    "unity_version": "2022.3.62f3"
+   },
+   "tree": {
+    "files": 6,
+    "mb": 147,
+    "total": "7e8335d8000761364ee63c08808729090c68c3d8f21d45576309c6ad99150abe",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 800,
+      "members": "5b2488458f3f41d9"
+     }
+    }
+   }
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 58,
+   "frames": 6166
+  },
+  "shots": [
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 60,
+    "top": 0.859
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 150,
+    "top": 0.859
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 280,
+    "top": 0.859
+   }
+  ]
+ },
+ "dfu-apk-mono32": {
+  "apk": {
+   "facts": {
+    "abi": "armeabi-v7a",
+    "backend": "mono",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 36,
+    "unity_version": "2022.3.62f3"
+   },
+   "tree": {
+    "files": 8,
+    "mb": 77,
+    "total": "e60aec06e87daeeed8a0897f3873731b13396960926bde8900db8bfd2b7d1b8f",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 908,
+      "members": "bddcd8f7538abb6a"
+     }
+    }
+   }
+  },
+  "run": {
+   "crash": null,
+   "exceptions": 0,
+   "exit": 124,
+   "fatal": 0,
+   "fps_lines": 38,
+   "frames": 81
+  },
+  "shots": [
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 60,
+    "top": 0.859
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 150,
+    "top": 0.859
+   },
+   {
+    "colours": 59,
+    "content": true,
+    "dark": 0.908,
+    "t": 280,
+    "top": 0.859
    }
   ]
  },

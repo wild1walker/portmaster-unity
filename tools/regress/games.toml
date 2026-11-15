@@ -308,6 +308,8 @@ slug = "dfu-linux"                 # Daggerfall Unity 1.1.1 (MIT, github.com/Int
 route = "android"                  # Bethesda's free Daggerfall data it stops at its data-folder screen
 unity = "2019.4.40f1"
 covers = ["2019.4", "mono", "same-game-apk"]
+# android-data (the Python) stops in its verification: UnityPy cannot read its [SerializeReference]
+# objects ("Failed to get ref type node"); the rig waits for the route through pmu
 
 # ------------------------------------------------------------------ games with their own ports
 
@@ -380,24 +382,32 @@ slug = "dfu-apk-mono32"
 route = "apk"
 covers = ["2022.3", "apk", "mono-armv7", "same-game-backends"]
 apk = { target = "armhf" }
+levels = ["fast", "rig"]
+rig = { arch = "armhf", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 30 }   # its data-folder screen (no Daggerfall data)
 
 [[game]]
 slug = "dfu-apk-il2cpp32"
 route = "apk"
 covers = ["2022.3", "apk", "il2cpp-armv7", "same-game-backends"]
 apk = { target = "armhf" }
+levels = ["fast", "rig"]
+rig = { arch = "armhf", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 30 }
 
 [[game]]
 slug = "dfu-apk-il2cpp64"
 route = "apk"
 covers = ["2022.3", "apk", "il2cpp-arm64", "same-game-backends"]
 apk = { target = "arm64" }
+levels = ["fast", "rig"]
+rig = { arch = "arm64", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 300 }
 
 [[game]]
 slug = "btw-apk"
 route = "apk"
 covers = ["2023.2", "apk", "aab", "il2cpp-arm64", "addressables"]
 apk = { target = "arm64" }
+levels = ["fast", "rig"]
+rig = { arch = "arm64", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 300 }   # its language screen
 
 # ------------------------------------------------------------------ 64-bit IL2CPP route (pmunity il2cpp)
 
