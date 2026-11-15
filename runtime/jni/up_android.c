@@ -2022,6 +2022,8 @@ void up_android_register(void)
     up_http_register();                 /* Unity's Java UnityWebRequest (2017.4 - 2018.4) */
     up_tls_register();                  /* the system trust store (unitytls, 2018.4+) */
     up_fmod_register();                 /* org.fmod.FMOD for FMOD's Android libraries */
+    extern void up_services_register(void);
+    up_services_register();             /* Play Billing, In-App Review, java.security/javax.crypto (up_services.c) */
     /* android.media's video classes (up_media.c): in the program when the host links the media
        core (ua_host does; the unit tests of this folder do not) */
     extern void up_media_register(void) __attribute__((weak));

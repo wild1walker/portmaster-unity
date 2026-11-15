@@ -164,10 +164,19 @@ the resource map, so stripped or obfuscated names work) and aapt2's protobuf XML
 ## What these games need that converted desktop data does not
 
 - Their Java code does not run: `runtime/jni` plays Unity's own `UnityPlayer` side, so plugins
-  made of Java (Google Play services, billing, ads, analytics SDKs, Firebase's Java half) see a
-  phone without them: calls through `AndroidJavaObject` to their classes fail (logged as
+  made of Java (Google Play services, ads, analytics SDKs, Firebase's Java half) see a
+  phone without them: calls through `AndroidJavaObject` to their classes answer null (logged as
   `UNKNOWN class ...`), which most games survive the way they survive a phone without Play
-  services.
+  services. A few are answered as such a phone answers (`runtime/jni/up_services.c`):
+  - Google Play Billing (`com.android.billingclient.api`, what Unity IAP 4.x calls from C#): the
+    client's `startConnection` reports `BILLING_UNAVAILABLE` (3) to its listener on the UI thread,
+    every query answers the same with an empty list and no purchase flow starts, so the store
+    reports itself unavailable instead of waiting for a connection that never comes;
+  - Play In-App Review: `requestReviewFlow` / `launchReviewFlow` give a task that has already failed,
+    and its listeners hear it at once (no review prompt);
+  - Java's own cryptography, real: `MessageDigest` (MD5, SHA-1, SHA-256), `SecureRandom`, `Mac`
+    (HmacMD5, HmacSHA1, HmacSHA256), `Cipher` (AES in ECB, CBC or CTR, PKCS5Padding or NoPadding),
+    `SecretKeySpec`, `IvParameterSpec`; another algorithm throws `NoSuchAlgorithmException`.
 - Touch-first games: pads arrive as Android gamepads (Unity's Input Manager / Input System see
   them), touch only through the pointer mode (`UA_POINTER`, docs/input.md).
 - Portrait games: Unity is given the handheld's landscape window; `setRequestedOrientation` is
@@ -206,4 +215,6 @@ reached its first battle in the arm64 rig.
   SIGUSR2 on a thread it does not know aborts the game); `UA_PROF_EVERY` / `UA_HITCH_TRACE` sample them
   (runtime/host/hitches.c).
 - `SO_TRACE=1` lists unresolved imports of the game's own libraries (plugins).
+- `UA_PROBE=<s>` (Mono builds): a check of what a phone gives a game, from inside it
+  ([runtime.md](runtime.md#what-a-phone-gives-a-game-ua_probe)).
 - `PMUNITY_APK=<file>` runs `tests/test_apk.py`'s dry import on a real build.

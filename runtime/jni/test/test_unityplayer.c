@@ -275,6 +275,161 @@ static const char *const java_side[][3] = {
     { "android/view/Display", "getRealMetrics", "(Landroid/util/DisplayMetrics;)V" },
 };
 
+/* up_services.c: java.security / javax.crypto against the standard test vectors, Play Billing's
+   unavailable answer through a listener, In-App Review's failed task */
+static void unhex(const char *h, unsigned char *out, int *n)
+{
+    *n = 0;
+    for (; h[0] && h[1]; h += 2) { unsigned v; sscanf(h, "%2x", &v); out[(*n)++] = (unsigned char)v; }
+}
+static jbyteArray jbytes(JNIEnv *e, const unsigned char *p, int n)
+{
+    jbyteArray a = (*e)->NewByteArray(e, n);
+    (*e)->SetByteArrayRegion(e, a, 0, n, (const jbyte *)p);
+    return a;
+}
+static int same_hex(JNIEnv *e, jbyteArray a, const char *want)
+{
+    if (!a) return 0;
+    char got[300] = "";
+    int n = (*e)->GetArrayLength(e, a);
+    jbyte *b = (*e)->GetByteArrayElements(e, a, NULL);
+    for (int i = 0; i < n && i < 140; i++) sprintf(got + 2 * i, "%02x", (unsigned char)b[i]);
+    (*e)->ReleaseByteArrayElements(e, a, b, 0);
+    if (strcmp(got, want)) printf("  got %s\n  want %s\n", got, want);
+    return !strcmp(got, want);
+}
+static jbyteArray digest(JNIEnv *e, const char *alg, const char *msg)
+{
+    jclass c = (*e)->FindClass(e, "java/security/MessageDigest");
+    jobject md = (*e)->CallStaticObjectMethod(e, c, (*e)->GetStaticMethodID(e, c, "getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;"),
+                                              (*e)->NewStringUTF(e, alg));
+    if (!md) return NULL;
+    (*e)->CallVoidMethod(e, md, (*e)->GetMethodID(e, c, "update", "([B)V"), jbytes(e, (const unsigned char *)msg, (int)strlen(msg)));
+    return (*e)->CallObjectMethod(e, md, (*e)->GetMethodID(e, c, "digest", "()[B"));
+}
+static jbyteArray hmac(JNIEnv *e, const char *alg, const char *key, const char *msg)
+{
+    jclass c = (*e)->FindClass(e, "javax/crypto/Mac"), kc = (*e)->FindClass(e, "javax/crypto/spec/SecretKeySpec");
+    jobject k = (*e)->NewObject(e, kc, (*e)->GetMethodID(e, kc, "<init>", "([BLjava/lang/String;)V"),
+                                jbytes(e, (const unsigned char *)key, (int)strlen(key)), (*e)->NewStringUTF(e, alg));
+    jobject m = (*e)->CallStaticObjectMethod(e, c, (*e)->GetStaticMethodID(e, c, "getInstance", "(Ljava/lang/String;)Ljavax/crypto/Mac;"),
+                                             (*e)->NewStringUTF(e, alg));
+    (*e)->CallVoidMethod(e, m, (*e)->GetMethodID(e, c, "init", "(Ljava/security/Key;)V"), k);
+    return (*e)->CallObjectMethod(e, m, (*e)->GetMethodID(e, c, "doFinal", "([B)[B"), jbytes(e, (const unsigned char *)msg, (int)strlen(msg)));
+}
+/* Cipher.getInstance(t).init(mode, key[, iv]).doFinal(in) */
+static jbyteArray aes(JNIEnv *e, const char *t, int mode, const char *keyhex, const char *ivhex, const unsigned char *in, int n)
+{
+    unsigned char kb[32], ivb[16];
+    int kn, ivn;
+    unhex(keyhex, kb, &kn);
+    jclass c = (*e)->FindClass(e, "javax/crypto/Cipher"), kc = (*e)->FindClass(e, "javax/crypto/spec/SecretKeySpec"),
+           ic = (*e)->FindClass(e, "javax/crypto/spec/IvParameterSpec");
+    jobject k = (*e)->NewObject(e, kc, (*e)->GetMethodID(e, kc, "<init>", "([BLjava/lang/String;)V"), jbytes(e, kb, kn), (*e)->NewStringUTF(e, "AES"));
+    jobject ci = (*e)->CallStaticObjectMethod(e, c, (*e)->GetStaticMethodID(e, c, "getInstance", "(Ljava/lang/String;)Ljavax/crypto/Cipher;"),
+                                              (*e)->NewStringUTF(e, t));
+    if (!ci) return NULL;
+    if (ivhex) {
+        unhex(ivhex, ivb, &ivn);
+        jobject iv = (*e)->NewObject(e, ic, (*e)->GetMethodID(e, ic, "<init>", "([B)V"), jbytes(e, ivb, ivn));
+        (*e)->CallVoidMethod(e, ci, (*e)->GetMethodID(e, c, "init", "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V"), mode, k, iv);
+    } else (*e)->CallVoidMethod(e, ci, (*e)->GetMethodID(e, c, "init", "(ILjava/security/Key;)V"), mode, k);
+    return (*e)->CallObjectMethod(e, ci, (*e)->GetMethodID(e, c, "doFinal", "([B)[B"), jbytes(e, in, n));
+}
+static volatile int g_billing_code = -1, g_review_done;
+static jvalue t_on_setup(JNIEnv *env, jobject self, const jvalue *a, void *ud)
+{
+    (void)self; (void)ud;
+    jclass c = (*env)->FindClass(env, "com/android/billingclient/api/BillingResult");
+    g_billing_code = (*env)->CallIntMethod(env, a[0].l, (*env)->GetMethodID(env, c, "getResponseCode", "()I"));
+    return fj_v();
+}
+static jvalue t_on_complete(JNIEnv *env, jobject self, const jvalue *a, void *ud)
+{
+    (void)self; (void)ud;
+    jclass c = (*env)->FindClass(env, "com/google/android/play/core/tasks/Task");
+    g_review_done = 1 + !(*env)->CallBooleanMethod(env, a[0].l, (*env)->GetMethodID(env, c, "isSuccessful", "()Z"));
+    return fj_v();
+}
+static void test_services(void)
+{
+    JNIEnv *e = fj_env();
+    (*e)->PushLocalFrame(e, 64);
+    CHECK(same_hex(e, digest(e, "MD5", "abc"), "900150983cd24fb0d6963f7d28e17f72"));
+    CHECK(same_hex(e, digest(e, "SHA-1", "abc"), "a9993e364706816aba3e25717850c26c9cd0d89d"));
+    CHECK(same_hex(e, digest(e, "SHA-256", "abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+    CHECK(same_hex(e, digest(e, "SHA-256", "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+                   "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"));
+    CHECK(digest(e, "SHA-999", "abc") == NULL && (*e)->ExceptionCheck(e));          /* NoSuchAlgorithmException */
+    (*e)->ExceptionClear(e);
+    CHECK(same_hex(e, hmac(e, "HmacMD5", "Jefe", "what do ya want for nothing?"), "750c783e6ab0b503eaa86e310a5db738"));
+    CHECK(same_hex(e, hmac(e, "HmacSHA1", "Jefe", "what do ya want for nothing?"), "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"));
+    CHECK(same_hex(e, hmac(e, "HmacSHA256", "Jefe", "what do ya want for nothing?"),
+                   "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
+    unsigned char pt[64];
+    int n;
+    unhex("00112233445566778899aabbccddeeff", pt, &n);                     /* FIPS-197 C.1, C.3 */
+    CHECK(same_hex(e, aes(e, "AES/ECB/NoPadding", 1, "000102030405060708090a0b0c0d0e0f", NULL, pt, n), "69c4e0d86a7b0430d8cdb78070b4c55a"));
+    CHECK(same_hex(e, aes(e, "AES/ECB/NoPadding", 1, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", NULL, pt, n),
+                   "8ea2b7ca516745bfeafc49904b496089"));
+    unhex("69c4e0d86a7b0430d8cdb78070b4c55a", pt, &n);
+    CHECK(same_hex(e, aes(e, "AES/ECB/NoPadding", 2, "000102030405060708090a0b0c0d0e0f", NULL, pt, n), "00112233445566778899aabbccddeeff"));
+    unhex("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51", pt, &n);   /* SP 800-38A F.2.1, F.5.1 */
+    CHECK(same_hex(e, aes(e, "AES/CBC/NoPadding", 1, "2b7e151628aed2a6abf7158809cf4f3c", "000102030405060708090a0b0c0d0e0f", pt, n),
+                   "7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b2"));
+    CHECK(same_hex(e, aes(e, "AES/CTR/NoPadding", 1, "2b7e151628aed2a6abf7158809cf4f3c", "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff", pt, n),
+                   "874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff"));
+    const unsigned char msg[] = "twenty bytes of text";                    /* PKCS5: two blocks there and back */
+    jbyteArray enc = aes(e, "AES/CBC/PKCS5Padding", 1, "2b7e151628aed2a6abf7158809cf4f3c", "000102030405060708090a0b0c0d0e0f", msg, 20);
+    CHECK(enc && (*e)->GetArrayLength(e, enc) == 32);
+    if (enc) {
+        unsigned char eb[32];
+        (*e)->GetByteArrayRegion(e, enc, 0, 32, (jbyte *)eb);
+        jbyteArray dec = aes(e, "AES/CBC/PKCS5Padding", 2, "2b7e151628aed2a6abf7158809cf4f3c", "000102030405060708090a0b0c0d0e0f", eb, 32);
+        CHECK(same_hex(e, dec, "7477656e7479206279746573206f662074657874"));
+        eb[31] ^= 1;                                                       /* a broken pad: BadPaddingException */
+        CHECK(aes(e, "AES/CBC/PKCS5Padding", 2, "2b7e151628aed2a6abf7158809cf4f3c", "000102030405060708090a0b0c0d0e0f", eb, 32) == NULL &&
+              (*e)->ExceptionCheck(e));
+        (*e)->ExceptionClear(e);
+    }
+    jclass sr = (*e)->FindClass(e, "java/security/SecureRandom");
+    jobject r = (*e)->NewObject(e, sr, (*e)->GetMethodID(e, sr, "<init>", "()V"));
+    jbyteArray rb = (*e)->NewByteArray(e, 32), rb2 = (*e)->NewByteArray(e, 32);
+    (*e)->CallVoidMethod(e, r, (*e)->GetMethodID(e, sr, "nextBytes", "([B)V"), rb);
+    (*e)->CallVoidMethod(e, r, (*e)->GetMethodID(e, sr, "nextBytes", "([B)V"), rb2);
+    unsigned char x[32], y[32];
+    (*e)->GetByteArrayRegion(e, rb, 0, 32, (jbyte *)x);
+    (*e)->GetByteArrayRegion(e, rb2, 0, 32, (jbyte *)y);
+    CHECK(memcmp(x, y, 32) != 0);
+
+    /* Play Billing: a client made as Unity IAP 4 does, connected; the listener hears BILLING_UNAVAILABLE */
+    fj_class_define("test/SetupListener", NULL);
+    fj_method_define("test/SetupListener", "onBillingSetupFinished", "(Lcom/android/billingclient/api/BillingResult;)V", 0, t_on_setup, NULL);
+    jclass bc = (*e)->FindClass(e, "com/android/billingclient/api/BillingClient"), bb = (*e)->FindClass(e, "com/android/billingclient/api/BillingClient$Builder");
+    jobject b = (*e)->CallStaticObjectMethod(e, bc, (*e)->GetStaticMethodID(e, bc, "newBuilder", "(Landroid/content/Context;)Lcom/android/billingclient/api/BillingClient$Builder;"), NULL);
+    b = (*e)->CallObjectMethod(e, b, (*e)->GetMethodID(e, bb, "enablePendingPurchases", "()Lcom/android/billingclient/api/BillingClient$Builder;"));
+    jobject client = (*e)->CallObjectMethod(e, b, (*e)->GetMethodID(e, bb, "build", "()Lcom/android/billingclient/api/BillingClient;"));
+    CHECK(client && !(*e)->CallBooleanMethod(e, client, (*e)->GetMethodID(e, bc, "isReady", "()Z")));
+    jobject l = fj_new_by_name("test/SetupListener", NULL, NULL);
+    (*e)->CallVoidMethod(e, client, (*e)->GetMethodID(e, bc, "startConnection", "(Lcom/android/billingclient/api/BillingClientStateListener;)V"), l);
+    for (int i = 0; i < 200 && g_billing_code < 0; i++) { up_poll(); usleep(10000); }   /* on the UI thread (this one) */
+    CHECK(g_billing_code == 3);
+
+    /* In-App Review: the flow's task has failed; an OnCompleteListener hears it at once */
+    fj_class_define("test/CompleteListener", NULL);
+    fj_method_define("test/CompleteListener", "onComplete", "(Lcom/google/android/play/core/tasks/Task;)V", 0, t_on_complete, NULL);
+    jclass rf = (*e)->FindClass(e, "com/google/android/play/core/review/ReviewManagerFactory"),
+           rm = (*e)->FindClass(e, "com/google/android/play/core/review/ReviewManager"), tk = (*e)->FindClass(e, "com/google/android/play/core/tasks/Task");
+    jobject mgr = (*e)->CallStaticObjectMethod(e, rf, (*e)->GetStaticMethodID(e, rf, "create", "(Landroid/content/Context;)Lcom/google/android/play/core/review/ReviewManager;"), NULL);
+    jobject task = (*e)->CallObjectMethod(e, mgr, (*e)->GetMethodID(e, rm, "requestReviewFlow", "()Lcom/google/android/play/core/tasks/Task;"));
+    (*e)->CallObjectMethod(e, task, (*e)->GetMethodID(e, tk, "addOnCompleteListener",
+                           "(Lcom/google/android/play/core/tasks/OnCompleteListener;)Lcom/google/android/play/core/tasks/Task;"),
+                           fj_new_by_name("test/CompleteListener", NULL, NULL));
+    CHECK(g_review_done == 2);                                              /* complete, not successful */
+    (*e)->PopLocalFrame(e, NULL);
+}
+
 static int run_shape(int shape)
 {
     setenv("UA_PREFS_DEFAULTS", "particles=0 bad =3", 1);   /* (a malformed entry is skipped) */
@@ -319,6 +474,7 @@ static int run_shape(int shape)
 
     /* startup */
     CHECK(up_start(&cfg) == 0);
+    if (shape == SHAPE_2021_3 && !no_libmain) test_services();
     CHECK(R(R_ONLOAD) == 1);
     CHECK(R(R_INITJNI) == 1);
     CHECK(R(R_WEBREQ) == (shape <= SHAPE_2018_4));

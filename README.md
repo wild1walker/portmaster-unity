@@ -352,3 +352,7 @@ translates Direct3D shaders with Unity's open-source
 [libpmhwdec](https://github.com/Knifethrower/pmhwdec), which a port ships, and the runtime's support
 for it (his pull requests #10, H.264 and HEVC, and #12, VP8). He also found and fixed the loader's freezes in
 2017.4's video player and thread start (#16, #17) and wrote asmpatch's `playmaker-typelookup` (#18).
+[Bogodroid](https://github.com/binarycounter/Bogodroid) (binarycounter, and geoffwoollams' Unity 7 work in
+[his fork](https://github.com/geoffwoollams/bogodroid)) showed what Unity 7's player needs (no
+`libmain.so`, the system's ICU) and which phone services games call (Play Billing, In-App Review,
+Java's cryptography, the battery's level); the code for them here is this project's own.
