@@ -261,7 +261,8 @@ REL/RELA-only libraries, the UnityMain looper model, Swappy off, the OBB GUID of
 | engine assembly slots | 2 | 2 | 45 | by name (json) | same | same | same | same | same |
 | PlayerSettings type tree | UnityPy's | UnityPy's | UnityPy's | UnityPy's | 2023.2.20: +1 byte (typetrees.py) | +4 bytes | (6000.3.11: +4) | +4 | +4 |
 
-Not covered: 5.0 - 5.5 (5.0 - 5.4: another Shader layout; 5.5 unchecked), 6000.7 (betas: format
+Not covered: Unity 4 (its own route under box64: [box64-route.md](../box64-route.md#unity-4-games)),
+5.0 - 5.5 (5.0 - 5.4: another Shader layout; 5.5 unchecked), 6000.7 (betas: format
 25), the GameActivity variant (a Gradle-built `libgame.so`; every package has the Activity one,
 which the runtime plays), Vulkan (the converter keeps GLES3 only).
 

@@ -115,6 +115,31 @@ or a handheld with a full desktop GL this needs nothing from the port.
 OpenGL Core: Unity reads its 2.1 version and refuses, or, with the version string faked, calls GL 3
 functions gl4es does not have. gl4es is also what Westonpack's `crusty_glx_gl4es` mode bundles.
 
+### Unity 4 games
+
+Unity 4 players (and 5.0 - 5.4's OpenGL 2 renderer) draw with desktop OpenGL 2 only, so `gl4es` mode
+is their route, and every one of them needs more than gl4es as it is. Knifethrower worked this out on
+four Unity 4 ports of his (4.3 - 4.7, PortMaster) and keeps the
+tools and the notes in [PM-Porting-Tools](https://github.com/Knifethrower/PM-Porting-Tools) (0BSD;
+[docs/engines/unity-4.md](https://github.com/Knifethrower/PM-Porting-Tools/blob/main/docs/engines/unity-4.md),
+and [unity-4-donor.md](https://github.com/Knifethrower/PM-Porting-Tools/blob/main/docs/engines/unity-4-donor.md)
+for games with only a Windows, Mac or 32-bit Linux build). What a Unity 4 port needs, from those notes:
+
+- gl4es built with fixes every Unity 4 game hits: ARB program ids it recycled crashed the game at a scene
+  change; `GL_UNSIGNED_SHORT` pixels read as bytes left point lights dark (Unity's 1024x1 `GL_ALPHA16`
+  attenuation texture); Mali refused the main framebuffer's separate depth and stencil (one packed
+  `DEPTH24_STENCIL8` instead); ARB parser overflows. `LIBGL_NOBGRA=1` keeps Unity's BGRA render
+  textures on the GPU; `LIBGL_SHRINK` 1/2/5/7 and `LIBGL_BATCH=1` broke the picture or the game.
+- Three byte patches of the 4.5 - 4.7 x86_64 player, found by pattern: a VRAM floor (without a memory-info
+  extension the player assumes 64 MB and shrinks big DXT textures into stripes), its own joystick reader
+  off (`/dev/input/js%d`: presses arrived twice with gptokeyb), and the resolution list; and
+  `Plugins/x86_64/ScreenSelector.so` removed (no GTK resolution dialog).
+- No Westonpack: an X11 stand-in and GLX on the firmware's SDL2, inside the game's process.
+- The data: serialized file format 9 without type trees (`mainData` + `levelN`), DXT textures, the
+  `SubProgram "opengl"` of each shader.
+
+None of this is in this repository's tools yet: for a Unity 4 game, start from his.
+
 ## box64
 
 Built by `tools/box64/build.sh` from the official release tag (v0.4.4), generic ARM64 dynarec
