@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -77,6 +78,98 @@ static void test_log(void)
     CHECK(s && strstr(s, "W/FMOD(") && strstr(s, "warn 1.50\n"));
     CHECK(s && strstr(s, "xxxx|end\n"));
     free(s);
+}
+
+// ---- AAssetManager over the APK's own entries (an Android build ported as it is) -------------------
+// a zip written here: entries stored or deflated, at offsets that are not page-aligned
+static void zip_put16(FILE *f, unsigned v) { fputc(v & 255, f); fputc(v >> 8 & 255, f); }
+static void zip_put32(FILE *f, unsigned long v) { zip_put16(f, v & 0xffff); zip_put16(f, v >> 16 & 0xffff); }
+static void write_zip(const char *path, const char *const *names, const char *const *data, const int *deflated, int n)
+{
+    FILE *f = fopen(path, "wb");
+    long off[8];
+    unsigned long crc[8], csz[8];
+    unsigned char *comp[8];
+    for (int i = 0; i < n; i++) {
+        size_t len = strlen(data[i]);
+        crc[i] = crc32(0, (const unsigned char *)data[i], (uInt)len);
+        comp[i] = malloc(len + 64);
+        if (deflated[i]) {
+            z_stream z = { 0 };
+            deflateInit2(&z, 9, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+            z.next_in = (unsigned char *)data[i]; z.avail_in = (uInt)len; z.next_out = comp[i]; z.avail_out = (uInt)len + 64;
+            deflate(&z, Z_FINISH);
+            csz[i] = z.total_out;
+            deflateEnd(&z);
+        } else { memcpy(comp[i], data[i], len); csz[i] = len; }
+        off[i] = ftell(f);
+        zip_put32(f, 0x04034b50); zip_put16(f, 20); zip_put16(f, 0); zip_put16(f, deflated[i] ? 8 : 0);
+        zip_put32(f, 0); zip_put32(f, crc[i]); zip_put32(f, csz[i]); zip_put32(f, len);
+        zip_put16(f, (unsigned)strlen(names[i])); zip_put16(f, 3);     // a 3-byte extra: odd offsets
+        fputs(names[i], f); fputs("xyz", f);
+        fwrite(comp[i], 1, csz[i], f);
+    }
+    long cd = ftell(f);
+    for (int i = 0; i < n; i++) {
+        zip_put32(f, 0x02014b50); zip_put16(f, 20); zip_put16(f, 20); zip_put16(f, 0); zip_put16(f, deflated[i] ? 8 : 0);
+        zip_put32(f, 0); zip_put32(f, crc[i]); zip_put32(f, csz[i]); zip_put32(f, strlen(data[i]));
+        zip_put16(f, (unsigned)strlen(names[i])); zip_put16(f, 0); zip_put16(f, 0); zip_put16(f, 0); zip_put16(f, 0);
+        zip_put32(f, 0); zip_put32(f, (unsigned long)off[i]);
+        fputs(names[i], f);
+        free(comp[i]);
+    }
+    long end = ftell(f);
+    zip_put32(f, 0x06054b50); zip_put16(f, 0); zip_put16(f, 0); zip_put16(f, n); zip_put16(f, n);
+    zip_put32(f, (unsigned long)(end - cd)); zip_put32(f, (unsigned long)cd); zip_put16(f, 0);
+    fclose(f);
+}
+static void test_assets_apk(void)
+{
+    char apk[512], dir[512];
+    static const char *const names[] = { "AndroidManifest.xml", "assets/realtime_features.json", "assets/stored.bin",
+                                         "assets/ma/model.tflite", "assets/bin/Data/settings.xml" };
+    static const char *const data[] = { "<manifest/>", "{\"features\": [\"available_memory\", \"oom_score\"]}",
+                                        "0123456789abcdef", "tflite tflite tflite tflite tflite", "FROM-APK" };
+    static const int deflated[] = { 1, 1, 0, 1, 0 };
+    snprintf(apk, sizeof apk, "%s/base.apk", tmpdir);
+    write_zip(apk, names, data, deflated, 5);
+    snprintf(dir, sizeof dir, "%s/assets", tmpdir);                 // the unpacked folder of the test above
+    android_set_asset_dir(dir);
+    android_set_asset_apk(apk);
+    AAssetManager *m = AAssetManager_fromJava(NULL, (void *)1);
+    char buf[64] = { 0 };
+    AAsset *a = AAssetManager_open(m, "realtime_features.json", AASSET_MODE_BUFFER);   // deflated, only in the APK
+    CHECK(a && AAsset_getLength(a) == (a_off_t)strlen(data[1]));
+    if (a) {
+        CHECK(AAsset_read(a, buf, 13) == 13 && !memcmp(buf, data[1], 13));
+        const char *b = AAsset_getBuffer(a);
+        CHECK(b && !memcmp(b, data[1], strlen(data[1])));
+        CHECK(AAsset_isAllocated(a) == 1);
+        a_off_t s, l;
+        CHECK(AAsset_openFileDescriptor(a, &s, &l) < 0);             // a compressed asset has none, as on Android
+        AAsset_close(a);
+    }
+    a = AAssetManager_open(m, "stored.bin", 0);                       // stored: read from the APK in place
+    CHECK(a && AAsset_getLength(a) == 16);
+    if (a) {
+        CHECK(AAsset_seek(a, 10, SEEK_SET) == 10 && AAsset_read(a, buf, 32) == 6 && !memcmp(buf, "abcdef", 6));
+        const char *b = AAsset_getBuffer(a);
+        CHECK(b && !memcmp(b, "0123456789abcdef", 16));
+        a_off_t s = -1, l = -1;
+        int fd = AAsset_openFileDescriptor(a, &s, &l);
+        CHECK(fd >= 0 && s > 0 && l == 16);
+        if (fd >= 0) { char c; CHECK(pread(fd, &c, 1, s + 3) == 1 && c == '3'); close(fd); }
+        AAsset_close(a);
+    }
+    a = AAssetManager_open(m, "bin/Data/settings.xml", 0);           // the unpacked folder wins over the APK
+    if (a) { CHECK(AAsset_read(a, buf, 4) == 4 && !memcmp(buf, "0123", 4)); AAsset_close(a); } else CHECK(0);
+    CHECK(AAssetManager_open(m, "AndroidManifest.xml", 0) == NULL);   // only assets/ entries
+    CHECK(AAssetManager_open(m, "ma", 0) == NULL);
+    AAssetDir *d = AAssetManager_openDir(m, "ma");                    // a folder only in the APK
+    const char *nm = d ? AAssetDir_getNextFileName(d) : NULL;
+    CHECK(nm && !strcmp(nm, "model.tflite") && !AAssetDir_getNextFileName(d));
+    if (d) AAssetDir_close(d);
+    android_set_asset_apk(NULL);
 }
 
 // ---- AAssetManager ----------------------------------------------------------------------------
@@ -1096,6 +1189,7 @@ int main(int argc, char **argv)
     mkdir(tmpdir, 0755);
     test_log();
     test_assets();
+    test_assets_apk();
     test_looper_sensors_input();
     test_choreographer();
     test_ndk_newer();

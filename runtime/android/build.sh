@@ -28,7 +28,7 @@ docker run --rm $PLAT -v "$PWD/..":/r -w /r/android -e O=$O -e CROSS=$CROSS $IMG
   rm -f $O/libandroidshims.a
   ${CROSS}ar rcs $O/libandroidshims.a $O/obj/*.o
   $CC $CFLAGS -shared -o $O/test/libfakeegl.so test/fake_egl.c
-  $CC $CFLAGS -I. -o $O/test/test_shims test/test_shims.c $O/libandroidshims.a -Wl,--wrap=SDL_InitSubSystem -lSDL2 -ldl -lpthread -lm
+  $CC $CFLAGS -I. -o $O/test/test_shims test/test_shims.c $O/libandroidshims.a -Wl,--wrap=SDL_InitSubSystem -lSDL2 -lz -ldl -lpthread -lm
   file $O/libandroidshims.a $O/test/test_shims | sed "s|, BuildID[^,]*||"
   ${CROSS}objdump -T $O/test/test_shims | grep -o "GLIBC_[0-9.]*" | sort -uV | tail -1 | sed "s/^/max glibc symbol version: /"
 '

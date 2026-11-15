@@ -666,6 +666,7 @@ int main(int argc, char **argv)
     memset(&cfg, 0, sizeof cfg);
     cfg.package_name = pkg;
     cfg.apk_path = apk;
+    android_set_asset_apk(apk);                 // AAssetManager: what assets/ beside it lacks, from the APK
     cfg.native_lib_dir = libdir;
     cfg.data_dir = data;
     cfg.files_dir = files;

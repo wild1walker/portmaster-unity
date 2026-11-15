@@ -82,6 +82,9 @@ void android_log_set_min_priority(int prio);
 // Assets: directory that AAssetManager_* reads ("assets/" of the APK, unpacked).
 // Default from env ANDROID_ASSET_DIR, else "./assets".
 void android_set_asset_dir(const char *dir);
+// The APK whose assets/ entries AAssetManager_* serves when the directory has no such file (an
+// Android build ported as it is: its assets stay in the APK), stored or deflated.
+void android_set_asset_apk(const char *apk);
 
 // The one native window. Its size defaults to the /dev/fb0 visible size (FBIOGET_VSCREENINFO);
 // env ANDROID_WINDOW_SIZE=WxH overrides; if both fail, 720x480.

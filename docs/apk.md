@@ -186,6 +186,12 @@ the resource map, so stripped or obfuscated names work) and aapt2's protobuf XML
 - Portrait games: Unity is given the handheld's landscape window; `setRequestedOrientation` is
   logged and ignored.
 - HTTPS fails certificate checks (as for every game here, docs/compat/README.md).
+- Assets the game's native code opens through `AAssetManager` (Memory Advice's
+  `realtime_features.json` and `*.tflite` in 2023.1+ players, which abort without them; FMOD banks;
+  plugins) come from the APK itself when the port's `assets/` folder lacks them: stored entries are read
+  in place, deflated ones inflated when opened (`runtime/android/asset_manager.c`). Before, an APK
+  route port served nothing that way, and a 2023.2 App Bundle aborted at start
+  (`std::length_error` after "Can't find realtime_features.json in APK").
 
 ## Tested (emulated rig)
 
