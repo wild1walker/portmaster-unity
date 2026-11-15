@@ -444,6 +444,34 @@ int main(void)
     setup_fb(720, 720, 8 << 20, 0, "16:9");
     CHECK(fbdev_bars_height() == 562 && fbdev_buffers() == 3 && fb_var.yres_virtual == 4 * 562 + 158);
     unsetenv("UA_FB_FLIP");
+    // UA_ROTATE: a 480x640 framebuffer (muOS's RG28XX): Unity draws the handheld's 640x480, the GPU turns it
+    unsetenv("DISPLAY_ORIENTATION");
+    setup_fb(480, 640, 8 << 20, 0, "");
+    CHECK(fbdev_rotation() == 270 && fbdev_bars_height() == 0 && gpu_size_is(640, 480, 480, 640));
+    setenv("UA_RENDER_SIZE", "540x360 480x480", 1);  // (Hollow Knight's)
+    setup_fb(480, 640, 8 << 20, 0, "");
+    CHECK(gpu_size_is(480, 360, 480, 640));
+    setenv("UA_RENDER_SIZE_VAR", "TEST_RENDER_SIZE_VAR", 1);
+    setup_fb(480, 640, 8 << 20, 0, "");
+    CHECK(gpu_size_is(640, 480, 480, 640));
+    CHECK(getenv("TEST_RENDER_SIZE_VAR") && !strcmp(getenv("TEST_RENDER_SIZE_VAR"), "480x360"));
+    unsetenv("UA_RENDER_SIZE_VAR");
+    unsetenv("UA_RENDER_SIZE");
+    setup_fb(480, 640, 8 << 20, 0, "16:9");          // bars: the GPU's, no taller buffers
+    CHECK(fbdev_bars_height() == 0 && gpu_size_is(640, 360, 480, 640));
+    setenv("DISPLAY_ORIENTATION", "90", 1);
+    setup_fb(480, 640, 8 << 20, 0, "");
+    CHECK(fbdev_rotation() == 90 && gpu_size_is(640, 480, 480, 640));
+    setup_fb(640, 480, 8 << 20, 0, "");              // (an HDMI screen on the same handheld)
+    CHECK(fbdev_rotation() == 0 && gpu_size_is(0, 0, 0, 0));
+    unsetenv("DISPLAY_ORIENTATION");
+    setenv("UA_ROTATE", "90", 1);                    // by number: on any framebuffer
+    setup_fb(720, 480, 8 << 20, 0, "");
+    CHECK(fbdev_rotation() == 90 && gpu_size_is(480, 720, 720, 480));
+    setenv("UA_ROTATE", "0", 1);
+    setup_fb(480, 640, 8 << 20, 0, "");
+    CHECK(fbdev_rotation() == 0 && gpu_size_is(0, 0, 0, 0));
+    unsetenv("UA_ROTATE");
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

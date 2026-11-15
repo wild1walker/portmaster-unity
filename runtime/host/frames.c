@@ -177,6 +177,7 @@ static void on_swap(void *ctx)
     if (shot) screenshot();
     if (!osk_first) osk_draw();
     if (cursor && !cursor_first) pointer_draw();          // UA_POINTER's cursor (nothing when off)
+    display_present_rotated();                  // a turned panel: the frame, all drawn, turned onto the window
     if (++total == 1) glhooks_first_frame();
     hitches_frame();
     prof_swap();

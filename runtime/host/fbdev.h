@@ -18,6 +18,14 @@ int fbdev_render_size(int *w, int *h);
 // UA_RENDER_SIZE / UA_RENDER_SCALE without Allwinner's display engine: 1, the render size and the
 // panel's (display.c's GPU scaler draws the frame over the panel), else 0
 int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph);
+// UA_ROTATE (fbdev.c): degrees the panel is turned clockwise, after fbdev_setup (0: none). With a
+// turn, fbdev_gpu_render_size gives Unity's size (the handheld's) and the framebuffer's.
+int fbdev_rotation(void);
+// UA_ROTATE's choice for the framebuffer now (before fbdev_setup: whether the host's GL wrappers for
+// it are needed), and the choice itself from the variables' values, /proc/cmdline and the
+// framebuffer's size (tests)
+int fbdev_rotation_wanted(void);
+int fbdev_pick_rotation(const char *rotate, const char *orientation, const char *cmdline, int fw, int fh);
 // UA_ASPECT without a copy: the height of the surface (bar above + picture; the GPU only clears the bar), else 0.
 int fbdev_bars_height(void);
 // The EGL driver draws and presents the whole screen itself (PowerVR's native window 0): the

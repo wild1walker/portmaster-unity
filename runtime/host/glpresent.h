@@ -2,8 +2,9 @@
 #ifndef GLPRESENT_H
 #define GLPRESENT_H
 #include "../loader/so_loader.h"
-// The GL wrappers when UA_PRESENT_THREAD=1 (else an empty table); next(name): the next layer's function.
-const so_shim *glpresent_table(void *(*next)(const char *name));
+// The GL wrappers when UA_PRESENT_THREAD=1 or sync (a turned panel may need glpresent_start_sync),
+// else an empty table; next(name): the next layer's function.
+const so_shim *glpresent_table(void *(*next)(const char *name), int sync);
 int glpresent_wanted(void);                     // UA_PRESENT_THREAD=1 and the wrappers are in
 // The window's side, from the display backend (display_sdl.c): a context that shares Unity's, made
 // current with the window on the present thread, its swap and swap interval there.
@@ -16,6 +17,11 @@ typedef struct glpresent_window {
 } glpresent_window;
 void glpresent_start(int rw, int rh, int dw, int dh, const glpresent_window *w);   // on from here
 int glpresent_active(void);
+// No thread (fbdev.c's UA_ROTATE): Unity's framebuffer 0 is one rw x rh frame of the host's on the thread
+// whose context is made current with the window (glpresent_made_current); display.c draws it onto the
+// window. 0 when on (the wrappers are in and no present thread runs).
+int glpresent_start_sync(int rw, int rh);
+unsigned glpresent_fb0_texture(void);           // the colour texture of this thread's framebuffer 0 (0: off)
 void glpresent_made_current(void *ctx);         // Unity's context current (surfaceless) on this thread; NULL: released
 int glpresent_swap(void);                       // Unity's swap on this thread: 0 handed on
 void glpresent_swap_interval(int interval);

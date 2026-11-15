@@ -68,6 +68,20 @@
 //   UA_RENDER_PIXELS=<n>  at most about n pixels, on every device (also where UA_RENDER_RAM leaves
 //                     the panel's size): a port's default for big screens, e.g. 560000 (a
 //                     1920x1152 panel: 960x576; 720x480: the panel's size)
+//
+// A panel mounted a quarter turn in the handheld (Anbernic's RG28XX: a 480x640 framebuffer in a
+// 640x480 handheld). The framebuffer holds the picture turned, and nothing between the GPU and the
+// panel turns it back for us: Unity is told the handheld's landscape size, draws into a frame of
+// the host's (glpresent.c's framebuffer 0, one frame) and display.c draws that frame turned over
+// the whole surface (the GPU scaler's place; no display-engine crop).
+//   UA_ROTATE=0|90|180|270|auto  how far the panel is turned, clockwise, as PortMaster's
+//                     DISPLAY_ORIENTATION says it: 270 for a framebuffer that holds the picture
+//                     turned a quarter anticlockwise (its image turned 90 degrees clockwise is
+//                     upright; muOS's RG28XX). A number is used as it is, on any framebuffer.
+//                     auto (default): DISPLAY_ORIENTATION, else the kernel's fbcon=rotate:<n>, else
+//                     270 for a framebuffer taller than wide (as PortMaster's device_info.txt);
+//                     a quarter turn only where the framebuffer is taller than wide (an HDMI
+//                     screen on the same handheld is not turned), 180 only when asked by number.
 #define _GNU_SOURCE
 #include "fbdev.h"
 
@@ -108,6 +122,7 @@ static int g_gw, g_gh;                      // the render size for the GPU scale
 static int g_vh;                            // UA_ASPECT without a copy: the screen's height the driver is told (fbdev_bars_height)
 static volatile int g_cw, g_ch;
 static volatile int g_crop;
+static int g_rot;                           // UA_ROTATE: degrees the panel is turned (fbdev_rotation)
 
 #ifdef FBDEV_TEST
 static long (*g_test_fb)(int, unsigned long, void *);
@@ -285,6 +300,41 @@ int fbdev_pick_render_size(int pw, int ph, const char *size, const char *scale, 
 
 int fbdev_bars_height(void) { return g_vh; }
 
+int fbdev_pick_rotation(const char *rotate, const char *orientation, const char *cmdline, int fw, int fh)
+{
+    if (rotate && *rotate && strcmp(rotate, "auto")) {
+        if (!strcmp(rotate, "0") || !strcmp(rotate, "90") || !strcmp(rotate, "180") || !strcmp(rotate, "270")) return atoi(rotate);
+        fprintf(stderr, "[fbdev] UA_ROTATE=%s: 0, 90, 180, 270 or auto; auto\n", rotate);
+    }
+    if (fh <= fw) return 0;                     // (a quarter turn only for a framebuffer taller than wide)
+    int d = -1;
+    if (orientation && *orientation) d = atoi(orientation);
+    else if (cmdline) {
+        const char *p = strstr(cmdline, "fbcon=rotate:");
+        if (p && (p == cmdline || p[-1] == ' ')) d = p[13] == '1' ? 90 : p[13] == '3' ? 270 : -1;
+    }
+    if (d < 0) d = 270;
+    return d == 90 || d == 270 ? d : 0;
+}
+
+int fbdev_rotation(void) { return g_rot; }
+
+// UA_ROTATE's choice for the framebuffer (ANDROID_FBDEV, else /dev/fb0) as it is now; 0 without one
+int fbdev_rotation_wanted(void)
+{
+    const char *dev = getenv("ANDROID_FBDEV");
+    int fd = open(dev && *dev ? dev : "/dev/fb0", O_RDONLY | O_CLOEXEC);
+    struct fb_var_screeninfo v;
+    if (fd < 0) return 0;
+    int ok = fb_ioctl(fd, FBIOGET_VSCREENINFO, &v) == 0 && v.xres && v.yres;
+    close(fd);
+    if (!ok) return 0;
+    char cmd[2048] = "";
+    int cfd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (cfd >= 0) { ssize_t n = read(cfd, cmd, sizeof cmd - 1); cmd[n > 0 ? n : 0] = 0; close(cfd); }
+    return fbdev_pick_rotation(getenv("UA_ROTATE"), getenv("DISPLAY_ORIENTATION"), cmd, (int)v.xres, (int)v.yres);
+}
+
 int fbdev_gpu_render_size(int *w, int *h, int *pw, int *ph)
 {
     if (!g_gw) return 0;
@@ -345,12 +395,19 @@ void fbdev_setup(void)
     int fit = screens_in_memory(&v, &f);
     g_fb_w = v.xres;
     g_fb_h = v.yres;
+    // UA_ROTATE: the sizes below are the handheld's (the panel's turned a quarter); the GPU draws
+    // every frame turned, so there is always a GPU render size
+    g_rot = fbdev_rotation_wanted();
+    int quarter = g_rot == 90 || g_rot == 270;
+    int pw = quarter ? (int)v.yres : (int)v.xres, ph = quarter ? (int)v.xres : (int)v.yres;
+    if (g_rot) fprintf(stderr, "[fbdev] UA_ROTATE: the panel is turned %d degrees: Unity draws %dx%d, the GPU turns it onto %ux%u\n",
+                       g_rot, pw, ph, v.xres, v.yres);
     // UA_ASPECT: the picture keeps that aspect, with black bars; the GPU places it (the display
     // engine's layer always fills the panel: sunxi's pans put its window back)
-    int lw, lh, letterbox = fbdev_fit_aspect(v.xres, v.yres, getenv("UA_ASPECT"), &lw, &lh);
+    int lw, lh, letterbox = fbdev_fit_aspect(pw, ph, getenv("UA_ASPECT"), &lw, &lh);
     int picked = fbdev_pick_render_size(lw, lh, getenv("UA_RENDER_SIZE"), getenv("UA_RENDER_SCALE"), getenv("UA_RENDER_RAM"),
                                         getenv("UA_RENDER_PIXELS"), mem_total_kb(), &g_rw, &g_rh);
-    if (!picked && letterbox) { g_rw = lw; g_rh = lh; picked = 1; }
+    if (!picked && (letterbox || g_rot)) { g_rw = lw; g_rh = lh; picked = 1; }
     // UA_RENDER_SIZE_VAR (as in display_sdl.c): the game draws its world at the render size by itself
     // and reads the size from that variable; Unity keeps the panel's size (UA_ASPECT's), no scaler
     const char *var = getenv("UA_RENDER_SIZE_VAR");
@@ -360,7 +417,7 @@ void fbdev_setup(void)
         setenv(var, size, 1);
         fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the game's own, told in %s; Unity keeps %dx%d\n",
                 g_rw, g_rh, 100.0 * g_rw * g_rh / ((double)v.xres * v.yres), v.xres, v.yres, var, lw, lh);
-        if (letterbox) { g_rw = lw; g_rh = lh; }
+        if (letterbox || g_rot) { g_rw = lw; g_rh = lh; }
         else { g_rw = g_rh = 0; picked = 0; }
     }
     if (picked) {
@@ -368,7 +425,7 @@ void fbdev_setup(void)
         // framebuffer over the whole panel; other drivers (Rockchip's) would show it smaller or
         // shifted, so there the GPU scales (UA_RENDER_SCALER=display|gpu chooses)
         const char *sc = getenv("UA_RENDER_SCALER");
-        int de = letterbox ? 0 : sc && !strcmp(sc, "display") ? 1 : sc && !strcmp(sc, "gpu") ? 0 : access("/sys/class/disp", F_OK) == 0;
+        int de = letterbox || g_rot ? 0 : sc && !strcmp(sc, "display") ? 1 : sc && !strcmp(sc, "gpu") ? 0 : access("/sys/class/disp", F_OK) == 0;
         if (de) {
             g_cw = g_rw;
             g_ch = g_rh;
@@ -381,7 +438,7 @@ void fbdev_setup(void)
             g_rw = g_rh = 0;
             fprintf(stderr, "[fbdev] render size %dx%d (%.0f %% of %ux%u's pixels): the GPU scales the window to the panel "
                     "(%s)\n", g_gw, g_gh, 100.0 * g_gw * g_gh / ((double)v.xres * v.yres), v.xres, v.yres,
-                    letterbox ? "UA_ASPECT: black bars" : "no Allwinner display engine");
+                    g_rot ? "UA_ROTATE: turned" : letterbox ? "UA_ASPECT: black bars" : "no Allwinner display engine");
         }
     }
     // the refresh period from the mode's timings, when the driver gives them (else 60 Hz until the
@@ -397,7 +454,7 @@ void fbdev_setup(void)
     // buffers lie that far apart, the next buffer's bar is the bar below, the real pans still show a
     // whole panel, and more buffers fit in the memory than whole screens (720x720: 4 instead of 3).
     int bar_below = 0;
-    if (letterbox && g_gw == (int)v.xres && g_gh < (int)v.yres && !(getenv("UA_ASPECT_COPY") && *getenv("UA_ASPECT_COPY"))) {
+    if (letterbox && !g_rot && g_gw == (int)v.xres && g_gh < (int)v.yres && !(getenv("UA_ASPECT_COPY") && *getenv("UA_ASPECT_COPY"))) {
         int h = g_gh + ((int)v.yres - g_gh) / 2;
         bar_below = (int)v.yres - h;
         int lines = f.line_length ? (int)(f.smem_len / f.line_length) : 0;
@@ -900,6 +957,6 @@ void fbdev_test_bars(int vh, int ph, unsigned vy)
 void fbdev_test_fb(long (*fb)(int, unsigned long, void *))
 {
     g_test_fb = fb;
-    g_rw = g_rh = g_gw = g_gh = g_vh = g_cw = g_ch = g_crop = g_changed = g_var_ok = 0;
+    g_rw = g_rh = g_gw = g_gh = g_vh = g_cw = g_ch = g_crop = g_changed = g_var_ok = g_rot = 0;
 }
 #endif

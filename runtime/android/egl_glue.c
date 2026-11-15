@@ -10,6 +10,8 @@
 //   eglCreateContext        retried with only EGL_CONTEXT_CLIENT_VERSION on EGL_BAD_ATTRIBUTE
 //   eglSwapBuffers          optional host hooks before and after each swap (input pumping, pacing,
 //                           stats)
+//   eglMakeCurrent          an optional host hook after it: which context is current with the
+//                           window on this thread (glpresent.c's framebuffer 0 for a turned panel)
 //   UA_EGL_PBUFFER=1        tests without a display (Mesa's surfaceless platform): the window surface
 //                           is a pbuffer of the window's size, configs are chosen for pbuffers
 //   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
@@ -226,6 +228,18 @@ static EGLBoolean shim_eglQuerySurface(EGLDisplay d, EGLSurface s, EGLint attr, 
     return real.QuerySurface(d, s, attr, value);
 }
 
+static void (*g_current_hook)(void *ctx, int window);
+void egl_glue_set_current_hook(void (*hook)(void *ctx, int window)) { g_current_hook = hook; }
+
+static EGLBoolean shim_eglMakeCurrent(EGLDisplay d, EGLSurface draw, EGLSurface read, EGLContext ctx)
+{
+    if (!ensure() || !real.MakeCurrent) return EGL_FALSE;
+    EGLBoolean r = real.MakeCurrent(d, draw, read, ctx);
+    void (*hook)(void *, int) = g_current_hook;
+    if (r && hook) hook(ctx, draw && draw == g_window_surface);
+    return r;
+}
+
 // egl_glue_set_single_sample_window (egl_glue.h): off unless the host turns it on
 static int g_single_sample;
 void egl_glue_set_single_sample_window(int on) { g_single_sample = on; }
@@ -365,6 +379,7 @@ so_shim egl_shims[] = {
     { "eglGetConfigAttrib", (void *)shim_eglGetConfigAttrib },
     { "eglCreateContext", (void *)shim_eglCreateContext },
     { "eglSwapBuffers", (void *)shim_eglSwapBuffers },
+    { "eglMakeCurrent", (void *)shim_eglMakeCurrent },
     { "eglGetProcAddress", (void *)shim_eglGetProcAddress },
     { "eglPresentationTimeANDROID", (void *)shim_eglPresentationTimeANDROID },
     { NULL, NULL },

@@ -16,6 +16,10 @@
 // shares Unity's, waits for the frame's fence on the GPU, scales it over the window in one
 // glBlitFramebuffer (linear, as display.c's scaler; one pass fewer than its copy and scale) and swaps
 // (it waits for the GPU there). Unity may run up to two frames ahead of the screen.
+//
+// Without a thread (glpresent_start_sync: fbdev.c's UA_ROTATE, a panel mounted a quarter turn): the
+// same framebuffer 0, one frame of Unity's size, on the window's thread; display.c draws it turned
+// onto the window in Unity's own context right before each swap (glpresent_fb0_texture).
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <pthread.h>
@@ -61,6 +65,8 @@ typedef unsigned char GLboolean; typedef void *GLsync; typedef uint64_t GLuint64
 
 static so_shim g_shims[16];
 static int g_want;                              // UA_PRESENT_THREAD=1 (the wrappers are in)
+static int g_wrapped;                           // the wrappers are in (UA_PRESENT_THREAD=1 or a turned panel)
+static int g_sync;                              // glpresent_start_sync: no thread, one frame
 static int g_rw, g_rh, g_dw, g_dh;              // render and window sizes (glpresent_start)
 static const glpresent_window *g_win;
 
@@ -91,6 +97,7 @@ static char g_shot[512];                        // a screenshot of the window as
 
 // ---- Unity's framebuffer 0: three frames per context of Unity's (framebuffers are not shared)
 #define SLOTS 3
+static int g_slots = SLOTS;                     // (1 without the thread)
 typedef struct { void *ctx; GLuint fbo[SLOTS], tex[SLOTS], ds; int cur, ok; } ring;
 static ring g_rings[4];
 static int g_nrings;
@@ -98,7 +105,7 @@ static pthread_mutex_t g_ring_lock = PTHREAD_MUTEX_INITIALIZER;
 static __thread ring *t_ring;                   // the calling thread's current context's (NULL: off here)
 static __thread int t_draw0, t_read0;           // Unity has "framebuffer 0" bound to draw / to read
 
-static int is_ours(const ring *r, GLuint fb) { for (int i = 0; i < SLOTS; i++) if (r->fbo[i] == fb) return 1; return 0; }
+static int is_ours(const ring *r, GLuint fb) { for (int i = 0; i < g_slots; i++) if (r->fbo[i] == fb) return 1; return 0; }
 static int target_is0(GLenum t) { return t == GL_READ_FRAMEBUFFER ? t_read0 : t_draw0; }
 void glpresent_tstate_take(glpresent_tstate *s) { s->ring = t_ring; s->draw0 = t_draw0; s->read0 = t_read0; }
 void glpresent_tstate_give(const glpresent_tstate *s) { t_ring = (ring *)s->ring; t_draw0 = s->draw0; t_read0 = s->read0; }
@@ -167,13 +174,13 @@ static ring *ring_for(void *ctx)
         GLint tex0 = 0, rb0 = 0;
         r_GetIntegerv(GL_TEXTURE_BINDING_2D, &tex0);
         r_GetIntegerv(GL_RENDERBUFFER_BINDING, &rb0);
-        r_GenTextures(SLOTS, r->tex);
+        r_GenTextures(g_slots, r->tex);
         r_GenRenderbuffers(1, &r->ds);
         r_BindRenderbuffer(GL_RENDERBUFFER, r->ds);
         r_RenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, g_rw, g_rh);
-        r_GenFramebuffers(SLOTS, r->fbo);
+        r_GenFramebuffers(g_slots, r->fbo);
         r->ok = 1;
-        for (int i = 0; i < SLOTS; i++) {
+        for (int i = 0; i < g_slots; i++) {
             r_BindTexture(GL_TEXTURE_2D, r->tex[i]);
             r_TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, g_rw, g_rh);
             r_TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -185,7 +192,7 @@ static ring *ring_for(void *ctx)
         }
         r_BindTexture(GL_TEXTURE_2D, (GLuint)tex0);
         r_BindRenderbuffer(GL_RENDERBUFFER, (GLuint)rb0);
-        fprintf(stderr, "[present] Unity's context %p: framebuffer 0 is %d frames of %dx%d of the host's%s\n", ctx, SLOTS, g_rw, g_rh,
+        fprintf(stderr, "[present] Unity's context %p: framebuffer 0 is %d frames of %dx%d of the host's%s\n", ctx, g_slots, g_rw, g_rh,
                 r->ok ? "" : " (INCOMPLETE: off)");
     }
     pthread_mutex_unlock(&g_ring_lock);
@@ -290,9 +297,19 @@ void glpresent_start(int rw, int rh, int dw, int dh, const glpresent_window *w)
 
 int glpresent_active(void) { return g_win != NULL; }
 
+int glpresent_start_sync(int rw, int rh)
+{
+    if (!g_wrapped || g_win) return -1;
+    g_rw = rw; g_rh = rh; g_slots = 1; g_sync = 1;
+    fprintf(stderr, "[present] Unity's framebuffer 0 is a %dx%d frame of the host's, drawn onto the window at each swap\n", rw, rh);
+    return 0;
+}
+
+unsigned glpresent_fb0_texture(void) { ring *r = t_ring; return r ? r->tex[r->cur] : 0; }
+
 void glpresent_made_current(void *ctx)
 {
-    if (!g_win || !ctx) { t_ring = NULL; t_draw0 = t_read0 = 0; return; }
+    if ((!g_win && !g_sync) || !ctx) { t_ring = NULL; t_draw0 = t_read0 = 0; return; }
     ring *r = ring_for(ctx);
     t_ring = r;
     t_draw0 = t_read0 = r != NULL;
@@ -355,11 +372,12 @@ static void *gl_driver(const char *name)
     return h ? dlsym(h, name) : NULL;
 }
 
-const so_shim *glpresent_table(void *(*next)(const char *name))
+const so_shim *glpresent_table(void *(*next)(const char *name), int sync)
 {
     memset(g_shims, 0, sizeof g_shims);
     const char *e = getenv("UA_PRESENT_THREAD");
-    if (!e || strcmp(e, "1")) return g_shims;
+    int thread = e && !strcmp(e, "1");
+    if (!thread && !sync) return g_shims;
 #define N(f) do { void *p = next ? next("gl" #f) : NULL; *(void **)&r_##f = p ? p : gl_driver("gl" #f); } while (0)
     N(BindFramebuffer); N(GetIntegerv); N(GetFramebufferAttachmentParameteriv); N(InvalidateFramebuffer); N(DiscardFramebufferEXT);
     N(DrawBuffers); N(ReadBuffer); N(GenTextures); N(BindTexture); N(TexStorage2D); N(TexParameteri); N(GenRenderbuffers);
@@ -376,7 +394,7 @@ const so_shim *glpresent_table(void *(*next)(const char *name))
         !r_CheckFramebufferStatus || !r_FenceSync || !r_WaitSync || !r_DeleteSync || !r_Flush || !D.BindFramebuffer ||
         !D.GenFramebuffers || !D.FramebufferTexture2D || !D.BlitFramebuffer || !D.InvalidateFramebuffer || !D.FenceSync || !D.WaitSync ||
         !D.DeleteSync || !D.Flush) {
-        fprintf(stderr, "[present] GLES 3 functions missing: UA_PRESENT_THREAD off\n");
+        fprintf(stderr, "[present] GLES 3 functions missing: %s off\n", thread ? "UA_PRESENT_THREAD" : "the turned panel's frame");
         return g_shims;
     }
     int k = 0;
@@ -387,6 +405,7 @@ const so_shim *glpresent_table(void *(*next)(const char *name))
     if (r_DiscardFramebufferEXT) g_shims[k++] = (so_shim){ "glDiscardFramebufferEXT", (void *)w_DiscardFramebufferEXT };
     g_shims[k++] = (so_shim){ "glDrawBuffers", (void *)w_DrawBuffers };
     g_shims[k++] = (so_shim){ "glReadBuffer", (void *)w_ReadBuffer };
-    g_want = 1;
+    g_want = thread;
+    g_wrapped = 1;
     return g_shims;
 }

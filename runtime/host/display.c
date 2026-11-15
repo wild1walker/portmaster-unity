@@ -123,9 +123,11 @@ static int scale_setup(void)
     return ok;
 }
 
+static int g_srot;                              // degrees the panel is turned (display_gpu_rotate)
+
 void display_frame_rect(int *x, int *y, int *w, int *h)
 {
-    if (g_sbars && g_sstate > 0) { *x = g_sx; *y = g_sy; *w = g_sfw; *h = g_sfh; }
+    if (g_sbars && g_sstate > 0 && !g_srot) { *x = g_sx; *y = g_sy; *w = g_sfw; *h = g_sfh; }
 }
 
 // The surface's lines above Unity's frame, black: the bar above the picture. In the frame's own
@@ -157,7 +159,8 @@ void display_gpu_spanned(void) { g_spanned = 1; g_sbars = 0; }
 
 void display_present_scaled(void)
 {
-    if (!g_srw || g_sstate < 0 || glpresent_active()) return;   // (UA_PRESENT_THREAD: the present thread scales)
+    if (!g_srw || g_sstate < 0 || g_srot || glpresent_active()) return;   // (UA_PRESENT_THREAD: the present thread scales;
+                                                                          // a turned panel: display_present_rotated)
     if (g_spanned) {
         if (!g_sstate) {
             g_sstate = gl_load() ? 1 : -1;
@@ -206,6 +209,178 @@ void display_present_scaled(void)
     if (sc) G.Enable(GL_SCISSOR_TEST);
     if (rd) G.Enable(GL_RASTERIZER_DISCARD);
 }
+
+// ---- a panel turned a quarter (fbdev.c's UA_ROTATE; render thread, Unity's context, at the swap) ---
+// Unity's frame is glpresent.c's framebuffer 0 (a texture of the host's); one quad draws it turned
+// over the window, after the host's own drawing into the frame (the on-screen keyboard, the cursor,
+// screenshots). Positions and texture coordinates come from gl_VertexID: no buffer or vertex state
+// of Unity's is used. Put back after it: the program, vertex array, active unit and its 2D texture
+// and sampler, viewport, draw framebuffer, colour mask and clear colour, and the scissor, blend,
+// depth, stencil, cull, rasterizer-discard, polygon-offset and coverage switches. GLES 3.
+#define GL_VERTEX_SHADER 0x8B31
+#define GL_FRAGMENT_SHADER 0x8B30
+#define GL_COMPILE_STATUS 0x8B81
+#define GL_LINK_STATUS 0x8B82
+#define GL_CURRENT_PROGRAM 0x8B8D
+#define GL_VERTEX_ARRAY_BINDING 0x85B5
+#define GL_ACTIVE_TEXTURE 0x84E0
+#define GL_TEXTURE0 0x84C0
+#define GL_SAMPLER_BINDING 0x8919
+#define GL_VIEWPORT 0x0BA2
+#define GL_BLEND 0x0BE2
+#define GL_DEPTH_TEST 0x0B71
+#define GL_STENCIL_TEST 0x0B90
+#define GL_CULL_FACE 0x0B44
+#define GL_POLYGON_OFFSET_FILL 0x8037
+#define GL_SAMPLE_ALPHA_TO_COVERAGE 0x809E
+#define GL_SAMPLE_COVERAGE 0x80A0
+#define GL_TRIANGLE_STRIP 0x0005
+#define GL_COLOR 0x1800
+static struct {
+    unsigned (*CreateShader)(unsigned);
+    void (*ShaderSource)(unsigned, int, const char *const *, const int *);
+    void (*CompileShader)(unsigned), (*DeleteShader)(unsigned);
+    void (*GetShaderiv)(unsigned, unsigned, int *), (*GetProgramiv)(unsigned, unsigned, int *);
+    unsigned (*CreateProgram)(void);
+    void (*AttachShader)(unsigned, unsigned), (*LinkProgram)(unsigned), (*UseProgram)(unsigned);
+    int (*GetUniformLocation)(unsigned, const char *);
+    void (*Uniform1i)(int, int);
+    void (*GenVertexArrays)(int, unsigned *), (*BindVertexArray)(unsigned);
+    void (*ActiveTexture)(unsigned), (*BindSampler)(unsigned, unsigned);
+    void (*Viewport)(int, int, int, int), (*DrawArrays)(unsigned, int, int);
+} R;
+static int g_rx, g_ry, g_rfw, g_rfh, g_rbars;   // the frame's place on the window; black around it
+static unsigned g_rprog, g_rvao;
+static int g_rstate;                            // 0 not set up, 1 on, -1 failed (frames not shown)
+
+void display_gpu_rotate(int deg)
+{
+    if (!g_srw || glpresent_start_sync(g_srw, g_srh) != 0) {
+        fprintf(stderr, "[display] UA_ROTATE=%d: no frame of the host's (GL wrappers missing): the picture is not turned\n", deg);
+        return;
+    }
+    int q = deg == 90 || deg == 270;
+    int lw = q ? g_sdh : g_sdw, lh = q ? g_sdw : g_sdh;          // the window as the handheld is held
+    int fw = lw, fh = (int)((double)lw * g_srh / g_srw + 0.5);   // the frame at its own aspect
+    if (fh > lh) { fh = lh; fw = (int)((double)lh * g_srw / g_srh + 0.5); }
+    if (fw >= lw - 1 && fh >= lh - 1) { fw = lw; fh = lh; }
+    int fx = (lw - fw) / 2, fy = (lh - fh) / 2;
+    g_rbars = fw < lw || fh < lh;
+    if (deg == 270) { g_rx = g_sdw - (fy + fh); g_ry = fx; g_rfw = fh; g_rfh = fw; }
+    else if (deg == 90) { g_rx = fy; g_ry = g_sdh - (fx + fw); g_rfw = fh; g_rfh = fw; }
+    else { g_rx = g_sdw - (fx + fw); g_ry = g_sdh - (fy + fh); g_rfw = fw; g_rfh = fh; }
+    g_srot = deg;
+}
+
+static unsigned rotate_shader(unsigned type, const char *src)
+{
+    unsigned sh = R.CreateShader(type);
+    int ok = 0;
+    R.ShaderSource(sh, 1, &src, NULL);
+    R.CompileShader(sh);
+    R.GetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) { R.DeleteShader(sh); return 0; }
+    return sh;
+}
+
+static int rotate_setup(void)
+{
+    if (!gl_load()) return 0;
+    void *h = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
+    if (!h) h = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
+    void *(*gpa)(const char *) = (void *(*)(const char *))egl_glue_real("eglGetProcAddress");
+#define L(f) do { *(void **)&R.f = h ? dlsym(h, "gl" #f) : NULL; if (!R.f && gpa) *(void **)&R.f = gpa("gl" #f); } while (0)
+    L(CreateShader); L(ShaderSource); L(CompileShader); L(DeleteShader); L(GetShaderiv); L(GetProgramiv); L(CreateProgram);
+    L(AttachShader); L(LinkProgram); L(UseProgram); L(GetUniformLocation); L(Uniform1i); L(GenVertexArrays);
+    L(BindVertexArray); L(ActiveTexture); L(BindSampler); L(Viewport); L(DrawArrays);
+#undef L
+    void **f = (void **)&R;
+    for (unsigned i = 0; i < sizeof R / sizeof *f; i++) if (!f[i]) return 0;
+    // p: the corner of the window's quad (0..1 over the frame's place); uv: where it is in the frame
+    char vs[512];
+    snprintf(vs, sizeof vs, "#version 300 es\nout highp vec2 uv;\nvoid main() {\n"
+             "    highp vec2 p = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));\n"
+             "    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n    uv = %s;\n}\n",
+             g_srot == 270 ? "vec2(p.y, 1.0 - p.x)" : g_srot == 90 ? "vec2(1.0 - p.y, p.x)" : "vec2(1.0 - p.x, 1.0 - p.y)");
+    static const char fs[] = "#version 300 es\nprecision highp float;\nuniform sampler2D t;\nin highp vec2 uv;\n"
+                             "out vec4 c;\nvoid main() { c = texture(t, uv); }\n";
+    unsigned v = rotate_shader(GL_VERTEX_SHADER, vs), fr = v ? rotate_shader(GL_FRAGMENT_SHADER, fs) : 0;
+    if (!fr) { if (v) R.DeleteShader(v); return 0; }
+    int ok = 0, prog0 = 0;
+    g_rprog = R.CreateProgram();
+    R.AttachShader(g_rprog, v);
+    R.AttachShader(g_rprog, fr);
+    R.LinkProgram(g_rprog);
+    R.DeleteShader(v);
+    R.DeleteShader(fr);
+    R.GetProgramiv(g_rprog, GL_LINK_STATUS, &ok);
+    if (!ok) return 0;
+    G.GetIntegerv(GL_CURRENT_PROGRAM, &prog0);
+    R.UseProgram(g_rprog);
+    R.Uniform1i(R.GetUniformLocation(g_rprog, "t"), 0);
+    R.UseProgram((unsigned)prog0);
+    R.GenVertexArrays(1, &g_rvao);
+    return 1;
+}
+
+void display_present_rotated(void)
+{
+    if (!g_srot || g_rstate < 0) return;
+    unsigned tex = glpresent_fb0_texture();
+    if (!tex) return;                           // (not the window's context)
+    if (!g_rstate) {
+        g_rstate = rotate_setup() ? 1 : -1;
+        fprintf(stderr, g_rstate > 0 ? "[display] UA_ROTATE=%d: Unity's %dx%d frame turned onto %dx%d of the %dx%d window by the GPU\n"
+                                     : "[display] UA_ROTATE=%d: no GLES 3 program for the turn: frames of %dx%d are not shown (%dx%d of %dx%d)\n",
+                g_srot, g_srw, g_srh, g_rfw, g_rfh, g_sdw, g_sdh);
+        if (g_rstate < 0) return;
+    }
+    static const unsigned sw[] = { GL_SCISSOR_TEST, GL_BLEND, GL_DEPTH_TEST, GL_STENCIL_TEST, GL_CULL_FACE, GL_RASTERIZER_DISCARD,
+                                   GL_POLYGON_OFFSET_FILL, GL_SAMPLE_ALPHA_TO_COVERAGE, GL_SAMPLE_COVERAGE };
+    unsigned char on[sizeof sw / sizeof *sw], mask[4];
+    int prog = 0, vao = 0, unit = 0, tex0 = 0, smp = 0, dfb = 0, vp[4];
+    float c[4];
+    for (unsigned i = 0; i < sizeof sw / sizeof *sw; i++) if ((on[i] = G.IsEnabled(sw[i]))) G.Disable(sw[i]);
+    G.GetIntegerv(GL_CURRENT_PROGRAM, &prog);
+    G.GetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+    G.GetIntegerv(GL_ACTIVE_TEXTURE, &unit);
+    if (unit != GL_TEXTURE0) R.ActiveTexture(GL_TEXTURE0);
+    G.GetIntegerv(GL_TEXTURE_BINDING_2D, &tex0);
+    G.GetIntegerv(GL_SAMPLER_BINDING, &smp);
+    G.GetIntegerv(GL_VIEWPORT, vp);
+    G.GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &dfb);
+    G.GetBooleanv(GL_COLOR_WRITEMASK, mask);
+    G.GetFloatv(GL_COLOR_CLEAR_VALUE, c);
+    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);  // (the driver's: the window itself)
+    G.ColorMask(1, 1, 1, 1);
+    if (g_rbars) {                              // a new pass of the window: nothing of it loaded, bars black
+        static const unsigned ds[2] = { GL_DEPTH, GL_STENCIL };
+        G.InvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 2, ds);
+        G.ClearColor(0, 0, 0, 1);
+        G.Clear(GL_COLOR_BUFFER_BIT);
+    } else {
+        static const unsigned all[3] = { GL_COLOR, GL_DEPTH, GL_STENCIL };
+        G.InvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 3, all);
+    }
+    R.Viewport(g_rx, g_ry, g_rfw, g_rfh);
+    R.UseProgram(g_rprog);
+    R.BindVertexArray(g_rvao);
+    G.BindTexture(GL_TEXTURE_2D, tex);
+    if (smp) R.BindSampler(0, 0);
+    R.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (smp) R.BindSampler(0, (unsigned)smp);
+    G.BindTexture(GL_TEXTURE_2D, (unsigned)tex0);
+    if (unit != GL_TEXTURE0) R.ActiveTexture((unsigned)unit);
+    R.BindVertexArray((unsigned)vao);
+    R.UseProgram((unsigned)prog);
+    R.Viewport(vp[0], vp[1], vp[2], vp[3]);
+    G.BindFramebuffer(GL_DRAW_FRAMEBUFFER, (unsigned)dfb);
+    G.ClearColor(c[0], c[1], c[2], c[3]);
+    G.ColorMask(mask[0], mask[1], mask[2], mask[3]);
+    for (unsigned i = 0; i < sizeof sw / sizeof *sw; i++) if (on[i]) G.Enable(sw[i]);
+}
+
+static void on_current(void *ctx, int window) { glpresent_made_current(window ? ctx : NULL); }
 
 static const char *g_backend = "fbdev";
 static egl_host_display g_hd;
@@ -288,7 +463,10 @@ static int use_fbdev(void)
         android_window_set_native(&panel);
         egl_glue_set_report_size(w, h);
         display_gpu_scale(w, h, pw, ph);
-        if (fbdev_bars_height()) display_gpu_spanned();
+        if (fbdev_rotation()) {
+            display_gpu_rotate(fbdev_rotation());
+            egl_glue_set_current_hook(on_current);
+        } else if (fbdev_bars_height()) display_gpu_spanned();
     }
     ANativeWindow *win = android_window_get();
     android_window_set_max_size(ANativeWindow_getWidth(win), ANativeWindow_getHeight(win));

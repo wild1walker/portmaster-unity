@@ -39,3 +39,8 @@ void display_frame_rect(int *x, int *y, int *w, int *h);
 // After display_gpu_scale: UA_ASPECT is placed by the surface itself (fbdev_bars_height): no copy, only the bar cleared.
 void display_gpu_spanned(void);
 void display_present_scaled(void);
+// After display_gpu_scale: the panel is turned deg degrees (fbdev.c's UA_ROTATE): Unity draws into a
+// frame of the host's (glpresent_start_sync) that display_present_rotated (render thread, at the
+// swap, after the host's own drawing into the frame) draws turned over the window.
+void display_gpu_rotate(int deg);
+void display_present_rotated(void);

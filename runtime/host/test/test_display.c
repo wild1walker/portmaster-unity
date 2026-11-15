@@ -310,7 +310,7 @@ int main(void)
     if (fbdev) setenv("ANDROID_FBDEV", fbdev, 1); else unsetenv("ANDROID_FBDEV");
 
     int present = getenv("TEST_PRESENT") != NULL;
-    if (present) CHECK(glpresent_table(NULL)[0].name != NULL);      // (ua_host's GL chain makes the table at its start)
+    if (present) CHECK(glpresent_table(NULL, 0)[0].name != NULL);      // (ua_host's GL chain makes the table at its start)
     CHECK(display_init("test_display") == 0);
     CHECK(glpresent_active() == present);
     fprintf(stderr, "test: backend %s (expected %s)\n", display_backend(), expect);

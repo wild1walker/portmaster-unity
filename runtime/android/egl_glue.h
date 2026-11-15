@@ -28,6 +28,10 @@ void egl_glue_set_swap_offload(int (*offload)(egl_glue_swap_fn swap, void *dpy, 
 // Called on Unity's render thread right after each real eglSwapBuffers returned, with its result
 // (NULL to remove).
 void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx);
+// Called on the calling thread after each eglMakeCurrent that succeeded (not with a host display):
+// the context made current (NULL: released) and whether it draws into Unity's window surface (NULL
+// to remove).
+void egl_glue_set_current_hook(void (*hook)(void *ctx, int window));
 // Called right before the driver creates a window surface for Unity's window (not with a host
 // display, nor for UA_EGL_PBUFFER's pbuffer; NULL to remove).
 void egl_glue_set_window_hook(void (*hook)(void));

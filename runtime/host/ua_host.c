@@ -589,7 +589,7 @@ int main(int argc, char **argv)
     g_hook_shims = glhooks_table();            // UA_SHADER_DUMP/OVERRIDE, UA_COMPUTE_GROUP, UA_SWAP_INTERVAL
     int msaa = msaa_fix();                     // UA_MSAA_FIX: also a single-sampled window
     g_msaa_shims = msaafix_table(msaa, gltrace_wrapper);
-    g_present_shims = glpresent_table(below_glpresent);       // UA_PRESENT_THREAD
+    g_present_shims = glpresent_table(below_glpresent, fbdev_rotation_wanted());   // UA_PRESENT_THREAD, UA_ROTATE
     g_persist_shims = glpersist_table(after_glpersist);       // UA_GL_PERSIST
     g_arena_shims = glarena_table(after_glarena);             // UA_GL_ARENA
     g_state_shims = glstate_table(after_glstate);             // UA_GL_STATE
