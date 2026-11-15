@@ -466,3 +466,108 @@ public class PlayMakerFSM : UnityEngine.MonoBehaviour
         NotMainThread = false;
     }
 }
+
+// playmaker-typelookup: ReflectionUtils.GetGlobalType as PlayMaker 1.9 has it (Type.GetType in the
+// likely assemblies, then in every loaded one, then every loaded assembly's types by Name in three
+// namespaces), and types for each kind of name: plain ones in the three namespaces, a nested one, a
+// name used twice in this assembly, one in another namespace. Lookup reports what each name finds.
+namespace HutongGames.PlayMaker
+{
+    public static class ReflectionUtils
+    {
+        private static readonly Dictionary<string, Type> typeLookup = new Dictionary<string, Type>();
+        private static List<string> assemblyNames;
+        private static System.Reflection.Assembly[] loadedAssemblies;
+
+        public static Type GetGlobalType(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName))
+            {
+                return null;
+            }
+            typeLookup.TryGetValue(typeName, out var value);
+            if (value != null)
+            {
+                return value;
+            }
+            value = Type.GetType(typeName + ",Assembly-CSharp") ?? Type.GetType(typeName + ",PlayMaker");
+            if (value == null)
+            {
+                value = Type.GetType(typeName + ",Assembly-CSharp-firstpass") ?? Type.GetType(typeName);
+            }
+            if (value == null)
+            {
+                if (assemblyNames == null)
+                {
+                    assemblyNames = new List<string>();
+                    loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies();
+                    foreach (var assembly in loadedAssemblies)
+                    {
+                        assemblyNames.Add(assembly.FullName);
+                    }
+                }
+                foreach (string assemblyName in assemblyNames)
+                {
+                    value = Type.GetType(typeName + "," + assemblyName);
+                    if (value != null)
+                    {
+                        break;
+                    }
+                }
+                if (value == null)
+                {
+                    for (int j = 0; j < loadedAssemblies.Length; j++)
+                    {
+                        Type[] types = loadedAssemblies[j].GetTypes();
+                        for (int k = 0; k < types.Length; k++)
+                        {
+                            if (types[k].Name == typeName && (types[k].Namespace == "UnityEngine" || types[k].Namespace == "HutongGames.PlayMaker" || types[k].Namespace == "HutongGames.PlayMaker.Actions"))
+                            {
+                                value = types[k];
+                                typeLookup[typeName] = value;
+                                return value;
+                            }
+                        }
+                    }
+                }
+            }
+            typeLookup.Remove(typeName);
+            typeLookup[typeName] = value;
+            return value;
+        }
+
+        /// <summary>name=type per name ('|' between names), twice each (the second from the cache).</summary>
+        public static string Lookup(string names)
+        {
+            var sb = new StringBuilder();
+            for (int round = 0; round < 2; round++)
+                foreach (var n in names.Split('|'))
+                {
+                    var t = GetGlobalType(n);
+                    sb.Append(n).Append('=').Append(t == null ? "null" : t.FullName + " in " + t.Assembly.GetName().Name).Append('\n');
+                }
+            return sb.ToString();
+        }
+    }
+
+    public class FsmThing { }
+    public class Dup { }
+}
+
+namespace HutongGames.PlayMaker.Actions
+{
+    public class SetThing { }
+}
+
+namespace UnityEngine
+{
+    public class FakeAnimator { }
+    public class Outer { public class Inner { } }
+    public class Dup { }
+}
+
+namespace SomeGame
+{
+    public class FakeAnimator2 { }
+    public class Inner { }
+}
