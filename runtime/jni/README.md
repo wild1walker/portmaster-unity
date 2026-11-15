@@ -208,11 +208,14 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
 
 - Phone services a game reaches through JNI (`up_services.c`): Google Play Billing answers
   `BILLING_UNAVAILABLE` (3) through `startConnection`'s listener (posted to the UI thread) and every
-  query's; Play In-App Review gives a failed task whose listeners hear it at once; `MessageDigest`
+  query's; Play In-App Review gives a failed task whose listeners hear it at once; Unity's Mobile
+  Notifications package gets a manager whose app has notifications blocked (no channels, nothing
+  shown); Play Games v2's sign-in client gives failed tasks; `MessageDigest`
   (MD5, SHA-1, SHA-256), `SecureRandom` (getrandom), `Mac` (HmacMD5/SHA1/SHA256) and `Cipher` (AES
   ECB/CBC/CTR, PKCS5Padding/NoPadding) are real, written in C; other algorithms throw
   `NoSuchAlgorithmException`. Tested in `test_unityplayer` (FIPS-197 and SP 800-38A AES vectors,
-  RFC 2202/4231 HMAC, the "abc" digests, a billing listener, a review task).
+  RFC 2202/4231 HMAC, the "abc" digests, a billing listener, a review task, the notification manager and
+  its builder, a Play Games sign-in task).
 
 ## Tests (`./build.sh` in an arm/v7 container, `ARCH=arm64 ./build.sh` natively in ua-build-arm64)
 - `test/test_fakejni.c` + `test/android_side.c`: on ARM android_side is compiled **`-mfloat-abi=softfp

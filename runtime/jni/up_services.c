@@ -7,6 +7,14 @@
  *     reports the store unavailable instead of waiting for a connection that never comes.
  *   - Play In-App Review (com.google.android.play.core.review): requestReviewFlow and launchReviewFlow give
  *     a Task that has already failed; its listeners are called at once (a review never shows).
+ *   - Unity's Mobile Notifications package (com.unity.androidnotifications.UnityNotificationManager, the Java
+ *     half its C# calls): a manager whose app has notifications blocked (areNotificationsEnabled 5), no
+ *     channels, nothing scheduled or shown; its builder keeps the extras the C# writes. Without it
+ *     AndroidNotificationCenter.Initialize threw a NullReferenceException (the manager was null).
+ *   - Google Play Games (v2, com.google.android.gms.games: what the Play Games plugin for Unity calls):
+ *     PlayGamesSdk.initialize does nothing; the sign-in client's isAuthenticated/signIn/
+ *     requestServerSideAccess give a failed task, as on a phone without Play Games: the plugin reports a
+ *     sign-in error and the game goes on without it.
  *   - java.security.MessageDigest (MD5, SHA-1, SHA-256), java.security.SecureRandom (getrandom),
  *     javax.crypto.Mac (HmacMD5, HmacSHA1, HmacSHA256), javax.crypto.Cipher (AES in ECB, CBC or CTR, with
  *     PKCS5Padding or NoPadding), SecretKeySpec and IvParameterSpec: real results, written here (no
@@ -124,6 +132,35 @@ H(task_complete) { fj_call(a[0].l, "onComplete", (const char *)ud, self); return
 H(task_failure)  { fj_call(a[0].l, "onFailure", "(Ljava/lang/Exception;)V", fj_get_field(self, "ex", "Ljava/lang/Exception;").l); return fj_l(self); }
 H(task_complete2) { fj_call(a[1].l, "onComplete", (const char *)ud, self); return fj_l(self); }
 H(task_failure2)  { fj_call(a[1].l, "onFailure", "(Ljava/lang/Exception;)V", fj_get_field(self, "ex", "Ljava/lang/Exception;").l); return fj_l(self); }
+
+/* ---- Unity's Mobile Notifications --------------------------------------------------------------- */
+#define UNM "com/unity/androidnotifications/UnityNotificationManager"
+#define NB "android/app/Notification$Builder"
+static jobject g_unm;
+H(unm_get)
+{
+    if (!g_unm) {
+        g_unm = fj_global(fj_new_by_name(UNM, NULL, NULL));
+        up_log("Mobile Notifications: a manager made: notifications are blocked for the app, none is shown");
+    }
+    return fj_l(g_unm);
+}
+H(unm_target)   { return fj_i(UPC.sdk_int); }
+H(unm_enabled)  { return fj_i(5); }                 /* PERMISSION_STATUS_NOTIFICATIONS_BLOCKED_FOR_APP */
+H(unm_channels) { return fj_l(fj_array_new("Lcom/unity/androidnotifications/NotificationChannelWrapper;", 0)); }
+H(unm_int0)     { return fj_i(0); }
+H(unm_builder)
+{
+    jobject b = fj_new_by_name(NB, NULL, NULL);
+    jclass bc = (*env)->FindClass(env, "android/os/Bundle");
+    fj_set_obj(b, "extras", "Landroid/os/Bundle;", (*env)->NewObject(env, bc, (*env)->GetMethodID(env, bc, "<init>", "()V")));
+    return fj_l(b);
+}
+H(nb_extras)    { return fj_get_field(self, "extras", "Landroid/os/Bundle;"); }
+
+/* ---- Google Play Games v2 ---------------------------------------------------------------------------- */
+#define PG "com/google/android/gms/games"
+H(pg_client) { up_log("Play Games: a sign-in client made: its sign-in fails"); return fj_l(fj_new_by_name(PG "/GamesSignInClient", NULL, NULL)); }
 
 /* ---- hashes: MD5, SHA-1, SHA-256 ---------------------------------------------------------------- */
 enum { H_MD5, H_SHA1, H_SHA256 };
@@ -644,6 +681,54 @@ void up_services_register(void)
         M(T, "addOnSuccessListener", sig, h_self);
         snprintf(sig, sizeof sig, "(Landroid/app/Activity;L%s/OnSuccessListener;)L%s;", P, T);
         M(T, "addOnSuccessListener", sig, h_self);
+    }
+
+    /* Play Games v2 */
+    CLS(PG "/PlayGamesSdk", NULL);
+    SM(PG "/PlayGamesSdk", "initialize", "(Landroid/content/Context;)V", h_void);
+    CLS(PG "/PlayGames", NULL);
+    CLS(PG "/GamesSignInClient", NULL);
+    SM(PG "/PlayGames", "getGamesSignInClient", "(Landroid/app/Activity;)L" PG "/GamesSignInClient;", pg_client);
+    MU(PG "/GamesSignInClient", "isAuthenticated", "()L" GTASK ";", rv_flow, GTASK);
+    MU(PG "/GamesSignInClient", "signIn", "()L" GTASK ";", rv_flow, GTASK);
+    MU(PG "/GamesSignInClient", "requestServerSideAccess", "(Ljava/lang/String;Z)L" GTASK ";", rv_flow, GTASK);
+
+    /* Mobile Notifications (the package's Java side, 2.x) */
+    CLS(UNM, NULL);
+    CLS("com/unity/androidnotifications/NotificationCallback", NULL);
+    CLS("com/unity/androidnotifications/NotificationChannelWrapper", NULL);
+    SM(UNM, "getNotificationManagerImpl", "(Landroid/app/Activity;Lcom/unity/androidnotifications/NotificationCallback;)L" UNM ";", unm_get);
+    SM(UNM, "getNotificationManagerImpl", "(Landroid/content/Context;)L" UNM ";", unm_get);
+    M(UNM, "getTargetSdk", "()I", unm_target);
+    M(UNM, "areNotificationsEnabled", "()I", unm_enabled);
+    M(UNM, "getNotificationChannels", "()[Lcom/unity/androidnotifications/NotificationChannelWrapper;", unm_channels);
+    M(UNM, "getNotificationChannel", "(Ljava/lang/String;)Lcom/unity/androidnotifications/NotificationChannelWrapper;", h_null);
+    M(UNM, "canScheduleExactAlarms", "()Z", h_false);
+    M(UNM, "checkIfPendingNotificationIsRegistered", "(I)Z", h_false);
+    M(UNM, "checkNotificationStatus", "(I)I", unm_int0);      /* 0: neither scheduled nor shown */
+    M(UNM, "scheduleNotification", "(L" NB ";Z)I", unm_int0);
+    M(UNM, "createNotificationBuilder", "(Ljava/lang/String;)L" NB ";", unm_builder);
+    M(UNM, "registerNotificationChannel", "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;ZZZZ[JILjava/lang/String;)V", h_void);
+    M(UNM, "registerNotificationChannelGroup", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", h_void);
+    M(UNM, "deleteNotificationChannel", "(Ljava/lang/String;)V", h_void);
+    M(UNM, "deleteNotificationChannelGroup", "(Ljava/lang/String;)V", h_void);
+    M(UNM, "cancelPendingNotification", "(I)V", h_void);
+    M(UNM, "cancelDisplayedNotification", "(I)V", h_void);
+    M(UNM, "cancelAllPendingNotificationIntents", "()V", h_void);
+    M(UNM, "cancelAllNotifications", "()V", h_void);
+    M(UNM, "showNotificationSettings", "(Ljava/lang/String;)V", h_void);
+    M(UNM, "getNotificationFromIntent", "(Landroid/content/Intent;)Landroid/app/Notification;", h_null);
+    CLS(NB, NULL);
+    M(NB, "getExtras", "()Landroid/os/Bundle;", nb_extras);
+    static const char *const setters[][2] = {
+        { "setContentTitle", "(Ljava/lang/CharSequence;)" }, { "setContentText", "(Ljava/lang/CharSequence;)" },
+        { "setAutoCancel", "(Z)" }, { "setNumber", "(I)" }, { "setStyle", "(Landroid/app/Notification$Style;)" },
+        { "setWhen", "(J)" }, { "setGroup", "(Ljava/lang/String;)" }, { "setGroupSummary", "(Z)" },
+        { "setSortKey", "(Ljava/lang/String;)" }, { "setShowWhen", "(Z)" } };
+    static char nb_sigs[sizeof setters / sizeof setters[0]][128];
+    for (size_t i = 0; i < sizeof setters / sizeof setters[0]; i++) {
+        snprintf(nb_sigs[i], sizeof nb_sigs[i], "%sL" NB ";", setters[i][1]);
+        M(NB, setters[i][0], nb_sigs[i], h_self);
     }
 
     /* java.security and javax.crypto */

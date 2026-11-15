@@ -337,7 +337,13 @@ static jbyteArray aes(JNIEnv *e, const char *t, int mode, const char *keyhex, co
     } else (*e)->CallVoidMethod(e, ci, (*e)->GetMethodID(e, c, "init", "(ILjava/security/Key;)V"), mode, k);
     return (*e)->CallObjectMethod(e, ci, (*e)->GetMethodID(e, c, "doFinal", "([B)[B"), jbytes(e, in, n));
 }
-static volatile int g_billing_code = -1, g_review_done;
+static volatile int g_billing_code = -1, g_review_done, g_failed;
+static jvalue t_on_failure(JNIEnv *env, jobject self, const jvalue *a, void *ud)
+{
+    (void)env; (void)self; (void)ud;
+    g_failed += a[0].l != NULL;
+    return fj_v();
+}
 static jvalue t_on_setup(JNIEnv *env, jobject self, const jvalue *a, void *ud)
 {
     (void)self; (void)ud;
@@ -427,6 +433,33 @@ static void test_services(void)
                            "(Lcom/google/android/play/core/tasks/OnCompleteListener;)Lcom/google/android/play/core/tasks/Task;"),
                            fj_new_by_name("test/CompleteListener", NULL, NULL));
     CHECK(g_review_done == 2);                                              /* complete, not successful */
+
+    /* Mobile Notifications: Initialize's calls get a manager (blocked for the app, the device's API level, no
+       channels); a builder keeps the extras the C# puts */
+    jclass um = (*e)->FindClass(e, "com/unity/androidnotifications/UnityNotificationManager"), nb = (*e)->FindClass(e, "android/app/Notification$Builder"),
+           bu = (*e)->FindClass(e, "android/os/Bundle");
+    jobject nm = (*e)->CallStaticObjectMethod(e, um, (*e)->GetStaticMethodID(e, um, "getNotificationManagerImpl",
+                 "(Landroid/app/Activity;Lcom/unity/androidnotifications/NotificationCallback;)Lcom/unity/androidnotifications/UnityNotificationManager;"), NULL, NULL);
+    CHECK(nm && (*e)->CallIntMethod(e, nm, (*e)->GetMethodID(e, um, "getTargetSdk", "()I")) == 23);
+    CHECK(nm && (*e)->CallIntMethod(e, nm, (*e)->GetMethodID(e, um, "areNotificationsEnabled", "()I")) == 5);
+    jobject chans = nm ? (*e)->CallObjectMethod(e, nm, (*e)->GetMethodID(e, um, "getNotificationChannels", "()[Lcom/unity/androidnotifications/NotificationChannelWrapper;")) : NULL;
+    CHECK(chans && (*e)->GetArrayLength(e, chans) == 0);
+    jobject bld = nm ? (*e)->CallObjectMethod(e, nm, (*e)->GetMethodID(e, um, "createNotificationBuilder", "(Ljava/lang/String;)Landroid/app/Notification$Builder;"),
+                                             (*e)->NewStringUTF(e, "default")) : NULL;
+    CHECK(bld && (*e)->IsSameObject(e, bld, (*e)->CallObjectMethod(e, bld, (*e)->GetMethodID(e, nb, "setAutoCancel", "(Z)Landroid/app/Notification$Builder;"), 1)));
+    jobject ex = bld ? (*e)->CallObjectMethod(e, bld, (*e)->GetMethodID(e, nb, "getExtras", "()Landroid/os/Bundle;")) : NULL;
+    if (ex) (*e)->CallVoidMethod(e, ex, (*e)->GetMethodID(e, bu, "putInt", "(Ljava/lang/String;I)V"), (*e)->NewStringUTF(e, "id"), 7);
+    CHECK(ex && (*e)->CallIntMethod(e, ex, (*e)->GetMethodID(e, bu, "getInt", "(Ljava/lang/String;)I"), (*e)->NewStringUTF(e, "id")) == 7);
+    /* Play Games v2: the sign-in task fails; an OnFailureListener hears the exception */
+    fj_class_define("test/FailureListener", NULL);
+    fj_method_define("test/FailureListener", "onFailure", "(Ljava/lang/Exception;)V", 0, t_on_failure, NULL);
+    jclass pg = (*e)->FindClass(e, "com/google/android/gms/games/PlayGames"), sc = (*e)->FindClass(e, "com/google/android/gms/games/GamesSignInClient"),
+           gt = (*e)->FindClass(e, "com/google/android/gms/tasks/Task");
+    jobject sic = (*e)->CallStaticObjectMethod(e, pg, (*e)->GetStaticMethodID(e, pg, "getGamesSignInClient", "(Landroid/app/Activity;)Lcom/google/android/gms/games/GamesSignInClient;"), NULL);
+    jobject at = sic ? (*e)->CallObjectMethod(e, sic, (*e)->GetMethodID(e, sc, "isAuthenticated", "()Lcom/google/android/gms/tasks/Task;")) : NULL;
+    if (at) (*e)->CallObjectMethod(e, at, (*e)->GetMethodID(e, gt, "addOnFailureListener", "(Lcom/google/android/gms/tasks/OnFailureListener;)Lcom/google/android/gms/tasks/Task;"),
+                                   fj_new_by_name("test/FailureListener", NULL, NULL));
+    CHECK(at && g_failed == 1);
     (*e)->PopLocalFrame(e, NULL);
 }
 

@@ -174,6 +174,10 @@ the resource map, so stripped or obfuscated names work) and aapt2's protobuf XML
     reports itself unavailable instead of waiting for a connection that never comes;
   - Play In-App Review: `requestReviewFlow` / `launchReviewFlow` give a task that has already failed,
     and its listeners hear it at once (no review prompt);
+  - Unity's Mobile Notifications package: a manager whose app has notifications blocked, no channels,
+    nothing scheduled or shown (before, `AndroidNotificationCenter.Initialize` threw: the manager was null);
+  - Google Play Games v2 (the Play Games plugin for Unity): sign-in fails as on a phone without Play
+    Games, and the plugin reports a sign-in error;
   - Java's own cryptography, real: `MessageDigest` (MD5, SHA-1, SHA-256), `SecureRandom`, `Mac`
     (HmacMD5, HmacSHA1, HmacSHA256), `Cipher` (AES in ECB, CBC or CTR, PKCS5Padding or NoPadding),
     `SecretKeySpec`, `IvParameterSpec`; another algorithm throws `NoSuchAlgorithmException`.
