@@ -78,10 +78,11 @@
 //                     DISPLAY_ORIENTATION says it: 270 for a framebuffer that holds the picture
 //                     turned a quarter anticlockwise (its image turned 90 degrees clockwise is
 //                     upright; muOS's RG28XX). A number is used as it is, on any framebuffer.
-//                     auto (default): DISPLAY_ORIENTATION, else the kernel's fbcon=rotate:<n>, else
-//                     270 for a framebuffer taller than wide (as PortMaster's device_info.txt);
-//                     a quarter turn only where the framebuffer is taller than wide (an HDMI
-//                     screen on the same handheld is not turned), 180 only when asked by number.
+//                     auto (default): a framebuffer taller than wide is turned a quarter, any
+//                     other is not (an HDMI screen on the same handheld; 180 only by number);
+//                     which way: DISPLAY_ORIENTATION when it says 90 or 270, else the kernel's
+//                     fbcon=rotate:1 or 3, else 270 (as PortMaster's device_info.txt; muOS's
+//                     RG28XX gave DISPLAY_ORIENTATION=0).
 #define _GNU_SOURCE
 #include "fbdev.h"
 
@@ -307,14 +308,13 @@ int fbdev_pick_rotation(const char *rotate, const char *orientation, const char 
         fprintf(stderr, "[fbdev] UA_ROTATE=%s: 0, 90, 180, 270 or auto; auto\n", rotate);
     }
     if (fh <= fw) return 0;                     // (a quarter turn only for a framebuffer taller than wide)
-    int d = -1;
-    if (orientation && *orientation) d = atoi(orientation);
-    else if (cmdline) {
-        const char *p = strstr(cmdline, "fbcon=rotate:");
-        if (p && (p == cmdline || p[-1] == ' ')) d = p[13] == '1' ? 90 : p[13] == '3' ? 270 : -1;
-    }
-    if (d < 0) d = 270;
-    return d == 90 || d == 270 ? d : 0;
+    // a framebuffer taller than wide in a handheld is mounted a quarter turned whatever else is said:
+    // which way from DISPLAY_ORIENTATION or fbcon=rotate when they say a quarter, else 270 (muOS's
+    // RG28XX: PortMaster's DISPLAY_ORIENTATION was 0 there)
+    if (orientation && (!strcmp(orientation, "90") || !strcmp(orientation, "270"))) return atoi(orientation);
+    const char *p = cmdline ? strstr(cmdline, "fbcon=rotate:") : NULL;
+    if (p && (p == cmdline || p[-1] == ' ') && (p[13] == '1' || p[13] == '3')) return p[13] == '1' ? 90 : 270;
+    return 270;
 }
 
 int fbdev_rotation(void) { return g_rot; }

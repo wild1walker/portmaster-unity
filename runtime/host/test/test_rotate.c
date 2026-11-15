@@ -156,9 +156,11 @@ int main(int argc, char **argv)
     CHECK(fbdev_pick_rotation(NULL, NULL, "", 480, 640) == 270);          // taller than wide: PortMaster's 270
     CHECK(fbdev_pick_rotation("auto", NULL, "", 640, 480) == 0);
     CHECK(fbdev_pick_rotation(NULL, "90", "", 480, 640) == 90);           // DISPLAY_ORIENTATION
-    CHECK(fbdev_pick_rotation(NULL, "0", "", 480, 640) == 0);
+    CHECK(fbdev_pick_rotation(NULL, "0", "", 480, 640) == 270);           // (muOS's RG28XX: PortMaster said 0)
     CHECK(fbdev_pick_rotation(NULL, "270", "", 640, 480) == 0);           // (an HDMI screen: not turned)
-    CHECK(fbdev_pick_rotation(NULL, "180", "", 480, 640) == 0);           // (180 only by number)
+    CHECK(fbdev_pick_rotation(NULL, "180", "", 480, 640) == 270);         // (180 only by number)
+    CHECK(fbdev_pick_rotation(NULL, "0", "fbcon=rotate:1", 480, 640) == 90);
+    CHECK(fbdev_pick_rotation(NULL, "", "fbcon=rotate:2", 480, 640) == 270);
     CHECK(fbdev_pick_rotation(NULL, NULL, "root=/dev/mmcblk0p2 fbcon=rotate:1 quiet", 480, 640) == 90);
     CHECK(fbdev_pick_rotation(NULL, NULL, "fbcon=rotate:3", 480, 640) == 270);
     CHECK(fbdev_pick_rotation(NULL, NULL, "xfbcon=rotate:1", 480, 640) == 270);

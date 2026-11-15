@@ -465,6 +465,10 @@ int main(void)
     setup_fb(640, 480, 8 << 20, 0, "");              // (an HDMI screen on the same handheld)
     CHECK(fbdev_rotation() == 0 && gpu_size_is(0, 0, 0, 0));
     unsetenv("DISPLAY_ORIENTATION");
+    setenv("DISPLAY_ORIENTATION", "0", 1);           // (muOS's RG28XX: PortMaster said 0)
+    setup_fb(480, 640, 8 << 20, 0, "");
+    CHECK(fbdev_rotation() == 270 && gpu_size_is(640, 480, 480, 640));
+    unsetenv("DISPLAY_ORIENTATION");
     setenv("UA_ROTATE", "90", 1);                    // by number: on any framebuffer
     setup_fb(720, 480, 8 << 20, 0, "");
     CHECK(fbdev_rotation() == 90 && gpu_size_is(480, 720, 720, 480));
