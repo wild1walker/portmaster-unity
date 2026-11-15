@@ -271,10 +271,14 @@ icall registration and arrays, and for IL2CPP's).
 own Mono and runs one check a line of what a phone gives a game, then a total:
 
 ```
-[probe] ok time zone: local 2026-11-14 23:12, UTC-08:00, America/Los_Angeles
-[probe] FAIL compression: DllNotFoundException: ...
-[probe] done: 26 ok, 1 failed (compression)
+[probe] ok time zone: local 2026-11-14 23:35, UTC-08:00, America/Los_Angeles
+[probe] ok compression: gzip 4005 -> 45 bytes and back (libMonoPosixHelper)
+[probe] ok battery: 100 %, Full
+[probe] done: 27 ok, 0 failed
 ```
+
+(Hollow Knight on the RG34XX-SP with Knulli, 2026-11-14: all 27 checks pass; the same ua_host walked
+Greenpath at 49.2 / 47.8 fps against 48.5 / 48.9 before these changes.)
 
 The checks: Unity's version and the runtime's; the time zone (against the handheld's own UTC offset,
 which ua_host passes: `TZ`, `/etc/timezone` or the `/etc/localtime` link); the culture and Unity's system
