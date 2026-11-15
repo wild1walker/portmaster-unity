@@ -653,11 +653,23 @@ static int bionic_cond_broadcast(void *c)
 }
 /* a wait on a mutex this thread went on without (bionic_mutex_lock): a short pause, as a spurious wakeup */
 static int phantom_wait(void) { usleep(10000); return 0; }
+/* An untimed wait ends after 100 ms at the latest, as a spurious wakeup (POSIX allows them, and every caller must
+ * check its condition again; on Android Mono's GC signals cut waits short all the time). Unity 2017.4's
+ * PlatformThread::Create waits for the new thread's start signal, but the new thread signals without taking the
+ * mutex: a signal between the creator's check and its wait is lost, and the creator waited forever (a video decoder
+ * thread's start, 1 GB RK3326 handheld, 2026-11-12). Now a lost signal costs at most 100 ms. */
+#define COND_WAIT_MAX_NS 100000000L
 static int bionic_cond_wait(void *c, void *m)
 {
     if (COND_SHARED_WITH_ANDROID(c) || MUTEX_SHARED_WITH_ANDROID(m)) return 0;
     if (t_nphantom && phantom_held(m)) return phantom_wait();
-    return pthread_cond_wait(&cond_of(c)->c, mutex_of(m));
+    struct bcond *b = cond_of(c);
+    struct timespec t;
+    clock_gettime(b->clock, &t);
+    t.tv_nsec += COND_WAIT_MAX_NS;
+    if (t.tv_nsec >= 1000000000L) { t.tv_sec++; t.tv_nsec -= 1000000000L; }
+    int r = pthread_cond_clockwait(&b->c, mutex_of(m), b->clock, &t);
+    return r == ETIMEDOUT ? 0 : r;
 }
 static int bionic_cond_clockwait(void *c, void *m, clockid_t clock, const struct timespec *abstime)
 {
