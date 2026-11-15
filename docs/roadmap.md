@@ -50,3 +50,14 @@ are 32-bit ARM in every version.
 
 Each item keeps the rule the Cuphead port follows: the game looks and plays as the original;
 anything that changes that is an option, off by default.
+
+Considered and not taken:
+
+- **A mod loader for IL2CPP Android builds** (MelonLoader's Android bootstrap, "LemonLoader": Bogodroid
+  loads it with its dependencies, Android's .NET 8 CoreCLR and dobby, as bionic libraries, and calls the
+  bootstrap's `JNI_OnLoad`; only that first step is done there). Ports load no mod loader
+  ([porting.md](porting.md#community-performance-mods-and-fixes), rule 4): a community speedup goes in
+  as a Cecil patch run at setup on the player's own copy. On top of that CoreCLR and the
+  Il2CppInterop assemblies MelonLoader generates (Cpp2IL, the first run) need far more memory than a
+  1 GB handheld has. For a game ported by the IL2CPP route ([il2cpp.md](il2cpp.md)) the game's
+  assemblies are patched (asmpatch) before the compile, which needs no loader at run time.
