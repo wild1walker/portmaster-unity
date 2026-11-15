@@ -137,6 +137,8 @@ _SHOT = re.compile(r'^\[frames\] screenshot \S*shot-(\d+)\.ppm')
 _CRASH = re.compile(r'^\[crash\] signal (\d+)')
 _FATAL = re.compile(r'FORTIFY|abort message|Fatal signal|Assertion .* failed|^\* Assertion|SIGSEGV')
 _EXIT = re.compile(r'^exit (\d+)$')
+# UA_PROBE's total (runtime/host/managed/UAProbe.cs), behind the Unity log's prefix
+_PROBE = re.compile(r'\[probe\] done: (\d+) ok, (\d+) failed(?: \((.*)\))?$')
 _EXCEPTION = re.compile(r'\b\w*Exception\b(?::|$)')
 
 
@@ -144,8 +146,12 @@ def run_log(lines):
     """ua_host's log: frames, fps, crash, exit, shots taken, exceptions (counts only)."""
     r = {'frames': 0, 'fps_lines': 0, 'last_fps_at': None, 'fps_last': None, 'crash': None, 'fatal': 0,
          'exit': None, 'shots_logged': 0, 'exceptions': 0, 'unity_exit_frames': None, 'lines': len(lines),
-         'stopped': False}
+         'stopped': False, 'probe': None}
     for line in lines:
+        m = _PROBE.search(line.rstrip())
+        if m:
+            r['probe'] = {'ok': int(m[1]), 'failed': sorted(n.strip() for n in (m[3] or '').split(',') if n.strip())}
+            continue
         if re.search(r'\] up: quit$', line):
             r['stopped'] = True         # the rig's time was up: ua_host was asked to stop (SIGINT)
         m = _FPS.search(line)
@@ -355,4 +361,11 @@ def compare_rig(golden, run, shots, frames_ratio=0.3):
                                            + ('' if ok else f' (under {frames_ratio:.0%}: slower or stuck)')))
     if (golden.get('run') or {}).get('crash') is None and run.get('crash') is not None:
         out.append(('baseline:crash', False, f"crash (signal {run.get('crash')}); none in the baseline"))
+    # UA_PROBE (on in the rig): a check that passed in the baseline and fails now; checks are added over
+    # time, so only failures are compared, and only when both runs have a total
+    gp, p = (golden.get('run') or {}).get('probe'), run.get('probe')
+    if gp and p:
+        new = sorted(set(p['failed']) - set(gp['failed']))
+        out.append(('baseline:probe', not new, f"probe: {p['ok']} ok, failed {p['failed'] or 'none'}"
+                                              + (f'; new since the baseline: {", ".join(new)}' if new else '')))
     return out

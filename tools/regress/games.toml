@@ -303,6 +303,12 @@ route = "android"
 unity = "6000.6.2f1"
 covers = ["6000.6", "mono"]
 
+[[game]]
+slug = "dfu-linux"                 # Daggerfall Unity 1.1.1 (MIT, github.com/Interkarma/daggerfall-unity); without
+route = "android"                  # Bethesda's free Daggerfall data it stops at its data-folder screen
+unity = "2019.4.40f1"
+covers = ["2019.4", "mono", "same-game-apk"]
+
 # ------------------------------------------------------------------ games with their own ports
 
 [[game]]
@@ -365,6 +371,33 @@ covers = ["2022.3", "apk", "il2cpp-arm64", "inputsystem"]
 apk = { target = "arm64" }
 levels = ["rig"]                # (184 MB: the other arm64 APKs cover the route in the fast level)
 rig = { arch = "arm64", seconds = 150, shots = [40, 90, 140], content = [140], frames_min = 300 }
+
+# Daggerfall Unity's Android port (MIT, github.com/Vwing/daggerfall-unity-android): one game and version in all
+# three Android backends; and Between Two Worlds (MIT, github.com/SkS-GameDev/Between-two-worlds), whose "APK"
+# is an App Bundle, with a Linux build of the same version below (box64)
+[[game]]
+slug = "dfu-apk-mono32"
+route = "apk"
+covers = ["2022.3", "apk", "mono-armv7", "same-game-backends"]
+apk = { target = "armhf" }
+
+[[game]]
+slug = "dfu-apk-il2cpp32"
+route = "apk"
+covers = ["2022.3", "apk", "il2cpp-armv7", "same-game-backends"]
+apk = { target = "armhf" }
+
+[[game]]
+slug = "dfu-apk-il2cpp64"
+route = "apk"
+covers = ["2022.3", "apk", "il2cpp-arm64", "same-game-backends"]
+apk = { target = "arm64" }
+
+[[game]]
+slug = "btw-apk"
+route = "apk"
+covers = ["2023.2", "apk", "aab", "il2cpp-arm64", "addressables"]
+apk = { target = "arm64" }
 
 # ------------------------------------------------------------------ 64-bit IL2CPP route (pmunity il2cpp)
 
@@ -460,4 +493,11 @@ slug = "x64-coldapples"
 route = "box64"
 unity = "6000.6.4f1"
 covers = ["6000.6", "box64", "mono"]
+expect = { box64_fits = true }
+
+[[game]]
+slug = "btw-linux"                 # the same version as btw-apk's App Bundle
+route = "box64"
+unity = "2023.2.9f1"
+covers = ["2023.2", "box64", "il2cpp-x64"]
 expect = { box64_fits = true }

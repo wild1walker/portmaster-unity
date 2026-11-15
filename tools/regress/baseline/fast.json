@@ -91,6 +91,80 @@
    }
   }
  },
+ "btw-apk": {
+  "apk": {
+   "facts": {
+    "abi": "arm64-v8a",
+    "backend": "il2cpp",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 33,
+    "unity_version": "2023.2.9f1"
+   },
+   "tree": {
+    "files": 7,
+    "mb": 115,
+    "total": "c353ef95143688a3b8127b81c42f1914d7135822ec3ec020ca2d3c7c0dd5298f",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 154,
+      "members": "14da1940de042a14"
+     }
+    }
+   }
+  }
+ },
+ "btw-linux": {
+  "route": {
+   "android": {
+    "blockers": 1,
+    "caveats": 0,
+    "fits": false
+   },
+   "backend": "il2cpp",
+   "box64": {
+    "blockers": 0,
+    "caveats": 0,
+    "fits": true
+   },
+   "compressed": false,
+   "platform": "linux",
+   "route": "box64",
+   "unity": "2023.2.9f1"
+  },
+  "shaders": {
+   "files": 3,
+   "gl4x_empty": 0,
+   "gl4x_programs": 2,
+   "gl4x_subshaders_left_out": 0,
+   "not_translatable": 1,
+   "precision": "highp",
+   "programs": 174,
+   "rewrites": 1,
+   "shaders": 45,
+   "subprograms": 183
+  },
+  "shaders_digest": {
+   "compute": 0,
+   "files": 3,
+   "per_file": {
+    "Resources/unity_builtin_extra": "4d75a2ca5f0260b1",
+    "f-7b56d5d0afac": "fca8477e6932dd5b",
+    "resources.assets": "bab14d68e37ecddf"
+   },
+   "shaders": 45,
+   "total": "7da5fd111a89d9abad02d1424a348771346f9edf979390feca74134d438ee5b1"
+  },
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "9cbf6225b33455be"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
  "buggish": {
   "check": {
    "backend": "mono",
@@ -1295,6 +1369,147 @@
    "files": 1,
    "per_file": {
     "globalgamemanagers": "f31f459ae0d054fa"
+   },
+   "steps": [
+    "settings"
+   ]
+  }
+ },
+ "dfu-apk-il2cpp32": {
+  "apk": {
+   "facts": {
+    "abi": "armeabi-v7a",
+    "backend": "il2cpp",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 36,
+    "unity_version": "2022.3.62f3"
+   },
+   "tree": {
+    "files": 6,
+    "mb": 133,
+    "total": "22ab6bff89958412c7748c0ca42cdd6292d495eded9c617d10b08d0f744e83f7",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 800,
+      "members": "a196936052e3b54d"
+     }
+    }
+   }
+  }
+ },
+ "dfu-apk-il2cpp64": {
+  "apk": {
+   "facts": {
+    "abi": "arm64-v8a",
+    "backend": "il2cpp",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 36,
+    "unity_version": "2022.3.62f3"
+   },
+   "tree": {
+    "files": 6,
+    "mb": 147,
+    "total": "7e8335d8000761364ee63c08808729090c68c3d8f21d45576309c6ad99150abe",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 800,
+      "members": "5b2488458f3f41d9"
+     }
+    }
+   }
+  }
+ },
+ "dfu-apk-mono32": {
+  "apk": {
+   "facts": {
+    "abi": "armeabi-v7a",
+    "backend": "mono",
+    "min_sdk": 23,
+    "source": "apk",
+    "target_sdk": 36,
+    "unity_version": "2022.3.62f3"
+   },
+   "tree": {
+    "files": 8,
+    "mb": 77,
+    "total": "e60aec06e87daeeed8a0897f3873731b13396960926bde8900db8bfd2b7d1b8f",
+    "zips": {
+     "f-dc3a2e338600": {
+      "entries": 908,
+      "members": "bddcd8f7538abb6a"
+     }
+    }
+   }
+  }
+ },
+ "dfu-linux": {
+  "check": {
+   "backend": "mono",
+   "build": "linux",
+   "compressed": false,
+   "exit": 0,
+   "notes": 9,
+   "route": "android",
+   "routes_ok": [
+    "android",
+    "box64",
+    "il2cpp-arm64",
+    "mono-arm64"
+   ],
+   "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+   "shader_source": "glcore",
+   "suggest": {
+    "android_data": {
+     "asmpatch": "off",
+     "streaming_assets": "both"
+    },
+    "convert": {},
+    "runtime": {
+     "UA_POINTER": "1"
+    }
+   },
+   "unity_supported": true,
+   "unity_version": "2019.4.40f1",
+   "warnings": 0
+  },
+  "shaders": {
+   "compute": 10,
+   "compute_total": 12,
+   "compute_without_glcore": 0,
+   "es31_programs": 7,
+   "files": 4,
+   "gl4x_empty": 2,
+   "gl4x_programs": 44,
+   "gl4x_subshaders_left_out": 1,
+   "kernel_variants": 25,
+   "kernels": 25,
+   "kernels_left_out": 10,
+   "not_translatable": 1,
+   "precision": "highp",
+   "programs": 7476,
+   "rewrites": 5,
+   "shaders": 114,
+   "subprograms": 14358,
+   "vr_left_out": 594
+  },
+  "shaders_digest": {
+   "compute": 10,
+   "files": 4,
+   "per_file": {
+    "Resources/unity_builtin_extra": "7a761eb9e768f450",
+    "globalgamemanagers.assets": "a46b78166003ef27",
+    "resources.assets": "fb8c88e9430cad64",
+    "sharedassets1.assets": "4c293aab774ea626"
+   },
+   "shaders": 114,
+   "total": "899bebf893de2ef7428b09590ad8fd6787e861a47c0cc56f08ef471bedf1a267"
+  },
+  "steps": {
+   "files": 1,
+   "per_file": {
+    "globalgamemanagers": "6d191b539ccde8b9"
    },
    "steps": [
     "settings"

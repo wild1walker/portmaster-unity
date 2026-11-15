@@ -647,6 +647,9 @@ class Game:
         if self.g.get('input'):
             env['UA_INPUT_SCRIPT'] = self.g['input']
         env.update({k: str(v) for k, v in env_extra.items()})
+        # the feature probe (Mono games; uaprobe.dll beside ua_host: runtime/host/managed/build.sh probe), halfway
+        # through the run at most a minute in: its failures go into the baseline (checks.compare_rig)
+        env.setdefault('UA_PROBE', str(min(60, max(10, secs // 2))))
         prefixes = sorted({k.split('_', 1)[0] + '_' for k in env_extra if not k.startswith(('UA_', 'GC_', 'ANDROID_'))})
         if prefixes:
             env['EMU_ENV'] = ' '.join(prefixes)

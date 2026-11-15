@@ -113,6 +113,13 @@ class RunLog(unittest.TestCase):
         c = dict((k, ok) for k, ok, _ in K.expectations_rig({}, r, [], ''))
         self.assertFalse(c['exit'])
 
+    def test_probe(self):
+        r = K.run_log(['I/Unity(57): [probe] ok time zone: local 2026-11-15 06:57, UTC+00:00, Etc/UTC',
+                       'I/Unity(57): [probe] done: 25 ok, 2 failed (text encodings, compression)'])
+        self.assertEqual(r['probe'], {'ok': 25, 'failed': ['compression', 'text encodings']})
+        self.assertEqual(K.run_log(['[probe] done: 27 ok, 0 failed'])['probe'], {'ok': 27, 'failed': []})
+        self.assertIsNone(K.run_log(['[fps] nothing'])['probe'])
+
     def test_crash(self):
         r = K.run_log(['[crash] signal 11 (code 1) at address 0x0, thread 12', 'exit 139'])
         self.assertEqual((r['crash'], r['exit']), (11, 139))
@@ -165,6 +172,12 @@ class Compare(unittest.TestCase):
         self.assertTrue(all(c[1] for c in ok))
         bad = K.compare_rig(golden, {'frames': 100, 'crash': 11}, [{'t': 60, 'content': False}])
         self.assertEqual(sorted(c[0] for c in bad if not c[1]), ['baseline:content@60', 'baseline:crash', 'baseline:frames'])
+        gp = {'run': {'frames': 0, 'crash': None, 'probe': {'ok': 26, 'failed': ['compression']}}}
+        ok = K.compare_rig(gp, {'crash': None, 'probe': {'ok': 27, 'failed': []}}, [])
+        self.assertEqual([c[1] for c in ok if c[0] == 'baseline:probe'], [True])
+        bad = K.compare_rig(gp, {'crash': None, 'probe': {'ok': 25, 'failed': ['compression', 'sockets']}}, [])
+        self.assertEqual([c for c in bad if c[0] == 'baseline:probe'][0][1:2], (False,))
+        self.assertIn('sockets', [c for c in bad if c[0] == 'baseline:probe'][0][2])
 
     def test_rig_expectations(self):
         shots = [{'t': 220, 'content': True, 'dark': 0.1, 'colours': 50}]
