@@ -492,6 +492,34 @@ H(act_setReqOrient)  { g_requested_orientation = a[0].i; up_log("setRequestedOri
 H(act_isFinishing)   { return fj_z(up_is_finishing()); }
 H(act_finish)        { up_request_finish("Activity.finish()"); return fj_v(); }
 
+/* ActivityManager.getMemoryInfo: /proc/meminfo's MemTotal and MemAvailable; the threshold under which
+ * Android's low-memory killer starts on the background, which a phone sets from its RAM: 1/16 of it
+ * (64 MB on a 1 GB handheld), lowMemory when less is available */
+static long long up_meminfo_kb(const char *key)
+{
+    FILE *f = fopen("/proc/meminfo", "r");
+    char line[128];
+    long long v = -1;
+    size_t k = strlen(key);
+    while (f && fgets(line, sizeof line, f))
+        if (!strncmp(line, key, k) && line[k] == ':') { v = atoll(line + k + 1); break; }
+    if (f) fclose(f);
+    return v;
+}
+H(am_memoryInfo)
+{
+    if (!a[0].l) return fj_v();
+    long long total = up_meminfo_kb("MemTotal"), avail = up_meminfo_kb("MemAvailable");
+    if (total < 0) total = 1024 * 1024;
+    if (avail < 0) avail = up_meminfo_kb("MemFree");
+    long long threshold = total * 1024 / 16;
+    fj_set_field(a[0].l, "totalMem", "J", fj_j(total * 1024));
+    fj_set_field(a[0].l, "availMem", "J", fj_j(avail * 1024));
+    fj_set_field(a[0].l, "threshold", "J", fj_j(threshold));
+    fj_set_field(a[0].l, "lowMemory", "Z", fj_z(avail * 1024 <= threshold));
+    return fj_v();
+}
+
 /* PackageManager */
 H(pm_getAppInfo)     { return fj_l(g_appinfo); }
 H(pm_getPkgInfo)     { return fj_l(g_pkginfo); }
@@ -1773,6 +1801,13 @@ void up_android_register(void)
     M("android/app/ActivityManager", "getMemoryClass", "()I", h_int);
     fj_method_define("android/app/ActivityManager", "getMemoryClass", "()I", 0, h_int, (void *)256);
     fj_method_define("android/app/ActivityManager", "getLargeMemoryClass", "()I", 0, h_int, (void *)512);
+    /* ActivityManager.MemoryInfo (Memory Advice in 2023.1+ players, plugins): the handheld's memory */
+    CLS("android/app/ActivityManager$MemoryInfo", NULL);
+    M("android/app/ActivityManager$MemoryInfo", "<init>", "()V", h_void);
+    for (int i = 0; i < 3; i++)                  /* public fields, read by GetFieldID before the call fills them */
+        fj_field_define("android/app/ActivityManager$MemoryInfo", (const char *[]){ "totalMem", "availMem", "threshold" }[i], "J", 0, fj_j(0));
+    fj_field_define("android/app/ActivityManager$MemoryInfo", "lowMemory", "Z", 0, fj_z(0));
+    M("android/app/ActivityManager", "getMemoryInfo", "(Landroid/app/ActivityManager$MemoryInfo;)V", am_memoryInfo);
 
     /* files */
     const char *F = "java/io/File";

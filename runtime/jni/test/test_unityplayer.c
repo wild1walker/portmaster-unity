@@ -467,6 +467,17 @@ static void test_services(void)
     jobject actobj = cf ? (*e)->GetStaticObjectField(e, upc, cf) : NULL;
     CHECK(gmid && actobj && (*e)->CallObjectMethod(e, actobj, gmid) != NULL);  /* Call<AndroidJavaObject>("getApplicationContext") */
 
+    /* ActivityManager.getMemoryInfo: /proc/meminfo's total and available, as the fields' JNI readers see them */
+    jclass mic = (*e)->FindClass(e, "android/app/ActivityManager$MemoryInfo"), amc = (*e)->FindClass(e, "android/app/ActivityManager");
+    jfieldID ftot = (*e)->GetFieldID(e, mic, "totalMem", "J"), favail = (*e)->GetFieldID(e, mic, "availMem", "J");
+    jobject mi = (*e)->NewObject(e, mic, (*e)->GetMethodID(e, mic, "<init>", "()V"));
+    jclass ctxc = (*e)->FindClass(e, "android/content/Context");
+    jobject amo = actobj ? (*e)->CallObjectMethod(e, actobj, (*e)->GetMethodID(e, ctxc, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;"),
+                                                 (*e)->NewStringUTF(e, "activity")) : NULL;
+    if (amo) (*e)->CallVoidMethod(e, amo, (*e)->GetMethodID(e, amc, "getMemoryInfo", "(Landroid/app/ActivityManager$MemoryInfo;)V"), mi);
+    jlong tot = (*e)->GetLongField(e, mi, ftot), av = (*e)->GetLongField(e, mi, favail);
+    CHECK(amo && tot > (64ll << 20) && av > 0 && av <= tot);
+
     /* Play Games v2: the sign-in task fails; an OnFailureListener hears the exception */
     fj_class_define("test/FailureListener", NULL);
     fj_method_define("test/FailureListener", "onFailure", "(Ljava/lang/Exception;)V", 0, t_on_failure, NULL);
