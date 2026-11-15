@@ -42,6 +42,8 @@
 #include <sys/statfs.h>
 #include <sys/statvfs.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 /* bionic_setjmp.S: setjmp/longjmp with bionic's 256-byte jmp_buf (both ABIs: 64 or 32 longs) */
 int bionic_setjmp(void *), bionic__setjmp(void *), bionic_sigsetjmp(void *, int);
@@ -485,11 +487,69 @@ static int bionic_mutex_init(void *m, const pthread_mutexattr_t *attr)
     __atomic_store_n(slot_of(m), (uintptr_t)x, __ATOMIC_RELEASE);   /* a second init leaks the first, as in libhybris */
     return 0;
 }
+/* A deadlock in the game's own code: a thread that holds a mutex joins (pthread_join) a thread that waits
+ * for that mutex. Unity 2017.4's video player does it when it switches clips: it locks the player, prepares
+ * the next clip and then stops the old clip's thread, which may be waiting for that lock by then. On a
+ * phone the window is short; here, where preparing a clip (and opening a hardware decoder) takes longer,
+ * it came every few dozen switches, and the game froze. So a lock that has been waited for 250 ms checks
+ * whether its owner is joining the waiting thread; if so, the waiting thread goes on without the lock (its
+ * unlock then does nothing), reaches its stop flag and ends, and the join returns. Nothing else changes. */
+#define JOINERS_MAX 32
+static struct { pid_t joiner; pthread_t target; } g_joiners[JOINERS_MAX];
+static pthread_mutex_t g_joiners_mu = PTHREAD_MUTEX_INITIALIZER;
+#define PHANTOM_MAX 8
+static __thread void *t_phantom[PHANTOM_MAX];   /* mutexes this thread went on without */
+static __thread int t_nphantom;
+static int bionic_pthread_join(pthread_t t, void **ret)
+{
+    pid_t me = (pid_t)syscall(SYS_gettid);
+    int slot = -1;
+    pthread_mutex_lock(&g_joiners_mu);
+    for (int i = 0; i < JOINERS_MAX && slot < 0; i++)
+        if (!g_joiners[i].joiner) { g_joiners[i].joiner = me; g_joiners[i].target = t; slot = i; }
+    pthread_mutex_unlock(&g_joiners_mu);
+    int r = pthread_join(t, ret);
+    if (slot >= 0) { pthread_mutex_lock(&g_joiners_mu); g_joiners[slot].joiner = 0; pthread_mutex_unlock(&g_joiners_mu); }
+    return r;
+}
+static int joins_me(pid_t owner)
+{
+    pthread_t self = pthread_self();
+    int r = 0;
+    pthread_mutex_lock(&g_joiners_mu);
+    for (int i = 0; i < JOINERS_MAX; i++)
+        if (g_joiners[i].joiner == owner && pthread_equal(g_joiners[i].target, self)) r = 1;
+    pthread_mutex_unlock(&g_joiners_mu);
+    return r;
+}
+static int phantom_held(void *m)
+{
+    for (int i = 0; i < t_nphantom; i++) if (t_phantom[i] == m) return 1;
+    return 0;
+}
 static int bionic_mutex_lock(void *m)
 {
     if (!m) return EINVAL;
     if (MUTEX_SHARED_WITH_ANDROID(m)) return 0;
-    return pthread_mutex_lock(mutex_of(m));
+    pthread_mutex_t *x = mutex_of(m);
+    int r = pthread_mutex_trylock(x);
+    while (r == EBUSY || r == ETIMEDOUT) {
+        struct timespec t;
+        clock_gettime(CLOCK_REALTIME, &t);
+        t.tv_nsec += 250000000L;
+        if (t.tv_nsec >= 1000000000L) { t.tv_sec++; t.tv_nsec -= 1000000000L; }
+        r = pthread_mutex_timedlock(x, &t);
+        if (r != ETIMEDOUT) break;
+        pid_t owner = x->__data.__owner;
+        if (owner && t_nphantom < PHANTOM_MAX && joins_me(owner)) {
+            fprintf(stderr, "[bionic] thread %ld waits for a lock that thread %d holds while it waits for this thread "
+                    "to end (pthread_join): it goes on without the lock (a deadlock in the game's own code)\n",
+                    (long)syscall(SYS_gettid), (int)owner);
+            t_phantom[t_nphantom++] = m;
+            return 0;
+        }
+    }
+    return r;
 }
 static int bionic_mutex_trylock(void *m)
 {
@@ -500,6 +560,8 @@ static int bionic_mutex_trylock(void *m)
 static int bionic_mutex_unlock(void *m)
 {
     if (!m) return EINVAL;
+    for (int i = 0; i < t_nphantom; i++)                       /* went on without it (above): nothing to unlock */
+        if (t_phantom[i] == m) { t_phantom[i] = t_phantom[--t_nphantom]; return 0; }
     uintptr_t v = slot_load(m);
     if (v <= ANDROID_TOP_ADDR_VALUE_MUTEX)                     /* shared with Android, or never locked */
         return hybris_check_android_shared_mutex(init_value(m, v)) ? 0 : EPERM;
@@ -589,19 +651,24 @@ static int bionic_cond_broadcast(void *c)
     if (COND_SHARED_WITH_ANDROID(c)) return android_pthread_cond_broadcast((android_cond_t *)c);
     return pthread_cond_broadcast(&cond_of(c)->c);
 }
+/* a wait on a mutex this thread went on without (bionic_mutex_lock): a short pause, as a spurious wakeup */
+static int phantom_wait(void) { usleep(10000); return 0; }
 static int bionic_cond_wait(void *c, void *m)
 {
     if (COND_SHARED_WITH_ANDROID(c) || MUTEX_SHARED_WITH_ANDROID(m)) return 0;
+    if (t_nphantom && phantom_held(m)) return phantom_wait();
     return pthread_cond_wait(&cond_of(c)->c, mutex_of(m));
 }
 static int bionic_cond_clockwait(void *c, void *m, clockid_t clock, const struct timespec *abstime)
 {
     if (COND_SHARED_WITH_ANDROID(c) || MUTEX_SHARED_WITH_ANDROID(m)) return 0;
+    if (t_nphantom && phantom_held(m)) return phantom_wait();
     return pthread_cond_clockwait(&cond_of(c)->c, mutex_of(m), clock, abstime);
 }
 static int bionic_cond_timedwait(void *c, void *m, const struct timespec *abstime)   /* the cond's clock */
 {
     if (COND_SHARED_WITH_ANDROID(c) || MUTEX_SHARED_WITH_ANDROID(m)) return 0;
+    if (t_nphantom && phantom_held(m)) return phantom_wait();
     struct bcond *b = cond_of(c);
     return pthread_cond_clockwait(&b->c, mutex_of(m), b->clock, abstime);
 }
@@ -1242,6 +1309,7 @@ static const so_shim ours[] = {
     { "pthread_mutex_init", (void *)bionic_mutex_init }, { "pthread_mutex_lock", (void *)bionic_mutex_lock }, { "pthread_mutex_trylock", (void *)bionic_mutex_trylock },
     { "pthread_mutex_unlock", (void *)bionic_mutex_unlock }, { "pthread_mutex_timedlock", (void *)bionic_mutex_timedlock },
     { "pthread_mutex_lock_timeout_np", (void *)bionic_mutex_lock_timeout_np }, { "pthread_mutex_destroy", (void *)bionic_mutex_destroy },
+    { "pthread_join", (void *)bionic_pthread_join },
     { "pthread_cond_init", (void *)bionic_cond_init }, { "pthread_cond_destroy", (void *)bionic_cond_destroy },
     { "pthread_cond_signal", (void *)bionic_cond_signal }, { "pthread_cond_broadcast", (void *)bionic_cond_broadcast },
     { "pthread_cond_wait", (void *)bionic_cond_wait }, { "pthread_cond_timedwait", (void *)bionic_cond_timedwait },
