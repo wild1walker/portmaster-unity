@@ -314,6 +314,9 @@ int main(int argc, char **argv)
         CHECK(prop_get && prop_get("swappy.disable", v) == 1 && !strcmp(v, "0"), "SO_PROP_swappy_disable: \"%s\"", v);
         unsetenv("SO_PROP_swappy_disable");
         CHECK(prop_get && prop_get("no.such.prop", v) == 0 && !v[0], "a missing property");
+        setenv("TZ", "Europe/Lisbon", 1);                  /* the handheld's zone (read once: before any other use) */
+        CHECK(prop_get && prop_get("persist.sys.timezone", v) > 0 && !strcmp(v, "Europe/Lisbon"), "persist.sys.timezone = \"%s\"", v);
+        unsetenv("TZ");
     }
 #if defined(__arm__)
     // bionic-only names glibc lacks resolve to the static softfp wrappers (2018.4's libmonobdwgc)

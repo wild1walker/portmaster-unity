@@ -274,6 +274,11 @@ Android's ICU (`libicuuc.so`, `libicui18n.so`, probing `u_getVersion_<n>`), whic
 the handheld's own ICU on AArch64 (the newest `libicuuc.so.<n>` of `/usr/lib/aarch64-linux-gnu`,
 `/usr/lib`...: Knulli has 73, dArkOS 76; `runtime/loader/test`). Not on 32-bit: ICU passes dates as
 doubles, which a softfp caller cannot hand to an armhf library unconverted.
+The local time: Unity 2017.4 - 6000.x's class libraries (Mono's and IL2CPP's alike) read
+`/etc/localtime`, `TZ` and `TZDIR` themselves, the handheld's own; newer .NET asks Android's
+`persist.sys.timezone` property, which the loader answers with the handheld's zone (`TZ`,
+`/etc/timezone` or the `/etc/localtime` link). Not done: Android's packed `tzdata` file, which such a
+runtime would also look for (Bogodroid builds one from the system's zoneinfo).
 
 ### Players run (emulated rig)
 

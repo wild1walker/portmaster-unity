@@ -406,6 +406,32 @@ static const char *const default_props[][2] = {
      * and Unity presents with eglSwapBuffers (android/README.md, "Frame pacing") */
     { "swappy.disable", "1" },
 };
+/* persist.sys.timezone: the handheld's own zone (TZ, /etc/timezone, or the /etc/localtime link), as a phone
+ * names its zone there. Unity 2017.4 - 6000.x's class libraries read /etc/localtime themselves; newer .NET
+ * (Unity 7's) asks this property. */
+static const char *host_timezone(void)
+{
+    static char tz[96];
+    static int done;
+    if (done) return tz;
+    done = 1;
+    const char *e = getenv("TZ");
+    if (e && *e && !strchr(e, ',')) { snprintf(tz, sizeof tz, "%s", e[0] == ':' ? e + 1 : e); return tz; }
+    FILE *f = fopen("/etc/timezone", "r");
+    if (f) {
+        if (fgets(tz, sizeof tz, f)) tz[strcspn(tz, " \r\n")] = 0;
+        fclose(f);
+        if (tz[0]) return tz;
+    }
+    char l[256];
+    ssize_t n = readlink("/etc/localtime", l, sizeof l - 1);
+    if (n > 0) {
+        l[n] = 0;
+        const char *z = strstr(l, "zoneinfo/");
+        if (z) snprintf(tz, sizeof tz, "%s", z + 9);
+    }
+    return tz;
+}
 static int bionic_system_property_get(const char *name, char *value)
 {
     char key[128];
@@ -414,6 +440,7 @@ static int bionic_system_property_get(const char *name, char *value)
     const char *v = getenv(key);
     for (size_t i = 0; !v && i < sizeof default_props / sizeof default_props[0]; i++)
         if (!strcmp(default_props[i][0], name)) v = default_props[i][1];
+    if (!v && !strcmp(name, "persist.sys.timezone")) v = host_timezone();
     if (!v) v = "";
     snprintf(value, 92, "%s", v);                   /* PROP_VALUE_MAX */
     return (int)strlen(value);
