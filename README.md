@@ -350,4 +350,5 @@ translates Direct3D shaders with Unity's open-source
 [box64](https://github.com/ptitSeb/box64) and gl4es. Assembly patches use
 [Mono.Cecil](https://github.com/jbevain/cecil). Hardware video decoding is Knifethrower's work: his
 [libpmhwdec](https://github.com/Knifethrower/pmhwdec), which a port ships, and the runtime's support
-for it (his pull requests #10, H.264 and HEVC, and #12, VP8).
+for it (his pull requests #10, H.264 and HEVC, and #12, VP8). He also found and fixed the loader's freezes in
+2017.4's video player and thread start (#16, #17) and wrote asmpatch's `playmaker-typelookup` (#18).

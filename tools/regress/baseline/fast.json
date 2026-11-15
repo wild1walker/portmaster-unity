@@ -1566,8 +1566,8 @@
   },
   "il2cpp_dry_run": {
    "assemblies": "assemblies: 28 of the game, 64 UnityEngine (IL2CPP player), 21 class libraries (MonoBleedingEdge/lib/mono/unityaot-linux)",
-   "commands": "4197881a8145b711",
-   "lines": 19,
+   "commands": "c504ca81581375dc",
+   "lines": 24,
    "staged": {
     "files": 113,
     "total": "eebcc9caccc53301"
@@ -2280,8 +2280,8 @@
   },
   "il2cpp_dry_run": {
    "assemblies": "assemblies: 53 of the game, 64 UnityEngine (IL2CPP player), 21 class libraries (MonoBleedingEdge/lib/mono/unityaot-linux)",
-   "commands": "bc48eb0213184649",
-   "lines": 19,
+   "commands": "fbd8016bc21e7bae",
+   "lines": 24,
    "staged": {
     "files": 138,
     "total": "9968a1c969b1a2b2"
@@ -2520,8 +2520,8 @@
   },
   "il2cpp_dry_run": {
    "assemblies": "assemblies: 9 of the game, 45 UnityEngine (IL2CPP player), 5 class libraries (Mono/lib/mono/unity)",
-   "commands": "50e7606046f08ce8",
-   "lines": 19,
+   "commands": "b5fd298d27c18ccc",
+   "lines": 24,
    "staged": {
     "files": 59,
     "total": "87d861917ac3b846"

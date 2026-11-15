@@ -285,3 +285,19 @@ Profiling on the device (`UA_PROF`, the bench `tools/device/profbench.sh`): [pro
 Debugging on the device: `python3 tools/device/stacks.py <pid> [thread]` (each thread's syscall and the
 libunity return addresses on its stack; name them with `tools/analysis/sym.py`), and gdb attaches to the
 32-bit process (`set arm force-mode arm`, `break *<libunity base + offset>`).
+
+## Waits the game's own code can leave hanging
+
+Three of Unity's own thread habits can stop a game for good where a phone's timing hides them (found
+with 2017.4's VideoPlayer, in a game that switches clips every few seconds). The loader keeps them from
+freezing it:
+
+| what the game does | what the loader does | log line |
+|---|---|---|
+| a thread that holds a mutex joins (`pthread_join`) a thread that is waiting for that mutex (2017.4's VideoPlayer stops the old clip's thread while it holds the player's lock) | after 250 ms the waiting thread goes on without the lock (its unlock does nothing, a condition wait on that mutex is a 10 ms pause), reaches its stop flag and ends; every other lock waits as before | `[bionic] thread ... goes on without the lock` |
+| a thread signals a condition without taking the mutex, so the signal can land before the other thread waits (2017.4's `PlatformThread::Create` waiting for the new thread's start) | an untimed condition wait ends after 100 ms at the latest, as a spurious wakeup (POSIX allows them: a caller checks its condition again) | none |
+| `pthread_create` without checking its result: glibc gives a thread a stack of `ulimit -s` (often 8 MB, Android 1 MB), and a 32-bit process can run out of address space for it | a failure is logged; for `EAGAIN` or `ENOMEM` the thread is started once more with a 1 MB stack | `[loader] pthread_create: ... (address space N MB)` |
+
+A game that stops while its sound goes on: dump its threads (`tools/device/stacks.py`, or `kill -USR2`
+as [apk.md](apk.md) describes) and look for one thread in `pthread_join` or a condition wait and
+another in a lock.
