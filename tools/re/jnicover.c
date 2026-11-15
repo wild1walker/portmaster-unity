@@ -1,7 +1,8 @@
 /* jnicover: which of the Java classes, methods and fields a Unity player binds does runtime/jni
  * define? Reads jnibindings.py rows (class TAB member TAB signature TAB kind ...) on stdin and
  * prints one status per row: ok, NO-CLASS (class unknown or a placeholder), NO-MEMBER.
- * Natives (rows of kind "native", e.g. from jnitables.py) are looked up as Java methods too.
+ * Natives (rows of kind "native", e.g. from jnitables.py) are looked up as Java methods too; rows of
+ * kind "class" (pmu jnitrace's FindClass rows) only need the class.
  *
  * It includes fakejni.c to query its tables directly; build it on any glibc host, e.g. in the
  * ua-build-arm64 image:
@@ -37,6 +38,7 @@ int main(void)
         fj_class *c = class_lookup_raw(cls);
         const char *st;
         if (!c || c->placeholder) st = "NO-CLASS";
+        else if (!strcmp(kind, "class")) st = "ok";                 /* pmu jnitrace: a FindClass */
         else if (!strcmp(kind, "field") || !strcmp(kind, "static-field"))
             st = (field_find(c, mem, sig, 0, 0) || field_find(c, mem, sig, 1, 0)) ? "ok" : "NO-MEMBER";
         else

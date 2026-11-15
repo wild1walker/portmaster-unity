@@ -215,6 +215,14 @@ reached its first battle in the arm64 rig.
   SIGUSR2 on a thread it does not know aborts the game); `UA_PROF_EVERY` / `UA_HITCH_TRACE` sample them
   (runtime/host/hitches.c).
 - `SO_TRACE=1` lists unresolved imports of the game's own libraries (plugins).
+- What the game's native code asks Java for on a phone: trace it there with Frida's
+  [jnitrace](https://github.com/chame1eon/jnitrace) (a rooted phone: `jnitrace -l libunity.so -l libmain.so
+  -l libil2cpp.so -o trace.json <package>`), then `pmu jnitrace trace.json > used.tsv` (every class looked
+  up, method and field id made and native registered, with the calls through each; the busiest on
+  stderr) and `jnicover < used.tsv | grep -v '^ok'` (tools/re/jnicover.c: what runtime/jni does not
+  define). Natives show as missing there (libunity registers them at run time); the rest is what to
+  look at. On a Unity game's trace the gaps left were proxied interfaces (`View.OnLayoutChangeListener`),
+  AR, the camera and Bluetooth headsets, which answer "not available".
 - `UA_PROBE=<s>` (Mono builds): a check of what a phone gives a game, from inside it
   ([runtime.md](runtime.md#what-a-phone-gives-a-game-ua_probe)).
 - `PMUNITY_APK=<file>` runs `tests/test_apk.py`'s dry import on a real build.

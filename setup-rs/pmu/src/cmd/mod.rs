@@ -7,6 +7,7 @@ mod apk_asmpatch;
 mod argp;
 mod convert;
 mod il2cpp;
+mod jnitrace;
 mod lazy;
 mod macpkg;
 mod patch_obb;
@@ -38,6 +39,7 @@ pub const NAMES: &[&str] = &[
     "video",
     "apk-asmpatch",
     "lazy",
+    "jnitrace",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -60,6 +62,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "video" => Some(video::run(args)),
         "apk-asmpatch" => Some(apk_asmpatch::run(args)),
         "lazy" => Some(lazy::run(args)),
+        "jnitrace" => Some(jnitrace::run(args)),
         _ => None,
     }
 }

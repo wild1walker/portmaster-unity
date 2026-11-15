@@ -472,6 +472,7 @@ dependencies = [
  "il2cpp",
  "libc",
  "pkgzip",
+ "serde_json",
  "unityfs",
  "wwise",
 ]

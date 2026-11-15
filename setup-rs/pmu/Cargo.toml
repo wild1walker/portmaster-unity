@@ -18,3 +18,4 @@ il2cpp = { path = "../crates/il2cpp" }
 unityfs = { path = "../crates/unityfs" }
 wwise = { path = "../crates/wwise" }
 libc = "0.2"
+serde_json = "1"

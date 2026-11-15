@@ -1967,6 +1967,17 @@ void up_android_register(void)
     M("android/media/AudioFocusRequest$Builder", "build", "()Landroid/media/AudioFocusRequest;", afr_build);
     M(AU, "getDevices", "(I)[Landroid/media/AudioDeviceInfo;", am_getDevices);
     MU("android/media/AudioDeviceInfo", "getType", "()I", h_int, 2);
+    /* the constants libunity reads when it lists the outputs (a phone's jnitrace: pmu jnitrace) */
+    fj_static_int("android/media/AudioManager", "GET_DEVICES_INPUTS", 1);
+    fj_static_int("android/media/AudioManager", "GET_DEVICES_OUTPUTS", 2);
+    fj_static_int("android/media/AudioManager", "GET_DEVICES_ALL", 3);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_BUILTIN_SPEAKER", 2);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_WIRED_HEADSET", 3);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_WIRED_HEADPHONES", 4);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_BLUETOOTH_SCO", 7);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_BLUETOOTH_A2DP", 8);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_USB_DEVICE", 11);
+    fj_static_int("android/media/AudioDeviceInfo", "TYPE_USB_HEADSET", 22);
     M(AU, "startBluetoothSco", "()V", h_void);
     M(AU, "stopBluetoothSco", "()V", h_void);
     SM("android/provider/Settings$System", "getString", "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", h_null);
