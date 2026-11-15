@@ -23,6 +23,10 @@
 // A hardware keyboard (SDL key events: an SDL window) types into an open soft keyboard; with
 // UA_KEYBOARD=1 its keys also reach the game as an Android keyboard (KeyEvents from a
 // "Hardware Keyboard" device) while none is open.
+// The d-pad is state (the hat axes), which the game reads once a frame: a tap made and let go between
+// two of its reads would never be seen (jumps and other buttons are key events, which queue). So a
+// d-pad direction sent stays until two more frames were shown, or 250 ms went by, however soon it
+// was let go; a press held longer than that is let go as it is (UA_DPAD_HOLD=0: no hold).
 // UA_INPUT_LOG=1: for a control that sticks, is missed or comes late: every pad button as SDL gave it
 // with the key sent and Unity's answer, and the axes sent whenever a stick, trigger or the d-pad
 // crosses half travel ("[input] <s> f<frames shown> ..."; the seconds are the [hitch] lines'). Always
@@ -52,7 +56,11 @@ static struct pad {
     int script_hx, script_hy;   // UA_INPUT_SCRIPT d-pad and left stick, merged into the pad's own state
     int script_lx, script_ly;
     int virt;                   // UA_INPUT_SCRIPT's own pad (no SDL pad present)
+    unsigned long hat_frame[2]; // the d-pad's hat axes: frames shown when a direction was sent,
+    double hat_t[2];            // and when (the hold above)
+    int hat_held;               // a direction let go but still sent: send again at the next poll
 } pads[MAX_PADS];
+static int dpad_hold = -1;      // UA_DPAD_HOLD (on unless 0)
 
 static const int pad_axes[8] = { UP_AXIS_X, UP_AXIS_Y, UP_AXIS_Z, UP_AXIS_RZ,
                                  UP_AXIS_HAT_X, UP_AXIS_HAT_Y, UP_AXIS_LTRIGGER, UP_AXIS_RTRIGGER };
@@ -482,6 +490,24 @@ static void send_axes(struct pad *p)
     for (int i = 0; i < 8; i++) { if (v[i] < -1.f) v[i] = -1.f; if (v[i] > 1.f) v[i] = 1.f; }
     osk_axes((int)(p - pads), v);               // the on-screen keyboard takes the pad while open
     pointer_axes((int)(p - pads), v);           // pointer mode / UA_KEYMAP take their controls
+    if (dpad_hold < 0) { const char *e = getenv("UA_DPAD_HOLD"); dpad_hold = !(e && !strcmp(e, "0")); }
+    p->hat_held = 0;
+    for (int k = 0; dpad_hold && k < 2; k++)
+    {
+        float old = p->axes[4 + k], *nv = &v[4 + k];
+        int changed = (old > 0) != (*nv > 0) || (old < 0) != (*nv < 0);
+        if (!changed) continue;
+        double t = mono_s();
+        if (old != 0.f && frames_presented() < p->hat_frame[k] + 2 && t - p->hat_t[k] < 0.25)
+        {
+            *nv = old;                              // let go too soon for the game to have seen it
+            p->hat_held = 1;
+            if (logging()) fprintf(stderr, "[input] %s: pad %d d-pad %s held on until the game has seen it\n", stamp(),
+                                   (int)(p - pads), k ? "y" : "x");
+            continue;
+        }
+        if (*nv != 0.f) { p->hat_frame[k] = frames_presented(); p->hat_t[k] = t; }
+    }
     if (!memcmp(v, p->axes, sizeof v)) return;
     int crossed = 0;                            // UA_INPUT_LOG: a control past half travel, or back
     for (int i = 0; i < 8 && !crossed; i++) crossed = half(v[i]) != half(p->axes[i]);
@@ -621,7 +647,7 @@ void input_poll(void)
             break;
         }
     }
-    for (int i = 0; i < MAX_PADS; i++) if (moved[i] && pads[i].gc) send_axes(&pads[i]);
+    for (int i = 0; i < MAX_PADS; i++) if ((moved[i] || pads[i].hat_held) && (pads[i].gc || pads[i].virt)) send_axes(&pads[i]);
     live_input();                       // (cheap: a stat of input.req every 0.25 s)
     if (next_press < nscript) script_run();
     // the soft keyboard opened or closed (the game sees a centred pad while it is open), or the
