@@ -1134,7 +1134,7 @@ the port's settings, scaled to the plain run's 37.6 ms frame):
 | job signals and waits | 1.4 | 1.5 | the job queue's semaphores (the G350's kernel gives user space no timer, so ua_host's futex spin is off there and every wake and wait is a system call) |
 
 The same G350 profile three days on (2026-11-16: portmaster-gungeon physics-active with dragun-baby, the HUD upkeep
-cuts, the Pixelator cuts and unoccluded-empty's companion patches up to 4a7543c; the JIT warm-up thread; 100 Hz `UA_PROF`
+cuts and the Pixelator cuts, up to 4a7543c; the JIT warm-up thread; 100 Hz `UA_PROF`
 in both, ms a frame of UnityMain as recorded, not scaled): the frame 40.3 -> 32.8 ms, plain fps 26.6 -> about 28.3
 (the mean of 13 plain Bullet Hell runs of that day, 26.8 - 30.4).
 
