@@ -963,6 +963,52 @@ and not yet its `OnDestroy`. The class has no `Awake`, `OnDestroy` or subclass o
 three). A check build that asks Unity every time and compares: 60 calls in the fight, 0 wrong. The High Dragun on the Knulli (RG34XX-SP), A B and B A, fps, p99, frames over 50 ms: 47.73 -> 51.19 fps,
 76.2 -> 43.4 ms, 40 -> 13; 50.01 -> 51.17 fps, 61.1 -> 39.4 ms, 34 -> 6. muOS (2026-11-10, one pair): 53.09 -> 53.83 fps, p99 63.0 -> 50.8 ms, frames over 50 ms 38 -> 10.
 
+### dfGUI's per-frame upkeep (Enter the Gungeon, 2026-11-16)
+
+After `hud-half` the HUD still costs every frame: each of its ~246 dfGUI controls has an `Update` and a `LateUpdate`
+that Unity calls through its script dispatch (~1.7 us a call on the RG34XX-SP before the method's own work), and the
+draw, when it happens, asks the engine the same questions for every drawn control. Five more patches of the port,
+pushed together after an A/B of all five (their split is not measured):
+- `df-late` (exact): a control's `LateUpdate` only performs its layout when a request is pending (rare); it leaves
+  Unity's dispatch, and the controls whose request turns pending are queued and laid out once a frame from the first
+  `dfGUIManager.LateUpdate` (a check build that keeps a `LateUpdate` on each control to look for a pending request
+  that is not in the queue: CHECK).
+- `df-update-half` (a change too small to see): a control's `Update` looks for changes to its own transform; with
+  `hud-half` the HUD is drawn on even frames, so the controls now look on even frames too, before that drawing: a
+  change made on an odd frame is found one frame later and drawn on the same frame as before.
+- `df-update-late` (the same): `dfControl.Update` leaves the dispatch too, called once a frame from the first
+  `dfGUIManager.LateUpdate` on dfGUI's own list of enabled controls that have had their `Start` (the six control types
+  with an `Update` of their own keep it).
+- `df-fields` (exact): `dfReflectionExtensions.GetAllFields(Type)` (every field of a type and its bases, less those
+  marked `HideInInspector`, by reflection and LINQ, a new array each call) is computed once per type and kept; every
+  caller only reads it (each call's result goes straight into a LINQ call: the patch checks that). Each control
+  destroyed in play (the ammo bar's burst, one per shot; the boss bar's sparks) called it from `OnDestroy`. A .NET
+  test of both assemblies: the same answers for all 6,420 types.
+- `df-draw-compare` (exact): the draw-call test per drawn control skips the texture test where the two materials are
+  equal (one live engine object: one main texture; each `mainTexture` read is `Shader.PropertyToID("_MainTex")` and
+  `GetTexture`, two internal calls) and answers the shader test at once for one shader object (its test compares
+  `Object.name`: two internal calls and two new strings).
+Where the HUD's time went with all five (the RG34XX-SP, Bullet Hell's room, every Update/LateUpdate and the HUD's
+own calls timed, ms a frame, the timers' own cost included): dfGUIManager.LateUpdate 1.29 (the draw 0.70, on 30 % of
+frames; the controls' updates 0.51; the font walk 0.005), GameUIRoot.UpdateScale 0.30 (from Pixelator.CheckSize, every
+frame: each HUD controller's sizes set again to the same values), the player's gun panel 0.25 (UpdateGunData) and item
+panel 0.13, the three boss bars' LateUpdate 0.12 with no boss. A sixth candidate, the font walk left out while no
+font is dirty, measured 0.005 ms: dropped.
+Bullet Hell's room (fps, p99, frames over 33 ms), the port before (A) and with the five (B):
+
+| | Knulli (RG34XX-SP) | muOS |
+|---|---|---|
+| B A | 39.67 (six, with the font walk below), 46.7 ms, 106 against 35.77, 43.9 ms, 190 | 40.09, 37.9 ms, 74 against 40.46, 37.3 ms, 77 |
+| A B | 37.10, 42.8 ms, 146 against 39.14, 39.4 ms, 65 | 41.07, 37.9 ms, 72 against 40.31, 38.2 ms, 63 |
+
+The Knulli gains 2 - 4 fps and halves its late frames; muOS, at 1.8 GHz against the Knulli's 1.5, does not move (its
+frame there waits on something else). Check builds in the Dragun and in Bullet Hell: `df-fields` 5,300 and 5,100
+calls, 0 different; `df-draw-compare` 24,000 and 20,000 texture tests, 0 different; `df-late`'s check printed nothing
+(it prints every 100 pending layouts: fewer in a fight). A slip worth knowing: inserting several instructions before
+`x.Next` with Cecil re-reads `x.Next` after each insert and reverses them; Mono 2.6 then rejects the method at its
+first call (`InvalidProgramException`, every frame) while .NET's asmcheck cannot compile it either way (it calls Unity's
+internal calls): count the exceptions in a run's log against the base build's.
+
 ### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
 
 Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split
