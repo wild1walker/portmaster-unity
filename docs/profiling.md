@@ -1053,7 +1053,8 @@ too-small-to-see cuts (portmaster-gungeon patch words):
 Bullet Hell's room, A B and B A, fps / p99 ms / frames over 33 ms: RG34XX-SP (Knulli) 38.79 / 41.1 / 111 -> 41.39 /
 37.3 / 58 and 40.06 / 38.0 / 74 -> 41.10 / 40.1 / 60; muOS 41.01 -> 40.79 and 39.16 -> 41.34 (an earlier muOS pair:
 40.09 / 38.97 -> 41.77 / 39.99). Screenshots of both builds at the same moments of the route show the same picture
-(the minimap faded in the sealed room either way).
+(the minimap faded in the sealed room either way). BattleXP G350 (dArkOS), Bullet Hell A B and B A: 25.93 / 59.1 ms /
+71 frames over 50 ms -> 27.46 / 57.0 / 34 and 26.49 / 71.4 / 81 -> 28.41 / 60.3 / 27.
 
 ### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
 
