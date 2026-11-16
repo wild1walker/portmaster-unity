@@ -16,6 +16,9 @@
 //   UA_GLES_POOL=1       Unity's pool of GLES buffers in lists that cost O(1) (unitypool.c)
 //   UA_FAST_VERTS=1      dynamic batching's vertex transform without its per-vertex overhead (unityverts.c)
 //   UA_INV_MEMO=1        the 4x4 matrix inverse's last results kept per thread (unitymath.c)
+//   UA_BEH_PREFETCH=1    the behaviour update loops fetch the next scripts' objects ahead (unitybeh.c)
+//   UA_BEH_EMPTY=1       a started script's empty Update/LateUpdate/FixedUpdate is not called (unitybeh.c)
+//   UA_SCRIPT_FIND=1     FindRuntimeScript's answers kept on UnityMain (AddComponent's script lookup; unityscripts.c)
 //   UA_PRESENT_SYNC=end  Unity's GraphicsDeviceSettings.waitForPresentSyncPoint = EndFrame, set once from
 //                        UnityMain after its first frame (=begin: BeginFrame; unset: as the game has it).
 //                        GfxDeviceClient waits for the render thread to have presented the last frame in
@@ -54,6 +57,8 @@
 #include "unitypool.h"
 #include "unityverts.h"
 #include "unitymath.h"
+#include "unitybeh.h"
+#include "unityscripts.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -273,6 +278,8 @@ static void present_sync_on_load(uintptr_t base, size_t size)
 void unityhooks_frame(void)
 {
     static unsigned long frames;
+    unitybeh_frame();                           // UA_BEH_STATS
+    unityscripts_frame();                       // UA_SCRIPT_FIND
     if (!g_psync_set || ++frames != 2) return;       // (the device made, the game's own start-up settings applied)
     g_psync_set(g_psync_value);
     fprintf(stderr, "[unityhooks] UA_PRESENT_SYNC: the main thread waits for the last frame's present at the %s of its frame\n",
@@ -288,6 +295,8 @@ void unityhooks_on_load(so_module *m)
     unitypool_on_load(base, size);              // UA_GLES_POOL
     unityverts_on_load(base, size);             // UA_FAST_VERTS
     unitymath_on_load(base, size);              // UA_INV_MEMO
+    unitybeh_on_load(base, size);               // UA_BEH_PREFETCH, UA_BEH_EMPTY, UA_BEH_STATS
+    unityscripts_on_load(base, size);           // UA_SCRIPT_FIND
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);

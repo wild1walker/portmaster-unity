@@ -14,9 +14,14 @@
 
 #include "../unityhooks.c"
 
-// the loader's accessors and unitypool.c's entry (unityhooks_on_load, not called here)
+// the loader's accessors and the other hook files' entries (unityhooks_on_load, unityhooks_frame: not called here)
 void unitypool_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 void unityverts_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unitymath_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unitybeh_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unitybeh_frame(void) {}
+void unityscripts_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unityscripts_frame(void) {}
 const char *so_name(so_module *m) { (void)m; return NULL; }
 uintptr_t so_base(so_module *m) { (void)m; return 0; }
 size_t so_size(so_module *m) { (void)m; return 0; }

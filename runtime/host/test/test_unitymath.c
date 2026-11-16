@@ -1,8 +1,8 @@
 // unitymath.c's unit test: the memo over a stand-in inverse that counts its calls (a diagonal
 // matrix's inverse; anything with a zero on the diagonal singular, out left alone): a repeated input
 // gets the same bytes and bool without a call, in place (m == out) included; a singular input is
-// computed every time; the four last inputs kept, the oldest replaced; each thread its own. Run by
-// unityhooks_test.sh.
+// computed every time; the four last inputs kept, the oldest replaced; each thread its own; each hooked function
+// (Full, General3D) its own. Run by unityhooks_test.sh.
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,7 +38,7 @@ static void *thread_main(void *u)
 
 int main(void)
 {
-    o_inv = fake_inv;
+    o_inv[0] = fake_inv; o_inv[1] = fake_inv;
     float m[16], o[16], o2[16];
     diag(m, 2, 4, 8, 16);
     CHECK(inv_memo(m, o) == 1 && calls == 1, "first call");
@@ -69,6 +69,12 @@ int main(void)
     inv_memo(m, o2);
     CHECK(calls == before + 1, "the oldest input was still kept");
     pthread_t t; pthread_create(&t, NULL, thread_main, NULL); pthread_join(t, NULL);
+    // each function its own results: General3D is not answered from Full's
+    int before2 = calls;
+    inv_memo_g3d(m, o2);
+    CHECK(calls == before2 + 1, "General3D was answered from Full's results");
+    inv_memo_g3d(m, o2);
+    CHECK(calls == before2 + 1, "General3D's own result was not kept");
     printf("%s unitymath: %d failure(s)\n", fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }

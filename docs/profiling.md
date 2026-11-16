@@ -1082,6 +1082,62 @@ draws nothing in these fights, but its CPU cost (~0.3 - 0.4 ms) could only be le
 be empty beforehand, and objects arrive on that layer from the game's data (prefabs) as well as from code; and
 renderers that draw nothing (alpha 0, empty meshes) can only be found per draw.
 
+### UnityMain inside the engine, by caller chain (Enter the Gungeon, 2026-11-13)
+
+The split above by the sample's own symbol, now read by caller chain: `UA_PROF` recordings with only the unwound
+(exact) frames (`profsum.py --exact`, `--callers`, `--within`) and Unity 2017.4.27's symbols, each hot function read
+back in the player's libunity.so. Bullet Hell's busiest room, ms a frame (the G350's from gungeon-g350's profile at
+the port's settings, scaled to the plain run's 37.6 ms frame):
+
+| bucket | RG34XX-SP (Knulli) | G350 | what it is |
+|---|---|---|---|
+| draw loop | 3.5 | 5.9 | ~150 draws, a long tail of functions under 0.4 ms each; `GetGfxDevice()` is a `pthread_getspecific` through the PLT on every call (0.25 ms on the G350) |
+| behaviour dispatch | 2.3 | 2.8 | `MonoBehaviour::CallUpdateMethod`, `GameObject::IsActive`, `SafeIterator::Next`, the loop: waits on memory (below) |
+| engine calls from scripts | 2.0 | 2.6 | each a different engine function; the largest single one is `AddComponent`'s script lookup (below) |
+| transforms | 1.5 | 2.3 | `Transform::GetPosition` walks the parent chain on every call (2017.4 keeps no world positions); the matrix inverses |
+| job signals and waits | 1.4 | 1.5 | the job queue's semaphores (the G350's kernel gives user space no timer, so ua_host's futex spin is off there and every wake and wait is a system call) |
+
+What 2017.4 already does, so there is nothing to gain: every transform setter (`SetPosition`, `SetLocalPosition`,
+the rotations, the scale, `SetPositionAndRotation`, `SetLocalEulerAngles`, `SetLocalTRS`) compares the new local value
+with the stored one and returns before the change dispatch when they are equal (`hasChanged` is not set either);
+engine calls have no thread or serialization checks in the Release player (a null check, the native pointer, the
+call); a waiting main thread runs queued jobs itself (`JobQueue::WaitForJobGroup` -> `Exec` / `Steal`), so what it
+waits for is a job a worker already took. Small: `DoSendMouseEvents` (0.3 % of UnityMain), `Input.GetAxisRaw` (a
+linear walk over every input axis with a hash compare, 0.07 ms a frame).
+
+The cuts, each an opt-in ua_host switch over Unity's own code (runtime.md; rows tie every hook to the bytes it was
+read from), each exact by construction:
+
+- **The behaviour loop waits on memory** (`UA_BEH_PREFETCH`). Per behaviour, `CommonUpdate` -> `SafeIterator::Next`
+  -> the vtable's `Update` -> `CallUpdateMethod` reads the native object's three or four cache lines (vtable, the
+  managed object's handle and the GameObject pointer; the script's method table; the list node; the started byte),
+  the GameObject's cached active byte and the managed object's header, and computes nothing: on the in-order
+  Cortex-A53 / A35 each first read is a wait for DRAM. ~1,250 behaviours a frame in Bullet Hell (588 Update + 664
+  LateUpdate). The hook prefetches, while one behaviour runs, what the next two will read (the node two ahead,
+  then its object's lines, then the next one's GameObject and managed object), reading only live list nodes.
+- **AddComponent's script lookup** (`UA_SCRIPT_FIND`). `AddComponent<T>()` asks
+  `MonoScriptManager::FindRuntimeScript(class)` one to three times; it walks the vector of every MonoScript from
+  the start, dereferencing each entry twice through the instance-ID map, until a loaded script of the class. In
+  the fights the game adds components while spawning (decals, pooled objects): 0.25 - 0.34 ms a frame on the
+  RG34XX-SP, 0.5 - 0.6 on the G350. The hook keeps each class's answer on UnityMain with what it depended on (the
+  vector's contents, no MonoScript ended, left the ID map or got a class since) and only for answers whose earlier
+  entries are all loaded scripts of other classes; `UA_SCRIPT_FIND=check` compares every kept answer with Unity's
+  walk on the handheld.
+- **The camera inverses** (`UA_INV_MEMO`, now with 2017.4's `InvertMatrix4x4_Full` and `InvertMatrix4x4_General3D`).
+  Scripts' `WorldToScreenPoint` / `ViewportToWorldPoint` invert the same camera matrix each call; both inverses are
+  pure functions of their 16 floats, each thread keeps their last results.
+- **`Shader.PropertyToID`** (`UA_PROPERTY_ID`): a name's number, once Unity's call gave it, from a table on UnityMain
+  instead of Unity's `std::map` of C strings (0.1 ms a frame on the G350).
+- **Empty callbacks** (`UA_BEH_EMPTY`): 24 of the game's 752 most-derived update methods are empty (`ret`); a started
+  script's call to one is left out once its class is initialized.
+
+Measured (2026-11-16, Bullet Hell's room; `UA_SCRIPT_FIND=1 UA_INV_MEMO=1 UA_PROPERTY_ID=1` against none, the same
+ua_host otherwise): a 1 kHz profile pair on the Knulli FindRuntimeScript 0.157 -> 0 ms a frame, the ID-map lookups
+0.29 -> 0.15, the inverses 0.157 -> 0.035; `UA_SCRIPT_FIND=check` 5,932 kept answers compared with Unity's walk, 0
+wrong. fps, A B then B A: Knulli 39.83 -> 42.34 and 39.96 -> 39.66, muOS 39.80 -> 43.57 and 40.26 -> 40.03: inside
+the run-to-run noise in one order. `UA_BEH_PREFETCH` showed nothing in the profile and `UA_BEH_EMPTY` leaves out one
+call a frame here. All stay opt-in; the G350 (main-thread bound, 1.4x the Knulli's engine time) decides the port.
+
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
 muOS had 3 - 8 frames over 50 ms in the fight where the Knulli had none. A 40 s profile of the frames

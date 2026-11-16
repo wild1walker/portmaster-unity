@@ -38,12 +38,28 @@ HOOKS = [
     ('_Z15GetGraphicsCapsv', 'GetGraphicsCaps', 'call'),
     # unitymath.c (UA_INV_MEMO): the 4x4 inverse, its last results kept
     ('_Z20InvertMatrix4x4_FullPKfPf', 'InvertMatrix4x4_Full'),
+    ('_Z25InvertMatrix4x4_General3DPKfPf', 'InvertMatrix4x4_General3D'),
     # unityverts.c (UA_FAST_VERTS): dynamic batching's vertex transform
     ('_Z26TransformVerticesInnerLoopILb0ELb0ELb1EE', 'TransformVerticesInnerLoop<false, false, true>'),
     # unityhooks.c (UA_PRESENT_SYNC): where the main thread waits for the last frame's present
     ('_Z61GraphicsDeviceSettings_Set_Custom_PropWaitForPresentSyncPoint', 'GraphicsDeviceSettings.waitForPresentSyncPoint (set)', 'call'),
     ('_ZN15GfxDeviceClient10BeginFrameEv', 'GfxDeviceClient::BeginFrame', 'call'),
     ('_ZN15GfxDeviceClient8EndFrameEv', 'GfxDeviceClient::EndFrame', 'call'),
+    # unitybeh.c (UA_BEH_PREFETCH, UA_BEH_EMPTY): the behaviour loops' iterator and the script call, and the code
+    # their offsets were read from
+    ('_ZN12SafeIteratorI4ListI8ListNodeI9BehaviourEEE4NextEv', 'SafeIterator<List<ListNode<Behaviour> > >::Next'),
+    ('_ZN13MonoBehaviour16CallUpdateMethodEi', 'MonoBehaviour::CallUpdateMethod'),
+    ('_ZNK10GameObject8IsActiveEv', 'GameObject::IsActive', 'call'),
+    # unityscripts.c (UA_SCRIPT_FIND): the script lookup AddComponent and serialization make, a class's change and a
+    # script's end (which empty its cache), and the PPtr dereference it calls
+    ('_ZN17MonoScriptManager17FindRuntimeScriptE17ScriptingClassPtr', 'MonoScriptManager::FindRuntimeScript(ScriptingClassPtr)'),
+    ('_ZN10MonoScript5RenewE17ScriptingClassPtr', 'MonoScript::Renew'),
+    ('_ZN10MonoScriptD2Ev', 'MonoScript::~MonoScript (D2)'),
+    ('_ZN10MonoScriptD0Ev', 'MonoScript::~MonoScript (D0)', 'call'),
+    ('_ZNK4PPtrI10MonoScriptEcvPS0_Ev', 'PPtr<MonoScript>::operator MonoScript*', 'call'),
+    ('_ZNK4core8hash_mapIiP6ObjectNS_4hashIiEESt8equal_toIiEE6lookupERKi', 'core::hash_map<int, Object*>::lookup', 'call'),
+    ('_ZN4core8hash_mapIiP6ObjectNS_4hashIiEESt8equal_toIiEE5eraseERKi', 'core::hash_map<int, Object*>::erase'),
+    ('_ZN20BaseBehaviourManager12CommonUpdateI16BehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<BehaviourManager>', 'call'),
 ]
 
 

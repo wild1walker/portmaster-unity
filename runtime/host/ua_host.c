@@ -21,6 +21,8 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "gcbudget.h"
 #include "uinav.h"
 #include "monoinvoke.h"
+#include "icallcount.h"
+#include "unityicalls.h"
 #include "jitlog.h"
 #include "monoaot.h"
 #include "jitwarm.h"
@@ -375,6 +377,8 @@ static void *dlsym_hook(const char *sym, void *p)
     p = quality_dlsym_hook(sym, p);            // the quality profile's caps (quality.c)
     p = desktopenv_dlsym_hook(sym, p);         // the command line, Screen.resolutions (desktopenv.c)
     p = monoinvoke_dlsym_hook(sym, p);         // UA_MONO_INVOKE: the runtime invoke's cache (monoinvoke.c)
+    p = icallcount_dlsym_hook(sym, p);         // UA_ICALL_COUNT: the engine's internal calls counted (icallcount.c)
+    p = unityicalls_dlsym_hook(sym, p);        // UA_PROPERTY_ID: engine calls answered from earlier answers (unityicalls.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
@@ -488,7 +492,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); monodump_frame(); }
+static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
