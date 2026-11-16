@@ -582,6 +582,26 @@ impl Assembly {
         Ok(())
     }
 
+    /// The #GUID heap's i-th GUID (1-based, as metadata columns name them).
+    pub fn guid(&self, i: u32) -> Result<[u8; 16]> {
+        let (o, n) = *self
+            .streams
+            .get("#GUID")
+            .ok_or_else(|| Error::Value("no #GUID stream".into()))?;
+        let at = (i as usize)
+            .checked_sub(1)
+            .map(|k| k * 16)
+            .filter(|&k| k + 16 <= n);
+        let at = at.ok_or_else(|| Error::Value("GUID index out of range".into()))?;
+        let mut g = [0u8; 16];
+        g.copy_from_slice(
+            self.d
+                .get(o + at..o + at + 16)
+                .ok_or_else(|| Error::Value("GUID past the file".into()))?,
+        );
+        Ok(g)
+    }
+
     pub fn count(&self, t: u8) -> u32 {
         self.nrows.get(&t).copied().unwrap_or(0)
     }

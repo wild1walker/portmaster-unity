@@ -7,6 +7,7 @@ mod apk_asmpatch;
 mod argp;
 mod convert;
 mod il2cpp;
+mod jitwarm_seed;
 mod jnitrace;
 mod lazy;
 mod macpkg;
@@ -40,6 +41,7 @@ pub const NAMES: &[&str] = &[
     "apk-asmpatch",
     "lazy",
     "jnitrace",
+    "jitwarm-seed",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -63,6 +65,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "apk-asmpatch" => Some(apk_asmpatch::run(args)),
         "lazy" => Some(lazy::run(args)),
         "jnitrace" => Some(jnitrace::run(args)),
+        "jitwarm-seed" => Some(jitwarm_seed::run(args)),
         _ => None,
     }
 }

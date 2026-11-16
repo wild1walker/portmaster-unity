@@ -1009,6 +1009,34 @@ calls, 0 different; `df-draw-compare` 24,000 and 20,000 texture tests, 0 differe
 first call (`InvalidProgramException`, every frame) while .NET's asmcheck cannot compile it either way (it calls Unity's
 internal calls): count the exceptions in a run's log against the base build's.
 
+### A first fight's compiles (Enter the Gungeon, 2026-11-16)
+
+The Keep's boss on a first visit had 13 - 22 frames over 50 ms on the RG34XX-SP (p99 51 - 66 ms). A 500 Hz
+`UA_PROF` of the long frames put UnityMain 44 - 46 % inside Mono's JIT, and `UA_JIT_LOG=2` counted about 950
+compiles (about 1 s of compiling) after the warp in each heavy fight: the bench warps straight in, so the session's
+first fight compiles the game's combat code there (Projectile, Gun, AIActor, debris, colliders), then the boss's own.
+`UA_JIT_WARM=2` lists what a session compiled and compiles it ahead at the next launch, and with that list kept the
+same fight's p99 went 51.1 -> 40.1 -> 34.8 ms over three runs (frames over 50 ms 13 -> 7 -> 5; muOS 48.0 -> 36.7 ->
+36.2 ms). A first visit has no list yet; so the port's setup now writes one (`pmu jitwarm-seed`, from the player's own
+assembly, never shipped), and the warm-up compiles on a thread of its own instead of 4 ms slices of UnityMain's
+frames (Unity 2017.4's Mono 2.6; [runtime.md](runtime.md), `UA_JIT_WARM`). Which seed: the fight's own compiles
+covered by each (of its 912 ms of the game's JIT): every method of the types deriving from BraveBehaviour,
+BehaviorBase and Brave.BulletScript.Script (15,232 methods) 617 ms; with every MonoBehaviour (24,537) 757 ms; the
+whole assembly (37,450) did not finish compiling ahead before the fight. First visit to the Keep's boss, p99 ms /
+frames over 50 ms, both orders:
+
+| | no list | 15,232 (the port's) | 24,537 |
+|---|---|---|---|
+| RG34XX-SP (Knulli) | 51.6 / 10, 52.2 / 14 | 34.8 / 9, 36.4 / 8 | 41.9 / 10, 41.1 / 11 |
+| muOS | 45.9 / 13, 40.4 / 13 | 35.0 / 8, 32.5 / 4 | 33.6 / 6, 36.9 / 9 |
+| BattleXP G350 | 88.7 / 36, 111.8 / 36 | 83.4 / 24, 92.8 / 29 | |
+
+The thread compiles about 7,000 of the seed's methods in 11 s on the H700 (the rest the game had compiled already)
+and 12,000 in 16.5 s on the G350, all before the first floor; the floor's load takes as long as without; the game
+keeps about 10 MB more of compiled code (RSS 624 -> 636 MB on the G350, MemAvailable's lowest 228 -> 216 MB). Static
+constructors stay the game's: `UA_JIT_WARM_CHECK=2` logged the same 782 static constructors in the same order in a
+cold run and a seeded one, none inside a warm-up compile.
+
 ### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
 
 Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split

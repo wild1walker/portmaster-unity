@@ -4,9 +4,13 @@
 // walk, 80 % of it in methods that are not generic instances).
 //   UA_JIT_WARM=1   (off by default; a port turns it on) the methods the game has had compiled are
 //                   listed in data/jitwarm.txt beside the game ("<assembly> <token> <method>", as each
-//                   first compiles), and at the next launch compiled ahead on UnityMain between
-//                   frames, from frame 60 on, at most UA_JIT_WARM_MS (default 4) ms a frame, in the
-//                   order the game first needed them. A method whose name is not the one listed (the
+//                   first compiles), and at the next launch compiled ahead, from frame 60 on, in the
+//                   order the game first needed them: on a thread of its own (UA_JIT_WARM_THREAD, below),
+//                   or with UA_JIT_WARM_THREAD=0 on UnityMain between frames, at most UA_JIT_WARM_MS
+//                   (default 4) ms a frame. After them, data/jitwarm-seed.txt, a port's setup's list made
+//                   from the player's own assemblies (`pmu jitwarm-seed`: a first fight's code compiled
+//                   ahead before the game ever ran it; "*" for a name: the token and the build name the
+//                   method; entries of another build are left out). A method whose name is not the one listed (the
 //                   game changed) is left out; generic instances are not listed (a token names their
 //                   definition). Logged: "[jitwarm] <n> listed", "[jitwarm] <n> compiled ahead in
 //                   <ms> ms (<n> already compiled, <n> not found)".
@@ -43,6 +47,7 @@
 // legacy profiler only) counts the static constructors that run inside a warm-up compile ("[jitwarm] check:
 // ..."; 0 is the rule), =2 also logs every static constructor run with its frame; UA_JIT_WARM_DEFER=0 (a
 // measurement) compiles every listed method at once again, as before 2026-11-13.
+#define _GNU_SOURCE
 #include "jitwarm.h"
 #include "hitches.h"
 #include "../loader/so_loader.h"
@@ -53,8 +58,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 
 #define LIST "data/jitwarm.txt"
+// the setup's list (the port's setup writes it from the player's own assemblies; never shipped): read after LIST
+#define SEED "data/jitwarm-seed.txt"
 
 typedef void *(*create_fn)(void *);
 typedef void (*done_cb)(void *prof, void *method, void *jinfo);
@@ -114,6 +124,12 @@ static int g_defer = 1, g_check;
 struct waiting { void *m, *k; };
 static struct waiting *g_wait;
 static size_t g_wait_n, g_wait_cap;
+static size_t g_seed_n; static long g_seed_stale;
+static int g_thread = 1;
+static void *g_domain;
+static void *(*m_thread_attach)(void *domain);
+static volatile int g_started;
+
 static long g_later, g_later_said, g_waited, g_unread, g_cctors_skipped, g_check_runs;
 static __thread int t_compiling;                                                 // (UnityMain, in a warm-up compile)
 static int g_reported;
@@ -358,6 +374,10 @@ void jitwarm_init(void)
     if ((e = getenv("UA_JIT_WARM_MS")) && atof(e) >= 0) g_budget = atof(e) / 1000;
     if ((e = getenv("UA_JIT_WARM_DEFER")) && !strcmp(e, "0")) g_defer = 0;
     if ((e = getenv("UA_JIT_WARM_CHECK")) && *e && *e != '0') g_check = atoi(e) >= 2 ? 2 : 1;
+    // (the thread is the default where it was measured: Unity 2017.4's Mono 2.6, UA_JIT_WARM=2; Unity 6's Mono keeps
+    // UnityMain unless UA_JIT_WARM_THREAD=1)
+    if ((e = getenv("UA_JIT_WARM_THREAD")) && *e) g_thread = strcmp(e, "0") != 0;
+    else g_thread = g_on == 2;
 }
 
 // an assembly's id for the list: its module version id and its type and method counts ("" when Mono cannot say)
@@ -374,9 +394,10 @@ static const char *loaded_guid(const char *image)
     return image_id(m_image_loaded(image), b, sizeof b);
 }
 
-static void read_list(void)
+static void read_list(const char *path)
 {
-    FILE *f = fopen(LIST, "r");
+    int own = !strcmp(path, LIST);
+    FILE *f = fopen(path, "r");
     if (!f) return;
     char line[2048];
     size_t cap = 0;
@@ -423,6 +444,7 @@ static void read_list(void)
         x->idx = idx;
     }
     fclose(f);
+    if (!own) return;                         // (the setup's seed list: entries of another build are only left out)
     if (!g_stale) {
         // the file's assemblies, as they stand: new entries of these follow on without a new line
         for (int k = 0; k < ncur && g_nmvid < MAXIMG; k++)
@@ -478,6 +500,7 @@ static void install(void)
         m_method_name = (const char *(*)(void *))so_dlsym(h, "mono_method_get_name");
         jitwarm_class_vtable = (void *(*)(void *, void *))so_dlsym(h, "mono_class_vtable");
         jitwarm_domain_get = (void *(*)(void))so_dlsym(h, "mono_domain_get");
+        m_thread_attach = (void *(*)(void *))so_dlsym(h, "mono_thread_attach");
     }
     // Unity 2017.x's Mono 2.6: the legacy profiler's JIT events (its end callback's third argument is
     // the result, which on_done does not read)
@@ -506,7 +529,10 @@ static void install(void)
 #if defined(__arm__)
     if (legacy && !g_probe && probe_2017_4(h)) jitwarm_set_probe(ran_2017_4, 0);
 #endif
-    read_list();
+    read_list(LIST);
+    size_t own_n = g_list_n; long own_stale = g_stale;
+    read_list(SEED);
+    g_seed_n = g_list_n - own_n; g_seed_stale = g_stale - own_stale; g_stale = own_stale;
     const char *jl = getenv("UA_JIT_LOG");
     if (legacy && jl && *jl && *jl != '0')
         fprintf(stderr, "[jitwarm] UA_JIT_LOG holds Mono 2.6's one profiler: compiled ahead, nothing new listed\n");
@@ -524,18 +550,20 @@ static void install(void)
         } else sd(create(NULL), on_done);
     }
     if (g_check && !legacy) g_check = 0;
-    fprintf(stderr, "[jitwarm] %zu listed (%s), compiled ahead from frame 60 at most %.1f ms a frame; static constructors: %s%s\n",
-            g_list_n, LIST, g_budget * 1000, !g_defer ? "not waited for (UA_JIT_WARM_DEFER=0)" :
+    char how[96];
+    if (g_thread) snprintf(how, sizeof how, "on a thread of its own (ua_jitwarm)");
+    else snprintf(how, sizeof how, "on UnityMain at most %.1f ms a frame", g_budget * 1000);
+    fprintf(stderr, "[jitwarm] %zu listed (%s; %zu from %s, %ld of another build left out), compiled ahead from frame 60 %s; static constructors: %s%s\n",
+            g_list_n, LIST, g_seed_n, SEED, g_seed_stale, how, !g_defer ? "not waited for (UA_JIT_WARM_DEFER=0)" :
             g_probe ? "waited for" : "no probe for this runtime: methods touching a class with one are not compiled ahead",
             g_check ? " (UA_JIT_WARM_CHECK: counted)" : "");
 }
 
-void jitwarm_frame(void)
+// one round of the warm-up until `end`: the list's next methods, then (retry) the ones waiting for a class's static
+// constructor
+static void warm_step(double end, int retry)
 {
-    if (!g_on) return;
-    if (!g_installed) { install(); return; }
-    if (++g_frame < 60 || (g_next >= g_list_n && (!g_wait_n || g_frame % 30))) return;
-    double t0 = now(), end = t0 + g_budget;
+    double t0 = now();
     while (g_next < g_list_n && now() < end) {
         struct entry *x = &g_list[g_next];
         void *img = m_image_loaded(x->image);  // (Unity loads the game's assemblies before its first frame)
@@ -555,7 +583,7 @@ void jitwarm_frame(void)
         }
         void *m = img ? m_get_method(img, x->token, NULL) : NULL;
         char *n = m ? m_full_name(m, 1) : NULL;
-        if (n && !strcmp(n, x->name)) {
+        if (n && (!strcmp(n, x->name) || !strcmp(x->name, "*"))) {
             void *k = NULL;
             int ok = strstr(n, ":.cctor (") ? 2 : g_defer ? warm_ok(m, &k) : 1;
             if (ok == 1) {
@@ -571,7 +599,7 @@ void jitwarm_frame(void)
         g_next++;
     }
     // the methods waiting for a class's static constructor: tried again every 30 frames once the list is through
-    if (g_next >= g_list_n && g_wait_n && g_frame % 30 == 0)
+    if (g_next >= g_list_n && g_wait_n && retry)
         for (size_t i = 0; i < g_wait_n && now() < end; ) {
             struct waiting *w = &g_wait[i];
             void *k = NULL;
@@ -595,4 +623,46 @@ void jitwarm_frame(void)
         fprintf(stderr, "[jitwarm] %ld more compiled ahead once their classes' static constructors had run (%zu still waiting%s)\n",
                 g_later, g_wait_n, chk);
     }
+}
+
+// UA_JIT_WARM_THREAD (default 1 with UA_JIT_WARM=2, Unity 2017.4's Mono 2.6; 0 with UA_JIT_WARM=1): the warm-up compiles on a thread of its own (ua_jitwarm, attached to the game's
+// domain, nice 10), from frame 60, never on UnityMain: a compile ahead never adds to a frame the game draws. The
+// rule is the same (a method is compiled only when compiling it can run no static constructor), so every static
+// constructor still runs on the game's own thread, at the game's own first use. =0: on UnityMain between frames, at
+// most UA_JIT_WARM_MS a frame, as before 2026-11-16.
+
+static void *warm_thread(void *a)
+{
+    (void)a;
+    m_thread_attach(g_domain);
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+    long round = 0;
+    for (;;) {
+        int retry = ++round % 50 == 0;     // (the waiting ones every ~0.5 s once the list is through)
+        if (g_next >= g_list_n && !g_wait_n) break;
+        warm_step(now() + 0.004, retry);
+        usleep(g_next >= g_list_n ? 10000 : 500);
+    }
+    return NULL;
+}
+
+void jitwarm_frame(void)
+{
+    if (!g_on) return;
+    if (!g_installed) { install(); return; }
+    ++g_frame;
+    if (g_thread) {
+        if (g_frame == 59) g_domain = jitwarm_domain_get ? jitwarm_domain_get() : NULL;
+        if (g_frame >= 60 && !g_started) {
+            g_started = 1;
+            pthread_t t;
+            if (!g_domain || !m_thread_attach || pthread_create(&t, NULL, warm_thread, NULL)) {
+                fprintf(stderr, "[jitwarm] no thread of its own: compiled ahead on UnityMain\n");
+                g_thread = 0;
+            } else { pthread_setname_np(t, "ua_jitwarm"); pthread_detach(t); }
+        }
+        if (g_thread) return;
+    }
+    if (g_frame < 60 || (g_next >= g_list_n && (!g_wait_n || g_frame % 30))) return;
+    warm_step(now() + g_budget, g_frame % 30 == 0);
 }

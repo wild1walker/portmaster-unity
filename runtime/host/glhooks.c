@@ -102,7 +102,13 @@ static int g_progcache;
 static void w_ShaderSource(unsigned shader, int count, const char *const *string, const int *length)
 {
     if (!r_ShaderSource) return;
-    if (g_progcache) pc_note_source(shader, fnv64(string, length, count));
+    if (g_progcache || g_proglog) {
+        uint64_t h0 = fnv64(string, length, count);
+        if (g_progcache) pc_note_source(shader, h0);
+        // which source each shader object gets (the names UA_SHADER_DUMP gives its files): a shader compiled
+        // again and again shows as the same hash under new shader numbers
+        if (g_proglog) fprintf(stderr, "[glprog] source s%u h=%016llx\n", shader, (unsigned long long)h0);
+    }
     if (!g_dump && !g_override) { r_ShaderSource(shader, count, string, length); return; }
     char path[600];
     uint64_t h = fnv64(string, length, count);
@@ -658,6 +664,8 @@ const so_shim *glhooks_table(void)
     }
     if (g_proglog) {
         r_GetProgramiv = (get_programiv_fn)gl_real(L, A, "glGetProgramiv");
+        if (!g_progcache && !g_dump && !g_override && (r_ShaderSource = (shader_source_fn)gl_real(L, A, "glShaderSource")))
+            g_shims[k++] = (so_shim){ "glShaderSource", (void *)w_ShaderSource };
         if ((r_CompileShader = (u_fn)gl_real(L, A, "glCompileShader")))
             g_shims[k++] = (so_shim){ "glCompileShader", (void *)w_CompileShader };
         if (!g_progcache && (r_LinkProgram = (u_fn)gl_real(L, A, "glLinkProgram")))
