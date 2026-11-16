@@ -65,9 +65,20 @@ namespace UnityEngine
         public override string ToString() => Name;
     }
 
+    public struct Vector2
+    {
+        public float x, y;
+        public Vector2(float x, float y) { this.x = x; this.y = y; }
+    }
+
     public static class Graphics
     {
         public static readonly List<string> Log = new List<string>();
+
+        public static void Blit(Texture source, RenderTexture dest, Vector2 scale, Vector2 offset)
+        {
+            Log.Add(FormattableString.Invariant($"{source}>{dest}@{scale.x}x{scale.y}+{offset.x},{offset.y}"));
+        }
 
         public static void Blit(Texture source, RenderTexture dest) { Log.Add(source + ">" + dest); }
         public static void Blit(Texture source, RenderTexture dest, Material mat) { Log.Add(source + ">" + dest + ":" + mat); }

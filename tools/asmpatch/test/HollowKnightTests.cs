@@ -299,10 +299,41 @@ static partial class TestMain
         finally { ctx.Unload(); Environment.SetEnvironmentVariable(HollowKnightRenderSize.Variable, old); }
     }
 
+    /// <summary>The stand-in's copy of the world's texture onto the screen (CameraRenderScaledApply.OnPreRender) with
+    /// the world camera's rectangle (x, y, w, h): the blit it makes, as the engine stand-in logs it.</summary>
+    static string WorldCopy(string dir, float x, float y, float w, float h)
+    {
+        var ctx = new AssemblyLoadContext("hkc" + Guid.NewGuid(), isCollectible: true);
+        ctx.Resolving += (c, n) => n.Name == "Assembly-CSharp-firstpass" ? c.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, n.Name + ".dll")))) : null;
+        try
+        {
+            Assembly a = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(dir, "Assembly-CSharp.dll"))));
+            var t = a.GetType("CameraRenderScaledApply", true);
+            var o = Activator.CreateInstance(t);
+            var cam = t.GetField("camera").GetValue(o);
+            var camType = cam.GetType();
+            var rtType = camType.GetProperty("activeTexture").PropertyType;
+            var src = Activator.CreateInstance(rtType); rtType.GetField("Name").SetValue(src, "world");
+            var dst = Activator.CreateInstance(rtType); rtType.GetField("Name").SetValue(dst, "screen");
+            camType.GetProperty("activeTexture").SetValue(cam, dst);
+            var srcCam = Activator.CreateInstance(camType);
+            var rectType = camType.GetProperty("rect").PropertyType;
+            camType.GetProperty("rect").SetValue(srcCam, Activator.CreateInstance(rectType, x, y, w, h));
+            t.GetProperty("Texture").SetValue(o, src);
+            t.GetProperty("SourceCamera").SetValue(o, srcCam);
+            var log = (System.Collections.Generic.List<string>)rtType.Assembly.GetType("UnityEngine.Graphics").GetField("Log").GetValue(null);
+            log.Clear();
+            t.GetMethod("OnPreRender").Invoke(o, null);
+            return string.Join(";", log);
+        }
+        finally { ctx.Unload(); }
+    }
+
     static void HollowKnightRenderSizeTests()
     {
         var d = Dir("hkr");
         File.Copy(FakeHollowKnight, Path.Combine(d, "Assembly-CSharp.dll"));
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(d, "Assembly-CSharp-firstpass.dll"));
         var (st, outp) = Patch(d, Path.Combine(tmp, "hkr-default"));
         Check(st == 0 && outp.Contains("skip hk-render-size (opt-in: --with=hk-render-size)"), "hk-render-size: opt-in, not run by default");
         var o = Path.Combine(tmp, "hkr-out");
@@ -322,6 +353,11 @@ static partial class TestMain
             Check(FullSize(o, v) == (true, false), $"hk-render-size: ASMPATCH_HK_RENDER_SIZE={v ?? "(unset)"}: the menu scene at the screen's size ({FullSize(o, v)})");
         foreach (var v in new[] { "540x360", "480x360" })
             Check(FullSize(o, v) == (false, false), $"hk-render-size: {v}: the menu scene's world at that size too ({FullSize(o, v)})");
+        // the copy onto the screen: the camera's rectangle of the texture (bars: 3:2 at the game's 16:10), the whole without bars
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(o, "Assembly-CSharp-firstpass.dll"), true);
+        Check(WorldCopy(d, 0f, 0.03125f, 1f, 0.9375f) == "world>screen", $"hk-render-size: the unpatched stand-in copies the whole texture ({WorldCopy(d, 0f, 0.03125f, 1f, 0.9375f)})");
+        Check(WorldCopy(o, 0f, 0.03125f, 1f, 0.9375f) == "world>screen@1x0.9375+0,0.03125", $"hk-render-size: bars: the camera's rectangle copied ({WorldCopy(o, 0f, 0.03125f, 1f, 0.9375f)})");
+        Check(WorldCopy(o, 0f, 0f, 1f, 1f) == "world>screen@1x1+0,0", $"hk-render-size: no bars: the whole texture ({WorldCopy(o, 0f, 0f, 1f, 1f)})");
         (st, outp) = Patch(o, Path.Combine(tmp, "hkr-again"), with: new[] { "hk-render-size" });
         Check(st == 0 && outp.Contains("done hk-render-size") && NoDlls(Path.Combine(tmp, "hkr-again")), "hk-render-size: a second run finds it applied");
         (st, outp) = Patch(d, Path.Combine(tmp, "hkr-both"), with: new[] { "hk-aspect", "hk-render-size" });

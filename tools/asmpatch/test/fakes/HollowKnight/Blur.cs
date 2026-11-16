@@ -25,6 +25,14 @@ public class Camera
     public float farClipPlane { get; set; } = 1000f;
     public float nearClipPlane { get; set; } = 0.25f;
     public Transform transform { get { return t; } }
+    // (kept as floats: a Rect field would load the engine stand-in with every Camera, as hk-blur's rig has none)
+    private float rx, ry, rw = 1f, rh = 1f;
+    public UnityEngine.Rect rect
+    {
+        get { return new UnityEngine.Rect(rx, ry, rw, rh); }
+        set { rx = value.x; ry = value.y; rw = value.width; rh = value.height; }
+    }
+    public UnityEngine.RenderTexture activeTexture { get; set; }
 }
 
 public class LightBlurredBackground

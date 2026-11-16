@@ -32,3 +32,19 @@ public class CameraRenderScaled
         ForceFullResolution = full;
     }
 }
+
+// the HUD camera's copy of the world's texture onto the screen, before the HUD
+public class CameraRenderScaledApply
+{
+    public Camera camera = new Camera();
+
+    public UnityEngine.RenderTexture Texture { get; set; }
+
+    public Camera SourceCamera { get; set; }
+
+    public void OnPreRender()
+    {
+        if (SourceCamera != null && Texture != null)
+            UnityEngine.Graphics.Blit(Texture, camera.activeTexture);
+    }
+}
