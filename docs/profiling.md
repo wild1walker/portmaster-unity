@@ -1133,6 +1133,28 @@ the port's settings, scaled to the plain run's 37.6 ms frame):
 | transforms | 1.5 | 2.3 | `Transform::GetPosition` walks the parent chain on every call (2017.4 keeps no world positions); the matrix inverses |
 | job signals and waits | 1.4 | 1.5 | the job queue's semaphores (the G350's kernel gives user space no timer, so ua_host's futex spin is off there and every wake and wait is a system call) |
 
+The same G350 profile three days on (2026-11-16: portmaster-gungeon physics-active with dragun-baby, the HUD upkeep
+cuts, the Pixelator cuts and unoccluded-empty's companion patches up to 4a7543c; the JIT warm-up thread; 100 Hz `UA_PROF`
+in both, ms a frame of UnityMain as recorded, not scaled): the frame 40.3 -> 32.8 ms, plain fps 26.6 -> about 28.3
+(the mean of 13 plain Bullet Hell runs of that day, 26.8 - 30.4).
+
+| G350, Bullet Hell's room | 2026-11-13 | 2026-11-16 |
+|---|---|---|
+| UnityMain's frame (profiled run) | 40.3 | 32.8 |
+| managed code (JIT) | 16.0 | 12.7 |
+| draw loop on the main thread | 6.3 | 5.4 |
+| image effects (`OnRenderImage`: the camera renders inside it) | 5.0 | 4.6 |
+| behaviour dispatch | 3.0 | 2.5 |
+| engine calls from scripts | 2.8 | 1.7 |
+| transforms | 2.4 | 1.8 |
+| job signals and waits | 1.6 | 1.7 |
+| render queue | 1.3 | 1.0 |
+| allocators | 1.2 | 0.8 |
+| the GPU's frame (`UA_GL_TRACE_GPU=3`, passes one at a time) | | 13.7 - 15.1 |
+
+The G350's GPU draws the frame in about 14 ms with every pass waited for (the scene 7.1, the vignette 3.4), so its
+main thread stays the wall: 60 fps needs UnityMain's 32.8 ms halved, and what is left is spread over many places.
+
 What 2017.4 already does, so there is nothing to gain: every transform setter (`SetPosition`, `SetLocalPosition`,
 the rotations, the scale, `SetPositionAndRotation`, `SetLocalEulerAngles`, `SetLocalTRS`) compares the new local value
 with the stored one and returns before the change dispatch when they are equal (`hasChanged` is not set either);
@@ -1173,6 +1195,8 @@ ua_host otherwise): a 1 kHz profile pair on the Knulli FindRuntimeScript 0.157 -
 wrong. fps, A B then B A: Knulli 39.83 -> 42.34 and 39.96 -> 39.66, muOS 39.80 -> 43.57 and 40.26 -> 40.03: inside
 the run-to-run noise in one order. `UA_BEH_PREFETCH` showed nothing in the profile and `UA_BEH_EMPTY` leaves out one
 call a frame here. All stay opt-in; the G350 (main-thread bound, 1.4x the Knulli's engine time) decides the port.
+The G350, six pairs in both orders (on minus off): +0.3, -1.0, +2.1, +3.3, +1.3, -0.8 fps (mean +0.9, about 1.6 fps
+apart run to run): not shown. They stay opt-in.
 
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
@@ -1416,8 +1440,9 @@ instead of 128, 45.3 against 47.5 fps. Not a default for Hollow Knight while the
 | `InvertMatrix4x4_Full` (self time ~1 % of UnityMain; called per camera from `Camera::ExtractCameraRenderingParams`, image-effect blits, `ScreenPointToRay`) replaced by a NEON inverse, or memoized (it reads only its 16 input floats and writes only its output, no globals or calls) | a rewritten 4x4 inverse reassociates the arithmetic, so it is not bit-identical and cannot be a default (the exactness rule forbids it); a last-inputs memo would be exact but the function is small next to the wake traffic |
 | `ShaderVariantAnalytics::...::SumUpVariants*` (editor telemetry summed per draw inside `ShaderLab::Pass::ApplyPass`, ~0.4 % of UnityMain and of the render thread) | computes an internal analytics counter the game never reads; could be no-op'd, but the saving is below the run-to-run noise |
 | Holding a repeated engine getter's answer in a local (`transform.position`, `.transform`, `.sharedMaterial` read twice from the same receiver with nothing between that could change it; Enter the Gungeon, 2026-11-10) | a Cecil scan of the game's assembly (a parameterless `UnityEngine` getter called twice on the same `this.field`, local or argument, with no call, no store to the receiver and no branch target between) finds 166 pairs, nearly all in Start, teleports and menus; the ones in per-frame code (the guns' aim and sprite flip, the player's input, the camera's offset, the occlusion update, the sprite Z-depth upkeep) are a few dozen calls a frame, under ~0.05 ms. The engine calls the game's frame spends are one call per object inside its logic, not repeats. A general pass could still do it, but per game it does not pay |
-| The game's body sort by a 3-bit key (Enter the Gungeon's `SortRigidbodies`: `List.Sort` with a delegate that reads `CanCarry`, `CanPush` and `CanBePushed` of both bodies, replaced by Mono 2.6's own quicksort over a key per body and a table of the comparison's 64 answers read off its IL: the same comparisons, swaps and order; portmaster-gungeon's `physics-sortkey`, 2026-11-10) | exact: a check build sorted both ways in Bullet Hell's room, 0 of 552,684 positions different; on the Mac 3,360 random lists came out as Mono's own sort with the game's comparison. RG34XX-SP (Knulli), Bullet Hell's room: 40.46; 40.73 against 39.10; 38.13 against 41.17 fps (A B, B A): inside the run-to-run noise of about 1.5 fps. With `physics-sorthash` the sort runs only after a body's flags change, about 0.3 ms a frame there. Not shipped |
+| The game's body sort by a 3-bit key (Enter the Gungeon's `SortRigidbodies`: `List.Sort` with a delegate that reads `CanCarry`, `CanPush` and `CanBePushed` of both bodies, replaced by Mono 2.6's own quicksort over a key per body and a table of the comparison's 64 answers read off its IL: the same comparisons, swaps and order; portmaster-gungeon's `physics-sortkey`, 2026-11-10) | exact: a check build sorted both ways in Bullet Hell's room, 0 of 552,684 positions different; on the Mac 3,360 random lists came out as Mono's own sort with the game's comparison. RG34XX-SP (Knulli), Bullet Hell's room: 40.46; 40.73 against 39.10; 38.13 against 41.17 fps (A B, B A): inside the run-to-run noise of about 1.5 fps. With `physics-sorthash` the sort runs only after a body's flags change, about 0.3 ms a frame there. BattleXP G350 (a check build: 300 sorts, 552,697 bodies, 0 differ): 27.76 vs 27.60, 30.37 vs 28.24, 27.66 vs 28.80 (off / on): noise too. Not shipped |
 | A sprite's three reads once per vertex read once per call (Enter the Gungeon's `tk2dBaseSprite.SetPositions`: `transform.rotation`, `lossyScale` and `IsPerpendicular`, whose getter calls `renderer.sharedMaterial`, read in the loop over the sprite's 4 vertices; nothing in the loop can change them; `perp-hoist`, 2026-11-16) | exact: a check build read them again after the loop, 20,000 calls 0 differ (Bullet Hell, Keep boss). A census of engine calls by call site (each call timed, UnityMain only) had blamed the getter: ~450 `sharedMaterial` calls a frame in Bullet Hell's room; but only ~26 of them a frame come from `SetPositions`, the rest from the depth sort of attached sprites (`UpdateZDepthInternal`, ~640 transform reads and writes a frame), whose reads cannot be moved: the child's update between them may rebuild sprites. RG34XX-SP (Knulli) 40.57 -> 42.39, muOS 42.83 vs 42.33 fps: noise. Not shipped |
+| An attached sprite's position read once instead of three times (Enter the Gungeon's `tk2dBaseSprite.UpdateZDepthAttached`: `m_transform.position` for its y twice and again in `UpdateZDepthInternal` for its z, nothing between that could move it; `zdepth-pos`, 2026-11-16) | exact: a check build read it again in the twin and compared, 150,000 - 700,000 calls a run, 0 differ (Bullet Hell, Keep boss; Knulli and muOS). About 160 attached sprites a frame in Bullet Hell's room, two engine calls each saved. Knulli 44.23 vs 43.50 and 39.67 vs 40.24, muOS 40.56 -> 43.17 and 41.66 vs 41.31, BattleXP G350 28.67 -> 29.67 and 29.19 vs 28.36 fps (A B, B A): noise. Not shipped |
 | hooking `GfxDeviceGLES` to drop redundant GL state or uniform re-uploads on the render thread | the render thread's time is spent blocked inside Mali's driver (the grab copies and the first draw after a framebuffer change), not in redundant state Unity sends; the driver's buffer handling, not Unity's call count, is the cost ([GPU, pass by pass](#gpu-pass-by-pass)) |
 
 ## Shader programs: compiles, links and Unity's binary cache
