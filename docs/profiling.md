@@ -949,6 +949,20 @@ ActorPathCount!" about 25 times a second in Bullet Hell's room, about 0.02 ms a 
 same profile: the game's own physics (`PhysicsEngine.LateUpdate` about 2 ms of its own time with ~1,000 bullets,
 the body sort 0.6 ms: `List.Sort` with a delegate whenever a body registers) and the camera chain (3.4 ms).
 
+### A boss's once-a-second search (the High Dragun, Enter the Gungeon, 2026-11-16)
+
+The High Dragun's fight had a stall every second. `DraGunController.Update` looks for the Baby Dragun pet once a
+second with `Object.FindObjectOfType<BabyDragunController>()`, and Unity 2017.4 answers that by gathering every
+loaded object of the type from all of its objects and sorting them by instance ID: 45 - 60 ms on the RG34XX-SP each
+time (a call timer on the game's `FindObjectOfType` calls), about 39 frames over 50 ms in the bench's 35 s. The pet is
+rare. The port's `dragun-baby` (exact) counts the `BabyDragunController` objects that have woken (an `Awake` added
+to the class adds one, an `OnDestroy` takes it away again) and asks Unity only while the count is above zero; with
+none, the answer is null, as Unity's would be: `FindObjectOfType` returns only objects in active GameObjects, each
+of which has had its `Awake` (Unity calls it on activation, before anything else in the frame can see the object)
+and not yet its `OnDestroy`. The class has no `Awake`, `OnDestroy` or subclass of its own (the patch checks all
+three). A check build that asks Unity every time and compares: 60 calls in the fight, 0 wrong. The High Dragun on the Knulli (RG34XX-SP), A B and B A, fps, p99, frames over 50 ms: 47.73 -> 51.19 fps,
+76.2 -> 43.4 ms, 40 -> 13; 50.01 -> 51.17 fps, 61.1 -> 39.4 ms, 34 -> 6. muOS (2026-11-10, one pair): 53.09 -> 53.83 fps, p99 63.0 -> 50.8 ms, frames over 50 ms 38 -> 10.
+
 ### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
 
 Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split
