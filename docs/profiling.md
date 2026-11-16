@@ -2479,6 +2479,38 @@ render textures of 40 MB that the Ammonomicon's page renderers hold for the whol
 (`AmmonomiconController.PrecacheAllData`); the CJK font atlases are not loaded in an English game; 4,173
 meshes, 457k vertices, all readable.
 
+### The G350's frame by thread and by area of work (Enter the Gungeon, 2026-11-13)
+
+Five fixed scenes at the clocks a player gets (perfmax), EmulationStation stopped, a cool start: one plain run each and
+one `UA_PROF=100` run (30 s from 20 s into the fight; the threads' own CPU time from their `/proc` user + kernel ticks;
+UnityMain by symbol with Unity 2017.4.27f1's symbol files). The profiler itself costs about 8 % of the frame rate on
+the A35s (Bullet Hell 26.57 -> 24.43 fps), so its shares are scaled to the plain run's frame. UnityMain, ms a frame
+("libunity" = the engine's own code plus the libc, ua_host and Mono time under an unwound engine caller):
+
+| scene | frame | scripts (JIT code) | libunity | of it: draw loop, behaviour dispatch, icalls, transforms, job semaphores |
+|---|---|---|---|---|
+| Bullet Hell, Hell_Hath_No_Joery_007 | 37.6 ms (26.6 fps) | 14.9 | 19.9 | 5.9, 2.8, 2.6, 2.3, 1.5 |
+| the Forge, Forge_Joe_Hot_Fire_002 | ~33.7 ms* | 12.3 | 18.8 | 5.5, 2.7, 2.5, 1.9, 1.6 |
+| the High Dragun | ~28.5 ms* | 8.1 | 18.2 | 5.2, 2.0, 3.4, 1.7, 1.5 |
+| the Keep's boss | ~26.1 ms* | 8.6 | 15.6 | 4.8, 2.0, 2.0, 1.5, 1.3 |
+| the Keep's first fight | ~20.6 ms* | 6.1 | 13.0 | 4.4, 2.1, 1.0, 1.0, 1.5 |
+
+\* the profile run's frame x 0.92 (Bullet Hell's ratio). What differs from the H700 (the same buckets on an RG34XX-SP
+profile of Bullet Hell, 28.6 ms): script code 1.19x slower, the engine 1.41x, most in its pointer-chasing parts (the
+draw loop 1.69x, transforms 1.64x, allocators 1.6x), least in the job semaphores (1.07x). libc is 7.5 % of UnityMain
+there (the H700: 3.8 %): the G350's kernel does not let user space read the ARM timer, so ua_host's futex spin is off
+and every job-system semaphore post and wait is a system call (`bionic_sem_post` 1.1 ms a frame, `bionic_sem_wait`
+0.3). UnityMain is never short of a core (waiting for one 0 % of its samples; the four cores are about half busy, 2.0
+cores of work): GL thread 26 %, render thread 20 %, the silent sound output 8 %.
+
+Unity 2017.4's job workers are three threads called `Worker Thread` (`UA_PROF_THREADS='...,Worker*'`; the
+`Job.Worker*` names are Unity 2018 and later's) plus one more of that name. On the G350 they use 9.7 ms of CPU a frame
+in the Forge and 2.6 at the Keep's boss, and 64 % of their time on a CPU is the semaphore: `syscall` from
+`bionic_sem_wait` (Forge: 15.7 ms a frame of their samples there against 8.4 ms of jobs, mostly the Forge's particle
+systems), the wake-up herd of a post that wakes all three. Unity 2017.4 has no `-job-worker-count` switch (the
+library has no such string): the count is chosen where the queue is made, `CreateJobQueue(name, workerName, -1)`,
+-1 becoming the big cores less one.
+
 ## Where a game's memory goes on a 1 GB handheld (Hollow Knight, 2026-11-12)
 
 Hollow Knight with release 2026.11.12's settings (textures at 0.375 in ASTC 6x6, 16 MiB of a scene's sound decoded),
