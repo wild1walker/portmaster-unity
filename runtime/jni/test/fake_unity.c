@@ -606,6 +606,11 @@ static jboolean inject_event(JNIEnv *env, jobject ev)
     jclass ie = (*env)->FindClass(env, "android/view/InputEvent");
     jint src = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, ie, "getSource", "()I"));
     jint dev;
+    /* libunity drops an event whose time is not after the last one's: every event's must be */
+    static jlong last_ms;
+    jlong ms = (*env)->CallLongMethod(env, ev, (*env)->GetMethodID(env, ie, "getEventTime", "()J"));
+    if (last_ms && ms <= last_ms) R[R_EVENT_NOT_LATER]++;
+    last_ms = ms;
     if ((*env)->IsInstanceOf(env, ev, kc)) {
         R[R_KEY_CODE] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, kc, "getKeyCode", "()I"));
         R[R_KEY_ACTION] = (*env)->CallIntMethod(env, ev, (*env)->GetMethodID(env, kc, "getAction", "()I"));

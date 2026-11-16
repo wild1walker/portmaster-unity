@@ -8,6 +8,7 @@
 //                           vertex colour ("[dump] ..."). With UA_DUMP_RENDERERS_ALL=1 the hidden ones too.
 //   UA_DUMP_HERO=<period>[,<name>]  every <period> seconds the position of the GameObject <name> (Knight) and of the
 //                           main camera ("[dump] t <s> Knight (x, y) camera (x, y)"): where a scripted walk took the player
+//                           (UA_DUMP_HERO_INPUT=1, Hollow Knight: also each input layer's state, hero_input below)
 //   UA_HERO_PLACE=<x>,<y>[,<s>]  a test aid that changes the game: <s> seconds (default 3) after the Knight first
 //                           stands in the scene (not the load's waiting place far below it), its transform is put at
 //                           (x, y) once ("[dump] Knight placed ..."): a test save
@@ -546,6 +547,66 @@ static void census(int list)
     memledger_report();                     // who mapped what (UA_MEM_LEDGER), glibc's malloc arenas
 }
 
+// UA_DUMP_HERO_INPUT=1 (Hollow Knight): the hero line also says what each layer of the game's input held at that
+// frame: the Input System's Gamepad.current (d-pad x y, south button), InControl's moveVector (HeroActions, the
+// game's own) and HeroController.move_input ("pad <x> <y> a <0|1> move <x> <y> input <v>"), to tell which one lost a
+// press; "-" for a layer not there yet
+static void *(*m_field_from_name)(MonoClass *, const char *);
+static void (*m_field_get_value)(MonoObject *, void *, void *);
+static void hero_input(char *out, size_t n)
+{
+    static int on = -1;
+    static MonoMethod *gp_current, *hc_instance;
+    static void *f_ih, *f_ia, *f_mv, *f_mi;
+    if (on < 0) {
+        const char *e = getenv("UA_DUMP_HERO_INPUT");
+        on = e && !strcmp(e, "1") ? 2 : 0;
+        void *h = mono_runtime_lib();
+        if (on && h) {
+            *(void **)&m_field_from_name = so_dlsym(h, "mono_class_get_field_from_name");
+            *(void **)&m_field_get_value = so_dlsym(h, "mono_field_get_value");
+        }
+        if (!m_field_from_name || !m_field_get_value) on = 0;
+    }
+    if (!on) return;
+    if (on == 2) {                          // the classes, once their assemblies are loaded
+        MonoImage *is = m_image_loaded("Unity.InputSystem"), *cs = m_image_loaded("Assembly-CSharp");
+        MonoClass *k_gp = is ? m_class_from_name(is, "UnityEngine.InputSystem", "Gamepad") : NULL;
+        MonoClass *k_hc = cs ? m_class_from_name(cs, "", "HeroController") : NULL;
+        MonoClass *k_ih = cs ? m_class_from_name(cs, "", "InputHandler") : NULL;
+        MonoClass *k_ha = cs ? m_class_from_name(cs, "", "HeroActions") : NULL;
+        if (!k_gp || !k_hc || !k_ih || !k_ha) { snprintf(out, n, " pad -"); return; }
+        gp_current = method(k_gp, "get_current", 0);
+        hc_instance = method(k_hc, "get_UnsafeInstance", 0);
+        f_ih = m_field_from_name(k_hc, "inputHandler"); f_mi = m_field_from_name(k_hc, "move_input");
+        f_ia = m_field_from_name(k_ih, "inputActions"); f_mv = m_field_from_name(k_ha, "moveVector");
+        on = 1;
+        if (!gp_current || !hc_instance || !f_ih || !f_mi || !f_ia || !f_mv) {
+            fprintf(stderr, "[dump] UA_DUMP_HERO_INPUT: Gamepad.current or the hero's input fields not found\n");
+            on = 0;
+            return;
+        }
+    }
+    MonoObject *exc = NULL;
+    size_t len = 0;
+    MonoObject *gp = m_invoke(gp_current, NULL, NULL, &exc);
+    float d[2];
+    MonoObject *south = gp && !exc ? call(gp, "get_buttonSouth", NULL, 0) : NULL, *pressed = south ? call(south, "get_isPressed", NULL, 0) : NULL;
+    if (gp && !exc && getf(call(gp, "get_dpad", NULL, 0), "ReadValue", d, 2))
+        len += snprintf(out + len, n - len, " pad %g %g a %d", d[0], d[1], pressed ? *(unsigned char *)m_unbox(pressed) : -1);
+    else len += snprintf(out + len, n - len, " pad -");
+    exc = NULL;
+    MonoObject *hc = m_invoke(hc_instance, NULL, NULL, &exc), *ih = NULL, *ia = NULL, *mv = NULL;
+    if (hc && !exc) m_field_get_value(hc, f_ih, &ih);
+    if (ih) m_field_get_value(ih, f_ia, &ia);
+    if (ia) m_field_get_value(ia, f_mv, &mv);
+    float x, y, mi;
+    if (mv && getf(mv, "get_X", &x, 1) && getf(mv, "get_Y", &y, 1)) len += snprintf(out + len, n - len, " move %g %g", x, y);
+    else len += snprintf(out + len, n - len, " move -");
+    if (hc && !exc) { m_field_get_value(hc, f_mi, &mi); snprintf(out + len, n - len, " input %g", mi); }
+    else snprintf(out + len, n - len, " input -");
+}
+
 static void hero(const char *name, double t)
 {
     static int ok = -1;
@@ -570,14 +631,15 @@ static void hero(const char *name, double t)
     float h[3] = { 0 }, c[3] = { 0 };
     int fh = go && getf(call(go, "get_transform", NULL, 0), "get_position", h, 3);
     int fc = cam && getf(call(cam, "get_transform", NULL, 0), "get_position", c, 3);
-    char a[48] = "-", b[48] = "-";
+    char a[48] = "-", b[48] = "-", in[160] = "";
     if (fh) snprintf(a, sizeof a, "(%.3f, %.3f)", h[0], h[1]);
     if (fc) snprintf(b, sizeof b, "(%.2f, %.2f)", c[0], c[1]);
+    hero_input(in, sizeof in);
     // (at: the [input] and [hitch] lines' clock, seconds from the first frame, to line a press up with the move)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     double t0 = frames_t_start(), at = t0 > 0 ? ts.tv_sec + ts.tv_nsec / 1e9 - t0 : 0;
-    fprintf(stderr, "[dump] t %.2f %s %s camera %s at %.3f\n", t, name, a, b, at);
+    fprintf(stderr, "[dump] t %.2f %s %s camera %s at %.3f%s\n", t, name, a, b, at, in);
 }
 
 // UA_FLIPBOOK: uaflipbook.dll loaded and UAFlipbook.Init called, once UnityEngine.CoreModule is loaded

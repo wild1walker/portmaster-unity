@@ -854,6 +854,20 @@ static int inject(jobject ev)
     return r.z;
 }
 
+/* Each injected event's time is past the one before. Unity drops an event whose time (getEventTime, in
+ * milliseconds) is not after the last one it took: an event sent in the same millisecond as the one before
+ * never reached the game until another one carried its state (Hollow Knight, Input System: a d-pad press
+ * made with a jump, its MotionEvent in the KeyEvent's millisecond, was lost until the jump was let go) */
+static int64_t g_event_ms;
+static int64_t event_ms(void)
+{
+    int64_t t = up_now_ms(), last = __atomic_load_n(&g_event_ms, __ATOMIC_RELAXED);
+    for (;;) {
+        int64_t n = t > last ? t : last + 1;
+        if (__atomic_compare_exchange_n(&g_event_ms, &last, n, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return n;
+    }
+}
+
 static int64_t g_key_down_ms[512];
 
 static int inject_key_flags(int device_id, int source, int action, int keycode, int repeat, int meta, int flags);
@@ -871,7 +885,7 @@ static int inject_key_flags(int device_id, int source, int action, int keycode, 
     k->meta = meta;
     k->device = device_id;
     k->source = source ? source : UP_SOURCE_GAMEPAD;
-    k->time_ms = up_now_ms();
+    k->time_ms = event_ms();
     if (keycode >= 0 && keycode < 512) {
         if (action == UP_ACTION_DOWN && !repeat) g_key_down_ms[keycode] = k->time_ms;
         k->down_ms = g_key_down_ms[keycode] ? g_key_down_ms[keycode] : k->time_ms;
@@ -892,7 +906,7 @@ static up_motion_ev *motion_new(int action, int source, int device)
     m->action = action;
     m->source = source;
     m->device = device;
-    m->time_ms = up_now_ms();
+    m->time_ms = event_ms();
     if ((action & 0xff) == UP_ACTION_DOWN) g_motion_down_ms = m->time_ms;
     m->down_ms = g_motion_down_ms ? g_motion_down_ms : m->time_ms;
     return m;

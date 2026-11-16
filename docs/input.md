@@ -94,7 +94,11 @@ python -m pmunity android-data ... --asmpatch "/path/to/asmpatch --only=inputsys
 
 ## InControl
 
-[InControl](https://gallantgames.com/pages/incontrol-introduction) reads pads through Unity's
+Newer InControl (Hollow Knight 1.5 on Unity 6) reads pads through the Input System package
+when its native input is off: `InputManager` adds `NewUnityInputDeviceManager`, which makes an
+InControl device of every Input System `Gamepad` and reads its controls (`dpad.left.isPressed`,
+`leftStick`, `buttonSouth`). There the pad's name does not matter and `inputsystem-android`
+(above) does. Older InControl (and newer with that manager left out) reads pads through Unity's
 legacy joystick input and picks a device profile for each joystick at run time: profiles name
 the platforms they apply to (`IncludePlatforms` / `SupportedPlatforms`, compared with
 `SystemInfo.operatingSystem`, which says Android on the Android player) and the joystick names
@@ -400,8 +404,24 @@ Unity's render thread, the frame recorder's GL thread and the present thread to 
 press shows one to three frames after the game read it, and the delay grows with the frame time
 (estimated, not measured: 40-60 ms at 50 fps, 70-120 ms at 33 fps, before the panel's own).
 
-**Unity does not lose an event it was given** (libunity 6000.0.61f1 armv7, legacy input, read in
-its disassembly): a joystick MotionEvent is always queued and answered 1; at the next frame every
+**An event in the same millisecond as the one before it was lost** (Hollow Knight, whose InControl
+reads the Input System). Android times events in milliseconds (`getEventTime`), and Unity drops an
+event whose time is not after the last one it took. A pad sends a button and a d-pad change made
+together in one report, so ua_host sent the KeyEvent and the MotionEvent in the same millisecond:
+the d-pad's change never reached the Input System's `Gamepad` until the pad's next event (the
+jump let go) carried the whole state. A jump made with a turn went straight up; a release made
+with a button press left the Knight walking. Two d-pad changes a millisecond apart lost the second
+the same way. Measured on the BattleXP G350 in Dirtmouth with `UA_DUMP_HERO_INPUT` (below), 24
+scripted turns and jumps: with the old times, 6 of the 6 d-pad presses made in the jump's
+millisecond never reached the `Gamepad` in their 0.4 s, and two changes a millisecond apart lost
+the second for 3-4 frames; with each event's time after the last, none of the 45 changes was lost,
+each in the `Gamepad` in the first or second frame after it was sent. InControl and the hero
+followed the `Gamepad` in every frame of both runs. The fake JNI now gives each event a time
+past the one before (runtime/jni/unityplayer.c `event_ms`: at most a millisecond later than the
+clock), and the jni tests check it (`R_EVENT_NOT_LATER`).
+
+**Unity's legacy input does not lose an event it was given** (libunity 6000.0.61f1 armv7, legacy
+input, read in its disassembly): a joystick MotionEvent is always queued and answered 1; at the next frame every
 axis of that pad is set from the event, with no filter; a pad's DPAD KeyEvents set the hat axes.
 ua_host therefore sends each change once and repeats nothing. Two things follow from "every axis
 is set from the event": an axis pressed and let go between two frames is never seen by a script
@@ -452,7 +472,23 @@ game's side (Mono games):
 export UA_DUMP_INPUT='joystick 1 analog 4,key:joystick 1 button 0'
 ```
 
-Each frame it asks `UnityEngine.Input` what a script would get, `Input.GetAxisRaw(<name>)` or,
+(A game whose InControl reads the Input System, Hollow Knight's among them, never asks these:
+use the third switch.)
+
+```sh
+export UA_DUMP_HERO=0.001 UA_DUMP_HERO_INPUT=1   # Hollow Knight: each frame, every layer of its input
+```
+
+Each frame's hero line (`UA_DUMP_HERO`, docs/runtime.md) then ends with what each layer of the game's
+input held: the Input System's `Gamepad.current` (d-pad x and y, the south button), InControl's
+`moveVector` (the game's `HeroActions`) and `HeroController.move_input`:
+`[dump] t 80.98 Knight (54.123, 9.408) camera (54.12, 12.31) at 80.977 pad 0 0 a 1 move 0 0 input 0`.
+Line the `at` times up with the `[input]` lines' (the same clock) to see which layer lost a
+change: a change sent but still not in `pad` two frames later was lost before the Input System;
+`pad` right and `move` wrong, by InControl; `move` right and `input` wrong is the game's own logic,
+as on PC (it ignores the pad while the Knight cannot act).
+
+The legacy switch: each frame it asks `UnityEngine.Input` what a script would get, `Input.GetAxisRaw(<name>)` or,
 with `key:`, `Input.GetKey(<name>)`, for up to 8 names, and logs each crossing of half travel
 (`[dump] input 41.221 f2052: "joystick 1 analog 4" 0 -> -1`), after the frame that read it: a
 send's line is followed by the probe's one or two frames later (Hollow Knight in the emulator,
@@ -481,6 +517,8 @@ evidence.
   `UA_DPAD_STICK` (`dstick`: the d-pad as the stick, its diagonals of length 1, a real stick while
   the d-pad is let go, the swap button giving the d-pad back and the axes sent again;
   `dstickauto`: `auto,both` on a pad with sticks and one without).
+- `runtime/jni/build.sh`: every injected event's time after the one before (a key and a d-pad
+  change in the same millisecond, as one pad report gives them), in every Unity version shape.
 - `runtime/jni/build.sh`: libunity's view of a mouse MotionEvent (source, action, tool type,
   button state, `isButtonPressed`, the wheel axis, its InputDevice) in every Unity version shape.
 - `runtime/host/test/pointer_test.sh` also runs `test_osk` (osk.c against a stand-in field and the

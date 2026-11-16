@@ -603,6 +603,11 @@ static int run_shape(int shape)
     CHECK(up_inject_axes(5, 0, 2, axes, vals) == 1);
     CHECK(R(R_AXIS_X_X1000) == -500 && R(R_AXIS_HAT_X1000) == 1000 && R(R_MOTION_SRC) == UP_SOURCE_JOYSTICK);
     CHECK(R(R_INJECT_EXTRA) == (shape >= SHAPE_2022_3 ? 1000 : 0));
+    /* a jump and a d-pad press in the same millisecond (one pad report): the second's time after the first's */
+    up_inject_key(5, UP_SOURCE_GAMEPAD, UP_ACTION_DOWN, UP_KEYCODE_BUTTON_A, 0, 0);
+    CHECK(up_inject_axes(5, 0, 2, axes, vals) == 1);
+    up_inject_key(5, UP_SOURCE_GAMEPAD, UP_ACTION_UP, UP_KEYCODE_BUTTON_A, 0, 0);
+    CHECK(R(R_EVENT_NOT_LATER) == 0);
     /* a mouse (host pointer mode): hover, press, wheel */
     struct up_input_device mouse = { .id = 9, .name = "Test Mouse", .descriptor = "test-mouse", .sources = UP_SOURCE_MOUSE,
                                      .naxes = 2, .axis = { UP_AXIS_X, UP_AXIS_Y }, .max = { 639, 479 } };

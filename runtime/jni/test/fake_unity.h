@@ -47,6 +47,7 @@ enum { R_ONLOAD, R_INITJNI, R_RESUME, R_PAUSE, R_DONE, R_FOCUS_TRUE, R_FOCUS_FAL
        /* soft keyboard natives */
        R_SI_STR, R_SI_SEL_START, R_SI_SEL_LEN, R_SI_CLOSED, R_SI_CANCELED, R_SI_LOST, R_SI_CONFIG,
        R_SI_VISIBLE, R_SI_AREA_TOP, R_SI_AREA_W, R_SI_LAYOUT,
+       R_EVENT_NOT_LATER,   /* events whose getEventTime was not after the one before (Unity drops them) */
        R_N };
 
 #endif
