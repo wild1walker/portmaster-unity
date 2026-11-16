@@ -67,7 +67,7 @@ if [ "$ARCH" = arm64 ]; then
     for s in $MEMO; do LD_LIBRARY_PATH=\$O/memo \$O/test_glmemo \$s; done
     for s in random count off; do LD_LIBRARY_PATH=\$O/state \$O/test_glstate \$s; done
     for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done
-    for s in source binary stale unlit wcomp cache off; do LD_LIBRARY_PATH=\$O/spec \$O/test_glspec \$s; done
+    for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=\$O/spec \$O/test_glspec \$s; done
     for s in $PCS; do d=\$(mktemp -d); LD_LIBRARY_PATH=\$O/pc \$O/test_progcache \$s \$d; rm -rf \$d; done"
   exit
 fi
@@ -84,5 +84,5 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
    for s in '"$MEMO"'; do LD_LIBRARY_PATH=out/test/memo out/test/test_glmemo $s; done
    for s in random count off; do LD_LIBRARY_PATH=out/test/state out/test/test_glstate $s; done
    for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=out/test/arena out/test/test_glarena $s; done
-   for s in source binary stale unlit wcomp cache off; do LD_LIBRARY_PATH=out/test/spec out/test/test_glspec $s; done
+   for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=out/test/spec out/test/test_glspec $s; done
    for s in '"$PCS"'; do d=$(mktemp -d); LD_LIBRARY_PATH=out/test/pc out/test/test_progcache $s $d; rm -rf $d; done'

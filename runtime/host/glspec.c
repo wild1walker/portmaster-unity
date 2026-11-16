@@ -128,39 +128,58 @@ F(void, PixelStorei, (GLenum, GLint)) F(void, BindBuffer, (GLenum, GLuint)) F(vo
 F(void, GetIntegerv_, (GLenum, GLint *))
 #undef F
 
-// ---- the rule: _LightColor0 a constant 0
-static const char RULE_NAME[] = "_LightColor0";
+// ---- the rule: one plain uniform a constant 0 (UA_GL_SPEC_UNIFORM=<name>, default _LightColor0; a vec4 or a float)
+static char RULE_NAME[64] = "_LightColor0";
+static size_t RULE_LEN = sizeof "_LightColor0" - 1;
+static void rule_init(void)
+{
+    snprintf(RULE_NAME, sizeof RULE_NAME, "_LightColor0");
+    RULE_LEN = strlen(RULE_NAME);
+    const char *e = getenv("UA_GL_SPEC_UNIFORM");
+    if (!e || !*e || strlen(e) >= sizeof RULE_NAME) return;
+    for (const char *c = e; *c; c++) if (!(*c == '_' || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9'))) return;
+    snprintf(RULE_NAME, sizeof RULE_NAME, "%s", e);
+    RULE_LEN = strlen(RULE_NAME);
+}
 
 // the source with the rule's declaration replaced; *used: the components the shader reads (bits xyzw)
 static char *twin_source(const char *src, unsigned *used)
 {
-    const char *d = NULL;
-    for (const char *p = src; (p = strstr(p, RULE_NAME)); p += sizeof RULE_NAME - 1) {
+    const char *d = NULL; int is_float = 0;
+    for (const char *p = src; (p = strstr(p, RULE_NAME)); p += RULE_LEN) {
         const char *line = p;
         while (line > src && line[-1] != '\n') line--;
         const char *end = strchr(p, '\n');
         size_t n = end ? (size_t)(end - line) : strlen(line);
-        // `uniform [precision] vec4 _LightColor0;` at the line's start: a plain uniform (in a block the
+        // `uniform [precision] vec4|float <name>;` at the line's start: a plain uniform (in a block the
         // members are indented, after a `uniform <Block> {` line)
-        if (!strncmp(line, "uniform", 7) && memmem(line, n, "vec4", 4) && p[sizeof RULE_NAME - 1] == ';') { d = line; break; }
+        if (strncmp(line, "uniform", 7) || p[RULE_LEN] != ';' || (p > src && p[-1] != ' ' && p[-1] != '\t')) continue;
+        if (memmem(line, (size_t)(p - line), "vec4", 4)) { d = line; break; }
+        if (memmem(line, (size_t)(p - line), "float", 5)) { d = line; is_float = 1; break; }
+        (void)n;
     }
     if (!d) return NULL;
     // what of it the shader reads: every later use followed by a swizzle of x, y, z, w (or none: all)
     *used = 0;
     const char *after = strchr(d, '\n');
     if (!after) return NULL;
-    for (const char *p = after; (p = strstr(p, RULE_NAME)); p += sizeof RULE_NAME - 1) {
-        const char *q = p + sizeof RULE_NAME - 1;
+    for (const char *p = after; (p = strstr(p, RULE_NAME)); p += RULE_LEN) {
+        const char *q = p + RULE_LEN;
+        char b = p > after ? p[-1] : ' ';
+        if (b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) continue;   // (a longer name)
+        if (*q == '_' || (*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || (*q >= '0' && *q <= '9')) continue;
+        if (is_float) { *used = 1; break; }
         if (*q != '.') { *used = 15; break; }
         for (q++; *q == 'x' || *q == 'y' || *q == 'z' || *q == 'w' || *q == 'r' || *q == 'g' || *q == 'b' || *q == 'a'; q++)
             *used |= *q == 'x' || *q == 'r' ? 1 : *q == 'y' || *q == 'g' ? 2 : *q == 'z' || *q == 'b' ? 4 : 8;
     }
     if (!*used) return NULL;                        // (declared, never read: nothing to gain)
     size_t pre = (size_t)(d - src), n = strlen(src);
-    char *s = malloc(n + 64);
+    char *s = malloc(n + 128);
     if (!s) return NULL;
     memcpy(s, src, pre);
-    size_t o = pre + (size_t)sprintf(s + pre, "const vec4 %s = vec4(0.0);", RULE_NAME);
+    size_t o = pre + (size_t)(is_float ? sprintf(s + pre, "const float %s = 0.0;", RULE_NAME)
+                                       : sprintf(s + pre, "const vec4 %s = vec4(0.0);", RULE_NAME));
     memcpy(s + o, after, strlen(after) + 1);
     return s;
 }
@@ -628,16 +647,26 @@ void glspec_cache(const char *cache_dir)
 {
     const char *e = getenv("UA_GL_SPEC");
     int on = e && (!strcmp(e, "1") || !strcmp(e, "check"));
-    char mark[1024], dir[1024];
+    rule_init();
+    char mark[1024], dir[1024], want[160], have[160] = "";
     snprintf(mark, sizeof mark, "%s/uaspec.on", cache_dir);
     snprintf(dir, sizeof dir, "%s/UnityShaderCache", cache_dir);
-    struct stat st;
-    int marked = stat(mark, &st) == 0;
-    if (on == marked) return;
+    // the mark names the rule (a mark of before the rule was named: _LightColor0's)
+    snprintf(want, sizeof want, "UA_GL_SPEC: Unity's program binaries carry their twins (%s)\n", RULE_NAME);
+    FILE *m = fopen(mark, "r");
+    int marked = m != NULL;
+    if (m) {
+        if (!fgets(have, sizeof have, m)) have[0] = 0;
+        fclose(m);
+        if (!strcmp(have, "UA_GL_SPEC: Unity's program binaries carry their twins\n"))
+            snprintf(have, sizeof have, "UA_GL_SPEC: Unity's program binaries carry their twins (_LightColor0)\n");
+    }
+    if (on == marked && (!on || !strcmp(have, want))) return;
     remove_tree(dir);
-    if (on) { FILE *f = fopen(mark, "w"); if (f) { fputs("UA_GL_SPEC: Unity's program binaries carry their twins\n", f); fclose(f); } }
+    if (on) { FILE *f = fopen(mark, "w"); if (f) { fputs(want, f); fclose(f); } }
     else unlink(mark);
-    fprintf(stderr, "[glspec] UA_GL_SPEC turned %s: Unity's program binary cache emptied (%s)\n", on ? "on" : "off", dir);
+    fprintf(stderr, "[glspec] UA_GL_SPEC %s (%s): Unity's program binary cache emptied (%s)\n",
+            !on ? "turned off" : marked ? "rule changed" : "turned on", RULE_NAME, dir);
 }
 
 static so_shim g_shims[64];
@@ -665,6 +694,7 @@ const so_shim *glspec_table(void *(*next)(const char *name))
     g_on = e && (!strcmp(e, "1") || !strcmp(e, "check"));
     g_check = e && !strcmp(e, "check");
     if (!g_on) return g_shims;
+    rule_init();
     int ok = 1;
 #define Q(f, n) do { if (!(*(void **)&q_##f = gl(NULL, n))) ok = 0; } while (0)
     Q(CreateShader, "glCreateShader"); Q(CompileShader, "glCompileShader"); Q(GetShaderiv, "glGetShaderiv");

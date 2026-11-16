@@ -5,9 +5,12 @@
 //   binary   the program's binary as Unity caches it carries the twin's; loaded into a new program, the
 //            twin comes back with it
 //   stale    a binary cached without the twin's (before): loads as it is, without a twin
-//   cache    glspec_cache: turned on, the cache emptied and marked; again: kept; turned off: emptied, mark gone
+//   cache    glspec_cache: turned on, the cache emptied and marked; again: kept; another UA_GL_SPEC_UNIFORM: emptied;
+//            a mark of before the rule was named counts as _LightColor0's; turned off: emptied, mark gone
 //   unlit    a program without the uniform: no twin
 //   wcomp    the shader reads _LightColor0.w: (0, 0, 0, 1) binds the program
+//   float    UA_GL_SPEC_UNIFORM=_DamagedPower, a float uniform: its twin has `const float _DamagedPower = 0.0;`,
+//            bound while the value is 0; a longer name that starts with it is not the rule's
 //   off      UA_GL_SPEC unset: nothing wrapped
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +44,9 @@ static const char *LITW =
     "layout(location = 0) out vec4 SV_Target0;\nvoid main()\n{\n    SV_Target0 = _Color * _LightColor0.w + vec4(_LightColor0.xyz, 0.0);\n}\n";
 static const char *UNLIT = "#version 320 es\nuniform \tvec4 _Color;\nlayout(location = 0) out vec4 SV_Target0;\nvoid main()\n{\n    SV_Target0 = _Color;\n}\n";
 
+static const char *FLT =
+    "#version 320 es\nprecision highp float;\nuniform \tfloat _DamagedPowerScale;\nuniform \tfloat _DamagedPower;\nuniform \tvec4 _Color;\n"
+    "layout(location = 0) out vec4 SV_Target0;\nvoid main()\n{\n    SV_Target0 = _Color * (_DamagedPower * _DamagedPowerScale);\n}\n";
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "source";
@@ -58,6 +64,16 @@ int main(int argc, char **argv)
         snprintf(f, sizeof f, "%s/UnityShaderCache/def", dir); fclose(fopen(f, "w"));
         glspec_cache(dir);                      // (still on: kept)
         CHECK(stat(f, &st) == 0);
+        setenv("UA_GL_SPEC_UNIFORM", "_DamagedPower", 1);
+        glspec_cache(dir);                      // (another rule: emptied)
+        CHECK(stat(f, &st) != 0);
+        unsetenv("UA_GL_SPEC_UNIFORM");
+        snprintf(f, sizeof f, "%s/uaspec.on", dir);
+        FILE *mf = fopen(f, "w"); fputs("UA_GL_SPEC: Unity's program binaries carry their twins\n", mf); fclose(mf);
+        snprintf(f, sizeof f, "%s/UnityShaderCache", dir); mkdir(f, 0755);
+        snprintf(f, sizeof f, "%s/UnityShaderCache/ghi", dir); fclose(fopen(f, "w"));
+        glspec_cache(dir);                      // (an old mark: _LightColor0's, the rule now: kept)
+        CHECK(stat(f, &st) == 0);
         unsetenv("UA_GL_SPEC");
         glspec_cache(dir);
         CHECK(stat(f, &st) != 0);
@@ -66,6 +82,7 @@ int main(int argc, char **argv)
         return failures != 0;
     }
     if (strcmp(mode, "off")) setenv("UA_GL_SPEC", "1", 1);
+    if (!strcmp(mode, "float")) setenv("UA_GL_SPEC_UNIFORM", "_DamagedPower", 1);
     g_t = glspec_table(NULL);
     if (!strcmp(mode, "off")) { CHECK(!g_t[0].name); printf("test_glspec %s: %s\n", mode, failures ? "FAILED" : "ok"); return failures != 0; }
     void (*Source)(unsigned, int, const char *const *, const int *) = fn("glShaderSource");
@@ -85,7 +102,7 @@ int main(int argc, char **argv)
     CHECK(Source && Link && Use && Get && U4 && Progiv && GetBin && Bin);
     glspec_frame();                             // (this thread renders)
 
-    const char *fsrc = !strcmp(mode, "unlit") ? UNLIT : !strcmp(mode, "wcomp") ? LITW : LIT;
+    const char *fsrc = !strcmp(mode, "unlit") ? UNLIT : !strcmp(mode, "wcomp") ? LITW : !strcmp(mode, "float") ? FLT : LIT;
     unsigned vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
     Source(vs, 1, &VS, NULL); Source(fs, 1, &fsrc, NULL);
     glCompileShader(vs); glCompileShader(fs);
@@ -96,7 +113,22 @@ int main(int argc, char **argv)
     int lc = Loc(p, "_LightColor0"), col = Loc(p, "_Color"), cur = 0;
     static const float zero[4] = { 0, 0, 0, 0 }, one[4] = { 1, 1, 1, 0 }, w1[4] = { 0, 0, 0, 1 }, red[4] = { 1, 0, 0, 1 };
 
-    if (!strcmp(mode, "unlit")) {
+    if (!strcmp(mode, "float")) {
+        void (*U1)(int, int, const float *) = fn("glUniform1fv");
+        int dp = Loc(p, "_DamagedPower"), sc = Loc(p, "_DamagedPowerScale");
+        static const float half = 0.5f, z = 0.0f;
+        CHECK(U1 && dp > 0 && sc > 0);
+        U1(sc, 1, &half); U1(dp, 1, &half); Draw(4, 6, 0x1403, NULL);
+        CHECK(fake_draw_prog == (int)p);
+        U1(dp, 1, &z); Draw(4, 6, 0x1403, NULL);
+        unsigned twin = (unsigned)fake_draw_prog;
+        CHECK(twin != p && strstr(fake_fs(twin), "const float _DamagedPower = 0.0;") && strstr(fake_fs(twin), "uniform \tfloat _DamagedPowerScale;"));
+        CHECK(fake_value(twin, "_DamagedPowerScale") && fake_value(twin, "_DamagedPowerScale")[0] == 0.5f);
+        U1(sc, 1, &z); Draw(4, 6, 0x1403, NULL);          // (the other float at 0: still the twin, the rule's value decides)
+        CHECK(fake_draw_prog == (int)twin);
+        U1(dp, 1, &half); Draw(4, 6, 0x1403, NULL);
+        CHECK(fake_draw_prog == (int)p);
+    } else if (!strcmp(mode, "unlit")) {
         U4(col, 1, red); Draw(4, 6, 0x1403, NULL);
         CHECK(fake_draw_prog == (int)p);
     } else if (!strcmp(mode, "wcomp")) {
