@@ -571,9 +571,13 @@ static void hero(const char *name, double t)
     int fh = go && getf(call(go, "get_transform", NULL, 0), "get_position", h, 3);
     int fc = cam && getf(call(cam, "get_transform", NULL, 0), "get_position", c, 3);
     char a[48] = "-", b[48] = "-";
-    if (fh) snprintf(a, sizeof a, "(%.2f, %.2f)", h[0], h[1]);
+    if (fh) snprintf(a, sizeof a, "(%.3f, %.3f)", h[0], h[1]);
     if (fc) snprintf(b, sizeof b, "(%.2f, %.2f)", c[0], c[1]);
-    fprintf(stderr, "[dump] t %.2f %s %s camera %s\n", t, name, a, b);
+    // (at: the [input] and [hitch] lines' clock, seconds from the first frame, to line a press up with the move)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double t0 = frames_t_start(), at = t0 > 0 ? ts.tv_sec + ts.tv_nsec / 1e9 - t0 : 0;
+    fprintf(stderr, "[dump] t %.2f %s %s camera %s at %.3f\n", t, name, a, b, at);
 }
 
 // UA_FLIPBOOK: uaflipbook.dll loaded and UAFlipbook.Init called, once UnityEngine.CoreModule is loaded
