@@ -1139,6 +1139,11 @@ The G350's main thread by module, 100 Hz profiles of one run each: the frame 35.
 piece alone was inside the noise on the H700 (runtime pieces +2.4 / -1.7 and +1.6 / +0.6; the inliner -1.9 / +1.4 and
 +1.0 / +1.9 fps); together they are not.
 
+A second, longer list (15 more callers from a profile of the stack: the depth sort, `b2DynamicTree.Query`'s
+`Stack<int>`, `GameManager.Update`, the bullets' updates; 30 callers in all) did not pay on the Knulli: fps against
+the first list +0.4, -4.1, -3.4, -0.3 in two orders; UnityMain's managed time inside the run-to-run spread. The port
+keeps the first list.
+
 ### Pixelator's frame by call site, CPU and GPU (Enter the Gungeon, 2026-11-16)
 
 When a change is worth less than the run-to-run noise of an fps pair (about 1.5 fps on the RG34XX-SP in Bullet
