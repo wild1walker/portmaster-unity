@@ -11,6 +11,7 @@
 //   UA_PROF_START=<s>        record once, <s> seconds after the first frame (default: only on prof.req)
 //   UA_PROF_DEPTH=<n>        return addresses kept per sample (default 32, at most 128; 0: pc and lr)
 //   UA_PROF_SCAN=<bytes>     stack scanned for them (default 16384)
+//   UA_PROF_CODE_METHOD=<text> the whole compiled body of each sampled JIT method whose name has <text> ("jitcode")
 //   UA_PROF_CODE=1           also the bytes of the anonymous code the samples fell in (no module, no JIT method:
 //                            Mono's trampolines, IMT and branch thunks, wrappers it does not name), 128 bytes around
 //                            each address ("code <start> <hex>"), read from this process at the recording's end:
@@ -863,6 +864,16 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
                 char *full = m_full_name(m_ji_method(ji), 1), tok[400];
                 if (full) { method_token(full, tok, sizeof tok); m_free(full); } else snprintf(tok, sizeof tok, "M:?");
                 fprintf(f, "jit %lx %x %s\n", (unsigned long)st, (unsigned)sz, tok);
+                // UA_PROF_CODE_METHOD=<text>: the whole compiled body of each method whose name has <text> (once)
+                {
+                    static const char *want; static int wanted;
+                    if (!wanted) { want = getenv("UA_PROF_CODE_METHOD"); wanted = 1; }
+                    if (want && *want && strstr(tok, want) && sz > 0 && sz < (1 << 20)) {
+                        fprintf(f, "jitcode %lx ", (unsigned long)st);
+                        for (int x = 0; x < sz; x++) fprintf(f, "%02x", ((const unsigned char *)st)[x]);
+                        fputc('\n', f);
+                    }
+                }
                 jit_lo = st; jit_hi = st + (uintptr_t)(sz > 0 ? sz : 1);
                 if (a < jit_lo || a >= jit_hi) jit_lo = jit_hi = 0;
                 continue;
