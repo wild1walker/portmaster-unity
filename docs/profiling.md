@@ -1039,6 +1039,22 @@ keeps about 10 MB more of compiled code (RSS 624 -> 636 MB on the G350, MemAvail
 constructors stay the game's: `UA_JIT_WARM_CHECK=2` logged the same 782 static constructors in the same order in a
 cold run and a seeded one, none inside a warm-up compile.
 
+### Three cuts in the picture's own passes (Enter the Gungeon, 2026-11-16)
+
+Pixelator, the game's image effect, renders its passes from `OnRenderImage` every frame. Three exact or
+too-small-to-see cuts (portmaster-gungeon patch words):
+- `dead-blits` (exact): at Low lighting the light buffers get a black fill that the next draw covers whole: left out.
+- `occ-gather` (exact): the occlusion texture (34 x 20 texels, made again when the view crosses a tile) sums a 5 x 5
+  neighbourhood of cells per texel, each cell's darkness read through several calls; the sums now read an array of
+  the cells copied once per texture (4.1 -> 3.0 ms a call; a check build summed both ways: 120,000 texels, 0 differ).
+- `minimap-faded` (too small to see): the corner minimap's camera renders every other frame (`half-rate`) even while
+  the minimap is faded out (its quad's `_Fade` at 0, as in a sealed room); now only while it can be seen or is open
+  full screen.
+Bullet Hell's room, A B and B A, fps / p99 ms / frames over 33 ms: RG34XX-SP (Knulli) 38.79 / 41.1 / 111 -> 41.39 /
+37.3 / 58 and 40.06 / 38.0 / 74 -> 41.10 / 40.1 / 60; muOS 41.01 -> 40.79 and 39.16 -> 41.34 (an earlier muOS pair:
+40.09 / 38.97 -> 41.77 / 39.99). Screenshots of both builds at the same moments of the route show the same picture
+(the minimap faded in the sealed room either way).
+
 ### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
 
 Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split
