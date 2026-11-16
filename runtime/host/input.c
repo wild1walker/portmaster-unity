@@ -56,11 +56,13 @@ static struct pad {
     int script_hx, script_hy;   // UA_INPUT_SCRIPT d-pad and left stick, merged into the pad's own state
     int script_lx, script_ly;
     int virt;                   // UA_INPUT_SCRIPT's own pad (no SDL pad present)
-    unsigned long hat_frame[2]; // the d-pad's hat axes: frames shown when a direction was sent,
+    unsigned long hat_frame[2]; // the d-pad's hat axes: the game's frames done when a direction was sent,
     double hat_t[2];            // and when (the hold above)
-    int hat_held;               // a direction let go but still sent: send again at the next poll
+    int hat_held;               // a release not sent yet: send it at the next poll
 } pads[MAX_PADS];
 static int dpad_hold = -1;      // UA_DPAD_HOLD (on unless 0)
+static unsigned long main_frames;   // nativeRenders done (input_main_frame, UnityMain; read here on the UI thread)
+void input_main_frame(void) { __atomic_add_fetch(&main_frames, 1, __ATOMIC_RELEASE); }
 
 static const int pad_axes[8] = { UP_AXIS_X, UP_AXIS_Y, UP_AXIS_Z, UP_AXIS_RZ,
                                  UP_AXIS_HAT_X, UP_AXIS_HAT_Y, UP_AXIS_LTRIGGER, UP_AXIS_RTRIGGER };
@@ -494,19 +496,24 @@ static void send_axes(struct pad *p)
     p->hat_held = 0;
     for (int k = 0; dpad_hold && k < 2; k++)
     {
+        // Unity takes the events queued for it at the start of a frame (nativeRender): a press let go
+        // before a frame began after it would be taken together with its release, never seen. The
+        // release waits until the frame running when the direction was sent and the next have
+        // ended (the next began after it); a new direction or a longer press is sent at once.
         float old = p->axes[4 + k], *nv = &v[4 + k];
         int changed = (old > 0) != (*nv > 0) || (old < 0) != (*nv < 0);
         if (!changed) continue;
         double t = mono_s();
-        if (old != 0.f && frames_presented() < p->hat_frame[k] + 2 && t - p->hat_t[k] < 0.25)
+        unsigned long done = __atomic_load_n(&main_frames, __ATOMIC_ACQUIRE);
+        if (old != 0.f && *nv == 0.f && done < p->hat_frame[k] + 2 && t - p->hat_t[k] < 0.25)
         {
-            *nv = old;                              // let go too soon for the game to have seen it
+            *nv = old;                              // let go before the game took the press
             p->hat_held = 1;
             if (logging()) fprintf(stderr, "[input] %s: pad %d d-pad %s held on until the game has seen it\n", stamp(),
                                    (int)(p - pads), k ? "y" : "x");
             continue;
         }
-        if (*nv != 0.f) { p->hat_frame[k] = frames_presented(); p->hat_t[k] = t; }
+        if (*nv != 0.f) { p->hat_frame[k] = done; p->hat_t[k] = t; }
     }
     if (!memcmp(v, p->axes, sizeof v)) return;
     int crossed = 0;                            // UA_INPUT_LOG: a control past half travel, or back

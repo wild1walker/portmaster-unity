@@ -1,8 +1,9 @@
 // input.c's d-pad hold, against stand-ins for the runtime (Unity's input calls, the frame count, the
 // on-screen keyboard, pointer mode): an SDL virtual gamepad (SDL 2.0.14+, in the process; no uinput)
 // pressed and let go as a quick tap would be, the hat axis Unity was sent read back.
-//   a tap let go before the game drew two frames stays sent until it has, or 250 ms went by
-//   a press held longer is let go at once; a turn to the other direction waits the same way
+//   a tap let go before the game's frames took it (the frame running and the next done) stays sent
+//   until they have, or 250 ms went by
+//   a press held longer is let go at once; a turn to the other direction is sent at once
 //   UA_DPAD_HOLD=0: no hold
 // Built and run by input_test.sh (aarch64, SDL 2.26).
 #include "../input.h"
@@ -18,7 +19,7 @@ static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
 // ---- stand-ins
-static unsigned long F;                         // frames shown
+static unsigned long F;                         // frames shown (and nativeRenders done: frame())
 static float hat_x = -9;                        // the last AXIS_HAT_X Unity was sent
 static int sends;
 unsigned long frames_presented(void) { return F; }
@@ -53,6 +54,7 @@ int up_inject_axes(int id, int src, int n, const int *axes, const float *v)
 static SDL_Joystick *J;
 static void dpad(int button, int down) { SDL_JoystickSetVirtualButton(J, button, (Uint8)down); }
 static void poll(void) { SDL_Delay(5); input_poll(); }
+static void frame(void) { F++; input_main_frame(); }
 
 int main(int argc, char **argv)
 {
@@ -73,14 +75,14 @@ int main(int argc, char **argv)
     CHECK(hat_x == 1.f);
     dpad(R, 0); poll(); poll();
     CHECK(hat_x == (nohold ? 0.f : 1.f));       // (without the hold the game never sees it)
-    F++; poll();
-    CHECK(hat_x == (nohold ? 0.f : 1.f));
-    F++; poll();
-    CHECK(hat_x == 0.f);                        // two frames: let go
+    frame(); poll();
+    CHECK(hat_x == (nohold ? 0.f : 1.f));       // (the frame running at the press may have begun before it)
+    frame(); poll();
+    CHECK(hat_x == 0.f);                        // a frame begun after the press is done: let go
     if (nohold) { printf("%d checks, %d failures\n", checks, failures); return failures != 0; }
 
     // a press held for frames: let go at once
-    dpad(R, 1); poll(); F += 3; poll();
+    dpad(R, 1); poll(); frame(); frame(); frame(); poll();
     dpad(R, 0); poll();
     CHECK(hat_x == 0.f);
 
@@ -90,12 +92,12 @@ int main(int argc, char **argv)
     SDL_Delay(260); poll();
     CHECK(hat_x == 0.f);
 
-    // right then left at once: right until the game has seen it, then left
+    // right then left at once: left at once, never held back
     dpad(R, 1); poll(); dpad(R, 0); dpad(L, 1); poll();
-    CHECK(hat_x == 1.f);
-    F += 2; poll();
     CHECK(hat_x == -1.f);
-    dpad(L, 0); F += 2; poll();
+    dpad(L, 0); poll();
+    CHECK(hat_x == -1.f);                       // (a tap of left: held as above)
+    frame(); frame(); poll();
     CHECK(hat_x == 0.f);
 
     // held on while still pressed: nothing re-sent while nothing changed
