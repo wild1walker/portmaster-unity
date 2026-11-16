@@ -961,7 +961,8 @@ none, the answer is null, as Unity's would be: `FindObjectOfType` returns only o
 of which has had its `Awake` (Unity calls it on activation, before anything else in the frame can see the object)
 and not yet its `OnDestroy`. The class has no `Awake`, `OnDestroy` or subclass of its own (the patch checks all
 three). A check build that asks Unity every time and compares: 60 calls in the fight, 0 wrong. The High Dragun on the Knulli (RG34XX-SP), A B and B A, fps, p99, frames over 50 ms: 47.73 -> 51.19 fps,
-76.2 -> 43.4 ms, 40 -> 13; 50.01 -> 51.17 fps, 61.1 -> 39.4 ms, 34 -> 6. muOS (2026-11-10, one pair): 53.09 -> 53.83 fps, p99 63.0 -> 50.8 ms, frames over 50 ms 38 -> 10.
+76.2 -> 43.4 ms, 40 -> 13; 50.01 -> 51.17 fps, 61.1 -> 39.4 ms, 34 -> 6. The BattleXP G350 (perfmax, ES stopped): 32.94 -> 37.16 fps, 101.8 -> 53.6 ms, 54 -> 26; 34.63 -> 36.76 fps,
+87.5 -> 59.9 ms, 50 -> 28. muOS (2026-11-10, one pair): 53.09 -> 53.83 fps, p99 63.0 -> 50.8 ms, frames over 50 ms 38 -> 10.
 
 ### dfGUI's per-frame upkeep (Enter the Gungeon, 2026-11-16)
 
@@ -1001,7 +1002,8 @@ Bullet Hell's room (fps, p99, frames over 33 ms), the port before (A) and with t
 | B A | 39.67 (six, with the font walk below), 46.7 ms, 106 against 35.77, 43.9 ms, 190 | 40.09, 37.9 ms, 74 against 40.46, 37.3 ms, 77 |
 | A B | 37.10, 42.8 ms, 146 against 39.14, 39.4 ms, 65 | 41.07, 37.9 ms, 72 against 40.31, 38.2 ms, 63 |
 
-The Knulli gains 2 - 4 fps and halves its late frames; muOS, at 1.8 GHz against the Knulli's 1.5, does not move (its
+The BattleXP G350 (perfmax, ES stopped), A B and B A: 25.46 -> 26.69 and 25.46 -> 26.73 fps, frames over 33 ms 682 -> 631
+and 678 -> 634, p99 65.2 -> 60.1 and 61.2 -> 59.4 ms. The Knulli gains 2 - 4 fps and halves its late frames; muOS, at 1.8 GHz against the Knulli's 1.5, does not move (its
 frame there waits on something else). Check builds in the Dragun and in Bullet Hell: `df-fields` 5,300 and 5,100
 calls, 0 different; `df-draw-compare` 24,000 and 20,000 texture tests, 0 different; `df-late`'s check printed nothing
 (it prints every 100 pending layouts: fewer in a fight). A slip worth knowing: inserting several instructions before
