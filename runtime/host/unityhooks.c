@@ -59,6 +59,7 @@
 #include "unitymath.h"
 #include "unitybeh.h"
 #include "unityscripts.h"
+#include "unitylayers.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -298,6 +299,7 @@ void unityhooks_on_load(so_module *m)
     unitybeh_on_load(base, size);               // UA_BEH_PREFETCH, UA_BEH_EMPTY, UA_BEH_STATS
     unityscripts_on_load(base, size);           // UA_SCRIPT_FIND
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
+    unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {

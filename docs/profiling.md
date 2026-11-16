@@ -1056,6 +1056,41 @@ Bullet Hell's room, A B and B A, fps / p99 ms / frames over 33 ms: RG34XX-SP (Kn
 (the minimap faded in the sealed room either way). BattleXP G350 (dArkOS), Bullet Hell A B and B A: 25.93 / 59.1 ms /
 71 frames over 50 ms -> 27.46 / 57.0 / 34 and 26.49 / 71.4 / 81 -> 28.41 / 60.3 / 27.
 
+### Pixelator's frame by call site, CPU and GPU (Enter the Gungeon, 2026-11-16)
+
+When a change is worth less than the run-to-run noise of an fps pair (about 1.5 fps on the RG34XX-SP in Bullet
+Hell's room), time the code it removes instead. A test-only probe wraps each engine call made from one class
+(`Before()` / `After("<caller>@<IL offset>:<callee>")`, a stack of start times so that nested calls time
+correctly) and sums calls and ms per call site, every 600 frames. Count UnityMain only: the first version shared
+its dictionary with the loading threads and crashed the player at 35 s.
+
+Bullet Hell's room on the RG34XX-SP (Knulli), ms a frame of UnityMain, inclusive:
+
+| Call site in `Pixelator` | ms a frame |
+|---|---|
+| `RenderGame_Combined` (from `OnRenderImage`) | 4.37 |
+| the slave camera, FG layers (core 3, 4: sprites, ~120-150 draws) | 2.54 |
+| the slave camera, BG layers (core 1, 2) | 0.66 |
+| the slave camera, `Unoccluded` layer (draws nothing in fights) | 0.40 - 0.44 |
+| `CheckSize` (mostly `GameUIRoot.UpdateScale`) | 0.18 |
+| `RenderGBufferCheap` | 0.16 |
+| each `Graphics.Blit` | 0.03 - 0.06 |
+| each `RenderTexture.GetTemporary` | 0.02 - 0.04 |
+| all `Material.Set*` calls | < 0.05 |
+
+The CPU side of the image effects is the scene's own camera renders; the blits are cheap. The GPU side is the
+other way round (`UA_GL_TRACE_GPU=3`, each pass followed by `glFinish`: each includes ~0.3 ms of submission): of
+~18-20 ms a frame, the FG scene pass at 480x270 takes 9-10 ms and the one full-screen draw of the vignette, fade
+and lighting shader (four textures, a sine and a cosine a pixel) 5.6 ms; the clears 1.1 ms each. So the H700's GPU
+is close to a 60 fps frame on its own.
+
+`unoccluded-empty` (portmaster-gungeon, exact): the `Unoccluded` render is left out when `UaHost::LayersInScene`
+(runtime.md, `UA_LAYER_QUERY`) says no renderer is on its layer. A check build that rendered anyway and compared
+every 30th "empty" answer with the scene's renderers: 0 found where empty (up to 3,600 answers a run, Bullet Hell and
+the Keep's boss). By call site: the render's 0.40 ms a frame is gone, the rest of the frame's Pixelator time the
+same (0.72 / 0.71 ms outside its camera renders). As fps pairs it is inside the noise (Knulli 40.87 vs 40.43, 39.64
+vs 39.31; muOS 44.00 vs 43.34, 42.04 vs 41.10).
+
 ### Where a busy 2D frame's draw loop goes (Enter the Gungeon, 2026-11-10)
 
 Bullet Hell's busiest room on the RG34XX-SP (Knulli), the port's settings and patches. UnityMain's native time split

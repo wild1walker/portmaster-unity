@@ -55,6 +55,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "plugins.h"
 #include "mono64.h"
 #include "unityhooks.h"
+#include "unitylayers.h"
 #include "monodump.h"
 #include "memledger.h"
 
@@ -373,6 +374,7 @@ static void *dlsym_hook(const char *sym, void *p)
 {
     p = plugins_dlsym_hook(sym, p);            // FMOD's file paths (plugins.c)
     p = framerate_dlsym_hook(sym, p);          // UA_FRAME_RATE (framerate.c)
+    p = unitylayers_dlsym_hook(sym, p);        // UaHost::LayersInScene (unitylayers.c)
     p = gcbudget_dlsym_hook(sym, p);           // UA_GC_BUDGET (gcbudget.c)
     p = quality_dlsym_hook(sym, p);            // the quality profile's caps (quality.c)
     p = desktopenv_dlsym_hook(sym, p);         // the command line, Screen.resolutions (desktopenv.c)
@@ -492,7 +494,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
+static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
