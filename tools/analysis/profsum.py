@@ -25,6 +25,10 @@ over the recording and each core's use.
   --offsets    keep offsets in managed method names (hot spots inside a method)
   --exact      only the callers that were unwound (not those found by scanning) for "on the
                stack", the managed method and --callers
+  --code       (a recording made with UA_PROF_CODE=1) the anonymous code's samples by what the code is:
+               Mono 2.6's ARM stubs told by their instructions (long-branch thunks with their targets,
+               IMT thunks, delegate invoke, rgctx fetch, generic class init, static-rgctx, unbox) and its
+               generic trampolines by kind (mono_trampoline_code)
   --areas      UnityMain's frame by area of Unity's player loop, in ms a frame: rendering (each
                camera stage), scripts (Update, FixedUpdate, LateUpdate, coroutines, OnGUI), physics,
                animation, particles, audio, UI; the waits (the previous frame's present: the render
@@ -58,6 +62,7 @@ class Profile:
         self.meta, self.threads, self.modules, self.jits, self.syms = {}, {}, [], [], {}
         self.cpu, self.stat, self.stacks, self.seq = [], [], {}, collections.defaultdict(list)
         self.frames = {'swap': [], 'main': []}
+        self.code, self.tramps = {}, []
         self.version = 1
         with open(path, errors='replace') as f:
             lines = f.read().splitlines()
@@ -91,6 +96,10 @@ class Profile:
                 self.jits.append((a, a + int(p[2], 16), ' '.join(p[3:])))
             elif k == 'sym':
                 self.syms[int(p[1], 16)] = (p[2], int(p[3], 16))
+            elif k == 'code' and len(p) == 3:
+                self.code[int(p[1], 16)] = bytes.fromhex(p[2])
+            elif k == 'tramp':
+                self.tramps.append((int(p[2], 16), int(p[1])))
             elif k == 'thread':
                 self.threads[int(p[1])] = dict(tid=int(p[2]), name=p[3], samples=int(p[4]), dropped=int(p[5]))
             elif k == 'cpu':
@@ -125,6 +134,54 @@ class Profile:
         if i >= 0 and a < self.jits[i][1]:
             return self.jits[i]
         return None
+
+
+# Mono 2.6's generic trampolines (MonoTrampolineType)
+TRAMP_KINDS = ['JIT', 'jump', 'class init', 'generic class init', 'rgctx lazy fetch', 'AOT', 'AOT PLT', 'delegate',
+               'restore stack protection', 'generic virtual remoting', 'monitor enter', 'monitor exit']
+
+
+def anon_kind(p, a, name):
+    """what the anonymous code at a is (UA_PROF_CODE): Mono 2.6's ARM stubs by their instruction words"""
+    for i, (t, k) in enumerate(sorted(p.tramps)):
+        end = min(t + 0x300, sorted(p.tramps)[i + 1][0] if i + 1 < len(p.tramps) else t + 0x300)
+        if t <= a < end:
+            return 'generic trampoline: ' + (TRAMP_KINDS[k] if k < len(TRAMP_KINDS) else str(k))
+    if not p.code:
+        return None
+    if not hasattr(p, 'code_lo'):
+        p.code_lo = sorted(p.code)
+    i = bisect.bisect_right(p.code_lo, a) - 1
+    if i < 0:
+        return None
+    st = p.code_lo[i]
+    b = p.code[st]
+    if a >= st + len(b):
+        return None
+
+    def w(x):
+        o = x - st
+        return int.from_bytes(b[o:o + 4], 'little') if 0 <= o <= len(b) - 4 else None
+    near = [w(a + 4 * k) for k in range(-6, 3)]           # the words around the pc
+    for k in (0, -1):                                       # ldr ip, [pc]; bx ip; .word target
+        if w(a + 4 * k) == 0xe59fc000 and w(a + 4 * k + 4) == 0xe12fff1c:
+            t = w(a + 4 * k + 8)
+            return 'long-branch thunk to ' + ('%s (%s)' % (name(t)[1], name(t)[0]) if t else '?')
+    if 0xe92d0003 in near and 0xe51e0004 in near:            # push {r0, r1}; ldr r0, [lr, #-4]
+        return 'IMT thunk'
+    if 0xe1d0c1db in near:                                  # ldrsb ip, [r0, #27]
+        return 'generic class init (shared code)'
+    if 0xe590c008 in near and 0xe1a0f00c in near:            # ldr ip, [r0, #8] ... mov pc, ip
+        return 'delegate invoke'
+    if 0xe5901020 in near:                                  # ldr r1, [r0, #32]
+        return 'rgctx fetch'
+    if 0xe59f8000 in near and 0xe59ff000 in near:            # ldr r8, [pc]; ldr pc, [pc]
+        return 'static-rgctx trampoline'
+    if 0xe59fc004 in near and 0xe12fff1c in near:            # ldr ip, [pc, #4]; add rN, rN, #8; bx ip
+        return 'unbox trampoline'
+    if w(a) == 0xe12fff1e:
+        return 'a lone bx lr (a nullified class init?)'
+    return 'other (%08x at the pc)' % (w(a) or 0)
 
 
 class Namer:
@@ -292,6 +349,7 @@ def main(argv=None):
     ap.add_argument('--offsets', action='store_true')
     ap.add_argument('--exact', action='store_true')
     ap.add_argument('--areas', action='store_true')
+    ap.add_argument('--code', action='store_true')
     a = ap.parse_args(argv)
     p = Profile(a.profile)
     elf = ElfNames(dirs=a.syms, files=a.lib)
@@ -393,6 +451,21 @@ def main(argv=None):
             print('  self (the pc):')
             for k, v in selfc.most_common(a.top):
                 print(f'    {pct(v, nrun)}  {k}')
+            if a.code:
+                kinds, lrs = collections.Counter(), collections.defaultdict(collections.Counter)
+                for n, s in run:
+                    if name(s['pc'])[1] != 'anon':
+                        continue
+                    kd = anon_kind(p, s['pc'], name) or '(no code recorded: UA_PROF_CODE=1)'
+                    key = 'long-branch thunk' if kd.startswith('long-branch') else kd
+                    kinds[key] += n
+                    lrs[key][(kd, name(s['lr'])[1])] += n
+                if kinds:
+                    print('  anonymous code by kind (--code):')
+                    for k, v in kinds.most_common():
+                        print(f'    {pct(v, nrun)}  {k}')
+                        for (kd, lr), m in lrs[k].most_common(4):
+                            print(f'           {m:5d}  {kd if kd != k else ""}  (lr {lr})')
             print('  on the stack (inclusive):')
             for k, v in incl.most_common(a.top * 2):
                 print(f'    {pct(v, nrun)}  {k}')

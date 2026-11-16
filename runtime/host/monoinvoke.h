@@ -20,8 +20,32 @@ struct monoinvoke_env {
     void (*class_init)(void *vtable);                                    // mono_runtime_class_init
     int (*lock)(void *mutex), (*unlock)(void *mutex);                    // the Android pthread_mutex_lock/unlock
     unsigned domain_lock_off, jit_info_off, invoke_hash_off;             // MonoDomain: its lock, its MonoJitDomainInfo
+    // the dispatch thunk (all set, or it calls runtime_invoke every time): libmono's mono_runtime_invoke, the variables
+    // it reads (mono_runtime_get_no_exec's, mono_profiler_events, default_mono_runtime_invoke), its profiler end call
+    // (mono_profiler_method_end_invoke), and MonoVTable's byte and bit for initialized (mono_runtime_class_init_full's
+    // first test)
+    void *(*runtime_invoke)(void *method, void *obj, void **params, void **exc);
+    const int *no_exec;
+    const unsigned *prof_events;
+    void *const *rt_var;
+    void (*prof_end)(void *method);
+    unsigned vt_flags_off, vt_initialized;
 };
 // the replacement for mono_jit_runtime_invoke with env (copied); monoinvoke_off() turns it into a plain pass-through
 void *(*monoinvoke_start(const struct monoinvoke_env *env))(void *, void *, void **, void **);
 void monoinvoke_off(void);
+#if defined(__arm__)
+#include <stdint.h>
+// UA_MONO_DIV: Mono 2.6's integer division helpers (mono_idiv, mono_irem, mono_idiv_un, mono_irem_un) and the hooks'
+// replacements: monoinvoke_div_start gives the replacements for these originals, with the CPU's SDIV/UDIV (hw) or
+// the C divide (the unit test's way in; at load the originals are libmono's own)
+struct monoinvoke_div {
+    int32_t (*idiv)(int32_t, int32_t), (*irem)(int32_t, int32_t);
+    uint32_t (*idiv_un)(uint32_t, uint32_t), (*irem_un)(uint32_t, uint32_t);
+};
+void monoinvoke_div_start(const struct monoinvoke_div *orig, int hw, struct monoinvoke_div *fast);
+#endif
+// libunity's mono_runtime_invoke (the dlsym hook's answer; see monoinvoke.c, "the dispatch thunk"): libmono's own until
+// monoinvoke_start with the thunk's fields, and after monoinvoke_off
+void *monoinvoke_thunk(void *method, void *obj, void **params, void **exc);
 int monoinvoke_cached(void);   // methods in the cache

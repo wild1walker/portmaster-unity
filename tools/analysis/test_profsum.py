@@ -152,6 +152,26 @@ class ProfsumTest(unittest.TestCase):
         out = self.run_sum('--offsets', '--thread', 'UnityMain')
         self.assertIn('M:HeroController:Update+0x20', out)
 
+    def test_code(self):
+        # UA_PROF_CODE: a long-branch thunk to libunity (ldr ip, [pc]; bx ip; .word), an IMT thunk and the generic
+        # class init trampoline: anonymous samples classed by the words at them
+        def le(*ws):
+            return ''.join(w.to_bytes(4, 'little').hex() for w in ws)
+        extra = (f"code 300000 {le(0xe59fc000, 0xe12fff1c, 0x11010, 0, 0xe92d0003, 0xe51e0004, 0xe12fff1e)}\n"
+                 "tramp 3 400000\n"
+                 "stack 6 30 0 R ffff 300004 200041 1 200045\n"
+                 "stack 7 7 0 R ffff 300010 200041 1 200045\n"
+                 "stack 8 5 0 R ffff 400040 200041 1 200045\n"
+                 "stack 9 2 0 R ffff 500000 200041 1 200045\n")
+        with open(self.path, 'w') as f:
+            f.write(PROFILE.replace('end\n', extra + 'end\n'))
+        out = self.run_sum('--code', '--thread', 'UnityMain')
+        self.assertIn('anonymous code by kind (--code):', out)
+        self.assertRegex(out, r'long-branch thunk\n.*long-branch thunk to Behaviour::Update \(Unity engine')
+        self.assertIn('IMT thunk', out)
+        self.assertIn('generic trampoline: generic class init', out)
+        self.assertIn('(no code recorded: UA_PROF_CODE=1)', out)
+
 
 def snap(uptime, cpu0, main_run, main_wait, swpin, tis, gpu_ms, temp, es_ticks):
     return f"""=== /proc/uptime

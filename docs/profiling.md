@@ -1056,6 +1056,28 @@ Bullet Hell's room, A B and B A, fps / p99 ms / frames over 33 ms: RG34XX-SP (Kn
 (the minimap faded in the sealed room either way). BattleXP G350 (dArkOS), Bullet Hell A B and B A: 25.93 / 59.1 ms /
 71 frames over 50 ms -> 27.46 / 57.0 / 34 and 26.49 / 71.4 / 81 -> 28.41 / 60.3 / 27.
 
+### Mono 2.6's code, all at once (Enter the Gungeon, 2026-11-16)
+
+Four changes to how the game's compiled code runs, each small and spread over every managed frame, measured as a
+stack: ua_host's JIT code region (`UA_MONO_CODE`: no long-branch thunks between methods), the CPU's integer divide
+(`UA_MONO_DIV`), the dispatch thunk (`UA_MONO_INVOKE`: libunity's calls into scripts in one frame), and asmpatch's
+`inline` (the port's list of hot callers gets the small callees Mono 2.6 keeps as calls copied in: `List<T>[i]`,
+Unity's null tests, Mathf, Vector2/3). Exactness: asmpatch's `inline-check` ran the copies and the original calls
+side by side and compared every result (Knulli 56.0 M + 33.4 M, muOS 53.8 M + 6.2 M, G350 34.8 M compared, 0
+differ); the static constructors ran in the same order (791, `UA_JIT_WARM_CHECK=2`); the division hook's unit test
+compares it with C's division. Bullet Hell's room, all four against none, A B and B A:
+
+| handheld | without | with | pairs |
+|---|---|---|---|
+| BattleXP G350 (dArkOS) | 28.97 fps (28.0 - 30.5) | 31.14 (29.6 - 32.8) | 6 + 6 runs, frames over 33 ms 496 -> 392 |
+| RG34XX-SP (Knulli) | 40.66 | 42.85 | 4: +0.4, +4.1, +1.7, +2.5 |
+| RG34XX-SP (muOS) | 41.40 | 44.40 | 4: +4.7, +2.7, +3.3, +1.3 |
+
+The G350's main thread by module, 100 Hz profiles of one run each: the frame 35.6 -> 31.3 ms; managed code 14.7 ->
+12.6, libunity 14.3 -> 12.9 (the invoke path), Mono's runtime 1.4 -> 0.9, anonymous code (thunks) 0.9 -> 0.4. Each
+piece alone was inside the noise on the H700 (runtime pieces +2.4 / -1.7 and +1.6 / +0.6; the inliner -1.9 / +1.4 and
++1.0 / +1.9 fps); together they are not.
+
 ### Pixelator's frame by call site, CPU and GPU (Enter the Gungeon, 2026-11-16)
 
 When a change is worth less than the run-to-run noise of an fps pair (about 1.5 fps on the RG34XX-SP in Bullet

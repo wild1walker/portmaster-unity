@@ -11,6 +11,10 @@
 //   UA_PROF_START=<s>        record once, <s> seconds after the first frame (default: only on prof.req)
 //   UA_PROF_DEPTH=<n>        return addresses kept per sample (default 32, at most 128; 0: pc and lr)
 //   UA_PROF_SCAN=<bytes>     stack scanned for them (default 16384)
+//   UA_PROF_CODE=1           also the bytes of the anonymous code the samples fell in (no module, no JIT method:
+//                            Mono's trampolines, IMT and branch thunks, wrappers it does not name), 128 bytes around
+//                            each address ("code <start> <hex>"), read from this process at the recording's end:
+//                            what profsum.py's --code classes them by (a measurement; the code is the game's own)
 //   touch <root>/prof.req    record now (looked for every second; a number in it is the length in s)
 //   UA_PROF_EVENT=<event>    sample on a CPU event instead of time: a sample each UA_PROF_EVENT_PERIOD
 //                            (default 10000) occurrences on the sampled thread, user code only, e.g.
@@ -147,7 +151,7 @@ static int ev_open(pthr *t, int sig)  // the counter for one thread, its overflo
 }
 
 
-static int g_hz, g_secs = 20, g_depth = 32, g_scan = 16384, g_stride;
+static int g_hz, g_secs = 20, g_depth = 32, g_scan = 16384, g_stride, g_code;
 static double g_start_s = -1;
 static char g_names[MAX_THREADS][17];
 static int g_nnames;
@@ -757,6 +761,9 @@ static const char *base_name(const char *p) { const char *b = strrchr(p, '/'); r
 //                                    (Android libraries by the loader's bias, others by dladdr's base)
 //   jit <start> <size> <name>       a JIT-compiled method (M:Namespace.Class:Method, W: wrappers)
 //   sym <address> <symbol> <offset> dladdr's nearest exported symbol, for glibc libraries
+//   code <start> <hex>              UA_PROF_CODE: the bytes at an anonymous code address (128 from start)
+//   tramp <kind> <address>          UA_PROF_CODE: Mono 2.6's generic trampolines (mono_trampoline_code: 0 JIT, 1 jump,
+//                                   2 class init, 3 generic class init, 4 rgctx lazy fetch, 7 delegate, 10/11 monitor)
 //   cpu <tid> <name> <on-cpu ns> <runqueue ns> <slices> <utime> <stime>   deltas over the recording
 //   stat <cpuN> <user> <nice> <system> <idle> <iowait> <irq> <softirq>  /proc/stat deltas (ticks)
 //   stack <id> <count> <thread> <state> <syscall> <pc> <lr> <exact> <callers...>
@@ -816,9 +823,12 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
     int mono = !up_is_finishing() && mono_ready();
     void *domain = mono ? m_root() : NULL, *mthread = domain ? m_attach(domain) : NULL;
     fprintf(f, "mono %s\n", domain ? "yes" : "no");
+    // UA_PROF_CODE: Mono 2.6's generic trampolines (mono_trampoline_code[MonoTrampolineType]), by kind
+    void **tc = g_code && domain ? (void **)so_dlsym(mono_runtime_lib(), "mono_trampoline_code") : NULL;
+    for (int i = 0; tc && i < 12; i++) if (tc[i]) fprintf(f, "tramp %d %lx\n", i, (unsigned long)(uintptr_t)tc[i]);
     int nmaps = 0;
     mapline *maps = read_maps(&nmaps);
-    uintptr_t mod_lo = 0, mod_hi = 0, jit_lo = 0, jit_hi = 0, last_line = 1;
+    uintptr_t mod_lo = 0, mod_hi = 0, jit_lo = 0, jit_hi = 0, last_line = 1, code_hi = 0;
     int mi = 0;
     for (size_t i = 0; i < na; i++) {
         uintptr_t a = addrs[i];
@@ -855,6 +865,20 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
                 fprintf(f, "jit %lx %x %s\n", (unsigned long)st, (unsigned)sz, tok);
                 jit_lo = st; jit_hi = st + (uintptr_t)(sz > 0 ? sz : 1);
                 if (a < jit_lo || a >= jit_hi) jit_lo = jit_hi = 0;
+                continue;
+            }
+        }
+        // UA_PROF_CODE: anonymous code (no module, no method): its bytes, 128 around the address, inside its mapping
+        if (g_code && m && m->perms[0] == 'r' && m->perms[2] == 'x') {
+            uintptr_t w0 = (a & ~(uintptr_t)63) - 64, w1 = w0 + 128;
+            if (w0 < m->lo) w0 = m->lo;
+            if (w1 > m->hi) w1 = m->hi;
+            if (w0 >= code_hi || w1 > code_hi) {
+                if (w0 < code_hi) w0 = code_hi;
+                fprintf(f, "code %lx ", (unsigned long)w0);
+                for (uintptr_t x = w0; x < w1; x++) fprintf(f, "%02x", *(const unsigned char *)x);
+                fputc('\n', f);
+                code_hi = w1;
             }
         }
     }
@@ -1124,6 +1148,7 @@ void prof_init(const char *root)
     if (g_depth < 0) g_depth = 0;
     if (g_depth > 128) g_depth = 128;              // (8 bits in the sample)
     if (getenv("UA_PROF_SCAN") && atoi(getenv("UA_PROF_SCAN")) > 0) g_scan = atoi(getenv("UA_PROF_SCAN"));
+    g_code = getenv("UA_PROF_CODE") && atoi(getenv("UA_PROF_CODE")) > 0;
     g_stride = HDR + g_depth;
     const char *names = getenv("UA_PROF_THREADS") && *getenv("UA_PROF_THREADS") ? getenv("UA_PROF_THREADS") : "UnityMain,UnityGfxDeviceW";
     char buf[512];
