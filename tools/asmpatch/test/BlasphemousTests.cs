@@ -167,3 +167,83 @@ static partial class TestMain
         finally { ctx.Unload(); }
     }
 }
+
+static partial class TestMain
+{
+    /// blasphemous-video-depth on a stand-in: Cinematics.PlayVideo's `if (renderTexture == null) renderTexture = new
+    /// RenderTexture(1920, 1080, 24); videoImage.texture = renderTexture; player.targetTexture = renderTexture;`
+    /// (with extraRead: one more read of the field, which the patch must refuse).
+    static string VideoDepthGame(string name, bool extraRead)
+    {
+        var d = Dir(name);
+        var u = NewModule("UnityEngine.CoreModule");
+        TypeDefinition Cls(ModuleDefinition m, string ns, string n, TypeReference b = null)
+        {
+            var t = new TypeDefinition(ns, n, TypeAttributes.Public | TypeAttributes.BeforeFieldInit, b ?? m.TypeSystem.Object);
+            m.Types.Add(t); return t;
+        }
+        var obj = Cls(u, "UnityEngine", "Object");
+        var eq = new MethodDefinition("op_Equality", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.HideBySig, u.TypeSystem.Boolean);
+        eq.Parameters.Add(new ParameterDefinition(obj)); eq.Parameters.Add(new ParameterDefinition(obj));
+        var eil = eq.Body.GetILProcessor(); eil.Emit(OpCodes.Ldc_I4_0); eil.Emit(OpCodes.Ret); obj.Methods.Add(eq);
+        var tex = Cls(u, "UnityEngine", "Texture", obj);
+        var rt = Cls(u, "UnityEngine", "RenderTexture", tex);
+        var ctor = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, u.TypeSystem.Void);
+        for (int i = 0; i < 3; i++) ctor.Parameters.Add(new ParameterDefinition(u.TypeSystem.Int32));
+        var cil = ctor.Body.GetILProcessor(); cil.Emit(OpCodes.Ret); rt.Methods.Add(ctor);
+        var getDepth = new MethodDefinition("get_depth", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName, u.TypeSystem.Int32);
+        var gil = getDepth.Body.GetILProcessor(); gil.Emit(OpCodes.Ldc_I4_0); gil.Emit(OpCodes.Ret); rt.Methods.Add(getDepth);
+        var raw = Cls(u, "UnityEngine.UI", "RawImage");
+        var setTex = new MethodDefinition("set_texture", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName, u.TypeSystem.Void);
+        setTex.Parameters.Add(new ParameterDefinition(tex)); var sil = setTex.Body.GetILProcessor(); sil.Emit(OpCodes.Ret); raw.Methods.Add(setTex);
+        var vp = Cls(u, "UnityEngine.Video", "VideoPlayer");
+        var setTarget = new MethodDefinition("set_targetTexture", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName, u.TypeSystem.Void);
+        setTarget.Parameters.Add(new ParameterDefinition(rt)); var vil = setTarget.Body.GetILProcessor(); vil.Emit(OpCodes.Ret); vp.Methods.Add(setTarget);
+        u.Write(Path.Combine(d, "UnityEngine.CoreModule.dll"));
+
+        var m = NewModule("Assembly-CSharp");
+        var c = new TypeDefinition("Framework.Managers", "Cinematics", TypeAttributes.Public | TypeAttributes.BeforeFieldInit, m.TypeSystem.Object);
+        var f = new FieldDefinition("renderTexture", FieldAttributes.Private, m.ImportReference(rt));
+        var img = new FieldDefinition("videoImage", FieldAttributes.Public, m.ImportReference(raw));
+        var pl = new FieldDefinition("player", FieldAttributes.Public, m.ImportReference(vp));
+        c.Fields.Add(f); c.Fields.Add(img); c.Fields.Add(pl);
+        var pv = new MethodDefinition("PlayVideo", MethodAttributes.Private | MethodAttributes.HideBySig, m.TypeSystem.Int32);
+        var il = pv.Body.GetILProcessor();
+        var skip = il.Create(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, m.ImportReference(eq)); il.Emit(OpCodes.Brfalse, skip);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldc_I4, 1920); il.Emit(OpCodes.Ldc_I4, 1080); il.Emit(OpCodes.Ldc_I4_S, (sbyte)24);
+        il.Emit(OpCodes.Newobj, m.ImportReference(ctor)); il.Emit(OpCodes.Stfld, f);
+        il.Append(skip); il.Emit(OpCodes.Ldfld, img); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f); il.Emit(OpCodes.Callvirt, m.ImportReference(setTex));
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, pl); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f); il.Emit(OpCodes.Callvirt, m.ImportReference(setTarget));
+        if (extraRead) { il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f); il.Emit(OpCodes.Callvirt, m.ImportReference(getDepth)); }
+        else il.Emit(OpCodes.Ldc_I4_0);
+        il.Emit(OpCodes.Ret);
+        c.Methods.Add(pv);
+        m.Types.Add(c);
+        m.Write(Path.Combine(d, "Assembly-CSharp.dll"));
+        return d;
+    }
+
+    static void VideoDepthTests()
+    {
+        var d = VideoDepthGame("vd", false);
+        var o = Path.Combine(tmp, "vd-out");
+        var (st, outp) = Patch(d, o, only: new string[0], with: new[] { "blasphemous-video-depth" });
+        var patched = Path.Combine(o, "Assembly-CSharp.dll");
+        Check(st == 0 && outp.Contains("ok   blasphemous-video-depth") && File.Exists(patched), "blasphemous-video-depth: applied");
+        if (File.Exists(patched))
+        {
+            var md = AssemblyDefinition.ReadAssembly(patched).MainModule.GetType("Framework.Managers.Cinematics").Methods.First(x => x.Name == "PlayVideo");
+            var ctor = md.Body.Instructions.First(i => i.OpCode.Code == Code.Newobj);
+            Check(Cecil.ConstInt(ctor.Previous) == 0 && Cecil.ConstInt(ctor.Previous.Previous) == 1080, "blasphemous-video-depth: new RenderTexture(1920, 1080, 0)");
+            File.Copy(patched, Path.Combine(d, "Assembly-CSharp.dll"), true);
+            (st, outp) = Patch(d, Path.Combine(tmp, "vd-again"), only: new string[0], with: new[] { "blasphemous-video-depth" });
+            Check(st == 0 && outp.Contains("done blasphemous-video-depth"), "blasphemous-video-depth: a second run finds it done");
+        }
+        var d2 = VideoDepthGame("vd-read", true);
+        (st, outp) = Patch(d2, Path.Combine(tmp, "vd-read-out"), only: new string[0], with: new[] { "blasphemous-video-depth" });
+        Check(st == 0 && outp.Contains("n/a  blasphemous-video-depth") && outp.Contains("reads renderTexture otherwise"), "blasphemous-video-depth: another read of the field: left alone");
+        (st, outp) = Patch(d, Path.Combine(tmp, "vd-skip"));
+        Check(outp.Contains("skip blasphemous-video-depth"), "blasphemous-video-depth: opt-in");
+    }
+}

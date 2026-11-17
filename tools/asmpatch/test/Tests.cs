@@ -44,6 +44,7 @@ static partial class TestMain
             InlineTests();
             BlasphemousTests();
             BlasphemousCatalogsTests();
+            VideoDepthTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }
