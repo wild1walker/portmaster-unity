@@ -454,11 +454,19 @@ class CheckTest(unittest.TestCase):
             put(os.path.join(d, 'data.unity3d'), archive([('globalgamemanagers', b'not a serialized file' * 4)]))
             r = P.survey_data(d, deep=False)
             self.assertTrue(any(n.startswith('globalgamemanagers: not read') for n in r['notes']), r['notes'])
-            P.COMPRESSED_SURVEY_MAX, keep = 16, P.COMPRESSED_SURVEY_MAX
-            try:
-                self.assertEqual(P.survey_data(d, deep=False)['notes'], [])     # too big to open: not tried
-            finally:
-                P.COMPRESSED_SURVEY_MAX = keep
+
+    def test_compressed_read_file(self):
+        # only the blocks a file spans are decompressed (an archive can unpack to gigabytes: Blasphemous 6 GB)
+        from test_android_data import archive
+        from pmunity.unpack import Archive
+        with tempfile.TemporaryDirectory() as t:
+            p = os.path.join(t, 'data.unity3d')
+            a, b = bytes(range(256)) * 300, b'globalgamemanagers bytes' * 500
+            put(p, archive([('level0', a), ('globalgamemanagers', b)]))
+            arc = Archive(p)
+            self.assertEqual(arc.read_file('globalgamemanagers'), b)
+            self.assertEqual(arc.read_file('level0'), a)
+            self.assertIsNone(arc.read_file('missing'))
 
     def test_unsupported(self):
         with tempfile.TemporaryDirectory() as t:

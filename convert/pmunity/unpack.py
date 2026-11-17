@@ -86,6 +86,26 @@ class Archive:
             name, q = _cstr(bi, q)
             self.files.append((off, sz, fl, name.decode('utf-8')))
 
+    def read_file(self, name):
+        """One file's bytes, decompressing only the blocks it spans (a 173 MB data.unity3d can unpack
+        to 6 GB: Blasphemous; its globalgamemanagers is a few MB), or None when it is not there."""
+        hit = next(((off, sz) for off, sz, _, n in self.files if n == name), None)
+        if hit is None:
+            return None
+        off, sz = hit
+        out, upos = bytearray(), 0
+        with open(self.path, 'rb') as f:
+            for fpos, csz, usz, bfl in self.blocks:
+                if upos + usz > off and upos < off + sz:
+                    f.seek(fpos)
+                    b = _decompress(f.read(csz), usz, bfl & 0x3f)
+                    lo, hi = max(off - upos, 0), min(off + sz - upos, usz)
+                    out += b[lo:hi]
+                upos += usz
+                if upos >= off + sz:
+                    break
+        return bytes(out)
+
     def extract(self, out_dir, log=None):
         """Writes every file of the archive under out_dir; returns their names."""
         root = os.path.realpath(out_dir)

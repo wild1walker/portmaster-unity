@@ -708,9 +708,6 @@ def plugin_notes(names):
     return out
 
 
-COMPRESSED_SURVEY_MAX = 768 << 20     # a compressed build's data.unity3d up to this size is opened for its settings
-
-
 def survey_data(data, deep=True):
     """From the serialized files (UnityPy, read only): player settings, the scripts scenes use
     (input modules, text fields), video, texture formats, scenes."""
@@ -724,14 +721,19 @@ def survey_data(data, deep=True):
         return r
     ggm = os.path.join(data, 'globalgamemanagers')
     u3d = os.path.join(data, 'data.unity3d')
-    if os.path.isfile(ggm) or os.path.isfile(u3d) and os.path.getsize(u3d) <= COMPRESSED_SURVEY_MAX:
+    if os.path.isfile(ggm) or os.path.isfile(u3d):
         try:
             if os.path.isfile(ggm):
                 objects = UnityPy.load(ggm).objects
-            else:                                   # a compressed build: its globalgamemanagers in the archive
-                env = UnityPy.load(u3d)
-                sf = (getattr(env.file, 'files', None) or {}).get('globalgamemanagers')
-                objects = list(sf.objects.values()) if sf is not None else []
+            else:                                   # a compressed build: its globalgamemanagers out of the archive,
+                from .unpack import Archive         # only the blocks it spans (the whole archive can unpack to
+                raw = Archive(u3d).read_file('globalgamemanagers')   # gigabytes: Blasphemous 6 GB)
+                env = UnityPy.load(raw) if raw else None
+                if env is not None and not any(isinstance(f, UnityPy.files.SerializedFile) for f in env.files.values()):
+                    raise ValueError('not a serialized file')
+                objects = list(env.objects) if env is not None else []
+                if deep:
+                    r['notes'].append('a compressed build: its scenes and textures are surveyed after `pmunity unpack <data>` (or pmu unpack)')
             for o in objects:
                 n = o.type.name
                 if n == 'PlayerSettings':
