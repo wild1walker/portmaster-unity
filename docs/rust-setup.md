@@ -341,6 +341,24 @@ serialized files): the 499 changed entries byte-identical to the step's referenc
 other entries untouched, a second run changes nothing (0 entries found to replace). On a BattleXP G350 (dArkOS) the installed
 1.9 GB APK took 1 min 58 s (a second run 52 s, nothing to change), every changed byte the reference's.
 
+### `fmodcatalogs`
+
+pmu's own step (convert's `fmodcatalogs`, for Blasphemous and asmpatch's `blasphemous-catalogs`): what
+`Resources.LoadAll<Framework.Audio.FMODAudioCatalog>("FMODCatalogs/Enemies")` returns, in its order, with each
+catalog's `Owner` class, written to `fmodcatalogs.txt` in the data folder (`android_data.data_path` puts it in
+`Game_Data/` beside the APK, where the patched game reads it). After the header `# pmu fmodcatalogs 1`, one line a
+catalog: `<container path> TAB <owner's namespace.class, or ->`. The order is the ResourceManager's container
+(globalgamemanagers), whose keys Unity keeps sorted (a map): the entries under the path, each a prefab's root
+GameObject whose FMODAudioCatalog component is read from its bytes (no type trees in a player's data) in the order
+the class declares its fields (m_GameObject, m_Enabled, m_Script, m_Name, AssociatedCatalog, HasAssociatedCatalog,
+Owner; the patch checks that order in the game's assembly), the owner's class from its MonoScript. Anything it
+cannot be sure of (keys out of order, a key that starts with the path without being under it, two catalogs on a
+GameObject or one in a child, an owner without its script, an owner that is not a component) writes no list, and
+the patched game then loads them all at startup as the original does. A missing object behind `Owner` is `-`
+(Unity's null). Blasphemous (Steam, Linux, 2017.4.40f1): 66 catalogs, 59 with an owner, 52 owner classes, in 0.7 s;
+the same lines as an independent UnityPy read. The unit tests (`cargo test -p convert --lib fmodcatalogs`) cover
+the field reader and the path range.
+
 ### `pmu il2cpp`
 
 `pmu il2cpp <data> <out> --on-device [--abi --home --pkg --jobs --keep-cpp --strip --unity

@@ -6,6 +6,7 @@ pub mod audio;
 pub mod compute;
 pub mod d3d11;
 pub mod edits;
+pub mod fmodcatalogs;
 pub mod fusedpost;
 pub mod grabfetch;
 pub mod lazy;
@@ -58,6 +59,12 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         (
             lazy::STEP.into(),
             Arc::new(|job: &mut Job, _: &Args| lazy::run(job)),
+        ),
+        // pmu's own: Blasphemous's enemy sound catalogs and their owners' classes, for asmpatch's
+        // blasphemous-catalogs (loaded per level instead of all at startup)
+        (
+            fmodcatalogs::STEP.into(),
+            Arc::new(|job: &mut Job, _: &Args| fmodcatalogs::run(job)),
         ),
     ]
 }
