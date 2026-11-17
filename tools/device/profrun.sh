@@ -70,6 +70,11 @@ fi
 # clock, no device, no process: never the pipe to aplay, also where SDL has no dummy driver)
 unset UA_AUDIO AUDIODEV ANDROID_SLES_PIPE_CMD
 export SDL_AUDIODRIVER=dummy ANDROID_SLES_OUTPUT=none UA_FPS=${UA_FPS:-1}
+# the flipbook stand-in (UA_FLIPBOOK) as the launcher runs it: ua_host loads uaflipbook.dll from beside itself,
+# here bench/, where there is none (the flipbook then off: "no UAFlipbook.Init"), so the game folder's copy
+if [ -n "${UA_FLIPBOOK:-}" ] && [ -z "${UA_FLIPBOOK_DLL:-}" ] && [ -f "$ROOT/uaflipbook.dll" ]; then
+  export UA_FLIPBOOK_DLL=$ROOT/uaflipbook.dll
+fi
 PM=${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster
 if [ -z "${SDL_GAMECONTROLLERCONFIG:-}" ] && [ -z "${SDL_GAMECONTROLLERCONFIG_FILE:-}" ]; then
   for f in "$PM"/*/gamecontrollerdb.txt; do [ -f "$f" ] && export SDL_GAMECONTROLLERCONFIG_FILE="$f" && break; done
