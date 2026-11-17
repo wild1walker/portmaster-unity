@@ -815,6 +815,21 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   sound decoded instead of 36 (`audio.lowmem_pcm_budget_mb`): City of Tears on muOS 663 -> 597 MB, the
   lowest available 266 -> 332 MB, 56.0 -> 56.3 fps. The G350 with 126 MB held had hung in that scene.
 
+### A pixel-perfect picture on another panel
+
+A game that draws a fixed picture and shows it at the largest whole scale that fits (Blasphemous: 640x360,
+its Options' "Pixel perfect", the default; Enter the Gungeon: 480x270) shows it at 1x in the middle of a
+720x480 panel, black on all four sides. Fill the width without stretching, as the Gungeon port does: Unity's
+window the smallest size of the panel's aspect that holds the picture (`UA_RENDER_SIZE`, computed at each
+launch from `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` by a `post_install` hook that writes it into `answers.env`), so
+the game keeps its 1x and the display engine (or the GPU in one blit) scales the window to the panel. Mind
+ua_host's sizes: whole steps of the panel's aspect, even (720x480: m x 3x2 with m even), so 640x426 becomes
+636x424, which no longer holds 640 and makes such a game fall back to its own uneven scaling or, below 1x,
+to nothing sensible; take the first step that holds the picture (642x428: the picture 718x404 of 720x480).
+Blasphemous on the RG34XX-SP (fbdev, the display engine scales): the menu 59.6 fps (Knulli) and 61.4 (muOS) with it and without. A panel the
+picture fills at a whole scale (640x480: 640x360 at 1x) gets none. The game's own scaling option ("Scale",
+Options, Video) fills too, by scaling the picture unevenly: a choice for the player, not the port.
+
 ### Videos
 
 `port check` lists the game's clips and their codecs; what the port does with them depends on the
@@ -862,6 +877,21 @@ costs only while it plays: game play frames decode nothing.
   intro: on a TrimUI Smart Pro (A133P) 21.1 -> 23.8 pictures a second and the game 42 -> 48 fps; on
   an RG Cube XX (H700) the CPU during the intro 83 -> 56 %. The library is LGPL-2.1-or-later and `pmhwdec-cedard` GPL-2.0-or-later: the port ships their licences and says
   where their source is; this repository never ships them.
+- **Clips of 60 pictures a second** (Blasphemous: 15 VP8 clips, 1920x1080 at 60, 201 MB, and one
+  H.264 clip in an MP4 that shares a `.resource` file with a VP8 one): too many pictures for the path
+  Unity's player takes them by, whatever decodes them. RG34XX-SP, `umbench` alone (Knulli and muOS
+  alike): libvpx 0.6 - 0.9 times the clips' speed at full size, 2.1 - 2.3 at 960x540; libpmhwdec
+  on the video engine 1.3 - 1.4 at full size, 4.2 at 960x540. In the game (muOS, the 7.5 s boot clip,
+  pictures shown counted from `UM_TRACE=1`'s releases): libvpx at full size 113 of 451 (the player
+  seeks ahead again and again), the video engine at full size 401 (the render thread 36 % busy taking
+  1080p pictures), libvpx at 960x540 430 with the four cores 28 - 42 % busy, the video engine at
+  960x540 421 with them 31 - 34 % busy. Such a port sets
+  `on_hardware = "smaller"` in `[convert.video]`: the setup and the update make the clips smaller
+  where libpmhwdec decodes VP8 too (the default, `"full"`, leaves them as they are there), and the
+  video engine then decodes the smaller ones. The step leaves a clip that is not WebM as it is (before
+  2026-11-17 Blasphemous's MP4 stopped it with "webm: bad element id"). In the 1 GB arm64 container
+  pmu made Blasphemous's 15 clips smaller (24,800 pictures, 201 -> 128 MB) in 81 s on four of the Mac's
+  cores; an H700 takes about 63 ms a picture (Hollow Knight's), about 26 minutes of setup.
 - **VP9, Opus, others**: the table in runtime/media/README.md says which decoder takes each.
 
 ## 4. The setup on the handheld
@@ -1191,6 +1221,13 @@ The rehearsal does not cover what only a handheld has. Check, with the release z
   a PC: docs/android-data.md, "Saves", and `pmunity prefs`), the exit hotkey, the frame rate
   (`UA_FPS=5` in `log.txt`);
 - the display path (`UA_DISPLAY`: Mali fbdev or SDL; `[display]` in `log.txt`).
+
+Detaching a run over adb (Knulli): adbd ends the shell's session when its command line ends, and a
+`setsid -f` job that is the command line's last command can be killed before it has left the session (a
+script whose first line never ran; 2026-11-17, twice). Put another command after it (`setsid -f ./run.sh
+> run.out 2>&1 < /dev/null; sleep 1; echo started`) and check that the run started (its log exists)
+before waiting for it to end: test.sh and profbench.sh run theirs through `dev_sh`, which appends its
+marker line.
 
 ## 9. By hand
 
