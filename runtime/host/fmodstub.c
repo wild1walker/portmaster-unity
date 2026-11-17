@@ -437,11 +437,15 @@ static int Studio_EventDescription_CreateInstance(uintptr_t d, uintptr_t *inst)
 
 // --- event instances
 // an instance handle's slot: valid until released and, with the player, until it has stopped
+// the instance whose callback runs (Studio_System_Update, the game's thread): as in FMOD, a released
+// instance is valid in its own callbacks until DESTROYED returns, also when the player let it go already
+// (the game reads its user data there: Blasphemous frees its GCHandle on DESTROYED)
+static int g_cb_slot;
 static int INST(uintptr_t h)
 {
     int i = SLOT(h, T_INST, g_inst);
     if (i <= 0) return -1;
-    if (g_inst[i].released && (!g_inst[i].pid || !fmp_valid(g_inst[i].pid))) return -1;
+    if (g_inst[i].released && (!g_inst[i].pid || !fmp_valid(g_inst[i].pid)) && i != g_cb_slot) return -1;
     return i;
 }
 static void inst_free_params(int i)
@@ -648,6 +652,7 @@ static int Studio_System_Update(uintptr_t s)
     fmp_cb c;
     while (fmp_poll(&c)) {
         int i = 0;
+        g_cb_slot = 0;
         pthread_mutex_lock(&M);
         for (int k = 1; k < SLOTS; k++) if (g_inst[k].h.used && g_inst[k].pid == c.inst) { i = k; break; }
         event_cb cb = i ? (event_cb)g_inst[i].cb : NULL;
@@ -655,6 +660,7 @@ static int Studio_System_Update(uintptr_t s)
         uintptr_t h = i ? H(T_INST, g_inst, i) : 0;
         pthread_mutex_unlock(&M);
         if (!i) continue;
+        g_cb_slot = i;
         if (c.type == FMP_CB_CREATE_PROGRAMMER_SOUND) {
             prog_props pp = { c.name, 0, -1 };
             if (cb && (mask & c.type)) cb(c.type, h, &pp);
@@ -678,6 +684,7 @@ static int Studio_System_Update(uintptr_t s)
         } else cb(c.type, h, NULL);
         if (c.type == FMP_CB_DESTROYED) { pthread_mutex_lock(&M); inst_free(i); pthread_mutex_unlock(&M); }
     }
+    g_cb_slot = 0;
     // released instances the player let go of without a DESTROYED callback
     pthread_mutex_lock(&M);
     for (int k = 1; k < SLOTS; k++) if (g_inst[k].h.used && g_inst[k].released && !fmp_valid(g_inst[k].pid)) inst_free(k);
