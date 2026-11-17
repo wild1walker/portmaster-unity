@@ -359,6 +359,71 @@ the patched game then loads them all at startup as the original does. A missing 
 the same lines as an independent UnityPy read. The unit tests (`cargo test -p convert --lib fmodcatalogs`) cover
 the field reader and the path range.
 
+### `exact_shaders` and `exactindex`: palette textures
+
+Some shaders read a texel as data, not as a colour: Blasphemous's `Maikel/MaikelSpriteMasterShader` with the
+keyword `PALETTE_ON` takes the blue channel as the x of a 256x1 palette (`_PaletteTex`, the skins) and outputs
+that colour, with the texel's alpha; red and green never reach the picture. ASTC (or a scale) changes blue values,
+another palette entry comes out, and the Penitent had magenta and cyan pixels. Two settings of the textures step
+and one step after it (crates/convert/src/steps/exactindex.rs):
+
+```toml
+[convert.textures]
+exact_shaders = "^Maikel/MaikelSpriteMasterShader"   # the shaders' names (a regular expression)
+exact_keywords = "PALETTE_ON"                         # the keywords a material must have, all of them
+exact_index = "blue"                                  # step exactindex: one byte a texel where provably exact
+exact_index_skip = "^ReplicateSprite$"                # scripts that copy a renderer's sprite elsewhere
+# exact_names = "..."                                 # textures kept by name (a script's own use)
+# steps = [..., "textures", "exactindex", ...]
+```
+
+**What the palette programs sample** (the textures step leaves those as the game has them): the materials of
+those shaders with those keywords, their own textures, the sprite of every SpriteRenderer drawn with one, and
+the sprites the clips of the Animators above such a renderer set on it. A clip names its target by the CRC-32 of
+the GameObject's path below the Animator (`genericBindings[].path`; "" for the Animator's own); a clip whose sprite
+curves name a palette renderer's path counts. Blasphemous: 109 textures (the Penitent's animations, every
+execution as the Penitent's renderer draws it, a few props), 547 MB as RGBA32. (A first version took every clip of
+every Animator above such a renderer: 137 textures, 1,032 MB, executions drawn through other materials among them.)
+
+**exactindex** stores those it can prove are drawn only through those programs as R8: the index, transparent texels
+at a reserved index K that no opaque texel of them uses (Blasphemous: 1). The programs of those keywords get, after
+their own `V = texture(_MainTex, uv).wxyz;` (checked: one such line, V.y and V.z written before anything reads
+them, writes inside a block not counted), the line
+
+```text
+if (V.x == 1.0 && V.z == 0.0 && V.w == 0.0) { V.w = V.y; V.x = (V.y == K) ? 0.0 : 1.0; }
+```
+
+An R8 texel samples as (r, 0, 0, 1); an RGBA32 texel reads as before unless it is (r, 0, 0, 1) with r > 0, which
+the step checks for in every RGBA32 texture those programs sample (one there stops the step: everything stays as it
+is). Proven, or left as the game has it:
+- every use of every sprite of the texture goes through such a renderer: a renderer of another material, a clip
+  whose sprite curves name several paths (or another object curve), a script of `exact_index_skip` on the
+  renderer or above it, any other object that names the sprite, the texture, a clip that sets it or a controller
+  that holds that clip (a MonoBehaviour field read with its class's layout, monotree.rs; a UI Image; a particle
+  system; the ResourceManager's container, where Resources.Load finds it) keep it as it is. A raw PPtr match in an
+  object whose layout is not known counts as a use (PlayMakerFSM's serialized actions: some textures of
+  `sharedassets11` stay RGBA32 for that);
+- point filtering, one mip, inline pixels, alpha 0 or 255 only (a texture with other alpha values stays RGBA32: a
+  two-byte (index, alpha) form would sample as (r, g, 0, 1), and Blasphemous's RGBA32 palette textures have texels
+  like (255, 204, 0, 255) that a test for it would take);
+- every texel reads back as the shader read it (index where the alpha is not 0, the alpha).
+
+The plan (textures, K) goes into the journal with the textures step, so a setup that stops goes on with the same
+one. Blasphemous: 24 textures to R8 (399 -> 100 MB: the TPO-recolour executions, the Penitent's respawn, lever and
+chest animations); the Penitent's own sprites stay RGBA32, because `ReplicateSprite` copies them every frame to two
+renderers whose shaders (`Maikel/StencilMaskSword`, `Maikel/StencilMaskedSwordEffect`) compare their colour with a
+target colour and read their alpha.
+
+**Checked by rendering.** Each rewritten program, the original program beside it, through Mesa (llvmpipe, GLES 3.2,
+surfaceless EGL), one fragment a texel: every R8 texture with the new program against its RGBA32 original with the
+old one, and three RGBA32 textures the programs still sample (the Penitent's idle and dodge, the Extras menu's skin
+preview) with both programs: all 24 programs (the 8 PALETTE_ON variants of each of the three shaders) with the
+default palette and white, the first with all 14 palettes and two more vertex colours; 1,080 pairs, every byte the
+same (a control: the R8 texture through the old program differs in 1,572,860 bytes of 2,097,152). The harness:
+tools/analysis/glcmp (`docker build -t pmu-glcmp tools/analysis/glcmp`; `prep.py` writes the programs, textures and
+palettes from a conversion before and after the step with UnityPy; `run.sh` renders and compares in the container).
+
 ### `pmu il2cpp`
 
 `pmu il2cpp <data> <out> --on-device [--abi --home --pkg --jobs --keep-cpp --strip --unity
