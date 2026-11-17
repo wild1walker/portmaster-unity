@@ -1599,6 +1599,19 @@ def suggest_config(rep):
                      f'sample them): more than a 1 GB device can hold next to the game. The textures step is '
                      f'suggested (convert.steps), re-encoding them as ASTC at the GPU\'s own size; remove it '
                      f'only for a device with the memory to spare')
+    if 'blasphemous-catalogs' in (rep.get('asmpatch_would') or []):
+        # Blasphemous: every enemy's sound catalog, and with each its enemy, loaded at startup (docs/porting.md,
+        # "A startup load that pulls in whole enemies"): the list from the setup's step, the patch, Game_Data/
+        steps = cv.setdefault('steps', list(DEFAULT_STEPS))
+        if 'fmodcatalogs' not in steps:
+            steps.append('fmodcatalogs')
+        a = ad.get('asmpatch')
+        ad['asmpatch'] = (a if isinstance(a, list) else ['auto'] if a == 'auto' else []) + ['blasphemous-catalogs']
+        ad['data_path'] = True
+        notes.append("Blasphemous loads every enemy's sound catalog at startup, and each catalog references its enemy "
+                     "(all their sprite sheets: more than a 1 GB handheld has): the fmodcatalogs step "
+                     "(convert.steps) lists them and asmpatch's blasphemous-catalogs loads each level's own when it "
+                     "needs them (android_data.asmpatch, data_path = true for the list in Game_Data/)")
     if rep.get('size_mb', 0) > 600:
         notes.append(f"{rep['size_mb']} MB: the handheld's setup needs about 2-3 times that free while it runs")
     return sug
