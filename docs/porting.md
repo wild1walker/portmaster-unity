@@ -763,6 +763,39 @@ after their owners were let go), no owner type different; memory the same as the
 there is nothing there to free yet; the saving shows only after areas with other enemies, which a test reaches
 only by playing there (the console is a debug build's, and a save made for it would be made-up game state).
 
+Where the rest of a level's memory goes, and what can go exactly (Blasphemous's first level on the RG34XX-SP,
+Knulli, 2026-11-17; the armv7 player's memory behaves as on the G350). The game at about 740 MB resident: the GPU
+driver's pages about 445 MB (Mali's `gpu_memory`: textures 370 MB, render textures 21 MB), Mono's heap about 52 MB,
+and 179 MB of malloc. Naming the malloc took two tools: `UA_MEM_LEDGER=2` (runtime.md) for the Android libraries'
+blocks, and for everything else a measurement-only `LD_PRELOAD` ([tools/analysis/mtrack](../tools/analysis/mtrack/mtrack.c)) that wraps glibc's malloc family (through
+`__libc_malloc` and friends) and files each block under the library its return address is in (`/proc/self/maps`
+read with raw syscalls; no `dladdr` inside malloc), with the callers inside ua_host symbolized from
+`ua_host.debug`. Result: Unity 96.9 MB, Mono 39.0, ua_host 14 - 27 (the video decoder's frames 4.5, the FMOD
+player's bank trees 4.5, its Vorbis decoders 2), the Mali driver 13.9, libstdc++/SDL/libc about 1. The ledger's
+block-size split and biggest blocks then showed what in them is not the game's own: 24 of Mono's and Unity's
+blocks begin with `MZ`, whole copies of the assemblies (15.8 MB) the APK holds unchanged. What went, each exact:
+
+- the assemblies read in place from the APK (`UA_MONO_IMAGE_MAP=1`, runtime.md): anonymous memory 238 -> 222 MB,
+  Mono's malloc 39.0 -> 28.3, Unity's 97.8 -> 92.7; the same bytes now file pages the kernel can drop;
+- the other languages' fonts (pmu's `lazy` step + `UA_UNLOAD_ASSETS`, as for Hollow Knight above): the Traditional
+  Chinese font (`MSJhengHei-cut`, an 8 MB RGBAHalf atlas) and the Chinese, Korean and Japanese TextMeshPro atlases:
+  textures 370.3 -> 360.3 MB, Mali's pages -13.9 MB, the lowest MemAvailable 170 -> 185 MB. In English the Korean
+  atlas came back in the main menu (its text uses it: the census logs `loaded again after it was given back: in
+  use, kept`), as the unload is meant to; the others stayed out through the first level;
+- the video's render texture without a depth buffer (asmpatch `blasphemous-video-depth`): render textures
+  21.1 -> 13.2 MB, Mali's pages -7.1 MB;
+- the FMOD player's parsed bank trees freed after reading (ua_host): about 4.5 MB.
+
+What stays and why: Unity's 97 MB is its objects (234,000 blocks of 65 - 256 bytes: 11,950 sprites, 8,991 game
+objects, 4,584 text assets) and its allocators' blocks; Mono's 28 MB its metadata (498,000 blocks of 64 bytes or
+less) and its memory pools (1,700 blocks of 8 - 16 KB); neither has a copy of anything to drop. The census's
+`[dump] unity memory: allocated 76.8 MB` is Unity's own count of the same allocations, less its allocators' slack.
+All four together on the release install's data (no video-depth patch in it): the game 747 -> 705 MB resident,
+the lowest MemAvailable in the run 186 -> 214 MB, 59.6 fps either way. Mali's `gpu_memory` page count moves by
+several MB from run to run with nothing changed: compare the census's texture totals for a texture cut.
+The two tools are measurements: the ledger's lock around every allocation and the preload's table cost frame rate
+and 16 MB each.
+
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
 
 The R36S class is PortMaster's most common handheld and the slowest these tools aim at: four Cortex-A35
