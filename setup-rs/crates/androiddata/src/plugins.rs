@@ -1531,7 +1531,17 @@ pub fn summary(rep: &Survey) -> Vec<String> {
             e.get("note").map(Json::py_str).unwrap_or_default()
         ));
     }
-    if let Some(f) = &rep.fmod {
+    // (no FMOD library to supply where the map gives FMOD's DllImports ua_host's built-in FMOD: stub fmod)
+    let fm: Vec<&Json> = rep
+        .modules
+        .as_obj()
+        .unwrap()
+        .iter()
+        .filter(|(n, _)| n.as_str() == "fmod" || n.as_str() == "fmodstudio")
+        .map(|(_, e)| e)
+        .collect();
+    let all_stub = !fm.is_empty() && fm.iter().all(|e| e.get("use").and_then(Json::as_str) == Some("stub"));
+    if let Some(f) = rep.fmod.as_ref().filter(|_| !all_stub) {
         let s = f.get("supply").unwrap();
         let a = s.get("android").unwrap();
         let files: Vec<String> = a

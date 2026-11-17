@@ -1059,7 +1059,9 @@ def summary(rep):
         out.append(f'{name} ({what}, {e["entries"]} entry points): {e["use"]}'
                    + (f' {e["stub"]}' if e.get('stub') else '') + f' - {e["note"]}')
     f = rep.get('fmod')
-    if f:
+    # (no FMOD library to supply where the map gives FMOD's DllImports ua_host's built-in FMOD: stub fmod)
+    fm = [e for n, e in rep['modules'].items() if n in ('fmod', 'fmodstudio')]
+    if f and not (fm and all(e['use'] == 'stub' for e in fm)):
         s = f['supply']
         out.append(f'FMOD {f["header_version"]}: put {", ".join(s["android"]["files"])} of FMOD Engine {s["version"]} '
                    f'for Android ({s["android"]["abi"]}) in {s["android"]["to"]}' + (f'; {f["warning"]}' if f.get('warning') else ''))
