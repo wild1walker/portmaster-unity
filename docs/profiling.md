@@ -2884,3 +2884,19 @@ streams: streaming them would save that, at the risk of the layers drifting apar
 an audible change: not done. The async upload buffer is 4 MB and persistent (`UA_ASYNC_UPLOAD=transient`, not
 measured). The Mali driver's own heaps and frame memory (about 18 MB on the G350) and its context pools are the
 driver's. Mono's heap (96 - 112 MB) and its runtime's 41 MB of malloc are Mono's side, not looked at here.
+
+### Rewired's per-frame work (Blasphemous, 2026-11-17)
+
+Blasphemous's first level on the RG34XX-SP (Knulli, walking and jumping, 59.5 fps, `UA_PROF=200` for 15 s):
+UnityMain is on a CPU 70 % of the time; Rewired (2017.4's `Rewired_Core.dll`, the Unity input source, the
+`rewired-android` patch) is on the stack in about 9 % of its samples: `InputManager_Base.DoEarlyUpdate` 8.9 %
+(it includes `Update` and `DoUpdate`; nested, so not to be added) and `FixedUpdate` 0.9 %, about 1.5 ms of a
+16.7 ms frame. Within it: the keyboard (`ThreadSafeUnityInput/Keyboard.Update`, 132 `Input.GetKey` calls a
+frame, and `Keyboard.UpdateData` over its button states) 2.3 %, the mouse (7 `Input.GetButton` and 3
+`Input.GetAxisRaw` by name, `mousePosition`, `mousePresent`) 1.0 %, the joystick's axes and buttons by name
+1.7 %, controller maps (`MapHelper.GetMaps<T>`, a generic virtual call that Mono 2.6 resolves through
+`compile_generic_method` every time) 1.1 %, the rest the players' action evaluation. Rewired monitors the
+keyboard and mouse because the game's Rewired data leaves them on for Android. Skipping them is not exact in
+general: ua_host can send key events (`UA_KEYMAP`, the on-screen keyboard, Android's Back as Escape) and
+pointer motion (`UA_POINTER`), so it would have to be a port's choice tied to those being off, and it is worth
+about 0.5 ms a frame. Not done; the G350's budget may make it worth an opt-in later.
