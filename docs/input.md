@@ -291,6 +291,21 @@ first and up with the last, and a key that passes from one to the other in one e
 `alt`, `pageup`, `pagedown`, `home`, `end`, `insert`, `minus`, `equals`, `comma`, `period`,
 `slash`, `grave`, `back` (Android's back key, which Unity reads as Escape).
 
+### Pad buttons that Unity also reports as keys
+
+Unity's Android player turns some gamepad buttons into keyboard keys as well as joystick buttons. Unity
+2017.4 on ua_host, read with `Input.GetKey` (a test build that logged every true answer): A, B, X, Y give
+joystick buttons 0 - 3 only; L1 gives LeftShift and button 4, R1 RightShift and button 5, L2 LeftAlt and
+R2 RightAlt (no button: the triggers are axes), Start Return and button 10; Select also moved Blasphemous
+to the keyboard. Libraries that poll the keyboard through `Input.GetKey` then see a key pressed: Rewired's
+keyboard controller does, and Blasphemous's `InputManager` switched its main input to the keyboard (its
+prompts to keyboard glyphs) at every press of those buttons and back at the next stick or face button.
+A port whose players have no keyboard turns Rewired's own "Disable Keyboard" platform option on with
+asmpatch's opt-in `rewired-no-keyboard` (`android_data.asmpatch = ["auto", "rewired-no-keyboard"]`):
+Blasphemous then stays on the pad's glyphs (RG34XX-SP, Knulli and muOS: no switch over ten buttons). Not for
+ports that send keys themselves (`UA_KEYMAP`, `UA_KEYBOARD`, the on-screen keyboard): Rewired would ignore
+those too.
+
 ## Menus made for touch
 
 Unity UI (uGUI) already moves between buttons and presses them from the Input Manager's default
