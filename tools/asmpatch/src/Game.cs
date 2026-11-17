@@ -58,8 +58,11 @@ sealed class Game : IAssemblyResolver
     /// <summary>References a patch added to an assembly that the game's Mono cannot load: the
     /// patcher's own runtime (System.Private.CoreLib, System.Runtime, netstandard) when it was not
     /// referenced before.</summary>
+    /// <summary>Tests only: stand-ins built for .NET whose patch imports from the runtime's CoreLib (run in .NET, not Mono).</summary>
+    internal static bool AllowForeign;
+
     public IEnumerable<string> ForeignReferences(AssemblyDefinition a) =>
-        a.MainModule.AssemblyReferences.Select(r => r.Name).Except(refsBefore[a])
+        AllowForeign ? Enumerable.Empty<string>() : a.MainModule.AssemblyReferences.Select(r => r.Name).Except(refsBefore[a])
             .Where(n => n.StartsWith("System.Private") || n == "System.Runtime" || n == "netstandard");
 
     // IAssemblyResolver: our copies first; anything else (a reference the folder lacks) is unresolved

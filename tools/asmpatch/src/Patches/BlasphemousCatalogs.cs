@@ -17,6 +17,19 @@
 // "check-all" = check, and the game's array is kept (the unpatched game's memory) so that at each level the catalogs
 // walked are compared with those of the array whose owner has one of the level's types, in its order.
 // Without the list (or an unreadable one) the game loads them all at startup, as it does itself.
+// The enemies met are let go as well: FMODAudioManager.RegisterCatalog keeps every catalog registered for the whole
+// session (its array is never cleared), and a catalog's Owner kept its enemy, with all its sprite sheets, in memory
+// after the level (most enemies 15 - 70 MB, the bosses up to 340 MB as the port stores them). Owner is a type tag:
+// AddCatalogItems reads it only as "Owner == null" and "Owner.GetType()". The patch has those two reads ask the
+// helper (OwnerType: the type Owner had when the helper first saw it, kept by catalog), and at the end of
+// AddCatalogItems sets Owner to null on each catalog the level walked (their types noted first), so Level's
+// Resources.UnloadUnusedAssets frees the enemy after its level. The next level that needs it walks the same
+// catalog (the list matches by class name; Resources.Load gives the registered object) and the game's loop sees the
+// same type, so the same catalogs are registered in the same order. Not in check-all (the game's array keeps the
+// owners and is compared with them).
+// Checked at patch time besides: no class deriving from Entity is nested or generic (Type.FullName then is not the
+// list's namespace.class), no two classes share a full name, and no game code names "Owner" for reflection
+// (Type.GetField / GetProperty / GetMember and the like with that constant).
 using System.Security.Cryptography;
 using System.Text;
 using Mono.Cecil;
@@ -39,7 +52,8 @@ sealed class BlasphemousCatalogs : Patch
                  LoaderType = "Framework.Audio.AudioLoader", EntityType = "Gameplay.GameControllers.Entities.Entity";
     // AudioLoader.AddCatalogItems and GetLevelEnemyTypes as the game (Blasphemous 4.0, Unity 2017.4.40f1) has them:
     // the hash of their IL (Shape below); another build's are not assumed to do the same
-    const string AddHash = "1568c942a28fd079", TypesHash = "0a8a7fddd175bbf5";
+    // (the tests set their stand-in's: test/fakes/Blasphemous)
+    internal static string AddHash = "1568c942a28fd079", TypesHash = "0a8a7fddd175bbf5";
 
     public override Result Run(Game game, bool apply)
     {
@@ -56,7 +70,7 @@ sealed class BlasphemousCatalogs : Patch
         string why = Check(game, m, cat, mgr, loader, out var init, out var loadAll, out var add, out var getter, out var types);
         if (why != null) return Result.NotApplicable($"{file}: {why}");
         var r = new Result { Outcome = Outcome.Applied };
-        r.Details.Add($"{file}: FMODAudioManager.Initialize loads no enemy catalogs; AudioLoader.AddCatalogItems loads those of the level's enemy types from {ListFile} (none there: the game's own load)");
+        r.Details.Add($"{file}: FMODAudioManager.Initialize loads no enemy catalogs; AudioLoader.AddCatalogItems loads those of the level's enemy types from {ListFile} (none there: the game's own load) and lets their owners go after it");
         if (!apply) return r;
 
         var h = Helper(game, m, cat, loadAll);
@@ -72,6 +86,25 @@ sealed class BlasphemousCatalogs : Patch
         {
             il.InsertAfter(after, ins);
             after = ins;
+        }
+        // c.Owner == null -> NoOwner(c); c.Owner.GetType() -> OwnerType(c) (the only two reads, Check and the IL hash say)
+        var ownerField = cat.Fields.First(f => f.Name == "Owner");
+        foreach (var ins in addBody.Instructions.ToList())
+        {
+            if (ins.OpCode.Code != Code.Ldfld || !Cecil.SameField(ins.Operand, ownerField)) continue;
+            var n1 = ins.Next; var n2 = n1?.Next;
+            if (n1?.OpCode.Code == Code.Ldnull && n2?.Operand is MethodReference eq && eq.Name == "op_Equality" && eq.DeclaringType.FullName == "UnityEngine.Object")
+            { ins.OpCode = OpCodes.Call; ins.Operand = h.Value.noOwner; il.Remove(n2); il.Remove(n1); }
+            else if (n1?.Operand is MethodReference gt && gt.Name == "GetType" && gt.DeclaringType.FullName == "System.Object" && gt.Parameters.Count == 0)
+            { ins.OpCode = OpCodes.Call; ins.Operand = h.Value.ownerType; il.Remove(n1); }
+            else return Result.Failed($"{file}: AudioLoader.AddCatalogItems reads Owner other than as '== null' or '.GetType()'");
+        }
+        // the end of AddCatalogItems: Release() (the owners of the catalogs it walked let go); each ret becomes the call
+        // and a ret after it, so branches to the ret run it too
+        foreach (var ret in addBody.Instructions.Where(x => x.OpCode.Code == Code.Ret).ToList())
+        {
+            ret.OpCode = OpCodes.Call; ret.Operand = h.Value.release;
+            il.InsertAfter(ret, il.Create(OpCodes.Ret));
         }
         addBody.OptimizeMacros();
         game.MarkChanged(asm);
@@ -99,6 +132,8 @@ sealed class BlasphemousCatalogs : Patch
         // the owners' classes, compared by full name: one class per name, none nested (pmu writes namespace.class)
         var entities = all.Where(t => t.FullName == EntityType || Derives(t, EntityType)).ToList();
         if (entities.Any(t => t.IsNested)) return "a nested class derives from Entity";
+        if (entities.Any(t => t.HasGenericParameters || Cecil.Hierarchy(t).Any(b => b.HasGenericParameters)))
+            return "a generic class derives from Entity (or is one)";
         var names = all.GroupBy(t => t.FullName).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
         if (entities.Any(t => names.Contains(t.FullName))) return "two classes of one name derive from Entity";
 
@@ -120,6 +155,11 @@ sealed class BlasphemousCatalogs : Patch
                         uses.Add((md, ins, "Owner"));
                     else if (ins.OpCode.Code == Code.Ldstr && (string)ins.Operand is "EnemiesAudioCatalogs" or "Owner" && md.DeclaringType.Module == m &&
                              md.DeclaringType.Namespace.StartsWith("Framework.Audio"))
+                        uses.Add((md, ins, "name"));
+                    // reflection by name anywhere: ldstr "Owner" (or "EnemiesAudioCatalogs") straight into Type.GetField/GetProperty/GetMember/...
+                    else if (ins.OpCode.Code == Code.Ldstr && (string)ins.Operand is "EnemiesAudioCatalogs" or "Owner" &&
+                             Enumerable.Range(1, 3).Select(k => Nth(ins, k)).Any(x => x?.Operand is MethodReference mr && mr.DeclaringType.FullName is "System.Type" or "System.Reflection.TypeInfo" or "System.Reflection.IReflect" &&
+                                                                                     mr.Name is "GetField" or "GetProperty" or "GetMember" or "GetMethod" or "InvokeMember"))
                         uses.Add((md, ins, "name"));
                 }
         add = loader.Methods.FirstOrDefault(x => x.Name == "AddCatalogItems" && x.HasBody && x.Parameters.Count == 0 && !x.IsStatic);
@@ -150,6 +190,8 @@ sealed class BlasphemousCatalogs : Patch
             return $"AudioLoader.AddCatalogItems/GetLevelEnemyTypes are not as this patch knows them (IL {ha}/{ht}, known {AddHash}/{TypesHash})";
         return null;
     }
+
+    static Instruction Nth(Instruction i, int k) { for (; i != null && k > 0; k--) i = i.Next; return i; }
 
     /// <summary>A method's IL as text (op codes, operands by name, branch targets by index), hashed.</summary>
     public static string Shape(MethodDefinition md)
@@ -192,7 +234,7 @@ sealed class BlasphemousCatalogs : Patch
 
     /// <summary>The helper class: static FMODAudioCatalog[] Startup(string path) (the startup load) and
     /// Candidates(FMODAudioCatalog[] all, IEnumerable&lt;Type&gt; types) (the catalogs AddCatalogItems walks).</summary>
-    static (MethodDefinition startup, MethodDefinition candidates)? Helper(Game game, ModuleDefinition m, TypeDefinition cat, MethodReference loadAll)
+    static (MethodDefinition startup, MethodDefinition candidates, MethodDefinition ownerType, MethodDefinition noOwner, MethodDefinition release)? Helper(Game game, ModuleDefinition m, TypeDefinition cat, MethodReference loadAll)
     {
         var ts = m.TypeSystem;
         const string S = "System.String", I = "System.Int32", O = "System.Object";
@@ -223,8 +265,12 @@ sealed class BlasphemousCatalogs : Patch
         var uEq = Lib(game, m, "UnityEngine.Object", "op_Equality", "UnityEngine.Object", "UnityEngine.Object");
         var uName = Lib(game, m, "UnityEngine.Object", "get_name");
         var replace = Lib(game, m, S, "Replace", S, S);
+        var htNew = Lib(game, m, "System.Collections.Hashtable", ".ctor");
+        var htGet = Lib(game, m, "System.Collections.Hashtable", "get_Item", O);
+        var htSet = Lib(game, m, "System.Collections.Hashtable", "set_Item", O, O);
         var refs = new MethodReference[] { env, strEq, endsWith, indexOf, indexOfChar, sub1, sub2, concat2, concat3, concatO, dirName, exists, readLines,
-                                           fromHandle, fullName, getType, getEnum, moveNext, current, dispose, copy, dataPath, load, log, uEq, uName, replace };
+                                           fromHandle, fullName, getType, getEnum, moveNext, current, dispose, copy, dataPath, load, log, uEq, uName, replace,
+                                           htNew, htGet, htSet };
         if (refs.Any(x => x == null)) return null;
         var typeT = fromHandle.ReturnType;
         var exc = m.ImportReference(game.Load("mscorlib")?.MainModule.GetType("System.Exception"));
@@ -239,7 +285,8 @@ sealed class BlasphemousCatalogs : Patch
         const FieldAttributes SF = FieldAttributes.Private | FieldAttributes.Static;
         var paths = new FieldDefinition("paths", SF, strArr); var owners = new FieldDefinition("owners", SF, strArr);
         var state = new FieldDefinition("state", SF, ts.Int32); var check = new FieldDefinition("check", SF, ts.Int32);   // 1: check, 2: check-all
-        foreach (var f in new[] { paths, owners, state, check }) t.Fields.Add(f);
+        var table = new FieldDefinition("types", SF, htNew.DeclaringType); var last = new FieldDefinition("last", SF, catArr);
+        foreach (var f in new[] { paths, owners, state, check, table, last }) t.Fields.Add(f);
         const MethodAttributes Static = MethodAttributes.Assembly | MethodAttributes.Static | MethodAttributes.HideBySig;
         MethodDefinition Method(string name, TypeReference ret, params (string n, TypeReference t)[] ps)
         {
@@ -406,6 +453,59 @@ sealed class BlasphemousCatalogs : Patch
             startup.Body.OptimizeMacros();
         }
 
+        // static Type OwnerType(FMODAudioCatalog c): the type c.Owner had when first asked (kept by catalog: Owner is let go
+        // after the level); null where it had none, as "Owner == null" in the game's loop
+        //   if (types == null) types = new Hashtable(); object x = types[c]; if (x != null) return (Type)x;
+        //   if (c.Owner == null) return null; Type y = c.Owner.GetType(); types[c] = y; return y;
+        var ownerType = Method("OwnerType", typeT, ("c", cat));
+        {
+            var x = Local(ownerType, ts.Object); var y = Local(ownerType, typeT);
+            var il = ownerType.Body.GetILProcessor();
+            var have = il.Create(OpCodes.Ldsfld, table);
+            il.Emit(OpCodes.Ldsfld, table); il.Emit(OpCodes.Brtrue, have);
+            il.Emit(OpCodes.Newobj, htNew); il.Emit(OpCodes.Stsfld, table);
+            il.Append(have); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Callvirt, htGet); il.Emit(OpCodes.Stloc, x);
+            var notKept = il.Create(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldloc, x); il.Emit(OpCodes.Brfalse, notKept);
+            il.Emit(OpCodes.Ldloc, x); il.Emit(OpCodes.Castclass, typeT); il.Emit(OpCodes.Ret);
+            var hasOwner = il.Create(OpCodes.Ldarg_0);
+            il.Append(notKept); il.Emit(OpCodes.Ldfld, owner); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, uEq); il.Emit(OpCodes.Brfalse, hasOwner);
+            il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Ret);
+            il.Append(hasOwner); il.Emit(OpCodes.Ldfld, owner); il.Emit(OpCodes.Callvirt, getType); il.Emit(OpCodes.Stloc, y);
+            il.Emit(OpCodes.Ldsfld, table); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldloc, y); il.Emit(OpCodes.Callvirt, htSet);
+            il.Emit(OpCodes.Ldloc, y); il.Emit(OpCodes.Ret);
+            ownerType.Body.OptimizeMacros();
+        }
+        // static bool NoOwner(FMODAudioCatalog c): OwnerType(c) == null
+        var noOwner = Method("NoOwner", ts.Boolean, ("c", cat));
+        {
+            var il = noOwner.Body.GetILProcessor();
+            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, ownerType); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Ceq); il.Emit(OpCodes.Ret);
+        }
+        // static void Release(): the catalogs the level walked (last): their types noted, then Owner = null (not in check-all)
+        //   l = last; last = null; if (l == null) return; for (i...) { OwnerType(l[i]); if (check != 2) l[i].Owner = null; } (check: log)
+        var release = Method("Release", ts.Void);
+        {
+            var l = Local(release, catArr); var i = Local(release, ts.Int32);
+            var il = release.Body.GetILProcessor();
+            var go = il.Create(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Ldsfld, last); il.Emit(OpCodes.Stloc, l); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Stsfld, last);
+            il.Emit(OpCodes.Ldloc, l); il.Emit(OpCodes.Brtrue, go); il.Emit(OpCodes.Ret);
+            il.Append(go); il.Emit(OpCodes.Stloc, i);
+            var loop = il.Create(OpCodes.Ldloc, i); var next = il.Create(OpCodes.Ldloc, i); var end = il.Create(OpCodes.Ldsfld, check);
+            il.Append(loop); il.Emit(OpCodes.Ldloc, l); il.Emit(OpCodes.Ldlen); il.Emit(OpCodes.Conv_I4); il.Emit(OpCodes.Bge, end);
+            il.Emit(OpCodes.Ldloc, l); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Call, ownerType); il.Emit(OpCodes.Pop);
+            il.Emit(OpCodes.Ldsfld, check); il.Emit(OpCodes.Ldc_I4_2); il.Emit(OpCodes.Beq, next);
+            il.Emit(OpCodes.Ldloc, l); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Stfld, owner);
+            il.Append(next); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, i); il.Emit(OpCodes.Br, loop);
+            var quiet = il.Create(OpCodes.Ret);
+            il.Append(end); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Bne_Un, quiet);
+            Log(il, () => il.Emit(OpCodes.Ldstr, "[blasphemous-catalogs] check: the owners of "), () => { il.Emit(OpCodes.Ldloc, l); il.Emit(OpCodes.Ldlen); il.Emit(OpCodes.Conv_I4); il.Emit(OpCodes.Box, ts.Int32); },
+                () => il.Emit(OpCodes.Ldstr, " catalogs walked let go (their types kept)"));
+            il.Append(quiet);
+            release.Body.OptimizeMacros();
+        }
+
         // static FMODAudioCatalog[] Candidates(FMODAudioCatalog[] all, IEnumerable<Type> types): no list: all; else the list's
         // catalogs whose owner class is one of types, in the list's order, loaded by path
         var candidates = Method("Candidates", catArr, ("all", catArr), ("types", m.ImportReference(loadAllTypes(game, m))));
@@ -442,12 +542,25 @@ sealed class BlasphemousCatalogs : Patch
             il.Emit(OpCodes.Ldsfld, paths); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref);
             il.Emit(OpCodes.Ldtoken, cat); il.Emit(OpCodes.Call, fromHandle); il.Emit(OpCodes.Call, load); il.Emit(OpCodes.Isinst, cat); il.Emit(OpCodes.Stloc, c);
             il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Brfalse, next);
-            il.Emit(OpCodes.Ldloc, res); il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Stelem_Ref);
+            //   check: OwnerType(c) (the game's own match reads it) must be the list's class: "[blasphemous-catalogs] check owner DIFFERENT ..."
+            var store = il.Create(OpCodes.Ldloc, res);
+            var ot = Local(candidates, typeT); var on = Local(candidates, ts.String);
+            il.Emit(OpCodes.Ldsfld, check); il.Emit(OpCodes.Brfalse, store);
+            var named = il.Create(OpCodes.Ldloc, ot); var nameDone = il.Create(OpCodes.Stloc, on);
+            il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Call, ownerType); il.Emit(OpCodes.Stloc, ot);
+            il.Emit(OpCodes.Ldloc, ot); il.Emit(OpCodes.Brtrue, named); il.Emit(OpCodes.Ldstr, "-"); il.Emit(OpCodes.Br, nameDone);
+            il.Append(named); il.Emit(OpCodes.Callvirt, fullName); il.Append(nameDone);
+            il.Emit(OpCodes.Ldloc, on); il.Emit(OpCodes.Ldsfld, owners); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Call, strEq); il.Emit(OpCodes.Brtrue, store);
+            Log(il, () => il.Emit(OpCodes.Ldstr, "[blasphemous-catalogs] check owner DIFFERENT: "), () => { il.Emit(OpCodes.Ldsfld, paths); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); },
+                () => il.Emit(OpCodes.Ldstr, " has an owner of "), () => il.Emit(OpCodes.Ldloc, on), () => il.Emit(OpCodes.Ldstr, ", the list says "),
+                () => { il.Emit(OpCodes.Ldsfld, owners); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); });
+            il.Append(store); il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Stelem_Ref);
             il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, k);
             il.Append(next); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, i); il.Emit(OpCodes.Br, loop);
             //   r = new FMODAudioCatalog[k]; Array.Copy(res, r, k);
             il.Append(end); il.Emit(OpCodes.Newarr, cat); il.Emit(OpCodes.Stloc, r);
             il.Emit(OpCodes.Ldloc, res); il.Emit(OpCodes.Ldloc, r); il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Call, copy);
+            il.Emit(OpCodes.Ldloc, r); il.Emit(OpCodes.Stsfld, last);                         // (Release at the end of AddCatalogItems)
             //   check: log the level's types and the catalogs it walks
             var ret = il.Create(OpCodes.Ldloc, r);
             il.Emit(OpCodes.Ldsfld, check); il.Emit(OpCodes.Brfalse, ret);
@@ -496,7 +609,7 @@ sealed class BlasphemousCatalogs : Patch
             il.Append(ret); il.Emit(OpCodes.Ret);
             candidates.Body.OptimizeMacros();
         }
-        return (startup, candidates);
+        return (startup, candidates, ownerType, noOwner, release);
     }
 
     /// <summary>IEnumerable&lt;Type&gt;, as GetLevelEnemyTypes returns it.</summary>

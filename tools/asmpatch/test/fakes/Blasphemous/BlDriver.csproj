@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The blasphemous-catalogs tests' driver (Driver.cs), against the stand-ins. Built by ../../../build.sh test into out/test/fakes/bl/. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>BlDriver</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Driver.cs" />
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/bl/UnityEngine.CoreModule.dll</HintPath></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/bl/Assembly-CSharp.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

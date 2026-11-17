@@ -43,6 +43,7 @@ static partial class TestMain
             UnionTests();
             InlineTests();
             BlasphemousTests();
+            BlasphemousCatalogsTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }
