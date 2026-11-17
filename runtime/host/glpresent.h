@@ -5,7 +5,8 @@
 // The GL wrappers when UA_PRESENT_THREAD=1 or sync (a turned panel may need glpresent_start_sync),
 // else an empty table; next(name): the next layer's function.
 const so_shim *glpresent_table(void *(*next)(const char *name), int sync);
-int glpresent_wanted(void);                     // UA_PRESENT_THREAD=1 and the wrappers are in
+int glpresent_wanted(void);
+int glpresent_full(void);                       // UA_PRESENT_THREAD=full: also at the window's own size
 // The window's side, from the display backend (display_sdl.c): a context that shares Unity's, made
 // current with the window on the present thread, its swap and swap interval there.
 typedef struct glpresent_window {

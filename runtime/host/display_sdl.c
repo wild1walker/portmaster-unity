@@ -34,7 +34,7 @@
 //                           environment variable <name>: Unity keeps the window's size (UA_ASPECT's), nothing
 //                           is scaled here (a game that draws its world smaller and its text at the window's
 //                           size by itself: Hollow Knight with asmpatch's hk-render-size)
-//   UA_PRESENT_THREAD=1     (with a render size, no UA_ASPECT) Unity's contexts current without a surface,
+//   UA_PRESENT_THREAD=1     (with a render size, no UA_ASPECT; =full also without one) Unity's contexts current without a surface,
 //                           its frames scaled over the window and swapped by a present thread
 //                           (glpresent.c): the render thread no longer waits for the GPU at its swap
 // SDL's own variables apply (SDL_VIDEODRIVER=wayland|kmsdrm|x11|offscreen, SDL_VIDEO_EGL_DRIVER).
@@ -382,6 +382,9 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
             display_gpu_scale(g_rw, g_rh, dw, dh);
             pw = g_rw; ph = g_rh;
         }
+    }
+    if (!pw && tries[t].major >= 3 && glpresent_full()) {
+        pw = dw; ph = dh;   // UA_PRESENT_THREAD=full: at the window's size, copied 1:1
     }
     if (pw && tries[t].major >= 3 && glpresent_wanted()) {
         const char *asp = getenv("UA_ASPECT");

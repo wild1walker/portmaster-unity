@@ -1,4 +1,4 @@
-// UA_PRESENT_THREAD=1: on the SDL display with a render size (display_sdl.c; SDL's KMSDRM and X11 drivers), Unity's frames
+// UA_PRESENT_THREAD=1: on the SDL display with a render size (=full: also at the window's own size, copied 1:1) (display_sdl.c; SDL's KMSDRM and X11 drivers), Unity's frames
 // shown by a present thread of the host's, so that Unity's render thread never waits for the GPU at its swap.
 //
 // Mali's GBM driver (BattleXP G350 / R36S class, RK3326, r13p0 on a 4.4 kernel, SDL's KMSDRM) waits in
@@ -47,6 +47,7 @@ typedef unsigned char GLboolean; typedef void *GLsync; typedef uint64_t GLuint64
 #define GL_TEXTURE_MIN_FILTER 0x2801
 #define GL_TEXTURE_MAG_FILTER 0x2800
 #define GL_LINEAR 0x2601
+#define GL_NEAREST 0x2600
 #define GL_COLOR_ATTACHMENT0 0x8CE0
 #define GL_DEPTH_ATTACHMENT 0x8D00
 #define GL_STENCIL_ATTACHMENT 0x8D20
@@ -270,7 +271,9 @@ static void *present_main(void *arg)
         if (f) { D.WaitSync(f, 0, GL_TIMEOUT_IGNORED); D.DeleteSync(f); }
         D.BindFramebuffer(GL_READ_FRAMEBUFFER, fbo[s]);
         D.InvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 3, all);    // (the whole window is drawn: nothing of it loaded)
-        D.BlitFramebuffer(0, 0, g_rw, g_rh, 0, 0, g_dw, g_dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        // (the same size: a plain copy, every pixel as Unity drew it)
+        D.BlitFramebuffer(0, 0, g_rw, g_rh, 0, 0, g_dw, g_dh, GL_COLOR_BUFFER_BIT,
+                          g_rw == g_dw && g_rh == g_dh ? GL_NEAREST : GL_LINEAR);
         if (g_shot[0] && D.ReadPixels) window_shot(fbo[s]);
         GLsync rd = D.FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         D.Flush();
@@ -287,6 +290,8 @@ static void *present_main(void *arg)
 
 // ---- the display's calls (display_sdl.c)
 int glpresent_wanted(void) { return g_want; }
+// UA_PRESENT_THREAD=full: the present thread also where Unity's window is the window's own size (no render size)
+int glpresent_full(void) { const char *e = getenv("UA_PRESENT_THREAD"); return g_want && e && !strcmp(e, "full"); }
 
 void glpresent_start(int rw, int rh, int dw, int dh, const glpresent_window *w)
 {
@@ -376,7 +381,7 @@ const so_shim *glpresent_table(void *(*next)(const char *name), int sync)
 {
     memset(g_shims, 0, sizeof g_shims);
     const char *e = getenv("UA_PRESENT_THREAD");
-    int thread = e && !strcmp(e, "1");
+    int thread = e && (!strcmp(e, "1") || !strcmp(e, "full"));
     if (!thread && !sync) return g_shims;
 #define N(f) do { void *p = next ? next("gl" #f) : NULL; *(void **)&r_##f = p ? p : gl_driver("gl" #f); } while (0)
     N(BindFramebuffer); N(GetIntegerv); N(GetFramebufferAttachmentParameteriv); N(InvalidateFramebuffer); N(DiscardFramebufferEXT);
