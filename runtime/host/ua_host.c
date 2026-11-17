@@ -58,6 +58,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "unitylayers.h"
 #include "monodump.h"
 #include "memledger.h"
+#include "monoimage.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -381,6 +382,7 @@ static void *dlsym_hook(const char *sym, void *p)
     p = monoinvoke_dlsym_hook(sym, p);         // UA_MONO_INVOKE: the runtime invoke's cache (monoinvoke.c)
     p = icallcount_dlsym_hook(sym, p);         // UA_ICALL_COUNT: the engine's internal calls counted (icallcount.c)
     p = unityicalls_dlsym_hook(sym, p);        // UA_PROPERTY_ID: engine calls answered from earlier answers (unityicalls.c)
+    p = monoimage_dlsym_hook(sym, p);          // UA_MONO_IMAGE_MAP: the assemblies read in place from the APK (monoimage.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (!g_mono_trace) return p;
     if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
@@ -672,6 +674,7 @@ int main(int argc, char **argv)
     memset(&cfg, 0, sizeof cfg);
     cfg.package_name = pkg;
     cfg.apk_path = apk;
+    monoimage_set_apk(apk);                     // UA_MONO_IMAGE_MAP (monoimage.c)
     android_set_asset_apk(apk);                 // AAssetManager: what assets/ beside it lacks, from the APK
     cfg.native_lib_dir = libdir;
     cfg.data_dir = data;

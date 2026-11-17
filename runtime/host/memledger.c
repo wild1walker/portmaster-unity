@@ -124,9 +124,11 @@ static void *w_mremap(void *old, size_t olen, size_t nlen, int flags, void *nadd
 }
 
 // UA_MEM_LEDGER=2: the Android libraries' malloc family too: each block they allocate noted in a pointer table (linear
-// probing, 2^20 slots, 8 MB) with its library and usable size, taken out when freed, live bytes by library in the report.
-// A measurement: a lock around every allocation and free of those libraries.
-enum { MSLOTS = 1 << 20 };
+// probing, 2^21 slots, 16 MB: a level of a big game holds over a million such blocks) with its library and usable size,
+// taken out when freed; the report gives the live bytes by library, by block size, and the biggest blocks with their
+// first bytes (a whole file read into memory shows its signature: "MZ" for an assembly). A measurement: a lock around
+// every allocation and free of those libraries.
+enum { MSLOTS = 1 << 21 };
 struct mslot { uintptr_t p; unsigned size : 24; unsigned mod : 8; };
 static struct mslot *g_ms;
 static unsigned g_mused, g_mfull;
@@ -257,6 +259,41 @@ void memledger_report(void)
             pthread_mutex_lock(&g_mmu);
             for (int m = 0; m < g_nmods; m++)
                 if (g_mcount[m]) fprintf(stderr, "[mem] %s: %u blocks from malloc, %.1f MB live\n", g_mods[m], g_mcount[m], g_mlive[m] / 1048576.0);
+            // by block size, per library; the biggest live blocks with their first bytes
+            enum { NB = 9 };
+            static const unsigned lim[NB] = { 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 0xffffffffu };
+            static long long hb[MAXM][NB]; static unsigned hc[MAXM][NB];
+            memset(hb, 0, sizeof hb); memset(hc, 0, sizeof hc);
+            enum { NBIG = 24 };
+            struct { uintptr_t p; size_t n; int m; } big[NBIG]; int nbig = 0;
+            for (unsigned i = 0; i < MSLOTS; i++) {
+                if (!g_ms[i].p) continue;
+                size_t n = g_ms[i].size == 0xffffff ? malloc_usable_size((void *)g_ms[i].p) : g_ms[i].size;
+                int b = 0; while (n > lim[b]) b++;
+                hb[g_ms[i].mod][b] += n; hc[g_ms[i].mod][b]++;
+                if (n >= 262144) {
+                    int k;
+                    if (nbig < NBIG) k = nbig++;
+                    else if (big[NBIG - 1].n < n) k = NBIG - 1;
+                    else continue;
+                    big[k].p = g_ms[i].p; big[k].n = n; big[k].m = g_ms[i].mod;
+                    for (; k > 0 && big[k - 1].n < big[k].n; k--) { __typeof__(big[0]) t = big[k]; big[k] = big[k - 1]; big[k - 1] = t; }
+                }
+            }
+            static const char *bn[NB] = { "<=64", "<=256", "<=1K", "<=4K", "<=16K", "<=64K", "<=256K", "<=1M", ">1M" };
+            for (int m = 0; m < g_nmods; m++) {
+                if (!g_mcount[m]) continue;
+                char line[512]; int o = 0;
+                for (int b = 0; b < NB; b++)
+                    if (hc[m][b]) o += snprintf(line + o, sizeof line - o, " %s %.1f MB (%u)", bn[b], hb[m][b] / 1048576.0, hc[m][b]);
+                fprintf(stderr, "[mem] %s malloc by block size:%s\n", g_mods[m], line);
+            }
+            for (int k = 0; k < nbig; k++) {
+                const unsigned char *q = (const unsigned char *)big[k].p; char hx[3 * 16 + 1], as[17];
+                for (int j = 0; j < 16; j++) { snprintf(hx + 3 * j, 4, "%02x ", q[j]); as[j] = q[j] >= 32 && q[j] < 127 ? q[j] : '.'; }
+                as[16] = 0;
+                fprintf(stderr, "[mem] big block %s %.2f MB at %p: %s|%s|\n", g_mods[big[k].m], big[k].n / 1048576.0, (void *)big[k].p, hx, as);
+            }
             if (g_mfull) fprintf(stderr, "[mem] (%u allocations not noted: the pointer table was full)\n", g_mfull);
             pthread_mutex_unlock(&g_mmu);
         }
