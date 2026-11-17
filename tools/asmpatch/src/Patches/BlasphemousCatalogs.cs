@@ -13,7 +13,9 @@
 // when the catalogs and those enemies are loaded changes.
 // ASMPATCH_BLASPHEMOUS_CATALOGS (read once): "off" = the game as it was; "check" = the startup load is done as
 // well and compared with the list entry by entry (LoadAll's order, Resources.Load's object, the owner's type),
-// "[blasphemous-catalogs] check ..." in the log, then the list is used; each level logs its types and catalogs.
+// "[blasphemous-catalogs] check ..." in the log, then the list is used and each level logs its types and catalogs;
+// "check-all" = check, and the game's array is kept (the unpatched game's memory) so that at each level the catalogs
+// walked are compared with those of the array whose owner has one of the level's types, in its order.
 // Without the list (or an unreadable one) the game loads them all at startup, as it does itself.
 using System.Security.Cryptography;
 using System.Text;
@@ -236,7 +238,7 @@ sealed class BlasphemousCatalogs : Patch
         m.Types.Add(t);
         const FieldAttributes SF = FieldAttributes.Private | FieldAttributes.Static;
         var paths = new FieldDefinition("paths", SF, strArr); var owners = new FieldDefinition("owners", SF, strArr);
-        var state = new FieldDefinition("state", SF, ts.Int32); var check = new FieldDefinition("check", SF, ts.Boolean);
+        var state = new FieldDefinition("state", SF, ts.Int32); var check = new FieldDefinition("check", SF, ts.Int32);   // 1: check, 2: check-all
         foreach (var f in new[] { paths, owners, state, check }) t.Fields.Add(f);
         const MethodAttributes Static = MethodAttributes.Assembly | MethodAttributes.Static | MethodAttributes.HideBySig;
         MethodDefinition Method(string name, TypeReference ret, params (string n, TypeReference t)[] ps)
@@ -273,7 +275,12 @@ sealed class BlasphemousCatalogs : Patch
             il.Emit(OpCodes.Ldloc, v); il.Emit(OpCodes.Ldstr, "off"); il.Emit(OpCodes.Call, strEq); il.Emit(OpCodes.Brfalse, notOff);
             Log(il, () => il.Emit(OpCodes.Ldstr, $"[blasphemous-catalogs] {Variable}=off: every enemy catalog loaded at startup (the game's own)"));
             il.Emit(OpCodes.Br, ret);
-            il.Append(notOff); il.Emit(OpCodes.Ldstr, "check"); il.Emit(OpCodes.Call, strEq); il.Emit(OpCodes.Stsfld, check);
+            //   check = v == "check-all" ? 2 : v == "check" ? 1 : 0;
+            var notAll = il.Create(OpCodes.Ldloc, v); var checkSet = il.Create(OpCodes.Nop);
+            il.Append(notOff); il.Emit(OpCodes.Ldstr, "check-all"); il.Emit(OpCodes.Call, strEq); il.Emit(OpCodes.Brfalse, notAll);
+            il.Emit(OpCodes.Ldc_I4_2); il.Emit(OpCodes.Stsfld, check); il.Emit(OpCodes.Br, checkSet);
+            il.Append(notAll); il.Emit(OpCodes.Ldstr, "check"); il.Emit(OpCodes.Call, strEq); il.Emit(OpCodes.Stsfld, check);
+            il.Append(checkSet);
             //   try { d = Application.dataPath; if (d.EndsWith(".apk") || d.EndsWith(".obb")) d = Path.GetDirectoryName(d) + "/Game_Data";
             //         f = d + "/fmodcatalogs.txt"; if (!File.Exists(f)) leave; lines = File.ReadAllLines(f);
             //         if (lines.Length < 2 || lines[0] != Header) leave; n = lines.Length - 1; p = new string[n]; o = new string[n];
@@ -391,7 +398,10 @@ sealed class BlasphemousCatalogs : Patch
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, loadAll); il.Emit(OpCodes.Ret);
             var empty = il.Create(OpCodes.Ldc_I4_0);
             il.Append(list); il.Emit(OpCodes.Brfalse, empty);
-            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, loadAll); il.Emit(OpCodes.Call, compare);
+            //   all = LoadAll(path); Compare(all); if (check == 2) return all; (check-all keeps the game's array: its memory too)
+            var all = Local(startup, catArr);
+            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, loadAll); il.Emit(OpCodes.Stloc, all); il.Emit(OpCodes.Ldloc, all); il.Emit(OpCodes.Call, compare);
+            il.Emit(OpCodes.Ldsfld, check); il.Emit(OpCodes.Ldc_I4_2); il.Emit(OpCodes.Bne_Un, empty); il.Emit(OpCodes.Ldloc, all); il.Emit(OpCodes.Ret);
             il.Append(empty); il.Emit(OpCodes.Newarr, cat); il.Emit(OpCodes.Ret);
             startup.Body.OptimizeMacros();
         }
@@ -450,6 +460,36 @@ sealed class BlasphemousCatalogs : Patch
             il.Emit(OpCodes.Ldstr, " "); il.Emit(OpCodes.Call, concat3); il.Emit(OpCodes.Stloc, shown);
             il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, i); il.Emit(OpCodes.Br, sloop);
             il.Append(send);
+            //   the game's array (check mode keeps it): its catalogs whose owner is of these types, in its order, must be r
+            //   same = true; j = 0; foreach (a in all) { if (a.Owner == null || names.IndexOf("\n" + a.Owner.GetType().FullName + "\n") < 0) continue;
+            //                                           if (j >= k || !(a == r[j])) same = false; j++; }  if (j != k) same = false;
+            var j = Local(candidates, ts.Int32); var a = Local(candidates, cat); var same = Local(candidates, ts.Boolean);
+            var noCompare = il.Create(OpCodes.Nop);
+            il.Emit(OpCodes.Ldsfld, check); il.Emit(OpCodes.Ldc_I4_2); il.Emit(OpCodes.Bne_Un, noCompare);
+            il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Stloc, same); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Stloc, j);
+            il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Stloc, i);
+            var aloop = il.Create(OpCodes.Ldloc, i); var anext = il.Create(OpCodes.Ldloc, i); var aend = il.Create(OpCodes.Ldloc, j);
+            var differ = il.Create(OpCodes.Ldc_I4_0); var counted = il.Create(OpCodes.Ldloc, j);
+            il.Append(aloop); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldlen); il.Emit(OpCodes.Conv_I4); il.Emit(OpCodes.Bge, aend);
+            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Stloc, a);
+            il.Emit(OpCodes.Ldloc, a); il.Emit(OpCodes.Ldfld, owner); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, uEq); il.Emit(OpCodes.Brtrue, anext);
+            il.Emit(OpCodes.Ldloc, names); il.Emit(OpCodes.Ldstr, "\n"); il.Emit(OpCodes.Ldloc, a); il.Emit(OpCodes.Ldfld, owner); il.Emit(OpCodes.Callvirt, getType); il.Emit(OpCodes.Callvirt, fullName);
+            il.Emit(OpCodes.Ldstr, "\n"); il.Emit(OpCodes.Call, concat3); il.Emit(OpCodes.Ldc_I4_4); il.Emit(OpCodes.Callvirt, indexOf); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Blt, anext);
+            il.Emit(OpCodes.Ldloc, j); il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Bge, differ);
+            il.Emit(OpCodes.Ldloc, a); il.Emit(OpCodes.Ldloc, r); il.Emit(OpCodes.Ldloc, j); il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Call, uEq); il.Emit(OpCodes.Brtrue, counted);
+            il.Append(differ); il.Emit(OpCodes.Stloc, same);
+            il.Append(counted); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, j);
+            il.Append(anext); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, i); il.Emit(OpCodes.Br, aloop);
+            var countOk = il.Create(OpCodes.Nop);
+            il.Append(aend); il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Beq, countOk); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Stloc, same);
+            il.Append(countOk);
+            var sameText = il.Create(OpCodes.Ldstr, "the same as the game's array gives");
+            Log(il, () => il.Emit(OpCodes.Ldstr, "[blasphemous-catalogs] check level: "),
+                () => { var nd = il.Create(OpCodes.Nop); il.Emit(OpCodes.Ldloc, same); il.Emit(OpCodes.Brtrue, sameText);
+                        il.Emit(OpCodes.Ldstr, "DIFFERENT from the game's array"); il.Emit(OpCodes.Br, nd); il.Append(sameText); il.Append(nd); },
+                () => il.Emit(OpCodes.Ldstr, " ("), () => { il.Emit(OpCodes.Ldloc, j); il.Emit(OpCodes.Box, ts.Int32); },
+                () => il.Emit(OpCodes.Ldstr, " there, "), () => { il.Emit(OpCodes.Ldloc, k); il.Emit(OpCodes.Box, ts.Int32); }, () => il.Emit(OpCodes.Ldstr, " from the list)"));
+            il.Append(noCompare);
             Log(il, () => il.Emit(OpCodes.Ldstr, "[blasphemous-catalogs] level: enemy types"),
                 () => { il.Emit(OpCodes.Ldloc, names); il.Emit(OpCodes.Ldstr, "\n"); il.Emit(OpCodes.Ldstr, " "); il.Emit(OpCodes.Callvirt, replace); },
                 () => il.Emit(OpCodes.Ldstr, "-> catalogs walked: "), () => il.Emit(OpCodes.Ldloc, shown));
