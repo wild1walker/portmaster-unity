@@ -1288,7 +1288,7 @@ wrong. fps, A B then B A: Knulli 39.83 -> 42.34 and 39.96 -> 39.66, muOS 39.80 -
 the run-to-run noise in one order. `UA_BEH_PREFETCH` showed nothing in the profile and `UA_BEH_EMPTY` leaves out one
 call a frame here. All stay opt-in; the G350 (main-thread bound, 1.4x the Knulli's engine time) decides the port.
 The G350, six pairs in both orders (on minus off): +0.3, -1.0, +2.1, +3.3, +1.3, -0.8 fps (mean +0.9, about 1.6 fps
-apart run to run): not shown. They stay opt-in.
+apart run to run): not shown in fps. Measured as CPU time instead (100 Hz UnityMain profiles, two runs each, the Mono stack on): libunity 13.9 -> 13.0 ms a frame, engine calls from scripts 2.15 -> 1.62, transforms 2.08 -> 1.69; `UA_SCRIPT_FIND=check` on the G350 5,804 kept answers, 0 wrong. Enter the Gungeon's port turns the three on (port.env).
 
 ### The game's thread waiting for the Wwise player's mix (Enter the Gungeon on muOS, 2026-11-08)
 
