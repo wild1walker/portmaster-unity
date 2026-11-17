@@ -41,6 +41,7 @@ static partial class TestMain
             HollowKnightTests();
             UnionTests();
             InlineTests();
+            BlasphemousTests();
             Cli();
         }
         finally { Directory.Delete(tmp, true); }

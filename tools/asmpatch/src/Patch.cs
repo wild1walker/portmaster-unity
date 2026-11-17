@@ -45,6 +45,7 @@ abstract class Patch
     {
         new RewiredAndroid(),
         new InputSystemAndroid(),
+        new BlasphemousPreload(),
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
         new GenericUnion(),
         // optimizations
