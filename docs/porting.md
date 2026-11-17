@@ -618,6 +618,25 @@ by eye, the same frame rate). With 110 MB held by another process, as EmulationS
 dArkOS while a port runs, release reached the watchdog's 50 MB and convert kept 75 MB; the port uses
 convert.
 
+Blasphemous: 395 readable textures (361 MB of RGBA32, all but one RGBA32), none whose pixels its code
+reads (the calls are on textures it makes itself, in editor-only buttons such as
+`ScreenColorPaletteData.Generate`, or in `MapManager`'s reveal masks, whose dictionary nothing fills; Unity
+2017.4's particle shape module has no texture yet). Most are in the scene its first level loads before
+itself and keeps for the whole session, `Preload_<platform>` (every enemy's execution and death
+animations: 402 textures, 487 MB as the data has them, 248 readable, 189 MB): held twice, that load took
+the BattleXP G350 from 372 MB available at the menu to the kernel's OOM kill in about 14 s. With `readable =
+"convert"` (ASTC 4x4 like the game's other textures, 90 MB): the menu 478 -> 405 MB resident (Unity's own
+allocations 92 -> 50 MB), the first level loads and keeps 213 MB available at 647 MB resident. A scene that
+a game loads by name to warm a cache is worth reading first: its PreloadData (`sharedassets<n>.assets`,
+UnityPy) lists every object it pulls in, by file, with the textures' sizes and readable flags.
+
+Textures a shader reads as data, not as colours, must stay as they are. Blasphemous draws the Penitent,
+several bosses and some props with `Maikel/MaikelSpriteMasterShader`, which takes a sprite texel's blue
+channel as the x of a palette texture (`_PaletteTex`, the skins) and outputs that palette colour: any
+change of a blue value picks another palette entry, and ASTC turned parts of the Penitent magenta and
+cyan. Look for `texture(<palette>, <a channel of _MainTex>)` in the game's shaders (UnityPy's
+`Shader.export()` of the data's GLSL) and for the materials that use them.
+
 Text for every language, loaded in every language: a game may keep the fonts of all its languages
 referenced from its text objects (a component that swaps the font by language, a fallback list), and Unity
 then loads every one of them with the first scene and again with each scene that has text. Hollow Knight's
@@ -1213,6 +1232,19 @@ the command line and `Screen.resolutions`: [runtime.md](runtime.md#what-a-deskto
 its port: patches to its assemblies (`files.assembly_patches`) and a helper assembly
 (`files.managed`), as portmaster-cuphead does with Mono.Cecil. Changes that alter the picture or
 the game play belong behind an option, off by default.
+
+A game may also name its own content by the platform it runs on, and the Android player is none of the
+platforms the desktop build was made for. Blasphemous loads the scene `"Preload_" + GetPlatformName()`
+before its first level, its build holds `Preload_Windows`, `Preload_Linux` and `Preload_OSX`, and on the
+Android player it asked for `Preload_Android`: `LevelScene.Load` threw a NullReferenceException and the
+new game stayed on its loading screen. asmpatch's `blasphemous-preload` makes that method read the data's
+own platform (globalgamemanagers' build target) where it reads Android. Look for such names before the
+first level: every read of `Application.platform` and `RuntimePlatform` in the game's assemblies (an
+IL scan; the decompiled code shows the switches), and what each picks. Blasphemous's others: the
+disclaimer's version line prints `Steam - Android` (left as it is), the rest is demo and library code
+the game does not run. The patch reads `globalgamemanagers` beside `Managed`, so it fails (and the
+setup stops) when asmpatch runs on a staged copy of the Managed folder, which it does when the port
+also ships its own patch of `Assembly-CSharp.dll` (below).
 
 ### A port's own assembly patch
 
