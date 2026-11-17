@@ -53,7 +53,12 @@ if [ -f "$S/convert.json" ] && grep -q '"video"' "$S/convert.json"; then
   if [ -f "$t" ]; then chmod +x "$t" "$GAMEDIR/pmhwdec/pmhwdec-cedard" 2>/dev/null; r=$("$t" -q 2>/dev/null | sed -n 's/^VP8: //p'); fi
   case "$r" in
     ""|"no hardware"*) "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt).";;
-    *) echo "VP8 on this handheld's video engine ($r): the videos are left as they are";;
+    *) if grep -q '"on_hardware": *"smaller"' "$S/convert.json"; then
+         echo "VP8 on this handheld's video engine ($r); the port makes its videos smaller all the same"
+         "$S/pmu" video "$GAMEDIR" --config "$S/convert.json" || fail "Could not update the game's videos (see patchlog.txt)."
+       else
+         echo "VP8 on this handheld's video engine ($r): the videos are left as they are"
+       fi;;
   esac
 fi
 

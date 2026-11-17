@@ -9,7 +9,10 @@
 //! .resource file where the old one was (it is smaller; the rest of its old place is zeroed), so
 //! no other object of the file moves; the VideoClip gets the new size (m_ExternalResources.m_Size,
 //! Width, Height). Other codecs, and clips inside bundles, are left as they are.
-//! `mode`: auto (where MemTotal is at most `ram_mb`), on, off. A resource file and the asset files
+//! `mode`: auto (where MemTotal is at most `ram_mb`), on, off. `on_hardware` is for the setup templates, which
+//! turn the step off where the port's libpmhwdec decodes VP8 on the handheld's video engine ("full", the
+//! default) or leave it on there too ("smaller": clips of 60 pictures a second, whose 1080p pictures cost the
+//! game's render thread more to take than the smaller ones cost libvpx to decode; Blasphemous). A resource file and the asset files
 //! whose clips it holds are written together and journalled as done together.
 use super::{field, field_mut, objects, section, text};
 use crate::error::{Error, Result};
@@ -28,6 +31,7 @@ fn defaults() -> Vec<(&'static str, Json)> {
         ("cq_level", Json::Int(10)),
         ("max_kbps", Json::Int(4000)),
         ("threads", Json::Int(0)),
+        ("on_hardware", Json::Str("full".into())),
     ]
 }
 
@@ -101,6 +105,15 @@ pub fn applies(cfg: &Json) -> Result<(bool, String)> {
 
 pub fn run(job: &mut Job) -> Result<()> {
     let c = section(&job.cfg, "video", &defaults())?;
+    match c.get("on_hardware").and_then(Json::as_str) {
+        Some("full" | "smaller") => {}
+        other => {
+            return Err(Error::Value(format!(
+                "video.on_hardware: {} (full or smaller)",
+                other.unwrap_or("not a string")
+            )))
+        }
+    }
     let (on, why) = mode_of(&c)?;
     if !on {
         job.log(&format!("video: clips kept as they are ({why})"));

@@ -113,9 +113,15 @@ hw_vp8() {
   case "$r" in ""|"no hardware"*) echo "VP8: no hardware decoder here (the software decoder plays the videos)"; return 1;; esac
   echo "VP8 on this handheld's video engine: $r"
 }
+# (a port whose convert.json says video.on_hardware = "smaller" has them made smaller there too: Blasphemous's
+# 60-pictures-a-second 1080p clips, whose uploads cost more than the smaller clips' decoding)
 if grep -q '"video"' "$S/convert.json" 2>/dev/null && hw_vp8; then
-  echo "the videos stay at full size"
-  CONVERT_SET+=(--set video.mode=off)
+  if grep -q '"on_hardware": *"smaller"' "$S/convert.json"; then
+    echo "the videos are made smaller all the same (the port's video.on_hardware)"
+  else
+    echo "the videos stay at full size"
+    CONVERT_SET+=(--set video.mode=off)
+  fi
 fi
 
 # ---- 1. the game's data folder
