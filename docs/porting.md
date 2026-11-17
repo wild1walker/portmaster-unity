@@ -659,6 +659,43 @@ names = "chinese_body Atlas|chinese_trad_body Atlas|...|NotoSerifCJKsc-Regular|N
 UA_UNLOAD_ASSETS = "chinese_body Atlas|chinese_trad_body Atlas|...|NotoSerifCJKsc-Regular|NotoSerifTC-Medium"
 ```
 
+A startup load that pulls in whole enemies: `Resources.LoadAll` loads everything under a path, and with each
+object everything its fields reference. Blasphemous's `FMODAudioManager.Initialize` loads every enemy's sound
+catalog (`Resources.LoadAll<FMODAudioCatalog>("FMODCatalogs/Enemies")`: 66 small prefabs), and 59 of them have an
+`Owner` field that references the enemy or boss component it belongs to, so the load brings every enemy and boss
+with all their sprite sheets (resources.assets holds 972 textures, 2.4 GB as RGBA32, about 600 MB as the port's
+ASTC): on the BattleXP G350 (895 MB) the game climbed to 778 MB during startup and ran out of memory before the
+title. How it showed: `mem.log` climbing while nothing was on screen, and a `UA_PROF` profile with 90 % of the
+stall under that one `LoadAll`; then the decompiled code, for who reads what the load returns. Here the only
+reader is each level's `AudioLoader.AddCatalogItems`, which takes, for each enemy type in the level, the first
+catalog whose `Owner` has that type. The fix keeps that exactly and changes only when things load: the setup's
+`fmodcatalogs` step ([rust-setup.md](rust-setup.md#fmodcatalogs)) writes what the load returns from the player's own
+data (the paths in the ResourceManager container's order, which is `LoadAll`'s, each with its owner's class), and
+asmpatch's `blasphemous-catalogs` ([tools/asmpatch](../tools/asmpatch/README.md)) makes the startup load empty and
+has `AddCatalogItems` walk only the listed catalogs whose owner class is one of the level's types, loading each by
+its path then: the same catalogs in the same order. The order matters: three catalogs own the `Fool` enemy
+(`dmkfool`, `fool`, `quirce`), and the game takes the first. `ASMPATCH_BLASPHEMOUS_CATALOGS=check` does the
+original load as well and compares it with the list entry by entry. What a level used stays loaded as the game
+keeps it: the catalogs it registers keep their `Owner`, so the enemies met so far stay in memory (all of them,
+after a long enough game, as at the original's startup); an exact fix can only move the load, not drop it.
+
+```toml
+[convert]
+steps = ["shaders", "settings", "audio", "quality", "textures", "fmodcatalogs"]
+[android_data]
+asmpatch = ["auto", "blasphemous-catalogs"]
+data_path = true          # the list in Game_Data/ beside the APK, where the patched game reads it
+```
+
+Checked on Unity 2017.4's armv7 player (the emulated rig, which has the memory for the original load):
+`check` found the game's load and the list the same in all 66 entries (order, the object `Resources.Load` gives
+for each path, the owner's runtime type), and the first level (D17Z01S01) walked its one enemy type's two
+catalogs in the array's order (`DMKPatrollingFlyingEnemy`, then `PatrollingFlyingEnemy`). On the BattleXP G350
+(2026-11-16, release settings, silent): unpatched (and with `check`, which does the original load) the game
+reached 778-791 MB during startup and was stopped for low memory before the title; patched, the title at 233 MB
+and 60 fps, the main menu 490 MB. The first level's load still runs out (781 MB at its loading screen): a
+second memory problem, not this one, still to be found (a census during that load).
+
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
 
 The R36S class is PortMaster's most common handheld and the slowest these tools aim at: four Cortex-A35
