@@ -637,6 +637,30 @@ change of a blue value picks another palette entry, and ASTC turned parts of the
 cyan. Look for `texture(<palette>, <a channel of _MainTex>)` in the game's shaders (UnityPy's
 `Shader.export()` of the data's GLSL) and for the materials that use them.
 
+`exact_shaders` (a regular expression on shader names) with `exact_keywords` (keywords the material must
+have, all of them) finds those textures in the player's data at setup and leaves them as the game has
+them: the materials' own textures, the sprites of the SpriteRenderers drawn with such a material and
+every sprite the Animators above those renderers set in their clips. A material a script makes, a sprite
+a script sets and UI Images are not followed: `exact_names` (a regular expression on texture names) adds
+those by hand. Blasphemous (only its `PALETTE_ON` materials sample the palette: the Penitent's and its
+ghost trail's, and BlindBaby's):
+
+```toml
+[convert.textures]
+exact_shaders = "^Maikel/MaikelSpriteMasterShader"
+exact_keywords = "PALETTE_ON"
+```
+
+finds 3 materials, 1,419 renderers and 39 animator controllers: 137 textures, 1,032 MB as RGBA32 (the
+Penitent's animations and every execution, which draw the enemy through the Penitent's palette too).
+ASTC 4x4 cannot hold them exactly, whatever the effort: encoded with the blue channel and alpha alone
+weighted, at astcenc's exhaustive preset, 9 - 17 % of the opaque texels still change. Left as RGBA32 they
+do not fit a 1 GB handheld: the BattleXP G350's menu 405 -> 485 MB, and the first level's load was stopped
+for low memory at 773 MB (the first level holds 107 of them, 74 MB as ASTC, 295 MB as RGBA32). All 137
+use point filtering and no mipmaps, and all but three have alpha 0 or 255 only, so one byte a texel would
+hold them exactly (the index, a reserved value for transparent), but the shader reads the blue channel:
+that needs the shader changed with the format.
+
 Text for every language, loaded in every language: a game may keep the fonts of all its languages
 referenced from its text objects (a component that swaps the font by language, a fallback list), and Unity
 then loads every one of them with the first scene and again with each scene that has text. Hollow Knight's
