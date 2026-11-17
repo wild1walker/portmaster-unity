@@ -24,6 +24,7 @@
 #include "wwise.h"
 #ifndef UA_NO_STEAMSTUB
 #include "steamstub.h"
+#include "fmodstub.h"
 #endif
 
 #include <dlfcn.h>
@@ -692,5 +693,6 @@ const so_shim *plugins_stub_table(const char *id)
     if (!strcmp(id, "discord_game_sdk")) return plugstub_discord_game_sdk;
     if (!strcmp(id, "discord-rpc")) return plugstub_discord_rpc;
     if (!strcmp(id, "eos")) return plugstub_eos;
+    if (!strcmp(id, "fmod")) return fmodstub_table();
     return NULL;
 }

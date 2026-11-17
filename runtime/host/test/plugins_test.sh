@@ -1,7 +1,7 @@
 #!/bin/sh
 # plugins.c's unit test (test_plugins.c, plugins_softfp.c as the softfp "Mono side") with the FMOD
 # test double (fmod_double.c) built as an Android library and as a glibc library; the Wwise stub
-# (wwise.c) with and without a test backend (wwise_backend.c); desktopenv.c's (test_desktopenv.c); monoaot.c's
+# (wwise.c) with and without a test backend (wwise_backend.c); the built-in FMOD (fmodstub.c); desktopenv.c's (test_desktopenv.c); monoaot.c's
 # (test_monoaot.c); jitlog.c's (test_jitlog.c); jitwarm.c's list (test_jitwarm.c); gcbudget.c's UA_GC_GROW (test_gcgrow.c);
 # monoinvoke.c's (test_monoinvoke.c). Build the loader
 # first (../loader/build.sh, same ARCH). ARCH=armhf (default): built in ua-host-armhf, run in an
@@ -14,7 +14,7 @@ if [ "$ARCH" = arm64 ]; then
     set -e
     O=out/arm64/test/plugins; mkdir -p $O/glibc $O/android
     F="-O2 -g -Wall -Wno-format-truncation"
-    gcc $F -o $O/test_plugins test/test_plugins.c test/plugins_softfp.c plugins.c plugstubs.c steamstub.c wwise.c wwise_tramp.S \
+    gcc $F -o $O/test_plugins test/test_plugins.c test/plugins_softfp.c plugins.c plugstubs.c fmodstub.c steamstub.c wwise.c wwise_tramp.S \
       ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
     gcc $F -shared -fPIC -o $O/libwwise_backend.so test/wwise_backend.c
     gcc $F -o $O/test_desktopenv test/test_desktopenv.c desktopenv.c ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
@@ -38,6 +38,7 @@ if [ "$ARCH" = arm64 ]; then
     mkdir -p $T/w $T/wb
     $O/test_plugins wwise $T/w
     $O/test_plugins wwise $T/wb $PWD/$O/libwwise_backend.so
+    mkdir -p $T/f; $O/test_plugins fmod $T/f
     $O/test_desktopenv
     $O/test_monoaot $T
     $O/test_jitlog none
@@ -54,7 +55,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
   F="-O2 -g -Wall -Wno-format-truncation -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
   # the Mono side: armeabi-v7a code passes floats in core registers
   $CC -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=softfp -ffreestanding -c test/plugins_softfp.c -o $O/plugins_softfp.o
-  arm-linux-gnueabihf-g++ $F -o $O/test_plugins -x c test/test_plugins.c -x c plugins.c -x c plugstubs.c -x c steamstub.c -x c wwise.c \
+  arm-linux-gnueabihf-g++ $F -o $O/test_plugins -x c test/test_plugins.c -x c plugins.c -x c plugstubs.c -x c fmodstub.c -x c steamstub.c -x c wwise.c \
     -x assembler-with-cpp wwise_tramp.S -x none \
     $O/plugins_softfp.o ../loader/out/libsoloader.a -Wl,--no-warn-mismatch -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
     -ldl -lpthread -lm
@@ -85,6 +86,7 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
   mkdir -p $T/w $T/wb
   $O/test_plugins wwise $T/w
   $O/test_plugins wwise $T/wb $PWD/$O/libwwise_backend.so
+  mkdir -p $T/f; $O/test_plugins fmod $T/f
   $O/test_desktopenv
   $O/test_monoaot $T
   $O/test_jitlog none

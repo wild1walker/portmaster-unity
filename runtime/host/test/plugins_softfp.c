@@ -139,3 +139,42 @@ int sf_wwise(sym_t sym, uint64_t *o, uint64_t go, uint32_t rtpc, uint32_t event)
     o[k++] = W(int (*)(void), "CSharp_IsInitialized")();                                         // 35: 0
     return k;
 }
+
+// the built-in FMOD (fmodstub.c), called as Mono calls it: fn[] in the order of test_plugins.c's
+// FMOD_STUB_CALLS; out[] gets the results to check (floats as bits)
+int sf_fmod_stub(void *const *fn, uint32_t *out)
+{
+    int cur = -1, max = -1, st = -1;
+    void *sys = 0, *core = 0, *bank = 0, *desc = 0, *inst = 0, *bus = 0, *param = 0;
+    unsigned char id[16];
+    float v = 0, fv = 0;
+    out[0] = ((int (*)(int *, int *, int))fn[0])(&cur, &max, 0);
+    out[1] = ((int (*)(void **, unsigned))fn[1])(&sys, 0x00011013) | (sys ? 0 : 0x100);
+    out[2] = ((int (*)(void *, int, unsigned, unsigned, void *))fn[2])(sys, 1024, 1, 0, 0);
+    out[3] = ((int (*)(void *, void **))fn[3])(sys, &core) | (core ? 0 : 0x100);
+    out[4] = ((int (*)(void *, const char *, unsigned, void **))fn[4])(sys, "/x/StreamingAssets/Master Bank.bank", 0, &bank);
+    ((int (*)(void *, int *))fn[5])(bank, &st);
+    out[5] = (uint32_t)st;
+    out[6] = ((int (*)(void *, const char *, unsigned char *))fn[6])(sys, "event:/SFX/UI/ChangeTab", id);
+    out[7] = ((int (*)(void *, const unsigned char *, void **))fn[7])(sys, id, &desc) | (desc ? 0 : 0x100);
+    out[8] = ((int (*)(void *, void **))fn[8])(desc, &inst) | (inst ? 0 : 0x100);
+    out[9] = ((int (*)(void *))fn[9])(inst);
+    st = -1;
+    ((int (*)(void *, int *))fn[10])(inst, &st);
+    out[10] = (uint32_t)st;
+    out[11] = ((int (*)(void *, const char *, void **))fn[11])(sys, "bus:/MUSIC", &bus) | (bus ? 0 : 0x100);
+    out[12] = ((int (*)(void *, float))fn[12])(bus, 0.625f);
+    ((int (*)(void *, float *, float *))fn[13])(bus, &v, &fv);
+    out[13] = fbits(v);
+    out[14] = ((int (*)(void *, const char *, float))fn[14])(inst, "Spanish", 1.0f);
+    ((int (*)(void *, const char *, float *, float *))fn[15])(inst, "Spanish", &v, &fv);
+    out[15] = fbits(v);
+    out[16] = ((int (*)(void *, const char *, void **))fn[16])(inst, "Panning", &param) | (param ? 0 : 0x100);
+    out[17] = ((int (*)(void *, float))fn[17])(param, 0.25f);
+    ((int (*)(void *, float *))fn[18])(param, &v);
+    out[18] = fbits(v);
+    out[19] = ((int (*)(void *))fn[19])(inst);                    // Release
+    out[20] = ((int (*)(void *))fn[20])(inst);                    // IsValid after release: false
+    out[21] = ((int (*)(void *, unsigned *))fn[21])(core, (unsigned *)&cur);   // an entry point it does not implement: OK
+    return 0;
+}

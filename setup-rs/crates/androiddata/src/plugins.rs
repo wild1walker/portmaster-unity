@@ -19,8 +19,9 @@ type Sdk = (
 );
 
 const SDKS: &[Sdk] = &[
-    ("fmod", r"fmod(studio)?l?(64)?", "FMOD Engine / FMOD Studio", "lib", None,
-     "audio middleware: supply FMOD's ARM libraries of the same version (see \"fmod\")"),
+    ("fmod", r"fmod(studio)?l?(64)?", "FMOD Engine / FMOD Studio", "stub", Some("fmod"),
+     "built-in FMOD: every call succeeds, nothing plays; FMOD's own ARM libraries of the same version \
+in lib/ play the sound instead (see \"fmod\")"),
     ("steamworks", r"steam_api(64)?", "Steamworks", "stub", Some("steam"),
      "built-in stub: SteamAPI_Init fails as without a running Steam client"),
     ("steam-encryptedappticket", r"sdkencryptedappticket(64)?", "Steamworks encrypted app tickets", "none", None,
@@ -1386,6 +1387,7 @@ fn py_type(j: &Json) -> &'static str {
 
 const STUBS: &[&str] = &[
     "steam",
+    "fmod",
     "csteamworks",
     "discord_game_sdk",
     "discord-rpc",
@@ -1443,7 +1445,11 @@ pub fn map_text(rep: &Survey, pmap: &Json) -> Result<String, String> {
     }
     let libs: BTreeSet<&str> = items
         .iter()
-        .filter(|(_, e)| matches!(e.get("use").and_then(Json::as_str), Some("lib" | "host")))
+        // (the built-in FMOD too: a glibc FMOD dropped into lib/ wins over it and needs the thunks)
+        .filter(|(_, e)| {
+            matches!(e.get("use").and_then(Json::as_str), Some("lib" | "host"))
+                || e.get("stub").and_then(Json::as_str) == Some("fmod")
+        })
         .map(|(n, _)| n.as_str())
         .collect();
     for (name, entry, ret, params) in &rep.sigs {

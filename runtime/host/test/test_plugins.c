@@ -8,6 +8,8 @@
 //                                    Mono calls Wwise 2017.2's integration (softfp on 32-bit ARM):
 //                                    results, the callback queue, game syncs; with a backend, what
 //                                    it gets and an event it ends later
+//   test_plugins fmod <root>         the built-in FMOD (fmodstub.c) under fmod and fmodstudio, called
+//                                    as the integration calls it (softfp on 32-bit ARM)
 #define _GNU_SOURCE
 #include "../plugins.h"
 #include "../../loader/so_loader.h"
@@ -125,6 +127,51 @@ static int test_paths(const char *tmp)
           "variants of fmodstudio: %d", n);
     n = plugins_name_variants("libsteam_api.so", v, 6);
     CHECK(n >= 3 && !strcmp(v[0], "libsteam_api.so") && !strcmp(v[1], "steam_api"), "variants of libsteam_api.so: %d %s", n, v[1]);
+    return 0;
+}
+
+int sf_fmod_stub(void *const *fn, uint32_t *out);
+static const char *const FMOD_STUB_CALLS[] = {
+    "FMOD5_Memory_GetStats", "FMOD_Studio_System_Create", "FMOD_Studio_System_Initialize", "FMOD_Studio_System_GetLowLevelSystem",
+    "FMOD_Studio_System_LoadBankFile", "FMOD_Studio_Bank_GetSampleLoadingState", "FMOD_Studio_System_LookupID",
+    "FMOD_Studio_System_GetEventByID", "FMOD_Studio_EventDescription_CreateInstance", "FMOD_Studio_EventInstance_Start",
+    "FMOD_Studio_EventInstance_GetPlaybackState", "FMOD_Studio_System_GetBus", "FMOD_Studio_Bus_SetVolume", "FMOD_Studio_Bus_GetVolume",
+    "FMOD_Studio_EventInstance_SetParameterValue", "FMOD_Studio_EventInstance_GetParameterValue", "FMOD_Studio_EventInstance_GetParameter",
+    "FMOD_Studio_ParameterInstance_SetValue", "FMOD_Studio_ParameterInstance_GetValue", "FMOD_Studio_EventInstance_Release",
+    "FMOD_Studio_EventInstance_IsValid", "FMOD5_System_GetSoftwareChannels",
+};
+
+// the built-in FMOD (fmodstub.c) under both DllImport names, as the integration calls it
+static int test_fmod(const char *root)
+{
+    char p[600];
+    snprintf(p, sizeof p, "%s/plugins.map", root);
+    FILE *f = fopen(p, "w");
+    fprintf(f, "map fmodstudio stub fmod\nmap fmod stub fmod\n");
+    fclose(f);
+    plugins_init(root, root);
+    void *h = so_dlopen("libfmodstudio.so", 0), *h2 = so_dlopen("fmod", 0);
+    CHECK(h != NULL && h2 != NULL, "the stub under both names");
+    if (!h) return 0;
+    int n = (int)(sizeof FMOD_STUB_CALLS / sizeof FMOD_STUB_CALLS[0]);
+    void *fn[32];
+    for (int i = 0; i < n; i++) { fn[i] = so_dlsym(h, FMOD_STUB_CALLS[i]); CHECK(fn[i] != NULL, "%s", FMOD_STUB_CALLS[i]); if (!fn[i]) return 0; }
+    CHECK(so_dlsym(h2, "FMOD5_Memory_GetStats") != NULL, "FMOD5_Memory_GetStats under fmod");
+    uint32_t o[32] = { 0 };
+    sf_fmod_stub(fn, o);
+    float v;
+    for (int i = 0; i <= 4; i++) CHECK(o[i] == 0, "%s: %u", FMOD_STUB_CALLS[i], o[i]);
+    CHECK(o[5] == 3, "bank sample loading state LOADED: %u", o[5]);
+    for (int i = 6; i <= 9; i++) CHECK(o[i] == 0, "%s: %u", FMOD_STUB_CALLS[i], o[i]);
+    CHECK(o[10] == 2, "a started instance is STOPPED: %u", o[10]);
+    CHECK(o[11] == 0 && o[12] == 0, "bus: %u %u", o[11], o[12]);
+    memcpy(&v, &o[13], 4); CHECK(v == .625f, "bus volume back: %g (float argument through the ABI)", v);
+    CHECK(o[14] == 0, "SetParameterValue: %u", o[14]);
+    memcpy(&v, &o[15], 4); CHECK(v == 1.0f, "parameter value back: %g", v);
+    CHECK(o[16] == 0 && o[17] == 0, "parameter instance: %u %u", o[16], o[17]);
+    memcpy(&v, &o[18], 4); CHECK(v == .25f, "parameter instance value back: %g", v);
+    CHECK(o[19] == 0 && o[20] == 0, "release, then not valid: %u %u", o[19], o[20]);
+    CHECK(o[21] == 0, "an unimplemented entry point: %u", o[21]);
     return 0;
 }
 
@@ -323,7 +370,8 @@ int main(int argc, char **argv)
     else if (!strcmp(mode, "paths") && argc > 2) test_paths(argv[2]);
     else if (!strcmp(mode, "lib") && argc > 3) test_lib(argv[2], argv[3]);
     else if (!strcmp(mode, "wwise") && argc > 2) test_wwise(argv[2], argc > 3 ? argv[3] : NULL);
-    else { fprintf(stderr, "usage: test_plugins thunks | paths <tmp> | lib <libdir> <root> | wwise <root> [backend.so]\n"); return 2; }
+    else if (!strcmp(mode, "fmod") && argc > 2) test_fmod(argv[2]);
+    else { fprintf(stderr, "usage: test_plugins thunks | paths <tmp> | lib <libdir> <root> | wwise <root> [backend.so] | fmod <root>\n"); return 2; }
     printf("%s: %s (%d failures)\n", mode, fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }

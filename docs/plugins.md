@@ -87,7 +87,31 @@ the core API is imported from `fmodstudio` too). FMOD's licence makes it free fo
 but every download needs an FMOD account: the port tools never ship FMOD, and the porter (or the
 player, in a port's setup) supplies FMOD's ARM libraries of the game's FMOD version.
 
-**Route: FMOD's own Android libraries**, of the same version as the game's integration, in the
+**Default: ua_host's built-in FMOD** (`stub fmod`, under both `fmod` and `fmodstudio`;
+runtime/host/fmodstub.c). Without FMOD's libraries every call of the integration would throw
+`DllNotFoundException` (Blasphemous, FMOD 1.10: 3,464 times at its title screen, from
+`RuntimeUtils.EnforceLibraryOrder`'s `FMOD5_Memory_GetStats`, and `RuntimeManager` never
+initializes). The built-in FMOD answers the whole API as an FMOD that plays nothing: written from
+FMOD's public API names and documented results (the 546 entry points FMOD for Unity 1.10 declares,
+runtime/host/fmodstub_names.h), no FMOD code, header or data.
+
+| calls | answer |
+|---|---|
+| `System_Create`, `Studio_System_Create` / `Initialize` / `GetLowLevelSystem`, `Memory_GetStats`, `GetVersion` (1.10.13) | success, valid handles |
+| `LoadBankFile` / `LoadBankMemory`, `Bank_GetLoadingState` / `GetSampleLoadingState`, `EventDescription_GetSampleLoadingState` | success, `LOADED` (nothing waits for samples); `Bank_GetPath` `bank:/<file name>` |
+| `LookupID`, `GetEvent` / `GetEventByID`, `LookupPath`, `EventDescription_GetPath` | a GUID for every path (a hash of it), a description for every GUID, the path back |
+| `CreateInstance`, `Start`, `Stop`, `Release`, `IsValid`, `GetPlaybackState` | a valid instance until it is released; `STOPPED` (a started instance has nothing to play, so nothing waits for its end) |
+| parameters (`SetParameterValue`, `GetParameter` + `ParameterInstance_SetValue` / `GetValue`), instance volume, pitch, paused, properties, user data, callbacks | kept and given back; callbacks are never called |
+| `GetBus` / `GetVCA`, `Bus_SetVolume` / `GetVolume` / `SetPaused` / `SetMute`, the master channel group's volume | kept and given back (the options menu reads back what it set) |
+| `GetSoundInfo` (programmer sounds) | `ERR_EVENT_NOTFOUND` |
+| every other entry point | `FMOD_OK`, nothing written |
+
+The entry points that take a float by value are built for the base AAPCS on 32-bit ARM
+(`pcs("aapcs")`): the armeabi-v7a player's Mono passes floats in core registers. `UA_FMOD_TRACE=1`
+logs bank loads. An FMOD library in `lib/` (below) is used instead of it. Test: `test_plugins fmod`
+(runtime/host/test/plugins_test.sh), as the integration calls it.
+
+**Route to sound: FMOD's own Android libraries**, of the same version as the game's integration, in the
 port's `lib/`:
 
 | | |
@@ -146,6 +170,7 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | Epic Online Services | `EOSSDK-*` | stub `eos` | `EOS_Initialize` succeeds, `EOS_Platform_Create` gives no platform (NULL) |
 | GOG Galaxy | `GalaxyCSharpGlue`, `Galaxy64` | none | the SWIG glue's first call throws `DllNotFoundException` (GOG builds catch Galaxy failures; Cuphead's does) |
 | Discord Social SDK | `discord_partner_sdk` | none | no stub yet |
+| FMOD Studio | `fmodstudio`, `fmod` | stub `fmod` | every call succeeds, nothing plays ([FMOD](#fmod)); FMOD's ARM libraries of the game's version in `lib/` play the sound instead |
 | Wwise | `AkSoundEngine` | stub `wwise` | a sound engine made of the game's own entry points: every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game; ua_host's own player plays the banks the setup converted ([the player](#the-player-runtimehostwwplayc)), else it is silent ([Wwise](#wwise)); an ARM `libAkSoundEngine.so` of the game's version in `lib/` plays the sound instead |
 | SQLite | `sqlite3` | host `libsqlite3.so.0` | the system's library (32-bit for the armv7 player); missing: `DllNotFoundException` as before |
 | StandaloneFileBrowser | `StandaloneFileBrowser` | none | no file dialogs on a handheld |
