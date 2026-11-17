@@ -723,7 +723,16 @@ its path then: the same catalogs in the same order. The order matters: three cat
 (`dmkfool`, `fool`, `quirce`), and the game takes the first. `ASMPATCH_BLASPHEMOUS_CATALOGS=check` does the
 original load as well and compares it with the list entry by entry. What a level used stays loaded as the game
 keeps it: the catalogs it registers keep their `Owner`, so the enemies met so far stay in memory (all of them,
-after a long enough game, as at the original's startup); an exact fix can only move the load, not drop it.
+after a long enough game, as at the original's startup); an exact fix can only move the load, not drop it. How much
+that is, estimated from the data (2026-11-17: each catalog's objects in resources.assets reached from it by
+references, a raw scan of every object for pointers into the file; textures counted at one byte a pixel, as the
+port's ASTC 4x4 and R8 store them): most enemies 15 - 70 MB, the bosses 140 - 340 MB (Amanecidas, the Pontiff's husk,
+the snake, Isidora), all 66 catalogs 629 MB with what they share counted once. The RG34XX-SP plays the first level
+with about 220 MB available, so a few areas' worth of enemies would use it up. The reference that keeps them is the
+catalog's `Owner`, through `FMODAudioManager.RegisterCatalog`'s array, which keeps every catalog registered for the
+session; `Owner` is a type tag (only `AddCatalogItems` reads it; `FMODAudioCatalog.Initialize` does not), so a
+patch that matches the level's types by the list's class names and clears `Owner` once a catalog is loaded would
+let `Level`'s `Resources.UnloadUnusedAssets` free each enemy after its level, with the same catalogs registered.
 
 ```toml
 [convert]
