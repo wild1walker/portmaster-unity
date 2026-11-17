@@ -781,7 +781,10 @@ blocks begin with `MZ`, whole copies of the assemblies (15.8 MB) the APK holds u
   Chinese font (`MSJhengHei-cut`, an 8 MB RGBAHalf atlas) and the Chinese, Korean and Japanese TextMeshPro atlases:
   textures 370.3 -> 360.3 MB, Mali's pages -13.9 MB, the lowest MemAvailable 170 -> 185 MB. In English the Korean
   atlas came back in the main menu (its text uses it: the census logs `loaded again after it was given back: in
-  use, kept`), as the unload is meant to; the others stayed out through the first level;
+  use, kept`), as the unload is meant to; the others stayed out through the first level. In Chinese (the
+  options file's `textLanguageIndex` 5, saved before launch) the Chinese font and atlas and the Korean atlas came
+  back at the title and stayed, the Japanese one stayed out, and the title and save-slot screens were the same
+  bytes as without the step;
 - the video's render texture without a depth buffer (asmpatch `blasphemous-video-depth`): render textures
   21.1 -> 13.2 MB, Mali's pages -7.1 MB;
 - the FMOD player's parsed bank trees freed after reading (ua_host): about 4.5 MB.
