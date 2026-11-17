@@ -53,7 +53,7 @@ abstract class Patch
         // reductions
         new HollowKnightBlur(), new HollowKnightPost(), new HollowKnightUnload(),
         // screens
-        new HollowKnightAspect(), new HollowKnightRenderSize(),
+        new HollowKnightAspect(), new HollowKnightRenderSize(), new HollowKnightText(),
         // prompts
         new HollowKnightPadLetters(),
         // fixes

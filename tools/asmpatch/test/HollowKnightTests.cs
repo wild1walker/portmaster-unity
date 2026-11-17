@@ -148,6 +148,7 @@ static partial class TestMain
         HollowKnightFadeTests();
         HollowKnightPadLettersTests();
         HollowKnightUnloadTests();
+        HollowKnightTextTests();
     }
 
     // ---- hk-pad-letters ----------------------------------------------------------------------
