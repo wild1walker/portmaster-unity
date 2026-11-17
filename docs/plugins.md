@@ -106,6 +106,17 @@ runtime/host/fmodstub_names.h), no FMOD code, header or data.
 | `GetSoundInfo` (programmer sounds) | `ERR_EVENT_NOTFOUND` |
 | every other entry point | `FMOD_OK`, nothing written |
 
+**Sound: ua_host's own FMOD player.** With `UA_FMOD_DATA=<dir>` (the launcher sets it when the setup
+converted the banks, `fmod.banks` in port.toml: `pmu fmod`) the built-in FMOD plays the game's banks
+with runtime/host/fmplay.c ([fmod-player.md](fmod-player.md): the format and what step 1 plays): paths
+and GUIDs come from the strings bank, events, parameters (by name and index, with their
+descriptions), playback states, timeline positions, volumes, pause, buses and the master channel
+group's volume reach the player; the game's callbacks it asked for (timeline markers and beats,
+programmer sounds with `getSoundInfo` / `createSound` / `Sound::getLength` from the voice-over banks'
+sound tables, stopped, created, destroyed) are called on the game's thread from
+`Studio::System::update`, as with `DEFERRED_CALLBACKS`. A released instance stays valid until it has
+stopped. The mix goes into the game's OpenSL ES output like the Wwise player's.
+
 The entry points that take a float by value are built for the base AAPCS on 32-bit ARM
 (`pcs("aapcs")`): the armeabi-v7a player's Mono passes floats in core registers. `UA_FMOD_TRACE=1`
 logs bank loads. An FMOD library in `lib/` (below) is used instead of it. Test: `test_plugins fmod`

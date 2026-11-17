@@ -14,7 +14,7 @@ if [ "$ARCH" = arm64 ]; then
     set -e
     O=out/arm64/test/plugins; mkdir -p $O/glibc $O/android
     F="-O2 -g -Wall -Wno-format-truncation"
-    gcc $F -o $O/test_plugins test/test_plugins.c test/plugins_softfp.c plugins.c plugstubs.c fmodstub.c steamstub.c wwise.c wwise_tramp.S \
+    gcc $F -o $O/test_plugins test/test_plugins.c test/plugins_softfp.c plugins.c plugstubs.c fmodstub.c fmplay.c wwplay_vorbis.c steamstub.c wwise.c wwise_tramp.S \
       ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
     gcc $F -shared -fPIC -o $O/libwwise_backend.so test/wwise_backend.c
     gcc $F -o $O/test_desktopenv test/test_desktopenv.c desktopenv.c ../loader/out/arm64/libsoloader.a -ldl -lpthread -lm -lrt -lstdc++
@@ -55,7 +55,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
   F="-O2 -g -Wall -Wno-format-truncation -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
   # the Mono side: armeabi-v7a code passes floats in core registers
   $CC -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=softfp -ffreestanding -c test/plugins_softfp.c -o $O/plugins_softfp.o
-  arm-linux-gnueabihf-g++ $F -o $O/test_plugins -x c test/test_plugins.c -x c plugins.c -x c plugstubs.c -x c fmodstub.c -x c steamstub.c -x c wwise.c \
+  arm-linux-gnueabihf-g++ $F -o $O/test_plugins -x c test/test_plugins.c -x c plugins.c -x c plugstubs.c -x c fmodstub.c -x c fmplay.c -x c wwplay_vorbis.c -x c steamstub.c -x c wwise.c \
     -x assembler-with-cpp wwise_tramp.S -x none \
     $O/plugins_softfp.o ../loader/out/libsoloader.a -Wl,--no-warn-mismatch -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx \
     -ldl -lpthread -lm

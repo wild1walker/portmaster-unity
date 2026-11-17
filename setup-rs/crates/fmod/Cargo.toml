@@ -1,0 +1,10 @@
+[package]
+name = "fmod"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "`pmu fmod`: a game's FMOD Studio banks (bank format 0x67, FMOD Studio 1.10) read once at setup into the data of ua_host's FMOD player (docs/fmod-player.md)"
+
+[dependencies]   # (pure Rust: the Vorbis setup headers are read from the game's own FMOD library; lewton to count and check)
+serde_json = "1"
+lewton = "0.10.2"

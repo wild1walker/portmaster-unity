@@ -19,6 +19,7 @@ mod version;
 mod video;
 mod winbcl;
 mod wwise;
+mod fmod;
 mod zip_extract;
 
 /// The commands this binary has, as the setup scripts name them.
@@ -37,6 +38,7 @@ pub const NAMES: &[&str] = &[
     "apk",
     "il2cpp",
     "wwise",
+    "fmod",
     "video",
     "apk-asmpatch",
     "lazy",
@@ -61,6 +63,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "apk" => Some(apk::run(args)),
         "il2cpp" => Some(il2cpp::run(args)),
         "wwise" => Some(wwise::run(args)),
+        "fmod" => Some(fmod::run(args)),
         "video" => Some(video::run(args)),
         "apk-asmpatch" => Some(apk_asmpatch::run(args)),
         "lazy" => Some(lazy::run(args)),

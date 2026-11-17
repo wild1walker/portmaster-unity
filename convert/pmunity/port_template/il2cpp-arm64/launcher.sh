@@ -110,6 +110,8 @@ if [ "${ANALOG_STICKS:-2}" = 0 ]; then
 fi
 # a Wwise game: ua_host's own Wwise player plays the banks the setup converted (set UA_WWISE_DATA= empty for none)
 [ -d "$GAMEDIR/wwise" ] && export UA_WWISE_DATA="${UA_WWISE_DATA-$GAMEDIR/wwise}"
+# an FMOD Studio game: ua_host's own FMOD player plays the banks the setup converted (set UA_FMOD_DATA= empty for none)
+[ -d "$GAMEDIR/fmod" ] && export UA_FMOD_DATA="${UA_FMOD_DATA-$GAMEDIR/fmod}"
 chmod +x "$GAMEDIR/ua_host"
 [ -f "$GAMEDIR/pmhwdec/pmhwdec-cedard" ] && chmod +x "$GAMEDIR/pmhwdec/pmhwdec-cedard"   # libpmhwdec's Allwinner decoder, where the port ships it
 

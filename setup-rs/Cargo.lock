@@ -235,6 +235,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fmod"
+version = "0.1.0"
+dependencies = [
+ "lewton",
+ "serde_json",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -469,6 +477,7 @@ dependencies = [
  "androiddata",
  "apk",
  "convert",
+ "fmod",
  "il2cpp",
  "libc",
  "pkgzip",

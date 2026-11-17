@@ -401,6 +401,7 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `android_data.video_shader`, `swappy`, `name`, `package`, `args` | on, `off`, from the title, `com.pmunity.<name>` | `pmunity android-data` options; `args` = more of them. Keep `package` from release to release: it names the PlayerPrefs file |
 | `runtime` | `UA_POINTER = "1"` for pointer-driven menus; `UA_PAD_NAME` for Rewired and InControl (the name of one of its Android profiles); `UA_OSK = "done"` where a text field does not matter | ua_host's environment (docs/runtime.md, docs/input.md), written to `port.env`; a variable set before the launcher runs wins |
 | `wwise.banks` | the check's: the game's Wwise soundbank folder (relative to the data folder) when its banks are of a version `pmu wwise` reads (128, Wwise 2017.2) | the setup converts those banks once into the port's `wwise/` folder (step 5 below), and the launcher points ua_host's own Wwise player at it (`UA_WWISE_DATA`): the game's sound without Wwise's engine ([wwise-player.md](wwise-player.md)); empty: no conversion, the game runs silent on ua_host's built-in Wwise |
+| `fmod.banks` | empty (set it by hand: `StreamingAssets` for a game whose FMOD Studio banks are of format 0x67, FMOD 1.10) | the setup converts those banks once into the port's `fmod/` folder (step 5b), and the launcher points ua_host's FMOD player at it (`UA_FMOD_DATA`): the game's sound without FMOD ([fmod-player.md](fmod-player.md)); empty: the game runs silent on ua_host's built-in FMOD ([plugins.md](plugins.md#fmod)) |
 | `runtime_low` | none | the Low picture: more of the environment, set on every handheld unless already set (no setup question offers another picture; `UA_PICTURE=high` set by hand in `port.env` skips it): the game's own options at their lowest and reductions of the picture that leave the game play as it is ([below](#the-low-picture-at-launch-runtime_low)) |
 | `runtime_lowmem` | none | more of the environment, set only on handhelds with 1 GB of RAM or less (`MemTotal` at most 1024 MB, read by `port.env` at each launch) unless already set, with either picture: what spares memory there at a price a bigger handheld need not pay; speedups go in `runtime` or `runtime_low`, for every handheld ([below](#small-handhelds-1-gb)) |
 | `[[questions]]` | none | asked by PortMaster's patcher before the setup: `id`, `question`, `options = [[value, label], ...]`, `default`; the answer goes to `convert_set` (`pmunity convert --set <key>=<answer>`) or to `env` (the game's environment, `answers.env`). The first answer is kept for later runs; `setup.txt` (`<id>=<value>`) is used when PortMaster asks nothing |
@@ -814,6 +815,10 @@ a `PATCH_FAIL_MSG:` line the patcher shows):
    ADPCM in a pak, the objects in a json; the Vorbis codebooks read from the game's own Wwise library; Enter the Gungeon's 177 MB in seconds, about 25 MB of
    memory), needing about the banks' size free; banks it cannot read leave the game silent and the
    setup goes on (the step runs only where the release ships pmu);
+5b. an FMOD Studio game (`fmod.banks`): `pmu fmod <data>/<banks> <port>/fmod --fmod-lib <plugins>` turns its banks
+    into the data of ua_host's FMOD player ([fmod-player.md](fmod-player.md): the samples as Ogg Vorbis, with
+    the Vorbis setup headers read from the game's own `libfmod.so`); the launcher sets `UA_FMOD_DATA=<port>/fmod`
+    when that folder is there.
 6. `pmunity android-data --consume-src --pack all`, with asmpatch, the class libraries of step 3,
    the managed files and assembly patches, and `android_data.args` (pmu syncs a file's new copy to
    the card before the file it was made from goes: docs/rust-setup.md, "the power cut");

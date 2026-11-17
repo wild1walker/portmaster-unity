@@ -20,6 +20,7 @@ the five-step quick start. This page lists every document and the repository's l
 | [input.md](input.md) | pads, Rewired, InControl, the Input System package, pointer mode, keys from the pad, the on-screen keyboard |
 | [plugins.md](plugins.md) | native plugins, the plugin map, FMOD, Steam and other service stubs, HTTPS |
 | [wwise-player.md](wwise-player.md) | ua_host's own Wwise player: the format `pmu wwise` writes from a game's soundbanks, and what the player plays of it |
+| [fmod-player.md](fmod-player.md) | ua_host's own FMOD player: the format `pmu fmod` writes from a game's FMOD Studio banks (format 0x67), how they are read, and what the player plays of it |
 | [quality.md](quality.md) | the handheld quality profile: a cheaper picture by default on 1 GB handhelds (shadow maps, MSAA, SSAO, per-pixel lights, the Standard shader's mobile SubShader, a few post effects), the game play the same; MonoBehaviour type trees from the game's assemblies; ua_host's run-time caps; what it gained on the handheld |
 | [shaders.md](shaders.md) | the shader converter (OpenGL Core and Direct3D 11 to GLSL ES), checks, what costs what on a Mali-G31 |
 | [android-data.md](android-data.md) | the APK and OBB the converter writes, per Unity version; StreamingAssets; saves |

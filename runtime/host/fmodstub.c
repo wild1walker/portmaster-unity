@@ -4,8 +4,11 @@
 // results (FMOD 1.10's Studio and core C API, as the integration declares them); no FMOD code,
 // header or data is used.
 //
-// Silent stand-in: every call succeeds with plausible results, so that the integration and the
-// game run as with an FMOD that plays nothing: the system initializes, banks load (and report
+// With UA_FMOD_DATA=<dir> (the banks pmu's setup converted) ua_host's FMOD player (fmplay.c) plays
+// them behind these entry points: paths, events, parameters, states, buses and the game's callbacks
+// (timeline markers and beats, programmer sounds, stopped) are the player's (docs/fmod-player.md).
+// Without it, a silent stand-in: every call succeeds with plausible results, so that the
+// integration and the game run as with an FMOD that plays nothing: the system initializes, banks load (and report
 // LOADED, so nothing waits for their samples), paths have GUIDs, event descriptions and instances
 // are valid handles, a started instance is STOPPED at once (nothing waits for an end), parameters,
 // volumes, pause and paused states are kept and given back (the options menu's bus volumes read
@@ -20,6 +23,7 @@
 // floats returned through pointers need nothing.
 #define _GNU_SOURCE
 #include "fmodstub.h"
+#include "fmplay.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -29,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 #if defined(__arm__) && defined(__ARM_PCS_VFP)
 #define SOFTFP __attribute__((pcs("aapcs")))
@@ -75,7 +80,7 @@ static uint16_t h_gen(uintptr_t h) { return (uint16_t)((h >> 12) & 0xffff); }
 typedef struct { slot_hdr h; char path[256]; } bank_t;
 static bank_t g_bank[256];
 // event descriptions: by GUID
-typedef struct { slot_hdr h; uint8_t id[16]; } desc_t;
+typedef struct { slot_hdr h; uint8_t id[16]; int ev; } desc_t;   // ev: the player's event (-1 none)
 static desc_t g_desc[SLOTS];
 // instances
 typedef struct {
@@ -86,13 +91,14 @@ typedef struct {
     uintptr_t userdata;
     void *cb;
     uint32_t mask;
+    uint32_t pid;               // the player's instance (0: none, silent)
 } inst_t;
 static inst_t g_inst[SLOTS];
 // parameter instances: an instance's parameter by name, its value
-typedef struct { slot_hdr h; int inst; uint16_t inst_gen; char name[64]; float value; } param_t;
+typedef struct { slot_hdr h; int inst; uint16_t inst_gen; char name[64]; float value; int index; } param_t;   // index: the player's (-1)
 static param_t g_param[SLOTS];
 // buses and VCAs: by path, their volume, pause, mute
-typedef struct { slot_hdr h; char path[192]; float vol; int paused, mute; } bus_t;
+typedef struct { slot_hdr h; char path[192]; float vol; int paused, mute, pbus; } bus_t;      // pbus: the player's (-1)
 static bus_t g_bus[256], g_vca[64];
 // sounds (programmer sounds): nothing to play in the silent stand-in
 static float g_master_vol = 1.0f;
@@ -152,7 +158,7 @@ static int desc_for(const uint8_t id[16])
 {
     for (int i = 1; i < SLOTS; i++) if (g_desc[i].h.used && !memcmp(g_desc[i].id, id, 16)) return i;
     int i = NEW(g_desc);
-    if (i > 0) memcpy(g_desc[i].id, id, 16);
+    if (i > 0) { memcpy(g_desc[i].id, id, 16); g_desc[i].ev = -1; }
     return i;
 }
 static const char *path_of(const uint8_t id[16])
@@ -175,20 +181,38 @@ static int System_GetNumDrivers(uintptr_t s, int *n) { (void)s; if (n) *n = 1; r
 static int System_LoadPlugin(uintptr_t s, const char *f, uint32_t *handle, uint32_t prio) { (void)s; (void)prio; TRACE("LoadPlugin(%s)", f ? f : ""); if (handle) *handle = 1; return OK; }
 static int System_SetUserData(uintptr_t s, uintptr_t u) { (void)s; g_core_user = u; return OK; }
 static int System_GetUserData(uintptr_t s, uintptr_t *u) { (void)s; if (u) *u = g_core_user; return OK; }
-SOFTFP static int ChannelGroup_SetVolume(uintptr_t cg, float v) { if (cg == MASTER_CG) g_master_vol = v; return OK; }
+static int g_player;
+SOFTFP static int ChannelGroup_SetVolume(uintptr_t cg, float v) { if (cg == MASTER_CG) { g_master_vol = v; if (g_player) fmp_master_volume(v); } return OK; }
+static int System_MixerSuspend(uintptr_t s) { (void)s; if (g_player) fmp_pause_all(1); return OK; }
+static int System_MixerResume(uintptr_t s) { (void)s; if (g_player) fmp_pause_all(0); return OK; }
 static int ChannelGroup_GetVolume(uintptr_t cg, float *v) { if (v) *v = cg == MASTER_CG ? g_master_vol : 1.0f; return OK; }
-static int Sound_GetLength(uintptr_t s, uint32_t *len, int unit) { (void)s; (void)unit; if (len) *len = 0; return OK; }
-static int Sound_GetSubSound(uintptr_t s, int i, uintptr_t *sub) { (void)i; if (sub) *sub = s; return OK; }
-static int System_CreateSound(uintptr_t sys, const void *name, uint32_t mode, void *ex, uintptr_t *sound) { (void)sys; (void)name; (void)mode; (void)ex; if (sound) *sound = ((uintptr_t)T_SOUND << 28) | 1; return OK; }
 
 // --- Studio: system
 static int Studio_System_Create(uintptr_t *sys, uint32_t header) { TRACE("Studio_System_Create(%#x)", header); if (sys) *sys = SYS; return OK; }
 static int Studio_System_IsValid(uintptr_t s) { return s == SYS; }
+// the audio output (runtime/android/opensles.c); weak: the unit tests link no shims
+extern void android_sles_set_mix(void (*fn)(float *, int, int, int), int rate) __attribute__((weak));
+// (g_player: ua_host's FMOD player plays the banks, UA_FMOD_DATA)
+
+static void player_log(const char *line) { say("%s", line); }
+
 static int Studio_System_Initialize(uintptr_t s, int maxch, uint32_t sf, uint32_t f, void *x)
 {
     (void)s; (void)x;
     static int once;
-    if (!once++) say("built-in FMOD (silent): Studio::System::initialize(%d channels, studio flags %#x, flags %#x); no sound", maxch, sf, f);
+    if (once++) return OK;
+    const char *d = getenv("UA_FMOD_DATA");
+    if (d && *d && access(d, R_OK) == 0) {
+        fmp_set_log(player_log);
+        g_player = fmp_open(d);
+    }
+    if (g_player) {
+        const char *r = getenv("UA_AUDIO_RATE");
+        int rate = r && atoi(r) >= 8000 && atoi(r) <= 192000 ? atoi(r) : 48000;
+        if (android_sles_set_mix) android_sles_set_mix(fmp_mix, rate);
+        say("built-in FMOD: Studio::System::initialize(%d channels, studio flags %#x, flags %#x); ua_host's player on %s", maxch, sf, f, d);
+    } else
+        say("built-in FMOD (silent%s): Studio::System::initialize(%d channels, studio flags %#x, flags %#x); no sound", d && *d ? ": UA_FMOD_DATA not readable" : "", maxch, sf, f);
     return OK;
 }
 static int Studio_System_GetLowLevelSystem(uintptr_t s, uintptr_t *core) { (void)s; if (core) *core = CORE; return OK; }
@@ -206,6 +230,7 @@ static int Studio_System_LoadBankFile(uintptr_t s, const char *file, uint32_t fl
     }
     uintptr_t h = i > 0 ? H(T_BANK, g_bank, i) : 0;
     pthread_mutex_unlock(&M);
+    if (g_player && file) fmp_load_bank(file);
     TRACE("LoadBankFile(%s)", file ? file : "");
     if (bank) *bank = h;
     return h ? OK : ERR_INVALID_PARAM;
@@ -221,6 +246,7 @@ static int Studio_System_LookupID(uintptr_t s, const char *path, uint8_t id[16])
 {
     (void)s;
     if (!path || !*path) return ERR_EVENT_NOTFOUND;
+    if (g_player && fmp_lookup(path, id)) return OK;
     path_guid(path, id);
     pthread_mutex_lock(&M);
     int known = 0;
@@ -236,6 +262,8 @@ static int Studio_System_LookupID(uintptr_t s, const char *path, uint8_t id[16])
 static int Studio_System_LookupPath(uintptr_t s, const uint8_t id[16], char *buf, int size, int *ret)
 {
     (void)s;
+    char pp[512];
+    if (g_player && fmp_path(id, pp, sizeof pp)) { put_str(buf, size, ret, pp); return str_result(size, pp); }
     pthread_mutex_lock(&M);
     const char *p = path_of(id);
     put_str(buf, size, ret, p);
@@ -248,6 +276,7 @@ static int Studio_System_GetEventByID(uintptr_t s, const uint8_t id[16], uintptr
     (void)s;
     pthread_mutex_lock(&M);
     int i = desc_for(id);
+    if (i > 0 && g_player && g_desc[i].ev < 0) g_desc[i].ev = fmp_event(id);
     uintptr_t h = i > 0 ? H(T_DESC, g_desc, i) : 0;
     pthread_mutex_unlock(&M);
     if (desc) *desc = h;
@@ -266,7 +295,11 @@ static int bus_get(bus_t *arr, int n, int type, const char *path, uintptr_t *out
     for (int k = 1; k < n; k++) if (arr[k].h.used && !strcasecmp(arr[k].path, path ? path : "")) { i = k; break; }
     if (!i) {
         i = slot_new(&arr[0].h, sizeof arr[0], n);
-        if (i > 0) { snprintf(arr[i].path, sizeof arr[i].path, "%s", path ? path : ""); arr[i].vol = 1.0f; arr[i].paused = arr[i].mute = 0; }
+        if (i > 0) {
+            snprintf(arr[i].path, sizeof arr[i].path, "%s", path ? path : "");
+            arr[i].vol = 1.0f; arr[i].paused = arr[i].mute = 0;
+            arr[i].pbus = g_player && type == T_BUS && path ? fmp_bus(path) : -1;
+        }
     }
     uintptr_t h = i > 0 ? mk(type, i, arr[i].h.gen) : 0;
     pthread_mutex_unlock(&M);
@@ -291,7 +324,6 @@ static int Studio_System_GetBankList(uintptr_t s, uintptr_t *arr, int cap, int *
     if (n) *n = c;
     return OK;
 }
-static int Studio_System_GetSoundInfo(uintptr_t s, const char *key, void *info) { (void)s; (void)key; (void)info; return ERR_EVENT_NOTFOUND; }
 static int Studio_System_GetNumListeners(uintptr_t s, int *n) { (void)s; if (n) *n = 1; return OK; }
 static int Studio_ParseID(const char *str, uint8_t id[16])
 {
@@ -347,6 +379,8 @@ static int Studio_EventDescription_GetPath(uintptr_t d, char *buf, int size, int
 {
     int i = SLOT(d, T_DESC, g_desc);
     if (i <= 0) return ERR_INVALID_HANDLE;
+    char pp[512];
+    if (g_player && fmp_path(g_desc[i].id, pp, sizeof pp)) { put_str(buf, size, ret, pp); return str_result(size, pp); }
     pthread_mutex_lock(&M);
     const char *p = path_of(g_desc[i].id);
     put_str(buf, size, ret, p);
@@ -355,11 +389,27 @@ static int Studio_EventDescription_GetPath(uintptr_t d, char *buf, int size, int
     return r;
 }
 static int Studio_EventDescription_GetSampleLoadingState(uintptr_t d, int *st) { (void)d; if (st) *st = LOADING_STATE_LOADED; return OK; }
-static int Studio_EventDescription_IsOneshot(uintptr_t d, int *b) { (void)d; if (b) *b = 1; return OK; }
-static int Studio_EventDescription_GetLength(uintptr_t d, int *ms) { (void)d; if (ms) *ms = 0; return OK; }
+#define DESC_EV(d) ({ int di_ = SLOT(d, T_DESC, g_desc); di_ > 0 ? g_desc[di_].ev : -1; })
+static int Studio_EventDescription_IsOneshot(uintptr_t d, int *b) { int ev = DESC_EV(d); if (b) *b = ev >= 0 ? fmp_event_oneshot(ev) : 1; return OK; }
+static int Studio_EventDescription_GetLength(uintptr_t d, int *ms) { int ev = DESC_EV(d); if (ms) *ms = ev >= 0 ? fmp_event_length_ms(ev) : 0; return OK; }
+static int Studio_EventDescription_IsSnapshot(uintptr_t d, int *b) { int ev = DESC_EV(d); if (b) *b = ev >= 0 ? fmp_event_is_snapshot(ev) : 0; return OK; }
+static int Studio_EventDescription_GetParameterCount(uintptr_t d, int *n) { int ev = DESC_EV(d); if (n) *n = ev >= 0 ? fmp_event_params(ev) : 0; return OK; }
+// FMOD_STUDIO_PARAMETER_DESCRIPTION: name, index, minimum, maximum, default, type
+typedef struct { const char *name; int index; float min, max, def; int type; } param_desc;
+static int fill_desc(int ev, int i, param_desc *out)
+{
+    float mn, mx, df;
+    const char *n = fmp_event_param(ev, i, &mn, &mx, &df);
+    if (!n) return ERR_INVALID_PARAM;
+    if (out) *out = (param_desc){ n, i, mn, mx, df, 0 };
+    return OK;
+}
+static int Studio_EventDescription_GetParameterByIndex(uintptr_t d, int i, param_desc *out) { int ev = DESC_EV(d); return ev >= 0 ? fill_desc(ev, i, out) : ERR_INVALID_PARAM; }
+static int Studio_EventDescription_GetParameter(uintptr_t d, const char *name, param_desc *out) { int ev = DESC_EV(d); return ev >= 0 ? fill_desc(ev, fmp_event_param_index(ev, name), out) : ERR_EVENT_NOTFOUND; }
 static int Studio_EventDescription_GetInstanceCount(uintptr_t d, int *n)
 {
     int i = SLOT(d, T_DESC, g_desc), c = 0;
+    if (i > 0 && g_desc[i].ev >= 0) { if (n) *n = fmp_event_instances(g_desc[i].ev); return OK; }
     for (int k = 1; k < SLOTS; k++) c += g_inst[k].h.used && !g_inst[k].released && g_inst[k].desc == i;
     if (n) *n = c;
     return OK;
@@ -377,6 +427,7 @@ static int Studio_EventDescription_CreateInstance(uintptr_t d, uintptr_t *inst)
         memset(x, 0, sizeof *x);
         x->h.used = 1; x->h.gen = gen;
         x->desc = di; x->vol = x->pitch = 1.0f;
+        if (g_player && g_desc[di].ev >= 0) x->pid = fmp_create(g_desc[di].ev);
         h = H(T_INST, g_inst, i);
     }
     pthread_mutex_unlock(&M);
@@ -385,42 +436,72 @@ static int Studio_EventDescription_CreateInstance(uintptr_t d, uintptr_t *inst)
 }
 
 // --- event instances
-#define INST(h) SLOT(h, T_INST, g_inst)
+// an instance handle's slot: valid until released and, with the player, until it has stopped
+static int INST(uintptr_t h)
+{
+    int i = SLOT(h, T_INST, g_inst);
+    if (i <= 0) return -1;
+    if (g_inst[i].released && (!g_inst[i].pid || !fmp_valid(g_inst[i].pid))) return -1;
+    return i;
+}
 static void inst_free_params(int i)
 {
     for (int k = 1; k < SLOTS; k++) if (g_param[k].h.used && g_param[k].inst == i) g_param[k].h.used = 0;
 }
+static void inst_free(int i) { inst_free_params(i); g_inst[i].h.used = 0; }
 static int Studio_EventInstance_IsValid(uintptr_t e) { return INST(e) > 0; }
 static int Studio_EventInstance_GetDescription(uintptr_t e, uintptr_t *d) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (d) *d = H(T_DESC, g_desc, g_inst[i].desc); return OK; }
-static int Studio_EventInstance_Start(uintptr_t e) { return INST(e) > 0 ? OK : ERR_INVALID_HANDLE; }
-static int Studio_EventInstance_Stop(uintptr_t e, int mode) { (void)mode; return INST(e) > 0 ? OK : ERR_INVALID_HANDLE; }
+static int Studio_EventInstance_Start(uintptr_t e)
+{
+    int i = INST(e);
+    if (i <= 0) return ERR_INVALID_HANDLE;
+    if (g_inst[i].pid) fmp_start(g_inst[i].pid);
+    if (g_trace) { char p[256] = ""; if (!fmp_path(g_desc[g_inst[i].desc].id, p, sizeof p)) snprintf(p, sizeof p, "%s", path_of(g_desc[g_inst[i].desc].id)); TRACE("start %s%s", p, g_inst[i].pid ? "" : " (no event in the banks: silent)"); }
+    return OK;
+}
+static int Studio_EventInstance_Stop(uintptr_t e, int mode) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (g_inst[i].pid) fmp_stop(g_inst[i].pid, mode == 1); return OK; }
 static int Studio_EventInstance_Release(uintptr_t e)
 {
     pthread_mutex_lock(&M);
     int i = INST(e);
-    if (i > 0) { inst_free_params(i); g_inst[i].h.used = 0; }
+    if (i > 0) {
+        if (g_inst[i].pid) { g_inst[i].released = 1; fmp_release(g_inst[i].pid); }
+        else inst_free(i);
+    }
     pthread_mutex_unlock(&M);
     return i > 0 ? OK : ERR_INVALID_HANDLE;
 }
-static int Studio_EventInstance_GetPlaybackState(uintptr_t e, int *st) { if (st) *st = PLAYBACK_STOPPED; return INST(e) > 0 ? OK : ERR_INVALID_HANDLE; }
-SOFTFP static int Studio_EventInstance_SetVolume(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].vol = v; return OK; }
+static int Studio_EventInstance_GetPlaybackState(uintptr_t e, int *st) { int i = INST(e); if (st) *st = i > 0 && g_inst[i].pid ? fmp_state(g_inst[i].pid) : PLAYBACK_STOPPED; return i > 0 ? OK : ERR_INVALID_HANDLE; }
+SOFTFP static int Studio_EventInstance_SetVolume(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].vol = v; if (g_inst[i].pid) fmp_set_volume(g_inst[i].pid, v); return OK; }
 static int Studio_EventInstance_GetVolume(uintptr_t e, float *v, float *fv) { int i = INST(e); float x = i > 0 ? g_inst[i].vol : 0; if (v) *v = x; if (fv) *fv = x; return i > 0 ? OK : ERR_INVALID_HANDLE; }
-SOFTFP static int Studio_EventInstance_SetPitch(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].pitch = v; return OK; }
+SOFTFP static int Studio_EventInstance_SetPitch(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].pitch = v; if (g_inst[i].pid) fmp_set_pitch(g_inst[i].pid, v); return OK; }
 static int Studio_EventInstance_GetPitch(uintptr_t e, float *v, float *fv) { int i = INST(e); float x = i > 0 ? g_inst[i].pitch : 0; if (v) *v = x; if (fv) *fv = x; return i > 0 ? OK : ERR_INVALID_HANDLE; }
 SOFTFP static int Studio_EventInstance_SetProperty(uintptr_t e, int k, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (k >= 0 && k < 8) g_inst[i].prop[k] = v; return OK; }
 static int Studio_EventInstance_GetProperty(uintptr_t e, int k, float *v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (v) *v = k >= 0 && k < 8 ? g_inst[i].prop[k] : 0; return OK; }
-static int Studio_EventInstance_SetPaused(uintptr_t e, int p) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].paused = p != 0; return OK; }
+static int Studio_EventInstance_SetPaused(uintptr_t e, int p) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].paused = p != 0; if (g_inst[i].pid) fmp_set_paused(g_inst[i].pid, p != 0); return OK; }
 static int Studio_EventInstance_GetPaused(uintptr_t e, int *p) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (p) *p = g_inst[i].paused; return OK; }
-static int Studio_EventInstance_GetTimelinePosition(uintptr_t e, int *ms) { if (ms) *ms = 0; return INST(e) > 0 ? OK : ERR_INVALID_HANDLE; }
+static int Studio_EventInstance_GetTimelinePosition(uintptr_t e, int *ms) { int i = INST(e); if (ms) *ms = i > 0 && g_inst[i].pid ? fmp_timeline_ms(g_inst[i].pid) : 0; return i > 0 ? OK : ERR_INVALID_HANDLE; }
+static int Studio_EventInstance_SetTimelinePosition(uintptr_t e, int ms) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (g_inst[i].pid) fmp_set_timeline_ms(g_inst[i].pid, ms); return OK; }
 static int Studio_EventInstance_SetUserData(uintptr_t e, uintptr_t u) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].userdata = u; return OK; }
 static int Studio_EventInstance_GetUserData(uintptr_t e, uintptr_t *u) { int i = INST(e); if (i <= 0) { if (u) *u = 0; return ERR_INVALID_HANDLE; } if (u) *u = g_inst[i].userdata; return OK; }
-static int Studio_EventInstance_SetCallback(uintptr_t e, void *cb, uint32_t mask) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].cb = cb; g_inst[i].mask = mask; return OK; }
-static int Studio_EventInstance_GetChannelGroup(uintptr_t e, uintptr_t *cg) { (void)e; if (cg) *cg = 0; return ERR_NOTREADY; }
-static int Studio_EventInstance_GetParameterCount(uintptr_t e, int *n) { if (n) *n = 0; return INST(e) > 0 ? OK : ERR_INVALID_HANDLE; }
-
-// a parameter of an instance by name: its slot, made on first use
-static int param_for(int inst, const char *name)
+static int Studio_EventInstance_SetCallback(uintptr_t e, void *cb, uint32_t mask)
 {
+    int i = INST(e);
+    if (i <= 0) return ERR_INVALID_HANDLE;
+    g_inst[i].cb = cb;
+    g_inst[i].mask = cb ? mask : 0;
+    if (g_inst[i].pid) fmp_set_callback_mask(g_inst[i].pid, g_inst[i].mask);
+    return OK;
+}
+static int Studio_EventInstance_GetChannelGroup(uintptr_t e, uintptr_t *cg) { (void)e; if (cg) *cg = 0; return ERR_NOTREADY; }
+static int Studio_EventInstance_GetParameterCount(uintptr_t e, int *n) { int i = INST(e); if (n) *n = i > 0 && g_desc[g_inst[i].desc].ev >= 0 ? fmp_event_params(g_desc[g_inst[i].desc].ev) : 0; return i > 0 ? OK : ERR_INVALID_HANDLE; }
+
+// a parameter of an instance by name (or the player's index): its slot, made on first use
+static int param_for(int inst, const char *name, int index)
+{
+    int ev = g_desc[g_inst[inst].desc].ev;
+    if (!name && ev >= 0) { float mn, mx, df; name = fmp_event_param(ev, index, &mn, &mx, &df); }
+    if (!name) return -1;
     for (int k = 1; k < SLOTS; k++)
         if (g_param[k].h.used && g_param[k].inst == inst && g_param[k].inst_gen == g_inst[inst].h.gen && !strcasecmp(g_param[k].name, name)) return k;
     int k = NEW(g_param);
@@ -428,31 +509,55 @@ static int param_for(int inst, const char *name)
         g_param[k].inst = inst;
         g_param[k].inst_gen = g_inst[inst].h.gen;
         snprintf(g_param[k].name, sizeof g_param[k].name, "%s", name);
-        g_param[k].value = 0;
+        g_param[k].index = ev >= 0 ? fmp_event_param_index(ev, name) : -1;
+        g_param[k].value = g_param[k].index >= 0 ? fmp_get_param(g_inst[inst].pid, g_param[k].index) : 0;
     }
     return k;
+}
+static void param_set(int k, float v)
+{
+    g_param[k].value = v;
+    int i = g_param[k].inst;
+    if (g_param[k].index >= 0 && g_inst[i].pid) { fmp_set_param(g_inst[i].pid, g_param[k].index, v); g_param[k].value = fmp_get_param(g_inst[i].pid, g_param[k].index); }
 }
 static int Studio_EventInstance_GetParameter(uintptr_t e, const char *name, uintptr_t *p)
 {
     pthread_mutex_lock(&M);
-    int i = INST(e), k = i > 0 && name ? param_for(i, name) : -1;
+    int i = INST(e), k = i > 0 && name ? param_for(i, name, -1) : -1;
     uintptr_t h = k > 0 ? H(T_PARAM, g_param, k) : 0;
     pthread_mutex_unlock(&M);
     if (p) *p = h;
     return h ? OK : i > 0 ? ERR_EVENT_NOTFOUND : ERR_INVALID_HANDLE;
 }
+static int Studio_EventInstance_GetParameterByIndex(uintptr_t e, int index, uintptr_t *p)
+{
+    pthread_mutex_lock(&M);
+    int i = INST(e), k = i > 0 ? param_for(i, NULL, index) : -1;
+    uintptr_t h = k > 0 ? H(T_PARAM, g_param, k) : 0;
+    pthread_mutex_unlock(&M);
+    if (p) *p = h;
+    return h ? OK : i > 0 ? ERR_INVALID_PARAM : ERR_INVALID_HANDLE;
+}
 SOFTFP static int Studio_EventInstance_SetParameterValue(uintptr_t e, const char *name, float v)
 {
     pthread_mutex_lock(&M);
-    int i = INST(e), k = i > 0 && name ? param_for(i, name) : -1;
-    if (k > 0) g_param[k].value = v;
+    int i = INST(e), k = i > 0 && name ? param_for(i, name, -1) : -1;
+    if (k > 0) param_set(k, v);
     pthread_mutex_unlock(&M);
     return k > 0 ? OK : ERR_INVALID_HANDLE;
+}
+SOFTFP static int Studio_EventInstance_SetParameterValueByIndex(uintptr_t e, int index, float v)
+{
+    pthread_mutex_lock(&M);
+    int i = INST(e), k = i > 0 ? param_for(i, NULL, index) : -1;
+    if (k > 0) param_set(k, v);
+    pthread_mutex_unlock(&M);
+    return k > 0 ? OK : ERR_INVALID_PARAM;
 }
 static int Studio_EventInstance_GetParameterValue(uintptr_t e, const char *name, float *v, float *fv)
 {
     pthread_mutex_lock(&M);
-    int i = INST(e), k = i > 0 && name ? param_for(i, name) : -1;
+    int i = INST(e), k = i > 0 && name ? param_for(i, name, -1) : -1;
     float x = k > 0 ? g_param[k].value : 0;
     pthread_mutex_unlock(&M);
     if (v) *v = x;
@@ -461,18 +566,135 @@ static int Studio_EventInstance_GetParameterValue(uintptr_t e, const char *name,
 }
 #define PARAM(h) SLOT(h, T_PARAM, g_param)
 static int Studio_ParameterInstance_IsValid(uintptr_t p) { int k = PARAM(p); return k > 0 && g_inst[g_param[k].inst].h.used && g_inst[g_param[k].inst].h.gen == g_param[k].inst_gen; }
-SOFTFP static int Studio_ParameterInstance_SetValue(uintptr_t p, float v) { int k = PARAM(p); if (k <= 0) return ERR_INVALID_HANDLE; g_param[k].value = v; return OK; }
+SOFTFP static int Studio_ParameterInstance_SetValue(uintptr_t p, float v) { pthread_mutex_lock(&M); int k = PARAM(p); if (k > 0) param_set(k, v); pthread_mutex_unlock(&M); return k > 0 ? OK : ERR_INVALID_HANDLE; }
 static int Studio_ParameterInstance_GetValue(uintptr_t p, float *v) { int k = PARAM(p); if (v) *v = k > 0 ? g_param[k].value : 0; return k > 0 ? OK : ERR_INVALID_HANDLE; }
+static int Studio_ParameterInstance_GetDescription(uintptr_t p, param_desc *out)
+{
+    int k = PARAM(p);
+    if (k <= 0) return ERR_INVALID_HANDLE;
+    int ev = g_desc[g_inst[g_param[k].inst].desc].ev;
+    if (ev >= 0 && g_param[k].index >= 0) return fill_desc(ev, g_param[k].index, out);
+    if (out) *out = (param_desc){ g_param[k].name, -1, 0, 1, 0, 0 };
+    return OK;
+}
+
+// programmer sounds (FMOD core Sound handles): the player's sound number + 1 in the slot
+typedef struct { slot_hdr h; int sound; } sound_t;
+static sound_t g_sound[SLOTS];
+static char g_sound_names[64][24]; static int g_sound_name_i;
+// FMOD_CREATESOUNDEXINFO as FMOD for Unity 1.10 declares it (blittable: C's layout)
+typedef struct {
+    int cbsize; uint32_t length, fileoffset; int numchannels, defaultfrequency, format; uint32_t decodebuffersize;
+    int initialsubsound, numsubsounds; void *inclusionlist; int inclusionlistnum;
+    void *pcmread, *pcmsetpos, *nonblock, *dlsname, *encryptionkey; int maxpolyphony; void *userdata; int suggestedsoundtype;
+    void *fopen_, *fclose_, *fread_, *fseek_, *fasyncread, *fasynccancel, *fileuserdata; int filebuffersize, channelorder, channelmask;
+    void *initialsoundgroup; uint32_t initialseekposition; int initialseekpostype, ignoresetfilesystem; uint32_t audioqueuepolicy, minmidigranularity;
+    int nonblockthreadid; void *fsbguid;
+} exinfo_t;
+typedef struct { const char *name_or_data; uint32_t mode; exinfo_t exinfo; int subsoundindex; } sound_info_t;
+static int Studio_System_GetSoundInfo(uintptr_t s, const char *key, sound_info_t *info)
+{
+    (void)s;
+    int snd = g_player ? fmp_sound(key) : -1;
+    if (snd < 0) return ERR_EVENT_NOTFOUND;
+    pthread_mutex_lock(&M);
+    char *n = g_sound_names[g_sound_name_i++ & 63];         // (valid until 64 more lookups)
+    snprintf(n, sizeof g_sound_names[0], "uafm:%d", snd);
+    pthread_mutex_unlock(&M);
+    if (info) {
+        memset(info, 0, sizeof *info);
+        info->name_or_data = n;
+        info->exinfo.cbsize = (int)sizeof info->exinfo;
+        info->subsoundindex = 0;
+    }
+    return OK;
+}
+static int System_CreateSound(uintptr_t sys, const char *name, uint32_t mode, void *ex, uintptr_t *sound)
+{
+    (void)sys; (void)mode; (void)ex;
+    int snd = -1;
+    if (name && !strncmp(name, "uafm:", 5)) snd = atoi(name + 5);
+    pthread_mutex_lock(&M);
+    int k = NEW(g_sound);
+    if (k > 0) g_sound[k].sound = snd;
+    pthread_mutex_unlock(&M);
+    if (sound) *sound = k > 0 ? H(T_SOUND, g_sound, k) : 0;
+    return k > 0 ? OK : ERR_NOTREADY;
+}
+#define SOUND(h) SLOT(h, T_SOUND, g_sound)
+static int Sound_Release(uintptr_t s) { int k = SOUND(s); if (k > 0) g_sound[k].h.used = 0; return OK; }
+static int Sound_GetSubSound(uintptr_t s, int i, uintptr_t *sub) { (void)i; if (sub) *sub = s; return SOUND(s) > 0 ? OK : ERR_INVALID_HANDLE; }
+static int Sound_GetLength(uintptr_t s, uint32_t *len, int unit)
+{
+    int k = SOUND(s), snd = k > 0 ? g_sound[k].sound : -1;
+    uint32_t ms = snd >= 0 ? (uint32_t)fmp_sound_length_ms(snd) : 0;
+    // FMOD_TIMEUNIT: 1 ms, 2 PCM (samples), 4 PCM bytes
+    if (len) *len = unit == 2 ? ms * 48 : unit == 4 ? ms * 48 * 2 * (uint32_t)fmp_sound_channels(snd) : ms;
+    return k > 0 ? OK : ERR_INVALID_HANDLE;
+}
+
+// FMOD_STUDIO_TIMELINE_MARKER_PROPERTIES, _BEAT_PROPERTIES, _PROGRAMMER_SOUND_PROPERTIES
+typedef struct { const char *name; int position; } marker_props;
+typedef struct { int bar, beat, position; float tempo; int upper, lower; } beat_props;
+typedef struct { const char *name; uintptr_t sound; int subsoundindex; } prog_props;
+typedef int (*event_cb)(uint32_t type, uintptr_t event, void *params);
+
+// the game's frame: the player's callbacks, on the game's thread (DEFERRED_CALLBACKS)
+static int Studio_System_Update(uintptr_t s)
+{
+    (void)s;
+    if (!g_player) return OK;
+    fmp_update();
+    fmp_cb c;
+    while (fmp_poll(&c)) {
+        int i = 0;
+        pthread_mutex_lock(&M);
+        for (int k = 1; k < SLOTS; k++) if (g_inst[k].h.used && g_inst[k].pid == c.inst) { i = k; break; }
+        event_cb cb = i ? (event_cb)g_inst[i].cb : NULL;
+        uint32_t mask = i ? g_inst[i].mask : 0;
+        uintptr_t h = i ? H(T_INST, g_inst, i) : 0;
+        pthread_mutex_unlock(&M);
+        if (!i) continue;
+        if (c.type == FMP_CB_CREATE_PROGRAMMER_SOUND) {
+            prog_props pp = { c.name, 0, -1 };
+            if (cb && (mask & c.type)) cb(c.type, h, &pp);
+            int k = SOUND(pp.sound);
+            fmp_programmer_sound(c.inst, c.prog, k > 0 ? g_sound[k].sound : -1);
+            continue;
+        }
+        if (!cb || !(mask & c.type)) {
+            if (c.type == FMP_CB_DESTROYED) { pthread_mutex_lock(&M); inst_free(i); pthread_mutex_unlock(&M); }
+            continue;
+        }
+        if (c.type == FMP_CB_TIMELINE_MARKER) { marker_props mp = { c.name, c.position_ms }; cb(c.type, h, &mp); }
+        else if (c.type == FMP_CB_TIMELINE_BEAT) { beat_props bp = { c.bar, c.beat, c.position_ms, c.tempo, c.upper, c.lower }; cb(c.type, h, &bp); }
+        else if (c.type == FMP_CB_DESTROY_PROGRAMMER_SOUND) {
+            uintptr_t sh = 0;
+            pthread_mutex_lock(&M);
+            for (int k = 1; k < SLOTS; k++) if (g_sound[k].h.used && g_sound[k].sound == c.prog_sound) { sh = H(T_SOUND, g_sound, k); break; }
+            pthread_mutex_unlock(&M);
+            prog_props pp = { NULL, sh, 0 };
+            cb(c.type, h, &pp);
+        } else cb(c.type, h, NULL);
+        if (c.type == FMP_CB_DESTROYED) { pthread_mutex_lock(&M); inst_free(i); pthread_mutex_unlock(&M); }
+    }
+    // released instances the player let go of without a DESTROYED callback
+    pthread_mutex_lock(&M);
+    for (int k = 1; k < SLOTS; k++) if (g_inst[k].h.used && g_inst[k].released && !fmp_valid(g_inst[k].pid)) inst_free(k);
+    pthread_mutex_unlock(&M);
+    return OK;
+}
 
 // --- buses and VCAs
 static bus_t *bus_of(uintptr_t h) { int t = h_type(h); int i = t == T_BUS ? SLOT(h, T_BUS, g_bus) : t == T_VCA ? SLOT(h, T_VCA, g_vca) : -1; return i > 0 ? (t == T_BUS ? &g_bus[i] : &g_vca[i]) : NULL; }
 static int Studio_Bus_IsValid(uintptr_t b) { return h_type(b) == T_BUS && bus_of(b) != NULL; }
 static int Studio_VCA_IsValid(uintptr_t b) { return h_type(b) == T_VCA && bus_of(b) != NULL; }
-SOFTFP static int Studio_Bus_SetVolume(uintptr_t b, float v) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->vol = v; return OK; }
+SOFTFP static int Studio_Bus_SetVolume(uintptr_t b, float v) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->vol = v; if (x->pbus >= 0) fmp_bus_set_volume(x->pbus, v); return OK; }
 static int Studio_Bus_GetVolume(uintptr_t b, float *v, float *fv) { bus_t *x = bus_of(b); float y = x ? x->vol : 0; if (v) *v = y; if (fv) *fv = y; return x ? OK : ERR_INVALID_HANDLE; }
-static int Studio_Bus_SetPaused(uintptr_t b, int p) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->paused = p != 0; return OK; }
+static int Studio_Bus_SetPaused(uintptr_t b, int p) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->paused = p != 0; if (x->pbus >= 0) fmp_bus_set_paused(x->pbus, p != 0); return OK; }
 static int Studio_Bus_GetPaused(uintptr_t b, int *p) { bus_t *x = bus_of(b); if (p) *p = x ? x->paused : 0; return x ? OK : ERR_INVALID_HANDLE; }
-static int Studio_Bus_SetMute(uintptr_t b, int m) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->mute = m != 0; return OK; }
+static int Studio_Bus_SetMute(uintptr_t b, int m) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->mute = m != 0; if (x->pbus >= 0) fmp_bus_set_mute(x->pbus, m != 0); return OK; }
+static int Studio_Bus_StopAllEvents(uintptr_t b, int mode) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; if (x->pbus >= 0) fmp_bus_stop_all(x->pbus, mode == 1); return OK; }
 static int Studio_Bus_GetMute(uintptr_t b, int *m) { bus_t *x = bus_of(b); if (m) *m = x ? x->mute : 0; return x ? OK : ERR_INVALID_HANDLE; }
 static int Studio_Bus_GetPath(uintptr_t b, char *buf, int size, int *ret) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; put_str(buf, size, ret, x->path); return str_result(size, x->path); }
 static int Studio_Bus_GetChannelGroup(uintptr_t b, uintptr_t *cg) { (void)b; if (cg) *cg = 0; return ERR_NOTREADY; }   // as before the bus has a mix
@@ -540,7 +762,10 @@ const so_shim *fmodstub_table(void)
         F("FMOD_Studio_EventDescription_IsOneshot", Studio_EventDescription_IsOneshot),
         F("FMOD_Studio_EventDescription_GetLength", Studio_EventDescription_GetLength),
         F("FMOD_Studio_EventDescription_GetInstanceCount", Studio_EventDescription_GetInstanceCount),
-        F("FMOD_Studio_EventDescription_GetParameterCount", zero_count),
+        F("FMOD_Studio_EventDescription_GetParameterCount", Studio_EventDescription_GetParameterCount),
+        F("FMOD_Studio_EventDescription_GetParameterByIndex", Studio_EventDescription_GetParameterByIndex),
+        F("FMOD_Studio_EventDescription_GetParameter", Studio_EventDescription_GetParameter),
+        F("FMOD_Studio_EventDescription_IsSnapshot", Studio_EventDescription_IsSnapshot),
         F("FMOD_Studio_EventDescription_GetUserPropertyCount", zero_count),
         F("FMOD_Studio_EventDescription_CreateInstance", Studio_EventDescription_CreateInstance),
         F("FMOD_Studio_EventInstance_IsValid", Studio_EventInstance_IsValid),
@@ -564,6 +789,15 @@ const so_shim *fmodstub_table(void)
         F("FMOD_Studio_EventInstance_GetChannelGroup", Studio_EventInstance_GetChannelGroup),
         F("FMOD_Studio_EventInstance_GetParameterCount", Studio_EventInstance_GetParameterCount),
         F("FMOD_Studio_EventInstance_GetParameter", Studio_EventInstance_GetParameter),
+        F("FMOD_Studio_EventInstance_GetParameterByIndex", Studio_EventInstance_GetParameterByIndex),
+        F("FMOD_Studio_EventInstance_SetParameterValueByIndex", Studio_EventInstance_SetParameterValueByIndex),
+        F("FMOD_Studio_EventInstance_SetTimelinePosition", Studio_EventInstance_SetTimelinePosition),
+        F("FMOD_Studio_ParameterInstance_GetDescription", Studio_ParameterInstance_GetDescription),
+        F("FMOD_Studio_System_Update", Studio_System_Update),
+        F("FMOD_Studio_Bus_StopAllEvents", Studio_Bus_StopAllEvents),
+        F("FMOD5_Sound_Release", Sound_Release),
+        F("FMOD5_System_MixerSuspend", System_MixerSuspend),
+        F("FMOD5_System_MixerResume", System_MixerResume),
         F("FMOD_Studio_EventInstance_SetParameterValue", Studio_EventInstance_SetParameterValue),
         F("FMOD_Studio_EventInstance_GetParameterValue", Studio_EventInstance_GetParameterValue),
         F("FMOD_Studio_ParameterInstance_IsValid", Studio_ParameterInstance_IsValid),

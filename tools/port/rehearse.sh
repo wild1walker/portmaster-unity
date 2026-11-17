@@ -8,7 +8,7 @@
 # (control.txt, utils/patcher.txt). The launcher runs the setup through the "patcher"; afterwards
 # ports/<name>/ is what the handheld would have. With [emu seconds] the installed game then runs
 # in the emulated armv7 rig (tools/emu: QEMU + Mesa llvmpipe) with the port's port.env (and, as the
-# launcher does, UA_WWISE_DATA when the setup converted Wwise banks), four screenshots go to
+# launcher does, UA_WWISE_DATA / UA_FMOD_DATA when the setup converted Wwise / FMOD banks), four screenshots go to
 # <work>/shots.png and the sound to <work>/sound.wav (never played aloud: what the game's OpenSL ES
 # output played, the Wwise player's mix included, with its levels printed at the end). The results of
 # an earlier emulated run in <work> move to <work>/earlier/<n>/ first.
@@ -163,6 +163,7 @@ rm -rf "$E"; mkdir -p "$E"; cp "$H/ua_host" "$E/"
   . "$P/port.env"; [ -f "$P/answers.env" ] && . "$P/answers.env"
   # as the launcher: ua_host's own Wwise player on the banks the setup converted (the port folder is /zip in the rig)
   [ -d "$P/wwise" ] && export UA_WWISE_DATA="${UA_WWISE_DATA-/zip/wwise}"
+  [ -d "$P/fmod" ] && export UA_FMOD_DATA="${UA_FMOD_DATA-/zip/fmod}"
   [ -n "${UA_WWISE_CAPTURE:-}" ] && export UA_WWISE_CAPTURE_SECS="${UA_WWISE_CAPTURE_SECS:-$SECS}"
   [ "${REHEARSE_SOUND:-1}" = 1 ] && export ANDROID_SLES_CAPTURE=/emu/sound.pcm
   cd "$PU" && UA_INPUT_SCRIPT="$INP" EMU_ROOT="$E" EMU_ZIP="$P" EMU_HOSTBIN="$H" tools/emu/emu.sh run.log "$SECS" release

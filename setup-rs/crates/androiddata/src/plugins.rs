@@ -20,8 +20,9 @@ type Sdk = (
 
 const SDKS: &[Sdk] = &[
     ("fmod", r"fmod(studio)?l?(64)?", "FMOD Engine / FMOD Studio", "stub", Some("fmod"),
-     "built-in FMOD: every call succeeds, nothing plays; FMOD's own ARM libraries of the same version \
-in lib/ play the sound instead (see \"fmod\")"),
+     "built-in FMOD: every call succeeds; ua_host's own FMOD player plays the banks the setup converted \
+into the port's fmod/ folder (pmu fmod, UA_FMOD_DATA), else it is silent; FMOD's own ARM libraries of \
+the same version in lib/ play the sound instead (see \"fmod\")"),
     ("steamworks", r"steam_api(64)?", "Steamworks", "stub", Some("steam"),
      "built-in stub: SteamAPI_Init fails as without a running Steam client"),
     ("steam-encryptedappticket", r"sdkencryptedappticket(64)?", "Steamworks encrypted app tickets", "none", None,

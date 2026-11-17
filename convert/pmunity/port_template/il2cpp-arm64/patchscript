@@ -284,6 +284,33 @@ if [ -n "$WWISE_BANKS" ] && [ ! -f "$W/.step_wwise" ]; then
   mark wwise
 fi
 
+# ---- 3c. an FMOD Studio game's banks for ua_host's own FMOD player (pmu fmod; docs/fmod-player.md in
+# portmaster-unity): read once, before packing moves StreamingAssets into the OBB, into the port's
+# fmod/ folder on the card (the launcher points UA_FMOD_DATA there). Banks the player does not read
+# leave the game silent (ua_host's built-in FMOD still answers it): the setup goes on. Nothing of
+# FMOD's comes with the port: the Vorbis setup headers are read from the game's own FMOD library.
+if [ -n "$FMOD_BANKS" ] && [ ! -f "$W/.step_fmod" ]; then
+  B="$D/$FMOD_BANKS"
+  if [ -f "$S/pmu" ] && [ -d "$B" ]; then
+    need=$(( $(du -sm "$B" | cut -f1) * 11 / 10 + 50 ))
+    room "$need" || fail "Converting the game's sound banks needs about $need MB free on the card ($(free_mb) MB free)."
+    step "the game's sound banks for the port's FMOD player"
+    rm -rf "$GAMEDIR/fmod.new"
+    # the Vorbis setup headers come from the game's own FMOD library, in its plugins folder (a
+    # macOS app's is Contents/Plugins); without them the samples stay silent
+    PL="$D/Plugins"; [ -d "$PL" ] || PL="$(dirname "$(dirname "$D")")/Plugins"
+    if pm fmod "$B" "$GAMEDIR/fmod.new" --fmod-lib "$PL"; then
+      rm -rf "$GAMEDIR/fmod" && mv "$GAMEDIR/fmod.new" "$GAMEDIR/fmod" || fail "Could not install the converted sound banks."
+    else
+      echo "The sound banks were not converted (above): the game runs without sound."
+      rm -rf "$GAMEDIR/fmod.new"
+    fi
+  else
+    echo "no sound banks in ${B#$GAMEDIR/} (or no setup/pmu): the game runs without sound."
+  fi
+  mark fmod
+fi
+
 # ---- 4. what Unity's IL2CPP player reads: APK + OBB (the data's files are moved into them), with
 # IL2CPP's metadata in place of the assemblies
 if [ ! -f "$W/.step_package" ]; then

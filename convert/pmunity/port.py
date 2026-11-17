@@ -1721,6 +1721,7 @@ DEFAULTS = {
     'android_data': {'asmpatch': 'off', 'video_shader': True, 'swappy': 'off', 'streaming_assets': 'obb', 'data_path': False,
                      'winbcl': 'auto', 'name': '', 'package': '', 'args': []},
     'wwise': {'banks': ''},
+    'fmod': {'banks': ''},
     'runtime': {},
     'runtime_low': {},
     'runtime_lowmem': {},
@@ -1849,6 +1850,9 @@ def validate(cfg):
     if b and (not isinstance(b, str) or b.startswith('/') or '..' in b.split('/') or not re.fullmatch(r'[\w .+/-]+', b)):
         errs.append(f"wwise.banks {b!r}: the soundbanks' folder, relative to the game's data folder "
                     f"(e.g. StreamingAssets/Audio/GeneratedSoundBanks/Linux)")
+    b = (cfg.get('fmod') or {}).get('banks') or ''
+    if b and (not isinstance(b, str) or b.startswith('/') or '..' in b.split('/') or not re.fullmatch(r'[\w .+/-]+', b)):
+        errs.append(f"fmod.banks {b!r}: the FMOD banks' folder, relative to the game's data folder (e.g. StreamingAssets)")
     if cfg['player'].get('il2cpp') and (p['route'] != 'apk' or cfg['player'].get('backend') != 'mono'):
         errs.append('player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP '
                     'player where the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds')
@@ -1926,6 +1930,8 @@ CONFIG_DOC = {
                     '# name = the APK\'s, package (keep it: it names the PlayerPrefs file); args = more options',
     'wwise': "# a Wwise game's soundbanks (banks: their folder, relative to the game's data folder), which the setup\n"
              "# converts once for ua_host's own Wwise player (pmu wwise; docs/wwise-player.md); empty: silent",
+    'fmod': "# an FMOD Studio game's banks (banks: their folder, relative to the game's data folder), which the setup\n"
+            "# converts once for ua_host's own FMOD player (pmu fmod; docs/fmod-player.md); empty: silent",
     'runtime': "# ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:\n"
                "# e.g. UA_POINTER = \"1\", UA_POINTER_CURSOR = \"0\", UA_KEYMAP = \"start:escape\", UA_PAD_NAME,\n"
                "# UA_OSK = \"done\" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = \"1\",\n"
@@ -1968,10 +1974,10 @@ def dump_toml(cfg, route=None, drafted=()):
     docs = dict(CONFIG_DOC, **(route.get('config_doc') or {}))
     out = ['# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).',
            '# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.', '']
-    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'wwise', 'runtime',
+    for sec in route.get('config') or ('port', 'game', 'controls', 'player', 'convert', 'android_data', 'wwise', 'fmod', 'runtime',
                                        'runtime_low', 'runtime_lowmem', 'files', 'build'):
         val = cfg.get(sec, {})
-        if sec == 'wwise' and not val.get('banks'):
+        if sec in ('wwise', 'fmod') and not val.get('banks'):
             continue
         out.append(docs[sec])
         if sec in drafted and val:
@@ -2089,6 +2095,8 @@ def setup_env(cfg, extra=(), sections=None):
         lines.append('CONVERT_PLUGINS=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('plugins', [])) + ')')
         # a Wwise game's soundbanks (relative to the data folder), for ua_host's Wwise player (pmu wwise)
         lines.append(f"WWISE_BANKS={q((cfg.get('wwise') or {}).get('banks') or '')}")
+        # an FMOD game's banks (relative to the data folder), for ua_host's FMOD player (pmu fmod)
+        lines.append(f"FMOD_BANKS={q((cfg.get('fmod') or {}).get('banks') or '')}")
     if sections is None or 'android_data' in sections:
         lines += ['MANAGED_FILES=(' + ' '.join(q('files/' + os.path.basename(x)) for x in fl.get('managed', [])) + ')',
                   'ASSEMBLY_PATCHES=(' + ' '.join(q(ap['name']) + ' ' + q(ap['command']) for ap in fl.get('assembly_patches', [])) + ')']
