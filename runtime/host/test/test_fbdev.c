@@ -14,7 +14,8 @@
 // display engine's crop) at the same offsets; and the render sizes UA_RENDER_SIZE / UA_RENDER_SCALE
 // pick. UA_ASPECT: the sizes it picks; fbdev_setup against a fake framebuffer (the driver told a shorter
 // screen, more buffers in the memory, or a copy of the frame when that cannot be); and the flips with
-// such buffers, every pan showing a whole panel at the driver's offsets.
+// such buffers, every pan showing a whole panel at the driver's offsets. UA_FB_PACE: host flips paced at a
+// frame rate well under the refresh, and not paced near it.
 // Built and run by fbdev_test.sh (armhf under QEMU, arm64).
 #define _GNU_SOURCE
 #include "../fbdev.h"
@@ -33,6 +34,7 @@
 void fbdev_test_init(int mode, int buffers, int queue, double period, int (*pan)(int, unsigned long, ...));
 void fbdev_test_bars(int vh, int ph, unsigned vy);
 void fbdev_test_fb(long (*fb)(int, unsigned long, void *));
+void fbdev_test_pace(double hz);
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -294,6 +296,17 @@ int main(void)
         qf = last_queue;
     }
     CHECK(qf < 1.7);
+    // UA_FB_PACE: a refresh almost twice the frame rate (muOS on the RG34XX-SP: 107.5 Hz, 60 fps) gives
+    // frames at that rate on average, every one shown in order; a frame rate near the refresh is not paced
+    fbdev_test_pace(hz * 0.55);
+    double pf = run("host auto, paced at 0.55 x the refresh", 1, 4, 0, 120, US(300), US(600), -1);
+    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 120);
+    CHECK(pf > hz * 0.55 * 0.9 && pf < hz * 0.55 * 1.1);
+    fbdev_test_pace(hz * 0.95);
+    double pn = run("host auto, a rate near the refresh", 1, 4, 0, 120, US(300), US(600), -1);
+    CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 120);
+    CHECK(pn > hz * 0.9);
+    fbdev_test_pace(0);
     run("host auto, slow frames", 1, 4, 0, 120, US(300), US(5000), -1);
     CHECK(tears == 0 && overwrites == 0 && out_of_order == 0 && flips == 120);
     CHECK(last_queue > 1.9 && gpu_busy > 0.85);

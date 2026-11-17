@@ -28,6 +28,17 @@
 //                     pending (frames keep up with the refresh, and a second queued frame would only
 //                     be latency); back to 2 at a missed refresh, for 2 s (doubling each time, up to
 //                     a minute, so a game at the edge does not go back and forth).
+//   UA_FB_PACE=auto|off|<hz>  host flips no closer together than the game's frame rate (auto: the rate
+//                     ua_host gives Unity, framerate.c, where the refresh the flips measure is more than
+//                     1.15 times that rate; <hz>: that rate). muOS on the RG34XX-SP drives its 720x480 panel
+//                     at 107.5 vblanks a second while the mode's timings say 59.968 Hz (sunxi's
+//                     /sys/class/disp/disp/attr/sys: "fps:107.5"; Knulli 59.8 on the same handheld), and a
+//                     Unity before 2021.1 with vSyncCount 1 draws a frame every vblank: Blasphemous's title
+//                     at 106.6 fps there. Each pan waits until half a refresh before its slot on a clock
+//                     of the frame rate's period (it then shows at the first vblank after that), so the
+//                     frames come at that rate on average (1 and 2 refreshes of 9.3 ms in turn for 60 fps)
+//                     and the render thread, which waits for the flips, draws no more. Where the refresh
+//                     is the frame rate (Knulli, 59.8 against 60) nothing changes; not with mailbox flips.
 // UA_FB_FLIP=driver: the driver's own pans (the firmware's two buffers by default); UA_FB_FLIP=mailbox:
 // a measurement, tears: the driver's pan returns at once and only the newest frame is flipped to,
 // so the frame rate is what the frames cost (more than the refresh rate when they are cheaper).
@@ -365,6 +376,11 @@ static int g_mode = FLIP_DRIVER;
 static int g_queue;                         // host flips: frames the render thread may be ahead now
 static int g_queue_max, g_queue_auto;       // at most buffers - 2; auto: 1 while frames keep up
 static double g_period = 1 / 60.0;          // the refresh period (an average of back-to-back flips)
+static int g_pace_mode = -1;                // UA_FB_PACE: -1 not read yet, 0 off, 1 auto, 2 a fixed rate
+static double g_pace_hz;                    // UA_FB_PACE=<hz>
+static double g_pace_slot;                  // the clock the paced pans follow: the next one's time
+static double g_pace_cur;                   // the period pans are paced at now (0: not paced)
+int framerate_target_fps(void) __attribute__((weak));   // framerate.c: the rate ua_host gives Unity
 
 static int screens_in_memory(const struct fb_var_screeninfo *v, const struct fb_fix_screeninfo *f)
 {
@@ -718,8 +734,11 @@ static void flipped(double t, unsigned yoffset, unsigned yres, double t_call, in
     g_last_y = yoffset;
     double iv = g_last_flip > 0 ? t - g_last_flip : 0;
     g_last_flip = t;
-    if (b2b && iv > 0.002 && iv < 1.4 * g_period) g_period += (iv - g_period) / 16;
-    if (g_mode == FLIP_HOST && g_queue_auto && iv > 1.5 * g_period && g_queue < g_queue_max) {
+    // (not from paced flips: a pan held back to its slot is no refresh apart from the one before, and
+    // the average crept up until the pacing let go: muOS, 107.5 Hz read as 68 - 70)
+    if (b2b && !g_pace_cur && iv > 0.002 && iv < 1.4 * g_period) g_period += (iv - g_period) / 16;
+    double expect = g_pace_cur > g_period ? g_pace_cur : g_period;     // (paced flips: a refresh or two apart)
+    if (g_mode == FLIP_HOST && g_queue_auto && iv > 1.5 * expect && g_queue < g_queue_max) {
         g_queue = g_queue_max;                       // a missed refresh: the GPU gets the next frame again
         if (t - g_q1_since > 30) g_hold = g_hold_base;   // a lone miss (a load) after a long while at 1
         g_hold_until = t + g_hold;
@@ -755,6 +774,29 @@ static int pan(int fd, struct fb_var_screeninfo *v)
     return r_ioctl(fd, FBIOPAN_DISPLAY, &c);
 }
 
+// UA_FB_PACE (above): the period host flips are paced at now, 0 for none
+static double pace_period(void)
+{
+    if (g_pace_mode < 0) {
+        const char *e = getenv("UA_FB_PACE");
+        if (e && !strcmp(e, "off")) g_pace_mode = 0;
+        else if (e && atof(e) > 0) { g_pace_mode = 2; g_pace_hz = atof(e); }
+        else g_pace_mode = 1;
+    }
+    if (g_mode != FLIP_HOST || !g_pace_mode) return 0;
+    double hz = g_pace_mode == 2 ? g_pace_hz : framerate_target_fps ? framerate_target_fps() : 0;
+    if (hz <= 0) return 0;
+    double p = 1 / hz;
+    return p > 1.15 * g_period ? p : 0;
+}
+
+static void sleep_s(double s)
+{
+    if (s <= 0) return;
+    struct timespec t = { (time_t)s, (long)((s - (time_t)s) * 1e9) };
+    nanosleep(&t, NULL);
+}
+
 // Host and mailbox flips: the driver's pans, made by "ua_flip" in order (mailbox: the newest only).
 static pthread_once_t g_flip_once = PTHREAD_ONCE_INIT;
 static int g_flip_ok;
@@ -775,6 +817,18 @@ static void *flip_main(void *arg)
         g_inflight = 1;
         pthread_cond_broadcast(&g_cond);
         pthread_mutex_unlock(&g_lock);
+        double pp = pace_period();
+        if (pp > 0) {
+            double t = now();
+            if (g_pace_slot < t - pp) g_pace_slot = t;            // the first paced pan, or frames slower than the pace
+            sleep_s(g_pace_slot - g_period / 2 - t);             // (the pan shows at the first vblank after)
+            g_pace_slot += pp;
+            if (g_pace_cur != pp) fprintf(stderr, "[fbdev] flips paced at %.1f fps (refresh %.1f Hz; UA_FB_PACE=%s)\n", 1 / pp,
+                                           1 / g_period, g_pace_mode == 2 ? "<hz>" : "auto");
+        } else if (g_pace_cur > 0) {
+            fprintf(stderr, "[fbdev] flips no longer paced (refresh %.1f Hz)\n", 1 / g_period);
+        }
+        g_pace_cur = pp;
         double tc = now();
         int r = pan(fd, &v);
         if (r != 0 && !warned++) fprintf(stderr, "[fbdev] FBIOPAN_DISPLAY to y %u failed: %s\n", v.yoffset, strerror(errno));
@@ -943,6 +997,14 @@ void fbdev_test_init(int mode, int buffers, int queue, double period, int (*pan)
     g_last_flip = 0;
     g_period = period;
     r_ioctl = pan;
+}
+
+// After fbdev_test_init: UA_FB_PACE=<hz> (0: off)
+void fbdev_test_pace(double hz)
+{
+    g_pace_mode = hz > 0 ? 2 : 0;
+    g_pace_hz = hz;
+    g_pace_slot = g_pace_cur = 0;
 }
 
 // After fbdev_test_init: UA_ASPECT's flips, the driver's buffers vh lines apart on a ph-line panel.

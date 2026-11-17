@@ -6,3 +6,4 @@ void framerate_init(const char *default_mode, float refresh_hz);
 void *framerate_dlsym_hook(const char *symbol, void *found);
 // UnityMain, after each nativeRender (up_config.on_frame)
 void framerate_frame(void *user);
+int framerate_target_fps(void);   // the rate Unity is given now, 0: none (fbdev.c's UA_FB_PACE)
