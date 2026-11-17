@@ -75,6 +75,9 @@ int main(int argc, char **argv) {
         {"_DamageEffectColor", {1, 0.1f, 0.1f, 1}}, {"_DamageEffectHighlight", {0.6f, 0.6f, 0.6f, 1}}, {"_DamageEffectTimescale", {1}},
         {"_Time", {1.5f, 3.0f, 6.0f, 9.0f}}, {"_ID", {0}}, {"_AlphaSplitEnabled", {0}},
     };
+    // GLCMP_UNIFORMS="name=a,b,c,d;name=a": more uniforms, set after the table (a material's own values,
+    // e.g. a colour key's _TargetColor as the material stores it)
+    char *ov = getenv("GLCMP_UNIFORMS") ? strdup(getenv("GLCMP_UNIFORMS")) : NULL;
     for (unsigned i = 0; i < sizeof U / sizeof U[0]; i++)
         if ((u = glGetUniformLocation(p, U[i].n)) >= 0) {
             GLint sz; GLenum ty; char nm[64]; GLint cnt; GLint idx = -1;
@@ -82,6 +85,11 @@ int main(int argc, char **argv) {
             for (int k = 0; k < cnt; k++) { glGetActiveUniform(p, k, sizeof nm, NULL, &sz, &ty, nm); if (!strcmp(nm, U[i].n)) { idx = k; break; } }
             if (idx >= 0 && ty == GL_FLOAT) glUniform1f(u, U[i].v[0]); else glUniform4fv(u, 1, U[i].v);
         }
+    for (char *tok = ov ? strtok(ov, ";") : NULL; tok; tok = strtok(NULL, ";")) {
+        char *eq = strchr(tok, '='); if (!eq) continue; *eq = 0; float v[4] = {0}; int k = 0;
+        for (char *x = eq + 1; k < 4; ) { v[k++] = strtof(x, &x); if (*x != ',') break; x++; }
+        if ((u = glGetUniformLocation(p, tok)) >= 0) { if (k == 1) glUniform1f(u, v[0]); else glUniform4fv(u, 1, v); }
+    }
     // target
     GLuint fb, rb; glGenFramebuffers(1, &fb); glBindFramebuffer(GL_FRAMEBUFFER, fb);
     glGenRenderbuffers(1, &rb); glBindRenderbuffer(GL_RENDERBUFFER, rb); glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);

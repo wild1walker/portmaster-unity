@@ -798,6 +798,15 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   commands around the game, as ES does: with no terminal (ES's stdin is `/dev/null`). From a terminal
   (`ssh -t`, `script`) both scripts take their non-RK3326 branch and perfnorm leaves the GPU on
   `performance`. A port itself never touches clocks.
+- **Probe the GPU only from inside a game run.** A standalone GBM/EGL program on dArkOS's Mali (libmali
+  r13p0, `/dev/dri/renderD128`, EmulationStation running) oopsed the kernel (a NULL pointer dereference in
+  the driver): the program hung in uninterruptible sleep, every ua_host started after it hung at display
+  setup, EmulationStation did not come back, and only a reboot helps. A question about what the GPU computes
+  (how it converts a texel, what a shader decides) is asked through ua_host's own display path in a game
+  run; tools/analysis/glcmp renders on the PC with Mesa only. Mesa's answer is not the handheld's: for
+  Blasphemous's colour key (`Maikel/StencilMaskSword` discards a texel equal to `_TargetColor`, which the
+  material stores as 168/255, 192/255, 175/255) llvmpipe discards no texel of exactly those bytes, so its
+  sampled 8-bit values are not the nearest floats.
 - **Memory hogs in tests take the device down:** a process standing in for EmulationStation's memory must
   give it back before the game's own watchdog stops the game (the harness's `hog.py` exits under 60 MB
   available; the watchdog stops the game under 50), and never in tmpfs (`/dev/shm` is not freed when the
