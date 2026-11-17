@@ -619,6 +619,94 @@ pub fn shader(db: &ClassDb, name: &str, kind: ShaderKind) -> Value {
     v
 }
 
+/// The fragment of a palette program: a texel's blue channel is the x of `_PaletteTex`, its alpha the
+/// alpha (Blasphemous's Maikel/MaikelSpriteMasterShader with PALETTE_ON, GLES3).
+pub const PALETTE_GLES: &str = "#ifdef VERTEX\n#version 300 es\nin vec4 in_POSITION0;\nvoid main()\n{\n    gl_Position = in_POSITION0;\n    return;\n}\n#endif\n#ifdef FRAGMENT\n#version 300 es\nprecision highp float;\nuniform sampler2D _MainTex;\nuniform sampler2D _PaletteTex;\nin vec2 vs_TEXCOORD0;\nlayout(location = 0) out vec4 SV_Target0;\nvec4 u_xlat0;\nvec4 u_xlat10_2;\nvoid main()\n{\n    u_xlat0 = texture(_MainTex, vs_TEXCOORD0.xy).wxyz;\n    u_xlat0.y = 0.0;\n    u_xlat10_2 = texture(_PaletteTex, u_xlat0.wy);\n    u_xlat0.yzw = u_xlat10_2.xyz;\n    SV_Target0 = u_xlat0.yzwx;\n    return;\n}\n#endif\n";
+
+/// A Shader with GLES3 programs only: the palette program under the keyword PALETTE_ON (keyword index
+/// 3) and a plain one without.
+pub fn palette_shader(db: &ClassDb, name: &str) -> Value {
+    let t = tree(db, 48);
+    let mut v = default_of(&t, 0);
+    set(&mut v, &["m_Name"], Value::str(name));
+    set(&mut v, &["m_ParsedForm", "m_Name"], Value::str(name));
+    let plain = PALETTE_GLES
+        .replace(".wxyz;", ";")
+        .replace("u_xlat0.y = 0.0;", "u_xlat0.x = 1.0;");
+    let mut entries = vec![entry(&plain, &[]), entry(PALETTE_GLES, &["PALETTE_ON"])];
+    for e in entries.iter_mut().flatten() {
+        if let Slot::Program(p) = e {
+            p.gpu_type = blob::GPU_GLES3 as i32;
+        }
+    }
+    let mut plats = BTreeMap::new();
+    plats.insert(
+        blob::PLATFORM_GLES3PLUS,
+        PlatformBlob::One(blob::build_blob(&entries)),
+    );
+    let fields = ShaderBlobs {
+        nested: false,
+        platforms: plats,
+        stage_counts: None,
+    }
+    .store()
+    .unwrap();
+    let ints = |l: &[i64]| Value::Array(l.iter().map(|&x| Value::U32(x as u32)).collect());
+    let flat = |l: &blob::Lengths| match l {
+        blob::Lengths::Flat(x) => ints(x),
+        blob::Lengths::Nested(_) => unreachable!(),
+    };
+    set(&mut v, &["platforms"], ints(&fields.platforms));
+    set(&mut v, &["offsets"], flat(&fields.offsets));
+    set(
+        &mut v,
+        &["compressedLengths"],
+        flat(&fields.compressed_lengths),
+    );
+    set(
+        &mut v,
+        &["decompressedLengths"],
+        flat(&fields.decompressed_lengths),
+    );
+    set(
+        &mut v,
+        &["compressedBlob"],
+        Value::Bytes(fields.compressed_blob),
+    );
+    let st = sub_program_tree(&t);
+    let sub = |blob_index: u32, keywords: &[u16]| {
+        let mut e = default_of(&t, st);
+        e.set("m_BlobIndex", Value::U32(blob_index)).unwrap();
+        e.set("m_GpuProgramType", Value::I8(blob::GPU_GLES3 as i8))
+            .unwrap();
+        e.set(
+            "m_KeywordIndices",
+            Value::Array(keywords.iter().map(|&k| Value::U16(k)).collect()),
+        )
+        .unwrap();
+        e
+    };
+    let pass_node = pass_tree(&t);
+    let mut pass = default_of(&t, pass_node);
+    let prog = |subs: Vec<Value>| {
+        let mut p = pass.get("progVertex").unwrap().clone();
+        p.set("m_SubPrograms", Value::Array(subs)).unwrap();
+        p
+    };
+    let vertex = prog(vec![sub(0, &[]), sub(1, &[3])]);
+    let fragment = prog(vec![sub(0, &[]), sub(1, &[3])]);
+    pass.set("progVertex", vertex).unwrap();
+    pass.set("progFragment", fragment).unwrap();
+    let mut ss = default_of(&t, sub_shader_tree(&t));
+    ss.set("m_Passes", Value::Array(vec![pass])).unwrap();
+    set(
+        &mut v,
+        &["m_ParsedForm", "m_SubShaders"],
+        Value::Array(vec![ss]),
+    );
+    v
+}
+
 /// What a made-up GrabPass shader does (shaders.grab_fetch).
 #[derive(Clone, Copy, PartialEq)]
 pub enum GrabKind {

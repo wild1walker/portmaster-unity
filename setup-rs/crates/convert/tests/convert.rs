@@ -120,7 +120,7 @@ fn cuphead_steps_on_made_up_data() {
     );
     assert_eq!(
         audio.get("cfg").unwrap().dumps(),
-        r#"{"pcm_budget_mb": 16, "compressed_min_s": 2.0, "resident_scenes": 2}"#
+        r#"{"pcm_budget_mb": 16, "compressed_min_s": 2.0, "resident_scenes": 2, "lowmem_pcm_budget_mb": null, "ram_mb": 1024}"#
     );
     assert_eq!(
         audio.get("switch").unwrap().dumps(),
@@ -586,7 +586,7 @@ fn errors_and_statuses() {
     .unwrap_err();
     assert_eq!(
         e.to_string(),
-        "unknown step nope; steps: shaders, textures, settings, audio, quality, video, lazy, fmodcatalogs"
+        "unknown step nope; steps: shaders, textures, settings, audio, quality, video, lazy, exactindex, fmodcatalogs"
     );
     // a plugin pmu does not have
     let e = cli::run(&Cli {

@@ -424,8 +424,10 @@ fn textures_readable_modes() {
 }
 
 /// `exact_shaders` / `exact_keywords` / `exact_names`: the textures that materials of a palette shader
-/// sample (a SpriteRenderer's sprite, the sprites its parent's Animator sets, through a controller in
-/// another file) and the named ones are left as they are; the others are converted.
+/// sample (a SpriteRenderer's sprite, the sprite its parent's Animator sets on it through a clip of a
+/// controller in another file) and the named ones are left as they are by the textures step, the others
+/// converted; then `exact_index = "blue"` (step exactindex) stores the palette ones as R8 and rewrites
+/// the PALETTE_ON program.
 #[test]
 fn textures_exact_shaders() {
     let Some(db) = madeup::db() else {
@@ -441,12 +443,18 @@ fn textures_exact_shaders() {
         path_id,
         value,
     };
-    let tex = |name: &str| madeup::texture(&db, name, (8, 8), 4, &[9u8; 256], None);
-    let shader = |name: &str| {
-        let mut v = object(&db, 48);
-        set(&mut v, &["m_ParsedForm", "m_Name"], Value::str(name));
-        v
-    };
+    // 8x8 RGBA32: blue = an index (2 + the texel's number), alpha 0 or 255, red and green anything
+    let pal_px: Vec<u8> = (0..64u32)
+        .flat_map(|i| {
+            [
+                (i * 7) as u8,
+                (i * 3) as u8,
+                2 + i as u8,
+                if i % 5 == 0 { 0 } else { 255 },
+            ]
+        })
+        .collect();
+    let tex = |name: &str, px: &[u8]| madeup::texture(&db, name, (8, 8), 4, px, None);
     let material = |shader_pid: i64, kw: &str| {
         let mut v = object(&db, 21);
         set(&mut v, &["m_Shader"], pptr(0, shader_pid));
@@ -461,8 +469,9 @@ fn textures_exact_shaders() {
         v
     };
     let gt = tree(&db, 1);
-    let game_object = |comps: &[i64]| {
+    let game_object = |name: &str, comps: &[i64]| {
         let mut v = object(&db, 1);
+        set(&mut v, &["m_Name"], Value::str(name));
         let list = comps
             .iter()
             .map(|&c| {
@@ -474,46 +483,69 @@ fn textures_exact_shaders() {
         set(&mut v, &["m_Component"], Value::Array(list));
         v
     };
-    let transform = |go: i64, father: i64| {
+    let transform = |go: i64, father: i64, children: &[i64]| {
         let mut v = object(&db, 4);
         set(&mut v, &["m_GameObject"], pptr(0, go));
         set(&mut v, &["m_Father"], pptr(0, father));
+        set(
+            &mut v,
+            &["m_Children"],
+            Value::Array(children.iter().map(|&c| pptr(0, c)).collect()),
+        );
         v
     };
     let mut animator = object(&db, 95);
     set(&mut animator, &["m_Controller"], pptr(1, 2));
-    // the parent (GameObject 30: Transform 31, Animator 32) and the child drawn with the palette
-    // material (GameObject 40: Transform 41, SpriteRenderer 42 with sprite 51 of texture 61);
-    // sprite 52 (texture 62) only in the parent's clip; sprite 53 (texture 63) on a renderer of the
+    // the parent (GameObject 30: Transform 31, Animator 32) and the child "Body" drawn with the palette
+    // material (GameObject 40: Transform 41, SpriteRenderer 42 with sprite 51 of texture 61); sprite 52
+    // (texture 62) only in the parent's clip, on "Body"; sprite 53 (texture 63) on a renderer of the
     // same shader without PALETTE_ON; texture 64 by name; texture 65 nobody's
     let objs = vec![
-        o(48, 10, shader("Maikel/MaikelSpriteMasterShader")),
+        o(
+            48,
+            10,
+            madeup::palette_shader(&db, "Maikel/MaikelSpriteMasterShader"),
+        ),
         o(21, 20, material(10, "ETC1_EXTERNAL_ALPHA PALETTE_ON")),
         o(21, 21, material(10, "ETC1_EXTERNAL_ALPHA")),
-        o(1, 30, game_object(&[31, 32])),
-        o(4, 31, transform(30, 0)),
+        o(1, 30, game_object("Penitent", &[31, 32])),
+        o(4, 31, transform(30, 0, &[41])),
         o(95, 32, animator),
-        o(1, 40, game_object(&[41, 42])),
-        o(4, 41, transform(40, 31)),
+        o(1, 40, game_object("Body", &[41, 42])),
+        o(4, 41, transform(40, 31, &[])),
         o(212, 42, renderer(40, 20, 51)),
-        o(1, 43, game_object(&[44, 45])),
-        o(4, 44, transform(43, 0)),
+        o(1, 43, game_object("Prop", &[44, 45])),
+        o(4, 44, transform(43, 0, &[])),
         o(212, 45, renderer(43, 21, 53)),
         o(213, 51, madeup::sprite(&db, "body", 61)),
         o(213, 52, madeup::sprite(&db, "attack", 62)),
         o(213, 53, madeup::sprite(&db, "prop", 63)),
-        o(28, 61, tex("penitent_body")),
-        o(28, 62, tex("penitent_attack")),
-        o(28, 63, tex("prop")),
-        o(28, 64, tex("byhand_lut")),
-        o(28, 65, tex("other")),
+        o(28, 61, tex("penitent_body", &pal_px)),
+        o(28, 62, tex("penitent_attack", &pal_px)),
+        o(28, 63, tex("prop", &[9u8; 256])),
+        o(28, 64, tex("byhand_lut", &[9u8; 256])),
+        o(28, 65, tex("other", &[9u8; 256])),
     ];
     std::fs::write(
         data.join("sharedassets0.assets"),
         madeup::serialized(&db, &objs, &["sharedassets1.assets"], false),
     )
     .unwrap();
+    let ct = tree(&db, 74);
     let mut clip = madeup::animation_clip(&db, "attack", &[], 0);
+    let mut b = element(&ct, &["m_ClipBindingConstant", "genericBindings"]);
+    b.set(
+        "path",
+        Value::U32(convert::steps::exactindex::crc32(b"Body")),
+    )
+    .unwrap();
+    b.set("typeID", Value::I32(212)).unwrap();
+    b.set("isPPtrCurve", Value::U8(1)).unwrap();
+    set(
+        &mut clip,
+        &["m_ClipBindingConstant", "genericBindings"],
+        Value::Array(vec![b]),
+    );
     set(
         &mut clip,
         &["m_ClipBindingConstant", "pptrCurveMapping"],
@@ -541,7 +573,7 @@ fn textures_exact_shaders() {
     )
     .unwrap();
     let cfg = pyjson::loads(
-        r#"{"version": 1, "textures": {"inline": true, "exact_shaders": "^Maikel/MaikelSpriteMasterShader", "exact_keywords": "PALETTE_ON", "exact_names": "_lut$", "files": "^[^/]*\\.assets$"}}"#,
+        r#"{"version": 1, "textures": {"inline": true, "exact_shaders": "^Maikel/MaikelSpriteMasterShader", "exact_keywords": "PALETTE_ON", "exact_names": "_lut$", "exact_index": "blue", "files": "^[^/]*\\.assets$"}}"#,
     )
     .unwrap();
     let mut job = Job::new(&data, &data, cfg).unwrap();
@@ -554,8 +586,7 @@ fn textures_exact_shaders() {
         db: Some(db.clone()),
         ..Default::default()
     };
-    let f = DataFile::open(data.join("sharedassets0.assets"), &opts).unwrap();
-    let format = |pid| {
+    let format_of = |f: &DataFile, pid| {
         f.sf.read_typetree(pid)
             .unwrap()
             .get("m_TextureFormat")
@@ -563,18 +594,43 @@ fn textures_exact_shaders() {
             .as_int()
             .unwrap()
     };
+    let f = DataFile::open(data.join("sharedassets0.assets"), &opts).unwrap();
     assert_eq!(
-        [61, 62, 63, 64, 65].map(format),
+        [61, 62, 63, 64, 65].map(|p| format_of(&f, p)),
         [4, 4, 54, 4, 54],
-        "kept: the palette renderer's sprite, its Animator's clip sprite, the named one"
+        "kept: the palette renderer's sprite, the clip's sprite on it, the named one"
     );
+    drop(f);
+    convert::steps::exactindex::run(&mut job).unwrap();
+    let f = DataFile::open(data.join("sharedassets0.assets"), &opts).unwrap();
+    assert_eq!([61, 62, 64].map(|p| format_of(&f, p)), [63, 63, 4]);
+    // the index where the alpha is 255, the reserved index (1: no opaque texel uses it) where it is 0
+    let want: Vec<u8> = pal_px
+        .chunks(4)
+        .map(|p| if p[3] == 0 { 1 } else { p[2] })
+        .collect();
+    let t = f.sf.read_typetree(61).unwrap();
+    assert_eq!(t.get("image data").unwrap().as_bytes().unwrap(), &want[..]);
+    let sh = f.sf.read_typetree(10).unwrap();
+    let blobs = shaderx::tree::blobs(&sh).unwrap();
+    let entries =
+        shaderx::tree::platform_entries(&sh, shaderx::blob::PLATFORM_GLES3PLUS, &blobs).unwrap();
+    let codes: Vec<String> = entries
+        .iter()
+        .flatten()
+        .filter_map(|e| match e {
+            shaderx::blob::Slot::Program(p) => Some(String::from_utf8_lossy(&p.code).into_owned()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        f.sf.read_typetree(61)
-            .unwrap()
-            .get("image data")
-            .unwrap()
-            .as_bytes()
-            .unwrap(),
-        &[9u8; 256][..]
+        codes
+            .iter()
+            .filter(|c| c.contains("u_xlat0.z == 0.0 && u_xlat0.w == 0.0"))
+            .count(),
+        1
     );
+    assert!(codes
+        .iter()
+        .any(|c| !c.contains("u_xlat0.z == 0.0") && !c.contains(".wxyz")));
 }

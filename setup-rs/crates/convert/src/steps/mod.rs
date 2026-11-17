@@ -6,6 +6,7 @@ pub mod audio;
 pub mod compute;
 pub mod d3d11;
 pub mod edits;
+pub mod exactindex;
 pub mod exacttex;
 pub mod fmodcatalogs;
 pub mod fusedpost;
@@ -60,6 +61,11 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         (
             lazy::STEP.into(),
             Arc::new(|job: &mut Job, _: &Args| lazy::run(job)),
+        ),
+        // pmu's own: palette-indexed textures in one byte a texel (textures.exact_index)
+        (
+            exactindex::STEP.into(),
+            Arc::new(|job: &mut Job, _: &Args| exactindex::run(job)),
         ),
         // pmu's own: Blasphemous's enemy sound catalogs and their owners' classes, for asmpatch's
         // blasphemous-catalogs (loaded per level instead of all at startup)

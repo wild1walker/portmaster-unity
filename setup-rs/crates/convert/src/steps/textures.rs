@@ -360,7 +360,7 @@ fn codec(c: &Json, job: &Job) -> Result<Box<dyn Codec>> {
     Ok(Box::new(TexCodec { s, enc, quality }))
 }
 
-fn defaults() -> Vec<(&'static str, Json)> {
+pub(crate) fn defaults() -> Vec<(&'static str, Json)> {
     let l = |a: i128, b: i128| Json::List(vec![Json::Int(a), Json::Int(b)]);
     vec![
         ("scale", Json::Float(1.0)),
@@ -395,6 +395,8 @@ fn defaults() -> Vec<(&'static str, Json)> {
         ("exact_shaders", Json::Str(String::new())),
         ("exact_keywords", Json::Str(String::new())),
         ("exact_names", Json::Str(String::new())),
+        ("exact_index", Json::Str(String::new())),
+        ("exact_index_skip", Json::Str(String::new())),
     ]
 }
 
@@ -1625,37 +1627,49 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
         ..Default::default()
     };
     if !opt(&c, "exact_shaders").to_str().is_empty() {
-        let shaders = rx("exact_shaders")?;
-        let kw: Vec<String> = opt(&c, "exact_keywords")
-            .to_str()
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
-        let found = super::exacttex::find(job, &shaders, &kw);
-        job.log(&format!(
-            "textures: exact_shaders {:?}{}: {} materials, {} renderers, {} animator controllers: {} textures left as they are",
-            shaders.as_str(),
-            if kw.is_empty() { String::new() } else { format!(" with {}", kw.join(" ")) },
-            found.materials.len(),
-            found.renderers,
-            found.animators,
-            found.textures.len()
-        ));
-        let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
-        for (f, _) in &found.textures {
-            *by_file.entry(f.as_str()).or_default() += 1;
+        let index = opt(&c, "exact_index").to_str() == "blue";
+        match super::exactindex::analyze(job, &c, index) {
+            Err(why) => job.log(&format!("textures: exact_shaders: {why}")),
+            Ok((keep, plan)) => {
+                let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
+                for (f, _) in &keep {
+                    *by_file.entry(f.as_str()).or_default() += 1;
+                }
+                job.log(&format!(
+                    "textures: exact_shaders: {} textures the palette programs sample, left as they are{}",
+                    keep.len(),
+                    if by_file.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ": in {}",
+                            by_file
+                                .iter()
+                                .map(|(f, n)| format!("{f} ({n})"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                ));
+                if index && job.state.get(super::exactindex::STATE).is_none() {
+                    match plan {
+                        Ok(p) => {
+                            for w in &p.why {
+                                job.log(&format!("{}: {w}", super::exactindex::STEP));
+                            }
+                            job.state
+                                .set(super::exactindex::STATE, super::exactindex::plan_json(&p));
+                            job.save_state()?;
+                        }
+                        Err(why) => job.log(&format!(
+                            "{}: {why}: the textures stay as the game has them",
+                            super::exactindex::STEP
+                        )),
+                    }
+                }
+                exact.keys = keep.into_iter().collect();
+            }
         }
-        if !by_file.is_empty() {
-            job.log(&format!(
-                "textures: exact_shaders: in {}",
-                by_file
-                    .iter()
-                    .map(|(f, n)| format!("{f} ({n})"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        exact.keys = found.textures.into_iter().collect();
     }
     let spill_mb = opt(&c, "spill_mb").as_int().unwrap_or(0).max(0) as u64;
     let inline_streams = opt(&c, "inline_streams").truthy();
