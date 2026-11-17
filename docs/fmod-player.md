@@ -119,7 +119,10 @@ instruments restart from the new position; asynchronous ones play on while their
 position. The cursor stops at `len` (an event without jumps), and the event ends there once nothing
 plays; an event with sheets, an instrument that loops forever or an unconditional jump back plays
 until stopped. Markers and beats (from the tempo markers; bar numbers from 1) reach the game as its
-callbacks.
+callbacks. As in FMOD, a released instance stays valid in its own callbacks until DESTROYED returns, also
+when the player has let it go already: a callback reads the instance's user data there (Blasphemous's
+programmer-sound callback frees its GCHandle on DESTROYED; with a 0 it threw `GCHandle value cannot be
+zero` once a line of the intro had played).
 
 A sheet's box triggers its instrument while the parameter is in [start, start + length) (or at the
 parameter's maximum, for a box ending there). An instrument that is on the timeline and also has a
