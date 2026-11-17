@@ -29,16 +29,18 @@
 //                     be latency); back to 2 at a missed refresh, for 2 s (doubling each time, up to
 //                     a minute, so a game at the edge does not go back and forth).
 //   UA_FB_PACE=auto|off|<hz>  host flips no closer together than the game's frame rate (auto: the rate
-//                     ua_host gives Unity, framerate.c, where the refresh the flips measure is more than
-//                     1.15 times that rate; <hz>: that rate). muOS on the RG34XX-SP drives its 720x480 panel
+//                     ua_host gives Unity, framerate.c, only where the refresh the flips measure is more than
+//                     1.15 times the one the display mode says, and more than 1.15 times that rate; <hz>:
+//                     that rate wherever the refresh is more than 1.15 times it). muOS on the RG34XX-SP drives its 720x480 panel
 //                     at 107.5 vblanks a second while the mode's timings say 59.968 Hz (sunxi's
 //                     /sys/class/disp/disp/attr/sys: "fps:107.5"; Knulli 59.8 on the same handheld), and a
 //                     Unity before 2021.1 with vSyncCount 1 draws a frame every vblank: Blasphemous's title
 //                     at 106.6 fps there. Each pan waits until half a refresh before its slot on a clock
 //                     of the frame rate's period (it then shows at the first vblank after that), so the
 //                     frames come at that rate on average (1 and 2 refreshes of 9.3 ms in turn for 60 fps)
-//                     and the render thread, which waits for the flips, draws no more. Where the refresh
-//                     is the frame rate (Knulli, 59.8 against 60) nothing changes; not with mailbox flips.
+//                     and the render thread, which waits for the flips, draws no more. Where the panel
+//                     refreshes at its mode's rate (Knulli: 59.8, its mode 59.2) auto does nothing, whatever the
+//                     game's rate; not with mailbox flips.
 // UA_FB_FLIP=driver: the driver's own pans (the firmware's two buffers by default); UA_FB_FLIP=mailbox:
 // a measurement, tears: the driver's pan returns at once and only the newest frame is flipped to,
 // so the frame rate is what the frames cost (more than the refresh rate when they are cheaper).
@@ -381,6 +383,7 @@ static double g_pace_hz;                    // UA_FB_PACE=<hz>
 static double g_pace_slot;                  // the clock the paced pans follow: the next one's time
 static double g_pace_cur;                   // the period pans are paced at now (0: not paced)
 int framerate_target_fps(void) __attribute__((weak));   // framerate.c: the rate ua_host gives Unity
+int framerate_display_hz(void) __attribute__((weak));   // framerate.c: the display's rate as the mode says
 
 static int screens_in_memory(const struct fb_var_screeninfo *v, const struct fb_fix_screeninfo *f)
 {
@@ -784,6 +787,10 @@ static double pace_period(void)
         else g_pace_mode = 1;
     }
     if (g_mode != FLIP_HOST || !g_pace_mode) return 0;
+    if (g_pace_mode == 1) {                 // auto: only a panel that refreshes faster than its mode says
+        int d = framerate_display_hz ? framerate_display_hz() : 0;
+        if (d <= 0 || 1 / g_period < 1.15 * d) return 0;
+    }
     double hz = g_pace_mode == 2 ? g_pace_hz : framerate_target_fps ? framerate_target_fps() : 0;
     if (hz <= 0) return 0;
     double p = 1 / hz;

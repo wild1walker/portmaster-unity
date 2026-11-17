@@ -138,3 +138,4 @@ void framerate_frame(void *user)
 // The rate Unity is given now (0: none, Unity's Android pacing): fbdev.c's UA_FB_PACE paces the flips at it
 // where the panel refreshes faster than the mode says (muOS on the RG34XX-SP: 107.5 Hz)
 int framerate_target_fps(void) { return g_mode != M_ANDROID && g_applied > 0 ? g_applied : 0; }
+int framerate_display_hz(void) { return g_hz; }
