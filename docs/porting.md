@@ -721,18 +721,23 @@ asmpatch's `blasphemous-catalogs` ([tools/asmpatch](../tools/asmpatch/README.md)
 has `AddCatalogItems` walk only the listed catalogs whose owner class is one of the level's types, loading each by
 its path then: the same catalogs in the same order. The order matters: three catalogs own the `Fool` enemy
 (`dmkfool`, `fool`, `quirce`), and the game takes the first. `ASMPATCH_BLASPHEMOUS_CATALOGS=check` does the
-original load as well and compares it with the list entry by entry. What a level used stays loaded as the game
-keeps it: the catalogs it registers keep their `Owner`, so the enemies met so far stay in memory (all of them,
-after a long enough game, as at the original's startup); an exact fix can only move the load, not drop it. How much
-that is, estimated from the data (2026-11-17: each catalog's objects in resources.assets reached from it by
-references, a raw scan of every object for pointers into the file; textures counted at one byte a pixel, as the
-port's ASTC 4x4 and R8 store them): most enemies 15 - 70 MB, the bosses 140 - 340 MB (Amanecidas, the Pontiff's husk,
-the snake, Isidora), all 66 catalogs 629 MB with what they share counted once. The RG34XX-SP plays the first level
-with about 220 MB available, so a few areas' worth of enemies would use it up. The reference that keeps them is the
-catalog's `Owner`, through `FMODAudioManager.RegisterCatalog`'s array, which keeps every catalog registered for the
-session; `Owner` is a type tag (only `AddCatalogItems` reads it; `FMODAudioCatalog.Initialize` does not), so a
-patch that matches the level's types by the list's class names and clears `Owner` once a catalog is loaded would
-let `Level`'s `Resources.UnloadUnusedAssets` free each enemy after its level, with the same catalogs registered.
+original load as well and compares it with the list entry by entry. How much an enemy holds, estimated from the data
+(2026-11-17: each catalog's objects in resources.assets reached from it by references, a raw scan of every
+object for pointers into the file; textures counted at one byte a pixel, as the port's ASTC 4x4 and R8 store
+them): most enemies 15 - 70 MB, the bosses 140 - 340 MB (Amanecidas, the Pontiff's husk, the snake, Isidora), all
+66 catalogs 629 MB with what they share counted once. The RG34XX-SP plays the first level with about 220 MB
+available, so a few areas' worth of enemies would use it up if they stayed. The game keeps them: the catalogs a
+level registers stay in `FMODAudioManager.RegisterCatalog`'s array for the session, and each keeps its `Owner`.
+`Owner` is only a type tag (`AddCatalogItems` reads it as `== null` and `.GetType()`; nothing else reads it, by
+IL, by reflection or in the data: the type's name is in no scene or PlayMaker file), so the patch routes those two
+reads through a helper that remembers each catalog's owner type when it first sees it, and after the walk sets
+`Owner` to null on the catalogs walked: `Level`'s `Resources.UnloadUnusedAssets` can then free an enemy once the
+level that had it is gone, and a later level with the same type finds the same catalog by the type remembered.
+The game's own `GetType() ==` comparison stays (the list's class names only choose what to load), and the patch
+refuses nested or generic enemy classes, two of one full name, and `Owner` named next to a reflection call. The
+asmpatch tests run a stand-in of the catalog, manager and loader over seven levels (a revisit after the owners
+went, a level whose own catalog is the second of its type, two classes of one name in two namespaces, a respawn,
+a level without enemies) as built and as patched: the same catalogs walked and registered, level by level.
 
 ```toml
 [convert]
@@ -750,6 +755,13 @@ catalogs in the array's order (`DMKPatrollingFlyingEnemy`, then `PatrollingFlyin
 reached 778-791 MB during startup and was stopped for low memory before the title; patched, the title at 233 MB
 and 60 fps, the main menu 490 MB. The first level's load still runs out (781 MB at its loading screen): a
 second memory problem, not this one, still to be found (a census during that load).
+
+The owners let go, on the RG34XX-SP (Knulli, 2026-11-17, 300 s from the title through D17Z01S01 and S02 twice,
+silent): `check` found the 66 entries the same and walked the same two catalogs in S01 each time (the second time
+after their owners were let go), no owner type different; memory the same as the build that keeps the owners
+(rss 687 against 684 MB, 220 against 223 MB available, 58.7 fps both): the first rooms have one enemy type, so
+there is nothing there to free yet; the saving shows only after areas with other enemies, which a test reaches
+only by playing there (the console is a debug build's, and a save made for it would be made-up game state).
 
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
 
