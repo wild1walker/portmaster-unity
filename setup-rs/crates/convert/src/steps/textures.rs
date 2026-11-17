@@ -392,6 +392,9 @@ fn defaults() -> Vec<(&'static str, Json)> {
         ("spill_mb", Json::Int(64)),
         ("readable", Json::Str("keep".into())),
         ("readable_keep", Json::Str(String::new())),
+        ("exact_shaders", Json::Str(String::new())),
+        ("exact_keywords", Json::Str(String::new())),
+        ("exact_names", Json::Str(String::new())),
     ]
 }
 
@@ -538,6 +541,8 @@ struct Stats {
     textures: u64,
     /// readable textures whose flag `readable` cleared
     released: u64,
+    /// textures `exact_*` left as they are
+    exact: u64,
     sprites: u64,
     atlas_entries: u64,
     bytes_in: u64,
@@ -962,6 +967,8 @@ struct Turns<'a> {
     converted: u64,
     /// textures whose m_IsReadable the `readable` setting cleared (the file is written for them too)
     released: u64,
+    /// textures `exact_*` left as they are
+    exact: u64,
 }
 
 impl Turns<'_> {
@@ -1132,6 +1139,26 @@ pub struct Pool {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The textures left exactly as they are (`exact_shaders`, `exact_keywords`, `exact_names`): those that
+/// materials of the named shaders sample (exacttex.rs), by data file and path id, and those named.
+#[derive(Default)]
+pub struct Exact {
+    pub keys: std::collections::HashSet<(String, i64)>,
+    pub names: Option<regex::Regex>,
+}
+
+impl Exact {
+    fn has(&self, rel: &str, pid: i64, name: &[u8]) -> bool {
+        let base = rel.rsplit('/').next().unwrap_or(rel);
+        self.keys.contains(&(base.to_string(), pid))
+            || self
+                .names
+                .as_ref()
+                .is_some_and(|rx| rx.is_match(&String::from_utf8_lossy(name)))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn convert_file(
     f: &mut unityfs::DataFile,
     rel: &str,
@@ -1142,6 +1169,7 @@ fn convert_file(
     stats: &mut Stats,
     stream_path: PathBuf,
     fix_refs: bool,
+    exact: &Exact,
 ) -> Result<FileResult> {
     let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
     let (vmaj, vmin) = {
@@ -1169,6 +1197,7 @@ fn convert_file(
         order: Vec::new(),
         converted: 0,
         released: 0,
+        exact: 0,
     };
     let textures = f.path_ids("Texture2D");
     let (budget, nworkers) = pool.as_ref().map_or((0, 0), |p| (p.budget, p.codecs.len()));
@@ -1290,7 +1319,12 @@ fn convert_file(
                         tex.is_readable = false;
                     }
                 }
-                let Some(ch) = enc.choose(&tex) else {
+                // `exact_*`: left as they are (a shader reads their texels as data)
+                let keep = exact.has(rel, pid, &tex.name);
+                if keep {
+                    turns.exact += 1;
+                }
+                let Some(ch) = (if keep { None } else { enc.choose(&tex) }) else {
                     return Ok(match &sd {
                         Some((off, size, path)) => Some(Turn::Keep {
                             pid,
@@ -1421,6 +1455,7 @@ fn convert_file(
     });
     r?;
     stats.released += turns.released;
+    stats.exact += turns.exact;
     if turns.converted == 0 && turns.released == 0 {
         return Ok(None);
     }
@@ -1523,10 +1558,13 @@ fn left(work: &Path, e: Error, stream: bool) -> Error {
 fn settings(cfg: &Json) -> Result<(Json, Option<String>)> {
     let mut c = section(cfg, "textures", &defaults())?;
     let set = |k: &str| c.get(k).filter(|v| !matches!(v, Json::Null)).cloned();
-    let lowmem: Vec<(&str, Json)> = [("scale", set("lowmem_scale")), ("block", set("lowmem_block"))]
-        .into_iter()
-        .filter_map(|(k, v)| Some((k, v?)))
-        .collect();
+    let lowmem: Vec<(&str, Json)> = [
+        ("scale", set("lowmem_scale")),
+        ("block", set("lowmem_block")),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| Some((k, v?)))
+    .collect();
     if lowmem.is_empty() {
         return Ok((c, None));
     }
@@ -1542,7 +1580,10 @@ fn settings(cfg: &Json) -> Result<(Json, Option<String>)> {
         .iter()
         .map(|(k, v)| format!("{k} {} (lowmem_{k})", v.repr()))
         .collect();
-    let why = format!("textures: {mem} MB of RAM (at most {ram}): {}", what.join(", "));
+    let why = format!(
+        "textures: {mem} MB of RAM (at most {ram}): {}",
+        what.join(", ")
+    );
     for (k, v) in lowmem {
         c.set(k, v);
     }
@@ -1575,6 +1616,46 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     };
     if let Some(r) = &only {
         files.retain(|f| r.is_match(f));
+    }
+    let mut exact = Exact {
+        names: match opt(&c, "exact_names").to_str().as_str() {
+            "" => None,
+            _ => Some(rx("exact_names")?),
+        },
+        ..Default::default()
+    };
+    if !opt(&c, "exact_shaders").to_str().is_empty() {
+        let shaders = rx("exact_shaders")?;
+        let kw: Vec<String> = opt(&c, "exact_keywords")
+            .to_str()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let found = super::exacttex::find(job, &shaders, &kw);
+        job.log(&format!(
+            "textures: exact_shaders {:?}{}: {} materials, {} renderers, {} animator controllers: {} textures left as they are",
+            shaders.as_str(),
+            if kw.is_empty() { String::new() } else { format!(" with {}", kw.join(" ")) },
+            found.materials.len(),
+            found.renderers,
+            found.animators,
+            found.textures.len()
+        ));
+        let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
+        for (f, _) in &found.textures {
+            *by_file.entry(f.as_str()).or_default() += 1;
+        }
+        if !by_file.is_empty() {
+            job.log(&format!(
+                "textures: exact_shaders: in {}",
+                by_file
+                    .iter()
+                    .map(|(f, n)| format!("{f} ({n})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        exact.keys = found.textures.into_iter().collect();
     }
     let spill_mb = opt(&c, "spill_mb").as_int().unwrap_or(0).max(0) as u64;
     let inline_streams = opt(&c, "inline_streams").truthy();
@@ -1643,6 +1724,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     &work,
                     &res_dir,
                     job,
+                    &exact,
                 )?;
                 match r {
                     Err(why) => {
@@ -1687,6 +1769,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     &mut stats,
                     work.join("stream.new"),
                     true,
+                    &exact,
                 )
                 .map_err(|e| left(&work, e, true))?;
                 drop(streams);
@@ -1756,6 +1839,12 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
         stats.atlas_entries,
         stats.sprites
     ));
+    if stats.exact > 0 {
+        job.log(&format!(
+            "textures: {} textures left exactly as they are (exact_shaders, exact_names: a shader reads their texels as data)",
+            stats.exact
+        ));
+    }
     if stats.released > 0 {
         job.log(&format!(
             "textures: {} readable textures no longer readable (readable = {}): no copy of their pixels in system memory",
@@ -1815,6 +1904,7 @@ fn convert_bundle_files(
     work: &Path,
     res_dir: &Path,
     job: &Job,
+    exact: &Exact,
 ) -> Result<std::result::Result<Option<Written>, String>> {
     let n = f.file_count();
     // (the totals as they were, should the bundle be left as it is)
@@ -1842,6 +1932,7 @@ fn convert_bundle_files(
             stats,
             work.join(format!("stream{k}.new")),
             false,
+            exact,
         )
         .map_err(|e| left(work, e, false))?;
         results.push(r);
@@ -1960,9 +2051,15 @@ mod tests {
         let (scale, block, sharp, why) = got(
             r#"{"textures": {"lowmem_scale": 0.375, "lowmem_block": [6, 6], "ram_mb": 1099511627776}}"#,
         );
-        assert_eq!((scale.as_str(), block.as_str(), sharp.as_str()), ("0.375", "[6, 6]", "[4, 4]"));
+        assert_eq!(
+            (scale.as_str(), block.as_str(), sharp.as_str()),
+            ("0.375", "[6, 6]", "[4, 4]")
+        );
         let why = why.unwrap();
-        assert!(why.ends_with("scale 0.375 (lowmem_scale), block [6, 6] (lowmem_block)"), "{why}");
+        assert!(
+            why.ends_with("scale 0.375 (lowmem_scale), block [6, 6] (lowmem_block)"),
+            "{why}"
+        );
         // the block alone
         let (scale, block, _, why) =
             got(r#"{"textures": {"lowmem_block": [6, 6], "ram_mb": 1099511627776}}"#);

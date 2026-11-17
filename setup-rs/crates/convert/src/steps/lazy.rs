@@ -25,7 +25,10 @@ const NAMED: [i32; 3] = [28, 128, 49];
 
 /// An object's m_Name (its first field) read from its first bytes, without reading the whole object.
 fn name_of(f: &unityfs::DataFile, o: &unityfs::ObjectInfo) -> Option<Vec<u8>> {
-    let head = f.sf.source().read_vec(o.byte_start, (o.byte_size as usize).min(4 + 255)).ok()?;
+    let head =
+        f.sf.source()
+            .read_vec(o.byte_start, (o.byte_size as usize).min(4 + 255))
+            .ok()?;
     if head.len() < 4 {
         return None;
     }
@@ -97,7 +100,11 @@ pub fn names_of(c: &Json) -> BTreeSet<Vec<u8>> {
 }
 
 /// The objects of a file named in `names`: (the file's name, path id), and the names found.
-pub fn survey(f: &unityfs::DataFile, rel: &str, names: &BTreeSet<Vec<u8>>) -> (Vec<Key>, Vec<Vec<u8>>) {
+pub fn survey(
+    f: &unityfs::DataFile,
+    rel: &str,
+    names: &BTreeSet<Vec<u8>>,
+) -> (Vec<Key>, Vec<Vec<u8>>) {
     let base = rel.rsplit('/').next().unwrap_or(rel).to_string();
     let (mut keys, mut found) = (Vec::new(), Vec::new());
     for o in f.sf.objects.iter().filter(|o| NAMED.contains(&o.class_id)) {
@@ -114,15 +121,14 @@ pub fn survey(f: &unityfs::DataFile, rel: &str, names: &BTreeSet<Vec<u8>>) -> (V
 /// A file's PreloadData and ResourceManager lists without the objects in `drop` (saved in `f`, the same length):
 /// the number of entries left out.
 pub fn edit(f: &mut unityfs::DataFile, rel: &str, drop: &BTreeSet<Key>) -> Result<usize> {
-    let ext: Vec<String> = f
-        .sf
-        .externals
-        .iter()
-        .map(|e| {
-            let p = String::from_utf8_lossy(&e.path).into_owned();
-            p.rsplit('/').next().unwrap_or("").to_string()
-        })
-        .collect();
+    let ext: Vec<String> =
+        f.sf.externals
+            .iter()
+            .map(|e| {
+                let p = String::from_utf8_lossy(&e.path).into_owned();
+                p.rsplit('/').next().unwrap_or("").to_string()
+            })
+            .collect();
     let mut n = 0;
     for (pid, class) in objects(f) {
         match class.as_str() {
@@ -163,7 +169,9 @@ pub fn run(job: &mut Job) -> Result<()> {
     let c = section(&job.cfg, STEP, &[("names", Json::Str(String::new()))])?;
     let names = names_of(&c);
     if names.is_empty() {
-        job.log(&format!("{STEP}: no names (convert.{STEP}.names): nothing to do"));
+        job.log(&format!(
+            "{STEP}: no names (convert.{STEP}.names): nothing to do"
+        ));
         return Ok(());
     }
     let files: Vec<String> = edits::data_files(&job.src)
@@ -183,7 +191,10 @@ pub fn run(job: &mut Job) -> Result<()> {
         found.extend(names_found);
     }
     for n in names.difference(&found) {
-        job.log(&format!("{STEP}: no object named {:?} in the data", String::from_utf8_lossy(n)));
+        job.log(&format!(
+            "{STEP}: no object named {:?} in the data",
+            String::from_utf8_lossy(n)
+        ));
     }
     if drop.is_empty() {
         return Ok(());

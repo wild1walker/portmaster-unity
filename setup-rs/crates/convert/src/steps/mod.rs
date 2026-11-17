@@ -6,6 +6,7 @@ pub mod audio;
 pub mod compute;
 pub mod d3d11;
 pub mod edits;
+pub mod exacttex;
 pub mod fmodcatalogs;
 pub mod fusedpost;
 pub mod grabfetch;

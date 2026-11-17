@@ -359,9 +359,11 @@ fn survey(job: &Job) -> std::result::Result<Vec<(String, String)>, String> {
             let f = files.get(file).unwrap();
             match root_of(f, go) {
                 Some(r) if !rs.contains(&r) => {}
-                _ => return Err(format!(
+                _ => {
+                    return Err(format!(
                     "{file}: a catalog ({c}) in a prefab under {PREFIX:?} that is not its root's"
-                )),
+                ))
+                }
             }
         }
     }

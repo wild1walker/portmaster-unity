@@ -18,7 +18,11 @@ fn temp(name: &str) -> PathBuf {
 }
 
 fn o(class_id: i32, path_id: i64, value: Value) -> Obj {
-    Obj { class_id, path_id, value }
+    Obj {
+        class_id,
+        path_id,
+        value,
+    }
 }
 
 fn write(data: &Path, rel: &str, b: &[u8]) {
@@ -32,7 +36,12 @@ fn pptrs(v: &Value) -> Vec<(i128, i128)> {
     v.as_array()
         .unwrap()
         .iter()
-        .map(|p| (p.get("m_FileID").unwrap().as_int().unwrap(), p.get("m_PathID").unwrap().as_int().unwrap()))
+        .map(|p| {
+            (
+                p.get("m_FileID").unwrap().as_int().unwrap(),
+                p.get("m_PathID").unwrap().as_int().unwrap(),
+            )
+        })
         .collect()
 }
 
@@ -54,15 +63,26 @@ fn lazy_on_made_up_data() {
         eprintln!("PMU_TPK not set: skipped");
         return;
     };
-    let opts = Options { db: Some(db.clone()), ..Default::default() };
+    let opts = Options {
+        db: Some(db.clone()),
+        ..Default::default()
+    };
     let dir = temp("names");
     let data = dir.join("Data");
     // sharedassets0.assets: the fonts' file, the atlases of two languages
     let s0 = madeup::serialized(
         &db,
         &[
-            o(28, 1, madeup::texture(&db, "latin Atlas", (8, 8), 1, &[0; 64], None)),
-            o(28, 2, madeup::texture(&db, "chinese_body Atlas", (8, 8), 1, &[0; 64], None)),
+            o(
+                28,
+                1,
+                madeup::texture(&db, "latin Atlas", (8, 8), 1, &[0; 64], None),
+            ),
+            o(
+                28,
+                2,
+                madeup::texture(&db, "chinese_body Atlas", (8, 8), 1, &[0; 64], None),
+            ),
             o(150, 3, madeup::preload_data(&db, &[])),
         ],
         &[],
@@ -73,8 +93,16 @@ fn lazy_on_made_up_data() {
     let s1 = madeup::serialized(
         &db,
         &[
-            o(28, 1, madeup::texture(&db, "scene tex", (8, 8), 1, &[0; 64], None)),
-            o(150, 2, madeup::preload_data(&db, &[(0, 1), (1, 1), (1, 2), (2, 2), (1, 2)])),
+            o(
+                28,
+                1,
+                madeup::texture(&db, "scene tex", (8, 8), 1, &[0; 64], None),
+            ),
+            o(
+                150,
+                2,
+                madeup::preload_data(&db, &[(0, 1), (1, 1), (1, 2), (2, 2), (1, 2)]),
+            ),
         ],
         &["sharedassets0.assets", "resources.assets"],
         false, // (no type trees, as a player build's: the files the setup edits)
@@ -85,27 +113,57 @@ fn lazy_on_made_up_data() {
     let mut rm = madeup::object(&db, 147);
     let mut dep = madeup::element(&rm_tree, &["m_DependentAssets"]);
     dep.set("m_Object", madeup::pptr(2, 9)).unwrap();
-    dep.set("m_Dependencies", Value::Array(vec![madeup::pptr(1, 2), madeup::pptr(1, 1), madeup::pptr(2, 3)])).unwrap();
+    dep.set(
+        "m_Dependencies",
+        Value::Array(vec![
+            madeup::pptr(1, 2),
+            madeup::pptr(1, 1),
+            madeup::pptr(2, 3),
+        ]),
+    )
+    .unwrap();
     madeup::set(&mut rm, &["m_DependentAssets"], Value::Array(vec![dep]));
-    let ggm = madeup::serialized(&db, &[o(147, 1, rm)], &["sharedassets0.assets", "resources.assets"], false);
+    let ggm = madeup::serialized(
+        &db,
+        &[o(147, 1, rm)],
+        &["sharedassets0.assets", "resources.assets"],
+        false,
+    );
     write(&data, "globalgamemanagers", &ggm);
     let untouched = std::fs::read(data.join("sharedassets0.assets")).unwrap();
 
     cli::run(&cli(&dir, "chinese_body Atlas|no such Atlas")).unwrap();
-    assert_eq!(std::fs::metadata(data.join("sharedassets1.assets")).unwrap().len() as usize, s1.len());
+    assert_eq!(
+        std::fs::metadata(data.join("sharedassets1.assets"))
+            .unwrap()
+            .len() as usize,
+        s1.len()
+    );
     let f = DataFile::open(data.join("sharedassets1.assets"), &opts).unwrap();
     let t = f.sf.read_typetree(2).unwrap();
     // (each entry for the named atlas replaced by the list's first other one: the same length)
-    assert_eq!(pptrs(t.get("m_Assets").unwrap()), [(0, 1), (1, 1), (0, 1), (2, 2), (0, 1)]);
+    assert_eq!(
+        pptrs(t.get("m_Assets").unwrap()),
+        [(0, 1), (1, 1), (0, 1), (2, 2), (0, 1)]
+    );
     let g = DataFile::open(data.join("globalgamemanagers"), &opts).unwrap();
     let t = g.sf.read_typetree(1).unwrap();
     let deps = t.get("m_DependentAssets").unwrap().as_array().unwrap();
     // (a resource's dependency on it replaced by the resource itself)
-    assert_eq!(pptrs(deps[0].get("m_Dependencies").unwrap()), [(2, 9), (1, 1), (2, 3)]);
-    assert_eq!(std::fs::read(data.join("sharedassets0.assets")).unwrap(), untouched);
+    assert_eq!(
+        pptrs(deps[0].get("m_Dependencies").unwrap()),
+        [(2, 9), (1, 1), (2, 3)]
+    );
+    assert_eq!(
+        std::fs::read(data.join("sharedassets0.assets")).unwrap(),
+        untouched
+    );
     // again: nothing left to do, nothing written
     let before = std::fs::read(data.join("sharedassets1.assets")).unwrap();
     cli::run(&cli(&dir, "chinese_body Atlas|no such Atlas")).unwrap();
-    assert_eq!(std::fs::read(data.join("sharedassets1.assets")).unwrap(), before);
+    assert_eq!(
+        std::fs::read(data.join("sharedassets1.assets")).unwrap(),
+        before
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

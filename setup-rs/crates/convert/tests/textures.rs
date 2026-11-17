@@ -422,3 +422,159 @@ fn textures_readable_modes() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// `exact_shaders` / `exact_keywords` / `exact_names`: the textures that materials of a palette shader
+/// sample (a SpriteRenderer's sprite, the sprites its parent's Animator sets, through a controller in
+/// another file) and the named ones are left as they are; the others are converted.
+#[test]
+fn textures_exact_shaders() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    use madeup::{element, object, pptr, set, tree};
+    let dir = temp("exact");
+    let data = dir.join("Data");
+    std::fs::create_dir_all(&data).unwrap();
+    let o = |class_id, path_id, value| Obj {
+        class_id,
+        path_id,
+        value,
+    };
+    let tex = |name: &str| madeup::texture(&db, name, (8, 8), 4, &[9u8; 256], None);
+    let shader = |name: &str| {
+        let mut v = object(&db, 48);
+        set(&mut v, &["m_ParsedForm", "m_Name"], Value::str(name));
+        v
+    };
+    let material = |shader_pid: i64, kw: &str| {
+        let mut v = object(&db, 21);
+        set(&mut v, &["m_Shader"], pptr(0, shader_pid));
+        set(&mut v, &["m_ShaderKeywords"], Value::str(kw));
+        v
+    };
+    let renderer = |go: i64, mat: i64, sprite: i64| {
+        let mut v = object(&db, 212);
+        set(&mut v, &["m_GameObject"], pptr(0, go));
+        set(&mut v, &["m_Materials"], Value::Array(vec![pptr(0, mat)]));
+        set(&mut v, &["m_Sprite"], pptr(0, sprite));
+        v
+    };
+    let gt = tree(&db, 1);
+    let game_object = |comps: &[i64]| {
+        let mut v = object(&db, 1);
+        let list = comps
+            .iter()
+            .map(|&c| {
+                let mut e = element(&gt, &["m_Component"]);
+                e.set("component", pptr(0, c)).unwrap();
+                e
+            })
+            .collect();
+        set(&mut v, &["m_Component"], Value::Array(list));
+        v
+    };
+    let transform = |go: i64, father: i64| {
+        let mut v = object(&db, 4);
+        set(&mut v, &["m_GameObject"], pptr(0, go));
+        set(&mut v, &["m_Father"], pptr(0, father));
+        v
+    };
+    let mut animator = object(&db, 95);
+    set(&mut animator, &["m_Controller"], pptr(1, 2));
+    // the parent (GameObject 30: Transform 31, Animator 32) and the child drawn with the palette
+    // material (GameObject 40: Transform 41, SpriteRenderer 42 with sprite 51 of texture 61);
+    // sprite 52 (texture 62) only in the parent's clip; sprite 53 (texture 63) on a renderer of the
+    // same shader without PALETTE_ON; texture 64 by name; texture 65 nobody's
+    let objs = vec![
+        o(48, 10, shader("Maikel/MaikelSpriteMasterShader")),
+        o(21, 20, material(10, "ETC1_EXTERNAL_ALPHA PALETTE_ON")),
+        o(21, 21, material(10, "ETC1_EXTERNAL_ALPHA")),
+        o(1, 30, game_object(&[31, 32])),
+        o(4, 31, transform(30, 0)),
+        o(95, 32, animator),
+        o(1, 40, game_object(&[41, 42])),
+        o(4, 41, transform(40, 31)),
+        o(212, 42, renderer(40, 20, 51)),
+        o(1, 43, game_object(&[44, 45])),
+        o(4, 44, transform(43, 0)),
+        o(212, 45, renderer(43, 21, 53)),
+        o(213, 51, madeup::sprite(&db, "body", 61)),
+        o(213, 52, madeup::sprite(&db, "attack", 62)),
+        o(213, 53, madeup::sprite(&db, "prop", 63)),
+        o(28, 61, tex("penitent_body")),
+        o(28, 62, tex("penitent_attack")),
+        o(28, 63, tex("prop")),
+        o(28, 64, tex("byhand_lut")),
+        o(28, 65, tex("other")),
+    ];
+    std::fs::write(
+        data.join("sharedassets0.assets"),
+        madeup::serialized(&db, &objs, &["sharedassets1.assets"], false),
+    )
+    .unwrap();
+    let mut clip = madeup::animation_clip(&db, "attack", &[], 0);
+    set(
+        &mut clip,
+        &["m_ClipBindingConstant", "pptrCurveMapping"],
+        Value::Array(vec![pptr(1, 51), pptr(1, 52)]),
+    );
+    let mut ctrl = object(&db, 91);
+    set(
+        &mut ctrl,
+        &["m_AnimationClips"],
+        Value::Array(vec![pptr(0, 3)]),
+    );
+    std::fs::write(
+        data.join("sharedassets1.assets"),
+        madeup::serialized(
+            &db,
+            &[o(91, 2, ctrl), o(74, 3, clip)],
+            &["sharedassets0.assets"],
+            false,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        data.join("globalgamemanagers"),
+        madeup::serialized(&db, &[o(141, 1, madeup::build_settings(&db))], &[], false),
+    )
+    .unwrap();
+    let cfg = pyjson::loads(
+        r#"{"version": 1, "textures": {"inline": true, "exact_shaders": "^Maikel/MaikelSpriteMasterShader", "exact_keywords": "PALETTE_ON", "exact_names": "_lut$", "files": "^[^/]*\\.assets$"}}"#,
+    )
+    .unwrap();
+    let mut job = Job::new(&data, &data, cfg).unwrap();
+    let fake = Fake {
+        seen: Vec::new(),
+        workers: false,
+    };
+    textures::run_with(&mut job, &Args::default(), Box::new(fake)).unwrap();
+    let opts = Options {
+        db: Some(db.clone()),
+        ..Default::default()
+    };
+    let f = DataFile::open(data.join("sharedassets0.assets"), &opts).unwrap();
+    let format = |pid| {
+        f.sf.read_typetree(pid)
+            .unwrap()
+            .get("m_TextureFormat")
+            .unwrap()
+            .as_int()
+            .unwrap()
+    };
+    assert_eq!(
+        [61, 62, 63, 64, 65].map(format),
+        [4, 4, 54, 4, 54],
+        "kept: the palette renderer's sprite, its Animator's clip sprite, the named one"
+    );
+    assert_eq!(
+        f.sf.read_typetree(61)
+            .unwrap()
+            .get("image data")
+            .unwrap()
+            .as_bytes()
+            .unwrap(),
+        &[9u8; 256][..]
+    );
+}

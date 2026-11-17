@@ -1752,14 +1752,49 @@ mod tests {
 
     #[test]
     fn auto_is_the_handheld_profile_unless_a_port_gates_it() {
-        let o = |kv: Vec<(&str, Json)>| Json::Dict(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+        let o = |kv: Vec<(&str, Json)>| {
+            Json::Dict(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        };
         // auto with no ram_mb (the default): the handheld profile on every machine
-        assert!(profile_of(&o(vec![("profile", Json::Str("auto".into())), ("ram_mb", Json::Null)])).unwrap().0);
-        assert!(profile_of(&o(vec![("profile", Json::Str("auto".into()))])).unwrap().0);
+        assert!(
+            profile_of(&o(vec![
+                ("profile", Json::Str("auto".into())),
+                ("ram_mb", Json::Null)
+            ]))
+            .unwrap()
+            .0
+        );
+        assert!(
+            profile_of(&o(vec![("profile", Json::Str("auto".into()))]))
+                .unwrap()
+                .0
+        );
         // a port's own gate: at most that much RAM (no system has more than 2^40 MB, none 0)
-        assert!(profile_of(&o(vec![("profile", Json::Str("auto".into())), ("ram_mb", Json::Int(1 << 40))])).unwrap().0);
-        assert!(!profile_of(&o(vec![("profile", Json::Str("auto".into())), ("ram_mb", Json::Int(0))])).unwrap().0);
-        assert!(!profile_of(&o(vec![("profile", Json::Str("full".into()))])).unwrap().0);
-        assert!(profile_of(&o(vec![("profile", Json::Str("handheld".into()))])).unwrap().0);
+        assert!(
+            profile_of(&o(vec![
+                ("profile", Json::Str("auto".into())),
+                ("ram_mb", Json::Int(1 << 40))
+            ]))
+            .unwrap()
+            .0
+        );
+        assert!(
+            !profile_of(&o(vec![
+                ("profile", Json::Str("auto".into())),
+                ("ram_mb", Json::Int(0))
+            ]))
+            .unwrap()
+            .0
+        );
+        assert!(
+            !profile_of(&o(vec![("profile", Json::Str("full".into()))]))
+                .unwrap()
+                .0
+        );
+        assert!(
+            profile_of(&o(vec![("profile", Json::Str("handheld".into()))]))
+                .unwrap()
+                .0
+        );
     }
 }
