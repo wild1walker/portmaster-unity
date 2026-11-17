@@ -689,6 +689,10 @@ int fmp_load_bank(const char *name)
         b.keys[i] = strtoull(snd->k[i], NULL, 16);
         b.key_media[i] = (int)snd->v[i].num;
     }
+    // the tree is read only here (what plays keeps its own copies, and its strings point into b.text, kept): freed,
+    // 4 - 5 MB of small blocks for Blasphemous's banks
+    js_free(&b.root);
+    memset(&b.root, 0, sizeof b.root);
     GROW(g_banks, g_nbanks, g_cbanks);
     g_banks[g_nbanks++] = b;
     pthread_mutex_unlock(&L);
