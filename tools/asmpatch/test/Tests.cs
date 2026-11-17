@@ -31,6 +31,7 @@ static partial class TestMain
             DllEdition();
             NoRewired();
             NoAndroidConstant();
+            RewiredNoKeyboardTests();
             InputSystemTests();
             InControlTests();
             InControlBindingsTests();
@@ -225,6 +226,42 @@ static partial class TestMain
         File.Copy(Path.Combine(d, "Rewired_Core.dll"), Path.Combine(d2, "Rewired_Core.dll"));
         (st, outp) = Patch(d2, o2);
         Check(st == 0 && outp.Contains("done rewired-android") && NoDlls(o2), "patched twice: already applied, nothing written");
+    }
+
+    // rewired-no-keyboard: a Rewired_Core whose ConfigVars.GetPlatformVar_disableKeyboard returns its field (false);
+    // opt-in (not in the default set), then true when named, then nothing to do on the patched copy
+    static void RewiredNoKeyboardTests()
+    {
+        var d = Dir("nokb"); var o = Path.Combine(tmp, "nokb-out");
+        var m = NewModule("Rewired_Core");
+        var t = new TypeDefinition("Rewired.Data", "ConfigVars", TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit, m.TypeSystem.Object);
+        var f = new FieldDefinition("disable", FieldAttributes.Public, m.TypeSystem.Boolean);
+        t.Fields.Add(f);
+        var g = new MethodDefinition("GetPlatformVar_disableKeyboard", MethodAttributes.Assembly | MethodAttributes.HideBySig, m.TypeSystem.Boolean);
+        var il = g.Body.GetILProcessor();
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f); il.Emit(OpCodes.Ret);
+        t.Methods.Add(g);
+        t.Methods.Add(Ctor(m, ObjectCtor(m)));
+        m.Types.Add(t);
+        m.Write(Path.Combine(d, "Rewired_Core.dll"));
+        var (st, outp) = Patch(d, Path.Combine(tmp, "nokb-default"));
+        Check(st == 0 && outp.Contains("skip rewired-no-keyboard (opt-in") && NoDlls(Path.Combine(tmp, "nokb-default")), "rewired-no-keyboard: opt-in, not in the default set");
+        (st, outp) = Patch(d, o, with: new[] { "rewired-no-keyboard" });
+        Check(st == 0 && outp.Contains("ok   rewired-no-keyboard: Rewired_Core.dll: Rewired.Data.ConfigVars.GetPlatformVar_disableKeyboard: returns true"), "rewired-no-keyboard: applied when named");
+        var ctx = new AssemblyLoadContext("nokb" + Guid.NewGuid(), isCollectible: true);
+        try
+        {
+            var asm = ctx.LoadFromStream(new MemoryStream(File.ReadAllBytes(Path.Combine(o, "Rewired_Core.dll"))));
+            var ct = asm.GetType("Rewired.Data.ConfigVars", true);
+            var obj = Activator.CreateInstance(ct);
+            var r = (bool)ct.GetMethod("GetPlatformVar_disableKeyboard", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(obj, null);
+            Check(r, "rewired-no-keyboard: the patched GetPlatformVar_disableKeyboard returns true (the field says false)");
+        }
+        finally { ctx.Unload(); }
+        var d2 = Dir("nokb-again");
+        File.Copy(Path.Combine(o, "Rewired_Core.dll"), Path.Combine(d2, "Rewired_Core.dll"));
+        (st, outp) = Patch(d2, Path.Combine(tmp, "nokb-again-out"), with: new[] { "rewired-no-keyboard" });
+        Check(st == 0 && outp.Contains("done rewired-no-keyboard") && NoDlls(Path.Combine(tmp, "nokb-again-out")), "rewired-no-keyboard: patched twice: already applied");
     }
 
     static void DllEdition()

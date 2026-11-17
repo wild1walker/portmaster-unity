@@ -43,7 +43,7 @@ abstract class Patch
 
     public static readonly Patch[] All =
     {
-        new RewiredAndroid(),
+        new RewiredAndroid(), new RewiredNoKeyboard(),
         new InputSystemAndroid(),
         new BlasphemousPreload(),
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
