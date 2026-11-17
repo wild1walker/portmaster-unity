@@ -790,7 +790,8 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   shell the device stays on its idle governors, where the memory controller never left 528 MHz and the
   GPU 400 MHz in a fight; Enter the Gungeon's heavy fights ran 5 - 30 % slower there (the Keep's boss
   27.7 -> 36.1 fps, the High Dragun 32.7 -> 34.5, the Forge's busiest room 23.7 -> 27.4, Bullet Hell's
-  22.9 -> 25.9: idle governors -> perfmax, EmulationStation stopped). A test harness should run the same two
+  22.9 -> 25.9: idle governors -> perfmax, EmulationStation stopped). Blasphemous's first level: 50.5 fps
+  -> 56.5 - 57.7 (three runs), its intro narration 45.7 -> 47 - 49. A test harness should run the same two
   commands around the game, as ES does: with no terminal (ES's stdin is `/dev/null`). From a terminal
   (`ssh -t`, `script`) both scripts take their non-RK3326 branch and perfnorm leaves the GPU on
   `performance`. A port itself never touches clocks.
