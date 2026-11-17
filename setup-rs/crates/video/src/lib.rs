@@ -46,8 +46,13 @@ pub fn target(w: u64, h: u64, max_height: u64) -> (u64, u64) {
     (w, h)
 }
 
-/// The clip made smaller (None: its VP8 picture is not taller than max_height, or it has none).
+/// The clip made smaller (None: its VP8 picture is not taller than max_height, or it has none, or the
+/// clip is not WebM: a game's .resource file can hold MP4 clips beside its WebM ones, Blasphemous's
+/// sharedassets1221.resource an H.264 one after a VP8 one).
 pub fn reencode(clip: &[u8], s: &Settings) -> Result<Option<(Vec<u8>, Outcome)>, String> {
+    if !clip.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        return Ok(None);
+    }
     let mut w = WebM::parse(clip)?;
     let video: Vec<(u64, (u64, u64))> = w
         .tracks()
@@ -195,6 +200,17 @@ pub fn reencode(clip: &[u8], s: &Settings) -> Result<Option<(Vec<u8>, Outcome)>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_containers_kept() {
+        let s = Settings {
+            max_height: 720,
+            encode: vpx::EncodeSettings { threads: 1, log2_partitions: 2, cpu_used: 4, cq_level: 10, max_kbps: 4000 },
+        };
+        // an MP4's first box (ftyp), as an H.264 clip in a .resource file begins
+        let mp4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42mp41";
+        assert_eq!(reencode(mp4, &s), Ok(None));
+    }
 
     #[test]
     fn target_sizes() {
