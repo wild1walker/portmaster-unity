@@ -883,6 +883,16 @@ patchlog.txt gets these lines as pmu prints them (the patchscript tees both stre
   the peak rose from 169 to 222 MB on Hollow Knight (MemAvailable at least 529 MB on the 1 GB handheld).
 - A kill during one big file loses that file's work (~2-3 min for `resources.assets` on the
   handheld): the journal moves a file at a time.
+- **Every step opens every data file's header again** (follow-up, parked 2026-11-18). A rehearsal of Blasphemous
+  (3,947 data files) with `PMU_PROF` (rehearse.sh passes it) counts the opens a step: shaders 3,946, quality 3,947,
+  audio 1,973, video 3,955, lazy 4,775, textures 12,476 (the exact-shaders analysis included). Most of these only
+  look at the object table to find the classes the step reads. One census a convert makes (each file's classes,
+  externals and the names of its named objects, invalidated for a file when a step writes it) and passes to the
+  steps would leave each step opening only the files it changes or reads objects from; the same output, which
+  the byte-identical bar checks. In Docker on the Mac each open costs 5 - 20 ms through the drive's file sharing
+  (Blasphemous's lazy first pass: 8 - 13 s of Unity-file checks, 18 - 22 s of opens, 28 - 30 s of 2,768 name
+  reads); on a handheld's card it is about a millisecond, so this matters less there than a rehearsal's times
+  suggest: measure on the handheld before building it. Whole setup: rh5 1,314 s, rh8 1,367 s (rehearsal, quiet Mac).
 
 ## Rules
 
