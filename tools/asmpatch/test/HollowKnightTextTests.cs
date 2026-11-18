@@ -52,6 +52,8 @@ static partial class TestMain
         public int Parses => (int)o.GetType().GetField("Parses").GetValue(o);
         public float Fits { set => o.GetType().GetProperty("Fits").SetValue(o, value); }
         public float PerSize { set => o.GetType().GetField("PerSize").SetValue(o, value); }
+        public float PerWidth { set => o.GetType().GetField("PerWidth").SetValue(o, value); }
+        public float X { set => o.GetType().GetProperty("X").SetValue(o, value); }
         public float Height => F("Height");
         public bool Relaid => (bool)o.GetType().GetProperty("Changed").GetValue(o);
         public void Changed() => o.GetType().GetField("InputChanged").SetValue(o, true);
@@ -175,6 +177,58 @@ static partial class TestMain
             var other = new Txt(a, "Text Name", "Charms", true, -4.89f, 10.14f).Wake();
             other.PerSize = 0.8f; other.Render();
             Check(other.Size == 7.5f, $"hk-text: a text without a floor: the box only ({other.Size})");
+            return 0;
+        });
+
+        // a text outside the HUD whose line would run past the screen's sides (the main camera shows 20 units across):
+        // a smaller top size, laid out again in the same frame, never under its own size
+        TextRun(o, "1.5", null, (640, 480), (a, fp) =>
+        {
+            var camT = fp.GetType("UnityEngine.Camera", true);
+            void Cameras(params object[] cs)
+            {
+                var arr = Array.CreateInstance(camT, cs.Length);
+                for (int k = 0; k < cs.Length; k++) arr.SetValue(cs[k], k);
+                camT.GetProperty("allCameras").SetValue(null, arr);
+            }
+            object Cam(int mask = -1, float x = 0f)
+            {
+                var c = Activator.CreateInstance(camT);
+                camT.GetField("Mask").SetValue(c, mask); camT.GetField("X").SetValue(c, x);
+                return c;
+            }
+            Cameras(Cam());
+            var w = new Txt(a, "TextMeshPro", 5f).Wake();
+            w.PerWidth = 3f;   // (7.5 would be 22.5 across; 2 % inside each side leaves 19.2: 6.4 at most)
+            w.Render();
+            Check(w.Size <= 6.4f && w.Size >= 6.2f && !w.Auto && w.Layouts == 2,
+                  $"hk-text: a line past the screen's sides: smaller (6.27: {w.Size}), in the same frame ({w.Layouts} layouts)");
+            w.Render();
+            Check(w.Layouts == 3 && w.Size <= 6.4f, $"hk-text: that size is kept ({w.Size}, {w.Layouts} layouts)");
+            var fits = new Txt(a, "TextMeshPro", 5f).Wake();
+            fits.PerWidth = 2f; fits.Render();
+            Check(fits.Size == 7.5f && fits.Layouts == 1, $"hk-text: a line inside the screen: the box only ({fits.Size}, {fits.Layouts} layouts)");
+            var wide = new Txt(a, "TextMeshPro", 5f).Wake();
+            wide.PerWidth = 5f; wide.Render();
+            Check(wide.Size == 5f && wide.Layouts == 2, $"hk-text: wider than the screen even at its own size: its own size, never smaller ({wide.Size}, {wide.Layouts} layouts)");
+            var side = new Txt(a, "TextMeshPro", 5f).Wake();
+            side.X = 6f; side.PerWidth = 1f; side.Render();
+            Check(side.Size < 7.2f && side.Size >= 6.9f, $"hk-text: a text right of the middle: kept inside the right side (7.06: {side.Size})");
+            var hud = new Txt(a, "Text", "Prompts", true, 0f, 10f).Wake();
+            hud.PerWidth = 3f; hud.Render();
+            Check(hud.Size == 7.5f, $"hk-text: under the HudCamera: the box only ({hud.Size})");
+            var off = new Txt(a, "TextMeshPro", 5f).Wake();
+            off.X = 30f; off.PerWidth = 3f; off.Render();
+            Check(off.Size == 7.5f, $"hk-text: its position off the camera's view: the box only ({off.Size})");
+            // (the first camera drawing the text's layer with its position in view; layer 0)
+            Cameras(Cam(mask: 2), Cam(x: 100f), Cam());
+            var later = new Txt(a, "TextMeshPro", 5f).Wake();
+            later.PerWidth = 3f; later.Render();
+            Check(later.Size <= 6.4f && later.Size >= 6.2f, $"hk-text: measured through the camera that draws it (not one without its layer or its position) ({later.Size})");
+            Cameras(Cam(mask: 2), Cam(x: 100f));
+            var none = new Txt(a, "TextMeshPro", 5f).Wake();
+            none.PerWidth = 3f; none.Render();
+            Check(none.Size == 7.5f, $"hk-text: no camera draws it in view: the box only ({none.Size})");
             return 0;
         });
 

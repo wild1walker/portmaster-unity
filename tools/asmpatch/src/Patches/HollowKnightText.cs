@@ -20,6 +20,13 @@
 // descriptions: their boxes run past the frame, the Equip prompt, the journal's divider) the fit keeps it above a
 // floor in the game's 1920x1080 layout (Floors, from the HUD camera: the HudCamera above the text), measured on
 // the game's own screens; the text is laid out again at its box's full height once the size is chosen.
+// A text outside the HUD (the start screen's notices, the prompts over the world) can have a box wider than the
+// screen shows on a narrower screen than 16:9 (the view is cut at its sides): after the fit its lines are measured
+// (textBounds) through the camera that draws it (the first enabled one whose culling mask has the text's layer and
+// whose view has the text's position: no camera is tagged main on the start screen), and a text that would run past
+// the screen's sides (less 2 % each) gets a smaller top size and is laid out again in the same frame, down to its
+// own size at most (as the game draws it).
+// The HUD's texts (under the HudCamera) are inside its 16:9 frame, which hk-aspect keeps on the screen.
 // The game reads and sets these texts' sizes in its own units (ChangeFontByLanguage's sizes per language): the
 // fontSize property still reads the game's size and setting it sets the fit's range.
 // The variable is read at the first text's Awake; "[hk-text] ..." is logged once. ASMPATCH_HK_TEXT_LOG=1 also
@@ -59,6 +66,10 @@ sealed class HollowKnightText : Patch
     const int Overflow = 0, Page = 5;   // TMProOld.TextOverflowModes
     /// <summary>auto: k = Reference / the screen's 16:9 width, at most AutoMax.</summary>
     public const float Reference = 1024f, AutoMax = 2f;
+    /// <summary>A text outside the HUD stays this far (of the screen's width) inside each side; each new try takes
+    /// Step of the size that would just fit; at most Tries layouts more in a frame.</summary>
+    public const float Edge = 0.02f, Step = 0.98f;
+    public const int Tries = 4;
 
     public override Result Run(Game game, bool apply)
     {
@@ -82,13 +93,17 @@ sealed class HollowKnightText : Patch
         };
         if (new[] { f.size, f.min, f.max, f.minRun, f.maxRun, f.auto, f.fontAsset, f.overflow, f.wrap, f.container, f.marginHeight, f.changed }.Any(x => x == null))
             return Result.Failed($"{file}: TMProOld.TMP_Text / TextMeshPro are not as this patch knows them (their font size, auto size, overflow and box fields)");
+        foreach (var n in Resets)
+            if ((F(tmp, n) ?? F(text, n)) is { } rf && rf.FieldType.MetadataType is MetadataType.Single or MetadataType.Int32 or MetadataType.Boolean)
+                f.resets.Add(rf);
         MethodDefinition M(TypeDefinition t, string n, int args) => t.Methods.FirstOrDefault(x => x.Name == n && !x.IsStatic && x.HasBody && x.Parameters.Count == args);
         var getSize = M(text, "get_fontSize", 0); var setSize = M(text, "set_fontSize", 1); var parse = M(text, "ParseInputText", 0);
         var awake = M(tmp, "Awake", 0); var pre = M(tmp, "OnPreRenderObject", 0);
         var gens = pre?.Body.Instructions.Where(i => i.OpCode.Code is Code.Call or Code.Callvirt && i.Operand is MethodReference c &&
                                                      c.Name == "GenerateTextMesh" && c.Parameters.Count == 0).ToList();
-        if (getSize == null || setSize == null || parse == null || awake == null || gens == null || gens.Count != 1)
-            return Result.Failed($"{file}: TMProOld's fontSize, ParseInputText, TextMeshPro.Awake and OnPreRenderObject (one GenerateTextMesh) are not as this patch knows them");
+        var bounds = M(text, "get_textBounds", 0);
+        if (getSize == null || setSize == null || parse == null || awake == null || gens == null || gens.Count != 1 || bounds == null)
+            return Result.Failed($"{file}: TMProOld's fontSize, ParseInputText, textBounds, TextMeshPro.Awake and OnPreRenderObject (one GenerateTextMesh) are not as this patch knows them");
         var refs = new Refs(m);
         if (refs.Missing is string missing)
             return Result.Failed($"{file}: Assembly-CSharp does not reference {missing} (the patch calls it as the game does)");
@@ -120,7 +135,7 @@ sealed class HollowKnightText : Patch
         // ParseInputText: the input changed, the fit runs again
         Prepend(parse, OpCodes.Ldarg_0, OpCodes.Ldc_I4_0, Instruction.Create(OpCodes.Stfld, f.fitted));
         var grow = Grow(m, tmp, h, refs, f, sizeGet);
-        var (begin, end) = Fit(m, tmp, h, refs, f, sizeGet);
+        var (begin, end) = Fit(m, tmp, h, refs, f, bounds, gens[0]);
         {
             var il = awake.Body.GetILProcessor();
             foreach (var ret in awake.Body.Instructions.Where(i => i.OpCode.Code == Code.Ret).ToList())
@@ -155,6 +170,7 @@ sealed class HollowKnightText : Patch
     sealed class Fields
     {
         public FieldDefinition size, min, max, minRun, maxRun, auto, fontAsset, overflow, wrap, container, marginHeight, changed, scale, fitted, floor, saved;
+        public List<FieldDefinition> resets = new();
     }
 
     static void Prepend(MethodDefinition md, params object[] code)
@@ -188,8 +204,9 @@ sealed class HollowKnightText : Patch
     /// <summary>The Unity and system methods the patch calls, as Assembly-CSharp already references them.</summary>
     sealed class Refs
     {
-        public MethodReference log, objEq, getName, getTransform, getParent, lossy, position, abs, screenW, screenH, cDefW, cDefH, cCorners, cMargins;
-        public FieldReference vecY, vec4Y;
+        public MethodReference log, objEq, getName, getTransform, getParent, lossy, position, abs, screenW, screenH, cDefW, cDefH, cCorners, cMargins,
+                               toViewport, cullingMask, getGameObject, layer, bMin, bMax, vec3, allCameras;
+        public FieldReference vecX, vecY, vecZ, vec4Y;
         public string Missing;
 
         public Refs(ModuleDefinition m)
@@ -212,8 +229,26 @@ sealed class HollowKnightText : Patch
             abs = R("UnityEngine.Mathf", "Abs", 1, false, MetadataType.Single);
             screenW = R("UnityEngine.Screen", "get_width", 0, false);
             screenH = R("UnityEngine.Screen", "get_height", 0, false);
+            toViewport = R("UnityEngine.Camera", "WorldToViewportPoint", 1, true, MetadataType.ValueType);
+            cullingMask = R("UnityEngine.Camera", "get_cullingMask", 0, true);
+            getGameObject = R("UnityEngine.Component", "get_gameObject", 0, true);
+            layer = R("UnityEngine.GameObject", "get_layer", 0, true);
+            // (Camera.allCameras: the enabled cameras; the game does not call it, so it is referenced here, on the
+            // Camera type the game's own references name)
+            if (toViewport != null)
+                allCameras = new MethodReference("get_allCameras", new ArrayType(toViewport.DeclaringType), toViewport.DeclaringType) { HasThis = false };
+            bMin = R("UnityEngine.Bounds", "get_min", 0, true);
+            bMax = R("UnityEngine.Bounds", "get_max", 0, true);
+            vec3 = all.FirstOrDefault(c => c.Name == ".ctor" && c.DeclaringType.FullName == "UnityEngine.Vector3" && c.Parameters.Count == 3 &&
+                                           c.Parameters.All(p => p.ParameterType.MetadataType == MetadataType.Single));
+            if (vec3 == null) Missing ??= "UnityEngine.Vector3::.ctor(float, float, float)";
             var vec = m.GetTypeReferences().FirstOrDefault(t => t.FullName == "UnityEngine.Vector3");
-            if (vec != null) vecY = new FieldReference("y", m.TypeSystem.Single, vec);
+            if (vec != null)
+            {
+                vecX = new FieldReference("x", m.TypeSystem.Single, vec);
+                vecY = new FieldReference("y", m.TypeSystem.Single, vec);
+                vecZ = new FieldReference("z", m.TypeSystem.Single, vec);
+            }
             else Missing ??= "UnityEngine.Vector3";
             var vec4 = m.GetTypeReferences().FirstOrDefault(t => t.FullName == "UnityEngine.Vector4");
             if (vec4 != null) vec4Y = new FieldReference("y", m.TypeSystem.Single, vec4);
@@ -231,13 +266,14 @@ sealed class HollowKnightText : Patch
 
     sealed class HelperMethods
     {
-        public MethodDefinition read, path;
+        public MethodDefinition read, path, onHud;
         public FieldDefinition scale, log;
     }
 
     /// <summary>The helper class: static void Read() (the variables, once); static float Factor(string v, int w, int h)
     /// (the factor a value asks for on that screen, 0: none; the tests call it); static string Path(Transform)
-    /// (the text's GameObject and up to four parents, for the log).</summary>
+    /// (the text's GameObject and up to four parents, for the log); static bool OnHud(Transform) (a HudCamera
+    /// among its eight nearest parents).</summary>
     static HelperMethods Helper(ModuleDefinition m, Refs refs)
     {
         var ts = m.TypeSystem;
@@ -325,6 +361,28 @@ sealed class HollowKnightText : Patch
             il.Emit(OpCodes.Br, loop);
             il.Append(done); il.Emit(OpCodes.Ret);
             h.path.Body.OptimizeMacros();
+        }
+        // static bool OnHud(Transform t): for (c = t.parent, n = 0; c != null && n < 8; c = c.parent, n++) if (c.name == HudCamera) true
+        h.onHud = new MethodDefinition("OnHud", Static, ts.Boolean);
+        h.onHud.Parameters.Add(new ParameterDefinition("t", ParameterAttributes.None, refs.getParent.ReturnType));
+        t.Methods.Add(h.onHud);
+        {
+            var n = new VariableDefinition(ts.Int32);
+            h.onHud.Body.Variables.Add(n);
+            h.onHud.Body.InitLocals = true;
+            var il = h.onHud.Body.GetILProcessor();
+            var loop = il.Create(OpCodes.Ldarg_0);
+            var no = il.Create(OpCodes.Ldc_I4_0);
+            var yes = il.Create(OpCodes.Ldc_I4_1);
+            il.Append(loop); il.Emit(OpCodes.Callvirt, refs.getParent); il.Emit(OpCodes.Starg, h.onHud.Parameters[0]);
+            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, refs.objEq); il.Emit(OpCodes.Brtrue, no);
+            il.Emit(OpCodes.Ldloc, n); il.Emit(OpCodes.Ldc_I4_8); il.Emit(OpCodes.Bge, no);
+            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Callvirt, refs.getName); il.Emit(OpCodes.Ldstr, HudCamera); il.Emit(OpCodes.Call, equals); il.Emit(OpCodes.Brtrue, yes);
+            il.Emit(OpCodes.Ldloc, n); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, n);
+            il.Emit(OpCodes.Br, loop);
+            il.Append(no); il.Emit(OpCodes.Ret);
+            il.Append(yes); il.Emit(OpCodes.Ret);
+            h.onHud.Body.OptimizeMacros();
         }
         // static void Read(): once: log = LogVariable == "1"; scale = Factor(Variable, Screen.width, Screen.height); one line when on
         h.read = new MethodDefinition("Read", Static, ts.Void);
@@ -490,9 +548,11 @@ sealed class HollowKnightText : Patch
     }
 
     /// <summary>TextMeshPro.TextFitBegin() before OnPreRenderObject's layout: a grown text not fitted to its input yet
-    /// is laid out by the auto size from its top size; TextFitEnd() after it: the size found is kept (auto size off,
-    /// fitted) until the input or the size changes.</summary>
-    static (MethodDefinition, MethodDefinition) Fit(ModuleDefinition m, TypeDefinition tmp, HelperMethods h, Refs refs, Fields f, MethodDefinition sizeGet)
+    /// is laid out by the auto size from its top size; TextFitEnd() after it: a text outside the HUD that runs past the
+    /// screen's sides is laid out again with a smaller top size (at most Tries times), then the size found is kept
+    /// (auto size off, fitted) until the input or the size changes.</summary>
+    static (MethodDefinition, MethodDefinition) Fit(ModuleDefinition m, TypeDefinition tmp, HelperMethods h, Refs refs, Fields f,
+                                                   MethodDefinition textBounds, Instruction gen)
     {
         var ts = m.TypeSystem;
         var begin = new MethodDefinition("<asmpatch>TextFitBegin", MethodAttributes.Assembly | MethodAttributes.HideBySig, ts.Void);
@@ -570,6 +630,7 @@ sealed class HollowKnightText : Patch
             var ret = il.Create(OpCodes.Ret);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.scale); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, ret);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.fitted); il.Emit(OpCodes.Brtrue, ret);
+            Screen(m, end, il, h, refs, f, textBounds, gen);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Stfld, f.auto);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Stfld, f.fitted);
             var logged = il.Create(OpCodes.Nop);
@@ -588,4 +649,139 @@ sealed class HollowKnightText : Patch
         }
         return (begin, end);
     }
+
+    /// <summary>Emits, at the start of TextFitEnd (the fit's layout done, auto size still on): for a text outside the
+    /// HUD with room to shrink, its lines' left and right ends (textBounds, at the text's scale) through the camera
+    /// that draws it into the screen's 0..1; past Edge or 1 - Edge, the top size becomes Step of the size that would just fit
+    /// (about the text's position: c - Edge over c - left, 1 - Edge - c over right - c), never under its own size,
+    /// and the text is laid out again from it (the same layout call as OnPreRenderObject's), at most Tries times.
+    /// No camera draws it with its position in view: nothing.</summary>
+    static void Screen(ModuleDefinition m, MethodDefinition md, ILProcessor il, HelperMethods h, Refs refs, Fields f,
+                       MethodDefinition textBounds, Instruction gen)
+    {
+        var ts = m.TypeSystem;
+        var vec3T = refs.position.ReturnType; vec3T.IsValueType = true;
+        var boundsT = textBounds.ReturnType; boundsT.IsValueType = true;
+        var camT = refs.toViewport.DeclaringType;
+        var cam = new VariableDefinition(camT); var p = new VariableDefinition(vec3T); var b = new VariableDefinition(boundsT);
+        var cams = new VariableDefinition(new ArrayType(camT)); var i = new VariableDefinition(ts.Int32); var bit = new VariableDefinition(ts.Int32);
+        var vp = new VariableDefinition(vec3T);
+        var sx = new VariableDefinition(ts.Single); var c = new VariableDefinition(ts.Single); var v0 = new VariableDefinition(ts.Single);
+        var v1 = new VariableDefinition(ts.Single); var r = new VariableDefinition(ts.Single); var q = new VariableDefinition(ts.Single);
+        var tries = new VariableDefinition(ts.Int32);
+        foreach (var x in new[] { cam, p, b, sx, c, v0, v1, r, q, tries, cams, i, bit, vp }) md.Body.Variables.Add(x);
+        md.Body.InitLocals = true;
+        var done = il.Create(OpCodes.Nop);
+        //   if (OnHud(transform)) done
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, refs.getTransform); il.Emit(OpCodes.Call, h.onHud); il.Emit(OpCodes.Brtrue, done);
+        //   the camera: the first of Camera.allCameras with (cullingMask & 1 << layer) != 0 and the text's position in
+        //   0..1 of its view (x, y) in front of it (z > 0); none: if (log) "... no camera shows it"; done
+        il.Emit(OpCodes.Call, refs.allCameras); il.Emit(OpCodes.Stloc, cams);
+        il.Emit(OpCodes.Ldloc, cams); il.Emit(OpCodes.Brfalse, done);
+        il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, refs.getGameObject); il.Emit(OpCodes.Callvirt, refs.layer);
+        il.Emit(OpCodes.Ldc_I4, 31); il.Emit(OpCodes.And); il.Emit(OpCodes.Shl); il.Emit(OpCodes.Stloc, bit);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, refs.getTransform); il.Emit(OpCodes.Callvirt, refs.position); il.Emit(OpCodes.Stloc, p);
+        var next = il.Create(OpCodes.Ldloc, i);
+        var none = il.Create(OpCodes.Ldsfld, h.log);
+        var haveCam = il.Create(OpCodes.Nop);
+        il.Append(next); il.Emit(OpCodes.Ldloc, cams); il.Emit(OpCodes.Ldlen); il.Emit(OpCodes.Conv_I4); il.Emit(OpCodes.Bge, none);
+        il.Emit(OpCodes.Ldloc, cams); il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Stloc, cam);
+        il.Emit(OpCodes.Ldloc, i); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, i);
+        il.Emit(OpCodes.Ldloc, cam); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, refs.objEq); il.Emit(OpCodes.Brtrue, next);
+        il.Emit(OpCodes.Ldloc, cam); il.Emit(OpCodes.Callvirt, refs.cullingMask); il.Emit(OpCodes.Ldloc, bit); il.Emit(OpCodes.And); il.Emit(OpCodes.Brfalse, next);
+        il.Emit(OpCodes.Ldloc, cam); il.Emit(OpCodes.Ldloc, p); il.Emit(OpCodes.Callvirt, refs.toViewport); il.Emit(OpCodes.Stloc, vp);
+        il.Emit(OpCodes.Ldloc, vp); il.Emit(OpCodes.Ldfld, refs.vecX); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, next);
+        il.Emit(OpCodes.Ldloc, vp); il.Emit(OpCodes.Ldfld, refs.vecX); il.Emit(OpCodes.Ldc_R4, 1f); il.Emit(OpCodes.Bge_Un, next);
+        il.Emit(OpCodes.Ldloc, vp); il.Emit(OpCodes.Ldfld, refs.vecY); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, next);
+        il.Emit(OpCodes.Ldloc, vp); il.Emit(OpCodes.Ldfld, refs.vecY); il.Emit(OpCodes.Ldc_R4, 1f); il.Emit(OpCodes.Bge_Un, next);
+        il.Emit(OpCodes.Ldloc, vp); il.Emit(OpCodes.Ldfld, refs.vecZ); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, next);
+        il.Emit(OpCodes.Br, haveCam);
+        il.Append(none); il.Emit(OpCodes.Brfalse, done);
+        LogLine(m, il, refs, S("[hk-text] measured "), (x => { x.Emit(OpCodes.Ldarg_0); x.Emit(OpCodes.Call, refs.getTransform); x.Emit(OpCodes.Call, h.path); }, null),
+            S(": no camera shows it"));
+        il.Emit(OpCodes.Br, done);
+        il.Append(haveCam);
+        var check = il.Create(OpCodes.Ldarg_0);
+        //   check: if (size <= min + 0.001) done
+        il.Append(check); il.Emit(OpCodes.Ldfld, f.size); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.min); il.Emit(OpCodes.Ldc_R4, 0.001f); il.Emit(OpCodes.Add);
+        il.Emit(OpCodes.Ble_Un, done);
+        //   p = transform.position; sx = |lossyScale.x|; c = cam.WorldToViewportPoint(p).x; if (!(0 < c < 1)) done
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, refs.getTransform); il.Emit(OpCodes.Callvirt, refs.position); il.Emit(OpCodes.Stloc, p);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, refs.getTransform); il.Emit(OpCodes.Callvirt, refs.lossy); il.Emit(OpCodes.Ldfld, refs.vecX);
+        il.Emit(OpCodes.Call, refs.abs); il.Emit(OpCodes.Stloc, sx);
+        il.Emit(OpCodes.Ldloc, cam); il.Emit(OpCodes.Ldloc, p); il.Emit(OpCodes.Callvirt, refs.toViewport); il.Emit(OpCodes.Ldfld, refs.vecX); il.Emit(OpCodes.Stloc, c);
+        //   (r = 1 first: a position off the screen is logged as measured, nothing changes)
+        var decide = il.Create(OpCodes.Ldloc, r);
+        il.Emit(OpCodes.Ldc_R4, 1f); il.Emit(OpCodes.Stloc, r);
+        il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, decide);
+        il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Ldc_R4, 1f); il.Emit(OpCodes.Bge_Un, decide);
+        //   b = textBounds; v0/v1 = cam.WorldToViewportPoint(new Vector3(p.x + b.min.x / b.max.x * sx, p.y, p.z)).x
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, textBounds); il.Emit(OpCodes.Stloc, b);
+        foreach (var (end, v) in new[] { (refs.bMin, v0), (refs.bMax, v1) })
+        {
+            il.Emit(OpCodes.Ldloc, cam);
+            il.Emit(OpCodes.Ldloc, p); il.Emit(OpCodes.Ldfld, refs.vecX);
+            il.Emit(OpCodes.Ldloca, b); il.Emit(OpCodes.Call, end); il.Emit(OpCodes.Ldfld, refs.vecX); il.Emit(OpCodes.Ldloc, sx); il.Emit(OpCodes.Mul); il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Ldloc, p); il.Emit(OpCodes.Ldfld, refs.vecY); il.Emit(OpCodes.Ldloc, p); il.Emit(OpCodes.Ldfld, refs.vecZ);
+            il.Emit(OpCodes.Newobj, refs.vec3); il.Emit(OpCodes.Callvirt, refs.toViewport); il.Emit(OpCodes.Ldfld, refs.vecX); il.Emit(OpCodes.Stloc, v);
+        }
+        //   r = 1; left past the edge: r = min(r, (c - Edge) / (c - v0)); right: r = min(r, (1 - Edge - c) / (v1 - c))
+        il.Emit(OpCodes.Ldc_R4, 1f); il.Emit(OpCodes.Stloc, r);
+        var right = il.Create(OpCodes.Ldloc, v1);
+        il.Emit(OpCodes.Ldloc, v0); il.Emit(OpCodes.Ldc_R4, Edge); il.Emit(OpCodes.Bge_Un, right);
+        il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Ldloc, v0); il.Emit(OpCodes.Sub); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, right);
+        il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Ldc_R4, Edge); il.Emit(OpCodes.Sub); il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Ldloc, v0); il.Emit(OpCodes.Sub);
+        il.Emit(OpCodes.Div); il.Emit(OpCodes.Stloc, q);
+        il.Emit(OpCodes.Ldloc, q); il.Emit(OpCodes.Ldloc, r); il.Emit(OpCodes.Bge_Un, right);
+        il.Emit(OpCodes.Ldloc, q); il.Emit(OpCodes.Stloc, r);
+        il.Append(right); il.Emit(OpCodes.Ldc_R4, 1f - Edge); il.Emit(OpCodes.Ble_Un, decide);
+        il.Emit(OpCodes.Ldloc, v1); il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Sub); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, decide);
+        il.Emit(OpCodes.Ldc_R4, 1f - Edge); il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Sub); il.Emit(OpCodes.Ldloc, v1); il.Emit(OpCodes.Ldloc, c); il.Emit(OpCodes.Sub);
+        il.Emit(OpCodes.Div); il.Emit(OpCodes.Stloc, q);
+        il.Emit(OpCodes.Ldloc, q); il.Emit(OpCodes.Ldloc, r); il.Emit(OpCodes.Bge_Un, decide);
+        il.Emit(OpCodes.Ldloc, q); il.Emit(OpCodes.Stloc, r);
+        //   decide: if (log) "[hk-text] measured <path> camera <name> at <c>: <v0> .. <v1>"; if (r >= 1 || tries >= Tries) done
+        var judge = il.Create(OpCodes.Ldloc, r);
+        il.Append(decide); il.Emit(OpCodes.Pop); il.Emit(OpCodes.Ldsfld, h.log); il.Emit(OpCodes.Brfalse, judge);
+        LogLine(m, il, refs,
+            S("[hk-text] measured "), (x => { x.Emit(OpCodes.Ldarg_0); x.Emit(OpCodes.Call, refs.getTransform); x.Emit(OpCodes.Call, h.path); }, null),
+            S(" camera "), (x => { x.Emit(OpCodes.Ldloc, cam); x.Emit(OpCodes.Callvirt, refs.getName); }, null),
+            S(" at "), (x => x.Emit(OpCodes.Ldloc, c), ts.Single), S(": "), (x => x.Emit(OpCodes.Ldloc, v0), ts.Single),
+            S(" .. "), (x => x.Emit(OpCodes.Ldloc, v1), ts.Single));
+        il.Append(judge); il.Emit(OpCodes.Ldc_R4, 1f); il.Emit(OpCodes.Bge_Un, done);
+        il.Emit(OpCodes.Ldloc, tries); il.Emit(OpCodes.Ldc_I4, Tries); il.Emit(OpCodes.Bge, done);
+        il.Emit(OpCodes.Ldloc, tries); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, tries);
+        //   max = size * r * Step; if (max < min) max = min
+        var kept = il.Create(OpCodes.Ldsfld, h.log);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.size); il.Emit(OpCodes.Ldloc, r); il.Emit(OpCodes.Mul);
+        il.Emit(OpCodes.Ldc_R4, Step); il.Emit(OpCodes.Mul); il.Emit(OpCodes.Stfld, f.max);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.max); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.min); il.Emit(OpCodes.Bge_Un, kept);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.min); il.Emit(OpCodes.Stfld, f.max);
+        //   if (log) "[hk-text] screen <path> <v0> .. <v1> of the screen: up to <max>"
+        var relay = il.Create(OpCodes.Ldarg_0);
+        il.Append(kept); il.Emit(OpCodes.Brfalse, relay);
+        LogLine(m, il, refs,
+            S("[hk-text] screen "), (x => { x.Emit(OpCodes.Ldarg_0); x.Emit(OpCodes.Call, refs.getTransform); x.Emit(OpCodes.Call, h.path); }, null),
+            S(" "), (x => x.Emit(OpCodes.Ldloc, v0), ts.Single), S(" .. "), (x => x.Emit(OpCodes.Ldloc, v1), ts.Single),
+            S(" of the screen: up to "), Fld(f.max));
+        //   laid out again from the new top size: auto size on (it is), size = max, the run's range, the layout call
+        il.Append(relay); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.max); il.Emit(OpCodes.Stfld, f.size);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.max); il.Emit(OpCodes.Stfld, f.maxRun);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.min); il.Emit(OpCodes.Stfld, f.minRun);
+        //   (what OnPreRenderObject sets before its layout call, where the type has it)
+        foreach (var fd in f.resets)
+        {
+            il.Emit(OpCodes.Ldarg_0);
+            if (fd.FieldType.MetadataType == MetadataType.Single) il.Emit(OpCodes.Ldc_R4, 0f); else il.Emit(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Stfld, fd);
+        }
+        il.Emit(OpCodes.Ldarg_0); il.Emit(gen.OpCode, (MethodReference)gen.Operand);
+        il.Emit(OpCodes.Br, check);
+        il.Append(done);
+    }
+
+    /// <summary>The fields TextMeshPro's OnPreRenderObject zeroes before its layout call (TMProOld's names), the layout
+    /// again from TextFitEnd zeroes too.</summary>
+    public static readonly string[] Resets =
+        { "m_lineSpacingDelta", "m_charWidthAdjDelta", "m_recursiveCount", "loopCountA", "m_isCharacterWrappingEnabled", "m_isTextTruncated" };
 }

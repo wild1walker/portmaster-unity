@@ -52,6 +52,10 @@ namespace TMProOld
             }
         }
 
+        /// <summary>The text's one line is PerWidth times its size wide, centred on it (0: no width).</summary>
+        public float PerWidth;
+        public Bounds textBounds => new Bounds(new Vector3(0f, 0f, 0f), new Vector3(m_fontSize * PerWidth, 1f, 0f));
+
         protected void ParseInputText() { Parses++; }
         protected virtual void GenerateTextMesh() { }
 
@@ -71,6 +75,8 @@ namespace TMProOld
         public bool InputChanged;
         /// <summary>The size at which the text just fits its whole box.</summary>
         public float Fits { set => PerSize = m_marginHeight / value; }
+        /// <summary>The text's x in the world.</summary>
+        public float X { set => Own.position = new Vector3(value, Own.position.y, Own.position.z); }
 
         /// <summary>A text named name (under a parent "Inv") of that size, wrapping or not, overflow mode, auto size,
         /// its box set or the default one, with a font asset or none.</summary>
@@ -115,6 +121,9 @@ namespace TMProOld
                 // (the engine calls the game makes elsewhere, which the patch calls the same way)
                 Debug.Log("no font asset on " + transform.name + " " + Mathf.Abs(transform.lossyScale.y) + " " + Screen.width + "x" + Screen.height +
                           " " + (transform.parent == null) + " " + new Vector3(0f, 0f, 0f).x + " " + transform.position.y);
+                foreach (var cam in UnityEngine.Camera.allCameras)
+                    Debug.Log(cam.WorldToViewportPoint(transform.position).x + " " + (cam.cullingMask & 1 << gameObject.layer) + " " +
+                              textBounds.min.x + " " + textBounds.max.x);
                 return;
             }
             if (m_fontSizeMin == 0f) m_fontSizeMin = m_fontSize / 2f;

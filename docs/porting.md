@@ -707,6 +707,14 @@ the same load in A and B (3.34 s, 3.37 s). Inputs on the G350 are sometimes lost
 not to be trusted, so the language and death checks are best done on a handheld that keeps them (the RG34XX-SP).
 On a test copy whose prefs had lost `GameLangSet` a scripted run waited at the title in A and B alike (the game
 is likely asking for a language, as at its first launch): check the prefs before blaming a change.
+Missed by that check (2026-11-17, a tester's Korean game on an R36S): the start screen's autosave notice, shown
+before the title. Its atlas was given back while the notice used it, and Unity did not load it again: the
+notice's letters were white blocks (a texture given back is not always loaded again for a text that already
+draws it, whatever the documentation says). Hollow Knight's launcher now keeps every atlas when the game's saved
+language (`M2H_lastLanguage` in its PlayerPrefs) is Japanese, Korean, Chinese or Russian, or none is saved yet
+(the first launch asks for one): the saving is for the players of the other languages. A player who switches to
+one of those languages in the game's options may see blocks until the next launch. Shoot a language check from
+the game's first frame, not from the title.
 
 ```toml
 [convert]
