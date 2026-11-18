@@ -1126,6 +1126,12 @@ overwritten, [rust-setup.md](rust-setup.md)), and convert's `video` step when th
 1 GB handhelds, [rust-setup.md](rust-setup.md#video)); the update logs to `patchlog.txt` like the
 setup, and a run that is interrupted runs again at the next launch.
 
+A port submitted to PortMaster leaves the update step out: PortMaster-New's instructions for
+submissions (its `AGENTS.md`, 2026-11) reject code that migrates installs of earlier test releases.
+The Hollow Knight port dropped `setup/update` and its launcher block on 2026-11-18 (portmaster-hollowknight
+a1501a3): a newer release unzipped over a set-up game runs it as it was set up, and what a newer setup
+does reaches it when it is set up again (the game back in `gamedata/`, `.setup_done` deleted).
+
 ## 5. Donors: build Unity's player for the port
 
 **Every port of the `android` and `mono-arm64` routes needs donors, and the porter builds them
@@ -1541,7 +1547,8 @@ picture. On a handheld, start the game with `tools/device/test.sh` and take it w
 `DEVICE=root@<handheld> REMOTE=<the folder> tools/device/drive.sh "" 0 screenshot.png`; for a game
 ua_host runs in a folder this machine can reach (the emulated rig's `EMU_ROOT`), `python -m pmunity
 port shot <folder> --out screenshot.png` asks ua_host for the next frame (`shot.req`) and saves it
-as a PNG (`port shot <shot-N.ppm>` converts one already taken). PortMaster wants 4:3: a 3:2
+as a PNG (`port shot <shot-N.ppm>` converts one already taken). PortMaster wants 4:3 (its `AGENTS.md`:
+640x480; a 640x480 handheld's capture, the BattleXP G350's, needs no crop or scaling): a 3:2
 screen's capture (720x480) is what it is, and `package` says so; take it on a 4:3 handheld when one
 is at hand.
 
@@ -1556,3 +1563,27 @@ first-launch setup through PortMaster's patcher (`PATCHER_FILE`, `PATCHER_GAME`,
 box64's settings and the command written to `conf/run.sh`. Testing on the firmwares and screens
 of the testing thread's checklist is the testers' and the porter's work; the rehearsal
 (section 7) and `tools/device/test.sh` cover the setup and one handheld.
+
+Read PortMaster-New's `AGENTS.md` before a pull request: reviewers reject AI-made ports that are
+more verbose than the ports around them without discussion. What it asked for in 2026-11, and what the
+Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
+
+- A launcher about the size of recently merged ports of the same kind (the new ports merged in
+  2026-11: 63 - 143 lines): Hollow Knight's went from 206 to 109 lines, short comments, one
+  message where there were six.
+- No migration code for earlier test releases: the update step (section 4) and the launcher's branches
+  for installs of older releases left out.
+- `.sh` files at mode 644, one flat `licenses/`, the screenshot at 640x480, one branch per port, fixes
+  pushed to the same pull request (never closed and opened again).
+- `trap` only for a reason (Hollow Knight's puts the Rockchip video nodes back on exit and still ends
+  with `pm_message_end`, which `funcs.txt` set as the EXIT trap).
+
+After `source "$controlfolder/utils/patcher.txt"` the launcher goes back to `$GAMEDIR` before
+anything relative (`./ua_host`): the patcher runs in the launcher's own shell, and a working directory
+it left elsewhere would keep the game from starting right after the first setup.
+
+To check a cut launcher without a handheld, run it and the released one against stub PortMaster files
+(`control.txt` whose `pm_*` functions log, a `utils/patcher.txt` that runs `PATCHER_FILE`, stub
+`ua_host`/`ua_host64` that write their arguments, folder and `UA_*`/`ASMPATCH_*`/`SDL_*` environment)
+in each state a handheld can be in, and compare the logs: everything that starts the game should match,
+line for line.
