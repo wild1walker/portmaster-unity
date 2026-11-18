@@ -2,7 +2,10 @@
 // rule (a destroyed object equals null) and an instance id, MonoBehaviour, GameObject, Resources (Load and LoadAll
 // from a table the test fills, FindObjectsOfTypeAll: every loaded object, Loaded), Debug.Log (kept for the test),
 // Application.dataPath, Object.FindObjectsOfType (the active objects of Scene, the generic one through the
-// Type one as Unity's; Order lets a test give each type's scan its own order), counts of the scans.
+// Type one as Unity's; Order lets a test give each type's scan its own order), counts of the scans; for
+// blasphemous-skin-idle: Object's bool conversion, Behaviour.enabled (OnEnable/OnDisable on a change),
+// GameObject.GetComponentInChildren<T>(includeInactive) (none in an inactive object unless asked), CanvasGroup.alpha
+// and UI.Image, whose rebuilds are counted as UGUI registers them (a sprite set or OnEnable while active and enabled).
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,6 +23,7 @@ namespace UnityEngine
             return ReferenceEquals(a, b);
         }
         public static bool operator !=(Object a, Object b) => !(a == b);
+        public static implicit operator bool(Object o) => !(o == null);
         public override bool Equals(object o) => o is Object x && this == x;
         public override int GetHashCode() => base.GetHashCode();
         public bool active = true;
@@ -38,12 +42,20 @@ namespace UnityEngine
         public static T[] FindObjectsOfType<T>() where T : Object => FindObjectsOfType(typeof(T)).Cast<T>().ToArray();
     }
     public class Component : Object { public GameObject gameObject; }
-    public class Behaviour : Component { }
+    public class Behaviour : Component
+    {
+        bool en = true;
+        public bool enabled { get => en; set { if (en == value) return; en = value; if (value) OnEnable(); else OnDisable(); } }
+        protected virtual void OnEnable() { }
+        protected virtual void OnDisable() { }
+    }
+    public class CanvasGroup : Component { public float alpha { get; set; } = 1f; }
     public class MonoBehaviour : Behaviour { }
     public class GameObject : Object
     {
         public List<Component> Components = new List<Component>();
         public T GetComponentInChildren<T>() where T : Component => Components.OfType<T>().FirstOrDefault();
+        public T GetComponentInChildren<T>(bool includeInactive) where T : Component => includeInactive || active ? Components.OfType<T>().FirstOrDefault() : null;
     }
     public static class Resources
     {
@@ -69,4 +81,15 @@ namespace UnityEngine
         public static void Log(object message) { Logs.Add(message?.ToString()); }
     }
     public static class Application { public static string Data = ""; public static string dataPath => Data; }
+}
+namespace UnityEngine.UI
+{
+    public class Image : Behaviour
+    {
+        public static int Rebuilds;
+        string s;
+        public string sprite { get => s; set { if (s == value) return; s = value; Dirty(); } }
+        void Dirty() { if (enabled && gameObject.active) Rebuilds++; }
+        protected override void OnEnable() => Dirty();
+    }
 }

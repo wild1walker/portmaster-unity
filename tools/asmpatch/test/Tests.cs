@@ -45,6 +45,7 @@ static partial class TestMain
             BlasphemousTests();
             BlasphemousCatalogsTests();
             BlasphemousScanTests();
+            BlasphemousSkinTests();
             VideoDepthTests();
             Cli();
         }

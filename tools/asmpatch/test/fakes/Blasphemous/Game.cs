@@ -150,3 +150,104 @@ namespace Framework.Managers
                 .Select(t => t.Name + ":" + (cacheObjects.TryGetValue(t, out var l) ? string.Join(",", l.Select(x => x.name)) : "-"))) + " n=" + cacheObjects.Count;
     }
 }
+
+// blasphemous-skin-idle's stand-in: ExtrasMenuWidget's pages and skin selector as the game shows them (ShowMenu,
+// ResetMenus, ShowSkinSelectorValues and its lookups as Blasphemous 4.0 has them, cut to what touches the pages'
+// alpha and the preview Images; a locked skin's element is made inactive, and ShowSkinSelectorValues then throws, as
+// the game's does). skinSelectorDataElements is filled by the driver through reflection, as Unity fills it.
+namespace Gameplay.UI.Others.MenuLogic
+{
+    using System;
+    using System.Collections.Generic;
+    using UnityEngine;
+    using UnityEngine.UI;
+
+    public class ExtrasMenuWidget : MonoBehaviour
+    {
+        [Serializable]
+        public struct SkinSelectorElement { public string skinKey; public GameObject element; }
+        private enum STATE { STATE_OFF, STATE_EXTRAS }
+        private enum MENU { EXTRAS, SKINSELECTOR, ACHIEVEMENT }
+
+        public GameObject ExtrasRoot, AchievementRoot;
+        private GameObject SelectorRoot;
+        private readonly Dictionary<MENU, GameObject> extrasRoot = new Dictionary<MENU, GameObject>();
+        private List<SkinSelectorElement> skinSelectorDataElements;
+        private STATE currentState;
+        private MENU currentMenu;
+        public List<string> allSkins = new List<string>();
+        public List<string> unlocked = new List<string>();
+        public string currentSkin, optionLastSkinSelected;
+        public bool noSelection;
+
+        public void Awake()
+        {
+            extrasRoot.Clear();
+            extrasRoot[MENU.ACHIEVEMENT] = AchievementRoot;
+            extrasRoot[MENU.EXTRAS] = ExtrasRoot;
+            extrasRoot[MENU.SKINSELECTOR] = SelectorRoot;
+            currentState = STATE.STATE_OFF;
+            currentMenu = MENU.EXTRAS;
+            ResetMenus();
+        }
+
+        public void ShowExtras() { currentState = STATE.STATE_EXTRAS; ShowMenu(MENU.EXTRAS); }
+        public void Hide() { ResetMenus(); currentState = STATE.STATE_OFF; }
+        public void GoBack() { if (currentState == STATE.STATE_EXTRAS) { if (currentMenu != MENU.EXTRAS) ShowMenu(MENU.EXTRAS); else Hide(); } }
+        public void Option_MenuSkinSelector() { if (currentState == STATE.STATE_EXTRAS) ShowMenu(MENU.SKINSELECTOR); }
+        public void Next(string skin)   // the pad moved, as Update sees it
+        {
+            if (currentState != STATE.STATE_EXTRAS || currentMenu != MENU.SKINSELECTOR) return;
+            optionLastSkinSelected = skin;
+            UpdateInputSkinSelectorOptions();
+        }
+
+        private void ShowMenu(MENU menu)
+        {
+            currentMenu = menu;
+            foreach (KeyValuePair<MENU, GameObject> item in extrasRoot)
+                if (item.Value != null) item.Value.GetComponentInChildren<CanvasGroup>(true).alpha = item.Key != currentMenu ? 0f : 1f;
+            if (noSelection) return;
+            switch (currentMenu)
+            {
+                case MENU.SKINSELECTOR:
+                    foreach (SkinSelectorElement e in skinSelectorDataElements) SetOptionSkinSelected(e.skinKey, selected: false);
+                    for (int j = 0; j < allSkins.Count; j++)
+                    {
+                        string k = allSkins[j];
+                        skinSelectorDataElements.Find(x => x.skinKey == k).element.active = unlocked.Contains(k);
+                    }
+                    optionLastSkinSelected = currentSkin;
+                    ShowSkinSelectorValues();
+                    break;
+            }
+        }
+
+        private void SetOptionSkinSelected(string option, bool selected)
+        {
+            skinSelectorDataElements.Find(x => x.skinKey == option).element.name = option + (selected ? "*" : "");
+        }
+
+        private void UpdateInputSkinSelectorOptions()
+        {
+            currentSkin = optionLastSkinSelected;
+            ShowSkinSelectorValues();
+        }
+
+        private void ShowSkinSelectorValues()
+        {
+            int i;
+            for (i = 0; i < allSkins.Count; i++)
+            {
+                Image img = skinSelectorDataElements.Find(x => x.skinKey == allSkins[i]).element.GetComponentInChildren<Image>(false);
+                img.enabled = currentSkin == allSkins[i];
+            }
+        }
+
+        private void ResetMenus()
+        {
+            foreach (KeyValuePair<MENU, GameObject> item in extrasRoot)
+                if (item.Value != null) item.Value.GetComponentInChildren<CanvasGroup>(true).alpha = 0f;
+        }
+    }
+}

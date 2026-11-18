@@ -835,11 +835,13 @@ compares. With `check` on Knulli (title, the first level, S01 - S02 - S01 - S02,
 language to French in Options): 73 I2 scans each run, one of which added a source (the patch would have scanned it too), the other 72
 skippable, no difference; `MapManager`'s lists the same as the game's at every level. Patched, the level's start
 50 then 59 - 60 fps (31 - 40 for 4 - 5 s before), the fade-in frame 109 - 125 ms (183 - 206 before; what is left is
-the camera's and the persistence manager's scans).
+the camera's and the persistence manager's scans). In play, `blasphemous-skin-idle` stops the hidden Extras menu's
+skin previews from rebuilding their meshes at every frame of their idle animation (3.7 UI rebuilds a frame, unseen):
+the BattleXP G350's first level 58.4 -> 59.7 fps ([profiling.md](profiling.md#blasphemouss-first-level-on-the-battlexp-g350-2026-11-18)).
 
 ```toml
 [android_data]
-asmpatch = ["auto", "blasphemous-catalogs", "rewired-no-keyboard", "blasphemous-i2-sources", "blasphemous-map-scan"]
+asmpatch = ["auto", "blasphemous-catalogs", "rewired-no-keyboard", "blasphemous-i2-sources", "blasphemous-map-scan", "blasphemous-skin-idle"]
 ```
 
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)

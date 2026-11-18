@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Framework.Audio;
 using Framework.Managers;
 using Gameplay.GameControllers.Entities;
@@ -135,4 +136,78 @@ public static class BlDriver
         Level("NONE", O<Tools.Level.Teleport>("teleport 2"));
         return string.Join("\n", t);
     }
+
+    // blasphemous-skin-idle: the Extras menu as a run of Blasphemous goes through it, frames between the steps (each
+    // frame the preview Animators set the next idle sprite). Each line: the step, the skin page's alpha and, while it is
+    // shown (alpha > 0), what it shows: each preview's enabled flag and sprite. The last line: the rebuilds.
+    public static string RunSkins(bool unused)
+    {
+        var t = new List<string>();
+        UnityEngine.UI.Image.Rebuilds = 0;
+        var w = new Gameplay.UI.Others.MenuLogic.ExtrasMenuWidget();
+        GameObject Root(string name) { var g = new GameObject { name = name }; var cg = new CanvasGroup { gameObject = g }; g.Components.Add(cg); return g; }
+        w.ExtrasRoot = Root("extras"); w.AchievementRoot = Root("achievements");
+        var selector = Root("selector");
+        var wt = typeof(Gameplay.UI.Others.MenuLogic.ExtrasMenuWidget);
+        wt.GetField("SelectorRoot", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(w, selector);
+        var elT = wt.GetNestedType("SkinSelectorElement");
+        var list = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(elT));
+        var imgs = new List<UnityEngine.UI.Image>();
+        foreach (var k in new[] { "default", "a", "b", "c" })
+        {
+            var g = new GameObject { name = k };
+            var img = new UnityEngine.UI.Image { gameObject = g, sprite = "idle0" };
+            g.Components.Add(img); imgs.Add(img);
+            var e = Activator.CreateInstance(elT);
+            elT.GetField("skinKey").SetValue(e, k); elT.GetField("element").SetValue(e, g);
+            list.Add(e);
+            w.allSkins.Add(k); w.unlocked.Add(k);
+        }
+        wt.GetField("skinSelectorDataElements", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(w, list);
+        w.currentSkin = "default";
+        int frame = 0;
+        void Frames(string step, int n = 3)
+        {
+            for (int f = 0; f < n; f++)
+            {
+                frame++;
+                foreach (var img in imgs) img.sprite = "idle" + frame % 13;
+                float a = selector.GetComponentInChildren<CanvasGroup>(true).alpha;
+                t.Add($"{step} f{frame}: alpha {a}" + (a > 0 ? ": " + string.Join(" ", imgs.Select(i => i.gameObject.name + "=" +
+                      (i.gameObject.active ? (i.enabled ? i.sprite : "off") : "inactive"))) : ""));
+            }
+        }
+        void Do(string step, Action a)
+        {
+            try { a(); } catch (Exception e) { step += " (threw " + e.GetType().Name + ")"; }
+            Frames(step);
+        }
+        Do("awake", w.Awake);
+        Frames("playing", 10);
+        Do("extras", w.ShowExtras);
+        Do("skins", w.Option_MenuSkinSelector);
+        Do("next b", () => w.Next("b"));
+        Do("next c", () => w.Next("c"));
+        Do("back", w.GoBack);
+        Do("skins again", w.Option_MenuSkinSelector);
+        Do("back", w.GoBack);
+        Do("hide", w.GoBack);
+        Frames("playing", 10);
+        Do("extras", w.ShowExtras);
+        w.unlocked.Remove("a");
+        Do("skins with a locked", w.Option_MenuSkinSelector);
+        Do("back", w.GoBack);
+        w.unlocked.Add("a");
+        Do("skins", w.Option_MenuSkinSelector);
+        w.noSelection = true;
+        Do("back without a selection", w.GoBack);
+        Do("skins without a selection", w.Option_MenuSkinSelector);
+        w.noSelection = false;
+        Do("back", w.GoBack);
+        Do("hide", w.GoBack);
+        Frames("playing", 10);
+        t.Add("rebuilds " + UnityEngine.UI.Image.Rebuilds);
+        return string.Join("\n", t);
+    }
 }
+

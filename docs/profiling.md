@@ -2941,5 +2941,47 @@ Measured and not paying here (three runs each, interleaved in one hold, fps at 2
 - The game's own V-SYNC option off: 57.28 -> 57.29. With it on, the game's `FpsLimiter.LateUpdate` sleeps the
   frame up to 1/60 s (the 0.9 ms above): it only stretches frames that were early.
 - `UA_PRESENT_THREAD=full` (runtime.md).
-What is left is the engine's own work on UnityMain (animation, the render-texture cameras, UI canvases); no exact cut
-found so far.
+What is left is the engine's own work on UnityMain (animation, the render-texture cameras, UI canvases).
+
+Where the threads run (`/proc/<pid>/task/*/stat` and `status` at 240 and 270 s): every thread may run on all four
+cores (`Cpus_allowed_list` 0-3), each core 50 - 58 % busy; UnityMain 81 % of a core, the render thread 46 %, the FMOD
+mix 25 %, Mali's command thread 12 %, each of the three job workers about 6 %. Nothing is pinned and the mixer crowds
+nothing out: the workers idle because Unity 2017.4 makes few jobs of the animation update. `Animator::UpdateAvatars`
+is UnityMain on a CPU (BuildJobs, the playable graph's traversal, WriteLoop, the temp allocator), and its fences are
+UnityMain joining the few jobs it made, most of which it runs itself while it waits. No exact way to spread it.
+
+**The UI's rebuilds** (`tools/analysis/uicensus`, loaded with `UA_PROBE`): 3.7 - 4.1 graphics rebuilt a frame in the
+level, none of them a no-op, and the 18 rebuilt most are the Extras menu's skin-selector previews
+(`Game UI/Content/UI_EXTRAS/Options/Extras_SkinSelector/Data/<skin>/Skin`), each with an Animator playing the
+Penitent's idle by setting `Image.sprite`, about every 4.5 frames each. The Extras menu stays active in the game's one UI
+canvas for the whole run, its pages hidden by `CanvasGroup` alpha 0 (`ExtrasMenuWidget.ResetMenus`): every sprite change
+rebuilds a mesh nobody sees and batches the whole canvas (4,200 RectTransforms) again. The rest: the fade (`UI_FADE`) and
+the loading spinner while they play, the HUD's flasks and health bar when they change. Interleaved in one hold, fps at
+230 - 300 s, through a measurement DLL at 215 s:
+
+| | runs | fps |
+|---|---|---|
+| as shipped | 58.49, 58.41, 58.31 / 58.21, 58.44, 58.38 | 58.37 |
+| the 18 previews' Animators off (changes the menu's state: a measurement) | 59.75, 59.81, 59.70 | 59.75 |
+| the 18 previews' Images disabled, their Animators running | 59.86, 59.78, 59.78 | 59.81 |
+
+The Images are the cost, not the Animators. `asmpatch`'s `blasphemous-skin-idle` (opt-in) disables them while the skin
+selector's page is hidden and gives each its enabled state back first thing in `ShowMenu`: the game's code reads and
+writes those flags only there or with the page shown, and an Image enabled again rebuilds from the sprite its Animator
+set, so every frame shows what the game's shows (the test drives the menu through the stand-in, a locked skin's
+exception included: the same frames, 135 -> 40 rebuilds). The GPU gets the same UI: with `UA_GL_TRACE`, the UI
+texture's pass is 10 draws of 336 vertices in every traced frame, patched or not (Unity 2017.4 sends nothing of a
+renderer under a group at alpha 0). On the G350, the patched `Assembly-CSharp.dll` against the install's own, A P P A A P
+in one hold: 58.42, 58.33, 58.49 -> 59.61, 59.86, 59.66 fps (58.41 -> 59.71), the frame 17.07 -> 16.68 ms on average,
+its p99 25.1 -> 23.1 ms; `uicensus` with the patch: 0.15 rebuilds a frame while the level fades in (the fade, the
+spinner, the HUD), then none.
+
+**The render-texture cameras** (each camera's main-thread time from `onPreCull` to `onPostRender`, image effects not
+included): the world camera (`ProCamera2D/.../Camera`, every layer into the 640x360 `Game Texture`, two
+`CustomImageEffect` blits and `CameraTextureHolder`'s copy after it) 2.4 - 2.8 ms a frame, the `UICamera` (layer UI into
+the 640x360 `UI Texture`) 0.9 - 1.0 ms, the `Virtual Camera` that puts both on the screen (three quads; its CRT effects
+are the game's option, off) 1.0 ms. Each renders once a frame and each picture is used; the two small cameras' cost is
+mostly culling every renderer of the scene against their masks (`CullScene`, `GetOrCreateSharedRendererScene`) and the
+per-camera setup, and `SmartRectCollider2D` snaps its objects' positions before every camera and puts them back after
+(`Camera.onPreCull`/`onPostRender`, the game's own). Nothing there renders a picture twice or for nobody; cutting a
+camera's culling would take engine hooks with no exactness argument yet.
