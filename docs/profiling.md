@@ -2973,7 +2973,7 @@ exception included: the same frames, 135 -> 40 rebuilds). The GPU gets the same 
 texture's pass is 10 draws of 336 vertices in every traced frame, patched or not (Unity 2017.4 sends nothing of a
 renderer under a group at alpha 0). On the G350, the patched `Assembly-CSharp.dll` against the install's own, A P P A A P
 in one hold: 58.42, 58.33, 58.49 -> 59.61, 59.86, 59.66 fps (58.41 -> 59.71), the frame 17.07 -> 16.68 ms on average,
-its p99 25.1 -> 23.1 ms; `uicensus` with the patch: 0.15 rebuilds a frame while the level fades in (the fade, the
+its p99 25.1 -> 23.1 ms. The release (rh9: the patch in port.toml's list, set up by its own setup) against itself with `ASMPATCH_BLASPHEMOUS_SKIN_IDLE=off`, A P P A A P: 58.43, 58.09, 57.94 -> 59.64, 59.54, 59.75 fps (58.15 -> 59.64; p99 25.4 -> 23.3 ms); `uicensus` with the patch: 0.15 rebuilds a frame while the level fades in (the fade, the
 spinner, the HUD), then none.
 
 **The render-texture cameras** (each camera's main-thread time from `onPreCull` to `onPostRender`, image effects not
