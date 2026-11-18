@@ -339,8 +339,17 @@ fn plan_inner(
     let mut shaders: HashMap<Key, String> = HashMap::new();
     let mut scripts: HashMap<Key, String> = HashMap::new();
     let mut scripts_full: HashMap<Key, (String, String)> = HashMap::new();
+    // each file's classes and the files its PPtrs can name (itself, its externals): the later passes open again
+    // only the files that hold what they read (a file they would skip object by object, or whose references
+    // cannot reach what they look for, is left unopened: the same result, a fraction of the opens)
+    let mut census: HashMap<String, (HashSet<i32>, HashSet<String>)> = HashMap::new();
     for n in &names {
         let Some(f) = open(n) else { continue };
+        let mut can: HashSet<String> = (0..=f.sf.externals.len() as i32)
+            .filter_map(|fid| super::exacttex::file_name(&f, n, fid))
+            .collect();
+        can.insert(n.clone());
+        census.insert(n.clone(), (f.sf.objects.iter().map(|o| o.class_id).collect(), can));
         for o in &f.sf.objects {
             if o.class_id == SHADER {
                 if let Ok(t) = f.sf.read_typetree(o.path_id) {
@@ -381,7 +390,13 @@ fn plan_inner(
     type Bindings = (Vec<(u32, i64, i64)>, Vec<Key>);
     let mut clip_pptr: HashMap<Key, Bindings> = HashMap::new();
     let mut mat_tex: Vec<(Key, Vec<Key>)> = Vec::new();
+    const PASS2: [i32; 10] = [
+        MATERIAL, GAME_OBJECT, SPRITE_RENDERER, SPRITE, CONTROLLER, OVERRIDE, CLIP, TRANSFORM, RECT_TRANSFORM, ANIMATOR,
+    ];
     for n in &names {
+        if !census.get(n).is_some_and(|c| c.0.iter().any(|x| PASS2.contains(x))) {
+            continue;
+        }
         let Some(f) = open(n) else { continue };
         for o in &f.sf.objects {
             let k = (n.clone(), o.path_id);
@@ -512,6 +527,9 @@ fn plan_inner(
     // the renderers' material test, now that every palette material is known
     let mut palette_renderer: HashMap<Key, bool> = HashMap::new();
     for n in &names {
+        if !census.get(n).is_some_and(|c| c.0.contains(&SPRITE_RENDERER)) {
+            continue;
+        }
         let Some(f) = open(n) else { continue };
         for o in
             f.sf.objects
@@ -738,14 +756,22 @@ fn plan_inner(
             );
         }
     }
+    const PASS4_SKIP: [i32; 15] = [
+        GAME_OBJECT, TRANSFORM, RECT_TRANSFORM, SPRITE, TEXTURE2D, CLIP, CONTROLLER, OVERRIDE, SPRITE_RENDERER, ANIMATOR,
+        MATERIAL, SHADER, MONO_SCRIPT, PRELOAD_DATA, ASSET_BUNDLE,
+    ];
+    let want_files: HashSet<&str> = want.iter().map(|k| k.0.as_str()).collect();
     for n in &names {
+        // (raw_refs finds only keys of the file itself or of its externals)
+        if !census.get(n).is_some_and(|c| {
+            c.0.iter().any(|x| !PASS4_SKIP.contains(x)) && c.1.iter().any(|x| want_files.contains(x.as_str()))
+        }) {
+            continue;
+        }
         let Some(f) = open(n) else { continue };
         for o in &f.sf.objects {
-            match o.class_id {
-                GAME_OBJECT | TRANSFORM | RECT_TRANSFORM | SPRITE | TEXTURE2D | CLIP
-                | CONTROLLER | OVERRIDE | SPRITE_RENDERER | ANIMATOR | MATERIAL | SHADER
-                | MONO_SCRIPT | PRELOAD_DATA | ASSET_BUNDLE => continue,
-                _ => {}
+            if PASS4_SKIP.contains(&o.class_id) {
+                continue;
             }
             if let Ok(b) = f.sf.bytes(o.path_id) {
                 let before = named.len();
