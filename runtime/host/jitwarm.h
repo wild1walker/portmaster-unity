@@ -2,6 +2,8 @@
 #pragma once
 void jitwarm_init(void);   // once, before Unity starts
 void jitwarm_frame(void);  // UnityMain, after each frame
+void jitwarm_flush(void);  // waits until every queued line of the list is in its file (the host's end)
+void jitwarm_flush_crash(void);   // the same from a signal handler: what is queued written, no waiting on locks
 
 // A runtime's probe for the warm-up's static constructor rule (jitwarm.c, top): ran(klass) is 1 when the class's
 // static constructor has run in the current domain (Mono's own flag, MonoVTable.initialized), 0 when not yet.

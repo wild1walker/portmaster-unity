@@ -274,9 +274,11 @@ static void on_crash(int sig, siginfo_t *si, void *ctx)
     {
         static const char msg[] = "[host] Unity shut down\n";
         (void)!write(2, msg, sizeof msg - 1);
+        jitwarm_flush_crash();      // the JIT warm-up list's queued lines (jitwarm.c)
         fbdev_restore();
         _exit(0);
     }
+    jitwarm_flush_crash();
     fprintf(stderr, "[crash] signal %d (code %d) at address %p, thread %ld\n", sig, si->si_code, si->si_addr, (long)syscall(SYS_gettid));
     where("pc", UC_PC(uc));
     where("lr", UC_LR(uc));
@@ -772,6 +774,7 @@ int main(int argc, char **argv)
     up_quit();      // also when the game asked to quit (Application.Quit: nativeRender returned false)
     up_wait();
     glhooks_progcache_report("at the end");
+    jitwarm_flush();                // every queued line of the JIT warm-up list in its file (jitwarm.c)
     fprintf(stderr, "[host] Unity stopped\n");
     // Unity has saved and shut down; the libraries' exit handlers (Mono's thread cleanup, static
     // destructors) have nothing left to do but can block on threads that are gone

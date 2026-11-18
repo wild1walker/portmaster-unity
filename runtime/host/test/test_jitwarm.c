@@ -15,6 +15,10 @@
 //            a body with an opcode outside the standard is never compiled ahead, nor a static constructor itself
 //   noprobe  no probe for the runtime: only methods touching no class with a static constructor
 //   nodefer  UA_JIT_WARM_DEFER=0: every listed method compiled at once (static constructors still not)
+//   writer   the list's lines queued for the writer thread through a queue of 64 bytes (the compiling thread
+//            waits for room again and again): after jitwarm_flush the file holds every line, in order, the same
+//            bytes as the old write from the compiling thread
+//   writer0  UA_JIT_WARM_WRITER=0: the same file, written by the compiling thread
 //   inline   a runtime whose inliner runs an AggressiveInlining callee's class constructor (JITWARM_INLINE_CCTORS):
 //            a call to such a callee of a class not initialised waits too, a plain callee's does not
 #include "../jitwarm.h"
@@ -113,7 +117,7 @@ void *so_dlsym(void *h, const char *n)
 }
 static void frames(int n) { for (int i = 0; i < n; i++) jitwarm_frame(); }
 static void put(const char *text) { FILE *f = fopen("data/jitwarm.txt", "w"); fputs(text, f); fclose(f); }
-static int count(const char *what) { FILE *f = fopen("data/jitwarm.txt", "r"); if (!f) return -1; char l[256]; int n = 0; while (fgets(l, sizeof l, f)) if (strstr(l, what)) n++; fclose(f); return n; }
+static int count(const char *what) { jitwarm_flush(); FILE *f = fopen("data/jitwarm.txt", "r"); if (!f) return -1; char l[256]; int n = 0; while (fgets(l, sizeof l, f)) if (strstr(l, what)) n++; fclose(f); return n; }
 
 int main(int argc, char **argv)
 {
@@ -154,12 +158,28 @@ int main(int argc, char **argv)
         if (!strcmp(sc, "inline")) jitwarm_set_probe(probe, JITWARM_INLINE_CCTORS);
         if (!strcmp(sc, "nodefer")) setenv("UA_JIT_WARM_DEFER", "0", 1);
     }
+    if (!strcmp(sc, "writer")) setenv("UA_JIT_WARM_QUEUE", "64", 1);
+    if (!strcmp(sc, "writer0")) setenv("UA_JIT_WARM_WRITER", "0", 1);
     jitwarm_init();
     frames(1);                                                   // install: the list read
     if (!strcmp(sc, "late")) g_other_loaded = 1;
     if (!strcmp(sc, "latestale")) { g_other_loaded = 1; g_guid[2] = "BBBB-3333"; }
     frames(70);                                                  // from frame 60: compiled ahead
-    if (!strcmp(sc, "record")) {
+    if (!strcmp(sc, "writer") || !strcmp(sc, "writer0")) {
+        char *want = malloc(65536); size_t wn = 0;
+        wn += sprintf(want + wn, "# mvid Assembly-CSharp AAAA-1111/10/100\n");
+        for (long r = 1; r < 100; r++) {
+            if (r == 37) continue;
+            if (r == 1) { g_done(NULL, (void *)(1000L + r), 0); wn += sprintf(want + wn, "Assembly-CSharp %08lx C1:M%ld ()\n", 0x06000000L + r, r);
+                          g_done(NULL, (void *)(2000L + r), 0); wn += sprintf(want + wn, "# mvid Other BBBB-2222/10/100\nOther %08lx C2:M%ld ()\n", 0x06000000L + r, r); continue; }
+            g_done(NULL, (void *)(1000L + r), 0); wn += sprintf(want + wn, "Assembly-CSharp %08lx C1:M%ld ()\n", 0x06000000L + r, r);
+            g_done(NULL, (void *)(2000L + r), 0); wn += sprintf(want + wn, "Other %08lx C2:M%ld ()\n", 0x06000000L + r, r);
+        }
+        jitwarm_flush();
+        FILE *f = fopen("data/jitwarm.txt", "r"); char *got = calloc(1, 65536); size_t gn = f ? fread(got, 1, 65535, f) : 0; if (f) fclose(f);
+        CHECK(gn == wn && !memcmp(got, want, wn), "%s: the file holds every line in order, the same bytes (%zu of %zu bytes)", sc, gn, wn);
+        free(want); free(got);
+    } else if (!strcmp(sc, "record")) {
         g_done(NULL, (void *)1003L, 0); g_done(NULL, (void *)1004L, 0); g_done(NULL, (void *)2009L, 0); g_done(NULL, (void *)1003L, 0);
         CHECK(count("# mvid Assembly-CSharp AAAA-1111/10/100") == 1 && count("# mvid Other BBBB-2222/10/100") == 1, "one mvid line each");
         CHECK(count("Assembly-CSharp 06000003") == 1 && count("Assembly-CSharp 06000004") == 1 && count("Other 06000009") == 1, "listed once each");

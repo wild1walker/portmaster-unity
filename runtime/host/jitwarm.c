@@ -47,6 +47,15 @@
 // legacy profiler only) counts the static constructors that run inside a warm-up compile ("[jitwarm] check:
 // ..."; 0 is the rule), =2 also logs every static constructor run with its frame; UA_JIT_WARM_DEFER=0 (a
 // measurement) compiles every listed method at once again, as before 2026-11-13.
+// The list's new lines are written by a thread of their own (ua_jitwrite): the compiling thread (UnityMain, for
+// the game's code) formats each line and queues it in memory, the writer appends them to data/jitwarm.txt in
+// the same order and flushes, so a slow card never stalls a frame for it (a write to the card can block for
+// hundreds of ms while it is busy). The queue is bounded (UA_JIT_WARM_QUEUE bytes, 256 KB): when it is full the
+// compiling thread waits for the writer, a line is never dropped. jitwarm_flush() waits until every queued line is
+// in the file (ua_host calls it at its end, after SIGTERM or SIGINT too, and when Unity's shutdown crashes;
+// a crash writes what is queued from the crash handler). The file has the same bytes in the same order as with
+// the old write of each line from the compiling thread (UA_JIT_WARM_WRITER=0, kept as the fallback when the
+// thread cannot be made).
 #define _GNU_SOURCE
 #include "jitwarm.h"
 #include "hitches.h"
@@ -96,6 +105,96 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t *g_seen;
 static size_t g_seen_cap, g_seen_n;
 static FILE *g_out;
+
+// the list's writer: lines queued in q (q_n bytes of q_cap), taken whole by the thread (ua_jitwrite) and appended
+// to g_out; q_busy while it writes a batch (outside the lock), so a flush waits for that too
+static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t q_data = PTHREAD_COND_INITIALIZER, q_room = PTHREAD_COND_INITIALIZER;
+static char *q, *q_spare;
+static size_t q_n, q_cap;
+static volatile int q_busy, q_on;
+
+static void *write_thread(void *arg)
+{
+    (void)arg;
+    pthread_setname_np(pthread_self(), "ua_jitwrite");
+    for (;;) {
+        pthread_mutex_lock(&q_lock);
+        while (!q_n) pthread_cond_wait(&q_data, &q_lock);
+        char *b = q; size_t n = q_n;
+        q = q_spare; q_spare = b; q_n = 0; q_busy = 1;
+        pthread_mutex_unlock(&q_lock);
+        fwrite(b, 1, n, g_out);
+        fflush(g_out);
+        pthread_mutex_lock(&q_lock);
+        q_busy = 0;
+        pthread_cond_broadcast(&q_room);
+        pthread_mutex_unlock(&q_lock);
+    }
+    return NULL;
+}
+
+// one line of the list: queued for the writer (waiting while the queue is full), or written here without it
+static void list_line(const char *line)
+{
+    size_t n = strlen(line);
+    if (!q_on || n > q_cap) {
+        if (q_on) jitwarm_flush();      // (a line longer than the queue: after what is queued, in order)
+        fputs(line, g_out);
+        fflush(g_out);
+        return;
+    }
+    pthread_mutex_lock(&q_lock);
+    while (q_n + n > q_cap) pthread_cond_wait(&q_room, &q_lock);
+    memcpy(q + q_n, line, n);
+    q_n += n;
+    pthread_cond_signal(&q_data);
+    pthread_mutex_unlock(&q_lock);
+}
+
+void jitwarm_flush(void)
+{
+    if (!q_on) return;
+    pthread_mutex_lock(&q_lock);
+    while (q_n || q_busy) pthread_cond_wait(&q_room, &q_lock);
+    pthread_mutex_unlock(&q_lock);
+}
+
+void jitwarm_flush_crash(void)
+{
+    // from a signal handler: no waiting on a lock that a stopped thread may hold. Let a batch being written
+    // finish (up to a second), then write what is queued straight to the file, after it.
+    if (!q_on || !g_out) return;
+    for (int i = 0; i < 1000 && q_busy; i++) usleep(1000);
+    if (pthread_mutex_trylock(&q_lock) != 0) return;
+    if (q_n && !q_busy) {
+        fflush(g_out);
+        size_t off = 0;
+        while (off < q_n) { ssize_t w = write(fileno(g_out), q + off, q_n - off); if (w <= 0) break; off += (size_t)w; }
+        q_n = 0;
+    }
+    pthread_mutex_unlock(&q_lock);
+}
+
+static void writer_start(void)
+{
+    const char *w = getenv("UA_JIT_WARM_WRITER");
+    if (w && !strcmp(w, "0")) return;
+    const char *qs = getenv("UA_JIT_WARM_QUEUE");
+    long cap = qs && *qs ? atol(qs) : 256 * 1024;
+    if (cap < 64) cap = 64;
+    q_cap = (size_t)cap;
+    q = malloc(q_cap); q_spare = malloc(q_cap);
+    pthread_t t;
+    pthread_attr_t a;
+    pthread_attr_init(&a);
+    pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    if (!q || !q_spare || pthread_create(&t, &a, write_thread, NULL)) {
+        free(q); free(q_spare); q = q_spare = NULL;
+        fprintf(stderr, "[jitwarm] no writer thread: the list's lines written by the compiling thread\n");
+    } else q_on = 1;
+    pthread_attr_destroy(&a);
+}
 
 // the warm-up's list, read at start
 struct entry { char image[64]; unsigned token; char *name; short idx; };   // idx: its id in g_fid (-1: checked)
@@ -357,10 +456,13 @@ static void on_done(void *prof, void *method, void *jinfo)
             if (k == g_nmvid || strcmp(g_mvid[k].guid, guid)) {   // whose the entries after this line are
                 if (k == g_nmvid && g_nmvid < MAXIMG) g_nmvid++;
                 if (k < MAXIMG) { snprintf(g_mvid[k].image, sizeof g_mvid[k].image, "%s", in); snprintf(g_mvid[k].guid, sizeof g_mvid[k].guid, "%s", guid); }
-                fprintf(g_out, "# mvid %s %s\n", in, guid);
+                char ml[256];
+                snprintf(ml, sizeof ml, "# mvid %s %s\n", in, guid);
+                list_line(ml);
             }
-            fprintf(g_out, "%s %08x %s\n", in, tok, n);
-            fflush(g_out);
+            size_t ll = strlen(in) + strlen(n) + 16;
+            char lb[512], *l = ll <= sizeof lb ? lb : malloc(ll);
+            if (l) { snprintf(l, ll <= sizeof lb ? sizeof lb : ll, "%s %08x %s\n", in, tok, n); list_line(l); if (l != lb) free(l); }
         }
         pthread_mutex_unlock(&g_lock);
     }
@@ -539,6 +641,7 @@ static void install(void)
     else {
         g_out = fopen(LIST, "a");
         if (!g_out) fprintf(stderr, "[jitwarm] cannot write %s: nothing new is listed\n", LIST);
+        else { writer_start(); atexit(jitwarm_flush); }
         if (legacy) {
             static int prof_token;
             l_install(&prof_token, NULL);

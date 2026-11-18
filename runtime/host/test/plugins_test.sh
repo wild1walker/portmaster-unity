@@ -43,7 +43,7 @@ if [ "$ARCH" = arm64 ]; then
     $O/test_monoaot $T
     $O/test_jitlog none
     $O/test_jitlog legacy
-    for s in record warm stale patched late latestale legacy badtoken cctor noprobe nodefer inline; do d=$(mktemp -d); $O/test_jitwarm $s $d; rm -rf $d; done
+    for s in record warm stale patched late latestale legacy badtoken cctor noprobe nodefer inline writer writer0; do d=$(mktemp -d); $O/test_jitwarm $s $d; rm -rf $d; done
     for s in grow playing collected plenty off; do $O/test_gcgrow $s; done
     $O/test_monoinvoke'
   exit
@@ -91,6 +91,6 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
   $O/test_monoaot $T
   $O/test_jitlog none
   $O/test_jitlog legacy
-  for s in record warm stale patched late latestale legacy badtoken cctor noprobe nodefer inline; do d=$(mktemp -d); $O/test_jitwarm $s $d; rm -rf $d; done
+  for s in record warm stale patched late latestale legacy badtoken cctor noprobe nodefer inline writer writer0; do d=$(mktemp -d); $O/test_jitwarm $s $d; rm -rf $d; done
   for s in grow playing collected plenty off; do $O/test_gcgrow $s; done
   $O/test_monoinvoke'
