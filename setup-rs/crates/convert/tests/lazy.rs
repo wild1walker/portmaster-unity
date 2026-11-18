@@ -1,7 +1,8 @@
 //! The `lazy` step on made-up data: the objects named in `lazy.names` (in another file) are left out of a
 //! scene's PreloadData and of the ResourceManager's dependency lists (each entry replaced by one the list's owner
 //! loads anyway, so nothing changes length), everything else listed stays in its place, files without such lists
-//! are written as they were, the scene file keeps its size, and a second run changes nothing. Needs $PMU_TPK (skipped
+//! are written as they were (also one whose lists can name no file of those objects, which is not read again), the
+//! scene file keeps its size, and a second run changes nothing. Needs $PMU_TPK (skipped
 //! without).
 mod madeup;
 
@@ -130,6 +131,15 @@ fn lazy_on_made_up_data() {
         false,
     );
     write(&data, "globalgamemanagers", &ggm);
+    // scene 2: its list names path id 2 of another file only (no external is the atlases' file): the step does
+    // not read its list again, and the file stays as it was
+    let s2 = madeup::serialized(
+        &db,
+        &[o(150, 1, madeup::preload_data(&db, &[(1, 2), (1, 1), (0, 1)]))],
+        &["other.assets"],
+        false,
+    );
+    write(&data, "sharedassets2.assets", &s2);
     let untouched = std::fs::read(data.join("sharedassets0.assets")).unwrap();
 
     cli::run(&cli(&dir, "chinese_body Atlas|no such Atlas")).unwrap();
@@ -158,6 +168,7 @@ fn lazy_on_made_up_data() {
         std::fs::read(data.join("sharedassets0.assets")).unwrap(),
         untouched
     );
+    assert_eq!(std::fs::read(data.join("sharedassets2.assets")).unwrap(), s2);
     // again: nothing left to do, nothing written
     let before = std::fs::read(data.join("sharedassets1.assets")).unwrap();
     cli::run(&cli(&dir, "chinese_body Atlas|no such Atlas")).unwrap();

@@ -118,6 +118,24 @@ pub fn survey(
     (keys, found)
 }
 
+/// PreloadData (150) and ResourceManager (147): the objects whose lists `edit` reads.
+const LISTS: [i32; 2] = [150, 147];
+
+/// The files a PPtr of a file's PreloadData or ResourceManager lists can name: the file itself and its externals
+/// (by the last path component, as file_of reads them); None for a file with no such list. `edit` finds nothing
+/// in a file whose lists can name none of the files of the named objects.
+pub fn list_files(f: &unityfs::DataFile, rel: &str) -> Option<Vec<String>> {
+    if !f.sf.objects.iter().any(|o| LISTS.contains(&o.class_id)) {
+        return None;
+    }
+    let mut v = vec![rel.rsplit('/').next().unwrap_or(rel).to_string()];
+    v.extend(f.sf.externals.iter().map(|e| {
+        let p = String::from_utf8_lossy(&e.path);
+        p.rsplit('/').next().unwrap_or("").to_string()
+    }));
+    Some(v)
+}
+
 /// A file's PreloadData and ResourceManager lists without the objects in `drop` (saved in `f`, the same length):
 /// the number of entries left out.
 pub fn edit(f: &mut unityfs::DataFile, rel: &str, drop: &BTreeSet<Key>) -> Result<usize> {
@@ -178,17 +196,23 @@ pub fn run(job: &mut Job) -> Result<()> {
         .into_iter()
         .filter(|rel| edits::unity_file(&job.path_in(rel)).unwrap_or(false))
         .collect();
-    // the objects of those names, by (file, path id)
+    // the objects of those names, by (file, path id); and for each file, the files its lists can name (None: it
+    // has no list, or the step cannot read it)
     let mut drop: BTreeSet<Key> = BTreeSet::new();
     let mut found: BTreeSet<Vec<u8>> = BTreeSet::new();
+    let mut names_files: Vec<Option<Option<Vec<String>>>> = Vec::with_capacity(files.len());
     for rel in &files {
         let f = match job.open(&job.path_in(rel), Default::default()) {
             Ok(f) => f,
-            Err(_) => continue, // (a bundle or a file the step cannot read: no objects of ours)
+            Err(_) => {
+                names_files.push(None);
+                continue; // (a bundle or a file the step cannot read: no objects of ours)
+            }
         };
         let (keys, names_found) = survey(&f, rel, &names);
         drop.extend(keys);
         found.extend(names_found);
+        names_files.push(Some(list_files(&f, rel)));
     }
     for n in names.difference(&found) {
         job.log(&format!(
@@ -200,10 +224,21 @@ pub fn run(job: &mut Job) -> Result<()> {
         return Ok(());
     }
     // every PreloadData and the ResourceManager's dependencies without them
+    let holders: BTreeSet<String> = drop.iter().map(|k| k.0.clone()).collect();
     let (mut total, mut nfiles) = (0usize, 0usize);
-    for rel in &files {
+    for (rel, can) in files.iter().zip(&names_files) {
         if job.is_done(STEP, rel) {
             continue;
+        }
+        // only a file with such a list that can name one of those files is opened again: edit would leave the
+        // others as they are (marked like a file a step looked at and left, the journal written once a while)
+        match can {
+            None => continue, // (a file the step cannot read, as before)
+            Some(c) if !c.as_ref().is_some_and(|c| c.iter().any(|x| holders.contains(x))) => {
+                job.mark_unchanged(STEP, rel)?;
+                continue;
+            }
+            _ => {}
         }
         let mut f = match job.open(&job.path_in(rel), Default::default()) {
             Ok(f) => f,
@@ -214,9 +249,12 @@ pub fn run(job: &mut Job) -> Result<()> {
             job.write_with(rel, |tmp| Ok(f.write_to(tmp, false)?))?;
             nfiles += 1;
             total += n;
+            std::mem::drop(f);
+            job.mark_done(STEP, rel)?;
+        } else {
+            std::mem::drop(f);
+            job.mark_unchanged(STEP, rel)?;
         }
-        std::mem::drop(f);
-        job.mark_done(STEP, rel)?;
     }
     job.log(&format!(
         "{STEP}: {} object(s) named ({} of {} names found), left out of {total} preload or dependency entries in {nfiles} file(s)",
