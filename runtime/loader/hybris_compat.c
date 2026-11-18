@@ -294,6 +294,7 @@ static int bionic_sem_post(void *s)
  * makes no system call. Unity 2017.4's job queue workers sleep here (PlatformSemaphore), as
  * Baselib's do in futex.c. sem_timedwait is left as it was (its deadline may be shorter). */
 static uint64_t g_sem_spin;                        /* ticks; 0: off */
+static uint64_t g_sem_spin_loops;                  /* no counter to read: watch loops instead (armtimer.h) */
 static atomic_ullong g_sem_spun, g_sem_slept;
 static void sem_spin_init(void)
 {
@@ -303,6 +304,9 @@ static void sem_spin_init(void)
     if (us > 1000) us = 1000;
     uint64_t f = armtimer_probe();
     if (f) g_sem_spin = f * (uint64_t)us / 1000000u;
+    else g_sem_spin_loops = armtimer_loops_per_us() * (uint64_t)us;
+    fprintf(stderr, "[futex] sem_wait watches a semaphore at 0 for up to %ld us before it sleeps (%s)\n", us,
+            f ? "the timer's counter" : "no counter readable here: a count of watch loops measured at start");
 }
 void bionic_sem_stats(unsigned long long *spun, unsigned long long *slept)
 {
@@ -312,15 +316,15 @@ void bionic_sem_stats(unsigned long long *spun, unsigned long long *slept)
 static int bionic_sem_wait(void *s)
 {
     atomic_uint *w = s;
-    if (g_sem_spin && BSEM_VAL(atomic_load_explicit(w, memory_order_relaxed)) == 0) {
-        uint64_t end = armtimer_ticks() + g_sem_spin;
+    if ((g_sem_spin || g_sem_spin_loops) && BSEM_VAL(atomic_load_explicit(w, memory_order_relaxed)) == 0) {
+        uint64_t end = g_sem_spin ? armtimer_ticks() + g_sem_spin : 0, n = 0;
         do {
             if (BSEM_VAL(atomic_load_explicit(w, memory_order_relaxed)) > 0 && bsem_trydec(w) > 0) {
                 atomic_fetch_add_explicit(&g_sem_spun, 1, memory_order_relaxed);
                 return 0;
             }
             armtimer_relax();
-        } while (armtimer_ticks() < end);
+        } while (g_sem_spin ? armtimer_ticks() < end : ++n < g_sem_spin_loops);
         atomic_fetch_add_explicit(&g_sem_slept, 1, memory_order_relaxed);
     }
     for (;;)

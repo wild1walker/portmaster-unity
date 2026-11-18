@@ -34,6 +34,9 @@ static const struct { int fn; struct uh_row r; } g_rows[] = {
     { 0, { "6000.0.61f1 armeabi-v7a", "InvertMatrix4x4_Full", 0xac6f00, 0x17e4, 'a', 0xd0837ff6914fd53cull } },
     { 0, { "2017.4.27f1 armeabi-v7a", "InvertMatrix4x4_Full", 0x6c1400, 0x910, 'a', 0xa7f9474f32d24a43ull } },
     { 1, { "2017.4.27f1 armeabi-v7a", "InvertMatrix4x4_General3D", 0x6c3590, 0x340, 'a', 0x53578f0ea9bcb6b4ull } },
+    // (2017.4.40f1, Blasphemous: the same bytes as 2017.4.27f1's, the same hashes)
+    { 0, { "2017.4.40f1 armeabi-v7a", "InvertMatrix4x4_Full", 0x6c0c10, 0x910, 'a', 0xa7f9474f32d24a43ull } },
+    { 1, { "2017.4.40f1 armeabi-v7a", "InvertMatrix4x4_General3D", 0x6c2da0, 0x340, 'a', 0x53578f0ea9bcb6b4ull } },
 };
 #define NFN 2
 

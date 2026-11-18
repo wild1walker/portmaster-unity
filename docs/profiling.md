@@ -2908,3 +2908,38 @@ keyboard and mouse because the game's Rewired data leaves them on for Android. S
 general: ua_host can send key events (`UA_KEYMAP`, the on-screen keyboard, Android's Back as Escape) and
 pointer motion (`UA_POINTER`), so it would have to be a port's choice tied to those being off, and it is worth
 about 0.5 ms a frame. Not done; the G350's budget may make it worth an opt-in later.
+
+## Blasphemous's first level on the BattleXP G350 (2026-11-18)
+
+The release install (rh6: every port optimization, the game's own settings), ES stopped, perfmax, silent, walking
+right through D17Z01S01 into D17Z01S02: 57.6 - 59.2 fps, the frame 17.4 ms on average, 16.4 median, 24 - 25 p99;
+about 110 of each 5 seconds' 295 frames take longer than 17 ms. 100 Hz `UA_PROF` of 25 s (Unity 2017.4.40f1's
+symbols, `profsum.py --areas`):
+
+| thread | CPU a frame | |
+|---|---|---|
+| UnityMain | 13.9 ms (80 % of a core; blocked the rest: job fences 2.2 ms, a script's `Thread.Sleep` 0.9) | the wall |
+| UnityGfxDeviceW (render thread) | 8.2 ms | half the driver's draw calls; idle a third of the time |
+| SLESNone (the silent OpenSL ES output: the FMOD player's mix) | 4.4 ms | its own core |
+| Mali's command thread | 2.0 ms | |
+| three job workers | 1.2 ms each | mostly idle |
+
+UnityMain by area, ms a frame: animation 3.5 (Animator::UpdateAvatars through the Director: its jobs and the
+main thread's wait for them), offscreen cameras 3.3 (the game draws its world and its UI into 640x360 render
+textures), scripts' Update 2.8, waiting 2.6 (`CompleteFenceInternal`: job fences, mostly the animation's), UI canvases
+1.3 (`RectTransform::UpdateAnchorPositionIfTransformChanged` alone 0.6; the canvases weigh twice their average in
+the frames over 18 ms), the cameras' own draw loop 0.7, LateUpdate 0.6. The GPU (`UA_GL_TRACE_GPU=3`, each pass
+waited for): 12 - 15 ms a frame in six passes (the scene 5.6, two image effects 1.0 + 2.7, a copy 1.1, the UI 2.1,
+the screen 2.3): under the frame, not the wall.
+
+Measured and not paying here (three runs each, interleaved in one hold, fps at 230 - 300 s):
+- `UA_FUTEX_SPIN=50` (Unity 2017.4's job semaphores watched before sleeping; on this kernel, which lets user space read
+  no timer, the watch counts loops measured at start): 58.64 -> 58.29.
+- `UA_BEH_PREFETCH=1 UA_BEH_EMPTY=1 UA_INV_MEMO=1` (rows for 2017.4.40f1 added: the functions' instructions are
+  2017.4.27f1's): 58.25 -> 58.12. The update loop is small here: 160 `CallUpdateMethod` calls a frame, 129 of them
+  `ObjectEffect.Update` returning at once (0.2 % of UnityMain).
+- The game's own V-SYNC option off: 57.28 -> 57.29. With it on, the game's `FpsLimiter.LateUpdate` sleeps the
+  frame up to 1/60 s (the 0.9 ms above): it only stretches frames that were early.
+- `UA_PRESENT_THREAD=full` (runtime.md).
+What is left is the engine's own work on UnityMain (animation, the render-texture cameras, UI canvases); no exact cut
+found so far.

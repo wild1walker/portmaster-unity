@@ -82,6 +82,17 @@ static const struct beh_player g_players[] = {
         },
         0x1108dbc, 0x7c, 0x72cde0,
     },
+    // 2017.4.40f1 armeabi-v7a (Blasphemous): the four functions' instructions are 2017.4.27f1's, only their
+    // addresses (and a literal pool word of IsActive's) differ: the same offsets
+    {
+        { "2017.4.40f1 armeabi-v7a", "SafeIterator<List<ListNode<Behaviour> > >::Next", 0x4e4310, 0x70, 'a', 0xf9c22af8383f7918ull },
+        { "2017.4.40f1 armeabi-v7a", "MonoBehaviour::CallUpdateMethod", 0x72c618, 0x128, 'a', 0x26d8d5c95cadd1cfull },
+        {
+            { "2017.4.40f1 armeabi-v7a", "GameObject::IsActive", 0x3e9338, 0xc4, 'a', 0x552da18648ab6427ull },
+            { "2017.4.40f1 armeabi-v7a", "BaseBehaviourManager::CommonUpdate<BehaviourManager>", 0x4e4220, 0x74, 'a', 0x4bde37ad6c69bda9ull },
+        },
+        0x1108e2c, 0x7c, 0x72c740,
+    },
 };
 
 static void *(*o_next)(void *it);
