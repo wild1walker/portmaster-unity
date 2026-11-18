@@ -38,6 +38,9 @@
 #                   (its donors carry Unity's player) shows that it needs no Wi-Fi
 #   PMU_PROF        set: pmu's per-step profile in the setup log (prof: <step>: <stage> <s> (<calls> calls):
 #                   the file opens, writes, journal writes...), counts that machine noise does not change
+#   REHEARSE_NOFILE  the setup's open-file limit, soft:hard (default 1024:524288: dArkOS's, which a port's
+#                   processes inherit from EmulationStation; a step that holds more files open at once
+#                   fails there with "os error 24")
 #   REHEARSE_MEMINFO  a /proc/meminfo for the setup container (Docker shows the VM's RAM): e.g. one with
 #                   "MemTotal: 996352 kB", for the setup steps that decide by the handheld's RAM (video,
 #                   textures lowmem_scale)
@@ -130,7 +133,7 @@ for c in mount umount; do
 done
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
-docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
+docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory 1g --memory-swap 2g --ulimit "nofile=${REHEARSE_NOFILE:-1024:524288}" -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
   ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} ${PMU_PROF:+-e PMU_PROF="$PMU_PROF"} \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \

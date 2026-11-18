@@ -1574,3 +1574,45 @@ fn damaged_values() {
         .to_string();
     assert!(e.starts_with("an object of more than"), "{e}");
 }
+
+// unpack: thousands of files (Blasphemous's data.unity3d has 3,944), small blocks, files crossing
+// block ends, empty ones, out of order in the table: each written whole under its name. Every file
+// is open only while its bytes come by, so the extraction stays under a handheld's open-file limit
+// (dArkOS: 1024, which a build of 3,944 files opened at once exceeded: "os error 24")
+#[test]
+fn unpack_many_files() {
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    let mut rnd = |n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 32) as u8
+            })
+            .collect()
+    };
+    let names: Vec<String> = (0..3000).map(|i| format!("d{}/f{i}", i % 7)).collect();
+    let nodes: Vec<(&str, u32, Vec<u8>)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), 0u32, rnd(if i % 50 == 0 { 0 } else { (i * 37) % 900 + 1 })))
+        .collect();
+    let b = unity_bundle(&nodes, 4096);
+    let d = temp("many");
+    let p = d.join("data.unity3d");
+    std::fs::write(&p, &b).unwrap();
+    let a = crate::unpack::Archive::open(&p).unwrap();
+    assert!(a.blocks.len() > 100);
+    let out = d.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut lines = 0;
+    let got = a.extract(&out, &mut |_| lines += 1).unwrap();
+    assert_eq!(got.len(), 3000);
+    assert_eq!(lines, 3000);
+    for (n, _, data) in &nodes {
+        assert_eq!(&std::fs::read(out.join(n)).unwrap(), data, "{n}");
+        assert!(!out.join(format!("{n}.tmp")).exists());
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

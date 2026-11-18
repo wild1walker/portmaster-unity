@@ -118,10 +118,13 @@ impl Archive {
     }
 
     /// Writes every file of the archive under out_dir (`log`: a line for each); returns their
-    /// names.
+    /// names. A file is open only while its bytes come by (they lie one after another in the
+    /// archive's stream: a block touches a few), synced when its last byte is written and closed:
+    /// a build of thousands of files stays far under a handheld's open-file limit (1024 on dArkOS,
+    /// where the launcher's processes inherit EmulationStation's).
     pub fn extract(&self, out_dir: &Path, log: &mut dyn FnMut(&str)) -> Result<Vec<String>> {
         let root = std::fs::canonicalize(out_dir)?;
-        let mut outs: Vec<(u64, u64, PathBuf, File)> = Vec::new();
+        let mut ents: Vec<(u64, u64, PathBuf)> = Vec::new();
         let mut names = Vec::new();
         for (off, sz, _, name) in &self.files {
             let dst = realpath(&out_dir.join(name));
@@ -135,39 +138,73 @@ impl Archive {
             if let Some(d) = dst.parent() {
                 std::fs::create_dir_all(d)?;
             }
-            let fo = File::create(tmp(&dst))?;
-            outs.push((*off, off.saturating_add(*sz), dst, fo));
+            ents.push((*off, off.saturating_add(*sz), dst));
             names.push(name.clone());
+        }
+        // the files in the order their data starts; `next` is the first not opened yet
+        let mut order: Vec<usize> = (0..ents.len()).collect();
+        order.sort_by_key(|&i| (ents[i].0, i));
+        let mut next = 0usize;
+        let mut open: Vec<(usize, File)> = Vec::new();
+        // each file's data on the card before its name: a power cut never leaves a short file
+        // under the name a later run takes for an unpacked one (the renames wait for all of them)
+        fn done(fo: File) -> Result<()> {
+            let mut fo = fo;
+            fo.flush()?;
+            fo.sync_all()?;
+            Ok(())
         }
         let mut upos = 0u64;
         let mut f = File::open(&self.path)?;
         for &(fpos, csz, usz, bfl) in &self.blocks {
-            f.seek(SeekFrom::Start(fpos))?;
-            let mut data = Vec::new();
-            (&mut f).take(csz as u64).read_to_end(&mut data)?;
-            let plain = decompress(&data, usz as usize, (bfl & 0x3f) as u32)?;
-            for (a, b, _, fo) in &mut outs {
-                let lo = (*a).max(upos);
-                let hi = (*b).min(upos + usz as u64);
-                if lo < hi {
-                    let s = (lo - upos) as usize;
-                    let e = ((hi - upos) as usize).min(plain.len());
-                    if s < e {
-                        fo.write_all(&plain[s..e])?;
+            let bend = upos + usz as u64;
+            // open the files whose data starts in this block (or before it: none yet)
+            while next < order.len() && ents[order[next]].0 < bend {
+                let i = order[next];
+                open.push((i, File::create(tmp(&ents[i].2))?));
+                next += 1;
+            }
+            if !open.is_empty() {
+                f.seek(SeekFrom::Start(fpos))?;
+                let mut data = Vec::new();
+                (&mut f).take(csz as u64).read_to_end(&mut data)?;
+                let plain = decompress(&data, usz as usize, (bfl & 0x3f) as u32)?;
+                for (i, fo) in &mut open {
+                    let (a, b) = (ents[*i].0, ents[*i].1);
+                    let lo = a.max(upos);
+                    let hi = b.min(bend);
+                    if lo < hi {
+                        let s = (lo - upos) as usize;
+                        let e = ((hi - upos) as usize).min(plain.len());
+                        if s < e {
+                            fo.write_all(&plain[s..e])?;
+                        }
                     }
                 }
             }
-            upos += usz as u64;
+            upos = bend;
+            // the files that end in this block: done
+            let mut k = 0;
+            while k < open.len() {
+                if ents[open[k].0].1 <= upos {
+                    let (_, fo) = open.swap_remove(k);
+                    done(fo)?;
+                } else {
+                    k += 1;
+                }
+            }
         }
-        // each file's data on the card before its name: a power cut never leaves a short file
-        // under the name a later run takes for an unpacked one
-        for (_, _, _, fo) in &mut outs {
-            fo.flush()?;
-            fo.sync_all()?;
+        // what the blocks did not reach (empty files after the last block, or a short archive:
+        // caught below)
+        for (_, fo) in open.drain(..) {
+            done(fo)?;
+        }
+        while next < order.len() {
+            done(File::create(tmp(&ents[order[next]].2))?)?;
+            next += 1;
         }
         let mut dirs: Vec<PathBuf> = Vec::new();
-        for (a, b, dst, fo) in outs {
-            drop(fo);
+        for (a, b, dst) in ents {
             let t = tmp(&dst);
             if std::fs::metadata(&t)?.len() != b - a {
                 return Err(value(format!(
