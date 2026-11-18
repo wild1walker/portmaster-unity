@@ -799,6 +799,29 @@ several MB from run to run with nothing changed: compare the census's texture to
 The two tools are measurements: the ledger's lock around every allocation and the preload's table cost frame rate
 and 16 MB each.
 
+Scans of every loaded object at a level's start (Blasphemous, RG34XX-SP, 2026-11-17): a level's first seconds ran at
+31 - 40 fps, and each room change's fade-in started with a 200 ms frame. `UA_PROF` over them, the long frames
+named by their samples (profsum's parser, frame by frame): the level's start is I2 Localization rescanning at every
+scene load (`Resources.FindObjectsOfTypeAll(typeof(LanguageSource))`, 28 ms, while `LevelManager.StreamingLevels`
+loads the neighbouring rooms' scenes one after another); the fade-in frame is the game's level-loaded handlers'
+`FindObjectsOfType<T>` (each walks every loaded MonoBehaviour, 25 - 45 ms), four of them `MapManager`'s. The other
+long frames of a room change are behind the black screen the game holds until its frame rate settles (the new
+room's Awake/Start, its enemy pools, and `Resources.UnloadUnusedAssets`, whose walk of the managed heap is a 500 ms
+frame), and the `UA_JIT_WARM=2` warm-up takes 10 - 15 ms off the fade-in frame and 110 ms off the first room
+change. asmpatch's `blasphemous-i2-sources` skips I2's scan when no `LanguageSource` was made since (every one runs
+its constructor; the scan can only add one not in `Sources`) and `blasphemous-map-scan` makes `MapManager`'s four
+scans one ([tools/asmpatch](../tools/asmpatch/README.md)), both with a check mode that does the game's scans too and
+compares. With `check` on Knulli (title, the first level, S01 - S02 - S01 - S02, and again after switching the text
+language to French in Options): 73 I2 scans each run, one of which added a source (the patch would have scanned it too), the other 72
+skippable, no difference; `MapManager`'s lists the same as the game's at every level. Patched, the level's start
+50 then 59 - 60 fps (31 - 40 for 4 - 5 s before), the fade-in frame 109 - 125 ms (183 - 206 before; what is left is
+the camera's and the persistence manager's scans).
+
+```toml
+[android_data]
+asmpatch = ["auto", "blasphemous-catalogs", "rewired-no-keyboard", "blasphemous-i2-sources", "blasphemous-map-scan"]
+```
+
 ### RK3326 handhelds (dArkOS, ArkOS: the R36S family, the BattleXP G350)
 
 The R36S class is PortMaster's most common handheld and the slowest these tools aim at: four Cortex-A35
