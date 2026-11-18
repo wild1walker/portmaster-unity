@@ -197,6 +197,14 @@ never the menu's lines, whatever ua_host or settings the run has (2026-11-12, G3
 runs lost to it, first blamed on the stripped ua_host). Keep a known-good copy of the prefs beside
 the test copy and check the key before a run (`grep -c GameLangSet data/shared_prefs/*.prefs`).
 
+The bench's game writes its log straight into `run.log` on the handheld's card (`>> run.log 2>&1`), so a
+log line can stall the frame that writes it while the card is busy: on muOS (Blasphemous, 2026-11-17, with
+`UA_PROF` writing its recording at the same time) UnityMain sat 459 ms in `write()` from a Unity log line,
+two seconds after a room change. Read such a frame as the bench's: a player's launch sends the same lines
+through the launcher's `tee` (`exec > >(tee log.txt) 2>&1`), a pipe of 64 KB that the game never fills
+(Blasphemous logs nothing per frame: 27 lines, 3.6 KB a minute over an 18-minute Knulli soak, the most
+2.8 KB in one second and 6.4 KB in ten, at room changes), so the card's delay lands on `tee`, not the game.
+
 ## Worked example: Hollow Knight, King's Pass (Unity 6000.0, Mono)
 
 On the RG34XX-SP the game ran King's Pass at 32 - 34 fps (2026-10-22; 33 - 37 with the host's flips:
