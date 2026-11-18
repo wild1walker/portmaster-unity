@@ -6,8 +6,25 @@ use crate::job::Job;
 use std::collections::{HashMap, HashSet};
 use unityfs::{DataFile, Value};
 
-/// A data file's name and a path id.
-pub type Key = (String, i64);
+/// A data file's name and a path id. The name is shared (name()): the walk keeps a key for every
+/// GameObject, Transform, renderer and sprite of the game, and a String each made Blasphemous's
+/// walk need more memory than a 1 GB handheld has.
+pub type Key = (Name, i64);
+pub type Name = std::sync::Arc<str>;
+
+/// The one shared copy of a file name.
+pub(crate) fn name(n: &str) -> Name {
+    use std::sync::Mutex;
+    static NAMES: Mutex<Option<HashMap<String, Name>>> = Mutex::new(None);
+    let mut g = NAMES.lock().unwrap();
+    let m = g.get_or_insert_with(HashMap::new);
+    if let Some(a) = m.get(n) {
+        return a.clone();
+    }
+    let a: Name = std::sync::Arc::from(n);
+    m.insert(n.to_string(), a.clone());
+    a
+}
 
 /// The data files the walk reads (serialized files: not bundles), in the textures step's order.
 pub(crate) fn data_files(job: &Job) -> Vec<String> {
@@ -23,13 +40,13 @@ pub(crate) fn pptr_of(v: &Value) -> Option<(i32, i64)> {
 }
 
 /// The file a PPtr's file id names, seen from `from` (0: `from` itself), by its base name.
-pub(crate) fn file_name(f: &DataFile, from: &str, fid: i32) -> Option<String> {
+pub(crate) fn file_name(f: &DataFile, from: &str, fid: i32) -> Option<Name> {
     if fid == 0 {
-        return Some(from.to_string());
+        return Some(name(from));
     }
     let e = f.sf.externals.get(usize::try_from(fid - 1).ok()?)?;
-    let p = String::from_utf8_lossy(&e.path).into_owned();
-    Some(p.rsplit('/').next().unwrap_or(&p).to_string())
+    let p = String::from_utf8_lossy(&e.path);
+    Some(name(p.rsplit('/').next().unwrap_or(&p)))
 }
 
 /// A PPtr as a key (None for a null reference or an unknown file id).

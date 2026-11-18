@@ -38,6 +38,10 @@
 #                   (its donors carry Unity's player) shows that it needs no Wi-Fi
 #   PMU_PROF        set: pmu's per-step profile in the setup log (prof: <step>: <stage> <s> (<calls> calls):
 #                   the file opens, writes, journal writes...), counts that machine noise does not change
+#   REHEARSE_MEM    the setup container's memory with no swap (e.g. 800m: the BattleXP G350 with
+#                   EmulationStation stopped; 700m with it running); default 1g with 1 GB of swap
+#                   (REHEARSE_MEMSWAP: memory + swap), where a step that needs more than a handheld has
+#                   only gets slower: Blasphemous's textures step was killed on the G350 (2026-11-18)
 #   REHEARSE_NOFILE  the setup's open-file limit, soft:hard (default 1024:524288: dArkOS's, which a port's
 #                   processes inherit from EmulationStation; a step that holds more files open at once
 #                   fails there with "os error 24")
@@ -133,7 +137,10 @@ for c in mount umount; do
 done
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
-docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory 1g --memory-swap 2g --ulimit "nofile=${REHEARSE_NOFILE:-1024:524288}" -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
+# the setup container's memory: 1 GB with 1 GB of swap beside it (the default), or a handheld's: REHEARSE_MEM alone
+# is that much and no swap (a G350: 800m, what its setup has with EmulationStation stopped)
+RMEM=${REHEARSE_MEM:-1g}; RSWAP=${REHEARSE_MEMSWAP:-${REHEARSE_MEM:-2g}}
+docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory "$RMEM" --memory-swap "$RSWAP" --ulimit "nofile=${REHEARSE_NOFILE:-1024:524288}" -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
   ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} ${PMU_PROF:+-e PMU_PROF="$PMU_PROF"} \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \

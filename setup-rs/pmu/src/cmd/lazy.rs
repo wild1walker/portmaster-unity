@@ -169,13 +169,13 @@ fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
                     // object's length): the file is not written again by unityfs, whose layout can differ by padding
                     let mut bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
                     for o in f.sf.objects.iter().filter(|o| o.data.is_some()) {
-                        let nb = o.data.as_ref().unwrap();
+                        let nb = f.sf.bytes(o.path_id).map_err(|e| format!("{name}: {e}"))?;
                         let (at, sz) = (o.byte_start as usize, o.byte_size as usize);
                         if nb.len() != sz || at + sz > bytes.len() {
                             let _ = std::fs::remove_dir_all(&work);
                             return Err(format!("{name}: object {} is {} bytes after the edit, {sz} before: the game is left as it was", o.path_id, nb.len()));
                         }
-                        bytes[at..at + sz].copy_from_slice(nb);
+                        bytes[at..at + sz].copy_from_slice(&nb);
                     }
                     std::fs::write(out.join(name), &bytes).map_err(|e| e.to_string())?;
                     total += n;

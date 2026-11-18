@@ -1616,3 +1616,42 @@ fn unpack_many_files() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+// spill_saved: saved bytes past the budget wait in a scratch file; bytes(), save() and save_to() give
+// what the same saves in memory give, and the scratch file goes with the SerializedFile
+#[test]
+fn saved_bytes_spill() {
+    let b = serialized_bytes(&[(-3, "minus three"), (4, "four"), (9, "nine")]);
+    let d = temp("spill");
+    let edit = |sf: &mut SerializedFile| {
+        for (pid, len) in [(4i64, 200_000usize), (9, 70_000), (-3, 10)] {
+            let mut v = sf.read_typetree(pid).unwrap();
+            v.set("m_Name", Value::str(&"x".repeat(len))).unwrap();
+            sf.save_typetree(pid, &v).unwrap();
+        }
+        // a second save of one object: its earlier bytes no longer count
+        let mut v = sf.read_typetree(9).unwrap();
+        v.set("m_Name", Value::str(&"y".repeat(90_000))).unwrap();
+        sf.save_typetree(9, &v).unwrap();
+    };
+    let mut plain = SerializedFile::open("t", mem(b.clone()), None, None).unwrap();
+    edit(&mut plain);
+    let want = plain.save().unwrap();
+    let p = d.join("objects.spill");
+    let mut sp = SerializedFile::open("t", mem(b.clone()), None, None).unwrap();
+    sp.spill_saved(&p, 100_000).unwrap();
+    edit(&mut sp);
+    assert!(std::fs::metadata(&p).unwrap().len() >= 200_000, "the big object went to the spill file");
+    for pid in [-3i64, 4, 9] {
+        assert_eq!(sp.bytes(pid).unwrap(), plain.bytes(pid).unwrap());
+    }
+    assert_eq!(sp.save().unwrap(), want);
+    let mut cur = std::io::Cursor::new(Vec::new());
+    sp.save_to(&mut cur, |_, _| Ok(None)).unwrap();
+    assert_eq!(cur.into_inner(), want);
+    sp.clear_raw(4);
+    assert_eq!(sp.bytes(4).unwrap(), sp.original_bytes(4).unwrap());
+    drop(sp);
+    assert!(!p.exists(), "the spill file goes with the file");
+    let _ = std::fs::remove_dir_all(&d);
+}

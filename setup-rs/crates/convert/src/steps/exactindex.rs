@@ -311,9 +311,18 @@ pub fn analyze(
 ) -> std::result::Result<(BTreeSet<Key>, std::result::Result<Plan, String>), String> {
     let mut keep = BTreeSet::new();
     let r = plan_inner(job, c, index, &mut keep);
+    rss_note("after the walk");
     match r {
         Err(e) if keep.is_empty() && e.starts_with("no shader") => Err(e),
         r => Ok((keep, r)),
+    }
+}
+
+fn rss_note(what: &str) {
+    if std::env::var_os("PMU_EXACT_STATS").is_some() {
+        let st = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let v: Vec<&str> = st.lines().filter(|l| l.starts_with("VmRSS") || l.starts_with("RssAnon") || l.starts_with("VmHWM")).collect();
+        eprintln!("[exact-stats] {what}: {}", v.join(" ").split_whitespace().collect::<Vec<_>>().join(" "));
     }
 }
 
@@ -333,7 +342,8 @@ fn plan_inner(
         "" => None,
         s => Some(regex::Regex::new(s).map_err(|e| e.to_string())?),
     };
-    let names = data_files(job);
+    rss_note("start");
+    let names: Vec<super::exacttex::Name> = data_files(job).iter().map(|n| super::exacttex::name(n)).collect();
     let open = |n: &str| job.open(&job.path_in(n), Default::default()).ok();
     // 1. shaders, materials, game objects, renderers, sprites, controllers, clips
     let mut shaders: HashMap<Key, String> = HashMap::new();
@@ -342,10 +352,10 @@ fn plan_inner(
     // each file's classes and the files its PPtrs can name (itself, its externals): the later passes open again
     // only the files that hold what they read (a file they would skip object by object, or whose references
     // cannot reach what they look for, is left unopened: the same result, a fraction of the opens)
-    let mut census: HashMap<String, (HashSet<i32>, HashSet<String>)> = HashMap::new();
+    let mut census: HashMap<super::exacttex::Name, (HashSet<i32>, HashSet<super::exacttex::Name>)> = HashMap::new();
     for n in &names {
         let Some(f) = open(n) else { continue };
-        let mut can: HashSet<String> = (0..=f.sf.externals.len() as i32)
+        let mut can: HashSet<super::exacttex::Name> = (0..=f.sf.externals.len() as i32)
             .filter_map(|fid| super::exacttex::file_name(&f, n, fid))
             .collect();
         can.insert(n.clone());
@@ -373,6 +383,7 @@ fn plan_inner(
             }
         }
     }
+    rss_note("after pass 1");
     let targets: BTreeSet<Key> = shaders
         .iter()
         .filter(|(_, n)| rx.is_match(n))
@@ -524,6 +535,15 @@ fn plan_inner(
             }
         }
     }
+    rss_note("after pass 2");
+    if std::env::var_os("PMU_EXACT_STATS").is_some() {
+        let ch: usize = gos.values().map(|g| g.children.len()).sum();
+        let sc: usize = gos.values().map(|g| g.scripts.len()).sum();
+        let cb: usize = clip_pptr.values().map(|c| c.0.len() + c.1.len()).sum();
+        let mt: usize = mat_tex.iter().map(|m| m.1.len()).sum();
+        eprintln!("[exact-stats] census {} shaders {} scripts {} gos {} (children {} scripts {}) renderers {} sprite_tex {} ctrl {} clips {} (entries {}) mat_tex {} ({})",
+            census.len(), shaders.len(), scripts.len(), gos.len(), ch, sc, renderers.len(), sprite_tex.len(), ctrl_clips.len(), clip_pptr.len(), cb, mat_tex.len(), mt);
+    }
     // the renderers' material test, now that every palette material is known
     let mut palette_renderer: HashMap<Key, bool> = HashMap::new();
     for n in &names {
@@ -547,6 +567,7 @@ fn plan_inner(
             palette_renderer.insert((n.clone(), o.path_id), pal);
         }
     }
+    rss_note("after the renderers");
     let script_name = |s: &str| -> String {
         let mut it = s.split('\0');
         let (f, p) = (
@@ -554,7 +575,7 @@ fn plan_inner(
             it.next().and_then(|p| p.parse::<i64>().ok()).unwrap_or(0),
         );
         scripts
-            .get(&(f.to_string(), p))
+            .get(&(super::exacttex::name(f), p))
             .cloned()
             .unwrap_or_default()
     };
@@ -756,15 +777,16 @@ fn plan_inner(
             );
         }
     }
+    rss_note("before pass 4");
     const PASS4_SKIP: [i32; 15] = [
         GAME_OBJECT, TRANSFORM, RECT_TRANSFORM, SPRITE, TEXTURE2D, CLIP, CONTROLLER, OVERRIDE, SPRITE_RENDERER, ANIMATOR,
         MATERIAL, SHADER, MONO_SCRIPT, PRELOAD_DATA, ASSET_BUNDLE,
     ];
-    let want_files: HashSet<&str> = want.iter().map(|k| k.0.as_str()).collect();
+    let want_files: HashSet<&str> = want.iter().map(|k| &*k.0).collect();
     for n in &names {
         // (raw_refs finds only keys of the file itself or of its externals)
         if !census.get(n).is_some_and(|c| {
-            c.0.iter().any(|x| !PASS4_SKIP.contains(x)) && c.1.iter().any(|x| want_files.contains(x.as_str()))
+            c.0.iter().any(|x| !PASS4_SKIP.contains(x)) && c.1.iter().any(|x| want_files.contains(&**x))
         }) {
             continue;
         }
@@ -811,7 +833,9 @@ fn plan_inner(
     let mut why = Vec::new();
     let mut textures = BTreeMap::new();
     let mut opaque_idx = [false; 256];
-    let mut pixels: Vec<(Key, Vec<u8>)> = Vec::new();
+    // (each candidate's pixels read twice, one texture at a time: kept together they were more than a 1 GB
+    // handheld has, Blasphemous's 24 sprite sheets)
+    let mut cands: Vec<(Key, bool)> = Vec::new();
     let mut candidates: Vec<&Key> = candidate_tex.iter().collect();
     candidates.sort();
     for t in candidates {
@@ -840,11 +864,7 @@ fn plan_inner(
             .and_then(Value::as_int);
         let w = tt.get("m_Width").and_then(Value::as_int).unwrap_or(0) as usize;
         let h = tt.get("m_Height").and_then(Value::as_int).unwrap_or(0) as usize;
-        let px = tt
-            .get("image data")
-            .and_then(Value::as_bytes)
-            .unwrap_or(&[])
-            .to_vec();
+        let px = tt.get("image data").and_then(Value::as_bytes).unwrap_or(&[]);
         if fmt != RGBA32
             || mips != 1
             || streamed
@@ -863,15 +883,15 @@ fn plan_inner(
                 opaque_idx[p[2] as usize] = true;
             }
         }
-        pixels.push((t.clone(), px));
+        let binary = px.chunks_exact(4).all(|p| p[3] == 0 || p[3] == 255);
+        cands.push((t.clone(), binary));
     }
     let Some(k) = (1..256).find(|&i| !opaque_idx[i]) else {
         return Err("every index is used by an opaque texel: no reserved index".into());
     };
     let k = k as u8;
-    for (t, px) in &pixels {
-        let binary = px.chunks_exact(4).all(|p| p[3] == 0 || p[3] == 255);
-        if !binary {
+    for (t, binary) in &cands {
+        if !*binary {
             why.push(format!(
                 "{} {}: alpha other than 0 and 255: left as it is",
                 t.0, t.1
@@ -879,6 +899,12 @@ fn plan_inner(
             continue;
         }
         let form = Form::R8;
+        let tt = open(&t.0)
+            .ok_or_else(|| format!("{} {}: not readable again", t.0, t.1))?
+            .sf
+            .read_typetree(t.1)
+            .map_err(|e| format!("{} {}: {e}", t.0, t.1))?;
+        let px = tt.get("image data").and_then(Value::as_bytes).unwrap_or(&[]);
         match encode(px, form, k) {
             Ok(_) => {
                 textures.insert(t.clone(), form);
@@ -950,7 +976,7 @@ fn plan_inner(
 
 /// The GameObject of a Transform key, in the same file.
 fn open_go(f: &DataFile, n: &str, tk: &Key) -> Option<Key> {
-    if tk.0 != n {
+    if &*tk.0 != n {
         return None;
     }
     let t = f.sf.read_typetree(tk.1).ok()?;
@@ -1008,7 +1034,7 @@ pub fn plan_json(p: &Plan) -> Json {
                 .iter()
                 .map(|((f, pid), form)| {
                     Json::List(vec![
-                        Json::Str(f.clone()),
+                        Json::Str(f.to_string()),
                         Json::Int(*pid as i128),
                         Json::Str(match form {
                             Form::R8 => "r8".into(),
@@ -1023,7 +1049,7 @@ pub fn plan_json(p: &Plan) -> Json {
         Json::List(
             p.shaders
                 .iter()
-                .map(|(f, pid)| Json::List(vec![Json::Str(f.clone()), Json::Int(*pid as i128)]))
+                .map(|(f, pid)| Json::List(vec![Json::Str(f.to_string()), Json::Int(*pid as i128)]))
                 .collect(),
         ),
     );
@@ -1040,14 +1066,14 @@ fn plan_of(j: &Json) -> Option<Plan> {
         }
         let form = Form::R8;
         textures.insert(
-            (l.first()?.as_str()?.to_string(), l.get(1)?.as_int()? as i64),
+            (super::exacttex::name(l.first()?.as_str()?), l.get(1)?.as_int()? as i64),
             form,
         );
     }
     let mut shaders = BTreeSet::new();
     for s in j.get("shaders")?.as_list()? {
         let l = s.as_list()?;
-        shaders.insert((l.first()?.as_str()?.to_string(), l.get(1)?.as_int()? as i64));
+        shaders.insert((super::exacttex::name(l.first()?.as_str()?), l.get(1)?.as_int()? as i64));
     }
     Some(Plan {
         k,
@@ -1093,15 +1119,15 @@ pub fn run(job: &mut Job) -> Result<()> {
         p.shaders.len(),
         kw.join(" ")
     ));
-    let mut files: BTreeSet<String> = p.textures.keys().map(|k| k.0.clone()).collect();
-    files.extend(p.shaders.iter().map(|k| k.0.clone()));
+    let mut files: BTreeSet<String> = p.textures.keys().map(|k| k.0.to_string()).collect();
+    files.extend(p.shaders.iter().map(|k| k.0.to_string()));
     let (mut bytes_in, mut bytes_out) = (0u64, 0u64);
     for rel in files {
         if job.is_done(STEP, &rel) {
             continue;
         }
         let mut f = job.open(&job.path_in(&rel), Default::default())?;
-        for (t, form) in p.textures.iter().filter(|(k, _)| k.0 == rel) {
+        for (t, form) in p.textures.iter().filter(|(k, _)| *k.0 == *rel) {
             let mut tt = f.sf.read_typetree(t.1)?;
             let px = tt
                 .get("image data")
@@ -1117,7 +1143,7 @@ pub fn run(job: &mut Job) -> Result<()> {
             tt.set("image data", Value::Bytes(data))?;
             f.sf.save_typetree(t.1, &tt)?;
         }
-        for s in p.shaders.iter().filter(|k| k.0 == rel) {
+        for s in p.shaders.iter().filter(|k| *k.0 == *rel) {
             let mut t = f.sf.read_typetree(s.1)?;
             rewrite_shader(&mut t, &kw, p.k)
                 .map_err(|e| Error::Value(format!("{STEP}: {rel} {}: {e}", s.1)))?;

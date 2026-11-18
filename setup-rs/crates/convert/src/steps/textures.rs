@@ -1633,7 +1633,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             Ok((keep, plan)) => {
                 let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
                 for (f, _) in &keep {
-                    *by_file.entry(f.as_str()).or_default() += 1;
+                    *by_file.entry(&**f).or_default() += 1;
                 }
                 job.log(&format!(
                     "textures: exact_shaders: {} textures the palette programs sample, left as they are{}",
@@ -1667,7 +1667,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                         )),
                     }
                 }
-                exact.keys = keep.into_iter().collect();
+                exact.keys = keep.into_iter().map(|(f, p)| (f.to_string(), p)).collect();
             }
         }
     }
@@ -1764,6 +1764,15 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                 }
             }
             Ok(mut f) => {
+                // the converted textures' new bytes past spill_mb wait in a scratch file, not in
+                // memory: a file's inline image data can be more than a handheld has (Blasphemous's
+                // resources.assets: 534 MB of ASTC; the G350 ran out at 825 MB); the file comes out
+                // the same
+                if spill_mb > 0 {
+                    std::fs::create_dir_all(&work)?;
+                    f.sf.spill_saved(&work.join("objects.spill"), spill_mb << 20)
+                        .map_err(|e| left(&work, e.into(), false))?;
+                }
                 let mut streams = Streams {
                     job,
                     rel,

@@ -65,7 +65,34 @@ pub struct ObjectInfo {
     pub is_destroyed: Option<u16>,
     pub is_stripped: Option<u8>,
     /// The object's bytes as last saved (save_typetree / set_raw): written instead of the file's.
-    pub data: Option<Vec<u8>>,
+    pub data: Option<Saved>,
+}
+
+/// An object's saved bytes: in memory, or (spill_saved) in the file's scratch file.
+#[derive(Clone, Debug)]
+pub enum Saved {
+    Mem(Vec<u8>),
+    /// (offset, length) in the spill file
+    Spilled(u64, u64),
+}
+
+/// Where saved bytes go past a budget (spill_saved): a scratch file, removed with the
+/// SerializedFile. A file whose objects take more new bytes than a handheld has memory (a
+/// texture step's inline image data: Blasphemous's resources.assets, 534 MB of ASTC) is then
+/// written from it; what is written is the same.
+struct Spill {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    end: u64,
+    /// the saved bytes kept in memory, and how many may be
+    mem: u64,
+    budget: u64,
+}
+
+impl Drop for Spill {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// A script type entry (LocalSerializedObjectIdentifier).
@@ -116,6 +143,7 @@ pub struct SerializedFile {
     refs: Option<Vec<RefType>>,
     /// The target platform and Unity version the file was read with (changed()).
     opened: (i32, Vec<u8>),
+    spill: Option<Spill>,
 }
 
 fn hash16(r: &mut Reader) -> Result<[u8; 16]> {
@@ -561,6 +589,7 @@ impl SerializedFile {
             name: name.to_string(),
             header: h,
             opened: (target_platform, unity_version.clone()),
+            spill: None,
             unity_version,
             version,
             target_platform,
@@ -623,7 +652,8 @@ impl SerializedFile {
     pub fn bytes(&self, path_id: i64) -> Result<Vec<u8>> {
         let o = self.obj(path_id)?;
         match &o.data {
-            Some(d) => Ok(d.clone()),
+            Some(Saved::Mem(d)) => Ok(d.clone()),
+            Some(Saved::Spilled(off, len)) => self.spilled(*off, *len),
             None => self.original_bytes(path_id),
         }
     }
@@ -697,11 +727,73 @@ impl SerializedFile {
     /// obj.set_raw_data: the object's new bytes.
     pub fn set_raw(&mut self, path_id: i64, data: Vec<u8>) -> Result<()> {
         let name = self.name.clone();
-        let o = self
-            .object_mut(path_id)
+        let i = *self
+            .index
+            .get(&path_id)
             .ok_or_else(|| Error::Value(format!("{name}: no object {path_id}")))?;
-        o.data = Some(data);
+        let saved = self.keep(data)?;
+        let old = self.objects[i].data.replace(saved);
+        if let (Some(Saved::Mem(d)), Some(sp)) = (old, self.spill.as_mut()) {
+            sp.mem -= d.len() as u64;
+        }
         Ok(())
+    }
+
+    /// Saved bytes from here on go to a scratch file at `path` (made now, removed with this
+    /// SerializedFile) once those kept in memory would pass `budget` bytes; objects under 64 KB
+    /// stay in memory. Reading them (bytes()) and writing the file (save_to) take them from there.
+    pub fn spill_saved(&mut self, path: &std::path::Path, budget: u64) -> Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+        let mem = self
+            .objects
+            .iter()
+            .map(|o| match &o.data {
+                Some(Saved::Mem(d)) => d.len() as u64,
+                _ => 0,
+            })
+            .sum();
+        self.spill = Some(Spill {
+            file,
+            path: path.to_path_buf(),
+            end: 0,
+            mem,
+            budget,
+        });
+        Ok(())
+    }
+
+    /// New bytes as kept: in memory, or appended to the spill file past its budget.
+    fn keep(&mut self, data: Vec<u8>) -> Result<Saved> {
+        let Some(sp) = self.spill.as_mut() else {
+            return Ok(Saved::Mem(data));
+        };
+        let n = data.len() as u64;
+        if n < 64 << 10 || sp.mem + n <= sp.budget {
+            sp.mem += n;
+            return Ok(Saved::Mem(data));
+        }
+        use std::io::{Seek as _, Write as _};
+        sp.file.seek(SeekFrom::Start(sp.end))?;
+        sp.file.write_all(&data)?;
+        let at = sp.end;
+        sp.end += n;
+        Ok(Saved::Spilled(at, n))
+    }
+
+    fn spilled(&self, off: u64, len: u64) -> Result<Vec<u8>> {
+        let sp = self
+            .spill
+            .as_ref()
+            .ok_or_else(|| Error::Value(format!("{}: spilled bytes without a spill file", self.name)))?;
+        let mut v = vec![0u8; len as usize];
+        use std::os::unix::fs::FileExt;
+        sp.file.read_exact_at(&mut v, off)?;
+        Ok(v)
     }
 
     /// Adds an object (UnityPy's `new = copy.copy(like); new.path_id = path_id;
@@ -716,7 +808,7 @@ impl SerializedFile {
         }
         let mut o = self.obj(like)?.clone();
         o.path_id = path_id;
-        o.data = Some(data);
+        o.data = Some(self.keep(data)?);
         self.index.insert(path_id, self.objects.len());
         self.objects.push(o);
         Ok(())
@@ -732,8 +824,11 @@ impl SerializedFile {
 
     /// Drops an object's saved bytes (it is written as the file has it again).
     pub fn clear_raw(&mut self, path_id: i64) {
-        if let Some(o) = self.object_mut(path_id) {
-            o.data = None;
+        let Some(&i) = self.index.get(&path_id) else {
+            return;
+        };
+        if let (Some(Saved::Mem(d)), Some(sp)) = (self.objects[i].data.take(), self.spill.as_mut()) {
+            sp.mem -= d.len() as u64;
         }
     }
 
@@ -935,9 +1030,23 @@ impl SerializedFile {
             let o = &self.objects[i];
             let once = prepare(self, o)?;
             let size = match (&once, &o.data) {
-                (Some(d), _) | (None, Some(d)) => {
+                (Some(d), _) | (None, Some(Saved::Mem(d))) => {
                     out.write_all(d)?;
                     d.len() as u64
+                }
+                (None, Some(Saved::Spilled(off, len))) => {
+                    // a piece at a time: never the whole object in memory again
+                    let sp = self.spill.as_ref().unwrap();
+                    use std::os::unix::fs::FileExt;
+                    let mut buf = vec![0u8; (*len).min(4 << 20) as usize];
+                    let mut done = 0u64;
+                    while done < *len {
+                        let k = (len - done).min(buf.len() as u64) as usize;
+                        sp.file.read_exact_at(&mut buf[..k], off + done)?;
+                        out.write_all(&buf[..k])?;
+                        done += k as u64;
+                    }
+                    *len
                 }
                 (None, None) => {
                     let mut o2 = &mut *out;
