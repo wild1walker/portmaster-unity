@@ -36,6 +36,8 @@
 #                   runs on an updated install (a setup/update step, or the game at once)
 #   REHEARSE_NET=none  no network in the setup container: a port whose setup never downloads anything
 #                   (its donors carry Unity's player) shows that it needs no Wi-Fi
+#   PMU_PROF        set: pmu's per-step profile in the setup log (prof: <step>: <stage> <s> (<calls> calls):
+#                   the file opens, writes, journal writes...), counts that machine noise does not change
 #   REHEARSE_MEMINFO  a /proc/meminfo for the setup container (Docker shows the VM's RAM): e.g. one with
 #                   "MemTotal: 996352 kB", for the setup steps that decide by the handheld's RAM (video,
 #                   textures lowmem_scale)
@@ -129,7 +131,7 @@ done
 echo "== setup in the container ($(date +%T); the card: $FREE_MB MB free)"
 t0=$(date +%s)
 docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory 1g --memory-swap 2g -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
-  ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} \
+  ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} ${PMU_PROF:+-e PMU_PROF="$PMU_PROF"} \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
