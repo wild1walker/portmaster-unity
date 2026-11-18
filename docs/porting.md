@@ -664,6 +664,18 @@ first walk as RGBA32: stopped for low memory in the load at 773 MB), 56.6 fps (t
 Penitent's colours right. With EmulationStation's 100 MB held, as on dArkOS, that is too close: what is left
 is the Penitent's RGBA32 sprites (about 75 MB in that level).
 
+Why the Penitent's sprites stay RGBA32 (tried 2026-11-17; do not retry without a proof for every GPU the port
+runs on): the sword's stencil shader (`Maikel/StencilMaskSword`) discards a texel when its sampled RGB equals
+`_TargetColor` (168, 192, 175)/255, and those bytes are on the sword in 50 of the 52 textures, opaque and
+transparent. Whether the original discards them depends on how the GPU turns a byte into a float: ua_host's
+`UA_GL_PROBE=unorm8` (runtime.md), run inside a game on the BattleXP G350, found Mali-G31 (libmali r13p0) exact
+for all 256 bytes, so there the key matches and the texels are discarded; Mesa llvmpipe is exact for 130 bytes
+only (192 among those that are not), so there the key never matches. An R8 texture keeps only the palette
+index, so a rewritten shader would have to know "this texel is the key" without its bytes: a decision made at
+setup is right on one kind of GPU and wrong on the other, and a byte-identical render on Mesa cannot be had. A
+form exact on every GPU needs the key bytes sampled on that GPU (another texture bound to that program) or a
+per-GPU choice at run time; neither exists.
+
 Text for every language, loaded in every language: a game may keep the fonts of all its languages
 referenced from its text objects (a component that swaps the font by language, a fallback list), and Unity
 then loads every one of them with the first scene and again with each scene that has text. Hollow Knight's
