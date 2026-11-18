@@ -66,7 +66,7 @@ The commands every setup template (`convert/pmunity/port_template/<route>/patchs
 Cuphead's setups run on the handheld, and which run on pmu (2026-11-02). Besides these the setups
 use the system's shell tools (sed, awk, find, sha256sum, df), PortMaster's 7-Zip for archives,
 curl or wget for Unity's whole installer when range reads fail, and a port's own hooks
-(`setup/hooks/<point>.sh`, which may call `pm` too).
+(`setup/hooks/<point>`, which may call `pm` too).
 
 | setup | command (Python module) | on pmu |
 |---|---|---|

@@ -2722,7 +2722,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         src = os.path.join(base, rel)
         if not os.path.isfile(src):
             raise SystemExit(f'files.hooks.{point}: {src} not found')
-        ctx.write(f'{pd}/setup/hooks/{point}.sh', _read(src, 'rb'))
+        ctx.write(f'{pd}/setup/hooks/{point}', _read(src, 'rb'))
     for rel in fl.get('extra', []):
         src = os.path.join(base, rel)
         if not os.path.isfile(src):
