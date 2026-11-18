@@ -90,3 +90,63 @@ namespace Framework.Managers
         }
     }
 }
+
+// blasphemous-map-scan's stand-in: the persistent objects' classes and MapManager's cache as the game fills it
+namespace Framework.FrameworkCore
+{
+    public class PersistentObject : UnityEngine.MonoBehaviour { }
+    public class Level { public string LevelName; }
+}
+namespace Tools.Level.Interactables
+{
+    public class Interactable : Framework.FrameworkCore.PersistentObject { }
+    public class Door : Interactable { }
+    public class SpecialDoor : Door { }
+    public class PrieDieu : Interactable { }
+}
+namespace Tools.Level.Actionables { public class Gate : Framework.FrameworkCore.PersistentObject { } }
+namespace Tools.Level { public class Teleport : Framework.FrameworkCore.PersistentObject { } }
+namespace Framework.Managers
+{
+    using System;
+    using System.Collections.Generic;
+    using System.Linq;
+    using Framework.FrameworkCore;
+    using Tools.Level.Interactables;
+    using Tools.Level.Actionables;
+    using Tools.Level;
+
+    public class MapManager : UnityEngine.MonoBehaviour
+    {
+        private Dictionary<Type, List<PersistentObject>> cacheObjects = new Dictionary<Type, List<PersistentObject>>();
+        public string CurrentZone;
+
+        public void OnLevelLoaded(Framework.FrameworkCore.Level oldLevel, Framework.FrameworkCore.Level newLevel)
+        {
+            string levelName = newLevel.LevelName;
+            cacheObjects.Clear();
+            FillSceneCacheObject<Door>();
+            FillSceneCacheObject<PrieDieu>();
+            FillSceneCacheObject<Gate>();
+            FillSceneCacheObject<Teleport>();
+            if (levelName == "NONE") return;
+            CurrentZone = levelName;
+        }
+
+        private void FillSceneCacheObject<T>() where T : PersistentObject
+        {
+            Type typeFromHandle = typeof(T);
+            T[] array = UnityEngine.Object.FindObjectsOfType<T>();
+            foreach (T item in array)
+            {
+                if (!cacheObjects.ContainsKey(typeFromHandle)) cacheObjects[typeFromHandle] = new List<PersistentObject>();
+                cacheObjects[typeFromHandle].Add(item);
+            }
+        }
+
+        // the test's view of the cache: each type's objects by name, in order, and how many lists
+        public string Cache() =>
+            string.Join(";", new[] { typeof(Door), typeof(PrieDieu), typeof(Gate), typeof(Teleport) }
+                .Select(t => t.Name + ":" + (cacheObjects.TryGetValue(t, out var l) ? string.Join(",", l.Select(x => x.name)) : "-"))) + " n=" + cacheObjects.Count;
+    }
+}

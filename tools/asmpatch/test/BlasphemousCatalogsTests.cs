@@ -21,7 +21,7 @@ static partial class TestMain
     static string BlSrc(string name)
     {
         var src = Dir(name);
-        foreach (var f in new[] { "UnityEngine.CoreModule.dll", "Assembly-CSharp.dll" }) File.Copy(Path.Combine(FakeBl, f), Path.Combine(src, f), true);
+        foreach (var f in new[] { "UnityEngine.CoreModule.dll", "Assembly-CSharp.dll", "Assembly-CSharp-firstpass.dll" }) File.Copy(Path.Combine(FakeBl, f), Path.Combine(src, f), true);
         var rt = Path.GetDirectoryName(typeof(object).Assembly.Location);
         foreach (var f in new[] { "System.Runtime.dll", "System.Private.CoreLib.dll", "System.Linq.dll", "System.Collections.dll" })
             File.Copy(Path.Combine(rt, f), Path.Combine(src, f), true);

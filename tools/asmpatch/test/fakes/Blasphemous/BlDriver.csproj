@@ -13,5 +13,6 @@
     <Compile Include="Driver.cs" />
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/bl/UnityEngine.CoreModule.dll</HintPath></Reference>
     <Reference Include="Assembly-CSharp"><HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/bl/Assembly-CSharp.dll</HintPath></Reference>
+    <Reference Include="Assembly-CSharp-firstpass"><HintPath>$(MSBuildThisFileDirectory)../../../out/test/fakes/bl/Assembly-CSharp-firstpass.dll</HintPath></Reference>
   </ItemGroup>
 </Project>

@@ -191,7 +191,7 @@ sealed class BlasphemousCatalogs : Patch
         return null;
     }
 
-    static Instruction Nth(Instruction i, int k) { for (; i != null && k > 0; k--) i = i.Next; return i; }
+    internal static Instruction Nth(Instruction i, int k) { for (; i != null && k > 0; k--) i = i.Next; return i; }
 
     /// <summary>A method's IL as text (op codes, operands by name, branch targets by index), hashed.</summary>
     public static string Shape(MethodDefinition md)
@@ -220,7 +220,7 @@ sealed class BlasphemousCatalogs : Patch
     }
 
     /// <summary>A class library or engine method, by declaring type, name and parameter types, imported into m.</summary>
-    static MethodReference Lib(Game game, ModuleDefinition m, string type, string name, params string[] ps)
+    internal static MethodReference Lib(Game game, ModuleDefinition m, string type, string name, params string[] ps)
     {
         foreach (var a in game.Assemblies)
         {

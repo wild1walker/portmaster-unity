@@ -31,6 +31,7 @@ if [ "${1:-}" = test ]; then
   "$DOTNET" build test/fakes/HollowKnight/Assembly-CSharp.csproj -c Release -o out/test/fakes/hk -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/fakes/Blasphemous/UnityEngine.CoreModule.csproj -c Release -o out/test/fakes/bl -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/fakes/Blasphemous/Assembly-CSharp.csproj -c Release -o out/test/fakes/bl -v q -nologo | grep -E "error|warn" || true
+  "$DOTNET" build test/fakes/Blasphemous/Assembly-CSharp-firstpass.csproj -c Release -o out/test/fakes/bl -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/fakes/Blasphemous/BlDriver.csproj -c Release -o out/test/fakes/bl -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/fakes/Inline/Game/Assembly-CSharp.csproj -c Release -o out/test/fakes/inline -v q -nologo | grep -E "error|warn" || true
   "$DOTNET" build test/asmpatch-test.csproj -c Release -o out/test -v q -nologo | grep -E "error|warn" || true

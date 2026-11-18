@@ -64,4 +64,75 @@ public static class BlDriver
         return string.Join("\n", t);
     }
     public static string Logs() => string.Join("\n", UnityEngine.Debug.Logs);
+
+    // blasphemous-i2-sources: language sources made and loaded as scenes come and go; at each scene load
+    // UpdateSources as I2's ResourceManager calls it. Each line: the step, Sources in order, the scans so far.
+    // noCtor: one source made without its constructor (what Unity does not do: the check's own test)
+    public static string RunI2(bool noCtor)
+    {
+        var t = new List<string>();
+        I2.Loc.LanguageSource Made(string name, bool load = true, bool active = true)
+        {
+            var s = new I2.Loc.LanguageSource { name = name, active = active };
+            if (load) Resources.Loaded.Add(s);
+            return s;
+        }
+        void Step(string what)
+        {
+            I2.Loc.LocalizationManager.UpdateSources();
+            t.Add($"{what}: sources {string.Join(",", I2.Loc.LocalizationManager.Sources.Select(x => x.name))}; scans {Resources.FindAlls}");
+        }
+        Resources.Loaded.Add(new GameObject { name = "not a source" });
+        var g = Made("global");
+        I2.Loc.LocalizationManager.AddSource(g);          // (RegisterSourceInResources)
+        Step("first");
+        Step("a scene without sources");
+        Made("scene a");
+        Step("a scene with one");
+        Step("the same scene again");
+        Made("b inactive", active: false); Made("c");
+        Step("two at once");
+        var late = Made("late", load: false);
+        Step("made, not loaded yet");
+        Step("still not loaded");
+        Resources.Loaded.Add(late);
+        Step("loaded");
+        if (noCtor)
+        {
+            var x = (I2.Loc.LanguageSource)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(I2.Loc.LanguageSource));
+            x.name = "no constructor";
+            Resources.Loaded.Add(x);
+            Step("a source without its constructor");
+        }
+        Resources.Loaded.First(o => o.name == "scene a").destroyed = true;
+        Step("scene a destroyed");
+        var d = Made("d"); d.destroyed = true;
+        Step("made and destroyed before a scan");
+        Step("then");
+        return string.Join("\n", t);
+    }
+
+    // blasphemous-map-scan: three levels' persistent objects, MapManager.OnLevelLoaded at each. Each line: the level,
+    // the cache, the scans so far. reorder: each type's scan in its own order (what the check is for)
+    public static string RunMap(bool reorder)
+    {
+        if (reorder) UnityEngine.Object.Order = (ty, r) => ty == typeof(Framework.FrameworkCore.PersistentObject) ? r.Reverse().ToArray() : r;
+        var t = new List<string>();
+        var m = new MapManager();
+        T O<T>(string name, bool active = true) where T : UnityEngine.Object, new() => new T { name = name, active = active };
+        void Level(string name, params UnityEngine.Object[] objs)
+        {
+            UnityEngine.Object.Scene = objs;
+            m.OnLevelLoaded(null, new Framework.FrameworkCore.Level { LevelName = name });
+            t.Add($"{name}: {m.Cache()}; scans {UnityEngine.Object.Finds}");
+        }
+        Level("L1", O<Tools.Level.Interactables.Door>("door 1"), O<Tools.Level.Actionables.Gate>("gate 1"), O<Framework.FrameworkCore.PersistentObject>("other"),
+              O<Tools.Level.Interactables.PrieDieu>("prie-dieu"), O<Tools.Level.Interactables.Door>("door off", active: false),
+              O<Tools.Level.Interactables.SpecialDoor>("special door"), O<Tools.Level.Teleport>("teleport"), O<GameObject>("not one"),
+              O<Tools.Level.Interactables.Door>("door 2"), O<Tools.Level.Actionables.Gate>("gate 2"));
+        Level("L2", O<Tools.Level.Interactables.Door>("door 3"));
+        Level("L3");
+        Level("NONE", O<Tools.Level.Teleport>("teleport 2"));
+        return string.Join("\n", t);
+    }
 }
