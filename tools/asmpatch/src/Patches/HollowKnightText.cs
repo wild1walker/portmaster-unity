@@ -27,6 +27,8 @@
 // the screen's sides (less 2 % each) gets a smaller top size and is laid out again in the same frame, down to its
 // own size at most (as the game draws it).
 // The HUD's texts (under the HudCamera) are inside its 16:9 frame, which hk-aspect keeps on the screen.
+// A game patched by the earlier hk-text (2026.11.17's: the helper without OnHud) gets this part alone (the update
+// step runs asmpatch again).
 // The game reads and sets these texts' sizes in its own units (ChangeFontByLanguage's sizes per language): the
 // fontSize property still reads the game's size and setting it sets the fit's range.
 // The variable is read at the first text's Awake; "[hk-text] ..." is logged once. ASMPATCH_HK_TEXT_LOG=1 also
@@ -80,8 +82,9 @@ sealed class HollowKnightText : Patch
         if (text == null || tmp == null)
             return Result.NotApplicable("no Hollow Knight (TMProOld.TMP_Text, TMProOld.TextMeshPro in Assembly-CSharp)");
         var file = game.FileOf(asm);
-        if (m.Types.Any(t => t.Name == HelperType))
-            return new Result { Outcome = Outcome.AlreadyApplied, Details = { $"{file}: the body text's size follows {Variable}" } };
+        var helper = m.Types.FirstOrDefault(t => t.Name == HelperType);
+        if (helper != null && helper.Methods.Any(x => x.Name == "OnHud"))
+            return new Result { Outcome = Outcome.AlreadyApplied, Details = { $"{file}: the body text's size follows {Variable}; a text outside the HUD stays inside the screen's sides" } };
 
         FieldDefinition F(TypeDefinition t, string n) => t.Fields.FirstOrDefault(f => f.Name == n && !f.IsStatic);
         var f = new Fields
@@ -108,8 +111,34 @@ sealed class HollowKnightText : Patch
         if (refs.Missing is string missing)
             return Result.Failed($"{file}: Assembly-CSharp does not reference {missing} (the patch calls it as the game does)");
 
+        if (helper != null)
+        {
+            // an earlier hk-text (2026.11.17's: the helper without OnHud): the screen's sides added to its TextFitEnd,
+            // ahead of its "auto size off" (ldarg.0; ldc.i4.0; stfld m_enableAutoSizing)
+            var endOld = tmp.Methods.FirstOrDefault(x => x.Name == "<asmpatch>TextFitEnd" && x.HasBody);
+            var autoOff = endOld?.Body.Instructions.FirstOrDefault(i => i.OpCode.Code == Code.Stfld && i.Operand is FieldReference fr && fr.Name == f.auto.Name &&
+                                                                        i.Previous?.OpCode.Code == Code.Ldc_I4_0 && i.Previous.Previous?.OpCode.Code == Code.Ldarg_0);
+            var hOld = new HelperMethods { path = helper.Methods.FirstOrDefault(x => x.Name == "Path" && x.IsStatic), log = helper.Fields.FirstOrDefault(x => x.Name == "log" && x.IsStatic) };
+            if (autoOff == null || hOld.path == null || hOld.log == null)
+                return Result.Failed($"{file}: an earlier hk-text is there, but not as this patch knows it (its TextFitEnd, its helper's Path and log)");
+            var r0 = new Result { Outcome = Outcome.Applied };
+            r0.Details.Add($"{file}: the earlier hk-text's TextFitEnd: a text outside the HUD kept inside the screen's sides");
+            if (!apply) return r0;
+            hOld.onHud = OnHud(m, helper, refs);
+            var screenOld = Screen(m, tmp, hOld, refs, f, bounds, gens[0]);
+            var il = endOld.Body.GetILProcessor();
+            var at = autoOff.Previous.Previous;
+            var first = il.Create(OpCodes.Ldarg_0);
+            il.InsertBefore(at, first);
+            il.InsertBefore(at, il.Create(OpCodes.Call, screenOld));
+            Retarget(endOld.Body, at, first);
+            endOld.Body.OptimizeMacros();
+            game.MarkChanged(asm);
+            return r0;
+        }
+
         var r = new Result { Outcome = Outcome.Applied };
-        r.Details.Add($"{file}: TMProOld.TextMeshPro's body text up to {Variable} times bigger, fitted to its box by its own auto size (Awake, OnPreRenderObject); fontSize in the game's units");
+        r.Details.Add($"{file}: TMProOld.TextMeshPro's body text up to {Variable} times bigger, fitted to its box by its own auto size (Awake, OnPreRenderObject); fontSize in the game's units; a text outside the HUD inside the screen's sides");
         if (!apply) return r;
 
         var ts = m.TypeSystem;
@@ -362,28 +391,7 @@ sealed class HollowKnightText : Patch
             il.Append(done); il.Emit(OpCodes.Ret);
             h.path.Body.OptimizeMacros();
         }
-        // static bool OnHud(Transform t): for (c = t.parent, n = 0; c != null && n < 8; c = c.parent, n++) if (c.name == HudCamera) true
-        h.onHud = new MethodDefinition("OnHud", Static, ts.Boolean);
-        h.onHud.Parameters.Add(new ParameterDefinition("t", ParameterAttributes.None, refs.getParent.ReturnType));
-        t.Methods.Add(h.onHud);
-        {
-            var n = new VariableDefinition(ts.Int32);
-            h.onHud.Body.Variables.Add(n);
-            h.onHud.Body.InitLocals = true;
-            var il = h.onHud.Body.GetILProcessor();
-            var loop = il.Create(OpCodes.Ldarg_0);
-            var no = il.Create(OpCodes.Ldc_I4_0);
-            var yes = il.Create(OpCodes.Ldc_I4_1);
-            il.Append(loop); il.Emit(OpCodes.Callvirt, refs.getParent); il.Emit(OpCodes.Starg, h.onHud.Parameters[0]);
-            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, refs.objEq); il.Emit(OpCodes.Brtrue, no);
-            il.Emit(OpCodes.Ldloc, n); il.Emit(OpCodes.Ldc_I4_8); il.Emit(OpCodes.Bge, no);
-            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Callvirt, refs.getName); il.Emit(OpCodes.Ldstr, HudCamera); il.Emit(OpCodes.Call, equals); il.Emit(OpCodes.Brtrue, yes);
-            il.Emit(OpCodes.Ldloc, n); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, n);
-            il.Emit(OpCodes.Br, loop);
-            il.Append(no); il.Emit(OpCodes.Ret);
-            il.Append(yes); il.Emit(OpCodes.Ret);
-            h.onHud.Body.OptimizeMacros();
-        }
+        h.onHud = OnHud(m, t, refs);
         // static void Read(): once: log = LogVariable == "1"; scale = Factor(Variable, Screen.width, Screen.height); one line when on
         h.read = new MethodDefinition("Read", Static, ts.Void);
         t.Methods.Add(h.read);
@@ -404,6 +412,35 @@ sealed class HollowKnightText : Patch
             h.read.Body.OptimizeMacros();
         }
         return h;
+    }
+
+    /// <summary>The helper's static bool OnHud(Transform t): for (c = t.parent, n = 0; c != null && n < 8; c = c.parent,
+    /// n++) if (c.name == HudCamera) true.</summary>
+    static MethodDefinition OnHud(ModuleDefinition m, TypeDefinition helper, Refs refs)
+    {
+        var ts = m.TypeSystem;
+        var equals = new MethodReference("op_Equality", ts.Boolean, new TypeReference("System", "String", m, ts.CoreLibrary));
+        equals.Parameters.Add(new ParameterDefinition(ts.String)); equals.Parameters.Add(new ParameterDefinition(ts.String));
+        var md = new MethodDefinition("OnHud", MethodAttributes.Assembly | MethodAttributes.Static | MethodAttributes.HideBySig, ts.Boolean);
+        md.Parameters.Add(new ParameterDefinition("t", ParameterAttributes.None, refs.getParent.ReturnType));
+        helper.Methods.Add(md);
+        var n = new VariableDefinition(ts.Int32);
+        md.Body.Variables.Add(n);
+        md.Body.InitLocals = true;
+        var il = md.Body.GetILProcessor();
+        var loop = il.Create(OpCodes.Ldarg_0);
+        var no = il.Create(OpCodes.Ldc_I4_0);
+        var yes = il.Create(OpCodes.Ldc_I4_1);
+        il.Append(loop); il.Emit(OpCodes.Callvirt, refs.getParent); il.Emit(OpCodes.Starg, md.Parameters[0]);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldnull); il.Emit(OpCodes.Call, refs.objEq); il.Emit(OpCodes.Brtrue, no);
+        il.Emit(OpCodes.Ldloc, n); il.Emit(OpCodes.Ldc_I4_8); il.Emit(OpCodes.Bge, no);
+        il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Callvirt, refs.getName); il.Emit(OpCodes.Ldstr, HudCamera); il.Emit(OpCodes.Call, equals); il.Emit(OpCodes.Brtrue, yes);
+        il.Emit(OpCodes.Ldloc, n); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Add); il.Emit(OpCodes.Stloc, n);
+        il.Emit(OpCodes.Br, loop);
+        il.Append(no); il.Emit(OpCodes.Ret);
+        il.Append(yes); il.Emit(OpCodes.Ret);
+        md.Body.OptimizeMacros();
+        return md;
     }
 
     /// <summary>Emits Debug.Log(string.Concat(new object[] { items... })): each item pushes one value and names
@@ -630,7 +667,8 @@ sealed class HollowKnightText : Patch
             var ret = il.Create(OpCodes.Ret);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.scale); il.Emit(OpCodes.Ldc_R4, 0f); il.Emit(OpCodes.Ble_Un, ret);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldfld, f.fitted); il.Emit(OpCodes.Brtrue, ret);
-            Screen(m, end, il, h, refs, f, textBounds, gen);
+            var screen = Screen(m, tmp, h, refs, f, textBounds, gen);
+            il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Call, screen);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Stfld, f.auto);
             il.Emit(OpCodes.Ldarg_0); il.Emit(OpCodes.Ldc_I4_1); il.Emit(OpCodes.Stfld, f.fitted);
             var logged = il.Create(OpCodes.Nop);
@@ -650,16 +688,19 @@ sealed class HollowKnightText : Patch
         return (begin, end);
     }
 
-    /// <summary>Emits, at the start of TextFitEnd (the fit's layout done, auto size still on): for a text outside the
+    /// <summary>TextMeshPro.TextScreen(), called at the start of TextFitEnd (the fit's layout done, auto size still on): for a text outside the
     /// HUD with room to shrink, its lines' left and right ends (textBounds, at the text's scale) through the camera
     /// that draws it into the screen's 0..1; past Edge or 1 - Edge, the top size becomes Step of the size that would just fit
     /// (about the text's position: c - Edge over c - left, 1 - Edge - c over right - c), never under its own size,
     /// and the text is laid out again from it (the same layout call as OnPreRenderObject's), at most Tries times.
     /// No camera draws it with its position in view: nothing.</summary>
-    static void Screen(ModuleDefinition m, MethodDefinition md, ILProcessor il, HelperMethods h, Refs refs, Fields f,
-                       MethodDefinition textBounds, Instruction gen)
+    static MethodDefinition Screen(ModuleDefinition m, TypeDefinition tmp, HelperMethods h, Refs refs, Fields f,
+                                   MethodDefinition textBounds, Instruction gen)
     {
         var ts = m.TypeSystem;
+        var md = new MethodDefinition("<asmpatch>TextScreen", MethodAttributes.Assembly | MethodAttributes.HideBySig, ts.Void);
+        tmp.Methods.Add(md);
+        var il = md.Body.GetILProcessor();
         var vec3T = refs.position.ReturnType; vec3T.IsValueType = true;
         var boundsT = textBounds.ReturnType; boundsT.IsValueType = true;
         var camT = refs.toViewport.DeclaringType;
@@ -777,7 +818,9 @@ sealed class HollowKnightText : Patch
         }
         il.Emit(OpCodes.Ldarg_0); il.Emit(gen.OpCode, (MethodReference)gen.Operand);
         il.Emit(OpCodes.Br, check);
-        il.Append(done);
+        il.Append(done); il.Emit(OpCodes.Ret);
+        md.Body.OptimizeMacros();
+        return md;
     }
 
     /// <summary>The fields TextMeshPro's OnPreRenderObject zeroes before its layout call (TMProOld's names), the layout

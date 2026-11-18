@@ -275,6 +275,45 @@ static partial class TestMain
 
         (st, outp) = Patch(o, Path.Combine(tmp, "hkt-again"), with: new[] { "hk-text" });
         Check(st == 0 && outp.Contains("done hk-text") && NoDlls(Path.Combine(tmp, "hkt-again")), "hk-text: a second run finds it applied");
+
+        // a game patched by the earlier hk-text (2026.11.17: no OnHud, no TextScreen): the screen's sides added alone
+        var old = Dir("hkt-old");
+        using (var asm = Mono.Cecil.AssemblyDefinition.ReadAssembly(new MemoryStream(File.ReadAllBytes(Path.Combine(o, "Assembly-CSharp.dll")))))
+        {
+            var mm = asm.MainModule;
+            var helper = mm.Types.First(t => t.Name == HollowKnightText.HelperType);
+            helper.Methods.Remove(helper.Methods.First(x => x.Name == "OnHud"));
+            var tmpT = mm.GetType("TMProOld.TextMeshPro");
+            var scr = tmpT.Methods.First(x => x.Name == "<asmpatch>TextScreen");
+            var endM = tmpT.Methods.First(x => x.Name == "<asmpatch>TextFitEnd");
+            var call = endM.Body.Instructions.First(i => i.Operand == scr);
+            endM.Body.Instructions.Remove(call.Previous);
+            endM.Body.Instructions.Remove(call);
+            tmpT.Methods.Remove(scr);
+            asm.Write(Path.Combine(old, "Assembly-CSharp.dll"));
+        }
+        File.Copy(FakeHollowKnightFirstpass, Path.Combine(old, "Assembly-CSharp-firstpass.dll"));
+        bool OldShrinks(string dir) => TextRun(dir, "1.5", null, (640, 480), (a, fp) =>
+        {
+            var camT = fp.GetType("UnityEngine.Camera", true);
+            var arr = Array.CreateInstance(camT, 1); arr.SetValue(Activator.CreateInstance(camT), 0);
+            camT.GetProperty("allCameras").SetValue(null, arr);
+            var w = new Txt(a, "TextMeshPro", 5f).Wake();
+            w.PerWidth = 3f; w.Render();
+            return w.Size < 7f;
+        });
+        Check(!OldShrinks(old), "hk-text: the earlier hk-text (the stand-in made so) has no screen's sides");
+        var up = Path.Combine(tmp, "hkt-up");
+        (st, outp) = Patch(old, up, with: new[] { "hk-text" });
+        Check(st == 0 && outp.Contains("ok   hk-text: Assembly-CSharp.dll: the earlier hk-text's TextFitEnd: a text outside the HUD kept inside the screen's sides"),
+              "hk-text: on the earlier hk-text, the screen's sides added alone");
+        if (File.Exists(Path.Combine(up, "Assembly-CSharp.dll")))
+        {
+            File.Copy(FakeHollowKnightFirstpass, Path.Combine(up, "Assembly-CSharp-firstpass.dll"), true);
+            Check(OldShrinks(up), "hk-text: after it, a line past the screen's sides gets smaller");
+            (st, outp) = Patch(up, Path.Combine(tmp, "hkt-up-again"), with: new[] { "hk-text" });
+            Check(st == 0 && outp.Contains("done hk-text"), "hk-text: then a run finds it applied");
+        }
         var none = Dir("hkt-none");
         var plain = NewModule("Assembly-CSharp");
         plain.Types.Add(new Mono.Cecil.TypeDefinition("", "GameManager", Mono.Cecil.TypeAttributes.Public, plain.TypeSystem.Object));
