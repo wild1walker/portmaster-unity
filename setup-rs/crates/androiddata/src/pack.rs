@@ -384,7 +384,8 @@ fn short_of_space(need: u64, free: u64) -> Option<String> {
             "pack: the APK and OBB need {:.2} GiB, {:.2} GiB free (keeping 1 GiB spare): free {:.1} GiB more on the card",
             gib(need as f64),
             gib(free as f64),
-            gib((need + (1 << 30) - free) as f64)
+            // (rounded up: a card a few MB short read "free 0.0 GiB more", 2026-11-19 on muOS)
+            (gib((need + (1 << 30) - free) as f64) * 10.0).ceil() / 10.0
         )
     })
 }
@@ -741,6 +742,10 @@ mod tests {
             short_of_space(1_500_000_000, 1 << 30).unwrap(),
             "pack: the APK and OBB need 1.40 GiB, 1.00 GiB free (keeping 1 GiB spare): free 1.4 GiB more on the card"
         );
+        // a few MB short: never "0.0 GiB more"
+        let need = 2_100_000_000u64;
+        let s = short_of_space(need, need + (1 << 30) - 4_000_000).unwrap();
+        assert!(s.ends_with("free 0.1 GiB more on the card"), "{s}");
     }
 
     #[test]

@@ -48,6 +48,7 @@ import ctypes
 import errno
 import fnmatch
 import json
+import math
 import os
 import re
 import shlex
@@ -2085,7 +2086,7 @@ def check_space(zdir, entries, replaced, log):
     free = st.f_bavail * st.f_frsize + sum(os.path.getsize(p) for p in replaced if os.path.isfile(p))
     if free < need + (1 << 30):
         log(f'pack: the APK and OBB need {need / 2**30:.2f} GiB, {free / 2**30:.2f} GiB free (keeping 1 GiB spare): '
-            f'free {(need + (1 << 30) - free) / 2**30:.1f} GiB more on the card')
+            f'free {math.ceil((need + (1 << 30) - free) / 2**30 * 10) / 10:.1f} GiB more on the card')
         raise SystemExit(NO_SPACE)
 
 
