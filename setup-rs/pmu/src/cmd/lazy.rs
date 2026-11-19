@@ -7,7 +7,10 @@
 //! file in the work folder. Marked ready, they are written over their entries: stored and of the same length, so
 //! nothing else in the APK or OBB moves (Archive::overwrite_stored_from, the CRC-32 in both headers). A run that is
 //! stopped before the mark starts again; one stopped after writes them all again. Exit 0 when done or nothing
-//! needed doing; "lazy: ..." lines on stdout.
+//! needed doing; "lazy: ..." lines on stdout. The mark is written only once the kept files and their folder are on
+//! the card (synced), and is synced itself: on exFAT the archives' first sync can put the folder's entries (the
+//! files' sizes, the mark) on the card before the kept files' data, and a rerun after a power cut would trust the
+//! mark and copy what never reached the card into the APK.
 use convert::pyjson::Json;
 use convert::steps::lazy;
 use pkgzip::zip::Archive;
@@ -105,6 +108,38 @@ fn take_out(z: &Archive, name: &str, dir: &Path) -> Result<PathBuf, String> {
     Ok(p)
 }
 
+/// What mark_ready asks of the card (a test watches the order).
+#[derive(Debug, PartialEq)]
+enum Op<'a> {
+    SyncFile(&'a Path),
+    SyncDir(&'a Path),
+    Mark(&'a Path),
+}
+
+/// The kept files' data and the folder's entries on the card, then the mark that says they are whole, then the
+/// mark itself: a rerun that finds the mark after a power cut finds every kept file whole.
+fn mark_ready(out: &Path, kept: &[PathBuf], op: &mut dyn FnMut(Op) -> Result<(), String>) -> Result<(), String> {
+    for p in kept {
+        op(Op::SyncFile(p))?;
+    }
+    op(Op::SyncDir(out))?;
+    let m = out.join(".ready");
+    op(Op::Mark(&m))?;
+    op(Op::SyncFile(&m))?;
+    op(Op::SyncDir(out))
+}
+
+fn on_card(op: Op) -> Result<(), String> {
+    match op {
+        Op::SyncFile(p) => unityfs::bgwrite::sync_file(p).map_err(|e| format!("{}: {e}", p.display())),
+        Op::SyncDir(p) => {
+            unityfs::bgwrite::sync_dir(p);
+            Ok(())
+        }
+        Op::Mark(p) => std::fs::write(p, b"").map_err(|e| format!("{}: {e}", p.display())),
+    }
+}
+
 fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(game)
         .map_err(|e| format!("{}: {e}", game.display()))?
@@ -160,6 +195,7 @@ fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
         }
         // each file's lists without them, kept when changed (the same length, or nothing is written)
         let mut total = 0;
+        let mut kept: Vec<PathBuf> = Vec::new();
         for (name, i) in &files {
             let p = take_out(&zips[*i].1, name, &one)?;
             if let Ok(mut f) = unityfs::DataFile::open(&p, &opts) {
@@ -178,6 +214,7 @@ fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
                         bytes[at..at + sz].copy_from_slice(&nb);
                     }
                     std::fs::write(out.join(name), &bytes).map_err(|e| e.to_string())?;
+                    kept.push(out.join(name));
                     total += n;
                 }
             }
@@ -185,7 +222,7 @@ fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
         }
         println!("lazy: {} object(s) named, left out of {total} preload or dependency entries", drop.len());
         let _ = std::fs::remove_dir_all(&one);
-        std::fs::write(out.join(".ready"), b"").map_err(|e| e.to_string())?;
+        mark_ready(&out, &kept, &mut on_card)?;
     }
     // the changed files back over their entries, every one checked first
     let mut changed: Vec<String> = std::fs::read_dir(&out)
@@ -219,4 +256,55 @@ fn in_place(game: &Path, names: &BTreeSet<Vec<u8>>) -> Result<(), String> {
     }
     let _ = std::fs::remove_dir_all(&work);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mark_comes_after_the_kept_files_are_on_the_card() {
+        let out = Path::new("/w/.pmunity-lazy/out");
+        let kept = [out.join("globalgamemanagers"), out.join("level0.assets")];
+        let mut seen = Vec::new();
+        mark_ready(out, &kept, &mut |op| {
+            seen.push(format!("{op:?}"));
+            Ok(())
+        })
+        .unwrap();
+        let m = out.join(".ready");
+        let want = [
+            Op::SyncFile(&kept[0]),
+            Op::SyncFile(&kept[1]),
+            Op::SyncDir(out),
+            Op::Mark(&m),
+            Op::SyncFile(&m),
+            Op::SyncDir(out),
+        ]
+        .map(|o| format!("{o:?}"));
+        assert_eq!(seen, want);
+        // a sync that fails: no mark
+        let mut marked = false;
+        let r = mark_ready(out, &kept, &mut |op| match op {
+            Op::SyncFile(p) if p == kept[1] => Err("EIO".into()),
+            Op::Mark(_) => {
+                marked = true;
+                Ok(())
+            }
+            _ => Ok(()),
+        });
+        assert!(r.is_err() && !marked);
+    }
+
+    #[test]
+    fn marks_on_a_real_folder() {
+        let d = std::env::temp_dir().join(format!("pmu-lazy-mark-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.assets"), b"x").unwrap();
+        mark_ready(&d, &[d.join("a.assets")], &mut on_card).unwrap();
+        assert!(d.join(".ready").is_file());
+        assert!(mark_ready(&d, &[d.join("missing.assets")], &mut on_card).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

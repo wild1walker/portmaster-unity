@@ -1769,6 +1769,20 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                 // resources.assets: 534 MB of ASTC; the G350 ran out at 825 MB); the file comes out
                 // the same
                 if spill_mb > 0 {
+                    // (that scratch file is on the card beside the new file: room for the textures' objects past
+                    // spill_mb, counted at their size now (an estimate: ASTC is a quarter of RGBA32, twice DXT1);
+                    // a card too full then stops here with status 3, not part way through)
+                    let tex: u64 = f
+                        .sf
+                        .objects
+                        .iter()
+                        .filter(|o| o.class_id == 28)
+                        .map(|o| o.byte_size as u64)
+                        .sum();
+                    let more = tex.saturating_sub(spill_mb << 20);
+                    if more > 0 {
+                        job.need_space(need + more, &format!("convert {rel}"))?;
+                    }
                     std::fs::create_dir_all(&work)?;
                     f.sf.spill_saved(&work.join("objects.spill"), spill_mb << 20)
                         .map_err(|e| left(&work, e.into(), false))?;
