@@ -1008,11 +1008,11 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             W, S = os.path.join(g, 'gamedata', '.setup'), os.path.join(g, 'setup')
             wb = next(l for l in log.splitlines() if l.startswith('pm winbcl '))
-            self.assertEqual(wb, f"pm winbcl {g}/gamedata/My Game/My Game_Data {W}/bcl --version 2022.2.17f1 "
-                                 f"--player {W}/player --donor {g}/donor/donor-2022.2.17f1-mono-armv7.apk")
-            self.assertIn(f'env PMHLSLCC={S}/pmhlslcc', log)
+            self.assertEqual(wb, "pm winbcl ./gamedata/My Game/My Game_Data ./gamedata/.setup/bcl --version 2022.2.17f1 "
+                                 "--player ./gamedata/.setup/player --donor ./donor/donor-2022.2.17f1-mono-armv7.apk")
+            self.assertIn('env PMHLSLCC=./setup/pmhlslcc', log)
             ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
-            self.assertIn(f'--managed-file {W}/bcl/System.dll --managed-file {W}/bcl/netstandard.dll', ad)
+            self.assertIn('--managed-file ./gamedata/.setup/bcl/System.dll --managed-file ./gamedata/.setup/bcl/netstandard.dll', ad)
             self.assertLess(log.index('pm player donor'), log.index('pm winbcl'))
             self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
             # winbcl = "off": not run
@@ -1326,6 +1326,9 @@ class NewAndSetupTest(unittest.TestCase):
                  STUB_VERSION='2019.4.8f1', STUB_FAIL='')
         e.update(env)
         r = subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
+        # paths relative to the port folder, in what the setup prints and in what it gives its tools: a
+        # freed page that starts with an absolute card path can deadlock a FUSE card driver (Knulli A133P)
+        self.assertNotIn(g + '/', r.stdout + r.stderr)
         return g, r, (P._read(log) if os.path.exists(log) else '')
 
     def test_setup_no_donor(self):
@@ -1355,10 +1358,15 @@ class NewAndSetupTest(unittest.TestCase):
             # first run: the conversion fails (interrupted), the second continues from there
             g, r, log = self.run_setup(t, out, {'TEXTURE_QUALITY': 'fast', 'STUB_FAIL': 'convert'})
             self.assertIn('PATCH_FAIL_MSG:Converting', r.stdout)
+            # (as a setup begun by an older release left it: the data folder's absolute path; the setup goes
+            # on with it, relative, and still removes the game's copy at the end)
+            data = os.path.join(g, 'gamedata', '.setup', '.data')
+            self.assertEqual(P._read(data).strip(), './gamedata/My Game/My Game_Data')
+            put(data, os.path.join(g, 'gamedata', 'My Game', 'My Game_Data') + '\n')
             g, r, log = self.run_setup(t, out, {'TEXTURE_QUALITY': 'medium'})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(log.count('pm player donor 2019.4.8f1'), 1)
-            self.assertIn(f"--apk {g}/donor/donor-2019.4.8f1-mono-armv7.apk", log)
+            self.assertIn("--apk ./donor/donor-2019.4.8f1-mono-armv7.apk", log)
             self.assertIn('--set textures.quality=fast', log)            # (the first answer is kept)
             self.assertIn('--name MyGame --package com.pmunity.mygame', log)
             self.assertNotIn('--asmpatch', log)
@@ -1390,7 +1398,7 @@ class NewAndSetupTest(unittest.TestCase):
                                   P._read(os.path.join(P.TEMPLATES, p, 'patchscript')), p)
                 g, r, log = self.run_setup(t, out, {})
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-                self.assertEqual(log.count(f'pm unpack {data} --remove'), 1, (left, log))
+                self.assertEqual(log.count('pm unpack ./gamedata/My Game/My Game_Data --remove'), 1, (left, log))
 
     def test_setup_convert_stopped(self):
         """convert stopped by the kernel (out of memory on a 1 GB handheld: status 137) runs again by
@@ -1436,7 +1444,7 @@ class NewAndSetupTest(unittest.TestCase):
             shutil.rmtree(os.path.join(g, 'gamedata', '.setup'))
             g, r, log = self.run_setup(t, out, {'STUB_RUNTIME': '.NET 3.5 (libmono)'})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn("--asmpatch '" + os.path.join(g, 'setup', 'asmpatch') + "'", log)
+            self.assertIn("--asmpatch './setup/asmpatch'", log)
             self.assertIn('--set textures.quality=medium', log)          # (the default)
             self.assertNotIn('libmonobdwgc-2.0.so', os.listdir(os.path.join(g, 'lib')))
             self.assertFalse(os.path.isfile(z))                          # (the archive is removed once built)
@@ -1462,9 +1470,8 @@ class NewAndSetupTest(unittest.TestCase):
             g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t)})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
-            S = os.path.join(g, 'setup')
-            self.assertIn(f"--assembly-patch Assembly-CSharp.dll sh {S}/files/mypatch.sh {{managed}} {{out}}", il)
-            self.assertIn(f"--streaming-assets both --data-path --asmpatch '{S}/asmpatch' --only=", il)
+            self.assertIn("--assembly-patch Assembly-CSharp.dll sh ./setup/files/mypatch.sh {managed} {out}", il)
+            self.assertIn("--streaming-assets both --data-path --asmpatch './setup/asmpatch' --only=", il)
             ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
             self.assertIn('--streaming-assets both --data-path', ad)
             for o in ('--asmpatch', '--managed-file', '--assembly-patch'):
@@ -1481,7 +1488,7 @@ class NewAndSetupTest(unittest.TestCase):
             g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t)})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             il = next(l for l in log.splitlines() if l.startswith('pm il2cpp '))
-            self.assertTrue(il.endswith(f"--streaming-assets obb --asmpatch '{os.path.join(g, 'setup', 'asmpatch')}'"), il)
+            self.assertTrue(il.endswith("--streaming-assets obb --asmpatch './setup/asmpatch'"), il)
 
     def installed(self, t, cfg_extra=None, game_folder=True):
         """A port made by port new, unzipped as <t>/ports/mygame, the player's copy of the game (its
@@ -1584,7 +1591,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertIn("the setup's notes of the game are incomplete (or the game's folder is gone): starting again", r.stdout)
             self.assertEqual(log.count('pm version'), n + 1)
             self.assertIn('PATCH_FAIL_MSG:Converting', r.stdout)
-            self.assertEqual(P._read(os.path.join(W, '.data')).strip(), os.path.join(g, 'gamedata', 'My Game', 'My Game_Data'))
+            self.assertEqual(P._read(os.path.join(W, '.data')).strip(), './gamedata/My Game/My Game_Data')
             # the game's folder went before it was packed: the player is asked for the game again
             os.rename(os.path.join(g, 'gamedata', 'My Game'), os.path.join(t, 'away'))
             g, r, log = self.run_setup(t, out, {})
@@ -1653,7 +1660,7 @@ class NewAndSetupTest(unittest.TestCase):
             put(a, good)
             g, r, log = self.run_setup(t, out, {})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn(f'7zz x -so {a}', log)
+            self.assertIn('7zz x -so ./gamedata/my game.tar.gz', log)
             self.assertIn('7zz x -si -ttar -y -o', log)
             self.assertFalse(os.path.isfile(a))
             self.assertTrue(os.path.isfile(os.path.join(g, '.setup_done')))
@@ -1910,7 +1917,9 @@ class ApkRouteTest(unittest.TestCase):
         e = dict(os.environ, GAMEDIR=g, controlfolder=os.path.join(os.path.dirname(g), 'PortMaster'),
                  DEVICE_ARCH='aarch64', PYTHONPATH='')
         e.update(env or {})
-        return subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
+        r = subprocess.run(['bash', os.path.join(g, 'setup', 'patchscript')], env=e, capture_output=True, text=True)
+        self.assertNotIn(g + '/', r.stdout + r.stderr)          # (relative paths: NewAndSetupTest.run_setup)
+        return r
 
     @unittest.skipIf(os.path.exists('/lib/ld-linux-armhf.so.3'), 'a 32-bit userland here: the setup takes armeabi-v7a')
     def test_setup(self):
@@ -2036,7 +2045,7 @@ def build(data, out, abi='arm64-v8a', home=None, pkg=None, jobs=None, **kw):   #
             calls = [json.loads(x) for x in P._read(log).splitlines()]
             self.assertEqual(len(calls), 2)
             W = os.path.join(g, 'gamedata', '.setup')
-            self.assertEqual(calls[1], [['Assembly-CSharp.dll'], os.path.join(W, 'apk', '.il2cpp'), os.path.join(W, 'il2cpp-home'),
+            self.assertEqual(calls[1], [['Assembly-CSharp.dll'], './gamedata/.setup/apk/.il2cpp', os.path.join(W, 'il2cpp-home'),
                                         os.path.join(W, 'il2cpp-home', '2021.3.4f1', 'player-arm64-v8a'), True])
             self.assertEqual(sorted(os.listdir(os.path.join(g, 'lib'))), ['libil2cpp.so', 'libmain.so', 'libunity.so'])
             info = json.loads(P._read(os.path.join(g, 'android_package.json')))
