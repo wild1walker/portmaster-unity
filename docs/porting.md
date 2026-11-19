@@ -1613,12 +1613,14 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
   on the firmwares checked: with it unset, the 32-bit SDL picks ALSA by itself on dArkOS (G350: it plays;
   32-bit libpipewire and libpulse are there, no sound server runs) and on muOS 2606 (32-bit libpipewire
   and its ALSA plugin are there, SDL's PipeWire driver is not; ALSA's open fails either way, and
-  the OpenSL shim pipes into `pw-cat`). Hollow Knight's submission dropped it (2026-11-19); a silent
+  the OpenSL shim pipes into `pw-cat`), and on Knulli the same as on muOS (32-bit libpipewire and libpulse
+  there, SDL 2.32's drivers for them not available). Hollow Knight's submission dropped it (2026-11-19); a silent
   check is `runtime/host/audiocheck` (one second of zeros) with and without the variable.
 - The same question for `/lib32:/usr/lib32` on `LD_LIBRARY_PATH` (pmcheck asks which device needs it):
-  muOS 2606 (32-bit libraries in `/lib32`, `/usr/lib32`) and dArkOS (Debian multiarch, no `/lib32`) find
-  them without it (`/lib/ld-linux-armhf.so.3 --list` on `audiocheck`, 2026-11-19); Knulli not checked
-  yet, so Hollow Knight's launcher keeps it until it is.
+  Knulli, muOS 2606 (32-bit libraries in `/lib32`, `/usr/lib32`) and dArkOS (Debian multiarch, no `/lib32`)
+  find them without it (`/lib/ld-linux-armhf.so.3 --list` on `audiocheck`, 2026-11-19). Hollow Knight's
+  launcher keeps it for `ua_host`: 197 merged launchers put `/usr/lib32` first the same way (gmloader
+  ports such as Fran Bow), so it is the usual line, and ROCKNIX and AmberELEC were not checked.
 
 After `source "$controlfolder/utils/patcher.txt"` the launcher goes back to `$GAMEDIR` before
 anything relative (`./ua_host`): the patcher runs in the launcher's own shell, and a working directory
