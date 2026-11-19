@@ -2,7 +2,8 @@
 //! next to it (or to another folder), one block at a time (memory: one block), each file to
 //! `<name>.tmp` first, synced, and then renamed; the folders synced before the archive is removed
 //! (a handheld that loses power part way finds every file whole, or the archive still there to
-//! unpack again). Blocks stored, LZ4 or LZMA compressed; formats 6 - 8.
+//! unpack again). A stopped unpack goes on where it was: extract() skips the files it finished.
+//! Blocks stored, LZ4 or LZMA compressed; formats 6 - 8.
 use crate::compress;
 use crate::error::{Error, Result};
 use std::fs::File;
@@ -119,9 +120,16 @@ impl Archive {
 
     /// Writes every file of the archive under out_dir (`log`: a line for each); returns their
     /// names. A file is open only while its bytes come by (they lie one after another in the
-    /// archive's stream: a block touches a few), synced when its last byte is written and closed:
-    /// a build of thousands of files stays far under a handheld's open-file limit (1024 on dArkOS,
-    /// where the launcher's processes inherit EmulationStation's).
+    /// archive's stream: a block touches a few), synced when its last byte is written, closed and
+    /// renamed from `<name>.tmp` at once: a build of thousands of files stays far under a
+    /// handheld's open-file limit (1024 on dArkOS, where the launcher's processes inherit
+    /// EmulationStation's), and an unpack stopped part way (a setup paused, the battery, the power
+    /// button) keeps what it finished. The next run goes on: it skips a file only where the marker
+    /// of this archive (RESUME, written and synced before the first file) is there, the file has
+    /// no `<name>.tmp`, its length is the table's and it was written after the marker (a file of
+    /// an older copy of the game beside the archive is written again). Its data was synced before
+    /// its rename, so a file with its name is whole; a rename the card lost leaves the file to be
+    /// done again.
     pub fn extract(&self, out_dir: &Path, log: &mut dyn FnMut(&str)) -> Result<Vec<String>> {
         let root = std::fs::canonicalize(out_dir)?;
         let mut ents: Vec<(u64, u64, PathBuf)> = Vec::new();
@@ -141,19 +149,74 @@ impl Archive {
             ents.push((*off, off.saturating_add(*sz), dst));
             names.push(name.clone());
         }
+        // this archive's marker: its size and modification time (a newer copy of the game: another)
+        let meta = std::fs::metadata(&self.path)?;
+        let mtime = |m: &std::fs::Metadata| {
+            m.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos())
+        };
+        let ident = format!("{} {}\n", meta.len(), mtime(&meta));
+        let marker = root.join(RESUME);
+        let since = match std::fs::read_to_string(&marker) {
+            Ok(t) if t == ident => std::fs::metadata(&marker).ok().map(|m| mtime(&m)),
+            _ => None,
+        };
+        if since.is_none() {
+            let mut m = File::create(&marker)?;
+            m.write_all(ident.as_bytes())?;
+            m.sync_all()?;
+            crate::bgwrite::sync_dir(&root);
+        }
+        // done[i]: a file an earlier run of this archive finished
+        let done: Vec<bool> = ents
+            .iter()
+            .map(|(a, b, dst)| {
+                since.is_some_and(|t0| {
+                    !tmp(dst).exists()
+                        && std::fs::metadata(dst)
+                            .is_ok_and(|m| m.is_file() && m.len() == b - a && mtime(&m) >= t0)
+                })
+            })
+            .collect();
+        let rel = |dst: &Path| dst.strip_prefix(&root).unwrap_or(dst).display().to_string();
+        for (i, (a, b, dst)) in ents.iter().enumerate() {
+            if done[i] {
+                log(&format!("unpack: {} ({} bytes, unpacked before)", rel(dst), b - a));
+            }
+        }
         // the files in the order their data starts; `next` is the first not opened yet
-        let mut order: Vec<usize> = (0..ents.len()).collect();
+        let mut order: Vec<usize> = (0..ents.len()).filter(|&i| !done[i]).collect();
         order.sort_by_key(|&i| (ents[i].0, i));
         let mut next = 0usize;
         let mut open: Vec<(usize, File)> = Vec::new();
-        // each file's data on the card before its name: a power cut never leaves a short file
-        // under the name a later run takes for an unpacked one (the renames wait for all of them)
-        fn done(fo: File) -> Result<()> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        // a file's data on the card before its name: a power cut never leaves a short file under the
+        // name a later run takes for an unpacked one
+        let mut finish = |i: usize, fo: File, log: &mut dyn FnMut(&str)| -> Result<()> {
             let mut fo = fo;
             fo.flush()?;
             fo.sync_all()?;
+            drop(fo);
+            let (a, b, dst) = &ents[i];
+            let t = tmp(dst);
+            if std::fs::metadata(&t)?.len() != b - a {
+                return Err(value(format!(
+                    "{}: {} came out short",
+                    self.path.display(),
+                    dst.display()
+                )));
+            }
+            std::fs::rename(&t, dst)?;
+            if let Some(d) = dst.parent() {
+                if !dirs.iter().any(|x| x == d) {
+                    dirs.push(d.to_path_buf());
+                }
+            }
+            log(&format!("unpack: {} ({} bytes)", rel(dst), b - a));
             Ok(())
-        }
+        };
         let mut upos = 0u64;
         let mut f = File::open(&self.path)?;
         for &(fpos, csz, usz, bfl) in &self.blocks {
@@ -187,40 +250,22 @@ impl Archive {
             let mut k = 0;
             while k < open.len() {
                 if ents[open[k].0].1 <= upos {
-                    let (_, fo) = open.swap_remove(k);
-                    done(fo)?;
+                    let (i, fo) = open.swap_remove(k);
+                    finish(i, fo, log)?;
                 } else {
                     k += 1;
                 }
             }
         }
-        // what the blocks did not reach (empty files after the last block, or a short archive:
-        // caught below)
-        for (_, fo) in open.drain(..) {
-            done(fo)?;
+        // what the blocks did not reach (empty files after the last block, or a short archive: an
+        // error, its file left as .tmp)
+        for (i, fo) in std::mem::take(&mut open) {
+            finish(i, fo, log)?;
         }
         while next < order.len() {
-            done(File::create(tmp(&ents[order[next]].2))?)?;
+            let i = order[next];
+            finish(i, File::create(tmp(&ents[i].2))?, log)?;
             next += 1;
-        }
-        let mut dirs: Vec<PathBuf> = Vec::new();
-        for (a, b, dst) in ents {
-            let t = tmp(&dst);
-            if std::fs::metadata(&t)?.len() != b - a {
-                return Err(value(format!(
-                    "{}: {} came out short",
-                    self.path.display(),
-                    dst.display()
-                )));
-            }
-            std::fs::rename(&t, &dst)?;
-            if let Some(d) = dst.parent() {
-                if !dirs.iter().any(|x| x == d) {
-                    dirs.push(d.to_path_buf());
-                }
-            }
-            let rel = dst.strip_prefix(&root).unwrap_or(&dst);
-            log(&format!("unpack: {} ({} bytes)", rel.display(), b - a));
         }
         // the renames on the card before the caller removes the archive
         for d in &dirs {
@@ -229,6 +274,9 @@ impl Archive {
         Ok(names)
     }
 }
+
+/// The marker of an unpack under way (unpack(): removed, with the archive, after the last file).
+pub const RESUME: &str = ".pmu-unpack";
 
 fn tmp(p: &Path) -> PathBuf {
     let mut s = p.as_os_str().to_owned();
@@ -284,7 +332,11 @@ pub fn unpack(
             data_dir.display()
         )));
     }
-    let names = Archive::open(&src)?.extract(out_dir.unwrap_or(data_dir), log)?;
+    let out = out_dir.unwrap_or(data_dir);
+    let names = Archive::open(&src)?.extract(out, log)?;
+    // the marker, then (last) the archive: a run stopped between them unpacks every file again
+    let _ = std::fs::remove_file(out.join(RESUME));
+    crate::bgwrite::sync_dir(out);
     if remove {
         std::fs::remove_file(&src)?;
     }

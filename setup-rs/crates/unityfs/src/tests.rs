@@ -1655,3 +1655,94 @@ fn saved_bytes_spill() {
     assert!(!p.exists(), "the spill file goes with the file");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+// a stopped unpack goes on: the files it finished are kept (skipped by the next run), a file left as
+// .tmp, a finished file cut short and a file of an older copy (same length, written before this
+// archive's marker) are written again, and every file comes out byte-identical to an unpack in one go
+#[test]
+fn unpack_resumes() {
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    let mut rnd = |n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 32) as u8
+            })
+            .collect()
+    };
+    let names: Vec<String> = (0..200).map(|i| format!("d{}/f{i}", i % 3)).collect();
+    let nodes: Vec<(&str, u32, Vec<u8>)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), 0u32, rnd(if i % 40 == 0 { 0 } else { (i * 53) % 3000 + 1 })))
+        .collect();
+    let b = unity_bundle(&nodes, 2048);
+    let d = temp("resume");
+    // the whole unpack in one go: what every run must leave
+    let one = d.join("one");
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::write(one.join("data.unity3d"), &b).unwrap();
+    crate::unpack::unpack(&one, None, true, &mut |_| {}).unwrap();
+    assert!(!one.join("data.unity3d").exists() && !one.join(crate::unpack::RESUME).exists());
+    // a run stopped part way: its marker, the first files finished, then a .tmp; a finished file cut
+    // short; a file of an older copy beside the archive, as long as the table says
+    let two = d.join("two");
+    std::fs::create_dir_all(&two).unwrap();
+    std::fs::write(two.join("data.unity3d"), &b).unwrap();
+    let a = crate::unpack::Archive::open(&two.join("data.unity3d")).unwrap();
+    a.extract(&two, &mut |_| {}).unwrap();
+    assert!(two.join(crate::unpack::RESUME).exists(), "the marker stays until unpack() ends");
+    for n in &names[120..] {
+        std::fs::remove_file(two.join(n)).unwrap();
+    }
+    std::fs::write(two.join("d0/f120.tmp"), b"partial").unwrap();
+    let cut = two.join(&names[7]);
+    let len = std::fs::metadata(&cut).unwrap().len();
+    std::fs::OpenOptions::new().write(true).open(&cut).unwrap().set_len(len / 2).unwrap();
+    let old = two.join(&names[11]);
+    std::fs::write(&old, vec![0xAAu8; nodes[11].2.len()]).unwrap();
+    let f = std::fs::OpenOptions::new().write(true).open(&old).unwrap();
+    f.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000))
+        .unwrap();
+    drop(f);
+    let mut before = 0;
+    let mut written = Vec::new();
+    crate::unpack::unpack(&two, None, true, &mut |l| {
+        if l.ends_with("unpacked before)") {
+            before += 1;
+        } else if let Some(n) = l.strip_prefix("unpack: ").and_then(|r| r.split(" (").next()) {
+            written.push(n.to_string());
+        }
+    })
+    .unwrap();
+    assert_eq!(before, 120 - 2, "the finished files kept, but the cut one and the older copy's");
+    for n in [&names[7], &names[11], &names[120], &names[199]] {
+        assert!(written.iter().any(|w| w == n), "{n} written again");
+    }
+    for n in &names {
+        assert_eq!(std::fs::read(one.join(n)).unwrap(), std::fs::read(two.join(n)).unwrap(), "{n}");
+        assert!(!two.join(format!("{n}.tmp")).exists());
+    }
+    assert!(!two.join("data.unity3d").exists() && !two.join(crate::unpack::RESUME).exists());
+    // another archive (a newer copy of the game): its own marker, nothing skipped
+    let three = d.join("three");
+    std::fs::create_dir_all(&three).unwrap();
+    std::fs::write(three.join("data.unity3d"), &b).unwrap();
+    std::fs::write(three.join(crate::unpack::RESUME), b"1 2\n").unwrap();
+    for n in &names[..5] {
+        std::fs::create_dir_all(three.join(n).parent().unwrap()).unwrap();
+        std::fs::write(three.join(n), std::fs::read(one.join(n)).unwrap()).unwrap();
+    }
+    let mut skipped = 0;
+    crate::unpack::unpack(&three, None, false, &mut |l| {
+        if l.ends_with("unpacked before)") {
+            skipped += 1;
+        }
+    })
+    .unwrap();
+    assert_eq!(skipped, 0);
+    assert!(three.join("data.unity3d").exists() && !three.join(crate::unpack::RESUME).exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
