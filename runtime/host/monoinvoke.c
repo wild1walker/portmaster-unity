@@ -481,6 +481,7 @@ void *monoinvoke_thunk(void *method, void *obj, void **params, void **exc)
     return r;
 }
 
+#if defined(__arm__)          // (Unity 2017.4's armeabi-v7a libmono only, as the TLS build table above)
 // ---------------------------------------------------------------------------------- UA_MONO_CODE
 // Where Mono's JIT code goes: Unity 2017.4's libmono takes each code chunk with its own mmap, so the chunks of a session
 // land all over the address space (Enter the Gungeon: 751 MB from the lowest method to the highest), and every call
@@ -546,6 +547,8 @@ static void code_on_load(uintptr_t base, size_t size, const struct tls_build *tb
     }
     fprintf(stderr, "[mono] JIT code region: %u MB at %p, libmono at %p (UA_MONO_CODE=0 turns it off)\n", CODE_REGION >> 20, r, (void *)base);
 }
+
+#endif
 
 void monoinvoke_on_load(so_module *m)
 {
