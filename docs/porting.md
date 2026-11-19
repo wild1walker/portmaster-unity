@@ -586,8 +586,9 @@ at its faint edge (2026-11-19). Kept at full size it is within 3 levels of the o
 background in 6x6 as in 4x4; in `sharp_names` (`light_effect`) it keeps its size in 4x4 for 15 KB.
 To find such a texture: the name from a tester or a frame, then the original through UnityPy, and
 the setup's own `pmu convert <data> <out> --config <a textures-only config> --only <file>` on a copy of
-the one file that holds it (24 s for Hollow Knight's `resources.assets` in the arm64 image). What
-banding is left is the original's 8 bits a channel with the game's Dithering off.
+the one file that holds it (24 s for Hollow Knight's `resources.assets` in the arm64 image). The
+banding a tester still saw is in the original's 8-bit gradient; whether the game's Dithering or Noise
+options (off in the port) hide it is not checked yet.
 
 ```toml
 [convert.textures]
