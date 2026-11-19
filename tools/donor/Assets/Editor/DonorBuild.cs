@@ -12,6 +12,8 @@ public static class DonorBuild
         EditorPrefs.SetString("JdkPath", System.Environment.GetEnvironmentVariable("DONOR_JDK"));
         // (the editor reads the NDK's folder from its preferences before this runs: build.sh sets them too)
         EditorPrefs.SetString("AndroidNdkRoot", System.Environment.GetEnvironmentVariable("DONOR_NDK") ?? "");
+        // (2018.x reads the NDK from "AndroidNdkRootR16b" (it wants r16b): without it "Unable to locate Android NDK")
+        EditorPrefs.SetString("AndroidNdkRootR16b", System.Environment.GetEnvironmentVariable("DONOR_NDK") ?? "");
         // (2019.3 on: the external tools settings, which Unity 6 checks for every Android build, NDK included)
         var tools = System.Type.GetType("UnityEditor.Android.AndroidExternalToolsSettings, UnityEditor.Android.Extensions");
         string[] props = { "sdkRootPath", "jdkRootPath", "ndkRootPath" }, envs = { "DONOR_SDK", "DONOR_JDK", "DONOR_NDK" };

@@ -17,7 +17,7 @@
 #         Unity 6 checks for every Android build)
 #   JDK   a JDK home (2017.4 and 2021.3: JDK 8, the 8u172 x86-64 build Unity lists for its Intel and
 #         Apple-silicon editors alike; Unity 6: the OpenJDK 17 its release API lists)
-#   NDK   for Il2cppArm64 and Il2cppArmv7: the NDK the editor asks for (2017.4: r13b); 2021.3 and
+#   NDK   for Il2cppArm64 and Il2cppArmv7: the NDK the editor asks for (2017.4: r13b; 2018.4: r16b); 2021.3 and
 #         Unity 6 ask for one for every build, Mono too ("Android NDK not found"; 2021.3.27f1: r21d,
 #         6000.0: r27c, in <editor>/PlaybackEngines/AndroidPlayer/NDK)
 # 6000.0.61f1 (2026-11-06): its MonoArmv7 donor's player (`pmu player donor`) is the one Unity's
@@ -57,7 +57,10 @@ done
 P=$(mktemp -d)/donor; trap 'rm -rf "$(dirname "$P")"' EXIT
 mkdir -p "$P/Assets"; cp -R "$HERE/Assets/Editor" "$HERE/Assets/Scripts" "$P/Assets/"
 BIN="$ED/Contents/MacOS/Unity"; [ -x "$BIN" ] || BIN="$ED"
-if [ -n "${NDK:-}" ] && command -v defaults >/dev/null; then defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"; fi
+if [ -n "${NDK:-}" ] && command -v defaults >/dev/null; then
+    defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"
+    defaults write com.unity3d.UnityEditor5.x AndroidNdkRootR16b -string "$NDK"     # (2018.x reads this one)
+fi
 DONOR_SDK=${SDK:?set SDK} DONOR_JDK=${JDK:?set JDK} DONOR_NDK=${NDK:-} \
   "$BIN" -batchmode -nographics -quit -projectPath "$P" -executeMethod "DonorBuild.$WHAT" -logFile "$P/build.log" \
   || { tail -40 "$P/build.log"; trap - EXIT; echo "the editor's project, with its whole build.log: $P" >&2; exit 1; }
