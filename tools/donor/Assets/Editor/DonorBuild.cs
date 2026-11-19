@@ -33,6 +33,12 @@ public static class DonorBuild
         var android = UnityEditor.Build.NamedBuildTarget.Android;
         PlayerSettings.SetApiCompatibilityLevel(android, ApiCompatibilityLevel.NET_Unity_4_8);
         PlayerSettings.SetManagedStrippingLevel(android, ManagedStrippingLevel.Disabled);
+#elif UNITY_2018_1_OR_NEWER
+        // (2018.x: a new project runs the .NET 4.x scripting runtime, where NET_2_0 is .NET Standard 2.0 and the
+        // Android build cannot resolve mscorlib; the 4.x profile, and the player with Mono's 4.x runtime)
+        PlayerSettings.scriptingRuntimeVersion = ScriptingRuntimeVersion.Latest;
+        PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Android, ApiCompatibilityLevel.NET_4_6);
+        PlayerSettings.strippingLevel = StrippingLevel.Disabled;
 #else
         PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Android, ApiCompatibilityLevel.NET_2_0);
         PlayerSettings.strippingLevel = StrippingLevel.Disabled;
