@@ -11,6 +11,7 @@
 #include "mono64.h"
 #include "../loader/so_loader.h"
 #include "../mono64/il2cpp_mono.h"
+#include "../android/android_shims.h"
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -20,6 +21,26 @@
 
 void *so_dlopen(const char *filename, int flags);
 void *so_dlsym(void *handle, const char *symbol);
+
+// one of the APK's assets (or of the assets/ folder beside it), as the player reads them, whole: for the bridge
+static void *read_asset(const char *name, size_t *size)
+{
+    AAsset *a = AAssetManager_open(NULL, name, 0);
+    if (!a) return NULL;
+    long long n = AAsset_getLength64(a);
+    char *buf = n >= 0 && n < (64 << 20) ? malloc((size_t)n + 1) : NULL;
+    long long got = 0;
+    while (buf && got < n) {
+        int r = AAsset_read(a, buf + got, (size_t)(n - got));
+        if (r <= 0) break;
+        got += r;
+    }
+    AAsset_close(a);
+    if (!buf || got != n) { free(buf); return NULL; }
+    buf[n] = 0;
+    if (size) *size = (size_t)n;
+    return buf;
+}
 
 int mono64_init(const char *libdir, const char *scripting, const char *unity_version, int gc_time_slice_ms)
 {
@@ -44,6 +65,7 @@ int mono64_init(const char *libdir, const char *scripting, const char *unity_ver
     host.unity_version = unity_version;
     host.managed_dir = getenv("UA_MONO64_MANAGED");
     host.gc_time_slice_ms = gc_time_slice_ms;      // (UA_MONO64_GC_SLICE wins, in the bridge)
+    host.read_asset = read_asset;
     if (!setup || setup(&host) != 0) {
         fprintf(stderr, "[host] %s: not the Mono bridge (no ua_mono_setup: an IL2CPP build's?)\n", bridge);
         return -1;

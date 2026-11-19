@@ -78,6 +78,7 @@ typedef gboolean (*MonoStackWalk)(MonoMethod *method, int32_t native_offset, int
 #define MONO_FUNCS(X) \
     X(MonoDomain *, mono_jit_init_version, (const char *, const char *)) \
     X(void, mono_domain_set_config, (MonoDomain *, const char *, const char *)) \
+    X(void, mono_install_assembly_load_hook, (void (*)(MonoAssembly *, void *), void *)) \
     X(void, mono_set_dirs, (const char *, const char *)) \
     X(void, mono_set_assemblies_path, (const char *)) \
     X(void, mono_set_config_dir, (const char *)) \
@@ -108,6 +109,7 @@ typedef gboolean (*MonoStackWalk)(MonoMethod *method, int32_t native_offset, int
     X(MonoClass *, mono_class_get_nesting_type, (MonoClass *)) \
     X(MonoClass *, mono_class_get_element_class, (MonoClass *)) \
     X(MonoImage *, mono_class_get_image, (MonoClass *)) \
+    X(int, mono_image_is_dynamic, (MonoImage *)) \
     X(uint32_t, mono_class_get_flags, (MonoClass *)) \
     X(int, mono_class_get_rank, (MonoClass *)) \
     X(uint32_t, mono_class_get_type_token, (MonoClass *)) \
@@ -367,8 +369,9 @@ __attribute__((constructor)) static void il2cpp_mono_load(void)
 
 API int ua_mono_setup(const struct ua_mono_host *host)
 {
-    if (!host || host->size < (int)sizeof(struct ua_mono_host)) return -1;
-    g_host = *host;
+    if (!host || host->size < UA_MONO_HOST_MIN_SIZE) return -1;
+    memset(&g_host, 0, sizeof g_host);           // (an older ua_host's struct: the fields it lacks stay NULL)
+    memcpy(&g_host, host, host->size < (int)sizeof g_host ? (size_t)host->size : sizeof g_host);
     unity_version(host->unity_version);
     if (host->managed_dir && *host->managed_dir) snprintf(g_managed, sizeof g_managed, "%s", host->managed_dir);
     g_gc_slice_ms = host->gc_time_slice_ms;
@@ -508,12 +511,46 @@ static void find_managed(void)
     snprintf(g_managed, sizeof g_managed, "%s", g_data_dir);
 }
 
+static pthread_mutex_t g_asm_lock = PTHREAD_MUTEX_INITIALIZER;
 static void add_assembly(MonoAssembly *a)
 {
     if (!a) return;
-    for (size_t i = 0; i < g_nasm; i++) if (g_asm[i] == a) return;
-    if (g_nasm == g_capasm) { g_capasm = g_capasm ? g_capasm * 2 : 256; g_asm = realloc(g_asm, g_capasm * sizeof *g_asm); }
-    g_asm[g_nasm++] = a;
+    pthread_mutex_lock(&g_asm_lock);
+    size_t i = 0;
+    while (i < g_nasm && g_asm[i] != a) i++;
+    if (i == g_nasm) {
+        // (the array is not moved once libunity may hold it: 4096 slots from the start)
+        if (!g_asm) { g_capasm = 4096; g_asm = calloc(g_capasm, sizeof *g_asm); }
+        if (g_asm && g_nasm < g_capasm) g_asm[g_nasm++] = a;
+    }
+    pthread_mutex_unlock(&g_asm_lock);
+}
+// an assembly Mono loads later (a class library the game's code reaches): listed too, as IL2CPP lists every one
+static void on_assembly_load(MonoAssembly *a, void *ud) { (void)ud; add_assembly(a); }
+
+// the names in the player's ScriptingAssemblies.json ("names": [...]): the assemblies a Mono player loads at its start
+static char **scripting_assemblies(size_t *n)
+{
+    *n = 0;
+    if (!g_host.read_asset) return NULL;
+    size_t len = 0;
+    char *js = g_host.read_asset("bin/Data/ScriptingAssemblies.json", &len);
+    if (!js) return NULL;
+    char *end = js + len, *p = strstr(js, "\"names\"");
+    char **names = NULL;
+    size_t cap = 0;
+    if (p && (p = memchr(p, '[', (size_t)(end - p)))) {
+        for (p++; p < end && *p != ']'; p++) {
+            if (*p != '"') continue;
+            char *q = memchr(p + 1, '"', (size_t)(end - p - 1));
+            if (!q) break;
+            if (*n == cap) { cap = cap ? cap * 2 : 128; names = realloc(names, cap * sizeof *names); }
+            names[(*n)++] = strndup(p + 1, (size_t)(q - p - 1));
+            p = q;
+        }
+    }
+    free(js);
+    return names;
 }
 
 static int dll_name_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
@@ -522,6 +559,29 @@ static int dll_name_cmp(const void *a, const void *b) { return strcmp(*(char *co
 // them): load each one in the Managed folder, mscorlib first
 static void load_all_assemblies(void)
 {
+    // UA_MONO64_ASSEMBLIES=scripting: only the assemblies of ScriptingAssemblies.json (the game's and the engine
+    // modules, what a Mono player loads at its start) and mscorlib; the class libraries when Mono needs them (the
+    // game's code references them, or libunity opens one by name), each then listed as it loads
+    const char *mode = getenv("UA_MONO64_ASSEMBLIES");
+    if (m_mono_install_assembly_load_hook) m_mono_install_assembly_load_hook(on_assembly_load, NULL);
+    size_t ns = 0;
+    char **sn = mode && !strcmp(mode, "scripting") ? scripting_assemblies(&ns) : NULL;
+    if (sn) {
+        add_assembly(m_mono_image_get_assembly(m_mono_get_corlib()));
+        int failed = 0;
+        for (size_t i = 0; i < ns; i++) {
+            char p[PATH_MAX];
+            snprintf(p, sizeof p, "%s/%s", g_managed, sn[i]);
+            MonoAssembly *a = access(p, R_OK) == 0 ? m_mono_domain_assembly_open(g_domain, p) : NULL;
+            if (a) add_assembly(a); else failed++;
+            free(sn[i]);
+        }
+        free(sn);
+        logf_("%zu assemblies loaded from %s: ScriptingAssemblies.json's (%d not there), the class libraries when used "
+              "(UA_MONO64_ASSEMBLIES=scripting)", g_nasm, g_managed, failed);
+        return;
+    }
+    if (mode && !strcmp(mode, "scripting")) logf_("UA_MONO64_ASSEMBLIES=scripting: no ScriptingAssemblies.json from the host: all of them");
     DIR *d = opendir(g_managed);
     if (!d) { logf_("no Managed folder %s", g_managed); return; }
     char **names = NULL;
@@ -910,7 +970,47 @@ API const char *il2cpp_method_get_name(MonoMethod *m) { return m_mono_method_get
 API MonoClass *il2cpp_method_get_class(MonoMethod *m) { return m_mono_method_get_class(m); }
 API MonoClass *il2cpp_method_get_declaring_type(MonoMethod *m) { return m_mono_method_get_class(m); }
 API MonoType *il2cpp_method_get_return_type(MonoMethod *m) { return m_mono_signature_get_return_type(m_mono_method_signature(m)); }
-API uint32_t il2cpp_method_get_param_count(MonoMethod *m) { return m_mono_signature_get_param_count(m_mono_method_signature(m)); }
+// libunity's IL2CPP scripting layer asks for a method's parameter count before each invoke (Hollow Knight, King's
+// Pass: 712 a frame, every il2cpp_runtime_invoke; the Mono player's libunity asks nothing there), and Mono's
+// mono_method_signature takes its GC-unsafe transition and checks each time (0.07 ms a frame on the RG34XX-SP).
+// A method's signature is fixed for its life, so the count is remembered: for methods of a loaded assembly's
+// metadata (a MethodDef token, an image that is not dynamic), which live in their image's memory for as long as
+// the domain, never freed, so their address is never another method's. A dynamic method (token 0) is asked of
+// Mono every time. The table: open addressing, filled under a lock, read without it (a slot is published by its
+// method pointer, release; never changed after).
+#define PC_SLOTS 16384
+#define PC_PROBES 32
+static struct { MonoMethod *m; uint32_t n; } g_pc[PC_SLOTS];
+static pthread_mutex_t g_pc_lock = PTHREAD_MUTEX_INITIALIZER;
+static inline unsigned pc_slot(const void *m)
+{
+    uint64_t x = (uint64_t)(uintptr_t)m >> 3;
+    x ^= x >> 17; x *= 0xed5ad4bbu; x ^= x >> 11;
+    return (unsigned)x & (PC_SLOTS - 1);
+}
+API uint32_t il2cpp_method_get_param_count(MonoMethod *m)
+{
+    unsigned i = pc_slot(m), n = 0;
+    for (; n < PC_PROBES; i = (i + 1) & (PC_SLOTS - 1), n++) {
+        MonoMethod *x = __atomic_load_n(&g_pc[i].m, __ATOMIC_ACQUIRE);
+        if (x == m) return g_pc[i].n;
+        if (!x) break;
+    }
+    uint32_t count = m_mono_signature_get_param_count(m_mono_method_signature(m));
+    uint32_t tok = m ? m_mono_method_get_token(m) : 0;
+    MonoClass *k = (tok >> 24) == 0x06 && (tok & 0xffffff) ? m_mono_method_get_class(m) : NULL;
+    MonoImage *img = k ? m_mono_class_get_image(k) : NULL;
+    if (img && !(m_mono_image_is_dynamic && m_mono_image_is_dynamic(img))) {
+        pthread_mutex_lock(&g_pc_lock);
+        for (i = pc_slot(m), n = 0; n < PC_PROBES; i = (i + 1) & (PC_SLOTS - 1), n++) {
+            MonoMethod *x = g_pc[i].m;
+            if (x == m) break;
+            if (!x) { g_pc[i].n = count; __atomic_store_n(&g_pc[i].m, m, __ATOMIC_RELEASE); break; }
+        }
+        pthread_mutex_unlock(&g_pc_lock);
+    }
+    return count;
+}
 API MonoType *il2cpp_method_get_param(MonoMethod *m, uint32_t index)
 {
     void *it = NULL;
