@@ -162,6 +162,7 @@ typedef gboolean (*MonoStackWalk)(MonoMethod *method, int32_t native_offset, int
     X(MonoString *, mono_string_new_utf16, (MonoDomain *, const Il2CppChar *, int32_t)) \
     X(MonoString *, mono_string_new_wrapper, (const char *)) \
     X(MonoString *, mono_string_intern, (MonoString *)) \
+    X(MonoString *, mono_string_empty, (MonoDomain *)) \
     X(MonoString *, mono_string_is_interned, (MonoString *)) \
     X(char *, mono_string_to_utf8, (MonoString *)) \
     X(uint32_t, mono_field_get_flags, (MonoClassField *)) \
@@ -1073,10 +1074,36 @@ API uint32_t il2cpp_allocation_granularity(void) { return m_mono_unity_allocatio
 
 API int32_t il2cpp_string_length(MonoString *s) { return *(int32_t *)((char *)s + 2 * sizeof(void *)); }
 API Il2CppChar *il2cpp_string_chars(MonoString *s) { return (Il2CppChar *)((char *)s + 2 * sizeof(void *) + 4); }
-API MonoString *il2cpp_string_new(const char *s) { attached(); return m_mono_string_new(g_domain, s); }
-API MonoString *il2cpp_string_new_len(const char *s, uint32_t len) { attached(); return m_mono_string_new_len(g_domain, s, len); }
-API MonoString *il2cpp_string_new_utf16(const Il2CppChar *s, int32_t len) { attached(); return m_mono_string_new_utf16(g_domain, s, len); }
-API MonoString *il2cpp_string_new_wrapper(const char *s) { attached(); return m_mono_string_new(g_domain, s); }
+// An empty string is String.Empty, as both real players answer it: IL2CPP's String::NewSize(0) returns
+// String.Empty, and libunity's Mono backend makes its empty strings with mono_unity_string_empty_wrapper.
+// Mono's mono_string_new* allocate a new empty string each time instead: Hollow Knight's serialized
+// PlayMaker data then kept 197,566 of them alive (6 MB of the 64-bit heap; the 32-bit Mono player: none).
+// UA_MONO64_EMPTY_STRING=0: a new one each time (a measurement).
+static int g_empty_new = -1;
+static inline MonoString *empty_string(void)
+{
+    if (g_empty_new < 0) { const char *e = getenv("UA_MONO64_EMPTY_STRING"); g_empty_new = e && !strcmp(e, "0"); }
+    return !g_empty_new && m_mono_string_empty ? m_mono_string_empty(g_domain) : NULL;
+}
+API MonoString *il2cpp_string_new(const char *s)
+{
+    attached();
+    MonoString *e = s && !*s ? empty_string() : NULL;
+    return e ? e : m_mono_string_new(g_domain, s);
+}
+API MonoString *il2cpp_string_new_len(const char *s, uint32_t len)
+{
+    attached();
+    MonoString *e = !len ? empty_string() : NULL;
+    return e ? e : m_mono_string_new_len(g_domain, s, len);
+}
+API MonoString *il2cpp_string_new_utf16(const Il2CppChar *s, int32_t len)
+{
+    attached();
+    MonoString *e = !len ? empty_string() : NULL;
+    return e ? e : m_mono_string_new_utf16(g_domain, s, len);
+}
+API MonoString *il2cpp_string_new_wrapper(const char *s) { return il2cpp_string_new(s); }
 API MonoString *il2cpp_string_intern(MonoString *s) { attached(); return m_mono_string_intern(s); }
 API MonoString *il2cpp_string_is_interned(MonoString *s) { return m_mono_string_is_interned(s); }
 

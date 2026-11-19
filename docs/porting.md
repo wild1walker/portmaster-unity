@@ -162,11 +162,14 @@ loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries b
   still to do.
 
 What shipping only the 64-bit build would give up, measured on Hollow Knight ([mono-arm64.md](mono-arm64.md),
-"32-bit or 64-bit only", 2026-11-19): 4 - 6 % of the frame rate in a main-thread-bound scene (RG34XX-SP
-53.0 -> 50.9 fps, BattleXP G350 39.2 -> 37.0) and about 100 MB of available memory on a 1 GB handheld.
-Little of it is Mono's (the 64-bit runtime is faster than Unity's 32-bit libmono): it is Unity's arm64
-engine, the 64-bit Mali driver and Mono's heap at twice the pointer size, which an IL2CPP 64-bit build
-pays as well. Where the margin is that thin (a game near its frame rate or its memory limit), keep both
+"32-bit or 64-bit only", 2026-11-19, muOS, Knulli and the G350): 3.5 - 6 % of the frame rate in a
+main-thread-bound scene (RG34XX-SP 52.5 -> 50.9 fps under muOS, 53.9 -> 50.7 under Knulli, BattleXP G350
+39.9 -> 37.8) and 45 MB (RG34XX-SP) to 110 MB (G350) of available memory on a 1 GB handheld. Little of it
+is Mono's (the 64-bit runtime is faster than Unity's 32-bit libmono): it is Unity's arm64 engine, the
+64-bit Mali driver and Mono's heap at twice the pointer size (a census of the live heap finds the same
+objects on both builds, each larger), which an IL2CPP 64-bit build pays as well. The one part that was
+the route's own, 197,566 empty strings the bridge made new where both real players answer String.Empty
+(6 MB of heap), is fixed. Where the margin is that thin (a game near its frame rate or its memory limit), keep both
 builds; a game with headroom can ship the 64-bit build alone (`reqs` without `armhf`).
 
 ### Choose the route for speed first

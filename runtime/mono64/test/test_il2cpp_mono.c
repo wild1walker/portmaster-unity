@@ -73,6 +73,14 @@ int main(int argc, char **argv)
     CHECK(il2cpp_gchandle_new(obj, 1) == 0x80000001u, "gchandle %lx", (unsigned long)il2cpp_gchandle_new(obj, 1));
     CHECK(il2cpp_object_header_size() == 16, "object header %u", il2cpp_object_header_size());
 
+    // an empty string is String.Empty (both real players' answer), the rest Mono's new strings
+    B(void *(*)(const char *), il2cpp_string_new);
+    B(void *(*)(const char *, uint32_t), il2cpp_string_new_len);
+    B(void *(*)(const uint16_t *, int32_t), il2cpp_string_new_utf16);
+    void *empty = dlsym(mono, "mono_string_empty") ? ((void *(*)(void *))dlsym(mono, "mono_string_empty"))(NULL) : NULL;
+    CHECK(il2cpp_string_new("") == empty && il2cpp_string_new_len("abc", 0) == empty && il2cpp_string_new_utf16(NULL, 0) == empty, "empty string is not String.Empty");
+    CHECK(il2cpp_string_new("x") != empty && il2cpp_string_new_len("abc", 3) != empty && il2cpp_string_new_utf16((const uint16_t *)"a\0", 1) != empty, "a string with characters is String.Empty");
+
     // a thread's first managed call attaches it
     int before = *attaches;
     pthread_t t;

@@ -337,6 +337,56 @@ MB, 202 against 199 MB available). The class libraries the bridge loads at start
 assembly (System.Windows.Forms, System.Data, ...: 10.8 MB of the 20.5 MB of assembly pages) are the one
 part that is the route's own (below).
 
+**What the heap holds, object by object** (`UA_GC_CENSUS`, runtime.md: Boehm's reachable objects right after a
+full collection, King's Pass standing after the load, the same save; RG34XX-SP under Knulli, 2026-11-19):
+
+| | 32-bit | 64-bit (release bridge) | 64-bit, empty strings shared |
+|---|---|---|---|
+| live objects | 1,447,739 | 1,653,030 | 1,455,200 |
+| live bytes | 68.1 MB | 110.4 MB | 104.3 MB |
+| strings | 269,312, 12.5 MB | 466,911, 21.5 MB | 269,355, 15.5 MB |
+| of them empty (`""`) | none (String.Empty) | 197,566, 6.0 MB | none |
+| objects with references (Boehm's typed kind) | 797,372, 27.8 MB | 821,327, 53.5 MB | |
+| pointer-free (strings, value arrays) | 477,303, 24.7 MB | 675,543, 37.8 MB | |
+| Mono's heap at that point / the run's largest | 112 / 112 MB | 176 / 176 MB | 160 / 176 MB |
+
+The one difference that is not the pointer size: 197,566 empty strings. libunity's IL2CPP scripting layer
+makes a string through `il2cpp_string_new`/`_new_len`/`_new_utf16` for every serialized string field it
+reads (PlayMaker's FSMs hold hundreds of thousands, most of them empty), and the bridge passed each to
+Mono's `mono_string_new*`, which allocates a new empty string every time. Both real players answer
+String.Empty there: IL2CPP's `String::NewSize(0)` returns it, and libunity's Mono backend makes its empty
+strings with `mono_unity_string_empty_wrapper` (the 32-bit census: not one empty string besides it). The
+bridge now does the same (`mono_string_empty`; `UA_MONO64_EMPTY_STRING=0` the old way, a measurement):
+exact, 6 MB less live heap. Everything else scales with the pointer: the same 269,312 strings take 12.5
+-> 15.5 MB (a 16-byte header and Boehm's 16-byte granule), the objects with references 35 -> 65 bytes
+each (27.8 -> 53.5 MB), `string[]`, `int[]`, PlayMaker's arrays about twice; the 32-bit heap's classes
+and counts are the 64-bit one's, class for class. Mono has no compressed references, so this part has no
+switch: about 36 MB of live heap, and with the budget's 32 MB of garbage on top Mono's heap still reaches
+176 MB later in the run (Boehm grows it 16 MB at a time). Mono's metadata grows the same way (its own
+counters, `UA_GC_CENSUS`: MonoClass 3.2 -> 6.7 MB, inflated classes 1.8 -> 3.2, MonoMethod 0.75 -> 1.2,
+inflated methods 1.1 -> 1.7; the JIT's code 2.8 MB on both).
+
+**The three handhelds again, with the fix** (the same installs and settings, King's Pass,
+`tools/device/profbench.sh`, each run from a cool handheld, 32-bit, the release bridge and the fixed bridge
+interleaved A B C A C B in one hold; UnityMain and the render thread (G350: ua_host's GL thread) in ms a
+frame of CPU; lowest MemAvailable; the G350's runs paired by whether the game took the CJK fonts back):
+
+| handheld | build | fps | UnityMain | render | lowest available |
+|---|---|---|---|---|---|
+| RG34XX-SP (muOS) | 32-bit | 52.7, 52.3 | 16.7, 16.4 | 10.8, 10.7 | 251, 251 MB |
+| | 64-bit, release bridge | 50.8, 50.9 | 18.5, 18.5 | 12.6, 12.6 | 202, 198 MB |
+| | 64-bit, empty strings shared | 50.9, 50.8 | 18.6, 18.6 | 12.7, 12.7 | 204, 205 MB |
+| RG34XX-SP (Knulli) | 32-bit | 53.8, 53.9 | 18.2, 18.1 | 11.6, 11.6 | 253, 255 MB |
+| | 64-bit, release bridge | 50.7, 51.3 | 19.3, 19.1 | 13.2, 13.0 | 204, 202 MB |
+| | 64-bit, empty strings shared | 50.5, 50.9 | 19.4, 19.2 | 13.1, 13.1 | 210, 209 MB |
+| BattleXP G350 (dArkOS) | 32-bit | 40.2, 39.6 | 24.1, 23.9 | GL 12.0, 12.4 | 268, 267 MB (fonts kept) |
+| | 64-bit, release bridge | 38.0, 37.8 | 24.8, 25.3 | GL 15.2, 15.3 | 186 (fonts given back), 149 MB (kept) |
+| | 64-bit, empty strings shared | 37.8, 37.7 | 25.2, 25.1 | GL 15.7, 15.6 | 194 (given back), 158 MB (kept) |
+
+The fix gives 6 - 9 MB of memory and nothing in frame rate. The 64-bit build stays 3.5 - 6 % slower
+(muOS 1.7 fps, Knulli 3.0, G350 2.2) and leaves 45 MB less available on the RG34XX-SP, about 110 MB less on
+the G350 with the same fonts held (its 64-bit libmali, r13p0 GBM, and GL thread: +3.3 ms, +27 %).
+
 **What libunity asks of the runtime** (`UA_API_COUNT=10`, the same scene, a frame): the 32-bit Mono player
 4,690 `mono_gc_wbarrier_set_field` and 717 `mono_runtime_invoke`; the 64-bit player on the Mono route
 4,650 `il2cpp_gc_wbarrier_set_field` and 712 `il2cpp_runtime_invoke`, the same, plus 712
@@ -352,7 +402,8 @@ fps, UnityMain 18.5 ms, against 50.7 and 18.5 with the release's bridge in the s
 |---|---|---|
 | Unity's arm64 engine (libunity) | +1.2 ms of UnityMain a frame (+11 %), all over the frame | none from the runtime's side: exact hooks of single engine functions measured about 1 % each (profiling.md); a game whose main thread is the limit keeps the 32-bit build |
 | the 64-bit Mali driver | +0.85 ms of the render thread (+18 %; G350's GL thread +26 %) and +13 MB of code | fewer GL calls help both builds; on the G350 a profile of the GL thread (driver against ua_host's replay) when it is back |
-| Mono's heap and metadata at 64-bit pointers | +64 MB of heap (112 -> 176 MB), +105 MB of anonymous memory in all: most of the lost memory | none at run time (Mono has no compressed pointers); `UA_GC_GROW` (a collection before the heap grows during a load when memory is low) is the lever for a 64-bit build at its memory limit |
+| Mono's heap and metadata at 64-bit pointers | +36 MB of live heap after the empty-string fix (68 -> 104 MB live; Mono's heap 112 -> 160 - 176 MB), Mono's metadata about +7 MB: most of the lost memory | none at run time: the census finds the same classes and counts on both builds, each object larger (Mono has no compressed references); `UA_GC_GROW` (a collection before the heap grows during a load when memory is low) is the lever for a 64-bit build at its memory limit |
+| empty strings made new for libunity (the route's own) | 197,566 live, 6 MB of heap | **closed** (2026-11-19): the bridge answers String.Empty as both real players do; 6 - 9 MB more available, the frame rate the same |
 | JIT code | +0.34 ms (+13 %) | not Mono's options (inline limit, abcrem: no change); IL2CPP's arm64 build (compiled at setup, hours on the handheld) |
 | the class libraries loaded at start | 10.8 MB of file pages (System.Windows.Forms, System.Data...) | `UA_MONO64_ASSEMBLIES=scripting` (runtime.md): only `ScriptingAssemblies.json`'s at start, as a Mono player, the class libraries when used: 88 + 7 assemblies instead of 116, 588 against 599 MB resident (assembly pages 20.5 -> 16.0 MB), 209 and 212 MB available against 198 - 204, the scene and its frame rate unchanged (50.8, 51.1 fps); opt-in until the route's other games (Cuphead's 2017.4 player, Tom City, Untitled Hook Game) have run with it, then the default |
-| Mono's runtime invoke path | about 0.35 ms a frame (already less than the 32-bit libmono's) | a cache like the 32-bit `UA_MONO_INVOKE` inside the bridge (this Mono's structures are ours, built by tools/mono64): about 0.2 ms, 1 % |
+| Mono's runtime invoke path | about 0.35 ms a frame (already less than the 32-bit libmono's) | not worth a cache: this Mono's `mono_jit_runtime_invoke` already finds a method's invoke info in a lock-free hash (`mono_conc_hashtable_lookup`, 0.09 ms a frame in the profile; the 32-bit libmono took the domain lock, which is what `UA_MONO_INVOKE` removes); what a cache could save is under the runs' spread |

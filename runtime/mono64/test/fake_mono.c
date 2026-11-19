@@ -32,3 +32,7 @@ void *mono_class_get_parent(fclass *k) { return k->parent; }
 void *mono_class_get_method_from_name(fclass *k, const char *n, int argc) { (void)argc; return k->method && !strcmp(k->method, n) ? k : NULL; }
 uint32_t mono_gchandle_new(void *o, int pinned) { (void)o; return pinned ? 0x80000001u : 7; }
 void *mono_string_new(void *d, const char *s) { (void)d; return (void *)s; }
+static int empty_obj, newlen_obj;
+void *mono_string_empty(void *d) { (void)d; return &empty_obj; }
+void *mono_string_new_len(void *d, const char *s, uint32_t n) { (void)d; (void)s; (void)n; return &newlen_obj; }
+void *mono_string_new_utf16(void *d, const uint16_t *s, int32_t n) { (void)d; (void)s; (void)n; return &newlen_obj; }
