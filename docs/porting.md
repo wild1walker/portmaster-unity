@@ -1010,6 +1010,20 @@ costs only while it plays: game play frames decode nothing.
 `setup/patchscript`, run by PortMaster's patcher (log: `ports/<name>/patchlog.txt`; a failure is
 a `PATCH_FAIL_MSG:` line the patcher shows):
 
+On muOS the setup first claims muOS's own idle inhibit: it writes its PID to
+`/run/muos/idle_game_inhibit`, as muOS's video player and RetroArch launcher do, and removes it at the
+end (only if it still holds that PID). Without it, a setup with nobody at the pad is idle time to muOS:
+after `idle_display` (120 s) muOS dims the screen and switches to its idle CPU governor (`gov_idle`:
+powersave, 288 MHz), and a 26-minute setup took 92 minutes. muOS 2606's `muhotkey` resets its display
+and sleep timers every 250 ms while that file names a live process; checked on an RG34XX-SP with
+muOS 2606 (2026-11-19): schedutil at 1.2 - 1.32 GHz again within 10 s, held past the timeout, and
+powersave 120 s after the file was gone. Nothing of muOS's settings, governors or clocks is changed;
+the screen stays at full brightness during the setup. A file naming a dead process (a killed setup) is
+taken over, another app's live one left alone; systems without `/run/muos` are not affected. Not
+legitimate, and not done: writing `config/system/idle_inhibit` (muOS's `idle.sh` rewrites it every
+5 s), faking input activity, changing `idle_display` or `gov_idle`. Ports made before this
+(2026-11-19) can copy the block from the templates' patchscripts.
+
 1. the setup's tools: `setup/pmu`, one static aarch64 program (setup-rs, docs/rust-setup.md:
    the same files as the converter's Python, byte for byte); a port whose setup needs what pmu
    does not do yet (a porter's Python converter plugin, `il2cpp --on-device`: `port.py`'s
