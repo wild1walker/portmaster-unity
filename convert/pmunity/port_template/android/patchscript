@@ -257,7 +257,13 @@ fi
 # ---- 3. the conversion
 if [ ! -f "$W/.step_convert" ]; then
   hook pre_convert
-  need=$((GAME_SIZE_MB * 3 / 2 + 300)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
+  need=$((GAME_SIZE_MB * 3 / 2 + 300))
+  # (the estimate is the card's whole share while converting: the game's data, already there and
+  # converted in place, counts in it. 2026-11-19: muOS stopped here after unpacking Blasphemous, 8342 MB
+  # free for "about 10287 MB", the 6.3 GB it had just unpacked counted twice)
+  have=$(du -sm "$D" 2>/dev/null | cut -f1); case "$have" in ""|*[!0-9]*) have=0;; esac
+  need=$((need - have)); [ "$need" -lt 500 ] && need=500
+  [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
   # (a conversion under way, its journal there: what it already did is on the card, and convert checks
   # each file's room itself before it begins it (status 3); the whole estimate again would stop a
   # paused setup on a card that had room when it began)
