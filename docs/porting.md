@@ -579,6 +579,16 @@ Text atlases stay at `sharp_block` (4x4). 8x8 (2 bits a texel) is
 visibly blocky in Hollow Knight; testers on Discord found 6x6 good enough, and side by side on the
 handheld the two are hard to tell apart.
 
+A small soft picture drawn many times its size is the exception: its blocks show. Hollow Knight's light
+around the Knight (`light_effect_v02`, RGBA32 128x121, on screen in almost every scene) went to 48x45 in
+6x6 blocks, and testers on Discord saw staircase lines and, on a 4:3 3.5" screen, "giant macro blocks"
+at its faint edge (2026-11-19). Kept at full size it is within 3 levels of the original on a dark
+background in 6x6 as in 4x4; in `sharp_names` (`light_effect`) it keeps its size in 4x4 for 15 KB.
+To find such a texture: the name from a tester or a frame, then the original through UnityPy, and
+the setup's own `pmu convert <data> <out> --config <a textures-only config> --only <file>` on a copy of
+the one file that holds it (24 s for Hollow Knight's `resources.assets` in the arm64 image). What
+banding is left is the original's 8 bits a channel with the game's Dithering off.
+
 ```toml
 [convert.textures]
 lowmem_scale = 0.375
