@@ -263,7 +263,12 @@ fi
 if [ ! -f "$W/.step_convert" ]; then
   hook pre_convert
   need=$((GAME_SIZE_MB * 3 / 2 + 300)); [ "$SETUP_SPACE_MB" -gt 0 ] && need=$SETUP_SPACE_MB
-  room "$need" || fail "Converting the game needs about $need MB free on the card ($(free_mb) MB free)."
+  # (a conversion under way, its journal there: what it already did is on the card, and convert checks
+  # each file's room itself before it begins it (status 3); the whole estimate again would stop a
+  # paused setup on a card that had room when it began)
+  if [ ! -f "$D/.pmunity.json" ]; then
+    room "$need" || fail "Converting the game needs about $need MB free on the card ($(free_mb) MB free)."
+  fi
   step "converting the game (if this is interrupted, the next launch continues where it stopped)"
   sed "s|{setup}|$S|g" "$S/convert.json" > "$W/convert.json"
   plugins=(); for f in "${CONVERT_PLUGINS[@]}"; do plugins+=(--plugin "$S/$f"); done
