@@ -126,10 +126,11 @@ impl Archive {
     /// EmulationStation's), and an unpack stopped part way (a setup paused, the battery, the power
     /// button) keeps what it finished. The next run goes on: it skips a file only where the marker
     /// of this archive (RESUME, written and synced before the first file) is there, the file has
-    /// no `<name>.tmp`, its length is the table's and it was written after the marker (a file of
-    /// an older copy of the game beside the archive is written again). Its data was synced before
-    /// its rename, so a file with its name is whole; a rename the card lost leaves the file to be
-    /// done again.
+    /// no `<name>.tmp` and its length is the table's. A fresh start (no marker of this archive)
+    /// removes whatever lies under the table's names first (an older copy of the game), so a file
+    /// under its name was written under the marker: no clock is trusted (R36S-class handhelds
+    /// have no RTC). Its data was synced before its rename, so a file with its name is whole; a
+    /// rename the card lost leaves the file to be done again.
     pub fn extract(&self, out_dir: &Path, log: &mut dyn FnMut(&str)) -> Result<Vec<String>> {
         let root = std::fs::canonicalize(out_dir)?;
         let mut ents: Vec<(u64, u64, PathBuf)> = Vec::new();
@@ -159,11 +160,27 @@ impl Archive {
         };
         let ident = format!("{} {}\n", meta.len(), mtime(&meta));
         let marker = root.join(RESUME);
-        let since = match std::fs::read_to_string(&marker) {
-            Ok(t) if t == ident => std::fs::metadata(&marker).ok().map(|m| mtime(&m)),
-            _ => None,
-        };
-        if since.is_none() {
+        let since = matches!(std::fs::read_to_string(&marker), Ok(t) if t == ident);
+        if !since {
+            // a fresh start: what lies under the table's names (an older copy of the game, a run of
+            // another archive) goes first, so every file found under its name later was written
+            // under this marker (the skip trusts no clock: a handheld without one may go back)
+            let mut gone: Vec<PathBuf> = Vec::new();
+            for (_, _, dst) in &ents {
+                for p in [dst.clone(), tmp(dst)] {
+                    if p != self.path && std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file()) {
+                        std::fs::remove_file(&p)?;
+                        if let Some(d) = p.parent() {
+                            if !gone.iter().any(|x| x == d) {
+                                gone.push(d.to_path_buf());
+                            }
+                        }
+                    }
+                }
+            }
+            for d in &gone {
+                crate::bgwrite::sync_dir(d);
+            }
             let mut m = File::create(&marker)?;
             m.write_all(ident.as_bytes())?;
             m.sync_all()?;
@@ -173,17 +190,19 @@ impl Archive {
         let done: Vec<bool> = ents
             .iter()
             .map(|(a, b, dst)| {
-                since.is_some_and(|t0| {
-                    !tmp(dst).exists()
-                        && std::fs::metadata(dst)
-                            .is_ok_and(|m| m.is_file() && m.len() == b - a && mtime(&m) >= t0)
-                })
+                since
+                    && !tmp(dst).exists()
+                    && std::fs::metadata(dst).is_ok_and(|m| m.is_file() && m.len() == b - a)
             })
             .collect();
         let rel = |dst: &Path| dst.strip_prefix(&root).unwrap_or(dst).display().to_string();
         for (i, (a, b, dst)) in ents.iter().enumerate() {
             if done[i] {
-                log(&format!("unpack: {} ({} bytes, unpacked before)", rel(dst), b - a));
+                log(&format!(
+                    "unpack: {} ({} bytes, unpacked before)",
+                    rel(dst),
+                    b - a
+                ));
             }
         }
         // the files in the order their data starts; `next` is the first not opened yet

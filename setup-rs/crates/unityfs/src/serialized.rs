@@ -786,10 +786,9 @@ impl SerializedFile {
     }
 
     fn spilled(&self, off: u64, len: u64) -> Result<Vec<u8>> {
-        let sp = self
-            .spill
-            .as_ref()
-            .ok_or_else(|| Error::Value(format!("{}: spilled bytes without a spill file", self.name)))?;
+        let sp = self.spill.as_ref().ok_or_else(|| {
+            Error::Value(format!("{}: spilled bytes without a spill file", self.name))
+        })?;
         let mut v = vec![0u8; len as usize];
         use std::os::unix::fs::FileExt;
         sp.file.read_exact_at(&mut v, off)?;
@@ -827,7 +826,8 @@ impl SerializedFile {
         let Some(&i) = self.index.get(&path_id) else {
             return;
         };
-        if let (Some(Saved::Mem(d)), Some(sp)) = (self.objects[i].data.take(), self.spill.as_mut()) {
+        if let (Some(Saved::Mem(d)), Some(sp)) = (self.objects[i].data.take(), self.spill.as_mut())
+        {
             sp.mem -= d.len() as u64;
         }
     }
