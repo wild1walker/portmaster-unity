@@ -1556,9 +1556,7 @@ The pull request's template asks the porter to confirm they understand the launc
 explain every line that differs from PortMaster's usual ones. In these launchers that is: the
 first-launch setup through PortMaster's patcher (`PATCHER_FILE`, `PATCHER_GAME`, `PATCHER_TIME`,
 `PATCHER_QUESTIONS`), the 32-bit userland check and `/lib32:/usr/lib32` first on `LD_LIBRARY_PATH`
-(the android route's `ua_host` is an armhf program), `SDL_AUDIODRIVER=alsa` as the default there
-(the 32-bit `ua_host` finds no 32-bit PipeWire or PulseAudio client libraries on the firmwares;
-`port.env` can change it), `UA_FPS` (a frame-rate line in `log.txt`), `port.env` and
+(the android route's `ua_host` is an armhf program), `UA_FPS` (a frame-rate line in `log.txt`), `port.env` and
 `answers.env` (the game's options and the setup's answers), and for box64 the Westonpack block,
 box64's settings and the command written to `conf/run.sh`. Testing on the firmwares and screens
 of the testing thread's checklist is the testers' and the porter's work; the rehearsal
@@ -1577,6 +1575,13 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
   pushed to the same pull request (never closed and opened again).
 - `trap` only for a reason (Hollow Knight's puts the Rockchip video nodes back on exit and still ends
   with `pm_message_end`, which `funcs.txt` set as the EXIT trap).
+- No SDL driver defaults (PortMaster's `pmcheck` warns on `SDL_AUDIODRIVER` and the like) unless a
+  named device needs one. The android template's `SDL_AUDIODRIVER=alsa` (`port_template/android/launcher.sh`) changes nothing
+  on the firmwares checked: with it unset, the 32-bit SDL picks ALSA by itself on dArkOS (G350: it plays;
+  32-bit libpipewire and libpulse are there, no sound server runs) and on muOS 2606 (32-bit libpipewire
+  and its ALSA plugin are there, SDL's PipeWire driver is not; ALSA's open fails either way, and
+  the OpenSL shim pipes into `pw-cat`). Hollow Knight's submission dropped it (2026-11-19); a silent
+  check is `runtime/host/audiocheck` (one second of zeros) with and without the variable.
 
 After `source "$controlfolder/utils/patcher.txt"` the launcher goes back to `$GAMEDIR` before
 anything relative (`./ua_host`): the patcher runs in the launcher's own shell, and a working directory
