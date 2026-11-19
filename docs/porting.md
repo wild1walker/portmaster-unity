@@ -161,6 +161,14 @@ loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries b
   install's `arm64` folder, 99.9 % of Greenpath's buffers from the pool), a handheld run with it is
   still to do.
 
+What shipping only the 64-bit build would give up, measured on Hollow Knight ([mono-arm64.md](mono-arm64.md),
+"32-bit or 64-bit only", 2026-11-19): 4 - 6 % of the frame rate in a main-thread-bound scene (RG34XX-SP
+53.0 -> 50.9 fps, BattleXP G350 39.2 -> 37.0) and about 100 MB of available memory on a 1 GB handheld.
+Little of it is Mono's (the 64-bit runtime is faster than Unity's 32-bit libmono): it is Unity's arm64
+engine, the 64-bit Mali driver and Mono's heap at twice the pointer size, which an IL2CPP 64-bit build
+pays as well. Where the margin is that thin (a game near its frame rate or its memory limit), keep both
+builds; a game with headroom can ship the 64-bit build alone (`reqs` without `armhf`).
+
 ### Choose the route for speed first
 
 The route sets how fast the game can ever run on a handheld: which engine build (ARMv7 or arm64)
