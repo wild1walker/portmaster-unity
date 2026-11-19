@@ -386,14 +386,15 @@ static void *dlsym_hook(const char *sym, void *p)
     p = unityicalls_dlsym_hook(sym, p);        // UA_PROPERTY_ID: engine calls answered from earlier answers (unityicalls.c)
     p = monoimage_dlsym_hook(sym, p);          // UA_MONO_IMAGE_MAP: the assemblies read in place from the APK (monoimage.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
-    if (!g_mono_trace) return p;
-    if (!strcmp(sym, "mono_array_new")) { r_array_new = p; return (void *)w_array_new; }
-    if (!strcmp(sym, "mono_class_get_name")) r_class_get_name = p;
-    if (!strcmp(sym, "mono_class_from_name")) { r_class_from_name = p; return (void *)w_class_from_name; }
-    if (!strcmp(sym, "mono_class_get_method_from_name")) { r_method_from_name = p; return (void *)w_method_from_name; }
-    if (!strcmp(sym, "mono_class_get_field_from_name")) { r_field_from_name = p; return (void *)w_field_from_name; }
-    if (!strcmp(sym, "mono_array_class_get")) { r_array_class_get = p; return (void *)w_array_class_get; }
-    return p;
+    if (g_mono_trace) {
+        if (!strcmp(sym, "mono_array_new")) { r_array_new = p; p = (void *)w_array_new; }
+        else if (!strcmp(sym, "mono_class_get_name")) r_class_get_name = p;
+        else if (!strcmp(sym, "mono_class_from_name")) { r_class_from_name = p; p = (void *)w_class_from_name; }
+        else if (!strcmp(sym, "mono_class_get_method_from_name")) { r_method_from_name = p; p = (void *)w_method_from_name; }
+        else if (!strcmp(sym, "mono_class_get_field_from_name")) { r_field_from_name = p; p = (void *)w_field_from_name; }
+        else if (!strcmp(sym, "mono_array_class_get")) { r_array_class_get = p; p = (void *)w_array_class_get; }
+    }
+    return icallcount_api_hook(sym, p);        // UA_API_COUNT: the runtime's API calls counted, last (icallcount.c)
 }
 
 // what glopt.c's GL wrappers call: glstate.c's wrapper of that function, else after_glstate's
