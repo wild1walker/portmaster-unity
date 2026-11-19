@@ -37,6 +37,7 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     export PATCHER_GAME="@@TITLE@@"
     export PATCHER_TIME="@@SETUP_TIME@@, once"
     source "$controlfolder/utils/patcher.txt"
+    cd "$GAMEDIR"   # the patcher runs in this shell and may leave another working directory
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     if [ -f "$GAMEDIR/setup/patchscript" ]; then

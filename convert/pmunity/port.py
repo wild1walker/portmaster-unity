@@ -2224,9 +2224,9 @@ IMAGE_EXT = {'.png': '.png', '.jpg': '.jpg', '.jpeg': '.jpg'}
 QUIT_KEYS = 'Select + Start'
 BIG_FILE_MB = 90                                        # PortMaster's repository splits larger files
 # what a testing thread asks testers to try (PortMaster's #testing-n-dev channel); ROCKNIX by GPU driver
-TEST_CFWS = ('[ ] AmberELEC', '[ ] ArkOS / dArkOS', '[ ] muOS', 'ROCKNIX', '-> [ ] Libmali', '-> [ ] Panfrost',
-             '-> [ ] Adreno (optional)', '[ ] Knulli', '[ ] CrossMix (optional)')
-TEST_RESOLUTIONS = ('[ ] 480x320 (optional)', '[ ] 640x480', '[ ] 720x720 (RGB30, optional)', '[ ] 1280x720 and higher')
+TEST_CFWS = ('[ ] AmberELEC', '[ ] dArkOS', '[ ] MuOS', 'ROCKNIX', '-> [ ] Libmali', '-> [ ] Panfrost',
+             '-> [ ] Adreno (Optional)', '[ ] Knulli')      # (PortMaster-New's AGENTS.md, 2026-11)
+TEST_RESOLUTIONS = ('[ ] 480x320 (Optional)', '[ ] 640x480', '[ ] 720x720 (RGB30) (Optional)', '[ ] Higher resolutions (e.g., 1280)')
 # what a route needs of the handheld (the README, the testing thread), and what else its setup does
 ROUTE_NEEDS = {
     'android': 'a handheld with a 32-bit (armhf) userland beside its 64-bit system (e.g. Knulli on Allwinner H700 '
@@ -2446,7 +2446,7 @@ def testing_thread_txt(cfg, inst):
     if ROUTE_NEEDS.get(p['route']):
         out.append(f"Needs {ROUTE_NEEDS[p['route']]}.")
     out += ['', '| Button | Action |', '|--|--|'] + [f'| {k} | {v} |' for k, v in controls_rows(cfg)]
-    out += ['', 'CFW tests:'] + list(TEST_CFWS) + ['', 'Resolutions:'] + list(TEST_RESOLUTIONS)
+    out += ['', 'CFW Tests:'] + list(TEST_CFWS) + ['', 'Resolutions:'] + list(TEST_RESOLUTIONS)
     return '\n'.join(out) + '\n'
 
 

@@ -67,6 +67,7 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     export PATCHER_TIME="@@SETUP_TIME@@, once"
     [ -f "$GAMEDIR/setup/questions.lua" ] && export PATCHER_QUESTIONS="$GAMEDIR/setup/questions.lua"
     source "$controlfolder/utils/patcher.txt"
+    cd "$GAMEDIR"   # the patcher runs in this shell and may leave another working directory
   fi
   if [ ! -f "$GAMEDIR/@@READY@@" ]; then
     if [ -f "$GAMEDIR/setup/patchscript" ]; then
@@ -90,6 +91,7 @@ if [ -f "$GAMEDIR/setup/update" ] && [ -f "$controlfolder/utils/patcher.txt" ]; 
   export PATCHER_TIME="a few minutes, once"
   unset PATCHER_QUESTIONS
   source "$controlfolder/utils/patcher.txt"
+  cd "$GAMEDIR"   # the patcher runs in this shell and may leave another working directory
 fi
 
 # ---- the game is set up: what a setup cut off right after it marked the game set up left behind,
