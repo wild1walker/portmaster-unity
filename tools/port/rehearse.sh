@@ -36,6 +36,7 @@
 #                   runs on an updated install (a setup/update step, or the game at once)
 #   REHEARSE_NET=none  no network in the setup container: a port whose setup never downloads anything
 #                   (its donors carry Unity's player) shows that it needs no Wi-Fi
+#   PMU_EXACT_STATS set: the textures step's exact_shaders walk prints its memory and tables (exactindex.rs)
 #   PMU_PROF        set: pmu's per-step profile in the setup log (prof: <step>: <stage> <s> (<calls> calls):
 #                   the file opens, writes, journal writes...), counts that machine noise does not change
 #   REHEARSE_MEM    the setup container's memory with no swap (e.g. 800m: the BattleXP G350 with
@@ -48,6 +49,12 @@
 #   REHEARSE_MEMINFO  a /proc/meminfo for the setup container (Docker shows the VM's RAM): e.g. one with
 #                   "MemTotal: 996352 kB", for the setup steps that decide by the handheld's RAM (video,
 #                   textures lowmem_scale)
+#   REHEARSE_CARD_MB  the card's free space the setup is told (default: the work folder's): more than the drive
+#                   has where the game is an APFS clone (cp -c) that the setup's space checks count whole
+#   REHEARSE_MEMLOG=1  the setup's memory sampled twice a second into <work>/mem.log (the container's: all,
+#                   anonymous, page cache; each process over 2 MB: RSS/anonymous/peak RSS in MB; the setup's
+#                   step and its last line), then each program's peak and the step it was in (tools/port/memlog.py):
+#                   which step and program need the most of a handheld's memory
 #   EMU_ARCH        the emulated rig's architecture (tools/emu/emu.sh: armhf or arm64); default:
 #                   arm64 when the installed game is an arm64-v8a build (android_package.json "abi"),
 #                   which then runs with the port's ua_host64 when it has one (the apk route)
@@ -121,7 +128,7 @@ TXT
 # folder on an external drive, which a setup's space checks would trust (rbin/df, first on PATH,
 # answers `df -Pm` with it, and PMUNITY_DISK_FREE_MB tells pmunity's own checks; the figure does not
 # shrink as the setup writes)
-FREE_MB=$(df -Pm "$WORK" | awk 'NR==2{print $4}')
+FREE_MB=${REHEARSE_CARD_MB:-$(df -Pm "$WORK" | awk 'NR==2{print $4}')}
 mkdir -p "$WORK/rbin"
 cat > "$WORK/rbin/df" <<'SH'
 #!/bin/sh
@@ -132,6 +139,36 @@ esac
 exec /bb/df "$@"
 SH
 chmod +x "$WORK/rbin/df"
+# REHEARSE_MEMLOG: a sampler beside the launcher in the container (busybox sh and awk, ~1 MB), until it ends
+cat > "$WORK/rbin/memsamp" <<'SH'
+#!/bin/sh
+# memsamp <log> <port folder>: the container's memory (cgroup v2) and each process's, twice a second: a line
+# <time> <MB> <anonymous MB> <page cache MB> <name/pid RSS/anonymous/peak RSS ...> <step> <the setup's last line>
+# (tab-separated; MB)
+# (the step: the setup log's last "== " line, and pmu convert's own last "] == <step>" after it, read as the log grows)
+cg=/sys/fs/cgroup; off=0; s1=; s2=
+while :; do
+  sz=$(wc -c < "$2/patchlog.txt" 2>/dev/null || echo 0)
+  if [ "$sz" -gt "$off" ]; then
+    r=$(tail -c +$((off + 1)) "$2/patchlog.txt" | head -c $((sz - off)) | tr -d '\r\t' | awk -v s1="$s1" -v s2="$s2" '
+      /^== / { s1 = substr($0, 4, 64); s2 = "" } /\] == / { sub(/.*\] == /, ""); s2 = substr($0, 1, 24) }
+      END { print s1 "|" s2 }')
+    s1=${r%|*}; s2=${r##*|}; off=$sz
+  fi
+  st="$s1${s2:+: $s2}"
+  last=$(tail -c 512 "$2/patchlog.txt" 2>/dev/null | tail -n 1 | tr -d '\r\t' | cut -c1-80)
+  awk -v t="$(date +%s)" -v cur="$(cat $cg/memory.current 2>/dev/null)" -v st="$st" -v last="$last" -v cgs="$cg/memory.stat" '
+    FILENAME == cgs { if ($1 == "anon" || $1 == "file") m[$1] = int($2 / 1048576); next }
+    FNR == 1 && n != "" { if (r > 2048) out = out sprintf(" %s/%s %d/%d/%d", n, p, r / 1024, a / 1024, h / 1024); n = ""; r = a = h = 0 }
+    /^Name:/ { n = $2 } /^Pid:/ { p = $2 } /^VmRSS:/ { r = $2 } /^RssAnon:/ { a = $2 } /^VmHWM:/ { h = $2 }
+    END { if (n != "" && r > 2048) out = out sprintf(" %s/%s %d/%d/%d", n, p, r / 1024, a / 1024, h / 1024)
+          printf "%s\t%d\t%d\t%d\t%s\t%s\t%s\n", t, cur / 1048576, m["anon"], m["file"], substr(out, 2), st, last }
+  ' $cg/memory.stat /proc/[0-9]*/status 2>/dev/null >> "$1"
+  sleep 0.5
+done
+SH
+chmod +x "$WORK/rbin/memsamp"
+rm -f "$R/mem.log"
 for c in mount umount; do
   if [ -n "${PM_PYTHON:-}" ]; then printf '#!/bin/sh\nexit 0\n' > "$WORK/rbin/$c"; chmod +x "$WORK/rbin/$c"; else rm -f "$WORK/rbin/$c"; fi
 done
@@ -141,11 +178,12 @@ t0=$(date +%s)
 # is that much and no swap (a G350: 800m, what its setup has with EmulationStation stopped)
 RMEM=${REHEARSE_MEM:-1g}; RSWAP=${REHEARSE_MEMSWAP:-${REHEARSE_MEM:-2g}}
 docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory "$RMEM" --memory-swap "$RSWAP" --ulimit "nofile=${REHEARSE_NOFILE:-1024:524288}" -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
-  ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} ${PMU_PROF:+-e PMU_PROF="$PMU_PROF"} \
+  ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} ${PMU_PROF:+-e PMU_PROF="$PMU_PROF"} ${PMU_EXACT_STATS:+-e PMU_EXACT_STATS=1} \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
-  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
+  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_MEMLOG:+(/rbin/memsamp /roms/mem.log '/roms/ports/$name' &); }${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
+if [ -f "$R/mem.log" ]; then mv "$R/mem.log" "$WORK/mem.log"; "$PY" -I "$HERE/memlog.py" "$WORK/mem.log" || true; fi
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
 [ -f "$P/${REHEARSE_DONE:-.setup_done}" ] || { echo "setup did not finish"; tail -20 "$WORK/launch1.log"; exit 1; }
 [ -z "${REHEARSE_OVER:-}" ] || echo "after the update: $(head -1 "$P/${REHEARSE_DONE:-.setup_done}" | cut -c1-120); setup folder: $(ls "$P/setup" 2>/dev/null | wc -l | tr -d ' ') entries"

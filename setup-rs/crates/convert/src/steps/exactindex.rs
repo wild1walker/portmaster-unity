@@ -289,7 +289,8 @@ struct Go {
     children: Vec<Key>,
     renderers: Vec<Key>,
     controllers: Vec<Key>,
-    scripts: Vec<String>,
+    /// a script of exact_index_skip on it (read when the GameObject is: the scripts' names are known by then)
+    skipped: bool,
 }
 
 /// The plan: which textures, which form, the reserved index; and the shaders to rewrite.
@@ -453,8 +454,11 @@ fn plan_inner(
                                     if b.len() >= 28 {
                                         let fid = i32::from_le_bytes(b[16..20].try_into().unwrap());
                                         let pid = i64::from_le_bytes(b[20..28].try_into().unwrap());
-                                        if let Some(sn) = super::exacttex::file_name(&f, n, fid) {
-                                            g.scripts.push(format!("{sn}\0{pid}"));
+                                        if let (Some(sn), Some(s)) =
+                                            (super::exacttex::file_name(&f, n, fid), &skip)
+                                        {
+                                            let cls = scripts.get(&(sn, pid)).map_or("", String::as_str);
+                                            g.skipped |= s.is_match(cls);
                                         }
                                     }
                                 }
@@ -538,10 +542,10 @@ fn plan_inner(
     rss_note("after pass 2");
     if std::env::var_os("PMU_EXACT_STATS").is_some() {
         let ch: usize = gos.values().map(|g| g.children.len()).sum();
-        let sc: usize = gos.values().map(|g| g.scripts.len()).sum();
+        let sc: usize = gos.values().filter(|g| g.skipped).count();
         let cb: usize = clip_pptr.values().map(|c| c.0.len() + c.1.len()).sum();
         let mt: usize = mat_tex.iter().map(|m| m.1.len()).sum();
-        eprintln!("[exact-stats] census {} shaders {} scripts {} gos {} (children {} scripts {}) renderers {} sprite_tex {} ctrl {} clips {} (entries {}) mat_tex {} ({})",
+        eprintln!("[exact-stats] census {} shaders {} scripts {} gos {} (children {} skipped {}) renderers {} sprite_tex {} ctrl {} clips {} (entries {}) mat_tex {} ({})",
             census.len(), shaders.len(), scripts.len(), gos.len(), ch, sc, renderers.len(), sprite_tex.len(), ctrl_clips.len(), clip_pptr.len(), cb, mat_tex.len(), mt);
     }
     // the renderers' material test, now that every palette material is known
@@ -568,17 +572,6 @@ fn plan_inner(
         }
     }
     rss_note("after the renderers");
-    let script_name = |s: &str| -> String {
-        let mut it = s.split('\0');
-        let (f, p) = (
-            it.next().unwrap_or(""),
-            it.next().and_then(|p| p.parse::<i64>().ok()).unwrap_or(0),
-        );
-        scripts
-            .get(&(super::exacttex::name(f), p))
-            .cloned()
-            .unwrap_or_default()
-    };
     // a renderer is "ours" when its materials are all palette materials and no skipped script sits on
     // its GameObject or above it
     let ours = |r: &Key| -> bool {
@@ -592,10 +585,8 @@ fn plan_inner(
         for _ in 0..256 {
             let Some(gk) = g else { break };
             let Some(x) = gos.get(&gk) else { break };
-            if let Some(s) = &skip {
-                if x.scripts.iter().any(|sc| s.is_match(&script_name(sc))) {
-                    return false;
-                }
+            if x.skipped {
+                return false;
             }
             g = x.father.clone();
         }
@@ -847,7 +838,7 @@ fn plan_inner(
             continue;
         }
         let Some(f) = open(&t.0) else { continue };
-        let Ok(tt) = f.sf.read_typetree(t.1) else {
+        let Ok(tt) = f.sf.read_typetree_owned(t.1, 1 << 20) else {
             continue;
         };
         let fmt = tt
@@ -902,7 +893,7 @@ fn plan_inner(
         let tt = open(&t.0)
             .ok_or_else(|| format!("{} {}: not readable again", t.0, t.1))?
             .sf
-            .read_typetree(t.1)
+            .read_typetree_owned(t.1, 1 << 20)
             .map_err(|e| format!("{} {}: {e}", t.0, t.1))?;
         let px = tt.get("image data").and_then(Value::as_bytes).unwrap_or(&[]);
         match encode(px, form, k) {
@@ -925,7 +916,7 @@ fn plan_inner(
         .collect();
     for t in &kept {
         let Some(f) = open(&t.0) else { continue };
-        let Ok(tt) = f.sf.read_typetree(t.1) else {
+        let Ok(tt) = f.sf.read_typetree_owned(t.1, 1 << 20) else {
             continue;
         };
         let fmt = tt
@@ -1128,12 +1119,13 @@ pub fn run(job: &mut Job) -> Result<()> {
         }
         let mut f = job.open(&job.path_in(&rel), Default::default())?;
         for (t, form) in p.textures.iter().filter(|(k, _)| *k.0 == *rel) {
-            let mut tt = f.sf.read_typetree(t.1)?;
-            let px = tt
-                .get("image data")
-                .and_then(Value::as_bytes)
-                .unwrap_or(&[])
-                .to_vec();
+            // (the pixels moved out of the object as it is read, and out of the value: held once, not
+            // three times; "image data" is set again below)
+            let mut tt = f.sf.read_typetree_owned(t.1, 1 << 20)?;
+            let px = match tt.get_mut("image data") {
+                Some(Value::Bytes(b)) => std::mem::take(b),
+                _ => Vec::new(),
+            };
             let data = encode(&px, *form, p.k)
                 .map_err(|e| Error::Value(format!("{STEP}: {rel} {}: {e}", t.1)))?;
             bytes_in += px.len() as u64;

@@ -688,6 +688,16 @@ impl SerializedFile {
         value::read_object(&t, &data, self.header.big, self.ref_types_view())
     }
 
+    /// read_typetree, the object's first byte array of at least `carve_min` bytes (a texture's image
+    /// data) moved into the value from the bytes read, not copied: the object is held once while it is
+    /// read (value::read_object_owned). The same value.
+    pub fn read_typetree_owned(&self, path_id: i64, carve_min: usize) -> Result<Value> {
+        let o = self.obj(path_id)?;
+        let t = self.typetree(o)?;
+        let data = self.original_bytes(path_id)?;
+        value::read_object_owned(&t, data, self.header.big, self.ref_types_view(), carve_min)
+    }
+
     /// obj.read_typetree(nodes=tree): with another type tree.
     pub fn read_typetree_with(&self, path_id: i64, tree: &TypeTree) -> Result<Value> {
         let data = self.original_bytes(path_id)?;

@@ -213,6 +213,11 @@ struct Ctx<'a> {
     /// Values read, and the most the object may have.
     values: usize,
     max_values: usize,
+    /// read_object_owned: byte arrays of at least this many bytes are not copied; the first is left
+    /// empty and noted (its place among the byte arrays read, its offset and length), to be moved in
+    carve_min: usize,
+    carved: Option<(usize, usize, usize)>,
+    bytes_seen: usize,
 }
 
 /// The deepest nesting read or written: Unity's own trees are a few dozen levels deep; a damaged
@@ -249,9 +254,100 @@ pub fn read(
         depth: 0,
         values: 0,
         max_values: MAX_VALUES.saturating_add(data.len().saturating_mul(16)),
+        carve_min: usize::MAX,
+        carved: None,
+        bytes_seen: 0,
     };
     let v = read_value(tree, 0, &mut r, &mut ctx)?;
     Ok((v, r.pos))
+}
+
+/// read_object of bytes the caller gives up: the object's biggest part, its first byte array of at
+/// least `carve_min` bytes (a texture's image data), is moved out of `data` into the value rather
+/// than copied, so the object is never held twice (Blasphemous's 4000x6720 sprite sheet: 107 MB once,
+/// not 214). The same value as read_object.
+pub fn read_object_owned(
+    tree: &TypeTree,
+    mut data: Vec<u8>,
+    big: bool,
+    refs: Option<&RefTypes>,
+    carve_min: usize,
+) -> Result<Value> {
+    let (mut v, carved) = {
+        let mut r = Reader::new(&data, big);
+        let mut ctx = Ctx {
+            refs,
+            has_registry: false,
+            depth: 0,
+            values: 0,
+            max_values: MAX_VALUES.saturating_add(data.len().saturating_mul(16)),
+            carve_min: carve_min.max(1),
+            carved: None,
+            bytes_seen: 0,
+        };
+        let v = read_value(tree, 0, &mut r, &mut ctx)?;
+        if r.pos != data.len() {
+            return Err(Error::ReadSize {
+                expected: data.len(),
+                read: r.pos,
+            });
+        }
+        (v, ctx.carved)
+    };
+    if let Some((nth, off, n)) = carved {
+        data.truncate(off + n);
+        data.drain(..off);
+        let mut seen = 0;
+        let mut data = Some(data);
+        fill_nth_bytes(&mut v, nth, &mut seen, &mut data);
+        if data.is_some() {
+            return Err(Error::Format(
+                "read_object_owned: a byte array lost its place".into(),
+            ));
+        }
+    }
+    Ok(v)
+}
+
+/// The nth byte array of a value in reading order (fields, elements, a pair's two) given its bytes.
+fn fill_nth_bytes(v: &mut Value, nth: usize, seen: &mut usize, data: &mut Option<Vec<u8>>) {
+    if data.is_none() {
+        return;
+    }
+    match v {
+        Value::Bytes(b) => {
+            if *seen == nth {
+                *b = data.take().unwrap();
+            }
+            *seen += 1;
+        }
+        Value::Array(a) => a
+            .iter_mut()
+            .for_each(|x| fill_nth_bytes(x, nth, seen, data)),
+        Value::Pair(p) => {
+            fill_nth_bytes(&mut p.0, nth, seen, data);
+            fill_nth_bytes(&mut p.1, nth, seen, data);
+        }
+        Value::Struct(st) => st
+            .fields
+            .iter_mut()
+            .for_each(|(_, x)| fill_nth_bytes(x, nth, seen, data)),
+        _ => {}
+    }
+}
+
+/// A byte array as read: copied, or (read_object_owned, the first one of carve_min bytes) left empty
+/// with its place noted.
+fn bytes_value(r: &mut Reader, n: usize, ctx: &mut Ctx) -> Result<Value> {
+    let nth = ctx.bytes_seen;
+    ctx.bytes_seen += 1;
+    if n >= ctx.carve_min && ctx.carved.is_none() {
+        let off = r.pos;
+        r.take(n)?;
+        ctx.carved = Some((nth, off, n));
+        return Ok(Value::Bytes(Vec::new()));
+    }
+    Ok(Value::Bytes(r.take(n)?.to_vec()))
 }
 
 /// An object's bytes read with a type tree, every byte of them (else Error::ReadSize, the
@@ -341,7 +437,7 @@ fn read_node(t: &TypeTree, i: usize, r: &mut Reader, ctx: &mut Ctx) -> Result<Va
             if r.remaining() < n {
                 return Err(eof("read_bytes"));
             }
-            Value::Bytes(r.take(n)?.to_vec())
+            bytes_value(r, n, ctx)?
         }
         Kind::Pair => read_pair(t, i, r, ctx)?,
         Kind::RefObject => {
@@ -425,7 +521,7 @@ fn read_array(t: &TypeTree, e: usize, n: usize, r: &mut Reader, ctx: &mut Ctx) -
             if r.remaining() < n {
                 return Err(eof("read_u8_array"));
             }
-            Value::Bytes(r.take(n)?.to_vec())
+            bytes_value(r, n, ctx)?
         } else if k == Kind::Pair {
             let mut a = Vec::with_capacity(n.min(1 << 20));
             for _ in 0..n {
@@ -491,6 +587,9 @@ pub fn write(tree: &TypeTree, v: &Value, big: bool, refs: Option<&RefTypes>) -> 
         depth: 0,
         values: 0,
         max_values: usize::MAX,
+        carve_min: usize::MAX,
+        carved: None,
+        bytes_seen: 0,
     };
     write_value(tree, 0, v, &mut w, &mut ctx)?;
     Ok(w.buf)

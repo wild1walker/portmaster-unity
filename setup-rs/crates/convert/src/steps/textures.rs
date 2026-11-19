@@ -916,9 +916,12 @@ enum Turn {
     },
     Conv {
         pid: i64,
+        /// (an inline texture's image data taken out: finish_front sets the new one)
         t: Value,
         tex: Tex,
         sd: Option<(u64, u64, String)>,
+        /// the texture's size as the totals count it (its stream's size, or its image data's)
+        size_in: u64,
         est: u64,
         out: Out,
     },
@@ -941,8 +944,13 @@ fn stopped<T>(rel: &str) -> Result<T> {
     Err(Error::Value(format!("{rel}: a texture's worker stopped")))
 }
 
-/// How many textures ahead the step reads the objects of (and has their streams read).
+/// How many textures ahead the step reads the objects of (and has their streams read), and the most
+/// their objects may hold together (one texture's ahead whatever its size).
 const LOOK: usize = 8;
+const LOOK_BYTES: u64 = 16 << 20;
+/// A texture's image data this big is moved out of the object's bytes as they are read, not copied
+/// (SerializedFile::read_typetree_owned): an inline texture is held once, not twice.
+const CARVE_MIN: usize = 1 << 20;
 
 /// Textures this big (their new size) are converted alone, on every core (which their own work
 /// keeps busy), rather than on one worker while the others wait for their turn.
@@ -993,6 +1001,7 @@ impl Turns<'_> {
                 mut t,
                 tex,
                 sd,
+                size_in,
                 est,
                 out,
             } => {
@@ -1034,13 +1043,7 @@ impl Turns<'_> {
                         .insert(pid, [tex.width, tex.height, out.width, out.height]);
                     self.order.push(pid);
                 }
-                stats.bytes_in += match &sd {
-                    Some((_, size, _)) => *size,
-                    None => t
-                        .get("image data")
-                        .and_then(Value::as_bytes)
-                        .map_or(0, |b| b.len() as u64),
-                };
+                stats.bytes_in += size_in;
                 stats.bytes_out += out.data.len() as u64;
                 t.set("m_TextureFormat", Value::I64(out.format as i64))?;
                 t.set("m_Width", Value::I64(out.width as i64))?;
@@ -1250,13 +1253,25 @@ fn convert_file(
             let step = (|| -> Result<Option<Turn>> {
                 let mut t = match next.pop_front() {
                     Some(t) => t?,
-                    None => f.sf.read_typetree(pid)?,
+                    None => f.sf.read_typetree_owned(pid, CARVE_MIN)?,
                 };
                 let sd = stream_data(&t);
                 looked = looked.max(k + 1);
                 offered = offered.max(k + 1);
+                // (at most LOOK_BYTES of objects ahead: an inline texture's object holds its pixels, 8 of
+                // resources.assets's sprite sheets were up to 8 x 107 MB)
+                let size_of = |pid: i64| f.sf.object(pid).map_or(0, |o| o.byte_size as u64);
+                let mut ahead: u64 = textures[k + 1..looked].iter().map(|&p| size_of(p)).sum();
                 while looked < textures.len() && looked < k + 1 + LOOK {
-                    next.push_back(f.sf.read_typetree(textures[looked]).map_err(Error::from));
+                    let size = size_of(textures[looked]);
+                    if looked > k + 1 && ahead + size > LOOK_BYTES {
+                        break;
+                    }
+                    ahead += size;
+                    next.push_back(
+                        f.sf.read_typetree_owned(textures[looked], CARVE_MIN)
+                            .map_err(Error::from),
+                    );
                     looked += 1;
                 }
                 // (their streams offered in order, as far as the budget goes)
@@ -1337,13 +1352,19 @@ fn convert_file(
                         None => None,
                     });
                 };
+                // (an inline texture's pixels taken out of its object, not copied: the biggest texture of a
+                // file was held twice, Blasphemous's 4000x6720 sheet 2 x 107 MB; finish_front sets the new
+                // image data, so the object written is the same)
                 let raw = match &sd {
                     Some((off, size, path)) => streams.read(f, path, *off, *size)?,
-                    None => t
-                        .get("image data")
-                        .and_then(Value::as_bytes)
-                        .unwrap_or(&[])
-                        .to_vec(),
+                    None => match t.get_mut("image data") {
+                        Some(Value::Bytes(b)) => std::mem::take(b),
+                        _ => Vec::new(),
+                    },
+                };
+                let size_in = match &sd {
+                    Some((_, size, _)) => *size,
+                    None => raw.len() as u64,
                 };
                 let key = format!("{rel}|{pid}");
                 // a big texture in strips: each strip a worker's (its strips' blocks in order)
@@ -1387,6 +1408,7 @@ fn convert_file(
                         t,
                         tex,
                         sd,
+                        size_in,
                         est,
                         out: Out::Strips {
                             parts: (0..n).map(|_| None).collect(),
@@ -1405,6 +1427,7 @@ fn convert_file(
                         t,
                         tex,
                         sd,
+                        size_in,
                         est,
                         out: Out::Now(out),
                     }));
@@ -1435,6 +1458,7 @@ fn convert_file(
                     t,
                     tex,
                     sd,
+                    size_in,
                     est,
                     out: Out::Later(rx),
                 }))

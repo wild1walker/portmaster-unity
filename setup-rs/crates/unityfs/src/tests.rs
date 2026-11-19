@@ -169,6 +169,45 @@ fn value_layout_and_round_trip() {
 }
 
 #[test]
+fn owned_read_moves_the_big_byte_array() {
+    // m_Bytes (3 bytes, then 300) and image data: each one in turn the first of carve_min bytes or more
+    let t = test_tree();
+    for (bytes, image) in [(3usize, 5usize), (300, 5), (3, 400), (300, 400), (0, 0)] {
+        let mut v = test_value("abc", 0);
+        if let Value::Struct(st) = &mut v {
+            for (n, x) in st.fields.iter_mut() {
+                match &**n {
+                    "m_Bytes" => *x = Value::Bytes((0..bytes).map(|i| i as u8).collect()),
+                    "image data" => *x = Value::Bytes((0..image).map(|i| (i * 7) as u8).collect()),
+                    _ => {}
+                }
+            }
+        }
+        let b = value::write(&t, &v, false, None).unwrap();
+        let want = value::read_object(&t, &b, false, None).unwrap();
+        for carve in [1, 4, 100, 301, usize::MAX] {
+            let got = value::read_object_owned(&t, b.clone(), false, None, carve).unwrap();
+            assert_eq!(
+                value::write(&t, &got, false, None).unwrap(),
+                b,
+                "{bytes} {image} {carve}"
+            );
+            assert_eq!(got.get("m_Bytes"), want.get("m_Bytes"));
+            assert_eq!(got.get("image data"), want.get("image data"));
+            assert_eq!(got.get("m_Names"), want.get("m_Names"));
+        }
+        // errors as read_object's
+        assert!(value::read_object_owned(&t, b[..b.len() - 1].to_vec(), false, None, 4).is_err());
+        let mut more = b.clone();
+        more.extend_from_slice(&[0; 4]);
+        assert!(matches!(
+            value::read_object_owned(&t, more, false, None, 4),
+            Err(crate::Error::ReadSize { .. })
+        ));
+    }
+}
+
+#[test]
 fn value_errors_and_conversions() {
     let t = test_tree();
     let mut v = test_value("n", 0);

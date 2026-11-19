@@ -525,14 +525,12 @@ pub fn run(banks: &Path, out: &Path, opts: &Opts, log: &mut dyn FnMut(&str)) -> 
         for p in &b.problems {
             sum.problems.push(format!("{name}: {p}"));
         }
-        let (j, pak, lines) = convert_bank(&name, &d, &b, lib.as_deref(), &mut setups, opts.check, &mut sum)?;
+        // (the samples go to <name>.uafm.pak as they are made: the bank and all of its Ogg samples together were
+        // Blasphemous's peak, 2 x 159 MB for BackgroundLayer)
+        let pp = out.join(format!("{name}.uafm.pak"));
+        let (j, lines) = convert_bank(&name, &d, &b, lib.as_deref(), &mut setups, opts.check, &mut sum, &pp)?;
         let jp = out.join(format!("{name}.uafm.json"));
         fs::write(&jp, serde_json::to_vec(&j).unwrap()).map_err(|e| format!("{}: {e}", jp.display()))?;
-        if let Some(pak) = pak {
-            let pp = out.join(format!("{name}.uafm.pak"));
-            let mut w = BufWriter::new(File::create(&pp).map_err(|e| format!("{}: {e}", pp.display()))?);
-            w.write_all(&pak).map_err(|e| format!("{}: {e}", pp.display()))?;
-        }
         for l in lines {
             log(&l);
             sum.lines.push(l);
@@ -547,9 +545,25 @@ pub fn run(banks: &Path, out: &Path, opts: &Opts, log: &mut dyn FnMut(&str)) -> 
     Ok(sum)
 }
 
-type Converted = (Value, Option<Vec<u8>>, Vec<String>);
+type Converted = (Value, Vec<String>);
 
-fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut HashMap<u32, fsb::Setup>, check: bool, sum: &mut Summary) -> Result<Converted> {
+/// The pak a bank's samples are written to as they are made (made with its sound data's first sample block).
+struct Pak<'a> {
+    path: &'a Path,
+    w: BufWriter<File>,
+    len: usize,
+}
+
+impl Pak<'_> {
+    fn put(&mut self, b: &[u8]) -> Result<()> {
+        self.w.write_all(b).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.len += b.len();
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut HashMap<u32, fsb::Setup>, check: bool, sum: &mut Summary, pak_path: &Path) -> Result<Converted> {
     let mut j = Map::new();
     j.insert("format".into(), json!(FORMAT));
     j.insert("bank".into(), json!({"name": name, "id": hex(&b.id), "version": b.version}));
@@ -602,7 +616,6 @@ fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut
         j.insert("sounds".into(), json!(m));
     }
     // the samples
-    let mut pak: Option<Vec<u8>> = None;
     let mut media = Vec::new();
     let (mut nv, mut nleft, mut total) = (0usize, 0usize, 0usize);
     for (k, &(at, len)) in b.fsb.iter().enumerate() {
@@ -634,7 +647,7 @@ fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut
                 }
             }
         }
-        let mut out = Vec::new();
+        let mut out = Pak { path: pak_path, w: BufWriter::new(File::create(pak_path).map_err(|e| format!("{}: {e}", pak_path.display()))?), len: 0 };
         for (i, s) in f.samples.iter().enumerate() {
             let setup = s.setup_id.and_then(|id| setups.get(&id));
             let ogg = match setup {
@@ -643,8 +656,8 @@ fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut
             };
             match ogg {
                 Ok(o) => {
-                    while out.len() % 16 != 0 {
-                        out.push(0);
+                    if out.len % 16 != 0 {
+                        out.put(&[0u8; 16][..16 - out.len % 16])?;
                     }
                     if check {
                         if let Err(e) = check_ogg(&o, s.samples) {
@@ -652,8 +665,8 @@ fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut
                             sum.check_failures += 1;
                         }
                     }
-                    media.push(json!({"off": out.len(), "len": o.len(), "ch": s.channels, "rate": s.rate, "samples": s.samples, "name": s.name}));
-                    out.extend_from_slice(&o);
+                    media.push(json!({"off": out.len, "len": o.len(), "ch": s.channels, "rate": s.rate, "samples": s.samples, "name": s.name}));
+                    out.put(&o)?;
                     nv += 1;
                 }
                 Err(e) => {
@@ -665,8 +678,8 @@ fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut
                 }
             }
         }
-        total = out.len();
-        pak = Some(out);
+        total = out.len;
+        out.w.flush().map_err(|e| format!("{}: {e}", pak_path.display()))?;
     }
     if !media.is_empty() {
         j.insert("media".into(), json!(media));
@@ -679,7 +692,7 @@ fn convert_bank(name: &str, d: &[u8], b: &Bank, lib: Option<&[u8]>, setups: &mut
             sum.problems.extend(n.into_iter().map(|p| format!("{name}: check: {p}")));
         }
     }
-    Ok((Value::Object(j), pak, lines))
+    Ok((Value::Object(j), lines))
 }
 
 /// Decodes a stream (lewton) and compares its length with the sample count.
