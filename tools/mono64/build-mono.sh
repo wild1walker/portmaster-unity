@@ -87,6 +87,16 @@ cd /b/$B
 # as Unity'"'"'s build.pl builds the Linux players'"'"' runtime (no class libraries, no btls, Boehm,
 # no parallel marking), optimized for speed instead of size
 export CFLAGS="-fPIC -O2 -g"
+# Boehm without its byte at the end of every object (DONT_ADD_BYTE_AT_END; interior pointers are
+# still recognised): with aarch64'"'"'s 16-byte granules that byte costs a whole granule for every
+# object whose size is a multiple of 16 (docs/mono-arm64.md, "the collector'"'"'s layout"). It only
+# keeps an object alive through a pointer just past its end, which Mono'"'"'s JIT never needs (SGen
+# does not honour one either). A tree built with other flags has its collector built again.
+GCFLAGS="-DDONT_ADD_BYTE_AT_END"
+if [ "$(cat .ua-gcflags 2>/dev/null)" != "$GCFLAGS" ]; then
+  [ -f external/bdwgc/Makefile ] && make -C external/bdwgc clean > /dev/null 2>&1
+  rm -f mono/mini/.libs/libmonobdwgc-2.0.so* mono/mini/.libs/libmonoboehm-2.0.so* mono/mini/libmono*-2.0.la
+fi
 # the Boehm collector is external/bdwgc: Mono 5 builds it as the "bdwgc" runtime next to an older
 # included Boehm ("boehm", libgc/, which does not know aarch64): that one is left out; Mono 6
 # calls external/bdwgc "boehm"
@@ -104,6 +114,9 @@ for d in external/bdwgc eglib mono/culture mono/eglib mono/arch mono/utils mono/
   [ -d $d ] && [ -f $d/Makefile ] || continue
   # mono/mini: the runtime library only (its mono executable wants files of the full build)
   if [ $d = mono/mini ]; then make -k -j$(nproc) -C $d >> /out/make.log 2>&1 || true
+  elif [ $d = external/bdwgc ]; then
+    make -j$(nproc) -C $d CFLAGS="$CFLAGS $GCFLAGS" >> /out/make.log 2>&1 || { grep -n -B3 -A12 -m2 " error" /out/make.log | head -60; exit 1; }
+    echo "$GCFLAGS" > .ua-gcflags
   elif [ $d = mono/native ]; then make -j$(nproc) -C $d >> /out/make.log 2>&1 || echo "mono/native: not built (make.log)"
   # (the profilers are not shipped; Mono 5.0'"'"'s want the old Boehm runtime this build leaves out)
   elif [ $d = mono/profiler ]; then make -j$(nproc) -C $d >> /out/make.log 2>&1 || echo "mono/profiler: not built (make.log)"
