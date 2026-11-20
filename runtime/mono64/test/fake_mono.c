@@ -27,6 +27,9 @@ void *mono_assembly_get_image(void *a) { (void)a; return &corlib_obj; }
 const char *mono_image_get_name(void *i) { (void)i; return "mscorlib"; }
 const char *mono_image_get_filename(void *i) { (void)i; return "/x/Managed/mscorlib.dll"; }
 int mono_gc_is_incremental(void) { return 1; }
+void mono_gc_collect(int gen) { (void)gen; }
+int64_t mono_gc_get_used_size(void) { return 0; }
+int64_t mono_gc_get_heap_size(void) { return 0; }
 void mono_gc_wbarrier_generic_nostore(void *p) { (void)p; fake_nostore++; }
 void *mono_class_get_parent(fclass *k) { return k->parent; }
 void *mono_class_get_method_from_name(fclass *k, const char *n, int argc) { (void)argc; return k->method && !strcmp(k->method, n) ? k : NULL; }

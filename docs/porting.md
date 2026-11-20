@@ -169,7 +169,7 @@ is Mono's (the 64-bit runtime is faster than Unity's 32-bit libmono): it is Unit
 64-bit Mali driver and Mono's heap at twice the pointer size (a census of the live heap finds the same
 objects on both builds, each larger), which an IL2CPP 64-bit build pays as well. The one part that was
 the route's own, 197,566 empty strings the bridge made new where both real players answer String.Empty
-(6 MB of heap), is fixed. Where the margin is that thin (a game near its frame rate or its memory limit), keep both
+(6 MB of heap), is fixed, and so is the collector's 16-byte granule (8 bytes for 6000.0's runtime, 7 MB of live heap). Compared with the same assets held by both builds the memory gap on the RG34XX-SP was 75 - 80 MB; with 8-byte granules and Unity's allocators at 1 MB blocks (`UA_BOOT_CONFIG`, a port setting, which helps the 32-bit build too) it is about 30 MB ([mono-arm64.md](mono-arm64.md#a-fourth-look-8-byte-granules-the-engine-symbol-by-symbol-the-gpu-clock-thread-placement-2026-11-19)). Where the margin is that thin (a game near its frame rate or its memory limit), keep both
 builds; a game with headroom can ship the 64-bit build alone (`reqs` without `armhf`).
 
 ### Choose the route for speed first

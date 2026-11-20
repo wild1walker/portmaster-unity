@@ -56,6 +56,7 @@ static int g_mode = GC_ENABLED, g_mode_known;
 static void (*m_collect)(int);
 static int (*m_max_gen)(void);
 static int64_t (*m_used)(void);
+static int64_t (*m_heap)(void);             // the collector's heap size (the log line only)
 static int64_t g_base = -1;                 // used heap after the last collection (-1: not read yet)
 static int g_count;
 
@@ -379,11 +380,13 @@ void gcbudget_frame(void *user)
             m_collect = (void (*)(int))so_dlsym(h, "mono_gc_collect");
             m_max_gen = (int (*)(void))so_dlsym(h, "mono_gc_max_generation");
             m_used = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_used_size");
+            m_heap = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_heap_size");
         } else if ((h = so_dlopen("libil2cpp.so", 4 /* RTLD_NOLOAD */))) {
             // IL2CPP (its Boehm collector): il2cpp_gc_collect collects everything whatever the
             // generation it is given; UnityMain, where this runs, is attached to the runtime
             m_collect = (void (*)(int))so_dlsym(h, "il2cpp_gc_collect");
             m_used = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_used_size");
+            m_heap = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_heap_size");
             m_max_gen = il2cpp_max_gen;
         }
         if (!m_collect || !m_max_gen || !m_used) { m_collect = NULL; g_budget = 0; return; }
@@ -398,8 +401,8 @@ void gcbudget_frame(void *user)
     r_set_mode(GC_DISABLED);
     int64_t after = m_used();
     if (g_count++ < 50)
-        fprintf(stderr, "[host] gc budget: the game keeps the collector off; heap %lld -> %lld MB used, collected in %.0f ms (UA_GC_BUDGET=%lld)\n",
-                (long long)(used >> 20), (long long)(after >> 20), (now() - t) * 1000, g_budget >> 20);
+        fprintf(stderr, "[host] gc budget: the game keeps the collector off; heap %lld -> %lld MB used of %lld MB, collected in %.0f ms (UA_GC_BUDGET=%lld)\n",
+                (long long)(used >> 20), (long long)(after >> 20), (long long)(m_heap ? m_heap() >> 20 : -1), (now() - t) * 1000, g_budget >> 20);
     g_base = after;
     if (g_census_left > 0) { g_census_left--; census("gc budget"); }
 }

@@ -88,11 +88,23 @@ cd /b/$B
 # no parallel marking), optimized for speed instead of size
 export CFLAGS="-fPIC -O2 -g"
 # Boehm without its byte at the end of every object (DONT_ADD_BYTE_AT_END; interior pointers are
-# still recognised): with aarch64'"'"'s 16-byte granules that byte costs a whole granule for every
-# object whose size is a multiple of 16 (docs/mono-arm64.md, "the collector'"'"'s layout"). It only
-# keeps an object alive through a pointer just past its end, which Mono'"'"'s JIT never needs (SGen
-# does not honour one either). A tree built with other flags has its collector built again.
+# still recognised): with 16-byte granules that byte costs a whole granule for every object whose
+# size is a multiple of 16 (docs/mono-arm64.md, "the collector'"'"'s layout"). It only keeps an
+# object alive through a pointer just past its end, which Mono'"'"'s JIT never needs (SGen does not
+# honour one either).
+# 8-byte granules (GC_GRANULE_BYTES=8, one word: the 32-bit collector'"'"'s granule and SGen'"'"'s
+# alignment on aarch64) for the lines a game has run with them: Mono'"'"'s objects are multiples of 8
+# bytes, and bdwgc'"'"'s 64-bit default of 16 rounds every other one up by 8 (Hollow Knight, 6000.0:
+# 98.7 -> 91.8 MB live). MONO64_GRANULE=8|16 chooses for any line.
+# A tree built with other flags has its collector built again.
 GCFLAGS="-DDONT_ADD_BYTE_AT_END"
+GRANULE='"${MONO64_GRANULE:-auto}"'
+if [ "$GRANULE" = auto ]; then case $B in unity-6000.0-mbe) GRANULE=8 ;; *) GRANULE=16 ;; esac; fi
+case $GRANULE in
+  8) GCFLAGS="$GCFLAGS -DGC_GRANULE_BYTES=8 -DGC_GRANULE_WORDS=1" ;;
+  16) ;;
+  *) echo "MONO64_GRANULE must be 8 or 16"; exit 1 ;;
+esac
 if [ "$(cat .ua-gcflags 2>/dev/null)" != "$GCFLAGS" ]; then
   [ -f external/bdwgc/Makefile ] && make -C external/bdwgc clean > /dev/null 2>&1
   rm -f mono/mini/.libs/libmonobdwgc-2.0.so* mono/mini/.libs/libmonoboehm-2.0.so* mono/mini/libmono*-2.0.la
@@ -125,6 +137,11 @@ for d in external/bdwgc eglib mono/culture mono/eglib mono/arch mono/utils mono/
 done
 L=mono/mini/.libs/libmonobdwgc-2.0.so; [ -f $L ] || L=mono/mini/.libs/libmonoboehm-2.0.so   # (Mono 6 names it so)
 [ -f $L ] || { grep -n -B3 -A12 -m2 " error" /out/make.log | head -60; exit 1; }
+# what the bridge binds without asking must be there: a runtime linked without Mono'"'"'s collector
+# glue starts and then stops at its first collection
+for f in mono_jit_init_version mono_runtime_invoke mono_add_internal_call mono_gc_collect mono_gc_get_used_size mono_gc_get_heap_size GC_gcollect; do
+  nm -D --defined-only $L | grep -q " T $f\$" || { echo "$L does not export $f: not a complete runtime (make.log)"; exit 1; }
+done
 cp -L $L /out/libmonobdwgc-2.0.debug.so
 strip -o /out/libmonobdwgc-2.0.so /out/libmonobdwgc-2.0.debug.so
 for f in support/.libs/libMonoPosixHelper.so mono/native/.libs/libmono-native.so; do

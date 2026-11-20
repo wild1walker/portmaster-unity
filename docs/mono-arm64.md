@@ -111,8 +111,9 @@ cut to 32 bits).
 `tools/mono64/build-mono.sh` builds the runtime of a Unity line from
 github.com/Unity-Technologies/mono, branch `unity-<line>-mbe` (`unity-6000.0-mbe` for 6000.0.x),
 as Unity's `build.pl` builds the Linux players' (no class libraries, no BTLS, Boehm without
-parallel marking), with `-O2` and Boehm without its byte at the end of each object
-(`DONT_ADD_BYTE_AT_END`, [below](#the-collectors-layout-and-what-else-was-tried-for-a-faster-64-bit-build-2026-11-19)): a glibc library, loaded by ua_host itself rather than through the
+parallel marking), with `-O2`, Boehm without its byte at the end of each object
+(`DONT_ADD_BYTE_AT_END`, [below](#the-collectors-layout-and-what-else-was-tried-for-a-faster-64-bit-build-2026-11-19))
+and, for 6000.0, 8-byte granules ([below](#8-byte-granules-work-the-crash-was-a-broken-test-build)): a glibc library, loaded by ua_host itself rather than through the
 Android loader, so its threads, signals and `dlopen` are the host's. It fetches the branch's
 tarball without the class libraries and tests (45 MB on disk), the pinned bdwgc and libatomic_ops,
 and for Mono 6 corefx's native code (libmono-native); the build runs in an arm64 container
@@ -423,7 +424,7 @@ fps, UnityMain 18.5 ms, against 50.7 and 18.5 with the release's bridge in the s
 |---|---|---|
 | Unity's arm64 engine (libunity) | +1.2 ms of UnityMain a frame (+11 %), all over the frame | none from the runtime's side: exact hooks of single engine functions measured about 1 % each (profiling.md). The NDK's outline atomics (`__aarch64_ldadd4_relax`, `_ldadd8_relax`, `_cas8_acq_rel` ...: 1.6 % of UnityMain's samples, about 0.3 ms) are mostly the LL/SC loop itself, which an A53/A35 without LSE runs either way; pointing them at versions without the `__aarch64_have_lse_atomics` test would save its load and branch, under 0.1 ms. `Scripting::GetCachedPtrFromScriptingWrapper` (0.2 ms) is out of line in this player and cannot be inlined into its callers from outside. A game whose main thread is the limit keeps the 32-bit build |
 | the 64-bit Mali driver | +0.85 ms of the render thread (+18 %; G350's GL thread +3.3 ms, +27 %) and +13 MB of code | no choice of driver: muOS and Knulli each ship one libmali per architecture (`/usr/lib/libmali.so`, 44 MB with its symbols, and `/usr/lib32/libmali.so`, 14.5 MB, both `libmali.so.0.20`), no Panfrost; ua_host's GL layer does the same work on both builds (2.87 against 2.91 ms); fewer GL calls help both builds alike |
-| Mono's heap and metadata at 64-bit pointers | +36 MB of live heap after the empty-string fix (68 -> 104 MB live; Mono's heap 112 -> 160 - 176 MB), Mono's metadata about +7 MB: most of the lost memory | Boehm's byte at the end of each object dropped (2026-11-19, [below](#the-collectors-layout-and-what-else-was-tried-for-a-faster-64-bit-build-2026-11-19): 104.3 -> 98.7 MB live, 6 - 9 MB more available); 8-byte granules stop the IL2CPP player. Otherwise none at run time: the census finds the same classes and counts on both builds, each object larger (Mono has no compressed references); `UA_GC_GROW` (a collection before the heap grows during a load when memory is low) is the lever for a 64-bit build at its memory limit |
+| Mono's heap and metadata at 64-bit pointers | +36 MB of live heap after the empty-string fix (68 -> 104 MB live; Mono's heap 112 -> 160 - 176 MB), Mono's metadata about +7 MB | Boehm's byte at the end of each object dropped (104.3 -> 98.7 MB live), then 8-byte granules (98.7 -> 91.8 MB live, Mono's heap 160 -> 144 MB: [below](#8-byte-granules-work-the-crash-was-a-broken-test-build)); the rest is the pointer size in each object (Mono has no compressed references) |
 | empty strings made new for libunity (the route's own) | 197,566 live, 6 MB of heap | **closed** (2026-11-19): the bridge answers String.Empty as both real players do; 6 - 9 MB more available, the frame rate the same |
 | JIT code | +0.34 ms (+13 %) | not Mono's options (inline limit, abcrem: no change), not Mono's AOT images (0.3 ms slower, above); IL2CPP's arm64 build (compiled at setup, hours on the handheld) |
 | the class libraries loaded at start | 10.8 MB of file pages (System.Windows.Forms, System.Data...) | `UA_MONO64_ASSEMBLIES=scripting` (runtime.md): only `ScriptingAssemblies.json`'s at start, as a Mono player, the class libraries when used: 88 + 7 assemblies instead of 116, 588 against 599 MB resident (assembly pages 20.5 -> 16.0 MB), 209 and 212 MB available against 198 - 204, the scene and its frame rate unchanged (50.8, 51.1 fps); opt-in until the route's other games (Cuphead's 2017.4 player, Tom City, Untitled Hook Game) have run with it, then the default |
@@ -472,10 +473,10 @@ emits the same code for SGen, which never keeps an object alive through a pointe
   available memory those of the byte-less build (muOS 50.9, 51.0 fps, 217, 216 MB; Knulli 50.9, 51.1 fps,
   220, 212 MB). Nothing gained for the risk of a heap interior pointer somewhere in Mono's native code.
 - *8-byte granules* (`GC_GRANULE_BYTES=8`, SGen's alignment, the other half of the per-object waste):
-  the game stops at its first scene on both handhelds (SIGSEGV, a call through a null function pointer
-  in libunity during `TeamCherry.Localization.Language.LoadLanguage`), with and without interior
-  pointers. Something in the IL2CPP player expects 16-byte aligned objects (IL2CPP's own Boehm on arm64
-  has 16-byte granules); not followed further.
+  the test build stopped at the first scene (SIGSEGV, a call through a null function pointer in
+  libunity). That build was broken, not the idea: it lacked Mono's collector functions, and the
+  bridge called the missing `mono_gc_collect`. Built properly, 8-byte granules work and are 6000.0's
+  default now ([below](#8-byte-granules-work-the-crash-was-a-broken-test-build)).
 - *Transparent huge pages* (for libunity's code and the heap, against the A53's small TLB): neither
   RG34XX-SP kernel has them (muOS and Knulli, Linux 4.9.170: no `/sys/kernel/mm/transparent_hugepage`,
   no huge pages in `/proc/meminfo`); nothing a process can ask for.
@@ -490,7 +491,7 @@ emits the same code for SGen, which never keeps an object alive through a pointe
   (its stacks, scanned conservatively and so pinned; GC handles; `il2cpp_gc_alloc_fixed` roots) and
   never one in its own heap memory, which no one has checked and which would show as rare corruption,
   not a clean failure; SGen has no mode without the copying nursery. Its memory advantage over Boehm,
-  the 8-byte alignment, the IL2CPP player does not take even under Boehm (above). Not tried.
+  the 8-byte alignment, Boehm now has too (8-byte granules, below). Not tried.
 - *Mono's LLVM back end.* Unity's branch supports it only with dotnet/llvm-project (the fork as a
   submodule, built with the runtime: a full LLVM build), as an AOT compiler (`--aot=llvm`: `opt`, `llc`
   and a linker on the handheld at setup, where the game's assemblies are; 17,431 methods in
@@ -506,3 +507,284 @@ emits the same code for SGen, which never keeps an object alive through a pointe
 gap is libunity arm64 (+1.2 ms) and the 64-bit Mali driver (+0.85 ms of the render thread) on the
 frame, and pointer-sized objects on memory. A 64-bit build cannot overtake the 32-bit one from the
 runtime's side on these handhelds.
+
+## A fourth look: 8-byte granules, the engine symbol by symbol, the GPU clock, thread placement (2026-11-19)
+
+The same question once more, with what the first three passes left open: the crash with 8-byte
+granules, where libunity's extra time is function by function, the Mali driver by GL call, whether
+Unity ships any other arm64 player, and what the threads' placement does. King's Pass as before (the
+1 GB settings, `tools/device/profbench.sh`, each run from a cool handheld, builds interleaved in one
+hold), RG34XX-SP under muOS and Knulli; the G350 was off.
+
+### 8-byte granules work: the crash was a broken test build
+
+The runtime the third pass tried with `GC_GRANULE_BYTES=8` had been linked without Mono's collector
+glue: it exported none of `mono_gc_collect`, `mono_gc_get_used_size`, `mono_gc_walk_heap` ... (19
+functions of `boehm-gc.c` missing from its dynamic symbols; the collector itself, `GC_gcollect`, was
+there). The bridge binds Mono's functions with `dlsym` and left `mono_gc_collect` NULL;
+`il2cpp_gc_collect` ends in a tail call through that pointer, so the first collection libunity asks
+for (`CleanupAfterLoad` -> `scripting_gc_collect_unsafe`, right after the first scene's load: the
+"call through a null function pointer in libunity during `Language.LoadLanguage`") jumped to 0 with
+libunity's return address still in the link register. Nothing in the IL2CPP player expects 16-byte
+objects. Two guards against the same mistake: the bridge now refuses a runtime without
+`mono_gc_collect`, `mono_gc_get_used_size` and `mono_gc_get_heap_size` when it loads it ("not a complete
+build of the runtime"), and `build-mono.sh` checks the finished library's exports.
+
+Built again from a clean tree (`-DGC_GRANULE_BYTES=8 -DGC_GRANULE_WORDS=1` on top of
+`DONT_ADD_BYTE_AT_END`; bdwgc has the one-word granule for 64-bit targets in its size macros and its
+mark loops), the game runs as before. Mono's objects are multiples of 8 bytes, the 32-bit collector's
+granule is 8 bytes and SGen aligns to 8 on aarch64, so Mono's own code and its JIT expect nothing
+more; the collector's 16 on 64-bit targets is bdwgc's default, which rounds every other object up by
+8 bytes. The census (`UA_GC_CENSUS`, Knulli, the same save, right after the same full collection):
+
+| | 16-byte granules (2026-11-19's build) | 8-byte granules |
+|---|---|---|
+| reachable objects | 1,455,484 | 1,457,342 |
+| live bytes | 98.70 MB | 91.78 MB |
+| Mono's heap at that point | 160 MB | 144 MB |
+| the 32-bit build, for comparison | 1,447,725 objects, 68.14 MB, heap 112 MB | |
+
+| handheld | runtime | fps | UnityMain | render | lowest available |
+|---|---|---|---|---|---|
+| RG34XX-SP (Knulli) | 16-byte granules | 51.0, 50.6 | 19.2, 19.2 | 13.1, 13.0 | 218, 216 MB |
+| | 8-byte granules | 51.0, 51.0 | 19.2, 19.2 | 13.1, 13.1 | 220, 227 MB |
+| RG34XX-SP (muOS) | 16-byte granules | 51.1, 50.9 | 18.4, 18.3 | 12.5, 12.5 | 220, 219 MB |
+| | 8-byte granules | 51.0, 51.0 | 18.3, 18.4 | 12.5, 12.7 | 224, 229 MB |
+
+The frame rate is the same; 6.9 MB less live heap, one 16 MB step less of Mono's heap, 4 - 9 MB more
+available in these runs (14 - 35 MB in the census runs below, where both builds hold the same assets). Exact for the reason the dropped
+byte is: only where objects lie changes, which managed code sees through nothing but
+`RuntimeHelpers.GetHashCode` (address-derived in a Boehm build, different from run to run anyway; its
+`>> 3` keeps every bit that differs between two objects at either granule).
+`tools/mono64/build-mono.sh` builds 6000.0's runtime this way; the other lines keep 16 bytes until a
+game of theirs has run with it (`MONO64_GRANULE=8|16` chooses for any line).
+
+*Smaller heap steps, not taken.* With the game's collector off (Hollow Knight), Boehm grows the heap
+by `MAXHINCR` blocks whenever an allocation finds no room: 16 MB at a time in Unity's configuration
+(`LARGE_CONFIG`). Capped at 4 MB in `GC_collect_or_expand` (a test patch), the same run ends at 140 MB
+instead of 144: the heap is the live data, the 32 MB budget (`UA_GC_BUDGET`) and about 20 MB of free
+space inside partly used blocks, not the step. Not worth a patch to the collector.
+
+### Memory with the same assets held: the gap is 55 - 70 MB, not 45
+
+The frame-rate runs above (and every table of this page since "the three handhelds again") compare a
+32-bit run that holds the two CJK fonts of `UA_UNLOAD_ASSETS` (NotoSerifCJKsc-Regular,
+NotoSerifTC-Medium: about 50 MB; these test installs lack the setup's `lazy` step, and the 32-bit build
+loads them again in every run) with 64-bit runs in which they stayed given back: 250 against 216 -
+229 MB. Like for like the difference is larger. Census runs with the two fonts left out of the list, so
+that both builds hold them (Knulli; lowest MemAvailable, the process's anonymous memory at the end):
+
+| | lowest available | anonymous memory (RssAnon) |
+|---|---|---|
+| 32-bit | 249, 250 MB | 485, 486 MB |
+| 64-bit, 16-byte granules | 180, 159 MB | 555, 575 MB |
+| 64-bit, 8-byte granules | 194, 194, 187, 182 MB | 544 - 553 MB |
+
+So the gap with the same assets held is 55 - 70 MB on the RG34XX-SP, not 45. (muOS, the same kind of run:
+32-bit 245 MB, 64-bit with 8-byte granules 180 MB.)
+
+| where the 64-bit build's anonymous memory is (Knulli, 8-byte granules) | 32-bit | 64-bit |
+|---|---|---|
+| Mono's heap | 112 MB | 144 MB |
+| glibc's malloc, in use and mmapped (Mono's metadata, the Mali driver's userspace side, the host; the 32-bit player also keeps the assemblies there, about 20 MB) | 98 MB | 113 MB |
+| Unity's allocators (libunity's anonymous mappings, resident; Unity's own count: 197 MB allocated of 345 MB reserved on 32-bit, 227 of 358 MB on 64-bit) | 293 MB | 305 - 310 MB |
+| Mono's own counters: classes, inflated classes and methods, signatures | 8 MB | 14 MB |
+
+The libraries' code and the assemblies the 64-bit build maps (Mapped 85 against 53 MB) are file
+pages, which MemAvailable counts as reclaimable: the difference in available memory is the anonymous
+memory. What remains is the pointer size in Mono's objects and metadata and in the engine's own
+structures: no switch of the runtime's reaches it. (A game-side lead, for the port, both builds:
+PlayMaker keeps every state's serialized `ActionData` after the actions are built, 12,528 objects with
+25 lists each, about 17 MB of the 64-bit heap.)
+
+### Unity's engine, symbol by symbol
+
+Two recordings of each build (`UA_PROF=500`, 20 s and 45 s, UnityMain's samples on a CPU by the
+function the program counter is in, each player's own symbol file; ms a frame, the 45 s pair):
+
+| UnityMain | 32-bit | 64-bit | difference |
+|---|---|---|---|
+| Unity's engine (libunity), without the next line | 11.23 | 12.09 | +0.86 |
+| the NDK's outline atomics (`__aarch64_ldadd8_relax`, `_ldadd4_relax`, `_cas8_acq` ...; inline `ldrex`/`strex` in the 32-bit player, counted in its callers) | - | 0.31 | +0.31 |
+| managed code (JIT) | 2.51 | 2.95 | +0.44 |
+| Mono's runtime | 1.20 | 0.77 | -0.44 |
+| libc | 1.25 | 0.80 | -0.45 |
+| ua_host, the bridge | 0.24 | 0.24 | 0 |
+| unnamed code (trampolines) | 0.40 | 0.26 | -0.14 |
+
+libunity's +0.86 ms over its 2,191 functions with a sample in either recording: the functions that
+got slower sum to +3.15 ms, the ones that got faster to -2.29; six differ by more than 0.05 ms
+(together +0.56), fourteen by more than 0.02 ms (+0.85). The largest, both recordings agreeing:
+
+| function | 32-bit | 64-bit | what it is |
+|---|---|---|---|
+| `Scripting::GetCachedPtrFromScriptingWrapper` | 0 | 0.19 | the read of a managed object's native pointer: a function of its own in the IL2CPP player, inline in the Mono player, where the same cache miss shows in its callers (`MonoBehaviour::CallUpdateMethod` 0.35 -> 0.27, `SerializableManagedRef::GetScriptCache` 0.22 -> 0.18) |
+| `FMOD::SystemI::UpdateAudibilities` | 0.27 | 0.40 | FMOD's per-frame walk of its channels |
+| `BaseRenderer::FlattenBasicData` | 0.04 | 0.12 | renderer data copied for the render thread |
+| `BaseBehaviourManager::CommonUpdate` | 0.11 | 0.16 | the walk of the behaviour lists |
+| `Playable::Handle` | 0.10 | 0.15 | the playable graph's traversal |
+| `InputAxis::Update` | 0.05 | 0.10 | |
+| `GameObject::QueryComponentByType` | 0.15 | 0.19 | |
+| `ProcessCameraIndexListIsNodeVisibleStep1` | 0.14 | 0.19 | culling |
+| `MonoBehaviour::HandleNotifications`, `Behaviour::GetEnabled`, `b2GrowableStack::Push`, `PrepareSpriteRenderNodes` | 0.15 | 0.29 | |
+
+None of them calls the runtime: the engine asks the bridge for the same things the 32-bit player asks
+Mono for (`UA_API_COUNT`: 4,606 write barriers and 706 invokes a frame against 4,582 and 703, plus
+the parameter count the bridge now remembers), and the bridge's own share is 0.05 ms. The functions
+are pointer walks over the engine's lists, trees and component tables (and FMOD's channel list): the
+same instructions' work on structures half again as large, on a core with 32 KB of data cache. Mono's
+side shows the same thing in one number: `mono_runtime_class_init_full`, on this path a load of one
+flag of the method's vtable, takes 120 ns a call (706 a frame): the time is the cache miss. Outside
+the engine nothing is left to take: Mono's whole invoke path (bridge, `mono_runtime_invoke`, the
+lookup, the wrappers) is 0.5 ms a frame on the 64-bit build against 1.2 ms of the 32-bit libmono.
+
+### The render thread and the Mali driver
+
+| UnityGfxDeviceW, ms a frame (the 45 s pair) | 32-bit | 64-bit | difference |
+|---|---|---|---|
+| the Mali driver | 4.54 | 5.47 | +0.92 |
+| Unity's engine | 3.12 | 3.09 | -0.04 |
+| libc | 2.03 | 1.96 | -0.07 |
+| ua_host's GL layers | 1.06 | 1.05 | 0 |
+
+The 64-bit driver's time by the GL call it was entered through (its stacks unwind; the 32-bit blob's
+do not, so there is no pair for this): `glDrawElements` 2.5 ms a frame, `glBindFramebuffer` 2.1 (the
+driver closes a pass's work there), `glClear` 1.4, the swap 0.3, `glBufferSubData` 0.2,
+`glBindTexture` 0.2, `glUseProgram` and `glUniform4fv` 0.1 each (the driver's calls into libc
+included). Draws, pass changes and clears: the calls the frame consists of, the same ones in the
+same order on both builds (ua_host's layers cost the same, 1.06 and 1.05 ms).
+
+It is not what holds the 64-bit frame: the render thread sleeps a third of its time waiting for
+UnityMain's commands (33 % of its samples in `Semaphore::WaitForSignal`, 38 % on the 32-bit build),
+and a core to itself (`UA_AFFINITY='UnityMain:3 UnityGfxDeviceW:2 *:0-1'`) changes nothing (muOS
+51.1 against 50.9 fps, Knulli 51.6 against 51.3). UnityMain waits for it 0.4 - 0.8 ms a frame
+(`GfxDeviceClient::WaitForPendingPresent`), on both builds.
+
+### The GPU clock: on muOS the two builds meet once the handheld is warm
+
+The RG34XX-SP's GPU clock follows the load (simple_ondemand) and the thermal cap (600 MHz from about
+68 C). Each second's frame rate grouped by the second's GPU clock: on muOS the 32-bit build spends the
+first seconds of a 25 s run at 648 - 816 MHz and the 64-bit build almost none, which is part of the
+25 s runs' 2 fps. Over 150 s (muOS, both from a cool start, `MEASURE=150`) the two run 53.2 and 51.7
+fps, and in the seconds both spend at 600 MHz 52.7 against 51.9 fps: a gap of 0.8 fps (1.5 %) once the
+handheld is warm, which is how it plays. Knulli keeps 696 MHz in both builds' runs, and there the gap
+stays 2 - 3 fps (55.0 - 55.5 against 52.2 - 53.2 fps in the seconds at 696 MHz).
+
+### Thread placement
+
+Thread placement through `UA_AFFINITY` (ua_host's own threads.c: the game's threads by name, nothing
+of the handheld's settings), A B pairs in one hold:
+
+| setting | Knulli 64-bit | Knulli 32-bit | muOS 64-bit |
+|---|---|---|---|
+| none | 51.1 - 51.3 fps (5 runs) | 53.8 | 50.9 - 51.2 |
+| `UnityMain:3 Job.Worker*:2 *:0-1` (the main thread and the job worker a core each) | 52.3, 51.8 | 55.1 | 51.1 |
+| `UnityMain:3 Job.Worker*:2 UnityGfxDeviceW:1 *:0` | 52.7, 52.1 | | 51.1 |
+| `UnityMain:3 *:0-2` | 51.6 | | 51.1 |
+| `FMOD*:0 *:1-3` | | | 50.8 |
+
+On Knulli the main thread and the job worker on cores of their own give 1 - 2 % to both builds (the
+worker's wait for a CPU 13 -> 5 %); on muOS nothing. It does not close the gap between the builds and
+is not a default (one firmware, one game). Also measured, nothing: `UA_FUTEX_SPIN` 20, 200 and 500 us
+(muOS 50.5 - 50.8 against 50.9 - 51.2 fps; Knulli 51.2), two job workers (muOS 51.1, UnityMain 17.8
+against 18.4 ms but the same frame rate).
+
+### Does Unity ship another arm64 player?
+
+A Linux or Android arm64 player built for Mono would replace the IL2CPP player and the bridge. None
+exists for the lines used here:
+
+- Unity's manual, "Scripting back ends" (6000.0 and 6000.3): Mono is supported on Windows
+  x86/x64/Arm64, macOS x64/Arm64, Linux x64 and Android Armv7; "any platform not mentioned in the
+  previous list of Mono-supporting platforms is IL2CPP-only".
+- 6000.0.61f1's module lists (`unity-6000.0.61f1-linux.ini`, `-osx.ini`, `-win.ini` on
+  download.unity3d.com): Linux Build Support (IL2CPP), (Mono) and Dedicated Server; their archives hold
+  the variations `linux64_player_*` and `linux64_server_*` only (x86-64, Mono and IL2CPP). No Embedded
+  Linux module in the public lists; Unity's arm64 Linux sysroot package (`com.unity.sdk.linux-arm64`,
+  for Linux and Embedded Linux) is for "IL2CPP-based Unity players".
+- 2021.3: the Android player's `Variations/mono` has `armeabi-v7a` only (the module on disk),
+  `Variations/il2cpp` has arm64-v8a; desktop Linux is x64 (system requirements); Embedded Linux x64
+  and ARM64 on request. 2017.4: Android Mono for ARMv7 and x86, Linux x86 and x86-64.
+
+The arm64 players Unity builds for Mono are macOS's and Windows's: a Mach-O or PE engine that draws
+with Metal or Direct3D, not something the Android route's runtime can host in place of libunity.so
+([macho-route.md](macho-route.md) uses a macOS build's game code, not its engine).
+
+### Unity's allocator blocks: the largest memory lever (both builds)
+
+Unity's native allocators take memory from the system in blocks (`memorysetup-*-allocator-block-size`,
+16 MB by default for the main, thread and graphics allocators) and keep a block while any allocation in
+it lives. Hollow Knight's player allocates 227 MB (64-bit) and holds 358 MB reserved; most of the
+difference is freed memory in blocks that something small still pins. Smaller blocks through
+`UA_BOOT_CONFIG` (boot.config lines Unity reads at launch; the APK unchanged), Knulli, census runs with
+the same assets held:
+
+| | Unity reserved | libunity resident | lowest available |
+|---|---|---|---|
+| 64-bit, 16 MB blocks (Unity's default) | 358 MB | 305 - 310 MB | 182 - 187 MB |
+| 4 MB | 303 MB | 283 - 288 MB | 204 - 211 MB |
+| 2 MB | 289 MB | 275 MB | 212 - 218 MB |
+| 1 MB | 276 MB | 264 MB | 228 - 234 MB |
+| 0.5 MB | 270 MB | 260 MB | 233 MB |
+| 1 MB, also the cache and type-tree allocators at 1 MB | 269 MB | 262 MB | 228 MB |
+| 32-bit, 16 MB | 345 MB | 289 - 293 MB | 249 MB |
+| 32-bit, 1 MB | 240 MB | 228 MB | 305 MB |
+
+Frame-rate runs with 1 MB blocks (`memorysetup-main-, -thread-, -gfx-main-, -gfx-thread-allocator-block-size=1048576`),
+A B pairs in one hold, runs with the same fonts held compared:
+
+| handheld | build | fps, 16 MB -> 1 MB | lowest available, 16 MB -> 1 MB |
+|---|---|---|---|
+| RG34XX-SP (Knulli) | 64-bit | 51.3, 51.1 -> 50.8, 51.2 | 228, 222 -> 268, 270 MB |
+| | 32-bit | 54.1 -> 54.0 | 299 -> 311 MB (the 1 MB run held the fonts) |
+| RG34XX-SP (muOS) | 64-bit | 50.9, 51.2 -> 51.0 | 226, 228 -> 271 MB |
+| | 32-bit | 53.1 -> 53.2 | 305 -> 317 MB (the 1 MB run held the fonts) |
+| BattleXP G350 | 64-bit | 39.4 -> 39.6, 38.9 | 207 -> 224, 224 MB |
+| | 32-bit | 40.8 -> 40.9 | 269 -> 292 MB |
+
+The frame rate is the same within the runs' spread (4 MB blocks: the same), frames over 50 ms the same.
+It changes where Unity's allocations lie and how much freed memory its allocators keep, not what the
+engine computes: the picture and play are the same. Not yet a default: measured on one game (6000.0),
+and the launch-to-scene time of these runs varies by up to 8 s either way, which a load-heavy route
+should settle first (the G350's loads especially). The setting for a port's `port.env`:
+`UA_BOOT_CONFIG='memorysetup-main-allocator-block-size=1048576 memorysetup-thread-allocator-block-size=1048576 memorysetup-gfx-main-allocator-block-size=1048576 memorysetup-gfx-thread-allocator-block-size=1048576'`.
+
+### Where that leaves the 64-bit build
+
+Per lead:
+
+- **8-byte granules**: the crash was ours (a broken build), not the player's; 6000.0's default now:
+  6.9 MB less live heap, the frame rate the same.
+- **libunity's +0.9 ms**: spread over the engine's pointer-walking functions (14 of 2,191 differ by more
+  than 0.02 ms, together +0.85 ms), plus 0.3 ms of the NDK's outline atomics; nothing of it passes
+  through the bridge, whose share is 0.05 ms. No call pattern of ours to change.
+- **libmali +0.9 ms**: in the draw calls, pass changes and clears themselves, the same calls on both
+  builds; the render thread is not the 64-bit frame's limit (a core of its own: no change).
+- **Another arm64 player**: none with Mono for Linux or Android in 2017.4, 2021.3 or 6000.0.
+- **Managed code** +0.44 ms: the same methods leading on both builds (PlayMaker's FSM updates); the
+  runtime's invoke path is already 0.7 ms cheaper than the 32-bit libmono's.
+- **Unity's allocator blocks** (the largest memory gain this pass, both builds: below), thread
+  placement (both builds, Knulli only), the malloc settings of ua_host (PR #22: on these handhelds
+  Hollow Knight's glibc memory is the same with and without them; the G350 12 - 20 MB more).
+
+Hollow Knight at King's Pass, the 1 GB settings, 25 s runs, the same assets held by both builds:
+
+| handheld | build | fps | lowest available |
+|---|---|---|---|
+| RG34XX-SP (muOS) | 32-bit today | 53.0 - 53.2 | 303 - 305 MB |
+| | 64-bit, start of this pass | 50.9 - 51.2 | 219 - 229 MB |
+| | 64-bit, 8-byte granules + 1 MB Unity blocks | 51.0 | 271 MB |
+| RG34XX-SP (Knulli) | 32-bit today | 53.8 - 54.2 | 299 - 302 MB |
+| | 64-bit, start of this pass | 50.6 - 51.3 | 216 - 228 MB |
+| | 64-bit, 8-byte granules + 1 MB Unity blocks | 50.8, 51.2 | 268, 270 MB |
+| BattleXP G350 (dArkOS) | 32-bit today (CJK fonts held) | 40.1 - 40.8 | 269 MB |
+| | 64-bit, 8-byte granules (fonts given back) | 39.3, 39.4 | 202 - 211 MB |
+| | 64-bit, 8-byte granules + 1 MB Unity blocks | 39.6, 38.9 | 224, 224 MB |
+
+The 64-bit build's memory gap on the RG34XX-SP is down from 75 - 80 MB to about 30 MB, and on the G350
+the 64-bit build now leaves 224 MB where it left 150 - 190 when it stopped the handheld. The frame rate
+is where it was: 1.5 % behind on muOS once warm, 4 - 5 % on Knulli and the G350, and every part of that
+measured above is Unity's arm64 engine, its NDK atomics, the JIT's code on larger objects and the
+64-bit Mali driver: none of it reached through the runtime. The 1 MB blocks are Unity's, so the 32-bit
+build gains from them too (+12 to +56 MB): what makes the aarch64 build better also makes the armhf one
+better, and the order between them stays.

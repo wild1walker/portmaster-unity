@@ -358,6 +358,11 @@ static void bind_mono(void)
 #undef BIND
     if (!m_mono_jit_init_version || !m_mono_runtime_invoke || !m_mono_add_internal_call)
     { logf_("%s is not a Mono runtime", path); abort(); }
+    // the collector's calls every line's runtime has and libunity uses without asking: a runtime
+    // built without them (a broken build of the collector) would run until the first collection
+    // and stop there in a call through a null pointer
+    if (!m_mono_gc_collect || !m_mono_gc_get_used_size || !m_mono_gc_get_heap_size)
+    { logf_("%s lacks mono_gc_collect / mono_gc_get_used_size / mono_gc_get_heap_size: not a complete build of the runtime", path); abort(); }
     logf_("Mono runtime %s", path);
 }
 
