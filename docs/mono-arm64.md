@@ -788,3 +788,128 @@ measured above is Unity's arm64 engine, its NDK atomics, the JIT's code on large
 64-bit Mali driver: none of it reached through the runtime. The 1 MB blocks are Unity's, so the 32-bit
 build gains from them too (+12 to +56 MB): what makes the aarch64 build better also makes the armhf one
 better, and the order between them stays.
+
+## Faster code for the game's scripts: four code generators measured on the handheld (2026-11-20)
+
+The question: could another code generator make the game's managed code so much faster that the 64-bit
+build overtakes the 32-bit one (UnityMain 18.4 - 18.6 against 16.4 - 17.0 ms a frame at King's Pass on
+muOS; the JIT's code 2.95 ms of it)? Measured with a benchmark, not by porting the game to each.
+
+**The benchmark** (kept outside the repository, with no game code in it): one IL assembly of 16
+kernels written after the managed methods that lead UnityMain's samples (`p64-main`, `UA_PROF`):
+PlayMaker's `Fsm.Update` / `UpdateDelayedEvents` / `UpdateState` / `UpdateStateChanges` /
+`FsmState.OnUpdate` with their structure taken from PlayMaker.dll's IL (300 FSMs, 3 - 8 states, seven
+action kinds, delayed events, the execution stack), `List<T>.get_Item` loops, UnityEngine.Object's `==`
+/ `IsNativeObjectAlive` on live and destroyed objects, tk2d's `UpdateAnimation` and
+`UpdateCameraMatrix` (Matrix4x4), Vector3 integration, InControl's axis update, `Dictionary<string,
+_>` lookups, interface calls and `foreach`, delegates, `stelemref`, a pointer walk, strings, small
+allocations, a P/Invoke (an internal call's transition) and a native-to-managed callback (an invoke).
+They are stand-ins written from the game's patterns, not the game's code. The same IL ran under each
+route on CPU 3 (`taskset`), the clock recorded (1.8 GHz on the RG34XX-SP, 1.512 GHz on the G350 in
+every run; the governors left alone); per kernel the median of 7 (G350: 5) timed calls after 0.6 s of
+warm-up, two passes in opposite orders on muOS (within 3 % of each other).
+
+**Routes**: our Mono (`build-mono.sh` 6000.0, 8-byte granules, JIT, as the port ships it); upstream Mono
+6.12.0.200 from mono-project's Debian arm64 packages as the LLVM proxy (Unity's branch needs the
+dotnet/llvm-project fork built with it): its JIT, its LLVM JIT (`--llvm`) and LLVM AOT
+(`--aot=llvm` of mscorlib, System.Core and the benchmark, `-fp-contract=off`; mono-llvm-tools' llc
+needed two newer flags dropped and libmono-llvm three symbols the runtime does not export, all no-ops);
+.NET 10.0.15 (CoreCLR, RyuJIT; the Terraria port's runtime): tiered (default), `TieredPGO=0`,
+`TieredCompilation=0`, ReadyToRun (crossgen2); IL2CPP: Unity 6000.0.61f1's (2022.3.62f3 converter,
+6000.0's libil2cpp and Boehm, Android's baselib.a) built for aarch64 Linux with clang 19 at `-Os` (what
+Unity's Android build uses: every compile command of Hollow Knight's build has `-Os`) and `-O2`.
+
+Time relative to our Mono's JIT (lower is faster), RG34XX-SP (muOS) / G350 where they differ:
+
+| kernel | our Mono, ms | Mono 6.12 JIT | Mono LLVM JIT | Mono LLVM AOT | .NET 10 tiered | .NET 10 TC=0 | .NET 10 R2R | IL2CPP -Os | IL2CPP -O2 |
+|---|---|---|---|---|---|---|---|---|---|
+| fsm_frame (PlayMaker) | 55.3 | 1.11 | 0.79 | 0.84 | 1.97 / 1.49 | 0.77 | 1.20 | 0.66 / 0.82 | 0.59 |
+| list_get_item | 54.9 | 1.12 | 0.56 | 0.56 | 0.22 | 0.33 | 0.89 | 0.44 | 0.37 |
+| unity_null | 38.3 | 1.15 | 0.60 | 0.47 | 0.35 | 0.44 | 0.80 | 0.49 | 0.31 |
+| dict_string | 36.1 | 1.10 | 0.73 | 0.80 | 0.54 | 0.54 | 0.59 | 0.64 | 0.63 |
+| tk2d_anim | 22.1 | 1.00 | 0.55 | 0.56 | 0.54 | 0.60 | 0.61 | 0.81 | 0.81 |
+| matrix4x4 | 283.9 | 0.96 | 0.13 | 0.21 | 0.39 | 0.20 | 0.22 | 0.05 | 0.05 |
+| vector3 | 77.0 | 1.02 | 0.14 | 0.12 | 0.16 | 0.16 | 0.20 | 0.16 | 0.15 |
+| incontrol | 94.3 | 0.99 | 0.19 | 0.20 | 0.20 | 0.27 | 0.27 | 0.28 | 0.22 |
+| interface | 236.4 | 0.98 | 0.73 | 0.93 | 0.51 | 0.74 | 0.88 | 0.89 | 0.89 |
+| delegate | 190.3 | 1.00 | 0.51 | 0.81 | 0.73 | 0.57 | 0.79 | 0.57 | 0.57 |
+| stelemref | 80.1 | 1.06 | 0.49 | 0.88 | 1.25 | 1.37 | 1.46 | 1.37 | 1.49 |
+| graph_walk | 16.4 | 0.58 | 0.47 | 0.48 | 1.13 | 1.49 | 0.99 | 2.66 | 2.30 |
+| string | 215.4 | 0.51 | 0.24 | 0.26 | 0.18 | 0.22 | 0.42 | 0.69 | 0.67 |
+| alloc | 946.8 | 0.28 | 0.26 | 0.28 | 0.19 | 0.19 | 0.20 | 1.12 | 1.10 |
+| pinvoke (an internal call) | 38.9 | 2.87 | 2.86 | 2.88 | 0.36 | 0.37 | 1.90 | 0.40 | 0.23 |
+| callback (an invoke) | 26.9 | 0.96 | 0.96 | 0.96 | 1.00 | 0.96 | 0.96 | 0.36 | 0.36 |
+| **geomean, the 6 PlayMaker-like kernels** (fsm, list, null, stelemref, interface, delegate) | 1.00 | 1.07 / 1.05 | 0.60 / 0.61 | 0.72 / 0.71 | 0.64 / 0.59 | 0.64 / 0.67 | 0.97 / 1.01 | **0.68 / 0.72** | 0.61 / 0.60 |
+| geomean, the 14 compute kernels | 1.00 | 0.86 / 0.81 | 0.39 | 0.44 / 0.42 | 0.44 / 0.39 | 0.44 / 0.43 | 0.56 / 0.57 | 0.55 / 0.52 | 0.51 / 0.47 |
+
+The PlayMaker-like geomean is the one to scale the game by: for IL2CPP at `-Os` it gives 0.68, and in the
+game the IL2CPP build's code and runtime took 3.4 ms a frame against the Mono route's 4.9 (0.69, above:
+the 2026-10-24 profile). The struct-math kernels (Matrix4x4, Vector3, InControl) are 5 - 20x faster under
+any optimizing compiler, but in this scene they are a small part of the 2.95 ms; the frame's managed time
+is PlayMaker's pointer walking, interface/virtual calls and list indexing, where the gains are 30 - 40 %.
+The same floating-point results everywhere (Matrix4x4's checksum identical on all routes).
+Side results: our Mono allocates 3.5 - 4.5x slower than Mono 6.12 (Unity's Boehm glue has no managed
+allocator: every `new` is a call into `GC_malloc`; IL2CPP's is the same, 1.1x), a P/Invoke costs our Mono
+40 ns and .NET 14 ns; Mono 6.12's armhf JIT on the same handheld takes 0.90 - 0.93 of its arm64 time on
+the pointer-walking kernels (the 32-bit build's advantage in the game, 2.61 against 2.95 ms) and 1.2 - 2x
+longer on everything else.
+
+**Compile cost and memory** (muOS): compiling all of Hollow Knight's Assembly-CSharp (17,220 methods,
+1.4 MB of IL) in the process: our Mono 5.6 s (0.33 ms a method), RyuJIT tier 0 5.7 s (0.33 ms),
+RyuJIT fully optimized 18.8 s (1.09 ms); Mono's LLVM JIT compiled the 16 kernels in 2.0 s against our
+JIT's 0.06 s (25 - 35x). Peak resident memory of the runtime with the benchmark's setup only: our Mono 16
+MB, Mono 6.12 17 - 18, .NET 10 32 (R2R 28), IL2CPP 14; with all of Assembly-CSharp compiled: our Mono
+66 MB, .NET 10 110 - 115 MB. Ahead-of-time cost on a Mac (M3, arm64 container): Mono 6.12's LLVM AOT of
+Assembly-CSharp 34 s (25 s CPU, peak 586 MB; mscorlib 38 - 52 s), its plain AOT 3 s; IL2CPP of the whole
+game (2026-11-04, `hk60/il2cpp`): 7.2 min converting (4.2 min CPU, peak 1.9 GB) and 20 min compiling with
+6 jobs (35 min CPU, peak 869 MB). On a 1.5 - 1.8 GHz A53 (1/15 - 1/20 of an M3 core) that is about 10 - 13
+h of CPU for IL2CPP (3 - 6 h with up to four compiles) with a conversion that needs more memory than a 1
+GB handheld has, and 30 - 45 min for LLVM AOT of the game's and the class libraries' assemblies (llc
+near 600 MB).
+
+**What it would give Hollow Knight** (2.95 ms of JIT code a frame on muOS; the 32-bit build is 1.5 - 2
+ms of UnityMain ahead):
+
+| route | managed code | saved a frame | what it adds a frame | engineering | verdict |
+|---|---|---|---|---|---|
+| Mono LLVM AOT at setup | 0.72 | about 0.8 ms | nothing new (the same bridge) | Unity's Mono branch built with the dotnet/llvm-project fork; opt/llc and a linker on the handheld; 30 - 45 min of setup, ~600 MB peak | the realistic one, short of the gap |
+| Mono LLVM JIT | 0.60 | about 1.2 ms | compiling 25 - 35x slower: the 2,711 methods `UA_JIT_WARM` compiles in 2.8 s would take over a minute, and every first call later stalls | the same LLVM build in the runtime (+21 MB of code) | no: hitches |
+| .NET 10 (CoreCLR) | 0.64 (TC=0) | about 1.0 ms | invokes (712 a frame at ~90 ns, as Mono), cheaper internal calls (14 against 40 ns) | a new bridge; blocked by object layout (below) | not possible behind the IL2CPP player |
+| IL2CPP | 0.68 | about 0.9 - 1.2 ms (measured in the game: 1.2) | none | exists (`pmu il2cpp`, `--on-device`) | 10+ h of handheld CPU and 1.9 GB to convert; +140 MB resident in the game |
+
+None closes the gap alone: the best usable one (LLVM AOT) brings UnityMain from about 18.5 to 17.7 ms
+against the 32-bit build's 16.7, because most of the gap is Unity's arm64 engine and the Mali driver
+(above), not the scripts.
+
+**CoreCLR in place of Mono, the facts**:
+- *Hosting*: `libcoreclr.so`'s `coreclr_initialize` / `coreclr_create_delegate` / `coreclr_execute_assembly`
+  (coreclrhost.h) or hostfxr, with a trusted-platform-assembly list; the Terraria port already runs .NET
+  10.0.15 for linux-arm64 (glibc) from a squashfs on all three handhelds (muOS glibc 2.44, Knulli, dArkOS
+  2.41).
+- *Object layout, the blocker*: libunity's IL2CPP scripting layer is compiled against IL2CPP's object
+  layout and reads objects in place (`GetCachedPtrFromScriptingWrapper` loads a field at a fixed offset;
+  `kIl2CppSizeOfArray` and the string layout are inlined): an object header of two pointers (class,
+  monitor) with fields from offset 16, arrays with `bounds` and `max_length` and elements from 32,
+  strings' characters from 20. Mono's layout is the same, which is why the bridge works. CoreCLR's object
+  has one pointer (the MethodTable; the sync block sits before it), fields from 8, arrays' elements from
+  16, strings' characters from 12, fixed in the runtime. A CoreCLR behind the IL2CPP player would read
+  every field of every UnityEngine object 8 bytes off.
+- *Internal calls*: CoreCLR has no `mono_add_internal_call`; its InternalCall table is compiled in for
+  CoreLib only. Unity's public fork (github.com/Unity-Technologies/runtime, MIT, default branch
+  `unity-main`, its last commit 2025-04-04) had a Mono-API layer over CoreCLR (`src/coreclr/vm/mono/mono_coreclr.cpp`,
+  `MonoFunctionsClr.h`) with registered "dynamic ecalls", and a 2021 branch `enable-conservative-gc`;
+  PRs #238 - #268 (2024) removed most of that layer and the ecall registration (#239), as Unity's engine
+  moved to generated P/Invoke-like bindings. What remains is profiler, class-info and invoke functions,
+  not an embedding API for a Unity 6000.0 player.
+- *GC*: CoreCLR's collector is precise and compacting; `gcConservative` scans stacks conservatively and
+  pins what they reference, but heap objects still move, and there is no non-moving mode. The IL2CPP
+  player keeps raw object pointers across calls (Boehm never moves anything), so even with the layout
+  solved it would need every such pointer pinned or behind a handle.
+- Unity's own CoreCLR player (announced for a later Unity 6 release) is not a player Hollow Knight's
+  6000.0 data can use.
+
+**Next step, if any**: the Mono LLVM AOT route is the only one that fits the bridge: build Unity's
+6000.0 Mono branch with its LLVM (`--enable-llvm`, the dotnet/llvm-project fork) in `tools/mono64`, AOT
+PlayMaker, Assembly-CSharp and mscorlib in the arm64 container, and measure King's Pass with those
+images (`UA_MONO64_MANAGED`) before deciding whether the handheld could build them at setup. Expected
+about -0.8 ms of UnityMain: a 64-bit build that is still behind the 32-bit one on frame rate.
