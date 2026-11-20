@@ -33,12 +33,18 @@ pub enum Stage {
     Journal,
     /// the work folder made and removed
     WorkDir,
+    /// (CPU time, summed over threads) source rows decoded inside prepare
+    DecodeCpu,
+    /// (CPU time, summed over threads) rows premultiplied, resampled and unpremultiplied inside prepare
+    ResizeCpu,
+    /// the main thread waiting for a worker's texture
+    Wait,
 }
 
-const N: usize = 12;
+const N: usize = 15;
 const NAMES: [&str; N] = [
     "open", "read", "prepare", "mips", "strips", "guided", "astc", "objects", "write", "commit",
-    "journal", "workdir",
+    "journal", "workdir", "decode-cpu", "resize-cpu", "wait",
 ];
 static NS: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
 static CALLS: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];

@@ -505,6 +505,7 @@ fn bc7_weights(n: u8) -> &'static [u8] {
     }
 }
 
+#[cfg(test)]
 fn bc7_subset(ns: u8, partition: u8, n: usize) -> usize {
     match ns {
         2 => (1 & (BC7_SI2[partition as usize] >> n)) as usize,
@@ -513,6 +514,7 @@ fn bc7_subset(ns: u8, partition: u8, n: usize) -> usize {
     }
 }
 
+#[cfg(test)]
 /// Pillow's get_bits: at most 8 bits (as UINT8), reading at most two bytes.
 fn get_bits(src: &[u8], bit: usize, count: u8) -> u8 {
     if count == 0 {
@@ -544,7 +546,8 @@ fn bc7_lerp(dst: &mut [u8; 4], e0: &[u8; 4], e1: &[u8; 4], s0: u8, s1: u8) {
     dst[3] = ((t1 * e0[3] as u32 + s1 * e1[3] as u32 + 32) >> 6) as u8;
 }
 
-fn decode_bc7_block(col: &mut [[u8; 4]; 16], src: &[u8]) {
+#[cfg(test)]
+fn decode_bc7_block_pillow(col: &mut [[u8; 4]; 16], src: &[u8]) {
     let first = src[0];
     if first == 0 {
         // degenerate case when no bits set
@@ -669,6 +672,179 @@ fn decode_bc7_block(col: &mut [[u8; 4]; 16], src: &[u8]) {
     }
 }
 
+/// Pillow's decode_bc7_block (the reference above, kept for the tests) for one mode at a time
+/// (the mode's field sizes constants), the block read as one 128-bit number, and the colours of
+/// each subset and index worked out once (bc7_lerp of the same endpoints and weights: a texel's
+/// colour depends only on them) instead of once a texel. Every block decodes to the same texels
+/// (the tests compare them on random blocks of each mode).
+fn decode_bc7_block(col: &mut [[u8; 4]; 16], src: &[u8]) {
+    let first = src[0];
+    if first == 0 {
+        // degenerate case when no bits set
+        for c in col.iter_mut() {
+            *c = [0, 0, 0, 255];
+        }
+        return;
+    }
+    let v = u128::from_le_bytes(src[..16].try_into().unwrap());
+    match first.trailing_zeros() {
+        0 => bc7_mode::<0>(col, v),
+        1 => bc7_mode::<1>(col, v),
+        2 => bc7_mode::<2>(col, v),
+        3 => bc7_mode::<3>(col, v),
+        4 => bc7_mode::<4>(col, v),
+        5 => bc7_mode::<5>(col, v),
+        6 => bc7_mode::<6>(col, v),
+        _ => bc7_mode::<7>(col, v),
+    }
+}
+
+#[inline(always)]
+fn bc7_mode<const MODE: usize>(col: &mut [[u8; 4]; 16], v: u128) {
+    let info = &BC7_MODES[MODE];
+    // (get_bits: at most 8 bits; none past the block, as its bytes past it read 0)
+    let mut bits = v >> (MODE + 1);
+    let mut take = |n: u8| -> u8 {
+        let x = (bits as u32 & ((1u32 << n) - 1)) as u8;
+        bits >>= n;
+        x
+    };
+    let mut cb = info.cb;
+    let mut ab = info.ab;
+    let partition = take(info.pb) as usize;
+    let rotation = take(info.rb);
+    let index_sel = take(info.isb);
+    let ns = info.ns as usize;
+    let numep = ns << 1;
+    let mut ep = [[0u8; 4]; 6];
+    for c in 0..3 {
+        for e in ep.iter_mut().take(numep) {
+            e[c] = take(cb);
+        }
+    }
+    for e in ep.iter_mut().take(numep) {
+        e[3] = if ab != 0 { take(ab) } else { 255 };
+    }
+    if info.epb != 0 {
+        cb += 1;
+        if ab != 0 {
+            ab += 1;
+        }
+        for e in ep.iter_mut().take(numep) {
+            let val = take(1);
+            for x in &mut e[..3] {
+                *x = (*x << 1) | val;
+            }
+            if ab != 0 {
+                e[3] = (e[3] << 1) | val;
+            }
+        }
+    }
+    if info.spb != 0 {
+        cb += 1;
+        if ab != 0 {
+            ab += 1;
+        }
+        for i in (0..numep).step_by(2) {
+            let val = take(1);
+            for e in ep[i..i + 2].iter_mut() {
+                for x in &mut e[..3] {
+                    *x = (*x << 1) | val;
+                }
+                if ab != 0 {
+                    e[3] = (e[3] << 1) | val;
+                }
+            }
+        }
+    }
+    for e in ep.iter_mut().take(numep) {
+        for x in &mut e[..3] {
+            *x = expand_quantized(*x, cb);
+        }
+        if ab != 0 {
+            e[3] = expand_quantized(e[3], ab);
+        }
+    }
+    // the colour indices follow (the index bits fit in 64), the second set (modes 4, 5) after them
+    let two = ab != 0 && info.ib2 != 0;
+    let ib = info.ib as u32;
+    let mut ci = bits as u64;
+    let mut ai = if two {
+        (bits >> (16 * info.ib as usize - ns)) as u64
+    } else {
+        0
+    };
+    // texels whose index has a bit fewer: texel 0, and the subsets' anchors
+    let anchors: u32 = 1
+        | match ns {
+            2 => 1u32 << BC7_AI0[partition],
+            3 => (1u32 << BC7_AI1[partition]) | (1u32 << BC7_AI2[partition]),
+            _ => 0,
+        };
+    let subsets: u32 = match ns {
+        2 => BC7_SI2[partition] as u32,
+        3 => BC7_SI3[partition],
+        _ => 0,
+    };
+    let cw = bc7_weights(info.ib);
+    let swap = |c: &mut [u8; 4]| match rotation {
+        1 => c.swap(0, 3),
+        2 => c.swap(1, 3),
+        3 => c.swap(2, 3),
+        _ => {}
+    };
+    if !two {
+        // a palette of each subset's colours by index (bc7_lerp(e0, e1, w, w), rotated)
+        let mut pal = [[[0u8; 4]; 16]; 3];
+        for (s, p) in pal.iter_mut().enumerate().take(ns) {
+            let (e0, e1) = (&ep[2 * s], &ep[2 * s + 1]);
+            for (k, &w) in cw.iter().enumerate() {
+                bc7_lerp(&mut p[k], e0, e1, w, w);
+                swap(&mut p[k]);
+            }
+        }
+        for (i, c) in col.iter_mut().enumerate() {
+            let s = match ns {
+                2 => ((subsets >> i) & 1) as usize,
+                3 => ((subsets >> (2 * i)) & 3) as usize,
+                _ => 0,
+            };
+            let n = ib - ((anchors >> i) & 1);
+            let i0 = (ci & ((1u64 << n) - 1)) as usize;
+            ci >>= n;
+            *c = pal[s][i0];
+        }
+        return;
+    }
+    // modes 4 and 5 (one subset): the colour from one index, the alpha from the other
+    let aw = bc7_weights(info.ib2);
+    let (e0, e1) = (&ep[0], &ep[1]);
+    let (mut rgb, mut alpha) = ([[0u8; 4]; 8], [0u8; 8]);
+    // (index_sel: the second indices weight the colour, the first the alpha)
+    let (wc, wa) = if index_sel != 0 { (aw, cw) } else { (cw, aw) };
+    for (k, &w) in wc.iter().enumerate() {
+        bc7_lerp(&mut rgb[k], e0, e1, w, w);
+    }
+    for (k, &w) in wa.iter().enumerate() {
+        let mut t = [0u8; 4];
+        bc7_lerp(&mut t, e0, e1, w, w);
+        alpha[k] = t[3];
+    }
+    let ib2 = info.ib2 as u32;
+    for (i, c) in col.iter_mut().enumerate() {
+        let first = (i == 0) as u32;
+        let n = ib - first;
+        let i0 = (ci & ((1u64 << n) - 1)) as usize;
+        ci >>= n;
+        let n2 = ib2 - first;
+        let i1 = (ai & ((1u64 << n2) - 1)) as usize;
+        ai >>= n2;
+        let (kc, ka) = if index_sel != 0 { (i1, i0) } else { (i0, i1) };
+        *c = [rgb[kc][0], rgb[kc][1], rgb[kc][2], alpha[ka]];
+        swap(c);
+    }
+}
+
 /// UnityPy's TextureFormat name of a number (None: not a format it knows).
 pub fn format_name(format: i32) -> Option<&'static str> {
     Some(match format {
@@ -761,6 +937,34 @@ mod tests {
     fn px(img: &Decoded, x: usize, y: usize) -> &[u8] {
         let b = bytes_per_pixel(img.mode);
         &img.px[(y * img.width + x) * b..(y * img.width + x + 1) * b]
+    }
+
+    /// The 128-bit reader against Pillow's byte reader: random blocks of every mode (the mode
+    /// bits set, the rest random), and the degenerate first byte.
+    #[test]
+    fn bc7_blocks_decode_as_pillows() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for n in 0..400_000u32 {
+            let mut b = [0u8; 16];
+            b[..8].copy_from_slice(&rnd().to_le_bytes());
+            b[8..].copy_from_slice(&rnd().to_le_bytes());
+            let mode = n % 9;
+            if mode == 8 {
+                b[0] = 0;
+            } else {
+                b[0] = (b[0] & !(((2u16 << mode) - 1) as u8)) | (1 << mode);
+            }
+            let (mut x, mut y) = ([[0u8; 4]; 16], [[0u8; 4]; 16]);
+            decode_bc7_block(&mut x, &b);
+            decode_bc7_block_pillow(&mut y, &b);
+            assert_eq!(x, y, "block {b:02x?}");
+        }
     }
 
     #[test]

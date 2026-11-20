@@ -6,7 +6,8 @@
 //!   * sinf / cosf / sincosf from Arm's optimized-routines (vendor/optimized-routines): glibc's,
 //!     which the Python's astc-encoder calls, rather than the C library's;
 //!   * texture2ddecoder's crunch unpackers (vendor/texture2ddecoder) and csrc/crunch_capi.cpp;
-//!   * Pillow's Resample.c (vendor/pillow, -O3 as Pillow's wheel) with csrc/pillow_shim.c;
+//!   * Pillow's Resample.c (vendor/pillow, -O3 as Pillow's wheel), included by csrc/pillow_resample.c
+//!     (its 4-byte passes in NEON on aarch64, the same bytes), with csrc/pillow_shim.c;
 //!   * guided_astc (vendor/guided_astc, -O2 as its wheel).
 use std::path::PathBuf;
 
@@ -110,9 +111,11 @@ fn main() {
         .debug(false)
         .warnings(false)
         .include(csrc.join("pillow"))
+        .include(vendor.join("pillow/libImaging"))
         .define("NDEBUG", None)
         .flag("-fwrapv")
-        .file(vendor.join("pillow/libImaging/Resample.c"))
+        // (Resample.c itself, included by pillow_resample.c with its vector passes)
+        .file(csrc.join("pillow_resample.c"))
         .file(csrc.join("pillow_shim.c"))
         .compile("tc_pillow");
 

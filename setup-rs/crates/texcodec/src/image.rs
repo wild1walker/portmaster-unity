@@ -58,23 +58,78 @@ impl Rgba {
 
     /// convert('RGBa') of an RGBA image, in place (Convert.c rgbA2rgba: MULDIV255).
     pub fn premultiply(&mut self) {
-        for p in self.px.chunks_exact_mut(4) {
-            let a = p[3] as u32;
-            for c in &mut p[..3] {
-                let t = *c as u32 * a + 128;
-                *c = (((t >> 8) + t) >> 8) as u8;
-            }
-        }
+        premultiply_px(&mut self.px);
     }
 
     /// convert('RGBA') of an RGBa image, in place (Convert.c rgba2rgbA).
     pub fn unpremultiply(&mut self) {
-        for p in self.px.chunks_exact_mut(4) {
-            let a = p[3] as u32;
-            if a != 255 && a != 0 {
-                for c in &mut p[..3] {
-                    *c = ((255 * *c as u32) / a).min(255) as u8;
-                }
+        unpremultiply_px(&mut self.px);
+    }
+}
+
+/// Rgba::premultiply on pixels (any run of whole pixels: a band of an image).
+pub fn premultiply_px(px: &mut [u8]) {
+    #[cfg(target_arch = "aarch64")]
+    let px = {
+        let n = px.len() / 16 * 16;
+        // SAFETY: NEON is part of aarch64; the loads and stores stay inside px[..n].
+        unsafe { premultiply_neon(&mut px[..n]) };
+        &mut px[n..]
+    };
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        for c in &mut p[..3] {
+            let t = *c as u32 * a + 128;
+            *c = (((t >> 8) + t) >> 8) as u8;
+        }
+    }
+}
+
+/// MULDIV255 four pixels at a time in 16-bit lanes (c * a + 128 is at most 65153, and adding its
+/// high byte at most 65407: no lane overflows, so the bytes are the scalar ones).
+#[cfg(target_arch = "aarch64")]
+unsafe fn premultiply_neon(px: &mut [u8]) {
+    use std::arch::aarch64::*;
+    // (byte 3 of each pixel: its alpha, to every byte of the pixel)
+    let idx: [u8; 16] = [3, 3, 3, 3, 7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15];
+    let idx = vld1q_u8(idx.as_ptr());
+    let keep: [u8; 16] = [0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255];
+    let keep = vld1q_u8(keep.as_ptr());
+    let r = vdupq_n_u16(128);
+    for c in px.chunks_exact_mut(16) {
+        let v = vld1q_u8(c.as_ptr());
+        let a = vqtbl1q_u8(v, idx);
+        let lo = vmlal_u8(r, vget_low_u8(v), vget_low_u8(a));
+        let hi = vmlal_u8(r, vget_high_u8(v), vget_high_u8(a));
+        let lo = vshrq_n_u16::<8>(vaddq_u16(lo, vshrq_n_u16::<8>(lo)));
+        let hi = vshrq_n_u16::<8>(vaddq_u16(hi, vshrq_n_u16::<8>(hi)));
+        let m = vcombine_u8(vmovn_u16(lo), vmovn_u16(hi));
+        // (alpha itself kept)
+        vst1q_u8(c.as_mut_ptr(), vbslq_u8(keep, v, m));
+    }
+}
+
+/// floor(2^24 / a) + 1 for a in 1..=255 (0 for 0): floor(x * R[a] / 2^24) is floor(x / a) for
+/// every x up to 255 * 255 (the error x / 2^24 is under 1/256, less than the 1/a any fraction
+/// below 1 leaves; checked over every x and a by the tests).
+const RECIP: [u32; 256] = {
+    let mut t = [0u32; 256];
+    let mut a = 1;
+    while a < 256 {
+        t[a] = (1u32 << 24) / a as u32 + 1;
+        a += 1;
+    }
+    t
+};
+
+/// Rgba::unpremultiply on pixels: 255 * c / a (at most 255) by a reciprocal, the same quotients.
+pub fn unpremultiply_px(px: &mut [u8]) {
+    for p in px.chunks_exact_mut(4) {
+        let a = p[3] as usize;
+        if a != 255 && a != 0 {
+            let r = RECIP[a] as u64;
+            for c in &mut p[..3] {
+                *c = (((255 * *c as u64) * r) >> 24).min(255) as u8;
             }
         }
     }
@@ -126,6 +181,7 @@ extern "C" {
         oh: i32,
         filter: i32,
         boxp: *const f32,
+        pillow: i32,
     ) -> i32;
 }
 
@@ -136,20 +192,42 @@ const LANCZOS: i32 = 1;
 /// (Image.resize, then _imaging.c's _resize) and its Resample.c. `bx`: the box as Python floats
 /// (None: the whole image). Errors where Pillow raises.
 pub fn resize(img: &Rgba, w: usize, h: usize, bx: Option<[f64; 4]>) -> Result<Rgba, Error> {
+    resize_with(img, w, h, bx, false)
+}
+
+/// resize() with Pillow's own resampling loops, not the vector ones (the same bytes: the tests
+/// compare them).
+pub fn resize_pillow(img: &Rgba, w: usize, h: usize, bx: Option<[f64; 4]>) -> Result<Rgba, Error> {
+    resize_with(img, w, h, bx, true)
+}
+
+fn resize_with(
+    img: &Rgba,
+    w: usize,
+    h: usize,
+    bx: Option<[f64; 4]>,
+    pillow: bool,
+) -> Result<Rgba, Error> {
     let bx = bx.unwrap_or([0.0, 0.0, img.width as f64, img.height as f64]);
     if (img.width, img.height) == (w, h) && bx == [0.0, 0.0, w as f64, h as f64] {
         return Ok(img.clone());
     }
     if img.height > img.width * 100 && h < img.height {
         // (very tall images: the height first, then the width)
-        let tall = im_resize(img, img.width, h, [0.0, bx[1], img.width as f64, bx[3]])?;
-        return im_resize(&tall, w, h, [bx[0], 0.0, bx[2], h as f64]);
+        let tall = im_resize(
+            img,
+            img.width,
+            h,
+            [0.0, bx[1], img.width as f64, bx[3]],
+            pillow,
+        )?;
+        return im_resize(&tall, w, h, [bx[0], 0.0, bx[2], h as f64], pillow);
     }
-    im_resize(img, w, h, bx)
+    im_resize(img, w, h, bx, pillow)
 }
 
 /// _imaging.c's _resize with a filter other than NEAREST: the box taken as C floats.
-fn im_resize(img: &Rgba, w: usize, h: usize, bx: [f64; 4]) -> Result<Rgba, Error> {
+fn im_resize(img: &Rgba, w: usize, h: usize, bx: [f64; 4], pillow: bool) -> Result<Rgba, Error> {
     let b = bx.map(|v| v as f32);
     if w < 1 || h < 1 {
         return Err(Error::Resize("height and width must be > 0".into()));
@@ -195,6 +273,7 @@ fn im_resize(img: &Rgba, w: usize, h: usize, bx: [f64; 4]) -> Result<Rgba, Error
             h as i32,
             LANCZOS,
             b.as_ptr(),
+            pillow as i32,
         )
     };
     if r != 0 {
@@ -235,6 +314,35 @@ mod tests {
     }
 
     #[test]
+    fn premultiply_and_back_match_the_formulas_for_every_value() {
+        let mut px = Vec::with_capacity(256 * 256 * 4 + 8);
+        for a in 0..=255u8 {
+            for c in 0..=255u8 {
+                px.extend_from_slice(&[c, 255 - c, c / 3, a]);
+            }
+        }
+        px.extend_from_slice(&[7, 9, 200, 31, 0, 0, 0, 0]);
+        let mut pre = px.clone();
+        premultiply_px(&mut pre);
+        let mut back = px.clone();
+        unpremultiply_px(&mut back);
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            let a = p[3] as u32;
+            for k in 0..3 {
+                let t = p[k] as u32 * a + 128;
+                assert_eq!(pre[4 * i + k] as u32, ((t >> 8) + t) >> 8);
+                let u = if a == 0 || a == 255 {
+                    p[k] as u32
+                } else {
+                    (255 * p[k] as u32 / a).min(255)
+                };
+                assert_eq!(back[4 * i + k] as u32, u);
+            }
+            assert_eq!((pre[4 * i + 3], back[4 * i + 3]), (p[3], p[3]));
+        }
+    }
+
+    #[test]
     fn flip_rows_reverses_rows() {
         let mut img = Rgba {
             width: 1,
@@ -268,6 +376,64 @@ mod tests {
             out.px,
             [36, 37, 38, 39, 40, 41, 42, 43, 52, 53, 54, 55, 56, 57, 58, 59]
         );
+    }
+
+    /// The vector passes against Pillow's loops: images of noise, hard edges and alpha (sums
+    /// past 0-255 at the edges, clamped), scaled down and up, with boxes, and wide and narrow.
+    #[test]
+    fn vector_resampling_matches_pillow() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let sizes = [
+            (37, 23, 14, 9),
+            (64, 64, 24, 24),
+            (300, 41, 113, 15),
+            (17, 200, 7, 75),
+            (9, 9, 31, 20),
+            (129, 3, 48, 1),
+            (1, 50, 1, 19),
+            (513, 257, 192, 96),
+        ];
+        for (k, &(w, h, ow, oh)) in sizes.iter().enumerate() {
+            for kind in 0..3 {
+                let mut px = vec![0u8; w * h * 4];
+                for (i, p) in px.chunks_exact_mut(4).enumerate() {
+                    let r = rnd();
+                    match kind {
+                        0 => p.copy_from_slice(&r.to_le_bytes()[..4]),
+                        // hard edges: 0 / 255 stripes and checks (Lanczos rings past both ends)
+                        1 => {
+                            let on = ((i % w) / 2 + (i / w) / 3) % 2 == 0;
+                            p.copy_from_slice(if on { &[255, 255, 255, 255] } else { &[0, 0, 0, 0] });
+                        }
+                        _ => {
+                            let a = (r >> 32) as u8;
+                            let b = r.to_le_bytes();
+                            p.copy_from_slice(&[b[0].min(a), b[1].min(a), b[2].min(a), a]);
+                        }
+                    }
+                }
+                let img = Rgba { width: w, height: h, px };
+                let boxes = [
+                    None,
+                    Some([0.5, 1.25, w as f64 - 0.75, h as f64 - 0.5]),
+                    Some([0.0, h as f64 / 3.0, w as f64, h as f64]),
+                ];
+                for bx in boxes {
+                    if bx.is_some() && (w < 4 || h < 4) {
+                        continue;
+                    }
+                    let a = resize(&img, ow, oh, bx).unwrap();
+                    let b = resize_pillow(&img, ow, oh, bx).unwrap();
+                    assert_eq!(a, b, "size {k}, kind {kind}, box {bx:?}");
+                }
+            }
+        }
     }
 
     #[test]

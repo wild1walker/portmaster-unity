@@ -51,7 +51,10 @@ Imaging ImagingCopy(Imaging in)
 /* tc_resample: the w x h 4-byte image `in` (rows top first, w * 4 bytes each) resampled to ow x oh
  * from the source rectangle box (x0, y0, x1, y1: floats, as Pillow takes them) with filter (an
  * IMAGING_TRANSFORM_* value), into out (ow * oh * 4 bytes). 0, or -1 when Pillow fails. */
-int tc_resample(const UINT8 *in, int w, int h, UINT8 *out, int ow, int oh, int filter, const float box_in[4])
+Imaging tc_resample_rgba(Imaging imIn, int xsize, int ysize, int filter, float box[4], int pillow);
+
+/* (pillow: Pillow's own passes, not the vector ones of pillow_resample.c: the tests' reference) */
+int tc_resample(const UINT8 *in, int w, int h, UINT8 *out, int ow, int oh, int filter, const float box_in[4], int pillow)
 {
     struct ImagingMemoryInstance src;
     memset(&src, 0, sizeof src);
@@ -65,7 +68,7 @@ int tc_resample(const UINT8 *in, int w, int h, UINT8 *out, int ow, int oh, int f
     for (int y = 0; y < h; y++) src.image[y] = (char *)in + (size_t)w * 4 * (size_t)y;
     src.image32 = (INT32 **)src.image;
     float box[4] = {box_in[0], box_in[1], box_in[2], box_in[3]};
-    Imaging res = ImagingResample(&src, ow, oh, filter, box);
+    Imaging res = tc_resample_rgba(&src, ow, oh, filter, box, pillow);
     free(src.image);
     if (!res) return -1;
     for (int y = 0; y < oh; y++) memcpy(out + (size_t)ow * 4 * (size_t)y, res->image[y], (size_t)ow * 4);

@@ -438,7 +438,9 @@ pub fn prepare(
     }
     let huge = w.saturating_mul(h) >= HUGE_PX && !same;
     let small = if huge {
-        decode_downscale(t, raw, ch.width, ch.height, if split { threads } else { 1 })?
+        prof::time(Stage::Prepare, || {
+            decode_downscale(t, raw, ch.width, ch.height, if split { threads } else { 1 })
+        })?
     } else {
         None
     };
@@ -595,7 +597,12 @@ pub fn downscale_parallel(img: Rgba, w: usize, h: usize, cores: usize) -> Result
         return image::downscale(img, w, h);
     }
     let mut pm = img;
-    pm.premultiply();
+    // (pixel by pixel: on every core, the same bytes)
+    let line = sw * 4;
+    par_chunks(&mut pm.px, sh.div_ceil(cores) * line, cores, |_, c| {
+        image::premultiply_px(c);
+        Ok(())
+    })?;
     let parts = par_map(n, cores, |i| {
         let (y0, y1) = (bounds[i], bounds[i + 1]);
         image::resize(
@@ -610,7 +617,10 @@ pub fn downscale_parallel(img: Rgba, w: usize, h: usize, cores: usize) -> Result
     for (i, part) in parts.iter().enumerate() {
         out.paste_rows(part, bounds[i]);
     }
-    out.unpremultiply();
+    par_chunks(&mut out.px, h.div_ceil(cores) * w * 4, cores, |_, c| {
+        image::unpremultiply_px(c);
+        Ok(())
+    })?;
     Ok(out)
 }
 
@@ -657,7 +667,7 @@ pub fn decode_downscale(
         let s0 = (sh - b) / bh * bh;
         let s1 = sh.min((sh - a).div_ceil(bh) * bh);
         let data = &raw[(s0 / bh * per).min(raw.len())..(s1 / bh * per).min(raw.len())];
-        let stored = decode_rgba(t, data, sw, s1 - s0)?;
+        let stored = prof::time(Stage::DecodeCpu, || decode_rgba(t, data, sw, s1 - s0))?;
         // top first: row r is source row sh - s1 + r; keep rows a..b
         let off = sh - s1;
         let n = s1 - s0;
@@ -673,6 +683,7 @@ pub fn decode_downscale(
                 .extend_from_slice(&stored.px[sr * line..sr * line + line]);
         }
         drop(stored);
+        let _r = prof::Timer::new(Stage::ResizeCpu);
         img.premultiply();
         image::resize(
             &img,
@@ -689,9 +700,10 @@ pub fn decode_downscale(
     let mut out = Rgba::new(w, h);
     par_chunks(&mut out.px, rows * w * 4, threads, |i, dst| {
         dst.copy_from_slice(&band(i)?.px);
+        // (pixel by pixel: in the band's task, the same bytes as over the whole image after)
+        image::unpremultiply_px(dst);
         Ok(())
     })?;
-    out.unpremultiply();
     Ok(Some(out))
 }
 
