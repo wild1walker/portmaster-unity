@@ -45,22 +45,22 @@ counters over 24 s of it; a frame's worth = count / (the group's wall time x the
 runs, before the tool printed each group's wall time, take 24 s / 7 groups: within 3 % of it). muOS runs
 the A53s at 1.8 GHz, Knulli at 1.512 GHz (both read, not set).
 
-| UnityMain, a frame | muOS 32-bit | muOS 64-bit (2 runs) | Knulli 32-bit (2 runs) | Knulli 64-bit (3 runs) |
+| UnityMain, a frame | muOS 32-bit (2 runs) | muOS 64-bit (3 runs) | Knulli 32-bit (2 runs) | Knulli 64-bit (3 runs) |
 |---|---|---|---|---|
-| fps | 52.9 | 51.2, 51.2 | 53.6, 53.6 | 51.1, 51.4, 51.1 |
-| cycles (user) | 28.4 M | 31.5, 31.6 M | 25.8, 25.8 M | 27.5, 27.2, 27.2 M |
-| instructions | 5.15 M | 4.50, 4.53 M | 5.11, 5.11 M | 4.46, 4.48, 4.44 M |
+| fps | 52.9, 52.5 | 51.2, 51.2, 51.1 | 53.6, 53.6 | 51.1, 51.4, 51.1 |
+| cycles (user) | 28.4, 28.1 M | 31.5, 31.6, 31.8 M | 25.8, 25.8 M | 27.5, 27.2, 27.2 M |
+| instructions | 5.15, 5.14 M | 4.50, 4.53, 4.48 M | 5.11, 5.11 M | 4.46, 4.48, 4.44 M |
 | IPC | 0.181 | 0.143 | 0.198 | 0.164 |
-| L1I refills | 125 K | 120, 117 K | 124, 125 K | 121, 119, 115 K |
-| L1D refills | 93 K | 100, 101 K | 94, 93 K | 100, 100, 99 K |
+| L1I refills | 125, 130 K | 120, 117, 123 K | 124, 125 K | 121, 119, 115 K |
+| L1D refills | 93, 94 K | 100, 101, 101 K | 94, 93 K | 100, 100, 99 K |
 | L1I / L1D micro-TLB refills | 9.1 / 13.8 K | 8.7 / 14.3 K | 8.5 / 12.9 K | 8.6 / 14.2 K |
 | L2 accesses | 348 K | 365, 361 K | 346 K | 363, 362 K |
-| **L2 refills (from DRAM)** | **72.6 K** | **87.6, 87.4 K** | **73.0, 72.7 K** | **86.1, 86.4, 85.2 K** |
+| **L2 refills (from DRAM)** | **72.6, 72.1 K** | **87.6, 87.4, 87.3 K** | **73.0, 72.7 K** | **86.1, 86.4, 85.2 K** |
 | bus accesses | 314 K | 379, 374 K | 318 K | 373, 371 K |
-| branch mispredicts | 97.6 K | 44.6, 44.7 K | 100.5, 100.1 K | 44.4, 44.0, 44.0 K |
+| branch mispredicts | 97.6, 97.2 K | 44.6, 44.7, 44.4 K | 100.5, 100.1 K | 44.4, 44.0, 44.0 K |
 | loads / stores retired | 1.26 / 0.60 M | 1.04 / 0.52 M | 1.25 / 0.60 M | 1.04 / 0.52 M |
-| **cycles stalled on a load miss** (0xE7) | **15.2 M** | **18.5, 18.5 M** | **13.1, 13.2 M** | **15.2, 15.4, 15.1 M** |
-| **cycles stalled on an i-cache miss** (0xE1) | **5.8 M** | **6.9, 6.9 M** | **5.2, 5.2 M** | **6.2, 5.8, 6.0 M** |
+| **cycles stalled on a load miss** (0xE7) | **15.2, 14.9 M** | **18.5, 18.5, 18.7 M** | **13.1, 13.2 M** | **15.2, 15.4, 15.1 M** |
+| **cycles stalled on an i-cache miss** (0xE1) | **5.8, 5.7 M** | **6.9, 6.9, 7.0 M** | **5.2, 5.2 M** | **6.2, 5.8, 6.0 M** |
 | iTLB miss stalls (0xE2) | 0.75 M | 0.77, 0.79 M | 0.68 M | 0.71, 0.68 M |
 | store stalls + store buffer full | 0.81 M | 1.04, 1.04 M | 0.71 M | 0.93, 0.87 M |
 | address-generation interlocks (0xE5) | 0.81 M | 0.44, 0.44 M | 0.80 M | 0.44, 0.44 M |
