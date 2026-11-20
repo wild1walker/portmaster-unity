@@ -303,8 +303,21 @@ prompts to keyboard glyphs) at every press of those buttons and back at the next
 A port whose players have no keyboard turns Rewired's own "Disable Keyboard" platform option on with
 asmpatch's opt-in `rewired-no-keyboard` (`android_data.asmpatch = ["auto", "rewired-no-keyboard"]`):
 Blasphemous then stays on the pad's glyphs (RG34XX-SP, Knulli and muOS: no switch over ten buttons). Not for
-ports that send keys themselves (`UA_KEYMAP`, `UA_KEYBOARD`, the on-screen keyboard): Rewired would ignore
-those too.
+ports that send keys themselves (`UA_KEYMAP`, `UA_KEYBOARD`, the on-screen keyboard): Rewired's keyboard
+maps would ignore those too.
+
+### Select on Rewired's Android Xbox map
+
+ua_host sends the pad's Select (SDL's Back) as `KEYCODE_BUTTON_SELECT`, which Unity 2017.4's Android player
+reports as joystick button 11 and no key. Rewired's map for `Xbox Wireless Controller` on Android
+(MicrosoftXboxOne, its variant "Xbox One S Controller (orig fw)": A - Y buttons 0 - 3, LB 4, RB 5, the stick
+buttons 8 and 9, Menu 10, as Unity numbers them) reads none of that: it takes View as `KeyCode.Escape`, what
+Unity reports for `KEYCODE_BACK`, which an Xbox pad's View button sends on Android. So in Blasphemous Select did
+nothing (no pause, so no game options) until `UA_KEYMAP=select:back` sent it as that Back key: the map opens
+with its Game Options (the game's Pause action), Start still opens the inventory, and the prompts stay the pad's
+with `rewired-no-keyboard` on (a key a joystick map reads is the joystick's element, not the keyboard
+controller's; Knulli, 2026-11-19). Read a Rewired game's map before choosing: `HardwareJoystickMap` objects in
+the data (the Rewired Input Manager's `ControllerDataFiles`), their Android variants matched by the pad's name.
 
 ## Menus made for touch
 
