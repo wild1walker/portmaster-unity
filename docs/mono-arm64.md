@@ -310,12 +310,20 @@ on a CPU, `profsum.py --syms` with each player's symbols and the runtime's own):
   `UA_MONO64_OPTIONS=-O=abcrem` 51.0 fps, 18.3 ms (the same hold's plain run: 51.0, 18.5). In the arm64
   rig abcrem shrinks a method like `HeroController.CheckTouchingGround` by 12 %, but these methods are
   not where the frame goes.
-- **Not tried, and why**: Mono's ahead-of-time images of the game's assemblies at setup make the JIT's
-  code with GOT indirections (on the 32-bit route the frame cost the same, porting.md), and on arm64 this
-  Mono writes them only through GNU as/ld, which the handhelds lack; what they would save, the first-use
-  compiles, `UA_JIT_WARM` already moves out of the frames. Mono's LLVM back end (the one code generator
-  that would beat the JIT's) is not built for this runtime and would compile on the handheld for hours, as
-  IL2CPP does. Mono's runtime build flags: it is `-O2` already and no longer where the time goes.
+- **Mono's ahead-of-time images: measured, slower** (2026-11-19). This runtime has Mono's AOT loader and
+  compiler (`mono_main --aot`; configure's "Unity AOT: default"; LLVM back end: no). Compiled with the same
+  `libmonobdwgc-2.0.so` in the arm64 build container (GNU as/ld; 5 s for Assembly-CSharp, 17,431 methods,
+  13 MB; UnityEngine.CoreModule stops the compiler with a fatal error, left to the JIT) and put beside the
+  assemblies (`UA_MONO64_MANAGED`), images of Assembly-CSharp, -firstpass, PlayMaker, mscorlib,
+  TeamCherry.TK2D, Unity.TextMeshPro and UnityEngine.UI are taken (`UA_JIT_WARM`'s warm-up then finds 4,700
+  of its methods compiled already instead of 3,353). King's Pass on muOS, JIT A B B A: 50.9, 50.9 fps,
+  UnityMain 18.4, 18.4 ms; AOT 50.5, 50.8 fps, 18.7, 18.7 ms: the images' code is the same code generator's
+  with GOT loads and PLT calls, 0.3 ms slower a frame (on the 32-bit route it cost the same, porting.md),
+  and 6 MB more available (213, 216 against 206, 211 MB: less JIT-time memory). Not a setup step: no
+  frame-rate gain, and the handhelds have no as/ld. Mono's LLVM back end (the one that could beat the
+  JIT) is not built for this runtime, would compile on the handheld at setup, and LLVM may fuse a multiply
+  and an add the JIT keeps apart (`fp-contract`): floating-point results the game's code would not get
+  from either real player.
 
 **Where the memory goes** (`/proc/<pid>/smaps` 85 s into a run, in the scene, both builds holding the
 same fonts: 514 MB against 653 MB resident on the CPU side; the rest of each run's resident figure is the
@@ -386,6 +394,18 @@ frame of CPU; lowest MemAvailable; the G350's runs paired by whether the game to
 The fix gives 6 - 9 MB of memory and nothing in frame rate. The 64-bit build stays 3.5 - 6 % slower
 (muOS 1.7 fps, Knulli 3.0, G350 2.2) and leaves 45 MB less available on the RG34XX-SP, about 110 MB less on
 the G350 with the same fonts held (its 64-bit libmali, r13p0 GBM, and GL thread: +3.3 ms, +27 %).
+The G350 stopped answering (no network, a power button needed) during the next hold's first 64-bit run,
+the fixed bridge with the same settings as the runs above, as it did once before under `UA_PROF`: a 1 GB
+handheld without swap with 150 - 190 MB available at the scene and less during its load.
+
+**Verdict.** On these handhelds an aarch64-only Hollow Knight gives up 3.5 - 6 % of its frame rate and 45
+(RG34XX-SP) to 110 MB (G350) of available memory, and no part of that is the route's own any more: Unity's
+arm64 engine (+1.1 - 1.2 ms of UnityMain), the 64-bit Mali driver (+1.5 - 1.9 ms of the render thread,
++3.3 ms of the G350's GL thread, +13 MB of code) and Mono's objects and metadata at 64-bit pointers (+36 MB
+of live heap, about +7 MB of metadata: the census finds the same objects, each larger). The levers tried
+(Mono's inline limit, abcrem, AOT images, the parameter-count cache, malloc arenas, the empty strings)
+moved the frame rate by nothing measurable. A game near its frame-rate or memory limit keeps the armhf
+build; one with headroom can ship aarch64 alone.
 
 **What libunity asks of the runtime** (`UA_API_COUNT=10`, the same scene, a frame): the 32-bit Mono player
 4,690 `mono_gc_wbarrier_set_field` and 717 `mono_runtime_invoke`; the 64-bit player on the Mono route
@@ -400,10 +420,10 @@ fps, UnityMain 18.5 ms, against 50.7 and 18.5 with the release's bridge in the s
 
 | what | cost on the 64-bit build | next step |
 |---|---|---|
-| Unity's arm64 engine (libunity) | +1.2 ms of UnityMain a frame (+11 %), all over the frame | none from the runtime's side: exact hooks of single engine functions measured about 1 % each (profiling.md); a game whose main thread is the limit keeps the 32-bit build |
-| the 64-bit Mali driver | +0.85 ms of the render thread (+18 %; G350's GL thread +26 %) and +13 MB of code | fewer GL calls help both builds; on the G350 a profile of the GL thread (driver against ua_host's replay) when it is back |
+| Unity's arm64 engine (libunity) | +1.2 ms of UnityMain a frame (+11 %), all over the frame | none from the runtime's side: exact hooks of single engine functions measured about 1 % each (profiling.md). The NDK's outline atomics (`__aarch64_ldadd4_relax`, `_ldadd8_relax`, `_cas8_acq_rel` ...: 1.6 % of UnityMain's samples, about 0.3 ms) are mostly the LL/SC loop itself, which an A53/A35 without LSE runs either way; pointing them at versions without the `__aarch64_have_lse_atomics` test would save its load and branch, under 0.1 ms. `Scripting::GetCachedPtrFromScriptingWrapper` (0.2 ms) is out of line in this player and cannot be inlined into its callers from outside. A game whose main thread is the limit keeps the 32-bit build |
+| the 64-bit Mali driver | +0.85 ms of the render thread (+18 %; G350's GL thread +3.3 ms, +27 %) and +13 MB of code | no choice of driver: muOS and Knulli each ship one libmali per architecture (`/usr/lib/libmali.so`, 44 MB with its symbols, and `/usr/lib32/libmali.so`, 14.5 MB, both `libmali.so.0.20`), no Panfrost; ua_host's GL layer does the same work on both builds (2.87 against 2.91 ms); fewer GL calls help both builds alike |
 | Mono's heap and metadata at 64-bit pointers | +36 MB of live heap after the empty-string fix (68 -> 104 MB live; Mono's heap 112 -> 160 - 176 MB), Mono's metadata about +7 MB: most of the lost memory | none at run time: the census finds the same classes and counts on both builds, each object larger (Mono has no compressed references); `UA_GC_GROW` (a collection before the heap grows during a load when memory is low) is the lever for a 64-bit build at its memory limit |
 | empty strings made new for libunity (the route's own) | 197,566 live, 6 MB of heap | **closed** (2026-11-19): the bridge answers String.Empty as both real players do; 6 - 9 MB more available, the frame rate the same |
-| JIT code | +0.34 ms (+13 %) | not Mono's options (inline limit, abcrem: no change); IL2CPP's arm64 build (compiled at setup, hours on the handheld) |
+| JIT code | +0.34 ms (+13 %) | not Mono's options (inline limit, abcrem: no change), not Mono's AOT images (0.3 ms slower, above); IL2CPP's arm64 build (compiled at setup, hours on the handheld) |
 | the class libraries loaded at start | 10.8 MB of file pages (System.Windows.Forms, System.Data...) | `UA_MONO64_ASSEMBLIES=scripting` (runtime.md): only `ScriptingAssemblies.json`'s at start, as a Mono player, the class libraries when used: 88 + 7 assemblies instead of 116, 588 against 599 MB resident (assembly pages 20.5 -> 16.0 MB), 209 and 212 MB available against 198 - 204, the scene and its frame rate unchanged (50.8, 51.1 fps); opt-in until the route's other games (Cuphead's 2017.4 player, Tom City, Untitled Hook Game) have run with it, then the default |
 | Mono's runtime invoke path | about 0.35 ms a frame (already less than the 32-bit libmono's) | not worth a cache: this Mono's `mono_jit_runtime_invoke` already finds a method's invoke info in a lock-free hash (`mono_conc_hashtable_lookup`, 0.09 ms a frame in the profile; the 32-bit libmono took the domain lock, which is what `UA_MONO_INVOKE` removes); what a cache could save is under the runs' spread |
