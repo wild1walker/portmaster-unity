@@ -129,5 +129,59 @@ class DecodeDownscaleTest(unittest.TestCase):
         self._same('DXT1', 10, 64, 2048, (64 // 4) * (2048 // 4) * 8, 0.375)
 
 
+def _sprite(file_id, path_id):
+    return {'m_Rect': {'x': 10.0, 'y': 20.0, 'width': 100.0, 'height': 60.0}, 'm_Offset': {'x': 4.0, 'y': 6.0},
+            'm_Border': {'x': 2.0, 'y': 4.0, 'z': 6.0, 'w': 8.0}, 'm_PixelsToUnits': 100.0,
+            'm_RD': {'texture': {'m_FileID': file_id, 'm_PathID': path_id},
+                     'textureRect': {'x': 10.0, 'y': 20.0, 'width': 100.0, 'height': 60.0},
+                     'textureRectOffset': {'x': 2.0, 'y': 2.0}, 'atlasRectOffset': {'x': -1.0, 'y': -1.0},
+                     'uvTransform': {'x': 100.0, 'y': 60.0, 'z': 100.0, 'w': 50.0}}}
+
+
+class _Obj:
+    def __init__(self, tree):
+        self.tree = tree
+
+    def read_typetree(self):
+        return self.tree
+
+
+class CrossFileTest(unittest.TestCase):
+    """Sprites and atlas entries whose texture is in another file follow it when it is scaled there."""
+
+    SCALED = {'sharedassets1.assets': {'7': [2048, 1024, 1024, 512]},
+              os.path.join('sub', 'sharedassets2.assets'): {'3': [512, 512, 256, 256]}}
+
+    def test_externals_by_file_name(self):
+        ext = ['globalgamemanagers.assets', 'Library/unity default resources', 'sharedassets1.assets',
+               'sharedassets2.assets']
+        self.assertEqual(T.external_sizes(ext, self.SCALED, 'sharedassets5.assets'), {3: {7: (2048, 1024, 1024, 512)}})
+        # an external is looked for in the file's own folder; a file's reference to itself is its own textures'
+        self.assertEqual(T.external_sizes(ext, self.SCALED, os.path.join('sub', 'sharedassets9.assets')),
+                         {4: {3: (512, 512, 256, 256)}})
+        self.assertEqual(T.external_sizes(['sharedassets1.assets'], self.SCALED, 'sharedassets1.assets'), {})
+
+    def test_sprites_and_atlas_entries(self):
+        ext = {3: {7: (2048, 1024, 1024, 512)}}
+        there, own, other = _Obj(_sprite(3, 7)), _Obj(_sprite(0, 7)), _Obj(_sprite(3, 8))
+        atlas = _Obj({'m_RenderDataMap': [('a', {'texture': {'m_FileID': 3, 'm_PathID': 7}, 'downscaleMultiplier': 0.5}),
+                                          ('b', {'texture': {'m_FileID': 2, 'm_PathID': 7}, 'downscaleMultiplier': 1.0})]})
+        stats = {'sprites': 0, 'atlas_entries': 0}
+        save = T.fix_cross_references([('Sprite', there), ('Sprite', own), ('Sprite', other), ('SpriteAtlas', atlas),
+                                       ('Texture2D', _Obj({}))], ext, stats)
+        self.assertEqual([o for o, _ in save], [there, atlas])
+        self.assertEqual(stats, {'sprites': 1, 'atlas_entries': 1})
+        t = there.tree
+        self.assertEqual(t['m_Rect'], {'x': 5.0, 'y': 10.0, 'width': 50.0, 'height': 30.0})
+        self.assertEqual(t['m_RD']['textureRect'], {'x': 5.0, 'y': 10.0, 'width': 50.0, 'height': 30.0})
+        self.assertEqual(t['m_PixelsToUnits'], 50.0)
+        self.assertEqual(t['m_RD']['atlasRectOffset'], {'x': -1.0, 'y': -1.0})
+        # the same file's texture 7 (fix_references' own) and another texture of that file: as they were
+        self.assertEqual(own.tree, _sprite(0, 7))
+        self.assertEqual(other.tree, _sprite(3, 8))
+        m = dict(atlas.tree['m_RenderDataMap'])
+        self.assertEqual((m['a']['downscaleMultiplier'], m['b']['downscaleMultiplier']), (0.25, 1.0))
+
+
 if __name__ == '__main__':
     unittest.main()
