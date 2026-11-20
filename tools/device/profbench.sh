@@ -75,6 +75,13 @@ if [ -f "$GC" ] && [ "$(basename "$GC")" = gpucnt ]; then
   COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$GC")" gpucnt | dev_tar_in "$B" &&
     rshn "chmod +x $(q "$B/gpucnt")" || echo "   (copying gpucnt failed: no GPU counters)"
 fi
+# the CPU counter reader for HWCOUNT=1 runs (runtime/host/hwcount.c; a static aarch64 build counts a
+# 32-bit game's threads as well: the kernel is 64-bit)
+HC=${HWCOUNT_BIN:-$PU/runtime/host/out/arm64/hwcount}
+if [ -f "$HC" ] && [ "$(basename "$HC")" = hwcount ]; then
+  COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$HC")" hwcount | dev_tar_in "$B" &&
+    rshn "chmod +x $(q "$B/hwcount")" || echo "   (copying hwcount failed: no CPU counters)"
+fi
 
 base=()
 for v in $(compgen -e); do
@@ -83,6 +90,8 @@ done
 [ -n "${PLAN:-}" ] && base+=("PLAN=$PLAN")
 [ -n "${MEASURE:-}" ] && base+=("MEASURE=$MEASURE")
 [ -n "${GPUCNT:-}" ] && base+=("GPUCNT=$GPUCNT")
+[ -n "${HWCOUNT:-}" ] && base+=("HWCOUNT=$HWCOUNT")
+[ -n "${HWCOUNT_ARGS:-}" ] && base+=("HWCOUNT_ARGS=$HWCOUNT_ARGS")
 [ "${STOP_ES:-1}" = 1 ] && base+=("UATEST_STOP_ES=1")
 names=()
 for r in "${runs[@]}"; do

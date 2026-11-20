@@ -16,6 +16,7 @@ whole measured session:
 | what the GPU does, pass by pass, and what each pass costs | `UA_GL_TRACE=<s>` (+ `UA_GL_TRACE_DRAWS`, `UA_SHADER_DUMP`): below, [GPU, pass by pass](#gpu-pass-by-pass) |
 | how many of the sprites' fragments sample only transparent texels | `tools/device/deadfrags.py` + `UA_SHADER_OVERRIDE`: [below](#sprites-transparent-texels-kings-pass-2026-10-23) |
 | which of the GPU's units a frame or a shader keeps busy (arithmetic, texturing, varyings, tile writes, memory) | `runtime/host/gpucnt` (the Mali's hardware counters; `GPUCNT=1` in a bench run): [below](#gpu-counters-gpucnt) |
+| why a thread's code is slow on the CPU (IPC, cache and TLB refills, L2 misses, the A53's load-miss and i-cache stall cycles) | `runtime/host/out/arm64/hwcount` (the CPU's PMU counters on the game's threads; `HWCOUNT=1` in a bench run, `HWCOUNT_ARGS` its options; `hwcount -L` the cache latencies): [arm64-routes.md](arm64-routes.md) |
 | what a pass's loads and stores cost the GPU itself | `runtime/host/passbench` on the device: [below](#what-a-pass-costs-on-the-mali-g31-passbench) |
 | which passes, loads and stores a frame could do without | `tools/analysis/framegraph.py` on a `UA_GL_TRACE_DRAWS` log; the GL calls a frame makes, by entry point: `UA_GL_REC=census` ([holding the whole frame](#holding-the-whole-frame-ua_gl_rec)) |
 | whether the GPU ever waits for work inside the frames | `UA_GPU_IDLE=<s>` ([runtime.md](runtime.md); below, [the handheld around the game](#the-handheld-around-the-game-2026-10-23)) |

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the host programs: ua_host (loader + android shims + fake JNI + media core), and the device
-# checks egltest / passbench / drawbench / sdltest / audiocheck / shadercheck / computecheck, gpucnt (GPU counters; static) and
+# checks egltest / passbench / drawbench / sdltest / audiocheck / shadercheck / computecheck, gpucnt (GPU counters; static), hwcount (CPU counters; static, arm64 only: it counts 32-bit games too) and
 # wwrender (the Wwise player offline: docs/plugins.md, "The player"). Build ../loader, ../android, ../jni and ../media
 # first for the same ARCH (../build.sh does).
 #   ARCH=armhf (default): cross-compiled for the device's 32-bit userland in the ua-host-armhf image
@@ -56,6 +56,7 @@ if [ "$ARCH" = arm64 ]; then
     gcc -O2 -Wall -o $O/shadercheck shadercheck.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/computecheck computecheck.c -lEGL -lGLESv2
     gcc -O2 -Wall -static -o $O/gpucnt gpucnt.c
+    gcc -O2 -Wall -static -o $O/hwcount hwcount.c
     gcc -O2 -g -Wall -o $O/wwrender wwrender.c $O/wwplay.o $O/wwplay_vorbis.o -lpthread -lm
     gcc -O2 -g -Wall -o $O/fmrender fmrender.c $O/fmplay.o $O/wwplay_vorbis.o -lpthread -lm'
   exit

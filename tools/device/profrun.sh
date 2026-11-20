@@ -17,6 +17,9 @@
 #   prof-<n>.txt      with UA_PROF=<hz>: the profile of the measurement (runtime/host/prof.c)
 #   gpucnt.txt        with GPUCNT=1 (and gpucnt beside this script): the GPU's hardware counters
 #                     over the measurement (runtime/host/gpucnt.c)
+#   hwcount.txt       with HWCOUNT=1 (and hwcount beside this script): the CPU's hardware counters on
+#                     UnityMain over the measurement (runtime/host/hwcount.c; HWCOUNT_ARGS: its options,
+#                     e.g. "-t UnityMain,UnityGfxDeviceW -q 100")
 #   shot-<n>.ppm      the screenshots the plan asked for
 #   result            one line: ok, or why the run stopped early
 # Nothing is changed on the handheld except that folder (and EmulationStation stopped and started
@@ -39,7 +42,7 @@
 # e.g. a saved game continued from its title screen:
 #   PLAN='log:pd.maxHealth; steady:3; press:0:b; sleep:6; press:0:b; hitch:2000; steady:5'
 # Settings: MEASURE (s, default 30), UA_PROF (profile at that rate during the measurement),
-# GPUCNT=1 (the GPU's counters during the measurement), UATEST_STOP_ES=1, UA_MEM_MIN (the memory
+# GPUCNT=1 (the GPU's counters during the measurement), HWCOUNT=1 (the CPU's), UATEST_STOP_ES=1, UA_MEM_MIN (the memory
 # watchdog's line, as uatest.sh), and every UA_* (but UA_AUDIO: these runs are always silent).
 set -u
 R=${1:?usage: profrun.sh <game folder> <name>}; NAME=${2:?name}
@@ -209,6 +212,10 @@ snapshot "$OUT/snap-0.txt"
 [ -n "$PROF" ] && { echo "$M" > prof.req.tmp && mv prof.req.tmp prof.req; }
 if [ "${GPUCNT:-0}" = 1 ] && [ -x "$HERE/gpucnt" ]; then
   "$HERE/gpucnt" sample "$((M - 1))" 100 "$NAME" > "$OUT/gpucnt.txt" 2>&1 &
+fi
+if [ "${HWCOUNT:-0}" = 1 ] && [ -x "$HERE/hwcount" ]; then
+  # (word-split on purpose: options)
+  "$HERE/hwcount" -p "$pid" -s "$((M - 1))" ${HWCOUNT_ARGS:-} > "$OUT/hwcount.txt" 2>&1 &
 fi
 # t counts seconds of the measurement: each sample waits for the next whole second since its start
 # (bash 5's EPOCHREALTIME and a sleep that takes fractions; else one second after the last sample)
