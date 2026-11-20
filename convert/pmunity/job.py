@@ -30,6 +30,8 @@ class Job:
             self.state.setdefault('done', {}); self.state.setdefault('scaled', {})
             if self.state.get('pending'):
                 self._finish_pending()
+            if self.state.get('once'):
+                self._finish_once()
 
     @classmethod
     def reader(cls, src, cfg, log=None):
@@ -106,6 +108,31 @@ class Job:
             if os.path.exists(path):
                 os.replace(path, dst)
         self.save_state()
+
+    def write_once(self, step, rel, data):
+        """write() and mark_done(step, rel) for a change that must not be made twice (values scaled
+        in place: a file found changed and not marked would be scaled again). The journal names the
+        written file before it is put in place (`once`), so a job killed anywhere on the way ends
+        with the file changed once and marked when it starts again."""
+        if self.state_path is None:
+            raise RuntimeError('read-only job')
+        dst = os.path.join(self.out, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        tmp = dst + '.tmp'
+        with open(tmp, 'wb') as f:
+            f.write(data)
+            f.flush()
+            if self.inplace:
+                os.fsync(f.fileno())
+        self.state['once'] = [tmp, dst, step, rel]
+        self.save_state()
+        self._finish_once()
+
+    def _finish_once(self):
+        tmp, dst, step, rel = self.state.pop('once')
+        if os.path.exists(tmp):
+            os.replace(tmp, dst)
+        self.mark_done(step, rel)
 
     def work_dir(self, name):
         """An empty scratch folder for a step (<out>/.pmunity-work/<name>: a dot folder, which
