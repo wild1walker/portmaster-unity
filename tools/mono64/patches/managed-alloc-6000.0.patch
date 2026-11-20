@@ -1,0 +1,428 @@
+--- a/external/bdwgc/thread_local_alloc.c
++++ b/external/bdwgc/thread_local_alloc.c
+@@ -298,5 +298,75 @@
+         }
+     }
+ #endif /* GC_ASSERTIONS */
++
++#if defined(USE_COMPILER_TLS)
++/* For Mono's managed allocator (portmaster-unity, tools/mono64): the   */
++/* first branch of GC_FAST_MALLOC_GRANS as GC_malloc_kind and          */
++/* GC_gcj_malloc above take it, and nothing else.  An object off this  */
++/* thread's free list, initialised as they initialise it, or NULL      */
++/* wherever they would do anything else (a thread without free lists,  */
++/* incremental mode, a size beyond the tiny lists, a counter or an     */
++/* empty list): nothing is changed then, and the caller makes the same */
++/* call it made without this, which finds the same state.             */
++GC_INLINE void *GC_tl_try_pop(void **tiny_fl, size_t bytes)
++{
++    size_t granules = ROUNDED_UP_GRANULES(bytes);
++    void **my_fl;
++    void *my_entry;
++    void *next;
++
++    if (EXPECT(granules >= GC_TINY_FREELISTS, FALSE))
++        return NULL;
++    my_fl = tiny_fl + granules;
++    my_entry = *my_fl;
++    if (EXPECT((GC_word)my_entry <= DIRECT_GRANULES + GC_TINY_FREELISTS + 1,
++               FALSE))
++        return NULL;
++    next = *(void **)(my_entry);
++    GC_FAST_M_AO_STORE(my_fl, next);
++    GC_PREFETCH_FOR_WRITE(next);
++    return my_entry;
++}
++
++/* (hidden: called from Mono's boehm-gc.c in the same library, directly) */
++#define GC_TL_TRY_API __attribute__((__visibility__("hidden")))
++
++/* kind: PTRFREE or NORMAL (GC_I_PTRFREE, GC_I_NORMAL).                 */
++GC_TL_TRY_API void * GC_tl_try_malloc_kind(size_t bytes, int kind)
++{
++    void *tsd = GC_thread_key;
++    void *result;
+ 
++    if (EXPECT(0 == tsd || GC_incremental, FALSE)
++        || EXPECT(kind != PTRFREE && kind != NORMAL, FALSE))
++        return NULL;
++    result = GC_tl_try_pop(((GC_tlfs)tsd) -> _freelists[kind], bytes);
++    /* (GC_malloc_kind's init; GC_end_stubborn_change is GC_dirty, a no-op */
++    /* outside incremental mode)                                         */
++    if (result != NULL && kind != PTRFREE)
++        obj_link(result) = 0;
++    return result;
++}
++
++# ifdef GC_GCJ_SUPPORT
++GC_TL_TRY_API void * GC_tl_try_gcj_malloc(size_t bytes,
++                                    void * ptr_to_struct_containing_descr)
++{
++    void *tsd = GC_thread_key;
++    void *result;
++
++    if (EXPECT(0 == tsd || GC_incremental || !GC_gcj_malloc_initialized,
++               FALSE))
++        return NULL;
++    result = GC_tl_try_pop(((GC_tlfs)tsd) -> gcj_freelists, bytes);
++    if (result != NULL) {
++        /* the free list first, then the method pointer (GC_gcj_malloc) */
++        AO_compiler_barrier();
++        *(void **)result = ptr_to_struct_containing_descr;
++    }
++    return result;
++}
++# endif /* GC_GCJ_SUPPORT */
++#endif /* USE_COMPILER_TLS */
++
+ #endif /* THREAD_LOCAL_ALLOC */
+--- a/mono/metadata/boehm-gc.c
++++ b/mono/metadata/boehm-gc.c
+@@ -41,6 +41,7 @@
+ #include <mono/utils/mono-compiler.h>
+ #include <mono/utils/unlocked.h>
+ #include <mono/metadata/icall-decl.h>
++#include <mono/metadata/icall-signatures.h>
+ 
+ #if HAVE_BOEHM_GC
+ 
+@@ -61,6 +62,8 @@
+ static gboolean gc_initialized = FALSE;
+ static gboolean gc_dont_gc_env = FALSE;
+ static gboolean gc_strict_wbarriers = FALSE;
++/* the managed allocator (mono_gc_get_managed_allocator) */
++static gboolean boehm_managed_alloc = TRUE;
+ 
+ static mono_mutex_t mono_gc_lock;
+ 
+@@ -229,6 +232,14 @@
+ 	/* cache value rather than calling during collection since g_hasenv may take locks and can deadlock */
+ 	gc_dont_gc_env = g_hasenv ("GC_DONT_GC");
+ 
++	/* the managed allocator (mono_gc_get_managed_allocator): MONO_BOEHM_MANAGED_ALLOC=0 turns it off */
++	{
++		char *ma = g_getenv ("MONO_BOEHM_MANAGED_ALLOC");
++		if (ma && !strcmp (ma, "0"))
++			boehm_managed_alloc = FALSE;
++		g_free (ma);
++	}
++
+ 	GC_init ();
+ 
+ 	GC_set_warn_proc (mono_gc_warning);
+@@ -1200,7 +1211,235 @@
+ // Look at history around late August 2019 if this is to be restored.
+ // The code was effectively dead, not merely deleted to avoid maintaining it.
+ #endif
++
++/*
++ * A managed allocator for Boehm (portmaster-unity, tools/mono64/build-mono.sh MONO64_MANAGED_ALLOC):
++ * the JIT calls these MONO_WRAPPER_ALLOC wrappers where it would call ves_icall_object_new_specific,
++ * ves_icall_array_new_specific or ves_icall_string_alloc. A wrapper first calls one of the
++ * mono_gc_boehm_try_alloc_* functions below directly (no icall wrapper, no LMF): they take an object
++ * off this thread's Boehm free list (GC_tl_try_malloc_kind / GC_tl_try_gcj_malloc, thread_local_alloc.c:
++ * the first branch of the collector's own inline allocator, nothing else) and initialise it as
++ * mono_gc_alloc_obj / _vector / _string do. Wherever the call it replaces would do anything more
++ * (a finalizer, weak fields, remoting or COM, the allocation profiler, heap validation, a size beyond
++ * the collector's tiny free lists, an empty free list, incremental mode, a thread the collector has
++ * no free lists for, Unity's gcj vectors) they change nothing and return NULL, and the wrapper makes
++ * that call, unchanged. MONO_BOEHM_MANAGED_ALLOC=0 in the environment: the JIT calls as before.
++ */
++void *GC_tl_try_malloc_kind (size_t bytes, int kind);
++void *GC_tl_try_gcj_malloc (size_t bytes, void *ptr_to_struct_containing_descr);
++
++MonoObject *mono_gc_boehm_try_alloc_obj (MonoVTable *vtable);
++MonoArray *mono_gc_boehm_try_alloc_vector (MonoVTable *vtable, uintptr_t n);
++MonoString *mono_gc_boehm_try_alloc_string (MonoVTable *vtable, gint32 len);
++
++enum {
++	BOEHM_ATYPE_NORMAL,	/* (vtable) */
++	BOEHM_ATYPE_SMALL,	/* (vtable, size): the size the JIT knows (the wrapper reads the class's, as the call it replaces) */
++	BOEHM_ATYPE_VECTOR,	/* (vtable, length) */
++	BOEHM_ATYPE_STRING,	/* (vtable, length) */
++	BOEHM_ATYPE_NUM
++};
++
++/* (longer lengths go to the calls the wrappers replace, with their overflow checks) */
++#define BOEHM_TRY_MAX_LENGTH 0xffff
++
++static MonoMethod *boehm_alloc_cache [BOEHM_ATYPE_NUM];
++static MonoMethod *boehm_slow_alloc_cache [BOEHM_ATYPE_NUM];
++
++MonoObject *
++mono_gc_boehm_try_alloc_obj (MonoVTable *vtable)
++{
++	MonoClass *klass = vtable->klass;
++	MonoObject *obj;
++	size_t size;
++
++	if (G_UNLIKELY (mono_profiler_allocations_enabled ()))
++		return NULL;
++#ifdef HEAP_VALIDATION_FREQUENCY
++	if (unity_heap_validation_callback && validate_frequency > 0)
++		return NULL;
++#endif
++	/* what mono_object_new_specific_checked does besides mono_gc_alloc_obj */
++	if (G_UNLIKELY (mono_vtable_is_remote (vtable) || mono_class_is_com_object (klass) ||
++			m_class_has_finalize (klass) || m_class_has_weak_fields (klass)))
++		return NULL;
++
++	size = m_class_get_instance_size (klass);
++	/* mono_gc_alloc_obj, off the free list */
++	if (!m_class_has_references (klass)) {
++		obj = (MonoObject *)GC_tl_try_malloc_kind (size, PTRFREE);
++		if (G_UNLIKELY (!obj))
++			return NULL;
++
++		obj->vtable = vtable;
++		obj->synchronisation = NULL;
+ 
++		memset (mono_object_get_data (obj), 0, size - MONO_ABI_SIZEOF (MonoObject));
++	} else if (vtable->gc_descr != GC_NO_DESCRIPTOR) {
++		obj = (MonoObject *)GC_tl_try_gcj_malloc (size, vtable);
++	} else {
++		obj = (MonoObject *)GC_tl_try_malloc_kind (size, NORMAL);
++		if (G_UNLIKELY (!obj))
++			return NULL;
++
++		obj->vtable = vtable;
++	}
++
++	return obj;
++}
++
++MonoArray *
++mono_gc_boehm_try_alloc_vector (MonoVTable *vtable, uintptr_t n)
++{
++	MonoClass *klass = vtable->klass;
++	MonoArray *obj;
++	size_t size;
++
++	if (G_UNLIKELY (mono_profiler_allocations_enabled ()))
++		return NULL;
++	if (G_UNLIKELY (n > BOEHM_TRY_MAX_LENGTH))
++		return NULL;
++
++	/* mono_array_calc_byte_len (no overflow at these lengths) */
++	size = (size_t)mono_array_element_size (klass) * n + MONO_SIZEOF_MONO_ARRAY;
++
++	/* mono_gc_alloc_vector, off the free list */
++	if (!m_class_has_references (klass)) {
++		obj = (MonoArray *)GC_tl_try_malloc_kind (size, PTRFREE);
++		if (G_UNLIKELY (!obj))
++			return NULL;
++
++		obj->obj.vtable = vtable;
++		obj->obj.synchronisation = NULL;
++
++		memset (mono_object_get_data ((MonoObject*)obj), 0, size - MONO_ABI_SIZEOF (MonoObject));
++	} else if (klass->element_class->valuetype &&
++		klass->element_class->gc_descr != GC_NO_DESCRIPTOR &&
++		vtable->domain == mono_get_root_domain ()) {
++		/* GC_gcj_vector_malloc: left to mono_gc_alloc_vector */
++		return NULL;
++	} else {
++		obj = (MonoArray *)GC_tl_try_malloc_kind (size, NORMAL);
++		if (G_UNLIKELY (!obj))
++			return NULL;
++
++		obj->obj.vtable = vtable;
++	}
++
++	obj->max_length = n;
++
++	return obj;
++}
++
++MonoString *
++mono_gc_boehm_try_alloc_string (MonoVTable *vtable, gint32 len)
++{
++	MonoString *obj;
++	size_t size;
++
++	if (G_UNLIKELY (mono_profiler_allocations_enabled ()))
++		return NULL;
++	if (G_UNLIKELY (len < 0 || len > BOEHM_TRY_MAX_LENGTH))
++		return NULL;
++
++	/* mono_string_new_size_handle's size, then mono_gc_alloc_string off the free list */
++	size = (G_STRUCT_OFFSET (MonoString, chars) + (((size_t)len + 1) * 2));
++	obj = (MonoString *)GC_tl_try_malloc_kind (size, PTRFREE);
++	if (G_UNLIKELY (!obj))
++		return NULL;
++
++	obj->object.vtable = vtable;
++	obj->object.synchronisation = NULL;
++	obj->length = len;
++	obj->chars [len] = 0;
++
++	return obj;
++}
++
++static MonoMethod *
++boehm_create_allocator (int atype, gboolean slowpath)
++{
++	static const char * const names [BOEHM_ATYPE_NUM] = { "Alloc", "AllocSmall", "AllocVector", "AllocString" };
++	static const char * const slow_names [BOEHM_ATYPE_NUM] = { "SlowAlloc", "SlowAllocSmall", "SlowAllocVector", "SlowAllocString" };
++	MonoMethodBuilder *mb;
++	MonoMethodSignature *csig;
++	MonoMethod *res;
++	WrapperInfo *info;
++	int num_params = atype == BOEHM_ATYPE_NORMAL ? 1 : 2;
++	int pos = 0;
++
++	/* the functions the wrappers call first: plain calls (they never throw nor call managed code) */
++	mono_register_jit_icall_info (&mono_get_jit_icall_info ()->mono_gc_boehm_try_alloc_obj, mono_gc_boehm_try_alloc_obj,
++		"mono_gc_boehm_try_alloc_obj", mono_icall_sig_object_ptr, TRUE, "mono_gc_boehm_try_alloc_obj");
++	mono_register_jit_icall_info (&mono_get_jit_icall_info ()->mono_gc_boehm_try_alloc_vector, mono_gc_boehm_try_alloc_vector,
++		"mono_gc_boehm_try_alloc_vector", mono_icall_sig_object_ptr_ptr, TRUE, "mono_gc_boehm_try_alloc_vector");
++	mono_register_jit_icall_info (&mono_get_jit_icall_info ()->mono_gc_boehm_try_alloc_string, mono_gc_boehm_try_alloc_string,
++		"mono_gc_boehm_try_alloc_string", mono_icall_sig_object_ptr_int32, TRUE, "mono_gc_boehm_try_alloc_string");
++
++	csig = mono_metadata_signature_alloc (mono_defaults.corlib, num_params);
++	if (atype == BOEHM_ATYPE_STRING) {
++		csig->ret = m_class_get_byval_arg (mono_defaults.string_class);
++		csig->params [0] = mono_get_int_type ();
++		csig->params [1] = mono_get_int32_type ();
++	} else {
++		csig->ret = mono_get_object_type ();
++		for (int i = 0; i < num_params; i++)
++			csig->params [i] = mono_get_int_type ();
++	}
++
++	mb = mono_mb_new (mono_defaults.object_class, slowpath ? slow_names [atype] : names [atype], MONO_WRAPPER_ALLOC);
++
++	if (!slowpath) {
++		/* obj = mono_gc_boehm_try_alloc_* (vtable [, length]); if (obj) return obj; */
++		mono_mb_emit_ldarg (mb, 0);
++		if (atype == BOEHM_ATYPE_VECTOR) {
++			mono_mb_emit_ldarg (mb, 1);
++			mono_mb_emit_icall (mb, mono_gc_boehm_try_alloc_vector);
++		} else if (atype == BOEHM_ATYPE_STRING) {
++			mono_mb_emit_ldarg (mb, 1);
++			mono_mb_emit_icall (mb, mono_gc_boehm_try_alloc_string);
++		} else {
++			mono_mb_emit_icall (mb, mono_gc_boehm_try_alloc_obj);
++		}
++		mono_mb_emit_byte (mb, MONO_CEE_DUP);
++		pos = mono_mb_emit_short_branch (mb, MONO_CEE_BRTRUE_S);
++		mono_mb_emit_byte (mb, MONO_CEE_POP);
++	}
++
++	/* the call the JIT makes without a managed allocator */
++	switch (atype) {
++	case BOEHM_ATYPE_NORMAL:
++	case BOEHM_ATYPE_SMALL:
++		mono_mb_emit_ldarg (mb, 0);
++		mono_mb_emit_icall (mb, ves_icall_object_new_specific);
++		break;
++	case BOEHM_ATYPE_VECTOR:
++		mono_mb_emit_ldarg (mb, 0);
++		mono_mb_emit_ldarg (mb, 1);
++		mono_mb_emit_icall (mb, ves_icall_array_new_specific);
++		break;
++	case BOEHM_ATYPE_STRING:
++		mono_mb_emit_ldarg (mb, 1);
++		mono_mb_emit_icall (mb, ves_icall_string_alloc);
++		break;
++	default:
++		g_assert_not_reached ();
++	}
++
++	if (!slowpath)
++		mono_mb_patch_short_branch (mb, pos);
++	mono_mb_emit_byte (mb, MONO_CEE_RET);
++
++	info = mono_wrapper_info_create (mb, WRAPPER_SUBTYPE_NONE);
++	info->d.alloc.gc_name = "boehm";
++	info->d.alloc.alloc_type = atype;
++
++	res = mono_mb_create (mb, csig, 8, info);
++	mono_mb_free (mb);
++
++	return res;
++}
++
+ gboolean
+ mono_gc_is_critical_method (MonoMethod *method)
+ {
+@@ -1210,24 +1449,64 @@
+ MonoMethod*
+ mono_gc_get_managed_allocator (MonoClass *klass, gboolean for_box, gboolean known_instance_size)
+ {
+-	return NULL;
++	if (!boehm_managed_alloc)
++		return NULL;
++	if (!klass || mono_class_has_finalizer (klass) || mono_class_is_marshalbyref (klass) || m_class_has_weak_fields (klass))
++		return NULL;
++	if (mono_class_is_com_object (klass))
++		return NULL;
++	if (m_class_get_rank (klass))
++		return NULL;
++	if (m_class_get_byval_arg (klass)->type == MONO_TYPE_STRING)
++		return mono_gc_get_managed_allocator_by_type (BOEHM_ATYPE_STRING, MANAGED_ALLOCATOR_REGULAR);
++	if (known_instance_size)
++		return mono_gc_get_managed_allocator_by_type (BOEHM_ATYPE_SMALL, MANAGED_ALLOCATOR_REGULAR);
++	return mono_gc_get_managed_allocator_by_type (BOEHM_ATYPE_NORMAL, MANAGED_ALLOCATOR_REGULAR);
+ }
+ 
+ MonoMethod*
+ mono_gc_get_managed_array_allocator (MonoClass *klass)
+ {
+-	return NULL;
++	if (!boehm_managed_alloc)
++		return NULL;
++	if (m_class_get_rank (klass) != 1 || m_class_get_byval_arg (klass)->type != MONO_TYPE_SZARRAY)
++		return NULL;
++	return mono_gc_get_managed_allocator_by_type (BOEHM_ATYPE_VECTOR, MANAGED_ALLOCATOR_REGULAR);
+ }
+ 
+ MonoMethod*
+ mono_gc_get_managed_allocator_by_type (int atype, ManagedAllocatorVariant variant)
+ {
+-	return NULL;
++	/* (the profiler variant is the regular one: the functions check the profiler at every call) */
++	gboolean slowpath = variant == MANAGED_ALLOCATOR_SLOW_PATH;
++	MonoMethod **cache = slowpath ? boehm_slow_alloc_cache : boehm_alloc_cache;
++	MonoMethod *res;
++
++	if (atype < 0 || atype >= BOEHM_ATYPE_NUM)
++		return NULL;
++	if (!slowpath && !boehm_managed_alloc)
++		return NULL;
++	res = cache [atype];
++	if (res)
++		return res;
++
++	res = boehm_create_allocator (atype, slowpath);
++	mono_memory_barrier ();
++	if (mono_atomic_cas_ptr ((gpointer *)&cache [atype], res, NULL) != NULL) {
++		mono_free_method (res);
++		res = cache [atype];
++	}
++	return res;
+ }
+ 
+ guint32
+ mono_gc_get_managed_allocator_types (void)
+ {
++	/*
++	 * 0: the AOT compiler does not add the wrappers to its images (AOT code that calls one
++	 * gets it from mono_gc_get_managed_allocator_by_type), and mono_profiler_enable_allocations
++	 * still works after startup (the functions check the profiler at every call).
++	 */
+ 	return 0;
+ }
+ 
+--- a/mono/metadata/jit-icall-reg.h
++++ b/mono/metadata/jit-icall-reg.h
+@@ -343,6 +343,9 @@
+ MONO_JIT_ICALL (ves_icall_string_new_wrapper) \
+ MONO_JIT_ICALL (ves_icall_thread_finish_async_abort) \
+ MONO_JIT_ICALL (mono_marshal_lookup_pinvoke) \
++MONO_JIT_ICALL (mono_gc_boehm_try_alloc_obj) \
++MONO_JIT_ICALL (mono_gc_boehm_try_alloc_string) \
++MONO_JIT_ICALL (mono_gc_boehm_try_alloc_vector) \
+ 	\
+ MONO_JIT_ICALL (count) \
+ 

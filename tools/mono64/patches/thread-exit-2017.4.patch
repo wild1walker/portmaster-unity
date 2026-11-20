@@ -1,0 +1,21 @@
+--- a/external/bdwgc/pthread_support.c
++++ b/external/bdwgc/pthread_support.c
+@@ -1377,7 +1377,17 @@
+     LOCK();
+     DISABLE_CANCEL(cancel_state);
+     GC_wait_for_gc_completion(FALSE);
+-    GC_unregister_my_thread_inner((GC_thread)arg);
++    /* (portmaster-unity, tools/mono64) Not a second time: Mono unregisters */
++    /* the threads it detaches (GC_unregister_my_thread), and this thread's */
++    /* entry is then gone (detached) or FINISHED, its thread-local free     */
++    /* lists given back already (a second GC_destroy_thread_local walks the */
++    /* HBLKSIZE markers that left in them and faults).                      */
++    {
++      GC_thread me = GC_lookup_thread(pthread_self());
++
++      if (me == (GC_thread)arg && (me -> flags & FINISHED) == 0)
++        GC_unregister_my_thread_inner(me);
++    }
+     RESTORE_CANCEL(cancel_state);
+     UNLOCK();
+ }

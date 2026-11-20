@@ -113,7 +113,7 @@ github.com/Unity-Technologies/mono, branch `unity-<line>-mbe` (`unity-6000.0-mbe
 as Unity's `build.pl` builds the Linux players' (no class libraries, no BTLS, Boehm without
 parallel marking), with `-O2`, Boehm without its byte at the end of each object
 (`DONT_ADD_BYTE_AT_END`, [below](#the-collectors-layout-and-what-else-was-tried-for-a-faster-64-bit-build-2026-11-19))
-and, for 6000.0, 8-byte granules ([below](#8-byte-granules-work-the-crash-was-a-broken-test-build)): a glibc library, loaded by ua_host itself rather than through the
+and, for 6000.0, 8-byte granules ([below](#8-byte-granules-work-the-crash-was-a-broken-test-build)), a managed allocator for Boehm and a fix for its threads' exit (`tools/mono64/patches`, [below](#a-managed-allocator-for-boehm-2026-11-20)): a glibc library, loaded by ua_host itself rather than through the
 Android loader, so its threads, signals and `dlopen` are the host's. It fetches the branch's
 tarball without the class libraries and tests (45 MB on disk), the pinned bdwgc and libatomic_ops,
 and for Mono 6 corefx's native code (libmono-native); the build runs in an arm64 container
@@ -918,6 +918,8 @@ about -0.8 ms of UnityMain: a 64-bit build that is still behind the 32-bit one o
 
 ### Allocation in the game: the managed-allocator lead does not matter (2026-11-20)
 
+(Built afterwards all the same: [A managed allocator for Boehm](#a-managed-allocator-for-boehm-2026-11-20), below.)
+
 The benchmark's allocation kernel (a small object, a boxed int, a short array, a closure and its
 delegate a step: 2 million objects) takes our Mono 0.47 us an object against 0.13 for Mono 6.12. Measured in
 the games before building anything (`UA_ALLOC_LOG`, docs/runtime.md: Mono's allocation event, every object
@@ -1052,3 +1054,119 @@ peak (System 417 MB) does not fit beside the frontend on a 1 GB handheld without
 did not answer during this test): it would need assemblies split into parts (Mono's `--aot` has no such
 option) or the class libraries left to the JIT. Not run in parallel with the textures step: either alone
 takes most of the memory.
+
+### A managed allocator for Boehm (2026-11-20)
+
+Built anyway, as the arm64 Mono's missing piece (`tools/mono64/build-mono.sh` with `MONO64_MANAGED_ALLOC=1`;
+`tools/mono64/patches/managed-alloc-6000.0.patch`, `-2017.4.patch`). Where the JIT would call
+`ves_icall_object_new_specific` (`newobj`, `box`), `ves_icall_array_new_specific` (`newarr`) or
+`ves_icall_string_alloc` (`String.FastAllocateString` / Mono 5's `InternalAllocateStr`), it calls a
+`MONO_WRAPPER_ALLOC` wrapper (Mono's managed-allocator mechanism, as SGen's: `mono_gc_get_managed_allocator`,
+`_array_allocator`, `_by_type`), whose IL is
+
+    obj = mono_gc_boehm_try_alloc_{obj,vector,string} (vtable [, length]);   // a plain call: no icall wrapper, no LMF
+    if (obj) return obj;
+    return ves_icall_object_new_specific (vtable);                         // (or the array / string one): the call as before
+
+The try functions take an object off the thread's own Boehm free list: `GC_tl_try_malloc_kind` /
+`GC_tl_try_gcj_malloc`, added to bdwgc's `thread_local_alloc.c` and compiled with the collector's own flags
+(granule size, `TINY_FREELISTS`, the free-list struct), are the first branch of bdwgc's inline allocator
+(`GC_FAST_MALLOC_GRANS` as `GC_malloc_kind` and `GC_gcj_malloc` take it) and nothing else: the thread's
+`GC_thread_key`, the list of the size's granules, an entry above the counter range popped with the same
+store, then the same initialisation (the link word cleared for the normal kind; for gcj, a compiler barrier
+and the vtable as the descriptor pointer, after the list store: the order `GC_gcj_malloc` keeps for a
+collection that stops the thread in between). Mono's side then does what `mono_gc_alloc_obj` /
+`_vector` / `_string` do with the object: the same kind for the class (pointer-free:
+vtable, sync word and `memset` of the rest, as Boehm does not clear that kind; normal: vtable; gcj:
+nothing more), `max_length`, the string's length and terminator; Mono 5 also counts
+`gc_stats.new_object_count`. **Exactness**: every case in which the replaced call would do anything else
+returns NULL before anything is changed, and the wrapper makes the replaced call, which finds the same
+state: a finalizer, weak fields, remoting or COM (also refused at JIT time), the allocation profiler (read
+at every call, so `UA_ALLOC_LOG` turned on after startup still sees every object; `mono_gc_get_managed_allocator_types`
+stays 0, which keeps `mono_profiler_enable_allocations` working after startup, and AOT images take the
+wrappers from `_by_type`), heap validation, incremental mode (`GC_incremental`: bdwgc's gcj path steps
+aside then, and its normal path dirties the list), a thread without free lists (`GC_thread_key` 0),
+sizes from the collector's tiny lists' end (256 bytes with 8-byte granules), lengths over 65,535, an empty
+list or a counter (the refill, the direct-allocation counting, collections, out-of-memory stay where they
+were), and arrays of value types with references (Unity's `GC_gcj_vector_malloc`). The collector's
+accounting is untouched (the refills count the bytes, as before): the same allocations make the same
+number of collections (3 million objects, 521 / 531 / 393 / 786 / 1,043 / 660 by kind, both ways). The
+wrapper is a managed frame, so exceptions and stack walks through it are as SGen's. `MONO_BOEHM_MANAGED_ALLOC=0`
+in the environment turns it off at start (the JIT then calls as before): the A/B switch below.
+
+**Tests** (`alloctest`: every kind the JIT allocates, each against free lists dirtied with non-zero
+objects of every size first: classes with and without references, gcj-described, 3 - 400 bytes,
+boxes of value types with and without references, shared-generic `new`, `new T()`, strings 0 - 300
+chars and 70,000, arrays of every element kind 0 - 300 long and 100,000, `int[,]`, a negative length's
+`OverflowException`; zeroed contents, types, lengths, terminators, locks, hashes; 2,000 finalizers run; a
+300,000-node structure built while garbage is made and checked after the collections, four threads at
+once; 400 MB of garbage in a bounded heap): 0 failures with it, without it and on the port's `lib-gG8`
+runtime, in the arm64 container and on both handhelds (muOS, Knulli); the same collection counts.
+
+**A crash found on the way (fixed, every 6000.0 build)**: a managed thread that ends crashed our 6000.0
+runtime (with or without the allocator; `GC_destroy_thread_local` in `return_single_freelist`, at the
+thread's exit): Mono unregisters the threads it detaches from the collector (`GC_unregister_my_thread`,
+which gives back the thread-local free lists and leaves `HBLKSIZE` markers in them), and bdwgc's exit
+handler for a thread it started (`GC_pthread_create`, which Mono's thread creation goes through)
+unregistered it a second time and walked the markers. Only a collector with thread-local free lists
+does that second walk: the 6000.0 line's (and the 2017.4 line's when built with them, below), not the
+2017.4 port's. Hollow Knight starts no managed thread that ends, so the game never hit it; any game that
+ends a `Thread` would. `patches/thread-exit-<line>.patch`: the exit handler unregisters only a thread
+still registered and not finished (applied to every 6000.0 build; a 3-thread start-and-end test passes
+in the container, before it crashed at the first end).
+
+**The 2017.4 line (Mono 5.0.1, Cuphead)**: its collector (bdwgc 7.6) has no thread-local free lists on
+aarch64 Linux at all (bdwgc's configure defines `THREAD_LOCAL_ALLOC` for the x86 Linux hosts only), so
+every allocation takes the collector's lock (`GC_core_malloc`); there is no list for a managed allocator
+to pop. With `MONO64_MANAGED_ALLOC=1` that line is built with `-DTHREAD_LOCAL_ALLOC` and the thread-exit
+fix as well (a collector configuration change, not only a faster path: each thread keeps up to a block of
+free objects per size), and the managed allocator for objects and strings (Mono 5's JIT asks for no array
+allocator). The same tests pass (container).
+
+| alloc kernels, ns an object (micro, 2 M objects each, warm; one CPU at its top clock) | muOS (1.8 GHz) without / with | Knulli (1.5 GHz) without / with |
+|---|---|---|
+| class with references (gcj) | 234 / 137 (-42 %) | 280 / 159 (-43 %) |
+| class without references | 232 / 147 (-37 %) | 271 / 167 (-38 %) |
+| boxed `int` | 220 / 129 (-41 %) | 260 / 154 (-41 %) |
+| `int[4]` | 267 / 192 (-28 %) | 313 / 225 (-28 %) |
+| `object[4]` | 304 / 227 (-25 %) | 364 / 273 (-25 %) |
+| `new string('a', 8)` | 425 / 185 (-56 %) | 509 / 218 (-57 %) |
+| jitbench `alloc` (2 M objects: small object, box, short array, closure + delegate), ms | 1,255 / 1,088 (-13 %) | 1,381 / 1,184 (-14 %) |
+| jitbench `string` (string building), ms | 245 / 196 (-20 %) | 272 / 226 (-17 %) |
+
+(6000.0 runtime, interleaved A B A B; the same library with `MONO_BOEHM_MANAGED_ALLOC=0` and the port's
+`lib-gG8` one are the same without it.) In the arm64 container (Apple M-series) the same kernels gain
+15 - 25 %: what is left is the collector's own work (refills, sweeping, clearing, collections), not the call.
+
+**In the games** (profbench, release settings, cool starts, the same library with and without
+`MONO_BOEHM_MANAGED_ALLOC=0`, interleaved; "load" is King's Pass from the save, the frames over 100 ms
+after the last press summed; "launch" the game's age at the measurement less the plan's 30 s of sleeps):
+
+| Hollow Knight, King's Pass, 6000.0 runtime | fps (each run) | UnityMain user ms / 30 s | load s (each run) | launch s | available MB at the end |
+|---|---|---|---|---|---|
+| muOS, with | 51.12 51.13 50.93 50.99 (51.04) | 25,600 - 25,700 | 4.96 5.55 5.81 4.87 (5.30) | 38.8 - 43.3 (41.0) | 226 - 231 |
+| muOS, without | 51.06 51.00 51.13 50.85 (51.01) | 25,510 - 25,760 | 5.13 6.11 5.19 5.99 (5.61) | 39.8 - 49.1 (43.6) | 174 - 231 |
+| Knulli, with | 50.72 51.39 | (UnityMain 97 - 98 % busy) | 6.38 5.95 | 45.3 50.1 | 184 189 |
+| Knulli, without | 51.26 51.48 | | 6.21 6.33 | 47.3 42.1 | 187 189 |
+
+| Cuphead, Veggies fight (Knulli, 2017.4 runtime) | fps | UnityMain user ms / 35 s | available MB |
+|---|---|---|---|
+| thread-local free lists + managed allocator | 59.6 59.6 | 19,790 19,610 | 426 426 |
+| thread-local free lists only (`MONO_BOEHM_MANAGED_ALLOC=0`) | 59.6 59.6 | 19,280 19,710 | 426 428 |
+| the port's runtime (no thread-local lists) | 59.5 59.5 | 19,830 19,800 | 424 424 |
+
+As expected: no frame-rate change (the game's 36 objects a frame cost ~0.05 ms either way; the Knulli
+pair's 0.4 fps is within its run-to-run spread, and the muOS four agree to 0.03 fps), the King's Pass
+load not slower (0.3 s shorter on average on muOS, within its spread: ~0.9 M objects at ~0.1 us saved
+each is ~0.1 s of a 5 - 6 s load whose rest is assets), memory the same. `UA_ALLOC_LOG=5` at King's Pass (muOS) counts the same with it as without: 35.8 - 37.3
+against 35.7 - 36.9 objects, 2.73 - 2.86 KB a frame, the same classes (the profiler's event still sees every
+object). **Defaults**: `build-mono.sh`
+builds 6000.0 with the managed allocator (exact, faster per object, no slower in the games beyond their run-to-run spread); the
+2017.4 line keeps it opt-in (`MONO64_MANAGED_ALLOC=1`), since there it also switches the collector to
+thread-local free lists, a configuration change that Cuphead runs the same with in a 35 s fight but that
+has had no long session yet; the other lines have no patch. The thread-exit fix is in every 6000.0 build.
+
+Not done: the free-list pop inline in the wrapper's IL (no C call), which would need the collector's
+`GC_thread_key` in initial-exec TLS and a Mono TLS key for it (on aarch64 Mono's own TLS reads from JIT
+code are calls too, `MONO_THREAD_VAR_OFFSET` being -1 for a PIC library); the container says the call is
+no longer the main cost.

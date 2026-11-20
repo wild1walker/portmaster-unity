@@ -17,6 +17,8 @@
 # Mac or an arm64 Linux PC, in a docker volume (ua-mono64); about 5 minutes on 8 cores.
 # MONO64_LLVM=1: instead, the AOT compiler with Mono's LLVM back end and LLVM's opt and llc (a measurement:
 # no faster than the JIT in Hollow Knight; the block marked MONO64_LLVM below, docs/mono-arm64.md).
+# MONO64_MANAGED_ALLOC=1|0: with or without a managed allocator for Boehm (tools/mono64/patches/
+# managed-alloc-<line>.patch: 6000.0, on by default, and 2017.4; the source patches below, docs/mono-arm64.md).
 # Unity's Mono is MIT-licensed (THIRD_PARTY.md); what this builds stays on the porter's machine and
 # goes to the player's device with the port's setup, as Unity's player does.
 set -e
@@ -131,6 +133,25 @@ ls -la /out/opt /out/llc'
   LLVMCONF="--enable-llvm --with-llvm=/b/llvm-$LL/usr LIBS=-lstdc++"; LLVMDIR=llvm
 fi
 # --- (end of MONO64_LLVM)
+# --- Source patches (tools/mono64/patches/<name>-<line>.patch), copied next to the sources; the build
+# applies the set to its tree:
+#   thread-exit: a thread Mono detached is not unregistered from the collector a second time when it
+#     exits (with thread-local free lists, the second time faults); the lines whose collector has them:
+#     6000.0 always, 2017.4 with the managed allocator
+#   managed-alloc (MONO64_MANAGED_ALLOC=1|0; default 1 for 6000.0, 0 for the others): the JIT's
+#     allocations of small objects, arrays and strings off the thread's Boehm free list
+#     (docs/mono-arm64.md, "A managed allocator for Boehm")
+rm -rf "$D/.ua-patches"; mkdir -p "$D/.ua-patches"
+MA=${MONO64_MANAGED_ALLOC:-auto}
+if [ "$MA" = auto ]; then [ "$LINE" = 6000.0 ] && MA=1 || MA=0; fi
+if [ "$MA" = 1 ]; then
+  [ -f "$HERE/patches/managed-alloc-$LINE.patch" ] || { echo "MONO64_MANAGED_ALLOC: no patch for the $LINE line"; exit 1; }
+  cp "$HERE/patches/managed-alloc-$LINE.patch" "$D/.ua-patches/"
+fi
+if [ -f "$HERE/patches/thread-exit-$LINE.patch" ] && { [ "$LINE" = 6000.0 ] || [ "$MA" = 1 ]; }; then
+  cp "$HERE/patches/thread-exit-$LINE.patch" "$D/.ua-patches/"
+fi
+# --- (end of the source patches)
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
 docker run --rm --platform linux/arm64 -v $VOL:/b -v "$D":/src:ro -v "$OUT":/out ua-mono64-build bash -c '
@@ -159,6 +180,21 @@ case $GRANULE in
   16) ;;
   *) echo "MONO64_GRANULE must be 8 or 16"; exit 1 ;;
 esac
+# --- The source patches (/src/.ua-patches) applied to the build tree; another set takes the applied one
+# out first, and the runtime library is linked again. The collector of the 2017.4 line (bdwgc 7.6) has
+# no thread-local free lists on aarch64 Linux unless asked (configure defines THREAD_LOCAL_ALLOC there
+# for x86 only): with the managed allocator it is built with them
+WANT=$(cd /src/.ua-patches 2>/dev/null && ls *.patch 2>/dev/null | tr "\n" " ")
+WANTSUM=$(cd /src/.ua-patches 2>/dev/null && cat $WANT 2>/dev/null | md5sum | cut -c1-12)
+if [ "$(cat .ua-patchset 2>/dev/null)" != "$WANT$WANTSUM" ]; then
+  for p in $(ls -r .ua-applied 2>/dev/null); do patch -R -p1 -s < .ua-applied/$p || { echo "cannot take out $p"; exit 1; }; done
+  rm -rf .ua-applied; mkdir -p .ua-applied
+  for p in $WANT; do patch -p1 -s --forward < /src/.ua-patches/$p || { echo "$p does not apply"; exit 1; }; cp /src/.ua-patches/$p .ua-applied/; done
+  echo "$WANT$WANTSUM" > .ua-patchset
+  rm -f mono/mini/.libs/libmonobdwgc-2.0.so* mono/mini/.libs/libmonoboehm-2.0.so* mono/mini/libmono*-2.0.la
+fi
+case "$WANT" in *managed-alloc*) [ $B = unity-2017.4-mbe ] && GCFLAGS="$GCFLAGS -DTHREAD_LOCAL_ALLOC" ;; esac
+# --- (end of the source patches)
 if [ "$(cat .ua-gcflags 2>/dev/null)" != "$GCFLAGS" ]; then
   [ -f external/bdwgc/Makefile ] && make -C external/bdwgc clean > /dev/null 2>&1
   rm -f mono/mini/.libs/libmonobdwgc-2.0.so* mono/mini/.libs/libmonoboehm-2.0.so* mono/mini/libmono*-2.0.la
