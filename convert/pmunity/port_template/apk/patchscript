@@ -17,7 +17,13 @@
 # Settings: setup/setup.env (from port.toml). An interrupted setup (battery, power button)
 # continues on the next launch. Log: ports/<port>/patchlog.txt.
 # PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why the setup failed.
-S="${GAMEDIR:?}/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+# Paths relative to the port folder (GAMEDIR=.): on some kernels (Knulli on Allwinner A133P) a freed page
+# that starts with an absolute path on the card (pipes leave them) can deadlock its FUSE driver. The script
+# runs on by its relative name (bash starts its error messages with it), under its own process name
+G0=${GAMEDIR:?}; cd "$G0" || { echo "PATCH_FAIL_MSG:Cannot open ports/${G0##*/}."; exit 1; }
+case $0 in "$G0"/*) exec "$BASH" "./${0#"$G0"/}" "$@";; esac
+{ printf %s "${0##*/}" > /proc/$$/comm; } 2>/dev/null; GAMEDIR=.
+S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
 . "$S/setup.env"
 
 exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
@@ -98,7 +104,7 @@ else
     [ -n "$PY" ] || fail "The setup's Python is incomplete."
   fi
   export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-  pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
+  pm() { "$PY" -m pmunity "$@"; }
 fi
 # a top-level string of apk.json (json.dumps(indent=1): one key a line, one space in), its \" and
 # \\ unescaped (ensure_ascii's \uXXXX stay as they are: only the log line shows a version name)
@@ -210,6 +216,7 @@ hook post_install
 # PortMaster ports' setups do with installers, unless setup.txt says keep_installers=1
 keep=$(sed -n 's/^[[:space:]]*keep_installers[[:space:]]*=[[:space:]]*\([01]\).*/\1/p' "$GAMEDIR/setup.txt" 2>/dev/null | tail -1)
 while IFS= read -r f; do
+  f=${f/#"$G0"\//./}                     # (a setup begun by an older release kept the absolute path)
   case "$f" in "$GD"/*) ;; *) continue;; esac       # (not the installed files of a setup again)
   [ -f "$f" ] || continue
   if [ "$keep" = 1 ]; then echo "kept ${f#$GD/} (keep_installers=1)"; continue; fi

@@ -20,7 +20,13 @@
 # Settings: setup/setup.env (from port.toml). Every step can be interrupted (battery, power button):
 # the next launch continues where it stopped. Log: ports/<port>/patchlog.txt.
 # PortMaster's patcher protocol: a line "PATCH_FAIL_MSG:<text>" says why the setup failed.
-S="${GAMEDIR:?}/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+# Paths relative to the port folder (GAMEDIR=.): on some kernels (Knulli on Allwinner A133P) a freed page
+# that starts with an absolute path on the card (pipes leave them) can deadlock its FUSE driver. The script
+# runs on by its relative name (bash starts its error messages with it), under its own process name
+G0=${GAMEDIR:?}; cd "$G0" || { echo "PATCH_FAIL_MSG:Cannot open ports/${G0##*/}."; exit 1; }
+case $0 in "$G0"/*) exec "$BASH" "./${0#"$G0"/}" "$@";; esac
+{ printf %s "${0##*/}" > /proc/$$/comm; } 2>/dev/null; GAMEDIR=.
+S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
 . "$S/setup.env"
 
 exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
@@ -75,7 +81,7 @@ else
     [ -n "$PY" ] || fail "The setup's Python is incomplete."
   fi
   export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-  pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
+  pm() { "$PY" -m pmunity "$@"; }
 fi
 
 # convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
@@ -156,6 +162,7 @@ find_any() {    # the port's data folder, else any Unity data folder
 # card did not keep, or a data folder that is gone before it was packed, start again from the game)
 if [ -f "$W/.step_game" ]; then
   D=$(cat "$W/.data" 2>/dev/null); V=$(cat "$W/.version" 2>/dev/null)
+  D=${D/#"$G0"\//./}                    # (a setup begun by an older release kept the absolute path)
   if [ -z "$D" ] || [ -z "$V" ] || { [ ! -d "$D" ] && [ ! -f "$W/.step_package" ]; }; then
     echo "the setup's notes of the game are incomplete (or the game's folder is gone): starting again from the game"
     rm -f "$W"/.step_*; rm -rf "$W/android"
