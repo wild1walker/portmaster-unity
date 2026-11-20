@@ -399,12 +399,43 @@ static inline void attached(void)
 // ---------------------------------------------------------------------------------------------
 // the game's P/Invokes: Android libraries (plugins) and libunity itself ("__Internal") through
 // the loader, when glibc's dlopen cannot load them
+// Mono's ahead-of-time images (<assembly>.dll.so) from UA_MONO64_AOT=<dir> instead of beside the
+// assemblies (a measurement, not a port setting: docs/mono-arm64.md, "Mono's LLVM back end, measured
+// in the game"). glibc libraries, so their symbols are looked up with glibc's dlsym; Mono takes an
+// image only if it was compiled from the same assembly (its GUID) by the same runtime version, and
+// JITs the assembly otherwise.
+static char g_aot_dir[PATH_MAX];
+static void *g_aot_handles[64];
+static int g_aot_count;
+static void *aot_image(const char *name)
+{
+    if (!g_aot_dir[0]) return NULL;
+    const char *base = strrchr(name, '/');
+    base = base ? base + 1 : name;
+    char p[PATH_MAX];
+    if (snprintf(p, sizeof p, "%s/%s", g_aot_dir, base) >= (int)sizeof p) return NULL;
+    void *h = dlopen(p, RTLD_LAZY);
+    int n = h ? __atomic_fetch_add(&g_aot_count, 1, __ATOMIC_SEQ_CST) : 0;
+    if (h && n >= (int)(sizeof g_aot_handles / sizeof g_aot_handles[0])) { dlclose(h); h = NULL; }
+    else if (h) __atomic_store_n(&g_aot_handles[n], h, __ATOMIC_RELEASE);
+    TRACE("AOT image %s -> %p", p, h);
+    return h;
+}
+static int is_aot_handle(void *h)
+{
+    int n = __atomic_load_n(&g_aot_count, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n && i < (int)(sizeof g_aot_handles / sizeof g_aot_handles[0]); i++)
+        if (__atomic_load_n(&g_aot_handles[i], __ATOMIC_ACQUIRE) == h) return 1;
+    return 0;
+}
+
 static void *dl_load(const char *name, int flags, char **err, void *ud)
 {
     (void)flags; (void)err; (void)ud;
-    if (!g_host.dlopen) return NULL;
     size_t nl = name ? strlen(name) : 0;
-    if (nl > 7 && !strcmp(name + nl - 7, ".dll.so")) return NULL;     // Mono's probe for AOT images: none
+    if (nl > 7 && (!strcmp(name + nl - 7, ".dll.so") || !strcmp(name + nl - 7, ".exe.so")))
+        return aot_image(name);                                         // Mono's probe for AOT images
+    if (!g_host.dlopen) return NULL;
     if (!name || !strcmp(name, "__Internal") || !strcmp(name, "libunity.so")) return g_host.dlopen("libunity.so", 0);
     void *h = g_host.dlopen(name, 0);
     if (!h && !strchr(name, '/') && g_host.libdir) {
@@ -420,6 +451,7 @@ static void *dl_load(const char *name, int flags, char **err, void *ud)
 static void *dl_symbol(void *h, const char *name, char **err, void *ud)
 {
     (void)err; (void)ud;
+    if (h && is_aot_handle(h)) return dlsym(h, name);
     return g_host.dlsym ? g_host.dlsym(h, name) : NULL;
 }
 static void *dl_close(void *h, void *ud) { (void)h; (void)ud; return NULL; }
@@ -644,6 +676,8 @@ static void init_mono(const char *domain_name)
     }
     if (m_mono_set_signal_chaining) m_mono_set_signal_chaining(1);
     if (m_mono_trace_set_log_handler) m_mono_trace_set_log_handler(mono_log, NULL);
+    const char *aot = getenv("UA_MONO64_AOT");
+    if (aot && *aot) { snprintf(g_aot_dir, sizeof g_aot_dir, "%s", aot); TRACE("AOT images from %s", g_aot_dir); }
     if (m_mono_dl_fallback_register) m_mono_dl_fallback_register((void *)dl_load, (void *)dl_symbol, (void *)dl_close, NULL);
     if (m_mono_set_find_plugin_callback && g_find_plugin) m_mono_set_find_plugin_callback(g_find_plugin);
     const char *opts = getenv("UA_MONO64_OPTIONS");      // e.g. "--optimize=..."

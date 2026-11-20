@@ -951,3 +951,104 @@ allocators step aside in incremental mode): not measured, no such game tested ye
 wrapper (an LMF push and pop), `mono_object_new_specific`, `mono_gc_alloc_obj` and the TLS lookup.
 Upstream's 3.5x is SGen's bump-pointer nursery and its cheaper collections, not a Boehm path to port.
 
+
+6000.0 Mono branch with its LLVM, AOT the game's assemblies and measure King's Pass with those images
+before deciding whether the handheld could build them at setup. Done the same day (below): in the game
+it is no faster than the JIT.
+
+## Mono's LLVM back end, measured in the game (2026-11-20)
+
+**The build** (`MONO64_LLVM=1 tools/mono64/build-mono.sh 6000.0 <work>` -> `<work>/out/unity-6000.0-mbe-llvm/`):
+Unity's branch names its LLVM as a submodule, `external/llvm-project` = dotnet/llvm-project
+`7dfdea1` (2021-01-15, LLVM 6.0 with Mono's changes, `llvm-config --mono-api-version`). The script
+fetches that commit's `llvm/` (without its tests), builds it as `mono/llvm/build.mk` does (release, no
+assertions, `opt;llc;llvm-config;llvm-dis`) with only the AArch64 back end, then the runtime
+`--enable-llvm --with-llvm=<that prefix>` with the same collector flags as the plain build, in a docker
+volume of its own (`ua-mono64-llvm`, about 3 GB, a plain build's volume is not touched). About 70 minutes
+on an M3's 8 cores in Docker (LLVM 60 of them). Two fixes: Unity's AOT compiler passes llc
+`-disable-fault-maps`, an option of a later fork commit than the one it names, so the script adds it to
+llc as an accepted no-op (LLVM 6 lowers fault maps only for x86: nothing is lost); and libmono names
+libstdc++ (`LIBS=-lstdc++`; libtool's C link leaves it out, and `mono_main --aot=llvm` then stops on
+`__cxa_pure_virtual`). Out: `llc` 24 MB, `opt` 28 MB (libstdc++ and libgcc linked in), the LLVM runtime
+27 MB (stripped; the plain one 4.2 MB). Its version is the plain runtime's (`6.13.0 (tarball)`), so the
+images it compiles load in the runtime the port ships: the LLVM runtime is only the compiler.
+
+**Loading the images**: `UA_MONO64_AOT=<dir>` (the bridge, runtime/mono64): Mono probes
+`<assembly>.dll.so` beside the assembly and then through its dl fallback, which the bridge now answers
+from that folder with glibc's dlopen (and dlsym for those handles); without it nothing changes. So the
+images can live outside the game's Managed folder, and a stale image is safe: Mono takes one only if
+the assembly's GUID and the runtime version match, and JITs the assembly otherwise.
+
+**Compiling** (`--aot=llvm,llvm-path=<dir>/,llvmllc=-fp-contract=off`; Mono runs `opt -O2` and llc,
+then GNU as and ld for its own tables and trampolines): in the Mac's arm64 container, Hollow Knight's
+assemblies:
+
+| assembly | methods (LLVM) | time | peak memory | image |
+|---|---|---|---|---|
+| mscorlib | 24,635 | 46 s | 603 MB | 13.1 MB |
+| Assembly-CSharp | 17,436 (99 % LLVM) | 31 s | 552 MB | 9.1 MB |
+| System | 15,924 | 39 s | 417 MB | 9.9 MB |
+| System.Core | 7,002 | 34 s | 215 MB | 5.3 MB |
+| PlayMaker, -firstpass, TK2D, UnityEngine.UI, TextMeshPro | 6,395 | 14 s | 120 MB | 4.1 MB |
+| UnityEngine.CoreModule | - | stops (internal calls not registered at compile time, as with plain AOT) | | |
+
+Together 165 s and 40.5 MB of images (Assembly-CSharp's plain-AOT image is 13.7 MB). In Assembly-CSharp's
+image: no direct calls (every call through the GOT/PLT, as plain AOT), and opt adds safepoint polls at
+every loop back edge (`-place-safepoints -spp-all-backedges`, fixed in Mono's compiler).
+
+**Exactness**: a floating-point checker (bit-exact FNV hashes of a*b+c chains a fused multiply-add would
+round once, Vector3 integration with Lerp/Dot/Cross/sqrt, a 4x4 matrix chain, Math.Sin/Sqrt/Atan2 and
+conversions, timers adding float deltas into doubles, denormals, infinities, NaN compares) under the
+JIT and under the LLVM images, same runtime, on muOS: every floating-point hash equal. A control
+compiled `-fp-contract=fast` changes three of them, and its image has 75 fmadd/fmsub instructions; the
+`-fp-contract=off` images of all ten assemblies above (4.1 M instructions) have none. One difference,
+not floating point: a float outside int's range converted to int (`(int)3e9f`): the 64-bit JIT
+converts through 64 bits and keeps the low half (-1,294,967,296), LLVM saturates (2,147,483,647), as
+the 32-bit Mono JIT (`vcvt`) and IL2CPP's arm64 code (`fcvtzs w`) do; C# leaves it unspecified. In the
+game (the save loaded, the Knight standing in King's Pass; no movement scripted) the screenshots show
+the same frame, the Knight at the same place, apart from drifting particles (5.8 - 6.5 % of pixels
+differ, as between two JIT runs), and the logs the same lines.
+
+**The kernels** (jitbench, our runtime, muOS, CPU 3, median of 5): LLVM images against the JIT:
+fsm_frame 0.75, list_get_item 0.51, unity_null 0.41, dict_string 0.64, tk2d_anim 0.57, matrix4x4 0.21,
+vector3 0.16, incontrol 0.20, interface 0.97, delegate 0.82, stelemref 0.80, string 0.72, alloc,
+pinvoke, callback 1.0; the PlayMaker-like geomean **0.68** (Mono 6.12's LLVM AOT in the earlier table:
+0.72).
+
+**Hollow Knight, King's Pass** (UA_JIT_WARM on, the release's settings, JIT A B B A in one hold,
+both with the new bridge):
+
+| | fps | UnityMain ms | available MB | JIT warm-up |
+|---|---|---|---|---|
+| muOS, JIT | 51.4, 51.2 | 18.5, 18.3 | 228, 226 | 1.8, 1.9 s (3,435 methods already compiled) |
+| muOS, LLVM AOT | 51.5, 51.1 | 18.3, 18.4 | 232, 231 | 0.7, 0.7 s (4,783 already compiled) |
+| Knulli, JIT | 50.8, 51.1 | 19.3, 19.1 | 186, 186 | 2.6, 3.1 s |
+| Knulli, LLVM AOT | 51.1, 51.3 | 19.1, 19.0 | 185, 185 | 1.7, 1.0 s |
+| Knulli, 32-bit port | 53.6 | 18.1 | 211 | |
+
+The frame rate is the same within run-to-run noise (+0.1 ms at most), memory +4 MB on muOS. A 500 Hz
+profile of UnityMain on Knulli says why: managed code is 15.6 % of UnityMain's CPU time under the JIT
+and 15.9 % with the images (10.7 % in the images, 5.2 % still JIT code: generic instances, wrappers and
+UnityEngine.CoreModule); PlayMaker alone 4.4 % JIT against 5.2 % in its image. The kernels' gains do not
+carry over: the frame's managed time is PlayMaker walking its object graph (cache misses that any code
+generator waits for) and calls, which in an image all go through the GOT and PLT, against direct
+branches in the JIT's code (the 0.3 ms plain AOT lost); LLVM's better code wins back about that much and
+no more.
+
+**Verdict: not a setup step.** It would cost the setup (below) and a 50 MB toolchain for no frame-rate
+gain; the warm-up is 1 - 2 s shorter, which UA_JIT_WARM already hides behind the first frames. The build
+option and `UA_MONO64_AOT` stay for measurements.
+
+**What a setup step would have needed** (for the record): `opt`, `llc`, the LLVM runtime (one LLVM
+inside each; as one `libLLVM.so` about 35 MB instead of 79), GNU as and ld (binutils, GPL-3: separate
+programs, shippable as binaries with their source), monohost; about 82 MB, 35 MB compressed; the images
+compiled from the player's own assemblies into a folder of the port's, `UA_MONO64_AOT` set by the
+launcher, the JIT the fallback for anything missing or stale. On the handheld:
+measured on the RG34XX-SP under Knulli (H700, 1 GB, zram on), PlayMaker 38 s and Assembly-CSharp
+396 s (15x and 13x the Mac's), the compiler process alone 505 MB resident (Mono holds the whole
+assembly's LLVM module before opt and llc run), MemAvailable down to 42 MB with 120 MB pushed to zram.
+Scaled by the Mac's times, all ten assemblies would take about 35 - 40 minutes, and mscorlib's 603 MB
+peak (System 417 MB) does not fit beside the frontend on a 1 GB handheld without swap (the G350, which
+did not answer during this test): it would need assemblies split into parts (Mono's `--aot` has no such
+option) or the class libraries left to the JIT. Not run in parallel with the textures step: either alone
+takes most of the memory.

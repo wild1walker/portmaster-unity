@@ -15,6 +15,8 @@
 # which libmono-native is built from). The build runs in an arm64 container (ua-mono64-build: the
 # ua-build-arm64 image, Ubuntu 20.04 / glibc 2.31, plus autotools), natively on an Apple-silicon
 # Mac or an arm64 Linux PC, in a docker volume (ua-mono64); about 5 minutes on 8 cores.
+# MONO64_LLVM=1: instead, the AOT compiler with Mono's LLVM back end and LLVM's opt and llc (a measurement:
+# no faster than the JIT in Hollow Knight; the block marked MONO64_LLVM below, docs/mono-arm64.md).
 # Unity's Mono is MIT-licensed (THIRD_PARTY.md); what this builds stays on the porter's machine and
 # goes to the player's device with the port's setup, as Unity's player does.
 set -e
@@ -77,9 +79,61 @@ EOF
   echo "$B: mono $REF, bdwgc $GC, libatomic_ops $AO${CF:+, corefx $CF}" > "$D/.fetched"
 fi
 cp "$D/.fetched" "$W/out/$B/SOURCE.txt"         # which commits the libraries were built from
+# --- MONO64_LLVM=1: the ahead-of-time compiler with Mono's LLVM back end (docs/mono-arm64.md, "Mono's
+# LLVM back end, measured in the game"), built instead of the runtime, into <work>/out/<branch>-llvm/:
+# the same runtime configured --enable-llvm (LLVM linked in, for mono_main --aot=llvm) plus LLVM's opt and llc,
+# from the LLVM fork the branch names (external/llvm-project: dotnet/llvm-project, LLVM 6.0 with Mono's
+# changes), aarch64 back end only, release build, libstdc++ linked in. Its own docker volume
+# (ua-mono64-llvm, about 3 GB: LLVM's build tree) and its own source tree, so a plain build is not
+# touched; the volume can go once out/ has the files (docker volume rm ua-mono64-llvm). About 70
+# minutes on 8 cores. The images it compiles load in the plain runtime (same sources: same version).
+VOL=ua-mono64; OUT=$W/out/$B; LLVMCONF=; LLVMDIR=
+if [ "${MONO64_LLVM:-0}" = 1 ]; then
+  VOL=ua-mono64-llvm; OUT=$W/out/$B-llvm; mkdir -p "$OUT"; cp "$D/.fetched" "$OUT/SOURCE.txt"
+  REF=$(sed -nE 's/.*: mono ([0-9a-f]+).*/\1/p' "$D/.fetched")
+  LL=$(api Unity-Technologies/mono external/llvm-project "$REF") || { echo "no external/llvm-project at $REF"; exit 1; }
+  echo "llvm-project (dotnet/llvm-project) $LL" >> "$OUT/SOURCE.txt"
+  docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
+  docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
+  if ! docker run --rm -v $VOL:/b ua-mono64-build test -f /b/llvm-$LL/.fetched; then
+    echo "fetching dotnet/llvm-project $LL (llvm/ only, without its tests)"
+    tarball dotnet/llvm-project "$LL" | docker run --rm -i --platform linux/arm64 -v $VOL:/b ua-mono64-build bash -c "
+      set -e; rm -rf /b/llvm-$LL; mkdir -p /b/llvm-$LL/src
+      tar xz -C /b/llvm-$LL/src --strip-components=2 --wildcards '*/llvm/*' --exclude='*/llvm/test/*' --exclude='*/llvm/unittests/*'
+      touch /b/llvm-$LL/.fetched"
+  fi
+  docker run --rm --platform linux/arm64 -v $VOL:/b -v "$OUT":/out ua-mono64-build bash -c '
+set -e
+L=/b/llvm-'"$LL"'
+# Unity'"'"'s branch passes llc -disable-fault-maps, an option of a later fork commit than the one it
+# names (fault maps are never emitted for aarch64 by LLVM 6): llc accepts it here and ignores it
+if ! grep -q disable-fault-maps $L/src/tools/llc/llc.cpp; then
+  sed -i "/^static cl::opt<bool> NoVerify/i static cl::opt<bool> DisableFaultMaps(\"disable-fault-maps\", cl::Hidden, cl::desc(\"Accepted for Mono; no effect\"));" $L/src/tools/llc/llc.cpp
+  rm -f $L/usr/bin/llc
+fi
+if [ ! -x $L/usr/bin/llc ]; then
+  mkdir -p $L/build; cd $L/build
+  # mono/llvm/build.mk'"'"'s options, the aarch64 back end only; no assertions; libstdc++ and libgcc
+  # linked in so the tools run on any glibc handheld
+  [ -f Makefile ] || cmake -DCMAKE_INSTALL_PREFIX=$L/usr -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_BUILD_TESTS=Off -DLLVM_INCLUDE_TESTS=Off -DLLVM_BUILD_EXAMPLES=Off -DLLVM_INCLUDE_EXAMPLES=Off \
+    -DLLVM_INCLUDE_DOCS=Off -DLLVM_TOOLS_TO_BUILD="opt;llc;llvm-config;llvm-dis" -DLLVM_TARGETS_TO_BUILD=AArch64 \
+    -DLLVM_ENABLE_ASSERTIONS=Off -DLLVM_ENABLE_LIBXML2=Off -DLLVM_ENABLE_TERMINFO=Off -DLLVM_ENABLE_ZLIB=Off \
+    -DHAVE_FUTIMENS=0 -DLLVM_PARALLEL_LINK_JOBS=2 \
+    -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" $L/src > /out/llvm-cmake.log 2>&1 || { tail -30 /out/llvm-cmake.log; exit 1; }
+  make -j$(nproc) > /out/llvm-make.log 2>&1 || { grep -n -B3 -A10 -m3 "error" /out/llvm-make.log | head -50; exit 1; }
+  make install > /out/llvm-install.log 2>&1
+fi
+strip -o /out/opt $L/usr/bin/opt; strip -o /out/llc $L/usr/bin/llc
+cp $L/src/LICENSE.TXT /out/LLVM-LICENSE.TXT
+ls -la /out/opt /out/llc'
+  # (LLVM is C++: libmono names libstdc++, which libtool's C link leaves out)
+  LLVMCONF="--enable-llvm --with-llvm=/b/llvm-$LL/usr LIBS=-lstdc++"; LLVMDIR=llvm
+fi
+# --- (end of MONO64_LLVM)
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
-docker run --rm --platform linux/arm64 -v ua-mono64:/b -v "$D":/src:ro -v "$W/out/$B":/out ua-mono64-build bash -c '
+docker run --rm --platform linux/arm64 -v $VOL:/b -v "$D":/src:ro -v "$OUT":/out ua-mono64-build bash -c '
 set -e
 B='"$B"'
 [ -f /b/$B/.copied ] || { rm -rf /b/$B; mkdir -p /b/$B; cp -a /src/. /b/$B/; touch /b/$B/.copied; }
@@ -117,12 +171,12 @@ if [ ! -f config.status ]; then
   NOCONFIGURE=1 ./autogen.sh > /out/autogen.log 2>&1 || { tail -30 /out/autogen.log; exit 1; }
   ./configure --prefix=/b/$B-inst --host=aarch64-pc-linux-gnu --disable-mcs-build --with-mcs-docs=no \
     --with-glib=embedded --disable-nls --disable-btls --with-monotouch=no --disable-parallel-mark \
-    --with-sgen=no $GC > /out/configure.log 2>&1 || { tail -40 /out/configure.log; exit 1; }
+    --with-sgen=no $GC '"$LLVMCONF"' > /out/configure.log 2>&1 || { tail -40 /out/configure.log; exit 1; }
 fi
 : > /out/make.log
 # (eglib: at the top of the tree in Mono 5.0 - 2017.4 - and in mono/ later)
 for d in external/bdwgc eglib mono/culture mono/eglib mono/arch mono/utils mono/cil mono/zlib mono/sgen \
-         mono/metadata mono/mini mono/profiler mono/native support; do
+         mono/metadata '$LLVMDIR' mono/mini mono/profiler mono/native support; do
   [ -d $d ] && [ -f $d/Makefile ] || continue
   # mono/mini: the runtime library only (its mono executable wants files of the full build)
   if [ $d = mono/mini ]; then make -k -j$(nproc) -C $d >> /out/make.log 2>&1 || true
@@ -148,4 +202,4 @@ for f in support/.libs/libMonoPosixHelper.so mono/native/.libs/libmono-native.so
   [ -f $f ] && strip -o /out/$(basename $f) $f
 done
 ls -la /out/*.so'
-echo "-> $W/out/$B"
+echo "-> $OUT"
