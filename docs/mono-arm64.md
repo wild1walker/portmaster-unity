@@ -849,7 +849,9 @@ any optimizing compiler, but in this scene they are a small part of the 2.95 ms;
 is PlayMaker's pointer walking, interface/virtual calls and list indexing, where the gains are 30 - 40 %.
 The same floating-point results everywhere (Matrix4x4's checksum identical on all routes).
 Side results: our Mono allocates 3.5 - 4.5x slower than Mono 6.12 (Unity's Boehm glue has no managed
-allocator: every `new` is a call into `GC_malloc`; IL2CPP's is the same, 1.1x), a P/Invoke costs our Mono
+allocator: every `new` is a call into `GC_malloc`; IL2CPP's is the same, 1.1x; the Mono 6.12 runs are its
+SGen collector, the `--gc=boehm` run too, as Debian's package has no `mono-boehm`; in the game it does not
+matter: [below](#allocation-in-the-game-the-managed-allocator-lead-does-not-matter-2026-11-20)), a P/Invoke costs our Mono
 40 ns and .NET 14 ns; Mono 6.12's armhf JIT on the same handheld takes 0.90 - 0.93 of its arm64 time on
 the pointer-walking kernels (the 32-bit build's advantage in the game, 2.61 against 2.95 ms) and 1.2 - 2x
 longer on everything else.
@@ -913,3 +915,39 @@ against the 32-bit build's 16.7, because most of the gap is Unity's arm64 engine
 PlayMaker, Assembly-CSharp and mscorlib in the arm64 container, and measure King's Pass with those
 images (`UA_MONO64_MANAGED`) before deciding whether the handheld could build them at setup. Expected
 about -0.8 ms of UnityMain: a 64-bit build that is still behind the 32-bit one on frame rate.
+
+### Allocation in the game: the managed-allocator lead does not matter (2026-11-20)
+
+The benchmark's allocation kernel (a small object, a boxed int, a short array, a closure and its
+delegate a step: 2 million objects) takes our Mono 0.47 us an object against 0.13 for Mono 6.12. Measured in
+the games before building anything (`UA_ALLOC_LOG`, docs/runtime.md: Mono's allocation event, every object
+the runtime makes; `UA_PROF` for the time):
+
+| | objects a frame (UnityMain) | KB a frame | UnityMain in the allocation path (`UA_PROF` 500 Hz) |
+|---|---|---|---|
+| Hollow Knight, King's Pass, 32-bit (Unity's armv7 libmono), muOS | 35 - 37 | 2.2 | under 0.01 ms (3 of 20,436 samples, scanned) |
+| Hollow Knight, King's Pass, 64-bit (our Mono, 8-byte granules), muOS | 36 - 37 | 2.7 - 2.8 | 0.04 - 0.05 ms (64 samples unwound through `ves_icall_object_new_specific`, 0.3 %; self in `GC_*` 0.2 %) |
+| Cuphead, Veggies fight, 64-bit (Mono 5.0.1, `unity-2017.4-mbe`), Knulli | 19 - 21 | 1.1 | 0.05 ms (30 samples, 0.3 %; the game at 59.6 fps) |
+
+What the frame allocates is the game's own garbage: at King's Pass 9 strings, 6 `GUILayoutGroup` + 6 `List`
+(an `OnGUI`), 6 `Collision2D` + 6 `ContactPoint2D[]` (Physics2D's callbacks), 3 `WaitForFixedUpdate`;
+Cuphead's 4 strings, 2 `Type[]`, 2 boxed floats and its collision delegates. The same count on both builds;
+the 64-bit objects are larger (pointers: a `List` 40 bytes against 24). At ~1 us an object in the game (the
+profile's 0.04 ms over 36) even a free allocation would give back 0.05 ms of an 18.5 ms frame (0.3 %), under
+the run-to-run noise: not built. A scene load is where allocation counts (King's Pass's: 0.85 - 0.92
+million objects, 29 frames on 32-bit, 128 on 64-bit), about 0.3 - 0.9 s of it at these costs; not measured
+further.
+
+What a managed allocator would have been: upstream Mono has none for Boehm on ARM. Mono 5.0's
+`boehm-gc.c` (Unity's 2017.4 branch) has one only for x86/x86-64 with the old in-tree libgc
+(`!HAVE_BDWGC_GC`), and its `mono_gc_get_managed_allocator` returns NULL first ("Tls implementation
+changed"); Mono 6 removed it (Unity's 6000.0 branch keeps the stub and the note "the code was effectively
+dead"). The fast path that is there is Boehm's own: our bdwgc is built with thread-local allocation
+(`THREAD_LOCAL_ALLOC`, `USE_COMPILER_TLS`; the profile shows `GC_malloc_kind` and `GC_gcj_malloc` refilled by
+`GC_generic_malloc_many`), and Hollow Knight's collector is the stop-the-world one (`[mono64] Mono up: ...
+stop-the-world collector`). A game whose boot.config asks for the incremental one (`gc-max-time-slice`, which
+the bridge passes on) allocates through Boehm's locked `GC_core_*` paths instead (bdwgc's thread-local
+allocators step aside in incremental mode): not measured, no such game tested yet. The cost above it is the JIT's call through the `__icall_wrapper_ves_icall_object_new_specific`
+wrapper (an LMF push and pop), `mono_object_new_specific`, `mono_gc_alloc_obj` and the TLS lookup.
+Upstream's 3.5x is SGen's bump-pointer nursery and its cheaper collections, not a Boehm path to port.
+

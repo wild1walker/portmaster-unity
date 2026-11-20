@@ -1,12 +1,15 @@
 // jitlog.c's check (runtime/host/test/plugins_test.sh): UA_JIT_LOG installs its compile callbacks through Mono's
 // profiler API, the current one (mono_profiler_create + set_jit_*_callback) or, on Unity 2017.x's Mono 2.6, the
 // legacy one (mono_profiler_install + install_jit_compile + set_events(JIT_COMPILATION)), and counts the compiles
-// the callbacks report; without either API it stays off. Stand-ins for Mono; the loader and frames.c stubbed.
+// the callbacks report; without either API it stays off. UA_ALLOC_LOG: the allocation event through the current
+// API, UnityMain's allocations counted apart from another thread's. Stand-ins for Mono; the loader and frames.c stubbed.
 #include "../jitlog.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 double frames_t_start(void) { return 0; }
 void *mono_runtime_lib(void) { return NULL; }
@@ -34,10 +37,56 @@ static void *legacy_sym(const char *n)
 }
 static void *none_sym(const char *n) { (void)n; return NULL; }
 
+// the current API's allocation event (UA_ALLOC_LOG)
+typedef void (*alloc_cb)(void *, void *);
+static alloc_cb g_alloc;
+static int g_enabled;
+static void *p_create(void *x) { (void)x; return (void *)8; }
+static int p_enable(void) { return g_enabled = 1; }
+static void p_set_alloc(void *h, void *cb) { if (h) g_alloc = (alloc_cb)cb; }
+static void *o_class(void *o) { return *(void **)o; }
+static unsigned o_size(void *o) { (void)o; return 24; }
+static const char *c_name(void *k) { return (const char *)k; }
+static const char *c_ns(void *k) { (void)k; return "NS"; }
+static void *alloc_sym(const char *n)
+{
+    if (!strcmp(n, "mono_profiler_create")) return (void *)p_create;
+    if (!strcmp(n, "mono_profiler_enable_allocations")) return (void *)p_enable;
+    if (!strcmp(n, "mono_profiler_set_gc_allocation_callback")) return (void *)p_set_alloc;
+    if (!strcmp(n, "mono_object_get_class")) return (void *)o_class;
+    if (!strcmp(n, "mono_object_get_size")) return (void *)o_size;
+    if (!strcmp(n, "mono_class_get_name")) return (void *)c_name;
+    if (!strcmp(n, "mono_class_get_namespace")) return (void *)c_ns;
+    return NULL;
+}
+static void *other_thread(void *o) { g_alloc(NULL, o); return NULL; }
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     const char *mode = argc > 1 ? argv[1] : "none";
+    if (!strcmp(mode, "alloc")) {
+        setenv("UA_ALLOC_LOG", "0.001", 1);
+        jitlog_set_resolver(alloc_sym);
+        jitlog_init();
+        jitlog_frame();                     // installs at the first frame (UnityMain's thread)
+        CHECK(g_enabled && g_alloc, "allocation events enabled and the callback set");
+        static const char *klass_a = "A", *klass_b = "B";
+        void *a = (void *)&klass_a, *b = (void *)&klass_b;
+        if (g_alloc) {
+            g_alloc(NULL, a); g_alloc(NULL, a); g_alloc(NULL, b);
+            pthread_t t;                    // another thread's allocation: not UnityMain's
+            pthread_create(&t, NULL, other_thread, a); pthread_join(t, NULL);
+        }
+        CHECK(jitlog_allocs() == 3, "UnityMain's three allocations counted: %lld", jitlog_allocs());
+        jitlog_frame();                     // the first window starts here
+        struct timespec ts = { 0, 3000000 };
+        if (g_alloc) g_alloc(NULL, b);
+        nanosleep(&ts, NULL);
+        jitlog_frame();                     // the report: "[alloc] UnityMain 0.5 objects ... NS.B 0.5 (24 B)"
+        printf("jitlog %s: %s (%d failures)\n", mode, fails ? "FAILED" : "PASSED", fails);
+        return fails != 0;
+    }
     setenv("UA_JIT_LOG", "1", 1);
     jitlog_set_resolver(strcmp(mode, "legacy") ? none_sym : legacy_sym);
     jitlog_init();

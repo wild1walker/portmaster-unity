@@ -21,7 +21,7 @@ if [ "$ARCH" = arm64 ]; then
     gcc $F -o $O/test_monoaot test/test_monoaot.c monoaot.c
     gcc $F -o $O/test_jitlog test/test_jitlog.c jitlog.c -lpthread
     gcc $F -o $O/test_jitwarm test/test_jitwarm.c jitwarm.c -lpthread
-    gcc $F -o $O/test_gcgrow test/test_gcgrow.c gcbudget.c -lpthread
+    gcc $F -o $O/test_gcgrow test/test_gcgrow.c gcbudget.c -lpthread -ldl
     gcc $F -o $O/test_monoinvoke test/test_monoinvoke.c monoinvoke.c -lpthread
     gcc $F -shared -fPIC -o $O/glibc/libfmodstudio.so test/fmod_double.c
     # an NDK-style library: freestanding, bionic stack guard in tpidr_el0 + 0x28, DT_NEEDED libc.so
@@ -43,6 +43,7 @@ if [ "$ARCH" = arm64 ]; then
     $O/test_monoaot $T
     $O/test_jitlog none
     $O/test_jitlog legacy
+    $O/test_jitlog alloc
     for s in record warm stale patched late latestale legacy badtoken cctor noprobe nodefer inline writer writer0; do d=$(mktemp -d); $O/test_jitwarm $s $d; rm -rf $d; done
     for s in grow playing collected plenty off; do $O/test_gcgrow $s; done
     $O/test_monoinvoke'
@@ -66,7 +67,7 @@ docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c '
   $CC $F -o $O/test_monoaot test/test_monoaot.c monoaot.c
   $CC $F -o $O/test_jitlog test/test_jitlog.c jitlog.c -lpthread -latomic
   $CC $F -o $O/test_jitwarm test/test_jitwarm.c jitwarm.c -lpthread
-  $CC $F -o $O/test_gcgrow test/test_gcgrow.c gcbudget.c -lpthread
+  $CC $F -o $O/test_gcgrow test/test_gcgrow.c gcbudget.c -lpthread -ldl
   arm-linux-gnueabihf-g++ $F -o $O/test_monoinvoke -x c test/test_monoinvoke.c -x c monoinvoke.c -x none ../loader/out/libsoloader.a \
     -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -ldl -lpthread -lm
   # an NDK-style armeabi-v7a library: Thumb-2, softfp, freestanding, DT_NEEDED libc.so
@@ -91,6 +92,7 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
   $O/test_monoaot $T
   $O/test_jitlog none
   $O/test_jitlog legacy
+  $O/test_jitlog alloc
   for s in record warm stale patched late latestale legacy badtoken cctor noprobe nodefer inline writer writer0; do d=$(mktemp -d); $O/test_jitwarm $s $d; rm -rf $d; done
   for s in grow playing collected plenty off; do $O/test_gcgrow $s; done
   $O/test_monoinvoke'
