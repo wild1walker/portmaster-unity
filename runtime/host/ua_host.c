@@ -521,9 +521,28 @@ static void linux32_personality(void)
 }
 #endif
 
+#if defined(__LP64__) && defined(__GLIBC__)
+#include <malloc.h>
+// 64-bit glibc keeps freed memory: its mmap threshold grows with every large block freed (up to 32 MB; 32-bit
+// glibc stops at 512 KB), so Unity's loading buffers stay in the heap after they are freed, in an arena of up
+// to 64 MB per thread. A 2017.4 game at the same point: 283 MB of anonymous memory, 158 MB with a fixed 256 KB
+// threshold and two arenas, the same frame rate; its 32-bit build has 138 MB. UA_MALLOC=0 keeps glibc's
+// defaults; a MALLOC_ARENA_MAX or MALLOC_MMAP_THRESHOLD_ set by the caller wins.
+static void malloc_setup(void)
+{
+    const char *m = getenv("UA_MALLOC");
+    if (m && !strcmp(m, "0")) return;
+    if (!getenv("MALLOC_MMAP_THRESHOLD_")) mallopt(M_MMAP_THRESHOLD, 256 * 1024);
+    if (!getenv("MALLOC_ARENA_MAX")) mallopt(M_ARENA_MAX, 2);
+}
+#else
+static void malloc_setup(void) {}
+#endif
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    malloc_setup();
 #if defined(__arm__)
     linux32_personality();
 #endif
