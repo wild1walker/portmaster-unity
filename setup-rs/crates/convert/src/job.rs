@@ -39,6 +39,9 @@ pub struct Job {
     /// mark_unchanged).
     saved: std::cell::Cell<Option<Instant>>,
     unsaved: std::cell::Cell<bool>,
+    /// Converted files written but not yet put in place (write_deferred), with the marks of the
+    /// files after them, in order.
+    deferred: Deferred,
     /// The output folder, locked while the job runs (lock_dir).
     _lock: Arc<std::fs::File>,
 }
@@ -70,6 +73,56 @@ pub fn lock_dir(dir: &Path) -> std::io::Result<Option<Arc<std::fs::File>>> {
 
 /// How long marks of files a step left unchanged may wait before the journal is written.
 const LAZY_SAVE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// write_deferred's batch: put in place together once it holds DEFER_FILES files, DEFER_BYTES of
+/// them (the card holds them beside the files they replace until then), or its first file is
+/// DEFER_AGE old (the most a killed run has to convert again).
+const DEFER_FILES: usize = 16;
+const DEFER_BYTES: u64 = 64 << 20;
+const DEFER_AGE: std::time::Duration = std::time::Duration::from_secs(15);
+/// Where the deferred files wait (in the scratch folder, `.pmunity-work`).
+const DEFER_DIR: &str = ".pmunity-work/commit";
+
+/// A file of the batch (its sync on the syncer thread: the result comes on `synced`), or the mark
+/// of a file a step left as it was (kept in its place among the batch's files: the journal lists
+/// the files in the order the step finished them).
+enum Entry {
+    File {
+        step: String,
+        rel: String,
+        tmp: PathBuf,
+        dst: PathBuf,
+        synced: std::sync::mpsc::Receiver<std::io::Result<()>>,
+    },
+    Mark {
+        step: String,
+        rel: String,
+    },
+}
+
+type SyncReq = (PathBuf, std::sync::mpsc::SyncSender<std::io::Result<()>>);
+
+#[derive(Default)]
+struct Deferred {
+    entries: Vec<Entry>,
+    files: usize,
+    bytes: u64,
+    since: Option<Instant>,
+    /// the thread that syncs the batch's files as they come (fsync), while the step goes on
+    syncer: Option<(
+        std::sync::mpsc::Sender<SyncReq>,
+        std::thread::JoinHandle<()>,
+    )>,
+}
+
+impl Drop for Deferred {
+    fn drop(&mut self) {
+        if let Some((tx, t)) = self.syncer.take() {
+            drop(tx);
+            let _ = t.join();
+        }
+    }
+}
 
 /// os.path.abspath: absolute, '.' and '..' resolved lexically (symlinks left alone).
 pub fn abspath(p: &Path) -> PathBuf {
@@ -202,6 +255,7 @@ impl Job {
             db: OnceLock::new(),
             saved: std::cell::Cell::new(None),
             unsaved: std::cell::Cell::new(false),
+            deferred: Deferred::default(),
             _lock: lock,
         };
         // the journal, or the copy a save had synced but not yet renamed over it
@@ -226,6 +280,14 @@ impl Job {
             job.state.setdefault("scaled", Json::dict());
             if job.state.get("pending").is_some_and(Json::truthy) {
                 job.finish_pending()?;
+            }
+        }
+        // (deferred files of a killed run that never went in place: converted again)
+        let dir = job.out.join(DEFER_DIR);
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+            if let Some(p) = dir.parent() {
+                let _ = std::fs::remove_dir(p);
             }
         }
         Ok(job)
@@ -358,6 +420,147 @@ impl Job {
         Ok(())
     }
 
+    /// job.write_with then mark_done(step, rel), in place without waiting for the card: the file
+    /// is written to <file>.tmp, synced on a thread of its own while the step goes on, and put in
+    /// place with the batch it is in (commit_deferred), the journal written twice for the batch
+    /// instead of for each file. The same guarantees: a file is renamed into place only once it
+    /// is synced, the renames of a batch are listed in the journal (`pending`) before they are
+    /// made, and a file is marked done only after its rename. A run killed before a batch is put
+    /// in place converts its files again (their .tmp files written anew). As an overlay: as
+    /// write_with and mark_done.
+    pub fn write_deferred(
+        &mut self,
+        step: &str,
+        rel: &str,
+        f: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<()> {
+        if !self.inplace {
+            self.write_with(rel, f)?;
+            return self.mark_done(step, rel);
+        }
+        let dst = self.out.join(rel);
+        if let Some(d) = dst.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        // (in the scratch folder, which no step lists: a killed run's leave nothing among the
+        // game's files; Job::new removes them)
+        let dir = self.out.join(DEFER_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let name = Path::new(rel)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp = dir.join(format!("{}-{name}", self.deferred.files));
+        texcodec::prof::time(Stage::Write, || f(&tmp)).map_err(|e| match e {
+            Error::Io(e) => crate::error::at(&tmp)(e),
+            Error::Unity(unityfs::Error::Io(e)) => crate::error::at(&tmp)(e),
+            e => e,
+        })?;
+        let size = std::fs::metadata(&tmp).map_or(0, |m| m.len());
+        let d = &mut self.deferred;
+        if d.syncer.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel::<SyncReq>();
+            let t = std::thread::Builder::new()
+                .name("pmu-sync".into())
+                .spawn(move || {
+                    for (p, reply) in rx {
+                        let r = std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(&p)
+                            .and_then(|f| f.sync_all());
+                        let _ = reply.send(r);
+                    }
+                })?;
+            d.syncer = Some((tx, t));
+        }
+        let (reply, synced) = std::sync::mpsc::sync_channel(1);
+        d.syncer
+            .as_ref()
+            .unwrap()
+            .0
+            .send((tmp.clone(), reply))
+            .map_err(|_| Error::Value("the sync thread stopped".into()))?;
+        d.entries.push(Entry::File {
+            step: step.to_string(),
+            rel: rel.to_string(),
+            tmp,
+            dst,
+            synced,
+        });
+        d.files += 1;
+        d.bytes += size;
+        let since = *d.since.get_or_insert_with(Instant::now);
+        if d.files >= DEFER_FILES || d.bytes >= DEFER_BYTES || since.elapsed() >= DEFER_AGE {
+            self.commit_deferred()?;
+        }
+        Ok(())
+    }
+
+    /// The bytes of the deferred files waiting beside the files they replace (room they take on
+    /// the card until their batch is put in place).
+    pub fn deferred_bytes(&self) -> u64 {
+        self.deferred.bytes
+    }
+
+    /// The deferred batch put in place: its files' syncs waited for, the renames listed in the
+    /// journal, made, their folders synced, then the marks (the files' and those of the files left
+    /// as they were between them) in order, and the journal written.
+    pub fn commit_deferred(&mut self) -> Result<()> {
+        if self.deferred.entries.is_empty() {
+            return Ok(());
+        }
+        let _t = Timer::new(Stage::Commit);
+        let entries = std::mem::take(&mut self.deferred.entries);
+        self.deferred.files = 0;
+        self.deferred.bytes = 0;
+        self.deferred.since = None;
+        let mut moves = Vec::new();
+        for e in &entries {
+            if let Entry::File {
+                tmp, dst, synced, ..
+            } = e
+            {
+                synced
+                    .recv()
+                    .unwrap_or_else(|_| Err(std::io::Error::other("the sync thread stopped")))
+                    .map_err(crate::error::at(tmp))?;
+                moves.push((tmp.clone(), dst.clone()));
+            }
+        }
+        if moves.len() > 1 {
+            let pending = moves
+                .iter()
+                .map(|(p, d)| Json::List(vec![Json::Str(text(p)), Json::Str(text(d))]))
+                .collect();
+            self.state.set("pending", Json::List(pending));
+            self.save_state()?;
+        }
+        for (p, d) in &moves {
+            std::fs::rename(p, d).map_err(crate::error::at(d))?;
+        }
+        let mut dirs: Vec<&Path> = moves.iter().filter_map(|(_, d)| d.parent()).collect();
+        dirs.sort();
+        dirs.dedup();
+        for d in dirs {
+            fsync_dir(d);
+        }
+        self.state.pop("pending");
+        for e in &entries {
+            let (Entry::File { step, rel, .. } | Entry::Mark { step, rel }) = e;
+            self.add_mark(step, rel)?;
+        }
+        self.save_state()?;
+        // (the scratch folder as a step leaves it: removed when nothing else is there)
+        let dir = self.out.join(DEFER_DIR);
+        if std::fs::remove_dir(&dir).is_ok() {
+            if let Some(p) = dir.parent() {
+                let _ = std::fs::remove_dir(p);
+            }
+        }
+        Ok(())
+    }
+
     /// Puts a converted file written to `path` (on the output's file system) in place.
     pub fn write_file(&mut self, rel: &str, path: &Path) -> Result<()> {
         self.commit(&[(rel.to_string(), path.to_path_buf())])
@@ -476,6 +679,8 @@ impl Job {
     }
 
     pub fn mark_done(&mut self, step: &str, rel: &str) -> Result<()> {
+        // (after the files of a deferred batch, which come before it)
+        self.commit_deferred()?;
         self.add_mark(step, rel)?;
         self.save_state()
     }
@@ -487,6 +692,14 @@ impl Job {
     /// before such a mark is written looks at that file again and leaves it again: the same
     /// files, the same journal at the end.
     pub fn mark_unchanged(&mut self, step: &str, rel: &str) -> Result<()> {
+        if !self.deferred.entries.is_empty() {
+            // (its place among the deferred files: marked with them)
+            self.deferred.entries.push(Entry::Mark {
+                step: step.to_string(),
+                rel: rel.to_string(),
+            });
+            return Ok(());
+        }
         self.add_mark(step, rel)?;
         self.unsaved.set(true);
         match self.saved.get() {
@@ -571,6 +784,55 @@ mod tests {
         );
         drop(held);
         assert!(flock(&other, FlockOperation::NonBlockingLockExclusive).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// write_deferred in place: nothing in place or journaled until the batch is put in place; then
+    /// the files renamed and the marks (with an unchanged file's between them, and one marked
+    /// done after them) in the order the step made them, the journal as one file at a time makes it.
+    #[test]
+    fn deferred_files_go_in_place_together_in_order() {
+        use super::*;
+        let d = std::env::temp_dir().join(format!("pmu-defer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        for f in ["a", "b", "sub/c", "e"] {
+            std::fs::write(d.join(f), b"old").unwrap();
+        }
+        let journal = |d: &Path| std::fs::read_to_string(d.join(STATE)).unwrap_or_default();
+        {
+            let mut job = Job::new(&d, &d, Json::dict()).unwrap();
+            job.write_deferred("s", "a", |t| Ok(std::fs::write(t, b"new a")?)).unwrap();
+            job.mark_unchanged("s", "x").unwrap();
+            job.write_deferred("s", "sub/c", |t| Ok(std::fs::write(t, b"new c")?)).unwrap();
+            assert_eq!(std::fs::read(d.join("a")).unwrap(), b"old");
+            assert!(!journal(&d).contains("\"a\""));
+            assert_eq!(job.deferred_bytes(), 10);
+            // (a killed run: the batch dropped, nothing in place, its files converted again)
+            assert!(d.join(DEFER_DIR).is_dir());
+        }
+        assert_eq!(std::fs::read(d.join("a")).unwrap(), b"old");
+        assert!(!journal(&d).contains("\"a\""));
+        let mut job = Job::new(&d, &d, Json::dict()).unwrap();
+        assert!(!d.join(".pmunity-work").exists());
+        job.write_deferred("s", "a", |t| Ok(std::fs::write(t, b"new a")?)).unwrap();
+        job.mark_unchanged("s", "x").unwrap();
+        job.write_deferred("s", "sub/c", |t| Ok(std::fs::write(t, b"new c")?)).unwrap();
+        job.write_with("e", |t| Ok(std::fs::write(t, b"new e")?)).unwrap();
+        job.mark_done("s", "e").unwrap();
+        assert_eq!(std::fs::read(d.join("a")).unwrap(), b"new a");
+        assert_eq!(std::fs::read(d.join("sub/c")).unwrap(), b"new c");
+        assert!(!d.join(".pmunity-work").exists());
+        assert_eq!(
+            journal(&d),
+            r#"{"version": 1, "done": {"s": ["a", "x", "sub/c", "e"]}, "scaled": {}}"#
+        );
+        // the end of a step puts a batch in place too
+        job.write_deferred("t", "b", |t| Ok(std::fs::write(t, b"new b")?)).unwrap();
+        job.commit_deferred().unwrap();
+        assert_eq!(std::fs::read(d.join("b")).unwrap(), b"new b");
+        assert!(job.is_done("t", "b"));
+        drop(job);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

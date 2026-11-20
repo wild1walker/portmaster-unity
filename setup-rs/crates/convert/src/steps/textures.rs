@@ -477,21 +477,32 @@ fn stem(p: &Path) -> PathBuf {
 }
 
 /// The new contents of a texture stream file: blobs, each 16-byte aligned, written to a file as
-/// they come (StreamFile).
+/// they come (StreamFile), or (a bundle's, while they come to at most STREAM_MEM) held in memory:
+/// a bundle's new stream only goes into the bundle that is written next, so a file of it was
+/// written to the card and read back for nothing.
 /// (The file is made with the first blob: most of a game's files have no textures.)
 struct StreamFile {
     path: PathBuf,
     f: Option<unityfs::bgwrite::BgWriter>,
+    /// the blobs in memory, while they fit in `cap` (None: in the file)
+    mem: Option<Vec<u8>>,
+    cap: usize,
     size: u64,
     /// in place: its data synced as it is written (it is synced before its rename)
     sync: bool,
 }
 
+/// The most of a bundle's new stream held in memory (past it, the stream goes on in a file).
+const STREAM_MEM: usize = 32 << 20;
+
 impl StreamFile {
-    fn new(path: PathBuf, sync: bool) -> Result<StreamFile> {
+    /// `cap`: bytes held in memory before the file is made (0: a file from the first blob).
+    fn new(path: PathBuf, sync: bool, cap: usize) -> Result<StreamFile> {
         Ok(StreamFile {
             path,
             f: None,
+            mem: (cap > 0).then(Vec::new),
+            cap,
             size: 0,
             sync,
         })
@@ -509,6 +520,10 @@ impl StreamFile {
                 w.sync_every(16 << 20)
                     .map_err(crate::error::at(&self.path))?;
             }
+            // (what was held in memory first)
+            if let Some(m) = self.mem.take() {
+                w.write_all(&m).map_err(crate::error::at(&self.path))?;
+            }
             self.f = Some(w);
         }
         Ok(self.f.as_mut().unwrap())
@@ -516,24 +531,37 @@ impl StreamFile {
 
     fn add(&mut self, blob: &[u8]) -> Result<u64> {
         let pad = (16 - self.size % 16) % 16;
-        let path = self.path.clone();
-        let f = self.file()?;
-        f.write_all(&vec![0u8; pad as usize])
-            .and_then(|_| f.write_all(blob))
-            .map_err(crate::error::at(&path))?;
         let off = self.size + pad;
-        self.size = off + blob.len() as u64;
+        let end = off + blob.len() as u64;
+        match &mut self.mem {
+            Some(m) if end <= self.cap as u64 => {
+                m.resize(off as usize, 0);
+                m.extend_from_slice(blob);
+            }
+            _ => {
+                let path = self.path.clone();
+                let f = self.file()?;
+                f.write_all(&vec![0u8; pad as usize])
+                    .and_then(|_| f.write_all(blob))
+                    .map_err(crate::error::at(&path))?;
+            }
+        }
+        self.size = end;
         Ok(off)
     }
 
-    fn close(mut self) -> Result<PathBuf> {
+    /// The stream: its bytes, or the file they are in.
+    fn close(mut self) -> Result<NodeData> {
+        if let Some(m) = self.mem.take() {
+            return Ok(NodeData::Bytes(m));
+        }
         self.file()?;
         self.f
             .take()
             .unwrap()
             .finish()
             .map_err(crate::error::at(&self.path))?;
-        Ok(self.path)
+        Ok(NodeData::File(self.path))
     }
 }
 
@@ -743,7 +771,13 @@ impl Drop for Streams<'_> {
 }
 
 type Ahead = (String, u64, u64, Receiver<std::io::Result<Vec<u8>>>);
-type ReadReq = (PathBuf, u64, u64, SyncSender<std::io::Result<Vec<u8>>>);
+/// What the reader thread reads: a plain file's range, or a bundle node's (its source, which
+/// decompresses the blocks the range is in).
+enum ReadFrom {
+    File(PathBuf),
+    Node(unityfs::source::SharedSource),
+}
+type ReadReq = (ReadFrom, u64, u64, SyncSender<std::io::Result<Vec<u8>>>);
 
 /// The most a stream read ahead may be, and what the streams read ahead may hold together: they
 /// wait beside the textures being converted.
@@ -751,15 +785,24 @@ const AHEAD_MAX: u64 = 32 << 20;
 const AHEAD_BUDGET: u64 = 32 << 20;
 
 impl Streams<'_> {
-    /// Has a stream read by the reader thread (a plain file's: a bundle's nodes are read when
-    /// needed), for read() to take: the card reads the next textures while the workers convert
-    /// these. Left to read() when the streams ahead already hold AHEAD_BUDGET.
+    /// Has a stream read by the reader thread (a plain file's, or a bundle node's: its blocks
+    /// read and decompressed there), for read() to take: the card reads the next textures while
+    /// the workers convert these. Left to read() when the streams ahead already hold AHEAD_BUDGET.
     /// False when the streams ahead hold AHEAD_BUDGET already: the caller offers this one again
     /// later (the queue is in the textures' order).
     fn read_ahead(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> bool {
-        if f.is_bundle || size > AHEAD_MAX {
+        if size > AHEAD_MAX {
             return true;
         }
+        let from = if f.is_bundle {
+            match f.stream(path.rsplit('/').next().unwrap_or(path)) {
+                Some(src) => ReadFrom::Node(src),
+                // (read() says so)
+                None => return true,
+            }
+        } else {
+            ReadFrom::File(self.resolve(path))
+        };
         if self.ahead_bytes + size > AHEAD_BUDGET {
             return false;
         }
@@ -771,16 +814,21 @@ impl Streams<'_> {
                 .name("pmu-reader".into())
                 .spawn(move || {
                     let mut open: Option<(PathBuf, std::fs::File)> = None;
-                    for (p, off, size, reply) in rx {
+                    for (from, off, size, reply) in rx {
                         if stopped.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }
-                        if open.as_ref().is_none_or(|(q, _)| *q != p) {
-                            open = std::fs::File::open(&p).ok().map(|h| (p.clone(), h));
-                        }
-                        let r = match open.as_mut() {
-                            Some((_, h)) => read_range(h, off, size),
-                            None => Err(std::io::Error::other("not opened")),
+                        let r = match from {
+                            ReadFrom::Node(src) => src.read_clipped(off, size as usize),
+                            ReadFrom::File(p) => {
+                                if open.as_ref().is_none_or(|(q, _)| *q != p) {
+                                    open = std::fs::File::open(&p).ok().map(|h| (p.clone(), h));
+                                }
+                                match open.as_mut() {
+                                    Some((_, h)) => read_range(h, off, size),
+                                    None => Err(std::io::Error::other("not opened")),
+                                }
+                            }
                         };
                         let _ = reply.send(r);
                     }
@@ -797,13 +845,12 @@ impl Streams<'_> {
             }
         }
         let (tx, rx) = sync_channel(1);
-        let p = self.resolve(path);
         if self
             .reader
             .as_ref()
             .unwrap()
             .tx
-            .send((p, off, size, tx))
+            .send((from, off, size, tx))
             .is_ok()
         {
             self.ahead.push_back((path.to_string(), off, size, rx));
@@ -870,11 +917,12 @@ fn read_range(h: &mut std::fs::File, off: u64, size: u64) -> std::io::Result<Vec
     Ok(buf)
 }
 
-/// What convert_file leaves: the stream's name (None: no texture streams), the new stream file
-/// and the scaled textures' sizes; None when no texture was converted.
+/// What convert_file leaves: the stream's name (None: no texture streams), the new stream (a
+/// file, or a bundle's in memory) and the scaled textures' sizes; None when no texture was
+/// converted.
 type FileResult = Option<(
     Option<String>,
-    Option<PathBuf>,
+    Option<NodeData>,
     BTreeMap<i64, [usize; 4]>,
     Vec<i64>,
 )>;
@@ -1010,6 +1058,7 @@ impl Turns<'_> {
                     Out::Later(rx) => {
                         self.inflight -= est;
                         self.later -= 1;
+                        let _w = texcodec::prof::Timer::new(texcodec::prof::Stage::Wait);
                         rx.recv().unwrap_or_else(|_| stopped(self.rel))
                     }
                     Out::Strips {
@@ -1019,6 +1068,7 @@ impl Turns<'_> {
                     } => {
                         self.inflight -= est;
                         self.later -= 1;
+                        let _w = texcodec::prof::Timer::new(texcodec::prof::Stage::Wait);
                         let mut data = Vec::new();
                         let mut r = Ok(());
                         for (i, rx) in rxs.iter().enumerate() {
@@ -1197,7 +1247,13 @@ fn convert_file(
         q: Default::default(),
         inflight: 0,
         later: 0,
-        stream: StreamFile::new(stream_path, streams.job.inplace)?,
+        // (a bundle's new stream is packed into the bundle, which is synced: the stream is not;
+        // a plain file's is renamed into place beside it)
+        stream: if f.is_bundle {
+            StreamFile::new(stream_path, false, STREAM_MEM)?
+        } else {
+            StreamFile::new(stream_path, streams.job.inplace, 0)?
+        },
         sizes: BTreeMap::new(),
         order: Vec::new(),
         converted: 0,
@@ -1253,7 +1309,9 @@ fn convert_file(
             let step = (|| -> Result<Option<Turn>> {
                 let mut t = match next.pop_front() {
                     Some(t) => t?,
-                    None => f.sf.read_typetree_owned(pid, CARVE_MIN)?,
+                    None => texcodec::prof::time(texcodec::prof::Stage::Objects, || {
+                        f.sf.read_typetree_owned(pid, CARVE_MIN)
+                    })?,
                 };
                 let sd = stream_data(&t);
                 looked = looked.max(k + 1);
@@ -1269,8 +1327,10 @@ fn convert_file(
                     }
                     ahead += size;
                     next.push_back(
-                        f.sf.read_typetree_owned(textures[looked], CARVE_MIN)
-                            .map_err(Error::from),
+                        texcodec::prof::time(texcodec::prof::Stage::Objects, || {
+                            f.sf.read_typetree_owned(textures[looked], CARVE_MIN)
+                        })
+                        .map_err(Error::from),
                     );
                     looked += 1;
                 }
@@ -1486,6 +1546,7 @@ fn convert_file(
         return Ok(None);
     }
     let mut stream = turns.stream;
+    let _o = texcodec::prof::Timer::new(texcodec::prof::Stage::Objects);
     if let Some(name) = &stream_name {
         // everything else that streams from the same file goes along into the new one
         for (pid, class) in objects(f) {
@@ -1729,6 +1790,8 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             + beside
             + (64 << 20)
             + if spilled { bsize * 2 } else { 0 };
+        // (with the converted files that wait beside the ones they replace: write_deferred)
+        let need = need + job.deferred_bytes();
         job.need_space(need, &format!("convert {rel}"))?;
         let before = (stats.bytes_in, stats.bytes_out);
         let res_dir = job
@@ -1744,7 +1807,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             all_serialized: true,
             ..Default::default()
         };
-        let mut done = false;
+        let (mut done, mut deferred) = (false, false);
         match job.open(&src, opts) {
             Err(Error::Unity(e)) if super::shaders::not_one(&src, &e) => {
                 job.log(&format!("textures: {rel}: left as it is ({e})"));
@@ -1772,9 +1835,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     Ok(None) => {}
                     Ok(Some(written)) => {
                         let names = f.file_names();
-                        job.write_with(rel, |tmp| Ok(f.write_to(tmp, inline_streams)?))
-                            .map_err(|e| left(&work, e, false))?;
-                        drop(f);
+                        // (the journal's scaled sizes first: written with the file's mark)
                         for (k, (sizes, order)) in written.into_iter().enumerate() {
                             if !sizes.is_empty() {
                                 let map = scaled_json(&sizes, &order);
@@ -1783,6 +1844,12 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                                 }
                             }
                         }
+                        job.write_deferred("textures", rel, |tmp| {
+                            Ok(f.write_to(tmp, inline_streams)?)
+                        })
+                        .map_err(|e| left(&work, e, false))?;
+                        drop(f);
+                        deferred = true;
                         done = true;
                     }
                 }
@@ -1839,12 +1906,21 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                         .as_deref()
                         .map(|n| n.rsplit('/').next().unwrap_or(n).to_string());
                     if f.is_bundle {
-                        if let (Some(p), Some(node)) = (new_stream, &node) {
-                            f.set_bundle_res(node, NodeData::File(p))?;
+                        if let (Some(d), Some(node)) = (new_stream, &node) {
+                            f.set_bundle_res(node, d)?;
                         }
-                        job.write_with(rel, |tmp| Ok(f.write_to(tmp, inline_streams)?))
-                            .map_err(|e| left(&work, e, false))?;
+                        if !sizes.is_empty() {
+                            let map = scaled_json(&sizes, &order);
+                            if let Some(sc) = job.state.setdefault("scaled", Json::dict()) {
+                                sc.set(rel, map);
+                            }
+                        }
+                        job.write_deferred("textures", rel, |tmp| {
+                            Ok(f.write_to(tmp, inline_streams)?)
+                        })
+                        .map_err(|e| left(&work, e, false))?;
                         drop(f);
+                        deferred = true;
                     } else {
                         let sf_new = work.join("file.new");
                         std::fs::create_dir_all(&work)?;
@@ -1854,7 +1930,16 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                         .map_err(|e| left(&work, e.into(), false))?;
                         drop(f);
                         let mut pair = vec![(rel.clone(), sf_new)];
-                        if let (Some(p), Some(node)) = (new_stream, node) {
+                        if let (Some(d), Some(node)) = (new_stream, node) {
+                            let p = match d {
+                                NodeData::File(p) => p,
+                                // (a plain file's stream is always a file: StreamFile's cap 0)
+                                NodeData::Bytes(b) => {
+                                    let p = work.join("stream.new");
+                                    std::fs::write(&p, b).map_err(crate::error::at(&p))?;
+                                    p
+                                }
+                            };
                             let dir = Path::new(rel).parent().map(text).unwrap_or_default();
                             let srel = if dir.is_empty() {
                                 node
@@ -1865,11 +1950,11 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                         }
                         job.commit_then_mark(&pair)
                             .map_err(|e| left(&work, e, false))?;
-                    }
-                    if !sizes.is_empty() {
-                        let map = scaled_json(&sizes, &order);
-                        if let Some(sc) = job.state.setdefault("scaled", Json::dict()) {
-                            sc.set(rel, map);
+                        if !sizes.is_empty() {
+                            let map = scaled_json(&sizes, &order);
+                            if let Some(sc) = job.state.setdefault("scaled", Json::dict()) {
+                                sc.set(rel, map);
+                            }
                         }
                     }
                     done = true;
@@ -1877,7 +1962,9 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             }
         }
         drop_spill(&work);
-        if done {
+        if deferred {
+            // (marked when its batch is put in place)
+        } else if done {
             job.mark_done("textures", rel)?;
         } else {
             job.mark_unchanged("textures", rel)?;
@@ -1891,6 +1978,8 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             ));
         }
     }
+    // (the last batch of deferred files in place before the step's summary)
+    job.commit_deferred()?;
     job.end_work(&work);
     job.log(&format!(
         "textures: {} converted ({} -> {} MB), {} atlas entries and {} sprites follow their scaled textures",
@@ -2056,9 +2145,9 @@ fn convert_bundle_files(
     for r in results {
         match r {
             Some((name, path, sizes, order)) => {
-                if let (Some(name), Some(p)) = (name, path) {
+                if let (Some(name), Some(d)) = (name, path) {
                     let node = name.rsplit('/').next().unwrap_or(&name).to_string();
-                    f.set_bundle_res(&node, NodeData::File(p))?;
+                    f.set_bundle_res(&node, d)?;
                 }
                 written.push((sizes, order));
             }

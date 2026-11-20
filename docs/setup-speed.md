@@ -120,7 +120,9 @@ works on that file system, and so does replacing a file while it is still mapped
   next single-threaded passes over a big atlas.
 - **fsync** after each converted file waits for the card while the encoder could keep working; a
   commit and journal entry made on a thread, in order, would hide it (a resume must still never
-  see a file marked done before it is on the card).
+  see a file marked done before it is on the card). Done for bundles, shaders and audio
+  (2026-11-19, `write_deferred`, [below](#the-textures-steps-cpu-and-its-commits-2026-11-19)); a
+  plain file and its new .resS still commit together at once (`commit_then_mark`).
 - **The tree and the archives**: android-data writes each inlined file into the tree, then copies
   it into the APK or OBB (Hollow Knight: ~3.5 GB written twice). Writing those entries straight
   into the archives would save the second write, but the regression run and the rig read the
@@ -237,6 +239,99 @@ about 56 min of the setup; fastest 2.4 dB.
   would change what the code may reach by reflection.
 - **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
   conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
+
+## The textures step's CPU and its commits (2026-11-19)
+
+Profiled on the muOS RG34XX-SP (H700, 4x Cortex-A53, 1 GB, the card writing 6-9 MB/s) with
+`PMU_PROF=1`, Cuphead's whole setup took ~76 min, the textures step 2943 s at 3.07 of 4 cores
+busy. Its stages summed to ~1950 s: ~1000 s were in none of them. They were the decoding and
+downscaling of the big atlases: a texture of 16 Mpix or more that is scaled (Cuphead's 4096x4096
+BC7 pages at 0.375) goes through `decode_downscale` (bands of rows on every core), which was
+outside the `prepare` stage. It is timed now, with three stages more: `decode-cpu` and
+`resize-cpu` (the CPU time of the bands' decoding and of their premultiply + resample, summed over
+the threads), `wait` (the main thread waiting for a worker's texture) and `objects` (type trees
+read, the other streams copied, the sprites and atlases fixed).
+
+**The sample** (S1): `globalgamemanagers`, `resources.assets`, `sharedassets3`, `sharedassets8`
+(with their `.resS`) and the bundles `atlas_bakery`, `atlas_baronesslevel`, `atlas_beelevel`,
+`atlas_player`, `atlas_bad_ending`, `atlas_bg_smoke` and `tex_screen_fx` (264 MB; 257 textures,
+698 MB of pixels to 108 MB of ASTC), Cuphead's config and ASTC guide (fast), `convert --steps
+textures` in place on a fresh copy, the card's cache dropped before each run, one hold:
+
+| S1, `PMU_PROF` stage (s) | muOS before (2 runs) | muOS after | Knulli before | Knulli after |
+|---|---|---|---|---|
+| **wall** | **165.0 / 173.0** | **134.0** (-19 %) | **173.0** | **133.6** (-23 %) |
+| prepare (the main thread in decoding and scaling) | 58.7 / 58.7 | 36.7 | 62.9 | 37.8 |
+| decode-cpu (the bands' decoding, CPU summed) | 64.7 / 65.4 | 27.1 | 70.4 | 27.4 |
+| resize-cpu (premultiply, resample, CPU summed) | 84.0 / 84.3 | 56.6 | 89.1 | 57.0 |
+| astc (astc-encoder, wall) | 56.5 / 57.4 | 56.2 | 61.8 | 61.6 |
+| guided | 9.0 / 8.8 | 8.9 | 9.5 | 9.6 |
+| write (packing, LZ4 HC) | 13.0 / 14.7 | 7.9 | 9.0 | 8.3 |
+| commit (syncs, renames) | 8.7 / 13.2 | 11.6 | 10.6 | 3.6 |
+| read | 6.8 / 7.9 | 3.3 | 10.2 | 3.2 |
+| objects | 7.3 / 6.0 | 2.7 | 3.4 | 2.8 |
+| journal | 0.6 / 1.3 | 2.0 | 0.3 | 0.2 |
+| pmu's peak RSS | 123 MB | 151 MB | 121 MB | 153 MB |
+| written by pmu (muOS; FUSE hides it on Knulli) / read from the card | 283 / 274 MB | 89 / 274 MB | - / 418 MB | - / 269 MB |
+
+(muOS: main's pmu with the stage timers only, then all changes but the vector resampler's last form
+(lane-indexed coefficients, which the A53 runs at the same speed); Knulli: main's, then the same. Every converted file and the journal the same in all of
+them. The CPU stages are their threads' sums; prepare and astc wall time on the main thread, astc
+on every core.)
+
+What each change does (every one byte-identical: the converted files' md5s and the journal the
+same as before, on the handheld and in the arm64 container):
+
+| change | where | what it saves |
+|---|---|---|
+| Pillow's resampling passes for 4-byte pixels in NEON: the same coefficients (Pillow's own code, `Resample.c` unchanged, included by `csrc/pillow_resample.c`), the same 32-bit sums (wrapping as `-fwrapv` makes Pillow's), clip8 as two saturating narrows (what its lookup table holds); horizontal: four taps a step, their coefficients one vector taken by lane; vertical: 16 channels a step | texcodec `pillow_resample.c` | one band of an atlas (4096 x 532 -> 1536 x 192, muOS, one thread): 211 -> 111 ms (horizontal 138 -> 85, vertical 78 -> 38) (the coefficients taken by lane, four sums a step: the same on the A53, vertical 1.7 -> 1.2 ms on the M3) |
+| premultiply in NEON (16-bit lanes: no lane overflows, the scalar's bytes), unpremultiply by an exact reciprocal (checked for every value and alpha), both on every core (per band, per strip) instead of once over the whole image on one thread | texcodec `image.rs`, `texture.rs` | the single-threaded passes over each atlas |
+| BC7 blocks decoded as one 128-bit number, one function per mode, each subset's colours worked out once per block instead of once per texel (checked against Pillow's decoder on 400,000 random blocks of every mode) | texcodec `decode.rs` | the bands' decoding: 65 -> 27 s of CPU on S1 (a random-mode band: 437 ns a block on the A53, warm) |
+| a bundle's texture streams read ahead (the reader thread reads and decompresses the next textures' LZ4 blocks; it read only plain files' streams before) | textures step | the main thread's reads of the atlases' 16 MB of BC7 while the cores wait |
+| a bundle's new stream held in memory (up to 32 MB, else a file as before), not written to the card, synced every 16 MB and read back to be packed; the bundle's new serialized file held in memory when the nodes as they are now (the new stream, not the old .resS) come to at most `spill_mb`: it was decided on the old nodes (128-544 MB for Cuphead's atlases), so every atlas's serialized file, with its inlined ASTC, went through a scratch file | textures step, unityfs `write_into` | two of the three writes of each atlas's ASTC (S1 on muOS: pmu wrote 283 -> 89 MB) |
+| converted files committed in batches (`Job::write_deferred`): written to `.pmunity-work/commit/`, synced on a thread of their own while the next file is converted, renamed together through `pending` once 16 files, 64 MB or 15 s are waiting (and at the end of the step), their marks then in the order the step finished them | convert `job.rs`; the textures step's bundles, the shaders and audio steps | the main thread's syncs (Cuphead: commit 111 s in textures, 26 + 31 s in shaders and audio) and two journal writes a file |
+
+The commits keep their guarantees: a file is renamed into place only once it is synced, a batch's
+renames are in the journal before they are made, a file is marked done only after its rename. A
+run killed before a batch went in place converts its files again (`Job::new` removes the scratch
+folder of deferred files; they are never among the game's files, where a step would list them).
+Container, S1 with shaders, textures and audio: killed (-9) eight times in a row (1-6 s), then run
+to the end: every file and the journal the same as an uninterrupted run's.
+
+Memory: the bundle's stream in memory adds at most 32 MB, and its serialized file in memory at most
+`spill_mb` (64 MB) while the bundle is packed (when the converted textures are no longer held);
+plain files (Blasphemous's `resources.assets`, Hollow Knight) go as before. On S1 pmu's peak rose from 121-123 to 151-153 MB (the handheld has ~700 MB free beside the firmware). Blasphemous's `resources.assets` (the exact_shaders walk and 848 textures, 2121 -> 534 MB) in the arm64 container at 600 MB without swap: peak 363 MB before, 362 MB after, the same files.
+
+The shaders and audio steps of S1 (three files each, muOS, two runs of each): 25.0 / 24.0 s before,
+25.0 / 21.0 s with deferred commits, the same files and journal; the syncs move behind the next
+file's work, which S1 has little of: Cuphead's whole shaders and audio steps (54 and 50 files,
+commit 26 + 31 s) were not measured again.
+
+Cuphead's whole textures step was not run again (the muOS card has 1 GB free); from S1's stages,
+decoding and scaling (the profile's ~1000 uncovered seconds) about halve, the reads and the card's
+writes of bundles fall to a third, the encoder (~1000 s with its workers) stays.
+
+**Hollow Knight** (6x6 blocks, medium, scale 0.375) is the encoder's: on a sample of its files
+(globalgamemanagers, sharedassets 0, 6 and 34) in the container, astc-encoder is 17 of the step's
+21 s of CPU; these changes cut its prepare from 3.1 to 1.7 s, the same bytes.
+
+**Guided blocks for 6x6** (not adopted): the guided pass fits 4x4 blocks only (`pack_block` writes
+a 4x4 weight grid). Fitting other footprints on a 4x4 weight grid, which the decoder infills
+(astc-encoder's `init_decimation_info_2d`), at the 4x4 blocks' rule (an error of at most
+`guided_max_err` for every 16 texels against the exact decode, checked against astc-encoder's own
+decoder) was tried on 60 of Hollow Knight's textures (sharedassets 0, 6, 34 and 392, medium, every
+level decoded by astc-encoder): it fits 33,060 of the 414,146 blocks (8 %), all of them blocks the
+guided pass already routes to the cheap one-partition search, so the encoder's time did not move
+(4.0 -> 4.1 s, 8 threads); the PSNR over all of them is the same (34.257 dB), but 21 of the 60
+textures came out lower (worst by 0.197 dB): at 6x6, astc-encoder's own one-partition blocks with
+a full 6x6 weight grid are better than a 4x4 grid within 1/255 RMS. Since the guided pass promises
+no block worse than its rule and the release's textures must not get worse, it stays as it was;
+the time of a 6x6 setup is in the blocks far from a line (the full search), which only a change of
+their blocks could cut.
+
+**Not needed, or not the setup's**: the profile's 53 texture batches were the profiler's own (each
+a pmu run of six files, `TEXB`); the setups run the textures step in one pmu. GPU encoding: no gain
+at the same picture (worktree gpu-astc).
 
 ## ASTC guide files (2026-10-28)
 

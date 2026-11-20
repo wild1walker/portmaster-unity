@@ -795,20 +795,20 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
         }
         parent_left = false;
         if n > 0 {
-            job.write_with(&rel, |tmp| Ok(f.write_to(tmp, false)?))
+            job.write_deferred("shaders", &rel, |tmp| Ok(f.write_to(tmp, false)?))
                 .inspect_err(|_| {
                     let _ = std::fs::create_dir_all(&work);
                 })?;
             changed_files += 1;
             drop(f);
             drop_spill(&work);
-            job.mark_done("shaders", &rel)?;
         } else {
             drop(f);
             drop_spill(&work);
             job.mark_unchanged("shaders", &rel)?;
         }
     }
+    job.commit_deferred()?;
     job.end_work(&work);
     if parent_left {
         if let Some(p) = work.parent() {

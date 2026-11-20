@@ -498,8 +498,8 @@ impl DataFile {
     }
 
     /// write_to into any writer. A bundle's new serialized file is held in memory while the
-    /// bundle is packed when the bundle is no bigger than spill_mb (UnityPy holds it so), else
-    /// in a file: in the spill folder, or at `tmp` without one. A bundle with several serialized
+    /// bundle is packed when the bundle's nodes as they are now come to no more than spill_mb
+    /// (UnityPy holds it so), else in a file: in the spill folder, or at `tmp` without one. A bundle with several serialized
     /// files: each one that changed (or, `inline`, has textures to inline) is saved so, the
     /// others are packed as they are; a .resS node is dropped when none of them reads it.
     pub fn write_into<W: std::io::Write + std::io::Seek>(
@@ -511,8 +511,16 @@ impl DataFile {
         if !self.is_bundle {
             return self.sf.save_to(out, |_, _| Ok(None));
         }
-        let small =
-            self.bundle.as_ref().unwrap().bundle.header.nodes_size() <= self.opts.spill_mb << 20;
+        // (the nodes as they are now: a converted bundle's new streams, not the old ones, which
+        // the new serialized file does not hold)
+        let small = {
+            let b = self.bundle.as_ref().unwrap();
+            let now: u64 = (0..b.srcs.len())
+                .filter(|i| !b.removed.contains(i))
+                .map(|i| b.srcs[i].len())
+                .sum();
+            now <= self.opts.spill_mb << 20
+        };
         let multi = !self.parked.is_empty();
         let mut tmps: Vec<PathBuf> = Vec::new();
         let res = (|| -> Result<()> {

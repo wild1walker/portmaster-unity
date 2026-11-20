@@ -342,10 +342,10 @@ pub fn run(job: &mut Job) -> Result<()> {
                 f.sf.save_typetree(pid, &t)?;
             }
         }
-        job.write_with(rel, |tmp| Ok(f.write_to(tmp, false)?))?;
+        job.write_deferred("audio", rel, |tmp| Ok(f.write_to(tmp, false)?))?;
         drop(f);
-        job.mark_done("audio", rel)?;
     }
+    job.commit_deferred()?;
     let summary = st
         .get("summary")
         .ok_or_else(|| Error::Value("KeyError: 'summary'".into()))?

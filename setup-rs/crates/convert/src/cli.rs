@@ -238,8 +238,11 @@ pub fn run(cli: &Cli) -> Result<()> {
         };
         job.log(&format!("== {n}"));
         let r = f(&mut job, &args);
+        // (the step's deferred files put in place, also when it stopped: they are whole)
+        let committed = job.commit_deferred();
         let flushed = job.flush();
         r?;
+        committed?;
         flushed?;
         for l in texcodec::prof::report() {
             eprintln!("prof: {n}: {l}");
