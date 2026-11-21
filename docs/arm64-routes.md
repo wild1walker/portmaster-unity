@@ -555,6 +555,73 @@ Exactness: a prefetch has no architectural effect; the atomics keep their orderi
 (32 helpers, `adrp; ldrb; cbz` -> `b` to the LL/SC loop: exact on a CPU without LSE, and the A53/A35 have none),
 `hwcount` A/B; then `FlattenBasicData` with a prefetch.
 
+#### Route 3, built: prefetch stubs at the loops' call sites (`UA_PREFETCH`, 2026-11-20)
+
+`runtime/host/unityprefetch.c` (opt-in, `UA_PREFETCH=1` or a comma list of `beh,sprite,cull,play`; 64-bit
+player only). No function is rewritten: in each hot loop, the one `bl` made once per element is pointed at a
+small stub in a page within branch range of libunity. The stub reads where the loop is from the loop's own
+registers at that call, issues `PRFM` for what the next elements will read, and jumps on to the original callee
+with x0 - x7, x19 - x28, the stack and the float registers as they were (scratch: x16/x17, which any call may
+lose to a veneer, and x9 - x12, which each callee's code - tied to its bytes by its row - writes before it reads;
+the flags). Its loads are only of memory Unity's loop reads next anyway (the list nodes still to run, the index
+list below its end, fields of a MonoBehaviour once its vtable says it is one), each asked for by a PRFM a round
+earlier; everything else is PRFM, which changes no register, flag or memory and never faults. Unity's own
+loads, stores and calls are the same and in the same order: the picture and the play cannot change.
+`test_unityprefetch` runs every stub over models of Unity's structures placed against guard pages (a load past
+what Unity reads faults) and checks that the callee gets every register back and that nothing is written.
+
+| site | loop (6000.0.61f1 arm64-v8a) | fetched ahead |
+|---|---|---|
+| `beh` | `CommonUpdate<Behaviour / LateBehaviour / FixedBehaviourManager>` at its call of `SafeIterator::Next` | 4 behaviours deep: the managed object and its cached-pointer line (through the GC handle's slot), the handle slot, GameObject's active byte, script cache and its control block's weak count (for writing), the MonoBehaviour's lines `CallUpdateMethod` reads, the next node |
+| `sprite` | `PrepareSpriteRenderNodes<false / true>` at its call of `FlattenBasicData` | the next renderer's 0x1c0 bytes, the next RenderNode (for writing), the entry after |
+| `cull` | `ProcessCameraIndexListIsNodeVisibleStep1` at its call of `IsNodeVisibleFast` | SceneNodes 8 - 10 ahead |
+| `play` | `PreOrderPlayableTraverser::Traverse`'s input loop at its call of `RecursiveVisit` | the next input's Playable |
+
+Hollow Knight, King's Pass (the same installs and settings as above, `lib-gG8`), A B A B in one hold from a
+cool handheld, `hwcount` on UnityMain, a frame's worth (UnityMain ms: its CPU time a frame):
+
+| | fps | UnityMain ms | cycles | load-miss stall cycles | L2 refills | i-cache stall cycles |
+|---|---|---|---|---|---|---|
+| Knulli, off (2 runs) | 50.9, 50.9 | 16.46, 16.63 | 27.34, 27.33 M | 15.48, 15.55 M | 87.3, 87.6 K | 5.77, 5.79 M |
+| Knulli, `UA_PREFETCH=1` | 51.7, 52.9 | 16.05, 16.02 | 25.65, 26.33 M | 13.47, 14.11 M | 85.8, 86.7 K | 5.96, 6.24 M |
+| difference (means) | +1.4 (+2.8 %) | -0.51 | -1.35 M (-4.9 %) | -1.73 M (-11 %) | -1.2 K (-1.3 %) | +0.32 M |
+| muOS, off (2 runs) | 51.0, 50.8 | 16.58, 16.71 | 31.49, 31.76 M | 18.75, 18.37 M | 87.4, 88.4 K | 6.86, 6.95 M |
+| muOS, `UA_PREFETCH=1` | 51.7, 51.4 | 16.15, 16.20 | 29.33, 29.56 M | 16.08, 16.50 M | 87.9, 87.3 K | 6.88, 6.99 M |
+| difference (means) | +0.6 (+1.2 %) | -0.47 | -2.18 M (-6.9 %) | -2.27 M (-12 %) | -0.3 K | +0.03 M |
+| G350 (Cortex-A35; relayout off, UA_ATOMICS on; the playerprefs restored before each run), off | 37.9, 37.7 | | 29.80, 29.09 M | | 146.2, 145.6 K | |
+| G350, `UA_PREFETCH=1` | 38.5, 38.5 | | 28.41, 27.10 M | | 148.8, 147.8 K | |
+| difference (means) | +0.7 (its GPU clock throttles 528 - 786 MHz: the cycles count, not the fps) | | -1.69 M (-5.8 %) | | +2.4 K | |
+
+With the code layout on (`UA_RELAYOUT`, HK's whole-function list, `UA_RELAYOUT_DATA`, `UA_ATOMICS=llsc`, the
+aarch64 defaults now), Knulli, A B A B: off 51.5, 51.2 fps, UnityMain 16.53, 16.44 ms, cycles
+27.07, 27.26 M, load-miss stalls 15.33, 15.50 M, L2 refills 84.6, 84.5 K; `UA_PREFETCH=1` 52.1, 52.8 fps, 15.36,
+15.91 ms, 25.06, 25.68 M, 13.22, 13.99 M, 82.0, 84.5 K: +1.1 fps (+2.1 %), UnityMain -0.86 ms, cycles -1.79 M
+(-6.6 %), load-miss stalls -1.82 M (-12 %). muOS, the same: off 50.9, 51.0 fps, 16.93, 16.79 ms, 31.04, 30.94 M,
+18.49, 18.19 M, 84.8, 86.4 K; on 48.4 (a 0.7 s hitch in the measurement, lowest second 11.8 fps), 52.0 fps,
+15.83, 15.83 ms, 28.55, 28.91 M, 16.24, 16.21 M, 83.9, 83.8 K: UnityMain -1.03 ms, cycles -2.26 M (-7.3 %),
+load-miss stalls -2.12 M (-11.5 %), L2 refills -1.7 K. The relayout then leaves 10 functions in place instead of 4 (the six
+whose call sites changed); the two gains add.
+
+One site at a time (Knulli, one run each, the same hold): off 27.44 M cycles / 15.48 M load-miss stalls; `beh`
+alone 26.68 / 14.50; `sprite,cull,play` 27.39 / 15.12; all 25.68 / 13.59. The behaviour loops carry most of it.
+
+(A first build missed `CommonUpdate<BehaviourManager>`'s call by one word - the Update loop, the largest -
+and still took -0.78 M (Knulli) / -1.27 M (muOS) load-stall cycles a frame, +0.8 / +0.6 fps.)
+
+What it shows: the prefetches hide misses rather than remove them (L2 refills fall only 1 %: the lines still
+come from DRAM, ahead of their use), and they pay where the loop has an element of work to overlap with. Load-
+miss stalls fall by 11 - 13 % of UnityMain's, about as much as the whole 64-bit penalty of these loops; the
+i-cache stalls grow a little (the stubs' code, the functions they leave in place under UA_RELAYOUT). The rest of
+the gap is the misses spread over the engine with no loop to put a prefetch in.
+
+Exactness: by construction (PRFM is a hint; the stubs' loads read what Unity reads; registers, stack, flags as
+the ABI lets a call find them), the unit test, and the runs above reaching King's Pass with the same play.
+With `UA_RELAYOUT`: a function whose call site is changed differs from the
+library file, so the relayout leaves it in place and its moved callers reach it there; the two work together
+and the patched functions lose only their own move. Should become the default for 6000.0.61f1's 64-bit player
+(port.env) once a busier scene (City of Tears, a boss) and a soak have been run with it; other Unity versions
+need their own rows (tools/re/unityhooks.py prints them; the loops' registers read by hand).
+
 ### 4. Less L2 traffic from the other threads
 
 What: the render thread's own L2 refills grew 35 -> 47 K a frame and its i-cache stalls 4.7 -> 7.0 M cycles
@@ -615,7 +682,7 @@ pools) is years of work. Recorded for completeness.
 |---|---|---|---|---|
 | 1. FMOD update on a worker | built (`UA_FMOD_ASYNC=1`, off): UnityMain CPU -0.3 to -0.6 ms, frame rate the same | done | yes | - |
 | 2. libunity hot-code relayout | built (`UA_RELAYOUT`): -2.2 to -3.2 % of UnityMain's cycles split + vtables + atomics, +0.4 - 0.6 fps | done | yes (tested) | larger lists per game; route 3 for the data side |
-| 3. rewritten hot functions (prefetch, inline atomics) | -0.2 to -0.4 ms | medium, per Unity version | yes | outline-atomic helpers branched past the LSE test; `FlattenBasicData` with a prefetch |
+| 3. rewritten hot functions (prefetch, inline atomics) | -0.2 to -0.4 ms; built as `UA_PREFETCH` (call-site stubs): UnityMain -0.47 / -0.51 ms, cycles -6.9 / -4.9 % (muOS / Knulli) | medium, per Unity version | yes | more loops; default after a busier scene and a soak |
 | 4. less render-thread L2 traffic | 0.1 - 0.3 ms (to be measured) | small to measure | yes | `hwcount` on UnityMain with render-thread work removed |
 | 5. Unity bucket allocator settings | 0 - 0.2 ms | small | yes | three boot.config variants, `hwcount` |
 | 6. Mono LLVM AOT (elsewhere) | about -0.8 ms | in progress | as measured there | - |

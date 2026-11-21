@@ -19,6 +19,7 @@
 //   UA_BEH_PREFETCH=1    the behaviour update loops fetch the next scripts' objects ahead (unitybeh.c)
 //   UA_BEH_EMPTY=1       a started script's empty Update/LateUpdate/FixedUpdate is not called (unitybeh.c)
 //   UA_SCRIPT_FIND=1     FindRuntimeScript's answers kept on UnityMain (AddComponent's script lookup; unityscripts.c)
+//   UA_PREFETCH=1        the 64-bit player's hot loops fetch their next elements ahead (PRFM; unityprefetch.c)
 //   UA_PRESENT_SYNC=end  Unity's GraphicsDeviceSettings.waitForPresentSyncPoint = EndFrame, set once from
 //                        UnityMain after its first frame (=begin: BeginFrame; unset: as the game has it).
 //                        GfxDeviceClient waits for the render thread to have presented the last frame in
@@ -65,6 +66,7 @@
 #include "unityscripts.h"
 #include "unitylayers.h"
 #include "fmodasync.h"
+#include "unityprefetch.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -345,6 +347,7 @@ void unityhooks_on_load(so_module *m)
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
     fmodasync_on_load(base, size);              // UA_FMOD_ASYNC, UA_FMOD_COUNT (fmodasync.c)
+    unityprefetch_on_load(base, size);          // UA_PREFETCH (unityprefetch.c)
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {

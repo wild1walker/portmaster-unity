@@ -74,6 +74,22 @@ HOOKS = [
     ('_ZN4FMOD4DSPI8validate', 'FMOD::DSPI::validate'),
     ('_ZN4FMOD14DSPConnectionI8validate', 'FMOD::DSPConnectionI::validate'),
     ('_ZN4FMOD7ReverbI8validate', 'FMOD::ReverbI::validate'),
+    # unityprefetch.c (UA_PREFETCH): the loops whose call sites get a prefetch, the functions they call there,
+    # and the code the structure offsets were read from (all only checked: a call site's one word is changed)
+    ('_ZN20BaseBehaviourManager12CommonUpdateI20LateBehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<LateBehaviourManager>', 'call'),
+    ('_ZN20BaseBehaviourManager12CommonUpdateI21FixedBehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<FixedBehaviourManager>', 'call'),
+    ('_ZN12SafeIteratorI4ListI8ListNodeI13MonoBehaviourEEE4NextEv', 'SafeIterator<List<ListNode<MonoBehaviour> > >::Next', 'call'),
+    ('_ZN13MonoBehaviour6UpdateEv', 'MonoBehaviour::Update', 'call'),
+    ('_ZNK13MonoBehaviour23IsStateMachineBehaviourEv', 'MonoBehaviour::IsStateMachineBehaviour', 'call'),
+    ('_ZNK22SerializableManagedRef14GetScriptCacheEv', 'SerializableManagedRef::GetScriptCache', 'call'),
+    ('_ZN9Scripting32GetCachedPtrFromScriptingWrapperE', 'Scripting::GetCachedPtrFromScriptingWrapper', 'call'),
+    ('_ZL24PrepareSpriteRenderNodesILb0EE', 'PrepareSpriteRenderNodes<false>', 'call'),
+    ('_ZL24PrepareSpriteRenderNodesILb1EE', 'PrepareSpriteRenderNodes<true>', 'call'),
+    ('_ZN12BaseRenderer16FlattenBasicDataE', 'BaseRenderer::FlattenBasicData', 'call'),
+    ('_Z40ProcessCameraIndexListIsNodeVisibleStep1', 'ProcessCameraIndexListIsNodeVisibleStep1', 'call'),
+    ('_Z17IsNodeVisibleFast', 'IsNodeVisibleFast', 'call'),
+    ('_ZN25PreOrderPlayableTraverser8TraverseE', 'PreOrderPlayableTraverser::Traverse', 'call'),
+    ('_ZN25PreOrderPlayableTraverser14RecursiveVisitE', 'PreOrderPlayableTraverser::RecursiveVisit', 'call'),
 ]
 
 

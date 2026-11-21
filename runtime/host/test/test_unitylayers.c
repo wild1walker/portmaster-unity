@@ -10,6 +10,7 @@
 #include "../unitylayers.c"
 
 #if UINTPTR_MAX > 0xffffffffu
+int unityhooks_matches(const struct uh_row *r, uintptr_t base, size_t size) { (void)r; (void)base; (void)size; return 0; }
 int main(void) { printf("SKIPPED unitylayers: the ARMv7 player's layout (32-bit only)\n"); return 0; }
 #else
 static int fails;
