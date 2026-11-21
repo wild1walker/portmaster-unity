@@ -7,4 +7,4 @@ another build id finds no list and runs as it is. How to make one: docs/porting.
 
 | build id | player | made from |
 |---|---|---|
-| 8936b587837543a476339d9900708f6dc9a2d7e6 | 6000.0.61f1 IL2CPP arm64-v8a (the Mono route's player) | Hollow Knight: King's Pass and Greenpath (time samples, UnityMain + render thread), King's Pass (i-cache stall samples), RG34XX-SP muOS; `--split` |
+| 8936b587837543a476339d9900708f6dc9a2d7e6 | 6000.0.61f1 IL2CPP arm64-v8a (the Mono route's player) | Hollow Knight: King's Pass and Greenpath (time samples, UnityMain + render thread), King's Pass (i-cache stall samples), RG34XX-SP muOS; whole functions (a `--split` list measured better at King's Pass but less well in a scene it was not made from) |

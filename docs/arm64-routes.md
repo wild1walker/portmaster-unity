@@ -456,6 +456,22 @@ whole functions (`x`: the same plus `UA_ATOMICS=llsc`) and the atomics alone (`a
 | iTLB miss stall cycles | 0.78 M | 0.80 M | 0.61 M (-22 %) | 0.70 M | 0.54 M (-23 %) | 0.55 M (-21 %) |
 | load-miss stall cycles | 18.88 M | 18.51 M | 18.37 M | 15.45 M | 15.31 M | 15.28 M |
 
+City of Tears again (Knulli, not in the recordings; render-bound at 45 fps, so the counters say it),
+with only the entries unmoved code calls patched (1,578 of 2,800):
+
+| City of Tears, Knulli (2 runs each) | base | x (whole + vtables + atomics) | s (split + vtables + atomics) |
+|---|---|---|---|
+| cycles (user) a frame | 23.89 M | 23.26 M (-2.7 %) | 23.43 M (-1.9 %) |
+| i-cache miss stall cycles | 5.40 M | 5.14 M (-4.9 %) | 5.17 M (-4.2 %) |
+| L1I refills | 111.6 K | 107.2 K (-3.9 %) | 110.4 K (-1.1 %) |
+| L2 refills | 80.3 K | 78.5 K (-2.3 %) | 79.1 K (-1.5 %) |
+| iTLB miss stall cycles | 0.63 M | 0.50 M (-21 %) | 0.50 M (-20 %) |
+
+The whole-function layout carries to a scene the list was not made from; the split's hot ranges,
+sampled at King's Pass and Greenpath, carry less (code a scene runs that the recordings did not sample
+lies in the cold part): a game's list wants recordings of more of its scenes before `--split` pays
+everywhere.
+
 (UnityMain's CPU time a frame from the thread's schedstat moves within the runs' spread, +-0.4 ms; the
 cycle counters, which count only UnityMain's user time, are the steadier measure. The muOS base runs of
 this hold, 31.8 M cycles, match the earlier hold's 31.3 M within the spread.)
@@ -491,7 +507,7 @@ page that gets an entry branch made private (at most 864 pages, 3.4 MB, when eve
 
 **Defaults** (2026-11-20): `UA_ATOMICS=llsc` on for the 64-bit player (exact, no cost, a CPU with LSE is
 left alone); `UA_RELAYOUT` on where a list for the library's build id is in `relayout/` beside ua_host
-(runtime/relayout/: Hollow Knight's 6000.0.61f1 IL2CPP arm64 player, split), with `UA_RELAYOUT_DATA` on;
+(runtime/relayout/: Hollow Knight's 6000.0.61f1 IL2CPP arm64 player, whole functions: they carry to scenes the recordings missed), with `UA_RELAYOUT_DATA` on;
 `UA_RELAYOUT=0` / `UA_ATOMICS=0` turn them off. A port ships the lists by copying `relayout/` next to its
 ua_host (runtime/host/build.sh puts it beside the build's ua_host).
 
