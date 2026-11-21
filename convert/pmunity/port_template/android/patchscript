@@ -20,7 +20,7 @@
 # that starts with an absolute path on the card (pipes leave them) can deadlock its FUSE driver. The script
 # runs on by its relative name (bash starts its error messages with it), under its own process name
 G0=${GAMEDIR:?}; cd "$G0" || { echo "PATCH_FAIL_MSG:Cannot open ports/${G0##*/}."; exit 1; }
-case $0 in "$G0"/*) exec "$BASH" "./${0#"$G0"/}" "$@";; esac
+case $G0 in /*) case $0 in "$G0"/*) exec "$BASH" "./${0#"$G0"/}" "$@";; esac;; esac
 { printf %s "${0##*/}" > /proc/$$/comm; } 2>/dev/null; GAMEDIR=.
 S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
 . "$S/setup.env"

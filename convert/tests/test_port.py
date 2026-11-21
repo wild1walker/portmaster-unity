@@ -879,6 +879,23 @@ class NewAndSetupTest(unittest.TestCase):
                                    env=dict(os.environ, S=setup, PORT_TITLE='My Game'), capture_output=True, text=True)
                 self.assertEqual(r.stdout.splitlines(), ['step My Game: pre_convert', 'pre_convert ran', 'done'], route)
 
+    def test_setup_relative_start(self):
+        """every template started by a relative name with GAMEDIR=. (by hand, from the port folder) runs on:
+        its line that runs the script again by its relative name is for an absolute start only (it ran
+        itself again for ever)"""
+        tpl = os.path.join(os.path.dirname(P.__file__), 'port_template')
+        routes = [r for r in sorted(os.listdir(tpl)) if os.path.isfile(os.path.join(tpl, r, 'patchscript'))]
+        self.assertGreaterEqual(len(routes), 5)
+        for route in routes:
+            with tempfile.TemporaryDirectory() as t:
+                os.makedirs(os.path.join(t, 'setup'))
+                shutil.copy(os.path.join(tpl, route, 'patchscript'), os.path.join(t, 'setup', 'patchscript'))
+                put(os.path.join(t, 'setup', 'setup.env'), 'echo "setup.env read"; exit 7\n')
+                for start, gamedir in (('./setup/patchscript', '.'), (os.path.join(t, 'setup', 'patchscript'), t)):
+                    r = subprocess.run(['bash', start], cwd=t, env=dict(os.environ, GAMEDIR=gamedir),
+                                       capture_output=True, text=True, timeout=30)
+                    self.assertEqual((r.returncode, r.stdout), (7, 'setup.env read\n'), (route, start, r.stderr))
+
     def test_pmu_covers(self):
         """the setup ships pmu (no Python) for the default convert steps, the quality step, compute
         shaders, fused_post and shaders from Direct3D 11, Vulkan and Metal included, for plugins pmu
@@ -1191,8 +1208,8 @@ class NewAndSetupTest(unittest.TestCase):
                                                 'STUB_RUNTIME': '.NET 3.5 (libmono)'})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
-            self.assertIn(f"--managed-file {gm}/classlibs/mscorlib.dll", ad)
-            self.assertIn(f"--mono-etc {gm}/etc", ad)
+            self.assertIn("--managed-file ./setup/mono64/2017.4/classlibs/mscorlib.dll", ad)
+            self.assertIn("--mono-etc ./setup/mono64/2017.4/etc", ad)
             self.assertIn('System.Threading.dll: no 4.x class library of that name', r.stdout + r.stderr)
 
     def test_package(self):
