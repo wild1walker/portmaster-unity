@@ -2504,6 +2504,9 @@ order as `gl.ext[i]`, sorted as `gl.ext`), the old extension string, the limits 
 texture formats. Two drivers' outputs compare with `diff` (the Mali blob against Mesa: tools/mesa-kbase). It
 opens the GPU like any GL program: not on the G350.
 
+`glreplay --check` also names each shader that does not compile, with the driver's log and the source's first
+line (a trace made on a GLES 3.2 driver has `#version 320 es` shaders that a 3.1 driver refuses).
+
 ## Holding the whole frame (UA_GL_REC)
 
 The question (2026-10-23): a tiler pays for every pass (a load of each attachment it does not clear

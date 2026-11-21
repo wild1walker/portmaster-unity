@@ -10,8 +10,8 @@ Why: the 64-bit blob is the slower half of the 64-bit graphics gap (its heavy ca
 the 32-bit blob's on the same GPU work, docs/arm64-routes.md "The graphics side, counted"), and its licence
 forbids looking inside it. Mesa can be built, measured and changed.
 
-Status: **built, checked off the device, not yet run on a GPU.** No run of this driver has opened `/dev/mali0`
-yet (first light waits for the go). Nothing here is in a release.
+Status: **first light on muOS (RG34XX-SP, kbase r20p0, UK 11.17), 2026-11-21: draws, no kernel fault.** Not on
+the G350 yet, not in Unity yet (traces only). Nothing here is in a release.
 
 ## What is in it
 
@@ -55,13 +55,51 @@ everything down. 2026-11-21: both UK versions and `PAN_KBASE_CACHED_WINDOW=0` pa
 0 DRM ioctls on the node; the window's BO is the one allocation with `CACHED_CPU`. Nothing is drawn (the fake
 runs no jobs): this checks the paths, not the picture.
 
-What Mesa tells Unity there (`glreplay --info`, `test/mesa-info-fake.txt`):
+What Mesa tells Unity there (`glreplay --info`):
 
     Mesa | Mali-G31 MC2 (Panfrost) | OpenGL ES 3.1 Mesa 27.0.0-devel | OpenGL ES GLSL ES 3.10
     EGL 1.5, 130 configs, 143 GL extensions, 51 compressed formats
 
 The fake reports every texture feature bit, so the compressed formats there (ASTC LDR and HDR, ETC) are not
 the G31's: the real list comes at first light.
+
+## First light (muOS, 2026-11-21)
+
+Each step in its own short hold, dmesg read before and after: no new kernel line in any of them, no faulted
+atom, no hang.
+
+- `mesa_smoke` 30 frames: `Mali-G31 MC1 (Panfrost)` (the H700's G31 has one core), ok.
+- `glreplay --info`, blob against Mesa (`test/info-mali-r20p0.txt`, `test/info-mesa-muos.txt`): the blob is
+  GLES 3.2 / GLSL 3.20, EGL 1.4, 25 configs, 94 extensions, 69 compressed formats, 1 program binary format;
+  Mesa GLES 3.1 / GLSL 3.10, EGL 1.5, 130 configs, 143 extensions, 51 compressed formats, none. Only the blob:
+  geometry and tessellation shaders, cube map arrays, `GL_ARM_shader_framebuffer_fetch(_depth_stencil)`,
+  multiview, paletted and 3D ASTC formats. Only Mesa: S3TC/RGTC/BPTC, `GL_EXT_shader_framebuffer_fetch`,
+  anisotropic filtering, base instance, and more. Limits differ (blob: 8192 textures, 16 samples, 4 colour
+  attachments, 1024 uniform vectors; Mesa: 16384, 4, 8, 4088).
+- Hollow Knight's King's Pass trace from Knulli (64-bit, 3,457 frames) replayed through Mesa: Unity made its
+  shaders for the blob's 3.2, so 64 shaders (`#version 320 es`) do not compile on 3.1 and 32 programs do not
+  link. Unity on Mesa would choose 3.1 shaders itself; for the replay, `MESA_GLES_VERSION_OVERRIDE=3.2
+  MESA_GLSL_VERSION_OVERRIDE=320`: every program links; 23 GL errors left (one cube-map-array texture).
+- The pictures, last 135 frames (`--hash`, glpixdiff): 674 of 2,295 readbacks differ, all by rounding: frame
+  3322 dumped (PPM) shows at most 2 levels of one channel, in 0.3 - 0.9 % of the pixels of three 576x360
+  passes and 0.06 % of the final frame; the first differing call is a draw into a 576x360 pass. Not
+  bit-identical to the blob (the vanilla-look rule: to be traced to the draw before any default).
+- The times: the same trace, last 300 frames, glFinish after each (untimed), Mesa with the 3.2 override, two
+  holds of Mesa then the blob:
+
+  | per frame | blob r20p0 | Mesa |
+  |---|---|---|
+  | GL calls on the render thread (CPU) | 11.17 / 11.38 ms | 14.84 / 16.10 ms |
+  | draw (`glDrawElements`, 85 a frame) | 53.5 / 54.3 us | 110.6 / 120.7 us |
+  | framebuffer bind (16 a frame) | 142 / 145 us | 8.5 / 9.4 us |
+  | render thread CPU / whole process CPU | 12.1 / 17.4 ms | 16.1 / 17.8 ms |
+  | wall, with the GPU (glFinish) | 26.0 / 27.1 ms | 35.9 / 39.5 ms |
+
+  Mesa does its work on the render thread (the blob has its own thread, about 5.5 ms a frame), so the whole
+  process costs about the same; the render thread pays 4 ms more, almost all in the draws (Mesa builds the
+  jobs there), and the frame takes 10 - 12 ms longer with the GPU: where that goes (GPU time, the jobs, the
+  waits) is the next question. (Without the override, the 3.20 programs fail and their draws cost nothing:
+  5.7 ms, not a measurement.)
 
 ## In the runtime
 

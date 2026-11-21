@@ -172,7 +172,7 @@ egl.config id=80 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x8 samples=0x8 s
 egl.config id=81 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
 egl.config id=82 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
 gl.vendor Mesa
-gl.renderer Mali-G31 MC2 (Panfrost)
+gl.renderer Mali-G31 MC1 (Panfrost)
 gl.version OpenGL ES 3.1 Mesa 27.0.0-devel
 gl.glsl OpenGL ES GLSL ES 3.10
 gl.num_extensions 143
@@ -482,7 +482,7 @@ gl.max_uniform_block_size 65536
 gl.max_uniform_buffer_bindings 105
 gl.ubo_offset_alignment 16
 gl.max_ssbo_bindings 32
-gl.max_compute_invocations 512
+gl.max_compute_invocations 256
 gl.max_compute_shared_memory 32768
 gl.max_texture_lod_bias 16
 gl.num_program_binary_formats 0

@@ -380,7 +380,7 @@ static void free_rec(rec *r) { for (unsigned i = 0; i < r->nblobs; i++) free(r->
 static double g_op_ticks[OP_N]; static unsigned long g_op_calls[OP_N], g_op_err[OP_N]; static GLenum g_op_firsterr[OP_N];
 static double g_end_ticks; static unsigned long g_end_n;
 static int g_check;
-static unsigned long g_link_fail;
+static unsigned long g_link_fail, g_compile_fail;
 static unsigned long g_other_thread_calls;
 static unsigned g_main_thread = 255;
 
@@ -414,6 +414,17 @@ static void replay_rec(const rec *r)
             char log[512] = { 0 };
             RX(glGetProgramInfoLog)(pr, sizeof log, NULL, log);
             fprintf(stderr, "glreplay: program %u did not link: %.400s\n", (unsigned)r->a[0], log);
+        }
+    }
+    if (g_check && r->op == OP_glCompileShader && rp_fn[OP_glGetShaderiv] && rp_fn[OP_glGetShaderInfoLog]) {
+        GLint ok = 0; GLuint sh = rp_map(MK_SH, (GLuint)r->a[0]);
+        RX(glGetShaderiv)(sh, GL_COMPILE_STATUS, &ok);
+        if (!ok && g_compile_fail++ < 5) {          // the driver's reason, and the source's first line (#version, extensions)
+            char log[512] = { 0 }, src[160] = { 0 };
+            RX(glGetShaderInfoLog)(sh, sizeof log, NULL, log);
+            if (rp_fn[OP_glGetShaderSource]) RX(glGetShaderSource)(sh, sizeof src, NULL, src);
+            for (char *c = src; *c; c++) if (*c == '\n') *c = ' ';
+            fprintf(stderr, "glreplay: shader %u did not compile: %.400s [source: %.120s]\n", (unsigned)r->a[0], log, src);
         }
     }
     if (g_check) {
@@ -705,7 +716,7 @@ int main(int argc, char **argv)
     if (g_check) {
         unsigned long tot = 0;
         for (unsigned i = 0; i < OP_N; i++) if (g_op_err[i]) { printf("  GL errors in %s: %lu (first 0x%04x)\n", glrec_name[i], g_op_err[i], g_op_firsterr[i]); tot += g_op_err[i]; }
-        printf("GL errors: %lu; programs that did not link: %lu\n", tot, g_link_fail);
+        printf("GL errors: %lu; programs that did not link: %lu; shaders that did not compile: %lu\n", tot, g_link_fail, g_compile_fail);
     }
     return 0;
 }
