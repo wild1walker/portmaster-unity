@@ -371,8 +371,21 @@ static void mono_options(void *some_mono_fn)
     argv[argc] = NULL;
     if (argc && parse) { fprintf(stderr, "[host] mono options: %s\n", o); parse(argc, argv); }
 }
+// UA_RELAYOUT=<list or directory>: libunity's hot functions copied together in a profile's order (so_relayout,
+// runtime/loader/relayout.c; a directory holds lists named <build id>.txt, made by relayprof); after the hooks,
+// which it leaves alone; UA_RELAYOUT_DATA=1: vtables and function tables point at the copies too.
+// UA_ATOMICS=llsc: libunity's outline-atomic helpers straight to their LL/SC loops
+// (so_atomics_llsc; a CPU without LSE takes that path anyway). Both AArch64 only, both off when unset or 0.
+static void relayout_on_load(so_module *m)
+{
+    const char *n = so_name(m), *rl = getenv("UA_RELAYOUT"), *at = getenv("UA_ATOMICS");
+    if (!n || strcmp(n, "libunity.so")) return;
+    const char *dp = getenv("UA_RELAYOUT_DATA");
+    if (rl && *rl && strcmp(rl, "0")) so_relayout(m, rl, dp && !strcmp(dp, "1") ? SO_RELAYOUT_DATA : 0);
+    if (at && !strcmp(at, "llsc")) so_atomics_llsc(m);
+}
 // the loader's load hook: UA_GFX_JOBS and the like inside libunity (unityhooks.c); UA_MONO_TLS in libmono (monoinvoke.c)
-static void on_load(so_module *m) { unityhooks_on_load(m); monoinvoke_on_load(m); }
+static void on_load(so_module *m) { unityhooks_on_load(m); relayout_on_load(m); monoinvoke_on_load(m); }
 static int g_mono_trace;
 static void *dlsym_hook(const char *sym, void *p)
 {

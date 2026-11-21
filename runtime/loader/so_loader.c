@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "so_loader.h"
+#include "relayout.h"
 
 /* the one kind of Android library this build loads: the host's own architecture */
 #if defined(__aarch64__)
@@ -1591,6 +1592,282 @@ uintptr_t so_find_exidx(uintptr_t pc, int *pcount)
 #endif
 
 /* ------------------------------------------------------------------------ */
+/* UA_RELAYOUT (AArch64): copies of a module's hot functions laid out together (relayout.c) */
+
+typedef struct relregion {
+    uintptr_t lo, code_hi, hi;   /* the mapping; its code ends at code_hi */
+    so_module *m;
+    rl_image im;
+    rl_plan plan;
+    ElfW(Phdr) ph[2];            /* what so_dl_iterate_phdr reports: the code, its .eh_frame_hdr */
+    struct relregion *next;
+} relregion;
+static relregion *volatile g_regions;    /* append-only, as g_modules */
+static int g_nregions;
+
+static relregion *region_at(uintptr_t a)
+{
+    for (relregion *r = g_regions; r; r = r->next)
+        if (a >= r->lo && a < r->code_hi) return r;
+    return NULL;
+}
+
+uintptr_t so_relayout_orig(uintptr_t a)
+{
+    relregion *r = region_at(a);
+    if (!r) return a;
+    uint64_t o = rl_orig_of(&r->plan, a, r->lo);
+    return o ? (uintptr_t)o : a;
+}
+
+#if defined(__aarch64__)
+static void relayout_why(uint64_t start, const char *reason, void *ud)
+{
+    int *n = ud;
+    if (trace() || (*n)++ < 5) fprintf(stderr, "[relayout] %llx stays: %s\n", (unsigned long long)start, reason);
+}
+
+/* a mapping of len bytes within reach of the module's code (B/BL: 128 MB) */
+static void *region_map(const rl_image *im, so_module *m, size_t len)
+{
+    uintptr_t end = PAGE_UP(m->map_start + m->map_size), start = m->map_start;
+    for (int k = 0; k < 96; k++) {
+        /* after the module first (1 MB steps), then before it */
+        uintptr_t hint = k < 48 ? end + (uintptr_t)k * (1u << 20) : start - len - (uintptr_t)(k - 48 + 1) * (1u << 20);
+        void *p = mmap((void *)hint, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) continue;
+        if (rl_reach(im, (uintptr_t)p, len)) return p;
+        munmap(p, len);
+    }
+    return NULL;
+}
+
+static int cmp_uptr(const void *a, const void *b)
+{
+    uintptr_t x = *(const uintptr_t *)a, y = *(const uintptr_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* SO_RELAYOUT_DATA: the module's data words that hold a copied function's address (its R_AARCH64_RELATIVE
+ * relocations, applied: vtables, function tables, GOT entries) pointed at the copy, so virtual and indirect
+ * calls skip the original's entry. Only functions whose address is never formed in code (ADRP + ADD, ADR)
+ * nor exported: then every pointer to such a function the program can hold came from those words, all of
+ * them now the copy's, and comparisons of function pointers come out as before. */
+static int relayout_data(so_module *m, relregion *r)
+{
+    int n = r->plan.n, nd = 0;
+    uintptr_t *from = malloc(sizeof *from * (size_t)n * 2);
+    if (!from) return 0;
+    for (int i = 0; i < n; i++) { from[2 * i] = m->bias + r->plan.fn[i].start; from[2 * i + 1] = r->lo + r->plan.fn[i].at; }
+    qsort(from, (size_t)n, 2 * sizeof *from, cmp_uptr);
+    uint8_t *keep = calloc((size_t)n, 1);
+#define FIND(v) ((uintptr_t *)bsearch(&(v), from, (size_t)n, 2 * sizeof *from, cmp_uptr))
+    /* exported */
+    for (uint32_t i = 1; i < m->nsyms; i++) {
+        uintptr_t v = m->bias + m->symtab[i].st_value;
+        uintptr_t *e = m->symtab[i].st_shndx != SHN_UNDEF ? FIND(v) : NULL;
+        if (e) keep[(e - from) / 2] = 1;
+    }
+    /* formed in code: ADR, and ADRP followed (within 32 instructions) by ADD #imm on its register */
+    for (int s = 0; s < m->nsegs; s++) {
+        if (!(m->segs[s].prot & PROT_EXEC)) continue;
+        const uint32_t *w = (const uint32_t *)m->segs[s].start;
+        size_t nw = m->segs[s].len / 4;
+        for (size_t i = 0; i < nw; i++) {
+            uint32_t a = w[i];
+            if ((a & 0x1f000000u) != 0x10000000u) continue;             /* ADR / ADRP */
+            int64_t imm = (int64_t)((((uint64_t)((a >> 5) & 0x7ffff) << 2) | ((a >> 29) & 3)) << 43) >> 43;
+            uintptr_t pc = m->segs[s].start + 4 * i;
+            if (!(a >> 31)) { uintptr_t t = pc + (uintptr_t)imm; uintptr_t *e = FIND(t); if (e) keep[(e - from) / 2] = 1; continue; }
+            uintptr_t page = (pc & ~(uintptr_t)0xfff) + (uintptr_t)(imm * 4096);
+            unsigned rd = a & 31;
+            for (size_t k = i + 1; k < nw && k <= i + 32; k++) {
+                uint32_t b = w[k];
+                if ((b & 0xffc00000u) == 0x91000000u && ((b >> 5) & 31) == rd) {
+                    uintptr_t t = page + ((b >> 10) & 0xfff);
+                    uintptr_t *e = FIND(t);
+                    if (e) keep[(e - from) / 2] = 1;
+                }
+            }
+        }
+    }
+    /* the data words: every writable segment (RELRO included: opened for the change, closed again) */
+    for (int s = 0; s < m->nsegs; s++) {
+        if ((m->segs[s].prot & PROT_EXEC) || !(m->segs[s].prot & PROT_WRITE)) continue;
+        uintptr_t lo = m->segs[s].start, hi = lo + m->segs[s].len;
+        int changed = 0;
+        for (uintptr_t a = (lo + 7) & ~(uintptr_t)7; a + 8 <= hi; a += 8) {
+            uintptr_t v = *(const uintptr_t *)a, *e;
+            if (v < from[0] || v > from[2 * (n - 1)] || !(e = FIND(v)) || keep[(e - from) / 2]) continue;
+            if (!changed && m->relro_end > m->relro_start && lo < m->relro_end && hi > m->relro_start)
+                mprotect((void *)m->relro_start, m->relro_end - m->relro_start, PROT_READ | PROT_WRITE);
+            changed = 1;
+            *(uintptr_t *)a = e[1];
+            nd++;
+        }
+        if (changed && m->relro_end > m->relro_start && lo < m->relro_end && hi > m->relro_start && !getenv("SO_NO_RELRO"))
+            mprotect((void *)m->relro_start, m->relro_end - m->relro_start, PROT_READ);
+    }
+#undef FIND
+    int kept = 0;
+    for (int i = 0; i < n; i++) kept += keep[i];
+    fprintf(stderr, "[relayout] %s: %d data words point at copies now (%d functions whose address code forms or exports keep theirs)\n", m->name, nd, kept);
+    free(keep); free(from);
+    return nd;
+}
+
+int so_relayout(so_module *m, const char *list, int flags)
+{
+    if (!m || !list) return -1;
+    char path[600];
+    struct stat st;
+    if (!stat(list, &st) && S_ISDIR(st.st_mode)) {       /* a directory of lists: <build id>.txt */
+        rl_image im0;
+        char e0[200], b0[140];
+        if (rl_image_init(&im0, (const uint8_t *)m->bias, m->bias, m->map_start + m->map_size - m->bias, m->phdr, m->phnum, e0, sizeof e0) < 0) {
+            fprintf(stderr, "[relayout] %s: %s\n", m->name, e0); return -1;
+        }
+        rl_buildid_hex(&im0, b0, sizeof b0);
+        snprintf(path, sizeof path, "%s/%s.txt", list, b0);
+        if (access(path, R_OK)) { fprintf(stderr, "[relayout] %s: no list for build id %s in %s: not laid out\n", m->name, b0, list); return 0; }
+        list = path;
+    }
+    FILE *f = fopen(list, "r");
+    if (!f) { fprintf(stderr, "[relayout] %s: %s\n", list, strerror(errno)); return -1; }
+    rl_image im;
+    char err[256], bid[140], want[140] = "";
+    if (rl_image_init(&im, (const uint8_t *)m->bias, m->bias, m->map_start + m->map_size - m->bias, m->phdr, m->phnum, err, sizeof err) < 0) {
+        fprintf(stderr, "[relayout] %s: %s\n", m->name, err); fclose(f); return -1;
+    }
+    rl_buildid_hex(&im, bid, sizeof bid);
+    uint64_t *starts = NULL; int n = 0, cap = 0;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        unsigned long long s, z;
+        if (!strncmp(line, "buildid ", 8)) { sscanf(line + 8, "%139s", want); continue; }
+        if (line[0] == '#' || sscanf(line, "%llx %llx", &s, &z) != 2) continue;
+        if (n == cap) { cap = cap ? 2 * cap : 1024; starts = realloc(starts, sizeof *starts * (size_t)cap); }
+        starts[n++] = s;
+    }
+    fclose(f);
+    if (!want[0] || strcmp(want, bid)) {
+        fprintf(stderr, "[relayout] %s: %s is for build id %s, this %s is %s: not laid out\n", m->name, list, want[0] ? want : "(none)", m->name, bid);
+        free(starts); return -1;
+    }
+    /* only code that is still the file's own: a function hooked or patched in memory stays */
+    int fd = open(m->path, O_RDONLY | O_CLOEXEC), changed = 0;
+    uint64_t toff = 0, tva = 0;
+    for (int i = 0; i < m->phnum; i++)
+        if (m->phdr[i].p_type == PT_LOAD && (m->phdr[i].p_flags & PF_X)) { toff = m->phdr[i].p_offset; tva = m->phdr[i].p_vaddr; }
+    if (fd < 0) { fprintf(stderr, "[relayout] %s: %s\n", m->path, strerror(errno)); free(starts); return -1; }
+    int kept = 0;
+    uint8_t *buf = malloc(512u << 10);
+    for (int i = 0; i < n; i++) {
+        uint64_t s, z;
+        if (rl_fde_find(&im, starts[i], &s, &z, NULL) == 0 && s == starts[i] && z <= (512u << 10) && s >= tva &&
+            pread(fd, buf, z, (off_t)(s - tva + toff)) == (ssize_t)z && memcmp(buf, (const void *)(m->bias + s), z)) {
+            changed++;
+            continue;
+        }
+        starts[kept++] = starts[i];
+    }
+    free(buf);
+    close(fd);
+    relregion *r = calloc(1, sizeof *r);
+    int quiet = 0;
+    r->im = im;
+    if (rl_plan_make(&r->plan, &r->im, starts, kept, relayout_why, &quiet) < 0 || !r->plan.n) {
+        fprintf(stderr, "[relayout] %s: nothing to lay out\n", m->name); free(starts); free(r); return -1;
+    }
+    free(starts);
+    size_t len = PAGE_UP(r->plan.total);
+    uint8_t *dst = region_map(&r->im, m, len);
+    if (!dst) { fprintf(stderr, "[relayout] %s: no room within 128 MB of its code\n", m->name); rl_plan_free(&r->plan); free(r); return -1; }
+    if (rl_plan_emit(&r->plan, dst, (uintptr_t)dst, err, sizeof err) < 0) {
+        fprintf(stderr, "[relayout] %s: %s: not laid out\n", m->name, err);
+        munmap(dst, len); rl_plan_free(&r->plan); free(r); return -1;
+    }
+    mprotect(dst, len, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)dst, (char *)dst + r->plan.code_size);
+    r->m = m;
+    r->lo = (uintptr_t)dst; r->code_hi = r->lo + r->plan.code_size; r->hi = r->lo + len;
+    /* (before the entries change: the scan for addresses formed in code reads them) */
+    int nd = (flags & SO_RELAYOUT_DATA) ? relayout_data(m, r) : -1;
+    /* each original entry: a branch to its copy (calls through pointers, vtables, unmoved callers) */
+    int prot = PROT_READ | PROT_EXEC;
+    for (int i = 0; i < m->nsegs; i++) if (m->segs[i].prot & PROT_EXEC) prot = m->segs[i].prot;
+    uintptr_t open_page = 0;
+    for (int i = 0; i < r->plan.n; i++) {
+        const rl_fn *fn = &r->plan.fn[i];
+        uintptr_t at = m->bias + fn->start, pg = PAGE_DOWN(at);
+        uint32_t b = 0x14000000u | (uint32_t)((((intptr_t)((uintptr_t)dst + fn->at) - (intptr_t)at) >> 2) & 0x3ffffff);
+        if (pg != open_page) {
+            if (open_page) mprotect((void *)open_page, PAGE_SZ, prot);
+            mprotect((void *)pg, PAGE_SZ, prot | PROT_WRITE);
+            open_page = pg;
+        }
+        memcpy((void *)at, &b, 4);
+        __builtin___clear_cache((char *)at, (char *)at + 4);
+    }
+    if (open_page) mprotect((void *)open_page, PAGE_SZ, prot);
+    r->ph[0].p_type = PT_LOAD; r->ph[0].p_flags = PF_R | PF_X; r->ph[0].p_vaddr = 0;
+    r->ph[0].p_memsz = r->ph[0].p_filesz = r->plan.total; r->ph[0].p_align = PAGE_SZ;
+    r->ph[1].p_type = PT_GNU_EH_FRAME; r->ph[1].p_flags = PF_R; r->ph[1].p_vaddr = r->plan.hdr_off;
+    r->ph[1].p_memsz = r->ph[1].p_filesz = r->plan.hdr_size; r->ph[1].p_align = 4;
+    so_lock();
+    r->next = NULL;
+    if (!g_regions) g_regions = r;
+    else { relregion *t = g_regions; while (t->next) t = t->next; t->next = r; }
+    g_nregions++;
+    so_unlock();
+    fprintf(stderr, "[relayout] %s: %d functions (%llu KB) laid out at %p in the list's order (%s); %d left out%s\n",
+            m->name, r->plan.n, (unsigned long long)(r->plan.code_size >> 10), dst, list, r->plan.skipped + changed,
+            changed ? " (some changed in memory by a hook)" : "");
+    (void)nd;
+    return r->plan.n;
+}
+
+int so_atomics_llsc(so_module *m)
+{
+    if (!m) return -1;
+    /* HWCAP_ATOMICS (LSE): the helpers' test would take the LSE instruction there; leave them */
+    if (getauxval(AT_HWCAP) & (1ul << 8)) {
+        fprintf(stderr, "[relayout] %s: this CPU has LSE atomics: the outline-atomic helpers stay as they are\n", m->name);
+        return 0;
+    }
+    int n = 0, prot = PROT_READ | PROT_EXEC;
+    uint64_t flag = 0, f2 = 0;
+    for (int i = 0; i < m->nsegs; i++) {
+        if (!(m->segs[i].prot & PROT_EXEC)) continue;
+        prot = m->segs[i].prot;
+        uint8_t *c = (uint8_t *)m->segs[i].start;
+        size_t len = m->segs[i].len;
+        int k = rl_atomics(c, (uintptr_t)c, len, 0, &flag);
+        if (!k) continue;
+        mprotect(c, len, prot | PROT_WRITE);
+        n += rl_atomics(c, (uintptr_t)c, len, 1, &f2);
+        mprotect(c, len, prot);
+        __builtin___clear_cache((char *)c, (char *)c + len);
+    }
+    for (relregion *r = g_regions; r; r = r->next) {
+        if (r->m != m) continue;
+        uint64_t f3 = 0;
+        if (!rl_atomics((uint8_t *)r->lo, r->lo, r->code_hi - r->lo, 0, &f3)) continue;
+        if (flag && f3 != flag) continue;
+        mprotect((void *)r->lo, r->hi - r->lo, PROT_READ | PROT_WRITE);
+        n += rl_atomics((uint8_t *)r->lo, r->lo, r->code_hi - r->lo, 1, &f3);
+        mprotect((void *)r->lo, r->hi - r->lo, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)r->lo, (char *)r->code_hi);
+    }
+    fprintf(stderr, "[relayout] %s: %d outline-atomic helpers go straight to their LL/SC loops (this CPU has no LSE)\n", m->name, n);
+    return n;
+}
+#else
+int so_relayout(so_module *m, const char *list, int flags) { (void)m; (void)list; (void)flags; return -1; }
+int so_atomics_llsc(so_module *m) { (void)m; return -1; }
+#endif
+
+/* ------------------------------------------------------------------------ */
 /* dl* shims for Android code */
 
 static so_handle *new_handle(int kind, const char *name)
@@ -1775,6 +2052,11 @@ char *so_dlerror(void)
 const char *so_module_at(const void *addr, uintptr_t *bias)
 {
     uintptr_t a = (uintptr_t)addr;
+    relregion *r = region_at(a);
+    if (r) {                                             /* a copy: its module, a bias that gives the original's offset */
+        if (bias) *bias = r->m->bias + (a - so_relayout_orig(a));
+        return r->m->path;
+    }
     for (so_module *m = g_modules; m; m = m->next)      /* lock-free: modules are never unloaded */
         if (a >= m->map_start && a < m->map_start + m->map_size) {
             if (bias) *bias = m->bias;
@@ -1786,7 +2068,7 @@ const char *so_module_at(const void *addr, uintptr_t *bias)
 /* bionic Dl_info has the same layout as glibc's */
 int so_dladdr(const void *addr, Dl_info *info)
 {
-    uintptr_t a = (uintptr_t)addr;
+    uintptr_t a = so_relayout_orig((uintptr_t)addr);    /* a copy is named as its original */
     for (so_module *m = g_modules; m; m = m->next) {
         if (a < m->map_start || a >= m->map_start + m->map_size) continue;
         info->dli_fname = m->path;
@@ -1834,6 +2116,19 @@ int so_dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *d
     unsigned long long counts[2] = { 0, 0 }, nmods = 0;
     dl_iterate_phdr(host_load_counts, counts);
     for (so_module *m = g_modules; m; m = m->next) nmods++;
+    nmods += (unsigned long long)g_nregions;
+    for (relregion *r = g_regions; r; r = r->next) {    /* relayout's copies, with their own .eh_frame_hdr */
+        struct dl_phdr_info info;
+        memset(&info, 0, sizeof info);
+        info.dlpi_addr = r->lo;
+        info.dlpi_name = r->m->path;
+        info.dlpi_phdr = r->ph;
+        info.dlpi_phnum = 2;
+        info.dlpi_adds = counts[0] + nmods;
+        info.dlpi_subs = counts[1];
+        int ret = cb(&info, sizeof info, data);
+        if (ret) return ret;
+    }
     for (so_module *m = g_modules; m; m = m->next) {
         struct dl_phdr_info info;
         memset(&info, 0, sizeof info);

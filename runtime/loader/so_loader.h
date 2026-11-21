@@ -164,6 +164,19 @@ void so_set_dlopen_rewrite(const char *(*rewrite)(const char *path, char *buf, s
  * the loader's lock is held: the hook may read and patch the module (so_base, so_size, so_name), not
  * load or look up others */
 void so_set_load_hook(void (*hook)(so_module *m));
+/* UA_RELAYOUT (AArch64; relayout.h): the functions a list names (made by runtime/host/relayprof for this
+   library's build id) copied into one region near the module in the list's order, each original entry a
+   branch to its copy; unwind info for the copies through so_dl_iterate_phdr. Call from the load hook,
+   after any hook changed the module's code (changed functions stay). SO_RELAYOUT_DATA: also the data words
+   holding a copied function's address (vtables, function tables) point at the copy, for the functions
+   whose address no code forms and no symbol exports. The count laid out, or -1 */
+#define SO_RELAYOUT_DATA 1
+int so_relayout(so_module *m, const char *list, int flags);
+/* the module's outline-atomic helpers (and their copies) sent straight to their LL/SC loops, on a CPU
+   without LSE (where that is the path they take anyway); the count, 0 with LSE, -1 not AArch64 */
+int so_atomics_llsc(so_module *m);
+/* an address in a relayout copy -> the same instruction in the original; any other address as it is */
+uintptr_t so_relayout_orig(uintptr_t addr);
 int   so_dlclose(void *handle);
 char *so_dlerror(void);
 

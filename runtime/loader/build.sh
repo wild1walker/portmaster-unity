@@ -39,7 +39,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
   set -e
   CC=${T}gcc
   mkdir -p $OUT
-  for f in so_loader.c softfp.c fastclock.c bionic_setjmp.S; do
+  for f in so_loader.c relayout.c softfp.c fastclock.c bionic_setjmp.S; do
     $CC $CFLAGS -c $f -o $OUT/$(basename $f .${f##*.}).o
   done
   # libhybris (../thirdparty/libhybris, Apache 2.0): its hook functions and their helpers
@@ -52,7 +52,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
   $CC $HF -c $H/properties/hybris_properties.c -o $OUT/hybris_hybris_properties.o
   ${T}g++ $HF -c $H/common/dso_handle_counters.cpp -o $OUT/hybris_dso.o
   rm -f $OUT/libsoloader.a
-  ${T}ar rcs $OUT/libsoloader.a $OUT/so_loader.o $OUT/softfp.o $OUT/fastclock.o $OUT/bionic_setjmp.o $OUT/hybris_*.o
+  ${T}ar rcs $OUT/libsoloader.a $OUT/so_loader.o $OUT/relayout.o $OUT/softfp.o $OUT/fastclock.o $OUT/bionic_setjmp.o $OUT/hybris_*.o
   # -lrt: timer_* and shm_open live there before glibc 2.34 (Ubuntu 20.04: 2.31)
   L="$OUT/libsoloader.a $EXPORT -ldl -lpthread -lm -lrt -lstdc++"
   $CC $CFLAGS test_load.c $L -o $OUT/test_load
@@ -81,6 +81,13 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
   $CC -shared -nostdlib -Wl,-soname,libmediandk.so -o $D/libmediandk.so -x c /dev/null
   $CC $A -c test/syn_media.c -o $D/syn_media.o
   $CC $S -Wl,-soname,libsyn_media.so -o $D/libsyn_media.so $D/syn_media.o -L$D -lmediandk -lc
+  # arm64: the relayout test library (every pc-relative class, C cleanups unwound by its own libgcc_eh)
+  if [ -z "$T" ]; then
+    $CC $A -fexceptions -fno-omit-frame-pointer -c test/syn_rl.c -o $D/syn_rl.o
+    $CC -c test/syn_rl_asm.S -o $D/syn_rl_asm.o
+    $CC $S -Wl,-Bsymbolic -Wl,--build-id -Wl,-soname,libsyn_rl.so -o $D/libsyn_rl.so $D/syn_rl_asm.o $D/syn_rl.o -L$D -lc $UNW
+    $CC $CFLAGS test/test_relayout.c $L -o $D/test_relayout
+  fi
   P="python3 test/pack_relocs.py"
   $P --relr $D/libsyn_1.so $D/libsyn_1.so
   $P --aps2 $D/libsyn_2.so $D/libsyn_2.so
@@ -91,7 +98,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
 echo "built: $DIR/$OUT/libsoloader.a $DIR/$OUT/test_load"
 [ $TEST = 1 ] || exit 0
 if [ "$ARCH" = arm64 ]; then
-  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && UA_FUTEX_SPIN=50 ./test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
+  docker run --rm $PLAT -v "$DIR/$OUT/test":/t -w /t $IMG sh -c './test_sem && UA_FUTEX_SPIN=50 ./test_sem && ./test_sync && ./test_syn . && ./test_relayout . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'
 else
   docker run --rm --pull never --platform linux/arm/v7 -v "$DIR/$OUT/test":/t -w /t debian:bookworm-slim \
     sh -c './test_sem && UA_FUTEX_SPIN=50 ./test_sem && ./test_sync && ./test_syn . && ./test_clock 6 && UA_FAST_CLOCK=force ./test_clock 6'

@@ -785,6 +785,18 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
     FILE *f = fopen(tmp, "w");
     if (!f) { fprintf(stderr, "[prof] %s: %s\n", tmp, strerror(errno)); return; }
     int nthr = atomic_load(&g_nthr);
+    // UA_RELAYOUT: an address in a copy of a function is written as the original's (so_relayout_orig)
+    for (int i = 0; i < nthr; i++) {
+        pthr *t = &g_thr[i];
+        unsigned n = atomic_load(&t->n) < t->cap ? atomic_load(&t->n) : t->cap;
+        if (!t->buf) continue;
+        for (unsigned k = 0; k < n; k++) {
+            uintptr_t *s = t->buf + (size_t)k * g_stride;
+            unsigned d = (unsigned)(s[2] & 0xff);
+            for (unsigned j = 3; j < 5; j++) s[j] = so_relayout_orig(s[j]);
+            for (unsigned j = HDR; j < HDR + d; j++) s[j] = so_relayout_orig(s[j]);
+        }
+    }
     fprintf(f, "ua_prof 3\narch %s\nhz %d\nsecs %.3f\ndepth %d scan %d\nsignal %d\n",
 #if defined(__aarch64__)
             "arm64",

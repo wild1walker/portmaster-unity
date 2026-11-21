@@ -1230,6 +1230,40 @@ reads 2023.2+ donors (`unity default resources` is in `Resources/`, and there is
 Known gaps: a donor carries only the class libraries its own build uses (section 2, Windows
 builds); the Memory Advice models 2023.1's player reads have not been tried yet.
 
+### A code layout list for a 64-bit player (`UA_RELAYOUT`)
+
+A 64-bit port can lay out its player's hot engine code together at load (runtime.md, `UA_RELAYOUT`;
+why: [arm64-routes.md](arm64-routes.md), route 2). The list is per libunity build (its GNU build id;
+one per Unity version and ABI) and holds offsets, sizes and weights only, nothing of Unity's: it can
+ship with the port or in portmaster-unity beside the runtime. To make one:
+
+1. **Record** the game on a handheld with the 64-bit player, a few scenes of ordinary play, each a
+   `UA_PROF` recording of UnityMain and the render thread, plus one of instruction-fetch stalls:
+   ```
+   DEVICE=... ARCH=arm64 tools/device/profbench.sh <game> pA UA_PROF=500 'UA_PROF_THREADS=UnityMain,UnityGfxDeviceW*'
+   DEVICE=... ARCH=arm64 tools/device/profbench.sh <game> eA UA_PROF=2000 UA_PROF_EVENT=raw:0xe1 \
+       UA_PROF_EVENT_PERIOD=400000 'UA_PROF_THREADS=UnityMain,UnityGfxDeviceW*'
+   ```
+   (`raw:0xe1` is the Cortex-A53's `ic_dep_stall`; another scene, another `pB`). Keep one scene out of
+   the recordings to test the list on.
+2. **Make the list** from the donor's own `libunity.so` (the file the handheld loads; `--as` names it
+   as the recordings do when the file is called otherwise):
+   ```
+   runtime/host/build.sh (ARCH=arm64) builds runtime/host/out/arm64/relayprof (static)
+   docker run --rm -v $PWD:/w ua-build-arm64 /w/relayprof make /w/libunity.so /w/<build id>.txt \
+       /w/pA/prof-1.txt /w/pB/prof-1.txt /w/eA/prof-1.txt
+   ```
+   It weighs each recording's samples alike (scaled to a million per thread), counts the functions on
+   the sampled stacks too (`--no-callers`: only where samples fell), clusters callers with their
+   callees up to a page (`--cluster`), and writes the clusters densest first. `relayprof check
+   <lib>` says how many of the library's functions can move at all (6000.0.61f1 arm64: all 76,082),
+   `relayprof plan <lib> <list>` what the loader will build (sizes, islands, unwind data), `relayprof
+   refs <lib> <list>` how many of them are reached through vtables (`UA_RELAYOUT_DATA`).
+3. **Use it**: copy it to the handheld and set `UA_RELAYOUT=<file or directory>` (a directory holds
+   lists by build id: a list for another libunity is refused, logged, and the game runs as without).
+   Check the log for `[relayout] libunity.so: N functions ... laid out`, then A/B the frame rate and
+   `HWCOUNT=1`'s i-cache stall cycles on the scene the list was not made from.
+
 ## 6. package
 
 ```

@@ -188,6 +188,7 @@ static void mono_leave(void) { if (g_mthread && mono_detach) { mono_detach(g_mth
 
 static int fmt(char *out, size_t n, uintptr_t v)
 {
+    v = so_relayout_orig(v);                 // UA_RELAYOUT: a copy is named as its original
     const map_ent *m = find_map(v);
     if (m && !m->name[0]) {
         void *ji = g_domain ? mono_ji_find(g_domain, (char *)(uintptr_t)v) : NULL;

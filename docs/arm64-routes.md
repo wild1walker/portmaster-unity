@@ -361,6 +361,70 @@ libunity that classifies the 1,794 sampled functions (pc-relative forms, jump ta
 RELATIVE relocations, FDE present) to show what fraction can move mechanically; then the 75 functions of the
 first half of the samples moved in a test build, `hwcount` A/B on `ic_dep_stall` and L2 refills.
 
+### Route 2 built: load-time relayout (`UA_RELAYOUT`)
+
+**The tool** (2026-11-20; runtime.md `UA_RELAYOUT`, porting.md for making a list). Built as planned
+above, with what the offline pass found deciding the details:
+
+- **What can move.** `relayprof check` on 6000.0.61f1's arm64 libunity: 76,082 functions with FDEs,
+  all 18.96 MB of them movable mechanically: no literal loads at all, no data among the code, jump
+  tables are byte/halfword offsets from an ADR inside the function (so they move with it), every
+  `.eh_frame` pointer pc-relative. The loader still checks each function it is given (rl_check) and
+  leaves one it cannot prove (a literal pool inside, a SIMD literal from outside, a function a hook
+  changed: compared with the file's bytes).
+- **The list.** UnityMain and the render thread from three recordings on the muOS RG34XX-SP (time
+  samples at King's Pass and Greenpath, `ic_dep_stall` samples at King's Pass), the functions samples
+  fell in plus those on the sampled stacks: 2,804 functions, 830 KB, in 1,266 call-chain clusters
+  (C3, up to a page each), densest first. The loader builds 836 KB of copies (islands: 627 words used
+  of 2.5 KB reserved), 112 KB of `.eh_frame` and 22 KB of `.eh_frame_hdr`; 4 stay (changed by
+  `unityhooks`: `UA_GLES_POOL`, `UA_GFX_JOBS`). Load cost: a few ms.
+- **Calls.** Inside the copies BL/B go copy to copy. Each original entry is a `b` to its copy. 295 -
+  375 of the hot functions (22 % of the profile's weight) are reached through vtables and function
+  tables (R_AARCH64_RELATIVE); only 4 have their address formed in code and none is exported, so
+  `UA_RELAYOUT_DATA=1` points those data words (5,551 of them) at the copies and leaves the 178
+  functions whose address code forms or exports alone.
+- **Unwinding.** The copies' FDEs (with their CIEs, personality and LSDA pointers re-encoded) and a
+  search table are reported through the loader's `dl_iterate_phdr` as an object of their own: the
+  unwinder linked into libunity (and any other) finds them as it finds libunity's own, so exceptions
+  and backtraces pass through copies; nothing had to be excluded for throwing.
+- **Exactness.** Only branch and address fields change; a copied function computes what the original
+  did (same instructions, same order, same addresses formed). `test_relayout` (runtime/loader/test)
+  runs a synthetic library before and after: B, BL, B.cond, CBZ/CBNZ, TBZ/TBNZ to copied and unmoved
+  functions out of reach (islands), ADR and literal loads (W, X, SW, unaligned X, PRFM) out of reach,
+  ADRP + ADD/LDR, a jump table, a loop through the function's own entry, a C forced unwind through
+  copied frames with cleanups (personality, LSDA, landing pads, `_Unwind_Resume`) and a backtrace, a
+  vtable redirected and one kept, a hooked function and a data-in-code function left in place, the
+  outline-atomic helpers patched in the copies: every result the same. On the handhelds Hollow Knight
+  runs its scenes with it (King's Pass, Greenpath, City of Tears) and the profiler names the copies as
+  the originals.
+
+**Measured** (64-bit Hollow Knight, the arm64par copies, `HWCOUNT=1`, interleaved runs from a cool
+handheld; UnityMain's counters a frame; `r` = `UA_RELAYOUT`, `d` = with `UA_RELAYOUT_DATA=1`):
+
+Knulli RG34XX-SP, City of Tears (a scene the list was not made from; there the render thread and
+the GPU set the frame rate, 45 fps on every run, so UnityMain's time is what to read):
+
+| City of Tears, Knulli (2 runs each) | base | r | d |
+|---|---|---|---|
+| UnityMain ms a frame | 14.95, 14.69 | 15.10, 14.86 | 14.23, 14.87 |
+| render thread ms a frame | 15.42, 14.94 | 15.46, 15.17 | 14.81, 15.52 |
+| instructions | 3.68 M | 3.78 M (+2.6 %) | 3.72 M (+0.9 %) |
+| i-cache miss stall cycles (0xE1) | 5.36 M | 5.50 M (+2.6 %) | 5.17 M (-3.5 %) |
+| L1I refills | 112 K | 117 K (+4 %) | 111 K (-0.5 %) |
+| iTLB miss stall cycles (0xE2) | 0.62 M | 0.56 M (-9 %) | 0.50 M (-19 %) |
+| L1I micro-TLB refills | 8.3 K | 7.2 K (-13 %) | 6.6 K (-21 %) |
+| L2 refills | 80.9 K | 79.5 K (-1.8 %) | 78.5 K (-3.0 %) |
+| load-miss stall cycles (0xE7) | 13.05 M | 13.34 M | 13.11 M |
+
+What it says: packing whole functions does not shrink the code a frame touches: the same lines are
+fetched (L1I refills within 4 %); it takes pages (iTLB stalls -9 to -19 %) and, with the vtables pointed
+at the copies, a little of the i-cache stall time (-3.5 %) and of the L2 refills (-3 %). Without the
+data redirect, every virtual call into a moved function passes through the original's entry (one more
+taken branch and one more line: +2.6 % instructions and stall cycles), which costs what the packing
+gains. UnityMain -0.27 ms a frame on average for `d` (one run -0.6, one 0), +0.16 for `r`.
+
+
+
 ### 3. Rewritten hot functions with prefetch, inline atomics and the cached-pointer read folded in
 
 What: on top of route 2's copies (or as single hooks), exact replacements for the functions whose load-miss
