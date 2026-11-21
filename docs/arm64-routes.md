@@ -173,11 +173,11 @@ where the GL thread submits it, and hwcount counts `ua_glthread` too; gpucnt is 
 
 | a frame | Knulli 32-bit | Knulli 64-bit | muOS 32-bit | muOS 64-bit | G350 32-bit | G350 64-bit |
 |---|---|---|---|---|---|---|
-| fps (two runs) | 53.5, 52.9 | 51.1, 51.0 | 52.1, 52.0 | 50.7, 50.6 | 37.5, 37.2 (counters on; clean runs 39.9, 40.2) | 37.4, 37.4 (counters on; clean runs 37.5, 37.8) |
+| fps (two runs) | 53.5, 52.9 | 51.1, 51.0 (later pair at 696 MHz: 51.5, 51.2) | 52.1, 52.0 | 50.7, 50.6 | 40.0, 39.8 (with the counters and timer: 37.5, 37.2) | 38.5, 37.9 (with them: 37.4, 37.4) |
 | GPU clock (average; thermal state of the GPU) | 684, 677 MHz (0.1) | 600, 600 MHz (1.0) | 602, 631 MHz (3.0) | 594, 596 MHz (3.1) | 786 MHz | 786 MHz |
 | GPU busy / its cycles a frame | 94.3, 94.1 % / 12.1 M | 99.5 % / 11.7 M | 99.3, 96.4 % / 11.5, 11.7 M | 98.8, 98.1 % / 11.6 M | (not read) | (not read) |
-| UnityMain on a CPU | 18.1, 18.2 ms | 19.0, 19.1 ms | 16.9, 17.1 ms | 18.4, 18.8 ms | 24.9, 25.3 ms (clean 23.7) | 25.2, 25.4 ms (clean 25.0) |
-| render thread on a CPU (G350: + GL thread) | 12.1 ms | 13.5, 13.4 ms | 11.3 ms | 13.2 ms | 8.8 + 18.8 ms (clean: GL thread 11.9 - 12.7) | 8.8 + 17.9 ms (clean: GL thread 15.6 - 15.8) |
+| UnityMain on a CPU | 18.1, 18.2 ms | 19.0, 19.1 ms | 16.9, 17.1 ms | 18.4, 18.8 ms | 23.9, 23.9 ms | 24.8, 24.9 ms |
+| render thread on a CPU (G350: + GL thread) | 12.1 ms | 13.5, 13.4 ms | 11.3 ms | 13.2 ms | 8.0 + GL thread 12.2, 12.1 ms (with the timer 18.8) | 8.2 + GL thread 15.1, 15.5 ms (with the timer 17.9) |
 | its cycles a frame (user) | 16.3, 16.2 M | 18.4, 18.2 M | 17.7 M | 21.1, 21.2 M | GL thread 16.7, 17.0 M | GL thread 18.4, 18.3 M |
 | of them waiting for an instruction fetch (`ic_dep_stall`) | 3.9, 4.0 M | 5.9, 5.8 M | 4.8 M | 7.1, 7.1 M | 7.0 M | 9.5, 9.2 M |
 | waiting for a load (`ld_dep_stall`) | 7.0 M | 7.8, 7.7 M | 7.9 M | 9.1, 9.2 M | 5.0, 4.9 M | 5.3, 5.1 M |
@@ -231,23 +231,34 @@ What it says:
   later with its commands). Warm, at 600 MHz both, the gap was 0.8 fps (150 s runs, mono-arm64.md).
 - *Knulli*: the power allocator (one budget, `sustainable_power` 1000 mW, control at 70 C, both actors weight
   1024) gave the 64-bit runs' budget to the CPU (cpufreq state 0.7 - 0.8) and capped the GPU at 600 MHz
-  (state 1.0) in both pairs; the 32-bit runs the other way round (CPU state 1.3 - 1.6, GPU 677 - 684 MHz).
-  At 600 MHz the frame's 11.7 M GPU cycles take 19.5 ms (51.3 fps): the 64-bit runs are GPU-bound there, and
-  UnityMain's 19.0 ms would hold them at the same 51 at 696 MHz (past runs at 696: 50.9 fps). Over the
+  (state 1.0) in the first pair; the 32-bit runs the other way round (CPU state 1.3 - 1.6, GPU 677 - 684 MHz).
+  At 600 MHz the frame's 11.7 M GPU cycles take 19.5 ms (51.3 fps): those 64-bit runs are GPU-bound, and
+  UnityMain's 19.0 ms holds the same 51 at 696 MHz: a later 64-bit pair that kept 692 MHz (GPU busy 90 - 91 %)
+  ran 51.2 - 51.5 fps with UnityMain at 18.9 - 19.0 ms. On Knulli the 64-bit build has two limits at the same
+  51 fps; only both moving gains anything. Over the
   earlier 65 64-bit Knulli runs of the arm64par benches, 23 sat at 600 MHz, against 2 of 19 32-bit runs.
 - *G350*: UnityMain (24 - 25 ms of a 25 - 27 ms frame), with three of the four A35s busy (UnityMain, the GL
   thread 12 - 18 ms, FMOD's mixer 11 - 12 ms, the job worker 9 ms, the render thread 9 ms, the Mali back end
   6 ms a frame) and the CPU clock held at 1.22 - 1.43 GHz on average by its power allocator (the GPU stays at
-  786 MHz). The GL thread's extra 3 ms of the clean runs (the fmodasync benches: 11.9 - 12.7 against 15.6 - 15.8
-  ms) are CPU the main thread's core shares and heat the clock pays for. (The pairs above ran with the
-  counters and the per-call timer: both slow the GL thread, the 32-bit one more, its timer a system call: they
-  measure the per-call costs, not the gap. The clean A/B pair was queued when the G350 went down, during
-  another helper's plain 64-bit run.)
+  786 MHz). The clean pair (no counters, no timer; CPU 1.30 - 1.33 GHz on average in both): UnityMain +0.9 ms,
+  the GL thread +3.2 ms (12.1 - 12.2 against 15.1 - 15.5 ms): CPU the main thread's cores share, and heat the
+  clock pays for. (The counted pairs slow the GL thread, the 32-bit one more, its timer a system call: they
+  give the per-call costs, not the gap.)
 
 So on the RG34XX-SP the graphics side loses the 64-bit build its frame rate through heat, not through the
 render thread's time: its extra CPU work (UnityMain +1.0 - 1.5 ms, the render thread +1.4 - 1.9 ms) and the
 64-bit code's extra DRAM traffic warm the SoC and the thermal governors take it from the GPU's clock. Every
 CPU cycle the 64-bit build saves counts twice there.
+
+**The window's load is not the bars pass's cost.** The frame's first pass on the window (two letterbox bars:
+Unity's scissored clear quads, `ClearByDrawingQuad`, because the 720x450 viewport is not the 720x480 window)
+starts with neither a clear nor an invalidate, so the driver loads last frame's window; it reads 1.25 ms
+serialized (`UA_GL_TRACE`, about 0.3 of it any pass's start-up). Invalidating the window's colour, depth and
+stencil at its first bind (a measurement, `UA_GL_WININVAL`, not kept: exact only where the frame covers the
+window) changed the GPU's cycles a frame by nothing (64-bit, A B A B; Knulli 12.16, 12.22 against 12.19, 12.20 M,
+51.5, 51.2 against 51.1, 51.5 fps; muOS 11.63, 11.55 against 11.56, 11.53 M at ~600 MHz, 51.2, 51.4 against
+50.8, 51.1 fps): the bars pass costs its two quads' fixed
+work and the pass itself, not the load.
 
 **What can be cut from outside the driver.** Nothing on the way into libmali (above). The driver's own
 work by call is fixed per draw and per pass (drawbench, passbench above): fewer draws and passes would help
