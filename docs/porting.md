@@ -675,7 +675,8 @@ cyan. Look for `texture(<palette>, <a channel of _MainTex>)` in the game's shade
 have, all of them) finds the textures those programs sample in the player's data at setup and leaves them as
 the game has them; `exact_index = "blue"` (step `exactindex`) then stores those it can prove are drawn only
 through them in one byte a texel and rewrites the programs to read it (rust-setup.md, "exact_shaders and
-exactindex", has the rules and the render check):
+exactindex", has the rules and the render check; the walk's result is kept beside the journal, so a setup
+that is stopped and goes on does not walk the data again: setup-speed.md):
 
 ```toml
 [convert]

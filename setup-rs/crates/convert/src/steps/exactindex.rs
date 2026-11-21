@@ -1074,6 +1074,184 @@ fn plan_of(j: &Json) -> Option<Plan> {
     })
 }
 
+/// The plan for the step when the journal has none: the walk, or why a walk before it found none
+/// (the index kept), without walking again.
+fn plan_or_kept(job: &Job, c: &Json) -> std::result::Result<Plan, String> {
+    if let Some(k) = load_kept(job, c, true) {
+        if let Some(why) = k.none.or(k.plan_err) {
+            return Err(why);
+        }
+    }
+    let before = fingerprint(job);
+    let r = analyze(job, c, true);
+    let kept = match &r {
+        Err(why) => Some(Kept {
+            none: Some(why.clone()),
+            ..Default::default()
+        }),
+        Ok((keep, Err(why))) => Some(Kept {
+            keep: keep.clone(),
+            plan_err: Some(why.clone()),
+            none: None,
+        }),
+        // (a plan found goes into the journal: the caller's)
+        Ok((_, Ok(_))) => None,
+    };
+    if let Some(k) = kept {
+        save_kept(job, c, true, &before, &k);
+    }
+    r.and_then(|(_, r)| r)
+}
+
+// ---- The index kept
+//
+// The walk above reads every data file of the game (Blasphemous: 3945 files, 150 - 160 s on a handheld)
+// and finds the same each time. What it found is kept beside the journal (`.pmunity-exact.json`, written
+// through a .tmp file, synced and renamed as the journal is), and a run that goes on after a stop reads
+// it instead of walking again. It is used only when nothing it was made from has changed:
+// - the settings the walk reads (`exact_shaders`, `exact_keywords`, `exact_index`, `exact_index_skip`) and
+//   the program (its size and time: another build of pmu walks again);
+// - the data files: the same names, each with the size and time it had when the walk began, or named in
+//   the journal as done by a step (the conversion's own change: the journal already vouches for those). A
+//   file that changed and that no step has marked (other game files, a file put in place a moment
+//   before a stop and not yet marked) makes the run walk again and keep the new index.
+// Anything else (no file, a damaged one, another version of it): the walk, as before.
+
+/// The kept index's file name in the output folder (a dot file: no step lists it, packing leaves it out).
+pub const KEPT: &str = ".pmunity-exact.json";
+const KEPT_VERSION: i128 = 1;
+
+/// What a walk found: the textures left as they are, why there is no plan (with `exact_index`; None
+/// with a plan, which the journal holds, or without `exact_index`), or why there is nothing at all (no
+/// shader of `exact_shaders`).
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Kept {
+    pub keep: BTreeSet<Key>,
+    pub plan_err: Option<String>,
+    pub none: Option<String>,
+}
+
+/// The data files the walk reads, each with its size and time (texmemo::file_id).
+pub fn fingerprint(job: &Job) -> Vec<(String, String)> {
+    data_files(job)
+        .into_iter()
+        .map(|n| {
+            let id = super::texmemo::file_id(&job.path_in(&n));
+            (n, id)
+        })
+        .collect()
+}
+
+fn kept_settings(c: &Json, index: bool) -> Json {
+    Json::List(
+        ["exact_shaders", "exact_keywords", "exact_index_skip"]
+            .iter()
+            .map(|k| Json::Str(opt(c, k).to_str()))
+            .chain([Json::Bool(index), Json::Str(super::texmemo::tool_id())])
+            .collect(),
+    )
+}
+
+/// The index a run before this one kept, when it still holds (see above).
+pub fn load_kept(job: &Job, c: &Json, index: bool) -> Option<Kept> {
+    let text = std::fs::read_to_string(job.out.join(KEPT)).ok()?;
+    let j = crate::pyjson::loads(&text).ok()?;
+    if j.get("version")?.as_int()? != KEPT_VERSION
+        || j.get("settings")?.dumps() != kept_settings(c, index).dumps()
+    {
+        return None;
+    }
+    let mut then: HashMap<&str, &str> = HashMap::new();
+    for f in j.get("files")?.as_list()? {
+        let l = f.as_list()?;
+        then.insert(l.first()?.as_str()?, l.get(1)?.as_str()?);
+    }
+    let mut marked: HashSet<&str> = HashSet::new();
+    if let Some(Json::Dict(done)) = job.state.get("done") {
+        for (_, files) in done {
+            marked.extend(
+                files
+                    .as_list()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Json::as_str),
+            );
+        }
+    }
+    let now = fingerprint(job);
+    if now.len() != then.len() {
+        return None;
+    }
+    for (n, id) in &now {
+        let was = then.get(n.as_str())?;
+        if was != id && !marked.contains(n.as_str()) {
+            return None;
+        }
+    }
+    let mut keep = BTreeSet::new();
+    for k in j.get("keep")?.as_list()? {
+        let l = k.as_list()?;
+        keep.insert((
+            super::exacttex::name(l.first()?.as_str()?),
+            i64::try_from(l.get(1)?.as_int()?).ok()?,
+        ));
+    }
+    let why = |k: &str| match j.get(k) {
+        Some(Json::Str(s)) => Some(Some(s.clone())),
+        Some(Json::Null) => Some(None),
+        _ => None,
+    };
+    Some(Kept {
+        keep,
+        plan_err: why("plan_err")?,
+        none: why("none")?,
+    })
+}
+
+/// Keeps what a walk found, with the data files as they were when it began (best effort: without it
+/// the next run walks again).
+pub fn save_kept(job: &Job, c: &Json, index: bool, before: &[(String, String)], k: &Kept) {
+    let why = |w: &Option<String>| w.clone().map_or(Json::Null, Json::Str);
+    let mut d = Json::dict();
+    d.set("version", Json::Int(KEPT_VERSION));
+    d.set("settings", kept_settings(c, index));
+    d.set(
+        "files",
+        Json::List(
+            before
+                .iter()
+                .map(|(n, id)| Json::List(vec![Json::Str(n.clone()), Json::Str(id.clone())]))
+                .collect(),
+        ),
+    );
+    d.set(
+        "keep",
+        Json::List(
+            k.keep
+                .iter()
+                .map(|(f, pid)| Json::List(vec![Json::Str(f.to_string()), Json::Int(*pid as i128)]))
+                .collect(),
+        ),
+    );
+    d.set("plan_err", why(&k.plan_err));
+    d.set("none", why(&k.none));
+    let path = job.out.join(KEPT);
+    let tmp = crate::job::with_suffix(&path, ".tmp");
+    let r = std::fs::File::create(&tmp)
+        .and_then(|mut f| {
+            use std::io::Write as _;
+            f.write_all(d.dumps().as_bytes())?;
+            f.sync_all()
+        })
+        .and_then(|_| std::fs::rename(&tmp, &path));
+    match r {
+        Ok(()) => unityfs::bgwrite::sync_dir(&job.out),
+        Err(_) => {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
 pub fn run(job: &mut Job) -> Result<()> {
     let c = section(&job.cfg, "textures", &super::textures::defaults())?;
     if opt(&c, "exact_index").to_str() != "blue" || opt(&c, "exact_shaders").to_str().is_empty() {
@@ -1086,7 +1264,7 @@ pub fn run(job: &mut Job) -> Result<()> {
         .collect();
     let p = match job.state.get(STATE).and_then(plan_of) {
         Some(p) => p,
-        None => match analyze(job, &c, true).and_then(|(_, r)| r) {
+        None => match plan_or_kept(job, &c) {
             Ok(p) => {
                 for w in &p.why {
                     job.log(&format!("{STEP}: {w}"));

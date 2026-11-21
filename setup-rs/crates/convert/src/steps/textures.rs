@@ -397,6 +397,7 @@ pub(crate) fn defaults() -> Vec<(&'static str, Json)> {
         ("exact_names", Json::Str(String::new())),
         ("exact_index", Json::Str(String::new())),
         ("exact_index_skip", Json::Str(String::new())),
+        ("checkpoint_mb", Json::Int(64)),
     ]
 }
 
@@ -972,6 +973,9 @@ enum Turn {
         size_in: u64,
         est: u64,
         out: Out,
+        /// what it is converted from (texmemo::meta), and whether `out` came from the checkpoint
+        meta: u64,
+        memo: bool,
     },
 }
 
@@ -1027,6 +1031,8 @@ struct Turns<'a> {
     released: u64,
     /// textures `exact_*` left as they are
     exact: u64,
+    /// the file's checkpoint (`checkpoint_mb`): each texture's conversion kept as it is finished
+    memo: Option<&'a mut super::texmemo::Memo>,
 }
 
 impl Turns<'_> {
@@ -1052,6 +1058,8 @@ impl Turns<'_> {
                 size_in,
                 est,
                 out,
+                meta,
+                memo,
             } => {
                 let out = match out {
                     Out::Now(r) => r,
@@ -1088,6 +1096,11 @@ impl Turns<'_> {
                     }
                 }
                 .map_err(|e| texture_error(self.rel, &tex, pid, e))?;
+                if !memo {
+                    if let Some(m) = self.memo.as_deref_mut() {
+                        m.put(pid, meta, &out);
+                    }
+                }
                 if (out.width, out.height) != (tex.width, tex.height) {
                     self.sizes
                         .insert(pid, [tex.width, tex.height, out.width, out.height]);
@@ -1225,6 +1238,7 @@ fn convert_file(
     stream_path: PathBuf,
     fix_refs: bool,
     exact: &Exact,
+    memo: Option<&mut super::texmemo::Memo>,
 ) -> Result<FileResult> {
     let unity = String::from_utf8_lossy(&f.sf.unity_version).into_owned();
     let (vmaj, vmin) = {
@@ -1259,6 +1273,7 @@ fn convert_file(
         converted: 0,
         released: 0,
         exact: 0,
+        memo,
     };
     let textures = f.path_ids("Texture2D");
     let (budget, nworkers) = pool.as_ref().map_or((0, 0), |p| (p.budget, p.codecs.len()));
@@ -1427,6 +1442,26 @@ fn convert_file(
                     None => raw.len() as u64,
                 };
                 let key = format!("{rel}|{pid}");
+                let meta = super::texmemo::meta(&tex, raw.len(), &ch);
+                // (a run that goes on after a stop: the texture as the stopped run converted it, in
+                // its turn, after the turns before it)
+                if let Some(m) = turns.memo.as_deref_mut() {
+                    if let Some(out) = m.take(pid, meta) {
+                        drop(raw);
+                        turns.drain(f, stats).inspect_err(|_| turn_failed = true)?;
+                        return Ok(Some(Turn::Conv {
+                            pid,
+                            t,
+                            tex,
+                            sd,
+                            size_in,
+                            est: 0,
+                            out: Out::Now(Ok(out)),
+                            meta,
+                            memo: true,
+                        }));
+                    }
+                }
                 // a big texture in strips: each strip a worker's (its strips' blocks in order)
                 let n = if nworkers > 0 {
                     enc.strips(&tex, &raw, &ch)
@@ -1475,6 +1510,8 @@ fn convert_file(
                             rxs,
                             template,
                         },
+                        meta,
+                        memo: false,
                     }));
                 }
                 let est = estimate(&tex, &ch, raw.len());
@@ -1490,6 +1527,8 @@ fn convert_file(
                         size_in,
                         est,
                         out: Out::Now(out),
+                        meta,
+                        memo: false,
                     }));
                 }
                 while turns.later > 0
@@ -1521,6 +1560,8 @@ fn convert_file(
                     size_in,
                     est,
                     out: Out::Later(rx),
+                    meta,
+                    memo: false,
                 }))
             })();
             match step {
@@ -1713,7 +1754,38 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     };
     if !opt(&c, "exact_shaders").to_str().is_empty() {
         let index = opt(&c, "exact_index").to_str() == "blue";
-        match super::exactindex::analyze(job, &c, index) {
+        let mut save_kept = None;
+        // (the walk is the same work each time, minutes on a handheld: a run that goes on after a stop
+        // takes what the first one found, kept beside the journal: exactindex.rs "The index kept")
+        let need_plan = index && job.state.get(super::exactindex::STATE).is_none();
+        let kept = super::exactindex::load_kept(job, &c, index)
+            .filter(|k| !need_plan || k.none.is_some() || k.plan_err.is_some());
+        let from_kept = kept.is_some();
+        let found = match kept {
+            Some(k) => match k.none {
+                Some(why) => Err(why),
+                None => Ok((k.keep, k.plan_err.map(Err))),
+            },
+            None => {
+                let before = super::exactindex::fingerprint(job);
+                let r = super::exactindex::analyze(job, &c, index);
+                let kept = match &r {
+                    Err(why) => super::exactindex::Kept {
+                        none: Some(why.clone()),
+                        ..Default::default()
+                    },
+                    Ok((keep, plan)) => super::exactindex::Kept {
+                        keep: keep.clone(),
+                        plan_err: plan.as_ref().err().cloned(),
+                        none: None,
+                    },
+                };
+                // (a plan found is in the journal before the index is kept: below)
+                save_kept = Some((before, kept));
+                r.map(|(keep, plan)| (keep, Some(plan)))
+            }
+        };
+        match found {
             Err(why) => job.log(&format!("textures: exact_shaders: {why}")),
             Ok((keep, plan)) => {
                 let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
@@ -1721,8 +1793,13 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     *by_file.entry(&**f).or_default() += 1;
                 }
                 job.log(&format!(
-                    "textures: exact_shaders: {} textures the palette programs sample, left as they are{}",
+                    "textures: exact_shaders: {} textures the palette programs sample, left as they are{}{}",
                     keep.len(),
+                    if from_kept {
+                        " (the index of the run before)"
+                    } else {
+                        ""
+                    },
                     if by_file.is_empty() {
                         String::new()
                     } else {
@@ -1736,7 +1813,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                         )
                     }
                 ));
-                if index && job.state.get(super::exactindex::STATE).is_none() {
+                if let (true, Some(plan)) = (need_plan, plan) {
                     match plan {
                         Ok(p) => {
                             for w in &p.why {
@@ -1755,7 +1832,24 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                 exact.keys = keep.into_iter().map(|(f, p)| (f.to_string(), p)).collect();
             }
         }
+        if let Some((before, kept)) = save_kept {
+            super::exactindex::save_kept(job, &c, index, &before, &kept);
+        }
     }
+    // (a checkpoint is one file's, made with these settings and tools: texmemo.rs)
+    let checkpoint = match opt(&c, "checkpoint_mb") {
+        Json::Null | Json::Bool(_) => None,
+        v => v.as_f64().filter(|mb| *mb >= 0.0),
+    };
+    let memo_key = format!(
+        "{}\n{}\n{}",
+        c.dumps(),
+        super::texmemo::tool_id(),
+        match opt(&c, "guide").to_str().as_str() {
+            "" => String::new(),
+            g => super::texmemo::file_id(Path::new(g)),
+        }
+    );
     let spill_mb = opt(&c, "spill_mb").as_int().unwrap_or(0).max(0) as u64;
     let inline_streams = opt(&c, "inline_streams").truthy();
     let mut stats = Stats::default();
@@ -1808,6 +1902,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             ..Default::default()
         };
         let (mut done, mut deferred) = (false, false);
+        let mut drop_memo = false;
         match job.open(&src, opts) {
             Err(Error::Unity(e)) if super::shaders::not_one(&src, &e) => {
                 job.log(&format!("textures: {rel}: left as it is ({e})"));
@@ -1878,6 +1973,31 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     f.sf.spill_saved(&work.join("objects.spill"), spill_mb << 20)
                         .map_err(|e| left(&work, e.into(), false))?;
                 }
+                // `checkpoint_mb`: a file with this much to convert keeps each texture's conversion as
+                // it is finished (texmemo.rs), and a run that goes on after a stop takes them from there
+                let mut memo = match checkpoint {
+                    Some(mb) => {
+                        let tex: u64 = f
+                            .sf
+                            .objects
+                            .iter()
+                            .filter(|o| o.class_id == 28)
+                            .map(|o| o.byte_size as u64)
+                            .sum();
+                        let weight = (tex + beside).max(if f.is_bundle { bsize } else { 0 });
+                        if weight as f64 >= mb * 1048576.0 {
+                            let key = format!(
+                                "{rel}\n{}\n{}\n{memo_key}",
+                                super::texmemo::file_id(&src),
+                                String::from_utf8_lossy(&f.sf.unity_version)
+                            );
+                            super::texmemo::Memo::open(job, &key, need)
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                };
                 let mut streams = Streams {
                     job,
                     rel,
@@ -1898,9 +2018,20 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                     work.join("stream.new"),
                     true,
                     &exact,
+                    memo.as_mut(),
                 )
                 .map_err(|e| left(&work, e, true))?;
                 drop(streams);
+                let had_memo = memo.is_some();
+                if let Some(m) = memo.take() {
+                    if m.taken > 0 {
+                        job.log(&format!(
+                            "textures: {rel}: {} textures ({} MB) as the stopped run converted them (checkpoint_mb)",
+                            m.taken,
+                            m.taken_bytes >> 20
+                        ));
+                    }
+                }
                 if let Some((stream_name, new_stream, sizes, order)) = r {
                     let node = stream_name
                         .as_deref()
@@ -1956,8 +2087,11 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                                 sc.set(rel, map);
                             }
                         }
+                        drop_memo = had_memo;
                     }
                     done = true;
+                } else if had_memo {
+                    drop_memo = true;
                 }
             }
         }
@@ -1968,6 +2102,11 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             job.mark_done("textures", rel)?;
         } else {
             job.mark_unchanged("textures", rel)?;
+        }
+        if drop_memo {
+            // (its file is in place and marked, or was left as it is: a bundle's checkpoint stays until
+            // the next one or the step's end, its batch may not be in place yet)
+            super::texmemo::remove(job);
         }
         if done {
             job.log(&format!(
@@ -1980,6 +2119,7 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     }
     // (the last batch of deferred files in place before the step's summary)
     job.commit_deferred()?;
+    super::texmemo::remove(job);
     job.end_work(&work);
     job.log(&format!(
         "textures: {} converted ({} -> {} MB), {} atlas entries and {} sprites follow their scaled textures",
@@ -2083,6 +2223,7 @@ fn convert_bundle_files(
             work.join(format!("stream{k}.new")),
             false,
             exact,
+            None,
         )
         .map_err(|e| left(work, e, false))?;
         results.push(r);

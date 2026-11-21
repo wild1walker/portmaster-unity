@@ -16,4 +16,6 @@ video = { path = "../video" }
 serde_json = "1"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
 # statvfs for the free-space check (need_space), without unsafe code here
+# the checksums of the textures step's checkpoint (texmemo.rs)
+crc32fast = "1"
 rustix = { version = "1", default-features = false, features = ["std", "fs"] }

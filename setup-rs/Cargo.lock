@@ -117,6 +117,7 @@ name = "convert"
 version = "0.1.0"
 dependencies = [
  "androiddata",
+ "crc32fast",
  "regex",
  "rustix",
  "serde_json",

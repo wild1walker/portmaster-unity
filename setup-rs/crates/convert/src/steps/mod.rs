@@ -15,6 +15,7 @@ pub mod lazy;
 pub mod metal;
 pub mod quality;
 pub mod settings;
+pub mod texmemo;
 pub mod shaders;
 pub mod textures;
 pub mod video;

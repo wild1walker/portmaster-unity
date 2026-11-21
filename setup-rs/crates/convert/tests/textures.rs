@@ -434,148 +434,10 @@ fn textures_exact_shaders() {
         eprintln!("PMU_TPK not set: skipped");
         return;
     };
-    use madeup::{element, object, pptr, set, tree};
     let dir = temp("exact");
     let data = dir.join("Data");
-    std::fs::create_dir_all(&data).unwrap();
-    let o = |class_id, path_id, value| Obj {
-        class_id,
-        path_id,
-        value,
-    };
-    // 8x8 RGBA32: blue = an index (2 + the texel's number), alpha 0 or 255, red and green anything
-    let pal_px: Vec<u8> = (0..64u32)
-        .flat_map(|i| {
-            [
-                (i * 7) as u8,
-                (i * 3) as u8,
-                2 + i as u8,
-                if i % 5 == 0 { 0 } else { 255 },
-            ]
-        })
-        .collect();
-    let tex = |name: &str, px: &[u8]| madeup::texture(&db, name, (8, 8), 4, px, None);
-    let material = |shader_pid: i64, kw: &str| {
-        let mut v = object(&db, 21);
-        set(&mut v, &["m_Shader"], pptr(0, shader_pid));
-        set(&mut v, &["m_ShaderKeywords"], Value::str(kw));
-        v
-    };
-    let renderer = |go: i64, mat: i64, sprite: i64| {
-        let mut v = object(&db, 212);
-        set(&mut v, &["m_GameObject"], pptr(0, go));
-        set(&mut v, &["m_Materials"], Value::Array(vec![pptr(0, mat)]));
-        set(&mut v, &["m_Sprite"], pptr(0, sprite));
-        v
-    };
-    let gt = tree(&db, 1);
-    let game_object = |name: &str, comps: &[i64]| {
-        let mut v = object(&db, 1);
-        set(&mut v, &["m_Name"], Value::str(name));
-        let list = comps
-            .iter()
-            .map(|&c| {
-                let mut e = element(&gt, &["m_Component"]);
-                e.set("component", pptr(0, c)).unwrap();
-                e
-            })
-            .collect();
-        set(&mut v, &["m_Component"], Value::Array(list));
-        v
-    };
-    let transform = |go: i64, father: i64, children: &[i64]| {
-        let mut v = object(&db, 4);
-        set(&mut v, &["m_GameObject"], pptr(0, go));
-        set(&mut v, &["m_Father"], pptr(0, father));
-        set(
-            &mut v,
-            &["m_Children"],
-            Value::Array(children.iter().map(|&c| pptr(0, c)).collect()),
-        );
-        v
-    };
-    let mut animator = object(&db, 95);
-    set(&mut animator, &["m_Controller"], pptr(1, 2));
-    // the parent (GameObject 30: Transform 31, Animator 32) and the child "Body" drawn with the palette
-    // material (GameObject 40: Transform 41, SpriteRenderer 42 with sprite 51 of texture 61); sprite 52
-    // (texture 62) only in the parent's clip, on "Body"; sprite 53 (texture 63) on a renderer of the
-    // same shader without PALETTE_ON; texture 64 by name; texture 65 nobody's
-    let objs = vec![
-        o(
-            48,
-            10,
-            madeup::palette_shader(&db, "Maikel/MaikelSpriteMasterShader"),
-        ),
-        o(21, 20, material(10, "ETC1_EXTERNAL_ALPHA PALETTE_ON")),
-        o(21, 21, material(10, "ETC1_EXTERNAL_ALPHA")),
-        o(1, 30, game_object("Penitent", &[31, 32])),
-        o(4, 31, transform(30, 0, &[41])),
-        o(95, 32, animator),
-        o(1, 40, game_object("Body", &[41, 42])),
-        o(4, 41, transform(40, 31, &[])),
-        o(212, 42, renderer(40, 20, 51)),
-        o(1, 43, game_object("Prop", &[44, 45])),
-        o(4, 44, transform(43, 0, &[])),
-        o(212, 45, renderer(43, 21, 53)),
-        o(213, 51, madeup::sprite(&db, "body", 61)),
-        o(213, 52, madeup::sprite(&db, "attack", 62)),
-        o(213, 53, madeup::sprite(&db, "prop", 63)),
-        o(28, 61, tex("penitent_body", &pal_px)),
-        o(28, 62, tex("penitent_attack", &pal_px)),
-        o(28, 63, tex("prop", &[9u8; 256])),
-        o(28, 64, tex("byhand_lut", &[9u8; 256])),
-        o(28, 65, tex("other", &[9u8; 256])),
-    ];
-    std::fs::write(
-        data.join("sharedassets0.assets"),
-        madeup::serialized(&db, &objs, &["sharedassets1.assets"], false),
-    )
-    .unwrap();
-    let ct = tree(&db, 74);
-    let mut clip = madeup::animation_clip(&db, "attack", &[], 0);
-    let mut b = element(&ct, &["m_ClipBindingConstant", "genericBindings"]);
-    b.set(
-        "path",
-        Value::U32(convert::steps::exactindex::crc32(b"Body")),
-    )
-    .unwrap();
-    b.set("typeID", Value::I32(212)).unwrap();
-    b.set("isPPtrCurve", Value::U8(1)).unwrap();
-    set(
-        &mut clip,
-        &["m_ClipBindingConstant", "genericBindings"],
-        Value::Array(vec![b]),
-    );
-    set(
-        &mut clip,
-        &["m_ClipBindingConstant", "pptrCurveMapping"],
-        Value::Array(vec![pptr(1, 51), pptr(1, 52)]),
-    );
-    let mut ctrl = object(&db, 91);
-    set(
-        &mut ctrl,
-        &["m_AnimationClips"],
-        Value::Array(vec![pptr(0, 3)]),
-    );
-    std::fs::write(
-        data.join("sharedassets1.assets"),
-        madeup::serialized(
-            &db,
-            &[o(91, 2, ctrl), o(74, 3, clip)],
-            &["sharedassets0.assets"],
-            false,
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        data.join("globalgamemanagers"),
-        madeup::serialized(&db, &[o(141, 1, madeup::build_settings(&db))], &[], false),
-    )
-    .unwrap();
-    let cfg = pyjson::loads(
-        r#"{"version": 1, "textures": {"inline": true, "exact_shaders": "^Maikel/MaikelSpriteMasterShader", "exact_keywords": "PALETTE_ON", "exact_names": "_lut$", "exact_index": "blue", "files": "^[^/]*\\.assets$"}}"#,
-    )
-    .unwrap();
+    let pal_px = exact_game(&db, &data);
+    let cfg = pyjson::loads(EXACT_CFG).unwrap();
     let mut job = Job::new(&data, &data, cfg).unwrap();
     let fake = Fake {
         seen: Vec::new(),
@@ -633,4 +495,564 @@ fn textures_exact_shaders() {
     assert!(codes
         .iter()
         .any(|c| !c.contains("u_xlat0.z == 0.0") && !c.contains(".wxyz")));
+}
+
+const EXACT_CFG: &str = r#"{"version": 1, "textures": {"inline": true, "exact_shaders": "^Maikel/MaikelSpriteMasterShader", "exact_keywords": "PALETTE_ON", "exact_names": "_lut$", "exact_index": "blue", "files": "^[^/]*\\.assets$"}}"#;
+
+/// The made-up palette game of textures_exact_shaders in `data` (made anew); the palette textures' pixels.
+fn exact_game(db: &std::sync::Arc<unityfs::ClassDb>, data: &std::path::Path) -> Vec<u8> {
+    use madeup::{element, object, pptr, set, tree};
+    let _ = std::fs::remove_dir_all(data);
+    std::fs::create_dir_all(data).unwrap();
+    let o = |class_id, path_id, value| Obj {
+        class_id,
+        path_id,
+        value,
+    };
+    // 8x8 RGBA32: blue = an index (2 + the texel's number), alpha 0 or 255, red and green anything
+    let pal_px: Vec<u8> = (0..64u32)
+        .flat_map(|i| {
+            [
+                (i * 7) as u8,
+                (i * 3) as u8,
+                2 + i as u8,
+                if i % 5 == 0 { 0 } else { 255 },
+            ]
+        })
+        .collect();
+    let tex = |name: &str, px: &[u8]| madeup::texture(db, name, (8, 8), 4, px, None);
+    let material = |shader_pid: i64, kw: &str| {
+        let mut v = object(db, 21);
+        set(&mut v, &["m_Shader"], pptr(0, shader_pid));
+        set(&mut v, &["m_ShaderKeywords"], Value::str(kw));
+        v
+    };
+    let renderer = |go: i64, mat: i64, sprite: i64| {
+        let mut v = object(db, 212);
+        set(&mut v, &["m_GameObject"], pptr(0, go));
+        set(&mut v, &["m_Materials"], Value::Array(vec![pptr(0, mat)]));
+        set(&mut v, &["m_Sprite"], pptr(0, sprite));
+        v
+    };
+    let gt = tree(db, 1);
+    let game_object = |name: &str, comps: &[i64]| {
+        let mut v = object(db, 1);
+        set(&mut v, &["m_Name"], Value::str(name));
+        let list = comps
+            .iter()
+            .map(|&c| {
+                let mut e = element(&gt, &["m_Component"]);
+                e.set("component", pptr(0, c)).unwrap();
+                e
+            })
+            .collect();
+        set(&mut v, &["m_Component"], Value::Array(list));
+        v
+    };
+    let transform = |go: i64, father: i64, children: &[i64]| {
+        let mut v = object(db, 4);
+        set(&mut v, &["m_GameObject"], pptr(0, go));
+        set(&mut v, &["m_Father"], pptr(0, father));
+        set(
+            &mut v,
+            &["m_Children"],
+            Value::Array(children.iter().map(|&c| pptr(0, c)).collect()),
+        );
+        v
+    };
+    let mut animator = object(db, 95);
+    set(&mut animator, &["m_Controller"], pptr(1, 2));
+    // the parent (GameObject 30: Transform 31, Animator 32) and the child "Body" drawn with the palette
+    // material (GameObject 40: Transform 41, SpriteRenderer 42 with sprite 51 of texture 61); sprite 52
+    // (texture 62) only in the parent's clip, on "Body"; sprite 53 (texture 63) on a renderer of the
+    // same shader without PALETTE_ON; texture 64 by name; texture 65 nobody's
+    let objs = vec![
+        o(
+            48,
+            10,
+            madeup::palette_shader(db, "Maikel/MaikelSpriteMasterShader"),
+        ),
+        o(21, 20, material(10, "ETC1_EXTERNAL_ALPHA PALETTE_ON")),
+        o(21, 21, material(10, "ETC1_EXTERNAL_ALPHA")),
+        o(1, 30, game_object("Penitent", &[31, 32])),
+        o(4, 31, transform(30, 0, &[41])),
+        o(95, 32, animator),
+        o(1, 40, game_object("Body", &[41, 42])),
+        o(4, 41, transform(40, 31, &[])),
+        o(212, 42, renderer(40, 20, 51)),
+        o(1, 43, game_object("Prop", &[44, 45])),
+        o(4, 44, transform(43, 0, &[])),
+        o(212, 45, renderer(43, 21, 53)),
+        o(213, 51, madeup::sprite(db, "body", 61)),
+        o(213, 52, madeup::sprite(db, "attack", 62)),
+        o(213, 53, madeup::sprite(db, "prop", 63)),
+        o(28, 61, tex("penitent_body", &pal_px)),
+        o(28, 62, tex("penitent_attack", &pal_px)),
+        o(28, 63, tex("prop", &[9u8; 256])),
+        o(28, 64, tex("byhand_lut", &[9u8; 256])),
+        o(28, 65, tex("other", &[9u8; 256])),
+    ];
+    std::fs::write(
+        data.join("sharedassets0.assets"),
+        madeup::serialized(db, &objs, &["sharedassets1.assets"], false),
+    )
+    .unwrap();
+    let ct = tree(db, 74);
+    let mut clip = madeup::animation_clip(db, "attack", &[], 0);
+    let mut b = element(&ct, &["m_ClipBindingConstant", "genericBindings"]);
+    b.set(
+        "path",
+        Value::U32(convert::steps::exactindex::crc32(b"Body")),
+    )
+    .unwrap();
+    b.set("typeID", Value::I32(212)).unwrap();
+    b.set("isPPtrCurve", Value::U8(1)).unwrap();
+    set(
+        &mut clip,
+        &["m_ClipBindingConstant", "genericBindings"],
+        Value::Array(vec![b]),
+    );
+    set(
+        &mut clip,
+        &["m_ClipBindingConstant", "pptrCurveMapping"],
+        Value::Array(vec![pptr(1, 51), pptr(1, 52)]),
+    );
+    let mut ctrl = object(db, 91);
+    set(
+        &mut ctrl,
+        &["m_AnimationClips"],
+        Value::Array(vec![pptr(0, 3)]),
+    );
+    std::fs::write(
+        data.join("sharedassets1.assets"),
+        madeup::serialized(
+            db,
+            &[o(91, 2, ctrl), o(74, 3, clip)],
+            &["sharedassets0.assets"],
+            false,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        data.join("globalgamemanagers"),
+        madeup::serialized(db, &[o(141, 1, madeup::build_settings(db))], &[], false),
+    )
+    .unwrap();
+    pal_px
+}
+
+// ---- a setup that is stopped and goes on (the index kept, a big file's checkpoint)
+
+/// A codec whose blocks follow the texture's data, counting its conversions, and failing at the
+/// `stop_at`th (a setup stopped there: nothing after it is converted, written or marked).
+struct Stopping {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    stop_at: Option<usize>,
+    workers: bool,
+}
+
+impl Stopping {
+    fn new(
+        stop_at: Option<usize>,
+        workers: bool,
+    ) -> (
+        Box<Stopping>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (
+            Box::new(Stopping {
+                calls: calls.clone(),
+                stop_at,
+                workers,
+            }),
+            calls,
+        )
+    }
+}
+
+impl Codec for Stopping {
+    fn choose(&self, t: &Tex) -> Option<Choice> {
+        Fake {
+            seen: Vec::new(),
+            workers: false,
+        }
+        .choose(t)
+    }
+
+    fn convert(
+        &mut self,
+        t: &Tex,
+        raw: &[u8],
+        ch: &Choice,
+        _key: &str,
+        _unity: Option<&str>,
+    ) -> Result<Converted> {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.stop_at == Some(n) {
+            return Err(convert::Error::Value("stopped (the test's)".into()));
+        }
+        let len = ch.width.div_ceil(4) * ch.height.div_ceil(4) * 16;
+        Ok(Converted {
+            format: 54,
+            width: ch.width,
+            height: ch.height,
+            mip_count: 1,
+            data: (0..len)
+                .map(|i| raw[i % raw.len()] ^ (i / raw.len()) as u8 ^ t.name.len() as u8)
+                .collect(),
+        })
+    }
+
+    fn summary(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn worker(&self) -> Option<Box<dyn Codec + Send>> {
+        self.workers.then(|| {
+            Box::new(Stopping {
+                calls: self.calls.clone(),
+                stop_at: self.stop_at,
+                workers: false,
+            }) as Box<dyn Codec + Send>
+        })
+    }
+}
+
+/// Every file under `dir` but the kept index and the checkpoint (the journal included), by its path.
+fn snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn rec(
+        d: &std::path::Path,
+        base: &std::path::Path,
+        out: &mut std::collections::BTreeMap<String, Vec<u8>>,
+    ) {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                rec(&p, base, out);
+            } else {
+                let rel = p.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+                if rel != ".pmunity-exact.json" {
+                    out.insert(rel, std::fs::read(&p).unwrap());
+                }
+            }
+        }
+    }
+    let mut out = Default::default();
+    rec(dir, dir, &mut out);
+    out
+}
+
+/// A plain file with eight textures to convert (five streamed, one of them scaled with a sprite on
+/// it, three inline) and a readable one copied along; with `bundle`, a bundle with three more.
+fn checkpoint_game(db: &std::sync::Arc<unityfs::ClassDb>, data: &std::path::Path, bundle: bool) {
+    let _ = std::fs::remove_dir_all(data);
+    std::fs::create_dir_all(data.join("StreamingAssets/AssetBundles")).unwrap();
+    let o = |class_id, path_id, value| Obj {
+        class_id,
+        path_id,
+        value,
+    };
+    let stream = madeup::noise(7, 6 * 1024);
+    let res = "resources.assets.resS";
+    let streamed = |name: &str, size: (i32, i32), format: i32, k: u32| {
+        madeup::texture(db, name, size, format, &[], Some((k * 1024, 1024, res)))
+    };
+    let mut readable = streamed("readable", (16, 16), 4, 2);
+    readable.set("m_IsReadable", Value::Bool(true)).unwrap();
+    let file = madeup::serialized(
+        db,
+        &[
+            o(28, 1, streamed("big_sheet", (64, 32), 12, 0)),
+            o(28, 2, streamed("tiles", (32, 32), 12, 1)),
+            o(28, 3, readable),
+            o(
+                28,
+                4,
+                madeup::texture(db, "inline_a", (8, 8), 4, &madeup::noise(1, 256), None),
+            ),
+            o(28, 5, streamed("icons", (32, 32), 12, 3)),
+            o(
+                28,
+                6,
+                madeup::texture(db, "inline_b", (8, 8), 4, &madeup::noise(2, 256), None),
+            ),
+            o(28, 7, streamed("big_walls", (64, 32), 12, 4)),
+            o(
+                28,
+                8,
+                madeup::texture(db, "inline_c", (8, 8), 4, &madeup::noise(3, 256), None),
+            ),
+            o(28, 9, streamed("font", (32, 32), 12, 5)),
+            o(213, 10, madeup::sprite(db, "sheet_sprite", 1)),
+        ],
+        &[],
+        true,
+    );
+    std::fs::write(data.join("resources.assets"), &file).unwrap();
+    std::fs::write(data.join(res), &stream).unwrap();
+    if bundle {
+        let cab = "CAB-00112233445566778899aabbccddeeff";
+        let path = format!("archive:/{cab}/{cab}.resS");
+        let tex = |name: &str, k: u32| {
+            madeup::texture(db, name, (32, 32), 12, &[], Some((k * 1024, 1024, &path)))
+        };
+        let bf = madeup::serialized(
+            db,
+            &[
+                o(28, 1, tex("big_one", 0)),
+                o(28, 2, tex("two", 1)),
+                o(28, 3, tex("three", 2)),
+            ],
+            &[],
+            true,
+        );
+        std::fs::write(
+            data.join("StreamingAssets/AssetBundles/atlas_tiles"),
+            madeup::bundle(
+                &[
+                    (cab, 4, bf),
+                    (&format!("{cab}.resS"), 0, madeup::noise(9, 3 * 1024)),
+                ],
+                1 << 12,
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        data.join("globalgamemanagers"),
+        madeup::serialized(db, &[o(141, 1, madeup::build_settings(db))], &[], false),
+    )
+    .unwrap();
+}
+
+fn checkpoint_cfg(more: &str) -> Json {
+    pyjson::loads(&format!(
+        r#"{{"version": 1, "textures": {{"inline": true, "inline_streams": true, "checkpoint_mb": 0{more},
+            "files": "^StreamingAssets/AssetBundles/(atlas_|tex_)|^[^/]*\\.assets$"}}}}"#
+    ))
+    .unwrap()
+}
+
+/// `checkpoint_mb`: a run stopped at any texture of a file, then run again, writes the files and the
+/// journal an uninterrupted run writes, and converts again only the textures the stopped run had not
+/// finished; a checkpoint whose tail never reached the card, one with a damaged record and one made
+/// with other settings cost a texture, or the file, again, never a different file.
+#[test]
+fn textures_stopped_inside_a_file() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = temp("checkpoint");
+    let data = dir.join("Data");
+    let memo = data.join(".pmunity-texmemo");
+    let run = |cfg: Json, stop_at: Option<usize>, workers: bool| {
+        let mut job = Job::new(&data, &data, cfg).unwrap();
+        let (codec, calls) = Stopping::new(stop_at, workers);
+        let r = textures::run_with(&mut job, &Args::default(), codec);
+        (r, calls.load(SeqCst))
+    };
+    // the plain file alone: 8 textures to convert
+    checkpoint_game(&db, &data, false);
+    let (r, calls) = run(checkpoint_cfg(""), None, false);
+    r.unwrap();
+    assert_eq!(calls, 8);
+    let straight = snapshot(&data);
+    assert!(!memo.exists() && !data.join(".pmunity-work").exists());
+    // (the checkpoint changes nothing of an uninterrupted run)
+    checkpoint_game(&db, &data, false);
+    run(checkpoint_cfg(r#", "checkpoint_mb": null"#), None, false)
+        .0
+        .unwrap();
+    let mut off = snapshot(&data);
+    off.remove(".pmunity.json");
+    let mut on = straight.clone();
+    on.remove(".pmunity.json");
+    assert!(on == off, "the files with and without a checkpoint");
+    for stop in 0..8 {
+        checkpoint_game(&db, &data, false);
+        let (r, _) = run(checkpoint_cfg(""), Some(stop), false);
+        assert!(r.is_err(), "stopped at {stop}");
+        assert!(memo.exists());
+        let (r, calls) = run(checkpoint_cfg(""), None, false);
+        r.unwrap();
+        assert_eq!(
+            calls,
+            8 - stop,
+            "stopped at {stop}: the textures converted again"
+        );
+        assert!(
+            snapshot(&data) == straight,
+            "stopped at {stop}: the files and the journal"
+        );
+        assert!(!memo.exists() && !data.join(".pmunity-work").exists());
+    }
+    // stopped twice
+    checkpoint_game(&db, &data, false);
+    assert!(run(checkpoint_cfg(""), Some(3), false).0.is_err());
+    let (r, calls) = run(checkpoint_cfg(""), Some(2), false);
+    assert!(r.is_err());
+    assert_eq!(calls, 3);
+    let (r, calls) = run(checkpoint_cfg(""), None, false);
+    r.unwrap();
+    assert_eq!(calls, 3);
+    assert!(snapshot(&data) == straight, "stopped twice");
+    // a tail that never reached the card whole, and the last record's blocks damaged
+    checkpoint_game(&db, &data, false);
+    assert!(run(checkpoint_cfg(""), Some(5), false).0.is_err());
+    let mut m = std::fs::read(&memo).unwrap();
+    *m.last_mut().unwrap() ^= 0x55;
+    m.extend(madeup::noise(4, 70));
+    std::fs::write(&memo, &m).unwrap();
+    let (r, calls) = run(checkpoint_cfg(""), None, false);
+    r.unwrap();
+    assert_eq!(calls, 4, "the damaged record's texture converted again");
+    assert!(snapshot(&data) == straight, "a damaged checkpoint");
+    // a checkpoint cut inside a record
+    checkpoint_game(&db, &data, false);
+    assert!(run(checkpoint_cfg(""), Some(5), false).0.is_err());
+    let m = std::fs::read(&memo).unwrap();
+    std::fs::write(&memo, &m[..m.len() - 9]).unwrap();
+    let (r, calls) = run(checkpoint_cfg(""), None, false);
+    r.unwrap();
+    assert_eq!(calls, 4);
+    assert!(snapshot(&data) == straight, "a cut checkpoint");
+    // other settings: the checkpoint is not used
+    checkpoint_game(&db, &data, false);
+    assert!(run(checkpoint_cfg(""), Some(5), false).0.is_err());
+    let (r, calls) = run(checkpoint_cfg(r#", "quality": "fast""#), None, false);
+    r.unwrap();
+    assert_eq!(calls, 8, "a checkpoint made with other settings");
+    let mut other = snapshot(&data);
+    other.remove(".pmunity.json");
+    assert!(on == other);
+    // with a bundle, and with workers (several textures at once): the same files wherever it stops
+    for workers in [false, true] {
+        checkpoint_game(&db, &data, true);
+        let (r, calls) = run(checkpoint_cfg(""), None, workers);
+        r.unwrap();
+        assert_eq!(calls, 11);
+        let straight = snapshot(&data);
+        for stop in 0..11 {
+            checkpoint_game(&db, &data, true);
+            let (r, _) = run(checkpoint_cfg(""), Some(stop), workers);
+            assert!(r.is_err(), "stopped at {stop}");
+            let (r, calls) = run(checkpoint_cfg(""), None, workers);
+            r.unwrap();
+            assert!(calls <= 11);
+            assert!(
+                snapshot(&data) == straight,
+                "with a bundle, workers {workers}, stopped at {stop}"
+            );
+            assert!(!memo.exists() && !data.join(".pmunity-work").exists());
+        }
+    }
+}
+
+/// The exact_shaders index kept across a stop (`.pmunity-exact.json`): the run that goes on reads it
+/// instead of walking the data again, writes what an uninterrupted run writes, and walks again when a
+/// file the journal does not vouch for, the settings or the tools changed.
+#[test]
+fn textures_exact_index_kept() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    use convert::steps::exactindex;
+    let dir = temp("exactkept");
+    let data = dir.join("Data");
+    let kept = data.join(".pmunity-exact.json");
+    let cfg = || pyjson::loads(EXACT_CFG).unwrap();
+    // (the settings as the step reads them)
+    let c = |keywords: &str| {
+        pyjson::loads(&format!(
+            r#"{{"exact_shaders": "^Maikel/MaikelSpriteMasterShader", "exact_keywords": "{keywords}", "exact_index_skip": ""}}"#
+        ))
+        .unwrap()
+    };
+    let all = |job: &mut Job, stop_at: Option<usize>| -> Result<usize> {
+        let (codec, calls) = Stopping::new(stop_at, false);
+        textures::run_with(job, &Args::default(), codec)?;
+        exactindex::run(job)?;
+        Ok(calls.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    exact_game(&db, &data);
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(exactindex::load_kept(&job, &c("PALETTE_ON"), true).is_none());
+    assert_eq!(all(&mut job, None).unwrap(), 2);
+    drop(job);
+    let straight = snapshot(&data);
+    // (after the whole run: every file that changed is marked, the index still holds)
+    let job = Job::new(&data, &data, cfg()).unwrap();
+    let k = exactindex::load_kept(&job, &c("PALETTE_ON"), true).unwrap();
+    let keys: Vec<(String, i64)> = k.keep.iter().map(|(f, p)| (f.to_string(), *p)).collect();
+    assert_eq!(
+        keys,
+        [
+            ("sharedassets0.assets".to_string(), 61),
+            ("sharedassets0.assets".to_string(), 62)
+        ]
+    );
+    assert_eq!((&k.plan_err, &k.none), (&None, &None));
+    drop(job);
+
+    // stopped at the first texture, then run again: the kept index, the same files and journal
+    exact_game(&db, &data);
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(all(&mut job, Some(0)).is_err());
+    drop(job);
+    assert!(kept.exists());
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(
+        job.state.get("exactindex").is_some(),
+        "the plan is in the journal"
+    );
+    assert_eq!(
+        exactindex::load_kept(&job, &c("PALETTE_ON"), true),
+        Some(k.clone())
+    );
+    // (other settings, without the index step's plan: not this index)
+    assert!(exactindex::load_kept(&job, &c("PALETTE_ON OTHER"), true).is_none());
+    assert!(exactindex::load_kept(&job, &c("PALETTE_ON"), false).is_none());
+    assert_eq!(all(&mut job, None).unwrap(), 2);
+    drop(job);
+    assert!(snapshot(&data) == straight, "stopped and run again");
+
+    // the run that goes on reads the kept index, it does not walk: with texture 62 taken out of the kept
+    // file, it converts 62 (a walk would have kept it)
+    exact_game(&db, &data);
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(all(&mut job, Some(0)).is_err());
+    drop(job);
+    let text = std::fs::read_to_string(&kept).unwrap();
+    let cut = text.replace(r#", ["sharedassets0.assets", 62]"#, "");
+    assert_ne!(text, cut);
+    std::fs::write(&kept, cut).unwrap();
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    let (codec, calls) = Stopping::new(None, false);
+    textures::run_with(&mut job, &Args::default(), codec).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    drop(job);
+
+    // a data file changed that no step has marked: the index no longer holds, the run walks again
+    exact_game(&db, &data);
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(all(&mut job, Some(0)).is_err());
+    drop(job);
+    let p = data.join("sharedassets1.assets");
+    let mut b = std::fs::read(&p).unwrap();
+    b.extend([0u8; 16]);
+    std::fs::write(&p, b).unwrap();
+    let mut job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(exactindex::load_kept(&job, &c("PALETTE_ON"), true).is_none());
+    assert_eq!(all(&mut job, None).unwrap(), 2);
+    // (and keeps the new index)
+    assert_eq!(exactindex::load_kept(&job, &c("PALETTE_ON"), true), Some(k));
+    drop(job);
+    // a damaged kept file: as none
+    std::fs::write(&kept, "{\"version\": 1, \"sett").unwrap();
+    let job = Job::new(&data, &data, cfg()).unwrap();
+    assert!(exactindex::load_kept(&job, &c("PALETTE_ON"), true).is_none());
 }

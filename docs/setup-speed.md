@@ -240,23 +240,93 @@ about 56 min of the setup; fastest 2.4 dB.
 - **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
   conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
 
-## A setup stopped often makes no progress (2026-11-21, open)
+## A setup stopped often now goes on (2026-11-21)
 Found running Blasphemous's 64-bit setup on the RG34XX-SP (Knulli) in devlock holds of 9 minutes, each
 stopped and resumed (the setup's step marks and the convert's journal are meant for that):
-- each resume of the textures step rebuilds the `exact_shaders` index before it converts a file: 162 s
+- each resume of the textures step rebuilt the `exact_shaders` index before it converted a file: 162 s
   and 154 s in two resumes (the 109 textures the palette programs sample), the same work each time;
-- the journal moves on per finished file only, and the next file there is `resources.assets` (972
+- the journal moves on per finished file only, and the next file there was `resources.assets` (972
   textures, the bulk of the game's): the 377 s left of a hold never finished it, so the stop threw its
   work away;
 - after four holds (the unpack, then three of the textures step) the step stood at 2 of 3945 files.
-A player whose handheld sleeps or whose battery runs out every few minutes would see the same. Not
-fixed yet: keep the index across a resume (the journal's own file, keyed by the data's files), and a
-mark inside a big file (its textures done so far) so a stop loses less than the file. One hold of
-70 minutes (4170 s) then set it up: the textures step from its index to 3945 of 3945 in about 25
+A player whose handheld sleeps or whose battery runs out every few minutes would have seen the same.
+One hold of 70 minutes (4170 s) then set it up: the textures step from its index to 3945 of 3945 in about 25
 minutes (`resources.assets` among the first), exactindex and fmodcatalogs 2 minutes, the video step's
 15 clips halved to 960x540 in 28 minutes, the FMOD banks 1 minute, packing 12.6 minutes; 3237 MB
 installed. The four short holds before it (unpacking the game's data.unity3d took two of them) cost
 about 36 minutes, of which the three in the textures step bought nothing.
+
+Fixed in pmu (setup-rs `crates/convert/src/steps/exactindex.rs`, "The index kept", and `texmemo.rs`). Two
+dot files beside the journal, both best effort (without one the run does that work again, as before),
+neither listed by a step nor packed:
+- **The index is kept** (`<data>/.pmunity-exact.json`, written through a .tmp file, synced and renamed as
+  the journal is): what the walk found (the textures left as they are; why there is no `exact_index` plan
+  or no such shader, so the exactindex step does not walk again either; a plan found is in the journal
+  already). A run that goes on reads it instead of walking. It holds only while nothing it was made from
+  has changed: the settings the walk reads (`exact_shaders`, `exact_keywords`, `exact_index`,
+  `exact_index_skip`), the program (pmu's size and time: another build walks again), and the data files:
+  the same names, each with the size and time it had when the walk began, or named in the journal as done
+  by a step (the conversion's own change). A file that changed and that no step has marked (other game
+  files; a file put in place a moment before the stop and not yet marked) makes the run walk again and
+  keep the new index; so does a damaged or missing file.
+- **A big file's textures are kept as they are finished** (`textures.checkpoint_mb`, default 64: a file,
+  or a bundle with one serialized file, with at least that many MB of textures; `null`: none):
+  `<data>/.pmunity-texmemo`, one record a converted texture (path id, a hash of what it was converted from,
+  the new format and size, the blocks, checksums of the record's head and of the blocks), appended on a
+  thread as the textures are finished and synced every 4 MB. The journal still marks whole files: the run
+  that goes on reads the file from its start, and where the encoder would be called it takes the texture
+  from the checkpoint, in the same order, so the stream, the objects and the file come out as an
+  uninterrupted run writes them. Its key names the data file (path, size, time), the step's settings as
+  used (after `lowmem_*`), the program and the ASTC guide: anything else and the file starts empty. The
+  records count up to the first whose head does not check (a tail that never reached the card), a record
+  whose blocks do not check is encoded again, and what a stop can lose is the last 4 MB of blocks not yet
+  synced and the writer's 1 MB (about 20 MB of RGBA32). It never takes room the conversion needs (the free
+  space is looked at every 16 MB; a card with less than the file's own need left ends the checkpoint and
+  removes the file, as does any error writing it), and it is removed when its file is in place and
+  marked (a bundle's with the next checkpoint or at the step's end, its batch may not be in place yet).
+  Scene bundles (several serialized files) have none: each of them is seconds.
+
+Is one file really minutes? Yes: `resources.assets` holds 2119 of the game's 5280 MB of textures (more
+than 377 s on the RG34XX-SP; 135 - 173 s in the container below), and 9 of Blasphemous's 3943 files have 64 MB
+or more (3736 MB together, 969 MB of blocks).
+
+Measured on a Mac (the arm64 Linux container with 4 cores; Blasphemous's unpacked data, 3943 files, read
+over a bind mount; the textures step alone, into a second folder; a release build of pmu), the conversion
+killed with SIGKILL:
+
+| | before | after |
+|---|---|---|
+| the index, a first run | the walk: 76.7, 79.6 and 101.7 s (three runs) | the same walk, then kept (200 KB) |
+| the index, a run that goes on | the walk again | 0.7 - 1.1 s (eight such runs) |
+| killed after 227 s (1988 files done), again 122 s into the next run (3232), then to the end | 77 s or more of walk before each run's first file | each run's first file converted 2.2 s after its start; done 52 s into the third |
+| killed 45 s into `resources.assets`, again 40 s into the next run, then to the end | each run starts the file again: the two stops buy nothing, and a stop every 45 s never gets past the file (it needs 135 - 173 s there) | the checkpoint held 186 MB of blocks at the first kill and 299 MB at the second; the third run took 424 textures (285 MB) from it and had the file done (533 MB) 118 s after its start |
+| `resources.assets` alone, not stopped (the index kept) | 101.7 and 112.0 s (`checkpoint_mb = null`) | 115.1 and 116.2 s |
+
+Every file and the journal of both stopped conversions were compared with an uninterrupted run's: the same
+(`diff -r` of the output folders, 217 files, 2.0 GB each), and `resources.assets` with and without the
+checkpoint is the same file.
+
+On the handheld (not measured there yet): a resume's 154 - 162 s walk becomes reading a 200 KB file and
+one `stat` of each of the 3945 data files, and a hold inside `resources.assets` keeps what it encoded,
+less the last 5 MB of blocks: the run that goes on reads the objects it had done again (at the card's
+speed: the whole of that file's 2.6 GB is about two minutes of reading at 20 MB/s) and encodes from
+there. The three 9-minute holds that bought nothing would each have bought about their length of
+encoding after the first walk. The price on a setup that is never stopped: the checkpoints' writes,
+969 MB for Blasphemous over its nine big files (at a card's 10 - 20 MB/s, 50 - 100 s of writing on a
+thread of its own while the encoder works; in the container above, where the encoder is fast and the bind mount slow, `resources.assets` took 4 - 14 s longer with its 533 MB checkpoint, about 7 %; `checkpoint_mb = null` in the port's `[convert.textures]` turns it off).
+
+Not changed: `pmu journal-files` still counts finished files only, so the setup's rerun after an
+out-of-memory kill (it reruns while that count grows) is as before; a file the kernel kills the
+conversion in again and again stops the setup as it did.
+
+Tests (`cargo test -p convert --test textures`, made-up data): `textures_stopped_inside_a_file` stops a
+run at each of a file's 8 textures (and twice; with a bundle and with worker threads at each of 11) and
+runs it again: every file and the journal as an uninterrupted run's, only the textures not yet finished
+encoded again; a checkpoint with a damaged record, with a tail of noise, cut inside a record, or made
+with other settings costs a texture or the file again, never a different file.
+`textures_exact_index_kept`: the run that goes on uses the kept index (shown by taking a texture out of
+the kept file: it is then converted), writes the same files and journal, and walks again after a data
+file the journal does not vouch for changed, with other settings, or with a damaged kept file.
 
 ## The textures step's CPU and its commits (2026-11-19)
 
