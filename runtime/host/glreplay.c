@@ -1,7 +1,7 @@
 // glreplay: a UA_GL_REC_FILE trace (glrec.c: every GL call a game made, written after it ran) replayed
 // against any EGL/GLES driver, each call timed, to compare what drivers cost the CPU on the same frames.
 //
-//   glreplay <trace.gz> [--from <frame>] [--to <frame>] [--size <w>x<h>] [--check] [--no-finish]
+//   glreplay <trace.gz> [--from <frame>] [--to <frame>] [--size <w>x<h>] [--check] [--no-finish] [--evict <KB>]
 //
 // The trace is replayed from its first call (every object made as the game made it); the frames from
 // --from up to --to (default: the last 300 of the trace) are measured: each call timed with the ARM
@@ -16,6 +16,9 @@
 //   --hash <out> [--hash-frames A-B|last:N] [--hash-draws] [--hash-dump <dir>]   pixels, not times: each framebuffer's
 //                colour read back and hashed where a pass ends (a bind) and at the swap, with --hash-draws after
 //                every draw and clear too (glreplay_hash.c; two logs compared by glpixdiff)
+//   --evict <KB> between calls (untimed), run <KB> of code and read <KB> of data, each from the next slice of
+//                a 4 MB region of its own: the caches as a game's own code and data between its GL calls leave
+//                them (a replayer alone keeps the driver's code hot, which the game does not)
 //   --check      glGetError after every call: the calls a driver refused, by entry point (the replay is
 //                only a fair comparison where no driver refuses anything the game's driver took)
 // Environment:
@@ -38,6 +41,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <zlib.h>
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
@@ -395,6 +399,48 @@ static unsigned g_main_thread = 255;
 // --hash: the trace's call count, the frame, the game's draw framebuffer, the window's size
 static int g_hash; static unsigned long g_hcall; static long g_hframe; static unsigned g_hfb; static int g_hw = 720, g_hh = 480;
 
+// ---- --evict: the caches between calls as a game leaves them
+static size_t g_evict;                          // bytes a call
+static unsigned char *g_ev_code, *g_ev_data;
+static size_t g_ev_at;
+#define EV_REGION (4u << 20)
+static void evict_init(size_t kb)
+{
+    g_evict = kb << 10;
+    if (!g_evict) return;
+    if (g_evict > EV_REGION / 4) g_evict = EV_REGION / 4;
+    g_ev_code = mmap(NULL, EV_REGION + 64, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    g_ev_data = malloc(EV_REGION);
+    if (g_ev_code == MAP_FAILED || !g_ev_data) { g_evict = 0; return; }
+    memset(g_ev_data, 1, EV_REGION);
+    uint32_t *c = (uint32_t *)g_ev_code;
+    size_t n = EV_REGION / 4;
+#if defined(__aarch64__)
+    for (size_t i = 0; i < n; i++) c[i] = 0xd503201f;                 // nop
+    for (size_t i = 0; i + 1 < n; i += g_evict / 4) if (i) c[i - 1] = 0xd65f03c0;   // ret at each slice's end
+    c[n - 1] = 0xd65f03c0; c[n] = 0xd65f03c0;
+#elif defined(__arm__)
+    for (size_t i = 0; i < n; i++) c[i] = 0xe1a00000;                 // mov r0, r0
+    for (size_t i = 0; i + 1 < n; i += g_evict / 4) if (i) c[i - 1] = 0xe12fff1e;   // bx lr
+    c[n - 1] = 0xe12fff1e; c[n] = 0xe12fff1e;
+#else
+    g_evict = 0; return;
+#endif
+    __builtin___clear_cache((char *)g_ev_code, (char *)g_ev_code + EV_REGION + 64);
+    if (mprotect(g_ev_code, EV_REGION + 64, PROT_READ | PROT_EXEC)) g_evict = 0;
+}
+static volatile uint32_t g_ev_sink;
+static void evict(void)
+{
+    if (!g_evict) return;
+    if (g_ev_at + g_evict > EV_REGION) g_ev_at = 0;
+    ((void (*)(void))(g_ev_code + g_ev_at))();
+    uint32_t s = 0;
+    for (size_t i = 0; i < g_evict; i += 64) s += g_ev_data[g_ev_at + i];
+    g_ev_sink += s;
+    g_ev_at += g_evict;
+}
+
 static void replay_rec(const rec *r)
 {
     unsigned long hcall = g_hcall++;
@@ -420,6 +466,7 @@ static void replay_rec(const rec *r)
                        g_show_src[g_show_att[pr][k] & 0xffff] ? g_show_src[g_show_att[pr][k] & 0xffff] : "(no source)");
         }
     }
+    if (g_measuring) evict();
     uint64_t t = g_measuring ? ticks() : 0;
     rp_call(r->op, r->a, r->ret);
     if (g_hash) {
@@ -435,6 +482,14 @@ static void replay_rec(const rec *r)
             char log[512] = { 0 };
             RX(glGetProgramInfoLog)(pr, sizeof log, NULL, log);
             fprintf(stderr, "glreplay: program %u did not link: %.400s\n", (unsigned)r->a[0], log);
+            GLuint sh[4]; GLsizei nsh = 0;
+            RX(glGetAttachedShaders)(pr, 4, &nsh, sh);
+            for (GLsizei k = 0; k < nsh; k++) {
+                GLint cs = 0; char sl[1024] = { 0 };
+                RX(glGetShaderiv)(sh[k], GL_COMPILE_STATUS, &cs);
+                RX(glGetShaderInfoLog)(sh[k], sizeof sl, NULL, sl);
+                fprintf(stderr, "glreplay:   its shader %u: compiled %d: %.900s\n", sh[k], cs, sl);
+            }
         }
     }
     if (g_check && r->op == OP_glCompileShader && rp_fn[OP_glGetShaderiv] && rp_fn[OP_glGetShaderInfoLog]) {
@@ -611,12 +666,14 @@ int main(int argc, char **argv)
     int w = 720, h = 480;
     const char *hash_out = NULL, *hash_frames = NULL, *hash_dump = NULL;
     int hash_draws = 0, info = 0;
+    size_t evict_kb = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--from") && i + 1 < argc) from = atol(argv[++i]);
         else if (!strcmp(argv[i], "--to") && i + 1 < argc) to = atol(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &w, &h);
         else if (!strcmp(argv[i], "--check")) g_check = 1;
         else if (!strcmp(argv[i], "--no-finish")) g_finish = 0;
+        else if (!strcmp(argv[i], "--evict") && i + 1 < argc) evict_kb = (size_t)atol(argv[++i]);
         else if (!strcmp(argv[i], "--hash") && i + 1 < argc) hash_out = argv[++i];
         else if (!strcmp(argv[i], "--hash-frames") && i + 1 < argc) hash_frames = argv[++i];
         else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
@@ -631,9 +688,10 @@ int main(int argc, char **argv)
         print_info(maj, min);
         return 0;
     }
-    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]] [--show A-B]\n"); return 2; }
+    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]] [--show A-B] [--evict KB]\n"); return 2; }
     time_init();
     classes();
+    evict_init(evict_kb);
     // the frames: counted first (a pass over the file)
     g_f = gzopen(path, "rb");
     char magic[8]; uint32_t hdr[3];
@@ -715,8 +773,10 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < OP_N; i++) { cls_t[g_class[i]] += g_op_ticks[i]; cls_n[g_class[i]] += (double)g_op_calls[i]; total += g_op_ticks[i]; }
     cls_t[C_END] = g_end_ticks; cls_n[C_END] = (double)g_end_n; total += g_end_ticks;
     printf("glreplay %s\ndriver: %s | %s | %s\n", path, g_GetString(GL_VENDOR), g_GetString(GL_RENDERER), g_GetString(GL_VERSION));
-    printf("frames measured: %lu (%ld - %ld), timer: %s%s\n", g_frames_measured, from, to - 1,
+    printf("frames measured: %lu (%ld - %ld), timer: %s%s", g_frames_measured, from, to - 1,
            g_counter ? "generic timer" : "clock_gettime", g_finish ? ", glFinish after each frame (untimed)" : "");
+    if (g_evict) printf(", %zu KB of code and data run between calls (untimed)", g_evict >> 10);
+    printf("\n");
     printf("\n%-46s %10s %10s %10s\n", "class", "calls/fr", "us/call", "ms/frame");
     for (int c = 0; c < C_N; c++)
         if (cls_n[c] > 0) printf("%-46s %10.1f %10.2f %10.3f\n", c_name[c], cls_n[c] / F, cls_t[c] * us / cls_n[c], cls_t[c] * us / 1000 / F);

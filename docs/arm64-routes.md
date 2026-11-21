@@ -315,6 +315,144 @@ no AFBC, sync files optional, the window a CPU-cached pbuffer the host copies to
 (`UA_GL_DRIVER=mesa`, off by default, [runtime.md](runtime.md)). Built for aarch64 and checked against a fake
 `/dev/mali0`. First light on muOS the same day; then parked: about twice the blob's driver CPU on the render thread and 15 - 20 % more GPU work, with no fix within days (the numbers: the README).
 
+## Replacing libmali
+
+64-bit libmali (33 MB of code, against 10.9 MB on 32-bit) costs the GL thread 15-25 % more per heavy call,
+almost all of it instruction-cache stalls: +3.2 ms a frame on the G350 (above). An open GLES driver that we
+build ourselves could remove that. Assessed 2026-11-20; Step 0 (CPU cost, no GPU) measured 2026-11-21; Step 1
+(the kbase backend, gl64) above.
+
+**What the kernels speak.** All our handhelds run Arm's kbase, job-manager flavour, with no Panfrost DRM driver:
+
+| Device | Kernel | kbase | UK | Display |
+|---|---|---|---|---|
+| RG34XX-SP muOS / Knulli (H700) | 4.9.170 | r20p0 | 11.17 | fbdev only (no /dev/dri) |
+| G350 / R36S dArkOS (RK3326) | 4.4.189 | r12p0 | 11.7 | rockchip DRM, no sync_file |
+
+Both GPUs report product 0x7093 (Mali-G31, Bifrost v7). To read the version: `cat /sys/module/mali_kbase/version`.
+
+**Open drivers on kbase.**
+- Mesa Panfrost supports G31 at GLES 3.1 (libmali: 3.2), but only on the DRM drivers. Upstream Mesa has no
+  kbase backend.
+- panfork (Icecream95) was Panfrost Gallium on kbase. It is now abandoned and needs UK >= 11.20.
+- malisx2 (bmdhacks, MIT, Vulkan, ARMSX2) has a kbase layer for job-manager UK 11.7 to 11.36 (Knifethrower,
+  PR #60) and an fbdev present path (PR #61). It has run on H700 and RK3326 handhelds.
+- JimVulkan's mesa-unified-drivers (MIT) has Gallium Panfrost on job-manager kbase (UK 11.31), the design
+  Step 1 takes.
+
+**Chosen route: Panfrost Gallium (GLES) + a kbase `pan_kmod` backend over malisx2's `src/kbase`** (Step 1:
+tools/mesa-kbase, above). Ruled out: Unity's Vulkan player on malisx2 (no Vulkan programs in our data; reversed Z
+and other variants change the picture; no MSAA or secondary command buffers on v7); Zink (CPU cost; no transform
+feedback).
+
+### Step 0: Mesa's CPU cost per GL call against libmali's, no GPU (2026-11-21)
+
+**The tools.** `UA_GL_REC_FILE=<file>` ([runtime.md](runtime.md)) writes every GL call the game makes to a trace;
+`glreplay` (runtime/host/glreplay.c) replays it against any EGL/GLES driver and times each call. The trace: Hollow
+Knight 64-bit (arm64par/hk64, the release's 1 GB settings, relayout on), launch to King's Pass standing, recorded on
+each handheld (Knulli 3,457 frames, 3.0 M calls, 61 MB; muOS 3,735 frames); the last 300 frames (King's Pass, 85
+draws and 16 passes a frame, as in the game) measured, `glFinish` untimed after each frame so no call waits for the
+GPU. libmali-64 (/usr/lib/libmali.so) and libmali-32 (/usr/lib32, the armhf glreplay) replay it on the GPU with zero
+GL errors; Mesa replays it on the CPU only, under Mesa's `libpanfrost_noop_drm_shim.so` (a fake
+`/dev/dri/renderD128`: no job ever reaches the GPU, `/dev/mali0` never opened, a guard kills the run if it is).
+
+**The Mesa build** (/Volumes/Unity3/work/mesa0/build-mesa.sh, not in the repo): bmdhacks/armsx2-turnip `malisx2`
+@ b5f8787 (Mesa 27.0.0-devel, with Knifethrower's G31 fixes #2, #3, #5, #8, #9 already in) plus Knifethrower's
+#6 pan-fb-pack-rounding, #7 bifrost-int64-atomics-cas and #4 nir-robust-image-noformat (each applied cleanly).
+`-Dgallium-drivers=panfrost -Dvulkan-drivers= -Dllvm=disabled -Dtools=drm-shim -Dpanfrost-rust=false`, EGL
+surfaceless, GLES only, `-O2` release. Panfrost's precompiled shaders need `mesa_clc` (LLVM 18, libclc,
+SPIRV-LLVM-Translator) at build time, so the build runs in Ubuntu 24.04 (glibc 2.39: muOS has 2.44, Knulli 2.40);
+the driver itself has no LLVM. Mesa refuses LTO (`src/meson.build`). Three drm-shim changes for the measurement:
+exported sync files get a real file descriptor (else every Panfrost fence export fails), `PAN_SHADER_PRESENT`
+sets the core count (1, as kbase reports), and its wrappers look up libc once (below). libgallium's `.text` is 9.7 MB (libmali-64: 33 MB, -32: 10.9 MB).
+
+**GLES 3.2.** Unity compiles its shaders as `#version 320 es` against libmali (3.2). Panfrost stops at 3.1 and
+refuses them; `MESA_GLES_VERSION_OVERRIDE=3.2 MESA_GLSL_VERSION_OVERRIDE=320` makes every shader of the trace
+compile and link (23 GL errors left, all at load: one cube-map-array texture, a 3.2 feature). A shipped Mesa
+needs either a real 3.2 or Unity steered to 3.1.
+
+**The caches.** A replayer alone runs little code between GL calls, so the driver's code stays in the caches;
+the game runs Unity's render-thread code between them. `--evict <KB>` runs that much code and reads that much data
+between calls (untimed). At 16 KB libmali's calls cost what they cost in the game (draw 48 / 42 us on 64 / 32-bit
+against 40 / 34 in the game, framebuffer bind 139 / 117 against 152 / 126) and 64-bit libmali costs +12 % over
+32-bit (the game: +17 - 28 % on its heavy calls, so the game's caches are at least that cold); without eviction
+64-bit libmali is within 2 % of 32-bit.
+
+**A drm-shim trap.** drm-shim's `ioctl()` (and its other wrappers) looked up its ~23 real libc functions with
+`dlsym()` on every call; Panfrost makes several ioctls per buffer (create, mmap, madvise) for its pools and for
+each of Unity's 140 maps a frame, so the first Mesa runs measured the shim's lookups as Mesa's time (draw 121 us,
++75 % a frame). A gdb sampling of the replay found it; the shim now looks them up once (the change is in
+/Volumes/Unity3/work/mesa0/patches/mesa0-drm-shim.patch). The numbers below are with that fix.
+
+Time in the GL calls on the calling thread, ms a frame (each run after a cool; the pairs in one hold):
+
+| driver | Knulli no eviction | muOS no eviction | Knulli `--evict 4` | muOS `--evict 4` | Knulli `--evict 16` | muOS `--evict 16` |
+|---|---|---|---|---|---|---|
+| libmali-64 | 11.03 | 11.24 | 11.25 | 9.14 | 10.43 (10.32 - 10.37 earlier) | 10.56 (10.38 - 10.60) |
+| libmali-32 | (11.09, 11.37 earlier) | (10.41, 10.88) | | 8.89 | 9.34 (9.17 - 9.28) | 9.43 (9.44, 9.51) |
+| Mesa-64 Panfrost, -O2 | 5.35 | 4.75 | 7.53 | 7.09 | 11.85, 11.88 | 12.05 |
+| Mesa-64, PGO (profile: a Knulli replay) | | | | | 10.66 | 10.65 |
+| Mesa-64, -O3 `-mcpu=cortex-a53` | | | | | 11.76 | |
+| Mesa-64, `mesa_glthread=true` | | | | | 12.01 | 11.92 |
+
+libmali also runs threads of its own: the process's CPU a frame exceeds the calling thread's by 5.3 - 5.5 ms
+(no eviction) and 3.2 - 4.1 ms (`--evict 16`) with libmali-64, 3.8 ms with libmali-32, and by 0.00 ms with Mesa
+under drm-shim (whose kernel side is missing, below).
+
+Per call, Knulli `--evict 16` (us; calls a frame), and Mesa without eviction:
+
+| call class | calls | libmali-64 | libmali-32 | Mesa -O2 | Mesa PGO | Mesa -O2, no eviction |
+|---|---|---|---|---|---|---|
+| draw | 87 | 48.4 | 41.6 | 86.6 | 78.1 | 35.0 |
+| framebuffer bind | 16 | 138.7 | 116.5 | 8.8 | 7.9 | 3.3 |
+| clear | 16 | 14.3 | 12.0 | 17.6 | 16.5 | 7.3 |
+| invalidate | 12 | 8.6 | 6.9 | 2.5 | 2.4 | 0.7 |
+| uploads (buffer data, maps, texture uploads) | 440 | 3.4 | 3.3 | 3.2 | 3.0 | 2.2 |
+| uniforms | 165 | 1.7 | 1.8 | 2.6 | 2.2 | 1.2 |
+| glUseProgram | 58 | 4.3 | 4.2 | 7.8 | 6.9 | 3.0 |
+| state (binds, enables, blend, ...) | 1,068 | 1.45 | 1.40 | 1.28 | 1.12 | 0.67 |
+| frame end (eglSwapBuffers + glFlush) | 1 | 98 | 87 | 205 | 192 | 78 |
+| **all, ms a frame** | | **10.43** | **9.34** | **11.85** | **10.66** | **5.35** |
+| process CPU beyond the calling thread, ms a frame | | 4.07 | 3.84 | 0.00 | 0.00 | 0.00 |
+
+What it says:
+
+- **On the calling thread, Mesa-64 is not clearly cheaper than libmali-64 where the game's caches are.** With
+  warm caches it costs half (5.4 against 11.0 ms), at `--evict 4` two thirds, at `--evict 16` (where libmali's
+  calls cost what they cost in the game) +14 % (+1.4 ms; PGO: +2 %, parity). Against libmali-32 it is +2.5 ms
+  (PGO +1.3). Mesa's code is cheap when hot and suffers more from a cold cache than libmali's: its draw costs 35
+  us warm and 87 us evicted (libmali-64: 52 and 48).
+- **Mesa needs no helper threads.** libmali-64 spends another 4 - 5.5 ms a frame of CPU in threads of its own
+  (on other cores: heat and the other threads' CPU, not the render thread's frame). Counting them, Mesa-64 under
+  drm-shim uses less CPU in all than libmali-64 (11.9 against 14.5 ms at `--evict 16`) - before its kernel side.
+- **Where Mesa spends it: the draw.** Panfrost builds each draw's descriptors and jobs at the draw; libmali
+  defers a pass's work to the framebuffer bind that ends it (139 us against Mesa's 9). Mesa submits its batches
+  at the frame's end (205 us). Its perf warnings (`PAN_MESA_DEBUG=perf`): three whole flushes a frame (the fence
+  and the swap), a scissored clear made as a quad about once a frame. A gdb sampling shows no single hotspot left
+  after the shim fix. `mesa_glthread` does nothing here (Unity maps, flushes and unmaps a buffer for every draw,
+  which syncs the thread); -O3 `-mcpu=cortex-a53` 1 %; PGO 10 %.
+- **drm-shim leaves out the kernel and the GPU, so Mesa's numbers are a lower bound.** Missing: each batch's
+  submit (kbase: job-chain submission, external-resource mapping, event reads and the fence or event thread a
+  kbase backend needs), BO creation and mmap in the kernel (Unity's 140 maps a frame each take a fresh BO in
+  Mesa), page faults on fresh mappings, and any wait for the GPU inside a call. At ~16 submits and ~140 BO
+  allocations a frame and a few us each in the kernel: +0.5 - 1.5 ms a frame on the calling thread, plus an event
+  thread's CPU; and the GPU side (shader code, tiler) is not measured at all. gl64's Step 1 on real kbase (muOS)
+  measures draws of 111 - 121 us against the blob's 54 and +10 - 12 ms a frame wall: the kernel, mapping and GPU
+  costs drm-shim hides are large.
+
+**Verdict: no - Mesa-64 is not clearly cheaper per call than libmali-64 where it matters.** On the render
+thread, in a game-like cache state, it is at parity at best (PGO, +2 %) and +14 % as built, before its kernel
+side; it wins only with warm caches the game does not give, and on total CPU through libmali's helper threads.
+That is not the -3 ms a frame Step 0 was meant to find, and gl64's real-kbase numbers point the other way.
+What could change it: Panfrost's per-draw work (descriptor reuse across draws with the same state, as libmali
+evidently does), Unity's per-draw maps through a persistent arena (UA_GL_ARENA does this below the trace for
+libmali; the replay gives Mesa Unity's raw pattern), GLES 3.2, and profile-guided layout (-10 % measured).
+Step 1 stays useful as a measurement and picture-diff tool; as a frame-rate route it is not shown.
+
+Credits: Mesa (Panfrost, drm-shim; MIT), bmdhacks and the ARMSX2 contributors (armsx2-turnip, malisx2),
+Knifethrower (the G31/Bifrost v7 fixes, malisx2's UK 11.7/11.17 kbase layer), JimVulkan (Panfrost on kbase),
+Icecream95 (panfork).
+
 ## What others did (research)
 
 **Unity's own 32 -> 64-bit move on Android (2019's Google Play requirement).** The reported arm64 regressions
