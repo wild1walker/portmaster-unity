@@ -276,6 +276,17 @@ when the file is in place ([setup-speed.md](setup-speed.md#a-setup-stopped-often
 decoding and resampling CPU, `decode-cpu` / `resize-cpu`, and its main thread's `wait` for the
 workers); `PMU_TEXTURE_POOL_MB` sets (0: no) the memory the textures step's workers may hold.
 
+**Sprites of a texture in another file.** The textures step ends with a pass over the plain files
+(the Python and pmu alike) for the sprites and atlas entries whose texture is in another file (a
+PPtr with `m_FileID` > 0, through the file's externals: the file of that name in the same folder).
+They follow a texture scaled there as a file's own do (`fix_references`); before, they kept their
+full-size rectangles and were drawn from the wrong part of the scaled sheet (a 2017.4 game with a
+sheet's sprites spread over several `sharedassets` files: 351 sprites in 10 files). Such a file is
+written and marked (`textures-refs`) by `write_once`: the journal names the written file (`once`)
+before it is put in place and the next start finishes it, because the values are scaled in place
+and a setup started again must never scale them twice. Not covered: a sprite in one bundle of a
+texture in another bundle.
+
 **Bundles with several serialized files** (scene bundles: `BuildPlayer-<scene>` and its
 `.sharedAssets`) are pmu's own (2026-11-02): the Python's Loaded opens one serialized file a
 bundle, so its shaders, textures and edits steps leave such a bundle as it is ("expected one

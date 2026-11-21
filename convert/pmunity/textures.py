@@ -302,6 +302,80 @@ def fix_references(lf, sizes, stats):
     return out
 
 
+def external_sizes(externals, scaled, rel):
+    """For a file's externals (their paths, in order: m_FileID 1 is the first): {m_FileID: {path id: (old w, old h,
+    new w, new h)}} of the textures a step scaled in those files. scaled: job.state['scaled'], {file relative to
+    the data folder: {path id as a string: sizes}}. An external is matched by its file name in rel's folder."""
+    d = os.path.dirname(rel)
+    out = {}
+    for i, path in enumerate(externals, 1):
+        key = os.path.join(d, os.path.basename(path.replace(chr(92), '/')))
+        sizes = scaled.get(key) or scaled.get(key.replace(os.sep, '/'))
+        if sizes and key != rel:
+            out[i] = {int(k): tuple(v) for k, v in sizes.items()}
+    return out
+
+
+def fix_cross_references(objects, ext_sizes, stats):
+    """As fix_references, for sprites and atlas entries whose texture is in another file (m_FileID > 0): a scaled
+    texture's sprites in other files kept their full-size rectangles and were drawn from the wrong part of it
+    (a 2017.4 game's flags: the sprites of one sheet in two sharedassets files). objects: [(class name, object)]."""
+    out = []
+    for cls, o in objects:
+        if cls == 'SpriteAtlas':
+            t = o.read_typetree()
+            n = 0
+            for _key, rd in t['m_RenderDataMap']:
+                ref = rd['texture']
+                sz = ext_sizes.get(ref['m_FileID'], {}).get(ref['m_PathID'])
+                if sz:
+                    rd['downscaleMultiplier'] = rd.get('downscaleMultiplier', 1.0) * sz[2] / sz[0]
+                    n += 1
+            if n:
+                out.append((o, t))
+                stats['atlas_entries'] += n
+        elif cls == 'Sprite':
+            t = o.read_typetree()
+            ref = t['m_RD']['texture']
+            sz = ext_sizes.get(ref['m_FileID'], {}).get(ref['m_PathID'])
+            if sz:
+                scale_own_sprite(t, sz[2] / sz[0], sz[3] / sz[1])
+                out.append((o, t))
+                stats['sprites'] += 1
+    return out
+
+
+def cross_file_pass(job, stats):
+    """After every file's textures: the sprites and atlas entries of other files that use a scaled texture. A file
+    is marked (textures-refs) when it was changed, with the change (job.write_once): its values are scaled in
+    place, so it must never be changed twice."""
+    from .unity_io import NotOneSerializedFile
+    scaled = job.state.get('scaled') or {}
+    if not scaled:
+        return
+    for rel in texture_files(job, ''):
+        if job.is_done('textures-refs', rel):
+            continue
+        try:
+            lf = Loaded(job.path_in(rel))
+        except NotOneSerializedFile:
+            continue
+        ext = {} if lf.is_bundle else external_sizes([e.path for e in lf.sf.externals], scaled, rel)
+        n = 0
+        if ext:
+            before = stats['sprites'] + stats['atlas_entries']
+            save = fix_cross_references([(o.type.name, o) for _, o in lf.objects()
+                                         if o.type.name in ('Sprite', 'SpriteAtlas')], ext, stats)
+            for o, t in save:
+                o.save_typetree(t)
+            n = stats['sprites'] + stats['atlas_entries'] - before
+            if n:
+                job.write_once('textures-refs', rel, lf.save())
+        lf.close()
+        if n:
+            job.log(f'textures: {rel}: {n} sprites / atlas entries follow textures scaled in other files')
+
+
 # ---------------------------------------------------------------- files
 
 class StreamFile:
@@ -779,6 +853,8 @@ def run(job, only=None, recorder=None):
         job.mark_done('textures', rel)
         if r is not None:
             job.log(f'textures: {rel}: {(stats["in"] - before[0]) >> 20} -> {(stats["out"] - before[1]) >> 20} MB ({i}/{len(files)})')
+    if not only:
+        cross_file_pass(job, stats)
     job.log(f'textures: {stats["textures"]} converted ({stats["in"] >> 20} -> {stats["out"] >> 20} MB), '
             f'{stats["atlas_entries"]} atlas entries and {stats["sprites"]} sprites follow their scaled textures')
     if enc.guide:

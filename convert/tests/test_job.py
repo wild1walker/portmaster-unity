@@ -62,5 +62,63 @@ class CommitTest(unittest.TestCase):
             self.assertNotIn('pending', json.load(f))
 
 
+class WriteOnceTest(unittest.TestCase):
+    """write_once: a file changed and marked together; a job killed on the way ends with the file changed once and
+    marked (its change is never made a second time)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.data = os.path.join(self.d, 'Data')
+        os.makedirs(self.data)
+        self.f = os.path.join(self.data, 'a.assets')
+        _write(self.f, b'old')
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def _journal(self):
+        with open(os.path.join(self.data, J.STATE)) as f:
+            return json.load(f)
+
+    def test_written_and_marked(self):
+        j = J.Job(self.data, self.data, {'version': 1})
+        j.write_once('refs', 'a.assets', b'new')
+        self.assertEqual(_read(self.f), b'new')
+        self.assertFalse(os.path.exists(self.f + '.tmp'))
+        self.assertTrue(j.is_done('refs', 'a.assets'))
+        st = self._journal()
+        self.assertNotIn('once', st)
+        self.assertEqual(st['done'], {'refs': ['a.assets']})
+
+    def _killed(self, renamed):
+        j = J.Job(self.data, self.data, {'version': 1})
+        _write(self.f + '.tmp', b'new')
+        j.state['once'] = [self.f + '.tmp', self.f, 'refs', 'a.assets']     # journal written, then killed
+        j.save_state()
+        if renamed:
+            os.replace(self.f + '.tmp', self.f)
+        j2 = J.Job(self.data, self.data, {'version': 1})                    # the next start finishes it
+        self.assertEqual(_read(self.f), b'new')
+        self.assertFalse(os.path.exists(self.f + '.tmp'))
+        self.assertTrue(j2.is_done('refs', 'a.assets'))
+        st = self._journal()
+        self.assertNotIn('once', st)
+        self.assertEqual(st['done'], {'refs': ['a.assets']})
+
+    def test_killed_before_the_rename(self):
+        self._killed(False)
+
+    def test_killed_after_the_rename(self):
+        self._killed(True)
+
+    def test_killed_before_the_journal(self):
+        j = J.Job(self.data, self.data, {'version': 1})
+        j.save_state()
+        _write(self.f + '.tmp', b'half')                                    # killed while writing the new file
+        j2 = J.Job(self.data, self.data, {'version': 1})
+        self.assertEqual(_read(self.f), b'old')                             # as it was, not marked: done again
+        self.assertFalse(j2.is_done('refs', 'a.assets'))
+
+
 if __name__ == '__main__':
     unittest.main()
