@@ -2079,14 +2079,22 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
                             };
                             pair.insert(0, (srel, p));
                         }
-                        job.commit_then_mark(&pair)
-                            .map_err(|e| left(&work, e, false))?;
+                        // the scaled sizes are in the journal on the card before the file is in place: a
+                        // run killed between its rename and its mark finds the file converted (nothing left
+                        // to scale, so no sizes) and not marked, and the sprites of other files that use its
+                        // textures (cross_file_pass) need the sizes then. A file with its stream has them
+                        // written with `pending`; a file alone gets a write of the journal for them
                         if !sizes.is_empty() {
                             let map = scaled_json(&sizes, &order);
                             if let Some(sc) = job.state.setdefault("scaled", Json::dict()) {
                                 sc.set(rel, map);
                             }
+                            if pair.len() == 1 {
+                                job.save_state().map_err(|e| left(&work, e, false))?;
+                            }
                         }
+                        job.commit_then_mark(&pair)
+                            .map_err(|e| left(&work, e, false))?;
                         drop_memo = had_memo;
                     }
                     done = true;

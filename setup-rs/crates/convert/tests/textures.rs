@@ -369,7 +369,11 @@ fn textures_sprites_in_another_file() {
         .unwrap()
     {
         let Value::Pair(p) = e else { unreachable!() };
-        let pid = p.1.path(&["texture", "m_PathID"]).unwrap().as_int().unwrap();
+        let pid =
+            p.1.path(&["texture", "m_PathID"])
+                .unwrap()
+                .as_int()
+                .unwrap();
         p.1.set("texture", madeup::pptr(2, pid as i64)).unwrap();
     }
     let users = madeup::serialized(
@@ -1195,4 +1199,145 @@ fn textures_exact_index_kept() {
     std::fs::write(&kept, "{\"version\": 1, \"sett").unwrap();
     let job = Job::new(&data, &data, cfg()).unwrap();
     assert!(exactindex::load_kept(&job, &c("PALETTE_ON"), true).is_none());
+}
+
+/// A setup stopped in the textures step and run again, in a game with sprites of a scaled sheet in
+/// another file (cross_file_pass) and a checkpoint in each file (`checkpoint_mb`): stopped at each
+/// texture, stopped twice, with the sheet's file in place but not yet marked (a run killed between its
+/// rename and its mark: the journal has its scaled sizes already), and run once more when it is done.
+/// The sprites follow the sheet once, never twice and never not at all: every file and the journal as
+/// an uninterrupted run's.
+#[test]
+fn textures_stopped_with_sprites_in_another_file() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = temp("crossstop");
+    let data = dir.join("Data");
+    let game = || {
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(&data).unwrap();
+        let o = |class_id, path_id, value| Obj {
+            class_id,
+            path_id,
+            value,
+        };
+        let sheet = |name: &str, seed| {
+            madeup::texture(&db, name, (64, 32), 12, &madeup::noise(seed, 2048), None)
+        };
+        // the sheets' file: two scaled sheets (one with a sprite of its own), one that keeps its size
+        let sheets = madeup::serialized(
+            &db,
+            &[
+                o(28, 1, sheet("big_sheet", 1)),
+                o(
+                    28,
+                    2,
+                    madeup::texture(&db, "icon", (16, 8), 10, &madeup::noise(2, 64), None),
+                ),
+                o(28, 3, sheet("big_walls", 3)),
+                o(213, 4, madeup::sprite(&db, "own", 1)),
+            ],
+            &[],
+            true,
+        );
+        std::fs::write(data.join("sharedassets0.assets"), &sheets).unwrap();
+        // the other file: sprites of the sheets there, a scaled sheet of its own with its sprite
+        let there = |name, pid| {
+            let mut s = madeup::sprite(&db, name, pid);
+            madeup::set(&mut s, &["m_RD", "texture"], madeup::pptr(2, pid));
+            s
+        };
+        let users = madeup::serialized(
+            &db,
+            &[
+                o(213, 1, there("of_big_sheet", 1)),
+                o(213, 2, there("of_icon", 2)),
+                o(213, 3, there("of_big_walls", 3)),
+                o(28, 10, sheet("big_local", 4)),
+                o(28, 11, sheet("tiles", 5)),
+                o(213, 12, madeup::sprite(&db, "local", 10)),
+            ],
+            &["globalgamemanagers.assets", "sharedassets0.assets"],
+            true,
+        );
+        std::fs::write(data.join("sharedassets1.assets"), &users).unwrap();
+        std::fs::write(
+            data.join("globalgamemanagers"),
+            madeup::serialized(&db, &[o(141, 1, madeup::build_settings(&db))], &[], false),
+        )
+        .unwrap();
+    };
+    let cfg = || {
+        pyjson::loads(r#"{"version": 1, "textures": {"inline": true, "checkpoint_mb": 0}}"#)
+            .unwrap()
+    };
+    let run = |stop_at: Option<usize>| {
+        let mut job = Job::new(&data, &data, cfg()).unwrap();
+        let (codec, calls) = Stopping::new(stop_at, false);
+        let r = textures::run_with(&mut job, &Args::default(), codec);
+        (r, calls.load(SeqCst))
+    };
+    let journal_path = data.join(".pmunity.json");
+    game();
+    let (r, calls) = run(None);
+    r.unwrap();
+    assert_eq!(calls, 5);
+    let straight = snapshot(&data);
+    let j = pyjson::loads(&std::fs::read_to_string(&journal_path).unwrap()).unwrap();
+    assert_eq!(
+        j.get("done").unwrap().dumps(),
+        r#"{"textures": ["globalgamemanagers", "sharedassets0.assets", "sharedassets1.assets"], "textures-refs": ["sharedassets1.assets"]}"#
+    );
+    let opts = Options {
+        db: Some(db.clone()),
+        ..Default::default()
+    };
+    let widths = || {
+        let f = DataFile::open(data.join("sharedassets1.assets"), &opts).unwrap();
+        [1, 2, 3, 12].map(|p| f32_of(&f.sf.read_typetree(p).unwrap(), &["m_Rect", "width"]))
+    };
+    // (the sprites of the two scaled sheets there and of the file's own: half; the icon's: as it was)
+    assert_eq!(widths(), [50.5, 101.0, 50.5, 50.5]);
+    // run again when it is done: nothing is scaled twice
+    run(None).0.unwrap();
+    assert!(snapshot(&data) == straight, "run again when done");
+    // stopped at each texture (the first three in the sheets' file, then in the other one)
+    for stop in 0..5 {
+        game();
+        assert!(run(Some(stop)).0.is_err(), "stopped at {stop}");
+        let (r, calls) = run(None);
+        r.unwrap();
+        assert_eq!(calls, 5 - stop, "stopped at {stop}");
+        assert!(
+            snapshot(&data) == straight,
+            "stopped at {stop}: the files and the journal"
+        );
+    }
+    // stopped twice, in each file
+    game();
+    assert!(run(Some(1)).0.is_err());
+    assert!(run(Some(3)).0.is_err());
+    run(None).0.unwrap();
+    assert!(snapshot(&data) == straight, "stopped twice");
+    // the sheets' file in place and not marked (killed between its rename and its mark), its scaled
+    // sizes in the journal: it is looked at again (nothing left to convert), and the sprites in the
+    // other file still follow it, once
+    game();
+    assert!(run(Some(3)).0.is_err());
+    let text = std::fs::read_to_string(&journal_path).unwrap();
+    assert!(text.contains(
+        r#""scaled": {"sharedassets0.assets": {"1": [64, 32, 32, 16], "3": [64, 32, 32, 16]}}"#
+    ));
+    let unmarked = text.replace(r#", "sharedassets0.assets"]"#, "]");
+    assert_ne!(text, unmarked);
+    std::fs::write(&journal_path, unmarked).unwrap();
+    let (r, calls) = run(None);
+    r.unwrap();
+    assert_eq!(calls, 2);
+    assert_eq!(widths(), [50.5, 101.0, 50.5, 50.5]);
+    assert!(snapshot(&data) == straight, "in place and not marked");
+    let _ = std::fs::remove_dir_all(&dir);
 }

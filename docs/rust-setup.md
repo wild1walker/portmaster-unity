@@ -286,6 +286,13 @@ written and marked (`textures-refs`) by `write_once`: the journal names the writ
 before it is put in place and the next start finishes it, because the values are scaled in place
 and a setup started again must never scale them twice. Not covered: a sprite in one bundle of a
 texture in another bundle.
+The pass reads the sizes from the journal's `scaled`, so a plain file's sizes are in the journal on the
+card before the file is put in place (with `pending` when it has a stream; a write of the journal for a
+file alone): a run killed between a file's rename and its mark finds it converted, with nothing left to
+scale and so no sizes of its own, and the sprites of other files still follow it. With a checkpoint
+(`checkpoint_mb`) the sizes come from the textures taken from it as from those encoded. Test:
+`textures_stopped_with_sprites_in_another_file` (stopped at each texture, twice, the sheet's file in place
+and not marked, run again when done: every file and the journal as an uninterrupted run's).
 
 **Bundles with several serialized files** (scene bundles: `BuildPlayer-<scene>` and its
 `.sharedAssets`) are pmu's own (2026-11-02): the Python's Loaded opens one serialized file a
