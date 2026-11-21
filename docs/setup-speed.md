@@ -240,6 +240,24 @@ about 56 min of the setup; fastest 2.4 dB.
 - **Overlapping steps** (IL2CPP while textures are encoded): both use every core, and the
   conversion to C++ (800 MB) cannot share a 1 GB handheld with anything big.
 
+## A setup stopped often makes no progress (2026-11-21, open)
+Found running Blasphemous's 64-bit setup on the RG34XX-SP (Knulli) in devlock holds of 9 minutes, each
+stopped and resumed (the setup's step marks and the convert's journal are meant for that):
+- each resume of the textures step rebuilds the `exact_shaders` index before it converts a file: 162 s
+  and 154 s in two resumes (the 109 textures the palette programs sample), the same work each time;
+- the journal moves on per finished file only, and the next file there is `resources.assets` (972
+  textures, the bulk of the game's): the 377 s left of a hold never finished it, so the stop threw its
+  work away;
+- after four holds (the unpack, then three of the textures step) the step stood at 2 of 3945 files.
+A player whose handheld sleeps or whose battery runs out every few minutes would see the same. Not
+fixed yet: keep the index across a resume (the journal's own file, keyed by the data's files), and a
+mark inside a big file (its textures done so far) so a stop loses less than the file. One hold of
+70 minutes (4170 s) then set it up: the textures step from its index to 3945 of 3945 in about 25
+minutes (`resources.assets` among the first), exactindex and fmodcatalogs 2 minutes, the video step's
+15 clips halved to 960x540 in 28 minutes, the FMOD banks 1 minute, packing 12.6 minutes; 3237 MB
+installed. The four short holds before it (unpacking the game's data.unity3d took two of them) cost
+about 36 minutes, of which the three in the textures step bought nothing.
+
 ## The textures step's CPU and its commits (2026-11-19)
 
 Profiled on the muOS RG34XX-SP (H700, 4x Cortex-A53, 1 GB, the card writing 6-9 MB/s) with

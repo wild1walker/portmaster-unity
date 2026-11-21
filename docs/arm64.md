@@ -249,6 +249,19 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
   invoke finds a method's info in a lock-free hash already (mono-arm64.md, "Mono's runtime invoke path":
   0.09 ms a frame in Hollow Knight) and reads its thread-local data with the compiler's TLS. What the
   64-bit build costs Gungeon is to be measured once it runs.
+- **On the handhelds (2026-11-21):** each port's aarch64-only release (the current Mono builds, 7f504a8's
+  runtime) set up from the player's files on the RG34XX-SP, then played silent through
+  tools/device/profrun.sh. Setup times are the setup's own time on Knulli, summed over devlock holds:
+  | port | setup | installed | gameplay reached | fps (30 s at the point reached), resident memory |
+  |---|---|---|---|---|
+  | Hollow Knight | 40 min (Knulli) | 1857 MB | a test save's bench | Knulli 59.4 avg / 57.5 min, 563 MB; muOS 60.0 / 59.0, 562 MB (relayout and prefetch on) |
+  | Cuphead | 49 min, textures Low (Knulli) | 2.3 GB with the DLC | Botanic Panic (the helper's test level), shooting | Knulli 59.5 / 58.6, 490 MB; muOS 60.0 / 59.6, 498 MB |
+  | Blasphemous | about 90 min of setup in one hold (Knulli; setup-speed.md, "A setup stopped often") | 3237 MB | New Game to the first level | Knulli 59.5 steady, one 0.8 s room-load hitch; 736 MB |
+  | Enter the Gungeon | 17 min (muOS) | 711 MB | the Breach, from a test save | muOS 59.8 - 60.2, 618 MB |
+  muOS played the game set up on Knulli (its card had no room for a second setup). Gungeon's setup first
+  stopped in asmpatch's `inline` on the 4.x class libraries (fixed: tools/asmpatch/README.md). No managed
+  exception in any run; Blasphemous's FMOD player and its asmpatch patches (catalogs, I2 sources) ran on Mono 5
+  with the 4.x class libraries. The G350 was down for these runs: not tested there.
 - An earlier release's 32-bit build on the card: the 64-bit setup needs the game's files again (the 32-bit
   setup used them up), and each launcher says so; the saves come over (Cuphead and Hollow Knight copy
   `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none; Blasphemous's stay in
