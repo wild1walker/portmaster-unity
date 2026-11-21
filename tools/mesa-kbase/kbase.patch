@@ -434,10 +434,11 @@
  
  static uint64_t
  panfrost_max_res_size_b(unsigned arch)
-@@ -1121,6 +1123,16 @@
+@@ -1120,6 +1122,16 @@
+       /* If the resource is never exported, we can make the BO private. */
        if (template->bind & PIPE_BIND_SHARED)
           flags |= PAN_BO_SHAREABLE;
- 
++
 +      /* kbase: a linear render target the CPU reads back (the surfaceless window the host copies to
 +       * the framebuffer) is mapped write-back cached; PAN_KBASE_CACHED_WINDOW=0: write-combined */
 +      if (pan_kmod_dev_is_kbase(dev->kmod.dev) &&
@@ -447,10 +448,9 @@
 +          (dev->kmod.dev->props.supported_bo_flags & PAN_KMOD_BO_FLAG_WB_MMAP) &&
 +          debug_get_bool_option("PAN_KBASE_CACHED_WINDOW", true))
 +         flags |= PAN_BO_CPU_CACHED;
-+
+ 
        char *res_label =
           panfrost_resource_new_label(so, so->image.props.modifier , NULL);
-       if (!res_label)
 @@ -1783,6 +1795,13 @@
              transfer->base.box.x, transfer->base.box.width);
        }
@@ -465,10 +465,11 @@
        return bo->ptr.cpu + rsrc->plane.layout.slices[level].offset_B +
               box->z * transfer->base.layer_stride +
               box_blocks.y *
-@@ -2332,6 +2351,14 @@
+@@ -2331,6 +2350,14 @@
+ 
     if (transfer->usage & PIPE_MAP_WRITE)
        pan_crc_state_invalidate(&prsrc->crc_state);
- 
++
 +   /* CPU writes to a CPU-cached BO: cleaned to memory before the GPU reads them */
 +   if ((transfer->usage & PIPE_MAP_WRITE) && prsrc->bo && (prsrc->bo->flags & PAN_BO_CPU_CACHED) &&
 +       prsrc->bo->ptr.cpu) {
@@ -476,10 +477,22 @@
 +                                 panfrost_bo_size(prsrc->bo), PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH);
 +      pan_kmod_flush_bo_map_syncs(dev->kmod.dev);
 +   }
-+
+ 
     /* AFBC/AFRC will use a staging resource. `initialized` will be set when
      * the fragment job is created; this is deferred to prevent useless surface
-     * reloads that can cascade into DATA_INVALID_FAULTs due to reading
+@@ -2475,6 +2502,12 @@
+       if (surf->texture == prsrc)
+          batch->resolve &= ~(PIPE_CLEAR_COLOR0 << i);
+    }
++
++   /* The contents are undefined from here on: a later pass that draws into the resource without
++    * clearing it need not load them into the tile buffer (no preload; the Mali blob skips that load).
++    * PAN_INVALIDATE_KEEP_VALID=1: the old behaviour, for A/B. */
++   if (prsrc->last_level == 0 && !debug_get_bool_option("PAN_INVALIDATE_KEEP_VALID", false))
++      BITSET_CLEAR(rsrc->valid.data, 0);
+ }
+ 
+ static enum pipe_format
 --- a/src/loader/loader.c
 +++ b/src/loader/loader.c
 @@ -109,6 +109,11 @@
@@ -617,7 +630,7 @@
        else
 --- /dev/null
 +++ b/src/panfrost/lib/kmod/kbase_kmod.c
-@@ -0,0 +1,889 @@
+@@ -0,0 +1,953 @@
 +/*
 + * Copyright 2026 XclipseTools (JimVulkan/mesa-unified-drivers, a5010bb): the backend's design, the
 + *                event thread, the in-order atom chain and the process-local sync objects
@@ -695,7 +708,37 @@
 +   bool thread_started, stop;
 +   /* sync files: unknown (0), work (1), the kernel has none (-1) */
 +   int fences;
++   /* PAN_KBASE_STATS=1: each atom's submit time and kind, the GPU's time per kind (the atoms run one
++    * after the other: an atom's time is from its submit or the previous atom's end to its own end) */
++   bool stats;
++   double at_submit[256];
++   uint32_t at_req[256];
++   double last_done, st_t0, st_vt, st_fs, st_other, st_idle, st_wait;
++   unsigned long st_subs, st_atoms;
 +};
++
++static double
++kb_now(void)
++{
++   struct timespec t;
++   clock_gettime(CLOCK_MONOTONIC, &t);
++   return t.tv_sec + t.tv_nsec * 1e-9;
++}
++
++static void
++kb_stats_print_locked(struct kbase_queue *q, double now)
++{
++   const double span = now - q->st_t0;
++   if (span <= 0)
++      return;
++   mesa_logi("kbase stats: %.1f s, %lu submissions, %lu atoms; GPU ms per s: vertex/tiler %.1f, "
++             "fragment %.1f, other %.1f, idle with nothing queued %.1f; waiting on the GPU %.1f ms per s",
++             span, q->st_subs, q->st_atoms, 1000 * q->st_vt / span, 1000 * q->st_fs / span,
++             1000 * q->st_other / span, 1000 * q->st_idle / span, 1000 * q->st_wait / span);
++   q->st_t0 = now;
++   q->st_vt = q->st_fs = q->st_other = q->st_idle = q->st_wait = 0;
++   q->st_subs = q->st_atoms = 0;
++}
 +
 +struct kbase_kmod_dev {
 +   struct pan_kmod_dev base;
@@ -1198,6 +1241,23 @@
 +            mesa_loge("kbase: event for atom %u, which is not in flight", an);
 +            continue;
 +         }
++         if (q->stats) {
++            const double now = kb_now();
++            const double start = q->at_submit[an] > q->last_done ? q->at_submit[an] : q->last_done;
++            if (q->at_submit[an] > q->last_done && q->last_done > 0)
++               q->st_idle += q->at_submit[an] - q->last_done;
++            const double d = now - start;
++            if (q->at_req[an] == KBASE_JD_REQ_FRAGMENT)
++               q->st_fs += d;
++            else if (q->at_req[an] == KBASE_JD_REQ_VERTEX_TILER)
++               q->st_vt += d;
++            else
++               q->st_other += d;
++            q->last_done = now;
++            q->st_atoms++;
++            if (now - q->st_t0 >= 5)
++               kb_stats_print_locked(q, now);
++         }
 +         q->owner[an] = NULL;
 +         q->free_atoms++;
 +         if (q->last_atom == an)
@@ -1253,6 +1313,8 @@
 +   q->free_atoms = 255;
 +   q->next_seq = 1;
 +   q->fences = debug_get_bool_option("PAN_KBASE_NO_FENCES", false) ? -1 : 0;
++   q->stats = debug_get_bool_option("PAN_KBASE_STATS", false);
++   q->st_t0 = kb_now();
 +}
 +
 +static void
@@ -1405,6 +1467,15 @@
 +      return 0;
 +   }
 +
++   if (q->stats) {
++      const double now = kb_now();
++      for (unsigned i = 0; i < need; i++) {
++         /* a new chain after the GPU went idle starts now; one queued behind others at their end */
++         q->at_submit[real[i]] = now;
++         q->at_req[real[i]] = jd[i].core_req;
++      }
++      q->st_subs++;
++   }
 +   q->free_atoms -= need;
 +   if (nr_atoms)
 +      q->last_atom = real[nr_atoms - 1];
@@ -1436,8 +1507,11 @@
 +   pthread_mutex_lock(&q->lock);
 +   if (!seq)
 +      seq = q->next_seq - 1;
++   const double w0 = q->stats ? kb_now() : 0;
 +   while (seq_open_locked(q, seq))
 +      pthread_cond_wait(&q->cond, &q->lock);
++   if (q->stats)
++      q->st_wait += kb_now() - w0;
 +   pthread_mutex_unlock(&q->lock);
 +}
 +
@@ -1451,6 +1525,7 @@
 +
 +   bool done = false;
 +   pthread_mutex_lock(&q->lock);
++   const double w0 = q->stats ? kb_now() : 0;
 +   for (;;) {
 +      if (!seq_open_locked(q, seq)) {
 +         done = true;
@@ -1468,6 +1543,8 @@
 +                                     .tv_nsec = abs_timeout_ns % 1000000000ll};
 +      pthread_cond_timedwait(&q->cond, &q->lock, &until);
 +   }
++   if (q->stats)
++      q->st_wait += kb_now() - w0;
 +   pthread_mutex_unlock(&q->lock);
 +   return done;
 +}

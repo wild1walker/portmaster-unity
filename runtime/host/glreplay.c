@@ -250,10 +250,18 @@ static void rp_custom_glDeleteSync(const uint64_t *a, uint64_t r)
     if (s) RX(glDeleteSync)(s);
     if (a[0]) hput(&g_syncs, a[0], 0);
 }
+// --show A-B: the calls A..B (glreplay's call numbers, as --hash names them) printed with their first
+// arguments, and each program they use with its shaders' sources (kept from glShaderSource)
+static const char *const glrec_name[OP_N];
+static unsigned long g_show_a = 1, g_show_b;
+static char *g_show_src[1 << 16];
+static unsigned g_show_att[1 << 16][4];
+static unsigned char g_show_done[1 << 16];
 static void rp_custom_glShaderSource(const uint64_t *a, uint64_t r)
 {
     (void)r;
     const GLchar *src = rp_ptr(a[1]);
+    if (g_show_b && src) { free(g_show_src[a[0] & 0xffff]); g_show_src[a[0] & 0xffff] = strdup(src); }
     RX(glShaderSource)(rp_map(MK_SH, (GLuint)a[0]), 1, &src, NULL);
 }
 static void rp_custom_glCreateShader(const uint64_t *a, uint64_t r) { hput(&g_names[MK_SH], r, RX(glCreateShader)((GLenum)a[0])); }
@@ -399,6 +407,19 @@ static void replay_rec(const rec *r)
     if (g_main_thread != 255 && r->thread != g_main_thread) g_other_thread_calls++;
     int hbind = r->op == OP_glBindFramebuffer && ((GLenum)r->a[0] == GL_FRAMEBUFFER || (GLenum)r->a[0] == GL_DRAW_FRAMEBUFFER);
     if (g_hash && hbind && rph_on(g_hframe)) rph_read(g_hframe, hcall, "bind", g_hfb, !g_hfb, g_hw, g_hh);   // (the pass that ends)
+    if (g_show_b && r->op == OP_glAttachShader)
+        for (int k = 0; k < 4; k++) if (!g_show_att[r->a[0] & 0xffff][k]) { g_show_att[r->a[0] & 0xffff][k] = (unsigned)r->a[1]; break; }
+    if (g_show_b && hcall >= g_show_a && hcall <= g_show_b) {
+        printf("call %lu %s %llx %llx %llx %llx\n", hcall, glrec_name[r->op], (unsigned long long)r->a[0], (unsigned long long)r->a[1],
+               (unsigned long long)r->a[2], (unsigned long long)r->a[3]);
+        unsigned pr = (unsigned)r->a[0] & 0xffff;
+        if (r->op == OP_glUseProgram && !g_show_done[pr]) {
+            g_show_done[pr] = 1;
+            for (int k = 0; k < 4 && g_show_att[pr][k]; k++)
+                printf("--- program %u shader %u ---\n%s\n--- end ---\n", pr, g_show_att[pr][k],
+                       g_show_src[g_show_att[pr][k] & 0xffff] ? g_show_src[g_show_att[pr][k] & 0xffff] : "(no source)");
+        }
+    }
     uint64_t t = g_measuring ? ticks() : 0;
     rp_call(r->op, r->a, r->ret);
     if (g_hash) {
@@ -601,6 +622,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
         else if (!strcmp(argv[i], "--hash-dump") && i + 1 < argc) hash_dump = argv[++i];
         else if (!strcmp(argv[i], "--info")) info = 1;
+        else if (!strcmp(argv[i], "--show") && i + 1 < argc) sscanf(argv[++i], "%lu-%lu", &g_show_a, &g_show_b);
         else path = argv[i];
     }
     if (info) {                                          // no trace: the driver's strings, configs and limits
@@ -609,7 +631,7 @@ int main(int argc, char **argv)
         print_info(maj, min);
         return 0;
     }
-    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]]\n"); return 2; }
+    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]] [--show A-B]\n"); return 2; }
     time_init();
     classes();
     // the frames: counted first (a pass over the file)

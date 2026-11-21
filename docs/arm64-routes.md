@@ -313,7 +313,7 @@ can be measured and changed where the blob cannot. [tools/mesa-kbase](../tools/m
 Panfrost with a `pan_kmod` backend for kbase (JimVulkan's design on bmdhacks' kbase library, UK 11.7 and 11.17),
 no AFBC, sync files optional, the window a CPU-cached pbuffer the host copies to the framebuffer
 (`UA_GL_DRIVER=mesa`, off by default, [runtime.md](runtime.md)). Built for aarch64 and checked against a fake
-`/dev/mali0`; first light, the pictures against the blob's (glpixdiff) and the frame times come next.
+`/dev/mali0`. First light on muOS the same day; then parked: about twice the blob's driver CPU on the render thread and 15 - 20 % more GPU work, with no fix within days (the numbers: the README).
 
 ## What others did (research)
 

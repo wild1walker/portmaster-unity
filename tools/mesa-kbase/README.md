@@ -10,8 +10,9 @@ Why: the 64-bit blob is the slower half of the 64-bit graphics gap (its heavy ca
 the 32-bit blob's on the same GPU work, docs/arm64-routes.md "The graphics side, counted"), and its licence
 forbids looking inside it. Mesa can be built, measured and changed.
 
-Status: **first light on muOS (RG34XX-SP, kbase r20p0, UK 11.17), 2026-11-21: draws, no kernel fault.** Not on
-the G350 yet, not in Unity yet (traces only). Nothing here is in a release.
+Status: **parked (2026-11-21).** It runs on muOS (RG34XX-SP, kbase r20p0, UK 11.17) without a kernel fault and
+draws within a few levels of the blob, but it costs more CPU and more GPU than the 64-bit blob, and no change
+within days closes that (below, "Why it is parked"). Not on the G350, not in Unity, not in a release.
 
 ## What is in it
 
@@ -100,6 +101,40 @@ atom, no hang.
   jobs there), and the frame takes 10 - 12 ms longer with the GPU: where that goes (GPU time, the jobs, the
   waits) is the next question. (Without the override, the 3.20 programs fail and their draws cost nothing:
   5.7 ms, not a measurement.)
+
+## Why it is parked (2026-11-21)
+
+Hollow Knight's King's Pass trace, muOS, each driver in turn (GPU counters: `gpucnt exec` around a whole replay;
+CPU: an ITIMER_PROF sampler, `test/prof_preload.c`; the GPU's own time per atom: `PAN_KBASE_STATS=1`):
+
+- **GPU work is 15 - 20 % more.** GPU_ACTIVE +20 % over the same 3,457 frames, fragment job slot +16 %,
+  vertex/tiler slot +64 % (tiler unit 2.4x), fragment warps +50 %, quads rasterized +37 %, external reads +58 %.
+  Part of it is Panfrost loading (preloading) render targets the game had invalidated: `glInvalidateFramebuffer`
+  only dropped the store, the next pass still loaded the old contents. Clearing the resource's valid bit there
+  (in kbase.patch, `PAN_INVALIDATE_KEEP_VALID=1` for the old behaviour) leaves every readback identical and takes
+  the quads from +37 % to +16 %, reads from +58 % to +40 %, GPU_ACTIVE from +20 % to +15 %. The rest (tiler
+  2.2x, more warps) is Panfrost's own job layout and compiler output.
+- **Throughput without the per-frame glFinish** (`--no-finish`, the GPU fed as in a game): the blob 19.0 ms a
+  frame, Mesa 25.3, Mesa with the invalidate change 23.9. The GPU sets the pace there (Mesa's draws wait for
+  it: 166 - 178 us each).
+- **The +10 - 12 ms with glFinish** is about 4 ms more CPU, 4 ms more GPU and 3 ms of lost overlap: Mesa
+  submits a frame's passes only at the flush (`PAN_KBASE_STATS`: ~14 submissions of 2 atoms a frame, the
+  fragment atoms 93 % of the GPU time, the CPU waiting 55 % of the time), the blob as each pass ends, so its GPU
+  starts while the CPU still records.
+- **CPU:** the render thread's driver time is about twice the blob's (samples in the driver per sample in the
+  replay's own work: 3.1 against 1.5; the blob has a second thread, Mesa does everything on the render
+  thread). No hotspot: the largest functions are `panfrost_emit_const_buf` 5.6 %, `prepare_draw` 2.8 %,
+  `panfrost_ptr_map` 2.0 %, then dozens at 0.5 - 2 % (state validation, descriptor emission, BO tracking;
+  our per-BO submission numbers under 1 %) and libc's memcpy. mesa0's drm-shim runs agree: at parity with warm
+  caches, 70 % slower with the game's cache pressure: the driver's code itself is cache-hungry.
+- **Verdict:** below 10 ms of GL CPU a frame would need Panfrost's whole draw path made about twice as cheap in
+  i-cache terms, and the GPU gap needs tiler and compiler work: months, not days.
+
+The pictures: the first frame that differs is 21 (a title screen). Its first differing draw (call 13441) is
+TextMeshPro's SDF text shader (`discard` on the distance), one glyph quad: the blob draws one more pixel row
+(y 309, 220 pixels, value 60,0,60) at the quad's edge, Mesa none: an edge or threshold difference (vertex
+snapping, varying interpolation at the edge, or the discard threshold), not blending or a format; fp16 is not it
+(`PAN_MESA_DEBUG=nofp16` changes nothing). Later frames carry such differences on (max 2 levels in frame 3322).
 
 ## In the runtime
 

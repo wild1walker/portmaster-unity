@@ -2506,6 +2506,8 @@ opens the GPU like any GL program: not on the G350.
 
 `glreplay --check` also names each shader that does not compile, with the driver's log and the source's first
 line (a trace made on a GLES 3.2 driver has `#version 320 es` shaders that a 3.1 driver refuses).
+`--show A-B` prints the calls A..B (the call numbers `--hash` uses) with their first arguments, and the sources of
+each program they use: what a differing draw drew with.
 
 ## Holding the whole frame (UA_GL_REC)
 
