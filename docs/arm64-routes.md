@@ -505,6 +505,28 @@ Memory: the region (836 KB whole, 866 KB split) plus its unwind data (224 - 237 
 page that gets an entry branch made private (at most 864 pages, 3.4 MB, when every entry is patched;
 `UA_RELAYOUT_DATA` patches only entries that code left in place calls).
 
+**Against the 32-bit build** (King's Pass, interleaved in the same holds, 2 runs each; `s` = split list,
+vtables, atomics; the 64-bit base with `UA_RELAYOUT=0 UA_ATOMICS=0`):
+
+| King's Pass | muOS 32-bit | muOS 64 base | muOS 64 s | Knulli 32-bit | Knulli 64 base | Knulli 64 s |
+|---|---|---|---|---|---|---|
+| fps | 52.1, 52.6 | 50.2, 50.2 | 51.0, 51.0 | 53.0, 53.0 | 50.8, 51.2 | 50.5, 51.5 |
+| UnityMain cycles a frame | 28.02 M | 31.80 M | 30.91 M (-2.8 %) | 26.01 M | 27.35 M | 27.36 M (0) |
+| i-cache stall cycles | 5.62 M | 6.94 M | 6.65 M | 5.22 M | 5.69 M | 6.08 M |
+| L1I refills | 125.5 K | 120.0 K | 113.6 K | 125.0 K | 120.2 K | 117.2 K |
+| L2 refills | 72.1 K | 88.2 K | 85.8 K | 73.5 K | 86.7 K | 85.6 K |
+| load-miss stall cycles | 15.12 M | 18.56 M | 17.92 M | 13.25 M | 15.57 M | 15.46 M |
+
+On muOS the 64-bit build's deficit at King's Pass goes from 3.8 M to 2.9 M cycles a frame and 2.2 to
+1.4 fps. On Knulli this hold showed no change (one of its two `s` runs took more i-cache stall cycles
+than any base run; the three earlier Knulli holds gave -1.3 to -2.2 %): the effect is 0 - 3 % of
+UnityMain, about the size of run-to-run spread, and the data side (L2 refills +12 - 16 K, load stalls
++2.2 - 2.8 M over the 32-bit build) is untouched. The G350 (Cortex-A35, dArkOS): laid-out runs reach
+King's Pass and play as without (723 GL calls a frame, as the base runs), but its frame rate there moved
+30.9 / 43.4 fps between two base runs of the same build (the GPU clock throttles, 528 - 786 MHz):
+no relayout effect can be read from it yet, and its 32-bit runs need a check that they measure the
+same spot.
+
 **Defaults** (2026-11-20): `UA_ATOMICS=llsc` on for the 64-bit player (exact, no cost, a CPU with LSE is
 left alone); `UA_RELAYOUT` on where a list for the library's build id is in `relayout/` beside ua_host
 (runtime/relayout/: Hollow Knight's 6000.0.61f1 IL2CPP arm64 player, whole functions: they carry to scenes the recordings missed), with `UA_RELAYOUT_DATA` on;
