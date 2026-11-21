@@ -9,7 +9,9 @@ GL names in the libunity.so of 15 players, 5.6 - 6000.6), gets a wrapper. A wrap
 the call into glrec.c's command buffer (calls that only set state or queue GPU work: their arguments
 by value, the memory a pointer argument points at copied), or submits everything recorded so far
 and calls through (anything that returns a value, writes through a pointer, or reads memory whose
-size is not known here). The class of each function is decided below; glrec.c has the rest."""
+size is not known here). The class of each function is decided below; glrec.c has the rest.
+UA_GL_REC_FILE (a trace of every call to a file, glrec.c) uses the tr_<name> writers below, and
+glreplay.c (GLREC_PART 3) the reader that calls a driver with them again, names mapped."""
 import re, sys, os
 
 # extension entry points Unity players name (core GLES 3.2 functions are all wrapped)
@@ -172,6 +174,65 @@ POST = {
     'glDeleteProgram': 'glrec_delete_program(program)',
 }
 
+# ---- UA_GL_REC_FILE: every call written to a file (tr_<name>, after the call), and replayed (part 3)
+# pointer arguments written with the memory they point at: {function: {param: C expression giving the slot}}
+TR = {}
+for _f, _d in COPY.items():
+    TR[_f] = {_p: 'tr_blob(%s, (size_t)(%s))' % (_p, _e) for _p, _e in _d.items()}
+for _f, _p in (('glDeleteBuffers', 'buffers'), ('glDeleteVertexArrays', 'arrays'), ('glDeleteVertexArraysOES', 'arrays')):
+    TR[_f] = {_p: 'tr_blob(%s, (size_t)n * 4)' % _p}
+for _f in ('glTexSubImage2D', 'glTexImage2D'):
+    TR[_f] = {'pixels': 'tr_pix(pixels, tr_pixsize(width, height, 1, format, type))'}
+for _f in ('glTexSubImage3D', 'glTexImage3D'):
+    TR[_f] = {'pixels': 'tr_pix(pixels, tr_pixsize(width, height, depth, format, type))'}
+for _f in ('glCompressedTexSubImage2D', 'glCompressedTexSubImage3D', 'glCompressedTexImage2D', 'glCompressedTexImage3D'):
+    TR[_f] = {'data': 'tr_pix(data, (size_t)(imageSize > 0 ? imageSize : 0))'}
+for _d, _i in DRAWS.items():
+    if _i:
+        TR[_d] = {_i: 'tr_idx(%s, count, type)' % _i}
+for _f in ('glVertexAttribPointer', 'glVertexAttribIPointer'):
+    TR[_f] = {'pointer': 'tr_vap(pointer)'}
+for _f, _p in (('glGetUniformLocation', 'name'), ('glGetAttribLocation', 'name'), ('glBindAttribLocation', 'name'),
+               ('glGetFragDataLocation', 'name'), ('glGetUniformBlockIndex', 'uniformBlockName'),
+               ('glGetProgramResourceIndex', 'name'), ('glGetProgramResourceLocation', 'name')):
+    TR[_f] = {_p: 'tr_str(%s)' % _p}
+# outputs written after the call: the names a glGen* made
+TR_GEN = {}     # function: (count param, names param, kind)
+# which object a GLuint (or GLuint array) parameter names, by its name (part 3 maps them)
+KIND = {'texture': 'TEX', 'textures': 'TEX', 'buffer': 'BUF', 'buffers': 'BUF', 'framebuffer': 'FBO',
+        'framebuffers': 'FBO', 'renderbuffer': 'RBO', 'renderbuffers': 'RBO', 'array': 'VAO', 'arrays': 'VAO',
+        'sampler': 'SMP', 'samplers': 'SMP', 'program': 'PROG', 'shader': 'SH', 'pipeline': 'PIPE',
+        'pipelines': 'PIPE', 'id': 'QRY', 'ids': 'QRY'}
+XFB_FUNCS = {'glBindTransformFeedback', 'glGenTransformFeedbacks', 'glDeleteTransformFeedbacks', 'glIsTransformFeedback'}
+# replayed as they are recorded by hand (glreplay.c): maps, fences, sources, locations
+TR_CUSTOM_REPLAY = {'glMapBufferRange', 'glFlushMappedBufferRange', 'glUnmapBuffer', 'glFenceSync', 'glClientWaitSync',
+                    'glWaitSync', 'glDeleteSync', 'glShaderSource', 'glGetUniformLocation', 'glGetUniformBlockIndex',
+                    'glGetAttribLocation', 'glGetProgramResourceLocation', 'glGetProgramResourceIndex',
+                    'glGetFragDataLocation', 'glCreateShader', 'glCreateProgram', 'glCreateShaderProgramv',
+                    'glUseProgram', 'glReadPixels', 'glMapBufferOES', 'glUnmapBufferOES', 'glMapBufferRangeEXT',
+                    'glFlushMappedBufferRangeEXT'}
+
+
+def tr_kind(name, t, n):
+    b = t.replace('const ', '').replace('*', '').strip()
+    if b != 'GLuint':
+        return None
+    k = KIND.get(n)
+    if k == 'QRY' and name in XFB_FUNCS:
+        k = 'XFB'
+    return k
+
+
+def replayed(name):
+    """skipped on replay: queries, reads, debug labels, program binaries (the driver's own)"""
+    if name.startswith(('glGet', 'glIs', 'glCheck', 'glReadnPixels', 'glDebugMessage', 'glObjectLabel',
+                        'glObjectPtrLabel', 'glLabelObject', 'glPushDebugGroup', 'glPopDebugGroup',
+                        'glPushGroupMarker', 'glPopGroupMarker', 'glInsertEventMarker')):
+        return False
+    return name not in ('glProgramBinary', 'glProgramBinaryOES', 'glReleaseShaderCompiler', 'glFinish', 'glFlush',
+                        'glGetError', 'glValidateProgram', 'glShaderBinary')
+
+
 PTR_TYPES = {'GLsync', 'GLDEBUGPROC', 'GLDEBUGPROCKHR', 'GLeglImageOES', 'GLeglClientBufferEXT'}
 FLOAT_TYPES = {'GLfloat', 'GLclampf'}
 
@@ -278,6 +339,29 @@ def main():
     w('static void *glrec_next[OP_N] __attribute__((unused));\n')
     w('#define NX(f) ((T_##f)glrec_next[OP_##f])\n')
     w('#endif\n\n#if !defined(GLREC_PART) || GLREC_PART == 2\n')
+    # UA_GL_REC_FILE's writers: [op, nargs, nblobs, has a result] the slots, the result, then the blobs
+    w('\n// UA_GL_REC_FILE: each call written after it ran (glrec.c\'s tr_* helpers; replayed by glreplay.c)\n')
+    for ret, name, ps in funcs:
+        if classes[name] == 'custom':
+            continue
+        decl = ', '.join('%s %s' % (t, n) for t, n in ps)
+        if ret != 'void':
+            decl = (decl + ', ' if decl else '') + '%s r_' % ret
+        trd = TR.get(name, {})
+        sl = []
+        for i, (t, n) in enumerate(ps):
+            if n in trd:
+                sl.append('a_[%d] = %s;' % (i, trd[n]))
+            elif name.startswith('glGen') and is_ptr(t) and len(ps) == 2:
+                sl.append('a_[%d] = tr_blob(%s, (size_t)(%s > 0 ? %s : 0) * 4);' % (i, n, ps[0][1], ps[0][1]))
+            else:
+                sl.append('a_[%d] = %s;' % (i, slot_in(t, n)))
+        rs = ''
+        if ret != 'void':
+            rs = ' tr_ret(%s);' % slot_in(ret, 'r_')
+        w('static void tr_%s(%s) { %str_begin(OP_%s, %d);%s%s tr_end(); }\n' % (
+            name, decl or 'void', 'uint64_t *a_ = ' if sl else '', name, len(ps), (' ' + ' '.join(sl)) if sl else '', rs))
+    w('#define TRC(f, ...) do { if (g_tr) tr_##f(__VA_ARGS__); } while (0)\n\n')
     for ret, name, ps in funcs:
         hasf = any(p[0].replace('const ', '').strip() in FLOAT_TYPES and not is_ptr(p[0]) for p in ps)
         decl = ', '.join('%s %s' % (t, n) for t, n in ps) or 'void'
@@ -285,36 +369,37 @@ def main():
         abi = 'SO_ABI ' if hasf else ''
         c = classes[name]
         rv = 'return ' if ret != 'void' else ''
+        trargs = ', '.join([name] + [n for t, n in ps] + (['r_'] if ret != 'void' else []))
         if c == 'imm':
             # (glrec_imm: UA_GL_REC=thread's context for the call)
             if ret == 'void':
-                w('static %s%s w_%s(%s) { glrec_imm(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); }\n'
-                  % (abi, ret, name, decl, name, name, args, name))
+                w('static %s%s w_%s(%s) { glrec_imm(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); TRC(%s); }\n'
+                  % (abi, ret, name, decl, name, name, args, name, trargs))
             else:
-                w('static %s%s w_%s(%s) { glrec_imm(OP_%s); uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); glrec_t1(OP_%s, t_); return r_; }\n'
-                  % (abi, ret, name, decl, name, ret, name, args, name))
+                w('static %s%s w_%s(%s) { glrec_imm(OP_%s); uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); glrec_t1(OP_%s, t_); TRC(%s); return r_; }\n'
+                  % (abi, ret, name, decl, name, ret, name, args, name, trargs))
             continue
         if c == 'custom':
             w('static %s%s w_%s(%s) { %sglrec_custom_%s(%s); }\n' % (abi, ret, name, decl, rv, name, args))
             continue
         if c == 'flush' and name in POST:
             assert ret == 'void'
-            w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_tadd(OP_%s, t_); %s; }\n'
-              % (abi, ret, name, decl, name, name, args, name, POST[name]))
+            w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_tadd(OP_%s, t_); %s; TRC(%s); }\n'
+              % (abi, ret, name, decl, name, name, args, name, POST[name], trargs))
             continue
         if c == 'flush':
             if ret == 'void':
-                w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_tadd(OP_%s, t_); }\n'
-                  % (abi, ret, name, decl, name, name, args, name))
+                w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_tadd(OP_%s, t_); TRC(%s); }\n'
+                  % (abi, ret, name, decl, name, name, args, name, trargs))
             else:
                 w('static %s%s w_%s(%s) { glrec_submit_for(OP_%s); uint64_t t_ = glrec_t0(); %s r_ = NX(%s)(%s); '
-                  'glrec_tadd(OP_%s, t_); return r_; }\n' % (abi, ret, name, decl, name, ret, name, args, name))
+                  'glrec_tadd(OP_%s, t_); TRC(%s); return r_; }\n' % (abi, ret, name, decl, name, ret, name, args, name, trargs))
             continue
         w('static %s%s w_%s(%s)\n{\n    int rec_ = glrec_recording();\n' % (abi, ret, name, decl))
         if name in HOOKS:
             # (the hook follows the call either way; nonzero while recording: submit and call through)
             w('    if (%s && rec_) { glrec_submit_for(OP_%s); rec_ = 0; }\n' % (HOOKS[name], name))
-        w('    if (!rec_) { uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); return; }\n' % (name, args, name))
+        w('    if (!rec_) { uint64_t t_ = glrec_t0(); NX(%s)(%s); glrec_t1(OP_%s, t_); TRC(%s); return; }\n' % (name, args, name, trargs))
         cp = COPY.get(name, {})
         sl = []
         for i, (t, n) in enumerate(ps):
@@ -354,6 +439,54 @@ def main():
         w('    { "%s", (void *)w_%s },\n' % (name, name))
     w('    { NULL, NULL },\n};\n')
     w('#endif\n')
+    # part 3: glreplay.c's decoder for UA_GL_REC_FILE traces
+    w('\n#if defined(GLREC_PART) && GLREC_PART == 3\n')
+    w('// what replay does with each entry point: 0 skipped (a query, a read, a label), 1 below, 2 glreplay.c by hand\n')
+    w('static const unsigned char rp_how[OP_N] = {\n')
+    for ret, name, ps in funcs:
+        h = 2 if name in TR_CUSTOM_REPLAY else 1 if replayed(name) and classes[name] != 'custom' else 0
+        w('    %d,   // %s\n' % (h, name))
+    w('};\n')
+    w('static void rp_call(unsigned op, const uint64_t *a, uint64_t r)\n{\n    (void)r;\n    switch (op) {\n')
+    for ret, name, ps in funcs:
+        if name in TR_CUSTOM_REPLAY:
+            w('    case OP_%s: rp_custom_%s(a, r); break;\n' % (name, name))
+            continue
+        if not replayed(name) or classes[name] == 'custom':
+            continue
+        trd = TR.get(name, {})
+        gen = name.startswith('glGen') and len(ps) == 2 and is_ptr(ps[1][0])
+        if gen:
+            k = tr_kind(name, ps[1][0], ps[1][1])
+            assert k, name
+            w('    case OP_%s: { GLsizei n_ = (GLsizei)(int64_t)a[0]; GLuint *o_ = rp_out(n_); RX(%s)(n_, o_); '
+              'rp_gen(MK_%s, (const GLuint *)rp_ptr(a[1]), o_, n_); break; }\n' % (name, name, k))
+            continue
+        outs = []
+        prog_param = any(n == 'program' for t, n in ps)
+        for i, (t, n) in enumerate(ps):
+            b = t.replace('const ', '').strip()
+            k = tr_kind(name, t, n)
+            if is_ptr(t) and b in PTR_TYPES:
+                outs.append('(%s)rp_sync(a[%d])' % (t, i) if b == 'GLsync' else '(%s)(uintptr_t)a[%d]' % (t, i))
+            elif is_ptr(t):
+                kk = KIND.get(n)
+                if name.startswith('glDelete') and kk:
+                    if kk == 'QRY' and name in XFB_FUNCS:
+                        kk = 'XFB'
+                    outs.append('(%s)rp_maparr(MK_%s, rp_ptr(a[%d]), (GLsizei)(int64_t)a[0])' % (t, kk, i))
+                else:
+                    outs.append('(%s)rp_ptr(a[%d])' % (t, i))
+            elif k:
+                outs.append('rp_map(MK_%s, (GLuint)a[%d])' % (k, i))
+            elif n == 'location' and b == 'GLint' and name.startswith(('glUniform', 'glProgramUniform')):
+                outs.append('rp_loc(%s, (GLint)(int64_t)a[%d])' % ('(GLuint)a[0]' if prog_param else 'rp_prog', i))
+            elif n == 'uniformBlockIndex':
+                outs.append('rp_ubi((GLuint)a[0], (GLuint)a[%d])' % i)
+            else:
+                outs.append(slot_out(t, i))
+        w('    case OP_%s: RX(%s)(%s); break;\n' % (name, name, ', '.join(outs)))
+    w('    default: break;\n    }\n}\n#endif\n')
 
 
 if __name__ == '__main__':

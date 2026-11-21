@@ -35,7 +35,10 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrename test/test_glrename.c glrename.c $O/rename/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/rec
   $CC -O2 -g -Wall -Wextra -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/rec/libGLESv2.so.2 test/fake_rec_gl.c
-  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c glmerge.c $O/rec/libGLESv2.so.2 -ldl -lpthread
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c glmerge.c $O/rec/libGLESv2.so.2 -ldl -lpthread -lz
+  mkdir -p $O/replay
+  $CC -O2 -g -Wall -Wextra -shared -fPIC -o $O/replay/libfakereplay.so test/fake_replay_gl.c
+  $CC -O2 -g -Wall -Wextra -o $O/glreplay glreplay.c -ldl -lz
   mkdir -p $O/memo
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/memo/libGLESv2.so.2 test/fake_memo_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glmemo test/test_glmemo.c glmemo.c $O/memo/libGLESv2.so.2 -ldl -lpthread
@@ -52,7 +55,16 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/pc/libGLESv2.so.2 test/fake_progcache_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_progcache test/test_progcache.c glhooks.c $O/pc/libGLESv2.so.2 -ldl -lpthread'
 PCS='hit order attribs refused tf off'
-RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach upload sink side opt blackbox'
+RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach upload sink side opt blackbox file'
+# glreplay.c: the trace test_glrec's file scenario wrote, replayed against fake_replay_gl.c (names, locations,
+# shader source, map bytes, texture upload size, client indices reaching the driver as the game made them)
+REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/dev/null &&
+  GLREP_EGL=$PWD/$O/replay/libfakereplay.so GLREP_GLES=$PWD/$O/replay/libfakereplay.so $O/glreplay $t --from 0 --check > $t.txt 2>&1;
+  ok=1; for want in "src 140 1 void main() { }" "attach 105 140" "link 105" "use 105" "loc 105 _Color" "u4fv 17 1 0.50 0.25" "map 16 32" "flush 0 8 7 9"
+    "texsub 5x3 pixels" "tex 12" "drawel 3 42" "fb 1" "draw 3" "frames measured: 2" "GL errors: 0"; do
+    grep -qF "$want" $t.txt || { echo "FAIL glreplay: no \"$want\""; ok=0; }; done;
+  grep -qF "draw 5" $t.txt && { echo "FAIL glreplay: a call after the file closed"; ok=0; };
+  [ $ok = 1 ] && echo "ok glreplay" || cat $t.txt; rm -f $t $t.txt'
 MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec external'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
@@ -64,6 +76,7 @@ if [ "$ARCH" = arm64 ]; then
     for s in $PASS_TESTS; do LD_LIBRARY_PATH=\$O/pass \$O/test_glpass \$s; done
     for s in $RENAME_TESTS; do LD_LIBRARY_PATH=\$O/rename \$O/test_glrename \$s; done
     for s in $RECS; do LD_LIBRARY_PATH=\$O/rec \$O/test_glrec \$s; done
+    $REPLAY
     for s in $MEMO; do LD_LIBRARY_PATH=\$O/memo \$O/test_glmemo \$s; done
     for s in random count off; do LD_LIBRARY_PATH=\$O/state \$O/test_glstate \$s; done
     for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done
@@ -81,6 +94,7 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
    for s in '"$PASS_TESTS"'; do LD_LIBRARY_PATH=out/test/pass out/test/test_glpass $s; done
    for s in '"$RENAME_TESTS"'; do LD_LIBRARY_PATH=out/test/rename out/test/test_glrename $s; done
    for s in '"$RECS"'; do LD_LIBRARY_PATH=out/test/rec out/test/test_glrec $s; done
+   O=out/test; '"$REPLAY"'
    for s in '"$MEMO"'; do LD_LIBRARY_PATH=out/test/memo out/test/test_glmemo $s; done
    for s in random count off; do LD_LIBRARY_PATH=out/test/state out/test/test_glstate $s; done
    for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=out/test/arena out/test/test_glarena $s; done

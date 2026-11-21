@@ -20,6 +20,10 @@
 //                      calls are submitted (on the GL thread with thread: the driver's time there,
 //                      call by call, as UA_GL_REC=time gives it for the render thread):
 //                      "[glrec]   time in GL (submitted): ..."
+//   UA_GL_REC_FILE=<file>  (with census or time; alone: census) every GL call written to a gzip file
+//                      after it ran, replayable against any EGL/GLES driver by glreplay.c (below, at
+//                      "UA_GL_REC_FILE"); UA_GL_REC_FILE_FRAMES=<n> closes it after <n> frames,
+//                      UA_GL_REC_FILE_PIXELS=1 keeps texture pixels (else their size only)
 //   UA_GL_REC_BLACKBOX=<file>  (with 1, 2, thread or auto) a flight recorder for a handheld that hangs
 //                      in the driver: before each frame's held calls are submitted, before the swap and
 //                      after it (UA_GL_REC_BLACKBOX_LEVEL=1, default), also before each glBindFramebuffer
@@ -59,6 +63,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <zlib.h>
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 #include <EGL/egl.h>
@@ -440,6 +445,170 @@ static uint64_t glrec_cpixels(const void *p, GLsizei size)
     return glrec_blob(p, (size_t)size);
 }
 
+// ---- UA_GL_REC_FILE=<file>: every GL call (any thread) written to a gzip file after it ran, for
+// glreplay.c to call any driver with again (needs UA_GL_REC=census or time, which it implies: the
+// calls reach the driver as the game makes them). A record: one word [op | slots << 24 | blobs << 32 |
+// result << 48 | thread << 49], the slots, the result, then each blob (a word with its length, bit 63
+// set for a run of zeros whose bytes are not written; the bytes, padded to 8). A slot that points at
+// memory holds TR_TAG | its blob's index. Texture pixels are written as their size only (zeros on
+// replay: a driver's CPU cost does not depend on them) unless UA_GL_REC_FILE_PIXELS=1. Unity's program
+// binary cache is off while writing (programs compiled from source: a binary is the driver's own).
+// UA_GL_REC_FILE_FRAMES=<n>: the file closed after <n> frames.
+#define TR_TAG (1ull << 63)
+#define TR_FRAME 0xFFFFF0u              // (a record of its own: the swap)
+static int g_tr, g_trpix;
+static gzFile g_trf;
+static pthread_mutex_t g_trm = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_trrec[24];
+static unsigned g_trop, g_trn, g_trnb, g_trhasret;
+static unsigned char *g_trblob; static size_t g_trnblob, g_trcapblob;
+static pthread_t g_trthr[32]; static unsigned g_trnthr;
+static unsigned long g_tr_frames, g_tr_max_frames, g_tr_calls, g_tr_client, g_tr_threads_warned;
+static unsigned long long g_tr_bytes;
+static void tr_close(void);
+static unsigned tr_thread(void)
+{
+    pthread_t me = pthread_self();
+    for (unsigned i = 0; i < g_trnthr; i++) if (pthread_equal(g_trthr[i], me)) return i;
+    if (g_trnthr < 32) { g_trthr[g_trnthr] = me; return g_trnthr++; }
+    return 31;
+}
+static uint64_t *tr_begin(unsigned op, unsigned n)
+{
+    pthread_mutex_lock(&g_trm);
+    g_trop = op; g_trn = n; g_trnb = 0; g_trhasret = 0; g_trnblob = 0;
+    return g_trrec + 1;
+}
+static void tr_ret(uint64_t v) { g_trrec[1 + g_trn] = v; g_trhasret = 1; }
+static void tr_put(const void *p, size_t n) { if (g_trf && n) { gzwrite(g_trf, p, (unsigned)n); g_tr_bytes += n; } }
+static void tr_end(void)
+{
+    if (g_tr && g_trf) {
+        g_trrec[0] = g_trop | (uint64_t)g_trn << 24 | (uint64_t)g_trnb << 32 | (uint64_t)g_trhasret << 48 | (uint64_t)tr_thread() << 49;
+        tr_put(g_trrec, (1 + g_trn + g_trhasret) * 8);
+        tr_put(g_trblob, g_trnblob);
+        g_tr_calls++;
+    }
+    pthread_mutex_unlock(&g_trm);
+}
+static uint64_t tr_blobhead(uint64_t head, const void *p, size_t n)
+{
+    size_t pad = head >> 63 ? 0 : (n + 7) & ~(size_t)7, at = g_trnblob;
+    if (at + 8 + pad > g_trcapblob) g_trblob = grow(g_trblob, &g_trcapblob, at + 8 + pad, 1);
+    memcpy(g_trblob + at, &head, 8);
+    if (pad) { memcpy(g_trblob + at + 8, p, n); memset(g_trblob + at + 8 + n, 0, pad - n); }
+    g_trnblob = at + 8 + pad;
+    return TR_TAG | g_trnb++;
+}
+static uint64_t tr_blob(const void *p, size_t n) { return p ? tr_blobhead(n, p, n) : 0; }
+static uint64_t tr_zero(size_t n) { return tr_blobhead(TR_TAG | n, NULL, 0); }
+static uint64_t tr_str(const char *s) { return s ? tr_blob(s, strlen(s) + 1) : 0; }
+static GLint tr_get(GLenum p) { GLint v = 0; d_GetIntegerv(p, &v); return v; }
+// an upload's pixels: an offset into the bound unpack buffer, else the bytes (or their size)
+static uint64_t tr_pix(const void *p, size_t n)
+{
+    if (!p || tr_get(GL_PIXEL_UNPACK_BUFFER_BINDING)) return (uint64_t)(uintptr_t)p;
+    return g_trpix ? tr_blob(p, n) : tr_zero(n);
+}
+static size_t tr_pixsize(GLsizei w, GLsizei h, GLsizei d, GLenum format, GLenum type)
+{
+    if (w <= 0 || h <= 0 || d <= 0) return 0;
+    size_t bpp = pixel_bytes(format, type);
+    if (!bpp) return (size_t)w * (size_t)h * (size_t)d * 16;      // (unknown: the most a texel can be)
+    size_t align = (size_t)tr_get(GL_UNPACK_ALIGNMENT), rl = tr_get(GL_UNPACK_ROW_LENGTH) > 0 ? (size_t)tr_get(GL_UNPACK_ROW_LENGTH) : (size_t)w;
+    size_t ih = tr_get(GL_UNPACK_IMAGE_HEIGHT) > 0 ? (size_t)tr_get(GL_UNPACK_IMAGE_HEIGHT) : (size_t)h;
+    size_t row = rl * bpp;
+    if (align > 1) row = (row + align - 1) / align * align;
+    size_t img = ih * row;
+    return (size_t)tr_get(GL_UNPACK_SKIP_IMAGES) * img + (size_t)(d - 1) * img + (size_t)tr_get(GL_UNPACK_SKIP_ROWS) * row +
+           (size_t)tr_get(GL_UNPACK_SKIP_PIXELS) * bpp + (size_t)(h - 1) * row + (size_t)w * bpp;
+}
+// a draw's indices: an offset into the element buffer, or client memory (written)
+static uint64_t tr_idx(const void *p, GLsizei count, GLenum type)
+{
+    if (tr_get(GL_ELEMENT_ARRAY_BUFFER_BINDING)) return (uint64_t)(uintptr_t)p;
+    size_t sz = type == GL_UNSIGNED_BYTE ? 1 : type == GL_UNSIGNED_SHORT ? 2 : 4;
+    return tr_blob(p, (size_t)(count > 0 ? count : 0) * sz);
+}
+// a vertex attribute from client memory cannot be replayed (its size is known only at the draw): counted
+static uint64_t tr_vap(const void *p)
+{
+    if (p && !tr_get(GL_ARRAY_BUFFER_BINDING) && !g_tr_client++)
+        fprintf(stderr, "[glrec] UA_GL_REC_FILE: a client-side vertex array (not replayable; counted)\n");
+    return (uint64_t)(uintptr_t)p;
+}
+// maps (written into by the game): the flushed ranges, or the whole range at the unmap, written
+typedef struct { int used; GLenum target; unsigned char *p; GLsizeiptr len; GLbitfield access; } trmap_t;
+static trmap_t g_trmap[16];
+static void tr_map(GLenum target, GLintptr off, GLsizeiptr len, GLbitfield access, void *p)
+{
+    uint64_t *a = tr_begin(OP_glMapBufferRange, 4);
+    a[0] = target; a[1] = (uint64_t)(int64_t)off; a[2] = (uint64_t)(int64_t)len; a[3] = access;
+    tr_ret((uint64_t)(uintptr_t)p);
+    if (p) {
+        trmap_t *m = NULL;
+        for (int i = 0; i < 16 && !m; i++) if (g_trmap[i].used && g_trmap[i].target == target) m = &g_trmap[i];
+        for (int i = 0; i < 16 && !m; i++) if (!g_trmap[i].used) m = &g_trmap[i];
+        if (m) *m = (trmap_t){ 1, target, p, len, access };
+    }
+    tr_end();
+}
+static trmap_t *tr_mapof(GLenum target)
+{
+    for (int i = 0; i < 16; i++) if (g_trmap[i].used && g_trmap[i].target == target) return &g_trmap[i];
+    return NULL;
+}
+static void tr_flushmap(GLenum target, GLintptr off, GLsizeiptr len)
+{
+    uint64_t *a = tr_begin(OP_glFlushMappedBufferRange, 4);
+    trmap_t *m = tr_mapof(target);
+    a[0] = target; a[1] = (uint64_t)(int64_t)off; a[2] = (uint64_t)(int64_t)len;
+    a[3] = m && off >= 0 && len >= 0 && off + len <= m->len ? tr_blob(m->p + off, (size_t)len) : 0;
+    tr_end();
+}
+static void tr_unmap(GLenum target, const trmap_t *m)
+{
+    uint64_t *a = tr_begin(OP_glUnmapBuffer, 2);
+    a[0] = target;
+    a[1] = m && (m->access & GL_MAP_WRITE_BIT) && !(m->access & GL_MAP_FLUSH_EXPLICIT_BIT) ? tr_blob(m->p, (size_t)m->len) : 0;
+    tr_end();
+}
+static void tr_frame(void)
+{
+    uint64_t *a = tr_begin(TR_FRAME, 1);
+    a[0] = g_tr_frames;
+    tr_end();
+    g_tr_frames++;
+    if (g_tr_max_frames && g_tr_frames >= g_tr_max_frames) tr_close();
+    else if (g_tr_frames % 60 == 0) { pthread_mutex_lock(&g_trm); if (g_trf) gzflush(g_trf, Z_SYNC_FLUSH); pthread_mutex_unlock(&g_trm); }
+}
+static void tr_close(void)
+{
+    pthread_mutex_lock(&g_trm);
+    if (g_trf) {
+        gzclose(g_trf); g_trf = NULL;
+        fprintf(stderr, "[glrec] UA_GL_REC_FILE: closed after %lu frames, %lu calls, %.1f MB before compression%s\n",
+                g_tr_frames, g_tr_calls, g_tr_bytes / 1e6, g_tr_client ? " (client-side vertex arrays: not replayable)" : "");
+    }
+    g_tr = 0;
+    pthread_mutex_unlock(&g_trm);
+}
+static void tr_open(const char *path)
+{
+    g_trf = gzopen(path, "wb1");
+    if (!g_trf) { fprintf(stderr, "[glrec] UA_GL_REC_FILE: cannot open %s\n", path); return; }
+    const char *px = getenv("UA_GL_REC_FILE_PIXELS"), *fr = getenv("UA_GL_REC_FILE_FRAMES");
+    g_trpix = px && atoi(px) > 0;
+    g_tr_max_frames = fr ? strtoul(fr, NULL, 10) : 0;
+    uint32_t h[3] = { 1, OP_N, (uint32_t)sizeof(void *) };
+    tr_put("UAGLTRC1", 8); tr_put(h, sizeof h);
+    for (unsigned i = 0; i < OP_N; i++) { uint16_t l = (uint16_t)strlen(glrec_name[i]); tr_put(&l, 2); tr_put(glrec_name[i], l); }
+    g_tr = 1;
+    atexit(tr_close);
+    fprintf(stderr, "[glrec] UA_GL_REC_FILE: every GL call to %s (%s%s)\n", path,
+            g_trpix ? "with texture pixels" : "texture pixels as their size", g_tr_max_frames ? ", closed after UA_GL_REC_FILE_FRAMES" : "");
+}
+
 // ---- buffer maps for writing: the game writes into host memory, put into the real mapping at submission
 #define NMAP 16
 typedef struct { int used; GLenum target; GLuint buf; GLbitfield access; GLsizeiptr len; unsigned char *shadow; uint32_t id; } map_t;
@@ -478,6 +647,7 @@ static void *glrec_custom_glMapBufferRange(GLenum target, GLintptr off, GLsizeip
     uint64_t t_ = glrec_t0();
     void *p = NX(glMapBufferRange)(target, off, len, access);
     glrec_tadd(OP_glMapBufferRange, t_);
+    if (g_tr) tr_map(target, off, len, access, p);
     return p;
 }
 static void glrec_custom_glFlushMappedBufferRange(GLenum target, GLintptr off, GLsizeiptr len)
@@ -488,6 +658,7 @@ static void glrec_custom_glFlushMappedBufferRange(GLenum target, GLintptr off, G
         uint64_t t_ = glrec_t0();
         NX(glFlushMappedBufferRange)(target, off, len);
         glrec_tadd(OP_glFlushMappedBufferRange, t_);
+        if (g_tr) tr_flushmap(target, off, len);
         return;
     }
     int ok = off >= 0 && len >= 0 && off + len <= m->len;
@@ -500,6 +671,9 @@ static GLboolean glrec_custom_glUnmapBuffer(GLenum target)
     map_t *m = glrec_recording() ? map_of(target) : NULL;
     if (!m) {
         glrec_submit_for(OP_glUnmapBuffer);
+        trmap_t *tm = g_tr ? tr_mapof(target) : NULL;
+        if (g_tr) tr_unmap(target, tm);          // (before the unmap: the memory goes with it)
+        if (tm) tm->used = 0;
         uint64_t t_ = glrec_t0();
         GLboolean r = NX(glUnmapBuffer)(target);
         glrec_tadd(OP_glUnmapBuffer, t_);
@@ -603,6 +777,17 @@ static void glrec_custom_glShaderSource(GLuint sh, GLsizei count, const GLchar *
     else NX(glShaderSource)(sh, count, str, len);
     glrec_tadd(OP_glShaderSource, t_);
     glrec_shader_source(sh, count, str, len);
+    if (g_tr) {                                      // (written as one string)
+        size_t tot = 0;
+        for (GLsizei i = 0; str && i < count; i++) if (str[i]) tot += len && len[i] >= 0 ? (size_t)len[i] : strlen(str[i]);
+        char *c = malloc(tot + 1), *o = c;
+        for (GLsizei i = 0; c && str && i < count; i++) {
+            if (!str[i]) continue;
+            size_t n = len && len[i] >= 0 ? (size_t)len[i] : strlen(str[i]);
+            memcpy(o, str[i], n); o += n;
+        }
+        if (c) { *o = 0; uint64_t *a = tr_begin(OP_glShaderSource, 2); a[0] = sh; a[1] = tr_blob(c, tot + 1); tr_end(); free(c); }
+    }
 }
 static void glrec_replay_glShaderSource(const uint64_t *a) { (void)a; }      // (never held)
 static void glrec_attach_shader(GLuint prog, GLuint sh) { if (g_mode == 3) fg_note_attach(prog, sh); glmerge_attach(prog, sh); }
@@ -624,7 +809,7 @@ static void glrec_delete_program(GLuint prog) { if (g_mode == 3) fg_note_delete(
 // (Unity's program binary cache stays on: the frame graph keeps what it learnt from each program's
 // sources with the binary Unity reads back for its cache, glrec_fg.c)
 // (UA_GL_MERGE: Unity's program binary cache off, every program compiled from the source it rewrote)
-static void glrec_get_integerv(GLenum pname, GLint *data) { if (glmerge_on() && pname == GL_NUM_PROGRAM_BINARY_FORMATS && data) *data = 0; }
+static void glrec_get_integerv(GLenum pname, GLint *data) { if ((glmerge_on() || g_tr) && pname == GL_NUM_PROGRAM_BINARY_FORMATS && data) *data = 0; }
 
 // ---- UA_GL_REC=thread: the held frames replayed, and Unity's swaps made, on a thread of their own
 // Unity's render thread records each frame as with UA_GL_REC=1. At the swap, Unity's context and the
@@ -874,6 +1059,7 @@ static GLsync glrec_custom_glFenceSync(GLenum cond, GLbitfield flags)
     uint64_t t_ = glrec_t0();
     GLsync r = NX(glFenceSync)(cond, flags);
     glrec_tadd(OP_glFenceSync, t_);
+    if (g_tr) { uint64_t *a = tr_begin(OP_glFenceSync, 2); a[0] = cond; a[1] = flags; tr_ret((uint64_t)(uintptr_t)r); tr_end(); }
     return r;
 }
 static void glrec_replay_glFenceSync(const uint64_t *a)
@@ -892,6 +1078,7 @@ static GLenum glrec_custom_glClientWaitSync(GLsync s, GLbitfield flags, GLuint64
     uint64_t t_ = glrec_t0();
     GLenum v = r ? NX(glClientWaitSync)(r, flags, timeout) : GL_WAIT_FAILED;
     glrec_t1(OP_glClientWaitSync, t_);
+    if (g_tr) { uint64_t *a = tr_begin(OP_glClientWaitSync, 3); a[0] = (uint64_t)(uintptr_t)s; a[1] = flags; a[2] = timeout; tr_ret(v); tr_end(); }
     return v;
 }
 static void glrec_replay_glClientWaitSync(const uint64_t *a) { (void)a; }
@@ -913,6 +1100,7 @@ static void glrec_custom_glDeleteSync(GLsync s)
     uint64_t t_ = glrec_t0();
     if (r || !is_proxy(s)) NX(glDeleteSync)(r);
     glrec_t1(OP_glDeleteSync, t_);
+    if (g_tr) { uint64_t *a = tr_begin(OP_glDeleteSync, 1); a[0] = (uint64_t)(uintptr_t)s; tr_end(); }
     if (is_proxy(s)) free_proxy((psync *)s);
 }
 static void glrec_replay_glDeleteSync(const uint64_t *a)
@@ -952,6 +1140,7 @@ static void glrec_custom_glWaitSync(GLsync s, GLbitfield flags, GLuint64 timeout
     uint64_t t_ = glrec_t0();
     NX(glWaitSync)(r, flags, timeout);
     glrec_tadd(OP_glWaitSync, t_);
+    if (g_tr) { uint64_t *a = tr_begin(OP_glWaitSync, 3); a[0] = (uint64_t)(uintptr_t)s; a[1] = flags; a[2] = timeout; tr_end(); }
 }
 static void glrec_replay_glWaitSync(const uint64_t *a)
 {
@@ -989,6 +1178,7 @@ static void glrec_custom_glDeleteBuffers(GLsizei n, const GLuint *b)
     uint64_t t_ = glrec_t0();
     NX(glDeleteBuffers)(n, b);
     glrec_tadd(OP_glDeleteBuffers, t_);
+    if (g_tr) { uint64_t *a = tr_begin(OP_glDeleteBuffers, 2); a[0] = (uint64_t)(int64_t)n; a[1] = tr_blob(b, n > 0 ? (size_t)n * 4 : 0); tr_end(); }
 }
 static void glrec_replay_glDeleteBuffers(const uint64_t *a) { NX(glDeleteBuffers)((GLsizei)(int64_t)a[0], (const GLuint *)glrec_ptr(a[1])); }
 
@@ -1204,6 +1394,7 @@ static void log_stats(void)
 void glrec_swap(void)
 {
     if (!g_mode) return;
+    if (g_tr) tr_frame();
     if (!g_have_thread) {
         g_thread = pthread_self(); g_have_thread = 1;
         if (g_auto && !glpresent_active()) {
@@ -1234,6 +1425,7 @@ const so_shim *glrec_table(void *(*next)(const char *name))
 {
     memset(g_table, 0, sizeof g_table);
     const char *e = getenv("UA_GL_REC");
+    if ((!e || !*e || !strcmp(e, "0")) && getenv("UA_GL_REC_FILE") && *getenv("UA_GL_REC_FILE")) e = "census";   // (UA_GL_REC_FILE: census)
     g_time = e && !strcmp(e, "time");
     g_mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "census") || g_time ? 1 : !strcmp(e, "1") ? 2 : !strcmp(e, "2") ? 3 : !strcmp(e, "thread") || !strcmp(e, "auto") ? 4 : 0;
     g_auto = g_mode == 4 && !strcmp(e, "auto");
@@ -1252,6 +1444,8 @@ const so_shim *glrec_table(void *(*next)(const char *name))
     }
     const char *l = getenv("UA_GL_REC_LOG");
     if (l && *l) g_log_every = atof(l);
+    const char *tf = getenv("UA_GL_REC_FILE");
+    int want_tr = tf && *tf;
     void *h = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
     if (!h) h = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
     void *eh = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
@@ -1265,6 +1459,8 @@ const so_shim *glrec_table(void *(*next)(const char *name))
         return g_table;
     }
     g_resolve = next;
+    if (want_tr && g_mode == 1) tr_open(tf);
+    else if (want_tr) fprintf(stderr, "[glrec] UA_GL_REC_FILE needs UA_GL_REC=census or time (calls not held): not written\n");
     int k = 0;
     for (unsigned i = 0; i < OP_N; i++) {
         void *p = next ? next(glrec_name[i]) : NULL;

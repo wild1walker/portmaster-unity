@@ -180,6 +180,7 @@ const GLubyte *glGetString(GLenum n)
     return (const GLubyte *)(getenv("FAKE_DS_FETCH") ? "GL_EXT_fake GL_ARM_shader_framebuffer_fetch_depth_stencil" : "GL_EXT_fake");
 }
 GLuint glCreateShader(GLenum t) { (void)t; return 40; }
+GLuint glCreateProgram(void) { return 5; }
 void glShaderSource(GLuint s, GLsizei n, const GLchar *const *str, const GLint *len) { (void)s; (void)n; (void)str; (void)len; }
 void glCompileShader(GLuint s) { (void)s; }
 void glAttachShader(GLuint p, GLuint s) { (void)p; (void)s; }

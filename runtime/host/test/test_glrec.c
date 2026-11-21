@@ -28,7 +28,13 @@
 //               before the upload
 //   side        a shader storage buffer bound: no pass is left out
 //   opt         UA_GL_REC_OPT=end: only invalidates at pass ends
+//   file        UA_GL_REC_FILE: every call written after it ran (census), read back: a shader's source, a
+//               uniform's values and the location it was asked for, a map's flushed bytes, a texture upload
+//               as its size (row length, alignment), client-side indices, a frame per swap, the file closed
+//               after UA_GL_REC_FILE_FRAMES; argv[2] keeps the file there for glreplay's test
 #include <stdio.h>
+#include <stdint.h>
+#include <zlib.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,7 +85,7 @@ static int at(const char *s) { const char *p = strstr(fake_log, s); return p ? (
 int main(int argc, char **argv)
 {
     const char *m = argc > 1 ? argv[1] : "hold";
-    const char *mode = !strcmp(m, "census") ? "census" : (!strcmp(m, "hold") || !strcmp(m, "copy") || !strcmp(m, "clientidx") ||
+    const char *mode = !strcmp(m, "census") || !strcmp(m, "file") ? "census" : (!strcmp(m, "hold") || !strcmp(m, "copy") || !strcmp(m, "clientidx") ||
                                                           !strcmp(m, "clientarray") || !strcmp(m, "map") || !strcmp(m, "texsub") ||
                                                           !strcmp(m, "blackbox")) ? "1" : "2";
     setenv("UA_GL_REC", mode, 1);
@@ -93,6 +99,13 @@ int main(int argc, char **argv)
         close(fd);
         setenv("UA_GL_REC_BLACKBOX", bbf, 1);
         setenv("UA_GL_REC_BLACKBOX_LEVEL", "2", 1);
+    }
+    char trf[512] = "/tmp/test_glrec_fileXXXXXX";
+    if (!strcmp(m, "file")) {
+        if (argc > 2) snprintf(trf, sizeof trf, "%s", argv[2]);
+        else { int fd = mkstemp(trf); CHECK(fd >= 0); close(fd); }
+        setenv("UA_GL_REC_FILE", trf, 1);
+        setenv("UA_GL_REC_FILE_FRAMES", "2", 1);
     }
     g_t = glrec_table(NULL);
     CHECK(g_t && g_t[0].name);
@@ -279,6 +292,78 @@ int main(int argc, char **argv)
         CHECK(strstr(buf, "frame 1, stage: render thread: frame submitted, swapping") != NULL);
         CHECK(strstr(buf, "glBindFramebuffer glDrawArrays") != NULL || strstr(buf, "glBindFramebuffer glDrawElements") != NULL);
         if (failures) printf("%s\n", buf);
+    } else if (!strcmp(m, "file")) {
+        GLuint sh = CALL(glCreateShader, GLuint (*)(GLenum), GL_VERTEX_SHADER);
+        const GLchar *src[2] = { "void main() {", " }" };
+        CALL(glShaderSource, void (*)(GLuint, GLsizei, const GLchar *const *, const GLint *), sh, 2, src, NULL);
+        GLuint pr = CALL(glCreateProgram, GLuint (*)(void));
+        CALL(glAttachShader, void (*)(GLuint, GLuint), pr, sh);
+        CALL(glLinkProgram, void (*)(GLuint), pr);
+        USE(pr);
+        GLint loc = CALL(glGetUniformLocation, GLint (*)(GLuint, const GLchar *), pr, "_Color");
+        GLfloat v[4] = { 0.5f, 0.25f, 0, 1 };
+        CALL(glUniform4fv, void (*)(GLint, GLsizei, const GLfloat *), loc, 1, v);
+        CALL(glBindBuffer, void (*)(GLenum, GLuint), GL_ARRAY_BUFFER, 4);
+        unsigned char *p = CALL(glMapBufferRange, void *(*)(GLenum, GLintptr, GLsizeiptr, GLbitfield), GL_ARRAY_BUFFER, 16, 32,
+                                GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT);
+        p[0] = 7; p[4] = 9;
+        CALL(glFlushMappedBufferRange, void (*)(GLenum, GLintptr, GLsizeiptr), GL_ARRAY_BUFFER, 0, 8);
+        CALL(glUnmapBuffer, GLboolean (*)(GLenum), GL_ARRAY_BUFFER);
+        unsigned char px[3 * 8 * 4] = { 1 };
+        CALL(glPixelStorei, void (*)(GLenum, GLint), GL_UNPACK_ROW_LENGTH, 8);
+        CALL(glTexSubImage2D, void (*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *),
+             GL_TEXTURE_2D, 0, 0, 0, 5, 3, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        CALL(glPixelStorei, void (*)(GLenum, GLint), GL_UNPACK_ROW_LENGTH, 0);
+        TEX(12);
+        unsigned short idx[3] = { 42, 1, 2 };
+        CALL(glBindVertexArray, void (*)(GLuint), 1);
+        CALL(glDrawElements, void (*)(GLenum, GLsizei, GLenum, const void *), GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+        BIND(1); CLEAR(GL_COLOR_BUFFER_BIT); DRAW(3);
+        CHECK(HAS("bind(1) clear(C fb1") && HAS("draw(fb1 3)") && HAS("u4fv(7 0.5)"));       // (census: reached the driver)
+        SWAP();
+        DRAW(5);                                // (after UA_GL_REC_FILE_FRAMES: not written)
+        SWAP();
+        // read it back
+        gzFile f = gzopen(trf, "rb");
+        char magic[8] = { 0 }; uint32_t h[3] = { 0 };
+        CHECK(f && gzread(f, magic, 8) == 8 && !memcmp(magic, "UAGLTRC1", 8) && gzread(f, h, 12) == 12 && h[0] == 1);
+        char names[1024][64];
+        for (uint32_t i = 0; f && i < h[1] && i < 1024; i++) {
+            uint16_t l = 0; names[i][0] = 0;
+            if (gzread(f, &l, 2) != 2 || l >= 64 || gzread(f, names[i], l) != (int)l) { CHECK(0); break; }
+            names[i][l] = 0;
+        }
+        int frames = 0, got_src = 0, got_u = 0, got_loc = 0, got_flush = 0, got_tex = 0, got_idx = 0, got_draw5 = 0, got_gen = 0;
+        uint64_t w;
+        while (f && gzread(f, &w, 8) == 8) {
+            unsigned op = (unsigned)(w & 0xffffff), na = (unsigned)(w >> 24 & 0xff), nb = (unsigned)(w >> 32 & 0xffff), hr = (unsigned)(w >> 48 & 1);
+            uint64_t a[32] = { 0 };
+            if (na + hr > 32 || gzread(f, a, (na + hr) * 8) != (int)((na + hr) * 8)) { CHECK(0); break; }
+            unsigned char *bl[8] = { 0 }; uint64_t bn[8] = { 0 };
+            for (unsigned i = 0; i < nb; i++) {
+                uint64_t len = 0;
+                gzread(f, &len, 8);
+                size_t n = (size_t)(len & ~(1ull << 63)), pad = len >> 63 ? 0 : (n + 7) / 8 * 8;
+                unsigned char *b = calloc(1, pad + 1);
+                if (pad) gzread(f, b, (unsigned)pad);
+                if (i < 8) { bl[i] = b; bn[i] = len; } else free(b);
+            }
+            const char *nm = op == 0xFFFFF0u ? "frame" : op < h[1] ? names[op] : "?";
+            if (!strcmp(nm, "frame")) frames++;
+            if (!strcmp(nm, "glCreateShader") && hr && a[1] == 40) got_gen = 1;
+            if (!strcmp(nm, "glShaderSource") && nb == 1 && !strcmp((char *)bl[0], "void main() { }")) got_src = 1;
+            if (!strcmp(nm, "glGetUniformLocation") && hr && a[2] == 7 && nb == 1 && !strcmp((char *)bl[0], "_Color")) got_loc = 1;
+            if (!strcmp(nm, "glUniform4fv") && a[0] == 7 && nb == 1) { float x; memcpy(&x, bl[0], 4); got_u = x == 0.5f; }
+            if (!strcmp(nm, "glFlushMappedBufferRange") && nb == 1 && bn[0] == 8 && bl[0][0] == 7 && bl[0][4] == 9) got_flush = 1;
+            if (!strcmp(nm, "glTexSubImage2D") && nb == 1 && bn[0] == ((1ull << 63) | 84)) got_tex = 1;
+            if (!strcmp(nm, "glDrawElements") && nb == 1 && bn[0] == 6 && ((unsigned short *)bl[0])[0] == 42) got_idx = 1;
+            if (!strcmp(nm, "glDrawArrays") && a[2] == 5) got_draw5 = 1;
+            for (unsigned i = 0; i < nb && i < 8; i++) free(bl[i]);
+        }
+        if (f) gzclose(f);
+        if (argc <= 2) unlink(trf);
+        CHECK(frames == 2 && got_gen && got_src && got_loc && got_u && got_flush && got_tex && got_idx && !got_draw5);
+        if (failures) printf("frames %d gen %d src %d loc %d u %d flush %d tex %d idx %d draw5 %d\n", frames, got_gen, got_src, got_loc, got_u, got_flush, got_tex, got_idx, got_draw5);
     } else { printf("unknown scenario %s\n", m); return 2; }
     printf("%s %s\n", failures ? "FAIL" : "ok", m);
     return failures != 0;
