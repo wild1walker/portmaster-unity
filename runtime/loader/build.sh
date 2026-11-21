@@ -24,7 +24,7 @@ arm64)
   IMG=ua-build-arm64; PLAT="--platform linux/arm64"   # also on an x86 PC (QEMU)
   docker image inspect $IMG >/dev/null 2>&1 || docker build -q $PLAT -t $IMG "$DIR/../docker/arm64" >/dev/null
   T=
-  CFLAGS="-O2 -g -Wall -fPIC"
+  CFLAGS="-O2 -g -Wall -fPIC -ffunction-sections"   # (one section a function: host/build.sh groups the hot ones)
   # bionic's stack guard: the TLS slot NDK code reads (TLS_SLOT_STACK_GUARD, tpidr_el0 + 0x28)
   SYNFLAGS="-mstack-protector-guard=sysreg -mstack-protector-guard-reg=tpidr_el0 -mstack-protector-guard-offset=40"
   EXPORT=

@@ -678,7 +678,7 @@ same spot.
 
 **Defaults** (2026-11-20): `UA_ATOMICS=llsc` on for the 64-bit player (exact, no cost, a CPU with LSE is
 left alone); `UA_RELAYOUT` on where a list for the library's build id is in `relayout/` beside ua_host
-(runtime/relayout/: Hollow Knight's 6000.0.61f1 IL2CPP arm64 player, whole functions: they carry to scenes the recordings missed), with `UA_RELAYOUT_DATA` on;
+(runtime/relayout/: Hollow Knight's 6000.0.61f1 IL2CPP arm64 player; whole functions until 2026-11-21, now a `--split` list made from more scenes and the render thread's recordings, which carries to a scene the recordings missed: "The render thread's code" below), with `UA_RELAYOUT_DATA` on;
 `UA_RELAYOUT=0` / `UA_ATOMICS=0` turn them off. A port ships the lists by copying `relayout/` next to its
 ua_host (runtime/host/build.sh puts it beside the build's ua_host).
 
@@ -960,6 +960,50 @@ pools) is years of work. Recorded for completeness.
 Routes 1 + 2 + 6 together reach the 1.5 - 1.9 ms the 64-bit build needs; 3 - 5 are margin. Route 1 is the
 first prototype: one hook, measurable in a day, and it pays on both builds and every Unity game that uses
 Unity's built-in audio.
+
+## The render thread's code: libunity's hot/cold list with the render thread's recordings, and ua_host's own hot code grouped (2026-11-21)
+
+Where Unity's render thread waits for instruction fetch (`UA_PROF_EVENT=raw:0xe1`, King's Pass and City of Tears,
+64-bit, the aarch64 defaults; Knulli and muOS alike): 61 - 64 % in libmali, 23 - 24 % in libunity, 10 - 12 % in
+ua_host, 3 % in libc. libmali's code is not ours to move (above). Of the libunity part, 98 - 99 % already falls in the
+shipped list's functions (it was made from both threads' recordings): what is left there is the cold half of each hot
+function. ua_host's part is our code: 120 - 149 functions with samples on the render thread, 17 - 27 KB of sampled
+lines, spread over 1.2 MB of ua_host's text (the GL layers: the buffer pool's `h_acquire`, `glrec`'s hooks, the state
+filter's `before_draw`, the `w_gl*` wrappers, the loader's hooks of bionic's `pthread_getspecific`, `memcpy`).
+
+**What changed:**
+- **libunity's list** (runtime/relayout/8936b5...txt) is now made with `--split` from the earlier three recordings plus six new
+  ones (King's Pass and City of Tears, time and i-cache stall samples of UnityMain and the render thread, Knulli and muOS):
+  3,166 functions, 593 of them in hot and cold pieces, 628 KB hot of 896 KB. The earlier split list carried less to scenes
+  the recordings missed; this one, measured also in the Forgotten Crossroads (in no recording), carries.
+- **ua_host's hot functions grouped at build time.** `runtime/host/hot-arm64.txt` names the 206 functions that cover
+  99.5 % of ua_host's samples on UnityMain and the render thread (`tools/analysis/hotlist.py` makes it from `UA_PROF`
+  recordings and ua_host.debug's symbols); `runtime/host/build.sh` (ARCH=arm64) compiles ua_host's objects with
+  `-ffunction-sections` (the loader, shims and fake JNI archives too) and renames those functions' sections
+  `.text.hot.<name>` (objcopy, on the objects and on copies of the archives): GNU ld's default script puts `.text.hot.*`
+  together before the rest. 95 KB of them, one block where they were spread over 1.2 MB. Nothing in the code changes.
+
+**Measured** (64-bit, A = the defaults of origin/main, B = the new list + the grouped ua_host; `hwcount` on UnityMain and
+the render thread, cycles and i-cache stall cycles a frame, the means of two runs each, A B A B in one hold from a cool
+handheld):
+
+| scene, handheld | fps A / B | UnityMain cycles | UnityMain i-fetch stalls | render thread cycles | render thread i-fetch stalls |
+|---|---|---|---|---|---|
+| City of Tears, Knulli | 45.5 / 45.5 | 22.19 -> 21.97 M (-1.0 %) | 5.14 -> 4.92 M (-4.1 %) | 23.85 -> 23.66 M (-0.8 %) | 6.61 -> 6.43 M (-2.7 %) |
+| City of Tears, muOS | 46.9 / 46.1 | 27.87 -> 26.47 M | 6.79 -> 6.28 M | 27.33 -> 26.84 M (-1.8 %) | 7.88 -> 7.72 M (-2.0 %) |
+| King's Pass, Knulli | 52.3 / 52.7 | 25.22 -> 24.96 M (-1.0 %) | 5.73 -> 5.52 M (-3.7 %) | 17.92 -> 17.89 M | 5.82 -> 5.83 M |
+| King's Pass, muOS | 52.0 / 52.2 | 29.02 -> 28.62 M (-1.4 %) | 6.66 -> 6.41 M (-3.7 %) | 20.31 -> 20.31 M | 6.81 -> 6.70 M |
+| Forgotten Crossroads (not recorded), muOS | 55.0 / 54.4 | 26.02 -> 24.55 M (-5.7 %) | 6.75 -> 6.15 M (-8.8 %) | 21.59 -> 20.99 M (-2.8 %) | 7.21 -> 6.86 M (-4.9 %) |
+
+ua_host's grouping alone (the shipped whole-function list kept), City of Tears: render thread cycles -1.3 % (muOS,
+27.31 -> 26.94 M) and -0.3 % (Knulli, 23.87 -> 23.79 M), its i-fetch stalls 0 / -1.7 %, its L1I micro-TLB refills
+-12 / -15 % (one block of pages instead of 40); fps 45.0 / 46.5 (muOS), 45.4 / 45.3 (Knulli).
+
+What it says: the frame rate is the GPU's in these scenes (City of Tears) or within the runs' spread; the counters move
+the same way in every pair: UnityMain -1 to -6 % cycles (the split list's hot ranges), the render thread 0 to -3 %
+(mostly where ua_host's GL layers and libunity's render code are a larger share: City of Tears, the Crossroads). The
+render thread's remaining i-fetch stalls are libmali's. Both are now the defaults (the list ships in runtime/relayout/,
+the grouping is in the arm64 build).
 
 ## The BattleXP G350 (RK3326): the min-spec handheld, 32-bit against 64-bit (2026-11-20)
 

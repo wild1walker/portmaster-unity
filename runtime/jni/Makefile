@@ -6,7 +6,7 @@
 
 ARCH    ?= armhf
 CFLAGS  ?= -O2 -g
-CFLAGS  += -std=gnu11 -fPIC -Wall -Wextra -Wno-unused-parameter
+CFLAGS  += -std=gnu11 -fPIC -ffunction-sections -Wall -Wextra -Wno-unused-parameter
 
 ifeq ($(ARCH),arm64)
 CROSS   ?=

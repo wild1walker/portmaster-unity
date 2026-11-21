@@ -28,7 +28,10 @@ if [ "$ARCH" = arm64 ]; then
     O=out/arm64
     F="-O2 -g -Wall -I../jni/include -I../jni $NOSTEAM"
     OBJS=
-    for f in ua_host input pointer osk frames framerate gcbudget uinav monoinvoke jitlog jitwarm monoaot quality glhooks hitches prof threads futex gltrace glfill gltexdump monodump glopt glpersist glstate glarena glpresent glmemo gpuidle glpass glspec glrename glrec glrec_fg glmerge msaafix display display_sdl fbdev $STEAM plugins plugstubs fmodstub wwise desktopenv mono64 unityhooks fmodasync unitypool unityverts unitymath unitybeh unityprefetch nativebeh unityscripts icallcount unityicalls unitylayers memledger monoimage glprobe; do gcc $F -c $f.c -o $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    # hot-arm64.txt: the functions of ours the game threads run most (from UA_PROF recordings), each in its own
+    # section (-ffunction-sections) renamed .text.hot.<name>: the linker puts them together before the rest of .text
+    HOT=; [ -f hot-arm64.txt ] && HOT=$(grep -v "^#" hot-arm64.txt | while read n; do [ -n "$n" ] && printf -- "--rename-section .text.%s=.text.hot.%s " "$n" "$n"; done)
+    for f in ua_host input pointer osk frames framerate gcbudget uinav monoinvoke jitlog jitwarm monoaot quality glhooks hitches prof threads futex gltrace glfill gltexdump monodump glopt glpersist glstate glarena glpresent glmemo gpuidle glpass glspec glrename glrec glrec_fg glmerge msaafix display display_sdl fbdev $STEAM plugins plugstubs fmodstub wwise desktopenv mono64 unityhooks fmodasync unitypool unityverts unitymath unitybeh unityprefetch nativebeh unityscripts icallcount unityicalls unitylayers memledger monoimage glprobe; do gcc $F -ffunction-sections -c $f.c -o $O/$f.o; [ -z "$HOT" ] || objcopy $HOT $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     gcc $F -c wwise_tramp.S -o $O/wwise_tramp.o; OBJS="$OBJS $O/wwise_tramp.o"
     gcc $F -c wwplay.c -o $O/wwplay.o; gcc -O3 -ffast-math -g -w -c wwplay_vorbis.c -o $O/wwplay_vorbis.o; OBJS="$OBJS $O/wwplay.o $O/wwplay_vorbis.o"
     gcc $F -O3 -c fmplay.c -o $O/fmplay.o; OBJS="$OBJS $O/fmplay.o"
@@ -40,7 +43,12 @@ if [ "$ARCH" = arm64 ]; then
     # block holds bionic'"'"'s stack guard slot, so_loader.h).
     LOADER=../loader/out/arm64/libsoloader.a
     if [ -f $LOADER ]; then
-      g++ -o $O/ua_host $OBJS $LOADER ../android/out/arm64/libandroidshims.a ../jni/out/arm64/libfakejni.a \
+      SHIMS=../android/out/arm64/libandroidshims.a; FJ=../jni/out/arm64/libfakejni.a
+      if [ -n "$HOT" ]; then
+        objcopy $HOT $LOADER $O/hot-libsoloader.a; objcopy $HOT $SHIMS $O/hot-libandroidshims.a; objcopy $HOT $FJ $O/hot-libfakejni.a
+        LOADER=$O/hot-libsoloader.a; SHIMS=$O/hot-libandroidshims.a; FJ=$O/hot-libfakejni.a
+      fi
+      g++ -o $O/ua_host $OBJS $LOADER $SHIMS $FJ \
         ../media/out/arm64/libuamedia.a -Wl,--dynamic-list=exports.list -lSDL2 -lz -ldl -lpthread -lm -lrt
       cp $O/ua_host $O/ua_host.debug; strip $O/ua_host
       file $O/ua_host | sed "s|, BuildID[^,]*||"

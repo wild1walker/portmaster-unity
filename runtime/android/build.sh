@@ -21,7 +21,7 @@ mkdir -p $O/obj $O/test
 docker run --rm $PLAT -v "$PWD/..":/r -w /r/android -e O=$O -e CROSS=$CROSS $IMG bash -c '
   set -e
   CC=${CROSS}gcc
-  CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64"
+  CFLAGS="-O2 -g -fPIC -ffunction-sections -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64"
   for f in log_shim native_window asset_manager looper_input_sensor choreographer ndk_newer opensles media_ndk egl_glue shim_tables; do
     $CC $CFLAGS -c $f.c -o $O/obj/$f.o
   done

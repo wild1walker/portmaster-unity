@@ -1278,6 +1278,13 @@ ship with the port or in portmaster-unity beside the runtime. To make one:
    lists by build id: a list for another libunity is refused, logged, and the game runs as without).
    Check the log for `[relayout] libunity.so: N functions ... laid out`, then A/B the frame rate and
    `HWCOUNT=1`'s i-cache stall cycles on the scene the list was not made from.
+4. **ua_host's own hot code** is grouped at build time, not at load: `runtime/host/hot-arm64.txt` lists the functions
+   of ua_host (and of the loader, shims and fake JNI linked into it) that the recordings sampled on UnityMain, the render
+   thread and ua_host's GL thread; `runtime/host/build.sh` (ARCH=arm64) gives each its own `.text.hot.<name>` section so
+   the linker puts them together. To remake it from new recordings of the same ua_host build:
+   `nm -nS --defined-only runtime/host/out/arm64/ua_host.debug > ua_host.syms; python3 tools/analysis/hotlist.py
+   ua_host.syms pA/prof-1.txt eA/prof-1.txt ... > runtime/host/hot-arm64.txt` (one list for every game: the GL layers
+   are the same code; names that no longer exist are skipped).
 
 ## 6. package
 
