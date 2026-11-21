@@ -816,6 +816,76 @@ GameObject and the objects the loop reads from it, the GameObject's component ar
 Knulli 27.27 / 24.92 / 26.05 M and 28.63 / 28.35 / 30.72 M (the default -8.2 %, `ps` +2.6 %; the second hold's
 King's Pass was heavier for all three, 4.9 M instructions a frame against 4.5). `ps` stays opt-in.
 
+#### Route 3, the next step: our own behaviour loop (`UA_NATIVE_BEH`, 2026-11-21)
+
+`runtime/host/nativebeh.c` (opt-in, `UA_NATIVE_BEH=1`; `=verify` the differential test; `UA_NATIVE_BEH_STATS=<s>`
+the loops' time; [runtime.md](runtime.md)). The three `BaseBehaviourManager::CommonUpdate`s of 6000.0.61f1's arm64
+player are replaced whole: one function does what Unity spreads over fourteen (CommonUpdate, SafeIterator::Next,
+the vtable dispatch, MonoBehaviour::Update / CallUpdateMethod, IsStateMachineBehaviour with GetScriptCache, the
+weak_ptr's lock and two releases with their four atomics, GetEnabled, IsActive's cached byte), the same loads and
+stores in the same order (volatile accesses; the atomics as the NDK helpers' LL/SC loops, the same memory
+orders), Unity's own functions called for everything else, and the `beh` prefetch stub's fetches in place (so
+`UA_PREFETCH`'s `beh` sites, inside the replaced functions, stay off; `sprite`, `cull`, `play` work alongside).
+
+**What the loop is, read from the player** (Hollow Knight, King's Pass standing): 612 - 657 behaviours a frame
+(Update, LateUpdate, FixedUpdate together; PlayMaker's FSMs most of them), each one called (none of the early exits
+taken there), 0 - 0.04 Starts a frame. Unity's lists are moved node by node through a SafeIterator; scripts that
+add a behaviour put it on the queue's pending list (`AddBehaviour`, merged by `IntegrateLists` at the next loop's
+start), so the next frame's order depends on the iterator's surgery: a list mirror that skipped it would change
+that order. The surgery is kept as Unity does it.
+
+**Exact, proven on the live game** (`UA_NATIVE_BEH=verify`: our loop drives, Unity's own `Next`, `IsStateMachineBehaviour`
+and `CallUpdateMethod` do every step, ours is computed on the same state and compared: the iterator's step on a
+write overlay against every word Unity's changed, the Start and update calls predicted and compared at Unity's
+`InvokeMethodOrCoroutineChecked` / `ScriptingInvocation::Invoke` with object, method and instance id), the 64-bit
+copies, 25 s at King's Pass with the title screen and the load before it:
+
+| verify | iterator steps | IsStateMachineBehaviour | update calls | Starts | mismatches |
+|---|---|---|---|---|---|
+| muOS | 1,426,220 | 1,346,812 | 1,346,812 | 5 | 0 |
+| Knulli | 1,251,588 | 1,179,336 | 1,179,336 | 5 | 0 |
+
+The order of the scripts' calls (an FNV hash of instance id and method over a frame) is the same in Unity's loop,
+ours and verify on both handhelds (the 625-call King's Pass frame: `52fd05d86a85d389` in all six). test_nativebeh
+(runtime/host/test) runs the same three ways over a model with scripts that change the lists while they run and
+every early exit of CallUpdateMethod, and checks that verify catches a wrong Next and a wrong CallUpdateMethod.
+
+**Measured.** The loops' own work (`UA_NATIVE_BEH_STATS`: their time minus the scripts' calls; `UA_RELAYOUT=0`,
+`UA_PREFETCH=1`, so Unity's loops run without the `beh` stubs, whose entries the timing hooks change):
+
+| own work a frame | Unity's loops | ours |
+|---|---|---|
+| muOS | 1.37 - 1.45 ms | 0.57 - 0.62 ms |
+| Knulli | 1.59 - 1.68 ms | 0.60 - 0.68 ms |
+
+Against today's best (the aarch64 defaults: `UA_RELAYOUT` with HK's list, `UA_RELAYOUT_DATA`, `UA_ATOMICS=llsc`,
+and `UA_PREFETCH=1` with its `beh` stubs), A B A B in one hold, `hwcount` on UnityMain, a frame's worth:
+
+| King's Pass | fps | UnityMain ms | cycles | load-miss stall cycles | L2 refills | i-cache stall cycles |
+|---|---|---|---|---|---|---|
+| Knulli, base | 52.9, 52.7 | 15.97, 15.65 | 26.35, 26.47 M | 14.31, 14.32 M | 86.4, 86.5 K | 6.20, 6.17 M |
+| Knulli, `UA_NATIVE_BEH=1` | 52.5, 52.8 | 16.04, 16.12 | 26.29, 26.35 M | 14.24, 14.12 M | 87.1, 85.9 K | 6.22, 6.23 M |
+| muOS, base (hold 1) | 51.9, 51.4 | 15.93, 16.21 | 29.49, 29.51 M | 16.34, 16.68 M | 85.7, 86.9 K | 6.89, 6.89 M |
+| muOS, `UA_NATIVE_BEH=1` (hold 1) | 46.7, 50.4 | 16.52, 16.01 | 31.89, 28.92 M | 18.30, 16.34 M | 90.8, 89.7 K | 7.56, 6.95 M |
+| muOS, base (hold 2) | 51.8, 51.6 | 15.83, 16.11 | 29.20, 29.25 M | 16.17, 16.62 M | 86.1, 87.2 K | 6.85, 6.86 M |
+| muOS, `UA_NATIVE_BEH=1` (hold 2) | 51.7, 51.5 | 15.43, 15.65 | 29.43, 29.71 M | 16.11, 16.58 M | 87.3, 86.5 K | 6.96, 6.95 M |
+
+(muOS hold 1: both `UA_NATIVE_BEH` runs had 370 - 860 ms hitches after the scene's load, one inside the measurement,
+and its first run retired 6 % more instructions (another state of the scene); hold 2, the same pairs again, had no
+hitch after the load in any run: the hitches were not the loop's.)
+
+What it says: the call overhead is real (Unity's loops spend 2.2 - 2.6 us of their own a script, ours 0.9 - 1.1 us)
+but the relayout and the `beh` stubs had already taken most of it: against them our loop is within the runs'
+spread (Knulli: cycles -0.3 %, load-miss stalls -0.9 %, UnityMain's CPU +0.27 ms; muOS hold 2: cycles +1.2 %,
+UnityMain's CPU -0.43 ms, 51.6 against 51.7 fps). What is left is the lines each script's call must read - the
+behaviour's four (vtable, handle, GameObject and enabled byte; the list node; the script cache and method table;
+the started byte), its GameObject's, its managed object's - and the call into Mono (`ScriptingInvocation`, five
+write barriers through the bridge, `mono_runtime_invoke`), which Unity's layout fixes. Taking lines away needs a
+compact mirror of the per-behaviour state (handle, GameObject, method table, started, the script cache's flag)
+kept in step with every place Unity writes them; that is not built (each writer must be found and hooked, and a
+behaviour's memory is reused by later objects). Kept opt-in: exact, proven, no cost, no measured gain on top of
+route 3's stubs.
+
 ### 4. Less L2 traffic from the other threads
 
 What: the render thread's own L2 refills grew 35 -> 47 K a frame and its i-cache stalls 4.7 -> 7.0 M cycles
@@ -880,7 +950,7 @@ pools) is years of work. Recorded for completeness.
 |---|---|---|---|---|
 | 1. FMOD update on a worker | built (`UA_FMOD_ASYNC=1`, off): UnityMain CPU -0.3 to -0.6 ms, frame rate the same | done | yes | - |
 | 2. libunity hot-code relayout | built (`UA_RELAYOUT`): -2.2 to -3.2 % of UnityMain's cycles split + vtables + atomics, +0.4 - 0.6 fps | done | yes (tested) | larger lists per game; route 3 for the data side |
-| 3. rewritten hot functions (prefetch, inline atomics) | -0.2 to -0.4 ms; built as `UA_PREFETCH` (call-site stubs): UnityMain -0.47 / -0.51 ms, cycles -6.9 / -4.9 % (muOS / Knulli) | medium, per Unity version | yes | more loops; default after a busier scene and a soak |
+| 3. rewritten hot functions (prefetch, inline atomics) | -0.2 to -0.4 ms; built as `UA_PREFETCH` (call-site stubs): UnityMain -0.47 / -0.51 ms, cycles -6.9 / -4.9 % (muOS / Knulli); the behaviour loop rewritten whole (`UA_NATIVE_BEH`, exact, verified on both handhelds): its own work 1.4 - 1.7 -> 0.6 ms, but no gain over the stubs + relayout | medium, per Unity version | yes | more loops; default after a busier scene and a soak; a compact per-behaviour mirror |
 | 4. less render-thread L2 traffic | 0.1 - 0.3 ms (to be measured) | small to measure | yes | `hwcount` on UnityMain with render-thread work removed |
 | 5. Unity bucket allocator settings | 0 - 0.2 ms | small | yes | three boot.config variants, `hwcount` |
 | 6. Mono LLVM AOT (elsewhere) | about -0.8 ms | in progress | as measured there | - |

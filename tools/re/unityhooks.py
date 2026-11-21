@@ -26,7 +26,7 @@ import struct
 import sys
 
 HOOKS = [
-    # (mangled-name prefix, short name[, 'call': a function the runtime only calls (any instruction set,
+    # (mangled-name prefix (a trailing '$': the whole name), short name[, 'call': a function the runtime only calls (any instruction set,
     # nothing moved), whose hash ties the row to the code read])
     ('_Z25AdjustThreadingModeForAPI', 'AdjustThreadingModeForAPI'),
     # unitypool.c (UA_GLES_POOL): Unity's GLES buffer pool
@@ -92,6 +92,29 @@ HOOKS = [
     ('_ZN25PreOrderPlayableTraverser14RecursiveVisitE', 'PreOrderPlayableTraverser::RecursiveVisit', 'call'),
     ('_ZN14ParticleSystem25UpdateManualTransformDataEb', 'ParticleSystem::UpdateManualTransformData', 'call'),
     ('_ZNK10GameObject20QueryComponentByTypeEPKN5Unity4TypeE', 'GameObject::QueryComponentByType', 'call'),
+    # nativebeh.c (UA_NATIVE_BEH): the three behaviour update loops replaced by our own; the functions they call (or
+    # whose code they carry out in place: the iterator's step, the script call's checks, the shared_ptr's atomics) only
+    # checked; ScriptingInvocation::Invoke and InvokeMethodOrCoroutineChecked hooked for UA_NATIVE_BEH=verify / _STATS
+    ('_ZN20BaseBehaviourManager12CommonUpdateI16BehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<BehaviourManager> (replaced)', 'replace'),
+    ('_ZN20BaseBehaviourManager12CommonUpdateI20LateBehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<LateBehaviourManager> (replaced)', 'replace'),
+    ('_ZN20BaseBehaviourManager12CommonUpdateI21FixedBehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<FixedBehaviourManager> (replaced)', 'replace'),
+    ('_ZN12SafeIteratorI4ListI8ListNodeI9BehaviourEEEC2ERS4_', 'SafeIterator<List<ListNode<Behaviour> > >::SafeIterator', 'call'),
+    ('_ZN20BaseBehaviourManager14IntegrateListsEv', 'BaseBehaviourManager::IntegrateLists', 'call'),
+    ('_ZN19ManagedTempMemScopeC2E25ManagedTempMemScopePolicy', 'ManagedTempMemScope::ManagedTempMemScope', 'call'),
+    ('_ZN19ManagedTempMemScopeD2Ev', 'ManagedTempMemScope::~ManagedTempMemScope', 'call'),
+    ('_ZN13MonoBehaviour10LateUpdateEv', 'MonoBehaviour::LateUpdate', 'call'),
+    ('_ZN13MonoBehaviour11FixedUpdateEv', 'MonoBehaviour::FixedUpdate', 'call'),
+    ('_ZN17ScriptingGCHandle28ResolveBackendNativeGCHandleEm', 'ScriptingGCHandle::ResolveBackendNativeGCHandle', 'call'),
+    ('_ZL15IsInstanceValid18ScriptingObjectPtr', 'IsInstanceValid', 'call'),
+    ('_ZNK9Behaviour10GetEnabledEv', 'Behaviour::GetEnabled', 'call'),
+    ('_ZN13MonoBehaviour30InvokeMethodOrCoroutineCheckedE18ScriptingMethodPtr18ScriptingObjectPtr$', 'MonoBehaviour::InvokeMethodOrCoroutineChecked'),
+    ('_ZN19ScriptingInvocationC2E18ScriptingObjectPtr18ScriptingMethodPtr', 'ScriptingInvocation::ScriptingInvocation', 'call'),
+    ('_ZN19ScriptingInvocation6InvokeEP21ScriptingExceptionPtrb', 'ScriptingInvocation::Invoke'),
+    ('_ZNSt6__ndk119__shared_weak_count4lockEv', 'std::__shared_weak_count::lock', 'call'),
+    ('_ZNSt6__ndk119__shared_weak_count14__release_weakEv', 'std::__shared_weak_count::__release_weak', 'call'),
+    ('__aarch64_ldadd8_relax', '__aarch64_ldadd8_relax', 'call'),
+    ('__aarch64_ldadd8_acq_rel', '__aarch64_ldadd8_acq_rel', 'call'),
+    ('__aarch64_cas8_acq_rel', '__aarch64_cas8_acq_rel', 'call'),
 ]
 
 
@@ -332,7 +355,7 @@ def main(argv=None):
     funcs = {}
     for name, val, size in sym.funcs():
         for pre, short, *kind in HOOKS:
-            if name.startswith(pre) and (val, size) not in [(g[0], g[1]) for g in funcs.get(short, [])]:
+            if (name == pre[:-1] if pre.endswith('$') else name.startswith(pre)) and (val, size) not in [(g[0], g[1]) for g in funcs.get(short, [])]:
                 funcs.setdefault(short, []).append((val, size, name))     # (D1/D2 and C1/C2: one function)
     ok = 0
     for pre, short, *kind in HOOKS:
