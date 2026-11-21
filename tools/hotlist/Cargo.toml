@@ -1,0 +1,11 @@
+[package]
+name = "hotlist"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "runtime/host/hot-arm64.txt from UA_PROF recordings: ua_host's functions the game's threads run most"
+
+[dependencies]
+
+[profile.release]
+opt-level = 2

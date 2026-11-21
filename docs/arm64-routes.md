@@ -977,8 +977,8 @@ filter's `before_draw`, the `w_gl*` wrappers, the loader's hooks of bionic's `pt
   3,166 functions, 593 of them in hot and cold pieces, 628 KB hot of 896 KB. The earlier split list carried less to scenes
   the recordings missed; this one, measured also in the Forgotten Crossroads (in no recording), carries.
 - **ua_host's hot functions grouped at build time.** `runtime/host/hot-arm64.txt` names the 206 functions that cover
-  99.5 % of ua_host's samples on UnityMain and the render thread (`tools/analysis/hotlist.py` makes it from `UA_PROF`
-  recordings and ua_host.debug's symbols); `runtime/host/build.sh` (ARCH=arm64) compiles ua_host's objects with
+  99.5 % of ua_host's samples on UnityMain and the render thread (`tools/hotlist`, a small Rust crate, makes it from
+  `UA_PROF` recordings and ua_host.debug's symbol table; porting.md); `runtime/host/build.sh` (ARCH=arm64) compiles ua_host's objects with
   `-ffunction-sections` (the loader, shims and fake JNI archives too) and renames those functions' sections
   `.text.hot.<name>` (objcopy, on the objects and on copies of the archives): GNU ld's default script puts `.text.hot.*`
   together before the rest. 95 KB of them, one block where they were spread over 1.2 MB. Nothing in the code changes.
@@ -994,13 +994,14 @@ handheld):
 | King's Pass, Knulli | 52.3 / 52.7 | 25.22 -> 24.96 M (-1.0 %) | 5.73 -> 5.52 M (-3.7 %) | 17.92 -> 17.89 M | 5.82 -> 5.83 M |
 | King's Pass, muOS | 52.0 / 52.2 | 29.02 -> 28.62 M (-1.4 %) | 6.66 -> 6.41 M (-3.7 %) | 20.31 -> 20.31 M | 6.81 -> 6.70 M |
 | Forgotten Crossroads (not recorded), muOS | 55.0 / 54.4 | 26.02 -> 24.55 M (-5.7 %) | 6.75 -> 6.15 M (-8.8 %) | 21.59 -> 20.99 M (-2.8 %) | 7.21 -> 6.86 M (-4.9 %) |
+| Forgotten Crossroads, Knulli (B: one run; the other had a 1 s hitch in the measurement and 8 % more instructions: another state of the room) | 54.4 / 54.7 | 21.06 -> 21.12 M | 5.26 -> 5.11 M (-2.8 %) | 18.37 -> 18.42 M | 5.75 -> 5.77 M |
 
 ua_host's grouping alone (the shipped whole-function list kept), City of Tears: render thread cycles -1.3 % (muOS,
 27.31 -> 26.94 M) and -0.3 % (Knulli, 23.87 -> 23.79 M), its i-fetch stalls 0 / -1.7 %, its L1I micro-TLB refills
 -12 / -15 % (one block of pages instead of 40); fps 45.0 / 46.5 (muOS), 45.4 / 45.3 (Knulli).
 
 What it says: the frame rate is the GPU's in these scenes (City of Tears) or within the runs' spread; the counters move
-the same way in every pair: UnityMain -1 to -6 % cycles (the split list's hot ranges), the render thread 0 to -3 %
+the same way in every pair but one (the Crossroads on Knulli, where they stay within the spread): UnityMain -1 to -6 % cycles (the split list's hot ranges), the render thread 0 to -3 %
 (mostly where ua_host's GL layers and libunity's render code are a larger share: City of Tears, the Crossroads). The
 render thread's remaining i-fetch stalls are libmali's. Both are now the defaults (the list ships in runtime/relayout/,
 the grouping is in the arm64 build).

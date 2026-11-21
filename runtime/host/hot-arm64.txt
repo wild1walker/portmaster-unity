@@ -1,4 +1,4 @@
-# runtime/host/hot-arm64.txt: made by tools/analysis/hotlist.py from 6 recordings; 206 functions, 97356 bytes
+# runtime/host/hot-arm64.txt: made by tools/hotlist from 6 recordings; 206 functions, 97356 bytes
 _hybris_hook_pthread_getspecific
 h_acquire
 _hybris_hook_memcpy
