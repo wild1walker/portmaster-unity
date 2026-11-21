@@ -9,7 +9,13 @@
 #   3. ports/<port>/game.env: where the game is and the GL mode, for the launcher
 # The game's code is not changed. Every step can be interrupted: the next launch continues.
 # Log: ports/<port>/patchlog.txt. A line "PATCH_FAIL_MSG:<text>" says why the setup failed.
-S="${GAMEDIR:?}/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
+# Paths relative to the port folder (GAMEDIR=.): on some kernels (Knulli on Allwinner A133P) a freed page
+# that starts with an absolute path on the card (pipes leave them) can deadlock its FUSE driver. The script
+# runs on by its relative name (bash starts its error messages with it), under its own process name
+G0=${GAMEDIR:?}; cd "$G0" || { echo "PATCH_FAIL_MSG:Cannot open ports/${G0##*/}."; exit 1; }
+case $0 in "$G0"/*) exec "$BASH" "./${0#"$G0"/}" "$@";; esac
+{ printf %s "${0##*/}" > /proc/$$/comm; } 2>/dev/null; GAMEDIR=.
+S="$GAMEDIR/setup"; GD="$GAMEDIR/gamedata"; W="$GD/.setup"
 . "$S/setup.env"
 
 exec > >(tee -a "$GAMEDIR/patchlog.txt") 2>&1
@@ -62,7 +68,7 @@ else
     [ -n "$PY" ] || fail "The setup's Python is incomplete."
   fi
   export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-  pm() { (cd "$S" && "$PY" -m pmunity "$@"); }
+  pm() { "$PY" -m pmunity "$@"; }
 fi
 
 # convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
