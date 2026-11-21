@@ -13,6 +13,9 @@
 // call never waits for the previous frame's GPU work: the times are the driver's CPU work. Thread and
 // process CPU time a frame are reported too (the process's includes the driver's own threads, as
 // mesa_glthread's).
+//   --hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]   pixels, not times: each framebuffer's
+//                colour read back and hashed where a pass ends (a bind) and at the swap, with --hash-draws after
+//                every draw and clear too (glreplay_hash.c; two logs compared by glpixdiff)
 //   --check      glGetError after every call: the calls a driver refused, by entry point (the replay is
 //                only a fair comparison where no driver refuses anything the game's driver took)
 // Environment:
@@ -44,6 +47,7 @@
 #define GLREC_PART 1
 #include "glrec_gen.h"
 #undef GLREC_PART
+#include "glreplay_hash.h"
 
 #define TR_TAG (1ull << 63)
 #define TR_FRAME 0xFFFFF0u
@@ -380,8 +384,12 @@ static unsigned long g_link_fail;
 static unsigned long g_other_thread_calls;
 static unsigned g_main_thread = 255;
 
+// --hash: the trace's call count, the frame, the game's draw framebuffer, the window's size
+static int g_hash; static unsigned long g_hcall; static long g_hframe; static unsigned g_hfb; static int g_hw = 720, g_hh = 480;
+
 static void replay_rec(const rec *r)
 {
+    unsigned long hcall = g_hcall++;
     for (unsigned i = 0; i < r->nblobs && i < 64; i++) {
         uint64_t len; memcpy(&len, r->bl[i], 8);
         g_bl[i] = len & TR_TAG ? g_zeros : r->bl[i] + 8;
@@ -389,8 +397,15 @@ static void replay_rec(const rec *r)
     if (r->op >= OP_N) return;
     if (!rp_how[r->op] || !rp_fn[r->op]) return;
     if (g_main_thread != 255 && r->thread != g_main_thread) g_other_thread_calls++;
+    int hbind = r->op == OP_glBindFramebuffer && ((GLenum)r->a[0] == GL_FRAMEBUFFER || (GLenum)r->a[0] == GL_DRAW_FRAMEBUFFER);
+    if (g_hash && hbind && rph_on(g_hframe)) rph_read(g_hframe, hcall, "bind", g_hfb, !g_hfb, g_hw, g_hh);   // (the pass that ends)
     uint64_t t = g_measuring ? ticks() : 0;
     rp_call(r->op, r->a, r->ret);
+    if (g_hash) {
+        if (hbind) g_hfb = (unsigned)r->a[1];
+        else if ((g_class[r->op] == C_DRAW || g_class[r->op] == C_CLEAR) && rph_draws() && rph_on(g_hframe))
+            rph_read(g_hframe, hcall, "draw", g_hfb, !g_hfb, g_hw, g_hh);
+    }
     if (g_measuring) { g_op_ticks[r->op] += (double)(ticks() - t); g_op_calls[r->op]++; }
     if (g_check && r->op == OP_glLinkProgram) {
         GLint ok = 0; GLuint pr = rp_map(MK_PROG, (GLuint)r->a[0]);
@@ -414,6 +429,8 @@ static unsigned long g_frames_measured;
 
 static void frame_end(void)
 {
+    if (g_hash && rph_on(g_hframe)) rph_read(g_hframe, g_hcall, "swap", 0, 1, g_hw, g_hh);   // (before the swap: after it the window is undefined)
+    g_hframe++;
     uint64_t t = g_measuring ? ticks() : 0;
     e_SwapBuffers(g_dpy, g_surf);
     RX(glFlush)();
@@ -437,15 +454,21 @@ int main(int argc, char **argv)
     const char *path = NULL;
     long from = -1, to = -1;
     int w = 720, h = 480;
+    const char *hash_out = NULL, *hash_frames = NULL, *hash_dump = NULL;
+    int hash_draws = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--from") && i + 1 < argc) from = atol(argv[++i]);
         else if (!strcmp(argv[i], "--to") && i + 1 < argc) to = atol(argv[++i]);
         else if (!strcmp(argv[i], "--size") && i + 1 < argc) sscanf(argv[++i], "%dx%d", &w, &h);
         else if (!strcmp(argv[i], "--check")) g_check = 1;
         else if (!strcmp(argv[i], "--no-finish")) g_finish = 0;
+        else if (!strcmp(argv[i], "--hash") && i + 1 < argc) hash_out = argv[++i];
+        else if (!strcmp(argv[i], "--hash-frames") && i + 1 < argc) hash_frames = argv[++i];
+        else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
+        else if (!strcmp(argv[i], "--hash-dump") && i + 1 < argc) hash_dump = argv[++i];
         else path = argv[i];
     }
-    if (!path) { fprintf(stderr, "usage: glreplay <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish]\n"); return 2; }
+    if (!path) { fprintf(stderr, "usage: glreplay <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]]\n"); return 2; }
     time_init();
     classes();
     // the frames: counted first (a pass over the file)
@@ -503,6 +526,10 @@ int main(int argc, char **argv)
     }
     unsigned nfn = 0;
     for (unsigned i = 0; i < OP_N; i++) if ((rp_fn[i] = sym(glrec_name[i]))) nfn++;
+    if (hash_out) {                                      // --hash (glreplay_hash.c)
+        if (rph_init(hash_out, hash_frames, hash_draws, hash_dump, sym) < 0) return 1;
+        g_hash = 1; g_hw = w; g_hh = h;
+    }
     const GLubyte *(*g_GetString)(GLenum) = sym("glGetString");
     fprintf(stderr, "glreplay: EGL %d.%d, %s, %s, %s; %u entry points\n", maj, min, g_GetString(GL_VENDOR), g_GetString(GL_RENDERER),
             g_GetString(GL_VERSION), nfn);
@@ -541,6 +568,7 @@ int main(int argc, char **argv)
     }
     g_measuring = 0;
 
+    if (g_hash) rph_close();
     // the report
     double F = g_frames_measured ? (double)g_frames_measured : 1, us = g_tick_ns / 1000;
     double cls_t[C_N] = { 0 }, cls_n[C_N] = { 0 }, total = 0;

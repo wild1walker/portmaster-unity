@@ -2455,6 +2455,32 @@ Not built:
   these waits are the GPU's backpressure, not stalls that leave it idle: a change of the call
   pattern cannot give the frame more GPU time; only less GPU work can.
 
+## Pictures compared call by call: `glreplay --hash` and `glpixdiff`
+
+To say that another driver (Mesa's Panfrost) or a change in our GL layers draws the same picture, frame
+screenshots are too coarse (the game's timing differs from run to run, and a screenshot sees only the end
+of a frame). Instead one recorded GL stream is replayed and its pictures read back at fixed points:
+
+1. Record: `UA_GL_REC=census UA_GL_REC_FILE=<file.gz> UA_GL_REC_FILE_PIXELS=1` (every GL call written
+   after it ran, texture pixels included; `UA_GL_REC_FILE_FRAMES=<n>` closes it; runtime.md).
+2. Replay with hashing: `glreplay <file.gz> --from 0 --hash <out.txt> [--hash-frames A-B] [--hash-draws]
+   [--hash-dump <dir>]` (runtime/host/glreplay.c with glreplay_hash.c). Each framebuffer's colour
+   attachments are read back and hashed (FNV-1a 64) where its pass ends (the game binds another draw
+   framebuffer) and the window before each swap; with `--hash-draws` also after every draw and clear.
+   A normalized attachment is read as RGBA8, a float one as RGBA32F, an integer one as RGBA32I/UI: what
+   every GLES driver must offer, so two drivers' logs compare. Depth and stencil cannot be read in GLES:
+   what they decide shows in later colour. A line names the trace's call number, so the same line is the
+   same point in both replays. `--hash-dump` writes the 8-bit readbacks as PPM. Hashing costs time:
+   never time a `--hash` replay.
+3. Compare: `glpixdiff <a.txt> <b.txt> [--all]` (runtime/host/glpixdiff.c): readbacks of each log, those in
+   both, those that differ by event, the first difference. A difference at a pass's end means something in
+   that pass or before it differs; both replays again with `--hash-frames F-F --hash-draws` give the first
+   draw that differs, by its call number in the trace.
+
+A test on a fake driver with pixels (test/fake_hash_gl.c; pointer_test.sh): one driver twice must give no
+difference; a driver that draws one call otherwise must be found at its pass, then named exactly. (WIP: written
+while the build containers were down; not yet built or run, nor the self-test of the Mali driver against itself.)
+
 ## Holding the whole frame (UA_GL_REC)
 
 The question (2026-10-23): a tiler pays for every pass (a load of each attachment it does not clear

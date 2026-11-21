@@ -38,7 +38,10 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c glmerge.c $O/rec/libGLESv2.so.2 -ldl -lpthread -lz
   mkdir -p $O/replay
   $CC -O2 -g -Wall -Wextra -shared -fPIC -o $O/replay/libfakereplay.so test/fake_replay_gl.c
-  $CC -O2 -g -Wall -Wextra -o $O/glreplay glreplay.c -ldl -lz
+  $CC -O2 -g -Wall -Wextra -o $O/glreplay glreplay.c glreplay_hash.c -ldl -lz
+  mkdir -p $O/hash
+  $CC -O2 -g -Wall -Wextra -shared -fPIC -o $O/hash/libfakehash.so test/fake_hash_gl.c
+  $CC -O2 -g -Wall -Wextra -o $O/glpixdiff glpixdiff.c
   mkdir -p $O/memo
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/memo/libGLESv2.so.2 test/fake_memo_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glmemo test/test_glmemo.c glmemo.c $O/memo/libGLESv2.so.2 -ldl -lpthread
@@ -64,7 +67,18 @@ REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/
     "texsub 5x3 pixels" "tex 12" "drawel 3 42" "fb 1" "draw 3" "frames measured: 2" "GL errors: 0"; do
     grep -qF "$want" $t.txt || { echo "FAIL glreplay: no \"$want\""; ok=0; }; done;
   grep -qF "draw 5" $t.txt && { echo "FAIL glreplay: a call after the file closed"; ok=0; };
-  [ $ok = 1 ] && echo "ok glreplay" || cat $t.txt; rm -f $t $t.txt'
+  [ $ok = 1 ] && echo "ok glreplay" || cat $t.txt; rm -f $t $t.txt
+  t=/tmp/glhash_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/dev/null; L=$PWD/$O/hash/libfakehash.so; ok=1;
+  GLREP_EGL=$L GLREP_GLES=$L $O/glreplay $t --from 0 --hash $t.a >/dev/null 2>&1;
+  GLREP_EGL=$L GLREP_GLES=$L $O/glreplay $t --from 0 --hash $t.b >/dev/null 2>&1;
+  GLREP_EGL=$L GLREP_GLES=$L FAKE_HASH_DIFF=2 $O/glreplay $t --from 0 --hash $t.c >/dev/null 2>&1;
+  GLREP_EGL=$L GLREP_GLES=$L $O/glreplay $t --from 0 --hash $t.d --hash-draws >/dev/null 2>&1;
+  GLREP_EGL=$L GLREP_GLES=$L FAKE_HASH_DIFF=2 $O/glreplay $t --from 0 --hash $t.e --hash-draws >/dev/null 2>&1;
+  [ $(grep -vc "^#" $t.a) -ge 3 ] || { echo "FAIL glreplay --hash: too few readbacks"; ok=0; };
+  $O/glpixdiff $t.a $t.b > $t.r 2>&1; grep -q "the same" $t.r || { echo "FAIL glreplay --hash: one driver twice differs"; ok=0; };
+  $O/glpixdiff $t.a $t.c > $t.r 2>&1; grep -q "hash-draws" $t.r || { echo "FAIL glpixdiff: a changed draw not found at its pass"; ok=0; };
+  $O/glpixdiff $t.d $t.e > $t.r 2>&1; grep -q "the call that made it" $t.r || { echo "FAIL glpixdiff: the changed draw not named"; ok=0; };
+  if [ $ok = 1 ]; then echo "ok glreplay --hash"; else cat $t.r; head -20 $t.a $t.d $t.e; fi; rm -f $t $t.a $t.b $t.c $t.d $t.e $t.r'
 MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec external'
 if [ "$ARCH" = arm64 ]; then
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
