@@ -6,6 +6,7 @@
 #if defined(__arm__)
 	.text
 	.arm
+	.syntax divided
 	.balign 4
 	.globl fake_adjust
 	.type fake_adjust, %function
@@ -25,6 +26,44 @@ fake_adjust:
 	pop	{r4, r5, r6, pc}
 	.globl fake_adjust_end
 fake_adjust_end:
+@ fmodasync.c's Thumb rows: a validate's shape (handle, out): r0 == 0 -> 0x24, r1 == 0 -> 0x25, else *out = handle
+@ and 0. Its entry's IT block lies wholly in the bytes the jump takes (8 at a word-aligned entry, 10 at another);
+@ the test copies it to both alignments.
+	.syntax unified
+	.thumb
+	.balign 4
+	.globl fake_validate
+	.type fake_validate, %function
+	.thumb_func
+fake_validate:
+	cmp	r0, #0
+	itt	eq
+	moveq	r0, #0x24
+	bxeq	lr
+	cmp	r1, #0
+	itt	eq
+	moveq	r0, #0x25
+	bxeq	lr
+	str	r0, [r1]
+	movs	r0, #0
+	bx	lr
+	.globl fake_validate_end
+fake_validate_end:
+	.arm
+	.syntax divided
+@ an ARM entry with a b<cond> among the moved bytes (2017.4's SystemI::validate): r0 == 0 -> 7, else r0 + 1
+	.balign 4
+	.globl fake_armcond
+	.type fake_armcond, %function
+fake_armcond:
+	cmp	r0, #0
+	beq	1f
+	add	r0, r0, #1
+	bx	lr
+1:	mov	r0, #7
+	bx	lr
+	.globl fake_armcond_end
+fake_armcond_end:
 #elif defined(__aarch64__)
 	.text
 	.balign 4

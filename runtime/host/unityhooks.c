@@ -25,6 +25,7 @@
 //                        BeginFrame (0, the default) or in EndFrame (1): at the end the main thread runs
 //                        the frame's scripts, animation and culling while the render thread still plays
 //                        the last frame back. Unity's own setting (a script can set it); nothing is hooked.
+//   UA_FMOD_ASYNC=1      FMOD's once-a-frame update on a worker thread (fmodasync.c)
 //   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmunity player
@@ -36,12 +37,15 @@
 // or a library of another version with a function at the same offset, matches no row and is left
 // alone; the log says so. No Unity code is kept here: offsets and hashes only.
 //
-// How it hooks. The function's first instructions (8 bytes in ARM state, 16 in A64; the tool checks
-// that they can run elsewhere and that nothing in the function branches into them) are copied to a
-// trampoline that continues at the next instruction; the entry becomes a jump to the wrapper here,
-// which calls the original through the trampoline and adjusts only its result. In ARM state the moved
-// instructions use no pc-relative operand. In A64 one that does is rewritten for its new place: a
-// direct branch (b, bl, b.cond, cbz, cbnz, tbz, tbnz) goes through a veneer behind the trampoline to
+// How it hooks. The function's first instructions (8 bytes in ARM state, 16 in A64, 8 in Thumb at a
+// word-aligned entry and 10 at another, whose jump starts with a nop so that its literal is
+// word-aligned; the tool checks that they can run elsewhere and that nothing in the function branches
+// into them) are copied to a trampoline that continues at the next instruction; the entry becomes a
+// jump to the wrapper here, which calls the original through the trampoline and adjusts only its
+// result. In ARM and Thumb state the moved instructions use no pc-relative operand and end on an
+// instruction's boundary, an IT block among them whole (fmodasync.c's Thumb rows); but an ARM
+// b<cond>, which becomes a load of its target into the pc. In A64 one that does is rewritten for its
+// new place: a direct branch (b, bl, b.cond, cbz, cbnz, tbz, tbnz) goes through a veneer behind the trampoline to
 // its old target, adr and adrp become a load of the address they computed. The trampoline's jumps
 // use x16, which no moved instruction writes (the tool checks it).
 #define _GNU_SOURCE
@@ -60,6 +64,7 @@
 #include "unitybeh.h"
 #include "unityscripts.h"
 #include "unitylayers.h"
+#include "fmodasync.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -150,7 +155,21 @@ static size_t a64_trampoline(uint32_t *t, uint64_t fn, size_t n)
     return tail;
 }
 
-// a trampoline: the moved instructions, then a jump to fn + moved; returns its address or 0
+// Thumb: the bytes the entry's jump takes, `ldr.w pc, [pc, #0]` and its word: 8 at a word-aligned entry, else a
+// `nop` first (the load's literal must be word-aligned to load the pc): 10
+static size_t thumb_moved(uintptr_t fn) { return (fn & 2) ? 10 : 8; }
+static size_t thumb_jump(uint16_t *j, uintptr_t fn, uintptr_t to)
+{
+    size_t n = 0;
+    if (fn & 2) j[n++] = 0xbf00;                                    // nop
+    j[n++] = 0xf8df; j[n++] = 0xf000;                               // ldr.w pc, [pc, #0]
+    uint32_t a = (uint32_t)to;
+    memcpy(&j[n], &a, 4);
+    return 2 * n + 4;
+}
+
+// a trampoline: the moved instructions, then a jump to fn + moved; returns its address or 0 (a Thumb one with
+// its bit 0 set)
 static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
 {
     static uint8_t *pool;
@@ -160,14 +179,29 @@ static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
         pool = mmap(NULL, pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (pool == MAP_FAILED) { pool = NULL; return 0; }
     }
-    size_t need = isa == ISA_ARM ? moved + 8 : 4 * A64_TRAMPOLINE;
+    size_t need = isa == ISA_ARM ? 2 * moved + 8 : isa == ISA_THUMB ? moved + 10 : 4 * A64_TRAMPOLINE;
     if (used + need > (size_t)pg) return 0;
     uint8_t *t = pool + used;
     mprotect(pool, pg, PROT_READ | PROT_WRITE);
     if (isa == ISA_ARM) {
-        uint32_t j[2] = { 0xe51ff004u /* ldr pc, [pc, #-4] */, (uint32_t)(fn + moved) };
+        // a moved b<cond> becomes ldr<cond> pc, [pc, #k] of its target, kept behind the jump back
+        uint32_t *w = (uint32_t *)t, n = (uint32_t)(moved / 4), lit = n + 2;
         memcpy(t, (void *)fn, moved);
-        memcpy(t + moved, j, 8);
+        for (uint32_t i = 0; i < n; i++)
+            if ((w[i] & 0x0f000000u) == 0x0a000000u && w[i] >> 28 != 0xf) {
+                uint32_t target = (uint32_t)(fn + 4 * i + 8 + (uint32_t)(((int32_t)(w[i] << 8) >> 8) * 4));
+                w[lit] = target;
+                w[i] = (w[i] & 0xf0000000u) | 0x059ff000u | (4 * lit - (4 * i + 8));
+                lit++;
+            }
+        w[n] = 0xe51ff004u;                                          // ldr pc, [pc, #-4]
+        w[n + 1] = (uint32_t)(fn + moved);
+        need = 4 * lit;
+    } else if (isa == ISA_THUMB) {                                   // t is word-aligned: the jump as at t + moved
+        uint16_t j[5];
+        memcpy(t, (void *)fn, moved);
+        need = moved + thumb_jump(j, (uintptr_t)(t + moved), (fn + moved) | 1);
+        memcpy(t + moved, j, need - moved);
     } else {
         need = 4 * a64_trampoline((uint32_t *)t, fn, moved / 4);
     }
@@ -175,26 +209,36 @@ static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
     if (!need) return 0;
     __builtin___clear_cache((char *)t, (char *)(t + need));
     used += (need + 15) & ~(size_t)15;
-    return (uintptr_t)t;
+    return (uintptr_t)t | (isa == ISA_THUMB);
 }
 
 // the entry of fn becomes a jump to to; *orig gets a callable original. 0 on success
 int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig)
 {
-    size_t moved = isa == ISA_ARM ? 8 : 4 * A64_MOVED;
+    size_t moved = isa == ISA_ARM ? 8 : isa == ISA_THUMB ? thumb_moved(fn) : 4 * A64_MOVED;
     uintptr_t t = make_trampoline(fn, moved, isa);
     if (!t) return -1;
-    if (isa == ISA_ARM) {
-        uint32_t j[2] = { 0xe51ff004u, (uint32_t)(uintptr_t)to };     // Thumb bit kept: ldr pc interworks
-        if (patch_bytes(fn, j, 8) != 0) return -1;
-    } else {
-        uint32_t j[4] = { 0x58000050u, 0xd61f0200u, 0, 0 };
-        uint64_t a = (uint64_t)(uintptr_t)to;
-        memcpy(&j[2], &a, 8);
-        if (patch_bytes(fn, j, 16) != 0) return -1;
-    }
+    if (unityhooks_jump(fn, isa, to) != 0) return -1;
     *orig = (void *)t;
     return 0;
+}
+
+// the entry of fn becomes a jump to to, nothing kept (a function replaced whole). 0 on success
+int unityhooks_jump(uintptr_t fn, char isa, void *to)
+{
+    if (isa == ISA_ARM) {
+        uint32_t j[2] = { 0xe51ff004u, (uint32_t)(uintptr_t)to };     // Thumb bit kept: ldr pc interworks
+        return patch_bytes(fn, j, 8);
+    }
+    if (isa == ISA_THUMB) {                                          // ldr pc interworks: an ARM `to` too
+        uint16_t j[5];
+        size_t n = thumb_jump(j, fn, (uintptr_t)to);
+        return patch_bytes(fn, j, n);
+    }
+    uint32_t j[4] = { 0x58000050u, 0xd61f0200u, 0, 0 };
+    uint64_t a = (uint64_t)(uintptr_t)to;
+    memcpy(&j[2], &a, 8);
+    return patch_bytes(fn, j, 16);
 }
 
 // --- the row whose bytes the loaded library has
@@ -300,6 +344,7 @@ void unityhooks_on_load(so_module *m)
     unityscripts_on_load(base, size);           // UA_SCRIPT_FIND
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
+    fmodasync_on_load(base, size);              // UA_FMOD_ASYNC, UA_FMOD_COUNT (fmodasync.c)
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {

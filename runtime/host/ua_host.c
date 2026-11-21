@@ -56,6 +56,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "mono64.h"
 #include "unityhooks.h"
 #include "unitylayers.h"
+#include "fmodasync.h"
 #include "monodump.h"
 #include "memledger.h"
 #include "monoimage.h"
@@ -385,6 +386,7 @@ static void *dlsym_hook(const char *sym, void *p)
     p = icallcount_dlsym_hook(sym, p);         // UA_ICALL_COUNT: the engine's internal calls counted (icallcount.c)
     p = unityicalls_dlsym_hook(sym, p);        // UA_PROPERTY_ID: engine calls answered from earlier answers (unityicalls.c)
     p = monoimage_dlsym_hook(sym, p);          // UA_MONO_IMAGE_MAP: the assemblies read in place from the APK (monoimage.c)
+    p = fmodasync_dlsym_hook(sym, p);          // UA_FMOD_ASYNC: managed code waits for FMOD's update (fmodasync.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (g_mono_trace) {
         if (!strcmp(sym, "mono_array_new")) { r_array_new = p; p = (void *)w_array_new; }
@@ -499,7 +501,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
+static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); fmodasync_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }

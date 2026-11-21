@@ -9,15 +9,17 @@ symbol file for it (`pmunity player fetch <version> --symbols`: Variations/<back
 It checks what the runtime's hook relies on, and prints no row where a check fails:
   - the symbol file belongs to this library (the same GNU build id, when the library has one; else
     the function's bytes must at least be in the library's text);
-  - the bytes the jump replaces (8 in ARM state, 16 in A64) are instructions that can run anywhere
-    else: in ARM state no pc-relative operand, no branch, no literal load; in A64 no literal load, no
-    indirect branch, no write of x16 or x17 (the trampoline's jumps use x16), and a direct branch
-    only to outside those bytes (the runtime rewrites direct branches, adr and adrp for their new
-    place);
+  - the bytes the jump replaces (8 in ARM state, 16 in A64, 8 or 10 in Thumb: 10 at an entry that is
+    not word-aligned) are instructions that can run anywhere else: in ARM state no pc-relative
+    operand, no literal load, no branch but a b<cond>, which the runtime rewrites; in Thumb the same, whole instructions, and an IT block whole
+    among them (`bx lr` and a `pop` of the pc may be moved: they return); in A64 no literal load, no
+    indirect branch, no write of x16 or x17 (the trampoline's jumps use x16), and a direct branch only
+    to outside those bytes (the runtime rewrites direct branches, adr and adrp for their new place);
   - nothing in the function branches into those bytes after the first instruction.
+A 'replace' row (a function the runtime replaces whole: only its entry is overwritten, nothing of it
+runs again) checks only the last point and that the function is longer than the jump.
 The function's meaning (its arguments, the enum values the hook compares) is read by hand for each
-version before a row is added; the hash then ties the row to exactly that code. Thumb functions are
-not hooked (the ARM players' functions here are in ARM state).
+version before a row is added; the hash then ties the row to exactly that code.
 Pure Python, no Unity code is printed."""
 import argparse
 import struct
@@ -60,6 +62,18 @@ HOOKS = [
     ('_ZNK4core8hash_mapIiP6ObjectNS_4hashIiEESt8equal_toIiEE6lookupERKi', 'core::hash_map<int, Object*>::lookup', 'call'),
     ('_ZN4core8hash_mapIiP6ObjectNS_4hashIiEESt8equal_toIiEE5eraseERKi', 'core::hash_map<int, Object*>::erase'),
     ('_ZN20BaseBehaviourManager12CommonUpdateI16BehaviourManagerEEvv', 'BaseBehaviourManager::CommonUpdate<BehaviourManager>', 'call'),
+    # fmodasync.c (UA_FMOD_ASYNC, UA_FMOD_COUNT): FMOD's update replaced (it runs on a worker), every entry of FMOD's
+    # API gated (its handle's validate, the first call of each), the update's caller (where its result is dropped)
+    ('_ZN4FMOD6System6updateEv', 'FMOD::System::update', 'replace'),
+    ('_ZN4FMOD7SystemI6updateEv', 'FMOD::SystemI::update', 'call'),
+    ('_ZN12AudioManager6UpdateEv', 'AudioManager::Update', 'call'),
+    ('_ZN4FMOD7SystemI8validate', 'FMOD::SystemI::validate'),
+    ('_ZN4FMOD8ChannelI8validate', 'FMOD::ChannelI::validate'),
+    ('_ZN4FMOD13ChannelGroupI8validate', 'FMOD::ChannelGroupI::validate'),
+    ('_ZN4FMOD6SoundI8validate', 'FMOD::SoundI::validate'),
+    ('_ZN4FMOD4DSPI8validate', 'FMOD::DSPI::validate'),
+    ('_ZN4FMOD14DSPConnectionI8validate', 'FMOD::DSPConnectionI::validate'),
+    ('_ZN4FMOD7ReverbI8validate', 'FMOD::ReverbI::validate'),
 ]
 
 
@@ -147,12 +161,15 @@ def fnv1a(b):
 
 
 def arm_movable(w):
-    """an ARM-state instruction that computes the same wherever it runs: no branch, no pc operand"""
+    """an ARM-state instruction that computes the same wherever it runs (no pc operand), or a b<cond>, which the
+    runtime rewrites for its new place; never a bl"""
     cond = w >> 28
     if cond == 0xf:
         return False                            # unconditional space (blx imm, pld, ...)
-    if (w & 0x0e000000) == 0x0a000000:
-        return False                            # b / bl
+    if (w & 0x0f000000) == 0x0b000000:
+        return False                            # bl
+    if (w & 0x0f000000) == 0x0a000000:
+        return True                             # b<cond>: the runtime loads its target into the pc instead
     if (w & 0x0ffffff0) == 0x012fff10 or (w & 0x0ffffff0) == 0x012fff30:
         return False                            # bx / blx reg
     if (w & 0x0e000000) == 0x08000000:          # ldm / stm: pc in the list or as base
@@ -195,8 +212,78 @@ def a64_movable(w):
     return not any(r in (16, 17) for r in regs)
 
 
+def thumb_insns(code):
+    """(offset, halfword 1, halfword 2 or None) for each Thumb instruction of code"""
+    i = 0
+    while i + 2 <= len(code):
+        h, = struct.unpack_from('<H', code, i)
+        if h >> 11 in (0x1d, 0x1e, 0x1f) and i + 4 <= len(code):
+            yield i, h, struct.unpack_from('<H', code, i + 2)[0]
+            i += 4
+        else:
+            yield i, h, None
+            i += 2
+
+
+def thumb_movable(h, h2):
+    """a Thumb instruction that computes the same wherever it runs (no pc operand, no branch but a return)"""
+    if h2 is None:
+        if h == 0x4770 or (h & 0xff00) == 0xbd00:
+            return True                         # bx lr, pop {..., pc}: return
+        if (h & 0xf000) == 0xd000 or (h & 0xf800) == 0xe000 or (h & 0xf500) == 0xb100:
+            return False                        # b<c>, b, cbz / cbnz
+        if (h & 0xf800) == 0x4800 or (h & 0xf800) == 0xa000:
+            return False                        # ldr literal, adr
+        if (h & 0xfc00) == 0x4400:              # add / cmp / mov / bx / blx with high registers
+            return (h & 0x0078) != 0x0078 and (h & 0x0087) != 0x0087 and (h & 0xff00) != 0x4700
+        return True
+    if (h & 0xf800) == 0xf000 and h2 & 0x8000:
+        return False                            # b.w, b<c>.w, bl, blx, and the other branch-space forms
+    return (h & 0xf) != 0xf                     # Rn = pc (literal loads, adr.w, tbb, ...): never moved
+
+
+def thumb_entry_ok(code, moved):
+    """the first `moved` bytes are whole Thumb instructions that can be moved, any IT block whole among them"""
+    it = 0
+    for off, h, h2 in thumb_insns(code[:moved + 4]):
+        if off >= moved:
+            return off == moved and it == 0
+        if off + (4 if h2 is not None else 2) > moved or not thumb_movable(h, h2):
+            return False
+        if it:
+            it -= 1
+        if h2 is None and (h & 0xff00) == 0xbf00 and h & 0xf:     # IT: up to four instructions follow
+            m = h & 0xf
+            it = 4 - ((m & -m).bit_length() - 1)
+    return it == 0
+
+
+def thumb_targets(code, start):
+    """(pc, target) of each direct Thumb branch in code at start"""
+    for off, h, h2 in thumb_insns(code):
+        pc = start + off
+        if h2 is None:
+            if (h & 0xf000) == 0xd000 and (h & 0x0e00) != 0x0e00:
+                yield pc, pc + 4 + (((h & 0xff) ^ 0x80) - 0x80) * 2
+            elif (h & 0xf800) == 0xe000:
+                yield pc, pc + 4 + (((h & 0x7ff) ^ 0x400) - 0x400) * 2
+            elif (h & 0xf500) == 0xb100:
+                yield pc, pc + 4 + (((h >> 9) & 1) << 6 | ((h >> 3) & 0x1f) << 1)
+        elif (h & 0xf800) == 0xf000 and h2 & 0x8000:
+            s_, j1, j2 = (h >> 10) & 1, (h2 >> 13) & 1, (h2 >> 11) & 1
+            if h2 & 0x1000:                      # b.w, bl, blx
+                i1, i2 = 1 - (j1 ^ s_), 1 - (j2 ^ s_)
+                imm = s_ << 24 | i1 << 23 | i2 << 22 | (h & 0x3ff) << 12 | (h2 & 0x7ff) << 1
+                yield pc, pc + 4 + imm - (s_ << 25)
+            elif (h & 0x0380) != 0x0380:         # b<c>.w
+                imm = s_ << 20 | j2 << 19 | j1 << 18 | (h & 0x3f) << 12 | (h2 & 0x7ff) << 1
+                yield pc, pc + 4 + imm - (s_ << 21)
+
+
 def branches_into(code, start, isa, lo, hi):
     """offsets in the function whose direct branch target lies in [lo, hi)"""
+    if isa == 't':
+        return [pc for pc, t in thumb_targets(code, start) if lo <= t < hi]
     hits = []
     for i in range(0, len(code) - 3, 4):
         w, = struct.unpack_from('<I', code, i)
@@ -240,36 +327,66 @@ def main(argv=None):
             isa, addr = 'x', val
         else:
             isa, addr = ('t' if val & 1 else 'a'), val & ~1
-        call = kind == ['call']
-        if isa == 't' and not call:
-            print(f'// {short}: a Thumb function: no row', file=sys.stderr)
-            continue
+        call, replace = kind == ['call'], kind == ['replace']
         off, fl = lib.file_off(addr, size)
         if off is None or not (fl & 1):
             print(f'// {short}: +{addr:#x} is not in the library\'s code: no row', file=sys.stderr)
             continue
         code = lib.d[off:off + size]
+        moved = 8 if isa == 'a' else 16 if isa == 'x' else (10 if addr & 2 else 8)
+        isa_name = {"a": "ARM", "t": "THUMB", "x": "A64"}[isa]
         if call:
-            print(f'    {{ "{a.unity}", "{short}", {addr:#x}, {size:#x}, '
-                  f'ISA_{ {"a": "ARM", "t": "THUMB", "x": "A64"}[isa] }, {fnv1a(code):#018x}ull }},')
+            print(f'    {{ "{a.unity}", "{short}", {addr:#x}, {size:#x}, ISA_{isa_name}, {fnv1a(code):#018x}ull }},')
             ok += 1
             continue
-        moved = 8 if isa == 'a' else 16
-        words = struct.unpack_from(f'<{moved // 4}I', code, 0)
-        mov = arm_movable if isa == 'a' else a64_movable
-        bad = [i for i, w in enumerate(words) if not mov(w)]
-        if bad:
-            print(f'// {short}: instruction {bad[0]} of the entry cannot be moved: no row', file=sys.stderr)
+        if replace:
+            into = branches_into(code, addr, isa, addr + 1, addr + moved)
+            if size <= moved or into:
+                print(f'// {short}: {size} bytes, branches into the entry from {into}: no row', file=sys.stderr)
+                continue
+            print(f'    {{ "{a.unity}", "{short}", {addr:#x}, {size:#x}, ISA_{isa_name}, {fnv1a(code):#018x}ull }},')
+            ok += 1
             continue
+        if isa == 't':
+            if not thumb_entry_ok(code, moved):
+                print(f'// {short}: the entry\'s {moved} bytes cannot be moved: no row', file=sys.stderr)
+                continue
+        else:
+            words = struct.unpack_from(f'<{moved // 4}I', code, 0)
+            mov = arm_movable if isa == 'a' else a64_movable
+            bad = [i for i, w in enumerate(words) if not mov(w)]
+            if bad:
+                print(f'// {short}: instruction {bad[0]} of the entry cannot be moved: no row', file=sys.stderr)
+                continue
         # (a branch among the moved instructions to the first one would reach the jump to the hook)
-        into = branches_into(code, addr, isa, addr + 4, addr + moved) or \
-            branches_into(code[:moved], addr, isa, addr, addr + 4)
+        into = branches_into(code, addr, isa, addr + (2 if isa == 't' else 4), addr + moved) or \
+            branches_into(code[:moved], addr, isa, addr, addr + 2)
         if into:
             print(f'// {short}: branches into the entry from {", ".join(hex(x) for x in into)}: no row', file=sys.stderr)
             continue
-        print(f'    {{ "{a.unity}", "{short}", {addr:#x}, {size:#x}, ISA_{"ARM" if isa == "a" else "A64"}, '
-              f'{fnv1a(code):#018x}ull }},')
+        print(f'    {{ "{a.unity}", "{short}", {addr:#x}, {size:#x}, ISA_{isa_name}, {fnv1a(code):#018x}ull }},')
         ok += 1
+    # fmodasync.c: where AudioManager::Update's call of FMOD::System::update returns
+    am, up = funcs.get('AudioManager::Update', []), funcs.get('FMOD::System::update', [])
+    if len(am) == 1 and len(up) == 1:
+        val, size, _ = am[0]
+        isa = 'x' if lib.is64 else ('t' if val & 1 else 'a')
+        addr, target = val & ~1 if isa != 'x' else val, up[0][0] & ~1
+        off, _ = lib.file_off(addr, size)
+        code = lib.d[off:off + size]
+        sites = []
+        if isa == 't':
+            sites = [pc + 4 for pc, t in thumb_targets(code, addr) if t == target]
+        else:
+            for i in range(0, size - 3, 4):
+                w, = struct.unpack_from('<I', code, i)
+                pc = addr + i
+                t = a64_target(w, pc) if isa == 'x' else (pc + 8 + ((((w & 0xffffff) ^ 0x800000) - 0x800000) * 4)
+                                                         if (w & 0x0f000000) == 0x0b000000 else None)
+                if t == target and ((w & 0xfc000000) == 0x94000000 or isa == 'a'):
+                    sites.append(pc + 4)
+        print(f'    // AudioManager::Update: FMOD::System::update returns to '
+              f'{", ".join(hex(x | (isa == "t")) for x in sites) or "(no call found)"}')
     return 0 if ok else 1
 
 

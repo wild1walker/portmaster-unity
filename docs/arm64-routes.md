@@ -257,6 +257,81 @@ join comes before the next frame's scripts. Risk: a game that calls FMOD between
 FMOD entry points between `System::update` and the next frame's first script callback, and the update's time
 measured on its own thread.
 
+#### Route 1, built and measured (2026-11-20)
+
+`UA_FMOD_ASYNC=1` (runtime/host/fmodasync.c, [runtime.md](runtime.md)); off by default: it is exact, but it gives
+UnityMain back 0.3 - 0.6 ms of CPU a frame and no frame rate.
+
+**Safety, read from both 6000.0.61f1 players' code and counted on the handhelds (`UA_FMOD_COUNT`):**
+
+- Unity's audio is FMOD Ex 4.44.56 (`SystemI::getVersion` answers 0x44456; Unity's own build, linked into
+  libunity.so; 2017.4's players the same version). Its API takes no lock: each of the 135 public functions
+  (`System::`, `Channel::`, `ChannelGroup::`, `Sound::`, `DSP::`, `DSPConnection::`, `Reverb::`) calls its handle's
+  validate (7 functions) and then the implementation. `FMOD_INIT_THREAD_UNSAFE` is FMOD Studio's (1.x and later)
+  and does not exist here; Unity calls `System::init` with flags 0 (`FMOD_INIT_NORMAL`: no
+  `STREAM_FROM_UPDATE`, the mixer and stream threads FMOD's own). So the only safety is the order of calls, and
+  the hook keeps it: every call into FMOD's code from outside it in both libunity.so files was listed from their
+  symbol files (calls and tail calls): the 135 public functions, FMOD's start-up, and the Java AudioTrack output's
+  mix entry (FMOD's own mixing work, on its own thread); AudioManager::Update holds no lock around the update and
+  drops its result.
+- What the update reads that the frame sets: the listener and the channels' 3D attributes, volumes and pitches
+  that AudioManager::Update and the scripts set before it (unchanged: the handover comes at the same point), and
+  the mixer's DSP clock (FMOD's real-time thread: its position at the update already varies from run to run).
+  Its callbacks into Unity: `SoundChannelInstance::FMODChannelCallback` (a finished channel's Unity object
+  released; the only lock it can reach is the log's, on an FMOD error), `AudioSource::rolloffCallback` (returns
+  1.0), `AudioManager::systemCallback` (device-list changes: `FMOD_OS_CheckDriverList` is a stub on Android).
+- Between the update's return and the frame's end, Hollow Knight at King's Pass (muOS and Knulli, 32 and 64-bit,
+  and the G350): UnityMain enters FMOD in no gameplay frame (only while loading: `Sound::getFormat`, `lock`,
+  `getLength`, ... of new clips), Unity's loading threads (`Loading.Preload`, `Loading.AsyncRead`) call
+  `System::createSound` while scenes load, FMOD's mixer calls `DSP::getUserData` about 20 times a frame (Unity's
+  DSP callbacks; it never waits: it may hold FMOD's locks), the update's own callbacks call FMOD 0.1 times a
+  frame (channel ends), and UnityMain enters managed code 12 - 51 times a frame. The first managed call comes
+  0.5 - 0.8 ms after the update (Unity's `RenderPipelineManager.HandleRenderPipelineChange`, every frame), then
+  `Camera.FireOnPreCull`, or `ScriptableRuntimeReflectionSystemWrapper.TickRealtimeProbes` on some frames; the
+  first game script (`DarknessCameraEffect.OnPreRender`) about 1.0 ms after it on the 64-bit build. The three
+  Unity methods are let through only when their IL is the code read and the statics they test say they change
+  nothing.
+- The update itself: 0.18 - 0.42 ms inline on Knulli's 32-bit build, 0.49 - 0.52 ms on muOS's, 0.67 - 0.72 ms on
+  the 64-bit build (both firmwares), 0.50 - 0.65 ms on the G350. On the worker it takes longer (0.6 ms on the
+  32-bit build, 0.7 - 1.0 ms on the 64-bit one: its data was last written on UnityMain's core) and starts 0.12 -
+  0.25 ms after the handover (a futex wake; no spinning). So UnityMain still waits at the first script on most
+  frames (0.3 - 0.5 ms).
+
+**A/B, King's Pass standing, 25 s, cool starts, alternated (o = off, a = `UA_FMOD_ASYNC=1`); UnityMain ms is its
+CPU time a frame (/proc), the counters `hwcount` on UnityMain relative to the off runs:**
+
+| | fps off | fps async | UnityMain ms off | async | cycles | L2 refills | load-miss stall cycles |
+|---|---|---|---|---|---|---|---|
+| Knulli 32-bit | 53.5, 53.2 | 52.4, 53.7 | 16.16, 15.98 | 15.40, 15.89 | -2 to -6 % | -3 to -5 % | -4 to -10 % |
+| Knulli 64-bit | 51.0 | 51.2, 51.3 | 16.53 | 16.19, 16.19 | -2.5 % | -3 to -4 % | -5 % |
+| muOS 32-bit | 53.2, 52.0 | 52.1, 52.1 | 16.08, 15.78 | 15.75, 14.82 | -0 to -4 % | -0 to -4 % | -2 to -7 % |
+| G350 32-bit | 39.1, 39.5 | 39.4, 39.6 | (on a CPU) 24.42, 24.29 | 24.03, 24.16 | -1.5 % | -2.5 % | -2.5 % |
+
+The frame rate follows the GPU clock here (muOS: the 53.2 fps run had 635 MHz on average, the three others 610;
+King's Pass is held by the GPU, mono-arm64.md), so what moved is UnityMain's own time: 0.3 - 0.6 ms of CPU a
+frame and 2 - 5 % of its L2 refills and load-miss stalls. The worker spends 0.6 - 0.7 ms for it: more CPU in all
+than the update took inline, on a handheld whose four cores are 65 - 70 % busy. (The first 32-bit Knulli async
+run let no managed call through; the others let `HandleRenderPipelineChange`, and the muOS ones the camera's
+too, through.)
+
+**Exactness.** Every FMOD call, managed call and the frame's end on UnityMain, and every FMOD call from Unity's
+other threads, comes after the update has ended, as without it; the update runs between the same calls. The
+sound cannot be compared sample for sample between two runs (the game's timing differs from run to run, with or
+without it): captured output (`ANDROID_SLES_CAPTURE`) of the scripted walk, jump and attacks in King's Pass on
+Knulli's 32-bit build: two runs without it correlate 0.65 - 0.76 (10 ms envelopes, aligned), with it 0.53 - 0.81
+against them, levels within 0.05 dB: no difference beyond run-to-run.
+
+**Cuphead (Unity 2017.4).** The rows are there (2017.4.9f1 armeabi-v7a, the 32-bit port's player; 2017.4.40f1
+armeabi-v7a and arm64-v8a), but 2017.4's AudioManager::Update calls managed code right after the update
+(`AudioSettings.InvokeOnAudioManagerUpdate`, every frame): the join comes at once, so nothing is gained there
+(exact, not run on the handheld).
+
+**What would make it pay:** the update would need to run where nothing waits for it soon: the game's first camera
+script comes about 1 ms after it in Hollow Knight, as long as the update on another core takes with its wake-up.
+Handing it over earlier is not exact (the frame's audio settings come right before it). The route's expected
+-0.5 to -0.7 ms of UnityMain is reached in CPU time but not in frame time; the 64-bit build's gap stays for
+routes 2 and 3.
+
 ### 2. Profile-guided relayout of libunity's hot code (our own BOLT for a binary without relocations)
 
 What: at load, copy the functions a frame runs (from `UA_PROF` profiles: 824 functions / 354 KB cover 90 %
@@ -366,7 +441,7 @@ pools) is years of work. Recorded for completeness.
 
 | route | expected UnityMain a frame | effort | exact? | first step |
 |---|---|---|---|---|
-| 1. FMOD update on a worker | -0.5 to -0.7 ms (both builds) | small | yes, with the join before the next FMOD call | count FMOD calls between `System::update` and the next frame's scripts; time the update alone |
+| 1. FMOD update on a worker | built (`UA_FMOD_ASYNC=1`, off): UnityMain CPU -0.3 to -0.6 ms, frame rate the same | done | yes | - |
 | 2. libunity hot-code relayout | -0.5 to -1.0 ms (64-bit) | large | yes (instructions unchanged but branch fields) | classify the 1,794 sampled functions for a mechanical move; move the top 75; A/B `ic_dep_stall` |
 | 3. rewritten hot functions (prefetch, inline atomics) | -0.2 to -0.4 ms | medium, per Unity version | yes | outline-atomic helpers branched past the LSE test; `FlattenBasicData` with a prefetch |
 | 4. less render-thread L2 traffic | 0.1 - 0.3 ms (to be measured) | small to measure | yes | `hwcount` on UnityMain with render-thread work removed |

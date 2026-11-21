@@ -1170,3 +1170,9 @@ Not done: the free-list pop inline in the wrapper's IL (no C call), which would 
 `GC_thread_key` in initial-exec TLS and a Mono TLS key for it (on aarch64 Mono's own TLS reads from JIT
 code are calls too, `MONO_THREAD_VAR_OFFSET` being -1 for a PIC library); the container says the call is
 no longer the main cost.
+
+### FMOD's update on a worker thread (2026-11-20)
+
+Route 1 of [arm64-routes.md](arm64-routes.md#route-1-built-and-measured-2026-11-20), built as `UA_FMOD_ASYNC=1`
+(exact: everything that came after the update still comes after it): the 64-bit UnityMain gives back 0.3 ms of CPU
+a frame on Knulli and 2.5 % of its cycles, the frame rate the same; off by default.
