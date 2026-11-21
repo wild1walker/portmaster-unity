@@ -16,6 +16,17 @@
 //   UA_GL_REC=auto     thread where glpresent.c's present thread runs (a driver whose swap waits for
 //                      the GPU, whose draw calls hold the render thread: RK3326's Mali), else off
 //   UA_GL_REC_LOG=<s>  statistics every <s> seconds (default 10)
+//   UA_GL_REC_TIME=1   (with 1, 2, thread or auto) the time each entry point takes when the held
+//                      calls are submitted (on the GL thread with thread: the driver's time there,
+//                      call by call, as UA_GL_REC=time gives it for the render thread):
+//                      "[glrec]   time in GL (submitted): ..."
+//   UA_GL_REC_BLACKBOX=<file>  (with 1, 2, thread or auto) a flight recorder for a handheld that hangs
+//                      in the driver: before each frame's held calls are submitted, before the swap and
+//                      after it (UA_GL_REC_BLACKBOX_LEVEL=1, default), also before each glBindFramebuffer
+//                      (2: which pass), or before every call (3: slow), <file> is rewritten in place with
+//                      the frame, the stage, the call's index and name and the 64 calls submitted before
+//                      it, and synced to the card (fdatasync): after a hang the file holds the last stage
+//                      that was reached. A diagnosis aid (each sync costs the submitting thread time)
 //
 // Wrappers (glrec_gen.h, generated from Khronos' GLES 3.2 headers by glrec_gen.py) for every GLES
 // 3.2 entry point and each extension a Unity player names. While recording (the thread that swaps,
@@ -38,6 +49,7 @@
 // back. Submitting calls the next layer (glopt.c, msaafix.c, gltrace.c, the driver) in order.
 #define _GNU_SOURCE               // (pthread_setname_np)
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -182,7 +194,31 @@ static void time_init(void)
     g_tick_ns = g_counter ? 1e9 / f : 1.0;
     fprintf(stderr, "[glrec] timing with %s\n", g_counter ? "the generic timer's counter" : "clock_gettime");
 }
+// UA_GL_REC_TIME=1: the submitted calls' time, per entry point (written only by the thread that
+// submits, read by the log on the render thread without a lock: statistics; totals, the log keeps
+// what it printed last)
+static int g_rtime;
+static unsigned long long g_rticks[MAXOP], g_rcalls[MAXOP], g_rticks_last[MAXOP], g_rcalls_last[MAXOP];
 // (0 when not timing: the census only counts)
+// UA_GL_REC_BLACKBOX=<file>: the last stage reached, synced (see the top)
+static int g_bb_fd = -1, g_bb_level = 1;
+static unsigned long g_bb_frame, g_bb_calls;
+static unsigned g_bb_ring[64];
+static unsigned g_bb_bindfb = ~0u;
+static void bb_mark(const char *stage, unsigned op, size_t idx)
+{
+    char b[4096];
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    int o = snprintf(b, sizeof b, "ua_host GL black box (UA_GL_REC_BLACKBOX)\nframe %lu, stage: %s, call %zu of the frame: %s, "
+                     "calls submitted %lu, monotonic %ld.%03ld s\nthe calls before it, oldest first:",
+                     g_bb_frame, stage, idx, op < OP_N ? glrec_name[op] : "-", g_bb_calls, (long)t.tv_sec, t.tv_nsec / 1000000);
+    unsigned long n = g_bb_calls < 64 ? g_bb_calls : 64;
+    for (unsigned long i = g_bb_calls - n; i < g_bb_calls && o > 0 && o < (int)sizeof b - 64; i++)
+        o += snprintf(b + o, sizeof b - (size_t)o, " %s", glrec_name[g_bb_ring[i % 64]]);
+    if (o < 0 || o >= (int)sizeof b - 1) o = (int)sizeof b - 2;
+    memset(b + o, ' ', sizeof b - (size_t)o - 1); b[sizeof b - 1] = '\n';
+    if (pwrite(g_bb_fd, b, sizeof b, 0) == (ssize_t)sizeof b) fdatasync(g_bb_fd);
+}
 static inline uint64_t glrec_t0(void) { return g_time && mine() ? ticks() : 0; }
 static inline void glrec_t1(unsigned op, uint64_t t0) { if (!mine()) return; g_calls[op]++; if (t0) g_ticks[op] += ticks() - t0; }
 static inline void glrec_tadd(unsigned op, uint64_t t0) { if (t0) g_ticks[op] += ticks() - t0; }
@@ -701,14 +737,17 @@ static void *glt_main(void *u)
                 g_tglt_ctx = 1;
             }
             g_rblob = g_jblob;
+            if (g_bb_fd >= 0) bb_mark("GL thread: submitting the frame's calls", ~0u, 0);
             if (glmerge_on()) {
                 fg_frame mf = { .cmd = g_jcmd, .ncmd = g_jncmd, .at_swap = g_jswap != NULL, .call = glrec_call, .ptr = glrec_ptr, .next = glrec_next };
                 glmerge_submit(&mf);
             } else replay_buf(g_jcmd, 0, g_jncmd);
             g_jncmd = 0; g_jnblob = 0;
             TDBG("glt: replayed (%.2f ms)", (now() - t0) * 1000);
+            if (g_bb_fd >= 0) bb_mark(g_jswap ? "GL thread: in the swap" : "GL thread: glFlush", ~0u, 0);
             if (g_jswap) g_jswap(g_jsd, g_jss);
             else NX(glFlush)();
+            if (g_bb_fd >= 0) { bb_mark(g_jswap ? "GL thread: swap returned" : "GL thread: glFlush returned", ~0u, 0); if (g_jswap) g_bb_frame++; }
             TDBG("glt: done (%.2f ms)", (now() - t0) * 1000);
             // (a long frame's buffers not kept: a frame of play needs a few hundred KB)
             if (g_jcapcmd * sizeof *g_jcmd > HOLD_MAX_T) { free(g_jcmd); g_jcmd = NULL; g_jcapcmd = 0; }
@@ -959,6 +998,28 @@ static void glrec_replay_glDeleteBuffers(const uint64_t *a) { NX(glDeleteBuffers
 // ---- submitting
 static void replay_buf(const uint64_t *cmd, size_t from, size_t to)
 {
+    if (g_bb_fd >= 0) {
+        for (size_t i = from, k = 0; i < to; k++) {
+            uint64_t h = cmd[i];
+            unsigned op = (unsigned)(h & 0xffffffffu), n = (unsigned)(h >> 32);
+            if (g_bb_level >= 3 || (g_bb_level == 2 && op == g_bb_bindfb)) bb_mark(g_bb_level >= 3 ? "call" : "pass", op, k);
+            glrec_call(op, cmd + i + 1);
+            g_bb_ring[g_bb_calls++ % 64] = op;
+            i += n + 1;
+        }
+        return;
+    }
+    if (g_rtime) {
+        for (size_t i = from; i < to;) {
+            uint64_t h = cmd[i];
+            unsigned op = (unsigned)(h & 0xffffffffu), n = (unsigned)(h >> 32);
+            uint64_t t0 = ticks();
+            glrec_call(op, cmd + i + 1);
+            g_rticks[op] += ticks() - t0; g_rcalls[op]++;
+            i += n + 1;
+        }
+        return;
+    }
     for (size_t i = from; i < to;) {
         uint64_t h = cmd[i];
         unsigned op = (unsigned)(h & 0xffffffffu), n = (unsigned)(h >> 32);
@@ -974,6 +1035,7 @@ static void submit(int at_swap)
     double t0 = now();
     g_held_words += g_ncmd; g_held_blob += g_nblob;
     g_rblob = g_blob;
+    if (g_bb_fd >= 0) bb_mark(at_swap ? "render thread: submitting the frame's calls" : "render thread: submitting held calls", ~0u, 0);
     if (g_mode == 3) {
         fg_frame f = { .cmd = g_cmd, .ncmd = g_ncmd, .at_swap = at_swap, .call = glrec_call, .ptr = glrec_ptr, .next = glrec_next };
         fg_submit(&f);
@@ -984,6 +1046,7 @@ static void submit(int at_swap)
     } else replay(0, g_ncmd);
     g_ncmd = 0; g_nblob = 0;
     if (at_swap) g_swap_submits++;
+    if (g_bb_fd >= 0 && at_swap) { bb_mark("render thread: frame submitted, swapping", ~0u, 0); g_bb_frame++; }
     g_replay_s += now() - t0;
 }
 
@@ -1071,12 +1134,12 @@ static void top(const unsigned long *counts, const char *what, int max)
     fprintf(stderr, "[glrec]   %s: %s\n", what, line);
 }
 // UA_GL_REC=time: the entry points by time a frame, with their calls and the time of one
-static void top_time(double frames)
+static void top_time_of(const char *what, const unsigned long long *tk, const unsigned long long *nc, double frames)
 {
     opcount c[MAXOP];
     int k = 0;
     double all = 0;
-    for (unsigned i = 0; i < OP_N; i++) if (g_ticks[i]) { c[k++] = (opcount){ i, (unsigned long)(g_ticks[i] >> 4) }; all += g_ticks[i]; }
+    for (unsigned i = 0; i < OP_N; i++) if (tk[i]) { c[k++] = (opcount){ i, (unsigned long)(tk[i] >> 4) }; all += tk[i]; }
     if (!k) return;
     qsort(c, (size_t)k, sizeof c[0], by_count);
     char line[2400];
@@ -1084,10 +1147,26 @@ static void top_time(double frames)
     for (int i = 0; i < k && i < 30 && o + 96 < sizeof line; i++) {
         unsigned op = c[i].op;
         o += (size_t)snprintf(line + o, sizeof line - o, "%s%s %.3f ms (%.1f x %.1f us)", i ? ", " : "", glrec_name[op],
-                              g_ticks[op] * g_tick_ns / 1e6 / frames, g_calls[op] / frames,
-                              g_calls[op] ? g_ticks[op] * g_tick_ns / 1e3 / g_calls[op] : 0.0);
+                              tk[op] * g_tick_ns / 1e6 / frames, nc[op] / frames,
+                              nc[op] ? tk[op] * g_tick_ns / 1e3 / nc[op] : 0.0);
     }
-    fprintf(stderr, "[glrec]   time in GL: %.2f ms a frame: %s\n", all * g_tick_ns / 1e6 / frames, line);
+    fprintf(stderr, "[glrec]   %s: %.2f ms a frame: %s\n", what, all * g_tick_ns / 1e6 / frames, line);
+}
+static void top_time(double frames)
+{
+    static unsigned long long nc[MAXOP];
+    for (unsigned i = 0; i < OP_N; i++) nc[i] = g_calls[i];
+    top_time_of("time in GL", g_ticks, nc, frames);
+}
+static void top_rtime(double frames)
+{
+    static unsigned long long tk[MAXOP], nc[MAXOP];
+    for (unsigned i = 0; i < OP_N; i++) {
+        unsigned long long t = g_rticks[i], n = g_rcalls[i];
+        tk[i] = t - g_rticks_last[i]; nc[i] = n - g_rcalls_last[i];
+        g_rticks_last[i] = t; g_rcalls_last[i] = n;
+    }
+    top_time_of("time in GL (submitted)", tk, nc, frames);
 }
 static void log_stats(void)
 {
@@ -1109,6 +1188,7 @@ static void log_stats(void)
     if (g_mode == 1) top(g_calls, "calls a frame", 40);
     else top(g_direct, "made at once (not held)", 16);
     if (g_time) top_time(f);
+    if (g_rtime) top_rtime(f);
     if (g_mode == 3) fg_log(g_frames, g_fg_s);
     glmerge_log();
     if (g_tstarted)
@@ -1158,7 +1238,18 @@ const so_shim *glrec_table(void *(*next)(const char *name))
     g_mode = !e || !*e || !strcmp(e, "0") ? 0 : !strcmp(e, "census") || g_time ? 1 : !strcmp(e, "1") ? 2 : !strcmp(e, "2") ? 3 : !strcmp(e, "thread") || !strcmp(e, "auto") ? 4 : 0;
     g_auto = g_mode == 4 && !strcmp(e, "auto");
     if (!g_mode) return g_table;
-    if (g_time) time_init();
+    const char *rt = getenv("UA_GL_REC_TIME");
+    g_rtime = g_mode >= 2 && rt && atoi(rt) > 0;
+    if (g_time || g_rtime) time_init();
+    const char *bb = getenv("UA_GL_REC_BLACKBOX");
+    if (g_mode >= 2 && bb && *bb) {
+        const char *lv = getenv("UA_GL_REC_BLACKBOX_LEVEL");
+        if (lv && *lv) g_bb_level = atoi(lv);
+        for (unsigned i = 0; i < OP_N; i++) if (!strcmp(glrec_name[i], "glBindFramebuffer")) g_bb_bindfb = i;
+        g_bb_fd = open(bb, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        fprintf(stderr, "[glrec] black box %s (level %d)%s\n", bb, g_bb_level, g_bb_fd < 0 ? ": cannot open it" : "");
+        if (g_bb_fd >= 0) bb_mark("started", ~0u, 0);
+    }
     const char *l = getenv("UA_GL_REC_LOG");
     if (l && *l) g_log_every = atof(l);
     void *h = dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);

@@ -29,6 +29,7 @@
 //   side        a shader storage buffer bound: no pass is left out
 //   opt         UA_GL_REC_OPT=end: only invalidates at pass ends
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <GLES3/gl32.h>
@@ -79,11 +80,20 @@ int main(int argc, char **argv)
 {
     const char *m = argc > 1 ? argv[1] : "hold";
     const char *mode = !strcmp(m, "census") ? "census" : (!strcmp(m, "hold") || !strcmp(m, "copy") || !strcmp(m, "clientidx") ||
-                                                          !strcmp(m, "clientarray") || !strcmp(m, "map") || !strcmp(m, "texsub")) ? "1" : "2";
+                                                          !strcmp(m, "clientarray") || !strcmp(m, "map") || !strcmp(m, "texsub") ||
+                                                          !strcmp(m, "blackbox")) ? "1" : "2";
     setenv("UA_GL_REC", mode, 1);
     setenv("UA_GL_REC_LOG", "0", 1);
     if (!strcmp(m, "opt")) setenv("UA_GL_REC_OPT", "end", 1);
     if (!strcmp(m, "fetch")) setenv("FAKE_DS_FETCH", "1", 1);
+    char bbf[] = "/tmp/test_glrec_bbXXXXXX";
+    if (!strcmp(m, "blackbox")) {
+        int fd = mkstemp(bbf);
+        CHECK(fd >= 0);
+        close(fd);
+        setenv("UA_GL_REC_BLACKBOX", bbf, 1);
+        setenv("UA_GL_REC_BLACKBOX_LEVEL", "2", 1);
+    }
     g_t = glrec_table(NULL);
     CHECK(g_t && g_t[0].name);
     SWAP();                                     // (the render thread: this one; recording from now on)
@@ -254,6 +264,21 @@ int main(int argc, char **argv)
         BIND(0); USE(5); TEX(11); DRAW(4);
         SWAP();
         CHECK(at("clear(CDS fb1 0.25)") >= 0 && at("clear(CDS fb1 0.25)") < at("clear(C fb2 0.5) draw(fb2 2)") && HAS("clear(C fb3 0.25)"));
+    } else if (!strcmp(m, "blackbox")) {
+        // (UA_GL_REC_BLACKBOX: the file holds the last stage reached, rewritten in place, 4 KB)
+        BIND(1); CLEAR(GL_COLOR_BUFFER_BIT); DRAW(3);
+        SWAP();
+        BIND(2); DRAW(4);
+        SWAP();
+        char buf[8192] = { 0 };
+        FILE *f = fopen(bbf, "r");
+        size_t n = f ? fread(buf, 1, sizeof buf - 1, f) : 0;
+        if (f) fclose(f);
+        unlink(bbf);
+        CHECK(n == 4096);
+        CHECK(strstr(buf, "frame 1, stage: render thread: frame submitted, swapping") != NULL);
+        CHECK(strstr(buf, "glBindFramebuffer glDrawArrays") != NULL || strstr(buf, "glBindFramebuffer glDrawElements") != NULL);
+        if (failures) printf("%s\n", buf);
     } else { printf("unknown scenario %s\n", m); return 2; }
     printf("%s %s\n", failures ? "FAIL" : "ok", m);
     return failures != 0;

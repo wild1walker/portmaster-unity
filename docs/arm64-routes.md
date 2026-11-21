@@ -159,6 +159,114 @@ each helper `bti c; adrp; ldrb; cbz` (the LSE test) before its LL/SC loop; 684 `
 (hint space: no-ops on the A53, one issue slot each); no literal pools; `-Os` code (every compile command
 of Unity's Android build).
 
+## The graphics side, counted: render thread, Mali driver and GPU (2026-11-20)
+
+The same Hollow Knight installs and settings as above (King's Pass standing, the release's 1 GB settings,
+25 s from a cool handheld, 32-bit and 64-bit alternated A B A B in one hold; every run checked at the scene:
+the plan's hitch marker, 85 draws a frame), with four measurements at once: `UA_GL_REC=time` (the render
+thread's time in each GL entry point, read around the call at the top of ua_host's GL layers, so it is the
+driver's time plus the layers' below the recorder), `GPUCNT=1` (the Mali's own counters: GPU-active cycles,
+`gpucnt`), `HWCOUNT=1 HWCOUNT_ARGS='-t UnityGfxDeviceW'` (the A53's counters on the render thread) and
+`freq.log` (the GPU clock and the thermal cooling devices' states each second). On the G350, whose GL runs on
+ua_host's GL thread (`UA_GL_REC=auto`), `UA_GL_REC_TIME=1` (new, [runtime.md](runtime.md)) times each call
+where the GL thread submits it, and hwcount counts `ua_glthread` too; gpucnt is never run there.
+
+| a frame | Knulli 32-bit | Knulli 64-bit | muOS 32-bit | muOS 64-bit | G350 32-bit | G350 64-bit |
+|---|---|---|---|---|---|---|
+| fps (two runs) | 53.5, 52.9 | 51.1, 51.0 | 52.1, 52.0 | 50.7, 50.6 | 37.5, 37.2 (counters on; clean runs 39.9, 40.2) | 37.4, 37.4 (counters on; clean runs 37.5, 37.8) |
+| GPU clock (average; thermal state of the GPU) | 684, 677 MHz (0.1) | 600, 600 MHz (1.0) | 602, 631 MHz (3.0) | 594, 596 MHz (3.1) | 786 MHz | 786 MHz |
+| GPU busy / its cycles a frame | 94.3, 94.1 % / 12.1 M | 99.5 % / 11.7 M | 99.3, 96.4 % / 11.5, 11.7 M | 98.8, 98.1 % / 11.6 M | (not read) | (not read) |
+| UnityMain on a CPU | 18.1, 18.2 ms | 19.0, 19.1 ms | 16.9, 17.1 ms | 18.4, 18.8 ms | 24.9, 25.3 ms (clean 23.7) | 25.2, 25.4 ms (clean 25.0) |
+| render thread on a CPU (G350: + GL thread) | 12.1 ms | 13.5, 13.4 ms | 11.3 ms | 13.2 ms | 8.8 + 18.8 ms (clean: GL thread 11.9 - 12.7) | 8.8 + 17.9 ms (clean: GL thread 15.6 - 15.8) |
+| its cycles a frame (user) | 16.3, 16.2 M | 18.4, 18.2 M | 17.7 M | 21.1, 21.2 M | GL thread 16.7, 17.0 M | GL thread 18.4, 18.3 M |
+| of them waiting for an instruction fetch (`ic_dep_stall`) | 3.9, 4.0 M | 5.9, 5.8 M | 4.8 M | 7.1, 7.1 M | 7.0 M | 9.5, 9.2 M |
+| waiting for a load (`ld_dep_stall`) | 7.0 M | 7.8, 7.7 M | 7.9 M | 9.1, 9.2 M | 5.0, 4.9 M | 5.3, 5.1 M |
+| L2 refills | 34.7, 34.3 K | 45.7, 45.3 K | 36.5 K | 47.6 K | 84, 85 K | 99, 96 K |
+| instructions | 3.78 M | 3.55 M | 3.63 M | 3.51 M | 2.9 M | 2.3 M |
+
+Time in the GL calls, per call (us; the G350's per call on the GL thread; its 32-bit runs could not read the
+generic timer from AArch32 and took `clock_gettime`, about 0.8 us a call more, taken off here):
+
+| call (a frame) | Knulli 32 | Knulli 64 | muOS 32 | muOS 64 | G350 32 | G350 64 |
+|---|---|---|---|---|---|---|
+| `glDrawElements` (85; G350 87) | 34.0 | 39.6 | 33.5 | 40.1 | 75 | 86 |
+| `glBindFramebuffer` (16; 15) | 126 | 152 | 125 | 160 | 326 | 342 |
+| `glClear` (5; 3) | 50 | 58 | 48 | 59 | 79 | 91 |
+| `glBufferSubData` (18; 20) | 10.2 | 14.6 | 11.4 | 16.0 | 23 | 26 |
+| `glTexSubImage2D` (2) | 43 | 54 | 47 | 52 | 70 | 80 |
+| `glUseProgram` (57; 60) | 3.0 | 3.4 | 3.0 | 3.6 | 6.7 | 7.1 |
+| `glBindTexture`, `glUniform4fv`, `glVertexAttribPointer`, `glActiveTexture` | 1.2, 1.5, 0.5, 0.3 | 1.4, 1.5, 0.5, 0.2 | 1.2, 1.5, 0.5, 0.2 | 1.4, 1.5, 0.5, 0.2 | 2.4, 2.5, 1.8, 0.9 | 2.7, 2.4, 1.8, 1.0 |
+| `glInvalidateFramebuffer` (12) | 33 - 51 | 150 - 185 | 274 - 336 | 164 - 210 | 42 | 53 |
+| all, ms a frame | 7.3, 7.5 | 10.3, 9.7 | 10.7, 10.1 | 10.7, 10.2 | (17.9, 18.0 with the timer's cost) | 18.1, 17.9 |
+
+What it says:
+
+- **The GPU does the same work on both builds.** 11.5 - 11.7 M GPU-active cycles a frame at 600 MHz on both
+  (the counters count the GPU, not a process; at 696 MHz the same frame counts 12.1 M: memory latency in
+  cycles); the frame is the same 16 passes and 85 draws, the same 13,000 indices. Nothing in our GL layers
+  differs between the builds (the same `[unitypool]`, `[glarena]`, `[glspec]`, `[glopt]` counts).
+- **Entering the driver costs the same.** The cheap calls (`glBindTexture`, `glUniform4fv`,
+  `glVertexAttribPointer`, `glActiveTexture`: 0.2 - 1.5 us) take the same time on both builds: neither our
+  shims, nor libmali's TLS (`R_AARCH64_TLS_TPREL64`, initial-exec: one `mrs tpidr_el0` and a load) nor its
+  dispatch cost more on 64-bit. What costs more is the work inside the heavy calls: a draw +17 - 20 %, a
+  framebuffer change (the driver closes and submits the pass there) +20 - 28 %, a clear +16 - 23 %, an upload
+  +15 - 45 % on the RG34XX-SP; +6 - 15 % on the G350.
+- **The render thread's extra time is instruction fetch.** Its cycles grow 2.0 - 2.2 M a frame (Knulli) and
+  3.4 M (muOS) while it retires 6 % fewer instructions; the instruction-fetch stall cycles alone grow 1.9 -
+  2.0 M (Knulli) and 2.3 M (muOS), L2 refills +11 K. libmali's code a frame: 1,849 sampled 64-byte lines
+  (116 KB) on 64-bit against 1,450 (91 KB) on 32-bit (the mu-8 45 s recordings), spread over 201 against 165
+  pages; the 64-bit blob has 33 MB of `.text` against 10.9 MB. On the G350 the GL thread waits for instruction
+  fetch half its cycles on both builds (7.0 M of 16.7 - 17.0 M; 9.2 - 9.5 M of 18.3 M on 64-bit): the RK3326's
+  L2 is 256 KB.
+- **`glInvalidateFramebuffer` is where the render thread waits for the GPU** when the GPU is the limit (150 -
+  340 us against 33 - 51 us), on both builds (the call the driver blocks in when it is a frame ahead): time
+  asleep, not CPU.
+
+**What sets the frame rate, per handheld:**
+
+- *muOS*: the GPU, on both builds (busy 96 - 99 %, its clock held at 552 - 648 MHz by the thermal governor,
+  GPU-only cooling: the CPU's state stays 0 - 0.2). The 64-bit build's 1.4 fps are its clock: it reaches the
+  scene with the GPU already at state 3 (600 MHz) where the 32-bit build still runs 648 - 816 MHz for the
+  first seconds (the same temperatures at the start), and 1 - 2 % of GPU time left idle (the render thread
+  later with its commands). Warm, at 600 MHz both, the gap was 0.8 fps (150 s runs, mono-arm64.md).
+- *Knulli*: the power allocator (one budget, `sustainable_power` 1000 mW, control at 70 C, both actors weight
+  1024) gave the 64-bit runs' budget to the CPU (cpufreq state 0.7 - 0.8) and capped the GPU at 600 MHz
+  (state 1.0) in both pairs; the 32-bit runs the other way round (CPU state 1.3 - 1.6, GPU 677 - 684 MHz).
+  At 600 MHz the frame's 11.7 M GPU cycles take 19.5 ms (51.3 fps): the 64-bit runs are GPU-bound there, and
+  UnityMain's 19.0 ms would hold them at the same 51 at 696 MHz (past runs at 696: 50.9 fps). Over the
+  earlier 65 64-bit Knulli runs of the arm64par benches, 23 sat at 600 MHz, against 2 of 19 32-bit runs.
+- *G350*: UnityMain (24 - 25 ms of a 25 - 27 ms frame), with three of the four A35s busy (UnityMain, the GL
+  thread 12 - 18 ms, FMOD's mixer 11 - 12 ms, the job worker 9 ms, the render thread 9 ms, the Mali back end
+  6 ms a frame) and the CPU clock held at 1.22 - 1.43 GHz on average by its power allocator (the GPU stays at
+  786 MHz). The GL thread's extra 3 ms of the clean runs (the fmodasync benches: 11.9 - 12.7 against 15.6 - 15.8
+  ms) are CPU the main thread's core shares and heat the clock pays for. (The pairs above ran with the
+  counters and the per-call timer: both slow the GL thread, the 32-bit one more, its timer a system call: they
+  measure the per-call costs, not the gap. The clean A/B pair was queued when the G350 went down, during
+  another helper's plain 64-bit run.)
+
+So on the RG34XX-SP the graphics side loses the 64-bit build its frame rate through heat, not through the
+render thread's time: its extra CPU work (UnityMain +1.0 - 1.5 ms, the render thread +1.4 - 1.9 ms) and the
+64-bit code's extra DRAM traffic warm the SoC and the thermal governors take it from the GPU's clock. Every
+CPU cycle the 64-bit build saves counts twice there.
+
+**What can be cut from outside the driver.** Nothing on the way into libmali (above). The driver's own
+work by call is fixed per draw and per pass (drawbench, passbench above): fewer draws and passes would help
+both builds alike (`UA_GL_MERGE` measured slower). The 64-bit-only part is the code's size: libmali's
+hot code, relaid out the way route 2 relays libunity, would take most of the render thread's 2 - 2.3 M
+extra fetch-stall cycles. libmali is stripped and has FDEs for only 1,949 of its functions, so its function
+boundaries would come from its 42,188 BL targets and exported symbols (and a verifier that every pc-relative
+field of a moved function stays inside it or reaches a known start); by those, 90 % of the render thread's
+libmali samples fall in 281 functions (277 KB, spread over 5.5 MB), 99 % in 515 (398 KB). Not built: it needs
+route 2's relayout engine (being built for libunity) applied to a library the system loader maps.
+
+**A flight recorder for the G350's 64-bit hangs.** The G350 has stopped answering (no network, a power button
+needed) during 64-bit King's Pass runs more than once (mono-arm64.md; again 2026-11-20); nothing reaches its card after the hang.
+`UA_GL_REC_BLACKBOX=<file>` ([runtime.md](runtime.md)) rewrites a 4 KB record in place and syncs it before
+each frame's calls go to the driver, before the swap and after it (level 2: before each pass too): the frame, the
+stage, the call and the 64 calls before it. Run through the game as always (on the G350 its GL thread is the one
+that submits); after a power cycle the file says whether the GL thread was in a pass, in the swap or between
+frames (then the hang is elsewhere: the render thread's own calls, a load).
+
 ## What others did (research)
 
 **Unity's own 32 -> 64-bit move on Android (2019's Google Play requirement).** The reported arm64 regressions
@@ -628,6 +736,10 @@ What: the render thread's own L2 refills grew 35 -> 47 K a frame and its i-cache
 (the 64-bit libmali's 25 MB of code against 12 MB), in the same L2 UnityMain misses in. ua_host's GL layers
 (1.05 ms of the render thread on both builds) are ours: fewer distinct code paths and smaller tables there,
 fewer GL calls (each into libmali's code), and the job worker's and FMOD mixer's buffers sized to the game.
+
+Measured since ([the graphics side, counted](#the-graphics-side-counted-render-thread-mali-driver-and-gpu-2026-11-20)):
+the render thread's extra 2 - 3.4 M cycles a frame are libmali's instruction fetch; on the RG34XX-SP they matter
+through heat (the GPU clock), not through the render thread's own time.
 
 Evidence: indirect - the L2 is shared and the counters cannot split whose lines evict whose. Expected: unknown,
 probably 0.1 - 0.3 ms; measurable cheaply: an A/B of `UA_GL_REC`/`UA_GL_MEMO`-style settings that remove render-
