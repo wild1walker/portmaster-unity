@@ -373,16 +373,26 @@ static void mono_options(void *some_mono_fn)
 }
 // UA_RELAYOUT=<list or directory>: libunity's hot functions copied together in a profile's order (so_relayout,
 // runtime/loader/relayout.c; a directory holds lists named <build id>.txt, made by relayprof); after the hooks,
-// which it leaves alone; UA_RELAYOUT_DATA=1: vtables and function tables point at the copies too.
-// UA_ATOMICS=llsc: libunity's outline-atomic helpers straight to their LL/SC loops
-// (so_atomics_llsc; a CPU without LSE takes that path anyway). Both AArch64 only, both off when unset or 0.
+// which it leaves alone. Unset: the directory `relayout` beside this program, if a list for this libunity's
+// build id is there (runtime/relayout/ in portmaster-unity); 0: off. UA_RELAYOUT_DATA (on by default, 0: off):
+// vtables and function tables point at the copies too. UA_ATOMICS (llsc by default on AArch64, 0: off):
+// libunity's outline-atomic helpers straight to their LL/SC loops (so_atomics_llsc; a CPU without LSE takes
+// that path anyway). AArch64 only.
 static void relayout_on_load(so_module *m)
 {
-    const char *n = so_name(m), *rl = getenv("UA_RELAYOUT"), *at = getenv("UA_ATOMICS");
-    if (!n || strcmp(n, "libunity.so")) return;
-    const char *dp = getenv("UA_RELAYOUT_DATA");
-    if (rl && *rl && strcmp(rl, "0")) so_relayout(m, rl, dp && !strcmp(dp, "1") ? SO_RELAYOUT_DATA : 0);
-    if (at && !strcmp(at, "llsc")) so_atomics_llsc(m);
+    const char *n = so_name(m), *rl = getenv("UA_RELAYOUT"), *at = getenv("UA_ATOMICS"), *dp = getenv("UA_RELAYOUT_DATA");
+    if (!n || strcmp(n, "libunity.so") || sizeof(void *) != 8) return;
+    char dir[600];
+    if (!rl || !*rl) {                                   // the lists beside ua_host
+        ssize_t k = readlink("/proc/self/exe", dir, sizeof dir - 16);
+        if (k > 0) {
+            dir[k] = 0;
+            char *sl = strrchr(dir, '/');
+            if (sl) { strcpy(sl + 1, "relayout"); if (!access(dir, R_OK)) rl = dir; }
+        }
+    }
+    if (rl && *rl && strcmp(rl, "0")) so_relayout(m, rl, dp && !strcmp(dp, "0") ? 0 : SO_RELAYOUT_DATA);
+    if (!at || strcmp(at, "0")) so_atomics_llsc(m);
 }
 // the loader's load hook: UA_GFX_JOBS and the like inside libunity (unityhooks.c); UA_MONO_TLS in libmono (monoinvoke.c)
 static void on_load(so_module *m) { unityhooks_on_load(m); relayout_on_load(m); monoinvoke_on_load(m); }

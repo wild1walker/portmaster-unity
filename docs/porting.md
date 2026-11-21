@@ -1261,7 +1261,8 @@ ship with the port or in portmaster-unity beside the runtime. To make one:
    <lib>` says how many of the library's functions can move at all (6000.0.61f1 arm64: all 76,082),
    `relayprof plan <lib> <list>` what the loader will build (sizes, islands, unwind data), `relayprof
    refs <lib> <list>` how many of them are reached through vtables (`UA_RELAYOUT_DATA`).
-3. **Use it**: copy it to the handheld and set `UA_RELAYOUT=<file or directory>` (a directory holds
+3. **Use it**: put it in `runtime/relayout/` (ua_host finds it in `relayout/` beside itself; ship that
+   folder with the port's ua_host), or for a test copy it to the handheld and set `UA_RELAYOUT=<file or directory>` (a directory holds
    lists by build id: a list for another libunity is refused, logged, and the game runs as without).
    Check the log for `[relayout] libunity.so: N functions ... laid out`, then A/B the frame rate and
    `HWCOUNT=1`'s i-cache stall cycles on the scene the list was not made from.

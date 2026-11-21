@@ -442,14 +442,58 @@ King's Pass (the profiled scene; UnityMain sets the frame rate there):
 | L2 refills | 86.5 K | 84.3 K (-2.5 %) | 86.7 K |
 | load-miss stall cycles | 15.51 M | 15.31 M | 15.42 M |
 
-What it says: packing whole functions does not shrink the code a frame touches: the same lines are
-fetched (L1I refills within 4 %); it takes pages (iTLB stalls -9 to -19 %) and, with the vtables pointed
-at the copies, a little of the i-cache stall time (-3.5 %) and of the L2 refills (-3 %). Without the
-data redirect, every virtual call into a moved function passes through the original's entry (one more
-taken branch and one more line: +2.6 % instructions and stall cycles), which costs what the packing
-gains. UnityMain -0.27 ms a frame on average for `d` (one run -0.6, one 0), +0.16 for `r`.
+Then the hot/cold split (`s`: the list made with `--split`, 584 of its 2,804 functions in pieces, 557 KB
+of hot code first and 273 KB of cold after it; with `UA_RELAYOUT_DATA=1` and `UA_ATOMICS=llsc`), against
+whole functions (`x`: the same plus `UA_ATOMICS=llsc`) and the atomics alone (`a`):
 
+| King's Pass (2 runs each) | muOS base | muOS a | muOS s | Knulli base | Knulli x | Knulli s |
+|---|---|---|---|---|---|---|
+| fps | 50.3, 50.6 | 50.9, 50.6 | 50.9, 50.9 | 51.1, 50.7 | 51.6, 51.3 | 51.6, 51.1 |
+| cycles (user) a frame | 31.79 M | 31.40 M (-1.2 %) | 30.77 M (-3.2 %) | 27.50 M | 26.99 M (-1.9 %) | 26.89 M (-2.2 %) |
+| i-cache miss stall cycles | 6.99 M | 6.88 M | 6.58 M (-5.9 %) | 5.99 M | 5.78 M (-3.5 %) | 5.76 M (-3.8 %) |
+| L1I refills | 122.0 K | 117.9 K | 114.1 K (-6.5 %) | 120.9 K | 118.3 K | 115.0 K (-4.9 %) |
+| L2 refills | 88.7 K | 87.5 K | 86.3 K (-2.8 %) | 86.7 K | 84.5 K (-2.6 %) | 84.7 K (-2.3 %) |
+| iTLB miss stall cycles | 0.78 M | 0.80 M | 0.61 M (-22 %) | 0.70 M | 0.54 M (-23 %) | 0.55 M (-21 %) |
+| load-miss stall cycles | 18.88 M | 18.51 M | 18.37 M | 15.45 M | 15.31 M | 15.28 M |
 
+(UnityMain's CPU time a frame from the thread's schedstat moves within the runs' spread, +-0.4 ms; the
+cycle counters, which count only UnityMain's user time, are the steadier measure. The muOS base runs of
+this hold, 31.8 M cycles, match the earlier hold's 31.3 M within the spread.)
+
+What it says:
+
+- **Whole functions packed, original entries in the way: nothing.** Every virtual call into a moved
+  function still went through the original entry's line and a taken branch (`r`: +2.6 - 3.7 % i-cache
+  stall cycles); the packing gained only pages (iTLB stalls -9 to -13 %).
+- **With the vtables pointed at the copies (`d`): -1.3 to -1.6 % of UnityMain's cycles**, i-cache stalls
+  -3 to -5 %, L2 refills -2.5 %, iTLB stall cycles -21 to -23 %; muOS -0.60 ms of UnityMain's CPU time a
+  frame, +0.6 fps on both handhelds at King's Pass.
+- **The atomics alone (`a`): -0.6 to -1.2 % of the cycles**, +0.3 - 0.5 fps: each of the frame's
+  atomic operations skips a load, a branch and the call's indirect cost; the helpers' LL/SC loops are what
+  ran before.
+- **Hot/cold split + vtables + atomics (`s`): -2.2 to -3.2 % of UnityMain's cycles** (muOS -1.0 M a
+  frame, 0.57 ms at 1.8 GHz), L1I refills -5 to -6.5 %: the first route-2 change that fetches fewer
+  lines. The 32 -> 64-bit gap at King's Pass is +3.1 M cycles (muOS) / +1.5 M (Knulli): this closes about
+  a third of it on muOS and half on Knulli.
+- **What is left on the table.** The hot part is still 557 KB, larger than the L2: the code a frame
+  touches is spread over 1,800 functions and the cold half of each hot line stays. The data side (load
+  stalls, three quarters of the gap) is barely touched (-1 to -3 %): it needs route 3's prefetches.
+
+Exactness on the handhelds: every run reached and measured its scene (the game logs and the frame
+counts as without), with no crash in the 21 laid-out runs (and 4 with the atomics alone) across both firmwares (the profiler's naming
+of copies is covered by test_relayout, not yet by a device recording). G350: its runs (base and laid out
+alike) stopped in the measurement on the runner's memory floor (106 - 109 MB available, `UA_MEM_MIN=110`),
+and the handheld was unreachable over SSH later; not measured.
+
+Memory: the region (836 KB whole, 866 KB split) plus its unwind data (224 - 237 KB), and each library
+page that gets an entry branch made private (at most 864 pages, 3.4 MB, when every entry is patched;
+`UA_RELAYOUT_DATA` patches only entries that code left in place calls).
+
+**Defaults** (2026-11-20): `UA_ATOMICS=llsc` on for the 64-bit player (exact, no cost, a CPU with LSE is
+left alone); `UA_RELAYOUT` on where a list for the library's build id is in `relayout/` beside ua_host
+(runtime/relayout/: Hollow Knight's 6000.0.61f1 IL2CPP arm64 player, split), with `UA_RELAYOUT_DATA` on;
+`UA_RELAYOUT=0` / `UA_ATOMICS=0` turn them off. A port ships the lists by copying `relayout/` next to its
+ua_host (runtime/host/build.sh puts it beside the build's ua_host).
 
 ### 3. Rewritten hot functions with prefetch, inline atomics and the cached-pointer read folded in
 
@@ -532,7 +576,7 @@ pools) is years of work. Recorded for completeness.
 | route | expected UnityMain a frame | effort | exact? | first step |
 |---|---|---|---|---|
 | 1. FMOD update on a worker | built (`UA_FMOD_ASYNC=1`, off): UnityMain CPU -0.3 to -0.6 ms, frame rate the same | done | yes | - |
-| 2. libunity hot-code relayout | -0.5 to -1.0 ms (64-bit) | large | yes (instructions unchanged but branch fields) | classify the 1,794 sampled functions for a mechanical move; move the top 75; A/B `ic_dep_stall` |
+| 2. libunity hot-code relayout | built (`UA_RELAYOUT`): -2.2 to -3.2 % of UnityMain's cycles split + vtables + atomics, +0.4 - 0.6 fps | done | yes (tested) | larger lists per game; route 3 for the data side |
 | 3. rewritten hot functions (prefetch, inline atomics) | -0.2 to -0.4 ms | medium, per Unity version | yes | outline-atomic helpers branched past the LSE test; `FlattenBasicData` with a prefetch |
 | 4. less render-thread L2 traffic | 0.1 - 0.3 ms (to be measured) | small to measure | yes | `hwcount` on UnityMain with render-thread work removed |
 | 5. Unity bucket allocator settings | 0 - 0.2 ms | small | yes | three boot.config variants, `hwcount` |

@@ -58,6 +58,7 @@ if [ "$ARCH" = arm64 ]; then
     gcc -O2 -Wall -static -o $O/gpucnt gpucnt.c
     gcc -O2 -Wall -static -o $O/hwcount hwcount.c
     gcc -O2 -Wall -static -o $O/relayprof relayprof.c ../loader/relayout.c
+    rm -rf $O/relayout; cp -r ../relayout $O/relayout; rm -f $O/relayout/README.md
     gcc -O2 -g -Wall -o $O/wwrender wwrender.c $O/wwplay.o $O/wwplay_vorbis.o -lpthread -lm
     gcc -O2 -g -Wall -o $O/fmrender fmrender.c $O/fmplay.o $O/wwplay_vorbis.o -lpthread -lm'
   exit
