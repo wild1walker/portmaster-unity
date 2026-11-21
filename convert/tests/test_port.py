@@ -1231,6 +1231,107 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertFalse([n for n in names if n.startswith('mygame/licenses/') and
                               not re.match(r'mygame/licenses/LICENSE\.[^/]+\.txt$', n)])   # (one flat folder)
 
+    def test_aarch64_only(self):
+        """port.aarch64_only (docs/arm64.md, "Shipping aarch64 only"): off by default (the android
+        route as before); on, a Mono game made for the android route takes the mono-arm64 route (the
+        port.toml's armv7 player and its checksums give way to the arm64 one), port.json asks for no
+        armhf, and the release carries no 32-bit ARM file: the 64-bit ua_host, Unity's Mono for
+        aarch64, the IL2CPP donor, the Mono donor without its 32-bit player (its engine assemblies
+        kept), the porter's armhf build outputs left out"""
+        def elf(machine):
+            h = bytearray(64)
+            h[:4], h[4], h[5], h[6] = b'\x7fELF', 2 if machine == P.EM_AARCH64 else 1, 1, 1
+            h[18:20] = struct.pack('<H', machine)
+            return bytes(h) + b'Z' * 100
+
+        def mk(path, data):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            put(path, data)
+        with tempfile.TemporaryDirectory() as t:
+            _, out = self.make(t)
+            self.assertIn('PORT_ROUTE=android', P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertIs(cfg['port']['aarch64_only'], False)
+            self.assertIn('armhf', json.load(open(os.path.join(out, 'mygame', 'port.json')))['attr']['reqs'])
+        with tempfile.TemporaryDirectory() as t:
+            extra = {'port': {'route': 'android', 'aarch64_only': True},
+                     'player': {'backend': 'mono', 'abi': 'armeabi-v7a', 'sha256': {'libunity.so': '00' * 32}},
+                     'runtime': {'UA_FLIPBOOK': ''},
+                     'build': {'commands': ['printf x > "$BUILD/x"'],
+                               'outputs': {'pmhwdec/libpmhwdec.so.1': 'arm32.so', 'pmhwdec64/libpmhwdec.so.1': 'arm64.so',
+                                           'tools': 'tools'}}}
+            _, out = self.make(t, extra)
+            mk(os.path.join(out, 'arm32.so'), elf(P.EM_ARM))
+            mk(os.path.join(out, 'arm64.so'), elf(P.EM_AARCH64))
+            mk(os.path.join(out, 'tools', 'helper32'), elf(P.EM_ARM))
+            mk(os.path.join(out, 'tools', 'helper64'), elf(P.EM_AARCH64))
+            env = P._read(os.path.join(out, 'mygame', 'setup', 'setup.env'))
+            for x in ('PORT_ROUTE=mono-arm64', 'PLAYER_BACKEND=il2cpp', 'PLAYER_ABI=arm64-v8a',
+                      "DONORS='donor-2019.4.8f1-il2cpp-arm64.apk donor-2019.4.8f1-mono-armv7.apk'"):
+                self.assertIn(x, env)
+            self.assertNotIn('PLAYER_SHA256=libunity', env)
+            cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertEqual((cfg['port']['route'], cfg['player']['sha256']), ('mono-arm64', {}))
+            self.assertNotIn('armhf', json.load(open(os.path.join(out, 'mygame', 'port.json')))['attr']['reqs'])
+            self.assertIn('uname -m', P._read(os.path.join(out, 'My Game.sh')))
+            # the donors as tools/donor builds them: Unity's 32-bit Mono player in the Mono one
+            dn = os.path.join(t, 'donors')
+            with zipfile.ZipFile(os.path.join(dn, 'donor-2019.4.8f1-mono-armv7.apk'), 'w', zipfile.ZIP_DEFLATED) as z:
+                z.writestr('assets/bin/Data/Managed/UnityEngine.dll', b'MZ engine')
+                z.writestr('assets/bin/Data/Managed/mscorlib.dll', b'MZ corlib')
+                for n in ('libmain.so', 'libunity.so', 'libmonobdwgc-2.0.so'):
+                    z.writestr(f'lib/armeabi-v7a/{n}', elf(P.EM_ARM))
+                z.writestr('lib/x86/libunity.so', elf(3))
+            with zipfile.ZipFile(os.path.join(dn, 'donor-2019.4.8f1-il2cpp-arm64.apk'), 'w') as z:
+                for n in ('libmain.so', 'libunity.so', 'libil2cpp.so'):
+                    z.writestr(f'lib/arm64-v8a/{n}', elf(P.EM_AARCH64))
+            rt, opts = self.release_parts(t)
+            os.makedirs(os.path.join(rt, 'runtime/media/out/arm64/licenses'))
+            mk(os.path.join(rt, 'runtime/host/out/arm64/ua_host'), elf(P.EM_AARCH64))
+            mk(os.path.join(rt, 'runtime/media/out/arm64/licenses/libvpx.copyright'), 'BSD')
+            mk(os.path.join(rt, 'runtime/host/out/ua_host'), elf(P.EM_ARM))       # (the armhf one, not shipped)
+            w = os.path.join(t, 'mono64')
+            for n in ('out/unity-2019.4-mbe/libmonobdwgc-2.0.so', 'out/unity-2019.4-mbe/libMonoPosixHelper.so'):
+                mk(os.path.join(w, n), elf(P.EM_AARCH64))
+            for n in ('LICENSE', 'PATENTS.TXT', 'external/bdwgc/README.QUICK'):
+                mk(os.path.join(w, 'src/unity-2019.4-mbe', n), 'MIT')
+            mk(os.path.join(t, 'bridge.so'), elf(P.EM_AARCH64))
+            msgs = []
+            opts.update(log=msgs.append, mono64_work=w, mono64_bridge=os.path.join(t, 'bridge.so'))
+            z = P.package(out, os.path.join(t, 'rel'), rt, **opts)
+            text = '\n'.join(msgs)
+            self.assertIn('build.outputs: pmhwdec/libpmhwdec.so.1 not shipped: armhf', text)
+            self.assertIn('tools/helper32 not shipped: armhf', text)
+            self.assertIn('aarch64 only: no armhf file in the release', text)
+            x = os.path.join(t, 'x')
+            with zipfile.ZipFile(z) as zf:
+                names = set(zf.namelist())
+                zf.extractall(x)
+            self.assertEqual(P.armhf_files(x, x), [])
+            for n in ('mygame/ua_host', 'mygame/uaflipbook.dll', 'mygame/setup/mono64/2019.4/libil2cpp.so',
+                      'mygame/setup/mono64/2019.4/libmonobdwgc-2.0.so', 'mygame/pmhwdec64/libpmhwdec.so.1',
+                      'mygame/tools/helper64', 'mygame/donor/donor-2019.4.8f1-il2cpp-arm64.apk'):
+                self.assertIn(n, names)
+            for n in ('mygame/ua_host64', 'mygame/pmhwdec/libpmhwdec.so.1', 'mygame/tools/helper32'):
+                self.assertNotIn(n, names)
+            self.assertEqual(P.elf_machine(P._read(os.path.join(x, 'mygame', 'ua_host'), 'rb')[:20]), P.EM_AARCH64)
+            with zipfile.ZipFile(os.path.join(x, 'mygame/donor/donor-2019.4.8f1-mono-armv7.apk')) as d:
+                self.assertEqual(sorted(d.namelist()), ['assets/bin/Data/Managed/UnityEngine.dll',
+                                                        'assets/bin/Data/Managed/mscorlib.dll'])
+                self.assertEqual(d.read('assets/bin/Data/Managed/UnityEngine.dll'), b'MZ engine')
+                self.assertEqual(d.getinfo('assets/bin/Data/Managed/mscorlib.dll').compress_type, zipfile.ZIP_DEFLATED)
+            # a port folder made for the android route, then switched by hand: made again first
+            bj = os.path.join(out, 'port.build.json')
+            b = json.load(open(bj))
+            b['config']['port']['route'] = 'android'
+            json.dump(b, open(bj, 'w'))
+            with self.assertRaises(SystemExit) as cm:
+                P.package(out, os.path.join(t, 'rel'), rt, **opts)
+            self.assertIn('run `port new` again', str(cm.exception))
+            self.assertEqual(sorted(P.armhf_files(dn, t)), ['donors/donor-2019.4.8f1-mono-armv7.apk!lib/armeabi-v7a/libmain.so',
+                                                    'donors/donor-2019.4.8f1-mono-armv7.apk!lib/armeabi-v7a/libmonobdwgc-2.0.so',
+                                                    'donors/donor-2019.4.8f1-mono-armv7.apk!lib/armeabi-v7a/libunity.so'])
+
     def release_parts(self, t):
         """Stand-ins for what a default port's release takes besides the port: the runtime's folder
         (ua_host with the flip-book stand-in beside it, the decoders' licences), pmu's; returns

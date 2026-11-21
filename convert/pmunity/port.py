@@ -1722,10 +1722,20 @@ ID_RX = re.compile(r'^[A-Z][A-Z0-9_]*$')
 VALUE_RX = re.compile(r'^[A-Za-z0-9._:+-]+$')
 ENV_RX = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 
+# port.aarch64_only's default: false ships the armhf route where a port takes it (the android route:
+# Unity's armv7 Mono player, ua_host for armhf); true makes every port's release aarch64 only (a Mono
+# game on the mono-arm64 route, no EM_ARM file in the zip or on the handheld; docs/arm64.md,
+# "Shipping aarch64 only"). Dropping armhf from all ports is this one line.
+AARCH64_ONLY_DEFAULT = False
+# the routes whose releases carry nothing for armhf: their setups and players are aarch64 (apk: with
+# player.abis arm64-v8a, or player.il2cpp)
+AARCH64_ROUTES = ('mono-arm64', 'il2cpp-arm64', 'box64', 'apk')
+
 DEFAULTS = {
     'port': {'name': '', 'title': '', 'route': 'android', 'porter': [], 'desc': '', 'desc_md': '', 'inst': '',
              'inst_md': '', 'genres': [], 'availability': '', 'store': [], 'reqs': [], 'setup_time': '', 'exp': False,
-             'ready_marker': '.setup_done', 'thanks': '', 'screenshot': 'screenshot.png', 'cover': 'cover.png'},
+             'ready_marker': '.setup_done', 'thanks': '', 'screenshot': 'screenshot.png', 'cover': 'cover.png',
+             'aarch64_only': AARCH64_ONLY_DEFAULT},
     'game': {'data': '*_Data', 'build': 'linux', 'unity_versions': [], 'what': '', 'size_mb': 0, 'setup_space_mb': 0,
              'developer': '', 'publisher': '', 'release_date': '', 'genre': '', 'url': '', 'description': ''},
     'controls': {},
@@ -1767,6 +1777,45 @@ def load_config(path):
 
 def title_case(s):
     return re.sub(r'\s+', ' ', s.replace('_', ' ')).strip()
+
+
+def aarch64_only_route(cfg, user, rep=None, log=print):
+    """port.aarch64_only (docs/arm64.md, "Shipping aarch64 only"): a port on the android route (Unity's
+    armv7 Mono player, run by the 32-bit ua_host) moves to the mono-arm64 route: Unity's arm64 IL2CPP
+    player from the IL2CPP donor, the game's own assemblies on Unity's Mono for aarch64 (setup/mono64),
+    the 64-bit ua_host; the same game data, conversion and settings. The player's settings become the
+    route's (port.toml's armv7 ones, and their checksums, are the 32-bit player's). An apk-route port
+    keeps only its arm64-v8a player (or player.il2cpp's compile). Changes cfg in place."""
+    p, pl = cfg['port'], cfg['player']
+    if not p.get('aarch64_only'):
+        return
+    if p['route'] == 'android':
+        if rep and rep.get('routes'):
+            m = next((r for r in rep['routes'] if r['route'] == 'mono-arm64'), None)
+            if m and not m['ok']:
+                raise SystemExit('port.aarch64_only: this game cannot take the mono-arm64 route: ' + '; '.join(m['why']))
+        log('port.aarch64_only: the mono-arm64 route (Unity\'s arm64 player, the game\'s code on Unity\'s Mono for '
+            'aarch64) instead of the android route\'s armv7 player')
+        p['route'] = 'mono-arm64'
+        own = user.get('player') or {}
+        if own.get('abi', 'armeabi-v7a') != 'arm64-v8a' or own.get('backend', 'mono') != 'il2cpp':
+            for k in ('backend', 'abi'):
+                pl.pop(k, None)                 # (route.json's defaults fill them in)
+                (user.get('player') or {}).pop(k, None)
+            pl['sha256'] = {}                   # (the armv7 player's checksums)
+            pl['backend'], pl['abi'] = 'il2cpp', 'arm64-v8a'
+        # (a port.toml's armv7 Mono donor stays: the route reads the engine's assemblies from it,
+        # and the release ships it without its 32-bit player: port package)
+    elif p['route'] == 'apk':
+        abis = pl.get('abis') or []
+        if 'arm64-v8a' in abis:
+            pl['abis'] = ['arm64-v8a']
+        elif not pl.get('il2cpp'):
+            raise SystemExit('port.aarch64_only: the build has no arm64-v8a player (player.abis); a Mono build '
+                             'takes player.il2cpp = true (its code compiled for the arm64 IL2CPP player)')
+    elif p['route'] not in AARCH64_ROUTES:
+        raise SystemExit(f"port.aarch64_only: the {p['route']} route has no aarch64-only release "
+                         f"(routes: {', '.join(AARCH64_ROUTES)})")
 
 
 def build_config(name, rep, user):
@@ -1918,7 +1967,9 @@ CONFIG_DOC = {
             '# sports strategy "visual novel" other), availability (free | paid | demo | full), store =\n'
             '# [{name, gameurl, developerurl}], reqs (more device capabilities: "!lowres", "2gb", "power"),\n'
             '# exp (true only to hide a released port); thanks = the README\'s first sentence; screenshot and\n'
-            '# cover = image files (relative to the port folder) the release takes',
+            '# cover = image files (relative to the port folder) the release takes; aarch64_only = true: a\n'
+            '# release with nothing for armhf (a Mono game on the mono-arm64 route: Unity\'s arm64 player and\n'
+            '# Unity\'s Mono for aarch64; no 32-bit ua_host, libraries or player in the zip or on the handheld)',
     'game': '# what the player provides: the data folder the setup looks for (data, a glob), the build\n'
             '# kind (linux | macos | windows), the Unity versions the setup accepts (empty: any the\n'
             '# converter supports), how READMEs and messages describe it (what), its size in MB; and for\n'
@@ -2185,7 +2236,7 @@ def port_json(cfg):
     """port.json (version 4, the fields and order of PortMaster's port.json generator). Route hooks
     (port_new) adjust desc, inst, runtime, reqs and min_glibc for their routes."""
     p, g = cfg['port'], cfg['game']
-    reqs = ['armhf'] + [r for r in p.get('reqs') or [] if r != 'armhf']      # ua_host is a 32-bit program
+    reqs = ([] if p.get('aarch64_only') else ['armhf']) + [r for r in p.get('reqs') or [] if r != 'armhf']  # ua_host: 32-bit
     return {
         'version': 4,
         'name': f"{p['name']}.zip",
@@ -2653,6 +2704,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     if title:
         over.setdefault('port', {})['title'] = title
     cfg = build_config(name, rep, merge(user, over))
+    aarch64_only_route(cfg, user, rep, log)
     # the route's own defaults (route.json "defaults", e.g. the IL2CPP player), where port.toml
     # says nothing
     for sec, vals in ((routes().get(cfg['port']['route']) or {}).get('defaults') or {}).items():
@@ -2928,6 +2980,8 @@ def _component_ua_host(ctx, opts, dst='ua_host', suffix=''):
     # for a port whose settings name UA_FLIPBOOK ([runtime*], or a setup question's env), no other
     if dst == 'ua_host' and uses_flipbook(ctx.cfg):
         fb = os.path.join(os.path.dirname(p), 'uaflipbook.dll')
+        if not os.path.isfile(fb):              # (managed code: the 64-bit ua_host takes runtime/host/out's)
+            fb = os.path.join(ctx.runtime, 'runtime', 'host', 'out', 'uaflipbook.dll')
         if not os.path.isfile(fb):
             raise SystemExit(f'{fb}: the port sets UA_FLIPBOOK: build it (runtime/host/managed/build.sh <donor APK>)')
         ctx.add(fb, 'uaflipbook.dll')
@@ -3212,7 +3266,7 @@ def wants(part, cfg):
     pmu = pmu_covers(cfg)[0]
     return {'asmpatch': needs_asmpatch(cfg), 'pmhlslcc': needs_pmhlslcc(cfg), 'pmspirvcross': needs_pmspirvcross(cfg),
             'pmu': pmu, 'pmunity': not pmu, 'pybundle': not pmu,
-            'ua_host': not abis or 'armeabi-v7a' in abis,
+            'ua_host': (not abis or 'armeabi-v7a' in abis) and not (cfg.get('port') or {}).get('aarch64_only'),
             # (player.il2cpp: a Mono build's code compiled for the arm64 IL2CPP player on 64-bit-only systems)
             'ua_host64': not abis or 'arm64-v8a' in abis or bool(cfg['player'].get('il2cpp'))}.get(part, True)
 
@@ -3273,6 +3327,10 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     name, title = cfg['port']['name'], cfg['port']['title']
     out = os.path.abspath(out or os.path.join(port_src, 'out'))
     runtime = os.path.abspath(runtime or REPO)
+    a64 = bool(cfg['port'].get('aarch64_only'))
+    if a64 and cfg['port']['route'] not in AARCH64_ROUTES:
+        raise SystemExit(f"port.aarch64_only: this port folder was made for the {cfg['port']['route']} route (an armhf "
+                         f"setup and player): run `port new` again, which takes the mono-arm64 route")
     zipdir = os.path.join(out, 'zip')
     shutil.rmtree(zipdir, ignore_errors=True)
     os.makedirs(zipdir)
@@ -3288,7 +3346,7 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     shutil.copyfile(os.path.join(port_src, launcher), os.path.join(zipdir, launcher))
     os.chmod(os.path.join(zipdir, launcher), 0o644)   # (PortMaster's convention: .sh committed 644)
     ctx.add(os.path.join(port_src, name), '.')
-    add_donors(ctx, port_donors(cfg, route), opts.get('donors') or os.environ.get('DONORS'))
+    add_donors(ctx, port_donors(cfg, route), opts.get('donors') or os.environ.get('DONORS'), aarch64_only=a64)
     for c in route.get('package', []):
         opt, c = c.endswith('?'), c.rstrip('?')     # ('?': only when the port uses it: wants())
         if c not in COMPONENTS:
@@ -3301,8 +3359,14 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
         sp = os.path.join(port_src, src.replace('{build}', os.path.join(out, 'build')))
         if not os.path.exists(sp):
             raise SystemExit(f'build.outputs: {sp} was not made')
+        if a64 and os.path.isfile(sp) and elf_machine(_read(sp, 'rb')[:20]) == EM_ARM:
+            log(f'build.outputs: {dst} not shipped: armhf, and the port is aarch64 only')
+            continue
         # (a program of the porter's build, an ELF file or a `#!` script, is packed executable)
-        ctx.add(sp, dst, 0o755 if os.path.isfile(sp) and is_program(_read(sp, 'rb')[:4]) else None)
+        d = ctx.add(sp, dst, 0o755 if os.path.isfile(sp) and is_program(_read(sp, 'rb')[:4]) else None)
+        for x in (armhf_files(d, ctx.port_dir) if a64 and os.path.isdir(d) else ()):
+            log(f'build.outputs: {dst}: {x} not shipped: armhf, and the port is aarch64 only')
+            os.remove(os.path.join(ctx.port_dir, x))
     for n, src in (bld.get('licenses') or {}).items():
         ctx.license(n, os.path.join(port_src, src.replace('{build}', os.path.join(out, 'build'))))
     _call_hooks('port_package', ctx)
@@ -3317,6 +3381,11 @@ def package(port_src, out=None, runtime=None, log=print, submission=False, **opt
     for v in imgs.values():
         if v:
             ctx.add(v[0], v[1], 0o644)
+    if a64:                                     # (pmu arch-check checks the zip in full: tools/port/rehearse.sh)
+        bad = armhf_files(zipdir, zipdir)
+        if bad:
+            raise SystemExit('port.aarch64_only: the release would carry armhf (32-bit ARM) files: ' + ', '.join(bad))
+        log('aarch64 only: no armhf file in the release')
     zpath = os.path.join(out, f'{name}.zip')
     _write_zip(zpath, zipdir, [launcher, name], dict(ctx.modes, **{launcher: 0o644}))
     log(f'built {zpath} ({os.path.getsize(zpath) / 2**20:.1f} MB): unzip it into the handheld\'s ports folder')
@@ -3388,9 +3457,65 @@ def elf_debug_bytes(path):
         return 0
 
 
-def add_donors(ctx, names, src):
+EM_ARM, EM_AARCH64 = 40, 183
+ARCHIVE_EXT = ('.apk', '.zip', '.obb', '.aab', '.xapk', '.apks')
+
+
+def elf_machine(head):
+    """An ELF file's e_machine from its first 20 bytes (EM_ARM 40, EM_AARCH64 183), else None."""
+    if len(head) < 20 or head[:4] != b'\x7fELF':
+        return None
+    return struct.unpack_from('>H' if head[5] == 2 else '<H', head, 18)[0]
+
+
+def armhf_files(root, rel_to):
+    """The 32-bit ARM (EM_ARM) ELF files under root, and in its archives' entries (a donor APK's
+    lib/armeabi-v7a/), as paths relative to rel_to (`<archive>!<entry>`). The packaging's guard for
+    port.aarch64_only; setup-rs's `pmu arch-check` is the full check (the 64-bit route's pieces too)."""
+    out = []
+    for r, ds, fs in os.walk(root):
+        ds.sort()
+        for n in sorted(fs):
+            p = os.path.join(r, n)
+            rel = os.path.relpath(p, rel_to).replace(os.sep, '/')
+            with open(p, 'rb') as f:
+                head = f.read(20)
+            if elf_machine(head) == EM_ARM:
+                out.append(rel)
+            elif head[:4] == b'PK\x03\x04' or n.lower().endswith(ARCHIVE_EXT):
+                with zipfile.ZipFile(p) as z:
+                    for zi in z.infolist():
+                        if not zi.is_dir() and zi.file_size >= 20:
+                            with z.open(zi) as f:
+                                if elf_machine(f.read(20)) == EM_ARM:
+                                    out.append(f'{rel}!{zi.filename}')
+    return out
+
+
+def slim_donor(src, dst):
+    """A donor APK without its 32-bit player, for an aarch64-only release: every entry but those in
+    lib/<abi>/ for another ABI than arm64-v8a, copied as it is (the same bytes and compression). What
+    the 64-bit setup reads of a Mono donor stays: the engine's assemblies, the class libraries and
+    Unity's default resources (assets/bin/Data/). Returns the names left out."""
+    dropped = []
+    tmp = dst + '.tmp'
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(tmp, 'w') as zout:
+        for zi in zin.infolist():
+            parts = zi.filename.split('/')
+            if parts[0] == 'lib' and len(parts) > 2 and parts[1] != 'arm64-v8a':
+                dropped.append(zi.filename)
+                continue
+            with zin.open(zi) as f:
+                zout.writestr(zi, f.read(), compress_type=zi.compress_type)
+    os.replace(tmp, dst)
+    return dropped
+
+
+def add_donors(ctx, names, src, aarch64_only=False):
     """The donors (Unity's player) into <port>/donor/, with their licence; stops when one is missing:
-    the setup never downloads Unity's player, so a release without its donors cannot set the game up."""
+    the setup never downloads Unity's player, so a release without its donors cannot set the game up.
+    aarch64_only (port.aarch64_only): each donor without its 32-bit player (slim_donor); the Mono
+    donor keeps its name, which the mono-arm64 setup looks for."""
     if not names:
         return
     how = '; '.join(f"{n}: tools/donor/build.sh <Unity {m.group(1)} editor> "
@@ -3408,7 +3533,11 @@ def add_donors(ctx, names, src):
         raise SystemExit(f"{src}: {', '.join(bad)} is not an APK")
     ctx.log(f"== donors: {', '.join(names)}")
     for n in names:
-        ctx.add(os.path.join(src, n), f'donor/{n}', 0o644)
+        d = ctx.add(os.path.join(src, n), f'donor/{n}', 0o644)
+        if aarch64_only:
+            gone = slim_donor(d, d)
+            if gone:
+                ctx.log(f'== donor/{n}: without its 32-bit player ({len(gone)} files of lib/; aarch64 only)')
     ctx.license('LICENSE.unity-donor.txt', text=DONOR_LICENSE)
 
 

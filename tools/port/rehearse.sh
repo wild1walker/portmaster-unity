@@ -29,6 +29,10 @@
 #                   unless UA_WWISE_CAPTURE_SECS) lands in <work>/emuroot/
 #   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
 #                   is removed in the container first, so a launcher takes its 64-bit path
+#   REHEARSE_AARCH64_ONLY=1  an aarch64-only release (port.toml port.aarch64_only; docs/arm64.md, "Shipping
+#                   aarch64 only"): before the game goes in, the release's own pmu checks it in the container
+#                   (`pmu arch-check`: no armhf ELF file, the donors' entries included, and the 64-bit route's
+#                   pieces there) and the rehearsal stops if it fails; implies REHEARSE_64ONLY=1
 #   REHEARSE_NAME   the setup container's name (to docker kill it)
 #   REHEARSE_OVER   an update rehearsed: the work dir of an earlier rehearsal (of an older release), whose
 #                   installed roms/ is copied and the zip unpacked over it as PortMaster updates a port
@@ -93,6 +97,13 @@ pj=$(ls "$R"/ports/*/port.json | head -1)
 read -r name launcher < <("$PY" -I -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['items'][1], d['items'][0])" "$pj")
 P="$R/ports/$name"
 echo "port $name, launcher $launcher"
+if [ "${REHEARSE_AARCH64_ONLY:-}" = 1 ]; then
+  REHEARSE_64ONLY=1
+  [ -z "${REHEARSE_OVER:-}" ] || { echo "REHEARSE_AARCH64_ONLY: a fresh install only (not with REHEARSE_OVER)"; exit 1; }
+  [ -x "$P/setup/pmu" ] || { echo "REHEARSE_AARCH64_ONLY: the release has no setup/pmu to check it with"; exit 1; }
+  docker run --rm --platform linux/arm64 -v "$R/ports:/rel:ro" "$IMG" "/rel/$name/setup/pmu" arch-check /rel \
+    || { echo "the release is not aarch64 only (pmu arch-check above)"; exit 1; }
+fi
 [ -n "${REHEARSE_OVER:-}" ] && { m=$(head -1 "$P/${REHEARSE_DONE:-.setup_done}" 2>/dev/null | cut -c1-120 || true); echo "over the install of $REHEARSE_OVER (its marker: ${m:-empty})"; GAME=; }
 case "$GAME" in
   "") ;;

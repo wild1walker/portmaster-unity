@@ -7,6 +7,7 @@
 use std::fmt;
 use std::io;
 
+pub mod arch;
 pub mod cpio;
 pub mod http;
 pub mod macpkg;

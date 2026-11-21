@@ -2,6 +2,7 @@
 use std::process::ExitCode;
 
 mod android_data;
+mod arch_check;
 mod apk;
 mod apk_asmpatch;
 mod argp;
@@ -44,6 +45,7 @@ pub const NAMES: &[&str] = &[
     "lazy",
     "jnitrace",
     "jitwarm-seed",
+    "arch-check",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -69,6 +71,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "lazy" => Some(lazy::run(args)),
         "jnitrace" => Some(jnitrace::run(args)),
         "jitwarm-seed" => Some(jitwarm_seed::run(args)),
+        "arch-check" => Some(arch_check::run(args)),
         _ => None,
     }
 }
