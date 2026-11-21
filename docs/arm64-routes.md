@@ -267,8 +267,38 @@ hot code, relaid out the way route 2 relays libunity, would take most of the ren
 extra fetch-stall cycles. libmali is stripped and has FDEs for only 1,949 of its functions, so its function
 boundaries would come from its 42,188 BL targets and exported symbols (and a verifier that every pc-relative
 field of a moved function stays inside it or reaches a known start); by those, 90 % of the render thread's
-libmali samples fall in 281 functions (277 KB, spread over 5.5 MB), 99 % in 515 (398 KB). Not built: it needs
-route 2's relayout engine (being built for libunity) applied to a library the system loader maps.
+libmali samples fall in 281 functions (277 KB, spread over 5.5 MB), 99 % in 515 (398 KB).
+
+**Tried and stopped (2026-11-21): libmali's hot code relaid out.** Built as an experiment (a branch of its
+own, not on main): route 2's engine extended to functions without unwind info, their extents from the
+driver's call targets and a verifier (no unwind info inside, an end that does not fall through, no ADR into
+itself, no literal load from inside), the copies made at start-up before any EGL call. The render thread's
+i-fetch stalls are the driver's (an `ic_dep_stall` profile, Knulli 64-bit: 63 % of them in libmali, 24 % in
+libunity, 10 % in ua_host). 587 whole functions (401 KB, from the muOS 45 s recording) moved, A B A B, 64-bit,
+King's Pass:
+
+| | base | relaid out |
+|---|---|---|
+| Knulli: fps | 51.1, 50.9 | 51.1, 51.3 |
+| render thread cycles / i-fetch stall cycles a frame (same GPU clock, 600 MHz) | 18.32 / 5.95 M | 18.10 / 6.04 M |
+| muOS: fps | 50.9, 50.9 | 50.8, 50.7 |
+| render thread cycles / i-fetch stall cycles | 20.30, 20.39 / 7.03, 6.77 M | 21.03, 21.09 / 7.16, 7.21 M |
+| pixels (static in both shots of both runs) differing | 0.20 - 0.68 % between base runs | 0.05 - 0.44 %: within that |
+
+Whole functions packed together fetch the same lines (as with libunity, where only hot/cold splitting paid),
+and every call from code that stays still passes through the original entry. Not taken further, for a second
+reason: the Arm Mali user-space driver's licence (the EULA Rockchip distributes with its builds, LES-PRE-20769;
+the handhelds' blobs come under Arm's terms too) allows redistribution with the licence but says the software
+may not be reverse engineered, decompiled or disassembled except where the law allows. Relaying it out means
+decoding its instructions and shipping offsets into it. Routes that touch only our own code, or an open
+driver (Mesa's Panfrost), avoid that.
+
+**Another 64-bit blob instead?** Knifethrower's h700-mali-wayland runs Rockchip's g29p1 Wayland blob on the
+H700. It needs kbase r54p2 (ROCKNIX's 7.2 kernel), two kbase patches, Panfrost unbound and his AFBC shim (the
+H700's G31 has no AFBC). Knulli and muOS run kernel 4.9.170 with mali_kbase r20p0-01rel0 (UK 11.17), so it is
+no drop-in: it needs another kernel driver. He measured glmark2 and frame rates against Panfrost, not the
+render thread. The one other 64-bit build at hand, the G350's Rockchip `rxp0` GBM blob (40.8 MB), costs as much
+more per call against its 32-bit build (draws +15 %), so nothing points to a blob with smaller hot code.
 
 **A flight recorder for the G350's 64-bit hangs.** The G350 has stopped answering (no network, a power button
 needed) during 64-bit King's Pass runs more than once (mono-arm64.md; again 2026-11-20); nothing reaches its card after the hang.
