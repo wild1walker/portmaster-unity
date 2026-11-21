@@ -1151,6 +1151,76 @@ the same way in every pair but one (the Crossroads on Knulli, where they stay wi
 render thread's remaining i-fetch stalls are libmali's. Both are now the defaults (the list ships in runtime/relayout/,
 the grouping is in the arm64 build).
 
+## Remaining bottlenecks (2026-11-21)
+
+A census with every 64-bit default on (relayout with the split list, atomics, prefetch, 1 MB allocator blocks;
+`lib-gG8`), Hollow Knight, 32-bit against 64-bit in one hold a scene, order 32 64 64 32, 25 s each from a cool
+handheld, `HWCOUNT=1` on UnityMain, the render thread, libmali's threads (`mali*`) and FMOD's, `GPUCNT=1`.
+A frame's worth; two runs of each build.
+
+| scene, handheld | fps 32 / 64 | GPU busy 32 / 64 | UnityMain cycles | render thread cycles | of them i-fetch stalls | load stalls | its L2 refills | libmali's thread |
+|---|---|---|---|---|---|---|---|---|
+| King's Pass, Knulli | 48.6, 52.6 / 52.9, 53.2 | 87, 92 / 93, 93 % | 26.0 / 26.2 M | 15.7 / 18.1 M | 4.1 / 5.7 M | 6.8 / 8.0 M | 36 / 44 K | 1.9 / 2.4 M |
+| King's Pass, muOS | 52.6, 53.1 / 52.0, 52.6 | 84, 89 / 85, 90 % | 30.2 / 30.1 M | 17.7 / 20.7 M | 4.8 / 7.0 M | 7.9 / 9.3 M | 37 / 47 K | 2.2 / 2.7 M |
+| City of Tears, Knulli | 49.6, 47.3 / 47.8, 47.2 | 99.4 - 99.8 % all | 24.2 / 24.1 M | 22.5 / 24.7 M | 5.0 / 7.0 M | 9.4 / 10.7 M | 47 / 56 K | 2.1 / 2.5 M |
+| City of Tears, muOS | 46.4, 45.2 / 47.1, 45.1 | 98.5, 99.6 / 97.5, 99.5 % | 26.8 / 27.6 M | 24.6 / 27.5 M | 5.7 / 8.1 M | 10.9 / 12.1 M | 47 / 59 K | 2.4 / 2.8 M |
+| Hall of Gods boss, Knulli (median second of the fight) | 42.4, 42.6 / 42.3, 42.4 | 99.1, 99.7 / 95.6, 94.8 % | 22.0 / 23.6 M (one run each) | 18.6 / 19.9 M | 4.3 / 5.8 M | 8.1 / 8.8 M | 40 / 48 K | 2.0 / 2.3 M |
+| Hall of Gods boss, muOS (median second) | 42.3, 41.0 / 40.1, 40.2 | 99.0, 99.3 / 98.2, 99.0 % | 25.8 / 25.1 M | 20.6 / 24.6 M | 5.0 / 7.7 M | 9.2 / 10.9 M | 42 / 55 K | 2.2 / 3.0 M |
+
+UnityMain's own split is unchanged in kind from the tables above: on 64-bit 12 % fewer instructions, load-miss
+stalls +0.9 - 1.3 M, i-fetch stalls +0.4 - 0.6 M, L2 refills 75 -> 85 K, iTLB stall cycles *fewer* (0.50 against
+0.72 M: the relayout's one block), micro-TLB refills the same or fewer. FMOD's threads count the same on both.
+
+**The critical path, per scene.** King's Pass: UnityMain (93 - 97 % of a core, GPU 85 - 93 % busy), at the same
+cycles on both builds: no gap (Knulli's first 32-bit run met a 660 MHz GPU). City of Tears and the boss: the GPU
+(98 - 99.8 % busy), the same work on both builds; the frame rate follows the GPU's clock run by run (645 - 693 MHz
+Knulli, 603 - 670 MHz muOS), not the build. The boss fight's "2.5 fps on Knulli" was the measurement: the 25 s
+window takes in a different length of the 57 - 60 fps seconds after the fight ends each run (the fights diverge);
+by the median second of the fight Knulli is equal and muOS 1 - 2 fps apart between runs whose fights differ.
+
+**What the 64-bit build still pays, ranked** (none of it on a critical path on the RG34XX-SP):
+
+| # | where | size a frame | whose | lever left |
+|---|---|---|---|---|
+| 1 | render thread, instruction fetch | +1.5 - 2.7 M cycles (0.9 - 1.5 ms) | libmali-64 (61 - 64 % of the thread's fetch stalls) | none outside the driver: see below |
+| 2 | render thread, load misses | +0.7 - 1.7 M cycles | libmali's and libunity's data | - |
+| 3 | UnityMain, load misses | +0.9 - 1.3 M, paid back by fewer instructions and mispredicts | libunity, managed | prefetch sites per game |
+| 4 | libmali's own thread (`mali-cmar-backe`) | +0.4 - 0.8 M cycles | libmali-64 | - |
+| 5 | memory | resident +16 - 50 MB (King's Pass 649 -> 691 - 701 MB Knulli, 675 -> 691 - 698 muOS; boss 680 -> 730, 696 -> 735) | pointers | `UA_MONO64_ASSEMBLIES=scripting` (opt-in, ~10 MB) |
+| 6 | G350: hangs | see below | libmali / kernel or memory at the load | needs the handheld |
+
+**Tried against it, not kept:**
+
+- `UA_GL_ARENA_SUBDATA=1` (constant-buffer uploads as copies into the arena), City of Tears, 64-bit, A B B A:
+  every upload was copied (about 215 a second; none to the driver), render thread 24.10 -> 23.88 M cycles
+  (Knulli), 27.49 -> 27.01 M (muOS); fps 48.2, 46.1 -> 46.9, 46.1 and 44.6, 44.7 -> 46.3, 45.1 with the GPU's clock.
+  Too few uploads reach the driver to matter; stays opt-in.
+- UnityMain on a core of its own (`UA_AFFINITY='UnityMain:3 *:0-2'`), King's Pass, 64-bit, A B B A: Knulli 54.2,
+  53.6 -> 54.4, 53.9 fps, muOS 51.8, 51.8 -> 52.1, 51.8; UnityMain's cycles -1 %, its bus accesses -10 %. Within
+  the spread; not set.
+- Already there and counted again: `UA_GL_ARENA` serves every one of Unity's ~140 buffer maps a frame from its own
+  persistent mapping (the driver sees no map, flush or unmap in the game; the 140 in the replay tables are the
+  trace's), so there is no cheaper buffer path left to steer Unity onto; of the frame's 16 passes only one has no
+  draw (the 720x450 darkness texture's clear: `UA_GL_SAMECLEAR`, exact, nothing gained), the other 15 binds each
+  begin a pass with draws.
+
+**libmali, the facts** (headers and strings only): Knulli and muOS ship the same 64-bit blob byte for byte
+(r20p0-01rel0, 44.5 MB, `.text` 34.6 MB) and the same 32-bit build (r20p0-01rel0, `.text` 11.4 MB). The 64-bit
+blob exports 114 OpenCL and Vulkan entry points (`cl*`, `vk*`) and the 32-bit one none: most of the 3x is whole
+APIs the 32-bit build leaves out, not the GLES path, whose hot code is 116 KB against 91 KB (above).
+
+**The G350** (2026-11-21, two sessions between power cycles; EmulationStation left running in these runs, as a
+player's launch has it: profbench's `STOP_ES` knows only init scripts): King's Pass 20 s, 32 64 64 32: 43.5, 43.6
+against 44.2, 44.3 fps from a cool start (GPU 520 MHz, CPU 1.27 - 1.29 GHz); a 90 s 32-bit run 31.1 fps (CPU
+1.17 GHz, GPU 485 MHz on average, SoC 62 - 71 C); no 90 s 64-bit figure: the handheld stopped answering at the
+start of the 64-bit run both times one followed other runs. The counters there under-count with this many
+threads (the A35's fewer counters) and are not tabled; in ratio the GL thread's cycles are +20 % on 64-bit,
+nearly all instruction fetch, and UnityMain's lower.
+Hangs by build since 2026-11-19, from the helpers' result folders (a hung run leaves none, so the starts are
+approximate): 64-bit about 48 starts, 6 hangs (11-19 twice, 11-20 twice, 11-21 twice); 32-bit about 30 runs, none
+(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). About one
+64-bit start in eight: this, not the frame rate, is what stands between the G350 and an aarch64-only port.
+
 ## The BattleXP G350 (RK3326): the min-spec handheld, 32-bit against 64-bit (2026-11-20)
 
 The G350 (dArkOS, RK3326: four Cortex-A35 cores up to 1.512 GHz, Mali-G31 with r13p0 GBM libmali for each
