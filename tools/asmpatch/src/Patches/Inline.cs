@@ -183,6 +183,11 @@ sealed class InlineHot : Patch
                 {
                     MethodDefinition d2; try { d2 = mr.Resolve(); } catch (AssemblyResolutionException) { d2 = null; }
                     if (d2 == null) return "unresolved method";
+                    // a generic method instantiated on the callee's own type parameters (e.g. Array.Empty<T>() in the 4.x
+                    // class libraries' List<T>): SubMethod substitutes the declaring type's arguments only, and importing
+                    // the call as it is fails (Cecil: no generic context; Enter the Gungeon on the 64-bit route, 2026-11-21)
+                    if (mr is GenericInstanceMethod gim && gim.GenericArguments.Any(a => a.ContainsGenericParameter))
+                        return "a generic method call on its type's parameters";
                     if (!MemberVisible(d2.DeclaringType, d2.IsPublic, d2.IsAssembly, d2.IsFamilyOrAssembly, from, me)) return "a method it may not call";
                 }
                 else if (i.Operand is TypeReference tr && tr is not GenericParameter)

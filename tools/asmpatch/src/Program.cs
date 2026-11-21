@@ -86,7 +86,11 @@ static class Program
             if (p.OptIn && !named && apply) { Console.WriteLine($"skip {p.Name} (opt-in: --with={p.Name})"); continue; }
             Result r;
             try { r = p.Run(game, apply); }
-            catch (Exception e) when (e is not OutOfMemoryException) { r = Result.Failed($"{e.GetType().Name}: {e.Message}"); }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                r = Result.Failed($"{e.GetType().Name}: {e.Message}");
+                if (Environment.GetEnvironmentVariable("ASMPATCH_TRACE") == "1") Console.Error.WriteLine(e);   // (where it failed)
+            }
             switch (r.Outcome)
             {
                 case Outcome.NotApplicable: Console.WriteLine($"n/a  {p.Name}: {r.Reason}"); break;
