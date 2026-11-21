@@ -56,7 +56,10 @@ entries, order, modes, fixed times and versions (deflated at level 9 with zlib-r
 release's donor APKs written again as zipfile writes them). `[port] aarch64_only` (docs/arm64.md,
 "Shipping aarch64 only") is there: the android route's port takes the mono-arm64 route, the release
 drops armhf build outputs and the donors' 32-bit players, and the zip is checked with the same scan
-as `pmu arch-check` (crates/pkgzip `arch.rs`).
+as `pmu arch-check` (crates/pkgzip `arch.rs`). `player.mono64_classlibs` (a .NET 3.5 game of 2017.4 on Mono's 4.x
+class libraries: `setup/mono64/<line>/classlibs/` and `etc/`), `files.own` (files `port new` leaves as
+the porter made them) and the relayout lists beside every 64-bit ua_host are there too; `port new
+--data` sets `mono64_classlibs` from the check, so with `pmu port new` port.toml names it.
 
 ```bash
 pmu port new mygame --out mygame                  # mygame/port.toml is used (or --config FILE)

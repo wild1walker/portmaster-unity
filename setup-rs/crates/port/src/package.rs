@@ -395,7 +395,22 @@ fn ua_host_arm64_part(ctx: &mut PackCtx, opts: &PackOpts, dst: &str, suffix: &st
             Command::new(rt.join("build.sh")).env("ARCH", "arm64"),
         )?;
     }
-    ua_host_part(ctx, &o, dst, suffix)
+    ua_host_part(ctx, &o, dst, suffix)?;
+    // the code layout lists (runtime/relayout/<build id>.txt), beside every 64-bit ua_host
+    let rl = ctx.runtime.join("runtime/relayout");
+    if rl.is_dir() {
+        let mut names: Vec<String> = fs::read_dir(&rl)
+            .map_err(io_at(&rl))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".txt") && !mac_junk(n))
+            .collect();
+        names.sort();
+        for n in names {
+            ctx.add(&rl.join(&n), &format!("relayout/{n}"), Some(0o644))?;
+        }
+    }
+    Ok(())
 }
 
 fn component(ctx: &mut PackCtx, c: &str, opts: &PackOpts) -> Result<bool> {
@@ -658,6 +673,67 @@ fn mono64_part(ctx: &mut PackCtx, opts: &PackOpts) -> Result<()> {
         if out.join("libmono-native.so").is_file() && cf.is_file() {
             ctx.license_file(&format!("LICENSE.corefx-{line}.txt"), &cf)?;
         }
+        if ctx.cfg.dict("player").truthy("mono64_classlibs") {
+            mono64_classlibs(ctx, opts, &line, &work, &out)?;
+        }
+    }
+    Ok(())
+}
+
+/// A .NET 3.5 game's class libraries for the mono-arm64 route (player.mono64_classlibs): Mono's 4.x
+/// ones (tools/mono64/build-classlibs.sh) as setup/mono64/<line>/classlibs/, with Mono's config as
+/// setup/mono64/<line>/etc/.
+pub fn mono64_classlibs(ctx: &mut PackCtx, opts: &PackOpts, line: &str, work: &Path, out: &Path) -> Result<()> {
+    use crate::config::{MONO64_CLASSLIBS, MONO64_NET35_LINES};
+    if !MONO64_NET35_LINES.contains(&line) {
+        return Err(exit(format!(
+            "player.mono64_classlibs: Unity {line} (a .NET 3.5 game on Mono's 4.x class libraries: {})",
+            MONO64_NET35_LINES.join(", ")
+        )));
+    }
+    let cl = out.join("classlibs");
+    if !cl.join("mscorlib.dll").is_file() {
+        if opts.no_build {
+            return Err(exit(format!(
+                "{}: build Mono's 4.x class libraries first (tools/mono64/build-classlibs.sh {line} {})",
+                cl.display(),
+                work.display()
+            )));
+        }
+        let b = ctx.runtime.join("tools/mono64/build-classlibs.sh");
+        ctx.run(
+            &format!("building Mono's 4.x class libraries of unity-{line}-mbe (tools/mono64/build-classlibs.sh, Docker)"),
+            Command::new(b).arg(line).arg(work),
+        )?;
+    }
+    let names: Vec<String> = match ctx.cfg.dict("player").get("mono64_classlibs") {
+        Some(Val::List(l)) => l.iter().map(Val::py_str).collect(),
+        _ => MONO64_CLASSLIBS.iter().map(|s| s.to_string()).collect(),
+    };
+    let missing: Vec<&str> = names.iter().filter(|n| !cl.join(n).is_file()).map(String::as_str).collect();
+    if !missing.is_empty() {
+        return Err(exit(format!(
+            "{} has no {} (tools/mono64/build-classlibs.sh {line} {} builds the whole profile)",
+            cl.display(),
+            missing.join(", "),
+            work.display()
+        )));
+    }
+    for n in &names {
+        ctx.add(&cl.join(n), &format!("setup/mono64/{line}/classlibs/{n}"), Some(0o644))?;
+    }
+    for rel in ["mono/config", "mono/4.5/machine.config"] {
+        let sp = cl.join("etc").join(rel);
+        if !sp.is_file() {
+            return Err(exit(format!(
+                "{}: missing (tools/mono64/build-classlibs.sh writes Mono's config beside the libraries)",
+                sp.display()
+            )));
+        }
+        ctx.add(&sp, &format!("setup/mono64/{line}/etc/{rel}"), Some(0o644))?;
+    }
+    if cl.join("LICENSE.txt").is_file() {
+        ctx.license_file(&format!("LICENSE.mono-class-libraries-{line}.txt"), &cl.join("LICENSE.txt"))?;
     }
     Ok(())
 }

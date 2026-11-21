@@ -12,6 +12,13 @@ use pkgzip::{io_at, Result};
 /// route where a port takes it; true makes every port's release aarch64 only.
 pub const AARCH64_ONLY_DEFAULT: bool = false;
 /// The routes whose releases carry nothing for armhf.
+/// The Unity lines whose .NET 3.5 games take the mono-arm64 route (Mono's 4.x class libraries).
+pub const MONO64_NET35_LINES: [&str; 1] = ["2017.4"];
+/// The class libraries such a release ships (player.mono64_classlibs = true).
+pub const MONO64_CLASSLIBS: [&str; 8] = [
+    "mscorlib.dll", "System.dll", "System.Core.dll", "System.Xml.dll", "Mono.Security.dll", "System.Configuration.dll",
+    "System.Security.dll", "Mono.Posix.dll",
+];
 pub const AARCH64_ROUTES: [&str; 4] = ["mono-arm64", "il2cpp-arm64", "box64", "apk"];
 pub const DEFAULT_STEPS: [&str; 4] = ["shaders", "settings", "audio", "quality"];
 pub const HOOK_POINTS: [&str; 5] = ["game", "pre_convert", "post_convert", "post_pack", "post_install"];
@@ -67,7 +74,7 @@ pub fn defaults() -> Dict {
         "runtime_lowmem" => empty(),
         "questions" => list(),
         "files" => Val::Dict(dict! {
-            "plugins" => list(), "managed" => list(), "assembly_patches" => list(), "hooks" => empty(), "extra" => list(),
+            "plugins" => list(), "managed" => list(), "assembly_patches" => list(), "hooks" => empty(), "extra" => list(), "own" => list(),
         }),
         "build" => Val::Dict(dict! { "commands" => list(), "outputs" => empty(), "licenses" => empty() }),
     }
@@ -390,6 +397,22 @@ pub fn validate(cfg: &Dict) -> Result<()> {
         }
     }
     let pl = cfg.dict("player");
+    let mc = pl.get("mono64_classlibs");
+    if mc.is_some_and(Val::truthy) && p.str("route") != "mono-arm64" {
+        errs.push("player.mono64_classlibs: for the mono-arm64 route (a .NET 3.5 game on Mono's 4.x class libraries)".into());
+    } else if let Some(m) = mc.filter(|m| !matches!(m, Val::Null)) {
+        let ok = match m {
+            Val::Bool(_) => true,
+            Val::List(l) => !l.is_empty() && l.iter().all(|x| x.as_str().is_some_and(rx::dll_name)),
+            _ => false,
+        };
+        if !ok {
+            errs.push(format!(
+                "player.mono64_classlibs {}: true, false or a list of assembly file names (e.g. \"System.Xml.dll\")",
+                m.repr()
+            ));
+        }
+    }
     if pl.truthy("il2cpp")
         && (p.str("route") != "apk" || !pl.get("backend").is_some_and(|b| b.eq(&Val::s("mono"))))
     {
@@ -406,6 +429,18 @@ pub fn validate(cfg: &Dict) -> Result<()> {
     let sa = ad.get("streaming_assets").cloned().unwrap_or(Val::s("obb"));
     if !matches!(sa.as_str(), Some("obb" | "both" | "loose")) {
         errs.push(format!("android_data.streaming_assets {}: obb, both or loose", sa.repr()));
+    }
+    for rel in cfg.dict("files").list("own") {
+        let bad = match rel {
+            Val::Str(s) => s.starts_with('/') || s.split('/').any(|x| x == "..") || s == "port.toml" || s == "port.build.json",
+            _ => true,
+        };
+        if bad {
+            errs.push(format!(
+                "files.own: {} must be a path in the port's source folder (not port.toml or port.build.json)",
+                rel.repr()
+            ));
+        }
     }
     for k in cfg.dict("files").dict("hooks").keys() {
         if !HOOK_POINTS.contains(&k) {
@@ -592,7 +627,9 @@ pub fn config_doc(sec: &str) -> Option<&'static str> {
         "files" => "# the porter's own files (paths relative to this file), copied into setup/: converter plugins\n\
 # (--plugin), managed = assemblies shipped into the game (--managed-file), assembly_patches =\n\
 # [{name, command, files}] ({setup} = the setup folder), hooks = {game|pre_convert|post_convert|\n\
-# post_pack|post_install = \"x.sh\"} sourced by the setup, extra = files for the port folder",
+# post_pack|post_install = \"x.sh\"} sourced by the setup, extra = files for the port folder,\n\
+# own = files of the port's source folder `port new` leaves as they are (e.g. \"<title>.sh\", a\n\
+# hand-made launcher or \"<name>/setup/patchscript\"; the template's version is not written)",
         _ => return None,
     })
 }

@@ -54,11 +54,20 @@ pub struct NewCtx {
     pub cfg: Dict,
     pub out: PathBuf,
     pub written: Vec<String>,
+    /// files.own: the porter's own versions of files port new would write
+    pub own: Vec<String>,
+    /// what write() says, for the log (in order)
+    pub said: Vec<String>,
 }
 
 impl NewCtx {
     pub fn write(&mut self, rel: &str, data: &[u8], mode: u32) -> Result<()> {
         let p = self.out.join(rel);
+        if self.own.iter().any(|o| o == rel) && p.is_file() {
+            self.said.push(format!("{rel}: the port's own (files.own), left as it is"));
+            self.written.push(rel.to_string());
+            return Ok(());
+        }
         if let Some(d) = p.parent() {
             fs::create_dir_all(d).map_err(io_at(d))?;
         }
@@ -181,7 +190,8 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
     cfg.table("player").set("donors", Val::List(donors));
     validate(&cfg)?;
     fs::create_dir_all(&out).map_err(io_at(&out))?;
-    let mut ctx = NewCtx { cfg: cfg.clone(), out: out.clone(), written: Vec::new() };
+    let own: Vec<String> = cfg.dict("files").list("own").iter().filter_map(|x| x.as_str().map(String::from)).collect();
+    let mut ctx = NewCtx { cfg: cfg.clone(), out: out.clone(), written: Vec::new(), own, said: Vec::new() };
     let p = cfg.dict("port");
     let g = cfg.dict("game");
     let pn = p.get("name").map_or("None".into(), Val::py_str);
@@ -329,6 +339,9 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
     all.sort();
     all.dedup();
     write_file(&old, (all.join("\n") + "\n").as_bytes())?;
+    for m in std::mem::take(&mut ctx.said) {
+        log(&m);
+    }
     log(&format!("port {pn} ({route} route) -> {}", out.display()));
     let donors = cfg.dict("player").list("donors");
     if !donors.is_empty() {

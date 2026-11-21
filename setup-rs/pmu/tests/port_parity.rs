@@ -122,6 +122,8 @@ fn inputs(w: &Path) {
     put(&rt.join("runtime/media/out/arm64/licenses/openh264.LICENSE"), "BSD openh264\n");
     put(&rt.join("runtime/thirdparty/libhybris/LICENSE.Apache2"), "Apache 2.0 libhybris\n");
     put(&rt.join("runtime/mono64/out/arm64/libil2cpp_mono.so"), elf(183, true));
+    put(&rt.join("runtime/relayout/0123abcd.txt"), "# a code layout list\n");
+    put(&rt.join("runtime/relayout/README.md"), "# not shipped\n");
     put(&rt.join("tools/asmpatch/out/linux-arm64/asmpatch"), elf(183, true));
     put(&rt.join("tools/hlslcc/out/linux-arm64/pmhlslcc"), elf(183, true));
     put(&rt.join("tools/hlslcc/out/linux-arm64/pmhlslcc.LICENSE.txt"), "MIT HLSLcc\n");
@@ -157,19 +159,26 @@ fn inputs(w: &Path) {
         ],
     );
     let w64 = i.join("mono64");
-    for line in ["2019.4"] {
+    for line in ["2019.4", "2017.4"] {
         let br = format!("unity-{line}-mbe");
         put(&w64.join("out").join(&br).join("libmonobdwgc-2.0.so"), elf(183, true));
         put(&w64.join("out").join(&br).join("libMonoPosixHelper.so"), elf(183, true));
         put(&w64.join("src").join(&br).join("LICENSE"), "MIT mono\n");
         put(&w64.join("src").join(&br).join("PATENTS.TXT"), "patents\n");
         put(&w64.join("src").join(&br).join("external/bdwgc/README.QUICK"), "bdwgc\n");
+        let cl = w64.join("out").join(&br).join("classlibs");
+        for n in port::config::MONO64_CLASSLIBS.iter().chain(["System.Web.dll"].iter()) {
+            put(&cl.join(n), format!("MZ {n}"));
+        }
+        put(&cl.join("etc/mono/config"), "<configuration/>\n");
+        put(&cl.join("etc/mono/4.5/machine.config"), "<configuration/>\n");
+        put(&cl.join("LICENSE.txt"), "MIT class libraries\n");
     }
     let dn = i.join("donors");
     let e32 = elf(40, false);
     let e64 = elf(183, true);
     let text: Vec<u8> = (0..20000u32).flat_map(|x| format!("line {x} of the engine\n").into_bytes()).collect();
-    for v in ["2019.4.8f1", "2021.3.4f1", "2022.2.17f1"] {
+    for v in ["2019.4.8f1", "2021.3.4f1", "2022.2.17f1", "2017.4.40f1"] {
         zip(
             &dn.join(format!("donor-{v}-mono-armv7.apk")),
             &[
@@ -413,6 +422,24 @@ fn cases(w: &Path) -> Vec<Case> {
             after_new: vec![],
         },
         Case {
+            name: "mono-arm64-net35-own",
+            files: vec![(
+                "cfg.toml",
+                "[port]\ntitle = 'Old'\nroute = 'mono-arm64'\n[game]\nunity_versions = ['2017.4.40f1']\n[player]\nmono64_classlibs = ['System.dll', 'Mono.Posix.dll']\n\
+                 [files]\nown = ['Old.sh', 'mygame/README.md']\n".to_string(),
+            )],
+            cmds: vec![new("cfg.toml", "port", &[]), new("cfg.toml", "port", &[]), pkg("port", &["--mono64-work", &s(&i.join("mono64"))])],
+            env: vec![],
+            after_new: vec![("port/Old.sh", b"#!/bin/bash\n# hand-made\n".to_vec())],
+        },
+        Case {
+            name: "net35-true",
+            files: vec![("cfg.toml", "[port]\ntitle = 'Old'\nroute = 'mono-arm64'\n[game]\nunity_versions = ['2017.4.40f1']\n[player]\nmono64_classlibs = true\n".to_string())],
+            cmds: vec![new("cfg.toml", "port", &[]), pkg("port", &["--mono64-work", &s(&i.join("mono64"))])],
+            env: vec![],
+            after_new: vec![],
+        },
+        Case {
             name: "errors",
             files: vec![
                 ("bad.toml", "[port]\nname = 'Bad Name'\ngenres = ['shooter']\nstore = ['https://x']\n[game]\nunity_versions = ['x']\nrelease_date = '29/09/2017'\n[runtime]\nua-x = '1'\n[[questions]]\nid = 'q'\nquestion = '?'\noptions = [['a b', 'A']]\ndefault = 'z'\n".to_string()),
@@ -420,6 +447,7 @@ fn cases(w: &Path) -> Vec<Case> {
                 ("a64box.toml", "[port]\ntitle = 'X'\nroute = 'nope'\naarch64_only = true\n[game]\nunity_versions = ['2019.4.8f1']\n".to_string()),
                 ("noroute.toml", "[port]\ntitle = 'X'\nroute = 'nope'\n[game]\nunity_versions = ['2019.4.8f1']\n".to_string()),
                 ("ok.toml", "[port]\ntitle = 'X'\n[game]\nunity_versions = ['2019.4.8f1']\n".to_string()),
+                ("mc.toml", "[port]\ntitle = 'X'\n[game]\nunity_versions = ['2019.4.8f1']\n[player]\nmono64_classlibs = true\n[files]\nown = ['../x', 'port.toml']\n".to_string()),
                 ("other/notes.txt", "x".to_string()),
                 ("clone/LICENSE", "x".to_string()),
                 ("clone/._LICENSE", "x".to_string()),
@@ -429,6 +457,7 @@ fn cases(w: &Path) -> Vec<Case> {
                 new("noversion.toml", "p2", &[]),
                 new("a64box.toml", "p3", &[]),
                 new("noroute.toml", "p4", &[]),
+                new("mc.toml", "p5", &[]),
                 new("ok.toml", "other", &[]),
                 new("ok.toml", "clone", &[]),
                 sv(&["port", "package", "clone", "--out", "rel", "--runtime", &rt, "--pmu", &pmu, "--no-build"]),

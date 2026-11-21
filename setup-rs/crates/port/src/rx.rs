@@ -119,6 +119,11 @@ pub fn banks(s: &str) -> bool {
     all_of(s, |x| x.is_alphanumeric() || matches!(x, '_' | ' ' | '.' | '+' | '/' | '-'))
 }
 
+/// `re.fullmatch(r'[\w.-]+\.dll', x)`: an assembly file name.
+pub fn dll_name(s: &str) -> bool {
+    s.strip_suffix(".dll").is_some_and(|b| all_of(b, |x| x.is_alphanumeric() || matches!(x, '_' | '.' | '-')))
+}
+
 /// `^[A-Za-z0-9_-]+$`: a bare TOML key.
 pub fn bare_key(s: &str) -> bool {
     all_of(dollar(s), |x| x.is_ascii_alphanumeric() || matches!(x, '_' | '-'))

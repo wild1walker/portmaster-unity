@@ -770,6 +770,8 @@ tools = "tools"
     put(&rt.join("runtime/host/out/arm64/ua_host"), elf(package::EM_AARCH64));
     put(&rt.join("runtime/media/out/arm64/licenses/libvpx.copyright"), "BSD");
     put(&rt.join("runtime/host/out/ua_host"), elf(package::EM_ARM));
+    put(&rt.join("runtime/relayout/0123abcd.txt"), "# a code layout list\n");
+    put(&rt.join("runtime/relayout/README.md"), "# not shipped\n");
     let w = t.0.join("mono64");
     for n in ["out/unity-2019.4-mbe/libmonobdwgc-2.0.so", "out/unity-2019.4-mbe/libMonoPosixHelper.so"] {
         put(&w.join(n), elf(package::EM_AARCH64));
@@ -795,7 +797,8 @@ tools = "tools"
     ] {
         assert!(z.has(n), "{n}");
     }
-    for n in ["mygame/ua_host64", "mygame/pmhwdec/libpmhwdec.so.1", "mygame/tools/helper32"] {
+    assert!(z.has("mygame/relayout/0123abcd.txt"));
+    for n in ["mygame/ua_host64", "mygame/pmhwdec/libpmhwdec.so.1", "mygame/tools/helper32", "mygame/relayout/README.md"] {
         assert!(!z.has(n), "{n}");
     }
     assert_eq!(package::elf_machine(&z.read("mygame/ua_host")[..20]), Some(package::EM_AARCH64));
@@ -938,6 +941,85 @@ impl Tuple3 for (u16, u16) {
     fn into_tuple3(self, sys: u8) -> (u16, u16, u8) {
         (self.0, self.1, sys)
     }
+}
+
+#[test]
+fn mono_arm64_net35() {
+    // player.mono64_classlibs (set by hand: pmu port new runs no check): setup.env, the release's
+    // classlibs and Mono's config for them, the validation
+    let t = tmp("net35");
+    let out = make(&t.0, "[port]\nroute = 'mono-arm64'\n[game]\nunity_versions = ['2017.4.40f1']\n[player]\nmono64_classlibs = true\n");
+    assert!(read(&out.join("mygame/setup/setup.env")).contains("MONO64_CLASSLIBS=1"));
+    let cfg = build_cfg(&out);
+    assert!(matches!(cfg.dict("player").get("mono64_classlibs"), Some(Val::Bool(true))));
+    let w = t.0.join("mono64");
+    let cl = w.join("out/unity-2017.4-mbe/classlibs");
+    for n in config::MONO64_CLASSLIBS.iter().chain(["System.Web.dll"].iter()) {
+        put(&cl.join(n), format!("MZ {n}"));
+    }
+    put(&cl.join("etc/mono/config"), "<configuration/>");
+    put(&cl.join("etc/mono/4.5/machine.config"), "<configuration/>");
+    put(&cl.join("LICENSE.txt"), "MIT");
+    let r = repo();
+    let mut log = |_: &str| {};
+    let zipdir = t.0.join("zip");
+    let mut ctx = package::PackCtx {
+        repo: &r,
+        cfg: cfg.clone(),
+        port_src: out.clone(),
+        zipdir: zipdir.clone(),
+        runtime: t.0.clone(),
+        name: "mygame".into(),
+        port_dir: zipdir.join("mygame"),
+        licenses: zipdir.join("mygame/licenses"),
+        modes: BTreeMap::new(),
+        stale: vec![],
+        log: &mut log,
+    };
+    package::mono64_classlibs(&mut ctx, &PackOpts::default(), "2017.4", &w, cl.parent().unwrap()).unwrap();
+    let m = zipdir.join("mygame/setup/mono64/2017.4");
+    let mut got: Vec<String> = fs::read_dir(m.join("classlibs")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    got.sort();
+    let mut want: Vec<String> = config::MONO64_CLASSLIBS.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    assert_eq!(got, want);
+    assert!(m.join("etc/mono/4.5/machine.config").is_file());
+    assert!(zipdir.join("mygame/licenses/LICENSE.mono-class-libraries-2017.4.txt").is_file());
+    fs::remove_file(cl.join("Mono.Posix.dll")).unwrap();
+    let e = err_text(package::mono64_classlibs(&mut ctx, &PackOpts { no_build: true, ..Default::default() }, "2017.4", &w, cl.parent().unwrap()));
+    assert!(e.contains("Mono.Posix.dll"), "{e}");
+    let mut bad = cfg.clone();
+    bad.table("port").set("route", Val::s("android"));
+    assert!(err_text(validate(&bad)).contains("player.mono64_classlibs"));
+    bad = cfg.clone();
+    bad.table("player").set("mono64_classlibs", Val::strs(&["x y"]));
+    assert!(err_text(validate(&bad)).contains("a list of assembly file names"));
+}
+
+#[test]
+fn files_own() {
+    let t = tmp("own");
+    let out = make(&t.0, "");
+    let launcher = out.join("My Game.sh");
+    let ps = out.join("mygame/setup/patchscript");
+    put(&launcher, "#!/bin/bash\n# hand-made\n");
+    put(&ps, "#!/bin/bash\n# hand-made setup\n");
+    put(&out.join("mygame/setup.txt"), "changed\n");
+    let mut cfg = merge(&d(BASE), &d("[files]\nown = ['My Game.sh', 'mygame/setup/patchscript']"));
+    let cp = t.0.join("cfg.json");
+    put(&cp, pyjson::dumps(&Val::Dict(cfg.clone()), None, true));
+    let a = NewArgs { name: "mygame".into(), config: Some(port::ps(&cp)), out: Some(port::ps(&out)), ..Default::default() };
+    let mut msgs = Vec::new();
+    new(&repo(), &a, &mut |m: &str| msgs.push(m.to_string())).unwrap();
+    assert_eq!(read(&launcher), "#!/bin/bash\n# hand-made\n");
+    assert_eq!(read(&ps), "#!/bin/bash\n# hand-made setup\n");
+    assert_ne!(read(&out.join("mygame/setup.txt")), "changed\n");
+    assert!(msgs.join("\n").contains("My Game.sh: the port's own (files.own), left as it is"));
+    let kept = read(&out.join(".port_files"));
+    assert!(kept.split('\n').any(|l| l == "My Game.sh") && kept.split('\n').any(|l| l == "mygame/setup/patchscript"));
+    cfg.table("files").set("own", Val::strs(&["../x"]));
+    put(&cp, pyjson::dumps(&Val::Dict(cfg), None, true));
+    assert!(err_text(new(&repo(), &a, &mut quiet())).contains("files.own"));
 }
 
 // ------------------------------------------------------------------ ApkRouteTest (from port.toml)

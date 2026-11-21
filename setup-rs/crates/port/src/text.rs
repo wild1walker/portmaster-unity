@@ -153,6 +153,9 @@ pub fn setup_env(cfg: &Dict, extra: &[String], sections: Option<&[Val]>) -> Stri
     if pl.truthy("il2cpp") {
         lines.push("PLAYER_IL2CPP=1".into());
     }
+    if pl.truthy("mono64_classlibs") {
+        lines.push("MONO64_CLASSLIBS=1".into());
+    }
     if has("android_data") {
         let asm = match a {
             Some(Val::List(l)) => l.iter().map(Val::py_str).collect::<Vec<_>>().join(","),
