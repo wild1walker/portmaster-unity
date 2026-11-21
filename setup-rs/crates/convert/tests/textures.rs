@@ -317,6 +317,146 @@ fn textures_layer(workers: bool) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A sprite sheet's sprites and atlas entries in another file than the sheet (a PPtr with
+/// m_FileID > 0, through the file's externals) follow the scaled sheet as the sheet's own file's
+/// do; the file is marked with its change (textures-refs), and a second run leaves it alone.
+#[test]
+fn textures_sprites_in_another_file() {
+    let Some(db) = madeup::db() else {
+        eprintln!("PMU_TPK not set: skipped");
+        return;
+    };
+    let dir = temp("crossfile");
+    let data = dir.join("Data");
+    std::fs::create_dir_all(&data).unwrap();
+    let o = |class_id, path_id, value| Obj {
+        class_id,
+        path_id,
+        value,
+    };
+    // the sheets' file: a scaled sheet with a sprite of its own, and one that keeps its size
+    let sheets = madeup::serialized(
+        &db,
+        &[
+            o(
+                28,
+                1,
+                madeup::texture(&db, "big_sheet", (64, 32), 12, &[7u8; 2048], None),
+            ),
+            o(
+                28,
+                2,
+                madeup::texture(&db, "icon", (16, 8), 10, &[7u8; 64], None),
+            ),
+            o(213, 3, madeup::sprite(&db, "own", 1)),
+        ],
+        &[],
+        true,
+    );
+    std::fs::write(data.join("sharedassets0.assets"), &sheets).unwrap();
+    // another file: sprites of both sheets (the second external is the sheets' file), a sprite of
+    // a texture with the same path id in a file that is not scaled, an atlas with entries for all
+    let there = |name, file, pid| {
+        let mut s = madeup::sprite(&db, name, pid);
+        madeup::set(&mut s, &["m_RD", "texture"], madeup::pptr(file, pid));
+        s
+    };
+    let mut atlas = madeup::sprite_atlas(&db, "atlas", &[1, 2, 1]);
+    for e in atlas
+        .get_mut("m_RenderDataMap")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+    {
+        let Value::Pair(p) = e else { unreachable!() };
+        let pid = p.1.path(&["texture", "m_PathID"]).unwrap().as_int().unwrap();
+        p.1.set("texture", madeup::pptr(2, pid as i64)).unwrap();
+    }
+    let users = madeup::serialized(
+        &db,
+        &[
+            o(213, 1, there("of_big_sheet", 2, 1)),
+            o(213, 2, there("of_icon", 2, 2)),
+            o(213, 3, there("of_another_file", 1, 1)),
+            o(687078895, 4, atlas),
+        ],
+        &["globalgamemanagers.assets", "sharedassets0.assets"],
+        true,
+    );
+    std::fs::write(data.join("sharedassets1.assets"), &users).unwrap();
+    std::fs::write(
+        data.join("globalgamemanagers"),
+        madeup::serialized(&db, &[o(141, 1, madeup::build_settings(&db))], &[], false),
+    )
+    .unwrap();
+
+    let cfg = || pyjson::loads(r#"{"version": 1, "textures": {"inline": true}}"#).unwrap();
+    let run = || {
+        let mut job = Job::new(&data, &data, cfg()).unwrap();
+        textures::run_with(
+            &mut job,
+            &Args::default(),
+            Box::new(Fake {
+                seen: Vec::new(),
+                workers: false,
+            }),
+        )
+        .unwrap();
+    };
+    run();
+    let journal =
+        || pyjson::loads(&std::fs::read_to_string(data.join(".pmunity.json")).unwrap()).unwrap();
+    assert_eq!(
+        journal().get("done").unwrap().dumps(),
+        r#"{"textures": ["globalgamemanagers", "sharedassets0.assets", "sharedassets1.assets"], "textures-refs": ["sharedassets1.assets"]}"#
+    );
+    assert!(journal().get("once").is_none());
+    let opts = Options {
+        db: Some(db.clone()),
+        ..Default::default()
+    };
+    let check = || {
+        let f0 = DataFile::open(data.join("sharedassets0.assets"), &opts).unwrap();
+        assert_eq!(
+            f32_of(&f0.sf.read_typetree(3).unwrap(), &["m_Rect", "width"]),
+            50.5
+        );
+        let f = DataFile::open(data.join("sharedassets1.assets"), &opts).unwrap();
+        let tex = |pid| f.sf.read_typetree(pid).unwrap();
+        // the scaled sheet's sprite in the other file: as the sheet's own (textures_layer)
+        let s = tex(1);
+        assert_eq!(f32_of(&s, &["m_Rect", "width"]), 50.5);
+        assert_eq!(f32_of(&s, &["m_Rect", "height"]), 38.5);
+        assert_eq!(f32_of(&s, &["m_PixelsToUnits"]), 50.0);
+        assert_eq!(f32_of(&s, &["m_RD", "atlasRectOffset", "x"]), -1.0);
+        assert_eq!(
+            f32_of(&s, &["m_RD", "uvTransform", "y"]),
+            (53.3f32 as f64 * 0.5) as f32
+        );
+        // the sheet that kept its size, and path id 1 of a file with no scaled texture: untouched
+        assert_eq!(f32_of(&tex(2), &["m_Rect", "width"]), 101.0);
+        assert_eq!(f32_of(&tex(3), &["m_Rect", "width"]), 101.0);
+        let a = tex(4);
+        let m: Vec<f32> = a
+            .get("m_RenderDataMap")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| match e {
+                Value::Pair(p) => f32_of(&p.1, &["downscaleMultiplier"]),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(m, [0.5, 0.75, 0.375]);
+    };
+    check();
+    // a second run (a setup started again): nothing is scaled twice
+    run();
+    check();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `readable`: keep leaves readable textures as they are (and a file of only those unwritten);
 /// release clears their m_IsReadable and keeps their pixels (streamed and inline, the file written
 /// though nothing was converted); convert clears it and gives them to the codec as the others;

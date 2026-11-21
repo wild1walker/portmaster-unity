@@ -1980,6 +1980,9 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     }
     // (the last batch of deferred files in place before the step's summary)
     job.commit_deferred()?;
+    if only.is_none() {
+        cross_file_pass(job, &mut stats)?;
+    }
     job.end_work(&work);
     job.log(&format!(
         "textures: {} converted ({} -> {} MB), {} atlas entries and {} sprites follow their scaled textures",
@@ -2014,6 +2017,94 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     odd.retain(|(r, _)| files_rx.is_match(r) && only.as_ref().is_none_or(|o| o.is_match(r)));
     for line in super::shaders::skipped_warnings("textures", &skipped, &odd) {
         job.log(&line);
+    }
+    Ok(())
+}
+
+/// The journal's `scaled` entries of plain files: file -> path id -> sizes (a bundle's entries,
+/// `<bundle>:<file>`, are fixed with the bundle).
+fn journaled_sizes(state: &Json) -> BTreeMap<String, BTreeMap<i64, [usize; 4]>> {
+    let mut out = BTreeMap::new();
+    let Some(Json::Dict(files)) = state.get("scaled") else {
+        return out;
+    };
+    for (rel, v) in files {
+        let Json::Dict(texs) = v else { continue };
+        let mut m = BTreeMap::new();
+        for (pid, s) in texs {
+            let (Ok(pid), Some(l)) = (pid.parse::<i64>(), s.as_list()) else {
+                continue;
+            };
+            let n: Vec<usize> = l.iter().filter_map(|x| x.as_int()).map(|x| x as usize).collect();
+            if let [a, b, c, d] = n[..] {
+                m.insert(pid, [a, b, c, d]);
+            }
+        }
+        if !m.is_empty() {
+            out.insert(rel.clone(), m);
+        }
+    }
+    out
+}
+
+/// After every file's textures: the sprites and atlas entries of other plain files that use a
+/// scaled texture (a PPtr with m_FileID > 0, followed through the file's externals by name, in
+/// the same folder). fix_references covers a file's own textures only: a sprite sheet's sprites
+/// in another sharedassets file kept their full-size rectangles and were drawn from the wrong
+/// part of the scaled sheet. A file is marked (textures-refs) when it was changed, with the
+/// change (write_once): its values are scaled in place, so it must never be changed twice.
+fn cross_file_pass(job: &mut Job, stats: &mut Stats) -> Result<()> {
+    let scaled = journaled_sizes(&job.state);
+    if scaled.is_empty() {
+        return Ok(());
+    }
+    let all = regex::Regex::new("").map_err(|e| Error::Value(e.to_string()))?;
+    for rel in texture_files(job, &all) {
+        if job.is_done("textures-refs", &rel) {
+            continue;
+        }
+        let src = job.path_in(&rel);
+        let mut f = match job.open(&src, unityfs::Options::default()) {
+            Err(Error::Unity(e)) if super::shaders::not_one(&src, &e) => continue,
+            Err(e) => return Err(e),
+            Ok(f) => f,
+        };
+        if f.is_bundle || f.file_count() > 1 {
+            continue;
+        }
+        let dir = Path::new(&rel).parent().map(text).unwrap_or_default();
+        let by_file: Vec<Option<&BTreeMap<i64, [usize; 4]>>> = f
+            .sf
+            .externals
+            .iter()
+            .map(|e| {
+                let name = e.name();
+                let key = if dir.is_empty() {
+                    name
+                } else {
+                    format!("{dir}/{name}")
+                };
+                if key == rel {
+                    None
+                } else {
+                    scaled.get(&key)
+                }
+            })
+            .collect();
+        if by_file.iter().all(Option::is_none) {
+            continue;
+        }
+        let by = |fid: i64| -> Option<&BTreeMap<i64, [usize; 4]>> {
+            *by_file.get(usize::try_from(fid.checked_sub(1)?).ok()?)?
+        };
+        let before = stats.sprites + stats.atlas_entries;
+        if fix_references(&mut f, &by, stats)? {
+            job.write_once("textures-refs", &rel, |tmp| Ok(f.write_to(tmp, false)?))?;
+            job.log(&format!(
+                "textures: {rel}: {} sprites / atlas entries follow textures scaled in other files",
+                stats.sprites + stats.atlas_entries - before
+            ));
+        }
     }
     Ok(())
 }

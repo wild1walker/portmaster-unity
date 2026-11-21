@@ -281,6 +281,9 @@ impl Job {
             if job.state.get("pending").is_some_and(Json::truthy) {
                 job.finish_pending()?;
             }
+            if job.state.get("once").is_some_and(Json::truthy) {
+                job.finish_once()?;
+            }
         }
         // (deferred files of a killed run that never went in place: converted again)
         let dir = job.out.join(DEFER_DIR);
@@ -636,6 +639,59 @@ impl Job {
         self.save_state()
     }
 
+    /// write_with and mark_done(step, rel) for a change that must not be made twice (values
+    /// scaled in place: a file found changed and not marked would be scaled again). The journal
+    /// names the written file before it is put in place (`once`), so a job killed anywhere on
+    /// the way ends with the file changed once and marked when it starts again.
+    pub fn write_once(
+        &mut self,
+        step: &str,
+        rel: &str,
+        f: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<()> {
+        self.commit_deferred()?;
+        let dst = self.out.join(rel);
+        if let Some(d) = dst.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        let tmp = with_suffix(&dst, ".tmp");
+        texcodec::prof::time(Stage::Write, || f(&tmp)).map_err(|e| match e {
+            Error::Io(e) => crate::error::at(&tmp)(e),
+            Error::Unity(unityfs::Error::Io(e)) => crate::error::at(&tmp)(e),
+            e => e,
+        })?;
+        if self.inplace {
+            fsync(&tmp)?;
+        }
+        let once = [text(&tmp), text(&dst), step.to_string(), rel.to_string()];
+        self.state
+            .set("once", Json::List(once.into_iter().map(Json::Str).collect()));
+        self.save_state()?;
+        self.finish_once()
+    }
+
+    fn finish_once(&mut self) -> Result<()> {
+        let Some(Json::List(l)) = self.state.pop("once") else {
+            return self.save_state();
+        };
+        let s: Vec<&str> = l.iter().filter_map(Json::as_str).collect();
+        let [tmp, dst, step, rel] = s[..] else {
+            return Err(Error::Value(format!("{STATE}: once is not four strings")));
+        };
+        let _t = Timer::new(Stage::Commit);
+        if Path::new(tmp).exists() {
+            std::fs::rename(tmp, dst).map_err(crate::error::at(Path::new(dst)))?;
+            if self.inplace {
+                if let Some(d) = Path::new(dst).parent() {
+                    fsync_dir(d);
+                }
+            }
+        }
+        let (step, rel) = (step.to_string(), rel.to_string());
+        self.add_mark(&step, &rel)?;
+        self.save_state()
+    }
+
     /// An empty scratch folder for a step (<out>/.pmunity-work/<name>: a dot folder, which
     /// packing leaves out).
     pub fn work_dir(&self, name: &str) -> Result<PathBuf> {
@@ -832,6 +888,62 @@ mod tests {
         job.commit_deferred().unwrap();
         assert_eq!(std::fs::read(d.join("b")).unwrap(), b"new b");
         assert!(job.is_done("t", "b"));
+        drop(job);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// write_once: the file changed and marked together; a job killed after the journal named
+    /// the written file (before or after its rename) ends with the file changed once and marked
+    /// when it starts again; one killed before that finds the file as it was, not marked.
+    #[test]
+    fn a_file_written_once_is_marked_with_its_change() {
+        use super::*;
+        let d = std::env::temp_dir().join(format!("pmu-once-{}", std::process::id()));
+        let journal = |d: &Path| std::fs::read_to_string(d.join(STATE)).unwrap_or_default();
+        let done = r#"{"version": 1, "done": {"refs": ["a"]}, "scaled": {}}"#;
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("a"), b"old").unwrap();
+        };
+        fresh();
+        {
+            let mut job = Job::new(&d, &d, Json::dict()).unwrap();
+            job.write_once("refs", "a", |t| Ok(std::fs::write(t, b"new")?)).unwrap();
+            assert!(job.is_done("refs", "a"));
+        }
+        assert_eq!(std::fs::read(d.join("a")).unwrap(), b"new");
+        assert!(!d.join("a.tmp").exists());
+        assert_eq!(journal(&d), done);
+        for renamed in [false, true] {
+            fresh();
+            {
+                let mut job = Job::new(&d, &d, Json::dict()).unwrap();
+                std::fs::write(d.join("a.tmp"), b"new").unwrap();
+                let once = [text(&d.join("a.tmp")), text(&d.join("a")), "refs".into(), "a".into()];
+                job.state
+                    .set("once", Json::List(once.into_iter().map(Json::Str).collect()));
+                job.save_state().unwrap();
+                if renamed {
+                    std::fs::rename(d.join("a.tmp"), d.join("a")).unwrap();
+                }
+            }
+            let job = Job::new(&d, &d, Json::dict()).unwrap();
+            assert!(job.is_done("refs", "a"), "renamed: {renamed}");
+            assert_eq!(std::fs::read(d.join("a")).unwrap(), b"new");
+            assert!(!d.join("a.tmp").exists());
+            drop(job);
+            assert_eq!(journal(&d), done);
+        }
+        fresh();
+        {
+            let job = Job::new(&d, &d, Json::dict()).unwrap();
+            job.save_state().unwrap();
+            std::fs::write(d.join("a.tmp"), b"half").unwrap();
+        }
+        let job = Job::new(&d, &d, Json::dict()).unwrap();
+        assert!(!job.is_done("refs", "a"));
+        assert_eq!(std::fs::read(d.join("a")).unwrap(), b"old");
         drop(job);
         let _ = std::fs::remove_dir_all(&d);
     }
