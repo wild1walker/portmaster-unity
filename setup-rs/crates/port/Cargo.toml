@@ -5,8 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "The port packager (port.py `port new` and `port package`): a port's folder from port.toml and the route's templates, and its PortMaster release zip"
 
-[dependencies]   # (pure Rust: zlib-rs for deflate, as pkgzip)
+[dependencies]
 pkgzip = { path = "../pkgzip" }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 crc32fast = "1"
 libc = "0.2"
+# (zlib's own deflate for the release zip, built from the crate's copy of zlib, as crates/apk: Python's
+# zipfile compresses with zlib, and zlib-rs's output differs from it)
+libz-sys = { version = "1", default-features = false, features = ["static"] }

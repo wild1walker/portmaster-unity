@@ -1,10 +1,9 @@
 //! Zips as Python's zipfile writes them with ZipFile.writestr(ZipInfo, data): each entry's local
 //! header (its real sizes and CRC: the file is seekable, no data descriptor), the data, the central
-//! directory, the end record; deflate is raw zlib deflate at the entry's level (zlib-rs).
+//! directory, the end record; deflate is zlib's own raw deflate at the entry's level (libz-sys).
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
-use flate2::{Compress, Compression, FlushCompress, Status};
 use pkgzip::{io_at, Error, Result};
 
 pub const STORED: u16 = 0;
@@ -74,20 +73,78 @@ pub struct ZipOut {
     entries: Vec<Central>,
 }
 
-/// zlib.compressobj(level, DEFLATED, -15): raw deflate of data, one call and a flush.
+extern "C" fn zalloc(_: libz_sys::voidpf, items: libz_sys::uInt, size: libz_sys::uInt) -> libz_sys::voidpf {
+    unsafe { libc::calloc(items as libc::size_t, size as libc::size_t) }
+}
+
+extern "C" fn zfree(_: libz_sys::voidpf, p: libz_sys::voidpf) {
+    unsafe { libc::free(p) }
+}
+
+/// zlib.compressobj(level, DEFLATED, -15): compress(data) (Z_NO_FLUSH), then flush() (Z_FINISH), as
+/// zipfile's writestr runs it; zlib's own deflate (libz-sys), so the bytes are the Python's.
 pub fn deflate(data: &[u8], level: u32) -> Result<Vec<u8>> {
-    let mut c = Compress::new(Compression::new(level), false);
-    let mut out = Vec::with_capacity(data.len() / 2 + 64);
-    loop {
-        let before = c.total_in() as usize;
-        let st = c
-            .compress_vec(&data[before..], &mut out, FlushCompress::Finish)
-            .map_err(|e| Error::Fail(format!("deflate: {e}")))?;
-        match st {
-            Status::StreamEnd => return Ok(out),
-            _ => out.reserve(out.capacity().max(4096)),
-        }
+    let mut z = Box::new(libz_sys::z_stream {
+        next_in: std::ptr::null_mut(),
+        avail_in: 0,
+        total_in: 0,
+        next_out: std::ptr::null_mut(),
+        avail_out: 0,
+        total_out: 0,
+        msg: std::ptr::null_mut(),
+        state: std::ptr::null_mut(),
+        zalloc,
+        zfree,
+        opaque: std::ptr::null_mut(),
+        data_type: 0,
+        adler: 0,
+        reserved: 0,
+    });
+    let r = unsafe {
+        libz_sys::deflateInit2_(
+            &mut *z,
+            level as std::os::raw::c_int,
+            libz_sys::Z_DEFLATED,
+            -15,
+            8,
+            libz_sys::Z_DEFAULT_STRATEGY,
+            libz_sys::zlibVersion(),
+            std::mem::size_of::<libz_sys::z_stream>() as std::os::raw::c_int,
+        )
+    };
+    if r != libz_sys::Z_OK {
+        return Err(Error::Fail(format!("zlib.error: Error {r} while compressing data")));
     }
+    let mut out = Vec::with_capacity(data.len() / 2 + 64);
+    let step = |z: &mut libz_sys::z_stream, inp: &[u8], finish: bool, out: &mut Vec<u8>| -> Result<()> {
+        z.next_in = inp.as_ptr() as *mut u8;
+        z.avail_in = inp.len() as libz_sys::uInt;
+        let flush = if finish { libz_sys::Z_FINISH } else { libz_sys::Z_NO_FLUSH };
+        loop {
+            out.reserve((inp.len() / 2).max(1 << 16));
+            let len = out.len();
+            let spare = out.capacity() - len;
+            z.next_out = unsafe { out.as_mut_ptr().add(len) };
+            z.avail_out = spare as libz_sys::uInt;
+            let r = unsafe { libz_sys::deflate(z, flush) };
+            let made = spare - z.avail_out as usize;
+            unsafe { out.set_len(len + made) };
+            if r == libz_sys::Z_STREAM_END {
+                return Ok(());
+            }
+            if r != libz_sys::Z_OK && r != libz_sys::Z_BUF_ERROR {
+                return Err(Error::Fail(format!("zlib.error: Error {r} while compressing data")));
+            }
+            if !finish && z.avail_in == 0 && z.avail_out != 0 {
+                return Ok(());
+            }
+        }
+    };
+    let res = step(&mut z, data, false, &mut out).and_then(|_| step(&mut z, &[], true, &mut out));
+    unsafe {
+        libz_sys::deflateEnd(&mut *z);
+    }
+    res.map(|_| out)
 }
 
 impl ZipOut {

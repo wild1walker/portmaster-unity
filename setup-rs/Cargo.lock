@@ -496,6 +496,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "libc",
+ "libz-sys",
  "pkgzip",
 ]
 

@@ -52,7 +52,7 @@ with its route.json and templates, the runtime's builds, the donors) and write t
 port.build.json, port.json, setup.env, port.env, the rendered templates, gameinfo.xml,
 testing_thread.txt and `.port_files` byte for byte (dicts in the Python's insertion order, JSON
 as `json.dumps` writes it, TOML read as tomllib reads it), and the release zip with the Python's
-entries, order, modes, fixed times and versions (deflated at level 9 with zlib-rs; the aarch64-only
+entries, order, modes, fixed times and versions (deflated at level 9 with zlib's own deflate, libz-sys's copy, as crates/apk; the aarch64-only
 release's donor APKs written again as zipfile writes them). `[port] aarch64_only` (docs/arm64.md,
 "Shipping aarch64 only") is there: the android route's port takes the mono-arm64 route, the release
 drops armhf build outputs and the donors' 32-bit players, and the zip is checked with the same scan
@@ -67,7 +67,7 @@ pmu port package mygame --donors donors --pmu tools/port/out/pmu --submission
 ```
 
 (Tested in setup-rs's image, `tools/rs.sh <worktree> cargo build -p pmu`; the crate is plain Rust
-on pkgzip, flate2 with zlib-rs and libc.)
+on pkgzip, libz-sys (zlib, static) and libc.)
 
 The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
 come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working

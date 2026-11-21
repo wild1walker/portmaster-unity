@@ -40,6 +40,7 @@ fn elf(machine: u16, bits64: bool) -> Vec<u8> {
 }
 
 fn zip(p: &Path, entries: &[(&str, &[u8])], deflate: bool) {
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
     let mut z = port::zipw::ZipOut::create(&p.to_string_lossy()).unwrap();
     for (n, d) in entries {
         let mut i = port::zipw::Info::file(n, 0o644, 6);
@@ -178,7 +179,7 @@ fn inputs(w: &Path) {
     let e32 = elf(40, false);
     let e64 = elf(183, true);
     let text: Vec<u8> = (0..20000u32).flat_map(|x| format!("line {x} of the engine\n").into_bytes()).collect();
-    for v in ["2019.4.8f1", "2021.3.4f1", "2022.2.17f1", "2017.4.40f1"] {
+    for v in ["2019.4.8f1", "2019.4.40f1", "2021.3.4f1", "2022.2.17f1", "2017.4.40f1"] {
         zip(
             &dn.join(format!("donor-{v}-mono-armv7.apk")),
             &[
@@ -268,11 +269,11 @@ UA_RENDER_PIXELS = "560000"
 [runtime_lowmem]
 UA_X = "a b"
 [files]
-plugins = ["files/animclips.py", "files/tweaks.json"]
-managed = ["files/Patch.dll"]
-assembly_patches = [{name = "Assembly-CSharp.dll", command = "{setup}/files/patch {managed} {out}", files = ["files/notes.txt"]}]
-hooks = {game = "files/game.sh"}
-extra = ["files/notes.txt"]
+plugins = ["../in/files/animclips.py", "../in/files/tweaks.json"]
+managed = ["../in/files/Patch.dll"]
+assembly_patches = [{name = "Assembly-CSharp.dll", command = "{setup}/files/patch {managed} {out}", files = ["../in/files/notes.txt"]}]
+hooks = {game = "../in/files/game.sh"}
+extra = ["../in/files/notes.txt"]
 [[questions]]
 id = "TEXTURE_QUALITY"
 question = "Texture quality? \"High\" is tested."
@@ -373,7 +374,7 @@ fn cases(w: &Path) -> Vec<Case> {
             name: "vulkan-python",
             files: vec![(
                 "cfg.toml",
-                "[port]\ntitle = 'Vk'\n[game]\nunity_versions = ['2021.3.4f1']\nsize_mb = 2000\n[convert.shaders]\nfrom = 'vulkan,gles'\n[files]\nplugins = ['files/mystep.py']\n".to_string(),
+                "[port]\ntitle = 'Vk'\n[game]\nunity_versions = ['2021.3.4f1']\nsize_mb = 2000\n[convert.shaders]\nfrom = 'vulkan,gles'\n[files]\nplugins = ['../in/files/mystep.py']\n".to_string(),
             )],
             cmds: vec![new("cfg.toml", "port", &[]), pkg("port", &[])],
             env: vec![],
@@ -417,7 +418,7 @@ fn cases(w: &Path) -> Vec<Case> {
         Case {
             name: "mono-arm64-own-toml",
             files: vec![("port/port.toml", "[port]\ntitle = 'Mono'\nroute = 'mono-arm64'\nready_marker = '.setup_done64'\n[game]\nunity_versions = ['2019.4.8f1', '2019.4.40f1']\n".to_string())],
-            cmds: vec![sv(&["port", "new", "mono", "--out", "port"]), pkg("port", &["--mono64-work", &s(&i.join("mono64"))])],
+            cmds: vec![sv(&["port", "new", "mono", "--out", "port", "--force"]), pkg("port", &["--mono64-work", &s(&i.join("mono64"))])],
             env: vec![],
             after_new: vec![],
         },
@@ -567,12 +568,14 @@ fn zip_entries(data: &[u8], tmp: &Path) -> Option<Vec<String>> {
     for e in &a.entries {
         let mut d = Vec::new();
         a.reader(e).ok()?.read_to_end(&mut d).ok()?;
+        let nested = zip_entries(&d, &tmp.with_extension("inner"));
+        // (a nested zip's own CRC and size follow its deflate streams: its entries are compared)
+        let (crc, n) = if nested.is_some() { (0, 0) } else { (e.crc, e.file_size) };
         out.push(format!(
             "{} m{} t{} d{} cv{} cs{} ev{} f{} x{:o} crc{:08x} n{} extra{:?} comment{:?}",
             e.name, e.method, e.time, e.date, e.create_version, e.create_system, e.extract_version, e.flag_bits, e.external_attr,
-            e.crc, e.file_size, e.extra, e.comment
+            crc, n, e.extra, e.comment
         ));
-        let nested = zip_entries(&d, &tmp.with_extension("inner"));
         match nested {
             Some(inner) => out.extend(inner.into_iter().map(|x| format!("  {}: {x}", e.name))),
             None => out.push(format!("  data {:016x}", fnv(&d))),
@@ -663,6 +666,12 @@ fn port_parity() {
             }
         }
         report.push(format!("{}: {} commands, {} files compared ({} zips/APKs), exits {:?}", case.name, case.cmds.len(), files, zips, rp.statuses));
+        for k in 0..case.cmds.len() {
+            if rp.statuses[k] != 0 {
+                let l = rp.stderr[k].trim_end().lines().last().unwrap_or("").to_string();
+                report.push(format!("    command {k} ({}): {}", case.cmds[k][..2].join(" "), &l[..l.len().min(200)]));
+            }
+        }
     }
     // dump_toml (what `port new` writes as port.toml for a checked game) on a resolved config
     let cfg_text = ANDROID.replace("[[questions]]\nid = \"PICTURE\"", "[[questions]]\nid = \"PIC\"");
