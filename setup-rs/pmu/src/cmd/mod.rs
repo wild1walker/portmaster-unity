@@ -14,6 +14,7 @@ mod lazy;
 mod macpkg;
 mod patch_obb;
 mod player;
+mod port;
 mod route;
 mod unpack;
 mod version;
@@ -46,6 +47,7 @@ pub const NAMES: &[&str] = &[
     "jnitrace",
     "jitwarm-seed",
     "arch-check",
+    "port",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -72,6 +74,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "jnitrace" => Some(jnitrace::run(args)),
         "jitwarm-seed" => Some(jitwarm_seed::run(args)),
         "arch-check" => Some(arch_check::run(args)),
+        "port" => Some(port::run(args)),
         _ => None,
     }
 }

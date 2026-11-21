@@ -39,6 +39,9 @@ pub struct Entry {
     pub file_size: u64,
     pub internal_attr: u16,
     pub external_attr: u32,
+    /// The central directory's extra field and comment (ZipInfo.extra, .comment).
+    pub extra: Vec<u8>,
+    pub comment: Vec<u8>,
     /// Where its local header is (with the data that precedes the archive, if any).
     pub header_offset: i64,
     /// Where the next entry (or the central directory) begins: an entry may not reach past it.
@@ -227,7 +230,7 @@ impl Archive {
             let flag_bits = u16_at(&c, 8);
             let orig_name = decode_name(take(&mut p, n_len), flag_bits)?;
             let extra = take(&mut p, x_len).to_vec();
-            take(&mut p, k_len);
+            let comment = take(&mut p, k_len).to_vec();
             let extract_version = c[6];
             if extract_version > 63 {
                 return Err(Error::Fail(format!(
@@ -250,10 +253,13 @@ impl Archive {
                 file_size: u32_at(&c, 24) as u64,
                 internal_attr: u16_at(&c, 36),
                 external_attr: u32_at(&c, 38),
+                extra: Vec::new(),
+                comment,
                 header_offset: u32_at(&c, 42) as i64,
                 end_offset: 0,
             };
             decode_extra(&mut e, &extra)?;
+            e.extra = extra;
             // (Python's integers; an offset past i64 is past the end of any file)
             e.header_offset =
                 (e.header_offset as i128 + concat).clamp(i64::MIN as i128, i64::MAX as i128) as i64;

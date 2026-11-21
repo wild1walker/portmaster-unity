@@ -42,6 +42,53 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 
 The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
+## The port packager: `pmu port new`, `pmu port package`
+
+On the porter's computer, not the handheld: crates/port is `port.py`'s `port new` and `port
+package` (and what they call: the route hooks' `port_new` of route.py's box64 part, il2cpp.py,
+mono64.py and apk.py, route.py's `port_package`), the same arguments as `python -m pmunity port
+new|package`. They read the same inputs (port.toml or a .json config, `port_template/<route>/`
+with its route.json and templates, the runtime's builds, the donors) and write the same files:
+port.build.json, port.json, setup.env, port.env, the rendered templates, gameinfo.xml,
+testing_thread.txt and `.port_files` byte for byte (dicts in the Python's insertion order, JSON
+as `json.dumps` writes it, TOML read as tomllib reads it), and the release zip with the Python's
+entries, order, modes, fixed times and versions (deflated at level 9 with zlib-rs; the aarch64-only
+release's donor APKs written again as zipfile writes them). `[port] aarch64_only` (docs/arm64.md,
+"Shipping aarch64 only") is there: the android route's port takes the mono-arm64 route, the release
+drops armhf build outputs and the donors' 32-bit players, and the zip is checked with the same scan
+as `pmu arch-check` (crates/pkgzip `arch.rs`).
+
+```bash
+pmu port new mygame --out mygame                  # mygame/port.toml is used (or --config FILE)
+pmu port package mygame --donors donors --pmu tools/port/out/pmu --submission
+```
+
+(Tested in setup-rs's image, `tools/rs.sh <worktree> cargo build -p pmu`; the crate is plain Rust
+on pkgzip, flate2 with zlib-rs and libc.)
+
+The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
+come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working
+folder) with `convert/pmunity/port_template`. What stays with the Python: `port new --data <game>`
+(the check of a game's files, `port check`; a port.toml that names `game.unity_versions` is what
+`pmu port new` takes), `port shot`, `port routes`, and hook modules named in
+`$PMUNITY_PORT_HOOKS` (pmu stops: status 2 for the first three, 1 for the last). `made_by` in
+port.build.json stays `pmunity port new`, so either packs what the other made.
+
+The parity check, `pmu/tests/port_parity.rs`, runs the Python and pmu one after the other at the
+same paths on synthetic ports (every route, `aarch64_only`, Windows/Direct3D 11, Vulkan with a
+Python plugin, asmpatch, box64, the apk route's three player layouts, error cases) and compares the
+exit status, stdout, stderr's last line, every file left (bytes and modes) and the zips entry by
+entry, then `dump_toml` on the same config for three routes. It needs a Python 3.11+ with
+`convert/requirements.txt` in a scratch venv (never in the repository); in the image, whose pip
+has no TLS, the wheels come from the host (`pip download --platform manylinux2014_aarch64
+--python-version 3.11 --only-binary=:all:`; UnityPy 1.25.4 has no Linux aarch64 wheel and the
+image no Python headers: its sdist built without the optional UnityPyBoost extension, which the
+packager never imports):
+
+```bash
+PMU_PARITY_PYTHON=<venv>/bin/python setup-rs/tools/rs.sh <worktree> cargo test -p pmu --test port_parity -- --nocapture
+```
+
 ## The setups that run pmu
 
 Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64,
@@ -118,6 +165,7 @@ Crates while the port is under way (each is built and tested on its own branch, 
 | `apk` | `apk` (apk.py): manifests (binary AXML, an App Bundle's protobuf XML), the ABI choice, OBBs, PlayerSettings on `unityfs`, zips read with `pkgzip` and written as zipfile writes them (deflate: zlib's own, `libz-sys`'s bundled copy) |
 | `wwise` | `pmu wwise` (no Python twin): soundbanks of version 128 (BKHD, DIDX, DATA located, HIRC read object by object, each to its exact size, STMG), Wwise Vorbis rebuilt as Ogg Vorbis with ww2ogg-rs (`vendor/ww2ogg`, BSD-3-Clause, without its built-in codebooks) and the codebooks found in the game's own Wwise library (`codebooks.rs`), its pages packed to 4 KB (`ogg.rs`), IMA ADPCM and PCM copied, the json of docs/wwise-player.md; `--check` decodes every Vorbis packet with lewton and resolves every event |
 | `il2cpp` | `il2cpp --on-device` and `il2cpp fetch` (il2cpp.py's toolchain and build, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py, il2cpp_device_lock.py), on `pkgzip` (range reads, NSIS), `androiddata` (.NET metadata, versions, JSON) and `unityfs` (MonoManager's assembly list) |
+| `port` | `pmu port new` and `pmu port package` (port.py's packager, above): the config (DEFAULTS, merge, the resolved config, validate, port.toml written back), tomllib's and json's reading and writing as Python does them (`val.rs`, `toml.rs`, `pyjson.rs`), the templates, the route hooks, the release zip as zipfile writes it (`zipw.rs`), the setup's Python bundle's licences (`tar.rs`), on `pkgzip` |
 | `video` | the `video` step's work on one clip (pmu's own: there is no Python step): WebM read and written (EBML; SeekHead, Cues and Void left out), VP8 decoded and encoded by libvpx (vendor/libvpx: Debian 12's libvpx 1.12.0 source, the VP8 encoder and decoder configured for arm64 with NEON, compiled in by build.rs through csrc/vpx_capi.c; other architectures build without it), a 2x2 box downscale |
 
 Later (on top of `unityfs`): `android-data`, `patch-obb pack`.
@@ -657,6 +705,9 @@ in portmaster-cuphead and is built in).
 
 ## What is left, and why
 
+- `port check` and `port new --data <game>` (the check of a game: assemblies, serialized files,
+  plugins, asmpatch's survey), `port shot`, `port routes`: the Python's. `pmu port new` makes a port
+  from a port.toml that names `game.unity_versions`, as every port's own repository has it.
 - `il2cpp` and `apk --il2cpp` without `--on-device` (the Docker route of a porter's PC:
   tools/il2cpp/root.sh's folders in a stock container): status 2. pmu is for the handheld; a PC
   runs the Python.

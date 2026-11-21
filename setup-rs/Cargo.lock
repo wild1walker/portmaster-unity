@@ -477,13 +477,26 @@ dependencies = [
  "androiddata",
  "apk",
  "convert",
+ "crc32fast",
+ "flate2",
  "fmod",
  "il2cpp",
  "libc",
  "pkgzip",
+ "port",
  "serde_json",
  "unityfs",
  "wwise",
+]
+
+[[package]]
+name = "port"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "libc",
+ "pkgzip",
 ]
 
 [[package]]

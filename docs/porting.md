@@ -22,6 +22,11 @@ PM_7ZZ=<PortMaster's 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.z
 python -m pmunity port package mygame --donors donors --submission   # + mygame/out/submission/mygame/ for PortMaster's repository
 ```
 
+`port new` from a port.toml and `port package` are also in Rust, the same arguments and the same
+files: `pmu port new mygame --out mygame` (a port.toml that names `game.unity_versions`; `--data`,
+the check of a game, stays with the Python) and `pmu port package mygame --donors donors`
+(docs/rust-setup.md, "The port packager").
+
 `<game>` is the folder of a desktop build as you have it (the one with the executable and
 `<Game>_Data`), a macOS `<Game>.app`, or the data folder itself; or the game's own Android build
 (an `.apk`, with its `.obb` files beside it, an `.xapk`, `.apks` or `.aab`, or a folder of them: the
@@ -363,6 +368,11 @@ checks the game and writes `<out>` (default `./<name>`):
 | `README.md` | the port's README in PortMaster's layout: `## Notes` (a thank-you to the game's makers, what to put where, what the route needs), `## Controls` (the `[controls]` table), `## Compile` (the commands that build the release from a portmaster-unity checkout) |
 | `testing_thread.txt` | the post for PortMaster's Discord testing channel that goes with the test zip: how to install it, the game's link, the instructions, the controls, the firmware and screen checklist (not in the zip) |
 | `package.sh` | the release build (`port package`) |
+
+`pmu port new <name> [--config port.toml|.json] [--out DIR] [--route R] [--title T] [--player PKG]
+[--force]` (setup-rs, crates/port) writes the same folder, byte for byte, from a port.toml that names
+`game.unity_versions` (a port's own repository has one): everything but the check, so `--data`,
+`port check` and the check's suggestions stay with the Python.
 
 `port new` writes the donors the route needs for each of `game.unity_versions` into `port.toml`
 (`player.donors`, as a comment: they follow the route and the versions), `setup/setup.env`
@@ -1277,7 +1287,8 @@ python -m pmunity port package <port folder> [--out DIR] [--donors DIR] [--runti
                                [--pmhlslcc-bin FILE] [--pmspirvcross-bin FILE] [--no-build]
 ```
 
-(or the port's `package.sh`, `DONORS=<dir>`) builds `<out>/<name>.zip` (default `<port>/out/`): the
+(or the port's `package.sh`, `DONORS=<dir>`; or `pmu port package` with the same options, the same
+zip: docs/rust-setup.md, "The port packager") builds `<out>/<name>.zip` (default `<port>/out/`): the
 launcher and the port folder, the donors (`--donors DIR`, else `$DONORS`: each of `player.donors`
 into `<name>/donor/`, with `licenses/LICENSE.unity-donor.txt`; a missing one stops the build,
 section 5), `ua_host` (`runtime/host/out/`, built with `runtime/build.sh` when missing), the
@@ -1584,7 +1595,11 @@ module `pmunity.<name>` with a name in `port.HOOK_MODULES` (`route`, `box64`, `i
 | `port_new(ctx)` | the port being written: `ctx.cfg`, `ctx.out`, `ctx.route`, `ctx.write(rel, data, mode)` | add files (e.g. a plugin map, an on-screen keyboard's settings) |
 | `port_package(ctx)` | the release being assembled: `ctx.cfg`, `ctx.port_dir`, `ctx.runtime`, `ctx.add(src, rel, mode)`, `ctx.license(name, path=, text=)` | add binaries and their licences (e.g. box64, an ARM plugin build) |
 
-A new route is a template folder (section 2); `port new --route <name>` uses it.
+A new route is a template folder (section 2); `port new --route <name>` uses it. `pmu port`
+(setup-rs's crates/port) has the hooks of route.py, il2cpp.py, mono64.py and apk.py built in and
+runs no Python module: a port that needs another hook module is made with `python -m pmunity port`
+(pmu stops when `$PMUNITY_PORT_HOOKS` names one), and a hook added to those four is added to
+crates/port's `new.rs` or `package.rs` too.
 
 ## 12. Submitting to PortMaster
 
