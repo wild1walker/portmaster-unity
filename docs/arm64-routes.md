@@ -1187,7 +1187,7 @@ by the median second of the fight Knulli is equal and muOS 1 - 2 fps apart betwe
 | 3 | UnityMain, load misses | +0.9 - 1.3 M, paid back by fewer instructions and mispredicts | libunity, managed | prefetch sites per game |
 | 4 | libmali's own thread (`mali-cmar-backe`) | +0.4 - 0.8 M cycles | libmali-64 | - |
 | 5 | memory | resident +16 - 50 MB (King's Pass 649 -> 691 - 701 MB Knulli, 675 -> 691 - 698 muOS; boss 680 -> 730, 696 -> 735) | pointers | `UA_MONO64_ASSEMBLIES=scripting` (opt-in, ~10 MB) |
-| 6 | G350: hangs | see below | libmali / kernel or memory at the load | needs the handheld |
+| 6 | G350: hangs | see below | not found (not memory, not every 64-bit start) | a hang caught with the logger running |
 
 **Tried against it, not kept:**
 
@@ -1209,17 +1209,121 @@ by the median second of the fight Knulli is equal and muOS 1 - 2 fps apart betwe
 blob exports 114 OpenCL and Vulkan entry points (`cl*`, `vk*`) and the 32-bit one none: most of the 3x is whole
 APIs the 32-bit build leaves out, not the GLES path, whose hot code is 116 KB against 91 KB (above).
 
-**The G350** (2026-11-21, two sessions between power cycles; EmulationStation left running in these runs, as a
-player's launch has it: profbench's `STOP_ES` knows only init scripts): King's Pass 20 s, 32 64 64 32: 43.5, 43.6
-against 44.2, 44.3 fps from a cool start (GPU 520 MHz, CPU 1.27 - 1.29 GHz); a 90 s 32-bit run 31.1 fps (CPU
-1.17 GHz, GPU 485 MHz on average, SoC 62 - 71 C); no 90 s 64-bit figure: the handheld stopped answering at the
-start of the 64-bit run both times one followed other runs. The counters there under-count with this many
-threads (the A35's fewer counters) and are not tabled; in ratio the GL thread's cycles are +20 % on 64-bit,
-nearly all instruction fetch, and UnityMain's lower.
-Hangs by build since 2026-11-19, from the helpers' result folders (a hung run leaves none, so the starts are
-approximate): 64-bit about 48 starts, 6 hangs (11-19 twice, 11-20 twice, 11-21 twice); 32-bit about 30 runs, none
-(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). About one
-64-bit start in eight: this, not the frame rate, is what stands between the G350 and an aarch64-only port.
+**The G350** (2026-11-21, three sessions between power cycles; EmulationStation left running in all of them, as
+a player's launch has it: profbench's `STOP_ES` knows only init scripts). King's Pass:
+
+| | 32-bit | 64-bit |
+|---|---|---|
+| 20 s from a cool start (32 64 64 32) | 43.5, 43.6 | 44.2, 44.3 |
+| 90 s (32 64 64 32, one hold) | 43.7, 43.5 | 43.6, 43.6 |
+| 60 - 90 s, each right after the last (the 32-bit runs with 60 MB held in /dev/shm) | 43.7, 43.7, 43.8, 44.0 | 13 runs: 42.4, 43.7, 43.8, 43.8, 43.9, 43.9, 44.0 six times, 44.1 |
+| lowest MemAvailable in a run / the game resident | 290 MB / 502 MB (231 - 235 with the 60 MB held) | 316 - 327 MB / 511 - 520 MB |
+
+Equal frame rates (the GPU sits at 480 - 520 MHz and is the limit with EmulationStation running) and more memory
+left on 64-bit. The first game run after a boot is slow on either build (the title screen at 30.2 fps, King's
+Pass 31.1 fps on 32-bit and 31.6 on 64-bit in two such runs: paced at half the refresh rate); every later run is
+as above. The counters there under-count with this many threads (the A35's fewer counters) and are not tabled; in
+ratio the GL thread's cycles are +20 % on 64-bit, nearly all instruction fetch, and UnityMain's lower.
+
+*Hangs.* The handheld stopped answering twice that day, both at the start of a 64-bit run: the fifth run after one
+power cycle and the second after the next. After the third power cycle a logger ran beside every run (a line a
+second appended and fsynced to the card: MemAvailable, the game's resident size, the Mali's pages from its
+debugfs, temperatures, clocks; the kernel log followed into a second file): 22 runs, 16 of them 64-bit, in the
+orders that had hung (64-bit right after 32-bit, 64-bit after 64-bit, the same 90 s list again), without a hang
+and without a line from the Mali or the kernel in the log; the Mali's memory goes to 36,000 pages (140 MB) in a
+run and back to its 3,400 - 5,300 after it, memory is never short. So the hang is neither memory pressure (it also
+came once at 481 MB available, 2026-11-20) nor each 64-bit start; what sets it off is not found.
+By build since 2026-11-19, from the helpers' result folders (a hung run leaves none, so the starts are
+approximate): 64-bit about 64 starts, 6 hangs (11-19 twice, 11-20 twice, 11-21 twice); 32-bit about 36 runs, none
+(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). Until a
+hang is caught with the logger running (`/roms/uatest/gap64hunt/glog.sh`; the last second is then on the card),
+this, not the frame rate or memory, stands between the G350 and an aarch64-only port.
+
+### Heat-soaked: eleven minutes a build (2026-11-21)
+
+The 25 s runs start cool; a player's session does not. King's Pass standing, Knulli, 660 s measured, no counters,
+each run its own hold after the lock's cooling wait (to 50 C at the sensor; the handheld's body is not that cool
+after the first run), order 32 64 64 32. Frames a second by minute, the GPU's clock and the CPU zone's
+temperature by minute:
+
+| run | fps, minutes 1 - 11 | GPU MHz by minute | CPU zone C, first -> last minute | seconds at 696 MHz | minutes 6 - 11 |
+|---|---|---|---|---|---|
+| 32-bit, first (the handheld cold) | 55.2 55.8 55.6 54.8 54.1 53.4 53.3 53.3 52.9 53.3 52.8 | 696 x6, then 600 | 65 -> 72 | 353 | 53.2 |
+| 64-bit | 53.4 53.2 53.2 53.2 53.2 53.4 53.2 52.9 53.2 53.3 52.7 | 616, then 600 | 69 -> 74 | 30 | 53.1 |
+| 64-bit | 52.9 54.2 55.0 52.9 53.2 53.2 53.2 52.9 53.2 53.2 52.8 | 601 651 667, then 600 | 69 -> 74 | 77 | 53.1 |
+| 32-bit, last | 54.4 53.5 53.9 52.7 53.4 53.3 53.2 52.4 52.9 53.5 52.9 | 649 603 635, then 600 | 69 -> 75 | 128 | 53.0 |
+
+Once warm the two builds run the same 53 fps at the same 600 MHz and the same temperatures: at that clock the GPU
+is the limit (UnityMain 86 - 88 % of a core on 64-bit, 94 % on 32-bit) and it does the same work for both. The
+first run's four minutes at 696 MHz are the cold handheld, not the build: the second 32-bit run, started as warm
+as the 64-bit ones (69 C in its first minute), is at 600 MHz from its second minute like them. What is left of a
+difference is the time before the governor steps down from a warm start (128 s against 30 and 77 s: one run
+against two, within what two runs of one build differ by).
+
+**All of the game's CPU work, King's Pass** (Knulli, the census's second runs, % of one core on a CPU; every
+thread above 1 %; the handheld's own processes add 8 - 10 % on either build):
+
+| thread | 32-bit | 64-bit | |
+|---|---|---|---|
+| UnityMain | 97 | 97 | both |
+| UnityGfxDeviceW (render thread) | 63 | 71 | +8: the 64-bit libmali's instruction fetch |
+| Job.Worker_0 | 34 | 35 | both |
+| FMOD mixer | 30 | 28 | both |
+| mali-cmar-backe (the driver's thread) | 17 | 19 | +2 |
+| ua_host (main), Background_Job, ua_flip (ours: 2) | 3, 3, 2 | 3, 3, 2 | both |
+| sum | 249 | 258 | +3.6 % |
+| GPU active | 91.7 % at 696 MHz | 93.0 % at 696 MHz | the same frame |
+
+The 64-bit build's own share of the heat is that +9 % of a core, all of it inside the driver. Everything larger
+is paid by both builds alike (UnityMain, the job worker's wake-ups, FMOD's mixer), and each of those was measured
+before by frame rate and by clock residency ([profiling.md](profiling.md): the job workers, `UA_FUTEX_SPIN`, the
+mixer's rate).
+
+### Memory, by mapping (2026-11-21)
+
+The same installs on muOS (no swap), the 64-bit one with the Mono the ports ship (8-byte granules, the managed
+allocator: the handhelds' `lib-gG8` copies still carried the build before the allocator, which the frame-rate
+census above ran with; it changes no frame rate), 1 MB allocator blocks, `UA_MEM_LEDGER=1`, the game's
+`/proc/<pid>/smaps` taken after the plan's last step, one run each. Resident MB:
+
+| | King's Pass 32 | King's Pass 64 | boss 32 | boss 64 |
+|---|---|---|---|---|
+| game resident at the end of the run / MemAvailable | 686 / 239 | 707 - 709 / 250 | 721 / 207 | 732 / 184 |
+| anonymous + brk (cannot be reclaimed) | 476 | 460 | 486 | 506 |
+| - Unity's allocators (libunity's mappings) | 293 | 231 | 297 | 271 |
+| - Mono's collector heap (mapped; reachable after a full collection) | 112 (69) | 144 (93) | 112 (61) | 144 (82) |
+| - malloc (in use in the arenas + mmapped chunks) | 51 + 22 | 71 + 3 | 55 + 22 | 75 + 4 |
+| file pages (reclaimable): assemblies | (in malloc: read from the APK, 22) | 20 - 21 | (22) | 22 |
+| file pages: libmali / libunity / libmono text, the rest | 11.5 / 18.6 / 6.8, 10 | 23.3 / 18.7 / 3.5, 15 | 11.5 / 18.6 / 6.8, 10 | 4.0 / 8.2 / 3.2, 7 |
+
+(The ledger run of the 32-bit build holds a 16 MB table of its own, taken off. The driver's `/dev/mali0` mappings
+are not in a process's resident count on either build. File pages resident at a snapshot depend on what the page
+cache still holds: the 64-bit libmali's 23 against 4 MB are the same code in two runs.)
+
+- **The gap is 11 - 22 MB resident, and at King's Pass none of it is memory the kernel cannot take back**: the
+  64-bit build's anonymous memory is 16 MB *lower* there (Unity's allocators -62 MB with 1 MB blocks against
+  Mono's heap +32 and malloc +20, the assemblies' 22 MB apart), and its assemblies are file pages where the 32-bit
+  player holds them as heap blocks (it reads them out of the APK). MemAvailable follows: 250 against 239 MB. At the
+  boss (two scenes later) Unity's allocators have grown 40 MB on 64-bit against 4 on 32-bit (larger blocks, more of
+  them partly used) and the anonymous total is 20 MB higher.
+- **Mono's heap, +32 MB**: the same 1.3 - 1.5 M objects take 82 - 93 MB instead of 61 - 69 (pointers), the heap
+  grows in 16 MB steps and `UA_GC_BUDGET`'s 32 MB sits on top on both; the 64-bit build takes three budget
+  collections on the way to King's Pass where the 32-bit one takes two. Smaller steps were measured before
+  (140 instead of 144 MB: not taken).
+- **malloc, +20 MB**: in the 32-bit player Mono's own blocks are 41.7 MB (`UA_MEM_LEDGER=2`), 13 MB of them
+  assemblies, 19 MB mempool chunks (2,472 blocks of 4 - 16 KB), 4.6 MB in 263 K blocks of 64 bytes or less;
+  libunity's 12 MB are assemblies but 1 MB. On 64-bit the same metadata is pointers for the most part (Mono's
+  counters: `MonoClass` 3.2 -> 6.7 MB, inflated classes 1.8 -> 3.2, inflated methods 1.1 -> 1.7, `MonoMethod` 0.8
+  -> 1.2): about 28 -> 48 MB by the arena totals (an estimate: the ledger does not follow our glibc-built Mono). glibc's settings are in effect process-wide (`mallopt` before any thread starts:
+  2 arenas, 4 MB free in them, 2 - 4 MB in 3 - 7 mmapped chunks), so none of the +20 is freed memory kept.
+- **`UA_MONO64_ASSEMBLIES=scripting`** (King's Pass, one run against one): resident 707 -> 703 MB, MemAvailable
+  250 -> 258, the assemblies' mapping 33.8 -> 25.7 MB, malloc 73 -> 71 MB. Exact for a game that was a Mono player
+  (it loads what Unity's Mono player loads); before it is a default each game has to be started, loaded and saved
+  with it once, since code that looks a type up by name in a class library not yet loaded, or walks
+  `AppDomain.GetAssemblies()`, sees the Mono player's list instead of IL2CPP's. Left opt-in: 4 - 8 MB.
+
+Nothing here is worth a patch today: the two terms that are the 64-bit build's own (Mono's heap and metadata,
++50 MB) are pointer width, and Unity's 1 MB blocks already pay them back at King's Pass.
 
 ## The BattleXP G350 (RK3326): the min-spec handheld, 32-bit against 64-bit (2026-11-20)
 
