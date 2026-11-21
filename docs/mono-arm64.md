@@ -760,10 +760,37 @@ A B pairs in one hold, runs with the same fonts held compared:
 
 The frame rate is the same within the runs' spread (4 MB blocks: the same), frames over 50 ms the same.
 It changes where Unity's allocations lie and how much freed memory its allocators keep, not what the
-engine computes: the picture and play are the same. Not yet a default: measured on one game (6000.0),
-and the launch-to-scene time of these runs varies by up to 8 s either way, which a load-heavy route
-should settle first (the G350's loads especially). The setting for a port's `port.env`:
+engine computes: the picture and play are the same. The setting (the 64-bit build's default since
+2026-11-20, below; for the 32-bit build or a port's own choice, `port.env`):
 `UA_BOOT_CONFIG='memorysetup-main-allocator-block-size=1048576 memorysetup-thread-allocator-block-size=1048576 memorysetup-gfx-main-allocator-block-size=1048576 memorysetup-gfx-thread-allocator-block-size=1048576'`.
+
+**On a load-heavy path, and the default** (2026-11-20). A room tour: from the Town bench save, the game
+sent through 24 of the early game's scenes by their own doors (`GameManager.BeginSceneTransition`, the
+hk-ram-heap tools' `uatour.dll` through the flip-book loader), 5 s of play in each, 42 - 43 room loads in
+330 s, the 64-bit build (6466ebf's runtime) with the port's 1 GB settings (`hk-unload` at 150 MB), each
+run in its own hold from a cool handheld, A B B A:
+
+| handheld | blocks | room loads | fps | loads over 300 ms, average | Unity reserved, largest | lowest available |
+|---|---|---|---|---|---|---|
+| RG34XX-SP (muOS, no swap) | 16 MB | 43, 42 | 51.2, 51.0 | 562, 556 ms | 393, 393 MB | 124, 125 MB |
+| | 1 MB | 43, 43 | 51.1, 51.0 | 560, 556 ms | 298, 327 MB | 173, 143 MB |
+| RG34XX-SP (Knulli, zram) | 16 MB | 43, 42 | 51.8, 51.1 | 608, 616 ms | 393, 441 MB | 80, 37 MB |
+| | 1 MB | 42, 43 | 51.9, 51.5 | 594, 597 ms | 330, 333 MB | 99, 93 MB |
+
+No crash, the same frame rate and the same load times; Unity's reserved memory 60 - 110 MB lower and the
+tour's lowest point 20 - 55 MB higher. So the 64-bit build now passes these four lines to boot.config
+itself when `UA_BOOT_CONFIG` is unset (runtime/jni/up_android.c; `UA_BOOT_CONFIG=0` turns it off, a value of
+the port's own replaces it); keys a Unity version does not know are ignored by it. The 32-bit build keeps
+the data's boot.config. On the G350 King's Pass with the same assets held gives 209 MB available against
+179 (arm64-routes.md, "The BattleXP G350"); its own tour pair is not in: the G350 hung during the 1 MB run
+of it (the 16 MB run before it passed, 39 loads, lowest 166 MB available), as it had in a plain 64-bit run
+earlier that day and on the 32-bit build before (2026-11-08, -09). The GL flight recorder's last record
+of that run: inside `glBindFramebuffer` (the driver's pass submit), frame 3067, the game at 665 MB
+resident: a hang in libmali / the GPU (the 18 fps before it are the recorder's own synced writes). The
+rest of the G350's tour, with the recorder on and this build: 16 MB blocks 39 loads, lowest 166 MB and 39
+loads, 119 MB; 1 MB blocks (the default) 38 loads, 154 MB; Unity's reserved 330, 378 against 305 MB.
+With a muOS run without `UA_BOOT_CONFIG`, the default was checked: `boot.config: memorysetup-...=1048576 (the
+64-bit default)` four times in the log, Unity's reserved memory 274 MB.
 
 ### Where that leaves the 64-bit build
 

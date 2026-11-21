@@ -724,10 +724,23 @@ static int apk_read_asset(const char *apk, const char *name, char **out, size_t 
  * lines, a key the data has replaced, as if the data had them: Unity's settings it reads before the command line
  * (the memorysetup-* sizes of its allocators: MemoryManager reads them before the command line is parsed, so
  * -memorysetup-... in UA_UNITY_ARGS comes too late). The APK is not changed. */
+#if defined(__aarch64__)
+/* the 64-bit build's default when UA_BOOT_CONFIG is unset: Unity's main, thread and graphics allocators take
+ * memory in 1 MB blocks instead of 16 MB (a block stays while anything in it lives; docs/mono-arm64.md, "Unity's
+ * allocator blocks"). Where allocations lie, not what the engine computes. UA_BOOT_CONFIG=0 (or any value of
+ * its own) leaves it out. Lines with keys a Unity version does not know are ignored by it. */
+static const char BOOT_CONFIG_DEFAULT[] =
+    "memorysetup-main-allocator-block-size=1048576 memorysetup-thread-allocator-block-size=1048576 "
+    "memorysetup-gfx-main-allocator-block-size=1048576 memorysetup-gfx-thread-allocator-block-size=1048576";
+#endif
+
 static void boot_config_merge(stream *s)
 {
     const char *e = getenv("UA_BOOT_CONFIG");
-    if (!e || !*e) return;
+#if defined(__aarch64__)
+    if (!e) e = BOOT_CONFIG_DEFAULT;
+#endif
+    if (!e || !*e || !strcmp(e, "0")) return;
     char *spec = strdup(e);
     size_t cap = s->len + strlen(e) + 64;
     char *out = malloc(cap);
@@ -754,7 +767,7 @@ static void boot_config_merge(stream *s)
     for (char *t = strtok(spec, " ;\t\n"); t; t = strtok(NULL, " ;\t\n")) {
         if (!strchr(t, '=') || n + strlen(t) + 2 > cap) continue;
         n += (size_t)sprintf(out + n, "%s\n", t);
-        up_log("boot.config: %s (UA_BOOT_CONFIG)", t);
+        up_log("boot.config: %s (%s)", t, getenv("UA_BOOT_CONFIG") ? "UA_BOOT_CONFIG" : "the 64-bit default");
     }
     out[n] = 0;
     free(spec); free(s->buf);

@@ -890,3 +890,94 @@ pools) is years of work. Recorded for completeness.
 Routes 1 + 2 + 6 together reach the 1.5 - 1.9 ms the 64-bit build needs; 3 - 5 are margin. Route 1 is the
 first prototype: one hook, measurable in a day, and it pays on both builds and every Unity game that uses
 Unity's built-in audio.
+
+## The BattleXP G350 (RK3326): the min-spec handheld, 32-bit against 64-bit (2026-11-20)
+
+The G350 (dArkOS, RK3326: four Cortex-A35 cores up to 1.512 GHz, Mali-G31 with r13p0 GBM libmali for each
+userland, 895 MB, no swap) is the handheld this toolkit has to be fast enough on. Hollow Knight at King's
+Pass, the port's 1 GB settings (`UA_PRESENT_THREAD=1`, `UA_GL_REC=auto`: Unity's GL replayed on ua_host's GL
+thread, one job worker), the same 32-bit and 64-bit installs as on the RG34XX-SPs (the 64-bit one with
+6466ebf's runtime: 8-byte granules and the managed allocator), EmulationStation stopped
+(`systemctl stop emulationstation`: profbench's `STOP_ES` knows only the init scripts of Knulli and muOS),
+`tools/device/profbench.sh` 25 s from a cool handheld, `HWCOUNT=1` on UnityMain, Unity's render thread and
+the GL thread. Per-thread CPU from `/proc/<pid>/task/*/stat` (this 4.4 kernel has no schedstat).
+
+| run | build | fps | UnityMain | render thread | GL thread | job worker | FMOD threads | lowest available | CPU clock (avg of samples) |
+|---|---|---|---|---|---|---|---|---|---|
+| y32a | 32-bit | 39.3 | 24.4 ms | 8.3 | 12.5 | 8.7 | 11.7 | 263 MB | 1377 MHz |
+| y64a | 64-bit | 37.1 | 25.3 | 8.7 | 15.4 | 9.2 | 11.3 | 221 MB* | 1266 |
+| y32b | 32-bit | 38.8 | 24.5 | 8.4 | 12.6 | 8.8 | 12.1 | 266 MB | 1338 |
+| y64b | 64-bit | 36.6 | 25.8 | 8.9 | 16.4 | 9.4 | 11.8 | 225 MB* | 1293 |
+| m32 | 32-bit (40 s) | 39.7 | 24.2 | 8.0 | 12.1 | 8.7 | 11.9 | 263 MB | 1271 |
+| m64 | 64-bit (40 s) | 37.5 | 25.4 | 8.4 | 15.7 | 9.2 | 11.7 | 219 MB* | 1191 |
+| b64a | 64-bit | 36.3 | 25.8 | 8.8 | 15.9 | 9.5 | 12.1 | 179 MB | 1219 |
+| a64n | 64-bit | 38.4 | 24.6 | 8.4 | 15.4 | 9.1 | 10.6 | 179 MB | 1422 |
+
+(ms of CPU a frame; \* runs in which the two CJK fonts of `UA_UNLOAD_ASSETS` stayed given back, about 40 -
+45 MB: like for like, with the fonts held as every 32-bit run holds them, the 64-bit build leaves 179 -
+180 MB against 263 - 266.) The gap: 2.0 - 2.2 fps (5 - 6 %) and about 85 MB.
+
+**The counters** (a frame's worth, two runs of each build):
+
+| a frame | UnityMain 32 / 64 | render thread 32 / 64 | GL thread 32 / 64 |
+|---|---|---|---|
+| cycles (user) | 28.1, 27.0 / 29.6, 28.9 M | 8.2 / 9.3 M | 13.5, 13.3 / 17.0, 17.1 M |
+| instructions | 5.49, 5.10 / 4.62, 4.87 M | 1.98 / 2.10 M | 2.35, 2.33 / 2.27, 2.24 M |
+| L1I accesses | 6.1 / 6.1 M | 2.2 / 2.7 M | 2.57 / 3.10 M |
+| L2 refills | 130 / 148 K | 35 / 39 K | 66 / 91 K |
+| cycles stalled on an i-cache miss | 7.2, 6.9 / 8.2, 7.9 M | 2.5 / 3.2 M | 5.5, 5.4 / 8.7, 8.8 M |
+| cycles stalled on a load miss | 11.3, 11.1 / 12.5, 12.7 M | 2.7 / 2.8 M | 4.0, 3.8 / 4.7, 4.7 M |
+
+- **The GL thread is most of the G350's gap, and all of it is instruction fetch.** The 64-bit libmali
+  (40.9 MB file, r13p0 like the 32-bit one's 30.2 MB) runs the same frame in *fewer* instructions, but its
+  code takes 22 % more L1I accesses and refills and 38 % more L2 refills (code from DRAM), and the
+  i-cache stall cycles grow by 3.3 M of the 3.6 M extra cycles. The A35's L2 is a quarter of the H700's
+  (RK3326: 256 KB shared by the four cores; the H700's is 1 MB), so a 64-bit driver whose sampled hot code
+  spreads over 182 pages (32-bit 150) misses it far more than on the RG34XX-SP (where the render thread's
+  i-cache stalls grew 4.7 -> 7.0 M). By GL call (`UA_GL_REC=time`, the same scene, a frame): every state call is
+  as fast or faster on 64-bit (`glVertexAttribPointer` 2.7 -> 2.1 us, `glUniform4fv` 3.7 -> 2.9,
+  `glMapBufferRange` 1.9 -> 1.2); the loss is in the calls that run the driver's big paths:
+  `glDrawElements` 88.6 -> 104.8 us (87 a frame: +1.4 ms), `glBindFramebuffer` (a pass's flush) 249 -> 286 us
+  (15: +0.6 ms), `glInvalidateFramebuffer`, `glClear`. The same 1,880 calls a frame on both builds.
+- **UnityMain** +1.2 - 1.5 M cycles, half instruction fetch, half load misses (L2 refills 130 -> 148 K):
+  the RG34XX-SP's picture on a smaller L2 (routes 1 - 3 above apply unchanged).
+- **The clock.** dArkOS's thermal governor is `power_allocator` (sustainable 750 mW, control at 85 C), and
+  25 s of King's Pass take the SoC to 76 - 80 C: the CPU's clock is whatever its share of the power budget
+  buys, 1008 - 1512 MHz changing several times a second. The 64-bit runs average 6 - 8 % less (1191 - 1293
+  against 1271 - 1377 MHz): the same budget spread over more busy cycles and more DRAM traffic. On this
+  handheld a cycle saved on *any* thread (the GL thread, the mixer) is clock for UnityMain, not only a
+  cycle saved on the frame's critical path; the per-second fps does not follow the per-second clock
+  sample (the governor moves faster than a second), so run-to-run spread is 1 - 2 fps and A/B pairs need
+  several runs.
+- **Not it**: the profiles (`UA_PROF=200` on every busy thread, both builds) show the same shares by module
+  except the driver's; the futex `syscall` samples on the job worker (32 - 35 % of its on-CPU samples) and the
+  render thread (23 %) are threads woken and waiting for a core (their kernel time is 0.6 - 0.8 s of 25 s),
+  the same on both builds. Leaving out repeated GL state (`UA_GL_STATE=1`): 36.7, 37.0 fps against 36.3
+  (it acts on the render thread's calls only, not the GL thread's replay). FMOD's update on a worker
+  (`UA_FMOD_ASYNC=1`, route 1): UnityMain -1.5 M cycles a frame, 38.3 fps against 38.4 in the same hold
+  (the 25 s runs' spread). UnityMain on a core of its own (`UA_AFFINITY='UnityMain:3 *:0-2'`): 38.8; with
+  both 38.3; `UnityMain:3 ua_glthread:2 *:0-1` 38.0 (another hold): within the spread.
+
+**What is left for the G350**: the libmali code footprint, the one cost the RG34XX-SPs barely see; its
+relayout was tried and stopped (above, "libmali's hot code relaid out"), so the GL thread's +3.3 M stall
+cycles stay the driver's. Routes 1 - 3 on libunity apply as on the RG34XX-SPs (`UA_PREFETCH`, the relayout:
+their G350 rows above). Memory: Unity's 1 MB allocator blocks (now the 64-bit default,
+[mono-arm64.md](mono-arm64.md#unitys-allocator-blocks-the-largest-memory-lever-both-builds)) give the G350
++30 MB like for like (m64k 209 MB against b64a 179 MB, fonts held).
+
+**A hang** (2026-11-20 20:34 device time): the G350 stopped answering (USB link up, no ARP) 30 s into a
+plain 64-bit run, four seconds after the title screen's first frames on the GL thread (60 fps, 481 MB
+available, nothing loading); the last log lines are `[glrec] thread: the GL thread replays the frames
+...`, the first title frames and `[dump] UA_UNLOAD_ASSETS: none of them loaded at 21 s`. A power cycle
+brought it back. The game's player prefs were being written at that moment and came back empty: that is
+how the 64-bit install's prefs had lost `GameLangSet` earlier that day (its runs then stopped at the
+language screen). The G350 has hung on the 32-bit build as well (2026-11-08 after a long series of runs,
+2026-11-09 in City of Tears with 126 MB held), so this is not yet known to be the 64-bit build's.
+A second hang the same evening came in a 64-bit room tour (1 MB allocator blocks, about 7 min in) run
+with ua_host's GL flight recorder (`UA_GL_REC_BLACKBOX`, a 4 KB record rewritten and synced before each
+submit and around each swap): its last record is frame 3067, stage `pass`, inside `glBindFramebuffer` (the
+driver's submit of a pass), with the game at 665 MB resident (the stretch at 18 fps with 197 ms hitches
+before it is the recorder's own: its synced writes at level 2 halve the G350's frame rate, King's Pass 40.5
+fps on the 32-bit build against 19.4 on the 64-bit one with it on: a tool for hang hunting only, never for frame rates). So that hang was inside libmali / the
+GPU's kernel side during a pass submit, not in ua_host's threads; the same build passed the tour's other
+three runs (16 MB blocks twice, 1 MB once) and a 90 s King's Pass run with the recorder on.
