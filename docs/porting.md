@@ -1687,6 +1687,29 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
   find them without it (`/lib/ld-linux-armhf.so.3 --list` on `audiocheck`, 2026-11-19). Hollow Knight's
   launcher keeps it for `ua_host`: 197 merged launchers put `/usr/lib32` first the same way (gmloader
   ports such as Fran Bow), so it is the usual line, and ROCKNIX and AmberELEC were not checked.
+  (PortMaster's `control.txt` itself appends `/usr/lib32` on JELOS, UnofficialOS and firmwares with
+  `/storage/.config/.OS_ARCH` or no `$ESUDO`, which takes in ROCKNIX and AmberELEC.)
+- `PORT_32BIT="Y"` before the mod file, on the 32-bit build (pmcheck 0.2.31 warns without it):
+  ROCKNIX's, Knulli's, JELOS's, UnofficialOS's and Batocera's `mod_*.txt` then point PipeWire
+  (`SPA_PLUGIN_DIR`, `PIPEWIRE_MODULE_DIR`) at `/usr/lib32`, for the game's own 32-bit client. So a
+  launcher with two builds picks its route between `control.txt` and the mod line (Cuphead's has
+  since its submission, Hollow Knight's since 2026-11-21). The OpenSL shim's pipe output starts its
+  client (the system's 64-bit `pw-cat`, `pacat` or `aplay`) without those two variables (8a94435),
+  so the pipe still plays with `PORT_32BIT` set.
+- `$DEVICE_HAS_ARMHF` (`device_info.txt`) for the 32-bit userland, with the test for
+  `/lib/ld-linux-armhf.so.3` kept: `ua_host` names that loader, and the flag is also `Y` for a
+  `/lib32` or `/usr/lib32` folder alone. PortMaster has set it since 2025.
+- No gptokeyb2 config when it maps no button: `$GPTOKEYB2 "$HOST" &`. Without `-c` gptokeyb2 makes
+  no virtual keyboard and maps nothing, its exit hotkey (Start + hotkey, `state.c`) works the same,
+  and its Start + D-pad text entry only comes with `TEXTINPUTINTERACTIVE` (`config_finalise` in
+  `config.c`). The templates' `<name>.ini` (`common/hotkey.ini`: an empty `[controls]` against that
+  text entry) is not needed.
+- No `# PORTMASTER: <zip>, <script>` on line 2: harbourmaster writes it on the handheld at install,
+  so it marks a launcher copied back from one. `cd $GAMEDIR`, as in the templates, not
+  `cd "$GAMEDIR" || exit 1`. The templates (`port_template/*/launcher.sh`) still write the line,
+  pass `-c` and leave out `PORT_32BIT`: fix them there before the next submission.
+- pmcheck also notes two setup scripts that are 91 % alike (`patchscript`, `patchscript64`); Hollow
+  Knight's pull request says why they stay two (different donors, players, folders and flags).
 
 After `source "$controlfolder/utils/patcher.txt"` the launcher goes back to `$GAMEDIR` before
 anything relative (`./ua_host`): the patcher runs in the launcher's own shell, and a working directory
