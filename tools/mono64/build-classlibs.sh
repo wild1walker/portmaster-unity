@@ -29,14 +29,14 @@ B=unity-$LINE-mbe
 mkdir -p "$W/out/$B/classlibs"
 W=$(cd "$W" && pwd); O=$W/out/$B/classlibs
 PY=${PYTHON:-python3}
-VOL=${MONO64_CL_VOLUME:-ua-mono64-cl-$LINE}    # (the docker volume with the tree and the build)
+VOL=${MONO64_CL_VOLUME:-ua-mono64-cl-$LINE}    # (the docker volume with the tree and the build; an absolute path: a folder of the host)
 api() { curl -sfL "https://api.github.com/repos/$1/contents/$2?ref=$3" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
 tarball() { curl -sfL "https://codeload.github.com/$1/tar.gz/$2"; }
 commit() { curl -sfL "https://api.github.com/repos/$1/commits/$2" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
 dr() { docker run --rm -i --platform linux/arm64 -v "$VOL":/b ua-mono64-build bash -c "$1"; }
-docker volume create "$VOL" >/dev/null
+case "$VOL" in /*) mkdir -p "$VOL" ;; *) docker volume create "$VOL" >/dev/null ;; esac
 # the runtime's commit (build-mono.sh's SOURCE.txt), so runtime and class libraries are one tree
 REF=${MONO_REF:-$(sed -n 's/^[^:]*: mono \([0-9a-f]*\),.*/\1/p' "$W/src/$B/.fetched" 2>/dev/null || true)}
 if ! dr "test -f /b/src/.fetched"; then

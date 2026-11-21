@@ -89,7 +89,9 @@ cp "$D/.fetched" "$W/out/$B/SOURCE.txt"         # which commits the libraries we
 # (ua-mono64-llvm, about 3 GB: LLVM's build tree) and its own source tree, so a plain build is not
 # touched; the volume can go once out/ has the files (docker volume rm ua-mono64-llvm). About 70
 # minutes on 8 cores. The images it compiles load in the plain runtime (same sources: same version).
-VOL=ua-mono64; OUT=$W/out/$B; LLVMCONF=; LLVMDIR=
+# (MONO64_RUNTIME_VOLUME: another docker volume for the build tree, or an absolute path: a folder of the host)
+VOL=${MONO64_RUNTIME_VOLUME:-ua-mono64}; OUT=$W/out/$B; LLVMCONF=; LLVMDIR=
+case "$VOL" in /*) mkdir -p "$VOL" ;; esac
 if [ "${MONO64_LLVM:-0}" = 1 ]; then
   VOL=ua-mono64-llvm; OUT=$W/out/$B-llvm; mkdir -p "$OUT"; cp "$D/.fetched" "$OUT/SOURCE.txt"
   REF=$(sed -nE 's/.*: mono ([0-9a-f]+).*/\1/p' "$D/.fetched")
@@ -97,14 +99,14 @@ if [ "${MONO64_LLVM:-0}" = 1 ]; then
   echo "llvm-project (dotnet/llvm-project) $LL" >> "$OUT/SOURCE.txt"
   docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
   docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
-  if ! docker run --rm -v $VOL:/b ua-mono64-build test -f /b/llvm-$LL/.fetched; then
+  if ! docker run --rm -v "$VOL":/b ua-mono64-build test -f /b/llvm-$LL/.fetched; then
     echo "fetching dotnet/llvm-project $LL (llvm/ only, without its tests)"
-    tarball dotnet/llvm-project "$LL" | docker run --rm -i --platform linux/arm64 -v $VOL:/b ua-mono64-build bash -c "
+    tarball dotnet/llvm-project "$LL" | docker run --rm -i --platform linux/arm64 -v "$VOL":/b ua-mono64-build bash -c "
       set -e; rm -rf /b/llvm-$LL; mkdir -p /b/llvm-$LL/src
       tar xz -C /b/llvm-$LL/src --strip-components=2 --wildcards '*/llvm/*' --exclude='*/llvm/test/*' --exclude='*/llvm/unittests/*'
       touch /b/llvm-$LL/.fetched"
   fi
-  docker run --rm --platform linux/arm64 -v $VOL:/b -v "$OUT":/out ua-mono64-build bash -c '
+  docker run --rm --platform linux/arm64 -v "$VOL":/b -v "$OUT":/out ua-mono64-build bash -c '
 set -e
 L=/b/llvm-'"$LL"'
 # Unity'"'"'s branch passes llc -disable-fault-maps, an option of a later fork commit than the one it
@@ -154,7 +156,7 @@ fi
 # --- (end of the source patches)
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
-docker run --rm --platform linux/arm64 -v $VOL:/b -v "$D":/src:ro -v "$OUT":/out ua-mono64-build bash -c '
+docker run --rm --platform linux/arm64 -v "$VOL":/b -v "$D":/src:ro -v "$OUT":/out ua-mono64-build bash -c '
 set -e
 B='"$B"'
 [ -f /b/$B/.copied ] || { rm -rf /b/$B; mkdir -p /b/$B; cp -a /src/. /b/$B/; touch /b/$B/.copied; }
