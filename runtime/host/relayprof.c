@@ -9,6 +9,8 @@
 //       --max BYTES       stop adding functions at this many bytes (default all sampled)
 //       --min-weight W    leave out functions below W (per mille of a recording's samples; default 0)
 //       --as NAME         the library's name in the recordings (default: the file's name)
+//       --split           split functions into hot pieces (the 64-byte lines samples fell in, gaps of up to
+//                         --split-gap lines (1) filled) and cold ones laid out after every hot piece
 //       --no-callers      only the functions samples fell in (default: also every libunity function
 //                         on a sampled stack: code that runs around its calls each frame)
 //   relayprof show <lib.so> <list.txt>            the list's functions with what rl_check says
@@ -135,6 +137,29 @@ static void edge_add(int a, int b, double w)
     }
 }
 
+// --- the 64-byte lines samples (pcs and return addresses) fell in: a function's hot pieces (--split)
+static uint64_t *g_lines; static size_t g_nlines, g_caplines;
+static void line_add(uint64_t vaddr)
+{
+    if (!g_caplines) { g_caplines = 1 << 20; g_lines = malloc(sizeof *g_lines * g_caplines); memset(g_lines, 0xff, sizeof *g_lines * g_caplines); }
+    uint64_t l = vaddr >> 6, h = (l * 0x9e3779b97f4a7c15ull) >> 40;
+    for (;; h++) {
+        uint64_t *e = &g_lines[h & (g_caplines - 1)];
+        if (*e == l) return;
+        if (*e == ~0ull) { *e = l; if (++g_nlines * 2 > g_caplines) die("too many sampled lines", NULL); return; }
+    }
+}
+static int line_has(uint64_t vaddr)
+{
+    if (!g_caplines) return 0;
+    uint64_t l = vaddr >> 6, h = (l * 0x9e3779b97f4a7c15ull) >> 40;
+    for (;; h++) {
+        uint64_t e = g_lines[h & (g_caplines - 1)];
+        if (e == l) return 1;
+        if (e == ~0ull) return 0;
+    }
+}
+
 // --- UA_PROF recordings
 static char **g_threads; static int g_nthreads;
 static int thread_wanted(const char *name)
@@ -145,7 +170,42 @@ static int thread_wanted(const char *name)
     }
     return 0;
 }
-static int g_callers = 1;
+static int g_callers = 1, g_split = 0, g_split_gap = 1;
+
+// a function's hot ranges: its sampled lines (and the entry's), gaps of up to g_split_gap lines filled,
+// at most RL_MAXHOT ranges (the narrowest gaps closed first); "" if it stays whole
+static void hot_ranges(const fn_t *f, char *out, size_t n, uint64_t *hot_bytes)
+{
+    out[0] = 0;
+    *hot_bytes = f->size;
+    if (!g_split || rl_split_check(&g_im, f->start, f->size)) return;
+    uint64_t l0 = f->start >> 6, l1 = (f->start + f->size - 1) >> 6;
+    uint32_t r[2 * 256]; int nr = 0;
+    uint64_t gap = 0; int open = 0;
+    for (uint64_t l = l0; l <= l1; l++) {
+        int h = l == l0 || line_has(l << 6);
+        uint64_t a = l == l0 ? f->start : l << 6, b = (l + 1) << 6;
+        if (b > f->start + f->size) b = f->start + f->size;
+        if (h) {
+            if (open && gap <= (uint64_t)g_split_gap) r[nr - 1] = (uint32_t)(b - f->start);
+            else if (nr < 512) { r[nr++] = (uint32_t)(a - f->start); r[nr++] = (uint32_t)(b - f->start); }
+            open = 1; gap = 0;
+        } else gap++;
+    }
+    while (nr / 2 > RL_MAXHOT) {                         // close the narrowest gap
+        int best = 1; uint32_t bw = ~0u;
+        for (int i = 1; i < nr / 2; i++) if (r[2 * i] - r[2 * i - 1] < bw) { bw = r[2 * i] - r[2 * i - 1]; best = i; }
+        r[2 * best - 1] = r[2 * best + 1];
+        for (int i = 2 * best; i + 2 < nr; i++) r[i] = r[i + 2];
+        nr -= 2;
+    }
+    uint64_t hb = 0;
+    for (int i = 0; i < nr; i += 2) hb += r[i + 1] - r[i];
+    if (f->size - hb < 128) return;                      // not worth a piece
+    *hot_bytes = hb;
+    size_t k = (size_t)snprintf(out, n, " h:");
+    for (int i = 0; i < nr && k + 24 < n; i += 2) k += (size_t)snprintf(out + k, n - k, "%s%x-%x", i ? "," : "", r[i], r[i + 1]);
+}
 
 typedef struct { int idx; char name[64]; int want; double total; } pthread_t_;
 
@@ -181,7 +241,7 @@ static void read_prof(const char *path)
                 if (!have_bias || T->total <= 0) continue;
                 double w = 1e6 * cnt / T->total;
                 int f0 = pc >= bias ? fn_of(pc - bias) : -1;
-                if (f0 >= 0) g_fn[f0].self += w;
+                if (f0 >= 0) { g_fn[f0].self += w; line_add(pc - bias); }
                 // callers: lr, then the stack's return addresses
                 const char *p = line + 6 + used;
                 int prev = f0, first = 1, seen[160], nseen = 0;
@@ -198,6 +258,7 @@ static void read_prof(const char *path)
                     uint64_t a = addrs[k];
                     if (a < bias + 4) continue;
                     int fc = fn_of(a - bias - 4);      // the call instruction
+                    if (fc >= 0) { line_add(a - bias - 4); line_add(a - bias); }
                     if (fc < 0 || fc == prev) continue;
                     int dup = 0;
                     for (int j = 0; j < nseen; j++) dup |= seen[j] == fc;
@@ -248,6 +309,8 @@ static int cmd_make(int argc, char **argv)
         else if (!strcmp(argv[i], "--max") && i + 1 < argc) maxb = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--min-weight") && i + 1 < argc) minw = atof(argv[++i]) * 1000;
         else if (!strcmp(argv[i], "--no-callers")) g_callers = 0;
+        else if (!strcmp(argv[i], "--split")) g_split = 1;
+        else if (!strcmp(argv[i], "--split-gap") && i + 1 < argc) g_split_gap = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--as") && i + 1 < argc) g_libname = argv[++i];
         else if (np < 256) profs[np++] = argv[i];
     }
@@ -303,11 +366,17 @@ static int cmd_make(int argc, char **argv)
     for (int i = 0; i < np; i++) { const char *b = strrchr(profs[i], '/'); fprintf(o, " %s", b ? b + 1 : profs[i]); }
     fprintf(o, "; threads %s; cluster %llu\n", threads_shown, (unsigned long long)cluster);
     fprintf(o, "ua_relayout 1\nlib %s\nbuildid %s\nfunctions %d bytes %llu\n", g_libname, bid, nh, (unsigned long long)sum);
-    fprintf(o, "# vaddr size weight(self+stack/10, per million samples)\n");
+    fprintf(o, "# vaddr size weight(self+stack/10, per million samples) [h:hot ranges, offsets in the function]\n");
+    uint64_t hotb = 0; int nsplit = 0;
     for (int h = 0; h < nhd; h++)
-        for (int x = heads[h]; x >= 0; x = g_fn[x].next)
-            fprintf(o, "%llx %llx %.0f\n", (unsigned long long)g_fn[x].start, (unsigned long long)g_fn[x].size, weight(&g_fn[x]));
+        for (int x = heads[h]; x >= 0; x = g_fn[x].next) {
+            char hr[1024]; uint64_t hb;
+            hot_ranges(&g_fn[x], hr, sizeof hr, &hb);
+            hotb += hb; nsplit += hr[0] != 0;
+            fprintf(o, "%llx %llx %.0f%s\n", (unsigned long long)g_fn[x].start, (unsigned long long)g_fn[x].size, weight(&g_fn[x]), hr);
+        }
     fclose(o);
+    if (g_split) fprintf(stderr, "relayprof: --split: %d functions in hot and cold pieces; %llu bytes hot of %llu\n", nsplit, (unsigned long long)hotb, (unsigned long long)sum);
     fprintf(stderr, "relayprof: %s: %d functions, %llu bytes in %d clusters; %d sampled functions (%llu bytes) cannot move\n",
             out, nh, (unsigned long long)sum, nhd, bad, (unsigned long long)badb);
     return 0;
@@ -358,13 +427,13 @@ static int cmd_plan(const char *list)
 {
     FILE *f = fopen(list, "r");
     if (!f) die("cannot open", list);
-    char line[512];
-    uint64_t *st = NULL; int n = 0, cap = 0;
+    char line[2048];
+    rl_want *st = NULL; int n = 0, cap = 0;
     while (fgets(line, sizeof line, f)) {
-        unsigned long long s, z;
-        if (line[0] == '#' || sscanf(line, "%llx %llx", &s, &z) != 2) continue;
+        rl_want w;
+        if (rl_want_parse(line, &w) < 0) continue;
         if (n == cap) { cap = cap ? 2 * cap : 1024; st = realloc(st, sizeof *st * (size_t)cap); }
-        st[n++] = s;
+        st[n++] = w;
     }
     fclose(f);
     rl_plan p;
@@ -373,13 +442,17 @@ static int cmd_plan(const char *list)
     uint64_t run = (g_im.run + g_im.size + 0xfffff) & ~0xfffffull;
     char err[200];
     if (rl_plan_emit(&p, dst, run, err, sizeof err) < 0) die(err, NULL);
-    uint64_t isl = 0, used = 0, body = 0;
-    for (int i = 0; i < p.n; i++) {
-        isl += p.fn[i].isl; body += p.fn[i].size;
-        for (uint64_t o = 0; o < p.fn[i].isl; o += 4) { uint32_t w; memcpy(&w, dst + p.fn[i].at + p.fn[i].size + o, 4); used += w != 0; }
+    uint64_t isl = 0, used = 0, body = 0, hot = 0, hotend = 0, ft = 0;
+    for (int i = 0; i < p.np; i++) {
+        const rl_piece *q = &p.pc[i];
+        isl += q->isl; body += q->size; ft += q->ft ? 4 : 0;
+        if (q->hot) { hot += q->size; if (q->at + q->size > hotend) hotend = q->at + q->size; }
+        for (uint64_t o = 0; o < q->isl; o += 4) { uint32_t w; memcpy(&w, dst + q->at + q->size + (q->ft ? 4 : 0) + o, 4); used += w != 0; }
     }
-    printf("%d functions (%d left out): code %llu bytes (bodies %llu, padding %llu, islands reserved %llu, used %llu words), unwind %llu + %llu bytes\n",
-           p.n, p.skipped, (unsigned long long)p.code_size, (unsigned long long)body, (unsigned long long)(p.code_size - body - isl),
+    printf("%d functions (%d left out; %d split, %d not splittable), %d pieces: code %llu bytes (bodies %llu, hot %llu in the first %llu, "
+           "fall-through branches %llu, padding %llu, islands reserved %llu, used %llu words), unwind %llu + %llu bytes\n",
+           p.n, p.skipped, p.split, p.unsplit, p.np, (unsigned long long)p.code_size, (unsigned long long)body, (unsigned long long)hot,
+           (unsigned long long)hotend, (unsigned long long)ft, (unsigned long long)(p.code_size - body - isl - ft),
            (unsigned long long)isl, (unsigned long long)used, (unsigned long long)p.eh_size, (unsigned long long)p.hdr_size);
     free(dst); free(st); rl_plan_free(&p);
     return 0;
@@ -450,8 +523,8 @@ static int cmd_show(const char *list)
     while (fgets(line, sizeof line, f)) {
         unsigned long long s, z; double w;
         if (sscanf(line, "%llx %llx %lf", &s, &z, &w) != 3) continue;
-        const char *why = rl_check(&g_im, s, z);
-        printf("%llx %llx %.0f %s\n", s, z, w, why ? why : "ok");
+        const char *why = rl_check(&g_im, s, z), *sp = rl_split_check(&g_im, s, z);
+        printf("%llx %llx %.0f %s; split: %s\n", s, z, w, why ? why : "ok", sp ? sp : "ok");
     }
     fclose(f);
     return 0;

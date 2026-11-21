@@ -55,15 +55,36 @@ const char *rl_check(const rl_image *im, uint64_t start, uint64_t size);
 typedef struct {
     uint64_t start, size;      /* vaddr, bytes */
     uint64_t fde;              /* its FDE (vaddr) */
-    uint64_t at;               /* its copy: offset in the region */
-    uint32_t isl;              /* bytes of islands reserved after the copy */
+    uint64_t at;               /* its entry's copy: offset in the region */
+    int p0, npc;               /* its pieces: pc[p0 .. p0 + npc) in address order */
 } rl_fn;
 
 typedef struct {
+    uint64_t start, size;      /* a range of a function (vaddr, bytes) moved as one */
+    uint64_t at;               /* its copy: offset in the region */
+    uint32_t isl;              /* bytes of islands reserved after it (and its fall-through branch) */
+    int fn;                    /* its function */
+    uint8_t hot, ft;           /* in the hot part; ends in a branch to the function's next piece */
+    uint8_t *cfi; size_t ncfi; /* a piece starting inside its function: its own CFI instructions */
+    uint64_t fde_len;          /* and its FDE's bytes */
+} rl_piece;
+
+#define RL_MAXHOT 16
+typedef struct {
+    uint64_t start;            /* a function (vaddr) */
+    int nhot;                  /* 0: moved whole; else its hot ranges (offsets in it, ascending): the */
+    uint32_t hot[2 * RL_MAXHOT]; /* first holds the entry; the rest of it is laid out after every hot piece */
+} rl_want;
+
+typedef struct {
     const rl_image *im;
-    rl_fn *fn;                 /* in layout order (at ascending) */
+    rl_fn *fn;                 /* in the list's order */
     int n;
     int *by_start;             /* indices into fn, start ascending */
+    rl_piece *pc;              /* every function's pieces */
+    int np;
+    int *order;                /* pieces by `at` */
+    int split, unsplit;        /* functions split; functions whose hot ranges could not be used (moved whole) */
     uint64_t code_size;        /* copies and islands */
     uint64_t eh_off, eh_size;  /* .eh_frame of the copies */
     uint64_t hdr_off, hdr_size;/* .eh_frame_hdr */
@@ -71,11 +92,18 @@ typedef struct {
     int skipped;               /* functions rl_plan_make left out */
 } rl_plan;
 
-/* starts: function start vaddrs in layout order (each must be an FDE's start); those rl_check
- * refuses, unknown or repeated are left out (counted in p->skipped; why(start, reason) told) */
-int rl_plan_make(rl_plan *p, const rl_image *im, const uint64_t *starts, int n,
+/* want: functions in layout order (each must be an FDE's start); those rl_check refuses, unknown or
+ * repeated are left out (counted in p->skipped; why(start, reason) told). A function with hot ranges
+ * that rl_split_check allows is split: its hot pieces go in the list's order, its cold ones after all
+ * hot pieces; each piece that starts inside the function gets an FDE of its own */
+int rl_plan_make(rl_plan *p, const rl_image *im, const rl_want *want, int n,
                  void (*why)(uint64_t start, const char *reason, void *ud), void *ud);
 void rl_plan_free(rl_plan *p);
+/* a list line "<start> <size> [<weight>] [h:<o>-<e>,...]" (hex) into *w: 0, or -1 if it is not one */
+int rl_want_parse(const char *line, rl_want *w);
+/* why a function cannot be split into pieces (NULL: it can): an LSDA, an ADR into itself (a jump table's
+ * base: its targets are computed from it; a table based by ADRP lands in the original, which is exact), CFI this code does not follow */
+const char *rl_split_check(const rl_image *im, uint64_t start, uint64_t size);
 /* the region's bytes (p->total) for the address dst_run; -1 if a field does not reach (the region
  * must lie within 128 MB of the whole executable segment: rl_reach) */
 int rl_plan_emit(const rl_plan *p, uint8_t *dst, uint64_t dst_run, char *err, size_t errn);

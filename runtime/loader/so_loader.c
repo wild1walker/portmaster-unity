@@ -1740,14 +1740,14 @@ int so_relayout(so_module *m, const char *list, int flags)
         fprintf(stderr, "[relayout] %s: %s\n", m->name, err); fclose(f); return -1;
     }
     rl_buildid_hex(&im, bid, sizeof bid);
-    uint64_t *starts = NULL; int n = 0, cap = 0;
-    char line[256];
+    rl_want *starts = NULL; int n = 0, cap = 0;
+    char line[1024];
     while (fgets(line, sizeof line, f)) {
-        unsigned long long s, z;
+        rl_want w;
         if (!strncmp(line, "buildid ", 8)) { sscanf(line + 8, "%139s", want); continue; }
-        if (line[0] == '#' || sscanf(line, "%llx %llx", &s, &z) != 2) continue;
+        if (rl_want_parse(line, &w) < 0) continue;
         if (n == cap) { cap = cap ? 2 * cap : 1024; starts = realloc(starts, sizeof *starts * (size_t)cap); }
-        starts[n++] = s;
+        starts[n++] = w;
     }
     fclose(f);
     if (!want[0] || strcmp(want, bid)) {
@@ -1764,7 +1764,7 @@ int so_relayout(so_module *m, const char *list, int flags)
     uint8_t *buf = malloc(512u << 10);
     for (int i = 0; i < n; i++) {
         uint64_t s, z;
-        if (rl_fde_find(&im, starts[i], &s, &z, NULL) == 0 && s == starts[i] && z <= (512u << 10) && s >= tva &&
+        if (rl_fde_find(&im, starts[i].start, &s, &z, NULL) == 0 && s == starts[i].start && z <= (512u << 10) && s >= tva &&
             pread(fd, buf, z, (off_t)(s - tva + toff)) == (ssize_t)z && memcmp(buf, (const void *)(m->bias + s), z)) {
             changed++;
             continue;
@@ -1820,8 +1820,8 @@ int so_relayout(so_module *m, const char *list, int flags)
     else { relregion *t = g_regions; while (t->next) t = t->next; t->next = r; }
     g_nregions++;
     so_unlock();
-    fprintf(stderr, "[relayout] %s: %d functions (%llu KB) laid out at %p in the list's order (%s); %d left out%s\n",
-            m->name, r->plan.n, (unsigned long long)(r->plan.code_size >> 10), dst, list, r->plan.skipped + changed,
+    fprintf(stderr, "[relayout] %s: %d functions (%llu KB; %d split into hot and cold pieces) laid out at %p in the list's order (%s); %d left out%s\n",
+            m->name, r->plan.n, (unsigned long long)(r->plan.code_size >> 10), r->plan.split, dst, list, r->plan.skipped + changed,
             changed ? " (some changed in memory by a hook)" : "");
     (void)nd;
     return r->plan.n;

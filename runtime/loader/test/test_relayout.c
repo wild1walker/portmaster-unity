@@ -119,11 +119,20 @@ int main(int argc, char **argv)
     snprintf(list, sizeof list, "%s/rl_list.txt", dir);
     FILE *f = fopen(list, "w");
     fprintf(f, "ua_relayout 1\nlib libsyn_rl.so\nbuildid %s\n", bid);
+    /* hot ranges: these split into a hot entry piece and cold rest (rl_c_inner has an LSDA: moved whole;
+       rl_t_bl's cold piece holds both its calls and its epilogue; the unwinds pass through rl_c_raise's and
+       rl_c_bt's cold pieces, whose FDEs are made from the row at their start) */
+    static const struct { const char *name, *hot; } splits[] = {
+        { "rl_t_cbz", " h:0-8" }, { "rl_t_bl", " h:0-14" }, { "rl_c_raise", " h:0-8" }, { "rl_c_bt", " h:0-8" },
+        { "rl_c_outer", " h:0-c,20-28" }, { "rl_c_inner", " h:0-8" }, { "rl_t_tbz", " h:0-4" },
+    };
     for (int i = 0; i < NL; i++) {
         uintptr_t a = (uintptr_t)so_sym(m, in_list[i]);
         uint64_t s, z;
         CHECK(a && rl_fde_find(&im, a - base, &s, &z, NULL) == 0 && s == a - base, "%s: no FDE", in_list[i]);
-        fprintf(f, "%lx %lx 1\n", (unsigned long)(a - base), (unsigned long)z);
+        const char *hot = "";
+        for (unsigned k = 0; k < sizeof splits / sizeof *splits; k++) if (!strcmp(splits[k].name, in_list[i])) hot = splits[k].hot;
+        fprintf(f, "%lx %lx 1%s\n", (unsigned long)(a - base), (unsigned long)z, hot);
     }
     uintptr_t *vt = (uintptr_t *)so_sym(m, "rl_vtab"), va = vt[0], vb = vt[1], vfar = vt[2];
     for (int i = 0; i < 2; i++) {                    /* the table's two local functions */
@@ -156,11 +165,11 @@ int main(int argc, char **argv)
         if (t > hi) hi = t;
         CHECK(so_relayout_orig(t) == a, "%s: so_relayout_orig(copy) %lx != %lx", in_list[i], (unsigned long)so_relayout_orig(t), (unsigned long)a);
         uintptr_t bias = 0;
-        const char *mp = so_module_at((void *)(t + 4), &bias);
-        CHECK(mp && strstr(mp, "libsyn_rl.so") && t + 4 - bias == a + 4 - base, "%s: so_module_at(copy)", in_list[i]);
+        const char *mp = so_module_at((void *)t, &bias);
+        CHECK(mp && strstr(mp, "libsyn_rl.so") && t - bias == a - base, "%s: so_module_at(copy)", in_list[i]);
         Dl_info di;
         int (*dla)(const void *, Dl_info *) = (int (*)(const void *, Dl_info *))so_shim_lookup("dladdr");
-        if (dla) CHECK(dla((void *)(t + 4), &di) && di.dli_sname && !strcmp(di.dli_sname, in_list[i]),
+        if (dla) CHECK(dla((void *)t, &di) && di.dli_sname && !strcmp(di.dli_sname, in_list[i]),
                        "%s: dladdr(copy) %s", in_list[i], di.dli_sname ? di.dli_sname : "-");
     }
     /* BL between copies: rl_t_bl's first BL goes to rl_leaf's copy */

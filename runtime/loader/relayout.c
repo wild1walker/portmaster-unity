@@ -304,6 +304,191 @@ const char *rl_check(const rl_image *im, uint64_t start, uint64_t size)
     return scan(im, start, size, NULL);
 }
 
+/* ---------------------------------------------------------------- CFI rows (hot/cold pieces) */
+
+/* A piece that starts inside a function gets an FDE of its own: the row the function's CFI program
+ * reaches at the piece's start (CFA rule, each register's rule, AArch64's return-address signing
+ * state, the remember_state stack), written as instructions against the CIE's initial row, then the
+ * program's own instructions inside the piece with their advances measured from the piece. */
+#define NREG 96
+typedef struct { uint8_t kind; int64_t v; } rrule;          /* kind 0 = as the CIE's initial row */
+enum { RK_INIT, RK_OFF, RK_SAME, RK_UNDEF };
+typedef struct { uint32_t cfa_reg; int64_t cfa_off; rrule r[NREG]; int ra; } crow;
+typedef struct { uint64_t code_align; int64_t data_align; uint64_t init, init_end; } cie_cf;
+
+static int64_t sleb(const rl_image *im, uint64_t *v, uint64_t end)
+{
+    int64_t r = 0; int s = 0; uint8_t b = 0;
+    while (*v < end) { b = im->mem[(*v)++]; if (s < 64) r |= (int64_t)(b & 0x7f) << s; s += 7; if (!(b & 0x80)) break; }
+    if (s < 64 && (b & 0x40)) r |= -((int64_t)1 << s);
+    return r;
+}
+static int cie_cf_read(const rl_image *im, const cie_t *ci, cie_cf *cf)
+{
+    uint64_t p = ci->at + 8, e = ci->at + ci->len;
+    uint8_t ver = im->mem[p++];
+    const char *aug = (const char *)im->mem + p;
+    p += strnlen(aug, e - p) + 1;
+    cf->code_align = uleb(im, &p, e);
+    cf->data_align = sleb(im, &p, e);
+    if (ver == 1) p++; else uleb(im, &p, e);
+    if (aug[0] == 'z') { uint64_t al = uleb(im, &p, e); p += al; }
+    cf->init = p; cf->init_end = e;
+    return 0;
+}
+/* run instructions [p, e) on *row (loc starting at *loc) up to pc `stop` (relative to the function):
+   returns the position of the first instruction that applies at or after stop's next row, or 0 on an
+   unknown instruction. *loc ends at the location of the row containing stop. */
+static uint64_t cfa_run(const rl_image *im, const cie_cf *cf, const crow *init, crow *row, crow *stack, int *depth,
+                        uint64_t p, uint64_t e, uint64_t *loc, uint64_t stop, int *bad)
+{
+    while (p < e) {
+        uint64_t q = p;
+        uint8_t op = im->mem[p++];
+        uint64_t adv = 0;
+        int is_adv = 0;
+        switch (op >> 6) {
+        case 1: adv = (op & 0x3f) * cf->code_align; is_adv = 1; break;
+        case 2: { uint64_t o = uleb(im, &p, e); if ((op & 0x3f) < NREG) { row->r[op & 0x3f].kind = RK_OFF; row->r[op & 0x3f].v = (int64_t)o * cf->data_align; } continue; }
+        case 3: if ((op & 0x3f) < NREG) row->r[op & 0x3f] = init->r[op & 0x3f]; continue;
+        }
+        if (!is_adv) switch (op) {
+        case 0x00: continue;
+        case 0x02: adv = im->mem[p] * cf->code_align; p += 1; is_adv = 1; break;
+        case 0x03: { uint16_t x; memcpy(&x, im->mem + p, 2); p += 2; adv = x * cf->code_align; is_adv = 1; break; }
+        case 0x04: { uint32_t x; memcpy(&x, im->mem + p, 4); p += 4; adv = x * cf->code_align; is_adv = 1; break; }
+        case 0x05: { uint64_t r = uleb(im, &p, e), o = uleb(im, &p, e); if (r < NREG) { row->r[r].kind = RK_OFF; row->r[r].v = (int64_t)o * cf->data_align; } else *bad = 1; continue; }
+        case 0x11: { uint64_t r = uleb(im, &p, e); int64_t o = sleb(im, &p, e); if (r < NREG) { row->r[r].kind = RK_OFF; row->r[r].v = o * cf->data_align; } else *bad = 1; continue; }
+        case 0x06: { uint64_t r = uleb(im, &p, e); if (r < NREG) row->r[r] = init->r[r]; else *bad = 1; continue; }
+        case 0x07: { uint64_t r = uleb(im, &p, e); if (r < NREG) row->r[r].kind = RK_UNDEF; else *bad = 1; continue; }
+        case 0x08: { uint64_t r = uleb(im, &p, e); if (r < NREG) row->r[r].kind = RK_SAME; else *bad = 1; continue; }
+        case 0x0a: if (*depth >= 8) { *bad = 1; return 0; } stack[(*depth)++] = *row; continue;
+        case 0x0b: { if (!*depth) { *bad = 1; return 0; } int ra = row->ra; *row = stack[--*depth]; row->ra = ra; continue; }
+        case 0x0c: row->cfa_reg = (uint32_t)uleb(im, &p, e); row->cfa_off = (int64_t)uleb(im, &p, e); continue;
+        case 0x12: row->cfa_reg = (uint32_t)uleb(im, &p, e); row->cfa_off = sleb(im, &p, e) * cf->data_align; continue;
+        case 0x0d: row->cfa_reg = (uint32_t)uleb(im, &p, e); continue;
+        case 0x0e: row->cfa_off = (int64_t)uleb(im, &p, e); continue;
+        case 0x13: row->cfa_off = sleb(im, &p, e) * cf->data_align; continue;
+        case 0x2d: row->ra ^= 1; continue;           /* DW_CFA_AARCH64_negate_ra_state */
+        default: *bad = 1; return 0;
+        }
+        if (is_adv) {
+            if (*loc + adv > stop) return q;          /* this advance leaves the row that holds stop */
+            *loc += adv;
+        }
+    }
+    return e;
+}
+
+/* the bytes of an instruction stream that turns row `from` into row `to` */
+typedef struct { uint8_t *b; size_t n, cap; } bbuf;
+static void bput(bbuf *b, uint8_t x) { if (b->n == b->cap) { b->cap = b->cap ? 2 * b->cap : 256; b->b = realloc(b->b, b->cap); } b->b[b->n++] = x; }
+static void bu(bbuf *b, uint64_t v) { do { uint8_t x = v & 0x7f; v >>= 7; bput(b, x | (v ? 0x80 : 0)); } while (v); }
+static void bs(bbuf *b, int64_t v) { int more = 1; while (more) { uint8_t x = v & 0x7f; v >>= 7; if ((v == 0 && !(x & 0x40)) || (v == -1 && (x & 0x40))) more = 0; else x |= 0x80; bput(b, x); } }
+static int row_diff(bbuf *b, const cie_cf *cf, const crow *init, const crow *from, const crow *to)
+{
+    if (from->cfa_reg != to->cfa_reg || from->cfa_off != to->cfa_off) {
+        if (to->cfa_off < 0) return -1;
+        bput(b, 0x0c); bu(b, to->cfa_reg); bu(b, (uint64_t)to->cfa_off);
+    }
+    for (int r = 0; r < NREG; r++) {
+        const rrule *x = &from->r[r], *y = &to->r[r];
+        if (x->kind == y->kind && x->v == y->v) continue;
+        if (y->kind == init->r[r].kind && y->v == init->r[r].v) { bput(b, 0x06); bu(b, (uint64_t)r); continue; }
+        switch (y->kind) {
+        case RK_OFF:
+            if (!cf->data_align || y->v % cf->data_align) return -1;
+            bput(b, 0x11); bu(b, (uint64_t)r); bs(b, y->v / cf->data_align); break;
+        case RK_SAME: bput(b, 0x08); bu(b, (uint64_t)r); break;
+        case RK_UNDEF: bput(b, 0x07); bu(b, (uint64_t)r); break;
+        default: return -1;
+        }
+    }
+    if (from->ra != to->ra) bput(b, 0x2d);
+    return 0;
+}
+
+/* the CFI instructions of the piece [a, b) of the function whose FDE is fd (offsets in the function) */
+static int piece_cfi(const rl_image *im, const fde_t *fd, const cie_t *ci, uint64_t a, uint64_t bnd, bbuf *out)
+{
+    cie_cf cf;
+    cie_cf_read(im, ci, &cf);
+    if (!cf.code_align) return -1;
+    crow init, row, stack[8], dummy[8];
+    memset(&init, 0, sizeof init);
+    int depth = 0, d0 = 0, bad = 0;
+    uint64_t loc = 0;
+    crow zero; memset(&zero, 0, sizeof zero);
+    cfa_run(im, &cf, &zero, &init, dummy, &d0, cf.init, cf.init_end, &loc, ~0ull, &bad);
+    if (bad || d0) return -1;
+    for (int r = 0; r < NREG; r++) init.r[r].kind = init.r[r].kind;   /* (the CIE's own rules are the reference) */
+    /* the FDE's instructions follow its augmentation data */
+    uint64_t p = fd->at + 8 + 2 * (uint64_t)enc_size(ci->fde_enc), e = fd->at + fd->len;
+    if (ci->z) { uint64_t al = uleb(im, &p, e); p += al; }
+    row = init;
+    /* rows are relative to init: copies of it whose rules mean "the CIE's" are the RK_INIT kind */
+    crow base = init;
+    for (int r = 0; r < NREG; r++) { base.r[r].kind = RK_INIT; base.r[r].v = 0; }
+    row = base;
+    loc = 0;
+    uint64_t q = cfa_run(im, &cf, &base, &row, stack, &depth, p, e, &loc, a, &bad);
+    if (bad) return -1;
+    /* the remember_state stack, bottom up, then the row at a */
+    crow cur = base;
+    for (int k = 0; k < depth; k++) {
+        if (row_diff(out, &cf, &base, &cur, &stack[k]) < 0) return -1;
+        bput(out, 0x0a);
+        cur = stack[k];
+    }
+    if (row_diff(out, &cf, &base, &cur, &row) < 0) return -1;
+    /* then the program's instructions inside [a, bnd): advances re-measured from a */
+    uint64_t pos = a;                       /* the location the emitted rows have reached */
+    while (q && q < e) {
+        uint64_t q0 = q;
+        uint8_t op = im->mem[q];
+        uint64_t adv = 0;
+        int is_adv = 1;
+        if ((op >> 6) == 1) { adv = (op & 0x3f) * cf.code_align; q++; }
+        else if (op == 0x02) { adv = im->mem[q + 1] * cf.code_align; q += 2; }
+        else if (op == 0x03) { uint16_t x; memcpy(&x, im->mem + q + 1, 2); adv = x * cf.code_align; q += 3; }
+        else if (op == 0x04) { uint32_t x; memcpy(&x, im->mem + q + 1, 4); adv = x * cf.code_align; q += 5; }
+        else is_adv = 0;
+        if (is_adv) {
+            loc += adv;
+            if (loc >= bnd) break;
+            if (loc > pos) {
+                uint64_t d = (loc - pos) / cf.code_align;
+                bput(out, 0x04); for (int k = 0; k < 4; k++) bput(out, (uint8_t)(d >> (8 * k)));
+                pos = loc;
+            }
+            continue;
+        }
+        /* one non-advance instruction: run it on a scratch row to find its length, copy its bytes */
+        crow tmp = row; int dd = depth; uint64_t l2 = loc; crow st2[8]; memcpy(st2, stack, sizeof st2);
+        uint64_t q1 = q0;
+        /* find the end of this single instruction */
+        {
+            uint8_t o = im->mem[q1++];
+            if ((o >> 6) == 2) uleb(im, &q1, e);
+            else if ((o >> 6) == 3) { }
+            else switch (o) {
+            case 0x00: case 0x0a: case 0x0b: case 0x2d: break;
+            case 0x05: case 0x0c: uleb(im, &q1, e); uleb(im, &q1, e); break;
+            case 0x11: case 0x12: uleb(im, &q1, e); sleb(im, &q1, e); break;
+            case 0x06: case 0x07: case 0x08: case 0x0d: case 0x0e: uleb(im, &q1, e); break;
+            case 0x13: sleb(im, &q1, e); break;
+            default: return -1;
+            }
+        }
+        cfa_run(im, &cf, &base, &tmp, st2, &dd, q0, q1, &l2, ~0ull, &bad);
+        if (bad) return -1;
+        row = tmp; depth = dd; memcpy(stack, st2, sizeof st2);
+        for (uint64_t k = q0; k < q1; k++) bput(out, im->mem[k]);
+        q = q1;
+    }
+    return 0;
+}
+
 /* ---------------------------------------------------------------- the plan */
 
 static const rl_plan *g_sort_plan;
@@ -318,65 +503,167 @@ static int u64_cmp(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-int rl_plan_make(rl_plan *p, const rl_image *im, const uint64_t *starts, int n,
+const char *rl_split_check(const rl_image *im, uint64_t start, uint64_t size)
+{
+    uint64_t s, z, f;
+    if (rl_fde_find(im, start, &s, &z, &f) < 0 || s != start || z != size) return "no FDE";
+    fde_t fd; cie_t ci;
+    if (parse_fde(im, f, &fd, &ci) < 0) return "FDE";
+    if (fd.lsda_field && rd_raw(im, fd.lsda_field, ci.lsda_enc)) return "an LSDA (landing pads are offsets from the function's start)";
+    for (uint64_t pc = start; pc < start + size; pc += 4) {
+        int64_t off;
+        uint32_t w = rd32(im, pc);
+        if (classify(w, &off) == K_ADR) { uint64_t t = pc + (uint64_t)off; if (t >= start && t < start + size) return "an ADR inside the function"; }
+    }
+    bbuf b = { 0 };
+    int r = piece_cfi(im, &fd, &ci, size / 2 & ~3ull, size, &b);
+    free(b.b);
+    return r < 0 ? "CFI this tool does not follow" : NULL;
+}
+
+static int falls_through(uint32_t w)
+{
+    if ((w & 0xfc000000u) == 0x14000000u) return 0;            /* b */
+    if ((w & 0xfffffc1fu) == 0xd61f0000u) return 0;            /* br */
+    if ((w & 0xfffffc1fu) == 0xd65f0000u) return 0;            /* ret */
+    if (w == 0xd65f0bffu || w == 0xd65f0fffu) return 0;        /* retaa, retab */
+    if ((w & 0xffe0001fu) == 0xd4200000u) return 0;            /* brk */
+    return 1;
+}
+
+/* island bytes the piece [s, e) may need: every out-of-piece field a copy might not reach */
+static uint32_t piece_isl(const rl_image *im, uint64_t s, uint64_t e)
+{
+    uint32_t need = 0;
+    for (uint64_t pc = s; pc < e; pc += 4) {
+        uint32_t w = rd32(im, pc);
+        int64_t off;
+        int k = classify(w, &off);
+        if (k == K_NONE || k == K_ADRP || k == K_B || k == K_BL) continue;
+        uint64_t t = pc + (uint64_t)off;
+        if (t >= s && t < e) continue;
+        int n = island_need(k, w);
+        need += n > 0 ? (uint32_t)n : 0;
+    }
+    return need;
+}
+
+int rl_plan_make(rl_plan *p, const rl_image *im, const rl_want *want, int n,
                  void (*why)(uint64_t, const char *, void *), void *ud)
 {
     memset(p, 0, sizeof *p);
     p->im = im;
     p->fn = calloc((size_t)n + 1, sizeof *p->fn);
     p->by_start = calloc((size_t)n + 1, sizeof *p->by_start);
+    int capp = 2 * n + 16;
+    p->pc = calloc((size_t)capp, sizeof *p->pc);
     uint64_t *seen = calloc((size_t)n + 1, sizeof *seen);
-    if (!p->fn || !p->by_start || !seen) { free(seen); rl_plan_free(p); return -1; }
+    if (!p->fn || !p->by_start || !p->pc || !seen) { free(seen); rl_plan_free(p); return -1; }
     int nseen = 0;
-    uint64_t at = 0, eh = 0;
-    uint64_t *cies = calloc((size_t)n + 1, sizeof *cies);
-    int ncie = 0;
     for (int i = 0; i < n; i++) {
-        uint64_t s = starts[i], z = 0, f = 0;
-        /* repeated: a sorted copy of what was taken, searched */
-        int dup = 0;
-        if (nseen && bsearch(&s, seen, (size_t)nseen, sizeof *seen, u64_cmp)) dup = 1;
-        if (dup) { p->skipped++; if (why) why(s, "listed twice", ud); continue; }
-        if (rl_fde_find(im, s, &s, &z, &f) < 0 || s != starts[i]) {
-            p->skipped++; if (why) why(starts[i], "not the start of a function with an FDE", ud); continue;
+        uint64_t s = want[i].start, z = 0, f = 0;
+        if (nseen && bsearch(&s, seen, (size_t)nseen, sizeof *seen, u64_cmp)) { p->skipped++; if (why) why(s, "listed twice", ud); continue; }
+        if (rl_fde_find(im, s, &s, &z, &f) < 0 || s != want[i].start) {
+            p->skipped++; if (why) why(want[i].start, "not the start of a function with an FDE", ud); continue;
         }
         const char *r = rl_check(im, s, z);
-        uint32_t isl = 0;
-        if (!r) r = scan(im, s, z, &isl);
         if (r) { p->skipped++; if (why) why(s, r, ud); continue; }
-        rl_fn *fn = &p->fn[p->n++];
-        fn->start = s; fn->size = z; fn->fde = f; fn->isl = isl;
-        uint64_t al = (s & 15) ? 4 : 16;    /* a 16-byte aligned original stays so */
-        at = (at + al - 1) & ~(al - 1);
-        fn->at = at;
-        at += z + isl;
-        /* insert into the sorted list of taken starts */
+        int fi = p->n++;
+        rl_fn *fn = &p->fn[fi];
+        fn->start = s; fn->size = z; fn->fde = f;
         int k = nseen++;
         while (k > 0 && seen[k - 1] > s) { seen[k] = seen[k - 1]; k--; }
         seen[k] = s;
-        fde_t fd; cie_t ci;
-        parse_fde(im, f, &fd, &ci);
-        eh += fd.len;
-        int known = 0;
-        for (int c = 0; c < ncie && !known; c++) known = cies[c] == fd.cie;
-        if (!known) { cies[ncie++] = fd.cie; eh += ci.len; }
+        /* its pieces: the hot ranges the list gives (the first always holds the entry), the rest cold */
+        uint32_t cut[2 * RL_MAXHOT + 2]; int nc = 0;
+        int split = want[i].nhot > 0 && !rl_split_check(im, s, z);
+        if (want[i].nhot > 0 && !split) p->unsplit++;
+        if (split) {
+            uint32_t prev = 0;
+            for (int h = 0; h < want[i].nhot; h++) {
+                uint32_t a = want[i].hot[2 * h] & ~3u, b = (want[i].hot[2 * h + 1] + 3) & ~3u;
+                if (h == 0) a = 0;
+                if (b > z) b = (uint32_t)z;
+                if (a < prev || a >= b) { split = 0; break; }
+                cut[nc++] = a; cut[nc++] = b;
+                prev = b;
+            }
+        }
+        if (!split || !nc) { nc = 0; cut[nc++] = 0; cut[nc++] = (uint32_t)z; }
+        /* pieces: [cut0,cut1) hot, [cut1,cut2) cold, ... and a cold tail */
+        fn->p0 = p->np;
+        uint32_t pos = 0;
+        for (int c = 0; c < nc; c += 2) {
+            if (cut[c] > pos) { p->pc[p->np++] = (rl_piece){ .fn = fi, .start = s + pos, .size = cut[c] - pos, .hot = 0 }; }
+            p->pc[p->np++] = (rl_piece){ .fn = fi, .start = s + cut[c], .size = cut[c + 1] - cut[c], .hot = 1 };
+            pos = cut[c + 1];
+            if (p->np + 4 > capp) { capp *= 2; p->pc = realloc(p->pc, sizeof *p->pc * (size_t)capp); }
+        }
+        if (pos < z) p->pc[p->np++] = (rl_piece){ .fn = fi, .start = s + pos, .size = z - pos, .hot = 0 };
+        if (p->np + 4 > capp) { capp *= 2; p->pc = realloc(p->pc, sizeof *p->pc * (size_t)capp); }
+        fn->npc = p->np - fn->p0;
+        if (fn->npc > 1) p->split++;
     }
-    free(seen); free(cies);
+    free(seen);
     for (int i = 0; i < p->n; i++) p->by_start[i] = i;
     g_sort_plan = p;
     qsort(p->by_start, (size_t)p->n, sizeof *p->by_start, by_start_cmp);
+    /* islands, the fall-through branch, CFI of the pieces that start inside a function */
+    uint64_t eh = 0;
+    uint64_t *cies = calloc((size_t)p->n + 1, sizeof *cies);
+    int ncie = 0;
+    for (int j = 0; j < p->np; j++) {
+        rl_piece *q = &p->pc[j];
+        const rl_fn *f = &p->fn[q->fn];
+        q->isl = piece_isl(im, q->start, q->start + q->size);
+        int last = q->start + q->size == f->start + f->size;
+        q->ft = !last && falls_through(rd32(im, q->start + q->size - 4));
+        fde_t fd; cie_t ci;
+        parse_fde(im, f->fde, &fd, &ci);
+        int known = 0;
+        for (int c = 0; c < ncie && !known; c++) known = cies[c] == fd.cie;
+        if (!known) { cies[ncie++] = fd.cie; eh += ci.len; }
+        if (f->npc == 1) { eh += fd.len; continue; }
+        bbuf b = { 0 };
+        if (piece_cfi(im, &fd, &ci, q->start - f->start, q->start + q->size - f->start, &b) < 0) { free(b.b); free(cies); rl_plan_free(p); return -1; }
+        /* header: length, CIE pointer, pc_begin, pc_range (fde_enc), the augmentation as the original's */
+        uint64_t hdr = 8 + 2 * (uint64_t)enc_size(ci.fde_enc), augl = 0;
+        if (ci.z) { uint64_t a0 = fd.at + hdr, a1 = a0; uint64_t al = uleb(im, &a1, fd.at + fd.len); augl = (a1 - a0) + al; }
+        size_t len = hdr + augl + b.n;
+        len = (len + 7) & ~(size_t)7;
+        q->cfi = b.b; q->ncfi = b.n; q->fde_len = len;
+        eh += len;
+    }
+    free(cies);
+    /* layout: the hot pieces in the list's order, then the cold ones */
+    uint64_t at = 0;
+    for (int pass = 1; pass >= 0; pass--)
+        for (int j = 0; j < p->np; j++) {
+            rl_piece *q = &p->pc[j];
+            if (q->hot != pass) continue;
+            uint64_t al = (q->start & 15) ? 4 : 16;
+            at = (at + al - 1) & ~(al - 1);
+            q->at = at;
+            at += q->size + (q->ft ? 4 : 0) + q->isl;
+            if (q->start == p->fn[q->fn].start) p->fn[q->fn].at = q->at;
+        }
+    /* p->order: pieces by `at` */
+    p->order = calloc((size_t)p->np + 1, sizeof *p->order);
+    for (int j = 0; j < p->np; j++) p->order[j] = j;
+    for (int a = 1; a < p->np; a++) { int v = p->order[a], b = a; while (b > 0 && p->pc[p->order[b - 1]].at > p->pc[v].at) { p->order[b] = p->order[b - 1]; b--; } p->order[b] = v; }
     p->code_size = at;
     p->eh_off = (at + 7) & ~7ull;
-    p->eh_size = eh + 4;                    /* + the terminator */
+    p->eh_size = eh + 4;
     p->hdr_off = (p->eh_off + p->eh_size + 3) & ~3ull;
-    p->hdr_size = 12 + 8 * (uint64_t)p->n;
+    p->hdr_size = 12 + 8 * (uint64_t)p->np;
     p->total = p->hdr_off + p->hdr_size;
     return 0;
 }
 
 void rl_plan_free(rl_plan *p)
 {
-    free(p->fn); free(p->by_start);
+    if (p->pc) for (int j = 0; j < p->np; j++) free(p->pc[j].cfi);
+    free(p->fn); free(p->by_start); free(p->pc); free(p->order);
     memset(p, 0, sizeof *p);
 }
 
@@ -391,26 +678,35 @@ static const rl_fn *fn_at(const rl_plan *p, uint64_t v)
     const rl_fn *f = &p->fn[p->by_start[lo - 1]];
     return v < f->start + f->size ? f : NULL;
 }
+static const rl_piece *piece_at(const rl_plan *p, uint64_t v)
+{
+    const rl_fn *f = fn_at(p, v);
+    if (!f) return NULL;
+    for (int j = f->p0; j < f->p0 + f->npc; j++)
+        if (v >= p->pc[j].start && v < p->pc[j].start + p->pc[j].size) return &p->pc[j];
+    return NULL;
+}
 
 uint64_t rl_copy_of(const rl_plan *p, uint64_t v, uint64_t dst_run)
 {
-    const rl_fn *f = fn_at(p, v);
-    return f ? dst_run + f->at + (v - f->start) : 0;
+    const rl_piece *q = piece_at(p, v);
+    return q ? dst_run + q->at + (v - q->start) : 0;
 }
 
 uint64_t rl_orig_of(const rl_plan *p, uint64_t addr, uint64_t dst_run)
 {
     if (addr < dst_run || addr >= dst_run + p->code_size) return 0;
     uint64_t o = addr - dst_run;
-    int lo = 0, hi = p->n;                  /* p->fn is in `at` order */
+    int lo = 0, hi = p->np;
     while (lo < hi) {
         int mid = lo + (hi - lo) / 2;
-        if (p->fn[mid].at <= o) lo = mid + 1; else hi = mid;
+        if (p->pc[p->order[mid]].at <= o) lo = mid + 1; else hi = mid;
     }
     if (!lo) return 0;
-    const rl_fn *f = &p->fn[lo - 1];
-    if (o >= f->at + f->size + f->isl) return 0;
-    return p->im->run + f->start + (o < f->at + f->size ? o - f->at : 0);
+    const rl_piece *q = &p->pc[p->order[lo - 1]];
+    if (o >= q->at + q->size + (q->ft ? 4 : 0) + q->isl) return 0;
+    /* (the fall-through branch and the islands: the piece's last instruction) */
+    return p->im->run + q->start + (o < q->at + q->size ? o - q->at : q->size - 4);
 }
 
 int rl_reach(const rl_image *im, uint64_t dst_run, uint64_t total)
@@ -430,9 +726,15 @@ int rl_plan_emit(const rl_plan *p, uint8_t *dst, uint64_t dst_run, char *err, si
     const rl_image *im = p->im;
     memset(dst, 0, p->total);
     if (!rl_reach(im, dst_run, p->total)) { snprintf(err, errn, "the region is not within 128 MB of the code"); return -1; }
-    for (int i = 0; i < p->n; i++) {
-        const rl_fn *f = &p->fn[i];
-        uint64_t isl = f->at + f->size;     /* the next free island byte (region offset) */
+    for (int j = 0; j < p->np; j++) {
+        const rl_piece *f = &p->pc[j];
+        uint64_t isl = f->at + f->size + (f->ft ? 4 : 0);   /* the next free island byte (region offset) */
+        if (f->ft) {                                        /* fall through into the function's next piece */
+            uint32_t b = A64_B;
+            uint64_t from = dst_run + f->at + f->size, to = rl_copy_of(p, f->start + f->size, dst_run);
+            if (!to || put26(&b, (int64_t)(to - from)) < 0) { snprintf(err, errn, "fall-through of %llx", (unsigned long long)f->start); return -1; }
+            w32(dst + f->at + f->size, b);
+        }
         for (uint64_t o = 0; o < f->size; o += 4) {
             uint64_t pc = f->start + o, npc = dst_run + f->at + o;
             uint32_t w = rd32(im, pc), nw = w;
@@ -446,7 +748,7 @@ int rl_plan_emit(const rl_plan *p, uint8_t *dst, uint64_t dst_run, char *err, si
                 continue;
             }
             uint64_t tv = pc + (uint64_t)off;
-            if (tv >= f->start && tv < f->start + f->size) { w32(dst + f->at + o, w); continue; }   /* inside: relative */
+            if (tv >= f->start && tv < f->start + f->size) { w32(dst + f->at + o, w); continue; }   /* inside the piece: relative */
             uint64_t t = im->run + tv;
             if (k == K_B || k == K_BL || k == K_BCOND || k == K_CB || k == K_TB) {
                 uint64_t c = rl_copy_of(p, tv, dst_run);
@@ -462,9 +764,8 @@ int rl_plan_emit(const rl_plan *p, uint8_t *dst, uint64_t dst_run, char *err, si
             default: ok = (lit_prfm(w) || lit_gp(w)) && put19(&nw, d) == 0; break;
             }
             if (ok) { w32(dst + f->at + o, nw); continue; }
-            /* an island behind the function */
             uint64_t ia = isl, irun = dst_run + ia;
-            if (k == K_LIT && lit_prfm(w)) { w32(dst + f->at + o, A64_NOP); continue; }   /* a hint: no effect either way */
+            if (k == K_LIT && lit_prfm(w)) { w32(dst + f->at + o, A64_NOP); continue; }
             if (k == K_BCOND || k == K_CB || k == K_TB) {
                 uint32_t b = A64_B;
                 if (put26(&b, (int64_t)(t - irun)) < 0) goto range;
@@ -479,38 +780,39 @@ int rl_plan_emit(const rl_plan *p, uint8_t *dst, uint64_t dst_run, char *err, si
                 ins[ni++] = adrp;
                 uint32_t lo = (uint32_t)(t & 0xfff);
                 if (k == K_ADR) {
-                    ins[ni++] = 0x91000000u | (lo << 10) | (rdg << 5) | rdg;                 /* add xd, xd, #lo */
+                    ins[ni++] = 0x91000000u | (lo << 10) | (rdg << 5) | rdg;
                 } else {
                     uint32_t opc = w >> 30, sz = opc == 1 ? 8 : 4;
                     uint32_t base = opc == 0 ? 0xb9400000u : opc == 1 ? 0xf9400000u : 0xb9800000u;
                     if (lo % sz) { ins[ni++] = 0x91000000u | (lo << 10) | (rdg << 5) | rdg; lo = 0; }
-                    ins[ni++] = base | ((lo / sz) << 10) | (rdg << 5) | rdg;                  /* ldr[sw] t, [xt, #lo] */
+                    ins[ni++] = base | ((lo / sz) << 10) | (rdg << 5) | rdg;
                 }
                 uint32_t back = A64_B;
                 if (put26(&back, (int64_t)((npc + 4) - (irun + 4ull * ni))) < 0) goto range;
                 ins[ni++] = back;
-                for (uint32_t j = 0; j < ni; j++) w32(dst + ia + 4 * j, ins[j]);
+                for (uint32_t jj = 0; jj < ni; jj++) w32(dst + ia + 4 * jj, ins[jj]);
                 isl += 4ull * ni;
                 uint32_t b = A64_B;
                 if (put26(&b, (int64_t)(irun - npc)) < 0) goto range;
                 w32(dst + f->at + o, b);
             }
-            if (isl > f->at + f->size + f->isl) { snprintf(err, errn, "islands of %llx overflow", (unsigned long long)f->start); return -1; }
+            if (isl > f->at + f->size + (f->ft ? 4 : 0) + f->isl) { snprintf(err, errn, "islands of %llx overflow", (unsigned long long)f->start); return -1; }
             continue;
 range:
             snprintf(err, errn, "%llx: a field that does not reach (kind %d)", (unsigned long long)pc, k);
             return -1;
         }
     }
-    /* .eh_frame: the CIEs the copies use, each once, then each copy's FDE */
+    /* .eh_frame: the CIEs, each once, then each piece's FDE (the original's for a whole function) */
     uint64_t q = p->eh_off;
     uint64_t *cie_from = calloc((size_t)p->n + 1, sizeof *cie_from), *cie_to = calloc((size_t)p->n + 1, sizeof *cie_to);
     int ncie = 0;
     if (!cie_from || !cie_to) { free(cie_from); free(cie_to); snprintf(err, errn, "out of memory"); return -1; }
     uint8_t *hdr = dst + p->hdr_off;
     uint64_t hdr_run = dst_run + p->hdr_off;
-    for (int i = 0; i < p->n; i++) {
-        const rl_fn *f = &p->fn[i];
+    for (int oi = 0; oi < p->np; oi++) {
+        const rl_piece *pc = &p->pc[p->order[oi]];
+        const rl_fn *f = &p->fn[pc->fn];
         fde_t fd; cie_t ci;
         if (parse_fde(im, f->fde, &fd, &ci) < 0) { snprintf(err, errn, "FDE of %llx", (unsigned long long)f->start); goto fail; }
         uint64_t cq = 0;
@@ -528,11 +830,24 @@ range:
             cie_from[ncie] = fd.cie; cie_to[ncie++] = cq;
             q += ci.len;
         }
-        uint64_t fq = q;
-        memcpy(dst + fq, im->mem + fd.at, fd.len);
+        uint64_t fq = q, flen;
+        if (f->npc == 1) {
+            flen = fd.len;
+            memcpy(dst + fq, im->mem + fd.at, fd.len);
+        } else {
+            uint64_t hdrl = 8 + 2 * (uint64_t)enc_size(ci.fde_enc), augl = 0;
+            if (ci.z) { uint64_t a0 = fd.at + hdrl, a1 = a0; uint64_t al = uleb(im, &a1, fd.at + fd.len); augl = (a1 - a0) + al; }
+            flen = pc->fde_len;
+            memcpy(dst + fq, im->mem + fd.at, hdrl + augl);
+            uint32_t l = (uint32_t)(flen - 4);
+            memcpy(dst + fq, &l, 4);
+            if (wr_raw(dst + fq + 8 + enc_size(ci.fde_enc), ci.fde_enc & 0x0f, (int64_t)pc->size) < 0) { snprintf(err, errn, "pc_range"); goto fail; }
+            memcpy(dst + fq + hdrl + augl, pc->cfi, pc->ncfi);
+            /* (the rest: DW_CFA_nop) */
+        }
         uint32_t cp = (uint32_t)((fq + 4) - cq);
         memcpy(dst + fq + 4, &cp, 4);
-        if (wr_raw(dst + fq + 8, ci.fde_enc, (int64_t)((dst_run + f->at) - (dst_run + fq + 8))) < 0) { snprintf(err, errn, "pc_begin"); goto fail; }
+        if (wr_raw(dst + fq + 8, ci.fde_enc, (int64_t)((dst_run + pc->at) - (dst_run + fq + 8))) < 0) { snprintf(err, errn, "pc_begin"); goto fail; }
         if (fd.lsda_field) {
             int64_t raw = rd_raw(im, fd.lsda_field, ci.lsda_enc);
             if (raw) {
@@ -540,24 +855,44 @@ range:
                 if (wr_raw(dst + fld, ci.lsda_enc, (int64_t)(tgt - (dst_run + fld))) < 0) { snprintf(err, errn, "LSDA pointer"); goto fail; }
             }
         }
-        q += fd.len;
-        /* the search table entry: datarel to the header */
-        int32_t loc = (int32_t)((int64_t)(dst_run + f->at) - (int64_t)hdr_run), fa = (int32_t)((int64_t)(dst_run + fq) - (int64_t)hdr_run);
-        memcpy(hdr + 12 + 8 * (uint64_t)i, &loc, 4);
-        memcpy(hdr + 16 + 8 * (uint64_t)i, &fa, 4);
+        q += flen;
+        int32_t loc = (int32_t)((int64_t)(dst_run + pc->at) - (int64_t)hdr_run), fa = (int32_t)((int64_t)(dst_run + fq) - (int64_t)hdr_run);
+        memcpy(hdr + 12 + 8 * (uint64_t)oi, &loc, 4);
+        memcpy(hdr + 16 + 8 * (uint64_t)oi, &fa, 4);
     }
     free(cie_from); free(cie_to);
     if (q + 4 > p->eh_off + p->eh_size) { snprintf(err, errn, "unwind data overflow"); return -1; }
-    /* (the terminator: the zeroed word at q) */
     hdr[0] = 1; hdr[1] = 0x1b; hdr[2] = 0x03; hdr[3] = 0x3b;
     int32_t ep = (int32_t)((int64_t)(dst_run + p->eh_off) - (int64_t)(hdr_run + 4));
-    uint32_t cnt = (uint32_t)p->n;
+    uint32_t cnt = (uint32_t)p->np;
     memcpy(hdr + 4, &ep, 4);
     memcpy(hdr + 8, &cnt, 4);
     return 0;
 fail:
     free(cie_from); free(cie_to);
     return -1;
+}
+
+/* "<start> <size> [<weight>] [h:<o>-<e>,<o>-<e>...]" (hex): 0 and *w filled; -1 not such a line */
+int rl_want_parse(const char *line, rl_want *w)
+{
+    unsigned long long s, z;
+    int used = 0;
+    if (line[0] == '#' || sscanf(line, "%llx %llx%n", &s, &z, &used) != 2) return -1;
+    memset(w, 0, sizeof *w);
+    w->start = s;
+    const char *h = strstr(line + used, "h:");
+    if (!h) return 0;
+    h += 2;
+    while (*h && w->nhot < RL_MAXHOT) {
+        unsigned a, b; int k = 0;
+        if (sscanf(h, "%x-%x%n", &a, &b, &k) != 2) break;
+        w->hot[2 * w->nhot] = a; w->hot[2 * w->nhot + 1] = b; w->nhot++;
+        h += k;
+        if (*h != ',') break;
+        h++;
+    }
+    return 0;
 }
 
 /* ---------------------------------------------------------------- outline atomics */

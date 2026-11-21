@@ -1255,7 +1255,9 @@ ship with the port or in portmaster-unity beside the runtime. To make one:
    ```
    It weighs each recording's samples alike (scaled to a million per thread), counts the functions on
    the sampled stacks too (`--no-callers`: only where samples fell), clusters callers with their
-   callees up to a page (`--cluster`), and writes the clusters densest first. `relayprof check
+   callees up to a page (`--cluster`), and writes the clusters densest first. `--split` also gives each
+   function the 64-byte lines its samples fell in as hot ranges (gaps of up to `--split-gap` lines, 1,
+   filled): the loader puts those first and the rest of the function after all hot code. `relayprof check
    <lib>` says how many of the library's functions can move at all (6000.0.61f1 arm64: all 76,082),
    `relayprof plan <lib> <list>` what the loader will build (sizes, islands, unwind data), `relayprof
    refs <lib> <list>` how many of them are reached through vtables (`UA_RELAYOUT_DATA`).
