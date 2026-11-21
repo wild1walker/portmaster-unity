@@ -2493,6 +2493,17 @@ interest (the frames before them are replayed without readbacks). A replay holds
 to use with `--hash`. Calls the game made on other threads (975 here, Unity's loading threads) are replayed on the
 one thread, in the trace's order.
 
+
+### What a driver tells Unity: `glreplay --info`
+
+`glreplay --info` (no trace) opens the driver as a replay would (`GLREP_EGL`, `GLREP_GLES`, `GLREP_PLATFORM`)
+and prints, one item per line, what Unity chooses its GLES path from: EGL's version, vendor, client APIs,
+client and display extensions, every EGL config (id, colour, depth, stencil, samples, surface and renderable
+types, caveat, visual), the GL vendor, renderer, version and GLSL version, the extensions (in the driver's
+order as `gl.ext[i]`, sorted as `gl.ext`), the old extension string, the limits Unity reads and the compressed
+texture formats. Two drivers' outputs compare with `diff` (the Mali blob against Mesa: tools/mesa-kbase). It
+opens the GPU like any GL program: not on the G350.
+
 ## Holding the whole frame (UA_GL_REC)
 
 The question (2026-10-23): a tiler pays for every pass (a load of each attachment it does not clear

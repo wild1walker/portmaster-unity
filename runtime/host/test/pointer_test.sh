@@ -5,7 +5,7 @@
 # glrename.c's (test_glrename.c with fake_rename_gl.c), glrec.c's (test_glrec.c with fake_rec_gl.c),
 # glmemo.c's (test_glmemo.c with fake_memo_gl.c), glstate.c's (test_glstate.c with fake_state_gl.c) and
 # glarena.c's (test_glarena.c with fake_arena_gl.c), glspec.c's (test_glspec.c with fake_spec_gl.c) and glhooks.c's
-# UA_GL_PROGCACHE (test_progcache.c with fake_progcache_gl.c).
+# UA_GL_PROGCACHE (test_progcache.c with fake_progcache_gl.c), gldriver.c's frame copy (test_gldriver.c) and glreplay --info.
 # ARCH=armhf (default): built in
 # ua-host-armhf, run in an arm/v7 container; ARCH=arm64: built and run in ua-build-arm64.
 set -e
@@ -56,7 +56,8 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glspec test/test_glspec.c glspec.c $O/spec/libGLESv2.so.2 -ldl -lpthread
   mkdir -p $O/pc
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/pc/libGLESv2.so.2 test/fake_progcache_gl.c
-  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_progcache test/test_progcache.c glhooks.c $O/pc/libGLESv2.so.2 -ldl -lpthread'
+  $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_progcache test/test_progcache.c glhooks.c $O/pc/libGLESv2.so.2 -ldl -lpthread
+  $CC -O2 -g -Wall -Wextra -o $O/test_gldriver test/test_gldriver.c gldriver.c -ldl'
 PCS='hit order attribs refused tf off'
 RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend window fetch attach upload sink side opt blackbox file'
 # glreplay.c: the trace test_glrec's file scenario wrote, replayed against fake_replay_gl.c (names, locations,
@@ -68,6 +69,11 @@ REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/
     grep -qF "$want" $t.txt || { echo "FAIL glreplay: no \"$want\""; ok=0; }; done;
   grep -qF "draw 5" $t.txt && { echo "FAIL glreplay: a call after the file closed"; ok=0; };
   [ $ok = 1 ] && echo "ok glreplay" || cat $t.txt; rm -f $t $t.txt
+  GLREP_EGL=$PWD/$O/replay/libfakereplay.so GLREP_GLES=$PWD/$O/replay/libfakereplay.so $O/glreplay --info > $t.i 2>&1; ok=1;
+  for want in "egl.vendor fake" "egl.ext EGL_KHR_b" "egl.client_ext EGL_EXT_client" "egl.configs 2" "egl.config id=2 r=0x8" \
+    "gl.renderer fake" "gl.num_extensions 2" "gl.ext[0] GL_OES_z" "gl.ext GL_OES_a"; do
+    grep -qF "$want" $t.i || { echo "FAIL glreplay --info: no \"$want\""; ok=0; }; done;
+  [ $ok = 1 ] && echo "ok glreplay --info" || cat $t.i; rm -f $t.i
   t=/tmp/glhash_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/dev/null; L=$PWD/$O/hash/libfakehash.so; ok=1;
   GLREP_EGL=$L GLREP_GLES=$L $O/glreplay $t --from 0 --hash $t.a >/dev/null 2>&1;
   GLREP_EGL=$L GLREP_GLES=$L $O/glreplay $t --from 0 --hash $t.b >/dev/null 2>&1;
@@ -95,7 +101,8 @@ if [ "$ARCH" = arm64 ]; then
     for s in random count off; do LD_LIBRARY_PATH=\$O/state \$O/test_glstate \$s; done
     for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done
     for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=\$O/spec \$O/test_glspec \$s; done
-    for s in $PCS; do d=\$(mktemp -d); LD_LIBRARY_PATH=\$O/pc \$O/test_progcache \$s \$d; rm -rf \$d; done"
+    for s in $PCS; do d=\$(mktemp -d); LD_LIBRARY_PATH=\$O/pc \$O/test_progcache \$s \$d; rm -rf \$d; done
+    \$O/test_gldriver"
   exit
 fi
 docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c "O=out/test CC=arm-linux-gnueabihf-gcc; $run"
@@ -113,4 +120,5 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
    for s in random count off; do LD_LIBRARY_PATH=out/test/state out/test/test_glstate $s; done
    for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=out/test/arena out/test/test_glarena $s; done
    for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=out/test/spec out/test/test_glspec $s; done
-   for s in '"$PCS"'; do d=$(mktemp -d); LD_LIBRARY_PATH=out/test/pc out/test/test_progcache $s $d; rm -rf $d; done'
+   for s in '"$PCS"'; do d=$(mktemp -d); LD_LIBRARY_PATH=out/test/pc out/test/test_progcache $s $d; rm -rf $d; done
+   out/test/test_gldriver'

@@ -449,13 +449,136 @@ static void *sym(const char *n)
     return p;
 }
 
+// The driver: libEGL/libGLESv2 (GLREP_EGL/GLREP_GLES), a GLES 3 context on a WxH RGBA8 D24S8 pbuffer, made current.
+static int open_driver(int w, int h, EGLint *maj, EGLint *min)
+{
+    const char *el = getenv("GLREP_EGL"), *gl = getenv("GLREP_GLES"), *pf = getenv("GLREP_PLATFORM");
+    g_egl = dlopen(el && *el ? el : "libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+    if (!g_egl) g_egl = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
+    g_gles = dlopen(gl && *gl ? gl : "libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
+    if (!g_gles) g_gles = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!g_egl || !g_gles) { fprintf(stderr, "glreplay: no EGL/GLES: %s\n", dlerror()); return -1; }
+    EGLDisplay (*e_GetDisplay)(EGLNativeDisplayType) = sym("eglGetDisplay");
+    PFNEGLGETPLATFORMDISPLAYEXTPROC e_GetPlatformDisplay = sym("eglGetPlatformDisplayEXT");
+    EGLBoolean (*e_Initialize)(EGLDisplay, EGLint *, EGLint *) = sym("eglInitialize");
+    EGLBoolean (*e_ChooseConfig)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *) = sym("eglChooseConfig");
+    EGLBoolean (*e_BindAPI)(EGLenum) = sym("eglBindAPI");
+    EGLSurface (*e_CreatePbufferSurface)(EGLDisplay, EGLConfig, const EGLint *) = sym("eglCreatePbufferSurface");
+    EGLContext (*e_CreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint *) = sym("eglCreateContext");
+    EGLBoolean (*e_MakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext) = sym("eglMakeCurrent");
+    *(void **)&e_SwapBuffers = sym("eglSwapBuffers");
+    if (pf && !strcmp(pf, "surfaceless")) g_dpy = e_GetPlatformDisplay ? e_GetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, NULL, NULL) : EGL_NO_DISPLAY;
+    else g_dpy = e_GetDisplay(EGL_DEFAULT_DISPLAY);
+    if (g_dpy == EGL_NO_DISPLAY || !e_Initialize(g_dpy, maj, min)) { fprintf(stderr, "glreplay: eglInitialize failed\n"); return -1; }
+    const EGLint ca[] = { EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT */, EGL_RED_SIZE, 8,
+                          EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE };
+    EGLConfig cfg; EGLint n = 0;
+    if (!e_ChooseConfig(g_dpy, ca, &cfg, 1, &n) || n < 1) { fprintf(stderr, "glreplay: no pbuffer RGBA8 D24S8 GLES3 config\n"); return -1; }
+    e_BindAPI(EGL_OPENGL_ES_API);
+    const EGLint sa[] = { EGL_WIDTH, w, EGL_HEIGHT, h, EGL_NONE };
+    g_surf = e_CreatePbufferSurface(g_dpy, cfg, sa);
+    const EGLint xa[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+    EGLContext ctx = e_CreateContext(g_dpy, cfg, EGL_NO_CONTEXT, xa);
+    if (g_surf == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT || !e_MakeCurrent(g_dpy, g_surf, g_surf, ctx)) {
+        fprintf(stderr, "glreplay: no pbuffer context\n"); return -1;
+    }
+    return 0;
+}
+
+// --info: what the driver tells an application (Unity picks its GLES path from these): EGL's client and display
+// strings, every EGL config, the GL strings, the extensions one per line in the driver's order and the limits
+// Unity reads. Two drivers' outputs are compared with diff (Mesa made to answer as libmali does).
+static int cmp_str(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static void print_info(EGLint maj, EGLint min)
+{
+    const char *(*q)(EGLDisplay, EGLint) = sym("eglQueryString");
+    EGLBoolean (*getcfgs)(EGLDisplay, EGLConfig *, EGLint, EGLint *) = sym("eglGetConfigs");
+    EGLBoolean (*cattr)(EGLDisplay, EGLConfig, EGLint, EGLint *) = sym("eglGetConfigAttrib");
+    const GLubyte *(*gs)(GLenum) = sym("glGetString");
+    const GLubyte *(*gsi)(GLenum, GLuint) = sym("glGetStringi");
+    void (*gi)(GLenum, GLint *) = sym("glGetIntegerv");
+    const char *s;
+    printf("egl.version %d.%d\n", maj, min);
+    if (q) {
+        static const struct { EGLint e; const char *n; } es[] = { { EGL_VENDOR, "egl.vendor" }, { EGL_VERSION, "egl.version_string" },
+                                                                  { EGL_CLIENT_APIS, "egl.client_apis" } };
+        for (size_t i = 0; i < sizeof es / sizeof es[0]; i++) printf("%s %s\n", es[i].n, (s = q(g_dpy, es[i].e)) ? s : "(null)");
+        for (int d = 0; d < 2; d++) {
+            s = q(d ? g_dpy : EGL_NO_DISPLAY, EGL_EXTENSIONS);
+            char *c = s ? strdup(s) : NULL, *sp = NULL;
+            for (char *t = c ? strtok_r(c, " ", &sp) : NULL; t; t = strtok_r(NULL, " ", &sp)) printf("%s %s\n", d ? "egl.ext" : "egl.client_ext", t);
+            if (!s) printf("%s (null)\n", d ? "egl.ext" : "egl.client_ext");
+            free(c);
+        }
+    }
+    EGLint nc = 0;
+    if (getcfgs && cattr && getcfgs(g_dpy, NULL, 0, &nc) && nc > 0) {
+        EGLConfig *cs = calloc(nc, sizeof *cs);
+        getcfgs(g_dpy, cs, nc, &nc);
+        static const struct { EGLint a; const char *n; } at[] = {
+            { EGL_CONFIG_ID, "id" }, { EGL_RED_SIZE, "r" }, { EGL_GREEN_SIZE, "g" }, { EGL_BLUE_SIZE, "b" }, { EGL_ALPHA_SIZE, "a" },
+            { EGL_DEPTH_SIZE, "depth" }, { EGL_STENCIL_SIZE, "stencil" }, { EGL_SAMPLES, "samples" }, { EGL_SAMPLE_BUFFERS, "sbuf" },
+            { EGL_SURFACE_TYPE, "surface" }, { EGL_RENDERABLE_TYPE, "renderable" }, { EGL_CONFORMANT, "conformant" },
+            { EGL_CONFIG_CAVEAT, "caveat" }, { EGL_NATIVE_VISUAL_ID, "visual" }, { EGL_COLOR_BUFFER_TYPE, "colorbuf" } };
+        printf("egl.configs %d\n", nc);
+        for (EGLint i = 0; i < nc; i++) {
+            printf("egl.config");
+            for (size_t k = 0; k < sizeof at / sizeof at[0]; k++) {
+                EGLint v = 0;
+                if (cattr(g_dpy, cs[i], at[k].a, &v)) printf(" %s=%s%x", at[k].n, at[k].a == EGL_CONFIG_ID ? "" : "0x", v);
+            }
+            printf("\n");
+        }
+        free(cs);
+    }
+    static const struct { GLenum e; const char *n; } gss[] = { { GL_VENDOR, "gl.vendor" }, { GL_RENDERER, "gl.renderer" },
+                                                               { GL_VERSION, "gl.version" }, { GL_SHADING_LANGUAGE_VERSION, "gl.glsl" } };
+    for (size_t i = 0; i < sizeof gss / sizeof gss[0]; i++) printf("%s %s\n", gss[i].n, (s = (const char *)gs(gss[i].e)) ? s : "(null)");
+    GLint ne = 0;
+    if (gi) gi(GL_NUM_EXTENSIONS, &ne);
+    printf("gl.num_extensions %d\n", ne);
+    char **ex = ne > 0 ? calloc(ne, sizeof *ex) : NULL;
+    for (GLint i = 0; ex && gsi && i < ne; i++) ex[i] = strdup((s = (const char *)gsi(GL_EXTENSIONS, i)) ? s : "(null)");
+    if (ex && gsi) {
+        for (GLint i = 0; i < ne; i++) printf("gl.ext[%d] %s\n", i, ex[i]);
+        qsort(ex, ne, sizeof *ex, cmp_str);              // sorted too: a diff that ignores the order
+        for (GLint i = 0; i < ne; i++) { printf("gl.ext %s\n", ex[i]); free(ex[i]); }
+    }
+    free(ex);
+    s = (const char *)gs(GL_EXTENSIONS);                 // the old single string (Unity reads this one on GLES)
+    printf("gl.extensions_string %s\n", s ? s : "(null)");
+    static const struct { GLenum e; const char *n; } lim[] = {
+        { GL_MAX_TEXTURE_SIZE, "max_texture_size" }, { GL_MAX_CUBE_MAP_TEXTURE_SIZE, "max_cube_map_texture_size" },
+        { GL_MAX_3D_TEXTURE_SIZE, "max_3d_texture_size" }, { GL_MAX_ARRAY_TEXTURE_LAYERS, "max_array_texture_layers" },
+        { GL_MAX_RENDERBUFFER_SIZE, "max_renderbuffer_size" }, { GL_MAX_SAMPLES, "max_samples" },
+        { GL_MAX_COLOR_ATTACHMENTS, "max_color_attachments" }, { GL_MAX_DRAW_BUFFERS, "max_draw_buffers" },
+        { GL_MAX_VERTEX_ATTRIBS, "max_vertex_attribs" }, { GL_MAX_VERTEX_UNIFORM_VECTORS, "max_vertex_uniform_vectors" },
+        { GL_MAX_FRAGMENT_UNIFORM_VECTORS, "max_fragment_uniform_vectors" }, { GL_MAX_VARYING_VECTORS, "max_varying_vectors" },
+        { GL_MAX_TEXTURE_IMAGE_UNITS, "max_texture_image_units" }, { GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, "max_vertex_texture_image_units" },
+        { GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, "max_combined_texture_image_units" }, { GL_MAX_UNIFORM_BLOCK_SIZE, "max_uniform_block_size" },
+        { GL_MAX_UNIFORM_BUFFER_BINDINGS, "max_uniform_buffer_bindings" }, { GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, "ubo_offset_alignment" },
+        { GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, "max_ssbo_bindings" }, { GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, "max_compute_invocations" },
+        { GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, "max_compute_shared_memory" }, { GL_MAX_TEXTURE_LOD_BIAS, "max_texture_lod_bias" },
+        { GL_NUM_PROGRAM_BINARY_FORMATS, "num_program_binary_formats" }, { GL_NUM_SHADER_BINARY_FORMATS, "num_shader_binary_formats" },
+        { GL_NUM_COMPRESSED_TEXTURE_FORMATS, "num_compressed_texture_formats" } };
+    for (size_t i = 0; gi && i < sizeof lim / sizeof lim[0]; i++) { GLint v = -1; gi(lim[i].e, &v); printf("gl.%s %d\n", lim[i].n, v); }
+    GLint nf = 0;
+    if (gi) gi(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &nf);
+    if (gi && nf > 0 && nf < 4096) {
+        GLint *f = calloc(nf, sizeof *f);
+        gi(GL_COMPRESSED_TEXTURE_FORMATS, f);
+        for (GLint i = 0; i < nf; i++) printf("gl.compressed_format 0x%x\n", f[i]);
+        free(f);
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *path = NULL;
     long from = -1, to = -1;
     int w = 720, h = 480;
     const char *hash_out = NULL, *hash_frames = NULL, *hash_dump = NULL;
-    int hash_draws = 0;
+    int hash_draws = 0, info = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--from") && i + 1 < argc) from = atol(argv[++i]);
         else if (!strcmp(argv[i], "--to") && i + 1 < argc) to = atol(argv[++i]);
@@ -466,9 +589,16 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--hash-frames") && i + 1 < argc) hash_frames = argv[++i];
         else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
         else if (!strcmp(argv[i], "--hash-dump") && i + 1 < argc) hash_dump = argv[++i];
+        else if (!strcmp(argv[i], "--info")) info = 1;
         else path = argv[i];
     }
-    if (!path) { fprintf(stderr, "usage: glreplay <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]]\n"); return 2; }
+    if (info) {                                          // no trace: the driver's strings, configs and limits
+        EGLint maj = 0, min = 0;
+        if (open_driver(w, h, &maj, &min) < 0) return 1;
+        print_info(maj, min);
+        return 0;
+    }
+    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]]\n"); return 2; }
     time_init();
     classes();
     // the frames: counted first (a pass over the file)
@@ -493,37 +623,8 @@ int main(int argc, char **argv)
     fprintf(stderr, "glreplay: %s: %ld frames, %lu calls; measuring frames %ld - %ld\n", path, nframes, ncalls, from, to - 1);
 
     // the driver
-    const char *el = getenv("GLREP_EGL"), *gl = getenv("GLREP_GLES"), *pf = getenv("GLREP_PLATFORM");
-    g_egl = dlopen(el && *el ? el : "libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
-    if (!g_egl) g_egl = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
-    g_gles = dlopen(gl && *gl ? gl : "libGLESv2.so.2", RTLD_NOW | RTLD_GLOBAL);
-    if (!g_gles) g_gles = dlopen("libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!g_egl || !g_gles) { fprintf(stderr, "glreplay: no EGL/GLES: %s\n", dlerror()); return 1; }
-    EGLDisplay (*e_GetDisplay)(EGLNativeDisplayType) = sym("eglGetDisplay");
-    PFNEGLGETPLATFORMDISPLAYEXTPROC e_GetPlatformDisplay = sym("eglGetPlatformDisplayEXT");
-    EGLBoolean (*e_Initialize)(EGLDisplay, EGLint *, EGLint *) = sym("eglInitialize");
-    EGLBoolean (*e_ChooseConfig)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *) = sym("eglChooseConfig");
-    EGLBoolean (*e_BindAPI)(EGLenum) = sym("eglBindAPI");
-    EGLSurface (*e_CreatePbufferSurface)(EGLDisplay, EGLConfig, const EGLint *) = sym("eglCreatePbufferSurface");
-    EGLContext (*e_CreateContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint *) = sym("eglCreateContext");
-    EGLBoolean (*e_MakeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext) = sym("eglMakeCurrent");
-    *(void **)&e_SwapBuffers = sym("eglSwapBuffers");
-    if (pf && !strcmp(pf, "surfaceless")) g_dpy = e_GetPlatformDisplay ? e_GetPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, NULL, NULL) : EGL_NO_DISPLAY;
-    else g_dpy = e_GetDisplay(EGL_DEFAULT_DISPLAY);
     EGLint maj = 0, min = 0;
-    if (g_dpy == EGL_NO_DISPLAY || !e_Initialize(g_dpy, &maj, &min)) { fprintf(stderr, "glreplay: eglInitialize failed\n"); return 1; }
-    const EGLint ca[] = { EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT */, EGL_RED_SIZE, 8,
-                          EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE };
-    EGLConfig cfg; EGLint n = 0;
-    if (!e_ChooseConfig(g_dpy, ca, &cfg, 1, &n) || n < 1) { fprintf(stderr, "glreplay: no pbuffer RGBA8 D24S8 GLES3 config\n"); return 1; }
-    e_BindAPI(EGL_OPENGL_ES_API);
-    const EGLint sa[] = { EGL_WIDTH, w, EGL_HEIGHT, h, EGL_NONE };
-    g_surf = e_CreatePbufferSurface(g_dpy, cfg, sa);
-    const EGLint xa[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
-    EGLContext ctx = e_CreateContext(g_dpy, cfg, EGL_NO_CONTEXT, xa);
-    if (g_surf == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT || !e_MakeCurrent(g_dpy, g_surf, g_surf, ctx)) {
-        fprintf(stderr, "glreplay: no pbuffer context\n"); return 1;
-    }
+    if (open_driver(w, h, &maj, &min) < 0) return 1;
     unsigned nfn = 0;
     for (unsigned i = 0; i < OP_N; i++) if ((rp_fn[i] = sym(glrec_name[i]))) nfn++;
     char last_frames[64];                                // --hash-frames last:N: the trace's last N frames

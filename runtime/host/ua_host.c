@@ -28,6 +28,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "jitwarm.h"
 #include "quality.h"
 #include "desktopenv.h"
+#include "gldriver.h"
 #include "glhooks.h"
 #include "hitches.h"
 #include "prof.h"
@@ -567,6 +568,7 @@ static void malloc_setup(void) {}
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    gldriver_early(argv);                           // UA_GL_DRIVER=mesa: started again with Mesa's libraries (gldriver.c)
     malloc_setup();
 #if defined(__arm__)
     linux32_personality();

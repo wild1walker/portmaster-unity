@@ -1,0 +1,1993 @@
+--- a/src/egl/drivers/dri2/platform_surfaceless.c
++++ b/src/egl/drivers/dri2/platform_surfaceless.c
+@@ -38,6 +38,7 @@
+ #include "eglglobals.h"
+ #include "kopper_interface.h"
+ #include "loader.h"
++#include "util/u_debug.h"
+ #include "loader_dri_helper.h"
+ #include "dri_util.h"
+ #include "dri_screen.h"
+@@ -46,9 +47,14 @@
+ surfaceless_alloc_image(struct dri2_egl_display *dri2_dpy,
+                         struct dri2_egl_surface *dri2_surf)
+ {
++   /* kbase: the window is linear (Panfrost maps it CPU-cached), the host reads it back each frame */
++   const unsigned use = loader_fd_is_kbase(dri2_dpy->fd_render_gpu) &&
++                              debug_get_bool_option("PAN_KBASE_CACHED_WINDOW", true)
++                           ? __DRI_IMAGE_USE_LINEAR
++                           : 0;
+    return dri_create_image(
+       dri2_dpy->dri_screen_render_gpu, dri2_surf->base.Width,
+-      dri2_surf->base.Height, dri2_surf->visual, NULL, 0, 0, NULL);
++      dri2_surf->base.Height, dri2_surf->visual, NULL, 0, use, NULL);
+ }
+ 
+ static void
+@@ -220,7 +226,47 @@
+    .kopper = &kopper_pbuffer_loader_extension,
+ };
+ 
++/* A device driven by Arm's kbase has no DRM node: its GPU is /dev/mali0, and pan_kmod's kbase
++ * backend drives it. MESA_KBASE_NODE names the node; the loader names the driver (panfrost) from the
++ * node's path. */
+ static bool
++surfaceless_probe_kbase_node(struct _egl_display *disp)
++{
++   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
++   const char *node = getenv("MESA_KBASE_NODE");
++
++   /* Unset: /dev/mali0 when there is one (a set name is opened as it is) */
++   if (!node || !*node) {
++      node = "/dev/mali0";
++      if (access(node, F_OK) != 0)
++         return false;
++   }
++
++   dri2_dpy->fd_render_gpu = loader_open_device(node);
++   if (dri2_dpy->fd_render_gpu < 0) {
++      _eglLog(_EGL_WARNING, "surfaceless: cannot open %s", node);
++      return false;
++   }
++   dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
++   dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd_render_gpu);
++   if (!dri2_dpy->driver_name) {
++      close(dri2_dpy->fd_render_gpu);
++      dri2_dpy->fd_render_gpu = dri2_dpy->fd_display_gpu = -1;
++      return false;
++   }
++   dri2_dpy->loader_funcs = &image_loader_funcs;
++   if (!dri2_create_screen(disp)) {
++      _eglLog(_EGL_WARNING, "surfaceless: no %s screen on %s", dri2_dpy->driver_name, node);
++      free(dri2_dpy->driver_name);
++      dri2_dpy->driver_name = NULL;
++      close(dri2_dpy->fd_render_gpu);
++      dri2_dpy->fd_render_gpu = dri2_dpy->fd_display_gpu = -1;
++      return false;
++   }
++   return true;
++}
++
++static bool
+ surfaceless_probe_device(struct _egl_display *disp, bool swrast, bool zink)
+ {
+    const unsigned node_type = swrast ? DRM_NODE_PRIMARY : DRM_NODE_RENDER;
+@@ -228,6 +274,9 @@
+    struct _egl_device *dev_list = _eglGlobal.DeviceList;
+    drmDevicePtr device;
+ 
++   if (!swrast && !zink && surfaceless_probe_kbase_node(disp))
++      return true;
++
+    while (dev_list) {
+       if (!_eglDeviceSupports(dev_list, _EGL_DEVICE_DRM))
+          goto next;
+--- a/src/gallium/auxiliary/util/u_screen.c
++++ b/src/gallium/auxiliary/util/u_screen.c
+@@ -22,6 +22,7 @@
+  */
+ 
+ #include <sys/stat.h>
++#include <sys/sysmacros.h>
+ 
+ #include "pipe/p_screen.h"
+ #include "util/u_screen.h"
+@@ -179,7 +180,10 @@
+    if (pscreen->get_screen_fd) {
+       uint64_t cap;
+       int fd = pscreen->get_screen_fd(pscreen);
+-      if (fd != -1 && (drmGetCap(fd, DRM_CAP_PRIME, &cap) == 0))
++      struct stat st;
++      /* DRM nodes only (major 226): not a kbase node, which takes no DRM ioctls */
++      if (fd != -1 && fstat(fd, &st) == 0 && major(st.st_rdev) == 226 &&
++          (drmGetCap(fd, DRM_CAP_PRIME, &cap) == 0))
+          caps->dmabuf = cap;
+    }
+ #endif
+--- a/src/gallium/drivers/panfrost/pan_bo.c
++++ b/src/gallium/drivers/panfrost/pan_bo.c
+@@ -46,6 +46,8 @@
+       kmod_bo_flags |= PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT;
+    if (flags & PAN_BO_INVISIBLE)
+       kmod_bo_flags |= PAN_KMOD_BO_FLAG_NO_MMAP;
++   if (flags & PAN_BO_CPU_CACHED)
++      kmod_bo_flags |= PAN_KMOD_BO_FLAG_WB_MMAP;
+ 
+    return kmod_bo_flags;
+ }
+--- a/src/gallium/drivers/panfrost/pan_bo.h
++++ b/src/gallium/drivers/panfrost/pan_bo.h
+@@ -38,6 +38,10 @@
+  * PAN_BO_SHARED if the BO has not been exported yet */
+ #define PAN_BO_SHAREABLE (1 << 5)
+ 
++/* CPU mappings are write-back cached (PAN_KMOD_BO_FLAG_WB_MMAP; kbase): CPU reads after GPU writes
++ * need an invalidate, GPU reads after CPU writes a clean (pan_resource.c's map and unmap) */
++#define PAN_BO_CPU_CACHED (1 << 6)
++
+ struct panfrost_device;
+ 
+ struct panfrost_bo {
+--- a/src/gallium/drivers/panfrost/pan_context.c
++++ b/src/gallium/drivers/panfrost/pan_context.c
+@@ -11,6 +11,7 @@
+ 
+ #include "pan_bo.h"
+ #include "pan_context.h"
++#include "kmod/kbase_kmod.h"
+ #include "pan_minmax_cache.h"
+ 
+ #include "util/format/u_format.h"
+@@ -1041,6 +1042,13 @@
+    ASSERTED int ret;
+    int fd = -1;
+    assert(!value);
++
++   /* kbase runs this device's submissions in order: only a foreign sync file needs waiting. */
++   if (pan_kmod_dev_is_kbase(dev->kmod.dev)) {
++      if (f->sync_fd >= 0)
++         sync_accumulate("panfrost", &ctx->in_sync_fd, f->sync_fd);
++      return;
++   }
+ 
+    ret = pan_kmod_sync_export_file(dev->kmod.dev, f->syncobj, &fd);
+    assert(!ret);
+--- a/src/gallium/drivers/panfrost/pan_context.h
++++ b/src/gallium/drivers/panfrost/pan_context.h
+@@ -243,6 +243,9 @@
+    int in_sync_fd;
+    uint32_t in_sync_obj;
+ 
++   /* kbase: the last submission of this context, which its fences wait for. */
++   uint64_t kbase_seq;
++
+    union {
+       struct panfrost_csf_context csf;
+       struct panfrost_jm_context jm;
+--- a/src/gallium/drivers/panfrost/pan_fence.c
++++ b/src/gallium/drivers/panfrost/pan_fence.c
+@@ -15,7 +15,29 @@
+ #include "util/os_time.h"
+ #include "util/u_inlines.h"
+ #include "kmod/pan_kmod.h"
++#include "kmod/kbase_kmod.h"
++#include "util/libsync.h"
++#include "util/os_file.h"
+ 
++static bool
++is_kbase(struct panfrost_device *dev)
++{
++   return pan_kmod_dev_is_kbase(dev->kmod.dev);
++}
++
++static struct pipe_fence_handle *
++kbase_fence_new(uint64_t seq, int sync_fd)
++{
++   struct pipe_fence_handle *f = calloc(1, sizeof(*f));
++   if (!f)
++      return NULL;
++   pipe_reference_init(&f->reference, 1);
++   f->kbase_seq = seq;
++   f->sync_fd = sync_fd;
++   f->signaled = !seq && sync_fd < 0;
++   return f;
++}
++
+ void
+ panfrost_fence_reference(struct pipe_screen *pscreen,
+                          struct pipe_fence_handle **ptr,
+@@ -25,6 +47,13 @@
+    struct pipe_fence_handle *old = *ptr;
+ 
+    if (pipe_reference(&old->reference, &fence->reference)) {
++      if (is_kbase(dev)) {
++         if (old->sync_fd >= 0)
++            close(old->sync_fd);
++         free(old);
++         *ptr = fence;
++         return;
++      }
+       pan_kmod_sync_destroy(dev->kmod.dev, old->syncobj);
+       free(old);
+    }
+@@ -46,6 +75,18 @@
+    if (abs_timeout == OS_TIMEOUT_INFINITE)
+       abs_timeout = INT64_MAX;
+ 
++   if (is_kbase(dev)) {
++      if (fence->sync_fd >= 0) {
++         const int ms = abs_timeout == INT64_MAX ? -1
++                        : (int)MIN2(DIV_ROUND_UP(timeout, 1000000), INT32_MAX);
++         fence->signaled = sync_wait(fence->sync_fd, ms) == 0;
++      } else {
++         fence->signaled =
++            pan_kmod_kbase_wait_seq_timeout(dev->kmod.dev, fence->kbase_seq, abs_timeout);
++      }
++      return fence->signaled;
++   }
++
+    ret = pan_kmod_sync_wait(dev->kmod.dev, &fence->syncobj, 1, abs_timeout,
+                             DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+ 
+@@ -59,6 +100,17 @@
+    struct panfrost_device *dev = pan_device(screen);
+    int fd = -1;
+ 
++   if (is_kbase(dev)) {
++      if (f->sync_fd >= 0)
++         return os_dupfd_cloexec(f->sync_fd);
++      if (f->signaled || pan_kmod_kbase_wait_seq_timeout(dev->kmod.dev, f->kbase_seq, 0))
++         return -1;
++      /* A fence-trigger atom behind everything submitted so far, which includes f's work; -1
++       * where the kernel has no sync files (then nothing outside this process can wait on it). */
++      pan_kmod_kbase_submit_async(dev->kmod.dev, NULL, 0, &fd, NULL, NULL);
++      return fd;
++   }
++
+    pan_kmod_sync_export_file(dev->kmod.dev, f->syncobj, &fd);
+    return fd;
+ }
+@@ -70,6 +122,13 @@
+    struct panfrost_device *dev = pan_device(ctx->base.screen);
+    int ret;
+ 
++   if (is_kbase(dev)) {
++      if (type != PIPE_FD_TYPE_NATIVE_SYNC)
++         return NULL;
++      const int dup = os_dupfd_cloexec(fd);
++      return dup >= 0 ? kbase_fence_new(0, dup) : NULL;
++   }
++
+    struct pipe_fence_handle *f = calloc(1, sizeof(*f));
+    if (!f)
+       return NULL;
+@@ -112,6 +171,9 @@
+    struct panfrost_device *dev = pan_device(ctx->base.screen);
+    int fd = -1, ret;
+ 
++   if (is_kbase(dev))
++      return kbase_fence_new(ctx->kbase_seq, -1);
++
+    /* Snapshot the last rendering out fence. We'd rather have another
+     * syncobj instead of a sync file, but this is all we get.
+     * (HandleToFD/FDToHandle just gives you another syncobj ID for the
+--- a/src/gallium/drivers/panfrost/pan_fence.h
++++ b/src/gallium/drivers/panfrost/pan_fence.h
+@@ -13,6 +13,9 @@
+    struct pipe_reference reference;
+    uint32_t syncobj;
+    bool signaled;
++   /* kbase: the submission this fence waits for, or a foreign sync file (-1: none) */
++   uint64_t kbase_seq;
++   int sync_fd;
+ };
+ 
+ void panfrost_fence_reference(struct pipe_screen *pscreen,
+--- a/src/gallium/drivers/panfrost/pan_jm.c
++++ b/src/gallium/drivers/panfrost/pan_jm.c
+@@ -13,6 +13,8 @@
+ #include "pan_context.h"
+ #include "pan_fb_preload.h"
+ #include "pan_jm.h"
++#include "kmod/kbase_kmod.h"
++#include "util/libsync.h"
+ #include "pan_job.h"
+ #include "pan_trace.h"
+ #include "kmod/panfrost_kmod.h"
+@@ -174,6 +176,92 @@
+    return 0;
+ }
+ 
++static void
++jm_kbase_done(void *data, bool ok)
++{
++   (void)data;
++   if (!ok)
++      mesa_loge("panfrost: a kbase job faulted");
++}
++
++/* kbase (no DRM node, no syncobjs, no PANFROST_SUBMIT): the vertex/tiler chain and the fragment
++ * chain go to the kernel as two atoms in one JOB_SUBMIT, the fragment one depending on the other, and
++ * nothing waits: every BO the batch touches remembers the submission (pan_kmod_kbase_bo_set_seq), and
++ * BO waits and fences wait for it. The kmod runs submissions in order, which is also what keeps the
++ * shared tiler heap to one batch at a time. (JimVulkan/mesa-unified-drivers, jm_submit_batch_kbase.) */
++static int
++jm_submit_batch_kbase(struct panfrost_batch *batch, bool has_draws, bool has_frag)
++{
++   struct panfrost_context *ctx = batch->ctx;
++   struct panfrost_device *dev = pan_device(ctx->base.screen);
++
++   if (ctx->in_sync_fd >= 0) {
++      sync_wait(ctx->in_sync_fd, -1);
++      close(ctx->in_sync_fd);
++      ctx->in_sync_fd = -1;
++   }
++
++   const uint32_t permon = batch->need_job_req_cycle_count ? KBASE_JD_REQ_PERMON : 0;
++   struct pan_kmod_kbase_atom atoms[2];
++   unsigned n = 0;
++   if (has_draws) {
++      atoms[n] = (struct pan_kmod_kbase_atom){
++         .jc = batch->jm.jobs.vtc_jc.first_job,
++         .core_req = KBASE_JD_REQ_VERTEX_TILER | permon,
++         .atom_number = n + 1,
++      };
++      n++;
++   }
++   if (has_frag) {
++      atoms[n] = (struct pan_kmod_kbase_atom){
++         .jc = batch->jm.jobs.frag,
++         .core_req = KBASE_JD_REQ_FRAGMENT | permon,
++         .atom_number = n + 1,
++         .dep_atom = has_draws ? 1 : 0,
++      };
++      n++;
++   }
++   if (!n || ctx->is_noop)
++      return 0;
++
++   const uint64_t seq =
++      pan_kmod_kbase_submit_async(dev->kmod.dev, atoms, n, NULL, jm_kbase_done, NULL);
++   if (!seq) {
++      mesa_loge("panfrost: the kernel refused a kbase submission");
++      return -1;
++   }
++   ctx->kbase_seq = seq;
++
++   pan_bo_access *flags = util_dynarray_begin(&batch->bos);
++   unsigned end_bo = util_dynarray_num_elements(&batch->bos, pan_bo_access);
++   for (unsigned i = 0; i < end_bo; ++i) {
++      if (!flags[i])
++         continue;
++      struct panfrost_bo *bo = pan_lookup_bo(dev, i);
++      panfrost_context_report_bo_access(ctx, bo, flags[i]);
++      pan_kmod_kbase_bo_set_seq(bo->kmod_bo, seq);
++   }
++   util_dynarray_foreach(&batch->pool.bos, struct panfrost_bo *, bo)
++      pan_kmod_kbase_bo_set_seq((*bo)->kmod_bo, seq);
++   util_dynarray_foreach(&batch->invisible_pool.bos, struct panfrost_bo *, bo)
++      pan_kmod_kbase_bo_set_seq((*bo)->kmod_bo, seq);
++   if (has_draws && batch->jm.jobs.vtc_jc.first_tiler)
++      pan_kmod_kbase_bo_set_seq(dev->tiler_heap->kmod_bo, seq);
++   if (dev->sample_positions)
++      pan_kmod_kbase_bo_set_seq(dev->sample_positions->kmod_bo, seq);
++
++   if (dev->debug & (PAN_DBG_TRACE | PAN_DBG_SYNC)) {
++      pan_kmod_kbase_wait_seq(dev->kmod.dev, seq);
++      if (dev->debug & PAN_DBG_TRACE) {
++         for (unsigned i = 0; i < n; i++)
++            pandecode_jc(dev->decode_ctx, atoms[i].jc, panfrost_device_gpu_id(dev));
++      }
++      if (dev->debug & PAN_DBG_DUMP)
++         pandecode_dump_mappings(dev->decode_ctx);
++   }
++   return 0;
++}
++
+ /* Submit both vertex/tiler and fragment jobs for a batch, possibly with an
+  * outsync corresponding to the later of the two (since there will be an
+  * implicit dep between them) */
+@@ -191,6 +279,9 @@
+    uint32_t out_sync = batch->ctx->syncobj;
+    int ret = 0;
+ 
++   if (pan_kmod_dev_is_kbase(dev->kmod.dev))
++      return jm_submit_batch_kbase(batch, has_draws, has_frag);
++
+    unsigned reqs =
+       batch->need_job_req_cycle_count ? PANFROST_JD_REQ_CYCLE_COUNT : 0;
+ 
+@@ -1107,6 +1198,12 @@
+ {
+    PAN_TRACE_FUNC(PAN_TRACE_GL_JM);
+ 
++   /* kbase: one context per open, no JM context objects: the default priority. */
++   if (pan_kmod_dev_is_kbase(pan_device(ctx->base.screen)->kmod.dev)) {
++      ctx->jm.handle = 0;
++      return 0;
++   }
++
+    /* The default context is medium prio, so we use that one. */
+    if (!(ctx->flags &
+          (PIPE_CONTEXT_HIGH_PRIORITY | PIPE_CONTEXT_LOW_PRIORITY))) {
+@@ -1145,6 +1242,12 @@
+ 
+    struct panfrost_device *dev = pan_device(ctx->base.screen);
+ 
++   if (pan_kmod_dev_is_kbase(dev->kmod.dev)) {
++      /* The context's jobs still read the screen's pools: let them finish. */
++      pan_kmod_kbase_wait_seq(dev->kmod.dev, ctx->kbase_seq);
++      return;
++   }
++
+    if (!ctx->jm.handle) {
+       /* Without an explicit JM context, nothing kills the jobs this context
+        * still has in flight, and they point at memory that is in no job's BO
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -35,6 +35,8 @@
+ #include "pan_tiling.h"
+ #include "pan_trace.h"
+ #include "pan_util.h"
++#include "util/u_debug.h"
++#include "kmod/kbase_kmod.h"
+ 
+ static uint64_t
+ panfrost_max_res_size_b(unsigned arch)
+@@ -1121,6 +1123,16 @@
+       if (template->bind & PIPE_BIND_SHARED)
+          flags |= PAN_BO_SHAREABLE;
+ 
++      /* kbase: a linear render target the CPU reads back (the surfaceless window the host copies to
++       * the framebuffer) is mapped write-back cached; PAN_KBASE_CACHED_WINDOW=0: write-combined */
++      if (pan_kmod_dev_is_kbase(dev->kmod.dev) &&
++          (template->bind & (PIPE_BIND_LINEAR | PIPE_BIND_RENDER_TARGET)) ==
++             (PIPE_BIND_LINEAR | PIPE_BIND_RENDER_TARGET) &&
++          !(template->bind & PIPE_BIND_SHARED) &&
++          (dev->kmod.dev->props.supported_bo_flags & PAN_KMOD_BO_FLAG_WB_MMAP) &&
++          debug_get_bool_option("PAN_KBASE_CACHED_WINDOW", true))
++         flags |= PAN_BO_CPU_CACHED;
++
+       char *res_label =
+          panfrost_resource_new_label(so, so->image.props.modifier , NULL);
+       if (!res_label)
+@@ -1783,6 +1795,13 @@
+             transfer->base.box.x, transfer->base.box.width);
+       }
+ 
++      /* A CPU-cached BO the GPU may have written: invalidate before the CPU reads it */
++      if ((bo->flags & PAN_BO_CPU_CACHED) && (usage & PIPE_MAP_READ)) {
++         pan_kmod_queue_bo_map_sync(bo->kmod_bo, 0, bo->ptr.cpu, panfrost_bo_size(bo),
++                                    PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH_AND_INVALIDATE);
++         pan_kmod_flush_bo_map_syncs(dev->kmod.dev);
++      }
++
+       return bo->ptr.cpu + rsrc->plane.layout.slices[level].offset_B +
+              box->z * transfer->base.layer_stride +
+              box_blocks.y *
+@@ -2332,6 +2351,14 @@
+    if (transfer->usage & PIPE_MAP_WRITE)
+       pan_crc_state_invalidate(&prsrc->crc_state);
+ 
++   /* CPU writes to a CPU-cached BO: cleaned to memory before the GPU reads them */
++   if ((transfer->usage & PIPE_MAP_WRITE) && prsrc->bo && (prsrc->bo->flags & PAN_BO_CPU_CACHED) &&
++       prsrc->bo->ptr.cpu) {
++      pan_kmod_queue_bo_map_sync(prsrc->bo->kmod_bo, 0, prsrc->bo->ptr.cpu,
++                                 panfrost_bo_size(prsrc->bo), PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH);
++      pan_kmod_flush_bo_map_syncs(dev->kmod.dev);
++   }
++
+    /* AFBC/AFRC will use a staging resource. `initialized` will be set when
+     * the fragment job is created; this is deferred to prevent useless surface
+     * reloads that can cascade into DATA_INVALID_FAULTs due to reading
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -109,6 +109,11 @@
+ loader_get_kernel_driver_name(int fd)
+ {
+    char *driver;
++
++   /* kbase: no DRM ioctls on its node */
++   if (loader_fd_is_kbase(fd))
++      return strdup("panfrost");
++
+    drmVersionPtr version = drmGetVersion(fd);
+ 
+    if (!version) {
+@@ -802,6 +807,21 @@
+    return driver;
+ }
+ 
++/* Arm's kbase node (/dev/mali0) is not a DRM device: drmGetVersion on it fails on some kernels and
++ * returns garbage on others. Gallium panfrost drives it through pan_kmod's kbase backend.
++ * (JimVulkan/mesa-unified-drivers) */
++bool
++loader_fd_is_kbase(int fd)
++{
++   char link[64], path[PATH_MAX];
++   snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
++   const ssize_t n = readlink(link, path, sizeof(path) - 1);
++   if (n <= 0)
++      return false;
++   path[n] = 0;
++   return strncmp(path, "/dev/mali", 9) == 0;
++}
++
+ char *
+ loader_get_driver_for_fd(int fd)
+ {
+@@ -824,6 +844,9 @@
+       return driver;
+ #endif
+ 
++   if (loader_fd_is_kbase(fd))
++      return strdup("panfrost");
++
+    driver = loader_get_pci_driver(fd);
+    if (!driver)
+       driver = loader_get_kernel_driver_name(fd);
+--- a/src/loader/loader.h
++++ b/src/loader/loader.h
+@@ -66,6 +66,9 @@
+ char *
+ loader_get_driver_for_fd(int fd);
+ 
++bool
++loader_fd_is_kbase(int fd);
++
+ void *
+ loader_open_driver_lib(const char *driver_name,
+                        const char *lib_suffix,
+--- a/src/panfrost/lib/kmod/meson.build
++++ b/src/panfrost/lib/kmod/meson.build
+@@ -5,6 +5,9 @@
+ libpankmod_lib_link_with = []
+ libpankmod_lib_inc = []
+ libpankmod_lib_code = [
++  'kbase_kmod.c',
++  'kbase/cache.c', 'kbase/context.c', 'kbase/csf.c', 'kbase/device.c',
++  'kbase/jm.c', 'kbase/kcpu.c', 'kbase/mem.c', 'kbase/props.c',
+   'pan_kmod.c',
+   'panfrost_kmod.c',
+   'panthor_kmod.c',
+--- a/src/panfrost/lib/kmod/pan_kmod.c
++++ b/src/panfrost/lib/kmod/pan_kmod.c
+@@ -3,7 +3,9 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include <stdio.h>
+ #include <string.h>
++#include <unistd.h>
+ #include <xf86drm.h>
+ 
+ #include "util/cache_ops.h"
+@@ -14,6 +16,7 @@
+ 
+ extern const struct pan_kmod_ops panfrost_kmod_ops;
+ extern const struct pan_kmod_ops panthor_kmod_ops;
++extern const struct pan_kmod_ops kbase_kmod_ops;
+ #ifdef HAVE_PANFROST_VDRM
+ extern const struct pan_kmod_ops panfrost_virtio_gpu_ops;
+ extern const struct pan_kmod_ops panfrost_vpipe_ops;
+@@ -31,6 +34,11 @@
+       "panthor",
+       &panthor_kmod_ops,
+    },
++   {
++      /* Arm's kbase (/dev/mali0): no DRM node; tried on such an fd only */
++      "kbase",
++      &kbase_kmod_ops,
++   },
+ #ifdef HAVE_PANFROST_VDRM
+    {
+       "panfrost_virtio_gpu",
+@@ -50,6 +58,19 @@
+ {
+    return !strcmp(enabled_backends, "all") ||
+           comma_separated_list_contains(enabled_backends, backend);
++}
++
++/* Arm's kbase node (/dev/mali*), by the fd's path */
++static bool
++pan_kmod_fd_is_kbase(int fd)
++{
++   char link[64], path[64];
++   snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
++   const ssize_t n = readlink(link, path, sizeof(path) - 1);
++   if (n <= 0)
++      return false;
++   path[n] = 0;
++   return !strncmp(path, "/dev/mali", 9);
+ }
+ 
+ static void *
+@@ -80,7 +101,12 @@
+    if (!allocator)
+       allocator = &default_allocator;
+ 
++   /* A kbase node takes the kbase backend only: the DRM backends' version ioctl never reaches it */
++   const bool kbase = pan_kmod_fd_is_kbase(fd);
++
+    for (int i = 0; i < ARRAY_SIZE(backends); i++) {
++      if (kbase != !strcmp(backends[i].name, "kbase"))
++         continue;
+       if (pan_kmod_backend_is_enabled(selected_backends, backends[i].name))
+          dev = backends[i].ops->dev_create(fd, flags, allocator);
+       else
+--- /dev/null
++++ b/src/panfrost/lib/kmod/kbase_kmod.c
+@@ -0,0 +1,889 @@
++/*
++ * Copyright 2026 XclipseTools (JimVulkan/mesa-unified-drivers, a5010bb): the backend's design, the
++ *                event thread, the in-order atom chain and the process-local sync objects
++ * Copyright 2026 ARMSX2 and bmdhacks (bmdhacks/malisx2 src/kbase, with Knifethrower's UK 11.7 and 11.17
++ *                support, PR #60): every ioctl and struct this backend uses, through mali_kbase_*
++ * SPDX-License-Identifier: MIT
++ *
++ * kbase_kmod.c -- a pan_kmod backend for Arm's kbase kernel driver (/dev/mali0), job-manager GPUs.
++ *
++ * pan_kmod's own backends talk to a DRM render node (panfrost, panthor). Handhelds that ship Arm's
++ * kbase have no DRM node for the GPU at all. This backend drives kbase through the kbase layer of
++ * malisx2 (src/panfrost/lib/kmod/kbase/: context setup, GPU properties, memory, JOB_SUBMIT and the
++ * event channel), which negotiates the UK version the kernel speaks (job manager 11.7 to 11.36) and
++ * picks the struct layouts that version needs (the 48-byte base_jd_atom_v2 below 11.19, no executable
++ * zone before 11.13, the 16-byte MEM_JIT_INIT below 11.20, ...), each one pinned by a static assert.
++ * Nothing in this file builds an ioctl itself.
++ *
++ * The shape is JimVulkan's kbase_kmod.c (Mesa 26.3, Mali-G76/G72 phones), ported to this tree's
++ * pan_kmod API (bo_import by dma-buf fd, bo_mmap by the backend, a sync provider per device):
++ *   - kbase assigns every GPU VA at allocation, one address space a context: one VM, AUTO_VA only;
++ *   - SAME_VA memory: the mapping made at allocation fixes the address and owns the region (munmap
++ *     of it is the free); bo_mmap gives callers a second mapping of it, which they may unmap;
++ *   - shader code: the executable zone, a single CPU mapping, handed to the first bo_mmap;
++ *   - submission: atoms in one JOB_SUBMIT, each submission ORDER-dependent on the last atom of the
++ *     one before (the kernel runs them in order, which also keeps the tiler heap to one batch at a
++ *     time); one event thread reads completions; callers wait for a submission's sequence number;
++ *   - sync objects: binary objects in this process (kbase has none); sync files only where the
++ *     kernel has them (CONFIG_SYNC_FILE: the RK3326's kernels have not), else waits go through
++ *     the sequence numbers.
++ *   - AFBC is reported absent: the H700's Mali-G31 was built without it (Knifethrower's
++ *     h700-mali-wayland), and no AFBC is ever asked for on a kbase device.
++ */
++
++#include <assert.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <inttypes.h>
++#include <poll.h>
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <time.h>
++#include <unistd.h>
++
++#include "drm-uapi/drm.h"
++#include "util/macros.h"
++#include "util/u_debug.h"
++#include "util/u_sync_provider.h"
++#include "util/timespec.h"
++
++#include "pan_kmod_backend.h"
++#include "kbase_kmod.h"
++#include "kbase/kbase.h"
++#include "kbase/uapi.h"
++#include "kbase/uapi_jm.h"
++
++extern const struct pan_kmod_ops kbase_kmod_ops;
++
++struct kbase_sub;
++
++/* Submission state of a device (see "submission" below). */
++struct kbase_queue {
++   pthread_mutex_t lock;
++   pthread_cond_t cond;              /* atom numbers freed, submissions completed */
++   struct kbase_sub *owner[256];     /* by atom number, NULL when free */
++   bool is_fence[256];
++   unsigned free_atoms;              /* of the numbers 1..255 */
++   uint8_t last_atom;                /* the newest GPU atom in flight, 0 if none */
++   uint64_t next_seq;
++   uint64_t open_seq[256];           /* submissions whose callback has not run yet */
++   unsigned nr_open_seq;
++   unsigned in_flight;               /* submissions and lone fence atoms */
++   pthread_t thread;
++   bool thread_started, stop;
++   /* sync files: unknown (0), work (1), the kernel has none (-1) */
++   int fences;
++};
++
++struct kbase_kmod_dev {
++   struct pan_kmod_dev base;
++   struct mali_kbase *kb;
++   int kb_fd;                        /* the fd kb was created on (a dup of base.fd) */
++   struct kbase_kmod_vm *vm;
++   uint32_t next_handle;
++   struct kbase_queue queue;
++};
++
++struct kbase_kmod_bo {
++   struct pan_kmod_bo base;
++   struct mali_kbase_bo kbo;
++   int dmabuf_fd;                    /* imports: our dup of the dma-buf, for CPU mappings; else -1 */
++   bool exec_map_given;              /* an executable BO's one mapping went to a bo_mmap caller */
++   uint64_t seq;                     /* the last submission that used it (pan_kmod_kbase_bo_set_seq) */
++};
++
++struct kbase_kmod_vm {
++   struct pan_kmod_vm base;
++};
++
++static struct kbase_kmod_dev *
++to_kdev(const struct pan_kmod_dev *dev)
++{
++   return container_of(dev, struct kbase_kmod_dev, base);
++}
++
++static void kbase_queue_init(struct kbase_queue *q);
++static void kbase_queue_finish(struct kbase_kmod_dev *kdev);
++
++bool
++pan_kmod_dev_is_kbase(const struct pan_kmod_dev *dev)
++{
++   return dev && dev->ops == &kbase_kmod_ops;
++}
++
++/* ---- the kbase layer's OS backend: the context is made on our fd --------------------------
++ *
++ * mali_kbase_create opens the device itself; Mesa has already opened it (the EGL platform or the
++ * loader), so open() hands back a dup of that fd. kbase's context is per open file description,
++ * so the dup is the same context Mesa's fd refers to. */
++
++struct fd_backend {
++   struct mali_kbase_backend b;
++   int fd;
++};
++
++static int
++fdb_open(void *priv, const char *path)
++{
++   (void)path;
++   const int fd = fcntl(((struct fd_backend *)priv)->fd, F_DUPFD_CLOEXEC, 3);
++   return fd;
++}
++
++static void
++kbase_log(void *user, const char *msg)
++{
++   (void)user;
++   mesa_logi("kbase: %s", msg);
++}
++
++/* Is fd Arm's kbase node? (A DRM driver answers DRM_IOCTL_VERSION; kbase does not reliably, and
++ * on some kernels returns success for DRM ioctls it does not implement, so the device path decides.) */
++static bool
++fd_is_kbase(int fd)
++{
++   char link[64], path[256];
++   snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
++   const ssize_t n = readlink(link, path, sizeof(path) - 1);
++   if (n <= 0)
++      return false;
++   path[n] = 0;
++   return !strncmp(path, "/dev/mali", 9);
++}
++
++static void
++kbase_props(const struct mali_kbase *kb, struct pan_kmod_dev_props *props)
++{
++   const struct mali_kbase_gpu_props *p = &kb->props;
++
++   memset(props, 0, sizeof(*props));
++   /* GPU_ID: product id in 31:16, revision in 15:0 (major 15:12, minor 11:4, status 3:0), as
++    * DRM panfrost reports it. */
++   props->gpu_id = ((uint64_t)p->product_id << 16) | ((p->major_revision & 0xf) << 12) |
++                   ((p->minor_revision & 0xff) << 4) | (p->version_status & 0xf);
++   props->shader_present = p->shader_present;
++   props->tiler_features = p->tiler_features;
++   props->mem_features = p->mem_features;
++   props->mmu_features = p->mmu_features;
++   props->l2_features = p->l2_features;
++   props->gpu_features = p->gpu_features;
++   for (unsigned i = 0; i < 4; i++)
++      props->texture_features[i] = p->raw_texture_features[i] ? p->raw_texture_features[i]
++                                                              : p->texture_features[i];
++   /* Nonzero: no AFBC (pan_query_afbc). Never on kbase: the H700's G31 has none. */
++   props->afbc_features = 1;
++
++   props->max_threads_per_core = p->thread_max_threads ? p->thread_max_threads : p->max_threads;
++   props->max_threads_per_wg =
++      p->thread_max_workgroup_size ? p->thread_max_workgroup_size : p->max_workgroup_size;
++   props->max_tasks_per_core = (p->thread_features >> 24) & 0xff;
++   if (!props->max_tasks_per_core)
++      props->max_tasks_per_core = 1;
++   props->num_registers_per_core = p->max_registers ? p->max_registers
++                                                    : props->max_threads_per_core * 32;
++   props->max_tls_instance_per_core = p->thread_tls_alloc ? p->thread_tls_alloc
++                                                          : props->max_threads_per_core;
++   if (!props->max_tls_instance_per_core)
++      props->max_tls_instance_per_core = props->max_threads_per_core;
++
++   /* PERMON on an atom starts the cycle counter, which is what makes timestamps propagate. */
++   props->gpu_can_query_timestamp = true;
++   props->timestamp_device_coherent = true;
++#if defined(__aarch64__)
++   uint64_t f;
++   __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
++   props->timestamp_frequency = f;
++#endif
++   if (props->timestamp_frequency)
++      props->timestamp_cycles_to_ns_factor = (double)NSEC_PER_SEC / props->timestamp_frequency;
++
++   props->allowed_group_priorities_mask = PAN_KMOD_GROUP_ALLOW_PRIORITY_MEDIUM;
++   props->supported_bo_flags =
++      PAN_KMOD_BO_FLAG_EXECUTABLE | PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT | PAN_KMOD_BO_FLAG_NO_MMAP |
++      PAN_KMOD_BO_FLAG_WB_MMAP;
++   props->is_io_coherent = false;
++   props->pgsize_bitmap = PAN_PGSIZE_4K;
++}
++
++/* ---- device ------------------------------------------------------------------------------- */
++
++static struct pan_kmod_dev *
++kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_allocator *allocator)
++{
++   if (!fd_is_kbase(fd))
++      return NULL;
++
++   struct kbase_kmod_dev *kdev = pan_kmod_alloc(allocator, sizeof(*kdev));
++   if (!kdev)
++      return NULL;
++   memset(kdev, 0, sizeof(*kdev));
++
++   static struct fd_backend fdb; /* (one device a process is all Mesa makes here) */
++   fdb.b = *mali_kbase_os_backend();
++   fdb.b.priv = &fdb;
++   fdb.b.open = fdb_open;
++   fdb.fd = fd;
++
++   const struct mali_kbase_create_info ci = {
++      .device_path = "/dev/mali0",
++      .backend = &fdb.b,
++      .log = kbase_log,
++   };
++   enum mali_kbase_result r = mali_kbase_create(&ci, &kdev->kb);
++   if (r != MALI_KBASE_SUCCESS) {
++      mesa_loge("kbase: no context on fd %d: %s", fd, mali_kbase_result_str(r));
++      pan_kmod_free(allocator, kdev);
++      return NULL;
++   }
++   if (kdev->kb->frontend != MALI_KBASE_FRONTEND_JM) {
++      mesa_loge("kbase: a command-stream (CSF) kernel: this backend drives job-manager GPUs only");
++      mali_kbase_destroy(kdev->kb);
++      pan_kmod_free(allocator, kdev);
++      return NULL;
++   }
++   kdev->kb_fd = kdev->kb->fd;
++
++   char layout[160];
++   mesa_logi("kbase: UK %u.%u, GPU 0x%04x r%up%u, %u cores; %s", kdev->kb->uk_major,
++             kdev->kb->uk_minor, kdev->kb->props.product_id, kdev->kb->props.major_revision,
++             kdev->kb->props.minor_revision, kdev->kb->props.core_count,
++             mali_kbase_jm_atom_layout_str(kdev->kb, layout, sizeof(layout)));
++
++   struct pan_kmod_driver drv = {.version = {.major = kdev->kb->uk_major,
++                                             .minor = kdev->kb->uk_minor}};
++   if (pan_kmod_dev_init(&kdev->base, fd, flags, &drv, allocator, &kbase_kmod_ops,
++                         pan_kmod_kbase_sync_provider())) {
++      mali_kbase_destroy(kdev->kb);
++      pan_kmod_free(allocator, kdev);
++      return NULL;
++   }
++   kbase_props(kdev->kb, &kdev->base.props);
++   kdev->next_handle = 1;
++   kbase_queue_init(&kdev->queue);
++   return &kdev->base;
++}
++
++static void
++kbase_kmod_dev_destroy(struct pan_kmod_dev *dev)
++{
++   struct kbase_kmod_dev *kdev = to_kdev(dev);
++
++   kbase_queue_finish(kdev);
++   mali_kbase_destroy(kdev->kb);
++   pan_kmod_dev_cleanup(dev);
++   pan_kmod_free(dev->allocator, kdev);
++}
++
++static struct pan_kmod_va_range
++kbase_kmod_dev_query_user_va_range(const struct pan_kmod_dev *dev)
++{
++   /* kbase hands out the addresses; this only describes the space they live in. The low 4 GiB
++    * hold kbase's own special mappings (the tracking page at 3 << 12). */
++   const unsigned va_bits = MMU_FEATURES_VA_BITS(dev->props.mmu_features);
++   return (struct pan_kmod_va_range){
++      .start = 4ull << 30,
++      .size = (1ull << va_bits) - (4ull << 30),
++   };
++}
++
++/* ---- buffer objects ------------------------------------------------------------------------ */
++
++#define KBASE_GROW_INITIAL_PAGES 256ull
++#define KBASE_GROW_STEP_PAGES    512ull
++
++static struct pan_kmod_bo *
++kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *exclusive_vm, uint64_t size,
++                    uint32_t flags)
++{
++   struct kbase_kmod_dev *kdev = to_kdev(dev);
++
++   if (flags & PAN_KMOD_BO_FLAG_GPU_UNCACHED)
++      return NULL;
++
++   struct kbase_kmod_bo *bo = pan_kmod_dev_alloc(dev, sizeof(*bo));
++   if (!bo)
++      return NULL;
++   memset(bo, 0, sizeof(*bo));
++   bo->dmabuf_fd = -1;
++
++   enum mali_kbase_result r;
++   if (flags & PAN_KMOD_BO_FLAG_EXECUTABLE) {
++      r = mali_kbase_alloc_program(kdev->kb, size, &bo->kbo);
++   } else {
++      const bool grow = flags & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT;
++      const bool cached = flags & PAN_KMOD_BO_FLAG_WB_MMAP;
++      const uint64_t pages = DIV_ROUND_UP(size, 4096);
++      uint64_t kflags = cached ? MALI_KBASE_FLAGS_DEVICE_CACHED : MALI_KBASE_FLAGS_DEVICE_UNCACHED;
++      if (grow)
++         kflags |= KB_MEM_GROW_ON_GPF;
++      const struct mali_kbase_alloc_info ai = {
++         .size = size,
++         .commit_size = grow ? MIN2(pages, KBASE_GROW_INITIAL_PAGES) * 4096 : 0,
++         .extension_pages = grow ? KBASE_GROW_STEP_PAGES : 0,
++         .flags = mali_kbase_mem_same_va_policy(kflags) | kflags,
++         .mem_class = cached ? MALI_KBASE_MEM_CLASS_DEVICE_CPU_CACHED
++                             : MALI_KBASE_MEM_CLASS_DEVICE_CPU_UNCACHED,
++         .cpu_map = !(flags & PAN_KMOD_BO_FLAG_NO_MMAP),
++      };
++      r = mali_kbase_alloc(kdev->kb, &ai, &bo->kbo);
++   }
++   if (r != MALI_KBASE_SUCCESS) {
++      mesa_loge("kbase: allocation of %" PRIu64 " bytes (flags 0x%x) failed: %s", size, flags,
++                mali_kbase_result_str(r));
++      pan_kmod_dev_free(dev, bo);
++      return NULL;
++   }
++
++   pan_kmod_bo_init(&bo->base, dev, exclusive_vm, bo->kbo.size, flags, kdev->next_handle++);
++   return &bo->base;
++}
++
++static void
++kbase_kmod_bo_free(struct pan_kmod_bo *bo)
++{
++   struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
++   struct kbase_kmod_dev *kdev = to_kdev(bo->dev);
++
++   /* kbase frees memory at once, not when the jobs using it are done: wait for the last
++    * submission that used it (everything so far when nobody said which). */
++   pan_kmod_kbase_wait_seq(bo->dev, kbo->seq ? kbo->seq : 0);
++
++   if (kbo->exec_map_given) {
++      /* The caller unmapped the one mapping already. */
++      kbo->kbo.attrs &= ~MALI_KBASE_BO_CPU_MAPPED;
++      kbo->kbo.cpu = NULL;
++   }
++   mali_kbase_free(kdev->kb, &kbo->kbo);
++   if (kbo->dmabuf_fd >= 0)
++      close(kbo->dmabuf_fd);
++   pan_kmod_dev_free(bo->dev, kbo);
++}
++
++static void *
++kbase_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags, void *host_addr)
++{
++   struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
++   struct kbase_kmod_dev *kdev = to_kdev(bo->dev);
++
++   if (kbo->dmabuf_fd >= 0) /* an import: CPU access through the dma-buf itself */
++      return mmap(host_addr, bo->size, prot, flags, kbo->dmabuf_fd, 0);
++
++   if (kbo->kbo.attrs & MALI_KBASE_BO_SAME_VA) {
++      /* A second mapping of the region (offset = its address); the first one owns it. */
++      return mmap(host_addr, bo->size, prot, flags, kdev->kb_fd, (off_t)kbo->kbo.gpu_va);
++   }
++
++   /* Executable memory allows one CPU mapping: hand it over, once. */
++   if (kbo->kbo.cpu && !kbo->exec_map_given && !host_addr) {
++      kbo->exec_map_given = true;
++      return kbo->kbo.cpu;
++   }
++   errno = ENOMEM;
++   return MAP_FAILED;
++}
++
++static struct pan_kmod_bo *
++kbase_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
++{
++   struct kbase_kmod_dev *kdev = to_kdev(dev);
++   struct kbase_kmod_bo *bo = pan_kmod_dev_alloc(dev, sizeof(*bo));
++   if (!bo)
++      return NULL;
++   memset(bo, 0, sizeof(*bo));
++
++   enum mali_kbase_result r =
++      mali_kbase_import_dmabuf(kdev->kb, fd, MALI_KBASE_FLAGS_IMPORT, 0, true, &bo->kbo);
++   if (r != MALI_KBASE_SUCCESS) {
++      mesa_loge("kbase: import of dma-buf %d failed: %s", fd, mali_kbase_result_str(r));
++      pan_kmod_dev_free(dev, bo);
++      return NULL;
++   }
++   bo->dmabuf_fd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
++   pan_kmod_bo_init(&bo->base, dev, NULL, bo->kbo.size, PAN_KMOD_BO_FLAG_IMPORTED,
++                    kdev->next_handle++);
++   return &bo->base;
++}
++
++static int
++kbase_kmod_bo_export(struct pan_kmod_bo *bo)
++{
++   /* kbase memory is not a dma-buf. Nothing here shares buffers with another process: the
++    * window is presented by copying (see docs/mesa.md in portmaster-unity). */
++   (void)bo;
++   errno = ENOTSUP;
++   return -1;
++}
++
++void
++pan_kmod_kbase_bo_set_seq(struct pan_kmod_bo *bo, uint64_t seq)
++{
++   if (bo && pan_kmod_dev_is_kbase(bo->dev))
++      container_of(bo, struct kbase_kmod_bo, base)->seq = seq;
++}
++
++static bool
++kbase_kmod_bo_wait(struct pan_kmod_bo *bo, int64_t timeout_ns, bool for_read_only_access)
++{
++   (void)for_read_only_access;
++   /* The last submission that used the BO (kbase has no per-BO wait). Readers and writers are
++    * not told apart: a submission is waited for whole. */
++   const uint64_t seq = container_of(bo, struct kbase_kmod_bo, base)->seq;
++   if (!seq)
++      return true;
++   struct timespec now;
++   clock_gettime(CLOCK_MONOTONIC, &now);
++   const int64_t now_ns = (int64_t)now.tv_sec * 1000000000ll + now.tv_nsec;
++   const int64_t abs = timeout_ns >= INT64_MAX - now_ns ? INT64_MAX : now_ns + timeout_ns;
++   return pan_kmod_kbase_wait_seq_timeout(bo->dev, seq, abs);
++}
++
++static int
++kbase_kmod_flush_bo_map_syncs(struct pan_kmod_dev *dev)
++{
++   /* Cache maintenance of WB_MMAP mappings runs in userspace (pan_kmod_queue_bo_map_sync). */
++   (void)dev;
++   return 0;
++}
++
++/* ---- address space ------------------------------------------------------------------------- */
++
++static struct pan_kmod_vm *
++kbase_kmod_vm_create(struct pan_kmod_dev *dev, uint32_t flags, uint64_t va_start,
++                     uint64_t va_range)
++{
++   struct kbase_kmod_dev *kdev = to_kdev(dev);
++   (void)va_start;
++   (void)va_range;
++
++   if (kdev->vm || !(flags & PAN_KMOD_VM_FLAG_AUTO_VA)) {
++      mesa_loge("kbase: one VM per device, AUTO_VA only: the kernel owns the addresses");
++      return NULL;
++   }
++   struct kbase_kmod_vm *vm = pan_kmod_dev_alloc(dev, sizeof(*vm));
++   if (!vm)
++      return NULL;
++   pan_kmod_vm_init(&vm->base, dev, 0, flags);
++   kdev->vm = vm;
++   return &vm->base;
++}
++
++static void
++kbase_kmod_vm_destroy(struct pan_kmod_vm *vm)
++{
++   struct kbase_kmod_dev *kdev = to_kdev(vm->dev);
++   kdev->vm = NULL;
++   pan_kmod_vm_cleanup(vm);
++   pan_kmod_dev_free(vm->dev, container_of(vm, struct kbase_kmod_vm, base));
++}
++
++static int
++kbase_kmod_vm_bind(struct pan_kmod_vm *vm, enum pan_kmod_vm_op_mode mode,
++                   struct pan_kmod_vm_op *ops, uint32_t op_count)
++{
++   (void)vm;
++   if (mode != PAN_KMOD_VM_OP_MODE_IMMEDIATE && mode != PAN_KMOD_VM_OP_MODE_DEFER_TO_NEXT_IDLE_POINT)
++      return -1;
++   for (uint32_t i = 0; i < op_count; i++) {
++      if (ops[i].type == PAN_KMOD_VM_OP_TYPE_MAP) {
++         if (ops[i].va.start != PAN_KMOD_VM_MAP_AUTO_VA)
++            return -1;
++         /* MEM_ALLOC made the mapping: report where the kernel put it. */
++         ops[i].va.start = container_of(ops[i].map.bo, struct kbase_kmod_bo, base)->kbo.gpu_va;
++      } else if (ops[i].type != PAN_KMOD_VM_OP_TYPE_UNMAP) {
++         return -1;
++      }
++   }
++   return 0;
++}
++
++static uint64_t
++kbase_kmod_query_timestamp(const struct pan_kmod_dev *dev)
++{
++   uint64_t mono, ts;
++   if (mali_kbase_timeinfo(to_kdev(dev)->kb, &mono, &ts) == MALI_KBASE_SUCCESS)
++      return ts;
++#if defined(__aarch64__)
++   uint64_t v;
++   __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) : : "memory");
++   return v;
++#else
++   return 0;
++#endif
++}
++
++/* ---- sync objects (JimVulkan's, unchanged in substance) --------------------------------------
++ *
++ * kbase has no syncobjs. These are binary objects kept in this process with the DRM syncobj
++ * semantics Mesa's runtime expects: unsignaled, submitted (its signal operation queued: satisfies
++ * WAIT_AVAILABLE) or signaled; a sync file attached when the kernel gave one. */
++
++#include "kbase_kmod_sync.c.inc"
++
++/* ---- submission -------------------------------------------------------------------------------
++ *
++ * One thread per device reads the completion events; a submission returns once the kernel has its
++ * atoms. Atom numbers (1..255, unique among the atoms in flight) come from one allocator. Each
++ * submission's first atom ORDER-depends on the newest GPU atom still in flight, so submissions run
++ * in order (ORDER, so a fault does not spread). A completion callback runs on the event thread once
++ * every atom of the submission has reported, before pan_kmod_kbase_wait_seq sees it complete.
++ *
++ * A sync file for a submission comes from a FENCE_TRIGGER soft atom behind its last atom, where the
++ * kernel has sync files. Where it has not (JOB_SUBMIT refuses the soft atom, or it completes with an
++ * error), fences are turned off for the device and callers get -1: they wait on the sequence number. */
++
++#define KBASE_ATOM_TAG 0x50414e4b42ull /* "PANKB", comes back in the event's udata */
++
++struct kbase_sub {
++   uint64_t seq;
++   unsigned pending;
++   bool ok;
++   pan_kmod_kbase_done_cb done;
++   void *data;
++};
++
++static void *
++kbase_event_thread(void *arg)
++{
++   struct kbase_kmod_dev *kdev = arg;
++   struct kbase_queue *q = &kdev->queue;
++
++   for (;;) {
++      pthread_mutex_lock(&q->lock);
++      const bool stop = q->stop && !q->in_flight;
++      pthread_mutex_unlock(&q->lock);
++      if (stop)
++         break;
++
++      if (mali_kbase_jm_poll(kdev->kb, 100) <= 0)
++         continue;
++
++      struct kb_jm_event ev[16];
++      unsigned n = 0;
++      if (mali_kbase_jm_read_events(kdev->kb, ev, ARRAY_SIZE(ev), &n, NULL) != MALI_KBASE_SUCCESS ||
++          !n)
++         continue;
++
++      struct kbase_sub *finished[16];
++      unsigned nr_finished = 0;
++
++      pthread_mutex_lock(&q->lock);
++      for (unsigned i = 0; i < n; i++) {
++         if (ev[i].udata[0] != KBASE_ATOM_TAG)
++            continue;
++         const uint8_t an = ev[i].atom_number;
++         struct kbase_sub *sub = q->owner[an];
++         if (!sub) {
++            mesa_loge("kbase: event for atom %u, which is not in flight", an);
++            continue;
++         }
++         q->owner[an] = NULL;
++         q->free_atoms++;
++         if (q->last_atom == an)
++            q->last_atom = 0;
++         if (ev[i].event_code != KB_JM_EVENT_DONE) {
++            if (q->is_fence[an]) {
++               if (q->fences >= 0)
++                  mesa_logw("kbase: a fence-trigger atom ended with event 0x%x: no sync files on "
++                            "this kernel, fences wait on submissions",
++                            ev[i].event_code);
++               q->fences = -1;
++            } else {
++               mesa_loge("kbase: atom %u ended with event 0x%x, not DONE", an, ev[i].event_code);
++               sub->ok = false;
++            }
++         }
++         q->is_fence[an] = false;
++         if (--sub->pending == 0)
++            finished[nr_finished++] = sub;
++      }
++      pthread_cond_broadcast(&q->cond);
++      pthread_mutex_unlock(&q->lock);
++
++      for (unsigned i = 0; i < nr_finished; i++) {
++         struct kbase_sub *sub = finished[i];
++         if (sub->done)
++            sub->done(sub->data, sub->ok);
++         pthread_mutex_lock(&q->lock);
++         for (unsigned k = 0; sub->seq && k < q->nr_open_seq; k++) {
++            if (q->open_seq[k] == sub->seq) {
++               q->open_seq[k] = q->open_seq[--q->nr_open_seq];
++               break;
++            }
++         }
++         q->in_flight--;
++         pthread_cond_broadcast(&q->cond);
++         pthread_mutex_unlock(&q->lock);
++         free(sub);
++      }
++   }
++   return NULL;
++}
++
++static void
++kbase_queue_init(struct kbase_queue *q)
++{
++   pthread_mutex_init(&q->lock, NULL);
++   pthread_condattr_t attr;
++   pthread_condattr_init(&attr);
++   pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
++   pthread_cond_init(&q->cond, &attr);
++   pthread_condattr_destroy(&attr);
++   q->free_atoms = 255;
++   q->next_seq = 1;
++   q->fences = debug_get_bool_option("PAN_KBASE_NO_FENCES", false) ? -1 : 0;
++}
++
++static void
++kbase_queue_finish(struct kbase_kmod_dev *kdev)
++{
++   struct kbase_queue *q = &kdev->queue;
++
++   pthread_mutex_lock(&q->lock);
++   q->stop = true;
++   const bool started = q->thread_started;
++   pthread_mutex_unlock(&q->lock);
++   if (started)
++      pthread_join(q->thread, NULL);
++   pthread_cond_destroy(&q->cond);
++   pthread_mutex_destroy(&q->lock);
++}
++
++/* The JOB_SUBMIT itself; atoms built by the caller. True when the kernel took them. */
++static bool
++kbase_job_submit(struct kbase_kmod_dev *kdev, const struct kb_jm_atom *jd, unsigned n)
++{
++   enum mali_kbase_result r = mali_kbase_jm_submit(kdev->kb, jd, n);
++   if (r != MALI_KBASE_SUCCESS) {
++      mesa_loge("kbase: JOB_SUBMIT of %u atoms failed: %s", n, mali_kbase_result_str(r));
++      return false;
++   }
++   return true;
++}
++
++uint64_t
++pan_kmod_kbase_submit_async(struct pan_kmod_dev *dev, const struct pan_kmod_kbase_atom *atoms,
++                            unsigned nr_atoms, int *fence_fd, pan_kmod_kbase_done_cb done,
++                            void *data)
++{
++   struct kbase_kmod_dev *kdev = to_kdev(dev);
++   struct kbase_queue *q = &kdev->queue;
++
++   if (fence_fd)
++      *fence_fd = -1;
++   if (nr_atoms > PAN_KMOD_KBASE_MAX_ATOMS)
++      return 0;
++
++   pthread_mutex_lock(&q->lock);
++
++   if (!q->thread_started) {
++      if (pthread_create(&q->thread, NULL, kbase_event_thread, kdev)) {
++         pthread_mutex_unlock(&q->lock);
++         mesa_loge("kbase: could not start the event thread");
++         return 0;
++      }
++      q->thread_started = true;
++   }
++
++   const uint64_t seq = q->next_seq++;
++   bool fence = fence_fd && q->fences >= 0 && (nr_atoms || q->last_atom);
++
++retry:;
++   const unsigned need = nr_atoms + fence;
++   if (!need) {
++      /* Nothing to run: complete once the earlier submissions have, so completion stays in order. */
++      while (q->nr_open_seq)
++         pthread_cond_wait(&q->cond, &q->lock);
++      pthread_mutex_unlock(&q->lock);
++      if (done)
++         done(data, true);
++      return seq;
++   }
++
++   while (q->free_atoms < need)
++      pthread_cond_wait(&q->cond, &q->lock);
++
++   const bool split = fence && nr_atoms;
++   struct kbase_sub *sub = calloc(1, sizeof(*sub));
++   struct kbase_sub *fsub = split ? calloc(1, sizeof(*fsub)) : NULL;
++   if (!sub || (split && !fsub)) {
++      free(sub);
++      free(fsub);
++      pthread_mutex_unlock(&q->lock);
++      return 0;
++   }
++   *sub = (struct kbase_sub){.seq = seq, .pending = split ? nr_atoms : need, .ok = true,
++                             .done = done, .data = data};
++   if (split)
++      *fsub = (struct kbase_sub){.pending = 1, .ok = true};
++
++   uint8_t real[PAN_KMOD_KBASE_MAX_ATOMS + 1];
++   uint8_t rel_to_real[256] = {0};
++   unsigned next = 1;
++   for (unsigned i = 0; i < need; i++) {
++      while (q->owner[next])
++         next++;
++      assert(next <= 255);
++      real[i] = next;
++      q->owner[next] = split && i == nr_atoms ? fsub : sub;
++      q->is_fence[next] = fence && i == nr_atoms;
++      next++;
++   }
++   for (unsigned i = 0; i < nr_atoms; i++)
++      rel_to_real[atoms[i].atom_number] = real[i];
++
++   struct kb_jm_atom jd[PAN_KMOD_KBASE_MAX_ATOMS + 1];
++   memset(jd, 0, need * sizeof(jd[0]));
++   for (unsigned i = 0; i < nr_atoms; i++) {
++      jd[i].jc = atoms[i].jc;
++      jd[i].core_req = atoms[i].core_req;
++      jd[i].atom_number = real[i];
++      jd[i].udata[0] = KBASE_ATOM_TAG;
++      jd[i].udata[1] = seq;
++      if (atoms[i].dep_atom) {
++         jd[i].pre_dep[0].atom_id = rel_to_real[atoms[i].dep_atom];
++         jd[i].pre_dep[0].dependency_type = KB_JM_DEP_DATA;
++      } else if (q->last_atom) {
++         jd[i].pre_dep[0].atom_id = q->last_atom;
++         jd[i].pre_dep[0].dependency_type = KB_JM_DEP_ORDER;
++      }
++   }
++
++   /* base_fence: the kernel reads it at submit time and writes the sync file's fd into it. */
++   struct {
++      int fd;
++      int stream_fd;
++   } base_fence = {-1, -1};
++   if (fence) {
++      struct kb_jm_atom *f = &jd[nr_atoms];
++      f->jc = (uintptr_t)&base_fence;
++      f->core_req = KB_JM_REQ_SOFT_FENCE_TRIGGER;
++      f->atom_number = real[nr_atoms];
++      f->udata[0] = KBASE_ATOM_TAG;
++      f->udata[1] = seq;
++      f->pre_dep[0].atom_id = nr_atoms ? real[nr_atoms - 1] : q->last_atom;
++      f->pre_dep[0].dependency_type = KB_JM_DEP_ORDER;
++   }
++
++   if (!kbase_job_submit(kdev, jd, need)) {
++      for (unsigned i = 0; i < need; i++) {
++         q->owner[real[i]] = NULL;
++         q->is_fence[real[i]] = false;
++      }
++      free(sub);
++      free(fsub);
++      if (fence) {
++         /* A kernel without sync files refuses the fence-trigger atom: no fences from now on,
++          * and this submission goes again without one. */
++         mesa_logw("kbase: JOB_SUBMIT refused a fence-trigger atom: no sync files on this kernel");
++         q->fences = -1;
++         fence = false;
++         goto retry;
++      }
++      pthread_mutex_unlock(&q->lock);
++      return 0;
++   }
++
++   q->free_atoms -= need;
++   if (nr_atoms)
++      q->last_atom = real[nr_atoms - 1];
++   q->in_flight += split ? 2 : 1;
++   q->open_seq[q->nr_open_seq++] = seq;
++   if (fence && base_fence.fd >= 0)
++      q->fences = 1;
++   pthread_mutex_unlock(&q->lock);
++
++   if (fence_fd)
++      *fence_fd = base_fence.fd;
++   return seq;
++}
++
++static bool
++seq_open_locked(const struct kbase_queue *q, uint64_t seq)
++{
++   for (unsigned k = 0; k < q->nr_open_seq; k++)
++      if (q->open_seq[k] <= seq)
++         return true;
++   return false;
++}
++
++void
++pan_kmod_kbase_wait_seq(struct pan_kmod_dev *dev, uint64_t seq)
++{
++   struct kbase_queue *q = &to_kdev(dev)->queue;
++
++   pthread_mutex_lock(&q->lock);
++   if (!seq)
++      seq = q->next_seq - 1;
++   while (seq_open_locked(q, seq))
++      pthread_cond_wait(&q->cond, &q->lock);
++   pthread_mutex_unlock(&q->lock);
++}
++
++bool
++pan_kmod_kbase_wait_seq_timeout(struct pan_kmod_dev *dev, uint64_t seq, int64_t abs_timeout_ns)
++{
++   struct kbase_queue *q = &to_kdev(dev)->queue;
++
++   if (!seq)
++      return true;
++
++   bool done = false;
++   pthread_mutex_lock(&q->lock);
++   for (;;) {
++      if (!seq_open_locked(q, seq)) {
++         done = true;
++         break;
++      }
++      if (abs_timeout_ns == INT64_MAX) {
++         pthread_cond_wait(&q->cond, &q->lock);
++         continue;
++      }
++      struct timespec now;
++      clock_gettime(CLOCK_MONOTONIC, &now);
++      if ((int64_t)now.tv_sec * 1000000000ll + now.tv_nsec >= abs_timeout_ns)
++         break;
++      const struct timespec until = {.tv_sec = abs_timeout_ns / 1000000000ll,
++                                     .tv_nsec = abs_timeout_ns % 1000000000ll};
++      pthread_cond_timedwait(&q->cond, &q->lock, &until);
++   }
++   pthread_mutex_unlock(&q->lock);
++   return done;
++}
++
++static void
++kbase_blocking_done(void *data, bool ok)
++{
++   *(bool *)data = ok;
++}
++
++bool
++pan_kmod_kbase_submit(struct pan_kmod_dev *dev, const struct pan_kmod_kbase_atom *atoms,
++                      unsigned nr_atoms)
++{
++   bool ok = true;
++   const uint64_t seq =
++      pan_kmod_kbase_submit_async(dev, atoms, nr_atoms, NULL, kbase_blocking_done, &ok);
++   if (!seq)
++      return false;
++   pan_kmod_kbase_wait_seq(dev, seq);
++   return ok;
++}
++
++const struct pan_kmod_ops kbase_kmod_ops = {
++   .dev_create = kbase_kmod_dev_create,
++   .dev_destroy = kbase_kmod_dev_destroy,
++   .dev_query_user_va_range = kbase_kmod_dev_query_user_va_range,
++   .bo_alloc = kbase_kmod_bo_alloc,
++   .bo_free = kbase_kmod_bo_free,
++   .bo_import = kbase_kmod_bo_import,
++   .bo_export = kbase_kmod_bo_export,
++   .bo_mmap = kbase_kmod_bo_mmap,
++   .flush_bo_map_syncs = kbase_kmod_flush_bo_map_syncs,
++   .bo_wait = kbase_kmod_bo_wait,
++   .vm_create = kbase_kmod_vm_create,
++   .vm_destroy = kbase_kmod_vm_destroy,
++   .vm_bind = kbase_kmod_vm_bind,
++   .query_timestamp = kbase_kmod_query_timestamp,
++};
+--- /dev/null
++++ b/src/panfrost/lib/kmod/kbase_kmod.h
+@@ -0,0 +1,98 @@
++/*
++ * Copyright 2026 XclipseTools (JimVulkan/mesa-unified-drivers a5010bb)
++ * SPDX-License-Identifier: MIT
++ *
++ * The part of the kbase backend that is NOT a pan_kmod op: job submission.
++ *
++ * pan_kmod deliberately stops at memory and VMs -- submission is per-driver and lives in the
++ * Vulkan driver, which is why panvk has separate jm/ and csf/ queue backends. kbase is a third
++ * shape, so it needs a third door, and this is it.
++ */
++
++#ifndef KBASE_KMOD_H
++#define KBASE_KMOD_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++struct pan_kmod_dev;
++
++/* core_req values are TAKEN VERBATIM from the vendor driver's own atoms, captured while it
++ * rendered a triangle (probe/mali/glprobe2.c, logs/mspy_gl.txt). The frame arrived as ONE
++ * JOB_SUBMIT carrying two atoms:
++ *
++ *    atom 1  jc=...1040  core_req=0x4e    pre_dep = none
++ *    atom 2  jc=...1540  core_req=0x8001  pre_dep = {atom 1, type 1}
++ *
++ * which is exactly the shape panvk already produces -- a vertex/tiler chain and a fragment chain
++ * that waits for it. Guessing these from a bit table would have been an invitation to be subtly
++ * wrong; the numbers below are what the hardware was actually asked for.
++ */
++#define KBASE_JD_REQ_VERTEX_TILER 0x4eu
++/* The fragment chain: FS only, as DRM panfrost's kernel builds it. The 0x8001 JimVulkan captured on
++ * a Mali-G76 also has SKIP_CACHE_START (bit 15), which leaves out the cache clean at the atom's start:
++ * not taken here until it is measured on the G31s (r13p0/r20p0 kernels). */
++#define KBASE_JD_REQ_FRAGMENT     0x1u
++/* BASE_JD_REQ_PERMON: kbase starts the cycle counter for the atom, which is also what makes the
++ * GPU's system timestamp propagate (WRITE_VALUE SYSTEM_TIMESTAMP stores 0 without it). */
++#define KBASE_JD_REQ_PERMON       0x80u
++
++
++struct pan_kmod_kbase_atom {
++   uint64_t jc;           /* GPU VA of the job chain head */
++   uint32_t core_req;     /* one of the KBASE_JD_REQ_* above */
++   uint8_t atom_number;   /* 1..255; kbase treats 0 as unset */
++   uint8_t dep_atom;      /* atom_number this one waits for, or 0 for none */
++};
++
++/* True when this device is driven by kbase rather than a DRM node. Every caller that would
++ * otherwise reach for a DRM ioctl has to ask: some kbase kernels return SUCCESS for DRM ioctls
++ * they do not implement (JimVulkan measured it on Exynos). */
++bool pan_kmod_dev_is_kbase(const struct pan_kmod_dev *dev);
++
++/* Sync objects for kbase, which has none: binary objects kept in this process, with the DRM
++ * syncobj semantics Mesa's runtime expects (see kbase_kmod.c). Each call returns a new provider
++ * over the same process-wide table; finalize frees the provider, not the objects. */
++struct util_sync_provider *pan_kmod_kbase_sync_provider(void);
++
++/* The most atoms one submission takes: atom numbers are 1..255 and unique among the atoms in
++ * flight, and a submission may add a fence-trigger atom. */
++#define PAN_KMOD_KBASE_MAX_ATOMS 253
++
++/* Submit atoms without waiting for them. atom_number is 1..nr_atoms within the call and dep_atom
++ * refers to those (0: none). The atoms run after everything submitted before on the device. When
++ * fence_fd is not NULL it receives a sync file (the caller owns it) that signals once they have
++ * all run, or -1 when there is nothing to wait for or the kernel has no sync files (RK3326: wait
++ * on the returned sequence number instead). done, if set, is called on the kmod's event
++ * thread when every atom has reported, with ok false if one faulted. Returns the submission's
++ * sequence number, or 0 when the kernel refused it (done is not called then). */
++typedef void (*pan_kmod_kbase_done_cb)(void *data, bool ok);
++uint64_t pan_kmod_kbase_submit_async(struct pan_kmod_dev *dev,
++                                     const struct pan_kmod_kbase_atom *atoms, unsigned nr_atoms,
++                                     int *fence_fd, pan_kmod_kbase_done_cb done, void *data);
++
++/* The last submission that used bo: its waits and its free wait for that. */
++struct pan_kmod_bo;
++void pan_kmod_kbase_bo_set_seq(struct pan_kmod_bo *bo, uint64_t seq);
++
++/* Wait until submission seq, and every one before it, has completed and run its callback. 0
++ * waits for everything submitted so far. */
++void pan_kmod_kbase_wait_seq(struct pan_kmod_dev *dev, uint64_t seq);
++
++/* Wait for submission seq and every one before it, until abs_timeout_ns on CLOCK_MONOTONIC
++ * (INT64_MAX: no limit). True when it has completed; seq 0 (never submitted) always has. */
++bool pan_kmod_kbase_wait_seq_timeout(struct pan_kmod_dev *dev, uint64_t seq,
++                                     int64_t abs_timeout_ns);
++
++/* Submit atoms and wait for them. Returns false if the kernel refused the submission or an atom
++ * completed with a fault. */
++bool pan_kmod_kbase_submit(struct pan_kmod_dev *dev,
++                           const struct pan_kmod_kbase_atom *atoms, unsigned nr_atoms);
++
++/* Sync objects (see pan_kmod_kbase_sync_provider) whose signal operation has been submitted: they
++ * satisfy WAIT_AVAILABLE until the completion signals them. attach_fd gives the ones still
++ * submitted a sync file that signals with the GPU work, for sync file exports. */
++void pan_kmod_kbase_sync_submitted(const uint32_t *handles, unsigned count);
++void pan_kmod_kbase_sync_attach_fd(const uint32_t *handles, unsigned count, int fd);
++
++#endif /* KBASE_KMOD_H */
+--- /dev/null
++++ b/src/panfrost/lib/kmod/kbase_kmod_sync.c.inc
+@@ -0,0 +1,380 @@
++/*
++ * Copyright 2026 XclipseTools (JimVulkan/mesa-unified-drivers a5010bb: kbase_kmod.c, its sync objects)
++ * SPDX-License-Identifier: MIT
++ */
++
++/* ---- sync objects ----------------------------------------------------------------------------
++ *
++ * kbase has no syncobjs, and the DRM syncobj ioctls panvk used to issue on the kbase fd only
++ * worked on the Exynos kernel because it returns success for DRM ioctls it does not implement
++ * (see "THE TRAP" below): every wait "succeeded" at once and nothing was ever signaled. A
++ * MediaTek kbase (Galaxy A31, Mali-G52) rejects them, so panvk found no device there at all.
++ *
++ * So the objects live in this process: binary, in one process-wide table indexed by handle, with
++ * waits on a condition variable (CLOCK_MONOTONIC, DRM's absolute timeouts and -ETIME). A GPU
++ * signal is done by the kmod's event thread when the submission that carries it completes
++ * (pan_kmod_kbase_submit_async); until then the object is SUBMITTED, which is what a DRM
++ * syncobj holding an unsignaled fence is, and satisfies WAIT_AVAILABLE. A submitted object can
++ * hold a sync file from a kbase fence-trigger atom that signals with the GPU work: that is what
++ * an export hands to the compositor, so presenting never waits for the GPU. */
++
++enum ks_state {
++   KS_FREE = 0,
++   KS_UNSIGNALED,
++   KS_SIGNALED,
++   KS_SUBMITTED,
++};
++
++struct ks_obj {
++   uint8_t state;
++   /* KS_SUBMITTED from an import: nothing here signals it, the sync file below does. */
++   bool external;
++   int fd; /* KS_SUBMITTED: a sync file signaling with it, or -1 */
++};
++
++static pthread_mutex_t ks_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t ks_cond;
++static pthread_once_t ks_once = PTHREAD_ONCE_INIT;
++static struct ks_obj *ks_objs;
++static uint32_t ks_cap, ks_hint;
++
++/* The runtime (vk_drm_syncobj.c) tells a timeout from an error by errno == ETIME, the way
++ * libdrm's wrappers leave it: every failure here sets errno too. Without it, a fence that was
++ * merely not signaled yet read as a lost device -- which never happened while every submission
++ * blocked, and killed Minecraft once they stopped blocking. */
++static int
++ks_ret(int ret)
++{
++   if (ret < 0)
++      errno = -ret;
++   return ret;
++}
++
++static void
++ks_init(void)
++{
++   pthread_condattr_t a;
++   pthread_condattr_init(&a);
++   pthread_condattr_setclock(&a, CLOCK_MONOTONIC);
++   pthread_cond_init(&ks_cond, &a);
++   pthread_condattr_destroy(&a);
++}
++
++static struct ks_obj *
++ks_get(uint32_t h)
++{
++   return h && h <= ks_cap && ks_objs[h - 1].state != KS_FREE ? &ks_objs[h - 1] : NULL;
++}
++
++static void
++ks_set_state(struct ks_obj *o, uint8_t state, int fd)
++{
++   if (o->fd >= 0)
++      close(o->fd);
++   o->state = state;
++   o->external = false;
++   o->fd = fd;
++}
++
++static int
++ks_create(struct util_sync_provider *p, uint32_t flags, uint32_t *handle)
++{
++   pthread_mutex_lock(&ks_lock);
++   uint32_t i = ks_hint;
++   while (i < ks_cap && ks_objs[i].state != KS_FREE)
++      i++;
++   if (i >= ks_cap) {
++      for (i = 0; i < ks_cap && ks_objs[i].state != KS_FREE; i++)
++         ;
++   }
++   if (i >= ks_cap) {
++      const uint32_t cap = ks_cap ? ks_cap * 2 : 256;
++      struct ks_obj *o = realloc(ks_objs, cap * sizeof(*o));
++      if (!o) {
++         pthread_mutex_unlock(&ks_lock);
++         return ks_ret(-ENOMEM);
++      }
++      for (uint32_t k = ks_cap; k < cap; k++)
++         o[k] = (struct ks_obj){.state = KS_FREE, .fd = -1};
++      i = ks_cap;
++      ks_objs = o;
++      ks_cap = cap;
++   }
++   ks_objs[i] = (struct ks_obj){
++      .state = (flags & DRM_SYNCOBJ_CREATE_SIGNALED) ? KS_SIGNALED : KS_UNSIGNALED, .fd = -1};
++   ks_hint = i + 1;
++   *handle = i + 1;
++   pthread_mutex_unlock(&ks_lock);
++   return 0;
++}
++
++static int
++ks_destroy(struct util_sync_provider *p, uint32_t handle)
++{
++   pthread_mutex_lock(&ks_lock);
++   struct ks_obj *o = ks_get(handle);
++   if (o) {
++      ks_set_state(o, KS_FREE, -1);
++      ks_hint = MIN2(ks_hint, handle - 1);
++   }
++   pthread_mutex_unlock(&ks_lock);
++   return ks_ret(o ? 0 : -EINVAL);
++}
++
++static int
++ks_set(const uint32_t *handles, uint32_t count, uint8_t state)
++{
++   int ret = 0;
++   pthread_mutex_lock(&ks_lock);
++   for (uint32_t i = 0; i < count; i++) {
++      struct ks_obj *o = ks_get(handles[i]);
++      if (o)
++         ks_set_state(o, state, -1);
++      else
++         ret = -EINVAL;
++   }
++   pthread_cond_broadcast(&ks_cond);
++   pthread_mutex_unlock(&ks_lock);
++   return ret;
++}
++
++static int
++ks_signal(struct util_sync_provider *p, const uint32_t *handles, uint32_t count)
++{
++   return ks_ret(ks_set(handles, count, KS_SIGNALED));
++}
++
++static int
++ks_reset(struct util_sync_provider *p, const uint32_t *handles, uint32_t count)
++{
++   return ks_ret(ks_set(handles, count, KS_UNSIGNALED));
++}
++
++void
++pan_kmod_kbase_sync_submitted(const uint32_t *handles, unsigned count)
++{
++   pthread_once(&ks_once, ks_init);
++   ks_set(handles, count, KS_SUBMITTED);
++}
++
++void
++pan_kmod_kbase_sync_attach_fd(const uint32_t *handles, unsigned count, int fd)
++{
++   if (fd < 0)
++      return;
++   pthread_mutex_lock(&ks_lock);
++   for (uint32_t i = 0; i < count; i++) {
++      struct ks_obj *o = ks_get(handles[i]);
++      /* Only if still submitted: the event thread may have signaled it already. */
++      if (o && o->state == KS_SUBMITTED && o->fd < 0)
++         o->fd = dup(fd);
++   }
++   pthread_mutex_unlock(&ks_lock);
++}
++
++static uint64_t
++ks_now(void)
++{
++   struct timespec ts;
++   clock_gettime(CLOCK_MONOTONIC, &ts);
++   return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
++}
++
++/* Called with ks_lock held. WAIT_AVAILABLE is satisfied by a submitted object, everything else
++ * waits for it to be signaled; WAIT_FOR_SUBMIT needs nothing extra, an unsubmitted object just
++ * keeps the wait going. */
++static int
++ks_wait_locked(uint32_t *handles, unsigned n, int64_t timeout_nsec, unsigned flags,
++               uint32_t *first_signaled)
++{
++   const bool all = flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL;
++   const bool available = flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE;
++
++   for (;;) {
++      unsigned done = 0, first = UINT32_MAX;
++      bool external = false;
++      for (unsigned i = 0; i < n; i++) {
++         struct ks_obj *o = ks_get(handles[i]);
++         if (!o)
++            return -EINVAL;
++         if (o->state == KS_SUBMITTED && o->external) {
++            struct pollfd pfd = {.fd = o->fd, .events = POLLIN};
++            if (o->fd < 0 || poll(&pfd, 1, 0) > 0)
++               ks_set_state(o, KS_SIGNALED, -1);
++            else
++               external = true;
++         }
++         if (o->state == KS_SIGNALED || (available && o->state == KS_SUBMITTED)) {
++            done++;
++            first = MIN2(first, i);
++         }
++      }
++      if (all ? done == n : done > 0) {
++         if (first_signaled)
++            *first_signaled = first == UINT32_MAX ? 0 : first;
++         return 0;
++      }
++      if (timeout_nsec != INT64_MAX && (uint64_t)timeout_nsec <= ks_now())
++         return -ETIME;
++      if (external) {
++         /* An imported sync file signals without telling anyone: look again in a millisecond. */
++         const uint64_t next = MIN2((uint64_t)timeout_nsec, ks_now() + 1000000ull);
++         const struct timespec ts = {.tv_sec = next / 1000000000ull, .tv_nsec = next % 1000000000ull};
++         pthread_cond_timedwait(&ks_cond, &ks_lock, &ts);
++      } else if (timeout_nsec == INT64_MAX) {
++         pthread_cond_wait(&ks_cond, &ks_lock);
++      } else {
++         const struct timespec ts = {.tv_sec = timeout_nsec / 1000000000ll,
++                                     .tv_nsec = timeout_nsec % 1000000000ll};
++         pthread_cond_timedwait(&ks_cond, &ks_lock, &ts);
++      }
++   }
++}
++
++static int
++ks_wait(struct util_sync_provider *p, uint32_t *handles, unsigned n, int64_t timeout_nsec,
++        unsigned flags, uint32_t *first_signaled)
++{
++   pthread_mutex_lock(&ks_lock);
++   const int ret = ks_wait_locked(handles, n, timeout_nsec, flags, first_signaled);
++   pthread_mutex_unlock(&ks_lock);
++   return ks_ret(ret);
++}
++
++/* Binary objects only (panvk drops the timeline feature before v10), but the runtime takes this
++ * path for every VK_SYNC_WAIT_PENDING wait because only it carries WAIT_AVAILABLE. */
++static int
++ks_timeline_wait(struct util_sync_provider *p, uint32_t *handles, uint64_t *points,
++                 unsigned n, int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled)
++{
++   return ks_wait(p, handles, n, timeout_nsec, flags, first_signaled);
++}
++
++static int
++ks_query(struct util_sync_provider *p, uint32_t *handles, uint64_t *points, uint32_t count,
++         uint32_t flags)
++{
++   return ks_ret(-ENOSYS);
++}
++
++static int
++ks_transfer(struct util_sync_provider *p, uint32_t dst, uint64_t dst_point, uint32_t src,
++            uint64_t src_point, uint32_t flags)
++{
++   pthread_mutex_lock(&ks_lock);
++   struct ks_obj *d = ks_get(dst), *s = ks_get(src);
++   if (d && s && d != s) {
++      ks_set_state(d, s->state, s->fd >= 0 ? dup(s->fd) : -1);
++      d->external = s->external;
++      pthread_cond_broadcast(&ks_cond);
++   }
++   pthread_mutex_unlock(&ks_lock);
++   return ks_ret(d && s ? 0 : -EINVAL);
++}
++
++static int
++ks_export_sync_file(struct util_sync_provider *p, uint32_t handle, int *out_fd)
++{
++   const uint64_t deadline = ks_now() + 10ull * 1000000000ull;
++   pthread_mutex_lock(&ks_lock);
++   /* Wait for the signal operation to be submitted (normally it is already). */
++   int ret = ks_wait_locked(&handle, 1, deadline, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE, NULL);
++   struct ks_obj *o = ret ? NULL : ks_get(handle);
++   if (o && o->state == KS_SUBMITTED) {
++      if (o->fd >= 0) {
++         /* The GPU is still at it: hand out the fence-trigger sync file. */
++         *out_fd = dup(o->fd);
++         pthread_mutex_unlock(&ks_lock);
++         return *out_fd >= 0 ? 0 : ks_ret(-errno);
++      }
++      /* Submitted without a sync file: all that is left is to wait for the GPU. */
++      ret = ks_wait_locked(&handle, 1, deadline, 0, NULL);
++   }
++   pthread_mutex_unlock(&ks_lock);
++   if (ret) {
++      mesa_loge("kbase: sync file export of an object never signaled (%d)", ret);
++      return ks_ret(ret);
++   }
++   *out_fd = -1;
++   return 0;
++}
++
++/* Not a CPU wait: the object stays pending on a copy of the sync file, and a wait on it polls
++ * that. Waiting here held vkAcquireNextImageKHR until the compositor released the buffer, and a
++ * present (vkQueueSignalReleaseImageANDROID imports the frame's own fence) until the GPU had
++ * finished the frame. A submission waiting on such an object still waits on the CPU, but by then
++ * the compositor has normally long released the buffer. */
++static int
++ks_import_sync_file(struct util_sync_provider *p, uint32_t handle, int fd)
++{
++   struct pollfd pfd = {.fd = fd, .events = POLLIN};
++   if (fd < 0 || poll(&pfd, 1, 0) > 0)
++      return ks_signal(p, &handle, 1);
++   const int copy = dup(fd);
++   if (copy < 0)
++      return ks_ret(-errno);
++   pthread_mutex_lock(&ks_lock);
++   struct ks_obj *o = ks_get(handle);
++   if (o) {
++      ks_set_state(o, KS_SUBMITTED, copy);
++      o->external = true;
++      pthread_cond_broadcast(&ks_cond);
++   } else {
++      close(copy);
++   }
++   pthread_mutex_unlock(&ks_lock);
++   return ks_ret(o ? 0 : -EINVAL);
++}
++
++static int
++ks_no_fd(struct util_sync_provider *p, uint32_t handle, int *out_fd)
++{
++   return ks_ret(-ENOSYS);
++}
++
++static int
++ks_no_handle(struct util_sync_provider *p, int fd, uint32_t *handle)
++{
++   return ks_ret(-ENOSYS);
++}
++
++static void
++ks_finalize(struct util_sync_provider *p)
++{
++   free(p);
++}
++
++static struct util_sync_provider *
++ks_clone(struct util_sync_provider *p)
++{
++   return pan_kmod_kbase_sync_provider();
++}
++
++struct util_sync_provider *
++pan_kmod_kbase_sync_provider(void)
++{
++   pthread_once(&ks_once, ks_init);
++
++   struct util_sync_provider *p = calloc(1, sizeof(*p));
++   if (!p)
++      return NULL;
++
++   *p = (struct util_sync_provider){
++      .create = ks_create,
++      .destroy = ks_destroy,
++      .handle_to_fd = ks_no_fd,
++      .fd_to_handle = ks_no_handle,
++      .import_sync_file = ks_import_sync_file,
++      .export_sync_file = ks_export_sync_file,
++      .wait = ks_wait,
++      .timeline_wait = ks_timeline_wait,
++      .query = ks_query,
++      .reset = ks_reset,
++      .signal = ks_signal,
++      .transfer = ks_transfer,
++      .finalize = ks_finalize,
++      .clone = ks_clone,
++   };
++   return p;
++}
++

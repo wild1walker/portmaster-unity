@@ -16,10 +16,15 @@ EGLContext eglCreateContext(EGLDisplay d, EGLConfig c, EGLContext s, const EGLin
 EGLBoolean eglMakeCurrent(EGLDisplay d, EGLSurface r, EGLSurface w, EGLContext c) { (void)d; (void)r; (void)w; (void)c; return EGL_TRUE; }
 EGLBoolean eglSwapBuffers(EGLDisplay d, EGLSurface s) { (void)d; (void)s; printf("fake: swap\n"); return EGL_TRUE; }
 void (*eglGetProcAddress(const char *n))(void) { (void)n; return NULL; }
+// glreplay --info: the strings, two configs and two extensions
+const char *eglQueryString(EGLDisplay d, EGLint n) { return n == EGL_EXTENSIONS ? (d ? "EGL_KHR_fake EGL_KHR_b" : "EGL_EXT_client") : "fake"; }
+EGLBoolean eglGetConfigs(EGLDisplay d, EGLConfig *c, EGLint n, EGLint *num) { (void)d; if (c) for (EGLint i = 0; i < n && i < 2; i++) c[i] = (char *)&surf + i; *num = 2; return EGL_TRUE; }
+EGLBoolean eglGetConfigAttrib(EGLDisplay d, EGLConfig c, EGLint a, EGLint *v) { (void)d; *v = a == EGL_CONFIG_ID ? 1 + (int)((char *)c - (char *)&surf) : 8; return EGL_TRUE; }
 
 const GLubyte *glGetString(GLenum n) { (void)n; return (const GLubyte *)"fake"; }
 GLenum glGetError(void) { return 0; }
-void glGetIntegerv(GLenum p, GLint *v) { (void)p; *v = 0; }
+void glGetIntegerv(GLenum p, GLint *v) { *v = p == GL_NUM_EXTENSIONS ? 2 : 0; }
+const GLubyte *glGetStringi(GLenum n, GLuint i) { (void)n; return (const GLubyte *)(i ? "GL_OES_a" : "GL_OES_z"); }
 void glGetProgramiv(GLuint p, GLenum n, GLint *v) { (void)p; *v = n == GL_LINK_STATUS; }
 void glGetProgramInfoLog(GLuint p, GLsizei n, GLsizei *l, GLchar *s) { (void)p; (void)n; (void)l; s[0] = 0; }
 GLuint glCreateShader(GLenum t) { (void)t; return 140; }

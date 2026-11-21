@@ -4,7 +4,7 @@
 # made by display_test.sh).
 set -e
 cd "$(dirname "$0")/../.."
-SRC="host/test/test_rotate.c host/display.c host/display_sdl.c host/glpresent.c host/fbdev.c android/egl_glue.c android/native_window.c android/log_shim.c"
+SRC="host/test/test_rotate.c host/display.c host/display_sdl.c host/glpresent.c host/fbdev.c host/gldriver.c android/egl_glue.c android/native_window.c android/log_shim.c"
 docker run --rm --platform linux/arm64 -v "$PWD":/w:ro -w /w -e SRC="$SRC" ua-display-test sh -c '
   set -e
   gcc -O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter -o /tmp/test_rotate $SRC -lSDL2 -ldl -lpthread

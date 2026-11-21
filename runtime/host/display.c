@@ -3,6 +3,7 @@
 #include "display.h"
 #include "fbdev.h"
 #include "glpresent.h"
+#include "gldriver.h"
 #include "../android/android_shims.h"
 #include "../android/egl_glue.h"
 
@@ -450,7 +451,7 @@ static void on_whole_screen(void)
 
 static int use_fbdev(void)
 {
-    if (pbuffer_mode()) return 0;
+    if (pbuffer_mode() && !gldriver_mesa()) return 0;
     fbdev_setup();
     egl_glue_set_whole_screen_hook(on_whole_screen);
     int w, h, pw, ph;
@@ -468,6 +469,13 @@ static int use_fbdev(void)
             egl_glue_set_current_hook(on_current);
         } else if (fbdev_bars_height()) display_gpu_spanned();
     }
+    // UA_GL_DRIVER=mesa (gldriver.c): Unity's window is a pbuffer (the panel's size under the GPU
+    // scaler, as Mali's surface would be), copied to the framebuffer at each swap
+    if (gldriver_mesa()) {
+        int gw, gh, gpw = 0, gph = 0;
+        if (!fbdev_render_size(&gw, &gh)) fbdev_gpu_render_size(&gw, &gh, &gpw, &gph);
+        gldriver_fbdev_present(gpw, gph);
+    }
     ANativeWindow *win = android_window_get();
     android_window_set_max_size(ANativeWindow_getWidth(win), ANativeWindow_getHeight(win));
     return 0;
@@ -483,6 +491,10 @@ int display_init(const char *title)
         return -1;
     }
     if (!strcmp(want, "fbdev")) return use_fbdev();
+    if (pbuffer_mode() && gldriver_mesa()) {               // Mesa's surfaceless EGL: the fbdev path, the host shows the frames
+        if (strcmp(want, "auto")) fprintf(stderr, "[display] UA_GL_DRIVER=mesa: the fbdev path, UA_DISPLAY=%s ignored\n", want);
+        return use_fbdev();
+    }
     if (pbuffer_mode()) {
         if (!is_auto) fprintf(stderr, "[display] UA_EGL_PBUFFER is set: pbuffer path, UA_DISPLAY=sdl ignored\n");
         return 0;

@@ -1,0 +1,541 @@
+egl.version 1.5
+egl.vendor Mesa Project
+egl.version_string 1.5
+egl.client_apis OpenGL_ES 
+egl.client_ext EGL_EXT_client_extensions
+egl.client_ext EGL_EXT_device_base
+egl.client_ext EGL_EXT_device_enumeration
+egl.client_ext EGL_EXT_device_query
+egl.client_ext EGL_EXT_platform_base
+egl.client_ext EGL_KHR_client_get_all_proc_addresses
+egl.client_ext EGL_KHR_debug
+egl.client_ext EGL_EXT_platform_device
+egl.client_ext EGL_EXT_explicit_device
+egl.client_ext EGL_MESA_platform_surfaceless
+egl.ext EGL_ANDROID_blob_cache
+egl.ext EGL_ANDROID_native_fence_sync
+egl.ext EGL_EXT_config_select_group
+egl.ext EGL_EXT_surface_compression
+egl.ext EGL_IMG_context_priority
+egl.ext EGL_KHR_cl_event2
+egl.ext EGL_KHR_config_attribs
+egl.ext EGL_KHR_context_flush_control
+egl.ext EGL_KHR_create_context
+egl.ext EGL_KHR_create_context_no_error
+egl.ext EGL_KHR_fence_sync
+egl.ext EGL_KHR_get_all_proc_addresses
+egl.ext EGL_KHR_gl_colorspace
+egl.ext EGL_KHR_gl_renderbuffer_image
+egl.ext EGL_KHR_gl_texture_2D_image
+egl.ext EGL_KHR_gl_texture_3D_image
+egl.ext EGL_KHR_gl_texture_cubemap_image
+egl.ext EGL_KHR_image_base
+egl.ext EGL_KHR_no_config_context
+egl.ext EGL_KHR_partial_update
+egl.ext EGL_KHR_reusable_sync
+egl.ext EGL_KHR_surfaceless_context
+egl.ext EGL_EXT_pixel_format_float
+egl.ext EGL_KHR_wait_sync
+egl.ext EGL_MESA_configless_context
+egl.ext EGL_MESA_gl_interop
+egl.ext EGL_MESA_query_driver
+egl.ext EGL_MESA_x11_native_visual_id
+egl.configs 130
+egl.config id=1 r=0xa g=0xa b=0xa a=0x2 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2 r=0xa g=0xa b=0xa a=0x2 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3 r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4 r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5 r=0xa g=0xa b=0xa a=0x2 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6 r=0xa g=0xa b=0xa a=0x2 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7 r=0xa g=0xa b=0xa a=0x2 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=8 r=0xa g=0xa b=0xa a=0x2 depth=0x0 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=9 r=0xa g=0xa b=0xa a=0x2 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=a r=0xa g=0xa b=0xa a=0x2 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=b r=0xa g=0xa b=0xa a=0x2 depth=0x10 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=c r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=d r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=e r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=f r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=10 r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=11 r=0xa g=0xa b=0xa a=0x2 depth=0x18 stencil=0x8 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=12 r=0xa g=0xa b=0xa a=0x2 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=13 r=0xa g=0xa b=0xa a=0x2 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=14 r=0xa g=0xa b=0xa a=0x2 depth=0x20 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=15 r=0xa g=0xa b=0xa a=0x0 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=16 r=0xa g=0xa b=0xa a=0x0 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=17 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=18 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=19 r=0xa g=0xa b=0xa a=0x0 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=1a r=0xa g=0xa b=0xa a=0x0 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=1b r=0xa g=0xa b=0xa a=0x0 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=1c r=0xa g=0xa b=0xa a=0x0 depth=0x0 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=1d r=0xa g=0xa b=0xa a=0x0 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=1e r=0xa g=0xa b=0xa a=0x0 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=1f r=0xa g=0xa b=0xa a=0x0 depth=0x10 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=20 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=21 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=22 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=23 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=24 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=25 r=0xa g=0xa b=0xa a=0x0 depth=0x18 stencil=0x8 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=26 r=0xa g=0xa b=0xa a=0x0 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=27 r=0xa g=0xa b=0xa a=0x0 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=28 r=0xa g=0xa b=0xa a=0x0 depth=0x20 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=29 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2a r=0x8 g=0x8 b=0x8 a=0x8 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2b r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2c r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2d r=0x8 g=0x8 b=0x8 a=0x8 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2e r=0x8 g=0x8 b=0x8 a=0x8 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=2f r=0x8 g=0x8 b=0x8 a=0x8 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=30 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x0 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=31 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=32 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=33 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x10 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=34 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=35 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=36 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=37 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=38 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=39 r=0x8 g=0x8 b=0x8 a=0x8 depth=0x18 stencil=0x8 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3a r=0x8 g=0x8 b=0x8 a=0x8 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3b r=0x8 g=0x8 b=0x8 a=0x8 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3c r=0x8 g=0x8 b=0x8 a=0x8 depth=0x20 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3d r=0x8 g=0x8 b=0x8 a=0x0 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3e r=0x8 g=0x8 b=0x8 a=0x0 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=3f r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=40 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=41 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=42 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=43 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=44 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x0 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=45 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=46 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=47 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x10 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=48 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=49 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4a r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4b r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4c r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4d r=0x8 g=0x8 b=0x8 a=0x0 depth=0x18 stencil=0x8 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4e r=0x8 g=0x8 b=0x8 a=0x0 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=4f r=0x8 g=0x8 b=0x8 a=0x0 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=50 r=0x8 g=0x8 b=0x8 a=0x0 depth=0x20 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=51 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=52 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=53 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=54 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=55 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=56 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=57 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=58 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x0 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=59 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5a r=0x5 g=0x6 b=0x5 a=0x0 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5b r=0x5 g=0x6 b=0x5 a=0x0 depth=0x10 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5c r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5d r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5e r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=5f r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=60 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=61 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x18 stencil=0x8 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=62 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=63 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=64 r=0x5 g=0x6 b=0x5 a=0x0 depth=0x20 stencil=0x0 samples=0x10 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=65 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=66 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=67 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=68 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=69 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6a r=0x10 g=0x10 b=0x10 a=0x10 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6b r=0x10 g=0x10 b=0x10 a=0x10 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6c r=0x10 g=0x10 b=0x10 a=0x10 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6d r=0x10 g=0x10 b=0x10 a=0x10 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6e r=0x10 g=0x10 b=0x10 a=0x10 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=6f r=0x10 g=0x10 b=0x10 a=0x10 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=70 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=71 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=72 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=73 r=0x10 g=0x10 b=0x10 a=0x10 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=74 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x0 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=75 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x10 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=76 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=77 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x8 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=78 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x20 stencil=0x0 samples=0x0 sbuf=0x0 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=79 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x0 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7a r=0x10 g=0x10 b=0x10 a=0x0 depth=0x0 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7b r=0x10 g=0x10 b=0x10 a=0x0 depth=0x10 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7c r=0x10 g=0x10 b=0x10 a=0x0 depth=0x10 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7d r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7e r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=7f r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x8 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=80 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x18 stencil=0x8 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=81 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x20 stencil=0x0 samples=0x4 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+egl.config id=82 r=0x10 g=0x10 b=0x10 a=0x0 depth=0x20 stencil=0x0 samples=0x8 sbuf=0x1 surface=0x1 renderable=0x44 conformant=0x44 caveat=0x3038 visual=0x0 colorbuf=0x308e
+gl.vendor Mesa
+gl.renderer Mali-G31 MC2 (Panfrost)
+gl.version OpenGL ES 3.1 Mesa 27.0.0-devel
+gl.glsl OpenGL ES GLSL ES 3.10
+gl.num_extensions 143
+gl.ext[0] GL_ANGLE_pack_reverse_row_order
+gl.ext[1] GL_ANGLE_texture_compression_dxt3
+gl.ext[2] GL_ANGLE_texture_compression_dxt5
+gl.ext[3] GL_APPLE_sync
+gl.ext[4] GL_APPLE_texture_max_level
+gl.ext[5] GL_EXT_EGL_image_storage
+gl.ext[6] GL_EXT_EGL_image_storage_compression
+gl.ext[7] GL_EXT_base_instance
+gl.ext[8] GL_EXT_blend_func_extended
+gl.ext[9] GL_EXT_blend_minmax
+gl.ext[10] GL_EXT_buffer_storage
+gl.ext[11] GL_EXT_clear_texture
+gl.ext[12] GL_EXT_clip_control
+gl.ext[13] GL_EXT_color_buffer_float
+gl.ext[14] GL_EXT_color_buffer_half_float
+gl.ext[15] GL_EXT_compressed_ETC1_RGB8_sub_texture
+gl.ext[16] GL_EXT_conservative_depth
+gl.ext[17] GL_EXT_copy_image
+gl.ext[18] GL_EXT_debug_label
+gl.ext[19] GL_EXT_depth_clamp
+gl.ext[20] GL_EXT_discard_framebuffer
+gl.ext[21] GL_EXT_disjoint_timer_query
+gl.ext[22] GL_EXT_draw_buffers
+gl.ext[23] GL_EXT_draw_buffers_indexed
+gl.ext[24] GL_EXT_draw_elements_base_vertex
+gl.ext[25] GL_EXT_draw_instanced
+gl.ext[26] GL_EXT_float_blend
+gl.ext[27] GL_EXT_frag_depth
+gl.ext[28] GL_EXT_gpu_shader5
+gl.ext[29] GL_EXT_instanced_arrays
+gl.ext[30] GL_EXT_map_buffer_range
+gl.ext[31] GL_EXT_multi_draw_arrays
+gl.ext[32] GL_EXT_multi_draw_indirect
+gl.ext[33] GL_EXT_multisampled_render_to_texture
+gl.ext[34] GL_EXT_multisampled_render_to_texture2
+gl.ext[35] GL_EXT_occlusion_query_boolean
+gl.ext[36] GL_EXT_polygon_offset_clamp
+gl.ext[37] GL_EXT_primitive_bounding_box
+gl.ext[38] GL_EXT_read_format_bgra
+gl.ext[39] GL_EXT_render_snorm
+gl.ext[40] GL_EXT_robustness
+gl.ext[41] GL_EXT_sRGB
+gl.ext[42] GL_EXT_sRGB_write_control
+gl.ext[43] GL_EXT_separate_shader_objects
+gl.ext[44] GL_EXT_shader_clock
+gl.ext[45] GL_EXT_shader_framebuffer_fetch
+gl.ext[46] GL_EXT_shader_framebuffer_fetch_non_coherent
+gl.ext[47] GL_EXT_shader_implicit_conversions
+gl.ext[48] GL_EXT_shader_integer_mix
+gl.ext[49] GL_EXT_shader_io_blocks
+gl.ext[50] GL_EXT_shader_pixel_local_storage
+gl.ext[51] GL_EXT_shader_realtime_clock
+gl.ext[52] GL_EXT_shadow_samplers
+gl.ext[53] GL_EXT_texture_border_clamp
+gl.ext[54] GL_EXT_texture_buffer
+gl.ext[55] GL_EXT_texture_compression_astc_decode_mode
+gl.ext[56] GL_EXT_texture_compression_bptc
+gl.ext[57] GL_EXT_texture_compression_dxt1
+gl.ext[58] GL_EXT_texture_compression_rgtc
+gl.ext[59] GL_EXT_texture_compression_s3tc
+gl.ext[60] GL_EXT_texture_compression_s3tc_srgb
+gl.ext[61] GL_EXT_texture_filter_anisotropic
+gl.ext[62] GL_EXT_texture_format_BGRA8888
+gl.ext[63] GL_EXT_texture_mirror_clamp_to_edge
+gl.ext[64] GL_EXT_texture_norm16
+gl.ext[65] GL_EXT_texture_rg
+gl.ext[66] GL_EXT_texture_sRGB_R8
+gl.ext[67] GL_EXT_texture_sRGB_RG8
+gl.ext[68] GL_EXT_texture_sRGB_decode
+gl.ext[69] GL_EXT_texture_storage
+gl.ext[70] GL_EXT_texture_storage_compression
+gl.ext[71] GL_EXT_texture_type_2_10_10_10_REV
+gl.ext[72] GL_EXT_texture_view
+gl.ext[73] GL_EXT_unpack_subimage
+gl.ext[74] GL_INTEL_blackhole_render
+gl.ext[75] GL_KHR_blend_equation_advanced
+gl.ext[76] GL_KHR_blend_equation_advanced_coherent
+gl.ext[77] GL_KHR_context_flush_control
+gl.ext[78] GL_KHR_debug
+gl.ext[79] GL_KHR_no_error
+gl.ext[80] GL_KHR_parallel_shader_compile
+gl.ext[81] GL_KHR_robust_buffer_access_behavior
+gl.ext[82] GL_KHR_robustness
+gl.ext[83] GL_KHR_texture_compression_astc_hdr
+gl.ext[84] GL_KHR_texture_compression_astc_ldr
+gl.ext[85] GL_KHR_texture_compression_astc_sliced_3d
+gl.ext[86] GL_MESA_bgra
+gl.ext[87] GL_MESA_framebuffer_flip_y
+gl.ext[88] GL_MESA_sampler_objects
+gl.ext[89] GL_MESA_shader_integer_functions
+gl.ext[90] GL_NV_conditional_render
+gl.ext[91] GL_NV_draw_buffers
+gl.ext[92] GL_NV_fbo_color_attachments
+gl.ext[93] GL_NV_generate_mipmap_sRGB
+gl.ext[94] GL_NV_image_formats
+gl.ext[95] GL_NV_pack_subimage
+gl.ext[96] GL_NV_pixel_buffer_object
+gl.ext[97] GL_NV_read_buffer
+gl.ext[98] GL_NV_read_depth
+gl.ext[99] GL_NV_read_depth_stencil
+gl.ext[100] GL_NV_read_stencil
+gl.ext[101] GL_NV_shader_noperspective_interpolation
+gl.ext[102] GL_OES_EGL_image
+gl.ext[103] GL_OES_EGL_image_external
+gl.ext[104] GL_OES_EGL_image_external_essl3
+gl.ext[105] GL_OES_EGL_sync
+gl.ext[106] GL_OES_compressed_ETC1_RGB8_texture
+gl.ext[107] GL_OES_copy_image
+gl.ext[108] GL_OES_depth24
+gl.ext[109] GL_OES_depth_texture
+gl.ext[110] GL_OES_depth_texture_cube_map
+gl.ext[111] GL_OES_draw_buffers_indexed
+gl.ext[112] GL_OES_draw_elements_base_vertex
+gl.ext[113] GL_OES_element_index_uint
+gl.ext[114] GL_OES_fbo_render_mipmap
+gl.ext[115] GL_OES_get_program_binary
+gl.ext[116] GL_OES_gpu_shader5
+gl.ext[117] GL_OES_mapbuffer
+gl.ext[118] GL_OES_packed_depth_stencil
+gl.ext[119] GL_OES_primitive_bounding_box
+gl.ext[120] GL_OES_required_internalformat
+gl.ext[121] GL_OES_rgb8_rgba8
+gl.ext[122] GL_OES_sample_shading
+gl.ext[123] GL_OES_sample_variables
+gl.ext[124] GL_OES_shader_image_atomic
+gl.ext[125] GL_OES_shader_io_blocks
+gl.ext[126] GL_OES_shader_multisample_interpolation
+gl.ext[127] GL_OES_standard_derivatives
+gl.ext[128] GL_OES_stencil8
+gl.ext[129] GL_OES_surfaceless_context
+gl.ext[130] GL_OES_texture_3D
+gl.ext[131] GL_OES_texture_border_clamp
+gl.ext[132] GL_OES_texture_buffer
+gl.ext[133] GL_OES_texture_float
+gl.ext[134] GL_OES_texture_float_linear
+gl.ext[135] GL_OES_texture_half_float
+gl.ext[136] GL_OES_texture_half_float_linear
+gl.ext[137] GL_OES_texture_npot
+gl.ext[138] GL_OES_texture_stencil8
+gl.ext[139] GL_OES_texture_storage_multisample_2d_array
+gl.ext[140] GL_OES_texture_view
+gl.ext[141] GL_OES_vertex_array_object
+gl.ext[142] GL_OES_vertex_half_float
+gl.ext GL_ANGLE_pack_reverse_row_order
+gl.ext GL_ANGLE_texture_compression_dxt3
+gl.ext GL_ANGLE_texture_compression_dxt5
+gl.ext GL_APPLE_sync
+gl.ext GL_APPLE_texture_max_level
+gl.ext GL_EXT_EGL_image_storage
+gl.ext GL_EXT_EGL_image_storage_compression
+gl.ext GL_EXT_base_instance
+gl.ext GL_EXT_blend_func_extended
+gl.ext GL_EXT_blend_minmax
+gl.ext GL_EXT_buffer_storage
+gl.ext GL_EXT_clear_texture
+gl.ext GL_EXT_clip_control
+gl.ext GL_EXT_color_buffer_float
+gl.ext GL_EXT_color_buffer_half_float
+gl.ext GL_EXT_compressed_ETC1_RGB8_sub_texture
+gl.ext GL_EXT_conservative_depth
+gl.ext GL_EXT_copy_image
+gl.ext GL_EXT_debug_label
+gl.ext GL_EXT_depth_clamp
+gl.ext GL_EXT_discard_framebuffer
+gl.ext GL_EXT_disjoint_timer_query
+gl.ext GL_EXT_draw_buffers
+gl.ext GL_EXT_draw_buffers_indexed
+gl.ext GL_EXT_draw_elements_base_vertex
+gl.ext GL_EXT_draw_instanced
+gl.ext GL_EXT_float_blend
+gl.ext GL_EXT_frag_depth
+gl.ext GL_EXT_gpu_shader5
+gl.ext GL_EXT_instanced_arrays
+gl.ext GL_EXT_map_buffer_range
+gl.ext GL_EXT_multi_draw_arrays
+gl.ext GL_EXT_multi_draw_indirect
+gl.ext GL_EXT_multisampled_render_to_texture
+gl.ext GL_EXT_multisampled_render_to_texture2
+gl.ext GL_EXT_occlusion_query_boolean
+gl.ext GL_EXT_polygon_offset_clamp
+gl.ext GL_EXT_primitive_bounding_box
+gl.ext GL_EXT_read_format_bgra
+gl.ext GL_EXT_render_snorm
+gl.ext GL_EXT_robustness
+gl.ext GL_EXT_sRGB
+gl.ext GL_EXT_sRGB_write_control
+gl.ext GL_EXT_separate_shader_objects
+gl.ext GL_EXT_shader_clock
+gl.ext GL_EXT_shader_framebuffer_fetch
+gl.ext GL_EXT_shader_framebuffer_fetch_non_coherent
+gl.ext GL_EXT_shader_implicit_conversions
+gl.ext GL_EXT_shader_integer_mix
+gl.ext GL_EXT_shader_io_blocks
+gl.ext GL_EXT_shader_pixel_local_storage
+gl.ext GL_EXT_shader_realtime_clock
+gl.ext GL_EXT_shadow_samplers
+gl.ext GL_EXT_texture_border_clamp
+gl.ext GL_EXT_texture_buffer
+gl.ext GL_EXT_texture_compression_astc_decode_mode
+gl.ext GL_EXT_texture_compression_bptc
+gl.ext GL_EXT_texture_compression_dxt1
+gl.ext GL_EXT_texture_compression_rgtc
+gl.ext GL_EXT_texture_compression_s3tc
+gl.ext GL_EXT_texture_compression_s3tc_srgb
+gl.ext GL_EXT_texture_filter_anisotropic
+gl.ext GL_EXT_texture_format_BGRA8888
+gl.ext GL_EXT_texture_mirror_clamp_to_edge
+gl.ext GL_EXT_texture_norm16
+gl.ext GL_EXT_texture_rg
+gl.ext GL_EXT_texture_sRGB_R8
+gl.ext GL_EXT_texture_sRGB_RG8
+gl.ext GL_EXT_texture_sRGB_decode
+gl.ext GL_EXT_texture_storage
+gl.ext GL_EXT_texture_storage_compression
+gl.ext GL_EXT_texture_type_2_10_10_10_REV
+gl.ext GL_EXT_texture_view
+gl.ext GL_EXT_unpack_subimage
+gl.ext GL_INTEL_blackhole_render
+gl.ext GL_KHR_blend_equation_advanced
+gl.ext GL_KHR_blend_equation_advanced_coherent
+gl.ext GL_KHR_context_flush_control
+gl.ext GL_KHR_debug
+gl.ext GL_KHR_no_error
+gl.ext GL_KHR_parallel_shader_compile
+gl.ext GL_KHR_robust_buffer_access_behavior
+gl.ext GL_KHR_robustness
+gl.ext GL_KHR_texture_compression_astc_hdr
+gl.ext GL_KHR_texture_compression_astc_ldr
+gl.ext GL_KHR_texture_compression_astc_sliced_3d
+gl.ext GL_MESA_bgra
+gl.ext GL_MESA_framebuffer_flip_y
+gl.ext GL_MESA_sampler_objects
+gl.ext GL_MESA_shader_integer_functions
+gl.ext GL_NV_conditional_render
+gl.ext GL_NV_draw_buffers
+gl.ext GL_NV_fbo_color_attachments
+gl.ext GL_NV_generate_mipmap_sRGB
+gl.ext GL_NV_image_formats
+gl.ext GL_NV_pack_subimage
+gl.ext GL_NV_pixel_buffer_object
+gl.ext GL_NV_read_buffer
+gl.ext GL_NV_read_depth
+gl.ext GL_NV_read_depth_stencil
+gl.ext GL_NV_read_stencil
+gl.ext GL_NV_shader_noperspective_interpolation
+gl.ext GL_OES_EGL_image
+gl.ext GL_OES_EGL_image_external
+gl.ext GL_OES_EGL_image_external_essl3
+gl.ext GL_OES_EGL_sync
+gl.ext GL_OES_compressed_ETC1_RGB8_texture
+gl.ext GL_OES_copy_image
+gl.ext GL_OES_depth24
+gl.ext GL_OES_depth_texture
+gl.ext GL_OES_depth_texture_cube_map
+gl.ext GL_OES_draw_buffers_indexed
+gl.ext GL_OES_draw_elements_base_vertex
+gl.ext GL_OES_element_index_uint
+gl.ext GL_OES_fbo_render_mipmap
+gl.ext GL_OES_get_program_binary
+gl.ext GL_OES_gpu_shader5
+gl.ext GL_OES_mapbuffer
+gl.ext GL_OES_packed_depth_stencil
+gl.ext GL_OES_primitive_bounding_box
+gl.ext GL_OES_required_internalformat
+gl.ext GL_OES_rgb8_rgba8
+gl.ext GL_OES_sample_shading
+gl.ext GL_OES_sample_variables
+gl.ext GL_OES_shader_image_atomic
+gl.ext GL_OES_shader_io_blocks
+gl.ext GL_OES_shader_multisample_interpolation
+gl.ext GL_OES_standard_derivatives
+gl.ext GL_OES_stencil8
+gl.ext GL_OES_surfaceless_context
+gl.ext GL_OES_texture_3D
+gl.ext GL_OES_texture_border_clamp
+gl.ext GL_OES_texture_buffer
+gl.ext GL_OES_texture_float
+gl.ext GL_OES_texture_float_linear
+gl.ext GL_OES_texture_half_float
+gl.ext GL_OES_texture_half_float_linear
+gl.ext GL_OES_texture_npot
+gl.ext GL_OES_texture_stencil8
+gl.ext GL_OES_texture_storage_multisample_2d_array
+gl.ext GL_OES_texture_view
+gl.ext GL_OES_vertex_array_object
+gl.ext GL_OES_vertex_half_float
+gl.extensions_string GL_EXT_blend_minmax GL_EXT_multi_draw_arrays GL_EXT_texture_filter_anisotropic GL_EXT_texture_compression_s3tc GL_EXT_texture_compression_dxt1 GL_EXT_texture_compression_rgtc GL_EXT_texture_format_BGRA8888 GL_OES_compressed_ETC1_RGB8_texture GL_OES_depth24 GL_OES_element_index_uint GL_OES_fbo_render_mipmap GL_OES_mapbuffer GL_OES_rgb8_rgba8 GL_OES_standard_derivatives GL_OES_stencil8 GL_OES_texture_3D GL_OES_texture_float GL_OES_texture_float_linear GL_OES_texture_half_float GL_OES_texture_half_float_linear GL_OES_texture_npot GL_OES_vertex_half_float GL_EXT_draw_instanced GL_EXT_texture_sRGB_decode GL_OES_EGL_image GL_OES_depth_texture GL_OES_packed_depth_stencil GL_EXT_texture_type_2_10_10_10_REV GL_NV_conditional_render GL_OES_get_program_binary GL_APPLE_texture_max_level GL_EXT_discard_framebuffer GL_EXT_read_format_bgra GL_EXT_texture_storage GL_NV_pack_subimage GL_EXT_frag_depth GL_NV_fbo_color_attachments GL_OES_EGL_image_external GL_OES_EGL_sync GL_OES_vertex_array_object GL_ANGLE_pack_reverse_row_order GL_ANGLE_texture_compression_dxt3 GL_ANGLE_texture_compression_dxt5 GL_EXT_occlusion_query_boolean GL_EXT_robustness GL_EXT_sRGB GL_EXT_texture_rg GL_EXT_unpack_subimage GL_NV_draw_buffers GL_NV_read_buffer GL_NV_read_depth GL_NV_read_depth_stencil GL_NV_read_stencil GL_APPLE_sync GL_EXT_draw_buffers GL_EXT_instanced_arrays GL_EXT_map_buffer_range GL_EXT_shadow_samplers GL_KHR_debug GL_KHR_robustness GL_KHR_texture_compression_astc_hdr GL_KHR_texture_compression_astc_ldr GL_NV_generate_mipmap_sRGB GL_NV_pixel_buffer_object GL_OES_depth_texture_cube_map GL_OES_required_internalformat GL_OES_surfaceless_context GL_EXT_color_buffer_float GL_EXT_debug_label GL_EXT_sRGB_write_control GL_EXT_separate_shader_objects GL_EXT_shader_framebuffer_fetch GL_EXT_shader_implicit_conversions GL_EXT_shader_integer_mix GL_EXT_base_instance GL_EXT_compressed_ETC1_RGB8_sub_texture GL_EXT_copy_image GL_EXT_draw_buffers_indexed GL_EXT_draw_elements_base_vertex GL_EXT_gpu_shader5 GL_EXT_multi_draw_indirect GL_EXT_polygon_offset_clamp GL_EXT_primitive_bounding_box GL_EXT_render_snorm GL_EXT_shader_io_blocks GL_EXT_shader_pixel_local_storage GL_EXT_texture_border_clamp GL_EXT_texture_buffer GL_EXT_texture_norm16 GL_EXT_texture_view GL_KHR_blend_equation_advanced GL_KHR_blend_equation_advanced_coherent GL_KHR_context_flush_control GL_KHR_robust_buffer_access_behavior GL_NV_image_formats GL_NV_shader_noperspective_interpolation GL_OES_copy_image GL_OES_draw_buffers_indexed GL_OES_draw_elements_base_vertex GL_OES_gpu_shader5 GL_OES_primitive_bounding_box GL_OES_sample_shading GL_OES_sample_variables GL_OES_shader_io_blocks GL_OES_shader_multisample_interpolation GL_OES_texture_border_clamp GL_OES_texture_buffer GL_OES_texture_stencil8 GL_OES_texture_storage_multisample_2d_array GL_OES_texture_view GL_EXT_blend_func_extended GL_EXT_buffer_storage GL_EXT_float_blend GL_EXT_texture_sRGB_R8 GL_EXT_texture_sRGB_RG8 GL_KHR_no_error GL_KHR_texture_compression_astc_sliced_3d GL_OES_EGL_image_external_essl3 GL_OES_shader_image_atomic GL_EXT_clear_texture GL_EXT_conservative_depth GL_EXT_disjoint_timer_query GL_EXT_multisampled_render_to_texture GL_EXT_multisampled_render_to_texture2 GL_EXT_texture_compression_s3tc_srgb GL_MESA_shader_integer_functions GL_EXT_clip_control GL_EXT_color_buffer_half_float GL_EXT_texture_compression_astc_decode_mode GL_EXT_texture_compression_bptc GL_EXT_texture_mirror_clamp_to_edge GL_KHR_parallel_shader_compile GL_EXT_EGL_image_storage GL_EXT_shader_framebuffer_fetch_non_coherent GL_EXT_shader_realtime_clock GL_INTEL_blackhole_render GL_MESA_framebuffer_flip_y GL_EXT_depth_clamp GL_MESA_sampler_objects GL_EXT_EGL_image_storage_compression GL_EXT_texture_storage_compression GL_MESA_bgra GL_EXT_shader_clock 
+gl.max_texture_size 16384
+gl.max_cube_map_texture_size 16384
+gl.max_3d_texture_size 16384
+gl.max_array_texture_layers 2048
+gl.max_renderbuffer_size 16384
+gl.max_samples 4
+gl.max_color_attachments 8
+gl.max_draw_buffers 8
+gl.max_vertex_attribs 16
+gl.max_vertex_uniform_vectors 4088
+gl.max_fragment_uniform_vectors 4095
+gl.max_varying_vectors 32
+gl.max_texture_image_units 32
+gl.max_vertex_texture_image_units 32
+gl.max_combined_texture_image_units 96
+gl.max_uniform_block_size 65536
+gl.max_uniform_buffer_bindings 105
+gl.ubo_offset_alignment 16
+gl.max_ssbo_bindings 32
+gl.max_compute_invocations 512
+gl.max_compute_shared_memory 32768
+gl.max_texture_lod_bias 16
+gl.num_program_binary_formats 0
+gl.num_shader_binary_formats 0
+gl.num_compressed_texture_formats 51
+gl.compressed_format 0x83f0
+gl.compressed_format 0x83f2
+gl.compressed_format 0x83f3
+gl.compressed_format 0x83f1
+gl.compressed_format 0x8d64
+gl.compressed_format 0x8e8c
+gl.compressed_format 0x8e8d
+gl.compressed_format 0x8e8e
+gl.compressed_format 0x8e8f
+gl.compressed_format 0x8dbb
+gl.compressed_format 0x8dbc
+gl.compressed_format 0x8dbd
+gl.compressed_format 0x8dbe
+gl.compressed_format 0x9274
+gl.compressed_format 0x9278
+gl.compressed_format 0x9270
+gl.compressed_format 0x9272
+gl.compressed_format 0x9271
+gl.compressed_format 0x9273
+gl.compressed_format 0x9276
+gl.compressed_format 0x9275
+gl.compressed_format 0x9279
+gl.compressed_format 0x9277
+gl.compressed_format 0x93b0
+gl.compressed_format 0x93b1
+gl.compressed_format 0x93b2
+gl.compressed_format 0x93b3
+gl.compressed_format 0x93b4
+gl.compressed_format 0x93b5
+gl.compressed_format 0x93b6
+gl.compressed_format 0x93b7
+gl.compressed_format 0x93b8
+gl.compressed_format 0x93b9
+gl.compressed_format 0x93ba
+gl.compressed_format 0x93bb
+gl.compressed_format 0x93bc
+gl.compressed_format 0x93bd
+gl.compressed_format 0x93d0
+gl.compressed_format 0x93d1
+gl.compressed_format 0x93d2
+gl.compressed_format 0x93d3
+gl.compressed_format 0x93d4
+gl.compressed_format 0x93d5
+gl.compressed_format 0x93d6
+gl.compressed_format 0x93d7
+gl.compressed_format 0x93d8
+gl.compressed_format 0x93d9
+gl.compressed_format 0x93da
+gl.compressed_format 0x93db
+gl.compressed_format 0x93dc
+gl.compressed_format 0x93dd

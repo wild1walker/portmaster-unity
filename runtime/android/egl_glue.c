@@ -13,7 +13,10 @@
 //   eglMakeCurrent          an optional host hook after it: which context is current with the
 //                           window on this thread (glpresent.c's framebuffer 0 for a turned panel)
 //   UA_EGL_PBUFFER=1        tests without a display (Mesa's surfaceless platform): the window surface
-//                           is a pbuffer of the window's size, configs are chosen for pbuffers
+//                           is a pbuffer of the window's size, configs are chosen for pbuffers; with a
+//                           present function (egl_glue_set_present: UA_GL_DRIVER=mesa, host/gldriver.c)
+//                           it is Unity's window: the window hook runs, and each swap of it is that
+//                           function (the host copies the frame to the framebuffer)
 //   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
 //                           passed through the loader's so_softfp_wrap() (float-taking GL calls);
 //                           NULL for Android's frame-timestamp queries (EGL_ANDROID_get_frame_timestamps)
@@ -86,6 +89,7 @@ static struct {
 
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static void (*g_swap_hook)(void *ctx), (*g_swap_done_hook)(void *ctx, int ok);
+static void (*g_window_hook)(void);
 static void *g_swap_ctx, *g_swap_done_ctx;
 
 // The loader's softfp wrapper for float-taking GL entry points (loader/so_loader.h); weak so the
@@ -131,7 +135,6 @@ void egl_glue_set_swap_hook(void (*hook)(void *ctx), void *ctx)
     g_swap_hook = hook;
 }
 
-static void (*g_window_hook)(void);
 void egl_glue_set_window_hook(void (*hook)(void)) { g_window_hook = hook; }
 
 void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx)
@@ -174,6 +177,14 @@ static int pbuffer_mode(void)
 }
 
 static EGLSurface g_window_surface;            // the window surface (egl_glue_set_report_size)
+static int (*g_present)(void *dpy, void *surface);   // UA_EGL_PBUFFER's window shown by the host (egl_glue_set_present)
+static int g_pbuffer_w, g_pbuffer_h;
+void egl_glue_set_present(int (*present)(void *dpy, void *surface), int width, int height)
+{
+    g_present = present;
+    g_pbuffer_w = width;
+    g_pbuffer_h = height;
+}
 static void (*g_whole_screen_hook)(void);
 void egl_glue_set_whole_screen_hook(void (*hook)(void)) { g_whole_screen_hook = hook; }
 static int g_report_w, g_report_h;
@@ -188,8 +199,14 @@ static EGLSurface shim_eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, voi
     if (pbuffer_mode() && real.CreatePbufferSurface) {
         ANativeWindow *w = android_window_get();
         EGLint pa[] = { EGL_WIDTH, ANativeWindow_getWidth(w), EGL_HEIGHT, ANativeWindow_getHeight(w), EGL_NONE };
+        int shown = g_present && android_window_is_ours(win);
+        if (shown && g_pbuffer_w > 0) { pa[1] = g_pbuffer_w; pa[3] = g_pbuffer_h; }
+        void (*wh)(void) = g_window_hook;
+        if (shown && wh) wh();
         EGLSurface ps = real.CreatePbufferSurface(dpy, cfg, pa);
-        SHIM_WARN("egl_glue: window surface replaced by a %dx%d pbuffer (UA_EGL_PBUFFER): %p", pa[1], pa[3], ps);
+        SHIM_WARN("egl_glue: window surface replaced by a %dx%d pbuffer (UA_EGL_PBUFFER%s): %p", pa[1], pa[3],
+                  shown ? ", shown by the host's present" : "", ps);
+        if (ps && shown) g_window_surface = ps;
         return ps;
     }
     void (*wh)(void) = g_window_hook;
@@ -331,6 +348,8 @@ static EGLBoolean shim_swap(EGLDisplay dpy, EGLSurface s)
 {
     void (*hook)(void *) = g_swap_hook;
     if (hook) hook(g_swap_ctx);
+    int (*present)(void *, void *) = g_present;
+    if (present && s && s == g_window_surface && pbuffer_mode()) return swap_done(present(dpy, s) ? EGL_TRUE : EGL_FALSE);
     return swap_done(real.SwapBuffers(dpy, s));
 }
 static EGLBoolean shim_eglSwapBuffers(EGLDisplay dpy, EGLSurface s)

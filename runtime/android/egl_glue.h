@@ -33,8 +33,13 @@ void egl_glue_set_swap_done_hook(void (*hook)(void *ctx, int ok), void *ctx);
 // to remove).
 void egl_glue_set_current_hook(void (*hook)(void *ctx, int window));
 // Called right before the driver creates a window surface for Unity's window (not with a host
-// display, nor for UA_EGL_PBUFFER's pbuffer; NULL to remove).
+// display, nor for UA_EGL_PBUFFER's pbuffer unless a present function is set; NULL to remove).
 void egl_glue_set_window_hook(void (*hook)(void));
+// UA_EGL_PBUFFER with the host showing the frames (UA_GL_DRIVER=mesa: Mesa's surfaceless EGL has no
+// window surfaces; runtime/host/gldriver.c): Unity's window is a pbuffer of width x height (0: the
+// window's size), its swaps call present(display, surface) instead of the real eglSwapBuffers, with
+// the swap hooks around it as before (nonzero: shown). NULL to remove.
+void egl_glue_set_present(int (*present)(void *dpy, void *surface), int width, int height);
 
 // Single-sampled window configs (0, the default: the driver's list as it is). With it on,
 // eglChooseConfig returns only the driver's single-sampled configs (requests for EGL_SAMPLES or

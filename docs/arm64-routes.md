@@ -308,6 +308,13 @@ stage, the call and the 64 calls before it. Run through the game as always (on t
 that submits); after a power cycle the file says whether the GL thread was in a pass, in the swap or between
 frames (then the hang is elsewhere: the render thread's own calls, a load).
 
+**Mesa's Panfrost on the handhelds' own kernel driver (2026-11-21, built, not yet on a GPU).** An open driver
+can be measured and changed where the blob cannot. [tools/mesa-kbase](../tools/mesa-kbase/README.md): Gallium
+Panfrost with a `pan_kmod` backend for kbase (JimVulkan's design on bmdhacks' kbase library, UK 11.7 and 11.17),
+no AFBC, sync files optional, the window a CPU-cached pbuffer the host copies to the framebuffer
+(`UA_GL_DRIVER=mesa`, off by default, [runtime.md](runtime.md)). Built for aarch64 and checked against a fake
+`/dev/mali0`; first light, the pictures against the blob's (glpixdiff) and the frame times come next.
+
 ## What others did (research)
 
 **Unity's own 32 -> 64-bit move on Android (2019's Google Play requirement).** The reported arm64 regressions
