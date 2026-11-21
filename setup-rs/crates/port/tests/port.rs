@@ -780,6 +780,8 @@ tools = "tools"
     put(&t.0.join("bridge.so"), elf(package::EM_AARCH64));
     opts.mono64_work = Some(port::ps(&w));
     opts.mono64_bridge = Some(port::ps(&t.0.join("bridge.so")));
+    // (arch-check wants setup/pmu for aarch64: the stand-in as an aarch64 ELF file)
+    put(&Path::new(opts.pmu.as_ref().unwrap()).join("pmu"), elf(package::EM_AARCH64));
     let mut msgs = Vec::new();
     let zp = package(&repo(), &port::ps(&out), &opts, &mut |m: &str| msgs.push(m.to_string())).unwrap();
     let text = msgs.join("\n");
@@ -799,7 +801,7 @@ tools = "tools"
     assert_eq!(package::elf_machine(&z.read("mygame/ua_host")[..20]), Some(package::EM_AARCH64));
     // (pmu arch-check's full check of the release zip passes)
     let rep = pkgzip::arch::check_release_zip(&port::ps(&zp), &t.0.join("archcheck")).unwrap();
-    assert!(rep.ok(), "arch-check");
+    assert!(rep.ok(), "arch-check: {:?} {:?}", rep.missing, rep.armhf);
     let x = t.0.join("x");
     pkgzip::zip::extract_all(&port::ps(&zp), &port::ps(&x)).unwrap();
     assert!(package::armhf_files(&x, &x).unwrap().is_empty());
