@@ -857,6 +857,28 @@ class NewAndSetupTest(unittest.TestCase):
             self.make(t, {'questions': []})
             self.assertFalse(os.path.exists(os.path.join(out, 'mygame', 'setup', 'questions.lua')))
 
+    def test_new_hooks(self):
+        """files.hooks: each lands as setup/hooks/<point> without .sh (harbourmaster warns on install about
+        .sh files inside the port folder), and every template's hook() sources it from there"""
+        with tempfile.TemporaryDirectory() as t:
+            os.makedirs(os.path.join(t, 'hooks'))
+            put(os.path.join(t, 'hooks', 'pre_convert.sh'), 'echo "pre_convert ran"\n')
+            _, out = self.make(t, {'files': {'hooks': {'pre_convert': 'hooks/pre_convert.sh'}}})
+            setup = os.path.join(out, 'mygame', 'setup')
+            self.assertTrue(os.path.isfile(os.path.join(setup, 'hooks', 'pre_convert')))
+            self.assertEqual([f for _, _, fs in os.walk(os.path.join(out, 'mygame')) for f in fs if f.endswith('.sh')], [])
+            tpl = os.path.join(os.path.dirname(P.__file__), 'port_template')
+            routes = [r for r in sorted(os.listdir(tpl)) if os.path.isfile(os.path.join(tpl, r, 'patchscript'))]
+            self.assertGreaterEqual(len(routes), 5)
+            for route in routes:
+                text = P._read(os.path.join(tpl, route, 'patchscript'))
+                fn = text[text.index('\nhook() {') + 1:]
+                fn = fn[:fn.index('\n}\n') + 3]
+                r = subprocess.run(['bash', '-c', 'fail() { echo "FAIL $1"; exit 1; }; step() { echo "step $*"; }\n' + fn +
+                                    'hook pre_convert; hook post_install; echo done'],
+                                   env=dict(os.environ, S=setup, PORT_TITLE='My Game'), capture_output=True, text=True)
+                self.assertEqual(r.stdout.splitlines(), ['step My Game: pre_convert', 'pre_convert ran', 'done'], route)
+
     def test_pmu_covers(self):
         """the setup ships pmu (no Python) for the default convert steps, the quality step, compute
         shaders, fused_post and shaders from Direct3D 11, Vulkan and Metal included, for plugins pmu

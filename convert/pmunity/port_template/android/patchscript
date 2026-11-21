@@ -35,10 +35,10 @@ fi
 echo "=== $(date) $PORT_TITLE setup ==="
 fail() { echo "PATCH_FAIL_MSG:$1"; echo "Setup failed: $1"; echo "Patching process failed!"; exit 1; }
 step() { echo; echo "== $(date +%H:%M:%S) $*"; }
-hook() {                                # the port's own step at a fixed point (setup/hooks/<name>.sh)
-  [ -f "$S/hooks/$1.sh" ] || return 0
+hook() {                                # the port's own step at a fixed point (setup/hooks/<name>)
+  [ -f "$S/hooks/$1" ] || return 0
   step "$PORT_TITLE: $1"
-  . "$S/hooks/$1.sh" || fail "The port's $1 step failed (see patchlog.txt)."
+  . "$S/hooks/$1" || fail "The port's $1 step failed (see patchlog.txt)."
 }
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 free_mb() { df -Pm "$GD" | awk 'NR==2{print $4}'; }
