@@ -59,6 +59,8 @@ if ! dr "test -f /b/src/.fetched"; then
   awk '/<<.EOF.$/{f=1;next} /^EOF$/{f=0} f' "$HERE/build-mono.sh" | dr "python3 -I - /b/src"
   echo "$B: mono $REF" | dr "cat > /b/src/.fetched"
 fi
+# (bdwgc's Makefile.am includes tests/tests.am, and the download leaves the submodules' tests out: an empty one)
+dr "[ -f /b/src/external/bdwgc/tests/tests.am ] || { mkdir -p /b/src/external/bdwgc/tests && echo '# tests left out of this source download' > /b/src/external/bdwgc/tests/tests.am; }"
 CV=$(dr 'cd /b/src && V=$(sed -n "s/^AC_INIT(mono, \[\([0-9.]*\)\].*/\1/p" configure.ac) && C=$(sed -n "s/^MONO_CORLIB_COUNTER=//p" configure.ac) && IFS=. read a b c <<< "$V" && printf "1%02d%02d%02d%03d" $a $b ${c:-0} ${C:-0}')
 if ! dr "test -f /b/src/mcs/class/lib/monolite/$CV/mscorlib.dll"; then
   echo "Mono's bootstrap compiler: monolite $CV"
