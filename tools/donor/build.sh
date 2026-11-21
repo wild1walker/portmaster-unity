@@ -9,14 +9,15 @@
 # Hub), or one the Unity Hub installed.
 # Needs the editor's Android Build Support, a licence (Unity Personal is enough: Unity_lic.ulf in
 # /Library/Application Support/Unity; nothing here signs in) and the Android tools the editor builds with:
-#   SDK   an Android SDK (2017.4: tools r25.2.5, build-tools 28.0.3, platforms;android-28; 2021.3 and
+#   SDK   an Android SDK (2017.4: tools r25.2.5, build-tools 28.0.3, platforms;android-28; 2018.4: the same
+#         with SDK tools 26.1.1 or newer, since it refuses r25.2.5 and tries to update the SDK it is given; 2021.3 and
 #         Unity 6: the sub-modules Unity's release API lists for the version; 2021.3.27f1: SDK tools
 #         26.1.1, platform-tools 30.0.4, build-tools 30.0.2, platforms android-29 and android-30;
 #         Unity 6: build-tools, platform-tools, platforms, cmdline-tools, and cmake/3.22.1, which
 #         Unity 6 checks for every Android build)
 #   JDK   a JDK home (2017.4 and 2021.3: JDK 8, the 8u172 x86-64 build Unity lists for its Intel and
 #         Apple-silicon editors alike; Unity 6: the OpenJDK 17 its release API lists)
-#   NDK   for Il2cppArm64 and Il2cppArmv7: the NDK the editor asks for (2017.4: r13b); 2021.3 and
+#   NDK   for Il2cppArm64 and Il2cppArmv7: the NDK the editor asks for (2017.4: r13b; 2018.4: r16b); 2021.3 and
 #         Unity 6 ask for one for every build, Mono too ("Android NDK not found"; 2021.3.27f1: r21d,
 #         6000.0: r27c, in <editor>/PlaybackEngines/AndroidPlayer/NDK)
 # 6000.0.61f1 (2026-11-06): its MonoArmv7 donor's player (`pmu player donor`) is the one Unity's
@@ -24,6 +25,9 @@
 # Apple-silicon editor): 70 files; libunity.so and libmain.so are the installer's. Its Il2cppArmv7
 # donor (6 minutes with NDK r21d): `player donor --backend il2cpp --abi armeabi-v7a` gives
 # libunity.so and libmain.so, both the installer's.
+# 2018.4.30f1 (2026-11-19, the Windows editor, this project in batch mode): its MonoArmv7 donor's player
+# is the installer's: libmain.so, libunity.so, libmonobdwgc-2.0.so and the default resources (the .NET 4.x
+# runtime: no libmono.so, which a 2018.x game on the .NET 3.5 runtime needs).
 # A newly unpacked editor's first launch can sit for minutes with no CPU and no log while macOS
 # verifies the bundle (`log show`: "ASP: Security policy would not allow process", a
 # CoreServicesUIAgent progress window): wait, do not kill and relaunch it.
@@ -53,7 +57,10 @@ done
 P=$(mktemp -d)/donor; trap 'rm -rf "$(dirname "$P")"' EXIT
 mkdir -p "$P/Assets"; cp -R "$HERE/Assets/Editor" "$HERE/Assets/Scripts" "$P/Assets/"
 BIN="$ED/Contents/MacOS/Unity"; [ -x "$BIN" ] || BIN="$ED"
-if [ -n "${NDK:-}" ] && command -v defaults >/dev/null; then defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"; fi
+if [ -n "${NDK:-}" ] && command -v defaults >/dev/null; then
+    defaults write com.unity3d.UnityEditor5.x AndroidNdkRoot -string "$NDK"
+    defaults write com.unity3d.UnityEditor5.x AndroidNdkRootR16b -string "$NDK"     # (2018.x reads this one)
+fi
 DONOR_SDK=${SDK:?set SDK} DONOR_JDK=${JDK:?set JDK} DONOR_NDK=${NDK:-} \
   "$BIN" -batchmode -nographics -quit -projectPath "$P" -executeMethod "DonorBuild.$WHAT" -logFile "$P/build.log" \
   || { tail -40 "$P/build.log"; trap - EXIT; echo "the editor's project, with its whole build.log: $P" >&2; exit 1; }

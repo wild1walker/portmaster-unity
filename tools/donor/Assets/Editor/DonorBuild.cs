@@ -12,6 +12,8 @@ public static class DonorBuild
         EditorPrefs.SetString("JdkPath", System.Environment.GetEnvironmentVariable("DONOR_JDK"));
         // (the editor reads the NDK's folder from its preferences before this runs: build.sh sets them too)
         EditorPrefs.SetString("AndroidNdkRoot", System.Environment.GetEnvironmentVariable("DONOR_NDK") ?? "");
+        // (2018.x reads the NDK from "AndroidNdkRootR16b" (it wants r16b): without it "Unable to locate Android NDK")
+        EditorPrefs.SetString("AndroidNdkRootR16b", System.Environment.GetEnvironmentVariable("DONOR_NDK") ?? "");
         // (2019.3 on: the external tools settings, which Unity 6 checks for every Android build, NDK included)
         var tools = System.Type.GetType("UnityEditor.Android.AndroidExternalToolsSettings, UnityEditor.Android.Extensions");
         string[] props = { "sdkRootPath", "jdkRootPath", "ndkRootPath" }, envs = { "DONOR_SDK", "DONOR_JDK", "DONOR_NDK" };
@@ -33,6 +35,12 @@ public static class DonorBuild
         var android = UnityEditor.Build.NamedBuildTarget.Android;
         PlayerSettings.SetApiCompatibilityLevel(android, ApiCompatibilityLevel.NET_Unity_4_8);
         PlayerSettings.SetManagedStrippingLevel(android, ManagedStrippingLevel.Disabled);
+#elif UNITY_2018_1_OR_NEWER
+        // (2018.x: a new project runs the .NET 4.x scripting runtime, where NET_2_0 is .NET Standard 2.0 and the
+        // Android build cannot resolve mscorlib; the 4.x profile, and the player with Mono's 4.x runtime)
+        PlayerSettings.scriptingRuntimeVersion = ScriptingRuntimeVersion.Latest;
+        PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Android, ApiCompatibilityLevel.NET_4_6);
+        PlayerSettings.strippingLevel = StrippingLevel.Disabled;
 #else
         PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.Android, ApiCompatibilityLevel.NET_2_0);
         PlayerSettings.strippingLevel = StrippingLevel.Disabled;
