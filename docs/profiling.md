@@ -2986,3 +2986,27 @@ mostly culling every renderer of the scene against their masks (`CullScene`, `Ge
 per-camera setup, and `SmartRectCollider2D` snaps its objects' positions before every camera and puts them back after
 (`Camera.onPreCull`/`onPostRender`, the game's own). Nothing there renders a picture twice or for nobody; cutting a
 camera's culling would take engine hooks with no exactness argument yet.
+
+## Blasphemous's later areas and bosses through its console (2026-11-20)
+
+`tools/analysis/consolefeed` (loaded with `UA_PROBE=5 UA_PROBE_DLL=<consolefeed.dll>`, a test aid, never in a port) hands
+each line of `console.req` in the game's folder to the game's own developer console (Blasphemous:
+`ConsoleWidget.Instance.ProcessCommand`, whose `Update` runs in the release player too; only F1 needs a debug build) and
+logs the level name whenever it changes (`[feed] <s> s: watch D06Z01S25`), so the `[fps]` lines split by room. A test
+plays New Game to the first level with `UA_INPUT_SCRIPT`, then `invincible` and `load <room>` per stop, with walks and
+attacks through `input.req`. The boss arenas, from the scenes' `Gameplay.GameControllers.Bosses.*` scripts: Ten Piedad
+D01Z04S18, Our Lady of the Charred Visage D02Z03S20, Tres Angustias D03BZ01S01, Quirce D04Z02S22, Exposito D05Z02S14,
+Crisanta D06Z01S25, the Pontiff D07Z01S02 / D07Z01S05, Esdras D08Z01S01, D09Z01S03, D17Z01S11, Sierpes D20Z02S08, the
+Amanecidas D21Z01S01-04, Isidora D01BZ08S01; D22Z01 is the boss rush's copies.
+
+Test release 2026.11.20, EmulationStation stopped, silent:
+
+- **Ordinary areas** (Knulli, 8 zones' first rooms): 59.5 - 59.7 fps once settled; entering a new zone costs about 8 s at
+  ~31 fps (every frame ~30 ms) while the zone's other rooms stream in, then a lock at 60. ua_host 659 -> 692 MB over the
+  tour, at least 177 MB available.
+- **Boss arenas one after another** keep memory: Knulli 694 -> 822 MB over seven (Ten Piedad, Charred Visage, Tres
+  Angustias, Exposito, Crisanta, Esdras, Quirce), the last at 12.7 fps with 2.5 - 5.5 s frames at 56 MB available; the
+  G350 684 -> 762 MB over four, then killed by the kernel loading Crisanta's arena.
+- **Crisanta's arena alone** from the first level (G350): MemAvailable 206 MB -> killed within 5 s of the load (ua_host
+  anon 253 MB + file 564 MB). That jump holds two zones (D17, D06) during the load; a player arrives from her own zone,
+  not yet measured.
