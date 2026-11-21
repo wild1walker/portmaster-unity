@@ -284,7 +284,7 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
         if !src.is_file() {
             return Err(exit(format!("files.hooks.{point}: {} not found", src.display())));
         }
-        ctx.write(&format!("{pd}/setup/hooks/{point}.sh"), &fs::read(&src).map_err(io_at(&src))?, 0o644)?;
+        ctx.write(&format!("{pd}/setup/hooks/{point}"), &fs::read(&src).map_err(io_at(&src))?, 0o644)?;
     }
     for rel in fl.list("extra") {
         let rel = rel.py_str();
