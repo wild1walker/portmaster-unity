@@ -90,6 +90,8 @@ HOOKS = [
     ('_Z17IsNodeVisibleFast', 'IsNodeVisibleFast', 'call'),
     ('_ZN25PreOrderPlayableTraverser8TraverseE', 'PreOrderPlayableTraverser::Traverse', 'call'),
     ('_ZN25PreOrderPlayableTraverser14RecursiveVisitE', 'PreOrderPlayableTraverser::RecursiveVisit', 'call'),
+    ('_ZN14ParticleSystem25UpdateManualTransformDataEb', 'ParticleSystem::UpdateManualTransformData', 'call'),
+    ('_ZNK10GameObject20QueryComponentByTypeEPKN5Unity4TypeE', 'GameObject::QueryComponentByType', 'call'),
 ]
 
 

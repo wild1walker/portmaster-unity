@@ -7,7 +7,7 @@
 // a page followed by an inaccessible one, so a load past what Unity's own code reads faults; prefetched addresses
 // may point anywhere (a PRFM never faults). Lists of 0 to 6 behaviours, sprite loops at every element of lists of
 // 0 to 5, the culling walk's stub at any node address, the playable traversal at every input of
-// graph nodes of 0 to 4 inputs. Also: the `bl` encoder's reach, the jump to the callee (near and far), the page placement, UA_PREFETCH's
+// graph nodes of 0 to 4 inputs, the particle systems' loop at every system of lists of 0 to 5. Also: the `bl` encoder's reach, the jump to the callee (near and far), the page placement, UA_PREFETCH's
 // names. The memory the stubs walk is compared before and after: they store nothing.
 #include <stdio.h>
 #include <string.h>
@@ -231,6 +231,31 @@ static void test_play(void)
         }
 }
 
+// the particle systems' loop: x24 + 0x730 holds the list {array, .., count at +0x10}; each system's GameObject at +0x20,
+// the GameObject's component array at +0x20; every piece at a page's end
+static void test_ps(void)
+{
+    void *stub = install(STUB_PS, 0);
+    for (int count = 0; count <= 5; count++)
+        for (int i = 0; i < (count ? count : 1); i++) {
+            uint8_t *list = guarded(0x18), *slot = guarded(8), *arr = guarded(8 * (size_t)(count ? count : 1));
+            uint64_t a = (uint64_t)(uintptr_t)arr, c = (uint64_t)count, l = (uint64_t)(uintptr_t)list;
+            memcpy(list, &a, 8); memcpy(list + 0x10, &c, 8); memcpy(slot, &l, 8);
+            for (int k = 0; k < count; k++) {
+                uint8_t *ps = guarded(0x48), *go = guarded(0x28);
+                uint64_t g = (uint64_t)(uintptr_t)go, r1 = rnd(), r2 = rnd(), r3 = rnd(), comps = rnd();
+                memcpy(ps + 0x20, &g, 8); memcpy(ps + 0x30, &r1, 8); memcpy(ps + 0x38, &r2, 8); memcpy(ps + 0x40, &r3, 8);
+                memcpy(go + 0x20, &comps, 8);
+                uint64_t p = (uint64_t)(uintptr_t)ps; memcpy(arr + 8 * k, &p, 8);
+            }
+            char what[64];
+            snprintf(what, sizeof what, "ps: system %d of %d", i, count);
+            int which[4] = { 0, 1, 24, 25 };
+            uint64_t v[4] = { rnd(), rnd(), (uint64_t)(uintptr_t)slot - 0x730, (uint64_t)i };
+            run(stub, which, v, 4, what);
+        }
+}
+
 int main(void)
 {
     CHECK(unityprefetch_wanted("1", "beh") && unityprefetch_wanted("beh,sprite", "sprite") && !unityprefetch_wanted("behx", "beh") &&
@@ -252,6 +277,7 @@ int main(void)
     void *cull = install(STUB_CULL, 0);                 // PRFM only: any node address
     for (int k = 0; k < 16; k++) { int which[1] = { 23 }; uint64_t v[1] = { k ? rnd() : 0 }; run(cull, which, v, 1, "cull"); }
     test_play();
+    test_ps();
     printf("%s unityprefetch: %d failure(s)\n", fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }

@@ -1,10 +1,12 @@
 // unityprefetch.c: software prefetch (PRFM) ahead of the pointer walks of libunity's hot loops, on the 64-bit
-// player (UA_PREFETCH; off by default). docs/arm64-routes.md, route 3.
+// player (UA_PREFETCH; on by default where a player's rows match: 6000.0.61f1 arm64-v8a). docs/arm64-routes.md, route 3.
 //
+//   unset                  beh, sprite, cull, play
 //   UA_PREFETCH=1          every site below
+//   UA_PREFETCH=0          none
 //   UA_PREFETCH=beh,sprite the named sites only (beh: the behaviour update loops; sprite: the sprite render
 //                          nodes' preparation; cull: the camera culling walk;
-//                          play: the playable graphs' traversal)
+//                          play: the playable graphs' traversal; ps: the particle systems' transform update)
 //
 // Why. On the Cortex-A53 / A35 (in order) a load that misses waits for memory at its first use: about 220
 // cycles from DRAM on the H700 handhelds. The 64-bit player's structures are larger than the 32-bit one's,
@@ -48,6 +50,10 @@
 //   play    PreOrderPlayableTraverser::Traverse, at its loop's call of RecursiveVisit for each input of a playable
 //           (x22: the playable's graph node, its inputs at +0x20 (16 bytes each, the Playable first) and their count
 //           at +0x30; x23 / x24: the input's offset and number): the next input's Playable, four lines.
+//   ps      ParticleSystem::UpdateManualTransformData, at its loop's first call of GameObject::QueryComponentByType (the
+//           Transform's lookup; x24 the page of the global list of particle systems, +0x730: {array, .., count at
+//           +0x10}; x25 the system's number): three ahead the ParticleSystem, two ahead its GameObject and the objects
+//           the loop reads from it (+0x30, +0x38, +0x40), one ahead the GameObject's component array.
 //
 // Found as unityhooks.c finds its hooks: tools/re/unityhooks.py rows (offset, size, FNV-1a of the bytes) for each
 // function whose call is changed or whose reads the offsets come from; any other build matches no row and is
@@ -64,8 +70,8 @@
 #include "unityprefetch.h"
 #include "unityhooks.h"
 
-enum { STUB_BEH, STUB_SPRITE, STUB_CULL, STUB_PLAY, STUB_N };
-static const char *const g_stub_name[STUB_N] = { "beh", "sprite", "cull", "play" };
+enum { STUB_BEH, STUB_SPRITE, STUB_CULL, STUB_PLAY, STUB_PS, STUB_N };
+static const char *const g_stub_name[STUB_N] = { "beh", "sprite", "cull", "play", "ps" };
 
 #if defined(__aarch64__)
 // The stubs: position-independent code copied into a page near libunity. Each ends in four words the installer
@@ -188,15 +194,54 @@ __asm__(
     "ua_pf_play_tail:\n"
     "    .word 0, 0, 0, 0\n"
     "ua_pf_play_end:\n"
+
+    "    .p2align 3\n"
+    "    .globl ua_pf_ps_start, ua_pf_ps_tail, ua_pf_ps_end\n"
+    "ua_pf_ps_start:\n"
+    "    ldr  x9, [x24, #0x730]\n"         // the list of particle systems: {array, ..., count at +0x10}
+    "    ldr  x10, [x9, #0x10]\n"
+    "    ldr  x9, [x9]\n"
+    "    add  x11, x25, #3\n"              // three ahead: the ParticleSystem
+    "    cmp  x11, x10\n"
+    "    b.hs 1f\n"
+    "    ldr  x12, [x9, x11, lsl #3]\n"
+    "    prfm pldl1keep, [x12, #0x20]\n"
+    "1:  add  x11, x25, #2\n"              // two ahead: its GameObject and the objects the loop reads
+    "    cmp  x11, x10\n"
+    "    b.hs 2f\n"
+    "    ldr  x12, [x9, x11, lsl #3]\n"
+    "    ldr  x16, [x12, #0x20]\n"
+    "    prfm pldl1keep, [x16, #0x20]\n"   // its component array and count
+    "    ldr  x16, [x12, #0x30]\n"
+    "    prfm pldl1keep, [x16, #0x48]\n"
+    "    ldr  x16, [x12, #0x38]\n"
+    "    prfm pldl1keep, [x16, #0x20]\n"
+    "    prfm pldl1keep, [x16, #0x44]\n"
+    "    prfm pldl1keep, [x16, #0x80]\n"
+    "    prfm pldl1keep, [x16, #0x168]\n"
+    "    ldr  x16, [x12, #0x40]\n"
+    "    prfm pldl1keep, [x16, #0x218]\n"
+    "2:  add  x11, x25, #1\n"              // the next one: its GameObject's components
+    "    cmp  x11, x10\n"
+    "    b.hs ua_pf_ps_tail\n"
+    "    ldr  x12, [x9, x11, lsl #3]\n"
+    "    ldr  x16, [x12, #0x20]\n"
+    "    ldr  x16, [x16, #0x20]\n"
+    "    prfm pldl1keep, [x16]\n"
+    "    prfm pldl1keep, [x16, #0x40]\n"
+    "ua_pf_ps_tail:\n"
+    "    .word 0, 0, 0, 0\n"
+    "ua_pf_ps_end:\n"
 );
 extern const uint8_t ua_pf_beh_start[], ua_pf_beh_tail[], ua_pf_beh_vt[], ua_pf_beh_end[];
 extern const uint8_t ua_pf_sprite_start[], ua_pf_sprite_tail[], ua_pf_sprite_end[];
 extern const uint8_t ua_pf_cull_start[], ua_pf_cull_tail[], ua_pf_cull_end[];
 extern const uint8_t ua_pf_play_start[], ua_pf_play_tail[], ua_pf_play_end[];
+extern const uint8_t ua_pf_ps_start[], ua_pf_ps_tail[], ua_pf_ps_end[];
 
-static const uint8_t *const g_stub_start[STUB_N] = { ua_pf_beh_start, ua_pf_sprite_start, ua_pf_cull_start, ua_pf_play_start };
-static const uint8_t *const g_stub_tail[STUB_N] = { ua_pf_beh_tail, ua_pf_sprite_tail, ua_pf_cull_tail, ua_pf_play_tail };
-static const uint8_t *const g_stub_end[STUB_N] = { ua_pf_beh_end, ua_pf_sprite_end, ua_pf_cull_end, ua_pf_play_end };
+static const uint8_t *const g_stub_start[STUB_N] = { ua_pf_beh_start, ua_pf_sprite_start, ua_pf_cull_start, ua_pf_play_start, ua_pf_ps_start };
+static const uint8_t *const g_stub_tail[STUB_N] = { ua_pf_beh_tail, ua_pf_sprite_tail, ua_pf_cull_tail, ua_pf_play_tail, ua_pf_ps_tail };
+static const uint8_t *const g_stub_end[STUB_N] = { ua_pf_beh_end, ua_pf_sprite_end, ua_pf_cull_end, ua_pf_play_end, ua_pf_ps_end };
 #endif
 
 // a call site: the function (its row), the `bl` in it, the function it calls (its row), the stub
@@ -208,7 +253,7 @@ struct pf_site {
 };
 struct pf_player {
     const char *unity;
-    struct pf_site sites[7];
+    struct pf_site sites[8];
     struct uh_row checks[6];        // the code the offsets were read from (checked only)
     uint32_t mb_vtable;             // MonoBehaviour's vtable as objects point to it (its symbol + 0x10)
     uint32_t mb_vt_update;          // its Update slot (CommonUpdate<BehaviourManager>'s call) ...
@@ -228,7 +273,9 @@ struct pf_player {
 // x8 and x9 before it reads them; after it the loop writes x8 first. ProcessCameraIndexListIsNodeVisibleStep1 walks
 // the nodes with x23 (+24 a step) and calls IsNodeVisibleFast (the cull stub uses no register). Traverse's input loop
 // keeps the graph node in x22, the input's offset and number in x23 / x24, reloads x9 after the call; RecursiveVisit
-// writes x8 - x12 before it reads them (its float arguments s0 - s3 / d3 are not touched).
+// writes x8 - x12 before it reads them (its float arguments s0 - s3 / d3 are not touched). UpdateManualTransformData keeps
+// the list's page in x24 and the number in x25 across its calls; QueryComponentByType writes x8 - x12 before it reads
+// them, and the loop's next call (GetTransformAccess) reads none of them.
 static const struct pf_player g_players[] = {
     {
         "6000.0.61f1 arm64-v8a",
@@ -242,6 +289,8 @@ static const struct pf_player g_players[] = {
               { "6000.0.61f1 arm64-v8a", "IsNodeVisibleFast", 0x785de0, 0x6c, 'x', 0x959ef690b160b089ull }, 1 + STUB_CULL },
             { { "6000.0.61f1 arm64-v8a", "PreOrderPlayableTraverser::Traverse", 0x9b1be0, 0x1f0, 'x', 0x196dd5dbc9ecc92dull }, 0x9b1d98,
               { "6000.0.61f1 arm64-v8a", "PreOrderPlayableTraverser::RecursiveVisit", 0x9b2998, 0xbc, 'x', 0xf8b390afd5730f12ull }, 1 + STUB_PLAY },
+            { { "6000.0.61f1 arm64-v8a", "ParticleSystem::UpdateManualTransformData", 0x11fa950, 0x1a4, 'x', 0x4dbcab5f515c8486ull }, 0x11fa9cc,
+              { "6000.0.61f1 arm64-v8a", "GameObject::QueryComponentByType", 0x77b034, 0x44, 'x', 0x823fd1d5d6ddd8a7ull }, 1 + STUB_PS },
         },
         {
             { "6000.0.61f1 arm64-v8a", "MonoBehaviour::CallUpdateMethod", 0x9d3e78, 0x114, 'x', 0xd695de744b4c0dbdull },
@@ -324,10 +373,12 @@ static int write_word(uintptr_t at, uint32_t w)
 void unityprefetch_on_load(uintptr_t base, size_t size)
 {
     const char *v = getenv("UA_PREFETCH");
-    if (!v || !*v || !strcmp(v, "0")) return;
+    int asked = v && *v;
+    if (!asked) v = "beh,sprite,cull,play";     // the default (ps: measured apart); a player without rows: silently none
+    if (!strcmp(v, "0")) return;
 #if !defined(__aarch64__)
     (void)base; (void)size;
-    fprintf(stderr, "[unityprefetch] UA_PREFETCH: the 64-bit player's sites only; nothing on this build\n");
+    if (asked) fprintf(stderr, "[unityprefetch] UA_PREFETCH: the 64-bit player's sites only; nothing on this build\n");
 #else
     for (size_t k = 0; k < sizeof g_players / sizeof *g_players; k++) {
         const struct pf_player *p = &g_players[k];
@@ -396,10 +447,10 @@ void unityprefetch_on_load(uintptr_t base, size_t size)
         mprotect(page, (size_t)pg, PROT_READ | PROT_EXEC);
         __builtin___clear_cache((char *)page, (char *)(page + used));
         if (!n) { munmap(page, (size_t)pg); return; }
-        fprintf(stderr, "[unityprefetch] libunity %s: %d call sites fetch ahead (beh %d, sprite %d, cull %d, play %d; UA_PREFETCH=%s)\n",
-                p->unity, n, done[STUB_BEH], done[STUB_SPRITE], done[STUB_CULL], done[STUB_PLAY], v);
+        fprintf(stderr, "[unityprefetch] libunity %s: %d call sites fetch ahead (beh %d, sprite %d, cull %d, play %d, ps %d; UA_PREFETCH=%s)\n",
+                p->unity, n, done[STUB_BEH], done[STUB_SPRITE], done[STUB_CULL], done[STUB_PLAY], done[STUB_PS], v);
         return;
     }
-    fprintf(stderr, "[unityprefetch] this libunity.so is not one whose loops were read (tools/re/unityhooks.py); no prefetch\n");
+    if (asked) fprintf(stderr, "[unityprefetch] this libunity.so is not one whose loops were read (tools/re/unityhooks.py); no prefetch\n");
 #endif
 }

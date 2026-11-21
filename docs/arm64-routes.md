@@ -767,9 +767,54 @@ Exactness: by construction (PRFM is a hint; the stubs' loads read what Unity rea
 the ABI lets a call find them), the unit test, and the runs above reaching King's Pass with the same play.
 With `UA_RELAYOUT`: a function whose call site is changed differs from the
 library file, so the relayout leaves it in place and its moved callers reach it there; the two work together
-and the patched functions lose only their own move. Should become the default for 6000.0.61f1's 64-bit player
-(port.env) once a busier scene (City of Tears, a boss) and a soak have been run with it; other Unity versions
-need their own rows (tools/re/unityhooks.py prints them; the loops' registers read by hand).
+and the patched functions lose only their own move. Other Unity versions need their own rows
+(tools/re/unityhooks.py prints them; the loops' registers read by hand).
+
+**City of Tears, a boss, the 32-bit build, a soak (2026-11-21), and the default.** All 64-bit runs with the
+aarch64 defaults (relayout with HK's list, vtables, atomics), A B A B, then the 32-bit build (armeabi-v7a player,
+its own ua_host from the same commit) twice at the same spot; UnityMain a frame, means of two runs:
+
+| | fps | UnityMain ms | cycles | load-miss stalls | L2 refills | render thread ms |
+|---|---|---|---|---|---|---|
+| City, muOS: off / `UA_PREFETCH` / 32-bit | 44.7 / 44.8 / 45.5 | 15.10 / 14.40 / 14.53 | 27.70 / 26.58 / 26.37 M | 16.60 / 14.72 / 14.24 M | 80.0 / 81.0 / 71.3 K | 15.14 / 15.09 / 14.00 |
+| City, Knulli | 45.1 / 45.2 / 46.1 | 14.81 / 14.31 / 14.09 | 23.23 / 22.17 / 22.48 M | 13.07 / 12.54 / 11.60 M | 79.2 / 78.3 / 69.8 K | 15.42 / 15.48 / 13.95 |
+| boss, muOS | 40.2 / 41.0 / 41.4 | 15.06 / 15.54 / 15.06 | 27.32 / 26.55 / 26.65 M | 15.74 / 14.51 / 13.32 M | 78.3 / 81.0 / 68.8 K | 14.17 / 14.42 / 12.72 |
+| boss, Knulli | 41.4 / 42.5 / 45.0 | 16.00 / 14.30 / 14.89 | 25.51 / 23.32 / 22.14 M | 14.24 / 12.43 / 10.91 M | 84.0 / 77.3 / 65.9 K | 13.83 / 13.77 / 12.05 |
+
+The boss is the Hall of Gods' second lower-floor statue (`spots/gg`: continue from the Hall's bench, attack off
+it, right 4.67 s, up, confirm twice; in the arena a fixed walk / attack / jump pattern). Each fight goes its own
+way (the instructions retired a frame differ by up to 20 % between runs, three of the eight 64-bit runs include a
+1.1 s death reload), so its rows say less than the standing scenes'. City is GPU-bound on both builds (44 - 46 fps):
+there the prefetch takes 0.5 - 0.7 ms off UnityMain without moving the frame rate.
+
+**Where 64-bit stands now**: UnityMain at City is at the 32-bit build's cycles (muOS 26.6 against 26.4 M, Knulli
+22.2 against 22.5 M), at King's Pass below them (Knulli 25.4 against 25.8 M). The frame-rate gap left (0.7 - 0.9 fps
+at City, 0.4 - 2.5 at the boss) is the render thread: UnityGfxDeviceW 15.1 - 15.5 ms against 13.9 - 14.0 ms, of it
++1.7 - 2.1 M i-cache stall cycles a frame (the 64-bit libmali's code), +1.3 M load-miss stalls, +10 K L2 refills.
+The next lever is route 4 (and the 64-bit Mali driver), not libunity's loops.
+
+Soak, Knulli, `UA_PREFETCH=1`, 25 min in the Crossroads with a fixed walk / attack / jump pattern (deaths and
+respawns included): no crash, 55.4 fps throughout (per 3-minute segment 55.0 - 56.8), game RSS 736 - 739 MB from the
+4th minute to the end, the only hitches 4 of ~310 ms at 6-minute intervals (`UA_GC_BUDGET`'s collections, as
+without it), no swap-ins.
+
+**Default**: on in the runtime for the 64-bit player (`UA_PREFETCH` unset = `beh,sprite,cull,play`; `0` off; `1`
+adds `ps`), checked with the build that sets it: the unset runs below log the four sites and match `UA_PREFETCH=1`'s
+earlier numbers. It only acts where a player's rows match (6000.0.61f1 arm64-v8a), silently elsewhere; nothing in a
+port's port.env is needed.
+
+**The next loops** (King's Pass, Knulli, load-miss stall samples `UA_PROF_EVENT=raw:0xe7` every 1 M cycles, 64-bit
+with relayout and prefetch against 32-bit, share of UnityMain's stalls): `QueryComponentByType` 2.0 % against 1.5 %,
+`Playable::Handle` 1.3 / 0.7, `FlattenBasicData` 1.0 / 0.4, the outline atomics 1.9 / 0 (inline in the 32-bit
+player), `FMOD::SystemI::UpdateAudibilities` 3.7 / 3.0 (moved off the thread by `UA_FMOD_ASYNC`), `CallUpdateMethod`
+now 0.5 against 3.2. `QueryComponentByType`'s samples come mostly from `ParticleSystem::UpdateManualTransformData`'s
+loop over every particle system (the Transform lookup, then `GetTransformAccess`), then `AudioSource::CachePositional`
+and the particle systems' job scheduling: site `ps` prefetches that loop three systems deep (the system, its
+GameObject and the objects the loop reads from it, the GameObject's component array). Measured at King's Pass,
+`UA_PREFETCH=0` / unset (the default) / `1` (with `ps`), A D P then P D A, UnityMain cycles a frame: muOS 31.72 /
+28.78 / 28.35 M and 28.43 / 28.95 / 31.44 M (the default -8.6 %, `ps` a further -1.6 %, 51.2 / 51.9 / 52.2 fps);
+Knulli 27.27 / 24.92 / 26.05 M and 28.63 / 28.35 / 30.72 M (the default -8.2 %, `ps` +2.6 %; the second hold's
+King's Pass was heavier for all three, 4.9 M instructions a frame against 4.5). `ps` stays opt-in.
 
 ### 4. Less L2 traffic from the other threads
 
