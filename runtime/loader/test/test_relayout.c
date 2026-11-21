@@ -195,7 +195,8 @@ int main(int argc, char **argv)
     }
 
     /* SO_RELAYOUT_DATA: rl_vt_a's table word is its copy now; rl_vt_b's (formed in code) and rl_far_leaf's (not copied) stay */
-    CHECK(vt[0] == b_target(va) && vt[0] != va, "rl_vtab[0] %lx: not rl_vt_a's copy %lx", (unsigned long)vt[0], (unsigned long)b_target(va));
+    CHECK(vt[0] != va && so_relayout_orig(vt[0]) == va, "rl_vtab[0] %lx: not rl_vt_a's copy", (unsigned long)vt[0]);
+    CHECK(!b_target(va), "rl_vt_a's original entry was patched (only the copies and its table word reach it)");
     CHECK(vt[1] == vb, "rl_vtab[1] %lx changed (rl_vt_b's address is formed in code)", (unsigned long)vt[1]);
     CHECK(vt[2] == vfar, "rl_vtab[2] changed");
 

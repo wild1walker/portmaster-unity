@@ -416,6 +416,32 @@ the GPU set the frame rate, 45 fps on every run, so UnityMain's time is what to 
 | L2 refills | 80.9 K | 79.5 K (-1.8 %) | 78.5 K (-3.0 %) |
 | load-miss stall cycles (0xE7) | 13.05 M | 13.34 M | 13.11 M |
 
+King's Pass (the profiled scene; UnityMain sets the frame rate there):
+
+| King's Pass, muOS (2 runs each) | base | r | d |
+|---|---|---|---|
+| fps | 50.6, 50.6 | 50.7, 50.5 | 51.3, 51.2 |
+| UnityMain ms a frame | 17.00, 17.20 | 17.13, 16.86 | 16.65, 16.36 (-0.60) |
+| render thread ms a frame | 11.86, 11.83 | 11.83, 11.70 | 11.73, 11.30 |
+| cycles (user) | 31.31 M | 31.90 M | 30.80 M (-1.6 %) |
+| instructions | 4.55 M | 4.64 M | 4.50 M |
+| i-cache miss stall cycles | 6.81 M | 7.07 M (+3.7 %) | 6.60 M (-3.2 %) |
+| L1I refills | 118.8 K | 123.9 K | 115.4 K (-2.8 %) |
+| iTLB miss stall cycles | 0.78 M | 0.66 M | 0.60 M (-23 %) |
+| L2 refills | 88.1 K | 87.2 K | 85.9 K (-2.5 %) |
+
+| King's Pass, Knulli (2 runs each) | base | d | `UA_ATOMICS=llsc` alone |
+|---|---|---|---|
+| fps | 50.7, 50.7 | 51.4, 51.3 | 51.1, 51.2 |
+| UnityMain ms a frame | 16.89, 16.92 | 16.67, 16.73 (-0.21) | 16.51, 16.63 (-0.34) |
+| cycles (user) | 27.32 M | 26.96 M (-1.3 %) | 27.33 M |
+| instructions | 4.48 M | 4.48 M | 4.49 M |
+| i-cache miss stall cycles | 5.96 M | 5.65 M (-5.2 %) | 5.79 M (-3.0 %) |
+| L1I refills | 119.5 K | 118.6 K | 120.0 K |
+| iTLB miss stall cycles | 0.68 M | 0.53 M (-21 %) | 0.68 M |
+| L2 refills | 86.5 K | 84.3 K (-2.5 %) | 86.7 K |
+| load-miss stall cycles | 15.51 M | 15.31 M | 15.42 M |
+
 What it says: packing whole functions does not shrink the code a frame touches: the same lines are
 fetched (L1I refills within 4 %); it takes pages (iTLB stalls -9 to -19 %) and, with the vtables pointed
 at the copies, a little of the i-cache stall time (-3.5 %) and of the L2 refills (-3 %). Without the

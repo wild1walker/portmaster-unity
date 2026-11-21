@@ -1653,32 +1653,45 @@ static int cmp_uptr(const void *a, const void *b)
  * calls skip the original's entry. Only functions whose address is never formed in code (ADRP + ADD, ADR)
  * nor exported: then every pointer to such a function the program can hold came from those words, all of
  * them now the copy's, and comparisons of function pointers come out as before. */
-static int relayout_data(so_module *m, relregion *r)
+static int relayout_data(so_module *m, relregion *r, uint8_t *need_entry)
 {
     int n = r->plan.n, nd = 0;
-    uintptr_t *from = malloc(sizeof *from * (size_t)n * 2);
+    uintptr_t *from = malloc(sizeof *from * (size_t)n * 3);
     if (!from) return 0;
-    for (int i = 0; i < n; i++) { from[2 * i] = m->bias + r->plan.fn[i].start; from[2 * i + 1] = r->lo + r->plan.fn[i].at; }
-    qsort(from, (size_t)n, 2 * sizeof *from, cmp_uptr);
+    for (int i = 0; i < n; i++) { from[3 * i] = m->bias + r->plan.fn[i].start; from[3 * i + 1] = r->lo + r->plan.fn[i].at; from[3 * i + 2] = (uintptr_t)i; }
+    qsort(from, (size_t)n, 3 * sizeof *from, cmp_uptr);
     uint8_t *keep = calloc((size_t)n, 1);
-#define FIND(v) ((uintptr_t *)bsearch(&(v), from, (size_t)n, 2 * sizeof *from, cmp_uptr))
+#define FIND(v) ((uintptr_t *)bsearch(&(v), from, (size_t)n, 3 * sizeof *from, cmp_uptr))
+#define FN(e) ((int)(e)[2])
     /* exported */
     for (uint32_t i = 1; i < m->nsyms; i++) {
         uintptr_t v = m->bias + m->symtab[i].st_value;
         uintptr_t *e = m->symtab[i].st_shndx != SHN_UNDEF ? FIND(v) : NULL;
-        if (e) keep[(e - from) / 2] = 1;
+        if (e) keep[FN(e)] = 1;
     }
-    /* formed in code: ADR, and ADRP followed (within 32 instructions) by ADD #imm on its register */
+    /* formed in code: ADR, and ADRP followed (within 32 instructions) by ADD #imm on its register; and
+       the direct branches from code that stays (B, BL, B.cond, CBZ, TBZ): those functions keep the
+       branch at their original entry */
     for (int s = 0; s < m->nsegs; s++) {
         if (!(m->segs[s].prot & PROT_EXEC)) continue;
         const uint32_t *w = (const uint32_t *)m->segs[s].start;
         size_t nw = m->segs[s].len / 4;
         for (size_t i = 0; i < nw; i++) {
             uint32_t a = w[i];
+            uintptr_t pc = m->segs[s].start + 4 * i;
+            int64_t bo = 0; int br = 1;
+            if ((a & 0x7c000000u) == 0x14000000u) bo = (int64_t)((uint64_t)(a & 0x3ffffff) << 38) >> 36;
+            else if ((a & 0xff000000u) == 0x54000000u || (a & 0x7e000000u) == 0x34000000u) bo = (int64_t)((uint64_t)((a >> 5) & 0x7ffff) << 45) >> 43;
+            else if ((a & 0x7e000000u) == 0x36000000u) bo = (int64_t)((uint64_t)((a >> 5) & 0x3fff) << 50) >> 48;
+            else br = 0;
+            if (br) {
+                uintptr_t t = pc + (uintptr_t)bo, *e = FIND(t);
+                if (e && !need_entry[FN(e)] && !rl_copy_of(&r->plan, pc - m->bias, r->lo)) need_entry[FN(e)] = 1;
+                continue;
+            }
             if ((a & 0x1f000000u) != 0x10000000u) continue;             /* ADR / ADRP */
             int64_t imm = (int64_t)((((uint64_t)((a >> 5) & 0x7ffff) << 2) | ((a >> 29) & 3)) << 43) >> 43;
-            uintptr_t pc = m->segs[s].start + 4 * i;
-            if (!(a >> 31)) { uintptr_t t = pc + (uintptr_t)imm; uintptr_t *e = FIND(t); if (e) keep[(e - from) / 2] = 1; continue; }
+            if (!(a >> 31)) { uintptr_t t = pc + (uintptr_t)imm; uintptr_t *e = FIND(t); if (e) keep[FN(e)] = 1; continue; }
             uintptr_t page = (pc & ~(uintptr_t)0xfff) + (uintptr_t)(imm * 4096);
             unsigned rd = a & 31;
             for (size_t k = i + 1; k < nw && k <= i + 32; k++) {
@@ -1686,7 +1699,7 @@ static int relayout_data(so_module *m, relregion *r)
                 if ((b & 0xffc00000u) == 0x91000000u && ((b >> 5) & 31) == rd) {
                     uintptr_t t = page + ((b >> 10) & 0xfff);
                     uintptr_t *e = FIND(t);
-                    if (e) keep[(e - from) / 2] = 1;
+                    if (e) keep[FN(e)] = 1;
                 }
             }
         }
@@ -1698,7 +1711,7 @@ static int relayout_data(so_module *m, relregion *r)
         int changed = 0;
         for (uintptr_t a = (lo + 7) & ~(uintptr_t)7; a + 8 <= hi; a += 8) {
             uintptr_t v = *(const uintptr_t *)a, *e;
-            if (v < from[0] || v > from[2 * (n - 1)] || !(e = FIND(v)) || keep[(e - from) / 2]) continue;
+            if (v < from[0] || v > from[3 * (n - 1)] || !(e = FIND(v)) || keep[FN(e)]) continue;
             if (!changed && m->relro_end > m->relro_start && lo < m->relro_end && hi > m->relro_start)
                 mprotect((void *)m->relro_start, m->relro_end - m->relro_start, PROT_READ | PROT_WRITE);
             changed = 1;
@@ -1709,8 +1722,9 @@ static int relayout_data(so_module *m, relregion *r)
             mprotect((void *)m->relro_start, m->relro_end - m->relro_start, PROT_READ);
     }
 #undef FIND
+#undef FN
     int kept = 0;
-    for (int i = 0; i < n; i++) kept += keep[i];
+    for (int i = 0; i < n; i++) { kept += keep[i]; if (keep[i]) need_entry[i] = 1; }
     fprintf(stderr, "[relayout] %s: %d data words point at copies now (%d functions whose address code forms or exports keep theirs)\n", m->name, nd, kept);
     free(keep); free(from);
     return nd;
@@ -1792,13 +1806,21 @@ int so_relayout(so_module *m, const char *list, int flags)
     r->m = m;
     r->lo = (uintptr_t)dst; r->code_hi = r->lo + r->plan.code_size; r->hi = r->lo + len;
     /* (before the entries change: the scan for addresses formed in code reads them) */
-    int nd = (flags & SO_RELAYOUT_DATA) ? relayout_data(m, r) : -1;
+    /* which original entries need the branch: all of them; with SO_RELAYOUT_DATA only those that code
+       which stays branches to directly or whose address stays the original's (the rest are reached only
+       from the copies and through the redirected words: their original pages stay clean) */
+    uint8_t *need = malloc((size_t)r->plan.n + 1);
+    memset(need, (flags & SO_RELAYOUT_DATA) ? 0 : 1, (size_t)r->plan.n + 1);
+    int nd = (flags & SO_RELAYOUT_DATA) ? relayout_data(m, r, need) : -1;
     /* each original entry: a branch to its copy (calls through pointers, vtables, unmoved callers) */
     int prot = PROT_READ | PROT_EXEC;
     for (int i = 0; i < m->nsegs; i++) if (m->segs[i].prot & PROT_EXEC) prot = m->segs[i].prot;
     uintptr_t open_page = 0;
+    int npatched = 0;
     for (int i = 0; i < r->plan.n; i++) {
         const rl_fn *fn = &r->plan.fn[i];
+        if (!need[i]) continue;
+        npatched++;
         uintptr_t at = m->bias + fn->start, pg = PAGE_DOWN(at);
         uint32_t b = 0x14000000u | (uint32_t)((((intptr_t)((uintptr_t)dst + fn->at) - (intptr_t)at) >> 2) & 0x3ffffff);
         if (pg != open_page) {
@@ -1810,6 +1832,7 @@ int so_relayout(so_module *m, const char *list, int flags)
         __builtin___clear_cache((char *)at, (char *)at + 4);
     }
     if (open_page) mprotect((void *)open_page, PAGE_SZ, prot);
+    free(need);
     r->ph[0].p_type = PT_LOAD; r->ph[0].p_flags = PF_R | PF_X; r->ph[0].p_vaddr = 0;
     r->ph[0].p_memsz = r->ph[0].p_filesz = r->plan.total; r->ph[0].p_align = PAGE_SZ;
     r->ph[1].p_type = PT_GNU_EH_FRAME; r->ph[1].p_flags = PF_R; r->ph[1].p_vaddr = r->plan.hdr_off;
@@ -1823,7 +1846,7 @@ int so_relayout(so_module *m, const char *list, int flags)
     fprintf(stderr, "[relayout] %s: %d functions (%llu KB; %d split into hot and cold pieces) laid out at %p in the list's order (%s); %d left out%s\n",
             m->name, r->plan.n, (unsigned long long)(r->plan.code_size >> 10), r->plan.split, dst, list, r->plan.skipped + changed,
             changed ? " (some changed in memory by a hook)" : "");
-    (void)nd;
+    if (nd >= 0) fprintf(stderr, "[relayout] %s: %d original entries branch to their copies (the others are reached only from copies and redirected words)\n", m->name, npatched);
     return r->plan.n;
 }
 
