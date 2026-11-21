@@ -377,20 +377,30 @@ fn gib(n: f64) -> f64 {
     n / (1u64 << 30) as f64
 }
 
-/// What check_space says when the archives (need bytes) would leave less than 1 GiB of free.
+/// What packing leaves free on the card beside the archives: room for what the setup still writes
+/// after them, which is the player's libraries copied into the port (the copies of Unity 6's arm64
+/// player and the Mono runtime: about 60 MB; the il2cpp-arm64 route's player and the game's
+/// libil2cpp.so, more for a big game), its notes and the game's first saves and caches. The
+/// archives' own bytes are counted exactly (their entries' sizes), so nothing of it is an allowance
+/// for them. 1 GiB until 2026-11-21, a figure from the first version with no step behind it, which
+/// turned away cards with room for the game.
+const PACK_SPARE_BYTES: u64 = 200_000_000;
+
+/// What check_space says when the archives (need bytes) would leave less than the spare free.
 fn short_of_space(need: u64, free: u64) -> Option<String> {
-    (free < need + (1 << 30)).then(|| {
+    let want = need.saturating_add(PACK_SPARE_BYTES);
+    (free < want).then(|| {
         format!(
-            "pack: the APK and OBB need {:.2} GiB, {:.2} GiB free (keeping 1 GiB spare): free {:.1} GiB more on the card",
+            "pack: the APK and OBB need {:.2} GiB, {:.2} GiB free (keeping 200 MB spare): free {:.1} GiB more on the card",
             gib(need as f64),
             gib(free as f64),
             // (rounded up: a card a few MB short read "free 0.0 GiB more", 2026-11-19 on muOS)
-            (gib((need + (1 << 30) - free) as f64) * 10.0).ceil() / 10.0
+            (gib((want - free) as f64) * 10.0).ceil() / 10.0
         )
     })
 }
 
-/// Exits NO_SPACE when the archives of these entries would leave less than 1 GiB free.
+/// Exits NO_SPACE when the archives of these entries would leave less than the spare free.
 fn check_space(
     ctx: &mut Ctx,
     zdir: &str,
@@ -559,9 +569,9 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
             need += size_of(s)?;
         }
         let free = free_space(&zdir)?;
-        if free < need + (1 << 30) {
+        if free < need.saturating_add(PACK_SPARE_BYTES) {
             let m = format!(
-                "pack: OBB needs {:.2} GiB, only {:.2} GiB free (keeping 1 GiB spare)",
+                "pack: OBB needs {:.2} GiB, only {:.2} GiB free (keeping 200 MB spare)",
                 gib(need as f64),
                 gib(free as f64)
             );
@@ -740,11 +750,15 @@ mod tests {
         assert_eq!(short_of_space(1 << 30, 3 << 30), None);
         assert_eq!(
             short_of_space(1_500_000_000, 1 << 30).unwrap(),
-            "pack: the APK and OBB need 1.40 GiB, 1.00 GiB free (keeping 1 GiB spare): free 1.4 GiB more on the card"
+            "pack: the APK and OBB need 1.40 GiB, 1.00 GiB free (keeping 200 MB spare): free 0.6 GiB more on the card"
         );
+        // the spare is 200 MB: one byte less is short, the spare itself is enough
+        let need = 60_000_000;
+        assert!(short_of_space(need, need + PACK_SPARE_BYTES - 1).is_some());
+        assert_eq!(short_of_space(need, need + PACK_SPARE_BYTES), None);
         // a few MB short: never "0.0 GiB more"
         let need = 2_100_000_000u64;
-        let s = short_of_space(need, need + (1 << 30) - 4_000_000).unwrap();
+        let s = short_of_space(need, need + PACK_SPARE_BYTES - 4_000_000).unwrap();
         assert!(s.ends_with("free 0.1 GiB more on the card"), "{s}");
     }
 
