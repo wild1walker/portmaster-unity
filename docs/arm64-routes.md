@@ -1279,6 +1279,43 @@ is paid by both builds alike (UnityMain, the job worker's wake-ups, FMOD's mixer
 before by frame rate and by clock residency ([profiling.md](profiling.md): the job workers, `UA_FUTEX_SPIN`, the
 mixer's rate).
 
+### The job worker and FMOD's mixer, taken apart (2026-11-21)
+
+The two largest threads after UnityMain and the render thread, on both builds (King's Pass, Knulli, 64-bit;
+`UA_PROF=500` on them with the player's symbols, `UA_FUTEX_STATS`; the profiled run itself is slower, 47 fps:
+shares, not totals).
+
+**The job worker** (one worker, 29 - 35 % of a core, 88 % of it user time). What it runs is work, most of it
+ours to have put there: `ForwardRenderLoopJob` (`UA_GFX_JOBS=legacy`: the sprites' draw calls built off
+UnityMain) is on a third of its samples, then playables, culling and the transform dispatch. Around the work:
+1,376 futex waits a second, three in four shorter than 250 us (it sleeps and is woken about 26 times a frame),
+and it waits for a core 16 - 19 % of the time. UnityMain makes about 3,000 `FUTEX_WAKE` calls a second of which
+1,250 - 1,550 wake a thread (16 ms a second in them, 5 us each); the render thread 2,000, 550 - 660 of them
+waking one. No spin or yield loop of Unity's shows in the samples.
+
+| tried, 64-bit, A B B A (or A V V V A), fps | Knulli | muOS |
+|---|---|---|
+| wakes with no sleeper in the kernel not made, no watching (`UA_FUTEX_SPIN=1 UA_FUTEX_SPIN_THREADS=nobody`): 810 - 910 of UnityMain's wake calls a second left out, its time in wakes 16.4 -> 13.0 ms a second | 53.9, 54.5 -> 53.9, 53.5 | 54.0, 52.1 -> 53.4, 52.8 |
+| a core each for UnityMain, the render thread and the worker, the rest on the fourth (`UA_AFFINITY='UnityMain:3 UnityGfxDeviceW:2 Job.Worker*:1 *:0'`; 42 threads placed): the worker's wait for a core 16 - 19 -> 6 - 12 % | 54.3, 53.9 -> 54.3 | 52.7, 52.5 -> 52.5 |
+| the same with FMOD's threads on the worker's core: the worker waits 25 - 27 % | 54.0 | 52.0 |
+| the same with libmali's thread on the render thread's core: the render thread waits 18 - 19 % | 53.5 | 51.8 |
+
+None moves the frame rate: a no-sleeper wake costs the kernel a few microseconds (0.05 ms a frame in all), and
+the worker's wait for a core is not what UnityMain waits for (it waits 15 - 37 ms a second in futexes in all).
+Not set.
+
+**FMOD's mixer** (28 % of a core on 64-bit, 30 % on 32-bit: nothing here is the 64-bit build's). With the sound
+off it is clocked as with sound: the null sink takes 256 frames on the monotonic clock every 10.7 ms
+(runtime/android/opensles.c), a sound card's pace. Its samples: Vorbis decoding 44.5 % (FMOD's Tremor: the clips
+kept compressed in memory, decoded each time they play), `FMOD::DSPFilter::read` itself 15 % (the walk of the DSP
+graph and its copies), the AudioMixer groups' faders 14 %, the SFX reverb 11 %, a flange 3.4 %, linear
+resampling 3 %, the connections' mixing 2 %. The decoding is the audio step's memory budget at work
+([profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)): at the 1 GB budget of 16 MiB five of
+the game's twelve always-playing loops stay compressed, and the budget of 36 MiB (all twelve decoded once) took
+5 points of a core off the mixer there for about 20 MB; the rest of the decoding is clips the game itself ships
+compressed. Which budget a 1 GB handheld gets was set for memory (2026-11-09); with 1 MB allocator blocks the
+64-bit build has 60 MB more to spare at King's Pass than it had then.
+
 ### Memory, by mapping (2026-11-21)
 
 The same installs on muOS (no swap), the 64-bit one with the Mono the ports ship (8-byte granules, the managed
