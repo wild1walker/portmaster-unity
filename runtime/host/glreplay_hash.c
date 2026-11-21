@@ -3,7 +3,7 @@
 // replays of one UA_GL_REC_FILE trace (two drivers, or one driver twice) can be compared picture by picture
 // and a difference traced to the draw that made it (tools/analysis/pixdiff.py).
 //
-//   glreplay <trace.gz> --hash <out.txt> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]
+//   glreplay <trace.gz> --hash <out.txt> [--hash-frames A-B | last:N] [--hash-draws] [--hash-dump <dir>]
 //
 // A line of <out.txt>: "<frame> <call> <event> fb<game's name> <w>x<h> <kind> <hash>", event `bind` (the
 // pass on that framebuffer ends: the game binds another), `swap` (the frame ends; fb0 is the window), `draw`

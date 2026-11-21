@@ -13,7 +13,7 @@
 // call never waits for the previous frame's GPU work: the times are the driver's CPU work. Thread and
 // process CPU time a frame are reported too (the process's includes the driver's own threads, as
 // mesa_glthread's).
-//   --hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]   pixels, not times: each framebuffer's
+//   --hash <out> [--hash-frames A-B|last:N] [--hash-draws] [--hash-dump <dir>]   pixels, not times: each framebuffer's
 //                colour read back and hashed where a pass ends (a bind) and at the swap, with --hash-draws after
 //                every draw and clear too (glreplay_hash.c; two logs compared by glpixdiff)
 //   --check      glGetError after every call: the calls a driver refused, by entry point (the replay is
@@ -526,6 +526,12 @@ int main(int argc, char **argv)
     }
     unsigned nfn = 0;
     for (unsigned i = 0; i < OP_N; i++) if ((rp_fn[i] = sym(glrec_name[i]))) nfn++;
+    char last_frames[64];                                // --hash-frames last:N: the trace's last N frames
+    if (hash_frames && !strncmp(hash_frames, "last:", 5)) {
+        long n_ = atol(hash_frames + 5);
+        snprintf(last_frames, sizeof last_frames, "%ld-%ld", nframes > n_ ? nframes - n_ : 0, nframes - 1);
+        hash_frames = last_frames;
+    }
     if (hash_out) {                                      // --hash (glreplay_hash.c)
         if (rph_init(hash_out, hash_frames, hash_draws, hash_dump, sym) < 0) return 1;
         g_hash = 1; g_hw = w; g_hh = h;

@@ -63,7 +63,7 @@ RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend 
 # shader source, map bytes, texture upload size, client indices reaching the driver as the game made them)
 REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/dev/null &&
   GLREP_EGL=$PWD/$O/replay/libfakereplay.so GLREP_GLES=$PWD/$O/replay/libfakereplay.so $O/glreplay $t --from 0 --check > $t.txt 2>&1;
-  ok=1; for want in "src 140 1 void main() { }" "attach 105 140" "link 105" "use 105" "loc 105 _Color" "u4fv 17 1 0.50 0.25" "map 16 32" "flush 0 8 7 9"
+  ok=1; for want in "src 140 1 void main() { }" "attach 105 140" "link 105" "use 105" "loc 105 _Color" "u4fv 17 1 0.50 0.25" "map 16 32" "flush 0 8 7 9" \
     "texsub 5x3 pixels" "tex 12" "drawel 3 42" "fb 1" "draw 3" "frames measured: 2" "GL errors: 0"; do
     grep -qF "$want" $t.txt || { echo "FAIL glreplay: no \"$want\""; ok=0; }; done;
   grep -qF "draw 5" $t.txt && { echo "FAIL glreplay: a call after the file closed"; ok=0; };
@@ -75,9 +75,9 @@ REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/
   GLREP_EGL=$L GLREP_GLES=$L $O/glreplay $t --from 0 --hash $t.d --hash-draws >/dev/null 2>&1;
   GLREP_EGL=$L GLREP_GLES=$L FAKE_HASH_DIFF=2 $O/glreplay $t --from 0 --hash $t.e --hash-draws >/dev/null 2>&1;
   [ $(grep -vc "^#" $t.a) -ge 3 ] || { echo "FAIL glreplay --hash: too few readbacks"; ok=0; };
-  $O/glpixdiff $t.a $t.b > $t.r 2>&1; grep -q "the same" $t.r || { echo "FAIL glreplay --hash: one driver twice differs"; ok=0; };
-  $O/glpixdiff $t.a $t.c > $t.r 2>&1; grep -q "hash-draws" $t.r || { echo "FAIL glpixdiff: a changed draw not found at its pass"; ok=0; };
-  $O/glpixdiff $t.d $t.e > $t.r 2>&1; grep -q "the call that made it" $t.r || { echo "FAIL glpixdiff: the changed draw not named"; ok=0; };
+  $O/glpixdiff $t.a $t.b > $t.r 2>&1 || :; grep -q "the same" $t.r || { echo "FAIL glreplay --hash: one driver twice differs"; ok=0; };
+  $O/glpixdiff $t.a $t.c > $t.r 2>&1 || :; grep -q "hash-draws" $t.r || { echo "FAIL glpixdiff: a changed draw not found at its pass"; ok=0; };
+  $O/glpixdiff $t.d $t.e > $t.r 2>&1 || :; grep -q "the call that made it" $t.r || { echo "FAIL glpixdiff: the changed draw not named"; ok=0; };
   if [ $ok = 1 ]; then echo "ok glreplay --hash"; else cat $t.r; head -20 $t.a $t.d $t.e; fi; rm -f $t $t.a $t.b $t.c $t.d $t.e $t.r'
 MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec external'
 if [ "$ARCH" = arm64 ]; then

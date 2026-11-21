@@ -2463,7 +2463,7 @@ of a frame). Instead one recorded GL stream is replayed and its pictures read ba
 
 1. Record: `UA_GL_REC=census UA_GL_REC_FILE=<file.gz> UA_GL_REC_FILE_PIXELS=1` (every GL call written
    after it ran, texture pixels included; `UA_GL_REC_FILE_FRAMES=<n>` closes it; runtime.md).
-2. Replay with hashing: `glreplay <file.gz> --from 0 --hash <out.txt> [--hash-frames A-B] [--hash-draws]
+2. Replay with hashing: `glreplay <file.gz> --hash <out.txt> [--hash-frames A-B | last:N] [--hash-draws]
    [--hash-dump <dir>]` (runtime/host/glreplay.c with glreplay_hash.c). Each framebuffer's colour
    attachments are read back and hashed (FNV-1a 64) where its pass ends (the game binds another draw
    framebuffer) and the window before each swap; with `--hash-draws` also after every draw and clear.
@@ -2477,9 +2477,21 @@ of a frame). Instead one recorded GL stream is replayed and its pictures read ba
    that pass or before it differs; both replays again with `--hash-frames F-F --hash-draws` give the first
    draw that differs, by its call number in the trace.
 
-A test on a fake driver with pixels (test/fake_hash_gl.c; pointer_test.sh): one driver twice must give no
-difference; a driver that draws one call otherwise must be found at its pass, then named exactly. (WIP: written
-while the build containers were down; not yet built or run, nor the self-test of the Mali driver against itself.)
+Tested on a fake driver with pixels (test/fake_hash_gl.c; pointer_test.sh, arm64 and armhf): one driver twice
+gives no difference; a driver that draws one call otherwise is found at its pass, then named exactly.
+
+**The Mali driver against itself** (2026-11-21): Hollow Knight 64-bit recorded from launch to King's Pass
+(`UA_GL_REC=census UA_GL_REC_FILE=... UA_GL_REC_FILE_PIXELS=1`: Knulli 2,435 frames, 2.07 M calls, 119 MB;
+muOS 2,492 frames, 2.03 M calls), each trace replayed twice through the handheld's own libmali (r20p0,
+pbuffer, EmulationStation stopped) with `--hash --hash-frames last:135` (the scene's last 135 frames: 16
+passes and the swap a frame): 2,295 readbacks each, 1,356 (Knulli) and 1,359 (muOS) distinct hashes (the
+scene's animation), **0 differ** on either handheld. The driver is deterministic for the same stream, so a
+difference between two drivers' replays is the drivers'. Costs: hashing every frame of a whole trace takes
+about 15 minutes a replay on the H700 (17 readbacks a frame); `--hash-frames` keeps it to the frames of
+interest (the frames before them are replayed without readbacks). A replay holds its measured window in memory
+(`--from 0` would hold the whole trace: 690 MB for this one): the default window (the last 300 frames) is the one
+to use with `--hash`. Calls the game made on other threads (975 here, Unity's loading threads) are replayed on the
+one thread, in the trace's order.
 
 ## Holding the whole frame (UA_GL_REC)
 
