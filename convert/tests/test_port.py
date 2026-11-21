@@ -1107,6 +1107,72 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertEqual(P.mono64_lines({'game': {'unity_versions': ['2019.4.8f1', '2019.4.40f1', '6000.0.61f1']}}),
                              ['2019.4', '6000.0'])
 
+    def test_mono_arm64_net35(self):
+        """a .NET 3.5 game of Unity 2017.4 on the mono-arm64 route (docs/mono-arm64.md, Cuphead): the check
+        offers the route (other lines still refuse it), port new sets player.mono64_classlibs, the release
+        ships Mono's 4.x class libraries and their config as setup/mono64/2017.4/, and the setup packs them in
+        place of the game's 2.0 ones"""
+        def mk(path, data):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            put(path, data)
+        with tempfile.TemporaryDirectory() as t:
+            for version, ok in (('2017.4.40f1', True), ('2018.4.36f1', False)):
+                game = os.path.join(t, version, 'My Game')
+                d = fake_game(game, version=version, name='My Game')
+                os.makedirs(os.path.join(d, 'Mono', 'etc', 'mono'))       # (Unity's 2.0 Mono: a .NET 3.5 build)
+                rep = P.check(game, asmpatch='/nonexistent-asmpatch')
+                self.assertIn('3.5', rep['scripting_runtime'])
+                r = next(x for x in rep['routes'] if x['route'] == 'mono-arm64')
+                self.assertEqual(r['ok'], ok, r)
+                if not ok:
+                    self.assertIn('Unity 2017.4: on its MonoBleedingEdge', r['why'][0])
+            game = os.path.join(t, '2017.4.40f1', 'My Game')
+            cp = os.path.join(t, 'cfg.json')
+            put(cp, json.dumps({'port': {'title': 'My Game', 'porter': ['someone'], 'route': 'mono-arm64'}}))
+            msgs = []
+            out = P.new('mygame', game, cp, os.path.join(t, 'port'), asmpatch='/nonexistent-asmpatch', log=msgs.append)
+            self.assertIn('MONO64_CLASSLIBS=1', P._read(os.path.join(out, 'mygame', 'setup', 'setup.env')))
+            cfg = json.load(open(os.path.join(out, 'port.build.json')))['config']
+            self.assertIs(cfg['player']['mono64_classlibs'], True)
+            # the release: the class libraries of the work folder's build, by name, and Mono's config for them
+            w = os.path.join(t, 'mono64')
+            cl = os.path.join(w, 'out', 'unity-2017.4-mbe', 'classlibs')
+            for n in P.MONO64_CLASSLIBS + ('System.Web.dll',):
+                mk(os.path.join(cl, n), 'MZ ' + n)
+            mk(os.path.join(cl, 'etc', 'mono', 'config'), '<configuration/>')
+            mk(os.path.join(cl, 'etc', 'mono', '4.5', 'machine.config'), '<configuration/>')
+            mk(os.path.join(cl, 'LICENSE.txt'), 'MIT')
+            ctx = P.PackCtx(cfg, out, os.path.join(t, 'zip'), t, lambda m: None)
+            P._mono64_classlibs(ctx, {}, '2017.4', w, os.path.dirname(cl))
+            m = os.path.join(t, 'zip', 'mygame', 'setup', 'mono64', '2017.4')
+            self.assertEqual(sorted(os.listdir(os.path.join(m, 'classlibs'))), sorted(P.MONO64_CLASSLIBS))
+            self.assertTrue(os.path.isfile(os.path.join(m, 'etc', 'mono', '4.5', 'machine.config')))
+            self.assertTrue(os.path.isfile(os.path.join(t, 'zip', 'mygame', 'licenses', 'LICENSE.mono-class-libraries-2017.4.txt')))
+            os.remove(os.path.join(cl, 'Mono.Posix.dll'))
+            with self.assertRaises(SystemExit) as cm:
+                P._mono64_classlibs(ctx, {'no_build': True}, '2017.4', w, os.path.dirname(cl))
+            self.assertIn('Mono.Posix.dll', str(cm.exception))
+            cfg['player']['mono64_classlibs'] = False
+            with self.assertRaises(SystemExit):
+                P.validate(dict(cfg, port=dict(cfg['port'], route='android'), player=dict(cfg['player'], mono64_classlibs=True)))
+            # the setup: the 4.x libraries packed after the game's, with their config; the game's own
+            # class library without a 4.x one named in the log
+            put(os.path.join(game, 'My Game_Data', 'Managed', 'System.Threading.dll'), 'MZ')
+            g = os.path.join(t, 'ports', 'mygame')
+            shutil.copytree(os.path.join(out, 'mygame'), g)
+            shutil.copytree(game, os.path.join(g, 'gamedata', 'My Game'))
+            gm = os.path.join(g, 'setup', 'mono64', '2017.4')
+            shutil.copytree(m, gm)
+            for n in ('libmonobdwgc-2.0.so', 'libil2cpp.so'):
+                mk(os.path.join(gm, n), 'elf')
+            g, r, log = self.run_setup(t, out, {'PATH': roomy_path(t), 'STUB_VERSION': '2017.4.40f1',
+                                                'STUB_RUNTIME': '.NET 3.5 (libmono)'})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            ad = next(l for l in log.splitlines() if l.startswith('pm android-data '))
+            self.assertIn(f"--managed-file {gm}/classlibs/mscorlib.dll", ad)
+            self.assertIn(f"--mono-etc {gm}/etc", ad)
+            self.assertIn('System.Threading.dll: no 4.x class library of that name', r.stdout + r.stderr)
+
     def test_package(self):
         """the release of a port whose setup needs the Python (here: a converter plugin of the porter's
         own, which pmu cannot run): the setup's Python and the converter, no pmu (test_package_pmu: the
@@ -1231,6 +1297,34 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertFalse([n for n in names if n.startswith('mygame/licenses/') and
                               not re.match(r'mygame/licenses/LICENSE\.[^/]+\.txt$', n)])   # (one flat folder)
 
+    def test_files_own(self):
+        """files.own: port new leaves the porter's own launcher and setup as they are (and keeps them
+        in .port_files, so a later run does not remove them); what is not listed is written again"""
+        with tempfile.TemporaryDirectory() as t:
+            game, out = self.make(t)
+            launcher, ps = os.path.join(out, 'My Game.sh'), os.path.join(out, 'mygame', 'setup', 'patchscript')
+            put(launcher, '#!/bin/bash\n# hand-made\n')
+            put(ps, '#!/bin/bash\n# hand-made setup\n')
+            put(os.path.join(out, 'mygame', 'setup.txt'), 'changed\n')
+            cp = os.path.join(t, 'cfg.json')
+            cfg = json.load(open(cp))
+            cfg['files'] = {'own': ['My Game.sh', 'mygame/setup/patchscript']}
+            json.dump(cfg, open(cp, 'w'))
+            msgs = []
+            P.new('mygame', game, cp, out, asmpatch='/nonexistent-asmpatch', log=msgs.append)
+            self.assertEqual(P._read(launcher), '#!/bin/bash\n# hand-made\n')
+            self.assertEqual(P._read(ps), '#!/bin/bash\n# hand-made setup\n')
+            self.assertNotEqual(P._read(os.path.join(out, 'mygame', 'setup.txt')), 'changed\n')
+            self.assertIn("My Game.sh: the port's own (files.own), left as it is", '\n'.join(msgs))
+            kept = P._read(os.path.join(out, '.port_files')).split('\n')
+            self.assertIn('My Game.sh', kept)
+            self.assertIn('mygame/setup/patchscript', kept)
+            cfg['files'] = {'own': ['../x']}
+            json.dump(cfg, open(cp, 'w'))
+            with self.assertRaises(SystemExit) as cm:
+                P.new('mygame', game, cp, out, asmpatch='/nonexistent-asmpatch', log=lambda m: None)
+            self.assertIn('files.own', str(cm.exception))
+
     def test_aarch64_only(self):
         """port.aarch64_only (docs/arm64.md, "Shipping aarch64 only"): off by default (the android
         route as before); on, a Mono game made for the android route takes the mono-arm64 route (the
@@ -1290,6 +1384,8 @@ class NewAndSetupTest(unittest.TestCase):
             mk(os.path.join(rt, 'runtime/host/out/arm64/ua_host'), elf(P.EM_AARCH64))
             mk(os.path.join(rt, 'runtime/media/out/arm64/licenses/libvpx.copyright'), 'BSD')
             mk(os.path.join(rt, 'runtime/host/out/ua_host'), elf(P.EM_ARM))       # (the armhf one, not shipped)
+            mk(os.path.join(rt, 'runtime/relayout/0123abcd.txt'), '# a code layout list\n')
+            mk(os.path.join(rt, 'runtime/relayout/README.md'), '# not shipped\n')
             w = os.path.join(t, 'mono64')
             for n in ('out/unity-2019.4-mbe/libmonobdwgc-2.0.so', 'out/unity-2019.4-mbe/libMonoPosixHelper.so'):
                 mk(os.path.join(w, n), elf(P.EM_AARCH64))
@@ -1312,7 +1408,9 @@ class NewAndSetupTest(unittest.TestCase):
                       'mygame/setup/mono64/2019.4/libmonobdwgc-2.0.so', 'mygame/pmhwdec64/libpmhwdec.so.1',
                       'mygame/tools/helper64', 'mygame/donor/donor-2019.4.8f1-il2cpp-arm64.apk'):
                 self.assertIn(n, names)
-            for n in ('mygame/ua_host64', 'mygame/pmhwdec/libpmhwdec.so.1', 'mygame/tools/helper32'):
+            self.assertIn('mygame/relayout/0123abcd.txt', names)       # (UA_RELAYOUT: the lists beside ua_host)
+            for n in ('mygame/ua_host64', 'mygame/pmhwdec/libpmhwdec.so.1', 'mygame/tools/helper32',
+                      'mygame/relayout/README.md'):
                 self.assertNotIn(n, names)
             self.assertEqual(P.elf_machine(P._read(os.path.join(x, 'mygame', 'ua_host'), 'rb')[:20]), P.EM_AARCH64)
             with zipfile.ZipFile(os.path.join(x, 'mygame/donor/donor-2019.4.8f1-mono-armv7.apk')) as d:

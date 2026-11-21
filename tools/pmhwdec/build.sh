@@ -41,9 +41,12 @@ docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e CC=gcc -e STRI
   | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=aarch64 ua-build-arm64 bash -c "$build" 2>&1 | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 # Rockchip MPP 1.1.0, as rkmpp/build_mpp.sh builds it (cmake and ninja put into the throwaway container)
+# (the source patches run with ua-host-armhf's Python 3.11 for both: they call Path.write_text(newline=), which
+# Python 3.10 added, and ua-build-arm64 has 3.8)
+prep='set -e; H=/o/src/pmhwdec; M=/o/mpp-src-$A; rm -rf $M /o/mpp-build-$A && cp -a /o/src/mpp $M
+for p in soc_name hw_list no_enc no_dbg_log; do python3 -I $H/rkmpp/patch_$p.py $M >/dev/null; done'
 mpp='set -e; apt-get update -qq >/dev/null && apt-get install -y -qq cmake ninja-build >/dev/null
-H=/o/src/pmhwdec; M=/o/mpp-src-$A; O=/o/$A; rm -rf $M /o/mpp-build-$A && cp -a /o/src/mpp $M
-for p in soc_name hw_list no_enc no_dbg_log; do python3 -I $H/rkmpp/patch_$p.py $M >/dev/null; done
+H=/o/src/pmhwdec; M=/o/mpp-src-$A; O=/o/$A; [ -d $M ] || { echo "no patched MPP source in $M"; exit 1; }
 printf "set(CMAKE_SYSTEM_NAME Linux)\nset(CMAKE_SYSTEM_PROCESSOR %s)\nset(CMAKE_C_COMPILER %sgcc)\nset(CMAKE_CXX_COMPILER %sg++)\n" $PROC "$CROSS" "$CROSS" > /o/mpp-$A.cmake
 C="-DENABLE_H264D=ON -DENABLE_H265D=ON -DENABLE_VP8D=ON -DMPP_HW_LIST=VDPU2,VDPU341,VDPU34X"
 for c in AVSD AVS2D H263D MPEG2D MPEG4D VP9D JPEGD AV1D H264E H265E JPEGE VP8E; do C="$C -DENABLE_$c=OFF"; done
@@ -60,8 +63,13 @@ cp -L $(find /o/mpp-build-$A -name "librockchip_mpp.so*" -type f | head -1) $O/l
   echo; cat $M/LICENSES/Apache-2.0 2>/dev/null || cat $M/LICENSE.md; } > $O/LICENSE.mpp.txt
 rm -rf $M /o/mpp-build-$A /o/mpp-$A.cmake /o/mpp-api-$A.map'
 docker run --rm -v "$OUT":/o -e A=armhf -e PROC=arm -e CROSS=arm-linux-gnueabihf- \
-  -e CPU="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" ua-host-armhf bash -c "$mpp"
-[ "${MPP_ARM64:-0}" = 1 ] && docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e PROC=aarch64 -e CROSS= \
-  -e CPU=-mcpu=cortex-a53 ua-build-arm64 bash -c "$mpp"
+  -e CPU="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" ua-host-armhf bash -c "$prep
+$mpp"
+if [ "${MPP_ARM64:-0}" = 1 ]; then
+  docker run --rm -v "$OUT":/o -e A=arm64 ua-host-armhf bash -c "$prep"
+  docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e PROC=aarch64 -e CROSS= \
+    -e CPU=-mcpu=cortex-a53 ua-build-arm64 bash -c "$mpp"
+fi
 echo "libpmhwdec $(git -C "$SRC/pmhwdec" rev-parse --short HEAD):"
-ls -l "$OUT"/armhf/libpmhwdec.so.1 "$OUT"/armhf/librockchip_mpp.so "$OUT"/arm64/libpmhwdec.so.1 "$OUT"/aarch64/pmhwdec-cedard
+ls -l "$OUT"/armhf/libpmhwdec.so.1 "$OUT"/armhf/librockchip_mpp.so "$OUT"/arm64/libpmhwdec.so.1 "$OUT"/aarch64/pmhwdec-cedard \
+  $([ "${MPP_ARM64:-0}" = 1 ] && echo "$OUT"/arm64/librockchip_mpp.so)

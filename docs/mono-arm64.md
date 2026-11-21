@@ -194,6 +194,22 @@ and corefx's licences (THIRD_PARTY.md). Tom City (2020.3.49f1) as such a port, r
 conversion with its texture step 3.4 min, the packing 7.3 min), 324 MB installed, then the title in
 the arm64 rig, Mono up 310 ms after `il2cpp_init` (2026-10-23).
 
+**A .NET 3.5 game of 2017.4** (2026-11-20) takes the route as Cuphead does (above): `port check` offers it
+for a .NET 3.5 Mono build of a line in `MONO64_NET35_LINES` (2017.4; other lines are refused with that
+reason), and `port new` sets `player.mono64_classlibs = true` (setup.env `MONO64_CLASSLIBS=1`). `port
+package` then ships, beside the line's runtime, Mono's 4.x class libraries from the same Mono tree
+(`tools/mono64/build-classlibs.sh <line> <work>`, run when the work folder has none) as
+`setup/mono64/<line>/classlibs/` and their config (`etc/mono/config`, `etc/mono/4.5/machine.config`) as
+`setup/mono64/<line>/etc/`, with their licence: by default `MONO64_CLASSLIBS` (`mscorlib`, `System`,
+`System.Core`, `System.Xml`, `Mono.Security`, `System.Configuration`, `System.Security`, `Mono.Posix`: what
+Cuphead, Blasphemous and Enter the Gungeon reference, followed to the end), or the names a list in
+`player.mono64_classlibs` gives. The setup packs them after the game's own (`--managed-file`, so they replace
+its 2.0 ones) with `--mono-etc` on their config, and names in the log any class library of the game's
+(`System.*`, `Mono.Security`, `Mono.Posix`, `Mono.Data.*`, `I18N*`) the release has no 4.x one of (the
+game's own is packed then). The game's own assemblies are not changed. Only the packing is tested
+(`test_mono_arm64_net35`); Blasphemous is the first such port made this way (portmaster-blasphemous
+branch aarch64-only), not yet set up or run on a handheld.
+
 ## Results
 
 | game | Unity | emulated rig (native arm64) | handheld | notes |

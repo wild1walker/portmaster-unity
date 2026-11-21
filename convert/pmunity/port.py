@@ -1084,11 +1084,15 @@ def decide_routes(rep):
                         "game's code for this version's libil2cpp and player (docs/il2cpp.md, \"Unity 2023.1+\"; "
                         "about 8 MB more downloads)"] if vv and MIX.needed(vv) else [])})
     # Mono on the arm64 player: the game's assemblies on Unity's Mono built for aarch64 Linux, which
-    # the release ships; .NET 4.x only (Unity's .NET 3.5 Mono has no 64-bit ARM code generator)
+    # the release ships. A .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM
+    # code generator; on the lines of MONO64_NET35_LINES it runs on the line's MonoBleedingEdge with Mono's
+    # 4.x class libraries in place of its 2.0 ones (player.mono64_classlibs; docs/mono-arm64.md, Cuphead)
     why = [] if mono else ['needs a Mono build']
     rt = str(rep.get('scripting_runtime') or '')
-    if mono and '3.5' in rt:
-        why.append('a .NET 3.5 game: Unity\'s Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator')
+    net35 = bool(mono and '3.5' in rt)
+    if net35 and not (vv and f'{vv.line[0]}.{vv.line[1]}' in MONO64_NET35_LINES):
+        why.append('a .NET 3.5 game: Unity\'s Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator '
+                   f'(Unity {", ".join(MONO64_NET35_LINES)}: on its MonoBleedingEdge with Mono\'s 4.x class libraries)')
     if vv and vv.line < (2017, 4):
         why.append(f'Unity {v}: the arm64 Android players start with 2017.4')
     elif v and not supported:
@@ -1102,6 +1106,9 @@ def decide_routes(rep):
                        "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux "
                        "(`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
                        'tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0'] + (
+                       ["a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono "
+                        "tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)"]
+                       if net35 else []) + (
                        [donor_need(v, 'il2cpp', 'arm64-v8a'), donor_need(v, 'mono', 'armeabi-v7a')] if v else [])})
     # box64: the game's own x86-64 Linux player
     why = []
@@ -1727,6 +1734,15 @@ ENV_RX = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 # game on the mono-arm64 route, no EM_ARM file in the zip or on the handheld; docs/arm64.md,
 # "Shipping aarch64 only"). Dropping armhf from all ports is this one line.
 AARCH64_ONLY_DEFAULT = False
+# the Unity lines whose .NET 3.5 games take the mono-arm64 route: the line's MonoBleedingEdge (Mono 5.0.1 for
+# 2017.4) runs them with Mono's 4.x class libraries built from the same tree (tools/mono64/build-classlibs.sh)
+# in place of the game's 2.0 ones (docs/mono-arm64.md, "A .NET 3.5 game on the 4.x class libraries")
+MONO64_NET35_LINES = ('2017.4',)
+# the class libraries such a release ships (player.mono64_classlibs = true): the 2.0 profile's that Unity's desktop
+# builds of 2017.4 carry in the games checked (Cuphead, Blasphemous, Enter the Gungeon), as 4.x assemblies, with
+# what they reference in turn; a list of names in port.toml instead ships those
+MONO64_CLASSLIBS = ('mscorlib.dll', 'System.dll', 'System.Core.dll', 'System.Xml.dll', 'Mono.Security.dll',
+                    'System.Configuration.dll', 'System.Security.dll', 'Mono.Posix.dll')
 # the routes whose releases carry nothing for armhf: their setups and players are aarch64 (apk: with
 # player.abis arm64-v8a, or player.il2cpp)
 AARCH64_ROUTES = ('mono-arm64', 'il2cpp-arm64', 'box64', 'apk')
@@ -1749,7 +1765,7 @@ DEFAULTS = {
     'runtime_low': {},
     'runtime_lowmem': {},
     'questions': [],
-    'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': []},
+    'files': {'plugins': [], 'managed': [], 'assembly_patches': [], 'hooks': {}, 'extra': [], 'own': []},
     'build': {'commands': [], 'outputs': {}, 'licenses': {}},
 }
 HOOK_POINTS = ('game', 'pre_convert', 'post_convert', 'post_pack', 'post_install')
@@ -1915,6 +1931,12 @@ def validate(cfg):
     b = (cfg.get('fmod') or {}).get('banks') or ''
     if b and (not isinstance(b, str) or b.startswith('/') or '..' in b.split('/') or not re.fullmatch(r'[\w .+/-]+', b)):
         errs.append(f"fmod.banks {b!r}: the FMOD banks' folder, relative to the game's data folder (e.g. StreamingAssets)")
+    mc = cfg['player'].get('mono64_classlibs')
+    if mc and p['route'] != 'mono-arm64':
+        errs.append('player.mono64_classlibs: for the mono-arm64 route (a .NET 3.5 game on Mono\'s 4.x class libraries)')
+    elif mc is not None and not (isinstance(mc, bool) or isinstance(mc, list) and mc and
+                                 all(isinstance(x, str) and re.fullmatch(r'[\w.-]+\.dll', x) for x in mc)):
+        errs.append(f'player.mono64_classlibs {mc!r}: true, false or a list of assembly file names (e.g. "System.Xml.dll")')
     if cfg['player'].get('il2cpp') and (p['route'] != 'apk' or cfg['player'].get('backend') != 'mono'):
         errs.append('player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP '
                     'player where the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds')
@@ -1922,6 +1944,9 @@ def validate(cfg):
         errs.append(f"android_data.winbcl {cfg['android_data']['winbcl']!r}: auto or off")
     if cfg['android_data'].get('streaming_assets', 'obb') not in ('obb', 'both', 'loose'):
         errs.append(f"android_data.streaming_assets {cfg['android_data']['streaming_assets']!r}: obb, both or loose")
+    for rel in cfg['files'].get('own') or []:
+        if not isinstance(rel, str) or rel.startswith('/') or '..' in rel.split('/') or rel in ('port.toml', 'port.build.json'):
+            errs.append(f'files.own: {rel!r} must be a path in the port\'s source folder (not port.toml or port.build.json)')
     for k in cfg['files'].get('hooks', {}):
         if k not in HOOK_POINTS:
             errs.append(f"files.hooks.{k}: one of {', '.join(HOOK_POINTS)}")
@@ -2013,7 +2038,9 @@ CONFIG_DOC = {
     'files': '# the porter\'s own files (paths relative to this file), copied into setup/: converter plugins\n'
              '# (--plugin), managed = assemblies shipped into the game (--managed-file), assembly_patches =\n'
              '# [{name, command, files}] ({setup} = the setup folder), hooks = {game|pre_convert|post_convert|\n'
-             '# post_pack|post_install = "x.sh"} sourced by the setup, extra = files for the port folder',
+             '# post_pack|post_install = "x.sh"} sourced by the setup, extra = files for the port folder,\n'
+             '# own = files of the port\'s source folder `port new` leaves as they are (e.g. "<title>.sh", a\n'
+             '# hand-made launcher or "<name>/setup/patchscript"; the template\'s version is not written)',
 }
 QUESTIONS_DOC = """# Questions PortMaster's patcher asks before the setup (each answer is kept for later runs), e.g.:
 # [[questions]]
@@ -2146,7 +2173,8 @@ def setup_env(cfg, extra=(), sections=None):
              # (the donors the release ships in donor/: the setup takes Unity's player from them)
              f'DONORS={q(" ".join(pl.get("donors") or []))}',
              'PLAYER_SHA256=' + q(' '.join(f'{k}={v}' for k, v in sorted((pl.get('sha256') or {}).items())))] + \
-            (['PLAYER_IL2CPP=1'] if pl.get('il2cpp') else [])     # (apk route: a Mono build compiled for arm64)
+            (['PLAYER_IL2CPP=1'] if pl.get('il2cpp') else []) + \
+            (['MONO64_CLASSLIBS=1'] if pl.get('mono64_classlibs') else [])   # (mono-arm64: a .NET 3.5 game on Mono's 4.x libraries)
     if sections is None or 'android_data' in sections:
         lines += [
              f'APK_NAME={q(ad["name"])}', f'PACKAGE={q(ad["package"])}',
@@ -2622,13 +2650,19 @@ def submission_warnings(cfg, port_src, pj=None, launcher=None, gameinfo=None):
 class NewCtx:
     """What a port_new hook gets: the config, the port's source folder, write()."""
 
-    def __init__(self, cfg, out, route):
-        self.cfg, self.out, self.route = cfg, out, route
+    def __init__(self, cfg, out, route, log=print):
+        self.cfg, self.out, self.route, self.log = cfg, out, route, log
         self.port_dir = os.path.join(out, cfg['port']['name'])
         self.written = []
+        # files.own: the porter's own versions of files port new would write (a hand-made launcher or setup)
+        self.own = set((cfg.get('files') or {}).get('own') or [])
 
     def write(self, rel, data, mode=0o644):
         p = os.path.join(self.out, rel)
+        if rel in self.own and os.path.isfile(p):
+            self.log(f'{rel}: the port\'s own (files.own), left as it is')
+            self.written.append(rel)            # (kept in .port_files, so a later run does not remove it)
+            return
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, 'wb' if isinstance(data, bytes) else 'w') as f:
             f.write(data)
@@ -2711,6 +2745,11 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
         for k, v in vals.items():
             if k not in (user.get(sec) or {}):
                 cfg[sec][k] = v
+    # a .NET 3.5 game on the mono-arm64 route: Mono's 4.x class libraries in place of its 2.0 ones
+    if (cfg['port']['route'] == 'mono-arm64' and 'mono64_classlibs' not in (user.get('player') or {})
+            and '3.5' in str((rep or {}).get('scripting_runtime') or '')):
+        cfg['player']['mono64_classlibs'] = True
+        log('a .NET 3.5 game: the release ships Mono\'s 4.x class libraries for it (player.mono64_classlibs)')
     if player:                                  # (a `pmunity player donor` folder: its libraries' checksums)
         if not cfg['player']['sha256']:
             libs = os.path.join(player, 'Variations', cfg['player']['backend'], 'Release', 'Libs', cfg['player']['abi'])
@@ -2727,7 +2766,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     cfg['player']['donors'] = port_donors(cfg, r)
     validate(cfg)
     os.makedirs(out, exist_ok=True)
-    ctx = NewCtx(cfg, out, r)
+    ctx = NewCtx(cfg, out, r, log)
     pn, pt = cfg['port']['name'], cfg['port']['title']
     values = {'PORTDIR': pn, 'TITLE': pt, 'ZIP': f'{pn}.zip', 'LAUNCHER': f'{pt}.sh',
               'SETUP_TIME': cfg['port']['setup_time'], 'GAME_WHAT': cfg['game']['what'],
@@ -3017,6 +3056,13 @@ def _component_ua_host_arm64(ctx, opts, dst='ua_host', suffix=''):
         ctx.log('building the 64-bit runtime (runtime/build.sh, Docker)')
         subprocess.run([os.path.join(rt, 'build.sh')], check=True, env=dict(os.environ, ARCH='arm64'))
     _component_ua_host(ctx, o, dst, suffix)
+    # the code layout lists (runtime/relayout/<build id>.txt): ua_host (AArch64) reads relayout/ beside
+    # it when UA_RELAYOUT is unset, the list whose build id is the player's libunity (a player without
+    # one runs as it is; a few dozen KB each)
+    rl = os.path.join(ctx.runtime, 'runtime', 'relayout')
+    for n in sorted(os.listdir(rl)) if os.path.isdir(rl) else ():
+        if n.endswith('.txt') and not _mac_junk(n):
+            ctx.add(os.path.join(rl, n), f'relayout/{n}', 0o644)
 
 
 def _component_ua_host64(ctx, opts):
@@ -3248,6 +3294,40 @@ def _component_mono64(ctx, opts):
         cf = os.path.join(src, 'external', 'corefx', 'LICENSE.TXT')
         if os.path.isfile(os.path.join(out, 'libmono-native.so')) and os.path.isfile(cf):
             ctx.license(f'LICENSE.corefx-{line}.txt', cf)
+        if ctx.cfg['player'].get('mono64_classlibs'):
+            _mono64_classlibs(ctx, opts, line, work, out)
+
+
+def _mono64_classlibs(ctx, opts, line, work, out):
+    """A .NET 3.5 game's class libraries for the mono-arm64 route (player.mono64_classlibs): Mono's 4.x
+    ones built from the same tree as the line's runtime (tools/mono64/build-classlibs.sh <line> <work>:
+    <work>/out/unity-<line>-mbe/classlibs/) as setup/mono64/<line>/classlibs/, with Mono's Linux config and
+    4.5 machine.config as setup/mono64/<line>/etc/; the setup packs them in place of the game's 2.0 ones
+    (docs/mono-arm64.md, "A .NET 3.5 game on the 4.x class libraries")."""
+    if line not in MONO64_NET35_LINES:
+        raise SystemExit(f'player.mono64_classlibs: Unity {line} (a .NET 3.5 game on Mono\'s 4.x class libraries: '
+                         f'{", ".join(MONO64_NET35_LINES)})')
+    cl = os.path.join(out, 'classlibs')
+    if not os.path.isfile(os.path.join(cl, 'mscorlib.dll')):
+        if opts.get('no_build'):
+            raise SystemExit(f'{cl}: build Mono\'s 4.x class libraries first (tools/mono64/build-classlibs.sh {line} {work})')
+        ctx.log(f'building Mono\'s 4.x class libraries of unity-{line}-mbe (tools/mono64/build-classlibs.sh, Docker)')
+        subprocess.run([os.path.join(ctx.runtime, 'tools', 'mono64', 'build-classlibs.sh'), line, work], check=True)
+    mc = ctx.cfg['player']['mono64_classlibs']
+    names = list(mc) if isinstance(mc, list) else list(MONO64_CLASSLIBS)
+    missing = [n for n in names if not os.path.isfile(os.path.join(cl, n))]
+    if missing:
+        raise SystemExit(f'{cl} has no {", ".join(missing)} (tools/mono64/build-classlibs.sh {line} {work} builds the '
+                         f'whole profile)')
+    for n in names:
+        ctx.add(os.path.join(cl, n), os.path.join('setup', 'mono64', line, 'classlibs', n), 0o644)
+    for rel in ('mono/config', 'mono/4.5/machine.config'):
+        sp = os.path.join(cl, 'etc', rel)
+        if not os.path.isfile(sp):
+            raise SystemExit(f'{sp}: missing (tools/mono64/build-classlibs.sh writes Mono\'s config beside the libraries)')
+        ctx.add(sp, os.path.join('setup', 'mono64', line, 'etc', rel), 0o644)
+    if os.path.isfile(os.path.join(cl, 'LICENSE.txt')):
+        ctx.license(f'LICENSE.mono-class-libraries-{line}.txt', os.path.join(cl, 'LICENSE.txt'))
 
 
 COMPONENTS = {'ua_host': _component_ua_host, 'ua_host_arm64': _component_ua_host_arm64, 'ua_host64': _component_ua_host64,

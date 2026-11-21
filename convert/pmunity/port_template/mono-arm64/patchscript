@@ -359,6 +359,23 @@ if [ ! -f "$W/.step_package" ]; then
     args+=(--asmpatch "$a")
   fi
   for f in "$W"/bcl/*.dll; do [ -f "$f" ] && args+=(--managed-file "$f"); done     # (step 2b's; the port's own win)
+  # a .NET 3.5 game (MONO64_CLASSLIBS=1, port.toml player.mono64_classlibs): Mono's 4.x class libraries
+  # (setup/mono64/<line>/classlibs/, built from the same Mono tree as the runtime) in place of the 2.0 ones
+  # of its desktop build, which the line's Mono cannot run, and Mono's config for them (etc/mono/4.5/machine.config);
+  # the game's own assemblies are not changed: Mono binds their 2.0 references to the 4.0 assemblies
+  if [ "${MONO64_CLASSLIBS:-0}" = 1 ]; then
+    CL="$S/mono64/$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')"
+    [ -f "$CL/classlibs/mscorlib.dll" ] && [ -f "$CL/etc/mono/4.5/machine.config" ] \
+      || fail "This release has no 4.x class libraries for Unity $V (setup/mono64/<line>/classlibs)."
+    for f in "$D"/Managed/*.dll; do
+      n=$(basename "$f")
+      case "$n" in mscorlib.dll|System.dll|System.*.dll|Mono.Security.dll|Mono.Posix.dll|Mono.Data.*.dll|I18N*.dll)
+        [ -f "$CL/classlibs/$n" ] || echo "note: $n: no 4.x class library of that name in the release (the game's own is packed)";;
+      esac
+    done
+    for f in "$CL"/classlibs/*.dll; do args+=(--managed-file "$f"); done
+    args+=(--mono-etc "$CL/etc")
+  fi
   for f in "${MANAGED_FILES[@]}"; do args+=(--managed-file "$S/$f"); done
   if [ ${#ASSEMBLY_PATCHES[@]} -gt 0 ]; then
     args+=(--game-managed "$D/Managed")

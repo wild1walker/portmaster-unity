@@ -143,7 +143,9 @@ one line set to `True` (then `port new` and `port package` again for each port).
   (`setup/mono64/<line>`), the 64-bit `ua_host`. The game data, conversion, settings, questions and
   `[runtime]` stay the same. port.toml's `player.backend`/`abi` and `sha256` (the armv7 player's)
   give way to the route's `il2cpp`/`arm64-v8a`; port.json asks for no `armhf`. A game the mono-arm64
-  route cannot take stops `port new` with the check's reason (e.g. a .NET 3.5 game: below). An apk
+  route cannot take stops `port new` with the check's reason (e.g. a .NET 3.5 game of a line other than
+  2017.4; a 2017.4 one gets `player.mono64_classlibs`, mono-arm64.md). Files the porter made by hand stay
+  as they are where port.toml lists them in `files.own` (a launcher, a setup, READMEs). An apk
   route port keeps only its `arm64-v8a` player (or needs `player.il2cpp`); il2cpp-arm64 and box64 are
   aarch64 already.
 - **`port package`**: refuses an aarch64-only port whose folder was made for the android route (run
@@ -181,7 +183,7 @@ one line set to `True` (then `port new` and `port package` again for each port).
 ### Where armhf and aarch64 are decided
 | place | what it decides | aarch64 only |
 |---|---|---|
-| `convert/pmunity/port.py` `decide_routes`, `DEFAULTS['port']['route']` | the route `port check` / `port new` recommends: android first for a Mono desktop build, then il2cpp-arm64, mono-arm64 (.NET 4.x only), box64 | `aarch64_only_route()` moves android to mono-arm64 |
+| `convert/pmunity/port.py` `decide_routes`, `DEFAULTS['port']['route']` | the route `port check` / `port new` recommends: android first for a Mono desktop build, then il2cpp-arm64, mono-arm64 (.NET 4.x; .NET 3.5 on 2017.4 with Mono's 4.x class libraries, `player.mono64_classlibs`), box64 | `aarch64_only_route()` moves android to mono-arm64 |
 | `port_template/<route>/route.json` `package` | the release's parts: android `ua_host` (armhf); mono-arm64 and il2cpp-arm64 `ua_host_arm64` (the 64-bit one named `ua_host`) and `mono64`; apk `ua_host?`, `ua_host64?` by `player.abis` | android's list is never used: the route changes |
 | `route.json` `donors`, `port_donors()`, `DONOR_RX` | android: `donor-<v>-mono-armv7.apk`; mono-arm64: the `il2cpp-arm64` one and the `mono-armv7` one (its engine assemblies: an IL2CPP build has none) | the Mono donor ships without `lib/` |
 | `port.py` `COMPONENTS` / `wants()` | `_component_ua_host` (runtime/host/out/ua_host, armhf), `_component_ua_host_arm64` (out/arm64/ua_host as `ua_host`), `_component_ua_host64` (as `ua_host64`, the apk route), `_component_mono64` (bridge + Unity's Mono per line), pmu/asmpatch/pmhlslcc/pmspirvcross (always aarch64) | `wants('ua_host')` false |
@@ -204,31 +206,51 @@ one line set to `True` (then `port new` and `port package` again for each port).
 | `tools/port/rehearse.sh` (`REHEARSE_64ONLY`, `REHEARSE_AARCH64_ONLY`), `tools/emu/emu.sh` (`EMU_ARCH`) | the rehearsal's 32-bit loader, the emulated rig's architecture | `REHEARSE_AARCH64_ONLY=1` |
 
 ### The shipped ports
-None is made by `port new` + `port package` alone today; each needs its own step before armhf goes.
-- **Cuphead** (portmaster-cuphead; own `build.sh`, `build64.sh`, `package.sh`): one zip with both
-  builds: `ua_host` (armhf) and `ua_host64`, `setup/` (32-bit setup) and `setup64/` (64-bit:
-  `mono64/` with Unity's Mono 2017.4 and Mono's 4.x class libraries, `classlibs/`), the donors
-  `donor-2017.4.9f1-mono-armv7.apk` (the game's own version's player, 32-bit route),
-  `donor-2017.4.40f1-il2cpp-arm64.apk` and `donor-2017.4.40f1-mono-armv7.apk`; the launcher picks
-  `CUPHEAD_ROUTE` (32 where `/lib/ld-linux-armhf.so.3` exists) and sources `launch64.txt`. Left:
-  package.sh without `ua_host`, `setup/`, the 2017.4.9f1 donor and with the 2017.4.40f1 Mono donor
-  slimmed; the launcher always 64-bit; `pmu arch-check` on the zip.
-- **Hollow Knight** (portmaster-hollowknight; android route from `port new`, the 64-bit setup
-  `setup/patchscript64` and `build64.sh` hand-merged from the mono-arm64 route): ships `ua_host` and
-  `ua_host64`, `pmhwdec/` (armhf libpmhwdec, Rockchip MPP) and `pmhwdec64/`, `setup/mono64/6000.0/`
-  through `build.outputs`, both donors; `HK_ROUTE` picks. Left: with `aarch64_only` `port new` would
-  write the mono-arm64 template's launcher and setup over the hand-made ones (`.port_files`), so its
-  launcher/patchscript64 have to become the port's own files (or its 64-bit parts the template's),
-  `pmhwdec/` armhf outputs dropped (package does that), `ua_host64` renamed or the launcher's 64-bit
-  path kept; Rockchip hardware decode needs `MPP_ARM64=1`.
-- **Blasphemous** (android route, Unity 2017.4.40f1, .NET 3.5): armhf only today (`ua_host`,
-  `donor-2017.4.40f1-mono-armv7.apk`, `pmhwdec/` armhf + cedard). Left: the mono-arm64 route refuses
-  .NET 3.5 games; Cuphead runs a .NET 3.5 game of 2017.4 on Unity's Mono 2017.4 with Mono's 4.x class
-  libraries (docs/mono-arm64.md, "A .NET 3.5 game on the 4.x class libraries"), which the route's
-  template and `_component_mono64` do not do yet (build-classlibs.sh, the class library remapping);
-  then the IL2CPP arm64 donor of 2017.4.40f1, `aarch64_only = true`, and its FMOD player and
-  asmpatch patches checked on the 64-bit player.
-- **Enter the Gungeon** (android route, Unity 2017.4.27f1, .NET 3.5): armhf only (`ua_host`,
-  `donor-2017.4.27f1-mono-armv7.apk`, `gungeonpatch` is linux-arm64 already). Left: the same .NET 3.5
-  step as Blasphemous, an IL2CPP arm64 donor of 2017.4.27f1, and its `UA_MONO_INVOKE`/`UA_MONO_TLS`
-  speedups, which are gated to the 2017.4 armv7 libmono, measured on the 64-bit Mono.
+Each has an aarch64-only build ready on its own branch (2026-11-20, not merged or released; nothing pushed):
+the release passes `pmu arch-check`, and a launch without the game, an install over an earlier release's
+32-bit build and the saves' carry-over were rehearsed in the container (`tools/port/rehearse.sh`,
+`REHEARSE_64ONLY=1`). None of them has been set up and played from this build on a handheld yet.
+- **Cuphead** (portmaster-cuphead, branch `aarch64-only`): `package.sh` with `AARCH64_ONLY=1` (default 0:
+  both builds, as before) ships no `ua_host` for armhf, no 32-bit setup, no `donor-2017.4.9f1-mono-armv7.apk`
+  and the 2017.4.40f1 Mono donor without its 32-bit player (`slim_donor`); the 64-bit ua_host as `ua_host`,
+  the 64-bit setup as `setup/patchscript` with Unity's Mono 2017.4, the bridge and Mono's 4.x class libraries in
+  `setup/mono64/2017.4/` and a `setup/setup.env` naming the route (this route's layout, so `pmu arch-check`
+  checks it: `package.sh` runs it on the zip). The launcher's `AARCH64_ONLY=1` line (package.sh writes it)
+  takes the 64-bit path always; the game stays in `arm64/` (`.cuphead_ready64`), so a 64-bit build an earlier
+  release set up goes on as it is. Zip 58 MB, 9 ELF files, all aarch64.
+- **Hollow Knight** (portmaster-hollowknight, branch `aarch64-only`): port.toml `route = "mono-arm64"`,
+  `aarch64_only = true`, `ready_marker = ".setup_done64"`, the arm64 player's hashes; its own launcher
+  (64-bit only: `ua_host`, no `HK_ROUTE`), setup (the former `setup/patchscript64` as `setup/patchscript`),
+  questions and READMEs kept by `files.own` while `port new` writes the rest; the game stays in `arm64/`. The
+  64-bit runtime is the route's (`ua_host_arm64`, `mono64`: `build64.sh` is gone); `pmhwdec/` is the arm64
+  build with Rockchip MPP for aarch64 (`MPP_ARM64=1`; its source patches now run in ua-host-armhf, whose
+  Python has the `Path.write_text(newline=)` they use: ua-build-arm64's 3.8 failed them). The code layout
+  list is shipped beside `ua_host` (`relayout/`, `port package` for every 64-bit ua_host). Zip 41.5 MB, 16
+  ELF files, all aarch64. On the G350 (dArkOS), the arm64 `pmhwdec-test` with the arm64 MPP finds H.264, HEVC
+  and VP8 on the video engine (with the decoder's nodes open, as the launcher opens them).
+- **Blasphemous** (portmaster-blasphemous, branch `aarch64-only`): port.toml `route = "mono-arm64"`,
+  `aarch64_only = true`, `player.mono64_classlibs = true` (a .NET 3.5 game: the route's 2017.4 support below),
+  `.setup_done64`, the 2017.4.40f1 arm64 player's hashes, `pmhwdec/` arm64 with MPP; its trimmed launcher kept
+  by `files.own` (64-bit check instead of the armhf one, SDL picks the sound driver, `.setup_done64`). The setup
+  is the route's template: the game is installed in the port folder over the 32-bit build's files (the saves in
+  `data/` stay where they are). Its FMOD banks are played by ua_host's own FMOD player (fmplay, in both builds)
+  and its asmpatch patches change the game's IL, which does not depend on the player; whether they run as
+  before on Mono 5 with the 4.x class libraries is what its first 64-bit setup and play test has to show.
+  Zip 33.7 MB, 13 ELF files, all aarch64 (its `setup/mono64/2017.4/classlibs/` the eight libraries above).
+- **Enter the Gungeon** (Unity 2017.4.27f1): no branch yet. It needs an IL2CPP arm64 donor of 2017.4.27f1,
+  which does not exist yet: the 2017.4.27f1 editor in the work folder has the Android player's
+  `Variations/il2cpp/Release/Libs/arm64-v8a` (IL2CPP arm64 players start with 2017.4.16f1), so
+  `tools/donor/build.sh <editor> Il2cppArm64 <out>` makes it with NDK r13b (not on this machine: Google's
+  download) and the 2017.4 SDK and JDK of `donor/tools`; the editor kills an adb server that is not its SDK's,
+  so it is built when no handheld is on adb, or with SDK set to the running adb's SDK (build.sh refuses
+  otherwise). Then the same port.toml change as Blasphemous. Its `UA_MONO_INVOKE` and `UA_MONO_TLS` do not
+  apply to the 64-bit build: both patch Unity's unoptimised 2017.4 armeabi-v7a libmono byte for byte (they
+  turn themselves off for any other), and the 64-bit Mono is this repository's -O2 build, whose runtime
+  invoke finds a method's info in a lock-free hash already (mono-arm64.md, "Mono's runtime invoke path":
+  0.09 ms a frame in Hollow Knight) and reads its thread-local data with the compiler's TLS. What the
+  64-bit build costs Gungeon is to be measured once it runs.
+- An earlier release's 32-bit build on the card: the 64-bit setup needs the game's files again (the 32-bit
+  setup used them up), and each launcher says so; the saves come over (Cuphead and Hollow Knight copy
+  `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none; Blasphemous's stay in
+  `data/`). The 32-bit build's own files (its `lib/`, APK, OBB) stay on the card until removed by hand
+  (Blasphemous's are replaced by the 64-bit install).
