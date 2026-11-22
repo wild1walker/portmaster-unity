@@ -261,10 +261,33 @@ static unsigned long g_show_a = 1, g_show_b;
 static char *g_show_src[1 << 16];
 static unsigned g_show_att[1 << 16][4];
 static unsigned char g_show_done[1 << 16];
+// --zero-discard (a measurement): every fragment shader with the one colour output Unity's translator names
+// SV_Target0 gets a main() that runs the game's and then discards a fragment whose output is exactly vec4(0):
+// under One/OneMinusSrcAlpha, SrcAlpha/OneMinusSrcAlpha and SrcAlpha/One such a fragment leaves its pixel as it
+// was. Where a shader is drawn with another blend state the picture changes: compare the --hash logs.
+static int g_zero_discard;
+static unsigned long g_zero_discard_n;
+static char *zero_discard_source(const char *src)
+{
+    const char *m = strstr(src, "void main()");
+    if (!m || !strstr(src, "SV_Target0") || strstr(src, "SV_Target1") || strstr(src, "gl_FragDepth") || strstr(src, "gl_Position")) return NULL;
+    static const char tail[] = "\nvoid main()\n{\n    ua_game_main();\n    if (SV_Target0 == vec4(0.0)) discard;\n}\n";
+    size_t n = strlen(src);
+    char *o = malloc(n + sizeof tail + 16);
+    if (!o) return NULL;
+    size_t k = (size_t)(m - src);
+    memcpy(o, src, k);
+    k += (size_t)sprintf(o + k, "void ua_game_main()");
+    strcpy(o + k, m + 11);
+    strcat(o, tail);
+    return o;
+}
 static void rp_custom_glShaderSource(const uint64_t *a, uint64_t r)
 {
     (void)r;
     const GLchar *src = rp_ptr(a[1]);
+    char *zd = g_zero_discard && src ? zero_discard_source(src) : NULL;
+    if (zd) { const GLchar *z = zd; g_zero_discard_n++; RX(glShaderSource)(rp_map(MK_SH, (GLuint)a[0]), 1, &z, NULL); free(zd); return; }
     if (g_show_b && src) { free(g_show_src[a[0] & 0xffff]); g_show_src[a[0] & 0xffff] = strdup(src); }
     RX(glShaderSource)(rp_map(MK_SH, (GLuint)a[0]), 1, &src, NULL);
 }
@@ -679,6 +702,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
         else if (!strcmp(argv[i], "--hash-dump") && i + 1 < argc) hash_dump = argv[++i];
         else if (!strcmp(argv[i], "--info")) info = 1;
+        else if (!strcmp(argv[i], "--zero-discard")) g_zero_discard = 1;
         else if (!strcmp(argv[i], "--show") && i + 1 < argc) sscanf(argv[++i], "%lu-%lu", &g_show_a, &g_show_b);
         else path = argv[i];
     }
@@ -791,6 +815,7 @@ int main(int argc, char **argv)
     printf("\n%-40s %10s %10s %10s\n", "entry point", "calls/fr", "us/call", "ms/frame");
     for (unsigned i = 0; i < k && i < 30; i++)
         printf("%-40s %10.1f %10.2f %10.3f\n", glrec_name[idx[i]], g_op_calls[idx[i]] / F, g_op_ticks[idx[i]] * us / g_op_calls[idx[i]], g_op_ticks[idx[i]] * us / 1000 / F);
+    if (g_zero_discard) printf("--zero-discard: %lu fragment shaders changed\n", g_zero_discard_n);
     printf("\nnot replayable: names not seen made %lu, uniform locations not asked for %lu, attribute locations that moved %lu, "
            "calls from other threads %lu, entry points this driver lacks (window) %lu\n",
            g_unmapped_names, g_loc_miss, g_attrib_moved, g_other_thread_calls, missing);

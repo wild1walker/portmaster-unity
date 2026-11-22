@@ -1371,6 +1371,19 @@ Of the counted fragments 5 - 13 % are hidden behind a later opaque one, and the 
 once more (those programs shade 8 - 18 % of the frame) to save that 5 - 13 %: nothing left over. Not built. What
 the boss arena has instead is alpha-0 fragments: 31 - 39 % of its pass.
 
+**Discarding the fragments that write nothing: exact, and slower.** A fragment whose output is exactly vec4(0)
+leaves its pixel as it was under the scene's three blend states, so a shader may discard it. Measured where the
+share is highest, by replay: the boss scene's GL stream recorded with its texture pixels (`UA_GL_REC_FILE`,
+`UA_GL_REC_FILE_PIXELS=1`, 3,251 frames) and replayed against libmali on Knulli (`glreplay`, `glFinish` after
+each frame, the last 300 frames, 114 draws a frame), plain and with `glreplay --zero-discard` (new, a
+measurement: each fragment shader with the one output `SV_Target0` gets a `main()` that runs the game's and
+discards on an all-zero output; 36 shaders), A B B A: 33.97, 34.63 ms a frame against 36.62, 36.82 ms with the
+discards (+7 %), the calling thread's CPU the same (17.0 - 17.5 ms). The pictures are the same (`--hash`, the
+last 150 frames, 2,551 readbacks at every pass's end: 0 differ). On the Mali-G31 a shader that can discard costs
+every fragment it shades more than the blend and tile write its discards save. Dropped. (Of the census above:
+why a third to half of the draws had no counting copy was not found; no failure is logged, so their programs
+never passed the tool's `glShaderSource`.)
+
 ### Memory, by mapping (2026-11-21)
 
 The same installs on muOS (no swap), the 64-bit one with the Mono the ports ship (8-byte granules, the managed
