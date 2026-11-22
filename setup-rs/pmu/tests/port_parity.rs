@@ -207,6 +207,20 @@ fn inputs(w: &Path) {
     put(&i.join("files/notes.txt"), "extra notes\n");
     put(&i.join("player/Variations/mono/Release/Libs/armeabi-v7a/libunity.so"), "libunity bytes");
     put(&i.join("player/Variations/mono/Release/Libs/armeabi-v7a/libmain.so"), "libmain bytes");
+    // one time for every input: `port package` warns of a build older than a source of its checkout, and
+    // the order these files were written in must not decide it (the golden file's lines)
+    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000);
+    let mut stack = vec![i];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(f) = fs::File::options().write(true).open(&p) {
+                let _ = f.set_modified(t);
+            }
+        }
+    }
 }
 
 /// A case's port.toml (or .json) and the commands it runs ("{py}" is the implementation's command).
