@@ -1235,16 +1235,21 @@ run and back to its 3,400 - 5,300 after it, memory is never short. So the hang i
 came once at 481 MB available, 2026-11-20) nor each 64-bit start; what sets it off is not found.
 By build since 2026-11-19, from the helpers' result folders (a hung run leaves none, so the starts are
 approximate): 64-bit about 64 starts, 6 hangs (11-19 twice, 11-20 twice, 11-21 twice); 32-bit about 36 runs, none
-(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). A third hang the same afternoon (the release's own install, the logger running): seconds after a run had ended
-cleanly (`[host] Unity stopped`, its results fetched, the ping answered), before the next game was started, with
-only EmulationStation running. Read again with that, both hangs of the morning were at that moment too ("the
-start of a 64-bit run" was the seconds after the run before it ended). In all of these runs the game was started
-over SSH with EmulationStation still in the foreground, which a player's launch does not do (ES gives up its
-window for the game it starts), and every exit logged SDL's `ERROR: Could not restore CRTC`; the same runs show
-the half-rate pacing (the title at 30 fps, King's Pass 31 - 35 instead of 44 - 48) in some runs and not in
-others, on either build. So these three are the hand-back of the display after a game that shared it with
-EmulationStation, not the 64-bit game; the hangs inside 64-bit runs of 2026-11-19 and 11-20 (EmulationStation
-stopped with systemctl there) are another matter, still open. Until a
+(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). A third hang the same afternoon was caught with the logger running (the release's own install, the boss save,
+EmulationStation running): its last line is 95 s into the run, the game loading the boss scene (resident 533 ->
+615 MB over the last 16 s), 230 MB available, the Mali at 21,400 pages (84 MB), 66 - 68 C, the CPU at 1.2 - 1.5
+GHz; after it nothing, and nothing from the kernel or the Mali in the followed kernel log. A hard stop in the
+middle of a 64-bit run during a scene load, with memory to spare and no kernel message: the same as the hangs
+of 2026-11-20. Two things in that session's kernel log are not in the hang-free session's (one USB enumeration
+at boot, a mode line for each of its game starts): the USB gadget was enumerated again by the host three times
+while games ran, and the display's mode line (`vop_crtc_enable: Update mode to 640x480p60`) is there for the
+session's first two game starts and missing for the last two, the run paced at half rate (City of Tears, 34.8
+fps) and the one that hung. In these runs the game was started over SSH with EmulationStation in the foreground;
+the system's own launch is `sudo perfmax %GOVERNOR% %ROM%; nice -n -19 %ROM%; sudo perfnorm` from
+EmulationStation (es_systems.cfg), which sets the CPU's, GPU's and memory's governors to the system's launch
+setting first (idle: ondemand, simple_ondemand, dmc_ondemand; the GPU's clocks are 400, 480 and 520 MHz), so
+every frame rate of this page taken over SSH on the G350 is the idle governors', not necessarily a player's.
+Until a
 hang is caught with the logger running (`/roms/uatest/gap64hunt/glog.sh`; the last second is then on the card),
 this, not the frame rate or memory, stands between the G350 and an aarch64-only port.
 
@@ -1324,6 +1329,47 @@ the game's twelve always-playing loops stay compressed, and the budget of 36 MiB
 5 points of a core off the mixer there for about 20 MB; the rest of the decoding is clips the game itself ships
 compressed. Which budget a 1 GB handheld gets was set for memory (2026-11-09); with 1 MB allocator blocks the
 64-bit build has 60 MB more to spare at King's Pass than it had then.
+
+**Looked at and left** (2026-11-21, numbers from `UA_PROF=500` on UnityMain and the mixer, Knulli, 64-bit):
+
+- *Physics2D on the job workers.* `PhysicsManager2D::Simulate` is on 5.2 % of UnityMain's samples at King's Pass
+  (0.95 ms a frame: contact updates 3.4 %, the step 1.6 %, the solver 0.8 %) and 3.7 % in the boss fight
+  (0.6 ms). The ports run one job worker, 35 % busy and waiting 16 - 19 % of the time for a core, so the most a
+  move could give is a few tenths of a millisecond; and Unity's multithreaded 2D solver orders contacts and
+  callbacks by thread unless its consistency sorting is on, so "the same play" would have to be shown step by
+  step in the emulator rig first. Not started.
+- *A faster Vorbis decode.* The decode is 44.5 % of the mixer's time (FMOD's Tremor, integers throughout): the
+  inverse MDCT and the overlap (`fmod_tremor_mdct_backward`, `_dsp_lapout`: 16 % of the mixer) could be done with
+  NEON to the same bits, the codebook and bit-reader part (`decode_packed_entry_number`, `decode_map`,
+  `book_decode*`: 18 %) is serial. About 2 - 3 points of one core on a thread that limits nothing, for hooks into
+  FMOD's internals per Unity version and a bit-compare harness. Not started.
+- *The mixer's effects on silence* (the groups' faders 14 %, the SFX reverb 11 %, a flange 3.4 %). The game's
+  twelve resident loops play in every scene at whatever level the AudioMixer snapshots give them
+  ([profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)), so the groups' inputs are quiet signal,
+  not zeros, and a reverb holds a tail: leaving a chain out would change the float mix even where the 16-bit
+  output came out the same. `ANDROID_SLES_CAPTURE` can compare outputs, but no skip here is exact by
+  construction. Dropped.
+
+### Fragments that cannot show (2026-11-21)
+
+`UA_GL_TRACE_FILL=1` (runtime/host/glfill.c: every draw of a traced frame made a second time with a counting copy
+of its program) on Knulli, 64-bit, the game's own shader sources (`UA_SHADER_DUMP` keeps Unity's binary cache
+off), five to seven traced frames a scene. The scene's 720x450 pass:
+
+| | draws counted | fragments a pixel | discarded | unchanged (alpha 0 under blending) | covered later (written, then wholly replaced) | opaque under blending (alpha 1: the ones that cover) |
+|---|---|---|---|---|---|---|
+| King's Pass | 46 | 6.9 | 7.3 % | 16.6 % | 7.4 % | 5.4 % |
+| City of Tears | 45 | 7.4 | 6.1 % | 17.9 % | 8.7 % | 3.0 % |
+| Hall of Gods boss (two frames of the fight) | 68, 85 | 14.8, 10.7 | 10.4, 16.8 % | 30.6, 38.7 % | 13.0, 4.7 % | 5.7, 3.3 % |
+
+(27 of 87 draws at King's Pass, 85 of 156 in City of Tears and 51 - 55 of 142 - 160 in the fight were not
+counted: the tool could not make a counting copy of their programs; their fragments are in none of the columns.
+The window's own 66 - 71 % "covered later" is the letterbox quads under the final copy.)
+
+Of the counted fragments 5 - 13 % are hidden behind a later opaque one, and the fragments that hide them are 3 -
+6 % of the pass. A depth pre-pass would have to run the alpha of every fragment of the covering draws' programs
+once more (those programs shade 8 - 18 % of the frame) to save that 5 - 13 %: nothing left over. Not built. What
+the boss arena has instead is alpha-0 fragments: 31 - 39 % of its pass.
 
 ### Memory, by mapping (2026-11-21)
 

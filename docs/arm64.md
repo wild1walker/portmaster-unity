@@ -267,9 +267,8 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
   played with the launcher's settings (EmulationStation left running, silent, `tools/device/profrun.sh`): King's
   Pass 48.0 fps over 94 s, 609 MB resident, 217 MB the lowest available; a second King's Pass run 32.5 fps and
   City of Tears 34.8 (601 - 611 MB resident, 212 - 217 MB available): the runs paced at half the refresh rate
-  ([arm64-routes.md](arm64-routes.md), the G350's paragraph). The handheld then stopped answering seconds after
-  the City of Tears run had ended cleanly, with only EmulationStation running: the other three ports are not
-  tested there yet.
+  ([arm64-routes.md](arm64-routes.md), the G350's paragraph). The handheld then stopped answering 95 s into the next run (the boss save,
+  loading its scene; arm64-routes.md): the other three ports are not tested there yet.
 - An earlier release's 32-bit build on the card: the 64-bit setup needs the game's files again (the 32-bit
   setup used them up), and each launcher says so; the saves come over (Cuphead and Hollow Knight copy
   `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none; Blasphemous's stay in
