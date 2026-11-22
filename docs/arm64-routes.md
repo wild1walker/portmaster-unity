@@ -1235,7 +1235,16 @@ run and back to its 3,400 - 5,300 after it, memory is never short. So the hang i
 came once at 481 MB available, 2026-11-20) nor each 64-bit start; what sets it off is not found.
 By build since 2026-11-19, from the helpers' result folders (a hung run leaves none, so the starts are
 approximate): 64-bit about 64 starts, 6 hangs (11-19 twice, 11-20 twice, 11-21 twice); 32-bit about 36 runs, none
-(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). Until a
+(two earlier: 11-08 after a long series, 11-09 in City of Tears with EmulationStation's memory held). A third hang the same afternoon (the release's own install, the logger running): seconds after a run had ended
+cleanly (`[host] Unity stopped`, its results fetched, the ping answered), before the next game was started, with
+only EmulationStation running. Read again with that, both hangs of the morning were at that moment too ("the
+start of a 64-bit run" was the seconds after the run before it ended). In all of these runs the game was started
+over SSH with EmulationStation still in the foreground, which a player's launch does not do (ES gives up its
+window for the game it starts), and every exit logged SDL's `ERROR: Could not restore CRTC`; the same runs show
+the half-rate pacing (the title at 30 fps, King's Pass 31 - 35 instead of 44 - 48) in some runs and not in
+others, on either build. So these three are the hand-back of the display after a game that shared it with
+EmulationStation, not the 64-bit game; the hangs inside 64-bit runs of 2026-11-19 and 11-20 (EmulationStation
+stopped with systemctl there) are another matter, still open. Until a
 hang is caught with the logger running (`/roms/uatest/gap64hunt/glog.sh`; the last second is then on the card),
 this, not the frame rate or memory, stands between the G350 and an aarch64-only port.
 
