@@ -514,7 +514,7 @@ pub fn missing_references(amanaged: &str, names: &BTreeSet<String>) -> Vec<(Stri
     out
 }
 
-fn scripting_runtime(src: &str, unity: &Version) -> Result<Option<String>, Stop> {
+pub fn scripting_runtime(src: &str, unity: &Version) -> Result<Option<String>, Stop> {
     if unity.line() >= (2019, 2) {
         return Ok(Some(".NET 4.x (libmonobdwgc-2.0)".into()));
     }

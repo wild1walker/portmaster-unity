@@ -1621,7 +1621,7 @@ been tried in its Discord testing channel. What PortMaster asks for, and what `p
 | `port.json`, version 4 (`name`, `items`, `attr`: title, porter, desc, inst, genres, `rtr`, `exp`, runtime, store, availability, reqs, arch, min_glibc) | `port new` (`<name>/port.json`; route hooks set Westonpack, `armhf`, glibc) | porter, desc, genres, store in port.toml |
 | `gameinfo.xml` (path, name, desc, release date, developer, publisher, genre, image) | `port new` (`<name>/gameinfo.xml`; the image: `./<name>/cover.png` when the port has a cover, else the screenshot) | developer, publisher, release date (look them up) |
 | `README.md`: Notes (a thank-you to the game's makers first), Controls (a row per bound button), Compile | `port new` (`README.md`) | `port.thanks`, `[controls]` |
-| `screenshot.png`: a real capture of the game running, 4:3, at least 640x480 | `package` ships it and checks its size; `port shot` saves a frame | the capture |
+| `screenshot.png`: a real capture of the game running, 4:3, at least 640x480 | `package` ships it and checks its size; `tools/device/drive.sh` takes one | the capture |
 | `cover.png` (optional, expected) | `package` ships it | the image |
 | the launcher `<Title>.sh` and the folder `<name>/` | `port new`, `package` | explaining every line reviewers ask about |
 | `testing_thread.txt`, the testing channel's post | `port new` (beside the port; `package` copies it beside the zip) | the zip's link, the testers' results |
@@ -1645,9 +1645,9 @@ functions in its logs and profiles from the exported symbols.
 The screenshot is a frame of the game as the port runs it, never a made, scaled or cropped
 picture. On a handheld, start the game with `tools/device/test.sh` and take it with
 `DEVICE=root@<handheld> REMOTE=<the folder> tools/device/drive.sh "" 0 screenshot.png`; for a game
-ua_host runs in a folder this machine can reach (the emulated rig's `EMU_ROOT`), `python -m pmunity
-port shot <folder> --out screenshot.png` asks ua_host for the next frame (`shot.req`) and saves it
-as a PNG (`port shot <shot-N.ppm>` converts one already taken). PortMaster wants 4:3 (its `AGENTS.md`:
+ua_host runs in a folder this machine can reach (the emulated rig's `EMU_ROOT`), `touch
+<folder>/shot.req` asks ua_host for the next frame, which it writes there as `shot-<n>.ppm` (any
+image tool turns it into a PNG). PortMaster wants 4:3 (its `AGENTS.md`:
 640x480; a 640x480 handheld's capture, the BattleXP G350's, needs no crop or scaling): a 3:2
 screen's capture (720x480) is what it is, and `package` says so; take it on a 4:3 handheld when one
 is at hand.

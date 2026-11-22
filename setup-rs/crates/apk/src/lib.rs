@@ -100,6 +100,9 @@ pub struct Opts {
     /// its options (--home, --pkg, --jobs, --on-device, --toolchain, --link-xml, --strip,
     /// --keep-cpp)
     pub il2cpp_opts: il2cpp::Il2cppOpts,
+    /// A folder that gets a Mono build's assemblies (assets/bin/Data/Managed/*.dll): the port
+    /// check's code survey (apk.py's managed_to).
+    pub managed_to: Option<String>,
 }
 
 // ------------------------------------------------------------------ Python's path helpers
@@ -1253,6 +1256,21 @@ fn run_in(
     }
     for n in &notes {
         log(&format!("note: {n}"));
+    }
+    if let Some(to) = o.managed_to.as_deref().filter(|_| backend == "mono") {
+        makedirs(to)?;
+        for (_, z, _) in &data_zips {
+            let names: Vec<String> = z.names().map(String::from).collect();
+            for nm in names {
+                let Some(base) = nm.strip_prefix("assets/bin/Data/Managed/") else { continue };
+                if base.is_empty() || base.contains('/') || !base.ends_with(".dll") {
+                    continue;
+                }
+                let data = z.read(&nm)?;
+                let dst = py::join(to, base);
+                fs::write(&dst, data).map_err(|e| Fail::Error(format!("{dst}: {e}")))?;
+            }
+        }
     }
     let meta_json = Json::Obj(
         mf.meta

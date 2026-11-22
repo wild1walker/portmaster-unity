@@ -2626,7 +2626,7 @@ def submission_warnings(cfg, port_src, pj=None, launcher=None, gameinfo=None):
     if not imgs['screenshot']:
         w.append(f"no screenshot ({os.path.join(port_src, p.get('screenshot') or 'screenshot.png')}): PortMaster requires "
                  "one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh "
-                 "or `pmunity port shot`")
+                 "(ua_host saves the next frame when the game's folder gets a shot.req)")
     else:
         sz = image_size(imgs['screenshot'][0])
         if not sz:

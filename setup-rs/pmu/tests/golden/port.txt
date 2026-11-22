@@ -4,7 +4,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build --submission -> exit 0
   out: == donors: donor-2019.4.8f1-mono-armv7.apk
@@ -15,14 +15,14 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out: PortMaster repository layout: <BASE>/work/port-rel/submission/mygame
   out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 2: port new mygame --config cfg.toml --out port --player <BASE>/in/player -> exit 0
   out: port mygame (android route) -> <BASE>/work/port
   out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 1894 e8500eaeb25c6a31
 file port-rel/mygame.zip 644 39022 e0156ed545b7ab7a zip 77 5198d8a3ce909c51
@@ -127,7 +127,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
   out:   - port.thanks is empty: the README starts with "Thanks to [Studio & Co](https://example.com/dev) for creating My Game."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port new mygame --config cfg.toml --out port -> exit 0
   out: port mygame (android route) -> <BASE>/work/port
@@ -266,7 +266,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == build: printf x > "$BUILD/x"
@@ -290,7 +290,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 531 0f7fc14ae8a8bfd8
 file port-rel/build/a32 644 3064 869b4522d89f2a0c
@@ -365,7 +365,7 @@ command 0: port new mygame --config cfg.json --out port --title Other Title -> e
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Other Title for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build -> exit 0
   out: == ua_host_arm64
@@ -382,7 +382,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Other Title for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.json 644 317 632cfd1940c86ef1
 file port-rel/mygame.zip 644 28147 8f9800089e4c6bab zip 50 97b8822d69d642e9
@@ -443,7 +443,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Win for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build -> exit 0
   out: == donors: donor-2022.2.17f1-mono-armv7.apk
@@ -461,7 +461,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Win for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 114 24a47c9ee982e2ef
 file port-rel/mygame.zip 644 35678 cd6daa6a136a9434 zip 59 7b650705aeca1098
@@ -522,7 +522,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Vk for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build -> exit 0
   out: == donors: donor-2021.3.4f1-mono-armv7.apk
@@ -541,10 +541,10 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Vk for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 157 86d9f60cc8267f8d
-file port-rel/mygame.zip 644 486801 5f2d4f791cc52cae zip 161 b4f9562ce9ce7c79
+file port-rel/mygame.zip 644 486829 4b15a1b0015862ef zip 161 80881c800deb5ebd
 file port-rel/testing_thread.txt 644 950 11138a6488584ab2
 file port-rel/zip/Vk.sh 644 7757 2bd69ca22b7cf9e1
 file port-rel/zip/mygame/README.md 644 2347 ac43b2226132b7df
@@ -588,7 +588,7 @@ file port-rel/zip/mygame/setup/pmunity/nsis.py 644 17062 2e2d94a7775894a1
 file port-rel/zip/mygame/setup/pmunity/patch_obb.py 644 6652 1b5ee093f2c7807c
 file port-rel/zip/mygame/setup/pmunity/player.py 644 13057 de47eaa749de6e3c
 file port-rel/zip/mygame/setup/pmunity/plugins.py 644 52251 62f4710a1ee172c8
-file port-rel/zip/mygame/setup/pmunity/port.py 644 216934 5a6b8477c1d50114
+file port-rel/zip/mygame/setup/pmunity/port.py 644 216981 aca79c16bb106bb6
 file port-rel/zip/mygame/setup/pmunity/prefs.py 644 5443 98865dbae877ae71
 file port-rel/zip/mygame/setup/pmunity/quality.py 644 35554 d2f1b9c00c6d7ab8
 file port-rel/zip/mygame/setup/pmunity/retarget.py 644 12378 533cd5f3987d0bb4
@@ -653,7 +653,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build --submission -> exit 0
   out: == ua_host
@@ -671,7 +671,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 2: port new mygame --config v7.toml --out port2 -> exit 0
   out: port mygame (apk route) -> <BASE>/work/port2
@@ -685,7 +685,7 @@ command 2: port new mygame --config v7.toml --out port2 -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of V7 for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 3: port package port2 --out port2-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build -> exit 0
   out: == ua_host
@@ -702,7 +702,7 @@ command 3: port package port2 --out port2-rel --runtime <BASE>/in/rt --donors <B
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of V7 for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 4: port new mygame --config v7only.toml --out port3 -> exit 0
   out: port mygame (apk route) -> <BASE>/work/port3
@@ -716,7 +716,7 @@ command 4: port new mygame --config v7only.toml --out port3 -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of V7only for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 5: port package port3 --out port3-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build -> exit 0
   out: == ua_host64
@@ -733,7 +733,7 @@ command 5: port package port3 --out port3-rel --runtime <BASE>/in/rt --donors <B
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of V7only for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 227 cd6fc800141165bb
 file port-rel/mygame.zip 644 24028 2665bddcfae171fd zip 40 e3dc4007f4ba73a7
@@ -885,7 +885,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Box for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build -> exit 0
   out: == pmu
@@ -900,7 +900,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Box for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 102 7791b7c54a934a80
 file port-rel/mygame.zip 644 22895 471f80203f9f8edf zip 46 2253e2e1e094ec70
@@ -961,7 +961,7 @@ command 0: port new mono --out port --force -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Mono for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == donors: donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk, donor-2019.4.40f1-il2cpp-arm64.apk, donor-2019.4.40f1-mono-armv7.apk
@@ -979,7 +979,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Mono for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file port-rel/mono.zip 644 41215 eb28464d6e211d81 zip 92 08db4da36bec3cdc
 file port-rel/testing_thread.txt 644 871 a5247d942334d02a
@@ -1045,7 +1045,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Old for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port new mygame --config cfg.toml --out port -> exit 0
   out: Old.sh: the port's own (files.own), left as it is
@@ -1062,7 +1062,7 @@ command 1: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Old for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == donors: donor-2017.4.40f1-il2cpp-arm64.apk, donor-2017.4.40f1-mono-armv7.apk
@@ -1080,7 +1080,7 @@ command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Old for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
   out:   - the launcher does not start with PortMaster's standard lines (#!/bin/bash, the PORTMASTER line, then the controlfolder block, source control.txt, the firmware's mod_${CFW_NAME}.txt, get_controls)
   out:   - the launcher never calls pm_finish
@@ -1151,7 +1151,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Old for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --pybundle <BASE>/in/python.tar.gz --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == donors: donor-2017.4.40f1-il2cpp-arm64.apk, donor-2017.4.40f1-mono-armv7.apk
@@ -1169,7 +1169,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of Old for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 115 45542d6f2cf26d71
 file port-rel/mygame.zip 644 37258 37642597b8e590f3 zip 94 0e31667bf59a5866
@@ -1256,7 +1256,7 @@ command 6: port new mygame --config ok.toml --out clone -> exit 0
   out:   - port.thanks is empty: the README starts with "Thanks to the makers of X for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/clone/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
+  out:   - no screenshot (<BASE>/work/clone/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 7: port package clone --out rel --runtime <BASE>/in/rt --pmu <BASE>/in/pmu-out --no-build -> exit 1
   err: this port's setup takes Unity's player from donors, and no donor folder was given: --donors DIR (or $DONORS) with donor-2019.4.8f1-mono-armv7.apk (donor-2019.4.8f1-mono-armv7.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <dir>; docs/porting.md, "Donors")

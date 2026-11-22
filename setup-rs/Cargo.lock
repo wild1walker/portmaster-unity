@@ -107,6 +107,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "check"
+version = "0.1.0"
+dependencies = [
+ "androiddata",
+ "apk",
+ "il2cpp",
+ "pkgzip",
+ "port",
+ "regex",
+ "unityfs",
+ "wwise",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -477,6 +491,7 @@ version = "0.1.0"
 dependencies = [
  "androiddata",
  "apk",
+ "check",
  "convert",
  "crc32fast",
  "flate2",
@@ -486,6 +501,7 @@ dependencies = [
  "pkgzip",
  "port",
  "serde_json",
+ "shaderx",
  "unityfs",
  "wwise",
 ]

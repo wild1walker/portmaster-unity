@@ -4,8 +4,8 @@
 //! its PortMaster release zip. Same inputs, same files: port.build.json, port.json, setup.env and
 //! the rest byte for byte, the zip's entries, order, modes and times as the Python writes them.
 //!
-//! Not here: `port check` and `port new --data <game>` (the check of a game's files: the Python's),
-//! `port shot`, and extension hook modules named in $PMUNITY_PORT_HOOKS.
+//! Not here: the check of a game's files (`port check`, `port new --data <game>`: crates/check, which
+//! hands `new` its report), and extension hook modules named in $PMUNITY_PORT_HOOKS.
 use std::path::{Path, PathBuf};
 
 pub mod config;

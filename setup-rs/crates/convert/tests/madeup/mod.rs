@@ -128,6 +128,9 @@ pub fn serialized(db: &ClassDb, objs: &[Obj], externals: &[&str], type_trees: bo
         m.i32(c);
         m.u8(0);
         m.i16(-1);
+        if c == 114 {
+            m.bytes(&[0x11; 16]); // (a MonoBehaviour's type: its script's id before the type's hash)
+        }
         m.bytes(&(c as u32).to_le_bytes().repeat(4));
         if type_trees {
             let mut t = (*tree(db, c)).clone();

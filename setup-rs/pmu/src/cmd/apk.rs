@@ -55,6 +55,7 @@ pub fn run(args: &[String]) -> ExitCode {
         any_version: a.has("--any-unity-version"),
         force: a.has("--force"),
         dry_run: a.has("--dry-run"),
+        managed_to: None,
         il2cpp: a.has("--il2cpp"),
         il2cpp_opts: apk::il2cpp::Il2cppOpts {
             home: a.get("--home").map(str::to_string),

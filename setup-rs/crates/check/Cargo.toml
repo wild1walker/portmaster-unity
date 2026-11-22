@@ -1,0 +1,17 @@
+[package]
+name = "check"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "pmu port check and pmu route: what a Unity game is, what it needs on a handheld, which route fits"
+
+[dependencies]
+port = { path = "../port" }
+pkgzip = { path = "../pkgzip" }
+androiddata = { path = "../androiddata" }
+apk = { path = "../apk" }
+il2cpp = { path = "../il2cpp" }
+unityfs = { path = "../unityfs" }
+wwise = { path = "../wwise" }
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }

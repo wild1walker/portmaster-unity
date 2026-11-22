@@ -14,6 +14,7 @@ androiddata = { path = "../crates/androiddata" }
 apk = { path = "../crates/apk" }
 pkgzip = { path = "../crates/pkgzip" }
 port = { path = "../crates/port" }
+check = { path = "../crates/check" }
 convert = { path = "../crates/convert" }
 il2cpp = { path = "../crates/il2cpp" }
 unityfs = { path = "../crates/unityfs" }
@@ -25,3 +26,5 @@ serde_json = "1"
 [dev-dependencies]   # (tests/port_parity.rs: the synthetic donors, the setup's Python bundle, images)
 flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 crc32fast = "1"
+# (tests/check_parity.rs: the convert tests' made-up Unity data, crates/convert/tests/madeup)
+shaderx = { path = "../crates/shaderx", features = ["tree"] }

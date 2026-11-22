@@ -31,7 +31,7 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `player fetch <version> <dir> [--backend --abi --installer FILE\|URL --symbols --symbols-only --managed]`, `player url <version>` | player.py, nsis.py | the porter's computer only (symbols, by-hand work; no setup runs it: the handheld never downloads Unity's player): Unity's Android player from Unity's installer: its NSIS header and the files wanted read with HTTPS range requests (pkgzip's http.rs on rustls, the system's CA certificates: `$SSL_CERT_FILE`, `$SSL_CERT_DIR`, else the usual bundle files; `https_proxy`), or from a local copy; the installer's URL from Unity's release API |
 | `winbcl <data> <dir> [--version --installer --donor APK --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll): in a setup from the port's Mono donor (`--donor`, nothing downloaded; what the donor does not carry is named, `not_in_donor`), on the porter's computer also from Unity's Windows editor installer the same way as `player fetch` |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
-| `route <path> --env` | route.py | the box64 route's game.env: the first build under the path with a Linux x86-64 executable, its Unity version, backend and GL mode (the report, `--json` and `--launcher` stay with the Python: status 2) |
+| `route <path> [--json \| --env] [--launcher OUT.sh [--port NAME] [--title TEXT] [--template FILE]]` | route.py | which way a game fits a handheld, and why (crates/check `route.rs`): each build under the path (its executables' and player's headers and strings, the data's version and build target, the plugins), the android and box64 verdicts, as the report or as JSON; `--env`: the box64 route's game.env (the first build with a Linux x86-64 executable: its folder, executable, data folder, Unity version, backend and GL mode), what the box64 port's setup writes; `--launcher`: the box64 route's launcher for the game |
 | `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
 | `wwise <banks> <out> [--check] [--wwise-lib PATH]` | (none: Rust only, 2026-11-02) | a Wwise game's soundbanks (bank version 128) into the data of ua_host's Wwise player ([wwise-player.md](wwise-player.md)): per bank `<Bank>.uaww.json` and `<Bank>.uaww.pak`, the media read and written one at a time (DATA is never held in memory); status 3 for another bank version |
 | `fmod <banks> <out> [--check] [--fmod-lib PATH]` | (none: Rust only, 2026-11-16) | an FMOD Studio game's banks (format 0x67, FMOD 1.10) into the data of ua_host's FMOD player ([fmod-player.md](fmod-player.md)): per bank `<Bank>.uafm.json` and `<Bank>.uafm.pak` (FMOD's Vorbis rebuilt as Ogg Vorbis with the setup headers of the game's own `libfmod.so`); status 3 for another format |
@@ -71,11 +71,48 @@ on pkgzip, libz-sys (zlib, static) and libc.)
 
 The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
 come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working
-folder) with `setup-rs/templates`. What stays with the Python: `port new --data <game>`
-(the check of a game's files, `port check`; a port.toml that names `game.unity_versions` is what
-`pmu port new` takes), `port shot`, `port routes`, and hook modules named in
-`$PMUNITY_PORT_HOOKS` (pmu stops: status 2 for the first three, 1 for the last). `made_by` in
+folder) with `setup-rs/templates`. `port new --data <game>` starts from the
+check of the game (below), as the Python's; hook modules named in `$PMUNITY_PORT_HOOKS` are not run
+(pmu stops, status 1), and `port shot` is gone (the screenshot is ua_host's `shot.req` frame:
+tools/device/drive.sh). `made_by` in
 port.build.json stays `pmunity port new`, so either packs what the other made.
+
+## The check: `pmu port check`, `pmu port new --data`, `pmu port routes`, `pmu route`
+
+crates/check is port.py's `check` with the parts of route.py, plugins.py and streaming.py it calls
+(their `port_check` hooks, in the Python's order), on the readers the setup's tools already have:
+androiddata's `clrmeta` (the names an assembly defines and references: input stacks, text input,
+video, P/Invoke modules, services), unityfs (player and build settings, the scripts scenes use,
+texture formats, the StreamingAssets bundles' shaders and textures; a compressed build's
+globalgamemanagers out of data.unity3d, only the blocks it spans), androiddata's `video` (clip
+codecs), `winbcl`, `android_data::scripting_runtime`, il2cpp's `mix`, the apk crate's dry run (an
+Android build), wwise's codebook finder. The report is the Python's dict, keys in its order
+(`port::val`), so `--json` is the same document and the printed report the same text; `port new
+--data` hands it to crates/port (`new_with`), which takes the title, route, Unity version and the
+suggested config from it, writes `[controls]` drafted from asmpatch's survey, port.build.json's
+`check`, and says what port.toml lacks of the suggestions. asmpatch's survey is run as the Python
+runs it (`--asmpatch CMD`, `$PMUNITY_ASMPATCH`, tools/asmpatch/out, built with the .NET 8 SDK when
+missing; `--asmpatch none`: no survey).
+
+Where the outputs can differ from the Python's, by design: a file that cannot be read is named
+with pmu's reason, not a Python exception's name (`globalgamemanagers: not read (...)`, an
+unreadable assembly past the PE and CLI headers, a bundle UnityPy cannot open); the Python lists a
+game's video types (`code.video`) in a set's order, which changes from run to run, pmu sorted; the
+codebook count of a Wwise library is taken over the whole file (the Python: its read-only data).
+
+`pmu/tests/check_parity.rs` is the bar, as port_parity is the packager's: made-up games (ELF, PE
+and Mach-O headers, assemblies of metadata only, plugins, soundbanks, a stand-in for asmpatch with
+a survey, and with `$PMU_TPK` serialized files and bundles written from the class database's trees:
+crates/convert/tests/madeup) checked by the Python and by pmu at the same paths: exit status,
+stdout, stderr and every file `port new --data` leaves. The same cases are frozen in
+`pmu/tests/golden/check.txt` (test `check_golden`, no Python; written 2026-11-22 from a run whose
+every output was the Python's; `PMU_CHECK_BLESS=1` writes it again; without `$PMU_TPK` the cases
+that read objects are left out).
+
+```bash
+PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk PMU_PARITY_PYTHON=<venv>/bin/python \
+  setup-rs/tools/rs.sh <worktree> cargo test -p pmu --test check_parity -- --nocapture
+```
 
 The parity check, `pmu/tests/port_parity.rs`, runs the Python and pmu one after the other at the
 same paths on synthetic ports (every route, `aarch64_only`, Windows/Direct3D 11, Vulkan with a
@@ -740,9 +777,6 @@ in portmaster-cuphead and is built in).
 
 ## What is left, and why
 
-- `port check` and `port new --data <game>` (the check of a game: assemblies, serialized files,
-  plugins, asmpatch's survey), `port shot`, `port routes`: the Python's. `pmu port new` makes a port
-  from a port.toml that names `game.unity_versions`, as every port's own repository has it.
 - `il2cpp` and `apk --il2cpp` without `--on-device` (the Docker route of a porter's PC:
   tools/il2cpp/root.sh's folders in a stock container): status 2. pmu is for the handheld; a PC
   runs the Python.

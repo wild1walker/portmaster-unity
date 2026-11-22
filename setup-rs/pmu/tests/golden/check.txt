@@ -1,0 +1,2710 @@
+== check-linux
+command 0: port check <BASE>/in/linux --asmpatch none -> exit 0
+  out: game: My Game_Data
+  out:   data: <BASE>/in/linux/My Game/My Game_Data (0 MB; the build: 0 MB)
+  out:   build: linux, My Game.x86_64 (x86_64)
+  out:   Unity 2019.4.8f1, mono, .NET 4.x (libmonobdwgc-2.0)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl yes; Input System yes; legacy Input: axes/buttons 2, keys 3, mouse 1, touch 1; OnMouse* 2; UI pointer handlers 1; UI selection calls 1
+  out:   verdict: mixed
+  out:   StreamingAssets: 0 bundles (0 MB); 2 other Unity archives
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
+  out:         + GL mode gles (GLES 3 shaders added by the setup)
+  out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - StreamingAssets read as files (references to Application.streamingAssetsPath and System.IO in Assembly-CSharp (asmpatch, when built, says which reads reach System.IO)): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - reads the mouse and also selects UI elements: try the pad first; UA_POINTER=1 (with UA_POINTER_TOGGLE) where menus need the mouse
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "auto", "streaming_assets": "both"}, "runtime": {"UA_PAD_NAME": "Microsoft X-Box 360 pad"}, "wwise": {"banks": "StreamingAssets/Audio/GeneratedSoundBanks/Linux"}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 1: port check <BASE>/in/linux --asmpatch none --json -> exit 0
+  out: {
+  out:  "path": "<BASE>/in/linux",
+  out:  "notes": [
+  out:   "Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)",
+  out:   "StreamingAssets read as files (references to Application.streamingAssetsPath and System.IO in Assembly-CSharp (asmpatch, when built, says which reads reach System.IO)): android_data.streaming_assets = \"both\" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder",
+  out:   "InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)",
+  out:   "PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, \"Optimizations\")",
+  out:   "reads the mouse and also selects UI elements: try the pad first; UA_POINTER=1 (with UA_POINTER_TOGGLE) where menus need the mouse",
+  out:   "reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding",
+  out:   "Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)",
+  out:   "text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = \"done\" in runtime answers it at once where text does not matter (docs/input.md)",
+  out:   "the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on",
+  out:   "native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)",
+  out:   "P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub",
+  out:   "services: Steamworks, Wwise"
+  out:  ],
+  out:  "warnings": [
+  out:   "graphics APIs not read: assuming glcore",
+  out:   "2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)"
+  out:  ],
+  out:  "suggest": {
+  out:   "wwise": {
+  out:    "banks": "StreamingAssets/Audio/GeneratedSoundBanks/Linux"
+  out:   },
+  out:   "android_data": {
+  out:    "streaming_assets": "both",
+  out:    "asmpatch": "auto"
+  out:   },
+  out:   "runtime": {
+  out:    "UA_PAD_NAME": "Microsoft X-Box 360 pad"
+  out:   },
+  out:   "convert": {}
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/linux/My Game/My Game_Data",
+  out:  "build": "linux",
+  out:  "exe": "My Game.x86_64",
+  out:  "arch": "x86_64",
+  out:  "root": "<BASE>/in/linux/My Game",
+  out:  "backend": "mono",
+  out:  "compressed": false,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2019.4.8f1",
+  out:  "unity_line": "2019.4",
+  out:  "unity_supported": true,
+  out:  "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+  out:  "data_survey": {
+  out:   "product": null,
+  out:   "company": null,
+  out:   "graphics_apis": null,
+  out:   "color_space": null,
+  out:   "active_input": null,
+  out:   "screen": null,
+  out:   "scenes": null,
+  out:   "scripts_used": {},
+  out:   "video_players": 0,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "notes": []
+  out:  },
+  out:  "streaming_survey": {
+  out:   "bundles": 0,
+  out:   "mb": 0.0,
+  out:   "scene_bundles": [],
+  out:   "shaders": {},
+  out:   "shader_bundles": {},
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "odd": [
+  out:    [
+  out:     "StreamingAssets/hidden.dat",
+  out:     "a UnityFS bundle behind other bytes (the game's own offset or encryption)"
+  out:    ],
+  out:    [
+  out:     "StreamingAssets/web.unity3d",
+  out:     "a UnityRaw archive (Unity 5.x uncompressed bundles)"
+  out:    ]
+  out:   ],
+  out:   "unread": [],
+  out:   "no_serialized": []
+  out:  },
+  out:  "product": null,
+  out:  "graphics_apis": null,
+  out:  "shader_source": "glcore",
+  out:  "code": {
+  out:   "assemblies": [
+  out:    "Assembly-CSharp"
+  out:   ],
+  out:   "libraries": [
+  out:    "Unity.InputSystem",
+  out:    "UnityEngine"
+  out:   ],
+  out:   "unreadable": [
+  out:    "Broken.dll: not a PE file"
+  out:   ],
+  out:   "rewired": null,
+  out:   "incontrol": true,
+  out:   "playmaker": "Assembly-CSharp.dll",
+  out:   "input_system": true,
+  out:   "legacy": {
+  out:    "axes/buttons": 2,
+  out:    "keys": 3,
+  out:    "mouse": 1,
+  out:    "touch": 1
+  out:   },
+  out:   "mouse_messages": [
+  out:    "OnMouseDown",
+  out:    "OnMouseEnter"
+  out:   ],
+  out:   "pointer_handlers": 1,
+  out:   "navigation": 1,
+  out:   "selects": 1,
+  out:   "text_input": [
+  out:    "UI InputField",
+  out:    "Input.inputString"
+  out:   ],
+  out:   "video": [
+  out:    "VideoPlayer"
+  out:   ],
+  out:   "pinvoke": {
+  out:    "AkSoundEngine": [
+  out:     "Assembly-CSharp"
+  out:    ],
+  out:    "libc": [
+  out:     "Assembly-CSharp"
+  out:    ],
+  out:    "mylib": [
+  out:     "Assembly-CSharp"
+  out:    ],
+  out:    "steam_api": [
+  out:     "Assembly-CSharp"
+  out:    ]
+  out:   },
+  out:   "services": [
+  out:    "Steamworks",
+  out:    "Wwise"
+  out:   ],
+  out:   "cursor": [
+  out:    "set_visible",
+  out:    "set_lockState"
+  out:   ],
+  out:   "screen": [
+  out:    "SetResolution"
+  out:   ]
+  out:  },
+  out:  "input_verdict": "mixed",
+  out:  "plugins": [
+  out:   [
+  out:    "Plugins/x86_64/libAkSoundEngine.so",
+  out:    "Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound"
+  out:   ],
+  out:   [
+  out:    "Plugins/x86_64/libmylib.so",
+  out:    "not shipped: a game that calls it needs an ARM build"
+  out:   ],
+  out:   [
+  out:    "Plugins/x86_64/libsteam_api.so",
+  out:    "Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)"
+  out:   ]
+  out:  ],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+  out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
+  out:     "the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)",
+  out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "box64 and the player's x86-64 libraries on the handheld (tools/box64)",
+  out:     "GL mode gles (GLES 3 shaders added by the setup)",
+  out:     "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:    ]
+  out:   }
+  out:  ],
+  out:  "wwise": {
+  out:   "libraries": [
+  out:    "Plugins/x86_64/libAkSoundEngine.so"
+  out:   ],
+  out:   "version": "2017.2.9 build 6726",
+  out:   "banks": 2,
+  out:   "bank_versions": [
+  out:    128
+  out:   ],
+  out:   "bank_folders": [
+  out:    "StreamingAssets/Audio/GeneratedSoundBanks/Linux"
+  out:   ],
+  out:   "version_from": "Plugins/x86_64/libAkSoundEngine.so (a string)",
+  out:   "bank_lines": [
+  out:    "2017.2"
+  out:   ],
+  out:   "codebooks": [
+  out:    "Plugins/x86_64/libAkSoundEngine.so",
+  out:    0
+  out:   ]
+  out:  },
+  out:  "streaming_assets": {
+  out:   "mb": 0.0,
+  out:   "io": true
+  out:  },
+  out:  "route": "android",
+  out:  "donors": [
+  out:   "donor-2019.4.8f1-mono-armv7.apk"
+  out:  ]
+  out: }
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 2: port check <BASE>/in/linux/My Game/My Game_Data --asmpatch none --no-scan -> exit 0
+  out: game: My Game_Data
+  out:   data: <BASE>/in/linux/My Game/My Game_Data (0 MB; the build: 0 MB)
+  out:   build: linux, My Game.x86_64 (x86_64)
+  out:   Unity 2019.4.8f1, mono, .NET 4.x (libmonobdwgc-2.0)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl yes; Input System yes; legacy Input: axes/buttons 2, keys 3, mouse 1, touch 1; OnMouse* 2; UI pointer handlers 1; UI selection calls 1
+  out:   verdict: mixed
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
+  out:         + GL mode gles (GLES 3 shaders added by the setup)
+  out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: graphics APIs not read: assuming glcore
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - StreamingAssets read as files (references to Application.streamingAssetsPath and System.IO in Assembly-CSharp (asmpatch, when built, says which reads reach System.IO)): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - reads the mouse and also selects UI elements: try the pad first; UA_POINTER=1 (with UA_POINTER_TOGGLE) where menus need the mouse
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "auto", "streaming_assets": "both"}, "runtime": {"UA_PAD_NAME": "Microsoft X-Box 360 pad"}, "wwise": {"banks": "StreamingAssets/Audio/GeneratedSoundBanks/Linux"}}
+  err: .. reading the game's settings and scenes
+== check-survey
+command 0: port check <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh -> exit 0
+  out: game: My Game_Data
+  out:   data: <BASE>/in/linux/My Game/My Game_Data (0 MB; the build: 0 MB)
+  out:   build: linux, My Game.x86_64 (x86_64)
+  out:   Unity 2019.4.8f1, mono, .NET 4.x (libmonobdwgc-2.0)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl yes; Input System yes; legacy Input: axes/buttons 2, keys 3, mouse 1, touch 1; OnMouse* 2; UI pointer handlers 1; UI selection calls 1
+  out:   verdict: mixed: the pad and the mouse
+  out:   StreamingAssets: 0 bundles (0 MB); 2 other Unity archives
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
+  out:         + GL mode gles (GLES 3 shaders added by the setup)
+  out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - reads of Application.dataPath reach System.IO (asmpatch --survey says where; on Android dataPath is the APK or OBB file): when the game needs files there or writes there, android_data.data_path = true gives those reads Game_Data/ beside the APK, with the data folder's own files
+  out: - StreamingAssets read as files (asmpatch: reads of Application.streamingAssetsPath reach System.IO): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - pad bindings: GameActions.MoveUp, GameActions.MoveDown only on the left stick, which a handheld without sticks lacks: UA_DPAD_STICK = "1,2" (the d-pad drives the left stick on pads without one; docs/input.md); the d-pad's own bindings (GameActions.SelectUp, GameActions.SelectDown) then need UA_DPAD_SWAP = "<button>", a button that gives the d-pad back: UA_DPAD_SWAP = "select" (the game binds nothing to it)
+  out: - pad bindings: GameActions.AimUp, GameActions.AimDown only on the right stick: a handheld without one (the RG34XX-SP and other d-pad-only ones) cannot do those (Aim needs a right stick; nothing in the port stands in for it). Check the game's own options on such a handheld (aim assist, aiming where it moves, another control scheme), or pointer mode where it aims at the mouse; the [controls] draft says so
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - the code uses the Input System's Mouse.current with no null check (Foo.Update, Bar.LateUpdate): a handheld has no mouse unless pointer mode presents one, else those throw NullReferenceException (every frame from an Update): UA_POINTER=1; if the game draws its own cursor, also UA_POINTER_CURSOR=0
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "auto", "streaming_assets": "both"}, "controls": {"A": "Dodge roll", "B": "Jump, UI submit", "D-Pad": "the left stick on handhelds without sticks; Select gives the d-pad back: Select (up, down)", "Left Stick": "Move", "Right Stick": "Aim (up, down); handhelds without a right stick cannot", "Select": "the d-pad as the d-pad, again as the left stick (handhelds without sticks; the game no longer gets this button)", "Start": "Pause"}, "runtime": {"UA_DPAD_STICK": "1,2", "UA_DPAD_SWAP": "select", "UA_PAD_NAME": "Xbox 360 Wired Controller", "UA_POINTER": "1"}, "wwise": {"banks": "StreamingAssets/Audio/GeneratedSoundBanks/Linux"}}
+  out: 
+  out: asmpatch --survey:
+  out:   input survey
+  out:     InControl's Android profiles:
+  out:       -> UA_PAD_NAME="Xbox 360 Wired Controller"
+  out:     pad bindings (the game's defaults):
+  out:       the left stick alone (no d-pad binding): GameActions.MoveUp, GameActions.MoveDown
+  out:         -> UA_DPAD_STICK=1,2
+  out:       the d-pad: its own bindings GameActions.SelectUp,
+  out:         GameActions.SelectDown need a UA_DPAD_SWAP
+  out:         -> UA_DPAD_SWAP=select (the game binds nothing
+  out:            to it)
+  out:       the right stick alone (no other binding): GameActions.AimUp, GameActions.AimDown
+  out:       every binding, by control:
+  out:         LeftStickUp: GameActions.MoveUp
+  out:         LeftStickDown: GameActions.MoveDown
+  out:         LeftStickLeft: GameActions.MoveLeft
+  out:         LeftStickRight: GameActions.MoveRight
+  out:         DPadUp: GameActions.SelectUp
+  out:         DPadDown: GameActions.SelectDown
+  out:         RightStickUp: GameActions.AimUp
+  out:         RightStickDown: GameActions.AimDown
+  out:         Action1: GameActions.JumpAction, GameActions.UISubmit
+  out:         Action2: GameActions.DodgeRollAction
+  out:         Start: GameActions.PauseAction
+  out:         Back: GameActions.MapAction
+  out:         Select: GameActions.UseHPPotion2
+  out:     Mouse.current: used with no null check in 3 methods (Foo.Update, Bar.LateUpdate)
+  out:   verdict: mixed: the pad and the mouse
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+  err: .. asmpatch --survey
+command 1: port check <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh --json -> exit 0
+  out: {
+  out:  "path": "<BASE>/in/linux",
+  out:  "notes": [
+  out:   "Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)",
+  out:   "reads of Application.dataPath reach System.IO (asmpatch --survey says where; on Android dataPath is the APK or OBB file): when the game needs files there or writes there, android_data.data_path = true gives those reads Game_Data/ beside the APK, with the data folder's own files",
+  out:   "StreamingAssets read as files (asmpatch: reads of Application.streamingAssetsPath reach System.IO): android_data.streaming_assets = \"both\" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder",
+  out:   "InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)",
+  out:   "pad bindings: GameActions.MoveUp, GameActions.MoveDown only on the left stick, which a handheld without sticks lacks: UA_DPAD_STICK = \"1,2\" (the d-pad drives the left stick on pads without one; docs/input.md); the d-pad's own bindings (GameActions.SelectUp, GameActions.SelectDown) then need UA_DPAD_SWAP = \"<button>\", a button that gives the d-pad back: UA_DPAD_SWAP = \"select\" (the game binds nothing to it)",
+  out:   "pad bindings: GameActions.AimUp, GameActions.AimDown only on the right stick: a handheld without one (the RG34XX-SP and other d-pad-only ones) cannot do those (Aim needs a right stick; nothing in the port stands in for it). Check the game's own options on such a handheld (aim assist, aiming where it moves, another control scheme), or pointer mode where it aims at the mouse; the [controls] draft says so",
+  out:   "PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, \"Optimizations\")",
+  out:   "the code uses the Input System's Mouse.current with no null check (Foo.Update, Bar.LateUpdate): a handheld has no mouse unless pointer mode presents one, else those throw NullReferenceException (every frame from an Update): UA_POINTER=1; if the game draws its own cursor, also UA_POINTER_CURSOR=0",
+  out:   "reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding",
+  out:   "Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)",
+  out:   "text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = \"done\" in runtime answers it at once where text does not matter (docs/input.md)",
+  out:   "the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on",
+  out:   "native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)",
+  out:   "P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub",
+  out:   "services: Steamworks, Wwise"
+  out:  ],
+  out:  "warnings": [
+  out:   "graphics APIs not read: assuming glcore",
+  out:   "2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)"
+  out:  ],
+  out:  "suggest": {
+  out:   "wwise": {
+  out:    "banks": "StreamingAssets/Audio/GeneratedSoundBanks/Linux"
+  out:   },
+  out:   "android_data": {
+  out:    "streaming_assets": "both",
+  out:    "asmpatch": "auto"
+  out:   },
+  out:   "runtime": {
+  out:    "UA_PAD_NAME": "Xbox 360 Wired Controller",
+  out:    "UA_DPAD_STICK": "1,2",
+  out:    "UA_DPAD_SWAP": "select",
+  out:    "UA_POINTER": "1"
+  out:   },
+  out:   "convert": {},
+  out:   "controls": {
+  out:    "Left Stick": "Move",
+  out:    "Right Stick": "Aim (up, down); handhelds without a right stick cannot",
+  out:    "D-Pad": "the left stick on handhelds without sticks; Select gives the d-pad back: Select (up, down)",
+  out:    "B": "Jump, UI submit",
+  out:    "A": "Dodge roll",
+  out:    "Start": "Pause",
+  out:    "Select": "the d-pad as the d-pad, again as the left stick (handhelds without sticks; the game no longer gets this button)"
+  out:   }
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/linux/My Game/My Game_Data",
+  out:  "build": "linux",
+  out:  "exe": "My Game.x86_64",
+  out:  "arch": "x86_64",
+  out:  "root": "<BASE>/in/linux/My Game",
+  out:  "backend": "mono",
+  out:  "compressed": false,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2019.4.8f1",
+  out:  "unity_line": "2019.4",
+  out:  "unity_supported": true,
+  out:  "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+  out:  "data_survey": {
+  out:   "product": null,
+  out:   "company": null,
+  out:   "graphics_apis": null,
+  out:   "color_space": null,
+  out:   "active_input": null,
+  out:   "screen": null,
+  out:   "scenes": null,
+  out:   "scripts_used": {},
+  out:   "video_players": 0,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "notes": []
+  out:  },
+  out:  "streaming_survey": {
+  out:   "bundles": 0,
+  out:   "mb": 0.0,
+  out:   "scene_bundles": [],
+  out:   "shaders": {},
+  out:   "shader_bundles": {},
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "odd": [
+  out:    [
+  out:     "StreamingAssets/hidden.dat",
+  out:     "a UnityFS bundle behind other bytes (the game's own offset or encryption)"
+  out:    ],
+  out:    [
+  out:     "StreamingAssets/web.unity3d",
+  out:     "a UnityRaw archive (Unity 5.x uncompressed bundles)"
+  out:    ]
+  out:   ],
+  out:   "unread": [],
+  out:   "no_serialized": []
+  out:  },
+  out:  "product": null,
+  out:  "graphics_apis": null,
+  out:  "shader_source": "glcore",
+  out:  "code": {
+  out:   "assemblies": [
+  out:    "Assembly-CSharp"
+  out:   ],
+  out:   "libraries": [
+  out:    "Unity.InputSystem",
+  out:    "UnityEngine"
+  out:   ],
+  out:   "unreadable": [
+  out:    "Broken.dll: not a PE file"
+  out:   ],
+  out:   "rewired": null,
+  out:   "incontrol": true,
+  out:   "playmaker": "Assembly-CSharp.dll",
+  out:   "input_system": true,
+  out:   "legacy": {
+  out:    "axes/buttons": 2,
+  out:    "keys": 3,
+  out:    "mouse": 1,
+  out:    "touch": 1
+  out:   },
+  out:   "mouse_messages": [
+  out:    "OnMouseDown",
+  out:    "OnMouseEnter"
+  out:   ],
+  out:   "pointer_handlers": 1,
+  out:   "navigation": 1,
+  out:   "selects": 1,
+  out:   "text_input": [
+  out:    "UI InputField",
+  out:    "Input.inputString"
+  out:   ],
+  out:   "video": [
+  out:    "VideoPlayer"
+  out:   ],
+  out:   "pinvoke": {
+  out:    "AkSoundEngine": [
+  out:     "Assembly-CSharp"
+  out:    ],
+  out:    "libc": [
+  out:     "Assembly-CSharp"
+  out:    ],
+  out:    "mylib": [
+  out:     "Assembly-CSharp"
+  out:    ],
+  out:    "steam_api": [
+  out:     "Assembly-CSharp"
+  out:    ]
+  out:   },
+  out:   "services": [
+  out:    "Steamworks",
+  out:    "Wwise"
+  out:   ],
+  out:   "cursor": [
+  out:    "set_visible",
+  out:    "set_lockState"
+  out:   ],
+  out:   "screen": [
+  out:    "SetResolution"
+  out:   ]
+  out:  },
+  out:  "input_verdict": "mixed",
+  out:  "asmpatch_survey": "input survey\n  InControl's Android profiles:\n    -> UA_PAD_NAME=\"Xbox 360 Wired Controller\"\n  pad bindings (the game's defaults):\n    the left stick alone (no d-pad binding): GameActions.MoveUp, GameActions.MoveDown\n      -> UA_DPAD_STICK=1,2\n    the d-pad: its own bindings GameActions.SelectUp,\n      GameActions.SelectDown need a UA_DPAD_SWAP\n      -> UA_DPAD_SWAP=select (the game binds nothing\n         to it)\n    the right stick alone (no other binding): GameActions.AimUp, GameActions.AimDown\n    every binding, by control:\n      LeftStickUp: GameActions.MoveUp\n      LeftStickDown: GameActions.MoveDown\n      LeftStickLeft: GameActions.MoveLeft\n      LeftStickRight: GameActions.MoveRight\n      DPadUp: GameActions.SelectUp\n      DPadDown: GameActions.SelectDown\n      RightStickUp: GameActions.AimUp\n      RightStickDown: GameActions.AimDown\n      Action1: GameActions.JumpAction, GameActions.UISubmit\n      Action2: GameActions.DodgeRollAction\n      Start: GameActions.PauseAction\n      Back: GameActions.MapAction\n      Select: GameActions.UseHPPotion2\n  Mouse.current: used with no null check in 3 methods (Foo.Update, Bar.LateUpdate)\nverdict: mixed: the pad and the mouse\n",
+  out:  "asmpatch_would": [
+  out:   "streaming-assets",
+  out:   "data-path"
+  out:  ],
+  out:  "input_verdict_text": "mixed: the pad and the mouse",
+  out:  "plugins": [
+  out:   [
+  out:    "Plugins/x86_64/libAkSoundEngine.so",
+  out:    "Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound"
+  out:   ],
+  out:   [
+  out:    "Plugins/x86_64/libmylib.so",
+  out:    "not shipped: a game that calls it needs an ARM build"
+  out:   ],
+  out:   [
+  out:    "Plugins/x86_64/libsteam_api.so",
+  out:    "Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)"
+  out:   ]
+  out:  ],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+  out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
+  out:     "the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)",
+  out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "box64 and the player's x86-64 libraries on the handheld (tools/box64)",
+  out:     "GL mode gles (GLES 3 shaders added by the setup)",
+  out:     "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:    ]
+  out:   }
+  out:  ],
+  out:  "wwise": {
+  out:   "libraries": [
+  out:    "Plugins/x86_64/libAkSoundEngine.so"
+  out:   ],
+  out:   "version": "2017.2.9 build 6726",
+  out:   "banks": 2,
+  out:   "bank_versions": [
+  out:    128
+  out:   ],
+  out:   "bank_folders": [
+  out:    "StreamingAssets/Audio/GeneratedSoundBanks/Linux"
+  out:   ],
+  out:   "version_from": "Plugins/x86_64/libAkSoundEngine.so (a string)",
+  out:   "bank_lines": [
+  out:    "2017.2"
+  out:   ],
+  out:   "codebooks": [
+  out:    "Plugins/x86_64/libAkSoundEngine.so",
+  out:    0
+  out:   ]
+  out:  },
+  out:  "streaming_assets": {
+  out:   "mb": 0.0,
+  out:   "io": true
+  out:  },
+  out:  "route": "android",
+  out:  "donors": [
+  out:   "donor-2019.4.8f1-mono-armv7.apk"
+  out:  ]
+  out: }
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+  err: .. asmpatch --survey
+command 2: port check <BASE>/in/linux --asmpatch <BASE>/in/fail.sh -> exit 0
+  out: game: My Game_Data
+  out:   data: <BASE>/in/linux/My Game/My Game_Data (0 MB; the build: 0 MB)
+  out:   build: linux, My Game.x86_64 (x86_64)
+  out:   Unity 2019.4.8f1, mono, .NET 4.x (libmonobdwgc-2.0)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl yes; Input System yes; legacy Input: axes/buttons 2, keys 3, mouse 1, touch 1; OnMouse* 2; UI pointer handlers 1; UI selection calls 1
+  out:   verdict: mixed
+  out:   StreamingAssets: 0 bundles (0 MB); 2 other Unity archives
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
+  out:         + GL mode gles (GLES 3 shaders added by the setup)
+  out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: asmpatch --survey failed (<BASE>/in/fail.sh): this check left out its input survey (the game's pad bindings: UA_DPAD_STICK and UA_DPAD_SWAP for handhelds without sticks, the [controls] draft; InControl's pad name; Mouse.current without a null check) and its file-access survey (StreamingAssets and dataPath reads)
+  out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - StreamingAssets read as files (references to Application.streamingAssetsPath and System.IO in Assembly-CSharp (asmpatch, when built, says which reads reach System.IO)): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - reads the mouse and also selects UI elements: try the pad first; UA_POINTER=1 (with UA_POINTER_TOGGLE) where menus need the mouse
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "auto", "streaming_assets": "both"}, "runtime": {"UA_PAD_NAME": "Microsoft X-Box 360 pad"}, "wwise": {"banks": "StreamingAssets/Audio/GeneratedSoundBanks/Linux"}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+  err: .. asmpatch --survey
+== check-net35
+command 0: port check <BASE>/in/net35 --asmpatch none -> exit 0
+  out: game: Old_Data
+  out:   data: <BASE>/in/net35/Old_Data (0 MB; the build: 0 MB)
+  out:   build: linux, Old.x86 (x86)
+  out:   Unity 2017.4.30f1, mono, .NET 3.5 (libmono)
+  out:   code: Assembly-CSharp, Rewired_Core
+  out:   input: Rewired Rewired_Core.dll (DLL edition); InControl no; Input System no; legacy Input: axes/buttons 1; OnMouse* 0; UI pointer handlers 0; UI selection calls 0
+  out:   verdict: pad
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
+  out:         + the donor donor-2017.4.30f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - the Linux build is x86 (box64 runs x86-64; box86 would be needed)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.30f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: graphics APIs not read: assuming glcore
+  out: - Rewired (Rewired_Core.dll (DLL edition)): asmpatch's rewired-android patch (Rewired then reads the pad through Unity's Android input); UA_PAD_NAME names the pad as one Rewired's Android definitions know
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "auto"}, "runtime": {"UA_PAD_NAME": "Xbox Wireless Controller"}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 1: port check <BASE>/in/net35 --asmpatch none --json -> exit 0
+  out: {
+  out:  "path": "<BASE>/in/net35",
+  out:  "notes": [
+  out:   "Rewired (Rewired_Core.dll (DLL edition)): asmpatch's rewired-android patch (Rewired then reads the pad through Unity's Android input); UA_PAD_NAME names the pad as one Rewired's Android definitions know"
+  out:  ],
+  out:  "warnings": [
+  out:   "graphics APIs not read: assuming glcore"
+  out:  ],
+  out:  "suggest": {
+  out:   "runtime": {
+  out:    "UA_PAD_NAME": "Xbox Wireless Controller"
+  out:   },
+  out:   "android_data": {
+  out:    "asmpatch": "auto"
+  out:   },
+  out:   "convert": {}
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/net35/Old_Data",
+  out:  "build": "linux",
+  out:  "exe": "Old.x86",
+  out:  "arch": "x86",
+  out:  "root": "<BASE>/in/net35",
+  out:  "backend": "mono",
+  out:  "compressed": false,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2017.4.30f1",
+  out:  "unity_line": "2017.4",
+  out:  "unity_supported": true,
+  out:  "scripting_runtime": ".NET 3.5 (libmono)",
+  out:  "data_survey": {
+  out:   "product": null,
+  out:   "company": null,
+  out:   "graphics_apis": null,
+  out:   "color_space": null,
+  out:   "active_input": null,
+  out:   "screen": null,
+  out:   "scenes": null,
+  out:   "scripts_used": {},
+  out:   "video_players": 0,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "notes": []
+  out:  },
+  out:  "streaming_survey": {
+  out:   "bundles": 0,
+  out:   "mb": 0.0,
+  out:   "scene_bundles": [],
+  out:   "shaders": {},
+  out:   "shader_bundles": {},
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "odd": [],
+  out:   "unread": [],
+  out:   "no_serialized": []
+  out:  },
+  out:  "product": null,
+  out:  "graphics_apis": null,
+  out:  "shader_source": "glcore",
+  out:  "code": {
+  out:   "assemblies": [
+  out:    "Assembly-CSharp",
+  out:    "Rewired_Core"
+  out:   ],
+  out:   "libraries": [
+  out:    "mscorlib"
+  out:   ],
+  out:   "unreadable": [],
+  out:   "rewired": "Rewired_Core.dll (DLL edition)",
+  out:   "incontrol": false,
+  out:   "playmaker": null,
+  out:   "input_system": false,
+  out:   "legacy": {
+  out:    "axes/buttons": 1,
+  out:    "keys": 0,
+  out:    "mouse": 0,
+  out:    "touch": 0
+  out:   },
+  out:   "mouse_messages": [],
+  out:   "pointer_handlers": 0,
+  out:   "navigation": 0,
+  out:   "selects": 0,
+  out:   "text_input": [],
+  out:   "video": [],
+  out:   "pinvoke": {},
+  out:   "services": [],
+  out:   "cursor": [],
+  out:   "screen": []
+  out:  },
+  out:  "input_verdict": "pad",
+  out:  "plugins": [],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+  out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
+  out:     "a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)",
+  out:     "the donor donor-2017.4.30f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> Il2cppArm64 <DONORS dir>`)",
+  out:     "the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "the Linux build is x86 (box64 runs x86-64; box86 would be needed)"
+  out:    ],
+  out:    "needs": []
+  out:   }
+  out:  ],
+  out:  "route": "android",
+  out:  "donors": [
+  out:   "donor-2017.4.30f1-mono-armv7.apk"
+  out:  ]
+  out: }
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+== check-windows
+command 0: port check <BASE>/in/windows --asmpatch none -> exit 1
+  out: game: Win_Data
+  out:   data: <BASE>/in/windows/Win_Data (0 MB; the build: 0 MB)
+  out:   build: windows, Win.exe (x86_64)
+  out:   Unity 2021.3.5f1, il2cpp
+  out: 
+  out: routes:
+  out:   [no ] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         - scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player)
+  out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
+  out:         + the donor donor-2021.3.5f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2021.3.5f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         - needs a Mono build (an IL2CPP desktop build is compiled for its own system)
+  out:   [no ] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         - needs a Mono build
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - needs the game's Linux build (this one is windows)
+  out: 
+  out: unsupported: scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs a Mono build; needs the game's Linux build (this one is windows)
+  out: - native plugins: discord_game_sdk.dll: Discord: not on the handheld (calls fail)
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 1: port check <BASE>/in/windows --json -> exit 1
+  out: {
+  out:  "path": "<BASE>/in/windows",
+  out:  "notes": [
+  out:   "native plugins: discord_game_sdk.dll: Discord: not on the handheld (calls fail)"
+  out:  ],
+  out:  "warnings": [],
+  out:  "suggest": {
+  out:   "runtime": {},
+  out:   "android_data": {
+  out:    "asmpatch": "off"
+  out:   },
+  out:   "convert": {
+  out:    "shaders": {
+  out:     "from": [
+  out:      "d3d11"
+  out:     ]
+  out:    }
+  out:   }
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/windows/Win_Data",
+  out:  "build": "windows",
+  out:  "exe": "Win.exe",
+  out:  "arch": "x86_64",
+  out:  "root": "<BASE>/in/windows",
+  out:  "backend": "il2cpp",
+  out:  "compressed": false,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2021.3.5f1",
+  out:  "unity_line": "2021.3",
+  out:  "unity_supported": true,
+  out:  "data_survey": {
+  out:   "product": null,
+  out:   "company": null,
+  out:   "graphics_apis": null,
+  out:   "color_space": null,
+  out:   "active_input": null,
+  out:   "screen": null,
+  out:   "scenes": null,
+  out:   "scripts_used": {},
+  out:   "video_players": 0,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "notes": []
+  out:  },
+  out:  "streaming_survey": {
+  out:   "bundles": 0,
+  out:   "mb": 0.0,
+  out:   "scene_bundles": [],
+  out:   "shaders": {},
+  out:   "shader_bundles": {},
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "odd": [],
+  out:   "unread": [],
+  out:   "no_serialized": []
+  out:  },
+  out:  "product": null,
+  out:  "graphics_apis": null,
+  out:  "shader_source": "d3d11",
+  out:  "code": null,
+  out:  "plugins": [
+  out:   [
+  out:    "Plugins/x86_64/discord_game_sdk.dll",
+  out:    "Discord: not on the handheld (calls fail)"
+  out:   ]
+  out:  ],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": false,
+  out:    "why": [
+  out:     "scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player)"
+  out:    ],
+  out:    "needs": [
+  out:     "Direct3D 11 shaders: `shaders.from = [\"d3d11\"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)",
+  out:     "the donor donor-2021.3.5f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2021.3.5f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "needs a Mono build (an IL2CPP desktop build is compiled for its own system)"
+  out:    ],
+  out:    "needs": []
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "needs a Mono build"
+  out:    ],
+  out:    "needs": []
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "needs the game's Linux build (this one is windows)"
+  out:    ],
+  out:    "needs": []
+  out:   }
+  out:  ],
+  out:  "route": null,
+  out:  "unsupported": "scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs a Mono build; needs the game's Linux build (this one is windows)"
+  out: }
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+== check-two
+command 0: port check <BASE>/in/two --asmpatch none -> exit 0
+  out: game: Thing_Data
+  out:   data: <BASE>/in/two/linux/Thing_Data (0 MB; the build: 0 MB)
+  out:   build: linux, Thing.x86_64 (x86_64)
+  out:   Unity 5.4.1f1 (outside the converter's range), mono, .NET 3.5 (libmono)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl no; Input System no; legacy Input: mouse 2; OnMouse* 1; UI pointer handlers 0; UI selection calls 0
+  out:   verdict: pointer
+  out:   also: windows build (mono) at <BASE>/in/two/win/Thing_Data
+  out: 
+  out: routes:
+  out:   [no ] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         - Unity 5.4.1f1: the converter supports 5.6 - 6000.6
+  out:         + the donor donor-5.4.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 5.4.1f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         - Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4
+  out:   [no ] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         - a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries)
+  out:         - Unity 5.4.1f1: the arm64 Android players start with 2017.4
+  out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
+  out:         + GL mode mesa (data as it is)
+  out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out: 
+  out: recommended route: box64
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: MovieTexture (the legacy movie player): Unity's Android player has none; those videos do not play
+  out: - menus look mouse-only (the code reads the mouse and selects no UI element for pad navigation): pointer mode, UA_POINTER=1; if the game draws its own cursor, also UA_POINTER_CURSOR=0
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "runtime": {"UA_POINTER": "1"}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 1: port check <BASE>/in/two/win --asmpatch none -> exit 1
+  out: game: Thing_Data
+  out:   data: <BASE>/in/two/win/Thing_Data (0 MB; the build: 0 MB)
+  out:   build: windows, Thing.exe (x86)
+  out:   Unity 5.4.1f1 (outside the converter's range), mono, .NET 3.5 (libmono)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl no; Input System no; legacy Input: none; OnMouse* 0; UI pointer handlers 0; UI selection calls 0
+  out:   verdict: none
+  out: 
+  out: routes:
+  out:   [no ] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         - Unity 5.4.1f1: the converter supports 5.6 - 6000.6
+  out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
+  out:         + the donor donor-5.4.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 5.4.1f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         - Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4
+  out:   [no ] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         - a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries)
+  out:         - Unity 5.4.1f1: the arm64 Android players start with 2017.4
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - needs the game's Linux build (this one is windows)
+  out: 
+  out: unsupported: Unity 5.4.1f1: the converter supports 5.6 - 6000.6; Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4; a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries); needs the game's Linux build (this one is windows)
+  out: warning: graphics APIs not read: assuming d3d11
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+== check-mac
+command 0: port check <BASE>/in/mac/Mac Game.app --asmpatch none -> exit 0
+  out: game: Data
+  out:   data: <BASE>/in/mac/Mac Game.app/Contents/Resources/Data (0 MB; the build: 0 MB)
+  out:   build: macos, Mac Game (universal)
+  out:   Unity 2020.3.1f1, mono, .NET 4.x (libmonobdwgc-2.0)
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl no; Input System no; legacy Input: none; OnMouse* 0; UI pointer handlers 0; UI selection calls 0
+  out:   verdict: none
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + the donor donor-2020.3.1f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - needs the game's Linux build (this one is macos)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2020.3.1f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: graphics APIs not read: assuming glcore
+  out: - native plugins: fmodstudio.bundle: FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 1: port check <BASE>/in/mac --asmpatch none --json -> exit 0
+  out: {
+  out:  "path": "<BASE>/in/mac",
+  out:  "notes": [
+  out:   "native plugins: fmodstudio.bundle: FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops"
+  out:  ],
+  out:  "warnings": [
+  out:   "graphics APIs not read: assuming glcore"
+  out:  ],
+  out:  "suggest": {
+  out:   "runtime": {},
+  out:   "android_data": {
+  out:    "asmpatch": "off"
+  out:   },
+  out:   "convert": {}
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/mac/Mac Game.app/Contents/Resources/Data",
+  out:  "build": "macos",
+  out:  "exe": "Mac Game",
+  out:  "arch": "universal",
+  out:  "root": "<BASE>/in/mac/Mac Game.app",
+  out:  "backend": "mono",
+  out:  "compressed": false,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2020.3.1f1",
+  out:  "unity_line": "2020.3",
+  out:  "unity_supported": true,
+  out:  "scripting_runtime": ".NET 4.x (libmonobdwgc-2.0)",
+  out:  "data_survey": {
+  out:   "product": null,
+  out:   "company": null,
+  out:   "graphics_apis": null,
+  out:   "color_space": null,
+  out:   "active_input": null,
+  out:   "screen": null,
+  out:   "scenes": null,
+  out:   "scripts_used": {},
+  out:   "video_players": 0,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "notes": []
+  out:  },
+  out:  "streaming_survey": {
+  out:   "bundles": 0,
+  out:   "mb": 0.0,
+  out:   "scene_bundles": [],
+  out:   "shaders": {},
+  out:   "shader_bundles": {},
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "odd": [],
+  out:   "unread": [],
+  out:   "no_serialized": []
+  out:  },
+  out:  "product": null,
+  out:  "graphics_apis": null,
+  out:  "shader_source": "glcore",
+  out:  "code": {
+  out:   "assemblies": [
+  out:    "Assembly-CSharp"
+  out:   ],
+  out:   "libraries": [],
+  out:   "unreadable": [],
+  out:   "rewired": null,
+  out:   "incontrol": false,
+  out:   "playmaker": null,
+  out:   "input_system": false,
+  out:   "legacy": {
+  out:    "axes/buttons": 0,
+  out:    "keys": 0,
+  out:    "mouse": 0,
+  out:    "touch": 0
+  out:   },
+  out:   "mouse_messages": [],
+  out:   "pointer_handlers": 0,
+  out:   "navigation": 0,
+  out:   "selects": 0,
+  out:   "text_input": [],
+  out:   "video": [],
+  out:   "pinvoke": {},
+  out:   "services": [],
+  out:   "cursor": [],
+  out:   "screen": []
+  out:  },
+  out:  "input_verdict": "none",
+  out:  "plugins": [
+  out:   [
+  out:    "../../PlugIns/fmodstudio.bundle",
+  out:    "FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops"
+  out:   ]
+  out:  ],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+  out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
+  out:     "the donor donor-2020.3.1f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> Il2cppArm64 <DONORS dir>`)",
+  out:     "the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "needs the game's Linux build (this one is macos)"
+  out:    ],
+  out:    "needs": []
+  out:   }
+  out:  ],
+  out:  "route": "android",
+  out:  "donors": [
+  out:   "donor-2020.3.1f1-mono-armv7.apk"
+  out:  ]
+  out: }
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+== check-none
+command 0: port check <BASE>/in/none -> exit 1
+  err: <BASE>/in/none: no Unity game here (no folder with globalgamemanagers, mainData or data.unity3d, no Android build: .apk, .xapk, .apks, .aab)
+command 1: port check <BASE>/in/missing -> exit 1
+  err: <BASE>/in/missing: no Unity game here (no folder with globalgamemanagers, mainData or data.unity3d, no Android build: .apk, .xapk, .apks, .aab)
+command 2: port check -> exit 2
+  err: usage: pmunity port check [-h] [--json] [--asmpatch ASMPATCH] [--no-scan] game
+  err: pmunity port check: error: the following arguments are required: game
+== routes
+command 0: port routes -> exit 0
+  out: android       templates     Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out: il2cpp-arm64  templates     the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out: mono-arm64    templates     the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out: box64         templates     the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out: apk           templates     the game's own Android build (`pmunity apk`)
+== route
+command 0: route <BASE>/in/linux -> exit 0
+  out: My Game: <BASE>/in/linux/My Game/My Game_Data
+  out:   Unity 2019.4.8f1, linux build, mono
+  out:   executable My Game.x86_64: elf x86_64, needs GLIBC_2.17
+  out:   player UnityPlayer.so: renderers glcore, vulkan, gles; x86_64 side asks for GLIBC_2.27
+  out:   plugin x86_64/ScreenSelector.so: elf x86_64 (Unity's start-up resolution dialog (GTK))
+  out:   plugin x86_64/libAkSoundEngine.so: elf x86_64 (Wwise sound engine)
+  out:   plugin x86_64/libmylib.so: elf x86_64
+  out:   plugin x86_64/libsteam_api.so: elf x86_64 (Steamworks)
+  out: route: box64 (the game's Linux build under box64)
+  out:   android: does not fit
+  out:     why: Unity 2019.4.8f1 is in the covered range 5.6 - 6000.6
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: linux build: OpenGL Core shaders, converted to GLES 3
+  out:     blocker: plugin x86_64/libmylib.so: an x86-only native plugin: the Android player needs an ARM build of it (or a game that runs without it)
+  out:     caveat: plugin x86_64/libAkSoundEngine.so (Wwise sound engine): needs Wwise's ARM Android libraries: no sound (or no start) without them [major]
+  out:   box64: fits
+  out:     why: Linux x86_64 build (My Game.x86_64): runs unmodified under box64
+  out:     caveat: x86_64 libraries box64 does not wrap; the port must ship x86_64 copies: libfoo.so.1
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: desktop OpenGL 3.2+ core for the OpenGL Core renderer: Mesa (Panfrost / Turnip / llvmpipe); gl4es (GL 2.1) is not enough
+  out:     need: or, on GLES-only drivers, the player's OpenGL ES mode: -force-gles with GLES 3 shaders added (pmunity convert --config tools/box64/gles.json) and glxes (GLX for ES contexts on EGL)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+  out:     need: native (aarch64) libraries box64 maps the x86_64 ones to: libGL.so.1, libX11.so.6, libasound.so.2
+  out:     need: x86_64 libraries from box64's x64lib, shipped with the port: libgcc_s.so.1, libstdc++.so.6
+command 1: route <BASE>/in/linux --json -> exit 0
+  out: {
+  out:  "data": "<BASE>/in/linux/My Game/My Game_Data",
+  out:  "name": "My Game",
+  out:  "layout_kind": "folder",
+  out:  "unity": "2019.4.8f1",
+  out:  "compressed": false,
+  out:  "platform": "linux",
+  out:  "backend": "mono",
+  out:  "mono_runtime": null,
+  out:  "executables": [
+  out:   {
+  out:    "file": "My Game.x86_64",
+  out:    "format": "elf",
+  out:    "arch": "x86_64",
+  out:    "needed": [
+  out:     "libdl.so.2",
+  out:     "libc.so.6",
+  out:     "UnityPlayer.so",
+  out:     "libgcc_s.so.1"
+  out:    ],
+  out:    "glibc": "GLIBC_2.17",
+  out:    "glibcxx": "GLIBCXX_3.4.9"
+  out:   }
+  out:  ],
+  out:  "player_binary": "UnityPlayer.so",
+  out:  "player": {
+  out:   "renderers": [
+  out:    "glcore",
+  out:    "vulkan",
+  out:    "gles"
+  out:   ],
+  out:   "flags": [
+  out:    "gfx-direct",
+  out:    "glcore",
+  out:    "glcore45",
+  out:    "opengl",
+  out:    "vulkan"
+  out:   ],
+  out:   "egl": true,
+  out:   "needed": [
+  out:    "libm.so.6",
+  out:    "libstdc++.so.6",
+  out:    "libfoo.so.1"
+  out:   ],
+  out:   "dlopen": [
+  out:    "libGL.so.1",
+  out:    "libX11.so.6",
+  out:    "libasound.so.2",
+  out:    "libfoo.so.1",
+  out:    "libm.so.6",
+  out:    "libnotused.so",
+  out:    "libstdc++.so.6"
+  out:   ],
+  out:   "glibc": "GLIBC_2.27",
+  out:   "glibcxx": null
+  out:  },
+  out:  "plugins": [
+  out:   {
+  out:    "file": "x86_64/ScreenSelector.so",
+  out:    "format": "elf",
+  out:    "arch": "x86_64",
+  out:    "what": "Unity's start-up resolution dialog (GTK)",
+  out:    "android": "not used",
+  out:    "severity": "ok",
+  out:    "box64": "shown only when the build enables the dialog (needs GTK 2 on the device; pass -screen-* arguments)"
+  out:   },
+  out:   {
+  out:    "file": "x86_64/libAkSoundEngine.so",
+  out:    "format": "elf",
+  out:    "arch": "x86_64",
+  out:    "what": "Wwise sound engine",
+  out:    "android": "needs Wwise's ARM Android libraries: no sound (or no start) without them",
+  out:    "severity": "major",
+  out:    "box64": "emulated"
+  out:   },
+  out:   {
+  out:    "file": "x86_64/libmylib.so",
+  out:    "format": "elf",
+  out:    "arch": "x86_64",
+  out:    "what": null,
+  out:    "android": "an x86-only native plugin: the Android player needs an ARM build of it (or a game that runs without it)",
+  out:    "severity": "major",
+  out:    "box64": "emulated"
+  out:   },
+  out:   {
+  out:    "file": "x86_64/libsteam_api.so",
+  out:    "format": "elf",
+  out:    "arch": "x86_64",
+  out:    "what": "Steamworks",
+  out:    "android": "replaced by the runtime's libsteam_api stub (SteamAPI_Init fails, as without a Steam client)",
+  out:    "severity": "ok",
+  out:    "box64": "emulated; without a Steam client SteamAPI_Init fails (games usually go on; a few quit)"
+  out:   }
+  out:  ],
+  out:  "libraries": {
+  out:   "native": [
+  out:    "libGL.so.1",
+  out:    "libX11.so.6",
+  out:    "libasound.so.2"
+  out:   ],
+  out:   "x64lib": [
+  out:    "libgcc_s.so.1",
+  out:    "libstdc++.so.6"
+  out:   ],
+  out:   "game": [
+  out:    "UnityPlayer.so"
+  out:   ],
+  out:   "emulated": [
+  out:    "libfoo.so.1"
+  out:   ],
+  out:   "runtime": [
+  out:    "libGL.so.1",
+  out:    "libX11.so.6",
+  out:    "libasound.so.2"
+  out:   ]
+  out:  },
+  out:  "android": {
+  out:   "fits": false,
+  out:   "why": [
+  out:    "Unity 2019.4.8f1 is in the covered range 5.6 - 6000.6",
+  out:    "Mono build: its assemblies run on the Android player's Mono",
+  out:    "linux build: OpenGL Core shaders, converted to GLES 3"
+  out:   ],
+  out:   "blockers": [
+  out:    "plugin x86_64/libmylib.so: an x86-only native plugin: the Android player needs an ARM build of it (or a game that runs without it)"
+  out:   ],
+  out:   "caveats": [
+  out:    "plugin x86_64/libAkSoundEngine.so (Wwise sound engine): needs Wwise's ARM Android libraries: no sound (or no start) without them [major]"
+  out:   ]
+  out:  },
+  out:  "box64": {
+  out:   "fits": true,
+  out:   "why": [
+  out:    "Linux x86_64 build (My Game.x86_64): runs unmodified under box64"
+  out:   ],
+  out:   "blockers": [],
+  out:   "caveats": [
+  out:    "x86_64 libraries box64 does not wrap; the port must ship x86_64 copies: libfoo.so.1",
+  out:    "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:   ],
+  out:   "needs": [
+  out:    "desktop OpenGL 3.2+ core for the OpenGL Core renderer: Mesa (Panfrost / Turnip / llvmpipe); gl4es (GL 2.1) is not enough",
+  out:    "or, on GLES-only drivers, the player's OpenGL ES mode: -force-gles with GLES 3 shaders added (pmunity convert --config tools/box64/gles.json) and glxes (GLX for ES contexts on EGL)",
+  out:    "an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X",
+  out:    "native (aarch64) libraries box64 maps the x86_64 ones to: libGL.so.1, libX11.so.6, libasound.so.2",
+  out:    "x86_64 libraries from box64's x64lib, shipped with the port: libgcc_s.so.1, libstdc++.so.6"
+  out:   ]
+  out:  },
+  out:  "route": "box64"
+  out: }
+command 2: route <BASE>/in/linux --env -> exit 0
+  out: GAME_DIR='My Game'
+  out: EXE='My Game.x86_64'
+  out: DATA='My Game_Data'
+  out: UNITY=2019.4.8f1
+  out: BACKEND=mono
+  out: GL_MODE=gles
+command 3: route <BASE>/in/linux/My Game/My Game.x86_64 --env -> exit 0
+  out: GAME_DIR=.
+  out: EXE='My Game.x86_64'
+  out: DATA='My Game_Data'
+  out: UNITY=2019.4.8f1
+  out: BACKEND=mono
+  out: GL_MODE=gles
+command 4: route <BASE>/in/net35 -> exit 0
+  out: Old: <BASE>/in/net35/Old_Data
+  out:   Unity 2017.4.30f1, linux build, mono, legacy Mono (.NET 2.0/3.5)
+  out: route: android (Unity's Android player, data converted)
+  out:   android: fits
+  out:     why: Unity 2017.4.30f1 is in the covered range 5.6 - 6000.6
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: linux build: OpenGL Core shaders, converted to GLES 3
+  out:   box64: does not fit
+  out:     blocker: no Linux build found
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+command 5: route <BASE>/in/net35 --env -> exit 1
+  err: <BASE>/in/net35: no Linux x86-64 build here
+command 6: route <BASE>/in/windows -> exit 0
+  out: Win: <BASE>/in/windows/Win_Data
+  out:   Unity 2021.3.5f1, windows build, il2cpp
+  out:   executable Win.exe: pe x86_64
+  out:   IL2CPP code GameAssembly.dll (x86_64)
+  out:   plugin x86_64/discord_game_sdk.dll: pe x86_64 (Discord SDK)
+  out: route: none
+  out:   android: does not fit
+  out:     why: Unity 2021.3.5f1 is in the covered range 5.6 - 6000.6
+  out:     blocker: IL2CPP build: the game's code is compiled x86 machine code, there is no IL to run on the Android player's Mono (unless the game's own Android build is owned)
+  out:     caveat: Windows build: Direct3D 11 shaders only, translated with `shaders.from = ["d3d11"]` (tools/hlslcc; pmhlslcc for the handheld)
+  out:     caveat: Windows build of 2021.2+: its class libraries are the Windows-only unityjit-win32 ones; `python -m pmunity.winbcl` fetches the Unix ones for `android-data --managed-file`
+  out:     caveat: plugin x86_64/discord_game_sdk.dll (Discord SDK): missing: Discord features off
+  out:   box64: does not fit
+  out:     blocker: IL2CPP windows build without a Linux one: its code is compiled for windows; get the game's Linux build
+  out:     caveat: plugin x86_64/discord_game_sdk.dll (Discord SDK): emulated; fails without a Discord client
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+command 7: route <BASE>/in/windows --json -> exit 0
+  out: {
+  out:  "data": "<BASE>/in/windows/Win_Data",
+  out:  "name": "Win",
+  out:  "layout_kind": "folder",
+  out:  "unity": "2021.3.5f1",
+  out:  "compressed": false,
+  out:  "platform": "windows",
+  out:  "backend": "il2cpp",
+  out:  "mono_runtime": null,
+  out:  "executables": [
+  out:   {
+  out:    "file": "Win.exe",
+  out:    "format": "pe",
+  out:    "arch": "x86_64"
+  out:   }
+  out:  ],
+  out:  "player_binary": null,
+  out:  "game_assembly": {
+  out:   "file": "GameAssembly.dll",
+  out:   "arch": "x86_64",
+  out:   "needed": [],
+  out:   "glibc": null
+  out:  },
+  out:  "plugins": [
+  out:   {
+  out:    "file": "x86_64/discord_game_sdk.dll",
+  out:    "format": "pe",
+  out:    "arch": "x86_64",
+  out:    "what": "Discord SDK",
+  out:    "android": "missing: Discord features off",
+  out:    "severity": "minor",
+  out:    "box64": "emulated; fails without a Discord client"
+  out:   }
+  out:  ],
+  out:  "libraries": {
+  out:   "native": [],
+  out:   "x64lib": [],
+  out:   "game": [],
+  out:   "emulated": [],
+  out:   "runtime": []
+  out:  },
+  out:  "android": {
+  out:   "fits": false,
+  out:   "why": [
+  out:    "Unity 2021.3.5f1 is in the covered range 5.6 - 6000.6"
+  out:   ],
+  out:   "blockers": [
+  out:    "IL2CPP build: the game's code is compiled x86 machine code, there is no IL to run on the Android player's Mono (unless the game's own Android build is owned)"
+  out:   ],
+  out:   "caveats": [
+  out:    "Windows build: Direct3D 11 shaders only, translated with `shaders.from = [\"d3d11\"]` (tools/hlslcc; pmhlslcc for the handheld)",
+  out:    "Windows build of 2021.2+: its class libraries are the Windows-only unityjit-win32 ones; `python -m pmunity.winbcl` fetches the Unix ones for `android-data --managed-file`",
+  out:    "plugin x86_64/discord_game_sdk.dll (Discord SDK): missing: Discord features off"
+  out:   ]
+  out:  },
+  out:  "box64": {
+  out:   "fits": false,
+  out:   "why": [],
+  out:   "blockers": [
+  out:    "IL2CPP windows build without a Linux one: its code is compiled for windows; get the game's Linux build"
+  out:   ],
+  out:   "caveats": [
+  out:    "plugin x86_64/discord_game_sdk.dll (Discord SDK): emulated; fails without a Discord client"
+  out:   ],
+  out:   "needs": [
+  out:    "an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X"
+  out:   ]
+  out:  },
+  out:  "route": null
+  out: }
+command 8: route <BASE>/in/windows --env -> exit 1
+  err: <BASE>/in/windows: no Linux x86-64 build here
+command 9: route <BASE>/in/two -> exit 0
+  out: Thing: <BASE>/in/two/linux/Thing_Data
+  out:   Unity 5.4.1f1, linux build, mono
+  out: route: none
+  out:   android: does not fit
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: linux build: OpenGL Core shaders, converted to GLES 3
+  out:     blocker: Unity 5.4.1f1: the converter and runtime cover 5.6 - 6000.6
+  out:   box64: does not fit
+  out:     blocker: no Linux build found
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+  out: 
+  out: Thing: <BASE>/in/two/win/Thing_Data
+  out:   Unity 5.4.1f1, windows build, mono
+  out:   executable Thing.exe: pe x86
+  out: route: none
+  out:   android: does not fit
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     blocker: Unity 5.4.1f1: the converter and runtime cover 5.6 - 6000.6
+  out:     caveat: Windows build: Direct3D 11 shaders only, translated with `shaders.from = ["d3d11"]` (tools/hlslcc; pmhlslcc for the handheld)
+  out:   box64: does not fit
+  out:     blocker: Windows-only Mono build: Unity's Linux player needs OpenGL Core shaders and this data has Direct3D ones; get the macOS or Linux build
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+command 10: route <BASE>/in/two --json -> exit 0
+  out: [
+  out:  {
+  out:   "data": "<BASE>/in/two/linux/Thing_Data",
+  out:   "name": "Thing",
+  out:   "layout_kind": "folder",
+  out:   "unity": "5.4.1f1",
+  out:   "compressed": false,
+  out:   "platform": "linux",
+  out:   "backend": "mono",
+  out:   "mono_runtime": null,
+  out:   "executables": [],
+  out:   "player_binary": null,
+  out:   "plugins": [],
+  out:   "libraries": {
+  out:    "native": [],
+  out:    "x64lib": [],
+  out:    "game": [],
+  out:    "emulated": [],
+  out:    "runtime": []
+  out:   },
+  out:   "android": {
+  out:    "fits": false,
+  out:    "why": [
+  out:     "Mono build: its assemblies run on the Android player's Mono",
+  out:     "linux build: OpenGL Core shaders, converted to GLES 3"
+  out:    ],
+  out:    "blockers": [
+  out:     "Unity 5.4.1f1: the converter and runtime cover 5.6 - 6000.6"
+  out:    ],
+  out:    "caveats": []
+  out:   },
+  out:   "box64": {
+  out:    "fits": false,
+  out:    "why": [],
+  out:    "blockers": [
+  out:     "no Linux build found"
+  out:    ],
+  out:    "caveats": [
+  out:     "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:    ],
+  out:    "needs": [
+  out:     "an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X"
+  out:    ]
+  out:   },
+  out:   "route": null
+  out:  },
+  out:  {
+  out:   "data": "<BASE>/in/two/win/Thing_Data",
+  out:   "name": "Thing",
+  out:   "layout_kind": "folder",
+  out:   "unity": "5.4.1f1",
+  out:   "compressed": false,
+  out:   "platform": "windows",
+  out:   "backend": "mono",
+  out:   "mono_runtime": null,
+  out:   "executables": [
+  out:    {
+  out:     "file": "Thing.exe",
+  out:     "format": "pe",
+  out:     "arch": "x86"
+  out:    }
+  out:   ],
+  out:   "player_binary": null,
+  out:   "plugins": [],
+  out:   "libraries": {
+  out:    "native": [],
+  out:    "x64lib": [],
+  out:    "game": [],
+  out:    "emulated": [],
+  out:    "runtime": []
+  out:   },
+  out:   "android": {
+  out:    "fits": false,
+  out:    "why": [
+  out:     "Mono build: its assemblies run on the Android player's Mono"
+  out:    ],
+  out:    "blockers": [
+  out:     "Unity 5.4.1f1: the converter and runtime cover 5.6 - 6000.6"
+  out:    ],
+  out:    "caveats": [
+  out:     "Windows build: Direct3D 11 shaders only, translated with `shaders.from = [\"d3d11\"]` (tools/hlslcc; pmhlslcc for the handheld)"
+  out:    ]
+  out:   },
+  out:   "box64": {
+  out:    "fits": false,
+  out:    "why": [],
+  out:    "blockers": [
+  out:     "Windows-only Mono build: Unity's Linux player needs OpenGL Core shaders and this data has Direct3D ones; get the macOS or Linux build"
+  out:    ],
+  out:    "caveats": [
+  out:     "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:    ],
+  out:    "needs": [
+  out:     "an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X"
+  out:    ]
+  out:   },
+  out:   "route": null
+  out:  }
+  out: ]
+command 11: route <BASE>/in/two --env -> exit 1
+  err: <BASE>/in/two: no Linux x86-64 build here
+command 12: route <BASE>/in/mac -> exit 0
+  out: Mac Game: <BASE>/in/mac/Mac Game.app/Contents/Resources/Data
+  out:   Unity 2020.3.1f1, macos build, mono, bdwgc (MonoBleedingEdge, .NET 4.x)
+  out:   executable Contents/MacOS/Mac Game: macho x86_64+arm64
+  out:   plugin fmodstudio.bundle: macho x86_64 (FMOD Studio integration)
+  out: route: android (Unity's Android player, data converted)
+  out:   android: fits
+  out:     why: Unity 2020.3.1f1 is in the covered range 5.6 - 6000.6
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: macos build: OpenGL Core shaders, converted to GLES 3
+  out:     caveat: plugin fmodstudio.bundle (FMOD Studio integration): needs FMOD's ARM Android libraries, which a desktop build does not carry: the game is silent without them [major]
+  out:   box64: fits
+  out:     why: macOS Mono build: its data runs on Unity's own Linux player of 2020.3.1f1 (Unity's Linux Mono support installer), under box64
+  out:     caveat: the Linux player comes from Unity's installer (download on the device, not shipped)
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+command 13: route <BASE>/in/mac --json -> exit 0
+  out: {
+  out:  "data": "<BASE>/in/mac/Mac Game.app/Contents/Resources/Data",
+  out:  "name": "Mac Game",
+  out:  "layout_kind": "macos-app",
+  out:  "unity": "2020.3.1f1",
+  out:  "compressed": false,
+  out:  "platform": "macos",
+  out:  "backend": "mono",
+  out:  "mono_runtime": "bdwgc (MonoBleedingEdge, .NET 4.x)",
+  out:  "executables": [
+  out:   {
+  out:    "file": "Contents/MacOS/Mac Game",
+  out:    "format": "macho",
+  out:    "arch": "x86_64+arm64"
+  out:   }
+  out:  ],
+  out:  "player_binary": null,
+  out:  "plugins": [
+  out:   {
+  out:    "file": "fmodstudio.bundle",
+  out:    "format": "macho",
+  out:    "arch": "x86_64",
+  out:    "what": "FMOD Studio integration",
+  out:    "android": "needs FMOD's ARM Android libraries, which a desktop build does not carry: the game is silent without them",
+  out:    "severity": "major",
+  out:    "box64": "emulated (audio through the device's ALSA / PulseAudio)"
+  out:   }
+  out:  ],
+  out:  "libraries": {
+  out:   "native": [],
+  out:   "x64lib": [],
+  out:   "game": [],
+  out:   "emulated": [],
+  out:   "runtime": []
+  out:  },
+  out:  "android": {
+  out:   "fits": true,
+  out:   "why": [
+  out:    "Unity 2020.3.1f1 is in the covered range 5.6 - 6000.6",
+  out:    "Mono build: its assemblies run on the Android player's Mono",
+  out:    "macos build: OpenGL Core shaders, converted to GLES 3"
+  out:   ],
+  out:   "blockers": [],
+  out:   "caveats": [
+  out:    "plugin fmodstudio.bundle (FMOD Studio integration): needs FMOD's ARM Android libraries, which a desktop build does not carry: the game is silent without them [major]"
+  out:   ]
+  out:  },
+  out:  "box64": {
+  out:   "fits": true,
+  out:   "why": [
+  out:    "macOS Mono build: its data runs on Unity's own Linux player of 2020.3.1f1 (Unity's Linux Mono support installer), under box64"
+  out:   ],
+  out:   "blockers": [],
+  out:   "caveats": [
+  out:    "the Linux player comes from Unity's installer (download on the device, not shipped)",
+  out:    "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:   ],
+  out:   "needs": [
+  out:    "an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X"
+  out:   ]
+  out:  },
+  out:  "route": "android"
+  out: }
+command 14: route <BASE>/in/none -> exit 1
+  err: <BASE>/in/none: no Unity data folder (<Game>_Data with globalgamemanagers, mainData or data.unity3d)
+command 15: route <BASE>/in/linux --launcher launcher.sh --title My Game! -> exit 0
+  out: My Game: <BASE>/in/linux/My Game/My Game_Data
+  out:   Unity 2019.4.8f1, linux build, mono
+  out:   executable My Game.x86_64: elf x86_64, needs GLIBC_2.17
+  out:   player UnityPlayer.so: renderers glcore, vulkan, gles; x86_64 side asks for GLIBC_2.27
+  out:   plugin x86_64/ScreenSelector.so: elf x86_64 (Unity's start-up resolution dialog (GTK))
+  out:   plugin x86_64/libAkSoundEngine.so: elf x86_64 (Wwise sound engine)
+  out:   plugin x86_64/libmylib.so: elf x86_64
+  out:   plugin x86_64/libsteam_api.so: elf x86_64 (Steamworks)
+  out: route: box64 (the game's Linux build under box64)
+  out:   android: does not fit
+  out:     why: Unity 2019.4.8f1 is in the covered range 5.6 - 6000.6
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: linux build: OpenGL Core shaders, converted to GLES 3
+  out:     blocker: plugin x86_64/libmylib.so: an x86-only native plugin: the Android player needs an ARM build of it (or a game that runs without it)
+  out:     caveat: plugin x86_64/libAkSoundEngine.so (Wwise sound engine): needs Wwise's ARM Android libraries: no sound (or no start) without them [major]
+  out:   box64: fits
+  out:     why: Linux x86_64 build (My Game.x86_64): runs unmodified under box64
+  out:     caveat: x86_64 libraries box64 does not wrap; the port must ship x86_64 copies: libfoo.so.1
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: desktop OpenGL 3.2+ core for the OpenGL Core renderer: Mesa (Panfrost / Turnip / llvmpipe); gl4es (GL 2.1) is not enough
+  out:     need: or, on GLES-only drivers, the player's OpenGL ES mode: -force-gles with GLES 3 shaders added (pmunity convert --config tools/box64/gles.json) and glxes (GLX for ES contexts on EGL)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+  out:     need: native (aarch64) libraries box64 maps the x86_64 ones to: libGL.so.1, libX11.so.6, libasound.so.2
+  out:     need: x86_64 libraries from box64's x64lib, shipped with the port: libgcc_s.so.1, libstdc++.so.6
+  err: launcher: launcher.sh
+command 16: route <BASE>/in/two --launcher two.sh --port thing -> exit 1
+  out: Thing: <BASE>/in/two/linux/Thing_Data
+  out:   Unity 5.4.1f1, linux build, mono
+  out: route: none
+  out:   android: does not fit
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: linux build: OpenGL Core shaders, converted to GLES 3
+  out:     blocker: Unity 5.4.1f1: the converter and runtime cover 5.6 - 6000.6
+  out:   box64: does not fit
+  out:     blocker: no Linux build found
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+  out: 
+  out: Thing: <BASE>/in/two/win/Thing_Data
+  out:   Unity 5.4.1f1, windows build, mono
+  out:   executable Thing.exe: pe x86
+  out: route: none
+  out:   android: does not fit
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     blocker: Unity 5.4.1f1: the converter and runtime cover 5.6 - 6000.6
+  out:     caveat: Windows build: Direct3D 11 shaders only, translated with `shaders.from = ["d3d11"]` (tools/hlslcc; pmhlslcc for the handheld)
+  out:   box64: does not fit
+  out:     blocker: Windows-only Mono build: Unity's Linux player needs OpenGL Core shaders and this data has Direct3D ones; get the macOS or Linux build
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+  err: no build here fits the box64 route: no launcher written
+command 17: route <BASE>/in/windows --launcher no.sh -> exit 1
+  out: Win: <BASE>/in/windows/Win_Data
+  out:   Unity 2021.3.5f1, windows build, il2cpp
+  out:   executable Win.exe: pe x86_64
+  out:   IL2CPP code GameAssembly.dll (x86_64)
+  out:   plugin x86_64/discord_game_sdk.dll: pe x86_64 (Discord SDK)
+  out: route: none
+  out:   android: does not fit
+  out:     why: Unity 2021.3.5f1 is in the covered range 5.6 - 6000.6
+  out:     blocker: IL2CPP build: the game's code is compiled x86 machine code, there is no IL to run on the Android player's Mono (unless the game's own Android build is owned)
+  out:     caveat: Windows build: Direct3D 11 shaders only, translated with `shaders.from = ["d3d11"]` (tools/hlslcc; pmhlslcc for the handheld)
+  out:     caveat: Windows build of 2021.2+: its class libraries are the Windows-only unityjit-win32 ones; `python -m pmunity.winbcl` fetches the Unix ones for `android-data --managed-file`
+  out:     caveat: plugin x86_64/discord_game_sdk.dll (Discord SDK): missing: Discord features off
+  out:   box64: does not fit
+  out:     blocker: IL2CPP windows build without a Linux one: its code is compiled for windows; get the game's Linux build
+  out:     caveat: plugin x86_64/discord_game_sdk.dll (Discord SDK): emulated; fails without a Discord client
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+  err: no build here fits the box64 route: no launcher written
+command 18: route -> exit 2
+  err: usage: pmunity route [-h] [--json] [--env] [--launcher OUT] [--port PORT]
+  err:                      [--title TITLE] [--template TEMPLATE]
+  err:                      path
+  err: pmunity route: error: the following arguments are required: path
+file launcher.sh 644 7096 3158567e8634715b
+== new-linux
+command 0: port new mygame --data <BASE>/in/linux --asmpatch none --out port -> exit 0
+  out: checking <BASE>/in/linux
+  out: port mygame (android route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - StreamingAssets read as files (references to Application.streamingAssetsPath and System.IO in Assembly-CSharp (asmpatch, when built, says which reads reach System.IO)): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - reads the mouse and also selects UI elements: try the pad first; UA_POINTER=1 (with UA_POINTER_TOGGLE) where menus need the mouse
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
+  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
+  out:   - port.desc is empty (port.json says "My Game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
+  out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
+  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
+  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
+  out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
+  out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
+  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
+  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+command 1: port new mygame --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh --out port -> exit 0
+  out: using <BASE>/work/port/port.toml
+  out: checking <BASE>/in/linux
+  out: port mygame (android route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - reads of Application.dataPath reach System.IO (asmpatch --survey says where; on Android dataPath is the APK or OBB file): when the game needs files there or writes there, android_data.data_path = true gives those reads Game_Data/ beside the APK, with the data folder's own files
+  out: - StreamingAssets read as files (asmpatch: reads of Application.streamingAssetsPath reach System.IO): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - pad bindings: GameActions.MoveUp, GameActions.MoveDown only on the left stick, which a handheld without sticks lacks: UA_DPAD_STICK = "1,2" (the d-pad drives the left stick on pads without one; docs/input.md); the d-pad's own bindings (GameActions.SelectUp, GameActions.SelectDown) then need UA_DPAD_SWAP = "<button>", a button that gives the d-pad back: UA_DPAD_SWAP = "select" (the game binds nothing to it)
+  out: - pad bindings: GameActions.AimUp, GameActions.AimDown only on the right stick: a handheld without one (the RG34XX-SP and other d-pad-only ones) cannot do those (Aim needs a right stick; nothing in the port stands in for it). Check the game's own options on such a handheld (aim assist, aiming where it moves, another control scheme), or pointer mode where it aims at the mouse; the [controls] draft says so
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - the code uses the Input System's Mouse.current with no null check (Foo.Update, Bar.LateUpdate): a handheld has no mouse unless pointer mode presents one, else those throw NullReferenceException (every frame from an Update): UA_POINTER=1; if the game draws its own cursor, also UA_POINTER_CURSOR=0
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: port.toml and what this check suggests (5; add them, or keep yours on purpose):
+  out:   - [runtime] UA_PAD_NAME = "Microsoft X-Box 360 pad" in port.toml; the check suggests "Xbox 360 Wired Controller"
+  out:   - [runtime] UA_DPAD_STICK = "1,2": used, not in port.toml (add it there)
+  out:   - [runtime] UA_DPAD_SWAP = "select": used, not in port.toml (add it there)
+  out:   - [runtime] UA_POINTER = "1": used, not in port.toml (add it there)
+  out:   - [controls] is empty: the READMEs use the check's draft from the game's pad bindings: "Left Stick" = "Move"; "Right Stick" = "Aim (up, down); handhelds without a right stick cannot"; D-Pad = "the left stick on handhelds without sticks; Select gives the d-pad back: Select (up, down)"; B = "Jump, UI submit"; A = "Dodge roll"; Start = "Pause"; Select = "the d-pad as the d-pad, again as the left stick (handhelds without sticks; the game no longer gets this button)"
+  out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
+  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
+  out:   - port.desc is empty (port.json says "My Game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
+  out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
+  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
+  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
+  out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
+  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
+  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
+  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+command 2: port new fresh --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh -> exit 0
+  out: checking <BASE>/in/linux
+  out: port fresh (android route) -> <BASE>/work/fresh
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: warning: graphics APIs not read: assuming glcore
+  out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
+  out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
+  out: - reads of Application.dataPath reach System.IO (asmpatch --survey says where; on Android dataPath is the APK or OBB file): when the game needs files there or writes there, android_data.data_path = true gives those reads Game_Data/ beside the APK, with the data folder's own files
+  out: - StreamingAssets read as files (asmpatch: reads of Application.streamingAssetsPath reach System.IO): android_data.streaming_assets = "both" puts them beside the APK (Game_Data/StreamingAssets/, 0.0 MB, also in the OBB) and asmpatch's streaming-assets patch gives those reads that folder
+  out: - InControl: it picks its Android profiles at run time by the pad's name; UA_PAD_NAME names the pad as one of them knows (asmpatch --survey lists them), else the pad is an unknown controller (docs/input.md)
+  out: - pad bindings: GameActions.MoveUp, GameActions.MoveDown only on the left stick, which a handheld without sticks lacks: UA_DPAD_STICK = "1,2" (the d-pad drives the left stick on pads without one; docs/input.md); the d-pad's own bindings (GameActions.SelectUp, GameActions.SelectDown) then need UA_DPAD_SWAP = "<button>", a button that gives the d-pad back: UA_DPAD_SWAP = "select" (the game binds nothing to it)
+  out: - pad bindings: GameActions.AimUp, GameActions.AimDown only on the right stick: a handheld without one (the RG34XX-SP and other d-pad-only ones) cannot do those (Aim needs a right stick; nothing in the port stands in for it). Check the game's own options on such a handheld (aim assist, aiming where it moves, another control scheme), or pointer mode where it aims at the mouse; the [controls] draft says so
+  out: - PlayMaker (Assembly-CSharp.dll): asmpatch's optimizations playmaker-loopcount and playmaker-delayedevents (the same behaviour, less work every frame for every FSM: tools/asmpatch/README.md, "Optimizations")
+  out: - the code uses the Input System's Mouse.current with no null check (Foo.Update, Bar.LateUpdate): a handheld has no mouse unless pointer mode presents one, else those throw NullReferenceException (every frame from an Update): UA_POINTER=1; if the game draws its own cursor, also UA_POINTER_CURSOR=0
+  out: - reads keyboard keys (Input.GetKey, 3 references): map pad buttons with UA_KEYMAP (e.g. start:escape) where the pad has no binding
+  out: - Input System package (Unity.InputSystem.dll): its desktop build has no layout for the Android player's pads: asmpatch's inputsystem-android patch registers them (docs/input.md)
+  out: - text input (UI InputField, Input.inputString): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - the code uses VideoPlayer, but the main data has no clips or players (videos from bundles or URLs, or none at all): keep android_data.video_shader on
+  out: - native plugins: libAkSoundEngine.so: Wwise: ua_host's built-in Wwise; its own player plays the banks the setup converts (bank version 128, pmu wwise), else silent; an ARM build of the game's Wwise version also gives sound; libmylib.so: not shipped: a game that calls it needs an ARM build; libsteam_api.so: Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)
+  out: - P/Invoke into AkSoundEngine (Assembly-CSharp), mylib (Assembly-CSharp), steam_api (Assembly-CSharp): each needs an ARM library or a stub
+  out: - services: Steamworks, Wwise
+  out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
+  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
+  out:   - port.desc is empty (port.json says "My Game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
+  out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
+  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
+  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
+  out:   - port.thanks is empty: the README starts with "Thanks to the makers of My Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
+  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
+  out:   - no screenshot (<BASE>/work/fresh/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
+  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+file fresh/.gitignore 644 260 b65b22e3a900afb4
+file fresh/.port_files 644 304 1fe5390ada3f87e3
+file fresh/My Game.sh 644 7786 0e7704fa1f06db63
+file fresh/README.md 644 2207 6d4f5ad843c69d05
+file fresh/fresh/README.md 644 2649 69ab1ba7cf6bccfc
+file fresh/fresh/fresh.ini 644 483 3b8d6ee4c6f53a0b
+file fresh/fresh/gamedata/PUT_GAME_FILES_HERE.txt 644 484 eac23188bc3f8bb8
+file fresh/fresh/gameinfo.xml 644 230 3b18013e79fd66c1
+file fresh/fresh/port.env 644 422 dd6a16bbf4c1544b
+file fresh/fresh/port.json 644 900 abfe260b3637c71f
+file fresh/fresh/setup.txt 644 265 d7323f2f73dd9d11
+file fresh/fresh/setup/convert.json 644 119 9b747d9590464036
+file fresh/fresh/setup/patchscript 644 26569 e7e868aa67ca94e6
+file fresh/fresh/setup/setup.env 644 804 02ed42d15d9cf158
+file fresh/fresh/setup/update 644 4420 52b96b947a42f6f1
+file fresh/package.sh 755 1420 4a7d9c1755ba5747
+file fresh/port.build.json 644 8378 e717f824eccc90e1
+file fresh/port.toml 644 7594 1825efde515bf1d4
+file fresh/testing_thread.txt 644 1329 025ee93a9c890978
+file port/.gitignore 644 260 b65b22e3a900afb4
+file port/.port_files 644 306 82d37c875d9da824
+file port/My Game.sh 644 7794 3434ecb3795483c5
+file port/README.md 644 2212 11aa541ecaeb314f
+file port/mygame/README.md 644 2654 dd8aa69e9860e20e
+file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 eac23188bc3f8bb8
+file port/mygame/gameinfo.xml 644 231 672fce3fcd0b5c87
+file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
+file port/mygame/port.env 644 420 4df2a1ec6aa06b08
+file port/mygame/port.json 644 903 ab947f6f82b20487
+file port/mygame/setup.txt 644 265 d7323f2f73dd9d11
+file port/mygame/setup/convert.json 644 119 9b747d9590464036
+file port/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
+file port/mygame/setup/setup.env 644 806 cb232372d0ca51ae
+file port/mygame/setup/update 644 4420 52b96b947a42f6f1
+file port/package.sh 755 1421 03ede34b985f8f09
+file port/port.build.json 644 8375 673fa582c786da4b
+file port/port.toml 644 7031 30268703ff9b804b
+file port/testing_thread.txt 644 1331 62e45118e9c6b3c4
+== new-net35
+command 0: port new old --data <BASE>/in/net35 --asmpatch none --route mono-arm64 --title The Old Game -> exit 0
+  out: checking <BASE>/in/net35
+  out: a .NET 3.5 game: the release ships Mono's 4.x class libraries for it (player.mono64_classlibs)
+  out: port old (mono-arm64 route) -> <BASE>/work/old
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2017.4.30f1-il2cpp-arm64.apk, donor-2017.4.30f1-mono-armv7.apk
+  out: warning: graphics APIs not read: assuming glcore
+  out: - Rewired (Rewired_Core.dll (DLL edition)): asmpatch's rewired-android patch (Rewired then reads the pad through Unity's Android input); UA_PAD_NAME names the pad as one Rewired's Android definitions know
+  out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
+  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
+  out:   - port.desc is empty (port.json says "The Old Game on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
+  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
+  out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
+  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
+  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
+  out:   - port.thanks is empty: the README starts with "Thanks to the makers of The Old Game for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
+  out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
+  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
+  out:   - no screenshot (<BASE>/work/old/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
+  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+command 1: port new old2 --data <BASE>/in/net35 --asmpatch none --route box64 -> exit 0
+  out: checking <BASE>/in/net35
+  out: port old2 (box64 route) -> <BASE>/work/old2
+  out: warning: graphics APIs not read: assuming glcore
+  out: - Rewired (Rewired_Core.dll (DLL edition)): asmpatch's rewired-android patch (Rewired then reads the pad through Unity's Android input); UA_PAD_NAME names the pad as one Rewired's Android definitions know
+  out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
+  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
+  out:   - port.desc is empty (port.json says "Old: the game's own Linux build under box64."): describe the game in a sentence or two
+  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
+  out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
+  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
+  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
+  out:   - port.thanks is empty: the README starts with "Thanks to the makers of Old for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
+  out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
+  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
+  out:   - no screenshot (<BASE>/work/old2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
+  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+file old/.gitignore 644 260 b65b22e3a900afb4
+file old/.port_files 644 268 38afa7dc50c48f18
+file old/README.md 644 1968 203bf6fa11747301
+file old/The Old Game.sh 644 6835 cd4b461df96091ab
+file old/old/README.md 644 2303 7e4f9a5138b34df0
+file old/old/gamedata/PUT_GAME_FILES_HERE.txt 644 500 498a6c07402291c9
+file old/old/gameinfo.xml 644 304 0860042e509d76ca
+file old/old/old.ini 644 483 3b8d6ee4c6f53a0b
+file old/old/port.env 644 260 4b0092b36cfdb7f0
+file old/old/port.json 644 947 59f6aec359ec2c4f
+file old/old/setup.txt 644 270 a494a1a4fb84c111
+file old/old/setup/convert.json 644 119 9b747d9590464036
+file old/old/setup/patchscript 644 28067 bc2fb85bd18c5a9d
+file old/old/setup/setup.env 644 824 458a26b0e3ced5f4
+file old/package.sh 755 1418 cda68ca91496533e
+file old/port.build.json 644 3653 a118ba01f68bbc41
+file old/port.toml 644 6835 eb605d43901a3936
+file old/testing_thread.txt 644 873 bcf42584cc219986
+file old2/.gitignore 644 260 b65b22e3a900afb4
+file old2/.port_files 644 291 53784478c5399f1a
+file old2/Old.sh 644 7326 b0a6052d37c05b3e
+file old2/README.md 644 1807 655e59cd13201da5
+file old2/old2/README.md 644 1944 213a5125a00f5a5b
+file old2/old2/gamedata/PUT_GAME_FILES_HERE.txt 644 406 e1d6c183be63a1dc
+file old2/old2/gameinfo.xml 644 231 2f0e35b561cb6305
+file old2/old2/old2.ini 644 483 3b8d6ee4c6f53a0b
+file old2/old2/port.env 644 619 9a293581b37c2a95
+file old2/old2/port.json 644 844 09c638e6cb08b797
+file old2/old2/setup.txt 644 261 162f0642f4aac568
+file old2/old2/setup/convert.json 644 119 9b747d9590464036
+file old2/old2/setup/gles.json 644 432 a67e917ccede92da
+file old2/old2/setup/patchscript 644 10941 8209180f3d23c7fa
+file old2/old2/setup/setup.env 644 708 2c316eb1d16a3799
+file old2/package.sh 755 1419 39ac842218d06edc
+file old2/port.build.json 644 3269 0b638d2383bb9982
+file old2/port.toml 644 6651 26078b06fb5851c5
+file old2/testing_thread.txt 644 862 388f6d9db55e8933
+== new-refused
+command 0: port new win --data <BASE>/in/windows --asmpatch none -> exit 1
+  out: checking <BASE>/in/windows
+  err: no route fits this game: scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs a Mono build; needs the game's Linux build (this one is windows)
+command 1: port new nothing --data <BASE>/in/none -> exit 1
+  out: checking <BASE>/in/none
+  err: <BASE>/in/none: no Unity game here (no folder with globalgamemanagers, mainData or data.unity3d, no Android build: .apk, .xapk, .apks, .aab)
+command 2: port new nothing -> exit 1
+  err: --data <game> (or a config with game.unity_versions) is needed
+== check-data
+command 0: port check <BASE>/in/data --asmpatch none -> exit 0
+  out: game: the made up game
+  out:   data: <BASE>/in/data/Data Game_Data (0 MB; the build: 0 MB)
+  out:   build: windows, Data Game.exe (x86_64)
+  out:   Unity 2017.4.9f1, mono, .NET 3.5 (libmono)
+  out:   graphics APIs: Direct3D11, Vulkan -> shaders from d3d11
+  out:   scenes: 0; screen [1280, 720]; colour space linear
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl no; Input System no; legacy Input: none; OnMouse* 0; UI pointer handlers 0; UI selection calls 0
+  out:   UI input modules in scenes: Unity UI, Input Manager (pad navigation and mouse)
+  out:   verdict: none
+  out:   textures (main data): RGBA32 1 (256 MB), ARGB32 1 (200 MB), DXT5 1 (50 MB), DXT1 1 (40 MB), DXT5Crunched 1 (0 MB)
+  out:   StreamingAssets: 3 bundles (0 MB), 1 of them scene bundles
+  out:     shaders: 4 with Direct3D 11; 2 with Direct3D 11, OpenGL Core
+  out:     textures: DXT5 2 (8 MB), RGBA32 1 (0 MB)
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
+  out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
+  out:         + the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - needs the game's Linux build (this one is windows)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: warning: 456 MB of uncompressed textures (RGBA32 2, ARGB32 1; main data and StreamingAssets bundles): on a handheld with 1 GB of RAM the game, the system and these share it, and the scenes that load many of them may not fit. The textures step (convert.steps += "textures"; docs/porting.md, "Small handhelds (1 GB)") re-encodes them as ASTC 4x4, a quarter of RGBA32's memory (slightly different pixels, a longer setup); try the port on a 1 GB handheld first, watching log.txt's memory
+  out: - 1 StreamingAssets bundle(s) without a serialized file (StreamingAssets/bundles/res.bundle): nothing in them to convert, left as they are
+  out: - 1 scene bundle(s) under StreamingAssets (several serialized files each: StreamingAssets/bundles/scene.bundle): pmu's convert converts each of their files (shaders, textures, JSON plugin edits); the Python converter, which a release ships only for a Python converter plugin of the port's, leaves them as they are (their shaders: desktop-only)
+  out: - text input (UnityEngine.UI.InputField in scenes): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)
+  out: - video: 1 VideoPlayers in the main data, clips none there: android-data adds Hidden/VideoDecodeAndroid (keep android_data.video_shader on); VP8/VP9 and H.264 decode built in, AAC/HEVC/MP3 only with the system's libavcodec (else silent)
+  out: - 98 MB of BC/DXT textures (main data and StreamingAssets bundles): the handheld GPU cannot sample them, so Unity decodes them to RGBA when loading (4-8x the memory). The textures step (convert.steps += "textures") re-encodes them as ASTC: less memory, slightly different pixels, a longer setup; off by default
+  out: - 1 crunched textures: as ASTC (the textures step) they take their full size on the card (several times the crunched size)
+  out: - BC/DXT textures decode to about 245 MB of RGBA on the handheld (its GPU cannot sample them): more than a 1 GB device can hold next to the game. The textures step is suggested (convert.steps), re-encoding them as ASTC at the GPU's own size; remove it only for a device with the memory to spare
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}, "steps": ["shaders", "settings", "audio", "quality", "textures"]}}
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 1: port check <BASE>/in/data --asmpatch none --json -> exit 0
+  out: {
+  out:  "path": "<BASE>/in/data",
+  out:  "notes": [
+  out:   "1 StreamingAssets bundle(s) without a serialized file (StreamingAssets/bundles/res.bundle): nothing in them to convert, left as they are",
+  out:   "1 scene bundle(s) under StreamingAssets (several serialized files each: StreamingAssets/bundles/scene.bundle): pmu's convert converts each of their files (shaders, textures, JSON plugin edits); the Python converter, which a release ships only for a Python converter plugin of the port's, leaves them as they are (their shaders: desktop-only)",
+  out:   "text input (UnityEngine.UI.InputField in scenes): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = \"done\" in runtime answers it at once where text does not matter (docs/input.md)",
+  out:   "linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)",
+  out:   "video: 1 VideoPlayers in the main data, clips none there: android-data adds Hidden/VideoDecodeAndroid (keep android_data.video_shader on); VP8/VP9 and H.264 decode built in, AAC/HEVC/MP3 only with the system's libavcodec (else silent)",
+  out:   "98 MB of BC/DXT textures (main data and StreamingAssets bundles): the handheld GPU cannot sample them, so Unity decodes them to RGBA when loading (4-8x the memory). The textures step (convert.steps += \"textures\") re-encodes them as ASTC: less memory, slightly different pixels, a longer setup; off by default",
+  out:   "1 crunched textures: as ASTC (the textures step) they take their full size on the card (several times the crunched size)",
+  out:   "BC/DXT textures decode to about 245 MB of RGBA on the handheld (its GPU cannot sample them): more than a 1 GB device can hold next to the game. The textures step is suggested (convert.steps), re-encoding them as ASTC at the GPU's own size; remove it only for a device with the memory to spare"
+  out:  ],
+  out:  "warnings": [
+  out:   "456 MB of uncompressed textures (RGBA32 2, ARGB32 1; main data and StreamingAssets bundles): on a handheld with 1 GB of RAM the game, the system and these share it, and the scenes that load many of them may not fit. The textures step (convert.steps += \"textures\"; docs/porting.md, \"Small handhelds (1 GB)\") re-encodes them as ASTC 4x4, a quarter of RGBA32's memory (slightly different pixels, a longer setup); try the port on a 1 GB handheld first, watching log.txt's memory"
+  out:  ],
+  out:  "suggest": {
+  out:   "runtime": {},
+  out:   "android_data": {
+  out:    "asmpatch": "off"
+  out:   },
+  out:   "convert": {
+  out:    "shaders": {
+  out:     "from": [
+  out:      "d3d11"
+  out:     ]
+  out:    },
+  out:    "steps": [
+  out:     "shaders",
+  out:     "settings",
+  out:     "audio",
+  out:     "quality",
+  out:     "textures"
+  out:    ]
+  out:   }
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/data/Data Game_Data",
+  out:  "build": "windows",
+  out:  "exe": "Data Game.exe",
+  out:  "arch": "x86_64",
+  out:  "root": "<BASE>/in/data",
+  out:  "backend": "mono",
+  out:  "compressed": false,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2017.4.9f1",
+  out:  "unity_line": "2017.4",
+  out:  "unity_supported": true,
+  out:  "scripting_runtime": ".NET 3.5 (libmono)",
+  out:  "data_survey": {
+  out:   "product": "the made up game",
+  out:   "company": " Made Up Games ",
+  out:   "graphics_apis": [
+  out:    2,
+  out:    21
+  out:   ],
+  out:   "color_space": "linear",
+  out:   "active_input": null,
+  out:   "screen": [
+  out:    1280,
+  out:    720
+  out:   ],
+  out:   "scenes": 0,
+  out:   "scripts_used": {
+  out:    "Player": 2,
+  out:    "UnityEngine.EventSystems.StandaloneInputModule": 1,
+  out:    "UnityEngine.UI.InputField": 1
+  out:   },
+  out:   "video_players": 1,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {
+  out:    "DXT5": [
+  out:     1,
+  out:     52428800
+  out:    ],
+  out:    "DXT1": [
+  out:     1,
+  out:     41943040
+  out:    ],
+  out:    "RGBA32": [
+  out:     1,
+  out:     268435456
+  out:    ],
+  out:    "ARGB32": [
+  out:     1,
+  out:     209715200
+  out:    ],
+  out:    "DXT5Crunched": [
+  out:     1,
+  out:     1000
+  out:    ]
+  out:   },
+  out:   "decoded_mb": 213.34895833333331,
+  out:   "notes": []
+  out:  },
+  out:  "streaming_survey": {
+  out:   "bundles": 3,
+  out:   "mb": 0.0,
+  out:   "scene_bundles": [
+  out:    "StreamingAssets/bundles/scene.bundle"
+  out:   ],
+  out:   "shaders": {
+  out:    "Direct3D 11, OpenGL Core": 2,
+  out:    "Direct3D 11": 4
+  out:   },
+  out:   "shader_bundles": {
+  out:    "Direct3D 11, OpenGL Core": [
+  out:     "StreamingAssets/bundles/one.bundle",
+  out:     "StreamingAssets/bundles/scene.bundle"
+  out:    ],
+  out:    "Direct3D 11": [
+  out:     "StreamingAssets/bundles/one.bundle",
+  out:     "StreamingAssets/bundles/scene.bundle"
+  out:    ]
+  out:   },
+  out:   "textures": {
+  out:    "DXT5": [
+  out:     2,
+  out:     8388608
+  out:    ],
+  out:    "RGBA32": [
+  out:     1,
+  out:     1024
+  out:    ]
+  out:   },
+  out:   "decoded_mb": 32.0,
+  out:   "odd": [],
+  out:   "unread": [],
+  out:   "no_serialized": [
+  out:    "StreamingAssets/bundles/res.bundle"
+  out:   ]
+  out:  },
+  out:  "product": "the made up game",
+  out:  "graphics_apis": [
+  out:   "Direct3D11",
+  out:   "Vulkan"
+  out:  ],
+  out:  "shader_source": "d3d11",
+  out:  "code": {
+  out:   "assemblies": [
+  out:    "Assembly-CSharp"
+  out:   ],
+  out:   "libraries": [],
+  out:   "unreadable": [],
+  out:   "rewired": null,
+  out:   "incontrol": false,
+  out:   "playmaker": null,
+  out:   "input_system": false,
+  out:   "legacy": {
+  out:    "axes/buttons": 0,
+  out:    "keys": 0,
+  out:    "mouse": 0,
+  out:    "touch": 0
+  out:   },
+  out:   "mouse_messages": [],
+  out:   "pointer_handlers": 0,
+  out:   "navigation": 0,
+  out:   "selects": 0,
+  out:   "text_input": [],
+  out:   "video": [],
+  out:   "pinvoke": {},
+  out:   "services": [],
+  out:   "cursor": [],
+  out:   "screen": []
+  out:  },
+  out:  "input_verdict": "none",
+  out:  "plugins": [],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "Direct3D 11 shaders: `shaders.from = [\"d3d11\"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)",
+  out:     "the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+  out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
+  out:     "a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)",
+  out:     "the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)",
+  out:     "the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "needs the game's Linux build (this one is windows)"
+  out:    ],
+  out:    "needs": []
+  out:   }
+  out:  ],
+  out:  "streaming_assets": {
+  out:   "mb": 0.0,
+  out:   "io": false
+  out:  },
+  out:  "route": "android",
+  out:  "donors": [
+  out:   "donor-2017.4.9f1-mono-armv7.apk"
+  out:  ]
+  out: }
+  err: .. reading the game's settings and scenes
+  err: .. reading the StreamingAssets bundles
+command 2: port check <BASE>/in/data --asmpatch none --no-scan -> exit 0
+  out: game: the made up game
+  out:   data: <BASE>/in/data/Data Game_Data (0 MB; the build: 0 MB)
+  out:   build: windows, Data Game.exe (x86_64)
+  out:   Unity 2017.4.9f1, mono, .NET 3.5 (libmono)
+  out:   graphics APIs: Direct3D11, Vulkan -> shaders from d3d11
+  out:   scenes: 0; screen [1280, 720]; colour space linear
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl no; Input System no; legacy Input: none; OnMouse* 0; UI pointer handlers 0; UI selection calls 0
+  out:   verdict: none
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
+  out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
+  out:         + the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - needs the game's Linux build (this one is windows)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: - linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}}}
+  err: .. reading the game's settings and scenes
+== check-packed
+command 0: port check <BASE>/in/packed --asmpatch none -> exit 0
+  out: game: the made up game
+  out:   data: <BASE>/in/packed/Packed_Data (0 MB; the build: 0 MB)
+  out:   build: linux, Packed.x86_64 (x86_64), compressed (data.unity3d)
+  out:   Unity 2017.4.9f1, mono, .NET 3.5 (libmono)
+  out:   graphics APIs: Direct3D11, Vulkan -> shaders from d3d11
+  out:   scenes: 0; screen [1280, 720]; colour space linear
+  out:   code: Assembly-CSharp
+  out:   input: Rewired no; InControl no; Input System no; legacy Input: none; OnMouse* 0; UI pointer handlers 0; UI selection calls 0
+  out:   verdict: none
+  out: 
+  out: routes:
+  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
+  out:         + a compressed build: the setup unpacks it first (pmunity unpack)
+  out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
+  out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
+  out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
+  out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
+  out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
+  out:         + the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)
+  out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)
+  out:         - the data has Direct3D11, Vulkan shaders, no OpenGL ones: the box64 port draws with OpenGL (gles, gl4es or Mesa); this player would need Vulkan on the handheld
+  out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
+  out: 
+  out: recommended route: android
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-mono-armv7.apk
+  out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
+  out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
+  out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
+  out: - a compressed build: its settings read from data.unity3d; scenes, textures and video are read after `pmunity unpack`
+  out: - linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)
+  out: 
+  out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}}}
+  err: .. reading the game's settings and scenes
+command 1: port check <BASE>/in/packed --asmpatch none --json -> exit 0
+  out: {
+  out:  "path": "<BASE>/in/packed",
+  out:  "notes": [
+  out:   "a compressed build: its settings read from data.unity3d; scenes, textures and video are read after `pmunity unpack`",
+  out:   "linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)"
+  out:  ],
+  out:  "warnings": [],
+  out:  "suggest": {
+  out:   "runtime": {},
+  out:   "android_data": {
+  out:    "asmpatch": "off"
+  out:   },
+  out:   "convert": {
+  out:    "shaders": {
+  out:     "from": [
+  out:      "d3d11"
+  out:     ]
+  out:    }
+  out:   }
+  out:  },
+  out:  "other_builds": [],
+  out:  "data": "<BASE>/in/packed/Packed_Data",
+  out:  "build": "linux",
+  out:  "exe": "Packed.x86_64",
+  out:  "arch": "x86_64",
+  out:  "root": "<BASE>/in/packed",
+  out:  "backend": "mono",
+  out:  "compressed": true,
+  out:  "size_mb": 0,
+  out:  "data_mb": 0,
+  out:  "unity_version": "2017.4.9f1",
+  out:  "unity_line": "2017.4",
+  out:  "unity_supported": true,
+  out:  "scripting_runtime": ".NET 3.5 (libmono)",
+  out:  "data_survey": {
+  out:   "product": "the made up game",
+  out:   "company": " Made Up Games ",
+  out:   "graphics_apis": [
+  out:    2,
+  out:    21
+  out:   ],
+  out:   "color_space": "linear",
+  out:   "active_input": null,
+  out:   "screen": [
+  out:    1280,
+  out:    720
+  out:   ],
+  out:   "scenes": 0,
+  out:   "scripts_used": {},
+  out:   "video_players": 0,
+  out:   "video_clips": {},
+  out:   "movie_textures": 0,
+  out:   "textures": {},
+  out:   "decoded_mb": 0.0,
+  out:   "notes": [
+  out:    "a compressed build: its settings read from data.unity3d; scenes, textures and video are read after `pmunity unpack`"
+  out:   ]
+  out:  },
+  out:  "product": "the made up game",
+  out:  "graphics_apis": [
+  out:   "Direct3D11",
+  out:   "Vulkan"
+  out:  ],
+  out:  "shader_source": "d3d11",
+  out:  "code": {
+  out:   "assemblies": [
+  out:    "Assembly-CSharp"
+  out:   ],
+  out:   "libraries": [],
+  out:   "unreadable": [],
+  out:   "rewired": null,
+  out:   "incontrol": false,
+  out:   "playmaker": null,
+  out:   "input_system": false,
+  out:   "legacy": {
+  out:    "axes/buttons": 0,
+  out:    "keys": 0,
+  out:    "mouse": 0,
+  out:    "touch": 0
+  out:   },
+  out:   "mouse_messages": [],
+  out:   "pointer_handlers": 0,
+  out:   "navigation": 0,
+  out:   "selects": 0,
+  out:   "text_input": [],
+  out:   "video": [],
+  out:   "pinvoke": {},
+  out:   "services": [],
+  out:   "cursor": [],
+  out:   "screen": []
+  out:  },
+  out:  "input_verdict": "none",
+  out:  "plugins": [],
+  out:  "routes": [
+  out:   {
+  out:    "route": "android",
+  out:    "ok": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "Direct3D 11 shaders: `shaders.from = [\"d3d11\"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)",
+  out:     "a compressed build: the setup unpacks it first (pmunity unpack)",
+  out:     "the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "mono-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)",
+  out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
+  out:     "a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)",
+  out:     "the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)",
+  out:     "the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "box64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "the data has Direct3D11, Vulkan shaders, no OpenGL ones: the box64 port draws with OpenGL (gles, gl4es or Mesa); this player would need Vulkan on the handheld"
+  out:    ],
+  out:    "needs": [
+  out:     "box64 and the player's x86-64 libraries on the handheld (tools/box64)"
+  out:    ]
+  out:   }
+  out:  ],
+  out:  "route": "android",
+  out:  "donors": [
+  out:   "donor-2017.4.9f1-mono-armv7.apk"
+  out:  ]
+  out: }
+  err: .. reading the game's settings and scenes
+== new-data
+command 0: port new datagame --data <BASE>/in/data --asmpatch none -> exit 0
+  out: checking <BASE>/in/data
+  out: port datagame (android route) -> <BASE>/work/datagame
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2017.4.9f1-mono-armv7.apk
+  out: warning: 456 MB of uncompressed textures (RGBA32 2, ARGB32 1; main data and StreamingAssets bundles): on a handheld with 1 GB of RAM the game, the system and these share it, and the scenes that load many of them may not fit. The textures step (convert.steps += "textures"; docs/porting.md, "Small handhelds (1 GB)") re-encodes them as ASTC 4x4, a quarter of RGBA32's memory (slightly different pixels, a longer setup); try the port on a 1 GB handheld first, watching log.txt's memory
+  out: - 1 StreamingAssets bundle(s) without a serialized file (StreamingAssets/bundles/res.bundle): nothing in them to convert, left as they are
+  out: - 1 scene bundle(s) under StreamingAssets (several serialized files each: StreamingAssets/bundles/scene.bundle): pmu's convert converts each of their files (shaders, textures, JSON plugin edits); the Python converter, which a release ships only for a Python converter plugin of the port's, leaves them as they are (their shaders: desktop-only)
+  out: - text input (UnityEngine.UI.InputField in scenes): Unity's soft keyboard opens ua_host's on-screen keyboard (the pad types); UA_OSK = "done" in runtime answers it at once where text does not matter (docs/input.md)
+  out: - linear colour space: with the SDL display, UA_DISPLAY_SRGB=1 (docs/runtime.md)
+  out: - video: 1 VideoPlayers in the main data, clips none there: android-data adds Hidden/VideoDecodeAndroid (keep android_data.video_shader on); VP8/VP9 and H.264 decode built in, AAC/HEVC/MP3 only with the system's libavcodec (else silent)
+  out: - 98 MB of BC/DXT textures (main data and StreamingAssets bundles): the handheld GPU cannot sample them, so Unity decodes them to RGBA when loading (4-8x the memory). The textures step (convert.steps += "textures") re-encodes them as ASTC: less memory, slightly different pixels, a longer setup; off by default
+  out: - 1 crunched textures: as ASTC (the textures step) they take their full size on the card (several times the crunched size)
+  out: - BC/DXT textures decode to about 245 MB of RGBA on the handheld (its GPU cannot sample them): more than a 1 GB device can hold next to the game. The textures step is suggested (convert.steps), re-encoding them as ASTC at the GPU's own size; remove it only for a device with the memory to spare
+  out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
+  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
+  out:   - port.desc is empty (port.json says "the made up game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
+  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
+  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
+  out:   - port.thanks is empty: the README starts with "Thanks to Made Up Games for creating the made up game."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
+  out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
+  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
+  out:   - no screenshot (<BASE>/work/datagame/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
+  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+command 1: route <BASE>/in/data -> exit 0
+  out: Data Game: <BASE>/in/data/Data Game_Data
+  out:   Unity 2017.4.9f1, macos build, mono
+  out:   executable Data Game.exe: pe x86_64
+  out: route: android (Unity's Android player, data converted)
+  out:   android: fits
+  out:     why: Unity 2017.4.9f1 is in the covered range 5.6 - 6000.6
+  out:     why: Mono build: its assemblies run on the Android player's Mono
+  out:     why: macos build: OpenGL Core shaders, converted to GLES 3
+  out:   box64: fits
+  out:     why: macOS Mono build: its data runs on Unity's own Linux player of 2017.4.9f1 (Unity's Linux Mono support installer), under box64
+  out:     caveat: the Linux player comes from Unity's installer (download on the device, not shipped)
+  out:     caveat: Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
+  out:     need: an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X
+command 2: route <BASE>/in/packed --json -> exit 0
+  out: {
+  out:  "data": "<BASE>/in/packed/Packed_Data",
+  out:  "name": "Packed",
+  out:  "layout_kind": "folder",
+  out:  "unity": "2017.4.9f1",
+  out:  "compressed": true,
+  out:  "platform": null,
+  out:  "backend": "mono",
+  out:  "mono_runtime": null,
+  out:  "executables": [],
+  out:  "player_binary": null,
+  out:  "plugins": [],
+  out:  "libraries": {
+  out:   "native": [],
+  out:   "x64lib": [],
+  out:   "game": [],
+  out:   "emulated": [],
+  out:   "runtime": []
+  out:  },
+  out:  "android": {
+  out:   "fits": true,
+  out:   "why": [
+  out:    "Unity 2017.4.9f1 is in the covered range 5.6 - 6000.6",
+  out:    "Mono build: its assemblies run on the Android player's Mono"
+  out:   ],
+  out:   "blockers": [],
+  out:   "caveats": [
+  out:    "compressed build (data.unity3d): `pmunity unpack` first"
+  out:   ]
+  out:  },
+  out:  "box64": {
+  out:   "fits": false,
+  out:   "why": [],
+  out:   "blockers": [
+  out:    "no Linux build found"
+  out:   ],
+  out:   "caveats": [
+  out:    "Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)"
+  out:   ],
+  out:   "needs": [
+  out:    "an X11 display: Xwayland or PortMaster's Westonpack on firmwares without X"
+  out:   ]
+  out:  },
+  out:  "route": "android"
+  out: }
+command 3: route <BASE>/in/packed --env -> exit 1
+  err: <BASE>/in/packed: no Linux x86-64 build here
+file datagame/.gitignore 644 260 b65b22e3a900afb4
+file datagame/.port_files 644 349 98a2cf793b69ff58
+file datagame/README.md 644 1957 56ce4113b5d56d4a
+file datagame/datagame/README.md 644 2355 49c4e3d7650627fc
+file datagame/datagame/datagame.ini 644 483 3b8d6ee4c6f53a0b
+file datagame/datagame/gamedata/PUT_GAME_FILES_HERE.txt 644 495 b18690df9b00ab46
+file datagame/datagame/gameinfo.xml 644 301 ab968188e0fa2a0a
+file datagame/datagame/port.env 644 185 b5d3a3c6cb138934
+file datagame/datagame/port.json 644 929 65d91ce628d27d3e
+file datagame/datagame/setup.txt 644 274 e5aa25c21d44f308
+file datagame/datagame/setup/convert.json 644 178 f450d5570273898b
+file datagame/datagame/setup/patchscript 644 26569 e7e868aa67ca94e6
+file datagame/datagame/setup/setup.env 644 765 1433d9d80984a17f
+file datagame/datagame/setup/update 644 4420 52b96b947a42f6f1
+file datagame/package.sh 755 1423 8ed89c74f42eef0f
+file datagame/port.build.json 644 5542 9be1bbb9264308ed
+file datagame/port.toml 644 6800 27c41e90acf4c5b3
+file datagame/testing_thread.txt 644 953 e9f569f612875547
+file datagame/the made up game.sh 644 7861 f686202db7c72900

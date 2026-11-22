@@ -5,7 +5,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::config::{aarch64_only_route, build_config, dump_toml, load_config, merge, validate};
+use crate::config::{aarch64_only_route_rep, build_config_rep, dump_toml, load_config, merge, validate};
 use crate::routes::{port_donors, read_text, render, routes, template_path};
 use crate::text::{self, *};
 use crate::val::{Dict, Val};
@@ -92,6 +92,80 @@ fn is_exec(p: &Path) -> bool {
 
 /// Writes a port's source folder; returns its path.
 pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBuf> {
+    new_with(repo, a, None, log)
+}
+
+/// The check of `--data <game>`: (the game, asmpatch's command) -> the report (crates/check's; this
+/// crate does not read games).
+pub type Checker<'a> = &'a mut dyn FnMut(&str) -> Result<Dict>;
+
+/// What the check suggests that the porter's port.toml lacks or sets otherwise: a key it lacks is
+/// used all the same (merged in; port.toml should say so), a value it has wins. For android_data,
+/// only where port.toml has the default.
+pub fn suggest_gaps(user: &Dict, sug: &Dict) -> Vec<String> {
+    use crate::config::{defaults, toml_key, toml_value};
+    let tv = |v: &Val| toml_value(v).unwrap_or_else(|_| v.repr());
+    let mut out = Vec::new();
+    for (k, v) in sug.dict("runtime").iter() {
+        match user.dict("runtime").get(k) {
+            None | Some(Val::Null) => out.push(format!("[runtime] {k} = {}: used, not in port.toml (add it there)", tv(v))),
+            Some(have) if have.py_str() != v.py_str() => {
+                out.push(format!("[runtime] {k} = {} in port.toml; the check suggests {}", tv(have), tv(v)))
+            }
+            _ => {}
+        }
+    }
+    let dflt = defaults();
+    let dflt = dflt.dict("android_data");
+    for (k, v) in sug.dict("android_data").iter() {
+        let d = dflt.get(k).cloned().unwrap_or(Val::Null);
+        match user.dict("android_data").get(k) {
+            None | Some(Val::Null) => {
+                if !v.eq(&d) {
+                    out.push(format!("[android_data] {k} = {}: used, not in port.toml (add it there)", tv(v)));
+                }
+            }
+            Some(have) => {
+                if have.eq(&d) && !have.eq(v) {
+                    out.push(format!("[android_data] {k} = {} in port.toml (the default); the check suggests {}", tv(have), tv(v)));
+                }
+            }
+        }
+    }
+    if sug.dict("wwise").truthy("banks") {
+        let banks = sug.dict("wwise").get("banks").unwrap();
+        match user.dict("wwise").get("banks") {
+            None | Some(Val::Null) => out.push(format!(
+                "[wwise] banks = {}: used (the setup converts them for ua_host's Wwise player), not in port.toml (add it there)",
+                tv(banks)
+            )),
+            Some(have) if !have.eq(banks) => out.push(format!(
+                "[wwise] banks = {} in port.toml; the check suggests {}{}",
+                tv(have),
+                tv(banks),
+                if have.truthy() { "" } else { " (empty: the game runs silent)" }
+            )),
+            _ => {}
+        }
+    }
+    let steps = sug.dict("convert").list("steps");
+    if let (false, Some(Val::List(have))) = (steps.is_empty(), user.dict("convert").get("steps")) {
+        let more: Vec<Val> = steps.iter().filter(|x| !have.iter().any(|h| h.eq(x))).cloned().collect();
+        if !more.is_empty() {
+            out.push(format!("[convert] steps lacks {}, which the check suggests", tv(&Val::List(more))));
+        }
+    }
+    if sug.truthy("controls") && !user.truthy("controls") {
+        out.push(format!(
+            "[controls] is empty: the READMEs use the check's draft from the game's pad bindings: {}",
+            sug.dict("controls").iter().map(|(k, v)| format!("{} = {}", toml_key(k), tv(v))).collect::<Vec<_>>().join("; ")
+        ));
+    }
+    out
+}
+
+/// `port new`, with the check `--data` asks for.
+pub fn new_with(repo: &Repo, a: &NewArgs, check: Option<Checker>, log: &mut dyn FnMut(&str)) -> Result<PathBuf> {
     let mut config = a.config.clone();
     let mut user = match &config {
         Some(c) => load_config(c)?,
@@ -118,14 +192,18 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
             )));
         }
     }
-    if a.data.is_some() {
-        // (the check reads the game's files: assemblies, serialized files, plugins; the Python's)
-        return Err(exit(
-            "pmu port new: --data (the check of the game) is not ported: run `python -m pmunity port new` with --data, \
-             or `pmu port new` with a port.toml that names game.unity_versions",
-        ));
-    }
-    if !user.dict("game").truthy("unity_versions") {
+    let mut rep: Option<Dict> = None;
+    if let Some(data) = a.data.as_deref().filter(|d| !d.is_empty()) {
+        let Some(check) = check else {
+            return Err(exit("--data <game>: this build of the packager has no check of a game (crates/check)"));
+        };
+        log(&format!("checking {data}"));
+        let r = check(data)?;
+        if !r.truthy("route") && a.route.as_deref().is_none_or(str::is_empty) && !user.dict("port").truthy("route") {
+            return Err(exit(format!("no route fits this game: {}", r.get("unsupported").map_or("None".into(), Val::py_str))));
+        }
+        rep = Some(r);
+    } else if !user.dict("game").truthy("unity_versions") {
         return Err(exit("--data <game> (or a config with game.unity_versions) is needed"));
     }
     if std::env::var("PMUNITY_PORT_HOOKS").is_ok_and(|h| h.split(',').any(|m| !m.is_empty())) {
@@ -138,8 +216,8 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
     if let Some(t) = a.title.as_deref().filter(|t| !t.is_empty()) {
         over.table("port").set("title", Val::s(t));
     }
-    let mut cfg = build_config(&a.name, &merge(&user, &over));
-    aarch64_only_route(&mut cfg, &mut user, log)?;
+    let mut cfg = build_config_rep(&a.name, rep.as_ref(), &merge(&user, &over));
+    aarch64_only_route_rep(&mut cfg, &mut user, rep.as_ref(), log)?;
     let rts = routes(repo)?;
     let route_name = cfg.dict("port").get("route").map(Val::py_str).unwrap_or_default();
     let r = rts.iter().find(|(n, _)| *n == route_name).map(|(_, r)| r.clone());
@@ -154,6 +232,14 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
                 }
             }
         }
+    }
+    // a .NET 3.5 game on the mono-arm64 route: Mono's 4.x class libraries in place of its 2.0 ones
+    if cfg.dict("port").str("route") == "mono-arm64"
+        && !user.dict("player").contains("mono64_classlibs")
+        && rep.as_ref().is_some_and(|r| r.truthy("scripting_runtime") && r.get("scripting_runtime").unwrap().py_str().contains("3.5"))
+    {
+        cfg.table("player").set("mono64_classlibs", Val::Bool(true));
+        log("a .NET 3.5 game: the release ships Mono's 4.x class libraries for it (player.mono64_classlibs)");
     }
     if let Some(player) = a.player.as_deref().filter(|p| !p.is_empty()) {
         if !cfg.dict("player").truthy("sha256") {
@@ -308,7 +394,8 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
     let inst = attr.get("inst").filter(|v| v.truthy()).map_or(String::new(), Val::py_str);
     ctx.write("testing_thread.txt", testing_thread_txt(&cfg, &inst).as_bytes(), 0o644)?;
     if config.is_none() {
-        ctx.write("port.toml", dump_toml(&cfg, &r, &[])?.as_bytes(), 0o644)?;
+        let drafted: &[&str] = if rep.as_ref().is_some_and(|r| r.dict("suggest").truthy("controls")) { &["controls"] } else { &[] };
+        ctx.write("port.toml", dump_toml(&cfg, &r, drafted)?.as_bytes(), 0o644)?;
     }
     let mut route_out = Dict::new();
     for (k, v) in r.iter() {
@@ -319,12 +406,20 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
     let mut written = ctx.written.clone();
     written.sort();
     written.dedup();
-    let build = Val::Dict(crate::dict! {
+    let mut build = crate::dict! {
         "made_by" => Val::s("pmunity port new"),
         "config" => Val::Dict(cfg.clone()),
         "route" => Val::Dict(route_out),
         "files" => Val::strs(&written),
-    });
+    };
+    if let Some(rep) = rep.as_ref().filter(|r| !r.is_empty()) {
+        let mut c = Dict::new();
+        for k in ["build", "arch", "backend", "unity_version", "scripting_runtime", "compressed", "input_verdict", "route", "notes", "warnings"] {
+            c.set(k, rep.get(k).cloned().unwrap_or(Val::Null));
+        }
+        build.set("check", Val::Dict(c));
+    }
+    let build = Val::Dict(build);
     ctx.write("port.build.json", (pyjson::dumps(&build, Some(1), true) + "\n").as_bytes(), 0o644)?;
     // remove files an earlier run wrote that this one did not
     let old = out.join(".port_files");
@@ -351,6 +446,23 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
         ));
     } else if r.truthy("donors") {
         log("no donors: game.unity_versions names no Unity version, so the release would ship no player for the setup");
+    }
+    if let Some(rep) = &rep {
+        for w in rep.list("warnings") {
+            log(&format!("warning: {}", w.py_str()));
+        }
+        for n in rep.list("notes") {
+            log(&format!("- {}", n.py_str()));
+        }
+        if let Some(c) = &config {
+            let gaps = suggest_gaps(&user, rep.dict("suggest"));
+            if !gaps.is_empty() {
+                log(&format!("{} and what this check suggests ({}; add them, or keep yours on purpose):", pkgzip::py::basename(c), gaps.len()));
+                for x in gaps {
+                    log(&format!("  - {x}"));
+                }
+            }
+        }
     }
     let todo = submission_warnings(&cfg, &ps(&out), Some(&pj), None, None);
     if !todo.is_empty() {

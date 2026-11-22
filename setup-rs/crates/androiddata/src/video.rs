@@ -526,6 +526,11 @@ fn sniff(path: &Path, offset: u64, size: u64) -> Option<&'static str> {
 /// clip_codecs: {codec: count} of the VideoClips in a game's data folder, in the order the
 /// Python's dict has them.
 fn clip_codecs(data_dir: &str, ctx: &Ctx) -> Result<Vec<(String, usize)>, Stop> {
+    clip_codecs_with(data_dir, &ctx.opts())
+}
+
+/// clip_codecs with the files opened as `opts` says (the port check has no android-data run).
+pub fn clip_codecs_with(data_dir: &str, opts: &unityfs::Options) -> Result<Vec<(String, usize)>, Stop> {
     let mut names: Vec<String> = std::fs::read_dir(data_dir)
         .map_err(|e| Stop::Fail(e.to_string()))?
         .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
@@ -539,7 +544,7 @@ fn clip_codecs(data_dir: &str, ctx: &Ctx) -> Result<Vec<(String, usize)>, Stop> 
         if !(n.ends_with(".assets") || level) {
             continue;
         }
-        let Ok(f) = DataFile::open(Path::new(data_dir).join(&n), &ctx.opts()) else {
+        let Ok(f) = DataFile::open(Path::new(data_dir).join(&n), opts) else {
             continue;
         };
         for o in &f.sf.objects {

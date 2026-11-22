@@ -114,8 +114,23 @@ pub fn load_config(path: &str) -> Result<Dict> {
 /// route's), an apk-route port keeps only its arm64-v8a player. Changes cfg (and user's player
 /// table) in place.
 pub fn aarch64_only_route(cfg: &mut Dict, user: &mut Dict, log: &mut dyn FnMut(&str)) -> Result<()> {
+    aarch64_only_route_rep(cfg, user, None, log)
+}
+
+/// aarch64_only_route with the check's report (`port new --data`): a game whose check says it
+/// cannot take the mono-arm64 route stops here.
+pub fn aarch64_only_route_rep(cfg: &mut Dict, user: &mut Dict, rep: Option<&Dict>, log: &mut dyn FnMut(&str)) -> Result<()> {
     if !cfg.dict("port").truthy("aarch64_only") {
         return Ok(());
+    }
+    if cfg.dict("port").str("route") == "android" {
+        let m = rep.and_then(|r| r.list("routes").iter().filter_map(Val::as_dict).find(|r| r.str("route") == "mono-arm64"));
+        if let Some(m) = m.filter(|m| !m.truthy("ok")) {
+            return Err(exit(format!(
+                "port.aarch64_only: this game cannot take the mono-arm64 route: {}",
+                m.list("why").iter().map(Val::py_str).collect::<Vec<_>>().join("; ")
+            )));
+        }
     }
     let route = cfg.dict("port").get("route").cloned().unwrap_or(Val::Null);
     match route.as_str() {
@@ -170,7 +185,45 @@ pub fn aarch64_only_route(cfg: &mut Dict, user: &mut Dict, log: &mut dyn FnMut(&
 /// build_config(name, None, user): DEFAULTS <- the porter's config, resolved (the check's report is
 /// not read: `pmu port new` takes no --data).
 pub fn build_config(name: &str, user: &Dict) -> Dict {
+    build_config_rep(name, None, user)
+}
+
+/// build_config(name, rep, user): DEFAULTS <- what the check found <- the porter's config.
+pub fn build_config_rep(name: &str, rep: Option<&Dict>, user: &Dict) -> Dict {
     let mut cfg = merge(&defaults(), &Dict::new());
+    if let Some(rep) = rep.filter(|r| !r.is_empty()) {
+        let android = rep.str("build") == "android";
+        let versions = if rep.truthy("unity_version") { vec![rep.get("unity_version").cloned().unwrap()] } else { Vec::new() };
+        let size = rep.get("size_mb").cloned().unwrap_or(Val::Int(0));
+        let or = |k: &str, d: &str| if rep.truthy(k) { rep.get(k).map_or(String::new(), Val::py_str) } else { d.to_string() };
+        let mut found = Dict::new();
+        if android {
+            found.table("port").set("title", Val::Str(rx::title_case(&or("product", name))));
+            found.table("port").set("route", Val::Str(or("route", "apk")));
+            let g = found.table("game");
+            g.set("data", Val::s(APK_GLOBS));
+            g.set("build", Val::s("android"));
+            g.set("unity_versions", Val::List(versions));
+            g.set("size_mb", size);
+        } else {
+            let b = rep.str("build");
+            let data = rep.str("data");
+            let base = pkgzip::py::basename(data);
+            let product = or("product", data.strip_suffix("_Data").map_or(name, |_| &base[..base.len() - 5]));
+            let company = pkgzip::py::strip(rep.dict("data_survey").str("company")).to_string();
+            found.table("port").set("title", Val::Str(rx::title_case(&product)));
+            found.table("port").set("route", Val::Str(or("route", "android")));
+            let g = found.table("game");
+            g.set("data", Val::s(if b == "macos" { "Data" } else { base }));
+            g.set("build", Val::s(if ["linux", "macos", "windows"].contains(&b) { b } else { "linux" }));
+            g.set("unity_versions", Val::List(versions));
+            g.set("size_mb", size);
+            // (PlayerSettings' company: the developer, unless Unity's placeholder)
+            g.set("developer", Val::Str(if company == "DefaultCompany" || company == "Default Company" { String::new() } else { company }));
+        }
+        cfg = merge(&cfg, &found);
+        cfg = merge(&cfg, rep.dict("suggest"));
+    }
     cfg = merge(&cfg, user);
     cfg.table("player").pop("url");
     if user.truthy("controls") {

@@ -719,7 +719,7 @@ pub fn submission_warnings(cfg: &Dict, port_src: &str, pj: Option<&Val>, launche
         None => {
             let shot = p.get("screenshot").filter(|v| v.truthy()).map_or("screenshot.png".into(), Val::py_str);
             w.push(format!(
-                "no screenshot ({}): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`",
+                "no screenshot ({}): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)",
                 pkgzip::py::join(port_src, &shot)
             ));
         }
