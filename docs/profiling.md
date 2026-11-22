@@ -2444,6 +2444,9 @@ Not built:
   same as the frame before in 0 of 1,200 frames standing in King's Pass, 0 of 1,200 walking, 4 of
   about 8,000 in the menus. The background layer has particles (its 60-quad particle batch has 354
   or 360 indices from frame to frame even standing): nothing repeats.
+  (2026-11-22, from the GL stream instead of a readback, on the handheld at 40 fps: the background camera's
+  pass reads the same inputs as the frame before in 52 of 600 frames standing, 1 of 600 walking, 2 of 700 in a
+  boss fight; "A cache of a pass's unchanged leading draws" below.)
 - **The black bars' pass deferred into the window's copy**: at most what leaving the bars out gives,
   +0.5 %, within noise; doing it exactly would mean recording two draws with all their state and
   vertex data for later.
@@ -2639,6 +2642,104 @@ What did not pay, or was not done:
 | the frame graph's invalidates (depth/stencil at pass ends and starts, a dead colour at its end) | Hollow Knight 32.8 against 32.8, White Mirror 43.0 - 43.1 against 42.7 - 42.8: noise to +0.7 % (the clear-pass sinking is what gives White Mirror its +2.2 %) |
 | merging two passes on one framebuffer that have draws (Hollow Knight's two window passes: about 0.4 ms by passbench's costs) | not built: the moved pass needs the GL state of its original place (bindings, uniforms of shared programs, vertex arrays), and it is one game's pattern |
 | a default | none: off by default. Exact by construction (the fake driver's tests; pictures within the run-to-run floor), but of the seven games measured one gains (White Mirror +2.2 %), and a wrapper for every GL entry point is a large layer to put in front of every game: a candidate for a default only after the regression rig has run every game with it |
+
+### A cache of a pass's unchanged leading draws (prefixcensus, 2026-11-22: not built)
+
+The idea: within a pass the draws go back to front after the clear. If a pass's first N draws read exactly
+what they read a frame before (state, uniforms, vertex and index bytes, textures), the target after draw N holds
+the same pixels, so the host could restore a saved copy of the target (one opaque copy) and go on with draw
+N + 1: exact by construction, nothing per fragment changes. It pays while the prefix is long and stable.
+Measured before building anything, and the answer is no: **in Hollow Knight the stable prefix is 0 - 6 % of a
+frame's fragments.**
+
+**The census.** `tools/prefixcensus` (Rust, no dependencies; `docker run --rm -v $PWD:/w ua-rust sh -c 'cp -r
+/w/tools/prefixcensus /tmp/p && cd /tmp/p && cargo build --release -q && ./target/release/prefixcensus
+/w/<trace.gz>'`) reads a `UA_GL_REC_FILE` trace (pixels not needed) and follows the GL state call by call:
+buffers' bytes (data, sub-data, maps), vertex arrays, each program's uniform values and sampler names (from its
+sources), texture bindings and a version of each texture's contents (its uploads; for a render target the
+operations of the pass that drew it, so a draw that samples a target repeats only if that pass did), the
+fixed-function state. Per pass (the operations between two binds of a draw framebuffer, matched to the pass at
+the same place in the frame before) every draw, clear and blit is compared twice: *strict*, the bytes of the calls
+since the operation before; and *by what it reads* (the program, its uniforms, the textures its samplers reach,
+the vertex bytes its indices reach whatever buffer and offset hold them, the state). It reports the leading
+operations that repeat, what differs in the first that does not (which uniform and by how much, positions, index
+count, a texture's contents), the fragments the repeat stands for, runs that begin at a later restart point (a
+whole clear or invalidate, an opaque whole-target draw or blit), and a simulated cache (a snapshot after the
+repeated operations once two frames in a row repeat them and they are worth half a target of fragments; restored
+while every frame still repeats them; a pass that repeats whole is left out without a copy). Fragments are
+estimated, not counted: each draw's triangles through the program's `unity_MatrixVP * unity_ObjectToWorld`, cut to
+the view volume, the viewport and the scissor, culled by winding: what is rasterized, before depth, stencil and
+discard (King's Pass's scene pass: 8.9 layers; the counters above gave 6.98 + 2.00). `--skip-empty` leaves draws out
+that cannot rasterize (every triangle with two identical corners or outside one clip plane); `--dump <frame>`
+lists a frame's operations, `--src <program>` a program's sources, `--timeline` one line a frame; `--last`,
+`--skip-end` choose the frames.
+
+**Recorded** on the RG34XX-SP (Knulli), 64-bit, the port's settings, `UA_GL_REC=census UA_GL_REC_FILE=...`
+(the recording itself slows King's Pass from 53 to 40 fps and the fight from 42 to 24, so two frames are further
+apart in the game's time than in play):
+
+| scene (frames compared) | a frame's fragments | in repeated leading operations, strict | by what is read (mean) | frames with >= 25 / 50 / 75 % of their fragments in them | scene pass (720x450): operations, layers, leading operations repeated (median), its fragments | background camera's pass (576x360): the same | the simulated cache |
+|---|---|---|---|---|---|---|---|
+| King's Pass, standing (600) | 5.93 M | 0 % | 6.4 % | 9 / 0 / 0 % | 52, 8.9, 1 (the clear), 2 % | 8, 1.43, 6, 87 % | 0.31 M fragments a frame (5.2 %) |
+| King's Pass, walking left and right (600) | 6.05 M | 0 % | 0.0 % | 0 / 0 / 0 % | 58, 9.4, 1, 0 % | 11, 1.15, 1, 0 % | nothing |
+| Hall of Gods, the Gruz Mother fight (700) | 9.32 M | 0 % | 3.1 % | 0 / 0 / 0 % | 68, 10.8, 1, 0 % | 25, 7.35, 1, 16 % | 0.10 M (1.0 %) |
+
+Later restart points add nothing in any scene (the same percentages): no opaque whole-target draw sits inside
+the scene passes after their first draw. No repeated draw writes depth or stencil. City of Tears, a bench and a
+second room were not recorded: these three decide it.
+
+**Why the prefix ends where it does.**
+
+- *A moving particle batch feeds the scene's first draw.* The scene pass begins with a clear and then the blurred
+  background's copy, an opaque full-screen draw. That texture is the end of the background camera's pass and its
+  blur, and the background camera's pass has one particle batch (60 quads, the 7th of its 8 operations at King's
+  Pass) whose vertex positions differ from the frame before in 479 of 600 frames standing and whose index count
+  differs in 69 more. So the scene pass's very first draw reads other pixels in 548 of 600 frames, and everything
+  after it is blended over it. (In the other 52 the whole background chain repeats.)
+- *Swaying sprites all through the order.* In those 52 frames the scene pass repeats 8 operations (26 % of its
+  fragments) and ends at the first sprite of the grass shader, whose vertex shader moves the vertices by
+  `sin(_Time.y * _SwaySpeed + ...) * _SwayAmount` (`_SwayAmount` and `_PushAmount` are not 0: it does sway); 11 of
+  the pass's 52 operations use it, between the 9th and the 35th, with the large static layers between them. The
+  `_Time` uniform is not a stray upload: only the three shaders that read it get it.
+- *The arena's camera scrolls.* Gruz Mother's arena is wider than the screen: `unity_MatrixVP` differs from the
+  frame before in 547 of 700 frames of the fight (median largest difference 0.11; under 1e-4 in 105 of them, the
+  camera easing to rest, which still moves pixels), in 599 of 600 walking. In the fight's 153 still frames the
+  background pass repeats 15 of 25 operations, then meets the audience's animated batches (index counts and
+  positions change), and the scene pass's first draw, the background copy, differs in 698 of 700 frames; animated
+  batches recur every few operations through the rest.
+- *Strict comparison never matches.* Byte for byte the call stream differs before the first draw of every pass
+  in every frame: Unity takes each frame's dynamic vertex and index buffers from a pool, so the names in
+  `glBindBuffer` rotate (and the trace shows a 1,088-byte `glBufferSubData` a draw into a buffer no program
+  reads: the shaders declare no uniform block). Only a comparison of what each draw reads finds the repeats above, and that needs the state following
+  the census tool does, on the render thread: the bytes of every map kept and hashed (165 - 300 KB a frame).
+
+**What it could give.** The only stable prefix is the background camera's first 6 draws at King's Pass,
+standing: 0.23 M fragments a frame restored plus the 9 % of frames in which the whole background chain repeats,
+0.31 M in all: at the 5.7 ns a fragment of "Sprites' transparent texels" (1.85 ms a 720x450 layer) 1.8 ms, less a
+576x360 copy a frame to restore (0.19 ms by passbench's 0.30 ms per 720x450 copy): about 1.6 ms of an 18.9 ms
+frame, in the one scene of the three where UnityMain, not the GPU, is the limit (53 fps; were the GPU alone the
+limit, 58 at best). In the fight, where the GPU is the limit: 0.10 M fragments, 0.5 ms of 23.6 ms (42.4 -> 43.3
+fps) before the comparison's CPU time on a render thread that already uses 20 M cycles a frame there; walking:
+nothing, and the comparison still runs. Not built.
+
+What an implementation would have had to respect, for the record: the snapshot must carry depth and stencil if a
+prefix draw writes them or a later draw tests what the prefix wrote (none here: the sprites test depth without
+writing, the stencil operations keep); a multisampled target cannot be restored by one copy; a program whose
+uniforms change needs no special case (it is simply not a repeat), but a texture written in the frame (an upload,
+or a pass that drew it: the grab copies and blur targets) must count as changed unless its own inputs repeated;
+saving splits the pass on a tiler (a store and a load of the target, 0.2 ms each at 720x450); and a pass may be
+left out whole only if its target still holds its result or every reader of it is left out too.
+
+**The trace writer lost particle buffers' bytes (fixed).** Unity maps a particle system's vertex and index
+buffers at the start of the pass, then maps, writes and unmaps the sprite batches' buffers on the same targets,
+and only then binds the particle buffers again to flush and unmap them. `UA_GL_REC_FILE`'s writer (glrec.c) and
+`glreplay` kept one open map per target, so those late flushes were written without their bytes and replayed
+into nothing: in every trace recorded before 2026-11-22 the particle batches have all-zero vertices (degenerate
+triangles, no fragments; King's Pass: about four draws a frame, 7,000 flushes in a 3,700-frame trace). The game itself
+was never affected (the writer only observes). Both now keep maps by buffer (test_glrec's file scenario holds a
+map across another on its target; the replayed bytes are checked in pointer_test.sh's glreplay test). The
+replay measurements made before the fix (Mesa against libmali call by call, `--zero-discard`, the Mali against
+itself) replayed slightly less GPU work than the game's frame, the same in both arms of each comparison.
 
 ## The render thread's draws (drawbench, 2026-11-04)
 

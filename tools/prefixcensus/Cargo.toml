@@ -1,0 +1,11 @@
+[package]
+name = "prefixcensus"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "a UA_GL_REC_FILE trace's passes compared frame by frame: how many leading draws of a pass repeat the frame before, what ends the repeat, and the fragments they stand for"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
