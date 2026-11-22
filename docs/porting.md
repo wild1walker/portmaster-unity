@@ -1714,6 +1714,22 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
   pass `-c` and leave out `PORT_32BIT`: fix them there before the next submission.
 - pmcheck also notes two setup scripts that are 91 % alike (`patchscript`, `patchscript64`); Hollow
   Knight's pull request says why they stay two (different donors, players, folders and flags).
+- A message that ends the launch is PortMaster's error card, which stays until it is closed:
+  `pm_show_error "<what to do>" --title "Setup needed"`, then `pm_finish` and `exit 1` (merged
+  launchers do so, FTL and Rez among them), not `pm_message` with `sleep 8`, which goes by itself.
+  `funcs.txt` has taken portmsg's options (`--title`, `--type warning`) since `PM_FUNCS_VERSION` 4;
+  older PortMaster shows the text alone.
+- Keep the setup's tools and donors (`setup/`, `donor/`) when the game is set up; clear only the
+  work folders (`gamedata/.setup*`). A port with two builds sets the other one up later
+  (`HK_ROUTE=64` after a 32-bit setup), and the README's way to get a newer setup's changes (the
+  game back in `gamedata/`, `.setup_done` deleted) needs them too. With them removed, as Hollow
+  Knight's setup and launcher did until 2026-11-22, both ended at "not set up yet" (a reviewer's
+  check of the pull request). Hollow Knight keeps 68 MB for it (`setup/` 28, `donor/` 40). A launcher whose setup files are missing (an install from an
+  older release) says to install the port again.
+- Still to do in the templates (`setup-rs/templates/*/launcher.sh`, `*/patchscript`; `port_golden`
+  covers them): `pm_show_error` for the not-set-up and wrong-system messages, the setup's tools and
+  donors kept (the launchers' `for d in setup donor gamedata/.setup` and the patchscripts'
+  `rm -rf "$W" "$S" "$DONOR_DIR"`), and muOS's Retro swap (input.md, "Buttons by position").
 
 After `source "$controlfolder/utils/patcher.txt"` the launcher goes back to `$GAMEDIR` before
 anything relative (`./ua_host`): the patcher runs in the launcher's own shell, and a working directory
