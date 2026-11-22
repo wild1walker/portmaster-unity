@@ -92,6 +92,14 @@ packager never imports):
 PMU_PARITY_PYTHON=<venv>/bin/python setup-rs/tools/rs.sh <worktree> cargo test -p pmu --test port_parity -- --nocapture
 ```
 
+The same cases are kept as a golden file, `pmu/tests/golden/port.txt` (test `port_golden`, no Python): each
+command's exit status, stdout and stderr's last line, every file left (mode, size, a digest of its bytes,
+and of a zip's entries) and the three port.toml texts. It was written (2026-11-21) from a run whose every
+output was byte for byte the Python packager's, so the bar stays when the Python is gone; its inputs are
+made up in the test (no game or Unity data). A deliberate change of the templates or the packager changes
+it: `PMU_PARITY_DIR=1` keeps the outputs and `port.txt.new` to look at, `PMU_PORT_BLESS=1 cargo test -p pmu
+--test port_parity port_golden` writes it again.
+
 ## The setups that run pmu
 
 Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64,

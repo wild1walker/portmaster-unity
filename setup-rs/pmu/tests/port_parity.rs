@@ -716,3 +716,121 @@ fn port_parity() {
     }
     assert!(failures.is_empty(), "{} differences:\n{}", failures.len(), failures.join("\n\n"));
 }
+
+// ---- The packager's golden outputs (no Python)
+//
+// `pmu port new` / `pmu port package` on the synthetic cases above, against tests/golden/port.txt: each
+// command's exit status, stdout and stderr's last line, and every file left (mode, size, a digest of
+// its bytes; a zip's entries, nested zips included, digested too) and the three port.toml texts
+// dump_toml writes. The file was written from a run whose every output was byte for byte the
+// Python packager's (port_parity above, 2026-11-21, the last commit with convert/pmunity): it is
+// that bar kept without the Python. The inputs are made up here: no game or Unity data.
+// A deliberate change of the templates or the packager changes it: look at the difference
+// (PMU_PARITY_DIR keeps the outputs and writes port.txt.new), then write it again with
+//   PMU_PORT_BLESS=1 cargo test -p pmu --test port_parity port_golden
+
+/// The golden text of a run of every case under `base`.
+fn golden_text(base: &Path) -> String {
+    let (b, repo) = (base.to_string_lossy().into_owned(), wt().to_string_lossy().into_owned());
+    let norm = |s: &str| s.replace(&b, "<BASE>").replace(&repo, "<REPO>");
+    let mut out = String::new();
+    for case in cases(base) {
+        let r = run_case(base, &case, None);
+        let dst = base.join(case.name).join("rs");
+        let _ = fs::remove_dir_all(&dst);
+        fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        fs::rename(base.join("work"), &dst).unwrap();
+        out += &format!("== {}\n", case.name);
+        for k in 0..case.cmds.len() {
+            out += &format!("command {k}: {} -> exit {}\n", norm(&case.cmds[k].join(" ")), r.statuses[k]);
+            for l in norm(&r.stdout[k]).lines() {
+                out += &format!("  out: {l}\n");
+            }
+            if let Some(l) = norm(&r.stderr[k]).trim_end().lines().last() {
+                out += &format!("  err: {l}\n");
+            }
+        }
+        for (n, (mode, data)) in tree(&dst) {
+            out += &format!("file {n} {mode:o} {} {:016x}", data.len(), fnv(&data));
+            if let Some(e) = zip_entries(&data, &base.join("golden-cmp.zip")) {
+                out += &format!(" zip {} {:016x}", e.len(), fnv(e.join("\n").as_bytes()));
+            }
+            out += "\n";
+        }
+    }
+    let cfg_text = ANDROID.replace("[[questions]]\nid = \"PICTURE\"", "[[questions]]\nid = \"PIC\"");
+    put(&base.join("dump/cfg.toml"), &cfg_text);
+    for route in ["android", "apk", "mono-arm64"] {
+        let repo = port::Repo::new(wt());
+        let user = port::config::load_config(&base.join("dump/cfg.toml").to_string_lossy()).unwrap();
+        let mut cfg = port::config::build_config("mygame", &user);
+        let r = port::routes::route(&repo, route).unwrap().unwrap();
+        let donors = port::routes::port_donors(&cfg, &r);
+        cfg.table("player").set("donors", port::val::Val::List(donors));
+        let mine = port::config::dump_toml(&cfg, &r, &["controls"]).unwrap();
+        out += &format!("== dump_toml {route}\n");
+        for l in mine.lines() {
+            out += &format!("  {l}\n");
+        }
+    }
+    out
+}
+
+#[test]
+fn port_golden() {
+    // (a fixed place: the outputs name it; one run at a time: the lock)
+    let base = PathBuf::from("/tmp/pmu-port-golden");
+    let _ = fs::create_dir_all(&base);
+    if base.canonicalize().ok().as_deref() != Some(base.as_path()) {
+        eprintln!("port_golden: skipped (/tmp/pmu-port-golden is not a plain folder here)");
+        return;
+    }
+    let lock = fs::File::open(&base).unwrap();
+    rustix_lock(&lock);
+    for e in fs::read_dir(&base).unwrap().flatten() {
+        let p = e.path();
+        let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+    }
+    inputs(&base);
+    let got = golden_text(&base);
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/port.txt");
+    if std::env::var_os("PMU_PORT_BLESS").is_some_and(|v| !v.is_empty()) {
+        put(&file, &got);
+        eprintln!("port_golden: wrote {}", file.display());
+        return;
+    }
+    let want = fs::read_to_string(&file).unwrap_or_default();
+    if got == want {
+        if std::env::var_os("PMU_PARITY_DIR").is_none() {
+            let _ = fs::remove_dir_all(&base);
+        }
+        return;
+    }
+    put(&base.join("port.txt.new"), &got);
+    let (g, w): (Vec<&str>, Vec<&str>) = (got.lines().collect(), want.lines().collect());
+    let (mut diffs, mut section) = (Vec::new(), "");
+    let wset: std::collections::BTreeSet<&str> = w.iter().copied().collect();
+    for l in &g {
+        if l.starts_with("== ") {
+            section = l;
+        } else if !wset.contains(l) && diffs.len() < 40 {
+            diffs.push(format!("{section}: {l}"));
+        }
+    }
+    panic!(
+        "the packager's outputs are not tests/golden/port.txt's ({} lines against {}); the new text is {}/port.txt.new, the outputs beside it; lines not in the golden file:\n{}",
+        g.len(),
+        w.len(),
+        base.display(),
+        diffs.join("\n")
+    );
+}
+
+/// An exclusive lock on the golden run's folder, held while the test's handle lives.
+fn rustix_lock(f: &fs::File) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: flock on a descriptor this test owns
+    unsafe {
+        libc::flock(f.as_raw_fd(), libc::LOCK_EX);
+    }
+}
