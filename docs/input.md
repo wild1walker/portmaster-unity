@@ -32,11 +32,13 @@ names them and how the Android player sends them. Handhelds print the Nintendo l
 them (Anbernic, Miyoo, Powkiddy, TrimUI, the R36S family: B at the bottom, A on the right), so a game's
 Xbox prompts name the wrong letter for each button. Fix the letters, never the positions:
 
-**The action stays where it is; only the letters swap.** On a Nintendo-lettered handheld **B, at the
-bottom, jumps and confirms**; on an Xbox-lettered one **A, at the bottom, does**. That holds in every
-Unity port and on every firmware, whatever a firmware's own button setting says (the port's owner,
-2026-11-08 and again 2026-11-22). A port never moves an action to follow a letter, and never takes a
-firmware's letter-based map as it is (muOS's Retro, below).
+**A port changes the game's button letters, never the control scheme** (the port's owner,
+2026-11-08 and 2026-11-22). The game's bindings stay the game's, and the firmware's SDL map reaches
+the game as the firmware sends it, muOS's own button layout setting included: a port does not
+move an action to follow a letter, and does not rewrite a firmware's map. Only the prompts change,
+to the letters printed on the buttons that do each thing. Cuphead's `Pad.Letters`
+(`pad-prompts-android`) and Hollow Knight's `hk-pad-letters` are that: on a map by position, B
+(Nintendo-lettered, at the bottom) or A (Xbox-lettered) jumps and the prompt names it so.
 
 - Never set `UA_PAD_NAME` to a Nintendo pad's name to get Nintendo prompts. Input libraries swap a
   Nintendo pad's face buttons by letter: Hollow Knight's InControl (its Input System device, for any
@@ -49,32 +51,29 @@ firmware's letter-based map as it is (muOS's Retro, below).
   Knight; Cuphead's own `pad-prompts-android`). Such a patch reads `UA_PAD_LETTERS`: unset, or
   anything but `xbox`, the Nintendo layout's letters; `xbox` the game's Xbox letters, for handhelds
   printed like an Xbox pad.
-- The firmware's SDL map decides where `a` is, so a launcher makes it the bottom button. PortMaster's
-  own maps are by position (its `mapper.py` turns EmulationStation's `b` into SDL's `a`), and so are
-  Knulli's (checked on the RG34XX-SP). muOS has two maps for its pad and a setting for them: **Modern**
-  by position, and **Retro**, its default, by the printed letters (`a` = the button printed A, on the
-  right; `x` the top one), as in muOS's own menus. Taken as it is, Retro puts the jump on the right
-  button and the Nintendo pictures name every face button wrongly (Hollow Knight's testers on the
-  RG35XX H, 2026-11-21: "A is B and B is A"). muOS links the map it uses to
+- The firmware's SDL map decides where `a` is, and the letters follow it. PortMaster's own maps
+  are by position (its `mapper.py` turns EmulationStation's `b` into SDL's `a`), and so are Knulli's
+  (checked on the RG34XX-SP). muOS has two maps for its pad and a setting for them: **Modern** by
+  position, and **Retro**, its default, by the printed letters (`a` = the button printed A, on the
+  right; `x` the top one), as in muOS's own menus and its other ports. On Retro the game's jump is on
+  the right button, as muOS set it, and the game's own Xbox letters are the printed ones, so the
+  Nintendo pictures named every face button wrongly (Hollow Knight's testers on the RG35XX H,
+  2026-11-21: "A is B and B is A"; the Xbox answer was right). muOS links the map it uses to
   `/usr/lib/gamecontrollerdb.txt` and `/usr/lib32/gamecontrollerdb.txt`, which PortMaster's muOS
-  `control.txt` reads as `$SDL_GAMECONTROLLERCONFIG_FILE` and greps into `SDL_GAMECONTROLLERCONFIG`:
-  `.../info/gamecontrollerdb/retro.txt` or `modern.txt` (since August 2025; before,
-  `gamecontrollerdb_retro.txt` or `_modern.txt`; MustardOS `script/mux/sdl_map.sh`). On Retro the
-  launcher swaps A/B and X/Y back in `SDL_GAMECONTROLLERCONFIG`, after setting it and before the game
-  starts; the letters stay the setup's answer (`UA_PAD_LETTERS`):
+  `control.txt` reads as `$SDL_GAMECONTROLLERCONFIG_FILE`: `.../info/gamecontrollerdb/retro.txt` or
+  `modern.txt` (since August 2025; before, `gamecontrollerdb_retro.txt` or `_modern.txt`; MustardOS
+  `script/mux/sdl_map.sh`). A launcher shows the game's own letters on Retro, after reading the
+  setup's answer:
 
   ```sh
-  export SDL_GAMECONTROLLERCONFIG="${SDL_GAMECONTROLLERCONFIG:-$sdl_controllerconfig}"
-  [ "$CFW_NAME" = muOS ] && case "$(readlink "$SDL_GAMECONTROLLERCONFIG_FILE" 2>/dev/null)" in *retro.txt)
-    SDL_GAMECONTROLLERCONFIG=$(printf '%s\n' "$SDL_GAMECONTROLLERCONFIG" | sed 's/,a:/,@:/; s/,b:/,a:/; s/,@:/,b:/; s/,x:/,@:/; s/,y:/,x:/; s/,@:/,y:/') ;; esac
+  [ "$CFW_NAME" = muOS ] && case "$(readlink "$SDL_GAMECONTROLLERCONFIG_FILE" 2>/dev/null)" in
+    *retro.txt) export UA_PAD_LETTERS=xbox ;; esac
   ```
 
-  The swapped line is muOS's own Modern map (the RG35XX H's, field for field; BusyBox sed gives the
-  same). SDL takes `SDL_GAMECONTROLLERCONFIG` over the file `SDL_GAMECONTROLLERCONFIG_FILE` names
-  (the variable's mappings are added last, at the user's priority). Hollow Knight's launcher does
-  this (2026-11-22; the day before it showed the Xbox letters on Retro instead, which left the jump
-  on the right button: wrong). Not yet: Cuphead's launcher, and pmu's launcher templates
-  (`setup-rs/templates/*/launcher.sh`, which `port_golden` covers).
+  Hollow Knight's launcher does (2026-11-22). Swapping A/B and X/Y back in `SDL_GAMECONTROLLERCONFIG`
+  instead, so that the bottom button jumps on Retro too, was tried the same day and dropped: it
+  overrides a muOS setting. Not yet: Cuphead's launcher (`CUPHEAD_PROMPTS=xbox` there), and pmu's
+  launcher templates (`setup-rs/templates/*/launcher.sh`, which `port_golden` covers).
 
 ## What the game reads
 

@@ -1729,7 +1729,7 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
 - Still to do in the templates (`setup-rs/templates/*/launcher.sh`, `*/patchscript`; `port_golden`
   covers them): `pm_show_error` for the not-set-up and wrong-system messages, the setup's tools and
   donors kept (the launchers' `for d in setup donor gamedata/.setup` and the patchscripts'
-  `rm -rf "$W" "$S" "$DONOR_DIR"`), and muOS's Retro swap (input.md, "Buttons by position").
+  `rm -rf "$W" "$S" "$DONOR_DIR"`), and the game's own letters on muOS's Retro layout (input.md, "Buttons by position").
 
 After `source "$controlfolder/utils/patcher.txt"` the launcher goes back to `$GAMEDIR` before
 anything relative (`./ua_host`): the patcher runs in the launcher's own shell, and a working directory
