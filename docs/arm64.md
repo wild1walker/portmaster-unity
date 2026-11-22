@@ -268,7 +268,34 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
   Pass 48.0 fps over 94 s, 609 MB resident, 217 MB the lowest available; a second King's Pass run 32.5 fps and
   City of Tears 34.8 (601 - 611 MB resident, 212 - 217 MB available): the runs paced at half the refresh rate
   ([arm64-routes.md](arm64-routes.md), the G350's paragraph). The handheld then stopped answering 95 s into the next run (the boss save,
-  loading its scene; arm64-routes.md): the other three ports are not tested there yet.
+  loading its scene; arm64-routes.md).
+  **The G350 as a player starts them (2026-11-21/22): all four release candidates set up and played through
+  EmulationStation.** Each zip unpacked into `ports/`, the player's game files in `gamedata/`, then launched from
+  the Ports list by a test entry that runs the port's launcher (EmulationStation's own `perfmax performance`
+  around it; pad presses injected on the handheld's pad device: EmulationStation restarted, a single A, the
+  launch confirmed in the process list), PortMaster's patcher answered with A (each question's first option),
+  the game left by the exit hotkey. Silent (the dummy sound driver, the mixer at 0), EmulationStation resident,
+  the handheld at 76 - 81 C in play. 33 launches (4 setups, 29 game starts), none hung, none mislaunched, every
+  exit by the hotkey in 2 s.
+  | port | setup from the first launch | installed | in play | fps | resident, lowest MemAvailable |
+  |---|---|---|---|---|---|
+  | Hollow Knight (36 MiB sound budget, pmu of 553bdfb; answers medium / fill / nintendo) | 55 min 53 s | 1887 MB | five scenes of test saves | King's Pass 42.4 - 47.2, City of Tears 36.9, Hall of Gods 39.4, a Crossroads bench 45.2, 24 rooms 44.4 | 618 - 643 MB; 162 - 233 MB |
+  | Cuphead (answers Low / bars / device resolution / nintendo) | 80 min 42 s | 2.4 GB | Botanic Panic (the helper's test level), shooting | 38.7 (37.2 - 41.9); the menus 50 - 53 | 505 MB; 338 MB |
+  | Blasphemous (no questions; pmu of 553bdfb) | 108 min 23 s | 3258 MB | New Game to the first level, walking | 43.7 (37.4 - 55.4); the menu 60 | 704 - 720 MB; **59 MB** (the menu 564 - 583 MB; 258 - 271 MB) |
+  | Enter the Gungeon (answers auto / auto; in a folder of its own, the launcher's GAMEDIR changed to it) | 22 min 43 s | 701 MB | the Breach, walking, with `UA_JIT_WARM=0` | 56.3 (53.7 - 57.6) | 570 MB; 218 MB |
+  No setup stopped or was refused, so the setup's resume fix (1e4f8ff) was not exercised on the handheld. Open
+  from these runs:
+  - **Enter the Gungeon crashes at every start after its first** with the release's settings (2 of 2): SIGSEGV in
+    `ua_host` (`+0x4f110`, build id c177685...) on UnityMain right after the first frame, `Assembly-CSharp` text in
+    the registers, the fault address just past a mapping. The first start (after the setup) ran and left
+    `data/jitwarm.txt` (5,139 lines beside the setup's 15,232-line `jitwarm-seed.txt`) before the exit hotkey
+    killed it; with `UA_JIT_WARM=0` the same install starts and plays. The warm-up's reading of its own list
+    is the suspect; the logs and both lists are kept (the work folder's `rc/evidence/`).
+  - **Blasphemous's first level leaves 59 MB** of the G350's 895 MB with EmulationStation resident (the game
+    704 - 720 MB), 20 MB over the launcher-less test's memory watchdog line, and runs at 37 - 55 fps there.
+  - Cuphead's Botanic Panic at 38 - 39 fps at the device's resolution.
+  - Hollow Knight's scripted boss fight and death did not trigger on the G350 (arm64-routes.md, "The sound
+    budget on a 1 GB handheld").
 - An earlier release's 32-bit build on the card: the 64-bit setup needs the game's files again (the 32-bit
   setup used them up), and each launcher says so; the saves come over (Cuphead and Hollow Knight copy
   `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none; Blasphemous's stay in

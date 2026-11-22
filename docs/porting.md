@@ -959,7 +959,9 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   fix (2026-11-09): textures at 0.375 instead of 0.5 on 1 GB handhelds (`textures.lowmem_scale`; about a
   texel for each pixel of its 540x360 picture, the same picture side by side) and 16 MiB of a scene's
   sound decoded instead of 36 (`audio.lowmem_pcm_budget_mb`): City of Tears on muOS 663 -> 597 MB, the
-  lowest available 266 -> 332 MB, 56.0 -> 56.3 fps. The G350 with 126 MB held had hung in that scene.
+  lowest available 266 -> 332 MB, 56.0 -> 56.3 fps. The G350 with 126 MB held had hung in that scene. The
+  64-bit only release went back to 36 MiB on 1 GB handhelds (2026-11-21): on the G350 it leaves what the 32-bit
+  build left with 16 ([arm64-routes.md](arm64-routes.md), "The sound budget on a 1 GB handheld").
 
 ### A pixel-perfect picture on another panel
 
@@ -1458,7 +1460,8 @@ The same steps without the setup, on a PC:
    takes the GPU's clock in a warm handheld: [profiling.md](profiling.md#fmods-mixer-and-the-audio-step-2026-10-24)).
    A port with memory to spare raises it (the step's log names the scene that holds the most);
    `audio.lowmem_pcm_budget_mb` is the budget on handhelds with at most `audio.ram_mb` (1024) of RAM, as
-   `textures.lowmem_scale` is the scale there (Hollow Knight: 36 MiB, 16 on 1 GB handhelds).
+   `textures.lowmem_scale` is the scale there (Hollow Knight: 36 MiB on every handheld since its 64-bit only
+   release; its 32-bit build had 16 on 1 GB handhelds).
 2. **Convert**: `python -m pmunity convert <Data> [<out>] --config game.json` with a config like
    the `convert` table above (`{"steps": ["shaders", "settings", "audio"], "settings":
    {"graphics_apis": [11]}}`); a game's own steps go in a plugin: field edits in a JSON file

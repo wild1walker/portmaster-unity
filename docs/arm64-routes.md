@@ -1330,6 +1330,30 @@ the game's twelve always-playing loops stay compressed, and the budget of 36 MiB
 compressed. Which budget a 1 GB handheld gets was set for memory (2026-11-09); with 1 MB allocator blocks the
 64-bit build has 60 MB more to spare at King's Pass than it had then.
 
+**The sound budget on a 1 GB handheld (G350, 2026-11-21).** Hollow Knight's aarch64-only release set up twice on the
+G350 (dArkOS, 895 MB, no swap), with `audio.lowmem_pcm_budget_mb` 16 and 36, against the 32-bit bench install (16 MiB),
+every run launched by EmulationStation (its `perfmax performance`; one test entry first in Ports, EmulationStation
+restarted and a single A for each launch), silent, EmulationStation resident. The lowest `MemAvailable` over the
+scene (a logger's line every second) and FMOD's mixer thread in per cent of a core:
+
+| scene | 32-bit, 16 MiB | 64-bit, 16 MiB | 64-bit, 36 MiB |
+|---|---|---|---|
+| King's Pass, standing 120 s | 206 MB, 48.9 % | 230 MB, 43.1 % | 208 MB, 39.7 % |
+| City of Tears, standing 120 s | 223 and 209 MB, 46.2 and 45.9 % | 245 MB, 41.5 % | 218 and 221 MB, 38.4 and 38.2 % |
+| Hall of Gods, walking and striking 120 s | 201 MB, 47.5 % | 208 MB, 34.1 % | 207 MB, 31.6 % |
+| a Crossroads bench, 210 s | 221 MB, 61.8 % | 253 MB, 55.6 % | 233 MB, 49.4 % |
+| 24 rooms, one every 8 s of play (a test DLL sends the Knight through the doors: 34 - 38 scene loads in 420 s) | 173 and 168 MB, 47.8 and 47.9 % | 189 MB, 45.6 % | 166 and 162 MB, 40.6 and 40.5 % |
+
+With 36 MiB the 64-bit build has the 32-bit build's memory at 16 within a few MB (room by room in the tour between
+8 MB more and 8 MB less; 6 MB less at the tour's lowest point, repeatably, with over 160 MB left), and the mixer
+takes 3 - 6 points of a core less than at 16 MiB (and 7 - 16 less than the 32-bit build's); the frame rates do not
+move (City of Tears 36.9 fps with both, the tour 44.1 and 44.4, the bench 45.6 and 45.2). The game's resident size
+is about 20 MB larger (King's Pass 615 -> 626 MB, City 605 -> 625). Hollow Knight's 64-bit only release takes 36 MiB
+on every handheld (portmaster-hollowknight port.toml). Not measured: a boss fight and a death with its respawn load.
+The scripted presses that reach them on the RG34XX-SP did not on the G350 (the Knight stands at the statue, the
+challenge does not start; it stays at the Crossroads bench), so the boss save's row is the Hall of Gods room and the
+tour stands in for the loads.
+
 **Looked at and left** (2026-11-21, numbers from `UA_PROF=500` on UnityMain and the mixer, Knulli, 64-bit):
 
 - *Physics2D on the job workers.* `PhysicsManager2D::Simulate` is on 5.2 % of UnityMain's samples at King's Pass
