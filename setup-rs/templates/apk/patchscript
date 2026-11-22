@@ -206,6 +206,9 @@ for d in lib assets; do
 done
 for f in "$A"/*.apk "$A"/*.obb "$A"/android_package.json; do
   [ -f "$f" ] || continue
+  # (the installed package set up again, on a card with links: the layout's file is the installed
+  # one, and GNU mv refuses to move a file onto itself)
+  if [ "$f" -ef "$GAMEDIR/${f##*/}" ]; then rm -f "$f"; continue; fi
   mv -f "$f" "$GAMEDIR/" || fail "Could not install $(basename "$f")."
 done
 [ -f "$GAMEDIR/lib/libunity.so" ] && [ -f "$GAMEDIR/base.apk" ] && [ -f "$GAMEDIR/android_package.json" ] \

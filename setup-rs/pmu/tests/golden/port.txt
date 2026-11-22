@@ -736,7 +736,7 @@ command 5: port package port3 --out port3-rel --runtime <BASE>/in/rt --donors <B
   out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 227 cd6fc800141165bb
-file port-rel/mygame.zip 644 24028 2665bddcfae171fd zip 40 e3dc4007f4ba73a7
+file port-rel/mygame.zip 644 24110 6571d4e7430ae7f4 zip 40 434416bf36ad4496
 file port-rel/submission/mygame/My Game.sh 644 7604 c27e8024aaf3aabe
 file port-rel/submission/mygame/README.md 644 2125 f54373943efb03c3
 file port-rel/submission/mygame/gameinfo.xml 644 267 32eef5e1ac1059f2
@@ -752,7 +752,7 @@ file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/submission/mygame/mygame/port.env 644 185 b5d3a3c6cb138934
 file port-rel/submission/mygame/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/submission/mygame/mygame/setup.txt 644 265 d7323f2f73dd9d11
-file port-rel/submission/mygame/mygame/setup/patchscript 644 15093 8925aab733808679
+file port-rel/submission/mygame/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port-rel/submission/mygame/mygame/setup/pmu 755 3064 d920b61413994e50
 file port-rel/submission/mygame/mygame/setup/setup.env 644 535 14d65807ffd7d38f
 file port-rel/submission/mygame/mygame/ua_host 755 3064 869b4522d89f2a0c
@@ -774,7 +774,7 @@ file port-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
 file port-rel/zip/mygame/port.json 644 862 fe03e37076921092
 file port-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/zip/mygame/setup.txt 644 265 d7323f2f73dd9d11
-file port-rel/zip/mygame/setup/patchscript 644 15093 8925aab733808679
+file port-rel/zip/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
 file port-rel/zip/mygame/setup/setup.env 644 535 14d65807ffd7d38f
 file port-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
@@ -790,12 +790,12 @@ file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/port.env 644 185 b5d3a3c6cb138934
 file port/mygame/port.json 644 862 fe03e37076921092
 file port/mygame/setup.txt 644 265 d7323f2f73dd9d11
-file port/mygame/setup/patchscript 644 15093 8925aab733808679
+file port/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port/mygame/setup/setup.env 644 535 14d65807ffd7d38f
 file port/package.sh 755 1421 03ede34b985f8f09
 file port/port.build.json 644 4213 cef3435c6f2fed62
 file port/testing_thread.txt 644 955 78e506d16c6356d0
-file port2-rel/mygame.zip 644 24062 0b120f42bbd757f9 zip 40 d73e9c773517c1ff
+file port2-rel/mygame.zip 644 24144 e4158c9545599675 zip 40 ae37369567f255aa
 file port2-rel/testing_thread.txt 644 1094 6b2aedd3e01bfb45
 file port2-rel/zip/V7.sh 644 7554 359c07579f587fd2
 file port2-rel/zip/mygame/README.md 644 2910 9bafdc77f556a10e
@@ -812,7 +812,7 @@ file port2-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
 file port2-rel/zip/mygame/port.json 644 991 616ab073864fb681
 file port2-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port2-rel/zip/mygame/setup.txt 644 260 3c2992b71f821a0e
-file port2-rel/zip/mygame/setup/patchscript 644 15093 8925aab733808679
+file port2-rel/zip/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port2-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
 file port2-rel/zip/mygame/setup/setup.env 644 485 c256b7cd09b94e92
 file port2-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
@@ -828,12 +828,12 @@ file port2/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port2/mygame/port.env 644 185 b5d3a3c6cb138934
 file port2/mygame/port.json 644 991 616ab073864fb681
 file port2/mygame/setup.txt 644 260 3c2992b71f821a0e
-file port2/mygame/setup/patchscript 644 15093 8925aab733808679
+file port2/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port2/mygame/setup/setup.env 644 485 c256b7cd09b94e92
 file port2/package.sh 755 1421 03ede34b985f8f09
 file port2/port.build.json 644 4118 9437726346a65838
 file port2/testing_thread.txt 644 1094 6b2aedd3e01bfb45
-file port3-rel/mygame.zip 644 23814 d50d951a049d40c3 zip 38 9b1a0815c14d275e
+file port3-rel/mygame.zip 644 23896 336e2b26a58294d5 zip 38 e03bd9013d577a27
 file port3-rel/testing_thread.txt 644 953 cb35801d64402d5e
 file port3-rel/zip/V7only.sh 644 7594 96207691d997d34a
 file port3-rel/zip/mygame/README.md 644 2926 eacd2fe1dba897e6
@@ -850,7 +850,7 @@ file port3-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
 file port3-rel/zip/mygame/port.json 644 858 c7947f6716f6d900
 file port3-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port3-rel/zip/mygame/setup.txt 644 264 5468d0c077e29d44
-file port3-rel/zip/mygame/setup/patchscript 644 15093 8925aab733808679
+file port3-rel/zip/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port3-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
 file port3-rel/zip/mygame/setup/setup.env 644 479 1022fec269d6eb7d
 file port3-rel/zip/mygame/ua_host64 755 3064 d920b61413994e50
@@ -865,7 +865,7 @@ file port3/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port3/mygame/port.env 644 185 b5d3a3c6cb138934
 file port3/mygame/port.json 644 858 c7947f6716f6d900
 file port3/mygame/setup.txt 644 264 5468d0c077e29d44
-file port3/mygame/setup/patchscript 644 15093 8925aab733808679
+file port3/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port3/mygame/setup/setup.env 644 479 1022fec269d6eb7d
 file port3/package.sh 755 1421 03ede34b985f8f09
 file port3/port.build.json 644 4134 62359057bd8c8af7
