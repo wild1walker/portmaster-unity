@@ -867,7 +867,7 @@ class NewAndSetupTest(unittest.TestCase):
             setup = os.path.join(out, 'mygame', 'setup')
             self.assertTrue(os.path.isfile(os.path.join(setup, 'hooks', 'pre_convert')))
             self.assertEqual([f for _, _, fs in os.walk(os.path.join(out, 'mygame')) for f in fs if f.endswith('.sh')], [])
-            tpl = os.path.join(os.path.dirname(P.__file__), 'port_template')
+            tpl = P.TEMPLATES
             routes = [r for r in sorted(os.listdir(tpl)) if os.path.isfile(os.path.join(tpl, r, 'patchscript'))]
             self.assertGreaterEqual(len(routes), 5)
             for route in routes:
@@ -883,7 +883,7 @@ class NewAndSetupTest(unittest.TestCase):
         """every template started by a relative name with GAMEDIR=. (by hand, from the port folder) runs on:
         its line that runs the script again by its relative name is for an absolute start only (it ran
         itself again for ever)"""
-        tpl = os.path.join(os.path.dirname(P.__file__), 'port_template')
+        tpl = P.TEMPLATES
         routes = [r for r in sorted(os.listdir(tpl)) if os.path.isfile(os.path.join(tpl, r, 'patchscript'))]
         self.assertGreaterEqual(len(routes), 5)
         for route in routes:
@@ -930,7 +930,7 @@ class NewAndSetupTest(unittest.TestCase):
             self.assertTrue(P.wants('pmunity', P.merge(base, over)))
         # the routes whose release can ship pmu instead of the Python
         for route in ('android', 'mono-arm64', 'box64', 'apk', 'il2cpp-arm64'):
-            r = json.load(open(os.path.join(os.path.dirname(P.__file__), 'port_template', route, 'route.json')))
+            r = json.load(open(os.path.join(P.TEMPLATES, route, 'route.json')))
             self.assertTrue({'pmu?', 'pmunity?', 'pybundle?'} <= set(r['package']), route)
 
     def test_vulkan_port(self):

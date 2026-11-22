@@ -47,7 +47,7 @@ The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 On the porter's computer, not the handheld: crates/port is `port.py`'s `port new` and `port
 package` (and what they call: the route hooks' `port_new` of route.py's box64 part, il2cpp.py,
 mono64.py and apk.py, route.py's `port_package`), the same arguments as `python -m pmunity port
-new|package`. They read the same inputs (port.toml or a .json config, `port_template/<route>/`
+new|package`. They read the same inputs (port.toml or a .json config, `setup-rs/templates/<route>/`
 with its route.json and templates, the runtime's builds, the donors) and write the same files:
 port.build.json, port.json, setup.env, port.env, the rendered templates, gameinfo.xml,
 testing_thread.txt and `.port_files` byte for byte (dicts in the Python's insertion order, JSON
@@ -71,7 +71,7 @@ on pkgzip, libz-sys (zlib, static) and libc.)
 
 The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
 come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working
-folder) with `convert/pmunity/port_template`. What stays with the Python: `port new --data <game>`
+folder) with `setup-rs/templates`. What stays with the Python: `port new --data <game>`
 (the check of a game's files, `port check`; a port.toml that names `game.unity_versions` is what
 `pmu port new` takes), `port shot`, `port routes`, and hook modules named in
 `$PMUNITY_PORT_HOOKS` (pmu stops: status 2 for the first three, 1 for the last). `made_by` in
@@ -121,7 +121,7 @@ was compared on four free macOS games of 2020.3 - 6000.3 (below) before `metal` 
 
 ## What each setup runs on the handheld
 
-The commands every setup template (`convert/pmunity/port_template/<route>/patchscript`) and
+The commands every setup template (`setup-rs/templates/<route>/patchscript`) and
 Cuphead's setups run on the handheld, and which run on pmu (2026-11-02). Besides these the setups
 use the system's shell tools (sed, awk, find, sha256sum, df), PortMaster's 7-Zip for archives,
 curl or wget for Unity's whole installer when range reads fail, and a port's own hooks

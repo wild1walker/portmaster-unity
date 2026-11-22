@@ -184,15 +184,15 @@ one line set to `True` (then `port new` and `port package` again for each port).
 | place | what it decides | aarch64 only |
 |---|---|---|
 | `convert/pmunity/port.py` `decide_routes`, `DEFAULTS['port']['route']` | the route `port check` / `port new` recommends: android first for a Mono desktop build, then il2cpp-arm64, mono-arm64 (.NET 4.x; .NET 3.5 on 2017.4 with Mono's 4.x class libraries, `player.mono64_classlibs`), box64 | `aarch64_only_route()` moves android to mono-arm64 |
-| `port_template/<route>/route.json` `package` | the release's parts: android `ua_host` (armhf); mono-arm64 and il2cpp-arm64 `ua_host_arm64` (the 64-bit one named `ua_host`) and `mono64`; apk `ua_host?`, `ua_host64?` by `player.abis` | android's list is never used: the route changes |
+| `setup-rs/templates/<route>/route.json` `package` | the release's parts: android `ua_host` (armhf); mono-arm64 and il2cpp-arm64 `ua_host_arm64` (the 64-bit one named `ua_host`) and `mono64`; apk `ua_host?`, `ua_host64?` by `player.abis` | android's list is never used: the route changes |
 | `route.json` `donors`, `port_donors()`, `DONOR_RX` | android: `donor-<v>-mono-armv7.apk`; mono-arm64: the `il2cpp-arm64` one and the `mono-armv7` one (its engine assemblies: an IL2CPP build has none) | the Mono donor ships without `lib/` |
 | `port.py` `COMPONENTS` / `wants()` | `_component_ua_host` (runtime/host/out/ua_host, armhf), `_component_ua_host_arm64` (out/arm64/ua_host as `ua_host`), `_component_ua_host64` (as `ua_host64`, the apk route), `_component_mono64` (bridge + Unity's Mono per line), pmu/asmpatch/pmhlslcc/pmspirvcross (always aarch64) | `wants('ua_host')` false |
 | `port.py` `port_json()`, route hooks (`mono64.py`, `apk.py` `port_new`) | port.json `reqs` `armhf` (android always; apk with armeabi-v7a only) | no `armhf` |
 | `port.py` `package()` `build.outputs` | the porter's own builds, any architecture (pmhwdec's `armhf/`, `arm64/`, `aarch64/`) | EM_ARM outputs left out |
-| `port_template/android/launcher.sh` | stops without `/lib/ld-linux-armhf.so.3`; runs `ua_host` (armhf) | not used |
-| `port_template/mono-arm64/launcher.sh`, `il2cpp-arm64/launcher.sh` | stop unless `uname -m` is aarch64; run `ua_host` (aarch64) | used |
-| `port_template/apk/launcher.sh`, `apk/patchscript` | `t32` where `/lib/ld-linux-armhf.so.3` and `ua_host` exist, else `t64` with `ua_host64` | only `ua_host64` shipped |
-| `port_template/*/patchscript` `donor()` | `donor-$V-<backend>-<armv7\|arm64>.apk`; mono-arm64 reads `donor mono armeabi-v7a` for engine assemblies and `pm winbcl --donor` | the slim Mono donor keeps its name |
+| `setup-rs/templates/android/launcher.sh` | stops without `/lib/ld-linux-armhf.so.3`; runs `ua_host` (armhf) | not used |
+| `setup-rs/templates/mono-arm64/launcher.sh`, `il2cpp-arm64/launcher.sh` | stop unless `uname -m` is aarch64; run `ua_host` (aarch64) | used |
+| `setup-rs/templates/apk/launcher.sh`, `apk/patchscript` | `t32` where `/lib/ld-linux-armhf.so.3` and `ua_host` exist, else `t64` with `ua_host64` | only `ua_host64` shipped |
+| `setup-rs/templates/*/patchscript` `donor()` | `donor-$V-<backend>-<armv7\|arm64>.apk`; mono-arm64 reads `donor mono armeabi-v7a` for engine assemblies and `pm winbcl --donor` | the slim Mono donor keeps its name |
 | `pmu player donor --backend --abi [--managed]` (`crates/pkgzip/src/player.rs`) | the player package from donors: `Libs/<abi>/` only from a donor of the backend and ABI; `--managed` the engine assemblies from any donor | reads no `lib/` of the Mono donor for `arm64-v8a` |
 | `pmu apk --target auto\|arm64\|armhf` (`crates/apk/src/lib.rs`) | the apk route's ABI: auto = armeabi-v7a where the system has a 32-bit userland, else arm64-v8a; `--il2cpp` compiles a Mono armv7-only build for arm64 | `player.abis = ["arm64-v8a"]` |
 | `pmu android-data --mono64` / `--il2cpp` (`crates/androiddata`) | the APK and OBB for the IL2CPP player with the Mono bridge / IL2CPP metadata | the 64-bit route's |

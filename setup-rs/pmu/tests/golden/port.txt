@@ -544,7 +544,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh or `pmunity port shot`
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 157 86d9f60cc8267f8d
-file port-rel/mygame.zip 644 486784 d7c4219c24a611a3 zip 161 244c689237622704
+file port-rel/mygame.zip 644 486801 5f2d4f791cc52cae zip 161 b4f9562ce9ce7c79
 file port-rel/testing_thread.txt 644 950 11138a6488584ab2
 file port-rel/zip/Vk.sh 644 7757 2bd69ca22b7cf9e1
 file port-rel/zip/mygame/README.md 644 2347 ac43b2226132b7df
@@ -588,11 +588,11 @@ file port-rel/zip/mygame/setup/pmunity/nsis.py 644 17062 2e2d94a7775894a1
 file port-rel/zip/mygame/setup/pmunity/patch_obb.py 644 6652 1b5ee093f2c7807c
 file port-rel/zip/mygame/setup/pmunity/player.py 644 13057 de47eaa749de6e3c
 file port-rel/zip/mygame/setup/pmunity/plugins.py 644 52251 62f4710a1ee172c8
-file port-rel/zip/mygame/setup/pmunity/port.py 644 216900 0ab60a428bfdc58e
+file port-rel/zip/mygame/setup/pmunity/port.py 644 216934 5a6b8477c1d50114
 file port-rel/zip/mygame/setup/pmunity/prefs.py 644 5443 98865dbae877ae71
 file port-rel/zip/mygame/setup/pmunity/quality.py 644 35554 d2f1b9c00c6d7ab8
 file port-rel/zip/mygame/setup/pmunity/retarget.py 644 12378 533cd5f3987d0bb4
-file port-rel/zip/mygame/setup/pmunity/route.py 644 40747 0a014915c0880b65
+file port-rel/zip/mygame/setup/pmunity/route.py 644 40789 f8427cd98f7e0891
 file port-rel/zip/mygame/setup/pmunity/settings.py 644 2673 c620504eb8155a71
 file port-rel/zip/mygame/setup/pmunity/shaders/__init__.py 644 0 cbf29ce484222325
 file port-rel/zip/mygame/setup/pmunity/shaders/blob.py 644 17466 a2212deecc3202fd
@@ -1238,7 +1238,7 @@ command 1: port new mygame --config noversion.toml --out p2 -> exit 1
 command 2: port new mygame --config a64box.toml --out p3 -> exit 1
   err: port.aarch64_only: the nope route has no aarch64-only release (routes: mono-arm64, il2cpp-arm64, box64, apk)
 command 3: port new mygame --config noroute.toml --out p4 -> exit 1
-  err: route 'nope' has no templates (port_template/nope/route.json; routes with templates: android, apk, box64, il2cpp-arm64, mono-arm64)
+  err: route 'nope' has no templates (templates/nope/route.json; routes with templates: android, apk, box64, il2cpp-arm64, mono-arm64)
 command 4: port new mygame --config mc.toml --out p5 -> exit 1
   err:   files.own: 'port.toml' must be a path in the port's source folder (not port.toml or port.build.json)
 command 5: port new mygame --config ok.toml --out other -> exit 1

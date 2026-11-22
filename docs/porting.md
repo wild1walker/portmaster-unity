@@ -112,11 +112,11 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 
 | route | when | status |
 |---|---|---|
-| `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, translated on the handheld by the release's `pmhlslcc`; a 2021.2+ Windows build's class libraries fetched by the setup, `pmunity winbcl`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `convert/pmunity/port_template/android/` |
-| `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `convert/pmunity/port_template/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
-| `mono-arm64` | a Mono build of Unity 2017.4+ with the .NET 4.x runtime on a 64-bit userland: the game's own assemblies run by Unity's Mono (built for aarch64 Linux, shipped with the release) inside Unity's arm64 IL2CPP player, whose `libil2cpp.so` is a bridge to it; no IL2CPP compile, the desktop's runtime and class libraries. .NET 3.5 games run on the line's MonoBleedingEdge with Mono's 4.x class libraries built from the same sources (`tools/mono64/build-classlibs.sh`; Cuphead, [mono-arm64.md](mono-arm64.md#a-net-35-game-on-the-4x-class-libraries-cuphead)), not yet through `port new`. Offered by `port check`, not yet recommended over the other routes | templates in `convert/pmunity/port_template/mono-arm64/`, hook `mono64.py`: the android route's setup with the IL2CPP player and its engine modules (`player donor --managed` from an IL2CPP and a Mono donor) and `android-data --mono64`; the release's `setup/mono64/<line>/` (the package part `mono64`: `runtime/mono64/build.sh` and `tools/mono64/build-mono.sh <line>`, Docker; `--mono64-work`) goes into `lib/` ([mono-arm64.md](mono-arm64.md)) |
-| `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `convert/pmunity/port_template/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
-| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `convert/pmunity/port_template/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
+| `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, translated on the handheld by the release's `pmhlslcc`; a 2021.2+ Windows build's class libraries fetched by the setup, `pmunity winbcl`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `setup-rs/templates/android/` |
+| `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `setup-rs/templates/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmunity il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
+| `mono-arm64` | a Mono build of Unity 2017.4+ with the .NET 4.x runtime on a 64-bit userland: the game's own assemblies run by Unity's Mono (built for aarch64 Linux, shipped with the release) inside Unity's arm64 IL2CPP player, whose `libil2cpp.so` is a bridge to it; no IL2CPP compile, the desktop's runtime and class libraries. .NET 3.5 games run on the line's MonoBleedingEdge with Mono's 4.x class libraries built from the same sources (`tools/mono64/build-classlibs.sh`; Cuphead, [mono-arm64.md](mono-arm64.md#a-net-35-game-on-the-4x-class-libraries-cuphead)), not yet through `port new`. Offered by `port check`, not yet recommended over the other routes | templates in `setup-rs/templates/mono-arm64/`, hook `mono64.py`: the android route's setup with the IL2CPP player and its engine modules (`player donor --managed` from an IL2CPP and a Mono donor) and `android-data --mono64`; the release's `setup/mono64/<line>/` (the package part `mono64`: `runtime/mono64/build.sh` and `tools/mono64/build-mono.sh <line>`, Docker; `--mono64-work`) goes into `lib/` ([mono-arm64.md](mono-arm64.md)) |
+| `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `setup-rs/templates/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
+| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `setup-rs/templates/apk/`, hooks in `apk.py`: the setup runs `pmunity apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmunity apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
 
 ### Both builds in one release: 32-bit where it can, 64-bit where it must
@@ -315,7 +315,7 @@ library and the soundbanks), or ARM libraries of the game's exact
 version that the porter supplies (FMOD, Wwise for sound; [plugins.md](plugins.md)). android-data repeats it as warnings and writes `plugins.map` for the
 runtime; a port config's `plugins` table changes the map.
 
-A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`:
+A route is a folder `setup-rs/templates/<route>/` with a `route.json`:
 
 ```json
 {
@@ -328,7 +328,7 @@ A route is a folder `convert/pmunity/port_template/<route>/` with a `route.json`
 ```
 
 `files` maps each output path of the port folder to a template, looked up in the route's folder
-and then in `port_template/common/` (the READMEs, the gamedata note, the exit-hotkey `.ini` for gptokeyb2,
+and then in `setup-rs/templates/common/` (the READMEs, the gamedata note, the exit-hotkey `.ini` for gptokeyb2,
 `package.sh`). Templates are text with `@@NAME@@` values (`PORTDIR`, `TITLE`, `ZIP`, `LAUNCHER`,
 `SETUP_TIME`, `GAME_WHAT`, `ROUTE`, `ROUTE_TEXT`, `UNITY_VERSIONS`, `SIZE_GB`, `PORTER`,
 `PLAYER_FROM` (where Unity's player comes from: the port's donors, no Wi-Fi; for il2cpp-arm64 what
@@ -1676,7 +1676,7 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
 - `trap` only for a reason (Hollow Knight's puts the Rockchip video nodes back on exit and still ends
   with `pm_message_end`, which `funcs.txt` set as the EXIT trap).
 - No SDL driver defaults (PortMaster's `pmcheck` warns on `SDL_AUDIODRIVER` and the like) unless a
-  named device needs one. The android template's `SDL_AUDIODRIVER=alsa` (`port_template/android/launcher.sh`) changes nothing
+  named device needs one. The android template's `SDL_AUDIODRIVER=alsa` (`setup-rs/templates/android/launcher.sh`) changes nothing
   on the firmwares checked: with it unset, the 32-bit SDL picks ALSA by itself on dArkOS (G350: it plays;
   32-bit libpipewire and libpulse are there, no sound server runs) and on muOS 2606 (32-bit libpipewire
   and its ALSA plugin are there, SDL's PipeWire driver is not; ALSA's open fails either way, and
@@ -1707,7 +1707,7 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
   text entry) is not needed.
 - No `# PORTMASTER: <zip>, <script>` on line 2: harbourmaster writes it on the handheld at install,
   so it marks a launcher copied back from one. `cd $GAMEDIR`, as in the templates, not
-  `cd "$GAMEDIR" || exit 1`. The templates (`port_template/*/launcher.sh`) still write the line,
+  `cd "$GAMEDIR" || exit 1`. The templates (`setup-rs/templates/*/launcher.sh`) still write the line,
   pass `-c` and leave out `PORT_32BIT`: fix them there before the next submission.
 - pmcheck also notes two setup scripts that are 91 % alike (`patchscript`, `patchscript64`); Hollow
   Knight's pull request says why they stay two (different donors, players, folders and flags).

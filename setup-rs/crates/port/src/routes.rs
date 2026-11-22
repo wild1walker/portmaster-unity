@@ -1,4 +1,4 @@
-//! The routes (port_template/<route>/route.json), their templates and @@TOKENS@@, and the donors a
+//! The routes (setup-rs/templates/<route>/route.json), their templates and @@TOKENS@@, and the donors a
 //! route's release ships (port.py's routes, render, template_path, route_donors, port_donors).
 use std::path::{Path, PathBuf};
 
@@ -75,7 +75,7 @@ pub fn render(text: &str, values: &[(&str, String)], at: &str) -> Result<String>
     Ok(out)
 }
 
-/// A route's template file, else the common one (port_template/common/).
+/// A route's template file, else the common one (templates/common/).
 pub fn template_path(repo: &Repo, route: &Dict, name: &str) -> Result<PathBuf> {
     let dir = PathBuf::from(route.str("dir"));
     for d in [dir.clone(), repo.templates().join("common")] {
@@ -84,7 +84,7 @@ pub fn template_path(repo: &Repo, route: &Dict, name: &str) -> Result<PathBuf> {
             return Ok(p);
         }
     }
-    Err(exit(format!("template {name} is in neither {} nor port_template/common", dir.display())))
+    Err(exit(format!("template {name} is in neither {} nor templates/common", dir.display())))
 }
 
 /// donor_name: donor-<version>-<backend>-<armv7|arm64>.apk

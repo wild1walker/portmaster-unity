@@ -220,7 +220,7 @@ problem. Two ways:
 ## Making a port
 
 `pmunity port` (docs/porting.md) makes box64 ports like Android-route ones: its `box64` route is
-`convert/pmunity/port_template/box64/` (launcher, setup, READMEs; `route.json`) plus this route's
+`setup-rs/templates/box64/` (launcher, setup, READMEs; `route.json`) plus this route's
 hooks in `convert/pmunity/route.py` (`port_check`, `port_new`, `port_package`).
 
 ```

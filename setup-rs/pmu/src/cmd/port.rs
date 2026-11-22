@@ -19,7 +19,7 @@ fn repo() -> Result<port::Repo, ExitCode> {
         starts.push(cwd);
     }
     port::Repo::find(&starts).ok_or_else(|| {
-        eprintln!("pmu port: no portmaster-unity checkout (convert/pmunity/port_template): set PMUNITY_REPO");
+        eprintln!("pmu port: no portmaster-unity checkout (setup-rs/templates): set PMUNITY_REPO");
         ExitCode::from(2)
     })
 }

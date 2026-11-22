@@ -58,7 +58,7 @@ REHEARSE_64ONLY=1 PM_7ZZ=<PortMaster's 7zzs.aarch64> ../tools/port/rehearse.sh m
 `.apks` or `.aab`, or a folder of split APKs and OBBs. The check reads the build with the dry run
 and suggests `game.package` (the setup takes only that package), `game.unity_versions`,
 `player.abis` (the APK's ARM players) and, for a Mono build, the pointer mode its code wants
-(docs/porting.md, section 1). The port (`port_template/apk/`):
+(docs/porting.md, section 1). The port (`setup-rs/templates/apk/`):
 
 - the release ships `ua_host` (armhf) when the APK has an armeabi-v7a player and `ua_host64` (the
   aarch64 build) when it has an arm64-v8a one: both for a build with both, about 4 MB of the zip;

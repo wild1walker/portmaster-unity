@@ -8,7 +8,7 @@ Python at /opt/py with the setup's packages, the musl pmu), once a game:
                 [--config <convert.json>] [--set k=v]... [--plugin P]...
                 [--android-data <json list of extra args>] [--pkg <player>] [--logs <dir>] [--keep]
 
-The stages are the android route's setup (port_template/android/patchscript) as it runs them:
+The stages are the android route's setup (setup-rs/templates/android/patchscript) as it runs them:
 `unpack <data> --remove` for a compressed build, `convert <data> --config ...` in place, then
 `android-data --src <data> ... --consume-src --verify-bundles 2 --pack all`. After each stage:
 the exit statuses, and every file of the data folder (and of android-data's output) by size and

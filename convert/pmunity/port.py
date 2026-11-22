@@ -64,7 +64,7 @@ from . import typetrees
 from . import unity_version as UV
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TEMPLATES = os.path.join(HERE, 'port_template')
+TEMPLATES = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'setup-rs', 'templates')
 REPO = os.path.dirname(os.path.dirname(HERE))          # the portmaster-unity checkout
 HOOK_MODULES = ('route', 'box64', 'il2cpp', 'mono64', 'apk', 'services', 'plugins', 'inputtext', 'osk', 'windows', 'streaming')
 # the donors: small games of the port's own built with the game's Unity version (tools/donor/build.sh),
@@ -2150,7 +2150,7 @@ def template_path(route, name):
         p = os.path.join(d, name)
         if os.path.isfile(p):
             return p
-    raise SystemExit(f"template {name} is in neither {route['dir']} nor port_template/common")
+    raise SystemExit(f"template {name} is in neither {route['dir']} nor templates/common")
 
 
 def q(v):
@@ -2760,7 +2760,7 @@ def new(name, data=None, config=None, out=None, route=None, title=None, player=N
     r = rts.get(cfg['port']['route'])
     if r is None:
         have = ', '.join(rts) or 'none'
-        raise SystemExit(f"route {cfg['port']['route']!r} has no templates (port_template/{cfg['port']['route']}/route.json; "
+        raise SystemExit(f"route {cfg['port']['route']!r} has no templates (templates/{cfg['port']['route']}/route.json; "
                          f"routes with templates: {have})")
     # the donors the release ships (Unity's player for the route, each Unity version), and any port.toml adds
     cfg['player']['donors'] = port_donors(cfg, r)

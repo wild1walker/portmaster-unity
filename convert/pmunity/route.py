@@ -613,7 +613,7 @@ def report(facts):
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TEMPLATE_DIR = os.path.join(HERE, 'port_template', 'box64')       # the box64 route's port templates
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'setup-rs', 'templates', 'box64')       # the box64 route's port templates
 TOOLS = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'tools', 'box64')
 
 

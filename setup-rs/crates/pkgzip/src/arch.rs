@@ -176,7 +176,7 @@ impl Report {
     }
 }
 
-/// The routes whose setup and player are 64-bit only (port_template/<route>).
+/// The routes whose setup and player are 64-bit only (setup-rs/templates/<route>).
 pub const AARCH64_ROUTES: [&str; 2] = ["mono-arm64", "il2cpp-arm64"];
 
 /// A Unity version's line ("6000.0.61f1" -> "6000.0").

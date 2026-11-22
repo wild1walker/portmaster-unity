@@ -1,6 +1,6 @@
 //! The port packager (convert/pmunity/port.py's `port new` and `port package`, and the route
 //! hooks they call: route.py's box64 part, il2cpp.py's, mono64.py's and apk.py's port_new): a
-//! port's folder from port.toml and the route's templates (port_template/<route>/route.json), and
+//! port's folder from port.toml and the route's templates (setup-rs/templates/<route>/route.json), and
 //! its PortMaster release zip. Same inputs, same files: port.build.json, port.json, setup.env and
 //! the rest byte for byte, the zip's entries, order, modes and times as the Python writes them.
 //!
@@ -28,7 +28,7 @@ pub fn exit(msg: impl Into<String>) -> Error {
 }
 
 /// The portmaster-unity checkout the packager works from (port.py's REPO): its templates
-/// (convert/pmunity/port_template), the converter it ships for ports pmu does not cover
+/// (setup-rs/templates), the converter it ships for ports pmu does not cover
 /// (convert/pmunity), LICENSE and THIRD_PARTY.md, tools/ and runtime/.
 #[derive(Clone, Debug)]
 pub struct Repo {
@@ -41,7 +41,7 @@ impl Repo {
     }
 
     /// The checkout: $PMUNITY_REPO, else the first folder above `start` (the program's own place,
-    /// then the working folder) that has convert/pmunity/port_template.
+    /// then the working folder) that has setup-rs/templates.
     pub fn find(starts: &[PathBuf]) -> Option<Repo> {
         if let Some(r) = std::env::var_os("PMUNITY_REPO").filter(|r| !r.is_empty()) {
             return Some(Repo::new(abspath(Path::new(&r))));
@@ -49,7 +49,7 @@ impl Repo {
         for s in starts {
             let mut d = Some(abspath(s));
             while let Some(x) = d {
-                if x.join("convert/pmunity/port_template").is_dir() {
+                if x.join("setup-rs/templates").is_dir() {
                     return Some(Repo::new(x));
                 }
                 d = x.parent().map(Path::to_path_buf);
@@ -63,7 +63,7 @@ impl Repo {
     }
 
     pub fn templates(&self) -> PathBuf {
-        self.pmunity().join("port_template")
+        self.root.join("setup-rs").join("templates")
     }
 }
 

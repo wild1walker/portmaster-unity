@@ -182,7 +182,7 @@ pub fn new(repo: &Repo, a: &NewArgs, log: &mut dyn FnMut(&str)) -> Result<PathBu
         let have: Vec<&str> = rts.iter().map(|(n, _)| n.as_str()).collect();
         let have = if have.is_empty() { "none".to_string() } else { have.join(", ") };
         return Err(exit(format!(
-            "route {} has no templates (port_template/{route_name}/route.json; routes with templates: {have})",
+            "route {} has no templates (templates/{route_name}/route.json; routes with templates: {have})",
             Val::s(&route_name).repr()
         )));
     };

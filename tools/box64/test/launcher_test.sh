@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs a box64-route launcher (convert/pmunity/port_template/box64/launcher.sh, as `pmunity route
+# Runs a box64-route launcher (setup-rs/templates/box64/launcher.sh, as `pmunity route
 # --launcher` or `pmunity port new --route box64` writes it) end to end in the test rig's container,
 # with a stand-in PortMaster (mockpm/: control.txt, Westonpack's westonwrap.sh) and the port's
 # folder laid out as on a handheld after its setup: box64, glxes/gl4es, box64.env, unityprefs.sh,
