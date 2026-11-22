@@ -537,9 +537,18 @@ static uint64_t tr_vap(const void *p)
         fprintf(stderr, "[glrec] UA_GL_REC_FILE: a client-side vertex array (not replayable; counted)\n");
     return (uint64_t)(uintptr_t)p;
 }
-// maps (written into by the game): the flushed ranges, or the whole range at the unmap, written
-typedef struct { int used; GLenum target; unsigned char *p; GLsizeiptr len; GLbitfield access; } trmap_t;
-static trmap_t g_trmap[16];
+// maps (written into by the game): the flushed ranges, or the whole range at the unmap, written.
+// Kept by target and buffer: Unity keeps a particle system's vertex and index buffers mapped while it
+// maps, writes and unmaps other buffers on the same targets, then binds them again to flush them
+// (a record by target alone lost those maps: their flushes were written without their bytes).
+typedef struct { int used; GLenum target; GLuint buf; unsigned char *p; GLsizeiptr len; GLbitfield access; } trmap_t;
+static trmap_t g_trmap[32];
+#define NTRMAP ((int)(sizeof g_trmap / sizeof g_trmap[0]))
+static GLuint tr_mapkey(GLenum target)         // the buffer bound to target; a target not followed: itself
+{
+    GLuint buf = 0;
+    return buffer_bound(target, &buf) ? buf : 0x80000000u | target;
+}
 static void tr_map(GLenum target, GLintptr off, GLsizeiptr len, GLbitfield access, void *p)
 {
     uint64_t *a = tr_begin(OP_glMapBufferRange, 4);
@@ -547,15 +556,17 @@ static void tr_map(GLenum target, GLintptr off, GLsizeiptr len, GLbitfield acces
     tr_ret((uint64_t)(uintptr_t)p);
     if (p) {
         trmap_t *m = NULL;
-        for (int i = 0; i < 16 && !m; i++) if (g_trmap[i].used && g_trmap[i].target == target) m = &g_trmap[i];
-        for (int i = 0; i < 16 && !m; i++) if (!g_trmap[i].used) m = &g_trmap[i];
-        if (m) *m = (trmap_t){ 1, target, p, len, access };
+        GLuint buf = tr_mapkey(target);
+        for (int i = 0; i < NTRMAP && !m; i++) if (g_trmap[i].used && g_trmap[i].buf == buf) m = &g_trmap[i];
+        for (int i = 0; i < NTRMAP && !m; i++) if (!g_trmap[i].used) m = &g_trmap[i];
+        if (m) *m = (trmap_t){ 1, target, buf, p, len, access };
     }
     tr_end();
 }
 static trmap_t *tr_mapof(GLenum target)
 {
-    for (int i = 0; i < 16; i++) if (g_trmap[i].used && g_trmap[i].target == target) return &g_trmap[i];
+    GLuint buf = tr_mapkey(target);
+    for (int i = 0; i < NTRMAP; i++) if (g_trmap[i].used && g_trmap[i].buf == buf) return &g_trmap[i];
     return NULL;
 }
 static void tr_flushmap(GLenum target, GLintptr off, GLsizeiptr len)

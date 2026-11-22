@@ -309,6 +309,21 @@ int main(int argc, char **argv)
         p[0] = 7; p[4] = 9;
         CALL(glFlushMappedBufferRange, void (*)(GLenum, GLintptr, GLsizeiptr), GL_ARRAY_BUFFER, 0, 8);
         CALL(glUnmapBuffer, GLboolean (*)(GLenum), GL_ARRAY_BUFFER);
+        // a buffer kept mapped while another is mapped, written and unmapped on the same target, then bound
+        // again and flushed (Unity's particle buffers): its bytes are in the trace too
+        CALL(glBindBuffer, void (*)(GLenum, GLuint), GL_ARRAY_BUFFER, 5);
+        unsigned char *q = CALL(glMapBufferRange, void *(*)(GLenum, GLintptr, GLsizeiptr, GLbitfield), GL_ARRAY_BUFFER, 48, 8,
+                                GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT);
+        CALL(glBindBuffer, void (*)(GLenum, GLuint), GL_ARRAY_BUFFER, 6);
+        unsigned char *r2 = CALL(glMapBufferRange, void *(*)(GLenum, GLintptr, GLsizeiptr, GLbitfield), GL_ARRAY_BUFFER, 64, 8,
+                                 GL_MAP_WRITE_BIT | GL_MAP_FLUSH_EXPLICIT_BIT);
+        r2[0] = 3; r2[4] = 4;
+        CALL(glFlushMappedBufferRange, void (*)(GLenum, GLintptr, GLsizeiptr), GL_ARRAY_BUFFER, 0, 8);
+        CALL(glUnmapBuffer, GLboolean (*)(GLenum), GL_ARRAY_BUFFER);
+        CALL(glBindBuffer, void (*)(GLenum, GLuint), GL_ARRAY_BUFFER, 5);
+        q[0] = 21; q[4] = 22;
+        CALL(glFlushMappedBufferRange, void (*)(GLenum, GLintptr, GLsizeiptr), GL_ARRAY_BUFFER, 0, 8);
+        CALL(glUnmapBuffer, GLboolean (*)(GLenum), GL_ARRAY_BUFFER);
         unsigned char px[3 * 8 * 4] = { 1 };
         CALL(glPixelStorei, void (*)(GLenum, GLint), GL_UNPACK_ROW_LENGTH, 8);
         CALL(glTexSubImage2D, void (*)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *),

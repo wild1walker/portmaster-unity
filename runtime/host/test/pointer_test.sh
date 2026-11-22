@@ -64,7 +64,7 @@ RECS='census hold copy clientidx clientarray map texsub dead live cascade dsend 
 # shader source, map bytes, texture upload size, client indices reaching the driver as the game made them)
 REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/dev/null &&
   GLREP_EGL=$PWD/$O/replay/libfakereplay.so GLREP_GLES=$PWD/$O/replay/libfakereplay.so $O/glreplay $t --from 0 --check > $t.txt 2>&1;
-  ok=1; for want in "src 140 1 void main() { }" "attach 105 140" "link 105" "use 105" "loc 105 _Color" "u4fv 17 1 0.50 0.25" "map 16 32" "flush 0 8 7 9" \
+  ok=1; for want in "src 140 1 void main() { }" "attach 105 140" "link 105" "use 105" "loc 105 _Color" "u4fv 17 1 0.50 0.25" "map 16 32" "flush 0 8 7 9" "map 48 8" "map 64 8" "flush 0 8 3 4" "flush 0 8 21 22" \
     "texsub 5x3 pixels" "tex 12" "drawel 3 42" "fb 1" "draw 3" "frames measured: 2" "GL errors: 0"; do
     grep -qF "$want" $t.txt || { echo "FAIL glreplay: no \"$want\""; ok=0; }; done;
   grep -qF "draw 5" $t.txt && { echo "FAIL glreplay: a call after the file closed"; ok=0; };

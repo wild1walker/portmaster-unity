@@ -189,12 +189,29 @@ static const void *rp_ptr(uint64_t v)
 // ---- by hand: maps, fences, sources, locations, programs
 static double g_mapwrite_ticks; static unsigned long g_mapwrites;
 static int g_measuring;
-typedef struct { GLenum target; unsigned char *p; } rmap;
-static rmap g_rmap[16];
+// A map is kept by the buffer bound to its target (the trace's name for it, followed from the binds):
+// Unity keeps a particle system's vertex and index buffers mapped while it maps, writes and unmaps
+// other buffers on the same targets, and binds them again to flush them.
+typedef struct { GLuint buf; unsigned char *p; } rmap;
+static rmap g_rmap[32];
+static struct { GLenum target; GLuint buf; } g_rbound[16];
+static GLuint g_rvao, g_rebo[256];
+static void rbound_note(GLenum t, GLuint buf)
+{
+    if (t == GL_ELEMENT_ARRAY_BUFFER) { g_rebo[g_rvao & 255] = buf; return; }
+    for (int i = 0; i < 16; i++) if (g_rbound[i].target == t || !g_rbound[i].target) { g_rbound[i].target = t; g_rbound[i].buf = buf; return; }
+}
+static GLuint rbound(GLenum t)
+{
+    if (t == GL_ELEMENT_ARRAY_BUFFER) return g_rebo[g_rvao & 255];
+    for (int i = 0; i < 16; i++) if (g_rbound[i].target == t) return g_rbound[i].buf;
+    return 0;
+}
 static rmap *rmap_of(GLenum t, int add)
 {
-    for (int i = 0; i < 16; i++) if (g_rmap[i].p && g_rmap[i].target == t) return &g_rmap[i];
-    if (add) for (int i = 0; i < 16; i++) if (!g_rmap[i].p) { g_rmap[i].target = t; return &g_rmap[i]; }
+    GLuint buf = rbound(t);
+    for (int i = 0; i < 32; i++) if (g_rmap[i].p && g_rmap[i].buf == buf) return &g_rmap[i];
+    if (add) for (int i = 0; i < 32; i++) if (!g_rmap[i].p) { g_rmap[i].buf = buf; return &g_rmap[i]; }
     return NULL;
 }
 static void mapwrite(void *dst, const void *src, size_t n)
@@ -489,6 +506,9 @@ static void replay_rec(const rec *r)
                        g_show_src[g_show_att[pr][k] & 0xffff] ? g_show_src[g_show_att[pr][k] & 0xffff] : "(no source)");
         }
     }
+    if (r->op == OP_glBindBuffer) rbound_note((GLenum)r->a[0], (GLuint)r->a[1]);         // (for the maps: rmap_of)
+    else if (r->op == OP_glBindBufferBase || r->op == OP_glBindBufferRange) rbound_note((GLenum)r->a[0], (GLuint)r->a[2]);
+    else if (r->op == OP_glBindVertexArray) g_rvao = (GLuint)r->a[0];
     if (g_measuring) evict();
     uint64_t t = g_measuring ? ticks() : 0;
     rp_call(r->op, r->a, r->ret);

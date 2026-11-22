@@ -35,10 +35,11 @@ void glLinkProgram(GLuint p) { printf("fake: link %u\n", p); }
 void glUseProgram(GLuint p) { printf("fake: use %u\n", p); }
 GLint glGetUniformLocation(GLuint p, const GLchar *n) { printf("fake: loc %u %s\n", p, n); return 17; }
 void glUniform4fv(GLint l, GLsizei n, const GLfloat *v) { printf("fake: u4fv %d %d %.2f %.2f\n", l, n, v[0], v[1]); }
-void glBindBuffer(GLenum t, GLuint b) { (void)t; printf("fake: buffer %u\n", b); }
+static GLuint bound; static long mapoff[16];        // (each buffer's mapping: where it starts in the one store)
+void glBindBuffer(GLenum t, GLuint b) { (void)t; bound = b; printf("fake: buffer %u\n", b); }
 static unsigned char store[256];
-void *glMapBufferRange(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a) { (void)t; (void)a; printf("fake: map %ld %ld\n", (long)o, (long)l); return store + o; }
-void glFlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr l) { (void)t; printf("fake: flush %ld %ld %u %u\n", (long)o, (long)l, store[16 + o], store[20 + o]); }
+void *glMapBufferRange(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a) { (void)t; (void)a; mapoff[bound & 15] = (long)o; printf("fake: map %ld %ld\n", (long)o, (long)l); return store + o; }
+void glFlushMappedBufferRange(GLenum t, GLintptr o, GLsizeiptr l) { (void)t; long m = mapoff[bound & 15]; printf("fake: flush %ld %ld %u %u\n", (long)o, (long)l, store[m + o], store[m + 4 + o]); }
 GLboolean glUnmapBuffer(GLenum t) { (void)t; printf("fake: unmap\n"); return GL_TRUE; }
 void glPixelStorei(GLenum p, GLint v) { (void)p; (void)v; }
 void glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, const void *p)
