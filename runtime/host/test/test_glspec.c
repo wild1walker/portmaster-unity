@@ -6,7 +6,8 @@
 //            twin comes back with it
 //   stale    a binary cached without the twin's (before): loads as it is, without a twin
 //   cache    glspec_cache: turned on, the cache emptied and marked; again: kept; another UA_GL_SPEC_UNIFORM: emptied;
-//            a mark of before the rule was named counts as _LightColor0's; turned off: emptied, mark gone
+//            a mark of an earlier form: emptied once, then kept; a run from the cache without one twin leaves a
+//            request (glspec_frame), the next start empties the cache once and notes it; turned off: emptied, mark gone
 //   unlit    a program without the uniform: no twin
 //   wcomp    the shader reads _LightColor0.w: (0, 0, 0, 1) binds the program
 //   float    UA_GL_SPEC_UNIFORM=_DamagedPower, a float uniform: its twin has `const float _DamagedPower = 0.0;`,
@@ -72,8 +73,35 @@ int main(int argc, char **argv)
         FILE *mf = fopen(f, "w"); fputs("UA_GL_SPEC: Unity's program binaries carry their twins\n", mf); fclose(mf);
         snprintf(f, sizeof f, "%s/UnityShaderCache", dir); mkdir(f, 0755);
         snprintf(f, sizeof f, "%s/UnityShaderCache/ghi", dir); fclose(fopen(f, "w"));
-        glspec_cache(dir);                      // (an old mark: _LightColor0's, the rule now: kept)
+        glspec_cache(dir);                      // (a mark of the earlier form: its cache may be without twins: emptied once)
+        CHECK(stat(f, &st) != 0);
+        snprintf(f, sizeof f, "%s/UnityShaderCache", dir); mkdir(f, 0755);
+        snprintf(f, sizeof f, "%s/UnityShaderCache/jkl", dir); fclose(fopen(f, "w"));
+        glspec_cache(dir);                      // (the mark of this form now: kept)
         CHECK(stat(f, &st) == 0);
+        // a run from the cache without one twin: glspec_frame leaves a request, the next start empties the cache
+        // once and says so in the mark; the same again later only warns
+        setenv("UA_GL_SPEC_WARN_FRAMES", "3", 1);
+        g_t = glspec_table(NULL);
+        {
+            void (*Bin)(unsigned, unsigned, const void *, int) = fn("glProgramBinary");
+            unsigned q = glCreateProgram();
+            Bin(q, 0x1234, "not ours", 8);      // (a binary saved without a twin's)
+            for (int i = 0; i < 4; i++) glspec_frame();
+            char line[200] = "", mk[256];
+            snprintf(mk, sizeof mk, "%s/uaspec.on", dir);
+            FILE *r = fopen(mk, "r"); if (r) { if (!fgets(line, sizeof line, r)) line[0] = 0; fclose(r); }
+            CHECK(strstr(line, "compile again") != NULL);
+            glspec_cache(dir);                  // (the request: emptied, the mark's second line written)
+            CHECK(stat(f, &st) != 0);
+            char l2[200] = "";
+            r = fopen(mk, "r"); if (r) { if (!fgets(line, sizeof line, r)) line[0] = 0; if (!fgets(l2, sizeof l2, r)) l2[0] = 0; fclose(r); }
+            CHECK(strstr(line, "carry their twins") != NULL && l2[0] != 0);
+            snprintf(f, sizeof f, "%s/UnityShaderCache", dir); mkdir(f, 0755);
+            snprintf(f, sizeof f, "%s/UnityShaderCache/mno", dir); fclose(fopen(f, "w"));
+            glspec_cache(dir);                  // (made again once already: kept from now on)
+            CHECK(stat(f, &st) == 0);
+        }
         unsetenv("UA_GL_SPEC");
         glspec_cache(dir);
         CHECK(stat(f, &st) != 0);

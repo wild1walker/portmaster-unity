@@ -365,6 +365,7 @@ static void w_GetIntegerv(GLenum e, GLint *v)
 
 // Unity's program binary cache: the twin's binary after the program's
 #define MAGIC 0x50534155u           // "UASP"
+#define MARK_V "v2"                  // the form of data/cache/uaspec.on (glspec_cache)
 typedef struct { unsigned magic, version, fmt, len, tfmt, tlen; } blob_t;
 static GLint twin_len(prog_t *p, GLint *tlen)
 {
@@ -397,9 +398,13 @@ static void w_GetProgramBinary(GLuint prog, GLsizei size, GLsizei *len, GLenum *
     if (len) *len = (GLsizei)(sizeof h + got + tgot);
     if (fmt) *fmt = h.fmt;
 }
+static long g_loaded;                    // program binaries Unity loaded from its cache (with or without a twin's)
+static char g_mark_path[1024];           // data/cache/uaspec.on (glspec_cache)
+static int g_mark_rebuilt;               // its second line: the cache was already made again once for a run without twins
 static void w_ProgramBinary(GLuint prog, GLenum fmt, const void *b, GLsizei len)
 {
     blob_t h;
+    g_loaded++;
     if (len < (GLsizei)sizeof h || (memcpy(&h, b, sizeof h), h.magic != MAGIC || h.version != 1 ||
                                     (GLsizei)(sizeof h + h.len + h.tlen) > len || h.fmt != fmt)) {
         r_ProgramBinary(prog, fmt, b, len);     // (the driver's own: no twin)
@@ -615,6 +620,23 @@ void glspec_frame(void)
                         "%ld failed; twins bound %ld times, %ld switches by value%s\n", frames, g_twins, g_binaries, g_stale, g_twin_fail,
                 g_twin_binds, g_rebinds, "");
     if (g_check && frames % every == 0) fprintf(stderr, "[glspec] check: %ld draws compared, %ld differ\n", g_compared, g_differ);
+    // on, and not one twin after a while: said once, so a silent miss shows in the log. Where Unity loaded its
+    // programs from its binary cache (binaries saved without their twins: by an older runtime, or under a mark
+    // that was not theirs), the mark is turned into a request and the next start empties that cache, once.
+    static long warn_at;
+    if (!warn_at) { const char *e = getenv("UA_GL_SPEC_WARN_FRAMES"); warn_at = e && atol(e) > 0 ? atol(e) : 3600; }
+    if (frames == warn_at && !g_twins && !g_binaries) {
+        int again = g_loaded > 0 && !g_mark_rebuilt && g_mark_path[0];
+        if (again) {
+            FILE *f = fopen(g_mark_path, "w");
+            if (f) { fprintf(f, "UA_GL_SPEC: no twin in a run from the cache: compile again (%s) " MARK_V "\n", RULE_NAME); fclose(f); }
+            else again = 0;
+        }
+        fprintf(stderr, "[glspec] warning: UA_GL_SPEC is on and no program has a twin after %ld frames (%ld programs came from "
+                        "Unity's binary cache)%s\n", frames, g_loaded,
+                again ? ": the next start empties that cache once, so its programs are compiled with their twins" :
+                g_loaded ? ": the cache was already made again once; this game's shaders do not read the uniform here" : "");
+    }
 }
 
 void *glspec_hard(const char *name)
@@ -648,25 +670,37 @@ void glspec_cache(const char *cache_dir)
     const char *e = getenv("UA_GL_SPEC");
     int on = e && (!strcmp(e, "1") || !strcmp(e, "check"));
     rule_init();
-    char mark[1024], dir[1024], want[160], have[160] = "";
+    char mark[1024], dir[1024], want[200], retry[200], have[200] = "", second[200] = "";
     snprintf(mark, sizeof mark, "%s/uaspec.on", cache_dir);
     snprintf(dir, sizeof dir, "%s/UnityShaderCache", cache_dir);
-    // the mark names the rule (a mark of before the rule was named: _LightColor0's)
-    snprintf(want, sizeof want, "UA_GL_SPEC: Unity's program binaries carry their twins (%s)\n", RULE_NAME);
+    snprintf(g_mark_path, sizeof g_mark_path, "%s", on ? mark : "");
+    g_mark_rebuilt = 0;
+    // the mark names the rule and the form of what the cache holds (MARK_V): a mark of an earlier form (its
+    // binaries may have been saved without twins and nothing said so) or of another rule empties the cache once;
+    // so does the request glspec_frame leaves after a run from the cache without one twin, and the mark written
+    // then says so in its second line, so that a game whose shaders do not read the uniform is not compiled
+    // again at every start
+    snprintf(want, sizeof want, "UA_GL_SPEC: Unity's program binaries carry their twins (%s) " MARK_V "\n", RULE_NAME);
+    snprintf(retry, sizeof retry, "UA_GL_SPEC: no twin in a run from the cache: compile again (%s) " MARK_V "\n", RULE_NAME);
     FILE *m = fopen(mark, "r");
     int marked = m != NULL;
     if (m) {
         if (!fgets(have, sizeof have, m)) have[0] = 0;
+        if (!fgets(second, sizeof second, m)) second[0] = 0;
         fclose(m);
-        if (!strcmp(have, "UA_GL_SPEC: Unity's program binaries carry their twins\n"))
-            snprintf(have, sizeof have, "UA_GL_SPEC: Unity's program binaries carry their twins (_LightColor0)\n");
     }
-    if (on == marked && (!on || !strcmp(have, want))) return;
+    int again = on && marked && !strcmp(have, retry);
+    if (on && marked && !strcmp(have, want)) { g_mark_rebuilt = second[0] != 0; return; }
+    if (!on && !marked) return;
     remove_tree(dir);
-    if (on) { FILE *f = fopen(mark, "w"); if (f) { fputs(want, f); fclose(f); } }
-    else unlink(mark);
+    if (on) {
+        FILE *f = fopen(mark, "w");
+        if (f) { fputs(want, f); if (again) fputs("made again once after a run without twins\n", f); fclose(f); }
+        g_mark_rebuilt = again;
+    } else unlink(mark);
     fprintf(stderr, "[glspec] UA_GL_SPEC %s (%s): Unity's program binary cache emptied (%s)\n",
-            !on ? "turned off" : marked ? "rule changed" : "turned on", RULE_NAME, dir);
+            !on ? "turned off" : again ? "found no twin in the last run" : marked ? "mark of another rule or an earlier form" : "turned on",
+            RULE_NAME, dir);
 }
 
 static so_shim g_shims[64];
